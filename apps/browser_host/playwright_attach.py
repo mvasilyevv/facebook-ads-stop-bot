@@ -68,12 +68,12 @@ class PlaywrightAttachService:
         except Exception as exc:
             with contextlib.suppress(Exception):
                 await playwright.stop()
-            raise RuntimeError(
-                f"Не удалось подключиться к CDP по адресу {cdp_url}: {exc}"
-            ) from exc
+            raise RuntimeError(f"Не удалось подключиться к CDP по адресу {cdp_url}: {exc}") from exc
 
         contexts = list(getattr(browser, "contexts", []) or [])
-        logger.info("Playwright подключился к профилю %s по CDP %s", launch_result.profile_id, cdp_url)
+        logger.info(
+            "Playwright подключился к профилю %s по CDP %s", launch_result.profile_id, cdp_url
+        )
         return AttachedBrowserSession(
             profile_id=launch_result.profile_id,
             cdp_url=launch_result.cdp_url,
@@ -85,3 +85,13 @@ class PlaywrightAttachService:
             context_count=len(contexts),
             attached_at=datetime.now(tz=UTC),
         )
+
+    async def detach(self, session: AttachedBrowserSession) -> None:
+        """Отключает локальный Playwright-клиент, не останавливая сам профиль браузера."""
+
+        logger = logging.getLogger(__name__)
+        if session.playwright is None:
+            return
+        with contextlib.suppress(Exception):
+            await session.playwright.stop()
+        logger.info("Playwright-клиент отключен для профиля %s", session.profile_id)

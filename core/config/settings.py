@@ -38,6 +38,11 @@ class Settings(BaseSettings):
         alias="VISION_LOCAL_API_URL",
     )
     vision_timeout_seconds: float = Field(default=10.0, alias="VISION_TIMEOUT_SECONDS")
+    worker_scan_interval_seconds: int = Field(default=120, alias="WORKER_SCAN_INTERVAL_SECONDS")
+    scanner_stabilize_attempts: int = Field(default=3, alias="SCANNER_STABILIZE_ATTEMPTS")
+    scanner_stabilize_delay_ms: int = Field(default=800, alias="SCANNER_STABILIZE_DELAY_MS")
+    scanner_scroll_pause_ms: int = Field(default=700, alias="SCANNER_SCROLL_PAUSE_MS")
+    scanner_max_no_new_attempts: int = Field(default=3, alias="SCANNER_MAX_NO_NEW_ATTEMPTS")
 
     feature_auto_pause: bool = Field(default=False, alias="FEATURE_AUTO_PAUSE")
     feature_auto_resume: bool = Field(default=False, alias="FEATURE_AUTO_RESUME")

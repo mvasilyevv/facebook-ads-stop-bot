@@ -7,7 +7,7 @@ import pytest
 
 from apps.browser_host import playwright_attach as playwright_attach_module
 from apps.browser_host.adapters.models import AutomationLaunchResult
-from apps.browser_host.playwright_attach import PlaywrightAttachService
+from apps.browser_host.playwright_attach import AttachedBrowserSession, PlaywrightAttachService
 
 
 class _FakeBrowser:
@@ -114,5 +114,28 @@ async def test_playwright_attach_reports_unavailable_cdp_endpoint() -> None:
 
     with pytest.raises(RuntimeError, match="Не удалось подключиться к CDP"):
         await service.attach(_build_launch_result("http://127.0.0.1:54000"))
+
+    assert playwright.stop_called is True
+
+
+# Проверяет, что detach корректно освобождает локальный Playwright-клиент после временного подключения.
+@pytest.mark.asyncio
+async def test_playwright_detach_stops_local_client() -> None:
+    browser = _FakeBrowser()
+    playwright = _FakePlaywright(browser)
+    service = PlaywrightAttachService()
+
+    session = AttachedBrowserSession(
+        profile_id="profile-1",
+        cdp_url="http://127.0.0.1:54000",
+        webdriver_url=None,
+        is_attached=True,
+        browser=browser,
+        context=browser.contexts[0],
+        playwright=playwright,
+        context_count=1,
+    )
+
+    await service.detach(session)
 
     assert playwright.stop_called is True

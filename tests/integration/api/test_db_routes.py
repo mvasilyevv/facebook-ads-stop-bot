@@ -7,6 +7,7 @@ import httpx
 import pytest
 
 from apps.browser_host.adapters.models import AdapterHealth, AutomationLaunchResult, ProfileStatus
+from apps.browser_host.playwright_attach import AttachedBrowserSession
 from core.domain import DecisionType, DeliveryStatus, ScanRunStatus, ScopePresence, TrackingMode
 from core.repositories import AdsRepository, DecisionsRepository, ScanRunsRepository
 
@@ -58,6 +59,34 @@ class FakeVisionAdapter:
         return AdapterHealth(is_healthy=True, message="Vision доступен")
 
 
+class FakeSessionManager:
+    """Фейковый session manager для проверки нового lifecycle запуска сессии через API."""
+
+    def __init__(self, adapter: FakeVisionAdapter) -> None:
+        self._adapter = adapter
+        self.released_profiles: list[str] = []
+
+    async def ensure_session(self, profile_id: str) -> AttachedBrowserSession:
+        await self._adapter.ensure_single_active_profile()
+        status = await self._adapter.get_profile_status(profile_id)
+        if not status.has_automation_binding:
+            await self._adapter.stop_profile(profile_id)
+        launch_result = await self._adapter.start_profile_for_automation(
+            profile_id=profile_id,
+            launch_mode="cdp",
+            launch_args=[],
+        )
+        return AttachedBrowserSession(
+            profile_id=profile_id,
+            cdp_url=launch_result.cdp_url,
+            webdriver_url=launch_result.webdriver_url,
+            is_attached=True,
+        )
+
+    async def release_session(self, session: AttachedBrowserSession) -> None:
+        self.released_profiles.append(session.profile_id)
+
+
 @pytest.fixture
 async def api_client(async_session_factory, monkeypatch):
     from apps.api import bootstrap as api_bootstrap
@@ -67,9 +96,15 @@ async def api_client(async_session_factory, monkeypatch):
     from apps.api.services import health as health_service
 
     fake_adapter = FakeVisionAdapter()
+    fake_session_manager = FakeSessionManager(fake_adapter)
     monkeypatch.setattr(api_deps, "get_session_factory", lambda: async_session_factory)
     monkeypatch.setattr(api_bootstrap, "get_session_factory", lambda: async_session_factory)
     monkeypatch.setattr(sessions_router, "build_adapter", lambda settings: fake_adapter)
+    monkeypatch.setattr(
+        sessions_router,
+        "build_session_manager",
+        lambda settings: fake_session_manager,
+    )
 
     async def fake_check_database_connection() -> bool:
         return True
@@ -79,7 +114,7 @@ async def api_client(async_session_factory, monkeypatch):
     async with app.router.lifespan_context(app):
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-            yield client, fake_adapter
+            yield client, fake_adapter, fake_session_manager
 
 
 async def _seed_operational_data(async_session_factory) -> None:
@@ -134,7 +169,7 @@ async def _seed_operational_data(async_session_factory) -> None:
 # Проверяет, что operational-роуты читают и обновляют реальные данные из базы вместо demo-state.
 @pytest.mark.asyncio
 async def test_operational_routes_use_database(api_client, async_session_factory) -> None:
-    client, _ = api_client
+    client, _, _ = api_client
     await _seed_operational_data(async_session_factory)
 
     ads_response = await client.get("/ads")
@@ -177,7 +212,7 @@ async def test_operational_routes_use_database(api_client, async_session_factory
 # Проверяет, что системные правила поднимаются из базы на старте и обновляются через API без in-memory слоя.
 @pytest.mark.asyncio
 async def test_rules_routes_work_through_database(api_client) -> None:
-    client, _ = api_client
+    client, _, _ = api_client
 
     rules_response = await client.get("/rules")
 
@@ -207,7 +242,7 @@ async def test_rules_routes_work_through_database(api_client) -> None:
 # Проверяет, что запуск и остановка browser session проходят через базу и реальный session endpoint API.
 @pytest.mark.asyncio
 async def test_session_routes_persist_browser_sessions(api_client) -> None:
-    client, fake_adapter = api_client
+    client, fake_adapter, fake_session_manager = api_client
 
     start_response = await client.post(
         "/sessions/vision-profile-1/start",
@@ -236,3 +271,4 @@ async def test_session_routes_persist_browser_sessions(api_client) -> None:
     assert session_response.json()["status"] == "STOPPED"
     assert fake_adapter.started_profiles == ["vision-profile-1"]
     assert fake_adapter.stopped_profiles.count("vision-profile-1") == 2
+    assert fake_session_manager.released_profiles == ["vision-profile-1"]

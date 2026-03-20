@@ -20,6 +20,15 @@ from core.repositories import BrowserRepository
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
 
+def build_session_manager(settings) -> BrowserSessionManager:
+    """Собирает browser session manager для runtime и тестовых подмен."""
+
+    return BrowserSessionManager(
+        adapter=build_adapter(settings),
+        playwright_attach_service=PlaywrightAttachService(),
+    )
+
+
 def _map_session_item(record) -> BrowserSessionItem:
     if record.session.error_message:
         last_message = record.session.error_message
@@ -62,11 +71,9 @@ async def start_session(
     profile_id: str, payload: SessionControlRequest, session: DbSessionDep
 ) -> SessionActionResponse:
     settings = get_settings()
-    manager = BrowserSessionManager(
-        adapter=build_adapter(settings),
-        playwright_attach_service=PlaywrightAttachService(),
-    )
+    manager = build_session_manager(settings)
     repo = BrowserRepository(session)
+    attached_session = None
     try:
         attached_session = await manager.ensure_session(profile_id)
     except (AdapterConnectionError, AdapterProtocolError, RuntimeError) as exc:
@@ -74,39 +81,42 @@ async def start_session(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"Не удалось запустить browser session: {exc}",
         ) from exc
-
-    browser_host = await repo.upsert_browser_host(
-        name=payload.browser_host_id,
-        vendor=settings.browser_vendor,
-        api_base_url=settings.vision_local_api_url,
-        is_enabled=True,
-        last_heartbeat_at=datetime.now(tz=UTC),
-    )
-    profile = await repo.upsert_profile(
-        browser_host_id=browser_host.id,
-        vendor_profile_id=profile_id,
-        display_name=profile_id,
-        is_active=True,
-        last_launch_at=datetime.now(tz=UTC),
-    )
-    await repo.create_browser_session(
-        browser_host_id=browser_host.id,
-        profile_id=profile.id,
-        status="ACTIVE",
-        started_at=datetime.now(tz=UTC),
-        cdp_url=attached_session.cdp_url,
-        webdriver_url=attached_session.webdriver_url,
-    )
-    await session.commit()
-    record = await repo.get_latest_session_by_vendor_profile_id(profile_id)
-    if record is None:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Сессия не сохранена"
+    try:
+        browser_host = await repo.upsert_browser_host(
+            name=payload.browser_host_id,
+            vendor=settings.browser_vendor,
+            api_base_url=settings.vision_local_api_url,
+            is_enabled=True,
+            last_heartbeat_at=datetime.now(tz=UTC),
         )
-    return SessionActionResponse(
-        message="Сессия успешно запущена",
-        session=_map_session_item(record),
-    )
+        profile = await repo.upsert_profile(
+            browser_host_id=browser_host.id,
+            vendor_profile_id=profile_id,
+            display_name=profile_id,
+            is_active=True,
+            last_launch_at=datetime.now(tz=UTC),
+        )
+        await repo.create_browser_session(
+            browser_host_id=browser_host.id,
+            profile_id=profile.id,
+            status="ACTIVE",
+            started_at=datetime.now(tz=UTC),
+            cdp_url=attached_session.cdp_url,
+            webdriver_url=attached_session.webdriver_url,
+        )
+        await session.commit()
+        record = await repo.get_latest_session_by_vendor_profile_id(profile_id)
+        if record is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Сессия не сохранена"
+            )
+        return SessionActionResponse(
+            message="Сессия успешно запущена",
+            session=_map_session_item(record),
+        )
+    finally:
+        if attached_session is not None:
+            await manager.release_session(attached_session)
 
 
 @router.post("/{profile_id}/stop", response_model=SessionActionResponse)

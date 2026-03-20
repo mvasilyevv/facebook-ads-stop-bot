@@ -43,3 +43,8 @@ class BrowserSessionManager:
             launch_args=launch_args or [],
         )
         return await self._playwright_attach_service.attach(launch_result)
+
+    async def release_session(self, session: AttachedBrowserSession) -> None:
+        """Освобождает временное Playwright-подключение после проверки или сканирования."""
+
+        await self._playwright_attach_service.detach(session)

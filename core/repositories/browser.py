@@ -19,6 +19,14 @@ class BrowserSessionRecord:
     browser_host: BrowserHost
 
 
+@dataclass(slots=True, frozen=True)
+class ActiveProfileRecord:
+    """Нормализованное представление активного профиля вместе с browser host."""
+
+    profile: Profile
+    browser_host: BrowserHost
+
+
 class BrowserRepository(AsyncRepository):
     """Репозиторий browser host, профилей и последних сессий."""
 
@@ -158,3 +166,16 @@ class BrowserRepository(AsyncRepository):
             profile=profile,
             browser_host=browser_host,
         )
+
+    async def list_active_profiles(self) -> list[ActiveProfileRecord]:
+        stmt = (
+            select(Profile, BrowserHost)
+            .join(BrowserHost, Profile.browser_host_id == BrowserHost.id)
+            .where(Profile.is_active.is_(True), BrowserHost.is_enabled.is_(True))
+            .order_by(BrowserHost.name, Profile.vendor_profile_id)
+        )
+        result = await self.session.execute(stmt)
+        return [
+            ActiveProfileRecord(profile=profile, browser_host=browser_host)
+            for profile, browser_host in result.all()
+        ]
