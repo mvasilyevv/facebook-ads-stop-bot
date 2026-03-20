@@ -27,6 +27,17 @@ class Settings(BaseSettings):
     redis_url: str = Field(default="redis://localhost:6379/0", alias="REDIS_URL")
     telegram_bot_token: str = Field(default="", alias="TELEGRAM_BOT_TOKEN")
     telegram_chat_id: str = Field(default="", alias="TELEGRAM_CHAT_ID")
+    browser_vendor: str = Field(default="vision", alias="BROWSER_VENDOR")
+    vision_api_token: str = Field(default="", alias="VISION_API_TOKEN")
+    vision_cloud_api_url: str = Field(
+        default="https://v1.empr.cloud/api/v1",
+        alias="VISION_CLOUD_API_URL",
+    )
+    vision_local_api_url: str = Field(
+        default="http://127.0.0.1:3030",
+        alias="VISION_LOCAL_API_URL",
+    )
+    vision_timeout_seconds: float = Field(default=10.0, alias="VISION_TIMEOUT_SECONDS")
 
     feature_auto_pause: bool = Field(default=False, alias="FEATURE_AUTO_PAUSE")
     feature_auto_resume: bool = Field(default=False, alias="FEATURE_AUTO_RESUME")

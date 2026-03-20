@@ -3,49 +3,33 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from apps.browser_host.adapters.base import AntiDetectAdapter
+from apps.browser_host.adapters.factory import build_adapter
 from apps.browser_host.playwright_attach import PlaywrightAttachService
 from apps.browser_host.session_manager import BrowserSessionManager
+from core.config import get_settings
 from core.logging import configure_logging
-
-
-class UnsupportedAdapter(AntiDetectAdapter):
-    async def list_profiles(self) -> list:
-        raise RuntimeError("Для browser host пока не выбран конкретный anti-detect адаптер")
-
-    async def list_open_profiles(self) -> list:
-        raise RuntimeError("Для browser host пока не выбран конкретный anti-detect адаптер")
-
-    async def get_profile_status(self, profile_id: str):
-        raise RuntimeError("Для browser host пока не выбран конкретный anti-detect адаптер")
-
-    async def stop_profile(self, profile_id: str) -> None:
-        raise RuntimeError("Для browser host пока не выбран конкретный anti-detect адаптер")
-
-    async def start_profile_for_automation(
-        self,
-        profile_id: str,
-        launch_mode: str,
-        launch_args: list[str] | None = None,
-    ):
-        raise RuntimeError("Для browser host пока не выбран конкретный anti-detect адаптер")
-
-    async def ensure_single_active_profile(self) -> None:
-        raise RuntimeError("Для browser host пока не выбран конкретный anti-detect адаптер")
-
-    async def healthcheck(self):
-        raise RuntimeError("Для browser host пока не выбран конкретный anti-detect адаптер")
 
 
 async def run_browser_host() -> None:
     configure_logging()
     logger = logging.getLogger(__name__)
+    settings = get_settings()
     manager = BrowserSessionManager(
-        adapter=UnsupportedAdapter(),
+        adapter=build_adapter(settings),
         playwright_attach_service=PlaywrightAttachService(),
     )
-    logger.info("Browser host запущен и ожидает конфигурацию адаптера")
-    await manager.healthcheck()
+    health = await manager.healthcheck()
+    if health.is_healthy:
+        logger.info(
+            "Browser host запущен с вендором %s: %s", settings.browser_vendor, health.message
+        )
+    else:
+        logger.warning(
+            "Browser host запущен с вендором %s, но пока не готов: %s",
+            settings.browser_vendor,
+            health.message,
+        )
+    await asyncio.Event().wait()
 
 
 def main() -> None:

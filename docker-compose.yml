@@ -23,6 +23,9 @@ services:
     command: alembic upgrade head
     env_file:
       - .env
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
     depends_on:
       postgres:
         condition: service_healthy
@@ -32,6 +35,12 @@ services:
     command: uvicorn apps.api.main:app --host 0.0.0.0 --port 8000
     env_file:
       - .env
+    environment:
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      REDIS_URL: redis://redis:6379/0
     depends_on:
       migrator:
         condition: service_completed_successfully
@@ -47,6 +56,30 @@ services:
     command: python -m apps.worker.main
     env_file:
       - .env
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      migrator:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  browser_host:
+    build: .
+    command: python -m apps.browser_host.main
+    env_file:
+      - .env
+    environment:
+      VISION_LOCAL_API_URL: http://host.docker.internal:3030
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      REDIS_URL: redis://redis:6379/0
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       migrator:
         condition: service_completed_successfully

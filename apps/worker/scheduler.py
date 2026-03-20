@@ -10,4 +10,4 @@ class SchedulerService:
     async def start(self) -> None:
         logger = logging.getLogger(__name__)
         logger.info("Планировщик готов к публикации заданий")
-        await asyncio.sleep(0)
+        await asyncio.Event().wait()

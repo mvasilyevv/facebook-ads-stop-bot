@@ -27,8 +27,6 @@ repos:
     hooks:
       - id: ruff-check
         name: Проверка кода Ruff
-        args:
-          - --fix
       - id: ruff-format
         name: Форматирование Ruff
 
@@ -50,7 +48,6 @@ repos:
           - redis
           - sqlalchemy
           - tenacity
-          - uvicorn[standard]
           - pytest
           - pytest-asyncio
         pass_filenames: false
@@ -59,6 +56,22 @@ repos:
           - -m
           - pytest
           - -q
-          - -o
-          - cache_dir=/tmp/facebook-ads-stop-bot-pytest-cache
+          - tests/unit
+          - -p
+          - no:cacheprovider
         files: ^(apps|core|tests|migrations)/|^(pyproject\.toml|Makefile|Dockerfile|docker-compose\.yml|alembic\.ini)$
+
+      - id: bash-syntax
+        name: Проверка shell-скриптов
+        entry: bash
+        language: system
+        args:
+          - -n
+        files: ^scripts/.*\.sh$
+
+      - id: frontend-build
+        name: Сборка React UI
+        entry: bash -lc 'cd frontend && npm run build'
+        language: system
+        pass_filenames: false
+        files: ^frontend/

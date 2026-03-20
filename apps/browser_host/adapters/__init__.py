@@ -11,6 +11,7 @@ from apps.browser_host.adapters.models import (
     ProfileInfo,
     ProfileStatus,
 )
+from apps.browser_host.adapters.vision import VisionAdapter, VisionAdapterSettings
 
 __all__ = [
     "AdapterConnectionError",
@@ -22,4 +23,6 @@ __all__ = [
     "OpenProfileInfo",
     "ProfileInfo",
     "ProfileStatus",
+    "VisionAdapter",
+    "VisionAdapterSettings",
 ]
