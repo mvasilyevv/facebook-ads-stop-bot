@@ -24,8 +24,8 @@ class AdSummary(BaseModel):
 
 
 class AdDetail(AdSummary):
-    campaign_id: str
-    adset_id: str
+    campaign_scope_key: str
+    adset_scope_key: str
     last_scan_run_id: str | None = None
     created_at: datetime
     updated_at: datetime

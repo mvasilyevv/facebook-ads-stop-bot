@@ -13,7 +13,7 @@ router = APIRouter(prefix="/ads", tags=["ads"])
 
 
 async def _resolve_ad_cpa(repo: OffersRepository, ad) -> object:
-    binding = await repo.resolve_binding(ad.fb_ad_id, ad.adset.fb_adset_id)
+    binding = await repo.resolve_binding(ad.fb_ad_id, ad.adset.scope_key)
     if binding is None:
         return None
     rate = await repo.resolve_rate_version(binding.offer_id, datetime.now(tz=UTC))
@@ -40,8 +40,8 @@ async def _map_ad_summary(ad, offers_repo: OffersRepository) -> AdSummary:
 async def _map_ad_detail(ad, offers_repo: OffersRepository) -> AdDetail:
     return AdDetail(
         **(await _map_ad_summary(ad, offers_repo)).model_dump(),
-        campaign_id=ad.campaign.fb_campaign_id,
-        adset_id=ad.adset.fb_adset_id,
+        campaign_scope_key=ad.campaign.scope_key,
+        adset_scope_key=ad.adset.scope_key,
         last_scan_run_id=str(ad.last_scan_run_id) if ad.last_scan_run_id is not None else None,
         created_at=ad.created_at,
         updated_at=ad.updated_at,

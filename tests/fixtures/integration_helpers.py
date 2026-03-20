@@ -21,13 +21,13 @@ class MemoryTelegramTransport:
 async def seed_demo_ad(async_session) -> tuple[str, str]:
     ads_repo = AdsRepository(async_session)
     campaign = await ads_repo.upsert_campaign(
-        fb_campaign_id="demo-campaign-1",
+        scope_key="campaign:demo-account:demo-campaign",
         name="Демо кампания",
         tracking_mode=TrackingMode.TRACKED,
         last_seen_at=datetime(2026, 3, 20, 12, 0, tzinfo=UTC),
     )
     adset = await ads_repo.upsert_adset(
-        fb_adset_id="demo-adset-1",
+        scope_key="adset:campaign:demo-account:demo-campaign:demo-adset",
         campaign_id=campaign.id,
         name="Демо адсет",
         tracking_mode=TrackingMode.TRACKED,
@@ -44,7 +44,7 @@ async def seed_demo_ad(async_session) -> tuple[str, str]:
         last_seen_at=datetime(2026, 3, 20, 12, 0, tzinfo=UTC),
     )
     await async_session.flush()
-    return ad.fb_ad_id, adset.fb_adset_id
+    return ad.fb_ad_id, adset.scope_key
 
 
 async def create_bound_offer_with_rate(
@@ -55,7 +55,7 @@ async def create_bound_offer_with_rate(
     cpa_usd: Decimal,
     effective_from: datetime,
     entity_type: EntityType,
-    entity_external_id: str,
+    entity_id: str,
     priority: int = 0,
 ) -> str:
     offers_repo = OffersRepository(async_session)
@@ -67,16 +67,21 @@ async def create_bound_offer_with_rate(
     )
     await offers_repo.upsert_binding(
         entity_type=entity_type,
-        entity_id=entity_external_id,
+        entity_id=entity_id,
         offer_id=offer.id,
         priority=priority,
     )
     return offer.id
 
 
-async def resolve_current_cpa(async_session, *, fb_ad_id: str, adset_id: str) -> Decimal | None:
+async def resolve_current_cpa(
+    async_session,
+    *,
+    fb_ad_id: str,
+    adset_scope_key: str,
+) -> Decimal | None:
     offers_repo = OffersRepository(async_session)
-    binding = await offers_repo.resolve_binding(fb_ad_id, adset_id)
+    binding = await offers_repo.resolve_binding(fb_ad_id, adset_scope_key)
     if binding is None:
         return None
     rate = await offers_repo.resolve_rate_version(

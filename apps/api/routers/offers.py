@@ -56,7 +56,7 @@ def _map_binding_action_response(
         binding={
             "id": str(binding.id),
             "entity_type": binding.entity_type.value,
-            "entity_external_id": binding.entity_id,
+            "entity_id": binding.entity_id,
             "offer_id": str(binding.offer_id),
             "offer_code": offer_code,
             "priority": binding.priority,
@@ -126,12 +126,12 @@ async def create_offer_rate(
 
 
 @router.post(
-    "/adsets/{fb_adset_id}/offer-binding",
+    "/adsets/{adset_scope_key}/offer-binding",
     response_model=OfferBindingActionResponse,
     status_code=status.HTTP_201_CREATED,
 )
 async def bind_offer_to_adset(
-    fb_adset_id: str,
+    adset_scope_key: str,
     payload: OfferBindingCreateRequest,
     session: DbSessionDep,
 ) -> OfferBindingActionResponse:
@@ -141,7 +141,7 @@ async def bind_offer_to_adset(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Оффер не найден")
     binding = await repo.upsert_binding(
         entity_type=EntityType(ControlFlagTarget.ADSET.value),
-        entity_id=fb_adset_id,
+        entity_id=adset_scope_key,
         offer_id=payload.offer_id,
         priority=payload.priority,
         is_active=payload.is_active,

@@ -20,8 +20,8 @@ export type AdSummary = {
 };
 
 export type AdDetail = AdSummary & {
-  campaign_id: string;
-  adset_id: string;
+  campaign_scope_key: string;
+  adset_scope_key: string;
   last_scan_run_id?: string | null;
   created_at: string;
   updated_at: string;
@@ -74,7 +74,7 @@ export type OfferRateItem = {
 export type OfferBindingItem = {
   id: string;
   entity_type: "campaign" | "adset" | "ad";
-  entity_external_id: string;
+  entity_id: string;
   offer_id: string;
   offer_code: string;
   priority: number;

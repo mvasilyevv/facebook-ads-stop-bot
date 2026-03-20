@@ -32,7 +32,7 @@ async def test_worker_scan_service_writes_pause_decision_for_expensive_click(asy
     await seed_offer_with_binding(
         async_session_factory,
         entity_type=EntityType.ADSET,
-        entity_external_id=seed.adset_scope_key,
+        entity_id=seed.adset_scope_key,
         offer_code="offer-1",
         cpa_usd=Decimal("5.00"),
         effective_from=datetime(2026, 3, 20, 11, 0, tzinfo=UTC),

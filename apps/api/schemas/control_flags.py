@@ -12,7 +12,7 @@ class ControlFlagItem(BaseModel):
 
     id: str
     entity_type: ControlFlagTarget
-    entity_external_id: str
+    entity_id: str
     tracking_mode: TrackingMode
     reason: str
     created_by: str
@@ -22,7 +22,7 @@ class ControlFlagItem(BaseModel):
 
 class ControlFlagCreateRequest(BaseModel):
     entity_type: ControlFlagTarget
-    entity_external_id: str = Field(min_length=1)
+    entity_id: str = Field(min_length=1)
     tracking_mode: TrackingMode
     reason: str = Field(min_length=1)
     created_by: str = Field(default="operator", min_length=1)

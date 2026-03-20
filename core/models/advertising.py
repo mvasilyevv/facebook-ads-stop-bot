@@ -19,7 +19,8 @@ if TYPE_CHECKING:
 class Campaign(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "campaigns"
 
-    fb_campaign_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    scope_key: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    fb_campaign_id: Mapped[str | None] = mapped_column(String(64), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(255))
     tracking_mode: Mapped[TrackingMode] = mapped_column(
         Enum(TrackingMode, name="tracking_mode_enum"),
@@ -33,7 +34,8 @@ class Campaign(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 class AdSet(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "adsets"
 
-    fb_adset_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    scope_key: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    fb_adset_id: Mapped[str | None] = mapped_column(String(64), unique=True, index=True)
     campaign_id: Mapped[str] = mapped_column(ForeignKey("campaigns.id", ondelete="CASCADE"))
     name: Mapped[str] = mapped_column(String(255))
     tracking_mode: Mapped[TrackingMode] = mapped_column(

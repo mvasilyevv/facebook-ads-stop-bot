@@ -20,14 +20,18 @@ class AdsRepository(AsyncRepository):
 
     async def upsert_campaign(
         self,
-        fb_campaign_id: str,
+        scope_key: str,
         name: str,
         tracking_mode: TrackingMode = TrackingMode.TRACKED,
         last_seen_at: datetime | None = None,
+        fb_campaign_id: str | None = None,
     ) -> Campaign:
-        campaign = await self.get_campaign_by_fb_id(fb_campaign_id)
+        campaign = await self.get_campaign_by_scope_key(scope_key)
+        if campaign is None and fb_campaign_id is not None:
+            campaign = await self.get_campaign_by_fb_id(fb_campaign_id)
         if campaign is None:
             campaign = Campaign(
+                scope_key=scope_key,
                 fb_campaign_id=fb_campaign_id,
                 name=name,
                 tracking_mode=tracking_mode,
@@ -35,11 +39,17 @@ class AdsRepository(AsyncRepository):
             )
             self.session.add(campaign)
         else:
+            campaign.scope_key = scope_key
             campaign.name = name
+            campaign.fb_campaign_id = fb_campaign_id
             campaign.tracking_mode = tracking_mode
             campaign.last_seen_at = last_seen_at
         await self.session.flush()
         return campaign
+
+    async def get_campaign_by_scope_key(self, scope_key: str) -> Campaign | None:
+        result = await self.session.scalars(select(Campaign).where(Campaign.scope_key == scope_key))
+        return result.first()
 
     async def get_campaign_by_fb_id(self, fb_campaign_id: str) -> Campaign | None:
         result = await self.session.scalars(
@@ -49,15 +59,19 @@ class AdsRepository(AsyncRepository):
 
     async def upsert_adset(
         self,
-        fb_adset_id: str,
+        scope_key: str,
         campaign_id: str,
         name: str,
         tracking_mode: TrackingMode = TrackingMode.TRACKED,
         last_seen_at: datetime | None = None,
+        fb_adset_id: str | None = None,
     ) -> AdSet:
-        adset = await self.get_adset_by_fb_id(fb_adset_id)
+        adset = await self.get_adset_by_scope_key(scope_key)
+        if adset is None and fb_adset_id is not None:
+            adset = await self.get_adset_by_fb_id(fb_adset_id)
         if adset is None:
             adset = AdSet(
+                scope_key=scope_key,
                 fb_adset_id=fb_adset_id,
                 campaign_id=campaign_id,
                 name=name,
@@ -66,12 +80,18 @@ class AdsRepository(AsyncRepository):
             )
             self.session.add(adset)
         else:
+            adset.scope_key = scope_key
             adset.campaign_id = campaign_id
             adset.name = name
+            adset.fb_adset_id = fb_adset_id
             adset.tracking_mode = tracking_mode
             adset.last_seen_at = last_seen_at
         await self.session.flush()
         return adset
+
+    async def get_adset_by_scope_key(self, scope_key: str) -> AdSet | None:
+        result = await self.session.scalars(select(AdSet).where(AdSet.scope_key == scope_key))
+        return result.first()
 
     async def get_adset_by_fb_id(self, fb_adset_id: str) -> AdSet | None:
         result = await self.session.scalars(select(AdSet).where(AdSet.fb_adset_id == fb_adset_id))
@@ -186,9 +206,11 @@ class AdsRepository(AsyncRepository):
         offer_id: str | None = None,
         offer_rate_version_id: str | None = None,
         resolved_cpa_usd: Decimal | None = None,
+        ad_id: str | None = None,
     ) -> MetricSnapshot:
         snapshot = MetricSnapshot(
             fb_ad_id=fb_ad_id,
+            ad_id=ad_id,
             scan_run_id=scan_run_id,
             captured_at=captured_at,
             spend=spend,

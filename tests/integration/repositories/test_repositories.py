@@ -42,11 +42,11 @@ async def test_offers_repository_resolves_binding_and_rate(async_session) -> Non
     )
     campaign = AdsRepository(async_session)
     campaign_entity = await campaign.upsert_campaign(
-        fb_campaign_id="campaign-1",
+        scope_key="campaign:account-1:campaign-1",
         name="Кампания 1",
     )
     adset = await campaign.upsert_adset(
-        fb_adset_id="adset-1",
+        scope_key="adset:campaign:account-1:campaign-1:adset-1",
         campaign_id=campaign_entity.id,
         name="Адсет 1",
     )
@@ -60,10 +60,10 @@ async def test_offers_repository_resolves_binding_and_rate(async_session) -> Non
         scope_presence=ScopePresence.IN_SCOPE,
         last_seen_at=datetime(2026, 3, 20, 10, 5, tzinfo=UTC),
     )
-    await repo.upsert_binding(EntityType.ADSET, adset.fb_adset_id, offer.id, priority=1)
+    await repo.upsert_binding(EntityType.ADSET, adset.scope_key, offer.id, priority=1)
     await repo.upsert_binding(EntityType.AD, ad.fb_ad_id, offer.id, priority=10)
 
-    resolved_binding = await repo.resolve_binding(ad.fb_ad_id, adset.fb_adset_id)
+    resolved_binding = await repo.resolve_binding(ad.fb_ad_id, adset.scope_key)
     resolved_rate = await repo.resolve_rate_version(
         offer.id, datetime(2026, 3, 20, 12, 0, tzinfo=UTC)
     )
@@ -84,13 +84,13 @@ async def test_ads_repository_upsert_and_list(async_session) -> None:
     repo = AdsRepository(async_session)
 
     campaign = await repo.upsert_campaign(
-        fb_campaign_id="campaign-1",
+        scope_key="campaign:account-1:campaign-1",
         name="Кампания 1",
         tracking_mode=TrackingMode.TRACKED,
         last_seen_at=datetime(2026, 3, 20, 10, 0, tzinfo=UTC),
     )
     adset = await repo.upsert_adset(
-        fb_adset_id="adset-1",
+        scope_key="adset:campaign:account-1:campaign-1:adset-1",
         campaign_id=campaign.id,
         name="Адсет 1",
         tracking_mode=TrackingMode.TRACKED,
@@ -114,8 +114,8 @@ async def test_ads_repository_upsert_and_list(async_session) -> None:
 
     await async_session.commit()
 
-    assert campaign.fb_campaign_id == "campaign-1"
-    assert adset.fb_adset_id == "adset-1"
+    assert campaign.scope_key == "campaign:account-1:campaign-1"
+    assert adset.scope_key == "adset:campaign:account-1:campaign-1:adset-1"
     assert ad.fb_ad_id == "ad-1"
     assert len(ads) == 1
     assert fetched is not None

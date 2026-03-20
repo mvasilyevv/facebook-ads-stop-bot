@@ -14,7 +14,7 @@ def _map_control_flag_item(flag) -> ControlFlagItem:
     return ControlFlagItem(
         id=str(flag.id),
         entity_type=flag.entity_type.value,
-        entity_external_id=flag.entity_id,
+        entity_id=flag.entity_id,
         tracking_mode=flag.tracking_mode.value,
         reason=flag.reason,
         created_by=flag.created_by,
@@ -38,7 +38,7 @@ async def create_control_flag(
     repo = ControlFlagsRepository(session)
     flag = await repo.upsert_control_flag(
         entity_type=EntityType(payload.entity_type.value),
-        entity_id=payload.entity_external_id,
+        entity_id=payload.entity_id,
         reason=payload.reason,
         created_by=payload.created_by,
         tracking_mode=TrackingMode(payload.tracking_mode.value),

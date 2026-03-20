@@ -38,7 +38,7 @@ class EntityOfferBinding(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "entity_offer_bindings"
 
     entity_type: Mapped[EntityType] = mapped_column(Enum(EntityType, name="entity_type_enum"))
-    entity_id: Mapped[str] = mapped_column(String(64), index=True)
+    entity_id: Mapped[str] = mapped_column(String(255), index=True)
     offer_id: Mapped[str] = mapped_column(ForeignKey("offers.id", ondelete="CASCADE"))
     priority: Mapped[int] = mapped_column(default=0)
     is_active: Mapped[bool] = mapped_column(default=True)

@@ -32,7 +32,7 @@ class ResolvedOfferRate:
 
 def resolve_offer_binding(
     ad_id: str | None,
-    adset_id: str | None,
+    adset_scope_key: str | None,
     bindings: list[OfferBindingCandidate],
 ) -> OfferBindingCandidate | None:
     """Возвращает наиболее приоритетную активную привязку оффера."""
@@ -46,11 +46,11 @@ def resolve_offer_binding(
         if ad_matches:
             return sorted(ad_matches, key=lambda item: item.priority, reverse=True)[0]
 
-    if adset_id is not None:
+    if adset_scope_key is not None:
         adset_matches = [
             item
             for item in candidates
-            if item.entity_type == "adset" and item.entity_id == adset_id
+            if item.entity_type == "adset" and item.entity_id == adset_scope_key
         ]
         if adset_matches:
             return sorted(adset_matches, key=lambda item: item.priority, reverse=True)[0]

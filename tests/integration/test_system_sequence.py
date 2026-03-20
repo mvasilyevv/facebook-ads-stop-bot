@@ -31,7 +31,7 @@ from tests.fixtures.integration_helpers import (
 @pytest.mark.asyncio
 async def test_full_pause_sequence_with_telegram_notification(async_session) -> None:
     created_at = datetime(2026, 3, 20, 12, 0, tzinfo=UTC)
-    fb_ad_id, adset_id = await seed_demo_ad(async_session)
+    fb_ad_id, adset_scope_key = await seed_demo_ad(async_session)
 
     await create_bound_offer_with_rate(
         async_session,
@@ -40,11 +40,11 @@ async def test_full_pause_sequence_with_telegram_notification(async_session) -> 
         cpa_usd=Decimal("5.00"),
         effective_from=created_at,
         entity_type=EntityType.ADSET,
-        entity_external_id=adset_id,
+        entity_id=adset_scope_key,
     )
 
     assert await resolve_current_cpa(
-        async_session, fb_ad_id=fb_ad_id, adset_id=adset_id
+        async_session, fb_ad_id=fb_ad_id, adset_scope_key=adset_scope_key
     ) == Decimal("5.00")
 
     thresholds = build_threshold_pack(Decimal("5.00"))
@@ -96,7 +96,7 @@ async def test_full_pause_sequence_with_telegram_notification(async_session) -> 
 @pytest.mark.asyncio
 async def test_resume_sequence_after_metrics_catch_up(async_session) -> None:
     created_at = datetime(2026, 3, 20, 12, 0, tzinfo=UTC)
-    fb_ad_id, adset_id = await seed_demo_ad(async_session)
+    fb_ad_id, adset_scope_key = await seed_demo_ad(async_session)
 
     await create_bound_offer_with_rate(
         async_session,
@@ -105,11 +105,11 @@ async def test_resume_sequence_after_metrics_catch_up(async_session) -> None:
         cpa_usd=Decimal("5.00"),
         effective_from=created_at,
         entity_type=EntityType.ADSET,
-        entity_external_id=adset_id,
+        entity_id=adset_scope_key,
     )
 
     assert await resolve_current_cpa(
-        async_session, fb_ad_id=fb_ad_id, adset_id=adset_id
+        async_session, fb_ad_id=fb_ad_id, adset_scope_key=adset_scope_key
     ) == Decimal("5.00")
 
     thresholds = build_threshold_pack(Decimal("5.00"))

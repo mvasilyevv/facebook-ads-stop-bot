@@ -70,7 +70,7 @@ class ControlFlag(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "control_flags"
 
     entity_type: Mapped[EntityType] = mapped_column(Enum(EntityType, name="entity_type_enum"))
-    entity_id: Mapped[str] = mapped_column(String(64), index=True)
+    entity_id: Mapped[str] = mapped_column(String(255), index=True)
     tracking_mode: Mapped[TrackingMode] = mapped_column(
         Enum(TrackingMode, name="tracking_mode_enum"),
         default=TrackingMode.MANUAL_BLOCK,
@@ -138,6 +138,6 @@ class Cooldown(Base):
         Enum(EntityType, name="entity_type_enum"),
         primary_key=True,
     )
-    entity_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    entity_id: Mapped[str] = mapped_column(String(255), primary_key=True)
     until_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     reason: Mapped[str] = mapped_column(String(255))

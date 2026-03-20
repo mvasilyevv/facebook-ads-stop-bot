@@ -89,13 +89,13 @@ async def _seed_operational_data(async_session_factory) -> None:
         decisions_repo = DecisionsRepository(session)
 
         campaign = await ads_repo.upsert_campaign(
-            fb_campaign_id="campaign-1",
+            scope_key="campaign:account-1:campaign-1",
             name="Кампания 1",
             tracking_mode=TrackingMode.TRACKED,
             last_seen_at=datetime(2026, 3, 20, 10, 0, tzinfo=UTC),
         )
         adset = await ads_repo.upsert_adset(
-            fb_adset_id="adset-1",
+            scope_key="adset:campaign:account-1:campaign-1:adset-1",
             campaign_id=campaign.id,
             name="Адсет 1",
             tracking_mode=TrackingMode.TRACKED,
@@ -145,8 +145,17 @@ async def test_operational_routes_use_database(api_client, async_session_factory
     assert decisions_response.status_code == 200
     assert scan_runs_response.status_code == 200
     assert ads_response.json()[0]["fb_ad_id"] == "ad-1"
+    assert ads_response.json()[0]["campaign_name"] == "Кампания 1"
     assert decisions_response.json()[0]["reason"] == "Тестовое решение"
     assert scan_runs_response.json()[0]["rows_seen"] == 1
+
+    ad_detail_response = await client.get("/ads/ad-1")
+    assert ad_detail_response.status_code == 200
+    assert ad_detail_response.json()["campaign_scope_key"] == "campaign:account-1:campaign-1"
+    assert (
+        ad_detail_response.json()["adset_scope_key"]
+        == "adset:campaign:account-1:campaign-1:adset-1"
+    )
 
     block_response = await client.post(
         "/ads/ad-1/block",

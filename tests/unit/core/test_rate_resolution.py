@@ -15,11 +15,11 @@ from core.domain import (
 def test_resolve_offer_binding_prefers_ad_override() -> None:
     binding = resolve_offer_binding(
         ad_id="ad-1",
-        adset_id="adset-1",
+        adset_scope_key="adset-scope-1",
         bindings=[
             OfferBindingCandidate(
                 entity_type="adset",
-                entity_id="adset-1",
+                entity_id="adset-scope-1",
                 offer_id="offer-a",
                 priority=1,
             ),

@@ -50,7 +50,7 @@ class OfferBindingItem(BaseModel):
 
     id: str
     entity_type: ControlFlagTarget
-    entity_external_id: str
+    entity_id: str
     offer_id: str
     offer_code: str
     priority: int = 0

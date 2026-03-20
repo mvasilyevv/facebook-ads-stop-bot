@@ -104,13 +104,13 @@ async def seed_worker_ad_graph(async_session_factory) -> WorkerScenarioSeed:
             last_launch_at=datetime(2026, 3, 20, 12, 0, tzinfo=UTC),
         )
         campaign = await ads_repo.upsert_campaign(
-            fb_campaign_id="campaign-1",
+            scope_key="campaign-scope-1",
             name="Кампания 1",
             tracking_mode=TrackingMode.TRACKED,
             last_seen_at=datetime(2026, 3, 20, 12, 0, tzinfo=UTC),
         )
         adset = await ads_repo.upsert_adset(
-            fb_adset_id="adset-1",
+            scope_key="adset-scope-1",
             campaign_id=campaign.id,
             name="Адсет 1",
             tracking_mode=TrackingMode.TRACKED,
@@ -144,7 +144,7 @@ async def seed_offer_with_binding(
     async_session_factory,
     *,
     entity_type: EntityType,
-    entity_external_id: str,
+    entity_id: str,
     offer_code: str,
     cpa_usd: Decimal,
     effective_from: datetime,
@@ -161,7 +161,7 @@ async def seed_offer_with_binding(
         )
         await offers_repo.upsert_binding(
             entity_type=entity_type,
-            entity_id=entity_external_id,
+            entity_id=entity_id,
             offer_id=offer.id,
         )
         await session.commit()

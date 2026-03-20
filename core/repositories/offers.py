@@ -123,7 +123,7 @@ class OffersRepository(AsyncRepository):
     async def resolve_binding(
         self,
         ad_id: str | None,
-        adset_id: str | None,
+        adset_scope_key: str | None,
     ) -> EntityOfferBinding | None:
         if ad_id is not None:
             result = await self.session.scalars(
@@ -139,12 +139,12 @@ class OffersRepository(AsyncRepository):
             if binding is not None:
                 return binding
 
-        if adset_id is not None:
+        if adset_scope_key is not None:
             result = await self.session.scalars(
                 select(EntityOfferBinding)
                 .where(
                     EntityOfferBinding.entity_type == EntityType.ADSET,
-                    EntityOfferBinding.entity_id == adset_id,
+                    EntityOfferBinding.entity_id == adset_scope_key,
                     EntityOfferBinding.is_active.is_(True),
                 )
                 .order_by(EntityOfferBinding.priority.desc())
