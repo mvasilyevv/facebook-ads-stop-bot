@@ -5,6 +5,7 @@ from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from core.domain import DecisionType, DeliveryStatus, ScopePresence, TrackingMode
 from core.models.advertising import Ad, AdSet, Campaign, MetricSnapshot
@@ -124,12 +125,50 @@ class AdsRepository(AsyncRepository):
         return ad
 
     async def get_ad_by_fb_id(self, fb_ad_id: str) -> Ad | None:
-        result = await self.session.scalars(select(Ad).where(Ad.fb_ad_id == fb_ad_id))
+        result = await self.session.scalars(
+            select(Ad)
+            .options(
+                selectinload(Ad.campaign),
+                selectinload(Ad.adset),
+            )
+            .where(Ad.fb_ad_id == fb_ad_id)
+        )
         return result.first()
 
     async def list_ads(self) -> list[Ad]:
-        result = await self.session.scalars(select(Ad).order_by(Ad.fb_ad_id))
+        result = await self.session.scalars(
+            select(Ad)
+            .options(
+                selectinload(Ad.campaign),
+                selectinload(Ad.adset),
+            )
+            .order_by(Ad.fb_ad_id)
+        )
         return list(result.all())
+
+    async def update_ad_review_state(
+        self,
+        fb_ad_id: str,
+        *,
+        tracking_mode: TrackingMode | None = None,
+        scope_presence: ScopePresence | None = None,
+        last_decision: DecisionType | None = None,
+        last_action_source: str | None = None,
+        last_action_at: datetime | None = None,
+    ) -> Ad | None:
+        ad = await self.get_ad_by_fb_id(fb_ad_id)
+        if ad is None:
+            return None
+        if tracking_mode is not None:
+            ad.tracking_mode = tracking_mode
+        if scope_presence is not None:
+            ad.scope_presence = scope_presence
+        if last_decision is not None:
+            ad.last_decision = last_decision
+        ad.last_action_source = last_action_source
+        ad.last_action_at = last_action_at
+        await self.session.flush()
+        return ad
 
     async def add_metric_snapshot(
         self,

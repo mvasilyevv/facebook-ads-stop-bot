@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import logging
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from apps.api.bootstrap import bootstrap_reference_data
 from apps.api.config import load_settings
 from apps.api.routers import (
     ads,
@@ -18,7 +20,6 @@ from apps.api.routers import (
     scan_runs,
     sessions,
 )
-from apps.api.services.state import build_api_state
 
 
 def _setup_logging(level: str) -> None:
@@ -32,12 +33,21 @@ settings = load_settings()
 _setup_logging(settings.log_level)
 logger = logging.getLogger(__name__)
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await bootstrap_reference_data(settings)
+    logger.info("API успешно инициализировано и подключено к базе данных")
+    yield
+
+
 app = FastAPI(
     title=settings.app_name,
     debug=settings.debug,
     docs_url="/docs" if settings.docs_enabled else None,
     redoc_url="/redoc" if settings.docs_enabled else None,
     openapi_url="/openapi.json" if settings.docs_enabled else None,
+    lifespan=lifespan,
 )
 app.add_middleware(
     CORSMiddleware,
@@ -46,12 +56,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-@app.on_event("startup")
-async def on_startup() -> None:
-    app.state.api_state = build_api_state(settings)
-    logger.info("API-каркас успешно инициализирован")
 
 
 @app.exception_handler(RequestValidationError)

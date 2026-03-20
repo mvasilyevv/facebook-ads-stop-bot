@@ -6,6 +6,7 @@ from uuid import uuid4
 
 import pytest
 
+from core.config.settings import Settings
 from core.domain import (
     ActionExecutionStatus,
     ActionType,
@@ -18,11 +19,14 @@ from core.domain import (
 )
 from core.repositories import (
     AdsRepository,
+    BrowserRepository,
     ControlFlagsRepository,
     DecisionsRepository,
     OffersRepository,
+    RulesRepository,
     ScanRunsRepository,
 )
+from core.repositories.rules import DEFAULT_RULES
 
 
 # Проверяет полный поток offers -> rates -> bindings -> resolved binding/rate на async SQLite.
@@ -220,3 +224,66 @@ async def test_scan_runs_repository_tracks_lifecycle(async_session) -> None:
     assert updated is not None
     assert updated.rows_seen == 2
     assert len(all_runs) == 1
+
+
+# Проверяет, что bootstrap правил создает полный набор системных стоп-правил в базе и больше не зависит от памяти API.
+@pytest.mark.asyncio
+async def test_rules_repository_bootstraps_default_rules(async_session) -> None:
+    repo = RulesRepository(async_session)
+
+    await repo.ensure_default_rules()
+    rules = await repo.list_rules()
+
+    await async_session.commit()
+
+    assert len(rules) == len(DEFAULT_RULES)
+    assert [rule.code for rule in rules] == [rule.code for rule in DEFAULT_RULES]
+    assert rules[0].config_json["priority"] == 10
+    assert rules[0].config_json["cpa_multiplier"] == "0.02"
+
+
+# Проверяет, что browser repository хранит последнюю сессию профиля и возвращает ее вместе с host/profile данными.
+@pytest.mark.asyncio
+async def test_browser_repository_returns_latest_session_per_profile(async_session) -> None:
+    repo = BrowserRepository(async_session)
+
+    browser_host = await repo.upsert_browser_host(
+        name="browser-host-local",
+        vendor="vision",
+        api_base_url=Settings().vision_local_api_url,
+        is_enabled=True,
+        last_heartbeat_at=datetime(2026, 3, 20, 10, 0, tzinfo=UTC),
+    )
+    profile = await repo.upsert_profile(
+        browser_host_id=browser_host.id,
+        vendor_profile_id="vision-profile-1",
+        display_name="Vision профиль 1",
+        is_active=True,
+        last_launch_at=datetime(2026, 3, 20, 10, 1, tzinfo=UTC),
+    )
+    await repo.create_browser_session(
+        browser_host_id=browser_host.id,
+        profile_id=profile.id,
+        status="STOPPED",
+        started_at=datetime(2026, 3, 20, 10, 2, tzinfo=UTC),
+        finished_at=datetime(2026, 3, 20, 10, 3, tzinfo=UTC),
+    )
+    await repo.create_browser_session(
+        browser_host_id=browser_host.id,
+        profile_id=profile.id,
+        status="ACTIVE",
+        started_at=datetime(2026, 3, 20, 10, 4, tzinfo=UTC),
+        cdp_url="http://127.0.0.1:54000",
+    )
+
+    latest = await repo.get_latest_session_by_vendor_profile_id("vision-profile-1")
+    all_latest = await repo.list_latest_sessions()
+
+    await async_session.commit()
+
+    assert latest is not None
+    assert latest.profile.vendor_profile_id == "vision-profile-1"
+    assert latest.browser_host.name == "browser-host-local"
+    assert latest.session.status == "ACTIVE"
+    assert latest.session.cdp_url == "http://127.0.0.1:54000"
+    assert len(all_latest) == 1

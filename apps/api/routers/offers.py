@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from fastapi import APIRouter, HTTPException, status
 
 from apps.api.deps import DbSessionDep
@@ -71,7 +73,7 @@ async def list_offers(session: DbSessionDep) -> list[OfferItem]:
     offers = await repo.list_offers()
     result: list[OfferItem] = []
     for offer in offers:
-        rate = await repo.resolve_rate_version(offer.id, offer.updated_at)
+        rate = await repo.resolve_rate_version(offer.id, datetime.now(tz=UTC))
         result.append(_map_offer_item(offer, rate.cpa_usd if rate is not None else None))
     return result
 

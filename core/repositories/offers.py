@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
+from uuid import UUID
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,7 +23,7 @@ class OffersRepository(AsyncRepository):
         return list(result.all())
 
     async def get_offer(self, offer_id: str) -> Offer | None:
-        return await self.session.get(Offer, offer_id)
+        return await self.session.get(Offer, UUID(str(offer_id)))
 
     async def get_offer_by_code(self, code: str) -> Offer | None:
         result = await self.session.scalars(select(Offer).where(Offer.code == code))

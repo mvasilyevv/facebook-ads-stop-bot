@@ -3,16 +3,9 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from apps.api.config import ApiSettings
-from apps.api.schemas.common import ControlFlagTarget
-from apps.api.schemas.offers import (
-    OfferBindingCreateRequest,
-    OfferCreateRequest,
-    OfferRateCreateRequest,
-)
-from apps.api.services.offers import OffersService
-from apps.api.services.state import ApiState, build_api_state
 from apps.notifier.events import TelegramEvent, TelegramEventPayload, TelegramEventType
+from core.domain import DeliveryStatus, EntityType, ScopePresence, TrackingMode
+from core.repositories import AdsRepository, OffersRepository
 
 
 class MemoryTelegramTransport:
@@ -25,36 +18,73 @@ class MemoryTelegramTransport:
         self.messages.append(text)
 
 
-def build_demo_state() -> tuple[ApiState, OffersService]:
-    state = build_api_state(ApiSettings())
-    return state, OffersService(store=state.store)
+async def seed_demo_ad(async_session) -> tuple[str, str]:
+    ads_repo = AdsRepository(async_session)
+    campaign = await ads_repo.upsert_campaign(
+        fb_campaign_id="demo-campaign-1",
+        name="Демо кампания",
+        tracking_mode=TrackingMode.TRACKED,
+        last_seen_at=datetime(2026, 3, 20, 12, 0, tzinfo=UTC),
+    )
+    adset = await ads_repo.upsert_adset(
+        fb_adset_id="demo-adset-1",
+        campaign_id=campaign.id,
+        name="Демо адсет",
+        tracking_mode=TrackingMode.TRACKED,
+        last_seen_at=datetime(2026, 3, 20, 12, 0, tzinfo=UTC),
+    )
+    ad = await ads_repo.upsert_ad(
+        fb_ad_id="demo-ad-1",
+        campaign_id=campaign.id,
+        adset_id=adset.id,
+        name="Демо объявление",
+        delivery_status=DeliveryStatus.ACTIVE,
+        tracking_mode=TrackingMode.TRACKED,
+        scope_presence=ScopePresence.IN_SCOPE,
+        last_seen_at=datetime(2026, 3, 20, 12, 0, tzinfo=UTC),
+    )
+    await async_session.flush()
+    return ad.fb_ad_id, adset.fb_adset_id
 
 
-def create_bound_offer_with_rate(
-    offers_service: OffersService,
+async def create_bound_offer_with_rate(
+    async_session,
     *,
     offer_code: str,
     offer_name: str,
     cpa_usd: Decimal,
     effective_from: datetime,
-    entity_type: ControlFlagTarget,
+    entity_type: EntityType,
     entity_external_id: str,
     priority: int = 0,
 ) -> str:
-    offer = offers_service.create_offer(OfferCreateRequest(code=offer_code, name=offer_name)).offer
-    offers_service.create_rate(
+    offers_repo = OffersRepository(async_session)
+    offer = await offers_repo.create_offer(code=offer_code, name=offer_name)
+    await offers_repo.add_rate_version(
         offer_id=offer.id,
-        payload=OfferRateCreateRequest(
-            cpa_usd=cpa_usd,
-            effective_from=effective_from,
-        ),
+        cpa_usd=cpa_usd,
+        effective_from=effective_from,
     )
-    offers_service.bind_offer(
+    await offers_repo.upsert_binding(
         entity_type=entity_type,
-        entity_external_id=entity_external_id,
-        payload=OfferBindingCreateRequest(offer_id=offer.id, priority=priority),
+        entity_id=entity_external_id,
+        offer_id=offer.id,
+        priority=priority,
     )
     return offer.id
+
+
+async def resolve_current_cpa(async_session, *, fb_ad_id: str, adset_id: str) -> Decimal | None:
+    offers_repo = OffersRepository(async_session)
+    binding = await offers_repo.resolve_binding(fb_ad_id, adset_id)
+    if binding is None:
+        return None
+    rate = await offers_repo.resolve_rate_version(
+        binding.offer_id, datetime(2026, 3, 20, 12, 0, tzinfo=UTC)
+    )
+    if rate is None:
+        return None
+    return rate.cpa_usd
 
 
 def build_telegram_event(

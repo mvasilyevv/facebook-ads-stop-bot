@@ -53,8 +53,16 @@ async def async_engine(tmp_path) -> AsyncIterator[AsyncEngine]:
 
 
 @pytest.fixture
-async def async_session(async_engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
-    session_factory = async_sessionmaker(bind=async_engine, expire_on_commit=False)
-    async with session_factory() as session:
+async def async_session_factory(
+    async_engine: AsyncEngine,
+) -> AsyncIterator[async_sessionmaker[AsyncSession]]:
+    yield async_sessionmaker(bind=async_engine, expire_on_commit=False)
+
+
+@pytest.fixture
+async def async_session(
+    async_session_factory: async_sessionmaker[AsyncSession],
+) -> AsyncIterator[AsyncSession]:
+    async with async_session_factory() as session:
         yield session
         await session.rollback()

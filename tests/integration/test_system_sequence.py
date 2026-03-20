@@ -3,12 +3,13 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from apps.api.schemas.common import ControlFlagTarget
+import pytest
+
 from apps.notifier.events import TelegramEventType
 from apps.notifier.formatter import TelegramMessageFormatter
 from apps.notifier.sender import InMemoryDedupStore, TelegramSender
 from apps.notifier.telegram import TelegramNotifier
-from core.domain import DeliveryStatus
+from core.domain import DeliveryStatus, EntityType
 from core.rules import (
     CleanScanState,
     MetricsSnapshot,
@@ -18,29 +19,33 @@ from core.rules import (
 )
 from tests.fixtures.integration_helpers import (
     MemoryTelegramTransport,
-    build_demo_state,
     build_low_risk_metrics,
     build_telegram_event,
     create_bound_offer_with_rate,
+    resolve_current_cpa,
+    seed_demo_ad,
 )
 
 
 # Проверяет полный рабочий путь: оффер и ставка рассчитывают CPA, стоп-правило срабатывает, а Telegram-фасад отправляет русское сообщение.
-def test_full_pause_sequence_with_telegram_notification() -> None:
-    state, offers_service = build_demo_state()
+@pytest.mark.asyncio
+async def test_full_pause_sequence_with_telegram_notification(async_session) -> None:
     created_at = datetime(2026, 3, 20, 12, 0, tzinfo=UTC)
+    fb_ad_id, adset_id = await seed_demo_ad(async_session)
 
-    create_bound_offer_with_rate(
-        offers_service,
+    await create_bound_offer_with_rate(
+        async_session,
         offer_code="offer-sequence",
         offer_name="Последовательный оффер",
         cpa_usd=Decimal("5.00"),
         effective_from=created_at,
-        entity_type=ControlFlagTarget.ADSET,
-        entity_external_id="demo-adset-1",
+        entity_type=EntityType.ADSET,
+        entity_external_id=adset_id,
     )
 
-    assert state.store.ads["demo-ad-1"].resolved_cpa_usd == Decimal("5.00")
+    assert await resolve_current_cpa(
+        async_session, fb_ad_id=fb_ad_id, adset_id=adset_id
+    ) == Decimal("5.00")
 
     thresholds = build_threshold_pack(Decimal("5.00"))
     pause_snapshot = MetricsSnapshot(
@@ -88,21 +93,24 @@ def test_full_pause_sequence_with_telegram_notification() -> None:
 
 
 # Проверяет, что после долета лидов объявление снова становится пригодным к включению при двух чистых сканах подряд.
-def test_resume_sequence_after_metrics_catch_up() -> None:
-    state, offers_service = build_demo_state()
+@pytest.mark.asyncio
+async def test_resume_sequence_after_metrics_catch_up(async_session) -> None:
     created_at = datetime(2026, 3, 20, 12, 0, tzinfo=UTC)
+    fb_ad_id, adset_id = await seed_demo_ad(async_session)
 
-    create_bound_offer_with_rate(
-        offers_service,
+    await create_bound_offer_with_rate(
+        async_session,
         offer_code="offer-resume",
         offer_name="Оффер для возврата",
         cpa_usd=Decimal("5.00"),
         effective_from=created_at,
-        entity_type=ControlFlagTarget.ADSET,
-        entity_external_id="demo-adset-1",
+        entity_type=EntityType.ADSET,
+        entity_external_id=adset_id,
     )
 
-    assert state.store.ads["demo-ad-1"].resolved_cpa_usd == Decimal("5.00")
+    assert await resolve_current_cpa(
+        async_session, fb_ad_id=fb_ad_id, adset_id=adset_id
+    ) == Decimal("5.00")
 
     thresholds = build_threshold_pack(Decimal("5.00"))
     resume_snapshot = MetricsSnapshot(
