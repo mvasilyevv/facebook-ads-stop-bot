@@ -7,8 +7,11 @@ from core.domain import DecisionType, DeliveryStatus, ScopePresence, TrackingMod
 from core.scanner import (
     ScannedAdRow,
     ScannerPolicyFlags,
+    build_adset_scope_key,
+    build_campaign_scope_key,
     build_scope_summary,
     evaluate_scanned_row,
+    normalize_scope_fragment,
     to_metrics_snapshot,
 )
 
@@ -18,10 +21,11 @@ def _build_row(
     tracking_mode: TrackingMode = TrackingMode.TRACKED,
     scope_presence: ScopePresence = ScopePresence.IN_SCOPE,
 ) -> ScannedAdRow:
+    campaign_scope_key = build_campaign_scope_key("Кампания 1", "Аккаунт 1")
     return ScannedAdRow(
         fb_ad_id="ad-1",
-        campaign_id="campaign-1",
-        adset_id="adset-1",
+        campaign_scope_key=campaign_scope_key,
+        adset_scope_key=build_adset_scope_key("Адсет 1", campaign_scope_key),
         campaign_name="Кампания 1",
         adset_name="Адсет 1",
         ad_name="Объявление 1",
@@ -79,6 +83,16 @@ def test_build_scope_summary_counts_rows_by_status() -> None:
     assert summary.manual_blocked_rows == 1
     assert summary.read_only_rows == 1
     assert summary.fb_ad_ids == ("ad-1", "ad-1", "ad-1")
+
+
+# Проверяет, что scanner строит внутренние scope key из человеческих названий, а не из Facebook ID.
+def test_build_scope_key_helpers_normalize_names() -> None:
+    campaign_scope_key = build_campaign_scope_key("Кампания 1", "Аккаунт 1")
+    adset_scope_key = build_adset_scope_key("Адсет 1", campaign_scope_key)
+
+    assert campaign_scope_key == "campaign:аккаунт-1:кампания-1"
+    assert adset_scope_key == "adset:campaign:аккаунт-1:кампания-1:адсет-1"
+    assert normalize_scope_fragment("  Аккаунт / 1  ") == "аккаунт-1"
 
 
 # Проверяет, что объявление со статусом «не показывается» всегда уходит в alert rejection.
@@ -144,10 +158,11 @@ def test_evaluate_scanned_row_detects_pause_reasons() -> None:
 
 # Проверяет, что пауза может перейти в resume только при явном feature flag и двух чистых сканах подряд.
 def test_evaluate_scanned_row_allows_resume_only_with_flag() -> None:
+    campaign_scope_key = build_campaign_scope_key("Кампания 1", "Аккаунт 1")
     row = ScannedAdRow(
         fb_ad_id="ad-1",
-        campaign_id="campaign-1",
-        adset_id="adset-1",
+        campaign_scope_key=campaign_scope_key,
+        adset_scope_key=build_adset_scope_key("Адсет 1", campaign_scope_key),
         campaign_name="Кампания 1",
         adset_name="Адсет 1",
         ad_name="Объявление 1",

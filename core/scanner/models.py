@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
@@ -7,14 +8,46 @@ from decimal import Decimal
 from core.domain import DecisionType, DeliveryStatus, ScopePresence, TrackingMode
 from core.rules import ThresholdPack
 
+_NON_KEY_CHARS = re.compile(r"[^\w]+", re.UNICODE)
+_DASHES = re.compile(r"-+")
+
+
+def normalize_scope_fragment(value: str) -> str:
+    """Приводит произвольную строку к безопасному фрагменту внутреннего scope key."""
+
+    normalized = value.casefold().strip()
+    normalized = _NON_KEY_CHARS.sub("-", normalized).replace("_", "-")
+    normalized = _DASHES.sub("-", normalized).strip("-")
+    return normalized or "unknown"
+
+
+def build_campaign_scope_key(campaign_name: str, account_name: str | None = None) -> str:
+    """Строит внутренний ключ кампании из имени и, при наличии, имени аккаунта."""
+
+    parts = ["campaign"]
+    if account_name is not None and account_name.strip():
+        parts.append(normalize_scope_fragment(account_name))
+    parts.append(normalize_scope_fragment(campaign_name))
+    return ":".join(parts)
+
+
+def build_adset_scope_key(adset_name: str, campaign_scope_key: str | None = None) -> str:
+    """Строит внутренний ключ адсета из собственного имени и ключа кампании."""
+
+    parts = ["adset"]
+    if campaign_scope_key is not None and campaign_scope_key.strip():
+        parts.append(campaign_scope_key.casefold().strip())
+    parts.append(normalize_scope_fragment(adset_name))
+    return ":".join(parts)
+
 
 @dataclass(slots=True, frozen=True)
 class ScannedAdRow:
     """Нормализованная строка объявления, полученная после сканирования scope."""
 
     fb_ad_id: str
-    campaign_id: str
-    adset_id: str
+    campaign_scope_key: str
+    adset_scope_key: str
     campaign_name: str
     adset_name: str
     ad_name: str
