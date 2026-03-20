@@ -32,7 +32,7 @@ async def test_worker_scan_service_writes_pause_decision_for_expensive_click(asy
     await seed_offer_with_binding(
         async_session_factory,
         entity_type=EntityType.ADSET,
-        entity_external_id=seed.fb_adset_id,
+        entity_external_id=seed.adset_scope_key,
         offer_code="offer-1",
         cpa_usd=Decimal("5.00"),
         effective_from=datetime(2026, 3, 20, 11, 0, tzinfo=UTC),
@@ -40,9 +40,9 @@ async def test_worker_scan_service_writes_pause_decision_for_expensive_click(asy
     provider = FakeScannerProvider(
         rows=[
             WorkerScanRow(
-                fb_campaign_id=seed.fb_campaign_id,
+                campaign_scope_key=seed.campaign_scope_key,
                 campaign_name=seed.campaign_name,
-                fb_adset_id=seed.fb_adset_id,
+                adset_scope_key=seed.adset_scope_key,
                 adset_name=seed.adset_name,
                 fb_ad_id=seed.fb_ad_id,
                 ad_name=seed.ad_name,
@@ -78,7 +78,7 @@ async def test_worker_scan_service_writes_pause_decision_for_expensive_click(asy
                 )
             ).all()
         )
-        binding = await OffersRepository(session).resolve_binding(seed.fb_ad_id, seed.fb_adset_id)
+        binding = await OffersRepository(session).resolve_binding(None, seed.adset_scope_key)
 
     assert len(scan_runs) == 1
     assert scan_runs[0].status == ScanRunStatus.SUCCEEDED
@@ -89,6 +89,7 @@ async def test_worker_scan_service_writes_pause_decision_for_expensive_click(asy
     assert snapshots[0].fb_ad_id == seed.fb_ad_id
     assert snapshots[0].resolved_cpa_usd == Decimal("5.00")
     assert binding is not None
+    assert binding.entity_id == seed.adset_scope_key
 
 
 # Проверяет, что объявление без resolved CPA сохраняет снимок и пишет решение `INSUFFICIENT_DATA`.
@@ -98,9 +99,9 @@ async def test_worker_scan_service_marks_insufficient_data_without_cpa(async_ses
     provider = FakeScannerProvider(
         rows=[
             WorkerScanRow(
-                fb_campaign_id=seed.fb_campaign_id,
+                campaign_scope_key=seed.campaign_scope_key,
                 campaign_name=seed.campaign_name,
-                fb_adset_id=seed.fb_adset_id,
+                adset_scope_key=seed.adset_scope_key,
                 adset_name=seed.adset_name,
                 fb_ad_id=seed.fb_ad_id,
                 ad_name=seed.ad_name,

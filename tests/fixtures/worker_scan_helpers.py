@@ -17,9 +17,9 @@ from core.repositories import AdsRepository, BrowserRepository, OffersRepository
 class WorkerScanRow:
     """Нормализованная строка скана для будущего worker runtime."""
 
-    fb_campaign_id: str
+    campaign_scope_key: str
     campaign_name: str
-    fb_adset_id: str
+    adset_scope_key: str
     adset_name: str
     fb_ad_id: str
     ad_name: str
@@ -77,8 +77,8 @@ class WorkerScenarioSeed:
     campaign_name: str
     adset_name: str
     ad_name: str
-    fb_campaign_id: str
-    fb_adset_id: str
+    campaign_scope_key: str
+    adset_scope_key: str
     fb_ad_id: str
 
 
@@ -134,8 +134,8 @@ async def seed_worker_ad_graph(async_session_factory) -> WorkerScenarioSeed:
             campaign_name=campaign.name,
             adset_name=adset.name,
             ad_name=ad.name,
-            fb_campaign_id=campaign.fb_campaign_id,
-            fb_adset_id=adset.fb_adset_id,
+            campaign_scope_key="campaign-scope-1",
+            adset_scope_key="adset-scope-1",
             fb_ad_id=ad.fb_ad_id,
         )
 
