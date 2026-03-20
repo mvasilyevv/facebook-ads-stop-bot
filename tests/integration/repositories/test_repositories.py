@@ -1,0 +1,222 @@
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from decimal import Decimal
+from uuid import uuid4
+
+import pytest
+
+from core.domain import (
+    ActionExecutionStatus,
+    ActionType,
+    DecisionType,
+    DeliveryStatus,
+    EntityType,
+    ScanRunStatus,
+    ScopePresence,
+    TrackingMode,
+)
+from core.repositories import (
+    AdsRepository,
+    ControlFlagsRepository,
+    DecisionsRepository,
+    OffersRepository,
+    ScanRunsRepository,
+)
+
+
+# Проверяет полный поток offers -> rates -> bindings -> resolved binding/rate на async SQLite.
+@pytest.mark.asyncio
+async def test_offers_repository_resolves_binding_and_rate(async_session) -> None:
+    repo = OffersRepository(async_session)
+
+    offer = await repo.create_offer(code="offer-1", name="Оффер 1")
+    rate = await repo.add_rate_version(
+        offer_id=offer.id,
+        cpa_usd=Decimal("5.00"),
+        effective_from=datetime(2026, 3, 20, 10, 0, tzinfo=UTC),
+    )
+    campaign = AdsRepository(async_session)
+    campaign_entity = await campaign.upsert_campaign(
+        fb_campaign_id="campaign-1",
+        name="Кампания 1",
+    )
+    adset = await campaign.upsert_adset(
+        fb_adset_id="adset-1",
+        campaign_id=campaign_entity.id,
+        name="Адсет 1",
+    )
+    ad = await campaign.upsert_ad(
+        fb_ad_id="ad-1",
+        campaign_id=campaign_entity.id,
+        adset_id=adset.id,
+        name="Объявление 1",
+        delivery_status=DeliveryStatus.ACTIVE,
+        tracking_mode=TrackingMode.TRACKED,
+        scope_presence=ScopePresence.IN_SCOPE,
+        last_seen_at=datetime(2026, 3, 20, 10, 5, tzinfo=UTC),
+    )
+    await repo.upsert_binding(EntityType.ADSET, adset.fb_adset_id, offer.id, priority=1)
+    await repo.upsert_binding(EntityType.AD, ad.fb_ad_id, offer.id, priority=10)
+
+    resolved_binding = await repo.resolve_binding(ad.fb_ad_id, adset.fb_adset_id)
+    resolved_rate = await repo.resolve_rate_version(
+        offer.id, datetime(2026, 3, 20, 12, 0, tzinfo=UTC)
+    )
+
+    await async_session.commit()
+
+    assert rate.offer_id == offer.id
+    assert resolved_binding is not None
+    assert resolved_binding.entity_type == EntityType.AD
+    assert resolved_binding.entity_id == ad.fb_ad_id
+    assert resolved_rate is not None
+    assert resolved_rate.cpa_usd == Decimal("5.00")
+
+
+# Проверяет, что репозиторий объявлений создаёт и обновляет кампанию, адсет и ad с правильными состояниями.
+@pytest.mark.asyncio
+async def test_ads_repository_upsert_and_list(async_session) -> None:
+    repo = AdsRepository(async_session)
+
+    campaign = await repo.upsert_campaign(
+        fb_campaign_id="campaign-1",
+        name="Кампания 1",
+        tracking_mode=TrackingMode.TRACKED,
+        last_seen_at=datetime(2026, 3, 20, 10, 0, tzinfo=UTC),
+    )
+    adset = await repo.upsert_adset(
+        fb_adset_id="adset-1",
+        campaign_id=campaign.id,
+        name="Адсет 1",
+        tracking_mode=TrackingMode.TRACKED,
+        last_seen_at=datetime(2026, 3, 20, 10, 1, tzinfo=UTC),
+    )
+    ad = await repo.upsert_ad(
+        fb_ad_id="ad-1",
+        campaign_id=campaign.id,
+        adset_id=adset.id,
+        name="Объявление 1",
+        delivery_status=DeliveryStatus.NOT_DELIVERING,
+        tracking_mode=TrackingMode.MANUAL_BLOCK,
+        scope_presence=ScopePresence.IN_SCOPE,
+        last_seen_at=datetime(2026, 3, 20, 10, 2, tzinfo=UTC),
+        last_action_source="operator",
+        last_decision=DecisionType.ALERT_REJECTION,
+    )
+
+    ads = await repo.list_ads()
+    fetched = await repo.get_ad_by_fb_id("ad-1")
+
+    await async_session.commit()
+
+    assert campaign.fb_campaign_id == "campaign-1"
+    assert adset.fb_adset_id == "adset-1"
+    assert ad.fb_ad_id == "ad-1"
+    assert len(ads) == 1
+    assert fetched is not None
+    assert fetched.delivery_status == DeliveryStatus.NOT_DELIVERING
+
+
+# Проверяет, что решения и действия сохраняются в правильной последовательности по одному скану.
+@pytest.mark.asyncio
+async def test_decisions_repository_persists_decision_and_action(async_session) -> None:
+    scan_repo = ScanRunsRepository(async_session)
+    decisions_repo = DecisionsRepository(async_session)
+
+    scan_run = await scan_repo.create_scan_run(
+        browser_host_id=uuid4(),
+        profile_id=uuid4(),
+        status=ScanRunStatus.RUNNING,
+        started_at=datetime(2026, 3, 20, 10, 0, tzinfo=UTC),
+    )
+    decision = await decisions_repo.create_decision(
+        scan_run_id=scan_run.id,
+        fb_ad_id="ad-1",
+        decision=DecisionType.WOULD_PAUSE,
+        reason="Тестовая причина",
+        resolved_cpa_usd=Decimal("5.00"),
+    )
+    action = await decisions_repo.add_action_execution(
+        decision_id=decision.id,
+        action_type=ActionType.PAUSE,
+        status=ActionExecutionStatus.SUCCEEDED,
+        started_at=datetime(2026, 3, 20, 10, 1, tzinfo=UTC),
+        finished_at=datetime(2026, 3, 20, 10, 2, tzinfo=UTC),
+        message="Пауза выполнена",
+    )
+
+    decisions = await decisions_repo.list_decisions(scan_run_id=scan_run.id)
+    updated_scan = await scan_repo.update_scan_run(
+        scan_run.id,
+        status=ScanRunStatus.SUCCEEDED,
+        finished_at=datetime(2026, 3, 20, 10, 3, tzinfo=UTC),
+        rows_seen=1,
+        rows_parsed=1,
+        scope_summary={"ads": 1},
+    )
+
+    await async_session.commit()
+
+    assert decision.reason == "Тестовая причина"
+    assert action.status == ActionExecutionStatus.SUCCEEDED
+    assert len(decisions) == 1
+    assert updated_scan is not None
+    assert updated_scan.status == ScanRunStatus.SUCCEEDED
+
+
+# Проверяет, что control flags можно создать, найти и удалить в рамках одного async-сеанса.
+@pytest.mark.asyncio
+async def test_control_flags_repository_crud(async_session) -> None:
+    repo = ControlFlagsRepository(async_session)
+
+    created = await repo.upsert_control_flag(
+        entity_type=EntityType.AD,
+        entity_id="ad-1",
+        reason="Ручная блокировка",
+        created_by="operator",
+        tracking_mode=TrackingMode.MANUAL_BLOCK,
+        expires_at=datetime(2026, 3, 21, 10, 0, tzinfo=UTC),
+    )
+    fetched = await repo.get_control_flag(EntityType.AD, "ad-1")
+    deleted = await repo.delete_control_flag(EntityType.AD, "ad-1")
+    remaining = await repo.list_control_flags()
+
+    await async_session.commit()
+
+    assert created.entity_id == "ad-1"
+    assert fetched is not None
+    assert deleted is True
+    assert remaining == []
+
+
+# Проверяет, что репозиторий сканов сохраняет временные метки и счетчики последовательно.
+@pytest.mark.asyncio
+async def test_scan_runs_repository_tracks_lifecycle(async_session) -> None:
+    repo = ScanRunsRepository(async_session)
+
+    started_at = datetime(2026, 3, 20, 10, 0, tzinfo=UTC)
+    scan_run = await repo.create_scan_run(
+        browser_host_id=uuid4(),
+        profile_id=uuid4(),
+        status=ScanRunStatus.PENDING,
+        started_at=started_at,
+        rows_seen=0,
+        rows_parsed=0,
+    )
+    updated = await repo.update_scan_run(
+        scan_run.id,
+        status=ScanRunStatus.RUNNING,
+        rows_seen=2,
+        rows_parsed=2,
+        scope_summary={"ads": 2},
+    )
+
+    all_runs = await repo.list_scan_runs()
+
+    await async_session.commit()
+
+    assert scan_run.started_at == started_at
+    assert updated is not None
+    assert updated.rows_seen == 2
+    assert len(all_runs) == 1

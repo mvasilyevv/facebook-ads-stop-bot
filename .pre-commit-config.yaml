@@ -1,0 +1,64 @@
+# Конфигурация локального контрольно-валидационного контура.
+# Тесты запускаются только для релевантных изменений, чтобы не утяжелять мелкие правки.
+minimum_pre_commit_version: "4.2.0"
+default_stages:
+  - pre-commit
+fail_fast: false
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        name: Удаление хвостовых пробелов
+      - id: end-of-file-fixer
+        name: Исправление конца файла
+      - id: check-yaml
+        name: Проверка YAML
+      - id: check-toml
+        name: Проверка TOML
+      - id: check-merge-conflict
+        name: Проверка конфликтных маркеров
+      - id: check-added-large-files
+        name: Проверка больших файлов
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.7
+    hooks:
+      - id: ruff-check
+        name: Проверка кода Ruff
+        args:
+          - --fix
+      - id: ruff-format
+        name: Форматирование Ruff
+
+  - repo: local
+    hooks:
+      - id: pytest-russian-guard
+        name: Прогон тестов для кода и инфраструктуры
+        entry: python
+        language: python
+        additional_dependencies:
+          - alembic
+          - asyncpg
+          - aiosqlite
+          - fastapi
+          - httpx
+          - pydantic
+          - pydantic-settings
+          - python-json-logger
+          - redis
+          - sqlalchemy
+          - tenacity
+          - uvicorn[standard]
+          - pytest
+          - pytest-asyncio
+        pass_filenames: false
+        args:
+          - -B
+          - -m
+          - pytest
+          - -q
+          - -o
+          - cache_dir=/tmp/facebook-ads-stop-bot-pytest-cache
+        files: ^(apps|core|tests|migrations)/|^(pyproject\.toml|Makefile|Dockerfile|docker-compose\.yml|alembic\.ini)$
