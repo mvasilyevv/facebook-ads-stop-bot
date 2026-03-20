@@ -13,6 +13,7 @@ from core.scanner.service import (
     evaluate_scanned_row,
     to_metrics_snapshot,
 )
+from core.scanner.utils import StatusNormalizer, normalize_delivery_status, parse_scanner_decimal
 
 __all__ = [
     "ObserveScannerService",
@@ -20,10 +21,13 @@ __all__ = [
     "ScannerDecisionResult",
     "ScannerPolicyFlags",
     "ScannedAdRow",
+    "StatusNormalizer",
     "build_adset_scope_key",
     "build_campaign_scope_key",
     "build_scope_summary",
     "evaluate_scanned_row",
+    "normalize_delivery_status",
     "normalize_scope_fragment",
+    "parse_scanner_decimal",
     "to_metrics_snapshot",
 ]
