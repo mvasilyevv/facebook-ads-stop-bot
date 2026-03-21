@@ -12,28 +12,35 @@ branch_labels = None
 depends_on = None
 
 
-tracking_mode_enum = sa.Enum(
-    "TRACKED",
-    "MANUAL_BLOCK",
-    "READ_ONLY",
-    "ARCHIVED",
-    name="tracking_mode_enum",
+_tracking_mode_enum = sa.Enum(
+    "TRACKED", "MANUAL_BLOCK", "READ_ONLY", "ARCHIVED", name="tracking_mode_enum"
 )
-delivery_status_enum = sa.Enum(
+tracking_mode_enum = postgresql.ENUM(
+    "TRACKED", "MANUAL_BLOCK", "READ_ONLY", "ARCHIVED", name="tracking_mode_enum", create_type=False
+)
+_delivery_status_enum = sa.Enum(
+    "ACTIVE", "LEARNING", "PAUSED", "NOT_DELIVERING", "UNKNOWN", name="delivery_status_enum"
+)
+delivery_status_enum = postgresql.ENUM(
     "ACTIVE",
     "LEARNING",
     "PAUSED",
     "NOT_DELIVERING",
     "UNKNOWN",
     name="delivery_status_enum",
+    create_type=False,
 )
-scope_presence_enum = sa.Enum(
+_scope_presence_enum = sa.Enum(
+    "IN_SCOPE", "NOT_SEEN_THIS_SCAN", "OUT_OF_SCOPE_CONFIRMED", name="scope_presence_enum"
+)
+scope_presence_enum = postgresql.ENUM(
     "IN_SCOPE",
     "NOT_SEEN_THIS_SCAN",
     "OUT_OF_SCOPE_CONFIRMED",
     name="scope_presence_enum",
+    create_type=False,
 )
-decision_type_enum = sa.Enum(
+_decision_type_enum = sa.Enum(
     "NO_ACTION",
     "WOULD_PAUSE",
     "WOULD_RESUME",
@@ -44,19 +51,48 @@ decision_type_enum = sa.Enum(
     "KEPT_PAUSED_BY_VIABILITY",
     name="decision_type_enum",
 )
-entity_type_enum = sa.Enum("campaign", "adset", "ad", name="entity_type_enum")
-scan_run_status_enum = sa.Enum(
+decision_type_enum = postgresql.ENUM(
+    "NO_ACTION",
+    "WOULD_PAUSE",
+    "WOULD_RESUME",
+    "SKIPPED_BY_POLICY",
+    "INSUFFICIENT_DATA",
+    "AMBIGUOUS",
+    "ALERT_REJECTION",
+    "KEPT_PAUSED_BY_VIABILITY",
+    name="decision_type_enum",
+    create_type=False,
+)
+_entity_type_enum = sa.Enum("campaign", "adset", "ad", name="entity_type_enum")
+entity_type_enum = postgresql.ENUM(
+    "campaign", "adset", "ad", name="entity_type_enum", create_type=False
+)
+_scan_run_status_enum = sa.Enum(
     "PENDING", "RUNNING", "SUCCEEDED", "FAILED", "INVALID", name="scan_run_status_enum"
 )
-action_type_enum = sa.Enum("PAUSE", "RESUME", name="action_type_enum")
-action_execution_status_enum = sa.Enum(
+scan_run_status_enum = postgresql.ENUM(
+    "PENDING",
+    "RUNNING",
+    "SUCCEEDED",
+    "FAILED",
+    "INVALID",
+    name="scan_run_status_enum",
+    create_type=False,
+)
+_action_type_enum = sa.Enum("PAUSE", "RESUME", name="action_type_enum")
+action_type_enum = postgresql.ENUM("PAUSE", "RESUME", name="action_type_enum", create_type=False)
+_action_execution_status_enum = sa.Enum(
+    "PENDING", "SUCCEEDED", "FAILED", "SKIPPED", name="action_execution_status_enum"
+)
+action_execution_status_enum = postgresql.ENUM(
     "PENDING",
     "SUCCEEDED",
     "FAILED",
     "SKIPPED",
     name="action_execution_status_enum",
+    create_type=False,
 )
-telegram_event_type_enum = sa.Enum(
+_telegram_event_type_enum = sa.Enum(
     "AD_PAUSED_BY_BOT",
     "AD_RESUMED_BY_BOT",
     "AD_REJECTED_OR_NOT_DELIVERING",
@@ -66,19 +102,30 @@ telegram_event_type_enum = sa.Enum(
     "SCOPE_INVALID",
     name="telegram_event_type_enum",
 )
+telegram_event_type_enum = postgresql.ENUM(
+    "AD_PAUSED_BY_BOT",
+    "AD_RESUMED_BY_BOT",
+    "AD_REJECTED_OR_NOT_DELIVERING",
+    "OBSERVE_WOULD_PAUSE",
+    "OBSERVE_WOULD_RESUME",
+    "WORKER_ERROR",
+    "SCOPE_INVALID",
+    name="telegram_event_type_enum",
+    create_type=False,
+)
 
 
 def upgrade() -> None:
     bind = op.get_bind()
-    tracking_mode_enum.create(bind, checkfirst=True)
-    delivery_status_enum.create(bind, checkfirst=True)
-    scope_presence_enum.create(bind, checkfirst=True)
-    decision_type_enum.create(bind, checkfirst=True)
-    entity_type_enum.create(bind, checkfirst=True)
-    scan_run_status_enum.create(bind, checkfirst=True)
-    action_type_enum.create(bind, checkfirst=True)
-    action_execution_status_enum.create(bind, checkfirst=True)
-    telegram_event_type_enum.create(bind, checkfirst=True)
+    _tracking_mode_enum.create(bind, checkfirst=True)
+    _delivery_status_enum.create(bind, checkfirst=True)
+    _scope_presence_enum.create(bind, checkfirst=True)
+    _decision_type_enum.create(bind, checkfirst=True)
+    _entity_type_enum.create(bind, checkfirst=True)
+    _scan_run_status_enum.create(bind, checkfirst=True)
+    _action_type_enum.create(bind, checkfirst=True)
+    _action_execution_status_enum.create(bind, checkfirst=True)
+    _telegram_event_type_enum.create(bind, checkfirst=True)
 
     op.create_table(
         "browser_hosts",
@@ -590,12 +637,12 @@ def downgrade() -> None:
     op.drop_table("browser_hosts")
 
     bind = op.get_bind()
-    telegram_event_type_enum.drop(bind, checkfirst=True)
-    action_execution_status_enum.drop(bind, checkfirst=True)
-    action_type_enum.drop(bind, checkfirst=True)
-    scan_run_status_enum.drop(bind, checkfirst=True)
-    entity_type_enum.drop(bind, checkfirst=True)
-    decision_type_enum.drop(bind, checkfirst=True)
-    scope_presence_enum.drop(bind, checkfirst=True)
-    delivery_status_enum.drop(bind, checkfirst=True)
-    tracking_mode_enum.drop(bind, checkfirst=True)
+    _telegram_event_type_enum.drop(bind, checkfirst=True)
+    _action_execution_status_enum.drop(bind, checkfirst=True)
+    _action_type_enum.drop(bind, checkfirst=True)
+    _scan_run_status_enum.drop(bind, checkfirst=True)
+    _entity_type_enum.drop(bind, checkfirst=True)
+    _decision_type_enum.drop(bind, checkfirst=True)
+    _scope_presence_enum.drop(bind, checkfirst=True)
+    _delivery_status_enum.drop(bind, checkfirst=True)
+    _tracking_mode_enum.drop(bind, checkfirst=True)

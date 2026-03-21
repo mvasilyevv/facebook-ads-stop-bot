@@ -4,21 +4,24 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from core.domain import DecisionType, DeliveryStatus, ScanRunStatus, TrackingMode
+from core.domain import DecisionType, DeliveryStatus, ScanRunStatus, TelegramEventType, TrackingMode
 from core.repositories import (
     AdsRepository,
     BrowserRepository,
     DecisionsRepository,
     OffersRepository,
 )
-from core.repositories.operations import ScanRunsRepository
+from core.repositories.notification_outbox import NotificationOutboxRepository
+from core.repositories.operations import ScanRunsRepository, SystemSettingsRepository
 from core.rules.types import RulePercentages
 from core.scanner import (
     ObserveScannerService,
     ScannedAdRow,
+    ScannerDecisionResult,
     ScannerPolicyFlags,
     build_scope_summary,
 )
+from core.scanner.protocols import ScannerProvider
 
 
 @dataclass(slots=True, frozen=True)
@@ -38,7 +41,7 @@ class WorkerScanService:
         self,
         *,
         async_session_factory,
-        scanner_provider: Any,
+        scanner_provider: ScannerProvider,
         notifier: Any | None = None,
         auto_resume_enabled: bool = False,
         percentages: RulePercentages | None = None,
@@ -46,13 +49,15 @@ class WorkerScanService:
         self._async_session_factory = async_session_factory
         self._scanner_provider = scanner_provider
         self._notifier = notifier
-        self._auto_resume_enabled = auto_resume_enabled
+        self._default_auto_resume_enabled = auto_resume_enabled
         self._scanner = ObserveScannerService(percentages=percentages)
 
     async def run_once(self, profile_id: str, browser_host_name: str) -> WorkerScanResult:
         async with self._async_session_factory() as session:
             browser_repo = BrowserRepository(session)
             scan_runs_repo = ScanRunsRepository(session)
+            settings_repo = SystemSettingsRepository(session)
+
             browser_host = await browser_repo.get_browser_host_by_name(browser_host_name)
             if browser_host is None:
                 raise RuntimeError(f"Browser host `{browser_host_name}` не найден в базе")
@@ -60,6 +65,18 @@ class WorkerScanService:
             profile = await browser_repo.get_profile_by_vendor_id(profile_id)
             if profile is None:
                 raise RuntimeError(f"Профиль `{profile_id}` не найден в базе")
+
+            # Получить текущее значение auto_resume_enabled из БД
+            auto_resume_setting = await settings_repo.get_setting("auto_resume_enabled")
+            if auto_resume_setting is not None:
+                auto_resume_enabled = auto_resume_setting.value.lower() in (
+                    "true",
+                    "1",
+                    "yes",
+                    "on",
+                )
+            else:
+                auto_resume_enabled = self._default_auto_resume_enabled
 
             started_at = datetime.now(tz=UTC)
             scan_run = await scan_runs_repo.create_scan_run(
@@ -78,6 +95,13 @@ class WorkerScanService:
                     session=session,
                     scan_run_id=scan_run.id,
                     rows=scanned_rows,
+                    auto_resume_enabled=auto_resume_enabled,
+                )
+                ads_repo = AdsRepository(session)
+                seen_fb_ad_ids = [row.fb_ad_id for row in scanned_rows]
+                await ads_repo.mark_unseen_ads(
+                    seen_fb_ad_ids=seen_fb_ad_ids,
+                    profile_id=profile.id,
                 )
                 finished_at = datetime.now(tz=UTC)
                 summary = build_scope_summary(scanned_rows, scanned_at=finished_at)
@@ -112,6 +136,7 @@ class WorkerScanService:
         session,
         scan_run_id,
         rows: list[ScannedAdRow],
+        auto_resume_enabled: bool = False,
     ) -> None:
         ads_repo = AdsRepository(session)
         offers_repo = OffersRepository(session)
@@ -163,7 +188,7 @@ class WorkerScanService:
             )
             policy_flags = ScannerPolicyFlags(
                 is_blocked=row.tracking_mode in {TrackingMode.MANUAL_BLOCK, TrackingMode.READ_ONLY},
-                auto_resume_enabled=self._auto_resume_enabled,
+                auto_resume_enabled=auto_resume_enabled,
             )
             decision_result = self._scanner.evaluate_row(
                 row=row,
@@ -189,7 +214,7 @@ class WorkerScanService:
                 offer_rate_version_id=rate.id if rate is not None else None,
                 resolved_cpa_usd=resolved_cpa_usd,
             )
-            await decisions_repo.create_decision(
+            decision_record = await decisions_repo.create_decision(
                 scan_run_id=scan_run_id,
                 fb_ad_id=row.fb_ad_id,
                 decision=decision_result.decision,
@@ -203,21 +228,15 @@ class WorkerScanService:
             ad.last_decision = decision_result.decision
             ad.last_scan_run_id = scan_run_id
 
-            self._send_notification_if_supported(decision_result)
+            await self._enqueue_notification(
+                outbox_repo=NotificationOutboxRepository(session),
+                decision_id=decision_record.id,
+                decision_result=decision_result,
+                row=row,
+            )
 
-    async def _collect_rows(self, *, profile_id: str, browser_host_name: str) -> list[Any]:
-        for method_name in ("scan_rows", "collect_rows", "scan", "collect", "run"):
-            method = getattr(self._scanner_provider, method_name, None)
-            if method is not None:
-                return list(await method(profile_id, browser_host_name))
-
-        if hasattr(self._scanner_provider, "__aiter__"):
-            rows: list[Any] = []
-            async for item in self._scanner_provider:
-                rows.append(item)
-            return rows
-
-        raise RuntimeError("Scanner provider не поддерживает ожидаемый контракт чтения строк")
+    async def _collect_rows(self, *, profile_id: str, browser_host_name: str) -> list[ScannedAdRow]:
+        return list(await self._scanner_provider.scan_rows(profile_id, browser_host_name))
 
     @staticmethod
     def _coerce_scanned_row(item: Any) -> ScannedAdRow:
@@ -255,14 +274,7 @@ class WorkerScanService:
         decisions_repo: DecisionsRepository,
         fb_ad_id: str,
     ) -> int:
-        decisions = await decisions_repo.list_decisions(fb_ad_id=fb_ad_id)
-        streak = 0
-        for item in decisions:
-            if item.decision in {DecisionType.NO_ACTION, DecisionType.WOULD_RESUME}:
-                streak += 1
-                continue
-            break
-        return streak
+        return await decisions_repo.get_clean_streak_count(fb_ad_id)
 
     @staticmethod
     def _serialize_scope_summary(summary) -> dict[str, Any]:
@@ -283,6 +295,54 @@ class WorkerScanService:
             "fb_ad_ids": list(summary.fb_ad_ids),
         }
 
-    def _send_notification_if_supported(self, decision_result) -> None:
-        # Уведомления будут подключены отдельным outbox-пайплайном после стабилизации scanner runtime.
-        return None
+    async def _enqueue_notification(
+        self,
+        *,
+        outbox_repo: NotificationOutboxRepository,
+        decision_id: Any,
+        decision_result: ScannerDecisionResult,
+        row: ScannedAdRow,
+    ) -> None:
+        """Записывает уведомление в outbox-таблицу в рамках текущей транзакции."""
+
+        event_type = self._map_decision_to_event_type(decision_result.decision)
+        if event_type is None:
+            return
+
+        payload = {
+            "host": "worker",
+            "account_name": row.account_name or "unknown",
+            "campaign_name": row.campaign_name,
+            "adset_name": row.adset_name,
+            "ad_name": row.ad_name,
+            "fb_ad_id": row.fb_ad_id,
+            "reason": decision_result.reason,
+            "metrics": {
+                "spend": str(row.spend),
+                "clicks": row.clicks,
+                "cpc": str(row.cpc) if row.cpc is not None else "n/a",
+                "leads": row.leads,
+                "cost_per_lead": str(row.cost_per_lead) if row.cost_per_lead is not None else "n/a",
+                "registrations": row.registrations,
+                "cost_per_registration": str(row.cost_per_registration)
+                if row.cost_per_registration is not None
+                else "n/a",
+                "deposits": row.deposits,
+            },
+        }
+        await outbox_repo.enqueue(
+            decision_id=decision_id,
+            event_type=event_type,
+            payload_json=payload,
+        )
+
+    @staticmethod
+    def _map_decision_to_event_type(decision: DecisionType) -> TelegramEventType | None:
+        """Маппит тип решения на тип Telegram-события."""
+
+        mapping = {
+            DecisionType.WOULD_PAUSE: TelegramEventType.OBSERVE_WOULD_PAUSE,
+            DecisionType.WOULD_RESUME: TelegramEventType.OBSERVE_WOULD_RESUME,
+            DecisionType.ALERT_REJECTION: TelegramEventType.AD_REJECTED_OR_NOT_DELIVERING,
+        }
+        return mapping.get(decision)

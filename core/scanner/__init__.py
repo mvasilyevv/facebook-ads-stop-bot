@@ -7,6 +7,7 @@ from core.scanner.models import (
     build_campaign_scope_key,
     normalize_scope_fragment,
 )
+from core.scanner.protocols import ScannerProvider
 from core.scanner.service import (
     ObserveScannerService,
     build_scope_summary,
@@ -20,6 +21,7 @@ __all__ = [
     "ScanScopeSummary",
     "ScannerDecisionResult",
     "ScannerPolicyFlags",
+    "ScannerProvider",
     "ScannedAdRow",
     "StatusNormalizer",
     "build_adset_scope_key",

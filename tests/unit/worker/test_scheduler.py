@@ -38,6 +38,22 @@ class _FakeSessionFactory:
         return None
 
 
+class _FakeRedis:
+    """Заглушка Redis для тестирования планировщика с распределёнными блокировками."""
+
+    def __init__(self) -> None:
+        self._store: dict[str, str] = {}
+
+    async def set(self, key: str, value: str, *, nx: bool = False, ex: int | None = None) -> bool:
+        if nx and key in self._store:
+            return False
+        self._store[key] = value
+        return True
+
+    async def delete(self, key: str) -> int:
+        return 1 if self._store.pop(key, None) is not None else 0
+
+
 class _FakeScanService:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str]] = []
@@ -54,6 +70,7 @@ async def test_scheduler_cycle_skips_when_no_active_profiles(monkeypatch) -> Non
     scheduler._settings = SimpleNamespace(worker_scan_interval_seconds=120)
     scheduler._session_factory = _FakeSessionFactory(object())
     scheduler._scan_service = _FakeScanService()
+    scheduler._redis = _FakeRedis()
 
     class _EmptyBrowserRepository:
         def __init__(self, session) -> None:
@@ -76,6 +93,7 @@ async def test_scheduler_cycle_scans_all_active_profiles(monkeypatch) -> None:
     scheduler._settings = SimpleNamespace(worker_scan_interval_seconds=120)
     scheduler._session_factory = _FakeSessionFactory(object())
     scheduler._scan_service = _FakeScanService()
+    scheduler._redis = _FakeRedis()
 
     records = [
         _FakeActiveProfileRecord(
@@ -123,6 +141,7 @@ async def test_scheduler_cycle_continues_after_profile_error(monkeypatch) -> Non
             return SimpleNamespace(rows_parsed=2, scan_run_id="scan-run-2")
 
     scheduler._scan_service = _PartiallyBrokenScanService()
+    scheduler._redis = _FakeRedis()
 
     records = [
         _FakeActiveProfileRecord(

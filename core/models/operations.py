@@ -141,3 +141,13 @@ class Cooldown(Base):
     entity_id: Mapped[str] = mapped_column(String(255), primary_key=True)
     until_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     reason: Mapped[str] = mapped_column(String(255))
+
+
+class SystemSetting(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """Системные настройки, хранящиеся в базе данных."""
+
+    __tablename__ = "system_settings"
+
+    key: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    value: Mapped[str] = mapped_column(String(1000))
+    description: Mapped[str | None] = mapped_column(String(500))

@@ -1,6 +1,7 @@
 import type {
   AdSummary,
   ApiErrorResponse,
+  BotModeResponse,
   BrowserSessionItem,
   DecisionItem,
   HealthResponse,
@@ -8,6 +9,7 @@ import type {
   OfferItem,
   OfferRateItem,
   RuleItem,
+  ScanRunItem,
 } from "../types";
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL?.trim();
@@ -28,6 +30,7 @@ export type DashboardPayload = {
   decisions: DecisionItem[];
   rules: RuleItem[];
   offers: OfferItem[];
+  bindings: OfferBindingItem[];
   sessions: BrowserSessionItem[];
   errors: Record<string, string>;
 };
@@ -90,6 +93,14 @@ export function fetchSessions(): Promise<BrowserSessionItem[]> {
   return requestJson<BrowserSessionItem[]>("/sessions");
 }
 
+export function fetchOfferBindings(): Promise<OfferBindingItem[]> {
+  return requestJson<OfferBindingItem[]>("/offer-bindings");
+}
+
+export function fetchScanRuns(): Promise<ScanRunItem[]> {
+  return requestJson<ScanRunItem[]>("/scan-runs");
+}
+
 export async function loadDashboard(): Promise<DashboardPayload> {
   const keys = [
     ["health", fetchHealth()],
@@ -97,6 +108,7 @@ export async function loadDashboard(): Promise<DashboardPayload> {
     ["decisions", fetchDecisions()],
     ["rules", fetchRules()],
     ["offers", fetchOffers()],
+    ["bindings", fetchOfferBindings()],
     ["sessions", fetchSessions()],
   ] as const;
 
@@ -108,6 +120,7 @@ export async function loadDashboard(): Promise<DashboardPayload> {
     decisions: [],
     rules: [],
     offers: [],
+    bindings: [],
     sessions: [],
     errors: {},
   };
@@ -130,6 +143,9 @@ export async function loadDashboard(): Promise<DashboardPayload> {
           break;
         case "offers":
           payload.offers = result.value as OfferItem[];
+          break;
+        case "bindings":
+          payload.bindings = result.value as OfferBindingItem[];
           break;
         case "sessions":
           payload.sessions = result.value as BrowserSessionItem[];
@@ -237,4 +253,18 @@ export async function stopSession(payload: {
     }),
   });
   return response.session;
+}
+
+export function fetchBotMode(): Promise<BotModeResponse> {
+  return requestJson<BotModeResponse>("/settings/bot-mode");
+}
+
+export async function updateBotMode(payload: {
+  auto_pause_enabled: boolean;
+  auto_resume_enabled: boolean;
+}): Promise<BotModeResponse> {
+  return requestJson<BotModeResponse>("/settings/bot-mode", {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
 }

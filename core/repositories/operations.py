@@ -15,7 +15,7 @@ from core.domain import (
     ScanRunStatus,
     TrackingMode,
 )
-from core.models.operations import ActionExecution, ControlFlag, Decision, ScanRun
+from core.models.operations import ActionExecution, ControlFlag, Decision, ScanRun, SystemSetting
 from core.repositories.base import AsyncRepository
 
 
@@ -62,14 +62,35 @@ class DecisionsRepository(AsyncRepository):
         self,
         scan_run_id: str | None = None,
         fb_ad_id: str | None = None,
+        limit: int | None = None,
     ) -> list[Decision]:
         stmt = select(Decision).order_by(Decision.created_at.desc())
         if scan_run_id is not None:
             stmt = stmt.where(Decision.scan_run_id == scan_run_id)
         if fb_ad_id is not None:
             stmt = stmt.where(Decision.fb_ad_id == fb_ad_id)
+        if limit is not None:
+            stmt = stmt.limit(limit)
         result = await self.session.scalars(stmt)
         return list(result.all())
+
+    async def get_clean_streak_count(self, fb_ad_id: str) -> int:
+        """Считает количество последних подряд решений NO_ACTION/WOULD_RESUME для объявления."""
+
+        stmt = (
+            select(Decision.decision)
+            .where(Decision.fb_ad_id == fb_ad_id)
+            .order_by(Decision.created_at.desc())
+            .limit(50)
+        )
+        result = await self.session.scalars(stmt)
+        streak = 0
+        for decision_type in result.all():
+            if decision_type in {DecisionType.NO_ACTION, DecisionType.WOULD_RESUME}:
+                streak += 1
+                continue
+            break
+        return streak
 
     async def add_action_execution(
         self,
@@ -229,3 +250,36 @@ class ScanRunsRepository(AsyncRepository):
         if value is None or isinstance(value, UUID):
             return value
         return UUID(str(value))
+
+
+class SystemSettingsRepository(AsyncRepository):
+    """Репозиторий для системных настроек."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        super().__init__(session)
+
+    async def get_setting(self, key: str) -> SystemSetting | None:
+        """Получить значение системной настройки по ключу."""
+        result = await self.session.scalars(select(SystemSetting).where(SystemSetting.key == key))
+        return result.first()
+
+    async def set_setting(
+        self, key: str, value: str, description: str | None = None
+    ) -> SystemSetting:
+        """Установить или обновить системную настройку."""
+        existing = await self.get_setting(key)
+        if existing is None:
+            setting = SystemSetting(key=key, value=value, description=description)
+            self.session.add(setting)
+        else:
+            existing.value = value
+            if description is not None:
+                existing.description = description
+            setting = existing
+        await self.session.flush()
+        return setting
+
+    async def get_all_settings(self) -> dict[str, str]:
+        """Получить все системные настройки как словарь."""
+        result = await self.session.scalars(select(SystemSetting))
+        return {setting.key: setting.value for setting in result.all()}

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
+from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,6 +10,7 @@ from sqlalchemy.orm import selectinload
 
 from core.domain import DecisionType, DeliveryStatus, ScopePresence, TrackingMode
 from core.models.advertising import Ad, AdSet, Campaign, MetricSnapshot
+from core.models.operations import ScanRun
 from core.repositories.base import AsyncRepository
 
 
@@ -18,6 +20,11 @@ class AdsRepository(AsyncRepository):
     def __init__(self, session: AsyncSession) -> None:
         super().__init__(session)
 
+    def _is_postgresql(self) -> bool:
+        """Проверяет, используется ли PostgreSQL в качестве диалекта."""
+        bind = self.session.get_bind()
+        return bind.dialect.name == "postgresql"
+
     async def upsert_campaign(
         self,
         scope_key: str,
@@ -25,6 +32,53 @@ class AdsRepository(AsyncRepository):
         tracking_mode: TrackingMode = TrackingMode.TRACKED,
         last_seen_at: datetime | None = None,
         fb_campaign_id: str | None = None,
+    ) -> Campaign:
+        if self._is_postgresql():
+            return await self._upsert_campaign_pg(
+                scope_key, name, tracking_mode, last_seen_at, fb_campaign_id
+            )
+        return await self._upsert_campaign_fallback(
+            scope_key, name, tracking_mode, last_seen_at, fb_campaign_id
+        )
+
+    async def _upsert_campaign_pg(
+        self,
+        scope_key: str,
+        name: str,
+        tracking_mode: TrackingMode,
+        last_seen_at: datetime | None,
+        fb_campaign_id: str | None,
+    ) -> Campaign:
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+        stmt = pg_insert(Campaign).values(
+            scope_key=scope_key,
+            fb_campaign_id=fb_campaign_id,
+            name=name,
+            tracking_mode=tracking_mode,
+            last_seen_at=last_seen_at,
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[Campaign.scope_key],
+            set_={
+                "name": stmt.excluded.name,
+                "fb_campaign_id": stmt.excluded.fb_campaign_id,
+                "tracking_mode": stmt.excluded.tracking_mode,
+                "last_seen_at": stmt.excluded.last_seen_at,
+            },
+        ).returning(Campaign)
+        result = await self.session.execute(stmt)
+        campaign = result.scalars().first()
+        await self.session.flush()
+        return campaign
+
+    async def _upsert_campaign_fallback(
+        self,
+        scope_key: str,
+        name: str,
+        tracking_mode: TrackingMode,
+        last_seen_at: datetime | None,
+        fb_campaign_id: str | None,
     ) -> Campaign:
         campaign = await self.get_campaign_by_scope_key(scope_key)
         if campaign is None and fb_campaign_id is not None:
@@ -65,6 +119,57 @@ class AdsRepository(AsyncRepository):
         tracking_mode: TrackingMode = TrackingMode.TRACKED,
         last_seen_at: datetime | None = None,
         fb_adset_id: str | None = None,
+    ) -> AdSet:
+        if self._is_postgresql():
+            return await self._upsert_adset_pg(
+                scope_key, campaign_id, name, tracking_mode, last_seen_at, fb_adset_id
+            )
+        return await self._upsert_adset_fallback(
+            scope_key, campaign_id, name, tracking_mode, last_seen_at, fb_adset_id
+        )
+
+    async def _upsert_adset_pg(
+        self,
+        scope_key: str,
+        campaign_id: str,
+        name: str,
+        tracking_mode: TrackingMode,
+        last_seen_at: datetime | None,
+        fb_adset_id: str | None,
+    ) -> AdSet:
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+        stmt = pg_insert(AdSet).values(
+            scope_key=scope_key,
+            fb_adset_id=fb_adset_id,
+            campaign_id=campaign_id,
+            name=name,
+            tracking_mode=tracking_mode,
+            last_seen_at=last_seen_at,
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[AdSet.scope_key],
+            set_={
+                "campaign_id": stmt.excluded.campaign_id,
+                "name": stmt.excluded.name,
+                "fb_adset_id": stmt.excluded.fb_adset_id,
+                "tracking_mode": stmt.excluded.tracking_mode,
+                "last_seen_at": stmt.excluded.last_seen_at,
+            },
+        ).returning(AdSet)
+        result = await self.session.execute(stmt)
+        adset = result.scalars().first()
+        await self.session.flush()
+        return adset
+
+    async def _upsert_adset_fallback(
+        self,
+        scope_key: str,
+        campaign_id: str,
+        name: str,
+        tracking_mode: TrackingMode,
+        last_seen_at: datetime | None,
+        fb_adset_id: str | None,
     ) -> AdSet:
         adset = await self.get_adset_by_scope_key(scope_key)
         if adset is None and fb_adset_id is not None:
@@ -111,6 +216,103 @@ class AdsRepository(AsyncRepository):
         last_action_at: datetime | None = None,
         last_decision: DecisionType = DecisionType.NO_ACTION,
         last_scan_run_id: str | None = None,
+    ) -> Ad:
+        if self._is_postgresql():
+            return await self._upsert_ad_pg(
+                fb_ad_id,
+                campaign_id,
+                adset_id,
+                name,
+                delivery_status,
+                tracking_mode,
+                scope_presence,
+                last_seen_at,
+                last_action_source,
+                last_action_at,
+                last_decision,
+                last_scan_run_id,
+            )
+        return await self._upsert_ad_fallback(
+            fb_ad_id,
+            campaign_id,
+            adset_id,
+            name,
+            delivery_status,
+            tracking_mode,
+            scope_presence,
+            last_seen_at,
+            last_action_source,
+            last_action_at,
+            last_decision,
+            last_scan_run_id,
+        )
+
+    async def _upsert_ad_pg(
+        self,
+        fb_ad_id: str,
+        campaign_id: str,
+        adset_id: str,
+        name: str,
+        delivery_status: DeliveryStatus,
+        tracking_mode: TrackingMode,
+        scope_presence: ScopePresence,
+        last_seen_at: datetime | None,
+        last_action_source: str | None,
+        last_action_at: datetime | None,
+        last_decision: DecisionType,
+        last_scan_run_id: str | None,
+    ) -> Ad:
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+        stmt = pg_insert(Ad).values(
+            fb_ad_id=fb_ad_id,
+            campaign_id=campaign_id,
+            adset_id=adset_id,
+            name=name,
+            delivery_status=delivery_status,
+            tracking_mode=tracking_mode,
+            scope_presence=scope_presence,
+            last_seen_at=last_seen_at,
+            last_action_source=last_action_source,
+            last_action_at=last_action_at,
+            last_decision=last_decision,
+            last_scan_run_id=last_scan_run_id,
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[Ad.fb_ad_id],
+            set_={
+                "campaign_id": stmt.excluded.campaign_id,
+                "adset_id": stmt.excluded.adset_id,
+                "name": stmt.excluded.name,
+                "delivery_status": stmt.excluded.delivery_status,
+                "tracking_mode": stmt.excluded.tracking_mode,
+                "scope_presence": stmt.excluded.scope_presence,
+                "last_seen_at": stmt.excluded.last_seen_at,
+                "last_action_source": stmt.excluded.last_action_source,
+                "last_action_at": stmt.excluded.last_action_at,
+                "last_decision": stmt.excluded.last_decision,
+                "last_scan_run_id": stmt.excluded.last_scan_run_id,
+            },
+        ).returning(Ad)
+        result = await self.session.execute(stmt)
+        ad = result.scalars().first()
+        await self.session.flush()
+        return ad
+
+    async def _upsert_ad_fallback(
+        self,
+        fb_ad_id: str,
+        campaign_id: str,
+        adset_id: str,
+        name: str,
+        delivery_status: DeliveryStatus,
+        tracking_mode: TrackingMode,
+        scope_presence: ScopePresence,
+        last_seen_at: datetime | None,
+        last_action_source: str | None,
+        last_action_at: datetime | None,
+        last_decision: DecisionType,
+        last_scan_run_id: str | None,
     ) -> Ad:
         ad = await self.get_ad_by_fb_id(fb_ad_id)
         if ad is None:
@@ -189,6 +391,39 @@ class AdsRepository(AsyncRepository):
         ad.last_action_at = last_action_at
         await self.session.flush()
         return ad
+
+    async def mark_unseen_ads(
+        self,
+        *,
+        seen_fb_ad_ids: list[str],
+        profile_id: UUID | str,
+    ) -> int:
+        """Помечает объявления профиля, отсутствующие в текущем успешном скане, как NOT_SEEN_THIS_SCAN."""
+
+        stmt = (
+            select(Ad)
+            .join(ScanRun, Ad.last_scan_run_id == ScanRun.id)
+            .where(
+                Ad.scope_presence == ScopePresence.IN_SCOPE,
+                ScanRun.profile_id == self._coerce_uuid(profile_id),
+            )
+        )
+        if seen_fb_ad_ids:
+            stmt = stmt.where(Ad.fb_ad_id.notin_(seen_fb_ad_ids))
+        result = await self.session.scalars(stmt)
+        count = 0
+        for ad in result.all():
+            ad.scope_presence = ScopePresence.NOT_SEEN_THIS_SCAN
+            count += 1
+        if count > 0:
+            await self.session.flush()
+        return count
+
+    @staticmethod
+    def _coerce_uuid(value: UUID | str) -> UUID:
+        if isinstance(value, UUID):
+            return value
+        return UUID(str(value))
 
     async def add_metric_snapshot(
         self,

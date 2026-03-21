@@ -210,5 +210,5 @@ def test_evaluate_scanned_row_blocks_resume_without_clean_streak() -> None:
         clean_streak=1,
     )
 
-    assert result.decision == DecisionType.NO_ACTION
-    assert result.reason == "Объявление находится в допустимой зоне"
+    assert result.decision == DecisionType.KEPT_PAUSED_BY_VIABILITY
+    assert result.reason == "Объявление остается на паузе — метрики всё ещё нарушают стоп-правила"

@@ -4,31 +4,38 @@
 
 ## Запуск
 
-Локальная разработка без Docker для приложений:
+Основная точка входа для локального запуска всего проекта одной командой:
 
 ```bash
 cp .env.example .env
 python3 -m venv .venv
 .venv/bin/pip install -e '.[dev]'
-make dev
+./run.sh
 ```
 
-Команда `make dev` пытается поднять `Postgres` и `Redis` через Docker Compose, применяет миграции, а затем запускает `api`, `worker`, `browser_host` и React UI. Если Docker Compose недоступен, скрипт предполагает, что инфраструктура уже поднята отдельно.
+`./run.sh` вызывает `scripts/bootstrap.sh`, который:
 
-Compose-сценарий для инфраструктуры и backend-сервисов:
+1. проверяет Docker, Python и `.env`;
+2. поднимает `Postgres` и `Redis` через Docker Compose;
+3. ждет готовности `Postgres`;
+4. применяет миграции Alembic;
+5. передает управление в `scripts/dev.sh`;
+6. запускает `api`, `worker`, `browser_host` и React UI.
+
+Полезные режимы запуска:
 
 ```bash
-make compose-up
+./run.sh --check   # только проверки окружения
+./run.sh --down    # остановить стек
 ```
 
-Остановить compose-стек можно командой `make compose-down`, а смотреть логи - `make compose-logs`.
+Если нужен запуск через `Makefile`, доступны актуальные обертки:
 
-Для отдельных процессов доступны команды:
+- `make up` — полный запуск через `scripts/bootstrap.sh`
+- `make down` — остановка через `scripts/bootstrap.sh --down`
+- `make logs` — логи docker compose
 
-- `make dev-backend`
-- `make dev-worker`
-- `make dev-browser-host`
-- `make dev-frontend`
+Важно: frontend запускается локально через `scripts/dev.sh`, а не как отдельный сервис в `docker-compose.yml`.
 
 ## Компоненты
 

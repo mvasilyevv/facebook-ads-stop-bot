@@ -10,6 +10,7 @@ from apps.api.schemas.offers import (
     OfferActionResponse,
     OfferBindingActionResponse,
     OfferBindingCreateRequest,
+    OfferBindingItem,
     OfferCreateRequest,
     OfferItem,
     OfferRateActionResponse,
@@ -123,6 +124,32 @@ async def create_offer_rate(
     )
     await session.commit()
     return _map_rate_action_response(rate)
+
+
+@router.get("/offer-bindings", response_model=list[OfferBindingItem])
+async def list_offer_bindings(session: DbSessionDep) -> list[OfferBindingItem]:
+    """Получить все привязки офферов к сущностям."""
+    repo = OffersRepository(session)
+    bindings = await repo.list_bindings()
+    result: list[OfferBindingItem] = []
+    for binding in bindings:
+        # Получить код оффера через relationship или отдельный запрос
+        offer = await repo.get_offer(str(binding.offer_id))
+        offer_code = offer.code if offer is not None else "unknown"
+        result.append(
+            OfferBindingItem(
+                id=str(binding.id),
+                entity_type=binding.entity_type.value,
+                entity_id=binding.entity_id,
+                offer_id=str(binding.offer_id),
+                offer_code=offer_code,
+                priority=binding.priority,
+                is_active=binding.is_active,
+                created_at=binding.created_at,
+                updated_at=binding.updated_at,
+            )
+        )
+    return result
 
 
 @router.post(

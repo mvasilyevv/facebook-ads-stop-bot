@@ -7,6 +7,8 @@ from apps.browser_host.facebook_scanner import FacebookAdsScannerProvider
 from apps.worker.scan_service import WorkerScanService
 from core.config import get_settings
 from core.db import get_session_factory
+from core.locks import ScanLockAcquisitionError, acquire_scan_lock
+from core.redis import get_redis_client
 from core.repositories import BrowserRepository
 
 
@@ -16,6 +18,7 @@ class SchedulerService:
     def __init__(self) -> None:
         self._settings = get_settings()
         self._session_factory = get_session_factory()
+        self._redis = get_redis_client()
         self._scan_service = WorkerScanService(
             async_session_factory=self._session_factory,
             scanner_provider=FacebookAdsScannerProvider(settings=self._settings),
@@ -42,20 +45,27 @@ class SchedulerService:
             return
 
         for record in active_profiles:
+            profile_id = record.profile.vendor_profile_id
             try:
-                result = await self._scan_service.run_once(
-                    profile_id=record.profile.vendor_profile_id,
-                    browser_host_name=record.browser_host.name,
-                )
+                async with acquire_scan_lock(self._redis, profile_id):
+                    result = await self._scan_service.run_once(
+                        profile_id=profile_id,
+                        browser_host_name=record.browser_host.name,
+                    )
+                    logger.info(
+                        "Скан профиля %s завершен успешно: строк %s, run_id=%s",
+                        profile_id,
+                        result.rows_parsed,
+                        result.scan_run_id,
+                    )
+            except ScanLockAcquisitionError:
                 logger.info(
-                    "Скан профиля %s завершен успешно: строк %s, run_id=%s",
-                    record.profile.vendor_profile_id,
-                    result.rows_parsed,
-                    result.scan_run_id,
+                    "Скан профиля %s пропущен — уже выполняется другим воркером",
+                    profile_id,
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.exception(
                     "Скан профиля %s завершился ошибкой: %s",
-                    record.profile.vendor_profile_id,
+                    profile_id,
                     exc,
                 )

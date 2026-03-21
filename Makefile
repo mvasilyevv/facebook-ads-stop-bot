@@ -1,45 +1,29 @@
-.PHONY: test lint format migrate precommit precommit-install dev dev-backend dev-frontend dev-worker dev-browser-host compose-up compose-down compose-logs
+.PHONY: up down logs test lint format precommit precommit-install
+
+PYTHON := $(shell if [ -x .venv/bin/python ]; then echo .venv/bin/python; elif command -v python3 >/dev/null 2>&1; then command -v python3; else echo python3; fi)
 
 SHELL := /bin/bash
 
+up:
+	bash scripts/bootstrap.sh
+
+down:
+	bash scripts/bootstrap.sh --down
+
+logs:
+	docker compose logs -f --tail=200
+
 test:
-	pytest
+	$(PYTHON) -m pytest
 
 lint:
-	ruff check .
+	$(PYTHON) -m ruff check .
 
 format:
-	ruff format .
-
-migrate:
-	alembic upgrade head
-
-dev:
-	bash scripts/dev.sh
-
-dev-backend:
-	bash scripts/backend.sh
-
-dev-frontend:
-	bash scripts/frontend.sh
-
-dev-worker:
-	bash scripts/worker.sh
-
-dev-browser-host:
-	bash scripts/browser-host.sh
-
-compose-up:
-	bash scripts/compose-up.sh
-
-compose-down:
-	bash scripts/compose-down.sh
-
-compose-logs:
-	bash scripts/compose-logs.sh
+	$(PYTHON) -m ruff format .
 
 precommit:
-	pre-commit run --all-files
+	$(PYTHON) -m pre_commit run --all-files
 
 precommit-install:
-	pre-commit install
+	$(PYTHON) -m pre_commit install

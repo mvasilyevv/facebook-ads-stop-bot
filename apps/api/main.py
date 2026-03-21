@@ -20,6 +20,9 @@ from apps.api.routers import (
     scan_runs,
     sessions,
 )
+from apps.api.routers import (
+    settings as settings_router,
+)
 
 
 def _setup_logging(level: str) -> None:
@@ -29,29 +32,29 @@ def _setup_logging(level: str) -> None:
     )
 
 
-settings = load_settings()
-_setup_logging(settings.log_level)
+api_settings = load_settings()
+_setup_logging(api_settings.log_level)
 logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await bootstrap_reference_data(settings)
+    await bootstrap_reference_data(api_settings)
     logger.info("API успешно инициализировано и подключено к базе данных")
     yield
 
 
 app = FastAPI(
-    title=settings.app_name,
-    debug=settings.debug,
-    docs_url="/docs" if settings.docs_enabled else None,
-    redoc_url="/redoc" if settings.docs_enabled else None,
-    openapi_url="/openapi.json" if settings.docs_enabled else None,
+    title=api_settings.app_name,
+    debug=api_settings.debug,
+    docs_url="/docs" if api_settings.docs_enabled else None,
+    redoc_url="/redoc" if api_settings.docs_enabled else None,
+    openapi_url="/openapi.json" if api_settings.docs_enabled else None,
     lifespan=lifespan,
 )
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=list(settings.cors_origins),
+    allow_origins=list(api_settings.cors_origins),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -86,3 +89,4 @@ app.include_router(rules.router)
 app.include_router(offers.router)
 app.include_router(control_flags.router)
 app.include_router(sessions.router)
+app.include_router(settings_router.router)

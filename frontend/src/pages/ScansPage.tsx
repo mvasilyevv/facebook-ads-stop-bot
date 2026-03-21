@@ -1,0 +1,115 @@
+import { useEffect, useState, startTransition } from "react";
+import { Badge } from "../components/Badge";
+import { EmptyState } from "../components/EmptyState";
+import { SectionCard } from "../components/SectionCard";
+import { fetchScanRuns } from "../lib/api";
+import { formatDateTime, formatRelativeStatus, formatMetricText } from "../lib/format";
+import { getBadgeTone } from "../lib/helpers";
+import type { ScanRunItem } from "../types";
+
+export default function ScansPage() {
+  const [scans, setScans] = useState<ScanRunItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  async function reload(silent = false) {
+    if (!silent) setLoading(true);
+    setError(null);
+    try {
+      const data = await fetchScanRuns();
+      startTransition(() => {
+        setScans(data);
+        setLoading(false);
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Ошибка загрузки");
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void reload();
+  }, []);
+
+  const visibleScans = scans.filter((scan) => {
+    const text = `${scan.id} ${scan.browser_host_id} ${scan.profile_id} ${scan.status}`.toLowerCase();
+    return text.includes(search.toLowerCase());
+  });
+
+  if (loading) {
+    return <div className="page-loading">Загрузка сканов...</div>;
+  }
+
+  return (
+    <>
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">Сканирование объявлений</h1>
+          <p className="page-subtitle">История запусков сканирования и результаты</p>
+        </div>
+        <div className="page-header__actions">
+          <button type="button" className="button button--primary" onClick={() => void reload(true)}>
+            Обновить
+          </button>
+        </div>
+      </div>
+
+      {error && <div className="inline-error">{error}</div>}
+
+      <SectionCard
+        title="Запуски сканирования"
+        subtitle="История выполненных сканов"
+        actions={
+          <input
+            className="input input--compact"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Поиск по ID, хосту, профилю или статусу"
+          />
+        }
+      >
+        {visibleScans.length === 0 ? (
+          <EmptyState title="Сканов не загружено" description="История сканирования появится после выполнения первого скана." />
+        ) : (
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Хост</th>
+                  <th>Профиль</th>
+                  <th>Статус</th>
+                  <th>Просмотрено</th>
+                  <th>Разобрано</th>
+                  <th>Сводка по объёму</th>
+                  <th>Ошибка</th>
+                  <th>Начало</th>
+                  <th>Завершение</th>
+                </tr>
+              </thead>
+              <tbody>
+                {visibleScans.map((scan) => (
+                  <tr key={scan.id}>
+                    <td className="mono">{scan.id}</td>
+                    <td className="mono">{scan.browser_host_id}</td>
+                    <td className="mono">{scan.profile_id}</td>
+                    <td>
+                      <Badge tone={getBadgeTone(scan.status)}>{formatRelativeStatus(scan.status)}</Badge>
+                    </td>
+                    <td>{formatMetricText(scan.rows_seen)}</td>
+                    <td>{formatMetricText(scan.rows_parsed)}</td>
+                    <td>{scan.scope_summary || "—"}</td>
+                    <td>{scan.error_message ? <span className="inline-error">{scan.error_message}</span> : "—"}</td>
+                    <td>{formatDateTime(scan.started_at)}</td>
+                    <td>{scan.finished_at ? formatDateTime(scan.finished_at) : "в процессе"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </SectionCard>
+    </>
+  );
+}

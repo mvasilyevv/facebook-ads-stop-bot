@@ -2,17 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from enum import StrEnum
 
-
-class TelegramEventType(StrEnum):
-    AD_PAUSED_BY_BOT = "AD_PAUSED_BY_BOT"
-    AD_RESUMED_BY_BOT = "AD_RESUMED_BY_BOT"
-    AD_REJECTED_OR_NOT_DELIVERING = "AD_REJECTED_OR_NOT_DELIVERING"
-    OBSERVE_WOULD_PAUSE = "OBSERVE_WOULD_PAUSE"
-    OBSERVE_WOULD_RESUME = "OBSERVE_WOULD_RESUME"
-    WORKER_ERROR = "WORKER_ERROR"
-    SCOPE_INVALID = "SCOPE_INVALID"
+from core.domain.enums import TelegramEventType
 
 
 @dataclass(slots=True, frozen=True)

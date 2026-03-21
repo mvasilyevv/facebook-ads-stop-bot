@@ -86,6 +86,15 @@ class ObserveScannerService:
                 stop_reasons=pause_reasons,
             )
 
+        if row.delivery_status == DeliveryStatus.PAUSED and pause_reasons:
+            return ScannerDecisionResult(
+                decision=DecisionType.KEPT_PAUSED_BY_VIABILITY,
+                reason="Объявление остается на паузе — метрики всё ещё нарушают стоп-правила",
+                resolved_cpa_usd=resolved_cpa_usd,
+                thresholds=thresholds,
+                stop_reasons=pause_reasons,
+            )
+
         return ScannerDecisionResult(
             decision=DecisionType.NO_ACTION,
             reason="Объявление находится в допустимой зоне",

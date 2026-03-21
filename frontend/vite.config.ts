@@ -18,6 +18,8 @@ export default defineConfig(({ mode }) => {
         "/sessions": backend,
         "/scan-runs": backend,
         "/control-flags": backend,
+        "/settings": backend,
+        "/offer-bindings": backend,
       },
     },
   };

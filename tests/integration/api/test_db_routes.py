@@ -8,8 +8,20 @@ import pytest
 
 from apps.browser_host.adapters.models import AdapterHealth, AutomationLaunchResult, ProfileStatus
 from apps.browser_host.playwright_attach import AttachedBrowserSession
-from core.domain import DecisionType, DeliveryStatus, ScanRunStatus, ScopePresence, TrackingMode
-from core.repositories import AdsRepository, DecisionsRepository, ScanRunsRepository
+from core.domain import (
+    DecisionType,
+    DeliveryStatus,
+    EntityType,
+    ScanRunStatus,
+    ScopePresence,
+    TrackingMode,
+)
+from core.repositories import (
+    AdsRepository,
+    DecisionsRepository,
+    OffersRepository,
+    ScanRunsRepository,
+)
 
 
 class FakeVisionAdapter:
@@ -237,6 +249,65 @@ async def test_rules_routes_work_through_database(api_client) -> None:
     assert update_response.json()["priority"] == 15
     assert update_response.json()["cpa_multiplier"] == "0.03"
     assert refreshed_rules.json()[0]["title"] == "Стоп по клику обновлен"
+
+
+# Проверяет, что настройки режима бота читаются и сохраняются через базу данных.
+@pytest.mark.asyncio
+async def test_settings_routes_persist_bot_mode(api_client) -> None:
+    client, _, _ = api_client
+
+    initial_response = await client.get("/settings/bot-mode")
+    update_response = await client.put(
+        "/settings/bot-mode",
+        json={
+            "auto_pause_enabled": True,
+            "auto_resume_enabled": False,
+        },
+    )
+    refreshed_response = await client.get("/settings/bot-mode")
+
+    assert initial_response.status_code == 200
+    assert update_response.status_code == 200
+    assert refreshed_response.status_code == 200
+    assert update_response.json()["auto_pause_enabled"] is True
+    assert update_response.json()["auto_resume_enabled"] is False
+    assert refreshed_response.json()["auto_pause_enabled"] is True
+    assert refreshed_response.json()["auto_resume_enabled"] is False
+
+
+# Проверяет, что API возвращает созданные привязки офферов вместе с кодом оффера.
+@pytest.mark.asyncio
+async def test_offer_bindings_route_reads_database(api_client, async_session_factory) -> None:
+    client, _, _ = api_client
+
+    async with async_session_factory() as session:
+        offers_repo = OffersRepository(session)
+        offer = await offers_repo.create_offer(code="offer-bind-1", name="Оффер для привязки")
+        await offers_repo.upsert_binding(
+            EntityType.ADSET,
+            "adset:campaign:account-1:campaign-1:adset-99",
+            offer.id,
+            priority=7,
+            is_active=True,
+        )
+        await session.commit()
+
+    response = await client.get("/offer-bindings")
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            "id": response.json()[0]["id"],
+            "entity_type": "adset",
+            "entity_id": "adset:campaign:account-1:campaign-1:adset-99",
+            "offer_id": response.json()[0]["offer_id"],
+            "offer_code": "offer-bind-1",
+            "priority": 7,
+            "is_active": True,
+            "created_at": response.json()[0]["created_at"],
+            "updated_at": response.json()[0]["updated_at"],
+        }
+    ]
 
 
 # Проверяет, что запуск и остановка browser session проходят через базу и реальный session endpoint API.

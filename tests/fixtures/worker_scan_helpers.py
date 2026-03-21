@@ -48,25 +48,6 @@ class FakeScannerProvider:
         self.calls.append((profile_id, browser_host_name))
         return self.rows
 
-    async def collect_rows(self, profile_id: str, browser_host_name: str) -> list[WorkerScanRow]:
-        return await self.scan_rows(profile_id, browser_host_name)
-
-    async def scan(self, profile_id: str, browser_host_name: str) -> list[WorkerScanRow]:
-        return await self.scan_rows(profile_id, browser_host_name)
-
-    async def collect(self, profile_id: str, browser_host_name: str) -> list[WorkerScanRow]:
-        return await self.scan_rows(profile_id, browser_host_name)
-
-    async def run(self, profile_id: str, browser_host_name: str) -> list[WorkerScanRow]:
-        return await self.scan_rows(profile_id, browser_host_name)
-
-    def __aiter__(self):
-        async def _iterate():
-            for row in self.rows:
-                yield row
-
-        return _iterate()
-
 
 @dataclass(slots=True, frozen=True)
 class WorkerScenarioSeed:

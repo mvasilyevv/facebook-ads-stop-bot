@@ -37,3 +37,19 @@ export function formatMetricText(value: string | number | null | undefined): str
   }
   return String(value);
 }
+
+export function formatDecisionHuman(decision: string, reason: string): string {
+  const decisionMap: Record<string, string> = {
+    WOULD_PAUSE: "было бы выключено",
+    WOULD_RESUME: "было бы включено",
+    NO_ACTION: "без изменений",
+    SKIPPED_BY_POLICY: "пропущено по политике",
+    INSUFFICIENT_DATA: "недостаточно данных",
+    AMBIGUOUS: "неоднозначное решение",
+    ALERT_REJECTION: "отклонено/не показывается",
+    KEPT_PAUSED_BY_VIABILITY: "остаётся на паузе",
+  };
+
+  const humanDecision = decisionMap[decision] || decision.toLowerCase();
+  return `${humanDecision}: ${reason}`;
+}

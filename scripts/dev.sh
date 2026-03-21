@@ -150,4 +150,4 @@ start_worker
 start_browser_host
 start_frontend
 
-wait -n "${PIDS[@]}"
+wait

@@ -17,6 +17,14 @@ export type AdSummary = {
   last_seen_at?: string | null;
   last_decision: string;
   resolved_cpa_usd?: string | number | null;
+  spend?: string | number | null;
+  clicks?: number | null;
+  cpc?: string | number | null;
+  leads?: number | null;
+  cost_per_lead?: string | number | null;
+  registrations?: number | null;
+  cost_per_registration?: string | number | null;
+  deposits?: number | null;
 };
 
 export type AdDetail = AdSummary & {
@@ -105,6 +113,12 @@ export type ScanRunItem = {
   error_message?: string | null;
   started_at: string;
   finished_at?: string | null;
+};
+
+export type BotModeResponse = {
+  auto_pause_enabled: boolean;
+  auto_resume_enabled: boolean;
+  updated_at: string;
 };
 
 export type ApiErrorResponse = {
