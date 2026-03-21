@@ -78,6 +78,24 @@ async def test_offers_repository_resolves_binding_and_rate(async_session) -> Non
     assert resolved_rate.cpa_usd == Decimal("5.00")
 
 
+# Проверяет, что репозиторий находит активный оффер по коду из имени объявления без ручной привязки.
+@pytest.mark.asyncio
+async def test_offers_repository_resolves_offer_from_ad_name(async_session) -> None:
+    repo = OffersRepository(async_session)
+
+    offer = await repo.create_offer(code="offer-auto-1", name="DRC_CR2")
+    resolved = await repo.resolve_offer_for_ad(
+        ad_name="DRC_CR2_[778899]",
+        ad_id="ad-778899",
+        adset_scope_key="adset-scope-778899",
+    )
+
+    await async_session.commit()
+
+    assert resolved is not None
+    assert resolved.id == offer.id
+
+
 # Проверяет, что репозиторий объявлений создаёт и обновляет кампанию, адсет и ad с правильными состояниями.
 @pytest.mark.asyncio
 async def test_ads_repository_upsert_and_list(async_session) -> None:

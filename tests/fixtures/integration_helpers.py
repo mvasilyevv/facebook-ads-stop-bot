@@ -74,6 +74,24 @@ async def create_bound_offer_with_rate(
     return offer.id
 
 
+async def create_offer_with_rate(
+    async_session,
+    *,
+    offer_code: str,
+    offer_name: str,
+    cpa_usd: Decimal,
+    effective_from: datetime,
+) -> str:
+    offers_repo = OffersRepository(async_session)
+    offer = await offers_repo.create_offer(code=offer_code, name=offer_name)
+    await offers_repo.add_rate_version(
+        offer_id=offer.id,
+        cpa_usd=cpa_usd,
+        effective_from=effective_from,
+    )
+    return offer.id
+
+
 async def resolve_current_cpa(
     async_session,
     *,
@@ -81,11 +99,18 @@ async def resolve_current_cpa(
     adset_scope_key: str,
 ) -> Decimal | None:
     offers_repo = OffersRepository(async_session)
-    binding = await offers_repo.resolve_binding(fb_ad_id, adset_scope_key)
-    if binding is None:
+    ad = await AdsRepository(async_session).get_ad_by_fb_id(fb_ad_id)
+    if ad is None:
+        return None
+    offer = await offers_repo.resolve_offer_for_ad(
+        ad_name=ad.name,
+        ad_id=fb_ad_id,
+        adset_scope_key=adset_scope_key,
+    )
+    if offer is None:
         return None
     rate = await offers_repo.resolve_rate_version(
-        binding.offer_id, datetime(2026, 3, 20, 12, 0, tzinfo=UTC)
+        offer.id, datetime(2026, 3, 20, 12, 0, tzinfo=UTC)
     )
     if rate is None:
         return None

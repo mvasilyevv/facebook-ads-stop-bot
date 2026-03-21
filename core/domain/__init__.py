@@ -13,6 +13,8 @@ from core.domain.offer_resolution import (
     OfferBindingCandidate,
     OfferRateCandidate,
     ResolvedOfferRate,
+    extract_offer_code_from_ad_name,
+    normalize_offer_lookup_key,
     resolve_offer_binding,
     resolve_offer_rate,
 )
@@ -23,6 +25,8 @@ __all__ = [
     "DecisionType",
     "DeliveryStatus",
     "EntityType",
+    "extract_offer_code_from_ad_name",
+    "normalize_offer_lookup_key",
     "OfferBindingCandidate",
     "OfferRateCandidate",
     "ResolvedOfferRate",

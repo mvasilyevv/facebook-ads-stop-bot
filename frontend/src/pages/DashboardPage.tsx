@@ -184,7 +184,6 @@ export default function DashboardPage() {
       {dashboardData && (
         <SetupStepper
           offers={dashboardData.offers}
-          bindings={dashboardData.bindings}
           rules={dashboardData.rules}
           sessions={dashboardData.sessions}
           botMode={botMode}

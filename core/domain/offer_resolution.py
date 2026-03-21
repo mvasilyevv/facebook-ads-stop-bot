@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
+
+_OFFER_CODE_FROM_AD_NAME_PATTERN = re.compile(r"(?P<offer>[\w-]+?)(?=_\[[^\]]+\])", re.UNICODE)
 
 
 @dataclass(slots=True, frozen=True)
@@ -28,6 +31,25 @@ class ResolvedOfferRate:
     offer_id: str
     version_id: str
     cpa_usd: Decimal
+
+
+def extract_offer_code_from_ad_name(ad_name: str | None) -> str | None:
+    """Выделяет код оффера из имени объявления формата `CODE_[ID]`."""
+
+    if ad_name is None:
+        return None
+    match = _OFFER_CODE_FROM_AD_NAME_PATTERN.search(ad_name.strip())
+    if match is None:
+        return None
+    value = match.group("offer").strip(" _-")
+    return value or None
+
+
+def normalize_offer_lookup_key(value: str) -> str:
+    """Нормализует код или имя оффера для устойчивого сопоставления."""
+
+    parts = [part for part in re.findall(r"\w+", value.casefold(), flags=re.UNICODE) if part]
+    return "_".join(parts)
 
 
 def resolve_offer_binding(

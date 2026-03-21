@@ -25,7 +25,6 @@ from core.repositories import (
     AdsRepository,
     BrowserRepository,
     DecisionsRepository,
-    OffersRepository,
     ScanRunsRepository,
     SystemSettingsRepository,
 )
@@ -34,6 +33,7 @@ from tests.fixtures.worker_scan_helpers import (
     WorkerScanRow,
     build_worker_service,
     seed_offer_with_binding,
+    seed_offer_with_rate,
     seed_worker_ad_graph,
 )
 
@@ -100,11 +100,10 @@ class FakeResumeExecutor:
 @pytest.mark.asyncio
 async def test_worker_scan_service_writes_pause_decision_for_expensive_click(async_session_factory):
     seed = await seed_worker_ad_graph(async_session_factory)
-    await seed_offer_with_binding(
+    offer_id = await seed_offer_with_rate(
         async_session_factory,
-        entity_type=EntityType.ADSET,
-        entity_id=seed.adset_scope_key,
-        offer_code="offer-1",
+        offer_code="offer-auto-worker-1",
+        offer_name="DRC_CR2",
         cpa_usd=Decimal("5.00"),
         effective_from=datetime(2026, 3, 20, 11, 0, tzinfo=UTC),
     )
@@ -116,7 +115,7 @@ async def test_worker_scan_service_writes_pause_decision_for_expensive_click(asy
                 adset_scope_key=seed.adset_scope_key,
                 adset_name=seed.adset_name,
                 fb_ad_id=seed.fb_ad_id,
-                ad_name=seed.ad_name,
+                ad_name="DRC_CR2_[1001]",
                 delivery_status=DeliveryStatus.ACTIVE,
                 tracking_mode=TrackingMode.TRACKED,
                 scope_presence=ScopePresence.IN_SCOPE,
@@ -150,21 +149,20 @@ async def test_worker_scan_service_writes_pause_decision_for_expensive_click(asy
             ).all()
         )
         telegram_events = list((await session.scalars(select(TelegramEvent))).all())
-        binding = await OffersRepository(session).resolve_binding(None, seed.adset_scope_key)
 
     assert len(scan_runs) == 1
     assert scan_runs[0].status == ScanRunStatus.SUCCEEDED
     assert len(decisions) == 1
     assert decisions[0].decision == DecisionType.WOULD_PAUSE
     assert decisions[0].resolved_cpa_usd == Decimal("5.00")
+    assert str(decisions[0].offer_id) == str(offer_id)
     assert len(snapshots) == 1
     assert snapshots[0].fb_ad_id == seed.fb_ad_id
     assert snapshots[0].resolved_cpa_usd == Decimal("5.00")
+    assert str(snapshots[0].offer_id) == str(offer_id)
     assert len(telegram_events) == 1
     assert telegram_events[0].event_type == TelegramEventType.OBSERVE_WOULD_PAUSE
     assert telegram_events[0].status == "pending"
-    assert binding is not None
-    assert binding.entity_id == seed.adset_scope_key
 
 
 # Проверяет, что объявление без resolved CPA сохраняет снимок и пишет решение `INSUFFICIENT_DATA`.
@@ -418,11 +416,10 @@ async def test_worker_scan_service_executes_auto_pause_and_marks_decision(async_
         await settings_repo.set_setting("observe_only_enabled", "false")
         await session.commit()
 
-    await seed_offer_with_binding(
+    await seed_offer_with_rate(
         async_session_factory,
-        entity_type=EntityType.ADSET,
-        entity_id=seed.adset_scope_key,
-        offer_code="offer-pause",
+        offer_code="offer-auto-pause-1",
+        offer_name="DRC_CR2",
         cpa_usd=Decimal("5.00"),
         effective_from=datetime(2026, 3, 20, 11, 0, tzinfo=UTC),
     )
@@ -437,7 +434,7 @@ async def test_worker_scan_service_executes_auto_pause_and_marks_decision(async_
                     adset_scope_key=seed.adset_scope_key,
                     adset_name=seed.adset_name,
                     fb_ad_id=seed.fb_ad_id,
-                    ad_name=seed.ad_name,
+                    ad_name="DRC_CR2_[2002]",
                     delivery_status=DeliveryStatus.ACTIVE,
                     tracking_mode=TrackingMode.TRACKED,
                     scope_presence=ScopePresence.IN_SCOPE,

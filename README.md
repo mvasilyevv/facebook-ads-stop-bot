@@ -19,8 +19,8 @@ python3 -m venv .venv
 2. поднимает `Postgres` и `Redis` через Docker Compose;
 3. ждет готовности `Postgres`;
 4. применяет миграции Alembic;
-5. передает управление в `scripts/dev.sh`;
-6. запускает `api`, `worker`, `browser_host` и React UI.
+5. сам запускает `api`, `worker`, `browser_host` и React UI;
+6. печатает ссылки на UI и API после готовности.
 
 Полезные режимы запуска:
 
@@ -34,8 +34,6 @@ python3 -m venv .venv
 - `make up` — полный запуск через `scripts/bootstrap.sh`
 - `make down` — остановка через `scripts/bootstrap.sh --down`
 - `make logs` — логи docker compose
-
-Важно: frontend запускается локально через `scripts/dev.sh`, а не как отдельный сервис в `docker-compose.yml`.
 
 ## Компоненты
 

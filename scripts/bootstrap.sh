@@ -32,6 +32,138 @@ step() { printf "\n${C_BOLD}${C_CYAN}▸ %s${C_RESET}\n" "$*"; }
 
 ERRORS=0
 WARNINGS=0
+PIDS=()
+
+cleanup() {
+  local pid
+  for pid in "${PIDS[@]:-}"; do
+    if kill -0 "$pid" >/dev/null 2>&1; then
+      kill "$pid" >/dev/null 2>&1 || true
+    fi
+  done
+}
+
+wait_for_http() {
+  local url="$1"
+  local label="$2"
+  local attempts="${3:-30}"
+  local attempt
+
+  if ! command -v curl >/dev/null 2>&1; then
+    warn "curl не найден, пропускаю проверку доступности для: $label"
+    return 1
+  fi
+
+  for attempt in $(seq 1 "$attempts"); do
+    if curl --silent --show-error --fail "$url" >/dev/null 2>&1; then
+      ok "$label доступен: $url"
+      return 0
+    fi
+    sleep 1
+  done
+
+  warn "$label пока не ответил, но процессы уже запущены. Проверьте логи при необходимости"
+  return 1
+}
+
+print_access_summary() {
+  local backend_host="${API_HOST:-127.0.0.1}"
+  local backend_port="${API_PORT:-8000}"
+  local frontend_host="${FRONTEND_HOST:-127.0.0.1}"
+  local frontend_port="${FRONTEND_PORT:-5173}"
+  local backend_log="${BACKEND_LOG:-/tmp/fb_agent_backend.log}"
+  local worker_log="${WORKER_LOG:-/tmp/fb_agent_worker.log}"
+  local browser_host_log="${BROWSER_HOST_LOG:-/tmp/fb_agent_browser_host.log}"
+  local frontend_log="${FRONTEND_LOG:-/tmp/fb_agent_frontend.log}"
+
+  printf "\n${C_BOLD}${C_GREEN}Проект запущен.${C_RESET}\n"
+  printf "  UI: http://%s:%s\n" "$frontend_host" "$frontend_port"
+  printf "  API: http://%s:%s\n" "$backend_host" "$backend_port"
+  printf "  Health: http://%s:%s/health\n" "$backend_host" "$backend_port"
+  printf "  Docs: http://%s:%s/docs\n" "$backend_host" "$backend_port"
+  printf "  Логи backend: %s\n" "$backend_log"
+  printf "  Логи worker: %s\n" "$worker_log"
+  printf "  Логи browser host: %s\n" "$browser_host_log"
+  printf "  Логи frontend: %s\n" "$frontend_log"
+  printf "  Дальше ждать не нужно. Для остановки нажмите Ctrl+C.\n"
+}
+
+start_backend() {
+  local backend_log="${BACKEND_LOG:-/tmp/fb_agent_backend.log}"
+  log_info "Запускаю backend API"
+  (
+    cd "$ROOT"
+    exec "$PYTHON" -m uvicorn apps.api.main:app \
+      --host "${API_HOST:-127.0.0.1}" \
+      --port "${API_PORT:-8000}" \
+      --reload
+  ) >"$backend_log" 2>&1 &
+  PIDS+=("$!")
+}
+
+start_worker() {
+  local worker_log="${WORKER_LOG:-/tmp/fb_agent_worker.log}"
+  log_info "Запускаю фонового воркера"
+  (
+    cd "$ROOT"
+    exec "$PYTHON" -m apps.worker.main
+  ) >"$worker_log" 2>&1 &
+  PIDS+=("$!")
+}
+
+start_browser_host() {
+  local browser_host_log="${BROWSER_HOST_LOG:-/tmp/fb_agent_browser_host.log}"
+  log_info "Запускаю browser host"
+  (
+    cd "$ROOT"
+    exec "$PYTHON" -m apps.browser_host.main
+  ) >"$browser_host_log" 2>&1 &
+  PIDS+=("$!")
+}
+
+start_frontend() {
+  local frontend_dir="$ROOT/frontend"
+  local frontend_log="${FRONTEND_LOG:-/tmp/fb_agent_frontend.log}"
+
+  if [[ ! -d "$frontend_dir" ]]; then
+    warn "Папка frontend пока отсутствует, запускаю только backend"
+    return
+  fi
+
+  if [[ ! -f "$frontend_dir/package.json" ]]; then
+    die "В папке frontend не найден package.json"
+  fi
+
+  log_info "Запускаю React UI"
+  (
+    cd "$frontend_dir"
+    if [[ -f pnpm-lock.yaml ]]; then
+      ensure_command pnpm
+      if [[ ! -d node_modules ]]; then
+        log_info "Устанавливаю frontend-зависимости через pnpm"
+        pnpm install
+      fi
+      exec pnpm run dev -- --host "${FRONTEND_HOST:-127.0.0.1}" --port "${FRONTEND_PORT:-5173}"
+    fi
+    if [[ -f yarn.lock ]]; then
+      ensure_command yarn
+      if [[ ! -d node_modules ]]; then
+        log_info "Устанавливаю frontend-зависимости через yarn"
+        yarn install --frozen-lockfile
+      fi
+      exec yarn dev --host "${FRONTEND_HOST:-127.0.0.1}" --port "${FRONTEND_PORT:-5173}"
+    fi
+    ensure_command npm
+    if [[ ! -d node_modules ]]; then
+      log_info "Устанавливаю frontend-зависимости через npm"
+      npm install
+    fi
+    exec npm run dev -- --host "${FRONTEND_HOST:-127.0.0.1}" --port "${FRONTEND_PORT:-5173}"
+  ) >"$frontend_log" 2>&1 &
+  PIDS+=("$!")
+}
+
+trap cleanup INT TERM EXIT
 
 # ─────────────────────────────────────────────────────────────
 # Аргументы
@@ -183,5 +315,12 @@ ok "Миграции применены"
 
 # Сервисы
 step "Сервисы"
-log_info "Передаю управление dev.sh"
-DEV_SKIP_INFRA=1 exec bash "$ROOT/scripts/dev.sh"
+start_backend
+start_worker
+start_browser_host
+start_frontend
+wait_for_http "http://${API_HOST:-127.0.0.1}:${API_PORT:-8000}/health" "Backend API" 25 || true
+wait_for_http "http://${FRONTEND_HOST:-127.0.0.1}:${FRONTEND_PORT:-5173}" "Frontend UI" 60 || true
+print_access_summary
+
+wait

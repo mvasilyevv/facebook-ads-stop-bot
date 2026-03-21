@@ -109,7 +109,7 @@ export type ScanRunItem = {
   status: string;
   rows_seen: number;
   rows_parsed: number;
-  scope_summary: string;
+  scope_summary?: Record<string, unknown> | null;
   error_message?: string | null;
   started_at: string;
   finished_at?: string | null;

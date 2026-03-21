@@ -202,12 +202,17 @@ class WorkerScanService:
                 last_scan_run_id=scan_run_id,
             )
 
-            binding = await offers_repo.resolve_binding(row.fb_ad_id, row.adset_scope_key)
+            offer = await offers_repo.resolve_offer_for_ad(
+                ad_name=row.ad_name,
+                resolved_offer_code=row.resolved_offer_code,
+                ad_id=row.fb_ad_id,
+                adset_scope_key=row.adset_scope_key,
+            )
             rate = None
             resolved_cpa_usd = None
-            if binding is not None:
+            if offer is not None:
                 rate = await offers_repo.resolve_rate_version(
-                    binding.offer_id,
+                    offer.id,
                     row.last_seen_at or datetime.now(tz=UTC),
                 )
                 if rate is not None:
@@ -244,7 +249,7 @@ class WorkerScanService:
                 registrations=row.registrations,
                 cost_per_registration=row.cost_per_registration,
                 deposits=row.deposits,
-                offer_id=binding.offer_id if binding is not None else None,
+                offer_id=offer.id if offer is not None else None,
                 offer_rate_version_id=rate.id if rate is not None else None,
                 resolved_cpa_usd=resolved_cpa_usd,
             )
@@ -254,7 +259,7 @@ class WorkerScanService:
                 decision=decision_result.decision,
                 reason=decision_result.reason,
                 ad_id=ad.id,
-                offer_id=binding.offer_id if binding is not None else None,
+                offer_id=offer.id if offer is not None else None,
                 offer_rate_version_id=rate.id if rate is not None else None,
                 resolved_cpa_usd=resolved_cpa_usd,
                 created_at=row.last_seen_at or datetime.now(tz=UTC),

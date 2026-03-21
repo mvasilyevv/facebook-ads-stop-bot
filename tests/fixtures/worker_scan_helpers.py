@@ -149,6 +149,28 @@ async def seed_offer_with_binding(
         return offer.id
 
 
+async def seed_offer_with_rate(
+    async_session_factory,
+    *,
+    offer_code: str,
+    offer_name: str,
+    cpa_usd: Decimal,
+    effective_from: datetime,
+) -> str:
+    """Создает оффер и ставку без ручной привязки к сущности."""
+
+    async with async_session_factory() as session:
+        offers_repo = OffersRepository(session)
+        offer = await offers_repo.create_offer(code=offer_code, name=offer_name)
+        await offers_repo.add_rate_version(
+            offer_id=offer.id,
+            cpa_usd=cpa_usd,
+            effective_from=effective_from,
+        )
+        await session.commit()
+        return offer.id
+
+
 def load_worker_scan_service_class() -> type[Any]:
     """Пробует найти будущий WorkerScanService в ожидаемых модулях."""
 

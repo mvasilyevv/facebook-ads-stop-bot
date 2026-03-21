@@ -1,8 +1,8 @@
-import type { OfferItem, OfferBindingItem, RuleItem, BrowserSessionItem, BotModeResponse } from "../types";
+import { Link } from "react-router-dom";
+import type { OfferItem, RuleItem, BrowserSessionItem, BotModeResponse } from "../types";
 
 type SetupStepperProps = {
   offers: OfferItem[];
-  bindings: OfferBindingItem[];
   rules: RuleItem[];
   sessions: BrowserSessionItem[];
   botMode: BotModeResponse | null;
@@ -10,6 +10,13 @@ type SetupStepperProps = {
 };
 
 type StepStatus = "pending" | "active" | "completed";
+type StepDefinition = {
+  number: number;
+  title: string;
+  description: string;
+  link: string;
+  actionLabel: string;
+};
 
 function getStepStatus(step: number, completed: boolean[], current: number): StepStatus {
   if (completed[step]) return "completed";
@@ -19,15 +26,12 @@ function getStepStatus(step: number, completed: boolean[], current: number): Ste
 
 export function SetupStepper({
   offers,
-  bindings,
   rules,
   sessions,
   botMode,
   loading,
 }: SetupStepperProps) {
-  // Проверяем условия завершения для каждого шага
   const offersExist = offers.length > 0;
-  const bindingsExist = bindings.length > 0;
   const enabledRulesExist = rules.some((r) => r.is_enabled);
   const activeSessions = sessions.filter((s) => s.status === "active" || s.status === "started");
   const sessionsExist = activeSessions.length > 0;
@@ -36,7 +40,6 @@ export function SetupStepper({
 
   const completed = [
     offersExist,
-    bindingsExist,
     enabledRulesExist,
     sessionsExist,
     botModeSet,
@@ -49,31 +52,34 @@ export function SetupStepper({
     return null;
   }
 
-  const steps = [
+  const steps: StepDefinition[] = [
     {
       number: 1,
-      title: "Создать предложение",
+      title: "Создать оффер",
+      description: "Создай оффер по коду из начала объявления, например `DRC_CR2` для имени `DRC_CR2_[ID]`.",
       link: "/offers",
+      actionLabel: "Открыть Офферы",
     },
     {
       number: 2,
-      title: "Привязать предложение",
-      link: "/offers",
+      title: "Настроить правила",
+      description: "На странице Правила выстави проценты от CPA через слайдеры.",
+      link: "/rules",
+      actionLabel: "Открыть Правила",
     },
     {
       number: 3,
-      title: "Настроить правила",
-      link: "/rules",
+      title: "Запустить браузер",
+      description: "Открой Сессии и запусти рабочий браузерный профиль.",
+      link: "/sessions",
+      actionLabel: "Открыть Сессии",
     },
     {
       number: 4,
-      title: "Запустить браузер",
-      link: "/sessions",
-    },
-    {
-      number: 5,
       title: "Настроить режим бота",
-      link: "#",
+      description: "Вернись на Обзор и выбери режим наблюдения или боевой режим.",
+      link: "/",
+      actionLabel: "Открыть Обзор",
     },
   ];
 
@@ -91,17 +97,16 @@ export function SetupStepper({
               <div className="setup-step__number">{step.number}</div>
               <div className="setup-step__content">
                 <div className="setup-step__title">{step.title}</div>
+                <div className="setup-step__description">{step.description}</div>
                 <div className="setup-step__status">
                   {status === "completed" && <span className="setup-step__badge">✓ Готово</span>}
                   {status === "active" && <span className="setup-step__badge setup-step__badge--active">● Текущий</span>}
                   {status === "pending" && <span className="setup-step__badge setup-step__badge--pending">○ Ожидание</span>}
                 </div>
               </div>
-              {step.link !== "#" && (
-                <a href={step.link} className="button button--ghost button--small">
-                  Перейти
-                </a>
-              )}
+              <Link to={step.link} className="button button--ghost button--small">
+                {step.actionLabel}
+              </Link>
             </div>
           );
         })}

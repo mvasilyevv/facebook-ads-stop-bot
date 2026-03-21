@@ -10,7 +10,12 @@ from apps.browser_host.adapters.factory import build_adapter
 from apps.browser_host.playwright_attach import PlaywrightAttachService
 from apps.browser_host.session_manager import BrowserSessionManager
 from core.config import Settings
-from core.domain import DeliveryStatus, ScopePresence, TrackingMode
+from core.domain import (
+    DeliveryStatus,
+    ScopePresence,
+    TrackingMode,
+    extract_offer_code_from_ad_name,
+)
 from core.scanner import (
     ScannedAdRow,
     build_adset_scope_key,
@@ -230,6 +235,7 @@ class FacebookAdsScannerProvider:
                     ),
                     deposits=_parse_int_value(mapped_values["deposits"]),
                     last_seen_at=datetime.now(tz=UTC),
+                    resolved_offer_code=extract_offer_code_from_ad_name(ad_name),
                 )
             )
 

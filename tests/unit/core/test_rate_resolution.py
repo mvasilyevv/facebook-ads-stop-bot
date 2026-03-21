@@ -6,9 +6,22 @@ from decimal import Decimal
 from core.domain import (
     OfferBindingCandidate,
     OfferRateCandidate,
+    extract_offer_code_from_ad_name,
+    normalize_offer_lookup_key,
     resolve_offer_binding,
     resolve_offer_rate,
 )
+
+
+# Проверяет, что код оффера выделяется из имени объявления формата `CODE_[ID]`.
+def test_extract_offer_code_from_ad_name() -> None:
+    assert extract_offer_code_from_ad_name("DRC_CR2_[845921]") == "DRC_CR2"
+
+
+# Проверяет, что имя и код оффера приводятся к одному ключу для сравнения.
+def test_normalize_offer_lookup_key_unifies_separators() -> None:
+    assert normalize_offer_lookup_key("DRC-CR2") == "drc_cr2"
+    assert normalize_offer_lookup_key("DRC_CR2") == "drc_cr2"
 
 
 # Проверяет, что привязка конкретного объявления имеет приоритет над привязкой адсета.

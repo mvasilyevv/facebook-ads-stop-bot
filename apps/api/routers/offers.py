@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException, status
@@ -20,6 +21,26 @@ from core.domain import EntityType
 from core.repositories import OffersRepository
 
 router = APIRouter(tags=["offers"])
+
+
+async def _build_offer_code(repo: OffersRepository, name: str, explicit_code: str | None) -> str:
+    """Собирает уникальный код оффера из имени или явного значения."""
+
+    normalized_explicit_code = explicit_code.strip() if explicit_code is not None else None
+    if normalized_explicit_code:
+        return normalized_explicit_code
+
+    base_code = re.sub(r"[^\w]+", "-", name.casefold(), flags=re.UNICODE).strip("-_")
+    base_code = base_code.replace("_", "-")[:80]
+    if not base_code:
+        base_code = "offer"
+
+    candidate = base_code
+    suffix = 2
+    while await repo.get_offer_by_code(candidate) is not None:
+        candidate = f"{base_code}-{suffix}"
+        suffix += 1
+    return candidate
 
 
 def _map_offer_item(offer, current_cpa_usd) -> OfferItem:
@@ -89,16 +110,40 @@ async def create_offer(
     session: DbSessionDep,
 ) -> OfferActionResponse:
     repo = OffersRepository(session)
+    offer_code = await _build_offer_code(repo, payload.name, payload.code)
     offer = await repo.create_offer(
-        code=payload.code,
+        code=offer_code,
         name=payload.name,
         is_active=payload.is_active,
     )
+    current_cpa_usd = None
+    if payload.cpa_usd is not None:
+        await repo.add_rate_version(
+            offer_id=offer.id,
+            cpa_usd=payload.cpa_usd,
+            effective_from=datetime.now(tz=UTC),
+            note="Создано из упрощенной формы оффера",
+        )
+        current_cpa_usd = payload.cpa_usd
     await session.commit()
     return OfferActionResponse(
         message="Оффер создан",
-        offer=_map_offer_item(offer, current_cpa_usd=None),
+        offer=_map_offer_item(offer, current_cpa_usd=current_cpa_usd),
     )
+
+
+@router.delete("/offers/{offer_id}", response_model=OfferActionResponse)
+async def delete_offer(offer_id: str, session: DbSessionDep) -> OfferActionResponse:
+    repo = OffersRepository(session)
+    offer = await repo.get_offer(offer_id)
+    if offer is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Оффер не найден")
+
+    rate = await repo.resolve_rate_version(offer.id, datetime.now(tz=UTC))
+    offer_item = _map_offer_item(offer, current_cpa_usd=rate.cpa_usd if rate is not None else None)
+    await repo.delete_offer(offer_id)
+    await session.commit()
+    return OfferActionResponse(message="Оффер удален", offer=offer_item)
 
 
 @router.post(

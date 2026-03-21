@@ -278,6 +278,118 @@ async def test_settings_routes_persist_bot_mode(api_client) -> None:
     assert refreshed_response.json()["observe_only_enabled"] is True
 
 
+# Проверяет, что оффер можно создать одной формой с автоматическим кодом и стартовой ставкой.
+@pytest.mark.asyncio
+async def test_create_offer_route_generates_code_and_initial_rate(
+    api_client,
+    async_session_factory,
+) -> None:
+    client, _, _ = api_client
+
+    response = await client.post(
+        "/offers",
+        json={
+            "name": "Новый оффер CPA",
+            "cpa_usd": "7.50",
+            "is_active": True,
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["offer"]["name"] == "Новый оффер CPA"
+    assert response.json()["offer"]["current_cpa_usd"] == "7.50"
+    assert response.json()["offer"]["code"] != ""
+
+    async with async_session_factory() as session:
+        offers_repo = OffersRepository(session)
+        offer = await offers_repo.get_offer(response.json()["offer"]["id"])
+        rate = await offers_repo.resolve_rate_version(
+            response.json()["offer"]["id"],
+            datetime.now(tz=UTC),
+        )
+
+    assert offer is not None
+    assert rate is not None
+    assert rate.cpa_usd == Decimal("7.50")
+
+
+# Проверяет, что API удаляет оффер и он исчезает из списка без остатка.
+@pytest.mark.asyncio
+async def test_delete_offer_route_removes_offer(api_client, async_session_factory) -> None:
+    client, _, _ = api_client
+
+    async with async_session_factory() as session:
+        offers_repo = OffersRepository(session)
+        offer = await offers_repo.create_offer(code="offer-delete-1", name="Удаляемый оффер")
+        await offers_repo.add_rate_version(
+            offer_id=offer.id,
+            cpa_usd=Decimal("6.50"),
+            effective_from=datetime(2026, 3, 20, 12, 0, tzinfo=UTC),
+        )
+        await session.commit()
+
+    response = await client.delete(f"/offers/{offer.id}")
+    list_response = await client.get("/offers")
+
+    assert response.status_code == 200
+    assert response.json()["message"] == "Оффер удален"
+    assert list_response.status_code == 200
+    assert list_response.json() == []
+
+    async with async_session_factory() as session:
+        offers_repo = OffersRepository(session)
+        deleted_offer = await offers_repo.get_offer(str(offer.id))
+
+    assert deleted_offer is None
+
+
+# Проверяет, что API показывает CPA оффера, найденного по коду из имени объявления.
+@pytest.mark.asyncio
+async def test_ads_route_resolves_cpa_from_ad_naming(api_client, async_session_factory) -> None:
+    client, _, _ = api_client
+
+    async with async_session_factory() as session:
+        ads_repo = AdsRepository(session)
+        offers_repo = OffersRepository(session)
+
+        campaign = await ads_repo.upsert_campaign(
+            scope_key="campaign:auto-account:auto-campaign",
+            name="Авто кампания",
+            tracking_mode=TrackingMode.TRACKED,
+            last_seen_at=datetime(2026, 3, 20, 10, 0, tzinfo=UTC),
+        )
+        adset = await ads_repo.upsert_adset(
+            scope_key="adset:campaign:auto-account:auto-campaign:auto-adset",
+            campaign_id=campaign.id,
+            name="Авто адсет",
+            tracking_mode=TrackingMode.TRACKED,
+            last_seen_at=datetime(2026, 3, 20, 10, 1, tzinfo=UTC),
+        )
+        await ads_repo.upsert_ad(
+            fb_ad_id="auto-ad-1",
+            campaign_id=campaign.id,
+            adset_id=adset.id,
+            name="DRC_CR2_[123456]",
+            delivery_status=DeliveryStatus.ACTIVE,
+            tracking_mode=TrackingMode.TRACKED,
+            scope_presence=ScopePresence.IN_SCOPE,
+            last_seen_at=datetime(2026, 3, 20, 10, 2, tzinfo=UTC),
+        )
+        offer = await offers_repo.create_offer(code="offer-auto-cpa-1", name="DRC_CR2")
+        await offers_repo.add_rate_version(
+            offer_id=offer.id,
+            cpa_usd=Decimal("9.50"),
+            effective_from=datetime(2026, 3, 20, 9, 0, tzinfo=UTC),
+        )
+        await session.commit()
+
+    response = await client.get("/ads")
+
+    assert response.status_code == 200
+    auto_ad = next(item for item in response.json() if item["fb_ad_id"] == "auto-ad-1")
+    assert auto_ad["resolved_cpa_usd"] == "9.50"
+
+
 # Проверяет, что API возвращает созданные привязки офферов вместе с кодом оффера.
 @pytest.mark.asyncio
 async def test_offer_bindings_route_reads_database(api_client, async_session_factory) -> None:

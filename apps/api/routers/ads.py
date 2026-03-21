@@ -13,10 +13,14 @@ router = APIRouter(prefix="/ads", tags=["ads"])
 
 
 async def _resolve_ad_cpa(repo: OffersRepository, ad) -> object:
-    binding = await repo.resolve_binding(ad.fb_ad_id, ad.adset.scope_key)
-    if binding is None:
+    offer = await repo.resolve_offer_for_ad(
+        ad_name=ad.name,
+        ad_id=ad.fb_ad_id,
+        adset_scope_key=ad.adset.scope_key,
+    )
+    if offer is None:
         return None
-    rate = await repo.resolve_rate_version(binding.offer_id, datetime.now(tz=UTC))
+    rate = await repo.resolve_rate_version(offer.id, datetime.now(tz=UTC))
     if rate is None:
         return None
     return rate.cpa_usd

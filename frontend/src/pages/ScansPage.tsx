@@ -7,6 +7,35 @@ import { formatDateTime, formatRelativeStatus, formatMetricText } from "../lib/f
 import { getBadgeTone } from "../lib/helpers";
 import type { ScanRunItem } from "../types";
 
+function renderScopeSummary(summary: ScanRunItem["scope_summary"]) {
+  if (!summary) {
+    return "—";
+  }
+
+  const rawEntries: Array<[string, unknown]> = [
+    ["В охвате", summary.rows_in_scope],
+    ["Не увидели", summary.rows_not_seen_this_scan],
+    ["Активных", summary.active_rows],
+    ["На паузе", summary.paused_rows],
+  ];
+  const summaryEntries = rawEntries.filter(([, value]) => value != null);
+
+  if (summaryEntries.length === 0) {
+    return "—";
+  }
+
+  return (
+    <div className="scan-summary">
+      {summaryEntries.map(([label, value]) => (
+        <div key={label} className="scan-summary__item">
+          <span>{label}</span>
+          <strong>{String(value)}</strong>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function ScansPage() {
   const [scans, setScans] = useState<ScanRunItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -99,7 +128,7 @@ export default function ScansPage() {
                     </td>
                     <td>{formatMetricText(scan.rows_seen)}</td>
                     <td>{formatMetricText(scan.rows_parsed)}</td>
-                    <td>{scan.scope_summary || "—"}</td>
+                    <td>{renderScopeSummary(scan.scope_summary)}</td>
                     <td>{scan.error_message ? <span className="inline-error">{scan.error_message}</span> : "—"}</td>
                     <td>{formatDateTime(scan.started_at)}</td>
                     <td>{scan.finished_at ? formatDateTime(scan.finished_at) : "в процессе"}</td>

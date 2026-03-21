@@ -21,11 +21,9 @@ async def list_scan_runs(session: DbSessionDep) -> list[ScanRunItem]:
             status=scan_run.status.value,
             rows_seen=scan_run.rows_seen,
             rows_parsed=scan_run.rows_parsed,
-            scope_summary=(
-                scan_run.scope_summary
-                if isinstance(scan_run.scope_summary, str)
-                else str(scan_run.scope_summary)
-            ),
+            scope_summary=scan_run.scope_summary
+            if isinstance(scan_run.scope_summary, dict)
+            else None,
             error_message=scan_run.error_message,
             started_at=scan_run.started_at,
             finished_at=scan_run.finished_at,

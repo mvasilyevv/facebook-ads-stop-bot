@@ -33,8 +33,9 @@ class OfferItem(BaseModel):
 
 
 class OfferCreateRequest(BaseModel):
-    code: str = Field(min_length=1)
+    code: str | None = Field(default=None, min_length=1)
     name: str = Field(min_length=1)
+    cpa_usd: Decimal | None = Field(default=None, gt=0)
     is_active: bool = True
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
@@ -14,7 +15,7 @@ class ScanRunItem(BaseModel):
     status: str
     rows_seen: int
     rows_parsed: int
-    scope_summary: str
+    scope_summary: dict[str, Any] | None = None
     error_message: str | None = None
     started_at: datetime
     finished_at: datetime | None = None

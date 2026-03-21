@@ -30,7 +30,6 @@ export type DashboardPayload = {
   decisions: DecisionItem[];
   rules: RuleItem[];
   offers: OfferItem[];
-  bindings: OfferBindingItem[];
   sessions: BrowserSessionItem[];
   errors: Record<string, string>;
 };
@@ -108,7 +107,6 @@ export async function loadDashboard(): Promise<DashboardPayload> {
     ["decisions", fetchDecisions()],
     ["rules", fetchRules()],
     ["offers", fetchOffers()],
-    ["bindings", fetchOfferBindings()],
     ["sessions", fetchSessions()],
   ] as const;
 
@@ -120,7 +118,6 @@ export async function loadDashboard(): Promise<DashboardPayload> {
     decisions: [],
     rules: [],
     offers: [],
-    bindings: [],
     sessions: [],
     errors: {},
   };
@@ -143,9 +140,6 @@ export async function loadDashboard(): Promise<DashboardPayload> {
           break;
         case "offers":
           payload.offers = result.value as OfferItem[];
-          break;
-        case "bindings":
-          payload.bindings = result.value as OfferBindingItem[];
           break;
         case "sessions":
           payload.sessions = result.value as BrowserSessionItem[];
@@ -181,13 +175,21 @@ export async function saveRule(ruleId: string, payload: Partial<RuleItem>): Prom
 }
 
 export async function createOffer(payload: {
-  code: string;
   name: string;
+  cpa_usd: string;
+  code?: string;
   is_active: boolean;
 }): Promise<OfferItem> {
   const response = await requestJson<{ offer: OfferItem }>("/offers", {
     method: "POST",
     body: JSON.stringify(payload),
+  });
+  return response.offer;
+}
+
+export async function deleteOffer(offerId: string): Promise<OfferItem> {
+  const response = await requestJson<{ offer: OfferItem }>(`/offers/${offerId}`, {
+    method: "DELETE",
   });
   return response.offer;
 }
