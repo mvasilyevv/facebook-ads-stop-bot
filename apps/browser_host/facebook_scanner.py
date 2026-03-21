@@ -196,6 +196,9 @@ class FacebookAdsScannerProvider:
 
         for index in range(row_count):
             row = row_locator.nth(index)
+            # Пропускаем строку заголовка (содержит columnheader вместо gridcell)
+            if await row.locator("[role='columnheader']").count() > 0:
+                continue
             cell_locator = row.locator("[role='gridcell'], [role='cell']")
             cell_count = await cell_locator.count()
             if cell_count < len(_REQUIRED_FIELDS):
@@ -334,7 +337,8 @@ class FacebookAdsScannerProvider:
             return False
         last_row = row_locator.nth(row_count - 1)
         await last_row.scroll_into_view_if_needed()
-        await page.mouse.wheel(0, 2500)
+        scroll_px = getattr(self._settings, "scanner_scroll_step_px", 2500)
+        await page.mouse.wheel(0, scroll_px)
         return True
 
     async def _resolve_ads_page(self, browser):

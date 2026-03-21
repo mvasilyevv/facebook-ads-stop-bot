@@ -5,7 +5,10 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 
-_OFFER_CODE_FROM_AD_NAME_PATTERN = re.compile(r"(?P<offer>[\w-]+?)(?=_\[[^\]]+\])", re.UNICODE)
+_OFFER_CODE_FROM_AD_NAME_PATTERN = re.compile(
+    r"^\s*(?P<offer>[A-Za-z0-9]+_[A-Za-z0-9]+)",
+    re.ASCII,
+)
 
 
 @dataclass(slots=True, frozen=True)
@@ -34,7 +37,7 @@ class ResolvedOfferRate:
 
 
 def extract_offer_code_from_ad_name(ad_name: str | None) -> str | None:
-    """Выделяет код оффера из имени объявления формата `CODE_[ID]`."""
+    """Выделяет маску оффера из начала имени объявления формата `GEO_CODE_*`."""
 
     if ad_name is None:
         return None

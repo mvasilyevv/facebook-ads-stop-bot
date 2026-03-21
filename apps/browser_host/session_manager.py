@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from apps.browser_host.adapters.base import AntiDetectAdapter
 from apps.browser_host.adapters.models import AdapterHealth
 from apps.browser_host.playwright_attach import AttachedBrowserSession, PlaywrightAttachService
+
+_STOP_START_DELAY_SECONDS = 2.0
 
 
 class BrowserSessionManager:
@@ -29,13 +32,15 @@ class BrowserSessionManager:
     ) -> AttachedBrowserSession:
         logger = logging.getLogger(__name__)
         logger.info("Запрашиваю automation-сессию для профиля %s", profile_id)
-        await self._adapter.ensure_single_active_profile()
         status = await self._adapter.get_profile_status(profile_id)
         if status.has_automation_binding:
             logger.info("Профиль %s уже готов к автоматизации", profile_id)
-        else:
+        elif status.state == "RUNNING":
             logger.info("Профиль %s будет перезапущен с флагами автоматизации", profile_id)
             await self._adapter.stop_profile(profile_id)
+            await asyncio.sleep(_STOP_START_DELAY_SECONDS)
+        else:
+            logger.info("Профиль %s остановлен, запускаю с автоматизацией", profile_id)
 
         launch_result = await self._adapter.start_profile_for_automation(
             profile_id=profile_id,

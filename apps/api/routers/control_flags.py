@@ -57,6 +57,7 @@ async def delete_control_flag(flag_id: str, session: DbSessionDep) -> ControlFla
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Флаг управления не найден"
         )
+    response = _map_control_flag_item(target_flag)
     await repo.delete_control_flag(target_flag.entity_type, target_flag.entity_id)
     await session.commit()
-    return _map_control_flag_item(target_flag)
+    return response

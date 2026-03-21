@@ -2,7 +2,7 @@ import { useEffect, useState, startTransition } from "react";
 import { Badge } from "../components/Badge";
 import { EmptyState } from "../components/EmptyState";
 import { SectionCard } from "../components/SectionCard";
-import { fetchSessions, startSession, stopSession } from "../lib/api";
+import { fetchSessions, startSession } from "../lib/api";
 import { formatRelativeStatus } from "../lib/format";
 import { getBadgeTone } from "../lib/helpers";
 import type { BrowserSessionItem } from "../types";
@@ -11,7 +11,6 @@ export default function SessionsPage() {
   const [sessions, setSessions] = useState<BrowserSessionItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
-  const [sessionReason, setSessionReason] = useState("Запрос оператора");
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -59,7 +58,7 @@ export default function SessionsPage() {
       <div className="page-header">
         <div>
           <h1 className="page-title">Сессии browser host</h1>
-          <p className="page-subtitle">Активные профили, состояние attach и ручной запуск/остановка</p>
+          <p className="page-subtitle">Активные профили и состояние автоматизации</p>
         </div>
       </div>
 
@@ -68,7 +67,7 @@ export default function SessionsPage() {
 
       <SectionCard
         title="Сессии browser host"
-        subtitle="Активные профили, состояние attach и ручной запуск/остановка"
+        subtitle="Активные профили и состояние автоматизации"
         actions={
           <input
             className="input input--compact"
@@ -78,14 +77,6 @@ export default function SessionsPage() {
           />
         }
       >
-        <div className="panel-form panel-form--inline">
-          <input
-            className="input"
-            value={sessionReason}
-            onChange={(event) => setSessionReason(event.target.value)}
-            placeholder="Причина для start/stop"
-          />
-        </div>
         <div className="table-wrap" id="sessions">
           <table className="data-table">
             <thead>
@@ -121,42 +112,24 @@ export default function SessionsPage() {
                     </td>
                     <td>{session.last_message ?? "—"}</td>
                     <td>
-                      <div className="row-actions">
-                        <button
-                          type="button"
-                          className="button button--small"
-                          onClick={() =>
-                            void runAction(
-                              () =>
-                                startSession({
-                                  profileId: session.profile_id,
-                                  browserHostId: session.browser_host_id,
-                                  reason: sessionReason,
-                                }),
-                              `Сессия ${session.profile_id} запущена`,
-                            )
-                          }
-                        >
-                          Запустить
-                        </button>
-                        <button
-                          type="button"
-                          className="button button--small button--ghost"
-                          onClick={() =>
-                            void runAction(
-                              () =>
-                                stopSession({
-                                  profileId: session.profile_id,
-                                  browserHostId: session.browser_host_id,
-                                  reason: sessionReason,
-                                }),
-                              `Сессия ${session.profile_id} остановлена`,
-                            )
-                          }
-                        >
-                          Остановить
-                        </button>
-                      </div>
+                      <button
+                        type="button"
+                        className="button button--small"
+                        disabled={session.status.toUpperCase() !== "ACTIVE"}
+                        onClick={() =>
+                          void runAction(
+                            () =>
+                              startSession({
+                                profileId: session.profile_id,
+                                browserHostId: session.browser_host_id,
+                                reason: "Перезапуск с автоматизацией",
+                              }),
+                            `Профиль ${session.profile_id} перезапущен с CDP`,
+                          )
+                        }
+                      >
+                        Перезапустить с CDP
+                      </button>
                     </td>
                   </tr>
                 ))

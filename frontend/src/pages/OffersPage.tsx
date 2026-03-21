@@ -81,7 +81,7 @@ export default function OffersPage() {
       {message && <div className="message-banner">{message}</div>}
 
       <div className="message-banner">
-        Если объявление называется `DRC_CR2_[12345]`, создай оффер с названием `DRC_CR2`. Бот сам сопоставит объявление с этим оффером по неймингу.
+        Если объявление называется `DRC_CR2_CR001`, создай оффер с названием `DRC_CR2`. Бот сам возьмет первые две части имени и сопоставит объявление с оффером.
       </div>
 
       <SectionCard title="Создать оффер">

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
 from dataclasses import dataclass
@@ -7,6 +8,8 @@ from datetime import UTC, datetime
 from typing import Any, Callable
 
 from apps.browser_host.adapters.models import AutomationLaunchResult
+
+_CDP_CONNECT_MAX_ATTEMPTS = 3
 
 
 def _load_async_playwright_factory() -> Callable[[], Any]:
@@ -63,12 +66,32 @@ class PlaywrightAttachService:
                 "Не удалось запустить Playwright Python для подключения к браузеру."
             ) from exc
 
-        try:
-            browser = await playwright.chromium.connect_over_cdp(cdp_url)
-        except Exception as exc:
+        last_error: Exception | None = None
+        browser = None
+        for attempt in range(_CDP_CONNECT_MAX_ATTEMPTS):
+            try:
+                browser = await playwright.chromium.connect_over_cdp(cdp_url)
+                break
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
+                if attempt < _CDP_CONNECT_MAX_ATTEMPTS - 1:
+                    delay = 2**attempt
+                    logger.warning(
+                        "Попытка %s/%s подключения к CDP %s не удалась, жду %sс: %s",
+                        attempt + 1,
+                        _CDP_CONNECT_MAX_ATTEMPTS,
+                        cdp_url,
+                        delay,
+                        exc,
+                    )
+                    await asyncio.sleep(delay)
+        if browser is None:
             with contextlib.suppress(Exception):
                 await playwright.stop()
-            raise RuntimeError(f"Не удалось подключиться к CDP по адресу {cdp_url}: {exc}") from exc
+            raise RuntimeError(
+                f"Не удалось подключиться к CDP по адресу {cdp_url} "
+                f"за {_CDP_CONNECT_MAX_ATTEMPTS} попыток: {last_error}"
+            ) from last_error
 
         contexts = list(getattr(browser, "contexts", []) or [])
         logger.info(

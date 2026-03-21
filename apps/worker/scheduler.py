@@ -8,6 +8,11 @@ from apps.browser_host.facebook_actions import FacebookAdsActionExecutor
 from apps.browser_host.facebook_scanner import FacebookAdsScannerProvider
 from apps.browser_host.playwright_attach import PlaywrightAttachService
 from apps.browser_host.session_manager import BrowserSessionManager
+from apps.notifier.formatter import TelegramMessageFormatter
+from apps.notifier.http_transport import HttpTelegramTransport
+from apps.notifier.outbox_processor import OutboxProcessor
+from apps.notifier.sender import InMemoryDedupStore, TelegramSender
+from apps.notifier.telegram import TelegramNotifier
 from apps.worker.scan_service import WorkerScanService
 from core.config import get_settings
 from core.db import get_session_factory
@@ -40,6 +45,7 @@ class SchedulerService:
             auto_resume_enabled=self._settings.feature_auto_resume,
             observe_only_enabled=self._settings.feature_observe_only,
         )
+        self._outbox_processor = self._build_outbox_processor()
 
     async def start(self) -> None:
         logger = logging.getLogger(__name__)
@@ -50,6 +56,24 @@ class SchedulerService:
         while True:
             await self._run_cycle()
             await asyncio.sleep(self._settings.worker_scan_interval_seconds)
+
+    def _build_outbox_processor(self) -> OutboxProcessor:
+        settings = self._settings
+        if not settings.telegram_bot_token or not settings.telegram_chat_id:
+            return OutboxProcessor(session_factory=self._session_factory, notifier=None)
+        transport = HttpTelegramTransport(
+            bot_token=settings.telegram_bot_token,
+            chat_id=settings.telegram_chat_id,
+        )
+        sender = TelegramSender(
+            transport=transport,
+            dedup_store=InMemoryDedupStore(),
+        )
+        notifier = TelegramNotifier(
+            formatter=TelegramMessageFormatter(),
+            sender=sender,
+        )
+        return OutboxProcessor(session_factory=self._session_factory, notifier=notifier)
 
     async def _run_cycle(self) -> None:
         logger = logging.getLogger(__name__)
@@ -85,3 +109,10 @@ class SchedulerService:
                     profile_id,
                     exc,
                 )
+
+        try:
+            processed = await self._outbox_processor.process_pending()
+            if processed > 0:
+                logger.info("Отправлено %s Telegram-уведомлений из outbox", processed)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Не удалось обработать outbox-уведомления: %s", exc)

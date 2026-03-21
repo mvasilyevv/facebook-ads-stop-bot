@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import random
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -24,6 +25,10 @@ class VisionAdapterSettings:
     cloud_api_url: str = "https://v1.empr.cloud/api/v1"
     local_api_url: str = "http://127.0.0.1:3030"
     timeout_seconds: float = 10.0
+
+
+# Кеш folder_id → profile_id, чтобы не зависеть от облачного API
+_folder_id_cache: dict[str, str] = {}
 
 
 class VisionAdapter:
@@ -75,7 +80,17 @@ class VisionAdapter:
             url=f"{self._settings.local_api_url.rstrip('/')}/list",
             context="список открытых профилей Vision",
         )
-        open_profiles = self._extract_data_list(payload, "список открытых профилей Vision")
+        raw_list = payload.get("data") or payload.get("profiles")
+        if not isinstance(raw_list, list):
+            raise AdapterProtocolError(
+                "Vision не вернул список данных для операции: список открытых профилей Vision"
+            )
+        open_profiles = [item for item in raw_list if isinstance(item, dict)]
+        for item in open_profiles:
+            pid = item.get("profile_id") or item.get("id")
+            fid = item.get("folder_id")
+            if pid and fid:
+                _folder_id_cache[str(pid)] = str(fid)
         result: list[OpenProfileInfo] = []
         for item in open_profiles:
             profile_id = self._extract_required_value(
@@ -92,7 +107,7 @@ class VisionAdapter:
             )
             port = item.get("port")
             debug_endpoint = None
-            if port is not None:
+            if port:
                 debug_endpoint = f"http://127.0.0.1:{int(port)}"
             result.append(
                 OpenProfileInfo(
@@ -113,7 +128,6 @@ class VisionAdapter:
                 has_automation_binding=profile.debug_endpoint is not None,
             )
 
-        await self._resolve_profile(profile_id)
         return ProfileStatus(
             profile_id=profile_id,
             state="STOPPED",
@@ -121,11 +135,25 @@ class VisionAdapter:
         )
 
     async def stop_profile(self, profile_id: str) -> None:
-        await self._request_json(
-            method="GET",
-            url=f"{self._settings.local_api_url.rstrip('/')}/stop/{profile_id}",
-            context=f"остановка профиля {profile_id}",
-        )
+        folder_id = await self._resolve_folder_id(profile_id)
+        url = f"{self._settings.local_api_url.rstrip('/')}/stop/{folder_id}/{profile_id}"
+        async with httpx.AsyncClient(
+            timeout=self._settings.timeout_seconds,
+            transport=self._transport,
+        ) as client:
+            try:
+                response = await client.get(url)
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                raise AdapterConnectionError(
+                    f"Vision API вернул статус {exc.response.status_code} "
+                    f"для операции: остановка профиля {profile_id}"
+                ) from exc
+            except httpx.HTTPError as exc:
+                raise AdapterConnectionError(
+                    f"Не удалось обратиться к Vision API для операции: "
+                    f"остановка профиля {profile_id}"
+                ) from exc
 
     async def start_profile_for_automation(
         self,
@@ -136,26 +164,20 @@ class VisionAdapter:
         if launch_mode.strip().lower() != "cdp":
             raise RuntimeError("Vision сейчас поддерживается только в режиме CDP")
 
-        profile = await self._resolve_profile(profile_id)
-        folder_id = self._extract_required_value(
-            profile,
-            ("folder_id",),
-            context=f"профиль {profile_id}",
-        )
+        debug_port = random.randint(10000, 59999)
+        args = list(launch_args or [])
+        if not any("--remote-debugging-port" in a for a in args):
+            args.append(f"--remote-debugging-port={debug_port}")
+
+        folder_id = await self._resolve_folder_id(profile_id)
         payload = await self._request_json(
             method="POST",
             url=f"{self._settings.local_api_url.rstrip('/')}/start/{folder_id}/{profile_id}",
             context=f"запуск профиля {profile_id}",
-            json={"args": launch_args or []},
+            json={"args": args},
         )
-        launch_data = self._extract_data_dict(payload, f"запуск профиля {profile_id}")
-        port = launch_data.get("port")
-        if port is None:
-            raise AdapterProtocolError(
-                f"Vision не вернул порт автоматизации для профиля {profile_id}"
-            )
-
-        browser_pid = launch_data.get("pid")
+        port = payload.get("port") or debug_port
+        browser_pid = payload.get("pid")
         cdp_url = f"http://127.0.0.1:{int(port)}"
         return AutomationLaunchResult(
             profile_id=profile_id,
@@ -168,12 +190,14 @@ class VisionAdapter:
         )
 
     async def ensure_single_active_profile(self) -> None:
+        import logging as _logging
+
         open_profiles = await self.list_open_profiles()
         if len(open_profiles) > 1:
-            profile_ids = ", ".join(profile.profile_id for profile in open_profiles)
-            raise RuntimeError(
-                "Vision вернул несколько активных профилей. "
-                f"Нужно оставить только один профиль для automation: {profile_ids}"
+            _logging.getLogger(__name__).warning(
+                "Vision: несколько активных профилей (%s). "
+                "Для automation будет использован указанный profile_id.",
+                len(open_profiles),
             )
 
     async def healthcheck(self) -> AdapterHealth:
@@ -184,18 +208,52 @@ class VisionAdapter:
             )
 
         try:
-            folders = await self._list_folders()
             open_profiles = await self.list_open_profiles()
         except (AdapterConnectionError, AdapterProtocolError) as exc:
             return AdapterHealth(is_healthy=False, message=str(exc))
 
-        return AdapterHealth(
-            is_healthy=True,
-            message=(
-                "Vision API доступен. "
-                f"Папок: {len(folders)}. Открытых профилей: {len(open_profiles)}"
-            ),
-        )
+        cloud_ok = True
+        folder_count = 0
+        try:
+            folders = await self._list_folders()
+            folder_count = len(folders)
+        except (AdapterConnectionError, AdapterProtocolError):
+            cloud_ok = False
+
+        msg = f"Vision Local API доступен. Открытых профилей: {len(open_profiles)}"
+        if cloud_ok:
+            msg += f". Cloud API доступен, папок: {folder_count}"
+        else:
+            msg += ". Cloud API недоступен (не критично для автоматизации)"
+        return AdapterHealth(is_healthy=True, message=msg)
+
+    async def _resolve_folder_id(self, profile_id: str) -> str:
+        """Определяет folder_id: кеш → локальный /list → облачный API."""
+        if profile_id in _folder_id_cache:
+            return _folder_id_cache[profile_id]
+
+        try:
+            payload = await self._request_json(
+                method="GET",
+                url=f"{self._settings.local_api_url.rstrip('/')}/list",
+                context="поиск folder_id открытого профиля",
+            )
+            raw_list = payload.get("data") or payload.get("profiles") or []
+            for item in raw_list:
+                if isinstance(item, dict):
+                    pid = item.get("profile_id")
+                    fid = item.get("folder_id")
+                    if pid and fid:
+                        _folder_id_cache[str(pid)] = str(fid)
+            if profile_id in _folder_id_cache:
+                return _folder_id_cache[profile_id]
+        except (AdapterConnectionError, AdapterProtocolError):
+            pass
+
+        profile = await self._resolve_profile(profile_id)
+        fid = self._extract_required_value(profile, ("folder_id",), context=f"профиль {profile_id}")
+        _folder_id_cache[profile_id] = fid
+        return fid
 
     async def _resolve_profile(self, profile_id: str) -> dict[str, Any]:
         for folder in await self._list_folders():

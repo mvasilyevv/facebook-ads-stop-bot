@@ -151,13 +151,20 @@ class WorkerScanService:
                     status=ScanRunStatus.SUCCEEDED,
                 )
             except Exception as exc:
-                await scan_runs_repo.update_scan_run(
-                    scan_run.id,
-                    status=ScanRunStatus.FAILED,
-                    finished_at=datetime.now(tz=UTC),
-                    error_message=str(exc),
-                )
-                await session.commit()
+                await session.rollback()
+                try:
+                    await scan_runs_repo.update_scan_run(
+                        scan_run.id,
+                        status=ScanRunStatus.FAILED,
+                        finished_at=datetime.now(tz=UTC),
+                        error_message=str(exc),
+                    )
+                    await session.commit()
+                except Exception:  # noqa: BLE001
+                    logging.getLogger(__name__).warning(
+                        "Не удалось обновить статус scan_run после ошибки: %s",
+                        exc,
+                    )
                 raise
 
     async def _persist_rows(

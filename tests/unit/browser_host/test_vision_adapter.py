@@ -86,8 +86,29 @@ async def test_vision_adapter_starts_profile_for_cdp_automation() -> None:
                     }
                 },
             )
+        if request.url.path == "/list":
+            return httpx.Response(
+                200,
+                json={
+                    "profiles": [
+                        {
+                            "folder_id": "folder-1",
+                            "profile_id": "profile-1",
+                            "port": None,
+                        }
+                    ]
+                },
+            )
         if request.url.path == "/start/folder-1/profile-1":
-            return httpx.Response(200, json={"data": {"port": 54000, "pid": 4321}})
+            return httpx.Response(
+                200,
+                json={
+                    "folder_id": "folder-1",
+                    "profile_id": "profile-1",
+                    "port": 54000,
+                    "pid": 4321,
+                },
+            )
         raise AssertionError(f"Неожиданный запрос: {request.method} {request.url}")
 
     adapter = _build_adapter(handler)

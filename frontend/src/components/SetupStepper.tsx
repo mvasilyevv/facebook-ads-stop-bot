@@ -33,7 +33,10 @@ export function SetupStepper({
 }: SetupStepperProps) {
   const offersExist = offers.length > 0;
   const enabledRulesExist = rules.some((r) => r.is_enabled);
-  const activeSessions = sessions.filter((s) => s.status === "active" || s.status === "started");
+  const activeSessions = sessions.filter((s) => {
+    const st = s.status.toUpperCase();
+    return st === "ACTIVE" || st === "STARTED";
+  });
   const sessionsExist = activeSessions.length > 0;
   const botModeSet =
     botMode != null && (botMode.auto_pause_enabled || botMode.auto_resume_enabled);
@@ -56,7 +59,7 @@ export function SetupStepper({
     {
       number: 1,
       title: "Создать оффер",
-      description: "Создай оффер по коду из начала объявления, например `DRC_CR2` для имени `DRC_CR2_[ID]`.",
+      description: "Создай оффер по маске из начала объявления, например `DRC_CR2` для имени `DRC_CR2_CR001`.",
       link: "/offers",
       actionLabel: "Открыть Офферы",
     },

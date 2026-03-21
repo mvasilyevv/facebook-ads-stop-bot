@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.models.browser import BrowserHost, BrowserSession, Profile
@@ -46,21 +47,28 @@ class BrowserRepository(AsyncRepository):
         is_enabled: bool = True,
         last_heartbeat_at: datetime | None = None,
     ) -> BrowserHost:
-        browser_host = await self.get_browser_host_by_name(name)
-        if browser_host is None:
-            browser_host = BrowserHost(
+        stmt = (
+            pg_insert(BrowserHost)
+            .values(
                 name=name,
                 vendor=vendor,
                 api_base_url=api_base_url,
                 is_enabled=is_enabled,
                 last_heartbeat_at=last_heartbeat_at,
             )
-            self.session.add(browser_host)
-        else:
-            browser_host.vendor = vendor
-            browser_host.api_base_url = api_base_url
-            browser_host.is_enabled = is_enabled
-            browser_host.last_heartbeat_at = last_heartbeat_at
+            .on_conflict_do_update(
+                index_elements=[BrowserHost.name],
+                set_={
+                    "vendor": vendor,
+                    "api_base_url": api_base_url,
+                    "is_enabled": is_enabled,
+                    "last_heartbeat_at": last_heartbeat_at,
+                },
+            )
+            .returning(BrowserHost)
+        )
+        result = await self.session.execute(stmt)
+        browser_host = result.scalars().one()
         await self.session.flush()
         return browser_host
 

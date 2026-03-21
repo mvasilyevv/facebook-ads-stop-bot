@@ -38,13 +38,14 @@ class NotificationOutboxRepository(AsyncRepository):
         return event
 
     async def list_pending(self, limit: int = 50) -> list[TelegramEvent]:
-        """Возвращает неотправленные события для обработки."""
+        """Возвращает неотправленные события для обработки с атомарным захватом."""
 
         stmt = (
             select(TelegramEvent)
             .where(TelegramEvent.status == "pending")
             .order_by(TelegramEvent.id)
             .limit(limit)
+            .with_for_update(skip_locked=True)
         )
         result = await self.session.scalars(stmt)
         return list(result.all())

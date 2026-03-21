@@ -1,19 +1,20 @@
 export function getBadgeTone(value: string): "neutral" | "good" | "warn" | "bad" | "info" {
-  if (value.includes("ok") || value.includes("active") || value.includes("succes")) {
+  const v = value.toLowerCase();
+  if (v.includes("ok") || v.includes("active") || v.includes("succes")) {
     return "good";
   }
   if (
-    value.includes("warn") ||
-    value.includes("learning") ||
-    value.includes("paused") ||
-    value.includes("stopped")
+    v.includes("warn") ||
+    v.includes("learning") ||
+    v.includes("paused") ||
+    v.includes("stopped")
   ) {
     return "warn";
   }
-  if (value.includes("error") || value.includes("fail") || value.includes("reject")) {
+  if (v.includes("error") || v.includes("fail") || v.includes("reject")) {
     return "bad";
   }
-  if (value.includes("manual") || value.includes("block") || value.includes("disabled")) {
+  if (v.includes("manual") || v.includes("block") || v.includes("disabled")) {
     return "info";
   }
   return "neutral";

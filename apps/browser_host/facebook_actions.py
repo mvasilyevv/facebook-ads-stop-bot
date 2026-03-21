@@ -104,6 +104,11 @@ class FacebookAdsActionExecutor:
                     browser_host_name=browser_host_name,
                 )
 
+            # Ожидание появления диалога подтверждения
+            wait_for_timeout = getattr(found_row.page, "wait_for_timeout", None)
+            if wait_for_timeout is not None:
+                await wait_for_timeout(500)
+
             await self._click_first_available_button(
                 found_row.page,
                 _CONFIRM_BUTTON_NAMES,

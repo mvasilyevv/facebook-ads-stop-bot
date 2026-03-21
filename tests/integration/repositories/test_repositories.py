@@ -85,7 +85,7 @@ async def test_offers_repository_resolves_offer_from_ad_name(async_session) -> N
 
     offer = await repo.create_offer(code="offer-auto-1", name="DRC_CR2")
     resolved = await repo.resolve_offer_for_ad(
-        ad_name="DRC_CR2_[778899]",
+        ad_name="DRC_CR2_CR001",
         ad_id="ad-778899",
         adset_scope_key="adset-scope-778899",
     )

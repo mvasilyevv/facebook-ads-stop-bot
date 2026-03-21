@@ -38,15 +38,11 @@ class _FakeAdapter:
             browser_pid=12345,
             launched_at=datetime(2026, 3, 20, 12, 0, tzinfo=UTC),
         )
-        self.ensure_single_called = False
         self.stop_called = False
         self.start_called_with: tuple[str, str, list[str]] | None = None
 
     async def healthcheck(self) -> AdapterHealth:
         return self._health
-
-    async def ensure_single_active_profile(self) -> None:
-        self.ensure_single_called = True
 
     async def get_profile_status(self, profile_id: str) -> ProfileStatus:
         return self._profile_status
@@ -106,11 +102,16 @@ async def test_healthcheck_delegates_to_adapter() -> None:
 
 # Проверяет, что менеджер останавливает профиль без automation binding перед запуском.
 @pytest.mark.asyncio
-async def test_ensure_session_stops_profile_without_automation_binding() -> None:
+async def test_ensure_session_stops_profile_without_automation_binding(monkeypatch) -> None:
+    async def _instant_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr("apps.browser_host.session_manager.asyncio.sleep", _instant_sleep)
+
     adapter = _FakeAdapter(
         profile_status=ProfileStatus(
             profile_id="p-1",
-            state="running",
+            state="RUNNING",
             has_automation_binding=False,
         ),
     )
@@ -119,7 +120,6 @@ async def test_ensure_session_stops_profile_without_automation_binding() -> None
 
     session = await manager.ensure_session("p-1")
 
-    assert adapter.ensure_single_called is True
     assert adapter.stop_called is True
     assert adapter.start_called_with is not None
     assert adapter.start_called_with[0] == "p-1"
@@ -132,7 +132,7 @@ async def test_ensure_session_skips_stop_when_automation_binding_exists() -> Non
     adapter = _FakeAdapter(
         profile_status=ProfileStatus(
             profile_id="p-1",
-            state="running",
+            state="RUNNING",
             has_automation_binding=True,
         ),
     )
@@ -141,7 +141,6 @@ async def test_ensure_session_skips_stop_when_automation_binding_exists() -> Non
 
     session = await manager.ensure_session("p-1")
 
-    assert adapter.ensure_single_called is True
     assert adapter.stop_called is False
     assert session.is_attached is True
 

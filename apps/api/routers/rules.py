@@ -14,7 +14,10 @@ router = APIRouter(prefix="/rules", tags=["rules"])
 def _parse_cpa_multiplier(raw_value: object) -> Decimal | None:
     if raw_value is None:
         return None
-    return Decimal(str(raw_value))
+    try:
+        return Decimal(str(raw_value))
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _map_rule_item(rule) -> RuleItem:

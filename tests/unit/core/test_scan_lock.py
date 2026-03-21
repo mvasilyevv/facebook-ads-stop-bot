@@ -20,6 +20,18 @@ class FakeRedis:
     async def delete(self, key: str) -> int:
         return 1 if self._store.pop(key, None) is not None else 0
 
+    async def eval(self, script: str, numkeys: int, *keys_and_args) -> int:
+        """Эмуляция Redis EVAL для Lua-скрипта снятия блокировки по значению."""
+        keys = list(keys_and_args[:numkeys])
+        args = list(keys_and_args[numkeys:])
+        if not keys or not args:
+            return 0
+        key, expected = keys[0], args[0]
+        if self._store.get(key) == expected:
+            del self._store[key]
+            return 1
+        return 0
+
 
 # Проверяет, что блокировка захватывается и освобождается корректно.
 @pytest.mark.asyncio

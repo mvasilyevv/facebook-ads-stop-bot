@@ -13,9 +13,9 @@ from core.domain import (
 )
 
 
-# Проверяет, что код оффера выделяется из имени объявления формата `CODE_[ID]`.
+# Проверяет, что код оффера выделяется из имени объявления по первым двум сегментам.
 def test_extract_offer_code_from_ad_name() -> None:
-    assert extract_offer_code_from_ad_name("DRC_CR2_[845921]") == "DRC_CR2"
+    assert extract_offer_code_from_ad_name("DRC_CR2_CR001") == "DRC_CR2"
 
 
 # Проверяет, что имя и код оффера приводятся к одному ключу для сравнения.

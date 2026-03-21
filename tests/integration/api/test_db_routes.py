@@ -64,9 +64,6 @@ class FakeVisionAdapter:
             launched_at=datetime(2026, 3, 20, 12, 0, tzinfo=UTC),
         )
 
-    async def ensure_single_active_profile(self) -> None:
-        return None
-
     async def healthcheck(self) -> AdapterHealth:
         return AdapterHealth(is_healthy=True, message="Vision доступен")
 
@@ -79,9 +76,10 @@ class FakeSessionManager:
         self.released_profiles: list[str] = []
 
     async def ensure_session(self, profile_id: str) -> AttachedBrowserSession:
-        await self._adapter.ensure_single_active_profile()
         status = await self._adapter.get_profile_status(profile_id)
-        if not status.has_automation_binding:
+        if status.has_automation_binding:
+            pass
+        elif status.state == "RUNNING":
             await self._adapter.stop_profile(profile_id)
         launch_result = await self._adapter.start_profile_for_automation(
             profile_id=profile_id,
@@ -369,7 +367,7 @@ async def test_ads_route_resolves_cpa_from_ad_naming(api_client, async_session_f
             fb_ad_id="auto-ad-1",
             campaign_id=campaign.id,
             adset_id=adset.id,
-            name="DRC_CR2_[123456]",
+            name="DRC_CR2_CR001",
             delivery_status=DeliveryStatus.ACTIVE,
             tracking_mode=TrackingMode.TRACKED,
             scope_presence=ScopePresence.IN_SCOPE,

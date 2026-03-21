@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     scanner_stabilize_delay_ms: int = Field(default=800, alias="SCANNER_STABILIZE_DELAY_MS")
     scanner_scroll_pause_ms: int = Field(default=700, alias="SCANNER_SCROLL_PAUSE_MS")
     scanner_max_no_new_attempts: int = Field(default=3, alias="SCANNER_MAX_NO_NEW_ATTEMPTS")
+    scanner_scroll_step_px: int = Field(default=2500, alias="SCANNER_SCROLL_STEP_PX")
 
     feature_auto_pause: bool = Field(default=False, alias="FEATURE_AUTO_PAUSE")
     feature_auto_resume: bool = Field(default=False, alias="FEATURE_AUTO_RESUME")

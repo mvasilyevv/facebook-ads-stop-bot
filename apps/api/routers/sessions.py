@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException, status
@@ -16,6 +17,8 @@ from apps.browser_host.playwright_attach import PlaywrightAttachService
 from apps.browser_host.session_manager import BrowserSessionManager
 from core.config import get_settings
 from core.repositories import BrowserRepository
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
@@ -50,9 +53,71 @@ def _map_session_item(record) -> BrowserSessionItem:
     )
 
 
+async def _sync_vision_profiles(repo: BrowserRepository) -> None:
+    """Синхронизирует открытые профили Vision с базой данных.
+
+    Запрашивает у Vision локального API текущие открытые профили
+    и для каждого создаёт/обновляет записи browser_host, profile и session.
+    Профили, которые были ACTIVE в базе, но уже закрыты в Vision, помечаются как STOPPED.
+    """
+    settings = get_settings()
+    adapter = build_adapter(settings)
+    try:
+        open_profiles = await adapter.list_open_profiles()
+    except (AdapterConnectionError, AdapterProtocolError) as exc:
+        logger.warning("Не удалось получить открытые профили из Vision: %s", exc)
+        return
+
+    open_profile_ids: set[str] = set()
+    now = datetime.now(tz=UTC)
+    host_name = f"vision-{settings.vision_local_api_url.split(':', maxsplit=3)[-1]}"
+
+    for open_profile in open_profiles:
+        open_profile_ids.add(open_profile.profile_id)
+        browser_host = await repo.upsert_browser_host(
+            name=host_name,
+            vendor=settings.browser_vendor,
+            api_base_url=settings.vision_local_api_url,
+            is_enabled=True,
+            last_heartbeat_at=now,
+        )
+        profile = await repo.upsert_profile(
+            browser_host_id=browser_host.id,
+            vendor_profile_id=open_profile.profile_id,
+            display_name=open_profile.display_name,
+            is_active=True,
+            last_launch_at=now,
+        )
+        existing = await repo.get_latest_session_by_vendor_profile_id(open_profile.profile_id)
+        if existing is None or existing.session.status != "ACTIVE":
+            cdp_url = open_profile.debug_endpoint
+            await repo.create_browser_session(
+                browser_host_id=browser_host.id,
+                profile_id=profile.id,
+                status="ACTIVE",
+                started_at=now,
+                cdp_url=cdp_url,
+            )
+
+    db_active = await repo.list_active_profiles()
+    for record in db_active:
+        if record.profile.vendor_profile_id not in open_profile_ids:
+            record.profile.is_active = False
+            latest = await repo.get_latest_session_by_vendor_profile_id(
+                record.profile.vendor_profile_id
+            )
+            if latest is not None and latest.session.status == "ACTIVE":
+                latest.session.status = "STOPPED"
+                latest.session.finished_at = now
+
+    await repo.session.flush()
+
+
 @router.get("", response_model=list[BrowserSessionItem])
 async def list_sessions(session: DbSessionDep) -> list[BrowserSessionItem]:
     repo = BrowserRepository(session)
+    await _sync_vision_profiles(repo)
+    await session.commit()
     sessions = await repo.list_latest_sessions()
     return [_map_session_item(item) for item in sessions]
 

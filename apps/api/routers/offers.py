@@ -176,18 +176,21 @@ async def list_offer_bindings(session: DbSessionDep) -> list[OfferBindingItem]:
     """Получить все привязки офферов к сущностям."""
     repo = OffersRepository(session)
     bindings = await repo.list_bindings()
+    offer_ids = {str(b.offer_id) for b in bindings}
+    offers_map: dict[str, str] = {}
+    for oid in offer_ids:
+        offer = await repo.get_offer(oid)
+        if offer is not None:
+            offers_map[oid] = offer.code
     result: list[OfferBindingItem] = []
     for binding in bindings:
-        # Получить код оффера через relationship или отдельный запрос
-        offer = await repo.get_offer(str(binding.offer_id))
-        offer_code = offer.code if offer is not None else "unknown"
         result.append(
             OfferBindingItem(
                 id=str(binding.id),
                 entity_type=binding.entity_type.value,
                 entity_id=binding.entity_id,
                 offer_id=str(binding.offer_id),
-                offer_code=offer_code,
+                offer_code=offers_map.get(str(binding.offer_id), "unknown"),
                 priority=binding.priority,
                 is_active=binding.is_active,
                 created_at=binding.created_at,
