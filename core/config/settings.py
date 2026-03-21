@@ -46,6 +46,7 @@ class Settings(BaseSettings):
 
     feature_auto_pause: bool = Field(default=False, alias="FEATURE_AUTO_PAUSE")
     feature_auto_resume: bool = Field(default=False, alias="FEATURE_AUTO_RESUME")
+    feature_observe_only: bool = Field(default=True, alias="FEATURE_OBSERVE_ONLY")
 
     @property
     def postgres_dsn(self) -> str:

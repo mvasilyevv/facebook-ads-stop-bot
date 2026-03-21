@@ -262,6 +262,7 @@ async def test_settings_routes_persist_bot_mode(api_client) -> None:
         json={
             "auto_pause_enabled": True,
             "auto_resume_enabled": False,
+            "observe_only_enabled": True,
         },
     )
     refreshed_response = await client.get("/settings/bot-mode")
@@ -271,8 +272,10 @@ async def test_settings_routes_persist_bot_mode(api_client) -> None:
     assert refreshed_response.status_code == 200
     assert update_response.json()["auto_pause_enabled"] is True
     assert update_response.json()["auto_resume_enabled"] is False
+    assert update_response.json()["observe_only_enabled"] is True
     assert refreshed_response.json()["auto_pause_enabled"] is True
     assert refreshed_response.json()["auto_resume_enabled"] is False
+    assert refreshed_response.json()["observe_only_enabled"] is True
 
 
 # Проверяет, что API возвращает созданные привязки офферов вместе с кодом оффера.

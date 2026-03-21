@@ -27,15 +27,18 @@ class SchedulerService:
             adapter=build_adapter(self._settings),
             playwright_attach_service=PlaywrightAttachService(),
         )
+        action_executor = FacebookAdsActionExecutor(session_manager=session_manager)
         self._scan_service = WorkerScanService(
             async_session_factory=self._session_factory,
             scanner_provider=FacebookAdsScannerProvider(
                 settings=self._settings,
                 browser_session_manager=session_manager,
             ),
-            pause_executor=FacebookAdsActionExecutor(session_manager=session_manager),
+            pause_executor=action_executor,
+            resume_executor=action_executor,
             auto_pause_enabled=self._settings.feature_auto_pause,
             auto_resume_enabled=self._settings.feature_auto_resume,
+            observe_only_enabled=self._settings.feature_observe_only,
         )
 
     async def start(self) -> None:

@@ -72,7 +72,7 @@ export function SetupStepper({
     },
     {
       number: 5,
-      title: "Выбрать режим бота",
+      title: "Настроить режим бота",
       link: "#",
     },
   ];

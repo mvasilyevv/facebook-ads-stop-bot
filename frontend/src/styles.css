@@ -699,6 +699,7 @@ select {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  margin-bottom: 14px;
 }
 
 .bot-mode-label {
@@ -714,6 +715,42 @@ select {
   height: 18px;
   cursor: pointer;
   accent-color: #7cd4ff;
+}
+
+.bot-mode-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.bot-mode-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+  cursor: pointer;
+}
+
+.bot-mode-item--accent {
+  border-color: rgba(124, 212, 255, 0.22);
+  background: rgba(124, 212, 255, 0.08);
+}
+
+.bot-mode-item__text {
+  display: grid;
+  gap: 4px;
+}
+
+.bot-mode-item__title {
+  font-weight: 600;
+}
+
+.bot-mode-item__hint {
+  color: var(--muted);
+  font-size: 0.92rem;
+  line-height: 1.4;
 }
 
 .setup-stepper {

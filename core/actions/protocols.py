@@ -24,3 +24,14 @@ class PauseAdExecutor(Protocol):
         browser_host_name: str,
         fb_ad_id: str,
     ) -> BrowserActionResult: ...
+
+
+class ResumeAdExecutor(Protocol):
+    """Контракт для отдельного исполнителя возобновления объявления."""
+
+    async def resume_ad(
+        self,
+        profile_id: str,
+        browser_host_name: str,
+        fb_ad_id: str,
+    ) -> BrowserActionResult: ...

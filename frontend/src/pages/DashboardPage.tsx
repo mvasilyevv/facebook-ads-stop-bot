@@ -8,6 +8,8 @@ import { formatDateTime, formatMoney, formatMetricText, formatRelativeStatus } f
 import { getBadgeTone, formatDeliveryStatusLabel, TRACKED_DELIVERY_STATUSES } from "../lib/helpers";
 import type { HealthResponse, AdSummary, BotModeResponse } from "../types";
 
+type BotModePatch = Partial<Pick<BotModeResponse, "auto_pause_enabled" | "auto_resume_enabled" | "observe_only_enabled">>;
+
 function scoreSeenAt(value: string | null | undefined): number {
   if (!value) return 0;
   const stamp = new Date(value).getTime();
@@ -48,13 +50,14 @@ export default function DashboardPage() {
     }
   }
 
-  async function toggleBotMode() {
+  async function updateBotModeState(patch: BotModePatch) {
     if (!botMode) return;
     setUpdatingBotMode(true);
     try {
       const updated = await updateBotMode({
-        auto_pause_enabled: !botMode.auto_pause_enabled,
-        auto_resume_enabled: !botMode.auto_resume_enabled,
+        auto_pause_enabled: patch.auto_pause_enabled ?? botMode.auto_pause_enabled,
+        auto_resume_enabled: patch.auto_resume_enabled ?? botMode.auto_resume_enabled,
+        observe_only_enabled: patch.observe_only_enabled ?? botMode.observe_only_enabled,
       });
       startTransition(() => {
         setBotMode(updated);
@@ -81,7 +84,10 @@ export default function DashboardPage() {
     return <div className="page-loading">Загрузка данных...</div>;
   }
 
-  const autopilotEnabled = botMode != null && (botMode.auto_pause_enabled || botMode.auto_resume_enabled);
+  const actionTypesEnabled =
+    botMode != null && (botMode.auto_pause_enabled || botMode.auto_resume_enabled);
+  const observeOnlyEnabled = botMode?.observe_only_enabled ?? true;
+  const liveAutomationEnabled = actionTypesEnabled && !observeOnlyEnabled;
 
   return (
     <>
@@ -102,26 +108,75 @@ export default function DashboardPage() {
 
       {error && <div className="inline-error">{error}</div>}
 
-      {autopilotEnabled && (
+      {actionTypesEnabled && observeOnlyEnabled && (
         <div className="message-banner">
-          ⚠️ Бот автоматически управляет объявлениями
+          Режим наблюдения: бот только пишет, что сделал бы, но не нажимает кнопки
+        </div>
+      )}
+
+      {liveAutomationEnabled && (
+        <div className="message-banner">
+          Бот автоматически управляет объявлениями в боевом режиме
         </div>
       )}
 
       {botMode && (
         <div className="bot-mode-section">
           <div className="bot-mode-toggle">
-            <label className="bot-mode-label">
+            <div>
+              <strong>Режим бота</strong>
+              <div className="section-note">
+                {observeOnlyEnabled ? "Сейчас: режим наблюдения" : "Сейчас: боевой режим"}
+              </div>
+            </div>
+            {updatingBotMode && <span className="section-note">Обновляется...</span>}
+          </div>
+          <div className="bot-mode-grid">
+            <label className="bot-mode-item">
               <input
                 type="checkbox"
-                checked={autopilotEnabled}
-                onChange={() => void toggleBotMode()}
+                checked={botMode.auto_pause_enabled}
+                onChange={() => void updateBotModeState({ auto_pause_enabled: !botMode.auto_pause_enabled })}
                 disabled={updatingBotMode}
                 className="bot-mode-checkbox"
               />
-              <span>Автопилот</span>
+              <span className="bot-mode-item__text">
+                <span className="bot-mode-item__title">Автопауза</span>
+                <span className="bot-mode-item__hint">
+                  Бот может сам ставить объявление на паузу
+                </span>
+              </span>
             </label>
-            {updatingBotMode && <span className="section-note">Обновляется...</span>}
+            <label className="bot-mode-item">
+              <input
+                type="checkbox"
+                checked={botMode.auto_resume_enabled}
+                onChange={() => void updateBotModeState({ auto_resume_enabled: !botMode.auto_resume_enabled })}
+                disabled={updatingBotMode}
+                className="bot-mode-checkbox"
+              />
+              <span className="bot-mode-item__text">
+                <span className="bot-mode-item__title">Авторезюм</span>
+                <span className="bot-mode-item__hint">
+                  Бот может сам возвращать объявление из паузы
+                </span>
+              </span>
+            </label>
+            <label className="bot-mode-item bot-mode-item--accent">
+              <input
+                type="checkbox"
+                checked={botMode.observe_only_enabled}
+                onChange={() => void updateBotModeState({ observe_only_enabled: !botMode.observe_only_enabled })}
+                disabled={updatingBotMode}
+                className="bot-mode-checkbox"
+              />
+              <span className="bot-mode-item__text">
+                <span className="bot-mode-item__title">Режим наблюдения</span>
+                <span className="bot-mode-item__hint">
+                  Бот продолжает мониторить и считать решения, но не выполняет действия физически
+                </span>
+              </span>
+            </label>
           </div>
         </div>
       )}

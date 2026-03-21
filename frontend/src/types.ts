@@ -118,6 +118,7 @@ export type ScanRunItem = {
 export type BotModeResponse = {
   auto_pause_enabled: boolean;
   auto_resume_enabled: boolean;
+  observe_only_enabled: boolean;
   updated_at: string;
 };
 

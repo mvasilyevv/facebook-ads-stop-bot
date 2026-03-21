@@ -262,6 +262,7 @@ export function fetchBotMode(): Promise<BotModeResponse> {
 export async function updateBotMode(payload: {
   auto_pause_enabled: boolean;
   auto_resume_enabled: boolean;
+  observe_only_enabled: boolean;
 }): Promise<BotModeResponse> {
   return requestJson<BotModeResponse>("/settings/bot-mode", {
     method: "PUT",

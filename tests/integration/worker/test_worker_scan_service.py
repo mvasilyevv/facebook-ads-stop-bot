@@ -67,6 +67,35 @@ class FakePauseExecutor:
         )
 
 
+class FakeResumeExecutor:
+    """Фейковый исполнитель авторезюма для проверки worker runtime."""
+
+    def __init__(
+        self,
+        *,
+        success: bool = True,
+        message: str = "Объявление снова запущено",
+    ) -> None:
+        self.success = success
+        self.message = message
+        self.calls: list[tuple[str, str, str]] = []
+
+    async def resume_ad(
+        self,
+        profile_id: str,
+        browser_host_name: str,
+        fb_ad_id: str,
+    ) -> BrowserActionResult:
+        self.calls.append((profile_id, browser_host_name, fb_ad_id))
+        return BrowserActionResult(
+            success=self.success,
+            message=self.message,
+            fb_ad_id=fb_ad_id,
+            profile_id=profile_id,
+            browser_host_name=browser_host_name,
+        )
+
+
 # Проверяет, что дорогой клик по объявлению с валидной CPA сохраняет снимок и пишет решение `WOULD_PAUSE`.
 @pytest.mark.asyncio
 async def test_worker_scan_service_writes_pause_decision_for_expensive_click(async_session_factory):
@@ -386,6 +415,7 @@ async def test_worker_scan_service_executes_auto_pause_and_marks_decision(async_
     async with async_session_factory() as session:
         settings_repo = SystemSettingsRepository(session)
         await settings_repo.set_setting("auto_pause_enabled", "true")
+        await settings_repo.set_setting("observe_only_enabled", "false")
         await session.commit()
 
     await seed_offer_with_binding(
@@ -425,6 +455,7 @@ async def test_worker_scan_service_executes_auto_pause_and_marks_decision(async_
         ),
         pause_executor=fake_executor,
         auto_pause_enabled=False,
+        observe_only_enabled=True,
     )
 
     await service.run_once(profile_id=seed.profile_id, browser_host_name=seed.browser_host_name)
@@ -449,3 +480,207 @@ async def test_worker_scan_service_executes_auto_pause_and_marks_decision(async_
     assert action_executions[0].action_type == ActionType.PAUSE
     assert action_executions[0].status == ActionExecutionStatus.SUCCEEDED
     assert action_executions[0].message == "Объявление переведено на паузу"
+
+
+# Проверяет, что в режиме наблюдения автопауза не выполняется физически даже при включенном праве на паузу.
+@pytest.mark.asyncio
+async def test_worker_scan_service_keeps_pause_in_observe_mode(async_session_factory):
+    seed = await seed_worker_ad_graph(async_session_factory)
+    fake_executor = FakePauseExecutor(message="Объявление переведено на паузу")
+
+    async with async_session_factory() as session:
+        settings_repo = SystemSettingsRepository(session)
+        await settings_repo.set_setting("auto_pause_enabled", "true")
+        await settings_repo.set_setting("observe_only_enabled", "true")
+        await session.commit()
+
+    await seed_offer_with_binding(
+        async_session_factory,
+        entity_type=EntityType.ADSET,
+        entity_id=seed.adset_scope_key,
+        offer_code="offer-observe",
+        cpa_usd=Decimal("5.00"),
+        effective_from=datetime(2026, 3, 20, 11, 0, tzinfo=UTC),
+    )
+
+    service = WorkerScanService(
+        async_session_factory=async_session_factory,
+        scanner_provider=FakeScannerProvider(
+            rows=[
+                WorkerScanRow(
+                    campaign_scope_key=seed.campaign_scope_key,
+                    campaign_name=seed.campaign_name,
+                    adset_scope_key=seed.adset_scope_key,
+                    adset_name=seed.adset_name,
+                    fb_ad_id=seed.fb_ad_id,
+                    ad_name=seed.ad_name,
+                    delivery_status=DeliveryStatus.ACTIVE,
+                    tracking_mode=TrackingMode.TRACKED,
+                    scope_presence=ScopePresence.IN_SCOPE,
+                    spend=Decimal("0.38"),
+                    clicks=4,
+                    cpc=Decimal("0.11"),
+                    leads=0,
+                    cost_per_lead=None,
+                    registrations=0,
+                    cost_per_registration=None,
+                    deposits=0,
+                    captured_at=datetime(2026, 3, 20, 12, 0, tzinfo=UTC),
+                )
+            ]
+        ),
+        pause_executor=fake_executor,
+        auto_pause_enabled=False,
+        observe_only_enabled=False,
+    )
+
+    await service.run_once(profile_id=seed.profile_id, browser_host_name=seed.browser_host_name)
+
+    async with async_session_factory() as session:
+        decisions_repo = DecisionsRepository(session)
+        decisions = await decisions_repo.list_decisions(fb_ad_id=seed.fb_ad_id)
+        action_executions = list(
+            (
+                await session.scalars(
+                    select(ActionExecution).where(ActionExecution.decision_id == decisions[0].id)
+                )
+            ).all()
+        )
+
+    assert fake_executor.calls == []
+    assert len(decisions) == 1
+    assert decisions[0].decision == DecisionType.WOULD_PAUSE
+    assert decisions[0].action_executed is False
+    assert decisions[0].action_status is None
+    assert action_executions == []
+
+
+# Проверяет, что авторезюм вызывает executor и пишет в БД выполненное действие после двух чистых сканов.
+@pytest.mark.asyncio
+async def test_worker_scan_service_executes_auto_resume_and_marks_decision(async_session_factory):
+    seed = await seed_worker_ad_graph(async_session_factory)
+    fake_executor = FakeResumeExecutor(message="Объявление снова запущено")
+
+    async with async_session_factory() as session:
+        settings_repo = SystemSettingsRepository(session)
+        await settings_repo.set_setting("auto_resume_enabled", "true")
+        await settings_repo.set_setting("observe_only_enabled", "false")
+        await session.commit()
+
+    await seed_offer_with_binding(
+        async_session_factory,
+        entity_type=EntityType.ADSET,
+        entity_id=seed.adset_scope_key,
+        offer_code="offer-resume",
+        cpa_usd=Decimal("5.00"),
+        effective_from=datetime(2026, 3, 20, 11, 0, tzinfo=UTC),
+    )
+
+    warmup_row_first = WorkerScanRow(
+        campaign_scope_key=seed.campaign_scope_key,
+        campaign_name=seed.campaign_name,
+        adset_scope_key=seed.adset_scope_key,
+        adset_name=seed.adset_name,
+        fb_ad_id=seed.fb_ad_id,
+        ad_name=seed.ad_name,
+        delivery_status=DeliveryStatus.PAUSED,
+        tracking_mode=TrackingMode.TRACKED,
+        scope_presence=ScopePresence.IN_SCOPE,
+        spend=Decimal("0.20"),
+        clicks=2,
+        cpc=Decimal("0.05"),
+        leads=1,
+        cost_per_lead=Decimal("0.20"),
+        registrations=1,
+        cost_per_registration=Decimal("0.20"),
+        deposits=0,
+        captured_at=datetime(2026, 3, 20, 12, 0, tzinfo=UTC),
+    )
+    warmup_row_second = WorkerScanRow(
+        campaign_scope_key=seed.campaign_scope_key,
+        campaign_name=seed.campaign_name,
+        adset_scope_key=seed.adset_scope_key,
+        adset_name=seed.adset_name,
+        fb_ad_id=seed.fb_ad_id,
+        ad_name=seed.ad_name,
+        delivery_status=DeliveryStatus.PAUSED,
+        tracking_mode=TrackingMode.TRACKED,
+        scope_presence=ScopePresence.IN_SCOPE,
+        spend=Decimal("0.20"),
+        clicks=2,
+        cpc=Decimal("0.05"),
+        leads=1,
+        cost_per_lead=Decimal("0.20"),
+        registrations=1,
+        cost_per_registration=Decimal("0.20"),
+        deposits=0,
+        captured_at=datetime(2026, 3, 20, 12, 1, tzinfo=UTC),
+    )
+    resume_row = WorkerScanRow(
+        campaign_scope_key=seed.campaign_scope_key,
+        campaign_name=seed.campaign_name,
+        adset_scope_key=seed.adset_scope_key,
+        adset_name=seed.adset_name,
+        fb_ad_id=seed.fb_ad_id,
+        ad_name=seed.ad_name,
+        delivery_status=DeliveryStatus.PAUSED,
+        tracking_mode=TrackingMode.TRACKED,
+        scope_presence=ScopePresence.IN_SCOPE,
+        spend=Decimal("0.20"),
+        clicks=2,
+        cpc=Decimal("0.05"),
+        leads=1,
+        cost_per_lead=Decimal("0.20"),
+        registrations=1,
+        cost_per_registration=Decimal("0.20"),
+        deposits=0,
+        captured_at=datetime(2026, 3, 20, 12, 2, tzinfo=UTC),
+    )
+
+    warmup_service = WorkerScanService(
+        async_session_factory=async_session_factory,
+        scanner_provider=FakeScannerProvider(rows=[warmup_row_first]),
+    )
+    await warmup_service.run_once(
+        profile_id=seed.profile_id, browser_host_name=seed.browser_host_name
+    )
+    warmup_service = WorkerScanService(
+        async_session_factory=async_session_factory,
+        scanner_provider=FakeScannerProvider(rows=[warmup_row_second]),
+    )
+    await warmup_service.run_once(
+        profile_id=seed.profile_id, browser_host_name=seed.browser_host_name
+    )
+
+    resume_service = WorkerScanService(
+        async_session_factory=async_session_factory,
+        scanner_provider=FakeScannerProvider(rows=[resume_row]),
+        resume_executor=fake_executor,
+        auto_resume_enabled=False,
+        observe_only_enabled=True,
+    )
+
+    await resume_service.run_once(
+        profile_id=seed.profile_id, browser_host_name=seed.browser_host_name
+    )
+
+    async with async_session_factory() as session:
+        decisions_repo = DecisionsRepository(session)
+        decisions = await decisions_repo.list_decisions(fb_ad_id=seed.fb_ad_id)
+        latest_decision = decisions[0]
+        action_executions = list(
+            (
+                await session.scalars(
+                    select(ActionExecution).where(ActionExecution.decision_id == latest_decision.id)
+                )
+            ).all()
+        )
+
+    assert fake_executor.calls == [(seed.profile_id, seed.browser_host_name, seed.fb_ad_id)]
+    assert latest_decision.decision == DecisionType.WOULD_RESUME
+    assert latest_decision.action_executed is True
+    assert latest_decision.action_status == ActionExecutionStatus.SUCCEEDED.value
+    assert len(action_executions) == 1
+    assert action_executions[0].action_type == ActionType.RESUME
+    assert action_executions[0].status == ActionExecutionStatus.SUCCEEDED
+    assert action_executions[0].message == "Объявление снова запущено"

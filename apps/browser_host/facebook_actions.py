@@ -10,6 +10,7 @@ from apps.browser_host.session_manager import BrowserSessionManager
 from core.actions import BrowserActionResult
 
 _PAUSE_BUTTON_NAMES = ("Пауза", "Pause", "Приостановить", "Остановить")
+_RESUME_BUTTON_NAMES = ("Запустить", "Resume", "Возобновить", "Включить")
 _CONFIRM_BUTTON_NAMES = ("Подтвердить", "Confirm", "ОК", "OK")
 
 
@@ -33,6 +34,46 @@ class FacebookAdsActionExecutor:
         browser_host_name: str,
         fb_ad_id: str,
     ) -> BrowserActionResult:
+        return await self._execute_action(
+            profile_id=profile_id,
+            browser_host_name=browser_host_name,
+            fb_ad_id=fb_ad_id,
+            button_names=_PAUSE_BUTTON_NAMES,
+            action_name="паузы",
+            success_message="переведено на паузу",
+            action_log_label="на паузу",
+            error_action_label="паузы",
+        )
+
+    async def resume_ad(
+        self,
+        profile_id: str,
+        browser_host_name: str,
+        fb_ad_id: str,
+    ) -> BrowserActionResult:
+        return await self._execute_action(
+            profile_id=profile_id,
+            browser_host_name=browser_host_name,
+            fb_ad_id=fb_ad_id,
+            button_names=_RESUME_BUTTON_NAMES,
+            action_name="возобновления",
+            success_message="возобновлено",
+            action_log_label="в ротацию",
+            error_action_label="возобновления",
+        )
+
+    async def _execute_action(
+        self,
+        *,
+        profile_id: str,
+        browser_host_name: str,
+        fb_ad_id: str,
+        button_names: tuple[str, ...],
+        action_name: str,
+        success_message: str,
+        action_log_label: str,
+        error_action_label: str,
+    ) -> BrowserActionResult:
         logger = logging.getLogger(__name__)
         attached_session: AttachedBrowserSession | None = None
 
@@ -42,7 +83,7 @@ class FacebookAdsActionExecutor:
             if found_row is None:
                 return BrowserActionResult(
                     success=False,
-                    message=f"Не удалось найти объявление {fb_ad_id} для паузы",
+                    message=f"Не удалось найти объявление {fb_ad_id} для {action_name}",
                     fb_ad_id=fb_ad_id,
                     profile_id=profile_id,
                     browser_host_name=browser_host_name,
@@ -50,14 +91,14 @@ class FacebookAdsActionExecutor:
 
             await self._select_ad_row(found_row.row)
 
-            paused = await self._click_first_available_button(
+            action_performed = await self._click_first_available_button(
                 found_row.page,
-                _PAUSE_BUTTON_NAMES,
+                button_names,
             )
-            if not paused:
+            if not action_performed:
                 return BrowserActionResult(
                     success=False,
-                    message=f"Не удалось найти кнопку паузы для объявления {fb_ad_id}",
+                    message=f"Не удалось найти кнопку {action_name} для объявления {fb_ad_id}",
                     fb_ad_id=fb_ad_id,
                     profile_id=profile_id,
                     browser_host_name=browser_host_name,
@@ -70,27 +111,29 @@ class FacebookAdsActionExecutor:
             )
 
             logger.info(
-                "Объявление %s профиля %s переведено на паузу",
+                "Объявление %s профиля %s переведено %s",
                 fb_ad_id,
                 profile_id,
+                action_log_label,
             )
             return BrowserActionResult(
                 success=True,
-                message=f"Объявление {fb_ad_id} переведено на паузу",
+                message=f"Объявление {fb_ad_id} {success_message}",
                 fb_ad_id=fb_ad_id,
                 profile_id=profile_id,
                 browser_host_name=browser_host_name,
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning(
-                "Не удалось перевести объявление %s профиля %s на паузу: %s",
+                "Не удалось выполнить действие %s для объявления %s профиля %s: %s",
+                error_action_label,
                 fb_ad_id,
                 profile_id,
                 exc,
             )
             return BrowserActionResult(
                 success=False,
-                message=f"Не удалось перевести объявление {fb_ad_id} на паузу: {exc}",
+                message=f"Не удалось выполнить действие {error_action_label} для объявления {fb_ad_id}: {exc}",
                 fb_ad_id=fb_ad_id,
                 profile_id=profile_id,
                 browser_host_name=browser_host_name,

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from core.actions import BrowserActionResult, PauseAdExecutor
+from core.actions import BrowserActionResult, PauseAdExecutor, ResumeAdExecutor
 from core.domain import (
     ActionExecutionStatus,
     ActionType,
@@ -35,6 +35,7 @@ from core.scanner.protocols import ScannerProvider
 
 _SETTING_AUTO_PAUSE_ENABLED = "auto_pause_enabled"
 _SETTING_AUTO_RESUME_ENABLED = "auto_resume_enabled"
+_SETTING_OBSERVE_ONLY_ENABLED = "observe_only_enabled"
 
 
 @dataclass(slots=True, frozen=True)
@@ -56,17 +57,21 @@ class WorkerScanService:
         async_session_factory,
         scanner_provider: ScannerProvider,
         pause_executor: PauseAdExecutor | None = None,
+        resume_executor: ResumeAdExecutor | None = None,
         notifier: Any | None = None,
         auto_pause_enabled: bool = False,
         auto_resume_enabled: bool = False,
+        observe_only_enabled: bool = True,
         percentages: RulePercentages | None = None,
     ) -> None:
         self._async_session_factory = async_session_factory
         self._scanner_provider = scanner_provider
         self._pause_executor = pause_executor
+        self._resume_executor = resume_executor
         self._notifier = notifier
         self._default_auto_pause_enabled = auto_pause_enabled
         self._default_auto_resume_enabled = auto_resume_enabled
+        self._default_observe_only_enabled = observe_only_enabled
         self._scanner = ObserveScannerService(percentages=percentages)
 
     async def run_once(self, profile_id: str, browser_host_name: str) -> WorkerScanResult:
@@ -93,6 +98,11 @@ class WorkerScanService:
                 key=_SETTING_AUTO_RESUME_ENABLED,
                 fallback=self._default_auto_resume_enabled,
             )
+            observe_only_enabled = await self._resolve_bool_setting(
+                settings_repo=settings_repo,
+                key=_SETTING_OBSERVE_ONLY_ENABLED,
+                fallback=self._default_observe_only_enabled,
+            )
 
             started_at = datetime.now(tz=UTC)
             scan_run = await scan_runs_repo.create_scan_run(
@@ -115,6 +125,7 @@ class WorkerScanService:
                     rows=scanned_rows,
                     auto_pause_enabled=auto_pause_enabled,
                     auto_resume_enabled=auto_resume_enabled,
+                    observe_only_enabled=observe_only_enabled,
                 )
                 ads_repo = AdsRepository(session)
                 seen_fb_ad_ids = [row.fb_ad_id for row in scanned_rows]
@@ -159,6 +170,7 @@ class WorkerScanService:
         rows: list[ScannedAdRow],
         auto_pause_enabled: bool = False,
         auto_resume_enabled: bool = False,
+        observe_only_enabled: bool = True,
     ) -> None:
         ads_repo = AdsRepository(session)
         offers_repo = OffersRepository(session)
@@ -258,6 +270,17 @@ class WorkerScanService:
                 browser_host_name=browser_host_name,
                 fb_ad_id=row.fb_ad_id,
                 auto_pause_enabled=auto_pause_enabled,
+                observe_only_enabled=observe_only_enabled,
+            )
+            await self._maybe_execute_resume_action(
+                decisions_repo=decisions_repo,
+                decision=decision_record,
+                decision_result=decision_result,
+                profile_id=profile_id,
+                browser_host_name=browser_host_name,
+                fb_ad_id=row.fb_ad_id,
+                auto_resume_enabled=auto_resume_enabled,
+                observe_only_enabled=observe_only_enabled,
             )
 
             await self._enqueue_notification(
@@ -392,10 +415,13 @@ class WorkerScanService:
         browser_host_name: str,
         fb_ad_id: str,
         auto_pause_enabled: bool,
+        observe_only_enabled: bool,
     ) -> BrowserActionResult | None:
         """При необходимости выполняет автопаузу и сохраняет результат в БД."""
 
         if not auto_pause_enabled:
+            return None
+        if observe_only_enabled:
             return None
         if decision_result.decision != DecisionType.WOULD_PAUSE:
             return None
@@ -457,6 +483,85 @@ class WorkerScanService:
             action_status=action_status.value,
         )
         return pause_result
+
+    async def _maybe_execute_resume_action(
+        self,
+        *,
+        decisions_repo: DecisionsRepository,
+        decision,
+        decision_result: ScannerDecisionResult,
+        profile_id: str,
+        browser_host_name: str,
+        fb_ad_id: str,
+        auto_resume_enabled: bool,
+        observe_only_enabled: bool,
+    ) -> BrowserActionResult | None:
+        """При необходимости выполняет автозапуск и сохраняет результат в БД."""
+
+        if not auto_resume_enabled:
+            return None
+        if observe_only_enabled:
+            return None
+        if decision_result.decision != DecisionType.WOULD_RESUME:
+            return None
+        if self._resume_executor is None:
+            return None
+
+        logger = logging.getLogger(__name__)
+        started_at = datetime.now(tz=UTC)
+
+        try:
+            resume_result = await self._resume_executor.resume_ad(
+                profile_id=profile_id,
+                browser_host_name=browser_host_name,
+                fb_ad_id=fb_ad_id,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Не удалось выполнить авторезюм для объявления %s: %s",
+                fb_ad_id,
+                exc,
+            )
+            await decisions_repo.add_action_execution(
+                decision_id=decision.id,
+                action_type=ActionType.RESUME,
+                status=ActionExecutionStatus.FAILED,
+                started_at=started_at,
+                finished_at=datetime.now(tz=UTC),
+                message=str(exc),
+            )
+            await decisions_repo.set_decision_action_result(
+                decision_id=decision.id,
+                action_executed=False,
+                action_status=ActionExecutionStatus.FAILED.value,
+            )
+            return BrowserActionResult(
+                success=False,
+                message=str(exc),
+                fb_ad_id=fb_ad_id,
+                profile_id=profile_id,
+                browser_host_name=browser_host_name,
+            )
+
+        action_status = (
+            ActionExecutionStatus.SUCCEEDED
+            if resume_result.success
+            else ActionExecutionStatus.FAILED
+        )
+        await decisions_repo.add_action_execution(
+            decision_id=decision.id,
+            action_type=ActionType.RESUME,
+            status=action_status,
+            started_at=started_at,
+            finished_at=datetime.now(tz=UTC),
+            message=resume_result.message,
+        )
+        await decisions_repo.set_decision_action_result(
+            decision_id=decision.id,
+            action_executed=resume_result.success,
+            action_status=action_status.value,
+        )
+        return resume_result
 
     @staticmethod
     def _map_decision_to_event_type(decision: DecisionType) -> TelegramEventType | None:

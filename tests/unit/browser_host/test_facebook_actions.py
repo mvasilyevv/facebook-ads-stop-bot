@@ -165,3 +165,35 @@ async def test_pause_ad_returns_not_found_message() -> None:
     assert result.message == "Не удалось найти объявление 1234567890123 для паузы"
     assert clicked_buttons == []
     assert manager.released is True
+
+
+# Проверяет, что executor находит объявление и нажимает кнопку возобновления на странице Ads Manager.
+@pytest.mark.asyncio
+async def test_resume_ad_success() -> None:
+    rows = [_FakeRow("Объявление 1 1234567890123"), _FakeRow("Другое объявление")]
+    clicked_buttons: list[str] = []
+    page = _FakePage(rows, clicked_buttons)
+    context = _FakeContext([page])
+    browser = _FakeBrowser(context)
+    attached_session = AttachedBrowserSession(
+        profile_id="profile-1",
+        cdp_url="http://127.0.0.1:54000",
+        webdriver_url=None,
+        is_attached=True,
+        browser=browser,
+        context=context,
+    )
+    executor, manager = _build_executor(attached_session)
+
+    result = await executor.resume_ad(
+        profile_id="profile-1",
+        browser_host_name="browser-host-local",
+        fb_ad_id="1234567890123",
+    )
+
+    assert result.success is True
+    assert result.fb_ad_id == "1234567890123"
+    assert "возобновлено" in result.message
+    assert rows[0].clicked is True
+    assert "Запустить" in clicked_buttons
+    assert manager.released is True
