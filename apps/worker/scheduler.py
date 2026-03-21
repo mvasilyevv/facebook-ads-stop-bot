@@ -3,7 +3,11 @@ from __future__ import annotations
 import asyncio
 import logging
 
+from apps.browser_host.adapters.factory import build_adapter
+from apps.browser_host.facebook_actions import FacebookAdsActionExecutor
 from apps.browser_host.facebook_scanner import FacebookAdsScannerProvider
+from apps.browser_host.playwright_attach import PlaywrightAttachService
+from apps.browser_host.session_manager import BrowserSessionManager
 from apps.worker.scan_service import WorkerScanService
 from core.config import get_settings
 from core.db import get_session_factory
@@ -19,9 +23,18 @@ class SchedulerService:
         self._settings = get_settings()
         self._session_factory = get_session_factory()
         self._redis = get_redis_client()
+        session_manager = BrowserSessionManager(
+            adapter=build_adapter(self._settings),
+            playwright_attach_service=PlaywrightAttachService(),
+        )
         self._scan_service = WorkerScanService(
             async_session_factory=self._session_factory,
-            scanner_provider=FacebookAdsScannerProvider(settings=self._settings),
+            scanner_provider=FacebookAdsScannerProvider(
+                settings=self._settings,
+                browser_session_manager=session_manager,
+            ),
+            pause_executor=FacebookAdsActionExecutor(session_manager=session_manager),
+            auto_pause_enabled=self._settings.feature_auto_pause,
             auto_resume_enabled=self._settings.feature_auto_resume,
         )
 

@@ -113,6 +113,29 @@ class DecisionsRepository(AsyncRepository):
         await self.session.flush()
         return item
 
+    async def set_decision_action_result(
+        self,
+        decision_id: str,
+        *,
+        action_executed: bool,
+        action_status: str | None,
+    ) -> Decision | None:
+        """Обновляет результат выполнения действия у сохраненного решения."""
+
+        decision = await self.session.get(Decision, self._coerce_uuid(decision_id))
+        if decision is None:
+            return None
+        decision.action_executed = action_executed
+        decision.action_status = action_status
+        await self.session.flush()
+        return decision
+
+    @staticmethod
+    def _coerce_uuid(value: UUID | str | None) -> UUID | None:
+        if value is None or isinstance(value, UUID):
+            return value
+        return UUID(str(value))
+
 
 class ControlFlagsRepository(AsyncRepository):
     """Репозиторий для флагов управления."""

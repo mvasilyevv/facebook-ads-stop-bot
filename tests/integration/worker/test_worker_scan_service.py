@@ -6,7 +6,11 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import select
 
+from apps.worker.scan_service import WorkerScanService
+from core.actions import BrowserActionResult
 from core.domain import (
+    ActionExecutionStatus,
+    ActionType,
     DecisionType,
     DeliveryStatus,
     EntityType,
@@ -16,13 +20,14 @@ from core.domain import (
     TrackingMode,
 )
 from core.models.advertising import MetricSnapshot
-from core.models.operations import TelegramEvent
+from core.models.operations import ActionExecution, TelegramEvent
 from core.repositories import (
     AdsRepository,
     BrowserRepository,
     DecisionsRepository,
     OffersRepository,
     ScanRunsRepository,
+    SystemSettingsRepository,
 )
 from tests.fixtures.worker_scan_helpers import (
     FakeScannerProvider,
@@ -31,6 +36,35 @@ from tests.fixtures.worker_scan_helpers import (
     seed_offer_with_binding,
     seed_worker_ad_graph,
 )
+
+
+class FakePauseExecutor:
+    """Фейковый исполнитель автопаузы для проверки worker runtime."""
+
+    def __init__(
+        self,
+        *,
+        success: bool = True,
+        message: str = "Объявление переведено на паузу",
+    ) -> None:
+        self.success = success
+        self.message = message
+        self.calls: list[tuple[str, str, str]] = []
+
+    async def pause_ad(
+        self,
+        profile_id: str,
+        browser_host_name: str,
+        fb_ad_id: str,
+    ) -> BrowserActionResult:
+        self.calls.append((profile_id, browser_host_name, fb_ad_id))
+        return BrowserActionResult(
+            success=self.success,
+            message=self.message,
+            fb_ad_id=fb_ad_id,
+            profile_id=profile_id,
+            browser_host_name=browser_host_name,
+        )
 
 
 # Проверяет, что дорогой клик по объявлению с валидной CPA сохраняет снимок и пишет решение `WOULD_PAUSE`.
@@ -341,3 +375,77 @@ async def test_worker_scan_service_marks_unseen_ads_only_inside_same_profile(asy
     assert refreshed_secondary_ad is not None
     assert primary_ad.scope_presence == ScopePresence.NOT_SEEN_THIS_SCAN
     assert refreshed_secondary_ad.scope_presence == ScopePresence.IN_SCOPE
+
+
+# Проверяет, что автопауза вызывает executor и фиксирует выполненное действие в базе.
+@pytest.mark.asyncio
+async def test_worker_scan_service_executes_auto_pause_and_marks_decision(async_session_factory):
+    seed = await seed_worker_ad_graph(async_session_factory)
+    fake_executor = FakePauseExecutor(message="Объявление переведено на паузу")
+
+    async with async_session_factory() as session:
+        settings_repo = SystemSettingsRepository(session)
+        await settings_repo.set_setting("auto_pause_enabled", "true")
+        await session.commit()
+
+    await seed_offer_with_binding(
+        async_session_factory,
+        entity_type=EntityType.ADSET,
+        entity_id=seed.adset_scope_key,
+        offer_code="offer-pause",
+        cpa_usd=Decimal("5.00"),
+        effective_from=datetime(2026, 3, 20, 11, 0, tzinfo=UTC),
+    )
+
+    service = WorkerScanService(
+        async_session_factory=async_session_factory,
+        scanner_provider=FakeScannerProvider(
+            rows=[
+                WorkerScanRow(
+                    campaign_scope_key=seed.campaign_scope_key,
+                    campaign_name=seed.campaign_name,
+                    adset_scope_key=seed.adset_scope_key,
+                    adset_name=seed.adset_name,
+                    fb_ad_id=seed.fb_ad_id,
+                    ad_name=seed.ad_name,
+                    delivery_status=DeliveryStatus.ACTIVE,
+                    tracking_mode=TrackingMode.TRACKED,
+                    scope_presence=ScopePresence.IN_SCOPE,
+                    spend=Decimal("0.38"),
+                    clicks=4,
+                    cpc=Decimal("0.11"),
+                    leads=0,
+                    cost_per_lead=None,
+                    registrations=0,
+                    cost_per_registration=None,
+                    deposits=0,
+                    captured_at=datetime(2026, 3, 20, 12, 0, tzinfo=UTC),
+                )
+            ]
+        ),
+        pause_executor=fake_executor,
+        auto_pause_enabled=False,
+    )
+
+    await service.run_once(profile_id=seed.profile_id, browser_host_name=seed.browser_host_name)
+
+    async with async_session_factory() as session:
+        decisions_repo = DecisionsRepository(session)
+        decisions = await decisions_repo.list_decisions(fb_ad_id=seed.fb_ad_id)
+        action_executions = list(
+            (
+                await session.scalars(
+                    select(ActionExecution).where(ActionExecution.decision_id == decisions[0].id)
+                )
+            ).all()
+        )
+
+    assert fake_executor.calls == [(seed.profile_id, seed.browser_host_name, seed.fb_ad_id)]
+    assert len(decisions) == 1
+    assert decisions[0].decision == DecisionType.WOULD_PAUSE
+    assert decisions[0].action_executed is True
+    assert decisions[0].action_status == ActionExecutionStatus.SUCCEEDED.value
+    assert len(action_executions) == 1
+    assert action_executions[0].action_type == ActionType.PAUSE
+    assert action_executions[0].status == ActionExecutionStatus.SUCCEEDED
+    assert action_executions[0].message == "Объявление переведено на паузу"
