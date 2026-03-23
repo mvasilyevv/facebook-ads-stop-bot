@@ -365,6 +365,19 @@ class AdsRepository(AsyncRepository):
         )
         return result.first()
 
+    async def get_ads_by_fb_ad_ids(self, fb_ad_ids: list[str]) -> dict[str, Ad]:
+        if not fb_ad_ids:
+            return {}
+        result = await self.session.scalars(
+            select(Ad)
+            .options(
+                selectinload(Ad.campaign),
+                selectinload(Ad.adset),
+            )
+            .where(Ad.fb_ad_id.in_(fb_ad_ids))
+        )
+        return {ad.fb_ad_id: ad for ad in result.all()}
+
     async def list_ads(self) -> list[Ad]:
         result = await self.session.scalars(
             select(Ad)
@@ -427,8 +440,10 @@ class AdsRepository(AsyncRepository):
             ad.scope_presence = scope_presence
         if last_decision is not None:
             ad.last_decision = last_decision
-        ad.last_action_source = last_action_source
-        ad.last_action_at = last_action_at
+        if last_action_source is not None:
+            ad.last_action_source = last_action_source
+        if last_action_at is not None:
+            ad.last_action_at = last_action_at
         await self.session.flush()
         return ad
 

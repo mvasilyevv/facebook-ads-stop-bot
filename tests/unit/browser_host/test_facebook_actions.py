@@ -511,6 +511,12 @@ async def test_pause_ad_closes_dialog_scoped_popup_and_skips_hidden_global_butto
         def __init__(self, page: "_PopupPage") -> None:
             self._page = page
 
+        async def inner_text(self) -> str:
+            return self._page.body_text
+
+        async def text_content(self) -> str:
+            return self._page.body_text
+
         def get_by_role(self, role: str, name: str):
             if role != "button":
                 raise AssertionError(f"Неожиданная роль внутри dialog: {role}")

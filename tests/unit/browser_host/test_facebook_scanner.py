@@ -440,6 +440,12 @@ async def test_parse_current_view_rows_dismisses_popup_with_ok_variant() -> None
         def __init__(self, page: "_Page") -> None:
             self._page = page
 
+        async def inner_text(self) -> str:
+            return self._page.body_text
+
+        async def text_content(self) -> str:
+            return self._page.body_text
+
         def get_by_role(self, role: str, name: str):
             if role == "button" and name == "Ok":
                 return _PopupButton(self._page, "Ok")
@@ -546,9 +552,9 @@ async def test_parse_current_view_rows_dismisses_popup_with_ok_variant() -> None
     assert page.modal_visible is False
 
 
-# Проверяет, что scanner прокручивает таблицу через mouse wheel по области строк.
+# Проверяет, что scanner сначала прокручивает реальный DOM-контейнер таблицы без mouse wheel.
 @pytest.mark.asyncio
-async def test_scroll_once_uses_mouse_wheel_on_table_area() -> None:
+async def test_scroll_once_prefers_dom_scroll_container() -> None:
     class _Locator:
         async def count(self) -> int:
             return 5
@@ -567,15 +573,18 @@ async def test_scroll_once_uses_mouse_wheel_on_table_area() -> None:
     class _Page:
         def __init__(self) -> None:
             self.mouse = _Mouse()
+            self.dom_scroll_calls: list[tuple[int | None, str | None]] = []
             self._states = [
                 {
                     "page_scroll_top": 0,
+                    "container_scroll_top": 0,
                     "anchor_x": 140,
                     "anchor_y": 360,
                     "signature": "before",
                 },
                 {
                     "page_scroll_top": 0,
+                    "container_scroll_top": 2500,
                     "anchor_x": 140,
                     "anchor_y": 360,
                     "signature": "after",
@@ -588,6 +597,9 @@ async def test_scroll_once_uses_mouse_wheel_on_table_area() -> None:
 
         async def evaluate(self, script: str, params: dict[str, object]) -> dict[str, object]:
             assert params["selector"] == "div[role='presentation']._1gd4"
+            if "deltaPx" in params:
+                self.dom_scroll_calls.append((params["deltaPx"], params["targetEdge"]))
+                return True
             return self._states.pop(0)
 
         async def wait_for_timeout(self, delay_ms: int) -> None:
@@ -598,6 +610,70 @@ async def test_scroll_once_uses_mouse_wheel_on_table_area() -> None:
     scrolled = await provider._scroll_once(page)
 
     assert scrolled is True
+    assert page.dom_scroll_calls == [(provider._settings.scanner_scroll_step_px, None)]
+    assert page.mouse.moves == []
+    assert page.mouse.wheels == []
+
+
+# Проверяет, что scanner откатывается на mouse wheel, если DOM-прокрутка контейнера недоступна.
+@pytest.mark.asyncio
+async def test_scroll_once_falls_back_to_mouse_wheel_when_dom_scroll_unavailable() -> None:
+    class _Locator:
+        async def count(self) -> int:
+            return 5
+
+    class _Mouse:
+        def __init__(self) -> None:
+            self.moves: list[tuple[int, int]] = []
+            self.wheels: list[tuple[int, int]] = []
+
+        async def move(self, x: int, y: int) -> None:
+            self.moves.append((x, y))
+
+        async def wheel(self, dx: int, dy: int) -> None:
+            self.wheels.append((dx, dy))
+
+    class _Page:
+        def __init__(self) -> None:
+            self.mouse = _Mouse()
+            self.dom_scroll_calls: list[tuple[int | None, str | None]] = []
+            self._states = [
+                {
+                    "page_scroll_top": 0,
+                    "container_scroll_top": 0,
+                    "anchor_x": 140,
+                    "anchor_y": 360,
+                    "signature": "before",
+                },
+                {
+                    "page_scroll_top": 0,
+                    "container_scroll_top": 0,
+                    "anchor_x": 140,
+                    "anchor_y": 360,
+                    "signature": "after",
+                },
+            ]
+
+        def locator(self, selector: str) -> _Locator:
+            assert selector == "div[role='presentation']._1gd4"
+            return _Locator()
+
+        async def evaluate(self, script: str, params: dict[str, object]) -> dict[str, object]:
+            assert params["selector"] == "div[role='presentation']._1gd4"
+            if "deltaPx" in params:
+                self.dom_scroll_calls.append((params["deltaPx"], params["targetEdge"]))
+                return False
+            return self._states.pop(0)
+
+        async def wait_for_timeout(self, delay_ms: int) -> None:
+            return None
+
+    provider = FacebookAdsScannerProvider(settings=Settings())
+    page = _Page()
+    scrolled = await provider._scroll_once(page)
+
+    assert scrolled is True
+    assert page.dom_scroll_calls == [(provider._settings.scanner_scroll_step_px, None)]
     assert page.mouse.moves == [(140, 360)]
     assert page.mouse.wheels == [(0, provider._settings.scanner_scroll_step_px)]
 
@@ -1623,6 +1699,9 @@ async def test_scan_rows_fails_after_single_reload_when_response_is_smaller_than
     response_rows = [
         {
             "id": str(120241420000000000 + index),
+            "campaign_name": f"Кампания {index // 10}",
+            "adset_name": f"Адсет {index // 5}",
+            "ad_name": f"Объявление {index}",
             "spend": "0.00",
             "clicks": "0",
             "cpc": "0.00",
@@ -1660,6 +1739,57 @@ async def test_scan_rows_fails_after_single_reload_when_response_is_smaller_than
             browser_host_name="host-1",
         )
 
+    assert response_page.reload_count == 3
+
+
+# Проверяет, что scanner допускает недобор в одну строку и возвращает лучший partial-scope без аварийного падения.
+@pytest.mark.asyncio
+async def test_scan_rows_accepts_best_partial_scope_within_tolerance() -> None:
+    response_rows = [
+        {
+            "id": str(120241420000000000 + index),
+            "campaign_name": f"Кампания {index // 10}",
+            "adset_name": f"Адсет {index // 5}",
+            "ad_name": f"Объявление {index}",
+            "spend": "0.00",
+            "clicks": "0",
+            "cpc": "0.00",
+            "leads": "0",
+            "cost_per_lead": "0.00",
+            "registrations": "0",
+            "cost_per_registration": "0.00",
+            "delivery_status": "PAUSED",
+        }
+        for index in range(50)
+    ]
+    response_page = _FakeResponsePage(
+        response_batches=[
+            [_FakeResponse("https://adsmanager.facebook.com/am_tabular", {"rows": response_rows})],
+        ],
+        title_text="(51) Ads Manager - Управление рекламой",
+    )
+
+    class _Provider(FacebookAdsScannerProvider):
+        def __init__(self) -> None:
+            super().__init__(
+                settings=Settings(
+                    scanner_reload_attempts=3,
+                    scanner_scope_tolerance_rows=1,
+                )
+            )
+
+        async def _resolve_ads_page(self, browser):
+            return response_page
+
+    provider = _Provider()
+
+    rows = await provider._scan_with_browser(
+        browser=SimpleNamespace(contexts=[]),
+        profile_id="profile-1",
+        browser_host_name="host-1",
+    )
+
+    assert len(rows) == 50
     assert response_page.reload_count == 3
 
 

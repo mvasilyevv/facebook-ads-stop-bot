@@ -481,6 +481,21 @@ class FacebookAdsScannerProvider:
             logger.warning("Диагностический отчет response Ads Manager сохранен: %s", report_path)
 
         if best_rows:
+            tolerated_rows_gap = max(
+                int(getattr(self._settings, "scanner_scope_tolerance_rows", 0)),
+                0,
+            )
+            if (
+                expected_rows_count is not None
+                and tolerated_rows_gap > 0
+                and expected_rows_count > len(best_rows)
+                and expected_rows_count - len(best_rows) <= tolerated_rows_gap
+            ):
+                logger.warning(
+                    "Ads Manager не дотянул до полного scope %s строк, продолжаю с частичным набором в пределах допуска",
+                    expected_rows_count - len(best_rows),
+                )
+                return best_rows
             logger.warning(
                 "После всех retry-попыток Ads Manager собрано только %s строк при ожидаемых %s",
                 len(best_rows),
@@ -1945,15 +1960,29 @@ class FacebookAdsScannerProvider:
             return False
         if row_count <= 0:
             return False
-        mouse = getattr(page, "mouse", None)
-        if mouse is None:
-            return False
 
-        before_state = await self._read_table_wheel_state(page)
+        before_state = await self._read_table_scroll_state(page)
         if before_state is None:
             return False
 
         scroll_px = getattr(self._settings, "scanner_scroll_step_px", 2500)
+        dom_scroll_applied = await self._scroll_table_container(page, delta_px=scroll_px)
+        if dom_scroll_applied:
+            wait_for_timeout = getattr(page, "wait_for_timeout", None)
+            if callable(wait_for_timeout):
+                await wait_for_timeout(min(self._settings.scanner_scroll_pause_ms, 150))
+            after_state = await self._read_table_scroll_state(page)
+            if after_state is None:
+                return False
+            return (
+                after_state["container_scroll_top"] != before_state["container_scroll_top"]
+                or after_state["signature"] != before_state["signature"]
+            )
+
+        mouse = getattr(page, "mouse", None)
+        if mouse is None:
+            return False
+
         move = getattr(mouse, "move", None)
         wheel = getattr(mouse, "wheel", None)
         if not callable(move) or not callable(wheel):
@@ -1969,7 +1998,7 @@ class FacebookAdsScannerProvider:
         if callable(wait_for_timeout):
             await wait_for_timeout(min(self._settings.scanner_scroll_pause_ms, 150))
 
-        after_state = await self._read_table_wheel_state(page)
+        after_state = await self._read_table_scroll_state(page)
         if after_state is None:
             return False
 
@@ -1978,6 +2007,8 @@ class FacebookAdsScannerProvider:
         return after_state["signature"] != before_state["signature"]
 
     async def _scroll_vertical_area_to_edge(self, page, *, edge: str) -> None:
+        if await self._scroll_table_container(page, edge=edge):
+            return
         try:
             await page.evaluate(
                 """(targetEdge) => {
@@ -2001,7 +2032,86 @@ class FacebookAdsScannerProvider:
         except Exception:  # noqa: BLE001
             return
 
-    async def _read_table_wheel_state(self, page) -> dict[str, Any] | None:
+    async def _scroll_table_container(
+        self,
+        page,
+        *,
+        delta_px: int | None = None,
+        edge: str | None = None,
+    ) -> bool:
+        try:
+            return bool(
+                await page.evaluate(
+                    """({ selector, deltaPx, targetEdge }) => {
+                        const rows = Array.from(document.querySelectorAll(selector));
+                        if (rows.length === 0) {
+                            return false;
+                        }
+
+                        const findScrollableContainer = (row) => {
+                            const doc = document.scrollingElement || document.documentElement || document.body;
+                            let fallback = null;
+                            let node = row.parentElement;
+                            while (node) {
+                                const style = window.getComputedStyle(node);
+                                const maxScrollTop = Math.max((node.scrollHeight || 0) - (node.clientHeight || 0), 0);
+                                const overflowY = `${style?.overflowY || ""} ${style?.overflow || ""}`;
+                                if (maxScrollTop > 20 && fallback === null) {
+                                    fallback = node;
+                                }
+                                if (maxScrollTop > 20 && /(auto|scroll|overlay)/i.test(overflowY)) {
+                                    return node;
+                                }
+                                node = node.parentElement;
+                            }
+                            return fallback || doc;
+                        };
+
+                        const container = findScrollableContainer(rows[0]);
+                        const currentTop = Math.max(
+                            Math.round(typeof container.scrollTop === "number" ? container.scrollTop || 0 : 0),
+                            0,
+                        );
+                        const maxScrollTop = Math.max(
+                            Math.round((container.scrollHeight || 0) - (container.clientHeight || 0)),
+                            0,
+                        );
+                        let targetTop = currentTop;
+                        if (targetEdge === "top") {
+                            targetTop = 0;
+                        } else if (targetEdge === "bottom") {
+                            targetTop = maxScrollTop;
+                        } else if (typeof deltaPx === "number") {
+                            const normalizedDeltaPx = Math.max(Math.round(deltaPx), 1);
+                            const visibleHeight = Math.max(Math.round(container.clientHeight || 0), 0);
+                            const safeStepPx = visibleHeight > 0
+                                ? Math.max(Math.round(visibleHeight * 0.75), 240)
+                                : normalizedDeltaPx;
+                            const actualStepPx = Math.min(normalizedDeltaPx, safeStepPx);
+                            targetTop = Math.min(maxScrollTop, Math.max(0, currentTop + actualStepPx));
+                        }
+
+                        if (targetTop === currentTop) {
+                            return false;
+                        }
+                        if (typeof container.scrollTo === "function") {
+                            container.scrollTo({ top: targetTop, behavior: "auto" });
+                        } else {
+                            container.scrollTop = targetTop;
+                        }
+                        return true;
+                    }""",
+                    {
+                        "selector": _PRESENTATION_ROW_SELECTOR,
+                        "deltaPx": delta_px,
+                        "targetEdge": edge,
+                    },
+                )
+            )
+        except Exception:  # noqa: BLE001
+            return False
+
+    async def _read_table_scroll_state(self, page) -> dict[str, Any] | None:
         try:
             return await page.evaluate(
                 """({ selector }) => {
@@ -2009,6 +2119,25 @@ class FacebookAdsScannerProvider:
                     if (rows.length === 0) {
                         return null;
                     }
+
+                    const findScrollableContainer = (row) => {
+                        const doc = document.scrollingElement || document.documentElement || document.body;
+                        let fallback = null;
+                        let node = row.parentElement;
+                        while (node) {
+                            const style = window.getComputedStyle(node);
+                            const maxScrollTop = Math.max((node.scrollHeight || 0) - (node.clientHeight || 0), 0);
+                            const overflowY = `${style?.overflowY || ""} ${style?.overflow || ""}`;
+                            if (maxScrollTop > 20 && fallback === null) {
+                                fallback = node;
+                            }
+                            if (maxScrollTop > 20 && /(auto|scroll|overlay)/i.test(overflowY)) {
+                                return node;
+                            }
+                            node = node.parentElement;
+                        }
+                        return fallback || doc;
+                    };
 
                     const buildSignature = (row) => {
                         if (!row) {
@@ -2024,9 +2153,13 @@ class FacebookAdsScannerProvider:
 
                     const firstRow = rows[0];
                     const rect = firstRow.getBoundingClientRect();
+                    const container = findScrollableContainer(firstRow);
                     return {
                         page_scroll_top: Math.round(
                             document.scrollingElement ? document.scrollingElement.scrollTop || 0 : 0,
+                        ),
+                        container_scroll_top: Math.round(
+                            typeof container.scrollTop === "number" ? container.scrollTop || 0 : 0,
                         ),
                         anchor_x: Math.round(rect.left + Math.min(200, Math.max(rect.width / 2, 80))),
                         anchor_y: Math.round(rect.top + Math.min(80, Math.max(rect.height / 2, 20))),

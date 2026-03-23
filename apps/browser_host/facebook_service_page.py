@@ -80,19 +80,18 @@ async def ensure_ads_manager_service_page(
         service_role=service_role,
         selected_ad_id=selected_ad_id,
     )
+    target_context = _resolve_context(browser=browser, context=context)
+    if target_context is None:
+        raise RuntimeError("Не удалось получить browser context для служебной страницы Ads Manager")
+
     existing_page = await _find_service_page(
-        browser=browser,
-        context=context,
+        context=target_context,
         service_role=service_role,
     )
     if existing_page is not None:
         await _goto_if_needed(existing_page, target_url)
         await _wait_for_dom_ready(existing_page)
         return existing_page
-
-    target_context = _resolve_context(browser=browser, context=context)
-    if target_context is None:
-        raise RuntimeError("Не удалось получить browser context для служебной страницы Ads Manager")
 
     new_page_factory = getattr(target_context, "new_page", None)
     if not callable(new_page_factory):
@@ -108,25 +107,14 @@ async def ensure_ads_manager_service_page(
 
 async def _find_service_page(
     *,
-    browser: Any | None,
     context: Any | None,
     service_role: str,
 ) -> Any | None:
-    for page in _iter_pages(browser=browser, context=context):
+    for page in _get_pages_from_context(context):
         page_url = getattr(page, "url", "") or ""
         if extract_service_page_role(page_url) == service_role:
             return page
     return None
-
-
-def _iter_pages(*, browser: Any | None, context: Any | None) -> list[Any]:
-    seen_pages: list[Any] = []
-    if context is not None:
-        seen_pages.extend(_get_pages_from_context(context))
-    if browser is not None:
-        for browser_context in getattr(browser, "contexts", []) or []:
-            seen_pages.extend(_get_pages_from_context(browser_context))
-    return seen_pages
 
 
 def _get_pages_from_context(context: Any) -> list[Any]:

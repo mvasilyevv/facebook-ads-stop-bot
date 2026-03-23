@@ -49,9 +49,13 @@ class Settings(BaseSettings):
     scanner_scroll_pause_ms: int = Field(default=700, alias="SCANNER_SCROLL_PAUSE_MS")
     scanner_max_no_new_attempts: int = Field(default=3, alias="SCANNER_MAX_NO_NEW_ATTEMPTS")
     scanner_scroll_step_px: int = Field(default=2500, alias="SCANNER_SCROLL_STEP_PX")
-    scanner_reload_attempts: int = Field(default=1, alias="SCANNER_RELOAD_ATTEMPTS")
+    scanner_reload_attempts: int = Field(default=3, alias="SCANNER_RELOAD_ATTEMPTS")
     scanner_same_page_retry_passes: int = Field(default=2, alias="SCANNER_SAME_PAGE_RETRY_PASSES")
     scanner_retry_delay_ms: int = Field(default=1200, alias="SCANNER_RETRY_DELAY_MS")
+    scanner_scope_tolerance_rows: int = Field(
+        default=1,
+        alias="SCANNER_SCOPE_TOLERANCE_ROWS",
+    )
     scanner_suspend_after_consecutive_failures: int = Field(
         default=3,
         alias="SCANNER_SUSPEND_AFTER_CONSECUTIVE_FAILURES",

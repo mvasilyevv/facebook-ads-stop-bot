@@ -66,7 +66,11 @@ async def _is_known_popup_visible(page: Any) -> bool:
 
 
 async def _dismiss_popup_once(page: Any) -> bool:
-    for container in filter(None, (await _get_known_popup_dialog(page), page)):
+    dialog = await _get_known_popup_dialog(page)
+    if dialog is not None:
+        return await _click_first_available_button(dialog, _KNOWN_ADS_MANAGER_POPUP_BUTTONS)
+
+    for container in (page,):
         if await _click_first_available_button(container, _KNOWN_ADS_MANAGER_POPUP_BUTTONS):
             return True
     return False
@@ -81,22 +85,11 @@ async def _wait_until_popup_closed(page: Any) -> bool:
 
 
 async def _get_known_popup_dialog(page: Any) -> Any | None:
-    get_by_role = getattr(page, "get_by_role", None)
-    if get_by_role is not None:
-        with contextlib.suppress(Exception):
-            locator = get_by_role("dialog")
-            if locator is not None:
-                return locator
-
-    locator = getattr(page, "locator", None)
-    if locator is None:
-        return None
-
-    for selector in ("[role='dialog']", "[aria-modal='true']"):
-        with contextlib.suppress(Exception):
-            candidate = locator(selector)
-            if candidate is not None:
-                return candidate
+    for candidate in await _iter_known_popup_dialog_candidates(page):
+        if not await _locator_is_visible(candidate):
+            continue
+        if await _locator_contains_known_popup_marker(candidate):
+            return candidate
     return None
 
 
@@ -167,6 +160,47 @@ async def _locator_is_visible(locator: Any) -> bool:
             return (await count()) > 0
 
     return True
+
+
+async def _iter_known_popup_dialog_candidates(page: Any) -> tuple[Any, ...]:
+    candidates: list[Any] = []
+
+    get_by_role = getattr(page, "get_by_role", None)
+    if get_by_role is not None:
+        with contextlib.suppress(Exception):
+            locator = get_by_role("dialog")
+            if locator is not None:
+                candidates.extend(await _expand_locator_candidates(locator))
+
+    locator_factory = getattr(page, "locator", None)
+    if locator_factory is None:
+        return tuple(candidates)
+
+    for selector in ("[role='dialog']", "[aria-modal='true']"):
+        with contextlib.suppress(Exception):
+            locator = locator_factory(selector)
+            if locator is not None:
+                candidates.extend(await _expand_locator_candidates(locator))
+
+    return tuple(candidates)
+
+
+async def _locator_contains_known_popup_marker(locator: Any) -> bool:
+    inner_text = getattr(locator, "inner_text", None)
+    if callable(inner_text):
+        with contextlib.suppress(Exception):
+            value = await inner_text()
+            if isinstance(value, str) and _contains_known_popup_marker(value):
+                return True
+
+    text_content = getattr(locator, "text_content", None)
+    if callable(text_content):
+        with contextlib.suppress(Exception):
+            value = await text_content()
+            if isinstance(value, str) and _contains_known_popup_marker(value):
+                return True
+
+    return False
 
 
 async def _wait_after_popup_click(page: Any) -> None:

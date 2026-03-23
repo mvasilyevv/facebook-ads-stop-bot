@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any
 
@@ -48,6 +49,14 @@ _SOURCE_UNAVAILABLE_ERROR_MARKERS = (
 )
 _AUTO_PAUSE_ACTION_SOURCE = "автопауза"
 _AUTO_RESUME_ACTION_SOURCE = "авторезюм"
+_PLACEHOLDER_CAMPAIGN_NAME_PATTERN = re.compile(
+    r"^(?:кампания|campaign)\s+\d{8,20}$",
+    re.IGNORECASE,
+)
+_PLACEHOLDER_AD_NAME_PATTERN = re.compile(
+    r"^(?:объявление|ad)\s+\d{8,20}$",
+    re.IGNORECASE,
+)
 
 
 @dataclass(slots=True, frozen=True)
@@ -275,6 +284,14 @@ class WorkerScanService:
             percentages=rule_percentages or self._default_percentages,
             rule_switches=rule_switches or self._default_rule_switches,
         )
+        known_ads = await ads_repo.get_ads_by_fb_ad_ids([row.fb_ad_id for row in rows])
+        rows = [
+            self._restore_scope_from_existing_ad(
+                row=row,
+                existing_ad=known_ads.get(row.fb_ad_id),
+            )
+            for row in rows
+        ]
         latest_successful_actions = await decisions_repo.get_latest_successful_actions(
             [row.fb_ad_id for row in rows]
         )
@@ -755,6 +772,72 @@ class WorkerScanService:
             ad.last_action_source = _AUTO_RESUME_ACTION_SOURCE
             ad.last_action_at = datetime.now(tz=UTC)
         return resume_result
+
+    def _restore_scope_from_existing_ad(
+        self,
+        *,
+        row: ScannedAdRow,
+        existing_ad: Any | None,
+    ) -> ScannedAdRow:
+        if existing_ad is None:
+            return row
+
+        campaign_name = row.campaign_name
+        campaign_scope_key = row.campaign_scope_key
+        adset_name = row.adset_name
+        adset_scope_key = row.adset_scope_key
+        ad_name = row.ad_name
+
+        existing_campaign = getattr(existing_ad, "campaign", None)
+        existing_adset = getattr(existing_ad, "adset", None)
+
+        if (
+            existing_campaign is not None
+            and getattr(existing_campaign, "name", None)
+            and self._is_placeholder_campaign_name(row.campaign_name)
+        ):
+            campaign_name = existing_campaign.name
+            if getattr(existing_campaign, "scope_key", None):
+                campaign_scope_key = existing_campaign.scope_key
+
+        if (
+            existing_adset is not None
+            and getattr(existing_adset, "name", None)
+            and not row.adset_name
+        ):
+            adset_name = existing_adset.name
+        if existing_adset is not None and getattr(existing_adset, "scope_key", None):
+            if campaign_scope_key != row.campaign_scope_key or adset_name != row.adset_name:
+                adset_scope_key = existing_adset.scope_key
+
+        if getattr(existing_ad, "name", None) and self._is_placeholder_ad_name(row.ad_name):
+            ad_name = existing_ad.name
+
+        if (
+            campaign_name == row.campaign_name
+            and campaign_scope_key == row.campaign_scope_key
+            and adset_name == row.adset_name
+            and adset_scope_key == row.adset_scope_key
+            and ad_name == row.ad_name
+        ):
+            return row
+
+        return replace(
+            row,
+            campaign_name=campaign_name,
+            campaign_scope_key=campaign_scope_key,
+            adset_name=adset_name,
+            adset_scope_key=adset_scope_key,
+            ad_name=ad_name,
+        )
+
+    @staticmethod
+    def _is_placeholder_campaign_name(value: str) -> bool:
+        return bool(value and _PLACEHOLDER_CAMPAIGN_NAME_PATTERN.fullmatch(value.strip()))
+
+    @staticmethod
+    def _is_placeholder_ad_name(value: str) -> bool:
+        return bool(value and _PLACEHOLDER_AD_NAME_PATTERN.fullmatch(value.strip()))
 
     @staticmethod
     def _restore_last_action_from_history(

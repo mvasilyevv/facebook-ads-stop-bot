@@ -142,6 +142,51 @@ async def test_ads_repository_upsert_and_list(async_session) -> None:
     assert fetched.delivery_status == DeliveryStatus.NOT_DELIVERING
 
 
+# Проверяет, что обновление review state не затирает ownership, если новые значения не переданы.
+@pytest.mark.asyncio
+async def test_ads_repository_update_review_state_preserves_last_action_when_not_provided(
+    async_session,
+) -> None:
+    repo = AdsRepository(async_session)
+
+    campaign = await repo.upsert_campaign(
+        scope_key="campaign:account-1:campaign-2",
+        name="Кампания 2",
+    )
+    adset = await repo.upsert_adset(
+        scope_key="adset:campaign:account-1:campaign-2:adset-1",
+        campaign_id=campaign.id,
+        name="Адсет 2",
+    )
+    original_action_at = datetime(2026, 3, 20, 10, 3, tzinfo=UTC)
+    await repo.upsert_ad(
+        fb_ad_id="ad-2",
+        campaign_id=campaign.id,
+        adset_id=adset.id,
+        name="Объявление 2",
+        delivery_status=DeliveryStatus.ACTIVE,
+        tracking_mode=TrackingMode.TRACKED,
+        scope_presence=ScopePresence.IN_SCOPE,
+        last_seen_at=datetime(2026, 3, 20, 10, 2, tzinfo=UTC),
+        last_action_source="автопауза",
+        last_action_at=original_action_at,
+    )
+
+    updated = await repo.update_ad_review_state(
+        fb_ad_id="ad-2",
+        tracking_mode=TrackingMode.MANUAL_BLOCK,
+        last_decision=DecisionType.SKIPPED_BY_POLICY,
+    )
+
+    await async_session.commit()
+
+    assert updated is not None
+    assert updated.tracking_mode == TrackingMode.MANUAL_BLOCK
+    assert updated.last_decision == DecisionType.SKIPPED_BY_POLICY
+    assert updated.last_action_source == "автопауза"
+    assert updated.last_action_at == original_action_at
+
+
 # Проверяет, что репозиторий помечает только не увиденные в последнем скане объявления как NOT_SEEN_THIS_SCAN.
 @pytest.mark.asyncio
 async def test_ads_repository_marks_unseen_ads_as_not_seen_this_scan(async_session) -> None:
