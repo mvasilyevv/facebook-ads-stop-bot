@@ -20,32 +20,42 @@ from core.repositories import (
     BrowserRepository,
     DecisionsRepository,
     OffersRepository,
+    RulesRepository,
 )
 from core.repositories.notification_outbox import NotificationOutboxRepository
 from core.repositories.operations import ScanRunsRepository, SystemSettingsRepository
-from core.rules.types import RulePercentages
+from core.rules.types import RulePercentages, RuleSwitches
 from core.scanner import (
     ObserveScannerService,
     ScannedAdRow,
     ScannerDecisionResult,
     ScannerPolicyFlags,
+    ScannerScopeUnavailableError,
     build_scope_summary,
 )
 from core.scanner.protocols import ScannerProvider
+from core.services import resolve_rule_runtime
 
 _SETTING_AUTO_PAUSE_ENABLED = "auto_pause_enabled"
 _SETTING_AUTO_RESUME_ENABLED = "auto_resume_enabled"
 _SETTING_OBSERVE_ONLY_ENABLED = "observe_only_enabled"
+_EXECUTION_STATE_NOT_REQUIRED = "NOT_REQUIRED"
+_EXECUTION_STATE_SKIPPED_BY_MODE = "SKIPPED_BY_MODE"
+_EXECUTION_STATE_PENDING = "PENDING"
+_SOURCE_UNAVAILABLE_ERROR_MARKER = "Не удалось получить полный набор строк Ads Manager"
+_AUTO_PAUSE_ACTION_SOURCE = "автопауза"
+_AUTO_RESUME_ACTION_SOURCE = "авторезюм"
 
 
 @dataclass(slots=True, frozen=True)
 class WorkerScanResult:
     """Краткий итог одного запуска scanner worker."""
 
-    scan_run_id: str
+    scan_run_id: str | None
     rows_seen: int
     rows_parsed: int
     status: ScanRunStatus
+    skip_reason: str | None = None
 
 
 class WorkerScanService:
@@ -63,6 +73,7 @@ class WorkerScanService:
         auto_resume_enabled: bool = False,
         observe_only_enabled: bool = True,
         percentages: RulePercentages | None = None,
+        suspend_after_consecutive_source_failures: int = 3,
     ) -> None:
         self._async_session_factory = async_session_factory
         self._scanner_provider = scanner_provider
@@ -72,7 +83,12 @@ class WorkerScanService:
         self._default_auto_pause_enabled = auto_pause_enabled
         self._default_auto_resume_enabled = auto_resume_enabled
         self._default_observe_only_enabled = observe_only_enabled
-        self._scanner = ObserveScannerService(percentages=percentages)
+        self._default_percentages = percentages or RulePercentages()
+        self._default_rule_switches = RuleSwitches()
+        self._suspend_after_consecutive_source_failures = max(
+            int(suspend_after_consecutive_source_failures),
+            1,
+        )
 
     async def run_once(self, profile_id: str, browser_host_name: str) -> WorkerScanResult:
         async with self._async_session_factory() as session:
@@ -87,6 +103,20 @@ class WorkerScanService:
             profile = await browser_repo.get_profile_by_vendor_id(profile_id)
             if profile is None:
                 raise RuntimeError(f"Профиль `{profile_id}` не найден в базе")
+            if profile.scan_suspended:
+                skip_reason = profile.scan_suspend_reason or "Профиль находится на стопе"
+                logging.getLogger(__name__).info(
+                    "Скан профиля %s пропущен: профиль находится на стопе по причине `%s`",
+                    profile_id,
+                    skip_reason,
+                )
+                return WorkerScanResult(
+                    scan_run_id=None,
+                    rows_seen=0,
+                    rows_parsed=0,
+                    status=ScanRunStatus.SKIPPED,
+                    skip_reason=skip_reason,
+                )
 
             auto_pause_enabled = await self._resolve_bool_setting(
                 settings_repo=settings_repo,
@@ -103,6 +133,21 @@ class WorkerScanService:
                 key=_SETTING_OBSERVE_ONLY_ENABLED,
                 fallback=self._default_observe_only_enabled,
             )
+            rule_percentages, rule_switches = await self._resolve_rule_runtime(session)
+            if not auto_pause_enabled and not auto_resume_enabled:
+                skip_reason = "Автопауза и авторезюм выключены"
+                logging.getLogger(__name__).info(
+                    "Скан профиля %s пропущен: %s",
+                    profile_id,
+                    skip_reason,
+                )
+                return WorkerScanResult(
+                    scan_run_id=None,
+                    rows_seen=0,
+                    rows_parsed=0,
+                    status=ScanRunStatus.SKIPPED,
+                    skip_reason=skip_reason,
+                )
 
             started_at = datetime.now(tz=UTC)
             scan_run = await scan_runs_repo.create_scan_run(
@@ -126,6 +171,8 @@ class WorkerScanService:
                     auto_pause_enabled=auto_pause_enabled,
                     auto_resume_enabled=auto_resume_enabled,
                     observe_only_enabled=observe_only_enabled,
+                    rule_percentages=rule_percentages,
+                    rule_switches=rule_switches,
                 )
                 ads_repo = AdsRepository(session)
                 seen_fb_ad_ids = [row.fb_ad_id for row in scanned_rows]
@@ -153,12 +200,47 @@ class WorkerScanService:
             except Exception as exc:
                 await session.rollback()
                 try:
-                    await scan_runs_repo.update_scan_run(
-                        scan_run.id,
+                    failed_scan_run = await scan_runs_repo.create_scan_run(
+                        browser_host_id=browser_host.id,
+                        profile_id=profile.id,
                         status=ScanRunStatus.FAILED,
+                        started_at=started_at,
                         finished_at=datetime.now(tz=UTC),
                         error_message=str(exc),
                     )
+                    if isinstance(exc, ScannerScopeUnavailableError):
+                        failure_streak = await self._count_consecutive_source_failures(
+                            scan_runs_repo=scan_runs_repo,
+                            profile_db_id=profile.id,
+                        )
+                        if failure_streak >= self._suspend_after_consecutive_source_failures:
+                            await browser_repo.suspend_profile_scan(profile_id, str(exc))
+                            await NotificationOutboxRepository(session).enqueue(
+                                decision_id=None,
+                                event_type=TelegramEventType.SCAN_SOURCE_UNAVAILABLE,
+                                payload_json={
+                                    "host": browser_host_name,
+                                    "account_name": profile.display_name,
+                                    "campaign_name": "",
+                                    "adset_name": "",
+                                    "ad_name": "",
+                                    "fb_ad_id": "",
+                                    "reason": str(exc),
+                                    "metrics": {},
+                                    "extra": {
+                                        "profile_id": profile_id,
+                                        "attempts": str(failure_streak),
+                                        "scan_run_id": str(failed_scan_run.id),
+                                    },
+                                },
+                            )
+                        else:
+                            logging.getLogger(__name__).warning(
+                                "Неполный scope Ads Manager для профиля %s: подряд %s ошибок из %s до автоматического стопа",
+                                profile_id,
+                                failure_streak,
+                                self._suspend_after_consecutive_source_failures,
+                            )
                     await session.commit()
                 except Exception:  # noqa: BLE001
                     logging.getLogger(__name__).warning(
@@ -178,10 +260,16 @@ class WorkerScanService:
         auto_pause_enabled: bool = False,
         auto_resume_enabled: bool = False,
         observe_only_enabled: bool = True,
+        rule_percentages: RulePercentages | None = None,
+        rule_switches: RuleSwitches | None = None,
     ) -> None:
         ads_repo = AdsRepository(session)
         offers_repo = OffersRepository(session)
         decisions_repo = DecisionsRepository(session)
+        scanner = ObserveScannerService(
+            percentages=rule_percentages or self._default_percentages,
+            rule_switches=rule_switches or self._default_rule_switches,
+        )
 
         for row in rows:
             campaign = await ads_repo.upsert_campaign(
@@ -235,8 +323,9 @@ class WorkerScanService:
             policy_flags = ScannerPolicyFlags(
                 is_blocked=row.tracking_mode in {TrackingMode.MANUAL_BLOCK, TrackingMode.READ_ONLY},
                 auto_resume_enabled=auto_resume_enabled,
+                resume_owned_by_system=ad.last_action_source == _AUTO_PAUSE_ACTION_SOURCE,
             )
-            decision_result = self._scanner.evaluate_row(
+            decision_result = scanner.evaluate_row(
                 row=row,
                 resolved_cpa_usd=resolved_cpa_usd,
                 policy_flags=policy_flags,
@@ -269,12 +358,19 @@ class WorkerScanService:
                 offer_id=offer.id if offer is not None else None,
                 offer_rate_version_id=rate.id if rate is not None else None,
                 resolved_cpa_usd=resolved_cpa_usd,
+                action_status=self._build_initial_execution_state(
+                    decision_result=decision_result,
+                    auto_pause_enabled=auto_pause_enabled,
+                    auto_resume_enabled=auto_resume_enabled,
+                    observe_only_enabled=observe_only_enabled,
+                ),
                 created_at=row.last_seen_at or datetime.now(tz=UTC),
             )
             ad.last_decision = decision_result.decision
             ad.last_scan_run_id = scan_run_id
 
             await self._maybe_execute_pause_action(
+                ad=ad,
                 decisions_repo=decisions_repo,
                 decision=decision_record,
                 decision_result=decision_result,
@@ -285,6 +381,7 @@ class WorkerScanService:
                 observe_only_enabled=observe_only_enabled,
             )
             await self._maybe_execute_resume_action(
+                ad=ad,
                 decisions_repo=decisions_repo,
                 decision=decision_record,
                 decision_result=decision_result,
@@ -318,6 +415,42 @@ class WorkerScanService:
         if setting is None:
             return fallback
         return setting.value.lower() in ("true", "1", "yes", "on")
+
+    async def _resolve_rule_runtime(self, session) -> tuple[RulePercentages, RuleSwitches]:
+        repo = RulesRepository(session)
+        try:
+            runtime = await resolve_rule_runtime(repo)
+            return runtime.percentages, runtime.switches
+        except Exception:  # noqa: BLE001
+            logging.getLogger(__name__).warning(
+                "Не удалось разрешить runtime-правила из БД, использую значения по умолчанию"
+            )
+            return self._default_percentages, self._default_rule_switches
+
+    async def _count_consecutive_source_failures(
+        self,
+        *,
+        scan_runs_repo: ScanRunsRepository,
+        profile_db_id,
+    ) -> int:
+        recent_runs = await scan_runs_repo.list_recent_scan_runs_for_profile(
+            profile_db_id,
+            limit=self._suspend_after_consecutive_source_failures,
+        )
+        failure_streak = 0
+        for run in recent_runs:
+            if run.status != ScanRunStatus.FAILED:
+                break
+            if not self._is_source_unavailable_error(run.error_message):
+                break
+            failure_streak += 1
+        return failure_streak
+
+    @staticmethod
+    def _is_source_unavailable_error(message: str | None) -> bool:
+        if not message:
+            return False
+        return _SOURCE_UNAVAILABLE_ERROR_MARKER in message
 
     @staticmethod
     def _coerce_scanned_row(item: Any) -> ScannedAdRow:
@@ -417,9 +550,28 @@ class WorkerScanService:
             payload_json=payload,
         )
 
+    @staticmethod
+    def _build_initial_execution_state(
+        *,
+        decision_result: ScannerDecisionResult,
+        auto_pause_enabled: bool,
+        auto_resume_enabled: bool,
+        observe_only_enabled: bool,
+    ) -> str:
+        if decision_result.decision not in {DecisionType.WOULD_PAUSE, DecisionType.WOULD_RESUME}:
+            return _EXECUTION_STATE_NOT_REQUIRED
+        if observe_only_enabled:
+            return _EXECUTION_STATE_SKIPPED_BY_MODE
+        if decision_result.decision == DecisionType.WOULD_PAUSE and not auto_pause_enabled:
+            return _EXECUTION_STATE_SKIPPED_BY_MODE
+        if decision_result.decision == DecisionType.WOULD_RESUME and not auto_resume_enabled:
+            return _EXECUTION_STATE_SKIPPED_BY_MODE
+        return _EXECUTION_STATE_PENDING
+
     async def _maybe_execute_pause_action(
         self,
         *,
+        ad,
         decisions_repo: DecisionsRepository,
         decision,
         decision_result: ScannerDecisionResult,
@@ -442,6 +594,11 @@ class WorkerScanService:
 
         logger = logging.getLogger(__name__)
         started_at = datetime.now(tz=UTC)
+        await decisions_repo.set_decision_action_result(
+            decision_id=decision.id,
+            action_executed=False,
+            action_status=_EXECUTION_STATE_PENDING,
+        )
 
         try:
             pause_result = await self._pause_executor.pause_ad(
@@ -494,11 +651,15 @@ class WorkerScanService:
             action_executed=pause_result.success,
             action_status=action_status.value,
         )
+        if pause_result.success:
+            ad.last_action_source = _AUTO_PAUSE_ACTION_SOURCE
+            ad.last_action_at = datetime.now(tz=UTC)
         return pause_result
 
     async def _maybe_execute_resume_action(
         self,
         *,
+        ad,
         decisions_repo: DecisionsRepository,
         decision,
         decision_result: ScannerDecisionResult,
@@ -521,6 +682,11 @@ class WorkerScanService:
 
         logger = logging.getLogger(__name__)
         started_at = datetime.now(tz=UTC)
+        await decisions_repo.set_decision_action_result(
+            decision_id=decision.id,
+            action_executed=False,
+            action_status=_EXECUTION_STATE_PENDING,
+        )
 
         try:
             resume_result = await self._resume_executor.resume_ad(
@@ -573,6 +739,9 @@ class WorkerScanService:
             action_executed=resume_result.success,
             action_status=action_status.value,
         )
+        if resume_result.success:
+            ad.last_action_source = _AUTO_RESUME_ACTION_SOURCE
+            ad.last_action_at = datetime.now(tz=UTC)
         return resume_result
 
     @staticmethod

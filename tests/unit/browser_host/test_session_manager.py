@@ -7,6 +7,7 @@ import pytest
 from apps.browser_host.adapters.models import (
     AdapterHealth,
     AutomationLaunchResult,
+    OpenProfileInfo,
     ProfileStatus,
 )
 from apps.browser_host.playwright_attach import AttachedBrowserSession
@@ -22,6 +23,7 @@ class _FakeAdapter:
         health: AdapterHealth | None = None,
         profile_status: ProfileStatus | None = None,
         launch_result: AutomationLaunchResult | None = None,
+        open_profiles: list[OpenProfileInfo] | None = None,
     ) -> None:
         self._health = health or AdapterHealth(is_healthy=True, message="OK")
         self._profile_status = profile_status or ProfileStatus(
@@ -38,6 +40,7 @@ class _FakeAdapter:
             browser_pid=12345,
             launched_at=datetime(2026, 3, 20, 12, 0, tzinfo=UTC),
         )
+        self._open_profiles = open_profiles or []
         self.stop_called = False
         self.start_called_with: tuple[str, str, list[str]] | None = None
 
@@ -63,7 +66,7 @@ class _FakeAdapter:
         return []
 
     async def list_open_profiles(self):
-        return []
+        return self._open_profiles
 
 
 class _FakePlaywrightAttachService:
@@ -77,9 +80,11 @@ class _FakePlaywrightAttachService:
             is_attached=True,
             attached_at=datetime(2026, 3, 20, 12, 0, tzinfo=UTC),
         )
+        self.attached_launch_results: list[AutomationLaunchResult] = []
         self.detach_called = False
 
     async def attach(self, launch_result: AutomationLaunchResult) -> AttachedBrowserSession:
+        self.attached_launch_results.append(launch_result)
         return self._session
 
     async def detach(self, session: AttachedBrowserSession) -> None:
@@ -126,7 +131,20 @@ async def test_ensure_session_stops_profile_without_automation_binding(monkeypat
     assert session.is_attached is True
 
 
-# Проверяет, что менеджер НЕ останавливает профиль с уже готовым automation binding.
+# Проверяет, что запуск профиля без attach возвращает launch result и не трогает Playwright.
+@pytest.mark.asyncio
+async def test_ensure_profile_started_returns_launch_result_without_attach() -> None:
+    adapter = _FakeAdapter()
+    attach_service = _FakePlaywrightAttachService()
+    manager = BrowserSessionManager(adapter=adapter, playwright_attach_service=attach_service)
+
+    launch_result = await manager.ensure_profile_started("p-1")
+
+    assert launch_result == adapter._launch_result
+    assert attach_service.attached_launch_results == []
+
+
+# Проверяет, что менеджер использует уже открытый CDP-профиль без повторного запуска.
 @pytest.mark.asyncio
 async def test_ensure_session_skips_stop_when_automation_binding_exists() -> None:
     adapter = _FakeAdapter(
@@ -135,6 +153,13 @@ async def test_ensure_session_skips_stop_when_automation_binding_exists() -> Non
             state="RUNNING",
             has_automation_binding=True,
         ),
+        open_profiles=[
+            OpenProfileInfo(
+                profile_id="p-1",
+                display_name="Профиль 1",
+                debug_endpoint="http://127.0.0.1:17777",
+            )
+        ],
     )
     attach_service = _FakePlaywrightAttachService()
     manager = BrowserSessionManager(adapter=adapter, playwright_attach_service=attach_service)
@@ -142,6 +167,8 @@ async def test_ensure_session_skips_stop_when_automation_binding_exists() -> Non
     session = await manager.ensure_session("p-1")
 
     assert adapter.stop_called is False
+    assert adapter.start_called_with is None
+    assert attach_service.attached_launch_results[0].cdp_url == "http://127.0.0.1:17777"
     assert session.is_attached is True
 
 

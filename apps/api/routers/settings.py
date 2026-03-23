@@ -2,19 +2,35 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, HTTPException, status
 
 from apps.api.deps import DbSessionDep
-from apps.api.schemas.settings import BotModeResponse, BotModeUpdateRequest
+from apps.api.schemas.settings import (
+    BotModeResponse,
+    BotModeUpdateRequest,
+    ServiceSettingsResponse,
+    ServiceSettingsUpdateRequest,
+    SuspendedProfileItem,
+    SuspendedProfileResetResponse,
+)
 from core.config import get_settings
+from core.repositories import BrowserRepository
 from core.repositories.operations import SystemSettingsRepository
+from core.services import (
+    SERVICE_SETTING_AUTO_PAUSE_ENABLED,
+    SERVICE_SETTING_AUTO_RESUME_ENABLED,
+    SERVICE_SETTING_OBSERVE_ONLY_ENABLED,
+    SERVICE_SETTING_SCAN_INTERVAL_SECONDS,
+    SERVICE_SETTING_TELEGRAM_BOT_TOKEN,
+    SERVICE_SETTING_TELEGRAM_CHAT_ID,
+    SERVICE_SETTING_VISION_API_TOKEN,
+    SERVICE_SETTING_VISION_CLOUD_API_URL,
+    SERVICE_SETTING_VISION_LOCAL_API_URL,
+    mask_secret,
+    resolve_service_settings,
+)
 
 router = APIRouter(prefix="/settings", tags=["settings"])
-
-# Ключи для системных настроек
-SETTING_AUTO_PAUSE_ENABLED = "auto_pause_enabled"
-SETTING_AUTO_RESUME_ENABLED = "auto_resume_enabled"
-SETTING_OBSERVE_ONLY_ENABLED = "observe_only_enabled"
 
 
 def _parse_bool_setting(value: str) -> bool:
@@ -30,44 +46,13 @@ def _bool_to_string(value: bool) -> str:
 @router.get("/bot-mode", response_model=BotModeResponse, status_code=status.HTTP_200_OK)
 async def get_bot_mode(session: DbSessionDep) -> BotModeResponse:
     """Получить текущие настройки режима бота."""
-    repo = SystemSettingsRepository(session)
-    settings = await repo.get_all_settings()
-    default_settings = get_settings()
-
-    # Получить значения из БД или использовать значения по умолчанию из конфига
-    auto_pause_enabled = _parse_bool_setting(
-        settings.get(SETTING_AUTO_PAUSE_ENABLED, str(default_settings.feature_auto_pause).lower())
-    )
-    auto_resume_enabled = _parse_bool_setting(
-        settings.get(SETTING_AUTO_RESUME_ENABLED, str(default_settings.feature_auto_resume).lower())
-    )
-    observe_only_enabled = _parse_bool_setting(
-        settings.get(
-            SETTING_OBSERVE_ONLY_ENABLED, str(default_settings.feature_observe_only).lower()
-        )
-    )
-
-    # Получить время последнего обновления или текущее время
-    auto_pause_setting = await repo.get_setting(SETTING_AUTO_PAUSE_ENABLED)
-    auto_resume_setting = await repo.get_setting(SETTING_AUTO_RESUME_ENABLED)
-    observe_only_setting = await repo.get_setting(SETTING_OBSERVE_ONLY_ENABLED)
-
-    # Используем время обновления из БД, если есть, иначе текущее время
-    existing_settings = [
-        item.updated_at
-        for item in (auto_pause_setting, auto_resume_setting, observe_only_setting)
-        if item is not None
-    ]
-    if existing_settings:
-        updated_at = max(existing_settings)
-    else:
-        updated_at = datetime.now(tz=UTC)
+    runtime = await resolve_service_settings(session, base_settings=get_settings())
 
     return BotModeResponse(
-        auto_pause_enabled=auto_pause_enabled,
-        auto_resume_enabled=auto_resume_enabled,
-        observe_only_enabled=observe_only_enabled,
-        updated_at=updated_at,
+        auto_pause_enabled=runtime.auto_pause_enabled,
+        auto_resume_enabled=runtime.auto_resume_enabled,
+        observe_only_enabled=runtime.observe_only_enabled,
+        updated_at=runtime.updated_at,
     )
 
 
@@ -78,25 +63,181 @@ async def update_bot_mode(
 ) -> BotModeResponse:
     """Обновить настройки режима бота."""
     repo = SystemSettingsRepository(session)
+    default_settings = get_settings()
 
-    # Сохранить обновленные значения в БД
     await repo.set_setting(
-        SETTING_AUTO_PAUSE_ENABLED,
+        SERVICE_SETTING_AUTO_PAUSE_ENABLED,
         _bool_to_string(payload.auto_pause_enabled),
         description="Автоматическое паузирование объявлений",
     )
     await repo.set_setting(
-        SETTING_AUTO_RESUME_ENABLED,
-        _bool_to_string(payload.auto_resume_enabled),
+        SERVICE_SETTING_AUTO_RESUME_ENABLED,
+        _bool_to_string(
+            payload.auto_resume_enabled if default_settings.feature_auto_resume else False
+        ),
         description="Автоматическое возобновление объявлений",
     )
     await repo.set_setting(
-        SETTING_OBSERVE_ONLY_ENABLED,
+        SERVICE_SETTING_OBSERVE_ONLY_ENABLED,
         _bool_to_string(payload.observe_only_enabled),
         description="Режим наблюдения без реальных действий",
     )
 
     await session.commit()
-
-    # Получить обновленные значения и вернуть
     return await get_bot_mode(session)
+
+
+def _map_suspended_profile(item) -> SuspendedProfileItem:
+    return SuspendedProfileItem(
+        profile_id=item.profile.vendor_profile_id,
+        display_name=item.profile.display_name,
+        browser_host_id=item.browser_host.name,
+        reason=item.profile.scan_suspend_reason or "Сканирование остановлено",
+        suspended_at=item.profile.scan_suspend_at or datetime.now(tz=UTC),
+    )
+
+
+@router.get("/service", response_model=ServiceSettingsResponse, status_code=status.HTTP_200_OK)
+async def get_service_settings(session: DbSessionDep) -> ServiceSettingsResponse:
+    """Получить полный набор runtime-настроек сервиса."""
+
+    runtime = await resolve_service_settings(session, base_settings=get_settings())
+    return ServiceSettingsResponse(
+        auto_pause_enabled=runtime.auto_pause_enabled,
+        auto_resume_enabled=runtime.auto_resume_enabled,
+        auto_resume_available=runtime.auto_resume_available,
+        observe_only_enabled=runtime.observe_only_enabled,
+        scan_interval_seconds=runtime.scan_interval_seconds,
+        vision_local_api_url=runtime.vision_local_api_url,
+        vision_cloud_api_url=runtime.vision_cloud_api_url,
+        telegram_chat_id=runtime.telegram_chat_id,
+        vision_api_token_masked=mask_secret(runtime.vision_api_token),
+        telegram_bot_token_masked=mask_secret(runtime.telegram_bot_token),
+        vision_api_token_configured=bool(runtime.vision_api_token),
+        telegram_bot_token_configured=bool(runtime.telegram_bot_token),
+        updated_at=runtime.updated_at,
+    )
+
+
+@router.put("/service", response_model=ServiceSettingsResponse, status_code=status.HTTP_200_OK)
+async def update_service_settings(
+    payload: ServiceSettingsUpdateRequest,
+    session: DbSessionDep,
+) -> ServiceSettingsResponse:
+    """Обновить runtime-настройки сервиса."""
+
+    if payload.scan_interval_seconds not in {30, 60, 120, 300}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Допустимая частота скана: 30, 60, 120 или 300 секунд",
+        )
+
+    repo = SystemSettingsRepository(session)
+    default_settings = get_settings()
+    await repo.set_setting(
+        SERVICE_SETTING_AUTO_PAUSE_ENABLED,
+        _bool_to_string(payload.auto_pause_enabled),
+        description="Автоматическое паузирование объявлений",
+    )
+    await repo.set_setting(
+        SERVICE_SETTING_AUTO_RESUME_ENABLED,
+        _bool_to_string(
+            payload.auto_resume_enabled if default_settings.feature_auto_resume else False
+        ),
+        description="Автоматическое возобновление объявлений",
+    )
+    await repo.set_setting(
+        SERVICE_SETTING_OBSERVE_ONLY_ENABLED,
+        _bool_to_string(payload.observe_only_enabled),
+        description="Режим наблюдения без реальных действий",
+    )
+    await repo.set_setting(
+        SERVICE_SETTING_SCAN_INTERVAL_SECONDS,
+        str(payload.scan_interval_seconds),
+        description="Частота полного цикла сканирования",
+    )
+    await repo.set_setting(
+        SERVICE_SETTING_VISION_LOCAL_API_URL,
+        payload.vision_local_api_url.strip(),
+        description="Локальный URL Vision API",
+    )
+    await repo.set_setting(
+        SERVICE_SETTING_VISION_CLOUD_API_URL,
+        payload.vision_cloud_api_url.strip(),
+        description="Облачный URL Vision API",
+    )
+    await repo.set_setting(
+        SERVICE_SETTING_TELEGRAM_CHAT_ID,
+        payload.telegram_chat_id.strip(),
+        description="Идентификатор чата Telegram",
+    )
+    if payload.vision_api_token is not None:
+        await repo.set_setting(
+            SERVICE_SETTING_VISION_API_TOKEN,
+            payload.vision_api_token.strip(),
+            description="Токен Vision API",
+        )
+    if payload.telegram_bot_token is not None:
+        await repo.set_setting(
+            SERVICE_SETTING_TELEGRAM_BOT_TOKEN,
+            payload.telegram_bot_token.strip(),
+            description="Токен Telegram-бота",
+        )
+    await session.commit()
+    return await get_service_settings(session)
+
+
+@router.get(
+    "/suspended-profiles",
+    response_model=list[SuspendedProfileItem],
+    status_code=status.HTTP_200_OK,
+)
+async def list_suspended_profiles(session: DbSessionDep) -> list[SuspendedProfileItem]:
+    """Вернуть профили, для которых сканирование остановлено."""
+
+    repo = BrowserRepository(session)
+    suspended_profiles = await repo.list_suspended_profiles()
+    return [_map_suspended_profile(item) for item in suspended_profiles]
+
+
+@router.post(
+    "/suspended-profiles/{profile_id}/reset",
+    response_model=SuspendedProfileResetResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def reset_suspended_profile(
+    profile_id: str,
+    session: DbSessionDep,
+) -> SuspendedProfileResetResponse:
+    """Снять ручной стоп сканирования с профиля."""
+
+    repo = BrowserRepository(session)
+    profile = await repo.reset_profile_scan_suspension(profile_id)
+    if profile is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Профиль `{profile_id}` не найден",
+        )
+    await session.commit()
+    refreshed = await repo.get_profile_by_vendor_id(profile_id)
+    if refreshed is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Профиль `{profile_id}` не найден после сброса стопа",
+        )
+    browser_host = await repo.get_browser_host(refreshed.browser_host_id)
+    if browser_host is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Browser host для профиля `{profile_id}` не найден",
+        )
+    return SuspendedProfileResetResponse(
+        message="Сканирование профиля снова разрешено",
+        profile=SuspendedProfileItem(
+            profile_id=refreshed.vendor_profile_id,
+            display_name=refreshed.display_name,
+            browser_host_id=browser_host.name,
+            reason="Сканирование разрешено вручную",
+            suspended_at=datetime.now(tz=UTC),
+        ),
+    )

@@ -2,6 +2,7 @@ import { useEffect, useState, startTransition } from "react";
 import { Badge } from "../components/Badge";
 import { EmptyState } from "../components/EmptyState";
 import { SectionCard } from "../components/SectionCard";
+import { useAutoRefresh } from "../hooks/useAutoRefresh";
 import { fetchSessions, startSession } from "../lib/api";
 import { formatRelativeStatus } from "../lib/format";
 import { getBadgeTone } from "../lib/helpers";
@@ -32,6 +33,8 @@ export default function SessionsPage() {
   useEffect(() => {
     void reload();
   }, []);
+
+  useAutoRefresh(reload, { enabled: !loading });
 
   async function runAction(action: () => Promise<unknown>, successMsg: string) {
     setMessage(null);
@@ -107,7 +110,13 @@ export default function SessionsPage() {
                     <td>
                       <div className="stack stack--tight">
                         <span>{session.cdp_url ? "CDP готов" : "CDP нет"}</span>
-                        <span>{session.webdriver_url ? "WebDriver готов" : "WebDriver нет"}</span>
+                        <span>
+                          {session.webdriver_url
+                            ? "WebDriver готов"
+                            : session.cdp_url
+                              ? "WebDriver не используется"
+                              : "WebDriver нет"}
+                        </span>
                       </div>
                     </td>
                     <td>{session.last_message ?? "—"}</td>

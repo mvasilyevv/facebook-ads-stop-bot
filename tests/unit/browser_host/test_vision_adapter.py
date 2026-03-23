@@ -124,6 +124,43 @@ async def test_vision_adapter_starts_profile_for_cdp_automation() -> None:
     assert launch.launched_at.tzinfo == UTC
 
 
+# Проверяет, что локальный список профилей Vision поддерживает ключ `id` при поиске folder_id.
+@pytest.mark.asyncio
+async def test_vision_adapter_resolves_folder_id_from_local_list_id_alias() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/list":
+            return httpx.Response(
+                200,
+                json={
+                    "profiles": [
+                        {
+                            "folder_id": "folder-1",
+                            "id": "profile-1",
+                            "port": 54000,
+                        }
+                    ]
+                },
+            )
+        if request.url.path == "/start/folder-1/profile-1":
+            return httpx.Response(
+                200,
+                json={
+                    "folder_id": "folder-1",
+                    "profile_id": "profile-1",
+                    "port": 54000,
+                    "pid": 4321,
+                },
+            )
+        raise AssertionError(f"Неожиданный запрос: {request.method} {request.url}")
+
+    adapter = _build_adapter(handler)
+
+    launch = await adapter.start_profile_for_automation("profile-1", "cdp")
+
+    assert launch.cdp_url == "http://127.0.0.1:54000"
+    assert launch.debug_port == 54000
+
+
 # Проверяет, что healthcheck возвращает русское описание проблемы, если токен Vision не задан.
 @pytest.mark.asyncio
 async def test_vision_adapter_healthcheck_reports_missing_token() -> None:

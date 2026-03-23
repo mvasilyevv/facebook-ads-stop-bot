@@ -3,8 +3,7 @@ import { NavLink } from "react-router-dom";
 const NAV_ITEMS = [
   { to: "/", label: "Обзор", icon: "◉" },
   { to: "/ads", label: "Объявления", icon: "◧" },
-  { to: "/decisions", label: "Решения", icon: "⇄" },
-  { to: "/rules", label: "Правила", icon: "⚙" },
+  { to: "/settings", label: "Настройки", icon: "⚙" },
   { to: "/offers", label: "Офферы", icon: "❖" },
   { to: "/sessions", label: "Сессии", icon: "◎" },
   { to: "/scans", label: "Сканы", icon: "↻" },

@@ -10,6 +10,12 @@ from core.db.base import Base
 from core.domain import EntityType
 from core.models.base_mixins import TimestampMixin, UUIDPrimaryKeyMixin
 
+_ENTITY_TYPE_ENUM = Enum(
+    EntityType,
+    name="entity_type_enum",
+    values_callable=lambda enum_cls: [item.value for item in enum_cls],
+)
+
 
 class Offer(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "offers"
@@ -37,7 +43,7 @@ class OfferRateVersion(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 class EntityOfferBinding(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "entity_offer_bindings"
 
-    entity_type: Mapped[EntityType] = mapped_column(Enum(EntityType, name="entity_type_enum"))
+    entity_type: Mapped[EntityType] = mapped_column(_ENTITY_TYPE_ENUM)
     entity_id: Mapped[str] = mapped_column(String(255), index=True)
     offer_id: Mapped[str] = mapped_column(ForeignKey("offers.id", ondelete="CASCADE"))
     priority: Mapped[int] = mapped_column(default=0)

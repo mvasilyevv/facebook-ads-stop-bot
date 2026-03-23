@@ -1,5 +1,6 @@
-import { defineConfig, loadEnv } from "vite";
+import { loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
+import { defineConfig } from "vitest/config";
 
 function apiProxy(target: string) {
   return {
@@ -33,6 +34,13 @@ export default defineConfig(({ mode }) => {
         "/settings": apiProxy(backend),
         "/offer-bindings": apiProxy(backend),
       },
+    },
+    test: {
+      environment: "jsdom",
+      globals: true,
+      setupFiles: "./tests/setup.ts",
+      include: ["tests/**/*.test.ts", "tests/**/*.test.tsx"],
+      css: true,
     },
   };
 });

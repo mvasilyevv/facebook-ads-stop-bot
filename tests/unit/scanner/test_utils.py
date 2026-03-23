@@ -15,6 +15,7 @@ from core.scanner import StatusNormalizer, normalize_delivery_status, parse_scan
         ("Активно", DeliveryStatus.ACTIVE),
         ("ACTIVE", DeliveryStatus.ACTIVE),
         ("На паузе", DeliveryStatus.PAUSED),
+        ("Выключено", DeliveryStatus.PAUSED),
         ("Paused", DeliveryStatus.PAUSED),
         ("Обучение", DeliveryStatus.LEARNING),
         ("Learning", DeliveryStatus.LEARNING),

@@ -79,5 +79,6 @@ class OutboxProcessor:
                 delivery_before=payload_data.get("delivery_before"),
                 delivery_after=payload_data.get("delivery_after"),
                 rule_id=payload_data.get("rule_id"),
+                extra=payload_data.get("extra", {}),
             ),
         )

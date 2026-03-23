@@ -4,7 +4,7 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -288,8 +288,14 @@ class AdsRepository(AsyncRepository):
                 "tracking_mode": stmt.excluded.tracking_mode,
                 "scope_presence": stmt.excluded.scope_presence,
                 "last_seen_at": stmt.excluded.last_seen_at,
-                "last_action_source": stmt.excluded.last_action_source,
-                "last_action_at": stmt.excluded.last_action_at,
+                "last_action_source": func.coalesce(
+                    stmt.excluded.last_action_source,
+                    Ad.last_action_source,
+                ),
+                "last_action_at": func.coalesce(
+                    stmt.excluded.last_action_at,
+                    Ad.last_action_at,
+                ),
                 "last_decision": stmt.excluded.last_decision,
                 "last_scan_run_id": stmt.excluded.last_scan_run_id,
             },
@@ -339,8 +345,10 @@ class AdsRepository(AsyncRepository):
             ad.tracking_mode = tracking_mode
             ad.scope_presence = scope_presence
             ad.last_seen_at = last_seen_at
-            ad.last_action_source = last_action_source
-            ad.last_action_at = last_action_at
+            if last_action_source is not None:
+                ad.last_action_source = last_action_source
+            if last_action_at is not None:
+                ad.last_action_at = last_action_at
             ad.last_decision = last_decision
             ad.last_scan_run_id = last_scan_run_id
         await self.session.flush()
@@ -367,6 +375,38 @@ class AdsRepository(AsyncRepository):
             .order_by(Ad.fb_ad_id)
         )
         return list(result.all())
+
+    async def get_latest_metric_snapshots(
+        self,
+        fb_ad_ids: list[str],
+    ) -> dict[str, MetricSnapshot]:
+        if not fb_ad_ids:
+            return {}
+
+        ranked_snapshots = (
+            select(
+                MetricSnapshot.id.label("snapshot_id"),
+                MetricSnapshot.fb_ad_id.label("fb_ad_id"),
+                func.row_number()
+                .over(
+                    partition_by=MetricSnapshot.fb_ad_id,
+                    order_by=(MetricSnapshot.captured_at.desc(), MetricSnapshot.id.desc()),
+                )
+                .label("row_number"),
+            )
+            .where(MetricSnapshot.fb_ad_id.in_(fb_ad_ids))
+            .subquery()
+        )
+
+        result = await self.session.scalars(
+            select(MetricSnapshot)
+            .join(
+                ranked_snapshots,
+                MetricSnapshot.id == ranked_snapshots.c.snapshot_id,
+            )
+            .where(ranked_snapshots.c.row_number == 1)
+        )
+        return {snapshot.fb_ad_id: snapshot for snapshot in result.all()}
 
     async def update_ad_review_state(
         self,

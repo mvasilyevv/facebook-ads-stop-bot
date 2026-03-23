@@ -22,6 +22,12 @@ from core.models.base_mixins import TimestampMixin, UUIDPrimaryKeyMixin
 if TYPE_CHECKING:
     from core.models.advertising import Ad, MetricSnapshot
 
+_ENTITY_TYPE_ENUM = Enum(
+    EntityType,
+    name="entity_type_enum",
+    values_callable=lambda enum_cls: [item.value for item in enum_cls],
+)
+
 
 class RuleSet(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "rule_sets"
@@ -69,7 +75,7 @@ class ScanRun(UUIDPrimaryKeyMixin, Base):
 class ControlFlag(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "control_flags"
 
-    entity_type: Mapped[EntityType] = mapped_column(Enum(EntityType, name="entity_type_enum"))
+    entity_type: Mapped[EntityType] = mapped_column(_ENTITY_TYPE_ENUM)
     entity_id: Mapped[str] = mapped_column(String(255), index=True)
     tracking_mode: Mapped[TrackingMode] = mapped_column(
         Enum(TrackingMode, name="tracking_mode_enum"),
@@ -135,7 +141,7 @@ class Cooldown(Base):
     __tablename__ = "cooldowns"
 
     entity_type: Mapped[EntityType] = mapped_column(
-        Enum(EntityType, name="entity_type_enum"),
+        _ENTITY_TYPE_ENUM,
         primary_key=True,
     )
     entity_id: Mapped[str] = mapped_column(String(255), primary_key=True)

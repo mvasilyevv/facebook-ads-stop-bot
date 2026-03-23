@@ -24,9 +24,9 @@ export type RuleOfferPreview = {
 };
 
 const PERCENT_RULE_PRESETS: Record<string, PercentRulePreset> = {
-  stop_high_cpc: { percentLabel: "Лимит клика", min: 1, max: 20, step: 1 },
-  stop_high_cpl: { percentLabel: "Лимит лида", min: 1, max: 40, step: 1 },
-  stop_high_cpr: { percentLabel: "Лимит регистрации", min: 5, max: 60, step: 1 },
+  stop_high_cpc: { percentLabel: "Лимит клика", min: 0.1, max: 4.0, step: 0.01 },
+  stop_high_cpl: { percentLabel: "Лимит лида", min: 1.0, max: 20.0, step: 0.05 },
+  stop_high_cpr: { percentLabel: "Лимит регистрации", min: 5.0, max: 40.0, step: 0.05 },
   stop_spend_window_without_deposit: { percentLabel: "Лимит расхода", min: 10, max: 100, step: 5 },
   stop_spend_after_deposit: { percentLabel: "Лимит расхода после депозита", min: 10, max: 150, step: 5 },
 };
@@ -35,28 +35,53 @@ function multiplierToPercent(value: RuleItem["cpa_multiplier"]): number {
   if (value == null || value === "") {
     return 0;
   }
-  return Math.round(Number(value) * 100);
+  return Number((Number(value) * 100).toFixed(2));
 }
 
 function calculateThresholdUsd(percent: number, cpaUsd: number): number {
   return (cpaUsd * percent) / 100;
 }
 
+function formatPercentValue(value: number): string {
+  if (!Number.isFinite(value)) {
+    return "0";
+  }
+  return value.toFixed(2).replace(/\.?0+$/, "");
+}
+
+function buildQuickPercents(preset: PercentRulePreset): number[] {
+  const mid = Number(((preset.min + preset.max) / 2).toFixed(2));
+  const values = [preset.min, mid, preset.max];
+  return [...new Set(values)].filter((value) => value >= preset.min && value <= preset.max);
+}
+
 export function RuleEditor({ rule, offerPreviews, onSave }: RuleEditorProps) {
   const percentPreset = PERCENT_RULE_PRESETS[rule.code];
   const isPercentRule = percentPreset != null;
+  const hasRealPreviews = isPercentRule && offerPreviews.length > 0;
   const fallbackPercent = percentPreset?.min ?? 0;
   const [isEnabled, setIsEnabled] = useState(rule.is_enabled);
   const [percent, setPercent] = useState(multiplierToPercent(rule.cpa_multiplier) || fallbackPercent);
+  const quickPercents = percentPreset ? buildQuickPercents(percentPreset) : [];
+  const thresholdValues = hasRealPreviews
+    ? offerPreviews.map((preview) => calculateThresholdUsd(percent, preview.cpaUsd))
+    : [];
+  const minThresholdUsd = thresholdValues.length > 0 ? Math.min(...thresholdValues) : null;
+  const maxThresholdUsd = thresholdValues.length > 0 ? Math.max(...thresholdValues) : null;
+  const thresholdSummary =
+    minThresholdUsd == null || maxThresholdUsd == null
+      ? null
+      : Math.abs(maxThresholdUsd - minThresholdUsd) < 0.001
+        ? `Сейчас это ${formatMoney(minThresholdUsd)}`
+        : `Сейчас это диапазон ${formatMoney(minThresholdUsd)} - ${formatMoney(maxThresholdUsd)}`;
 
   useEffect(() => {
     setIsEnabled(rule.is_enabled);
     setPercent(multiplierToPercent(rule.cpa_multiplier) || fallbackPercent);
   }, [rule.is_enabled, rule.cpa_multiplier, fallbackPercent]);
   const percentThresholdText = isPercentRule
-    ? `Порог считается автоматически: ${percent}% от CPA каждого найденного оффера`
+    ? `Порог считается автоматически: ${formatPercentValue(percent)}% от CPA каждого найденного оффера`
     : "Фиксированное правило без процента от CPA";
-  const hasRealPreviews = isPercentRule && offerPreviews.length > 0;
 
   return (
     <form
@@ -65,7 +90,7 @@ export function RuleEditor({ rule, offerPreviews, onSave }: RuleEditorProps) {
         event.preventDefault();
         await onSave({
           is_enabled: isEnabled,
-          cpa_multiplier: isPercentRule ? (percent / 100).toFixed(2) : undefined,
+          cpa_multiplier: isPercentRule ? (percent / 100).toFixed(4) : undefined,
         });
       }}
     >
@@ -86,23 +111,47 @@ export function RuleEditor({ rule, offerPreviews, onSave }: RuleEditorProps) {
       </div>
       {rule.description ? <div className="rule-editor__description">{rule.description}</div> : null}
       {isPercentRule ? (
-        <div className="rule-slider">
-          <div className="rule-slider__head">
-            <span>{percentPreset.percentLabel}</span>
-            <strong>{percent}% от CPA</strong>
+        <div className="rule-percent">
+          <div className="rule-percent__head">
+            <div className="rule-percent__labels">
+              <span>{percentPreset.percentLabel}</span>
+              {thresholdSummary ? <span className="rule-percent__money">{thresholdSummary}</span> : null}
+            </div>
+            <strong>{formatPercentValue(percent)}% от CPA</strong>
           </div>
-          <input
-            className="rule-slider__input"
-            type="range"
-            min={percentPreset.min}
-            max={percentPreset.max}
-            step={percentPreset.step}
-            value={percent}
-            onChange={(event) => setPercent(Number(event.target.value))}
-          />
-          <div className="rule-slider__scale">
-            <span>{percentPreset.min}%</span>
-            <span>{percentPreset.max}%</span>
+          <div className="rule-percent__input-row">
+            <input
+              className="rule-percent__slider"
+              type="range"
+              min={percentPreset.min}
+              max={percentPreset.max}
+              step={percentPreset.step}
+              value={percent}
+              onChange={(event) => setPercent(Number(event.target.value))}
+              style={{ flex: 1, marginRight: "1rem" }}
+            />
+            <input
+              className="input input--compact rule-percent__input"
+              type="number"
+              min={percentPreset.min}
+              max={percentPreset.max}
+              step={percentPreset.step}
+              value={percent}
+              onChange={(event) => setPercent(Number(event.target.value))}
+            />
+            <span className="rule-percent__suffix">%</span>
+          </div>
+          <div className="rule-percent__chips">
+            {quickPercents.map((value) => (
+              <button
+                key={`${rule.id}-${value}`}
+                type="button"
+                className={`chip${percent === value ? " chip--active" : ""}`}
+                onClick={() => setPercent(value)}
+              >
+                {value}%
+              </button>
+            ))}
           </div>
         </div>
       ) : null}
@@ -118,7 +167,7 @@ export function RuleEditor({ rule, offerPreviews, onSave }: RuleEditorProps) {
               </div>
               <div className="rule-preview-item__meta">
                 <span>CPA: {formatMoney(preview.cpaUsd)}</span>
-                <span>Код для нейминга: {preview.offerName}</span>
+                <span>Код для нейминга: {preview.offerCode}</span>
               </div>
             </div>
           ))}

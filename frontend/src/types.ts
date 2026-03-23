@@ -16,6 +16,12 @@ export type AdSummary = {
   scope_presence: string;
   last_seen_at?: string | null;
   last_decision: string;
+  last_decision_reason?: string | null;
+  last_decision_at?: string | null;
+  last_execution_state?: DecisionExecutionState | null;
+  last_action_source?: string | null;
+  last_action_at?: string | null;
+  last_action_message?: string | null;
   resolved_cpa_usd?: string | number | null;
   spend?: string | number | null;
   clicks?: number | null;
@@ -44,9 +50,17 @@ export type DecisionItem = {
   reason: string;
   action_executed: boolean;
   action_status?: string | null;
+  execution_state?: DecisionExecutionState;
   resolved_cpa_usd?: string | number | null;
   created_at: string;
 };
+
+export type DecisionExecutionState =
+  | "NOT_REQUIRED"
+  | "SKIPPED_BY_MODE"
+  | "PENDING"
+  | "SUCCEEDED"
+  | "FAILED";
 
 export type RuleItem = {
   id: string;
@@ -120,6 +134,62 @@ export type BotModeResponse = {
   auto_resume_enabled: boolean;
   observe_only_enabled: boolean;
   updated_at: string;
+};
+
+export type ServiceSettings = {
+  auto_pause_enabled: boolean;
+  auto_resume_enabled: boolean;
+  observe_only_enabled: boolean;
+  scan_interval_seconds: number;
+  vision_api_token: string;
+  telegram_bot_token: string;
+  telegram_chat_id: string;
+  vision_local_api_url: string;
+  vision_cloud_api_url: string;
+  updated_at?: string | null;
+};
+
+export type ServiceSettingsResponse = {
+  auto_pause_enabled: boolean;
+  auto_resume_enabled: boolean;
+  auto_resume_available: boolean;
+  observe_only_enabled: boolean;
+  scan_interval_seconds: number;
+  vision_local_api_url: string;
+  vision_cloud_api_url: string;
+  telegram_chat_id: string;
+  vision_api_token_masked?: string | null;
+  telegram_bot_token_masked?: string | null;
+  vision_api_token_configured: boolean;
+  telegram_bot_token_configured: boolean;
+  updated_at: string;
+};
+
+export type ServiceSettingsUpdate = Pick<
+  ServiceSettings,
+  | "auto_pause_enabled"
+  | "auto_resume_enabled"
+  | "observe_only_enabled"
+  | "scan_interval_seconds"
+  | "telegram_chat_id"
+  | "vision_local_api_url"
+  | "vision_cloud_api_url"
+> & {
+  vision_api_token?: string | null;
+  telegram_bot_token?: string | null;
+};
+
+export type SuspendedProfileItem = {
+  profile_id: string;
+  display_name: string;
+  browser_host_id: string;
+  reason: string;
+  suspended_at: string;
+};
+
+export type SuspendedProfileResetResponse = {
+  message: string;
+  profile: SuspendedProfileItem;
 };
 
 export type ApiErrorResponse = {

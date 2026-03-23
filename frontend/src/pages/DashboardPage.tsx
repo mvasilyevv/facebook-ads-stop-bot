@@ -1,290 +1,283 @@
-import { useEffect, useState, startTransition } from "react";
-import { Badge } from "../components/Badge";
-import { EmptyState } from "../components/EmptyState";
-import { SetupStepper } from "../components/SetupStepper";
+import { useEffect, useMemo, useState, startTransition } from "react";
+import { Link } from "react-router-dom";
+import { GroupedAdsBoard } from "../components/GroupedAdsBoard";
 import { SectionCard } from "../components/SectionCard";
-import { fetchHealth, fetchAds, fetchBotMode, updateBotMode, loadDashboard } from "../lib/api";
-import { formatDateTime, formatMoney, formatMetricText, formatRelativeStatus } from "../lib/format";
-import { getBadgeTone, formatDeliveryStatusLabel, TRACKED_DELIVERY_STATUSES } from "../lib/helpers";
-import type { HealthResponse, AdSummary, BotModeResponse } from "../types";
+import { useAutoRefresh } from "../hooks/useAutoRefresh";
+import { isAttentionAdSummary } from "../lib/helpers";
+import { fetchScanRuns, fetchServiceSettings, loadDashboard } from "../lib/api";
+import { formatCountdown, formatDateTime, formatRelativeStatus } from "../lib/format";
+import type { ScanRunItem, ServiceSettingsResponse } from "../types";
 
-type BotModePatch = Partial<Pick<BotModeResponse, "auto_pause_enabled" | "auto_resume_enabled" | "observe_only_enabled">>;
+type DashboardData = Awaited<ReturnType<typeof loadDashboard>>;
 
-function scoreSeenAt(value: string | null | undefined): number {
-  if (!value) return 0;
-  const stamp = new Date(value).getTime();
-  return Number.isNaN(stamp) ? 0 : stamp;
+function formatModeLabel(settings: ServiceSettingsResponse | null): string {
+  if (!settings) {
+    return "нет данных";
+  }
+  if (settings.observe_only_enabled) {
+    return "наблюдение";
+  }
+  if (settings.auto_pause_enabled || settings.auto_resume_enabled) {
+    return "боевой";
+  }
+  return "только обзор";
+}
+
+function isActiveSession(status: string): boolean {
+  const normalized = status.toLowerCase();
+  return normalized.includes("active") || normalized.includes("running") || normalized.includes("open");
+}
+
+function resolveLastScan(scans: ScanRunItem[]): ScanRunItem | null {
+  if (scans.length === 0) {
+    return null;
+  }
+
+  return [...scans].sort((left, right) => {
+    const leftStamp = new Date(left.finished_at ?? left.started_at).getTime();
+    const rightStamp = new Date(right.finished_at ?? right.started_at).getTime();
+    return rightStamp - leftStamp;
+  })[0];
+}
+
+function resolveNextScanCountdown(
+  scan: ScanRunItem | null,
+  scanIntervalSeconds: number | null,
+  nowStamp: number,
+): number | null {
+  if (scan == null || scanIntervalSeconds == null) {
+    return null;
+  }
+
+  const anchorValue = scan.finished_at ?? scan.started_at;
+  const anchorStamp = new Date(anchorValue).getTime();
+  if (Number.isNaN(anchorStamp)) {
+    return null;
+  }
+
+  const nextScanStamp = anchorStamp + scanIntervalSeconds * 1000;
+  return Math.max(0, Math.ceil((nextScanStamp - nowStamp) / 1000));
+}
+
+function resolveNextScanLabel(
+  scan: ScanRunItem | null,
+  settings: ServiceSettingsResponse | null,
+  nowStamp: number,
+): string {
+  if (!settings) {
+    return "нет данных";
+  }
+  if (!settings.auto_pause_enabled && !settings.auto_resume_enabled) {
+    return "скан выключен";
+  }
+  if (scan == null) {
+    return "ожидаем запуск";
+  }
+  if (scan.status.toUpperCase() === "RUNNING") {
+    return "выполняется";
+  }
+
+  const secondsLeft = resolveNextScanCountdown(scan, settings.scan_interval_seconds, nowStamp);
+  if (secondsLeft == null) {
+    return "нет данных";
+  }
+  if (secondsLeft <= 0) {
+    return "ожидаем запуск";
+  }
+  return formatCountdown(secondsLeft);
 }
 
 export default function DashboardPage() {
-  const [health, setHealth] = useState<HealthResponse | null>(null);
-  const [ads, setAds] = useState<AdSummary[]>([]);
-  const [botMode, setBotMode] = useState<BotModeResponse | null>(null);
+  const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
+  const [serviceSettings, setServiceSettings] = useState<ServiceSettingsResponse | null>(null);
+  const [scanRuns, setScanRuns] = useState<ScanRunItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastLoadedAt, setLastLoadedAt] = useState<string | null>(null);
-  const [updatingBotMode, setUpdatingBotMode] = useState(false);
-  const [dashboardData, setDashboardData] = useState<Awaited<ReturnType<typeof loadDashboard>> | null>(null);
+  const [nowStamp, setNowStamp] = useState(() => Date.now());
 
   async function reload(silent = false) {
-    if (!silent) setLoading(true);
+    if (!silent) {
+      setLoading(true);
+    }
     setError(null);
-    try {
-      const [h, a, b, data] = await Promise.all([
-        fetchHealth(),
-        fetchAds(),
-        fetchBotMode(),
-        loadDashboard(),
-      ]);
+
+    const [dashboardResult, settingsResult, scansResult] = await Promise.allSettled([
+      loadDashboard(),
+      fetchServiceSettings(),
+      fetchScanRuns(),
+    ]);
+    const errors: string[] = [];
+
+    if (dashboardResult.status === "fulfilled") {
       startTransition(() => {
-        setHealth(h);
-        setAds(a);
-        setBotMode(b);
-        setDashboardData(data);
+        setDashboardData(dashboardResult.value);
         setLastLoadedAt(new Date().toISOString());
-        setLoading(false);
       });
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Ошибка загрузки");
-      setLoading(false);
+    } else {
+      errors.push(dashboardResult.reason instanceof Error ? dashboardResult.reason.message : "Не удалось загрузить обзор");
     }
-  }
 
-  async function updateBotModeState(patch: BotModePatch) {
-    if (!botMode) return;
-    setUpdatingBotMode(true);
-    try {
-      const updated = await updateBotMode({
-        auto_pause_enabled: patch.auto_pause_enabled ?? botMode.auto_pause_enabled,
-        auto_resume_enabled: patch.auto_resume_enabled ?? botMode.auto_resume_enabled,
-        observe_only_enabled: patch.observe_only_enabled ?? botMode.observe_only_enabled,
-      });
+    if (settingsResult.status === "fulfilled") {
       startTransition(() => {
-        setBotMode(updated);
+        setServiceSettings(settingsResult.value);
       });
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Ошибка обновления режима");
-    } finally {
-      setUpdatingBotMode(false);
+    } else {
+      errors.push(settingsResult.reason instanceof Error ? settingsResult.reason.message : "Не удалось загрузить настройки");
     }
+
+    if (scansResult.status === "fulfilled") {
+      startTransition(() => {
+        setScanRuns(scansResult.value);
+      });
+    } else {
+      errors.push(scansResult.reason instanceof Error ? scansResult.reason.message : "Не удалось загрузить сканы");
+    }
+
+    startTransition(() => {
+      setLoading(false);
+      if (errors.length > 0) {
+        setError(errors.join(" · "));
+      }
+    });
   }
 
-  useEffect(() => { void reload(); }, []);
+  useEffect(() => {
+    void reload();
+  }, []);
 
-  const trackedAds = ads
-    .filter((ad) => ad.tracking_mode === "TRACKED")
-    .sort((a, b) => scoreSeenAt(b.last_seen_at) - scoreSeenAt(a.last_seen_at));
+  useAutoRefresh(reload, { enabled: !loading });
 
-  const deliveryBreakdown = TRACKED_DELIVERY_STATUSES.map((status) => ({
-    status,
-    count: trackedAds.filter((ad) => ad.delivery_status === status).length,
-  }));
+  useEffect(() => {
+    const timerId = window.setInterval(() => {
+      setNowStamp(Date.now());
+    }, 1000);
+
+    return () => {
+      window.clearInterval(timerId);
+    };
+  }, []);
+
+  const trackedAds = dashboardData?.ads.filter((ad) => ad.tracking_mode === "TRACKED") ?? [];
+  const staleTrackedAds = trackedAds.filter((ad) => ad.scope_presence === "NOT_SEEN_THIS_SCAN");
+  const attentionTrackedAds = trackedAds.filter((ad) => isAttentionAdSummary(ad));
+  const activeSessions = dashboardData?.sessions.filter((session) => isActiveSession(session.status)) ?? [];
+  const activeCampaigns = new Set(
+    trackedAds
+      .filter((ad) => ad.delivery_status.toUpperCase().includes("ACTIVE"))
+      .map((ad) => ad.campaign_name),
+  ).size;
+  const modeLabel = formatModeLabel(serviceSettings);
+  const lastScan = useMemo(() => resolveLastScan(scanRuns), [scanRuns]);
+  const nextScanLabel = resolveNextScanLabel(lastScan, serviceSettings, nowStamp);
 
   if (loading) {
     return <div className="page-loading">Загрузка данных...</div>;
   }
-
-  const actionTypesEnabled =
-    botMode != null && (botMode.auto_pause_enabled || botMode.auto_resume_enabled);
-  const observeOnlyEnabled = botMode?.observe_only_enabled ?? true;
-  const liveAutomationEnabled = actionTypesEnabled && !observeOnlyEnabled;
 
   return (
     <>
       <div className="page-header">
         <div>
           <h1 className="page-title">Обзор системы</h1>
-          <p className="page-subtitle">Здоровье backend и отслеживаемые объявления</p>
+          <p className="page-subtitle">Краткая сводка по состоянию backend и отслеживаемым объявлениям</p>
         </div>
         <div className="page-header__actions">
-          <span className="section-note">
-            {lastLoadedAt ? `Обновлено: ${formatDateTime(lastLoadedAt)}` : ""}
-          </span>
-          <button type="button" className="button button--primary" onClick={() => void reload(true)}>
+          <span className="section-note">{lastLoadedAt ? `Обновлено: ${formatDateTime(lastLoadedAt)}` : ""}</span>
+          <button type="button" className="button button--ghost" onClick={() => void reload(true)}>
             Обновить
           </button>
+          <Link to="/settings" className="button button--primary">
+            Настройки
+          </Link>
         </div>
       </div>
 
-      {error && <div className="inline-error">{error}</div>}
+      {error ? <div className="inline-error">{error}</div> : null}
 
-      {actionTypesEnabled && observeOnlyEnabled && (
-        <div className="message-banner">
-          Режим наблюдения: бот только пишет, что сделал бы, но не нажимает кнопки
-        </div>
-      )}
-
-      {liveAutomationEnabled && (
-        <div className="message-banner">
-          Бот автоматически управляет объявлениями в боевом режиме
-        </div>
-      )}
-
-      {botMode && (
-        <div className="bot-mode-section">
-          <div className="bot-mode-toggle">
-            <div>
-              <strong>Режим бота</strong>
-              <div className="section-note">
-                {observeOnlyEnabled ? "Сейчас: режим наблюдения" : "Сейчас: боевой режим"}
-              </div>
-            </div>
-            {updatingBotMode && <span className="section-note">Обновляется...</span>}
+      <div className="metric-grid dashboard-summary-grid">
+        <article className="metric-tile metric-tile--accent">
+          <span>Режим</span>
+          <strong>{modeLabel}</strong>
+          <div className="mini-row">
+            <span>Автопауза</span>
+            <span>{serviceSettings?.auto_pause_enabled ? "включена" : "выключена"}</span>
           </div>
-          <div className="bot-mode-grid">
-            <label className="bot-mode-item">
-              <input
-                type="checkbox"
-                checked={botMode.auto_pause_enabled}
-                onChange={() => void updateBotModeState({ auto_pause_enabled: !botMode.auto_pause_enabled })}
-                disabled={updatingBotMode}
-                className="bot-mode-checkbox"
-              />
-              <span className="bot-mode-item__text">
-                <span className="bot-mode-item__title">Автопауза</span>
-                <span className="bot-mode-item__hint">
-                  Бот может сам ставить объявление на паузу
-                </span>
-              </span>
-            </label>
-            <label className="bot-mode-item">
-              <input
-                type="checkbox"
-                checked={botMode.auto_resume_enabled}
-                onChange={() => void updateBotModeState({ auto_resume_enabled: !botMode.auto_resume_enabled })}
-                disabled={updatingBotMode}
-                className="bot-mode-checkbox"
-              />
-              <span className="bot-mode-item__text">
-                <span className="bot-mode-item__title">Авторезюм</span>
-                <span className="bot-mode-item__hint">
-                  Бот может сам возвращать объявление из паузы
-                </span>
-              </span>
-            </label>
-            <label className="bot-mode-item bot-mode-item--accent">
-              <input
-                type="checkbox"
-                checked={botMode.observe_only_enabled}
-                onChange={() => void updateBotModeState({ observe_only_enabled: !botMode.observe_only_enabled })}
-                disabled={updatingBotMode}
-                className="bot-mode-checkbox"
-              />
-              <span className="bot-mode-item__text">
-                <span className="bot-mode-item__title">Режим наблюдения</span>
-                <span className="bot-mode-item__hint">
-                  Бот продолжает мониторить и считать решения, но не выполняет действия физически
-                </span>
-              </span>
-            </label>
+        </article>
+        <article className="metric-tile">
+          <span>Частота</span>
+          <strong>{serviceSettings ? `${serviceSettings.scan_interval_seconds} секунд` : "нет данных"}</strong>
+          <div className="mini-row">
+            <span>Авторезюм</span>
+            <span>{serviceSettings?.auto_resume_available ? "доступен" : "недоступен"}</span>
           </div>
-        </div>
-      )}
-
-      {dashboardData && (
-        <SetupStepper
-          offers={dashboardData.offers}
-          rules={dashboardData.rules}
-          sessions={dashboardData.sessions}
-          botMode={botMode}
-          loading={loading}
-        />
-      )}
+          <div className="mini-row">
+            <span>До следующего скана</span>
+            <span>{nextScanLabel}</span>
+          </div>
+        </article>
+        <article className="metric-tile">
+          <span>Отслеживаемые</span>
+          <strong>{trackedAds.length}</strong>
+          <div className="mini-row">
+            <span>Нет в последнем скане</span>
+            <span>{staleTrackedAds.length}</span>
+          </div>
+        </article>
+        <article className="metric-tile">
+          <span>Статус</span>
+          <strong>{attentionTrackedAds.length > 0 ? `проверить ${attentionTrackedAds.length}` : "стабильно"}</strong>
+          <div className="mini-row">
+            <span>Активных кампаний</span>
+            <span>{activeCampaigns}</span>
+          </div>
+          <div className="mini-row">
+            <span>Сессии</span>
+            <span>{activeSessions.length}</span>
+          </div>
+        </article>
+      </div>
 
       <SectionCard
         title="Здоровье системы"
         subtitle="Краткая сводка по backend"
         actions={
           <span className="section-note">
-            {health?.timestamp ? `Снимок: ${formatDateTime(health.timestamp)}` : "Снимок отсутствует"}
+            {dashboardData?.health?.timestamp ? `Снимок: ${formatDateTime(dashboardData.health.timestamp)}` : "Снимок отсутствует"}
           </span>
         }
       >
         <div className="metric-grid">
           <article className="metric-tile metric-tile--accent">
             <span>Сервис</span>
-            <strong>{health?.service ?? "API"}</strong>
+            <strong>{dashboardData?.health?.service ?? "API"}</strong>
           </article>
           <article className="metric-tile">
             <span>Статус</span>
-            <strong>{health ? formatRelativeStatus(health.status) : "нет ответа"}</strong>
+            <strong>{dashboardData?.health ? formatRelativeStatus(dashboardData.health.status) : "нет ответа"}</strong>
           </article>
           <article className="metric-tile">
             <span>Окружение</span>
-            <strong>{health?.environment ?? "неизвестно"}</strong>
+            <strong>{dashboardData?.health?.environment ?? "неизвестно"}</strong>
           </article>
           <article className="metric-tile">
             <span>База данных</span>
-            <strong>{health?.database_status ?? "нет данных"}</strong>
+            <strong>{dashboardData?.health?.database_status ?? "нет данных"}</strong>
           </article>
         </div>
       </SectionCard>
 
       <SectionCard
-        title="Отслеживаемые объявления"
-        subtitle="Сводка по объявлениям в отслеживании"
-        actions={<span className="section-note">Всего: {trackedAds.length}</span>}
+        title="Плиточный обзор"
+        subtitle="Короткая сводка по объявлениям с последним понятным действием прямо в карточке"
+        actions={<Link to="/ads" className="button button--ghost button--small">Открыть объявления</Link>}
       >
-        <div className="metric-grid">
-          <article className="metric-tile metric-tile--accent">
-            <span>Всего отслеживаемых</span>
-            <strong>{trackedAds.length}</strong>
-          </article>
-          {deliveryBreakdown.map((item) => (
-            <article key={item.status} className="metric-tile">
-              <span>{formatDeliveryStatusLabel(item.status)}</span>
-              <strong>{item.count}</strong>
-            </article>
-          ))}
-        </div>
-        <div className="table-wrap">
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Объявление</th>
-                <th>Статус</th>
-                <th>Расход</th>
-                <th>Клики</th>
-                <th>CPC</th>
-                <th>Лиды</th>
-                <th>CPL</th>
-                <th>Рег.</th>
-                <th>CPR</th>
-                <th>Деп.</th>
-                <th>Снимок</th>
-              </tr>
-            </thead>
-            <tbody>
-              {trackedAds.length === 0 ? (
-                <tr>
-                  <td colSpan={11}>
-                    <EmptyState title="Нет отслеживаемых" description="Отслеживаемые объявления появятся после загрузки." />
-                  </td>
-                </tr>
-              ) : (
-                trackedAds.map((ad) => (
-                  <tr key={ad.fb_ad_id}>
-                    <td>
-                      <strong>{ad.ad_name}</strong>
-                      <div className="muted">{ad.campaign_name} · {ad.adset_name}</div>
-                      <div className="mono">{ad.fb_ad_id}</div>
-                    </td>
-                    <td><Badge tone={getBadgeTone(ad.delivery_status)}>{formatRelativeStatus(ad.delivery_status)}</Badge></td>
-                    <td>{formatMoney(ad.spend)}</td>
-                    <td>{formatMetricText(ad.clicks)}</td>
-                    <td>{formatMoney(ad.cpc)}</td>
-                    <td>{formatMetricText(ad.leads)}</td>
-                    <td>{formatMoney(ad.cost_per_lead)}</td>
-                    <td>{formatMetricText(ad.registrations)}</td>
-                    <td>{formatMoney(ad.cost_per_registration)}</td>
-                    <td>{formatMetricText(ad.deposits)}</td>
-                    <td>{formatDateTime(ad.last_seen_at)}</td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
+        <GroupedAdsBoard
+          ads={trackedAds}
+          emptyTitle="Нет отслеживаемых объявлений"
+          emptyDescription="Отслеживаемые объявления появятся после загрузки backend."
+          compact
+        />
       </SectionCard>
     </>
   );

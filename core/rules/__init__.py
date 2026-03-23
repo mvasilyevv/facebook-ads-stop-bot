@@ -1,5 +1,6 @@
 from core.rules.cpa_thresholds import ThresholdPack, build_threshold_pack
 from core.rules.evaluator import (
+    RESUME_REASON_INSUFFICIENT_CLEAN_STREAK,
     CleanScanState,
     MetricsSnapshot,
     ResumeDecision,
@@ -10,6 +11,7 @@ from core.rules.evaluator import (
 __all__ = [
     "CleanScanState",
     "MetricsSnapshot",
+    "RESUME_REASON_INSUFFICIENT_CLEAN_STREAK",
     "ResumeDecision",
     "ThresholdPack",
     "build_threshold_pack",

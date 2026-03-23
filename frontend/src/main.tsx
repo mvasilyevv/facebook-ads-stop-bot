@@ -1,11 +1,10 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Navigate, Routes, Route } from "react-router-dom";
 import { Layout } from "./components/Layout";
 import DashboardPage from "./pages/DashboardPage";
 import AdsPage from "./pages/AdsPage";
-import DecisionsPage from "./pages/DecisionsPage";
-import RulesPage from "./pages/RulesPage";
+import SettingsPage from "./pages/SettingsPage";
 import OffersPage from "./pages/OffersPage";
 import SessionsPage from "./pages/SessionsPage";
 import ScansPage from "./pages/ScansPage";
@@ -18,8 +17,9 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
         <Route element={<Layout />}>
           <Route path="/" element={<DashboardPage />} />
           <Route path="/ads" element={<AdsPage />} />
-          <Route path="/decisions" element={<DecisionsPage />} />
-          <Route path="/rules" element={<RulesPage />} />
+          <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/decisions" element={<Navigate to="/settings" replace />} />
+          <Route path="/rules" element={<Navigate to="/settings" replace />} />
           <Route path="/offers" element={<OffersPage />} />
           <Route path="/sessions" element={<SessionsPage />} />
           <Route path="/scans" element={<ScansPage />} />

@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.domain import (
@@ -15,8 +15,10 @@ from core.domain import (
     ScanRunStatus,
     TrackingMode,
 )
+from core.models.browser import BrowserHost, Profile
 from core.models.operations import ActionExecution, ControlFlag, Decision, ScanRun, SystemSetting
 from core.repositories.base import AsyncRepository
+from core.rules.evaluator import RESUME_REASON_INSUFFICIENT_CLEAN_STREAK
 
 
 class DecisionsRepository(AsyncRepository):
@@ -75,22 +77,98 @@ class DecisionsRepository(AsyncRepository):
         return list(result.all())
 
     async def get_clean_streak_count(self, fb_ad_id: str) -> int:
-        """Считает количество последних подряд решений NO_ACTION/WOULD_RESUME для объявления."""
+        """Считает количество последних подряд чистых паузных решений для объявления."""
 
         stmt = (
-            select(Decision.decision)
+            select(Decision.decision, Decision.reason)
             .where(Decision.fb_ad_id == fb_ad_id)
             .order_by(Decision.created_at.desc())
             .limit(50)
         )
-        result = await self.session.scalars(stmt)
+        result = await self.session.execute(stmt)
         streak = 0
-        for decision_type in result.all():
-            if decision_type in {DecisionType.NO_ACTION, DecisionType.WOULD_RESUME}:
+        for decision_type, reason in result.all():
+            if decision_type == DecisionType.WOULD_RESUME:
+                streak += 1
+                continue
+            if (
+                decision_type == DecisionType.KEPT_PAUSED_BY_VIABILITY
+                and reason == RESUME_REASON_INSUFFICIENT_CLEAN_STREAK
+            ):
                 streak += 1
                 continue
             break
         return streak
+
+    async def get_latest_decisions(self, fb_ad_ids: list[str]) -> dict[str, Decision]:
+        """Возвращает последнее решение для каждого объявления из списка."""
+
+        if not fb_ad_ids:
+            return {}
+
+        ranked_decisions = (
+            select(
+                Decision.id.label("decision_id"),
+                Decision.fb_ad_id.label("fb_ad_id"),
+                func.row_number()
+                .over(
+                    partition_by=Decision.fb_ad_id,
+                    order_by=(Decision.created_at.desc(), Decision.id.desc()),
+                )
+                .label("row_number"),
+            )
+            .where(Decision.fb_ad_id.in_(fb_ad_ids))
+            .subquery()
+        )
+
+        result = await self.session.scalars(
+            select(Decision)
+            .join(
+                ranked_decisions,
+                Decision.id == ranked_decisions.c.decision_id,
+            )
+            .where(ranked_decisions.c.row_number == 1)
+        )
+        return {decision.fb_ad_id: decision for decision in result.all()}
+
+    async def get_latest_action_executions(
+        self,
+        decision_ids: list[str],
+    ) -> dict[str, ActionExecution]:
+        """Возвращает последнее выполнение действия для каждого решения."""
+
+        if not decision_ids:
+            return {}
+        normalized_decision_ids = [
+            self._coerce_uuid(decision_id)
+            for decision_id in decision_ids
+            if decision_id is not None
+        ]
+
+        ranked_actions = (
+            select(
+                ActionExecution.id.label("action_execution_id"),
+                ActionExecution.decision_id.label("decision_id"),
+                func.row_number()
+                .over(
+                    partition_by=ActionExecution.decision_id,
+                    order_by=(ActionExecution.started_at.desc(), ActionExecution.id.desc()),
+                )
+                .label("row_number"),
+            )
+            .where(ActionExecution.decision_id.in_(normalized_decision_ids))
+            .subquery()
+        )
+
+        result = await self.session.scalars(
+            select(ActionExecution)
+            .join(
+                ranked_actions,
+                ActionExecution.id == ranked_actions.c.action_execution_id,
+            )
+            .where(ranked_actions.c.row_number == 1)
+        )
+        return {str(action.decision_id): action for action in result.all()}
 
     async def add_action_execution(
         self,
@@ -238,6 +316,33 @@ class ScanRunsRepository(AsyncRepository):
     async def list_scan_runs(self) -> list[ScanRun]:
         result = await self.session.scalars(select(ScanRun).order_by(ScanRun.started_at.desc()))
         return list(result.all())
+
+    async def list_recent_scan_runs_for_profile(
+        self,
+        profile_id: UUID | str,
+        *,
+        limit: int = 10,
+    ) -> list[ScanRun]:
+        result = await self.session.scalars(
+            select(ScanRun)
+            .where(ScanRun.profile_id == self._coerce_uuid(profile_id))
+            .order_by(ScanRun.started_at.desc())
+            .limit(limit)
+        )
+        return list(result.all())
+
+    async def list_scan_run_rows(self) -> list[tuple[ScanRun, str | None, str | None]]:
+        stmt = (
+            select(ScanRun, BrowserHost.name, Profile.vendor_profile_id)
+            .outerjoin(BrowserHost, ScanRun.browser_host_id == BrowserHost.id)
+            .outerjoin(Profile, ScanRun.profile_id == Profile.id)
+            .order_by(ScanRun.started_at.desc())
+        )
+        result = await self.session.execute(stmt)
+        return [
+            (scan_run, browser_host_name, vendor_profile_id)
+            for scan_run, browser_host_name, vendor_profile_id in result.all()
+        ]
 
     async def update_scan_run(
         self,

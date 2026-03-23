@@ -2,6 +2,7 @@ from core.scanner.models import (
     ScannedAdRow,
     ScannerDecisionResult,
     ScannerPolicyFlags,
+    ScannerScopeUnavailableError,
     ScanScopeSummary,
     build_adset_scope_key,
     build_campaign_scope_key,
@@ -14,13 +15,18 @@ from core.scanner.service import (
     evaluate_scanned_row,
     to_metrics_snapshot,
 )
-from core.scanner.utils import StatusNormalizer, normalize_delivery_status, parse_scanner_decimal
+from core.scanner.utils import (
+    StatusNormalizer,
+    normalize_delivery_status,
+    parse_scanner_decimal,
+)
 
 __all__ = [
     "ObserveScannerService",
     "ScanScopeSummary",
     "ScannerDecisionResult",
     "ScannerPolicyFlags",
+    "ScannerScopeUnavailableError",
     "ScannerProvider",
     "ScannedAdRow",
     "StatusNormalizer",

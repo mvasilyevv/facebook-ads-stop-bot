@@ -241,7 +241,7 @@ class VisionAdapter:
             raw_list = payload.get("data") or payload.get("profiles") or []
             for item in raw_list:
                 if isinstance(item, dict):
-                    pid = item.get("profile_id")
+                    pid = item.get("profile_id") or item.get("id")
                     fid = item.get("folder_id")
                     if pid and fid:
                         _folder_id_cache[str(pid)] = str(fid)

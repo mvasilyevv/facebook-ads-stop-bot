@@ -6,13 +6,14 @@ from decimal import Decimal
 
 from core.domain import DecisionType, DeliveryStatus, ScopePresence, TrackingMode
 from core.rules import (
+    RESUME_REASON_INSUFFICIENT_CLEAN_STREAK,
     CleanScanState,
     MetricsSnapshot,
     build_threshold_pack,
     evaluate_pause_reasons,
     evaluate_resume,
 )
-from core.rules.types import RulePercentages
+from core.rules.types import RulePercentages, RuleSwitches
 from core.scanner.models import (
     ScannedAdRow,
     ScannerDecisionResult,
@@ -20,12 +21,21 @@ from core.scanner.models import (
     ScanScopeSummary,
 )
 
+_RESUME_REQUIRES_SYSTEM_PAUSE_REASON = (
+    "Автовключение разрешено только для объявлений, поставленных на паузу системой"
+)
+
 
 class ObserveScannerService:
     """Чистая логика observe-фазы без Playwright и без БД."""
 
-    def __init__(self, percentages: RulePercentages | None = None) -> None:
+    def __init__(
+        self,
+        percentages: RulePercentages | None = None,
+        rule_switches: RuleSwitches | None = None,
+    ) -> None:
         self._percentages = percentages or RulePercentages()
+        self._rule_switches = rule_switches or RuleSwitches()
 
     def evaluate_row(
         self,
@@ -58,24 +68,9 @@ class ObserveScannerService:
 
         thresholds = build_threshold_pack(resolved_cpa_usd, self._percentages)
         snapshot = to_metrics_snapshot(row)
-        pause_reasons = tuple(evaluate_pause_reasons(snapshot, thresholds))
-
-        if row.delivery_status == DeliveryStatus.PAUSED and flags.auto_resume_enabled:
-            resume_decision = evaluate_resume(
-                snapshot=snapshot,
-                thresholds=thresholds,
-                clean_scans=CleanScanState(streak=clean_streak),
-                delivery_status=row.delivery_status,
-                is_blocked=flags.is_blocked,
-            )
-            if resume_decision.should_resume:
-                return ScannerDecisionResult(
-                    decision=DecisionType.WOULD_RESUME,
-                    reason=resume_decision.reason,
-                    resolved_cpa_usd=resolved_cpa_usd,
-                    thresholds=thresholds,
-                    resume_reason=resume_decision.reason,
-                )
+        pause_reasons = tuple(
+            evaluate_pause_reasons(snapshot, thresholds, switches=self._rule_switches)
+        )
 
         if row.delivery_status != DeliveryStatus.PAUSED and pause_reasons:
             return ScannerDecisionResult(
@@ -86,14 +81,64 @@ class ObserveScannerService:
                 stop_reasons=pause_reasons,
             )
 
-        if row.delivery_status == DeliveryStatus.PAUSED and pause_reasons:
-            return ScannerDecisionResult(
-                decision=DecisionType.KEPT_PAUSED_BY_VIABILITY,
-                reason="Объявление остается на паузе — метрики всё ещё нарушают стоп-правила",
-                resolved_cpa_usd=resolved_cpa_usd,
-                thresholds=thresholds,
-                stop_reasons=pause_reasons,
-            )
+        if row.delivery_status == DeliveryStatus.PAUSED:
+            if flags.auto_resume_enabled:
+                if not flags.resume_owned_by_system:
+                    return ScannerDecisionResult(
+                        decision=DecisionType.KEPT_PAUSED_BY_VIABILITY,
+                        reason=_RESUME_REQUIRES_SYSTEM_PAUSE_REASON,
+                        resolved_cpa_usd=resolved_cpa_usd,
+                        thresholds=thresholds,
+                        stop_reasons=pause_reasons,
+                    )
+
+                resume_decision = evaluate_resume(
+                    snapshot=snapshot,
+                    thresholds=thresholds,
+                    clean_scans=CleanScanState(streak=clean_streak),
+                    delivery_status=row.delivery_status,
+                    is_blocked=flags.is_blocked,
+                    switches=self._rule_switches,
+                )
+                if resume_decision.should_resume:
+                    return ScannerDecisionResult(
+                        decision=DecisionType.WOULD_RESUME,
+                        reason=resume_decision.reason,
+                        resolved_cpa_usd=resolved_cpa_usd,
+                        thresholds=thresholds,
+                        resume_reason=resume_decision.reason,
+                    )
+                if pause_reasons:
+                    return ScannerDecisionResult(
+                        decision=DecisionType.KEPT_PAUSED_BY_VIABILITY,
+                        reason="Объявление остается на паузе — метрики всё ещё нарушают стоп-правила",
+                        resolved_cpa_usd=resolved_cpa_usd,
+                        thresholds=thresholds,
+                        stop_reasons=pause_reasons,
+                    )
+                if resume_decision.reason == RESUME_REASON_INSUFFICIENT_CLEAN_STREAK:
+                    return ScannerDecisionResult(
+                        decision=DecisionType.KEPT_PAUSED_BY_VIABILITY,
+                        reason=resume_decision.reason,
+                        resolved_cpa_usd=resolved_cpa_usd,
+                        thresholds=thresholds,
+                    )
+                return ScannerDecisionResult(
+                    decision=DecisionType.KEPT_PAUSED_BY_VIABILITY,
+                    reason=resume_decision.reason,
+                    resolved_cpa_usd=resolved_cpa_usd,
+                    thresholds=thresholds,
+                    stop_reasons=pause_reasons,
+                )
+
+            if pause_reasons:
+                return ScannerDecisionResult(
+                    decision=DecisionType.KEPT_PAUSED_BY_VIABILITY,
+                    reason="Объявление остается на паузе — метрики всё ещё нарушают стоп-правила",
+                    resolved_cpa_usd=resolved_cpa_usd,
+                    thresholds=thresholds,
+                    stop_reasons=pause_reasons,
+                )
 
         return ScannerDecisionResult(
             decision=DecisionType.NO_ACTION,
@@ -167,10 +212,11 @@ def evaluate_scanned_row(
     policy_flags: ScannerPolicyFlags | None = None,
     clean_streak: int = 0,
     percentages: RulePercentages | None = None,
+    rule_switches: RuleSwitches | None = None,
 ) -> ScannerDecisionResult:
     """Удобный фасад для оценки одного объявления без создания сервиса вручную."""
 
-    service = ObserveScannerService(percentages=percentages)
+    service = ObserveScannerService(percentages=percentages, rule_switches=rule_switches)
     return service.evaluate_row(
         row=row,
         resolved_cpa_usd=resolved_cpa_usd,

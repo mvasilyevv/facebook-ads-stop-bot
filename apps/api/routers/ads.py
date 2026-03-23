@@ -6,8 +6,14 @@ from fastapi import APIRouter, HTTPException, status
 
 from apps.api.deps import DbSessionDep
 from apps.api.schemas.ads import AdActionResponse, AdBlockRequest, AdDetail, AdSummary
+from apps.api.schemas.common import ExecutionState
 from core.domain import DecisionType, EntityType, ScopePresence, TrackingMode
-from core.repositories import AdsRepository, ControlFlagsRepository, OffersRepository
+from core.repositories import (
+    AdsRepository,
+    ControlFlagsRepository,
+    DecisionsRepository,
+    OffersRepository,
+)
 
 router = APIRouter(prefix="/ads", tags=["ads"])
 
@@ -26,7 +32,26 @@ async def _resolve_ad_cpa(repo: OffersRepository, ad) -> object:
     return rate.cpa_usd
 
 
-async def _map_ad_summary(ad, offers_repo: OffersRepository) -> AdSummary:
+def _resolve_execution_state(decision) -> ExecutionState:
+    raw_status = (decision.action_status or "").strip().upper()
+    if raw_status in {item.value for item in ExecutionState}:
+        return ExecutionState(raw_status)
+    if decision.action_executed:
+        return ExecutionState.SUCCEEDED
+    if decision.decision == DecisionType.NO_ACTION:
+        return ExecutionState.NOT_REQUIRED
+    if decision.decision in {DecisionType.WOULD_PAUSE, DecisionType.WOULD_RESUME}:
+        return ExecutionState.SKIPPED_BY_MODE
+    return ExecutionState.NOT_REQUIRED
+
+
+async def _map_ad_summary(
+    ad,
+    offers_repo: OffersRepository,
+    metric_snapshot=None,
+    latest_decision=None,
+    latest_action_execution=None,
+) -> AdSummary:
     return AdSummary(
         fb_ad_id=ad.fb_ad_id,
         campaign_name=ad.campaign.name,
@@ -37,13 +62,47 @@ async def _map_ad_summary(ad, offers_repo: OffersRepository) -> AdSummary:
         scope_presence=ad.scope_presence.value,
         last_seen_at=ad.last_seen_at,
         last_decision=ad.last_decision.value,
+        last_decision_reason=latest_decision.reason if latest_decision is not None else None,
+        last_decision_at=latest_decision.created_at if latest_decision is not None else None,
+        last_execution_state=_resolve_execution_state(latest_decision)
+        if latest_decision is not None
+        else None,
+        last_action_source=ad.last_action_source,
+        last_action_at=ad.last_action_at,
+        last_action_message=latest_action_execution.message
+        if latest_action_execution is not None
+        else None,
         resolved_cpa_usd=await _resolve_ad_cpa(offers_repo, ad),
+        spend=metric_snapshot.spend if metric_snapshot is not None else None,
+        clicks=metric_snapshot.clicks if metric_snapshot is not None else None,
+        cpc=metric_snapshot.cpc if metric_snapshot is not None else None,
+        leads=metric_snapshot.leads if metric_snapshot is not None else None,
+        cost_per_lead=metric_snapshot.cost_per_lead if metric_snapshot is not None else None,
+        registrations=metric_snapshot.registrations if metric_snapshot is not None else None,
+        cost_per_registration=metric_snapshot.cost_per_registration
+        if metric_snapshot is not None
+        else None,
+        deposits=metric_snapshot.deposits if metric_snapshot is not None else None,
     )
 
 
-async def _map_ad_detail(ad, offers_repo: OffersRepository) -> AdDetail:
+async def _map_ad_detail(
+    ad,
+    offers_repo: OffersRepository,
+    metric_snapshot=None,
+    latest_decision=None,
+    latest_action_execution=None,
+) -> AdDetail:
     return AdDetail(
-        **(await _map_ad_summary(ad, offers_repo)).model_dump(),
+        **(
+            await _map_ad_summary(
+                ad,
+                offers_repo,
+                metric_snapshot,
+                latest_decision,
+                latest_action_execution,
+            )
+        ).model_dump(),
         campaign_scope_key=ad.campaign.scope_key,
         adset_scope_key=ad.adset.scope_key,
         last_scan_run_id=str(ad.last_scan_run_id) if ad.last_scan_run_id is not None else None,
@@ -56,18 +115,51 @@ async def _map_ad_detail(ad, offers_repo: OffersRepository) -> AdDetail:
 async def list_ads(session: DbSessionDep) -> list[AdSummary]:
     ads_repo = AdsRepository(session)
     offers_repo = OffersRepository(session)
+    decisions_repo = DecisionsRepository(session)
     ads = await ads_repo.list_ads()
-    return [await _map_ad_summary(ad, offers_repo) for ad in ads]
+    fb_ad_ids = [ad.fb_ad_id for ad in ads]
+    latest_snapshots = await ads_repo.get_latest_metric_snapshots(fb_ad_ids)
+    latest_decisions = await decisions_repo.get_latest_decisions(fb_ad_ids)
+    latest_action_executions = await decisions_repo.get_latest_action_executions(
+        [str(decision.id) for decision in latest_decisions.values()]
+    )
+    return [
+        await _map_ad_summary(
+            ad,
+            offers_repo,
+            latest_snapshots.get(ad.fb_ad_id),
+            latest_decisions.get(ad.fb_ad_id),
+            latest_action_executions.get(str(latest_decisions[ad.fb_ad_id].id))
+            if ad.fb_ad_id in latest_decisions
+            else None,
+        )
+        for ad in ads
+    ]
 
 
 @router.get("/{fb_ad_id}", response_model=AdDetail)
 async def get_ad(fb_ad_id: str, session: DbSessionDep) -> AdDetail:
     ads_repo = AdsRepository(session)
     offers_repo = OffersRepository(session)
+    decisions_repo = DecisionsRepository(session)
     ad = await ads_repo.get_ad_by_fb_id(fb_ad_id)
     if ad is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Объявление не найдено")
-    return await _map_ad_detail(ad, offers_repo)
+    latest_snapshots = await ads_repo.get_latest_metric_snapshots([ad.fb_ad_id])
+    latest_decisions = await decisions_repo.get_latest_decisions([ad.fb_ad_id])
+    latest_decision = latest_decisions.get(ad.fb_ad_id)
+    latest_action_executions = await decisions_repo.get_latest_action_executions(
+        [str(latest_decision.id)] if latest_decision is not None else []
+    )
+    return await _map_ad_detail(
+        ad,
+        offers_repo,
+        latest_snapshots.get(ad.fb_ad_id),
+        latest_decision,
+        latest_action_executions.get(str(latest_decision.id))
+        if latest_decision is not None
+        else None,
+    )
 
 
 @router.post("/{fb_ad_id}/block", response_model=AdActionResponse)

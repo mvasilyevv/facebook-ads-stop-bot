@@ -3,6 +3,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 from core.rules import MetricsSnapshot, build_threshold_pack, evaluate_pause_reasons
+from core.rules.types import RuleSwitches
 
 _THRESHOLDS = build_threshold_pack(Decimal("5.00"))
 
@@ -50,6 +51,33 @@ def test_cpc_at_exact_threshold_does_not_trigger() -> None:
     assert "Клик превысил допустимую долю CPA" not in reasons
 
 
+# Правило 1: расход без единого клика выше порога должен останавливать объявление.
+def test_spend_above_click_threshold_without_clicks_triggers() -> None:
+    snapshot = MetricsSnapshot(
+        spend=Decimal("0.16"),
+        clicks=0,
+        cpc=None,
+    )
+    reasons = evaluate_pause_reasons(snapshot, _THRESHOLDS)
+    assert "Расход уже превысил порог клика без самого клика" in reasons
+
+
+# Проверяет, что отключённое правило дорогого клика не срабатывает ни по CPC, ни по расходу без клика.
+def test_disabled_click_rule_skips_click_stage_reasons() -> None:
+    snapshot = MetricsSnapshot(
+        spend=Decimal("0.16"),
+        clicks=0,
+        cpc=Decimal("0.11"),
+    )
+    reasons = evaluate_pause_reasons(
+        snapshot,
+        _THRESHOLDS,
+        switches=RuleSwitches(stop_high_cpc=False),
+    )
+    assert "Клик превысил допустимую долю CPA" not in reasons
+    assert "Расход уже превысил порог клика без самого клика" not in reasons
+
+
 # Правило 2: лид превысил допустимую долю CPA.
 def test_cpl_exceeds_threshold() -> None:
     snapshot = MetricsSnapshot(
@@ -70,6 +98,19 @@ def test_cpl_at_exact_threshold_does_not_trigger() -> None:
     )
     reasons = evaluate_pause_reasons(snapshot, _THRESHOLDS)
     assert "Лид превысил допустимую долю CPA" not in reasons
+
+
+# Правило 2: расход без лидов выше порога должен останавливать объявление.
+def test_spend_above_lead_threshold_without_leads_triggers() -> None:
+    snapshot = MetricsSnapshot(
+        spend=Decimal("0.51"),
+        clicks=5,
+        cpc=Decimal("0.08"),
+        leads=0,
+        cost_per_lead=None,
+    )
+    reasons = evaluate_pause_reasons(snapshot, _THRESHOLDS)
+    assert "Расход уже превысил порог лида без самого лида" in reasons
 
 
 # Правило 3: регистрация превысила допустимую долю CPA.
@@ -94,6 +135,22 @@ def test_registration_cost_at_exact_threshold_does_not_trigger() -> None:
     )
     reasons = evaluate_pause_reasons(snapshot, _THRESHOLDS)
     assert "Регистрация превысила допустимую долю CPA" not in reasons
+
+
+# Правило 3: расход без регистраций выше порога должен останавливать объявление.
+def test_spend_above_registration_threshold_without_registrations_triggers() -> None:
+    snapshot = MetricsSnapshot(
+        spend=Decimal("1.01"),
+        clicks=9,
+        cpc=Decimal("0.07"),
+        leads=2,
+        cost_per_lead=Decimal("0.35"),
+        registrations=0,
+        cost_per_registration=None,
+        deposits=0,
+    )
+    reasons = evaluate_pause_reasons(snapshot, _THRESHOLDS)
+    assert "Расход уже превысил порог регистрации без самой регистрации" in reasons
 
 
 # Правило 4: пять регистраций без депозитов.

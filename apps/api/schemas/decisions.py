@@ -5,7 +5,7 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict
 
-from apps.api.schemas.common import DecisionKind
+from apps.api.schemas.common import DecisionKind, ExecutionState
 
 
 class DecisionItem(BaseModel):
@@ -19,5 +19,6 @@ class DecisionItem(BaseModel):
     reason: str
     action_executed: bool
     action_status: str | None
+    execution_state: ExecutionState
     resolved_cpa_usd: Decimal | None = None
     created_at: datetime

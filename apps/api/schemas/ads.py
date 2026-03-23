@@ -5,7 +5,13 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from apps.api.schemas.common import DecisionKind, DeliveryStatus, ScopePresence, TrackingMode
+from apps.api.schemas.common import (
+    DecisionKind,
+    DeliveryStatus,
+    ExecutionState,
+    ScopePresence,
+    TrackingMode,
+)
 
 
 class AdSummary(BaseModel):
@@ -20,7 +26,21 @@ class AdSummary(BaseModel):
     scope_presence: ScopePresence = ScopePresence.NOT_SEEN_THIS_SCAN
     last_seen_at: datetime | None = None
     last_decision: DecisionKind = DecisionKind.NO_ACTION
+    last_decision_reason: str | None = None
+    last_decision_at: datetime | None = None
+    last_execution_state: ExecutionState | None = None
+    last_action_source: str | None = None
+    last_action_at: datetime | None = None
+    last_action_message: str | None = None
     resolved_cpa_usd: Decimal | None = None
+    spend: Decimal | None = None
+    clicks: int | None = None
+    cpc: Decimal | None = None
+    leads: int | None = None
+    cost_per_lead: Decimal | None = None
+    registrations: int | None = None
+    cost_per_registration: Decimal | None = None
+    deposits: int | None = None
 
 
 class AdDetail(AdSummary):

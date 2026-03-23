@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -28,6 +28,14 @@ class ActiveProfileRecord:
     browser_host: BrowserHost
 
 
+@dataclass(slots=True, frozen=True)
+class SuspendedProfileRecord:
+    """Профиль, для которого сканирование временно остановлено."""
+
+    profile: Profile
+    browser_host: BrowserHost
+
+
 class BrowserRepository(AsyncRepository):
     """Репозиторий browser host, профилей и последних сессий."""
 
@@ -37,6 +45,9 @@ class BrowserRepository(AsyncRepository):
     async def get_browser_host_by_name(self, name: str) -> BrowserHost | None:
         result = await self.session.scalars(select(BrowserHost).where(BrowserHost.name == name))
         return result.first()
+
+    async def get_browser_host(self, browser_host_id: str) -> BrowserHost | None:
+        return await self.session.get(BrowserHost, browser_host_id)
 
     async def upsert_browser_host(
         self,
@@ -179,7 +190,11 @@ class BrowserRepository(AsyncRepository):
         stmt = (
             select(Profile, BrowserHost)
             .join(BrowserHost, Profile.browser_host_id == BrowserHost.id)
-            .where(Profile.is_active.is_(True), BrowserHost.is_enabled.is_(True))
+            .where(
+                Profile.is_active.is_(True),
+                BrowserHost.is_enabled.is_(True),
+                Profile.scan_suspended.is_(False),
+            )
             .order_by(BrowserHost.name, Profile.vendor_profile_id)
         )
         result = await self.session.execute(stmt)
@@ -187,3 +202,36 @@ class BrowserRepository(AsyncRepository):
             ActiveProfileRecord(profile=profile, browser_host=browser_host)
             for profile, browser_host in result.all()
         ]
+
+    async def list_suspended_profiles(self) -> list[SuspendedProfileRecord]:
+        stmt = (
+            select(Profile, BrowserHost)
+            .join(BrowserHost, Profile.browser_host_id == BrowserHost.id)
+            .where(Profile.scan_suspended.is_(True))
+            .order_by(Profile.scan_suspend_at.desc(), Profile.vendor_profile_id)
+        )
+        result = await self.session.execute(stmt)
+        return [
+            SuspendedProfileRecord(profile=profile, browser_host=browser_host)
+            for profile, browser_host in result.all()
+        ]
+
+    async def suspend_profile_scan(self, vendor_profile_id: str, reason: str) -> Profile | None:
+        profile = await self.get_profile_by_vendor_id(vendor_profile_id)
+        if profile is None:
+            return None
+        profile.scan_suspended = True
+        profile.scan_suspend_reason = reason
+        profile.scan_suspend_at = datetime.now(tz=UTC)
+        await self.session.flush()
+        return profile
+
+    async def reset_profile_scan_suspension(self, vendor_profile_id: str) -> Profile | None:
+        profile = await self.get_profile_by_vendor_id(vendor_profile_id)
+        if profile is None:
+            return None
+        profile.scan_suspended = False
+        profile.scan_suspend_reason = None
+        profile.scan_suspend_at = None
+        await self.session.flush()
+        return profile

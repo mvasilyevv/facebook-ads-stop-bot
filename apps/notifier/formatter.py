@@ -24,6 +24,8 @@ class TelegramMessageFormatter:
                 return self._format_worker_error(event)
             case TelegramEventType.SCOPE_INVALID:
                 return self._format_scope_invalid(event)
+            case TelegramEventType.SCAN_SOURCE_UNAVAILABLE:
+                return self._format_scan_source_unavailable(event)
 
     def _format_header(self, title: str, event: TelegramEvent) -> str:
         payload = event.payload
@@ -98,4 +100,16 @@ class TelegramMessageFormatter:
             "⚠️ Скан текущего scope признан невалидным\n\n"
             f"Хост: {payload.host}\n"
             f"Причина: {payload.reason}"
+        )
+
+    def _format_scan_source_unavailable(self, event: TelegramEvent) -> str:
+        payload = event.payload
+        profile_id = payload.extra.get("profile_id", "unknown")
+        attempts = payload.extra.get("attempts", "1")
+        return (
+            "⚠️ Сканирование профиля остановлено\n\n"
+            f"Хост: {payload.host}\n"
+            f"Профиль: {profile_id}\n"
+            f"Причина: {payload.reason}\n"
+            f"Попыток подряд: {attempts}"
         )

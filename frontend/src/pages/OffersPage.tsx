@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useState, startTransition } from "react";
 import { Badge } from "../components/Badge";
 import { EmptyState } from "../components/EmptyState";
 import { SectionCard } from "../components/SectionCard";
+import { useAutoRefresh } from "../hooks/useAutoRefresh";
 import { fetchOffers, createOffer, deleteOffer } from "../lib/api";
 import { formatMoney } from "../lib/format";
 import type { OfferItem } from "../types";
@@ -27,6 +28,8 @@ export default function OffersPage() {
   }
 
   useEffect(() => { void reload(); }, []);
+
+  useAutoRefresh(reload, { enabled: !loading });
 
   async function runAction(action: () => Promise<unknown>, successMsg: string) {
     setMessage(null);

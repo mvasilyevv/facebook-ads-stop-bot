@@ -35,6 +35,9 @@ class Profile(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     display_name: Mapped[str] = mapped_column(String(255))
     is_active: Mapped[bool] = mapped_column(Boolean, default=False)
     last_launch_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    scan_suspended: Mapped[bool] = mapped_column(Boolean, default=False)
+    scan_suspend_reason: Mapped[str | None] = mapped_column(String(500))
+    scan_suspend_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     browser_host: Mapped[BrowserHost] = relationship(back_populates="profiles")
     browser_sessions: Mapped[list["BrowserSession"]] = relationship(back_populates="profile")

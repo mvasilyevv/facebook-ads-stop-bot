@@ -38,6 +38,14 @@ class DecisionKind(StrEnum):
     KEPT_PAUSED_BY_VIABILITY = "KEPT_PAUSED_BY_VIABILITY"
 
 
+class ExecutionState(StrEnum):
+    NOT_REQUIRED = "NOT_REQUIRED"
+    SKIPPED_BY_MODE = "SKIPPED_BY_MODE"
+    PENDING = "PENDING"
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
+
+
 class SessionStatus(StrEnum):
     ACTIVE = "ACTIVE"
     STOPPED = "STOPPED"

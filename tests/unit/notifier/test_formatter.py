@@ -55,3 +55,30 @@ def test_formatter_builds_rejected_message() -> None:
 
     assert "Объявление не показывается" in message
     assert "Причина: Причина теста" in message
+
+
+# Проверяет, что форматтер собирает отдельный alert о стопе профиля после деградации scanner source.
+def test_formatter_builds_scan_source_unavailable_message() -> None:
+    formatter = TelegramMessageFormatter()
+    event = TelegramEvent(
+        event_type=TelegramEventType.SCAN_SOURCE_UNAVAILABLE,
+        dedupe_key="scan-unavailable",
+        created_at=datetime(2026, 3, 20, 12, 0, tzinfo=UTC),
+        payload=TelegramEventPayload(
+            host="browser-host-01",
+            account_name="acc-1",
+            campaign_name="",
+            adset_name="",
+            ad_name="",
+            fb_ad_id="",
+            reason="Не удалось получить полный scope",
+            metrics={},
+            extra={"profile_id": "profile-1", "attempts": "1"},
+        ),
+    )
+
+    message = formatter.format(event)
+
+    assert "Сканирование профиля остановлено" in message
+    assert "Профиль: profile-1" in message
+    assert "Попыток подряд: 1" in message

@@ -1,3 +1,5 @@
+import type { AdSummary } from "../types";
+
 export function getBadgeTone(value: string): "neutral" | "good" | "warn" | "bad" | "info" {
   const v = value.toLowerCase();
   if (v.includes("ok") || v.includes("active") || v.includes("succes")) {
@@ -44,3 +46,20 @@ export const TRACKED_DELIVERY_STATUSES = [
   "NOT_DELIVERING",
   "UNKNOWN",
 ] as const;
+
+export function isAttentionAdSummary(ad: AdSummary): boolean {
+  const deliveryStatus = ad.delivery_status.toUpperCase();
+  const decision = ad.last_decision.toUpperCase();
+  const executionState = ad.last_execution_state?.toUpperCase() ?? "";
+
+  if (ad.scope_presence === "NOT_SEEN_THIS_SCAN") {
+    return true;
+  }
+  if (deliveryStatus.includes("NOT_DELIVERING")) {
+    return true;
+  }
+  if (executionState === "FAILED") {
+    return true;
+  }
+  return decision === "WOULD_PAUSE" || decision === "ALERT_REJECTION";
+}

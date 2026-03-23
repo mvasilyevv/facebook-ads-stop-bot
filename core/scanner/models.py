@@ -92,6 +92,7 @@ class ScannerPolicyFlags:
 
     is_blocked: bool = False
     auto_resume_enabled: bool = False
+    resume_owned_by_system: bool = False
 
 
 @dataclass(slots=True, frozen=True)
@@ -104,3 +105,7 @@ class ScannerDecisionResult:
     thresholds: ThresholdPack | None = None
     stop_reasons: tuple[str, ...] = field(default_factory=tuple)
     resume_reason: str | None = None
+
+
+class ScannerScopeUnavailableError(RuntimeError):
+    """Сканер не смог получить полный scope после допустимого числа попыток."""

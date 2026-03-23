@@ -2,8 +2,14 @@ import { useEffect, useState, startTransition } from "react";
 import { Badge } from "../components/Badge";
 import { EmptyState } from "../components/EmptyState";
 import { SectionCard } from "../components/SectionCard";
+import { useAutoRefresh } from "../hooks/useAutoRefresh";
 import { fetchScanRuns } from "../lib/api";
-import { formatDateTime, formatRelativeStatus, formatMetricText } from "../lib/format";
+import {
+  formatCompactId,
+  formatDateTime,
+  formatMetricText,
+  formatRelativeStatus,
+} from "../lib/format";
 import { getBadgeTone } from "../lib/helpers";
 import type { ScanRunItem } from "../types";
 
@@ -60,6 +66,8 @@ export default function ScansPage() {
   useEffect(() => {
     void reload();
   }, []);
+
+  useAutoRefresh(reload, { enabled: !loading });
 
   const visibleScans = scans.filter((scan) => {
     const text = `${scan.id} ${scan.browser_host_id} ${scan.profile_id} ${scan.status}`.toLowerCase();
@@ -120,16 +128,36 @@ export default function ScansPage() {
               <tbody>
                 {visibleScans.map((scan) => (
                   <tr key={scan.id}>
-                    <td className="mono">{scan.id}</td>
-                    <td className="mono">{scan.browser_host_id}</td>
-                    <td className="mono">{scan.profile_id}</td>
+                    <td>
+                      <span className="mono scan-identifier" title={scan.id}>
+                        {formatCompactId(scan.id)}
+                      </span>
+                    </td>
+                    <td>
+                      <span className="mono scan-identifier scan-identifier--host" title={scan.browser_host_id}>
+                        {scan.browser_host_id}
+                      </span>
+                    </td>
+                    <td>
+                      <span className="mono scan-identifier" title={scan.profile_id}>
+                        {formatCompactId(scan.profile_id)}
+                      </span>
+                    </td>
                     <td>
                       <Badge tone={getBadgeTone(scan.status)}>{formatRelativeStatus(scan.status)}</Badge>
                     </td>
                     <td>{formatMetricText(scan.rows_seen)}</td>
                     <td>{formatMetricText(scan.rows_parsed)}</td>
                     <td>{renderScopeSummary(scan.scope_summary)}</td>
-                    <td>{scan.error_message ? <span className="inline-error">{scan.error_message}</span> : "—"}</td>
+                    <td>
+                      {scan.error_message ? (
+                        <span className="scan-error-text" title={scan.error_message}>
+                          {scan.error_message}
+                        </span>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
                     <td>{formatDateTime(scan.started_at)}</td>
                     <td>{scan.finished_at ? formatDateTime(scan.finished_at) : "в процессе"}</td>
                   </tr>

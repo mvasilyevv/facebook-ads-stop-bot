@@ -26,3 +26,54 @@ class BotModeUpdateRequest(BaseModel):
     observe_only_enabled: bool = Field(
         description="Включить режим наблюдения без реальных действий"
     )
+
+
+class ServiceSettingsResponse(BaseModel):
+    """Ответ с полным набором runtime-настроек сервиса."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    auto_pause_enabled: bool
+    auto_resume_enabled: bool
+    auto_resume_available: bool
+    observe_only_enabled: bool
+    scan_interval_seconds: int
+    vision_local_api_url: str
+    vision_cloud_api_url: str
+    telegram_chat_id: str
+    vision_api_token_masked: str | None = None
+    telegram_bot_token_masked: str | None = None
+    vision_api_token_configured: bool
+    telegram_bot_token_configured: bool
+    updated_at: datetime
+
+
+class ServiceSettingsUpdateRequest(BaseModel):
+    """Запрос на обновление runtime-настроек сервиса."""
+
+    auto_pause_enabled: bool
+    auto_resume_enabled: bool
+    observe_only_enabled: bool
+    scan_interval_seconds: int = Field(description="Частота скана в секундах")
+    vision_local_api_url: str
+    vision_cloud_api_url: str
+    telegram_chat_id: str = ""
+    vision_api_token: str | None = None
+    telegram_bot_token: str | None = None
+
+
+class SuspendedProfileItem(BaseModel):
+    """Профиль, для которого сканирование остановлено."""
+
+    profile_id: str
+    display_name: str
+    browser_host_id: str
+    reason: str
+    suspended_at: datetime
+
+
+class SuspendedProfileResetResponse(BaseModel):
+    """Ответ после ручного снятия стопа с профиля."""
+
+    message: str
+    profile: SuspendedProfileItem

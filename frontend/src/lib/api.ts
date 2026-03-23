@@ -10,6 +10,10 @@ import type {
   OfferRateItem,
   RuleItem,
   ScanRunItem,
+  ServiceSettingsResponse,
+  ServiceSettingsUpdate,
+  SuspendedProfileItem,
+  SuspendedProfileResetResponse,
 } from "../types";
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL?.trim();
@@ -269,5 +273,30 @@ export async function updateBotMode(payload: {
   return requestJson<BotModeResponse>("/settings/bot-mode", {
     method: "PUT",
     body: JSON.stringify(payload),
+  });
+}
+
+export function fetchServiceSettings(): Promise<ServiceSettingsResponse> {
+  return requestJson<ServiceSettingsResponse>("/settings/service");
+}
+
+export async function updateServiceSettings(
+  payload: ServiceSettingsUpdate,
+): Promise<ServiceSettingsResponse> {
+  return requestJson<ServiceSettingsResponse>("/settings/service", {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function fetchSuspendedProfiles(): Promise<SuspendedProfileItem[]> {
+  return requestJson<SuspendedProfileItem[]>("/settings/suspended-profiles");
+}
+
+export async function resetSuspendedProfile(
+  profileId: string,
+): Promise<SuspendedProfileResetResponse> {
+  return requestJson<SuspendedProfileResetResponse>(`/settings/suspended-profiles/${profileId}/reset`, {
+    method: "POST",
   });
 }

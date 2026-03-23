@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from core.domain import DecisionType, DeliveryStatus, ScopePresence, TrackingMode
+from core.rules.types import RulePercentages
 from core.scanner import (
     ScannedAdRow,
     ScannerPolicyFlags,
@@ -156,6 +157,80 @@ def test_evaluate_scanned_row_detects_pause_reasons() -> None:
     assert "Клик превысил допустимую долю CPA" in result.stop_reasons
 
 
+# Проверяет, что scanner останавливает объявление по накопленному расходу, даже если первого клика ещё не было.
+def test_evaluate_scanned_row_detects_click_stage_spend_overrun() -> None:
+    campaign_scope_key = build_campaign_scope_key("Кампания 1", "Аккаунт 1")
+    row = ScannedAdRow(
+        fb_ad_id="ad-1",
+        campaign_scope_key=campaign_scope_key,
+        adset_scope_key=build_adset_scope_key("Адсет 1", campaign_scope_key),
+        campaign_name="Кампания 1",
+        adset_name="Адсет 1",
+        ad_name="Объявление 1",
+        delivery_status=DeliveryStatus.ACTIVE,
+        tracking_mode=TrackingMode.TRACKED,
+        scope_presence=ScopePresence.IN_SCOPE,
+        spend=Decimal("0.16"),
+        clicks=0,
+        cpc=None,
+        leads=0,
+        cost_per_lead=None,
+        registrations=0,
+        cost_per_registration=None,
+        deposits=0,
+        last_seen_at=datetime(2026, 3, 20, 12, 0, tzinfo=UTC),
+        account_name="Аккаунт 1",
+    )
+
+    result = evaluate_scanned_row(
+        row=row,
+        resolved_cpa_usd=Decimal("5.00"),
+        policy_flags=ScannerPolicyFlags(),
+        clean_streak=2,
+    )
+
+    assert result.decision == DecisionType.WOULD_PAUSE
+    assert result.reason == "Расход уже превысил порог клика без самого клика"
+    assert "Расход уже превысил порог клика без самого клика" in result.stop_reasons
+
+
+# Проверяет, что scanner использует кастомный lead-share, если он пришёл из runtime-правил.
+def test_evaluate_scanned_row_respects_custom_lead_share() -> None:
+    campaign_scope_key = build_campaign_scope_key("Кампания 1", "Аккаунт 1")
+    row = ScannedAdRow(
+        fb_ad_id="ad-1",
+        campaign_scope_key=campaign_scope_key,
+        adset_scope_key=build_adset_scope_key("Адсет 1", campaign_scope_key),
+        campaign_name="Кампания 1",
+        adset_name="Адсет 1",
+        ad_name="Объявление 1",
+        delivery_status=DeliveryStatus.ACTIVE,
+        tracking_mode=TrackingMode.TRACKED,
+        scope_presence=ScopePresence.IN_SCOPE,
+        spend=Decimal("0.46"),
+        clicks=8,
+        cpc=Decimal("0.08"),
+        leads=0,
+        cost_per_lead=None,
+        registrations=0,
+        cost_per_registration=None,
+        deposits=0,
+        last_seen_at=datetime(2026, 3, 20, 12, 0, tzinfo=UTC),
+        account_name="Аккаунт 1",
+    )
+
+    result = evaluate_scanned_row(
+        row=row,
+        resolved_cpa_usd=Decimal("5.00"),
+        policy_flags=ScannerPolicyFlags(),
+        clean_streak=2,
+        percentages=RulePercentages(lead_share=Decimal("0.09")),
+    )
+
+    assert result.decision == DecisionType.WOULD_PAUSE
+    assert result.reason == "Расход уже превысил порог лида без самого лида"
+
+
 # Проверяет, что пауза может перейти в resume только при явном feature flag и двух чистых сканах подряд.
 def test_evaluate_scanned_row_allows_resume_only_with_flag() -> None:
     campaign_scope_key = build_campaign_scope_key("Кампания 1", "Аккаунт 1")
@@ -190,13 +265,94 @@ def test_evaluate_scanned_row_allows_resume_only_with_flag() -> None:
     resume_result = evaluate_scanned_row(
         row=row,
         resolved_cpa_usd=Decimal("5.00"),
-        policy_flags=ScannerPolicyFlags(auto_resume_enabled=True),
+        policy_flags=ScannerPolicyFlags(
+            auto_resume_enabled=True,
+            resume_owned_by_system=True,
+        ),
         clean_streak=2,
     )
 
     assert no_resume_result.decision == DecisionType.NO_ACTION
     assert resume_result.decision == DecisionType.WOULD_RESUME
     assert resume_result.reason == "Объявление снова безопасно для запуска"
+
+
+# Проверяет, что авторезюм не включает объявления, которые не были поставлены на паузу самой системой.
+def test_evaluate_scanned_row_blocks_resume_without_system_pause_source() -> None:
+    campaign_scope_key = build_campaign_scope_key("Кампания 1", "Аккаунт 1")
+    row = ScannedAdRow(
+        fb_ad_id="ad-1",
+        campaign_scope_key=campaign_scope_key,
+        adset_scope_key=build_adset_scope_key("Адсет 1", campaign_scope_key),
+        campaign_name="Кампания 1",
+        adset_name="Адсет 1",
+        ad_name="Объявление 1",
+        delivery_status=DeliveryStatus.PAUSED,
+        tracking_mode=TrackingMode.TRACKED,
+        scope_presence=ScopePresence.IN_SCOPE,
+        spend=Decimal("0.20"),
+        clicks=2,
+        cpc=Decimal("0.05"),
+        leads=1,
+        cost_per_lead=Decimal("0.20"),
+        registrations=1,
+        cost_per_registration=Decimal("0.20"),
+        deposits=0,
+        last_seen_at=datetime(2026, 3, 20, 12, 0, tzinfo=UTC),
+        account_name="Аккаунт 1",
+    )
+
+    result = evaluate_scanned_row(
+        row=row,
+        resolved_cpa_usd=Decimal("5.00"),
+        policy_flags=ScannerPolicyFlags(auto_resume_enabled=True),
+        clean_streak=2,
+    )
+
+    assert result.decision == DecisionType.KEPT_PAUSED_BY_VIABILITY
+    assert (
+        result.reason
+        == "Автовключение разрешено только для объявлений, поставленных на паузу системой"
+    )
+
+
+# Проверяет, что paused-объявление сначала накапливает чистые сканы после автопаузы и не уходит в NO_ACTION.
+def test_evaluate_scanned_row_keeps_safe_paused_ad_in_resume_warmup() -> None:
+    campaign_scope_key = build_campaign_scope_key("Кампания 1", "Аккаунт 1")
+    row = ScannedAdRow(
+        fb_ad_id="ad-1",
+        campaign_scope_key=campaign_scope_key,
+        adset_scope_key=build_adset_scope_key("Адсет 1", campaign_scope_key),
+        campaign_name="Кампания 1",
+        adset_name="Адсет 1",
+        ad_name="Объявление 1",
+        delivery_status=DeliveryStatus.PAUSED,
+        tracking_mode=TrackingMode.TRACKED,
+        scope_presence=ScopePresence.IN_SCOPE,
+        spend=Decimal("0.20"),
+        clicks=2,
+        cpc=Decimal("0.05"),
+        leads=1,
+        cost_per_lead=Decimal("0.20"),
+        registrations=1,
+        cost_per_registration=Decimal("0.20"),
+        deposits=0,
+        last_seen_at=datetime(2026, 3, 20, 12, 0, tzinfo=UTC),
+        account_name="Аккаунт 1",
+    )
+
+    result = evaluate_scanned_row(
+        row=row,
+        resolved_cpa_usd=Decimal("5.00"),
+        policy_flags=ScannerPolicyFlags(
+            auto_resume_enabled=True,
+            resume_owned_by_system=True,
+        ),
+        clean_streak=1,
+    )
+
+    assert result.decision == DecisionType.KEPT_PAUSED_BY_VIABILITY
+    assert result.reason == "Недостаточно чистых сканов подряд для безопасного включения"
 
 
 # Проверяет, что без двух чистых сканов подряд включение обратно не происходит даже при включенном feature flag.
@@ -206,7 +362,10 @@ def test_evaluate_scanned_row_blocks_resume_without_clean_streak() -> None:
     result = evaluate_scanned_row(
         row=row,
         resolved_cpa_usd=Decimal("5.00"),
-        policy_flags=ScannerPolicyFlags(auto_resume_enabled=True),
+        policy_flags=ScannerPolicyFlags(
+            auto_resume_enabled=True,
+            resume_owned_by_system=True,
+        ),
         clean_streak=1,
     )
 
