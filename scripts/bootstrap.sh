@@ -33,6 +33,8 @@ step() { printf "\n${C_BOLD}${C_CYAN}▸ %s${C_RESET}\n" "$*"; }
 ERRORS=0
 WARNINGS=0
 PIDS=()
+SERVICES=()
+STATE_DIR="${RUN_STATE_DIR:-$ROOT/.run}"
 
 cleanup() {
   local pid
@@ -41,6 +43,101 @@ cleanup() {
       kill "$pid" >/dev/null 2>&1 || true
     fi
   done
+  clear_pid_files
+}
+
+pid_file() {
+  local service="$1"
+  printf "%s/%s.pid\n" "$STATE_DIR" "$service"
+}
+
+ensure_state_dir() {
+  mkdir -p "$STATE_DIR"
+}
+
+track_service_pid() {
+  local service="$1"
+  local pid="$2"
+  local hint="$3"
+  ensure_state_dir
+  printf "%s|%s\n" "$pid" "$hint" >"$(pid_file "$service")"
+  PIDS+=("$pid")
+  SERVICES+=("$service")
+}
+
+clear_pid_files() {
+  local service
+  for service in "${SERVICES[@]:-}"; do
+    rm -f "$(pid_file "$service")"
+  done
+}
+
+process_args() {
+  local pid="$1"
+  ps -p "$pid" -o args= 2>/dev/null || true
+}
+
+process_matches_hint() {
+  local pid="$1"
+  local hint="$2"
+  local args
+  args="$(process_args "$pid")"
+  [[ -n "$args" && "$args" == *"$hint"* ]]
+}
+
+stop_tracked_service() {
+  local service="$1"
+  local label="$2"
+  local fallback_hint="$3"
+  local pid_file_path pid attempt hint raw_state
+
+  pid_file_path="$(pid_file "$service")"
+  if [[ ! -f "$pid_file_path" ]]; then
+    return
+  fi
+
+  raw_state="$(cat "$pid_file_path" 2>/dev/null || true)"
+  rm -f "$pid_file_path"
+
+  pid="${raw_state%%|*}"
+  if [[ "$raw_state" == *"|"* ]]; then
+    hint="${raw_state#*|}"
+  else
+    hint="$fallback_hint"
+  fi
+
+  if [[ -z "$pid" ]]; then
+    return
+  fi
+
+  if ! kill -0 "$pid" >/dev/null 2>&1; then
+    ok "$label уже остановлен"
+    return
+  fi
+
+  if ! process_matches_hint "$pid" "$hint"; then
+    warn "$label с PID $pid не похож на ожидаемый процесс, пропускаю остановку"
+    return
+  fi
+
+  log_info "Останавливаю $label (PID $pid)"
+  kill "$pid" >/dev/null 2>&1 || true
+  for attempt in $(seq 1 10); do
+    if ! kill -0 "$pid" >/dev/null 2>&1; then
+      ok "$label остановлен"
+      return
+    fi
+    sleep 1
+  done
+  warn "$label не завершился мягко, отправляю SIGKILL"
+  kill -9 "$pid" >/dev/null 2>&1 || true
+}
+
+stop_tracked_local_services() {
+  stop_tracked_service "frontend" "frontend" "vite"
+  stop_tracked_service "browser_host" "browser host" "apps.browser_host.main"
+  stop_tracked_service "worker" "воркер" "apps.worker.main"
+  stop_tracked_service "backend" "backend API" "uvicorn apps.api.main:app"
 }
 
 wait_for_http() {
@@ -85,7 +182,9 @@ print_access_summary() {
   printf "  Логи worker: %s\n" "$worker_log"
   printf "  Логи browser host: %s\n" "$browser_host_log"
   printf "  Логи frontend: %s\n" "$frontend_log"
-  printf "  Дальше ждать не нужно. Для остановки нажмите Ctrl+C.\n"
+  printf "  Local logs: make logs\n"
+  printf "  Infra logs: make infra-logs\n"
+  printf "  Ctrl+C остановит локальные процессы. Для полной остановки вместе с Postgres/Redis используйте ./run.sh --down.\n"
 }
 
 start_backend() {
@@ -98,7 +197,7 @@ start_backend() {
       --port "${API_PORT:-8000}" \
       --reload
   ) >"$backend_log" 2>&1 &
-  PIDS+=("$!")
+  track_service_pid "backend" "$!" "uvicorn apps.api.main:app"
 }
 
 start_worker() {
@@ -108,7 +207,7 @@ start_worker() {
     cd "$ROOT"
     exec "$PYTHON" -m apps.worker.main
   ) >"$worker_log" 2>&1 &
-  PIDS+=("$!")
+  track_service_pid "worker" "$!" "apps.worker.main"
 }
 
 start_browser_host() {
@@ -118,7 +217,7 @@ start_browser_host() {
     cd "$ROOT"
     exec "$PYTHON" -m apps.browser_host.main
   ) >"$browser_host_log" 2>&1 &
-  PIDS+=("$!")
+  track_service_pid "browser_host" "$!" "apps.browser_host.main"
 }
 
 start_frontend() {
@@ -160,7 +259,7 @@ start_frontend() {
     fi
     exec npm run dev -- --host "${FRONTEND_HOST:-127.0.0.1}" --port "${FRONTEND_PORT:-5173}"
   ) >"$frontend_log" 2>&1 &
-  PIDS+=("$!")
+  track_service_pid "frontend" "$!" "run dev -- --host"
 }
 
 trap cleanup INT TERM EXIT
@@ -189,6 +288,7 @@ done
 # ─────────────────────────────────────────────────────────────
 if [[ "$MODE" == "down" ]]; then
   step "Останавливаю стек"
+  stop_tracked_local_services
   COMPOSE="$(compose_cmd)"
   eval "$COMPOSE down --remove-orphans"
   ok "Стек остановлен"
@@ -291,6 +391,9 @@ fi
 # ЗАПУСК
 # ═════════════════════════════════════════════════════════════
 COMPOSE="$(compose_cmd)"
+
+step "Локальные процессы"
+stop_tracked_local_services
 
 # Инфраструктура
 step "Инфраструктура (Docker)"

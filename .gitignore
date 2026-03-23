@@ -13,3 +13,5 @@ build/
 *.pyd
 .DS_Store
 .env
+.run/
+.tmp/
