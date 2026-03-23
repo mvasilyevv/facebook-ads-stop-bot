@@ -6,6 +6,60 @@ export type HealthResponse = {
   timestamp: string;
 };
 
+export type ProfileItem = {
+  profile_id: string;
+  display_name: string;
+  browser_host_id: string;
+  is_active: boolean;
+  scan_suspended: boolean;
+  last_launch_at?: string | null;
+};
+
+export type ProfileLaunchItem = {
+  id: string;
+  profile_id: string;
+  display_name: string;
+  browser_host_id: string;
+  name: string;
+  is_active: boolean;
+  started_at: string;
+  ended_at?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ProfileLaunchActionResponse = {
+  message: string;
+  launch: ProfileLaunchItem;
+  cleared_control_flags: number;
+  cleared_cooldowns: number;
+};
+
+export type ProfileLaunchSummary = {
+  total_ads: number;
+  active_ads: number;
+  paused_ads: number;
+  attention_ads: number;
+  spend_total: string | number;
+  scans_count: number;
+  last_scan_at?: string | null;
+};
+
+export type ProfileLaunchTrendPoint = {
+  timestamp: string;
+  value: string | number;
+};
+
+export type ProfileLaunchDashboard = {
+  launch: ProfileLaunchItem;
+  previous_launch?: ProfileLaunchItem | null;
+  current: ProfileLaunchSummary;
+  previous?: ProfileLaunchSummary | null;
+  spend_series: ProfileLaunchTrendPoint[];
+  attention_series: ProfileLaunchTrendPoint[];
+  action_series: ProfileLaunchTrendPoint[];
+};
+
 export type AdSummary = {
   fb_ad_id: string;
   campaign_name: string;
@@ -120,6 +174,8 @@ export type ScanRunItem = {
   id: string;
   browser_host_id: string;
   profile_id: string;
+  profile_launch_id?: string | null;
+  profile_launch_name?: string | null;
   status: string;
   rows_seen: number;
   rows_parsed: number;

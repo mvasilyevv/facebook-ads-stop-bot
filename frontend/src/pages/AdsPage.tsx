@@ -7,6 +7,7 @@ import { isAttentionAdSummary } from "../lib/helpers";
 import { blockAd, fetchAds, unblockAd } from "../lib/api";
 import { formatMoney } from "../lib/format";
 import type { AdSummary } from "../types";
+import { useOperatorScope } from "../context/OperatorScopeContext";
 
 type AdsFilter = "all" | "attention" | "active" | "paused";
 
@@ -19,12 +20,17 @@ function toNumber(value: string | number | null | undefined): number {
 }
 
 export default function AdsPage() {
+  const scope = useOperatorScope();
   const [ads, setAds] = useState<AdSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [blockReason, setBlockReason] = useState("Ручная блокировка через UI");
   const [filter, setFilter] = useState<AdsFilter>("all");
   const [message, setMessage] = useState<string | null>(null);
+  const profileId = scope?.selectedProfileId ?? null;
+  const launchId = scope?.selectedLaunchId ?? null;
+  const selectedLaunch = scope?.selectedLaunch ?? null;
+  const isArchiveLaunch = selectedLaunch != null && !selectedLaunch.is_active;
 
   async function reload(silent = false) {
     if (!silent) {
@@ -32,7 +38,14 @@ export default function AdsPage() {
     }
     setMessage(null);
     try {
-      const data = await fetchAds();
+      const data = await fetchAds(
+        profileId && launchId
+          ? {
+              profileId,
+              profileLaunchId: launchId,
+            }
+          : undefined,
+      );
       startTransition(() => {
         setAds(data);
         setLoading(false);
@@ -45,7 +58,7 @@ export default function AdsPage() {
 
   useEffect(() => {
     void reload();
-  }, []);
+  }, [profileId, launchId]);
 
   useAutoRefresh(reload, { enabled: !loading });
 
@@ -109,12 +122,25 @@ export default function AdsPage() {
     return <div className="page-loading">Загрузка объявлений...</div>;
   }
 
+  if (scope && !profileId) {
+    return (
+      <EmptyState
+        title="Профиль не выбран"
+        description="Выберите профиль и запуск в верхней панели, чтобы открыть объявления нужного периода."
+      />
+    );
+  }
+
   return (
     <>
       <div className="page-header">
         <div>
           <h1 className="page-title">Объявления</h1>
-          <p className="page-subtitle">Плиточный обзор кампаний, групп объявлений и самих ads</p>
+          <p className="page-subtitle">
+            {selectedLaunch
+              ? `${selectedLaunch.name}${isArchiveLaunch ? " · архивный просмотр" : ""}`
+              : "Плиточный обзор кампаний, групп объявлений и самих ads"}
+          </p>
         </div>
         <div className="page-header__actions">
           <input
@@ -130,6 +156,11 @@ export default function AdsPage() {
       </div>
 
       {message ? <div className="message-banner">{message}</div> : null}
+      {isArchiveLaunch ? (
+        <div className="message-banner">
+          Открыт архивный запуск. Карточки доступны только для просмотра, ручные действия отключены.
+        </div>
+      ) : null}
 
       <div className="metric-grid ads-summary-grid">
         <article className="metric-tile metric-tile--accent">
@@ -185,26 +216,47 @@ export default function AdsPage() {
           </div>
         }
       >
-        <div className="ads-toolbar">
-          <label className="panel-form ads-toolbar__reason">
-            <span>Причина ручной блокировки</span>
-            <input
-              className="input input--compact"
-              value={blockReason}
-              onChange={(event) => setBlockReason(event.target.value)}
-              placeholder="Например: ручная проверка"
-            />
-          </label>
-        </div>
+        {!isArchiveLaunch ? (
+          <div className="ads-toolbar">
+            <label className="panel-form ads-toolbar__reason">
+              <span>Причина ручной блокировки</span>
+              <input
+                className="input input--compact"
+                value={blockReason}
+                onChange={(event) => setBlockReason(event.target.value)}
+                placeholder="Например: ручная проверка"
+              />
+            </label>
+          </div>
+        ) : null}
         {visibleAds.length === 0 ? (
-          <EmptyState title="Объявлений нет" description="После загрузки backend здесь появится список ads." />
+          <EmptyState
+            title="Объявлений нет"
+            description="После первого скана выбранного запуска здесь появится список ads."
+          />
         ) : (
           <GroupedAdsBoard
             ads={visibleAds}
             emptyTitle="Объявлений нет"
-            emptyDescription="После загрузки backend здесь появится список ads."
-            onBlock={(ad) => void runAction(() => blockAd(ad.fb_ad_id, blockReason), `${ad.fb_ad_id} заблокировано`)}
-            onUnblock={(ad) => void runAction(() => unblockAd(ad.fb_ad_id), `${ad.fb_ad_id} разблокировано`)}
+            emptyDescription="После первого скана выбранного запуска здесь появится список ads."
+            onBlock={
+              isArchiveLaunch
+                ? undefined
+                : (ad) =>
+                    void runAction(
+                      () => blockAd(ad.fb_ad_id, blockReason),
+                      `${ad.fb_ad_id} заблокировано`,
+                    )
+            }
+            onUnblock={
+              isArchiveLaunch
+                ? undefined
+                : (ad) =>
+                    void runAction(
+                      () => unblockAd(ad.fb_ad_id),
+                      `${ad.fb_ad_id} разблокировано`,
+                    )
+            }
             blockReason={blockReason}
           />
         )}

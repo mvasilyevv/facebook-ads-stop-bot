@@ -29,6 +29,14 @@ class ActiveProfileRecord:
 
 
 @dataclass(slots=True, frozen=True)
+class ProfileRecord:
+    """Профиль вместе с browser host для UI-списков и выбора рабочего контекста."""
+
+    profile: Profile
+    browser_host: BrowserHost
+
+
+@dataclass(slots=True, frozen=True)
 class SuspendedProfileRecord:
     """Профиль, для которого сканирование временно остановлено."""
 
@@ -88,6 +96,9 @@ class BrowserRepository(AsyncRepository):
             select(Profile).where(Profile.vendor_profile_id == vendor_profile_id)
         )
         return result.first()
+
+    async def get_profile(self, profile_id: str) -> Profile | None:
+        return await self.session.get(Profile, profile_id)
 
     async def upsert_profile(
         self,
@@ -200,6 +211,22 @@ class BrowserRepository(AsyncRepository):
         result = await self.session.execute(stmt)
         return [
             ActiveProfileRecord(profile=profile, browser_host=browser_host)
+            for profile, browser_host in result.all()
+        ]
+
+    async def list_profiles(self) -> list[ProfileRecord]:
+        stmt = (
+            select(Profile, BrowserHost)
+            .join(BrowserHost, Profile.browser_host_id == BrowserHost.id)
+            .order_by(
+                Profile.is_active.desc(),
+                BrowserHost.name.asc(),
+                Profile.vendor_profile_id.asc(),
+            )
+        )
+        result = await self.session.execute(stmt)
+        return [
+            ProfileRecord(profile=profile, browser_host=browser_host)
             for profile, browser_host in result.all()
         ]
 

@@ -8,6 +8,10 @@ import type {
   OfferBindingItem,
   OfferItem,
   OfferRateItem,
+  ProfileItem,
+  ProfileLaunchActionResponse,
+  ProfileLaunchDashboard,
+  ProfileLaunchItem,
   RuleItem,
   ScanRunItem,
   ServiceSettingsResponse,
@@ -38,11 +42,31 @@ export type DashboardPayload = {
   errors: Record<string, string>;
 };
 
+type ScopeFilters = {
+  profileId?: string | null;
+  profileLaunchId?: string | null;
+};
+
 function buildUrl(path: string): string {
   if (apiBaseUrl) {
     return `${apiBaseUrl}${path.startsWith("/") ? path : `/${path}`}`;
   }
   return path;
+}
+
+function withQuery(path: string, filters?: ScopeFilters): string {
+  if (!filters?.profileId && !filters?.profileLaunchId) {
+    return path;
+  }
+  const query = new URLSearchParams();
+  if (filters.profileId) {
+    query.set("profile_id", filters.profileId);
+  }
+  if (filters.profileLaunchId) {
+    query.set("profile_launch_id", filters.profileLaunchId);
+  }
+  const separator = path.includes("?") ? "&" : "?";
+  return `${path}${separator}${query.toString()}`;
 }
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
@@ -76,12 +100,12 @@ export function fetchHealth(): Promise<HealthResponse> {
   return requestJson<HealthResponse>("/health");
 }
 
-export function fetchAds(): Promise<AdSummary[]> {
-  return requestJson<AdSummary[]>("/ads");
+export function fetchAds(filters?: ScopeFilters): Promise<AdSummary[]> {
+  return requestJson<AdSummary[]>(withQuery("/ads", filters));
 }
 
-export function fetchDecisions(): Promise<DecisionItem[]> {
-  return requestJson<DecisionItem[]>("/decisions");
+export function fetchDecisions(filters?: ScopeFilters): Promise<DecisionItem[]> {
+  return requestJson<DecisionItem[]>(withQuery("/decisions", filters));
 }
 
 export function fetchRules(): Promise<RuleItem[]> {
@@ -100,8 +124,43 @@ export function fetchOfferBindings(): Promise<OfferBindingItem[]> {
   return requestJson<OfferBindingItem[]>("/offer-bindings");
 }
 
-export function fetchScanRuns(): Promise<ScanRunItem[]> {
-  return requestJson<ScanRunItem[]>("/scan-runs");
+export function fetchScanRuns(filters?: ScopeFilters): Promise<ScanRunItem[]> {
+  return requestJson<ScanRunItem[]>(withQuery("/scan-runs", filters));
+}
+
+export function fetchProfiles(): Promise<ProfileItem[]> {
+  return requestJson<ProfileItem[]>("/profiles");
+}
+
+export function fetchProfileLaunches(profileId: string): Promise<ProfileLaunchItem[]> {
+  return requestJson<ProfileLaunchItem[]>(`/profile-launches?profile_id=${encodeURIComponent(profileId)}`);
+}
+
+export function createProfileLaunch(payload: {
+  profileId: string;
+  name?: string | null;
+}): Promise<ProfileLaunchActionResponse> {
+  return requestJson<ProfileLaunchActionResponse>("/profile-launches", {
+    method: "POST",
+    body: JSON.stringify({
+      profile_id: payload.profileId,
+      name: payload.name ?? null,
+    }),
+  });
+}
+
+export function renameProfileLaunch(
+  launchId: string,
+  name: string,
+): Promise<ProfileLaunchActionResponse> {
+  return requestJson<ProfileLaunchActionResponse>(`/profile-launches/${launchId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ name }),
+  });
+}
+
+export function fetchProfileLaunchDashboard(launchId: string): Promise<ProfileLaunchDashboard> {
+  return requestJson<ProfileLaunchDashboard>(`/profile-launches/${launchId}/dashboard`);
 }
 
 export async function loadDashboard(): Promise<DashboardPayload> {

@@ -21,6 +21,7 @@ from core.repositories import (
     BrowserRepository,
     DecisionsRepository,
     OffersRepository,
+    ProfileLaunchesRepository,
     RulesRepository,
 )
 from core.repositories.notification_outbox import NotificationOutboxRepository
@@ -49,6 +50,7 @@ _SOURCE_UNAVAILABLE_ERROR_MARKERS = (
 )
 _AUTO_PAUSE_ACTION_SOURCE = "автопауза"
 _AUTO_RESUME_ACTION_SOURCE = "авторезюм"
+_TARGETED_SCOPE_RECOVERY_LIMIT = 5
 _PLACEHOLDER_CAMPAIGN_NAME_PATTERN = re.compile(
     r"^(?:кампания|campaign)\s+\d{8,20}$",
     re.IGNORECASE,
@@ -105,6 +107,7 @@ class WorkerScanService:
     async def run_once(self, profile_id: str, browser_host_name: str) -> WorkerScanResult:
         async with self._async_session_factory() as session:
             browser_repo = BrowserRepository(session)
+            profile_launches_repo = ProfileLaunchesRepository(session)
             scan_runs_repo = ScanRunsRepository(session)
             settings_repo = SystemSettingsRepository(session)
 
@@ -131,6 +134,8 @@ class WorkerScanService:
                     status=ScanRunStatus.SKIPPED,
                     skip_reason=skip_reason,
                 )
+            active_launch = await profile_launches_repo.ensure_active_profile_launch(profile_db_id)
+            active_launch_id = active_launch.id
 
             auto_pause_enabled = await self._resolve_bool_setting(
                 settings_repo=settings_repo,
@@ -169,6 +174,7 @@ class WorkerScanService:
                 profile_id=profile_db_id,
                 status=ScanRunStatus.RUNNING,
                 started_at=started_at,
+                profile_launch_id=active_launch_id,
             )
 
             try:
@@ -176,6 +182,13 @@ class WorkerScanService:
                     profile_id=profile_id, browser_host_name=browser_host_name
                 )
                 scanned_rows = [self._coerce_scanned_row(item) for item in rows]
+                scanned_rows = await self._recover_missing_rows(
+                    session=session,
+                    profile_db_id=profile_db_id,
+                    profile_id=profile_id,
+                    browser_host_name=browser_host_name,
+                    rows=scanned_rows,
+                )
                 await self._persist_rows(
                     session=session,
                     scan_run_id=scan_run.id,
@@ -193,6 +206,7 @@ class WorkerScanService:
                 await ads_repo.mark_unseen_ads(
                     seen_fb_ad_ids=seen_fb_ad_ids,
                     profile_id=profile_db_id,
+                    profile_launch_id=active_launch_id,
                 )
                 finished_at = datetime.now(tz=UTC)
                 summary = build_scope_summary(scanned_rows, scanned_at=finished_at)
@@ -219,6 +233,7 @@ class WorkerScanService:
                         profile_id=profile_db_id,
                         status=ScanRunStatus.FAILED,
                         started_at=started_at,
+                        profile_launch_id=active_launch_id,
                         finished_at=datetime.now(tz=UTC),
                         error_message=str(exc),
                     )
@@ -431,6 +446,83 @@ class WorkerScanService:
     async def _collect_rows(self, *, profile_id: str, browser_host_name: str) -> list[ScannedAdRow]:
         return list(await self._scanner_provider.scan_rows(profile_id, browser_host_name))
 
+    async def _recover_missing_rows(
+        self,
+        *,
+        session,
+        profile_db_id,
+        profile_id: str,
+        browser_host_name: str,
+        rows: list[ScannedAdRow],
+    ) -> list[ScannedAdRow]:
+        recover_rows = getattr(self._scanner_provider, "recover_rows", None)
+        if not callable(recover_rows):
+            return rows
+
+        ads_repo = AdsRepository(session)
+        known_fb_ad_ids = await ads_repo.list_profile_fb_ad_ids(profile_db_id)
+        if not known_fb_ad_ids:
+            return rows
+
+        seen_fb_ad_ids = {row.fb_ad_id for row in rows}
+        missing_fb_ad_ids = [
+            fb_ad_id for fb_ad_id in known_fb_ad_ids if fb_ad_id not in seen_fb_ad_ids
+        ]
+        if not missing_fb_ad_ids:
+            return rows
+
+        if len(missing_fb_ad_ids) > _TARGETED_SCOPE_RECOVERY_LIMIT:
+            logging.getLogger(__name__).warning(
+                "Пропускаю адресный добор scope для профиля %s: отсутствует %s объявлений, это больше лимита %s",
+                profile_id,
+                len(missing_fb_ad_ids),
+                _TARGETED_SCOPE_RECOVERY_LIMIT,
+            )
+            return rows
+
+        logging.getLogger(__name__).info(
+            "Пробую адресно добрать %s отсутствующих объявлений через selected_ad_ids",
+            len(missing_fb_ad_ids),
+        )
+        recovered_rows = [
+            self._coerce_scanned_row(item)
+            for item in await recover_rows(profile_id, browser_host_name, missing_fb_ad_ids)
+        ]
+        recovered_rows = [row for row in recovered_rows if row.fb_ad_id in set(missing_fb_ad_ids)]
+        if not recovered_rows:
+            logging.getLogger(__name__).warning(
+                "Адресный добор scope не вернул ни одного отсутствующего объявления для профиля %s",
+                profile_id,
+            )
+            return rows
+
+        latest_snapshots = await ads_repo.get_latest_metric_snapshots(
+            [row.fb_ad_id for row in recovered_rows]
+        )
+        normalized_recovered_rows = [
+            self._restore_metrics_from_latest_snapshot(
+                row=row,
+                latest_snapshot=latest_snapshots.get(row.fb_ad_id),
+            )
+            for row in recovered_rows
+        ]
+        recovered_by_id = {row.fb_ad_id: row for row in normalized_recovered_rows}
+        merged_rows = list(rows)
+        recovered_count = 0
+        for fb_ad_id in missing_fb_ad_ids:
+            recovered_row = recovered_by_id.get(fb_ad_id)
+            if recovered_row is None:
+                continue
+            merged_rows.append(recovered_row)
+            recovered_count += 1
+        if recovered_count > 0:
+            logging.getLogger(__name__).info(
+                "Адресный добор scope восстановил %s объявлений для профиля %s",
+                recovered_count,
+                profile_id,
+            )
+        return merged_rows
+
     @staticmethod
     async def _resolve_bool_setting(
         *,
@@ -509,6 +601,54 @@ class WorkerScanService:
             account_name=getattr(item, "account_name", None),
             resolved_offer_id=getattr(item, "resolved_offer_id", None),
             resolved_offer_code=getattr(item, "resolved_offer_code", None),
+        )
+
+    @staticmethod
+    def _restore_metrics_from_latest_snapshot(
+        *,
+        row: ScannedAdRow,
+        latest_snapshot: Any | None,
+    ) -> ScannedAdRow:
+        if latest_snapshot is None:
+            return row
+        if not WorkerScanService._row_needs_snapshot_metric_fallback(row):
+            return row
+
+        logging.getLogger(__name__).info(
+            "Для объявления %s не пришли свежие метрики в адресном recovery, использую последний сохраненный snapshot",
+            row.fb_ad_id,
+        )
+        return replace(
+            row,
+            spend=latest_snapshot.spend or row.spend,
+            clicks=latest_snapshot.clicks or row.clicks,
+            cpc=latest_snapshot.cpc if latest_snapshot.cpc is not None else row.cpc,
+            leads=latest_snapshot.leads or row.leads,
+            cost_per_lead=(
+                latest_snapshot.cost_per_lead
+                if latest_snapshot.cost_per_lead is not None
+                else row.cost_per_lead
+            ),
+            registrations=latest_snapshot.registrations or row.registrations,
+            cost_per_registration=(
+                latest_snapshot.cost_per_registration
+                if latest_snapshot.cost_per_registration is not None
+                else row.cost_per_registration
+            ),
+            deposits=latest_snapshot.deposits or row.deposits,
+        )
+
+    @staticmethod
+    def _row_needs_snapshot_metric_fallback(row: ScannedAdRow) -> bool:
+        return (
+            row.spend.is_zero()
+            and row.clicks == 0
+            and row.cpc is None
+            and row.leads == 0
+            and row.cost_per_lead is None
+            and row.registrations == 0
+            and row.cost_per_registration is None
+            and row.deposits == 0
         )
 
     async def _get_prior_clean_streak(
@@ -854,11 +994,17 @@ class WorkerScanService:
         restored_source = WorkerScanService._map_action_type_to_source(action_type)
         if restored_source is None:
             return
-        if ad.last_action_at is not None and ad.last_action_at >= action_at:
+        last_action_at = WorkerScanService._restore_utc(ad.last_action_at)
+        restored_action_at = WorkerScanService._restore_utc(action_at)
+        if (
+            last_action_at is not None
+            and restored_action_at is not None
+            and last_action_at >= restored_action_at
+        ):
             return
 
         ad.last_action_source = restored_source
-        ad.last_action_at = action_at
+        ad.last_action_at = restored_action_at
 
     @staticmethod
     def _map_action_type_to_source(action_type: ActionType) -> str | None:
@@ -869,6 +1015,13 @@ class WorkerScanService:
         if action_type == ActionType.RESUME:
             return _AUTO_RESUME_ACTION_SOURCE
         return None
+
+    @staticmethod
+    def _restore_utc(value: datetime | None) -> datetime | None:
+        """Возвращает datetime с UTC, если SQLite снял timezone."""
+        if value is None or value.tzinfo is not None:
+            return value
+        return value.replace(tzinfo=UTC)
 
     @staticmethod
     def _map_decision_to_event_type(decision: DecisionType) -> TelegramEventType | None:

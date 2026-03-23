@@ -9,6 +9,7 @@ from core.repositories.operations import (
     ScanRunsRepository,
     SystemSettingsRepository,
 )
+from core.repositories.profile_launches import ProfileLaunchesRepository
 from core.repositories.rules import RulesRepository
 
 __all__ = [
@@ -19,6 +20,7 @@ __all__ = [
     "DecisionsRepository",
     "NotificationOutboxRepository",
     "OffersRepository",
+    "ProfileLaunchesRepository",
     "RulesRepository",
     "ScanRunsRepository",
     "SystemSettingsRepository",

@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, Query, status
 
 from apps.api.deps import DbSessionDep
 from apps.api.schemas.common import ExecutionState
 from apps.api.schemas.decisions import DecisionItem
 from core.domain import DecisionType
-from core.repositories import DecisionsRepository
+from core.repositories import BrowserRepository, DecisionsRepository
 
 router = APIRouter(prefix="/decisions", tags=["decisions"])
 
@@ -25,9 +25,25 @@ def _resolve_execution_state(decision) -> ExecutionState:
 
 
 @router.get("", response_model=list[DecisionItem])
-async def list_decisions(session: DbSessionDep) -> list[DecisionItem]:
+async def list_decisions(
+    session: DbSessionDep,
+    profile_id: str | None = Query(default=None),
+    profile_launch_id: str | None = Query(default=None),
+) -> list[DecisionItem]:
+    resolved_profile_id = None
+    if profile_id is not None:
+        profile = await BrowserRepository(session).get_profile_by_vendor_id(profile_id)
+        if profile is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Профиль `{profile_id}` не найден",
+            )
+        resolved_profile_id = profile.id
     repo = DecisionsRepository(session)
-    decisions = await repo.list_decisions()
+    decisions = await repo.list_decisions(
+        profile_id=resolved_profile_id,
+        profile_launch_id=profile_launch_id,
+    )
     return [
         DecisionItem(
             id=str(decision.id),

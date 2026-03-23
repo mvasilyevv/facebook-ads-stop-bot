@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from sqlalchemy.orm.attributes import set_committed_value
 
 from core.domain import DecisionType, DeliveryStatus, ScopePresence, TrackingMode
 from core.models.advertising import Ad, AdSet, Campaign, MetricSnapshot
@@ -24,6 +25,21 @@ class AdsRepository(AsyncRepository):
         """Проверяет, используется ли PostgreSQL в качестве диалекта."""
         bind = self.session.get_bind()
         return bind.dialect.name == "postgresql"
+
+    def _restore_utc(self, value: datetime | None) -> datetime | None:
+        """Возвращает дату с UTC, если SQLite снял timezone при чтении."""
+        if value is None or value.tzinfo is not None:
+            return value
+        return value.replace(tzinfo=UTC)
+
+    def _restore_ad_datetimes(self, ad: Ad) -> None:
+        """Возвращает timezone на чтении так, чтобы ORM не считал объект изменённым."""
+        restored_last_seen_at = self._restore_utc(ad.last_seen_at)
+        if restored_last_seen_at is not ad.last_seen_at:
+            set_committed_value(ad, "last_seen_at", restored_last_seen_at)
+        restored_last_action_at = self._restore_utc(ad.last_action_at)
+        if restored_last_action_at is not ad.last_action_at:
+            set_committed_value(ad, "last_action_at", restored_last_action_at)
 
     async def upsert_campaign(
         self,
@@ -363,7 +379,11 @@ class AdsRepository(AsyncRepository):
             )
             .where(Ad.fb_ad_id == fb_ad_id)
         )
-        return result.first()
+        ad = result.first()
+        if ad is not None:
+            await self.session.refresh(ad)
+            self._restore_ad_datetimes(ad)
+        return ad
 
     async def get_ads_by_fb_ad_ids(self, fb_ad_ids: list[str]) -> dict[str, Ad]:
         if not fb_ad_ids:
@@ -378,8 +398,22 @@ class AdsRepository(AsyncRepository):
         )
         return {ad.fb_ad_id: ad for ad in result.all()}
 
-    async def list_ads(self) -> list[Ad]:
+    async def list_profile_fb_ad_ids(self, profile_id: UUID | str) -> list[str]:
         result = await self.session.scalars(
+            select(Ad.fb_ad_id)
+            .join(ScanRun, Ad.last_scan_run_id == ScanRun.id)
+            .where(ScanRun.profile_id == self._coerce_uuid(profile_id))
+            .order_by(Ad.fb_ad_id)
+        )
+        return list(result.all())
+
+    async def list_ads(
+        self,
+        *,
+        profile_id: UUID | str | None = None,
+        profile_launch_id: UUID | str | None = None,
+    ) -> list[Ad]:
+        stmt = (
             select(Ad)
             .options(
                 selectinload(Ad.campaign),
@@ -387,29 +421,45 @@ class AdsRepository(AsyncRepository):
             )
             .order_by(Ad.fb_ad_id)
         )
+        if profile_launch_id is not None:
+            stmt = (
+                stmt.join(MetricSnapshot, MetricSnapshot.ad_id == Ad.id)
+                .join(ScanRun, MetricSnapshot.scan_run_id == ScanRun.id)
+                .where(ScanRun.profile_launch_id == self._coerce_uuid(profile_launch_id))
+                .distinct()
+            )
+            if profile_id is not None:
+                stmt = stmt.where(ScanRun.profile_id == self._coerce_uuid(profile_id))
+        elif profile_id is not None:
+            stmt = stmt.join(ScanRun, Ad.last_scan_run_id == ScanRun.id).where(
+                ScanRun.profile_id == self._coerce_uuid(profile_id)
+            )
+        result = await self.session.scalars(stmt)
         return list(result.all())
 
     async def get_latest_metric_snapshots(
         self,
         fb_ad_ids: list[str],
+        profile_launch_id: UUID | str | None = None,
     ) -> dict[str, MetricSnapshot]:
         if not fb_ad_ids:
             return {}
 
-        ranked_snapshots = (
-            select(
-                MetricSnapshot.id.label("snapshot_id"),
-                MetricSnapshot.fb_ad_id.label("fb_ad_id"),
-                func.row_number()
-                .over(
-                    partition_by=MetricSnapshot.fb_ad_id,
-                    order_by=(MetricSnapshot.captured_at.desc(), MetricSnapshot.id.desc()),
-                )
-                .label("row_number"),
+        ranked_base = select(
+            MetricSnapshot.id.label("snapshot_id"),
+            MetricSnapshot.fb_ad_id.label("fb_ad_id"),
+            func.row_number()
+            .over(
+                partition_by=MetricSnapshot.fb_ad_id,
+                order_by=(MetricSnapshot.captured_at.desc(), MetricSnapshot.id.desc()),
             )
-            .where(MetricSnapshot.fb_ad_id.in_(fb_ad_ids))
-            .subquery()
+            .label("row_number"),
         )
+        if profile_launch_id is not None:
+            ranked_base = ranked_base.join(ScanRun, MetricSnapshot.scan_run_id == ScanRun.id).where(
+                ScanRun.profile_launch_id == self._coerce_uuid(profile_launch_id)
+            )
+        ranked_snapshots = ranked_base.where(MetricSnapshot.fb_ad_id.in_(fb_ad_ids)).subquery()
 
         result = await self.session.scalars(
             select(MetricSnapshot)
@@ -445,6 +495,7 @@ class AdsRepository(AsyncRepository):
         if last_action_at is not None:
             ad.last_action_at = last_action_at
         await self.session.flush()
+        self._restore_ad_datetimes(ad)
         return ad
 
     async def mark_unseen_ads(
@@ -452,6 +503,7 @@ class AdsRepository(AsyncRepository):
         *,
         seen_fb_ad_ids: list[str],
         profile_id: UUID | str,
+        profile_launch_id: UUID | str | None = None,
     ) -> int:
         """Помечает объявления профиля, отсутствующие в текущем успешном скане, как NOT_SEEN_THIS_SCAN."""
 
@@ -463,6 +515,8 @@ class AdsRepository(AsyncRepository):
                 ScanRun.profile_id == self._coerce_uuid(profile_id),
             )
         )
+        if profile_launch_id is not None:
+            stmt = stmt.where(ScanRun.profile_launch_id == self._coerce_uuid(profile_launch_id))
         if seen_fb_ad_ids:
             stmt = stmt.where(Ad.fb_ad_id.notin_(seen_fb_ad_ids))
         result = await self.session.scalars(stmt)

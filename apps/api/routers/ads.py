@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Query, status
 
 from apps.api.deps import DbSessionDep
 from apps.api.schemas.ads import AdActionResponse, AdBlockRequest, AdDetail, AdSummary
@@ -10,6 +10,7 @@ from apps.api.schemas.common import ExecutionState
 from core.domain import DecisionType, EntityType, ScopePresence, TrackingMode
 from core.repositories import (
     AdsRepository,
+    BrowserRepository,
     ControlFlagsRepository,
     DecisionsRepository,
     OffersRepository,
@@ -60,8 +61,12 @@ async def _map_ad_summary(
         delivery_status=ad.delivery_status.value,
         tracking_mode=ad.tracking_mode.value,
         scope_presence=ad.scope_presence.value,
-        last_seen_at=ad.last_seen_at,
-        last_decision=ad.last_decision.value,
+        last_seen_at=metric_snapshot.captured_at
+        if metric_snapshot is not None
+        else ad.last_seen_at,
+        last_decision=latest_decision.decision.value
+        if latest_decision is not None
+        else ad.last_decision.value,
         last_decision_reason=latest_decision.reason if latest_decision is not None else None,
         last_decision_at=latest_decision.created_at if latest_decision is not None else None,
         last_execution_state=_resolve_execution_state(latest_decision)
@@ -112,14 +117,36 @@ async def _map_ad_detail(
 
 
 @router.get("", response_model=list[AdSummary])
-async def list_ads(session: DbSessionDep) -> list[AdSummary]:
+async def list_ads(
+    session: DbSessionDep,
+    profile_id: str | None = Query(default=None),
+    profile_launch_id: str | None = Query(default=None),
+) -> list[AdSummary]:
     ads_repo = AdsRepository(session)
     offers_repo = OffersRepository(session)
     decisions_repo = DecisionsRepository(session)
-    ads = await ads_repo.list_ads()
+    resolved_profile_id = None
+    if profile_id is not None:
+        profile = await BrowserRepository(session).get_profile_by_vendor_id(profile_id)
+        if profile is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Профиль `{profile_id}` не найден",
+            )
+        resolved_profile_id = profile.id
+    ads = await ads_repo.list_ads(
+        profile_id=resolved_profile_id,
+        profile_launch_id=profile_launch_id,
+    )
     fb_ad_ids = [ad.fb_ad_id for ad in ads]
-    latest_snapshots = await ads_repo.get_latest_metric_snapshots(fb_ad_ids)
-    latest_decisions = await decisions_repo.get_latest_decisions(fb_ad_ids)
+    latest_snapshots = await ads_repo.get_latest_metric_snapshots(
+        fb_ad_ids,
+        profile_launch_id=profile_launch_id,
+    )
+    latest_decisions = await decisions_repo.get_latest_decisions(
+        fb_ad_ids,
+        profile_launch_id=profile_launch_id,
+    )
     latest_action_executions = await decisions_repo.get_latest_action_executions(
         [str(decision.id) for decision in latest_decisions.values()]
     )
@@ -138,15 +165,25 @@ async def list_ads(session: DbSessionDep) -> list[AdSummary]:
 
 
 @router.get("/{fb_ad_id}", response_model=AdDetail)
-async def get_ad(fb_ad_id: str, session: DbSessionDep) -> AdDetail:
+async def get_ad(
+    fb_ad_id: str,
+    session: DbSessionDep,
+    profile_launch_id: str | None = Query(default=None),
+) -> AdDetail:
     ads_repo = AdsRepository(session)
     offers_repo = OffersRepository(session)
     decisions_repo = DecisionsRepository(session)
     ad = await ads_repo.get_ad_by_fb_id(fb_ad_id)
     if ad is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Объявление не найдено")
-    latest_snapshots = await ads_repo.get_latest_metric_snapshots([ad.fb_ad_id])
-    latest_decisions = await decisions_repo.get_latest_decisions([ad.fb_ad_id])
+    latest_snapshots = await ads_repo.get_latest_metric_snapshots(
+        [ad.fb_ad_id],
+        profile_launch_id=profile_launch_id,
+    )
+    latest_decisions = await decisions_repo.get_latest_decisions(
+        [ad.fb_ad_id],
+        profile_launch_id=profile_launch_id,
+    )
     latest_decision = latest_decisions.get(ad.fb_ad_id)
     latest_action_executions = await decisions_repo.get_latest_action_executions(
         [str(latest_decision.id)] if latest_decision is not None else []

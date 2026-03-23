@@ -15,7 +15,7 @@ from core.domain import (
     ScanRunStatus,
     TrackingMode,
 )
-from core.models.browser import BrowserHost, Profile
+from core.models.browser import BrowserHost, Profile, ProfileLaunch
 from core.models.operations import ActionExecution, ControlFlag, Decision, ScanRun, SystemSetting
 from core.repositories.base import AsyncRepository
 from core.rules.evaluator import RESUME_REASON_INSUFFICIENT_CLEAN_STREAK
@@ -64,6 +64,8 @@ class DecisionsRepository(AsyncRepository):
         self,
         scan_run_id: str | None = None,
         fb_ad_id: str | None = None,
+        profile_id: UUID | str | None = None,
+        profile_launch_id: UUID | str | None = None,
         limit: int | None = None,
     ) -> list[Decision]:
         stmt = select(Decision).order_by(Decision.created_at.desc())
@@ -71,6 +73,12 @@ class DecisionsRepository(AsyncRepository):
             stmt = stmt.where(Decision.scan_run_id == scan_run_id)
         if fb_ad_id is not None:
             stmt = stmt.where(Decision.fb_ad_id == fb_ad_id)
+        if profile_id is not None or profile_launch_id is not None:
+            stmt = stmt.join(ScanRun, Decision.scan_run_id == ScanRun.id)
+        if profile_id is not None:
+            stmt = stmt.where(ScanRun.profile_id == self._coerce_uuid(profile_id))
+        if profile_launch_id is not None:
+            stmt = stmt.where(ScanRun.profile_launch_id == self._coerce_uuid(profile_launch_id))
         if limit is not None:
             stmt = stmt.limit(limit)
         result = await self.session.scalars(stmt)
@@ -100,26 +108,31 @@ class DecisionsRepository(AsyncRepository):
             break
         return streak
 
-    async def get_latest_decisions(self, fb_ad_ids: list[str]) -> dict[str, Decision]:
+    async def get_latest_decisions(
+        self,
+        fb_ad_ids: list[str],
+        profile_launch_id: UUID | str | None = None,
+    ) -> dict[str, Decision]:
         """Возвращает последнее решение для каждого объявления из списка."""
 
         if not fb_ad_ids:
             return {}
 
-        ranked_decisions = (
-            select(
-                Decision.id.label("decision_id"),
-                Decision.fb_ad_id.label("fb_ad_id"),
-                func.row_number()
-                .over(
-                    partition_by=Decision.fb_ad_id,
-                    order_by=(Decision.created_at.desc(), Decision.id.desc()),
-                )
-                .label("row_number"),
+        ranked_base = select(
+            Decision.id.label("decision_id"),
+            Decision.fb_ad_id.label("fb_ad_id"),
+            func.row_number()
+            .over(
+                partition_by=Decision.fb_ad_id,
+                order_by=(Decision.created_at.desc(), Decision.id.desc()),
             )
-            .where(Decision.fb_ad_id.in_(fb_ad_ids))
-            .subquery()
+            .label("row_number"),
         )
+        if profile_launch_id is not None:
+            ranked_base = ranked_base.join(ScanRun, Decision.scan_run_id == ScanRun.id).where(
+                ScanRun.profile_launch_id == self._coerce_uuid(profile_launch_id)
+            )
+        ranked_decisions = ranked_base.where(Decision.fb_ad_id.in_(fb_ad_ids)).subquery()
 
         result = await self.session.scalars(
             select(Decision)
@@ -332,6 +345,8 @@ class ScanRunsRepository(AsyncRepository):
         profile_id: UUID | str | None,
         status: ScanRunStatus,
         started_at: datetime,
+        *,
+        profile_launch_id: UUID | str | None = None,
         finished_at: datetime | None = None,
         rows_seen: int = 0,
         rows_parsed: int = 0,
@@ -341,6 +356,7 @@ class ScanRunsRepository(AsyncRepository):
         scan_run = ScanRun(
             browser_host_id=self._coerce_uuid(browser_host_id),
             profile_id=self._coerce_uuid(profile_id),
+            profile_launch_id=self._coerce_uuid(profile_launch_id),
             status=status,
             started_at=started_at,
             finished_at=finished_at,
@@ -374,17 +390,39 @@ class ScanRunsRepository(AsyncRepository):
         )
         return list(result.all())
 
-    async def list_scan_run_rows(self) -> list[tuple[ScanRun, str | None, str | None]]:
+    async def list_scan_run_rows(
+        self,
+        *,
+        profile_id: UUID | str | None = None,
+        profile_launch_id: UUID | str | None = None,
+    ) -> list[tuple[ScanRun, str | None, str | None, str | None, str | None]]:
         stmt = (
-            select(ScanRun, BrowserHost.name, Profile.vendor_profile_id)
+            select(
+                ScanRun,
+                BrowserHost.name,
+                Profile.vendor_profile_id,
+                ProfileLaunch.id,
+                ProfileLaunch.name,
+            )
             .outerjoin(BrowserHost, ScanRun.browser_host_id == BrowserHost.id)
             .outerjoin(Profile, ScanRun.profile_id == Profile.id)
+            .outerjoin(ProfileLaunch, ScanRun.profile_launch_id == ProfileLaunch.id)
             .order_by(ScanRun.started_at.desc())
         )
+        if profile_id is not None:
+            stmt = stmt.where(Profile.vendor_profile_id == str(profile_id))
+        if profile_launch_id is not None:
+            stmt = stmt.where(ScanRun.profile_launch_id == self._coerce_uuid(profile_launch_id))
         result = await self.session.execute(stmt)
         return [
-            (scan_run, browser_host_name, vendor_profile_id)
-            for scan_run, browser_host_name, vendor_profile_id in result.all()
+            (
+                scan_run,
+                browser_host_name,
+                vendor_profile_id,
+                str(profile_launch_id_value) if profile_launch_id_value is not None else None,
+                profile_launch_name,
+            )
+            for scan_run, browser_host_name, vendor_profile_id, profile_launch_id_value, profile_launch_name in result.all()
         ]
 
     async def update_scan_run(

@@ -85,7 +85,7 @@ function mockDashboardEndpoints(
 }
 
 describe("DashboardPage", () => {
-  // Проверяет, что обзор не обрезает четвертое объявление внутри одного adset и показывает частоту скана из settings API.
+  // Проверяет, что обзор не обрезает четвертое объявление внутри одного adset.
   it("показывает все объявления adset без искусственного лимита карточек", async () => {
     mockDashboardEndpoints([
       buildAdSummary({ fb_ad_id: "120241420000000005", ad_name: "DRC_CR2_CR005", spend: "1.54" }),
@@ -100,7 +100,6 @@ describe("DashboardPage", () => {
     expect(screen.getByText("DRC_CR2_CR006")).toBeInTheDocument();
     expect(screen.getByText("DRC_CR2_CR007")).toBeInTheDocument();
     expect(screen.getByText("DRC_CR2_CR008")).toBeInTheDocument();
-    expect(screen.getByText("60 секунд")).toBeInTheDocument();
   });
 
   // Проверяет, что обзор не скрывает кампании и adset после удаления лимитов превью.

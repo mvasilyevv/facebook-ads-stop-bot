@@ -1,5 +1,5 @@
 from core.models.advertising import Ad, AdSet, Campaign, MetricSnapshot
-from core.models.browser import BrowserHost, BrowserSession, Profile, WorkerHeartbeat
+from core.models.browser import BrowserHost, BrowserSession, Profile, ProfileLaunch, WorkerHeartbeat
 from core.models.offers import EntityOfferBinding, Offer, OfferRateVersion
 from core.models.operations import (
     ActionExecution,
@@ -27,6 +27,7 @@ __all__ = [
     "Offer",
     "OfferRateVersion",
     "Profile",
+    "ProfileLaunch",
     "Rule",
     "RuleSet",
     "ScanRun",

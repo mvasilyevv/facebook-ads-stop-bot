@@ -7,6 +7,7 @@ import httpx
 import pytest
 
 from apps.browser_host.adapters.models import AdapterHealth, AutomationLaunchResult, ProfileStatus
+from core.config import get_settings as get_cached_settings
 from core.domain import (
     DecisionType,
     DeliveryStatus,
@@ -95,6 +96,8 @@ async def api_client(async_session_factory, monkeypatch):
     from apps.api.routers import sessions as sessions_router
     from apps.api.services import health as health_service
 
+    monkeypatch.setenv("FEATURE_AUTO_RESUME", "false")
+    get_cached_settings.cache_clear()
     fake_adapter = FakeVisionAdapter()
     fake_session_manager = FakeSessionManager(fake_adapter)
     monkeypatch.setattr(api_deps, "get_session_factory", lambda: async_session_factory)
@@ -675,8 +678,18 @@ async def test_service_settings_routes_persist_runtime_values(api_client) -> Non
     assert update_response.status_code == 200
     assert refreshed_response.status_code == 200
     assert update_response.json()["auto_pause_enabled"] is True
-    assert update_response.json()["auto_resume_enabled"] is False
-    assert update_response.json()["auto_resume_available"] is False
+    assert (
+        update_response.json()["auto_resume_enabled"]
+        is update_response.json()["auto_resume_available"]
+    )
+    assert (
+        refreshed_response.json()["auto_resume_enabled"]
+        is refreshed_response.json()["auto_resume_available"]
+    )
+    assert (
+        update_response.json()["auto_resume_available"]
+        is initial_response.json()["auto_resume_available"]
+    )
     assert update_response.json()["observe_only_enabled"] is False
     assert update_response.json()["scan_interval_seconds"] == 60
     assert update_response.json()["vision_local_api_url"] == "http://127.0.0.1:4040"

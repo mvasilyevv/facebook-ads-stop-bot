@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from core.db.base import Base
@@ -42,6 +42,31 @@ class Profile(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     browser_host: Mapped[BrowserHost] = relationship(back_populates="profiles")
     browser_sessions: Mapped[list["BrowserSession"]] = relationship(back_populates="profile")
     scan_runs: Mapped[list["ScanRun"]] = relationship()
+    launches: Mapped[list["ProfileLaunch"]] = relationship(back_populates="profile")
+
+
+class ProfileLaunch(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "profile_launches"
+    __table_args__ = (
+        Index(
+            "uq_profile_launches_active_per_profile",
+            "profile_id",
+            unique=True,
+            sqlite_where=text("is_active = 1"),
+            postgresql_where=text("is_active"),
+        ),
+    )
+
+    profile_id: Mapped[str] = mapped_column(
+        ForeignKey("profiles.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(255))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    profile: Mapped[Profile] = relationship(back_populates="launches")
+    scan_runs: Mapped[list["ScanRun"]] = relationship(back_populates="profile_launch")
 
 
 class BrowserSession(UUIDPrimaryKeyMixin, TimestampMixin, Base):

@@ -21,6 +21,7 @@ from core.models.base_mixins import TimestampMixin, UUIDPrimaryKeyMixin
 
 if TYPE_CHECKING:
     from core.models.advertising import Ad, MetricSnapshot
+    from core.models.browser import ProfileLaunch
 
 _ENTITY_TYPE_ENUM = Enum(
     EntityType,
@@ -60,6 +61,9 @@ class ScanRun(UUIDPrimaryKeyMixin, Base):
         ForeignKey("browser_hosts.id", ondelete="SET NULL")
     )
     profile_id: Mapped[str | None] = mapped_column(ForeignKey("profiles.id", ondelete="SET NULL"))
+    profile_launch_id: Mapped[str | None] = mapped_column(
+        ForeignKey("profile_launches.id", ondelete="SET NULL")
+    )
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     status: Mapped[ScanRunStatus] = mapped_column(Enum(ScanRunStatus, name="scan_run_status_enum"))
@@ -70,6 +74,7 @@ class ScanRun(UUIDPrimaryKeyMixin, Base):
 
     metric_snapshots: Mapped[list[MetricSnapshot]] = relationship(back_populates="scan_run")
     decisions: Mapped[list["Decision"]] = relationship(back_populates="scan_run")
+    profile_launch: Mapped["ProfileLaunch | None"] = relationship(back_populates="scan_runs")
 
 
 class ControlFlag(UUIDPrimaryKeyMixin, TimestampMixin, Base):

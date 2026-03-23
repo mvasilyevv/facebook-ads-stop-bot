@@ -16,6 +16,8 @@ from apps.api.routers import (
     decisions,
     health,
     offers,
+    profile_launches,
+    profiles,
     rules,
     scan_runs,
     sessions,
@@ -82,6 +84,8 @@ async def runtime_exception_handler(request: Request, exc: RuntimeError) -> JSON
 
 
 app.include_router(health.router)
+app.include_router(profiles.router)
+app.include_router(profile_launches.router)
 app.include_router(ads.router)
 app.include_router(decisions.router)
 app.include_router(scan_runs.router)

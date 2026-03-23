@@ -12,6 +12,8 @@ class ScanRunItem(BaseModel):
     id: str
     browser_host_id: str
     profile_id: str
+    profile_launch_id: str | None = None
+    profile_launch_name: str | None = None
     status: str
     rows_seen: int
     rows_parsed: int
