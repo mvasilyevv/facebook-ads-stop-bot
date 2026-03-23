@@ -8,10 +8,61 @@ import {
   formatCompactId,
   formatDateTime,
   formatMetricText,
-  formatRelativeStatus,
 } from "../lib/format";
 import { getBadgeTone } from "../lib/helpers";
 import type { ScanRunItem } from "../types";
+
+function formatDurationMs(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) {
+    return "—";
+  }
+  return `${value} мс`;
+}
+
+function formatPipelineKind(kind: ScanRunItem["pipeline_kind"]): string {
+  switch (kind) {
+    case "FULL_SCAN":
+      return "полный скан";
+    case "TARGETED_RECHECK":
+      return "быстрая перепроверка";
+    default:
+      return String(kind).replaceAll("_", " ").toLowerCase();
+  }
+}
+
+function formatTriggerSource(source: string): string {
+  switch (source.toLowerCase()) {
+    case "scheduler":
+      return "планировщик";
+    case "manual":
+      return "вручную";
+    case "watchlist":
+      return "список наблюдения";
+    case "action_queue":
+      return "очередь действий";
+    default:
+      return source.replaceAll("_", " ").toLowerCase();
+  }
+}
+
+function formatScanStatusLabel(status: string): string {
+  switch (status.toUpperCase()) {
+    case "QUEUED":
+      return "в очереди";
+    case "RUNNING":
+      return "в работе";
+    case "SUCCEEDED":
+      return "выполнено";
+    case "FAILED":
+      return "ошибка";
+    case "CANCELLED":
+      return "отменено";
+    case "SKIPPED":
+      return "пропущено";
+    default:
+      return String(status).replaceAll("_", " ").toLowerCase();
+  }
+}
 
 function renderScopeSummary(summary: ScanRunItem["scope_summary"]) {
   if (!summary) {
@@ -70,9 +121,12 @@ export default function ScansPage() {
   useAutoRefresh(reload, { enabled: !loading });
 
   const visibleScans = scans.filter((scan) => {
-    const text = `${scan.id} ${scan.browser_host_id} ${scan.profile_id} ${scan.status}`.toLowerCase();
+    const text = `${scan.id} ${scan.browser_host_id} ${scan.profile_id} ${scan.status} ${scan.pipeline_kind} ${scan.trigger_source}`.toLowerCase();
     return text.includes(search.toLowerCase());
   });
+  const fullScanCount = scans.filter((scan) => scan.pipeline_kind === "FULL_SCAN").length;
+  const recheckCount = scans.filter((scan) => scan.pipeline_kind === "TARGETED_RECHECK").length;
+  const actionJobsEnqueued = scans.reduce((sum, scan) => sum + scan.action_jobs_enqueued, 0);
 
   if (loading) {
     return <div className="page-loading">Загрузка сканов...</div>;
@@ -83,7 +137,7 @@ export default function ScansPage() {
       <div className="page-header">
         <div>
           <h1 className="page-title">Сканирование объявлений</h1>
-          <p className="page-subtitle">История запусков сканирования и результаты</p>
+          <p className="page-subtitle">История полного скана и быстрой перепроверки с timing-метриками</p>
         </div>
         <div className="page-header__actions">
           <button type="button" className="button button--primary" onClick={() => void reload(true)}>
@@ -93,6 +147,25 @@ export default function ScansPage() {
       </div>
 
       {error && <div className="inline-error">{error}</div>}
+
+      <div className="metric-grid dashboard-summary-grid">
+        <article className="metric-tile metric-tile--accent">
+          <span>Полный скан</span>
+          <strong>{fullScanCount}</strong>
+          <div className="mini-row">
+            <span>Быстрая перепроверка</span>
+            <span>{recheckCount}</span>
+          </div>
+        </article>
+        <article className="metric-tile">
+          <span>Очередь действий</span>
+          <strong>{actionJobsEnqueued}</strong>
+          <div className="mini-row">
+            <span>Последний запуск</span>
+            <span>{visibleScans[0] ? formatScanStatusLabel(visibleScans[0].status) : "нет данных"}</span>
+          </div>
+        </article>
+      </div>
 
       <SectionCard
         title="Запуски сканирования"
@@ -117,8 +190,15 @@ export default function ScansPage() {
                   <th>Хост</th>
                   <th>Профиль</th>
                   <th>Статус</th>
+                  <th>Тип</th>
+                  <th>Источник</th>
                   <th>Просмотрено</th>
                   <th>Разобрано</th>
+                  <th>Сбор</th>
+                  <th>Оценка</th>
+                  <th>Сохранение</th>
+                  <th>Очередь</th>
+                  <th>Задачи</th>
                   <th>Сводка по объёму</th>
                   <th>Ошибка</th>
                   <th>Начало</th>
@@ -144,10 +224,17 @@ export default function ScansPage() {
                       </span>
                     </td>
                     <td>
-                      <Badge tone={getBadgeTone(scan.status)}>{formatRelativeStatus(scan.status)}</Badge>
+                      <Badge tone={getBadgeTone(scan.status)}>{formatScanStatusLabel(scan.status)}</Badge>
                     </td>
+                    <td>{formatPipelineKind(scan.pipeline_kind)}</td>
+                    <td>{formatTriggerSource(scan.trigger_source)}</td>
                     <td>{formatMetricText(scan.rows_seen)}</td>
                     <td>{formatMetricText(scan.rows_parsed)}</td>
+                    <td title={`${scan.collect_ms} мс`}>{formatDurationMs(scan.collect_ms)}</td>
+                    <td title={`${scan.evaluate_ms} мс`}>{formatDurationMs(scan.evaluate_ms)}</td>
+                    <td title={`${scan.persist_ms} мс`}>{formatDurationMs(scan.persist_ms)}</td>
+                    <td title={`${scan.queue_ms} мс`}>{formatDurationMs(scan.queue_ms)}</td>
+                    <td>{formatMetricText(scan.action_jobs_enqueued)}</td>
                     <td>{renderScopeSummary(scan.scope_summary)}</td>
                     <td>
                       {scan.error_message ? (

@@ -40,6 +40,10 @@ test("DashboardPage renders loaded dashboard data and summary states", async () 
           registrations: 0,
           cost_per_registration: "0.00",
           deposits: 0,
+          risk_band: "SAFE",
+          fast_stop_state: "IDLE",
+          queued_action_status: null,
+          priority_score: 0,
           resolved_cpa_usd: "5.00",
           last_seen_at: "2026-03-22T10:05:00Z",
         },
@@ -62,6 +66,11 @@ test("DashboardPage renders loaded dashboard data and summary states", async () 
           registrations: 1,
           cost_per_registration: "1.50",
           deposits: 0,
+          risk_band: "STOP",
+          fast_stop_state: "WATCH",
+          watch_reason: "CPA выше порога",
+          queued_action_status: null,
+          priority_score: 95,
           resolved_cpa_usd: "5.00",
           last_seen_at: "2026-03-22T10:10:00Z",
         },
@@ -86,7 +95,10 @@ test("DashboardPage renders loaded dashboard data and summary states", async () 
         auto_resume_enabled: false,
         auto_resume_available: false,
         observe_only_enabled: false,
-        scan_interval_seconds: 60,
+        full_scan_interval_seconds: 60,
+        recheck_interval_seconds: 15,
+        full_scan_profile_concurrency: 2,
+        action_worker_concurrency: 2,
         vision_local_api_url: "http://127.0.0.1:3030",
         vision_cloud_api_url: "https://v1.empr.cloud/api/v1",
         telegram_chat_id: "777000",
@@ -102,8 +114,16 @@ test("DashboardPage renders loaded dashboard data and summary states", async () 
           browser_host_id: "vision-3030",
           profile_id: "profile-1",
           status: "SUCCEEDED",
+          pipeline_kind: "FULL_SCAN",
+          trigger_source: "scheduler",
+          target_fb_ad_ids: [],
           rows_seen: 42,
           rows_parsed: 42,
+          collect_ms: 1000,
+          evaluate_ms: 500,
+          persist_ms: 300,
+          queue_ms: 100,
+          action_jobs_enqueued: 0,
           scope_summary: {
             rows_in_scope: 42,
             rows_not_seen_this_scan: 0,
@@ -120,13 +140,12 @@ test("DashboardPage renders loaded dashboard data and summary states", async () 
     <DashboardPage />,
   );
 
-  expect(await screen.findByRole("heading", { name: "Обзор системы" })).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "Обзор запуска" })).toBeInTheDocument();
   expect(screen.getByText("боевой")).toBeInTheDocument();
-  expect(screen.getByText("60 секунд")).toBeInTheDocument();
+  expect(screen.getByText("Полный скан")).toBeInTheDocument();
   expect(screen.getByText("00:30")).toBeInTheDocument();
-  expect(screen.getByText("включена")).toBeInTheDocument();
-  expect(screen.getByText("frontend")).toBeInTheDocument();
-  expect(screen.getByText("healthy")).toBeInTheDocument();
+  expect(screen.getAllByText("Быстрый стоп").length).toBeGreaterThan(0);
+  expect(screen.getByText("нет очереди")).toBeInTheDocument();
   expect(
     screen.getByRole("heading", { name: "CR2 | DRC | MV | NEW | pwa.partners | 15.03" }),
   ).toBeInTheDocument();

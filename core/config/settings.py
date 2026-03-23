@@ -43,7 +43,10 @@ class Settings(BaseSettings):
         alias="VISION_LOCAL_API_URL",
     )
     vision_timeout_seconds: float = Field(default=10.0, alias="VISION_TIMEOUT_SECONDS")
-    worker_scan_interval_seconds: int = Field(default=120, alias="WORKER_SCAN_INTERVAL_SECONDS")
+    full_scan_interval_seconds: int = Field(default=60, alias="FULL_SCAN_INTERVAL_SECONDS")
+    recheck_interval_seconds: int = Field(default=15, alias="RECHECK_INTERVAL_SECONDS")
+    full_scan_profile_concurrency: int = Field(default=2, alias="FULL_SCAN_PROFILE_CONCURRENCY")
+    action_worker_concurrency: int = Field(default=2, alias="ACTION_WORKER_CONCURRENCY")
     scanner_stabilize_attempts: int = Field(default=3, alias="SCANNER_STABILIZE_ATTEMPTS")
     scanner_stabilize_delay_ms: int = Field(default=800, alias="SCANNER_STABILIZE_DELAY_MS")
     scanner_scroll_pause_ms: int = Field(default=700, alias="SCANNER_SCROLL_PAUSE_MS")
@@ -80,6 +83,10 @@ class Settings(BaseSettings):
             f"{self.postgres_user}:{self.postgres_password}"
             f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
         )
+
+    @property
+    def worker_scan_interval_seconds(self) -> int:
+        return self.full_scan_interval_seconds
 
 
 @lru_cache(maxsize=1)

@@ -3,7 +3,7 @@ from __future__ import annotations
 import contextlib
 import logging
 from typing import Any, Iterable
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 from apps.browser_host.facebook_popups import dismiss_known_ads_manager_popups
 from apps.browser_host.facebook_service_page import (
@@ -32,6 +32,9 @@ _SWITCH_WAIT_TIMEOUT_MS = 250
 _ROW_SEARCH_SCROLL_ATTEMPTS = 12
 _ROW_SEARCH_SCROLL_STEP_PX = 2200
 _ROW_SEARCH_SCROLL_PAUSE_MS = 250
+_TARGETED_SERVICE_QUERY_KEY = "fb_agent_service"
+_TARGETED_SERVICE_SELECTED_KEY = "selected_ad_ids"
+_TARGETED_SERVICE_RESET_KEYS = ("selected_campaign_ids", "selected_adset_ids")
 
 
 class FacebookAdsActionExecutor:
@@ -46,10 +49,27 @@ class FacebookAdsActionExecutor:
         browser_host_name: str,
         fb_ad_id: str,
     ) -> BrowserActionResult:
-        return await self._execute_action(
+        results = await self.pause_ads(profile_id, browser_host_name, [fb_ad_id])
+        if results:
+            return results[0]
+        return BrowserActionResult(
+            success=False,
+            message=f"Не удалось выполнить действие паузы для объявления {fb_ad_id}",
+            fb_ad_id=fb_ad_id,
             profile_id=profile_id,
             browser_host_name=browser_host_name,
-            fb_ad_id=fb_ad_id,
+        )
+
+    async def pause_ads(
+        self,
+        profile_id: str,
+        browser_host_name: str,
+        fb_ad_ids: list[str],
+    ) -> list[BrowserActionResult]:
+        return await self._execute_batch_action(
+            profile_id=profile_id,
+            browser_host_name=browser_host_name,
+            fb_ad_ids=fb_ad_ids,
             button_names=_PAUSE_BUTTON_NAMES,
             action_name="паузы",
             success_message="переведено на паузу",
@@ -64,10 +84,27 @@ class FacebookAdsActionExecutor:
         browser_host_name: str,
         fb_ad_id: str,
     ) -> BrowserActionResult:
-        return await self._execute_action(
+        results = await self.resume_ads(profile_id, browser_host_name, [fb_ad_id])
+        if results:
+            return results[0]
+        return BrowserActionResult(
+            success=False,
+            message=f"Не удалось выполнить действие возобновления для объявления {fb_ad_id}",
+            fb_ad_id=fb_ad_id,
             profile_id=profile_id,
             browser_host_name=browser_host_name,
-            fb_ad_id=fb_ad_id,
+        )
+
+    async def resume_ads(
+        self,
+        profile_id: str,
+        browser_host_name: str,
+        fb_ad_ids: list[str],
+    ) -> list[BrowserActionResult]:
+        return await self._execute_batch_action(
+            profile_id=profile_id,
+            browser_host_name=browser_host_name,
+            fb_ad_ids=fb_ad_ids,
             button_names=_RESUME_BUTTON_NAMES,
             action_name="возобновления",
             success_message="возобновлено",
@@ -76,12 +113,127 @@ class FacebookAdsActionExecutor:
             desired_switch_state=True,
         )
 
-    async def _execute_action(
+    async def _execute_batch_action(
         self,
         *,
         profile_id: str,
         browser_host_name: str,
+        fb_ad_ids: list[str],
+        button_names: tuple[str, ...],
+        action_name: str,
+        success_message: str,
+        action_log_label: str,
+        error_action_label: str,
+        desired_switch_state: bool,
+    ) -> list[BrowserActionResult]:
+        logger = logging.getLogger(__name__)
+        target_fb_ad_ids = tuple(dict.fromkeys(fb_ad_id for fb_ad_id in fb_ad_ids if fb_ad_id))
+        if not target_fb_ad_ids:
+            return []
+
+        attached_session: AttachedBrowserSession | None = None
+        try:
+            attached_session = await self._session_manager.ensure_session(profile_id)
+            current_page = await self._resolve_action_page(attached_session, target_fb_ad_ids)
+            if current_page is None:
+                raise RuntimeError("Не удалось подготовить служебную страницу Ads Manager")
+            if await dismiss_known_ads_manager_popups(current_page):
+                logger.info(
+                    "Закрываю блокирующее окно Ads Manager перед пакетным изменением статуса объявлений %s",
+                    ", ".join(target_fb_ad_ids),
+                )
+
+            results: list[BrowserActionResult] = []
+            for fb_ad_id in target_fb_ad_ids:
+                result = await self._execute_single_action(
+                    page=current_page,
+                    fb_ad_id=fb_ad_id,
+                    batch_fb_ad_ids=target_fb_ad_ids,
+                    browser_host_name=browser_host_name,
+                    profile_id=profile_id,
+                    button_names=button_names,
+                    action_name=action_name,
+                    success_message=success_message,
+                    action_log_label=action_log_label,
+                    error_action_label=error_action_label,
+                    desired_switch_state=desired_switch_state,
+                )
+                results.append(result)
+            return results
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Не удалось выполнить пакетное действие %s для профиля %s: %s",
+                error_action_label,
+                profile_id,
+                exc,
+            )
+            return [
+                BrowserActionResult(
+                    success=False,
+                    message=(
+                        f"Не удалось выполнить действие {error_action_label} для объявления "
+                        f"{fb_ad_id}: {exc}"
+                    ),
+                    fb_ad_id=fb_ad_id,
+                    profile_id=profile_id,
+                    browser_host_name=browser_host_name,
+                )
+                for fb_ad_id in target_fb_ad_ids
+            ]
+        finally:
+            if attached_session is not None:
+                with contextlib.suppress(Exception):
+                    await self._session_manager.release_session(attached_session)
+
+    async def _resolve_action_page(
+        self,
+        session: AttachedBrowserSession,
+        fb_ad_ids: tuple[str, ...],
+    ) -> Any | None:
+        seed_page = self._find_seed_ads_manager_page(session)
+        seed_url = getattr(seed_page, "url", "") or ""
+        target_page = await ensure_ads_manager_service_page(
+            browser=session.browser,
+            context=session.context,
+            service_role=ACTIONS_SERVICE_PAGE,
+            seed_url=seed_url,
+            selected_ad_ids=list(fb_ad_ids),
+        )
+        await self._ensure_batch_context(
+            page=target_page,
+            seed_url=seed_url or getattr(target_page, "url", "") or "",
+            fb_ad_ids=fb_ad_ids,
+        )
+        return target_page
+
+    async def _ensure_batch_context(
+        self,
+        *,
+        page: Any,
+        seed_url: str,
+        fb_ad_ids: tuple[str, ...],
+    ) -> bool:
+        target_url = self._build_service_page_url(
+            seed_url,
+            service_role=ACTIONS_SERVICE_PAGE,
+            fb_ad_ids=fb_ad_ids,
+        )
+        current_url = getattr(page, "url", "") or ""
+        if self._normalize_url(current_url) != self._normalize_url(target_url):
+            goto = getattr(page, "goto", None)
+            if callable(goto):
+                await goto(target_url, wait_until="domcontentloaded")
+        await self._wait_for_dom_ready(page)
+        return await self._page_targets_selected_ads(page, fb_ad_ids)
+
+    async def _execute_single_action(
+        self,
+        *,
+        page: Any,
         fb_ad_id: str,
+        batch_fb_ad_ids: tuple[str, ...],
+        browser_host_name: str,
+        profile_id: str,
         button_names: tuple[str, ...],
         action_name: str,
         success_message: str,
@@ -90,73 +242,31 @@ class FacebookAdsActionExecutor:
         desired_switch_state: bool,
     ) -> BrowserActionResult:
         logger = logging.getLogger(__name__)
-        attached_session: AttachedBrowserSession | None = None
 
-        try:
-            attached_session = await self._session_manager.ensure_session(profile_id)
-            current_page = await self._resolve_action_page(attached_session, fb_ad_id)
-            if current_page is None:
-                raise RuntimeError("Не удалось подготовить служебную страницу Ads Manager")
-            if await dismiss_known_ads_manager_popups(current_page):
-                logger.info(
-                    "Закрываю блокирующее окно Ads Manager перед изменением статуса объявления %s",
-                    fb_ad_id,
-                )
-
-            current_page_action = await self._execute_current_page_flow(
-                page=current_page,
-                fb_ad_id=fb_ad_id,
-                button_names=button_names,
-                action_name=action_name,
-                desired_switch_state=desired_switch_state,
+        if not await self._page_targets_selected_ads(page, batch_fb_ad_ids):
+            context_ready = await self._ensure_batch_context(
+                page=page,
+                seed_url=getattr(page, "url", "") or "",
+                fb_ad_ids=batch_fb_ad_ids,
             )
-            if current_page_action:
-                await self._confirm_action(current_page)
-                logger.info(
-                    "Объявление %s профиля %s переведено %s в текущей вкладке Ads Manager",
-                    fb_ad_id,
-                    profile_id,
-                    action_log_label,
-                )
-                return BrowserActionResult(
-                    success=True,
-                    message=f"Объявление {fb_ad_id} {success_message}",
-                    fb_ad_id=fb_ad_id,
-                    profile_id=profile_id,
-                    browser_host_name=browser_host_name,
+            if not context_ready:
+                logger.warning(
+                    "Не удалось подтвердить целевой контекст Ads Manager для объявлений %s, "
+                    "перехожу к аварийному пути",
+                    ", ".join(batch_fb_ad_ids),
                 )
 
-            found_row = await self._find_row_on_page_with_scroll(current_page, fb_ad_id)
-            if found_row is None:
-                return BrowserActionResult(
-                    success=False,
-                    message=f"Не удалось найти объявление {fb_ad_id} для {action_name}",
-                    fb_ad_id=fb_ad_id,
-                    profile_id=profile_id,
-                    browser_host_name=browser_host_name,
-                )
-
-            fallback_action = await self._execute_row_fallback_flow(
-                row=found_row,
-                page=current_page,
-                fb_ad_id=fb_ad_id,
-                button_names=button_names,
-                action_name=action_name,
-                desired_switch_state=desired_switch_state,
-            )
-            if not fallback_action:
-                return BrowserActionResult(
-                    success=False,
-                    message=f"Не удалось найти кнопку {action_name} для объявления {fb_ad_id}",
-                    fb_ad_id=fb_ad_id,
-                    profile_id=profile_id,
-                    browser_host_name=browser_host_name,
-                )
-
-            await self._confirm_action(current_page)
-
+        if await self._execute_current_page_flow(
+            page=page,
+            fb_ad_id=fb_ad_id,
+            batch_fb_ad_ids=batch_fb_ad_ids,
+            button_names=button_names,
+            action_name=action_name,
+            desired_switch_state=desired_switch_state,
+        ):
+            await self._confirm_action(page)
             logger.info(
-                "Объявление %s профиля %s переведено %s через fallback-строку",
+                "Объявление %s профиля %s переведено %s в целевой вкладке Ads Manager",
                 fb_ad_id,
                 profile_id,
                 action_log_label,
@@ -168,39 +278,58 @@ class FacebookAdsActionExecutor:
                 profile_id=profile_id,
                 browser_host_name=browser_host_name,
             )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "Не удалось выполнить действие %s для объявления %s профиля %s: %s",
-                error_action_label,
+
+        found_row = await self._find_row_on_page_with_scroll(page, fb_ad_id)
+        if found_row is not None and await self._execute_row_fallback_flow(
+            row=found_row,
+            page=page,
+            fb_ad_id=fb_ad_id,
+            button_names=button_names,
+            action_name=action_name,
+            desired_switch_state=desired_switch_state,
+        ):
+            await self._confirm_action(page)
+            logger.info(
+                "Объявление %s профиля %s переведено %s через целевую строку",
                 fb_ad_id,
                 profile_id,
-                exc,
+                action_log_label,
             )
             return BrowserActionResult(
-                success=False,
-                message=f"Не удалось выполнить действие {error_action_label} для объявления {fb_ad_id}: {exc}",
+                success=True,
+                message=f"Объявление {fb_ad_id} {success_message}",
                 fb_ad_id=fb_ad_id,
                 profile_id=profile_id,
                 browser_host_name=browser_host_name,
             )
-        finally:
-            if attached_session is not None:
-                with contextlib.suppress(Exception):
-                    await self._session_manager.release_session(attached_session)
 
-    async def _resolve_action_page(
-        self,
-        session: AttachedBrowserSession,
-        fb_ad_id: str,
-    ) -> Any | None:
-        seed_page = self._find_seed_ads_manager_page(session)
-        seed_url = getattr(seed_page, "url", "") or ""
-        return await ensure_ads_manager_service_page(
-            browser=session.browser,
-            context=session.context,
-            service_role=ACTIONS_SERVICE_PAGE,
-            seed_url=seed_url,
-            selected_ad_id=fb_ad_id,
+        if await self._set_switch_state_on_page(
+            page,
+            fb_ad_id,
+            desired_switch_state,
+            allow_generic=True,
+        ):
+            await self._confirm_action(page)
+            logger.warning(
+                "Объявление %s профиля %s переведено %s через аварийный общий контекст",
+                fb_ad_id,
+                profile_id,
+                action_log_label,
+            )
+            return BrowserActionResult(
+                success=True,
+                message=f"Объявление {fb_ad_id} {success_message}",
+                fb_ad_id=fb_ad_id,
+                profile_id=profile_id,
+                browser_host_name=browser_host_name,
+            )
+
+        return BrowserActionResult(
+            success=False,
+            message=f"Не удалось выполнить действие {error_action_label} для объявления {fb_ad_id}",
+            fb_ad_id=fb_ad_id,
+            profile_id=profile_id,
+            browser_host_name=browser_host_name,
         )
 
     def _find_seed_ads_manager_page(self, session: AttachedBrowserSession) -> Any | None:
@@ -219,10 +348,14 @@ class FacebookAdsActionExecutor:
         *,
         page: Any,
         fb_ad_id: str,
+        batch_fb_ad_ids: tuple[str, ...],
         button_names: tuple[str, ...],
         action_name: str,
         desired_switch_state: bool,
     ) -> bool:
+        if not await self._page_targets_selected_ads(page, batch_fb_ad_ids):
+            return False
+
         if await self._set_switch_state_on_page(
             page,
             fb_ad_id,
@@ -230,9 +363,6 @@ class FacebookAdsActionExecutor:
             allow_generic=False,
         ):
             return True
-
-        if not self._page_targets_selected_ad(page, fb_ad_id):
-            return False
 
         return await self._execute_selected_ad_flow(
             page=page,
@@ -243,14 +373,16 @@ class FacebookAdsActionExecutor:
         )
 
     @staticmethod
-    def _page_targets_selected_ad(page: Any, fb_ad_id: str) -> bool:
+    async def _page_targets_selected_ads(page: Any, fb_ad_ids: tuple[str, ...]) -> bool:
         url = getattr(page, "url", "") or ""
-        selected_values = parse_qs(urlparse(url).query).get("selected_ad_ids", [])
+        selected_values = parse_qs(urlparse(url).query).get(_TARGETED_SERVICE_SELECTED_KEY, [])
+        selected_ids: set[str] = set()
         for value in selected_values:
             for selected_id in str(value).split(","):
-                if selected_id.strip() == fb_ad_id:
-                    return True
-        return False
+                normalized = selected_id.strip()
+                if normalized:
+                    selected_ids.add(normalized)
+        return all(fb_ad_id in selected_ids for fb_ad_id in fb_ad_ids)
 
     async def _execute_selected_ad_flow(
         self,
@@ -267,6 +399,7 @@ class FacebookAdsActionExecutor:
             page,
             fb_ad_id,
             desired_switch_state,
+            allow_generic=False,
         ):
             return True
 
@@ -315,6 +448,64 @@ class FacebookAdsActionExecutor:
             desired_switch_state,
             allow_generic=False,
         )
+
+    @staticmethod
+    def _build_service_page_url(
+        seed_url: str,
+        *,
+        service_role: str,
+        fb_ad_ids: tuple[str, ...],
+    ) -> str:
+        parsed = urlparse(seed_url or "https://adsmanager.facebook.com/adsmanager/manage/ads")
+        scheme = parsed.scheme or "https"
+        netloc = parsed.netloc or "adsmanager.facebook.com"
+        path = parsed.path or "/adsmanager/manage/ads"
+        if "adsmanager" not in path.casefold():
+            path = "/adsmanager/manage/ads"
+
+        query = parse_qs(parsed.query, keep_blank_values=True)
+        query.pop(_TARGETED_SERVICE_QUERY_KEY, None)
+        for key in (
+            "selected_ad_id",
+            _TARGETED_SERVICE_SELECTED_KEY,
+            *_TARGETED_SERVICE_RESET_KEYS,
+        ):
+            query.pop(key, None)
+        if fb_ad_ids:
+            query[_TARGETED_SERVICE_SELECTED_KEY] = list(fb_ad_ids)
+        query[_TARGETED_SERVICE_QUERY_KEY] = [service_role]
+        return urlunparse(
+            (
+                scheme,
+                netloc,
+                path,
+                parsed.params,
+                urlencode(query, doseq=True),
+                "",
+            )
+        )
+
+    @staticmethod
+    def _normalize_url(url: str) -> str:
+        parsed = urlparse(url)
+        normalized_query = urlencode(parse_qs(parsed.query, keep_blank_values=True), doseq=True)
+        return urlunparse(
+            (
+                parsed.scheme,
+                parsed.netloc,
+                parsed.path,
+                parsed.params,
+                normalized_query,
+                "",
+            )
+        )
+
+    async def _wait_for_dom_ready(self, page: Any) -> None:
+        wait_for_load_state = getattr(page, "wait_for_load_state", None)
+        if not callable(wait_for_load_state):
+            return
+        with contextlib.suppress(Exception):
+            await wait_for_load_state("domcontentloaded")
 
     async def _confirm_action(self, page: Any) -> None:
         wait_for_timeout = getattr(page, "wait_for_timeout", None)

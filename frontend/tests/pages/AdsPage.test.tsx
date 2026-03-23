@@ -26,6 +26,10 @@ function buildAdSummary(overrides: Partial<AdSummary>): AdSummary {
     registrations: 0,
     cost_per_registration: "0.00",
     deposits: 0,
+    risk_band: "SAFE",
+    fast_stop_state: "IDLE",
+    queued_action_status: null,
+    priority_score: 0,
     ...overrides,
   };
 }
@@ -53,9 +57,9 @@ describe("AdsPage", () => {
 
     const { container } = renderWithRouter(<AdsPage />);
 
-    expect(await screen.findByText("DRC_CR2_CR101")).toBeInTheDocument();
-    expect(screen.getByText("DRC_CR2_CR201")).toBeInTheDocument();
-    expect(screen.getByText("DRC_CR2_CR301")).toBeInTheDocument();
+    expect((await screen.findAllByText("DRC_CR2_CR101")).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("DRC_CR2_CR201").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("DRC_CR2_CR301").length).toBeGreaterThan(0);
 
     const adsetHeads = Array.from(container.querySelectorAll(".ads-adset-block__head strong")).map((node) =>
       node.textContent?.trim(),
@@ -92,10 +96,10 @@ describe("AdsPage", () => {
 
     const { container } = renderWithRouter(<AdsPage />);
 
-    expect(await screen.findByText("DRC_CR2_CR005")).toBeInTheDocument();
-    expect(screen.getByText("DRC_CR2_CR006")).toBeInTheDocument();
-    expect(screen.getByText("DRC_CR2_CR007")).toBeInTheDocument();
-    expect(screen.getByText("DRC_CR2_CR008")).toBeInTheDocument();
+    expect((await screen.findAllByText("DRC_CR2_CR005")).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("DRC_CR2_CR006").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("DRC_CR2_CR007").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("DRC_CR2_CR008").length).toBeGreaterThan(0);
 
     const adsetBlocks = container.querySelectorAll(".ads-adset-block");
     expect(adsetBlocks).toHaveLength(1);
@@ -126,10 +130,10 @@ describe("AdsPage", () => {
 
     renderWithRouter(<AdsPage />);
 
-    expect(await screen.findByText("DRC_CR2_CR_ATTENTION")).toBeInTheDocument();
+    expect((await screen.findAllByText("DRC_CR2_CR_ATTENTION")).length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole("button", { name: /внимание/i }));
 
-    expect(screen.getByText("DRC_CR2_CR_ATTENTION")).toBeInTheDocument();
+    expect(screen.getAllByText("DRC_CR2_CR_ATTENTION").length).toBeGreaterThan(0);
     expect(screen.queryByText("DRC_CR2_CR_OK")).not.toBeInTheDocument();
   });
 });

@@ -40,13 +40,29 @@ class WorkerScanRow:
 class FakeScannerProvider:
     """Фейковый provider сканирования для интеграционных сценариев worker."""
 
-    def __init__(self, rows: list[WorkerScanRow]) -> None:
+    def __init__(
+        self,
+        rows: list[WorkerScanRow],
+        *,
+        recovered_rows: list[WorkerScanRow] | None = None,
+    ) -> None:
         self.rows = rows
         self.calls: list[tuple[str, str]] = []
+        self.recovered_rows = recovered_rows or []
+        self.recover_calls: list[tuple[str, str, tuple[str, ...]]] = []
 
     async def scan_rows(self, profile_id: str, browser_host_name: str) -> list[WorkerScanRow]:
         self.calls.append((profile_id, browser_host_name))
         return self.rows
+
+    async def recover_rows(
+        self,
+        profile_id: str,
+        browser_host_name: str,
+        fb_ad_ids: list[str],
+    ) -> list[WorkerScanRow]:
+        self.recover_calls.append((profile_id, browser_host_name, tuple(fb_ad_ids)))
+        return [row for row in self.recovered_rows if row.fb_ad_id in set(fb_ad_ids)]
 
 
 @dataclass(slots=True, frozen=True)

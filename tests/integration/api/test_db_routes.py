@@ -9,19 +9,24 @@ import pytest
 from apps.browser_host.adapters.models import AdapterHealth, AutomationLaunchResult, ProfileStatus
 from core.config import get_settings as get_cached_settings
 from core.domain import (
+    ActionType,
     DecisionType,
     DeliveryStatus,
     EntityType,
+    RiskBand,
+    ScanPipelineKind,
     ScanRunStatus,
     ScopePresence,
     TrackingMode,
 )
 from core.repositories import (
+    ActionJobsRepository,
     AdsRepository,
     BrowserRepository,
     DecisionsRepository,
     OffersRepository,
     ScanRunsRepository,
+    WatchlistRepository,
 )
 
 
@@ -664,7 +669,10 @@ async def test_service_settings_routes_persist_runtime_values(api_client) -> Non
             "auto_pause_enabled": True,
             "auto_resume_enabled": True,
             "observe_only_enabled": False,
-            "scan_interval_seconds": 60,
+            "full_scan_interval_seconds": 60,
+            "recheck_interval_seconds": 15,
+            "full_scan_profile_concurrency": 2,
+            "action_worker_concurrency": 2,
             "vision_local_api_url": "http://127.0.0.1:4040",
             "vision_cloud_api_url": "https://vision.example/api",
             "telegram_chat_id": "777000",
@@ -691,7 +699,10 @@ async def test_service_settings_routes_persist_runtime_values(api_client) -> Non
         is initial_response.json()["auto_resume_available"]
     )
     assert update_response.json()["observe_only_enabled"] is False
-    assert update_response.json()["scan_interval_seconds"] == 60
+    assert update_response.json()["full_scan_interval_seconds"] == 60
+    assert update_response.json()["recheck_interval_seconds"] == 15
+    assert update_response.json()["full_scan_profile_concurrency"] == 2
+    assert update_response.json()["action_worker_concurrency"] == 2
     assert update_response.json()["vision_local_api_url"] == "http://127.0.0.1:4040"
     assert update_response.json()["vision_cloud_api_url"] == "https://vision.example/api"
     assert update_response.json()["telegram_chat_id"] == "777000"
@@ -699,7 +710,7 @@ async def test_service_settings_routes_persist_runtime_values(api_client) -> Non
     assert update_response.json()["telegram_bot_token_configured"] is True
     assert update_response.json()["vision_api_token_masked"].endswith("oken")
     assert update_response.json()["telegram_bot_token_masked"].endswith("oken")
-    assert refreshed_response.json()["scan_interval_seconds"] == 60
+    assert refreshed_response.json()["full_scan_interval_seconds"] == 60
     assert refreshed_response.json()["vision_local_api_url"] == "http://127.0.0.1:4040"
 
 
@@ -732,7 +743,10 @@ async def test_service_settings_routes_reject_invalid_scan_interval(api_client) 
             "auto_pause_enabled": True,
             "auto_resume_enabled": False,
             "observe_only_enabled": False,
-            "scan_interval_seconds": 45,
+            "full_scan_interval_seconds": 45,
+            "recheck_interval_seconds": 15,
+            "full_scan_profile_concurrency": 2,
+            "action_worker_concurrency": 2,
             "vision_local_api_url": "http://127.0.0.1:4040",
             "vision_cloud_api_url": "https://vision.example/api",
             "telegram_chat_id": "",
@@ -742,7 +756,168 @@ async def test_service_settings_routes_reject_invalid_scan_interval(api_client) 
     )
 
     assert response.status_code == 400
-    assert response.json()["detail"] == "Допустимая частота скана: 30, 60, 120 или 300 секунд"
+    assert (
+        response.json()["detail"] == "Допустимая частота полного скана: 30, 60, 120 или 300 секунд"
+    )
+
+
+# Проверяет, что watchlist API отдает риск, причину и fast-stop состояние по объявлению.
+@pytest.mark.asyncio
+async def test_watchlist_route_returns_fast_stop_items(api_client, async_session_factory) -> None:
+    client, _, _ = api_client
+
+    async with async_session_factory() as session:
+        browser_repo = BrowserRepository(session)
+        ads_repo = AdsRepository(session)
+        scan_repo = ScanRunsRepository(session)
+        watchlist_repo = WatchlistRepository(session)
+
+        browser_host = await browser_repo.upsert_browser_host(
+            name="vision-watchlist-route",
+            vendor="vision",
+            api_base_url="http://127.0.0.1:3030",
+            is_enabled=True,
+            last_heartbeat_at=datetime(2026, 3, 23, 10, 0, tzinfo=UTC),
+        )
+        profile = await browser_repo.upsert_profile(
+            browser_host_id=browser_host.id,
+            vendor_profile_id="vision-watchlist-profile",
+            display_name="Vision watchlist profile",
+            is_active=True,
+            last_launch_at=datetime(2026, 3, 23, 10, 1, tzinfo=UTC),
+        )
+        campaign = await ads_repo.upsert_campaign(scope_key="campaign:watchlist", name="Кампания")
+        adset = await ads_repo.upsert_adset(
+            scope_key="adset:campaign:watchlist:1",
+            campaign_id=campaign.id,
+            name="Адсет",
+        )
+        ad = await ads_repo.upsert_ad(
+            fb_ad_id="watchlist-ad-1",
+            campaign_id=campaign.id,
+            adset_id=adset.id,
+            name="Объявление watchlist",
+            delivery_status=DeliveryStatus.ACTIVE,
+            tracking_mode=TrackingMode.TRACKED,
+            scope_presence=ScopePresence.IN_SCOPE,
+            risk_band=RiskBand.WATCH,
+            last_risk_reason="Рядом со стопом",
+            last_seen_at=datetime(2026, 3, 23, 10, 2, tzinfo=UTC),
+        )
+        scan_run = await scan_repo.create_scan_run(
+            browser_host_id=browser_host.id,
+            profile_id=profile.id,
+            status=ScanRunStatus.SUCCEEDED,
+            started_at=datetime(2026, 3, 23, 10, 2, tzinfo=UTC),
+            pipeline_kind=ScanPipelineKind.FULL_SCAN,
+        )
+        await watchlist_repo.upsert_entry(
+            ad_id=ad.id,
+            fb_ad_id=ad.fb_ad_id,
+            profile_id=profile.id,
+            browser_host_id=browser_host.id,
+            risk_band=RiskBand.WATCH,
+            priority_score=640,
+            next_check_at=datetime(2026, 3, 23, 10, 3, tzinfo=UTC),
+            last_reason="Рядом со стопом",
+            last_metrics_at=datetime(2026, 3, 23, 10, 2, tzinfo=UTC),
+            source_scan_run_id=scan_run.id,
+        )
+        await session.commit()
+
+    response = await client.get("/watchlist")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload) == 1
+    assert payload[0]["fb_ad_id"] == "watchlist-ad-1"
+    assert payload[0]["risk_band"] == "WATCH"
+    assert payload[0]["watch_reason"] == "Рядом со стопом"
+    assert payload[0]["fast_stop_state"] == "WATCH"
+
+
+# Проверяет, что action-jobs API отдает очередь действий с именами кампании и профиля.
+@pytest.mark.asyncio
+async def test_action_jobs_route_returns_queue_items(api_client, async_session_factory) -> None:
+    client, _, _ = api_client
+
+    async with async_session_factory() as session:
+        browser_repo = BrowserRepository(session)
+        ads_repo = AdsRepository(session)
+        scan_repo = ScanRunsRepository(session)
+        decisions_repo = DecisionsRepository(session)
+        jobs_repo = ActionJobsRepository(session)
+
+        browser_host = await browser_repo.upsert_browser_host(
+            name="vision-action-jobs-route",
+            vendor="vision",
+            api_base_url="http://127.0.0.1:3030",
+            is_enabled=True,
+            last_heartbeat_at=datetime(2026, 3, 23, 11, 0, tzinfo=UTC),
+        )
+        profile = await browser_repo.upsert_profile(
+            browser_host_id=browser_host.id,
+            vendor_profile_id="vision-action-profile",
+            display_name="Vision action profile",
+            is_active=True,
+            last_launch_at=datetime(2026, 3, 23, 11, 1, tzinfo=UTC),
+        )
+        campaign = await ads_repo.upsert_campaign(
+            scope_key="campaign:jobs-route", name="Кампания jobs"
+        )
+        adset = await ads_repo.upsert_adset(
+            scope_key="adset:campaign:jobs-route:1",
+            campaign_id=campaign.id,
+            name="Адсет jobs",
+        )
+        ad = await ads_repo.upsert_ad(
+            fb_ad_id="action-job-ad-1",
+            campaign_id=campaign.id,
+            adset_id=adset.id,
+            name="Объявление jobs",
+            delivery_status=DeliveryStatus.ACTIVE,
+            tracking_mode=TrackingMode.TRACKED,
+            scope_presence=ScopePresence.IN_SCOPE,
+            risk_band=RiskBand.STOP,
+            last_seen_at=datetime(2026, 3, 23, 11, 2, tzinfo=UTC),
+        )
+        scan_run = await scan_repo.create_scan_run(
+            browser_host_id=browser_host.id,
+            profile_id=profile.id,
+            status=ScanRunStatus.SUCCEEDED,
+            started_at=datetime(2026, 3, 23, 11, 2, tzinfo=UTC),
+            pipeline_kind=ScanPipelineKind.FULL_SCAN,
+        )
+        decision = await decisions_repo.create_decision(
+            scan_run_id=scan_run.id,
+            fb_ad_id=ad.fb_ad_id,
+            decision=DecisionType.WOULD_PAUSE,
+            reason="Стоп",
+            ad_id=ad.id,
+        )
+        await jobs_repo.enqueue_action_job(
+            decision_id=decision.id,
+            ad_id=ad.id,
+            fb_ad_id=ad.fb_ad_id,
+            profile_id=profile.id,
+            browser_host_id=browser_host.id,
+            action_type=ActionType.PAUSE,
+            priority_score=1200,
+            next_attempt_at=datetime(2026, 3, 23, 11, 3, tzinfo=UTC),
+        )
+        await session.commit()
+
+    response = await client.get("/action-jobs")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload) == 1
+    assert payload[0]["fb_ad_id"] == "action-job-ad-1"
+    assert payload[0]["profile_id"] == "vision-action-profile"
+    assert payload[0]["browser_host_id"] == "vision-action-jobs-route"
+    assert payload[0]["campaign_name"] == "Кампания jobs"
+    assert payload[0]["action_type"] == "PAUSE"
+    assert payload[0]["status"] == "QUEUED"
 
 
 # Проверяет, что список проблемных профилей и ручной reset стопа работают через API.

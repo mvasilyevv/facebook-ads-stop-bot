@@ -1,9 +1,12 @@
 from core.domain.enums import (
     ActionExecutionStatus,
+    ActionJobStatus,
     ActionType,
     DecisionType,
     DeliveryStatus,
     EntityType,
+    RiskBand,
+    ScanPipelineKind,
     ScanRunStatus,
     ScopePresence,
     TelegramEventType,
@@ -20,6 +23,7 @@ from core.domain.offer_resolution import (
 )
 
 __all__ = [
+    "ActionJobStatus",
     "ActionExecutionStatus",
     "ActionType",
     "DecisionType",
@@ -30,6 +34,8 @@ __all__ = [
     "OfferBindingCandidate",
     "OfferRateCandidate",
     "ResolvedOfferRate",
+    "RiskBand",
+    "ScanPipelineKind",
     "ScanRunStatus",
     "ScopePresence",
     "TelegramEventType",

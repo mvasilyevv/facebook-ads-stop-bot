@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.attributes import set_committed_value
 
-from core.domain import DecisionType, DeliveryStatus, ScopePresence, TrackingMode
+from core.domain import DecisionType, DeliveryStatus, RiskBand, ScopePresence, TrackingMode
 from core.models.advertising import Ad, AdSet, Campaign, MetricSnapshot
 from core.models.operations import ScanRun
 from core.repositories.base import AsyncRepository
@@ -40,6 +40,9 @@ class AdsRepository(AsyncRepository):
         restored_last_action_at = self._restore_utc(ad.last_action_at)
         if restored_last_action_at is not ad.last_action_at:
             set_committed_value(ad, "last_action_at", restored_last_action_at)
+        restored_last_risk_at = self._restore_utc(ad.last_risk_at)
+        if restored_last_risk_at is not ad.last_risk_at:
+            set_committed_value(ad, "last_risk_at", restored_last_risk_at)
 
     async def upsert_campaign(
         self,
@@ -231,6 +234,9 @@ class AdsRepository(AsyncRepository):
         last_action_source: str | None = None,
         last_action_at: datetime | None = None,
         last_decision: DecisionType = DecisionType.NO_ACTION,
+        risk_band: RiskBand = RiskBand.SAFE,
+        last_risk_reason: str | None = None,
+        last_risk_at: datetime | None = None,
         last_scan_run_id: str | None = None,
     ) -> Ad:
         if self._is_postgresql():
@@ -246,6 +252,9 @@ class AdsRepository(AsyncRepository):
                 last_action_source,
                 last_action_at,
                 last_decision,
+                risk_band,
+                last_risk_reason,
+                last_risk_at,
                 last_scan_run_id,
             )
         return await self._upsert_ad_fallback(
@@ -260,6 +269,9 @@ class AdsRepository(AsyncRepository):
             last_action_source,
             last_action_at,
             last_decision,
+            risk_band,
+            last_risk_reason,
+            last_risk_at,
             last_scan_run_id,
         )
 
@@ -276,6 +288,9 @@ class AdsRepository(AsyncRepository):
         last_action_source: str | None,
         last_action_at: datetime | None,
         last_decision: DecisionType,
+        risk_band: RiskBand,
+        last_risk_reason: str | None,
+        last_risk_at: datetime | None,
         last_scan_run_id: str | None,
     ) -> Ad:
         from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -292,6 +307,9 @@ class AdsRepository(AsyncRepository):
             last_action_source=last_action_source,
             last_action_at=last_action_at,
             last_decision=last_decision,
+            risk_band=risk_band,
+            last_risk_reason=last_risk_reason,
+            last_risk_at=last_risk_at,
             last_scan_run_id=last_scan_run_id,
         )
         stmt = stmt.on_conflict_do_update(
@@ -313,6 +331,9 @@ class AdsRepository(AsyncRepository):
                     Ad.last_action_at,
                 ),
                 "last_decision": stmt.excluded.last_decision,
+                "risk_band": stmt.excluded.risk_band,
+                "last_risk_reason": stmt.excluded.last_risk_reason,
+                "last_risk_at": stmt.excluded.last_risk_at,
                 "last_scan_run_id": stmt.excluded.last_scan_run_id,
             },
         ).returning(Ad)
@@ -334,6 +355,9 @@ class AdsRepository(AsyncRepository):
         last_action_source: str | None,
         last_action_at: datetime | None,
         last_decision: DecisionType,
+        risk_band: RiskBand,
+        last_risk_reason: str | None,
+        last_risk_at: datetime | None,
         last_scan_run_id: str | None,
     ) -> Ad:
         ad = await self.get_ad_by_fb_id(fb_ad_id)
@@ -350,6 +374,9 @@ class AdsRepository(AsyncRepository):
                 last_action_source=last_action_source,
                 last_action_at=last_action_at,
                 last_decision=last_decision,
+                risk_band=risk_band,
+                last_risk_reason=last_risk_reason,
+                last_risk_at=last_risk_at,
                 last_scan_run_id=last_scan_run_id,
             )
             self.session.add(ad)
@@ -366,6 +393,9 @@ class AdsRepository(AsyncRepository):
             if last_action_at is not None:
                 ad.last_action_at = last_action_at
             ad.last_decision = last_decision
+            ad.risk_band = risk_band
+            ad.last_risk_reason = last_risk_reason
+            ad.last_risk_at = last_risk_at
             ad.last_scan_run_id = last_scan_run_id
         await self.session.flush()
         return ad
@@ -480,6 +510,9 @@ class AdsRepository(AsyncRepository):
         last_decision: DecisionType | None = None,
         last_action_source: str | None = None,
         last_action_at: datetime | None = None,
+        risk_band: RiskBand | None = None,
+        last_risk_reason: str | None = None,
+        last_risk_at: datetime | None = None,
     ) -> Ad | None:
         ad = await self.get_ad_by_fb_id(fb_ad_id)
         if ad is None:
@@ -494,6 +527,12 @@ class AdsRepository(AsyncRepository):
             ad.last_action_source = last_action_source
         if last_action_at is not None:
             ad.last_action_at = last_action_at
+        if risk_band is not None:
+            ad.risk_band = risk_band
+        if last_risk_reason is not None:
+            ad.last_risk_reason = last_risk_reason
+        if last_risk_at is not None:
+            ad.last_risk_at = last_risk_at
         await self.session.flush()
         self._restore_ad_datetimes(ad)
         return ad

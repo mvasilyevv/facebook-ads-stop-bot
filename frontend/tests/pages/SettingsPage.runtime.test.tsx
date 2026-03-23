@@ -13,7 +13,10 @@ function setupRuntimeSettingsPage(options?: {
     auto_resume_enabled: boolean;
     auto_resume_available: boolean;
     observe_only_enabled: boolean;
-    scan_interval_seconds: number;
+    full_scan_interval_seconds: number;
+    recheck_interval_seconds: number;
+    full_scan_profile_concurrency: number;
+    action_worker_concurrency: number;
     vision_local_api_url: string;
     vision_cloud_api_url: string;
     telegram_chat_id: string;
@@ -38,6 +41,8 @@ function setupRuntimeSettingsPage(options?: {
     ),
     http.get("*/ads", () => HttpResponse.json([])),
     http.get("*/decisions", () => HttpResponse.json([])),
+    http.get("*/watchlist", () => HttpResponse.json([])),
+    http.get("*/action-jobs", () => HttpResponse.json([])),
     http.get("*/rules", () => HttpResponse.json([])),
     http.get("*/offers", () => HttpResponse.json([])),
     http.get("*/sessions", () => HttpResponse.json([])),
@@ -55,8 +60,16 @@ function setupRuntimeSettingsPage(options?: {
           browser_host_id: "vision-3030",
           profile_id: "profile-1",
           status: "SUCCEEDED",
+          pipeline_kind: "FULL_SCAN",
+          trigger_source: "scheduler",
+          target_fb_ad_ids: [],
           rows_seen: 51,
           rows_parsed: 51,
+          collect_ms: 800,
+          evaluate_ms: 200,
+          persist_ms: 100,
+          queue_ms: 50,
+          action_jobs_enqueued: 0,
           scope_summary: {
             rows_in_scope: 51,
             rows_not_seen_this_scan: 0,
@@ -81,7 +94,10 @@ function setupRuntimeSettingsPage(options?: {
         auto_resume_enabled: false,
         auto_resume_available: options?.autoResumeAvailable ?? false,
         observe_only_enabled: false,
-        scan_interval_seconds: 60,
+        full_scan_interval_seconds: 60,
+        recheck_interval_seconds: 15,
+        full_scan_profile_concurrency: 2,
+        action_worker_concurrency: 2,
         vision_local_api_url: "http://127.0.0.1:3030",
         vision_cloud_api_url: "https://vision.example/api",
         telegram_chat_id: "777000",
@@ -99,7 +115,10 @@ function setupRuntimeSettingsPage(options?: {
         auto_resume_enabled: false,
         auto_resume_available: options?.autoResumeAvailable ?? false,
         observe_only_enabled: false,
-        scan_interval_seconds: 60,
+        full_scan_interval_seconds: 60,
+        recheck_interval_seconds: 15,
+        full_scan_profile_concurrency: 2,
+        action_worker_concurrency: 2,
         vision_local_api_url: "http://127.0.0.1:3030",
         vision_cloud_api_url: "https://vision.example/api",
         telegram_chat_id: "777000",
@@ -156,7 +175,10 @@ describe("SettingsPage runtime", () => {
           auto_resume_enabled: false,
           auto_resume_available: false,
           observe_only_enabled: false,
-          scan_interval_seconds: 60,
+          full_scan_interval_seconds: 60,
+          recheck_interval_seconds: 15,
+          full_scan_profile_concurrency: 2,
+          action_worker_concurrency: 2,
           vision_local_api_url: "http://127.0.0.1:3030",
           vision_cloud_api_url: "https://vision.example/api",
           telegram_chat_id: serviceReads > 1 ? "999000" : "777000",

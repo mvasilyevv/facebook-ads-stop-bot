@@ -1,4 +1,5 @@
 import type {
+  ActionJobItem,
   AdSummary,
   ApiErrorResponse,
   BotModeResponse,
@@ -18,6 +19,7 @@ import type {
   ServiceSettingsUpdate,
   SuspendedProfileItem,
   SuspendedProfileResetResponse,
+  WatchlistItem,
 } from "../types";
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL?.trim();
@@ -36,6 +38,8 @@ export type DashboardPayload = {
   health: HealthResponse | null;
   ads: AdSummary[];
   decisions: DecisionItem[];
+  watchlist: WatchlistItem[];
+  actionJobs: ActionJobItem[];
   rules: RuleItem[];
   offers: OfferItem[];
   sessions: BrowserSessionItem[];
@@ -128,6 +132,14 @@ export function fetchScanRuns(filters?: ScopeFilters): Promise<ScanRunItem[]> {
   return requestJson<ScanRunItem[]>(withQuery("/scan-runs", filters));
 }
 
+export function fetchWatchlist(filters?: ScopeFilters): Promise<WatchlistItem[]> {
+  return requestJson<WatchlistItem[]>(withQuery("/watchlist", filters));
+}
+
+export function fetchActionJobs(filters?: ScopeFilters): Promise<ActionJobItem[]> {
+  return requestJson<ActionJobItem[]>(withQuery("/action-jobs", filters));
+}
+
 export function fetchProfiles(): Promise<ProfileItem[]> {
   return requestJson<ProfileItem[]>("/profiles");
 }
@@ -168,6 +180,8 @@ export async function loadDashboard(): Promise<DashboardPayload> {
     ["health", fetchHealth()],
     ["ads", fetchAds()],
     ["decisions", fetchDecisions()],
+    ["watchlist", fetchWatchlist()],
+    ["actionJobs", fetchActionJobs()],
     ["rules", fetchRules()],
     ["offers", fetchOffers()],
     ["sessions", fetchSessions()],
@@ -179,6 +193,8 @@ export async function loadDashboard(): Promise<DashboardPayload> {
     health: null,
     ads: [],
     decisions: [],
+    watchlist: [],
+    actionJobs: [],
     rules: [],
     offers: [],
     sessions: [],
@@ -197,6 +213,12 @@ export async function loadDashboard(): Promise<DashboardPayload> {
           break;
         case "decisions":
           payload.decisions = result.value as DecisionItem[];
+          break;
+        case "watchlist":
+          payload.watchlist = result.value as WatchlistItem[];
+          break;
+        case "actionJobs":
+          payload.actionJobs = result.value as ActionJobItem[];
           break;
         case "rules":
           payload.rules = result.value as RuleItem[];

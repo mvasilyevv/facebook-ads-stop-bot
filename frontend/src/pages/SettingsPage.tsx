@@ -15,7 +15,7 @@ import {
   updateServiceSettings,
   saveRule,
 } from "../lib/api";
-import { formatDateTime, formatRelativeStatus } from "../lib/format";
+import { formatDateTime } from "../lib/format";
 import type {
   RuleItem,
   ScanRunItem,
@@ -27,13 +27,18 @@ import type {
 
 type DashboardData = Awaited<ReturnType<typeof loadDashboard>>;
 
-const SCAN_INTERVAL_OPTIONS = [30, 60, 120, 300] as const;
+const FULL_SCAN_INTERVAL_OPTIONS = [30, 60, 120, 300] as const;
+const RECHECK_INTERVAL_OPTIONS = [5, 10, 15, 30, 60] as const;
+const CONCURRENCY_OPTIONS = [1, 2, 3, 4, 5] as const;
 
 const DEFAULT_DRAFT: ServiceSettings = {
   auto_pause_enabled: true,
   auto_resume_enabled: false,
   observe_only_enabled: true,
-  scan_interval_seconds: 120,
+  full_scan_interval_seconds: 120,
+  recheck_interval_seconds: 15,
+  full_scan_profile_concurrency: 2,
+  action_worker_concurrency: 2,
   vision_api_token: "",
   telegram_bot_token: "",
   telegram_chat_id: "",
@@ -47,7 +52,10 @@ function createDraftFromResponse(response: ServiceSettingsResponse): ServiceSett
     auto_pause_enabled: response.auto_pause_enabled,
     auto_resume_enabled: response.auto_resume_enabled,
     observe_only_enabled: response.observe_only_enabled,
-    scan_interval_seconds: response.scan_interval_seconds,
+    full_scan_interval_seconds: response.full_scan_interval_seconds,
+    recheck_interval_seconds: response.recheck_interval_seconds,
+    full_scan_profile_concurrency: response.full_scan_profile_concurrency,
+    action_worker_concurrency: response.action_worker_concurrency,
     vision_api_token: "",
     telegram_bot_token: "",
     telegram_chat_id: response.telegram_chat_id,
@@ -99,7 +107,10 @@ function serviceSettingsToPayload(settings: ServiceSettings): ServiceSettingsUpd
     auto_pause_enabled: settings.auto_pause_enabled,
     auto_resume_enabled: settings.auto_resume_enabled,
     observe_only_enabled: settings.observe_only_enabled,
-    scan_interval_seconds: settings.scan_interval_seconds,
+    full_scan_interval_seconds: settings.full_scan_interval_seconds,
+    recheck_interval_seconds: settings.recheck_interval_seconds,
+    full_scan_profile_concurrency: settings.full_scan_profile_concurrency,
+    action_worker_concurrency: settings.action_worker_concurrency,
     telegram_chat_id: settings.telegram_chat_id.trim(),
     vision_local_api_url: settings.vision_local_api_url.trim(),
     vision_cloud_api_url: settings.vision_cloud_api_url.trim(),
@@ -130,7 +141,10 @@ function isServiceDraftDirty(
       draft.auto_pause_enabled !== DEFAULT_DRAFT.auto_pause_enabled ||
       draft.auto_resume_enabled !== DEFAULT_DRAFT.auto_resume_enabled ||
       draft.observe_only_enabled !== DEFAULT_DRAFT.observe_only_enabled ||
-      draft.scan_interval_seconds !== DEFAULT_DRAFT.scan_interval_seconds ||
+      draft.full_scan_interval_seconds !== DEFAULT_DRAFT.full_scan_interval_seconds ||
+      draft.recheck_interval_seconds !== DEFAULT_DRAFT.recheck_interval_seconds ||
+      draft.full_scan_profile_concurrency !== DEFAULT_DRAFT.full_scan_profile_concurrency ||
+      draft.action_worker_concurrency !== DEFAULT_DRAFT.action_worker_concurrency ||
       draft.telegram_chat_id.trim() !== DEFAULT_DRAFT.telegram_chat_id ||
       draft.vision_local_api_url.trim() !== DEFAULT_DRAFT.vision_local_api_url ||
       draft.vision_cloud_api_url.trim() !== DEFAULT_DRAFT.vision_cloud_api_url ||
@@ -144,7 +158,10 @@ function isServiceDraftDirty(
     draft.auto_pause_enabled !== savedDraft.auto_pause_enabled ||
     draft.auto_resume_enabled !== savedDraft.auto_resume_enabled ||
     draft.observe_only_enabled !== savedDraft.observe_only_enabled ||
-    draft.scan_interval_seconds !== savedDraft.scan_interval_seconds ||
+    draft.full_scan_interval_seconds !== savedDraft.full_scan_interval_seconds ||
+    draft.recheck_interval_seconds !== savedDraft.recheck_interval_seconds ||
+    draft.full_scan_profile_concurrency !== savedDraft.full_scan_profile_concurrency ||
+    draft.action_worker_concurrency !== savedDraft.action_worker_concurrency ||
     draft.telegram_chat_id.trim() !== savedDraft.telegram_chat_id.trim() ||
     draft.vision_local_api_url.trim() !== savedDraft.vision_local_api_url.trim() ||
     draft.vision_cloud_api_url.trim() !== savedDraft.vision_cloud_api_url.trim() ||
@@ -293,7 +310,10 @@ export default function SettingsPage() {
         auto_resume_enabled: draft.auto_resume_enabled,
         auto_resume_available: true,
         observe_only_enabled: draft.observe_only_enabled,
-        scan_interval_seconds: draft.scan_interval_seconds,
+        full_scan_interval_seconds: draft.full_scan_interval_seconds,
+        recheck_interval_seconds: draft.recheck_interval_seconds,
+        full_scan_profile_concurrency: draft.full_scan_profile_concurrency,
+        action_worker_concurrency: draft.action_worker_concurrency,
         vision_local_api_url: draft.vision_local_api_url,
         vision_cloud_api_url: draft.vision_cloud_api_url,
         telegram_chat_id: draft.telegram_chat_id,
@@ -307,7 +327,10 @@ export default function SettingsPage() {
         auto_pause_enabled: key === "auto_pause_enabled" ? value : source.auto_pause_enabled,
         auto_resume_enabled: key === "auto_resume_enabled" ? value : source.auto_resume_enabled,
         observe_only_enabled: key === "observe_only_enabled" ? value : source.observe_only_enabled,
-        scan_interval_seconds: source.scan_interval_seconds,
+        full_scan_interval_seconds: source.full_scan_interval_seconds,
+        recheck_interval_seconds: source.recheck_interval_seconds,
+        full_scan_profile_concurrency: source.full_scan_profile_concurrency,
+        action_worker_concurrency: source.action_worker_concurrency,
         vision_local_api_url: source.vision_local_api_url,
         vision_cloud_api_url: source.vision_cloud_api_url,
         telegram_chat_id: source.telegram_chat_id,
@@ -395,11 +418,11 @@ export default function SettingsPage() {
           </div>
         </article>
         <article className="metric-tile">
-          <span>Частота</span>
-          <strong>{draft.scan_interval_seconds} секунд</strong>
+          <span>Пайплайн сканов</span>
+          <strong>{draft.full_scan_interval_seconds} / {draft.recheck_interval_seconds}</strong>
           <div className="mini-row">
-            <span>Последний scan</span>
-            <span>{lastScan ? formatRelativeStatus(lastScan.status) : "нет данных"}</span>
+            <span>Параллельность</span>
+            <span>{draft.full_scan_profile_concurrency} / {draft.action_worker_concurrency}</span>
           </div>
         </article>
         <article className="metric-tile">
@@ -483,25 +506,75 @@ export default function SettingsPage() {
             </span>
           </label>
         </div>
-        <div className="settings-interval">
-          <div>
-            <strong>Частота скана</strong>
-            <div className="section-note">Допустимые значения: 30, 60, 120 и 300 секунд</div>
-          </div>
-          <select
-            className="input input--compact settings-select"
-            aria-label="Частота скана"
-            value={draft.scan_interval_seconds}
-            onChange={(event) =>
-              setDraft((current) => ({ ...current, scan_interval_seconds: Number(event.target.value) }))
-            }
-          >
-            {SCAN_INTERVAL_OPTIONS.map((value) => (
-              <option key={value} value={value}>
-                {value} секунд
-              </option>
-            ))}
-          </select>
+        <div className="settings-interval-grid">
+          <label className="panel-form">
+            <span>Частота полного скана</span>
+            <select
+              className="input input--compact settings-select"
+              aria-label="Частота полного скана"
+              value={draft.full_scan_interval_seconds}
+              onChange={(event) =>
+                setDraft((current) => ({ ...current, full_scan_interval_seconds: Number(event.target.value) }))
+              }
+            >
+              {FULL_SCAN_INTERVAL_OPTIONS.map((value) => (
+                <option key={value} value={value}>
+                  {value} секунд
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="panel-form">
+            <span>Частота быстрой перепроверки</span>
+            <select
+              className="input input--compact settings-select"
+              aria-label="Частота быстрой перепроверки"
+              value={draft.recheck_interval_seconds}
+              onChange={(event) =>
+                setDraft((current) => ({ ...current, recheck_interval_seconds: Number(event.target.value) }))
+              }
+            >
+              {RECHECK_INTERVAL_OPTIONS.map((value) => (
+                <option key={value} value={value}>
+                  {value} секунд
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="panel-form">
+            <span>Параллельность полного скана</span>
+            <select
+              className="input input--compact settings-select"
+              aria-label="Параллельность полного скана"
+              value={draft.full_scan_profile_concurrency}
+              onChange={(event) =>
+                setDraft((current) => ({ ...current, full_scan_profile_concurrency: Number(event.target.value) }))
+              }
+            >
+              {CONCURRENCY_OPTIONS.map((value) => (
+                <option key={value} value={value}>
+                  {value}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="panel-form">
+            <span>Параллельность очереди действий</span>
+            <select
+              className="input input--compact settings-select"
+              aria-label="Параллельность очереди действий"
+              value={draft.action_worker_concurrency}
+              onChange={(event) =>
+                setDraft((current) => ({ ...current, action_worker_concurrency: Number(event.target.value) }))
+              }
+            >
+              {CONCURRENCY_OPTIONS.map((value) => (
+                <option key={value} value={value}>
+                  {value}
+                </option>
+              ))}
+            </select>
+          </label>
         </div>
       </SectionCard>
 

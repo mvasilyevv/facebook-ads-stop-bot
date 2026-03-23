@@ -28,6 +28,10 @@ function buildAdSummary(overrides: Partial<AdSummary>): AdSummary {
     registrations: 0,
     cost_per_registration: "0.00",
     deposits: 0,
+    risk_band: "SAFE",
+    fast_stop_state: "IDLE",
+    queued_action_status: null,
+    priority_score: 0,
     ...overrides,
   };
 }
@@ -76,7 +80,10 @@ function mockScopeEndpoints({
     auto_resume_enabled: false,
     auto_resume_available: false,
     observe_only_enabled: false,
-    scan_interval_seconds: 60,
+    full_scan_interval_seconds: 60,
+    recheck_interval_seconds: 15,
+    full_scan_profile_concurrency: 2,
+    action_worker_concurrency: 2,
     vision_local_api_url: "http://127.0.0.1:3030",
     vision_cloud_api_url: "https://vision.example/api",
     telegram_chat_id: "777000",
@@ -120,6 +127,8 @@ function mockScopeEndpoints({
       return HttpResponse.json(ads);
     }),
     http.get("*/decisions", () => HttpResponse.json([])),
+    http.get("*/watchlist", () => HttpResponse.json([])),
+    http.get("*/action-jobs", () => HttpResponse.json([])),
     http.get("*/rules", () => HttpResponse.json([])),
     http.get("*/offers", () => HttpResponse.json([])),
     http.get("*/sessions", () => HttpResponse.json([])),
@@ -248,8 +257,8 @@ describe("Launch scope", () => {
 
     await waitFor(() => expect(screen.getByRole("combobox", { name: /профиль/i })).toHaveValue("profile-1"));
     await waitFor(() => expect(screen.getByRole("combobox", { name: /запуск/i })).toHaveValue("launch-active"));
-    await screen.findByText("Обзор запуска");
-    expect(screen.getByRole("button", { name: /новый запуск/i })).toBeInTheDocument();
+    await screen.findByRole("heading", { name: "Обзор запуска" });
+    expect(await screen.findByRole("button", { name: /новый запуск/i })).toBeInTheDocument();
     expect(screen.getByText("Активный запуск")).toBeInTheDocument();
     expect(screen.getByText("Объявления запуска")).toBeInTheDocument();
     expect(screen.getByText("Сводка запуска")).toBeInTheDocument();

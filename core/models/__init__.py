@@ -3,6 +3,7 @@ from core.models.browser import BrowserHost, BrowserSession, Profile, ProfileLau
 from core.models.offers import EntityOfferBinding, Offer, OfferRateVersion
 from core.models.operations import (
     ActionExecution,
+    ActionJob,
     ControlFlag,
     Cooldown,
     Decision,
@@ -10,9 +11,11 @@ from core.models.operations import (
     RuleSet,
     ScanRun,
     TelegramEvent,
+    WatchlistEntry,
 )
 
 __all__ = [
+    "ActionJob",
     "ActionExecution",
     "Ad",
     "AdSet",
@@ -32,5 +35,6 @@ __all__ = [
     "RuleSet",
     "ScanRun",
     "TelegramEvent",
+    "WatchlistEntry",
     "WorkerHeartbeat",
 ]

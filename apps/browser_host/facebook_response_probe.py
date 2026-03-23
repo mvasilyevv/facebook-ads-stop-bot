@@ -111,13 +111,36 @@ class FacebookResponseProbeService:
 
     @staticmethod
     def _extract_ad_id(value: dict[str, Any]) -> str | None:
-        for key in ("fb_ad_id", "ad_id", "id"):
+        for key in ("fb_ad_id", "ad_id", "id", "node_id"):
             raw_value = value.get(key)
             if raw_value is None:
                 continue
             match = _NUMERIC_ID_PATTERN.search(str(raw_value))
             if match is not None:
                 return match.group(0)
+        for key in ("dimension_values", "atomic_values", "values"):
+            nested_value = value.get(key)
+            identifier = FacebookResponseProbeService._extract_ad_id_from_nested_value(nested_value)
+            if identifier is not None:
+                return identifier
+        pair_key = (
+            value.get("name") or value.get("field") or value.get("column") or value.get("key")
+        )
+        if isinstance(pair_key, str) and pair_key.strip().casefold() in {"ad_id", "fb_ad_id", "id"}:
+            match = _NUMERIC_ID_PATTERN.search(str(value.get("value", "")))
+            if match is not None:
+                return match.group(0)
+        return None
+
+    @staticmethod
+    def _extract_ad_id_from_nested_value(value: Any) -> str | None:
+        if isinstance(value, dict):
+            return FacebookResponseProbeService._extract_ad_id(value)
+        if isinstance(value, list):
+            for item in value:
+                identifier = FacebookResponseProbeService._extract_ad_id_from_nested_value(item)
+                if identifier is not None:
+                    return identifier
         return None
 
     @staticmethod

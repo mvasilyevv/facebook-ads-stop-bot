@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -55,7 +56,7 @@ class BrowserRepository(AsyncRepository):
         return result.first()
 
     async def get_browser_host(self, browser_host_id: str) -> BrowserHost | None:
-        return await self.session.get(BrowserHost, browser_host_id)
+        return await self.session.get(BrowserHost, self._coerce_uuid(browser_host_id))
 
     async def upsert_browser_host(
         self,
@@ -98,7 +99,7 @@ class BrowserRepository(AsyncRepository):
         return result.first()
 
     async def get_profile(self, profile_id: str) -> Profile | None:
-        return await self.session.get(Profile, profile_id)
+        return await self.session.get(Profile, self._coerce_uuid(profile_id))
 
     async def upsert_profile(
         self,
@@ -262,3 +263,9 @@ class BrowserRepository(AsyncRepository):
         profile.scan_suspend_at = None
         await self.session.flush()
         return profile
+
+    @staticmethod
+    def _coerce_uuid(value: UUID | str) -> UUID:
+        if isinstance(value, UUID):
+            return value
+        return UUID(str(value))

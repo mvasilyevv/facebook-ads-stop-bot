@@ -15,8 +15,16 @@ describe("ScansPage", () => {
         browser_host_id: "vision-3030",
         profile_id: "2a39059a-f41e-4bad-a081-216733388913",
         status: "SUCCEEDED",
+        pipeline_kind: "FULL_SCAN",
+        trigger_source: "scheduler",
+        target_fb_ad_ids: [],
         rows_seen: 42,
         rows_parsed: 42,
+        collect_ms: 900,
+        evaluate_ms: 300,
+        persist_ms: 150,
+        queue_ms: 75,
+        action_jobs_enqueued: 1,
         scope_summary: {
           rows_in_scope: 42,
           rows_not_seen_this_scan: 0,
@@ -40,7 +48,7 @@ describe("ScansPage", () => {
     expect(screen.getByTitle("2a39059a-f41e-4bad-a081-216733388913")).toHaveTextContent("2a39059a...388913");
     expect(screen.getByText("В охвате")).toBeInTheDocument();
     expect(screen.getByText("В охвате").parentElement).toHaveTextContent("42");
-    expect(screen.getByText("succeeded")).toBeInTheDocument();
+    expect(screen.getAllByText("выполнено").length).toBeGreaterThan(0);
   });
 
   // Проверяет, что ошибка загрузки сканов показывается пользователю и не скрывает пустое состояние.

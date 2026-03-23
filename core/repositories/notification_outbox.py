@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from typing import Any
+from uuid import UUID
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,7 +28,7 @@ class NotificationOutboxRepository(AsyncRepository):
         """Добавляет событие в outbox для последующей отправки."""
 
         event = TelegramEvent(
-            decision_id=decision_id,
+            decision_id=self._coerce_uuid(decision_id),
             event_type=event_type,
             payload_json=payload_json,
             status="pending",
@@ -50,20 +51,26 @@ class NotificationOutboxRepository(AsyncRepository):
         result = await self.session.scalars(stmt)
         return list(result.all())
 
-    async def mark_sent(self, event_id: str) -> None:
+    async def mark_sent(self, event_id: UUID | str) -> None:
         """Отмечает событие как успешно отправленное."""
 
         await self.session.execute(
             update(TelegramEvent)
-            .where(TelegramEvent.id == event_id)
+            .where(TelegramEvent.id == self._coerce_uuid(event_id))
             .values(status="sent", sent_at=datetime.now(tz=UTC))
         )
 
-    async def mark_failed(self, event_id: str, error: str) -> None:
+    async def mark_failed(self, event_id: UUID | str, error: str) -> None:
         """Отмечает событие как неуспешное."""
 
         await self.session.execute(
             update(TelegramEvent)
-            .where(TelegramEvent.id == event_id)
+            .where(TelegramEvent.id == self._coerce_uuid(event_id))
             .values(status=f"failed:{error[:200]}")
         )
+
+    @staticmethod
+    def _coerce_uuid(value: UUID | str | None) -> UUID | None:
+        if value is None or isinstance(value, UUID):
+            return value
+        return UUID(str(value))

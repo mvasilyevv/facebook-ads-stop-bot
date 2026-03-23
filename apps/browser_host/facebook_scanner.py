@@ -12,12 +12,18 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from apps.browser_host.adapters.factory import build_adapter
+from apps.browser_host.facebook_payload_collector import (
+    has_unresolved_scope_rows,
+    merge_scanned_rows,
+    parse_ads_manager_payloads,
+)
 from apps.browser_host.facebook_popups import dismiss_known_ads_manager_popups
 from apps.browser_host.facebook_response_probe import (
     FacebookResponseProbeService,
     ResponsePayloadEntry,
 )
 from apps.browser_host.facebook_service_page import (
+    RECOVERY_SERVICE_PAGE,
     SCANNER_SERVICE_PAGE,
     ensure_ads_manager_service_page,
     is_ads_manager_service_url,
@@ -326,6 +332,17 @@ class _CapturedResponseRow:
         self.deposits = self.deposits or _extract_mapped_value(mapped_values, "deposits")
 
 
+@dataclass(slots=True, frozen=True)
+class TargetedRecoveryResult:
+    """Результат batch-добора строк Ads Manager по списку объявлений."""
+
+    rows: list[ScannedAdRow]
+    requested_fb_ad_ids: tuple[str, ...]
+    recovered_fb_ad_ids: tuple[str, ...]
+    missing_fb_ad_ids: tuple[str, ...]
+    status: str
+
+
 class FacebookAdsScannerProvider:
     """Реальный scanner provider для Facebook Ads Manager через Playwright по CDP."""
 
@@ -375,6 +392,71 @@ class FacebookAdsScannerProvider:
         finally:
             await self._browser_session_manager.release_session(attached_session)
 
+    async def recover_rows(
+        self,
+        profile_id: str,
+        browser_host_name: str,
+        fb_ad_ids: list[str],
+    ) -> list[ScannedAdRow]:
+        """Возвращает список найденных строк для адресного добора."""
+
+        result = await self.recover_rows_with_status(
+            profile_id=profile_id,
+            browser_host_name=browser_host_name,
+            fb_ad_ids=fb_ad_ids,
+        )
+        return result.rows
+
+    async def recover_rows_with_status(
+        self,
+        profile_id: str,
+        browser_host_name: str,
+        fb_ad_ids: list[str],
+    ) -> TargetedRecoveryResult:
+        """Возвращает batch-добор с явным статусом полноты покрытия."""
+
+        logger = logging.getLogger(__name__)
+        target_fb_ad_ids = tuple(dict.fromkeys(fb_ad_id for fb_ad_id in fb_ad_ids if fb_ad_id))
+        if not target_fb_ad_ids:
+            return TargetedRecoveryResult(
+                rows=[],
+                requested_fb_ad_ids=(),
+                recovered_fb_ad_ids=(),
+                missing_fb_ad_ids=(),
+                status="complete",
+            )
+
+        logger.info(
+            "Запускаю адресный добор Ads Manager для профиля %s на хосте %s: %s объявлений",
+            profile_id,
+            browser_host_name,
+            len(target_fb_ad_ids),
+        )
+        attached_session = await self._browser_session_manager.ensure_session(profile_id)
+        try:
+            browser = attached_session.browser
+            if browser is None:
+                if not attached_session.cdp_url:
+                    raise RuntimeError(
+                        "Не удалось получить CDP endpoint для адресного добора Ads Manager"
+                    )
+                async with self._connect_browser(attached_session.cdp_url) as fallback_browser:
+                    return await self._recover_rows_with_browser(
+                        fallback_browser,
+                        profile_id=profile_id,
+                        browser_host_name=browser_host_name,
+                        fb_ad_ids=list(target_fb_ad_ids),
+                    )
+
+            return await self._recover_rows_with_browser(
+                browser,
+                profile_id=profile_id,
+                browser_host_name=browser_host_name,
+                fb_ad_ids=list(target_fb_ad_ids),
+            )
+        finally:
+            await self._browser_session_manager.release_session(attached_session)
+
     async def _scan_with_browser(
         self,
         browser,
@@ -394,6 +476,99 @@ class FacebookAdsScannerProvider:
                 "Не удалось получить полный набор строк Ads Manager после одного обновления страницы"
             )
         return rows
+
+    async def _recover_rows_with_browser(
+        self,
+        browser,
+        *,
+        profile_id: str,
+        browser_host_name: str,
+        fb_ad_ids: list[str],
+    ) -> TargetedRecoveryResult:
+        page = await self._resolve_ads_page(browser)
+        await self._dismiss_known_popups(page, stage="перед адресным добором")
+
+        requested_fb_ad_ids = tuple(dict.fromkeys(fb_ad_ids))
+        targeted_page = await ensure_ads_manager_service_page(
+            browser=browser,
+            context=getattr(page, "context", None),
+            service_role=RECOVERY_SERVICE_PAGE,
+            seed_url=getattr(page, "url", "") or "",
+            selected_ad_ids=list(requested_fb_ad_ids),
+        )
+        logger = logging.getLogger(__name__)
+        captured_responses: list[Any] = []
+        response_handler = self._build_response_handler(captured_responses)
+        add_listener = getattr(targeted_page, "on", None)
+        remove_listener = getattr(targeted_page, "remove_listener", None)
+        off_listener = getattr(targeted_page, "off", None)
+        if not callable(add_listener):
+            logger.warning(
+                "Служебная страница Ads Manager не поддерживает response-события для адресного batch-добора %s объявлений",
+                len(requested_fb_ad_ids),
+            )
+            return TargetedRecoveryResult(
+                rows=[],
+                requested_fb_ad_ids=requested_fb_ad_ids,
+                recovered_fb_ad_ids=(),
+                missing_fb_ad_ids=requested_fb_ad_ids,
+                status="inconclusive",
+            )
+
+        add_listener("response", response_handler)
+        try:
+            await targeted_page.reload(wait_until="domcontentloaded")
+            await self._wait_for_response_settle(targeted_page)
+            await self._dismiss_known_popups(
+                targeted_page,
+                stage="во время адресного batch-добора объявлений",
+            )
+            response_entries = await self._resolve_response_payloads(captured_responses)
+            merged_rows = parse_ads_manager_payloads(
+                relevant_payloads=[
+                    entry.payload for entry in response_entries if entry.is_relevant
+                ],
+                all_payloads=[entry.payload for entry in response_entries],
+                page_url=targeted_page.url,
+            )
+            rows_by_id = {
+                row.fb_ad_id: row for row in merged_rows if row.fb_ad_id in requested_fb_ad_ids
+            }
+            recovered_rows = [
+                rows_by_id[fb_ad_id] for fb_ad_id in requested_fb_ad_ids if fb_ad_id in rows_by_id
+            ]
+            missing_fb_ad_ids = tuple(
+                fb_ad_id for fb_ad_id in requested_fb_ad_ids if fb_ad_id not in rows_by_id
+            )
+            if missing_fb_ad_ids:
+                logger.warning(
+                    "Адресный batch-добор Ads Manager вернул неполное покрытие для профиля %s: не найдены объявления %s",
+                    profile_id,
+                    ", ".join(missing_fb_ad_ids),
+                )
+                status = "inconclusive"
+            else:
+                logger.info(
+                    "Адресный batch-добор Ads Manager успешно подтвердил %s объявлений для профиля %s на хосте %s",
+                    len(recovered_rows),
+                    profile_id,
+                    browser_host_name,
+                )
+                status = "complete"
+            return TargetedRecoveryResult(
+                rows=recovered_rows,
+                requested_fb_ad_ids=requested_fb_ad_ids,
+                recovered_fb_ad_ids=tuple(row.fb_ad_id for row in recovered_rows),
+                missing_fb_ad_ids=missing_fb_ad_ids,
+                status=status,
+            )
+        finally:
+            if remove_listener is not None:
+                with contextlib.suppress(Exception):
+                    remove_listener("response", response_handler)
+            elif off_listener is not None:
+                with contextlib.suppress(Exception):
+                    off_listener("response", response_handler)
 
     async def _scan_rows_from_responses(
         self,
@@ -553,23 +728,21 @@ class FacebookAdsScannerProvider:
 
             while True:
                 response_entries = await self._resolve_response_payloads(captured_responses)
-                response_rows = self._parse_response_rows(
-                    [entry.payload for entry in response_entries if entry.is_relevant],
-                    page_url,
-                )
-                graphql_rows = self._parse_graphql_rows(
-                    [entry.payload for entry in response_entries],
-                    page_url,
+                payload_rows = parse_ads_manager_payloads(
+                    relevant_payloads=[
+                        entry.payload for entry in response_entries if entry.is_relevant
+                    ],
+                    all_payloads=[entry.payload for entry in response_entries],
+                    page_url=page_url,
                 )
                 await self._dismiss_known_popups(page, stage="перед чтением текущего окна таблицы")
                 visible_rows = await self._parse_current_view_rows(page, page_url)
-                accumulated_visible_rows = self._merge_scanned_rows(
+                accumulated_visible_rows = merge_scanned_rows(
                     accumulated_visible_rows,
                     visible_rows,
                 )
-                rows = self._merge_scanned_rows(
-                    response_rows,
-                    graphql_rows,
+                rows = merge_scanned_rows(
+                    payload_rows,
                     accumulated_visible_rows,
                 )
 
@@ -577,9 +750,8 @@ class FacebookAdsScannerProvider:
                     merged_count = len(rows)
                     no_new_attempts = 0
                     logger.info(
-                        "Собрано строк Ads Manager: response=%s, graphql=%s, таблица=%s, всего=%s",
-                        len(response_rows),
-                        len(graphql_rows),
+                        "Собрано строк Ads Manager: payload=%s, таблица=%s, всего=%s",
+                        len(payload_rows),
                         len(visible_rows),
                         len(rows),
                     )
@@ -587,11 +759,11 @@ class FacebookAdsScannerProvider:
                     no_new_attempts += 1
 
                 is_scope_complete = self._is_complete_response_rows(rows, expected_rows_count)
-                has_unresolved_scope_rows = self._has_unresolved_scope_rows(rows)
-                if is_scope_complete and not has_unresolved_scope_rows:
+                has_unresolved_rows = has_unresolved_scope_rows(rows)
+                if is_scope_complete and not has_unresolved_rows:
                     return rows, response_entries
 
-                if is_scope_complete and has_unresolved_scope_rows and accumulated_visible_rows:
+                if is_scope_complete and has_unresolved_rows and accumulated_visible_rows:
                     logger.info(
                         "Полный scope по количеству уже собран, продолжаю прокрутку для уточнения campaign/adset имен"
                     )

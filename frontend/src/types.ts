@@ -76,6 +76,18 @@ export type AdSummary = {
   last_action_source?: string | null;
   last_action_at?: string | null;
   last_action_message?: string | null;
+  risk_band: "SAFE" | "WATCH" | "STOP";
+  fast_stop_state: "IDLE" | "WATCH" | "STOP" | "QUEUED" | "RUNNING" | "PAUSED" | "FAILED";
+  watch_reason?: string | null;
+  queued_action_status?:
+    | "QUEUED"
+    | "RUNNING"
+    | "RETRYING"
+    | "SUCCEEDED"
+    | "FAILED"
+    | "CANCELLED"
+    | null;
+  priority_score: number;
   resolved_cpa_usd?: string | number | null;
   spend?: string | number | null;
   clicks?: number | null;
@@ -177,8 +189,16 @@ export type ScanRunItem = {
   profile_launch_id?: string | null;
   profile_launch_name?: string | null;
   status: string;
+  pipeline_kind: "FULL_SCAN" | "TARGETED_RECHECK";
+  trigger_source: string;
+  target_fb_ad_ids: string[];
   rows_seen: number;
   rows_parsed: number;
+  collect_ms: number;
+  evaluate_ms: number;
+  persist_ms: number;
+  queue_ms: number;
+  action_jobs_enqueued: number;
   scope_summary?: Record<string, unknown> | null;
   error_message?: string | null;
   started_at: string;
@@ -196,7 +216,10 @@ export type ServiceSettings = {
   auto_pause_enabled: boolean;
   auto_resume_enabled: boolean;
   observe_only_enabled: boolean;
-  scan_interval_seconds: number;
+  full_scan_interval_seconds: number;
+  recheck_interval_seconds: number;
+  full_scan_profile_concurrency: number;
+  action_worker_concurrency: number;
   vision_api_token: string;
   telegram_bot_token: string;
   telegram_chat_id: string;
@@ -210,7 +233,10 @@ export type ServiceSettingsResponse = {
   auto_resume_enabled: boolean;
   auto_resume_available: boolean;
   observe_only_enabled: boolean;
-  scan_interval_seconds: number;
+  full_scan_interval_seconds: number;
+  recheck_interval_seconds: number;
+  full_scan_profile_concurrency: number;
+  action_worker_concurrency: number;
   vision_local_api_url: string;
   vision_cloud_api_url: string;
   telegram_chat_id: string;
@@ -226,13 +252,52 @@ export type ServiceSettingsUpdate = Pick<
   | "auto_pause_enabled"
   | "auto_resume_enabled"
   | "observe_only_enabled"
-  | "scan_interval_seconds"
+  | "full_scan_interval_seconds"
+  | "recheck_interval_seconds"
+  | "full_scan_profile_concurrency"
+  | "action_worker_concurrency"
   | "telegram_chat_id"
   | "vision_local_api_url"
   | "vision_cloud_api_url"
 > & {
   vision_api_token?: string | null;
   telegram_bot_token?: string | null;
+};
+
+export type WatchlistItem = {
+  id: string;
+  fb_ad_id: string;
+  profile_id?: string | null;
+  browser_host_id?: string | null;
+  campaign_name?: string | null;
+  adset_name?: string | null;
+  ad_name?: string | null;
+  risk_band: "SAFE" | "WATCH" | "STOP";
+  fast_stop_state: "IDLE" | "WATCH" | "STOP" | "QUEUED" | "RUNNING" | "PAUSED" | "FAILED";
+  watch_reason?: string | null;
+  priority_score: number;
+  next_check_at: string;
+  last_metrics_at?: string | null;
+  attempt_count: number;
+  source_scan_run_id?: string | null;
+};
+
+export type ActionJobItem = {
+  id: string;
+  fb_ad_id: string;
+  profile_id?: string | null;
+  browser_host_id?: string | null;
+  campaign_name?: string | null;
+  adset_name?: string | null;
+  ad_name?: string | null;
+  action_type: "PAUSE" | "RESUME";
+  status: "QUEUED" | "RUNNING" | "RETRYING" | "SUCCEEDED" | "FAILED" | "CANCELLED";
+  priority_score: number;
+  attempt_count: number;
+  next_attempt_at: string;
+  last_error?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
 };
 
 export type SuspendedProfileItem = {

@@ -97,3 +97,16 @@ async def test_ensure_ads_manager_service_page_reuses_page_from_target_context()
     assert page is existing_page
     assert target_context.created_pages == []
     assert existing_page.goto_urls == []
+
+
+# Проверяет, что service page собирает batch-контекст через список selected_ad_ids.
+def test_build_service_page_url_preserves_batch_selected_ad_ids() -> None:
+    url = build_service_page_url(
+        "https://adsmanager.facebook.com/adsmanager/manage/ads?selected_campaign_ids=1",
+        service_role=ACTIONS_SERVICE_PAGE,
+        selected_ad_ids=["111", "222"],
+    )
+
+    assert "selected_campaign_ids" not in url
+    assert "selected_ad_ids=111" in url
+    assert "selected_ad_ids=222" in url

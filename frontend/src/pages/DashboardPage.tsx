@@ -8,11 +8,13 @@ import { TrendStrip } from "../components/TrendStrip";
 import { useAutoRefresh } from "../hooks/useAutoRefresh";
 import {
   fetchAds,
+  fetchActionJobs,
   fetchDecisions,
   fetchHealth,
   fetchProfileLaunchDashboard,
   fetchScanRuns,
   fetchServiceSettings,
+  fetchWatchlist,
 } from "../lib/api";
 import { formatCountdown, formatDateTime, formatMoney } from "../lib/format";
 import { isAttentionAdSummary } from "../lib/helpers";
@@ -21,8 +23,10 @@ import type {
   DecisionItem,
   HealthResponse,
   ProfileLaunchDashboard,
+  ActionJobItem,
   ScanRunItem,
   ServiceSettingsResponse,
+  WatchlistItem,
 } from "../types";
 import { useOperatorScope } from "../context/OperatorScopeContext";
 
@@ -67,6 +71,43 @@ function resolveNextScanCountdown(
   return Math.max(0, Math.ceil((nextScanStamp - nowStamp) / 1000));
 }
 
+function resolveLatestScanByKind(scans: ScanRunItem[], pipelineKind: ScanRunItem["pipeline_kind"]) {
+  const filtered = scans.filter((scan) => scan.pipeline_kind === pipelineKind);
+  return resolveLastScan(filtered);
+}
+
+function resolveReactionLagSeconds(
+  watchlist: WatchlistItem[],
+  actionJobs: ActionJobItem[],
+  nowStamp: number,
+): number | null {
+  if (watchlist.length === 0 && actionJobs.length === 0) {
+    return null;
+  }
+  const oldestWatchStamp = watchlist.reduce((oldest, entry) => {
+    const stamp = new Date(entry.next_check_at).getTime();
+    if (Number.isNaN(stamp)) {
+      return oldest;
+    }
+    return oldest == null || stamp < oldest ? stamp : oldest;
+  }, null as number | null);
+  const oldestJobStamp = actionJobs.reduce((oldest, job) => {
+    const stamp = new Date(job.next_attempt_at).getTime();
+    if (Number.isNaN(stamp)) {
+      return oldest;
+    }
+    return oldest == null || stamp < oldest ? stamp : oldest;
+  }, null as number | null);
+  const anchorStamp = Math.min(
+    oldestWatchStamp ?? Number.POSITIVE_INFINITY,
+    oldestJobStamp ?? Number.POSITIVE_INFINITY,
+  );
+  if (!Number.isFinite(anchorStamp)) {
+    return null;
+  }
+  return Math.max(0, Math.ceil((nowStamp - anchorStamp) / 1000));
+}
+
 function resolveNextScanLabel(
   scan: ScanRunItem | null,
   settings: ServiceSettingsResponse | null,
@@ -88,7 +129,7 @@ function resolveNextScanLabel(
   if (scan.status.toUpperCase() === "RUNNING") {
     return "выполняется";
   }
-  const secondsLeft = resolveNextScanCountdown(scan, settings.scan_interval_seconds, nowStamp);
+  const secondsLeft = resolveNextScanCountdown(scan, settings.full_scan_interval_seconds, nowStamp);
   if (secondsLeft == null) {
     return "нет данных";
   }
@@ -111,12 +152,46 @@ function formatDelta(current: string | number, previous: string | number | null 
   return delta > 0 ? `+${delta.toFixed(2)}` : delta.toFixed(2);
 }
 
+function formatRiskBandLabel(value: WatchlistItem["risk_band"]): string {
+  switch (value) {
+    case "SAFE":
+      return "без риска";
+    case "WATCH":
+      return "наблюдение";
+    case "STOP":
+      return "стоп";
+    default:
+      return String(value).toLowerCase();
+  }
+}
+
+function formatActionStatusLabel(value: ActionJobItem["status"]): string {
+  switch (value) {
+    case "QUEUED":
+      return "в очереди";
+    case "RUNNING":
+      return "в работе";
+    case "RETRYING":
+      return "повтор";
+    case "SUCCEEDED":
+      return "выполнено";
+    case "FAILED":
+      return "ошибка";
+    case "CANCELLED":
+      return "отменено";
+    default:
+      return String(value).toLowerCase();
+  }
+}
+
 export default function DashboardPage() {
   const scope = useOperatorScope();
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [ads, setAds] = useState<AdSummary[]>([]);
   const [decisions, setDecisions] = useState<DecisionItem[]>([]);
   const [scanRuns, setScanRuns] = useState<ScanRunItem[]>([]);
+  const [watchlist, setWatchlist] = useState<WatchlistItem[]>([]);
+  const [actionJobs, setActionJobs] = useState<ActionJobItem[]>([]);
   const [serviceSettings, setServiceSettings] = useState<ServiceSettingsResponse | null>(null);
   const [launchDashboard, setLaunchDashboard] = useState<ProfileLaunchDashboard | null>(null);
   const [loading, setLoading] = useState(true);
@@ -147,10 +222,21 @@ export default function DashboardPage() {
       fetchAds(filters),
       fetchDecisions(filters),
       fetchScanRuns(filters),
+      fetchWatchlist(filters),
+      fetchActionJobs(filters),
       fetchServiceSettings(),
       launchId ? fetchProfileLaunchDashboard(launchId) : Promise.resolve(null),
     ] as const;
-    const [healthResult, adsResult, decisionsResult, scanRunsResult, settingsResult, launchResult] =
+    const [
+      healthResult,
+      adsResult,
+      decisionsResult,
+      scanRunsResult,
+      watchlistResult,
+      actionJobsResult,
+      settingsResult,
+      launchResult,
+    ] =
       await Promise.allSettled(requests);
 
     const errors: string[] = [];
@@ -176,6 +262,16 @@ export default function DashboardPage() {
       setScanRuns(scanRunsResult.value);
     } else {
       errors.push(scanRunsResult.reason instanceof Error ? scanRunsResult.reason.message : "Не удалось загрузить сканы");
+    }
+    if (watchlistResult.status === "fulfilled") {
+      setWatchlist(watchlistResult.value);
+    } else {
+      errors.push(watchlistResult.reason instanceof Error ? watchlistResult.reason.message : "Не удалось загрузить watchlist");
+    }
+    if (actionJobsResult.status === "fulfilled") {
+      setActionJobs(actionJobsResult.value);
+    } else {
+      errors.push(actionJobsResult.reason instanceof Error ? actionJobsResult.reason.message : "Не удалось загрузить очередь действий");
     }
     if (settingsResult.status === "fulfilled") {
       setServiceSettings(settingsResult.value);
@@ -211,6 +307,15 @@ export default function DashboardPage() {
   const trackedAds = ads.filter((ad) => ad.tracking_mode === "TRACKED");
   const attentionTrackedAds = trackedAds.filter((ad) => isAttentionAdSummary(ad));
   const lastScan = useMemo(() => resolveLastScan(scanRuns), [scanRuns]);
+  const lastFullScan = useMemo(() => resolveLatestScanByKind(scanRuns, "FULL_SCAN"), [scanRuns]);
+  const lastRecheckScan = useMemo(
+    () => resolveLatestScanByKind(scanRuns, "TARGETED_RECHECK"),
+    [scanRuns],
+  );
+  const reactionLagSeconds = useMemo(
+    () => resolveReactionLagSeconds(watchlist, actionJobs, nowStamp),
+    [actionJobs, nowStamp, watchlist],
+  );
   const nextScanLabel = resolveNextScanLabel(lastScan, serviceSettings, nowStamp, isArchiveLaunch);
 
   async function handleCreateLaunch() {
@@ -275,7 +380,7 @@ export default function DashboardPage() {
           <span>Режим</span>
           <strong>{formatModeLabel(serviceSettings)}</strong>
           <div className="mini-row">
-            <span>Следующий скан</span>
+            <span>Полный скан</span>
             <span>{nextScanLabel}</span>
           </div>
         </article>
@@ -285,6 +390,22 @@ export default function DashboardPage() {
           <div className="mini-row">
             <span>Требуют внимания</span>
             <span>{launchDashboard?.current.attention_ads ?? attentionTrackedAds.length}</span>
+          </div>
+        </article>
+        <article className="metric-tile">
+          <span>Быстрый стоп</span>
+          <strong>{watchlist.length}</strong>
+          <div className="mini-row">
+            <span>Очередь действий</span>
+            <span>{actionJobs.length}</span>
+          </div>
+        </article>
+        <article className="metric-tile">
+          <span>Задержка реакции</span>
+          <strong>{reactionLagSeconds != null ? formatCountdown(reactionLagSeconds) : "нет очереди"}</strong>
+          <div className="mini-row">
+            <span>Последняя перепроверка</span>
+            <span>{lastRecheckScan ? formatDateTime(lastRecheckScan.finished_at ?? lastRecheckScan.started_at) : "—"}</span>
           </div>
         </article>
         <article className="metric-tile">
@@ -299,13 +420,13 @@ export default function DashboardPage() {
           <span>Сканов</span>
           <strong>{launchDashboard?.current.scans_count ?? scanRuns.length}</strong>
           <div className="mini-row">
-            <span>Последний</span>
-            <span>{launchDashboard?.current.last_scan_at ? formatDateTime(launchDashboard.current.last_scan_at) : "—"}</span>
+            <span>Последний полный скан</span>
+            <span>{lastFullScan ? formatDateTime(lastFullScan.finished_at ?? lastFullScan.started_at) : "—"}</span>
           </div>
         </article>
       </div>
 
-      <SectionCard
+        <SectionCard
         title="Сводка запуска"
         subtitle={
           launchDashboard?.previous_launch
@@ -314,7 +435,7 @@ export default function DashboardPage() {
         }
         actions={
           <span className="section-note">
-            {health?.timestamp ? `Health: ${formatDateTime(health.timestamp)}` : "Health без данных"}
+            {health?.timestamp ? `Системный статус: ${formatDateTime(health.timestamp)}` : "Системный статус недоступен"}
           </span>
         }
       >
@@ -352,6 +473,53 @@ export default function DashboardPage() {
           <TrendStrip title="Проблемные решения" points={launchDashboard?.attention_series ?? []} />
           <TrendStrip title="Автодействия" points={launchDashboard?.action_series ?? []} />
         </div>
+      </SectionCard>
+
+      <SectionCard
+        title="Быстрый стоп"
+        subtitle="Список рискованных объявлений и очередь действий"
+      >
+        <div className="metric-grid launch-compare-grid">
+          <article className="metric-tile">
+            <span>Список наблюдения</span>
+            <strong>{watchlist.length}</strong>
+            <div className="mini-row">
+              <span>STOP</span>
+              <span>{watchlist.filter((item) => item.risk_band === "STOP").length}</span>
+            </div>
+          </article>
+          <article className="metric-tile">
+            <span>Очередь действий</span>
+            <strong>{actionJobs.length}</strong>
+            <div className="mini-row">
+              <span>В работе</span>
+              <span>{actionJobs.filter((item) => item.status === "RUNNING").length}</span>
+            </div>
+          </article>
+        </div>
+        {watchlist.length === 0 && actionJobs.length === 0 ? (
+          <EmptyState
+            title="Быстрый стоп пуст"
+            description="Когда появятся рискованные объявления, здесь будут видны список наблюдения и очередь действий."
+          />
+        ) : (
+          <div className="scan-summary scan-summary--stacked">
+            {watchlist.slice(0, 5).map((item) => (
+              <div key={item.id} className="scan-summary__item">
+                <span className="mono">{item.fb_ad_id}</span>
+                <strong>{formatRiskBandLabel(item.risk_band)}</strong>
+                <span>{item.watch_reason || "Без причины"}</span>
+              </div>
+            ))}
+            {actionJobs.slice(0, 5).map((job) => (
+              <div key={job.id} className="scan-summary__item">
+                <span className="mono">{job.fb_ad_id}</span>
+                <strong>{formatActionStatusLabel(job.status)}</strong>
+                <span>{job.last_error || "Без ошибок"}</span>
+              </div>
+            ))}
+          </div>
+        )}
       </SectionCard>
 
       <SectionCard

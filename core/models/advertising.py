@@ -8,7 +8,7 @@ from sqlalchemy import DateTime, Enum, ForeignKey, Index, Numeric, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from core.db.base import Base
-from core.domain import DecisionType, DeliveryStatus, ScopePresence, TrackingMode
+from core.domain import DecisionType, DeliveryStatus, RiskBand, ScopePresence, TrackingMode
 from core.models.base_mixins import TimestampMixin, UUIDPrimaryKeyMixin
 
 if TYPE_CHECKING:
@@ -54,6 +54,7 @@ class Ad(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __table_args__ = (
         Index("ix_ads_last_seen_at", "last_seen_at"),
         Index("ix_ads_last_scan_run_id", "last_scan_run_id"),
+        Index("ix_ads_risk_band_last_risk_at", "risk_band", "last_risk_at"),
     )
 
     fb_ad_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
@@ -80,6 +81,13 @@ class Ad(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         Enum(DecisionType, name="decision_type_enum"),
         default=DecisionType.NO_ACTION,
     )
+    risk_band: Mapped[RiskBand] = mapped_column(
+        Enum(RiskBand, name="risk_band_enum"),
+        default=RiskBand.SAFE,
+        index=True,
+    )
+    last_risk_reason: Mapped[str | None] = mapped_column(String(500))
+    last_risk_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_scan_run_id: Mapped[str | None] = mapped_column(
         ForeignKey("scan_runs.id", ondelete="SET NULL")
     )

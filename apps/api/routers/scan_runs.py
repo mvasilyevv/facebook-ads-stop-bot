@@ -37,8 +37,16 @@ async def list_scan_runs(
             profile_launch_id=scan_launch_id,
             profile_launch_name=scan_launch_name,
             status=scan_run.status.value,
+            pipeline_kind=scan_run.pipeline_kind.value,
+            trigger_source=scan_run.trigger_source,
+            target_fb_ad_ids=list(scan_run.target_fb_ad_ids or []),
             rows_seen=scan_run.rows_seen,
             rows_parsed=scan_run.rows_parsed,
+            collect_ms=scan_run.collect_ms,
+            evaluate_ms=scan_run.evaluate_ms,
+            persist_ms=scan_run.persist_ms,
+            queue_ms=scan_run.queue_ms,
+            action_jobs_enqueued=scan_run.action_jobs_enqueued,
             scope_summary=scan_run.scope_summary
             if isinstance(scan_run.scope_summary, dict)
             else None,

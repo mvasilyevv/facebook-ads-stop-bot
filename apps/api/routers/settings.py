@@ -17,10 +17,13 @@ from core.config import get_settings
 from core.repositories import BrowserRepository
 from core.repositories.operations import SystemSettingsRepository
 from core.services import (
+    SERVICE_SETTING_ACTION_WORKER_CONCURRENCY,
     SERVICE_SETTING_AUTO_PAUSE_ENABLED,
     SERVICE_SETTING_AUTO_RESUME_ENABLED,
+    SERVICE_SETTING_FULL_SCAN_INTERVAL_SECONDS,
+    SERVICE_SETTING_FULL_SCAN_PROFILE_CONCURRENCY,
     SERVICE_SETTING_OBSERVE_ONLY_ENABLED,
-    SERVICE_SETTING_SCAN_INTERVAL_SECONDS,
+    SERVICE_SETTING_RECHECK_INTERVAL_SECONDS,
     SERVICE_SETTING_TELEGRAM_BOT_TOKEN,
     SERVICE_SETTING_TELEGRAM_CHAT_ID,
     SERVICE_SETTING_VISION_API_TOKEN,
@@ -107,7 +110,10 @@ async def get_service_settings(session: DbSessionDep) -> ServiceSettingsResponse
         auto_resume_enabled=runtime.auto_resume_enabled,
         auto_resume_available=runtime.auto_resume_available,
         observe_only_enabled=runtime.observe_only_enabled,
-        scan_interval_seconds=runtime.scan_interval_seconds,
+        full_scan_interval_seconds=runtime.full_scan_interval_seconds,
+        recheck_interval_seconds=runtime.recheck_interval_seconds,
+        full_scan_profile_concurrency=runtime.full_scan_profile_concurrency,
+        action_worker_concurrency=runtime.action_worker_concurrency,
         vision_local_api_url=runtime.vision_local_api_url,
         vision_cloud_api_url=runtime.vision_cloud_api_url,
         telegram_chat_id=runtime.telegram_chat_id,
@@ -126,10 +132,25 @@ async def update_service_settings(
 ) -> ServiceSettingsResponse:
     """Обновить runtime-настройки сервиса."""
 
-    if payload.scan_interval_seconds not in {30, 60, 120, 300}:
+    if payload.full_scan_interval_seconds not in {30, 60, 120, 300}:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Допустимая частота скана: 30, 60, 120 или 300 секунд",
+            detail="Допустимая частота полного скана: 30, 60, 120 или 300 секунд",
+        )
+    if payload.recheck_interval_seconds not in {5, 10, 15, 30, 60}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Допустимая частота быстрой перепроверки: 5, 10, 15, 30 или 60 секунд",
+        )
+    if payload.full_scan_profile_concurrency not in {1, 2, 3, 4, 5}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Допустимая параллельность полного скана: от 1 до 5",
+        )
+    if payload.action_worker_concurrency not in {1, 2, 3, 4, 5}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Допустимая параллельность очереди действий: от 1 до 5",
         )
 
     repo = SystemSettingsRepository(session)
@@ -152,9 +173,24 @@ async def update_service_settings(
         description="Режим наблюдения без реальных действий",
     )
     await repo.set_setting(
-        SERVICE_SETTING_SCAN_INTERVAL_SECONDS,
-        str(payload.scan_interval_seconds),
+        SERVICE_SETTING_FULL_SCAN_INTERVAL_SECONDS,
+        str(payload.full_scan_interval_seconds),
         description="Частота полного цикла сканирования",
+    )
+    await repo.set_setting(
+        SERVICE_SETTING_RECHECK_INTERVAL_SECONDS,
+        str(payload.recheck_interval_seconds),
+        description="Частота быстрой перепроверки рискованных объявлений",
+    )
+    await repo.set_setting(
+        SERVICE_SETTING_FULL_SCAN_PROFILE_CONCURRENCY,
+        str(payload.full_scan_profile_concurrency),
+        description="Параллельность полного сканирования по профилям",
+    )
+    await repo.set_setting(
+        SERVICE_SETTING_ACTION_WORKER_CONCURRENCY,
+        str(payload.action_worker_concurrency),
+        description="Параллельность очереди действий по профилям",
     )
     await repo.set_setting(
         SERVICE_SETTING_VISION_LOCAL_API_URL,

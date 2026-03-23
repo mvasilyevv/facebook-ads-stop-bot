@@ -9,15 +9,19 @@ import pytest
 from core.config.settings import Settings
 from core.domain import (
     ActionExecutionStatus,
+    ActionJobStatus,
     ActionType,
     DecisionType,
     DeliveryStatus,
     EntityType,
+    RiskBand,
+    ScanPipelineKind,
     ScanRunStatus,
     ScopePresence,
     TrackingMode,
 )
 from core.repositories import (
+    ActionJobsRepository,
     AdsRepository,
     BrowserRepository,
     ControlFlagsRepository,
@@ -26,9 +30,16 @@ from core.repositories import (
     RulesRepository,
     ScanRunsRepository,
     SystemSettingsRepository,
+    WatchlistRepository,
 )
 from core.repositories.rules import DEFAULT_RULES
-from core.services import SERVICE_SETTING_AUTO_PAUSE_ENABLED, SERVICE_SETTING_SCAN_INTERVAL_SECONDS
+from core.services import (
+    SERVICE_SETTING_ACTION_WORKER_CONCURRENCY,
+    SERVICE_SETTING_AUTO_PAUSE_ENABLED,
+    SERVICE_SETTING_FULL_SCAN_INTERVAL_SECONDS,
+    SERVICE_SETTING_RECHECK_INTERVAL_SECONDS,
+    SERVICE_SETTING_SCAN_INTERVAL_SECONDS,
+)
 
 
 # Проверяет полный поток offers -> rates -> bindings -> resolved binding/rate на async SQLite.
@@ -572,14 +583,25 @@ async def test_scan_runs_repository_tracks_lifecycle(async_session) -> None:
         profile_id=uuid4(),
         status=ScanRunStatus.PENDING,
         started_at=started_at,
+        pipeline_kind=ScanPipelineKind.FULL_SCAN,
+        trigger_source="scheduler",
+        target_fb_ad_ids=["ad-1"],
         rows_seen=0,
         rows_parsed=0,
     )
     updated = await repo.update_scan_run(
         scan_run.id,
         status=ScanRunStatus.RUNNING,
+        pipeline_kind=ScanPipelineKind.TARGETED_RECHECK,
+        trigger_source="watchlist",
+        target_fb_ad_ids=["ad-1", "ad-2"],
         rows_seen=2,
         rows_parsed=2,
+        collect_ms=1200,
+        evaluate_ms=300,
+        persist_ms=200,
+        queue_ms=100,
+        action_jobs_enqueued=1,
         scope_summary={"ads": 2},
     )
 
@@ -589,7 +611,11 @@ async def test_scan_runs_repository_tracks_lifecycle(async_session) -> None:
 
     assert scan_run.started_at == started_at
     assert updated is not None
+    assert updated.pipeline_kind == ScanPipelineKind.TARGETED_RECHECK
+    assert updated.trigger_source == "watchlist"
+    assert updated.target_fb_ad_ids == ["ad-1", "ad-2"]
     assert updated.rows_seen == 2
+    assert updated.action_jobs_enqueued == 1
     assert len(all_runs) == 1
 
 
@@ -654,3 +680,177 @@ async def test_browser_repository_returns_latest_session_per_profile(async_sessi
     assert latest.session.status == "ACTIVE"
     assert latest.session.cdp_url == "http://127.0.0.1:54000"
     assert len(all_latest) == 1
+
+
+# Проверяет, что репозиторий системных настроек хранит новые runtime-ключи fast-stop контура.
+@pytest.mark.asyncio
+async def test_system_settings_repository_stores_new_runtime_keys(async_session) -> None:
+    repo = SystemSettingsRepository(async_session)
+
+    await repo.set_setting(SERVICE_SETTING_AUTO_PAUSE_ENABLED, "true")
+    await repo.set_setting(SERVICE_SETTING_FULL_SCAN_INTERVAL_SECONDS, "60")
+    await repo.set_setting(SERVICE_SETTING_RECHECK_INTERVAL_SECONDS, "15")
+    await repo.set_setting(SERVICE_SETTING_ACTION_WORKER_CONCURRENCY, "2")
+
+    all_settings = await repo.get_all_settings()
+
+    await async_session.commit()
+
+    assert all_settings[SERVICE_SETTING_AUTO_PAUSE_ENABLED] == "true"
+    assert all_settings[SERVICE_SETTING_FULL_SCAN_INTERVAL_SECONDS] == "60"
+    assert all_settings[SERVICE_SETTING_RECHECK_INTERVAL_SECONDS] == "15"
+    assert all_settings[SERVICE_SETTING_ACTION_WORKER_CONCURRENCY] == "2"
+
+
+# Проверяет, что watchlist умеет обновлять риск, планировать retry и удалять запись по объявлению.
+@pytest.mark.asyncio
+async def test_watchlist_repository_tracks_retry_and_delete(async_session) -> None:
+    browser_repo = BrowserRepository(async_session)
+    ads_repo = AdsRepository(async_session)
+    scan_repo = ScanRunsRepository(async_session)
+    watchlist_repo = WatchlistRepository(async_session)
+
+    browser_host = await browser_repo.upsert_browser_host(
+        name="browser-host-watchlist",
+        vendor="vision",
+        api_base_url=Settings().vision_local_api_url,
+    )
+    profile = await browser_repo.upsert_profile(
+        browser_host_id=browser_host.id,
+        vendor_profile_id="profile-watchlist-1",
+        display_name="Профиль watchlist",
+        is_active=True,
+    )
+    campaign = await ads_repo.upsert_campaign(scope_key="campaign:watch", name="Кампания watch")
+    adset = await ads_repo.upsert_adset(
+        scope_key="adset:campaign:watch:1",
+        campaign_id=campaign.id,
+        name="Адсет watch",
+    )
+    ad = await ads_repo.upsert_ad(
+        fb_ad_id="watch-ad-1",
+        campaign_id=campaign.id,
+        adset_id=adset.id,
+        name="Объявление watch",
+        delivery_status=DeliveryStatus.ACTIVE,
+        tracking_mode=TrackingMode.TRACKED,
+        scope_presence=ScopePresence.IN_SCOPE,
+        risk_band=RiskBand.WATCH,
+        last_seen_at=datetime(2026, 3, 23, 18, 0, tzinfo=UTC),
+    )
+    scan_run = await scan_repo.create_scan_run(
+        browser_host_id=browser_host.id,
+        profile_id=profile.id,
+        status=ScanRunStatus.SUCCEEDED,
+        started_at=datetime(2026, 3, 23, 18, 0, tzinfo=UTC),
+        pipeline_kind=ScanPipelineKind.FULL_SCAN,
+    )
+
+    entry = await watchlist_repo.upsert_entry(
+        ad_id=ad.id,
+        fb_ad_id=ad.fb_ad_id,
+        profile_id=profile.id,
+        browser_host_id=browser_host.id,
+        risk_band=RiskBand.WATCH,
+        priority_score=650,
+        next_check_at=datetime(2026, 3, 23, 18, 0, tzinfo=UTC),
+        last_reason="Рядом со стопом",
+        last_metrics_at=datetime(2026, 3, 23, 18, 0, tzinfo=UTC),
+        source_scan_run_id=scan_run.id,
+    )
+    retried = await watchlist_repo.schedule_retry(
+        ad.fb_ad_id,
+        next_check_at=datetime(2026, 3, 23, 18, 1, tzinfo=UTC),
+        last_reason="Неполный recheck",
+    )
+    deleted = await watchlist_repo.delete_entry(ad.fb_ad_id)
+
+    await async_session.commit()
+
+    assert entry.fb_ad_id == ad.fb_ad_id
+    assert retried is not None
+    assert retried.attempt_count == 1
+    assert retried.last_reason == "Неполный recheck"
+    assert deleted is True
+
+
+# Проверяет, что очередь действий не создает дубликат активной pause job для одного объявления.
+@pytest.mark.asyncio
+async def test_action_jobs_repository_deduplicates_active_pause_jobs(async_session) -> None:
+    browser_repo = BrowserRepository(async_session)
+    ads_repo = AdsRepository(async_session)
+    scan_repo = ScanRunsRepository(async_session)
+    decisions_repo = DecisionsRepository(async_session)
+    jobs_repo = ActionJobsRepository(async_session)
+
+    browser_host = await browser_repo.upsert_browser_host(
+        name="browser-host-jobs",
+        vendor="vision",
+        api_base_url=Settings().vision_local_api_url,
+    )
+    profile = await browser_repo.upsert_profile(
+        browser_host_id=browser_host.id,
+        vendor_profile_id="profile-jobs-1",
+        display_name="Профиль jobs",
+        is_active=True,
+    )
+    campaign = await ads_repo.upsert_campaign(scope_key="campaign:jobs", name="Кампания jobs")
+    adset = await ads_repo.upsert_adset(
+        scope_key="adset:campaign:jobs:1",
+        campaign_id=campaign.id,
+        name="Адсет jobs",
+    )
+    ad = await ads_repo.upsert_ad(
+        fb_ad_id="job-ad-1",
+        campaign_id=campaign.id,
+        adset_id=adset.id,
+        name="Объявление jobs",
+        delivery_status=DeliveryStatus.ACTIVE,
+        tracking_mode=TrackingMode.TRACKED,
+        scope_presence=ScopePresence.IN_SCOPE,
+        risk_band=RiskBand.STOP,
+        last_seen_at=datetime(2026, 3, 23, 19, 0, tzinfo=UTC),
+    )
+    scan_run = await scan_repo.create_scan_run(
+        browser_host_id=browser_host.id,
+        profile_id=profile.id,
+        status=ScanRunStatus.SUCCEEDED,
+        started_at=datetime(2026, 3, 23, 19, 0, tzinfo=UTC),
+        pipeline_kind=ScanPipelineKind.FULL_SCAN,
+    )
+    decision = await decisions_repo.create_decision(
+        scan_run_id=scan_run.id,
+        fb_ad_id=ad.fb_ad_id,
+        decision=DecisionType.WOULD_PAUSE,
+        reason="Стоп",
+        ad_id=ad.id,
+    )
+
+    first_job = await jobs_repo.enqueue_action_job(
+        decision_id=decision.id,
+        ad_id=ad.id,
+        fb_ad_id=ad.fb_ad_id,
+        profile_id=profile.id,
+        browser_host_id=browser_host.id,
+        action_type=ActionType.PAUSE,
+        priority_score=1200,
+        next_attempt_at=datetime(2026, 3, 23, 19, 0, tzinfo=UTC),
+    )
+    second_job = await jobs_repo.enqueue_action_job(
+        decision_id=decision.id,
+        ad_id=ad.id,
+        fb_ad_id=ad.fb_ad_id,
+        profile_id=profile.id,
+        browser_host_id=browser_host.id,
+        action_type=ActionType.PAUSE,
+        priority_score=1400,
+        next_attempt_at=datetime(2026, 3, 23, 18, 59, tzinfo=UTC),
+    )
+    ready_jobs = await jobs_repo.list_ready_jobs(limit=10)
+
+    await async_session.commit()
+
+    assert first_job.id == second_job.id
+    assert second_job.priority_score == 1400
+    assert second_job.status == ActionJobStatus.QUEUED
+    assert len([job for job in ready_jobs if job.fb_ad_id == ad.fb_ad_id]) == 1

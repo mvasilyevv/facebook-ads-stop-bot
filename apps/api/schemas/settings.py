@@ -37,7 +37,10 @@ class ServiceSettingsResponse(BaseModel):
     auto_resume_enabled: bool
     auto_resume_available: bool
     observe_only_enabled: bool
-    scan_interval_seconds: int
+    full_scan_interval_seconds: int
+    recheck_interval_seconds: int
+    full_scan_profile_concurrency: int
+    action_worker_concurrency: int
     vision_local_api_url: str
     vision_cloud_api_url: str
     telegram_chat_id: str
@@ -54,7 +57,14 @@ class ServiceSettingsUpdateRequest(BaseModel):
     auto_pause_enabled: bool
     auto_resume_enabled: bool
     observe_only_enabled: bool
-    scan_interval_seconds: int = Field(description="Частота скана в секундах")
+    full_scan_interval_seconds: int = Field(description="Частота полного цикла сканирования")
+    recheck_interval_seconds: int = Field(description="Частота быстрой перепроверки")
+    full_scan_profile_concurrency: int = Field(
+        description="Параллельность полного скана по профилям"
+    )
+    action_worker_concurrency: int = Field(
+        description="Параллельность очереди действий по профилям"
+    )
     vision_local_api_url: str
     vision_cloud_api_url: str
     telegram_chat_id: str = ""

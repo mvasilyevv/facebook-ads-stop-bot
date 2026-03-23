@@ -6,9 +6,12 @@ from decimal import Decimal
 from pydantic import BaseModel, ConfigDict, Field
 
 from apps.api.schemas.common import (
+    ActionJobStatus,
     DecisionKind,
     DeliveryStatus,
     ExecutionState,
+    FastStopState,
+    RiskBand,
     ScopePresence,
     TrackingMode,
 )
@@ -32,6 +35,11 @@ class AdSummary(BaseModel):
     last_action_source: str | None = None
     last_action_at: datetime | None = None
     last_action_message: str | None = None
+    risk_band: RiskBand = RiskBand.SAFE
+    fast_stop_state: FastStopState = FastStopState.IDLE
+    watch_reason: str | None = None
+    queued_action_status: ActionJobStatus | None = None
+    priority_score: int = 0
     resolved_cpa_usd: Decimal | None = None
     spend: Decimal | None = None
     clicks: int | None = None

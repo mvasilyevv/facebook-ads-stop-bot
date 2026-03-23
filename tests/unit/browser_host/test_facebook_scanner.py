@@ -6,6 +6,10 @@ from types import SimpleNamespace
 
 import pytest
 
+from apps.browser_host.facebook_response_probe import (
+    FacebookResponseProbeService,
+    ResponsePayloadEntry,
+)
 from apps.browser_host.facebook_scanner import (
     FacebookAdsScannerProvider,
     _build_horizontal_pass_starts,
@@ -1118,6 +1122,106 @@ async def test_scan_rows_uses_dedicated_service_page() -> None:
     assert rows[0].fb_ad_id == "120241420867480176"
 
 
+# Проверяет, что адресный recovery через selected_ad_ids возвращает только целевое объявление, даже если GraphQL отдает соседние строки.
+@pytest.mark.asyncio
+async def test_recover_rows_filters_only_target_fb_ad_id() -> None:
+    class _SeedPage:
+        def __init__(self) -> None:
+            self.url = (
+                "https://adsmanager.facebook.com/adsmanager/manage/ads"
+                "?act=1&selected_campaign_ids=120241420128910176"
+            )
+
+        async def title(self) -> str:
+            return "Ads Manager"
+
+        async def wait_for_load_state(self, state: str) -> None:
+            return None
+
+    class _ServicePage(_FakeResponsePage):
+        def __init__(self, response_batches: list[list[_FakeResponse]]) -> None:
+            super().__init__(response_batches=response_batches)
+            self.goto_urls: list[str] = []
+
+        async def goto(self, url: str, wait_until: str | None = None) -> None:
+            self.url = url
+            self.goto_urls.append(url)
+
+        async def wait_for_load_state(self, state: str) -> None:
+            return None
+
+    seed_page = _SeedPage()
+    service_page = _ServicePage(
+        response_batches=[
+            [
+                _FakeResponse(
+                    "https://www.facebook.com/api/graphql/",
+                    {
+                        "data": {
+                            "nodes": [
+                                {
+                                    "__typename": "AdCampaignGroup",
+                                    "id": "120241420128910176",
+                                    "name": "Кампания Alpha",
+                                },
+                                {
+                                    "__typename": "AdCampaign",
+                                    "id": "120241420867510000",
+                                    "name": "3",
+                                    "ad_campaign_group_id": "120241420128910176",
+                                },
+                                {
+                                    "__typename": "Adgroup",
+                                    "id": "120241420867550176",
+                                    "name": "DRC_CR2_CR015",
+                                    "ad_campaign_name": "3",
+                                    "ad_campaign_id": "120241420867510000",
+                                    "delivery_status": {"status": "PAUSED"},
+                                },
+                                {
+                                    "__typename": "Adgroup",
+                                    "id": "120241420867500176",
+                                    "name": "DRC_CR2_CR015",
+                                    "ad_campaign_name": "2",
+                                    "ad_campaign_id": "120241420867510000",
+                                    "delivery_status": {"status": "ACTIVE"},
+                                },
+                            ]
+                        }
+                    },
+                ),
+            ]
+        ]
+    )
+
+    class _Context:
+        def __init__(self, pages, service_page) -> None:
+            self.pages = pages
+            self._service_page = service_page
+
+        async def new_page(self):
+            self.pages.append(self._service_page)
+            return self._service_page
+
+    context = _Context([seed_page], service_page)
+    browser = SimpleNamespace(contexts=[context])
+    provider = FacebookAdsScannerProvider(settings=Settings())
+
+    result = await provider._recover_rows_with_browser(
+        browser,
+        profile_id="profile-1",
+        browser_host_name="host-1",
+        fb_ad_ids=["120241420867550176"],
+    )
+
+    rows = result.rows
+    assert result.status == "complete"
+    assert len(rows) == 1
+    assert rows[0].fb_ad_id == "120241420867550176"
+    assert rows[0].ad_name == "DRC_CR2_CR015"
+    assert any("selected_ad_ids=120241420867550176" in url for url in service_page.goto_urls)
+
+
 # Проверяет, что scanner собирает полный scope через один reload и последующую прокрутку таблицы без дополнительных обновлений страницы.
 @pytest.mark.asyncio
 async def test_scan_rows_collects_full_scope_after_single_reload_with_table_scroll() -> None:
@@ -1876,6 +1980,38 @@ async def test_scan_rows_writes_probe_report_for_incomplete_scope(tmp_path) -> N
     assert report_payload["parsed_row_count"] == 42
     assert report_payload["captured_response_count"] == 1
     assert report_payload["responses"][0]["row_list_total"] == 42
+
+
+# Проверяет, что probe умеет вытаскивать ad_id из `dimension_values`, даже если id лежит не в корне строки.
+def test_response_probe_extracts_ad_ids_from_dimension_values() -> None:
+    service = FacebookResponseProbeService(enabled=True, output_dir=".tmp")
+
+    summary = service._summarize_entry(
+        ResponsePayloadEntry(
+            url="https://adsmanager.facebook.com/am_tabular",
+            is_relevant=True,
+            payload={
+                "data": [
+                    {
+                        "rows": [
+                            {
+                                "dimension_values": [
+                                    {"name": "ad_id", "value": "120241420867550176"},
+                                    {"name": "ad_name", "value": "DRC_CR2_CR015"},
+                                ],
+                                "atomic_values": [
+                                    {"name": "spend", "value": "0.16 $"},
+                                ],
+                            }
+                        ]
+                    }
+                ]
+            },
+        )
+    )
+
+    assert summary["unique_ad_ids"] == ["120241420867550176"]
+    assert summary["sample_ad_ids"] == ["120241420867550176"]
 
 
 # Проверяет, что временный probe сохраняет соседние JSON-response Facebook и не мешает основному парсеру строк даже после retry.

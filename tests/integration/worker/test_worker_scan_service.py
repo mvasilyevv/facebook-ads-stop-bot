@@ -6,21 +6,26 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import select
 
+from apps.worker.action_queue_service import ActionQueueService
 from apps.worker.scan_service import WorkerScanService
+from apps.worker.targeted_recheck_service import TargetedRecheckService
 from core.actions import BrowserActionResult
 from core.domain import (
     ActionExecutionStatus,
+    ActionJobStatus,
     ActionType,
     DecisionType,
     DeliveryStatus,
     EntityType,
+    RiskBand,
+    ScanPipelineKind,
     ScanRunStatus,
     ScopePresence,
     TelegramEventType,
     TrackingMode,
 )
 from core.models.advertising import MetricSnapshot
-from core.models.operations import ActionExecution, TelegramEvent
+from core.models.operations import ActionExecution, ActionJob, TelegramEvent, WatchlistEntry
 from core.repositories import (
     AdsRepository,
     BrowserRepository,
@@ -28,6 +33,7 @@ from core.repositories import (
     RulesRepository,
     ScanRunsRepository,
     SystemSettingsRepository,
+    WatchlistRepository,
 )
 from core.scanner import ScannerScopeUnavailableError
 from tests.fixtures.worker_scan_helpers import (
@@ -37,6 +43,21 @@ from tests.fixtures.worker_scan_helpers import (
     seed_offer_with_rate,
     seed_worker_ad_graph,
 )
+
+
+async def _run_action_queue(
+    async_session_factory,
+    *,
+    pause_executor=None,
+    resume_executor=None,
+) -> int:
+    service = ActionQueueService(
+        async_session_factory=async_session_factory,
+        pause_executor=pause_executor,
+        resume_executor=resume_executor,
+        profile_concurrency=1,
+    )
+    return await service.run_once(limit=50)
 
 
 class FakePauseExecutor:
@@ -151,20 +172,35 @@ async def test_worker_scan_service_writes_pause_decision_for_expensive_click(asy
             ).all()
         )
         telegram_events = list((await session.scalars(select(TelegramEvent))).all())
+        watchlist_entries = list(
+            (
+                await session.scalars(
+                    select(WatchlistEntry).where(WatchlistEntry.fb_ad_id == seed.fb_ad_id)
+                )
+            ).all()
+        )
+        action_jobs = list(
+            (
+                await session.scalars(select(ActionJob).where(ActionJob.fb_ad_id == seed.fb_ad_id))
+            ).all()
+        )
 
     assert len(scan_runs) == 1
     assert scan_runs[0].status == ScanRunStatus.SUCCEEDED
     assert len(decisions) == 1
     assert decisions[0].decision == DecisionType.WOULD_PAUSE
+    assert decisions[0].action_status == "SKIPPED_BY_MODE"
     assert decisions[0].resolved_cpa_usd == Decimal("5.00")
     assert str(decisions[0].offer_id) == str(offer_id)
     assert len(snapshots) == 1
     assert snapshots[0].fb_ad_id == seed.fb_ad_id
     assert snapshots[0].resolved_cpa_usd == Decimal("5.00")
     assert str(snapshots[0].offer_id) == str(offer_id)
-    assert len(telegram_events) == 1
-    assert telegram_events[0].event_type == TelegramEventType.OBSERVE_WOULD_PAUSE
-    assert telegram_events[0].status == "pending"
+    assert telegram_events == []
+    assert len(watchlist_entries) == 1
+    assert watchlist_entries[0].risk_band == RiskBand.STOP
+    assert watchlist_entries[0].priority_score > 0
+    assert action_jobs == []
 
 
 # Проверяет, что объявление без resolved CPA сохраняет снимок и пишет решение `INSUFFICIENT_DATA`.
@@ -607,6 +643,143 @@ async def test_worker_scan_service_marks_missing_ads_stale_after_partial_scan(
     assert scan_runs[0].rows_parsed == 1
 
 
+# Проверяет, что targeted recheck адресно добирает объявление из watchlist и создает pause-job по свежим метрикам.
+@pytest.mark.asyncio
+async def test_worker_scan_service_recovers_missing_ad_via_targeted_scope(async_session_factory):
+    seed = await seed_worker_ad_graph(async_session_factory)
+    await seed_offer_with_binding(
+        async_session_factory,
+        entity_type=EntityType.ADSET,
+        entity_id="adset-scope-2",
+        offer_code="offer-recheck",
+        cpa_usd=Decimal("5.00"),
+        effective_from=datetime(2026, 3, 20, 11, 0, tzinfo=UTC),
+    )
+
+    async with async_session_factory() as session:
+        ads_repo = AdsRepository(session)
+        browser_repo = BrowserRepository(session)
+        profile = await browser_repo.get_profile_by_vendor_id(seed.profile_id)
+        browser_host = await browser_repo.get_browser_host_by_name(seed.browser_host_name)
+        assert profile is not None
+        assert browser_host is not None
+        campaign = await ads_repo.upsert_campaign(
+            scope_key="campaign-scope-2",
+            name="Кампания 2",
+            tracking_mode=TrackingMode.TRACKED,
+            last_seen_at=datetime(2026, 3, 20, 12, 0, tzinfo=UTC),
+        )
+        adset = await ads_repo.upsert_adset(
+            scope_key="adset-scope-2",
+            campaign_id=campaign.id,
+            name="Адсет 2",
+            tracking_mode=TrackingMode.TRACKED,
+            last_seen_at=datetime(2026, 3, 20, 12, 0, tzinfo=UTC),
+        )
+        secondary_ad = await ads_repo.upsert_ad(
+            fb_ad_id="ad-2",
+            campaign_id=campaign.id,
+            adset_id=adset.id,
+            name="Объявление 2",
+            delivery_status=DeliveryStatus.ACTIVE,
+            tracking_mode=TrackingMode.TRACKED,
+            scope_presence=ScopePresence.IN_SCOPE,
+            last_seen_at=datetime(2026, 3, 20, 12, 0, tzinfo=UTC),
+        )
+        await WatchlistRepository(session).upsert_entry(
+            ad_id=secondary_ad.id,
+            fb_ad_id=secondary_ad.fb_ad_id,
+            profile_id=profile.id,
+            browser_host_id=browser_host.id,
+            risk_band=RiskBand.STOP,
+            priority_score=1200,
+            next_check_at=datetime(2026, 3, 20, 12, 5, tzinfo=UTC),
+            last_reason="Клик превысил допустимую долю CPA",
+            last_metrics_at=datetime(2026, 3, 20, 12, 0, tzinfo=UTC),
+            source_scan_run_id=None,
+        )
+        await session.commit()
+
+    recovery_provider = FakeScannerProvider(
+        rows=[],
+        recovered_rows=[
+            WorkerScanRow(
+                campaign_scope_key="campaign-scope-2",
+                campaign_name="Кампания 2",
+                adset_scope_key="adset-scope-2",
+                adset_name="Адсет 2",
+                fb_ad_id="ad-2",
+                ad_name="Объявление 2",
+                delivery_status=DeliveryStatus.ACTIVE,
+                tracking_mode=TrackingMode.TRACKED,
+                scope_presence=ScopePresence.IN_SCOPE,
+                spend=Decimal("0.38"),
+                clicks=4,
+                cpc=Decimal("0.11"),
+                leads=0,
+                cost_per_lead=None,
+                registrations=0,
+                cost_per_registration=None,
+                deposits=0,
+                captured_at=datetime(2026, 3, 20, 12, 5, tzinfo=UTC),
+            )
+        ],
+    )
+    recovery_service = TargetedRecheckService(
+        async_session_factory=async_session_factory,
+        scanner_provider=recovery_provider,
+        auto_pause_enabled=True,
+        observe_only_enabled=False,
+    )
+
+    processed = await recovery_service.run_once()
+
+    async with async_session_factory() as session:
+        ads_repo = AdsRepository(session)
+        refreshed_secondary_ad = await ads_repo.get_ad_by_fb_id(secondary_ad.fb_ad_id)
+        secondary_snapshots = list(
+            (
+                await session.scalars(
+                    select(MetricSnapshot)
+                    .where(MetricSnapshot.fb_ad_id == secondary_ad.fb_ad_id)
+                    .order_by(MetricSnapshot.captured_at.desc(), MetricSnapshot.id.desc())
+                )
+            ).all()
+        )
+        action_jobs = list(
+            (
+                await session.scalars(
+                    select(ActionJob).where(ActionJob.fb_ad_id == secondary_ad.fb_ad_id)
+                )
+            ).all()
+        )
+        watchlist_entries = list(
+            (
+                await session.scalars(
+                    select(WatchlistEntry).where(WatchlistEntry.fb_ad_id == secondary_ad.fb_ad_id)
+                )
+            ).all()
+        )
+        scan_runs = await ScanRunsRepository(session).list_scan_runs()
+
+    assert processed == 1
+    assert recovery_provider.recover_calls == [(seed.profile_id, seed.browser_host_name, ("ad-2",))]
+    assert refreshed_secondary_ad is not None
+    assert refreshed_secondary_ad.scope_presence == ScopePresence.IN_SCOPE
+    assert len(secondary_snapshots) == 1
+    assert secondary_snapshots[0].spend == Decimal("0.38")
+    assert secondary_snapshots[0].clicks == 4
+    assert secondary_snapshots[0].cpc == Decimal("0.11")
+    assert len(action_jobs) == 1
+    assert action_jobs[0].action_type == ActionType.PAUSE
+    assert action_jobs[0].status == ActionJobStatus.QUEUED
+    assert len(watchlist_entries) == 1
+    assert watchlist_entries[0].risk_band == RiskBand.STOP
+    assert scan_runs[0].pipeline_kind == ScanPipelineKind.TARGETED_RECHECK
+    assert scan_runs[0].rows_seen == 1
+    assert scan_runs[0].rows_parsed == 1
+
+
 # Проверяет, что в режиме наблюдения worker продолжает сканировать профиль даже при выключенных действиях.
 @pytest.mark.asyncio
 async def test_worker_scan_service_runs_scan_in_observe_mode_when_actions_disabled(
@@ -743,6 +916,10 @@ async def test_worker_scan_service_executes_auto_pause_and_marks_decision(async_
     )
 
     await service.run_once(profile_id=seed.profile_id, browser_host_name=seed.browser_host_name)
+    processed_jobs = await _run_action_queue(
+        async_session_factory,
+        pause_executor=fake_executor,
+    )
 
     async with async_session_factory() as session:
         ads_repo = AdsRepository(session)
@@ -750,6 +927,11 @@ async def test_worker_scan_service_executes_auto_pause_and_marks_decision(async_
         assert ad is not None
         decisions_repo = DecisionsRepository(session)
         decisions = await decisions_repo.list_decisions(fb_ad_id=seed.fb_ad_id)
+        jobs = list(
+            (
+                await session.scalars(select(ActionJob).where(ActionJob.fb_ad_id == seed.fb_ad_id))
+            ).all()
+        )
         action_executions = list(
             (
                 await session.scalars(
@@ -759,10 +941,13 @@ async def test_worker_scan_service_executes_auto_pause_and_marks_decision(async_
         )
 
     assert fake_executor.calls == [(seed.profile_id, seed.browser_host_name, seed.fb_ad_id)]
+    assert processed_jobs == 1
     assert len(decisions) == 1
     assert decisions[0].decision == DecisionType.WOULD_PAUSE
     assert decisions[0].action_executed is True
     assert decisions[0].action_status == ActionExecutionStatus.SUCCEEDED.value
+    assert len(jobs) == 1
+    assert jobs[0].status == ActionJobStatus.SUCCEEDED
     assert len(action_executions) == 1
     assert action_executions[0].action_type == ActionType.PAUSE
     assert action_executions[0].status == ActionExecutionStatus.SUCCEEDED
@@ -1084,6 +1269,10 @@ async def test_worker_scan_service_executes_auto_resume_and_marks_decision(async
     await resume_service.run_once(
         profile_id=seed.profile_id, browser_host_name=seed.browser_host_name
     )
+    processed_jobs = await _run_action_queue(
+        async_session_factory,
+        resume_executor=fake_executor,
+    )
 
     async with async_session_factory() as session:
         ads_repo = AdsRepository(session)
@@ -1092,6 +1281,11 @@ async def test_worker_scan_service_executes_auto_resume_and_marks_decision(async
         decisions_repo = DecisionsRepository(session)
         decisions = await decisions_repo.list_decisions(fb_ad_id=seed.fb_ad_id)
         latest_decision = decisions[0]
+        jobs = list(
+            (
+                await session.scalars(select(ActionJob).where(ActionJob.fb_ad_id == seed.fb_ad_id))
+            ).all()
+        )
         action_executions = list(
             (
                 await session.scalars(
@@ -1101,9 +1295,12 @@ async def test_worker_scan_service_executes_auto_resume_and_marks_decision(async
         )
 
     assert fake_executor.calls == [(seed.profile_id, seed.browser_host_name, seed.fb_ad_id)]
+    assert processed_jobs == 1
     assert latest_decision.decision == DecisionType.WOULD_RESUME
     assert latest_decision.action_executed is True
     assert latest_decision.action_status == ActionExecutionStatus.SUCCEEDED.value
+    assert len(jobs) == 1
+    assert jobs[0].status == ActionJobStatus.SUCCEEDED
     assert len(action_executions) == 1
     assert action_executions[0].action_type == ActionType.RESUME
     assert action_executions[0].status == ActionExecutionStatus.SUCCEEDED
@@ -1205,6 +1402,10 @@ async def test_worker_scan_service_restores_pause_owner_from_action_history(
         profile_id=seed.profile_id,
         browser_host_name=seed.browser_host_name,
     )
+    await _run_action_queue(
+        async_session_factory,
+        pause_executor=fake_pause_executor,
+    )
 
     async with async_session_factory() as session:
         ads_repo = AdsRepository(session)
@@ -1246,6 +1447,10 @@ async def test_worker_scan_service_restores_pause_owner_from_action_history(
     await resume_service.run_once(
         profile_id=seed.profile_id,
         browser_host_name=seed.browser_host_name,
+    )
+    await _run_action_queue(
+        async_session_factory,
+        resume_executor=fake_resume_executor,
     )
 
     async with async_session_factory() as session:

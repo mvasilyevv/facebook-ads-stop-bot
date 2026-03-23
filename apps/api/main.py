@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 from apps.api.bootstrap import bootstrap_reference_data
 from apps.api.config import load_settings
 from apps.api.routers import (
+    action_jobs,
     ads,
     control_flags,
     decisions,
@@ -21,6 +22,7 @@ from apps.api.routers import (
     rules,
     scan_runs,
     sessions,
+    watchlist,
 )
 from apps.api.routers import (
     settings as settings_router,
@@ -89,6 +91,8 @@ app.include_router(profile_launches.router)
 app.include_router(ads.router)
 app.include_router(decisions.router)
 app.include_router(scan_runs.router)
+app.include_router(watchlist.router)
+app.include_router(action_jobs.router)
 app.include_router(rules.router)
 app.include_router(offers.router)
 app.include_router(control_flags.router)

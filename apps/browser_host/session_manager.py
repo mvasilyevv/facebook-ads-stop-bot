@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from urllib.parse import urlparse
 
@@ -22,6 +25,8 @@ class BrowserSessionManager:
     ) -> None:
         self._adapter = adapter
         self._playwright_attach_service = playwright_attach_service
+        self._session_lock = asyncio.Lock()
+        self._leased_sessions: dict[str, tuple[AttachedBrowserSession, int]] = {}
 
     async def healthcheck(self) -> AdapterHealth:
         return await self._adapter.healthcheck()
@@ -64,17 +69,96 @@ class BrowserSessionManager:
         launch_mode: str = "cdp",
         launch_args: list[str] | None = None,
     ) -> AttachedBrowserSession:
+        async with self._session_lock:
+            cached_session = self._leased_sessions.get(profile_id)
+            if cached_session is not None:
+                session, lease_count = cached_session
+                self._leased_sessions[profile_id] = (session, lease_count + 1)
+                logging.getLogger(__name__).info(
+                    "Переиспользую теплую Playwright-сессию для профиля %s, активных арендаторов: %s",
+                    profile_id,
+                    lease_count + 1,
+                )
+                return session
+
         launch_result = await self.ensure_profile_started(
             profile_id=profile_id,
             launch_mode=launch_mode,
             launch_args=launch_args,
         )
-        return await self._playwright_attach_service.attach(launch_result)
+        session = await self._playwright_attach_service.attach(launch_result)
+
+        async with self._session_lock:
+            cached_session = self._leased_sessions.get(profile_id)
+            if cached_session is not None:
+                existing_session, lease_count = cached_session
+                self._leased_sessions[profile_id] = (existing_session, lease_count + 1)
+                with contextlib.suppress(Exception):
+                    await self._playwright_attach_service.detach(session)
+                logging.getLogger(__name__).info(
+                    "Параллельная аренда Playwright-сессии для профиля %s уже существует, "
+                    "использую ранее открытую сессию",
+                    profile_id,
+                )
+                return existing_session
+
+            self._leased_sessions[profile_id] = (session, 1)
+            logging.getLogger(__name__).info(
+                "Открыта теплая Playwright-сессия для профиля %s", profile_id
+            )
+            return session
+
+    @asynccontextmanager
+    async def lease_session(
+        self,
+        profile_id: str,
+        launch_mode: str = "cdp",
+        launch_args: list[str] | None = None,
+    ) -> AsyncIterator[AttachedBrowserSession]:
+        """Арендует Playwright-сессию на время батча действий."""
+
+        session = await self.ensure_session(
+            profile_id=profile_id,
+            launch_mode=launch_mode,
+            launch_args=launch_args,
+        )
+        try:
+            yield session
+        finally:
+            await self.release_session(session)
 
     async def release_session(self, session: AttachedBrowserSession) -> None:
         """Освобождает временное Playwright-подключение после проверки или сканирования."""
 
+        async with self._session_lock:
+            cached_session = self._leased_sessions.get(session.profile_id)
+            if cached_session is None:
+                with contextlib.suppress(Exception):
+                    await self._playwright_attach_service.detach(session)
+                return
+
+            cached_session_obj, lease_count = cached_session
+            if cached_session_obj is not session:
+                with contextlib.suppress(Exception):
+                    await self._playwright_attach_service.detach(session)
+                return
+
+            next_lease_count = lease_count - 1
+            if next_lease_count > 0:
+                self._leased_sessions[session.profile_id] = (session, next_lease_count)
+                logging.getLogger(__name__).info(
+                    "Сохраняю теплую Playwright-сессию для профиля %s, активных арендаторов: %s",
+                    session.profile_id,
+                    next_lease_count,
+                )
+                return
+
+            self._leased_sessions.pop(session.profile_id, None)
+
         await self._playwright_attach_service.detach(session)
+        logging.getLogger(__name__).info(
+            "Теплая Playwright-сессия для профиля %s освобождена", session.profile_id
+        )
 
     async def _find_open_profile(self, profile_id: str) -> OpenProfileInfo | None:
         open_profiles = await self._adapter.list_open_profiles()

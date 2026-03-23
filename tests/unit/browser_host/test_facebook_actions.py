@@ -651,7 +651,7 @@ async def test_pause_ad_returns_not_found_message() -> None:
     )
 
     assert result.success is False
-    assert result.message == "Не удалось найти объявление 1234567890123 для паузы"
+    assert result.message == "Не удалось выполнить действие паузы для объявления 1234567890123"
     assert manager.released is True
     assert context.created_pages == []
 

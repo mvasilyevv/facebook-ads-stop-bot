@@ -11,6 +11,59 @@ import { useOperatorScope } from "../context/OperatorScopeContext";
 
 type AdsFilter = "all" | "attention" | "active" | "paused";
 
+function formatRiskBandLabel(value: AdSummary["risk_band"]): string {
+  switch (value) {
+    case "SAFE":
+      return "без риска";
+    case "WATCH":
+      return "наблюдение";
+    case "STOP":
+      return "стоп";
+    default:
+      return String(value).toLowerCase();
+  }
+}
+
+function formatFastStopStateLabel(value: AdSummary["fast_stop_state"]): string {
+  switch (value) {
+    case "IDLE":
+      return "нет";
+    case "WATCH":
+      return "наблюдение";
+    case "STOP":
+      return "стоп";
+    case "QUEUED":
+      return "в очереди";
+    case "RUNNING":
+      return "в работе";
+    case "PAUSED":
+      return "на паузе";
+    case "FAILED":
+      return "ошибка";
+    default:
+      return String(value).toLowerCase();
+  }
+}
+
+function formatActionStatusLabel(value: NonNullable<AdSummary["queued_action_status"]>): string {
+  switch (value) {
+    case "QUEUED":
+      return "в очереди";
+    case "RUNNING":
+      return "в работе";
+    case "RETRYING":
+      return "повтор";
+    case "SUCCEEDED":
+      return "выполнено";
+    case "FAILED":
+      return "ошибка";
+    case "CANCELLED":
+      return "отменено";
+    default:
+      return String(value).toLowerCase();
+  }
+}
+
 function toNumber(value: string | number | null | undefined): number {
   if (value == null || value === "") {
     return 0;
@@ -109,12 +162,39 @@ export default function AdsPage() {
     () => ads.filter((ad) => isAttentionAdSummary(ad)).length,
     [ads],
   );
+  const watchCount = useMemo(() => ads.filter((ad) => ad.risk_band === "WATCH").length, [ads]);
+  const stopCount = useMemo(() => ads.filter((ad) => ad.risk_band === "STOP").length, [ads]);
+  const queuedCount = useMemo(
+    () =>
+      ads.filter((ad) =>
+        ad.queued_action_status === "QUEUED" ||
+        ad.queued_action_status === "RUNNING" ||
+        ad.queued_action_status === "RETRYING",
+      ).length,
+    [ads],
+  );
   const activeCount = useMemo(
     () => ads.filter((ad) => ad.delivery_status.toUpperCase().includes("ACTIVE")).length,
     [ads],
   );
   const pausedCount = useMemo(
     () => ads.filter((ad) => ad.delivery_status.toUpperCase().includes("PAUSED")).length,
+    [ads],
+  );
+  const fastStopAds = useMemo(
+    () =>
+      [...ads]
+        .filter((ad) => ad.risk_band !== "SAFE" || ad.queued_action_status != null || ad.fast_stop_state !== "IDLE")
+        .sort((left, right) => {
+          const bandScore = { SAFE: 0, WATCH: 1, STOP: 2 } as const;
+          const leftScore = bandScore[left.risk_band];
+          const rightScore = bandScore[right.risk_band];
+          if (leftScore !== rightScore) {
+            return rightScore - leftScore;
+          }
+          return right.priority_score - left.priority_score;
+        })
+        .slice(0, 8),
     [ads],
   );
 
@@ -189,7 +269,64 @@ export default function AdsPage() {
             </span>
           </div>
         </article>
+        <article className="metric-tile">
+          <span>Наблюдение</span>
+          <strong>{watchCount}</strong>
+          <div className="mini-row">
+            <span>Стоп</span>
+            <span>{stopCount}</span>
+          </div>
+        </article>
+        <article className="metric-tile">
+          <span>В очереди</span>
+          <strong>{queuedCount}</strong>
+          <div className="mini-row">
+            <span>Последняя реакция</span>
+            <span>{isArchiveLaunch ? "архив" : "актуально"}</span>
+          </div>
+        </article>
       </div>
+
+      <SectionCard title="Быстрый стоп" subtitle="Рискованные объявления, причины и очередь действий">
+        {fastStopAds.length === 0 ? (
+          <EmptyState
+            title="Рискованных объявлений пока нет"
+            description="Когда быстрый стоп найдёт объявления в наблюдении или стопе, здесь появятся ключевые поля и статусы."
+          />
+        ) : (
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Объявление</th>
+                  <th>Риск</th>
+                  <th>Быстрый стоп</th>
+                  <th>Очередь</th>
+                  <th>Приоритет</th>
+                  <th>Причина</th>
+                </tr>
+              </thead>
+              <tbody>
+                {fastStopAds.map((ad) => (
+                  <tr key={ad.fb_ad_id}>
+                    <td>
+                      <div className="mono" title={ad.fb_ad_id}>
+                        {ad.fb_ad_id}
+                      </div>
+                      <div className="section-note">{ad.ad_name}</div>
+                    </td>
+                    <td>{formatRiskBandLabel(ad.risk_band)}</td>
+                    <td>{formatFastStopStateLabel(ad.fast_stop_state)}</td>
+                    <td>{ad.queued_action_status ? formatActionStatusLabel(ad.queued_action_status) : "—"}</td>
+                    <td>{ad.priority_score}</td>
+                    <td>{ad.watch_reason || "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </SectionCard>
 
       <SectionCard
         title={`Все объявления (${visibleAds.length})`}

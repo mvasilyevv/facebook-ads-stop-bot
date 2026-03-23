@@ -26,6 +26,10 @@ function buildAdSummary(overrides: Partial<AdSummary>): AdSummary {
     registrations: 0,
     cost_per_registration: "0.00",
     deposits: 0,
+    risk_band: "SAFE",
+    fast_stop_state: "IDLE",
+    queued_action_status: null,
+    priority_score: 0,
     ...overrides,
   };
 }
@@ -42,7 +46,10 @@ function setupSettingsPageFixtures(
     auto_resume_enabled: false,
     auto_resume_available: true,
     observe_only_enabled: false,
-    scan_interval_seconds: 120,
+    full_scan_interval_seconds: 120,
+    recheck_interval_seconds: 15,
+    full_scan_profile_concurrency: 2,
+    action_worker_concurrency: 2,
     vision_local_api_url: "http://127.0.0.1:3030",
     vision_cloud_api_url: "https://vision.example/api",
     telegram_chat_id: "777000",
@@ -60,8 +67,16 @@ function setupSettingsPageFixtures(
       browser_host_id: "vision-3030",
       profile_id: "profile-1",
       status: "SUCCEEDED",
+      pipeline_kind: "FULL_SCAN",
+      trigger_source: "scheduler",
+      target_fb_ad_ids: [],
       rows_seen: 42,
       rows_parsed: 42,
+      collect_ms: 700,
+      evaluate_ms: 200,
+      persist_ms: 100,
+      queue_ms: 50,
+      action_jobs_enqueued: 0,
       scope_summary: {
         rows_in_scope: 42,
         rows_not_seen_this_scan: 9,
@@ -103,6 +118,8 @@ function setupSettingsPageFixtures(
     ),
     http.get("*/ads", () => HttpResponse.json(ads)),
     http.get("*/decisions", () => HttpResponse.json(decisions)),
+    http.get("*/watchlist", () => HttpResponse.json([])),
+    http.get("*/action-jobs", () => HttpResponse.json([])),
     http.get("*/rules", () => HttpResponse.json(rules)),
     http.get("*/offers", () => HttpResponse.json(offers)),
     http.get("*/sessions", () => HttpResponse.json(sessions)),
@@ -115,7 +132,10 @@ function setupSettingsPageFixtures(
       serviceSettings.auto_pause_enabled = Boolean(body.auto_pause_enabled);
       serviceSettings.auto_resume_enabled = Boolean(body.auto_resume_enabled);
       serviceSettings.observe_only_enabled = Boolean(body.observe_only_enabled);
-      serviceSettings.scan_interval_seconds = Number(body.scan_interval_seconds);
+      serviceSettings.full_scan_interval_seconds = Number(body.full_scan_interval_seconds);
+      serviceSettings.recheck_interval_seconds = Number(body.recheck_interval_seconds);
+      serviceSettings.full_scan_profile_concurrency = Number(body.full_scan_profile_concurrency);
+      serviceSettings.action_worker_concurrency = Number(body.action_worker_concurrency);
       serviceSettings.vision_local_api_url = String(body.vision_local_api_url);
       serviceSettings.vision_cloud_api_url = String(body.vision_cloud_api_url);
       serviceSettings.telegram_chat_id = String(body.telegram_chat_id);
@@ -172,7 +192,7 @@ describe("SettingsPage", () => {
     fireEvent.change(screen.getByLabelText("Telegram chat id"), {
       target: { value: "888000" },
     });
-    fireEvent.change(screen.getByRole("combobox"), {
+    fireEvent.change(screen.getByRole("combobox", { name: "Частота полного скана" }), {
       target: { value: "300" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Сохранить настройки" }));
@@ -186,7 +206,10 @@ describe("SettingsPage", () => {
       auto_pause_enabled: true,
       auto_resume_enabled: false,
       observe_only_enabled: false,
-      scan_interval_seconds: 300,
+      full_scan_interval_seconds: 300,
+      recheck_interval_seconds: 15,
+      full_scan_profile_concurrency: 2,
+      action_worker_concurrency: 2,
       telegram_chat_id: "888000",
       vision_local_api_url: "http://127.0.0.1:4040",
       vision_cloud_api_url: "https://vision.example/new-api",

@@ -58,6 +58,18 @@ def _normalize_datetime_text(value: object) -> object:
     return parsed.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _normalize_runtime_ms(value: object) -> int:
+    if isinstance(value, int) and value >= 0:
+        return 0
+    return 0
+
+
+def _normalize_runtime_timestamp(value: object) -> str | None:
+    if value in (None, ""):
+        return None
+    return "__runtime__"
+
+
 @pytest.fixture
 async def sequence_api_client(async_session_factory, monkeypatch):
     monkeypatch.setattr(api_deps, "get_session_factory", lambda: async_session_factory)
@@ -107,6 +119,11 @@ def _normalize_sequence_payload(
                 "registrations": ads_payload[0]["registrations"],
                 "cost_per_registration": ads_payload[0]["cost_per_registration"],
                 "deposits": ads_payload[0]["deposits"],
+                "risk_band": ads_payload[0]["risk_band"],
+                "fast_stop_state": ads_payload[0]["fast_stop_state"],
+                "watch_reason": ads_payload[0]["watch_reason"],
+                "queued_action_status": ads_payload[0]["queued_action_status"],
+                "priority_score": ads_payload[0]["priority_score"],
             }
         ],
         "decisions": [
@@ -130,8 +147,16 @@ def _normalize_sequence_payload(
                 "browser_host_id": scan_runs_payload[0]["browser_host_id"],
                 "profile_id": scan_runs_payload[0]["profile_id"],
                 "status": scan_runs_payload[0]["status"],
+                "pipeline_kind": scan_runs_payload[0]["pipeline_kind"],
+                "trigger_source": scan_runs_payload[0]["trigger_source"],
+                "target_fb_ad_ids": scan_runs_payload[0]["target_fb_ad_ids"],
                 "rows_seen": scan_runs_payload[0]["rows_seen"],
                 "rows_parsed": scan_runs_payload[0]["rows_parsed"],
+                "collect_ms": _normalize_runtime_ms(scan_runs_payload[0]["collect_ms"]),
+                "evaluate_ms": _normalize_runtime_ms(scan_runs_payload[0]["evaluate_ms"]),
+                "persist_ms": _normalize_runtime_ms(scan_runs_payload[0]["persist_ms"]),
+                "queue_ms": _normalize_runtime_ms(scan_runs_payload[0]["queue_ms"]),
+                "action_jobs_enqueued": scan_runs_payload[0]["action_jobs_enqueued"],
                 "scope_summary": {
                     "rows_seen": scan_runs_payload[0]["scope_summary"]["rows_seen"],
                     "rows_in_scope": scan_runs_payload[0]["scope_summary"]["rows_in_scope"],
@@ -154,6 +179,8 @@ def _normalize_sequence_payload(
                     "fb_ad_ids": scan_runs_payload[0]["scope_summary"]["fb_ad_ids"],
                 },
                 "error_message": scan_runs_payload[0]["error_message"],
+                "started_at": _normalize_runtime_timestamp(scan_runs_payload[0]["started_at"]),
+                "finished_at": _normalize_runtime_timestamp(scan_runs_payload[0]["finished_at"]),
             }
         ],
         "scanRunLinkCheck": {
@@ -185,6 +212,7 @@ async def test_full_pause_sequence_with_telegram_notification(async_session) -> 
     thresholds = build_threshold_pack(Decimal("5.00"))
     pause_snapshot = MetricsSnapshot(
         spend=Decimal("0.38"),
+        clicks=4,
         cpc=Decimal("0.11"),
         leads=0,
         cost_per_lead=None,
@@ -250,6 +278,7 @@ async def test_resume_sequence_after_metrics_catch_up(async_session) -> None:
     thresholds = build_threshold_pack(Decimal("5.00"))
     resume_snapshot = MetricsSnapshot(
         spend=Decimal("0.51"),
+        clicks=8,
         cpc=Decimal("0.06"),
         leads=2,
         cost_per_lead=Decimal("0.25"),

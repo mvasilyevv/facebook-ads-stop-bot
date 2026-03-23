@@ -6,14 +6,16 @@ from fastapi import APIRouter, HTTPException, Query, status
 
 from apps.api.deps import DbSessionDep
 from apps.api.schemas.ads import AdActionResponse, AdBlockRequest, AdDetail, AdSummary
-from apps.api.schemas.common import ExecutionState
+from apps.api.schemas.common import ActionJobStatus, ExecutionState, FastStopState, RiskBand
 from core.domain import DecisionType, EntityType, ScopePresence, TrackingMode
 from core.repositories import (
+    ActionJobsRepository,
     AdsRepository,
     BrowserRepository,
     ControlFlagsRepository,
     DecisionsRepository,
     OffersRepository,
+    WatchlistRepository,
 )
 
 router = APIRouter(prefix="/ads", tags=["ads"])
@@ -52,7 +54,17 @@ async def _map_ad_summary(
     metric_snapshot=None,
     latest_decision=None,
     latest_action_execution=None,
+    watchlist_entry=None,
+    action_job=None,
 ) -> AdSummary:
+    risk_band = getattr(watchlist_entry, "risk_band", None) or getattr(
+        ad, "risk_band", RiskBand.SAFE
+    )
+    watch_reason = getattr(watchlist_entry, "last_reason", None) or getattr(
+        ad, "last_risk_reason", None
+    )
+    priority_score = getattr(watchlist_entry, "priority_score", 0) or 0
+    queued_action_status = getattr(action_job, "status", None)
     return AdSummary(
         fb_ad_id=ad.fb_ad_id,
         campaign_name=ad.campaign.name,
@@ -77,6 +89,15 @@ async def _map_ad_summary(
         last_action_message=latest_action_execution.message
         if latest_action_execution is not None
         else None,
+        risk_band=risk_band,
+        fast_stop_state=_resolve_fast_stop_state(
+            ad=ad,
+            watchlist_entry=watchlist_entry,
+            action_job=action_job,
+        ),
+        watch_reason=watch_reason,
+        queued_action_status=queued_action_status,
+        priority_score=priority_score,
         resolved_cpa_usd=await _resolve_ad_cpa(offers_repo, ad),
         spend=metric_snapshot.spend if metric_snapshot is not None else None,
         clicks=metric_snapshot.clicks if metric_snapshot is not None else None,
@@ -91,12 +112,36 @@ async def _map_ad_summary(
     )
 
 
+def _resolve_fast_stop_state(*, ad, watchlist_entry=None, action_job=None) -> FastStopState:
+    if action_job is not None:
+        status = getattr(action_job, "status", None)
+        if status == ActionJobStatus.RUNNING:
+            return FastStopState.RUNNING
+        if status == ActionJobStatus.RETRYING:
+            return FastStopState.QUEUED
+        if status == ActionJobStatus.QUEUED:
+            return FastStopState.QUEUED
+        if status == ActionJobStatus.FAILED:
+            return FastStopState.FAILED
+    if ad.delivery_status.value == "PAUSED":
+        return FastStopState.PAUSED
+    if watchlist_entry is not None:
+        risk_band = getattr(watchlist_entry, "risk_band", RiskBand.SAFE)
+        if risk_band == RiskBand.STOP:
+            return FastStopState.STOP
+        if risk_band == RiskBand.WATCH:
+            return FastStopState.WATCH
+    return FastStopState.IDLE
+
+
 async def _map_ad_detail(
     ad,
     offers_repo: OffersRepository,
     metric_snapshot=None,
     latest_decision=None,
     latest_action_execution=None,
+    watchlist_entry=None,
+    action_job=None,
 ) -> AdDetail:
     return AdDetail(
         **(
@@ -106,6 +151,8 @@ async def _map_ad_detail(
                 metric_snapshot,
                 latest_decision,
                 latest_action_execution,
+                watchlist_entry,
+                action_job,
             )
         ).model_dump(),
         campaign_scope_key=ad.campaign.scope_key,
@@ -139,6 +186,8 @@ async def list_ads(
         profile_launch_id=profile_launch_id,
     )
     fb_ad_ids = [ad.fb_ad_id for ad in ads]
+    watchlist_entries = await WatchlistRepository(session).get_entries_by_fb_ad_ids(fb_ad_ids)
+    action_jobs = await ActionJobsRepository(session).get_latest_jobs(fb_ad_ids)
     latest_snapshots = await ads_repo.get_latest_metric_snapshots(
         fb_ad_ids,
         profile_launch_id=profile_launch_id,
@@ -159,6 +208,8 @@ async def list_ads(
             latest_action_executions.get(str(latest_decisions[ad.fb_ad_id].id))
             if ad.fb_ad_id in latest_decisions
             else None,
+            watchlist_entries.get(ad.fb_ad_id),
+            action_jobs.get(ad.fb_ad_id),
         )
         for ad in ads
     ]
@@ -176,6 +227,7 @@ async def get_ad(
     ad = await ads_repo.get_ad_by_fb_id(fb_ad_id)
     if ad is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Объявление не найдено")
+    watchlist_entry = await WatchlistRepository(session).get_entry_by_fb_ad_id(fb_ad_id)
     latest_snapshots = await ads_repo.get_latest_metric_snapshots(
         [ad.fb_ad_id],
         profile_launch_id=profile_launch_id,
@@ -188,6 +240,7 @@ async def get_ad(
     latest_action_executions = await decisions_repo.get_latest_action_executions(
         [str(latest_decision.id)] if latest_decision is not None else []
     )
+    latest_jobs = await ActionJobsRepository(session).get_latest_jobs([fb_ad_id])
     return await _map_ad_detail(
         ad,
         offers_repo,
@@ -196,6 +249,8 @@ async def get_ad(
         latest_action_executions.get(str(latest_decision.id))
         if latest_decision is not None
         else None,
+        watchlist_entry,
+        latest_jobs.get(ad.fb_ad_id),
     )
 
 

@@ -71,3 +71,23 @@ class ScanRunStatus(StrEnum):
     FAILED = "FAILED"
     INVALID = "INVALID"
     SKIPPED = "SKIPPED"
+
+
+class RiskBand(StrEnum):
+    SAFE = "SAFE"
+    WATCH = "WATCH"
+    STOP = "STOP"
+
+
+class ScanPipelineKind(StrEnum):
+    FULL_SCAN = "FULL_SCAN"
+    TARGETED_RECHECK = "TARGETED_RECHECK"
+
+
+class ActionJobStatus(StrEnum):
+    QUEUED = "QUEUED"
+    RUNNING = "RUNNING"
+    RETRYING = "RETRYING"
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"

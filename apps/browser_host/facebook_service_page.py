@@ -7,6 +7,7 @@ from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 _ADS_MANAGER_DEFAULT_URL = "https://adsmanager.facebook.com/adsmanager/manage/ads"
 _SERVICE_QUERY_KEY = "fb_agent_service"
 SCANNER_SERVICE_PAGE = "scanner"
+RECOVERY_SERVICE_PAGE = "scanner-recovery"
 ACTIONS_SERVICE_PAGE = "actions"
 _AD_SPECIFIC_QUERY_KEYS = (
     "selected_ad_ids",
@@ -37,7 +38,7 @@ def build_service_page_url(
     seed_url: str | None,
     *,
     service_role: str,
-    selected_ad_id: str | None = None,
+    selected_ad_ids: list[str] | None = None,
 ) -> str:
     parsed = urlparse(seed_url or _ADS_MANAGER_DEFAULT_URL)
     scheme = parsed.scheme or "https"
@@ -50,10 +51,16 @@ def build_service_page_url(
     query.pop(_SERVICE_QUERY_KEY, None)
     for key in _AD_SPECIFIC_QUERY_KEYS:
         query.pop(key, None)
-    if selected_ad_id is not None:
+    if selected_ad_ids is not None:
         for key in _ACTION_SCOPE_RESET_KEYS:
             query.pop(key, None)
-        query["selected_ad_ids"] = [selected_ad_id]
+        normalized_selected_ad_ids = [
+            str(selected_ad_id).strip()
+            for selected_ad_id in selected_ad_ids
+            if str(selected_ad_id).strip()
+        ]
+        if normalized_selected_ad_ids:
+            query["selected_ad_ids"] = normalized_selected_ad_ids
     query[_SERVICE_QUERY_KEY] = [service_role]
     return urlunparse(
         (
@@ -73,12 +80,12 @@ async def ensure_ads_manager_service_page(
     context: Any | None,
     service_role: str,
     seed_url: str | None,
-    selected_ad_id: str | None = None,
+    selected_ad_ids: list[str] | None = None,
 ) -> Any:
     target_url = build_service_page_url(
         seed_url,
         service_role=service_role,
-        selected_ad_id=selected_ad_id,
+        selected_ad_ids=selected_ad_ids,
     )
     target_context = _resolve_context(browser=browser, context=context)
     if target_context is None:

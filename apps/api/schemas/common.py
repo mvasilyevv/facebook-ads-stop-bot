@@ -46,6 +46,36 @@ class ExecutionState(StrEnum):
     FAILED = "FAILED"
 
 
+class RiskBand(StrEnum):
+    SAFE = "SAFE"
+    WATCH = "WATCH"
+    STOP = "STOP"
+
+
+class ScanPipelineKind(StrEnum):
+    FULL_SCAN = "FULL_SCAN"
+    TARGETED_RECHECK = "TARGETED_RECHECK"
+
+
+class ActionJobStatus(StrEnum):
+    QUEUED = "QUEUED"
+    RUNNING = "RUNNING"
+    RETRYING = "RETRYING"
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
+
+
+class FastStopState(StrEnum):
+    IDLE = "IDLE"
+    WATCH = "WATCH"
+    STOP = "STOP"
+    QUEUED = "QUEUED"
+    RUNNING = "RUNNING"
+    PAUSED = "PAUSED"
+    FAILED = "FAILED"
+
+
 class SessionStatus(StrEnum):
     ACTIVE = "ACTIVE"
     STOPPED = "STOPPED"
