@@ -332,7 +332,7 @@ async def test_scheduler_cycle_logs_profile_suspended_skip_reason(monkeypatch, c
     assert "автопауза и авторезюм выключены" not in caplog.text
 
 
-# Проверяет, что scheduler честно пишет причину пропуска, когда автопауза и авторезюм выключены.
+# Проверяет, что scheduler честно пишет причину пропуска, когда выключены и действия, и режим наблюдения.
 @pytest.mark.asyncio
 async def test_scheduler_cycle_logs_actions_disabled_skip_reason(monkeypatch, caplog) -> None:
     scheduler = object.__new__(SchedulerService)
@@ -350,7 +350,7 @@ async def test_scheduler_cycle_logs_actions_disabled_skip_reason(monkeypatch, ca
                 rows_parsed=0,
                 scan_run_id=None,
                 status=ScanRunStatus.SKIPPED,
-                skip_reason="Автопауза и авторезюм выключены",
+                skip_reason="Автопауза, авторезюм и режим наблюдения выключены",
             )
 
     skipping_scan_service = _SkippingScanService()
@@ -379,7 +379,7 @@ async def test_scheduler_cycle_logs_actions_disabled_skip_reason(monkeypatch, ca
         await scheduler._run_cycle()
 
     assert skipping_scan_service.calls == [("profile-1", "host-1")]
-    assert "Автопауза и авторезюм выключены" in caplog.text
+    assert "Автопауза, авторезюм и режим наблюдения выключены" in caplog.text
 
 
 # Проверяет, что scheduler берёт интервал сканирования из runtime-настроек без жёсткой привязки к env.

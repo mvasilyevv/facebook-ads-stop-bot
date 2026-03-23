@@ -139,8 +139,8 @@ class WorkerScanService:
                 fallback=self._default_observe_only_enabled,
             )
             rule_percentages, rule_switches = await self._resolve_rule_runtime(session)
-            if not auto_pause_enabled and not auto_resume_enabled:
-                skip_reason = "Автопауза и авторезюм выключены"
+            if not auto_pause_enabled and not auto_resume_enabled and not observe_only_enabled:
+                skip_reason = "Автопауза, авторезюм и режим наблюдения выключены"
                 logging.getLogger(__name__).info(
                     "Скан профиля %s пропущен: %s",
                     profile_id,

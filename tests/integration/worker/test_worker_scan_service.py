@@ -607,11 +607,36 @@ async def test_worker_scan_service_marks_missing_ads_stale_after_partial_scan(
     assert scan_runs[0].rows_parsed == 1
 
 
-# Проверяет, что при выключенных автопаузе и авторезюме worker вообще не запускает скан и не создает scan_run.
+# Проверяет, что в режиме наблюдения worker продолжает сканировать профиль даже при выключенных действиях.
 @pytest.mark.asyncio
-async def test_worker_scan_service_skips_scan_when_actions_disabled(async_session_factory):
+async def test_worker_scan_service_runs_scan_in_observe_mode_when_actions_disabled(
+    async_session_factory,
+):
     seed = await seed_worker_ad_graph(async_session_factory)
-    provider = FakeScannerProvider(rows=[])
+    provider = FakeScannerProvider(
+        rows=[
+            WorkerScanRow(
+                campaign_scope_key=seed.campaign_scope_key,
+                campaign_name=seed.campaign_name,
+                adset_scope_key=seed.adset_scope_key,
+                adset_name=seed.adset_name,
+                fb_ad_id=seed.fb_ad_id,
+                ad_name=seed.ad_name,
+                delivery_status=DeliveryStatus.ACTIVE,
+                tracking_mode=TrackingMode.TRACKED,
+                scope_presence=ScopePresence.IN_SCOPE,
+                spend=Decimal("0.05"),
+                clicks=1,
+                cpc=Decimal("0.05"),
+                leads=0,
+                cost_per_lead=None,
+                registrations=0,
+                cost_per_registration=None,
+                deposits=0,
+                captured_at=datetime(2026, 3, 20, 12, 0, tzinfo=UTC),
+            )
+        ]
+    )
     service = WorkerScanService(
         async_session_factory=async_session_factory,
         scanner_provider=provider,
@@ -628,9 +653,39 @@ async def test_worker_scan_service_skips_scan_when_actions_disabled(async_sessio
     async with async_session_factory() as session:
         scan_runs = await ScanRunsRepository(session).list_scan_runs()
 
+    assert provider.calls == [(seed.profile_id, seed.browser_host_name)]
+    assert len(scan_runs) == 1
+    assert result.status == ScanRunStatus.SUCCEEDED
+    assert result.scan_run_id is not None
+    assert result.rows_seen == 1
+    assert result.rows_parsed == 1
+
+
+# Проверяет, что worker пропускает профиль только когда выключены и действия, и режим наблюдения.
+@pytest.mark.asyncio
+async def test_worker_scan_service_skips_scan_when_all_modes_disabled(async_session_factory):
+    seed = await seed_worker_ad_graph(async_session_factory)
+    provider = FakeScannerProvider(rows=[])
+    service = WorkerScanService(
+        async_session_factory=async_session_factory,
+        scanner_provider=provider,
+        auto_pause_enabled=False,
+        auto_resume_enabled=False,
+        observe_only_enabled=False,
+    )
+
+    result = await service.run_once(
+        profile_id=seed.profile_id,
+        browser_host_name=seed.browser_host_name,
+    )
+
+    async with async_session_factory() as session:
+        scan_runs = await ScanRunsRepository(session).list_scan_runs()
+
     assert provider.calls == []
     assert scan_runs == []
     assert result.status == ScanRunStatus.SKIPPED
+    assert result.skip_reason == "Автопауза, авторезюм и режим наблюдения выключены"
     assert result.scan_run_id is None
     assert result.rows_seen == 0
     assert result.rows_parsed == 0
