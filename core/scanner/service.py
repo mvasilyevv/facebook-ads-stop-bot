@@ -24,6 +24,7 @@ from core.scanner.models import (
 _RESUME_REQUIRES_SYSTEM_PAUSE_REASON = (
     "Автовключение разрешено только для объявлений, поставленных на паузу системой"
 )
+_PAUSED_AD_AUTO_RESUME_DISABLED_REASON = "Объявление остается на паузе — автозапуск отключен"
 
 
 class ObserveScannerService:
@@ -139,6 +140,12 @@ class ObserveScannerService:
                     thresholds=thresholds,
                     stop_reasons=pause_reasons,
                 )
+            return ScannerDecisionResult(
+                decision=DecisionType.KEPT_PAUSED_BY_VIABILITY,
+                reason=_PAUSED_AD_AUTO_RESUME_DISABLED_REASON,
+                resolved_cpa_usd=resolved_cpa_usd,
+                thresholds=thresholds,
+            )
 
         return ScannerDecisionResult(
             decision=DecisionType.NO_ACTION,

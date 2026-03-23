@@ -42,7 +42,10 @@ _SETTING_OBSERVE_ONLY_ENABLED = "observe_only_enabled"
 _EXECUTION_STATE_NOT_REQUIRED = "NOT_REQUIRED"
 _EXECUTION_STATE_SKIPPED_BY_MODE = "SKIPPED_BY_MODE"
 _EXECUTION_STATE_PENDING = "PENDING"
-_SOURCE_UNAVAILABLE_ERROR_MARKER = "Не удалось получить полный набор строк Ads Manager"
+_SOURCE_UNAVAILABLE_ERROR_MARKERS = (
+    "Не удалось получить полный набор строк Ads Manager",
+    "Не удалось получить полный scope из response Ads Manager",
+)
 _AUTO_PAUSE_ACTION_SOURCE = "автопауза"
 _AUTO_RESUME_ACTION_SOURCE = "авторезюм"
 
@@ -99,10 +102,12 @@ class WorkerScanService:
             browser_host = await browser_repo.get_browser_host_by_name(browser_host_name)
             if browser_host is None:
                 raise RuntimeError(f"Browser host `{browser_host_name}` не найден в базе")
+            browser_host_id = browser_host.id
 
             profile = await browser_repo.get_profile_by_vendor_id(profile_id)
             if profile is None:
                 raise RuntimeError(f"Профиль `{profile_id}` не найден в базе")
+            profile_db_id = profile.id
             if profile.scan_suspended:
                 skip_reason = profile.scan_suspend_reason or "Профиль находится на стопе"
                 logging.getLogger(__name__).info(
@@ -151,8 +156,8 @@ class WorkerScanService:
 
             started_at = datetime.now(tz=UTC)
             scan_run = await scan_runs_repo.create_scan_run(
-                browser_host_id=browser_host.id,
-                profile_id=profile.id,
+                browser_host_id=browser_host_id,
+                profile_id=profile_db_id,
                 status=ScanRunStatus.RUNNING,
                 started_at=started_at,
             )
@@ -178,7 +183,7 @@ class WorkerScanService:
                 seen_fb_ad_ids = [row.fb_ad_id for row in scanned_rows]
                 await ads_repo.mark_unseen_ads(
                     seen_fb_ad_ids=seen_fb_ad_ids,
-                    profile_id=profile.id,
+                    profile_id=profile_db_id,
                 )
                 finished_at = datetime.now(tz=UTC)
                 summary = build_scope_summary(scanned_rows, scanned_at=finished_at)
@@ -201,8 +206,8 @@ class WorkerScanService:
                 await session.rollback()
                 try:
                     failed_scan_run = await scan_runs_repo.create_scan_run(
-                        browser_host_id=browser_host.id,
-                        profile_id=profile.id,
+                        browser_host_id=browser_host_id,
+                        profile_id=profile_db_id,
                         status=ScanRunStatus.FAILED,
                         started_at=started_at,
                         finished_at=datetime.now(tz=UTC),
@@ -211,7 +216,7 @@ class WorkerScanService:
                     if isinstance(exc, ScannerScopeUnavailableError):
                         failure_streak = await self._count_consecutive_source_failures(
                             scan_runs_repo=scan_runs_repo,
-                            profile_db_id=profile.id,
+                            profile_db_id=profile_db_id,
                         )
                         if failure_streak >= self._suspend_after_consecutive_source_failures:
                             await browser_repo.suspend_profile_scan(profile_id, str(exc))
@@ -270,6 +275,9 @@ class WorkerScanService:
             percentages=rule_percentages or self._default_percentages,
             rule_switches=rule_switches or self._default_rule_switches,
         )
+        latest_successful_actions = await decisions_repo.get_latest_successful_actions(
+            [row.fb_ad_id for row in rows]
+        )
 
         for row in rows:
             campaign = await ads_repo.upsert_campaign(
@@ -295,6 +303,10 @@ class WorkerScanService:
                 scope_presence=row.scope_presence,
                 last_seen_at=row.last_seen_at,
                 last_scan_run_id=scan_run_id,
+            )
+            self._restore_last_action_from_history(
+                ad=ad,
+                latest_successful_action=latest_successful_actions.get(row.fb_ad_id),
             )
 
             offer = await offers_repo.resolve_offer_for_ad(
@@ -450,7 +462,7 @@ class WorkerScanService:
     def _is_source_unavailable_error(message: str | None) -> bool:
         if not message:
             return False
-        return _SOURCE_UNAVAILABLE_ERROR_MARKER in message
+        return any(marker in message for marker in _SOURCE_UNAVAILABLE_ERROR_MARKERS)
 
     @staticmethod
     def _coerce_scanned_row(item: Any) -> ScannedAdRow:
@@ -743,6 +755,37 @@ class WorkerScanService:
             ad.last_action_source = _AUTO_RESUME_ACTION_SOURCE
             ad.last_action_at = datetime.now(tz=UTC)
         return resume_result
+
+    @staticmethod
+    def _restore_last_action_from_history(
+        *,
+        ad,
+        latest_successful_action: tuple[ActionType, datetime] | None,
+    ) -> None:
+        """Восстанавливает источник последнего действия из истории успешных action execution."""
+
+        if latest_successful_action is None:
+            return
+
+        action_type, action_at = latest_successful_action
+        restored_source = WorkerScanService._map_action_type_to_source(action_type)
+        if restored_source is None:
+            return
+        if ad.last_action_at is not None and ad.last_action_at >= action_at:
+            return
+
+        ad.last_action_source = restored_source
+        ad.last_action_at = action_at
+
+    @staticmethod
+    def _map_action_type_to_source(action_type: ActionType) -> str | None:
+        """Преобразует тип action execution в человекочитаемый источник для карточки объявления."""
+
+        if action_type == ActionType.PAUSE:
+            return _AUTO_PAUSE_ACTION_SOURCE
+        if action_type == ActionType.RESUME:
+            return _AUTO_RESUME_ACTION_SOURCE
+        return None
 
     @staticmethod
     def _map_decision_to_event_type(decision: DecisionType) -> TelegramEventType | None:

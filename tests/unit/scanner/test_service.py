@@ -272,7 +272,8 @@ def test_evaluate_scanned_row_allows_resume_only_with_flag() -> None:
         clean_streak=2,
     )
 
-    assert no_resume_result.decision == DecisionType.NO_ACTION
+    assert no_resume_result.decision == DecisionType.KEPT_PAUSED_BY_VIABILITY
+    assert no_resume_result.reason == "Объявление остается на паузе — автозапуск отключен"
     assert resume_result.decision == DecisionType.WOULD_RESUME
     assert resume_result.reason == "Объявление снова безопасно для запуска"
 

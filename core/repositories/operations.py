@@ -170,6 +170,49 @@ class DecisionsRepository(AsyncRepository):
         )
         return {str(action.decision_id): action for action in result.all()}
 
+    async def get_latest_successful_actions(
+        self,
+        fb_ad_ids: list[str],
+    ) -> dict[str, tuple[ActionType, datetime]]:
+        """Возвращает последнее успешное действие по каждому объявлению."""
+
+        if not fb_ad_ids:
+            return {}
+
+        occurred_at = func.coalesce(ActionExecution.finished_at, ActionExecution.started_at)
+        ranked_actions = (
+            select(
+                Decision.fb_ad_id.label("fb_ad_id"),
+                ActionExecution.action_type.label("action_type"),
+                occurred_at.label("occurred_at"),
+                func.row_number()
+                .over(
+                    partition_by=Decision.fb_ad_id,
+                    order_by=(occurred_at.desc(), ActionExecution.id.desc()),
+                )
+                .label("row_number"),
+            )
+            .join(Decision, Decision.id == ActionExecution.decision_id)
+            .where(
+                Decision.fb_ad_id.in_(fb_ad_ids),
+                ActionExecution.status == ActionExecutionStatus.SUCCEEDED,
+            )
+            .subquery()
+        )
+
+        result = await self.session.execute(
+            select(
+                ranked_actions.c.fb_ad_id,
+                ranked_actions.c.action_type,
+                ranked_actions.c.occurred_at,
+            ).where(ranked_actions.c.row_number == 1)
+        )
+        return {
+            str(fb_ad_id): (action_type, occurred_at_value)
+            for fb_ad_id, action_type, occurred_at_value in result.all()
+            if occurred_at_value is not None
+        }
+
     async def add_action_execution(
         self,
         decision_id: str,
