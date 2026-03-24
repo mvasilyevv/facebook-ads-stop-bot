@@ -19,18 +19,20 @@ branch_labels = None
 depends_on = None
 
 
-_RISK_BAND_ENUM = sa.Enum(
+_RISK_BAND_ENUM = postgresql.ENUM(
     "SAFE",
     "WATCH",
     "STOP",
     name="risk_band_enum",
+    create_type=False,
 )
-_SCAN_PIPELINE_KIND_ENUM = sa.Enum(
+_SCAN_PIPELINE_KIND_ENUM = postgresql.ENUM(
     "FULL_SCAN",
     "TARGETED_RECHECK",
     name="scan_pipeline_kind_enum",
+    create_type=False,
 )
-_ACTION_JOB_STATUS_ENUM = sa.Enum(
+_ACTION_JOB_STATUS_ENUM = postgresql.ENUM(
     "QUEUED",
     "RUNNING",
     "RETRYING",
@@ -38,8 +40,9 @@ _ACTION_JOB_STATUS_ENUM = sa.Enum(
     "FAILED",
     "CANCELLED",
     name="action_job_status_enum",
+    create_type=False,
 )
-_ACTION_TYPE_ENUM = sa.Enum(
+_ACTION_TYPE_ENUM = postgresql.ENUM(
     "PAUSE",
     "RESUME",
     name="action_type_enum",
@@ -96,7 +99,7 @@ def upgrade() -> None:
             "target_fb_ad_ids",
             sa.JSON(),
             nullable=False,
-            server_default=sa.text("'[]'"),
+            server_default=sa.text("'[]'::json"),
         ),
     )
     op.add_column(
