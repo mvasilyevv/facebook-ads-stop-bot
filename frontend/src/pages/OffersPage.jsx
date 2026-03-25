@@ -1,10 +1,137 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
+import { getOffers, createOffer, updateOffer, deleteOffer, getOfferRules, updateOfferRules } from '../api.js';
 
-const DEMO_OFFERS = [
-  { id: '1', code: 'offer_au_42', name: 'Australia — iPhone 15', cpa: '5.00', is_active: true },
-  { id: '2', code: 'offer_de_17', name: 'Germany — Samsung S24', cpa: '8.00', is_active: true },
-  { id: '3', code: 'offer_us_99', name: 'USA — TikTok Promo', cpa: '3.50', is_active: true },
-  { id: '4', code: 'offer_uk_42', name: 'UK — Offer42 Casino', cpa: '6.00', is_active: false },
+/* Тогл-переключатель с ARIA-атрибутами */
+function Toggle({ on, onChange, label }) {
+  return (
+    <button
+      className={`toggle-switch ${on ? 'on' : ''}`}
+      onClick={() => onChange(!on)}
+      type="button"
+      role="switch"
+      aria-checked={on}
+      aria-label={label}
+    />
+  );
+}
+
+/* Всплывающее уведомление */
+function Toast({ message, type, onClose }) {
+  useEffect(() => {
+    const timer = setTimeout(onClose, 3000);
+    return () => clearTimeout(timer);
+  }, [onClose]);
+  return (
+    <div className={`toast toast-${type}`} role="alert">
+      {message}
+    </div>
+  );
+}
+
+/* Модалка создания/редактирования оффера */
+function OfferModal({ offer, onSave, onClose }) {
+  const [form, setForm] = useState({
+    code: offer?.code || '',
+    name: offer?.name || '',
+    cpa: offer?.cpa || '',
+    is_active: offer?.is_active ?? true,
+  });
+  const [saving, setSaving] = useState(false);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      await onSave({
+        ...form,
+        cpa: parseFloat(form.cpa) || 0,
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-label={offer ? 'Редактировать оффер' : 'Создать оффер'}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <h2 className="modal-title">{offer ? 'Редактировать оффер' : 'Новый оффер'}</h2>
+        <form onSubmit={handleSubmit}>
+          <div className="form-group" style={{ marginBottom: 16 }}>
+            <label className="form-label" htmlFor="offer-code">
+              Код оффера
+            </label>
+            <input
+              id="offer-code"
+              className="form-input"
+              type="text"
+              placeholder="offer_au_42"
+              value={form.code}
+              onChange={(e) => setForm({ ...form, code: e.target.value })}
+              required
+              disabled={!!offer}
+            />
+            <div className="form-hint">
+              Код используется для матчинга — ищется в названии кампании / объявления
+            </div>
+          </div>
+          <div className="form-group" style={{ marginBottom: 16 }}>
+            <label className="form-label" htmlFor="offer-name">
+              Название
+            </label>
+            <input
+              id="offer-name"
+              className="form-input"
+              type="text"
+              placeholder="Australia — iPhone 15"
+              value={form.name}
+              onChange={(e) => setForm({ ...form, name: e.target.value })}
+              required
+            />
+          </div>
+          <div className="form-group" style={{ marginBottom: 16 }}>
+            <label className="form-label" htmlFor="offer-cpa">
+              CPA ($)
+            </label>
+            <input
+              id="offer-cpa"
+              className="form-input"
+              type="number"
+              step="0.01"
+              min="0"
+              placeholder="5.00"
+              value={form.cpa}
+              onChange={(e) => setForm({ ...form, cpa: e.target.value })}
+              required
+            />
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+            <Toggle on={form.is_active} onChange={(v) => setForm({ ...form, is_active: v })} label="Оффер активен" />
+            <span style={{ color: 'var(--text-secondary)', fontSize: 14 }}>
+              {form.is_active ? 'Активен' : 'Выключен'}
+            </span>
+          </div>
+          <div className="modal-actions">
+            <button type="button" className="btn btn-outline" onClick={onClose}>
+              Отмена
+            </button>
+            <button type="submit" className="btn btn-primary" disabled={saving}>
+              {saving ? 'Сохранение...' : offer ? 'Сохранить' : 'Создать'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+/* Шесть стоп-правил */
+const RULE_DEFS = [
+  { key: 'cpc', title: 'Правило 1: CPC > X% CPA', fields: [{ name: 'cpc_percent', label: 'Процент стопа (%)', type: 'number' }] },
+  { key: 'cpl', title: 'Правило 2: CPL > X% CPA', fields: [{ name: 'cpl_percent', label: 'Процент стопа (%)', type: 'number' }] },
+  { key: 'cpr', title: 'Правило 3: CPR > X% CPA', fields: [{ name: 'cpr_percent', label: 'Процент стопа (%)', type: 'number' }] },
+  { key: 'regs_no_dep', title: 'Правило 4: N регистраций без депозитов', fields: [{ name: 'regs_no_dep_count', label: 'Количество регистраций', type: 'number' }] },
+  { key: 'spend_no_dep', title: 'Правило 5: Расход без депозитов', fields: [{ name: 'spend_no_dep_from', label: 'Расход от (% CPA)', type: 'number' }, { name: 'spend_no_dep_to', label: 'Расход до (% CPA)', type: 'number' }] },
+  { key: 'spend_with_dep', title: 'Правило 6: Расход с депозитом', fields: [{ name: 'spend_with_dep_from', label: 'Расход от (% CPA)', type: 'number' }, { name: 'spend_with_dep_to', label: 'Расход до (% CPA)', type: 'number' }] },
 ];
 
 const DEFAULT_RULES = {
@@ -16,20 +143,101 @@ const DEFAULT_RULES = {
   spend_with_dep_enabled: true, spend_with_dep_from: '70', spend_with_dep_to: '90',
 };
 
-function Toggle({ on, onChange }) {
-  return (
-    <button
-      className={`toggle-switch ${on ? 'on' : ''}`}
-      onClick={() => onChange(!on)}
-      type="button"
-    />
-  );
-}
-
 export default function OffersPage() {
-  const [offers] = useState(DEMO_OFFERS);
+  const [offers, setOffers] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [editingId, setEditingId] = useState(null);
   const [rules, setRules] = useState(DEFAULT_RULES);
+  const [rulesLoading, setRulesLoading] = useState(false);
+  const [showModal, setShowModal] = useState(false);
+  const [editOffer, setEditOffer] = useState(null);
+  const [toast, setToast] = useState(null);
+  const [savingRules, setSavingRules] = useState(false);
+
+  /* Загрузка офферов */
+  const fetchOffers = useCallback(async () => {
+    try {
+      setError(null);
+      const data = await getOffers();
+      setOffers(Array.isArray(data) ? data : []);
+    } catch (err) {
+      setError(err.message || 'Не удалось загрузить офферы');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchOffers();
+  }, [fetchOffers]);
+
+  /* Загрузка правил при открытии редактора */
+  const openRules = useCallback(async (offerId) => {
+    if (editingId === offerId) {
+      setEditingId(null);
+      return;
+    }
+    setEditingId(offerId);
+    setRulesLoading(true);
+    try {
+      const data = await getOfferRules(offerId);
+      if (data && typeof data === 'object') {
+        setRules({ ...DEFAULT_RULES, ...data });
+      } else {
+        setRules(DEFAULT_RULES);
+      }
+    } catch {
+      setRules(DEFAULT_RULES);
+    } finally {
+      setRulesLoading(false);
+    }
+  }, [editingId]);
+
+  /* Сохранение правил */
+  const handleSaveRules = async () => {
+    if (!editingId) return;
+    setSavingRules(true);
+    try {
+      await updateOfferRules(editingId, rules);
+      setToast({ message: 'Правила сохранены', type: 'success' });
+    } catch (err) {
+      setToast({ message: err.message || 'Ошибка сохранения', type: 'error' });
+    } finally {
+      setSavingRules(false);
+    }
+  };
+
+  /* Создание / редактирование оффера */
+  const handleSaveOffer = async (data) => {
+    try {
+      if (editOffer) {
+        await updateOffer(editOffer.id, data);
+        setToast({ message: 'Оффер обновлён', type: 'success' });
+      } else {
+        await createOffer(data);
+        setToast({ message: 'Оффер создан', type: 'success' });
+      }
+      setShowModal(false);
+      setEditOffer(null);
+      fetchOffers();
+    } catch (err) {
+      setToast({ message: err.message || 'Ошибка сохранения', type: 'error' });
+    }
+  };
+
+  /* Удаление оффера */
+  const handleDelete = async (offer) => {
+    if (!confirm(`Удалить оффер "${offer.name}"?`)) return;
+    try {
+      await deleteOffer(offer.id);
+      setToast({ message: 'Оффер удалён', type: 'success' });
+      if (editingId === offer.id) setEditingId(null);
+      fetchOffers();
+    } catch (err) {
+      setToast({ message: err.message || 'Ошибка удаления', type: 'error' });
+    }
+  };
 
   return (
     <div className="animate-in">
@@ -40,159 +248,181 @@ export default function OffersPage() {
             Управление офферами и стоп-правилами • {offers.length} шт.
           </div>
         </div>
-        <button className="btn btn-primary">➕ Добавить оффер</button>
+        <button
+          className="btn btn-primary"
+          onClick={() => {
+            setEditOffer(null);
+            setShowModal(true);
+          }}
+        >
+          + Добавить оффер
+        </button>
       </div>
 
-      {/* Список офферов */}
-      <div className="table-container" style={{ marginBottom: 24 }}>
-        <table>
-          <thead>
-            <tr>
-              <th>Код</th>
-              <th>Название</th>
-              <th>CPA</th>
-              <th>Статус</th>
-              <th>Действия</th>
-            </tr>
-          </thead>
-          <tbody>
-            {offers.map((o) => (
-              <tr key={o.id}>
-                <td><code style={{ color: 'var(--accent-purple)' }}>{o.code}</code></td>
-                <td style={{ fontWeight: 500, color: 'var(--text-primary)' }}>{o.name}</td>
-                <td style={{ fontWeight: 600 }}>${o.cpa}</td>
-                <td>
-                  <span className={`badge ${o.is_active ? 'badge-success' : 'badge-muted'}`}>
-                    {o.is_active ? '● Активен' : '○ Выкл.'}
-                  </span>
-                </td>
-                <td>
-                  <button
-                    className="btn btn-outline btn-sm"
-                    onClick={() => setEditingId(editingId === o.id ? null : o.id)}
-                  >
-                    {editingId === o.id ? 'Свернуть' : '⚙️ Правила'}
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      {/* Конфигурация правил для выбранного оффера */}
-      {editingId && (
-        <div className="form-section animate-in">
-          <div className="form-section-title">
-            🎯 Стоп-правила для: {offers.find((o) => o.id === editingId)?.name}
-          </div>
-
-          {/* Правило 1: CPC */}
-          <div className="form-section" style={{ background: 'var(--bg-secondary)', marginBottom: 12 }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-              <strong>Правило 1: CPC {'>'} X% CPA</strong>
-              <Toggle on={rules.cpc_enabled} onChange={(v) => setRules({ ...rules, cpc_enabled: v })} />
-            </div>
-            <div className="form-grid">
-              <div className="form-group">
-                <label className="form-label">Процент стопа (%)</label>
-                <input className="form-input" type="number" value={rules.cpc_percent}
-                  onChange={(e) => setRules({ ...rules, cpc_percent: e.target.value })} />
-              </div>
-            </div>
-          </div>
-
-          {/* Правило 2: CPL */}
-          <div className="form-section" style={{ background: 'var(--bg-secondary)', marginBottom: 12 }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-              <strong>Правило 2: CPL {'>'} X% CPA</strong>
-              <Toggle on={rules.cpl_enabled} onChange={(v) => setRules({ ...rules, cpl_enabled: v })} />
-            </div>
-            <div className="form-grid">
-              <div className="form-group">
-                <label className="form-label">Процент стопа (%)</label>
-                <input className="form-input" type="number" value={rules.cpl_percent}
-                  onChange={(e) => setRules({ ...rules, cpl_percent: e.target.value })} />
-              </div>
-            </div>
-          </div>
-
-          {/* Правило 3: CPR */}
-          <div className="form-section" style={{ background: 'var(--bg-secondary)', marginBottom: 12 }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-              <strong>Правило 3: CPR {'>'} X% CPA</strong>
-              <Toggle on={rules.cpr_enabled} onChange={(v) => setRules({ ...rules, cpr_enabled: v })} />
-            </div>
-            <div className="form-grid">
-              <div className="form-group">
-                <label className="form-label">Процент стопа (%)</label>
-                <input className="form-input" type="number" value={rules.cpr_percent}
-                  onChange={(e) => setRules({ ...rules, cpr_percent: e.target.value })} />
-              </div>
-            </div>
-          </div>
-
-          {/* Правило 4: N рег без депов */}
-          <div className="form-section" style={{ background: 'var(--bg-secondary)', marginBottom: 12 }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-              <strong>Правило 4: N регистраций без депозитов</strong>
-              <Toggle on={rules.regs_no_dep_enabled} onChange={(v) => setRules({ ...rules, regs_no_dep_enabled: v })} />
-            </div>
-            <div className="form-grid">
-              <div className="form-group">
-                <label className="form-label">Количество регистраций</label>
-                <input className="form-input" type="number" value={rules.regs_no_dep_count}
-                  onChange={(e) => setRules({ ...rules, regs_no_dep_count: e.target.value })} />
-              </div>
-            </div>
-          </div>
-
-          {/* Правило 5: Расход без депа */}
-          <div className="form-section" style={{ background: 'var(--bg-secondary)', marginBottom: 12 }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-              <strong>Правило 5: Расход без депов</strong>
-              <Toggle on={rules.spend_no_dep_enabled} onChange={(v) => setRules({ ...rules, spend_no_dep_enabled: v })} />
-            </div>
-            <div className="form-grid">
-              <div className="form-group">
-                <label className="form-label">Расход от (% CPA)</label>
-                <input className="form-input" type="number" value={rules.spend_no_dep_from}
-                  onChange={(e) => setRules({ ...rules, spend_no_dep_from: e.target.value })} />
-              </div>
-              <div className="form-group">
-                <label className="form-label">Расход до (% CPA)</label>
-                <input className="form-input" type="number" value={rules.spend_no_dep_to}
-                  onChange={(e) => setRules({ ...rules, spend_no_dep_to: e.target.value })} />
-              </div>
-            </div>
-          </div>
-
-          {/* Правило 6: Расход с депом */}
-          <div className="form-section" style={{ background: 'var(--bg-secondary)', marginBottom: 12 }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-              <strong>Правило 6: Расход с депозитом</strong>
-              <Toggle on={rules.spend_with_dep_enabled} onChange={(v) => setRules({ ...rules, spend_with_dep_enabled: v })} />
-            </div>
-            <div className="form-grid">
-              <div className="form-group">
-                <label className="form-label">Расход от (% CPA)</label>
-                <input className="form-input" type="number" value={rules.spend_with_dep_from}
-                  onChange={(e) => setRules({ ...rules, spend_with_dep_from: e.target.value })} />
-              </div>
-              <div className="form-group">
-                <label className="form-label">Расход до (% CPA)</label>
-                <input className="form-input" type="number" value={rules.spend_with_dep_to}
-                  onChange={(e) => setRules({ ...rules, spend_with_dep_to: e.target.value })} />
-              </div>
-            </div>
-          </div>
-
-          <div style={{ display: 'flex', gap: 12, marginTop: 16 }}>
-            <button className="btn btn-primary">💾 Сохранить правила</button>
-            <button className="btn btn-outline" onClick={() => setEditingId(null)}>Отмена</button>
-          </div>
+      {/* Состояние загрузки */}
+      {loading && (
+        <div className="loading-state">
+          <div className="spinner" />
+          <div>Загрузка офферов...</div>
         </div>
       )}
+
+      {/* Ошибка */}
+      {error && !loading && (
+        <div className="error-state">
+          <div className="error-state-text">{error}</div>
+          <button className="btn btn-outline btn-sm" onClick={fetchOffers}>
+            Повторить
+          </button>
+        </div>
+      )}
+
+      {/* Таблица офферов */}
+      {!loading && !error && (
+        <section aria-label="Список офферов" className="table-container" style={{ marginBottom: 24 }}>
+          <div className="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">Код</th>
+                  <th scope="col">Название</th>
+                  <th scope="col">CPA</th>
+                  <th scope="col">Статус</th>
+                  <th scope="col">Действия</th>
+                </tr>
+              </thead>
+              <tbody>
+                {offers.map((o) => (
+                  <tr key={o.id}>
+                    <td>
+                      <code style={{ color: 'var(--accent-purple)' }}>{o.code}</code>
+                    </td>
+                    <td style={{ fontWeight: 500, color: 'var(--text-primary)' }}>{o.name}</td>
+                    <td style={{ fontWeight: 600 }}>${Number(o.cpa).toFixed(2)}</td>
+                    <td>
+                      <span className={`badge ${o.is_active ? 'badge-success' : 'badge-muted'}`}>
+                        {o.is_active ? 'Активен' : 'Выкл.'}
+                      </span>
+                    </td>
+                    <td>
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <button
+                          className="btn btn-outline btn-sm"
+                          onClick={() => openRules(o.id)}
+                          aria-expanded={editingId === o.id}
+                        >
+                          {editingId === o.id ? 'Свернуть' : 'Правила'}
+                        </button>
+                        <button
+                          className="btn btn-outline btn-sm"
+                          onClick={() => {
+                            setEditOffer(o);
+                            setShowModal(true);
+                          }}
+                          aria-label={`Редактировать ${o.name}`}
+                        >
+                          ✏️
+                        </button>
+                        <button
+                          className="btn btn-outline btn-sm"
+                          onClick={() => handleDelete(o)}
+                          aria-label={`Удалить ${o.name}`}
+                          style={{ color: 'var(--accent-red)' }}
+                        >
+                          🗑
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {offers.length === 0 && (
+            <div className="empty-state">
+              <div className="empty-state-icon">🎯</div>
+              <div className="empty-state-title">Нет офферов</div>
+              <div>Создайте первый оффер, чтобы начать мониторинг</div>
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* Конфигурация стоп-правил для выбранного оффера */}
+      {editingId && (
+        <section className="form-section animate-in" aria-label="Стоп-правила">
+          <div className="form-section-title">
+            Стоп-правила для: {offers.find((o) => o.id === editingId)?.name || '—'}
+          </div>
+
+          {rulesLoading ? (
+            <div className="loading-state" style={{ padding: '24px 0' }}>
+              <div className="spinner" />
+              <div>Загрузка правил...</div>
+            </div>
+          ) : (
+            <>
+              {RULE_DEFS.map((rule) => (
+                <div
+                  key={rule.key}
+                  className="form-section"
+                  style={{ background: 'var(--bg-secondary)', marginBottom: 12 }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                    <strong>{rule.title}</strong>
+                    <Toggle
+                      on={rules[`${rule.key}_enabled`]}
+                      onChange={(v) => setRules({ ...rules, [`${rule.key}_enabled`]: v })}
+                      label={`Включить ${rule.title}`}
+                    />
+                  </div>
+                  <div className="form-grid">
+                    {rule.fields.map((field) => (
+                      <div className="form-group" key={field.name}>
+                        <label className="form-label" htmlFor={`rule-${field.name}`}>
+                          {field.label}
+                        </label>
+                        <input
+                          id={`rule-${field.name}`}
+                          className="form-input"
+                          type={field.type}
+                          value={rules[field.name] || ''}
+                          onChange={(e) => setRules({ ...rules, [field.name]: e.target.value })}
+                          disabled={!rules[`${rule.key}_enabled`]}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+
+              <div style={{ display: 'flex', gap: 12, marginTop: 16 }}>
+                <button className="btn btn-primary" onClick={handleSaveRules} disabled={savingRules}>
+                  {savingRules ? 'Сохранение...' : 'Сохранить правила'}
+                </button>
+                <button className="btn btn-outline" onClick={() => setEditingId(null)}>
+                  Закрыть
+                </button>
+              </div>
+            </>
+          )}
+        </section>
+      )}
+
+      {/* Модалка создания / редактирования */}
+      {showModal && (
+        <OfferModal
+          offer={editOffer}
+          onSave={handleSaveOffer}
+          onClose={() => {
+            setShowModal(false);
+            setEditOffer(null);
+          }}
+        />
+      )}
+
+      {/* Toast-уведомления */}
+      {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
     </div>
   );
 }

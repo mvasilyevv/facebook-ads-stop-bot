@@ -1,29 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
+import { getDashboardStats, getAlertEvents, getSpendHistory } from '../api.js';
 
-/* Демо-данные для визуализации (пока API не подключен к БД) */
-const DEMO_STATS = {
-  total_ads_monitored: 47,
-  ads_in_warning: 5,
-  ads_in_stop: 2,
-  ads_disabled: 8,
-  total_spend: '2,340.50',
-  active_offers: 3,
-  pending_disable_tasks: 1,
-  last_scan_at: new Date().toLocaleTimeString('ru'),
-};
-
-const DEMO_ALERTS = [
-  { id: '1', ad_name: 'Lead Gen — AU iPhone 15', stage: 'STOP', state: 'STOP_SENT', rule: 'cpc_stop', spend: '0.15', time: '2 мин назад' },
-  { id: '2', ad_name: 'Conversion — DE Samsung', stage: 'WARNING', state: 'WARNING_SENT', rule: 'cpl_stop', spend: '0.42', time: '5 мин назад' },
-  { id: '3', ad_name: 'Traffic — US TikTok', stage: 'STOP', state: 'CLAIMED', rule: 'regs_no_dep_stop', spend: '3.20', time: '12 мин назад' },
-  { id: '4', ad_name: 'Retarget — UK Offer42', stage: 'WARNING', state: 'WARNING_SENT', rule: 'spend_no_dep_range', spend: '2.85', time: '18 мин назад' },
-  { id: '5', ad_name: 'Brand — FR Promo', stage: 'STOP', state: 'DISABLED', rule: 'spend_with_dep_range', spend: '4.10', time: '25 мин назад' },
-];
-
-const SPEND_BARS = Array.from({ length: 24 }, (_, i) =>
-  Math.floor(20 + Math.random() * 80 + (i > 8 && i < 20 ? 40 : 0))
-);
-
+/* Вспомогательные функции рендеринга бейджей */
 function stageBadge(stage) {
   if (stage === 'STOP') return <span className="badge badge-danger">🛑 STOP</span>;
   return <span className="badge badge-warning">⚠️ WARNING</span>;
@@ -31,18 +9,136 @@ function stageBadge(stage) {
 
 function stateBadge(state) {
   const map = {
-    STOP_SENT: { cls: 'badge-danger', text: '⏳ Ждёт' },
-    WARNING_SENT: { cls: 'badge-warning', text: '⚠️ Предупр.' },
-    CLAIMED: { cls: 'badge-info', text: '🔄 В работе' },
-    DISABLED: { cls: 'badge-success', text: '✅ Выкл.' },
-    NORMAL: { cls: 'badge-muted', text: '— Норма' },
+    STOP_SENT: { cls: 'badge-danger', text: 'Ожидает' },
+    WARNING_SENT: { cls: 'badge-warning', text: 'Предупр.' },
+    CLAIMED: { cls: 'badge-info', text: 'В работе' },
+    DISABLED: { cls: 'badge-success', text: 'Выкл.' },
+    NORMAL: { cls: 'badge-muted', text: 'Норма' },
   };
   const b = map[state] || map.NORMAL;
   return <span className={`badge ${b.cls}`}>{b.text}</span>;
 }
 
+/* Форматирование времени алерта */
+function formatTime(isoStr) {
+  if (!isoStr) return '—';
+  try {
+    const d = new Date(isoStr);
+    const now = new Date();
+    const diffMs = now - d;
+    const diffMin = Math.floor(diffMs / 60000);
+    if (diffMin < 1) return 'Только что';
+    if (diffMin < 60) return `${diffMin} мин назад`;
+    const diffH = Math.floor(diffMin / 60);
+    if (diffH < 24) return `${diffH} ч назад`;
+    return d.toLocaleDateString('ru');
+  } catch {
+    return '—';
+  }
+}
+
 export default function DashboardPage() {
-  const s = DEMO_STATS;
+  const [stats, setStats] = useState(null);
+  const [alerts, setAlerts] = useState([]);
+  const [spendBars, setSpendBars] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [alertFilter, setAlertFilter] = useState('all');
+
+  /* Загрузка данных с API */
+  const fetchData = useCallback(async () => {
+    try {
+      setError(null);
+      const [statsData, alertsData, spendData] = await Promise.all([
+        getDashboardStats(),
+        getAlertEvents({ limit: 20 }),
+        getSpendHistory({ hours: 24 }),
+      ]);
+      setStats(statsData);
+      setAlerts(Array.isArray(alertsData) ? alertsData : []);
+      /* Нормализуем данные расходов для графика */
+      if (Array.isArray(spendData) && spendData.length > 0) {
+        const maxSpend = Math.max(...spendData.map((s) => s.spend || 0), 1);
+        setSpendBars(
+          spendData.map((s) => ({
+            hour: s.hour,
+            spend: s.spend || 0,
+            pct: Math.max(4, ((s.spend || 0) / maxSpend) * 100),
+          })),
+        );
+      } else {
+        setSpendBars([]);
+      }
+    } catch (err) {
+      setError(err.message || 'Не удалось загрузить данные');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchData();
+    /* Автообновление каждые 30 секунд */
+    const timer = setInterval(fetchData, 30000);
+    return () => clearInterval(timer);
+  }, [fetchData]);
+
+  /* Фильтрация алертов */
+  const filteredAlerts = alerts.filter((a) => {
+    if (alertFilter === 'all') return true;
+    if (alertFilter === 'warning') return a.stage === 'WARNING';
+    if (alertFilter === 'stop') return a.stage === 'STOP';
+    return true;
+  });
+
+  /* === Состояние загрузки === */
+  if (loading) {
+    return (
+      <div className="animate-in">
+        <div className="page-header">
+          <div>
+            <h1 className="page-title">Dashboard</h1>
+            <div className="page-subtitle">Загрузка данных...</div>
+          </div>
+        </div>
+        <div className="stats-grid">
+          {[1, 2, 3, 4].map((i) => (
+            <div key={i} className="stat-card">
+              <div className="skeleton" style={{ width: '60%', height: 14, marginBottom: 12 }} />
+              <div className="skeleton" style={{ width: '40%', height: 32 }} />
+            </div>
+          ))}
+        </div>
+        <div className="loading-state">
+          <div className="spinner" />
+          <div>Загрузка дашборда...</div>
+        </div>
+      </div>
+    );
+  }
+
+  /* === Состояние ошибки === */
+  if (error && !stats) {
+    return (
+      <div className="animate-in">
+        <div className="page-header">
+          <div>
+            <h1 className="page-title">Dashboard</h1>
+            <div className="page-subtitle">Ошибка загрузки</div>
+          </div>
+        </div>
+        <div className="error-state">
+          <div style={{ fontSize: 48, opacity: 0.5 }}>⚠️</div>
+          <div className="error-state-text">{error}</div>
+          <button className="btn btn-primary" onClick={fetchData}>
+            Попробовать снова
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const s = stats || {};
 
   return (
     <div className="animate-in">
@@ -50,84 +146,126 @@ export default function DashboardPage() {
         <div>
           <h1 className="page-title">Dashboard</h1>
           <div className="page-subtitle">
-            Мониторинг объявлений • Последний скан: {s.last_scan_at}
+            Мониторинг объявлений
+            {s.last_scan_at && <> • Последний скан: {formatTime(s.last_scan_at)}</>}
           </div>
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <span className="badge badge-success pulse">● Активен</span>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <span className="badge badge-success pulse" role="status">
+            ● Активен
+          </span>
+          <button className="btn btn-outline btn-sm" onClick={fetchData} aria-label="Обновить данные">
+            🔄 Обновить
+          </button>
         </div>
       </div>
 
-      {/* Stat Cards */}
-      <div className="stats-grid">
-        <div className="stat-card info">
+      {/* Карточки статистики */}
+      <section aria-label="Статистика" className="stats-grid">
+        <div className="stat-card info" role="group" aria-label="Всего объявлений">
           <div className="stat-label">Всего объявлений</div>
-          <div className="stat-value info">{s.total_ads_monitored}</div>
+          <div className="stat-value info">{s.total_ads_monitored ?? 0}</div>
         </div>
-        <div className="stat-card warning">
+        <div className="stat-card warning" role="group" aria-label="Предупреждения">
           <div className="stat-label">Предупреждения</div>
-          <div className="stat-value warning">{s.ads_in_warning}</div>
+          <div className="stat-value warning">{s.ads_in_warning ?? 0}</div>
         </div>
-        <div className="stat-card danger">
+        <div className="stat-card danger" role="group" aria-label="Стоп-алерты">
           <div className="stat-label">Стоп-алерты</div>
-          <div className="stat-value danger">{s.ads_in_stop}</div>
+          <div className="stat-value danger">{s.ads_in_stop ?? 0}</div>
         </div>
-        <div className="stat-card success">
+        <div className="stat-card success" role="group" aria-label="Выключено">
           <div className="stat-label">Выключено</div>
-          <div className="stat-value success">{s.ads_disabled}</div>
+          <div className="stat-value success">{s.ads_disabled ?? 0}</div>
         </div>
-      </div>
+      </section>
 
-      {/* Spend Chart */}
-      <div className="chart-container">
-        <div className="chart-title">Расход за 24 часа — ${s.total_spend}</div>
-        <div className="chart-canvas">
-          {SPEND_BARS.map((h, i) => (
-            <div
-              key={i}
-              className="chart-bar"
-              style={{ height: `${h}%` }}
-              title={`${i}:00 — $${(Math.random() * 100).toFixed(2)}`}
-            />
-          ))}
+      {/* График расходов */}
+      <section aria-label="Расход за 24 часа" className="chart-container">
+        <div className="chart-title">
+          Расход за 24 часа
+          {s.total_spend != null && <> — ${Number(s.total_spend).toLocaleString('ru')}</>}
         </div>
-      </div>
+        {spendBars.length > 0 ? (
+          <div className="chart-canvas" role="img" aria-label="График расходов по часам">
+            {spendBars.map((bar, i) => (
+              <div
+                key={i}
+                className="chart-bar"
+                style={{ height: `${bar.pct}%` }}
+                title={`${bar.hour ?? i}:00 — $${bar.spend.toFixed(2)}`}
+                aria-hidden="true"
+              />
+            ))}
+          </div>
+        ) : (
+          <div className="empty-state" style={{ padding: '32px 20px' }}>
+            <div style={{ color: 'var(--text-muted)' }}>Нет данных о расходах</div>
+          </div>
+        )}
+      </section>
 
-      {/* Recent Alerts */}
-      <div className="table-container">
+      {/* Последние алерты */}
+      <section aria-label="Последние алерты" className="table-container">
         <div className="table-header">
           <div className="table-title">Последние алерты</div>
-          <div className="table-filters">
-            <button className="filter-pill active">Все</button>
-            <button className="filter-pill">⚠️ Warning</button>
-            <button className="filter-pill">🛑 Stop</button>
+          <div className="table-filters" role="group" aria-label="Фильтры алертов">
+            {[
+              { key: 'all', label: 'Все' },
+              { key: 'warning', label: '⚠️ Warning' },
+              { key: 'stop', label: '🛑 Stop' },
+            ].map((f) => (
+              <button
+                key={f.key}
+                className={`filter-pill ${alertFilter === f.key ? 'active' : ''}`}
+                onClick={() => setAlertFilter(f.key)}
+                aria-pressed={alertFilter === f.key}
+              >
+                {f.label}
+              </button>
+            ))}
           </div>
         </div>
-        <table>
-          <thead>
-            <tr>
-              <th>Объявление</th>
-              <th>Стадия</th>
-              <th>Статус</th>
-              <th>Правило</th>
-              <th>Расход</th>
-              <th>Время</th>
-            </tr>
-          </thead>
-          <tbody>
-            {DEMO_ALERTS.map((a) => (
-              <tr key={a.id}>
-                <td style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{a.ad_name}</td>
-                <td>{stageBadge(a.stage)}</td>
-                <td>{stateBadge(a.state)}</td>
-                <td><code style={{ color: 'var(--accent-purple)', fontSize: 12 }}>{a.rule}</code></td>
-                <td>${a.spend}</td>
-                <td style={{ color: 'var(--text-muted)' }}>{a.time}</td>
+        <div className="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">Объявление</th>
+                <th scope="col">Стадия</th>
+                <th scope="col">Статус</th>
+                <th scope="col">Правило</th>
+                <th scope="col">Расход</th>
+                <th scope="col">Время</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              {filteredAlerts.map((a, i) => (
+                <tr key={a.id || i}>
+                  <td style={{ color: 'var(--text-primary)', fontWeight: 500 }}>
+                    {a.ad_name || a.fb_ad_id || '—'}
+                  </td>
+                  <td>{stageBadge(a.stage)}</td>
+                  <td>{stateBadge(a.state || a.alert_state)}</td>
+                  <td>
+                    <code style={{ color: 'var(--accent-purple)', fontSize: 12 }}>
+                      {a.rule_name || a.rule || '—'}
+                    </code>
+                  </td>
+                  <td>{a.spend != null ? `$${a.spend}` : '—'}</td>
+                  <td style={{ color: 'var(--text-muted)' }}>{formatTime(a.created_at || a.time)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {filteredAlerts.length === 0 && (
+          <div className="empty-state">
+            <div className="empty-state-icon">📭</div>
+            <div className="empty-state-title">Нет алертов</div>
+            <div>Пока не сработало ни одно стоп-правило</div>
+          </div>
+        )}
+      </section>
     </div>
   );
 }
