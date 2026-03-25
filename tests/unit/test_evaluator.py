@@ -5,8 +5,6 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-import pytest
-
 from core.domain import AlertStage
 from core.rules.evaluator import evaluate_stop_rules
 from core.rules.types import RuleContext
@@ -46,6 +44,7 @@ def _make_ctx(**kwargs) -> RuleContext:
 
 # === Правило 1: CPC > 2% CPA ===
 
+
 # Клик в пределах нормы → без алертов
 def test_cpc_within_limit():
     row = _make_row(spend=Decimal("0.05"), clicks=1, cpc=Decimal("0.05"))
@@ -74,6 +73,7 @@ def test_cpc_in_warning_zone():
 
 # === Нюанс: spend > порога при clicks=0 → стоп ===
 
+
 # Расход 0.12 при кликах=0 → первый клик будет > 0.10 → STOP
 def test_spend_without_click_triggers_stop():
     row = _make_row(spend=Decimal("0.12"), clicks=0, cpc=None)
@@ -94,11 +94,15 @@ def test_spend_without_click_triggers_warning():
 
 # === Правило 2: CPL > 10% CPA ===
 
+
 # Лид дороже порога (>0.50 при CPA=5$) → STOP
 def test_cpl_exceeds_stop():
     row = _make_row(
-        spend=Decimal("0.60"), leads=1, cost_per_lead=Decimal("0.60"),
-        clicks=3, cpc=Decimal("0.03"),
+        spend=Decimal("0.60"),
+        leads=1,
+        cost_per_lead=Decimal("0.60"),
+        clicks=3,
+        cpc=Decimal("0.03"),
     )
     ctx = _make_ctx()
     result = evaluate_stop_rules(row, ctx)
@@ -109,8 +113,11 @@ def test_cpl_exceeds_stop():
 # Расход > порога лида (0.50), но лидов нет → STOP (spend-without-lead)
 def test_spend_without_lead_triggers_stop():
     row = _make_row(
-        spend=Decimal("0.55"), leads=0, cost_per_lead=None,
-        clicks=3, cpc=Decimal("0.03"),
+        spend=Decimal("0.55"),
+        leads=0,
+        cost_per_lead=None,
+        clicks=3,
+        cpc=Decimal("0.03"),
     )
     ctx = _make_ctx()
     result = evaluate_stop_rules(row, ctx)
@@ -120,11 +127,17 @@ def test_spend_without_lead_triggers_stop():
 
 # === Правило 3: CPR > 20% CPA ===
 
+
 # Регистрация дороже 1.00 при CPA=5$ → STOP
 def test_cpr_exceeds_stop():
     row = _make_row(
-        spend=Decimal("1.50"), registrations=1, cost_per_registration=Decimal("1.50"),
-        clicks=5, cpc=Decimal("0.03"), leads=1, cost_per_lead=Decimal("0.10"),
+        spend=Decimal("1.50"),
+        registrations=1,
+        cost_per_registration=Decimal("1.50"),
+        clicks=5,
+        cpc=Decimal("0.03"),
+        leads=1,
+        cost_per_lead=Decimal("0.10"),
     )
     ctx = _make_ctx()
     result = evaluate_stop_rules(row, ctx)
@@ -134,12 +147,18 @@ def test_cpr_exceeds_stop():
 
 # === Правило 4: 5 рег без депозитов ===
 
+
 # 5 регистраций, 0 депозитов → STOP
 def test_five_regs_no_deposits_stop():
     row = _make_row(
-        spend=Decimal("2.00"), registrations=5, deposits=0,
+        spend=Decimal("2.00"),
+        registrations=5,
+        deposits=0,
         cost_per_registration=Decimal("0.40"),
-        clicks=10, cpc=Decimal("0.02"), leads=5, cost_per_lead=Decimal("0.10"),
+        clicks=10,
+        cpc=Decimal("0.02"),
+        leads=5,
+        cost_per_lead=Decimal("0.10"),
     )
     ctx = _make_ctx()
     result = evaluate_stop_rules(row, ctx)
@@ -150,9 +169,14 @@ def test_five_regs_no_deposits_stop():
 # 4 регистрации, 0 депозитов → WARNING (80% от 5 = 4)
 def test_four_regs_no_deposits_warning():
     row = _make_row(
-        spend=Decimal("1.60"), registrations=4, deposits=0,
+        spend=Decimal("1.60"),
+        registrations=4,
+        deposits=0,
         cost_per_registration=Decimal("0.40"),
-        clicks=8, cpc=Decimal("0.02"), leads=4, cost_per_lead=Decimal("0.10"),
+        clicks=8,
+        cpc=Decimal("0.02"),
+        leads=4,
+        cost_per_lead=Decimal("0.10"),
     )
     ctx = _make_ctx()
     result = evaluate_stop_rules(row, ctx)
@@ -163,9 +187,14 @@ def test_four_regs_no_deposits_warning():
 # 5 регистраций, 1 депозит → НЕ срабатывает (есть депозит)
 def test_five_regs_with_deposit_no_trigger():
     row = _make_row(
-        spend=Decimal("2.00"), registrations=5, deposits=1,
+        spend=Decimal("2.00"),
+        registrations=5,
+        deposits=1,
         cost_per_registration=Decimal("0.40"),
-        clicks=10, cpc=Decimal("0.02"), leads=5, cost_per_lead=Decimal("0.10"),
+        clicks=10,
+        cpc=Decimal("0.02"),
+        leads=5,
+        cost_per_lead=Decimal("0.10"),
     )
     ctx = _make_ctx()
     result = evaluate_stop_rules(row, ctx)
@@ -175,12 +204,18 @@ def test_five_regs_with_deposit_no_trigger():
 
 # === Правило 5: Расход 50-70% CPA, 0 депов, рега в норме ===
 
+
 # Расход 60% CPA=3.00, 0 депов, рега < порога → STOP
 def test_spend_no_dep_range_stop():
     row = _make_row(
-        spend=Decimal("3.00"), registrations=3, deposits=0,
+        spend=Decimal("3.00"),
+        registrations=3,
+        deposits=0,
         cost_per_registration=Decimal("0.50"),
-        clicks=15, cpc=Decimal("0.02"), leads=5, cost_per_lead=Decimal("0.10"),
+        clicks=15,
+        cpc=Decimal("0.02"),
+        leads=5,
+        cost_per_lead=Decimal("0.10"),
     )
     ctx = _make_ctx()
     result = evaluate_stop_rules(row, ctx)
@@ -189,12 +224,18 @@ def test_spend_no_dep_range_stop():
 
 # === Правило 6: Есть деп, расход 70-90% CPA ===
 
+
 # Расход 80% CPA=4.00, 1 депозит → STOP
 def test_spend_with_dep_range_stop():
     row = _make_row(
-        spend=Decimal("4.00"), registrations=3, deposits=1,
+        spend=Decimal("4.00"),
+        registrations=3,
+        deposits=1,
         cost_per_registration=Decimal("0.50"),
-        clicks=20, cpc=Decimal("0.02"), leads=5, cost_per_lead=Decimal("0.10"),
+        clicks=20,
+        cpc=Decimal("0.02"),
+        leads=5,
+        cost_per_lead=Decimal("0.10"),
     )
     ctx = _make_ctx()
     result = evaluate_stop_rules(row, ctx)
@@ -203,12 +244,17 @@ def test_spend_with_dep_range_stop():
 
 # === Нет алертов — всё в норме ===
 
+
 # Все метрики в допустимой зоне → stage=None
 def test_all_metrics_ok():
     row = _make_row(
-        spend=Decimal("0.04"), clicks=2, cpc=Decimal("0.02"),
-        leads=1, cost_per_lead=Decimal("0.04"),
-        registrations=1, cost_per_registration=Decimal("0.04"),
+        spend=Decimal("0.04"),
+        clicks=2,
+        cpc=Decimal("0.02"),
+        leads=1,
+        cost_per_lead=Decimal("0.04"),
+        registrations=1,
+        cost_per_registration=Decimal("0.04"),
         deposits=0,
     )
     ctx = _make_ctx()
@@ -219,6 +265,7 @@ def test_all_metrics_ok():
 
 
 # === Отключённое правило не срабатывает ===
+
 
 # CPC > порога, но правило отключено → нет алерта
 def test_disabled_rule_does_not_trigger():

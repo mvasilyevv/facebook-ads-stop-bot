@@ -7,7 +7,6 @@ Playwright Page для observer worker и disable worker.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -40,9 +39,7 @@ class VisionBrowserManager:
         """
         # Авто-определяем folder_id если не задан
         if self._folder_id is None:
-            self._folder_id = await self._vision.resolve_folder_id(
-                self._profile_id
-            )
+            self._folder_id = await self._vision.resolve_folder_id(self._profile_id)
 
         # Запускаем профиль через Vision API
         profile = await self._vision.start_profile(
@@ -51,9 +48,7 @@ class VisionBrowserManager:
         )
 
         if profile.port is None:
-            raise RuntimeError(
-                f"Vision не вернул CDP-порт для профиля {self._profile_id}"
-            )
+            raise RuntimeError(f"Vision не вернул CDP-порт для профиля {self._profile_id}")
 
         cdp_url = self._vision.cdp_url(profile.port)
         logger.info("Подключение через CDP: %s", cdp_url)

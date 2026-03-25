@@ -83,23 +83,27 @@ def evaluate_stop_rules(row: ScannedAdRow, ctx: RuleContext) -> RuleEvaluation:
         warn_val = _warning_count(ctx.regs_no_dep_stop_count, ctx.warning_percent_of_stop)
         current = Decimal(row.registrations)
         if current >= stop_val:
-            stop_hits.append(RuleHit(
-                code="regs_no_dep_stop",
-                title="Регистрации без депозитов",
-                stage=AlertStage.STOP,
-                value=current,
-                threshold=stop_val,
-                summary=f"Регистраций {row.registrations}, депозитов 0 (стоп от {ctx.regs_no_dep_stop_count})",
-            ))
+            stop_hits.append(
+                RuleHit(
+                    code="regs_no_dep_stop",
+                    title="Регистрации без депозитов",
+                    stage=AlertStage.STOP,
+                    value=current,
+                    threshold=stop_val,
+                    summary=f"Регистраций {row.registrations}, депозитов 0 (стоп от {ctx.regs_no_dep_stop_count})",
+                )
+            )
         elif current >= warn_val:
-            warning_hits.append(RuleHit(
-                code="regs_no_dep_stop",
-                title="Регистрации без депозитов",
-                stage=AlertStage.WARNING,
-                value=current,
-                threshold=warn_val,
-                summary=f"Регистраций {row.registrations}, депозитов 0 — до стопа мало",
-            ))
+            warning_hits.append(
+                RuleHit(
+                    code="regs_no_dep_stop",
+                    title="Регистрации без депозитов",
+                    stage=AlertStage.WARNING,
+                    value=current,
+                    threshold=warn_val,
+                    summary=f"Регистраций {row.registrations}, депозитов 0 — до стопа мало",
+                )
+            )
 
     # --- Правило 5: Расход 50-70% CPA, нет депов, рега в норме ---
     if ctx.spend_no_dep_enabled and row.deposits == 0 and registration_normal:
@@ -172,25 +176,29 @@ def _check_metric_rule(
 
     # Нюанс: расход превышает порог, но событий (кликов/лидов/рег) нет
     if metric_count == 0 and spend > stop_threshold:
-        stop_hits.append(RuleHit(
-            code=code,
-            title=title,
-            stage=AlertStage.STOP,
-            value=spend,
-            threshold=stop_threshold,
-            summary=f"Расход {spend:.4f} превысил порог {label} {stop_threshold:.4f} без единого события",
-        ))
+        stop_hits.append(
+            RuleHit(
+                code=code,
+                title=title,
+                stage=AlertStage.STOP,
+                value=spend,
+                threshold=stop_threshold,
+                summary=f"Расход {spend:.4f} превысил порог {label} {stop_threshold:.4f} без единого события",
+            )
+        )
         return
 
     if metric_count == 0 and spend > warning_threshold:
-        warning_hits.append(RuleHit(
-            code=code,
-            title=title,
-            stage=AlertStage.WARNING,
-            value=spend,
-            threshold=warning_threshold,
-            summary=f"Расход {spend:.4f} приближается к порогу {label} {stop_threshold:.4f} без событий",
-        ))
+        warning_hits.append(
+            RuleHit(
+                code=code,
+                title=title,
+                stage=AlertStage.WARNING,
+                value=spend,
+                threshold=warning_threshold,
+                summary=f"Расход {spend:.4f} приближается к порогу {label} {stop_threshold:.4f} без событий",
+            )
+        )
         return
 
     if metric_value is None:
@@ -198,23 +206,27 @@ def _check_metric_rule(
 
     current = Decimal(metric_value)
     if current > stop_threshold:
-        stop_hits.append(RuleHit(
-            code=code,
-            title=title,
-            stage=AlertStage.STOP,
-            value=current,
-            threshold=stop_threshold,
-            summary=f"{label} {current:.4f} выше стопа {stop_threshold:.4f}",
-        ))
+        stop_hits.append(
+            RuleHit(
+                code=code,
+                title=title,
+                stage=AlertStage.STOP,
+                value=current,
+                threshold=stop_threshold,
+                summary=f"{label} {current:.4f} выше стопа {stop_threshold:.4f}",
+            )
+        )
     elif current > warning_threshold:
-        warning_hits.append(RuleHit(
-            code=code,
-            title=title,
-            stage=AlertStage.WARNING,
-            value=current,
-            threshold=warning_threshold,
-            summary=f"{label} {current:.4f} приближается к стопу {stop_threshold:.4f}",
-        ))
+        warning_hits.append(
+            RuleHit(
+                code=code,
+                title=title,
+                stage=AlertStage.WARNING,
+                value=current,
+                threshold=warning_threshold,
+                summary=f"{label} {current:.4f} приближается к стопу {stop_threshold:.4f}",
+            )
+        )
 
 
 def _check_range_rule(
@@ -232,18 +244,31 @@ def _check_range_rule(
     """Проверяет диапазонное правило (расход в процентах CPA)."""
     warning_from = _warning_threshold(stop_from, warning_pct)
     if stop_from <= current_value <= stop_to:
-        stop_hits.append(RuleHit(
-            code=code, title=title, stage=AlertStage.STOP,
-            value=current_value, threshold=stop_from, summary=summary,
-        ))
+        stop_hits.append(
+            RuleHit(
+                code=code,
+                title=title,
+                stage=AlertStage.STOP,
+                value=current_value,
+                threshold=stop_from,
+                summary=summary,
+            )
+        )
     elif warning_from <= current_value < stop_from:
-        warning_hits.append(RuleHit(
-            code=code, title=title, stage=AlertStage.WARNING,
-            value=current_value, threshold=warning_from, summary=summary,
-        ))
+        warning_hits.append(
+            RuleHit(
+                code=code,
+                title=title,
+                stage=AlertStage.WARNING,
+                value=current_value,
+                threshold=warning_from,
+                summary=summary,
+            )
+        )
 
 
 # --- Вспомогательные функции ---
+
 
 def _percent_of_cpa(cpa: Decimal, percent: Decimal) -> Decimal:
     return (Decimal(cpa) * Decimal(percent)) / _HUNDRED
@@ -261,5 +286,6 @@ def _warning_threshold(stop_threshold: Decimal, warning_pct: Decimal) -> Decimal
 
 def _warning_count(stop_count: int, warning_pct: Decimal) -> Decimal:
     return (Decimal(stop_count) * Decimal(warning_pct) / _HUNDRED).quantize(
-        Decimal("1"), rounding=ROUND_CEILING,
+        Decimal("1"),
+        rounding=ROUND_CEILING,
     )

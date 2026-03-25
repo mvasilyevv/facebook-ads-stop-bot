@@ -7,7 +7,6 @@ import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
 
-from core.domain import DisableTaskStatus
 from core.telegram.client import TelegramBotClient
 
 logger = logging.getLogger(__name__)

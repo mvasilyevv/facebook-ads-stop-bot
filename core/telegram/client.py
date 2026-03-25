@@ -60,9 +60,7 @@ class TelegramBotClient:
     # Алиас для обратной совместимости
     edit_message_text = edit_message
 
-    async def answer_callback_query(
-        self, callback_query_id: str, text: str = ""
-    ) -> None:
+    async def answer_callback_query(self, callback_query_id: str, text: str = "") -> None:
         """Отвечает на callback query (убирает часики)."""
         payload: dict = {"callback_query_id": callback_query_id}
         if text:
@@ -72,7 +70,10 @@ class TelegramBotClient:
 
     async def get_updates(self, *, offset: int | None, timeout_seconds: int = 25) -> list[dict]:
         """Long polling для получения обновлений."""
-        payload: dict = {"timeout": timeout_seconds, "allowed_updates": ["message", "callback_query"]}
+        payload: dict = {
+            "timeout": timeout_seconds,
+            "allowed_updates": ["message", "callback_query"],
+        }
         if offset is not None:
             payload["offset"] = offset
         resp = await self._http.post(

@@ -12,6 +12,7 @@ from core.domain import AlertStage
 @dataclass(slots=True, frozen=True)
 class RuleHit:
     """Одно сработавшее правило."""
+
     code: str
     title: str
     stage: AlertStage
@@ -23,6 +24,7 @@ class RuleHit:
 @dataclass(slots=True, frozen=True)
 class RuleEvaluation:
     """Результат оценки правил для одного объявления."""
+
     stage: AlertStage | None
     warning_hits: tuple[RuleHit, ...]
     stop_hits: tuple[RuleHit, ...]
@@ -39,6 +41,7 @@ class RuleEvaluation:
 @dataclass(slots=True, frozen=True)
 class RuleContext:
     """Контекст правил для одного оффера."""
+
     cpa_amount: Decimal
     warning_percent_of_stop: Decimal
 

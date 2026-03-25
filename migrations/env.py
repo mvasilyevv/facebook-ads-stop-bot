@@ -15,9 +15,9 @@ from core.models import (  # noqa: F401 — нужен для metadata
     AdSnapshot,
     AlertEvent,
     DisableTask,
+    ObserverSettings,
     Offer,
     OfferRuleConfig,
-    ObserverSettings,
     TelegramSettings,
 )
 

@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 @dataclass(slots=True, frozen=True)
 class VisionProfile:
     """Запущенный профиль Vision."""
+
     folder_id: str
     profile_id: str
     port: int | None
@@ -66,7 +67,8 @@ class VisionClient:
             if p.profile_id == profile_id:
                 logger.info(
                     "Vision: folder_id=%s найден для профиля %s",
-                    p.folder_id, profile_id,
+                    p.folder_id,
+                    profile_id,
                 )
                 return p.folder_id
         raise RuntimeError(

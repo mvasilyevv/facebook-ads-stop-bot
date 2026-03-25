@@ -8,8 +8,8 @@ import logging
 import sys
 
 from core.config import get_settings
-from core.telegram.client import TelegramBotClient
 from core.telegram.bot_handler import handle_update
+from core.telegram.client import TelegramBotClient
 
 logger = logging.getLogger(__name__)
 

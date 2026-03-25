@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import signal
 import sys
+from decimal import Decimal
 
 from core.browser.manager import VisionBrowserManager
 from core.browser.vision_client import VisionClient
@@ -44,6 +46,16 @@ async def main() -> None:
         profile_id=settings.vision_profile_id,
     )
 
+    # Обработка graceful shutdown
+    shutdown_event = asyncio.Event()
+
+    def _handle_signal(signum, frame):
+        logger.info("Получен сигнал %s — завершаем работу", signum)
+        shutdown_event.set()
+
+    signal.signal(signal.SIGTERM, _handle_signal)
+    signal.signal(signal.SIGINT, _handle_signal)
+
     try:
         # Подключаемся к Vision
         await manager.connect()
@@ -51,13 +63,14 @@ async def main() -> None:
 
         logger.info("Подключён к Vision. Текущий URL: %s", page.url)
 
-        # Импортируем observer loop
-        from apps.observer_worker.main import observer_loop
-        from decimal import Decimal
+        # Загружаем офферы из БД
+        from apps.observer_worker.main import load_offers_from_db, observer_loop
+
+        offers = await load_offers_from_db()
 
         await observer_loop(
             page=page,
-            offers={},  # TODO: загрузить из БД
+            offers=offers,
             telegram_bot_token=settings.telegram_bot_token,
             telegram_chat_id=settings.telegram_chat_id,
             interval_seconds=settings.default_observer_interval_seconds,

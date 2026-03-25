@@ -3,7 +3,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+import uuid as _uuid
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -21,7 +22,6 @@ from sqlalchemy import (
     Uuid,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-import uuid as _uuid
 
 from core.db.base import Base
 from core.domain import AlertStage, AlertState, DisableTaskStatus
@@ -31,27 +31,44 @@ from core.domain import AlertStage, AlertState, DisableTaskStatus
 
 class UUIDPrimaryKeyMixin:
     """UUID первичный ключ."""
+
     id: Mapped[_uuid.UUID] = mapped_column(Uuid, primary_key=True, default=_uuid.uuid4)
+
+
+def _utcnow() -> datetime:
+    """Текущее UTC-время (не deprecated в Python 3.12+)."""
+    return datetime.now(UTC)
 
 
 class TimestampMixin:
     """Временные метки создания и обновления."""
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
     )
 
 
 # --- Enum типы для Postgres ---
-_ALERT_STAGE_ENUM = Enum(AlertStage, name="alert_stage_enum", values_callable=lambda e: [i.value for i in e])
-_ALERT_STATE_ENUM = Enum(AlertState, name="alert_state_enum", values_callable=lambda e: [i.value for i in e])
-_DISABLE_STATUS_ENUM = Enum(DisableTaskStatus, name="disable_task_status_enum", values_callable=lambda e: [i.value for i in e])
+_ALERT_STAGE_ENUM = Enum(
+    AlertStage, name="alert_stage_enum", values_callable=lambda e: [i.value for i in e]
+)
+_ALERT_STATE_ENUM = Enum(
+    AlertState, name="alert_state_enum", values_callable=lambda e: [i.value for i in e]
+)
+_DISABLE_STATUS_ENUM = Enum(
+    DisableTaskStatus,
+    name="disable_task_status_enum",
+    values_callable=lambda e: [i.value for i in e],
+)
 
 
 # === Настройки Observer ===
 
+
 class ObserverSettings(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     """Настройки наблюдателя (интервал, jitter, процент предупреждения)."""
+
     __tablename__ = "observer_settings"
 
     singleton_key: Mapped[str] = mapped_column(String(32), unique=True, default="default")
@@ -62,8 +79,10 @@ class ObserverSettings(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
 # === Telegram-настройки ===
 
+
 class TelegramSettings(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     """Настройки Telegram-бота."""
+
     __tablename__ = "telegram_settings"
 
     singleton_key: Mapped[str] = mapped_column(String(32), unique=True, default="default")
@@ -73,8 +92,10 @@ class TelegramSettings(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
 # === Оффер ===
 
+
 class Offer(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     """Оффер с CPA и конфигурацией правил."""
+
     __tablename__ = "offers"
 
     code: Mapped[str] = mapped_column(String(100), unique=True, index=True)
@@ -90,8 +111,10 @@ class Offer(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
 # === Конфигурация правил для оффера ===
 
+
 class OfferRuleConfig(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     """Конфигурация стоп-правил для конкретного оффера."""
+
     __tablename__ = "offer_rule_configs"
 
     offer_id: Mapped[_uuid.UUID] = mapped_column(
@@ -120,7 +143,9 @@ class OfferRuleConfig(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     # Правило 6: Есть деп, расход 70-90% CPA
     spend_with_dep_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
-    spend_with_dep_from_percent: Mapped[Decimal] = mapped_column(Numeric(8, 2), default=Decimal("70"))
+    spend_with_dep_from_percent: Mapped[Decimal] = mapped_column(
+        Numeric(8, 2), default=Decimal("70")
+    )
     spend_with_dep_to_percent: Mapped[Decimal] = mapped_column(Numeric(8, 2), default=Decimal("90"))
 
     offer: Mapped[Offer] = relationship(back_populates="rule_config")
@@ -128,12 +153,12 @@ class OfferRuleConfig(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
 # === Снимок метрик объявления ===
 
+
 class AdSnapshot(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     """Текущий снимок метрик одного объявления."""
+
     __tablename__ = "ad_snapshots"
-    __table_args__ = (
-        Index("uq_ad_snapshot_offer_fb_ad", "offer_id", "fb_ad_id", unique=True),
-    )
+    __table_args__ = (Index("uq_ad_snapshot_offer_fb_ad", "offer_id", "fb_ad_id", unique=True),)
 
     offer_id: Mapped[_uuid.UUID | None] = mapped_column(
         ForeignKey("offers.id", ondelete="SET NULL"), index=True
@@ -168,7 +193,9 @@ class AdSnapshot(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     telegram_chat_id: Mapped[str | None] = mapped_column(String(64))
     telegram_message_id: Mapped[int | None] = mapped_column(Integer)
     telegram_group_key: Mapped[str | None] = mapped_column(String(64), index=True)
-    last_observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    last_observed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), index=True, default=_utcnow
+    )
 
     offer: Mapped[Offer | None] = relationship(back_populates="snapshots")
     alerts: Mapped[list[AlertEvent]] = relationship(back_populates="snapshot")
@@ -177,8 +204,10 @@ class AdSnapshot(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
 # === Событие алерта ===
 
+
 class AlertEvent(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     """Событие алерта (WARNING или STOP)."""
+
     __tablename__ = "alert_events"
 
     snapshot_id: Mapped[_uuid.UUID | None] = mapped_column(
@@ -203,12 +232,12 @@ class AlertEvent(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
 # === Задача на отключение ===
 
+
 class DisableTask(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     """Задача на отключение объявления (outbox-паттерн)."""
+
     __tablename__ = "disable_tasks"
-    __table_args__ = (
-        Index("uq_disable_task_idempotency", "idempotency_key", unique=True),
-    )
+    __table_args__ = (Index("uq_disable_task_idempotency", "idempotency_key", unique=True),)
 
     snapshot_id: Mapped[_uuid.UUID | None] = mapped_column(
         ForeignKey("ad_snapshots.id", ondelete="SET NULL"), index=True

@@ -3,13 +3,10 @@
 
 from __future__ import annotations
 
-import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from decimal import Decimal
 
-from core.domain import AlertStage, AlertState
-from core.observer.state_machine import resolve_transition
+from core.domain import AlertStage
 from core.rules.evaluator import evaluate_stop_rules
 from core.rules.types import RuleContext, RuleEvaluation
 from core.scanner.models import ScannedAdRow
@@ -18,6 +15,7 @@ from core.scanner.models import ScannedAdRow
 @dataclass(slots=True, frozen=True)
 class AlertCandidate:
     """Кандидат на отправку алерта в Telegram."""
+
     snapshot_id: str
     fb_ad_id: str
     ad_name: str
@@ -30,6 +28,7 @@ class AlertCandidate:
 @dataclass(slots=True, frozen=True)
 class ObserverCycleResult:
     """Результат одного цикла observer."""
+
     alerts_to_send: list[AlertCandidate]
     observed_ads: int
 
@@ -86,7 +85,9 @@ def build_metrics_json(row: ScannedAdRow) -> dict[str, str | int | None]:
         "clicks": row.clicks,
         "cpc": f"{Decimal(row.cpc):.4f}" if row.cpc is not None else None,
         "leads": row.leads,
-        "cost_per_lead": f"{Decimal(row.cost_per_lead):.4f}" if row.cost_per_lead is not None else None,
+        "cost_per_lead": f"{Decimal(row.cost_per_lead):.4f}"
+        if row.cost_per_lead is not None
+        else None,
         "registrations": row.registrations,
         "cost_per_registration": (
             f"{Decimal(row.cost_per_registration):.4f}"

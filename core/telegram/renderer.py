@@ -11,6 +11,7 @@ from core.domain import AlertStage, AlertState
 @dataclass(slots=True, frozen=True)
 class TelegramAlertItem:
     """Одно объявление в TG-сообщении."""
+
     snapshot_id: str
     fb_ad_id: str
     ad_name: str
@@ -24,6 +25,7 @@ class TelegramAlertItem:
 @dataclass(slots=True, frozen=True)
 class TelegramOutgoingMessage:
     """Готовое к отправке сообщение."""
+
     text: str
     reply_markup: dict | None
 
@@ -44,27 +46,33 @@ def render_alert_message(
 
     for idx, item in enumerate(items, start=1):
         m = item.metrics_json
-        lines.extend([
-            f"{idx}. {item.ad_name}",
-            f"   Ad ID: {item.fb_ad_id}",
-            f"   Оффер: {item.offer_code or 'не определён'}",
-            f"   Причины: {', '.join(item.matched_rule_codes) if item.matched_rule_codes else 'нет'}",
-            (
-                f"   Расход: {m.get('spend')}, CPC: {m.get('cpc') or '-'}, "
-                f"CPL: {m.get('cost_per_lead') or '-'}, "
-                f"CPR: {m.get('cost_per_registration') or '-'}, "
-                f"рег: {m.get('registrations')}, деп: {m.get('deposits')}"
-            ),
-            f"   Статус: {_render_state(item.alert_state)}",
-            "",
-        ])
+        lines.extend(
+            [
+                f"{idx}. {item.ad_name}",
+                f"   Ad ID: {item.fb_ad_id}",
+                f"   Оффер: {item.offer_code or 'не определён'}",
+                f"   Причины: {', '.join(item.matched_rule_codes) if item.matched_rule_codes else 'нет'}",
+                (
+                    f"   Расход: {m.get('spend')}, CPC: {m.get('cpc') or '-'}, "
+                    f"CPL: {m.get('cost_per_lead') or '-'}, "
+                    f"CPR: {m.get('cost_per_registration') or '-'}, "
+                    f"рег: {m.get('registrations')}, деп: {m.get('deposits')}"
+                ),
+                f"   Статус: {_render_state(item.alert_state)}",
+                "",
+            ]
+        )
 
         # Кнопка «Отключить» только для STOP-стадии
         if stage == AlertStage.STOP:
-            keyboard.append([{
-                "text": _button_text(item),
-                "callback_data": _button_callback(item),
-            }])
+            keyboard.append(
+                [
+                    {
+                        "text": _button_text(item),
+                        "callback_data": _button_callback(item),
+                    }
+                ]
+            )
 
     return TelegramOutgoingMessage(
         text="\n".join(lines).strip(),

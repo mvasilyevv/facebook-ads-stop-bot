@@ -19,11 +19,14 @@ Inline-кнопки:
 
 from __future__ import annotations
 
-import json
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
 
+from sqlalchemy import select
+
+from core.db import get_session_factory
+from core.domain import AlertState
+from core.models import AdSnapshot, DisableTask
 from core.telegram.client import TelegramBotClient
 
 logger = logging.getLogger(__name__)
@@ -32,6 +35,7 @@ logger = logging.getLogger(__name__)
 # ==========================================
 # Inline-клавиатуры
 # ==========================================
+
 
 def _main_menu_keyboard() -> dict:
     """Главное меню с кнопками."""
@@ -55,11 +59,7 @@ def _main_menu_keyboard() -> dict:
 
 def _back_button() -> dict:
     """Кнопка «Назад в меню»."""
-    return {
-        "inline_keyboard": [
-            [{"text": "◀️ Главное меню", "callback_data": "cmd:start"}]
-        ]
-    }
+    return {"inline_keyboard": [[{"text": "◀️ Главное меню", "callback_data": "cmd:start"}]]}
 
 
 def _ads_navigation(page: int, total_pages: int) -> dict:
@@ -82,9 +82,11 @@ def _ads_navigation(page: int, total_pages: int) -> dict:
 # Хранилище состояния (в памяти)
 # ==========================================
 
+
 @dataclass
 class BotState:
     """Текущее состояние для отображения в TG."""
+
     total_ads: int = 0
     ads_in_warning: int = 0
     ads_in_stop: int = 0
@@ -114,6 +116,7 @@ bot_state = BotState()
 # ==========================================
 # Генерация сообщений
 # ==========================================
+
 
 def _render_start() -> tuple[str, dict]:
     """Стартовое сообщение с главным меню."""
@@ -153,13 +156,10 @@ def _render_ads(page: int = 0) -> tuple[str, dict]:
     page = min(page, total_pages - 1)
 
     start = page * per_page
-    page_ads = ads[start:start + per_page]
+    page_ads = ads[start : start + per_page]
 
     if not page_ads:
-        text = (
-            "📋 <b>Объявления</b>\n\n"
-            "Пока нет данных. Запустите observer для сканирования."
-        )
+        text = "📋 <b>Объявления</b>\n\nПока нет данных. Запустите observer для сканирования."
         return text, _back_button()
 
     lines = ["📋 <b>Объявления</b>\n"]
@@ -331,18 +331,41 @@ async def handle_update(client: TelegramBotClient, update: dict) -> None:
 
         # Кнопка "Отключить" из алертов: disable:{snapshot_id}
         if data.startswith("disable:"):
-            snapshot_id = data.split(":", 1)[1]
-            # TODO: создать DisableTask в БД
-            await client.edit_message(
-                chat_id=chat_id,
-                message_id=message_id,
-                text=(
-                    f"✅ Задача на отключение создана\n\n"
-                    f"Snapshot: <code>{snapshot_id}</code>\n"
-                    f"Статус: ⏳ В очереди"
-                ),
+            snapshot_token = data.split(":", 1)[1]
+            user = cq.get("from", {})
+            username = user.get("username", "")
+            tg_user_id = str(user.get("id", ""))
+
+            # Создаём DisableTask в БД
+            task_info = await _create_disable_task(
+                snapshot_token=snapshot_token,
+                tg_user_id=tg_user_id,
+                username=username,
             )
-            logger.info("Создана задача на отключение: %s", snapshot_id)
+
+            if task_info:
+                await client.edit_message(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text=(
+                        f"✅ Задача на отключение создана\n\n"
+                        f"Объявление: <b>{task_info['ad_name']}</b>\n"
+                        f"Ad ID: <code>{task_info['fb_ad_id']}</code>\n"
+                        f"Запросил: @{username or 'неизвестно'}\n"
+                        f"Статус: ⏳ В очереди"
+                    ),
+                )
+                logger.info(
+                    "Создана задача на отключение: %s (запросил @%s)",
+                    task_info["fb_ad_id"],
+                    username,
+                )
+            else:
+                await client.edit_message(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text="❌ Не удалось создать задачу — снэпшот не найден",
+                )
             return
 
         # noop — игнорируем
@@ -388,8 +411,8 @@ async def handle_update(client: TelegramBotClient, update: dict) -> None:
             await client.send_message(
                 chat_id=chat_id,
                 text="❌ Неверный параметр. Используйте:\n"
-                     "<code>/set interval 60</code>\n"
-                     "<code>/set warning 75</code>",
+                "<code>/set interval 60</code>\n"
+                "<code>/set warning 75</code>",
             )
         return
 
@@ -403,3 +426,65 @@ async def handle_update(client: TelegramBotClient, update: dict) -> None:
     handler = COMMAND_HANDLERS.get(cmd, _render_help)
     text, markup = handler()
     await client.send_message(chat_id=chat_id, text=text, reply_markup=markup)
+
+
+# ==========================================
+# Вспомогательные функции БД
+# ==========================================
+
+
+async def _create_disable_task(
+    *,
+    snapshot_token: str,
+    tg_user_id: str,
+    username: str,
+) -> dict | None:
+    """Создаёт DisableTask в БД по токену снэпшота.
+
+    Returns:
+        dict с fb_ad_id и ad_name или None если снэпшот не найден
+    """
+    try:
+        factory = get_session_factory()
+        async with factory() as session:
+            # Ищем снэпшот по open_state_token
+            result = await session.execute(
+                select(AdSnapshot).where(AdSnapshot.open_state_token == snapshot_token)
+            )
+            snapshot = result.scalar_one_or_none()
+            if snapshot is None:
+                # Пробуем по fb_ad_id (для обратной совместимости)
+                result = await session.execute(
+                    select(AdSnapshot).where(AdSnapshot.fb_ad_id == snapshot_token)
+                )
+                snapshot = result.scalar_one_or_none()
+
+            if snapshot is None:
+                logger.warning("Снэпшот не найден по токену %s", snapshot_token)
+                return None
+
+            # Обновляем состояние снэпшота
+            snapshot.alert_state = AlertState.CLAIMED
+
+            # Создаём задачу на отключение
+            idempotency_key = f"disable:{snapshot.fb_ad_id}:{snapshot_token}"
+            task = DisableTask(
+                snapshot_id=snapshot.id,
+                offer_id=snapshot.offer_id,
+                fb_ad_id=snapshot.fb_ad_id,
+                ad_name=snapshot.ad_name,
+                open_state_token=snapshot_token,
+                idempotency_key=idempotency_key,
+                requested_by_telegram_user_id=tg_user_id,
+                requested_by_username=username,
+            )
+            session.add(task)
+            await session.commit()
+
+            return {
+                "fb_ad_id": snapshot.fb_ad_id,
+                "ad_name": snapshot.ad_name,
+            }
+    except Exception:
+        logger.exception("Ошибка при создании DisableTask")
+        return None
