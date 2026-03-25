@@ -3,9 +3,9 @@ requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "facebook-ads-stop-bot"
+name = "fb-stop-bot-v2"
 version = "0.1.0"
-description = "Бот для контроля Facebook Ads через anti-detect браузер"
+description = "Бот для мониторинга и остановки объявлений Facebook Ads"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -28,7 +28,6 @@ dev = [
   "aiosqlite>=0.20.0,<1.0.0",
   "pytest>=8.3.5,<9.0.0",
   "pytest-asyncio>=0.25.3,<1.0.0",
-  "pre-commit>=4.2.0,<5.0.0",
   "ruff>=0.11.0,<1.0.0",
 ]
 

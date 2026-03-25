@@ -10,25 +10,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-# Full stack bootstrap (Postgres + Redis via Docker, then API/worker/browser_host/frontend)
-./run.sh
-./run.sh --check    # environment checks only
-./run.sh --down     # stop everything (local processes + Docker infra)
+# Infrastructure (Postgres 16 + Redis 7)
+docker compose up -d
 
-# Makefile shortcuts
-make up             # full bootstrap
-make down           # stop all
-make logs           # tail api/worker/browser_host/frontend logs
-make infra-logs     # tail Postgres/Redis Docker logs
+# Install
+python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
+
+# Run services (each in its own terminal)
+uvicorn apps.api.main:app --host 0.0.0.0 --port 8100 --reload   # API
+python run_observer.py                                             # Observer worker
+cd frontend && npm run dev                                         # React UI (Vite)
 
 # Testing & linting
-make test           # pytest (full suite)
-make lint           # ruff check
-make format         # ruff format
-make precommit      # all pre-commit hooks
-
-# Run a single test
-pytest tests/unit/test_foo.py::test_bar -x
+pytest tests/ -x                          # full suite
+pytest tests/unit/test_evaluator.py -x    # single file
+ruff check .                              # lint
+ruff format .                             # format
 
 # Database migration
 alembic revision --autogenerate -m "description"
@@ -37,49 +34,43 @@ alembic upgrade head
 
 ## Architecture
 
-**Facebook Ads Stop Bot** — service that monitors and auto-manages Facebook ads via an anti-detect browser.
+**FB Stop Bot v2** — monitors Facebook ads via anti-detect browser, evaluates stop-rules, sends Telegram alerts, and auto-disables ads.
 
-### Four runtime services (started by `run.sh`)
+### Three workers + API
 
-1. **api** (`apps/api`) — FastAPI on :8000. 13 routers under `apps/api/routers/`. Bootstraps reference data on startup.
-2. **worker** (`apps/worker`) — async scheduler: full scan, action queue, targeted recheck, fast-stop pipeline.
-3. **browser_host** (`apps/browser_host`) — Playwright-based edge agent connecting to Vision anti-detect browser API. Scans Facebook Ads pages.
-4. **frontend** (`frontend/`) — React 18 + TypeScript + Vite on :5173.
+1. **observer_worker** (`apps/observer_worker/`) — infinite loop: reload Ads Manager → scroll & parse HTML → evaluate 6 stop-rules → FSM state transition → send Telegram alerts. Entry point: `run_observer.py`.
+2. **disable_worker** (`apps/disable_worker/`) — polls DisableTask queue, executes Playwright clicks to disable ads, retries with exponential backoff.
+3. **telegram_poller** (`apps/telegram_poller/`) — long-polls Telegram Bot API, handles commands (`/start`, `/status`, `/ads`, etc.) and inline "Отключить" callback buttons.
+4. **api** (`apps/api/`) — FastAPI on :8100, serves dashboard stats, ad snapshots, offers CRUD, rule config, settings.
 
-### Shared core (`core/`)
+### Core (`core/`)
 
-- **models/** — SQLAlchemy 2.x async ORM models split by domain: `advertising.py`, `operations.py`, `browser.py`, `offers.py`.
-- **repositories/** — data access layer (one repo per aggregate).
-- **services/** — business logic: `rule_runtime.py` (rule evaluation), `service_settings.py`, `advertising_history_reset.py`.
-- **domain/** — enums, offer resolution logic.
-- **scanner/** — Facebook page scanner (models, protocols, service).
-- **rules/** — CPA threshold rule evaluation.
-- **actions/** — action execution protocols.
-- **events/** — domain event definitions.
-- **config/settings.py** — pydantic-settings configuration.
-- **db/** — SQLAlchemy base and async session factory.
-- **locks.py** — Redis distributed locks.
+- **domain.py** — three enums: `AlertStage` (WARNING/STOP), `AlertState` (NORMAL→WARNING_SENT→STOP_SENT→CLAIMED→DISABLED), `DisableTaskStatus`.
+- **models/** — SQLAlchemy 2.x async ORM: ObserverSettings, TelegramSettings, Offer, OfferRuleConfig, AdSnapshot, AlertEvent, DisableTask.
+- **observer/** — `service.py` (evaluation cycle), `state_machine.py` (FSM: one-way transitions, UUID tokens, no duplicate notifications).
+- **scanner/** — `parser.py` (regex DOM parser for Ads Manager table), `models.py` (frozen `ScannedAdRow` dataclass).
+- **rules/** — `evaluator.py` (6 stop-rules: CPC, CPL, CPR, regs-without-deps, spend-without-deps, spend-with-deps), `types.py` (RuleContext, RuleHit, RuleEvaluation). Each rule has WARNING tier (80% of threshold) and STOP tier.
+- **browser/** — `vision_client.py` (async httpx client for Vision anti-detect API), `manager.py` (Playwright CDP connection).
+- **telegram/** — `client.py` (Bot API wrapper), `renderer.py` (alert formatting with inline buttons), `bot_handler.py` (command routing).
+- **config.py** — pydantic-settings, singleton `get_settings()`.
+- **db/base.py** — SQLAlchemy declarative base.
 
-### Notifications (`apps/notifier`)
+### Frontend (`frontend/`)
 
-Telegram notifications via outbox pattern: events → outbox table → formatter → HTTP transport.
+React 19 + Vite (JSX, no TypeScript). Pages: DashboardPage, AdsPage, OffersPage, SettingsPage. API client in `api.js`.
 
 ## Key design rules
 
-- Do not mix scanning, rule evaluation, and action execution in one module.
-- Prefer async Python for all I/O services.
+- Scanning, rule evaluation, and action execution must stay in separate modules/workers.
+- Prefer async Python for all I/O.
 - Use SQLAlchemy 2.x async, FastAPI, Pydantic v2.
-- Never enable dangerous actions by default; `auto_resume` requires an explicit feature flag.
+- No dangerous actions by default; disable requires explicit Telegram callback confirmation.
+- Alert state machine is one-way (no going back from STOP_SENT/CLAIMED/DISABLED).
+- Domain data structures (`ScannedAdRow`, `RuleHit`, `AlertCandidate`) are frozen dataclasses.
 - Ruff: line-length=100, target py312, rules E/F/I/B/ASYNC (E501 ignored).
-
-## Testing
-
-- `tests/unit/` and `tests/integration/` with `tests/fixtures/` for shared data.
-- pytest with `asyncio_mode="auto"`, aiosqlite for test DB.
-- Pre-commit hook runs unit tests automatically on relevant changes.
 
 ## Infrastructure
 
-- Postgres 16 + Redis 7 via `docker-compose.yml`.
-- Alembic migrations in `migrations/versions/` (naming: `YYYYMMDD_NNNN_description.py`).
-- Python 3.12+, venv install: `pip install -e '.[dev]'`.
+- Postgres 16 (port 5433) + Redis 7 (port 6380) via `docker-compose.yml`.
+- Vision anti-detect browser (external, port 3030) — requires `VISION_X_TOKEN` and `VISION_PROFILE_ID`.
+- Python 3.12+.
