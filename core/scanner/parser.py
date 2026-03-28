@@ -35,17 +35,28 @@ _FIELD_KEYS = {
     "spend": "spend",
     "clicks": "clicks",
     "cpc": "cpc",
+    "outbound_clicks:outbound_click": "outbound_clicks",
+    "outbound_clicks_ctr:outbound_click": "outbound_ctr",
+    "omni_landing_page_view": "landing_page_views",
+    "cost_per_action_type:landing_page_view": "cost_per_landing_page_view",
+    "cpm": "cpm",
+    "frequency": "frequency",
     "actions:lead": "leads",
     "cost_per_action_type:lead": "cost_per_lead",
     "omni_complete_registration": "registrations",
     "cost_per_action_type:omni_complete_registration": "cost_per_registration",
+    # В нашем Ads Manager колонка «Результаты» = количество депозитов.
+    "table_cell:results": "deposits",
     "cost_per_result": "cost_per_result",
 }
 
 # Числовые/денежные поля, для которых нужна спецлогика извлечения
 _NUMERIC_FIELDS = frozenset({
-    "spend", "clicks", "cpc", "leads", "cost_per_lead",
-    "registrations", "cost_per_registration", "cost_per_result",
+    "spend", "clicks", "cpc", "outbound_clicks", "outbound_ctr",
+    "landing_page_views", "cost_per_landing_page_view", "cpm", "frequency",
+    "leads", "cost_per_lead", "registrations", "cost_per_registration",
+    "deposits",
+    "cost_per_result",
 })
 
 
@@ -300,6 +311,14 @@ def _build_row_from_fields(fields: dict) -> ScannedAdRow | None:
     spend = _parse_money(fields.get("spend", ""), Decimal("0"))
     clicks = _parse_int_value(fields.get("clicks", ""))
     cpc = _parse_money_or_none(fields.get("cpc", ""))
+    outbound_clicks = _parse_int_value(fields.get("outbound_clicks", ""))
+    outbound_ctr = _parse_decimal_or_none(fields.get("outbound_ctr", ""))
+    landing_page_views = _parse_int_value(fields.get("landing_page_views", ""))
+    cost_per_landing_page_view = _parse_money_or_none(
+        fields.get("cost_per_landing_page_view", "")
+    )
+    cpm = _parse_money_or_none(fields.get("cpm", ""))
+    frequency = _parse_decimal_or_none(fields.get("frequency", ""))
     leads = _parse_int_value(fields.get("leads", ""))
     cost_per_lead = _parse_money_or_none(fields.get("cost_per_lead", ""))
     registrations = _parse_int_value(
@@ -308,6 +327,7 @@ def _build_row_from_fields(fields: dict) -> ScannedAdRow | None:
     cost_per_registration = _parse_money_or_none(
         fields.get("cost_per_registration", "")
     )
+    deposits = _parse_int_value(fields.get("deposits", ""))
 
     return ScannedAdRow(
         fb_ad_id=fb_ad_id,
@@ -318,11 +338,17 @@ def _build_row_from_fields(fields: dict) -> ScannedAdRow | None:
         spend=spend,
         clicks=clicks,
         cpc=cpc,
+        outbound_clicks=outbound_clicks,
+        outbound_ctr=outbound_ctr,
+        landing_page_views=landing_page_views,
+        cost_per_landing_page_view=cost_per_landing_page_view,
+        cpm=cpm,
+        frequency=frequency,
         leads=leads,
         cost_per_lead=cost_per_lead,
         registrations=registrations,
         cost_per_registration=cost_per_registration,
-        deposits=0,
+        deposits=deposits,
     )
 
 
@@ -418,12 +444,21 @@ async def _parse_row_from_cells(
     spend = _parse_money(fields.get("spend", ""), Decimal("0"))
     clicks = _parse_int_value(fields.get("clicks", ""))
     cpc = _parse_money_or_none(fields.get("cpc", ""))
+    outbound_clicks = _parse_int_value(fields.get("outbound_clicks", ""))
+    outbound_ctr = _parse_decimal_or_none(fields.get("outbound_ctr", ""))
+    landing_page_views = _parse_int_value(fields.get("landing_page_views", ""))
+    cost_per_landing_page_view = _parse_money_or_none(
+        fields.get("cost_per_landing_page_view", "")
+    )
+    cpm = _parse_money_or_none(fields.get("cpm", ""))
+    frequency = _parse_decimal_or_none(fields.get("frequency", ""))
     leads = _parse_int_value(fields.get("leads", ""))
     cost_per_lead = _parse_money_or_none(fields.get("cost_per_lead", ""))
     registrations = _parse_int_value(fields.get("registrations", ""))
     cost_per_registration = _parse_money_or_none(
         fields.get("cost_per_registration", "")
     )
+    deposits = _parse_int_value(fields.get("deposits", ""))
 
     return ScannedAdRow(
         fb_ad_id=fb_ad_id,
@@ -434,11 +469,17 @@ async def _parse_row_from_cells(
         spend=spend,
         clicks=clicks,
         cpc=cpc,
+        outbound_clicks=outbound_clicks,
+        outbound_ctr=outbound_ctr,
+        landing_page_views=landing_page_views,
+        cost_per_landing_page_view=cost_per_landing_page_view,
+        cpm=cpm,
+        frequency=frequency,
         leads=leads,
         cost_per_lead=cost_per_lead,
         registrations=registrations,
         cost_per_registration=cost_per_registration,
-        deposits=0,
+        deposits=deposits,
     )
 
 
@@ -588,6 +629,11 @@ def _parse_money_or_none(text: str) -> Decimal | None:
         return Decimal(match.group())
     except InvalidOperation:
         return None
+
+
+def _parse_decimal_or_none(text: str) -> Decimal | None:
+    """Извлекает Decimal из процентной или дробной строки."""
+    return _parse_money_or_none(text)
 
 
 def _parse_int_value(text: str) -> int:

@@ -15,11 +15,13 @@ from core.domain import AlertState
 
 
 # Вспомогательная фабрика мок-результата GROUP BY
-def _make_state_rows(normal=0, warning=0, stop=0, disabled=0):
+def _make_state_rows(normal=0, early_signal=0, warning=0, stop=0, disabled=0):
     """Создаёт строки как их возвращает GROUP BY alert_state."""
     rows = []
     if normal:
         rows.append((AlertState.NORMAL, normal, Decimal("10.00")))
+    if early_signal:
+        rows.append((AlertState.EARLY_SIGNAL_SENT, early_signal, Decimal("12.00")))
     if warning:
         rows.append((AlertState.WARNING_SENT, warning, Decimal("25.50")))
     if stop:
@@ -103,6 +105,7 @@ async def test_dashboard_stats_counts(mock_db):
     result = await get_dashboard_stats(db=mock_db)
 
     assert result.total_ads_monitored == 16  # 10+3+2+1
+    assert result.ads_in_early_signal == 0
     assert result.ads_in_warning == 3
     assert result.ads_in_stop == 2
     assert result.ads_disabled == 1
@@ -126,6 +129,7 @@ async def test_dashboard_stats_empty_db(mock_db):
     result = await get_dashboard_stats(db=mock_db)
 
     assert result.total_ads_monitored == 0
+    assert result.ads_in_early_signal == 0
     assert result.ads_in_warning == 0
     assert result.ads_in_stop == 0
     assert result.ads_disabled == 0
@@ -151,6 +155,26 @@ async def test_dashboard_uses_single_group_by_query(mock_db):
     assert mock_db.execute.call_count == 1
     # scalar: last_scan + cabinet_day_start + active_offers + pending_tasks + disabled_today = 5
     assert mock_db.scalar.call_count == 5
+
+
+# Проверяем что dashboard считает ранние сигналы отдельно от warning и stop.
+@pytest.mark.asyncio
+async def test_dashboard_stats_counts_early_signal_separately(mock_db):
+    state_rows = _make_state_rows(normal=7, early_signal=2, warning=1, stop=1)
+
+    group_result = MagicMock()
+    group_result.all.return_value = state_rows
+    mock_db.execute = AsyncMock(return_value=group_result)
+    mock_db.scalar = AsyncMock(side_effect=[None, None, 3, 0, 0])
+
+    from apps.api.main import get_dashboard_stats
+
+    result = await get_dashboard_stats(db=mock_db)
+
+    assert result.total_ads_monitored == 11
+    assert result.ads_in_early_signal == 2
+    assert result.ads_in_warning == 1
+    assert result.ads_in_stop == 1
 
 
 # Проверяем что helper корректно собирает summary, funnel и сортировку кампаний

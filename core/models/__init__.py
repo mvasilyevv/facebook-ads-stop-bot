@@ -178,6 +178,37 @@ class OfferRuleConfig(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     spend_with_dep_to_percent: Mapped[Decimal] = mapped_column(Numeric(8, 2), default=Decimal("90"))
 
+    # Ранний сигнал: Outbound CTR
+    early_outbound_ctr_signal_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    early_outbound_ctr_signal_min_percent: Mapped[Decimal] = mapped_column(
+        Numeric(8, 2), default=Decimal("0.80")
+    )
+    early_outbound_ctr_signal_min_spend_percent: Mapped[Decimal] = mapped_column(
+        Numeric(8, 2), default=Decimal("5")
+    )
+
+    # Ранний сигнал: LPV ratio
+    early_lpv_ratio_signal_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    early_lpv_ratio_signal_min_percent: Mapped[Decimal] = mapped_column(
+        Numeric(8, 2), default=Decimal("60")
+    )
+    early_lpv_ratio_signal_min_outbound_clicks: Mapped[int] = mapped_column(Integer, default=5)
+
+    # Ранний сигнал: Cost per LPV
+    early_cost_per_lpv_signal_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    early_cost_per_lpv_signal_percent_of_cpa: Mapped[Decimal] = mapped_column(
+        Numeric(8, 2), default=Decimal("5")
+    )
+    early_cost_per_lpv_signal_min_views: Mapped[int] = mapped_column(Integer, default=2)
+
+    # Диагностика частоты
+    frequency_elevated_threshold: Mapped[Decimal] = mapped_column(
+        Numeric(8, 2), default=Decimal("2")
+    )
+    frequency_critical_threshold: Mapped[Decimal] = mapped_column(
+        Numeric(8, 2), default=Decimal("3")
+    )
+
     offer: Mapped[Offer] = relationship(back_populates="rule_config")
 
 
@@ -204,6 +235,12 @@ class AdSnapshot(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     spend: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"))
     clicks: Mapped[int] = mapped_column(Integer, default=0)
     cpc: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
+    outbound_clicks: Mapped[int] = mapped_column(Integer, default=0)
+    outbound_ctr: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
+    landing_page_views: Mapped[int] = mapped_column(Integer, default=0)
+    cost_per_landing_page_view: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
+    cpm: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
+    frequency: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
     leads: Mapped[int] = mapped_column(Integer, default=0)
     cost_per_lead: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
     registrations: Mapped[int] = mapped_column(Integer, default=0)
@@ -211,6 +248,7 @@ class AdSnapshot(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     deposits: Mapped[int] = mapped_column(Integer, default=0)
 
     # Состояние алертов
+    early_signal_rule_codes: Mapped[list[str]] = mapped_column(JSON, default=list)
     warning_rule_codes: Mapped[list[str]] = mapped_column(JSON, default=list)
     stop_rule_codes: Mapped[list[str]] = mapped_column(JSON, default=list)
     current_stage: Mapped[AlertStage | None] = mapped_column(_ALERT_STAGE_ENUM)
@@ -253,6 +291,8 @@ class AlertEvent(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     stage: Mapped[AlertStage] = mapped_column(_ALERT_STAGE_ENUM, index=True)
     state: Mapped[AlertState] = mapped_column(_ALERT_STATE_ENUM, index=True)
     matched_rule_codes: Mapped[list[str]] = mapped_column(JSON, default=list)
+    reason_title: Mapped[str | None] = mapped_column(String(255))
+    reason_text: Mapped[str | None] = mapped_column(Text)
     metrics_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     message_text: Mapped[str | None] = mapped_column(Text)
     telegram_chat_id: Mapped[str | None] = mapped_column(String(64))

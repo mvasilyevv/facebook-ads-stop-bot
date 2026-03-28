@@ -32,6 +32,7 @@ from core.crypto import decrypt, encrypt
 from core.config import get_settings
 from core.db import get_engine, get_session_factory
 from core.db.base import Base
+from core.diagnostics import build_ad_quality_diagnostics, compute_cpm_baselines_by_offer
 from core.domain import AlertStage, AlertState, DisableTaskStatus
 from core.models import (
     AdSnapshot,
@@ -149,6 +150,17 @@ class OfferRuleConfigSchema(BaseModel):
     spend_with_dep_enabled: bool = True
     spend_with_dep_from_percent: Decimal = Decimal("70")
     spend_with_dep_to_percent: Decimal = Decimal("90")
+    early_outbound_ctr_signal_enabled: bool = True
+    early_outbound_ctr_signal_min_percent: Decimal = Decimal("0.80")
+    early_outbound_ctr_signal_min_spend_percent: Decimal = Decimal("5")
+    early_lpv_ratio_signal_enabled: bool = True
+    early_lpv_ratio_signal_min_percent: Decimal = Decimal("60")
+    early_lpv_ratio_signal_min_outbound_clicks: int = 5
+    early_cost_per_lpv_signal_enabled: bool = True
+    early_cost_per_lpv_signal_percent_of_cpa: Decimal = Decimal("5")
+    early_cost_per_lpv_signal_min_views: int = 2
+    frequency_elevated_threshold: Decimal = Decimal("2")
+    frequency_critical_threshold: Decimal = Decimal("3")
 
 
 class AdSnapshotSchema(BaseModel):
@@ -164,6 +176,12 @@ class AdSnapshotSchema(BaseModel):
     spend: Decimal
     clicks: int
     cpc: Decimal | None = None
+    outbound_clicks: int = 0
+    outbound_ctr: Decimal | None = None
+    landing_page_views: int = 0
+    cost_per_landing_page_view: Decimal | None = None
+    cpm: Decimal | None = None
+    frequency: Decimal | None = None
     leads: int
     cost_per_lead: Decimal | None = None
     registrations: int
@@ -171,8 +189,12 @@ class AdSnapshotSchema(BaseModel):
     deposits: int
     alert_state: str
     current_stage: str | None = None
+    early_signal_rule_codes: list[str] = []
     warning_rule_codes: list[str] = []
     stop_rule_codes: list[str] = []
+    cpm_diagnostic_status: str | None = None
+    frequency_diagnostic_status: str | None = None
+    diagnostic_short_text: str | None = None
     last_observed_at: str | None = None
 
 
@@ -185,6 +207,8 @@ class AlertEventSchema(BaseModel):
     stage: str
     state: str
     matched_rule_codes: list[str] = []
+    reason_title: str | None = None
+    reason_text: str | None = None
     metrics_json: dict = {}
     created_at: str
 
@@ -209,6 +233,7 @@ class DashboardStatsSchema(BaseModel):
 
     total_ads_monitored: int = 0
     active_ads_count: int = 0  # объявления из последней скан-сессии (±30 мин от last_scan_at)
+    ads_in_early_signal: int = 0
     ads_in_warning: int = 0
     ads_in_stop: int = 0
     ads_disabled: int = 0
@@ -307,6 +332,28 @@ class ChartDataSchema(BaseModel):
 
 class HealthResponse(BaseModel):
     status: str = "ok"
+
+
+class MetricDiagnosticSchema(BaseModel):
+    """Диагностика одной метрики для карточки объявления."""
+
+    status: str
+    label: str
+    text: str
+    bar_percent: int
+    value: Decimal | None = None
+    baseline: Decimal | None = None
+    ratio_percent: Decimal | None = None
+    elevated_threshold: Decimal | None = None
+    critical_threshold: Decimal | None = None
+
+
+class AdDiagnosticsSchema(BaseModel):
+    """Диагностика качества трафика по объявлению."""
+
+    cpm: MetricDiagnosticSchema
+    frequency: MetricDiagnosticSchema
+    summary_text: str
 
 
 class VisionSettingsSchema(BaseModel):
@@ -683,6 +730,17 @@ async def get_offer_rules(offer_id: str, db: AsyncSession = Depends(get_db)):
         spend_with_dep_enabled=rc.spend_with_dep_enabled,
         spend_with_dep_from_percent=rc.spend_with_dep_from_percent,
         spend_with_dep_to_percent=rc.spend_with_dep_to_percent,
+        early_outbound_ctr_signal_enabled=rc.early_outbound_ctr_signal_enabled,
+        early_outbound_ctr_signal_min_percent=rc.early_outbound_ctr_signal_min_percent,
+        early_outbound_ctr_signal_min_spend_percent=rc.early_outbound_ctr_signal_min_spend_percent,
+        early_lpv_ratio_signal_enabled=rc.early_lpv_ratio_signal_enabled,
+        early_lpv_ratio_signal_min_percent=rc.early_lpv_ratio_signal_min_percent,
+        early_lpv_ratio_signal_min_outbound_clicks=rc.early_lpv_ratio_signal_min_outbound_clicks,
+        early_cost_per_lpv_signal_enabled=rc.early_cost_per_lpv_signal_enabled,
+        early_cost_per_lpv_signal_percent_of_cpa=rc.early_cost_per_lpv_signal_percent_of_cpa,
+        early_cost_per_lpv_signal_min_views=rc.early_cost_per_lpv_signal_min_views,
+        frequency_elevated_threshold=rc.frequency_elevated_threshold,
+        frequency_critical_threshold=rc.frequency_critical_threshold,
     )
 
 
@@ -697,8 +755,8 @@ async def update_offer_rules(
     if rc is None:
         rc = OfferRuleConfig(offer_id=uid)
         db.add(rc)
-    for field in body.model_fields:
-        setattr(rc, field, getattr(body, field))
+    for field, value in body.model_dump().items():
+        setattr(rc, field, value)
     await db.commit()
     return body
 
@@ -1071,6 +1129,76 @@ async def _load_dashboard_archives(
     return result.scalars().all()
 
 
+async def _load_frequency_thresholds_by_offer(
+    db: AsyncSession,
+    *,
+    offer_codes: set[str],
+) -> dict[str, tuple[Decimal, Decimal]]:
+    """Загружает пороги Frequency по кодам офферов."""
+    if not offer_codes:
+        return {}
+
+    result = await db.execute(
+        select(
+            Offer.code,
+            OfferRuleConfig.frequency_elevated_threshold,
+            OfferRuleConfig.frequency_critical_threshold,
+        )
+        .join(OfferRuleConfig, OfferRuleConfig.offer_id == Offer.id)
+        .where(Offer.code.in_(offer_codes))
+    )
+    return {
+        code: (Decimal(elevated), Decimal(critical))
+        for code, elevated, critical in result.all()
+    }
+
+
+async def _build_snapshot_diagnostics_map(
+    db: AsyncSession,
+    snapshots: list[AdSnapshot],
+) -> dict[str, AdDiagnosticsSchema]:
+    """Строит диагностику CPM/Frequency для набора снэпшотов."""
+    if not snapshots:
+        return {}
+
+    scan_cutoff = await _resolve_dashboard_snapshot_cutoff(db)
+    active_result = await db.execute(
+        select(AdSnapshot)
+        .where(
+            AdSnapshot.last_observed_at >= scan_cutoff,
+            AdSnapshot.delivery_status != "OFF",
+        )
+        .order_by(AdSnapshot.last_observed_at.desc())
+    )
+    active_snapshots = active_result.scalars().all()
+    cpm_baselines = compute_cpm_baselines_by_offer(
+        [snapshot for snapshot in active_snapshots if snapshot.resolved_offer_code],
+        offer_code_getter=lambda snapshot: snapshot.resolved_offer_code,
+        cpm_getter=lambda snapshot: snapshot.cpm,
+    )
+    frequency_thresholds = await _load_frequency_thresholds_by_offer(
+        db,
+        offer_codes={snapshot.resolved_offer_code for snapshot in snapshots if snapshot.resolved_offer_code},
+    )
+
+    diagnostics_map: dict[str, AdDiagnosticsSchema] = {}
+    for snapshot in snapshots:
+        elevated_threshold, critical_threshold = frequency_thresholds.get(
+            snapshot.resolved_offer_code or "",
+            (Decimal("2"), Decimal("3")),
+        )
+        diagnostics = build_ad_quality_diagnostics(
+            cpm_value=snapshot.cpm,
+            cpm_baseline=cpm_baselines.get(snapshot.resolved_offer_code or ""),
+            frequency_value=snapshot.frequency,
+            frequency_elevated_threshold=elevated_threshold,
+            frequency_critical_threshold=critical_threshold,
+        )
+        diagnostics_map[snapshot.fb_ad_id] = AdDiagnosticsSchema(**diagnostics.as_dict())
+
+    return diagnostics_map
+
+
 # ==========================================
 # Эндпоинты — Dashboard
 # ==========================================
@@ -1101,6 +1229,7 @@ async def get_dashboard_stats(db: AsyncSession = Depends(get_db)):
     rows = state_stats.all()
 
     total = 0
+    early_signal = 0
     warning = 0
     stop = 0
     disabled = 0
@@ -1109,7 +1238,9 @@ async def get_dashboard_stats(db: AsyncSession = Depends(get_db)):
     for state, cnt, spend in rows:
         total += cnt
         total_spend += spend or Decimal("0")
-        if state == AlertState.WARNING_SENT:
+        if state == AlertState.EARLY_SIGNAL_SENT:
+            early_signal = cnt
+        elif state == AlertState.WARNING_SENT:
             warning = cnt
         elif state == AlertState.STOP_SENT:
             stop = cnt
@@ -1150,6 +1281,7 @@ async def get_dashboard_stats(db: AsyncSession = Depends(get_db)):
     return DashboardStatsSchema(
         total_ads_monitored=total,
         active_ads_count=total,
+        ads_in_early_signal=early_signal,
         ads_in_warning=warning,
         ads_in_stop=stop,
         ads_disabled=disabled,
@@ -1215,6 +1347,7 @@ async def list_ad_snapshots(
 
     result = await db.execute(q)
     snapshots = result.scalars().all()
+    diagnostics_map = await _build_snapshot_diagnostics_map(db, snapshots)
     return [
         AdSnapshotSchema(
             id=str(s.id),
@@ -1227,6 +1360,12 @@ async def list_ad_snapshots(
             spend=s.spend,
             clicks=s.clicks,
             cpc=s.cpc,
+            outbound_clicks=s.outbound_clicks,
+            outbound_ctr=s.outbound_ctr,
+            landing_page_views=s.landing_page_views,
+            cost_per_landing_page_view=s.cost_per_landing_page_view,
+            cpm=s.cpm,
+            frequency=s.frequency,
             leads=s.leads,
             cost_per_lead=s.cost_per_lead,
             registrations=s.registrations,
@@ -1234,8 +1373,16 @@ async def list_ad_snapshots(
             deposits=s.deposits,
             alert_state=s.alert_state.value,
             current_stage=s.current_stage.value if s.current_stage else None,
+            early_signal_rule_codes=s.early_signal_rule_codes or [],
             warning_rule_codes=s.warning_rule_codes or [],
             stop_rule_codes=s.stop_rule_codes or [],
+            cpm_diagnostic_status=diagnostics_map[s.fb_ad_id].cpm.status if s.fb_ad_id in diagnostics_map else None,
+            frequency_diagnostic_status=(
+                diagnostics_map[s.fb_ad_id].frequency.status if s.fb_ad_id in diagnostics_map else None
+            ),
+            diagnostic_short_text=(
+                diagnostics_map[s.fb_ad_id].summary_text if s.fb_ad_id in diagnostics_map else None
+            ),
             last_observed_at=(s.last_observed_at.isoformat() if s.last_observed_at else None),
         )
         for s in snapshots
@@ -1270,6 +1417,8 @@ async def list_alert_events(
             stage=e.stage.value,
             state=e.state.value,
             matched_rule_codes=e.matched_rule_codes or [],
+            reason_title=e.reason_title,
+            reason_text=e.reason_text,
             metrics_json=e.metrics_json or {},
             created_at=e.created_at.isoformat(),
         )
@@ -1381,12 +1530,20 @@ async def get_chart_data(
     last_bucket = _timeline_bucket_start(now, period)
     while bucket_cursor <= last_bucket:
         label = _timeline_bucket_label(bucket_cursor, period)
-        alerts_timeline[bucket_cursor] = {"hour": label, "label": label, "warning": 0, "stop": 0}
+        alerts_timeline[bucket_cursor] = {
+            "hour": label,
+            "label": label,
+            "early_signal": 0,
+            "warning": 0,
+            "stop": 0,
+        }
         bucket_cursor += _timeline_bucket_step(period)
     for stage, created_at in alert_rows:
         bucket = _timeline_bucket_start(_to_dashboard_timezone(created_at), period)
         if bucket in alerts_timeline:
-            if stage == AlertStage.WARNING:
+            if stage == AlertStage.EARLY_SIGNAL:
+                alerts_timeline[bucket]["early_signal"] += 1
+            elif stage == AlertStage.WARNING:
                 alerts_timeline[bucket]["warning"] += 1
             elif stage == AlertStage.STOP:
                 alerts_timeline[bucket]["stop"] += 1
@@ -1454,6 +1611,7 @@ async def get_chart_data(
     )
     _state_labels = {
         AlertState.NORMAL: "Норма",
+        AlertState.EARLY_SIGNAL_SENT: "Ранний сигнал",
         AlertState.WARNING_SENT: "Предупреждение",
         AlertState.STOP_SENT: "Стоп",
         AlertState.CLAIMED: "Ожидает OFF",
@@ -1482,6 +1640,7 @@ async def get_chart_data(
         .limit(8)
     )
     _state_icons = {
+        AlertState.EARLY_SIGNAL_SENT: "🔎",
         AlertState.STOP_SENT: "🛑",
         AlertState.WARNING_SENT: "⚠️",
         AlertState.CLAIMED: "🔄",
@@ -1548,6 +1707,11 @@ async def get_ad_timeline(fb_ad_id: str, db: AsyncSession = Depends(get_db)):
     )
     tasks = tasks_result.scalars().all()
 
+    diagnostics = None
+    if snapshot is not None:
+        diagnostics_map = await _build_snapshot_diagnostics_map(db, [snapshot])
+        diagnostics = diagnostics_map.get(snapshot.fb_ad_id)
+
     # Формируем таймлайн: объединяем алерты и задачи по времени
     timeline = []
     for e in events:
@@ -1558,9 +1722,17 @@ async def get_ad_timeline(fb_ad_id: str, db: AsyncSession = Depends(get_db)):
             "stage": e.stage.value if e.stage else None,
             "state": e.state.value if e.state else None,
             "matched_rules": e.matched_rule_codes or [],
+            "reason_title": e.reason_title,
+            "reason_text": e.reason_text,
             "spend": m.get("spend"),
             "clicks": m.get("clicks"),
             "cpc": m.get("cpc"),
+            "outbound_clicks": m.get("outbound_clicks"),
+            "outbound_ctr": m.get("outbound_ctr"),
+            "landing_page_views": m.get("landing_page_views"),
+            "cost_per_landing_page_view": m.get("cost_per_landing_page_view"),
+            "cpm": m.get("cpm"),
+            "frequency": m.get("frequency"),
             "leads": m.get("leads"),
             "registrations": m.get("registrations"),
             "deposits": m.get("deposits"),
@@ -1589,11 +1761,28 @@ async def get_ad_timeline(fb_ad_id: str, db: AsyncSession = Depends(get_db)):
         "current_metrics": {
             "spend": str(snapshot.spend) if snapshot else None,
             "clicks": snapshot.clicks if snapshot else None,
-            "cpc": str(snapshot.cpc) if snapshot and snapshot.cpc else None,
+            "cpc": str(snapshot.cpc) if snapshot and snapshot.cpc is not None else None,
+            "outbound_clicks": snapshot.outbound_clicks if snapshot else None,
+            "outbound_ctr": str(snapshot.outbound_ctr) if snapshot and snapshot.outbound_ctr is not None else None,
+            "landing_page_views": snapshot.landing_page_views if snapshot else None,
+            "cost_per_landing_page_view": (
+                str(snapshot.cost_per_landing_page_view)
+                if snapshot and snapshot.cost_per_landing_page_view is not None
+                else None
+            ),
+            "cpm": str(snapshot.cpm) if snapshot and snapshot.cpm is not None else None,
+            "frequency": str(snapshot.frequency) if snapshot and snapshot.frequency is not None else None,
             "leads": snapshot.leads if snapshot else None,
+            "cost_per_lead": str(snapshot.cost_per_lead) if snapshot and snapshot.cost_per_lead is not None else None,
             "registrations": snapshot.registrations if snapshot else None,
+            "cost_per_registration": (
+                str(snapshot.cost_per_registration)
+                if snapshot and snapshot.cost_per_registration is not None
+                else None
+            ),
             "deposits": snapshot.deposits if snapshot else None,
         } if snapshot else None,
+        "diagnostics": diagnostics.model_dump() if diagnostics else None,
         "last_observed_at": snapshot.last_observed_at.isoformat() if snapshot else None,
         "timeline": timeline,
     }

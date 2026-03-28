@@ -19,6 +19,7 @@ class RuleHit:
     value: Decimal
     threshold: Decimal
     summary: str
+    reason_text: str
 
 
 @dataclass(slots=True, frozen=True)
@@ -26,8 +27,13 @@ class RuleEvaluation:
     """Результат оценки правил для одного объявления."""
 
     stage: AlertStage | None
+    early_signal_hits: tuple[RuleHit, ...]
     warning_hits: tuple[RuleHit, ...]
     stop_hits: tuple[RuleHit, ...]
+
+    @property
+    def early_signal_rule_codes(self) -> list[str]:
+        return [hit.code for hit in self.early_signal_hits]
 
     @property
     def warning_rule_codes(self) -> list[str]:
@@ -36,6 +42,28 @@ class RuleEvaluation:
     @property
     def stop_rule_codes(self) -> list[str]:
         return [hit.code for hit in self.stop_hits]
+
+    @property
+    def matched_hits(self) -> tuple[RuleHit, ...]:
+        if self.stage == AlertStage.STOP:
+            return self.stop_hits
+        if self.stage == AlertStage.WARNING:
+            return self.warning_hits
+        if self.stage == AlertStage.EARLY_SIGNAL:
+            return self.early_signal_hits
+        return ()
+
+    @property
+    def matched_rule_codes(self) -> list[str]:
+        return [hit.code for hit in self.matched_hits]
+
+    @property
+    def reason_title(self) -> str | None:
+        return self.matched_hits[0].title if self.matched_hits else None
+
+    @property
+    def reason_text(self) -> str | None:
+        return self.matched_hits[0].reason_text if self.matched_hits else None
 
 
 @dataclass(slots=True, frozen=True)
@@ -71,3 +99,18 @@ class RuleContext:
     spend_with_dep_enabled: bool = True
     spend_with_dep_from_percent: Decimal = Decimal("70")
     spend_with_dep_to_percent: Decimal = Decimal("90")
+
+    # Ранний сигнал 1: слабый Outbound CTR
+    early_outbound_ctr_signal_enabled: bool = True
+    early_outbound_ctr_signal_min_percent: Decimal = Decimal("0.80")
+    early_outbound_ctr_signal_min_spend_percent: Decimal = Decimal("5")
+
+    # Ранний сигнал 2: слабый LPV ratio
+    early_lpv_ratio_signal_enabled: bool = True
+    early_lpv_ratio_signal_min_percent: Decimal = Decimal("60")
+    early_lpv_ratio_signal_min_outbound_clicks: int = 5
+
+    # Ранний сигнал 3: дорогой Cost per LPV
+    early_cost_per_lpv_signal_enabled: bool = True
+    early_cost_per_lpv_signal_percent_of_cpa: Decimal = Decimal("5")
+    early_cost_per_lpv_signal_min_views: int = 2

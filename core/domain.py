@@ -7,8 +7,9 @@ from enum import StrEnum
 
 
 class AlertStage(StrEnum):
-    """Стадия алерта: предупреждение или стоп."""
+    """Стадия алерта: ранний сигнал, предупреждение или стоп."""
 
+    EARLY_SIGNAL = "EARLY_SIGNAL"
     WARNING = "WARNING"
     STOP = "STOP"
 
@@ -17,6 +18,7 @@ class AlertState(StrEnum):
     """Состояние объявления в конечном автомате."""
 
     NORMAL = "NORMAL"
+    EARLY_SIGNAL_SENT = "EARLY_SIGNAL_SENT"
     WARNING_SENT = "WARNING_SENT"
     STOP_SENT = "STOP_SENT"
     CLAIMED = "CLAIMED"

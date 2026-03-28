@@ -1380,6 +1380,7 @@ tr:last-child td { border-bottom: none; }
 }
 
 .stat-card--warning { border-top-color: var(--accent-amber); }
+.stat-card--signal  { border-top-color: var(--accent-blue); }
 .stat-card--stop    { border-top-color: var(--accent-red); }
 .stat-card--muted   { opacity: 0.6; }
 
@@ -1403,6 +1404,7 @@ tr:last-child td { border-bottom: none; }
 }
 
 .stat-card--warning .stat-card__value { color: var(--accent-amber); }
+.stat-card--signal  .stat-card__value { color: var(--accent-blue); }
 .stat-card--stop    .stat-card__value { color: var(--accent-red); }
 
 .stat-card__label {
@@ -1919,6 +1921,7 @@ button.ops-focus__health-card:hover {
 
 .rule-tag--stop { background: rgba(255, 43, 80, 0.14); color: var(--accent-red); }
 .rule-tag--warn { background: rgba(255, 154, 32, 0.14); color: var(--accent-amber); }
+.rule-tag--signal { background: rgba(77, 136, 255, 0.14); color: var(--accent-blue); }
 
 /* ─── Error Banner ─── */
 
@@ -2073,6 +2076,7 @@ button.ops-focus__health-card:hover {
 
 .ad-card--stop    { border-top-color: var(--accent-red); }
 .ad-card--warning { border-top-color: var(--accent-amber); }
+.ad-card--signal { border-top-color: var(--accent-blue); }
 .ad-card--disabled { opacity: 0.55; border-top-color: var(--border-color); }
 .ad-card--normal  { border-top-color: var(--border-color); }
 
@@ -2097,6 +2101,7 @@ button.ops-focus__health-card:hover {
 
 .ad-card__state-badge--stop    { background: rgba(255, 43, 80, 0.14);  color: var(--accent-red); }
 .ad-card__state-badge--warning { background: rgba(255, 154, 32, 0.14); color: var(--accent-amber); }
+.ad-card__state-badge--signal { background: rgba(77, 136, 255, 0.14); color: var(--accent-blue); }
 .ad-card__state-badge--disabled { background: rgba(58, 64, 96, 0.2);  color: var(--text-muted); }
 .ad-card__state-badge--normal  { background: rgba(0, 232, 150, 0.1);  color: var(--accent-green); }
 
@@ -2164,6 +2169,56 @@ button.ops-focus__health-card:hover {
 .ad-card__metric-value--zero { color: var(--accent-red); }
 
 .ad-card__rules { display: flex; flex-wrap: wrap; gap: 3px; }
+
+.ad-card__diagnostics {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding-top: 2px;
+}
+
+.ad-card__diagnostic-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.diagnostic-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  border-radius: var(--radius-sm);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.diagnostic-badge--normal {
+  background: rgba(0, 232, 150, 0.1);
+  color: var(--accent-green);
+}
+
+.diagnostic-badge--elevated {
+  background: rgba(255, 154, 32, 0.12);
+  color: var(--accent-amber);
+}
+
+.diagnostic-badge--critical {
+  background: rgba(255, 43, 80, 0.12);
+  color: var(--accent-red);
+}
+
+.diagnostic-badge--insufficient_data {
+  background: rgba(122, 130, 160, 0.16);
+  color: var(--text-secondary);
+}
+
+.ad-card__diagnostic-text {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
 
 .ad-card__disable-status { margin-top: 2px; }
 
@@ -2311,6 +2366,97 @@ button.ops-focus__health-card:hover {
   color: var(--text-primary);
 }
 
+.timeline-diagnostics {
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--border-color);
+  background: linear-gradient(180deg, rgba(77, 136, 255, 0.03), rgba(77, 136, 255, 0));
+}
+
+.timeline-diagnostics__header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.timeline-diagnostics__title {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+.timeline-diagnostics__summary {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.timeline-diagnostics__grid {
+  display: grid;
+  gap: 10px;
+}
+
+.timeline-diagnostic {
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  padding: 12px 13px;
+}
+
+.timeline-diagnostic__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.timeline-diagnostic__top span {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  letter-spacing: 0.03em;
+}
+
+.timeline-diagnostic__top strong {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.timeline-diagnostic__bar {
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(122, 130, 160, 0.18);
+  overflow: hidden;
+  margin-bottom: 9px;
+}
+
+.timeline-diagnostic__fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+}
+
+.timeline-diagnostic__fill--normal { background: var(--accent-green); }
+.timeline-diagnostic__fill--elevated { background: var(--accent-amber); }
+.timeline-diagnostic__fill--critical { background: var(--accent-red); }
+.timeline-diagnostic__fill--insufficient_data { background: var(--text-muted); }
+
+.timeline-diagnostic--normal .timeline-diagnostic__top strong { color: var(--accent-green); }
+.timeline-diagnostic--elevated .timeline-diagnostic__top strong { color: var(--accent-amber); }
+.timeline-diagnostic--critical .timeline-diagnostic__top strong { color: var(--accent-red); }
+.timeline-diagnostic--insufficient_data .timeline-diagnostic__top strong { color: var(--text-muted); }
+
+.timeline-diagnostic__text {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
 .timeline-events {
   flex: 1;
   overflow-y: auto;
@@ -2397,6 +2543,10 @@ button.ops-focus__health-card:hover {
   word-break: break-all;
 }
 
+.timeline-event--warning { background: rgba(255, 154, 32, 0.04); }
+.timeline-event--stop { background: rgba(255, 43, 80, 0.04); }
+.timeline-event--signal { background: rgba(77, 136, 255, 0.04); }
+
 /* ═══════════════════════════════════════════════════════════════
    MISC UTILITY
 ═══════════════════════════════════════════════════════════════ */
@@ -2441,7 +2591,7 @@ button.ops-focus__health-card:hover {
 }
 
 .stat-cards-grid--ops {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 
 .stat-cards-grid--performance {
@@ -2567,6 +2717,10 @@ button.ops-focus__health-card:hover {
   border-top: 2px solid var(--accent-amber);
 }
 
+.latest-event--signal {
+  border-top: 2px solid var(--accent-blue);
+}
+
 .latest-event--stop {
   border-top: 2px solid var(--accent-red);
 }
@@ -2641,6 +2795,12 @@ button.ops-focus__health-card:hover {
   font-weight: 600;
   color: var(--text-primary);
   line-height: 1.45;
+}
+
+.latest-event__reason-text {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-secondary);
 }
 
 .latest-event__metrics {

@@ -37,6 +37,7 @@ def test_build_extraction_js_returns_valid_js():
     assert "spend" in js
     assert "actions:lead" in js
     assert "omni_complete_registration" in js
+    assert "table_cell:results" in js
 
 
 # --- Тест 2: _parse_bulk_result корректно создаёт ScannedAdRow ---
@@ -44,7 +45,7 @@ def test_parse_bulk_result_creates_scanned_ad_rows():
     """Проверяем, что результат единого evaluate преобразуется в ScannedAdRow."""
     raw_rows = [
         {
-            "_row_id": "12345678",
+            "_row_id": "120241979860890176",
             "campaign_name": "Test Campaign",
             "adset_name": "Test Adset",
             "ad_name": "Test Ad Name",
@@ -56,13 +57,14 @@ def test_parse_bulk_result_creates_scanned_ad_rows():
             "cost_per_lead": "$2.10",
             "registrations": "2",
             "cost_per_registration": "$5.25",
+            "deposits": "1",
         },
     ]
     rows = _parse_bulk_result(raw_rows)
     assert len(rows) == 1
     row = rows[0]
     assert isinstance(row, ScannedAdRow)
-    assert row.fb_ad_id == "12345678"
+    assert row.fb_ad_id == "120241979860890176"
     assert row.campaign_name == "Test Campaign"
     assert row.adset_name == "Test Adset"
     assert row.ad_name == "Test Ad Name"
@@ -74,7 +76,7 @@ def test_parse_bulk_result_creates_scanned_ad_rows():
     assert row.cost_per_lead == Decimal("2.10")
     assert row.registrations == 2
     assert row.cost_per_registration == Decimal("5.25")
-    assert row.deposits == 0
+    assert row.deposits == 1
 
 
 # --- Тест 3: пустые/невалидные строки в bulk-результате пропускаются ---
@@ -94,7 +96,7 @@ def test_parse_bulk_result_skips_invalid_rows():
         },
         # Валидная строка
         {
-            "_row_id": "99999",
+            "_row_id": "120241979860770176",
             "ad_name": "Good Ad",
             "delivery_status": "Active",
             "spend": "$1.00",
@@ -102,7 +104,7 @@ def test_parse_bulk_result_skips_invalid_rows():
     ]
     rows = _parse_bulk_result(raw_rows)
     assert len(rows) == 1
-    assert rows[0].fb_ad_id == "99999"
+    assert rows[0].fb_ad_id == "120241979860770176"
 
 
 # --- Тест 4: mouse.move вызывается перед click в refresh_table ---
@@ -118,9 +120,7 @@ async def test_refresh_table_mouse_move_before_click():
     btn.bounding_box = AsyncMock(return_value={
         "x": 100, "y": 200, "width": 80, "height": 30,
     })
-    btn.click = AsyncMock(
-        side_effect=lambda: call_order.append("click")
-    )
+    btn.click = AsyncMock()
 
     # Мок контейнера
     container = AsyncMock()
@@ -136,6 +136,7 @@ async def test_refresh_table_mouse_move_before_click():
 
     page.mouse = AsyncMock()
     page.mouse.move = AsyncMock(side_effect=mock_mouse_move)
+    page.mouse.click = AsyncMock(side_effect=lambda x, y: call_order.append("click"))
 
     # Патчим asyncio.sleep чтобы тест не ждал
     with patch("core.scanner.parser.asyncio.sleep", new_callable=AsyncMock):
@@ -152,6 +153,8 @@ async def test_refresh_table_mouse_move_before_click():
     # Центр кнопки: x=140, y=215, допуск ±5px
     assert 135 <= x <= 145
     assert 212 <= y <= 218
+    page.mouse.click.assert_called_once()
+    btn.click.assert_not_called()
 
 
 # --- Тест 5: mouse.wheel используется вместо evaluate для скролла ---

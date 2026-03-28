@@ -73,7 +73,7 @@ function OfferModal({ offer, onSave, onClose }) {
               disabled={!!offer}
             />
             <div className="form-hint">
-              Код используется для матчинга — ищется в названии кампании / объявления
+              Код используется для сопоставления — ищется в названии кампании / объявления
             </div>
           </div>
           <div className="form-group" style={{ marginBottom: 16 }}>
@@ -136,6 +136,38 @@ const RULE_DEFS = [
   { key: 'spend_with_dep', title: 'Правило 6: Расход с депозитом', fields: [{ name: 'spend_with_dep_from_percent', label: 'Расход от (% CPA)', type: 'number' }, { name: 'spend_with_dep_to_percent', label: 'Расход до (% CPA)', type: 'number' }] },
 ];
 
+const EARLY_SIGNAL_DEFS = [
+  {
+    key: 'early_outbound_ctr_signal',
+    title: 'Ранний сигнал 1: слабый CTR исходящих кликов',
+    fields: [
+      { name: 'early_outbound_ctr_signal_min_percent', label: 'Минимальный CTR исходящих кликов (%)', type: 'number' },
+      { name: 'early_outbound_ctr_signal_min_spend_percent', label: 'Минимальный расход для проверки (% CPA)', type: 'number' },
+    ],
+  },
+  {
+    key: 'early_lpv_ratio_signal',
+    title: 'Ранний сигнал 2: слабая доходимость до лендинга',
+    fields: [
+      { name: 'early_lpv_ratio_signal_min_percent', label: 'Минимальная доля LPV (%)', type: 'number' },
+      { name: 'early_lpv_ratio_signal_min_outbound_clicks', label: 'Минимум исходящих кликов для проверки', type: 'number' },
+    ],
+  },
+  {
+    key: 'early_cost_per_lpv_signal',
+    title: 'Ранний сигнал 3: дорогой просмотр лендинга',
+    fields: [
+      { name: 'early_cost_per_lpv_signal_percent_of_cpa', label: 'Лимит цены LPV (% CPA)', type: 'number' },
+      { name: 'early_cost_per_lpv_signal_min_views', label: 'Минимум LPV для проверки', type: 'number' },
+    ],
+  },
+];
+
+const DIAGNOSTIC_FIELDS = [
+  { name: 'frequency_elevated_threshold', label: 'Частота: повышено от', type: 'number' },
+  { name: 'frequency_critical_threshold', label: 'Частота: критично от', type: 'number' },
+];
+
 const DEFAULT_RULES = {
   cpc_percent_enabled: true, cpc_percent_stop: '2',
   cpl_percent_enabled: true, cpl_percent_stop: '10',
@@ -143,6 +175,11 @@ const DEFAULT_RULES = {
   regs_no_dep_enabled: true, regs_no_dep_stop_count: '5',
   spend_no_dep_enabled: true, spend_no_dep_from_percent: '50', spend_no_dep_to_percent: '70',
   spend_with_dep_enabled: true, spend_with_dep_from_percent: '70', spend_with_dep_to_percent: '90',
+  early_outbound_ctr_signal_enabled: true, early_outbound_ctr_signal_min_percent: '0.80', early_outbound_ctr_signal_min_spend_percent: '5',
+  early_lpv_ratio_signal_enabled: true, early_lpv_ratio_signal_min_percent: '60', early_lpv_ratio_signal_min_outbound_clicks: '5',
+  early_cost_per_lpv_signal_enabled: true, early_cost_per_lpv_signal_percent_of_cpa: '5', early_cost_per_lpv_signal_min_views: '2',
+  frequency_elevated_threshold: '2',
+  frequency_critical_threshold: '3',
 };
 
 export default function OffersPage() {
@@ -400,6 +437,68 @@ export default function OffersPage() {
                   </div>
                 </div>
               ))}
+
+              <div className="form-section-title" style={{ marginTop: 20 }}>
+                Ранние сигналы до лидов
+              </div>
+              {EARLY_SIGNAL_DEFS.map((rule) => (
+                <div
+                  key={rule.key}
+                  className="form-section"
+                  style={{ background: 'var(--bg-secondary)', marginBottom: 12 }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                    <strong>{rule.title}</strong>
+                    <Toggle
+                      on={rules[`${rule.key}_enabled`]}
+                      onChange={(v) => setRules({ ...rules, [`${rule.key}_enabled`]: v })}
+                      label={`Включить ${rule.title}`}
+                    />
+                  </div>
+                  <div className="form-grid">
+                    {rule.fields.map((field) => (
+                      <div className="form-group" key={field.name}>
+                        <label className="form-label" htmlFor={`rule-${field.name}`}>
+                          {field.label}
+                        </label>
+                        <input
+                          id={`rule-${field.name}`}
+                          className="form-input"
+                          type={field.type}
+                          value={rules[field.name] || ''}
+                          onChange={(e) => setRules({ ...rules, [field.name]: e.target.value })}
+                          disabled={!rules[`${rule.key}_enabled`]}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+
+              <div className="form-section-title" style={{ marginTop: 20 }}>
+                Диагностика CPM / частоты
+              </div>
+              <div className="form-section" style={{ background: 'var(--bg-secondary)', marginBottom: 12 }}>
+                <div style={{ color: 'var(--text-secondary)', fontSize: 13, marginBottom: 12 }}>
+                  CPM считается динамически от медианы активных объявлений оффера. Здесь настраиваются только границы для частоты.
+                </div>
+                <div className="form-grid">
+                  {DIAGNOSTIC_FIELDS.map((field) => (
+                    <div className="form-group" key={field.name}>
+                      <label className="form-label" htmlFor={`rule-${field.name}`}>
+                        {field.label}
+                      </label>
+                      <input
+                        id={`rule-${field.name}`}
+                        className="form-input"
+                        type={field.type}
+                        value={rules[field.name] || ''}
+                        onChange={(e) => setRules({ ...rules, [field.name]: e.target.value })}
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
 
               <div style={{ display: 'flex', gap: 12, marginTop: 16 }}>
                 <button className="btn btn-primary" onClick={handleSaveRules} disabled={savingRules}>

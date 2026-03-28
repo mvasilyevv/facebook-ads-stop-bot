@@ -3,12 +3,14 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from core.domain import AlertState
+from core.domain import AlertStage, AlertState
 
 # --- Тесты jitter (задача 1.5) ---
 
@@ -63,6 +65,12 @@ async def test_batch_save_snapshots_single_query():
             "spend": Decimal("10.00"),
             "clicks": 5,
             "cpc": Decimal("2.00"),
+            "outbound_clicks": 4,
+            "outbound_ctr": Decimal("0.5000"),
+            "landing_page_views": 3,
+            "cost_per_landing_page_view": Decimal("3.3333"),
+            "cpm": Decimal("12.5000"),
+            "frequency": Decimal("1.2500"),
             "leads": 1,
             "cost_per_lead": Decimal("10.00"),
             "registrations": 0,
@@ -70,6 +78,7 @@ async def test_batch_save_snapshots_single_query():
             "deposits": 0,
             "alert_state": AlertState.NORMAL,
             "current_stage": None,
+            "early_signal_rule_codes": [],
             "warning_rule_codes": [],
             "stop_rule_codes": [],
             "open_state_token": None,
@@ -93,6 +102,158 @@ async def test_batch_save_snapshots_single_query():
     )
     # И один commit
     assert mock_session.commit.call_count == 1
+
+
+# Проверяем что stage EARLY_SIGNAL переводится в состояние EARLY_SIGNAL_SENT
+def test_state_for_emitted_stage_maps_early_signal():
+    """Ранний сигнал должен отправляться в состоянии EARLY_SIGNAL_SENT."""
+    from apps.observer_worker.main import _state_for_emitted_stage
+
+    assert _state_for_emitted_stage(AlertStage.EARLY_SIGNAL) == AlertState.EARLY_SIGNAL_SENT
+    assert _state_for_emitted_stage(AlertStage.WARNING) == AlertState.WARNING_SENT
+    assert _state_for_emitted_stage(AlertStage.STOP) == AlertState.CLAIMED
+
+
+# Проверяем склейку текста причины с диагностикой
+def test_compose_reason_text_appends_diagnostics_text():
+    """Диагностический контекст должен дописываться к основной причине."""
+    from apps.observer_worker.main import _compose_reason_text
+
+    assert (
+        _compose_reason_text("Основная причина.", "CPM выше медианы.")
+        == "Основная причина. CPM выше медианы."
+    )
+    assert _compose_reason_text("Только причина.", None) == "Только причина."
+    assert _compose_reason_text(None, "Только диагностика.") == "Только диагностика."
+
+
+# Проверяем что напоминание для EARLY_SIGNAL восстанавливает причину из последнего события
+@pytest.mark.asyncio
+async def test_collect_reminder_alerts_restores_early_signal_reason():
+    """Напоминание должно сохранить EARLY_SIGNAL и человекочитаемую причину."""
+    from apps.observer_worker.main import _collect_reminder_alerts
+
+    now = datetime.now(UTC)
+    snap = SimpleNamespace(
+        fb_ad_id="ad_early",
+        alert_state=AlertState.EARLY_SIGNAL_SENT,
+        snoozed_until=None,
+        open_state_token="token_early",
+        offer_id=None,
+        ad_name="Раннее объявление",
+        campaign_name="Campaign",
+        adset_name="Adset",
+        resolved_offer_code="DRC",
+        early_signal_rule_codes=["early_outbound_ctr_signal"],
+        warning_rule_codes=[],
+        stop_rule_codes=[],
+        spend=Decimal("12.34"),
+        clicks=7,
+        cpc=Decimal("1.76"),
+        outbound_clicks=5,
+        outbound_ctr=Decimal("0.4200"),
+        landing_page_views=4,
+        cost_per_landing_page_view=Decimal("3.0850"),
+        cpm=Decimal("14.1000"),
+        frequency=Decimal("1.4000"),
+        leads=0,
+        cost_per_lead=None,
+        registrations=0,
+        cost_per_registration=None,
+        deposits=0,
+        id=101,
+    )
+    last_event = SimpleNamespace(
+        reason_title="Слабый исходящий CTR",
+        reason_text="Сигнал раннего отсечения.",
+        metrics_json={"rule_summaries": ["CTR ниже порога"]},
+    )
+
+    candidates_result = MagicMock()
+    candidates_result.scalars.return_value.all.return_value = [snap]
+
+    last_event_result = MagicMock()
+    last_event_result.scalar_one_or_none.return_value = last_event
+
+    mock_session = AsyncMock()
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=False)
+    mock_session.execute = AsyncMock(side_effect=[candidates_result, last_event_result])
+    mock_session.scalar = AsyncMock(return_value=now - timedelta(minutes=20))
+
+    mock_factory = MagicMock(return_value=mock_session)
+
+    with patch(
+        "apps.observer_worker.main.get_session_factory",
+        return_value=mock_factory,
+    ):
+        reminders = await _collect_reminder_alerts(interval_seconds=90)
+
+    assert len(reminders) == 1
+    reminder = reminders[0]
+    assert reminder.stage == AlertStage.EARLY_SIGNAL
+    assert reminder.matched_rule_codes == ["early_outbound_ctr_signal"]
+    assert reminder.reason_title == "Слабый исходящий CTR"
+    assert reminder.reason_text == "Сигнал раннего отсечения."
+    assert reminder.metrics_json["rule_summaries"] == ["CTR ниже порога"]
+    assert reminder.metrics_json["outbound_clicks"] == 5
+    assert reminder.metrics_json["frequency"] == "1.4000"
+
+
+# Проверяем что AlertEvent для раннего сигнала сохраняет причину и состояние
+@pytest.mark.asyncio
+async def test_send_alerts_to_telegram_persists_early_signal_reason():
+    """Отправка раннего сигнала должна сохранить EARLY_SIGNAL_SENT и причину в AlertEvent."""
+    from apps.observer_worker.main import _send_alerts_to_telegram
+
+    candidate = MagicMock()
+    candidate.snapshot_id = "token-1"
+    candidate.fb_ad_id = "ad_early"
+    candidate.ad_name = "Раннее объявление"
+    candidate.campaign_name = "Campaign"
+    candidate.adset_name = "Adset"
+    candidate.offer_code = "DRC"
+    candidate.stage = AlertStage.EARLY_SIGNAL
+    candidate.matched_rule_codes = ["early_outbound_ctr_signal"]
+    candidate.reason_title = "Слабый исходящий CTR"
+    candidate.reason_text = "Сигнал раннего отсечения."
+    candidate.metrics_json = {"spend": "12.34"}
+    candidate.offer_id = None
+
+    sent_message = MagicMock()
+    sent_message.text = "текст"
+    sent_message.reply_markup = None
+
+    fake_client = AsyncMock()
+    fake_client.send_message = AsyncMock(return_value={"message_id": 777})
+
+    mock_session = AsyncMock()
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=False)
+    mock_session.add = MagicMock()
+    mock_session.commit = AsyncMock()
+
+    mock_factory = MagicMock(return_value=mock_session)
+
+    with (
+        patch("apps.observer_worker.main.render_alert_message", return_value=sent_message) as render_mock,
+        patch("apps.observer_worker.main.get_session_factory", return_value=mock_factory),
+    ):
+        await _send_alerts_to_telegram(fake_client, "chat-1", [candidate])
+
+    render_args = render_mock.call_args.kwargs
+    rendered_item = render_args["items"][0]
+    assert rendered_item.alert_state == AlertState.EARLY_SIGNAL_SENT
+    assert rendered_item.reason_title == "Слабый исходящий CTR"
+    assert rendered_item.reason_text == "Сигнал раннего отсечения."
+
+    added_event = mock_session.add.call_args.args[0]
+    assert added_event.state == AlertState.EARLY_SIGNAL_SENT
+    assert added_event.reason_title == "Слабый исходящий CTR"
+    assert added_event.reason_text == "Сигнал раннего отсечения."
+    assert added_event.telegram_chat_id == "chat-1"
+    assert added_event.telegram_message_id == 777
+    mock_session.commit.assert_awaited_once()
 
 
 # Проверяем что пустой список не вызывает запросов

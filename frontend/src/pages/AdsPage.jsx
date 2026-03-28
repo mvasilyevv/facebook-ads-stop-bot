@@ -9,13 +9,15 @@ const STALE_DISABLE_TASK_MS = 5 * 60 * 1000;
 const STATE_ORDER = {
   STOP_SENT: 0,
   WARNING_SENT: 1,
-  CLAIMED: 2,
-  NORMAL: 3,
-  DISABLED: 4,
+  EARLY_SIGNAL_SENT: 2,
+  CLAIMED: 3,
+  NORMAL: 4,
+  DISABLED: 5,
 };
 
 const STATE_LABELS = {
   NORMAL: 'Норма',
+  EARLY_SIGNAL_SENT: 'Ранний сигнал',
   WARNING_SENT: 'Предупреждение',
   STOP_SENT: 'Стоп',
   CLAIMED: 'Ожидает OFF',
@@ -29,10 +31,39 @@ const RULE_LABELS = {
   regs_no_dep_stop: 'Реги без депозитов',
   spend_no_dep_range: 'Расход без депа',
   spend_with_dep_range: 'Расход с депозитом',
+  early_outbound_ctr_signal: 'Слабый CTR исходящих кликов',
+  early_lpv_ratio_signal: 'Слабая доходимость до лендинга',
+  early_cost_per_lpv_signal: 'Дорогой просмотр лендинга',
 };
 
 function ruleLabel(code) {
   return RULE_LABELS[code] || code;
+}
+
+function diagnosticStatusLabel(status) {
+  const map = {
+    normal: 'Норма',
+    elevated: 'Повышено',
+    critical: 'Критично',
+    insufficient_data: 'Мало данных',
+  };
+  return map[status] || 'Нет данных';
+}
+
+function diagnosticBars(data) {
+  if (!data?.diagnostics) return [];
+  return [
+    {
+      key: 'cpm',
+      title: 'CPM vs медиана оффера',
+      payload: data.diagnostics.cpm,
+    },
+    {
+      key: 'frequency',
+      title: 'Частота vs норма оффера',
+      payload: data.diagnostics.frequency,
+    },
+  ];
 }
 
 function fmt(val, digits = 2) {
@@ -75,7 +106,7 @@ function isDeliveryOff(ad) {
 
 // --- Таймлайн объявления ---
 
-const STAGE_ICONS = { WARNING: '⚠️', STOP: '🛑' };
+const STAGE_ICONS = { EARLY_SIGNAL: '🔎', WARNING: '⚠️', STOP: '🛑' };
 const TASK_STATUS_ICONS = { PENDING: '⏳', RUNNING: '🔄', SUCCEEDED: '✅', RETRYING: '🔁', FAILED: '❌' };
 
 function AdTimeline({ fbAdId, onClose }) {
@@ -123,6 +154,14 @@ function AdTimeline({ fbAdId, onClose }) {
                 <strong>{fmt(data.current_metrics?.cpc)}</strong>
               </div>
               <div className="timeline-metric">
+                <span>Исх. CTR</span>
+                <strong>{data.current_metrics?.outbound_ctr ? `${Number(data.current_metrics.outbound_ctr).toFixed(2)}%` : '—'}</strong>
+              </div>
+              <div className="timeline-metric">
+                <span>LPV</span>
+                <strong>{fmtNum(data.current_metrics?.landing_page_views)}</strong>
+              </div>
+              <div className="timeline-metric">
                 <span>Лиды</span>
                 <strong>{fmtNum(data.current_metrics?.leads)}</strong>
               </div>
@@ -140,27 +179,73 @@ function AdTimeline({ fbAdId, onClose }) {
               </div>
             </div>
 
+            {data.diagnostics && (
+              <div className="timeline-diagnostics">
+                <div className="timeline-diagnostics__header">
+                  <div className="timeline-diagnostics__title">Диагностика трафика</div>
+                  <div className="timeline-diagnostics__summary">{data.diagnostics.summary_text}</div>
+                </div>
+                <div className="timeline-diagnostics__grid">
+                  {diagnosticBars(data).map((item) => (
+                    <div key={item.key} className={`timeline-diagnostic timeline-diagnostic--${item.payload?.status || 'insufficient_data'}`}>
+                      <div className="timeline-diagnostic__top">
+                        <span>{item.title}</span>
+                        <strong>{diagnosticStatusLabel(item.payload?.status)}</strong>
+                      </div>
+                      <div className="timeline-diagnostic__bar">
+                        <span
+                          className={`timeline-diagnostic__fill timeline-diagnostic__fill--${item.payload?.status || 'insufficient_data'}`}
+                          style={{
+                            width: `${Number(item.payload?.bar_percent || 0) > 0 ? Math.max(6, Number(item.payload?.bar_percent || 0)) : 0}%`,
+                          }}
+                        />
+                      </div>
+                      <div className="timeline-diagnostic__text">{item.payload?.text || 'Диагностика пока недоступна.'}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Таймлайн событий */}
             <div className="timeline-events">
               {data.timeline.length === 0 && (
                 <div className="timeline-empty">Событий пока нет</div>
               )}
               {[...(data.timeline || [])].sort((a, b) => new Date(b.time) - new Date(a.time)).map((ev, i) => (
-                <div key={i} className={`timeline-event timeline-event--${ev.type === 'alert' ? (ev.stage === 'STOP' ? 'stop' : 'warning') : 'task'}`}>
+                <div
+                  key={i}
+                  className={`timeline-event timeline-event--${
+                    ev.type === 'alert'
+                      ? ev.stage === 'STOP'
+                        ? 'stop'
+                        : ev.stage === 'EARLY_SIGNAL'
+                        ? 'signal'
+                        : 'warning'
+                      : 'task'
+                  }`}
+                >
                   <div className="timeline-event__time">{fmtTime(ev.time)}</div>
                   {ev.type === 'alert' && (
                     <div className="timeline-event__body">
                       <span className="timeline-event__icon">{STAGE_ICONS[ev.stage] || '📌'}</span>
                       <div className="timeline-event__content">
                         <div className="timeline-event__title">
-                          {ev.stage === 'STOP' ? 'Стоп-алерт' : 'Предупреждение'}
+                          {ev.reason_title || (ev.stage === 'STOP' ? 'Стоп-алерт' : ev.stage === 'EARLY_SIGNAL' ? 'Ранний сигнал' : 'Предупреждение')}
                           {ev.matched_rules?.length > 0 && (
                             <span className="timeline-event__rules"> — {ev.matched_rules.map(ruleLabel).join(', ')}</span>
                           )}
                         </div>
+                        {ev.reason_text && (
+                          <div className="timeline-event__sub">{ev.reason_text}</div>
+                        )}
                         <div className="timeline-event__metrics">
                           {ev.spend != null && <span>💰 {fmt(ev.spend)}</span>}
                           {ev.cpc != null && <span>🖱 {fmt(ev.cpc)}</span>}
+                          {ev.outbound_ctr != null && <span>🌐 CTR исх.: {Number(ev.outbound_ctr).toFixed(2)}%</span>}
+                          {ev.landing_page_views != null && <span>LPV: {ev.landing_page_views}</span>}
+                          {ev.cpm != null && <span>CPM: {fmt(ev.cpm)}</span>}
+                          {ev.frequency != null && <span>Частота: {Number(ev.frequency).toFixed(2)}</span>}
                           {ev.clicks != null && <span>Кликов: {ev.clicks}</span>}
                           {ev.leads != null && <span>Лидов: {ev.leads}</span>}
                           {ev.registrations != null && <span>Реги: {ev.registrations}</span>}
@@ -201,17 +286,20 @@ function AdTimeline({ fbAdId, onClose }) {
 function AdCard({ ad, disableTask, onClick }) {
   const isStop = ad.alert_state === 'STOP_SENT';
   const isWarning = ad.alert_state === 'WARNING_SENT';
+  const isEarlySignal = ad.alert_state === 'EARLY_SIGNAL_SENT';
   const isDisabled = ad.alert_state === 'DISABLED';
   const isClaimed = ad.alert_state === 'CLAIMED';
 
   let cardVariant = 'normal';
   if (isStop) cardVariant = 'stop';
   else if (isWarning) cardVariant = 'warning';
+  else if (isEarlySignal) cardVariant = 'signal';
   else if (isDisabled || isClaimed) cardVariant = 'disabled';
 
   const allRules = [
     ...(ad.stop_rule_codes || []).map((r) => ({ code: r, type: 'stop' })),
     ...(ad.warning_rule_codes || []).map((r) => ({ code: r, type: 'warn' })),
+    ...(ad.early_signal_rule_codes || []).map((r) => ({ code: r, type: 'signal' })),
   ];
 
   // Дедупликация: stop приоритет
@@ -231,9 +319,10 @@ function AdCard({ ad, disableTask, onClick }) {
         <span className={`ad-card__state-badge ad-card__state-badge--${cardVariant}`}>
           {isStop && '⛔ '}
           {isWarning && '⚠️ '}
+          {isEarlySignal && '🔎 '}
           {isClaimed && '🔄 '}
           {isDisabled && '🔕 '}
-          {!isStop && !isWarning && !isDisabled && !isClaimed && '✅ '}
+          {!isStop && !isWarning && !isEarlySignal && !isDisabled && !isClaimed && '✅ '}
           {stateLabel}
         </span>
         {ad.offer_code && (
@@ -274,6 +363,26 @@ function AdCard({ ad, disableTask, onClick }) {
               {ruleLabel(code)}
             </span>
           ))}
+        </div>
+      )}
+
+      {(ad.cpm_diagnostic_status || ad.frequency_diagnostic_status || ad.diagnostic_short_text) && (
+        <div className="ad-card__diagnostics">
+          <div className="ad-card__diagnostic-badges">
+            {ad.cpm_diagnostic_status && (
+              <span className={`diagnostic-badge diagnostic-badge--${ad.cpm_diagnostic_status}`}>
+                CPM: {diagnosticStatusLabel(ad.cpm_diagnostic_status)}
+              </span>
+            )}
+            {ad.frequency_diagnostic_status && (
+              <span className={`diagnostic-badge diagnostic-badge--${ad.frequency_diagnostic_status}`}>
+                Частота: {diagnosticStatusLabel(ad.frequency_diagnostic_status)}
+              </span>
+            )}
+          </div>
+          {ad.diagnostic_short_text && (
+            <div className="ad-card__diagnostic-text">{ad.diagnostic_short_text}</div>
+          )}
         </div>
       )}
 
@@ -451,6 +560,7 @@ export default function AdsPage({ initialView = 'active', initialState = '' }) {
           >
             <option value="">Все статусы</option>
             <option value="NORMAL">Норма</option>
+            <option value="EARLY_SIGNAL_SENT">Ранний сигнал</option>
             <option value="WARNING_SENT">Предупреждение</option>
             <option value="STOP_SENT">Стоп</option>
             <option value="CLAIMED">Ожидает OFF</option>

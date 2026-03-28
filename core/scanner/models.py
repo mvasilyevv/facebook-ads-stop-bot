@@ -19,6 +19,12 @@ class ScannedAdRow:
     spend: Decimal
     clicks: int = 0
     cpc: Decimal | None = None
+    outbound_clicks: int = 0
+    outbound_ctr: Decimal | None = None
+    landing_page_views: int = 0
+    cost_per_landing_page_view: Decimal | None = None
+    cpm: Decimal | None = None
+    frequency: Decimal | None = None
     leads: int = 0
     cost_per_lead: Decimal | None = None
     registrations: int = 0

@@ -23,6 +23,11 @@ from core.cabinet_day import (
     has_any_metric_value,
     is_cabinet_day_reset_scan,
 )
+from core.diagnostics import (
+    build_ad_quality_diagnostics,
+    build_diagnostics_context_text,
+    compute_cpm_baselines_by_offer,
+)
 from core.disable_tasks import (
     DISABLE_TASK_STALE_TIMEOUT,
     is_delivery_disabled,
@@ -41,7 +46,11 @@ from core.models import (
     TelegramSettings,
     VisionSettings,
 )
-from patchright.async_api import Error as PatchrightError
+try:
+    from patchright.async_api import Error as PatchrightError
+except ModuleNotFoundError:  # pragma: no cover - зависит от окружения
+    class PatchrightError(RuntimeError):
+        """Фолбэк-тип ошибки, когда patchright недоступен в окружении."""
 
 from core.observer.service import AlertCandidate, build_metrics_json, evaluate_row
 from core.observer.state_machine import resolve_transition
@@ -58,6 +67,22 @@ MAX_RECONNECT_ATTEMPTS = 5
 BASE_RECONNECT_DELAY = 10
 # Пока очередь отключения не опустеет, observer не должен трогать общий браузер.
 DISABLE_QUEUE_SCAN_PAUSE_SECONDS = 5.0
+
+
+def _state_for_emitted_stage(stage: AlertStage) -> AlertState:
+    """Возвращает состояние объявления для отправленного алерта."""
+    if stage == AlertStage.STOP:
+        return AlertState.CLAIMED
+    if stage == AlertStage.WARNING:
+        return AlertState.WARNING_SENT
+    return AlertState.EARLY_SIGNAL_SENT
+
+
+def _compose_reason_text(base_reason: str | None, diagnostics_text: str | None) -> str | None:
+    """Склеивает основную причину и диагностический контекст."""
+    if base_reason and diagnostics_text:
+        return f"{base_reason} {diagnostics_text}"
+    return base_reason or diagnostics_text
 
 
 async def load_offers_from_db() -> dict:
@@ -461,6 +486,12 @@ async def batch_save_snapshots(
             "spend": stmt.excluded.spend,
             "clicks": stmt.excluded.clicks,
             "cpc": stmt.excluded.cpc,
+            "outbound_clicks": stmt.excluded.outbound_clicks,
+            "outbound_ctr": stmt.excluded.outbound_ctr,
+            "landing_page_views": stmt.excluded.landing_page_views,
+            "cost_per_landing_page_view": stmt.excluded.cost_per_landing_page_view,
+            "cpm": stmt.excluded.cpm,
+            "frequency": stmt.excluded.frequency,
             "leads": stmt.excluded.leads,
             "cost_per_lead": stmt.excluded.cost_per_lead,
             "registrations": stmt.excluded.registrations,
@@ -468,6 +499,7 @@ async def batch_save_snapshots(
             "deposits": stmt.excluded.deposits,
             "alert_state": stmt.excluded.alert_state,
             "current_stage": stmt.excluded.current_stage,
+            "early_signal_rule_codes": stmt.excluded.early_signal_rule_codes,
             "warning_rule_codes": stmt.excluded.warning_rule_codes,
             "stop_rule_codes": stmt.excluded.stop_rule_codes,
             "open_state_token": stmt.excluded.open_state_token,
@@ -674,7 +706,7 @@ async def _collect_reminder_alerts(interval_seconds: int) -> list[AlertCandidate
     """Собирает алерты для повторного напоминания.
 
     Условия:
-    - alert_state IN [WARNING_SENT, STOP_SENT]
+    - alert_state IN [EARLY_SIGNAL_SENT, WARNING_SENT, STOP_SENT]
     - snoozed_until IS NULL или уже истёк
     - последний AlertEvent для этого fb_ad_id был > interval * 10 сек назад
     """
@@ -685,7 +717,13 @@ async def _collect_reminder_alerts(interval_seconds: int) -> list[AlertCandidate
     async with factory() as session:
         result = await session.execute(
             select(AdSnapshot).where(
-                AdSnapshot.alert_state.in_([AlertState.WARNING_SENT, AlertState.STOP_SENT]),
+                AdSnapshot.alert_state.in_(
+                    [
+                        AlertState.EARLY_SIGNAL_SENT,
+                        AlertState.WARNING_SENT,
+                        AlertState.STOP_SENT,
+                    ]
+                ),
             )
         )
         candidates = result.scalars().all()
@@ -709,11 +747,31 @@ async def _collect_reminder_alerts(interval_seconds: int) -> list[AlertCandidate
             if secs_since < reminder_threshold:
                 continue
 
-            # Строим AlertCandidate для напоминания
-            stage = (
-                AlertStage.STOP if snap.alert_state == AlertState.STOP_SENT else AlertStage.WARNING
+            last_event_result = await session.execute(
+                select(AlertEvent)
+                .where(AlertEvent.fb_ad_id == snap.fb_ad_id)
+                .order_by(AlertEvent.created_at.desc())
+                .limit(1)
             )
-            rule_codes = snap.stop_rule_codes or snap.warning_rule_codes or []
+            last_event = last_event_result.scalar_one_or_none()
+
+            # Строим AlertCandidate для напоминания
+            if snap.alert_state == AlertState.STOP_SENT:
+                stage = AlertStage.STOP
+                rule_codes = snap.stop_rule_codes or []
+            elif snap.alert_state == AlertState.WARNING_SENT:
+                stage = AlertStage.WARNING
+                rule_codes = snap.warning_rule_codes or []
+            else:
+                stage = AlertStage.EARLY_SIGNAL
+                rule_codes = snap.early_signal_rule_codes or []
+
+            rule_summaries = None
+            if last_event and isinstance(last_event.metrics_json, dict):
+                raw_summaries = last_event.metrics_json.get("rule_summaries")
+                if isinstance(raw_summaries, list) and raw_summaries:
+                    rule_summaries = [str(summary) for summary in raw_summaries]
+
             reminders.append(
                 AlertCandidate(
                     snapshot_id=snap.open_state_token or str(snap.id),
@@ -727,10 +785,22 @@ async def _collect_reminder_alerts(interval_seconds: int) -> list[AlertCandidate
                     offer_cpa=None,
                     stage=stage,
                     matched_rule_codes=rule_codes,
+                    reason_title=last_event.reason_title if last_event else None,
+                    reason_text=last_event.reason_text if last_event else None,
                     metrics_json={
                         "spend": str(snap.spend),
                         "clicks": snap.clicks,
                         "cpc": str(snap.cpc) if snap.cpc is not None else None,
+                        "outbound_clicks": snap.outbound_clicks,
+                        "outbound_ctr": str(snap.outbound_ctr) if snap.outbound_ctr is not None else None,
+                        "landing_page_views": snap.landing_page_views,
+                        "cost_per_landing_page_view": (
+                            str(snap.cost_per_landing_page_view)
+                            if snap.cost_per_landing_page_view is not None
+                            else None
+                        ),
+                        "cpm": str(snap.cpm) if snap.cpm is not None else None,
+                        "frequency": str(snap.frequency) if snap.frequency is not None else None,
                         "leads": snap.leads,
                         "cost_per_lead": str(snap.cost_per_lead)
                         if snap.cost_per_lead is not None
@@ -740,6 +810,7 @@ async def _collect_reminder_alerts(interval_seconds: int) -> list[AlertCandidate
                         if snap.cost_per_registration is not None
                         else None,
                         "deposits": snap.deposits,
+                        **({"rule_summaries": rule_summaries} if rule_summaries else {}),
                     },
                 )
             )
@@ -978,20 +1049,41 @@ async def observer_loop(
             rows = await _scroll_and_parse(page, parse_fn)
             logger.info("Observer: получено %s объявлений", len(rows))
 
+            resolved_rows = []
+            for row in rows:
+                offer_code = resolve_offer_code(row.ad_name, row.campaign_name, offers)
+                offer_data = offers.get(offer_code) if offer_code else None
+                resolved_rows.append((row, offer_code, offer_data))
+
+            cpm_baselines = compute_cpm_baselines_by_offer(
+                [item for item in resolved_rows if item[1]],
+                offer_code_getter=lambda item: item[1],
+                cpm_getter=lambda item: item[0].cpm,
+            )
+
             # 3. Оценка правил и сбор алертов + подготовка батча
             alerts_to_send: list[AlertCandidate] = []
             stop_alerts: list[AlertCandidate] = []  # для авто-стопа
             snapshot_batch: list[dict] = []
             now = datetime.now(UTC)
 
-            for row in rows:
+            for row, offer_code, offer_data in resolved_rows:
+                diagnostics = None
+                if offer_code and offer_data and offer_data.get("rule_config") is not None:
+                    diagnostics = build_ad_quality_diagnostics(
+                        cpm_value=row.cpm,
+                        cpm_baseline=cpm_baselines.get(offer_code),
+                        frequency_value=row.frequency,
+                        frequency_elevated_threshold=offer_data["rule_config"].frequency_elevated_threshold,
+                        frequency_critical_threshold=offer_data["rule_config"].frequency_critical_threshold,
+                    )
+
                 # Выключенные объявления не оцениваем — сбрасываем FSM и идём дальше
                 if row.delivery_status == "OFF":
                     current_state, _ = ad_states.get(row.fb_ad_id, (AlertState.NORMAL, None))
                     # Если объявление уже было в процессе отключения — фиксируем терминальное DISABLED.
                     off_state = resolve_off_alert_state(current_state)
                     ad_states[row.fb_ad_id] = (off_state, None)
-                    offer_code = resolve_offer_code(row.ad_name, row.campaign_name, offers)
                     offer_id = None
                     if offer_code and offer_code in offers:
                         offer_id = offers[offer_code]["offer"].id
@@ -1007,6 +1099,12 @@ async def observer_loop(
                             "spend": row.spend,
                             "clicks": row.clicks,
                             "cpc": row.cpc,
+                            "outbound_clicks": row.outbound_clicks,
+                            "outbound_ctr": row.outbound_ctr,
+                            "landing_page_views": row.landing_page_views,
+                            "cost_per_landing_page_view": row.cost_per_landing_page_view,
+                            "cpm": row.cpm,
+                            "frequency": row.frequency,
                             "leads": row.leads,
                             "cost_per_lead": row.cost_per_lead,
                             "registrations": row.registrations,
@@ -1014,6 +1112,7 @@ async def observer_loop(
                             "deposits": row.deposits,
                             "alert_state": off_state,
                             "current_stage": None,
+                            "early_signal_rule_codes": [],
                             "warning_rule_codes": [],
                             "stop_rule_codes": [],
                             "open_state_token": None,
@@ -1021,10 +1120,6 @@ async def observer_loop(
                         }
                     )
                     continue
-
-                # Матчинг оффера по названию
-                offer_code = resolve_offer_code(row.ad_name, row.campaign_name, offers)
-                offer_data = offers.get(offer_code) if offer_code else None
 
                 if offer_code is None:
                     logger.debug("Observer: %s — оффер не найден, пропуск", row.ad_name)
@@ -1087,6 +1182,12 @@ async def observer_loop(
                         "spend": row.spend,
                         "clicks": row.clicks,
                         "cpc": row.cpc,
+                        "outbound_clicks": row.outbound_clicks,
+                        "outbound_ctr": row.outbound_ctr,
+                        "landing_page_views": row.landing_page_views,
+                        "cost_per_landing_page_view": row.cost_per_landing_page_view,
+                        "cpm": row.cpm,
+                        "frequency": row.frequency,
                         "leads": row.leads,
                         "cost_per_lead": row.cost_per_lead,
                         "registrations": row.registrations,
@@ -1094,6 +1195,7 @@ async def observer_loop(
                         "deposits": row.deposits,
                         "alert_state": next_state,
                         "current_stage": evaluation.stage,
+                        "early_signal_rule_codes": evaluation.early_signal_rule_codes,
                         "warning_rule_codes": evaluation.warning_rule_codes,
                         "stop_rule_codes": evaluation.stop_rule_codes,
                         "open_state_token": token,
@@ -1103,13 +1205,10 @@ async def observer_loop(
 
                 # Собираем алерты для отправки
                 if should_emit and evaluation.stage is not None:
-                    codes = (
-                        evaluation.stop_rule_codes
-                        if evaluation.stage == AlertStage.STOP
-                        else evaluation.warning_rule_codes
-                    )
-                    matched_hits = (
-                        evaluation.stop_hits if evaluation.stage == AlertStage.STOP else evaluation.warning_hits
+                    diagnostics_text = (
+                        build_diagnostics_context_text(diagnostics)
+                        if diagnostics is not None
+                        else None
                     )
                     candidate = AlertCandidate(
                         snapshot_id=token or uuid.uuid4().hex,
@@ -1122,10 +1221,12 @@ async def observer_loop(
                         offer_name=offer_data["offer"].name if offer_data else None,
                         offer_cpa=str(offer_data["offer"].cpa_amount) if offer_data else None,
                         stage=evaluation.stage,
-                        matched_rule_codes=codes,
+                        matched_rule_codes=evaluation.matched_rule_codes,
+                        reason_title=evaluation.reason_title,
+                        reason_text=_compose_reason_text(evaluation.reason_text, diagnostics_text),
                         metrics_json=build_metrics_json(
                             row,
-                            rule_summaries=[hit.summary for hit in matched_hits],
+                            rule_summaries=[hit.summary for hit in evaluation.matched_hits],
                         ),
                     )
                     alerts_to_send.append(candidate)
@@ -1135,7 +1236,7 @@ async def observer_loop(
                         "AlertCandidate: %s | стадия=%s | правила=%s | fsm_было=%s",
                         row.ad_name,
                         evaluation.stage,
-                        codes,
+                        evaluation.matched_rule_codes,
                         current_state,
                     )
 
@@ -1342,7 +1443,7 @@ async def _send_alerts_to_telegram(
 ) -> None:
     """Отправляет алерты одному получателю — по одному сообщению на объявление."""
     for a in alerts:
-        alert_state = AlertState.CLAIMED if a.stage == AlertStage.STOP else AlertState.WARNING_SENT
+        alert_state = _state_for_emitted_stage(a.stage)
         item = TelegramAlertItem(
             snapshot_id=a.snapshot_id,
             fb_ad_id=a.fb_ad_id,
@@ -1353,6 +1454,8 @@ async def _send_alerts_to_telegram(
             stage=a.stage,
             alert_state=alert_state,
             matched_rule_codes=a.matched_rule_codes,
+            reason_title=a.reason_title,
+            reason_text=a.reason_text,
             metrics_json=a.metrics_json,
         )
         message = render_alert_message(stage=a.stage, items=[item])
@@ -1379,6 +1482,8 @@ async def _send_alerts_to_telegram(
                         stage=a.stage,
                         state=alert_state,
                         matched_rule_codes=a.matched_rule_codes,
+                        reason_title=a.reason_title,
+                        reason_text=a.reason_text,
                         metrics_json=a.metrics_json,
                         telegram_chat_id=chat_id,
                         telegram_message_id=sent_msg_id,

@@ -77,6 +77,9 @@ function ruleLabel(code) {
     regs_no_dep_stop: 'Реги без депозитов',
     spend_no_dep_range: 'Расход без депа',
     spend_with_dep_range: 'Расход с депозитом',
+    early_outbound_ctr_signal: 'Слабый CTR исходящих кликов',
+    early_lpv_ratio_signal: 'Слабая доходимость до лендинга',
+    early_cost_per_lpv_signal: 'Дорогой просмотр лендинга',
   };
   return map[code] || code;
 }
@@ -293,7 +296,7 @@ function DisableTasksSection({ tasks, onRetry }) {
     <div className="dashboard-section">
       <SectionHeader
         title="Очередь отключений"
-        hint="RUNNING, RETRYING и ошибки остаются рядом с первым экраном"
+        hint="Задачи в работе, повторы и ошибки остаются рядом с первым экраном"
         actions={<span className="badge badge--warning">{active.length}</span>}
       />
       <div className="disable-tasks-list">
@@ -346,17 +349,22 @@ function DisableTasksSection({ tasks, onRetry }) {
 }
 
 function LatestCriticalEventCard({ latestAlert, onNavigate }) {
-  const latestIsStop = latestAlert?.stage === 'STOP';
+  const latestStage = latestAlert?.stage;
+  const latestVariant = latestStage === 'STOP' ? 'stop' : latestStage === 'EARLY_SIGNAL' ? 'signal' : 'warning';
   const rules = latestAlert?.matched_rule_codes || [];
   const metrics = latestAlert?.metrics_json || {};
+  const stageLabel = latestStage === 'STOP' ? 'Стоп-алерт' : latestStage === 'EARLY_SIGNAL' ? 'Ранний сигнал' : 'Предупреждение';
+  const adsLink = latestStage === 'STOP' ? '/ads?state=STOP_SENT' : latestStage === 'EARLY_SIGNAL' ? '/ads?state=EARLY_SIGNAL_SENT' : '/ads?state=WARNING_SENT';
+  const reasonTitle = latestAlert?.reason_title || (rules.length > 0 ? rules.map(ruleLabel).join(' · ') : 'Причина не указана');
+  const reasonText = latestAlert?.reason_text || null;
 
   return (
     <div className="dashboard-section dashboard-section--compact">
       <SectionHeader
         title="Последнее событие"
-        hint="Последний warning или stop с причиной и быстрым переходом к объявлению"
+        hint="Последний ранний сигнал, предупреждение или стоп с причиной и быстрым переходом к объявлению"
       />
-      <div className={`latest-event ${latestIsStop ? 'latest-event--stop' : 'latest-event--warning'}`}>
+      <div className={`latest-event latest-event--${latestVariant}`}>
         {!latestAlert ? (
           <div className="latest-event__empty">Критичных событий пока нет</div>
         ) : (
@@ -364,7 +372,7 @@ function LatestCriticalEventCard({ latestAlert, onNavigate }) {
             <div className="latest-event__top">
               <div>
                 <div className="latest-event__status">
-                  {latestIsStop ? 'Стоп-алерт' : 'Предупреждение'} · {timeAgo(latestAlert.created_at)}
+                  {stageLabel} · {timeAgo(latestAlert.created_at)}
                 </div>
                 <div className="latest-event__name">{latestAlert.ad_name}</div>
               </div>
@@ -373,11 +381,12 @@ function LatestCriticalEventCard({ latestAlert, onNavigate }) {
             <div className="latest-event__meta">ID: {latestAlert.fb_ad_id}</div>
             <div className="latest-event__reason">
               <span>Причина</span>
-              <strong>{rules.length > 0 ? rules.map(ruleLabel).join(' · ') : 'Не указана'}</strong>
+              <strong>{reasonTitle}</strong>
             </div>
+            {reasonText && <div className="latest-event__reason-text">{reasonText}</div>}
             <div className="latest-event__metrics">
               <div className="latest-event__metric">
-                <span>Spend</span>
+                <span>Расход</span>
                 <strong>{formatMoney(metrics.spend)}</strong>
               </div>
               <div className="latest-event__metric">
@@ -395,14 +404,14 @@ function LatestCriticalEventCard({ latestAlert, onNavigate }) {
                 className="latest-event__action"
                 onClick={() => onNavigate('/ads?view=all&state=CLAIMED')}
               >
-                RUN
+                В обработку
               </button>
               <button
                 type="button"
                 className="latest-event__action latest-event__action--ghost"
-                onClick={() => onNavigate(latestIsStop ? '/ads?state=STOP_SENT' : '/ads?state=WARNING_SENT')}
+                onClick={() => onNavigate(adsLink)}
               >
-                Ads
+                К объявлениям
               </button>
             </div>
           </>
@@ -658,6 +667,7 @@ function CampaignFunnelTable({ rows, sortState, onSort }) {
 }
 
 const CHART_COLORS = {
+  signal: '#4d88ff',
   warning: '#ff9a20',
   stop: '#ff2b50',
   normal: '#00e896',
@@ -665,7 +675,7 @@ const CHART_COLORS = {
 };
 
 function AlertActivityChart({ data, period }) {
-  const hasData = data?.some((item) => item.warning > 0 || item.stop > 0);
+  const hasData = data?.some((item) => item.early_signal > 0 || item.warning > 0 || item.stop > 0);
   return (
     <div className="dashboard-chart-card">
       <div className="dashboard-chart-card__header">
@@ -694,6 +704,7 @@ function AlertActivityChart({ data, period }) {
               allowDecimals={false}
             />
             <Tooltip content={<ChartTooltip />} cursor={{ fill: 'rgba(77,136,255,0.06)' }} />
+            <Bar dataKey="early_signal" name="Ранний сигнал" fill={CHART_COLORS.signal} radius={[3, 3, 0, 0]} maxBarSize={20} />
             <Bar dataKey="warning" name="Предупреждение" fill={CHART_COLORS.warning} radius={[3, 3, 0, 0]} maxBarSize={20} />
             <Bar dataKey="stop" name="Стоп" fill={CHART_COLORS.stop} radius={[3, 3, 0, 0]} maxBarSize={20} />
           </BarChart>
@@ -1016,6 +1027,14 @@ export default function DashboardPage({ onNavigate }) {
           />
           <div className="stat-cards-grid stat-cards-grid--ops">
             <StatCard
+              value={formatCount(stats?.ads_in_early_signal ?? 0)}
+              label="Ранние сигналы"
+              icon="EAR"
+              variant={(stats?.ads_in_early_signal ?? 0) > 0 ? 'signal' : 'default'}
+              hint="Сигналы до лидов без авто-стопа"
+              onClick={() => navigate('/ads?view=all&state=EARLY_SIGNAL_SENT')}
+            />
+            <StatCard
               value={formatCount(stats?.ads_claimed ?? 0)}
               label="OFF не подтверждён"
               icon="OFF"
@@ -1026,9 +1045,9 @@ export default function DashboardPage({ onNavigate }) {
             <StatCard
               value={formatCount(health.activeCount)}
               label="Активная очередь"
-              icon="RUN"
+              icon="⏳"
               variant={health.activeCount > 0 ? 'warning' : 'default'}
-              hint="Задачи в статусах PENDING, RUNNING и RETRYING"
+              hint="Задачи в очереди, в работе и на повторе"
               onClick={() => navigate('/ads?view=all&state=CLAIMED')}
             />
             <StatCard
@@ -1036,7 +1055,7 @@ export default function DashboardPage({ onNavigate }) {
               label="Зависли > 5м"
               icon="STL"
               variant={health.staleCount > 0 ? 'stop' : 'default'}
-              hint="RUNNING без подтверждения OFF дольше 5 минут"
+              hint="В работе без подтверждённого OFF дольше 5 минут"
             />
             <StatCard
               value={formatCount(stats?.ads_disabled_today ?? 0)}

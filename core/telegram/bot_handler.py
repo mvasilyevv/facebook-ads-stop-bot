@@ -44,6 +44,7 @@ logger = logging.getLogger(__name__)
 
 # Иконки состояний объявлений
 _STATE_ICONS: dict[AlertState, str] = {
+    AlertState.EARLY_SIGNAL_SENT: "🔎",
     AlertState.STOP_SENT: "🛑",
     AlertState.WARNING_SENT: "⚠️",
     AlertState.CLAIMED: "⏳",
@@ -58,6 +59,9 @@ _RULE_LABELS: dict[str, str] = {
     "regs_no_dep_stop": "Реги без депозитов",
     "spend_no_dep_range": "Расход без депа",
     "spend_with_dep_range": "Расход с депом",
+    "early_outbound_ctr_signal": "Слабый CTR исходящих кликов",
+    "early_lpv_ratio_signal": "Слабая доходимость до лендинга",
+    "early_cost_per_lpv_signal": "Дорогой просмотр лендинга",
 }
 
 
@@ -71,7 +75,7 @@ def _key_metric_str(ad) -> str:
 
     Показывает CPC/CPL/CPR вместо расхода, если правило связано с этими метриками.
     """
-    rules = ad.stop_rule_codes or ad.warning_rule_codes or []
+    rules = ad.stop_rule_codes or ad.warning_rule_codes or ad.early_signal_rule_codes or []
     code = rules[0] if rules else ""
     if code == "cpc_stop":
         if ad.cpc is not None:
@@ -87,6 +91,18 @@ def _key_metric_str(ad) -> str:
         return f"расход ${ad.spend:.2f} (нет рег)"
     if code == "regs_no_dep_stop":
         return f"реги: {ad.registrations}, депы: 0"
+    if code == "early_outbound_ctr_signal":
+        if ad.outbound_ctr is not None:
+            return f"CTR исх. {ad.outbound_ctr:.2f}%"
+        return f"расход ${ad.spend:.2f}"
+    if code == "early_lpv_ratio_signal":
+        if ad.outbound_clicks:
+            return f"LPV {ad.landing_page_views}/{ad.outbound_clicks}"
+        return f"LPV {ad.landing_page_views}"
+    if code == "early_cost_per_lpv_signal":
+        if ad.cost_per_landing_page_view is not None:
+            return f"Цена LPV ${ad.cost_per_landing_page_view:.2f}"
+        return f"LPV {ad.landing_page_views}"
     return f"расход ${ad.spend:.2f}"
 
 
@@ -190,7 +206,13 @@ async def _render_start() -> tuple[str, dict]:
         alert_count = await session.scalar(
             select(func.count()).select_from(AdSnapshot).where(
                 in_batch,
-                AdSnapshot.alert_state.in_([AlertState.WARNING_SENT, AlertState.STOP_SENT]),
+                AdSnapshot.alert_state.in_(
+                    [
+                        AlertState.EARLY_SIGNAL_SENT,
+                        AlertState.WARNING_SENT,
+                        AlertState.STOP_SENT,
+                    ]
+                ),
             )
         ) or 0
 
@@ -265,6 +287,11 @@ async def _render_status() -> tuple[str, dict]:
                 in_batch, AdSnapshot.alert_state == AlertState.WARNING_SENT
             )
         ) or 0
+        ads_in_early_signal = await session.scalar(
+            select(func.count()).select_from(AdSnapshot).where(
+                in_batch, AdSnapshot.alert_state == AlertState.EARLY_SIGNAL_SENT
+            )
+        ) or 0
         ads_in_stop = await session.scalar(
             select(func.count()).select_from(AdSnapshot).where(
                 in_batch, AdSnapshot.alert_state == AlertState.STOP_SENT
@@ -300,6 +327,7 @@ async def _render_status() -> tuple[str, dict]:
         f"🕐 Последний скан: {last_scan_str}"
         f"{stale_warning}\n\n"
         f"📋 Активных объявлений: <b>{total_ads}</b>\n"
+        f"🔎 Ранних сигналов: <b>{ads_in_early_signal}</b>\n"
         f"⚠️ Предупреждений: <b>{ads_in_warning}</b>\n"
         f"🛑 Стоп-алертов: <b>{ads_in_stop}</b>\n"
         f"🚫 Отключено: <b>{ads_disabled}</b>\n"
@@ -330,7 +358,8 @@ async def _render_ads(page: int = 0) -> tuple[str, dict]:
         all_ads = result.scalars().all()
 
         has_alerts = any(
-            ad.alert_state in {AlertState.WARNING_SENT, AlertState.STOP_SENT}
+            ad.alert_state
+            in {AlertState.EARLY_SIGNAL_SENT, AlertState.WARNING_SENT, AlertState.STOP_SENT}
             for ad in all_ads
         )
 
@@ -351,7 +380,10 @@ async def _render_ads(page: int = 0) -> tuple[str, dict]:
     for ad in ads:
         icon = _STATE_ICONS.get(ad.alert_state, "✅")
         leads_str = str(ad.leads) if ad.leads else "—"
-        rules = [_RULE_LABELS.get(c, c) for c in (ad.stop_rule_codes or ad.warning_rule_codes or [])]
+        rules = [
+            _RULE_LABELS.get(c, c)
+            for c in (ad.stop_rule_codes or ad.warning_rule_codes or ad.early_signal_rule_codes or [])
+        ]
         rule_str = f" · {rules[0]}" if rules else ""
         lines.append(
             f"{icon} {html.escape(ad.ad_name)} · <b>${ad.spend:.2f}</b>"
@@ -373,7 +405,13 @@ async def _render_alerts(page: int = 0) -> tuple[str, dict]:
         result = await session.execute(
             select(AdSnapshot)
             .where(
-                AdSnapshot.alert_state.in_([AlertState.WARNING_SENT, AlertState.STOP_SENT]),
+                AdSnapshot.alert_state.in_(
+                    [
+                        AlertState.EARLY_SIGNAL_SENT,
+                        AlertState.WARNING_SENT,
+                        AlertState.STOP_SENT,
+                    ]
+                ),
                 AdSnapshot.last_observed_at >= batch_start,
             )
             .order_by(AdSnapshot.campaign_name, AdSnapshot.adset_name, AdSnapshot.spend.desc())
@@ -381,14 +419,14 @@ async def _render_alerts(page: int = 0) -> tuple[str, dict]:
         all_ads = result.scalars().all()
 
     if not all_ads:
-        return "⚠️ <b>Алерты</b>\n\nАктивных алертов нет — всё в порядке.", _back_button()
+        return "⚠️ <b>Сигналы и алерты</b>\n\nАктивных сигналов нет — всё в порядке.", _back_button()
 
     groups = _group_by_adset(all_ads)
     total_pages = len(groups)
     page = min(max(0, page), total_pages - 1)
     campaign_name, adset_name, ads = groups[page]
 
-    lines = [f"⚠️ <b>Алерты</b> ({page + 1}/{total_pages})\n"]
+    lines = [f"⚠️ <b>Сигналы и алерты</b> ({page + 1}/{total_pages})\n"]
     if campaign_name:
         lines.append(f"📁 {html.escape(campaign_name)}")
     if adset_name:
@@ -396,12 +434,21 @@ async def _render_alerts(page: int = 0) -> tuple[str, dict]:
 
     for ad in ads:
         icon = _STATE_ICONS.get(ad.alert_state, "⚠️")
-        rules = [_RULE_LABELS.get(c, c) for c in (ad.stop_rule_codes or ad.warning_rule_codes or [])]
+        rules = [
+            _RULE_LABELS.get(c, c)
+            for c in (ad.stop_rule_codes or ad.warning_rule_codes or ad.early_signal_rule_codes or [])
+        ]
         rule_str = f" · {rules[0]}" if rules else ""
         metric_str = _key_metric_str(ad)
         lines.append(
             f"{icon} {html.escape(ad.ad_name)} · <b>{html.escape(metric_str)}</b>{html.escape(rule_str)}"
         )
+        if getattr(ad, "reason_title", None):
+            lines.append(f"   🧭 {html.escape(str(ad.reason_title))}")
+        if getattr(ad, "reason_text", None):
+            lines.append(f"   Причина: {html.escape(str(ad.reason_text))}")
+        if getattr(ad, "reason_title", None) or getattr(ad, "reason_text", None):
+            lines.append("")
 
     return "\n".join(lines), _ads_keyboard(ads, page, total_pages, has_alerts=True, prefix="alerts")
 
@@ -421,6 +468,12 @@ async def _render_ad_detail(fb_ad_id: str, source: str = "ads") -> tuple[str, di
     cpc_str = f"${ad.cpc:.2f}" if ad.cpc else "—"
     cpl_str = f" · CPL: ${ad.cost_per_lead:.2f}" if ad.cost_per_lead else ""
     cpr_str = f" · CPR: ${ad.cost_per_registration:.2f}" if ad.cost_per_registration else ""
+    outbound_ctr_str = f"{ad.outbound_ctr:.2f}%" if ad.outbound_ctr is not None else "—"
+    cost_per_lpv_str = (
+        f"${ad.cost_per_landing_page_view:.2f}" if ad.cost_per_landing_page_view is not None else "—"
+    )
+    cpm_str = f"${ad.cpm:.2f}" if ad.cpm is not None else "—"
+    frequency_str = f"{ad.frequency:.2f}" if ad.frequency is not None else "—"
 
     lines = [f"📢 <b>{html.escape(ad.ad_name)}</b>"]
     if ad.campaign_name:
@@ -434,6 +487,9 @@ async def _render_ad_detail(fb_ad_id: str, source: str = "ads") -> tuple[str, di
         f"📋 Лидов: {ad.leads}{cpl_str}",
         f"📝 Рег: {ad.registrations}{cpr_str}",
         f"💵 Депозитов: {ad.deposits}",
+        f"🌐 Исх. клики: {ad.outbound_clicks} · CTR исх.: {outbound_ctr_str}",
+        f"🧪 LPV: {ad.landing_page_views} · Цена LPV: {cost_per_lpv_str}",
+        f"📈 CPM: {cpm_str} · Частота: {frequency_str}",
         "",
     ]
     if ad.last_observed_at:
@@ -441,6 +497,7 @@ async def _render_ad_detail(fb_ad_id: str, source: str = "ads") -> tuple[str, di
 
     state_labels = {
         AlertState.NORMAL: "✅ Норма",
+        AlertState.EARLY_SIGNAL_SENT: "🔎 Ранний сигнал",
         AlertState.WARNING_SENT: "⚠️ Предупреждение",
         AlertState.STOP_SENT: "🛑 Стоп",
         AlertState.CLAIMED: "⏳ Отключение в очереди",
@@ -448,16 +505,32 @@ async def _render_ad_detail(fb_ad_id: str, source: str = "ads") -> tuple[str, di
     }
     lines.append(f"📊 Статус: {state_labels.get(ad.alert_state, str(ad.alert_state))}")
 
-    rule_codes = list(dict.fromkeys((ad.stop_rule_codes or []) + (ad.warning_rule_codes or [])))
+    rule_codes = list(
+        dict.fromkeys(
+            (ad.stop_rule_codes or [])
+            + (ad.warning_rule_codes or [])
+            + (ad.early_signal_rule_codes or [])
+        )
+    )
     if rule_codes:
         rules_str = ", ".join(_RULE_LABELS.get(c, c) for c in rule_codes)
         lines.append(f"🔍 Правила: {html.escape(rules_str)}")
+
+    if getattr(ad, "reason_title", None):
+        lines.append(f"🧭 Причина: {html.escape(str(ad.reason_title))}")
+    if getattr(ad, "reason_text", None):
+        lines.append(f"   {html.escape(str(ad.reason_text))}")
 
     text = "\n".join(lines)
 
     # Кнопки зависят от состояния
     action_row: list[dict] = []
-    if ad.alert_state in {AlertState.NORMAL, AlertState.WARNING_SENT, AlertState.STOP_SENT}:
+    if ad.alert_state in {
+        AlertState.NORMAL,
+        AlertState.EARLY_SIGNAL_SENT,
+        AlertState.WARNING_SENT,
+        AlertState.STOP_SENT,
+    }:
         action_row = [{"text": "🛑 Отключить", "callback_data": f"ad:disable:{ad.fb_ad_id}"}]
     elif ad.alert_state == AlertState.CLAIMED:
         action_row = [{"text": "⏳ В обработке", "callback_data": "noop"}]
@@ -478,7 +551,15 @@ async def _render_disable_all_confirm() -> tuple[str, dict]:
     async with factory() as session:
         result = await session.execute(
             select(AdSnapshot)
-            .where(AdSnapshot.alert_state.in_([AlertState.WARNING_SENT, AlertState.STOP_SENT]))
+            .where(
+                AdSnapshot.alert_state.in_(
+                    [
+                        AlertState.EARLY_SIGNAL_SENT,
+                        AlertState.WARNING_SENT,
+                        AlertState.STOP_SENT,
+                    ]
+                )
+            )
             .order_by(AdSnapshot.spend.desc())
         )
         ads = result.scalars().all()
@@ -487,7 +568,10 @@ async def _render_disable_all_confirm() -> tuple[str, dict]:
         text = "✅ Нет объявлений с алертами для отключения"
         return text, _back_button()
 
-    lines = [f"🛑 <b>Отключить все объявления с алертами?</b>\n\nБудет создано {len(ads)} задач:\n"]
+    lines = [
+        f"🛑 <b>Отключить все объявления с активными сигналами?</b>\n\n"
+        f"Будет создано {len(ads)} задач:\n"
+    ]
     for ad in ads[:10]:
         icon = _STATE_ICONS.get(ad.alert_state, "")
         lines.append(f"{icon} {html.escape(ad.ad_name[:45])}")
@@ -545,6 +629,10 @@ async def _render_rules() -> tuple[str, dict]:
         "4️⃣ <b>Реги без депов</b> — если 5 рег и 0 депов → стоп\n"
         "5️⃣ <b>Расход без депа</b> — расход 50-70% CPA, нет депов → стоп\n"
         "6️⃣ <b>Расход с депом</b> — есть деп, расход 70-90% CPA → стоп\n\n"
+        "🔎 <b>Ранние сигналы</b> — отдельный тип уведомления до лидов:\n"
+        "• слабый CTR исходящих кликов\n"
+        "• слабая доходимость до лендинга\n"
+        "• дорогой просмотр лендинга\n\n"
         f"📉 Порог предупреждения: <b>{warning_pct}%</b> от стопа\n\n"
         "💡 Проценты и лимиты настраиваются через UI или индивидуально на оффер."
     )
@@ -578,7 +666,15 @@ async def _render_disabled(page: int = 0) -> tuple[str, dict]:
 
     for ad in ads:
         disabled_at = ad.updated_at.astimezone().strftime("%H:%M %d.%m") if ad.updated_at else "?"
-        rules = ", ".join(_RULE_LABELS.get(c, c) for c in (ad.stop_rule_codes or [])) or "—"
+        rules = (
+            ", ".join(
+                _RULE_LABELS.get(c, c)
+                for c in (
+                    ad.stop_rule_codes or ad.warning_rule_codes or ad.early_signal_rule_codes or []
+                )
+            )
+            or "—"
+        )
         lines.append(
             f"❌ {html.escape(ad.ad_name)} · {disabled_at}\n"
             f"   {html.escape(rules)}"
@@ -622,7 +718,7 @@ async def _render_help() -> tuple[str, dict]:
         "/tasks — Очередь задач на отключение\n\n"
         "Кнопка <b>«Отключить»</b> на алертах создаёт задачу на отключение через Playwright.\n"
         "Кнопка <b>«Включить (сброс)»</b> сбрасывает состояние в боте — "
-        "для реального включения в Facebook используйте Ads Manager."
+        "для реального включения в Facebook используйте Менеджер рекламы."
     )
     return text, _back_button()
 
@@ -803,7 +899,7 @@ async def handle_update(client: TelegramBotClient, update: dict) -> None:
                         f"📢 {html.escape(ad_name)}\n\n"
                         f"Бот будет снова мониторить это объявление.\n\n"
                         f"⚠️ Для фактического включения в Facebook — "
-                        f"активируйте объявление в Ads Manager вручную."
+                        f"активируйте объявление в Менеджере рекламы вручную."
                     ),
                     reply_markup={"inline_keyboard": [[
                         {"text": "◀️ К объявлениям", "callback_data": "cmd:ads"}
@@ -1039,7 +1135,13 @@ async def _execute_disable_all(*, tg_user_id: str, username: str) -> tuple[int, 
     async with factory() as session:
         result = await session.execute(
             select(AdSnapshot).where(
-                AdSnapshot.alert_state.in_([AlertState.WARNING_SENT, AlertState.STOP_SENT])
+                AdSnapshot.alert_state.in_(
+                    [
+                        AlertState.EARLY_SIGNAL_SENT,
+                        AlertState.WARNING_SENT,
+                        AlertState.STOP_SENT,
+                    ]
+                )
             )
         )
         ads = result.scalars().all()

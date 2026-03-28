@@ -11,7 +11,11 @@ from __future__ import annotations
 import logging
 import os
 
-from cryptography.fernet import Fernet, InvalidToken
+try:
+    from cryptography.fernet import Fernet, InvalidToken
+except ModuleNotFoundError:  # pragma: no cover - зависит от окружения
+    Fernet = None  # type: ignore[assignment]
+    InvalidToken = Exception  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +27,9 @@ def _get_fernet() -> Fernet:
     global _fernet
     if _fernet is not None:
         return _fernet
+
+    if Fernet is None:
+        raise RuntimeError("Библиотека cryptography не установлена")
 
     from core.config import get_settings
 

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Unit-тесты движка правил evaluator: все 6 стоп-метрик + spend-without-click нюанс."""
+"""Unit-тесты evaluator для лесенки funnel-логики и ранних сигналов."""
 
 from __future__ import annotations
 
@@ -12,16 +12,22 @@ from core.scanner.models import ScannedAdRow
 
 
 def _make_row(**kwargs) -> ScannedAdRow:
-    """Хелпер для создания строки с дефолтами."""
+    """Создаёт строку объявления с безопасными дефолтами."""
     defaults = {
-        "fb_ad_id": "123456",
-        "campaign_name": "test_campaign",
-        "adset_name": "test_adset",
-        "ad_name": "test_ad",
+        "fb_ad_id": "120241979860890176",
+        "campaign_name": "campaign",
+        "adset_name": "adset",
+        "ad_name": "DRC_CR2_CR015",
         "delivery_status": "ACTIVE",
         "spend": Decimal("0.00"),
         "clicks": 0,
         "cpc": None,
+        "outbound_clicks": 0,
+        "outbound_ctr": None,
+        "landing_page_views": 0,
+        "cost_per_landing_page_view": None,
+        "cpm": None,
+        "frequency": None,
         "leads": 0,
         "cost_per_lead": None,
         "registrations": 0,
@@ -33,263 +39,312 @@ def _make_row(**kwargs) -> ScannedAdRow:
 
 
 def _make_ctx(**kwargs) -> RuleContext:
-    """Хелпер для создания контекста с CPA=5$."""
+    """Создаёт контекст правил с CPA=5 и warning=80%."""
     defaults = {
         "cpa_amount": Decimal("5.00"),
         "warning_percent_of_stop": Decimal("80"),
+        "stop_percent_of_base": Decimal("100"),
     }
     defaults.update(kwargs)
     return RuleContext(**defaults)
 
 
-# === Правило 1: CPC > 2% CPA ===
-
-
-# Клик в пределах нормы → без алертов
-def test_cpc_within_limit():
-    row = _make_row(spend=Decimal("0.05"), clicks=1, cpc=Decimal("0.05"))
-    ctx = _make_ctx()
-    result = evaluate_stop_rules(row, ctx)
-    assert result.stage is None
-
-
-# CPC превышает стоп-порог (>0.10 при CPA=5$) → STOP
-def test_cpc_exceeds_stop_threshold():
+# Проверяем что на стадии клика срабатывает прямой STOP по дорогому CPC.
+def test_click_stage_returns_cpc_stop():
     row = _make_row(spend=Decimal("0.15"), clicks=1, cpc=Decimal("0.15"))
-    ctx = _make_ctx()
-    result = evaluate_stop_rules(row, ctx)
+
+    result = evaluate_stop_rules(row, _make_ctx())
+
     assert result.stage == AlertStage.STOP
-    assert any(h.code == "cpc_stop" for h in result.stop_hits)
+    assert result.matched_rule_codes == ["cpc_stop"]
 
 
-# CPC в зоне предупреждения (0.08-0.10 при CPA=5$) → WARNING
-def test_cpc_in_warning_zone():
-    row = _make_row(spend=Decimal("0.09"), clicks=1, cpc=Decimal("0.09"))
-    ctx = _make_ctx()
-    result = evaluate_stop_rules(row, ctx)
+# Проверяем что cent-level warning по CPC остаётся рабочим после округления до цента.
+def test_click_stage_returns_cpc_warning_after_cent_rounding():
+    row = _make_row(
+        spend=Decimal("0.06"),
+        clicks=1,
+        cpc=Decimal("0.06"),
+    )
+
+    result = evaluate_stop_rules(row, _make_ctx(stop_percent_of_base=Decimal("80")))
+
     assert result.stage == AlertStage.WARNING
-    assert any(h.code == "cpc_stop" for h in result.warning_hits)
+    assert result.matched_rule_codes == ["cpc_stop"]
 
 
-# Глобальный досрочный стоп 80% должен опускать CPA-порог и срабатывать раньше
-def test_cpc_stop_percent_of_base_triggers_earlier():
-    row = _make_row(spend=Decimal("0.09"), clicks=1, cpc=Decimal("0.09"))
-    ctx = _make_ctx(stop_percent_of_base=Decimal("80"))
-    result = evaluate_stop_rules(row, ctx)
-    assert result.stage == AlertStage.STOP
-    assert result.stop_hits[0].threshold == Decimal("0.08")
-    assert "0.08" in result.stop_hits[0].summary
-    assert "базовый 0.10" in result.stop_hits[0].summary
-
-
-# CPC 0.06 при warning 0.064 должен считаться предупреждением после округления до цента
-def test_cpc_reaches_warning_threshold_after_cent_rounding():
-    row = _make_row(spend=Decimal("0.06"), clicks=1, cpc=Decimal("0.06"))
-    ctx = _make_ctx(stop_percent_of_base=Decimal("80"))
-    result = evaluate_stop_rules(row, ctx)
-    assert result.stage == AlertStage.WARNING
-    assert any(h.code == "cpc_stop" for h in result.warning_hits)
-
-
-# === Нюанс: spend > порога при clicks=0 → стоп ===
-
-
-# Расход 0.12 при кликах=0 → первый клик будет > 0.10 → STOP
-def test_spend_without_click_triggers_stop():
+# Проверяем что без кликов работает pre-click guardrail по расходу.
+def test_click_stage_guardrail_without_clicks_triggers_stop():
     row = _make_row(spend=Decimal("0.12"), clicks=0, cpc=None)
-    ctx = _make_ctx()
-    result = evaluate_stop_rules(row, ctx)
+
+    result = evaluate_stop_rules(row, _make_ctx())
+
     assert result.stage == AlertStage.STOP
-    assert any(h.code == "cpc_stop" for h in result.stop_hits)
+    assert result.matched_rule_codes == ["cpc_stop"]
 
 
-# Расход 0.09 при кликах=0 → приближается к порогу → WARNING
-def test_spend_without_click_triggers_warning():
-    row = _make_row(spend=Decimal("0.09"), clicks=0, cpc=None)
-    ctx = _make_ctx()
-    result = evaluate_stop_rules(row, ctx)
-    assert result.stage == AlertStage.WARNING
-    assert any(h.code == "cpc_stop" for h in result.warning_hits)
-
-
-# === Правило 2: CPL > 10% CPA ===
-
-
-# Лид дороже порога (>0.50 при CPA=5$) → STOP
-def test_cpl_exceeds_stop():
+# Проверяем что после кликов, но без лидов, расход может эскалировать в следующий порог лида.
+def test_click_stage_escalates_to_lead_guardrail():
     row = _make_row(
-        spend=Decimal("0.60"),
-        leads=1,
-        cost_per_lead=Decimal("0.60"),
-        clicks=3,
-        cpc=Decimal("0.03"),
-    )
-    ctx = _make_ctx()
-    result = evaluate_stop_rules(row, ctx)
-    assert result.stage == AlertStage.STOP
-    assert any(h.code == "cpl_stop" for h in result.stop_hits)
-
-
-# Расход > порога лида (0.50), но лидов нет → STOP (spend-without-lead)
-def test_spend_without_lead_triggers_stop():
-    row = _make_row(
-        spend=Decimal("0.55"),
-        leads=0,
-        cost_per_lead=None,
-        clicks=3,
-        cpc=Decimal("0.03"),
-    )
-    ctx = _make_ctx()
-    result = evaluate_stop_rules(row, ctx)
-    assert result.stage == AlertStage.STOP
-    assert any(h.code == "cpl_stop" for h in result.stop_hits)
-
-
-# === Правило 3: CPR > 20% CPA ===
-
-
-# Регистрация дороже 1.00 при CPA=5$ → STOP
-def test_cpr_exceeds_stop():
-    row = _make_row(
-        spend=Decimal("1.50"),
-        registrations=1,
-        cost_per_registration=Decimal("1.50"),
-        clicks=5,
-        cpc=Decimal("0.03"),
-        leads=1,
-        cost_per_lead=Decimal("0.10"),
-    )
-    ctx = _make_ctx()
-    result = evaluate_stop_rules(row, ctx)
-    assert result.stage == AlertStage.STOP
-    assert any(h.code == "cpr_stop" for h in result.stop_hits)
-
-
-# === Правило 4: 5 рег без депозитов ===
-
-
-# 5 регистраций, 0 депозитов → STOP
-def test_five_regs_no_deposits_stop():
-    row = _make_row(
-        spend=Decimal("2.00"),
-        registrations=5,
-        deposits=0,
-        cost_per_registration=Decimal("0.40"),
+        spend=Decimal("0.50"),
         clicks=10,
-        cpc=Decimal("0.02"),
-        leads=5,
-        cost_per_lead=Decimal("0.10"),
+        cpc=Decimal("0.05"),
     )
-    ctx = _make_ctx()
-    result = evaluate_stop_rules(row, ctx)
+
+    result = evaluate_stop_rules(row, _make_ctx())
+
     assert result.stage == AlertStage.STOP
-    assert any(h.code == "regs_no_dep_stop" for h in result.stop_hits)
+    assert result.matched_rule_codes == ["cpl_stop"]
 
 
-# 4 регистрации, 0 депозитов → WARNING (80% от 5 = 4)
-def test_four_regs_no_deposits_warning():
+# Проверяем что наличие лида полностью подавляет правило клика.
+def test_lead_stage_suppresses_click_rule():
     row = _make_row(
-        spend=Decimal("1.60"),
-        registrations=4,
-        deposits=0,
-        cost_per_registration=Decimal("0.40"),
-        clicks=8,
-        cpc=Decimal("0.02"),
-        leads=4,
-        cost_per_lead=Decimal("0.10"),
+        spend=Decimal("0.20"),
+        clicks=1,
+        cpc=Decimal("0.20"),
+        leads=1,
+        cost_per_lead=Decimal("0.20"),
     )
-    ctx = _make_ctx()
-    result = evaluate_stop_rules(row, ctx)
-    assert result.stage == AlertStage.WARNING
-    assert any(h.code == "regs_no_dep_stop" for h in result.warning_hits)
+
+    result = evaluate_stop_rules(row, _make_ctx())
+
+    assert result.stage is None
+    assert result.matched_rule_codes == []
 
 
-# 5 регистраций, 1 депозит → НЕ срабатывает (есть депозит)
-def test_five_regs_with_deposit_no_trigger():
+# Проверяем что на стадии лида следующий spend guardrail сравнивается уже с порогом реги.
+def test_lead_stage_escalates_to_registration_guardrail():
     row = _make_row(
-        spend=Decimal("2.00"),
-        registrations=5,
-        deposits=1,
-        cost_per_registration=Decimal("0.40"),
+        spend=Decimal("1.00"),
         clicks=10,
-        cpc=Decimal("0.02"),
-        leads=5,
-        cost_per_lead=Decimal("0.10"),
+        cpc=Decimal("0.05"),
+        leads=2,
+        cost_per_lead=Decimal("0.20"),
     )
-    ctx = _make_ctx()
-    result = evaluate_stop_rules(row, ctx)
-    # Правило 4 не должно сработать, т.к. deposits=1
-    assert not any(h.code == "regs_no_dep_stop" for h in result.stop_hits)
+
+    result = evaluate_stop_rules(row, _make_ctx())
+
+    assert result.stage == AlertStage.STOP
+    assert result.matched_rule_codes == ["cpr_stop"]
 
 
-# === Правило 5: Расход 50-70% CPA, 0 депов, рега в норме ===
-
-
-# Расход 60% CPA=3.00, 0 депов, рега < порога → STOP
-def test_spend_no_dep_range_stop():
+# Проверяем что на стадии реги CPR имеет приоритет над более поздними правилами без депов.
+def test_registration_stage_prioritizes_cpr_before_other_rules():
     row = _make_row(
         spend=Decimal("3.00"),
-        registrations=3,
-        deposits=0,
-        cost_per_registration=Decimal("0.50"),
-        clicks=15,
-        cpc=Decimal("0.02"),
+        clicks=20,
+        cpc=Decimal("0.05"),
         leads=5,
-        cost_per_lead=Decimal("0.10"),
+        cost_per_lead=Decimal("0.30"),
+        registrations=5,
+        cost_per_registration=Decimal("1.20"),
+        deposits=0,
     )
-    ctx = _make_ctx()
-    result = evaluate_stop_rules(row, ctx)
-    assert any(h.code == "spend_no_dep_range" for h in result.stop_hits)
+
+    result = evaluate_stop_rules(row, _make_ctx())
+
+    assert result.stage == AlertStage.STOP
+    assert result.matched_rule_codes == ["cpr_stop"]
 
 
-# === Правило 6: Есть деп, расход 70-90% CPA ===
+# Проверяем что после нормальной цены реги включается правило 5 рег без депов раньше spend-range.
+def test_registration_stage_prioritizes_regs_without_dep_before_spend_range():
+    row = _make_row(
+        spend=Decimal("3.00"),
+        clicks=20,
+        cpc=Decimal("0.05"),
+        leads=5,
+        cost_per_lead=Decimal("0.30"),
+        registrations=5,
+        cost_per_registration=Decimal("0.50"),
+        deposits=0,
+    )
+
+    result = evaluate_stop_rules(row, _make_ctx())
+
+    assert result.stage == AlertStage.STOP
+    assert result.matched_rule_codes == ["regs_no_dep_stop"]
 
 
-# Расход 80% CPA=4.00, 1 депозит → STOP
-def test_spend_with_dep_range_stop():
+# Проверяем что spend-range без депов срабатывает только когда CPR ещё в норме.
+def test_registration_stage_falls_back_to_spend_without_dep_warning():
+    row = _make_row(
+        spend=Decimal("2.20"),
+        clicks=20,
+        cpc=Decimal("0.04"),
+        leads=5,
+        cost_per_lead=Decimal("0.25"),
+        registrations=3,
+        cost_per_registration=Decimal("0.50"),
+        deposits=0,
+    )
+
+    result = evaluate_stop_rules(row, _make_ctx())
+
+    assert result.stage == AlertStage.WARNING
+    assert result.matched_rule_codes == ["spend_no_dep_range"]
+
+
+# Проверяем что после первого депозита остаётся только депозитная ступень.
+def test_deposit_stage_uses_only_spend_with_dep_rule():
     row = _make_row(
         spend=Decimal("4.00"),
-        registrations=3,
-        deposits=1,
-        cost_per_registration=Decimal("0.50"),
         clicks=20,
-        cpc=Decimal("0.02"),
+        cpc=Decimal("0.05"),
         leads=5,
-        cost_per_lead=Decimal("0.10"),
+        cost_per_lead=Decimal("0.30"),
+        registrations=5,
+        cost_per_registration=Decimal("2.00"),
+        deposits=1,
     )
-    ctx = _make_ctx()
-    result = evaluate_stop_rules(row, ctx)
-    assert any(h.code == "spend_with_dep_range" for h in result.stop_hits)
+
+    result = evaluate_stop_rules(row, _make_ctx())
+
+    assert result.stage == AlertStage.STOP
+    assert result.matched_rule_codes == ["spend_with_dep_range"]
 
 
-# === Нет алертов — всё в норме ===
-
-
-# Все метрики в допустимой зоне → stage=None
-def test_all_metrics_ok():
+# Проверяем что ранний сигнал по CTR исходящих кликов работает до лида и раньше funnel-warning.
+def test_early_signal_outbound_ctr_triggers_before_leads():
     row = _make_row(
-        spend=Decimal("0.04"),
-        clicks=2,
-        cpc=Decimal("0.02"),
-        leads=1,
-        cost_per_lead=Decimal("0.04"),
-        registrations=1,
-        cost_per_registration=Decimal("0.04"),
-        deposits=0,
+        spend=Decimal("0.30"),
+        clicks=10,
+        cpc=Decimal("0.03"),
+        outbound_clicks=10,
+        outbound_ctr=Decimal("0.50"),
     )
-    ctx = _make_ctx()
-    result = evaluate_stop_rules(row, ctx)
+
+    result = evaluate_stop_rules(row, _make_ctx())
+
+    assert result.stage == AlertStage.EARLY_SIGNAL
+    assert result.matched_rule_codes == ["early_outbound_ctr_signal"]
+
+
+# Проверяем что gate по минимальному расходу для Outbound CTR берётся из явной конфигурации.
+def test_early_signal_outbound_ctr_respects_min_spend_gate():
+    row = _make_row(
+        spend=Decimal("0.30"),
+        clicks=10,
+        cpc=Decimal("0.03"),
+        outbound_clicks=10,
+        outbound_ctr=Decimal("0.50"),
+    )
+
+    result = evaluate_stop_rules(
+        row,
+        _make_ctx(
+            early_outbound_ctr_signal_min_spend_percent=Decimal("7"),
+            early_lpv_ratio_signal_enabled=False,
+            early_cost_per_lpv_signal_enabled=False,
+        ),
+    )
+
     assert result.stage is None
-    assert len(result.stop_hits) == 0
-    assert len(result.warning_hits) == 0
+    assert result.matched_rule_codes == []
 
 
-# === Отключённое правило не срабатывает ===
+# Проверяем что ранний сигнал по доходимости до лендинга срабатывает отдельно от warning/stop.
+def test_early_signal_lpv_ratio_triggers_before_leads():
+    row = _make_row(
+        spend=Decimal("0.20"),
+        clicks=10,
+        cpc=Decimal("0.02"),
+        outbound_clicks=10,
+        landing_page_views=3,
+    )
+
+    result = evaluate_stop_rules(row, _make_ctx())
+
+    assert result.stage == AlertStage.EARLY_SIGNAL
+    assert result.matched_rule_codes == ["early_lpv_ratio_signal"]
 
 
-# CPC > порога, но правило отключено → нет алерта
-def test_disabled_rule_does_not_trigger():
-    row = _make_row(spend=Decimal("0.15"), clicks=1, cpc=Decimal("0.15"))
-    ctx = _make_ctx(cpc_enabled=False)
-    result = evaluate_stop_rules(row, ctx)
-    assert not any(h.code == "cpc_stop" for h in result.stop_hits)
+# Проверяем что gate по количеству исходящих кликов для LPV ratio тоже задаётся явно.
+def test_early_signal_lpv_ratio_respects_min_outbound_clicks_gate():
+    row = _make_row(
+        spend=Decimal("0.20"),
+        clicks=10,
+        cpc=Decimal("0.02"),
+        outbound_clicks=10,
+        landing_page_views=3,
+    )
+
+    result = evaluate_stop_rules(
+        row,
+        _make_ctx(early_lpv_ratio_signal_min_outbound_clicks=12),
+    )
+
+    assert result.stage is None
+    assert result.matched_rule_codes == []
+
+
+# Проверяем что ранний сигнал по цене LPV срабатывает только на ранней стадии.
+def test_early_signal_cost_per_lpv_triggers_before_leads():
+    row = _make_row(
+        spend=Decimal("0.30"),
+        clicks=10,
+        cpc=Decimal("0.03"),
+        outbound_clicks=4,
+        landing_page_views=2,
+        cost_per_landing_page_view=Decimal("0.30"),
+    )
+
+    result = evaluate_stop_rules(row, _make_ctx())
+
+    assert result.stage == AlertStage.EARLY_SIGNAL
+    assert result.matched_rule_codes == ["early_cost_per_lpv_signal"]
+
+
+# Проверяем что gate по минимальному числу LPV не зашит и читается из конфигурации.
+def test_early_signal_cost_per_lpv_respects_min_views_gate():
+    row = _make_row(
+        spend=Decimal("0.30"),
+        clicks=10,
+        cpc=Decimal("0.03"),
+        outbound_clicks=4,
+        landing_page_views=2,
+        cost_per_landing_page_view=Decimal("0.30"),
+    )
+
+    result = evaluate_stop_rules(
+        row,
+        _make_ctx(early_cost_per_lpv_signal_min_views=3),
+    )
+
+    assert result.stage is None
+    assert result.matched_rule_codes == []
+
+
+# Проверяем что CPM и частота сами по себе не создают алерт или ранний сигнал.
+def test_cpm_and_frequency_are_diagnostics_only():
+    row = _make_row(
+        spend=Decimal("0.10"),
+        clicks=5,
+        cpc=Decimal("0.02"),
+        cpm=Decimal("99.00"),
+        frequency=Decimal("4.00"),
+    )
+
+    result = evaluate_stop_rules(row, _make_ctx())
+
+    assert result.stage is None
+    assert result.matched_rule_codes == []
+
+
+# Проверяем что при наличии лида ранние сигналы полностью подавляются более глубокой стадией.
+def test_early_signals_are_suppressed_after_first_lead():
+    row = _make_row(
+        spend=Decimal("0.30"),
+        clicks=10,
+        cpc=Decimal("0.03"),
+        outbound_clicks=10,
+        outbound_ctr=Decimal("0.50"),
+        leads=1,
+        cost_per_lead=Decimal("0.30"),
+    )
+
+    result = evaluate_stop_rules(row, _make_ctx())
+
+    assert result.stage is None
+    assert result.matched_rule_codes == []

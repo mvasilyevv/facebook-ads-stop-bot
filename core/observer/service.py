@@ -28,6 +28,8 @@ class AlertCandidate:
     offer_cpa: str | None
     stage: AlertStage
     matched_rule_codes: list[str]
+    reason_title: str | None
+    reason_text: str | None
     metrics_json: dict[str, Any]
 
 
@@ -65,6 +67,21 @@ def build_rule_context(
         spend_with_dep_enabled=bool(rule_config.spend_with_dep_enabled),
         spend_with_dep_from_percent=Decimal(rule_config.spend_with_dep_from_percent),
         spend_with_dep_to_percent=Decimal(rule_config.spend_with_dep_to_percent),
+        early_outbound_ctr_signal_enabled=bool(rule_config.early_outbound_ctr_signal_enabled),
+        early_outbound_ctr_signal_min_percent=Decimal(rule_config.early_outbound_ctr_signal_min_percent),
+        early_outbound_ctr_signal_min_spend_percent=Decimal(
+            rule_config.early_outbound_ctr_signal_min_spend_percent
+        ),
+        early_lpv_ratio_signal_enabled=bool(rule_config.early_lpv_ratio_signal_enabled),
+        early_lpv_ratio_signal_min_percent=Decimal(rule_config.early_lpv_ratio_signal_min_percent),
+        early_lpv_ratio_signal_min_outbound_clicks=int(
+            rule_config.early_lpv_ratio_signal_min_outbound_clicks
+        ),
+        early_cost_per_lpv_signal_enabled=bool(rule_config.early_cost_per_lpv_signal_enabled),
+        early_cost_per_lpv_signal_percent_of_cpa=Decimal(
+            rule_config.early_cost_per_lpv_signal_percent_of_cpa
+        ),
+        early_cost_per_lpv_signal_min_views=int(rule_config.early_cost_per_lpv_signal_min_views),
     )
 
 
@@ -78,7 +95,7 @@ def evaluate_row(
 ) -> RuleEvaluation:
     """Оценивает одну строку. Без оффера — пропуск."""
     if offer_cpa is None or rule_config is None:
-        return RuleEvaluation(stage=None, warning_hits=(), stop_hits=())
+        return RuleEvaluation(stage=None, early_signal_hits=(), warning_hits=(), stop_hits=())
     ctx = build_rule_context(
         cpa_amount=offer_cpa,
         warning_percent_of_stop=warning_percent_of_stop,
@@ -98,6 +115,16 @@ def build_metrics_json(
         "spend": f"{Decimal(row.spend):.2f}",
         "clicks": row.clicks,
         "cpc": f"{Decimal(row.cpc):.4f}" if row.cpc is not None else None,
+        "outbound_clicks": row.outbound_clicks,
+        "outbound_ctr": f"{Decimal(row.outbound_ctr):.4f}" if row.outbound_ctr is not None else None,
+        "landing_page_views": row.landing_page_views,
+        "cost_per_landing_page_view": (
+            f"{Decimal(row.cost_per_landing_page_view):.4f}"
+            if row.cost_per_landing_page_view is not None
+            else None
+        ),
+        "cpm": f"{Decimal(row.cpm):.4f}" if row.cpm is not None else None,
+        "frequency": f"{Decimal(row.frequency):.4f}" if row.frequency is not None else None,
         "leads": row.leads,
         "cost_per_lead": f"{Decimal(row.cost_per_lead):.4f}"
         if row.cost_per_lead is not None
