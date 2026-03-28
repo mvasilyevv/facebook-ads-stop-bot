@@ -78,3 +78,34 @@ def test_render_alert_message_for_early_signal():
     assert "Слабая доходимость до лендинга" in message.text
     assert "Переходы теряются" in message.text
     assert "CPM: $7.5000" in message.text
+
+
+# Проверяем что STOP больше не обещает снузер для авто-отключения
+def test_render_alert_message_omits_snooze_for_stop():
+    item = TelegramAlertItem(
+        snapshot_id="snap-3",
+        fb_ad_id="ad-3",
+        ad_name="DRC_CR2_CR019",
+        campaign_name="Campaign C",
+        adset_name="Adset C",
+        offer_code="offer-c",
+        stage=AlertStage.STOP,
+        alert_state=AlertState.CLAIMED,
+        matched_rule_codes=["cpc_stop"],
+        reason_title="Дорогой клик",
+        reason_text="Цена клика вышла за допустимую границу.",
+        metrics_json={
+            "spend": "0.50",
+            "clicks": 1,
+            "cpc": "0.5000",
+            "leads": 0,
+            "registrations": 0,
+            "deposits": 0,
+        },
+    )
+
+    message = render_alert_message(stage=AlertStage.STOP, items=[item])
+
+    assert "Оставить на 1 час" not in message.text
+    assert message.reply_markup is not None
+    assert len(message.reply_markup["inline_keyboard"]) == 1

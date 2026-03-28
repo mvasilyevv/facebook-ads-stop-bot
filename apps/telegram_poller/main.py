@@ -24,11 +24,12 @@ async def poller_loop(client: TelegramBotClient) -> None:
         try:
             updates = await client.get_updates(offset=offset)
             for update in updates:
-                offset = update["update_id"] + 1
                 try:
                     await handle_update(client, update)
                 except Exception:
                     logger.exception("Ошибка обработки update %s", update.get("update_id"))
+                    continue
+                offset = update["update_id"] + 1
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -48,9 +49,7 @@ async def _load_bot_token() -> str:
     try:
         async with factory() as session:
             result = await session.execute(
-                select(TelegramSettings).where(
-                    TelegramSettings.singleton_key == "default"
-                )
+                select(TelegramSettings).where(TelegramSettings.singleton_key == "default")
             )
             row = result.scalar_one_or_none()
             if row and row.bot_token_encrypted:

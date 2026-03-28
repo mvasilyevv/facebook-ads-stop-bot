@@ -87,12 +87,15 @@ async def test_batch_save_snapshots_single_query():
         for i in range(50)
     ]
 
-    with patch(
-        "apps.observer_worker.main.get_session_factory",
-        return_value=mock_factory,
-    ), patch(
-        "apps.observer_worker.main._maybe_rollover_cabinet_day",
-        new=AsyncMock(),
+    with (
+        patch(
+            "apps.observer_worker.main.get_session_factory",
+            return_value=mock_factory,
+        ),
+        patch(
+            "apps.observer_worker.main._maybe_rollover_cabinet_day",
+            new=AsyncMock(),
+        ),
     ):
         await batch_save_snapshots(snapshot_data)
 
@@ -236,7 +239,9 @@ async def test_send_alerts_to_telegram_persists_early_signal_reason():
     mock_factory = MagicMock(return_value=mock_session)
 
     with (
-        patch("apps.observer_worker.main.render_alert_message", return_value=sent_message) as render_mock,
+        patch(
+            "apps.observer_worker.main.render_alert_message", return_value=sent_message
+        ) as render_mock,
         patch("apps.observer_worker.main.get_session_factory", return_value=mock_factory),
     ):
         await _send_alerts_to_telegram(fake_client, "chat-1", [candidate])
@@ -254,6 +259,47 @@ async def test_send_alerts_to_telegram_persists_early_signal_reason():
     assert added_event.telegram_chat_id == "chat-1"
     assert added_event.telegram_message_id == 777
     mock_session.commit.assert_awaited_once()
+
+
+# Проверяем что при сбое Telegram алерт не сохраняется как доставленный
+@pytest.mark.asyncio
+async def test_send_alerts_to_telegram_skips_persist_on_failure():
+    """Если Telegram не принял сообщение, AlertEvent сохранять нельзя."""
+    from apps.observer_worker.main import _send_alerts_to_telegram
+
+    candidate = MagicMock()
+    candidate.snapshot_id = "token-2"
+    candidate.fb_ad_id = "ad_failed"
+    candidate.ad_name = "Проблемный алерт"
+    candidate.campaign_name = "Campaign"
+    candidate.adset_name = "Adset"
+    candidate.offer_code = "DRC"
+    candidate.stage = AlertStage.WARNING
+    candidate.matched_rule_codes = ["cpl_stop"]
+    candidate.reason_title = "Дорогой лид"
+    candidate.reason_text = "Цена лида вышла за допустимую границу."
+    candidate.metrics_json = {"spend": "12.34"}
+    candidate.offer_id = None
+
+    fake_client = AsyncMock()
+    fake_client.send_message = AsyncMock(side_effect=RuntimeError("Сбой Telegram"))
+
+    mock_session = AsyncMock()
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=False)
+    mock_session.add = MagicMock()
+    mock_session.commit = AsyncMock()
+
+    mock_factory = MagicMock(return_value=mock_session)
+
+    with (
+        patch("apps.observer_worker.main.get_session_factory", return_value=mock_factory),
+    ):
+        await _send_alerts_to_telegram(fake_client, "chat-1", [candidate])
+
+    fake_client.send_message.assert_awaited_once()
+    mock_session.add.assert_not_called()
+    mock_session.commit.assert_not_called()
 
 
 # Проверяем что пустой список не вызывает запросов
@@ -346,6 +392,48 @@ def test_resolve_off_alert_state_keeps_disabled_for_claimed_and_disabled():
     assert resolve_off_alert_state(AlertState.CLAIMED) == AlertState.DISABLED
     assert resolve_off_alert_state(AlertState.DISABLED) == AlertState.DISABLED
     assert resolve_off_alert_state(AlertState.NORMAL) == AlertState.NORMAL
+
+
+# Проверяем что Vision-настройки для запуска берутся из БД
+@pytest.mark.asyncio
+async def test_load_vision_settings_for_runtime_prefers_db():
+    """Если в БД есть Vision-настройки, они должны перекрывать fallback env."""
+    from apps.observer_worker.main import load_vision_settings_for_runtime
+
+    with patch(
+        "apps.observer_worker.main.load_vision_settings_from_db",
+        new=AsyncMock(return_value=("db-token", "http://db:3030", "db-profile")),
+    ):
+        x_token, api_url, profile_id = await load_vision_settings_for_runtime(
+            fallback_x_token="env-token",
+            fallback_api_url="http://env:3030",
+            fallback_profile_id="env-profile",
+        )
+
+    assert x_token == "db-token"
+    assert api_url == "http://db:3030"
+    assert profile_id == "db-profile"
+
+
+# Проверяем что при пустой БД Vision-настройки берутся из fallback env
+@pytest.mark.asyncio
+async def test_load_vision_settings_for_runtime_uses_fallback():
+    """Если в БД нет Vision-настроек, нужно использовать fallback значения."""
+    from apps.observer_worker.main import load_vision_settings_for_runtime
+
+    with patch(
+        "apps.observer_worker.main.load_vision_settings_from_db",
+        new=AsyncMock(return_value=("", "", "")),
+    ):
+        x_token, api_url, profile_id = await load_vision_settings_for_runtime(
+            fallback_x_token="env-token",
+            fallback_api_url="http://env:3030",
+            fallback_profile_id="env-profile",
+        )
+
+    assert x_token == "env-token"
+    assert api_url == "http://env:3030"
+    assert profile_id == "env-profile"
 
 
 # Проверяем что активная очередь отключения ставит observer на паузу
@@ -460,6 +548,46 @@ async def test_maybe_rollover_cabinet_day_waits_for_zero_scan():
 
 
 # --- Тесты reconnect (задача 2.4) ---
+
+
+# Проверяем что reconnect берёт актуальные Vision-настройки из БД
+@pytest.mark.asyncio
+async def test_reconnect_browser_manager_uses_db_vision_settings():
+    """При reconnect должен создаваться новый VisionClient с настройками из БД."""
+    from apps.observer_worker.main import reconnect_browser_manager_with_vision_settings
+
+    old_vision = MagicMock()
+    old_vision._headers = {"X-Token": "old-token"}
+    old_vision._base = "http://old:3030"
+    old_vision.close = AsyncMock()
+
+    mock_page = AsyncMock()
+    browser_manager = AsyncMock()
+    browser_manager._vision = old_vision
+    browser_manager._profile_id = "old-profile"
+    browser_manager._folder_id = "old-folder"
+    browser_manager.get_page = AsyncMock(return_value=mock_page)
+
+    new_vision = MagicMock()
+
+    with (
+        patch(
+            "apps.observer_worker.main.load_vision_settings_from_db",
+            new=AsyncMock(return_value=("db-token", "http://db:3030", "db-profile")),
+        ),
+        patch("apps.observer_worker.main.VisionClient", return_value=new_vision) as vision_cls,
+    ):
+        page = await reconnect_browser_manager_with_vision_settings(browser_manager)
+
+    vision_cls.assert_called_once_with(x_token="db-token", base_url="http://db:3030")
+    browser_manager.disconnect.assert_awaited_once()
+    old_vision.close.assert_awaited_once()
+    browser_manager.connect.assert_awaited_once()
+    browser_manager.get_page.assert_awaited_once()
+    assert browser_manager._vision is new_vision
+    assert browser_manager._profile_id == "db-profile"
+    assert browser_manager._folder_id is None
+    assert page is mock_page
 
 
 # Проверяем retry-логику при ошибке браузера

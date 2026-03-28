@@ -27,6 +27,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 
 from core.db import get_session_factory
 from core.domain import AlertState
@@ -41,6 +42,9 @@ from core.models import (
 from core.telegram.client import TelegramBotClient
 
 logger = logging.getLogger(__name__)
+
+LIVE_BATCH_WINDOW = timedelta(minutes=5)
+AUTH_REQUIRED_TEXT = "🔒 Сначала авторизуйтесь через /start <код> из настроек UI."
 
 # Иконки состояний объявлений
 _STATE_ICONS: dict[AlertState, str] = {
@@ -135,7 +139,48 @@ def _back_button(target: str = "start") -> dict:
         "alerts": "◀️ К алертам",
         "disabled": "◀️ К отключённым",
     }
-    return {"inline_keyboard": [[{"text": labels.get(target, "◀️ Назад"), "callback_data": f"cmd:{target}"}]]}
+    return {
+        "inline_keyboard": [
+            [{"text": labels.get(target, "◀️ Назад"), "callback_data": f"cmd:{target}"}]
+        ]
+    }
+
+
+async def _load_current_live_batch_bounds(session) -> tuple[datetime | None, datetime | None]:
+    """Возвращает границы текущего живого батча сканирования."""
+    last_scan = await session.scalar(select(func.max(AdSnapshot.last_observed_at)))
+    if last_scan is None:
+        return None, None
+    return last_scan, last_scan - LIVE_BATCH_WINDOW
+
+
+async def _is_chat_authorized(chat_id: str) -> bool:
+    """Проверяет, что chat_id имеет доступ к Telegram-контурe."""
+    factory = get_session_factory()
+    async with factory() as session:
+        settings = await session.scalar(
+            select(TelegramSettings).where(TelegramSettings.singleton_key == "default")
+        )
+        if settings and settings.is_authorized and settings.chat_id == chat_id:
+            return True
+
+        recipient = await session.scalar(
+            select(TelegramRecipient).where(
+                TelegramRecipient.chat_id == chat_id,
+                TelegramRecipient.is_active.is_(True),
+            )
+        )
+        return recipient is not None
+
+
+def _auth_required_text() -> str:
+    """Сообщение для неавторизованного пользователя."""
+    return AUTH_REQUIRED_TEXT
+
+
+def _disable_task_idempotency_key(snapshot) -> str:
+    """Строит стабильный ключ идемпотентности для задачи отключения."""
+    return f"disable:{snapshot.id}"
 
 
 def _ads_keyboard(
@@ -153,12 +198,14 @@ def _ads_keyboard(
     for ad in ads:
         icon = _STATE_ICONS.get(ad.alert_state, "✅")
         short = ad.ad_name[:22].rstrip()
-        ad_buttons.append({
-            "text": f"{icon} {short}",
-            "callback_data": f"ad:detail:{ad.fb_ad_id}:{prefix}",
-        })
+        ad_buttons.append(
+            {
+                "text": f"{icon} {short}",
+                "callback_data": f"ad:detail:{ad.fb_ad_id}:{prefix}",
+            }
+        )
     for i in range(0, len(ad_buttons), 2):
-        rows.append(ad_buttons[i:i + 2])
+        rows.append(ad_buttons[i : i + 2])
 
     # Навигация
     nav = []
@@ -192,29 +239,32 @@ async def _render_start() -> tuple[str, dict]:
         is_scanning = obs.is_scanning_enabled if obs else False
         interval = obs.interval_seconds if obs else 90
 
-        last_scan = await session.scalar(select(func.max(AdSnapshot.last_observed_at)))
-
-        if last_scan:
-            batch_start = last_scan - timedelta(minutes=5)
-            in_batch = AdSnapshot.last_observed_at >= batch_start
-        else:
+        last_scan, batch_start = await _load_current_live_batch_bounds(session)
+        if last_scan is None or batch_start is None:
             in_batch = AdSnapshot.last_observed_at.isnot(None)
+        else:
+            in_batch = AdSnapshot.last_observed_at >= batch_start
 
-        active_count = await session.scalar(
-            select(func.count()).select_from(AdSnapshot).where(in_batch)
-        ) or 0
-        alert_count = await session.scalar(
-            select(func.count()).select_from(AdSnapshot).where(
-                in_batch,
-                AdSnapshot.alert_state.in_(
-                    [
-                        AlertState.EARLY_SIGNAL_SENT,
-                        AlertState.WARNING_SENT,
-                        AlertState.STOP_SENT,
-                    ]
-                ),
+        active_count = (
+            await session.scalar(select(func.count()).select_from(AdSnapshot).where(in_batch)) or 0
+        )
+        alert_count = (
+            await session.scalar(
+                select(func.count())
+                .select_from(AdSnapshot)
+                .where(
+                    in_batch,
+                    AdSnapshot.alert_state.in_(
+                        [
+                            AlertState.EARLY_SIGNAL_SENT,
+                            AlertState.WARNING_SENT,
+                            AlertState.STOP_SENT,
+                        ]
+                    ),
+                )
             )
-        ) or 0
+            or 0
+        )
 
     # Свежесть данных
     if last_scan:
@@ -271,40 +321,48 @@ async def _render_status() -> tuple[str, dict]:
         warning_pct = int(obs.warning_percent_of_stop) if obs else 80
         is_scanning = obs.is_scanning_enabled if obs else False
 
-        last_scan = await session.scalar(select(func.max(AdSnapshot.last_observed_at)))
-
-        if last_scan:
-            batch_start = last_scan - timedelta(minutes=5)
-            in_batch = AdSnapshot.last_observed_at >= batch_start
-        else:
+        last_scan, batch_start = await _load_current_live_batch_bounds(session)
+        if last_scan is None or batch_start is None:
             in_batch = AdSnapshot.last_observed_at.isnot(None)
+        else:
+            in_batch = AdSnapshot.last_observed_at >= batch_start
 
-        total_ads = await session.scalar(
-            select(func.count()).select_from(AdSnapshot).where(in_batch)
-        ) or 0
-        ads_in_warning = await session.scalar(
-            select(func.count()).select_from(AdSnapshot).where(
-                in_batch, AdSnapshot.alert_state == AlertState.WARNING_SENT
-            )
-        ) or 0
-        ads_in_early_signal = await session.scalar(
-            select(func.count()).select_from(AdSnapshot).where(
-                in_batch, AdSnapshot.alert_state == AlertState.EARLY_SIGNAL_SENT
-            )
-        ) or 0
-        ads_in_stop = await session.scalar(
-            select(func.count()).select_from(AdSnapshot).where(
-                in_batch, AdSnapshot.alert_state == AlertState.STOP_SENT
-            )
-        ) or 0
-        ads_disabled = await session.scalar(
-            select(func.count()).select_from(AdSnapshot).where(
-                in_batch, AdSnapshot.delivery_status == "OFF"
-            )
-        ) or 0
-        total_spend_val = await session.scalar(
-            select(func.sum(AdSnapshot.spend)).where(in_batch)
+        total_ads = (
+            await session.scalar(select(func.count()).select_from(AdSnapshot).where(in_batch)) or 0
         )
+        ads_in_warning = (
+            await session.scalar(
+                select(func.count())
+                .select_from(AdSnapshot)
+                .where(in_batch, AdSnapshot.alert_state == AlertState.WARNING_SENT)
+            )
+            or 0
+        )
+        ads_in_early_signal = (
+            await session.scalar(
+                select(func.count())
+                .select_from(AdSnapshot)
+                .where(in_batch, AdSnapshot.alert_state == AlertState.EARLY_SIGNAL_SENT)
+            )
+            or 0
+        )
+        ads_in_stop = (
+            await session.scalar(
+                select(func.count())
+                .select_from(AdSnapshot)
+                .where(in_batch, AdSnapshot.alert_state == AlertState.STOP_SENT)
+            )
+            or 0
+        )
+        ads_disabled = (
+            await session.scalar(
+                select(func.count())
+                .select_from(AdSnapshot)
+                .where(in_batch, AdSnapshot.delivery_status == "OFF")
+            )
+            or 0
+        )
+        total_spend_val = await session.scalar(select(func.sum(AdSnapshot.spend)).where(in_batch))
         total_spend = f"${total_spend_val:.2f}" if total_spend_val else "$0.00"
 
     if last_scan:
@@ -342,11 +400,9 @@ async def _render_ads(page: int = 0) -> tuple[str, dict]:
     """Активные объявления, сгруппированные по кампании → адсету. Страница = 1 адсет."""
     factory = get_session_factory()
     async with factory() as session:
-        last_scan = await session.scalar(select(func.max(AdSnapshot.last_observed_at)))
-        if not last_scan:
+        last_scan, batch_start = await _load_current_live_batch_bounds(session)
+        if last_scan is None or batch_start is None:
             return "📋 <b>Объявления</b>\n\nПока нет данных. Запустите observer.", _back_button()
-
-        batch_start = last_scan - timedelta(minutes=5)
         result = await session.execute(
             select(AdSnapshot)
             .where(
@@ -382,7 +438,9 @@ async def _render_ads(page: int = 0) -> tuple[str, dict]:
         leads_str = str(ad.leads) if ad.leads else "—"
         rules = [
             _RULE_LABELS.get(c, c)
-            for c in (ad.stop_rule_codes or ad.warning_rule_codes or ad.early_signal_rule_codes or [])
+            for c in (
+                ad.stop_rule_codes or ad.warning_rule_codes or ad.early_signal_rule_codes or []
+            )
         ]
         rule_str = f" · {rules[0]}" if rules else ""
         lines.append(
@@ -397,11 +455,9 @@ async def _render_alerts(page: int = 0) -> tuple[str, dict]:
     """Алерты из текущего скана, сгруппированные по кампании → адсету. Страница = 1 адсет."""
     factory = get_session_factory()
     async with factory() as session:
-        last_scan = await session.scalar(select(func.max(AdSnapshot.last_observed_at)))
-        if not last_scan:
+        last_scan, batch_start = await _load_current_live_batch_bounds(session)
+        if last_scan is None or batch_start is None:
             return "⚠️ <b>Алерты</b>\n\nПока нет данных.", _back_button()
-
-        batch_start = last_scan - timedelta(minutes=5)
         result = await session.execute(
             select(AdSnapshot)
             .where(
@@ -436,7 +492,9 @@ async def _render_alerts(page: int = 0) -> tuple[str, dict]:
         icon = _STATE_ICONS.get(ad.alert_state, "⚠️")
         rules = [
             _RULE_LABELS.get(c, c)
-            for c in (ad.stop_rule_codes or ad.warning_rule_codes or ad.early_signal_rule_codes or [])
+            for c in (
+                ad.stop_rule_codes or ad.warning_rule_codes or ad.early_signal_rule_codes or []
+            )
         ]
         rule_str = f" · {rules[0]}" if rules else ""
         metric_str = _key_metric_str(ad)
@@ -457,9 +515,7 @@ async def _render_ad_detail(fb_ad_id: str, source: str = "ads") -> tuple[str, di
     """Детальный вид одного объявления: полные метрики + кнопки управления."""
     factory = get_session_factory()
     async with factory() as session:
-        ad = await session.scalar(
-            select(AdSnapshot).where(AdSnapshot.fb_ad_id == fb_ad_id)
-        )
+        ad = await session.scalar(select(AdSnapshot).where(AdSnapshot.fb_ad_id == fb_ad_id))
 
     if not ad:
         text = "❌ Объявление не найдено"
@@ -470,7 +526,9 @@ async def _render_ad_detail(fb_ad_id: str, source: str = "ads") -> tuple[str, di
     cpr_str = f" · CPR: ${ad.cost_per_registration:.2f}" if ad.cost_per_registration else ""
     outbound_ctr_str = f"{ad.outbound_ctr:.2f}%" if ad.outbound_ctr is not None else "—"
     cost_per_lpv_str = (
-        f"${ad.cost_per_landing_page_view:.2f}" if ad.cost_per_landing_page_view is not None else "—"
+        f"${ad.cost_per_landing_page_view:.2f}"
+        if ad.cost_per_landing_page_view is not None
+        else "—"
     )
     cpm_str = f"${ad.cpm:.2f}" if ad.cpm is not None else "—"
     frequency_str = f"{ad.frequency:.2f}" if ad.frequency is not None else "—"
@@ -549,6 +607,9 @@ async def _render_disable_all_confirm() -> tuple[str, dict]:
     """Экран подтверждения массового отключения объявлений с алертами."""
     factory = get_session_factory()
     async with factory() as session:
+        last_scan, batch_start = await _load_current_live_batch_bounds(session)
+        if last_scan is None or batch_start is None:
+            return "✅ Нет объявлений с алертами для отключения", _back_button()
         result = await session.execute(
             select(AdSnapshot)
             .where(
@@ -558,7 +619,8 @@ async def _render_disable_all_confirm() -> tuple[str, dict]:
                         AlertState.WARNING_SENT,
                         AlertState.STOP_SENT,
                     ]
-                )
+                ),
+                AdSnapshot.last_observed_at >= batch_start,
             )
             .order_by(AdSnapshot.spend.desc())
         )
@@ -651,7 +713,10 @@ async def _render_disabled(page: int = 0) -> tuple[str, dict]:
         all_ads = result.scalars().all()
 
     if not all_ads:
-        return "🚫 <b>Отключённые объявления</b>\n\nСписок пуст — пока ничего не отключали.", _back_button()
+        return (
+            "🚫 <b>Отключённые объявления</b>\n\nСписок пуст — пока ничего не отключали.",
+            _back_button(),
+        )
 
     groups = _group_by_adset(all_ads)
     total_pages = len(groups)
@@ -675,12 +740,11 @@ async def _render_disabled(page: int = 0) -> tuple[str, dict]:
             )
             or "—"
         )
-        lines.append(
-            f"❌ {html.escape(ad.ad_name)} · {disabled_at}\n"
-            f"   {html.escape(rules)}"
-        )
+        lines.append(f"❌ {html.escape(ad.ad_name)} · {disabled_at}\n   {html.escape(rules)}")
 
-    return "\n".join(lines), _ads_keyboard(ads, page, total_pages, has_alerts=False, prefix="disabled")
+    return "\n".join(lines), _ads_keyboard(
+        ads, page, total_pages, has_alerts=False, prefix="disabled"
+    )
 
 
 async def _render_settings() -> tuple[str, dict]:
@@ -800,6 +864,10 @@ async def handle_update(client: TelegramBotClient, update: dict) -> None:
         username = user.get("username", "") or ""
         tg_user_id = str(user.get("id", ""))
 
+        if not await _is_chat_authorized(chat_id):
+            await client.answer_callback_query(cq["id"], text=_auth_required_text())
+            return
+
         await client.answer_callback_query(cq["id"])
 
         # noop — игнорируем
@@ -873,9 +941,11 @@ async def handle_update(client: TelegramBotClient, update: dict) -> None:
                         f"👤 Запросил: @{html.escape(username) or 'неизвестно'}\n"
                         f"⏳ Статус: в очереди"
                     ),
-                    reply_markup={"inline_keyboard": [[
-                        {"text": "◀️ К объявлениям", "callback_data": "cmd:ads"}
-                    ]]},
+                    reply_markup={
+                        "inline_keyboard": [
+                            [{"text": "◀️ К объявлениям", "callback_data": "cmd:ads"}]
+                        ]
+                    },
                 )
                 logger.info("Создана задача на отключение: %s (запросил @%s)", fb_ad_id, username)
             else:
@@ -901,11 +971,15 @@ async def handle_update(client: TelegramBotClient, update: dict) -> None:
                         f"⚠️ Для фактического включения в Facebook — "
                         f"активируйте объявление в Менеджере рекламы вручную."
                     ),
-                    reply_markup={"inline_keyboard": [[
-                        {"text": "◀️ К объявлениям", "callback_data": "cmd:ads"}
-                    ]]},
+                    reply_markup={
+                        "inline_keyboard": [
+                            [{"text": "◀️ К объявлениям", "callback_data": "cmd:ads"}]
+                        ]
+                    },
                 )
-                logger.info("Состояние сброшено для объявления %s (запросил @%s)", fb_ad_id, username)
+                logger.info(
+                    "Состояние сброшено для объявления %s (запросил @%s)", fb_ad_id, username
+                )
             else:
                 await client.edit_message(
                     chat_id=chat_id,
@@ -932,9 +1006,9 @@ async def handle_update(client: TelegramBotClient, update: dict) -> None:
                 chat_id=chat_id,
                 message_id=message_id,
                 text=result_text,
-                reply_markup={"inline_keyboard": [[
-                    {"text": "◀️ К алертам", "callback_data": "cmd:alerts"}
-                ]]},
+                reply_markup={
+                    "inline_keyboard": [[{"text": "◀️ К алертам", "callback_data": "cmd:alerts"}]]
+                },
             )
             logger.info("Массовое отключение: %s задач создано (запросил @%s)", count, username)
             return
@@ -975,8 +1049,8 @@ async def handle_update(client: TelegramBotClient, update: dict) -> None:
             parts = data.split(":")
             snapshot_token = parts[1]
             hours = int(parts[2]) if len(parts) > 2 else 3
-            ad_name = await _snooze_alert(snapshot_token, hours)
-            if ad_name:
+            ad_name, applied = await _snooze_alert(snapshot_token, hours)
+            if applied and ad_name:
                 await client.edit_message(
                     chat_id=chat_id,
                     message_id=message_id,
@@ -987,6 +1061,16 @@ async def handle_update(client: TelegramBotClient, update: dict) -> None:
                     ),
                 )
                 logger.info("Снузер на %sч для %s (запросил @%s)", hours, snapshot_token, username)
+            elif ad_name:
+                await client.edit_message(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text=(
+                        f"ℹ️ <b>Снузер недоступен</b>\n\n"
+                        f"📢 {html.escape(ad_name)}\n"
+                        "Авто-отключение для STOP уже запущено, поэтому отложить его нельзя."
+                    ),
+                )
             else:
                 await client.edit_message(
                     chat_id=chat_id,
@@ -1017,6 +1101,10 @@ async def handle_update(client: TelegramBotClient, update: dict) -> None:
         authorized = await _try_authorize(client, chat_id, auth_code, msg)
         if authorized:
             return
+
+    if not await _is_chat_authorized(chat_id):
+        await client.send_message(chat_id=chat_id, text=_auth_required_text())
+        return
 
     # /set — настройка параметров
     if cmd == "set" and len(parts) >= 3:
@@ -1076,11 +1164,11 @@ async def _update_observer_setting(**kwargs: int) -> None:
         await session.commit()
 
 
-async def _snooze_alert(snapshot_token: str, hours: int) -> str | None:
+async def _snooze_alert(snapshot_token: str, hours: int) -> tuple[str | None, bool]:
     """Устанавливает snoozed_until на N часов для объявления по токену или fb_ad_id.
 
     Returns:
-        ad_name если успешно, None если объявление не найдено
+        (ad_name, applied): ad_name если объявление найдено, applied=True если snooze применён
     """
     try:
         factory = get_session_factory()
@@ -1093,13 +1181,19 @@ async def _snooze_alert(snapshot_token: str, hours: int) -> str | None:
                     select(AdSnapshot).where(AdSnapshot.fb_ad_id == snapshot_token)
                 )
             if ad is None:
-                return None
+                return None, False
+            if ad.alert_state == AlertState.STOP_SENT:
+                logger.info(
+                    "Снузер для STOP-алерта %s недоступен — отключение уже запущено",
+                    snapshot_token,
+                )
+                return ad.ad_name, False
             ad.snoozed_until = datetime.now(UTC) + timedelta(hours=hours)
             await session.commit()
-            return ad.ad_name
+            return ad.ad_name, True
     except Exception:
         logger.exception("Ошибка при установке снузера для %s", snapshot_token)
-        return None
+        return None, False
 
 
 async def _reset_ad_state(fb_ad_id: str) -> str | None:
@@ -1111,9 +1205,7 @@ async def _reset_ad_state(fb_ad_id: str) -> str | None:
     try:
         factory = get_session_factory()
         async with factory() as session:
-            ad = await session.scalar(
-                select(AdSnapshot).where(AdSnapshot.fb_ad_id == fb_ad_id)
-            )
+            ad = await session.scalar(select(AdSnapshot).where(AdSnapshot.fb_ad_id == fb_ad_id))
             if ad is None:
                 return None
             ad.alert_state = AlertState.NORMAL
@@ -1133,6 +1225,9 @@ async def _execute_disable_all(*, tg_user_id: str, username: str) -> tuple[int, 
     """
     factory = get_session_factory()
     async with factory() as session:
+        _, batch_start = await _load_current_live_batch_bounds(session)
+        if batch_start is None:
+            return 0, 0
         result = await session.execute(
             select(AdSnapshot).where(
                 AdSnapshot.alert_state.in_(
@@ -1141,7 +1236,8 @@ async def _execute_disable_all(*, tg_user_id: str, username: str) -> tuple[int, 
                         AlertState.WARNING_SENT,
                         AlertState.STOP_SENT,
                     ]
-                )
+                ),
+                AdSnapshot.last_observed_at >= batch_start,
             )
         )
         ads = result.scalars().all()
@@ -1279,19 +1375,37 @@ async def _create_disable_task(
                 return None
 
             snapshot.alert_state = AlertState.CLAIMED
-            idempotency_key = f"disable:{snapshot.fb_ad_id}:{snapshot_token}"
+            stable_open_state_token = snapshot.open_state_token or snapshot.fb_ad_id
+            idempotency_key = _disable_task_idempotency_key(snapshot)
+            existing_task = await session.scalar(
+                select(DisableTask).where(DisableTask.idempotency_key == idempotency_key)
+            )
+            if existing_task is not None:
+                await session.commit()
+                return {"fb_ad_id": snapshot.fb_ad_id, "ad_name": snapshot.ad_name}
+
             task = DisableTask(
                 snapshot_id=snapshot.id,
                 offer_id=snapshot.offer_id,
                 fb_ad_id=snapshot.fb_ad_id,
                 ad_name=snapshot.ad_name,
-                open_state_token=snapshot_token,
+                open_state_token=stable_open_state_token,
                 idempotency_key=idempotency_key,
                 requested_by_telegram_user_id=tg_user_id,
                 requested_by_username=username,
             )
             session.add(task)
-            await session.commit()
+            try:
+                await session.flush()
+                await session.commit()
+            except IntegrityError:
+                await session.rollback()
+                existing_task = await session.scalar(
+                    select(DisableTask).where(DisableTask.idempotency_key == idempotency_key)
+                )
+                if existing_task is not None:
+                    return {"fb_ad_id": snapshot.fb_ad_id, "ad_name": snapshot.ad_name}
+                raise
 
             return {"fb_ad_id": snapshot.fb_ad_id, "ad_name": snapshot.ad_name}
     except Exception:

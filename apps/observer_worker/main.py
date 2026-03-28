@@ -18,11 +18,13 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import selectinload
 
+from core.browser.vision_client import VisionClient
 from core.cabinet_day import (
     build_cabinet_day_archive_payload,
     has_any_metric_value,
     is_cabinet_day_reset_scan,
 )
+from core.db import get_session_factory
 from core.diagnostics import (
     build_ad_quality_diagnostics,
     build_diagnostics_context_text,
@@ -33,7 +35,6 @@ from core.disable_tasks import (
     is_delivery_disabled,
     reconcile_disable_tasks,
 )
-from core.db import get_session_factory
 from core.domain import AlertStage, AlertState, DisableTaskStatus
 from core.models import (
     AdSnapshot,
@@ -46,11 +47,14 @@ from core.models import (
     TelegramSettings,
     VisionSettings,
 )
+
 try:
     from patchright.async_api import Error as PatchrightError
 except ModuleNotFoundError:  # pragma: no cover - зависит от окружения
+
     class PatchrightError(RuntimeError):
         """Фолбэк-тип ошибки, когда patchright недоступен в окружении."""
+
 
 from core.observer.service import AlertCandidate, build_metrics_json, evaluate_row
 from core.observer.state_machine import resolve_transition
@@ -194,6 +198,58 @@ async def load_vision_settings_from_db() -> tuple[str, str, str]:
     except Exception:
         logger.debug("Не удалось загрузить Vision настройки из БД", exc_info=True)
     return "", "", ""
+
+
+async def load_vision_settings_for_runtime(
+    *,
+    fallback_x_token: str = "",
+    fallback_api_url: str = "http://127.0.0.1:3030",
+    fallback_profile_id: str = "",
+) -> tuple[str, str, str]:
+    """Возвращает Vision-настройки для запуска или переподключения."""
+    db_x_token, db_api_url, db_profile_id = await load_vision_settings_from_db()
+    if db_x_token and db_profile_id:
+        return db_x_token, db_api_url or fallback_api_url, db_profile_id
+    return fallback_x_token, fallback_api_url, fallback_profile_id
+
+
+async def reconnect_browser_manager_with_vision_settings(
+    browser_manager,
+) -> object | None:
+    """Переподключает browser_manager с актуальными Vision-настройками."""
+    current_vision = getattr(browser_manager, "_vision", None)
+    fallback_x_token = ""
+    fallback_api_url = "http://127.0.0.1:3030"
+    if current_vision is not None:
+        fallback_x_token = getattr(current_vision, "_headers", {}).get("X-Token", "")
+        fallback_api_url = getattr(current_vision, "_base", fallback_api_url)
+    fallback_profile_id = getattr(browser_manager, "_profile_id", "")
+
+    x_token, api_url, profile_id = await load_vision_settings_for_runtime(
+        fallback_x_token=fallback_x_token,
+        fallback_api_url=fallback_api_url,
+        fallback_profile_id=fallback_profile_id,
+    )
+    if not x_token or not profile_id:
+        logger.warning("Vision-настройки для переподключения не найдены")
+        return None
+
+    if current_vision is not None:
+        try:
+            await browser_manager.disconnect()
+        except Exception:
+            logger.warning("Не удалось отключить старое Vision-соединение", exc_info=True)
+        try:
+            await current_vision.close()
+        except Exception:
+            logger.debug("Не удалось закрыть старый Vision-клиент", exc_info=True)
+
+    browser_manager._vision = VisionClient(x_token=x_token, base_url=api_url)
+    browser_manager._profile_id = profile_id
+    browser_manager._folder_id = None
+    await browser_manager.connect()
+    logger.info("Vision браузер переподключён с актуальными настройками")
+    return await browser_manager.get_page()
 
 
 async def check_vision_reconnect_flag() -> bool:
@@ -415,7 +471,9 @@ async def _maybe_rollover_cabinet_day(session, snapshot_data: list[dict]) -> Non
             ),
             default=scan_started_at,
         )
-        if current_snapshots and any(has_any_metric_value(snapshot) for snapshot in current_snapshots):
+        if current_snapshots and any(
+            has_any_metric_value(snapshot) for snapshot in current_snapshots
+        ):
             summary_json, campaigns_json = build_cabinet_day_archive_payload(current_snapshots)
             session.add(
                 CabinetDayArchive(
@@ -428,15 +486,15 @@ async def _maybe_rollover_cabinet_day(session, snapshot_data: list[dict]) -> Non
                 )
             )
         settings.cabinet_day_started_at = scan_started_at
-        logger.info(
-            "Observer: впервые зафиксировано начало суток кабинета по zero-scan"
-        )
+        logger.info("Observer: впервые зафиксировано начало суток кабинета по zero-scan")
         return
 
     if not is_zero_scan:
         return
 
-    if not current_snapshots or not any(has_any_metric_value(snapshot) for snapshot in current_snapshots):
+    if not current_snapshots or not any(
+        has_any_metric_value(snapshot) for snapshot in current_snapshots
+    ):
         return
 
     summary_json, campaigns_json = build_cabinet_day_archive_payload(current_snapshots)
@@ -792,7 +850,9 @@ async def _collect_reminder_alerts(interval_seconds: int) -> list[AlertCandidate
                         "clicks": snap.clicks,
                         "cpc": str(snap.cpc) if snap.cpc is not None else None,
                         "outbound_clicks": snap.outbound_clicks,
-                        "outbound_ctr": str(snap.outbound_ctr) if snap.outbound_ctr is not None else None,
+                        "outbound_ctr": str(snap.outbound_ctr)
+                        if snap.outbound_ctr is not None
+                        else None,
                         "landing_page_views": snap.landing_page_views,
                         "cost_per_landing_page_view": (
                             str(snap.cost_per_landing_page_view)
@@ -983,9 +1043,11 @@ async def observer_loop(
                 try:
                     if await check_vision_reconnect_flag() and browser_manager is not None:
                         logger.info("Переподключение к Vision браузеру по запросу из UI")
-                        await browser_manager.disconnect()
-                        await browser_manager.connect()
-                        page = await browser_manager.get_page()
+                        reconnected_page = await reconnect_browser_manager_with_vision_settings(
+                            browser_manager
+                        )
+                        if reconnected_page is not None:
+                            page = reconnected_page
                 except Exception:
                     logger.warning("Не удалось выполнить переподключение к браузеру", exc_info=True)
 
@@ -1074,8 +1136,12 @@ async def observer_loop(
                         cpm_value=row.cpm,
                         cpm_baseline=cpm_baselines.get(offer_code),
                         frequency_value=row.frequency,
-                        frequency_elevated_threshold=offer_data["rule_config"].frequency_elevated_threshold,
-                        frequency_critical_threshold=offer_data["rule_config"].frequency_critical_threshold,
+                        frequency_elevated_threshold=offer_data[
+                            "rule_config"
+                        ].frequency_elevated_threshold,
+                        frequency_critical_threshold=offer_data[
+                            "rule_config"
+                        ].frequency_critical_threshold,
                     )
 
                 # Выключенные объявления не оцениваем — сбрасываем FSM и идём дальше
@@ -1470,6 +1536,7 @@ async def _send_alerts_to_telegram(
             logger.info("Отправлен TG-алерт: %s, стадия=%s", a.ad_name, a.stage)
         except Exception:
             logger.exception("Не удалось отправить TG-сообщение для %s", a.ad_name)
+            continue
 
         factory = get_session_factory()
         try:

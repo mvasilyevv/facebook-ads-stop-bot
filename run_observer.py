@@ -9,6 +9,11 @@ import os
 import signal
 import sys
 
+from core.browser.manager import VisionBrowserManager
+from core.browser.vision_client import VisionClient
+from core.config import get_settings
+from core.scanner.parser import parse_ads_from_page
+
 _PID_FILE = "/tmp/fb_observer.pid"
 
 
@@ -38,10 +43,6 @@ def _release_pid_lock() -> None:
     except FileNotFoundError:
         pass
 
-from core.browser.manager import VisionBrowserManager
-from core.browser.vision_client import VisionClient
-from core.config import get_settings
-from core.scanner.parser import parse_ads_from_page
 
 logging.basicConfig(
     level=logging.INFO,
@@ -55,25 +56,31 @@ async def main() -> None:
     """Запуск observer worker с подключением к Vision anti-detect."""
     _acquire_pid_lock()
     settings = get_settings()
+    from apps.observer_worker.main import (
+        load_offers_from_db,
+        load_vision_settings_for_runtime,
+        observer_loop,
+    )
 
-    if not settings.vision_x_token:
-        logger.error("Не задан VISION_X_TOKEN в .env")
-        sys.exit(1)
-
-    if not settings.vision_profile_id:
-        logger.error("Не задан VISION_PROFILE_ID в .env")
+    vision_x_token, vision_api_url, vision_profile_id = await load_vision_settings_for_runtime(
+        fallback_x_token=settings.vision_x_token,
+        fallback_api_url=settings.vision_api_url,
+        fallback_profile_id=settings.vision_profile_id,
+    )
+    if not vision_x_token or not vision_profile_id:
+        logger.error("Не заданы Vision-настройки ни в БД, ни в .env")
         sys.exit(1)
 
     # Инициализация Vision клиента
     vision = VisionClient(
-        x_token=settings.vision_x_token,
-        base_url=settings.vision_api_url,
+        x_token=vision_x_token,
+        base_url=vision_api_url,
     )
 
     # Менеджер браузера (folder_id определится автоматически через API)
     manager = VisionBrowserManager(
         vision_client=vision,
-        profile_id=settings.vision_profile_id,
+        profile_id=vision_profile_id,
     )
 
     # Graceful shutdown через asyncio event loop сигналы
@@ -95,8 +102,6 @@ async def main() -> None:
         logger.info("Подключён к Vision. Текущий URL: %s", page.url)
 
         # Загружаем офферы из БД
-        from apps.observer_worker.main import load_offers_from_db, observer_loop
-
         offers = await load_offers_from_db()
 
         await observer_loop(

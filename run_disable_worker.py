@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import pathlib
 import random
 import signal
 import sys
@@ -15,11 +17,12 @@ from sqlalchemy import select
 from core.browser.humanizer import human_click, human_scroll_to_find
 from core.browser.manager import VisionBrowserManager
 from core.browser.vision_client import VisionClient
-from core.disable_tasks import is_delivery_disabled, reconcile_disable_tasks
 from core.config import get_settings
+from core.crypto import decrypt
 from core.db import get_session_factory
+from core.disable_tasks import is_delivery_disabled, reconcile_disable_tasks
 from core.domain import AlertState, DisableTaskStatus
-from core.models import AdSnapshot, DisableTask
+from core.models import AdSnapshot, DisableTask, VisionSettings
 
 logging.basicConfig(
     level=logging.INFO,
@@ -33,6 +36,27 @@ logger = logging.getLogger(__name__)
 DISABLE_CONFIRMATION_POLL_DELAYS_SECONDS = (0.0, 3.0, 3.0, 3.0, 3.0, 4.0, 4.0, 5.0, 5.0)
 DISABLE_CONFIRMATION_FALSE_READS_REQUIRED = 2
 DISABLE_CONFIRMATION_WINDOW_SECONDS = int(sum(DISABLE_CONFIRMATION_POLL_DELAYS_SECONDS))
+
+
+async def _load_vision_settings() -> tuple[str, str, str]:
+    """Загружает Vision-настройки из БД с fallback на .env."""
+    settings = get_settings()
+    factory = get_session_factory()
+    try:
+        async with factory() as session:
+            result = await session.execute(
+                select(VisionSettings).where(VisionSettings.singleton_key == "default")
+            )
+            row = result.scalar_one_or_none()
+            if row and row.x_token_encrypted and row.profile_id:
+                token = decrypt(row.x_token_encrypted)
+                if token:
+                    logger.info("Vision-настройки загружены из БД")
+                    return token, row.api_url or settings.vision_api_url, row.profile_id
+    except Exception:
+        logger.debug("Не удалось загрузить Vision-настройки из БД", exc_info=True)
+
+    return settings.vision_x_token, settings.vision_api_url, settings.vision_profile_id
 
 
 async def claim_next_task():
@@ -367,19 +391,20 @@ async def mark_failed(task_id, error: str) -> None:
 
 async def main() -> None:
     """Запуск disable worker."""
+    vision_x_token, vision_api_url, vision_profile_id = await _load_vision_settings()
     settings = get_settings()
 
-    if not settings.vision_x_token or not settings.vision_profile_id:
-        logger.error("Не заданы VISION_X_TOKEN или VISION_PROFILE_ID")
+    if not vision_x_token or not vision_profile_id:
+        logger.error("Не заданы Vision-настройки ни в БД, ни в .env")
         sys.exit(1)
 
     vision = VisionClient(
-        x_token=settings.vision_x_token,
-        base_url=settings.vision_api_url,
+        x_token=vision_x_token,
+        base_url=vision_api_url,
     )
     manager = VisionBrowserManager(
         vision_client=vision,
-        profile_id=settings.vision_profile_id,
+        profile_id=vision_profile_id,
     )
 
     shutdown_event = asyncio.Event()
@@ -417,8 +442,6 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    import os, pathlib
-
     _PID_FILE = pathlib.Path("/tmp/fb_disable_worker.pid")
     if _PID_FILE.exists():
         _old_pid = int(_PID_FILE.read_text().strip())

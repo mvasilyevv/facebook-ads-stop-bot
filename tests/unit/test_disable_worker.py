@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -226,9 +227,7 @@ async def test_mark_succeeded_keeps_claimed_until_off_confirmed():
     mock_session = AsyncMock()
     mock_session.__aenter__ = AsyncMock(return_value=mock_session)
     mock_session.__aexit__ = AsyncMock(return_value=False)
-    mock_session.execute = AsyncMock(
-        side_effect=[_scalar_result(task), _scalar_result(snapshot)]
-    )
+    mock_session.execute = AsyncMock(side_effect=[_scalar_result(task), _scalar_result(snapshot)])
     mock_factory = MagicMock(return_value=mock_session)
 
     with patch("run_disable_worker.get_session_factory", return_value=mock_factory):
@@ -251,9 +250,7 @@ async def test_mark_succeeded_sets_disabled_when_delivery_off():
     mock_session = AsyncMock()
     mock_session.__aenter__ = AsyncMock(return_value=mock_session)
     mock_session.__aexit__ = AsyncMock(return_value=False)
-    mock_session.execute = AsyncMock(
-        side_effect=[_scalar_result(task), _scalar_result(snapshot)]
-    )
+    mock_session.execute = AsyncMock(side_effect=[_scalar_result(task), _scalar_result(snapshot)])
     mock_factory = MagicMock(return_value=mock_session)
 
     with patch("run_disable_worker.get_session_factory", return_value=mock_factory):
@@ -261,6 +258,77 @@ async def test_mark_succeeded_sets_disabled_when_delivery_off():
 
     assert task.status == DisableTaskStatus.SUCCEEDED
     assert snapshot.alert_state == AlertState.DISABLED
+
+
+# Тест: Vision-настройки сначала берутся из БД
+@pytest.mark.asyncio
+async def test_load_vision_settings_prefers_database():
+    """Если в БД есть Vision-настройки, worker должен использовать их."""
+    from run_disable_worker import _load_vision_settings
+
+    row = SimpleNamespace(
+        x_token_encrypted="encrypted-token",
+        profile_id="profile-from-db",
+        api_url="http://vision-db:3030",
+    )
+
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none.return_value = row
+
+    mock_session = AsyncMock()
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=False)
+    mock_session.execute = AsyncMock(return_value=mock_result)
+    mock_factory = MagicMock(return_value=mock_session)
+
+    settings = SimpleNamespace(
+        vision_x_token="env-token",
+        vision_api_url="http://vision-env:3030",
+        vision_profile_id="profile-from-env",
+    )
+
+    with (
+        patch("run_disable_worker.get_session_factory", return_value=mock_factory),
+        patch("run_disable_worker.get_settings", return_value=settings),
+        patch("run_disable_worker.decrypt", return_value="decrypted-token"),
+    ):
+        token, api_url, profile_id = await _load_vision_settings()
+
+    assert token == "decrypted-token"
+    assert api_url == "http://vision-db:3030"
+    assert profile_id == "profile-from-db"
+
+
+# Тест: при пустой БД worker падает назад на .env
+@pytest.mark.asyncio
+async def test_load_vision_settings_falls_back_to_env():
+    """Если Vision-настроек в БД нет, должны использоваться значения из .env."""
+    from run_disable_worker import _load_vision_settings
+
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none.return_value = None
+
+    mock_session = AsyncMock()
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=False)
+    mock_session.execute = AsyncMock(return_value=mock_result)
+    mock_factory = MagicMock(return_value=mock_session)
+
+    settings = SimpleNamespace(
+        vision_x_token="env-token",
+        vision_api_url="http://vision-env:3030",
+        vision_profile_id="profile-from-env",
+    )
+
+    with (
+        patch("run_disable_worker.get_session_factory", return_value=mock_factory),
+        patch("run_disable_worker.get_settings", return_value=settings),
+    ):
+        token, api_url, profile_id = await _load_vision_settings()
+
+    assert token == "env-token"
+    assert api_url == "http://vision-env:3030"
+    assert profile_id == "profile-from-env"
 
 
 # Тест: disable worker отправляет нейтральное подтверждение, а не финальное "выключено"

@@ -169,18 +169,25 @@ def render_alert_message(
                 footer = "ℹ️ Это ранний сигнал, авто-отключение не запускалось"
             lines.append(footer)
             keyboard.append(
-                [{"text": f"🛑 Отключить: {item.ad_name[:28].rstrip()}", "callback_data": f"disable:{item.snapshot_id}"}]
+                [
+                    {
+                        "text": f"🛑 Отключить: {item.ad_name[:28].rstrip()}",
+                        "callback_data": f"disable:{item.snapshot_id}",
+                    }
+                ]
             )
             keyboard.append(
                 [{"text": "✅ Оставить на 3 часа", "callback_data": f"snooze:{item.snapshot_id}:3"}]
             )
         elif stage == AlertStage.STOP:
-            lines.append("⚡ Авто-отключение запущено")
+            lines.append("⚡ Авто-отключение уже запущено")
             keyboard.append(
-                [{"text": f"🛑 Отключить: {item.ad_name[:28].rstrip()}", "callback_data": f"disable:{item.snapshot_id}"}]
-            )
-            keyboard.append(
-                [{"text": "✅ Оставить на 1 час", "callback_data": f"snooze:{item.snapshot_id}:1"}]
+                [
+                    {
+                        "text": f"🛑 Отключить: {item.ad_name[:28].rstrip()}",
+                        "callback_data": f"disable:{item.snapshot_id}",
+                    }
+                ]
             )
 
     return TelegramOutgoingMessage(
