@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""ORM-модели для stop-бота v2."""
+"""ORM-модели для stop-бота."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from core.db.base import Base
-from core.domain import AlertStage, AlertState, DisableTaskStatus
+from core.domain import AlertStage, AlertState, DisableTaskStatus, EnableTaskStatus
 
 # --- Общие миксины ---
 
@@ -75,19 +75,49 @@ class ObserverSettings(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     interval_seconds: Mapped[int] = mapped_column(Integer, default=90)
     jitter_seconds: Mapped[int] = mapped_column(Integer, default=10)
     warning_percent_of_stop: Mapped[Decimal] = mapped_column(Numeric(6, 2), default=Decimal("80"))
+    # Глобальный коэффициент досрочного стопа для CPA-правил. 100 = без смещения.
+    stop_percent_of_base: Mapped[Decimal] = mapped_column(Numeric(6, 2), default=Decimal("100"))
+    # Флаг включения/выключения сканирования из UI
+    is_scanning_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Флаг немедленного скана (устанавливается из UI, сбрасывается воркером)
+    scan_requested: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    # Граница текущих суток кабинета, определяемая по zero-scan в observer
+    cabinet_day_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class CabinetDayArchive(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """Архив агрегатов завершившихся суток кабинета."""
+
+    __tablename__ = "cabinet_day_archives"
+
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    ended_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    reset_detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    ads_count: Mapped[int] = mapped_column(Integer, default=0)
+    summary_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    campaigns_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
 
 
 # === Telegram-настройки ===
 
 
 class TelegramSettings(UUIDPrimaryKeyMixin, TimestampMixin, Base):
-    """Настройки Telegram-бота."""
+    """Настройки Telegram-бота с авторизацией."""
 
     __tablename__ = "telegram_settings"
 
     singleton_key: Mapped[str] = mapped_column(String(32), unique=True, default="default")
-    bot_token: Mapped[str] = mapped_column(String(255), default="")
+    # Токен хранится зашифрованным (Fernet)
+    bot_token_encrypted: Mapped[str] = mapped_column(Text, default="")
     chat_id: Mapped[str] = mapped_column(String(64), default="")
+    # Авторизация: пользователь должен отправить /start боту
+    is_authorized: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Одноразовый код для привязки (6 цифр)
+    auth_code: Mapped[str] = mapped_column(String(16), default="")
+    # Имя бота (кэшируем после getMe)
+    bot_username: Mapped[str] = mapped_column(String(128), default="")
+    # Список одноразовых кодов для добавления новых получателей (JSON)
+    pending_codes: Mapped[list] = mapped_column(JSON, default=list)
 
 
 # === Оффер ===
@@ -158,7 +188,7 @@ class AdSnapshot(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     """Текущий снимок метрик одного объявления."""
 
     __tablename__ = "ad_snapshots"
-    __table_args__ = (Index("uq_ad_snapshot_offer_fb_ad", "offer_id", "fb_ad_id", unique=True),)
+    __table_args__ = (Index("uq_ad_snapshot_fb_ad", "fb_ad_id", unique=True),)
 
     offer_id: Mapped[_uuid.UUID | None] = mapped_column(
         ForeignKey("offers.id", ondelete="SET NULL"), index=True
@@ -196,6 +226,8 @@ class AdSnapshot(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     last_observed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), index=True, default=_utcnow
     )
+    # Снузер: если задан и не истёк, observer не шлёт повторный алерт
+    snoozed_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     offer: Mapped[Offer | None] = relationship(back_populates="snapshots")
     alerts: Mapped[list[AlertEvent]] = relationship(back_populates="snapshot")
@@ -259,8 +291,77 @@ class DisableTask(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     # Retry-логика
     attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=10)
     next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     last_error: Mapped[str | None] = mapped_column(String(500))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     snapshot: Mapped[AdSnapshot | None] = relationship(back_populates="disable_tasks")
+
+
+# === Задача на включение ===
+
+_ENABLE_STATUS_ENUM = Enum(
+    EnableTaskStatus,
+    name="enable_task_status_enum",
+    values_callable=lambda e: [i.value for i in e],
+)
+
+
+class EnableTask(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """Задача на включение объявления (outbox-паттерн)."""
+
+    __tablename__ = "enable_tasks"
+    __table_args__ = (Index("uq_enable_task_idempotency", "idempotency_key", unique=True),)
+
+    snapshot_id: Mapped[_uuid.UUID | None] = mapped_column(
+        ForeignKey("ad_snapshots.id", ondelete="SET NULL"), index=True
+    )
+    fb_ad_id: Mapped[str] = mapped_column(String(32), index=True)
+    ad_name: Mapped[str] = mapped_column(String(255))
+    idempotency_key: Mapped[str] = mapped_column(String(128))
+    status: Mapped[EnableTaskStatus] = mapped_column(
+        _ENABLE_STATUS_ENUM, default=EnableTaskStatus.PENDING, index=True
+    )
+
+    # Кто запросил
+    requested_by_telegram_user_id: Mapped[str | None] = mapped_column(String(64))
+    requested_by_username: Mapped[str | None] = mapped_column(String(255))
+
+    # Retry-логика
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=10)
+    next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    last_error: Mapped[str | None] = mapped_column(String(500))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+# === Настройки Vision браузера ===
+
+
+class VisionSettings(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """Настройки подключения к Vision anti-detect браузеру."""
+
+    __tablename__ = "vision_settings"
+
+    singleton_key: Mapped[str] = mapped_column(String(32), unique=True, default="default")
+    api_url: Mapped[str] = mapped_column(String(255), default="http://127.0.0.1:3030")
+    # Токен хранится зашифрованным (Fernet)
+    x_token_encrypted: Mapped[str] = mapped_column(Text, default="")
+    profile_id: Mapped[str] = mapped_column(String(128), default="")
+    # Флаг для observer: переподключиться к браузеру при следующем цикле
+    reconnect_requested: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+# === Telegram получатели (мультипользователи) ===
+
+
+class TelegramRecipient(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """Авторизованный получатель Telegram-уведомлений."""
+
+    __tablename__ = "telegram_recipients"
+
+    chat_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    username: Mapped[str] = mapped_column(String(128), default="")
+    first_name: Mapped[str] = mapped_column(String(128), default="")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)

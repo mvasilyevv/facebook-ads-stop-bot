@@ -36,17 +36,46 @@ async def poller_loop(client: TelegramBotClient) -> None:
             await asyncio.sleep(3)
 
 
+async def _load_bot_token() -> str:
+    """Загружает bot_token из БД (расшифровывая) с fallback на .env."""
+    from sqlalchemy import select
+
+    from core.crypto import decrypt
+    from core.db import get_session_factory
+    from core.models import TelegramSettings
+
+    factory = get_session_factory()
+    try:
+        async with factory() as session:
+            result = await session.execute(
+                select(TelegramSettings).where(
+                    TelegramSettings.singleton_key == "default"
+                )
+            )
+            row = result.scalar_one_or_none()
+            if row and row.bot_token_encrypted:
+                token = decrypt(row.bot_token_encrypted)
+                if token:
+                    logger.info("Telegram bot_token загружен из БД")
+                    return token
+    except Exception:
+        logger.debug("Не удалось загрузить TG токен из БД", exc_info=True)
+
+    settings = get_settings()
+    return settings.telegram_bot_token
+
+
 async def main() -> None:
     """Точка входа для Telegram poller."""
-    settings = get_settings()
+    bot_token = await _load_bot_token()
 
-    if not settings.telegram_bot_token:
-        logger.error("Не задан TELEGRAM_BOT_TOKEN в .env")
+    if not bot_token:
+        logger.error("Не задан TELEGRAM_BOT_TOKEN ни в БД, ни в .env")
         sys.exit(1)
 
-    client = TelegramBotClient(settings.telegram_bot_token)
+    client = TelegramBotClient(bot_token)
 
-    # Получаем chat_id из первого сообщения, если не задан
+    settings = get_settings()
     if not settings.telegram_chat_id:
         logger.info("TELEGRAM_CHAT_ID не задан — жду первое сообщение для определения...")
 

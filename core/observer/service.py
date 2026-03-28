@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from typing import Any
 from dataclasses import dataclass
 from decimal import Decimal
 
@@ -17,12 +18,17 @@ class AlertCandidate:
     """Кандидат на отправку алерта в Telegram."""
 
     snapshot_id: str
+    offer_id: object  # UUID | None
     fb_ad_id: str
     ad_name: str
+    campaign_name: str
+    adset_name: str
     offer_code: str | None
+    offer_name: str | None
+    offer_cpa: str | None
     stage: AlertStage
     matched_rule_codes: list[str]
-    metrics_json: dict[str, str | int | None]
+    metrics_json: dict[str, Any]
 
 
 @dataclass(slots=True, frozen=True)
@@ -37,12 +43,14 @@ def build_rule_context(
     *,
     cpa_amount: Decimal,
     warning_percent_of_stop: Decimal,
+    stop_percent_of_base: Decimal,
     rule_config: object,
 ) -> RuleContext:
     """Строит RuleContext из конфигурации правил оффера."""
     return RuleContext(
         cpa_amount=Decimal(cpa_amount),
         warning_percent_of_stop=Decimal(warning_percent_of_stop),
+        stop_percent_of_base=min(Decimal("100"), max(Decimal("1"), Decimal(stop_percent_of_base))),
         cpc_enabled=bool(rule_config.cpc_percent_enabled),
         cpc_percent_stop=Decimal(rule_config.cpc_percent_stop),
         cpl_enabled=bool(rule_config.cpl_percent_enabled),
@@ -66,6 +74,7 @@ def evaluate_row(
     offer_cpa: Decimal | None,
     rule_config: object | None,
     warning_percent_of_stop: Decimal,
+    stop_percent_of_base: Decimal,
 ) -> RuleEvaluation:
     """Оценивает одну строку. Без оффера — пропуск."""
     if offer_cpa is None or rule_config is None:
@@ -73,14 +82,19 @@ def evaluate_row(
     ctx = build_rule_context(
         cpa_amount=offer_cpa,
         warning_percent_of_stop=warning_percent_of_stop,
+        stop_percent_of_base=stop_percent_of_base,
         rule_config=rule_config,
     )
     return evaluate_stop_rules(row, ctx)
 
 
-def build_metrics_json(row: ScannedAdRow) -> dict[str, str | int | None]:
+def build_metrics_json(
+    row: ScannedAdRow,
+    *,
+    rule_summaries: list[str] | None = None,
+) -> dict[str, Any]:
     """Формирует JSON-словарь метрик для хранения и отправки в TG."""
-    return {
+    payload = {
         "spend": f"{Decimal(row.spend):.2f}",
         "clicks": row.clicks,
         "cpc": f"{Decimal(row.cpc):.4f}" if row.cpc is not None else None,
@@ -96,3 +110,6 @@ def build_metrics_json(row: ScannedAdRow) -> dict[str, str | int | None]:
         ),
         "deposits": row.deposits,
     }
+    if rule_summaries:
+        payload["rule_summaries"] = rule_summaries
+    return payload

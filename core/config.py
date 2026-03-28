@@ -23,9 +23,13 @@ class Settings(BaseSettings):
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
 
+    # --- Шифрование (для хранения токенов в БД) ---
+    encryption_key: str = ""
+
     # --- API ---
     api_host: str = "0.0.0.0"
     api_port: int = 8100
+    app_timezone: str = "Europe/Kaliningrad"
 
     # --- Observer ---
     default_observer_interval_seconds: int = 90

@@ -5,9 +5,38 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import signal
 import sys
-from decimal import Decimal
+
+_PID_FILE = "/tmp/fb_observer.pid"
+
+
+def _acquire_pid_lock() -> None:
+    """Проверяет, что нет другого запущенного observer'а. Иначе — выходим."""
+    if os.path.exists(_PID_FILE):
+        try:
+            with open(_PID_FILE) as f:
+                old_pid = int(f.read().strip())
+            # Проверяем, жив ли процесс
+            os.kill(old_pid, 0)
+            logging.getLogger(__name__).error(
+                "Observer уже запущен (PID %s). Запуск второго экземпляра запрещён.", old_pid
+            )
+            sys.exit(1)
+        except (ValueError, ProcessLookupError, OSError):
+            # Устаревший lock-файл — удаляем
+            pass
+    with open(_PID_FILE, "w") as f:
+        f.write(str(os.getpid()))
+
+
+def _release_pid_lock() -> None:
+    """Удаляет PID-файл при завершении."""
+    try:
+        os.unlink(_PID_FILE)
+    except FileNotFoundError:
+        pass
 
 from core.browser.manager import VisionBrowserManager
 from core.browser.vision_client import VisionClient
@@ -24,6 +53,7 @@ logger = logging.getLogger(__name__)
 
 async def main() -> None:
     """Запуск observer worker с подключением к Vision anti-detect."""
+    _acquire_pid_lock()
     settings = get_settings()
 
     if not settings.vision_x_token:
@@ -46,15 +76,16 @@ async def main() -> None:
         profile_id=settings.vision_profile_id,
     )
 
-    # Обработка graceful shutdown
+    # Graceful shutdown через asyncio event loop сигналы
     shutdown_event = asyncio.Event()
+    loop = asyncio.get_running_loop()
 
-    def _handle_signal(signum, frame):
-        logger.info("Получен сигнал %s — завершаем работу", signum)
+    def _handle_signal() -> None:
+        logger.info("Получен сигнал остановки — завершаем работу")
         shutdown_event.set()
 
-    signal.signal(signal.SIGTERM, _handle_signal)
-    signal.signal(signal.SIGINT, _handle_signal)
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, _handle_signal)
 
     try:
         # Подключаемся к Vision
@@ -73,16 +104,19 @@ async def main() -> None:
             offers=offers,
             telegram_bot_token=settings.telegram_bot_token,
             telegram_chat_id=settings.telegram_chat_id,
-            interval_seconds=settings.default_observer_interval_seconds,
-            warning_percent_of_stop=Decimal("80"),
             parse_fn=parse_ads_from_page,
+            browser_manager=manager,
+            shutdown_event=shutdown_event,
         )
+
+        logger.info("Observer цикл завершён")
 
     except KeyboardInterrupt:
         logger.info("Остановка по Ctrl+C")
     finally:
         await manager.disconnect()
         await vision.close()
+        _release_pid_lock()
         logger.info("Ресурсы освобождены")
 
 

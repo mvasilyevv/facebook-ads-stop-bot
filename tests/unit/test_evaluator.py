@@ -71,6 +71,26 @@ def test_cpc_in_warning_zone():
     assert any(h.code == "cpc_stop" for h in result.warning_hits)
 
 
+# Глобальный досрочный стоп 80% должен опускать CPA-порог и срабатывать раньше
+def test_cpc_stop_percent_of_base_triggers_earlier():
+    row = _make_row(spend=Decimal("0.09"), clicks=1, cpc=Decimal("0.09"))
+    ctx = _make_ctx(stop_percent_of_base=Decimal("80"))
+    result = evaluate_stop_rules(row, ctx)
+    assert result.stage == AlertStage.STOP
+    assert result.stop_hits[0].threshold == Decimal("0.08")
+    assert "0.08" in result.stop_hits[0].summary
+    assert "базовый 0.10" in result.stop_hits[0].summary
+
+
+# CPC 0.06 при warning 0.064 должен считаться предупреждением после округления до цента
+def test_cpc_reaches_warning_threshold_after_cent_rounding():
+    row = _make_row(spend=Decimal("0.06"), clicks=1, cpc=Decimal("0.06"))
+    ctx = _make_ctx(stop_percent_of_base=Decimal("80"))
+    result = evaluate_stop_rules(row, ctx)
+    assert result.stage == AlertStage.WARNING
+    assert any(h.code == "cpc_stop" for h in result.warning_hits)
+
+
 # === Нюанс: spend > порога при clicks=0 → стоп ===
 
 

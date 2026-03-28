@@ -31,3 +31,15 @@ class DisableTaskStatus(StrEnum):
     RETRYING = "RETRYING"
     SUCCEEDED = "SUCCEEDED"
     CANCELLED = "CANCELLED"
+    FAILED = "FAILED"
+
+
+class EnableTaskStatus(StrEnum):
+    """Статус задачи на включение объявления."""
+
+    PENDING = "PENDING"
+    RUNNING = "RUNNING"
+    RETRYING = "RETRYING"
+    SUCCEEDED = "SUCCEEDED"
+    CANCELLED = "CANCELLED"
+    FAILED = "FAILED"

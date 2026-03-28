@@ -44,6 +44,7 @@ class RuleContext:
 
     cpa_amount: Decimal
     warning_percent_of_stop: Decimal
+    stop_percent_of_base: Decimal = Decimal("100")
 
     # Правило 1: CPC
     cpc_enabled: bool = True

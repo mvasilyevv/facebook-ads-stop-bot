@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-"""Менеджер Playwright-сессий через Vision anti-detect браузер.
+"""Менеджер Patchright-сессий через Vision anti-detect браузер.
 
 Подключается к запущенному профилю Vision по CDP и предоставляет
-Playwright Page для observer worker и disable worker.
+Patchright Page для observer worker и disable worker.
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 
-from playwright.async_api import Browser, Page, async_playwright
+from patchright.async_api import Browser, Page, async_playwright
 
 from core.browser.vision_client import VisionClient
 
@@ -47,6 +47,20 @@ class VisionBrowserManager:
             self._profile_id,
         )
 
+        # Если порт не вернулся — профиль был запущен без CDP, перезапускаем
+        if profile.port is None:
+            logger.info(
+                "CDP-порт не получен, перезапускаю профиль %s",
+                self._profile_id,
+            )
+            await self._vision.stop_profile(self._folder_id, self._profile_id)
+            import asyncio
+            await asyncio.sleep(2)
+            profile = await self._vision.start_profile(
+                self._folder_id,
+                self._profile_id,
+            )
+
         if profile.port is None:
             raise RuntimeError(f"Vision не вернул CDP-порт для профиля {self._profile_id}")
 
@@ -64,10 +78,15 @@ class VisionBrowserManager:
         )
         return self._browser
 
-    async def get_page(self) -> Page:
-        """Возвращает активную страницу или создаёт новую.
+    async def get_page(self, url_hint: str = "facebook.com") -> Page:
+        """Возвращает страницу браузера, подходящую по URL.
 
-        Использует первый контекст (это контекст anti-detect профиля).
+        Ищет вкладку содержащую url_hint (по умолчанию 'facebook.com').
+        Если не найдена — возвращает первую не-devtools страницу.
+        Если вообще нет страниц — создаёт новую.
+
+        Args:
+            url_hint: подстрока для поиска нужной вкладки.
         """
         if self._browser is None:
             await self.connect()
@@ -77,13 +96,21 @@ class VisionBrowserManager:
         if not contexts:
             raise RuntimeError("Нет доступных контекстов в браузере")
 
-        context = contexts[0]
-        pages = context.pages
-        if pages:
-            return pages[0]
+        all_pages = [p for ctx in contexts for p in ctx.pages]
 
-        # Создаём новую страницу в контексте anti-detect профиля
-        return await context.new_page()
+        # 1. Ищем вкладку с url_hint
+        for p in all_pages:
+            if url_hint in (p.url or ""):
+                return p
+
+        # 2. Fallback: первая страница не являющаяся devtools/chrome-extension
+        for p in all_pages:
+            url = p.url or ""
+            if not url.startswith("devtools://") and not url.startswith("chrome-extension://"):
+                return p
+
+        # 3. Создаём новую страницу
+        return await contexts[0].new_page()
 
     async def disconnect(self) -> None:
         """Отключается от браузера (не останавливает профиль)."""

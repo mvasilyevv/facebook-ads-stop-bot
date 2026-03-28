@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # -*- coding: utf-8 -*-
-# Единый скрипт запуска FB Stop Bot v2
+# Единый скрипт запуска FB Stop Bot
 # Использование:
 #   ./run.sh          — запуск всех сервисов
 #   ./run.sh --down   — остановка всех сервисов
@@ -71,7 +71,7 @@ esac
 # ==========================================
 # Проверки перед запуском
 # ==========================================
-echo -e "${BLUE}🛑 FB Stop Bot v2 — запуск${NC}"
+echo -e "${BLUE}🛑 FB Stop Bot — запуск${NC}"
 echo ""
 
 # Проверяем .env
@@ -99,14 +99,26 @@ if ! command -v python3 &>/dev/null; then
     exit 1
 fi
 
+# Останавливаем старые процессы если они запущены
+if [ -f "$PID_FILE" ] && [ -s "$PID_FILE" ]; then
+    echo -e "${YELLOW}🔄 Останавливаю предыдущие процессы...${NC}"
+    while read -r pid name; do
+        if kill -0 "$pid" 2>/dev/null; then
+            kill "$pid" 2>/dev/null || true
+            echo -e "  Остановлен $name (PID $pid)"
+        fi
+    done < "$PID_FILE"
+    sleep 2
+fi
+
 # Создаём директорию для логов
 mkdir -p "$LOG_DIR"
 > "$PID_FILE"
 
 # ==========================================
-# 1. Docker — Postgres + Redis
+# 1. Docker — Postgres
 # ==========================================
-echo -e "${BLUE}🐳 Запускаю Docker контейнеры (Postgres + Redis)...${NC}"
+echo -e "${BLUE}🐳 Запускаю Docker контейнеры (Postgres)...${NC}"
 docker compose up -d
 
 # Ждём готовности Postgres
@@ -176,7 +188,25 @@ echo "$OBSERVER_PID observer" >> "$PID_FILE"
 echo -e "${GREEN}  Observer PID: $OBSERVER_PID${NC}"
 
 # ==========================================
-# 6. Запуск Telegram Poller
+# 6. Запуск Disable Worker
+# ==========================================
+echo -e "${BLUE}🔴 Запускаю Disable Worker...${NC}"
+.venv/bin/python run_disable_worker.py > "$LOG_DIR/disable_worker.log" 2>&1 &
+DISABLE_PID=$!
+echo "$DISABLE_PID disable_worker" >> "$PID_FILE"
+echo -e "${GREEN}  Disable Worker PID: $DISABLE_PID${NC}"
+
+# ==========================================
+# 7. Запуск Enable Worker
+# ==========================================
+echo -e "${BLUE}🟢 Запускаю Enable Worker...${NC}"
+.venv/bin/python run_enable_worker.py > "$LOG_DIR/enable_worker.log" 2>&1 &
+ENABLE_PID=$!
+echo "$ENABLE_PID enable_worker" >> "$PID_FILE"
+echo -e "${GREEN}  Enable Worker PID: $ENABLE_PID${NC}"
+
+# ==========================================
+# 8. Запуск Telegram Poller
 # ==========================================
 echo -e "${BLUE}🤖 Запускаю Telegram Poller...${NC}"
 .venv/bin/python -m apps.telegram_poller.main > "$LOG_DIR/telegram.log" 2>&1 &
@@ -185,7 +215,7 @@ echo "$TG_PID telegram" >> "$PID_FILE"
 echo -e "${GREEN}  Telegram PID: $TG_PID${NC}"
 
 # ==========================================
-# 7. Запуск Frontend (Vite)
+# 9. Запуск Frontend (Vite)
 # ==========================================
 if [ -d frontend ]; then
     echo -e "${BLUE}🎨 Запускаю Frontend (Vite)...${NC}"
@@ -198,27 +228,43 @@ if [ -d frontend ]; then
     echo "$FRONTEND_PID frontend" >> "$PID_FILE"
     echo -e "${GREEN}  Frontend PID: $FRONTEND_PID${NC}"
     cd "$SCRIPT_DIR"
+
+    # Ждём пока Vite напишет реальный порт в лог
+    FRONTEND_URL="http://localhost:5173"
+    for i in $(seq 1 15); do
+        VITE_PORT=$(sed -n 's/.*Local: *http:\/\/localhost:\([0-9]*\).*/\1/p' "$LOG_DIR/frontend.log" 2>/dev/null | head -1)
+        if [ -n "$VITE_PORT" ]; then
+            FRONTEND_URL="http://localhost:$VITE_PORT"
+            break
+        fi
+        sleep 1
+    done
 fi
+
+# ==========================================
+# 8. Caffeinate — запрет сна ноутбука
+# ==========================================
+caffeinate -i -d &
+CAFFEINATE_PID=$!
+echo "$CAFFEINATE_PID caffeinate" >> "$PID_FILE"
 
 # ==========================================
 # Итог
 # ==========================================
 echo ""
 echo -e "${GREEN}══════════════════════════════════════════${NC}"
-echo -e "${GREEN}  ✅ FB Stop Bot v2 запущен!${NC}"
+echo -e "${GREEN}  ✅ FB Stop Bot запущен!${NC}"
 echo -e "${GREEN}══════════════════════════════════════════${NC}"
 echo ""
-echo -e "  🌐 API:       ${BLUE}http://localhost:8100${NC}"
-echo -e "  📊 Dashboard: ${BLUE}http://localhost:5173${NC}"
+echo -e "  🌐 API:       ${BLUE}http://localhost:8100/docs${NC}"
+echo -e "  📊 Dashboard: ${BLUE}${FRONTEND_URL}${NC}"
 echo -e "  🗄️ Postgres:  localhost:5433"
-echo -e "  📦 Redis:     localhost:6380"
 echo ""
 echo -e "  📋 Логи:      ${YELLOW}$LOG_DIR/${NC}"
 echo -e "  ⏹  Остановка: ${YELLOW}./run.sh --down${NC}"
 echo -e "  📋 Просмотр:  ${YELLOW}./run.sh --logs${NC}"
 echo ""
-echo -e "${YELLOW}💡 Disable Worker запускается отдельно:${NC}"
-echo -e "   ${BLUE}.venv/bin/python run_disable_worker.py${NC}"
+echo -e "${YELLOW}☕ Сон ноутбука заблокирован (caffeinate)${NC}"
 echo ""
 
 # Ждём завершения — Ctrl+C останавливает всё

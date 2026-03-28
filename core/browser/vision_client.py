@@ -50,6 +50,7 @@ class VisionClient:
         )
         resp.raise_for_status()
         data = resp.json()
+        logger.info("Vision: ответ /list: %s", data)
         profiles = data.get("profiles") or []
         return [
             VisionProfile(
@@ -108,11 +109,23 @@ class VisionClient:
 
         resp.raise_for_status()
         data = resp.json()
+        logger.info("Vision: ответ start_profile: %s", data)
+
+        port = data.get("port")
+
+        # Если Vision не вернул порт (профиль уже запущен) — берём из /list
+        if port is None:
+            logger.info("Vision: порт не в ответе start, пробуем /list")
+            profiles = await self.list_profiles()
+            for p in profiles:
+                if p.profile_id == profile_id and p.port is not None:
+                    port = p.port
+                    break
 
         profile = VisionProfile(
-            folder_id=data["folder_id"],
-            profile_id=data["profile_id"],
-            port=data.get("port"),
+            folder_id=data.get("folder_id", folder_id),
+            profile_id=data.get("profile_id", profile_id),
+            port=port,
         )
         logger.info(
             "Vision: профиль %s запущен на порту %s",

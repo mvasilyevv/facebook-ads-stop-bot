@@ -3,7 +3,7 @@ requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "fb-stop-bot-v2"
+name = "fb-stop-bot"
 version = "0.1.0"
 description = "Бот для мониторинга и остановки объявлений Facebook Ads"
 readme = "README.md"
@@ -13,14 +13,14 @@ dependencies = [
   "asyncpg>=0.30.0,<1.0.0",
   "fastapi>=0.115.0,<1.0.0",
   "httpx>=0.28.1,<1.0.0",
-  "playwright>=1.52.0,<2.0.0",
+  "patchright>=1.52.0,<2.0.0",
   "pydantic-settings>=2.8.0,<3.0.0",
   "pydantic>=2.11.0,<3.0.0",
   "python-json-logger>=3.3.0,<4.0.0",
-  "redis>=5.2.1,<6.0.0",
   "sqlalchemy>=2.0.38,<3.0.0",
   "tenacity>=9.0.0,<10.0.0",
   "uvicorn[standard]>=0.34.0,<1.0.0",
+  "cryptography>=44.0.0,<45.0.0",
 ]
 
 [project.optional-dependencies]

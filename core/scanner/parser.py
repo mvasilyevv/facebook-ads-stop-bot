@@ -8,7 +8,10 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
+import random
 import re
 from decimal import Decimal, InvalidOperation
 
@@ -39,16 +42,27 @@ _FIELD_KEYS = {
     "cost_per_result": "cost_per_result",
 }
 
+# Числовые/денежные поля, для которых нужна спецлогика извлечения
+_NUMERIC_FIELDS = frozenset({
+    "spend", "clicks", "cpc", "leads", "cost_per_lead",
+    "registrations", "cost_per_registration", "cost_per_result",
+})
+
 
 async def refresh_table(page) -> bool:
     """Нажимает кнопку «Обновить» в Ads Manager вместо перезагрузки страницы.
+
+    Перед кликом двигает мышь к кнопке с рандомным смещением для
+    имитации человеческого поведения (антидетект).
 
     Returns:
         True если кнопка найдена и нажата, False если нет
     """
     try:
         # Ищем контейнер с кнопками обновления и публикации
-        container = await page.query_selector('[data-pagelet="AdsRefreshAndPublishButtons"]')
+        container = await page.query_selector(
+            '[data-pagelet="AdsRefreshAndPublishButtons"]'
+        )
         if not container:
             logger.debug("Контейнер кнопок обновления не найден")
             return False
@@ -58,22 +72,165 @@ async def refresh_table(page) -> bool:
         for btn in buttons:
             text = await btn.inner_text()
             if "Обновить" in text or "Refresh" in text or "обновить" in text:
-                await btn.click()
+                # Антидетект: двигаем мышь к кнопке и кликаем через mouse API
+                box = await btn.bounding_box()
+                if box:
+                    offset_x = random.uniform(-5, 5)
+                    offset_y = random.uniform(-3, 3)
+                    target_x = box["x"] + box["width"] / 2 + offset_x
+                    target_y = box["y"] + box["height"] / 2 + offset_y
+                    await page.mouse.move(target_x, target_y)
+                    await asyncio.sleep(random.uniform(0.1, 0.3))
+                    await page.mouse.click(target_x, target_y)
+                else:
+                    await btn.click()
                 logger.info("Нажата кнопка «Обновить данные в таблице»")
                 return True
 
         logger.debug("Кнопка обновления не найдена среди кнопок контейнера")
         return False
     except Exception:
-        logger.debug("Ошибка при попытке нажать кнопку обновления", exc_info=True)
+        logger.debug(
+            "Ошибка при попытке нажать кнопку обновления", exc_info=True
+        )
         return False
+
+
+def _build_extraction_js() -> str:
+    """Генерирует единый JS-скрипт для извлечения данных всех строк таблицы.
+
+    Возвращает JavaScript, который при выполнении через page.evaluate()
+    находит все ячейки с data-surface*="table_row:" и возвращает массив
+    объектов с полями для каждой строки. Это заменяет множество отдельных
+    IPC-вызовов одним.
+    """
+    # Сериализуем маппинг полей в JS-объект
+    field_keys_json = json.dumps(_FIELD_KEYS, ensure_ascii=False)
+    numeric_fields_json = json.dumps(list(_NUMERIC_FIELDS), ensure_ascii=False)
+
+    return """() => {
+    const FIELD_KEYS = """ + field_keys_json + """;
+    const NUMERIC_FIELDS = new Set(""" + numeric_fields_json + """);
+    const ROW_RE = /table_row:(\\d+)/;
+
+    // Тексты кнопок, которые нужно игнорировать при извлечении ad_name
+    const BUTTON_LABELS = new Set([
+        'дублировать', 'редактировать', 'удалить', 'предпросмотр',
+        'duplicate', 'edit', 'delete', 'preview',
+        'открыть раскрывающееся меню', 'open dropdown menu',
+        'выкл.', 'вкл.', 'off', 'on',
+    ]);
+
+    // Извлечение названия объявления (аналог _get_ad_name)
+    function getAdName(el) {
+        const link = el.querySelector('a[href]');
+        if (link) {
+            const t = link.textContent.trim();
+            if (t && t.length > 2 && !BUTTON_LABELS.has(t.toLowerCase())) {
+                return t;
+            }
+        }
+        const walk = document.createTreeWalker(
+            el, NodeFilter.SHOW_TEXT, null, false
+        );
+        let best = '';
+        let n;
+        while (n = walk.nextNode()) {
+            const t = n.textContent.trim();
+            if (!t || BUTTON_LABELS.has(t.toLowerCase())) continue;
+            if (t.length > best.length) best = t;
+        }
+        return best || '\\u2014';
+    }
+
+    // Извлечение числовой метрики (аналог _get_metric_text)
+    function getMetricText(el) {
+        const walk = document.createTreeWalker(
+            el, NodeFilter.SHOW_TEXT, null, false
+        );
+        let best = '';
+        let n;
+        while (n = walk.nextNode()) {
+            const t = n.textContent.trim();
+            if (!t) continue;
+            if (t.length > 20) continue;
+            if (!best) { best = t; continue; }
+            const hasDigit = /\\d/.test(t);
+            const bestHasDigit = /\\d/.test(best);
+            if (hasDigit && !bestHasDigit) { best = t; continue; }
+            if (hasDigit === bestHasDigit && t.length < best.length) {
+                best = t;
+            }
+        }
+        return best || '\\u2014';
+    }
+
+    // Извлечение первого текстового узла (аналог _get_first_text)
+    function getFirstText(el) {
+        const walk = document.createTreeWalker(
+            el, NodeFilter.SHOW_TEXT, null, false
+        );
+        let n;
+        while (n = walk.nextNode()) {
+            const txt = n.textContent.trim();
+            if (txt) return txt;
+        }
+        return '\\u2014';
+    }
+
+    // Находим все ячейки с data-surface*="table_row:"
+    const cells = document.querySelectorAll('[data-surface*="table_row:"]');
+    const rowsMap = {};
+
+    for (const cell of cells) {
+        const surface = cell.getAttribute('data-surface');
+        if (!surface) continue;
+        const m = ROW_RE.exec(surface);
+        if (!m) continue;
+        const rowId = m[1];
+        if (!rowsMap[rowId]) rowsMap[rowId] = [];
+        rowsMap[rowId].push({surface, cell});
+    }
+
+    const result = [];
+
+    for (const [rowId, rowCells] of Object.entries(rowsMap)) {
+        const fields = {};
+        for (const {surface, cell} of rowCells) {
+            for (const [key, fieldName] of Object.entries(FIELD_KEYS)) {
+                if (surface.includes(key)) {
+                    let text;
+                    if (fieldName === 'ad_name') {
+                        text = getAdName(cell);
+                    } else if (NUMERIC_FIELDS.has(fieldName)) {
+                        text = getMetricText(cell);
+                    } else {
+                        text = getFirstText(cell);
+                    }
+                    if (!(fieldName in fields)
+                        || fields[fieldName] === '\\u2014'
+                        || fields[fieldName] === '-'
+                        || fields[fieldName] === '') {
+                        fields[fieldName] = text;
+                    }
+                    break;
+                }
+            }
+        }
+        fields._row_id = rowId;
+        result.push(fields);
+    }
+
+    return result;
+}"""
 
 
 async def parse_ads_from_page(page) -> list[ScannedAdRow]:
     """Парсит видимые строки таблицы Ads Manager из текущего viewport.
 
-    Стратегия: ищем ячейки с атрибутом data-surface, группируем по номеру
-    строки (table_row:N), извлекаем метрики по ключам полей.
+    Основной путь — единый page.evaluate() для извлечения всех данных разом
+    (минимум IPC-вызовов). Если единый evaluate не сработал — fallback
+    на поэлементный парсинг.
 
     Args:
         page: Playwright Page, открытая на Ads Manager
@@ -81,11 +238,102 @@ async def parse_ads_from_page(page) -> list[ScannedAdRow]:
     Returns:
         Список ScannedAdRow с нормализованными метриками
     """
+    # Основной путь: единый JS-вызов
+    try:
+        raw_rows = await page.evaluate(_build_extraction_js())
+        if raw_rows:
+            rows = _parse_bulk_result(raw_rows)
+            if rows:
+                logger.info(
+                    "Парсер (bulk): извлечено %s строк за один evaluate",
+                    len(rows),
+                )
+                return rows
+    except Exception:
+        logger.debug(
+            "Единый evaluate не сработал, переход на fallback",
+            exc_info=True,
+        )
+
+    # Fallback: поэлементный парсинг через отдельные IPC-вызовы
+    return await _parse_ads_fallback(page)
+
+
+def _parse_bulk_result(raw_rows: list[dict]) -> list[ScannedAdRow]:
+    """Преобразует результат единого JS evaluate в список ScannedAdRow."""
+    rows: list[ScannedAdRow] = []
+    for fields in raw_rows:
+        try:
+            row = _build_row_from_fields(fields)
+            if row is not None:
+                rows.append(row)
+        except Exception:
+            logger.debug(
+                "Не удалось построить строку из bulk-данных",
+                exc_info=True,
+            )
+            continue
+    return rows
+
+
+def _build_row_from_fields(fields: dict) -> ScannedAdRow | None:
+    """Строит ScannedAdRow из словаря полей (от JS или от fallback)."""
+    ad_name = fields.get("ad_name", "")
+    if not ad_name or ad_name in ("\u2014", "-"):
+        return None
+
+    # FB Ad ID берём из row_id (реальные ID — минимум 10 цифр)
+    fb_ad_id = fields.get("_row_id", "")
+    if not fb_ad_id or len(fb_ad_id) < 10:
+        # Короткий row_id — это порядковый номер строки, не FB Ad ID
+        # (например, строка итогов "Результаты, числ..." имеет row_id=12)
+        return None
+    if not fb_ad_id:
+        return None
+
+    campaign_name = fields.get("campaign_name", "")
+    adset_name = fields.get("adset_name", "")
+    delivery_status = _detect_delivery_status(
+        fields.get("delivery_status", "")
+    )
+
+    spend = _parse_money(fields.get("spend", ""), Decimal("0"))
+    clicks = _parse_int_value(fields.get("clicks", ""))
+    cpc = _parse_money_or_none(fields.get("cpc", ""))
+    leads = _parse_int_value(fields.get("leads", ""))
+    cost_per_lead = _parse_money_or_none(fields.get("cost_per_lead", ""))
+    registrations = _parse_int_value(
+        fields.get("registrations", "")
+    )
+    cost_per_registration = _parse_money_or_none(
+        fields.get("cost_per_registration", "")
+    )
+
+    return ScannedAdRow(
+        fb_ad_id=fb_ad_id,
+        campaign_name=campaign_name,
+        adset_name=adset_name,
+        ad_name=ad_name,
+        delivery_status=delivery_status,
+        spend=spend,
+        clicks=clicks,
+        cpc=cpc,
+        leads=leads,
+        cost_per_lead=cost_per_lead,
+        registrations=registrations,
+        cost_per_registration=cost_per_registration,
+        deposits=0,
+    )
+
+
+async def _parse_ads_fallback(page) -> list[ScannedAdRow]:
+    """Fallback-парсинг: поэлементные IPC-вызовы (старая логика)."""
     rows: list[ScannedAdRow] = []
 
     try:
-        # Находим все ячейки с data-surface содержащим table_row
-        cells = await page.query_selector_all('[data-surface*="table_row:"]')
+        cells = await page.query_selector_all(
+            '[data-surface*="table_row:"]'
+        )
 
         # Группируем ячейки по номеру строки
         rows_map: dict[str, list] = {}
@@ -107,7 +355,11 @@ async def parse_ads_from_page(page) -> list[ScannedAdRow]:
                 if row is not None:
                     rows.append(row)
             except Exception:
-                logger.debug("Не удалось распарсить строку %s", row_id, exc_info=True)
+                logger.debug(
+                    "Не удалось распарсить строку %s",
+                    row_id,
+                    exc_info=True,
+                )
                 continue
 
     except Exception:
@@ -129,19 +381,26 @@ async def _parse_row_from_cells(
     for surface, cell in row_cells:
         for key, field_name in _FIELD_KEYS.items():
             if key in surface:
-                text = await _get_first_text(cell)
-                # Берём первое непустое значение для каждого поля
-                if field_name not in fields or fields[field_name] in ("—", "-", ""):
+                # Выбираем функцию извлечения текста
+                if field_name == "ad_name":
+                    text = await _get_ad_name(cell)
+                elif field_name in _NUMERIC_FIELDS:
+                    text = await _get_metric_text(cell)
+                else:
+                    text = await _get_first_text(cell)
+                if (
+                    field_name not in fields
+                    or fields[field_name] in ("\u2014", "-", "")
+                ):
                     fields[field_name] = text
                 break
 
     ad_name = fields.get("ad_name", "")
-    if not ad_name or ad_name in ("—", "-"):
+    if not ad_name or ad_name in ("\u2014", "-"):
         return None
 
-    # Ищем Ad ID в тексте объявления или имени
+    # Ищем Ad ID
     fb_ad_id = ""
-    # Собираем весь текст строки для поиска Ad ID
     all_text = " ".join(fields.values())
     ad_id_match = _AD_ID_RE.search(all_text)
     if ad_id_match:
@@ -152,16 +411,19 @@ async def _parse_row_from_cells(
 
     campaign_name = fields.get("campaign_name", "")
     adset_name = fields.get("adset_name", "")
-    delivery_status = _detect_delivery_status(fields.get("delivery_status", ""))
+    delivery_status = _detect_delivery_status(
+        fields.get("delivery_status", "")
+    )
 
-    # Извлекаем метрики
     spend = _parse_money(fields.get("spend", ""), Decimal("0"))
     clicks = _parse_int_value(fields.get("clicks", ""))
     cpc = _parse_money_or_none(fields.get("cpc", ""))
     leads = _parse_int_value(fields.get("leads", ""))
     cost_per_lead = _parse_money_or_none(fields.get("cost_per_lead", ""))
     registrations = _parse_int_value(fields.get("registrations", ""))
-    cost_per_registration = _parse_money_or_none(fields.get("cost_per_registration", ""))
+    cost_per_registration = _parse_money_or_none(
+        fields.get("cost_per_registration", "")
+    )
 
     return ScannedAdRow(
         fb_ad_id=fb_ad_id,
@@ -176,14 +438,54 @@ async def _parse_row_from_cells(
         cost_per_lead=cost_per_lead,
         registrations=registrations,
         cost_per_registration=cost_per_registration,
-        deposits=0,  # Deposits нет в стандартной таблице, считаются из внешних данных
+        deposits=0,
     )
+
+
+async def _get_ad_name(element) -> str:
+    """Извлекает название объявления из ячейки name.
+
+    Facebook помещает название в span/a внутри ячейки, а рядом —
+    кнопки «Дублировать», «Редактировать» и т.д. Фильтруем известные
+    тексты кнопок и берём самый длинный оставшийся текстовый фрагмент.
+    """
+    try:
+        name = await element.evaluate("""(el) => {
+            // Тексты кнопок, которые нужно игнорировать
+            const BUTTON_LABELS = new Set([
+                'дублировать', 'редактировать', 'удалить', 'предпросмотр',
+                'duplicate', 'edit', 'delete', 'preview',
+            ]);
+
+            // Ищем ссылку с названием — обычно первый <a> с текстом
+            const link = el.querySelector('a[href]');
+            if (link) {
+                const t = link.textContent.trim();
+                if (t && t.length > 2
+                    && !BUTTON_LABELS.has(t.toLowerCase())) return t;
+            }
+
+            // Fallback: самый длинный текст, исключая кнопки
+            const walk = document.createTreeWalker(
+                el, NodeFilter.SHOW_TEXT, null, false
+            );
+            let best = '';
+            let n;
+            while (n = walk.nextNode()) {
+                const t = n.textContent.trim();
+                if (!t || BUTTON_LABELS.has(t.toLowerCase())) continue;
+                if (t.length > best.length) best = t;
+            }
+            return best || '\\u2014';
+        }""")
+        return name or "\u2014"
+    except Exception:
+        return "\u2014"
 
 
 async def _get_first_text(element) -> str:
     """Извлекает первый непустой текстовый узел из элемента."""
     try:
-        # Используем JS TreeWalker для точного извлечения текста
         text = await element.evaluate("""(el) => {
             const walk = document.createTreeWalker(
                 el, NodeFilter.SHOW_TEXT, null, false
@@ -193,11 +495,48 @@ async def _get_first_text(element) -> str:
                 const txt = n.textContent.trim();
                 if (txt) return txt;
             }
-            return "—";
+            return "\\u2014";
         }""")
-        return text or "—"
+        return text or "\u2014"
     except Exception:
-        return "—"
+        return "\u2014"
+
+
+async def _get_metric_text(element) -> str:
+    """Извлекает числовое/денежное значение из ячейки метрики.
+
+    Facebook оборачивает метрики в контейнеры, рядом с которыми могут быть
+    длинные тексты тултипов/подсказок. Берём самый короткий непустой текстовый
+    узел, который похож на число или прочерк, игнорируя длинные строки.
+    """
+    try:
+        text = await element.evaluate("""(el) => {
+            const walk = document.createTreeWalker(
+                el, NodeFilter.SHOW_TEXT, null, false
+            );
+            let best = '';
+            let n;
+            while (n = walk.nextNode()) {
+                const t = n.textContent.trim();
+                if (!t) continue;
+                // Пропускаем длинные строки — это тултипы/подсказки
+                if (t.length > 20) continue;
+                // Если ещё нет кандидата — берём первый короткий текст
+                if (!best) { best = t; continue; }
+                // Предпочитаем текст, содержащий цифру или прочерк
+                const hasDigit = /\\d/.test(t);
+                const bestHasDigit = /\\d/.test(best);
+                if (hasDigit && !bestHasDigit) { best = t; continue; }
+                // При прочих равных берём более короткий
+                if (hasDigit === bestHasDigit && t.length < best.length) {
+                    best = t;
+                }
+            }
+            return best || '\\u2014';
+        }""")
+        return text or "\u2014"
+    except Exception:
+        return "\u2014"
 
 
 def _detect_delivery_status(text: str) -> str:
@@ -209,19 +548,23 @@ def _detect_delivery_status(text: str) -> str:
         return "PAUSED"
     if "not delivering" in lowered or "не показывается" in lowered:
         return "NOT_DELIVERING"
+    # if "прекращен" in lowered or "stopped" in lowered or "завершен" in lowered:
+    #     return "NOT_DELIVERING"
     if "learning" in lowered or "обучение" in lowered:
         return "LEARNING"
-    if "выключен" in lowered or "off" in lowered:
+    if "выкл" in lowered or "off" in lowered or "disabled" in lowered:
         return "OFF"
+    logger.debug("delivery_status UNKNOWN: '%s'", text.strip()[:60])
     return "UNKNOWN"
 
 
 def _parse_money(text: str, default: Decimal) -> Decimal:
     """Извлекает Decimal из текстовой строки ('$0.15', '0,15 $', '-')."""
-    if not text or text.strip() in ("—", "-", "–", "—", "n/a", ""):
+    if not text or text.strip() in ("\u2014", "-", "\u2013", "\u2014", "n/a", ""):
         return default
-    # Заменяем запятую на точку и убираем пробелы
-    cleaned = text.replace(",", ".").replace("\xa0", "").replace(" ", "")
+    cleaned = (
+        text.replace(",", ".").replace("\xa0", "").replace(" ", "")
+    )
     match = _MONEY_RE.search(cleaned)
     if not match:
         return default
@@ -233,9 +576,11 @@ def _parse_money(text: str, default: Decimal) -> Decimal:
 
 def _parse_money_or_none(text: str) -> Decimal | None:
     """Извлекает Decimal или None если значение отсутствует."""
-    if not text or text.strip() in ("—", "-", "–", "—", "n/a", ""):
+    if not text or text.strip() in ("\u2014", "-", "\u2013", "\u2014", "n/a", ""):
         return None
-    cleaned = text.replace(",", ".").replace("\xa0", "").replace(" ", "")
+    cleaned = (
+        text.replace(",", ".").replace("\xa0", "").replace(" ", "")
+    )
     match = _MONEY_RE.search(cleaned)
     if not match:
         return None
@@ -247,7 +592,7 @@ def _parse_money_or_none(text: str) -> Decimal | None:
 
 def _parse_int_value(text: str) -> int:
     """Извлекает int из текстовой строки."""
-    if not text or text.strip() in ("—", "-", "–", "—", "n/a", ""):
+    if not text or text.strip() in ("\u2014", "-", "\u2013", "\u2014", "n/a", ""):
         return 0
     cleaned = re.sub(r"[^\d]", "", text)
     return int(cleaned) if cleaned else 0

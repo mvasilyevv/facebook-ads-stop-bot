@@ -3,13 +3,14 @@
 
 from __future__ import annotations
 
-from decimal import ROUND_CEILING, Decimal
+from decimal import ROUND_CEILING, ROUND_HALF_UP, Decimal
 
 from core.domain import AlertStage
 from core.rules.types import RuleContext, RuleEvaluation, RuleHit
 from core.scanner.models import ScannedAdRow
 
 _HUNDRED = Decimal("100")
+_MONEY_STEP = Decimal("0.01")
 
 
 def evaluate_stop_rules(row: ScannedAdRow, ctx: RuleContext) -> RuleEvaluation:
@@ -35,6 +36,7 @@ def evaluate_stop_rules(row: ScannedAdRow, ctx: RuleContext) -> RuleEvaluation:
         stop_percent=ctx.cpc_percent_stop,
         cpa_amount=ctx.cpa_amount,
         warning_pct=ctx.warning_percent_of_stop,
+        stop_percent_of_base=ctx.stop_percent_of_base,
         enabled=ctx.cpc_enabled,
         label="CPC",
     )
@@ -51,12 +53,18 @@ def evaluate_stop_rules(row: ScannedAdRow, ctx: RuleContext) -> RuleEvaluation:
         stop_percent=ctx.cpl_percent_stop,
         cpa_amount=ctx.cpa_amount,
         warning_pct=ctx.warning_percent_of_stop,
+        stop_percent_of_base=ctx.stop_percent_of_base,
         enabled=ctx.cpl_enabled,
         label="CPL",
     )
 
     # --- Правило 3: CPR > X% CPA ---
-    cpr_threshold = _percent_of_cpa(ctx.cpa_amount, ctx.cpr_percent_stop)
+    cpr_threshold = _round_money(_percent_of_cpa(ctx.cpa_amount, ctx.cpr_percent_stop))
+    registration_cpr = (
+        _round_money(row.cost_per_registration)
+        if row.cost_per_registration is not None
+        else None
+    )
     _check_metric_rule(
         stop_hits=stop_hits,
         warning_hits=warning_hits,
@@ -68,6 +76,7 @@ def evaluate_stop_rules(row: ScannedAdRow, ctx: RuleContext) -> RuleEvaluation:
         stop_percent=ctx.cpr_percent_stop,
         cpa_amount=ctx.cpa_amount,
         warning_pct=ctx.warning_percent_of_stop,
+        stop_percent_of_base=ctx.stop_percent_of_base,
         enabled=ctx.cpr_enabled,
         label="CPR",
     )
@@ -75,8 +84,8 @@ def evaluate_stop_rules(row: ScannedAdRow, ctx: RuleContext) -> RuleEvaluation:
     # --- Правило 4: N регистраций без депозитов ---
     registration_normal = (
         row.registrations > 0
-        and row.cost_per_registration is not None
-        and row.cost_per_registration <= cpr_threshold
+        and registration_cpr is not None
+        and registration_cpr <= cpr_threshold
     )
     if ctx.regs_no_dep_enabled and row.deposits == 0:
         stop_val = Decimal(ctx.regs_no_dep_stop_count)
@@ -116,7 +125,8 @@ def evaluate_stop_rules(row: ScannedAdRow, ctx: RuleContext) -> RuleEvaluation:
             stop_from=ctx.spend_no_dep_from_percent,
             stop_to=ctx.spend_no_dep_to_percent,
             warning_pct=ctx.warning_percent_of_stop,
-            summary=f"Расход {spend_percent:.2f}% CPA, депозитов 0, рега в норме",
+            stop_percent_of_base=ctx.stop_percent_of_base,
+            summary_suffix="депозитов 0, рега в норме",
         )
 
     # --- Правило 6: Есть деп, расход 70-90% CPA ---
@@ -130,7 +140,8 @@ def evaluate_stop_rules(row: ScannedAdRow, ctx: RuleContext) -> RuleEvaluation:
             stop_from=ctx.spend_with_dep_from_percent,
             stop_to=ctx.spend_with_dep_to_percent,
             warning_pct=ctx.warning_percent_of_stop,
-            summary=f"Расход {spend_percent:.2f}% CPA, депозитов {row.deposits}",
+            stop_percent_of_base=ctx.stop_percent_of_base,
+            summary_suffix=f"депозитов {row.deposits}",
         )
 
     # Определяем итоговую стадию
@@ -160,6 +171,7 @@ def _check_metric_rule(
     stop_percent: Decimal,
     cpa_amount: Decimal,
     warning_pct: Decimal,
+    stop_percent_of_base: Decimal,
     enabled: bool,
     label: str,
 ) -> None:
@@ -171,11 +183,15 @@ def _check_metric_rule(
     if not enabled:
         return
 
-    stop_threshold = _percent_of_cpa(cpa_amount, stop_percent)
-    warning_threshold = _warning_threshold(stop_threshold, warning_pct)
+    spend = _round_money(spend)
+    metric_value = _round_money(metric_value) if metric_value is not None else None
+    base_stop_threshold = _round_money(_percent_of_cpa(cpa_amount, stop_percent))
+    stop_threshold = _round_money(_apply_downward_stop(base_stop_threshold, stop_percent_of_base))
+    warning_threshold = _round_money(_warning_threshold(stop_threshold, warning_pct))
+    threshold_text = _format_threshold_value(stop_threshold, base_stop_threshold)
 
     # Нюанс: расход превышает порог, но событий (кликов/лидов/рег) нет
-    if metric_count == 0 and spend > stop_threshold:
+    if metric_count == 0 and spend >= stop_threshold:
         stop_hits.append(
             RuleHit(
                 code=code,
@@ -183,7 +199,10 @@ def _check_metric_rule(
                 stage=AlertStage.STOP,
                 value=spend,
                 threshold=stop_threshold,
-                summary=f"Расход {spend:.4f} превысил порог {label} {stop_threshold:.4f} без единого события",
+                summary=(
+                    f"Расход {_format_money_value(spend)} превысил стоп "
+                    f"{label} {threshold_text} без единого события"
+                ),
             )
         )
         return
@@ -196,7 +215,10 @@ def _check_metric_rule(
                 stage=AlertStage.WARNING,
                 value=spend,
                 threshold=warning_threshold,
-                summary=f"Расход {spend:.4f} приближается к порогу {label} {stop_threshold:.4f} без событий",
+                summary=(
+                    f"Расход {_format_money_value(spend)} приближается к стопу "
+                    f"{label} {threshold_text} без событий"
+                ),
             )
         )
         return
@@ -213,10 +235,10 @@ def _check_metric_rule(
                 stage=AlertStage.STOP,
                 value=current,
                 threshold=stop_threshold,
-                summary=f"{label} {current:.4f} выше стопа {stop_threshold:.4f}",
+                summary=f"{label} {_format_money_value(current)} > стоп {threshold_text}",
             )
         )
-    elif current > warning_threshold:
+    elif current >= warning_threshold:
         warning_hits.append(
             RuleHit(
                 code=code,
@@ -224,7 +246,9 @@ def _check_metric_rule(
                 stage=AlertStage.WARNING,
                 value=current,
                 threshold=warning_threshold,
-                summary=f"{label} {current:.4f} приближается к стопу {stop_threshold:.4f}",
+                summary=(
+                    f"{label} {_format_money_value(current)} приближается к стопу {threshold_text}"
+                ),
             )
         )
 
@@ -239,22 +263,26 @@ def _check_range_rule(
     stop_from: Decimal,
     stop_to: Decimal,
     warning_pct: Decimal,
-    summary: str,
+    stop_percent_of_base: Decimal,
+    summary_suffix: str,
 ) -> None:
     """Проверяет диапазонное правило (расход в процентах CPA)."""
-    warning_from = _warning_threshold(stop_from, warning_pct)
-    if stop_from <= current_value <= stop_to:
+    effective_from = _apply_downward_stop(stop_from, stop_percent_of_base)
+    effective_to = _apply_downward_stop(stop_to, stop_percent_of_base)
+    warning_from = _warning_threshold(effective_from, warning_pct)
+    range_text = _format_percent_range(effective_from, effective_to, stop_from, stop_to)
+    if effective_from <= current_value <= effective_to:
         stop_hits.append(
             RuleHit(
                 code=code,
                 title=title,
                 stage=AlertStage.STOP,
                 value=current_value,
-                threshold=stop_from,
-                summary=summary,
+                threshold=effective_from,
+                summary=f"Расход {current_value:.2f}% CPA вошёл в стоп-диапазон {range_text}, {summary_suffix}",
             )
         )
-    elif warning_from <= current_value < stop_from:
+    elif warning_from <= current_value < effective_from:
         warning_hits.append(
             RuleHit(
                 code=code,
@@ -262,7 +290,7 @@ def _check_range_rule(
                 stage=AlertStage.WARNING,
                 value=current_value,
                 threshold=warning_from,
-                summary=summary,
+                summary=f"Расход {current_value:.2f}% CPA приближается к стоп-диапазону {range_text}, {summary_suffix}",
             )
         )
 
@@ -282,6 +310,38 @@ def _ratio_percent(value: Decimal, total: Decimal) -> Decimal:
 
 def _warning_threshold(stop_threshold: Decimal, warning_pct: Decimal) -> Decimal:
     return (Decimal(stop_threshold) * Decimal(warning_pct)) / _HUNDRED
+
+
+def _apply_downward_stop(base_value: Decimal, stop_percent_of_base: Decimal) -> Decimal:
+    return (Decimal(base_value) * Decimal(stop_percent_of_base)) / _HUNDRED
+
+
+def _round_money(value: Decimal) -> Decimal:
+    return Decimal(value).quantize(_MONEY_STEP, rounding=ROUND_HALF_UP)
+
+
+def _format_money_value(value: Decimal) -> str:
+    return f"{_round_money(value):.2f}"
+
+
+def _format_threshold_value(effective_value: Decimal, base_value: Decimal) -> str:
+    if Decimal(effective_value) == Decimal(base_value):
+        return _format_money_value(effective_value)
+    return f"{_format_money_value(effective_value)} (базовый {_format_money_value(base_value)})"
+
+
+def _format_percent_range(
+    effective_from: Decimal,
+    effective_to: Decimal,
+    base_from: Decimal,
+    base_to: Decimal,
+) -> str:
+    if Decimal(effective_from) == Decimal(base_from) and Decimal(effective_to) == Decimal(base_to):
+        return f"{effective_from:.2f}-{effective_to:.2f}%"
+    return (
+        f"{effective_from:.2f}-{effective_to:.2f}% "
+        f"(базовый {base_from:.2f}-{base_to:.2f}%)"
+    )
 
 
 def _warning_count(stop_count: int, warning_pct: Decimal) -> Decimal:

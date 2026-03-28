@@ -5,19 +5,31 @@ import OffersPage from './pages/OffersPage.jsx';
 import SettingsPage from './pages/SettingsPage.jsx';
 
 const PAGES = [
-  { id: 'dashboard', label: 'Dashboard', icon: '📊' },
-  { id: 'ads', label: 'Объявления', icon: '📋' },
-  { id: 'offers', label: 'Офферы', icon: '🎯' },
-  { id: 'settings', label: 'Настройки', icon: '⚙️' },
+  { id: 'dashboard', label: 'Мониторинг', code: '01' },
+  { id: 'ads', label: 'Объявления', code: '02' },
+  { id: 'offers', label: 'Офферы', code: '03' },
+  { id: 'settings', label: 'Настройки', code: '04' },
 ];
 
 export default function App() {
   const [currentPage, setCurrentPage] = useState('dashboard');
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [adsInitialView, setAdsInitialView] = useState('active');
+  const [adsInitialState, setAdsInitialState] = useState('');
 
-  /* Закрываем мобильный сайдбар при переключении страницы */
-  const navigate = useCallback((pageId) => {
-    setCurrentPage(pageId);
+  /* navigate принимает строку вида 'ads', '/ads?view=active', '/ads?state=WARNING_SENT' */
+  const navigate = useCallback((target) => {
+    const path = String(target);
+    if (path.startsWith('/ads') || path === 'ads') {
+      try {
+        const url = new URL('http://x' + (path.startsWith('/') ? path : '/' + path));
+        setAdsInitialView(url.searchParams.get('view') || 'active');
+        setAdsInitialState(url.searchParams.get('state') || '');
+      } catch (_) {}
+      setCurrentPage('ads');
+    } else {
+      setCurrentPage(path.replace(/^\//, ''));
+    }
     setSidebarOpen(false);
   }, []);
 
@@ -35,15 +47,15 @@ export default function App() {
   const renderPage = () => {
     switch (currentPage) {
       case 'dashboard':
-        return <DashboardPage />;
+        return <DashboardPage onNavigate={navigate} />;
       case 'ads':
-        return <AdsPage />;
+        return <AdsPage initialView={adsInitialView} initialState={adsInitialState} />;
       case 'offers':
         return <OffersPage />;
       case 'settings':
         return <SettingsPage />;
       default:
-        return <DashboardPage />;
+        return <DashboardPage onNavigate={navigate} />;
     }
   };
 
@@ -74,7 +86,11 @@ export default function App() {
       {/* Навигация */}
       <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`} role="navigation" aria-label="Главное меню">
         <div className="sidebar-logo" aria-hidden="true">
-          🛑 <span>Stop Bot</span> v2
+          <span className="sidebar-logo__mark">◈</span>
+          <div className="sidebar-logo__text">
+            <span className="sidebar-logo__brand">AdGuard</span>
+            <span className="sidebar-logo__sub">FB Bot</span>
+          </div>
         </div>
         <nav>
           {PAGES.map((page) => (
@@ -84,17 +100,13 @@ export default function App() {
               onClick={() => navigate(page.id)}
               aria-current={currentPage === page.id ? 'page' : undefined}
             >
-              <span className="nav-icon" aria-hidden="true">
-                {page.icon}
-              </span>
+              <span className="nav-code" aria-hidden="true">{page.code}</span>
               {page.label}
             </button>
           ))}
         </nav>
         <div style={{ flex: 1 }} />
-        <div style={{ padding: '12px', color: 'var(--text-muted)', fontSize: 11 }}>
-          FB Stop Bot v2 • 0.1.0
-        </div>
+        <div className="sidebar-footer">v0.1.0</div>
       </aside>
 
       {/* Основной контент */}

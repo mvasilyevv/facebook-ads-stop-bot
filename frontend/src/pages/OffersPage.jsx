@@ -33,7 +33,7 @@ function OfferModal({ offer, onSave, onClose }) {
   const [form, setForm] = useState({
     code: offer?.code || '',
     name: offer?.name || '',
-    cpa: offer?.cpa || '',
+    cpa: offer?.cpa_amount || offer?.cpa || '',
     is_active: offer?.is_active ?? true,
   });
   const [saving, setSaving] = useState(false);
@@ -43,8 +43,10 @@ function OfferModal({ offer, onSave, onClose }) {
     setSaving(true);
     try {
       await onSave({
-        ...form,
-        cpa: parseFloat(form.cpa) || 0,
+        code: form.code,
+        name: form.name,
+        cpa_amount: parseFloat(form.cpa) || 0,
+        is_active: form.is_active,
       });
     } finally {
       setSaving(false);
@@ -126,21 +128,21 @@ function OfferModal({ offer, onSave, onClose }) {
 
 /* Шесть стоп-правил */
 const RULE_DEFS = [
-  { key: 'cpc', title: 'Правило 1: CPC > X% CPA', fields: [{ name: 'cpc_percent', label: 'Процент стопа (%)', type: 'number' }] },
-  { key: 'cpl', title: 'Правило 2: CPL > X% CPA', fields: [{ name: 'cpl_percent', label: 'Процент стопа (%)', type: 'number' }] },
-  { key: 'cpr', title: 'Правило 3: CPR > X% CPA', fields: [{ name: 'cpr_percent', label: 'Процент стопа (%)', type: 'number' }] },
-  { key: 'regs_no_dep', title: 'Правило 4: N регистраций без депозитов', fields: [{ name: 'regs_no_dep_count', label: 'Количество регистраций', type: 'number' }] },
-  { key: 'spend_no_dep', title: 'Правило 5: Расход без депозитов', fields: [{ name: 'spend_no_dep_from', label: 'Расход от (% CPA)', type: 'number' }, { name: 'spend_no_dep_to', label: 'Расход до (% CPA)', type: 'number' }] },
-  { key: 'spend_with_dep', title: 'Правило 6: Расход с депозитом', fields: [{ name: 'spend_with_dep_from', label: 'Расход от (% CPA)', type: 'number' }, { name: 'spend_with_dep_to', label: 'Расход до (% CPA)', type: 'number' }] },
+  { key: 'cpc_percent', title: 'Правило 1: CPC > X% CPA', fields: [{ name: 'cpc_percent_stop', label: 'Процент стопа (%)', type: 'number' }] },
+  { key: 'cpl_percent', title: 'Правило 2: CPL > X% CPA', fields: [{ name: 'cpl_percent_stop', label: 'Процент стопа (%)', type: 'number' }] },
+  { key: 'cpr_percent', title: 'Правило 3: CPR > X% CPA', fields: [{ name: 'cpr_percent_stop', label: 'Процент стопа (%)', type: 'number' }] },
+  { key: 'regs_no_dep', title: 'Правило 4: N регистраций без депозитов', fields: [{ name: 'regs_no_dep_stop_count', label: 'Количество регистраций', type: 'number' }] },
+  { key: 'spend_no_dep', title: 'Правило 5: Расход без депозитов', fields: [{ name: 'spend_no_dep_from_percent', label: 'Расход от (% CPA)', type: 'number' }, { name: 'spend_no_dep_to_percent', label: 'Расход до (% CPA)', type: 'number' }] },
+  { key: 'spend_with_dep', title: 'Правило 6: Расход с депозитом', fields: [{ name: 'spend_with_dep_from_percent', label: 'Расход от (% CPA)', type: 'number' }, { name: 'spend_with_dep_to_percent', label: 'Расход до (% CPA)', type: 'number' }] },
 ];
 
 const DEFAULT_RULES = {
-  cpc_enabled: true, cpc_percent: '2',
-  cpl_enabled: true, cpl_percent: '10',
-  cpr_enabled: true, cpr_percent: '20',
-  regs_no_dep_enabled: true, regs_no_dep_count: '5',
-  spend_no_dep_enabled: true, spend_no_dep_from: '50', spend_no_dep_to: '70',
-  spend_with_dep_enabled: true, spend_with_dep_from: '70', spend_with_dep_to: '90',
+  cpc_percent_enabled: true, cpc_percent_stop: '2',
+  cpl_percent_enabled: true, cpl_percent_stop: '10',
+  cpr_percent_enabled: true, cpr_percent_stop: '20',
+  regs_no_dep_enabled: true, regs_no_dep_stop_count: '5',
+  spend_no_dep_enabled: true, spend_no_dep_from_percent: '50', spend_no_dep_to_percent: '70',
+  spend_with_dep_enabled: true, spend_with_dep_from_percent: '70', spend_with_dep_to_percent: '90',
 };
 
 export default function OffersPage() {
@@ -288,7 +290,7 @@ export default function OffersPage() {
                   <th scope="col">Название</th>
                   <th scope="col">CPA</th>
                   <th scope="col">Статус</th>
-                  <th scope="col">Действия</th>
+                  <th scope="col" className="actions-col">Действия</th>
                 </tr>
               </thead>
               <tbody>
@@ -298,18 +300,19 @@ export default function OffersPage() {
                       <code style={{ color: 'var(--accent-purple)' }}>{o.code}</code>
                     </td>
                     <td style={{ fontWeight: 500, color: 'var(--text-primary)' }}>{o.name}</td>
-                    <td style={{ fontWeight: 600 }}>${Number(o.cpa).toFixed(2)}</td>
+                    <td style={{ fontWeight: 600 }}>${Number(o.cpa_amount ?? o.cpa).toFixed(2)}</td>
                     <td>
                       <span className={`badge ${o.is_active ? 'badge-success' : 'badge-muted'}`}>
                         {o.is_active ? 'Активен' : 'Выкл.'}
                       </span>
                     </td>
-                    <td>
+                    <td className="actions-col">
                       <div style={{ display: 'flex', gap: 8 }}>
                         <button
                           className="btn btn-outline btn-sm"
                           onClick={() => openRules(o.id)}
                           aria-expanded={editingId === o.id}
+                          title="Настроить правила"
                         >
                           {editingId === o.id ? 'Свернуть' : 'Правила'}
                         </button>
@@ -320,6 +323,7 @@ export default function OffersPage() {
                             setShowModal(true);
                           }}
                           aria-label={`Редактировать ${o.name}`}
+                          title="Редактировать"
                         >
                           ✏️
                         </button>
@@ -327,6 +331,7 @@ export default function OffersPage() {
                           className="btn btn-outline btn-sm"
                           onClick={() => handleDelete(o)}
                           aria-label={`Удалить ${o.name}`}
+                          title="Удалить"
                           style={{ color: 'var(--accent-red)' }}
                         >
                           🗑
