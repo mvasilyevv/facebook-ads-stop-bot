@@ -480,6 +480,41 @@ async def _broadcast_message(
     return delivered_refs
 
 
+async def broadcast_observer_runtime_message(
+    *,
+    text: str,
+    fallback_token: str = "",
+    fallback_chat_id: str = "",
+) -> None:
+    """Рассылает служебное сообщение observer в CONTROL-поток или личный чат."""
+    token, destinations = await load_telegram_runtime_config(
+        fallback_token=fallback_token,
+        fallback_chat_id=fallback_chat_id,
+    )
+    if not token or not destinations or not text.strip():
+        return
+
+    client = TelegramBotClient(token)
+    try:
+        for destination in destinations:
+            message_thread_id = None
+            if destination.delivery_mode == "FORUM_GROUP":
+                message_thread_id = destination.control_topic_id
+            try:
+                await client.send_message(
+                    chat_id=destination.chat_id,
+                    message_thread_id=message_thread_id,
+                    text=text,
+                )
+            except Exception:
+                logger.exception(
+                    "Не удалось доставить служебное Telegram-сообщение observer в chat_id=%s",
+                    destination.chat_id,
+                )
+    finally:
+        await client.close()
+
+
 async def broadcast_disable_task_queue_message(
     *,
     ad_name: str,

@@ -1365,11 +1365,8 @@ async def test_reset_ads_table_scroll_rewinds_table_to_top():
         assert call.kwargs["move_before"] is False
 
 
-def _patch_observer_loop_runtime(stack: ExitStack, *, refresh_side_effect) -> AsyncMock:
-    """Изолирует reconnect-тесты от БД и внешних интеграций."""
-    stack.enter_context(
-        patch("apps.observer_worker.main.refresh_table", side_effect=refresh_side_effect)
-    )
+def _patch_observer_loop_runtime(stack: ExitStack, *, scan_side_effect) -> AsyncMock:
+    """Изолирует observer_loop от БД и внешних интеграций."""
     stack.enter_context(
         patch("apps.observer_worker.main.load_offers_from_db", new=AsyncMock(return_value={}))
     )
@@ -1428,7 +1425,10 @@ def _patch_observer_loop_runtime(stack: ExitStack, *, refresh_side_effect) -> As
         )
     )
     stack.enter_context(
-        patch("apps.observer_worker.main._scroll_and_parse", new=AsyncMock(return_value=[]))
+        patch(
+            "apps.observer_worker.main.scan_ads_with_page_recovery",
+            new=AsyncMock(side_effect=scan_side_effect),
+        )
     )
     stack.enter_context(patch("apps.observer_worker.main.batch_save_snapshots", new=AsyncMock()))
     stack.enter_context(
@@ -1442,6 +1442,12 @@ def _patch_observer_loop_runtime(stack: ExitStack, *, refresh_side_effect) -> As
     )
     stack.enter_context(patch("apps.observer_worker.main._human_micro_pause", new=AsyncMock()))
     stack.enter_context(
+        patch("apps.observer_worker.main.broadcast_observer_runtime_message", new=AsyncMock())
+    )
+    stack.enter_context(
+        patch("apps.observer_worker.main.update_observer_runtime_status", new=AsyncMock())
+    )
+    stack.enter_context(
         patch(
             "apps.observer_worker.main.check_scan_requested_flag",
             new=AsyncMock(return_value=False),
@@ -1454,41 +1460,29 @@ def _patch_observer_loop_runtime(stack: ExitStack, *, refresh_side_effect) -> As
     )
 
 
-# Проверяем что observer сбрасывает позицию перед refresh и затем запускает скан
+# Проверяем что observer делегирует скан отдельному recovery-helper
 @pytest.mark.asyncio
-async def test_observer_loop_resets_scroll_before_refresh_and_then_scans():
-    """Каждый цикл должен поднимать таблицу вверх до refresh и потом запускать скан."""
+async def test_observer_loop_delegates_scan_to_recovery_helper():
+    """Каждый цикл должен вызывать отдельный helper восстановления скана."""
     from apps.observer_worker.main import observer_loop
 
     mock_page = AsyncMock()
     mock_page.viewport_size = {"width": 1200, "height": 800}
     shutdown_event = asyncio.Event()
-    call_order: list[str] = []
+    parse_fn = AsyncMock(return_value=[])
 
-    async def successful_refresh(page):
-        call_order.append("refresh")
-        return True
-
-    async def reset_scroll(page):
-        call_order.append("reset")
-
-    async def scroll_and_stop(page, parse_fn):
-        call_order.append("scroll")
+    async def scan_and_stop(**kwargs):
         shutdown_event.set()
         return []
 
+    scan_mock = AsyncMock(side_effect=scan_and_stop)
+
     with ExitStack() as stack:
-        _patch_observer_loop_runtime(stack, refresh_side_effect=successful_refresh)
+        _patch_observer_loop_runtime(stack, scan_side_effect=AsyncMock(return_value=[]))
         stack.enter_context(
             patch(
-                "apps.observer_worker.main._reset_ads_table_scroll",
-                new=AsyncMock(side_effect=reset_scroll),
-            )
-        )
-        stack.enter_context(
-            patch(
-                "apps.observer_worker.main._scroll_and_parse",
-                new=AsyncMock(side_effect=scroll_and_stop),
+                "apps.observer_worker.main.scan_ads_with_page_recovery",
+                new=scan_mock,
             )
         )
         await observer_loop(
@@ -1497,12 +1491,78 @@ async def test_observer_loop_resets_scroll_before_refresh_and_then_scans():
             telegram_bot_token="",
             telegram_chat_id="",
             interval_seconds=1,
+            parse_fn=parse_fn,
+            browser_manager=AsyncMock(),
+            shutdown_event=shutdown_event,
+        )
+
+    scan_mock.assert_awaited_once()
+    assert scan_mock.await_args.kwargs["page"] is mock_page
+    assert scan_mock.await_args.kwargs["parse_fn"] is parse_fn
+    assert callable(scan_mock.await_args.kwargs["refresh_table_fn"])
+    assert callable(scan_mock.await_args.kwargs["reset_scroll_fn"])
+    assert callable(scan_mock.await_args.kwargs["scroll_and_parse_fn"])
+
+
+# Проверяем что после 5 неудачных попыток observer выключает сканирование и шлёт служебный TG-алерт.
+@pytest.mark.asyncio
+async def test_observer_loop_disables_scanning_after_scan_recovery_exhausted():
+    """После исчерпания recovery observer должен выключить сканирование и отправить alert."""
+    from apps.observer_worker.main import observer_loop
+    from core.scanner.recovery import ScanDataUnavailableError
+
+    shutdown_event = asyncio.Event()
+
+    with ExitStack() as stack:
+        _patch_observer_loop_runtime(stack, scan_side_effect=AsyncMock(return_value=[]))
+        broadcast_mock = stack.enter_context(
+            patch(
+                "apps.observer_worker.main.broadcast_observer_runtime_message",
+                new=AsyncMock(),
+            )
+        )
+        set_scanning_mock = stack.enter_context(
+            patch(
+                "apps.observer_worker.main.set_observer_scanning_enabled",
+                new=AsyncMock(side_effect=lambda enabled: shutdown_event.set()),
+            )
+        )
+        update_status_mock = stack.enter_context(
+            patch(
+                "apps.observer_worker.main.update_observer_runtime_status",
+                new=AsyncMock(),
+            )
+        )
+        stack.enter_context(
+            patch(
+                "apps.observer_worker.main.scan_ads_with_page_recovery",
+                new=AsyncMock(
+                    side_effect=ScanDataUnavailableError(
+                        attempts=5,
+                        retry_interval_seconds=60,
+                    )
+                ),
+            )
+        )
+
+        await observer_loop(
+            page=AsyncMock(),
+            offers={},
+            telegram_bot_token="fallback-token",
+            telegram_chat_id="fallback-chat",
+            interval_seconds=1,
             parse_fn=AsyncMock(return_value=[]),
             browser_manager=AsyncMock(),
             shutdown_event=shutdown_event,
         )
 
-    assert call_order[:3] == ["reset", "refresh", "scroll"]
+    assert shutdown_event.is_set()
+    set_scanning_mock.assert_awaited_once_with(False)
+    broadcast_mock.assert_awaited_once()
+    assert "Observer отключён" in broadcast_mock.await_args.kwargs["text"]
+    assert any(
+        call.kwargs.get("status") == "PAUSED" for call in update_status_mock.await_args_list
+    )
 
 
 # Проверяем что NOT_DELIVERING обрабатывается как уже выключенное объявление и не идёт в rule-evaluation.
@@ -1545,12 +1605,9 @@ async def test_observer_loop_skips_rule_evaluation_for_not_delivering_rows():
         shutdown_event.set()
 
     with ExitStack() as stack:
-        _patch_observer_loop_runtime(stack, refresh_side_effect=AsyncMock(return_value=True))
-        stack.enter_context(
-            patch(
-                "apps.observer_worker.main._scroll_and_parse",
-                new=AsyncMock(return_value=[scanned_row]),
-            )
+        _patch_observer_loop_runtime(
+            stack,
+            scan_side_effect=AsyncMock(return_value=[scanned_row]),
         )
         stack.enter_context(
             patch(
@@ -1595,16 +1652,16 @@ async def test_reconnect_on_browser_error():
 
     call_count = 0
 
-    async def failing_refresh(page):
+    async def failing_refresh(**kwargs):
         nonlocal call_count
         call_count += 1
         if call_count <= 2:
             raise ConnectionError("Потеряна связь с браузером")
         shutdown_event.set()
-        return True
+        return []
 
     with ExitStack() as stack:
-        _patch_observer_loop_runtime(stack, refresh_side_effect=failing_refresh)
+        _patch_observer_loop_runtime(stack, scan_side_effect=failing_refresh)
         await observer_loop(
             page=mock_page,
             offers={},
@@ -1632,11 +1689,11 @@ async def test_reconnect_max_attempts_exit():
     mock_browser_manager.get_page.return_value = mock_page
 
     # Всегда падаем с ошибкой связи
-    async def always_fail(page):
+    async def always_fail(**kwargs):
         raise ConnectionError("Потеряна связь с браузером")
 
     with ExitStack() as stack:
-        _patch_observer_loop_runtime(stack, refresh_side_effect=always_fail)
+        _patch_observer_loop_runtime(stack, scan_side_effect=always_fail)
         with pytest.raises(ConnectionError):
             await observer_loop(
                 page=mock_page,
@@ -1666,18 +1723,18 @@ async def test_reconnect_counter_resets_on_success():
 
     call_count = 0
 
-    async def mixed_refresh(page):
+    async def mixed_refresh(**kwargs):
         nonlocal call_count
         call_count += 1
         if call_count == 1:
             raise ConnectionError("Потеряна связь")
         if call_count == 2:
-            return True
+            return []
         shutdown_event.set()
         raise ConnectionError("Потеряна связь повторно")
 
     with ExitStack() as stack:
-        sleep_mock = _patch_observer_loop_runtime(stack, refresh_side_effect=mixed_refresh)
+        sleep_mock = _patch_observer_loop_runtime(stack, scan_side_effect=mixed_refresh)
         await observer_loop(
             page=mock_page,
             offers={},

@@ -69,7 +69,9 @@ from core.observer.service import AlertCandidate, build_metrics_json, evaluate_r
 from core.observer.state_machine import resolve_transition
 from core.scanner.models import ScannedAdRow
 from core.scanner.parser import refresh_table
+from core.scanner.recovery import ScanDataUnavailableError, scan_ads_with_page_recovery
 from core.telegram.client import TelegramBotClient
+from core.telegram.delivery import broadcast_observer_runtime_message
 from core.telegram.message_refs import (
     load_message_refs_by_chat,
     stream_for_alert_stage,
@@ -524,6 +526,44 @@ async def load_telegram_recipients_from_db() -> list[TelegramDestination]:
     """Сохраняет совместимость старого имени helper-а."""
     _, destinations = await load_telegram_runtime_config()
     return destinations
+
+
+async def set_observer_scanning_enabled(enabled: bool) -> None:
+    """Переключает флаг сканирования observer в singleton-настройках."""
+    factory = get_session_factory()
+    async with factory() as session:
+        result = await session.execute(
+            select(ObserverSettings).where(ObserverSettings.singleton_key == "default")
+        )
+        row = result.scalar_one_or_none()
+        if row is None:
+            row = ObserverSettings(singleton_key="default")
+            session.add(row)
+        row.is_scanning_enabled = enabled
+        await session.commit()
+
+
+def _build_scan_recovery_alert_text(exc: ScanDataUnavailableError) -> str:
+    """Формирует Telegram-алерт о фатальной недоступности данных скана."""
+    return (
+        "🚨 <b>Observer отключён</b>\n\n"
+        "Причина: Ads Manager не вернул данные сканирования после "
+        f"{exc.attempts} попыток перезагрузки страницы.\n"
+        f"Интервал между попытками: {int(exc.retry_interval_seconds)} сек.\n"
+        "Сканирование автоматически выключено.\n"
+        "Проверьте открытую страницу кабинета и затем включите воркер снова."
+    )
+
+
+async def _update_scan_recovery_status(attempt: int, max_attempts: int) -> None:
+    """Пишет в runtime-статус, что observer пытается восстановить данные страницы."""
+    await update_observer_runtime_status(
+        status="RECOVERING",
+        message=(
+            "Данные сканирования недоступны. "
+            f"Перезагружаем страницу и повторяем попытку {attempt}/{max_attempts}."
+        ),
+    )
 
 
 async def load_ad_states_from_db() -> dict[str, tuple[AlertState, str | None]]:
@@ -1643,21 +1683,18 @@ async def observer_loop(
                 clear_last_error=True,
             )
 
-            # После предыдущего прохода таблица может остаться внизу.
-            # Перед refresh возвращаемся к началу, чтобы новый цикл
-            # не стартовал только с хвоста списка объявлений.
-            await _reset_ads_table_scroll(page)
-
-            # 1. Обновляем таблицу (кнопка «Обновить» или reload)
-            logger.info("Observer: обновление таблицы")
-            refreshed = await refresh_table(page)
-            if not refreshed:
-                # Если кнопка не найдена — перезагружаем страницу
-                await page.reload(wait_until="domcontentloaded")
-            await asyncio.sleep(random.uniform(2.0, 4.0))
-
-            # 2. Плавный скролл + парсинг
-            rows = await _scroll_and_parse(page, parse_fn)
+            # 1-2. Обновляем таблицу и, если строки не появились,
+            # пробуем восстановить страницу через page reload.
+            rows = await scan_ads_with_page_recovery(
+                page=page,
+                parse_fn=parse_fn,
+                refresh_table_fn=refresh_table,
+                reset_scroll_fn=_reset_ads_table_scroll,
+                scroll_and_parse_fn=_scroll_and_parse,
+                sleep_fn=asyncio.sleep,
+                settle_delay_seconds=random.uniform(2.0, 4.0),
+                on_recovery_attempt=_update_scan_recovery_status,
+            )
             logger.info("Observer: получено %s объявлений", len(rows))
 
             resolved_rows = []
@@ -1962,6 +1999,28 @@ async def observer_loop(
             # Успешный цикл — сбрасываем счётчик ошибок браузера
             consecutive_browser_errors = 0
             cycle_completed = True
+
+        except ScanDataUnavailableError as exc:
+            runtime_message = str(exc)
+            await set_observer_scanning_enabled(False)
+            await update_observer_runtime_status(
+                status="PAUSED",
+                message=runtime_message,
+                last_error=runtime_message,
+            )
+            logger.error("Observer: %s", runtime_message)
+            try:
+                await broadcast_observer_runtime_message(
+                    text=_build_scan_recovery_alert_text(exc),
+                    fallback_token=tg_token or telegram_bot_token,
+                    fallback_chat_id=telegram_chat_id,
+                )
+            except Exception:
+                logger.exception(
+                    "Не удалось отправить Telegram-алерт о недоступности данных скана"
+                )
+
+            continue
 
         except Exception as exc:
             if _is_browser_connection_error(exc):
