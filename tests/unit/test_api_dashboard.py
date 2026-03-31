@@ -3,15 +3,16 @@
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
-
-import pytest
+from unittest.mock import AsyncMock, MagicMock, patch
 from zoneinfo import ZoneInfo
 
-from core.domain import AlertState
+import pytest
+
+from core.domain import AlertStage, AlertState, DisableTaskStatus
 
 
 # Вспомогательная фабрика мок-результата GROUP BY
@@ -80,6 +81,418 @@ def _make_archive(
     )
 
 
+def _make_risk_snapshot(
+    *,
+    alert_state: AlertState,
+    early_signal_rule_codes: list[str] | None = None,
+    warning_rule_codes: list[str] | None = None,
+    stop_rule_codes: list[str] | None = None,
+):
+    """Создаёт упрощённый snapshot для тестов причин активных рисков."""
+    return SimpleNamespace(
+        alert_state=alert_state,
+        early_signal_rule_codes=early_signal_rule_codes or [],
+        warning_rule_codes=warning_rule_codes or [],
+        stop_rule_codes=stop_rule_codes or [],
+    )
+
+
+def _make_stop_overrun_snapshot(
+    *,
+    offer_id,
+    campaign_name: str,
+    ad_name: str,
+    spend: str = "0.00",
+    clicks: int = 0,
+    cpc: str | None = None,
+    leads: int = 0,
+    cost_per_lead: str | None = None,
+    registrations: int = 0,
+    cost_per_registration: str | None = None,
+    deposits: int = 0,
+):
+    """Создаёт snapshot для теста перекрута над базовыми стопами."""
+    return SimpleNamespace(
+        offer_id=offer_id,
+        campaign_name=campaign_name,
+        ad_name=ad_name,
+        spend=Decimal(spend),
+        clicks=clicks,
+        cpc=Decimal(cpc) if cpc is not None else None,
+        leads=leads,
+        cost_per_lead=Decimal(cost_per_lead) if cost_per_lead is not None else None,
+        registrations=registrations,
+        cost_per_registration=(
+            Decimal(cost_per_registration) if cost_per_registration is not None else None
+        ),
+        deposits=deposits,
+    )
+
+
+def _make_scalars_result(rows):
+    """Создаёт мок SQLAlchemy-результата для scalars().all()."""
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = rows
+    return result
+
+
+# Проверяем что схемы API всегда отдают код оффера в верхнем регистре
+def test_offer_code_schemas_normalize_uppercase():
+    from apps.api.main import AdSnapshotSchema, OfferSchema
+
+    offer = OfferSchema(code=" drc_cr2 ", name="Оффер", cpa_amount=Decimal("10"), is_active=True)
+    snapshot = AdSnapshotSchema(
+        id="1",
+        fb_ad_id="ad-1",
+        campaign_name="Campaign",
+        adset_name="Adset",
+        ad_name="Ad",
+        delivery_status="ACTIVE",
+        offer_code=" drc_cr2 ",
+        spend=Decimal("12.50"),
+        clicks=3,
+        leads=0,
+        registrations=0,
+        deposits=0,
+        alert_state="NORMAL",
+    )
+
+    assert offer.code == "DRC_CR2"
+    assert snapshot.offer_code == "DRC_CR2"
+
+
+# Проверяем что lookup-ключ для оффера не зависит от регистра и пробелов
+def test_offer_code_lookup_key_is_case_insensitive():
+    from apps.api.main import _offer_code_lookup_key
+
+    assert _offer_code_lookup_key(" drc_cr2 ") == "drc_cr2"
+    assert _offer_code_lookup_key("DRC_CR2") == "drc_cr2"
+
+
+# Проверяем что причины активных рисков считаются по живым риск-статусам, а не по архивным snapshot
+def test_build_current_risk_reason_rows_uses_active_snapshot_states():
+    from apps.api.main import _build_current_risk_reason_rows
+
+    snapshots = [
+        _make_risk_snapshot(
+            alert_state=AlertState.EARLY_SIGNAL_SENT,
+            early_signal_rule_codes=["early_outbound_ctr_signal", "early_outbound_ctr_signal"],
+        ),
+        _make_risk_snapshot(
+            alert_state=AlertState.WARNING_SENT,
+            warning_rule_codes=["cpc_stop"],
+        ),
+        _make_risk_snapshot(
+            alert_state=AlertState.CLAIMED,
+            warning_rule_codes=["cpr_stop"],
+            stop_rule_codes=["cpl_stop", "cpl_stop"],
+        ),
+        _make_risk_snapshot(
+            alert_state=AlertState.DISABLED,
+            stop_rule_codes=["spend_no_dep_range"],
+        ),
+    ]
+
+    rows = _build_current_risk_reason_rows(snapshots)
+    reason_counts = {row["rule"]: row["count"] for row in rows}
+
+    assert reason_counts == {
+        "Слабый CTR исходящих кликов": 1,
+        "Дорогой клик": 1,
+        "Дорогой лид": 1,
+    }
+
+
+# Проверяем что current incident уходит в ручной разбор после лимита тихих автоповторов.
+def test_build_active_incident_schema_marks_manual_attention_after_retry_limit():
+    from apps.api.main import _build_active_incident_schema
+
+    now = datetime.now(UTC)
+    snapshot = SimpleNamespace(
+        fb_ad_id="ad-1",
+        ad_name="Объявление",
+        campaign_name="Campaign",
+        adset_name="Adset",
+        alert_state=AlertState.CLAIMED,
+        current_stage=AlertStage.STOP,
+        delivery_status="UNKNOWN",
+        open_state_token="incident-1",
+        telegram_group_key="incident-1",
+        stop_rule_codes=["cpc_stop"],
+        warning_rule_codes=[],
+        early_signal_rule_codes=[],
+        last_observed_at=now,
+        updated_at=now,
+        created_at=now - timedelta(hours=1),
+    )
+    event = SimpleNamespace(
+        telegram_group_key="incident-1",
+        created_at=now - timedelta(minutes=10),
+        reason_title="Дорогой клик",
+        reason_text="Цена клика превысила порог.",
+        metrics_json={"spend": "50.00"},
+        stage=AlertStage.STOP,
+    )
+    tasks = [
+        SimpleNamespace(
+            id=f"task-{index}",
+            open_state_token="incident-1",
+            status=DisableTaskStatus.SUCCEEDED if index < 3 else DisableTaskStatus.FAILED,
+            requested_by_username="bot_auto_stop",
+            attempt_count=index + 1,
+            created_at=now - timedelta(minutes=30 - index),
+            updated_at=now - timedelta(minutes=20 - index),
+            completed_at=now - timedelta(minutes=20 - index),
+            next_retry_at=None,
+            last_error="Meta не подтверждает OFF" if index == 3 else None,
+        )
+        for index in range(4)
+    ]
+
+    incident = _build_active_incident_schema(snapshot, alert_events=[event], disable_tasks=tasks)
+
+    assert incident.incident_key == "incident-1"
+    assert incident.incident_retry_count == 3
+    assert incident.needs_manual_attention is True
+    assert incident.latest_disable_task_status == DisableTaskStatus.FAILED.value
+    assert incident.reason_title == "Дорогой клик"
+
+
+# Проверяем что отклонение по кампании возвращает и перерасход, и экономию относительно базы.
+def test_build_campaign_stop_overrun_rows_returns_aggregated_base_stop_excess_by_campaign():
+    from apps.api.main import _build_campaign_stop_overrun_rows
+
+    offer_id = uuid.uuid4()
+    snapshots = [
+        _make_stop_overrun_snapshot(
+            offer_id=offer_id,
+            campaign_name="Campaign A",
+            ad_name="Ad 1",
+            spend="0.15",
+            clicks=1,
+            cpc="0.15",
+        ),
+        _make_stop_overrun_snapshot(
+            offer_id=offer_id,
+            campaign_name="Campaign A",
+            ad_name="Ad 2",
+            spend="0.55",
+            clicks=12,
+            leads=1,
+            cost_per_lead="0.55",
+        ),
+        _make_stop_overrun_snapshot(
+            offer_id=offer_id,
+            campaign_name="Campaign B",
+            ad_name="Ad 3",
+            spend="0.09",
+            clicks=1,
+            cpc="0.09",
+        ),
+    ]
+    offer_rule_map = {
+        offer_id: (
+            SimpleNamespace(id=offer_id, cpa_amount=Decimal("5.00")),
+            SimpleNamespace(
+                cpc_percent_enabled=True,
+                cpc_percent_stop=Decimal("2"),
+                cpl_percent_enabled=True,
+                cpl_percent_stop=Decimal("10"),
+                cpr_percent_enabled=True,
+                cpr_percent_stop=Decimal("20"),
+                regs_no_dep_enabled=True,
+                regs_no_dep_stop_count=5,
+                spend_no_dep_enabled=True,
+                spend_no_dep_from_percent=Decimal("50"),
+                spend_with_dep_enabled=True,
+                spend_with_dep_from_percent=Decimal("70"),
+            ),
+        )
+    }
+
+    rows = _build_campaign_stop_overrun_rows(snapshots, offer_rule_map)
+
+    assert len(rows) == 2
+    assert rows[0]["campaign_full"] == "Campaign A"
+    assert rows[0]["budget_status"] == "OVER"
+    assert rows[0]["total_ads"] == 2
+    assert rows[0]["affected_ads"] == 2
+    assert rows[0]["over_budget_ads"] == 2
+    assert rows[0]["under_budget_ads"] == 0
+    assert rows[0]["on_target_ads"] == 0
+    assert rows[0]["actual_spend"] == pytest.approx(0.70)
+    assert rows[0]["ideal_spend"] == pytest.approx(0.60)
+    assert rows[0]["budget_delta_amount"] == pytest.approx(0.10)
+    assert rows[0]["budget_delta_percent"] == pytest.approx(16.7)
+    assert rows[0]["dominant_metric"] == "CPC"
+    assert rows[0]["top_ad_name"] == "Ad 1"
+    assert rows[0]["max_ad_overrun_amount"] == pytest.approx(0.05)
+    assert rows[0]["max_ad_overrun_percent"] == pytest.approx(50.0)
+    assert rows[1]["campaign_full"] == "Campaign B"
+    assert rows[1]["budget_status"] == "UNDER"
+    assert rows[1]["total_ads"] == 1
+    assert rows[1]["over_budget_ads"] == 0
+    assert rows[1]["under_budget_ads"] == 1
+    assert rows[1]["on_target_ads"] == 0
+    assert rows[1]["actual_spend"] == pytest.approx(0.09)
+    assert rows[1]["ideal_spend"] == pytest.approx(0.10)
+    assert rows[1]["budget_delta_amount"] == pytest.approx(-0.01)
+    assert rows[1]["budget_delta_percent"] == pytest.approx(-10.0)
+
+
+# Проверяем что при нулевой суммарной дельте кампания остаётся в выдаче как точное попадание в базу.
+def test_build_campaign_stop_overrun_rows_keeps_campaign_when_total_matches_base():
+    from apps.api.main import _build_campaign_stop_overrun_rows
+
+    offer_id = uuid.uuid4()
+    snapshots = [
+        _make_stop_overrun_snapshot(
+            offer_id=offer_id,
+            campaign_name="Campaign A",
+            ad_name="Ad 1",
+            spend="0.15",
+            clicks=1,
+            cpc="0.15",
+        ),
+        _make_stop_overrun_snapshot(
+            offer_id=offer_id,
+            campaign_name="Campaign A",
+            ad_name="Ad 2",
+            spend="0.45",
+            clicks=9,
+            leads=1,
+            cost_per_lead="0.45",
+        ),
+    ]
+    offer_rule_map = {
+        offer_id: (
+            SimpleNamespace(id=offer_id, cpa_amount=Decimal("5.00")),
+            SimpleNamespace(
+                cpc_percent_enabled=True,
+                cpc_percent_stop=Decimal("2"),
+                cpl_percent_enabled=True,
+                cpl_percent_stop=Decimal("10"),
+                cpr_percent_enabled=True,
+                cpr_percent_stop=Decimal("20"),
+                regs_no_dep_enabled=True,
+                regs_no_dep_stop_count=5,
+                spend_no_dep_enabled=True,
+                spend_no_dep_from_percent=Decimal("50"),
+                spend_with_dep_enabled=True,
+                spend_with_dep_from_percent=Decimal("70"),
+            ),
+        )
+    }
+
+    rows = _build_campaign_stop_overrun_rows(snapshots, offer_rule_map)
+
+    assert len(rows) == 1
+    assert rows[0]["campaign_full"] == "Campaign A"
+    assert rows[0]["budget_status"] == "ON_TARGET"
+    assert rows[0]["total_ads"] == 2
+    assert rows[0]["over_budget_ads"] == 1
+    assert rows[0]["under_budget_ads"] == 1
+    assert rows[0]["on_target_ads"] == 0
+    assert rows[0]["actual_spend"] == pytest.approx(0.60)
+    assert rows[0]["ideal_spend"] == pytest.approx(0.60)
+    assert rows[0]["budget_delta_amount"] == pytest.approx(0.0)
+    assert rows[0]["budget_delta_percent"] == pytest.approx(0.0)
+    assert rows[0]["dominant_metric"] == "CPC"
+    assert rows[0]["top_ad_name"] == "Ad 1"
+
+
+# Проверяем что endpoint current incidents сортирует кейсы по последней активности.
+@pytest.mark.asyncio
+async def test_list_active_incidents_sorts_by_last_activity(mock_db):
+    from apps.api.main import list_active_incidents
+
+    now = datetime.now(UTC)
+    older_snapshot = SimpleNamespace(
+        fb_ad_id="ad-old",
+        ad_name="Старый инцидент",
+        campaign_name="Campaign",
+        adset_name="Adset",
+        alert_state=AlertState.WARNING_SENT,
+        current_stage=AlertStage.WARNING,
+        delivery_status="ACTIVE",
+        open_state_token="incident-old",
+        telegram_group_key="incident-old",
+        warning_rule_codes=["cpl_stop"],
+        stop_rule_codes=[],
+        early_signal_rule_codes=[],
+        last_observed_at=now - timedelta(minutes=5),
+        updated_at=now - timedelta(minutes=5),
+        created_at=now - timedelta(hours=2),
+    )
+    newer_snapshot = SimpleNamespace(
+        fb_ad_id="ad-new",
+        ad_name="Новый инцидент",
+        campaign_name="Campaign",
+        adset_name="Adset",
+        alert_state=AlertState.CLAIMED,
+        current_stage=AlertStage.STOP,
+        delivery_status="UNKNOWN",
+        open_state_token="incident-new",
+        telegram_group_key="incident-new",
+        warning_rule_codes=[],
+        stop_rule_codes=["cpc_stop"],
+        early_signal_rule_codes=[],
+        last_observed_at=now,
+        updated_at=now,
+        created_at=now - timedelta(hours=1),
+    )
+    events = [
+        SimpleNamespace(
+            fb_ad_id="ad-old",
+            telegram_group_key="incident-old",
+            created_at=now - timedelta(minutes=4),
+            reason_title="Предупреждение",
+            reason_text="Старый кейс",
+            metrics_json={},
+            stage=AlertStage.WARNING,
+        ),
+        SimpleNamespace(
+            fb_ad_id="ad-new",
+            telegram_group_key="incident-new",
+            created_at=now - timedelta(minutes=1),
+            reason_title="Стоп",
+            reason_text="Новый кейс",
+            metrics_json={},
+            stage=AlertStage.STOP,
+        ),
+    ]
+    tasks = [
+        SimpleNamespace(
+            id="task-new",
+            fb_ad_id="ad-new",
+            open_state_token="incident-new",
+            status=DisableTaskStatus.RETRYING,
+            requested_by_username="bot_auto_stop",
+            attempt_count=2,
+            created_at=now - timedelta(minutes=3),
+            updated_at=now - timedelta(minutes=1),
+            completed_at=None,
+            next_retry_at=now + timedelta(minutes=1),
+            last_error="Таймаут браузера",
+        )
+    ]
+
+    mock_db.scalar = AsyncMock(return_value=now)
+    mock_db.execute = AsyncMock(
+        side_effect=[
+            _make_scalars_result([older_snapshot, newer_snapshot]),
+            _make_scalars_result(events),
+            _make_scalars_result(tasks),
+        ]
+    )
+
+    incidents = await list_active_incidents(limit=10, db=mock_db)
+
+    assert [incident.fb_ad_id for incident in incidents] == ["ad-new", "ad-old"]
+    assert incidents[0].latest_disable_task_status == DisableTaskStatus.RETRYING.value
+    assert incidents[0].current_state == AlertState.CLAIMED.value
+
+
 @pytest.fixture
 def mock_db():
     """Мок async DB-сессии."""
@@ -98,11 +511,15 @@ async def test_dashboard_stats_counts(mock_db):
     mock_db.execute = AsyncMock(return_value=group_result)
 
     # scalar вызовы: last_scan, cabinet_day_start, active_offers, pending_tasks, disabled_today
-    mock_db.scalar = AsyncMock(side_effect=[None, None, 5, 2, 1])
+    mock_db.scalar = AsyncMock(side_effect=[None, None, 5, 2, 0, 1])
 
     from apps.api.main import get_dashboard_stats
 
-    result = await get_dashboard_stats(db=mock_db)
+    with patch(
+        "apps.api.main._load_current_enable_recommendations",
+        new=AsyncMock(return_value=(None, [])),
+    ):
+        result = await get_dashboard_stats(db=mock_db)
 
     assert result.total_ads_monitored == 16  # 10+3+2+1
     assert result.ads_in_early_signal == 0
@@ -122,11 +539,15 @@ async def test_dashboard_stats_empty_db(mock_db):
     group_result = MagicMock()
     group_result.all.return_value = []
     mock_db.execute = AsyncMock(return_value=group_result)
-    mock_db.scalar = AsyncMock(side_effect=[None, None, 0, 0, 0])
+    mock_db.scalar = AsyncMock(side_effect=[None, None, 0, 0, 0, 0])
 
     from apps.api.main import get_dashboard_stats
 
-    result = await get_dashboard_stats(db=mock_db)
+    with patch(
+        "apps.api.main._load_current_enable_recommendations",
+        new=AsyncMock(return_value=(None, [])),
+    ):
+        result = await get_dashboard_stats(db=mock_db)
 
     assert result.total_ads_monitored == 0
     assert result.ads_in_early_signal == 0
@@ -145,16 +566,20 @@ async def test_dashboard_uses_single_group_by_query(mock_db):
     group_result = MagicMock()
     group_result.all.return_value = _make_state_rows(normal=5)
     mock_db.execute = AsyncMock(return_value=group_result)
-    mock_db.scalar = AsyncMock(side_effect=[None, None, 1, 0, 0])
+    mock_db.scalar = AsyncMock(side_effect=[None, None, 1, 0, 0, 0])
 
     from apps.api.main import get_dashboard_stats
 
-    await get_dashboard_stats(db=mock_db)
+    with patch(
+        "apps.api.main._load_current_enable_recommendations",
+        new=AsyncMock(return_value=(None, [])),
+    ):
+        await get_dashboard_stats(db=mock_db)
 
     # Один execute (GROUP BY) вместо нескольких scalar для каждого состояния
     assert mock_db.execute.call_count == 1
     # scalar: last_scan + cabinet_day_start + active_offers + pending_tasks + disabled_today = 5
-    assert mock_db.scalar.call_count == 5
+    assert mock_db.scalar.call_count == 6
 
 
 # Проверяем что dashboard считает ранние сигналы отдельно от warning и stop.
@@ -165,16 +590,177 @@ async def test_dashboard_stats_counts_early_signal_separately(mock_db):
     group_result = MagicMock()
     group_result.all.return_value = state_rows
     mock_db.execute = AsyncMock(return_value=group_result)
-    mock_db.scalar = AsyncMock(side_effect=[None, None, 3, 0, 0])
+    mock_db.scalar = AsyncMock(side_effect=[None, None, 3, 0, 0, 0])
 
     from apps.api.main import get_dashboard_stats
 
-    result = await get_dashboard_stats(db=mock_db)
+    with patch(
+        "apps.api.main._load_current_enable_recommendations",
+        new=AsyncMock(return_value=(None, [])),
+    ):
+        result = await get_dashboard_stats(db=mock_db)
 
     assert result.total_ads_monitored == 11
     assert result.ads_in_early_signal == 2
     assert result.ads_in_warning == 1
     assert result.ads_in_stop == 1
+
+
+# Проверяем что dashboard отдаёт runtime-статус observer вместе с основной статистикой
+@pytest.mark.asyncio
+async def test_dashboard_stats_includes_observer_runtime_fields(mock_db):
+    now = datetime(2026, 3, 29, 15, 45, tzinfo=UTC)
+    state_rows = _make_state_rows(normal=2)
+    group_result = MagicMock()
+    group_result.all.return_value = state_rows
+    mock_db.execute = AsyncMock(return_value=group_result)
+    mock_db.scalar = AsyncMock(
+        side_effect=[
+            now - timedelta(minutes=5),
+            SimpleNamespace(
+                cabinet_day_started_at=now - timedelta(hours=3),
+                worker_status="ERROR",
+                worker_message="Vision запустил профиль без CDP-порта.",
+                worker_heartbeat_at=now,
+                worker_last_error="Vision запустил профиль без CDP-порта.",
+                worker_last_error_at=now - timedelta(seconds=10),
+            ),
+            4,
+            1,
+            0,
+            0,
+        ]
+    )
+
+    from apps.api.main import get_dashboard_stats
+
+    with patch(
+        "apps.api.main._load_current_enable_recommendations",
+        new=AsyncMock(return_value=(None, [])),
+    ):
+        result = await get_dashboard_stats(db=mock_db)
+
+    assert result.observer_status == "ERROR"
+    assert result.observer_status_message == "Vision запустил профиль без CDP-порта."
+    assert result.observer_heartbeat_at == now.isoformat()
+    assert result.observer_last_error == "Vision запустил профиль без CDP-порта."
+    assert result.observer_last_error_at == (now - timedelta(seconds=10)).isoformat()
+
+
+# Проверяем что dashboard по умолчанию отдаёт только актуальные задачи отключения без SUCCEEDED
+@pytest.mark.asyncio
+async def test_list_disable_tasks_filters_to_operational_statuses_by_default(mock_db):
+    tasks = [
+        SimpleNamespace(
+            id="task-1",
+            fb_ad_id="ad-1",
+            ad_name="Ad 1",
+            status=DisableTaskStatus.PENDING,
+            attempt_count=0,
+            last_error=None,
+            next_retry_at=None,
+            requested_by_username="bot",
+            created_at=datetime(2026, 3, 29, 15, 0, tzinfo=UTC),
+            completed_at=None,
+        ),
+        SimpleNamespace(
+            id="task-2",
+            fb_ad_id="ad-2",
+            ad_name="Ad 2",
+            status=DisableTaskStatus.SUCCEEDED,
+            attempt_count=1,
+            last_error=None,
+            next_retry_at=None,
+            requested_by_username="bot",
+            created_at=datetime(2026, 3, 29, 15, 1, tzinfo=UTC),
+            completed_at=datetime(2026, 3, 29, 15, 2, tzinfo=UTC),
+        ),
+    ]
+    result_mock = MagicMock()
+    result_mock.scalars.return_value.all.return_value = [tasks[0]]
+    mock_db.execute = AsyncMock(return_value=result_mock)
+
+    from apps.api.main import list_disable_tasks
+
+    result = await list_disable_tasks(status=None, limit=50, offset=0, db=mock_db)
+
+    assert [item.status for item in result] == ["PENDING"]
+
+
+# Проверяем что dashboard может вернуть терминальные задачи по явному фильтру статуса
+@pytest.mark.asyncio
+async def test_list_disable_tasks_supports_explicit_succeeded_filter(mock_db):
+    task = SimpleNamespace(
+        id="task-2",
+        fb_ad_id="ad-2",
+        ad_name="Ad 2",
+        status=DisableTaskStatus.SUCCEEDED,
+        attempt_count=1,
+        last_error=None,
+        next_retry_at=None,
+        requested_by_username="bot",
+        created_at=datetime(2026, 3, 29, 15, 1, tzinfo=UTC),
+        completed_at=datetime(2026, 3, 29, 15, 2, tzinfo=UTC),
+    )
+    result_mock = MagicMock()
+    result_mock.scalars.return_value.all.return_value = [task]
+    mock_db.execute = AsyncMock(return_value=result_mock)
+
+    from apps.api.main import list_disable_tasks
+
+    result = await list_disable_tasks(status="SUCCEEDED", limit=50, offset=0, db=mock_db)
+
+    assert [item.status for item in result] == ["SUCCEEDED"]
+
+
+# Проверяем что UI-перезапуск disable worker останавливает старый процесс и поднимает новый.
+@pytest.mark.asyncio
+async def test_restart_disable_worker_restarts_process():
+    from apps.api.main import restart_disable_worker
+
+    with (
+        patch(
+            "apps.api.main._stop_disable_process", new=AsyncMock(return_value=11111)
+        ) as stop_mock,
+        patch(
+            "apps.api.main._start_disable_process", new=AsyncMock(return_value=22222)
+        ) as start_mock,
+    ):
+        result = await restart_disable_worker()
+
+    assert result == {"restarted": True, "old_pid": 11111, "new_pid": 22222}
+    stop_mock.assert_awaited_once_with()
+    start_mock.assert_awaited_once_with(reason="Перезапуск воркера отключения через интерфейс")
+
+
+# Проверяем что зависшую RUNNING-задачу можно вручную вернуть в очередь перед рестартом воркера.
+@pytest.mark.asyncio
+async def test_retry_disable_task_allows_stale_running_task(mock_db):
+    from apps.api.main import retry_disable_task
+
+    stale_time = datetime.now(UTC) - timedelta(minutes=10)
+    task = SimpleNamespace(
+        id="task-stale",
+        status=DisableTaskStatus.RUNNING,
+        created_at=stale_time,
+        updated_at=stale_time,
+        next_retry_at=stale_time,
+        last_error="Зависло в браузере",
+        completed_at=None,
+    )
+    result_mock = MagicMock()
+    result_mock.scalar_one_or_none.return_value = task
+    mock_db.execute = AsyncMock(return_value=result_mock)
+    mock_db.commit = AsyncMock()
+
+    result = await retry_disable_task(task.id, db=mock_db)
+
+    assert result == {"ok": True}
+    assert task.status == DisableTaskStatus.PENDING
+    assert task.next_retry_at is None
+    assert task.last_error is None
+    assert task.completed_at is None
+    mock_db.commit.assert_awaited_once_with()
 
 
 # Проверяем что helper корректно собирает summary, funnel и сортировку кампаний
@@ -409,11 +995,14 @@ async def test_chart_data_today_uses_local_day_fallback(mock_db):
     empty_result = MagicMock()
     empty_result.all.return_value = []
     empty_result.scalars.return_value.all.return_value = []
-    mock_db.execute = AsyncMock(side_effect=[empty_result, empty_result, empty_result, empty_result, empty_result])
+    mock_db.execute = AsyncMock(
+        side_effect=[empty_result, empty_result, empty_result, empty_result, empty_result]
+    )
     mock_db.scalar = AsyncMock(side_effect=[None, None, None])
 
-    from apps.api.main import get_chart_data
     from unittest.mock import patch
+
+    from apps.api.main import get_chart_data
 
     now = datetime(2026, 3, 28, 13, 45, tzinfo=ZoneInfo("Europe/Kaliningrad"))
 

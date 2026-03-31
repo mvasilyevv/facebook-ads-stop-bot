@@ -3,11 +3,16 @@
 
 from __future__ import annotations
 
-from typing import Any
 from dataclasses import dataclass
 from decimal import Decimal
+from typing import Any
 
 from core.domain import AlertStage
+from core.observer.thresholds import (
+    DEFAULT_STOP_PERCENT_OF_BASE,
+    DEFAULT_WARNING_PERCENT_OF_STOP,
+    extract_observer_threshold_values,
+)
 from core.rules.evaluator import evaluate_stop_rules
 from core.rules.types import RuleContext, RuleEvaluation
 from core.scanner.models import ScannedAdRow
@@ -31,6 +36,7 @@ class AlertCandidate:
     reason_title: str | None
     reason_text: str | None
     metrics_json: dict[str, Any]
+    persist_event: bool = True
 
 
 @dataclass(slots=True, frozen=True)
@@ -41,18 +47,43 @@ class ObserverCycleResult:
     observed_ads: int
 
 
+def _make_json_safe(value: Any) -> Any:
+    """Рекурсивно приводит payload к JSON-совместимому виду."""
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(key): _make_json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_make_json_safe(item) for item in value]
+    return value
+
+
 def build_rule_context(
     *,
     cpa_amount: Decimal,
-    warning_percent_of_stop: Decimal,
-    stop_percent_of_base: Decimal,
+    warning_percent_of_stop: Decimal = DEFAULT_WARNING_PERCENT_OF_STOP,
+    stop_percent_of_base: Decimal = DEFAULT_STOP_PERCENT_OF_BASE,
     rule_config: object,
+    observer_thresholds: dict[str, Decimal] | None = None,
 ) -> RuleContext:
     """Строит RuleContext из конфигурации правил оффера."""
+    threshold_values = extract_observer_threshold_values(
+        observer_thresholds
+        or {
+            "warning_percent_of_stop": warning_percent_of_stop,
+            "stop_percent_of_base": stop_percent_of_base,
+        }
+    )
     return RuleContext(
         cpa_amount=Decimal(cpa_amount),
-        warning_percent_of_stop=Decimal(warning_percent_of_stop),
-        stop_percent_of_base=min(Decimal("100"), max(Decimal("1"), Decimal(stop_percent_of_base))),
+        warning_percent_of_stop=threshold_values["warning_percent_of_stop"],
+        stop_percent_of_base=threshold_values["stop_percent_of_base"],
+        cpc_warning_percent_of_stop=threshold_values["cpc_warning_percent_of_stop"],
+        cpc_stop_percent_of_base=threshold_values["cpc_stop_percent_of_base"],
+        cpl_warning_percent_of_stop=threshold_values["cpl_warning_percent_of_stop"],
+        cpl_stop_percent_of_base=threshold_values["cpl_stop_percent_of_base"],
+        cpr_warning_percent_of_stop=threshold_values["cpr_warning_percent_of_stop"],
+        cpr_stop_percent_of_base=threshold_values["cpr_stop_percent_of_base"],
         cpc_enabled=bool(rule_config.cpc_percent_enabled),
         cpc_percent_stop=Decimal(rule_config.cpc_percent_stop),
         cpl_enabled=bool(rule_config.cpl_percent_enabled),
@@ -68,7 +99,9 @@ def build_rule_context(
         spend_with_dep_from_percent=Decimal(rule_config.spend_with_dep_from_percent),
         spend_with_dep_to_percent=Decimal(rule_config.spend_with_dep_to_percent),
         early_outbound_ctr_signal_enabled=bool(rule_config.early_outbound_ctr_signal_enabled),
-        early_outbound_ctr_signal_min_percent=Decimal(rule_config.early_outbound_ctr_signal_min_percent),
+        early_outbound_ctr_signal_min_percent=Decimal(
+            rule_config.early_outbound_ctr_signal_min_percent
+        ),
         early_outbound_ctr_signal_min_spend_percent=Decimal(
             rule_config.early_outbound_ctr_signal_min_spend_percent
         ),
@@ -90,8 +123,9 @@ def evaluate_row(
     row: ScannedAdRow,
     offer_cpa: Decimal | None,
     rule_config: object | None,
-    warning_percent_of_stop: Decimal,
-    stop_percent_of_base: Decimal,
+    warning_percent_of_stop: Decimal = DEFAULT_WARNING_PERCENT_OF_STOP,
+    stop_percent_of_base: Decimal = DEFAULT_STOP_PERCENT_OF_BASE,
+    observer_thresholds: dict[str, Decimal] | None = None,
 ) -> RuleEvaluation:
     """Оценивает одну строку. Без оффера — пропуск."""
     if offer_cpa is None or rule_config is None:
@@ -101,6 +135,7 @@ def evaluate_row(
         warning_percent_of_stop=warning_percent_of_stop,
         stop_percent_of_base=stop_percent_of_base,
         rule_config=rule_config,
+        observer_thresholds=observer_thresholds,
     )
     return evaluate_stop_rules(row, ctx)
 
@@ -109,15 +144,25 @@ def build_metrics_json(
     row: ScannedAdRow,
     *,
     rule_summaries: list[str] | None = None,
+    traffic_diagnostics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Формирует JSON-словарь метрик для хранения и отправки в TG."""
     payload = {
         "spend": f"{Decimal(row.spend):.2f}",
+        "budget": row.budget or None,
+        "reach": row.reach,
+        "impressions": row.impressions,
         "clicks": row.clicks,
         "cpc": f"{Decimal(row.cpc):.4f}" if row.cpc is not None else None,
+        "ctr": f"{Decimal(row.ctr):.4f}" if row.ctr is not None else None,
         "outbound_clicks": row.outbound_clicks,
-        "outbound_ctr": f"{Decimal(row.outbound_ctr):.4f}" if row.outbound_ctr is not None else None,
+        "outbound_ctr": f"{Decimal(row.outbound_ctr):.4f}"
+        if row.outbound_ctr is not None
+        else None,
         "landing_page_views": row.landing_page_views,
+        "cost_per_result": (
+            f"{Decimal(row.cost_per_result):.4f}" if row.cost_per_result is not None else None
+        ),
         "cost_per_landing_page_view": (
             f"{Decimal(row.cost_per_landing_page_view):.4f}"
             if row.cost_per_landing_page_view is not None
@@ -139,4 +184,6 @@ def build_metrics_json(
     }
     if rule_summaries:
         payload["rule_summaries"] = rule_summaries
-    return payload
+    if traffic_diagnostics:
+        payload["traffic_diagnostics"] = traffic_diagnostics
+    return _make_json_safe(payload)

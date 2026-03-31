@@ -45,3 +45,34 @@ class EnableTaskStatus(StrEnum):
     SUCCEEDED = "SUCCEEDED"
     CANCELLED = "CANCELLED"
     FAILED = "FAILED"
+
+
+class EnableRecommendationLevel(StrEnum):
+    """Уровень рекомендации на включение объявления."""
+
+    OK = "OK"
+    EARLY_SIGNAL = "EARLY_SIGNAL"
+    WARNING = "WARNING"
+
+
+class TelegramUserRole(StrEnum):
+    """Роль пользователя в Telegram-контуре."""
+
+    OWNER = "owner"
+    RECIPIENT = "recipient"
+
+
+class TelegramDeliveryMode(StrEnum):
+    """Режим доставки Telegram-контура."""
+
+    PRIVATE_CHAT = "PRIVATE_CHAT"
+    FORUM_GROUP = "FORUM_GROUP"
+
+
+class TelegramNotificationStream(StrEnum):
+    """Независимый поток Telegram-уведомлений внутри одного чата."""
+
+    EARLY = "EARLY"
+    WARNING = "WARNING"
+    STOP = "STOP"
+    ENABLE = "ENABLE"

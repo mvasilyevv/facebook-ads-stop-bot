@@ -21,6 +21,53 @@ if TYPE_CHECKING:
     from patchright.async_api import ElementHandle, Page
 
 
+async def _resolve_scroll_anchor(page: "Page") -> tuple[float, float] | None:
+    """Пытается найти координаты центра реальной скроллируемой области.
+
+    Для Ads Manager обычный центр viewport часто попадает в шапку или боковую
+    панель, из-за чего колесо мыши не двигает таблицу. Поэтому сначала ищем
+    сетку/таблицу с объявлениями и только затем fallback на центр окна.
+    """
+    try:
+        anchor = await page.evaluate("""() => {
+            const selectors = [
+                '[role="grid"]',
+                '[role="table"]',
+                '[aria-rowcount]',
+                '[data-surface*="table_row:"]',
+            ];
+
+            for (const selector of selectors) {
+                const node = document.querySelector(selector);
+                if (!(node instanceof Element)) {
+                    continue;
+                }
+
+                const rect = node.getBoundingClientRect();
+                if (rect.width < 40 || rect.height < 40) {
+                    continue;
+                }
+
+                return {
+                    x: rect.left + rect.width * 0.5,
+                    y: rect.top + rect.height * 0.5,
+                };
+            }
+
+            return null;
+        }""")
+    except Exception:
+        return None
+
+    if not isinstance(anchor, dict):
+        return None
+
+    try:
+        return float(anchor["x"]), float(anchor["y"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 def _bezier_point(
     t: float,
     p0: tuple[float, float],
@@ -77,7 +124,10 @@ async def human_move(
     """
     if current_pos is None:
         vp = page.viewport_size or {"width": 1280, "height": 800}
-        current_pos = (vp["width"] * random.uniform(0.3, 0.7), vp["height"] * random.uniform(0.3, 0.7))
+        current_pos = (
+            vp["width"] * random.uniform(0.3, 0.7),
+            vp["height"] * random.uniform(0.3, 0.7),
+        )
 
     # Случайная точка попадания (не всегда точно в centre)
     jitter = random.uniform(1, 4)
@@ -173,8 +223,13 @@ async def human_scroll_to_find(
     Возвращает найденный элемент или None.
     """
     vp = page.viewport_size or {"width": 1280, "height": 800}
-    scroll_x = vp["width"] * random.uniform(0.35, 0.65)
-    scroll_y = vp["height"] * random.uniform(0.40, 0.60)
+    anchor = await _resolve_scroll_anchor(page)
+    if anchor is None:
+        scroll_x = vp["width"] * random.uniform(0.35, 0.65)
+        scroll_y = vp["height"] * random.uniform(0.40, 0.60)
+    else:
+        scroll_x = min(max(anchor[0], 24.0), max(vp["width"] - 24.0, 24.0))
+        scroll_y = min(max(anchor[1], 24.0), max(vp["height"] - 24.0, 24.0))
 
     await page.mouse.move(scroll_x, scroll_y)
     await asyncio.sleep(random.uniform(0.1, 0.3))
@@ -201,3 +256,38 @@ async def human_scroll_to_find(
             await page.mouse.move(scroll_x + jx, scroll_y + jy)
 
     return None
+
+
+async def human_wheel_scroll(
+    page: "Page",
+    delta_y: int,
+    *,
+    anchor: tuple[float, float] | None = None,
+    move_before: bool = True,
+    settle_range: tuple[float, float] = (0.25, 0.65),
+    drift_x_range: tuple[float, float] = (-20, 20),
+    drift_y_range: tuple[float, float] = (-10, 10),
+) -> tuple[float, float]:
+    """Прокручивает колесо мыши через общий humanized-слой.
+
+    Используется там, где важно не вызывать wheel напрямую из рабочих модулей.
+    Возвращает последнюю позицию курсора после небольшого пост-скролл дрейфа.
+    """
+    if anchor is None:
+        vp = page.viewport_size or {"width": 1280, "height": 800}
+        anchor = (
+            vp["width"] * random.uniform(0.35, 0.65),
+            vp["height"] * random.uniform(0.40, 0.60),
+        )
+
+    if move_before:
+        await human_move(page, anchor[0], anchor[1])
+        await asyncio.sleep(random.uniform(0.04, 0.12))
+
+    await page.mouse.wheel(0, delta_y)
+
+    drift_x = anchor[0] + random.uniform(*drift_x_range)
+    drift_y = anchor[1] + random.uniform(*drift_y_range)
+    await page.mouse.move(drift_x, drift_y)
+    await asyncio.sleep(random.uniform(*settle_range))
+    return drift_x, drift_y

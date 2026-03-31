@@ -10,7 +10,26 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 
-from patchright.async_api import Browser, Page, async_playwright
+try:
+    from patchright.async_api import Browser, Page, async_playwright
+except ModuleNotFoundError:  # pragma: no cover - зависит от окружения
+    from typing import Any
+
+    Browser = Any
+    Page = Any
+
+    class _MissingPatchrightFactory:
+        """Фолбэк для окружений, где patchright не установлен."""
+
+        async def start(self):
+            raise RuntimeError(
+                "Библиотека patchright не установлена. Подключение к браузеру недоступно."
+            )
+
+    def async_playwright():
+        """Возвращает фолбэк-объект с понятной ошибкой вместо падения на import."""
+        return _MissingPatchrightFactory()
+
 
 from core.browser.vision_client import VisionClient
 
@@ -54,8 +73,11 @@ class VisionBrowserManager:
                 self._profile_id,
             )
             await self._vision.stop_profile(self._folder_id, self._profile_id)
-            import asyncio
-            await asyncio.sleep(2)
+            stopped = await self._vision.wait_until_profile_stopped(self._profile_id)
+            if not stopped:
+                raise RuntimeError(
+                    f"Vision не остановил профиль {self._profile_id} после команды stop"
+                )
             profile = await self._vision.start_profile(
                 self._folder_id,
                 self._profile_id,

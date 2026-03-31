@@ -4,11 +4,47 @@ const BASE = '/api';
 
 async function request(url, options = {}) {
   const resp = await fetch(`${BASE}${url}`, {
+    cache: options.cache ?? 'no-store',
     headers: { 'Content-Type': 'application/json', ...options.headers },
     ...options,
   });
   if (!resp.ok) {
-    throw new Error(`Ошибка API: ${resp.status} ${resp.statusText}`);
+    let detail = '';
+    const contentType = resp.headers.get('content-type') || '';
+    try {
+      if (contentType.includes('application/json')) {
+        const body = await resp.json();
+        if (typeof body === 'string') {
+          detail = body;
+        } else if (Array.isArray(body?.detail)) {
+          detail = body.detail
+            .map((item) => {
+              if (typeof item === 'string') return item;
+              if (item && typeof item === 'object') return item.msg || item.message || JSON.stringify(item);
+              return String(item);
+            })
+            .join(', ');
+        } else if (body?.detail != null) {
+          detail = typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail);
+        } else if (body?.message) {
+          detail = typeof body.message === 'string' ? body.message : JSON.stringify(body.message);
+        } else if (Object.keys(body || {}).length > 0) {
+          detail = JSON.stringify(body);
+        }
+      } else {
+        detail = (await resp.text()).trim();
+      }
+    } catch {
+      detail = '';
+    }
+
+    const message = detail
+      ? `Ошибка API ${resp.status}: ${detail}`
+      : `Ошибка API ${resp.status}: ${resp.statusText || 'неизвестная ошибка'}`;
+    throw new Error(message);
+  }
+  if (resp.status === 204) {
+    return null;
   }
   return resp.json();
 }
@@ -55,9 +91,23 @@ export const getAlertEvents = (params = {}) => {
   const qs = new URLSearchParams(params).toString();
   return request(`/dashboard/alerts${qs ? '?' + qs : ''}`);
 };
+export const getDashboardIncidents = (params = {}) => {
+  const qs = new URLSearchParams(params).toString();
+  return request(`/dashboard/incidents${qs ? '?' + qs : ''}`);
+};
 export const getDisableTasks = (params = {}) => {
   const qs = new URLSearchParams(params).toString();
   return request(`/dashboard/disable-tasks${qs ? '?' + qs : ''}`);
+};
+export const getEnableRecommendations = (params = {}) => {
+  const qs = new URLSearchParams(params).toString();
+  return request(`/dashboard/enable-recommendations${qs ? '?' + qs : ''}`);
+};
+export const createEnableTaskFromRecommendation = (eventId) =>
+  request(`/dashboard/enable-recommendations/${eventId}/enable`, { method: 'POST' });
+export const getEnableTasks = (params = {}) => {
+  const qs = new URLSearchParams(params).toString();
+  return request(`/dashboard/enable-tasks${qs ? '?' + qs : ''}`);
 };
 export const retryDisableTask = (id) =>
   request(`/dashboard/disable-tasks/${id}/retry`, { method: 'POST' });
@@ -75,6 +125,7 @@ export const getDashboardPerformance = (params = {}) => {
 };
 export const getAdTimeline = (fb_ad_id) => request(`/ads/${fb_ad_id}/timeline`);
 export const restartObserver = () => request('/observer/restart', { method: 'POST' });
+export const restartDisableWorker = () => request('/disable-worker/restart', { method: 'POST' });
 
 // Vision настройки
 export const getVisionSettings = () => request('/settings/vision');

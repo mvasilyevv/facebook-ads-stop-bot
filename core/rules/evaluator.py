@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from decimal import ROUND_CEILING, ROUND_HALF_UP, Decimal
 
-from core.domain import AlertStage
+from core.domain import AlertStage, EnableRecommendationLevel
 from core.rules.types import RuleContext, RuleEvaluation, RuleHit
 from core.scanner.models import ScannedAdRow
 
@@ -18,7 +18,12 @@ def evaluate_stop_rules(row: ScannedAdRow, ctx: RuleContext) -> RuleEvaluation:
     """Оценивает объявление по последовательной лесенке."""
 
     hit = _evaluate_funnel_ladder(row, ctx)
-    if hit is None and row.leads == 0 and row.registrations == 0 and row.deposits == 0:
+    if (
+        hit is None
+        and row.leads == 0
+        and row.registrations == 0
+        and not _has_confirmed_deposit_signal(row)
+    ):
         hit = _evaluate_early_signals(row, ctx)
 
     if hit is None:
@@ -51,8 +56,30 @@ def evaluate_stop_rules(row: ScannedAdRow, ctx: RuleContext) -> RuleEvaluation:
     )
 
 
+def determine_enable_recommendation_level(
+    row: ScannedAdRow,
+    ctx: RuleContext,
+    *,
+    stop_evaluation: RuleEvaluation | None = None,
+) -> EnableRecommendationLevel | None:
+    """Возвращает безопасный уровень рекомендации на включение для OFF-объявления."""
+    evaluation = stop_evaluation or evaluate_stop_rules(row, ctx)
+
+    if _has_enable_data_gap(row):
+        return None
+    if evaluation.stage == AlertStage.STOP:
+        return None
+    if evaluation.stage == AlertStage.WARNING:
+        return EnableRecommendationLevel.WARNING
+    if evaluation.stage == AlertStage.EARLY_SIGNAL:
+        return EnableRecommendationLevel.EARLY_SIGNAL
+    if not _has_safe_enable_recovery_signal(row):
+        return None
+    return EnableRecommendationLevel.OK
+
+
 def _evaluate_funnel_ladder(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | None:
-    if row.deposits >= 1:
+    if _has_confirmed_deposit_signal(row):
         return _evaluate_deposit_stage(row, ctx)
     if row.registrations >= 1:
         return _evaluate_registration_stage(row, ctx)
@@ -68,108 +95,106 @@ def _evaluate_click_stage(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | None
             enabled=ctx.cpc_enabled,
             stop_percent=ctx.cpc_percent_stop,
             cpa_amount=ctx.cpa_amount,
-            warning_pct=ctx.warning_percent_of_stop,
-            stop_percent_of_base=ctx.stop_percent_of_base,
+            warning_pct=ctx.effective_cpc_warning_percent_of_stop,
+            stop_percent_of_base=ctx.effective_cpc_stop_percent_of_base,
             code="cpc_stop",
             title="Дорогой клик",
             label="CPC",
             missing_event_label="кликов",
         )
 
-    hit = _evaluate_metric_only(
-        metric_value=row.cpc,
-        enabled=ctx.cpc_enabled,
-        stop_percent=ctx.cpc_percent_stop,
-        cpa_amount=ctx.cpa_amount,
-        warning_pct=ctx.warning_percent_of_stop,
-        stop_percent_of_base=ctx.stop_percent_of_base,
-        code="cpc_stop",
-        title="Дорогой клик",
-        label="CPC",
-        stage_name="клика",
-    )
-    if hit is not None:
-        return hit
-
-    return _evaluate_guardrail_only(
-        spend=row.spend,
-        enabled=ctx.cpl_enabled,
-        stop_percent=ctx.cpl_percent_stop,
-        cpa_amount=ctx.cpa_amount,
-        warning_pct=ctx.warning_percent_of_stop,
-        stop_percent_of_base=ctx.stop_percent_of_base,
-        code="cpl_stop",
-        title="Дорогой лид",
-        label="CPL",
-        missing_event_label="лидов",
+    return _pick_highest_priority_hit(
+        _evaluate_metric_only(
+            metric_value=row.cpc,
+            enabled=ctx.cpc_enabled,
+            stop_percent=ctx.cpc_percent_stop,
+            cpa_amount=ctx.cpa_amount,
+            warning_pct=ctx.effective_cpc_warning_percent_of_stop,
+            stop_percent_of_base=ctx.effective_cpc_stop_percent_of_base,
+            code="cpc_stop",
+            title="Дорогой клик",
+            label="CPC",
+            stage_name="клика",
+        ),
+        _evaluate_guardrail_only(
+            spend=row.spend,
+            enabled=ctx.cpl_enabled,
+            stop_percent=ctx.cpl_percent_stop,
+            cpa_amount=ctx.cpa_amount,
+            warning_pct=ctx.effective_cpl_warning_percent_of_stop,
+            stop_percent_of_base=ctx.effective_cpl_stop_percent_of_base,
+            code="cpl_stop",
+            title="Дорогой лид",
+            label="CPL",
+            missing_event_label="лидов",
+        ),
     )
 
 
 def _evaluate_lead_stage(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | None:
-    hit = _evaluate_metric_only(
-        metric_value=row.cost_per_lead,
-        enabled=ctx.cpl_enabled,
-        stop_percent=ctx.cpl_percent_stop,
-        cpa_amount=ctx.cpa_amount,
-        warning_pct=ctx.warning_percent_of_stop,
-        stop_percent_of_base=ctx.stop_percent_of_base,
-        code="cpl_stop",
-        title="Дорогой лид",
-        label="CPL",
-        stage_name="лида",
-    )
-    if hit is not None:
-        return hit
-
-    return _evaluate_guardrail_only(
-        spend=row.spend,
-        enabled=ctx.cpr_enabled,
-        stop_percent=ctx.cpr_percent_stop,
-        cpa_amount=ctx.cpa_amount,
-        warning_pct=ctx.warning_percent_of_stop,
-        stop_percent_of_base=ctx.stop_percent_of_base,
-        code="cpr_stop",
-        title="Дорогая рега",
-        label="CPR",
-        missing_event_label="регистраций",
+    return _pick_highest_priority_hit(
+        _evaluate_metric_only(
+            metric_value=row.cost_per_lead,
+            enabled=ctx.cpl_enabled,
+            stop_percent=ctx.cpl_percent_stop,
+            cpa_amount=ctx.cpa_amount,
+            warning_pct=ctx.effective_cpl_warning_percent_of_stop,
+            stop_percent_of_base=ctx.effective_cpl_stop_percent_of_base,
+            code="cpl_stop",
+            title="Дорогой лид",
+            label="CPL",
+            stage_name="лида",
+        ),
+        _evaluate_guardrail_only(
+            spend=row.spend,
+            enabled=ctx.cpr_enabled,
+            stop_percent=ctx.cpr_percent_stop,
+            cpa_amount=ctx.cpa_amount,
+            warning_pct=ctx.effective_cpr_warning_percent_of_stop,
+            stop_percent_of_base=ctx.effective_cpr_stop_percent_of_base,
+            code="cpr_stop",
+            title="Дорогая рега",
+            label="CPR",
+            missing_event_label="регистраций",
+        ),
     )
 
 
 def _evaluate_registration_stage(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | None:
-    hit = _evaluate_metric_only(
+    cpr_hit = _evaluate_metric_only(
         metric_value=row.cost_per_registration,
         enabled=ctx.cpr_enabled,
         stop_percent=ctx.cpr_percent_stop,
         cpa_amount=ctx.cpa_amount,
-        warning_pct=ctx.warning_percent_of_stop,
-        stop_percent_of_base=ctx.stop_percent_of_base,
+        warning_pct=ctx.effective_cpr_warning_percent_of_stop,
+        stop_percent_of_base=ctx.effective_cpr_stop_percent_of_base,
         code="cpr_stop",
         title="Дорогая рега",
         label="CPR",
         stage_name="регистрации",
     )
-    if hit is not None:
-        return hit
 
-    hit = _evaluate_regs_without_deposits(row, ctx)
-    if hit is not None:
-        return hit
+    regs_without_dep_hit = _evaluate_regs_without_deposits(row, ctx)
 
-    registration_normal = _is_registration_normal(row, ctx)
-    if not registration_normal:
-        return None
+    spend_without_dep_hit = None
+    if _is_registration_normal(row, ctx):
+        spend_without_dep_hit = _evaluate_spend_range(
+            enabled=ctx.spend_no_dep_enabled,
+            current_value=_ratio_percent(row.spend, ctx.cpa_amount),
+            stop_from=ctx.spend_no_dep_from_percent,
+            stop_to=ctx.spend_no_dep_to_percent,
+            warning_pct=ctx.effective_cpr_warning_percent_of_stop,
+            stop_percent_of_base=ctx.effective_cpr_stop_percent_of_base,
+            code="spend_no_dep_range",
+            title="Расход без депа",
+            summary_suffix="депозитов 0, цена реги в норме",
+            reason_suffix="Цена регистрации ещё укладывается в рабочую зону, но депозитов всё ещё нет.",
+        )
 
-    return _evaluate_spend_range(
-        enabled=ctx.spend_no_dep_enabled,
-        current_value=_ratio_percent(row.spend, ctx.cpa_amount),
-        stop_from=ctx.spend_no_dep_from_percent,
-        stop_to=ctx.spend_no_dep_to_percent,
-        warning_pct=ctx.warning_percent_of_stop,
-        stop_percent_of_base=ctx.stop_percent_of_base,
-        code="spend_no_dep_range",
-        title="Расход без депа",
-        summary_suffix="депозитов 0, цена реги в норме",
-        reason_suffix="Цена регистрации ещё укладывается в рабочую зону, но депозитов всё ещё нет.",
+    return _pick_highest_priority_hit(
+        cpr_hit,
+        regs_without_dep_hit,
+        spend_without_dep_hit,
     )
 
 
@@ -179,8 +204,8 @@ def _evaluate_deposit_stage(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | No
         current_value=_ratio_percent(row.spend, ctx.cpa_amount),
         stop_from=ctx.spend_with_dep_from_percent,
         stop_to=ctx.spend_with_dep_to_percent,
-        warning_pct=ctx.warning_percent_of_stop,
-        stop_percent_of_base=ctx.stop_percent_of_base,
+        warning_pct=ctx.effective_cpr_warning_percent_of_stop,
+        stop_percent_of_base=ctx.effective_cpr_stop_percent_of_base,
         code="spend_with_dep_range",
         title="Расход с депозитом",
         summary_suffix=f"депозитов {row.deposits}",
@@ -260,6 +285,19 @@ def _evaluate_early_signals(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | No
                     f"Лимит для сигнала {_format_money_value(threshold)}, значит экономика проседает ещё до лида."
                 ),
             )
+
+    return None
+
+
+def _pick_highest_priority_hit(*hits: RuleHit | None) -> RuleHit | None:
+    candidates = tuple(hit for hit in hits if hit is not None)
+    if not candidates:
+        return None
+
+    for stage in (AlertStage.STOP, AlertStage.WARNING, AlertStage.EARLY_SIGNAL):
+        for hit in candidates:
+            if hit.stage == stage:
+                return hit
 
     return None
 
@@ -377,7 +415,10 @@ def _evaluate_regs_without_deposits(row: ScannedAdRow, ctx: RuleContext) -> Rule
         return None
 
     stop_val = Decimal(ctx.regs_no_dep_stop_count)
-    warning_val = _warning_count(ctx.regs_no_dep_stop_count, ctx.warning_percent_of_stop)
+    warning_val = _warning_count(
+        ctx.regs_no_dep_stop_count,
+        ctx.effective_cpr_warning_percent_of_stop,
+    )
     current = Decimal(row.registrations)
 
     if current >= stop_val:
@@ -433,16 +474,16 @@ def _evaluate_spend_range(
     range_text = _format_percent_range(effective_from, effective_to, stop_from, stop_to)
     current = _round_percent(current_value)
 
-    if effective_from <= current <= effective_to:
+    if current >= effective_from:
         return RuleHit(
             code=code,
             title=title,
             stage=AlertStage.STOP,
             value=current,
             threshold=_round_percent(effective_from),
-            summary=f"Расход {current:.2f}% CPA вошёл в стоп-диапазон {range_text}, {summary_suffix}",
+            summary=f"Расход {current:.2f}% CPA достиг или превысил стоп-диапазон {range_text}, {summary_suffix}",
             reason_text=(
-                f"Расход уже вошёл в стоп-диапазон {range_text}: сейчас {current:.2f}% от CPA. "
+                f"Расход уже достиг или превысил стоп-диапазон {range_text}: сейчас {current:.2f}% от CPA. "
                 f"{reason_suffix}"
             ),
         )
@@ -471,10 +512,35 @@ def _is_registration_normal(row: ScannedAdRow, ctx: RuleContext) -> bool:
     cpr_threshold = _round_money(
         _apply_downward_stop(
             _percent_of_cpa(ctx.cpa_amount, ctx.cpr_percent_stop),
-            ctx.stop_percent_of_base,
+            ctx.effective_cpr_stop_percent_of_base,
         )
     )
     return _round_money(row.cost_per_registration) <= cpr_threshold
+
+
+def _has_enable_data_gap(row: ScannedAdRow) -> bool:
+    if row.clicks > 0 and row.cpc is None:
+        return True
+    if row.leads > 0 and row.cost_per_lead is None:
+        return True
+    return row.registrations > 0 and row.cost_per_registration is None
+
+
+def _has_confirmed_deposit_signal(row: ScannedAdRow) -> bool:
+    """Считаем депозит подтверждённым только после появления регистрации."""
+    return row.registrations >= 1 and row.deposits >= 1
+
+
+def _has_safe_enable_recovery_signal(row: ScannedAdRow) -> bool:
+    if _has_confirmed_deposit_signal(row):
+        return True
+    if row.deposits > 0 and row.registrations <= 0:
+        return False
+    if row.registrations >= 1:
+        return row.cost_per_registration is not None
+    if row.leads >= 1:
+        return row.cost_per_lead is not None
+    return row.clicks >= 1 and row.cpc is not None
 
 
 def _landing_page_view_ratio(row: ScannedAdRow) -> Decimal | None:
@@ -531,10 +597,7 @@ def _format_percent_range(
 ) -> str:
     if Decimal(effective_from) == Decimal(base_from) and Decimal(effective_to) == Decimal(base_to):
         return f"{effective_from:.2f}-{effective_to:.2f}%"
-    return (
-        f"{effective_from:.2f}-{effective_to:.2f}% "
-        f"(базовый {base_from:.2f}-{base_to:.2f}%)"
-    )
+    return f"{effective_from:.2f}-{effective_to:.2f}% (базовый {base_from:.2f}-{base_to:.2f}%)"
 
 
 def _warning_count(stop_count: int, warning_pct: Decimal) -> Decimal:

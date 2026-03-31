@@ -8,13 +8,12 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
-import random
 import re
 from decimal import Decimal, InvalidOperation
 
+from core.browser.humanizer import human_click
 from core.scanner.models import ScannedAdRow
 
 logger = logging.getLogger(__name__)
@@ -26,54 +25,89 @@ _ROW_ID_RE = re.compile(r"table_row:(\d+)")
 # Регулярка для Ad ID (минимум 5 цифр подряд)
 _AD_ID_RE = re.compile(r"\d{5,}")
 
-# Маппинг ключей data-surface → поля ScannedAdRow
-_FIELD_KEYS = {
-    "campaign_group_name": "campaign_name",
-    "campaign_name": "adset_name",
-    "forObjectType(name,ADGROUP)": "ad_name",
-    "delivery": "delivery_status",
-    "spend": "spend",
-    "clicks": "clicks",
-    "cpc": "cpc",
-    "outbound_clicks:outbound_click": "outbound_clicks",
-    "outbound_clicks_ctr:outbound_click": "outbound_ctr",
-    "omni_landing_page_view": "landing_page_views",
-    "cost_per_action_type:landing_page_view": "cost_per_landing_page_view",
-    "cpm": "cpm",
-    "frequency": "frequency",
-    "actions:lead": "leads",
-    "cost_per_action_type:lead": "cost_per_lead",
-    "omni_complete_registration": "registrations",
-    "cost_per_action_type:omni_complete_registration": "cost_per_registration",
+# Упорядоченные алиасы data-surface → поля ScannedAdRow.
+# Более специфичные ключи идут раньше общих, чтобы includes-мэтчинг не путал
+# `cost_per_action_type:omni_complete_registration` с `omni_complete_registration`.
+_FIELD_ALIASES: tuple[tuple[str, str], ...] = (
+    ("cost_per_action_type:omni_complete_registration", "cost_per_registration"),
+    ("actions:omni_complete_registration", "registrations"),
+    ("omni_complete_registration", "registrations"),
+    ("cost_per_action_type:landing_page_view", "cost_per_landing_page_view"),
+    ("actions:omni_landing_page_view", "landing_page_views"),
+    ("omni_landing_page_view", "landing_page_views"),
+    ("cost_per_action_type:lead", "cost_per_lead"),
+    ("actions:lead", "leads"),
+    ("outbound_clicks_ctr:outbound_click", "outbound_ctr"),
+    ("outbound_clicks:outbound_click", "outbound_clicks"),
+    # Сначала разбираем кампанию/адсет, иначе их съедает общий алиас `name`.
+    ("forObjectType(campaign_group_name,ADGROUP)", "campaign_name"),
+    ("campaign_group_name", "campaign_name"),
+    ("forObjectType(campaign_name,ADGROUP)", "adset_name"),
+    ("adset_name", "adset_name"),
+    ("campaign_name", "adset_name"),
+    ("forObjectType(name,ADGROUP)", "ad_name"),
+    ("name", "ad_name"),
+    ("delivery", "delivery_status"),
+    ("budget", "budget"),
+    ("reach", "reach"),
+    ("impressions", "impressions"),
+    ("ctr", "ctr"),
+    ("cost_per_result", "cost_per_result"),
     # В нашем Ads Manager колонка «Результаты» = количество депозитов.
-    "table_cell:results": "deposits",
-    "cost_per_result": "cost_per_result",
-}
+    ("table_cell:results", "deposits"),
+    ("results", "deposits"),
+    ("spend", "spend"),
+    ("clicks", "clicks"),
+    ("cpc", "cpc"),
+    ("cpm", "cpm"),
+    ("frequency", "frequency"),
+)
 
 # Числовые/денежные поля, для которых нужна спецлогика извлечения
-_NUMERIC_FIELDS = frozenset({
-    "spend", "clicks", "cpc", "outbound_clicks", "outbound_ctr",
-    "landing_page_views", "cost_per_landing_page_view", "cpm", "frequency",
-    "leads", "cost_per_lead", "registrations", "cost_per_registration",
-    "deposits",
-    "cost_per_result",
-})
+_NUMERIC_FIELDS = frozenset(
+    {
+        "spend",
+        "reach",
+        "impressions",
+        "clicks",
+        "cpc",
+        "ctr",
+        "outbound_clicks",
+        "outbound_ctr",
+        "landing_page_views",
+        "cost_per_landing_page_view",
+        "cpm",
+        "frequency",
+        "leads",
+        "cost_per_lead",
+        "registrations",
+        "cost_per_registration",
+        "deposits",
+        "cost_per_result",
+    }
+)
+
+
+def _match_field_name(surface: str) -> str | None:
+    """Возвращает поле парсера по data-surface с учётом приоритета алиасов."""
+    for key, field_name in _FIELD_ALIASES:
+        if key in surface:
+            return field_name
+    return None
 
 
 async def refresh_table(page) -> bool:
     """Нажимает кнопку «Обновить» в Ads Manager вместо перезагрузки страницы.
 
-    Перед кликом двигает мышь к кнопке с рандомным смещением для
-    имитации человеческого поведения (антидетект).
+    Перед кликом используется humanized-слой, чтобы действие выглядело
+    как поведение живого пользователя.
 
     Returns:
         True если кнопка найдена и нажата, False если нет
     """
     try:
         # Ищем контейнер с кнопками обновления и публикации
-        container = await page.query_selector(
-            '[data-pagelet="AdsRefreshAndPublishButtons"]'
-        )
+        container = await page.query_selector('[data-pagelet="AdsRefreshAndPublishButtons"]')
         if not container:
             logger.debug("Контейнер кнопок обновления не найден")
             return False
@@ -83,27 +117,15 @@ async def refresh_table(page) -> bool:
         for btn in buttons:
             text = await btn.inner_text()
             if "Обновить" in text or "Refresh" in text or "обновить" in text:
-                # Антидетект: двигаем мышь к кнопке и кликаем через mouse API
-                box = await btn.bounding_box()
-                if box:
-                    offset_x = random.uniform(-5, 5)
-                    offset_y = random.uniform(-3, 3)
-                    target_x = box["x"] + box["width"] / 2 + offset_x
-                    target_y = box["y"] + box["height"] / 2 + offset_y
-                    await page.mouse.move(target_x, target_y)
-                    await asyncio.sleep(random.uniform(0.1, 0.3))
-                    await page.mouse.click(target_x, target_y)
-                else:
-                    await btn.click()
+                # Антидетект: клик выполняем через humanized-слой
+                await human_click(page, btn)
                 logger.info("Нажата кнопка «Обновить данные в таблице»")
                 return True
 
         logger.debug("Кнопка обновления не найдена среди кнопок контейнера")
         return False
     except Exception:
-        logger.debug(
-            "Ошибка при попытке нажать кнопку обновления", exc_info=True
-        )
+        logger.debug("Ошибка при попытке нажать кнопку обновления", exc_info=True)
         return False
 
 
@@ -116,13 +138,27 @@ def _build_extraction_js() -> str:
     IPC-вызовов одним.
     """
     # Сериализуем маппинг полей в JS-объект
-    field_keys_json = json.dumps(_FIELD_KEYS, ensure_ascii=False)
+    field_aliases_json = json.dumps(list(_FIELD_ALIASES), ensure_ascii=False)
     numeric_fields_json = json.dumps(list(_NUMERIC_FIELDS), ensure_ascii=False)
 
-    return """() => {
-    const FIELD_KEYS = """ + field_keys_json + """;
-    const NUMERIC_FIELDS = new Set(""" + numeric_fields_json + """);
+    return (
+        """() => {
+    const FIELD_ALIASES = """
+        + field_aliases_json
+        + """;
+    const NUMERIC_FIELDS = new Set("""
+        + numeric_fields_json
+        + """);
     const ROW_RE = /table_row:(\\d+)/;
+
+    function matchFieldName(surface) {
+        for (const [key, fieldName] of FIELD_ALIASES) {
+            if (surface.includes(key)) {
+                return fieldName;
+            }
+        }
+        return null;
+    }
 
     // Тексты кнопок, которые нужно игнорировать при извлечении ad_name
     const BUTTON_LABELS = new Set([
@@ -208,24 +244,24 @@ def _build_extraction_js() -> str:
     for (const [rowId, rowCells] of Object.entries(rowsMap)) {
         const fields = {};
         for (const {surface, cell} of rowCells) {
-            for (const [key, fieldName] of Object.entries(FIELD_KEYS)) {
-                if (surface.includes(key)) {
-                    let text;
-                    if (fieldName === 'ad_name') {
-                        text = getAdName(cell);
-                    } else if (NUMERIC_FIELDS.has(fieldName)) {
-                        text = getMetricText(cell);
-                    } else {
-                        text = getFirstText(cell);
-                    }
-                    if (!(fieldName in fields)
-                        || fields[fieldName] === '\\u2014'
-                        || fields[fieldName] === '-'
-                        || fields[fieldName] === '') {
-                        fields[fieldName] = text;
-                    }
-                    break;
-                }
+            const fieldName = matchFieldName(surface);
+            if (!fieldName) {
+                continue;
+            }
+
+            let text;
+            if (fieldName === 'ad_name') {
+                text = getAdName(cell);
+            } else if (NUMERIC_FIELDS.has(fieldName)) {
+                text = getMetricText(cell);
+            } else {
+                text = getFirstText(cell);
+            }
+            if (!(fieldName in fields)
+                || fields[fieldName] === '\\u2014'
+                || fields[fieldName] === '-'
+                || fields[fieldName] === '') {
+                fields[fieldName] = text;
             }
         }
         fields._row_id = rowId;
@@ -234,6 +270,7 @@ def _build_extraction_js() -> str:
 
     return result;
 }"""
+    )
 
 
 async def parse_ads_from_page(page) -> list[ScannedAdRow]:
@@ -304,29 +341,26 @@ def _build_row_from_fields(fields: dict) -> ScannedAdRow | None:
 
     campaign_name = fields.get("campaign_name", "")
     adset_name = fields.get("adset_name", "")
-    delivery_status = _detect_delivery_status(
-        fields.get("delivery_status", "")
-    )
+    delivery_status = _detect_delivery_status(fields.get("delivery_status", ""))
 
     spend = _parse_money(fields.get("spend", ""), Decimal("0"))
+    budget = fields.get("budget", "")
+    reach = _parse_int_value(fields.get("reach", ""))
+    impressions = _parse_int_value(fields.get("impressions", ""))
     clicks = _parse_int_value(fields.get("clicks", ""))
     cpc = _parse_money_or_none(fields.get("cpc", ""))
+    ctr = _parse_decimal_or_none(fields.get("ctr", ""))
     outbound_clicks = _parse_int_value(fields.get("outbound_clicks", ""))
     outbound_ctr = _parse_decimal_or_none(fields.get("outbound_ctr", ""))
     landing_page_views = _parse_int_value(fields.get("landing_page_views", ""))
-    cost_per_landing_page_view = _parse_money_or_none(
-        fields.get("cost_per_landing_page_view", "")
-    )
+    cost_per_result = _parse_money_or_none(fields.get("cost_per_result", ""))
+    cost_per_landing_page_view = _parse_money_or_none(fields.get("cost_per_landing_page_view", ""))
     cpm = _parse_money_or_none(fields.get("cpm", ""))
     frequency = _parse_decimal_or_none(fields.get("frequency", ""))
     leads = _parse_int_value(fields.get("leads", ""))
     cost_per_lead = _parse_money_or_none(fields.get("cost_per_lead", ""))
-    registrations = _parse_int_value(
-        fields.get("registrations", "")
-    )
-    cost_per_registration = _parse_money_or_none(
-        fields.get("cost_per_registration", "")
-    )
+    registrations = _parse_int_value(fields.get("registrations", ""))
+    cost_per_registration = _parse_money_or_none(fields.get("cost_per_registration", ""))
     deposits = _parse_int_value(fields.get("deposits", ""))
 
     return ScannedAdRow(
@@ -336,11 +370,16 @@ def _build_row_from_fields(fields: dict) -> ScannedAdRow | None:
         ad_name=ad_name,
         delivery_status=delivery_status,
         spend=spend,
+        budget=budget,
+        reach=reach,
+        impressions=impressions,
         clicks=clicks,
         cpc=cpc,
+        ctr=ctr,
         outbound_clicks=outbound_clicks,
         outbound_ctr=outbound_ctr,
         landing_page_views=landing_page_views,
+        cost_per_result=cost_per_result,
         cost_per_landing_page_view=cost_per_landing_page_view,
         cpm=cpm,
         frequency=frequency,
@@ -357,9 +396,7 @@ async def _parse_ads_fallback(page) -> list[ScannedAdRow]:
     rows: list[ScannedAdRow] = []
 
     try:
-        cells = await page.query_selector_all(
-            '[data-surface*="table_row:"]'
-        )
+        cells = await page.query_selector_all('[data-surface*="table_row:"]')
 
         # Группируем ячейки по номеру строки
         rows_map: dict[str, list] = {}
@@ -405,21 +442,18 @@ async def _parse_row_from_cells(
     # Извлекаем текст из каждой ячейки по ключам data-surface
     fields: dict[str, str] = {}
     for surface, cell in row_cells:
-        for key, field_name in _FIELD_KEYS.items():
-            if key in surface:
-                # Выбираем функцию извлечения текста
-                if field_name == "ad_name":
-                    text = await _get_ad_name(cell)
-                elif field_name in _NUMERIC_FIELDS:
-                    text = await _get_metric_text(cell)
-                else:
-                    text = await _get_first_text(cell)
-                if (
-                    field_name not in fields
-                    or fields[field_name] in ("\u2014", "-", "")
-                ):
-                    fields[field_name] = text
-                break
+        field_name = _match_field_name(surface)
+        if field_name is None:
+            continue
+        # Выбираем функцию извлечения текста
+        if field_name == "ad_name":
+            text = await _get_ad_name(cell)
+        elif field_name in _NUMERIC_FIELDS:
+            text = await _get_metric_text(cell)
+        else:
+            text = await _get_first_text(cell)
+        if field_name not in fields or fields[field_name] in ("\u2014", "-", ""):
+            fields[field_name] = text
 
     ad_name = fields.get("ad_name", "")
     if not ad_name or ad_name in ("\u2014", "-"):
@@ -437,27 +471,26 @@ async def _parse_row_from_cells(
 
     campaign_name = fields.get("campaign_name", "")
     adset_name = fields.get("adset_name", "")
-    delivery_status = _detect_delivery_status(
-        fields.get("delivery_status", "")
-    )
+    delivery_status = _detect_delivery_status(fields.get("delivery_status", ""))
 
     spend = _parse_money(fields.get("spend", ""), Decimal("0"))
+    budget = fields.get("budget", "")
+    reach = _parse_int_value(fields.get("reach", ""))
+    impressions = _parse_int_value(fields.get("impressions", ""))
     clicks = _parse_int_value(fields.get("clicks", ""))
     cpc = _parse_money_or_none(fields.get("cpc", ""))
+    ctr = _parse_decimal_or_none(fields.get("ctr", ""))
     outbound_clicks = _parse_int_value(fields.get("outbound_clicks", ""))
     outbound_ctr = _parse_decimal_or_none(fields.get("outbound_ctr", ""))
     landing_page_views = _parse_int_value(fields.get("landing_page_views", ""))
-    cost_per_landing_page_view = _parse_money_or_none(
-        fields.get("cost_per_landing_page_view", "")
-    )
+    cost_per_result = _parse_money_or_none(fields.get("cost_per_result", ""))
+    cost_per_landing_page_view = _parse_money_or_none(fields.get("cost_per_landing_page_view", ""))
     cpm = _parse_money_or_none(fields.get("cpm", ""))
     frequency = _parse_decimal_or_none(fields.get("frequency", ""))
     leads = _parse_int_value(fields.get("leads", ""))
     cost_per_lead = _parse_money_or_none(fields.get("cost_per_lead", ""))
     registrations = _parse_int_value(fields.get("registrations", ""))
-    cost_per_registration = _parse_money_or_none(
-        fields.get("cost_per_registration", "")
-    )
+    cost_per_registration = _parse_money_or_none(fields.get("cost_per_registration", ""))
     deposits = _parse_int_value(fields.get("deposits", ""))
 
     return ScannedAdRow(
@@ -467,11 +500,16 @@ async def _parse_row_from_cells(
         ad_name=ad_name,
         delivery_status=delivery_status,
         spend=spend,
+        budget=budget,
+        reach=reach,
+        impressions=impressions,
         clicks=clicks,
         cpc=cpc,
+        ctr=ctr,
         outbound_clicks=outbound_clicks,
         outbound_ctr=outbound_ctr,
         landing_page_views=landing_page_views,
+        cost_per_result=cost_per_result,
         cost_per_landing_page_view=cost_per_landing_page_view,
         cpm=cpm,
         frequency=frequency,
@@ -603,9 +641,7 @@ def _parse_money(text: str, default: Decimal) -> Decimal:
     """Извлекает Decimal из текстовой строки ('$0.15', '0,15 $', '-')."""
     if not text or text.strip() in ("\u2014", "-", "\u2013", "\u2014", "n/a", ""):
         return default
-    cleaned = (
-        text.replace(",", ".").replace("\xa0", "").replace(" ", "")
-    )
+    cleaned = text.replace(",", ".").replace("\xa0", "").replace(" ", "")
     match = _MONEY_RE.search(cleaned)
     if not match:
         return default
@@ -619,9 +655,7 @@ def _parse_money_or_none(text: str) -> Decimal | None:
     """Извлекает Decimal или None если значение отсутствует."""
     if not text or text.strip() in ("\u2014", "-", "\u2013", "\u2014", "n/a", ""):
         return None
-    cleaned = (
-        text.replace(",", ".").replace("\xa0", "").replace(" ", "")
-    )
+    cleaned = text.replace(",", ".").replace("\xa0", "").replace(" ", "")
     match = _MONEY_RE.search(cleaned)
     if not match:
         return None

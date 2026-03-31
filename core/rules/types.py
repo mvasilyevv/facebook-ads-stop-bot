@@ -73,6 +73,12 @@ class RuleContext:
     cpa_amount: Decimal
     warning_percent_of_stop: Decimal
     stop_percent_of_base: Decimal = Decimal("100")
+    cpc_warning_percent_of_stop: Decimal | None = None
+    cpc_stop_percent_of_base: Decimal | None = None
+    cpl_warning_percent_of_stop: Decimal | None = None
+    cpl_stop_percent_of_base: Decimal | None = None
+    cpr_warning_percent_of_stop: Decimal | None = None
+    cpr_stop_percent_of_base: Decimal | None = None
 
     # Правило 1: CPC
     cpc_enabled: bool = True
@@ -114,3 +120,51 @@ class RuleContext:
     early_cost_per_lpv_signal_enabled: bool = True
     early_cost_per_lpv_signal_percent_of_cpa: Decimal = Decimal("5")
     early_cost_per_lpv_signal_min_views: int = 2
+
+    @property
+    def effective_cpc_warning_percent_of_stop(self) -> Decimal:
+        return (
+            self.cpc_warning_percent_of_stop
+            if self.cpc_warning_percent_of_stop is not None
+            else self.warning_percent_of_stop
+        )
+
+    @property
+    def effective_cpc_stop_percent_of_base(self) -> Decimal:
+        return (
+            self.cpc_stop_percent_of_base
+            if self.cpc_stop_percent_of_base is not None
+            else self.stop_percent_of_base
+        )
+
+    @property
+    def effective_cpl_warning_percent_of_stop(self) -> Decimal:
+        return (
+            self.cpl_warning_percent_of_stop
+            if self.cpl_warning_percent_of_stop is not None
+            else self.warning_percent_of_stop
+        )
+
+    @property
+    def effective_cpl_stop_percent_of_base(self) -> Decimal:
+        return (
+            self.cpl_stop_percent_of_base
+            if self.cpl_stop_percent_of_base is not None
+            else self.stop_percent_of_base
+        )
+
+    @property
+    def effective_cpr_warning_percent_of_stop(self) -> Decimal:
+        return (
+            self.cpr_warning_percent_of_stop
+            if self.cpr_warning_percent_of_stop is not None
+            else self.warning_percent_of_stop
+        )
+
+    @property
+    def effective_cpr_stop_percent_of_base(self) -> Decimal:
+        return (
+            self.cpr_stop_percent_of_base
+            if self.cpr_stop_percent_of_base is not None
+            else self.stop_percent_of_base
+        )

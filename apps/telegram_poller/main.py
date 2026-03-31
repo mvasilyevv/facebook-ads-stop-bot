@@ -10,8 +10,30 @@ import sys
 from core.config import get_settings
 from core.telegram.bot_handler import handle_update
 from core.telegram.client import TelegramBotClient
+from core.telegram.service import touch_poller_heartbeat
 
 logger = logging.getLogger(__name__)
+TOKEN_RELOAD_INTERVAL_SECONDS = 3
+ERROR_RETRY_DELAY_SECONDS = 3
+
+
+async def _process_updates(
+    client: TelegramBotClient,
+    *,
+    offset: int | None,
+) -> int | None:
+    """Обрабатывает пачку update и всегда сдвигает offset, даже если один update оказался битым."""
+    updates = await client.get_updates(offset=offset)
+    for update in updates:
+        update_id = update.get("update_id")
+        try:
+            await handle_update(client, update)
+        except Exception:
+            logger.exception("Ошибка обработки update %s", update_id)
+        finally:
+            if isinstance(update_id, int):
+                offset = update_id + 1
+    return offset
 
 
 async def poller_loop(client: TelegramBotClient) -> None:
@@ -22,19 +44,12 @@ async def poller_loop(client: TelegramBotClient) -> None:
 
     while True:
         try:
-            updates = await client.get_updates(offset=offset)
-            for update in updates:
-                try:
-                    await handle_update(client, update)
-                except Exception:
-                    logger.exception("Ошибка обработки update %s", update.get("update_id"))
-                    continue
-                offset = update["update_id"] + 1
+            offset = await _process_updates(client, offset=offset)
         except asyncio.CancelledError:
             raise
         except Exception:
             logger.exception("Ошибка в long polling цикле")
-            await asyncio.sleep(3)
+            await asyncio.sleep(ERROR_RETRY_DELAY_SECONDS)
 
 
 async def _load_bot_token() -> str:
@@ -64,22 +79,68 @@ async def _load_bot_token() -> str:
     return settings.telegram_bot_token
 
 
+async def poller_runtime_loop(
+    *,
+    token_loader=_load_bot_token,
+    client_factory=TelegramBotClient,
+    reload_interval_seconds: int = TOKEN_RELOAD_INTERVAL_SECONDS,
+) -> None:
+    """Поддерживает живой poller, который ждёт появления токена и безопасно переживает ротацию."""
+    offset: int | None = None
+    current_token = ""
+    client: TelegramBotClient | None = None
+    waiting_for_token_logged = False
+
+    logger.info("Telegram poller запущен")
+
+    try:
+        while True:
+            await touch_poller_heartbeat()
+
+            token = (await token_loader()).strip()
+            if not token:
+                if client is not None:
+                    await client.close()
+                    client = None
+                    current_token = ""
+                if not waiting_for_token_logged:
+                    logger.info("Telegram poller ждёт bot_token и продолжает работать в фоне")
+                    waiting_for_token_logged = True
+                await asyncio.sleep(reload_interval_seconds)
+                continue
+
+            if token != current_token or client is None:
+                if client is not None:
+                    await client.close()
+                client = client_factory(token)
+                current_token = token
+                waiting_for_token_logged = False
+                logger.info("Telegram poller подключён к актуальному bot_token")
+
+            try:
+                offset = await _process_updates(client, offset=offset)
+                await touch_poller_heartbeat()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Ошибка в runtime-цикле Telegram poller")
+                await client.close()
+                client = None
+                current_token = ""
+                await asyncio.sleep(ERROR_RETRY_DELAY_SECONDS)
+    finally:
+        if client is not None:
+            await client.close()
+
+
 async def main() -> None:
     """Точка входа для Telegram poller."""
-    bot_token = await _load_bot_token()
-
-    if not bot_token:
-        logger.error("Не задан TELEGRAM_BOT_TOKEN ни в БД, ни в .env")
-        sys.exit(1)
-
-    client = TelegramBotClient(bot_token)
-
     settings = get_settings()
     if not settings.telegram_chat_id:
         logger.info("TELEGRAM_CHAT_ID не задан — жду первое сообщение для определения...")
 
     try:
-        await poller_loop(client)
+        await poller_runtime_loop()
     except KeyboardInterrupt:
         logger.info("Telegram poller остановлен")
 

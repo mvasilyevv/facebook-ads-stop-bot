@@ -6,6 +6,22 @@ from __future__ import annotations
 import httpx
 
 
+class TelegramAPIError(RuntimeError):
+    """Ошибка вызова Telegram Bot API."""
+
+    def __init__(
+        self,
+        *,
+        method: str,
+        description: str = "",
+        error_code: int | None = None,
+    ) -> None:
+        self.method = method
+        self.description = description
+        self.error_code = error_code
+        super().__init__(f"Ошибка Telegram API при вызове {method}")
+
+
 class TelegramBotClient:
     """Минимальный async-клиент для Telegram Bot API."""
 
@@ -14,12 +30,41 @@ class TelegramBotClient:
             raise RuntimeError("Не задан Telegram bot token")
         self._base = f"https://api.telegram.org/bot{bot_token.strip()}"
         self._http = http_client or httpx.AsyncClient(timeout=30.0)
+        self._owns_http_client = http_client is None
+
+    async def _post_json(
+        self,
+        method: str,
+        *,
+        payload: dict,
+        request_timeout: float | None = None,
+    ) -> dict:
+        """Выполняет POST-запрос к Telegram API и валидирует ответ."""
+        try:
+            resp = await self._http.post(
+                f"{self._base}/{method}",
+                json=payload,
+                timeout=request_timeout,
+            )
+            resp.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise RuntimeError(f"Не удалось выполнить запрос к Telegram API ({method})") from exc
+
+        data = resp.json()
+        if not data.get("ok"):
+            raise TelegramAPIError(
+                method=method,
+                description=str(data.get("description") or ""),
+                error_code=int(data.get("error_code") or 0) or None,
+            )
+        return dict(data)
 
     async def send_message(
         self,
         *,
         chat_id: str,
         text: str,
+        message_thread_id: int | None = None,
         reply_markup: dict | None = None,
     ) -> dict:
         """Отправляет сообщение в чат."""
@@ -28,13 +73,11 @@ class TelegramBotClient:
             "text": text,
             "parse_mode": "HTML",
         }
+        if message_thread_id is not None:
+            payload["message_thread_id"] = message_thread_id
         if reply_markup:
             payload["reply_markup"] = reply_markup
-        resp = await self._http.post(f"{self._base}/sendMessage", json=payload)
-        resp.raise_for_status()
-        data = resp.json()
-        if not data.get("ok"):
-            raise RuntimeError("Telegram не принял сообщение")
+        data = await self._post_json("sendMessage", payload=payload)
         return dict(data["result"])
 
     async def edit_message(
@@ -43,6 +86,7 @@ class TelegramBotClient:
         chat_id: str,
         message_id: int,
         text: str,
+        message_thread_id: int | None = None,
         reply_markup: dict | None = None,
     ) -> None:
         """Редактирует текст существующего сообщения."""
@@ -52,10 +96,11 @@ class TelegramBotClient:
             "text": text,
             "parse_mode": "HTML",
         }
+        if message_thread_id is not None:
+            payload["message_thread_id"] = message_thread_id
         if reply_markup:
             payload["reply_markup"] = reply_markup
-        resp = await self._http.post(f"{self._base}/editMessageText", json=payload)
-        resp.raise_for_status()
+        await self._post_json("editMessageText", payload=payload)
 
     # Алиас для обратной совместимости
     edit_message_text = edit_message
@@ -65,8 +110,7 @@ class TelegramBotClient:
         payload: dict = {"callback_query_id": callback_query_id}
         if text:
             payload["text"] = text
-        resp = await self._http.post(f"{self._base}/answerCallbackQuery", json=payload)
-        resp.raise_for_status()
+        await self._post_json("answerCallbackQuery", payload=payload)
 
     async def get_updates(self, *, offset: int | None, timeout_seconds: int = 25) -> list[dict]:
         """Long polling для получения обновлений."""
@@ -76,13 +120,36 @@ class TelegramBotClient:
         }
         if offset is not None:
             payload["offset"] = offset
-        resp = await self._http.post(
-            f"{self._base}/getUpdates",
-            json=payload,
-            timeout=timeout_seconds + 10,
+        data = await self._post_json(
+            "getUpdates",
+            payload=payload,
+            request_timeout=timeout_seconds + 10,
         )
-        resp.raise_for_status()
-        data = resp.json()
-        if not data.get("ok"):
-            raise RuntimeError("Telegram отказал в long polling")
         return list(data.get("result") or [])
+
+    async def get_chat(self, *, chat_id: str) -> dict:
+        """Возвращает информацию о чате."""
+        data = await self._post_json("getChat", payload={"chat_id": chat_id})
+        return dict(data["result"])
+
+    async def create_forum_topic(
+        self,
+        *,
+        chat_id: str,
+        name: str,
+        icon_color: int | None = None,
+    ) -> dict:
+        """Создаёт forum topic в supergroup."""
+        payload: dict = {
+            "chat_id": chat_id,
+            "name": name,
+        }
+        if icon_color is not None:
+            payload["icon_color"] = icon_color
+        data = await self._post_json("createForumTopic", payload=payload)
+        return dict(data["result"])
+
+    async def close(self) -> None:
+        """Закрывает внутренний HTTP-клиент, если он был создан внутри."""
+        if self._owns_http_client:
+            await self._http.aclose()

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -207,12 +208,48 @@ class FakeAdsPage:
     async def query_selector(self, selector: str):
         return self._cell
 
+    async def query_selector_all(self, selector: str):
+        return []
+
+
+# Фейковая кнопка для диалога подтверждения.
+class FakeDialogButton:
+    """Фейковая кнопка подтверждения в диалоге."""
+
+    def __init__(self, text: str) -> None:
+        self._text = text
+        self.click = AsyncMock()
+
+    async def inner_text(self) -> str:
+        return self._text
+
 
 def _scalar_result(obj):
     """Создаёт мок результата scalar_one_or_none()."""
     result = MagicMock()
     result.scalar_one_or_none.return_value = obj
     return result
+
+
+# Тест: подтверждение диалога должно идти через human_click, а не через прямой click.
+@pytest.mark.asyncio
+async def test_confirm_dialog_uses_human_click():
+    """Кнопка подтверждения должна нажиматься через humanizer."""
+    from run_disable_worker import _confirm_dialog_if_present
+
+    button = FakeDialogButton("Опубликовать")
+    page = AsyncMock()
+    page.query_selector_all = AsyncMock(return_value=[button])
+
+    with (
+        patch("run_disable_worker.asyncio.sleep", new=AsyncMock()),
+        patch("run_disable_worker.human_click", new=AsyncMock()) as human_click,
+    ):
+        confirmed = await _confirm_dialog_if_present(page)
+
+    assert confirmed is True
+    human_click.assert_awaited_once_with(page, button, double_check_pause=False)
+    button.click.assert_not_called()
 
 
 # Тест: успешный клик без OFF оставляет объявление в ожидании подтверждения
@@ -258,6 +295,64 @@ async def test_mark_succeeded_sets_disabled_when_delivery_off():
 
     assert task.status == DisableTaskStatus.SUCCEEDED
     assert snapshot.alert_state == AlertState.DISABLED
+
+
+# Тест: отменённая архивная задача не должна возвращаться в RETRYING
+@pytest.mark.asyncio
+async def test_mark_retrying_ignores_cancelled_task():
+    """Если задача уже отменена как архивная, worker не должен оживлять её повтором."""
+    from run_disable_worker import mark_retrying
+
+    task = FakeDisableTask(status=DisableTaskStatus.CANCELLED)
+
+    mock_session = AsyncMock()
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=False)
+    mock_session.execute = AsyncMock(return_value=_scalar_result(task))
+    mock_factory = MagicMock(return_value=mock_session)
+
+    with patch("run_disable_worker.get_session_factory", return_value=mock_factory):
+        await mark_retrying(task.id, "Ложное срабатывание", datetime.now(UTC))
+
+    assert task.status == DisableTaskStatus.CANCELLED
+    mock_session.commit.assert_not_awaited()
+
+
+# Тест: таймаут отключения браузера в cleanup не должен подвешивать recovery-цикл.
+@pytest.mark.asyncio
+async def test_close_disable_runtime_resources_tolerates_disconnect_timeout():
+    """При зависшем disconnect cleanup должен завершаться по таймауту и идти дальше."""
+    from run_disable_worker import _close_disable_runtime_resources
+
+    async def hang_disconnect():
+        await asyncio.sleep(3600)
+
+    manager = SimpleNamespace(disconnect=hang_disconnect)
+    vision = SimpleNamespace(close=AsyncMock())
+
+    with patch("run_disable_worker.DISABLE_MANAGER_DISCONNECT_TIMEOUT_SECONDS", 0.01):
+        await _close_disable_runtime_resources(manager, vision)
+
+    vision.close.assert_awaited_once_with()
+
+
+# Тест: таймаут закрытия Vision-клиента не должен подвешивать recovery-цикл.
+@pytest.mark.asyncio
+async def test_close_disable_runtime_resources_tolerates_vision_close_timeout():
+    """При зависшем Vision.close cleanup должен завершаться по таймауту и идти дальше."""
+    from run_disable_worker import _close_disable_runtime_resources
+
+    manager = SimpleNamespace(disconnect=AsyncMock())
+
+    async def hang_close():
+        await asyncio.sleep(3600)
+
+    vision = SimpleNamespace(close=hang_close)
+
+    with patch("run_disable_worker.DISABLE_VISION_CLOSE_TIMEOUT_SECONDS", 0.01):
+        await _close_disable_runtime_resources(manager, vision)
+
+    manager.disconnect.assert_awaited_once_with()
 
 
 # Тест: Vision-настройки сначала берутся из БД
@@ -331,10 +426,10 @@ async def test_load_vision_settings_falls_back_to_env():
     assert profile_id == "profile-from-env"
 
 
-# Тест: disable worker отправляет нейтральное подтверждение, а не финальное "выключено"
+# Тест: disable worker больше не шлёт TG напрямую, а использует общий lifecycle-колбэк.
 @pytest.mark.asyncio
-async def test_disable_worker_sends_pending_off_confirmation_to_telegram():
-    """После клика воркер должен сообщать о ожидании OFF, а не о финальном выключении."""
+async def test_disable_worker_uses_completion_callback_instead_of_direct_telegram_send():
+    """После клика воркер должен вызывать lifecycle-колбэк и не слать TG напрямую."""
     from apps.disable_worker.main import disable_worker_loop
 
     task = FakeDisableTask()
@@ -347,33 +442,312 @@ async def test_disable_worker_sends_pending_off_confirmation_to_telegram():
             return task
         return None
 
-    tg_client = AsyncMock()
+    send_completion_callback = AsyncMock()
 
-    with patch("apps.disable_worker.main.TelegramBotClient", return_value=tg_client):
-        loop_task = asyncio.create_task(
-            disable_worker_loop(
+    loop_task = asyncio.create_task(
+        disable_worker_loop(
+            poll_interval_seconds=0,
+            claim_next_task=claim_once,
+            execute_disable=AsyncMock(
+                return_value=(True, "Переключатель дважды показал OFF в интерфейсе")
+            ),
+            mark_succeeded=AsyncMock(),
+            mark_retrying=AsyncMock(),
+            telegram_bot_token="token",
+            telegram_chat_id="chat-id",
+            send_completion_callback=send_completion_callback,
+        )
+    )
+
+    await asyncio.sleep(0.1)
+    loop_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await loop_task
+
+    send_completion_callback.assert_awaited_once_with(
+        task,
+        True,
+        "Переключатель дважды показал OFF в интерфейсе",
+    )
+
+
+# Тест: пакетный режим должен обрабатывать несколько задач за один проход цикла.
+@pytest.mark.asyncio
+async def test_disable_worker_loop_processes_task_batch():
+    """Если воркер взял пачку задач, он должен обработать их без возврата в одиночный режим."""
+    from apps.disable_worker.main import disable_worker_loop
+
+    task_one = FakeDisableTask(id="task-001", fb_ad_id="111111")
+    task_two = FakeDisableTask(id="task-002", fb_ad_id="222222", attempt_count=2)
+    batch_calls = 0
+
+    async def claim_batch(limit: int):
+        nonlocal batch_calls
+        batch_calls += 1
+        if batch_calls == 1:
+            assert limit == 10
+            return [task_one, task_two]
+        return []
+
+    mark_succeeded = AsyncMock()
+    mark_retrying = AsyncMock()
+    mark_failed = AsyncMock()
+    execute_disable_batch = AsyncMock(
+        return_value={
+            task_one.id: (True, "Первое объявление отключено"),
+            task_two.id: (False, "Второе объявление не найдено в таблице"),
+        }
+    )
+
+    loop_task = asyncio.create_task(
+        disable_worker_loop(
+            poll_interval_seconds=0,
+            claim_next_task=AsyncMock(return_value=None),
+            execute_disable=AsyncMock(),
+            claim_task_batch=claim_batch,
+            execute_disable_batch=execute_disable_batch,
+            batch_size=10,
+            mark_succeeded=mark_succeeded,
+            mark_retrying=mark_retrying,
+            mark_failed=mark_failed,
+        )
+    )
+
+    await asyncio.sleep(0.1)
+    loop_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await loop_task
+
+    execute_disable_batch.assert_awaited_once_with([task_one, task_two])
+    mark_succeeded.assert_awaited_once_with(task_one.id)
+    mark_retrying.assert_awaited_once()
+    mark_failed.assert_not_called()
+
+
+# Тест: зависшая одиночная браузерная операция должна переводить задачу в RETRYING и ронять цикл для переподключения.
+@pytest.mark.asyncio
+async def test_disable_worker_loop_retries_and_restarts_on_single_task_timeout():
+    """Таймаут одной задачи должен вернуть её в очередь и пробросить фатальную ошибку вверх."""
+    from apps.disable_worker.main import BrowserOperationTimeoutError, disable_worker_loop
+
+    task = FakeDisableTask(id="task-timeout", fb_ad_id="999001")
+    call_count = 0
+
+    async def claim_once():
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return task
+        return None
+
+    async def hang_disable(_fb_ad_id: str):
+        await asyncio.sleep(3600)
+        return False, "не дойдём сюда"
+
+    mark_succeeded = AsyncMock()
+    mark_retrying = AsyncMock()
+    mark_failed = AsyncMock()
+
+    with patch("apps.disable_worker.main.DISABLE_BROWSER_TASK_TIMEOUT_SECONDS", 0.01):
+        with pytest.raises(BrowserOperationTimeoutError):
+            await disable_worker_loop(
                 poll_interval_seconds=0,
                 claim_next_task=claim_once,
-                execute_disable=AsyncMock(
-                    return_value=(True, "Переключатель дважды показал OFF в интерфейсе")
-                ),
-                mark_succeeded=AsyncMock(),
-                mark_retrying=AsyncMock(),
-                telegram_bot_token="token",
-                telegram_chat_id="chat-id",
+                execute_disable=hang_disable,
+                mark_succeeded=mark_succeeded,
+                mark_retrying=mark_retrying,
+                mark_failed=mark_failed,
             )
-        )
 
-        await asyncio.sleep(0.1)
-        loop_task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await loop_task
+    mark_succeeded.assert_not_called()
+    mark_failed.assert_not_called()
+    mark_retrying.assert_awaited_once()
+    assert "превысила таймаут" in mark_retrying.await_args.args[1]
 
-    tg_client.send_message.assert_awaited_once()
-    sent_text = tg_client.send_message.await_args.kwargs["text"]
-    assert "Клик по выключению выполнен" in sent_text
-    assert "Ждём подтверждения статуса OFF" in sent_text
-    assert "Объявление выключено" not in sent_text
+
+# Тест: зависшая пакетная браузерная операция должна вернуть всю пачку в RETRYING и инициировать переподключение.
+@pytest.mark.asyncio
+async def test_disable_worker_loop_retries_batch_on_browser_timeout():
+    """Таймаут пакетного прохода должен пометить все задачи на повтор и завершить цикл ошибкой."""
+    from apps.disable_worker.main import BrowserOperationTimeoutError, disable_worker_loop
+
+    task_one = FakeDisableTask(id="task-batch-1", fb_ad_id="999101")
+    task_two = FakeDisableTask(id="task-batch-2", fb_ad_id="999102", attempt_count=2)
+    batch_calls = 0
+
+    async def claim_batch(limit: int):
+        nonlocal batch_calls
+        batch_calls += 1
+        if batch_calls == 1:
+            assert limit == 10
+            return [task_one, task_two]
+        return []
+
+    async def hang_batch(_tasks):
+        await asyncio.sleep(3600)
+        return {}
+
+    mark_succeeded = AsyncMock()
+    mark_retrying = AsyncMock()
+    mark_failed = AsyncMock()
+
+    with patch("apps.disable_worker.main.DISABLE_BROWSER_BATCH_TIMEOUT_SECONDS", 0.01):
+        with pytest.raises(BrowserOperationTimeoutError):
+            await disable_worker_loop(
+                poll_interval_seconds=0,
+                claim_next_task=AsyncMock(return_value=None),
+                execute_disable=AsyncMock(),
+                claim_task_batch=claim_batch,
+                execute_disable_batch=hang_batch,
+                batch_size=10,
+                mark_succeeded=mark_succeeded,
+                mark_retrying=mark_retrying,
+                mark_failed=mark_failed,
+            )
+
+    mark_succeeded.assert_not_called()
+    mark_failed.assert_not_called()
+    assert mark_retrying.await_count == 2
+    assert "пачки из 2 задач" in mark_retrying.await_args_list[0].args[1]
+
+
+# Тест: при сбое humanizer disable worker не должен падать в обычный click.
+@pytest.mark.asyncio
+async def test_execute_disable_does_not_fallback_to_direct_click():
+    """Если human_click ломается, обычный click использоваться не должен."""
+    from run_disable_worker import execute_disable_via_playwright
+
+    toggle = FakeToggleHandle(aria_checked="true")
+    page = FakeAdsPage(FakeToggleCell(toggle=toggle))
+    manager = MagicMock()
+
+    with (
+        patch("run_disable_worker._find_ads_manager_page", return_value=page),
+        patch("run_disable_worker.asyncio.sleep", new=AsyncMock()),
+        patch(
+            "run_disable_worker.human_click",
+            new=AsyncMock(side_effect=RuntimeError("сбой humanizer")),
+        ),
+        patch("run_disable_worker._confirm_dialog_if_present", new=AsyncMock(return_value=False)),
+    ):
+        success, message = await execute_disable_via_playwright(manager, "123456")
+
+    assert success is False
+    assert "humanizer" in message
+    toggle.click.assert_not_awaited()
+
+
+# Тест: пакетный поиск должен идти сверху вниз и находить объявления на разных шагах прокрутки.
+@pytest.mark.asyncio
+async def test_execute_disable_batch_scans_table_top_to_bottom():
+    """Пакетный обход должен найти несколько объявлений за один проход сверху вниз."""
+    from run_disable_worker import execute_disable_batch_via_playwright
+
+    task_one = FakeDisableTask(id="task-001", fb_ad_id="111111")
+    task_two = FakeDisableTask(id="task-002", fb_ad_id="222222")
+    page = FakeAdsPage(FakeToggleCell(toggle=FakeToggleHandle(aria_checked="true")))
+    manager = MagicMock()
+
+    with (
+        patch("run_disable_worker.asyncio.sleep", new=AsyncMock()),
+        patch(
+            "run_disable_worker._resolve_ads_manager_page", new=AsyncMock(return_value=(page, None))
+        ),
+        patch("run_disable_worker._reset_ads_table_scroll", new=AsyncMock()) as reset_scroll_mock,
+        patch(
+            "run_disable_worker.get_visible_ads_table_row_ids",
+            new=AsyncMock(side_effect=[["111111"], ["222222"]]),
+        ),
+        patch(
+            "run_disable_worker.get_ads_table_scroll_metrics",
+            new=AsyncMock(
+                return_value={
+                    "found": True,
+                    "scroll_top": 0.0,
+                    "max_scroll_top": 600.0,
+                    "at_bottom": False,
+                    "moved": False,
+                }
+            ),
+        ),
+        patch(
+            "run_disable_worker.scroll_ads_table_down",
+            new=AsyncMock(
+                return_value={
+                    "found": True,
+                    "scroll_top": 220.0,
+                    "max_scroll_top": 600.0,
+                    "at_bottom": False,
+                    "moved": True,
+                }
+            ),
+        ) as scroll_mock,
+        patch(
+            "run_disable_worker._find_toggle_cell_in_dom", new=AsyncMock(return_value=page._cell)
+        ),
+        patch(
+            "run_disable_worker._execute_disable_on_page",
+            new=AsyncMock(side_effect=[(True, "Отключено 1"), (True, "Отключено 2")]),
+        ) as execute_mock,
+    ):
+        results = await execute_disable_batch_via_playwright(manager, [task_one, task_two])
+
+    assert results == {
+        task_one.id: (True, "Отключено 1"),
+        task_two.id: (True, "Отключено 2"),
+    }
+    reset_scroll_mock.assert_awaited_once_with(page)
+    scroll_mock.assert_awaited_once()
+    assert execute_mock.await_count == 2
+
+
+# Тест: если таблица уже внизу и дальше скроллить нельзя, worker должен вернуться к поиску сверху.
+@pytest.mark.asyncio
+async def test_execute_disable_batch_falls_back_to_legacy_search_from_bottom():
+    """При упоре в низ таблицы остаток пачки должен добиваться старым поиском сверху."""
+    from run_disable_worker import execute_disable_batch_via_playwright
+
+    task = FakeDisableTask(id="task-legacy", fb_ad_id="333333")
+    page = FakeAdsPage(FakeToggleCell(toggle=FakeToggleHandle(aria_checked="true")))
+    manager = MagicMock()
+
+    with (
+        patch("run_disable_worker.asyncio.sleep", new=AsyncMock()),
+        patch(
+            "run_disable_worker._resolve_ads_manager_page", new=AsyncMock(return_value=(page, None))
+        ),
+        patch("run_disable_worker._reset_ads_table_scroll", new=AsyncMock()) as reset_scroll_mock,
+        patch("run_disable_worker.get_visible_ads_table_row_ids", new=AsyncMock(return_value=[])),
+        patch(
+            "run_disable_worker.get_ads_table_scroll_metrics",
+            new=AsyncMock(
+                return_value={
+                    "found": True,
+                    "scroll_top": 600.0,
+                    "max_scroll_top": 600.0,
+                    "at_bottom": True,
+                    "moved": False,
+                }
+            ),
+        ),
+        patch("run_disable_worker.scroll_ads_table_down", new=AsyncMock()) as scroll_mock,
+        patch("run_disable_worker._find_toggle_cell_in_dom", new=AsyncMock(return_value=None)),
+        patch(
+            "run_disable_worker._execute_disable_on_page",
+            new=AsyncMock(return_value=(True, "Отключено через fallback")),
+        ) as execute_mock,
+    ):
+        results = await execute_disable_batch_via_playwright(manager, [task])
+
+    assert results == {task.id: (True, "Отключено через fallback")}
+    assert reset_scroll_mock.await_count == 2
+    scroll_mock.assert_not_awaited()
+    execute_mock.assert_awaited_once_with(
+        page,
+        task.fb_ad_id,
+        reset_table_before_search=True,
+        allow_scroll_search=True,
+    )
 
 
 # Тест: Playwright не использует двусмысленные fallback-контролы без точного switch
@@ -443,6 +817,162 @@ async def test_execute_disable_waits_for_two_false_reads():
     assert success is True
     assert "дважды подтвердил состояние OFF" in message
     human_click.assert_awaited_once_with(page, toggle, double_check_pause=True)
+
+
+# Тест: перед поиском worker должен сбрасывать внутренний скролл таблицы Ads Manager.
+@pytest.mark.asyncio
+async def test_execute_disable_resets_ads_table_scroll_before_search():
+    """Если строка не видна, worker должен вернуть таблицу к началу и только потом искать."""
+    from run_disable_worker import execute_disable_via_playwright
+
+    toggle = FakeToggleHandle(aria_checked="true")
+    cell = FakeToggleCell(toggle=toggle)
+    page = FakeAdsPage(None)
+    manager = MagicMock()
+
+    with (
+        patch("run_disable_worker._find_ads_manager_page", return_value=page),
+        patch("run_disable_worker.asyncio.sleep", new=AsyncMock()),
+        patch("run_disable_worker._reset_ads_table_scroll", new=AsyncMock()) as reset_scroll_mock,
+        patch(
+            "run_disable_worker._find_toggle_cell_in_dom",
+            new=AsyncMock(side_effect=[None, cell]),
+        ),
+        patch(
+            "run_disable_worker.get_ads_table_scroll_metrics",
+            new=AsyncMock(
+                return_value={
+                    "found": True,
+                    "scroll_top": 0.0,
+                    "max_scroll_top": 1200.0,
+                    "at_bottom": False,
+                    "moved": False,
+                }
+            ),
+        ),
+        patch(
+            "run_disable_worker.scroll_ads_table_down",
+            new=AsyncMock(
+                return_value={
+                    "found": True,
+                    "scroll_top": 220.0,
+                    "max_scroll_top": 1200.0,
+                    "at_bottom": False,
+                    "moved": True,
+                }
+            ),
+        ),
+        patch("run_disable_worker.human_click", new=AsyncMock()),
+        patch("run_disable_worker._confirm_dialog_if_present", new=AsyncMock(return_value=False)),
+        patch(
+            "run_disable_worker._wait_for_disable_confirmation",
+            new=AsyncMock(return_value=(True, "Объявление выключено")),
+        ),
+    ):
+        success, message = await execute_disable_via_playwright(manager, "123456")
+
+    assert success is True
+    assert "Объявление выключено" in message
+    reset_scroll_mock.assert_awaited_once_with(page)
+
+
+# Тест: одиночный поиск должен идти до позднего появления строки, а не обрываться по раннему лимиту шагов.
+@pytest.mark.asyncio
+async def test_find_toggle_cell_with_table_scan_reaches_late_row():
+    """Поиск по одной задаче должен пролистывать таблицу до появления нужной строки."""
+    from run_disable_worker import _find_toggle_cell_with_table_scan
+
+    page = FakeAdsPage(None)
+    cell = FakeToggleCell(toggle=FakeToggleHandle(aria_checked="true"))
+
+    with (
+        patch("run_disable_worker.asyncio.sleep", new=AsyncMock()),
+        patch("run_disable_worker._reset_ads_table_scroll", new=AsyncMock()) as reset_scroll_mock,
+        patch(
+            "run_disable_worker._find_toggle_cell_in_dom",
+            new=AsyncMock(side_effect=[None, None, cell]),
+        ),
+        patch(
+            "run_disable_worker.get_ads_table_scroll_metrics",
+            new=AsyncMock(
+                side_effect=[
+                    {
+                        "found": True,
+                        "scroll_top": 0.0,
+                        "max_scroll_top": 2200.0,
+                        "at_bottom": False,
+                        "moved": False,
+                    },
+                    {
+                        "found": True,
+                        "scroll_top": 220.0,
+                        "max_scroll_top": 2200.0,
+                        "at_bottom": False,
+                        "moved": False,
+                    },
+                ]
+            ),
+        ),
+        patch(
+            "run_disable_worker.scroll_ads_table_down",
+            new=AsyncMock(
+                side_effect=[
+                    {
+                        "found": True,
+                        "scroll_top": 220.0,
+                        "max_scroll_top": 2200.0,
+                        "at_bottom": False,
+                        "moved": True,
+                    },
+                    {
+                        "found": True,
+                        "scroll_top": 440.0,
+                        "max_scroll_top": 2200.0,
+                        "at_bottom": False,
+                        "moved": True,
+                    },
+                ]
+            ),
+        ) as scroll_mock,
+        patch("run_disable_worker.human_scroll_to_find", new=AsyncMock()) as legacy_scroll_mock,
+    ):
+        found = await _find_toggle_cell_with_table_scan(page, "123456", reset_to_top=True)
+
+    assert found is cell
+    reset_scroll_mock.assert_awaited_once_with(page)
+    assert scroll_mock.await_count == 2
+    legacy_scroll_mock.assert_not_awaited()
+
+
+# Тест: жёсткий сброс таблицы должен дополнительно прокручивать колесо вверх над областью таблицы.
+@pytest.mark.asyncio
+async def test_reset_ads_table_scroll_rewinds_table_with_upward_wheel():
+    """Disable worker должен уводить таблицу к началу тем же способом, что и observer."""
+    from run_disable_worker import _reset_ads_table_scroll
+
+    page = AsyncMock()
+    page.viewport_size = {"width": 1200, "height": 800}
+
+    with (
+        patch(
+            "run_disable_worker.get_ads_table_scroll_anchor",
+            new=AsyncMock(return_value=(600.0, 400.0)),
+        ),
+        patch("run_disable_worker.human_move", new=AsyncMock()) as human_move_mock,
+        patch(
+            "run_disable_worker.reset_ads_table_scroll", new=AsyncMock(return_value=2)
+        ) as reset_mock,
+        patch("run_disable_worker.human_wheel_scroll", new=AsyncMock()) as human_wheel_scroll_mock,
+    ):
+        await _reset_ads_table_scroll(page)
+
+    human_move_mock.assert_awaited_once_with(page, 600.0, 400.0)
+    reset_mock.assert_awaited_once_with(page)
+    assert human_wheel_scroll_mock.await_count == 4
+    for call in human_wheel_scroll_mock.await_args_list:
+        assert call.args == (page, -1200)
+        assert call.kwargs["anchor"] == (600.0, 400.0)
+        assert call.kwargs["move_before"] is False
 
 
 # Тест: расширенное окно подтверждения ловит позднее обновление aria-checked

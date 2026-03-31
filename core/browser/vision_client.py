@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 
@@ -60,6 +61,48 @@ class VisionClient:
             )
             for p in profiles
         ]
+
+    async def get_profile(self, profile_id: str) -> VisionProfile | None:
+        """Возвращает профиль из /list по profile_id."""
+        profiles = await self.list_profiles()
+        for profile in profiles:
+            if profile.profile_id == profile_id:
+                return profile
+        return None
+
+    async def wait_until_profile_stopped(
+        self,
+        profile_id: str,
+        *,
+        timeout_seconds: float = 15.0,
+        poll_interval_seconds: float = 1.0,
+    ) -> bool:
+        """Ждёт, пока профиль исчезнет из списка запущенных."""
+        deadline = asyncio.get_running_loop().time() + timeout_seconds
+        while True:
+            profile = await self.get_profile(profile_id)
+            if profile is None:
+                return True
+            if asyncio.get_running_loop().time() >= deadline:
+                return False
+            await asyncio.sleep(poll_interval_seconds)
+
+    async def wait_until_profile_has_port(
+        self,
+        profile_id: str,
+        *,
+        timeout_seconds: float = 15.0,
+        poll_interval_seconds: float = 1.0,
+    ) -> int | None:
+        """Ждёт, пока у запущенного профиля появится CDP-порт."""
+        deadline = asyncio.get_running_loop().time() + timeout_seconds
+        while True:
+            profile = await self.get_profile(profile_id)
+            if profile is not None and profile.port is not None:
+                return profile.port
+            if asyncio.get_running_loop().time() >= deadline:
+                return None
+            await asyncio.sleep(poll_interval_seconds)
 
     async def resolve_folder_id(self, profile_id: str) -> str:
         """Автоматически находит folder_id для profile_id через /list."""
@@ -116,11 +159,7 @@ class VisionClient:
         # Если Vision не вернул порт (профиль уже запущен) — берём из /list
         if port is None:
             logger.info("Vision: порт не в ответе start, пробуем /list")
-            profiles = await self.list_profiles()
-            for p in profiles:
-                if p.profile_id == profile_id and p.port is not None:
-                    port = p.port
-                    break
+            port = await self.wait_until_profile_has_port(profile_id)
 
         profile = VisionProfile(
             folder_id=data.get("folder_id", folder_id),

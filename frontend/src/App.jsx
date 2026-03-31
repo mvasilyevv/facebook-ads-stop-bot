@@ -49,7 +49,13 @@ export default function App() {
       case 'dashboard':
         return <DashboardPage onNavigate={navigate} />;
       case 'ads':
-        return <AdsPage initialView={adsInitialView} initialState={adsInitialState} />;
+        return (
+          <AdsPage
+            key={`ads:${adsInitialView}:${adsInitialState}`}
+            initialView={adsInitialView}
+            initialState={adsInitialState}
+          />
+        );
       case 'offers':
         return <OffersPage />;
       case 'settings':

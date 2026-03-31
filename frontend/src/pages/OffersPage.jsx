@@ -66,9 +66,9 @@ function OfferModal({ offer, onSave, onClose }) {
               id="offer-code"
               className="form-input"
               type="text"
-              placeholder="offer_au_42"
+              placeholder="OFFER_AU_42"
               value={form.code}
-              onChange={(e) => setForm({ ...form, code: e.target.value })}
+              onChange={(e) => setForm({ ...form, code: e.target.value.toUpperCase() })}
               required
               disabled={!!offer}
             />
@@ -362,7 +362,7 @@ export default function OffersPage() {
                           aria-label={`Редактировать ${o.name}`}
                           title="Редактировать"
                         >
-                          ✏️
+                          Изменить
                         </button>
                         <button
                           className="btn btn-outline btn-sm"
@@ -371,7 +371,7 @@ export default function OffersPage() {
                           title="Удалить"
                           style={{ color: 'var(--accent-red)' }}
                         >
-                          🗑
+                          Удалить
                         </button>
                       </div>
                     </td>

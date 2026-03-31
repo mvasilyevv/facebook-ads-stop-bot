@@ -17,12 +17,17 @@ class ScannedAdRow:
     ad_name: str
     delivery_status: str
     spend: Decimal
+    budget: str = ""
+    reach: int = 0
+    impressions: int = 0
     clicks: int = 0
     cpc: Decimal | None = None
+    ctr: Decimal | None = None
     outbound_clicks: int = 0
     outbound_ctr: Decimal | None = None
     landing_page_views: int = 0
     cost_per_landing_page_view: Decimal | None = None
+    cost_per_result: Decimal | None = None
     cpm: Decimal | None = None
     frequency: Decimal | None = None
     leads: int = 0

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from dataclasses import dataclass
 from decimal import Decimal
@@ -284,6 +285,49 @@ def _run_scenario(
     )
 
 
+# Проверяем, что metrics_json приводит вложенные Decimal в diagnostics к JSON-совместимому виду.
+def test_build_metrics_json_makes_traffic_diagnostics_json_safe():
+    row = SimpleNamespace(
+        spend=Decimal("12.34"),
+        budget=None,
+        reach=120,
+        impressions=150,
+        clicks=7,
+        cpc=Decimal("1.7625"),
+        ctr=Decimal("4.6667"),
+        outbound_clicks=5,
+        outbound_ctr=Decimal("3.3333"),
+        landing_page_views=4,
+        cost_per_result=None,
+        cost_per_landing_page_view=Decimal("3.0850"),
+        cpm=Decimal("14.1000"),
+        frequency=Decimal("1.4000"),
+        leads=0,
+        cost_per_lead=None,
+        registrations=0,
+        cost_per_registration=None,
+        deposits=0,
+    )
+
+    metrics_json = build_metrics_json(
+        row,
+        traffic_diagnostics={
+            "summary_text": "Трафик начал дорожать.",
+            "cpm": {
+                "status": "critical",
+                "value": Decimal("14.1000"),
+                "baseline": Decimal("10.2500"),
+                "ratio_percent": Decimal("137.56"),
+            },
+        },
+    )
+
+    assert metrics_json["traffic_diagnostics"]["cpm"]["value"] == "14.1000"
+    assert metrics_json["traffic_diagnostics"]["cpm"]["baseline"] == "10.2500"
+    assert metrics_json["traffic_diagnostics"]["cpm"]["ratio_percent"] == "137.56"
+    assert json.dumps(metrics_json)
+
+
 # Проверяем полный сценарий стопа по расходу до лида с диагностикой частоты.
 def test_scenario_click_guardrail_creates_stop_alert_and_snapshot():
     """Расход до лида должен перевести объявление в STOP и собрать человекочитаемый алерт."""
@@ -483,7 +527,10 @@ def test_scenario_early_signal_builds_alert_and_snapshot():
     assert result.alert_candidate is not None
     assert result.alert_candidate.reason_title == "Слабый CTR исходящих кликов"
     assert "Ранний сигнал" in (result.alert_message_text or "")
-    assert "Это ранний сигнал, авто-отключение не запускалось" in (result.alert_message_text or "")
+    assert "Следующее действие:" in (result.alert_message_text or "")
+    assert "задача на отключение создаётся отдельной цепочкой в STOP" in (
+        result.alert_message_text or ""
+    )
 
 
 # Проверяем что CPM и Frequency остаются только диагностикой и не создают алерт сами по себе.
@@ -552,7 +599,10 @@ def test_scenario_diagnostics_only_do_not_create_alert():
     assert result.diagnostics is not None
     assert result.diagnostics.cpm.status == "critical"
     assert result.diagnostics.frequency.status == "critical"
-    assert result.diagnostics.summary_text == "И аукцион, и частота показывают ухудшение качества трафика."
+    assert (
+        result.diagnostics.summary_text
+        == "И аукцион, и частота показывают ухудшение качества трафика."
+    )
 
 
 # Проверяем последовательность одинакового скана и последующей эскалации.

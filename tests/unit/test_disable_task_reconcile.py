@@ -52,9 +52,11 @@ async def test_reconcile_marks_off_ads_as_succeeded():
     task = FakeTask()
     snapshot = FakeSnapshot(delivery_status="OFF")
     session = AsyncMock()
+    session.scalar = AsyncMock(return_value=None)
     session.execute = AsyncMock(
         side_effect=[
             _result([(task, snapshot)]),
+            _result([]),
             _result([]),
         ]
     )
@@ -70,6 +72,28 @@ async def test_reconcile_marks_off_ads_as_succeeded():
     session.flush.assert_awaited_once()
 
 
+# Проверяем, что OFF + SUCCEEDED автоматически чинится в DISABLED даже после старого сброса в NORMAL
+@pytest.mark.asyncio
+async def test_reconcile_repairs_off_snapshot_with_succeeded_task():
+    now = datetime.now(UTC)
+    snapshot = FakeSnapshot(delivery_status="OFF", alert_state=AlertState.NORMAL)
+    session = AsyncMock()
+    session.scalar = AsyncMock(return_value=None)
+    session.execute = AsyncMock(
+        side_effect=[
+            _result([]),
+            _result([(snapshot, "task-001")]),
+            _result([]),
+        ]
+    )
+
+    summary = await reconcile_disable_tasks(session, now=now)
+
+    assert summary["repaired"] == ["ad-001"]
+    assert snapshot.alert_state == AlertState.DISABLED
+    session.flush.assert_awaited_once()
+
+
 # Проверяем, что зависшая RUNNING-задача возвращается в RETRYING
 @pytest.mark.asyncio
 async def test_reconcile_retries_stale_running_task():
@@ -77,8 +101,10 @@ async def test_reconcile_retries_stale_running_task():
     task = FakeTask()
     snapshot = FakeSnapshot(delivery_status="ACTIVE")
     session = AsyncMock()
+    session.scalar = AsyncMock(return_value=None)
     session.execute = AsyncMock(
         side_effect=[
+            _result([]),
             _result([]),
             _result([(task, snapshot)]),
         ]
@@ -101,8 +127,10 @@ async def test_reconcile_fails_stale_task_when_attempts_exhausted():
     task = FakeTask(attempt_count=10, max_attempts=10)
     snapshot = FakeSnapshot(delivery_status="ACTIVE")
     session = AsyncMock()
+    session.scalar = AsyncMock(return_value=None)
     session.execute = AsyncMock(
         side_effect=[
+            _result([]),
             _result([]),
             _result([(task, snapshot)]),
         ]
@@ -115,3 +143,33 @@ async def test_reconcile_fails_stale_task_when_attempts_exhausted():
     assert task.completed_at == now
     assert task.next_retry_at is None
     assert "исчерпала лимит" in (task.last_error or "")
+
+
+# Проверяем, что архивное объявление снимается с очереди и не уходит в retry
+@pytest.mark.asyncio
+async def test_reconcile_cancels_task_for_archived_snapshot():
+    now = datetime.now(UTC)
+    task = FakeTask(status=DisableTaskStatus.RETRYING)
+    snapshot = FakeSnapshot(delivery_status="UNKNOWN", alert_state=AlertState.CLAIMED)
+    snapshot.open_state_token = "token-archived"
+
+    session = AsyncMock()
+    session.scalar = AsyncMock(return_value=now)
+    session.execute = AsyncMock(
+        side_effect=[
+            _result([]),
+            _result([]),
+            _result([(task, snapshot)]),
+            _result([]),
+        ]
+    )
+
+    summary = await reconcile_disable_tasks(session, now=now)
+
+    assert summary["cancelled"] == ["ad-001"]
+    assert task.status == DisableTaskStatus.CANCELLED
+    assert task.completed_at == now
+    assert task.next_retry_at is None
+    assert "актуальную скан-сессию" in (task.last_error or "")
+    assert snapshot.alert_state == AlertState.NORMAL
+    assert snapshot.open_state_token is None

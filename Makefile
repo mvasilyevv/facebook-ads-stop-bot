@@ -1,0 +1,133 @@
+SHELL := /bin/bash
+
+PYTHON ?= python3
+NPM ?= npm
+VENV_DIR ?= .venv
+VENV_BIN := $(VENV_DIR)/bin
+PY := $(VENV_BIN)/python
+PIP := $(PY) -m pip
+PYTEST := $(VENV_BIN)/pytest
+RUFF := $(VENV_BIN)/ruff
+UVICORN := $(VENV_BIN)/uvicorn
+ALEMBIC := $(PY) -m alembic
+FRONTEND_DIR := frontend
+
+.DEFAULT_GOAL := help
+
+.PHONY: help check-env check-tools venv install-backend install-frontend install \
+	docker-up docker-down db-wait migrate bootstrap api observer telegram \
+	disable-worker enable-worker enable-recommendation-worker frontend frontend-build lint format test \
+	test-unit test-telegram verify start stop logs
+
+help: ## Показать доступные команды
+	@awk 'BEGIN {FS = ":.*## "}; /^[a-zA-Z0-9_.-]+:.*## / {printf "  %-20s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+
+check-env: ## Проверить наличие .env
+	@if [ ! -f .env ]; then \
+		if [ -f .env.example ]; then \
+			cp .env.example .env; \
+			echo "Создан .env из .env.example. Заполните переменные и повторите команду."; \
+		else \
+			echo ".env не найден."; \
+		fi; \
+		exit 1; \
+	fi
+
+check-tools: ## Проверить системные зависимости
+	@command -v $(PYTHON) >/dev/null || (echo "$(PYTHON) не найден"; exit 1)
+	@command -v docker >/dev/null || (echo "docker не найден"; exit 1)
+	@command -v $(NPM) >/dev/null || (echo "$(NPM) не найден"; exit 1)
+
+venv: ## Создать виртуальное окружение Python
+	@if [ ! -d "$(VENV_DIR)" ]; then \
+		$(PYTHON) -m venv "$(VENV_DIR)"; \
+	fi
+
+install-backend: venv ## Установить backend-зависимости Python
+	$(PIP) install -e '.[dev]'
+
+install-frontend: ## Установить frontend-зависимости
+	@if [ ! -d "$(FRONTEND_DIR)/node_modules" ]; then \
+		cd $(FRONTEND_DIR) && $(NPM) ci; \
+	else \
+		echo "Frontend-зависимости уже установлены"; \
+	fi
+
+install: install-backend install-frontend ## Установить все зависимости
+
+docker-up: check-tools ## Поднять Docker-сервисы
+	docker compose up -d
+
+docker-down: ## Остановить Docker-сервисы
+	docker compose down
+
+db-wait: ## Дождаться готовности Postgres
+	@for i in $$(seq 1 30); do \
+		if docker compose exec -T postgres pg_isready -U fb_stop_bot_v2 -d fb_stop_bot_v2 >/dev/null 2>&1; then \
+			echo "Postgres готов"; \
+			exit 0; \
+		fi; \
+		sleep 1; \
+	done; \
+	echo "Postgres не стал готов за 30 секунд"; \
+	exit 1
+
+migrate: check-env install-backend ## Применить миграции Alembic
+	$(ALEMBIC) upgrade head
+
+bootstrap: check-env check-tools docker-up db-wait install migrate ## Полная подготовка проекта
+
+api: check-env install-backend ## Запустить FastAPI
+	$(UVICORN) apps.api.main:app --host 0.0.0.0 --port 8100 --reload
+
+observer: check-env install-backend ## Запустить observer worker
+	$(PY) run_observer.py
+
+telegram: check-env install-backend ## Запустить Telegram poller
+	$(PY) -m apps.telegram_poller.main
+
+disable-worker: check-env install-backend ## Запустить disable worker
+	$(PY) run_disable_worker.py
+
+enable-worker: check-env install-backend ## Запустить enable worker
+	$(PY) run_enable_worker.py
+
+enable-recommendation-worker: check-env install-backend ## Запустить worker рекомендаций на включение
+	@if [ -f run_enable_recommendation_worker.py ]; then \
+		$(PY) run_enable_recommendation_worker.py; \
+	else \
+		echo "Файл run_enable_recommendation_worker.py не найден."; \
+		exit 1; \
+	fi
+
+frontend: ## Запустить frontend в dev-режиме
+	cd $(FRONTEND_DIR) && $(NPM) run dev
+
+frontend-build: install-frontend ## Собрать frontend
+	cd $(FRONTEND_DIR) && $(NPM) run build
+
+lint: install-backend ## Проверить Python-код через Ruff
+	$(RUFF) check .
+
+format: install-backend ## Отформатировать Python-код через Ruff
+	$(RUFF) format .
+
+test: install-backend ## Прогнать все backend-тесты
+	$(PYTEST) tests/ -x
+
+test-unit: install-backend ## Прогнать unit-тесты
+	$(PYTEST) tests/unit -q
+
+test-telegram: install-backend ## Прогнать Telegram-набор тестов
+	$(PYTEST) -q tests/unit/test_telegram_bot_handler.py tests/unit/test_telegram_renderer.py tests/unit/test_telegram_poller.py tests/unit/test_telegram_service.py tests/unit/test_disable_worker.py
+
+verify: lint test-telegram frontend-build ## Выполнить основной проверочный прогон
+
+start: ## Поднять весь проект через run.sh
+	./run.sh
+
+stop: ## Остановить весь проект через run.sh
+	./run.sh --down
+
+logs: ## Показать логи run.sh
+	./run.sh --logs

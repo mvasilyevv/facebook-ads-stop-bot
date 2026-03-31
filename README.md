@@ -2,7 +2,7 @@
 
 Бот для мониторинга и автоматической остановки объявлений Facebook Ads по стоп-правилам.
 
-Подключается к Ads Manager через anti-detect браузер (Vision), парсит метрики, оценивает 6 стоп-правил, отправляет алерты в Telegram и отключает объявления по команде.
+Подключается к Ads Manager через anti-detect браузер (Vision), парсит метрики, оценивает 6 стоп-правил, отправляет алерты в Telegram, отключает объявления по команде и поддерживает отдельный worker рекомендаций на включение.
 
 ## Возможности
 
@@ -45,6 +45,10 @@
 - Retry с exponential backoff при ошибках (30с → 60с → ... → 5 мин)
 - Отбивка в Telegram после успешного отключения
 
+### 🟡 Рекомендации на включение
+- Отдельный worker рекомендаций на включение анализирует выключенные объявления и готовит события для ручного возврата в работу
+- Рекомендации можно просматривать и обрабатывать отдельно от disable-flow
+
 ### 📈 Dashboard (Web UI)
 - Сводная статистика: объявления, алерты, расход, отключённые
 - Таблица объявлений с фильтрами по статусу и офферу
@@ -83,7 +87,20 @@ cp .env.example .env
 - Поднимет Docker-контейнеры (Postgres + Redis)
 - Создаст Python venv и установит зависимости
 - Применит миграции БД
-- Запустит API, Observer Worker, Telegram Poller и Frontend
+- Запустит API, Observer Worker, Disable Worker, Enable Recommendation Worker, Enable Worker, Telegram Poller и Frontend
+
+### 2a. Workflow через Makefile
+Если удобнее работать как с Gradle/Maven-задачами, используйте:
+
+```bash
+make help             # список всех команд
+make bootstrap        # docker + зависимости + миграции
+make test-telegram    # быстрый Telegram-набор тестов
+make verify           # lint + Telegram smoke + frontend build
+make start            # полный запуск через run.sh
+make stop             # остановка всех сервисов
+make enable-recommendation-worker  # worker рекомендаций на включение
+```
 
 ### 3. Остановка
 ```bash
@@ -98,7 +115,22 @@ uvicorn apps.api.main:app --host 0.0.0.0 --port 8100 --reload    # API
 python run_observer.py                                             # Observer
 python -m apps.telegram_poller.main                                # Telegram
 python run_disable_worker.py                                       # Disable Worker
+python run_enable_recommendation_worker.py                         # Worker рекомендаций на включение
+python run_enable_worker.py                                        # Enable Worker
 cd frontend && npm install && npm run dev                          # React UI
+```
+
+То же самое через `make`:
+
+```bash
+make bootstrap
+make api
+make observer
+make telegram
+make disable-worker
+make enable-recommendation-worker
+make enable-worker
+make frontend
 ```
 
 ## Архитектура
@@ -116,16 +148,26 @@ cd frontend && npm install && npm run dev                          # React UI
          │                     │                        │
          └─────────┬───────────┴────────────────────────┘
                    │
-            ┌──────▼──────┐     ┌─────────────┐
-            │  Postgres   │     │   Redis     │
-            │   :5433     │     │   :6380     │
-            └─────────────┘     └─────────────┘
-                   ▲
-                   │
-            ┌──────┴──────┐
-            │  Disable    │
-            │  Worker     │
-            └─────────────┘
+         ┌──────────▼──────────┐
+         │ Enable Recommendation│
+         │ Worker               │
+         └──────────┬──────────┘
+                    │
+            ┌───────▼───────┐     ┌─────────────┐
+            │   Postgres    │     │   Redis     │
+            │    :5433      │     │   :6380     │
+            └───────┬───────┘     └─────────────┘
+                    ▲
+                    │
+            ┌───────┴───────┐
+            │  Disable      │
+            │  Worker       │
+            └───────┬───────┘
+                    │
+            ┌───────┴───────┐
+            │  Enable       │
+            │  Worker       │
+            └───────────────┘
 ```
 
 ## Требования
@@ -142,6 +184,7 @@ cd frontend && npm install && npm run dev                          # React UI
 │   ├── api/main.py              # FastAPI — 14 эндпоинтов с БД
 │   ├── observer_worker/main.py  # Цикл мониторинга
 │   ├── disable_worker/main.py   # Цикл отключения
+│   ├── enable_recommendation_worker/main.py # Цикл рекомендаций на включение
 │   └── telegram_poller/main.py  # Long polling TG
 ├── core/
 │   ├── browser/                 # Vision API + Playwright CDP
@@ -158,6 +201,8 @@ cd frontend && npm install && npm run dev                          # React UI
 ├── run.sh                       # Единый скрипт запуска
 ├── run_observer.py              # Точка входа Observer
 ├── run_disable_worker.py        # Точка входа Disable Worker
+├── run_enable_recommendation_worker.py # Точка входа Enable Recommendation Worker
+├── run_enable_worker.py         # Точка входа Enable Worker
 ├── docker-compose.yml           # Postgres + Redis
 └── .env.example                 # Переменные окружения
 ```
@@ -185,6 +230,18 @@ cd frontend && npm install && npm run dev                          # React UI
 pytest tests/ -x          # все тесты
 ruff check .              # линтер
 ruff format .             # форматирование
+```
+
+Или через `make`:
+
+```bash
+make test
+make test-unit
+make test-telegram
+make lint
+make format
+make frontend-build
+make verify
 ```
 
 ## Варианты улучшения

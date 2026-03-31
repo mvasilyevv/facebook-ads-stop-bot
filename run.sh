@@ -20,6 +20,133 @@ NC='\033[0m' # No Color
 LOG_DIR="$SCRIPT_DIR/.logs"
 PID_FILE="$LOG_DIR/pids.txt"
 
+wait_for_process_exit() {
+    local pid="$1"
+    local timeout_seconds="${2:-15}"
+    local elapsed=0
+
+    while is_process_active "$pid"; do
+        if [ "$elapsed" -ge "$timeout_seconds" ]; then
+            return 1
+        fi
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+
+    reap_process_if_possible "$pid"
+    return 0
+}
+
+is_process_active() {
+    local pid="$1"
+    local process_stat=""
+
+    if ! kill -0 "$pid" 2>/dev/null; then
+        return 1
+    fi
+
+    process_stat="$(ps -o stat= -p "$pid" 2>/dev/null | tr -d '[:space:]')"
+    if [ -z "$process_stat" ]; then
+        return 1
+    fi
+
+    case "$process_stat" in
+        Z*|*Z*)
+            return 1
+            ;;
+    esac
+
+    return 0
+}
+
+reap_process_if_possible() {
+    local pid="$1"
+
+    wait "$pid" 2>/dev/null || true
+}
+
+stop_process_by_pid() {
+    local pid="$1"
+    local name="$2"
+    local timeout_seconds="${3:-15}"
+
+    if ! is_process_active "$pid"; then
+        reap_process_if_possible "$pid"
+        return 0
+    fi
+
+    echo -e "  Останавливаю $name (PID $pid)"
+    kill "$pid" 2>/dev/null || true
+
+    if wait_for_process_exit "$pid" "$timeout_seconds"; then
+        echo -e "  Остановлен $name (PID $pid)"
+        return 0
+    fi
+
+    echo -e "${YELLOW}  $name (PID $pid) не завершился за ${timeout_seconds}с, отправляю SIGKILL${NC}"
+    kill -9 "$pid" 2>/dev/null || true
+
+    if wait_for_process_exit "$pid" 5; then
+        echo -e "  Остановлен $name (PID $pid) через SIGKILL"
+        return 0
+    fi
+
+    echo -e "${RED}  Не удалось дождаться остановки $name (PID $pid)${NC}"
+    return 1
+}
+
+cleanup_singleton_pid_file() {
+    local pid_file="$1"
+    local pattern="$2"
+
+    if pgrep -f "$pattern" >/dev/null 2>&1; then
+        return 0
+    fi
+
+    if [ -f "$pid_file" ]; then
+        rm -f "$pid_file"
+        echo -e "  Удалён stale PID-файл: $pid_file"
+    fi
+}
+
+cleanup_worker_singleton_pid_files() {
+    cleanup_singleton_pid_file "/tmp/fb_observer.pid" "run_observer.py"
+    cleanup_singleton_pid_file "/tmp/fb_disable_worker.pid" "run_disable_worker.py"
+    cleanup_singleton_pid_file "/tmp/fb_enable_worker.pid" "run_enable_worker.py"
+}
+
+check_process_started() {
+    local pid="$1"
+    local name="$2"
+    local log_file="$3"
+
+    if is_process_active "$pid"; then
+        return 0
+    fi
+
+    echo -e "${RED}❌ $name завершился сразу после запуска${NC}"
+    if [ -f "$log_file" ]; then
+        echo -e "${YELLOW}Последние строки $log_file:${NC}"
+        tail -20 "$log_file" || true
+    fi
+    stop_all
+    exit 1
+}
+
+terminate_matching_processes() {
+    local name="$1"
+    local pattern="$2"
+    local pids=""
+
+    pids="$(pgrep -f "$pattern" 2>/dev/null || true)"
+    [ -n "$pids" ] || return 0
+
+    echo -e "${YELLOW}🔄 Найдены старые процессы $name:${NC}"
+    for pid in $pids; do
+        stop_process_by_pid "$pid" "$name"
+    done
+}
+
 # ==========================================
 # Остановка сервисов
 # ==========================================
@@ -28,13 +155,19 @@ stop_all() {
 
     if [ -f "$PID_FILE" ]; then
         while read -r pid name; do
-            if kill -0 "$pid" 2>/dev/null; then
-                echo -e "  Останавливаю $name (PID $pid)"
-                kill "$pid" 2>/dev/null || true
-            fi
+            stop_process_by_pid "$pid" "$name"
         done < "$PID_FILE"
         rm -f "$PID_FILE"
     fi
+
+    terminate_matching_processes "Observer Worker" "run_observer.py"
+    terminate_matching_processes "Disable Worker" "run_disable_worker.py"
+    terminate_matching_processes "Enable Worker" "run_enable_worker.py"
+    terminate_matching_processes "Enable Recommendation Worker" "run_enable_recommendation_worker.py"
+    terminate_matching_processes "Enable Recommendation Worker" "apps.enable_recommendation_worker.main"
+    terminate_matching_processes "Telegram Poller" "apps.telegram_poller.main"
+    terminate_matching_processes "API" "uvicorn apps.api.main:app"
+    cleanup_worker_singleton_pid_files
 
     echo -e "${YELLOW}⏹ Останавливаю Docker контейнеры...${NC}"
     docker compose down 2>/dev/null || true
@@ -87,6 +220,11 @@ if [ ! -f .env ]; then
     fi
 fi
 
+set -a
+# shellcheck disable=SC1091
+. ./.env
+set +a
+
 # Проверяем Docker
 if ! command -v docker &>/dev/null; then
     echo -e "${RED}❌ Docker не установлен${NC}"
@@ -99,17 +237,28 @@ if ! command -v python3 &>/dev/null; then
     exit 1
 fi
 
+if ! python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)'; then
+    echo -e "${RED}❌ Требуется Python 3.12+${NC}"
+    python3 --version || true
+    exit 1
+fi
+
 # Останавливаем старые процессы если они запущены
 if [ -f "$PID_FILE" ] && [ -s "$PID_FILE" ]; then
     echo -e "${YELLOW}🔄 Останавливаю предыдущие процессы...${NC}"
     while read -r pid name; do
-        if kill -0 "$pid" 2>/dev/null; then
-            kill "$pid" 2>/dev/null || true
-            echo -e "  Остановлен $name (PID $pid)"
-        fi
+        stop_process_by_pid "$pid" "$name"
     done < "$PID_FILE"
-    sleep 2
 fi
+
+terminate_matching_processes "Observer Worker" "run_observer.py"
+terminate_matching_processes "Disable Worker" "run_disable_worker.py"
+terminate_matching_processes "Enable Worker" "run_enable_worker.py"
+terminate_matching_processes "Enable Recommendation Worker" "run_enable_recommendation_worker.py"
+terminate_matching_processes "Enable Recommendation Worker" "apps.enable_recommendation_worker.main"
+terminate_matching_processes "Telegram Poller" "apps.telegram_poller.main"
+terminate_matching_processes "API" "uvicorn apps.api.main:app"
+cleanup_worker_singleton_pid_files
 
 # Создаём директорию для логов
 mkdir -p "$LOG_DIR"
@@ -123,8 +272,10 @@ docker compose up -d
 
 # Ждём готовности Postgres
 echo -e "${BLUE}⏳ Жду готовности Postgres...${NC}"
+POSTGRES_USER_VALUE="${POSTGRES_USER:-fb_stop_bot_v2}"
+POSTGRES_DB_VALUE="${POSTGRES_DB:-fb_stop_bot_v2}"
 for i in $(seq 1 30); do
-    if docker compose exec -T postgres pg_isready -U fb_stop_bot_v2 -d fb_stop_bot_v2 &>/dev/null; then
+    if docker compose exec -T postgres pg_isready -U "$POSTGRES_USER_VALUE" -d "$POSTGRES_DB_VALUE" &>/dev/null; then
         echo -e "${GREEN}✅ Postgres готов${NC}"
         break
     fi
@@ -150,8 +301,13 @@ echo -e "${BLUE}📦 Устанавливаю зависимости...${NC}"
 # 3. Миграции БД
 # ==========================================
 echo -e "${BLUE}🗄️ Применяю миграции БД...${NC}"
-.venv/bin/python -m alembic upgrade head 2>&1 || {
-    echo -e "${YELLOW}⚠️  Alembic миграции не найдены, создаю таблицы напрямую${NC}"
+if .venv/bin/python -m alembic upgrade head 2>&1; then
+    :
+elif find migrations/versions -maxdepth 1 -name '*.py' ! -name '__init__.py' | grep -q .; then
+    echo -e "${RED}❌ Alembic завершился с ошибкой. Автосоздание таблиц отключено, чтобы не рассинхронизировать схему с миграциями.${NC}"
+    exit 1
+else
+    echo -e "${YELLOW}⚠️  Файлы миграций не найдены, пробую аварийное создание таблиц напрямую${NC}"
     .venv/bin/python -c "
 import asyncio
 from core.db import get_engine
@@ -165,7 +321,7 @@ async def init():
     print('Таблицы созданы')
 asyncio.run(init())
 "
-}
+fi
 
 # ==========================================
 # 4. Запуск API
@@ -206,7 +362,20 @@ echo "$ENABLE_PID enable_worker" >> "$PID_FILE"
 echo -e "${GREEN}  Enable Worker PID: $ENABLE_PID${NC}"
 
 # ==========================================
-# 8. Запуск Telegram Poller
+# 8. Запуск Enable Recommendation Worker
+# ==========================================
+if [ -f run_enable_recommendation_worker.py ]; then
+    echo -e "${BLUE}🟡 Запускаю Enable Recommendation Worker...${NC}"
+    .venv/bin/python run_enable_recommendation_worker.py > "$LOG_DIR/enable_recommendation_worker.log" 2>&1 &
+    ENABLE_RECO_PID=$!
+    echo "$ENABLE_RECO_PID enable_recommendation_worker" >> "$PID_FILE"
+    echo -e "${GREEN}  Enable Recommendation Worker PID: $ENABLE_RECO_PID${NC}"
+else
+    echo -e "${YELLOW}⚠️  run_enable_recommendation_worker.py не найден, пропускаю запуск Enable Recommendation Worker${NC}"
+fi
+
+# ==========================================
+# 9. Запуск Telegram Poller
 # ==========================================
 echo -e "${BLUE}🤖 Запускаю Telegram Poller...${NC}"
 .venv/bin/python -m apps.telegram_poller.main > "$LOG_DIR/telegram.log" 2>&1 &
@@ -215,7 +384,7 @@ echo "$TG_PID telegram" >> "$PID_FILE"
 echo -e "${GREEN}  Telegram PID: $TG_PID${NC}"
 
 # ==========================================
-# 9. Запуск Frontend (Vite)
+# 10. Запуск Frontend (Vite)
 # ==========================================
 if [ -d frontend ]; then
     echo -e "${BLUE}🎨 Запускаю Frontend (Vite)...${NC}"
@@ -242,11 +411,32 @@ if [ -d frontend ]; then
 fi
 
 # ==========================================
-# 8. Caffeinate — запрет сна ноутбука
+# 11. Проверка что процессы не завершились сразу
 # ==========================================
-caffeinate -i -d &
-CAFFEINATE_PID=$!
-echo "$CAFFEINATE_PID caffeinate" >> "$PID_FILE"
+sleep 2
+check_process_started "$API_PID" "API" "$LOG_DIR/api.log"
+check_process_started "$OBSERVER_PID" "Observer Worker" "$LOG_DIR/observer.log"
+check_process_started "$DISABLE_PID" "Disable Worker" "$LOG_DIR/disable_worker.log"
+check_process_started "$ENABLE_PID" "Enable Worker" "$LOG_DIR/enable_worker.log"
+if [ -n "${ENABLE_RECO_PID:-}" ]; then
+    check_process_started "$ENABLE_RECO_PID" "Enable Recommendation Worker" "$LOG_DIR/enable_recommendation_worker.log"
+fi
+check_process_started "$TG_PID" "Telegram Poller" "$LOG_DIR/telegram.log"
+if [ -n "${FRONTEND_PID:-}" ]; then
+    check_process_started "$FRONTEND_PID" "Frontend" "$LOG_DIR/frontend.log"
+fi
+
+# ==========================================
+# 12. Caffeinate — запрет сна ноутбука
+# ==========================================
+if command -v caffeinate &>/dev/null; then
+    caffeinate -i -d &
+    CAFFEINATE_PID=$!
+    echo "$CAFFEINATE_PID caffeinate" >> "$PID_FILE"
+    CAFFEINATE_ENABLED=1
+else
+    CAFFEINATE_ENABLED=0
+fi
 
 # ==========================================
 # Итог
@@ -264,7 +454,11 @@ echo -e "  📋 Логи:      ${YELLOW}$LOG_DIR/${NC}"
 echo -e "  ⏹  Остановка: ${YELLOW}./run.sh --down${NC}"
 echo -e "  📋 Просмотр:  ${YELLOW}./run.sh --logs${NC}"
 echo ""
-echo -e "${YELLOW}☕ Сон ноутбука заблокирован (caffeinate)${NC}"
+if [ "${CAFFEINATE_ENABLED:-0}" -eq 1 ]; then
+    echo -e "${YELLOW}☕ Сон ноутбука заблокирован (caffeinate)${NC}"
+else
+    echo -e "${YELLOW}⚠️  caffeinate недоступен — запрет сна не включён${NC}"
+fi
 echo ""
 
 # Ждём завершения — Ctrl+C останавливает всё

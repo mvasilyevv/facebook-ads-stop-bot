@@ -16,6 +16,7 @@ import signal
 import sys
 import uuid as _uuid
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from functools import lru_cache
@@ -24,27 +25,75 @@ from zoneinfo import ZoneInfo
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from sqlalchemy import func, select
+from pydantic import BaseModel, field_validator
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.crypto import decrypt, encrypt
+from core.browser.vision_client import VisionClient
 from core.config import get_settings
+from core.crypto import decrypt, encrypt
 from core.db import get_engine, get_session_factory
 from core.db.base import Base
 from core.diagnostics import build_ad_quality_diagnostics, compute_cpm_baselines_by_offer
-from core.domain import AlertStage, AlertState, DisableTaskStatus
+from core.disable_tasks import (
+    DISABLE_TASK_STALE_TIMEOUT,
+    SILENT_DISABLE_INCIDENT_RETRY_LIMIT,
+    is_delivery_disabled,
+)
+from core.domain import (
+    AlertStage,
+    AlertState,
+    DisableTaskStatus,
+    EnableRecommendationLevel,
+    EnableTaskStatus,
+    TelegramDeliveryMode,
+    TelegramUserRole,
+)
+from core.enable_recommendations.service import (
+    OK_RECOMMENDATION_REASON_TEXT,
+    OK_RECOMMENDATION_REASON_TITLE,
+    RECOMMENDATION_DELIVERY_STATUSES,
+    EnableRecommendationCandidate,
+    collect_enable_recommendation_candidates_for_snapshots,
+    promote_recommendation_to_enable_task,
+)
+from core.live_batch import compute_live_batch_marker, is_within_live_batch, load_live_batch_bounds
 from core.models import (
     AdSnapshot,
     AlertEvent,
     CabinetDayArchive,
     DisableTask,
+    EnableRecommendationEvent,
+    EnableTask,
     ObserverSettings,
     Offer,
     OfferRuleConfig,
+    TelegramInvite,
     TelegramRecipient,
     TelegramSettings,
     VisionSettings,
+)
+from core.observer.thresholds import (
+    apply_observer_threshold_values,
+    derive_legacy_stop_percent_of_base,
+    derive_legacy_warning_percent_of_stop,
+    extract_observer_threshold_values,
+)
+from core.telegram.client import TelegramBotClient
+from core.telegram.service import (
+    CONTROL_TOPIC_NAME,
+    FORUM_STREAM_TOPIC_NAMES,
+    FORUM_SUPERGROUP_CHAT_ID,
+    build_telegram_deep_link,
+    create_telegram_invite,
+    forum_cutover_status_from_settings,
+    forum_topics_ready,
+    get_latest_active_invite,
+    get_or_create_telegram_settings,
+    is_forum_delivery_mode,
+    mask_chat_id,
+    poller_status_from_settings,
+    revoke_telegram_access_records,
 )
 
 # ==========================================
@@ -52,12 +101,23 @@ from core.models import (
 # ==========================================
 
 
+def _has_alembic_migrations() -> bool:
+    """Проверяет, есть ли в проекте реальные Alembic-миграции."""
+    versions_dir = Path(__file__).resolve().parents[2] / "migrations" / "versions"
+    if not versions_dir.exists():
+        return False
+    return any(
+        path.suffix == ".py" and path.name != "__init__.py" for path in versions_dir.iterdir()
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Создаём таблицы при старте (если нет миграций)."""
+    """Создаём таблицы только когда проект работает без Alembic-миграций."""
     engine = get_engine()
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    if not _has_alembic_migrations():
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
     yield
     await engine.dispose()
 
@@ -91,6 +151,62 @@ async def get_db() -> AsyncSession:
 # ==========================================
 
 
+def _normalize_offer_code_value(value: str | None) -> str | None:
+    """Приводит код оффера к каноническому виду для UI и API."""
+    if value is None:
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return ""
+    return normalized.upper()
+
+
+def _offer_code_lookup_key(value: str | None) -> str:
+    """Приводит код оффера к виду для case-insensitive поиска."""
+    normalized = _normalize_offer_code_value(value)
+    return normalized.casefold() if normalized else ""
+
+
+def _build_current_risk_reason_rows(snapshots: list[AdSnapshot]) -> list[dict[str, int | str]]:
+    """Строит топ причин по текущим рискованным объявлениям."""
+    risk_labels = {
+        "cpc_stop": ("Дорогой клик", "Дорогой клик"),
+        "cpl_stop": ("Дорогой лид", "Дорогой лид"),
+        "cpr_stop": ("Дорогая рега", "Дорогая рега"),
+        "regs_no_dep_stop": ("Реги без депозитов", "Реги без депов"),
+        "spend_no_dep_range": ("Расход без депа", "Расход без депа"),
+        "spend_with_dep_range": ("Расход с депозитом", "Расход с депозитом"),
+        "early_outbound_ctr_signal": ("Слабый CTR исходящих кликов", "Слабый CTR"),
+        "early_lpv_ratio_signal": ("Слабая доходимость до лендинга", "Слабая доходимость"),
+        "early_cost_per_lpv_signal": ("Дорогой просмотр лендинга", "Дорогой LPV"),
+    }
+    risk_counts: dict[str, int] = {}
+    for snapshot in snapshots:
+        if snapshot.alert_state == AlertState.EARLY_SIGNAL_SENT:
+            matched_codes = snapshot.early_signal_rule_codes or []
+        elif snapshot.alert_state == AlertState.WARNING_SENT:
+            matched_codes = snapshot.warning_rule_codes or []
+        elif snapshot.alert_state in (AlertState.STOP_SENT, AlertState.CLAIMED):
+            matched_codes = snapshot.stop_rule_codes or []
+        else:
+            matched_codes = []
+
+        for code in set(matched_codes):
+            risk_counts[code] = risk_counts.get(code, 0) + 1
+
+    return sorted(
+        [
+            {
+                "rule": risk_labels.get(code, (code, code))[0],
+                "rule_short": risk_labels.get(code, (code, code))[1],
+                "count": count,
+            }
+            for code, count in risk_counts.items()
+        ],
+        key=lambda item: (-int(item["count"]), str(item["rule"])),
+    )
+
+
 class ObserverSettingsSchema(BaseModel):
     """Настройки observer (интервал из UI)."""
 
@@ -98,6 +214,12 @@ class ObserverSettingsSchema(BaseModel):
     jitter_seconds: int = 10
     warning_percent_of_stop: Decimal = Decimal("80")
     stop_percent_of_base: Decimal = Decimal("100")
+    cpc_warning_percent_of_stop: Decimal | None = None
+    cpc_stop_percent_of_base: Decimal | None = None
+    cpl_warning_percent_of_stop: Decimal | None = None
+    cpl_stop_percent_of_base: Decimal | None = None
+    cpr_warning_percent_of_stop: Decimal | None = None
+    cpr_stop_percent_of_base: Decimal | None = None
     is_scanning_enabled: bool = True
 
 
@@ -112,9 +234,67 @@ class TelegramSettingsSchema(BaseModel):
 
     bot_token: str = ""
     chat_id: str = ""
+    forum_chat_id: str = ""
     is_authorized: bool = False
     bot_username: str = ""
     auth_code: str = ""
+    delivery_mode: str = TelegramDeliveryMode.PRIVATE_CHAT.value
+    control_topic_id: int | None = None
+    early_topic_id: int | None = None
+    warning_topic_id: int | None = None
+    stop_topic_id: int | None = None
+    enable_topic_id: int | None = None
+
+
+class TelegramPrimaryRecipientSchema(BaseModel):
+    """Основной получатель уведомлений Telegram."""
+
+    chat_id: str = ""
+    masked_chat_id: str = ""
+    telegram_user_id: str = ""
+    username: str = ""
+    first_name: str = ""
+    role: str = TelegramUserRole.OWNER.value
+
+
+class InviteCodeResponse(BaseModel):
+    """Ответ с одноразовым кодом для добавления получателя."""
+
+    code: str
+    bot_username: str = ""
+    role: str = TelegramUserRole.RECIPIENT.value
+    expires_at: str | None = None
+    deep_link: str = ""
+    activation_command: str = ""
+    activation_target: str = CONTROL_TOPIC_NAME
+
+
+class TelegramSettingsResponseSchema(TelegramSettingsSchema):
+    """Расширенные настройки Telegram-бота."""
+
+    poller_status: str = "OFFLINE"
+    last_poller_heartbeat_at: str | None = None
+    auth_deep_link: str = ""
+    activation_command: str = ""
+    forum_cutover_status: str = "NOT_STARTED"
+    primary_recipient: TelegramPrimaryRecipientSchema | None = None
+    active_invite: InviteCodeResponse | None = None
+
+
+class TelegramForumCutoverResponseSchema(BaseModel):
+    """Ответ на подготовку cutover в forum supergroup."""
+
+    bot_username: str = ""
+    chat_id: str = ""
+    auth_code: str = ""
+    activation_command: str = ""
+    control_topic_id: int | None = None
+    early_topic_id: int | None = None
+    warning_topic_id: int | None = None
+    stop_topic_id: int | None = None
+    enable_topic_id: int | None = None
+    forum_cutover_status: str = "WAITING_OWNER_AUTH"
+    message: str = ""
 
 
 class TelegramSetTokenRequest(BaseModel):
@@ -131,6 +311,13 @@ class OfferSchema(BaseModel):
     name: str
     cpa_amount: Decimal
     is_active: bool = True
+
+    @field_validator("code")
+    @classmethod
+    def normalize_code(cls, value: str) -> str:
+        """Нормализует код оффера в верхний регистр."""
+        normalized = _normalize_offer_code_value(value)
+        return normalized or ""
 
 
 class OfferRuleConfigSchema(BaseModel):
@@ -174,12 +361,17 @@ class AdSnapshotSchema(BaseModel):
     delivery_status: str
     offer_code: str | None = None
     spend: Decimal
+    budget: str = ""
+    reach: int = 0
+    impressions: int = 0
     clicks: int
     cpc: Decimal | None = None
+    ctr: Decimal | None = None
     outbound_clicks: int = 0
     outbound_ctr: Decimal | None = None
     landing_page_views: int = 0
     cost_per_landing_page_view: Decimal | None = None
+    cost_per_result: Decimal | None = None
     cpm: Decimal | None = None
     frequency: Decimal | None = None
     leads: int
@@ -197,11 +389,18 @@ class AdSnapshotSchema(BaseModel):
     diagnostic_short_text: str | None = None
     last_observed_at: str | None = None
 
+    @field_validator("offer_code")
+    @classmethod
+    def normalize_offer_code(cls, value: str | None) -> str | None:
+        """Нормализует код оффера в ответе API."""
+        return _normalize_offer_code_value(value)
+
 
 class AlertEventSchema(BaseModel):
     """Запись алерта для истории."""
 
     id: str
+    incident_key: str | None = None
     fb_ad_id: str
     ad_name: str
     stage: str
@@ -217,6 +416,7 @@ class DisableTaskSchema(BaseModel):
     """Задача на отключение для мониторинга."""
 
     id: str
+    incident_key: str
     fb_ad_id: str
     ad_name: str
     status: str
@@ -225,6 +425,120 @@ class DisableTaskSchema(BaseModel):
     next_retry_at: str | None = None
     requested_by_username: str | None = None
     created_at: str
+    updated_at: str
+    completed_at: str | None = None
+
+
+class ActiveIncidentSchema(BaseModel):
+    """Текущий открытый инцидент объявления."""
+
+    incident_key: str
+    fb_ad_id: str
+    ad_name: str
+    campaign_name: str
+    adset_name: str
+    current_state: str
+    current_stage: str | None = None
+    delivery_status: str
+    matched_rule_codes: list[str] = []
+    reason_title: str | None = None
+    reason_text: str | None = None
+    metrics_json: dict = {}
+    started_at: str | None = None
+    last_activity_at: str
+    last_observed_at: str | None = None
+    latest_alert_at: str | None = None
+    latest_alert_stage: str | None = None
+    latest_disable_task_status: str | None = None
+    latest_disable_task_created_at: str | None = None
+    latest_disable_task_updated_at: str | None = None
+    latest_disable_task_attempt: int | None = None
+    latest_disable_task_id: str | None = None
+    latest_disable_task_last_error: str | None = None
+    latest_disable_task_next_retry_at: str | None = None
+    latest_disable_task_completed_at: str | None = None
+    waiting_for_off: bool = False
+    has_active_disable_task: bool = False
+    incident_retry_count: int = 0
+    needs_manual_attention: bool = False
+
+
+class EnableRecommendationEventSchema(BaseModel):
+    """Событие рекомендации на включение для dashboard."""
+
+    id: str
+    fb_ad_id: str
+    ad_name: str
+    campaign_name: str | None = None
+    adset_name: str | None = None
+    delivery_status: str
+    recommendation_level: str
+    matched_rule_codes: list[str] = []
+    reason_title: str | None = None
+    reason_text: str | None = None
+    metrics_json: dict = {}
+    live_batch_started_at: str
+    created_at: str
+    updated_at: str | None = None
+    state: str = "OPEN"
+    related_enable_task_id: str | None = None
+    related_enable_task_status: str | None = None
+
+
+@dataclass(slots=True, frozen=True)
+class CurrentEnableRecommendationRow:
+    """Текущая live-проекция рекомендации для dashboard."""
+
+    event: EnableRecommendationEvent
+    snapshot: AdSnapshot
+    candidate: EnableRecommendationCandidate
+
+
+NEUTRAL_ENABLE_RECOMMENDATION_REASON_TITLE = "Нет блокирующих сигналов"
+NEUTRAL_ENABLE_RECOMMENDATION_REASON_TEXT = "По текущим правилам блокирующих сигналов нет."
+GENERIC_ENABLE_RECOMMENDATION_REASON_TITLES = {
+    OK_RECOMMENDATION_REASON_TITLE,
+    "Метрики в норме",
+}
+GENERIC_ENABLE_RECOMMENDATION_REASON_TEXTS = {
+    OK_RECOMMENDATION_REASON_TEXT,
+    "Объявление снова проходит по текущим правилам.",
+}
+
+
+def _normalize_enable_recommendation_reason(
+    *,
+    recommendation_level: EnableRecommendationLevel,
+    reason_title: str | None,
+    reason_text: str | None,
+) -> tuple[str | None, str | None]:
+    """Убирает позитивный дефолт у generic OK-рекомендаций."""
+    if str(recommendation_level).upper() != "OK":
+        return reason_title, reason_text
+
+    normalized_title = reason_title
+    normalized_text = reason_text
+    if normalized_title is None or normalized_title in GENERIC_ENABLE_RECOMMENDATION_REASON_TITLES:
+        normalized_title = NEUTRAL_ENABLE_RECOMMENDATION_REASON_TITLE
+    if normalized_text is None or normalized_text in GENERIC_ENABLE_RECOMMENDATION_REASON_TEXTS:
+        normalized_text = NEUTRAL_ENABLE_RECOMMENDATION_REASON_TEXT
+    return normalized_title, normalized_text
+
+
+class EnableTaskSchema(BaseModel):
+    """Задача на включение для мониторинга."""
+
+    id: str
+    recommendation_event_id: str | None = None
+    fb_ad_id: str
+    ad_name: str
+    status: str
+    attempt_count: int
+    last_error: str | None = None
+    next_retry_at: str | None = None
+    requested_by_username: str | None = None
+    created_at: str
+    updated_at: str | None = None
     completed_at: str | None = None
 
 
@@ -238,11 +552,20 @@ class DashboardStatsSchema(BaseModel):
     ads_in_stop: int = 0
     ads_disabled: int = 0
     ads_claimed: int = 0  # CLAIMED — взяты в работу воркером
-    ads_disabled_today: int = 0  # успешно отключено сегодня (DisableTask SUCCEEDED)
+    ads_disabled_today: int = 0  # успешно отключено ботом в текущем окне мониторинга
     total_spend: Decimal = Decimal("0")
     active_offers: int = 0
     pending_disable_tasks: int = 0
+    pending_enable_tasks: int = 0
+    enable_recommendations_ok: int = 0
+    enable_recommendations_early_signal: int = 0
+    enable_recommendations_warning: int = 0
     last_scan_at: str | None = None
+    observer_status: str | None = None
+    observer_status_message: str | None = None
+    observer_heartbeat_at: str | None = None
+    observer_last_error: str | None = None
+    observer_last_error_at: str | None = None
 
 
 class SpendHistoryPoint(BaseModel):
@@ -328,6 +651,8 @@ class ChartDataSchema(BaseModel):
     campaigns: list[dict] = []
     state_distribution: list[dict] = []
     top_ads_by_spend: list[dict] = []
+    campaign_budget_deltas: list[dict] = []
+    campaign_stop_overruns: list[dict] = []
 
 
 class HealthResponse(BaseModel):
@@ -378,17 +703,13 @@ class TelegramRecipientSchema(BaseModel):
 
     id: str
     chat_id: str
+    masked_chat_id: str = ""
+    telegram_user_id: str = ""
     username: str = ""
     first_name: str = ""
+    role: str = TelegramUserRole.RECIPIENT.value
     is_active: bool = True
     created_at: str
-
-
-class InviteCodeResponse(BaseModel):
-    """Ответ с одноразовым кодом для добавления получателя."""
-
-    code: str
-    bot_username: str = ""
 
 
 # ==========================================
@@ -413,13 +734,13 @@ async def get_observer_settings(db: AsyncSession = Depends(get_db)):
         select(ObserverSettings).where(ObserverSettings.singleton_key == "default")
     )
     row = result.scalar_one_or_none()
+    threshold_values = extract_observer_threshold_values(row)
     if row is None:
-        return ObserverSettingsSchema()
+        return ObserverSettingsSchema(**threshold_values)
     return ObserverSettingsSchema(
         interval_seconds=row.interval_seconds,
         jitter_seconds=row.jitter_seconds,
-        warning_percent_of_stop=row.warning_percent_of_stop,
-        stop_percent_of_base=row.stop_percent_of_base,
+        **threshold_values,
         is_scanning_enabled=row.is_scanning_enabled,
     )
 
@@ -436,17 +757,24 @@ async def update_observer_settings(
     if row is None:
         row = ObserverSettings(singleton_key="default")
         db.add(row)
+    threshold_values = extract_observer_threshold_values(body)
+    if "warning_percent_of_stop" not in body.model_fields_set:
+        threshold_values["warning_percent_of_stop"] = derive_legacy_warning_percent_of_stop(
+            threshold_values
+        )
+    if "stop_percent_of_base" not in body.model_fields_set:
+        threshold_values["stop_percent_of_base"] = derive_legacy_stop_percent_of_base(
+            threshold_values
+        )
     row.interval_seconds = body.interval_seconds
     row.jitter_seconds = body.jitter_seconds
-    row.warning_percent_of_stop = body.warning_percent_of_stop
-    row.stop_percent_of_base = min(Decimal("100"), max(Decimal("1"), Decimal(body.stop_percent_of_base)))
+    apply_observer_threshold_values(row, threshold_values)
     row.is_scanning_enabled = body.is_scanning_enabled
     await db.commit()
     return ObserverSettingsSchema(
         interval_seconds=row.interval_seconds,
         jitter_seconds=row.jitter_seconds,
-        warning_percent_of_stop=row.warning_percent_of_stop,
-        stop_percent_of_base=row.stop_percent_of_base,
+        **extract_observer_threshold_values(row),
         is_scanning_enabled=row.is_scanning_enabled,
     )
 
@@ -481,18 +809,75 @@ async def trigger_scan_now(db: AsyncSession = Depends(get_db)):
     return {"scan_requested": True}
 
 
-@app.post("/api/observer/restart")
-async def restart_observer():
-    """Перезапуск observer worker: завершает текущий процесс и запускает новый."""
+def _observer_runtime_paths() -> tuple[Path, Path, Path, str]:
+    """Возвращает пути и python-бинарь для управления observer worker."""
     project_root = Path(__file__).parent.parent.parent
     pid_file = project_root / ".logs" / "pids.txt"
     log_file = project_root / ".logs" / "observer.log"
     run_script = project_root / "run_observer.py"
+    venv_python = project_root / ".venv" / "bin" / "python"
+    python_bin = str(venv_python) if venv_python.exists() else sys.executable
+    return pid_file, log_file, run_script, python_bin
+
+
+def _disable_runtime_paths() -> tuple[Path, Path, Path, str]:
+    """Возвращает пути и python-бинарь для управления воркером отключения."""
+    project_root = Path(__file__).parent.parent.parent
+    pid_file = project_root / ".logs" / "pids.txt"
+    log_file = project_root / ".logs" / "disable_worker.log"
+    run_script = project_root / "run_disable_worker.py"
+    venv_python = project_root / ".venv" / "bin" / "python"
+    python_bin = str(venv_python) if venv_python.exists() else sys.executable
+    return pid_file, log_file, run_script, python_bin
+
+
+def _read_lines_from_file(path: Path) -> list[str]:
+    """Читает файл построчно или возвращает пустой список, если файла нет."""
+    if not path.exists():
+        return []
+    return path.read_text().splitlines()
+
+
+def _write_pid_lines(path: Path, lines: list[str]) -> None:
+    """Перезаписывает PID-файл подготовленным списком строк."""
+    path.write_text("\n".join(lines) + "\n" if lines else "")
+
+
+def _read_pid_from_file(path: Path) -> int | None:
+    """Читает PID из файла-одиночки."""
+    if not path.exists():
+        return None
+    try:
+        return int(path.read_text().strip())
+    except (OSError, ValueError):
+        path.unlink(missing_ok=True)
+        return None
+
+
+def _unlink_file(path: Path) -> None:
+    """Удаляет файл, если он существует."""
+    path.unlink(missing_ok=True)
+
+
+def _append_text(path: Path, text: str) -> None:
+    """Дописвает строку в конец файла."""
+    with path.open("a") as handle:
+        handle.write(text)
+
+
+def _open_append_handle(path: Path):
+    """Открывает файловый дескриптор в режиме append."""
+    return path.open("a")
+
+
+async def _stop_observer_process() -> int | None:
+    """Останавливает текущий observer worker и удаляет его PID из файла."""
+    pid_file, _, _, _ = _observer_runtime_paths()
 
     # Находим и завершаем текущий процесс воркера
     old_pid: int | None = None
-    if pid_file.exists():
-        lines = pid_file.read_text().splitlines()
+    lines = await asyncio.to_thread(_read_lines_from_file, pid_file)
+    if lines:
         remaining = []
         for line in lines:
             parts = line.strip().split()
@@ -518,61 +903,346 @@ async def restart_observer():
                     pass
             except ProcessLookupError:
                 pass  # Процесс уже не существует
-            pid_file.write_text("\n".join(remaining) + "\n" if remaining else "")
+            await asyncio.to_thread(_write_pid_lines, pid_file, remaining)
+    return old_pid
 
-    # Запускаем новый процесс
-    venv_python = project_root / ".venv" / "bin" / "python"
-    python_bin = str(venv_python) if venv_python.exists() else sys.executable
 
-    with open(log_file, "a") as log:
-        log.write(f"\n--- Перезапуск воркера через UI {datetime.now(UTC).isoformat()} ---\n")
+async def _stop_disable_process() -> int | None:
+    """Останавливает текущий воркер отключения и удаляет его PID из файла."""
+    pid_file, _, _, _ = _disable_runtime_paths()
+    singleton_pid_file = Path("/tmp/fb_disable_worker.pid")
 
-    proc = await asyncio.create_subprocess_exec(
-        python_bin,
-        str(run_script),
-        stdout=open(log_file, "a"),
-        stderr=asyncio.subprocess.STDOUT,
-        cwd=str(project_root),
+    old_pid = await asyncio.to_thread(_read_pid_from_file, singleton_pid_file)
+
+    lines = await asyncio.to_thread(_read_lines_from_file, pid_file)
+    if lines:
+        remaining = []
+        for line in lines:
+            parts = line.strip().split()
+            if len(parts) == 2 and parts[1] == "disable_worker":
+                if old_pid is None:
+                    try:
+                        old_pid = int(parts[0])
+                    except ValueError:
+                        pass
+            else:
+                remaining.append(line)
+        await asyncio.to_thread(_write_pid_lines, pid_file, remaining)
+
+    if old_pid:
+        try:
+            os.kill(old_pid, signal.SIGTERM)
+            await asyncio.sleep(2.0)
+            try:
+                os.kill(old_pid, 0)
+                os.kill(old_pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        except ProcessLookupError:
+            pass
+
+    await asyncio.to_thread(_unlink_file, singleton_pid_file)
+    return old_pid
+
+
+async def _start_observer_process(*, reason: str) -> int:
+    """Запускает observer worker и сохраняет его PID в файл."""
+    pid_file, log_file, run_script, python_bin = _observer_runtime_paths()
+
+    await asyncio.to_thread(
+        _append_text,
+        log_file,
+        f"\n--- {reason} {datetime.now(UTC).isoformat()} ---\n",
     )
+    stdout_handle = await asyncio.to_thread(_open_append_handle, log_file)
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            python_bin,
+            str(run_script),
+            stdout=stdout_handle,
+            stderr=asyncio.subprocess.STDOUT,
+            cwd=str(run_script.parent),
+        )
+    finally:
+        stdout_handle.close()
 
     # Сохраняем новый PID
-    with open(pid_file, "a") as f:
-        f.write(f"{proc.pid} observer\n")
+    await asyncio.to_thread(_append_text, pid_file, f"{proc.pid} observer\n")
 
-    return {"restarted": True, "old_pid": old_pid, "new_pid": proc.pid}
+    return proc.pid
 
 
-@app.get("/api/settings/telegram", response_model=TelegramSettingsSchema)
+async def _start_disable_process(*, reason: str) -> int:
+    """Запускает воркер отключения и сохраняет его PID в файл."""
+    pid_file, log_file, run_script, python_bin = _disable_runtime_paths()
+
+    await asyncio.to_thread(
+        _append_text,
+        log_file,
+        f"\n--- {reason} {datetime.now(UTC).isoformat()} ---\n",
+    )
+    stdout_handle = await asyncio.to_thread(_open_append_handle, log_file)
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            python_bin,
+            str(run_script),
+            stdout=stdout_handle,
+            stderr=asyncio.subprocess.STDOUT,
+            cwd=str(run_script.parent),
+        )
+    finally:
+        stdout_handle.close()
+
+    await asyncio.to_thread(_append_text, pid_file, f"{proc.pid} disable_worker\n")
+
+    return proc.pid
+
+
+@app.post("/api/observer/restart")
+async def restart_observer():
+    """Перезапуск observer worker: завершает текущий процесс и запускает новый."""
+    old_pid = await _stop_observer_process()
+    new_pid = await _start_observer_process(reason="Перезапуск воркера через UI")
+
+    return {"restarted": True, "old_pid": old_pid, "new_pid": new_pid}
+
+
+@app.post("/api/disable-worker/restart")
+async def restart_disable_worker():
+    """Перезапуск воркера отключения: завершает зависший процесс и поднимает новый."""
+    old_pid = await _stop_disable_process()
+    new_pid = await _start_disable_process(reason="Перезапуск воркера отключения через интерфейс")
+
+    return {"restarted": True, "old_pid": old_pid, "new_pid": new_pid}
+
+
+def _mask_bot_token(token: str) -> str:
+    """Маскирует bot token для безопасного отображения."""
+    return (token[:10] + "***") if len(token) > 10 else ("***" if token else "")
+
+
+def _serialize_primary_recipient(
+    row: TelegramSettings | None,
+) -> TelegramPrimaryRecipientSchema | None:
+    """Собирает primary recipient из telegram_settings."""
+    if row is None or not row.chat_id:
+        return None
+    return TelegramPrimaryRecipientSchema(
+        chat_id=row.chat_id,
+        masked_chat_id=mask_chat_id(row.chat_id),
+        telegram_user_id=row.owner_telegram_user_id or "",
+        username=row.owner_username or "",
+        first_name=row.owner_first_name or "",
+        role=TelegramUserRole.OWNER.value,
+    )
+
+
+def _activation_command(code: str) -> str:
+    """Строит текст команды активации для Telegram."""
+    return f"/start {code}".strip() if code else ""
+
+
+def _serialize_invite_response(
+    invite: TelegramInvite | None,
+    *,
+    bot_username: str,
+    delivery_mode: str = TelegramDeliveryMode.PRIVATE_CHAT.value,
+) -> InviteCodeResponse | None:
+    """Сериализует активный инвайт для UI."""
+    if invite is None:
+        return None
+    activation_command = _activation_command(invite.code)
+    return InviteCodeResponse(
+        code=invite.code,
+        bot_username=bot_username or "",
+        role=invite.role or TelegramUserRole.RECIPIENT.value,
+        expires_at=invite.expires_at.isoformat() if invite.expires_at else None,
+        deep_link=(
+            ""
+            if str(delivery_mode).upper() == TelegramDeliveryMode.FORUM_GROUP.value
+            else build_telegram_deep_link(bot_username or "", invite.code)
+        ),
+        activation_command=activation_command,
+        activation_target=CONTROL_TOPIC_NAME,
+    )
+
+
+async def _create_forum_topics_if_needed(
+    *,
+    bot_token: str,
+    settings_row: TelegramSettings,
+) -> dict[str, int]:
+    """Создаёт production topics для forum supergroup или переиспользует уже сохранённые."""
+    if settings_row.chat_id == FORUM_SUPERGROUP_CHAT_ID and forum_topics_ready(settings_row):
+        return {
+            "control_topic_id": int(settings_row.control_topic_id or 0),
+            "early_topic_id": int(settings_row.early_topic_id or 0),
+            "warning_topic_id": int(settings_row.warning_topic_id or 0),
+            "stop_topic_id": int(settings_row.stop_topic_id or 0),
+            "enable_topic_id": int(settings_row.enable_topic_id or 0),
+        }
+
+    client = TelegramBotClient(bot_token)
+    try:
+        chat = await client.get_chat(chat_id=FORUM_SUPERGROUP_CHAT_ID)
+        if str(chat.get("type") or "") != "supergroup":
+            raise HTTPException(
+                status_code=400,
+                detail="Telegram-группа для cutover должна быть supergroup.",
+            )
+        if not bool(chat.get("is_forum")):
+            raise HTTPException(
+                status_code=400,
+                detail="В Telegram-группе не включён режим forum topics.",
+            )
+
+        created_topics: dict[str, int] = {}
+        for stream_key, title in FORUM_STREAM_TOPIC_NAMES.items():
+            topic = await client.create_forum_topic(
+                chat_id=FORUM_SUPERGROUP_CHAT_ID,
+                name=title,
+            )
+            topic_id = int(topic["message_thread_id"])
+            if stream_key == "CONTROL":
+                created_topics["control_topic_id"] = topic_id
+            elif stream_key == "EARLY":
+                created_topics["early_topic_id"] = topic_id
+            elif stream_key == "WARNING":
+                created_topics["warning_topic_id"] = topic_id
+            elif stream_key == "STOP":
+                created_topics["stop_topic_id"] = topic_id
+            elif stream_key == "ENABLE":
+                created_topics["enable_topic_id"] = topic_id
+        return created_topics
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Не удалось подготовить forum topics. Проверьте права бота в группе.",
+        ) from exc
+    finally:
+        await client.close()
+
+
+async def _prepare_telegram_forum_cutover(
+    *,
+    db: AsyncSession,
+    settings_row: TelegramSettings,
+    bot_token: str,
+    bot_username: str,
+) -> TelegramForumCutoverResponseSchema:
+    """Готовит Telegram-контур к переезду в forum supergroup."""
+    topic_ids = await _create_forum_topics_if_needed(
+        bot_token=bot_token,
+        settings_row=settings_row,
+    )
+    auth_code = str(secrets.randbelow(900000) + 100000)
+    await revoke_telegram_access_records(db)
+
+    settings_row.delivery_mode = TelegramDeliveryMode.FORUM_GROUP
+    settings_row.chat_id = FORUM_SUPERGROUP_CHAT_ID
+    settings_row.is_authorized = False
+    settings_row.auth_code = auth_code
+    settings_row.owner_telegram_user_id = ""
+    settings_row.owner_username = ""
+    settings_row.owner_first_name = ""
+    settings_row.bot_username = bot_username or settings_row.bot_username or ""
+    settings_row.control_topic_id = topic_ids["control_topic_id"]
+    settings_row.early_topic_id = topic_ids["early_topic_id"]
+    settings_row.warning_topic_id = topic_ids["warning_topic_id"]
+    settings_row.stop_topic_id = topic_ids["stop_topic_id"]
+    settings_row.enable_topic_id = topic_ids["enable_topic_id"]
+    await db.commit()
+
+    return TelegramForumCutoverResponseSchema(
+        bot_username=settings_row.bot_username or "",
+        chat_id=FORUM_SUPERGROUP_CHAT_ID,
+        auth_code=auth_code,
+        activation_command=_activation_command(auth_code),
+        control_topic_id=settings_row.control_topic_id,
+        early_topic_id=settings_row.early_topic_id,
+        warning_topic_id=settings_row.warning_topic_id,
+        stop_topic_id=settings_row.stop_topic_id,
+        enable_topic_id=settings_row.enable_topic_id,
+        forum_cutover_status=forum_cutover_status_from_settings(settings_row),
+        message=(
+            "Forum topics готовы. Откройте topic CONTROL в группе AdGuard FB Bot "
+            "и отправьте команду активации."
+        ),
+    )
+
+
+@app.get("/api/settings/telegram", response_model=TelegramSettingsResponseSchema)
 async def get_telegram_settings(db: AsyncSession = Depends(get_db)):
     """Получить настройки Telegram (токен маскируется)."""
-    result = await db.execute(
+    row = await db.scalar(
         select(TelegramSettings).where(TelegramSettings.singleton_key == "default")
     )
-    row = result.scalar_one_or_none()
     if row is None:
-        # Fallback на .env
-        from core.config import get_settings
         s = get_settings()
-        token = s.telegram_bot_token
-        masked = (token[:10] + "***") if len(token) > 10 else ("***" if token else "")
-        return TelegramSettingsSchema(bot_token=masked, chat_id=s.telegram_chat_id)
+        primary_recipient = None
+        if s.telegram_chat_id:
+            primary_recipient = TelegramPrimaryRecipientSchema(
+                chat_id=s.telegram_chat_id,
+                masked_chat_id=mask_chat_id(s.telegram_chat_id),
+                role=TelegramUserRole.OWNER.value,
+            )
+        return TelegramSettingsResponseSchema(
+            bot_token=_mask_bot_token(s.telegram_bot_token),
+            chat_id=s.telegram_chat_id,
+            forum_chat_id="",
+            is_authorized=bool(s.telegram_chat_id),
+            delivery_mode=TelegramDeliveryMode.PRIVATE_CHAT.value,
+            poller_status="OFFLINE",
+            forum_cutover_status="NOT_CONFIGURED",
+            activation_command="",
+            primary_recipient=primary_recipient,
+        )
 
     token = decrypt(row.bot_token_encrypted) if row.bot_token_encrypted else ""
-    masked = (token[:10] + "***") if len(token) > 10 else ("***" if token else "")
-    return TelegramSettingsSchema(
-        bot_token=masked,
+    active_invite = await get_latest_active_invite(db)
+    delivery_mode = str(getattr(row, "delivery_mode", TelegramDeliveryMode.PRIVATE_CHAT.value))
+    auth_code = row.auth_code if not row.is_authorized else ""
+    auth_deep_link = ""
+    if delivery_mode != TelegramDeliveryMode.FORUM_GROUP.value:
+        auth_deep_link = build_telegram_deep_link(row.bot_username or "", auth_code or "")
+    return TelegramSettingsResponseSchema(
+        bot_token=_mask_bot_token(token),
         chat_id=row.chat_id,
+        forum_chat_id=row.chat_id
+        if delivery_mode == TelegramDeliveryMode.FORUM_GROUP.value
+        else "",
         is_authorized=row.is_authorized,
         bot_username=row.bot_username,
-        auth_code=row.auth_code if not row.is_authorized else "",
+        auth_code=auth_code,
+        delivery_mode=delivery_mode,
+        control_topic_id=row.control_topic_id,
+        early_topic_id=row.early_topic_id,
+        warning_topic_id=row.warning_topic_id,
+        stop_topic_id=row.stop_topic_id,
+        enable_topic_id=row.enable_topic_id,
+        poller_status=poller_status_from_settings(row),
+        last_poller_heartbeat_at=(
+            row.poller_heartbeat_at.isoformat() if row.poller_heartbeat_at else None
+        ),
+        auth_deep_link=auth_deep_link,
+        activation_command=_activation_command(auth_code),
+        forum_cutover_status=forum_cutover_status_from_settings(row),
+        primary_recipient=_serialize_primary_recipient(row),
+        active_invite=_serialize_invite_response(
+            active_invite,
+            bot_username=row.bot_username or "",
+            delivery_mode=delivery_mode,
+        ),
     )
 
 
 @app.put("/api/settings/telegram/token")
-async def set_telegram_token(
-    body: TelegramSetTokenRequest, db: AsyncSession = Depends(get_db)
-):
-    """Установить bot_token: проверяет через getMe, генерирует auth_code."""
+async def set_telegram_token(body: TelegramSetTokenRequest, db: AsyncSession = Depends(get_db)):
+    """Установить bot_token и сразу подготовить forum-cutover."""
     import httpx
 
     token = body.bot_token.strip()
@@ -593,45 +1263,74 @@ async def set_telegram_token(
             status_code=400, detail="Не удалось подключиться к Telegram API"
         ) from exc
 
-    # Генерируем 6-значный код авторизации
-    auth_code = str(secrets.randbelow(900000) + 100000)
+    row = await get_or_create_telegram_settings(db)
+    row.bot_token_encrypted = encrypt(token)
+    row.bot_username = bot_username
+    await db.flush()
 
-    # Upsert в БД
-    result = await db.execute(
+    cutover = await _prepare_telegram_forum_cutover(
+        db=db,
+        settings_row=row,
+        bot_token=token,
+        bot_username=bot_username,
+    )
+    return {
+        "bot_username": cutover.bot_username,
+        "auth_code": cutover.auth_code,
+        "auth_deep_link": "",
+        "activation_command": cutover.activation_command,
+        "control_topic_id": cutover.control_topic_id,
+        "forum_cutover_status": cutover.forum_cutover_status,
+        "message": cutover.message,
+    }
+
+
+@app.post(
+    "/api/settings/telegram/forum/cutover",
+    response_model=TelegramForumCutoverResponseSchema,
+)
+async def prepare_telegram_forum_cutover(db: AsyncSession = Depends(get_db)):
+    """Готовит Telegram-контур к переезду в forum supergroup без смены токена."""
+    row = await db.scalar(
         select(TelegramSettings).where(TelegramSettings.singleton_key == "default")
     )
-    row = result.scalar_one_or_none()
-    if row is None:
-        row = TelegramSettings(singleton_key="default")
-        db.add(row)
+    if row is None or not row.bot_token_encrypted:
+        raise HTTPException(status_code=400, detail="Telegram-бот не настроен")
 
-    row.bot_token_encrypted = encrypt(token)
-    row.auth_code = auth_code
-    row.is_authorized = False
-    row.chat_id = ""
-    row.bot_username = bot_username
-    await db.commit()
+    token = decrypt(row.bot_token_encrypted)
+    if not token:
+        raise HTTPException(status_code=400, detail="Не удалось прочитать токен Telegram-бота")
 
-    return {
-        "bot_username": bot_username,
-        "auth_code": auth_code,
-        "message": f"Отправьте боту @{bot_username} команду: /start {auth_code}",
-    }
+    return await _prepare_telegram_forum_cutover(
+        db=db,
+        settings_row=row,
+        bot_token=token,
+        bot_username=row.bot_username or "",
+    )
 
 
 @app.delete("/api/settings/telegram")
 async def revoke_telegram(db: AsyncSession = Depends(get_db)):
     """Отозвать авторизацию Telegram — сбрасывает все настройки."""
-    result = await db.execute(
+    row = await db.scalar(
         select(TelegramSettings).where(TelegramSettings.singleton_key == "default")
     )
-    row = result.scalar_one_or_none()
     if row is not None:
+        await revoke_telegram_access_records(db)
         row.bot_token_encrypted = ""
         row.chat_id = ""
         row.is_authorized = False
         row.auth_code = ""
         row.bot_username = ""
+        row.owner_telegram_user_id = ""
+        row.owner_username = ""
+        row.owner_first_name = ""
+        row.delivery_mode = TelegramDeliveryMode.PRIVATE_CHAT
+        row.control_topic_id = None
+        row.early_topic_id = None
+        row.warning_topic_id = None
+        row.stop_topic_id = None
+        row.enable_topic_id = None
         await db.commit()
     return {"status": "ok"}
 
@@ -784,6 +1483,434 @@ def _current_scan_cutoff(last_scan: datetime | None) -> datetime:
     return last_scan - timedelta(minutes=30)
 
 
+def _serialize_optional_datetime(value: datetime | None) -> str | None:
+    """Сериализует дату в ISO-формат."""
+    return value.isoformat() if value else None
+
+
+def _serialize_optional_decimal(value: object | None, precision: int) -> str | None:
+    """Сериализует Decimal-подобное значение в строку нужной точности."""
+    if value is None:
+        return None
+    return f"{Decimal(str(value)):.{precision}f}"
+
+
+def _build_snapshot_metrics_json(snapshot: AdSnapshot | None) -> dict[str, object]:
+    """Собирает текущие метрики рекомендации из актуального snapshot."""
+    if snapshot is None:
+        return {}
+    return {
+        "spend": _serialize_optional_decimal(getattr(snapshot, "spend", None), 2) or "0.00",
+        "budget": str(getattr(snapshot, "budget", "") or "").strip() or None,
+        "reach": int(getattr(snapshot, "reach", 0) or 0),
+        "impressions": int(getattr(snapshot, "impressions", 0) or 0),
+        "clicks": int(getattr(snapshot, "clicks", 0) or 0),
+        "cpc": _serialize_optional_decimal(getattr(snapshot, "cpc", None), 4),
+        "ctr": _serialize_optional_decimal(getattr(snapshot, "ctr", None), 4),
+        "outbound_clicks": int(getattr(snapshot, "outbound_clicks", 0) or 0),
+        "outbound_ctr": _serialize_optional_decimal(getattr(snapshot, "outbound_ctr", None), 4),
+        "landing_page_views": int(getattr(snapshot, "landing_page_views", 0) or 0),
+        "cost_per_result": _serialize_optional_decimal(
+            getattr(snapshot, "cost_per_result", None), 4
+        ),
+        "cost_per_landing_page_view": _serialize_optional_decimal(
+            getattr(snapshot, "cost_per_landing_page_view", None),
+            4,
+        ),
+        "cpm": _serialize_optional_decimal(getattr(snapshot, "cpm", None), 4),
+        "frequency": _serialize_optional_decimal(getattr(snapshot, "frequency", None), 4),
+        "leads": int(getattr(snapshot, "leads", 0) or 0),
+        "cost_per_lead": _serialize_optional_decimal(getattr(snapshot, "cost_per_lead", None), 4),
+        "registrations": int(getattr(snapshot, "registrations", 0) or 0),
+        "cost_per_registration": _serialize_optional_decimal(
+            getattr(snapshot, "cost_per_registration", None),
+            4,
+        ),
+        "deposits": int(getattr(snapshot, "deposits", 0) or 0),
+    }
+
+
+def _incident_key_for_snapshot(snapshot: AdSnapshot) -> str:
+    """Возвращает ключ текущего инцидента для snapshot."""
+    return snapshot.open_state_token or snapshot.telegram_group_key or snapshot.fb_ad_id
+
+
+def _matched_rule_codes_for_snapshot(snapshot: AdSnapshot) -> list[str]:
+    """Возвращает набор правил для текущей стадии snapshot."""
+    if snapshot.current_stage == AlertStage.EARLY_SIGNAL:
+        return list(snapshot.early_signal_rule_codes or [])
+    if snapshot.current_stage == AlertStage.WARNING:
+        return list(snapshot.warning_rule_codes or [])
+    return list(snapshot.stop_rule_codes or [])
+
+
+def _disable_task_activity_at(task: DisableTask) -> datetime:
+    """Возвращает момент последней активности disable-задачи."""
+    return task.updated_at or task.completed_at or task.created_at
+
+
+def _max_datetime(*values: datetime | None) -> datetime | None:
+    """Возвращает максимальную непустую дату."""
+    filtered = [value for value in values if value is not None]
+    if not filtered:
+        return None
+    return max(filtered)
+
+
+def _min_datetime(*values: datetime | None) -> datetime | None:
+    """Возвращает минимальную непустую дату."""
+    filtered = [value for value in values if value is not None]
+    if not filtered:
+        return None
+    return min(filtered)
+
+
+def _serialize_disable_task(task: DisableTask) -> DisableTaskSchema:
+    """Сериализует DisableTask для API-ответа."""
+    incident_key = getattr(task, "open_state_token", "") or getattr(task, "fb_ad_id", "")
+    updated_at = getattr(task, "updated_at", None) or getattr(task, "created_at", None)
+    return DisableTaskSchema(
+        id=str(task.id),
+        incident_key=incident_key,
+        fb_ad_id=task.fb_ad_id,
+        ad_name=task.ad_name,
+        status=task.status.value,
+        attempt_count=task.attempt_count,
+        last_error=task.last_error,
+        next_retry_at=_serialize_optional_datetime(task.next_retry_at),
+        requested_by_username=task.requested_by_username,
+        created_at=task.created_at.isoformat(),
+        updated_at=updated_at.isoformat() if updated_at else task.created_at.isoformat(),
+        completed_at=_serialize_optional_datetime(task.completed_at),
+    )
+
+
+def _build_active_incident_schema(
+    snapshot: AdSnapshot,
+    *,
+    alert_events: list[AlertEvent],
+    disable_tasks: list[DisableTask],
+) -> ActiveIncidentSchema:
+    """Собирает API-представление текущего инцидента по snapshot и связанным данным."""
+    incident_key = _incident_key_for_snapshot(snapshot)
+    current_events = [event for event in alert_events if event.telegram_group_key == incident_key]
+    current_tasks = [task for task in disable_tasks if task.open_state_token == incident_key]
+
+    latest_event = max(current_events, key=lambda event: event.created_at, default=None)
+    latest_task = max(current_tasks, key=_disable_task_activity_at, default=None)
+    has_active_disable_task = any(
+        task.status
+        in (
+            DisableTaskStatus.PENDING,
+            DisableTaskStatus.RUNNING,
+            DisableTaskStatus.RETRYING,
+        )
+        for task in current_tasks
+    )
+    auto_attempts = sum(
+        1 for task in current_tasks if (task.requested_by_username or "") == "bot_auto_stop"
+    )
+    incident_retry_count = max(auto_attempts - 1, 0)
+    needs_manual_attention = (
+        snapshot.alert_state == AlertState.CLAIMED
+        and snapshot.current_stage == AlertStage.STOP
+        and not is_delivery_disabled(snapshot.delivery_status)
+        and not has_active_disable_task
+        and incident_retry_count >= SILENT_DISABLE_INCIDENT_RETRY_LIMIT
+    )
+    latest_activity_at = (
+        _max_datetime(
+            snapshot.updated_at,
+            snapshot.last_observed_at,
+            latest_event.created_at if latest_event else None,
+            _disable_task_activity_at(latest_task) if latest_task else None,
+        )
+        or snapshot.updated_at
+    )
+    started_at = _min_datetime(
+        min((event.created_at for event in current_events), default=None),
+        min((task.created_at for task in current_tasks), default=None),
+        snapshot.created_at,
+    )
+
+    return ActiveIncidentSchema(
+        incident_key=incident_key,
+        fb_ad_id=snapshot.fb_ad_id,
+        ad_name=snapshot.ad_name,
+        campaign_name=snapshot.campaign_name,
+        adset_name=snapshot.adset_name,
+        current_state=snapshot.alert_state.value,
+        current_stage=snapshot.current_stage.value if snapshot.current_stage else None,
+        delivery_status=snapshot.delivery_status,
+        matched_rule_codes=_matched_rule_codes_for_snapshot(snapshot),
+        reason_title=latest_event.reason_title if latest_event else None,
+        reason_text=latest_event.reason_text if latest_event else None,
+        metrics_json=latest_event.metrics_json
+        if latest_event and latest_event.metrics_json
+        else {},
+        started_at=_serialize_optional_datetime(started_at),
+        last_activity_at=latest_activity_at.isoformat(),
+        last_observed_at=_serialize_optional_datetime(snapshot.last_observed_at),
+        latest_alert_at=_serialize_optional_datetime(
+            latest_event.created_at if latest_event else None
+        ),
+        latest_alert_stage=latest_event.stage.value
+        if latest_event and latest_event.stage
+        else None,
+        latest_disable_task_status=(latest_task.status.value if latest_task else None),
+        latest_disable_task_created_at=(
+            _serialize_optional_datetime(latest_task.created_at) if latest_task else None
+        ),
+        latest_disable_task_updated_at=(
+            _serialize_optional_datetime(latest_task.updated_at) if latest_task else None
+        ),
+        latest_disable_task_attempt=(latest_task.attempt_count if latest_task else None),
+        latest_disable_task_id=(str(latest_task.id) if latest_task else None),
+        latest_disable_task_last_error=(latest_task.last_error if latest_task else None),
+        latest_disable_task_next_retry_at=(
+            _serialize_optional_datetime(latest_task.next_retry_at) if latest_task else None
+        ),
+        latest_disable_task_completed_at=(
+            _serialize_optional_datetime(latest_task.completed_at) if latest_task else None
+        ),
+        waiting_for_off=(
+            snapshot.alert_state == AlertState.CLAIMED
+            and not is_delivery_disabled(snapshot.delivery_status)
+        ),
+        has_active_disable_task=has_active_disable_task,
+        incident_retry_count=incident_retry_count,
+        needs_manual_attention=needs_manual_attention,
+    )
+
+
+def _serialize_enable_task(task: EnableTask) -> EnableTaskSchema:
+    """Сериализует EnableTask для API-ответов."""
+    updated_at = getattr(task, "updated_at", None) or task.created_at
+    last_error = task.last_error
+    next_retry_at = task.next_retry_at
+    if task.status == EnableTaskStatus.SUCCEEDED:
+        last_error = None
+        next_retry_at = None
+    return EnableTaskSchema(
+        id=str(task.id),
+        recommendation_event_id=(
+            str(task.recommendation_event_id) if task.recommendation_event_id else None
+        ),
+        fb_ad_id=task.fb_ad_id,
+        ad_name=task.ad_name,
+        status=task.status.value,
+        attempt_count=task.attempt_count,
+        last_error=last_error,
+        next_retry_at=next_retry_at.isoformat() if next_retry_at else None,
+        requested_by_username=task.requested_by_username,
+        created_at=task.created_at.isoformat(),
+        updated_at=updated_at.isoformat(),
+        completed_at=task.completed_at.isoformat() if task.completed_at else None,
+    )
+
+
+def _build_current_enable_tasks_query(
+    *,
+    created_since: datetime | None = None,
+):
+    """Строит запрос только по актуальной задаче на каждое объявление."""
+    ranked_tasks = select(
+        EnableTask.id.label("task_id"),
+        func.row_number()
+        .over(
+            partition_by=EnableTask.fb_ad_id,
+            order_by=[
+                EnableTask.updated_at.desc(),
+                EnableTask.created_at.desc(),
+                EnableTask.id.desc(),
+            ],
+        )
+        .label("row_num"),
+    ).subquery()
+
+    query = (
+        select(EnableTask)
+        .join(ranked_tasks, ranked_tasks.c.task_id == EnableTask.id)
+        .join(
+            EnableRecommendationEvent,
+            EnableRecommendationEvent.id == EnableTask.recommendation_event_id,
+            isouter=True,
+        )
+        .where(
+            ranked_tasks.c.row_num == 1,
+            EnableTask.status.in_(
+                [
+                    EnableTaskStatus.PENDING,
+                    EnableTaskStatus.RUNNING,
+                    EnableTaskStatus.RETRYING,
+                    EnableTaskStatus.FAILED,
+                    EnableTaskStatus.SUCCEEDED,
+                ]
+            ),
+        )
+    )
+    if created_since is not None:
+        query = query.where(
+            or_(
+                EnableRecommendationEvent.live_batch_started_at >= created_since,
+                and_(
+                    EnableRecommendationEvent.id.is_(None),
+                    EnableTask.created_at >= created_since,
+                ),
+            )
+        )
+    return query.order_by(EnableTask.updated_at.desc(), EnableTask.created_at.desc())
+
+
+def _serialize_enable_recommendation_event(
+    event: EnableRecommendationEvent,
+    *,
+    current_batch_marker: datetime | None,
+    related_task: EnableTask | None = None,
+    current_snapshot: AdSnapshot | None = None,
+    live_candidate: EnableRecommendationCandidate | None = None,
+) -> EnableRecommendationEventSchema:
+    """Сериализует recommendation event для dashboard."""
+    state = "OPEN"
+    if related_task is not None:
+        state = "TASK_CREATED"
+    elif current_batch_marker is None or event.live_batch_started_at != current_batch_marker:
+        state = "STALE"
+
+    recommendation_level = (
+        live_candidate.recommendation_level
+        if live_candidate is not None
+        else event.recommendation_level
+    )
+    reason_title = live_candidate.reason_title if live_candidate is not None else event.reason_title
+    reason_text = live_candidate.reason_text if live_candidate is not None else event.reason_text
+    reason_title, reason_text = _normalize_enable_recommendation_reason(
+        recommendation_level=recommendation_level,
+        reason_title=reason_title,
+        reason_text=reason_text,
+    )
+    metrics_json = (
+        dict(live_candidate.metrics_json)
+        if live_candidate is not None
+        else _build_snapshot_metrics_json(current_snapshot)
+        if current_snapshot
+        else dict(event.metrics_json or {})
+    )
+    rule_summaries_source = (
+        live_candidate.metrics_json if live_candidate is not None else (event.metrics_json or {})
+    )
+    rule_summaries = rule_summaries_source.get("rule_summaries")
+    if isinstance(rule_summaries, list) and rule_summaries:
+        metrics_json["rule_summaries"] = rule_summaries
+    updated_at = getattr(event, "updated_at", None)
+    if current_snapshot is not None and (
+        updated_at is None or current_snapshot.last_observed_at > updated_at
+    ):
+        updated_at = current_snapshot.last_observed_at
+
+    return EnableRecommendationEventSchema(
+        id=str(event.id),
+        fb_ad_id=event.fb_ad_id,
+        ad_name=current_snapshot.ad_name if current_snapshot else event.ad_name,
+        campaign_name=current_snapshot.campaign_name if current_snapshot else None,
+        adset_name=current_snapshot.adset_name if current_snapshot else None,
+        delivery_status=current_snapshot.delivery_status
+        if current_snapshot
+        else event.delivery_status,
+        recommendation_level=recommendation_level.value,
+        matched_rule_codes=(
+            list(live_candidate.matched_rule_codes)
+            if live_candidate is not None
+            else event.matched_rule_codes or []
+        ),
+        reason_title=reason_title,
+        reason_text=reason_text,
+        metrics_json=metrics_json,
+        live_batch_started_at=event.live_batch_started_at.isoformat(),
+        created_at=event.created_at.isoformat(),
+        updated_at=_serialize_optional_datetime(updated_at),
+        state=state,
+        related_enable_task_id=str(related_task.id) if related_task else None,
+        related_enable_task_status=related_task.status.value if related_task else None,
+    )
+
+
+async def _load_ad_snapshots_by_fb_ad_id(
+    db: AsyncSession,
+    *,
+    fb_ad_ids: list[str],
+) -> dict[str, AdSnapshot]:
+    """Загружает текущие snapshot по fb_ad_id."""
+    if not fb_ad_ids:
+        return {}
+
+    result = await db.execute(select(AdSnapshot).where(AdSnapshot.fb_ad_id.in_(fb_ad_ids)))
+    return {snapshot.fb_ad_id: snapshot for snapshot in result.scalars().all()}
+
+
+async def _load_current_enable_recommendations(
+    db: AsyncSession,
+    *,
+    limit: int | None = None,
+) -> tuple[datetime | None, list[CurrentEnableRecommendationRow]]:
+    """Загружает текущие рекомендации, подтверждённые live-переоценкой snapshot."""
+    last_scan, batch_start = await load_live_batch_bounds(db)
+    if last_scan is None or batch_start is None:
+        return None, []
+
+    current_batch_marker = compute_live_batch_marker(last_scan)
+    result = await db.execute(
+        select(EnableRecommendationEvent)
+        .where(EnableRecommendationEvent.live_batch_started_at == current_batch_marker)
+        .order_by(
+            func.coalesce(
+                EnableRecommendationEvent.updated_at, EnableRecommendationEvent.created_at
+            ).desc(),
+            EnableRecommendationEvent.created_at.desc(),
+        )
+    )
+    events = result.scalars().all()
+    snapshot_by_ad = await _load_ad_snapshots_by_fb_ad_id(
+        db,
+        fb_ad_ids=[event.fb_ad_id for event in events],
+    )
+    live_snapshots = [
+        snapshot
+        for snapshot in snapshot_by_ad.values()
+        if is_within_live_batch(snapshot.last_observed_at, batch_start)
+        and snapshot.delivery_status in RECOMMENDATION_DELIVERY_STATUSES
+    ]
+    live_candidates = await collect_enable_recommendation_candidates_for_snapshots(
+        db,
+        snapshots=live_snapshots,
+        live_batch_started_at=current_batch_marker,
+    )
+    candidate_by_ad = {candidate.fb_ad_id: candidate for candidate in live_candidates}
+    latest_by_ad: dict[str, CurrentEnableRecommendationRow] = {}
+    for event in events:
+        snapshot = snapshot_by_ad.get(event.fb_ad_id)
+        if snapshot is None:
+            continue
+        if not is_within_live_batch(snapshot.last_observed_at, batch_start):
+            continue
+        if snapshot.delivery_status not in RECOMMENDATION_DELIVERY_STATUSES:
+            continue
+        candidate = candidate_by_ad.get(event.fb_ad_id)
+        if candidate is None:
+            continue
+        if event.fb_ad_id not in latest_by_ad:
+            latest_by_ad[event.fb_ad_id] = CurrentEnableRecommendationRow(
+                event=event,
+                snapshot=snapshot,
+                candidate=candidate,
+            )
+
+    rows = list(latest_by_ad.values())
+    if limit is not None:
+        rows = rows[:limit]
+    return current_batch_marker, rows
+
+
 def _safe_decimal_div(numerator: Decimal, denominator: int) -> Decimal | None:
     """Безопасно делит Decimal на целое число для cost-метрик."""
     if denominator <= 0:
@@ -796,6 +1923,257 @@ def _safe_percent(numerator: int, denominator: int) -> float | None:
     if denominator <= 0:
         return None
     return round((float(numerator) / float(denominator)) * 100, 1)
+
+
+def _safe_decimal_percent_over(value: Decimal, baseline: Decimal) -> Decimal | None:
+    """Возвращает процент превышения над базовым порогом или None."""
+    baseline_decimal = Decimal(baseline)
+    if baseline_decimal <= 0:
+        return None
+    ratio = Decimal(value) / baseline_decimal
+    if ratio <= 1:
+        return None
+    return (ratio - Decimal("1")) * Decimal("100")
+
+
+def _safe_decimal_percent_delta(value: Decimal, baseline: Decimal) -> Decimal | None:
+    """Возвращает отклонение от базового порога со знаком."""
+    baseline_decimal = Decimal(baseline)
+    if baseline_decimal <= 0:
+        return None
+    ratio = Decimal(value) / baseline_decimal
+    return (ratio - Decimal("1")) * Decimal("100")
+
+
+def _percent_of_cpa(cpa_amount: Decimal, percent: Decimal) -> Decimal:
+    """Возвращает абсолютный порог как процент от CPA."""
+    return (Decimal(cpa_amount) * Decimal(percent)) / Decimal("100")
+
+
+def _build_snapshot_base_budget_reference(
+    snapshot: AdSnapshot,
+    *,
+    cpa_amount: Decimal,
+    rule_config: OfferRuleConfig,
+) -> dict[str, object] | None:
+    """Возвращает базовый бюджет объявления по самой глубокой доступной стадии."""
+    clicks = int(snapshot.clicks or 0)
+    leads = int(snapshot.leads or 0)
+    registrations = int(snapshot.registrations or 0)
+    deposits = int(snapshot.deposits or 0)
+    spend = Decimal(snapshot.spend or 0)
+    cpa_decimal = Decimal(cpa_amount)
+
+    cpc_budget = (
+        _percent_of_cpa(cpa_decimal, Decimal(rule_config.cpc_percent_stop))
+        if rule_config.cpc_percent_enabled
+        else None
+    )
+    cpl_budget = (
+        _percent_of_cpa(cpa_decimal, Decimal(rule_config.cpl_percent_stop))
+        if rule_config.cpl_percent_enabled
+        else None
+    )
+    cpr_budget = (
+        _percent_of_cpa(cpa_decimal, Decimal(rule_config.cpr_percent_stop))
+        if rule_config.cpr_percent_enabled
+        else None
+    )
+
+    label: str | None = None
+    ideal_spend: Decimal | None = None
+
+    if deposits >= 1 and registrations >= 1 and cpa_decimal > 0:
+        label = "CPA"
+        ideal_spend = cpa_decimal * Decimal(deposits)
+    elif registrations >= 1:
+        if cpr_budget is not None and cpr_budget > 0:
+            label = "CPR"
+            ideal_spend = cpr_budget * Decimal(registrations)
+        elif rule_config.spend_no_dep_enabled:
+            label = "Расход без депозита"
+            ideal_spend = _percent_of_cpa(
+                cpa_decimal, Decimal(rule_config.spend_no_dep_from_percent)
+            )
+    elif leads >= 1:
+        if cpl_budget is not None and cpl_budget > 0:
+            label = "CPL"
+            ideal_spend = cpl_budget * Decimal(leads)
+        elif cpr_budget is not None and cpr_budget > 0:
+            label = "Расход до регистрации"
+            ideal_spend = cpr_budget
+    elif clicks >= 1:
+        if cpc_budget is not None and cpc_budget > 0:
+            label = "CPC"
+            ideal_spend = cpc_budget * Decimal(clicks)
+        elif cpl_budget is not None and cpl_budget > 0:
+            label = "Расход до лида"
+            ideal_spend = cpl_budget
+    elif cpc_budget is not None and cpc_budget > 0:
+        label = "Расход до клика"
+        ideal_spend = cpc_budget
+
+    if label is None or ideal_spend is None or ideal_spend <= 0:
+        return None
+
+    overrun_amount = spend - ideal_spend
+    overrun_percent = _safe_decimal_percent_over(spend, ideal_spend)
+    return {
+        "label": label,
+        "actual_spend": spend,
+        "ideal_spend": ideal_spend,
+        "overrun_amount": overrun_amount,
+        "overrun_percent": overrun_percent,
+    }
+
+
+async def _load_offer_rules_for_snapshots(
+    db: AsyncSession,
+    snapshots: list[AdSnapshot],
+) -> dict[_uuid.UUID, tuple[Offer, OfferRuleConfig]]:
+    """Загружает offer + rule config для списка snapshot с offer_id."""
+    offer_ids = {snapshot.offer_id for snapshot in snapshots if snapshot.offer_id is not None}
+    if not offer_ids:
+        return {}
+
+    result = await db.execute(
+        select(Offer, OfferRuleConfig)
+        .join(OfferRuleConfig, OfferRuleConfig.offer_id == Offer.id)
+        .where(Offer.id.in_(offer_ids))
+    )
+    return {offer.id: (offer, rule_config) for offer, rule_config in result.all()}
+
+
+def _build_campaign_stop_overrun_rows(
+    snapshots: list[AdSnapshot],
+    offer_rule_map: dict[_uuid.UUID, tuple[Offer, OfferRuleConfig]],
+) -> list[dict]:
+    """Возвращает отклонение от базовой экономики в разрезе кампаний."""
+    grouped: dict[str, dict[str, object]] = {}
+
+    for snapshot in snapshots:
+        if not snapshot.campaign_name or snapshot.offer_id is None:
+            continue
+        offer_bundle = offer_rule_map.get(snapshot.offer_id)
+        if offer_bundle is None:
+            continue
+
+        offer, rule_config = offer_bundle
+        budget_reference = _build_snapshot_base_budget_reference(
+            snapshot,
+            cpa_amount=Decimal(offer.cpa_amount),
+            rule_config=rule_config,
+        )
+        if budget_reference is None:
+            continue
+
+        campaign_name = snapshot.campaign_name
+        actual_spend = Decimal(budget_reference["actual_spend"])
+        ideal_spend = Decimal(budget_reference["ideal_spend"])
+        overrun_amount = Decimal(budget_reference["overrun_amount"])
+        overrun_percent = budget_reference["overrun_percent"]
+        bucket = grouped.setdefault(
+            campaign_name,
+            {
+                "campaign": campaign_name[:30] + "…" if len(campaign_name) > 30 else campaign_name,
+                "campaign_full": campaign_name,
+                "actual_spend_sum": Decimal("0"),
+                "ideal_spend_sum": Decimal("0"),
+                "total_ads": 0,
+                "affected_ads": 0,
+                "over_budget_ads": 0,
+                "under_budget_ads": 0,
+                "on_target_ads": 0,
+                "dominant_metric": None,
+                "top_ad_name": None,
+                "max_ad_overrun_amount": Decimal("0"),
+                "max_ad_overrun_percent": Decimal("0"),
+            },
+        )
+        bucket["total_ads"] = int(bucket["total_ads"]) + 1
+        bucket["actual_spend_sum"] = Decimal(bucket["actual_spend_sum"]) + actual_spend
+        bucket["ideal_spend_sum"] = Decimal(bucket["ideal_spend_sum"]) + ideal_spend
+
+        if overrun_amount > 0:
+            bucket["affected_ads"] = int(bucket["affected_ads"]) + 1
+            bucket["over_budget_ads"] = int(bucket["over_budget_ads"]) + 1
+        elif overrun_amount < 0:
+            bucket["under_budget_ads"] = int(bucket["under_budget_ads"]) + 1
+        else:
+            bucket["on_target_ads"] = int(bucket["on_target_ads"]) + 1
+
+        if overrun_amount > Decimal(bucket["max_ad_overrun_amount"]):
+            bucket["max_ad_overrun_amount"] = overrun_amount
+            bucket["max_ad_overrun_percent"] = (
+                Decimal(overrun_percent) if overrun_percent is not None else Decimal("0")
+            )
+            bucket["dominant_metric"] = budget_reference["label"]
+            bucket["top_ad_name"] = snapshot.ad_name
+
+    rows: list[dict[str, object]] = []
+    for item in grouped.values():
+        ideal_spend = Decimal(item["ideal_spend_sum"])
+        actual_spend = Decimal(item["actual_spend_sum"])
+        budget_delta_amount = actual_spend - ideal_spend
+        budget_delta_percent = _safe_decimal_percent_delta(actual_spend, ideal_spend)
+        if budget_delta_percent is None:
+            continue
+        if budget_delta_amount > 0:
+            budget_status = "OVER"
+        elif budget_delta_amount < 0:
+            budget_status = "UNDER"
+        else:
+            budget_status = "ON_TARGET"
+        rows.append(
+            {
+                **item,
+                "actual_spend": actual_spend,
+                "ideal_spend": ideal_spend,
+                "budget_delta_amount": budget_delta_amount,
+                "budget_delta_percent": budget_delta_percent,
+                "budget_status": budget_status,
+                "overrun_amount": budget_delta_amount,
+                "overrun_percent": budget_delta_percent,
+            }
+        )
+
+    rows = sorted(
+        rows,
+        key=lambda item: (
+            0
+            if str(item["budget_status"]) == "OVER"
+            else 1
+            if str(item["budget_status"]) == "UNDER"
+            else 2,
+            -abs(Decimal(item["budget_delta_percent"])),
+            -abs(Decimal(item["budget_delta_amount"])),
+            -int(item["over_budget_ads"]),
+            str(item["campaign_full"]),
+        ),
+    )
+    return [
+        {
+            "campaign": row["campaign"],
+            "campaign_full": row["campaign_full"],
+            "budget_delta_percent": round(float(Decimal(row["budget_delta_percent"])), 1),
+            "budget_delta_amount": round(float(Decimal(row["budget_delta_amount"])), 2),
+            "budget_status": row["budget_status"],
+            "overrun_percent": round(float(Decimal(row["overrun_percent"])), 1),
+            "actual_spend": round(float(Decimal(row["actual_spend"])), 2),
+            "ideal_spend": round(float(Decimal(row["ideal_spend"])), 2),
+            "overrun_amount": round(float(Decimal(row["overrun_amount"])), 2),
+            "total_ads": int(row["total_ads"]),
+            "affected_ads": int(row["affected_ads"]),
+            "over_budget_ads": int(row["over_budget_ads"]),
+            "under_budget_ads": int(row["under_budget_ads"]),
+            "on_target_ads": int(row["on_target_ads"]),
+            "dominant_metric": row["dominant_metric"],
+            "top_ad_name": row["top_ad_name"],
+            "max_ad_overrun_amount": round(float(Decimal(row["max_ad_overrun_amount"])), 2),
+            "max_ad_overrun_percent": round(float(Decimal(row["max_ad_overrun_percent"])), 1),
+        }
+        for row in rows
+    ]
 
 
 @lru_cache(maxsize=1)
@@ -824,6 +2202,32 @@ async def _get_cabinet_day_start(db: AsyncSession) -> datetime | None:
         )
     )
     return row
+
+
+def _serialize_observer_runtime_fields(
+    row: ObserverSettings | None,
+) -> dict[str, str | None]:
+    """Сериализует runtime-статус observer для dashboard."""
+    if row is None:
+        return {
+            "observer_status": None,
+            "observer_status_message": None,
+            "observer_heartbeat_at": None,
+            "observer_last_error": None,
+            "observer_last_error_at": None,
+        }
+
+    return {
+        "observer_status": row.worker_status,
+        "observer_status_message": row.worker_message,
+        "observer_heartbeat_at": (
+            row.worker_heartbeat_at.isoformat() if row.worker_heartbeat_at else None
+        ),
+        "observer_last_error": row.worker_last_error,
+        "observer_last_error_at": (
+            row.worker_last_error_at.isoformat() if row.worker_last_error_at else None
+        ),
+    }
 
 
 def _timeline_bucket_start(value: datetime, period: str) -> datetime:
@@ -1135,7 +2539,10 @@ async def _load_frequency_thresholds_by_offer(
     offer_codes: set[str],
 ) -> dict[str, tuple[Decimal, Decimal]]:
     """Загружает пороги Frequency по кодам офферов."""
-    if not offer_codes:
+    normalized_codes = {
+        _offer_code_lookup_key(code) for code in offer_codes if _offer_code_lookup_key(code)
+    }
+    if not normalized_codes:
         return {}
 
     result = await db.execute(
@@ -1145,10 +2552,10 @@ async def _load_frequency_thresholds_by_offer(
             OfferRuleConfig.frequency_critical_threshold,
         )
         .join(OfferRuleConfig, OfferRuleConfig.offer_id == Offer.id)
-        .where(Offer.code.in_(offer_codes))
+        .where(func.lower(Offer.code).in_(normalized_codes))
     )
     return {
-        code: (Decimal(elevated), Decimal(critical))
+        code.casefold(): (Decimal(elevated), Decimal(critical))
         for code, elevated, critical in result.all()
     }
 
@@ -1173,23 +2580,26 @@ async def _build_snapshot_diagnostics_map(
     active_snapshots = active_result.scalars().all()
     cpm_baselines = compute_cpm_baselines_by_offer(
         [snapshot for snapshot in active_snapshots if snapshot.resolved_offer_code],
-        offer_code_getter=lambda snapshot: snapshot.resolved_offer_code,
+        offer_code_getter=lambda snapshot: _offer_code_lookup_key(snapshot.resolved_offer_code),
         cpm_getter=lambda snapshot: snapshot.cpm,
     )
     frequency_thresholds = await _load_frequency_thresholds_by_offer(
         db,
-        offer_codes={snapshot.resolved_offer_code for snapshot in snapshots if snapshot.resolved_offer_code},
+        offer_codes={
+            snapshot.resolved_offer_code for snapshot in snapshots if snapshot.resolved_offer_code
+        },
     )
 
     diagnostics_map: dict[str, AdDiagnosticsSchema] = {}
     for snapshot in snapshots:
+        offer_code_key = _offer_code_lookup_key(snapshot.resolved_offer_code)
         elevated_threshold, critical_threshold = frequency_thresholds.get(
-            snapshot.resolved_offer_code or "",
+            offer_code_key,
             (Decimal("2"), Decimal("3")),
         )
         diagnostics = build_ad_quality_diagnostics(
             cpm_value=snapshot.cpm,
-            cpm_baseline=cpm_baselines.get(snapshot.resolved_offer_code or ""),
+            cpm_baseline=cpm_baselines.get(offer_code_key),
             frequency_value=snapshot.frequency,
             frequency_elevated_threshold=elevated_threshold,
             frequency_critical_threshold=critical_threshold,
@@ -1250,7 +2660,10 @@ async def get_dashboard_stats(db: AsyncSession = Depends(get_db)):
             claimed = cnt
 
     # Активные офферы + задачи на отключение
-    cabinet_day_start = await _get_cabinet_day_start(db)
+    observer_row = await db.scalar(
+        select(ObserverSettings).where(ObserverSettings.singleton_key == "default")
+    )
+    cabinet_day_start = observer_row.cabinet_day_started_at if observer_row else None
     # Если zero-scan ещё ни разу не был зафиксирован, считаем только по актуальной скан-сессии,
     # чтобы не тащить вчерашние значения из календарной полуночи.
     disabled_since = cabinet_day_start or scan_cutoff
@@ -1262,7 +2675,59 @@ async def get_dashboard_stats(db: AsyncSession = Depends(get_db)):
         await db.scalar(
             select(func.count())
             .select_from(DisableTask)
-            .where(DisableTask.status.in_([DisableTaskStatus.PENDING, DisableTaskStatus.RETRYING, DisableTaskStatus.RUNNING]))
+            .where(
+                DisableTask.status.in_(
+                    [
+                        DisableTaskStatus.PENDING,
+                        DisableTaskStatus.RETRYING,
+                        DisableTaskStatus.RUNNING,
+                    ]
+                )
+            )
+        )
+        or 0
+    )
+    pending_enable_tasks = (
+        await db.scalar(
+            (
+                select(func.count())
+                .select_from(EnableTask)
+                .join(
+                    EnableRecommendationEvent,
+                    EnableRecommendationEvent.id == EnableTask.recommendation_event_id,
+                    isouter=True,
+                )
+                .where(
+                    EnableTask.status.in_(
+                        [
+                            EnableTaskStatus.PENDING,
+                            EnableTaskStatus.RETRYING,
+                            EnableTaskStatus.RUNNING,
+                        ]
+                    )
+                )
+                .where(
+                    or_(
+                        EnableRecommendationEvent.live_batch_started_at >= cabinet_day_start,
+                        and_(
+                            EnableRecommendationEvent.id.is_(None),
+                            EnableTask.created_at >= cabinet_day_start,
+                        ),
+                    )
+                )
+            )
+            if cabinet_day_start is not None
+            else select(func.count())
+            .select_from(EnableTask)
+            .where(
+                EnableTask.status.in_(
+                    [
+                        EnableTaskStatus.PENDING,
+                        EnableTaskStatus.RETRYING,
+                        EnableTaskStatus.RUNNING,
+                    ]
+                )
+            )
         )
         or 0
     )
@@ -1277,6 +2742,22 @@ async def get_dashboard_stats(db: AsyncSession = Depends(get_db)):
         )
         or 0
     )
+    _, current_enable_recommendations = await _load_current_enable_recommendations(db)
+    enable_recommendations_ok = sum(
+        1
+        for row in current_enable_recommendations
+        if row.candidate.recommendation_level == EnableRecommendationLevel.OK
+    )
+    enable_recommendations_early_signal = sum(
+        1
+        for row in current_enable_recommendations
+        if row.candidate.recommendation_level == EnableRecommendationLevel.EARLY_SIGNAL
+    )
+    enable_recommendations_warning = sum(
+        1
+        for row in current_enable_recommendations
+        if row.candidate.recommendation_level == EnableRecommendationLevel.WARNING
+    )
 
     return DashboardStatsSchema(
         total_ads_monitored=total,
@@ -1290,7 +2771,12 @@ async def get_dashboard_stats(db: AsyncSession = Depends(get_db)):
         total_spend=total_spend,
         active_offers=active_offers,
         pending_disable_tasks=pending_tasks,
+        pending_enable_tasks=pending_enable_tasks,
+        enable_recommendations_ok=enable_recommendations_ok,
+        enable_recommendations_early_signal=enable_recommendations_early_signal,
+        enable_recommendations_warning=enable_recommendations_warning,
         last_scan_at=last_scan_str,
+        **_serialize_observer_runtime_fields(observer_row),
     )
 
 
@@ -1339,7 +2825,9 @@ async def list_ad_snapshots(
     if alert_state:
         q = q.where(AdSnapshot.alert_state == AlertState(alert_state))
     if offer_code:
-        q = q.where(AdSnapshot.resolved_offer_code == offer_code)
+        q = q.where(
+            func.lower(AdSnapshot.resolved_offer_code) == _offer_code_lookup_key(offer_code)
+        )
     if since_hours is not None:
         cutoff = datetime.now(UTC) - timedelta(hours=since_hours)
         q = q.where(AdSnapshot.last_observed_at >= cutoff)
@@ -1358,11 +2846,16 @@ async def list_ad_snapshots(
             delivery_status=s.delivery_status,
             offer_code=s.resolved_offer_code,
             spend=s.spend,
+            budget=getattr(s, "budget", "") or "",
+            reach=int(getattr(s, "reach", 0) or 0),
+            impressions=int(getattr(s, "impressions", 0) or 0),
             clicks=s.clicks,
             cpc=s.cpc,
+            ctr=getattr(s, "ctr", None),
             outbound_clicks=s.outbound_clicks,
             outbound_ctr=s.outbound_ctr,
             landing_page_views=s.landing_page_views,
+            cost_per_result=getattr(s, "cost_per_result", None),
             cost_per_landing_page_view=s.cost_per_landing_page_view,
             cpm=s.cpm,
             frequency=s.frequency,
@@ -1376,9 +2869,13 @@ async def list_ad_snapshots(
             early_signal_rule_codes=s.early_signal_rule_codes or [],
             warning_rule_codes=s.warning_rule_codes or [],
             stop_rule_codes=s.stop_rule_codes or [],
-            cpm_diagnostic_status=diagnostics_map[s.fb_ad_id].cpm.status if s.fb_ad_id in diagnostics_map else None,
+            cpm_diagnostic_status=diagnostics_map[s.fb_ad_id].cpm.status
+            if s.fb_ad_id in diagnostics_map
+            else None,
             frequency_diagnostic_status=(
-                diagnostics_map[s.fb_ad_id].frequency.status if s.fb_ad_id in diagnostics_map else None
+                diagnostics_map[s.fb_ad_id].frequency.status
+                if s.fb_ad_id in diagnostics_map
+                else None
             ),
             diagnostic_short_text=(
                 diagnostics_map[s.fb_ad_id].summary_text if s.fb_ad_id in diagnostics_map else None
@@ -1387,6 +2884,82 @@ async def list_ad_snapshots(
         )
         for s in snapshots
     ]
+
+
+@app.get("/api/dashboard/incidents", response_model=list[ActiveIncidentSchema])
+async def list_active_incidents(
+    fb_ad_id: str | None = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+):
+    """Текущие открытые инциденты из актуальной скан-сессии."""
+    last_scan = await db.scalar(select(func.max(AdSnapshot.last_observed_at)))
+    scan_cutoff = _current_scan_cutoff(last_scan)
+
+    snapshot_query = (
+        select(AdSnapshot)
+        .where(
+            AdSnapshot.last_observed_at >= scan_cutoff,
+            AdSnapshot.alert_state.in_(
+                [
+                    AlertState.EARLY_SIGNAL_SENT,
+                    AlertState.WARNING_SENT,
+                    AlertState.STOP_SENT,
+                    AlertState.CLAIMED,
+                ]
+            ),
+        )
+        .order_by(AdSnapshot.last_observed_at.desc())
+    )
+    if fb_ad_id:
+        snapshot_query = snapshot_query.where(AdSnapshot.fb_ad_id == fb_ad_id)
+
+    snapshots = (await db.execute(snapshot_query)).scalars().all()
+    if not snapshots:
+        return []
+
+    fb_ad_ids = [snapshot.fb_ad_id for snapshot in snapshots]
+    alert_events = (
+        (
+            await db.execute(
+                select(AlertEvent)
+                .where(AlertEvent.fb_ad_id.in_(fb_ad_ids))
+                .order_by(AlertEvent.created_at.desc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    disable_tasks = (
+        (
+            await db.execute(
+                select(DisableTask)
+                .where(DisableTask.fb_ad_id.in_(fb_ad_ids))
+                .order_by(DisableTask.updated_at.desc(), DisableTask.created_at.desc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    events_by_ad: dict[str, list[AlertEvent]] = {}
+    for event in alert_events:
+        events_by_ad.setdefault(event.fb_ad_id, []).append(event)
+
+    tasks_by_ad: dict[str, list[DisableTask]] = {}
+    for task in disable_tasks:
+        tasks_by_ad.setdefault(task.fb_ad_id, []).append(task)
+
+    incidents = [
+        _build_active_incident_schema(
+            snapshot,
+            alert_events=events_by_ad.get(snapshot.fb_ad_id, []),
+            disable_tasks=tasks_by_ad.get(snapshot.fb_ad_id, []),
+        )
+        for snapshot in snapshots
+    ]
+    incidents.sort(key=lambda incident: incident.last_activity_at, reverse=True)
+    return incidents[:limit]
 
 
 @app.get("/api/dashboard/alerts", response_model=list[AlertEventSchema])
@@ -1412,6 +2985,7 @@ async def list_alert_events(
     return [
         AlertEventSchema(
             id=str(e.id),
+            incident_key=e.telegram_group_key,
             fb_ad_id=e.fb_ad_id,
             ad_name=e.ad_name,
             stage=e.stage.value,
@@ -1426,18 +3000,35 @@ async def list_alert_events(
     ]
 
 
+def _is_disable_task_stale_for_manual_restart(task: DisableTask, *, now: datetime) -> bool:
+    """Проверяет, что RUNNING-задача действительно зависла."""
+    last_activity_at = task.updated_at or task.created_at
+    return last_activity_at <= now - DISABLE_TASK_STALE_TIMEOUT
+
+
 @app.post("/api/dashboard/disable-tasks/{task_id}/retry")
 async def retry_disable_task(task_id: str, db: AsyncSession = Depends(get_db)):
-    """Принудительный повтор задачи на отключение — сбрасывает таймер retry."""
+    """Принудительно возвращает задачу отключения в очередь."""
     result = await db.execute(select(DisableTask).where(DisableTask.id == task_id))
     task = result.scalar_one_or_none()
     if not task:
         raise HTTPException(status_code=404, detail="Задача не найдена")
-    if task.status not in (DisableTaskStatus.RETRYING, DisableTaskStatus.FAILED):
-        raise HTTPException(status_code=400, detail="Задача не в состоянии retry/failed")
+
+    now = datetime.now(UTC)
+    if task.status == DisableTaskStatus.RUNNING:
+        if not _is_disable_task_stale_for_manual_restart(task, now=now):
+            raise HTTPException(
+                status_code=400, detail="Задача ещё выполняется и не считается зависшей"
+            )
+    elif task.status not in (DisableTaskStatus.RETRYING, DisableTaskStatus.FAILED):
+        raise HTTPException(
+            status_code=400, detail="Задача не в состоянии retry/failed/stale-running"
+        )
+
     task.status = DisableTaskStatus.PENDING
     task.next_retry_at = None
     task.last_error = None
+    task.completed_at = None
     await db.commit()
     return {"ok": True}
 
@@ -1450,28 +3041,119 @@ async def list_disable_tasks(
     db: AsyncSession = Depends(get_db),
 ):
     """Задачи на отключение (для мониторинга)."""
-    q = select(DisableTask).order_by(DisableTask.created_at.desc())
+    q = select(DisableTask).order_by(DisableTask.updated_at.desc(), DisableTask.created_at.desc())
     if status:
         q = q.where(DisableTask.status == DisableTaskStatus(status))
+    else:
+        q = q.where(
+            DisableTask.status.in_(
+                [
+                    DisableTaskStatus.PENDING,
+                    DisableTaskStatus.RUNNING,
+                    DisableTaskStatus.RETRYING,
+                    DisableTaskStatus.FAILED,
+                ]
+            )
+        )
     q = q.limit(limit).offset(offset)
 
     result = await db.execute(q)
     tasks = result.scalars().all()
+    return [_serialize_disable_task(t) for t in tasks]
+
+
+@app.get(
+    "/api/dashboard/enable-recommendations",
+    response_model=list[EnableRecommendationEventSchema],
+)
+async def list_enable_recommendations(
+    limit: int = Query(20, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+):
+    """Рекомендации на включение из текущего живого батча."""
+    current_batch_marker, rows = await _load_current_enable_recommendations(db, limit=limit)
+    if not rows:
+        return []
+
+    event_ids = [row.event.id for row in rows]
+    tasks_result = await db.execute(
+        select(EnableTask)
+        .where(EnableTask.recommendation_event_id.in_(event_ids))
+        .order_by(EnableTask.created_at.desc())
+    )
+    task_by_event_id: dict[_uuid.UUID, EnableTask] = {}
+    for task in tasks_result.scalars().all():
+        if task.recommendation_event_id and task.recommendation_event_id not in task_by_event_id:
+            task_by_event_id[task.recommendation_event_id] = task
+
     return [
-        DisableTaskSchema(
-            id=str(t.id),
-            fb_ad_id=t.fb_ad_id,
-            ad_name=t.ad_name,
-            status=t.status.value,
-            attempt_count=t.attempt_count,
-            last_error=t.last_error,
-            next_retry_at=t.next_retry_at.isoformat() if t.next_retry_at else None,
-            requested_by_username=t.requested_by_username,
-            created_at=t.created_at.isoformat(),
-            completed_at=t.completed_at.isoformat() if t.completed_at else None,
+        _serialize_enable_recommendation_event(
+            row.event,
+            current_batch_marker=current_batch_marker,
+            related_task=task_by_event_id.get(row.event.id),
+            current_snapshot=row.snapshot,
+            live_candidate=row.candidate,
         )
-        for t in tasks
+        for row in rows
     ]
+
+
+@app.post("/api/dashboard/enable-recommendations/{event_id}/enable")
+async def create_enable_task_from_recommendation(
+    event_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Создаёт или переиспользует задачу на включение по recommendation event."""
+    result = await promote_recommendation_to_enable_task(
+        db,
+        event_id=event_id,
+        requested_by_username="dashboard",
+    )
+    if result.outcome in {"recommendation_not_found", "snapshot_not_found"}:
+        raise HTTPException(status_code=404, detail=result.detail)
+    if result.outcome not in {"created", "existing", "requeued"}:
+        raise HTTPException(status_code=409, detail=result.detail)
+
+    await db.commit()
+    task = None
+    if result.task_id:
+        task = await db.scalar(
+            select(EnableTask).where(EnableTask.id == _uuid.UUID(result.task_id))
+        )
+
+    return {
+        "ok": True,
+        "created_new": result.created_new,
+        "detail": result.detail,
+        "task": _serialize_enable_task(task).model_dump() if task else None,
+    }
+
+
+@app.get("/api/dashboard/enable-tasks", response_model=list[EnableTaskSchema])
+async def list_enable_tasks(
+    status: str | None = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+):
+    """Задачи на включение для мониторинга.
+
+    По умолчанию показываем только актуальную последнюю задачу на каждое объявление,
+    чтобы старые ошибки не маскировались под текущее состояние после успешного повтора.
+    """
+    if status:
+        q = (
+            select(EnableTask)
+            .where(EnableTask.status == EnableTaskStatus(status))
+            .order_by(EnableTask.updated_at.desc(), EnableTask.created_at.desc())
+        )
+    else:
+        q = _build_current_enable_tasks_query(created_since=await _get_cabinet_day_start(db))
+    q = q.limit(limit).offset(offset)
+
+    result = await db.execute(q)
+    tasks = result.scalars().all()
+    return [_serialize_enable_task(task) for task in tasks]
 
 
 @app.get("/api/dashboard/spend-history", response_model=list[SpendHistoryPoint])
@@ -1489,7 +3171,9 @@ async def get_spend_history(
         .order_by(AdSnapshot.last_observed_at.asc())
     )
     if offer_code:
-        q = q.where(AdSnapshot.resolved_offer_code == offer_code)
+        q = q.where(
+            func.lower(AdSnapshot.resolved_offer_code) == _offer_code_lookup_key(offer_code)
+        )
 
     result = await db.execute(q)
     snapshots = result.scalars().all()
@@ -1547,40 +3231,16 @@ async def get_chart_data(
                 alerts_timeline[bucket]["warning"] += 1
             elif stage == AlertStage.STOP:
                 alerts_timeline[bucket]["stop"] += 1
-    alerts_by_hour = [
-        row for _, row in sorted(alerts_timeline.items(), key=lambda item: item[0])
-    ]
+    alerts_by_hour = [row for _, row in sorted(alerts_timeline.items(), key=lambda item: item[0])]
 
-    # 2. Нарушения правил за выбранный период
-    _rule_labels = {
-        "cpc_stop": "Дорогой клик",
-        "cpl_stop": "Дорогой лид",
-        "cpr_stop": "Дорогая рега",
-        "regs_no_dep_stop": "Реги без депозитов",
-        "spend_no_dep_range": "Расход без депа",
-        "spend_with_dep_range": "Расход с депозитом",
-    }
-    rules_result = await db.execute(
-        select(AlertEvent.matched_rule_codes).where(AlertEvent.created_at >= event_cutoff)
-    )
-    rule_counts: dict[str, int] = {}
-    for (codes,) in rules_result.all():
-        if codes:
-            for code in codes:
-                rule_counts[code] = rule_counts.get(code, 0) + 1
-    rule_violations = sorted(
-        [{"rule": _rule_labels.get(k, k), "count": v} for k, v in rule_counts.items()],
-        key=lambda x: x["count"],
-        reverse=True,
-    )
-
-    # 3. Кампании за период собираем тем же способом, что верхний performance-блок.
+    # 2. Кампании за период собираем тем же способом, что верхний performance-блок.
     snapshot_result = await db.execute(
         select(AdSnapshot)
         .where(AdSnapshot.last_observed_at >= snapshot_cutoff)
         .order_by(AdSnapshot.last_observed_at.asc())
     )
     snapshots = snapshot_result.scalars().all()
+    rule_violations = _build_current_risk_reason_rows(snapshots)
     archives = []
     if period != "today":
         archives = await _load_dashboard_archives(db, cutoff=history_cutoff)
@@ -1591,6 +3251,7 @@ async def get_chart_data(
         cutoff=history_cutoff,
         archives=archives,
     )
+    offer_rule_map = await _load_offer_rules_for_snapshots(db, snapshots)
     campaigns = [
         {
             "campaign": row.campaign[:30] + "…" if len(row.campaign) > 30 else row.campaign,
@@ -1602,8 +3263,9 @@ async def get_chart_data(
         }
         for row in performance_payload.campaigns[:10]
     ]
+    campaign_budget_deltas = _build_campaign_stop_overrun_rows(snapshots, offer_rule_map)
 
-    # 4. Распределение статусов — только по актуальному живому срезу.
+    # 3. Распределение статусов — только по актуальному живому срезу.
     state_result = await db.execute(
         select(AdSnapshot.alert_state, func.count().label("cnt"))
         .where(AdSnapshot.last_observed_at >= snapshot_cutoff)
@@ -1622,14 +3284,14 @@ async def get_chart_data(
         for state, cnt in state_result.all()
     ]
 
-    # 5. Топ объявлений по расходу — текущий живой срез, без исторического режима.
+    # 4. Топ объявлений по расходу — текущий живой срез, без исторического режима.
     top_ads_result = await db.execute(
         select(
             AdSnapshot.ad_name,
             AdSnapshot.adset_name,
             AdSnapshot.fb_ad_id,
             AdSnapshot.spend,
-            AdSnapshot.cpc,
+            AdSnapshot.clicks,
             AdSnapshot.leads,
             AdSnapshot.deposits,
             AdSnapshot.alert_state,
@@ -1652,14 +3314,16 @@ async def get_chart_data(
             "name": row.ad_name[:25] + "…" if len(row.ad_name) > 25 else row.ad_name,
             "name_full": row.ad_name,
             "adset_name": row.adset_name,
-            "adset_short": row.adset_name[:18] + "…" if len(row.adset_name) > 18 else row.adset_name,
+            "adset_short": row.adset_name[:18] + "…"
+            if len(row.adset_name) > 18
+            else row.adset_name,
             "label": (
                 f"{row.ad_name[:16] + '…' if len(row.ad_name) > 16 else row.ad_name} · "
                 f"{row.adset_name[:10] + '…' if len(row.adset_name) > 10 else row.adset_name}"
             ),
             "fb_ad_id": row.fb_ad_id,
             "spend": float(row.spend or 0),
-            "cpc": float(row.cpc) if row.cpc else None,
+            "clicks": int(row.clicks or 0),
             "leads": int(row.leads or 0),
             "deposits": int(row.deposits or 0),
             "state": row.alert_state.value if row.alert_state else "NORMAL",
@@ -1674,6 +3338,8 @@ async def get_chart_data(
         campaigns=campaigns,
         state_distribution=state_distribution,
         top_ads_by_spend=top_ads_by_spend,
+        campaign_budget_deltas=campaign_budget_deltas,
+        campaign_stop_overruns=campaign_budget_deltas,
     )
 
 
@@ -1686,9 +3352,7 @@ async def get_chart_data(
 async def get_ad_timeline(fb_ad_id: str, db: AsyncSession = Depends(get_db)):
     """Таймлайн событий по одному объявлению: алерты, метрики на каждый момент, динамика расхода."""
     # Текущий снэпшот
-    snapshot_result = await db.execute(
-        select(AdSnapshot).where(AdSnapshot.fb_ad_id == fb_ad_id)
-    )
+    snapshot_result = await db.execute(select(AdSnapshot).where(AdSnapshot.fb_ad_id == fb_ad_id))
     snapshot = snapshot_result.scalar_one_or_none()
 
     # История алертов
@@ -1707,46 +3371,129 @@ async def get_ad_timeline(fb_ad_id: str, db: AsyncSession = Depends(get_db)):
     )
     tasks = tasks_result.scalars().all()
 
+    recommendation_events_result = await db.execute(
+        select(EnableRecommendationEvent)
+        .where(EnableRecommendationEvent.fb_ad_id == fb_ad_id)
+        .order_by(EnableRecommendationEvent.created_at.desc())
+    )
+    recommendation_events = recommendation_events_result.scalars().all()
+
+    enable_tasks_result = await db.execute(
+        select(EnableTask)
+        .where(EnableTask.fb_ad_id == fb_ad_id)
+        .order_by(EnableTask.created_at.desc())
+    )
+    enable_tasks = enable_tasks_result.scalars().all()
+
     diagnostics = None
     if snapshot is not None:
         diagnostics_map = await _build_snapshot_diagnostics_map(db, [snapshot])
         diagnostics = diagnostics_map.get(snapshot.fb_ad_id)
+    current_incident_key = _incident_key_for_snapshot(snapshot) if snapshot is not None else None
+    current_incident = (
+        _build_active_incident_schema(
+            snapshot,
+            alert_events=events,
+            disable_tasks=tasks,
+        )
+        if snapshot is not None
+        and snapshot.alert_state
+        in (
+            AlertState.EARLY_SIGNAL_SENT,
+            AlertState.WARNING_SENT,
+            AlertState.STOP_SENT,
+            AlertState.CLAIMED,
+        )
+        else None
+    )
 
     # Формируем таймлайн: объединяем алерты и задачи по времени
     timeline = []
     for e in events:
         m = e.metrics_json or {}
-        timeline.append({
-            "type": "alert",
-            "time": e.created_at.isoformat(),
-            "stage": e.stage.value if e.stage else None,
-            "state": e.state.value if e.state else None,
-            "matched_rules": e.matched_rule_codes or [],
-            "reason_title": e.reason_title,
-            "reason_text": e.reason_text,
-            "spend": m.get("spend"),
-            "clicks": m.get("clicks"),
-            "cpc": m.get("cpc"),
-            "outbound_clicks": m.get("outbound_clicks"),
-            "outbound_ctr": m.get("outbound_ctr"),
-            "landing_page_views": m.get("landing_page_views"),
-            "cost_per_landing_page_view": m.get("cost_per_landing_page_view"),
-            "cpm": m.get("cpm"),
-            "frequency": m.get("frequency"),
-            "leads": m.get("leads"),
-            "registrations": m.get("registrations"),
-            "deposits": m.get("deposits"),
-        })
+        timeline.append(
+            {
+                "type": "alert",
+                "time": e.created_at.isoformat(),
+                "stage": e.stage.value if e.stage else None,
+                "state": e.state.value if e.state else None,
+                "incident_key": e.telegram_group_key,
+                "current_incident": bool(
+                    current_incident_key and e.telegram_group_key == current_incident_key
+                ),
+                "matched_rules": e.matched_rule_codes or [],
+                "reason_title": e.reason_title,
+                "reason_text": e.reason_text,
+                "spend": m.get("spend"),
+                "budget": m.get("budget"),
+                "reach": m.get("reach"),
+                "impressions": m.get("impressions"),
+                "clicks": m.get("clicks"),
+                "cpc": m.get("cpc"),
+                "ctr": m.get("ctr"),
+                "outbound_clicks": m.get("outbound_clicks"),
+                "outbound_ctr": m.get("outbound_ctr"),
+                "landing_page_views": m.get("landing_page_views"),
+                "cost_per_result": m.get("cost_per_result"),
+                "cost_per_landing_page_view": m.get("cost_per_landing_page_view"),
+                "cpm": m.get("cpm"),
+                "frequency": m.get("frequency"),
+                "leads": m.get("leads"),
+                "registrations": m.get("registrations"),
+                "cost_per_registration": m.get("cost_per_registration"),
+                "deposits": m.get("deposits"),
+            }
+        )
     for t in tasks:
-        timeline.append({
-            "type": "disable_task",
-            "time": t.created_at.isoformat(),
-            "status": t.status.value,
-            "attempt_count": t.attempt_count,
-            "requested_by": t.requested_by_username,
-            "completed_at": t.completed_at.isoformat() if t.completed_at else None,
-            "last_error": t.last_error,
-        })
+        timeline.append(
+            {
+                "type": "disable_task",
+                "time": t.created_at.isoformat(),
+                "incident_key": t.open_state_token,
+                "current_incident": bool(
+                    current_incident_key and t.open_state_token == current_incident_key
+                ),
+                "status": t.status.value,
+                "attempt_count": t.attempt_count,
+                "requested_by": t.requested_by_username,
+                "updated_at": t.updated_at.isoformat() if t.updated_at else None,
+                "completed_at": t.completed_at.isoformat() if t.completed_at else None,
+                "last_error": t.last_error,
+            }
+        )
+    for event in recommendation_events:
+        reason_title, reason_text = _normalize_enable_recommendation_reason(
+            recommendation_level=event.recommendation_level,
+            reason_title=event.reason_title,
+            reason_text=event.reason_text,
+        )
+        timeline.append(
+            {
+                "type": "enable_recommendation",
+                "time": event.created_at.isoformat(),
+                "recommendation_level": event.recommendation_level.value,
+                "delivery_status": event.delivery_status,
+                "matched_rule_codes": event.matched_rule_codes or [],
+                "reason_title": reason_title,
+                "reason_text": reason_text,
+                "metrics_json": event.metrics_json or {},
+            }
+        )
+    for task in enable_tasks:
+        timeline.append(
+            {
+                "type": "enable_task",
+                "time": task.created_at.isoformat(),
+                "status": task.status.value,
+                "attempt_count": task.attempt_count,
+                "requested_by": task.requested_by_username,
+                "recommendation_event_id": (
+                    str(task.recommendation_event_id) if task.recommendation_event_id else None
+                ),
+                "completed_at": task.completed_at.isoformat() if task.completed_at else None,
+                "last_error": task.last_error,
+            }
+        )
 
     # Показываем новые события сверху, чтобы таймлайн читался как журнал.
     timeline.sort(key=lambda x: x["time"], reverse=True)
@@ -1758,22 +3505,43 @@ async def get_ad_timeline(fb_ad_id: str, db: AsyncSession = Depends(get_db)):
         "adset_name": snapshot.adset_name if snapshot else None,
         "current_state": snapshot.alert_state.value if snapshot else None,
         "delivery_status": snapshot.delivery_status if snapshot else None,
+        "current_incident": current_incident.model_dump() if current_incident else None,
         "current_metrics": {
             "spend": str(snapshot.spend) if snapshot else None,
+            "budget": getattr(snapshot, "budget", None) if snapshot else None,
+            "reach": getattr(snapshot, "reach", None) if snapshot else None,
+            "impressions": getattr(snapshot, "impressions", None) if snapshot else None,
             "clicks": snapshot.clicks if snapshot else None,
             "cpc": str(snapshot.cpc) if snapshot and snapshot.cpc is not None else None,
+            "ctr": (
+                str(snapshot.ctr)
+                if snapshot and getattr(snapshot, "ctr", None) is not None
+                else None
+            ),
+            "delivery_status": snapshot.delivery_status if snapshot else None,
             "outbound_clicks": snapshot.outbound_clicks if snapshot else None,
-            "outbound_ctr": str(snapshot.outbound_ctr) if snapshot and snapshot.outbound_ctr is not None else None,
+            "outbound_ctr": str(snapshot.outbound_ctr)
+            if snapshot and snapshot.outbound_ctr is not None
+            else None,
             "landing_page_views": snapshot.landing_page_views if snapshot else None,
+            "cost_per_result": (
+                str(snapshot.cost_per_result)
+                if snapshot and getattr(snapshot, "cost_per_result", None) is not None
+                else None
+            ),
             "cost_per_landing_page_view": (
                 str(snapshot.cost_per_landing_page_view)
                 if snapshot and snapshot.cost_per_landing_page_view is not None
                 else None
             ),
             "cpm": str(snapshot.cpm) if snapshot and snapshot.cpm is not None else None,
-            "frequency": str(snapshot.frequency) if snapshot and snapshot.frequency is not None else None,
+            "frequency": str(snapshot.frequency)
+            if snapshot and snapshot.frequency is not None
+            else None,
             "leads": snapshot.leads if snapshot else None,
-            "cost_per_lead": str(snapshot.cost_per_lead) if snapshot and snapshot.cost_per_lead is not None else None,
+            "cost_per_lead": str(snapshot.cost_per_lead)
+            if snapshot and snapshot.cost_per_lead is not None
+            else None,
             "registrations": snapshot.registrations if snapshot else None,
             "cost_per_registration": (
                 str(snapshot.cost_per_registration)
@@ -1781,7 +3549,9 @@ async def get_ad_timeline(fb_ad_id: str, db: AsyncSession = Depends(get_db)):
                 else None
             ),
             "deposits": snapshot.deposits if snapshot else None,
-        } if snapshot else None,
+        }
+        if snapshot
+        else None,
         "diagnostics": diagnostics.model_dump() if diagnostics else None,
         "last_observed_at": snapshot.last_observed_at.isoformat() if snapshot else None,
         "timeline": timeline,
@@ -1837,26 +3607,80 @@ async def update_vision_settings(
 
 @app.post("/api/vision/reconnect")
 async def vision_reconnect(db: AsyncSession = Depends(get_db)):
-    """Запросить переподключение к Vision браузеру (флаг для observer).
-
-    Observer подхватит флаг в следующем цикле сканирования и вызовет
-    browser_manager.disconnect() + connect(). Требует, чтобы observer был запущен.
-    """
+    """Немедленно перезапустить профиль Vision и попросить observer переподключиться."""
     result = await db.execute(
         select(VisionSettings).where(VisionSettings.singleton_key == "default")
     )
     row = result.scalar_one_or_none()
     if row is None:
-        row = VisionSettings(singleton_key="default")
-        db.add(row)
-    row.reconnect_requested = True
-    await db.commit()
+        raise HTTPException(status_code=400, detail="Настройки Vision ещё не сохранены")
+
+    if not row.x_token_encrypted:
+        raise HTTPException(status_code=400, detail="Vision X-Token не настроен")
+    if not row.profile_id:
+        raise HTTPException(status_code=400, detail="Не выбран профиль Vision")
+
+    x_token = decrypt(row.x_token_encrypted)
+    if not x_token:
+        raise HTTPException(status_code=400, detail="Не удалось расшифровать Vision X-Token")
+
+    old_observer_pid = await _stop_observer_process()
+    client = VisionClient(x_token=x_token, base_url=row.api_url)
+    profile_port: int | None = None
+    new_observer_pid: int | None = None
+    reconnect_error: HTTPException | None = None
+
+    try:
+        folder_id = await client.resolve_folder_id(row.profile_id)
+        try:
+            await client.stop_profile(folder_id, row.profile_id)
+        except Exception:
+            # Профиль мог уже быть остановлен, это не должно ломать повторный старт.
+            pass
+
+        stopped = await client.wait_until_profile_stopped(row.profile_id)
+        if not stopped:
+            raise RuntimeError(f"Vision не остановил профиль {row.profile_id} после команды stop")
+        profile = await client.start_profile(folder_id, row.profile_id)
+        profile_port = profile.port
+        row.reconnect_requested = True
+        await db.commit()
+    except HTTPException as exc:
+        reconnect_error = exc
+    except Exception as exc:
+        reconnect_error = HTTPException(
+            status_code=502,
+            detail=f"Не удалось перезапустить профиль Vision: {exc}",
+        )
+    finally:
+        await client.close()
+        new_observer_pid = await _start_observer_process(
+            reason="Ручное переподключение Vision через UI"
+        )
+
+    if reconnect_error is not None:
+        raise reconnect_error
+
+    if profile_port is not None:
+        return {
+            "ok": True,
+            "message": (
+                "Observer был временно остановлен, профиль Vision перезапущен, "
+                "воркер запущен заново."
+            ),
+            "port": profile_port,
+            "old_observer_pid": old_observer_pid,
+            "new_observer_pid": new_observer_pid,
+        }
+
     return {
         "ok": True,
         "message": (
-            "Флаг переподключения установлен. "
-            "Observer выполнит reconnect в следующем цикле сканирования."
+            "Observer был перезапущен, профиль Vision тоже перезапущен, "
+            "но CDP-порт пока не появился."
         ),
+        "old_observer_pid": old_observer_pid,
+        "new_observer_pid": new_observer_pid,
     }
 
 
@@ -1889,12 +3713,14 @@ async def get_vision_profiles(db: AsyncSession = Depends(get_db)):
         raw = data.get("profiles") if isinstance(data, dict) else data
         profiles = []
         for item in raw if isinstance(raw, list) else []:
-            profiles.append({
-                "folder_id": item.get("folder_id", ""),
-                "profile_id": item.get("profile_id", ""),
-                "name": item.get("name") or item.get("profile_id", ""),
-                "port": item.get("port"),
-            })
+            profiles.append(
+                {
+                    "folder_id": item.get("folder_id", ""),
+                    "profile_id": item.get("profile_id", ""),
+                    "name": item.get("name") or item.get("profile_id", ""),
+                    "port": item.get("port"),
+                }
+            )
         return profiles
     except httpx.RequestError as e:
         raise HTTPException(
@@ -1909,7 +3735,7 @@ async def get_vision_profiles(db: AsyncSession = Depends(get_db)):
 
 @app.get("/api/settings/telegram/recipients", response_model=list[TelegramRecipientSchema])
 async def list_telegram_recipients(db: AsyncSession = Depends(get_db)):
-    """Список авторизованных получателей Telegram-уведомлений."""
+    """Список дополнительных получателей Telegram-уведомлений."""
     result = await db.execute(
         select(TelegramRecipient).order_by(TelegramRecipient.created_at.asc())
     )
@@ -1918,8 +3744,11 @@ async def list_telegram_recipients(db: AsyncSession = Depends(get_db)):
         TelegramRecipientSchema(
             id=str(r.id),
             chat_id=r.chat_id,
+            masked_chat_id=mask_chat_id(r.chat_id),
+            telegram_user_id=r.telegram_user_id,
             username=r.username,
             first_name=r.first_name,
+            role=r.role or TelegramUserRole.RECIPIENT.value,
             is_active=r.is_active,
             created_at=r.created_at.isoformat(),
         )
@@ -1928,9 +3757,7 @@ async def list_telegram_recipients(db: AsyncSession = Depends(get_db)):
 
 
 @app.delete("/api/settings/telegram/recipients/{recipient_id}")
-async def delete_telegram_recipient(
-    recipient_id: str, db: AsyncSession = Depends(get_db)
-):
+async def delete_telegram_recipient(recipient_id: str, db: AsyncSession = Depends(get_db)):
     """Удалить получателя Telegram-уведомлений."""
     result = await db.execute(
         select(TelegramRecipient).where(TelegramRecipient.id == _uuid.UUID(recipient_id))
@@ -1946,20 +3773,32 @@ async def delete_telegram_recipient(
 @app.post("/api/settings/telegram/recipients/invite", response_model=InviteCodeResponse)
 async def create_invite_code(db: AsyncSession = Depends(get_db)):
     """Сгенерировать одноразовый код для добавления нового получателя."""
-    result = await db.execute(
+    row = await db.scalar(
         select(TelegramSettings).where(TelegramSettings.singleton_key == "default")
     )
-    row = result.scalar_one_or_none()
     if row is None or not row.is_authorized:
         raise HTTPException(status_code=400, detail="Telegram-бот не настроен")
+    if not is_forum_delivery_mode(getattr(row, "delivery_mode", None)):
+        raise HTTPException(
+            status_code=400, detail="Инвайты доступны только после cutover в группу"
+        )
+    if not forum_topics_ready(row):
+        raise HTTPException(status_code=400, detail="Forum topics ещё не готовы")
 
-    # Генерируем 6-значный код
-    code = str(secrets.randbelow(900000) + 100000)
-
-    # Добавляем в список pending_codes
-    current_codes = list(row.pending_codes or [])
-    current_codes.append(code)
-    row.pending_codes = current_codes
+    invite = await create_telegram_invite(
+        db,
+        role=TelegramUserRole.RECIPIENT.value,
+        created_by_telegram_user_id=row.owner_telegram_user_id or "",
+        created_by_username=row.owner_username or "",
+    )
     await db.commit()
 
-    return InviteCodeResponse(code=code, bot_username=row.bot_username)
+    return InviteCodeResponse(
+        code=invite.code,
+        bot_username=row.bot_username or "",
+        role=invite.role or TelegramUserRole.RECIPIENT.value,
+        expires_at=invite.expires_at.isoformat() if invite.expires_at else None,
+        deep_link="",
+        activation_command=_activation_command(invite.code),
+        activation_target=CONTROL_TOPIC_NAME,
+    )

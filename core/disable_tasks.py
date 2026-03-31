@@ -6,7 +6,7 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.domain import AlertState, DisableTaskStatus
@@ -16,6 +16,8 @@ logger = logging.getLogger(__name__)
 
 DISABLE_TASK_STALE_MINUTES = 5
 DISABLE_TASK_STALE_TIMEOUT = timedelta(minutes=DISABLE_TASK_STALE_MINUTES)
+ACTIVE_DISABLE_TASK_WINDOW = timedelta(minutes=30)
+SILENT_DISABLE_INCIDENT_RETRY_LIMIT = 3
 DISABLED_DELIVERY_STATUSES = ("OFF", "NOT_DELIVERING")
 ACTIVE_DISABLE_TASK_STATUSES = (
     DisableTaskStatus.PENDING,
@@ -38,12 +40,17 @@ async def reconcile_disable_tasks(
 
     Делает две вещи:
     - завершает активные задачи, если observer уже увидел `OFF`/`NOT_DELIVERING`;
+    - отменяет задачи по объявлениям, которые уже выпали из актуальной скан-сессии;
     - возвращает застрявшие `RUNNING`-задачи в повторную обработку.
     """
     current_time = now or datetime.now(UTC)
     stale_before = current_time - DISABLE_TASK_STALE_TIMEOUT
+    last_scan = await session.scalar(select(func.max(AdSnapshot.last_observed_at)))
+    active_cutoff = last_scan - ACTIVE_DISABLE_TASK_WINDOW if last_scan is not None else None
 
     completed_ids: list[str] = []
+    repaired_ids: list[str] = []
+    cancelled_ids: list[str] = []
     retried_ids: list[str] = []
     failed_ids: list[str] = []
 
@@ -70,6 +77,68 @@ async def reconcile_disable_tasks(
         )
 
     if completed_ids:
+        await session.flush()
+
+    repaired_rows = await session.execute(
+        select(AdSnapshot, DisableTask.id)
+        .join(DisableTask, DisableTask.fb_ad_id == AdSnapshot.fb_ad_id)
+        .where(
+            DisableTask.status == DisableTaskStatus.SUCCEEDED,
+            AdSnapshot.delivery_status.in_(DISABLED_DELIVERY_STATUSES),
+            AdSnapshot.alert_state != AlertState.DISABLED,
+        )
+    )
+    repaired_seen: set[str] = set()
+    for snapshot, task_id in repaired_rows.all():
+        if snapshot.fb_ad_id in repaired_seen:
+            continue
+        snapshot.alert_state = AlertState.DISABLED
+        repaired_ids.append(snapshot.fb_ad_id)
+        repaired_seen.add(snapshot.fb_ad_id)
+        logger.info(
+            "Снэпшот %s выровнен в DISABLED по успешной задаче %s",
+            snapshot.fb_ad_id,
+            task_id,
+        )
+
+    if repaired_ids:
+        await session.flush()
+
+    if active_cutoff is not None:
+        archived_rows = await session.execute(
+            select(DisableTask, AdSnapshot)
+            .join(AdSnapshot, AdSnapshot.fb_ad_id == DisableTask.fb_ad_id, isouter=True)
+            .where(
+                DisableTask.status.in_(ACTIVE_DISABLE_TASK_STATUSES),
+                or_(
+                    AdSnapshot.id.is_(None),
+                    AdSnapshot.last_observed_at.is_(None),
+                    AdSnapshot.last_observed_at < active_cutoff,
+                ),
+            )
+        )
+        for task, snapshot in archived_rows.all():
+            task.status = DisableTaskStatus.CANCELLED
+            task.completed_at = current_time
+            task.next_retry_at = None
+            task.last_error = (
+                "Задача отменена: объявление больше не входит в актуальную скан-сессию"
+            )
+            cancelled_ids.append(task.fb_ad_id)
+            if snapshot is not None:
+                if is_delivery_disabled(snapshot.delivery_status):
+                    snapshot.alert_state = AlertState.DISABLED
+                else:
+                    snapshot.alert_state = AlertState.NORMAL
+                    if hasattr(snapshot, "open_state_token"):
+                        snapshot.open_state_token = None
+            logger.info(
+                "Задача %s для %s отменена: объявление ушло в архив текущей скан-сессии",
+                task.id,
+                task.fb_ad_id,
+            )
+
+    if cancelled_ids:
         await session.flush()
 
     stale_rows = await session.execute(
@@ -125,6 +194,8 @@ async def reconcile_disable_tasks(
 
     return {
         "completed": completed_ids,
+        "repaired": repaired_ids,
+        "cancelled": cancelled_ids,
         "retried": retried_ids,
         "failed": failed_ids,
     }

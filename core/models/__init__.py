@@ -24,7 +24,16 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from core.db.base import Base
-from core.domain import AlertStage, AlertState, DisableTaskStatus, EnableTaskStatus
+from core.domain import (
+    AlertStage,
+    AlertState,
+    DisableTaskStatus,
+    EnableRecommendationLevel,
+    EnableTaskStatus,
+    TelegramDeliveryMode,
+    TelegramNotificationStream,
+    TelegramUserRole,
+)
 
 # --- Общие миксины ---
 
@@ -61,6 +70,21 @@ _DISABLE_STATUS_ENUM = Enum(
     name="disable_task_status_enum",
     values_callable=lambda e: [i.value for i in e],
 )
+_ENABLE_RECOMMENDATION_LEVEL_ENUM = Enum(
+    EnableRecommendationLevel,
+    name="enable_recommendation_level_enum",
+    values_callable=lambda e: [i.value for i in e],
+)
+_TELEGRAM_DELIVERY_MODE_ENUM = Enum(
+    TelegramDeliveryMode,
+    name="telegram_delivery_mode_enum",
+    values_callable=lambda e: [i.value for i in e],
+)
+_TELEGRAM_NOTIFICATION_STREAM_ENUM = Enum(
+    TelegramNotificationStream,
+    name="telegram_notification_stream_enum",
+    values_callable=lambda e: [i.value for i in e],
+)
 
 
 # === Настройки Observer ===
@@ -77,12 +101,32 @@ class ObserverSettings(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     warning_percent_of_stop: Mapped[Decimal] = mapped_column(Numeric(6, 2), default=Decimal("80"))
     # Глобальный коэффициент досрочного стопа для CPA-правил. 100 = без смещения.
     stop_percent_of_base: Mapped[Decimal] = mapped_column(Numeric(6, 2), default=Decimal("100"))
+    cpc_warning_percent_of_stop: Mapped[Decimal] = mapped_column(
+        Numeric(6, 2), default=Decimal("80")
+    )
+    cpc_stop_percent_of_base: Mapped[Decimal] = mapped_column(Numeric(6, 2), default=Decimal("100"))
+    cpl_warning_percent_of_stop: Mapped[Decimal] = mapped_column(
+        Numeric(6, 2), default=Decimal("80")
+    )
+    cpl_stop_percent_of_base: Mapped[Decimal] = mapped_column(Numeric(6, 2), default=Decimal("100"))
+    cpr_warning_percent_of_stop: Mapped[Decimal] = mapped_column(
+        Numeric(6, 2), default=Decimal("80")
+    )
+    cpr_stop_percent_of_base: Mapped[Decimal] = mapped_column(Numeric(6, 2), default=Decimal("100"))
     # Флаг включения/выключения сканирования из UI
     is_scanning_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     # Флаг немедленного скана (устанавливается из UI, сбрасывается воркером)
     scan_requested: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     # Граница текущих суток кабинета, определяемая по zero-scan в observer
-    cabinet_day_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    cabinet_day_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), index=True
+    )
+    # Runtime-статус observer worker для UI-диагностики.
+    worker_status: Mapped[str | None] = mapped_column(String(32))
+    worker_message: Mapped[str | None] = mapped_column(String(500))
+    worker_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    worker_last_error: Mapped[str | None] = mapped_column(String(500))
+    worker_last_error_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class CabinetDayArchive(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -110,14 +154,28 @@ class TelegramSettings(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # Токен хранится зашифрованным (Fernet)
     bot_token_encrypted: Mapped[str] = mapped_column(Text, default="")
     chat_id: Mapped[str] = mapped_column(String(64), default="")
+    owner_telegram_user_id: Mapped[str] = mapped_column(String(64), default="")
+    owner_username: Mapped[str] = mapped_column(String(128), default="")
+    owner_first_name: Mapped[str] = mapped_column(String(128), default="")
     # Авторизация: пользователь должен отправить /start боту
     is_authorized: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Режим доставки: legacy private chat или forum supergroup.
+    delivery_mode: Mapped[TelegramDeliveryMode] = mapped_column(
+        _TELEGRAM_DELIVERY_MODE_ENUM,
+        default=TelegramDeliveryMode.PRIVATE_CHAT,
+    )
     # Одноразовый код для привязки (6 цифр)
     auth_code: Mapped[str] = mapped_column(String(16), default="")
     # Имя бота (кэшируем после getMe)
     bot_username: Mapped[str] = mapped_column(String(128), default="")
-    # Список одноразовых кодов для добавления новых получателей (JSON)
-    pending_codes: Mapped[list] = mapped_column(JSON, default=list)
+    # Пульс poller-а для диагностики состояния Telegram-контура
+    poller_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Topic IDs для forum supergroup.
+    control_topic_id: Mapped[int | None] = mapped_column(Integer)
+    early_topic_id: Mapped[int | None] = mapped_column(Integer)
+    warning_topic_id: Mapped[int | None] = mapped_column(Integer)
+    stop_topic_id: Mapped[int | None] = mapped_column(Integer)
+    enable_topic_id: Mapped[int | None] = mapped_column(Integer)
 
 
 # === Оффер ===
@@ -233,12 +291,17 @@ class AdSnapshot(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     # Метрики
     spend: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"))
+    budget: Mapped[str] = mapped_column(String(255), default="")
+    reach: Mapped[int] = mapped_column(Integer, default=0)
+    impressions: Mapped[int] = mapped_column(Integer, default=0)
     clicks: Mapped[int] = mapped_column(Integer, default=0)
     cpc: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
+    ctr: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
     outbound_clicks: Mapped[int] = mapped_column(Integer, default=0)
     outbound_ctr: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
     landing_page_views: Mapped[int] = mapped_column(Integer, default=0)
     cost_per_landing_page_view: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
+    cost_per_result: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
     cpm: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
     frequency: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
     leads: Mapped[int] = mapped_column(Integer, default=0)
@@ -270,6 +333,9 @@ class AdSnapshot(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     offer: Mapped[Offer | None] = relationship(back_populates="snapshots")
     alerts: Mapped[list[AlertEvent]] = relationship(back_populates="snapshot")
     disable_tasks: Mapped[list[DisableTask]] = relationship(back_populates="snapshot")
+    enable_recommendation_events: Mapped[list[EnableRecommendationEvent]] = relationship(
+        back_populates="snapshot"
+    )
 
 
 # === Событие алерта ===
@@ -339,6 +405,44 @@ class DisableTask(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     snapshot: Mapped[AdSnapshot | None] = relationship(back_populates="disable_tasks")
 
 
+# === Событие рекомендации на включение ===
+
+
+class EnableRecommendationEvent(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """Событие рекомендации на включение объявления."""
+
+    __tablename__ = "enable_recommendation_events"
+    __table_args__ = (
+        Index("uq_enable_recommendation_event_idempotency", "idempotency_key", unique=True),
+    )
+
+    snapshot_id: Mapped[_uuid.UUID | None] = mapped_column(
+        ForeignKey("ad_snapshots.id", ondelete="SET NULL"), index=True
+    )
+    offer_id: Mapped[_uuid.UUID | None] = mapped_column(
+        ForeignKey("offers.id", ondelete="SET NULL"), index=True
+    )
+    fb_ad_id: Mapped[str] = mapped_column(String(32), index=True)
+    ad_name: Mapped[str] = mapped_column(String(255))
+    delivery_status: Mapped[str] = mapped_column(String(64))
+    recommendation_level: Mapped[EnableRecommendationLevel] = mapped_column(
+        _ENABLE_RECOMMENDATION_LEVEL_ENUM,
+        index=True,
+    )
+    matched_rule_codes: Mapped[list[str]] = mapped_column(JSON, default=list)
+    reason_title: Mapped[str | None] = mapped_column(String(255))
+    reason_text: Mapped[str | None] = mapped_column(Text)
+    metrics_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    live_batch_started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(160))
+    telegram_chat_id: Mapped[str | None] = mapped_column(String(64))
+    telegram_message_id: Mapped[int | None] = mapped_column(Integer, index=True)
+
+    snapshot: Mapped[AdSnapshot | None] = relationship(
+        back_populates="enable_recommendation_events"
+    )
+
+
 # === Задача на включение ===
 
 _ENABLE_STATUS_ENUM = Enum(
@@ -356,6 +460,10 @@ class EnableTask(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     snapshot_id: Mapped[_uuid.UUID | None] = mapped_column(
         ForeignKey("ad_snapshots.id", ondelete="SET NULL"), index=True
+    )
+    recommendation_event_id: Mapped[_uuid.UUID | None] = mapped_column(
+        ForeignKey("enable_recommendation_events.id", ondelete="SET NULL"),
+        index=True,
     )
     fb_ad_id: Mapped[str] = mapped_column(String(32), index=True)
     ad_name: Mapped[str] = mapped_column(String(255))
@@ -393,15 +501,64 @@ class VisionSettings(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     reconnect_requested: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
-# === Telegram получатели (мультипользователи) ===
+# === Telegram инвайты и получатели ===
+
+
+class TelegramInvite(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """Одноразовый инвайт-код для подключения Telegram-получателя."""
+
+    __tablename__ = "telegram_invites"
+
+    code: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    role: Mapped[str] = mapped_column(String(32), default=TelegramUserRole.RECIPIENT.value)
+    created_by_telegram_user_id: Mapped[str] = mapped_column(String(64), default="")
+    created_by_username: Mapped[str] = mapped_column(String(255), default="")
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
 
 
 class TelegramRecipient(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     """Авторизованный получатель Telegram-уведомлений."""
 
     __tablename__ = "telegram_recipients"
+    __table_args__ = (
+        Index(
+            "uq_telegram_recipients_chat_and_user",
+            "chat_id",
+            "telegram_user_id",
+            unique=True,
+        ),
+    )
 
-    chat_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    chat_id: Mapped[str] = mapped_column(String(64), index=True)
+    telegram_user_id: Mapped[str] = mapped_column(String(64), default="", index=True)
     username: Mapped[str] = mapped_column(String(128), default="")
     first_name: Mapped[str] = mapped_column(String(128), default="")
+    role: Mapped[str] = mapped_column(String(32), default=TelegramUserRole.RECIPIENT.value)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class TelegramMessageRef(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """Последний delivery-ref Telegram-сообщения для конкретного потока уведомлений."""
+
+    __tablename__ = "telegram_message_refs"
+    __table_args__ = (
+        Index(
+            "uq_telegram_message_refs_stream",
+            "telegram_chat_id",
+            "fb_ad_id",
+            "incident_key",
+            "stream_kind",
+            unique=True,
+        ),
+    )
+
+    telegram_chat_id: Mapped[str] = mapped_column(String(64), index=True)
+    telegram_message_id: Mapped[int] = mapped_column(Integer, index=True)
+    fb_ad_id: Mapped[str] = mapped_column(String(32), index=True)
+    incident_key: Mapped[str] = mapped_column(String(64), default="", index=True)
+    stream_kind: Mapped[TelegramNotificationStream] = mapped_column(
+        _TELEGRAM_NOTIFICATION_STREAM_ENUM,
+        index=True,
+    )
