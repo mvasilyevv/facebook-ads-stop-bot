@@ -12,6 +12,7 @@ from core.telegram.delivery import (
     TelegramAdMessageContext,
     broadcast_disable_task_runtime_message,
     broadcast_enable_recommendation_message,
+    broadcast_observer_runtime_message,
     render_disable_task_queue_message,
     render_disable_task_runtime_message,
     render_enable_task_queue_message,
@@ -257,3 +258,43 @@ async def test_broadcast_enable_recommendation_message_uses_enable_stream():
         stream_kind=TelegramNotificationStream.ENABLE,
     )
     assert send_mock.await_args.kwargs["message_thread_id"] == 15
+
+
+# Проверяем, что служебный alert observer идёт в CONTROL topic forum-группы.
+@pytest.mark.asyncio
+async def test_broadcast_observer_runtime_message_uses_control_topic():
+    """Служебное сообщение observer должно уходить в CONTROL topic."""
+    destination = TelegramDestination(
+        chat_id="-1003701505954",
+        telegram_user_id="42",
+        role="owner",
+        username="owner",
+        first_name="Иван",
+        is_primary=True,
+        delivery_mode="FORUM_GROUP",
+        control_topic_id=11,
+        early_topic_id=12,
+        warning_topic_id=13,
+        stop_topic_id=14,
+        enable_topic_id=15,
+    )
+    fake_client = AsyncMock()
+
+    with (
+        patch(
+            "core.telegram.delivery.load_telegram_runtime_config",
+            new=AsyncMock(return_value=("token", [destination])),
+        ),
+        patch(
+            "core.telegram.delivery.TelegramBotClient",
+            return_value=fake_client,
+        ),
+    ):
+        await broadcast_observer_runtime_message(text="Служебное сообщение")
+
+    fake_client.send_message.assert_awaited_once_with(
+        chat_id="-1003701505954",
+        message_thread_id=11,
+        text="Служебное сообщение",
+    )
+    fake_client.close.assert_awaited_once()
