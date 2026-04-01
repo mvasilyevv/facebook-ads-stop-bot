@@ -11,6 +11,7 @@ from sqlalchemy import select
 from core.db import get_session_factory
 from core.enable_recommendations.service import (
     attach_recommendation_telegram_delivery,
+    cleanup_orphaned_recommendation_events,
     collect_enable_recommendation_candidates,
     persist_enable_recommendation_candidates,
 )
@@ -76,6 +77,14 @@ async def process_enable_recommendation_cycle() -> int:
                 )
                 await session.commit()
         delivered_count += 1
+
+    # Очистка orphaned events (раз в цикл, ошибки глотаем)
+    try:
+        async with factory() as session:
+            await cleanup_orphaned_recommendation_events(session)
+            await session.commit()
+    except Exception:
+        logger.debug("Ошибка при очистке orphaned recommendation events", exc_info=True)
 
     return delivered_count
 

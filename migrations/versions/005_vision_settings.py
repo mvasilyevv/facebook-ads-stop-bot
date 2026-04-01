@@ -8,8 +8,8 @@ Create Date: 2026-03-27
 
 from __future__ import annotations
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision = "005"
 down_revision = "004_telegram_auth"
@@ -23,7 +23,9 @@ def upgrade() -> None:
         "vision_settings",
         sa.Column("id", sa.Uuid(), nullable=False),
         sa.Column("singleton_key", sa.String(32), nullable=False),
-        sa.Column("api_url", sa.String(255), nullable=False, server_default="http://127.0.0.1:3030"),
+        sa.Column(
+            "api_url", sa.String(255), nullable=False, server_default="http://127.0.0.1:3030"
+        ),
         sa.Column("x_token_encrypted", sa.Text(), nullable=False, server_default=""),
         sa.Column("profile_id", sa.String(128), nullable=False, server_default=""),
         sa.Column("reconnect_requested", sa.Boolean(), nullable=False, server_default="false"),

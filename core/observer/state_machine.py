@@ -17,9 +17,12 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 
 from core.domain import AlertStage, AlertState
+
+logger = logging.getLogger(__name__)
 
 
 def resolve_transition(
@@ -73,4 +76,5 @@ def resolve_transition(
     if previous == AlertState.DISABLED:
         return AlertState.DISABLED, token, False
 
-    return previous, token, False
+    logger.warning("FSM: неизвестное состояние %s, сбрасываю в NORMAL", previous)
+    return AlertState.NORMAL, None, False

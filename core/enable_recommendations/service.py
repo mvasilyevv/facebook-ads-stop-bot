@@ -3,12 +3,13 @@
 
 from __future__ import annotations
 
+import logging
 import uuid as _uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.domain import AlertStage, EnableRecommendationLevel, EnableTaskStatus
@@ -31,6 +32,8 @@ from core.observer.thresholds import extract_observer_threshold_values
 from core.rules.evaluator import determine_enable_recommendation_level, evaluate_stop_rules
 from core.rules.types import RuleEvaluation
 from core.scanner.models import ScannedAdRow
+
+logger = logging.getLogger(__name__)
 
 RECOMMENDATION_DELIVERY_STATUSES = ("OFF", "NOT_DELIVERING")
 OK_RECOMMENDATION_REASON_TITLE = "Строгая проверка пройдена"
@@ -609,3 +612,26 @@ async def promote_recommendation_to_enable_task(
         task_id=str(task.id),
         task_status=task.status.value,
     )
+
+
+async def cleanup_orphaned_recommendation_events(session: AsyncSession) -> int:
+    """Удаляет EnableRecommendationEvent старше 7 дней без связанной EnableTask.
+
+    Returns:
+        Количество удалённых записей.
+    """
+    cutoff = datetime.now(timezone=UTC) - timedelta(days=7)
+    result = await session.execute(
+        delete(EnableRecommendationEvent).where(
+            EnableRecommendationEvent.created_at < cutoff,
+            ~EnableRecommendationEvent.id.in_(
+                select(EnableTask.recommendation_event_id).where(
+                    EnableTask.recommendation_event_id.is_not(None)
+                )
+            ),
+        )
+    )
+    deleted_count = result.rowcount
+    if deleted_count > 0:
+        logger.debug("Удалено %s orphaned EnableRecommendationEvent старше 7 дней", deleted_count)
+    return deleted_count

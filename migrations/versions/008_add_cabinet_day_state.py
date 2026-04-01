@@ -63,7 +63,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index(op.f("ix_cabinet_day_archives_reset_detected_at"), table_name="cabinet_day_archives")
+    op.drop_index(
+        op.f("ix_cabinet_day_archives_reset_detected_at"), table_name="cabinet_day_archives"
+    )
     op.drop_index(op.f("ix_cabinet_day_archives_ended_at"), table_name="cabinet_day_archives")
     op.drop_index(op.f("ix_cabinet_day_archives_started_at"), table_name="cabinet_day_archives")
     op.drop_table("cabinet_day_archives")

@@ -30,6 +30,14 @@ async def _process_updates(
             await handle_update(client, update)
         except Exception:
             logger.exception("Ошибка обработки update %s", update_id)
+            cq_id = update.get("callback_query", {}).get("id")
+            if cq_id:
+                try:
+                    await client.answer_callback_query(
+                        cq_id, text="❌ Внутренняя ошибка — попробуйте ещё раз"
+                    )
+                except Exception:
+                    logger.exception("Не удалось ответить на callback_query %s", cq_id)
         finally:
             if isinstance(update_id, int):
                 offset = update_id + 1

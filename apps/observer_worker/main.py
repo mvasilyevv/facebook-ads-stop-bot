@@ -2016,9 +2016,7 @@ async def observer_loop(
                     fallback_chat_id=telegram_chat_id,
                 )
             except Exception:
-                logger.exception(
-                    "Не удалось отправить Telegram-алерт о недоступности данных скана"
-                )
+                logger.exception("Не удалось отправить Telegram-алерт о недоступности данных скана")
 
             continue
 

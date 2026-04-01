@@ -1,6 +1,6 @@
 import { useEffect, useEffectEvent, useRef } from 'react';
 
-export function useAsyncPolling(callback, { enabled, intervalMs, runImmediately = false }) {
+export function useAsyncPolling(callback, { enabled, intervalMs, runImmediately = false, errorMultiplier = 3 }) {
   const isRunningRef = useRef(false);
   const run = useEffectEvent(async () => {
     if (isRunningRef.current) return;
@@ -16,22 +16,40 @@ export function useAsyncPolling(callback, { enabled, intervalMs, runImmediately 
     if (!enabled || !intervalMs) return undefined;
 
     let disposed = false;
-    const tick = async () => {
-      if (disposed) return;
-      await run();
+    let hasError = false;
+    let timeoutId = null;
+
+    const scheduleNext = () => {
+      const delay = hasError ? intervalMs * errorMultiplier : intervalMs;
+      timeoutId = window.setTimeout(async () => {
+        if (disposed) return;
+        try {
+          await run();
+          hasError = false;
+        } catch (e) {
+          hasError = true;
+        }
+        if (!disposed) scheduleNext();
+      }, delay);
     };
 
     if (runImmediately) {
-      void tick();
+      void run().then(() => {
+        hasError = false;
+        if (!disposed) scheduleNext();
+      }).catch(() => {
+        hasError = true;
+        if (!disposed) scheduleNext();
+      });
+    } else {
+      scheduleNext();
     }
-
-    const timerId = window.setInterval(() => {
-      void tick();
-    }, intervalMs);
 
     return () => {
       disposed = true;
-      window.clearInterval(timerId);
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId);
+      }
     };
-  }, [enabled, intervalMs, runImmediately, run]);
+  }, [enabled, intervalMs, runImmediately, run, errorMultiplier]);
 }

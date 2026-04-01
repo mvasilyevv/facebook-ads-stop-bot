@@ -123,7 +123,10 @@ def build_diagnostics_context_text(diagnostics: AdQualityDiagnostics) -> str | N
             )
 
     if diagnostics.frequency.status in {"elevated", "critical"}:
-        if diagnostics.frequency.value is not None and diagnostics.frequency.critical_threshold is not None:
+        if (
+            diagnostics.frequency.value is not None
+            and diagnostics.frequency.critical_threshold is not None
+        ):
             parts.append(
                 f"частота {diagnostics.frequency.value:.2f} при критической границе {diagnostics.frequency.critical_threshold:.2f}"
             )
@@ -134,7 +137,9 @@ def build_diagnostics_context_text(diagnostics: AdQualityDiagnostics) -> str | N
     return "Дополнительно " + "; ".join(parts) + "."
 
 
-def _build_cpm_diagnostic(*, cpm_value: object | None, cpm_baseline: Decimal | None) -> MetricDiagnostic:
+def _build_cpm_diagnostic(
+    *, cpm_value: object | None, cpm_baseline: Decimal | None
+) -> MetricDiagnostic:
     value = _to_decimal(cpm_value)
     baseline = _to_decimal(cpm_baseline)
 

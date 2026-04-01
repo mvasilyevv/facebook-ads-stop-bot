@@ -607,18 +607,19 @@ def test_cpm_and_frequency_are_diagnostics_only():
 
 
 # Проверяем что при наличии лида ранние сигналы полностью подавляются более глубокой стадией.
-def test_early_signals_are_suppressed_after_first_lead():
+def test_early_signals_work_even_with_leads():
+    # Early signals на outbound_ctr должны срабатывать даже при наличии лидов
     row = _make_row(
         spend=Decimal("0.30"),
         clicks=10,
         cpc=Decimal("0.03"),
         outbound_clicks=10,
-        outbound_ctr=Decimal("0.50"),
+        outbound_ctr=Decimal("0.50"),  # Низкий CTR — сработает early signal
         leads=1,
         cost_per_lead=Decimal("0.30"),
     )
 
     result = evaluate_stop_rules(row, _make_ctx())
 
-    assert result.stage is None
-    assert result.matched_rule_codes == []
+    assert result.stage == AlertStage.EARLY_SIGNAL
+    assert "early_outbound_ctr_signal" in result.matched_rule_codes

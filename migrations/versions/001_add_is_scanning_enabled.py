@@ -8,8 +8,8 @@ Create Date: 2026-03-25
 
 from __future__ import annotations
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "001_scanning_flag"
@@ -22,7 +22,9 @@ def upgrade() -> None:
     # Добавляем колонку is_scanning_enabled с дефолтным значением True
     op.add_column(
         "observer_settings",
-        sa.Column("is_scanning_enabled", sa.Boolean(), nullable=False, server_default=sa.text("true")),
+        sa.Column(
+            "is_scanning_enabled", sa.Boolean(), nullable=False, server_default=sa.text("true")
+        ),
     )
 
 

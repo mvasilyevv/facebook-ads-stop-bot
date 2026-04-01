@@ -282,7 +282,7 @@ async def load_telegram_runtime_config(
                     unique_by_chat[destination.chat_id] = destination
             return token, list(unique_by_chat.values())
     except Exception:
-        logger.debug("Не удалось загрузить Telegram runtime config из БД", exc_info=True)
+        logger.error("Не удалось загрузить Telegram runtime config из БД", exc_info=True)
 
     if fallback_token and fallback_chat_id:
         return fallback_token, [

@@ -1206,6 +1206,43 @@ function EnableTasksSection({ tasks, onRetry, retryingRecommendationId }) {
   );
 }
 
+function ObserverHealthSection({ stats, observerHeartbeatAt }) {
+  const lastScanAt = stats?.last_scan_at;
+  const lastCycleAdCount = stats?.last_cycle_ad_count;
+  const disabledTodayCount = stats?.disabled_today_count;
+
+  return (
+    <div className="dashboard-section dashboard-section--compact">
+      <SectionHeader
+        badge="Здоровье"
+        badgeTone="live"
+        title="Статус Observer"
+        hint="Метрики последнего цикла сканирования."
+      />
+      <div className="stat-cards-grid stat-cards-grid--compact">
+        <StatCard
+          value={lastScanAt ? formatTime(lastScanAt) : '—'}
+          label="Последний скан"
+          icon="🔍"
+          hint={lastScanAt ? timeAgo(lastScanAt) : 'Сканирование не запускалось'}
+        />
+        <StatCard
+          value={formatCount(lastCycleAdCount ?? 0)}
+          label="Объявлений просканировано"
+          icon="📊"
+          hint={lastCycleAdCount != null ? `В последнем цикле` : 'Данные недоступны'}
+        />
+        <StatCard
+          value={formatCount(disabledTodayCount ?? 0)}
+          label="Отключено сегодня"
+          icon="✅"
+          hint={disabledTodayCount != null ? `Успешно отключено` : 'Данные недоступны'}
+        />
+      </div>
+    </div>
+  );
+}
+
 function LatestActiveIncidentCard({ latestIncident, onNavigate }) {
   const latestVariant = getIncidentVariant(latestIncident);
   const rules = latestIncident?.matched_rule_codes || [];
@@ -2155,7 +2192,10 @@ export default function DashboardPage({ onNavigate }) {
           <CampaignBudgetDeltaPanel rows={campaignBudgetDeltas} />
         </div>
 
-        <LatestActiveIncidentCard latestIncident={latestIncident} onNavigate={navigate} />
+        <div>
+          <ObserverHealthSection stats={stats} observerHeartbeatAt={stats?.observer_heartbeat_at} />
+          <LatestActiveIncidentCard latestIncident={latestIncident} onNavigate={navigate} />
+        </div>
       </div>
 
       <DisableTasksSection

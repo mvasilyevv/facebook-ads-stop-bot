@@ -458,6 +458,12 @@ async def _broadcast_message(
                     reply_markup=reply_markup,
                 )
                 if delivered_message_id is None:
+                    logger.error(
+                        "Потеря message_id при доставке для %s в chat_id=%s, stream=%s",
+                        fb_ad_id,
+                        destination.chat_id,
+                        stream_kind,
+                    )
                     continue
                 await upsert_message_ref(
                     chat_id=destination.chat_id,

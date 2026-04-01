@@ -3,7 +3,11 @@
 
 from __future__ import annotations
 
+import logging
+
 import httpx
+
+logger = logging.getLogger(__name__)
 
 
 class TelegramAPIError(RuntimeError):
@@ -48,6 +52,15 @@ class TelegramBotClient:
             )
             resp.raise_for_status()
         except httpx.HTTPError as exc:
+            if hasattr(exc, "response") and exc.response is not None:
+                status_code = exc.response.status_code
+                if status_code == 429:
+                    retry_after = exc.response.headers.get("Retry-After")
+                    logger.warning(
+                        "Telegram API rate limit (429) при вызове %s, retry_after=%s",
+                        method,
+                        retry_after,
+                    )
             raise RuntimeError(f"Не удалось выполнить запрос к Telegram API ({method})") from exc
 
         data = resp.json()

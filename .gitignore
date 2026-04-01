@@ -5,4 +5,12 @@ __pycache__/
 *.egg-info/
 .ruff_cache/
 .pytest_cache/
+.DS_Store
+.claude/
+.claude-flow/
+.logs/
+.mcp.json
+.tmp
 .tmp/
+frontend/dist/
+frontend/node_modules/

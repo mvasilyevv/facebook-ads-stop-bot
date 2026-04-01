@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import pathlib
 import random
 import signal
@@ -58,6 +57,7 @@ from core.disable_tasks import is_delivery_disabled, reconcile_disable_tasks
 from core.domain import AlertState, DisableTaskStatus
 from core.models import AdSnapshot, DisableTask, VisionSettings
 from core.telegram.delivery import broadcast_disable_task_runtime_message
+from core.worker_utils import PidFileLock, wait_for_shutdown_or_timeout
 
 logging.basicConfig(
     level=logging.INFO,
@@ -79,18 +79,6 @@ DISABLE_SINGLE_SEARCH_MAX_SCROLL_PASSES = 120
 DISABLE_SINGLE_SEARCH_FALLBACK_MAX_STEPS = 60
 DISABLE_MANAGER_DISCONNECT_TIMEOUT_SECONDS = 15
 DISABLE_VISION_CLOSE_TIMEOUT_SECONDS = 10
-
-
-async def _wait_for_shutdown_or_timeout(
-    shutdown_event: asyncio.Event,
-    timeout_seconds: int,
-) -> bool:
-    """Ждёт таймаут или сигнал остановки."""
-    try:
-        await asyncio.wait_for(shutdown_event.wait(), timeout=timeout_seconds)
-        return True
-    except asyncio.TimeoutError:
-        return False
 
 
 async def _close_disable_runtime_resources(manager, vision) -> None:
@@ -741,12 +729,9 @@ async def main() -> None:
     shutdown_event = asyncio.Event()
     waiting_for_vision_logged = False
 
-    def _handle_signal(signum, frame):
-        logger.info("Получен сигнал %s — завершаем disable worker", signum)
-        shutdown_event.set()
-
-    signal.signal(signal.SIGTERM, _handle_signal)
-    signal.signal(signal.SIGINT, _handle_signal)
+    loop = asyncio.get_event_loop()
+    loop.add_signal_handler(signal.SIGTERM, shutdown_event.set)
+    loop.add_signal_handler(signal.SIGINT, shutdown_event.set)
 
     try:
         from apps.disable_worker.main import disable_worker_loop
@@ -759,7 +744,7 @@ async def main() -> None:
                         "Disable worker ждёт Vision-настройки из UI или .env и продолжает работать в фоне"
                     )
                     waiting_for_vision_logged = True
-                if await _wait_for_shutdown_or_timeout(
+                if await wait_for_shutdown_or_timeout(
                     shutdown_event,
                     VISION_SETTINGS_POLL_INTERVAL_SECONDS,
                 ):
@@ -820,7 +805,7 @@ async def main() -> None:
                 if shutdown_event.is_set():
                     break
                 logger.exception("Disable worker: ошибка запуска или подключения к Vision")
-                if await _wait_for_shutdown_or_timeout(
+                if await wait_for_shutdown_or_timeout(
                     shutdown_event,
                     VISION_SETTINGS_POLL_INTERVAL_SECONDS,
                 ):
@@ -835,18 +820,9 @@ async def main() -> None:
 
 if __name__ == "__main__":
     _PID_FILE = pathlib.Path("/tmp/fb_disable_worker.pid")
-    if _PID_FILE.exists():
-        try:
-            _old_pid = int(_PID_FILE.read_text().strip())
-            os.kill(_old_pid, 0)
-            logger.error(
-                "Disable worker уже запущен (PID %s). Запуск второго экземпляра запрещён.", _old_pid
-            )
-            sys.exit(1)
-        except (ValueError, ProcessLookupError, OSError):
-            pass
-    _PID_FILE.write_text(str(os.getpid()))
     try:
-        asyncio.run(main())
-    finally:
-        _PID_FILE.unlink(missing_ok=True)
+        with PidFileLock(_PID_FILE):
+            asyncio.run(main())
+    except RuntimeError as e:
+        logger.error("%s", e)
+        sys.exit(1)

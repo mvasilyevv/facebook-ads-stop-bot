@@ -18,12 +18,7 @@ def evaluate_stop_rules(row: ScannedAdRow, ctx: RuleContext) -> RuleEvaluation:
     """Оценивает объявление по последовательной лесенке."""
 
     hit = _evaluate_funnel_ladder(row, ctx)
-    if (
-        hit is None
-        and row.leads == 0
-        and row.registrations == 0
-        and not _has_confirmed_deposit_signal(row)
-    ):
+    if hit is None:
         hit = _evaluate_early_signals(row, ctx)
 
     if hit is None:

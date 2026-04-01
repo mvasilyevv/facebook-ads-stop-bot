@@ -1560,9 +1560,7 @@ async def test_observer_loop_disables_scanning_after_scan_recovery_exhausted():
     set_scanning_mock.assert_awaited_once_with(False)
     broadcast_mock.assert_awaited_once()
     assert "Observer отключён" in broadcast_mock.await_args.kwargs["text"]
-    assert any(
-        call.kwargs.get("status") == "PAUSED" for call in update_status_mock.await_args_list
-    )
+    assert any(call.kwargs.get("status") == "PAUSED" for call in update_status_mock.await_args_list)
 
 
 # Проверяем что NOT_DELIVERING обрабатывается как уже выключенное объявление и не идёт в rule-evaluation.

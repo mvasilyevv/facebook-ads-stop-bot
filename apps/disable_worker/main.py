@@ -7,6 +7,8 @@ import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
 
+from core.worker_utils import calculate_retry_delay
+
 logger = logging.getLogger(__name__)
 
 DISABLE_BROWSER_TASK_TIMEOUT_SECONDS = 60
@@ -57,7 +59,7 @@ async def _process_disable_result(
                 max_att,
             )
         else:
-            delay = min(30 * (2 ** max(attempt - 1, 0)), 300)
+            delay = calculate_retry_delay(attempt)
             next_retry = datetime.now(tz=UTC) + timedelta(seconds=delay)
             await mark_retrying(task.id, message, next_retry)
             logger.warning(
@@ -108,14 +110,14 @@ async def disable_worker_loop(
             if claim_task_batch and execute_disable_batch:
                 tasks = await claim_task_batch(batch_size)
                 if not tasks:
-                    try:
-                        if shutdown_event:
+                    if shutdown_event:
+                        try:
                             await asyncio.wait_for(
                                 shutdown_event.wait(), timeout=poll_interval_seconds
                             )
                             break
-                    except asyncio.TimeoutError:
-                        pass
+                        except asyncio.TimeoutError:
+                            pass
                     else:
                         await asyncio.sleep(poll_interval_seconds)
                     continue
@@ -165,12 +167,12 @@ async def disable_worker_loop(
 
             task = await claim_next_task()
             if task is None:
-                try:
-                    if shutdown_event:
+                if shutdown_event:
+                    try:
                         await asyncio.wait_for(shutdown_event.wait(), timeout=poll_interval_seconds)
                         break
-                except asyncio.TimeoutError:
-                    pass
+                    except asyncio.TimeoutError:
+                        pass
                 else:
                     await asyncio.sleep(poll_interval_seconds)
                 continue
