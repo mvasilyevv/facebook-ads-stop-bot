@@ -277,7 +277,12 @@ class AdSnapshot(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     """Текущий снимок метрик одного объявления."""
 
     __tablename__ = "ad_snapshots"
-    __table_args__ = (Index("uq_ad_snapshot_fb_ad", "fb_ad_id", unique=True),)
+    __table_args__ = (
+        Index("uq_ad_snapshot_fb_ad", "fb_ad_id", unique=True),
+        Index("ix_ad_snapshot_alert_state", "alert_state"),
+        Index("ix_ad_snapshot_last_observed", "last_observed_at", "alert_state"),
+        Index("ix_ad_snapshot_offer_alert", "offer_id", "alert_state"),
+    )
 
     offer_id: Mapped[_uuid.UUID | None] = mapped_column(
         ForeignKey("offers.id", ondelete="SET NULL"), index=True

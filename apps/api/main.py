@@ -643,6 +643,15 @@ class DashboardPerformanceSchema(BaseModel):
     campaigns: list[DashboardPerformanceCampaignSchema] = []
 
 
+class DashboardBatchSchema(BaseModel):
+    """Батч-ответ для одного запроса вместо 4."""
+
+    ads: list[AdSnapshotSchema] = []
+    stats: DashboardStatsSchema | None = None
+    incidents: list[ActiveIncidentSchema] = []
+    disable_tasks: list[DisableTaskSchema] = []
+
+
 class ChartDataSchema(BaseModel):
     """Данные для графиков на главной странице."""
 
@@ -2804,6 +2813,315 @@ async def get_dashboard_performance(
         now=now,
         cutoff=cutoff,
         archives=archives,
+    )
+
+
+@app.get("/api/dashboard/batch", response_model=DashboardBatchSchema)
+async def get_dashboard_batch(
+    limit: int = Query(200, ge=1, le=1000),
+    db: AsyncSession = Depends(get_db),
+):
+    """Один запрос вместо 4 для AdsPage.
+
+    Возвращает ads, stats, incidents и disable-tasks одновременно.
+    """
+    # 1. Получить stats (полная логика из get_dashboard_stats)
+    last_scan = await db.scalar(select(func.max(AdSnapshot.last_observed_at)))
+    scan_cutoff = _current_scan_cutoff(last_scan)
+
+    state_stats = await db.execute(
+        select(
+            AdSnapshot.alert_state,
+            func.count().label("cnt"),
+            func.coalesce(func.sum(AdSnapshot.spend), 0).label("spend"),
+        )
+        .where(AdSnapshot.last_observed_at >= scan_cutoff)
+        .group_by(AdSnapshot.alert_state)
+    )
+    rows = state_stats.all()
+
+    total = 0
+    early_signal = 0
+    warning = 0
+    stop = 0
+    disabled = 0
+    claimed = 0
+    total_spend = Decimal("0")
+    for state, cnt, spend in rows:
+        total += cnt
+        total_spend += spend or Decimal("0")
+        if state == AlertState.EARLY_SIGNAL_SENT:
+            early_signal = cnt
+        elif state == AlertState.WARNING_SENT:
+            warning = cnt
+        elif state == AlertState.STOP_SENT:
+            stop = cnt
+        elif state == AlertState.DISABLED:
+            disabled = cnt
+        elif state == AlertState.CLAIMED:
+            claimed = cnt
+
+    observer_row = await db.scalar(
+        select(ObserverSettings).where(ObserverSettings.singleton_key == "default")
+    )
+    cabinet_day_start = observer_row.cabinet_day_started_at if observer_row else None
+    disabled_since = cabinet_day_start or scan_cutoff
+
+    active_offers = (
+        await db.scalar(select(func.count()).select_from(Offer).where(Offer.is_active.is_(True)))
+        or 0
+    )
+    pending_tasks = (
+        await db.scalar(
+            select(func.count())
+            .select_from(DisableTask)
+            .where(
+                DisableTask.status.in_(
+                    [
+                        DisableTaskStatus.PENDING,
+                        DisableTaskStatus.RETRYING,
+                        DisableTaskStatus.RUNNING,
+                    ]
+                )
+            )
+        )
+        or 0
+    )
+    pending_enable_tasks = (
+        await db.scalar(
+            (
+                select(func.count())
+                .select_from(EnableTask)
+                .join(
+                    EnableRecommendationEvent,
+                    EnableRecommendationEvent.id == EnableTask.recommendation_event_id,
+                    isouter=True,
+                )
+                .where(
+                    EnableTask.status.in_(
+                        [
+                            EnableTaskStatus.PENDING,
+                            EnableTaskStatus.RETRYING,
+                            EnableTaskStatus.RUNNING,
+                        ]
+                    )
+                )
+                .where(
+                    or_(
+                        EnableRecommendationEvent.live_batch_started_at >= cabinet_day_start,
+                        and_(
+                            EnableRecommendationEvent.id.is_(None),
+                            EnableTask.created_at >= cabinet_day_start,
+                        ),
+                    )
+                )
+            )
+            if cabinet_day_start is not None
+            else select(func.count())
+            .select_from(EnableTask)
+            .where(
+                EnableTask.status.in_(
+                    [
+                        EnableTaskStatus.PENDING,
+                        EnableTaskStatus.RETRYING,
+                        EnableTaskStatus.RUNNING,
+                    ]
+                )
+            )
+        )
+        or 0
+    )
+    disabled_today = (
+        await db.scalar(
+            select(func.count())
+            .select_from(DisableTask)
+            .where(
+                DisableTask.status == DisableTaskStatus.SUCCEEDED,
+                DisableTask.completed_at >= disabled_since,
+            )
+        )
+        or 0
+    )
+    _, current_enable_recommendations = await _load_current_enable_recommendations(db)
+    enable_recommendations_ok = sum(
+        1
+        for row in current_enable_recommendations
+        if row.candidate.recommendation_level == EnableRecommendationLevel.OK
+    )
+    enable_recommendations_early_signal = sum(
+        1
+        for row in current_enable_recommendations
+        if row.candidate.recommendation_level == EnableRecommendationLevel.EARLY_SIGNAL
+    )
+    enable_recommendations_warning = sum(
+        1
+        for row in current_enable_recommendations
+        if row.candidate.recommendation_level == EnableRecommendationLevel.WARNING
+    )
+
+    stats = DashboardStatsSchema(
+        total_ads_monitored=total,
+        active_ads_count=total,
+        ads_in_early_signal=early_signal,
+        ads_in_warning=warning,
+        ads_in_stop=stop,
+        ads_disabled=disabled,
+        ads_claimed=claimed,
+        ads_disabled_today=disabled_today,
+        total_spend=total_spend,
+        active_offers=active_offers,
+        pending_disable_tasks=pending_tasks,
+        pending_enable_tasks=pending_enable_tasks,
+        enable_recommendations_ok=enable_recommendations_ok,
+        enable_recommendations_early_signal=enable_recommendations_early_signal,
+        enable_recommendations_warning=enable_recommendations_warning,
+        last_scan_at=last_scan.isoformat() if last_scan else None,
+        **_serialize_observer_runtime_fields(observer_row),
+    )
+
+    # 2. Получить ads (переиспользуем логику из list_ad_snapshots)
+    q = select(AdSnapshot).order_by(AdSnapshot.last_observed_at.desc()).limit(limit)
+    result = await db.execute(q)
+    snapshots = result.scalars().all()
+    diagnostics_map = await _build_snapshot_diagnostics_map(db, snapshots)
+
+    ads = [
+        AdSnapshotSchema(
+            id=str(s.id),
+            fb_ad_id=s.fb_ad_id,
+            campaign_name=s.campaign_name,
+            adset_name=s.adset_name,
+            ad_name=s.ad_name,
+            delivery_status=s.delivery_status,
+            offer_code=s.resolved_offer_code,
+            spend=s.spend,
+            budget=getattr(s, "budget", "") or "",
+            reach=int(getattr(s, "reach", 0) or 0),
+            impressions=int(getattr(s, "impressions", 0) or 0),
+            clicks=s.clicks,
+            cpc=s.cpc,
+            ctr=getattr(s, "ctr", None),
+            outbound_clicks=s.outbound_clicks,
+            outbound_ctr=s.outbound_ctr,
+            landing_page_views=s.landing_page_views,
+            cost_per_result=getattr(s, "cost_per_result", None),
+            cost_per_landing_page_view=s.cost_per_landing_page_view,
+            cpm=s.cpm,
+            frequency=s.frequency,
+            leads=s.leads,
+            cost_per_lead=s.cost_per_lead,
+            registrations=s.registrations,
+            cost_per_registration=s.cost_per_registration,
+            deposits=s.deposits,
+            alert_state=s.alert_state.value,
+            current_stage=s.current_stage.value if s.current_stage else None,
+            early_signal_rule_codes=s.early_signal_rule_codes or [],
+            warning_rule_codes=s.warning_rule_codes or [],
+            stop_rule_codes=s.stop_rule_codes or [],
+            cpm_diagnostic_status=diagnostics_map[s.fb_ad_id].cpm.status
+            if s.fb_ad_id in diagnostics_map
+            else None,
+            frequency_diagnostic_status=(
+                diagnostics_map[s.fb_ad_id].frequency.status
+                if s.fb_ad_id in diagnostics_map
+                else None
+            ),
+            diagnostic_short_text=(
+                diagnostics_map[s.fb_ad_id].summary_text if s.fb_ad_id in diagnostics_map else None
+            ),
+            last_observed_at=(s.last_observed_at.isoformat() if s.last_observed_at else None),
+        )
+        for s in snapshots
+    ]
+
+    # 3. Получить incidents (переиспользуем логику из list_active_incidents)
+    snapshot_query = (
+        select(AdSnapshot)
+        .where(
+            AdSnapshot.last_observed_at >= scan_cutoff,
+            AdSnapshot.alert_state.in_(
+                [
+                    AlertState.EARLY_SIGNAL_SENT,
+                    AlertState.WARNING_SENT,
+                    AlertState.STOP_SENT,
+                    AlertState.CLAIMED,
+                ]
+            ),
+        )
+        .order_by(AdSnapshot.last_observed_at.desc())
+    )
+
+    incident_snapshots = (await db.execute(snapshot_query)).scalars().all()
+    incidents: list[ActiveIncidentSchema] = []
+
+    if incident_snapshots:
+        incident_fb_ad_ids = [snapshot.fb_ad_id for snapshot in incident_snapshots]
+        alert_events = (
+            (
+                await db.execute(
+                    select(AlertEvent)
+                    .where(AlertEvent.fb_ad_id.in_(incident_fb_ad_ids))
+                    .order_by(AlertEvent.created_at.desc())
+                )
+            )
+            .scalars()
+            .all()
+        )
+        disable_tasks_for_incidents = (
+            (
+                await db.execute(
+                    select(DisableTask)
+                    .where(DisableTask.fb_ad_id.in_(incident_fb_ad_ids))
+                    .order_by(DisableTask.updated_at.desc(), DisableTask.created_at.desc())
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+        events_by_ad: dict[str, list[AlertEvent]] = {}
+        for event in alert_events:
+            events_by_ad.setdefault(event.fb_ad_id, []).append(event)
+
+        tasks_by_ad: dict[str, list[DisableTask]] = {}
+        for task in disable_tasks_for_incidents:
+            tasks_by_ad.setdefault(task.fb_ad_id, []).append(task)
+
+        incidents = [
+            _build_active_incident_schema(
+                snapshot,
+                alert_events=events_by_ad.get(snapshot.fb_ad_id, []),
+                disable_tasks=tasks_by_ad.get(snapshot.fb_ad_id, []),
+            )
+            for snapshot in incident_snapshots
+        ]
+        incidents.sort(key=lambda incident: incident.last_activity_at, reverse=True)
+
+    # 4. Получить disable-tasks (переиспользуем логику из list_disable_tasks)
+    q_tasks = select(DisableTask).order_by(
+        DisableTask.updated_at.desc(), DisableTask.created_at.desc()
+    )
+    q_tasks = q_tasks.where(
+        DisableTask.status.in_(
+            [
+                DisableTaskStatus.PENDING,
+                DisableTaskStatus.RUNNING,
+                DisableTaskStatus.RETRYING,
+                DisableTaskStatus.FAILED,
+            ]
+        )
+    )
+    q_tasks = q_tasks.limit(50)
+
+    result_tasks = await db.execute(q_tasks)
+    tasks = result_tasks.scalars().all()
+    disable_tasks = [_serialize_disable_task(t) for t in tasks]
+
+    return DashboardBatchSchema(
+        ads=ads,
+        stats=stats,
+        incidents=incidents[:50],
+        disable_tasks=disable_tasks,
     )
 
 
