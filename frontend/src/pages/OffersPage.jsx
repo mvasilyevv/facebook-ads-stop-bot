@@ -128,18 +128,19 @@ function OfferModal({ offer, onSave, onClose }) {
 
 /* Шесть стоп-правил */
 const RULE_DEFS = [
-  { key: 'cpc_percent', title: 'Правило 1: CPC > X% CPA', fields: [{ name: 'cpc_percent_stop', label: 'Процент стопа (%)', type: 'number' }] },
-  { key: 'cpl_percent', title: 'Правило 2: CPL > X% CPA', fields: [{ name: 'cpl_percent_stop', label: 'Процент стопа (%)', type: 'number' }] },
-  { key: 'cpr_percent', title: 'Правило 3: CPR > X% CPA', fields: [{ name: 'cpr_percent_stop', label: 'Процент стопа (%)', type: 'number' }] },
-  { key: 'regs_no_dep', title: 'Правило 4: N регистраций без депозитов', fields: [{ name: 'regs_no_dep_stop_count', label: 'Количество регистраций', type: 'number' }] },
-  { key: 'spend_no_dep', title: 'Правило 5: Расход без депозитов', fields: [{ name: 'spend_no_dep_from_percent', label: 'Расход от (% CPA)', type: 'number' }, { name: 'spend_no_dep_to_percent', label: 'Расход до (% CPA)', type: 'number' }] },
-  { key: 'spend_with_dep', title: 'Правило 6: Расход с депозитом', fields: [{ name: 'spend_with_dep_from_percent', label: 'Расход от (% CPA)', type: 'number' }, { name: 'spend_with_dep_to_percent', label: 'Расход до (% CPA)', type: 'number' }] },
+  { key: 'cpc_percent', title: 'Правило 1: CPC > X% CPA', hint: 'Стоп при стоимости клика выше установленного % от целевого CPA', fields: [{ name: 'cpc_percent_stop', label: 'Процент стопа (%)', type: 'number' }] },
+  { key: 'cpl_percent', title: 'Правило 2: CPL > X% CPA', hint: 'Стоп при стоимости лида выше установленного % от целевого CPA', fields: [{ name: 'cpl_percent_stop', label: 'Процент стопа (%)', type: 'number' }] },
+  { key: 'cpr_percent', title: 'Правило 3: CPR > X% CPA', hint: 'Стоп при стоимости регистрации выше установленного % от целевого CPA', fields: [{ name: 'cpr_percent_stop', label: 'Процент стопа (%)', type: 'number' }] },
+  { key: 'regs_no_dep', title: 'Правило 4: N регистраций без депозитов', hint: 'Стоп при достижении заданного количества регистраций подряд без депозита', fields: [{ name: 'regs_no_dep_stop_count', label: 'Количество регистраций', type: 'number' }] },
+  { key: 'spend_no_dep', title: 'Правило 5: Расход без депозитов', hint: 'Стоп при расходе в диапазоне % от CPA без депозитов', fields: [{ name: 'spend_no_dep_from_percent', label: 'Расход от (% CPA)', type: 'number' }, { name: 'spend_no_dep_to_percent', label: 'Расход до (% CPA)', type: 'number' }] },
+  { key: 'spend_with_dep', title: 'Правило 6: Расход с депозитом', hint: 'Стоп при расходе в диапазоне % от CPA с депозитом', fields: [{ name: 'spend_with_dep_from_percent', label: 'Расход от (% CPA)', type: 'number' }, { name: 'spend_with_dep_to_percent', label: 'Расход до (% CPA)', type: 'number' }] },
 ];
 
 const EARLY_SIGNAL_DEFS = [
   {
     key: 'early_outbound_ctr_signal',
     title: 'Ранний сигнал 1: слабый CTR исходящих кликов',
+    hint: 'Предупреждение при низком CTR кликов уходящих на лендинг',
     fields: [
       { name: 'early_outbound_ctr_signal_min_percent', label: 'Минимальный CTR исходящих кликов (%)', type: 'number' },
       { name: 'early_outbound_ctr_signal_min_spend_percent', label: 'Минимальный расход для проверки (% CPA)', type: 'number' },
@@ -148,6 +149,7 @@ const EARLY_SIGNAL_DEFS = [
   {
     key: 'early_lpv_ratio_signal',
     title: 'Ранний сигнал 2: слабая доходимость до лендинга',
+    hint: 'Предупреждение при низкой доле просмотров лендинга от исходящих кликов',
     fields: [
       { name: 'early_lpv_ratio_signal_min_percent', label: 'Минимальная доля LPV (%)', type: 'number' },
       { name: 'early_lpv_ratio_signal_min_outbound_clicks', label: 'Минимум исходящих кликов для проверки', type: 'number' },
@@ -156,6 +158,7 @@ const EARLY_SIGNAL_DEFS = [
   {
     key: 'early_cost_per_lpv_signal',
     title: 'Ранний сигнал 3: дорогой просмотр лендинга',
+    hint: 'Предупреждение при превышении целевой цены за просмотр лендинга',
     fields: [
       { name: 'early_cost_per_lpv_signal_percent_of_cpa', label: 'Лимит цены LPV (% CPA)', type: 'number' },
       { name: 'early_cost_per_lpv_signal_min_views', label: 'Минимум LPV для проверки', type: 'number' },
@@ -181,6 +184,28 @@ const DEFAULT_RULES = {
   frequency_elevated_threshold: '2',
   frequency_critical_threshold: '3',
 };
+
+function FieldHint({ fieldName, value }) {
+  const hints = {
+    cpc_percent_stop: `Стоп при CPC выше ${value || '—'}% от целевого CPA`,
+    cpl_percent_stop: `Стоп при CPL выше ${value || '—'}% от целевого CPA`,
+    cpr_percent_stop: `Стоп при CPR выше ${value || '—'}% от целевого CPA`,
+    regs_no_dep_stop_count: `Стоп при ${value || '—'} регистрациях без депозитов подряд`,
+    spend_no_dep_from_percent: 'Начальная граница расхода без депозитов (% от CPA)',
+    spend_no_dep_to_percent: 'Верхняя граница расхода без депозитов (% от CPA)',
+    spend_with_dep_from_percent: 'Начальная граница расхода с депозитом (% от CPA)',
+    spend_with_dep_to_percent: 'Верхняя граница расхода с депозитом (% от CPA)',
+    early_outbound_ctr_signal_min_percent: `Ранний сигнал при CTR исходящих кликов ниже ${value || '—'}%`,
+    early_outbound_ctr_signal_min_spend_percent: `Проверка ранних сигналов только при расходе выше ${value || '—'}% от CPA`,
+    early_lpv_ratio_signal_min_percent: `Ранний сигнал при доле LPV ниже ${value || '—'}% от исходящих кликов`,
+    early_lpv_ratio_signal_min_outbound_clicks: `Проверка только при минимум ${value || '—'} исходящих кликов`,
+    early_cost_per_lpv_signal_percent_of_cpa: `Ранний сигнал при цене LPV выше ${value || '—'}% от CPA`,
+    early_cost_per_lpv_signal_min_views: `Проверка только при минимум ${value || '—'} просмотров лендинга`,
+  };
+  return hints[fieldName] ? (
+    <p className="text-xs text-gray-400 mt-1">{hints[fieldName]}</p>
+  ) : null;
+}
 
 export default function OffersPage() {
   const [offers, setOffers] = useState([]);
@@ -327,6 +352,7 @@ export default function OffersPage() {
                   <th scope="col">Название</th>
                   <th scope="col">CPA</th>
                   <th scope="col">Статус</th>
+                  <th scope="col">Правила</th>
                   <th scope="col" className="actions-col">Действия</th>
                 </tr>
               </thead>
@@ -342,6 +368,9 @@ export default function OffersPage() {
                       <span className={`badge ${o.is_active ? 'badge-success' : 'badge-muted'}`}>
                         {o.is_active ? 'Активен' : 'Выкл.'}
                       </span>
+                    </td>
+                    <td style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                      {editingId === o.id ? '↓ развёрнуто' : '✎ натсройте'}
                     </td>
                     <td className="actions-col">
                       <div style={{ display: 'flex', gap: 8 }}>
@@ -410,8 +439,11 @@ export default function OffersPage() {
                   className="form-section"
                   style={{ background: 'var(--bg-secondary)', marginBottom: 12 }}
                 >
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-                    <strong>{rule.title}</strong>
+                  <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 12, gap: 12 }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <strong style={{ display: 'block', marginBottom: 4 }}>{rule.title}</strong>
+                      {rule.hint && <p style={{ fontSize: '12px', color: 'var(--text-secondary)', margin: 0 }}>{rule.hint}</p>}
+                    </div>
                     <Toggle
                       on={rules[`${rule.key}_enabled`]}
                       onChange={(v) => setRules({ ...rules, [`${rule.key}_enabled`]: v })}
@@ -432,6 +464,7 @@ export default function OffersPage() {
                           onChange={(e) => setRules({ ...rules, [field.name]: e.target.value })}
                           disabled={!rules[`${rule.key}_enabled`]}
                         />
+                        <FieldHint fieldName={field.name} value={rules[field.name]} />
                       </div>
                     ))}
                   </div>
@@ -447,8 +480,11 @@ export default function OffersPage() {
                   className="form-section"
                   style={{ background: 'var(--bg-secondary)', marginBottom: 12 }}
                 >
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-                    <strong>{rule.title}</strong>
+                  <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 12, gap: 12 }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <strong style={{ display: 'block', marginBottom: 4 }}>{rule.title}</strong>
+                      {rule.hint && <p style={{ fontSize: '12px', color: 'var(--text-secondary)', margin: 0 }}>{rule.hint}</p>}
+                    </div>
                     <Toggle
                       on={rules[`${rule.key}_enabled`]}
                       onChange={(v) => setRules({ ...rules, [`${rule.key}_enabled`]: v })}
@@ -469,6 +505,7 @@ export default function OffersPage() {
                           onChange={(e) => setRules({ ...rules, [field.name]: e.target.value })}
                           disabled={!rules[`${rule.key}_enabled`]}
                         />
+                        <FieldHint fieldName={field.name} value={rules[field.name]} />
                       </div>
                     ))}
                   </div>

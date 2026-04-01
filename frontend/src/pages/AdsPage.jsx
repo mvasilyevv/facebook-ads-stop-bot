@@ -212,7 +212,7 @@ function getIncidentActivityAt(incident) {
     incident?.latest_disable_task_updated_at ||
     incident?.started_at ||
     incident?.created_at ||
-    null
+    new Date(0).toISOString()
   );
 }
 
@@ -883,6 +883,18 @@ function AdCard({ ad, incident, disableTask, onClick, onRestartDisableWorker, re
           <span className="ad-card__metric-label">CPC</span>
           <span className="ad-card__metric-value">{fmt(ad.cpc)}</span>
         </div>
+        {ad.outbound_ctr != null && (
+          <div className="ad-card__metric">
+            <span className="ad-card__metric-label">CTR</span>
+            <span className="ad-card__metric-value">{Number(ad.outbound_ctr).toFixed(2)}%</span>
+          </div>
+        )}
+        {ad.landing_page_views != null && (
+          <div className="ad-card__metric">
+            <span className="ad-card__metric-label">LPV</span>
+            <span className="ad-card__metric-value">{fmtNum(ad.landing_page_views)}</span>
+          </div>
+        )}
         <div className="ad-card__metric">
           <span className="ad-card__metric-label">Лиды</span>
           <span className="ad-card__metric-value">{fmtNum(ad.leads)}</span>
@@ -1300,24 +1312,42 @@ export default function AdsPage({ initialView = 'active', initialState = '' }) {
         </div>
       </div>
 
-      {/* Счётчик */}
+      {/* Счётчик с временем последнего скана */}
       <div className="ads-count">
         Показано: {filtered.length}
         {view === 'active' && archiveAds.length > 0 && (
           <span className="ads-count__archive"> · В архиве: {archiveAds.length}</span>
         )}
+        {lastScanAt && (
+          <span className="ads-count__timestamp" title={`Последний скан: ${fmtTime(lastScanAt)}`}>
+            {' '}· Скан {timeAgo(lastScanAt)}
+          </span>
+        )}
       </div>
 
       {/* Сетка карточек */}
       {loading && allAds.length === 0 ? (
-        <div className="ads-loading">Загрузка...</div>
+        <div className="ads-loading">
+          <div className="spinner" />
+          Загрузка объявлений...
+        </div>
       ) : filtered.length === 0 ? (
-        <div className="ads-empty">
-          {view === 'active'
-            ? 'Нет активных объявлений за текущую сессию'
-            : view === 'archive'
-            ? 'Архив пуст'
-            : 'Нет объявлений'}
+        <div className="ads-empty" role="status">
+          <div className="ads-empty__icon">
+            {view === 'active' ? '✅' : view === 'archive' ? '📁' : '🔍'}
+          </div>
+          <div className="ads-empty__text">
+            {view === 'active'
+              ? 'Нет активных объявлений за текущую сессию'
+              : view === 'archive'
+              ? 'Архив пуст'
+              : 'Нет объявлений'}
+          </div>
+          {stateFilter && (
+            <div className="ads-empty__hint">
+              Попробуйте сбросить фильтр по статусу
+            </div>
+          )}
         </div>
       ) : (
         <div className="ads-cards-grid">

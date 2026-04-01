@@ -1597,6 +1597,10 @@ tr:last-child td { border-bottom: none; }
   padding: 44px 20px;
   gap: 14px;
   color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
 }
 
 .spinner {
@@ -2991,11 +2995,21 @@ button.ops-focus__health-card:hover {
   border: 1px solid rgba(255, 43, 80, 0.25);
   border-left: 3px solid var(--accent-red);
   color: var(--accent-red);
-  padding: 9px 14px;
+  padding: 12px 16px;
   border-radius: var(--radius-sm);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
   margin-bottom: 14px;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  line-height: 1.5;
+}
+
+.error-banner::before {
+  content: '⚠️';
+  flex-shrink: 0;
+  font-size: 14px;
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -3153,11 +3167,18 @@ button.ops-focus__health-card:hover {
   overflow-wrap: anywhere;
 }
 
-.ads-count__archive { color: var(--text-muted); }
+.ads-count__archive,
+.ads-count__timestamp {
+  color: var(--text-muted);
+}
+
+.ads-count__timestamp {
+  font-size: 10px;
+  opacity: 0.85;
+}
 
 /* States */
-.ads-loading,
-.ads-empty {
+.ads-loading {
   padding: 44px 20px;
   text-align: center;
   color: var(--text-muted);
@@ -3168,6 +3189,44 @@ button.ops-focus__health-card:hover {
   background: var(--bg-card);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.ads-empty {
+  padding: 44px 20px;
+  text-align: center;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.ads-empty__icon {
+  font-size: 36px;
+  opacity: 0.7;
+}
+
+.ads-empty__text {
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.ads-empty__hint {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0.01em;
+  opacity: 0.85;
 }
 
 /* Cards grid */
