@@ -88,10 +88,9 @@ def _evaluate_click_stage(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | None
         return _evaluate_guardrail_only(
             spend=row.spend,
             enabled=ctx.cpc_enabled,
-            stop_percent=ctx.cpc_percent_stop,
-            cpa_amount=ctx.cpa_amount,
-            warning_pct=ctx.effective_cpc_warning_percent_of_stop,
-            stop_percent_of_base=ctx.effective_cpc_stop_percent_of_base,
+            base_stop_threshold=ctx.cpc_base_stop_threshold,
+            stop_threshold=ctx.cpc_stop_threshold,
+            warning_threshold=ctx.cpc_warning_threshold,
             code="cpc_stop",
             title="Дорогой клик",
             label="CPC",
@@ -102,10 +101,9 @@ def _evaluate_click_stage(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | None
         _evaluate_metric_only(
             metric_value=row.cpc,
             enabled=ctx.cpc_enabled,
-            stop_percent=ctx.cpc_percent_stop,
-            cpa_amount=ctx.cpa_amount,
-            warning_pct=ctx.effective_cpc_warning_percent_of_stop,
-            stop_percent_of_base=ctx.effective_cpc_stop_percent_of_base,
+            base_stop_threshold=ctx.cpc_base_stop_threshold,
+            stop_threshold=ctx.cpc_stop_threshold,
+            warning_threshold=ctx.cpc_warning_threshold,
             code="cpc_stop",
             title="Дорогой клик",
             label="CPC",
@@ -114,10 +112,9 @@ def _evaluate_click_stage(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | None
         _evaluate_guardrail_only(
             spend=row.spend,
             enabled=ctx.cpl_enabled,
-            stop_percent=ctx.cpl_percent_stop,
-            cpa_amount=ctx.cpa_amount,
-            warning_pct=ctx.effective_cpl_warning_percent_of_stop,
-            stop_percent_of_base=ctx.effective_cpl_stop_percent_of_base,
+            base_stop_threshold=ctx.cpl_base_stop_threshold,
+            stop_threshold=ctx.cpl_stop_threshold,
+            warning_threshold=ctx.cpl_warning_threshold,
             code="cpl_stop",
             title="Дорогой лид",
             label="CPL",
@@ -131,10 +128,9 @@ def _evaluate_lead_stage(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | None:
         _evaluate_metric_only(
             metric_value=row.cost_per_lead,
             enabled=ctx.cpl_enabled,
-            stop_percent=ctx.cpl_percent_stop,
-            cpa_amount=ctx.cpa_amount,
-            warning_pct=ctx.effective_cpl_warning_percent_of_stop,
-            stop_percent_of_base=ctx.effective_cpl_stop_percent_of_base,
+            base_stop_threshold=ctx.cpl_base_stop_threshold,
+            stop_threshold=ctx.cpl_stop_threshold,
+            warning_threshold=ctx.cpl_warning_threshold,
             code="cpl_stop",
             title="Дорогой лид",
             label="CPL",
@@ -143,10 +139,9 @@ def _evaluate_lead_stage(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | None:
         _evaluate_guardrail_only(
             spend=row.spend,
             enabled=ctx.cpr_enabled,
-            stop_percent=ctx.cpr_percent_stop,
-            cpa_amount=ctx.cpa_amount,
-            warning_pct=ctx.effective_cpr_warning_percent_of_stop,
-            stop_percent_of_base=ctx.effective_cpr_stop_percent_of_base,
+            base_stop_threshold=ctx.cpr_base_stop_threshold,
+            stop_threshold=ctx.cpr_stop_threshold,
+            warning_threshold=ctx.cpr_warning_threshold,
             code="cpr_stop",
             title="Дорогая рега",
             label="CPR",
@@ -159,10 +154,9 @@ def _evaluate_registration_stage(row: ScannedAdRow, ctx: RuleContext) -> RuleHit
     cpr_hit = _evaluate_metric_only(
         metric_value=row.cost_per_registration,
         enabled=ctx.cpr_enabled,
-        stop_percent=ctx.cpr_percent_stop,
-        cpa_amount=ctx.cpa_amount,
-        warning_pct=ctx.effective_cpr_warning_percent_of_stop,
-        stop_percent_of_base=ctx.effective_cpr_stop_percent_of_base,
+        base_stop_threshold=ctx.cpr_base_stop_threshold,
+        stop_threshold=ctx.cpr_stop_threshold,
+        warning_threshold=ctx.cpr_warning_threshold,
         code="cpr_stop",
         title="Дорогая рега",
         label="CPR",
@@ -209,12 +203,15 @@ def _evaluate_deposit_stage(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | No
 
 
 def _evaluate_early_signals(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | None:
+    # CPM и частота — только диагностика, ранние сигналы не создают
+
     spend_percent = _ratio_percent(row.spend, ctx.cpa_amount)
 
+    # Ранний сигнал 1: низкий CTR исходящих кликов — post-click качество трафика плохое
     if (
         ctx.early_outbound_ctr_signal_enabled
-        and spend_percent >= ctx.early_outbound_ctr_signal_min_spend_percent
         and row.outbound_ctr is not None
+        and spend_percent >= ctx.early_outbound_ctr_signal_min_spend_percent
     ):
         current = _round_percent(row.outbound_ctr)
         threshold = _round_percent(ctx.early_outbound_ctr_signal_min_percent)
@@ -225,38 +222,38 @@ def _evaluate_early_signals(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | No
                 stage=AlertStage.EARLY_SIGNAL,
                 value=current,
                 threshold=threshold,
-                summary=f"CTR исходящих кликов {_format_percent_value(current)} < минимум {_format_percent_value(threshold)}",
+                summary=f"Outbound CTR {current:.2f}% < минимум {threshold:.2f}%",
                 reason_text=(
-                    f"Исходящий CTR слишком слабый для ранней стадии: сейчас {_format_percent_value(current)} "
+                    f"CTR исходящих кликов слишком низкий: сейчас {current:.2f}% "
                     f"при расходе {_format_money_value(row.spend)}. "
-                    f"Минимум для сигнала {_format_percent_value(threshold)}, значит объявление слабо выбивает переходы на сайт."
+                    f"Минимальный порог {threshold:.2f}% — трафик не конвертируется в переходы на лендинг."
                 ),
             )
 
+    # Ранний сигнал 2: низкая доходимость до лендинга — высокий отвал после клика
     if (
         ctx.early_lpv_ratio_signal_enabled
         and row.outbound_clicks >= ctx.early_lpv_ratio_signal_min_outbound_clicks
-        and row.landing_page_views >= 0
     ):
-        ratio = _landing_page_view_ratio(row)
-        if ratio is not None:
-            current = _round_percent(ratio)
-            threshold = _round_percent(ctx.early_lpv_ratio_signal_min_percent)
-            if current < threshold:
-                return RuleHit(
-                    code="early_lpv_ratio_signal",
-                    title="Слабая доходимость до лендинга",
-                    stage=AlertStage.EARLY_SIGNAL,
-                    value=current,
-                    threshold=threshold,
-                    summary=f"Доля LPV {_format_percent_value(current)} < минимум {_format_percent_value(threshold)}",
-                    reason_text=(
-                        f"Переходы теряются между кликом и загрузкой страницы: доля LPV сейчас {_format_percent_value(current)} "
-                        f"при {row.outbound_clicks} исходящих кликах. "
-                        f"Минимум для сигнала {_format_percent_value(threshold)}, значит часть трафика не доходит до лендинга."
-                    ),
-                )
+        ratio = _ratio_percent(Decimal(row.landing_page_views), Decimal(row.outbound_clicks))
+        current = _round_percent(ratio)
+        threshold = _round_percent(ctx.early_lpv_ratio_signal_min_percent)
+        if current < threshold:
+            return RuleHit(
+                code="early_lpv_ratio_signal",
+                title="Низкая доходимость до лендинга",
+                stage=AlertStage.EARLY_SIGNAL,
+                value=current,
+                threshold=threshold,
+                summary=f"LPV/клики {current:.2f}% < минимум {threshold:.2f}%",
+                reason_text=(
+                    f"Только {current:.2f}% кликов доходит до лендинга ({row.landing_page_views} из "
+                    f"{row.outbound_clicks}). "
+                    f"Порог {threshold:.2f}% — большой отвал после клика указывает на проблемы с лендингом."
+                ),
+            )
 
+    # Ранний сигнал 3: высокая стоимость просмотра лендинга — слишком дорогой post-click
     if (
         ctx.early_cost_per_lpv_signal_enabled
         and row.landing_page_views >= ctx.early_cost_per_lpv_signal_min_views
@@ -273,11 +270,12 @@ def _evaluate_early_signals(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | No
                 stage=AlertStage.EARLY_SIGNAL,
                 value=current,
                 threshold=threshold,
-                summary=f"Цена LPV {_format_money_value(current)} > лимит {_format_money_value(threshold)}",
+                summary=f"Cost/LPV {_format_money_value(current)} > лимит {_format_money_value(threshold)}",
                 reason_text=(
-                    f"Просмотр лендинга обходится слишком дорого для ранней стадии: сейчас {_format_money_value(current)} "
-                    f"при {row.landing_page_views} просмотрах страницы. "
-                    f"Лимит для сигнала {_format_money_value(threshold)}, значит экономика проседает ещё до лида."
+                    f"Стоимость просмотра лендинга слишком высокая: {_format_money_value(current)} "
+                    f"при лимите {_format_money_value(threshold)} "
+                    f"({ctx.early_cost_per_lpv_signal_percent_of_cpa:.0f}% от CPA). "
+                    f"Экономика следующих шагов воронки будет нереалистичной."
                 ),
             )
 
@@ -301,10 +299,9 @@ def _evaluate_metric_only(
     *,
     metric_value: Decimal | None,
     enabled: bool,
-    stop_percent: Decimal,
-    cpa_amount: Decimal,
-    warning_pct: Decimal,
-    stop_percent_of_base: Decimal,
+    base_stop_threshold: Decimal,
+    stop_threshold: Decimal,
+    warning_threshold: Decimal,
     code: str,
     title: str,
     label: str,
@@ -314,9 +311,6 @@ def _evaluate_metric_only(
         return None
 
     current = _round_money(metric_value)
-    base_stop_threshold = _round_money(_percent_of_cpa(cpa_amount, stop_percent))
-    stop_threshold = _round_money(_apply_downward_stop(base_stop_threshold, stop_percent_of_base))
-    warning_threshold = _round_money(_warning_threshold(stop_threshold, warning_pct))
     threshold_text = _format_threshold_value(stop_threshold, base_stop_threshold)
 
     if current > stop_threshold:
@@ -354,10 +348,9 @@ def _evaluate_guardrail_only(
     *,
     spend: Decimal,
     enabled: bool,
-    stop_percent: Decimal,
-    cpa_amount: Decimal,
-    warning_pct: Decimal,
-    stop_percent_of_base: Decimal,
+    base_stop_threshold: Decimal,
+    stop_threshold: Decimal,
+    warning_threshold: Decimal,
     code: str,
     title: str,
     label: str,
@@ -367,9 +360,6 @@ def _evaluate_guardrail_only(
         return None
 
     current_spend = _round_money(spend)
-    base_stop_threshold = _round_money(_percent_of_cpa(cpa_amount, stop_percent))
-    stop_threshold = _round_money(_apply_downward_stop(base_stop_threshold, stop_percent_of_base))
-    warning_threshold = _round_money(_warning_threshold(stop_threshold, warning_pct))
     threshold_text = _format_threshold_value(stop_threshold, base_stop_threshold)
 
     if current_spend >= stop_threshold:
@@ -503,14 +493,7 @@ def _evaluate_spend_range(
 def _is_registration_normal(row: ScannedAdRow, ctx: RuleContext) -> bool:
     if row.registrations <= 0 or row.cost_per_registration is None:
         return False
-
-    cpr_threshold = _round_money(
-        _apply_downward_stop(
-            _percent_of_cpa(ctx.cpa_amount, ctx.cpr_percent_stop),
-            ctx.effective_cpr_stop_percent_of_base,
-        )
-    )
-    return _round_money(row.cost_per_registration) <= cpr_threshold
+    return _round_money(row.cost_per_registration) <= ctx.cpr_stop_threshold
 
 
 def _has_enable_data_gap(row: ScannedAdRow) -> bool:
@@ -536,12 +519,6 @@ def _has_safe_enable_recovery_signal(row: ScannedAdRow) -> bool:
     if row.leads >= 1:
         return row.cost_per_lead is not None
     return row.clicks >= 1 and row.cpc is not None
-
-
-def _landing_page_view_ratio(row: ScannedAdRow) -> Decimal | None:
-    if row.outbound_clicks <= 0:
-        return None
-    return (Decimal(row.landing_page_views) / Decimal(row.outbound_clicks)) * _HUNDRED
 
 
 def _percent_of_cpa(cpa: Decimal, percent: Decimal) -> Decimal:

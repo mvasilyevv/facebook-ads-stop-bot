@@ -56,6 +56,7 @@ from core.db import get_session_factory
 from core.disable_tasks import is_delivery_disabled, reconcile_disable_tasks
 from core.domain import AlertState, DisableTaskStatus
 from core.models import AdSnapshot, DisableTask, VisionSettings
+from core.sentry import setup_sentry
 from core.telegram.delivery import broadcast_disable_task_runtime_message
 from core.worker_utils import PidFileLock, wait_for_shutdown_or_timeout
 
@@ -726,6 +727,7 @@ async def _send_disable_task_completion_update(
 async def main() -> None:
     """Запуск disable worker."""
     settings = get_settings()
+    setup_sentry(dsn=settings.sentry_dsn, environment=settings.sentry_environment)
     shutdown_event = asyncio.Event()
     waiting_for_vision_logged = False
 

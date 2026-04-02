@@ -5,11 +5,11 @@ export function TopAdsQualityTable({ data = [] }) {
   }
 
   const stateConfig = {
-    NORMAL: { bg: '#d1fae5', color: '#065f46', label: 'Норма' },
-    EARLY_SIGNAL_SENT: { bg: '#ede9fe', color: '#5b21b6', label: 'Ранний' },
-    WARNING_SENT: { bg: '#fef3c7', color: '#92400e', label: 'Warning' },
-    STOP_SENT: { bg: '#fee2e2', color: '#991b1b', label: 'Стоп' },
-    DISABLED: { bg: '#f1f5f9', color: '#64748b', label: 'Откл.' },
+    NORMAL: { bg: 'var(--accent-emerald-dim)', color: 'var(--accent-emerald)', label: 'Норма' },
+    EARLY_SIGNAL_SENT: { bg: 'var(--accent-orchid-dim)', color: 'var(--accent-orchid)', label: 'Ранний' },
+    WARNING_SENT: { bg: 'var(--accent-gold-dim)', color: 'var(--accent-gold)', label: 'Warning' },
+    STOP_SENT: { bg: 'var(--accent-crimson-dim)', color: 'var(--accent-crimson)', label: 'Стоп' },
+    DISABLED: { bg: 'var(--bg-raised)', color: 'var(--text-muted)', label: 'Откл.' },
   };
 
   const getStateConfig = (state) => stateConfig[state] || stateConfig.NORMAL;
@@ -17,9 +17,9 @@ export function TopAdsQualityTable({ data = [] }) {
   const formatCurrency = (value) => `$${Number(value || 0).toFixed(2)}`;
 
   const depositsColor = (leads, deposits) => {
-    if (deposits > 0) return '#059669';
-    if (leads > 0) return '#ef4444';
-    return '#0f172a';
+    if (deposits > 0) return 'var(--accent-emerald)';
+    if (leads > 0) return 'var(--accent-crimson)';
+    return 'var(--text-primary)';
   };
 
   return (
@@ -188,7 +188,7 @@ export function TopAdsQualityTable({ data = [] }) {
                   <td style={{
                     padding: '9px 12px',
                     textAlign: 'right',
-                    color: row.leads > 0 ? '#059669' : 'var(--text-primary)',
+                    color: row.leads > 0 ? 'var(--accent-emerald)' : 'var(--text-primary)',
                     fontFamily: 'JetBrains Mono, monospace',
                     fontVariantNumeric: 'tabular-nums',
                     fontWeight: row.leads > 0 ? 600 : 400,

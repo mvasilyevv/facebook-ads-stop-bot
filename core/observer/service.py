@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
@@ -140,6 +141,40 @@ def evaluate_row(
     return evaluate_stop_rules(row, ctx)
 
 
+def _compose_reason_text(base_reason: str | None, diagnostics_text: str | None) -> str | None:
+    """Склеивает основную причину и диагностический контекст."""
+    if base_reason and diagnostics_text:
+        return f"{base_reason} {diagnostics_text}"
+    return base_reason or diagnostics_text
+
+
+def resolve_offer_code(
+    ad_name: str,
+    campaign_name: str,
+    offers: dict,
+) -> str | None:
+    """Сопоставляет объявление с оффером по вхождению кода в название.
+
+    Оффер содержит часть названия объявления/кампании.
+    Например, оффер "DRC_CR2" → объявление "DRC_CR2_CR002".
+
+    Используется word-boundary matching: код не должен быть частью другого
+    слова. Символы [a-z0-9_] считаются «внутри слова».
+    """
+    text_lower = f"{campaign_name} {ad_name}".casefold()
+    best_match: str | None = None
+    best_len = 0
+
+    for code in offers:
+        code_lower = code.casefold()
+        pattern = r"(?<![a-z0-9])" + re.escape(code_lower) + r"(?![a-z0-9])"
+        if re.search(pattern, text_lower) and len(code) > best_len:
+            best_match = code
+            best_len = len(code)
+
+    return best_match
+
+
 def build_metrics_json(
     row: ScannedAdRow,
     *,
@@ -155,18 +190,8 @@ def build_metrics_json(
         "clicks": row.clicks,
         "cpc": f"{Decimal(row.cpc):.4f}" if row.cpc is not None else None,
         "ctr": f"{Decimal(row.ctr):.4f}" if row.ctr is not None else None,
-        "outbound_clicks": row.outbound_clicks,
-        "outbound_ctr": f"{Decimal(row.outbound_ctr):.4f}"
-        if row.outbound_ctr is not None
-        else None,
-        "landing_page_views": row.landing_page_views,
         "cost_per_result": (
             f"{Decimal(row.cost_per_result):.4f}" if row.cost_per_result is not None else None
-        ),
-        "cost_per_landing_page_view": (
-            f"{Decimal(row.cost_per_landing_page_view):.4f}"
-            if row.cost_per_landing_page_view is not None
-            else None
         ),
         "cpm": f"{Decimal(row.cpm):.4f}" if row.cpm is not None else None,
         "frequency": f"{Decimal(row.frequency):.4f}" if row.frequency is not None else None,
@@ -181,6 +206,16 @@ def build_metrics_json(
             else None
         ),
         "deposits": row.deposits,
+        "outbound_clicks": row.outbound_clicks,
+        "outbound_ctr": f"{Decimal(row.outbound_ctr):.4f}"
+        if row.outbound_ctr is not None
+        else None,
+        "landing_page_views": row.landing_page_views,
+        "cost_per_landing_page_view": (
+            f"{Decimal(row.cost_per_landing_page_view):.4f}"
+            if row.cost_per_landing_page_view is not None
+            else None
+        ),
     }
     if rule_summaries:
         payload["rule_summaries"] = rule_summaries

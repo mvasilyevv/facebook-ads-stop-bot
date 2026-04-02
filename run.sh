@@ -388,6 +388,9 @@ echo -e "${GREEN}  Telegram PID: $TG_PID${NC}"
 # ==========================================
 if [ -d frontend ]; then
     echo -e "${BLUE}🎨 Запускаю Frontend (Vite)...${NC}"
+    # Убиваем старые Vite-процессы чтобы не накапливались на разных портах
+    pkill -f "node.*vite" 2>/dev/null || true
+    sleep 1
     cd frontend
     if [ ! -d node_modules ]; then
         npm install --silent 2>&1 | tail -3

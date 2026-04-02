@@ -6,7 +6,6 @@ from __future__ import annotations
 from decimal import Decimal, InvalidOperation
 from typing import Any, Mapping
 
-
 _METRIC_FIELDS = (
     "spend",
     "clicks",

@@ -32,13 +32,8 @@ _FIELD_ALIASES: tuple[tuple[str, str], ...] = (
     ("cost_per_action_type:omni_complete_registration", "cost_per_registration"),
     ("actions:omni_complete_registration", "registrations"),
     ("omni_complete_registration", "registrations"),
-    ("cost_per_action_type:landing_page_view", "cost_per_landing_page_view"),
-    ("actions:omni_landing_page_view", "landing_page_views"),
-    ("omni_landing_page_view", "landing_page_views"),
     ("cost_per_action_type:lead", "cost_per_lead"),
     ("actions:lead", "leads"),
-    ("outbound_clicks_ctr:outbound_click", "outbound_ctr"),
-    ("outbound_clicks:outbound_click", "outbound_clicks"),
     # Сначала разбираем кампанию/адсет, иначе их съедает общий алиас `name`.
     ("forObjectType(campaign_group_name,ADGROUP)", "campaign_name"),
     ("campaign_group_name", "campaign_name"),
@@ -51,6 +46,12 @@ _FIELD_ALIASES: tuple[tuple[str, str], ...] = (
     ("budget", "budget"),
     ("reach", "reach"),
     ("impressions", "impressions"),
+    # Outbound-метрики идут ДО общего "clicks"/"ctr", иначе substring-матчинг
+    # захватит "outbound_clicks_ctr" под алиас "ctr" раньше нужного.
+    ("outbound_clicks_ctr", "outbound_ctr"),
+    ("cost_per_landing_page_view", "cost_per_landing_page_view"),
+    ("landing_page_view", "landing_page_views"),
+    ("outbound_clicks", "outbound_clicks"),
     ("ctr", "ctr"),
     ("cost_per_result", "cost_per_result"),
     # В нашем Ads Manager колонка «Результаты» = количество депозитов.
@@ -72,10 +73,6 @@ _NUMERIC_FIELDS = frozenset(
         "clicks",
         "cpc",
         "ctr",
-        "outbound_clicks",
-        "outbound_ctr",
-        "landing_page_views",
-        "cost_per_landing_page_view",
         "cpm",
         "frequency",
         "leads",
@@ -84,6 +81,10 @@ _NUMERIC_FIELDS = frozenset(
         "cost_per_registration",
         "deposits",
         "cost_per_result",
+        "outbound_clicks",
+        "outbound_ctr",
+        "landing_page_views",
+        "cost_per_landing_page_view",
     }
 )
 
@@ -350,11 +351,7 @@ def _build_row_from_fields(fields: dict) -> ScannedAdRow | None:
     clicks = _parse_int_value(fields.get("clicks", ""))
     cpc = _parse_money_or_none(fields.get("cpc", ""))
     ctr = _parse_decimal_or_none(fields.get("ctr", ""))
-    outbound_clicks = _parse_int_value(fields.get("outbound_clicks", ""))
-    outbound_ctr = _parse_decimal_or_none(fields.get("outbound_ctr", ""))
-    landing_page_views = _parse_int_value(fields.get("landing_page_views", ""))
     cost_per_result = _parse_money_or_none(fields.get("cost_per_result", ""))
-    cost_per_landing_page_view = _parse_money_or_none(fields.get("cost_per_landing_page_view", ""))
     cpm = _parse_money_or_none(fields.get("cpm", ""))
     frequency = _parse_decimal_or_none(fields.get("frequency", ""))
     leads = _parse_int_value(fields.get("leads", ""))
@@ -362,6 +359,10 @@ def _build_row_from_fields(fields: dict) -> ScannedAdRow | None:
     registrations = _parse_int_value(fields.get("registrations", ""))
     cost_per_registration = _parse_money_or_none(fields.get("cost_per_registration", ""))
     deposits = _parse_int_value(fields.get("deposits", ""))
+    outbound_clicks = _parse_int_value(fields.get("outbound_clicks", ""))
+    outbound_ctr = _parse_decimal_or_none(fields.get("outbound_ctr", ""))
+    landing_page_views = _parse_int_value(fields.get("landing_page_views", ""))
+    cost_per_landing_page_view = _parse_money_or_none(fields.get("cost_per_landing_page_view", ""))
 
     return ScannedAdRow(
         fb_ad_id=fb_ad_id,
@@ -376,11 +377,7 @@ def _build_row_from_fields(fields: dict) -> ScannedAdRow | None:
         clicks=clicks,
         cpc=cpc,
         ctr=ctr,
-        outbound_clicks=outbound_clicks,
-        outbound_ctr=outbound_ctr,
-        landing_page_views=landing_page_views,
         cost_per_result=cost_per_result,
-        cost_per_landing_page_view=cost_per_landing_page_view,
         cpm=cpm,
         frequency=frequency,
         leads=leads,
@@ -388,6 +385,10 @@ def _build_row_from_fields(fields: dict) -> ScannedAdRow | None:
         registrations=registrations,
         cost_per_registration=cost_per_registration,
         deposits=deposits,
+        outbound_clicks=outbound_clicks,
+        outbound_ctr=outbound_ctr,
+        landing_page_views=landing_page_views,
+        cost_per_landing_page_view=cost_per_landing_page_view,
     )
 
 
@@ -480,11 +481,7 @@ async def _parse_row_from_cells(
     clicks = _parse_int_value(fields.get("clicks", ""))
     cpc = _parse_money_or_none(fields.get("cpc", ""))
     ctr = _parse_decimal_or_none(fields.get("ctr", ""))
-    outbound_clicks = _parse_int_value(fields.get("outbound_clicks", ""))
-    outbound_ctr = _parse_decimal_or_none(fields.get("outbound_ctr", ""))
-    landing_page_views = _parse_int_value(fields.get("landing_page_views", ""))
     cost_per_result = _parse_money_or_none(fields.get("cost_per_result", ""))
-    cost_per_landing_page_view = _parse_money_or_none(fields.get("cost_per_landing_page_view", ""))
     cpm = _parse_money_or_none(fields.get("cpm", ""))
     frequency = _parse_decimal_or_none(fields.get("frequency", ""))
     leads = _parse_int_value(fields.get("leads", ""))
@@ -492,6 +489,10 @@ async def _parse_row_from_cells(
     registrations = _parse_int_value(fields.get("registrations", ""))
     cost_per_registration = _parse_money_or_none(fields.get("cost_per_registration", ""))
     deposits = _parse_int_value(fields.get("deposits", ""))
+    outbound_clicks = _parse_int_value(fields.get("outbound_clicks", ""))
+    outbound_ctr = _parse_decimal_or_none(fields.get("outbound_ctr", ""))
+    landing_page_views = _parse_int_value(fields.get("landing_page_views", ""))
+    cost_per_landing_page_view = _parse_money_or_none(fields.get("cost_per_landing_page_view", ""))
 
     return ScannedAdRow(
         fb_ad_id=fb_ad_id,
@@ -506,11 +507,7 @@ async def _parse_row_from_cells(
         clicks=clicks,
         cpc=cpc,
         ctr=ctr,
-        outbound_clicks=outbound_clicks,
-        outbound_ctr=outbound_ctr,
-        landing_page_views=landing_page_views,
         cost_per_result=cost_per_result,
-        cost_per_landing_page_view=cost_per_landing_page_view,
         cpm=cpm,
         frequency=frequency,
         leads=leads,
@@ -518,6 +515,10 @@ async def _parse_row_from_cells(
         registrations=registrations,
         cost_per_registration=cost_per_registration,
         deposits=deposits,
+        outbound_clicks=outbound_clicks,
+        outbound_ctr=outbound_ctr,
+        landing_page_views=landing_page_views,
+        cost_per_landing_page_view=cost_per_landing_page_view,
     )
 
 

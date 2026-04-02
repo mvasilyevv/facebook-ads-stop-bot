@@ -411,7 +411,7 @@ export default function OffersPage() {
           </div>
           {offers.length === 0 && (
             <div className="empty-state">
-              <div className="empty-state-icon">🎯</div>
+              <div className="empty-state-icon">○</div>
               <div className="empty-state-title">Нет офферов</div>
               <div>Создайте первый оффер, чтобы начать мониторинг</div>
             </div>
@@ -459,9 +459,11 @@ export default function OffersPage() {
                         <input
                           id={`rule-${field.name}`}
                           className="form-input"
-                          type={field.type}
+                          type="text"
+                          inputMode="numeric"
+                          pattern="[0-9]*"
                           value={rules[field.name] || ''}
-                          onChange={(e) => setRules({ ...rules, [field.name]: e.target.value })}
+                          onChange={(e) => setRules({ ...rules, [field.name]: e.target.value.replace(/\D/g, '') })}
                           disabled={!rules[`${rule.key}_enabled`]}
                         />
                         <FieldHint fieldName={field.name} value={rules[field.name]} />
@@ -528,9 +530,11 @@ export default function OffersPage() {
                       <input
                         id={`rule-${field.name}`}
                         className="form-input"
-                        type={field.type}
+                        type="text"
+                        inputMode="numeric"
+                        pattern="[0-9]*"
                         value={rules[field.name] || ''}
-                        onChange={(e) => setRules({ ...rules, [field.name]: e.target.value })}
+                        onChange={(e) => setRules({ ...rules, [field.name]: e.target.value.replace(/\D/g, '') })}
                       />
                     </div>
                   ))}

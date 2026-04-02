@@ -53,9 +53,11 @@ async def test_get_telegram_settings_returns_forum_group_fields(mock_db):
     mock_db.scalar = AsyncMock(return_value=row)
 
     with (
-        patch("apps.api.main.decrypt", return_value="1234567890TOKEN"),
-        patch("apps.api.main.get_latest_active_invite", new=AsyncMock(return_value=invite)),
-        patch("apps.api.main.poller_status_from_settings", return_value="ONLINE"),
+        patch("apps.api.routers.settings.decrypt", return_value="1234567890TOKEN"),
+        patch(
+            "apps.api.routers.settings.get_latest_active_invite", new=AsyncMock(return_value=invite)
+        ),
+        patch("apps.api.routers.settings.poller_status_from_settings", return_value="ONLINE"),
     ):
         result = await get_telegram_settings(db=mock_db)
 
@@ -110,10 +112,13 @@ async def test_set_telegram_token_prepares_forum_cutover(mock_db):
 
     with (
         patch("httpx.AsyncClient", return_value=http_client),
-        patch("apps.api.main.get_or_create_telegram_settings", new=AsyncMock(return_value=row)),
-        patch("apps.api.main.encrypt", return_value="enc-token"),
         patch(
-            "apps.api.main._prepare_telegram_forum_cutover",
+            "apps.api.routers.settings.get_or_create_telegram_settings",
+            new=AsyncMock(return_value=row),
+        ),
+        patch("apps.api.routers.settings.encrypt", return_value="enc-token"),
+        patch(
+            "apps.api.routers.settings._prepare_telegram_forum_cutover",
             new=AsyncMock(return_value=cutover),
         ) as prepare_cutover,
     ):
@@ -171,7 +176,7 @@ async def test_create_invite_code_returns_activation_command_for_forum_group(moc
     mock_db.scalar = AsyncMock(return_value=row)
 
     with patch(
-        "apps.api.main.create_telegram_invite",
+        "apps.api.routers.vision_telegram.create_telegram_invite",
         new=AsyncMock(return_value=invite),
     ):
         result = await create_invite_code(db=mock_db)

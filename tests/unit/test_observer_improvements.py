@@ -54,7 +54,7 @@ def _telegram_destination(
 # Проверяем что compute_jitter возвращает значение в диапазоне 50-150% от interval
 def test_compute_jitter_range():
     """Задержка должна быть в пределах 50-150% от interval_seconds."""
-    from apps.observer_worker.main import compute_jitter
+    from apps.observer_worker.main import compute_jitter  # compute_jitter остаётся в main
 
     interval = 90
     results = [compute_jitter(interval, 45) for _ in range(500)]
@@ -81,8 +81,8 @@ def test_compute_jitter_is_random():
 @pytest.mark.asyncio
 async def test_batch_save_snapshots_single_query():
     """Batch upsert должен выполнять один запрос на все снэпшоты, а не N."""
-    import apps.observer_worker.main as observer_main
-    from apps.observer_worker.main import batch_save_snapshots
+    from core.observer.scan_guard import ZeroScanGuard
+    from core.observer.snapshot_writer import batch_save_snapshots
 
     mock_session = AsyncMock()
     mock_session.__aenter__ = AsyncMock(return_value=mock_session)
@@ -124,20 +124,18 @@ async def test_batch_save_snapshots_single_query():
         for i in range(50)
     ]
 
+    scan_guard = ZeroScanGuard()
     with (
         patch(
-            "apps.observer_worker.main.get_session_factory",
+            "core.observer.snapshot_writer.get_session_factory",
             return_value=mock_factory,
         ),
         patch(
-            "apps.observer_worker.main._maybe_rollover_cabinet_day",
+            "core.observer.snapshot_writer._maybe_rollover_cabinet_day",
             new=AsyncMock(),
         ),
-        patch.object(observer_main, "_PENDING_ZERO_SCAN_CONFIRMATION_AT", None),
-        patch.object(observer_main, "_PENDING_PARTIAL_BATCH_CONFIRMATION_AT", None),
-        patch.object(observer_main, "_LAST_ACCEPTED_SNAPSHOT_BATCH_SIZE", None),
     ):
-        await batch_save_snapshots(snapshot_data)
+        await batch_save_snapshots(snapshot_data, scan_guard)
 
     # Должен быть ровно один вызов execute (один INSERT для всех 50 строк)
     assert mock_session.execute.call_count == 1, (
@@ -151,8 +149,8 @@ async def test_batch_save_snapshots_single_query():
 @pytest.mark.asyncio
 async def test_batch_save_snapshots_preserves_identity_names_on_empty_update():
     """Upsert не должен перезаписывать campaign/adset пустыми строками."""
-    import apps.observer_worker.main as observer_main
-    from apps.observer_worker.main import batch_save_snapshots
+    from core.observer.scan_guard import ZeroScanGuard
+    from core.observer.snapshot_writer import batch_save_snapshots
 
     mock_session = AsyncMock()
     mock_session.__aenter__ = AsyncMock(return_value=mock_session)
@@ -192,20 +190,18 @@ async def test_batch_save_snapshots_preserves_identity_names_on_empty_update():
         }
     ]
 
+    scan_guard = ZeroScanGuard()
     with (
         patch(
-            "apps.observer_worker.main.get_session_factory",
+            "core.observer.snapshot_writer.get_session_factory",
             return_value=mock_factory,
         ),
         patch(
-            "apps.observer_worker.main._maybe_rollover_cabinet_day",
+            "core.observer.snapshot_writer._maybe_rollover_cabinet_day",
             new=AsyncMock(),
         ),
-        patch.object(observer_main, "_PENDING_ZERO_SCAN_CONFIRMATION_AT", None),
-        patch.object(observer_main, "_PENDING_PARTIAL_BATCH_CONFIRMATION_AT", None),
-        patch.object(observer_main, "_LAST_ACCEPTED_SNAPSHOT_BATCH_SIZE", None),
     ):
-        await batch_save_snapshots(snapshot_data)
+        await batch_save_snapshots(snapshot_data, scan_guard)
 
     sql = str(mock_session.execute.await_args.args[0]).lower()
     assert "coalesce" in sql
@@ -218,7 +214,8 @@ async def test_batch_save_snapshots_preserves_identity_names_on_empty_update():
 @pytest.mark.asyncio
 async def test_batch_save_snapshots_requires_confirmed_zero_scan_before_persist():
     """Подозрительный zero-scan должен пропускаться один цикл и применяться только после повтора."""
-    import apps.observer_worker.main as observer_main
+    from core.observer.scan_guard import ZeroScanGuard
+    from core.observer.snapshot_writer import batch_save_snapshots
 
     mock_session = AsyncMock()
     mock_session.__aenter__ = AsyncMock(return_value=mock_session)
@@ -258,19 +255,19 @@ async def test_batch_save_snapshots_requires_confirmed_zero_scan_before_persist(
         }
     ]
 
+    scan_guard = ZeroScanGuard()
     with (
         patch(
-            "apps.observer_worker.main.get_session_factory",
+            "core.observer.snapshot_writer.get_session_factory",
             return_value=mock_factory,
         ),
         patch(
-            "apps.observer_worker.main._maybe_rollover_cabinet_day",
+            "core.observer.snapshot_writer._maybe_rollover_cabinet_day",
             new=AsyncMock(),
         ) as rollover_mock,
-        patch.object(observer_main, "_PENDING_ZERO_SCAN_CONFIRMATION_AT", None),
     ):
-        await observer_main.batch_save_snapshots(snapshot_data)
-        await observer_main.batch_save_snapshots(snapshot_data)
+        await batch_save_snapshots(snapshot_data, scan_guard)
+        await batch_save_snapshots(snapshot_data, scan_guard)
 
     assert mock_session.execute.call_count == 1
     assert mock_session.commit.call_count == 1
@@ -281,7 +278,8 @@ async def test_batch_save_snapshots_requires_confirmed_zero_scan_before_persist(
 @pytest.mark.asyncio
 async def test_batch_save_snapshots_requires_confirmed_partial_batch_before_persist():
     """Первый подозрительно неполный non-zero батч должен пропускаться до повторного подтверждения."""
-    import apps.observer_worker.main as observer_main
+    from core.observer.scan_guard import ZeroScanGuard
+    from core.observer.snapshot_writer import batch_save_snapshots
 
     def build_snapshot(index: int) -> dict:
         return {
@@ -323,22 +321,20 @@ async def test_batch_save_snapshots_requires_confirmed_partial_batch_before_pers
     mock_session.__aexit__ = AsyncMock(return_value=False)
     mock_factory = MagicMock(return_value=mock_session)
 
+    scan_guard = ZeroScanGuard()
     with (
         patch(
-            "apps.observer_worker.main.get_session_factory",
+            "core.observer.snapshot_writer.get_session_factory",
             return_value=mock_factory,
         ),
         patch(
-            "apps.observer_worker.main._maybe_rollover_cabinet_day",
+            "core.observer.snapshot_writer._maybe_rollover_cabinet_day",
             new=AsyncMock(),
         ),
-        patch.object(observer_main, "_PENDING_ZERO_SCAN_CONFIRMATION_AT", None),
-        patch.object(observer_main, "_PENDING_PARTIAL_BATCH_CONFIRMATION_AT", None),
-        patch.object(observer_main, "_LAST_ACCEPTED_SNAPSHOT_BATCH_SIZE", None),
     ):
-        await observer_main.batch_save_snapshots(full_snapshot_data)
-        await observer_main.batch_save_snapshots(partial_snapshot_data)
-        await observer_main.batch_save_snapshots(partial_snapshot_data)
+        await batch_save_snapshots(full_snapshot_data, scan_guard)
+        await batch_save_snapshots(partial_snapshot_data, scan_guard)
+        await batch_save_snapshots(partial_snapshot_data, scan_guard)
 
     assert mock_session.execute.call_count == 2
     assert mock_session.commit.call_count == 2
@@ -347,7 +343,7 @@ async def test_batch_save_snapshots_requires_confirmed_partial_batch_before_pers
 # Проверяем что stage EARLY_SIGNAL переводится в состояние EARLY_SIGNAL_SENT
 def test_state_for_emitted_stage_maps_early_signal():
     """Ранний сигнал должен отправляться в состоянии EARLY_SIGNAL_SENT."""
-    from apps.observer_worker.main import _state_for_emitted_stage
+    from core.observer.state_machine import _state_for_emitted_stage
 
     assert _state_for_emitted_stage(AlertStage.EARLY_SIGNAL) == AlertState.EARLY_SIGNAL_SENT
     assert _state_for_emitted_stage(AlertStage.WARNING) == AlertState.WARNING_SENT
@@ -357,7 +353,7 @@ def test_state_for_emitted_stage_maps_early_signal():
 # Проверяем что CLAIMED ждёт подтверждения OFF, а DISABLED снимается только при новой активации
 def test_reopen_reactivated_alert_state_keeps_claimed_and_resets_disabled():
     """CLAIMED не должен сбрасываться до подтверждения OFF следующим сканом."""
-    from apps.observer_worker.main import reopen_reactivated_alert_state
+    from core.observer.state_machine import reopen_reactivated_alert_state
 
     assert reopen_reactivated_alert_state(AlertState.CLAIMED, "token-1", "ACTIVE") == (
         AlertState.CLAIMED,
@@ -381,7 +377,7 @@ def test_reopen_reactivated_alert_state_keeps_claimed_and_resets_disabled():
 @pytest.mark.asyncio
 async def test_reconcile_disable_incidents_after_scan_keeps_recent_success():
     """Недавний успешный disable-task должен оставлять incident без нового follow-up."""
-    from apps.observer_worker.main import reconcile_disable_incidents_after_scan
+    from core.observer.disable_reconciler import reconcile_disable_incidents_after_scan
 
     snapshot = SimpleNamespace(
         fb_ad_id="ad_001",
@@ -420,7 +416,7 @@ async def test_reconcile_disable_incidents_after_scan_keeps_recent_success():
     mock_session.scalar = AsyncMock(side_effect=[datetime.now(UTC), 0, 1])
     mock_factory = MagicMock(return_value=mock_session)
 
-    with patch("apps.observer_worker.main.get_session_factory", return_value=mock_factory):
+    with patch("core.observer.disable_reconciler.get_session_factory", return_value=mock_factory):
         alerts = await reconcile_disable_incidents_after_scan()
 
     assert alerts == []
@@ -431,7 +427,7 @@ async def test_reconcile_disable_incidents_after_scan_keeps_recent_success():
 @pytest.mark.asyncio
 async def test_reconcile_disable_incidents_after_scan_creates_follow_up_attempt():
     """Если OFF не подтвердился, observer должен создать новую auto-disable попытку в том же incident."""
-    from apps.observer_worker.main import reconcile_disable_incidents_after_scan
+    from core.observer.disable_reconciler import reconcile_disable_incidents_after_scan
 
     snapshot = SimpleNamespace(
         fb_ad_id="ad_002",
@@ -472,9 +468,9 @@ async def test_reconcile_disable_incidents_after_scan_creates_follow_up_attempt(
     mock_factory = MagicMock(return_value=mock_session)
 
     with (
-        patch("apps.observer_worker.main.get_session_factory", return_value=mock_factory),
+        patch("core.observer.disable_reconciler.get_session_factory", return_value=mock_factory),
         patch(
-            "apps.observer_worker.main._create_auto_disable_task_for_snapshot",
+            "core.observer.disable_reconciler._create_auto_disable_task_for_snapshot",
             new=AsyncMock(return_value=True),
         ) as create_attempt,
     ):
@@ -489,7 +485,7 @@ async def test_reconcile_disable_incidents_after_scan_creates_follow_up_attempt(
 @pytest.mark.asyncio
 async def test_reconcile_disable_incidents_after_scan_marks_manual_attention_after_limit():
     """После лимита follow-up попыток observer должен только обновить инцидент сообщением ручного разбора."""
-    from apps.observer_worker.main import reconcile_disable_incidents_after_scan
+    from core.observer.disable_reconciler import reconcile_disable_incidents_after_scan
 
     snapshot = SimpleNamespace(
         fb_ad_id="ad_003",
@@ -530,9 +526,9 @@ async def test_reconcile_disable_incidents_after_scan_marks_manual_attention_aft
     mock_factory = MagicMock(return_value=mock_session)
 
     with (
-        patch("apps.observer_worker.main.get_session_factory", return_value=mock_factory),
+        patch("core.observer.disable_reconciler.get_session_factory", return_value=mock_factory),
         patch(
-            "apps.observer_worker.main._create_auto_disable_task_for_snapshot",
+            "core.observer.disable_reconciler._create_auto_disable_task_for_snapshot",
             new=AsyncMock(return_value=True),
         ) as create_attempt,
     ):
@@ -549,7 +545,7 @@ async def test_reconcile_disable_incidents_after_scan_marks_manual_attention_aft
 # Проверяем склейку текста причины с диагностикой
 def test_compose_reason_text_appends_diagnostics_text():
     """Диагностический контекст должен дописываться к основной причине."""
-    from apps.observer_worker.main import _compose_reason_text
+    from core.observer.service import _compose_reason_text
 
     assert (
         _compose_reason_text("Основная причина.", "CPM выше медианы.")
@@ -563,7 +559,7 @@ def test_compose_reason_text_appends_diagnostics_text():
 @pytest.mark.asyncio
 async def test_collect_reminder_alerts_restores_early_signal_reason():
     """Напоминание должно сохранить EARLY_SIGNAL и человекочитаемую причину."""
-    from apps.observer_worker.main import _collect_reminder_alerts
+    from core.observer.db_queries import collect_reminder_alerts
 
     now = datetime.now(UTC)
     snap = SimpleNamespace(
@@ -623,10 +619,10 @@ async def test_collect_reminder_alerts_restores_early_signal_reason():
     mock_factory = MagicMock(return_value=mock_session)
 
     with patch(
-        "apps.observer_worker.main.get_session_factory",
+        "core.observer.db_queries.get_session_factory",
         return_value=mock_factory,
     ):
-        reminders = await _collect_reminder_alerts(interval_seconds=90)
+        reminders = await collect_reminder_alerts(interval_seconds=90)
 
     assert len(reminders) == 1
     reminder = reminders[0]
@@ -644,7 +640,7 @@ async def test_collect_reminder_alerts_restores_early_signal_reason():
 @pytest.mark.asyncio
 async def test_collect_reminder_alerts_keeps_stop_even_if_snoozed():
     """STOP-напоминание должно пройти даже при активном snoozed_until."""
-    from apps.observer_worker.main import _collect_reminder_alerts
+    from core.observer.db_queries import collect_reminder_alerts
 
     now = datetime.now(UTC)
     snap = SimpleNamespace(
@@ -696,8 +692,8 @@ async def test_collect_reminder_alerts_keeps_stop_even_if_snoozed():
     mock_session.scalar = AsyncMock(side_effect=[now, now - timedelta(minutes=20)])
     mock_factory = MagicMock(return_value=mock_session)
 
-    with patch("apps.observer_worker.main.get_session_factory", return_value=mock_factory):
-        reminders = await _collect_reminder_alerts(interval_seconds=90)
+    with patch("core.observer.db_queries.get_session_factory", return_value=mock_factory):
+        reminders = await collect_reminder_alerts(interval_seconds=90)
 
     assert len(reminders) == 1
     assert reminders[0].stage == AlertStage.STOP
@@ -707,7 +703,7 @@ async def test_collect_reminder_alerts_keeps_stop_even_if_snoozed():
 @pytest.mark.asyncio
 async def test_collect_reminder_alerts_skips_archived_snapshots():
     """Напоминания должны отправляться только по объявлениям из актуальной скан-сессии."""
-    from apps.observer_worker.main import _collect_reminder_alerts
+    from core.observer.db_queries import collect_reminder_alerts
 
     now = datetime.now(UTC)
     archived_snap = SimpleNamespace(
@@ -753,10 +749,10 @@ async def test_collect_reminder_alerts_skips_archived_snapshots():
     mock_factory = MagicMock(return_value=mock_session)
 
     with patch(
-        "apps.observer_worker.main.get_session_factory",
+        "core.observer.db_queries.get_session_factory",
         return_value=mock_factory,
     ):
-        reminders = await _collect_reminder_alerts(interval_seconds=90)
+        reminders = await collect_reminder_alerts(interval_seconds=90)
 
     assert reminders == []
     mock_session.execute.assert_awaited_once()
@@ -767,7 +763,7 @@ async def test_collect_reminder_alerts_skips_archived_snapshots():
 @pytest.mark.asyncio
 async def test_auto_create_disable_tasks_skips_archived_snapshot():
     """Авто-стоп должен пропускать snapshot, который уже выпал из актуального окна."""
-    from apps.observer_worker.main import auto_create_disable_tasks
+    from core.observer.disable_reconciler import auto_create_disable_tasks
 
     now = datetime.now(UTC)
     alert = SimpleNamespace(
@@ -789,7 +785,7 @@ async def test_auto_create_disable_tasks_skips_archived_snapshot():
     mock_factory = MagicMock(return_value=mock_session)
 
     with patch(
-        "apps.observer_worker.main.get_session_factory",
+        "core.observer.disable_reconciler.get_session_factory",
         return_value=mock_factory,
     ):
         await auto_create_disable_tasks([alert])
@@ -802,7 +798,7 @@ async def test_auto_create_disable_tasks_skips_archived_snapshot():
 @pytest.mark.asyncio
 async def test_send_alerts_to_telegram_persists_early_signal_reason():
     """Отправка раннего сигнала должна сохранить EARLY_SIGNAL_SENT и причину в AlertEvent."""
-    from apps.observer_worker.main import _send_alerts_to_telegram
+    from apps.observer_worker.main import _send_alerts_to_telegram  # Остаётся в main
 
     destination = _telegram_destination(chat_id="chat-1")
     candidate = MagicMock()
@@ -878,7 +874,7 @@ async def test_send_alerts_to_telegram_persists_early_signal_reason():
 @pytest.mark.asyncio
 async def test_send_alerts_to_telegram_skips_persist_on_failure():
     """Если Telegram не принял сообщение, AlertEvent сохранять нельзя."""
-    from apps.observer_worker.main import _send_alerts_to_telegram
+    from apps.observer_worker.main import _send_alerts_to_telegram  # Остаётся в main
 
     destination = _telegram_destination(chat_id="chat-1")
     candidate = MagicMock()
@@ -908,7 +904,7 @@ async def test_send_alerts_to_telegram_skips_persist_on_failure():
     mock_factory = MagicMock(return_value=mock_session)
 
     with (
-        patch("apps.observer_worker.main.get_session_factory", return_value=mock_factory),
+        patch("core.observer.disable_reconciler.get_session_factory", return_value=mock_factory),
         patch(
             "apps.observer_worker.main.load_message_refs_by_chat",
             new=AsyncMock(return_value={}),
@@ -925,7 +921,7 @@ async def test_send_alerts_to_telegram_skips_persist_on_failure():
 @pytest.mark.asyncio
 async def test_send_alerts_to_telegram_updates_same_incident_without_new_history_row():
     """Повторное обновление одного incident должно редактировать сообщение без новой history-записи."""
-    from apps.observer_worker.main import _send_alerts_to_telegram
+    from apps.observer_worker.main import _send_alerts_to_telegram  # Остаётся в main
 
     destination = _telegram_destination(
         chat_id="chat-1",
@@ -1009,15 +1005,17 @@ async def test_send_alerts_to_telegram_updates_same_incident_without_new_history
 @pytest.mark.asyncio
 async def test_batch_save_snapshots_empty_list():
     """При пустом списке не должно быть обращений к БД."""
-    from apps.observer_worker.main import batch_save_snapshots
+    from core.observer.scan_guard import ZeroScanGuard
+    from core.observer.snapshot_writer import batch_save_snapshots
 
     mock_factory = MagicMock()
+    scan_guard = ZeroScanGuard()
 
     with patch(
-        "apps.observer_worker.main.get_session_factory",
+        "core.observer.snapshot_writer.get_session_factory",
         return_value=mock_factory,
     ):
-        await batch_save_snapshots([])
+        await batch_save_snapshots([], scan_guard)
 
     # Фабрика не должна вызываться при пустом списке
     mock_factory.assert_not_called()
@@ -1030,7 +1028,7 @@ async def test_batch_save_snapshots_empty_list():
 @pytest.mark.asyncio
 async def test_load_ad_states_from_db():
     """FSM-состояния должны загружаться из AdSnapshot при старте."""
-    from apps.observer_worker.main import load_ad_states_from_db
+    from core.observer.db_queries import load_ad_states_from_db
 
     # Мокаем результат запроса к БД
     mock_rows = [
@@ -1050,7 +1048,7 @@ async def test_load_ad_states_from_db():
     mock_factory = MagicMock(return_value=mock_session)
 
     with patch(
-        "apps.observer_worker.main.get_session_factory",
+        "core.observer.db_queries.get_session_factory",
         return_value=mock_factory,
     ):
         states = await load_ad_states_from_db()
@@ -1066,7 +1064,7 @@ async def test_load_ad_states_from_db():
 @pytest.mark.asyncio
 async def test_load_ad_states_empty_db():
     """При пустой БД должен вернуться пустой словарь состояний."""
-    from apps.observer_worker.main import load_ad_states_from_db
+    from core.observer.db_queries import load_ad_states_from_db
 
     mock_result = MagicMock()
     mock_result.all.return_value = []
@@ -1079,7 +1077,7 @@ async def test_load_ad_states_empty_db():
     mock_factory = MagicMock(return_value=mock_session)
 
     with patch(
-        "apps.observer_worker.main.get_session_factory",
+        "core.observer.db_queries.get_session_factory",
         return_value=mock_factory,
     ):
         states = await load_ad_states_from_db()
@@ -1090,7 +1088,7 @@ async def test_load_ad_states_empty_db():
 # Проверяем что реальный OFF сохраняет DISABLED для ранее выключавшихся объявлений
 def test_resolve_off_alert_state_keeps_disabled_for_claimed_and_disabled():
     """При delivery=OFF состояния CLAIMED и DISABLED должны оставаться терминальным DISABLED."""
-    from apps.observer_worker.main import resolve_off_alert_state
+    from core.observer.state_machine import resolve_off_alert_state
 
     assert resolve_off_alert_state(AlertState.CLAIMED) == AlertState.DISABLED
     assert resolve_off_alert_state(AlertState.DISABLED) == AlertState.DISABLED
@@ -1101,10 +1099,10 @@ def test_resolve_off_alert_state_keeps_disabled_for_claimed_and_disabled():
 @pytest.mark.asyncio
 async def test_load_vision_settings_for_runtime_prefers_db():
     """Если в БД есть Vision-настройки, они должны перекрывать fallback env."""
-    from apps.observer_worker.main import load_vision_settings_for_runtime
+    from core.observer.db_queries import load_vision_settings_for_runtime
 
     with patch(
-        "apps.observer_worker.main.load_vision_settings_from_db",
+        "core.observer.db_queries.load_vision_settings_from_db",
         new=AsyncMock(return_value=("db-token", "http://db:3030", "db-profile")),
     ):
         x_token, api_url, profile_id = await load_vision_settings_for_runtime(
@@ -1122,10 +1120,10 @@ async def test_load_vision_settings_for_runtime_prefers_db():
 @pytest.mark.asyncio
 async def test_load_vision_settings_for_runtime_uses_fallback():
     """Если в БД нет Vision-настроек, нужно использовать fallback значения."""
-    from apps.observer_worker.main import load_vision_settings_for_runtime
+    from core.observer.db_queries import load_vision_settings_for_runtime
 
     with patch(
-        "apps.observer_worker.main.load_vision_settings_from_db",
+        "core.observer.db_queries.load_vision_settings_from_db",
         new=AsyncMock(return_value=("", "", "")),
     ):
         x_token, api_url, profile_id = await load_vision_settings_for_runtime(
@@ -1143,8 +1141,8 @@ async def test_load_vision_settings_for_runtime_uses_fallback():
 @pytest.mark.asyncio
 async def test_get_disable_queue_pause_reason_reports_active_queue():
     """Если есть PENDING и RETRYING задачи, observer должен видеть причину для паузы."""
-    from apps.observer_worker.main import get_disable_queue_pause_reason
     from core.domain import DisableTaskStatus
+    from core.observer.db_queries import get_disable_queue_pause_reason
 
     mock_result = MagicMock()
     mock_result.all.return_value = [
@@ -1160,7 +1158,7 @@ async def test_get_disable_queue_pause_reason_reports_active_queue():
     mock_factory = MagicMock(return_value=mock_session)
 
     with patch(
-        "apps.observer_worker.main.get_session_factory",
+        "core.observer.db_queries.get_session_factory",
         return_value=mock_factory,
     ):
         reason = await get_disable_queue_pause_reason()
@@ -1174,7 +1172,7 @@ async def test_get_disable_queue_pause_reason_reports_active_queue():
 @pytest.mark.asyncio
 async def test_get_disable_queue_pause_reason_returns_none_for_empty_queue():
     """Когда активных disable-задач нет, observer не должен ставить скан на паузу."""
-    from apps.observer_worker.main import get_disable_queue_pause_reason
+    from core.observer.db_queries import get_disable_queue_pause_reason
 
     mock_result = MagicMock()
     mock_result.all.return_value = []
@@ -1187,7 +1185,7 @@ async def test_get_disable_queue_pause_reason_returns_none_for_empty_queue():
     mock_factory = MagicMock(return_value=mock_session)
 
     with patch(
-        "apps.observer_worker.main.get_session_factory",
+        "core.observer.db_queries.get_session_factory",
         return_value=mock_factory,
     ):
         reason = await get_disable_queue_pause_reason()
@@ -1199,8 +1197,8 @@ async def test_get_disable_queue_pause_reason_returns_none_for_empty_queue():
 @pytest.mark.asyncio
 async def test_get_disable_queue_pause_reason_ignores_future_retry_only_queue():
     """Если в очереди остались только будущие RETRYING-задачи, сканирование не должно стопориться."""
-    from apps.observer_worker.main import get_disable_queue_pause_reason
     from core.domain import DisableTaskStatus
+    from core.observer.db_queries import get_disable_queue_pause_reason
 
     mock_result = MagicMock()
     mock_result.all.return_value = [
@@ -1215,7 +1213,7 @@ async def test_get_disable_queue_pause_reason_ignores_future_retry_only_queue():
     mock_factory = MagicMock(return_value=mock_session)
 
     with patch(
-        "apps.observer_worker.main.get_session_factory",
+        "core.observer.db_queries.get_session_factory",
         return_value=mock_factory,
     ):
         reason = await get_disable_queue_pause_reason()
@@ -1227,13 +1225,13 @@ async def test_get_disable_queue_pause_reason_ignores_future_retry_only_queue():
 @pytest.mark.asyncio
 async def test_refresh_runtime_ad_states_uses_db_as_source_of_truth():
     """Если Telegram перевёл объявление в CLAIMED, observer должен взять это из БД до нового скана."""
-    from apps.observer_worker.main import refresh_runtime_ad_states
+    from core.observer.db_queries import refresh_runtime_ad_states
 
     current_states = {"ad_001": (AlertState.WARNING_SENT, "old-token")}
     persisted_states = {"ad_001": (AlertState.CLAIMED, "old-token")}
 
     with patch(
-        "apps.observer_worker.main.load_ad_states_from_db",
+        "core.observer.db_queries.load_ad_states_from_db",
         new=AsyncMock(return_value=persisted_states),
     ):
         refreshed = await refresh_runtime_ad_states(current_states)
@@ -1245,7 +1243,7 @@ async def test_refresh_runtime_ad_states_uses_db_as_source_of_truth():
 @pytest.mark.asyncio
 async def test_maybe_rollover_cabinet_day_waits_for_zero_scan():
     """До первого полного zero-scan cabinet_day_started_at не должен выставляться."""
-    from apps.observer_worker.main import _maybe_rollover_cabinet_day
+    from core.observer.snapshot_writer import _maybe_rollover_cabinet_day
 
     settings = MagicMock()
     settings.cabinet_day_started_at = None
@@ -1269,7 +1267,7 @@ async def test_maybe_rollover_cabinet_day_waits_for_zero_scan():
     ]
 
     with patch(
-        "apps.observer_worker.main._get_or_create_observer_settings",
+        "core.observer.snapshot_writer._get_or_create_observer_settings",
         new=AsyncMock(return_value=settings),
     ):
         await _maybe_rollover_cabinet_day(session, snapshot_data)
@@ -1303,7 +1301,7 @@ async def test_reconnect_browser_manager_uses_db_vision_settings():
 
     with (
         patch(
-            "apps.observer_worker.main.load_vision_settings_from_db",
+            "core.observer.db_queries.load_vision_settings_from_db",
             new=AsyncMock(return_value=("db-token", "http://db:3030", "db-profile")),
         ),
         patch("apps.observer_worker.main.VisionClient", return_value=new_vision) as vision_cls,
@@ -1385,7 +1383,7 @@ def _patch_observer_loop_runtime(stack: ExitStack, *, scan_side_effect) -> Async
     stack.enter_context(
         patch(
             "apps.observer_worker.main.load_observer_settings_from_db",
-            new=AsyncMock(return_value=(1, 0, Decimal("80"), Decimal("100"))),
+            new=AsyncMock(return_value=(1, 0, {})),
         )
     )
     stack.enter_context(
@@ -1436,7 +1434,7 @@ def _patch_observer_loop_runtime(stack: ExitStack, *, scan_side_effect) -> Async
     )
     stack.enter_context(
         patch(
-            "apps.observer_worker.main._collect_reminder_alerts",
+            "apps.observer_worker.main.collect_reminder_alerts",
             new=AsyncMock(return_value=[]),
         )
     )
@@ -1598,7 +1596,7 @@ async def test_observer_loop_skips_rule_evaluation_for_not_delivering_rows():
         deposits=0,
     )
 
-    async def capture_snapshot_batch(snapshot_batch):
+    async def capture_snapshot_batch(snapshot_batch, _scan_guard=None):
         captured_snapshot_batch.extend(snapshot_batch)
         shutdown_event.set()
 
@@ -1752,3 +1750,41 @@ async def test_reconnect_counter_resets_on_success():
 
     assert reconnect_delays[:2] == [10, 10]
     assert mock_browser_manager.disconnect.call_count == 2
+
+
+# --- Word-boundary offer matching ---
+
+
+def test_resolve_offer_code_does_not_match_substring_inside_word():
+    """Код оффера не должен совпадать как подстрока внутри буквенного слова."""
+    from core.observer.service import resolve_offer_code
+
+    offers = {"AB": object()}
+    # "AB" является подстрокой "GRAB" — буква перед кодом → не должно матчиться
+    assert resolve_offer_code("GRAB_test", "campaign", offers) is None
+
+
+def test_resolve_offer_code_matches_at_word_start_with_underscore_separator():
+    """Код должен матчиться когда отделён от остатка имени символом '_'."""
+    from core.observer.service import resolve_offer_code
+
+    offers = {"AB": object()}
+    # "AB_creative_001": AB перед '_' — должно матчиться
+    assert resolve_offer_code("AB_creative_001", "campaign", offers) == "AB"
+
+
+def test_resolve_offer_code_matches_with_underscore_in_code():
+    """Код вида DRC_CR2 должен матчиться как отдельный токен."""
+    from core.observer.service import resolve_offer_code
+
+    offers = {"DRC_CR2": object(), "DRC": object()}
+    # Должен выбрать самый длинный совпадающий код
+    assert resolve_offer_code("DRC_CR2_CR002", "CR2 | DRC | MV", offers) == "DRC_CR2"
+
+
+def test_resolve_offer_code_case_insensitive():
+    """Матчинг должен быть нечувствителен к регистру."""
+    from core.observer.service import resolve_offer_code
+
+    offers = {"DRC_CR2": object()}
+    assert resolve_offer_code("drc_cr2_v3", "campaign", offers) == "DRC_CR2"

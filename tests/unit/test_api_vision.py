@@ -33,10 +33,12 @@ async def test_vision_reconnect_restarts_profile_immediately():
     fake_client.close = AsyncMock()
 
     with (
-        patch("apps.api.main.decrypt", return_value="token"),
-        patch("apps.api.main.VisionClient", return_value=fake_client),
-        patch("apps.api.main._stop_observer_process", new=AsyncMock(return_value=1001)),
-        patch("apps.api.main._start_observer_process", new=AsyncMock(return_value=2002)),
+        patch("apps.api.routers.vision_telegram.decrypt", return_value="token"),
+        patch("apps.api.routers.vision_telegram.VisionClient", return_value=fake_client),
+        patch("apps.api.routers.settings._stop_observer_process", new=AsyncMock(return_value=1001)),
+        patch(
+            "apps.api.routers.settings._start_observer_process", new=AsyncMock(return_value=2002)
+        ),
     ):
         from apps.api.main import vision_reconnect
 

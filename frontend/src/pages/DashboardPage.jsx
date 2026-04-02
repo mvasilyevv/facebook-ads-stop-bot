@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { ALERT_STATE_LABELS } from '../constants/alertStates.js';
 import {
   getDashboardStats,
   getDashboardIncidents,
@@ -23,12 +24,11 @@ import { CampaignScorecard, FunnelChart } from '../components/CampaignScorecard.
 import { DrawerPanel } from '../components/DrawerPanel.jsx';
 import { TaskQueuePanel } from '../components/TaskQueuePanel.jsx';
 import { BudgetOverrunChart } from '../components/BudgetOverrunChart.jsx';
-import { SpendTimelineChart } from '../components/SpendTimelineChart.jsx';
 import { CampaignBreakdownTable } from '../components/CampaignBreakdownTable.jsx';
-import { AlertVolumeTrendline } from '../components/AlertVolumeTrendline.jsx';
 import { RuleViolationRanking } from '../components/RuleViolationRanking.jsx';
-import { SpendPacingBar } from '../components/SpendPacingBar.jsx';
 import { TopAdsQualityTable } from '../components/TopAdsQualityTable.jsx';
+import { CampaignComparativeBars } from '../components/CampaignComparativeBars.jsx';
+import { SpendAlertsChart } from '../components/SpendAlertsChart.jsx';
 
 function normalizeIncidentList(payload) {
   if (!Array.isArray(payload)) return [];
@@ -45,23 +45,45 @@ function normalizeIncidentList(payload) {
   }));
 }
 
-function HeroKPIStrip({ performance }) {
+function Delta({ today, yesterday, fmt = (v) => String(v), lowerIsBetter = false }) {
+  if (today == null || yesterday == null) return null;
+  const a = Number(today);
+  const b = Number(yesterday);
+  if (b === 0) return null;
+  const diff = a - b;
+  const pct = Math.abs((diff / b) * 100).toFixed(0);
+  if (pct === '0') return null;
+  const up = diff > 0;
+  const good = lowerIsBetter ? !up : up;
+  const color = good ? 'var(--accent-emerald)' : 'var(--accent-crimson)';
+  return (
+    <div style={{ fontSize: '10px', fontWeight: 600, color, marginTop: '4px', fontFamily: 'JetBrains Mono, monospace' }}>
+      {up ? '↑' : '↓'} {pct}% к вчера
+    </div>
+  );
+}
+
+function HeroKPIStrip({ performance, performanceYesterday }) {
   const s = performance?.summary;
+  const y = performanceYesterday?.summary;
   const fmt$ = (v) => (v != null ? `$${Number(v).toFixed(2)}` : '—');
   const fmtN = (v) => (v != null ? String(v) : '—');
-  const fmtPct = (v) => (v != null ? `${(Number(v) * 100).toFixed(1)}%` : '—');
+  const fmtPct = (v) => (v != null ? `${Number(v).toFixed(1)}%` : '—');
+  const fmtRoas = (v) => (v != null && Number(v) > 0 ? `${Number(v).toFixed(2)}x` : '—');
 
   const hasDeposits = Number(s?.deposits ?? 0) > 0;
   const hasSpend = Number(s?.spend ?? 0) > 0;
-  const depositsColor = hasDeposits ? '#059669' : hasSpend ? '#ef4444' : '#94a3b8';
+  const depositsColor = hasDeposits ? 'var(--accent-emerald)' : hasSpend ? 'var(--accent-crimson)' : 'var(--text-muted)';
+  const roasVal = Number(s?.roas ?? 0);
+  const roasColor = roasVal >= 3 ? 'var(--accent-emerald)' : roasVal >= 1 ? 'var(--accent-gold)' : roasVal > 0 ? 'var(--accent-crimson)' : 'var(--text-muted)';
 
   const kpis = [
-    { label: 'Расход', value: fmt$(s?.spend), color: '#0ea5e9' },
-    { label: 'Лиды', value: fmtN(s?.leads), color: Number(s?.leads ?? 0) > 0 ? '#0ea5e9' : '#94a3b8' },
-    { label: 'Реги', value: fmtN(s?.registrations), color: '#0f172a' },
-    { label: 'Депозиты', value: fmtN(s?.deposits), color: depositsColor },
-    { label: 'CPR', value: fmt$(s?.cpr), color: '#0f172a' },
-    { label: 'Рег→Деп', value: fmtPct(s?.reg_to_dep_rate), color: '#0f172a' },
+    { label: 'Расход', value: fmt$(s?.spend), color: 'var(--accent-teal)', deltaKey: 'spend', lowerIsBetter: false },
+    { label: 'Лиды', value: fmtN(s?.leads), color: Number(s?.leads ?? 0) > 0 ? 'var(--accent-teal)' : 'var(--text-muted)', deltaKey: 'leads', lowerIsBetter: false },
+    { label: 'Реги', value: fmtN(s?.registrations), color: 'var(--text-primary)', deltaKey: 'registrations', lowerIsBetter: false },
+    { label: 'Депозиты', value: fmtN(s?.deposits), color: depositsColor, deltaKey: 'deposits', lowerIsBetter: false },
+    { label: 'Рег→Деп', value: fmtPct(s?.reg_to_dep_rate), color: 'var(--text-primary)', deltaKey: 'reg_to_dep_rate', lowerIsBetter: false },
+    { label: 'ROAS', value: fmtRoas(s?.roas), color: roasColor, deltaKey: 'roas', lowerIsBetter: false },
   ];
 
   return (
@@ -73,69 +95,111 @@ function HeroKPIStrip({ performance }) {
     }}>
       {kpis.map((kpi) => (
         <div key={kpi.label} style={{
-          background: '#ffffff',
-          border: '1px solid #e2e8f0',
-          borderRadius: '6px',
-          padding: '14px 16px',
-          boxShadow: '0 1px 3px rgba(0,0,0,0.07)',
-        }}>
-          <div style={{ fontSize: '10px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.1em', color: '#94a3b8', marginBottom: '6px' }}>
+          background: 'var(--bg-card)',
+          border: '1px solid var(--border-color)',
+          borderRadius: 'var(--radius-md)',
+          padding: '16px 18px',
+          boxShadow: 'var(--shadow-sm)',
+          transition: 'all 0.2s ease',
+        }}
+          onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-1px)'; e.currentTarget.style.boxShadow = 'var(--shadow-md)'; }}
+          onMouseLeave={e => { e.currentTarget.style.transform = ''; e.currentTarget.style.boxShadow = 'var(--shadow-sm)'; }}
+        >
+          <div style={{ fontSize: '10px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.1em', color: 'var(--text-muted)', marginBottom: '8px' }}>
             {kpi.label}
           </div>
-          <div style={{ fontSize: '20px', fontWeight: 700, color: kpi.color, fontFamily: 'JetBrains Mono, monospace', fontVariantNumeric: 'tabular-nums' }}>
+          <div style={{ fontSize: '22px', fontWeight: 700, color: kpi.color, fontFamily: 'Syne, sans-serif', fontVariantNumeric: 'tabular-nums', letterSpacing: '-0.01em' }}>
             {kpi.value}
           </div>
+          <Delta today={s?.[kpi.deltaKey]} yesterday={y?.[kpi.deltaKey]} lowerIsBetter={kpi.lowerIsBetter} />
         </div>
       ))}
     </div>
   );
 }
 
-function ScanStatusBar({ settings, onToggle, onScanNow, scanning, lastScanAt }) {
+function ScanStatusBar({ settings, onToggle, onScanNow, scanning, lastScanAt, observerStatus, observerStatusMessage }) {
+  const [secsLeft, setSecsLeft] = useState(null);
+
+  useEffect(() => {
+    if (!lastScanAt || !settings?.interval_seconds) { setSecsLeft(null); return; }
+    const nextScanAt = new Date(lastScanAt).getTime() + settings.interval_seconds * 1000;
+    const tick = () => setSecsLeft(Math.max(0, Math.round((nextScanAt - Date.now()) / 1000)));
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [lastScanAt, settings?.interval_seconds]);
+
+  const isEnabled = settings?.is_scanning_enabled ?? false;
+  const isRunning = observerStatus === 'RUNNING' || scanning;
+
+  let pillVariant = 'paused';
+  let pillDot = false;
+  let pillText = '';
+  if (!isEnabled) {
+    pillText = 'Выключено';
+  } else if (observerStatus === 'WAITING_BROWSER') {
+    pillVariant = 'waiting';
+    pillText = 'Браузер занят';
+  } else if (observerStatus === 'PAUSED') {
+    pillText = observerStatusMessage ?? 'Пауза';
+  } else if (isRunning) {
+    pillVariant = 'active';
+    pillDot = true;
+    pillText = 'Сканирую...';
+  }
+
+  const showCountdown = isEnabled && !isRunning && secsLeft !== null && secsLeft > 0;
+  const showLastScan = isEnabled && !isRunning && !showCountdown && lastScanAt;
+
   return (
-    <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-color)', padding: '12px 16px', marginBottom: '16px', borderRadius: '6px', display: 'flex', alignItems: 'center', gap: '12px', boxShadow: 'var(--shadow-sm)' }}>
-      <span style={{ fontSize: '13px', fontWeight: 600 }}>Сканирование</span>
-      <button
-        onClick={onToggle}
-        style={{
-          padding: '4px 12px',
-          fontSize: '12px',
-          borderRadius: '3px',
-          border: 'none',
-          cursor: 'pointer',
-          backgroundColor: settings?.is_scanning_enabled ? 'var(--accent-teal)' : 'var(--bg-tertiary)',
-          color: settings?.is_scanning_enabled ? 'white' : 'var(--text-primary)',
-        }}
-      >
-        {settings?.is_scanning_enabled ? '✓ Включено' : '○ Выключено'}
-      </button>
-      <button
-        onClick={onScanNow}
-        disabled={scanning}
-        style={{
-          padding: '4px 12px',
-          fontSize: '12px',
-          borderRadius: '3px',
-          border: '1px solid var(--border-color)',
-          backgroundColor: 'transparent',
-          cursor: scanning ? 'not-allowed' : 'pointer',
-          opacity: scanning ? 0.5 : 1,
-        }}
-      >
-        {scanning ? 'Сканирование...' : 'Обновить'}
-      </button>
-      {lastScanAt && (
-        <span style={{ marginLeft: 'auto', fontSize: '11px', color: 'var(--text-muted)' }}>
-          Последний скан: {new Date(lastScanAt).toLocaleTimeString('ru-RU')}
+    <div className="glass-panel" style={{ padding: '10px 18px', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
+      <label className="toggle-pill" title={isEnabled ? 'Выключить сканирование' : 'Включить сканирование'}>
+        <input type="checkbox" checked={isEnabled} onChange={onToggle} />
+        <span className="toggle-pill__track">
+          <span className="toggle-pill__thumb" />
+        </span>
+      </label>
+
+      <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+        Сканирование
+      </span>
+
+      {pillText && (
+        <span className={`status-pill status-pill--${pillVariant}`}>
+          {pillDot && <span className="status-pill__dot status-pill__dot--pulse" />}
+          {pillText}
         </span>
       )}
+
+      {showCountdown && (
+        <span style={{ fontSize: '11px', fontFamily: "'JetBrains Mono', monospace", fontVariantNumeric: 'tabular-nums', color: 'var(--text-muted)' }}>
+          через {secsLeft}с
+        </span>
+      )}
+      {showLastScan && (
+        <span style={{ fontSize: '11px', fontFamily: "'JetBrains Mono', monospace", fontVariantNumeric: 'tabular-nums', color: 'var(--text-muted)' }}>
+          {new Date(lastScanAt).toLocaleTimeString('ru-RU')}
+        </span>
+      )}
+
+      <button
+        className="scan-refresh-btn"
+        onClick={onScanNow}
+        disabled={scanning}
+        title="Принудительно запустить скан"
+        style={{ marginLeft: 'auto' }}
+      >
+        <span className={`scan-refresh-btn__icon${scanning ? ' scan-refresh-btn__icon--spin' : ''}`}>↻</span>
+        {scanning ? 'Сканирую' : 'Обновить'}
+      </button>
     </div>
   );
 }
 
 function DenseAdTable({ incidents }) {
   return (
-    <div style={{ marginTop: '16px', background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: '6px', overflow: 'hidden', boxShadow: 'var(--shadow-sm)' }}>
+    <div style={{ marginTop: '16px', background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', overflow: 'hidden', boxShadow: 'var(--shadow-sm)' }}>
       <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border-color)' }}>
         <h3 style={{ margin: 0, fontSize: '13px', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)', letterSpacing: '0.06em' }}>
           Активные инциденты
@@ -156,22 +220,10 @@ function DenseAdTable({ incidents }) {
                 <td style={{ padding: '9px 12px', color: 'var(--text-primary)' }}>{incident.ad_name}</td>
                 <td style={{ padding: '9px 12px', color: 'var(--text-secondary)', fontSize: '11px' }}>{incident.campaign_name}</td>
                 <td style={{ padding: '9px 12px' }}>
-                  <span style={{
-                    display: 'inline-block',
-                    padding: '2px 7px',
-                    borderRadius: '3px',
-                    fontSize: '10px',
-                    fontWeight: 600,
-                    background: incident.current_state === 'STOP_SENT' ? 'var(--accent-crimson-dim)' :
-                                incident.current_state === 'WARNING_SENT' ? 'var(--accent-gold-dim)' :
-                                incident.current_state === 'EARLY_SIGNAL_SENT' ? 'var(--accent-orchid-dim)' :
-                                'var(--bg-raised)',
-                    color: incident.current_state === 'STOP_SENT' ? 'var(--accent-crimson)' :
-                           incident.current_state === 'WARNING_SENT' ? 'var(--accent-gold)' :
-                           incident.current_state === 'EARLY_SIGNAL_SENT' ? 'var(--accent-orchid)' :
-                           'var(--text-muted)',
-                  }}>
-                    {incident.current_state}
+                  <span className={`status-pill status-pill--${{
+                    STOP_SENT: 'stop', WARNING_SENT: 'warning', EARLY_SIGNAL_SENT: 'signal', CLAIMED: 'paused',
+                  }[incident.current_state] || 'paused'}`}>
+                    {ALERT_STATE_LABELS[incident.current_state] || incident.current_state}
                   </span>
                 </td>
               </tr>
@@ -197,15 +249,17 @@ export default function DashboardPage({ onNavigate }) {
   const [enableRecs, setEnableRecs] = useState([]);
   const [chartData, setChartData] = useState(null);
   const [spendHistory, setSpendHistory] = useState([]);
+  const [performanceYesterday, setPerformanceYesterday] = useState(null);
 
   const loadData = useCallback(async () => {
     try {
-      const [statsRes, incidentsRes, tasksRes, settingsRes, perfRes, enableTasksRes, enableRecsRes, chartRes, spendRes] = await Promise.all([
+      const [statsRes, incidentsRes, tasksRes, settingsRes, perfRes, perfYestRes, enableTasksRes, enableRecsRes, chartRes, spendRes] = await Promise.all([
         getDashboardStats(),
         getDashboardIncidents({ limit: 50 }).catch(() => []),
         getDisableTasks({ limit: 50 }),
         getObserverSettings(),
         getDashboardPerformance({ period: 'today' }),
+        getDashboardPerformance({ period: 'yesterday' }).catch(() => null),
         getEnableTasks({ limit: 20 }).catch(() => []),
         getEnableRecommendations({ limit: 10 }).catch(() => []),
         getChartData({ period: 'today' }).catch(() => null),
@@ -216,6 +270,7 @@ export default function DashboardPage({ onNavigate }) {
       setDisableTasks(tasksRes);
       setSettings(settingsRes);
       setPerformance(perfRes);
+      setPerformanceYesterday(perfYestRes);
       setEnableTasks(enableTasksRes);
       setEnableRecs(enableRecsRes);
       setChartData(chartRes);
@@ -261,10 +316,27 @@ export default function DashboardPage({ onNavigate }) {
   const handleScanNow = async () => {
     if (scanning) return;
     setScanning(true);
+    const scanStartedAt = stats?.last_scan_at ?? null;
     try {
       await triggerScanNow();
-    } finally {
-      setTimeout(() => setScanning(false), 3000);
+      // Ждём реального завершения скана: last_scan_at должен обновиться
+      const deadline = Date.now() + 120_000;
+      const poll = async () => {
+        if (Date.now() > deadline) { setScanning(false); return; }
+        try {
+          const fresh = await getDashboardStats();
+          if (fresh?.last_scan_at && fresh.last_scan_at !== scanStartedAt) {
+            setStats(fresh);
+            setScanning(false);
+            return;
+          }
+        } catch (_) {}
+        setTimeout(poll, 4000);
+      };
+      setTimeout(poll, 4000);
+    } catch (e) {
+      setScanning(false);
+      setError(`Ошибка запуска скана: ${e.message}`);
     }
   };
 
@@ -328,38 +400,30 @@ export default function DashboardPage({ onNavigate }) {
         onScanNow={handleScanNow}
         scanning={scanning}
         lastScanAt={stats?.last_scan_at}
+        observerStatus={stats?.observer_status}
+        observerStatusMessage={stats?.observer_status_message}
       />
 
       {/* KPI Hero Strip */}
-      <HeroKPIStrip performance={performance} />
+      <HeroKPIStrip performance={performance} performanceYesterday={performanceYesterday} />
 
-      {/* Темп расхода */}
-      <SpendPacingBar performance={performance} />
-
-      {/* 3-колонная сетка — главный экран мониторинга */}
-      <div className="dashboard-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 2fr 1fr', gap: '16px', marginBottom: '16px' }}>
-        {/* Левая колонна: CampaignScorecard */}
-        <div className="dashboard-grid__left">
-          <CampaignScorecard
-            stats={stats}
-            performance={performance}
-            spendHistory={spendHistory}
-            onStateClick={(state) => onNavigate?.(`/ads?state=${state}`)}
-          />
-        </div>
-
-        {/* Центральная колонна: AlertTray */}
-        <div className="dashboard-grid__center" style={{ background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: '6px', boxShadow: 'var(--shadow-sm)', overflow: 'hidden' }}>
+      {/* Основная секция: AlertTray (2/3) + TaskQueuePanel (1/3) */}
+      <div className="main-content-row" style={{ display: 'flex', gap: '16px', alignItems: 'flex-start', marginBottom: '16px' }}>
+        {/* AlertTray — 2/3 ширины */}
+        <div className="alert-tray-col" style={{ flex: 2, minWidth: 0, background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', boxShadow: 'var(--shadow-sm)', overflow: 'hidden' }}>
           <AlertTray
             incidents={activeIncidents}
             disableTasks={disableTasks}
             onSelectIncident={setSelectedIncident}
             onDisable={handleDisable}
+            settings={settings}
+            lastScanAt={stats?.last_scan_at}
+            onEnableScanning={handleToggle}
           />
         </div>
 
-        {/* Правая колонна: TaskQueuePanel */}
-        <div className="dashboard-grid__right" style={{ background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: '6px', boxShadow: 'var(--shadow-sm)' }}>
+        {/* TaskQueuePanel — 1/3 ширины */}
+        <div className="task-queue-col" style={{ flex: 1, minWidth: 0, background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', boxShadow: 'var(--shadow-sm)' }}>
           <TaskQueuePanel
             disableTasks={disableTasks}
             enableTasks={enableTasks}
@@ -370,16 +434,28 @@ export default function DashboardPage({ onNavigate }) {
         </div>
       </div>
 
-      {/* Алерты по часам + Нарушения правил */}
-      {(chartData?.alerts_by_hour?.length > 0 || chartData?.rule_violations?.length > 0) && (
-        <div style={{
-          display: 'grid',
-          gridTemplateColumns: chartData?.alerts_by_hour?.length > 0 && chartData?.rule_violations?.length > 0 ? '2fr 1fr' : '1fr',
-          gap: '16px',
-          marginBottom: '16px',
-        }}>
-          <AlertVolumeTrendline data={chartData?.alerts_by_hour ?? []} />
-          <RuleViolationRanking data={chartData?.rule_violations ?? []} />
+      {/* Нижняя секция: CampaignScorecard + графики в полную ширину */}
+      <div style={{ marginBottom: '16px' }}>
+        <CampaignScorecard
+          stats={stats}
+          performance={performance}
+          spendHistory={spendHistory}
+          onStateClick={(state) => onNavigate?.(`/ads?state=${state}`)}
+        />
+      </div>
+
+      {/* Объединённый чарт: расход + алерты по часам */}
+      {(performance?.timeline?.length > 0 || chartData?.alerts_by_hour?.length > 0) && (
+        <SpendAlertsChart
+          spendData={performance?.timeline ?? []}
+          alertsData={chartData?.alerts_by_hour ?? []}
+        />
+      )}
+
+      {/* Нарушения правил */}
+      {chartData?.rule_violations?.length > 0 && (
+        <div style={{ marginBottom: '16px' }}>
+          <RuleViolationRanking data={chartData.rule_violations} />
         </div>
       )}
 
@@ -390,9 +466,11 @@ export default function DashboardPage({ onNavigate }) {
         </div>
       )}
 
-      {/* Spend Timeline */}
-      {performance?.timeline?.length > 0 && (
-        <SpendTimelineChart data={performance.timeline} />
+      {/* Сравнение кампаний: расход vs депозиты */}
+      {performance?.campaigns?.length > 0 && (
+        <div style={{ marginBottom: '16px' }}>
+          <CampaignComparativeBars data={performance.campaigns} />
+        </div>
       )}
 
       {/* BudgetOverrunChart + CampaignBreakdownTable в 2 колонки */}
@@ -409,9 +487,6 @@ export default function DashboardPage({ onNavigate }) {
 
       {/* Топ объявления по расходу */}
       <TopAdsQualityTable data={chartData?.top_ads_by_spend ?? []} />
-
-      {/* Таблица объявлений ниже при скролле */}
-      <DenseAdTable incidents={incidents} />
 
       {/* DrawerPanel для деталей инцидента */}
       {selectedIncident && (
@@ -435,7 +510,7 @@ export default function DashboardPage({ onNavigate }) {
 
 function StatItem({ label, value, color = 'var(--text-primary)' }) {
   return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', padding: '6px', borderBottom: '1px solid rgba(0,0,0,0.05)' }}>
+    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', padding: '6px', borderBottom: '1px solid var(--border-dim)' }}>
       <span style={{ color: 'var(--text-muted)' }}>{label}</span>
       <span style={{ fontWeight: 600, color }}>{value}</span>
     </div>

@@ -9,6 +9,8 @@ import signal
 import sys
 
 from apps.enable_recommendation_worker.main import recommendation_worker_loop
+from core.config import get_settings
+from core.sentry import setup_sentry
 
 logging.basicConfig(
     level=logging.INFO,
@@ -20,6 +22,8 @@ logger = logging.getLogger(__name__)
 
 async def main() -> None:
     """Запускает цикл recommendation worker и корректно останавливает его по сигналу."""
+    _s = get_settings()
+    setup_sentry(dsn=_s.sentry_dsn, environment=_s.sentry_environment)
     shutdown_event = asyncio.Event()
     loop = asyncio.get_running_loop()
 

@@ -9,11 +9,6 @@ from dataclasses import dataclass
 from decimal import Decimal
 from types import SimpleNamespace
 
-from apps.observer_worker.main import (
-    _compose_reason_text,
-    _state_for_emitted_stage,
-    resolve_offer_code,
-)
 from core.diagnostics import (
     AdQualityDiagnostics,
     build_ad_quality_diagnostics,
@@ -21,8 +16,14 @@ from core.diagnostics import (
     compute_cpm_baselines_by_offer,
 )
 from core.domain import AlertStage, AlertState
-from core.observer.service import AlertCandidate, build_metrics_json, evaluate_row
-from core.observer.state_machine import resolve_transition
+from core.observer.service import (
+    AlertCandidate,
+    _compose_reason_text,
+    build_metrics_json,
+    evaluate_row,
+    resolve_offer_code,
+)
+from core.observer.state_machine import _state_for_emitted_stage, resolve_transition
 from core.scanner.models import ScannedAdRow
 from core.scanner.parser import _parse_bulk_result
 from core.telegram.renderer import TelegramAlertItem, render_alert_message

@@ -3,8 +3,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from decimal import Decimal
+from dataclasses import dataclass, field
+from decimal import ROUND_HALF_UP, Decimal
 
 from core.domain import AlertStage
 
@@ -106,20 +106,76 @@ class RuleContext:
     spend_with_dep_from_percent: Decimal = Decimal("70")
     spend_with_dep_to_percent: Decimal = Decimal("90")
 
-    # Ранний сигнал 1: слабый Outbound CTR
+    # Ранний сигнал 1: низкий CTR исходящих кликов (post-click качество)
     early_outbound_ctr_signal_enabled: bool = True
-    early_outbound_ctr_signal_min_percent: Decimal = Decimal("0.80")
-    early_outbound_ctr_signal_min_spend_percent: Decimal = Decimal("5")
+    early_outbound_ctr_signal_min_percent: Decimal = Decimal("0.80")  # outbound CTR < 0.80%
+    early_outbound_ctr_signal_min_spend_percent: Decimal = Decimal("5")  # мин. расход 5% CPA
 
-    # Ранний сигнал 2: слабый LPV ratio
+    # Ранний сигнал 2: низкая доходимость до лендинга
     early_lpv_ratio_signal_enabled: bool = True
-    early_lpv_ratio_signal_min_percent: Decimal = Decimal("60")
-    early_lpv_ratio_signal_min_outbound_clicks: int = 5
+    early_lpv_ratio_signal_min_percent: Decimal = Decimal("60")  # LPV/outbound_clicks < 60%
+    early_lpv_ratio_signal_min_outbound_clicks: int = 5  # мин. кол-во outbound кликов
 
-    # Ранний сигнал 3: дорогой Cost per LPV
+    # Ранний сигнал 3: высокая стоимость просмотра лендинга
     early_cost_per_lpv_signal_enabled: bool = True
-    early_cost_per_lpv_signal_percent_of_cpa: Decimal = Decimal("5")
-    early_cost_per_lpv_signal_min_views: int = 2
+    early_cost_per_lpv_signal_percent_of_cpa: Decimal = Decimal("5")  # cost_per_lpv > 5% CPA
+    early_cost_per_lpv_signal_min_views: int = 2  # мин. кол-во LPV
+
+    # Предвычисленные пороги (init=False — заполняются в __post_init__)
+    cpc_base_stop_threshold: Decimal = field(init=False)
+    cpc_stop_threshold: Decimal = field(init=False)
+    cpc_warning_threshold: Decimal = field(init=False)
+    cpl_base_stop_threshold: Decimal = field(init=False)
+    cpl_stop_threshold: Decimal = field(init=False)
+    cpl_warning_threshold: Decimal = field(init=False)
+    cpr_base_stop_threshold: Decimal = field(init=False)
+    cpr_stop_threshold: Decimal = field(init=False)
+    cpr_warning_threshold: Decimal = field(init=False)
+
+    def __post_init__(self) -> None:
+        """Предвычисляет денежные пороги один раз при создании контекста."""
+        _step = Decimal("0.01")
+
+        def _base(percent: Decimal) -> Decimal:
+            return (self.cpa_amount * percent / Decimal("100")).quantize(
+                _step, rounding=ROUND_HALF_UP
+            )
+
+        def _stop(base: Decimal, pct_of_base: Decimal) -> Decimal:
+            return (base * pct_of_base / Decimal("100")).quantize(_step, rounding=ROUND_HALF_UP)
+
+        def _warn(stop: Decimal, warn_pct: Decimal) -> Decimal:
+            return (stop * warn_pct / Decimal("100")).quantize(_step, rounding=ROUND_HALF_UP)
+
+        cpc_base = _base(self.cpc_percent_stop)
+        cpc_stop = _stop(cpc_base, self.effective_cpc_stop_percent_of_base)
+        object.__setattr__(self, "cpc_base_stop_threshold", cpc_base)
+        object.__setattr__(self, "cpc_stop_threshold", cpc_stop)
+        object.__setattr__(
+            self,
+            "cpc_warning_threshold",
+            _warn(cpc_stop, self.effective_cpc_warning_percent_of_stop),
+        )
+
+        cpl_base = _base(self.cpl_percent_stop)
+        cpl_stop = _stop(cpl_base, self.effective_cpl_stop_percent_of_base)
+        object.__setattr__(self, "cpl_base_stop_threshold", cpl_base)
+        object.__setattr__(self, "cpl_stop_threshold", cpl_stop)
+        object.__setattr__(
+            self,
+            "cpl_warning_threshold",
+            _warn(cpl_stop, self.effective_cpl_warning_percent_of_stop),
+        )
+
+        cpr_base = _base(self.cpr_percent_stop)
+        cpr_stop = _stop(cpr_base, self.effective_cpr_stop_percent_of_base)
+        object.__setattr__(self, "cpr_base_stop_threshold", cpr_base)
+        object.__setattr__(self, "cpr_stop_threshold", cpr_stop)
+        object.__setattr__(
+            self,
+            "cpr_warning_threshold",
+            _warn(cpr_stop, self.effective_cpr_warning_percent_of_stop),
+        )
 
     @property
     def effective_cpc_warning_percent_of_stop(self) -> Decimal:

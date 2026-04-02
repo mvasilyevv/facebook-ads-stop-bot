@@ -1,115 +1,150 @@
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+// Эффективность кампаний по CPR — горизонтальные бары (меньше CPR = лучше = бар длиннее)
+function CustomTooltip({ active, payload }) {
+  if (!active || !payload?.length) return null;
+  const d = payload[0].payload;
+  return (
+    <div style={{
+      background: 'var(--bg-card)',
+      border: '1px solid var(--border-accent)',
+      borderRadius: '4px',
+      padding: '10px 14px',
+      fontSize: '12px',
+      maxWidth: '280px',
+      boxShadow: 'var(--shadow-md)',
+    }}>
+      <div style={{ fontWeight: 600, color: 'var(--text-primary)', marginBottom: '6px', lineHeight: 1.3 }}>
+        {d.campaign}
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+        <span style={{ color: 'var(--accent-teal)' }}>Расход: <b>${d.spend.toFixed(2)}</b></span>
+        <span style={{ color: 'var(--text-secondary)' }}>CPR: <b>${d.cpr.toFixed(2)}</b></span>
+        <span style={{ color: 'var(--text-secondary)' }}>Лиды: <b>{d.leads}</b></span>
+        <span style={{ color: d.deposits > 0 ? 'var(--accent-emerald)' : 'var(--text-muted)' }}>
+          Депозиты: <b>{d.deposits}</b>
+        </span>
+      </div>
+    </div>
+  );
+}
 
-/**
- * CampaignComparativeBars — сравнение расхода и депозитов по кампаниям.
- *
- * Props:
- * - data: массив {campaign, spend, deposits, ...}
- *
- * Вывод: топ 6 кампаний по spend, две оси Y (слева spend, справа deposits).
- */
 export function CampaignComparativeBars({ data = [] }) {
-  if (!data || data.length === 0) {
-    return null;
-  }
+  if (!data || data.length === 0) return null;
 
-  // Отсортировать по spend и взять топ 6
-  const topCampaigns = [...data]
-    .sort((a, b) => (b.spend || 0) - (a.spend || 0))
-    .slice(0, 6)
+  // Только кампании с CPR (есть лиды)
+  const rows = [...data]
+    .filter((item) => parseFloat(item.cpr) > 0)
+    .sort((a, b) => parseFloat(a.cpr) - parseFloat(b.cpr)) // лучшие сверху
+    .slice(0, 8)
     .map((item) => ({
-      ...item,
-      campaign_short: (item.campaign || '')
-        .substring(0, 15)
-        .concat((item.campaign || '').length > 15 ? '...' : ''),
-      spend_val: parseFloat(item.spend) || 0,
-      deposits_val: parseInt(item.deposits, 10) || 0,
-      deposits_scaled: (parseInt(item.deposits, 10) || 0) * 50, // масштабируем для видимости
+      campaign: item.campaign || '',
+      label: (item.campaign || '').replace(/\s*\|\s*/g, ' · ').substring(0, 28) +
+             ((item.campaign || '').length > 28 ? '…' : ''),
+      cpr: parseFloat(item.cpr),
+      spend: parseFloat(item.spend) || 0,
+      deposits: parseInt(item.deposits, 10) || 0,
+      leads: parseInt(item.leads, 10) || 0,
     }));
 
-  // Кастомный tooltip
-  const CustomTooltip = ({ active, payload, label }) => {
-    if (!active || !payload || payload.length === 0) return null;
-    const data = payload[0].payload;
-    return (
-      <div
-        style={{
-          backgroundColor: 'var(--bg-card)',
-          border: '1px solid var(--border-color)',
-          borderRadius: '4px',
-          padding: '8px 12px',
-          fontSize: '12px',
-        }}
-      >
-        <div style={{ fontWeight: 600, marginBottom: '4px' }}>
-          {data.campaign}
-        </div>
-        <div style={{ color: 'var(--accent-teal)' }}>
-          Расход: ${data.spend_val.toFixed(2)}
-        </div>
-        <div style={{ color: 'var(--accent-emerald)' }}>
-          Депозиты: {data.deposits_val}
-        </div>
-      </div>
-    );
+  if (rows.length === 0) return null;
+
+  const maxCpr = Math.max(...rows.map((r) => r.cpr));
+
+  // Инвертированная ширина: лучший CPR = самый длинный бар
+  const barWidth = (cpr) => Math.max(4, (1 - (cpr - rows[0].cpr) / (maxCpr - rows[0].cpr + 1)) * 100);
+
+  const barColor = (row) => {
+    if (row.deposits > 0) return 'var(--accent-emerald)';
+    if (row.leads > 0) return 'var(--accent-gold)';
+    return 'var(--accent-slate)';
   };
 
   return (
-    <div
-      style={{
-        background: 'var(--bg-card)',
-        border: '1px solid var(--border-color)',
-        borderRadius: '6px',
-        boxShadow: 'var(--shadow-sm)',
-      }}
-    >
-      {/* Заголовок */}
-      <div
-        style={{
-          padding: '12px 16px',
-          borderBottom: '1px solid var(--border-color)',
-          fontSize: '13px',
-          fontWeight: 700,
-          textTransform: 'uppercase',
-          color: 'var(--text-muted)',
-          letterSpacing: '0.06em',
-          backgroundColor: 'var(--bg-raised)',
-        }}
-      >
-        Кампании: расход vs депозиты
+    <div style={{
+      background: 'var(--bg-card)',
+      border: '1px solid var(--border-color)',
+      borderRadius: '6px',
+      boxShadow: 'var(--shadow-sm)',
+    }}>
+      <div style={{
+        padding: '12px 16px',
+        borderBottom: '1px solid var(--border-color)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+      }}>
+        <span style={{ fontSize: '13px', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)', letterSpacing: '0.06em' }}>
+          Эффективность кампаний (CPR)
+        </span>
+        <div style={{ display: 'flex', gap: '12px', fontSize: '11px', color: 'var(--text-muted)' }}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+            <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--accent-emerald)', display: 'inline-block' }} />
+            есть депозиты
+          </span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+            <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--accent-gold)', display: 'inline-block' }} />
+            нет депозитов
+          </span>
+        </div>
       </div>
 
-      {/* График */}
       <div style={{ padding: '12px 16px' }}>
-        <ResponsiveContainer width="100%" height={220}>
-          <BarChart data={topCampaigns} margin={{ top: 16, right: 32, left: 0, bottom: 60 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="var(--border-dim)" />
-            <XAxis
-              dataKey="campaign_short"
-              angle={-45}
-              textAnchor="end"
-              height={80}
-              tick={{ fontSize: 11, fill: 'var(--text-muted)' }}
-              interval={0}
-            />
-            {/* Левая ось для spend */}
-            <YAxis
-              yAxisId="spend"
-              label={{ value: 'Spend ($)', angle: -90, position: 'insideLeft', style: { fontSize: 11 } }}
-              tick={{ fontSize: 11, fill: 'var(--text-muted)' }}
-            />
-            {/* Правая ось для depozits */}
-            <YAxis
-              yAxisId="deps"
-              orientation="right"
-              label={{ value: 'Deposits (×50)', angle: 90, position: 'insideRight', style: { fontSize: 11 } }}
-              tick={{ fontSize: 11, fill: 'var(--text-muted)' }}
-            />
-            <Tooltip content={<CustomTooltip />} />
-            <Bar yAxisId="spend" dataKey="spend_val" fill="var(--accent-teal)" name="Расход" />
-            <Bar yAxisId="deps" dataKey="deposits_scaled" fill="var(--accent-emerald)" name="Депозиты" />
-          </BarChart>
-        </ResponsiveContainer>
+        {rows.map((row) => (
+          <div key={row.campaign} style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
+            {/* Название кампании */}
+            <div style={{
+              fontSize: '11px',
+              color: 'var(--text-muted)',
+              minWidth: '120px',
+              maxWidth: '120px',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              textAlign: 'right',
+              flexShrink: 0,
+            }} title={row.campaign}>
+              {row.label}
+            </div>
+
+            {/* Бар */}
+            <div style={{ flex: 1, height: '18px', background: 'var(--bg-tertiary)', borderRadius: '3px', overflow: 'hidden' }}>
+              <div style={{
+                width: `${barWidth(row.cpr)}%`,
+                height: '100%',
+                background: barColor(row),
+                borderRadius: '3px',
+                opacity: 0.85,
+                transition: 'width 0.3s ease',
+              }} />
+            </div>
+
+            {/* CPR + депозиты */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0, minWidth: '80px' }}>
+              <span style={{
+                fontSize: '11px',
+                fontFamily: 'JetBrains Mono, monospace',
+                fontWeight: 600,
+                color: 'var(--text-secondary)',
+              }}>
+                ${row.cpr.toFixed(2)}
+              </span>
+              {row.deposits > 0 && (
+                <span style={{
+                  fontSize: '10px',
+                  fontWeight: 700,
+                  color: 'var(--accent-emerald)',
+                  background: 'var(--accent-emerald-dim)',
+                  borderRadius: '3px',
+                  padding: '1px 5px',
+                }}>
+                  {row.deposits} деп.
+                </span>
+              )}
+            </div>
+          </div>
+        ))}
+        <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>
+          Длина бара — относительная эффективность. Меньше CPR = лучше.
+        </div>
       </div>
     </div>
   );

@@ -17,6 +17,7 @@ from core.observer.runtime_status import (
     update_observer_runtime_status,
 )
 from core.scanner.parser import parse_ads_from_page
+from core.sentry import setup_sentry
 
 _PID_FILE = "/tmp/fb_observer.pid"
 
@@ -71,6 +72,8 @@ async def _wait_for_shutdown_or_timeout(
 
 async def main() -> None:
     """Запуск observer worker с подключением к Vision anti-detect."""
+    _s = get_settings()
+    setup_sentry(dsn=_s.sentry_dsn, environment=_s.sentry_environment)
     _acquire_pid_lock()
     await update_observer_runtime_status(
         status="STARTING",
@@ -78,9 +81,13 @@ async def main() -> None:
     )
     settings = get_settings()
     from apps.observer_worker.main import (
+        _scan_guard,
+        observer_loop,
+    )
+    from core.observer.db_queries import (
+        load_ad_states_from_db,
         load_offers_from_db,
         load_vision_settings_for_runtime,
-        observer_loop,
     )
 
     # Graceful shutdown через asyncio event loop сигналы
@@ -149,6 +156,8 @@ async def main() -> None:
                 )
 
                 offers = await load_offers_from_db()
+                ad_states = await load_ad_states_from_db()
+                _scan_guard.initialize_from_count(len(ad_states))
                 await observer_loop(
                     page=page,
                     offers=offers,

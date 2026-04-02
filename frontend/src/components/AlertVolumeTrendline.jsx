@@ -12,6 +12,7 @@ import {
 
 function CustomTooltip({ active, payload, label }) {
   if (!active || !payload?.length) return null;
+  if (payload.every((p) => !p.value)) return null;
 
   const labels = {
     early_signal: 'Ранний сигнал',
@@ -21,19 +22,19 @@ function CustomTooltip({ active, payload, label }) {
 
   return (
     <div style={{
-      background: '#ffffff',
-      border: '1px solid #e2e8f0',
+      background: 'var(--bg-card)',
+      border: '1px solid var(--border-accent)',
       borderRadius: '6px',
       padding: '10px 14px',
-      boxShadow: '0 4px 6px -1px rgba(0,0,0,0.08)',
+      boxShadow: 'var(--shadow-md)',
       fontSize: '13px',
     }}>
-      <div style={{ fontWeight: 700, color: '#0f172a', marginBottom: '6px' }}>{label}</div>
+      <div style={{ fontWeight: 700, color: 'var(--text-primary)', marginBottom: '6px' }}>{label}</div>
       {payload.map((p) => (
         <div key={p.dataKey} style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '2px' }}>
           <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: p.color, display: 'inline-block', flexShrink: 0 }} />
-          <span style={{ color: '#475569' }}>{labels[p.dataKey] || p.name}:</span>
-          <span style={{ fontWeight: 600, color: '#0f172a', fontFamily: 'JetBrains Mono, monospace' }}>{p.value}</span>
+          <span style={{ color: 'var(--text-secondary)' }}>{labels[p.dataKey] || p.name}:</span>
+          <span style={{ fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'JetBrains Mono, monospace' }}>{p.value}</span>
         </div>
       ))}
     </div>
@@ -71,14 +72,14 @@ export function AlertVolumeTrendline({ data = [] }) {
           >
             <CartesianGrid
               strokeDasharray="0"
-              stroke="#f1f5f9"
+              stroke="var(--border-dim)"
               vertical={false}
               horizontal={true}
             />
             <XAxis
               dataKey="label"
               tick={{ fontSize: 11, fill: '#94a3b8' }}
-              axisLine={{ stroke: '#e2e8f0' }}
+              axisLine={{ stroke: 'var(--border-color)' }}
               tickLine={false}
               interval={3}
             />
@@ -87,7 +88,7 @@ export function AlertVolumeTrendline({ data = [] }) {
             <Legend
               wrapperStyle={{
                 fontSize: '12px',
-                color: '#475569',
+                color: 'var(--text-muted)',
                 paddingTop: '8px',
               }}
               formatter={(value) => {
@@ -102,19 +103,17 @@ export function AlertVolumeTrendline({ data = [] }) {
             <Bar
               dataKey="early_signal"
               stackId="alerts"
-              fill="var(--accent-orchid)"
-              radius={[2, 2, 0, 0]}
+              fill="#a855f7"
             />
             <Bar
               dataKey="warning"
               stackId="alerts"
-              fill="var(--accent-gold)"
-              radius={[2, 2, 0, 0]}
+              fill="#f5a623"
             />
             <Bar
               dataKey="stop"
               stackId="alerts"
-              fill="var(--accent-crimson)"
+              fill="#f74f4f"
               radius={[2, 2, 0, 0]}
             />
           </BarChart>

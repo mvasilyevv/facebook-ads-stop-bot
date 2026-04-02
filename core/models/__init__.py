@@ -240,23 +240,23 @@ class OfferRuleConfig(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     spend_with_dep_to_percent: Mapped[Decimal] = mapped_column(Numeric(8, 2), default=Decimal("90"))
 
-    # Ранний сигнал: Outbound CTR
+    # Ранний сигнал: низкий CTR исходящих кликов
     early_outbound_ctr_signal_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     early_outbound_ctr_signal_min_percent: Mapped[Decimal] = mapped_column(
-        Numeric(8, 2), default=Decimal("0.80")
+        Numeric(8, 4), default=Decimal("0.80")
     )
     early_outbound_ctr_signal_min_spend_percent: Mapped[Decimal] = mapped_column(
         Numeric(8, 2), default=Decimal("5")
     )
 
-    # Ранний сигнал: LPV ratio
+    # Ранний сигнал: низкая доходимость до лендинга
     early_lpv_ratio_signal_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     early_lpv_ratio_signal_min_percent: Mapped[Decimal] = mapped_column(
         Numeric(8, 2), default=Decimal("60")
     )
     early_lpv_ratio_signal_min_outbound_clicks: Mapped[int] = mapped_column(Integer, default=5)
 
-    # Ранний сигнал: Cost per LPV
+    # Ранний сигнал: высокая стоимость просмотра лендинга
     early_cost_per_lpv_signal_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     early_cost_per_lpv_signal_percent_of_cpa: Mapped[Decimal] = mapped_column(
         Numeric(8, 2), default=Decimal("5")
@@ -289,9 +289,9 @@ class AdSnapshot(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
 
     offer_id: Mapped[_uuid.UUID | None] = mapped_column(
-        ForeignKey("offers.id", ondelete="SET NULL"), index=True
+        ForeignKey("offers.id", ondelete="SET NULL")
     )
-    fb_ad_id: Mapped[str] = mapped_column(String(32), index=True)
+    fb_ad_id: Mapped[str] = mapped_column(String(32))
     campaign_name: Mapped[str] = mapped_column(String(255))
     adset_name: Mapped[str] = mapped_column(String(255))
     ad_name: Mapped[str] = mapped_column(String(255))
@@ -306,10 +306,6 @@ class AdSnapshot(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     clicks: Mapped[int] = mapped_column(Integer, default=0)
     cpc: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
     ctr: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
-    outbound_clicks: Mapped[int] = mapped_column(Integer, default=0)
-    outbound_ctr: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
-    landing_page_views: Mapped[int] = mapped_column(Integer, default=0)
-    cost_per_landing_page_view: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
     cost_per_result: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
     cpm: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
     frequency: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
@@ -318,24 +314,24 @@ class AdSnapshot(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     registrations: Mapped[int] = mapped_column(Integer, default=0)
     cost_per_registration: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
     deposits: Mapped[int] = mapped_column(Integer, default=0)
+    outbound_clicks: Mapped[int] = mapped_column(Integer, default=0)
+    outbound_ctr: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
+    landing_page_views: Mapped[int] = mapped_column(Integer, default=0)
+    cost_per_landing_page_view: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
 
     # Состояние алертов
     early_signal_rule_codes: Mapped[list[str]] = mapped_column(JSON, default=list)
     warning_rule_codes: Mapped[list[str]] = mapped_column(JSON, default=list)
     stop_rule_codes: Mapped[list[str]] = mapped_column(JSON, default=list)
     current_stage: Mapped[AlertStage | None] = mapped_column(_ALERT_STAGE_ENUM)
-    alert_state: Mapped[AlertState] = mapped_column(
-        _ALERT_STATE_ENUM, default=AlertState.NORMAL, index=True
-    )
+    alert_state: Mapped[AlertState] = mapped_column(_ALERT_STATE_ENUM, default=AlertState.NORMAL)
     open_state_token: Mapped[str | None] = mapped_column(String(64), index=True)
 
     # Telegram-привязка
     telegram_chat_id: Mapped[str | None] = mapped_column(String(64))
     telegram_message_id: Mapped[int | None] = mapped_column(Integer)
     telegram_group_key: Mapped[str | None] = mapped_column(String(64), index=True)
-    last_observed_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), index=True, default=_utcnow
-    )
+    last_observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     # Снузер: если задан и не истёк, observer не шлёт повторный алерт
     snoozed_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
@@ -384,7 +380,13 @@ class DisableTask(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     """Задача на отключение объявления (outbox-паттерн)."""
 
     __tablename__ = "disable_tasks"
-    __table_args__ = (Index("uq_disable_task_idempotency", "idempotency_key", unique=True),)
+    __table_args__ = (
+        Index("uq_disable_task_idempotency", "idempotency_key", unique=True),
+        # Очередь воркера: поиск задач по статусу и времени следующей попытки
+        Index("ix_disable_task_queue", "status", "next_retry_at"),
+        # Сверка по инциденту: поиск задач конкретного объявления в рамках токена
+        Index("ix_disable_task_ad_incident", "fb_ad_id", "open_state_token"),
+    )
 
     snapshot_id: Mapped[_uuid.UUID | None] = mapped_column(
         ForeignKey("ad_snapshots.id", ondelete="SET NULL"), index=True
@@ -465,7 +467,11 @@ class EnableTask(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     """Задача на включение объявления (outbox-паттерн)."""
 
     __tablename__ = "enable_tasks"
-    __table_args__ = (Index("uq_enable_task_idempotency", "idempotency_key", unique=True),)
+    __table_args__ = (
+        Index("uq_enable_task_idempotency", "idempotency_key", unique=True),
+        # Очередь воркера: поиск задач по статусу и времени следующей попытки
+        Index("ix_enable_task_queue", "status", "next_retry_at"),
+    )
 
     snapshot_id: Mapped[_uuid.UUID | None] = mapped_column(
         ForeignKey("ad_snapshots.id", ondelete="SET NULL"), index=True

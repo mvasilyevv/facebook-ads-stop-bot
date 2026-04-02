@@ -516,7 +516,7 @@ async def test_dashboard_stats_counts(mock_db):
     from apps.api.main import get_dashboard_stats
 
     with patch(
-        "apps.api.main._load_current_enable_recommendations",
+        "apps.api.routers.dashboard._load_current_enable_recommendations",
         new=AsyncMock(return_value=(None, [])),
     ):
         result = await get_dashboard_stats(db=mock_db)
@@ -544,7 +544,7 @@ async def test_dashboard_stats_empty_db(mock_db):
     from apps.api.main import get_dashboard_stats
 
     with patch(
-        "apps.api.main._load_current_enable_recommendations",
+        "apps.api.routers.dashboard._load_current_enable_recommendations",
         new=AsyncMock(return_value=(None, [])),
     ):
         result = await get_dashboard_stats(db=mock_db)
@@ -571,7 +571,7 @@ async def test_dashboard_uses_single_group_by_query(mock_db):
     from apps.api.main import get_dashboard_stats
 
     with patch(
-        "apps.api.main._load_current_enable_recommendations",
+        "apps.api.routers.dashboard._load_current_enable_recommendations",
         new=AsyncMock(return_value=(None, [])),
     ):
         await get_dashboard_stats(db=mock_db)
@@ -595,7 +595,7 @@ async def test_dashboard_stats_counts_early_signal_separately(mock_db):
     from apps.api.main import get_dashboard_stats
 
     with patch(
-        "apps.api.main._load_current_enable_recommendations",
+        "apps.api.routers.dashboard._load_current_enable_recommendations",
         new=AsyncMock(return_value=(None, [])),
     ):
         result = await get_dashboard_stats(db=mock_db)
@@ -635,7 +635,7 @@ async def test_dashboard_stats_includes_observer_runtime_fields(mock_db):
     from apps.api.main import get_dashboard_stats
 
     with patch(
-        "apps.api.main._load_current_enable_recommendations",
+        "apps.api.routers.dashboard._load_current_enable_recommendations",
         new=AsyncMock(return_value=(None, [])),
     ):
         result = await get_dashboard_stats(db=mock_db)
@@ -720,10 +720,10 @@ async def test_restart_disable_worker_restarts_process():
 
     with (
         patch(
-            "apps.api.main._stop_disable_process", new=AsyncMock(return_value=11111)
+            "apps.api.routers.settings._stop_disable_process", new=AsyncMock(return_value=11111)
         ) as stop_mock,
         patch(
-            "apps.api.main._start_disable_process", new=AsyncMock(return_value=22222)
+            "apps.api.routers.settings._start_disable_process", new=AsyncMock(return_value=22222)
         ) as start_mock,
     ):
         result = await restart_disable_worker()
@@ -974,9 +974,11 @@ def test_build_dashboard_performance_payload_keeps_nulls_for_zero_denominators()
 # Проверяем что today в endpoint опирается на актуальную скан-сессию, а не на полночь
 @pytest.mark.asyncio
 async def test_dashboard_performance_today_uses_current_scan_cutoff(mock_db):
-    execute_result = MagicMock()
-    execute_result.scalars.return_value.all.return_value = []
-    mock_db.execute = AsyncMock(return_value=execute_result)
+    snapshots_result = MagicMock()
+    snapshots_result.scalars.return_value.all.return_value = []
+    offers_result = MagicMock()
+    offers_result.scalars.return_value.all.return_value = []
+    mock_db.execute = AsyncMock(side_effect=[snapshots_result, offers_result])
     last_scan = datetime(2026, 3, 28, 10, 0, tzinfo=UTC)
     mock_db.scalar = AsyncMock(return_value=last_scan)
 
@@ -984,7 +986,8 @@ async def test_dashboard_performance_today_uses_current_scan_cutoff(mock_db):
 
     await get_dashboard_performance(period="today", db=mock_db)
 
-    stmt = mock_db.execute.call_args.args[0]
+    # Первый вызов execute — запрос снэпшотов с фильтром по last_observed_at
+    stmt = mock_db.execute.call_args_list[0].args[0]
     where_clause = list(stmt._where_criteria)[0]
     assert where_clause.right.value == last_scan - timedelta(minutes=30)
 
@@ -1006,7 +1009,7 @@ async def test_chart_data_today_uses_local_day_fallback(mock_db):
 
     now = datetime(2026, 3, 28, 13, 45, tzinfo=ZoneInfo("Europe/Kaliningrad"))
 
-    with patch("apps.api.main._dashboard_now", return_value=now):
+    with patch("apps.api.routers.dashboard._dashboard_now", return_value=now):
         await get_chart_data(period="today", db=mock_db)
 
     stmt = mock_db.execute.call_args_list[0].args[0]
@@ -1057,8 +1060,8 @@ def test_build_dashboard_performance_payload_respects_explicit_cabinet_cutoff():
 @pytest.mark.asyncio
 async def test_dashboard_performance_endpoint_returns_payload(mock_db):
     observed_at = datetime.now(UTC) - timedelta(minutes=10)
-    execute_result = MagicMock()
-    execute_result.scalars.return_value.all.return_value = [
+    snapshots_result = MagicMock()
+    snapshots_result.scalars.return_value.all.return_value = [
         _make_snapshot(
             campaign_name="Campaign A",
             spend="42.00",
@@ -1069,7 +1072,10 @@ async def test_dashboard_performance_endpoint_returns_payload(mock_db):
             last_observed_at=observed_at,
         )
     ]
-    mock_db.execute = AsyncMock(return_value=execute_result)
+    # Второй execute — запрос офферов (для ROAS), возвращаем пустой список
+    offers_result = MagicMock()
+    offers_result.scalars.return_value.all.return_value = []
+    mock_db.execute = AsyncMock(side_effect=[snapshots_result, offers_result])
     mock_db.scalar = AsyncMock(return_value=observed_at)
 
     from apps.api.main import get_dashboard_performance
@@ -1080,4 +1086,4 @@ async def test_dashboard_performance_endpoint_returns_payload(mock_db):
     assert payload.summary.spend == Decimal("42.00")
     assert payload.summary.cpc == Decimal("0.5000")
     assert payload.campaigns[0].campaign == "Campaign A"
-    assert mock_db.execute.call_count == 1
+    assert mock_db.execute.call_count == 2

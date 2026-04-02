@@ -91,11 +91,17 @@ export default function App() {
 
       {/* Навигация */}
       <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`} role="navigation" aria-label="Главное меню">
-        <div className="sidebar-logo" aria-hidden="true">
-          <span className="sidebar-logo__mark">◈</span>
-          <div className="sidebar-logo__text">
-            <span className="sidebar-logo__brand">AdGuard</span>
-            <span className="sidebar-logo__sub">FB Bot</span>
+        <div className="sidebar-brand">
+          <svg width="26" height="26" viewBox="0 0 28 28" fill="none">
+            <path d="M14 2L4 6v8c0 5.5 4.3 10.7 10 12 5.7-1.3 10-6.5 10-12V6L14 2z"
+                  fill="#4f6ef7" opacity="0.9"/>
+            <ellipse cx="14" cy="14" rx="3.5" ry="4.5" fill="white" opacity="0.95"/>
+            <circle cx="14" cy="13" r="1.5" fill="#0e1015"/>
+            <path d="M14 15.5 Q14 17 14 18" stroke="#0e1015" strokeWidth="1.2" strokeLinecap="round"/>
+          </svg>
+          <div className="sidebar-brand-text">
+            <span className="sidebar-brand-name">AdGuard FB</span>
+            <span className="sidebar-brand-sub">Мониторинг рекламы</span>
           </div>
         </div>
         <nav>

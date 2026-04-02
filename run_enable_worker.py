@@ -60,6 +60,7 @@ from core.db import get_session_factory
 from core.domain import EnableTaskStatus
 from core.enable_tasks import reconcile_enable_tasks
 from core.models import EnableTask, VisionSettings
+from core.sentry import setup_sentry
 from core.telegram.client import TelegramBotClient
 from core.telegram.delivery import (
     broadcast_enable_task_runtime_message,
@@ -632,6 +633,7 @@ async def enable_worker_loop(
 async def main() -> None:
     """Запуск enable worker."""
     settings = get_settings()
+    setup_sentry(dsn=settings.sentry_dsn, environment=settings.sentry_environment)
     tg_client = None
     if settings.telegram_bot_token and settings.telegram_chat_id:
         tg_client = TelegramBotClient(settings.telegram_bot_token)

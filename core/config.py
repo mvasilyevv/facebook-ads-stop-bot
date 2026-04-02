@@ -42,6 +42,10 @@ class Settings(BaseSettings):
     # --- Telegram MiniApp ---
     miniapp_url: str = ""
 
+    # --- Sentry (опционально) ---
+    sentry_dsn: str = ""
+    sentry_environment: str = "production"
+
     @property
     def database_url(self) -> str:
         """Строка подключения к Postgres для asyncpg."""

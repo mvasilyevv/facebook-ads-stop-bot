@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Тесты API observer-настроек с раздельными step-level порогами."""
+"""Тесты API observer-настроек с раздельными step-level порогами и валидацией B9."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from pydantic import ValidationError
 
 
 @pytest.fixture
@@ -70,3 +71,69 @@ async def test_update_observer_settings_persists_step_thresholds(mock_db):
     assert response.cpl_stop_percent_of_base == Decimal("70")
     assert response.cpr_stop_percent_of_base == Decimal("60")
     mock_db.commit.assert_awaited_once()
+
+
+# Проверяем, что отрицательный stop_percent_of_base отклоняется валидатором (B9).
+def test_observer_settings_schema_rejects_negative_stop_percent():
+    from apps.api.main import ObserverSettingsSchema
+
+    with pytest.raises(ValidationError) as exc_info:
+        ObserverSettingsSchema(stop_percent_of_base=Decimal("-10"))
+    errors = exc_info.value.errors()
+    assert any(e["loc"] == ("stop_percent_of_base",) for e in errors)
+
+
+# Проверяем, что нулевой stop_percent_of_base тоже отклоняется (должен быть > 0).
+def test_observer_settings_schema_rejects_zero_stop_percent():
+    from apps.api.main import ObserverSettingsSchema
+
+    with pytest.raises(ValidationError) as exc_info:
+        ObserverSettingsSchema(stop_percent_of_base=Decimal("0"))
+    errors = exc_info.value.errors()
+    assert any(e["loc"] == ("stop_percent_of_base",) for e in errors)
+
+
+# Проверяем, что interval_seconds < 10 отклоняется.
+def test_observer_settings_schema_rejects_too_short_interval():
+    from apps.api.main import ObserverSettingsSchema
+
+    with pytest.raises(ValidationError) as exc_info:
+        ObserverSettingsSchema(interval_seconds=5)
+    errors = exc_info.value.errors()
+    assert any(e["loc"] == ("interval_seconds",) for e in errors)
+
+
+# Проверяем, что warning_percent_of_stop > 100 отклоняется.
+def test_observer_settings_schema_rejects_warning_above_100():
+    from apps.api.main import ObserverSettingsSchema
+
+    with pytest.raises(ValidationError) as exc_info:
+        ObserverSettingsSchema(warning_percent_of_stop=Decimal("150"))
+    errors = exc_info.value.errors()
+    assert any(e["loc"] == ("warning_percent_of_stop",) for e in errors)
+
+
+# Проверяем, что корректные значения принимаются без ошибок.
+def test_observer_settings_schema_accepts_valid_values():
+    from apps.api.main import ObserverSettingsSchema
+
+    schema = ObserverSettingsSchema(
+        interval_seconds=60,
+        jitter_seconds=15,
+        warning_percent_of_stop=Decimal("80"),
+        stop_percent_of_base=Decimal("100"),
+    )
+    assert schema.interval_seconds == 60
+    assert schema.stop_percent_of_base == Decimal("100")
+
+
+# Проверяем, что cpc_stop_percent_of_base=None (отключено) проходит валидацию.
+def test_observer_settings_schema_accepts_null_step_thresholds():
+    from apps.api.main import ObserverSettingsSchema
+
+    schema = ObserverSettingsSchema(
+        cpc_stop_percent_of_base=None,
+        cpl_stop_percent_of_base=None,
+        cpr_stop_percent_of_base=None,
+    )
+    assert schema.cpc_stop_percent_of_base is None

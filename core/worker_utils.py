@@ -7,6 +7,7 @@ import asyncio
 import fcntl
 import logging
 import pathlib
+import random
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +23,10 @@ def calculate_retry_delay(attempt: int, base: int = 30, max_delay: int = 300) ->
     Returns:
         Время ожидания в секундах.
     """
-    return float(min(base * (2 ** max(attempt - 1, 0)), max_delay))
+    delay = base * (2 ** max(attempt - 1, 0))
+    # Jitter ±15% предотвращает thundering herd при одновременных ретраях
+    jitter = random.uniform(0.85, 1.15)
+    return float(min(delay * jitter, max_delay))
 
 
 async def wait_for_shutdown_or_timeout(

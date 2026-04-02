@@ -11,6 +11,7 @@ import {
 import { useAsyncPolling } from '../hooks/useAsyncPolling.js';
 import { useRefreshOnResume } from '../hooks/useRefreshOnResume.js';
 import { StateIcon } from '../components/StateIcon.jsx';
+import { ALERT_STATE_LABELS } from '../constants/alertStates.js';
 
 // Буфер в минутах: объявления виденные в пределах N минут от последнего скана = "активные".
 // Это разделяет текущую сессию от вчерашних кампаний независимо от времени суток.
@@ -27,16 +28,6 @@ const STATE_ORDER = {
   NORMAL: 4,
   DISABLED: 5,
   ARCHIVED: 6,
-};
-
-const STATE_LABELS = {
-  NORMAL: 'Норма',
-  EARLY_SIGNAL_SENT: 'Ранний сигнал',
-  WARNING_SENT: 'Предупреждение',
-  STOP_SENT: 'Стоп',
-  CLAIMED: 'Ожидает OFF',
-  DISABLED: 'Отключено',
-  ARCHIVED: 'Архив',
 };
 
 const SORT_OPTIONS = [
@@ -67,6 +58,39 @@ const RULE_LABELS = {
   early_lpv_ratio_signal: 'Слабая доходимость до лендинга',
   early_cost_per_lpv_signal: 'Дорогой просмотр лендинга',
 };
+
+const STATE_PRIORITY = {
+  STOP_SENT: 5,
+  WARNING_SENT: 4,
+  EARLY_SIGNAL_SENT: 3,
+  CLAIMED: 2,
+  NORMAL: 1,
+  DISABLED: 0,
+  ARCHIVED: -1,
+};
+
+const QUICK_FILTERS = [
+  {
+    id: 'problems',
+    label: 'Проблемные ↑',
+    apply: (ads) => [...ads].sort((a, b) => STATE_PRIORITY[getAdDisplayState(b)] - STATE_PRIORITY[getAdDisplayState(a)]),
+  },
+  {
+    id: 'top-spend',
+    label: 'Топ расход',
+    apply: (ads) => [...ads].sort((a, b) => parseFloat(b.spend || 0) - parseFloat(a.spend || 0)),
+  },
+  {
+    id: 'no-deposits',
+    label: 'Без депозитов',
+    apply: (ads) => ads.filter((ad) => ad.deposits === 0 && parseFloat(ad.spend || 0) > 0),
+  },
+  {
+    id: 'recent',
+    label: 'Недавние',
+    apply: (ads) => [...ads].sort((a, b) => new Date(b.last_observed_at || 0) - new Date(a.last_observed_at || 0)),
+  },
+];
 
 function ruleLabel(code) {
   return RULE_LABELS[code] || code;
@@ -357,8 +381,8 @@ function isDeliveryOff(ad) {
 
 // --- Таймлайн объявления ---
 
-const STAGE_ICONS = { EARLY_SIGNAL: '🔎', WARNING: '⚠️', STOP: '🛑' };
-const TASK_STATUS_ICONS = { PENDING: '⏳', RUNNING: '🔄', SUCCEEDED: '✅', RETRYING: '🔁', FAILED: '❌' };
+const STAGE_ICONS = { EARLY_SIGNAL: '◎', WARNING: '△', STOP: '×' };
+const TASK_STATUS_ICONS = { PENDING: '○', RUNNING: '●', SUCCEEDED: '✓', RETRYING: '↻', FAILED: '×' };
 const ENABLE_TASK_STATUS_LABELS = {
   PENDING: 'В очереди',
   RUNNING: 'В работе',
@@ -369,18 +393,18 @@ const ENABLE_TASK_STATUS_LABELS = {
 const ENABLE_RECOMMENDATION_LEVEL_META = {
   OK: {
     label: 'Нет блокирующих сигналов',
-    icon: 'ℹ️',
+    icon: '○',
     tone: 'signal',
   },
   EARLY_SIGNAL: {
     label: 'Ранний сигнал восстановления',
-    icon: '🔎',
+    icon: '◎',
     tone: 'signal',
     secondary: 'Есть ранний сигнал',
   },
   WARNING: {
     label: 'Требует проверки',
-    icon: '⚠️',
+    icon: '△',
     tone: 'warning',
     secondary: 'Близко к порогу',
   },
@@ -492,13 +516,13 @@ function AdTimeline({ fbAdId, onClose }) {
           </div>
           {data?.campaign_name && (
             <div className="timeline-drawer__subtitle">
-              📁 {data.campaign_name}
+              {data.campaign_name}
               {data.adset_name && ` › ${data.adset_name}`}
             </div>
           )}
           {data?.current_incident && (
             <div className="timeline-drawer__subtitle">
-              🧭 {getIncidentStateLabel(data.current_incident)}
+              {getIncidentStateLabel(data.current_incident)}
               {data.current_incident.last_activity_at && ` · ${timeAgo(data.current_incident.last_activity_at)}`}
             </div>
           )}
@@ -509,7 +533,7 @@ function AdTimeline({ fbAdId, onClose }) {
         {error && <div className="timeline-error">Ошибка: {error}</div>}
 
         {data && !loading && (
-          <>
+          <div className="timeline-body">
             {/* Текущие метрики */}
             <div className="timeline-current-metrics">
               {data.current_incident && (
@@ -695,7 +719,7 @@ function AdTimeline({ fbAdId, onClose }) {
                   )}
                   {ev.type === 'alert' && (
                     <div className="timeline-event__body">
-                      <span className="timeline-event__icon">{STAGE_ICONS[ev.stage] || '📌'}</span>
+                      <span className="timeline-event__icon">{STAGE_ICONS[ev.stage] || '○'}</span>
                       <div className="timeline-event__content">
                         <div className="timeline-event__title">
                           {ev.reason_title || (ev.stage === 'STOP' ? 'Стоп-алерт' : ev.stage === 'EARLY_SIGNAL' ? 'Ранний сигнал' : 'Предупреждение')}
@@ -713,9 +737,9 @@ function AdTimeline({ fbAdId, onClose }) {
                           <div className="timeline-event__sub">{ev.reason_text}</div>
                         )}
                         <div className="timeline-event__metrics">
-                          {ev.spend != null && <span>💰 {fmt(ev.spend)}</span>}
-                          {ev.cpc != null && <span>🖱 {fmt(ev.cpc)}</span>}
-                          {ev.outbound_ctr != null && <span>🌐 CTR исх.: {Number(ev.outbound_ctr).toFixed(2)}%</span>}
+                          {ev.spend != null && <span>Расход: {fmt(ev.spend)}</span>}
+                          {ev.cpc != null && <span>CPC: {fmt(ev.cpc)}</span>}
+                          {ev.outbound_ctr != null && <span>CTR исх.: {Number(ev.outbound_ctr).toFixed(2)}%</span>}
                           {ev.landing_page_views != null && <span>LPV: {ev.landing_page_views}</span>}
                           {ev.cpm != null && <span>CPM: {fmt(ev.cpm)}</span>}
                           {ev.frequency != null && <span>Частота: {Number(ev.frequency).toFixed(2)}</span>}
@@ -732,7 +756,7 @@ function AdTimeline({ fbAdId, onClose }) {
                     const taskStatus = getEnableTaskStatus(ev);
                     return (
                       <div className="timeline-event__body">
-                        <span className="timeline-event__icon">{TASK_STATUS_ICONS[taskStatus] || '🔧'}</span>
+                        <span className="timeline-event__icon">{TASK_STATUS_ICONS[taskStatus] || '○'}</span>
                         <div className="timeline-event__content">
                           <div className="timeline-event__title">
                             Задача на включение — {getEnableTaskStatusLabel(taskStatus)}
@@ -750,7 +774,7 @@ function AdTimeline({ fbAdId, onClose }) {
                   })()}
                   {ev.type === 'disable_task' && (
                     <div className="timeline-event__body">
-                      <span className="timeline-event__icon">{TASK_STATUS_ICONS[ev.status] || '🔧'}</span>
+                      <span className="timeline-event__icon">{TASK_STATUS_ICONS[ev.status] || '○'}</span>
                       <div className="timeline-event__content">
                         <div className="timeline-event__title">
                           Задача на отключение — {ev.status}
@@ -771,7 +795,7 @@ function AdTimeline({ fbAdId, onClose }) {
                 </div>
               ))}
             </div>
-          </>
+          </div>
         )}
       </div>
     </div>
@@ -792,9 +816,9 @@ function getTableRowState(ad) {
 // Вспомогательная функция: значок действия в конце строки
 function getTableRowActionIcon(ad) {
   const displayState = getAdDisplayState(ad);
-  if (displayState === 'STOP_SENT') return '🛑';
-  if (displayState === 'WARNING_SENT') return '⚠️';
-  if (displayState === 'EARLY_SIGNAL_SENT') return '🔎';
+  if (displayState === 'STOP_SENT') return '×';
+  if (displayState === 'WARNING_SENT') return '△';
+  if (displayState === 'EARLY_SIGNAL_SENT') return '◎';
   return null;
 }
 
@@ -814,6 +838,7 @@ export default function AdsPage({ initialView = 'active', initialState = '' }) {
   const [error, setError] = useState(null);
   const [timelineAdId, setTimelineAdId] = useState(null);
   const [restartingDisableWorker, setRestartingDisableWorker] = useState(false);
+  const [activeQuickFilter, setActiveQuickFilter] = useState(null);
 
   useEffect(() => {
     setView(initialView);
@@ -983,12 +1008,21 @@ export default function AdsPage({ initialView = 'active', initialState = '' }) {
           : getAdDisplayState(a) === stateFilter
       ));
     }
-    return [...result].sort((a, b) => compareAds(a, b, sortBy, sortDirection));
-  }, [sourceAds, offerFilter, stateFilter, sortBy, sortDirection]);
+    // Применяем quick filter, если выбран
+    if (activeQuickFilter) {
+      const filter = QUICK_FILTERS.find((f) => f.id === activeQuickFilter);
+      if (filter) {
+        result = filter.apply(result);
+      }
+    } else {
+      result = [...result].sort((a, b) => compareAds(a, b, sortBy, sortDirection));
+    }
+    return result;
+  }, [sourceAds, offerFilter, stateFilter, sortBy, sortDirection, activeQuickFilter]);
 
   return (
     <div className="ads-page">
-      {error && <div className="error-banner">⚠ {error}</div>}
+      {error && <div className="error-banner">{error}</div>}
 
       {/* Панель фильтров */}
       <div className="ads-toolbar">
@@ -1037,13 +1071,13 @@ export default function AdsPage({ initialView = 'active', initialState = '' }) {
               onChange={(e) => setStateFilter(e.target.value)}
             >
               <option value="">Все статусы</option>
-              <option value="NORMAL">Норма</option>
-              <option value="EARLY_SIGNAL_SENT">Ранний сигнал</option>
-              <option value="WARNING_SENT">Предупреждение</option>
-              <option value="STOP_SENT">Стоп</option>
-              <option value="CLAIMED">Ожидает OFF</option>
-              <option value="DISABLED">Отключено</option>
-              {archiveAds.length > 0 && <option value="ARCHIVED">Архив</option>}
+              <option value="NORMAL">{ALERT_STATE_LABELS.NORMAL}</option>
+              <option value="EARLY_SIGNAL_SENT">{ALERT_STATE_LABELS.EARLY_SIGNAL_SENT}</option>
+              <option value="WARNING_SENT">{ALERT_STATE_LABELS.WARNING_SENT}</option>
+              <option value="STOP_SENT">{ALERT_STATE_LABELS.STOP_SENT}</option>
+              <option value="CLAIMED">{ALERT_STATE_LABELS.CLAIMED}</option>
+              <option value="DISABLED">{ALERT_STATE_LABELS.DISABLED}</option>
+              {archiveAds.length > 0 && <option value="ARCHIVED">{ALERT_STATE_LABELS.ARCHIVED}</option>}
             </select>
           </div>
 
@@ -1080,6 +1114,19 @@ export default function AdsPage({ initialView = 'active', initialState = '' }) {
         </div>
       </div>
 
+      {/* Quick filters */}
+      <div className="quick-filters">
+        {QUICK_FILTERS.map((f) => (
+          <button
+            key={f.id}
+            className={`quick-filter-btn ${activeQuickFilter === f.id ? 'active' : ''}`}
+            onClick={() => setActiveQuickFilter(activeQuickFilter === f.id ? null : f.id)}
+          >
+            {f.label}
+          </button>
+        ))}
+      </div>
+
       {/* Счётчик с временем последнего скана */}
       <div className="ads-count">
         Показано: {filtered.length}
@@ -1102,7 +1149,7 @@ export default function AdsPage({ initialView = 'active', initialState = '' }) {
       ) : filtered.length === 0 ? (
         <div className="ads-empty" role="status">
           <div className="ads-empty__icon">
-            {view === 'active' ? '✅' : view === 'archive' ? '📁' : '🔍'}
+            {view === 'active' ? '✓' : view === 'archive' ? '○' : '—'}
           </div>
           <div className="ads-empty__text">
             {view === 'active'
@@ -1125,9 +1172,9 @@ export default function AdsPage({ initialView = 'active', initialState = '' }) {
                 <th style={{ width: '36px' }} />
                 <th className="sortable" onClick={() => handleSort('ad_name')}>Название</th>
                 <th className="sortable sorted" onClick={() => handleSort('spend')} style={{ width: '80px', textAlign: 'right' }}>Расход</th>
-                <th style={{ width: '70px', textAlign: 'right' }}>CPC</th>
-                <th style={{ width: '60px', textAlign: 'right' }}>Лиды</th>
-                <th style={{ width: '70px', textAlign: 'right' }}>Депо</th>
+                <th className="sortable" onClick={() => handleSort('cpc')} style={{ width: '70px', textAlign: 'right' }}>CPC</th>
+                <th className="sortable" onClick={() => handleSort('leads')} style={{ width: '60px', textAlign: 'right' }}>Лиды</th>
+                <th className="sortable" onClick={() => handleSort('deposits')} style={{ width: '70px', textAlign: 'right' }}>Депозит</th>
                 <th style={{ width: '120px' }}>Правила</th>
                 <th style={{ width: '40px' }} />
               </tr>

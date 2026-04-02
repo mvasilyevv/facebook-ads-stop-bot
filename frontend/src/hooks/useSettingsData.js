@@ -290,6 +290,7 @@ export function useSettingsData() {
   }, []);
 
   const saveObserver = useCallback(async () => {
+    if (saving === 'observer') return;
     setSaving('observer');
     try {
       await updateObserverSettings({
@@ -428,6 +429,7 @@ export function useSettingsData() {
   }, [currentBotUsername]);
 
   const saveVision = useCallback(async () => {
+    if (saving === 'vision') return;
     setSaving('vision');
     try {
       await updateVisionSettings({

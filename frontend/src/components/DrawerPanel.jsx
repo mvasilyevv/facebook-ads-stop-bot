@@ -7,9 +7,8 @@ const fmt$ = (v) => v != null ? `$${Number(v).toFixed(2)}` : '—';
 const fmtN = (v) => v != null ? String(v) : '—';
 const fmtPct = (v) => v != null ? `${Number(v).toFixed(2)}%` : '—';
 
-// Статус иконки и цвета
-function statusIcon(s) {
-  return { PENDING: '⏳', RUNNING: '🔄', RETRYING: '🔄', SUCCEEDED: '✅', FAILED: '❌' }[s] || '?';
+function statusSymbol(s) {
+  return { PENDING: '○', RUNNING: '●', RETRYING: '↻', SUCCEEDED: '✓', FAILED: '×' }[s] || '—';
 }
 
 function statusColor(s) {
@@ -56,12 +55,6 @@ function DrawerContent({ ad, incident, disableTask, onClose, onDisable, onRetry 
     { label: 'LPV', value: fmtN(ad.metrics?.lpv) },
   ].filter((m) => m.value !== '—');
 
-  const getRuleSeverity = (ruleCode) => {
-    if (!incident || !incident.rule_hits) return 'default';
-    const hit = incident.rule_hits.find((h) => h.rule_code === ruleCode);
-    return hit?.stage === 'STOP' ? 'stop' : 'warning';
-  };
-
   const canDisable = ['WARNING_SENT', 'STOP_SENT'].includes(ad.state);
   const showRetry = disableTask && disableTask.status === 'FAILED';
 
@@ -84,15 +77,10 @@ function DrawerContent({ ad, incident, disableTask, onClose, onDisable, onRetry 
           </div>
           <button
             onClick={onClose}
-            style={{
-              background: 'none',
-              border: 'none',
-              fontSize: '20px',
-              cursor: 'pointer',
-              padding: '4px',
-            }}
+            className="drawer-panel__close"
+            aria-label="Закрыть"
           >
-            ✕
+            ×
           </button>
         </div>
 
@@ -121,8 +109,7 @@ function DrawerContent({ ad, incident, disableTask, onClose, onDisable, onRetry 
                 Сработаны правила
               </div>
               {incident.rule_hits.map((hit) => {
-                const severity = hit.stage === 'STOP' ? 'stop' : 'warning';
-                const color = severity === 'stop' ? 'var(--accent-crimson)' : 'var(--accent-gold)';
+                const color = hit.stage === 'STOP' ? 'var(--accent-crimson)' : 'var(--accent-gold)';
                 return (
                   <div
                     key={hit.rule_code}
@@ -149,8 +136,8 @@ function DrawerContent({ ad, incident, disableTask, onClose, onDisable, onRetry 
                 <span>Задача на отключение</span>
                 <span>Попытка {disableTask.attempt_count || 1}</span>
               </div>
-              <div style={{ color: statusColor(disableTask.status) }}>
-                {statusIcon(disableTask.status)} {disableTask.status}
+              <div style={{ color: statusColor(disableTask.status), fontFamily: "'JetBrains Mono', monospace" }}>
+                {statusSymbol(disableTask.status)} {disableTask.status}
               </div>
               {disableTask.last_error && (
                 <div style={{ color: 'var(--accent-crimson)', marginTop: '4px', fontSize: '11px' }}>
@@ -163,7 +150,7 @@ function DrawerContent({ ad, incident, disableTask, onClose, onDisable, onRetry 
                 </div>
               )}
               {(disableTask.status === 'FAILED' || disableTask.status === 'RETRYING') && (
-                <button onClick={() => onRetry(disableTask.id)} style={{ marginTop: '8px', fontSize: '12px', padding: '6px 12px', background: 'var(--accent-crimson)', color: '#ffffff', border: 'none', borderRadius: 'var(--radius-sm)', cursor: 'pointer' }}>
+                <button onClick={() => onRetry(disableTask.id)} className="btn btn-sm btn-danger" style={{ marginTop: '8px' }}>
                   Повторить сейчас
                 </button>
               )}
@@ -174,24 +161,16 @@ function DrawerContent({ ad, incident, disableTask, onClose, onDisable, onRetry 
         {/* Footer */}
         <div className="drawer-panel__footer">
           {canDisable && !disableTask && (
-            <button
-              onClick={() => onDisable(ad.fb_ad_id)}
-              className="btn-disable-inline"
-              style={{ backgroundColor: 'var(--accent-crimson)', color: '#ffffff' }}
-            >
+            <button onClick={() => onDisable(ad.fb_ad_id)} className="btn-disable-inline">
               Отключить
             </button>
           )}
           {showRetry && (
-            <button
-              onClick={() => onRetry(disableTask.id)}
-              className="btn-disable-inline"
-              style={{ backgroundColor: 'var(--accent-gold)', color: 'var(--text-primary)' }}
-            >
+            <button onClick={() => onRetry(disableTask.id)} className="btn-disable-inline btn-disable-inline--warning">
               Повторить
             </button>
           )}
-          <button onClick={onClose} className="btn-secondary">
+          <button onClick={onClose} className="btn btn-secondary btn-sm">
             Закрыть
           </button>
         </div>

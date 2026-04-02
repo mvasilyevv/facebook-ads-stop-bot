@@ -5,8 +5,6 @@ import {
   clampStepValue,
   getObserverStepThresholds,
   OBSERVER_STEP_CONFIGS,
-  STOP_RANGE_MARKS,
-  WARNING_RANGE_MARKS,
 } from './settingsUtils.js';
 
 function normalizeIntegerDraft(value) {
@@ -19,15 +17,7 @@ function clampIntegerValue(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
 
-function IntegerObserverField({
-  id,
-  label,
-  value,
-  min,
-  max,
-  hint,
-  onChange,
-}) {
+function IntegerObserverField({ id, label, value, min, max, hint, onChange }) {
   const [draft, setDraft] = useState(String(value ?? ''));
 
   useEffect(() => {
@@ -37,9 +27,7 @@ function IntegerObserverField({
   const handleChange = (event) => {
     const nextDraft = normalizeIntegerDraft(event.target.value);
     setDraft(nextDraft);
-    if (nextDraft === '') {
-      return;
-    }
+    if (nextDraft === '') return;
     onChange(Number(nextDraft));
   };
 
@@ -57,9 +45,7 @@ function IntegerObserverField({
 
   return (
     <div className="form-group">
-      <label className="form-label" htmlFor={id}>
-        {label}
-      </label>
+      <label className="form-label" htmlFor={id}>{label}</label>
       <input
         id={id}
         className="form-input"
@@ -75,50 +61,81 @@ function IntegerObserverField({
   );
 }
 
-function PercentSlider({
-  id,
-  label,
-  value,
-  min,
-  max,
-  step,
-  marks,
-  hint,
-  summary,
-  onChange,
-}) {
-  const safeValue = clampStepValue(value, min, max, step);
+/* Слайдер стопа: трек 5–100%, зоны: зелёная → янтарная → красная */
+function StopSlider({ value, onChange }) {
+  const stop = value;
+  // warn absolute = stop * defaultWarning / 100, но здесь только визуализация позиции стопа
+  const stopPct = ((stop - 5) / 95) * 100;
+
+  const gradient = `linear-gradient(to right,
+    rgba(16,185,129,0.35) 0%,
+    rgba(16,185,129,0.35) ${Math.max(0, stopPct - 8)}%,
+    rgba(245,158,11,0.4) ${Math.max(0, stopPct - 8)}%,
+    rgba(245,158,11,0.4) ${stopPct}%,
+    rgba(239,68,68,0.2) ${stopPct}%,
+    rgba(239,68,68,0.2) 100%)`;
 
   return (
-    <div className="slider-field">
-      <div className="slider-field__header">
-        <label className="form-label slider-field__label" htmlFor={id}>
-          {label}
-        </label>
-        <div className="slider-field__value">{safeValue}%</div>
+    <div className="obs-slider">
+      <div className="obs-slider__label">Стоп (% от базового)</div>
+      <div className="obs-slider__track-area">
+        <div className="obs-slider__track-bg" style={{ background: gradient }} />
+        <input
+          type="range"
+          className="obs-slider__range"
+          min={5} max={100} step={5}
+          value={stop}
+          onChange={e => onChange(Number(e.target.value))}
+        />
       </div>
-      <input
-        id={id}
-        className="slider-field__range"
-        type="range"
-        min={min}
-        max={max}
-        step={step}
-        value={safeValue}
-        onChange={(event) => onChange(clampStepValue(event.target.value, min, max, step))}
-      />
-      <div className="slider-field__scale" aria-hidden="true">
-        {marks.map((mark) => (
-          <span
-            key={mark}
-            className={`slider-field__mark ${mark === safeValue ? 'active' : ''}`}
-          >
-            {mark}%
-          </span>
-        ))}
+      <div className="obs-slider__ticks">
+        <span className="obs-slider__tick">5%</span>
+        <span className="obs-slider__tick">25%</span>
+        <span className="obs-slider__tick">50%</span>
+        <span className="obs-slider__tick">75%</span>
+        <span className="obs-slider__tick">100%</span>
       </div>
-      <div className="slider-field__summary">{summary}</div>
-      <div className="form-hint slider-field__hint">{hint}</div>
+      <div className="obs-slider__badge obs-slider__badge--stop">
+        × Стоп: {stop}%
+      </div>
+    </div>
+  );
+}
+
+/* Слайдер предупреждения: трек 50–100% */
+function WarnSlider({ value, stopValue, onChange }) {
+  const warn = value;
+  const warnPct = ((warn - 50) / 50) * 100;
+  const warnAbsolute = Math.round(stopValue * warn / 100);
+
+  const gradient = `linear-gradient(to right,
+    rgba(16,185,129,0.35) 0%,
+    rgba(16,185,129,0.35) ${warnPct}%,
+    rgba(245,158,11,0.4) ${warnPct}%,
+    rgba(245,158,11,0.4) 100%)`;
+
+  return (
+    <div className="obs-slider">
+      <div className="obs-slider__label">Предупреждение (% от стопа)</div>
+      <div className="obs-slider__track-area">
+        <div className="obs-slider__track-bg" style={{ background: gradient }} />
+        <input
+          type="range"
+          className="obs-slider__range"
+          min={50} max={100} step={5}
+          value={warn}
+          onChange={e => onChange(Number(e.target.value))}
+        />
+      </div>
+      <div className="obs-slider__ticks">
+        <span className="obs-slider__tick">50%</span>
+        <span className="obs-slider__tick">65%</span>
+        <span className="obs-slider__tick">80%</span>
+        <span className="obs-slider__tick">100%</span>
+      </div>
+      <div className="obs-slider__badge obs-slider__badge--warn">
+        △ Предупр.: {warn}% → {warnAbsolute}% базы
+      </div>
     </div>
   );
 }
@@ -132,6 +149,7 @@ export function ObserverSettingsSection({ observer, onChange, onSave, saving }) 
   return (
     <section aria-label="Настройки Observer" className="form-section">
       <div className="form-section-title">Observer — сканирование и пороги</div>
+
       <div className="form-grid form-grid--observer-basics">
         <IntegerObserverField
           id="obs-interval"
@@ -152,72 +170,52 @@ export function ObserverSettingsSection({ observer, onChange, onSave, saving }) 
           onChange={(value) => onChange({ ...observer, jitter_seconds: value })}
         />
       </div>
-      <div className="observer-thresholds">
-        <div className="observer-thresholds__header">
-          <div>
-            <div className="observer-thresholds__title">Пороги отключения</div>
-            <div className="observer-thresholds__subtitle">
-              Базовые лимиты по-прежнему берём из правил оффера, а здесь настраиваем
-              фактический стоп и раннее предупреждение отдельно для каждого шага воронки.
-            </div>
+
+      {/* Пороги отключения со слайдерами */}
+      <div style={{ marginBottom: '20px' }}>
+        <div style={{ marginBottom: '14px' }}>
+          <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '4px' }}>
+            Пороги отключения
           </div>
-          <div className="observer-thresholds__badge">CPC → CPL → CPR</div>
+          <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+            Базовые лимиты берутся из правил оффера. Здесь настраивается фактический момент срабатывания.
+          </div>
         </div>
-        <div className="observer-thresholds__steps">
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
           {stepThresholds.map((step) => (
-            <div
-              key={step.id}
-              className={`threshold-step threshold-step--${step.id}`}
-            >
-              <div className="threshold-step__topline">
+            <div key={step.id} className="obs-step-card">
+              <div className="obs-step-card__header">
+                <div className="obs-step-card__code">{step.code}</div>
                 <div>
-                  <div className="threshold-step__ordinal">{step.ordinal}</div>
-                  <div className="threshold-step__title">
-                    {step.title} <span>{step.code}</span>
-                  </div>
-                  <div className="threshold-step__description">{step.description}</div>
-                </div>
-                <div className="threshold-step__badge">
-                  {step.stopShiftPercent > 0
-                    ? `Раньше базового на ${step.stopShiftPercent}%`
-                    : 'Базовый стоп'}
+                  <div className="obs-step-card__title">{step.title}</div>
+                  <div className="obs-step-card__desc">{step.description}</div>
                 </div>
               </div>
-
-              <PercentSlider
-                id={`obs-${step.id}-stop`}
-                label="Фактический стоп (% от базового стопа)"
-                value={step.stopPercent}
-                min={5}
-                max={100}
-                step={5}
-                marks={STOP_RANGE_MARKS}
-                summary={
-                  step.stopPercent === 100
-                    ? `${step.code} срабатывает на базовом пороге оффера.`
-                    : `${step.code} срабатывает раньше: на ${step.stopPercent}% от базового порога.`
-                }
-                hint="Фактический стоп может двигаться только вниз относительно базового лимита."
-                onChange={(value) => onChange({ ...observer, [step.stopKey]: value })}
-              />
-
-              <PercentSlider
-                id={`obs-${step.id}-warning`}
-                label="Порог предупреждения (% от стопа)"
-                value={step.warningPercent}
-                min={50}
-                max={100}
-                step={5}
-                marks={WARNING_RANGE_MARKS}
-                summary={`Предупреждение для ${step.code} придёт на ${step.warningPercent}% от его фактического стопа.`}
-                hint="Помогает увидеть риск заранее, ещё до реального авто-стопа."
-                onChange={(value) => onChange({ ...observer, [step.warningKey]: value })}
-              />
+              <div className="obs-step-card__sliders">
+                <StopSlider
+                  value={step.stopPercent}
+                  onChange={(v) => onChange({
+                    ...observer,
+                    [step.stopKey]: clampStepValue(v, 5, 100, 5),
+                  })}
+                />
+                <WarnSlider
+                  value={step.warningPercent}
+                  stopValue={step.stopPercent}
+                  onChange={(v) => onChange({
+                    ...observer,
+                    [step.warningKey]: clampStepValue(v, 50, 100, 5),
+                  })}
+                />
+              </div>
             </div>
           ))}
         </div>
       </div>
+
       <WarningBreakdown observer={observer} />
+
       <div className="settings-actions settings-actions--top">
         <button className="btn btn-primary" onClick={onSave} disabled={saving === 'observer'}>
           {saving === 'observer' ? 'Сохранение...' : 'Сохранить настройки Observer'}

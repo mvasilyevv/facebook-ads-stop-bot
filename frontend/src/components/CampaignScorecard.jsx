@@ -82,7 +82,7 @@ function MetricLine({ label, value, color = 'var(--text-primary)' }) {
   );
 }
 
-const STEP_COLORS = ['#0ea5e9', '#8b5cf6', '#f59e0b', '#10b981', '#ef4444'];
+const STEP_COLORS = ['#4f6ef7', '#a855f7', '#f5a623', '#34d399', '#f74f4f'];
 
 export function FunnelChart({ funnel }) {
   if (!funnel?.length) return null;
@@ -112,9 +112,9 @@ export function FunnelChart({ funnel }) {
 
         const convColor = convRate == null
           ? '#94a3b8'
-          : convRate >= 30 ? '#10b981'
-          : convRate >= 10 ? '#f59e0b'
-          : convRate > 0  ? '#ef4444'
+          : convRate >= 30 ? '#34d399'
+          : convRate >= 10 ? '#f5a623'
+          : convRate > 0  ? '#f74f4f'
           : '#94a3b8';
 
         const barColor = STEP_COLORS[i % STEP_COLORS.length];
@@ -123,18 +123,27 @@ export function FunnelChart({ funnel }) {
           <div key={step.key ?? step.label}>
             {/* Конверсия между шагами */}
             {i > 0 && (
-              <div style={{ display: 'flex', alignItems: 'center', paddingLeft: '56px', margin: '4px 0' }}>
-                <span style={{
-                  fontSize: '10px', fontWeight: 700,
+              <div style={{ display: 'flex', alignItems: 'center', paddingLeft: '56px', margin: '3px 0', gap: '8px' }}>
+                {/* вертикальная линия-коннектор */}
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: '10px', flexShrink: 0 }}>
+                  <div style={{ width: '2px', height: '7px', background: `${convColor}66`, borderRadius: '1px' }} />
+                  <div style={{ width: 0, height: 0, borderLeft: '4px solid transparent', borderRight: '4px solid transparent', borderTop: `5px solid ${convColor}99` }} />
+                </div>
+                {/* бейдж конверсии */}
+                <div style={{
+                  display: 'inline-flex', alignItems: 'center', gap: '5px',
+                  fontSize: '11px', fontWeight: 700,
                   fontFamily: 'JetBrains Mono, monospace',
                   color: convColor,
-                  background: `${convColor}1a`,
-                  padding: '2px 7px',
-                  borderRadius: '3px',
-                  letterSpacing: '0.02em',
+                  background: `${convColor}25`,
+                  border: `1px solid ${convColor}66`,
+                  padding: '2px 8px 2px 6px',
+                  borderRadius: '4px',
                 }}>
-                  ↓ {convRate != null ? `${convRate.toFixed(1)}%` : '—'}
-                </span>
+                  <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: convColor, flexShrink: 0, display: 'inline-block' }} />
+                  {convRate != null ? `${convRate.toFixed(1)}%` : '—'}
+                </div>
+                <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>конверсия</span>
               </div>
             )}
 

@@ -90,20 +90,20 @@ export function SpendTimelineChart({ data = [] }) {
             type="monotone"
             dataKey="spend"
             name="Расход $"
-            stroke="#0ea5e9"
+            stroke="#4f6ef7"
             strokeWidth={2}
             dot={false}
-            activeDot={{ r: 4, fill: '#0ea5e9' }}
+            activeDot={{ r: 4, fill: '#4f6ef7' }}
           />
           <Line
             yAxisId="count"
             type="monotone"
             dataKey="deposits"
             name="Депозиты"
-            stroke="#10b981"
+            stroke="#34d399"
             strokeWidth={2}
             dot={false}
-            activeDot={{ r: 4, fill: '#10b981' }}
+            activeDot={{ r: 4, fill: '#34d399' }}
           />
         </LineChart>
       </ResponsiveContainer>

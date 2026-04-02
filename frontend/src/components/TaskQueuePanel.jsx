@@ -1,9 +1,15 @@
-function statusIcon(s) {
-  return { PENDING: '⏳', RUNNING: '🔄', RETRYING: '🔄', SUCCEEDED: '✅', FAILED: '❌' }[s] || '?';
+import { TASK_STATUS_LABELS } from '../constants/alertStates.js';
+
+function statusSymbol(s) {
+  return { PENDING: '○', RUNNING: '●', RETRYING: '↻', SUCCEEDED: '✓', FAILED: '×' }[s] || '—';
 }
 
 function statusColor(s) {
   return { PENDING: 'var(--text-muted)', RUNNING: 'var(--accent-teal)', RETRYING: 'var(--accent-gold)', SUCCEEDED: 'var(--accent-teal)', FAILED: 'var(--accent-crimson)' }[s] || 'var(--text-primary)';
+}
+
+function getStatusLabel(status) {
+  return TASK_STATUS_LABELS[status] || status;
 }
 
 export function TaskQueuePanel({ disableTasks = [], enableTasks = [], enableRecs = [], onRetryDisable, onCreateEnableTask }) {
@@ -31,13 +37,13 @@ export function TaskQueuePanel({ disableTasks = [], enableTasks = [], enableRecs
             <div key={task.id} style={{ fontSize: '12px', padding: '8px', marginBottom: '6px', background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-sm)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <div style={{ flex: 1 }}>
                 <div>{task.ad_name || 'N/A'}</div>
-                <div style={{ color: statusColor(task.status), fontSize: '11px', marginTop: '2px' }}>
-                  {statusIcon(task.status)} {task.status}
+                <div style={{ color: statusColor(task.status), fontSize: '11px', marginTop: '2px', fontFamily: "'JetBrains Mono', monospace" }}>
+                  {statusSymbol(task.status)} {getStatusLabel(task.status)}
                   {task.attempt_count > 1 && <span> ×{task.attempt_count}</span>}
                 </div>
               </div>
               {(task.status === 'FAILED' || task.status === 'RETRYING') && (
-                <button onClick={() => onRetryDisable?.(task.id)} style={{ marginLeft: '8px', padding: '4px 10px', fontSize: '11px', background: 'var(--accent-crimson)', color: '#ffffff', border: 'none', borderRadius: 'var(--radius-sm)', cursor: 'pointer' }}>
+                <button onClick={() => onRetryDisable?.(task.id)} className="queue-action-btn queue-action-btn--danger">
                   Повтор
                 </button>
               )}
@@ -56,8 +62,8 @@ export function TaskQueuePanel({ disableTasks = [], enableTasks = [], enableRecs
             <div key={task.id} style={{ fontSize: '12px', padding: '8px', marginBottom: '6px', background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-sm)', display: 'flex', alignItems: 'center' }}>
               <div style={{ flex: 1 }}>
                 <div>{task.ad_name || 'N/A'}</div>
-                <div style={{ color: statusColor(task.status), fontSize: '11px', marginTop: '2px' }}>
-                  {statusIcon(task.status)} {task.status}
+                <div style={{ color: statusColor(task.status), fontSize: '11px', marginTop: '2px', fontFamily: "'JetBrains Mono', monospace" }}>
+                  {statusSymbol(task.status)} {getStatusLabel(task.status)}
                 </div>
               </div>
             </div>
@@ -74,12 +80,12 @@ export function TaskQueuePanel({ disableTasks = [], enableTasks = [], enableRecs
           {enableRecs.slice(0, 5).map((rec) => (
             <div key={rec.id} style={{ fontSize: '12px', padding: '8px', marginBottom: '6px', background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-sm)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <div style={{ flex: 1 }}>
-                <div>🔎 {rec.ad_name || 'N/A'}</div>
+                <div>{rec.ad_name || 'N/A'}</div>
                 <div style={{ color: 'var(--text-muted)', fontSize: '11px', marginTop: '2px' }}>
                   {rec.reason || 'Рекомендация'}
                 </div>
               </div>
-              <button onClick={() => onCreateEnableTask?.(rec.id)} style={{ marginLeft: '8px', padding: '4px 10px', fontSize: '11px', background: 'var(--accent-teal)', color: '#ffffff', border: 'none', borderRadius: 'var(--radius-sm)', cursor: 'pointer' }}>
+              <button onClick={() => onCreateEnableTask?.(rec.id)} className="queue-action-btn queue-action-btn--teal">
                 Включить
               </button>
             </div>

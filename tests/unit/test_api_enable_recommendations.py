@@ -154,7 +154,7 @@ async def test_list_enable_recommendations_deduplicates_by_ad_and_marks_task_cre
     mock_db.execute = AsyncMock(return_value=_rows_result([task]))
 
     with patch(
-        "apps.api.main._load_current_enable_recommendations",
+        "apps.api.routers.dashboard._load_current_enable_recommendations",
         new=AsyncMock(return_value=(shared_batch, live_rows)),
     ):
         result = await list_enable_recommendations(limit=20, db=mock_db)
@@ -293,11 +293,11 @@ async def test_load_current_enable_recommendations_filters_out_ads_that_are_no_l
 
     with (
         patch(
-            "apps.api.main.load_live_batch_bounds",
+            "apps.api.routers.dashboard.load_live_batch_bounds",
             new=AsyncMock(return_value=(last_scan, last_scan - timedelta(minutes=30))),
         ),
         patch(
-            "apps.api.main.collect_enable_recommendation_candidates_for_snapshots",
+            "apps.api.routers.dashboard.collect_enable_recommendation_candidates_for_snapshots",
             new=AsyncMock(return_value=[]),
         ),
     ):
@@ -361,11 +361,11 @@ async def test_load_current_enable_recommendations_filters_out_stale_live_event(
 
     with (
         patch(
-            "apps.api.main.load_live_batch_bounds",
+            "apps.api.routers.dashboard.load_live_batch_bounds",
             new=AsyncMock(return_value=(last_scan, last_scan - timedelta(minutes=30))),
         ),
         patch(
-            "apps.api.main.collect_enable_recommendation_candidates_for_snapshots",
+            "apps.api.routers.dashboard.collect_enable_recommendation_candidates_for_snapshots",
             new=AsyncMock(return_value=[]),
         ),
     ):
@@ -404,7 +404,7 @@ async def test_create_enable_task_from_recommendation_returns_task_payload(mock_
     mock_db.scalar = AsyncMock(return_value=api_task)
 
     with patch(
-        "apps.api.main.promote_recommendation_to_enable_task",
+        "apps.api.routers.dashboard.promote_recommendation_to_enable_task",
         new=AsyncMock(return_value=service_result),
     ):
         result = await create_enable_task_from_recommendation("event-10", db=mock_db)
@@ -446,7 +446,7 @@ async def test_create_enable_task_from_recommendation_accepts_requeued_outcome(m
     mock_db.scalar = AsyncMock(return_value=api_task)
 
     with patch(
-        "apps.api.main.promote_recommendation_to_enable_task",
+        "apps.api.routers.dashboard.promote_recommendation_to_enable_task",
         new=AsyncMock(return_value=service_result),
     ):
         result = await create_enable_task_from_recommendation("event-11", db=mock_db)
@@ -699,7 +699,7 @@ async def test_dashboard_stats_includes_enable_recommendation_counters(mock_db):
     ]
 
     with patch(
-        "apps.api.main._load_current_enable_recommendations",
+        "apps.api.routers.dashboard._load_current_enable_recommendations",
         new=AsyncMock(return_value=(None, recommendation_events)),
     ):
         result = await get_dashboard_stats(db=mock_db)
@@ -878,7 +878,7 @@ async def test_get_ad_timeline_includes_enable_recommendations_and_enable_tasks(
     )
 
     with patch(
-        "apps.api.main._build_snapshot_diagnostics_map",
+        "apps.api.routers.dashboard._build_snapshot_diagnostics_map",
         new=AsyncMock(return_value={}),
     ):
         result = await get_ad_timeline("ad-42", db=mock_db)

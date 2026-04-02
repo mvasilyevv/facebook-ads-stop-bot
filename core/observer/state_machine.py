@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 import uuid
 
+from core.disable_tasks import is_delivery_disabled
 from core.domain import AlertStage, AlertState
 
 logger = logging.getLogger(__name__)
@@ -78,3 +79,32 @@ def resolve_transition(
 
     logger.warning("FSM: неизвестное состояние %s, сбрасываю в NORMAL", previous)
     return AlertState.NORMAL, None, False
+
+
+def _state_for_emitted_stage(stage: AlertStage) -> AlertState:
+    """Возвращает состояние объявления для отправленного алерта."""
+    if stage == AlertStage.STOP:
+        return AlertState.CLAIMED
+    if stage == AlertStage.WARNING:
+        return AlertState.WARNING_SENT
+    return AlertState.EARLY_SIGNAL_SENT
+
+
+def reopen_reactivated_alert_state(
+    current_state: AlertState | None,
+    current_token: str | None,
+    delivery_status: str | None,
+) -> tuple[AlertState | None, str | None]:
+    """Сбрасывает терминальное состояние, если объявление снова начали откручивать."""
+    # CLAIMED не сбрасываем по одному только ACTIVE/UNKNOWN:
+    # после успешного клика Meta ещё может долго не показывать OFF.
+    if current_state == AlertState.DISABLED and not is_delivery_disabled(delivery_status):
+        return AlertState.NORMAL, None
+    return current_state, current_token
+
+
+def resolve_off_alert_state(current_state: AlertState) -> AlertState:
+    """Определяет итоговое состояние объявления, когда observer увидел реальный OFF."""
+    if current_state in (AlertState.CLAIMED, AlertState.DISABLED):
+        return AlertState.DISABLED
+    return AlertState.NORMAL

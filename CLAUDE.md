@@ -16,12 +16,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ./run.sh --logs       # просмотр логов
 
 # Ручной запуск сервисов (каждый в своём терминале)
-docker compose up -d                                                    # Postgres
+docker compose up -d                                                    # Postgres + Redis
 uvicorn apps.api.main:app --host 0.0.0.0 --port 8100 --reload          # API
 python run_observer.py                                                   # Observer worker
 python -m apps.telegram_poller.main                                      # Telegram poller
-python run_disable_worker.py                                             # Disable worker (отдельно)
+python run_disable_worker.py                                             # Disable worker
+python run_enable_worker.py                                              # Enable worker
+python run_enable_recommendation_worker.py                               # Enable recommendation worker
 cd frontend && npm run dev                                               # React UI (Vite)
+
+# Через Makefile
+make bootstrap        # docker + зависимости + миграции
+make verify           # lint + Telegram smoke + frontend build
+make test-unit        # только unit-тесты
+make test-telegram    # Telegram smoke-тесты
 
 # Тесты и линтинг
 pytest tests/ -x                          # полный набор
@@ -38,12 +46,14 @@ alembic upgrade head
 
 **FB Stop Bot** — мониторит Facebook Ads через anti-detect браузер, оценивает стоп-правила, шлёт алерты в Telegram и автоматически отключает объявления.
 
-### Четыре воркера + API
+### Шесть воркеров + API
 
 1. **observer_worker** (`apps/observer_worker/`) — бесконечный цикл: кнопка «Обновить» → скролл таблицы → парсинг через `data-surface` атрибуты → оценка 6 стоп-правил → FSM-переход → сохранение снэпшота в БД → Telegram-алерт. Проверяет флаг `is_scanning_enabled` из БД каждый цикл. Без активных офферов не сканирует. Перечитывает офферы каждые 10 циклов. Точка входа: `run_observer.py`.
 2. **disable_worker** (`apps/disable_worker/`) — поллит очередь DisableTask из БД (SELECT FOR UPDATE SKIP LOCKED), выполняет Playwright-клик для отключения, retry с exponential backoff (30s → 5min max). Точка входа: `run_disable_worker.py`.
-3. **telegram_poller** (`apps/telegram_poller/`) — long-polling Telegram Bot API, команды (`/start`, `/status`, `/ads`, `/offers`, `/rules`, `/disabled`, `/settings`, `/help`, `/set`), inline-кнопка «Отключить» создаёт DisableTask в БД.
-4. **api** (`apps/api/`) — FastAPI на :8100, lifespan создаёт таблицы, `Depends(get_db)` для async-сессий. Эндпоинты: настройки (GET/PUT + PATCH scanning toggle), CRUD офферов, правила, dashboard-статистика, снэпшоты, алерты, задачи на отключение, история расходов.
+3. **enable_worker** — выполняет задачи на включение объявлений (аналогично disable_worker, но для обратного действия). Точка входа: `run_enable_worker.py`.
+4. **enable_recommendation_worker** (`apps/enable_recommendation_worker/`) — анализирует выключенные объявления, генерирует рекомендации на включение через `core/enable_recommendations/service.py`. Точка входа: `run_enable_recommendation_worker.py`.
+5. **telegram_poller** (`apps/telegram_poller/`) — long-polling Telegram Bot API, команды (`/start`, `/status`, `/ads`, `/offers`, `/rules`, `/disabled`, `/settings`, `/help`, `/set`), inline-кнопка «Отключить» создаёт DisableTask в БД.
+6. **api** (`apps/api/`) — FastAPI на :8100, lifespan создаёт таблицы, `Depends(get_db)` для async-сессий. Эндпоинты: настройки (GET/PUT + PATCH scanning toggle), CRUD офферов, правила, dashboard-статистика, снэпшоты, алерты, задачи на отключение, история расходов.
 
 ### Core (`core/`)
 
@@ -73,7 +83,7 @@ alembic upgrade head
 
 ### Frontend (`frontend/`)
 
-React 19 + Vite (JSX, без TypeScript). Страницы: DashboardPage (чеклист запуска, таймер скана, тогл сканирования), AdsPage, OffersPage, SettingsPage. API-клиент в `api.js`. Vite-порт динамический (run.sh читает из лога).
+React 19 + Vite (JSX, без TypeScript). Страницы: DashboardPage (чеклист запуска, таймер скана, тогл сканирования, KPI-стрипы, графики), AdsPage, OffersPage, SettingsPage. API-клиент в `api.js`. Компоненты в `components/` (CampaignScorecard, AlertTray, DrawerPanel, TaskQueuePanel, графики). Хуки: `useAsyncPolling`, `useRefreshOnResume`. Vite-порт динамический (run.sh читает из лога).
 
 ## Key design rules
 
@@ -88,7 +98,7 @@ React 19 + Vite (JSX, без TypeScript). Страницы: DashboardPage (че�
 
 ## Infrastructure
 
-- Postgres 16 (port 5433, bind 127.0.0.1) via `docker-compose.yml`. Данные Postgres в именованном томе `pgdata`.
+- Postgres 16 (port 5433, bind 127.0.0.1) + Redis (port 6380) via `docker-compose.yml`. Данные Postgres в именованном томе `pgdata`.
 - Vision anti-detect browser (external, port 3030) — requires `VISION_X_TOKEN` and `VISION_PROFILE_ID`.
 - Python 3.12+, Node.js (for frontend).
 - Единый скрипт запуска `run.sh` — Docker, venv, миграции, все сервисы.
