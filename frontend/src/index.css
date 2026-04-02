@@ -505,9 +505,9 @@ tr:last-child td { border-bottom: none; }
 
 .badge-warning { background: rgba(255, 154, 32, 0.15); color: var(--accent-amber); }
 .badge-danger  { background: rgba(255, 43, 80, 0.15);  color: var(--accent-red); }
-.badge-success { background: rgba(0, 232, 150, 0.12);  color: var(--accent-green); }
+.badge-success { background: rgba(0, 217, 255, 0.15);  color: var(--accent-teal); }
 .badge-info    { background: rgba(77, 136, 255, 0.12); color: var(--accent-blue); }
-.badge-muted   { background: rgba(122, 130, 160, 0.12); color: var(--text-muted); }
+.badge-muted   { background: rgba(90, 107, 138, 0.2);  color: var(--accent-slate); }
 
 /* ═══════════════════════════════════════════════
    FORMS

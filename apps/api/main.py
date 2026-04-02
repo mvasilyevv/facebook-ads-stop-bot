@@ -29,6 +29,7 @@ from pydantic import BaseModel, field_validator
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from apps.api.routes.miniapp import router as miniapp_router
 from core.browser.vision_client import VisionClient
 from core.config import get_settings
 from core.crypto import decrypt, encrypt
@@ -132,6 +133,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Включаем маршруты MiniApp
+app.include_router(miniapp_router)
 
 
 # ==========================================
@@ -427,6 +431,12 @@ class DisableTaskSchema(BaseModel):
     created_at: str
     updated_at: str
     completed_at: str | None = None
+
+
+class CreateDisableTaskRequest(BaseModel):
+    """Запрос на создание задачи отключения."""
+
+    fb_ad_id: str
 
 
 class ActiveIncidentSchema(BaseModel):
@@ -3349,6 +3359,59 @@ async def retry_disable_task(task_id: str, db: AsyncSession = Depends(get_db)):
     task.completed_at = None
     await db.commit()
     return {"ok": True}
+
+
+@app.post("/api/dashboard/disable-tasks", response_model=DisableTaskSchema, status_code=201)
+async def create_disable_task(
+    body: CreateDisableTaskRequest,
+    db: AsyncSession = Depends(get_db),
+) -> DisableTaskSchema:
+    """Создаёт задачу на отключение объявления с идемпотентностью.
+
+    Ищет AdSnapshot по fb_ad_id, затем создаёт DisableTask с использованием
+    open_state_token как incident_key. Если задача с тем же fb_ad_id,
+    incident_key и статусом PENDING/RUNNING/RETRYING уже существует,
+    возвращает существующую задачу со статусом 200.
+    """
+    snapshot = await db.scalar(select(AdSnapshot).where(AdSnapshot.fb_ad_id == body.fb_ad_id))
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail="Снэпшот объявления не найден")
+
+    incident_key = snapshot.open_state_token
+    if incident_key is None:
+        incident_key = str(_uuid.uuid4())
+        snapshot.open_state_token = incident_key
+        await db.flush()
+
+    existing_task = await db.scalar(
+        select(DisableTask).where(
+            and_(
+                DisableTask.fb_ad_id == body.fb_ad_id,
+                DisableTask.open_state_token == incident_key,
+                DisableTask.status.in_(
+                    [
+                        DisableTaskStatus.PENDING,
+                        DisableTaskStatus.RUNNING,
+                        DisableTaskStatus.RETRYING,
+                    ]
+                ),
+            )
+        )
+    )
+    if existing_task is not None:
+        await db.rollback()
+        return _serialize_disable_task(existing_task)
+
+    new_task = DisableTask(
+        fb_ad_id=body.fb_ad_id,
+        open_state_token=incident_key,
+        status=DisableTaskStatus.PENDING,
+        requested_by_username="dashboard",
+    )
+    db.add(new_task)
+    await db.commit()
+    await db.refresh(new_task)
+    return _serialize_disable_task(new_task)
 
 
 @app.get("/api/dashboard/disable-tasks", response_model=list[DisableTaskSchema])

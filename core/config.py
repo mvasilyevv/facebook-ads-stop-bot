@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     vision_api_url: str = "http://127.0.0.1:3030"
     vision_profile_id: str = ""
 
+    # --- Telegram MiniApp ---
+    miniapp_url: str = ""
+
     @property
     def database_url(self) -> str:
         """Строка подключения к Postgres для asyncpg."""

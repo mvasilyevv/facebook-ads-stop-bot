@@ -30,6 +30,7 @@ from decimal import Decimal
 from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 
+from core.config import get_settings
 from core.db import get_session_factory
 from core.domain import AlertStage, AlertState, DisableTaskStatus
 from core.enable_recommendations.service import promote_recommendation_to_enable_task
@@ -570,21 +571,28 @@ async def _render_start() -> tuple[str, dict]:
 
     text = "\n".join(lines)
     alerts_btn = f"Алерты ({alert_count})" if alert_count > 0 else "Алерты"
-    keyboard = {
-        "inline_keyboard": [
-            [
-                {"text": "Сегодня", "callback_data": "cmd:today"},
-                {"text": alerts_btn, "callback_data": "cmd:alerts"},
-            ],
-            [
-                {"text": "Задачи", "callback_data": "cmd:tasks"},
-                {"text": "Объявления", "callback_data": "cmd:ads"},
-            ],
-            [
-                {"text": "Настройки", "callback_data": "cmd:settings"},
-            ],
-        ]
-    }
+    keyboard_buttons = [
+        [
+            {"text": "Сегодня", "callback_data": "cmd:today"},
+            {"text": alerts_btn, "callback_data": "cmd:alerts"},
+        ],
+        [
+            {"text": "Задачи", "callback_data": "cmd:tasks"},
+            {"text": "Объявления", "callback_data": "cmd:ads"},
+        ],
+        [
+            {"text": "Настройки", "callback_data": "cmd:settings"},
+        ],
+    ]
+
+    # Добавляем кнопку MiniApp если настроена
+    settings = get_settings()
+    if settings.miniapp_url:
+        keyboard_buttons.append(
+            [{"text": "📊 Открыть дашборд", "web_app": {"url": settings.miniapp_url}}]
+        )
+
+    keyboard = {"inline_keyboard": keyboard_buttons}
     return text, keyboard
 
 

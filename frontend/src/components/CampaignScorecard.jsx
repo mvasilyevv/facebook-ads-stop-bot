@@ -1,5 +1,7 @@
+import { ResponsiveContainer, LineChart, Line } from 'recharts';
+
 // Dashboard scorecard: статистика и распределение состояний
-export function CampaignScorecard({ stats = null, performance = null, onStateClick }) {
+export function CampaignScorecard({ stats = null, performance = null, spendHistory = [], onStateClick }) {
   if (!stats || !performance) {
     return (
       <div className="scorecard scorecard--empty">
@@ -85,6 +87,40 @@ export function CampaignScorecard({ stats = null, performance = null, onStateCli
           );
         })}
       </div>
+
+      {/* Section C: Funnel */}
+      {performance?.funnel?.length > 0 && (
+        <div style={{ marginTop: '16px' }}>
+          <div style={{ fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '8px' }}>Воронка</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', flexWrap: 'wrap' }}>
+            {performance.funnel.map((step, i) => (
+              <div key={step.key} style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <div style={{ textAlign: 'center' }}>
+                  <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{step.count ?? '—'}</div>
+                  <div style={{ color: 'var(--text-muted)' }}>{step.label}</div>
+                  {step.conversion_rate != null && i > 0 && (
+                    <div style={{ fontSize: '10px', color: 'var(--accent-orchid)' }}>{(step.conversion_rate * 100).toFixed(1)}%</div>
+                  )}
+                </div>
+                {i < performance.funnel.length - 1 && <span style={{ color: 'var(--text-muted)' }}>→</span>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Section D: Spend sparkline */}
+      {spendHistory?.length > 1 && (
+        <div style={{ marginTop: '12px' }}>
+          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '4px' }}>Расход 24ч</div>
+          <ResponsiveContainer width="100%" height={56}>
+            <LineChart data={spendHistory} margin={{ top: 2, right: 2, bottom: 2, left: 2 }}>
+              <Line type="monotone" dataKey="spend" stroke="var(--accent-teal)" strokeWidth={1.5} dot={false} />
+              <Line type="monotone" dataKey="deposits" stroke="var(--accent-crimson)" strokeWidth={1.5} dot={false} />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      )}
     </div>
   );
 }

@@ -9,12 +9,20 @@ import {
   restartObserver,
   retryDisableTask,
   getDashboardPerformance,
+  getEnableTasks,
+  getEnableRecommendations,
+  getChartData,
+  getSpendHistory,
+  createDisableTask,
+  createEnableTaskFromRecommendation,
 } from '../api.js';
 import { useAsyncPolling } from '../hooks/useAsyncPolling.js';
 import { useRefreshOnResume } from '../hooks/useRefreshOnResume.js';
 import { AlertTray } from '../components/AlertTray.jsx';
 import { CampaignScorecard } from '../components/CampaignScorecard.jsx';
 import { DrawerPanel } from '../components/DrawerPanel.jsx';
+import { TaskQueuePanel } from '../components/TaskQueuePanel.jsx';
+import { BudgetOverrunChart } from '../components/BudgetOverrunChart.jsx';
 
 function normalizeIncidentList(payload) {
   if (!Array.isArray(payload)) return [];
@@ -123,21 +131,33 @@ export default function DashboardPage({ onNavigate }) {
   const [toggling, setToggling] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [selectedIncident, setSelectedIncident] = useState(null);
+  const [enableTasks, setEnableTasks] = useState([]);
+  const [enableRecs, setEnableRecs] = useState([]);
+  const [chartData, setChartData] = useState(null);
+  const [spendHistory, setSpendHistory] = useState([]);
 
   const loadData = useCallback(async () => {
     try {
-      const [statsRes, incidentsRes, tasksRes, settingsRes, perfRes] = await Promise.all([
+      const [statsRes, incidentsRes, tasksRes, settingsRes, perfRes, enableTasksRes, enableRecsRes, chartRes, spendRes] = await Promise.all([
         getDashboardStats(),
         getDashboardIncidents({ limit: 50 }).catch(() => []),
         getDisableTasks({ limit: 50 }),
         getObserverSettings(),
         getDashboardPerformance({ period: 'today' }),
+        getEnableTasks({ limit: 20 }).catch(() => []),
+        getEnableRecommendations({ limit: 10 }).catch(() => []),
+        getChartData({ period: 'today' }).catch(() => null),
+        getSpendHistory({ hours: 24 }).catch(() => []),
       ]);
       setStats(statsRes);
       setIncidents(normalizeIncidentList(incidentsRes));
       setDisableTasks(tasksRes);
       setSettings(settingsRes);
       setPerformance(perfRes);
+      setEnableTasks(enableTasksRes);
+      setEnableRecs(enableRecsRes);
+      setChartData(chartRes);
+      setSpendHistory(spendRes);
       setError(null);
     } catch (e) {
       setError(e.message);
@@ -196,8 +216,27 @@ export default function DashboardPage({ onNavigate }) {
   };
 
   const handleDisable = async (fbAdId, adName) => {
-    // TODO: implement disable task creation via API
-    console.log('Disable:', fbAdId, adName);
+    try {
+      await createDisableTask(fbAdId);
+      const tasksRes = await getDisableTasks({ limit: 50 });
+      setDisableTasks(tasksRes);
+    } catch (e) {
+      setError(`Ошибка отключения: ${e.message}`);
+    }
+  };
+
+  const handleEnableTask = async (recId) => {
+    try {
+      await createEnableTaskFromRecommendation(recId);
+      const [recsRes, enableTasksRes] = await Promise.all([
+        getEnableRecommendations({ limit: 10 }),
+        getEnableTasks({ limit: 20 }),
+      ]);
+      setEnableRecs(recsRes);
+      setEnableTasks(enableTasksRes);
+    } catch (e) {
+      setError(`Ошибка включения: ${e.message}`);
+    }
   };
 
   const handleRetry = async (taskId) => {
@@ -236,6 +275,7 @@ export default function DashboardPage({ onNavigate }) {
           <CampaignScorecard
             stats={stats}
             performance={performance}
+            spendHistory={spendHistory}
             onStateClick={(state) => onNavigate?.(`/ads?state=${state}`)}
           />
         </div>
@@ -250,38 +290,22 @@ export default function DashboardPage({ onNavigate }) {
           />
         </div>
 
-        {/* Правая колонна: QuickStats */}
-        <div className="dashboard-grid__right" style={{ background: 'var(--bg-secondary)', padding: '16px', borderRadius: '4px' }}>
-          <div className="scorecard">
-            <div style={{ paddingBottom: '12px', borderBottom: '1px solid rgba(0,0,0,0.1)' }}>
-              <h3 style={{ margin: '0', fontSize: '13px', fontWeight: 600, textTransform: 'uppercase', color: 'var(--text-muted)' }}>
-                Статусы
-              </h3>
-            </div>
-            <div className="scorecard__body" style={{ marginTop: '12px', display: 'grid', gap: '4px' }}>
-              {[
-                { label: 'Норма', val: normalCount, color: 'var(--accent-teal)' },
-                { label: 'Ранний сигнал', val: stats?.ads_in_early_signal ?? 0, color: 'var(--accent-orchid)' },
-                { label: 'Предупреждение', val: stats?.ads_in_warning ?? 0, color: 'var(--accent-gold)' },
-                { label: 'Стоп-алерт', val: stats?.ads_in_stop ?? 0, color: 'var(--accent-crimson)' },
-                { label: 'Ожидает OFF', val: stats?.ads_claimed ?? 0, color: 'var(--accent-slate)' },
-                { label: 'Отключено', val: stats?.ads_disabled ?? 0, color: 'var(--accent-slate)' },
-              ].map(({ label, val, color }) => (
-                <div key={label} className="scorecard__row" style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', padding: '4px 0' }}>
-                  <span className="scorecard__label" style={{ color: 'var(--text-muted)' }}>{label}</span>
-                  <span className="scorecard__value" style={{ fontWeight: 600, color }}>{val ?? '—'}</span>
-                </div>
-              ))}
-              <div style={{ borderTop: '1px solid rgba(0,0,0,0.1)', marginTop: '8px', paddingTop: '8px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', padding: '4px 0', fontWeight: 600 }}>
-                  <span>Всего объявлений</span>
-                  <span>{stats?.total_ads_monitored ?? '—'}</span>
-                </div>
-              </div>
-            </div>
-          </div>
+        {/* Правая колонна: TaskQueuePanel */}
+        <div className="dashboard-grid__right">
+          <TaskQueuePanel
+            disableTasks={disableTasks}
+            enableTasks={enableTasks}
+            enableRecs={enableRecs}
+            onRetryDisable={handleRetry}
+            onCreateEnableTask={handleEnableTask}
+          />
         </div>
       </div>
+
+      {/* BudgetOverrunChart */}
+      {chartData?.campaign_budget_deltas?.length > 0 && (
+        <BudgetOverrunChart data={chartData.campaign_budget_deltas} />
+      )}
 
       {/* Таблица объявлений ниже при скролле */}
       <DenseAdTable incidents={incidents} />

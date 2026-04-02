@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import ReactDOM from 'react-dom';
 import { StateIcon } from './StateIcon';
 
@@ -6,6 +6,25 @@ import { StateIcon } from './StateIcon';
 const fmt$ = (v) => v != null ? `$${Number(v).toFixed(2)}` : '—';
 const fmtN = (v) => v != null ? String(v) : '—';
 const fmtPct = (v) => v != null ? `${Number(v).toFixed(2)}%` : '—';
+
+// Статус иконки и цвета
+function statusIcon(s) {
+  return { PENDING: '⏳', RUNNING: '🔄', RETRYING: '🔄', SUCCEEDED: '✅', FAILED: '❌' }[s] || '?';
+}
+
+function statusColor(s) {
+  return { PENDING: 'var(--text-muted)', RUNNING: 'var(--accent-teal)', RETRYING: 'var(--accent-gold)', SUCCEEDED: 'var(--accent-teal)', FAILED: 'var(--accent-crimson)' }[s] || 'var(--text-primary)';
+}
+
+function RetryCountdown({ nextRetryAt }) {
+  const [secs, setSecs] = useState(() => Math.max(0, Math.ceil((new Date(nextRetryAt) - Date.now()) / 1000)));
+  useEffect(() => {
+    if (secs <= 0) return;
+    const t = setInterval(() => setSecs(s => Math.max(0, s - 1)), 1000);
+    return () => clearInterval(t);
+  }, [nextRetryAt, secs]);
+  return <span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>Повтор через {secs}с</span>;
+}
 
 function DrawerContent({ ad, incident, disableTask, onClose, onDisable, onRetry }) {
   useEffect(() => {
@@ -124,20 +143,29 @@ function DrawerContent({ ad, incident, disableTask, onClose, onDisable, onRetry 
 
           {/* Disable Task Status */}
           {disableTask && (
-            <div style={{ marginTop: '16px', padding: '8px', backgroundColor: 'rgba(0, 0, 0, 0.02)', borderRadius: '4px' }}>
-              <div style={{ fontSize: '12px', fontWeight: 600, marginBottom: '4px' }}>
-                Статус отключения
+            <div style={{ marginTop: '12px', padding: '10px', background: 'var(--bg-tertiary)', borderRadius: '4px', fontSize: '12px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                <span>Задача на отключение</span>
+                <span>Попытка {disableTask.attempt_count || 1}</span>
               </div>
-              <div style={{ fontSize: '13px' }}>
-                {disableTask.status === 'PENDING' && '⏳ Ожидает выполнения'}
-                {disableTask.status === 'SUCCESS' && '✅ Объявление отключено'}
-                {disableTask.status === 'FAILED' && (
-                  <>
-                    <div style={{ color: 'var(--accent-crimson)' }}>❌ Ошибка отключения</div>
-                    {disableTask.error && <div style={{ fontSize: '11px', marginTop: '4px', color: 'var(--text-muted)' }}>{disableTask.error}</div>}
-                  </>
-                )}
+              <div style={{ color: statusColor(disableTask.status) }}>
+                {statusIcon(disableTask.status)} {disableTask.status}
               </div>
+              {disableTask.last_error && (
+                <div style={{ color: 'var(--accent-crimson)', marginTop: '4px', fontSize: '11px' }}>
+                  {String(disableTask.last_error).slice(0, 80)}
+                </div>
+              )}
+              {disableTask.next_retry_at && (disableTask.status === 'RETRYING' || disableTask.status === 'FAILED') && (
+                <div style={{ marginTop: '4px' }}>
+                  <RetryCountdown nextRetryAt={disableTask.next_retry_at} />
+                </div>
+              )}
+              {(disableTask.status === 'FAILED' || disableTask.status === 'RETRYING') && (
+                <button onClick={() => onRetry(disableTask.id)} style={{ marginTop: '8px', fontSize: '12px', padding: '4px 10px', background: 'var(--accent-crimson)', color: 'white', border: 'none', borderRadius: '3px', cursor: 'pointer' }}>
+                  Повторить сейчас
+                </button>
+              )}
             </div>
           )}
         </div>
