@@ -10,6 +10,7 @@ import {
 } from '../api.js';
 import { useAsyncPolling } from '../hooks/useAsyncPolling.js';
 import { useRefreshOnResume } from '../hooks/useRefreshOnResume.js';
+import { StateIcon } from '../components/StateIcon.jsx';
 
 // Буфер в минутах: объявления виденные в пределах N минут от последнего скана = "активные".
 // Это разделяет текущую сессию от вчерашних кампаний независимо от времени суток.
@@ -114,6 +115,9 @@ function fmtNum(val) {
   if (val == null) return '—';
   return String(val);
 }
+
+const fmt$ = (v) => (v != null && v !== '') ? `$${Number(v).toFixed(2)}` : '—';
+const fmtN = (v) => (v != null && v !== '') ? String(Number(v)) : '—';
 
 function extractListPayload(payload) {
   if (Array.isArray(payload)) return payload;
@@ -774,266 +778,24 @@ function AdTimeline({ fbAdId, onClose }) {
   );
 }
 
-// --- Карточка объявления ---
-
-function AdCard({ ad, incident, disableTask, onClick, onRestartDisableWorker, restartingDisableWorker }) {
-  const isArchived = isArchivedAd(ad);
-  const activeIncident = incident || ad.incident_summary || null;
+// Вспомогательная функция: состояние строки таблицы
+function getTableRowState(ad) {
   const displayState = getAdDisplayState(ad);
-  const displayStage = getAdDisplayStage(ad);
-  const isDisabled = displayState === 'DISABLED';
-  const isStop = !isDisabled && (displayState === 'STOP_SENT' || displayStage === 'STOP');
-  const isWarning = !isDisabled && (displayState === 'WARNING_SENT' || displayStage === 'WARNING');
-  const isEarlySignal = !isDisabled && (displayState === 'EARLY_SIGNAL_SENT' || displayStage === 'EARLY_SIGNAL');
-  const isClaimed = displayState === 'CLAIMED';
-  const isStaleDisableTask = disableTask?.status === 'RUNNING' && isDisableTaskStale(disableTask);
-  const incidentVariant = getIncidentVariant(activeIncident);
-  const incidentText = getIncidentSummaryText(activeIncident);
-  const incidentTime = getIncidentActivityAt(activeIncident);
+  if (displayState === 'STOP_SENT') return 'stop';
+  if (displayState === 'WARNING_SENT') return 'warning';
+  if (displayState === 'EARLY_SIGNAL_SENT') return 'signal';
+  if (displayState === 'CLAIMED') return 'claimed';
+  if (displayState === 'DISABLED') return 'disabled';
+  return 'normal';
+}
 
-  let cardVariant = 'normal';
-  if (isArchived) cardVariant = 'archived';
-  else if (isDisabled || isClaimed || incidentVariant === 'stop') cardVariant = 'disabled';
-  else if (isStop) cardVariant = 'stop';
-  else if (isWarning) cardVariant = 'warning';
-  else if (isEarlySignal) cardVariant = 'signal';
-
-  const allRules = [
-    ...(ad.stop_rule_codes || []).map((r) => ({ code: r, type: 'stop' })),
-    ...(ad.warning_rule_codes || []).map((r) => ({ code: r, type: 'warn' })),
-    ...(ad.early_signal_rule_codes || []).map((r) => ({ code: r, type: 'signal' })),
-  ];
-
-  // Дедупликация: stop приоритет
-  const seenCodes = new Set();
-  const rules = allRules.filter(({ code }) => {
-    if (seenCodes.has(code)) return false;
-    seenCodes.add(code);
-    return true;
-  });
-  const visibleRules = rules.slice(0, 3);
-  const rulesTitle = rules.map(({ code }) => ruleLabel(code)).join(', ');
-
-  const incidentStateLabel = getIncidentStateLabel(activeIncident);
-  const stateLabel = isDisabled
-    ? STATE_LABELS.DISABLED
-    : activeIncident
-      ? incidentStateLabel
-      : (STATE_LABELS[displayState] || displayState);
-  const isDisableConfirmed = activeIncident?.current_state === 'DISABLED' || displayState === 'DISABLED' || isDeliveryOff(ad);
-  const deliveryStatus = ad.delivery_status === 'OFF' || ad.delivery_status === 'NOT_DELIVERING' ? ad.delivery_status : null;
-  const manualAttention = Boolean(activeIncident?.needs_manual_attention);
-  const waitingForOff = Boolean(activeIncident?.waiting_for_off || isClaimed || (disableTask?.status === 'SUCCEEDED' && !isDisableConfirmed));
-
-  return (
-    <div className={`ad-card ad-card--${cardVariant}`} onClick={onClick}>
-      <div className="ad-card__header">
-        <span className={`ad-card__state-badge ad-card__state-badge--${cardVariant}`}>
-          {isArchived && '🗂 '}
-          {isStop && '⛔ '}
-          {isWarning && '⚠️ '}
-          {isEarlySignal && '🔎 '}
-          {isClaimed && '🔄 '}
-          {isDisabled && '🔕 '}
-          {!isArchived && !isStop && !isWarning && !isEarlySignal && !isDisabled && !isClaimed && '✅ '}
-          {stateLabel}
-        </span>
-        {activeIncident && (
-          <span className="ad-card__offer-code" title={incidentStateLabel}>
-            {incidentStateLabel}
-          </span>
-        )}
-        {ad.offer_code && (
-          <span className="ad-card__offer-code" title={ad.offer_code}>{ad.offer_code}</span>
-        )}
-        {deliveryStatus && (
-          <span
-            className={`ad-card__delivery-status ad-card__delivery-status--${deliveryStatus === 'OFF' ? 'off' : 'not-delivering'}`}
-            title={`Статус Meta: ${deliveryStatus}`}
-          >
-            Статус Meta: {deliveryStatus}
-          </span>
-        )}
-      </div>
-
-      <div className="ad-card__name" title={ad.ad_name}>{ad.ad_name}</div>
-      {(ad.campaign_name || ad.adset_name) && (
-        <div className="ad-card__meta">
-          {ad.campaign_name && (
-            <div className="ad-card__campaign" title={ad.campaign_name}>
-              <span className="ad-card__meta-label">Campaign</span>
-              <span className="ad-card__meta-value">{ad.campaign_name}</span>
-            </div>
-          )}
-          {ad.adset_name && (
-            <div className="ad-card__adset" title={ad.adset_name}>
-              <span className="ad-card__meta-label">Adset</span>
-              <span className="ad-card__meta-value">{ad.adset_name}</span>
-            </div>
-          )}
-        </div>
-      )}
-
-      <div className="ad-card__metrics">
-        <div className="ad-card__metric">
-          <span className="ad-card__metric-label">Расход</span>
-          <span className="ad-card__metric-value">{fmt(ad.spend)}</span>
-        </div>
-        <div className="ad-card__metric">
-          <span className="ad-card__metric-label">CPC</span>
-          <span className="ad-card__metric-value">{fmt(ad.cpc)}</span>
-        </div>
-        {ad.outbound_ctr != null && (
-          <div className="ad-card__metric">
-            <span className="ad-card__metric-label">CTR</span>
-            <span className="ad-card__metric-value">{Number(ad.outbound_ctr).toFixed(2)}%</span>
-          </div>
-        )}
-        {ad.landing_page_views != null && (
-          <div className="ad-card__metric">
-            <span className="ad-card__metric-label">LPV</span>
-            <span className="ad-card__metric-value">{fmtNum(ad.landing_page_views)}</span>
-          </div>
-        )}
-        <div className="ad-card__metric">
-          <span className="ad-card__metric-label">Лиды</span>
-          <span className="ad-card__metric-value">{fmtNum(ad.leads)}</span>
-        </div>
-        <div className="ad-card__metric">
-          <span className="ad-card__metric-label">Реги</span>
-          <span className="ad-card__metric-value">{fmtNum(ad.registrations)}</span>
-        </div>
-        <div className="ad-card__metric">
-          <span className="ad-card__metric-label">CPR</span>
-          <span className="ad-card__metric-value">{fmt(ad.cost_per_registration, 4)}</span>
-        </div>
-        <div className="ad-card__metric">
-          <span className="ad-card__metric-label">Депозиты</span>
-          <span className={`ad-card__metric-value ${ad.deposits === 0 && Number(ad.spend) > 0 ? 'ad-card__metric-value--zero' : ''}`}>
-            {fmtNum(ad.deposits)}
-          </span>
-        </div>
-      </div>
-
-      {rules.length > 0 && (
-        <div className="ad-card__rules" title={rulesTitle}>
-          {visibleRules.map(({ code, type }) => (
-            <span key={code} className={`rule-tag rule-tag--${type}`}>
-              {ruleLabel(code)}
-            </span>
-          ))}
-          {rules.length > visibleRules.length && (
-            <span className="rule-tag rule-tag--muted">+{rules.length - visibleRules.length}</span>
-          )}
-        </div>
-      )}
-
-      {(ad.cpm_diagnostic_status || ad.frequency_diagnostic_status || ad.diagnostic_short_text) && (
-        <div className="ad-card__diagnostics">
-          <div className="ad-card__diagnostic-badges">
-            {ad.cpm_diagnostic_status && (
-              <span className={`diagnostic-badge diagnostic-badge--${ad.cpm_diagnostic_status}`}>
-                CPM: {diagnosticStatusLabel(ad.cpm_diagnostic_status)}
-              </span>
-            )}
-            {ad.frequency_diagnostic_status && (
-              <span className={`diagnostic-badge diagnostic-badge--${ad.frequency_diagnostic_status}`}>
-                Частота: {diagnosticStatusLabel(ad.frequency_diagnostic_status)}
-              </span>
-            )}
-          </div>
-          {ad.diagnostic_short_text && (
-            <div className="ad-card__diagnostic-text" title={ad.diagnostic_short_text}>{ad.diagnostic_short_text}</div>
-          )}
-        </div>
-      )}
-
-      {activeIncident && (
-        <div className="ad-card__incident">
-          <div className="ad-card__incident-line">
-            <span className={`task-status task-status--${manualAttention ? 'failed' : waitingForOff ? 'pending' : 'running'}`}>
-              {manualAttention
-                ? '⛔ Нужен ручной разбор'
-                : waitingForOff
-                ? '⏳ Ждём подтверждения OFF'
-                : `🧭 ${incidentStateLabel}`}
-            </span>
-            {activeIncident.incident_retry_count != null && (
-              <span className="task-status task-status--pending">
-                Автоповторы {activeIncident.incident_retry_count}/3
-              </span>
-            )}
-            {incidentTime && (
-              <span className="task-status task-status--pending" title={fmtTime(incidentTime)}>
-                Активность {timeAgo(incidentTime)}
-              </span>
-            )}
-          </div>
-          {incidentText && (
-            <div className="ad-card__diagnostic-text" title={incidentText}>
-              {incidentText}
-            </div>
-          )}
-          {activeIncident.latest_disable_task_status && (
-            <div className="ad-card__diagnostic-text">
-              Последняя задача: {activeIncident.latest_disable_task_status}
-              {activeIncident.latest_disable_task_attempt != null && ` · попытка ${activeIncident.latest_disable_task_attempt}`}
-            </div>
-          )}
-          {activeIncident.incident_key && (
-            <div className="ad-card__diagnostic-text" title={activeIncident.incident_key}>
-              Инцидент: {activeIncident.incident_key}
-            </div>
-          )}
-        </div>
-      )}
-
-      {disableTask && isDisableTaskRelevant(ad, disableTask) && (
-        <div className="ad-card__disable-status">
-          {disableTask.status === 'RUNNING' && (
-            <div className="ad-card__disable-status-row">
-              <span className={`task-status ${isStaleDisableTask ? 'task-status--stale' : 'task-status--running'}`}>
-                {isStaleDisableTask ? '⚠️ Зависло в браузере' : '🔄 Выключаем в браузере'}
-              </span>
-              {isStaleDisableTask && onRestartDisableWorker && (
-                <button
-                  className="restart-btn restart-btn--inline"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    void onRestartDisableWorker(disableTask.id);
-                  }}
-                  disabled={restartingDisableWorker}
-                  title="Перезапустить воркер отключения"
-                  type="button"
-                >
-                  {restartingDisableWorker ? 'Перезапуск...' : 'Рестарт'}
-                </button>
-              )}
-            </div>
-          )}
-          {disableTask.status === 'PENDING' && (
-            <span className="task-status task-status--pending">⏳ В очереди на выключение</span>
-          )}
-          {disableTask.status === 'RETRYING' && (
-            <span className="task-status task-status--retrying">
-              🔁 Повтор ({disableTask.attempt_count}/10)
-              {disableTask.next_retry_at && ` · ${formatNextRetry(disableTask.next_retry_at)}`}
-            </span>
-          )}
-          {disableTask.status === 'FAILED' && (
-            <span className="task-status task-status--failed">❌ Ошибка отключения</span>
-          )}
-          {disableTask.status === 'SUCCEEDED' && (
-            <span className={`task-status ${isDisableConfirmed ? 'task-status--done' : 'task-status--pending'}`}>
-              {isDisableConfirmed
-                ? `✅ ${ad.delivery_status || 'OFF'} подтверждён`
-                : '⏳ Клик выполнен, ждём OFF'}
-            </span>
-          )}
-        </div>
-      )}
-    </div>
-  );
+// Вспомогательная функция: значок действия в конце строки
+function getTableRowActionIcon(ad) {
+  const displayState = getAdDisplayState(ad);
+  if (displayState === 'STOP_SENT') return '🛑';
+  if (displayState === 'WARNING_SENT') return '⚠️';
+  if (displayState === 'EARLY_SIGNAL_SENT') return '🔎';
+  return null;
 }
 
 // --- Главный компонент ---
@@ -1100,6 +862,12 @@ export default function AdsPage({ initialView = 'active', initialState = '' }) {
   useRefreshOnResume(() => {
     void loadAds();
   });
+
+  const handleSort = useCallback((field) => {
+    setSortBy(field);
+    const opt = SORT_OPTIONS.find(o => o.value === field);
+    if (opt) setSortDirection(opt.defaultDirection);
+  }, []);
 
   const handleRestartDisableWorker = useCallback(async (taskId) => {
     if (restartingDisableWorker) {
@@ -1325,7 +1093,7 @@ export default function AdsPage({ initialView = 'active', initialState = '' }) {
         )}
       </div>
 
-      {/* Сетка карточек */}
+      {/* Таблица объявлений */}
       {loading && allAds.length === 0 ? (
         <div className="ads-loading">
           <div className="spinner" />
@@ -1350,18 +1118,77 @@ export default function AdsPage({ initialView = 'active', initialState = '' }) {
           )}
         </div>
       ) : (
-        <div className="ads-cards-grid">
-          {filtered.map((ad) => (
-          <AdCard
-              key={ad.fb_ad_id}
-              ad={ad}
-              incident={incidentsByAdId[ad.fb_ad_id] || null}
-              disableTask={tasksByAdId[ad.fb_ad_id] || null}
-              onClick={() => setTimelineAdId(ad.fb_ad_id)}
-              onRestartDisableWorker={handleRestartDisableWorker}
-              restartingDisableWorker={restartingDisableWorker}
-            />
-          ))}
+        <div style={{ overflowX: 'auto', background: 'var(--bg-card)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border-color)' }}>
+          <table className="ad-table">
+            <thead>
+              <tr>
+                <th style={{ width: '36px' }} />
+                <th className="sortable" onClick={() => handleSort('ad_name')}>Название</th>
+                <th className="sortable sorted" onClick={() => handleSort('spend')} style={{ width: '80px', textAlign: 'right' }}>Расход</th>
+                <th style={{ width: '70px', textAlign: 'right' }}>CPC</th>
+                <th style={{ width: '60px', textAlign: 'right' }}>Лиды</th>
+                <th style={{ width: '70px', textAlign: 'right' }}>Депо</th>
+                <th style={{ width: '120px' }}>Правила</th>
+                <th style={{ width: '40px' }} />
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((ad) => {
+                const displayState = getAdDisplayState(ad);
+                const rowState = getTableRowState(ad);
+                const actionIcon = getTableRowActionIcon(ad);
+                const allRules = [
+                  ...ad.stop_rule_codes.map(c => ({ code: c, sev: 'stop' })),
+                  ...ad.warning_rule_codes.map(c => ({ code: c, sev: 'warn' })),
+                  ...ad.early_signal_rule_codes.map(c => ({ code: c, sev: 'signal' })),
+                ];
+                const shown = allRules.slice(0, 2);
+                const extra = allRules.length - shown.length;
+
+                return (
+                  <tr
+                    key={ad.fb_ad_id}
+                    className={`ad-table__row ad-table__row--${rowState}`}
+                    onClick={() => setTimelineAdId(ad.fb_ad_id)}
+                    style={{ cursor: 'pointer' }}
+                  >
+                    <td style={{ width: '36px', textAlign: 'center' }}>
+                      <StateIcon state={displayState} size="sm" />
+                    </td>
+                    <td className="ad-table__name">
+                      <div style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={ad.ad_name}>
+                        {ad.ad_name}
+                      </div>
+                      {ad.offer_code && (
+                        <span className="rule-tag rule-tag--offer" style={{ marginTop: '4px', display: 'inline-block' }}>
+                          {ad.offer_code}
+                        </span>
+                      )}
+                    </td>
+                    <td className="ad-table__num ad-table__num--spend">{fmt$(ad.spend)}</td>
+                    <td className="ad-table__num">{fmt$(ad.cpc)}</td>
+                    <td className="ad-table__num">{fmtN(ad.leads)}</td>
+                    <td className="ad-table__num" style={ad.deposits === 0 && Number(ad.spend) > 0 ? { color: 'var(--text-stop)' } : {}}>
+                      {fmtN(ad.deposits)}
+                    </td>
+                    <td className="ad-table__rules">
+                      {shown.map((r) => (
+                        <span key={r.code} className={`rule-tag rule-tag--${r.sev}`}>
+                          {r.code}
+                        </span>
+                      ))}
+                      {extra > 0 && (
+                        <span className="rule-tag rule-tag--muted">+{extra}</span>
+                      )}
+                    </td>
+                    <td style={{ width: '40px', textAlign: 'center' }}>
+                      {actionIcon && <span style={{ fontSize: '14px' }}>{actionIcon}</span>}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
       )}
 
