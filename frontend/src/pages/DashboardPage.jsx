@@ -19,10 +19,16 @@ import {
 import { useAsyncPolling } from '../hooks/useAsyncPolling.js';
 import { useRefreshOnResume } from '../hooks/useRefreshOnResume.js';
 import { AlertTray } from '../components/AlertTray.jsx';
-import { CampaignScorecard } from '../components/CampaignScorecard.jsx';
+import { CampaignScorecard, FunnelChart } from '../components/CampaignScorecard.jsx';
 import { DrawerPanel } from '../components/DrawerPanel.jsx';
 import { TaskQueuePanel } from '../components/TaskQueuePanel.jsx';
 import { BudgetOverrunChart } from '../components/BudgetOverrunChart.jsx';
+import { SpendTimelineChart } from '../components/SpendTimelineChart.jsx';
+import { CampaignBreakdownTable } from '../components/CampaignBreakdownTable.jsx';
+import { AlertVolumeTrendline } from '../components/AlertVolumeTrendline.jsx';
+import { RuleViolationRanking } from '../components/RuleViolationRanking.jsx';
+import { SpendPacingBar } from '../components/SpendPacingBar.jsx';
+import { TopAdsQualityTable } from '../components/TopAdsQualityTable.jsx';
 
 function normalizeIncidentList(payload) {
   if (!Array.isArray(payload)) return [];
@@ -39,9 +45,55 @@ function normalizeIncidentList(payload) {
   }));
 }
 
+function HeroKPIStrip({ performance }) {
+  const s = performance?.summary;
+  const fmt$ = (v) => (v != null ? `$${Number(v).toFixed(2)}` : '—');
+  const fmtN = (v) => (v != null ? String(v) : '—');
+  const fmtPct = (v) => (v != null ? `${(Number(v) * 100).toFixed(1)}%` : '—');
+
+  const hasDeposits = Number(s?.deposits ?? 0) > 0;
+  const hasSpend = Number(s?.spend ?? 0) > 0;
+  const depositsColor = hasDeposits ? '#059669' : hasSpend ? '#ef4444' : '#94a3b8';
+
+  const kpis = [
+    { label: 'Расход', value: fmt$(s?.spend), color: '#0ea5e9' },
+    { label: 'Лиды', value: fmtN(s?.leads), color: Number(s?.leads ?? 0) > 0 ? '#0ea5e9' : '#94a3b8' },
+    { label: 'Реги', value: fmtN(s?.registrations), color: '#0f172a' },
+    { label: 'Депозиты', value: fmtN(s?.deposits), color: depositsColor },
+    { label: 'CPR', value: fmt$(s?.cpr), color: '#0f172a' },
+    { label: 'Рег→Деп', value: fmtPct(s?.reg_to_dep_rate), color: '#0f172a' },
+  ];
+
+  return (
+    <div style={{
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))',
+      gap: '12px',
+      marginBottom: '16px',
+    }}>
+      {kpis.map((kpi) => (
+        <div key={kpi.label} style={{
+          background: '#ffffff',
+          border: '1px solid #e2e8f0',
+          borderRadius: '6px',
+          padding: '14px 16px',
+          boxShadow: '0 1px 3px rgba(0,0,0,0.07)',
+        }}>
+          <div style={{ fontSize: '10px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.1em', color: '#94a3b8', marginBottom: '6px' }}>
+            {kpi.label}
+          </div>
+          <div style={{ fontSize: '20px', fontWeight: 700, color: kpi.color, fontFamily: 'JetBrains Mono, monospace', fontVariantNumeric: 'tabular-nums' }}>
+            {kpi.value}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function ScanStatusBar({ settings, onToggle, onScanNow, scanning, lastScanAt }) {
   return (
-    <div style={{ background: 'var(--bg-secondary)', padding: '12px 16px', marginBottom: '16px', borderRadius: '4px', display: 'flex', alignItems: 'center', gap: '12px' }}>
+    <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-color)', padding: '12px 16px', marginBottom: '16px', borderRadius: '6px', display: 'flex', alignItems: 'center', gap: '12px', boxShadow: 'var(--shadow-sm)' }}>
       <span style={{ fontSize: '13px', fontWeight: 600 }}>Сканирование</span>
       <button
         onClick={onToggle}
@@ -83,31 +135,41 @@ function ScanStatusBar({ settings, onToggle, onScanNow, scanning, lastScanAt }) 
 
 function DenseAdTable({ incidents }) {
   return (
-    <div style={{ marginTop: '16px' }}>
-      <h3 style={{ margin: '0 0 12px 0', fontSize: '13px', fontWeight: 600, textTransform: 'uppercase', color: 'var(--text-muted)' }}>
-        Таблица объявлений
-      </h3>
+    <div style={{ marginTop: '16px', background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: '6px', overflow: 'hidden', boxShadow: 'var(--shadow-sm)' }}>
+      <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border-color)' }}>
+        <h3 style={{ margin: 0, fontSize: '13px', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)', letterSpacing: '0.06em' }}>
+          Активные инциденты
+        </h3>
+      </div>
       <div style={{ overflowX: 'auto' }}>
         <table style={{ width: '100%', fontSize: '12px', borderCollapse: 'collapse' }}>
           <thead>
-            <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
-              <th style={{ padding: '8px', textAlign: 'left', fontWeight: 600 }}>Объявление</th>
-              <th style={{ padding: '8px', textAlign: 'left', fontWeight: 600 }}>Кампания</th>
-              <th style={{ padding: '8px', textAlign: 'left', fontWeight: 600 }}>Статус</th>
+            <tr style={{ background: 'var(--bg-raised)', borderBottom: '1px solid var(--border-color)' }}>
+              <th style={{ padding: '8px 12px', textAlign: 'left', fontWeight: 600, fontSize: '11px', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Объявление</th>
+              <th style={{ padding: '8px 12px', textAlign: 'left', fontWeight: 600, fontSize: '11px', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Кампания</th>
+              <th style={{ padding: '8px 12px', textAlign: 'left', fontWeight: 600, fontSize: '11px', textTransform: 'uppercase', color: 'var(--text-muted)' }}>Статус</th>
             </tr>
           </thead>
           <tbody>
             {incidents.slice(0, 10).map((incident) => (
-              <tr key={incident.fb_ad_id} style={{ borderBottom: '1px solid rgba(0,0,0,0.05)' }}>
-                <td style={{ padding: '8px' }}>{incident.ad_name}</td>
-                <td style={{ padding: '8px' }}>{incident.campaign_name}</td>
-                <td style={{ padding: '8px' }}>
+              <tr key={incident.fb_ad_id} style={{ borderBottom: '1px solid var(--border-dim)' }}>
+                <td style={{ padding: '9px 12px', color: 'var(--text-primary)' }}>{incident.ad_name}</td>
+                <td style={{ padding: '9px 12px', color: 'var(--text-secondary)', fontSize: '11px' }}>{incident.campaign_name}</td>
+                <td style={{ padding: '9px 12px' }}>
                   <span style={{
                     display: 'inline-block',
-                    padding: '2px 6px',
+                    padding: '2px 7px',
                     borderRadius: '3px',
-                    fontSize: '11px',
-                    backgroundColor: 'var(--bg-secondary)',
+                    fontSize: '10px',
+                    fontWeight: 600,
+                    background: incident.current_state === 'STOP_SENT' ? 'var(--accent-crimson-dim)' :
+                                incident.current_state === 'WARNING_SENT' ? 'var(--accent-gold-dim)' :
+                                incident.current_state === 'EARLY_SIGNAL_SENT' ? 'var(--accent-orchid-dim)' :
+                                'var(--bg-raised)',
+                    color: incident.current_state === 'STOP_SENT' ? 'var(--accent-crimson)' :
+                           incident.current_state === 'WARNING_SENT' ? 'var(--accent-gold)' :
+                           incident.current_state === 'EARLY_SIGNAL_SENT' ? 'var(--accent-orchid)' :
+                           'var(--text-muted)',
                   }}>
                     {incident.current_state}
                   </span>
@@ -268,10 +330,16 @@ export default function DashboardPage({ onNavigate }) {
         lastScanAt={stats?.last_scan_at}
       />
 
+      {/* KPI Hero Strip */}
+      <HeroKPIStrip performance={performance} />
+
+      {/* Темп расхода */}
+      <SpendPacingBar performance={performance} />
+
       {/* 3-колонная сетка — главный экран мониторинга */}
       <div className="dashboard-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 2fr 1fr', gap: '16px', marginBottom: '16px' }}>
         {/* Левая колонна: CampaignScorecard */}
-        <div className="dashboard-grid__left" style={{ background: 'var(--bg-secondary)', padding: '16px', borderRadius: '4px' }}>
+        <div className="dashboard-grid__left">
           <CampaignScorecard
             stats={stats}
             performance={performance}
@@ -281,7 +349,7 @@ export default function DashboardPage({ onNavigate }) {
         </div>
 
         {/* Центральная колонна: AlertTray */}
-        <div className="dashboard-grid__center" style={{ background: 'var(--bg-secondary)', padding: '16px', borderRadius: '4px' }}>
+        <div className="dashboard-grid__center" style={{ background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: '6px', boxShadow: 'var(--shadow-sm)', overflow: 'hidden' }}>
           <AlertTray
             incidents={activeIncidents}
             disableTasks={disableTasks}
@@ -291,7 +359,7 @@ export default function DashboardPage({ onNavigate }) {
         </div>
 
         {/* Правая колонна: TaskQueuePanel */}
-        <div className="dashboard-grid__right">
+        <div className="dashboard-grid__right" style={{ background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: '6px', boxShadow: 'var(--shadow-sm)' }}>
           <TaskQueuePanel
             disableTasks={disableTasks}
             enableTasks={enableTasks}
@@ -302,10 +370,45 @@ export default function DashboardPage({ onNavigate }) {
         </div>
       </div>
 
-      {/* BudgetOverrunChart */}
-      {chartData?.campaign_budget_deltas?.length > 0 && (
-        <BudgetOverrunChart data={chartData.campaign_budget_deltas} />
+      {/* Алерты по часам + Нарушения правил */}
+      {(chartData?.alerts_by_hour?.length > 0 || chartData?.rule_violations?.length > 0) && (
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: chartData?.alerts_by_hour?.length > 0 && chartData?.rule_violations?.length > 0 ? '2fr 1fr' : '1fr',
+          gap: '16px',
+          marginBottom: '16px',
+        }}>
+          <AlertVolumeTrendline data={chartData?.alerts_by_hour ?? []} />
+          <RuleViolationRanking data={chartData?.rule_violations ?? []} />
+        </div>
       )}
+
+      {/* Воронка конверсий */}
+      {performance?.funnel?.length > 0 && (
+        <div style={{ marginBottom: '16px' }}>
+          <FunnelChart funnel={performance.funnel} />
+        </div>
+      )}
+
+      {/* Spend Timeline */}
+      {performance?.timeline?.length > 0 && (
+        <SpendTimelineChart data={performance.timeline} />
+      )}
+
+      {/* BudgetOverrunChart + CampaignBreakdownTable в 2 колонки */}
+      {(chartData?.campaign_budget_deltas?.length > 0 || performance?.campaigns?.length > 0) && (
+        <div style={{ display: 'grid', gridTemplateColumns: chartData?.campaign_budget_deltas?.length > 0 && performance?.campaigns?.length > 0 ? '1fr 1fr' : '1fr', gap: '16px', marginBottom: '16px' }}>
+          {chartData?.campaign_budget_deltas?.length > 0 && (
+            <BudgetOverrunChart data={chartData.campaign_budget_deltas} />
+          )}
+          {performance?.campaigns?.length > 0 && (
+            <CampaignBreakdownTable data={performance.campaigns} />
+          )}
+        </div>
+      )}
+
+      {/* Топ объявления по расходу */}
+      <TopAdsQualityTable data={chartData?.top_ads_by_spend ?? []} />
 
       {/* Таблица объявлений ниже при скролле */}
       <DenseAdTable incidents={incidents} />

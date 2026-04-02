@@ -29,9 +29,9 @@ export function AlertTray({ incidents = [], disableTasks = [], onSelectIncident,
   return (
     <div className="alert-tray">
       <div className="alert-tray__header">
-        <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', backgroundColor: 'var(--accent-crimson)', animation: 'pulse 2s infinite', marginRight: '8px' }} />
-        АКТИВНЫЕ СИГНАЛЫ
-        {!isEmpty && <span style={{ marginLeft: 'auto', background: 'var(--bg-tertiary)', padding: '2px 6px', borderRadius: '12px', fontSize: '12px' }}>{sorted.length}</span>}
+        <span style={{ display: 'inline-block', width: '6px', height: '6px', borderRadius: '50%', backgroundColor: 'var(--accent-crimson)', animation: 'pulse 2s infinite', marginRight: '8px', flexShrink: 0 }} />
+        <span style={{ fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)' }}>АКТИВНЫЕ СИГНАЛЫ</span>
+        {!isEmpty && <span style={{ marginLeft: 'auto', background: 'var(--bg-tertiary)', padding: '2px 6px', borderRadius: 'var(--radius-sm)', fontSize: '10px', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-muted)' }}>{sorted.length}</span>}
       </div>
 
       <div className="alert-tray__body">

@@ -601,6 +601,7 @@ class DashboardPerformanceSummarySchema(BaseModel):
     cpl: Decimal | None = None
     cpr: Decimal | None = None
     spend_per_dep: Decimal | None = None
+    roas: Decimal | None = None
     click_to_lead_rate: float | None = None
     lead_to_reg_rate: float | None = None
     reg_to_dep_rate: float | None = None
@@ -2273,8 +2274,19 @@ def _build_performance_summary(
     leads: int,
     registrations: int,
     deposits: int,
+    offers: list[Offer] | None = None,
 ) -> DashboardPerformanceSummarySchema:
     """Собирает сводный блок performance-метрик."""
+    offers = offers or []
+
+    # Расчет ROAS: (deposits × средний_payout) / spend
+    roas = None
+    if offers and deposits > 0 and spend > 0:
+        total_payout = sum(float(offer.payout_per_deposit or 0) for offer in offers)
+        avg_payout = total_payout / len(offers)
+        revenue = Decimal(str(deposits)) * Decimal(str(avg_payout))
+        roas = revenue / spend
+
     return DashboardPerformanceSummarySchema(
         spend=spend,
         clicks=clicks,
@@ -2285,6 +2297,7 @@ def _build_performance_summary(
         cpl=_safe_decimal_div(spend, leads),
         cpr=_safe_decimal_div(spend, registrations),
         spend_per_dep=_safe_decimal_div(spend, deposits),
+        roas=roas,
         click_to_lead_rate=_safe_percent(leads, clicks),
         lead_to_reg_rate=_safe_percent(registrations, leads),
         reg_to_dep_rate=_safe_percent(deposits, registrations),
@@ -2369,6 +2382,7 @@ def _finalize_campaign_rows(
 def _build_dashboard_performance_payload(
     snapshots: list[AdSnapshot],
     *,
+    offers: list[Offer] | None = None,
     period: str,
     now: datetime | None = None,
     cutoff: datetime | None = None,
@@ -2378,6 +2392,7 @@ def _build_dashboard_performance_payload(
     current_time = now or _dashboard_now()
     cutoff = cutoff or _performance_cutoff(period, current_time)
     archives = archives or []
+    offers = offers or []
     relevant = [
         snapshot
         for snapshot in snapshots
@@ -2504,6 +2519,7 @@ def _build_dashboard_performance_payload(
             leads=total_leads,
             registrations=total_regs,
             deposits=total_deps,
+            offers=offers,
         ),
         funnel=funnel,
         timeline=timeline,
@@ -2814,11 +2830,14 @@ async def get_dashboard_performance(
         .order_by(AdSnapshot.last_observed_at.asc())
     )
     snapshots = result.scalars().all()
+    offer_result = await db.execute(select(Offer).where(Offer.is_active))
+    offers = offer_result.scalars().all()
     archives = []
     if period != "today":
         archives = await _load_dashboard_archives(db, cutoff=cutoff)
     return _build_dashboard_performance_payload(
         snapshots,
+        offers=offers,
         period=period,
         now=now,
         cutoff=cutoff,

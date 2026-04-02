@@ -99,6 +99,8 @@ export const getDisableTasks = (params = {}) => {
   const qs = new URLSearchParams(params).toString();
   return request(`/dashboard/disable-tasks${qs ? '?' + qs : ''}`);
 };
+export const createDisableTask = (fbAdId) =>
+  request('/dashboard/disable-tasks', { method: 'POST', body: JSON.stringify({ fb_ad_id: fbAdId }) });
 export const getEnableRecommendations = (params = {}) => {
   const qs = new URLSearchParams(params).toString();
   return request(`/dashboard/enable-recommendations${qs ? '?' + qs : ''}`);

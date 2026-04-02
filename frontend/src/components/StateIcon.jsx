@@ -1,7 +1,7 @@
 // Иконка и цвет для статуса алерта объявления
 export function StateIcon({ state = 'NORMAL', stage = null, size = 'md' }) {
   const stateMap = {
-    NORMAL: { icon: '✅', label: 'Норма', color: 'var(--accent-teal)' },
+    NORMAL: { icon: '✅', label: 'Норма', color: 'var(--accent-emerald)' },
     EARLY_SIGNAL_SENT: { icon: '🔎', label: 'Ранний сигнал', color: 'var(--accent-orchid)' },
     WARNING_SENT: { icon: '⚠️', label: 'Предупреждение', color: 'var(--accent-gold)' },
     STOP_SENT: { icon: '🛑', label: 'Стоп-алерт', color: 'var(--accent-crimson)' },
@@ -12,9 +12,9 @@ export function StateIcon({ state = 'NORMAL', stage = null, size = 'md' }) {
 
   const config = stateMap[state] || { icon: '❓', label: 'Неизвестно', color: 'var(--text-muted)' };
 
-  const iconSize = { sm: '16px', md: '18px', lg: '24px' }[size];
-  const labelSize = { sm: '0px', md: '13px', lg: '14px' }[size];
-  const gap = { sm: '0px', md: '4px', lg: '6px' }[size];
+  const iconSize = { sm: '14px', md: '16px', lg: '20px' }[size];
+  const labelSize = { sm: '10px', md: '12px', lg: '13px' }[size];
+  const gap = { sm: '2px', md: '4px', lg: '6px' }[size];
   const display = size === 'lg' ? 'flex' : 'inline-flex';
   const flexDirection = size === 'lg' ? 'column' : 'row';
 

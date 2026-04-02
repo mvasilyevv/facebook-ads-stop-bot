@@ -117,7 +117,7 @@ function DrawerContent({ ad, incident, disableTask, onClose, onDisable, onRetry 
           {/* Rules Section */}
           {incident && incident.rule_hits && incident.rule_hits.length > 0 && (
             <div style={{ marginTop: '16px' }}>
-              <div style={{ fontSize: '12px', fontWeight: 600, marginBottom: '8px' }}>
+              <div style={{ fontSize: '12px', fontWeight: 700, marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)' }}>
                 Сработаны правила
               </div>
               {incident.rule_hits.map((hit) => {
@@ -128,10 +128,11 @@ function DrawerContent({ ad, incident, disableTask, onClose, onDisable, onRetry 
                     key={hit.rule_code}
                     style={{
                       fontSize: '12px',
-                      padding: '6px 8px',
+                      padding: '8px 12px',
                       marginBottom: '4px',
                       borderLeft: `3px solid ${color}`,
-                      backgroundColor: 'rgba(0, 0, 0, 0.02)',
+                      backgroundColor: 'var(--bg-raised)',
+                      borderRadius: 'var(--radius-sm)',
                     }}
                   >
                     {hit.rule_code}: {hit.message}
@@ -143,7 +144,7 @@ function DrawerContent({ ad, incident, disableTask, onClose, onDisable, onRetry 
 
           {/* Disable Task Status */}
           {disableTask && (
-            <div style={{ marginTop: '12px', padding: '10px', background: 'var(--bg-tertiary)', borderRadius: '4px', fontSize: '12px' }}>
+            <div style={{ marginTop: '12px', padding: '12px', background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-sm)', fontSize: '12px', border: '1px solid var(--border-color)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
                 <span>Задача на отключение</span>
                 <span>Попытка {disableTask.attempt_count || 1}</span>
@@ -162,7 +163,7 @@ function DrawerContent({ ad, incident, disableTask, onClose, onDisable, onRetry 
                 </div>
               )}
               {(disableTask.status === 'FAILED' || disableTask.status === 'RETRYING') && (
-                <button onClick={() => onRetry(disableTask.id)} style={{ marginTop: '8px', fontSize: '12px', padding: '4px 10px', background: 'var(--accent-crimson)', color: 'white', border: 'none', borderRadius: '3px', cursor: 'pointer' }}>
+                <button onClick={() => onRetry(disableTask.id)} style={{ marginTop: '8px', fontSize: '12px', padding: '6px 12px', background: 'var(--accent-crimson)', color: '#ffffff', border: 'none', borderRadius: 'var(--radius-sm)', cursor: 'pointer' }}>
                   Повторить сейчас
                 </button>
               )}
@@ -176,7 +177,7 @@ function DrawerContent({ ad, incident, disableTask, onClose, onDisable, onRetry 
             <button
               onClick={() => onDisable(ad.fb_ad_id)}
               className="btn-disable-inline"
-              style={{ backgroundColor: 'var(--accent-crimson)', color: 'white' }}
+              style={{ backgroundColor: 'var(--accent-crimson)', color: '#ffffff' }}
             >
               Отключить
             </button>
@@ -185,7 +186,7 @@ function DrawerContent({ ad, incident, disableTask, onClose, onDisable, onRetry 
             <button
               onClick={() => onRetry(disableTask.id)}
               className="btn-disable-inline"
-              style={{ backgroundColor: 'var(--accent-gold)' }}
+              style={{ backgroundColor: 'var(--accent-gold)', color: 'var(--text-primary)' }}
             >
               Повторить
             </button>

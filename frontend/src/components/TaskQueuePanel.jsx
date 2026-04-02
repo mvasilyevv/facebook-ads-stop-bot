@@ -10,8 +10,8 @@ export function TaskQueuePanel({ disableTasks = [], enableTasks = [], enableRecs
   const isEmpty = disableTasks.length === 0 && enableTasks.length === 0 && enableRecs.length === 0;
 
   return (
-    <div style={{ background: 'var(--bg-secondary)', padding: '16px', borderRadius: '4px' }}>
-      <h3 style={{ margin: '0 0 12px 0', fontSize: '13px', fontWeight: 600, textTransform: 'uppercase', color: 'var(--text-muted)' }}>
+    <div style={{ background: 'var(--bg-secondary)', padding: '16px', borderRadius: 'var(--radius-md)' }}>
+      <h3 style={{ margin: '0 0 12px 0', fontSize: '13px', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)', letterSpacing: '0.06em' }}>
         Очередь
       </h3>
 
@@ -24,11 +24,11 @@ export function TaskQueuePanel({ disableTasks = [], enableTasks = [], enableRecs
       {/* Отключение */}
       {disableTasks.length > 0 && (
         <div style={{ marginBottom: '16px' }}>
-          <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--accent-crimson)', marginBottom: '8px' }}>
+          <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--accent-crimson)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
             ОТКЛЮЧЕНИЕ ({disableTasks.length})
           </div>
           {disableTasks.slice(0, 5).map((task) => (
-            <div key={task.id} style={{ fontSize: '12px', padding: '8px', marginBottom: '6px', background: 'var(--bg-tertiary)', borderRadius: '3px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div key={task.id} style={{ fontSize: '12px', padding: '8px', marginBottom: '6px', background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-sm)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <div style={{ flex: 1 }}>
                 <div>{task.ad_name || 'N/A'}</div>
                 <div style={{ color: statusColor(task.status), fontSize: '11px', marginTop: '2px' }}>
@@ -37,7 +37,7 @@ export function TaskQueuePanel({ disableTasks = [], enableTasks = [], enableRecs
                 </div>
               </div>
               {(task.status === 'FAILED' || task.status === 'RETRYING') && (
-                <button onClick={() => onRetryDisable?.(task.id)} style={{ marginLeft: '8px', padding: '4px 10px', fontSize: '11px', background: 'var(--accent-crimson)', color: 'white', border: 'none', borderRadius: '3px', cursor: 'pointer' }}>
+                <button onClick={() => onRetryDisable?.(task.id)} style={{ marginLeft: '8px', padding: '4px 10px', fontSize: '11px', background: 'var(--accent-crimson)', color: '#ffffff', border: 'none', borderRadius: 'var(--radius-sm)', cursor: 'pointer' }}>
                   Повтор
                 </button>
               )}
@@ -49,11 +49,11 @@ export function TaskQueuePanel({ disableTasks = [], enableTasks = [], enableRecs
       {/* Включение */}
       {enableTasks.length > 0 && (
         <div style={{ marginBottom: '16px' }}>
-          <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--accent-teal)', marginBottom: '8px' }}>
+          <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--accent-teal)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
             ВКЛЮЧЕНИЕ ({enableTasks.length})
           </div>
           {enableTasks.slice(0, 5).map((task) => (
-            <div key={task.id} style={{ fontSize: '12px', padding: '8px', marginBottom: '6px', background: 'var(--bg-tertiary)', borderRadius: '3px', display: 'flex', alignItems: 'center' }}>
+            <div key={task.id} style={{ fontSize: '12px', padding: '8px', marginBottom: '6px', background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-sm)', display: 'flex', alignItems: 'center' }}>
               <div style={{ flex: 1 }}>
                 <div>{task.ad_name || 'N/A'}</div>
                 <div style={{ color: statusColor(task.status), fontSize: '11px', marginTop: '2px' }}>
@@ -68,18 +68,18 @@ export function TaskQueuePanel({ disableTasks = [], enableTasks = [], enableRecs
       {/* Рекомендации */}
       {enableRecs.length > 0 && (
         <div>
-          <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--accent-orchid)', marginBottom: '8px' }}>
+          <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--accent-orchid)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
             РЕКОМЕНДАЦИИ ({enableRecs.length})
           </div>
           {enableRecs.slice(0, 5).map((rec) => (
-            <div key={rec.id} style={{ fontSize: '12px', padding: '8px', marginBottom: '6px', background: 'var(--bg-tertiary)', borderRadius: '3px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div key={rec.id} style={{ fontSize: '12px', padding: '8px', marginBottom: '6px', background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-sm)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <div style={{ flex: 1 }}>
                 <div>🔎 {rec.ad_name || 'N/A'}</div>
                 <div style={{ color: 'var(--text-muted)', fontSize: '11px', marginTop: '2px' }}>
                   {rec.reason || 'Рекомендация'}
                 </div>
               </div>
-              <button onClick={() => onCreateEnableTask?.(rec.id)} style={{ marginLeft: '8px', padding: '4px 10px', fontSize: '11px', background: 'var(--accent-teal)', color: 'white', border: 'none', borderRadius: '3px', cursor: 'pointer' }}>
+              <button onClick={() => onCreateEnableTask?.(rec.id)} style={{ marginLeft: '8px', padding: '4px 10px', fontSize: '11px', background: 'var(--accent-teal)', color: '#ffffff', border: 'none', borderRadius: 'var(--radius-sm)', cursor: 'pointer' }}>
                 Включить
               </button>
             </div>

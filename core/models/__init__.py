@@ -13,6 +13,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     Enum,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -189,6 +190,9 @@ class Offer(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     code: Mapped[str] = mapped_column(String(100), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(255))
     cpa_amount: Mapped[Decimal] = mapped_column(Numeric(10, 2))
+    payout_per_deposit: Mapped[float] = mapped_column(
+        Float, default=0.0, nullable=False, server_default="0"
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     rule_config: Mapped[OfferRuleConfig | None] = relationship(
