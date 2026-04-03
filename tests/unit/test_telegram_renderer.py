@@ -60,7 +60,7 @@ def test_render_alert_message_for_early_signal_has_confirm_and_snooze_buttons():
         stage=AlertStage.EARLY_SIGNAL,
         alert_state=AlertState.EARLY_SIGNAL_SENT,
         matched_rule_codes=["early_lpv_ratio_signal"],
-        reason_title="Слабая доходимость до лендинга",
+        reason_title="Мало открытий PWA после клика",
         reason_text="Переходы теряются между кликом и загрузкой страницы.",
         metrics_json={
             "spend": "0.20",
@@ -80,7 +80,7 @@ def test_render_alert_message_for_early_signal_has_confirm_and_snooze_buttons():
 
     assert "Ранний сигнал" in message.text
     assert "Причина:" in message.text
-    assert "Слабая доходимость до лендинга" in message.text
+    assert "Мало открытий PWA после клика" in message.text
     assert "Переходы теряются" in message.text
     assert "CPM: $7.5000" not in message.text
     assert "Частота: 1.4000" not in message.text
@@ -245,7 +245,7 @@ def test_render_enable_recommendation_message_for_not_delivering_with_early_sign
 
     assert "Статус доставки Meta: <b>NOT_DELIVERING</b>" in message.text
     assert "Есть ранний сигнал" not in message.text
-    assert "Слабый CTR исходящих кликов" in message.text
+    assert "Мало переходов на PWA" in message.text
     assert "Следующее действие: проверьте сигнал вручную перед включением." in message.text
 
 

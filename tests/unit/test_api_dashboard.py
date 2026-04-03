@@ -197,7 +197,7 @@ def test_build_current_risk_reason_rows_uses_active_snapshot_states():
     reason_counts = {row["rule"]: row["count"] for row in rows}
 
     assert reason_counts == {
-        "Слабый CTR исходящих кликов": 1,
+        "Мало переходов на PWA": 1,
         "Дорогой клик": 1,
         "Дорогой лид": 1,
     }
@@ -1087,3 +1087,115 @@ async def test_dashboard_performance_endpoint_returns_payload(mock_db):
     assert payload.summary.cpc == Decimal("0.5000")
     assert payload.campaigns[0].campaign == "Campaign A"
     assert mock_db.execute.call_count == 2
+
+
+# =====================================================================
+# POST /dashboard/disable-tasks — ручное создание задачи отключения
+# =====================================================================
+
+
+# Проверяем что ручное создание задачи заполняет все обязательные поля DisableTask
+@pytest.mark.asyncio
+async def test_create_disable_task_sets_required_fields(mock_db):
+    from apps.api.main import create_disable_task
+
+    snapshot_id = uuid.uuid4()
+    offer_id = uuid.uuid4()
+    snapshot = SimpleNamespace(
+        id=snapshot_id,
+        fb_ad_id="123456",
+        ad_name="Test Ad",
+        offer_id=offer_id,
+        open_state_token="tok-abc",
+    )
+
+    # scalar: первый вызов — snapshot, второй — existing_task (None)
+    mock_db.scalar = AsyncMock(side_effect=[snapshot, None])
+    mock_db.commit = AsyncMock()
+    mock_db.add = MagicMock()
+
+    now = datetime.now(UTC)
+
+    async def _fake_refresh(obj: object) -> None:
+        obj.id = uuid.uuid4()
+        obj.created_at = now
+        obj.updated_at = now
+        obj.attempt_count = 0
+        obj.last_error = None
+        obj.next_retry_at = None
+        obj.completed_at = None
+
+    mock_db.refresh = AsyncMock(side_effect=_fake_refresh)
+
+    body = SimpleNamespace(fb_ad_id="123456")
+    await create_disable_task(body=body, db=mock_db)
+
+    # Проверяем что db.add вызван с DisableTask, у которого все поля заполнены
+    added_task = mock_db.add.call_args[0][0]
+    assert added_task.fb_ad_id == "123456"
+    assert added_task.ad_name == "Test Ad"
+    assert added_task.snapshot_id == snapshot_id
+    assert added_task.offer_id == offer_id
+    assert added_task.open_state_token == "tok-abc"
+    assert added_task.idempotency_key == "dashboard_123456_tok-abc"
+    assert added_task.status == DisableTaskStatus.PENDING
+    assert added_task.requested_by_username == "dashboard"
+
+
+# Проверяем что при отсутствии open_state_token генерируется новый UUID
+@pytest.mark.asyncio
+async def test_create_disable_task_generates_token_when_missing(mock_db):
+    from apps.api.main import create_disable_task
+
+    snapshot = SimpleNamespace(
+        id=uuid.uuid4(),
+        fb_ad_id="789",
+        ad_name="Ad No Token",
+        offer_id=uuid.uuid4(),
+        open_state_token=None,
+    )
+    mock_db.scalar = AsyncMock(side_effect=[snapshot, None])
+    mock_db.commit = AsyncMock()
+    mock_db.flush = AsyncMock()
+    mock_db.add = MagicMock()
+
+    now = datetime.now(UTC)
+
+    async def _fake_refresh(obj: object) -> None:
+        obj.id = uuid.uuid4()
+        obj.created_at = now
+        obj.updated_at = now
+        obj.attempt_count = 0
+        obj.last_error = None
+        obj.next_retry_at = None
+        obj.completed_at = None
+
+    mock_db.refresh = AsyncMock(side_effect=_fake_refresh)
+
+    body = SimpleNamespace(fb_ad_id="789")
+    await create_disable_task(body=body, db=mock_db)
+
+    # Snapshot должен получить сгенерированный токен
+    assert snapshot.open_state_token is not None
+    assert len(snapshot.open_state_token) == 36  # UUID формат
+    mock_db.flush.assert_awaited_once()
+
+    added_task = mock_db.add.call_args[0][0]
+    assert added_task.idempotency_key.startswith("dashboard_789_")
+    assert added_task.ad_name == "Ad No Token"
+
+
+# Проверяем что для несуществующего snapshot возвращается 404
+@pytest.mark.asyncio
+async def test_create_disable_task_returns_404_for_missing_snapshot(mock_db):
+    from fastapi import HTTPException
+
+    from apps.api.main import create_disable_task
+
+    mock_db.scalar = AsyncMock(return_value=None)
+
+    body = SimpleNamespace(fb_ad_id="nonexistent")
+    with pytest.raises(HTTPException) as exc_info:
+        await create_disable_task(body=body, db=mock_db)
+
+    assert exc_info.value.status_code == 404

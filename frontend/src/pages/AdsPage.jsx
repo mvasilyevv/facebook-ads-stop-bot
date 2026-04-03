@@ -47,17 +47,7 @@ const SORT_OPTIONS = [
   { value: 'deposits', label: 'Депозиты', kind: 'number', defaultDirection: 'desc' },
 ];
 
-const RULE_LABELS = {
-  cpc_stop: 'Дорогой клик',
-  cpl_stop: 'Дорогой лид',
-  cpr_stop: 'Дорогая рега',
-  regs_no_dep_stop: 'Реги без депозитов',
-  spend_no_dep_range: 'Расход без депа',
-  spend_with_dep_range: 'Расход с депозитом',
-  early_outbound_ctr_signal: 'Слабый CTR исходящих кликов',
-  early_lpv_ratio_signal: 'Слабая доходимость до лендинга',
-  early_cost_per_lpv_signal: 'Дорогой просмотр лендинга',
-};
+import { RULE_LABELS } from '../constants/ruleLabels.js';
 
 const STATE_PRIORITY = {
   STOP_SENT: 5,
@@ -508,104 +498,106 @@ function AdTimeline({ fbAdId, onClose }) {
   });
 
   return (
-    <div className="timeline-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="timeline-drawer">
-        <div className="timeline-drawer__header">
-          <div className="timeline-drawer__title">
-            {data?.ad_name || 'Загрузка...'}
+    <div className="fixed inset-0 z-50 bg-black/60 animate-fade-in" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="fixed right-0 top-0 z-50 flex h-full w-full max-w-lg flex-col border-l border-border bg-surface animate-slide-in-right overflow-y-auto">
+        <div className="flex items-start justify-between border-b border-border px-5 py-4">
+          <div>
+            <div className="text-sm font-semibold text-primary">
+              {data?.ad_name || 'Загрузка...'}
+            </div>
+            {data?.campaign_name && (
+              <div className="text-2xs text-muted">
+                {data.campaign_name}
+                {data.adset_name && ` › ${data.adset_name}`}
+              </div>
+            )}
+            {data?.current_incident && (
+              <div className="text-2xs text-secondary">
+                {getIncidentStateLabel(data.current_incident)}
+                {data.current_incident.last_activity_at && ` · ${timeAgo(data.current_incident.last_activity_at)}`}
+              </div>
+            )}
           </div>
-          {data?.campaign_name && (
-            <div className="timeline-drawer__subtitle">
-              {data.campaign_name}
-              {data.adset_name && ` › ${data.adset_name}`}
-            </div>
-          )}
-          {data?.current_incident && (
-            <div className="timeline-drawer__subtitle">
-              {getIncidentStateLabel(data.current_incident)}
-              {data.current_incident.last_activity_at && ` · ${timeAgo(data.current_incident.last_activity_at)}`}
-            </div>
-          )}
-          <button className="timeline-drawer__close" onClick={onClose}>✕</button>
+          <button className="rounded p-1 text-muted hover:bg-elevated hover:text-primary" onClick={onClose}>✕</button>
         </div>
 
-        {loading && <div className="timeline-loading">Загрузка...</div>}
-        {error && <div className="timeline-error">Ошибка: {error}</div>}
+        {loading && <div className="p-8 text-center text-sm text-muted">Загрузка...</div>}
+        {error && <div className="p-4 text-sm text-danger">Ошибка: {error}</div>}
 
         {data && !loading && (
-          <div className="timeline-body">
+          <div className="space-y-4 px-5 py-4">
             {/* Текущие метрики */}
-            <div className="timeline-current-metrics">
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
               {data.current_incident && (
-                <div className="timeline-metric">
+                <div className="rounded bg-elevated px-3 py-2">
                   <span>Инцидент</span>
                   <strong>{getIncidentStateLabel(data.current_incident)}</strong>
                 </div>
               )}
-              <div className="timeline-metric">
+              <div className="rounded bg-elevated px-3 py-2">
                 <span>Расход</span>
                 <strong>{fmt(data.current_metrics?.spend)}</strong>
               </div>
-              <div className="timeline-metric">
+              <div className="rounded bg-elevated px-3 py-2">
                 <span>CPC</span>
                 <strong>{fmt(data.current_metrics?.cpc)}</strong>
               </div>
-              <div className="timeline-metric">
+              <div className="rounded bg-elevated px-3 py-2">
                 <span>Статус Meta</span>
                 <strong>{data.current_metrics?.delivery_status || data.delivery_status || '—'}</strong>
               </div>
-              <div className="timeline-metric">
+              <div className="rounded bg-elevated px-3 py-2">
                 <span>Исх. CTR</span>
                 <strong>{data.current_metrics?.outbound_ctr ? `${Number(data.current_metrics.outbound_ctr).toFixed(2)}%` : '—'}</strong>
               </div>
-              <div className="timeline-metric">
+              <div className="rounded bg-elevated px-3 py-2">
                 <span>LPV</span>
                 <strong>{fmtNum(data.current_metrics?.landing_page_views)}</strong>
               </div>
-              <div className="timeline-metric">
+              <div className="rounded bg-elevated px-3 py-2">
                 <span>Лиды</span>
                 <strong>{fmtNum(data.current_metrics?.leads)}</strong>
               </div>
-              <div className="timeline-metric">
+              <div className="rounded bg-elevated px-3 py-2">
                 <span>Реги</span>
                 <strong>{fmtNum(data.current_metrics?.registrations)}</strong>
               </div>
-              <div className="timeline-metric">
+              <div className="rounded bg-elevated px-3 py-2">
                 <span>CPR</span>
                 <strong>{fmt(data.current_metrics?.cost_per_registration, 4)}</strong>
               </div>
-              <div className="timeline-metric">
+              <div className="rounded bg-elevated px-3 py-2">
                 <span>Депы</span>
                 <strong>{fmtNum(data.current_metrics?.deposits)}</strong>
               </div>
-              <div className="timeline-metric">
+              <div className="rounded bg-elevated px-3 py-2">
                 <span>Последний скан</span>
                 <strong>{fmtTime(data.last_observed_at)}</strong>
               </div>
             </div>
 
             {data.current_incident && (
-              <div className="timeline-diagnostics">
-                <div className="timeline-diagnostics__header">
-                  <div className="timeline-diagnostics__title">Текущий инцидент</div>
-                  <div className="timeline-diagnostics__summary">
+              <div className="rounded-md border border-border p-4 space-y-3">
+                <div className="space-y-1">
+                  <div className="text-sm font-semibold text-primary">Текущий инцидент</div>
+                  <div className="text-2xs text-secondary">
                     {getIncidentSummaryText(data.current_incident) || 'Инцидент активен и обновляется.'}
                   </div>
                 </div>
-                <div className="timeline-diagnostics__grid">
-                  <div className="timeline-diagnostic timeline-diagnostic--normal">
-                    <div className="timeline-diagnostic__top">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="rounded-md border border-border bg-elevated/50 p-3">
+                    <div className="flex items-center justify-between text-sm">
                       <span>Статус</span>
                       <strong>{getIncidentStateLabel(data.current_incident)}</strong>
                     </div>
-                    <div className="timeline-diagnostic__text">
+                    <div className="mt-1 text-2xs text-muted">
                       {data.current_incident.last_activity_at
                         ? `Последняя активность: ${fmtTime(data.current_incident.last_activity_at)}`
                         : 'Последняя активность пока не определена.'}
                     </div>
                   </div>
-                  <div className="timeline-diagnostic timeline-diagnostic--normal">
-                    <div className="timeline-diagnostic__top">
+                  <div className="rounded-md border border-border bg-elevated/50 p-3">
+                    <div className="flex items-center justify-between text-sm">
                       <span>Автоповторы</span>
                       <strong>
                         {data.current_incident.incident_retry_count != null
@@ -613,7 +605,7 @@ function AdTimeline({ fbAdId, onClose }) {
                           : '—'}
                       </strong>
                     </div>
-                    <div className="timeline-diagnostic__text">
+                    <div className="mt-1 text-2xs text-muted">
                       {data.current_incident.needs_manual_attention
                         ? 'Нужен ручной разбор после серии автопопыток.'
                         : 'Инцидент ещё может повторно ставить задачу на отключение.'}
@@ -624,27 +616,31 @@ function AdTimeline({ fbAdId, onClose }) {
             )}
 
             {data.diagnostics && (
-              <div className="timeline-diagnostics">
-                <div className="timeline-diagnostics__header">
-                  <div className="timeline-diagnostics__title">Диагностика трафика</div>
-                  <div className="timeline-diagnostics__summary">{data.diagnostics.summary_text}</div>
+              <div className="rounded-md border border-border p-4 space-y-3">
+                <div className="space-y-1">
+                  <div className="text-sm font-semibold text-primary">Диагностика трафика</div>
+                  <div className="text-2xs text-secondary">{data.diagnostics.summary_text}</div>
                 </div>
-                <div className="timeline-diagnostics__grid">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   {diagnosticBars(data).map((item) => (
-                    <div key={item.key} className={`timeline-diagnostic timeline-diagnostic--${item.payload?.status || 'insufficient_data'}`}>
-                      <div className="timeline-diagnostic__top">
+                    <div key={item.key} className="rounded-md border border-border bg-elevated/50 p-3">
+                      <div className="flex items-center justify-between text-sm">
                         <span>{item.title}</span>
                         <strong>{diagnosticStatusLabel(item.payload?.status)}</strong>
                       </div>
-                      <div className="timeline-diagnostic__bar">
+                      <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-elevated">
                         <span
-                          className={`timeline-diagnostic__fill timeline-diagnostic__fill--${item.payload?.status || 'insufficient_data'}`}
+                          className={`h-full rounded-full transition-all ${
+                            item.payload?.status === 'critical' ? 'bg-danger' :
+                            item.payload?.status === 'elevated' ? 'bg-warning' :
+                            item.payload?.status === 'normal' ? 'bg-success' : 'bg-muted'
+                          }`}
                           style={{
                             width: `${Number(item.payload?.bar_percent || 0) > 0 ? Math.max(6, Number(item.payload?.bar_percent || 0)) : 0}%`,
                           }}
                         />
                       </div>
-                      <div className="timeline-diagnostic__text">{item.payload?.text || 'Диагностика пока недоступна.'}</div>
+                      <div className="mt-1 text-2xs text-muted">{item.payload?.text || 'Диагностика пока недоступна.'}</div>
                     </div>
                   ))}
                 </div>
@@ -652,9 +648,9 @@ function AdTimeline({ fbAdId, onClose }) {
             )}
 
             {/* Таймлайн событий */}
-            <div className="timeline-events">
+            <div className="space-y-2">
               {data.timeline.length === 0 && (
-                <div className="timeline-empty">Событий пока нет</div>
+                <div className="py-6 text-center text-sm text-muted">Событий пока нет</div>
               )}
               {[...(data.timeline || [])].sort((a, b) => {
                 const left = getTimelineEventTime(a);
@@ -663,52 +659,52 @@ function AdTimeline({ fbAdId, onClose }) {
               }).map((ev, i) => (
                 <div
                   key={i}
-                  className={`timeline-event timeline-event--${
+                  className={`rounded-md border p-3 ${
                     isEnableRecommendationEvent(ev)
                       ? ev.recommendation_level === 'WARNING'
-                        ? 'warning'
-                        : 'signal'
+                        ? 'border-warning/30 bg-warning-muted'
+                        : 'border-early/30 bg-early-muted'
                       : isEnableTaskEvent(ev)
-                      ? 'task'
+                      ? 'border-accent/30 bg-accent-muted'
                       : ev.type === 'alert'
                       ? ev.stage === 'STOP'
-                        ? 'stop'
+                        ? 'border-danger/30 bg-danger-muted'
                         : ev.stage === 'EARLY_SIGNAL'
-                        ? 'signal'
-                        : 'warning'
-                      : 'task'
+                        ? 'border-early/30 bg-early-muted'
+                        : 'border-warning/30 bg-warning-muted'
+                      : 'border-border bg-elevated/50'
                   }`}
                 >
-                  <div className="timeline-event__time">{fmtTime(getTimelineEventTime(ev))}</div>
+                  <div className="mb-0.5 font-mono text-2xs text-muted">{fmtTime(getTimelineEventTime(ev))}</div>
                   {isEnableRecommendationEvent(ev) && (
-                    <div className="timeline-event__body">
-                      <span className="timeline-event__icon">{getEnableRecommendationMeta(ev.recommendation_level).icon}</span>
-                      <div className="timeline-event__content">
-                        <div className="timeline-event__title">
+                    <div className="flex items-start gap-2">
+                      <span className="mt-0.5 flex-shrink-0 text-sm text-secondary">{getEnableRecommendationMeta(ev.recommendation_level).icon}</span>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-medium text-primary">
                           {getEnableRecommendationMeta(ev.recommendation_level).label}
                           {ev.recommendation_level === 'EARLY_SIGNAL' && (
-                            <span className="timeline-event__who"> · есть ранний сигнал</span>
+                            <span className="text-2xs text-muted"> · есть ранний сигнал</span>
                           )}
                           {ev.recommendation_level === 'WARNING' && (
-                            <span className="timeline-event__who"> · близко к порогу</span>
+                            <span className="text-2xs text-muted"> · близко к порогу</span>
                           )}
                           {getEnableRecommendationRules(ev).length > 0 && (
-                            <span className="timeline-event__rules" title={getEnableRecommendationRules(ev).map(ruleLabel).join(', ')}>
+                            <span className="text-2xs text-secondary" title={getEnableRecommendationRules(ev).map(ruleLabel).join(', ')}>
                               {' — '}
                               {formatRuleSummary(getEnableRecommendationRules(ev))}
                             </span>
                           )}
                         </div>
                         {ev.delivery_status && (
-                          <div className="timeline-event__sub">
+                          <div className="text-2xs text-muted">
                             Статус Meta: <strong>{ev.delivery_status}</strong>
                           </div>
                         )}
                         {ev.reason_text && (
-                          <div className="timeline-event__sub">{ev.reason_text}</div>
+                          <div className="text-2xs text-muted">{ev.reason_text}</div>
                         )}
                         {getEnableRecommendationMetrics(ev).length > 0 && (
-                          <div className="timeline-event__metrics">
+                          <div className="mt-1 flex flex-wrap gap-2 font-mono text-2xs text-secondary">
                             {getEnableRecommendationMetrics(ev).map((item) => (
                               <span key={item}>{item}</span>
                             ))}
@@ -718,14 +714,14 @@ function AdTimeline({ fbAdId, onClose }) {
                     </div>
                   )}
                   {ev.type === 'alert' && (
-                    <div className="timeline-event__body">
-                      <span className="timeline-event__icon">{STAGE_ICONS[ev.stage] || '○'}</span>
-                      <div className="timeline-event__content">
-                        <div className="timeline-event__title">
+                    <div className="flex items-start gap-2">
+                      <span className="mt-0.5 flex-shrink-0 text-sm text-secondary">{STAGE_ICONS[ev.stage] || '○'}</span>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-medium text-primary">
                           {ev.reason_title || (ev.stage === 'STOP' ? 'Стоп-алерт' : ev.stage === 'EARLY_SIGNAL' ? 'Ранний сигнал' : 'Предупреждение')}
                           {ev.matched_rules?.length > 0 && (
                             <span
-                              className="timeline-event__rules"
+                              className="text-2xs text-secondary"
                               title={ev.matched_rules.map(ruleLabel).join(', ')}
                             >
                               {' — '}
@@ -734,9 +730,9 @@ function AdTimeline({ fbAdId, onClose }) {
                           )}
                         </div>
                         {ev.reason_text && (
-                          <div className="timeline-event__sub">{ev.reason_text}</div>
+                          <div className="text-2xs text-muted">{ev.reason_text}</div>
                         )}
-                        <div className="timeline-event__metrics">
+                        <div className="mt-1 flex flex-wrap gap-2 font-mono text-2xs text-secondary">
                           {ev.spend != null && <span>Расход: {fmt(ev.spend)}</span>}
                           {ev.cpc != null && <span>CPC: {fmt(ev.cpc)}</span>}
                           {ev.outbound_ctr != null && <span>CTR исх.: {Number(ev.outbound_ctr).toFixed(2)}%</span>}
@@ -755,39 +751,39 @@ function AdTimeline({ fbAdId, onClose }) {
                   {isEnableTaskEvent(ev) && (() => {
                     const taskStatus = getEnableTaskStatus(ev);
                     return (
-                      <div className="timeline-event__body">
-                        <span className="timeline-event__icon">{TASK_STATUS_ICONS[taskStatus] || '○'}</span>
-                        <div className="timeline-event__content">
-                          <div className="timeline-event__title">
+                      <div className="flex items-start gap-2">
+                        <span className="mt-0.5 flex-shrink-0 text-sm text-secondary">{TASK_STATUS_ICONS[taskStatus] || '○'}</span>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-sm font-medium text-primary">
                             Задача на включение — {getEnableTaskStatusLabel(taskStatus)}
-                            {getRequestedByName(ev) && <span className="timeline-event__who"> (@{getRequestedByName(ev)})</span>}
+                            {getRequestedByName(ev) && <span className="text-2xs text-muted"> (@{getRequestedByName(ev)})</span>}
                           </div>
                           {ev.completed_at && (
-                            <div className="timeline-event__sub">Выполнено: {fmtTime(ev.completed_at)}</div>
+                            <div className="text-2xs text-muted">Выполнено: {fmtTime(ev.completed_at)}</div>
                           )}
                           {ev.last_error && (
-                            <div className="timeline-event__error">{ev.last_error}</div>
+                            <div className="mt-1 text-2xs text-danger">{ev.last_error}</div>
                           )}
                         </div>
                       </div>
                     );
                   })()}
                   {ev.type === 'disable_task' && (
-                    <div className="timeline-event__body">
-                      <span className="timeline-event__icon">{TASK_STATUS_ICONS[ev.status] || '○'}</span>
-                      <div className="timeline-event__content">
-                        <div className="timeline-event__title">
+                    <div className="flex items-start gap-2">
+                      <span className="mt-0.5 flex-shrink-0 text-sm text-secondary">{TASK_STATUS_ICONS[ev.status] || '○'}</span>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-medium text-primary">
                           Задача на отключение — {ev.status}
-                          {getRequestedByName(ev) && <span className="timeline-event__who"> (@{getRequestedByName(ev)})</span>}
+                          {getRequestedByName(ev) && <span className="text-2xs text-muted"> (@{getRequestedByName(ev)})</span>}
                         </div>
                         {ev.updated_at && (
-                          <div className="timeline-event__sub">Обновлено: {fmtTime(ev.updated_at)}</div>
+                          <div className="text-2xs text-muted">Обновлено: {fmtTime(ev.updated_at)}</div>
                         )}
                         {ev.completed_at && (
-                          <div className="timeline-event__sub">Выполнено: {fmtTime(ev.completed_at)}</div>
+                          <div className="text-2xs text-muted">Выполнено: {fmtTime(ev.completed_at)}</div>
                         )}
                         {ev.last_error && (
-                          <div className="timeline-event__error">{ev.last_error}</div>
+                          <div className="mt-1 text-2xs text-danger">{ev.last_error}</div>
                         )}
                       </div>
                     </div>
@@ -1020,106 +1016,92 @@ export default function AdsPage({ initialView = 'active', initialState = '' }) {
     return result;
   }, [sourceAds, offerFilter, stateFilter, sortBy, sortDirection, activeQuickFilter]);
 
-  return (
-    <div className="ads-page">
-      {error && <div className="error-banner">{error}</div>}
+  const selectCls = 'rounded bg-elevated border border-border px-3 py-1.5 text-sm text-secondary focus:border-accent focus:outline-none';
 
-      {/* Панель фильтров */}
-      <div className="ads-toolbar">
-        <div className="view-tabs">
-          <button
-            className={`view-tab ${view === 'active' ? 'view-tab--active' : ''}`}
-            onClick={() => { setView('active'); setStateFilter(''); }}
-          >
-            Активные
-            <span className="view-tab__count">{activeAds.length}</span>
-          </button>
-          <button
-            className={`view-tab ${view === 'archive' ? 'view-tab--active' : ''}`}
-            onClick={() => { setView('archive'); setStateFilter(''); }}
-          >
-            Архив
-            <span className="view-tab__count view-tab__count--muted">{archiveAds.length}</span>
-          </button>
-          <button
-            className={`view-tab ${view === 'all' ? 'view-tab--active' : ''}`}
-            onClick={() => { setView('all'); setStateFilter(''); }}
-          >
-            Все
-            <span className="view-tab__count view-tab__count--muted">{allAds.length}</span>
-          </button>
+  const ROW_BORDER = {
+    stop: 'border-l-2 border-l-danger',
+    warning: 'border-l-2 border-l-warning',
+    signal: 'border-l-2 border-l-early',
+    claimed: 'border-l-2 border-l-muted',
+    disabled: 'opacity-60',
+    normal: '',
+  };
+
+  const SEV_BADGE = {
+    stop: 'bg-danger-muted text-danger',
+    warn: 'bg-warning-muted text-warning',
+    signal: 'bg-early-muted text-early',
+    muted: 'bg-elevated text-muted',
+    offer: 'bg-accent-muted text-accent',
+  };
+
+  return (
+    <div className="space-y-md">
+      {error && (
+        <div className="rounded-md bg-danger-muted border border-danger/30 px-4 py-3 text-sm text-danger">{error}</div>
+      )}
+
+      {/* Тулбар */}
+      <div className="flex flex-wrap items-center gap-3">
+        {/* Табы */}
+        <div className="flex gap-1 rounded-md bg-elevated p-1">
+          {[
+            { id: 'active', label: 'Активные', count: activeAds.length },
+            { id: 'archive', label: 'Архив', count: archiveAds.length },
+            { id: 'all', label: 'Все', count: allAds.length },
+          ].map((tab) => (
+            <button
+              key={tab.id}
+              className={`rounded px-3 py-1.5 text-sm transition-colors ${view === tab.id ? 'bg-surface font-medium text-primary' : 'text-secondary hover:text-primary'}`}
+              onClick={() => { setView(tab.id); setStateFilter(''); }}
+            >
+              {tab.label}
+              <span className={`ml-1.5 rounded-full px-1.5 text-2xs ${view === tab.id ? 'bg-accent-muted text-accent' : 'bg-elevated text-muted'}`}>
+                {tab.count}
+              </span>
+            </button>
+          ))}
         </div>
 
-        <div className="ads-toolbar__controls">
-          <div className="ads-filters">
-            {offerCodes.length > 0 && (
-              <select
-                className="filter-select"
-                value={offerFilter}
-                onChange={(e) => setOfferFilter(e.target.value)}
-              >
-                <option value="">Все офферы</option>
-                {offerCodes.map((c) => (
-                  <option key={c} value={c}>{c}</option>
-                ))}
-              </select>
-            )}
-
-            <select
-              className="filter-select"
-              value={stateFilter}
-              onChange={(e) => setStateFilter(e.target.value)}
-            >
-              <option value="">Все статусы</option>
-              <option value="NORMAL">{ALERT_STATE_LABELS.NORMAL}</option>
-              <option value="EARLY_SIGNAL_SENT">{ALERT_STATE_LABELS.EARLY_SIGNAL_SENT}</option>
-              <option value="WARNING_SENT">{ALERT_STATE_LABELS.WARNING_SENT}</option>
-              <option value="STOP_SENT">{ALERT_STATE_LABELS.STOP_SENT}</option>
-              <option value="CLAIMED">{ALERT_STATE_LABELS.CLAIMED}</option>
-              <option value="DISABLED">{ALERT_STATE_LABELS.DISABLED}</option>
-              {archiveAds.length > 0 && <option value="ARCHIVED">{ALERT_STATE_LABELS.ARCHIVED}</option>}
+        {/* Фильтры */}
+        <div className="flex flex-wrap gap-2">
+          {offerCodes.length > 0 && (
+            <select className={selectCls} value={offerFilter} onChange={(e) => setOfferFilter(e.target.value)}>
+              <option value="">Все офферы</option>
+              {offerCodes.map((c) => <option key={c} value={c}>{c}</option>)}
             </select>
-          </div>
+          )}
+          <select className={selectCls} value={stateFilter} onChange={(e) => setStateFilter(e.target.value)}>
+            <option value="">Все статусы</option>
+            <option value="NORMAL">{ALERT_STATE_LABELS.NORMAL}</option>
+            <option value="EARLY_SIGNAL_SENT">{ALERT_STATE_LABELS.EARLY_SIGNAL_SENT}</option>
+            <option value="WARNING_SENT">{ALERT_STATE_LABELS.WARNING_SENT}</option>
+            <option value="STOP_SENT">{ALERT_STATE_LABELS.STOP_SENT}</option>
+            <option value="CLAIMED">{ALERT_STATE_LABELS.CLAIMED}</option>
+            <option value="DISABLED">{ALERT_STATE_LABELS.DISABLED}</option>
+            {archiveAds.length > 0 && <option value="ARCHIVED">{ALERT_STATE_LABELS.ARCHIVED}</option>}
+          </select>
+        </div>
 
-          <div className="ads-sort-row">
-            <span className="ads-sort-row__label">Сортировка</span>
-            <select
-              className="filter-select filter-select--sort"
-              value={sortBy}
-              onChange={(event) => {
-                const nextSortBy = event.target.value;
-                setSortBy(nextSortBy);
-                const nextOption = SORT_OPTIONS.find((option) => option.value === nextSortBy);
-                if (nextOption) {
-                  setSortDirection(nextOption.defaultDirection);
-                }
-              }}
-            >
-              {SORT_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-
-            <select
-              className="filter-select filter-select--narrow"
-              value={sortDirection}
-              onChange={(event) => setSortDirection(event.target.value)}
-            >
-              <option value="asc">По возрастанию</option>
-              <option value="desc">По убыванию</option>
-            </select>
-          </div>
+        {/* Сортировка */}
+        <div className="ml-auto flex items-center gap-2">
+          <span className="text-2xs text-muted">Сортировка</span>
+          <select className={selectCls} value={sortBy} onChange={(e) => { setSortBy(e.target.value); const opt = SORT_OPTIONS.find((o) => o.value === e.target.value); if (opt) setSortDirection(opt.defaultDirection); }}>
+            {SORT_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+          <select className={`${selectCls} w-[130px]`} value={sortDirection} onChange={(e) => setSortDirection(e.target.value)}>
+            <option value="asc">По возрастанию</option>
+            <option value="desc">По убыванию</option>
+          </select>
         </div>
       </div>
 
-      {/* Quick filters */}
-      <div className="quick-filters">
+      {/* Quick-фильтры */}
+      <div className="flex gap-1.5">
         {QUICK_FILTERS.map((f) => (
           <button
             key={f.id}
-            className={`quick-filter-btn ${activeQuickFilter === f.id ? 'active' : ''}`}
+            className={`rounded px-3 py-1 text-2xs font-medium transition-colors ${activeQuickFilter === f.id ? 'bg-accent-muted text-accent' : 'text-secondary hover:bg-elevated hover:text-primary'}`}
             onClick={() => setActiveQuickFilter(activeQuickFilter === f.id ? null : f.id)}
           >
             {f.label}
@@ -1127,115 +1109,100 @@ export default function AdsPage({ initialView = 'active', initialState = '' }) {
         ))}
       </div>
 
-      {/* Счётчик с временем последнего скана */}
-      <div className="ads-count">
+      {/* Счётчик */}
+      <div className="text-2xs text-muted">
         Показано: {filtered.length}
-        {view === 'active' && archiveAds.length > 0 && (
-          <span className="ads-count__archive"> · В архиве: {archiveAds.length}</span>
-        )}
-        {lastScanAt && (
-          <span className="ads-count__timestamp" title={`Последний скан: ${fmtTime(lastScanAt)}`}>
-            {' '}· Скан {timeAgo(lastScanAt)}
-          </span>
-        )}
+        {view === 'active' && archiveAds.length > 0 && <span> · В архиве: {archiveAds.length}</span>}
+        {lastScanAt && <span title={`Последний скан: ${fmtTime(lastScanAt)}`}> · Скан {timeAgo(lastScanAt)}</span>}
       </div>
 
-      {/* Таблица объявлений */}
+      {/* Таблица */}
       {loading && allAds.length === 0 ? (
-        <div className="ads-loading">
-          <div className="spinner" />
+        <div className="flex items-center gap-3 py-12 text-sm text-muted">
+          <div className="h-5 w-5 animate-spin rounded-full border-2 border-accent border-t-transparent" />
           Загрузка объявлений...
         </div>
       ) : filtered.length === 0 ? (
-        <div className="ads-empty" role="status">
-          <div className="ads-empty__icon">
-            {view === 'active' ? '✓' : view === 'archive' ? '○' : '—'}
+        <div className="py-12 text-center" role="status">
+          <div className="text-2xl text-muted">{view === 'active' ? '✓' : view === 'archive' ? '○' : '—'}</div>
+          <div className="mt-2 text-sm font-medium text-primary">
+            {view === 'active' ? 'Нет активных объявлений' : view === 'archive' ? 'Архив пуст' : 'Нет объявлений'}
           </div>
-          <div className="ads-empty__text">
-            {view === 'active'
-              ? 'Нет активных объявлений за текущую сессию'
-              : view === 'archive'
-              ? 'Архив пуст'
-              : 'Нет объявлений'}
-          </div>
-          {stateFilter && (
-            <div className="ads-empty__hint">
-              Попробуйте сбросить фильтр по статусу
-            </div>
-          )}
+          {stateFilter && <div className="mt-1 text-2xs text-muted">Попробуйте сбросить фильтр</div>}
         </div>
       ) : (
-        <div style={{ overflowX: 'auto', background: 'var(--bg-card)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border-color)' }}>
-          <table className="ad-table">
-            <thead>
-              <tr>
-                <th style={{ width: '36px' }} />
-                <th className="sortable" onClick={() => handleSort('ad_name')}>Название</th>
-                <th className="sortable sorted" onClick={() => handleSort('spend')} style={{ width: '80px', textAlign: 'right' }}>Расход</th>
-                <th className="sortable" onClick={() => handleSort('cpc')} style={{ width: '70px', textAlign: 'right' }}>CPC</th>
-                <th className="sortable" onClick={() => handleSort('leads')} style={{ width: '60px', textAlign: 'right' }}>Лиды</th>
-                <th className="sortable" onClick={() => handleSort('deposits')} style={{ width: '70px', textAlign: 'right' }}>Депозит</th>
-                <th style={{ width: '120px' }}>Правила</th>
-                <th style={{ width: '40px' }} />
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((ad) => {
-                const displayState = getAdDisplayState(ad);
-                const rowState = getTableRowState(ad);
-                const actionIcon = getTableRowActionIcon(ad);
-                const allRules = [
-                  ...ad.stop_rule_codes.map(c => ({ code: c, sev: 'stop' })),
-                  ...ad.warning_rule_codes.map(c => ({ code: c, sev: 'warn' })),
-                  ...ad.early_signal_rule_codes.map(c => ({ code: c, sev: 'signal' })),
-                ];
-                const shown = allRules.slice(0, 2);
-                const extra = allRules.length - shown.length;
+        <div className="panel overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border bg-elevated/50">
+                  <th className="w-9 px-2 py-2" />
+                  <th className="th-sortable cursor-pointer px-3 py-2 text-left" onClick={() => handleSort('ad_name')}>Название</th>
+                  <th className="th-sortable cursor-pointer px-3 py-2 text-right w-20" onClick={() => handleSort('spend')}>Расход</th>
+                  <th className="th-sortable cursor-pointer px-3 py-2 text-right w-[70px]" onClick={() => handleSort('cpc')}>CPC</th>
+                  <th className="th-sortable cursor-pointer px-3 py-2 text-right w-[60px]" onClick={() => handleSort('leads')}>Лиды</th>
+                  <th className="th-sortable cursor-pointer px-3 py-2 text-right w-[70px]" onClick={() => handleSort('deposits')}>Депозит</th>
+                  <th className="th-sortable px-3 py-2 text-left w-[120px]">Правила</th>
+                  <th className="w-10 px-2 py-2" />
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((ad) => {
+                  const displayState = getAdDisplayState(ad);
+                  const rowState = getTableRowState(ad);
+                  const actionIcon = getTableRowActionIcon(ad);
+                  const allRules = [
+                    ...ad.stop_rule_codes.map((c) => ({ code: c, sev: 'stop' })),
+                    ...ad.warning_rule_codes.map((c) => ({ code: c, sev: 'warn' })),
+                    ...ad.early_signal_rule_codes.map((c) => ({ code: c, sev: 'signal' })),
+                  ];
+                  const shown = allRules.slice(0, 2);
+                  const extra = allRules.length - shown.length;
 
-                return (
-                  <tr
-                    key={ad.fb_ad_id}
-                    className={`ad-table__row ad-table__row--${rowState}`}
-                    onClick={() => setTimelineAdId(ad.fb_ad_id)}
-                    style={{ cursor: 'pointer' }}
-                  >
-                    <td style={{ width: '36px', textAlign: 'center' }}>
-                      <StateIcon state={displayState} size="sm" />
-                    </td>
-                    <td className="ad-table__name">
-                      <div style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={ad.ad_name}>
-                        {ad.ad_name}
-                      </div>
-                      {ad.offer_code && (
-                        <span className="rule-tag rule-tag--offer" style={{ marginTop: '4px', display: 'inline-block' }}>
-                          {ad.offer_code}
-                        </span>
-                      )}
-                    </td>
-                    <td className="ad-table__num ad-table__num--spend">{fmt$(ad.spend)}</td>
-                    <td className="ad-table__num">{fmt$(ad.cpc)}</td>
-                    <td className="ad-table__num">{fmtN(ad.leads)}</td>
-                    <td className="ad-table__num" style={ad.deposits === 0 && Number(ad.spend) > 0 ? { color: 'var(--text-stop)' } : {}}>
-                      {fmtN(ad.deposits)}
-                    </td>
-                    <td className="ad-table__rules">
-                      {shown.map((r) => (
-                        <span key={r.code} className={`rule-tag rule-tag--${r.sev}`}>
-                          {r.code}
-                        </span>
-                      ))}
-                      {extra > 0 && (
-                        <span className="rule-tag rule-tag--muted">+{extra}</span>
-                      )}
-                    </td>
-                    <td style={{ width: '40px', textAlign: 'center' }}>
-                      {actionIcon && <span style={{ fontSize: '14px' }}>{actionIcon}</span>}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+                  return (
+                    <tr
+                      key={ad.fb_ad_id}
+                      className={`tr-hover cursor-pointer border-b border-border ${ROW_BORDER[rowState] || ''}`}
+                      onClick={() => setTimelineAdId(ad.fb_ad_id)}
+                    >
+                      <td className="w-9 px-2 py-2.5 text-center">
+                        <StateIcon state={displayState} size="sm" />
+                      </td>
+                      <td className="px-3 py-2.5">
+                        <div className="truncate text-primary" title={ad.ad_name}>{ad.ad_name}</div>
+                        {ad.offer_code && (
+                          <span className={`mt-0.5 inline-block rounded-sm px-1.5 py-0.5 text-[10px] font-medium ${SEV_BADGE.offer}`}>
+                            {ad.offer_code}
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2.5 text-right font-mono text-primary">{fmt$(ad.spend)}</td>
+                      <td className="px-3 py-2.5 text-right font-mono text-primary">{fmt$(ad.cpc)}</td>
+                      <td className="px-3 py-2.5 text-right font-mono text-primary">{fmtN(ad.leads)}</td>
+                      <td className={`px-3 py-2.5 text-right font-mono ${ad.deposits === 0 && Number(ad.spend) > 0 ? 'text-danger font-semibold' : 'text-primary'}`}>
+                        {fmtN(ad.deposits)}
+                      </td>
+                      <td className="px-3 py-2.5">
+                        <div className="flex flex-wrap gap-1">
+                          {shown.map((r) => (
+                            <span key={r.code} className={`rounded-sm px-1.5 py-0.5 text-[10px] font-medium ${SEV_BADGE[r.sev]}`}>
+                              {r.code}
+                            </span>
+                          ))}
+                          {extra > 0 && (
+                            <span className={`rounded-sm px-1.5 py-0.5 text-[10px] font-medium ${SEV_BADGE.muted}`}>+{extra}</span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="w-10 px-2 py-2.5 text-center text-base">
+                        {actionIcon}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 

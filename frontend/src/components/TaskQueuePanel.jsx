@@ -4,92 +4,111 @@ function statusSymbol(s) {
   return { PENDING: '○', RUNNING: '●', RETRYING: '↻', SUCCEEDED: '✓', FAILED: '×' }[s] || '—';
 }
 
-function statusColor(s) {
-  return { PENDING: 'var(--text-muted)', RUNNING: 'var(--accent-teal)', RETRYING: 'var(--accent-gold)', SUCCEEDED: 'var(--accent-teal)', FAILED: 'var(--accent-crimson)' }[s] || 'var(--text-primary)';
-}
+const STATUS_COLOR = {
+  PENDING: 'text-muted',
+  RUNNING: 'text-accent',
+  RETRYING: 'text-warning',
+  SUCCEEDED: 'text-accent',
+  FAILED: 'text-danger',
+};
 
 function getStatusLabel(status) {
   return TASK_STATUS_LABELS[status] || status;
 }
 
+const ACTIVE_STATUSES = new Set(['PENDING', 'RUNNING', 'RETRYING', 'FAILED']);
+
+/** Компактная панель очереди задач — показывает только активные */
 export function TaskQueuePanel({ disableTasks = [], enableTasks = [], enableRecs = [], onRetryDisable, onCreateEnableTask }) {
-  const isEmpty = disableTasks.length === 0 && enableTasks.length === 0 && enableRecs.length === 0;
+  const activeDisable = disableTasks.filter((t) => ACTIVE_STATUSES.has(t.status));
+  const activeEnable = enableTasks.filter((t) => ACTIVE_STATUSES.has(t.status));
+  const isEmpty = activeDisable.length === 0 && activeEnable.length === 0 && enableRecs.length === 0;
 
   return (
-    <div style={{ background: 'var(--bg-secondary)', padding: '16px', borderRadius: 'var(--radius-md)' }}>
-      <h3 style={{ margin: '0 0 12px 0', fontSize: '13px', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)', letterSpacing: '0.06em' }}>
+    <div className="p-4">
+      <h3 className="mb-3 text-2xs font-bold uppercase tracking-widest text-muted">
         Очередь
       </h3>
 
       {isEmpty && (
-        <div style={{ fontSize: '12px', color: 'var(--text-muted)', textAlign: 'center', padding: '20px 0' }}>
+        <div className="py-6 text-center text-sm text-muted">
           Очередь пуста — всё в норме
         </div>
       )}
 
       {/* Отключение */}
-      {disableTasks.length > 0 && (
-        <div style={{ marginBottom: '16px' }}>
-          <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--accent-crimson)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-            ОТКЛЮЧЕНИЕ ({disableTasks.length})
+      {activeDisable.length > 0 && (
+        <div className="mb-4">
+          <div className="mb-2 text-2xs font-bold uppercase tracking-widest text-danger">
+            ОТКЛЮЧЕНИЕ ({activeDisable.length})
           </div>
-          {disableTasks.slice(0, 5).map((task) => (
-            <div key={task.id} style={{ fontSize: '12px', padding: '8px', marginBottom: '6px', background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-sm)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <div style={{ flex: 1 }}>
-                <div>{task.ad_name || 'N/A'}</div>
-                <div style={{ color: statusColor(task.status), fontSize: '11px', marginTop: '2px', fontFamily: "'JetBrains Mono', monospace" }}>
-                  {statusSymbol(task.status)} {getStatusLabel(task.status)}
-                  {task.attempt_count > 1 && <span> ×{task.attempt_count}</span>}
+          <div className="space-y-1.5">
+            {activeDisable.slice(0, 5).map((task) => (
+              <div key={task.id} className="flex items-center justify-between rounded bg-elevated px-3 py-2">
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm text-primary">{task.ad_name || 'N/A'}</div>
+                  <div className={`mt-0.5 font-mono text-2xs ${STATUS_COLOR[task.status] || 'text-primary'}`}>
+                    {statusSymbol(task.status)} {getStatusLabel(task.status)}
+                    {task.attempt_count > 1 && <span> x{task.attempt_count}</span>}
+                  </div>
                 </div>
+                {(task.status === 'FAILED' || task.status === 'RETRYING') && (
+                  <button
+                    onClick={() => onRetryDisable?.(task.id)}
+                    className="ml-2 rounded-sm bg-danger-muted px-2 py-1 text-2xs font-semibold text-danger hover:bg-danger/20"
+                  >
+                    Повтор
+                  </button>
+                )}
               </div>
-              {(task.status === 'FAILED' || task.status === 'RETRYING') && (
-                <button onClick={() => onRetryDisable?.(task.id)} className="queue-action-btn queue-action-btn--danger">
-                  Повтор
-                </button>
-              )}
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
       )}
 
       {/* Включение */}
-      {enableTasks.length > 0 && (
-        <div style={{ marginBottom: '16px' }}>
-          <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--accent-teal)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-            ВКЛЮЧЕНИЕ ({enableTasks.length})
+      {activeEnable.length > 0 && (
+        <div className="mb-4">
+          <div className="mb-2 text-2xs font-bold uppercase tracking-widest text-accent">
+            ВКЛЮЧЕНИЕ ({activeEnable.length})
           </div>
-          {enableTasks.slice(0, 5).map((task) => (
-            <div key={task.id} style={{ fontSize: '12px', padding: '8px', marginBottom: '6px', background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-sm)', display: 'flex', alignItems: 'center' }}>
-              <div style={{ flex: 1 }}>
-                <div>{task.ad_name || 'N/A'}</div>
-                <div style={{ color: statusColor(task.status), fontSize: '11px', marginTop: '2px', fontFamily: "'JetBrains Mono', monospace" }}>
-                  {statusSymbol(task.status)} {getStatusLabel(task.status)}
+          <div className="space-y-1.5">
+            {activeEnable.slice(0, 5).map((task) => (
+              <div key={task.id} className="flex items-center rounded bg-elevated px-3 py-2">
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm text-primary">{task.ad_name || 'N/A'}</div>
+                  <div className={`mt-0.5 font-mono text-2xs ${STATUS_COLOR[task.status] || 'text-primary'}`}>
+                    {statusSymbol(task.status)} {getStatusLabel(task.status)}
+                  </div>
                 </div>
               </div>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
       )}
 
       {/* Рекомендации */}
       {enableRecs.length > 0 && (
         <div>
-          <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--accent-orchid)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+          <div className="mb-2 text-2xs font-bold uppercase tracking-widest text-early">
             РЕКОМЕНДАЦИИ ({enableRecs.length})
           </div>
-          {enableRecs.slice(0, 5).map((rec) => (
-            <div key={rec.id} style={{ fontSize: '12px', padding: '8px', marginBottom: '6px', background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-sm)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <div style={{ flex: 1 }}>
-                <div>{rec.ad_name || 'N/A'}</div>
-                <div style={{ color: 'var(--text-muted)', fontSize: '11px', marginTop: '2px' }}>
-                  {rec.reason || 'Рекомендация'}
+          <div className="space-y-1.5">
+            {enableRecs.slice(0, 5).map((rec) => (
+              <div key={rec.id} className="flex items-center justify-between rounded bg-elevated px-3 py-2">
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm text-primary">{rec.ad_name || 'N/A'}</div>
+                  <div className="mt-0.5 text-2xs text-muted">{rec.reason || 'Рекомендация'}</div>
                 </div>
+                <button
+                  onClick={() => onCreateEnableTask?.(rec.id)}
+                  className="ml-2 rounded-sm bg-accent-muted px-2 py-1 text-2xs font-semibold text-accent hover:bg-accent/20"
+                >
+                  Включить
+                </button>
               </div>
-              <button onClick={() => onCreateEnableTask?.(rec.id)} className="queue-action-btn queue-action-btn--teal">
-                Включить
-              </button>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
       )}
     </div>

@@ -557,3 +557,107 @@ class TelegramRecipientSchema(BaseModel):
     role: str = TelegramUserRole.RECIPIENT.value
     is_active: bool = True
     created_at: str
+
+
+# ==========================================
+# История заливов
+# ==========================================
+
+
+class HistorySummarySchema(BaseModel):
+    """Агрегированные метрики за период."""
+
+    date_from: str
+    date_to: str
+    days_count: int
+    total_spend: Decimal
+    total_clicks: int
+    total_leads: int
+    total_registrations: int
+    total_deposits: int
+    avg_cpc: Decimal | None = None
+    avg_cpl: Decimal | None = None
+    avg_cpr: Decimal | None = None
+    avg_spend_per_dep: Decimal | None = None
+    roas: Decimal | None = None
+    total_alerts: int = 0
+    total_stops: int = 0
+    total_disables: int = 0
+    # Метрики предыдущего периода для сравнения
+    prev_spend: Decimal | None = None
+    prev_leads: int | None = None
+    prev_registrations: int | None = None
+    prev_deposits: int | None = None
+
+
+class HistoryTimelinePoint(BaseModel):
+    """Точка графика трендов по дням."""
+
+    date: str
+    spend: Decimal = Decimal("0")
+    clicks: int = 0
+    leads: int = 0
+    registrations: int = 0
+    deposits: int = 0
+    cpl: Decimal | None = None
+    cpr: Decimal | None = None
+    cpc: Decimal | None = None
+    spend_per_dep: Decimal | None = None
+
+
+class HistoryCampaignRow(BaseModel):
+    """Строка таблицы кампаний за период."""
+
+    campaign_name: str
+    offer_code: str | None = None
+    total_spend: Decimal = Decimal("0")
+    total_clicks: int = 0
+    total_leads: int = 0
+    total_registrations: int = 0
+    total_deposits: int = 0
+    avg_cpl: Decimal | None = None
+    avg_cpr: Decimal | None = None
+    avg_spend_per_dep: Decimal | None = None
+    roas: Decimal | None = None
+    alerts_count: int = 0
+    disables_count: int = 0
+
+
+class HistoryOfferSummary(BaseModel):
+    """Сводка по офферу за период."""
+
+    offer_code: str
+    offer_name: str
+    total_spend: Decimal = Decimal("0")
+    total_deposits: int = 0
+    total_registrations: int = 0
+    avg_cpr: Decimal | None = None
+    avg_spend_per_dep: Decimal | None = None
+    roas: Decimal | None = None
+    profit: Decimal | None = None
+    alerts_count: int = 0
+    disables_count: int = 0
+
+
+class HistoryEventItem(BaseModel):
+    """Элемент ленты событий."""
+
+    id: str
+    event_type: str  # "alert" | "disable" | "enable"
+    fb_ad_id: str
+    ad_name: str
+    offer_code: str | None = None
+    summary: str
+    stage: str | None = None
+    matched_rule_codes: list[str] = []
+    status: str | None = None
+    created_at: str
+
+
+class HistoryEventsPage(BaseModel):
+    """Лента событий с пагинацией."""
+
+    items: list[HistoryEventItem]
+    total: int
+    limit: int
+    offset: int

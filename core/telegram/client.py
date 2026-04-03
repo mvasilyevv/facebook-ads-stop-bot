@@ -3,11 +3,23 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import httpx
 
 logger = logging.getLogger(__name__)
+
+# Лимит Telegram на длину сообщения
+_TG_MESSAGE_LIMIT = 4096
+
+
+def _truncate_message(text: str, limit: int = _TG_MESSAGE_LIMIT) -> str:
+    """Обрезает сообщение до лимита Telegram, добавляя маркер обрезки."""
+    if len(text) <= limit:
+        return text
+    suffix = "\n\n... (сообщение обрезано)"
+    return text[: limit - len(suffix)] + suffix
 
 
 class TelegramAPIError(RuntimeError):
@@ -43,26 +55,11 @@ class TelegramBotClient:
         payload: dict,
         request_timeout: float | None = None,
     ) -> dict:
-        """Выполняет POST-запрос к Telegram API и валидирует ответ."""
-        try:
-            resp = await self._http.post(
-                f"{self._base}/{method}",
-                json=payload,
-                timeout=request_timeout,
-            )
-            resp.raise_for_status()
-        except httpx.HTTPError as exc:
-            if hasattr(exc, "response") and exc.response is not None:
-                status_code = exc.response.status_code
-                if status_code == 429:
-                    retry_after = exc.response.headers.get("Retry-After")
-                    logger.warning(
-                        "Telegram API rate limit (429) при вызове %s, retry_after=%s",
-                        method,
-                        retry_after,
-                    )
-            raise RuntimeError(f"Не удалось выполнить запрос к Telegram API ({method})") from exc
+        """Выполняет POST-запрос к Telegram API и валидирует ответ.
 
+        При HTTP 429 ждёт Retry-After (max 30s) и повторяет один раз.
+        """
+        resp = await self._do_request(method, payload=payload, request_timeout=request_timeout)
         data = resp.json()
         if not data.get("ok"):
             raise TelegramAPIError(
@@ -72,6 +69,53 @@ class TelegramBotClient:
             )
         return dict(data)
 
+    async def _do_request(
+        self,
+        method: str,
+        *,
+        payload: dict,
+        request_timeout: float | None = None,
+    ) -> httpx.Response:
+        """HTTP POST с однократным retry при 429."""
+        try:
+            resp = await self._http.post(
+                f"{self._base}/{method}",
+                json=payload,
+                timeout=request_timeout,
+            )
+            if resp.status_code != 429:
+                resp.raise_for_status()
+                return resp
+        except httpx.HTTPError as exc:
+            raise RuntimeError(f"Не удалось выполнить запрос к Telegram API ({method})") from exc
+
+        # Обработка 429: ждём и повторяем один раз
+        wait = self._parse_retry_after(resp)
+        logger.warning("Telegram API rate limit (429) при вызове %s, ожидание %ss", method, wait)
+        await asyncio.sleep(wait)
+
+        try:
+            resp = await self._http.post(
+                f"{self._base}/{method}",
+                json=payload,
+                timeout=request_timeout,
+            )
+            resp.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise RuntimeError(f"Не удалось выполнить запрос к Telegram API ({method})") from exc
+        return resp
+
+    @staticmethod
+    def _parse_retry_after(resp: httpx.Response) -> float:
+        """Извлекает Retry-After из ответа (cap 30s, default 5s)."""
+        raw = resp.headers.get("Retry-After")
+        if raw is None:
+            return 5.0
+        try:
+            return min(float(raw), 30.0)
+        except (ValueError, TypeError):
+            return 5.0
+
     async def send_message(
         self,
         *,
@@ -80,7 +124,8 @@ class TelegramBotClient:
         message_thread_id: int | None = None,
         reply_markup: dict | None = None,
     ) -> dict:
-        """Отправляет сообщение в чат."""
+        """Отправляет сообщение в чат. Обрезает текст до лимита Telegram."""
+        text = _truncate_message(text)
         payload: dict = {
             "chat_id": chat_id,
             "text": text,
@@ -102,7 +147,8 @@ class TelegramBotClient:
         message_thread_id: int | None = None,
         reply_markup: dict | None = None,
     ) -> None:
-        """Редактирует текст существующего сообщения."""
+        """Редактирует текст существующего сообщения. Обрезает до лимита."""
+        text = _truncate_message(text)
         payload: dict = {
             "chat_id": chat_id,
             "message_id": message_id,
@@ -114,9 +160,6 @@ class TelegramBotClient:
         if reply_markup:
             payload["reply_markup"] = reply_markup
         await self._post_json("editMessageText", payload=payload)
-
-    # Алиас для обратной совместимости
-    edit_message_text = edit_message
 
     async def answer_callback_query(self, callback_query_id: str, text: str = "") -> None:
         """Отвечает на callback query (убирает часики)."""

@@ -2,10 +2,17 @@
 
 const BASE = '/api';
 
+/** API-ключ: берём из Vite env или из localStorage (для ручной настройки). */
+const API_KEY = import.meta.env.VITE_API_KEY || localStorage.getItem('api_key') || '';
+
 async function request(url, options = {}) {
+  const headers = { 'Content-Type': 'application/json', ...options.headers };
+  if (API_KEY) {
+    headers['X-API-Key'] = API_KEY;
+  }
   const resp = await fetch(`${BASE}${url}`, {
     cache: options.cache ?? 'no-store',
-    headers: { 'Content-Type': 'application/json', ...options.headers },
+    headers,
     ...options,
   });
   if (!resp.ok) {
@@ -136,6 +143,35 @@ export const updateVisionSettings = (data) =>
 export const visionReconnect = () =>
   request('/vision/reconnect', { method: 'POST' });
 export const getVisionProfiles = () => request('/vision/profiles');
+
+// --- История заливов ---
+export const getHistorySummary = (params = {}) => {
+  const clean = Object.fromEntries(Object.entries(params).filter(([, v]) => v != null && v !== ''));
+  const qs = new URLSearchParams(clean).toString();
+  return request(`/history/summary${qs ? '?' + qs : ''}`);
+};
+export const getHistoryTimeline = (params = {}) => {
+  const clean = Object.fromEntries(Object.entries(params).filter(([, v]) => v != null && v !== ''));
+  const qs = new URLSearchParams(clean).toString();
+  return request(`/history/timeline${qs ? '?' + qs : ''}`);
+};
+export const getHistoryCampaigns = (params = {}) => {
+  const clean = Object.fromEntries(Object.entries(params).filter(([, v]) => v != null && v !== ''));
+  const qs = new URLSearchParams(clean).toString();
+  return request(`/history/campaigns${qs ? '?' + qs : ''}`);
+};
+export const getHistoryEvents = (params = {}) => {
+  const clean = Object.fromEntries(Object.entries(params).filter(([, v]) => v != null && v !== ''));
+  const qs = new URLSearchParams(clean).toString();
+  return request(`/history/events${qs ? '?' + qs : ''}`);
+};
+
+// История заливов — офферы
+export const getHistoryOffers = (params = {}) => {
+  const clean = Object.fromEntries(Object.entries(params).filter(([, v]) => v != null && v !== ''));
+  const qs = new URLSearchParams(clean).toString();
+  return request(`/history/offers${qs ? '?' + qs : ''}`);
+};
 
 // Telegram получатели (мультипользователи)
 export const getTelegramRecipients = () => request('/settings/telegram/recipients');

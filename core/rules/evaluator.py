@@ -6,6 +6,7 @@ from __future__ import annotations
 from decimal import ROUND_CEILING, ROUND_HALF_UP, Decimal
 
 from core.domain import AlertStage, EnableRecommendationLevel
+from core.rules.labels import rule_label
 from core.rules.types import RuleContext, RuleEvaluation, RuleHit
 from core.scanner.models import ScannedAdRow
 
@@ -92,7 +93,7 @@ def _evaluate_click_stage(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | None
             stop_threshold=ctx.cpc_stop_threshold,
             warning_threshold=ctx.cpc_warning_threshold,
             code="cpc_stop",
-            title="Дорогой клик",
+            title=rule_label("cpc_stop"),
             label="CPC",
             missing_event_label="кликов",
         )
@@ -105,7 +106,7 @@ def _evaluate_click_stage(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | None
             stop_threshold=ctx.cpc_stop_threshold,
             warning_threshold=ctx.cpc_warning_threshold,
             code="cpc_stop",
-            title="Дорогой клик",
+            title=rule_label("cpc_stop"),
             label="CPC",
             stage_name="клика",
         ),
@@ -116,7 +117,7 @@ def _evaluate_click_stage(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | None
             stop_threshold=ctx.cpl_stop_threshold,
             warning_threshold=ctx.cpl_warning_threshold,
             code="cpl_stop",
-            title="Дорогой лид",
+            title=rule_label("cpl_stop"),
             label="CPL",
             missing_event_label="лидов",
         ),
@@ -132,7 +133,7 @@ def _evaluate_lead_stage(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | None:
             stop_threshold=ctx.cpl_stop_threshold,
             warning_threshold=ctx.cpl_warning_threshold,
             code="cpl_stop",
-            title="Дорогой лид",
+            title=rule_label("cpl_stop"),
             label="CPL",
             stage_name="лида",
         ),
@@ -143,7 +144,7 @@ def _evaluate_lead_stage(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | None:
             stop_threshold=ctx.cpr_stop_threshold,
             warning_threshold=ctx.cpr_warning_threshold,
             code="cpr_stop",
-            title="Дорогая рега",
+            title=rule_label("cpr_stop"),
             label="CPR",
             missing_event_label="регистраций",
         ),
@@ -158,7 +159,7 @@ def _evaluate_registration_stage(row: ScannedAdRow, ctx: RuleContext) -> RuleHit
         stop_threshold=ctx.cpr_stop_threshold,
         warning_threshold=ctx.cpr_warning_threshold,
         code="cpr_stop",
-        title="Дорогая рега",
+        title=rule_label("cpr_stop"),
         label="CPR",
         stage_name="регистрации",
     )
@@ -175,7 +176,7 @@ def _evaluate_registration_stage(row: ScannedAdRow, ctx: RuleContext) -> RuleHit
             warning_pct=ctx.effective_cpr_warning_percent_of_stop,
             stop_percent_of_base=ctx.effective_cpr_stop_percent_of_base,
             code="spend_no_dep_range",
-            title="Расход без депа",
+            title=rule_label("spend_no_dep_range"),
             summary_suffix="депозитов 0, цена реги в норме",
             reason_suffix="Цена регистрации ещё укладывается в рабочую зону, но депозитов всё ещё нет.",
         )
@@ -196,7 +197,7 @@ def _evaluate_deposit_stage(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | No
         warning_pct=ctx.effective_cpr_warning_percent_of_stop,
         stop_percent_of_base=ctx.effective_cpr_stop_percent_of_base,
         code="spend_with_dep_range",
-        title="Расход с депозитом",
+        title=rule_label("spend_with_dep_range"),
         summary_suffix=f"депозитов {row.deposits}",
         reason_suffix=f"Депозит уже есть, но расход растёт до {row.deposits} депозита(ов) слишком быстро.",
     )
@@ -207,7 +208,7 @@ def _evaluate_early_signals(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | No
 
     spend_percent = _ratio_percent(row.spend, ctx.cpa_amount)
 
-    # Ранний сигнал 1: низкий CTR исходящих кликов — post-click качество трафика плохое
+    # Ранний сигнал 1: мало переходов на PWA — трафик не кликает
     if (
         ctx.early_outbound_ctr_signal_enabled
         and row.outbound_ctr is not None
@@ -218,19 +219,19 @@ def _evaluate_early_signals(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | No
         if current < threshold:
             return RuleHit(
                 code="early_outbound_ctr_signal",
-                title="Слабый CTR исходящих кликов",
+                title=rule_label("early_outbound_ctr_signal"),
                 stage=AlertStage.EARLY_SIGNAL,
                 value=current,
                 threshold=threshold,
                 summary=f"Outbound CTR {current:.2f}% < минимум {threshold:.2f}%",
                 reason_text=(
-                    f"CTR исходящих кликов слишком низкий: сейчас {current:.2f}% "
+                    f"Мало переходов на PWA: CTR сейчас {current:.2f}% "
                     f"при расходе {_format_money_value(row.spend)}. "
-                    f"Минимальный порог {threshold:.2f}% — трафик не конвертируется в переходы на лендинг."
+                    f"Минимальный порог {threshold:.2f}% — трафик не конвертируется в переходы."
                 ),
             )
 
-    # Ранний сигнал 2: низкая доходимость до лендинга — высокий отвал после клика
+    # Ранний сигнал 2: мало открытий PWA после клика — высокий отвал
     if (
         ctx.early_lpv_ratio_signal_enabled
         and row.outbound_clicks >= ctx.early_lpv_ratio_signal_min_outbound_clicks
@@ -241,19 +242,19 @@ def _evaluate_early_signals(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | No
         if current < threshold:
             return RuleHit(
                 code="early_lpv_ratio_signal",
-                title="Низкая доходимость до лендинга",
+                title=rule_label("early_lpv_ratio_signal"),
                 stage=AlertStage.EARLY_SIGNAL,
                 value=current,
                 threshold=threshold,
                 summary=f"LPV/клики {current:.2f}% < минимум {threshold:.2f}%",
                 reason_text=(
-                    f"Только {current:.2f}% кликов доходит до лендинга ({row.landing_page_views} из "
+                    f"Только {current:.2f}% кликов открывают PWA ({row.landing_page_views} из "
                     f"{row.outbound_clicks}). "
-                    f"Порог {threshold:.2f}% — большой отвал после клика указывает на проблемы с лендингом."
+                    f"Порог {threshold:.2f}% — большой отвал после клика указывает на проблемы с загрузкой PWA."
                 ),
             )
 
-    # Ранний сигнал 3: высокая стоимость просмотра лендинга — слишком дорогой post-click
+    # Ранний сигнал 3: дорогое открытие PWA — слишком дорогой post-click
     if (
         ctx.early_cost_per_lpv_signal_enabled
         and row.landing_page_views >= ctx.early_cost_per_lpv_signal_min_views
@@ -266,13 +267,13 @@ def _evaluate_early_signals(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | No
         if current > threshold:
             return RuleHit(
                 code="early_cost_per_lpv_signal",
-                title="Дорогой просмотр лендинга",
+                title=rule_label("early_cost_per_lpv_signal"),
                 stage=AlertStage.EARLY_SIGNAL,
                 value=current,
                 threshold=threshold,
                 summary=f"Cost/LPV {_format_money_value(current)} > лимит {_format_money_value(threshold)}",
                 reason_text=(
-                    f"Стоимость просмотра лендинга слишком высокая: {_format_money_value(current)} "
+                    f"Открытие PWA обходится слишком дорого: {_format_money_value(current)} "
                     f"при лимите {_format_money_value(threshold)} "
                     f"({ctx.early_cost_per_lpv_signal_percent_of_cpa:.0f}% от CPA). "
                     f"Экономика следующих шагов воронки будет нереалистичной."
@@ -409,7 +410,7 @@ def _evaluate_regs_without_deposits(row: ScannedAdRow, ctx: RuleContext) -> Rule
     if current >= stop_val:
         return RuleHit(
             code="regs_no_dep_stop",
-            title="Реги без депозитов",
+            title=rule_label("regs_no_dep_stop"),
             stage=AlertStage.STOP,
             value=current,
             threshold=stop_val,
@@ -423,7 +424,7 @@ def _evaluate_regs_without_deposits(row: ScannedAdRow, ctx: RuleContext) -> Rule
     if current >= warning_val:
         return RuleHit(
             code="regs_no_dep_stop",
-            title="Реги без депозитов",
+            title=rule_label("regs_no_dep_stop"),
             stage=AlertStage.WARNING,
             value=current,
             threshold=warning_val,

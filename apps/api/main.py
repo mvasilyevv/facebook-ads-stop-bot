@@ -18,9 +18,8 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from apps.api.deps import get_db
-from apps.api.routers import dashboard, offers, settings, vision_telegram
-from apps.api.routes.miniapp import router as miniapp_router
+from apps.api.deps import get_db, verify_api_key
+from apps.api.routers import dashboard, history, offers, settings, vision_telegram
 from apps.api.schemas import (  # noqa: F401 - re-exported for backward compatibility
     ActiveIncidentSchema,
     AdDiagnosticsSchema,
@@ -90,7 +89,10 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="FB Stop Bot API", version="0.1.0", lifespan=lifespan)
 
-# CORS для React-фронтенда (только localhost-порты Vite и MiniApp)
+# Общая зависимость API-ключа для всех роутеров (кроме /health)
+_api_key_dep = [Depends(verify_api_key)]
+
+# CORS для React-фронтенда (localhost-порты Vite)
 _CORS_ORIGINS = [
     "http://localhost:5173",
     "http://localhost:5174",
@@ -107,14 +109,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Включаем маршруты MiniApp
-app.include_router(miniapp_router)
-
-# Включаем роутеры для основного API
-app.include_router(offers.router)
-app.include_router(settings.router)
-app.include_router(dashboard.router)
-app.include_router(vision_telegram.router)
+# Включаем роутеры для основного API (с аутентификацией по API-ключу)
+app.include_router(offers.router, dependencies=_api_key_dep)
+app.include_router(settings.router, dependencies=_api_key_dep)
+app.include_router(dashboard.router, dependencies=_api_key_dep)
+app.include_router(vision_telegram.router, dependencies=_api_key_dep)
+app.include_router(history.router, dependencies=_api_key_dep)
 
 
 # ==========================================

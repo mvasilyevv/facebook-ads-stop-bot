@@ -1,44 +1,38 @@
 import { ALERT_STATE_LABELS, ALERT_STATE_COLORS, ALERT_STATE_TOOLTIPS } from '../constants/alertStates.js';
+import { twMerge } from 'tailwind-merge';
 
-// Pill-бейдж статуса алерта объявления
+// Маппинг состояний на Tailwind-цвета
+const STATE_STYLES = {
+  NORMAL:            'bg-success-muted text-success border-success/40',
+  EARLY_SIGNAL_SENT: 'bg-early-muted text-early border-early/40',
+  WARNING_SENT:      'bg-warning-muted text-warning border-warning/40',
+  STOP_SENT:         'bg-danger-muted text-danger border-danger/40',
+  CLAIMED:           'bg-elevated text-muted border-border',
+  DISABLED:          'bg-elevated text-muted border-border opacity-60',
+  ARCHIVED:          'bg-elevated text-muted border-border opacity-60',
+};
+
+const SIZE_STYLES = {
+  sm: 'px-1.5 py-0.5 text-[10px]',
+  md: 'px-2 py-0.5 text-2xs',
+  lg: 'px-2.5 py-1 text-2xs',
+};
+
+/** Pill-бейдж статуса алерта объявления */
 export function StateIcon({ state = 'NORMAL', size = 'md' }) {
   const label = ALERT_STATE_LABELS[state] || '?';
-  const bgColor = ALERT_STATE_COLORS[state] || 'var(--bg-tertiary)';
   const tooltip = ALERT_STATE_TOOLTIPS[state] || state;
-
-  const colorMap = {
-    NORMAL:            'var(--accent-emerald-dim)',
-    EARLY_SIGNAL_SENT: 'var(--accent-orchid-dim)',
-    WARNING_SENT:      'var(--accent-gold-dim)',
-    STOP_SENT:         'var(--accent-crimson-dim)',
-    CLAIMED:           'var(--bg-tertiary)',
-    DISABLED:          'var(--bg-tertiary)',
-    ARCHIVED:          'var(--bg-tertiary)',
-  };
-
-  const bg = colorMap[state] || 'var(--bg-tertiary)';
-  const fontSize = size === 'lg' ? '11px' : size === 'sm' ? '10px' : '11px';
-  const padding = size === 'lg' ? '3px 8px' : '2px 6px';
+  const stateStyle = STATE_STYLES[state] || STATE_STYLES.NORMAL;
+  const sizeStyle = SIZE_STYLES[size] || SIZE_STYLES.md;
 
   return (
     <span
-      className={`state-icon state-icon--${state.toLowerCase()} state-icon--${size}`}
+      className={twMerge(
+        'inline-block rounded-md border font-semibold uppercase tracking-wide leading-snug whitespace-nowrap',
+        stateStyle,
+        sizeStyle,
+      )}
       title={tooltip}
-      style={{
-        display: 'inline-block',
-        background: bg,
-        color: bgColor,
-        border: '1px solid currentColor',
-        borderRadius: '6px',
-        padding,
-        fontSize,
-        fontWeight: 600,
-        letterSpacing: '0.03em',
-        textTransform: 'uppercase',
-        lineHeight: 1.4,
-        whiteSpace: 'nowrap',
-        opacity: state === 'DISABLED' || state === 'ARCHIVED' ? 0.6 : 1,
-      }}
     >
       {label}
     </span>

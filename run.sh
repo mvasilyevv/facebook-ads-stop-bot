@@ -2,9 +2,11 @@
 # -*- coding: utf-8 -*-
 # Единый скрипт запуска FB Stop Bot
 # Использование:
-#   ./run.sh          — запуск всех сервисов
-#   ./run.sh --down   — остановка всех сервисов
-#   ./run.sh --logs   — логи всех процессов
+#   ./run.sh            — запуск всех сервисов
+#   ./run.sh --dev      — запуск в dev-режиме (API с --reload)
+#   ./run.sh --down     — остановка всех сервисов
+#   ./run.sh --restart  — перезапуск (--down + запуск)
+#   ./run.sh --logs     — логи всех процессов
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -129,8 +131,7 @@ check_process_started() {
         echo -e "${YELLOW}Последние строки $log_file:${NC}"
         tail -20 "$log_file" || true
     fi
-    stop_all
-    exit 1
+    return 1
 }
 
 terminate_matching_processes() {
@@ -195,11 +196,29 @@ case "${1:-}" in
         stop_all
         exit 0
         ;;
+    --restart)
+        stop_all
+        echo ""
+        exec "$0"
+        ;;
+    --dev)
+        export DEV_MODE=1
+        ;;
     --logs)
         show_logs
         exit 0
         ;;
 esac
+
+# Ловим Ctrl+C / SIGTERM / аварийный выход на любом этапе запуска
+CLEANUP_DONE=0
+do_cleanup() {
+    [ "$CLEANUP_DONE" -eq 0 ] || return 0
+    CLEANUP_DONE=1
+    stop_all
+}
+trap 'do_cleanup; exit 1' INT TERM
+trap 'do_cleanup' EXIT
 
 # ==========================================
 # Проверки перед запуском
@@ -294,8 +313,18 @@ if [ ! -d .venv ]; then
     python3 -m venv .venv
 fi
 
-echo -e "${BLUE}📦 Устанавливаю зависимости...${NC}"
-.venv/bin/pip install -q -e '.[dev]' 2>&1 | tail -3
+DEPS_HASH_FILE="$LOG_DIR/.pyproject_hash"
+CURRENT_HASH="$(md5 -q pyproject.toml 2>/dev/null || md5sum pyproject.toml 2>/dev/null | cut -d' ' -f1)"
+CACHED_HASH=""
+[ -f "$DEPS_HASH_FILE" ] && CACHED_HASH="$(cat "$DEPS_HASH_FILE")"
+
+if [ "$CURRENT_HASH" != "$CACHED_HASH" ]; then
+    echo -e "${BLUE}📦 Устанавливаю зависимости...${NC}"
+    .venv/bin/pip install -q -e '.[dev]' 2>&1 | tail -3
+    echo "$CURRENT_HASH" > "$DEPS_HASH_FILE"
+else
+    echo -e "${GREEN}📦 Зависимости актуальны (pyproject.toml не менялся)${NC}"
+fi
 
 # ==========================================
 # 3. Миграции БД
@@ -326,13 +355,39 @@ fi
 # ==========================================
 # 4. Запуск API
 # ==========================================
-echo -e "${BLUE}🚀 Запускаю API (порт 8100)...${NC}"
+DEV_MODE="${DEV_MODE:-0}"
+UVICORN_EXTRA_ARGS=""
+if [ "$DEV_MODE" -eq 1 ]; then
+    UVICORN_EXTRA_ARGS="--reload"
+    echo -e "${BLUE}🚀 Запускаю API (порт 8100, dev mode)...${NC}"
+else
+    echo -e "${BLUE}🚀 Запускаю API (порт 8100)...${NC}"
+fi
+# shellcheck disable=SC2086
 .venv/bin/uvicorn apps.api.main:app \
-    --host 0.0.0.0 --port 8100 \
+    --host 0.0.0.0 --port 8100 $UVICORN_EXTRA_ARGS \
     > "$LOG_DIR/api.log" 2>&1 &
 API_PID=$!
 echo "$API_PID api" >> "$PID_FILE"
 echo -e "${GREEN}  API PID: $API_PID${NC}"
+
+# Ждём готовности API через /health
+echo -e "${BLUE}⏳ Жду готовности API...${NC}"
+for i in $(seq 1 20); do
+    if curl -sf http://localhost:8100/health >/dev/null 2>&1; then
+        echo -e "${GREEN}✅ API отвечает на /health${NC}"
+        break
+    fi
+    if ! is_process_active "$API_PID"; then
+        echo -e "${RED}❌ API процесс завершился при запуске${NC}"
+        tail -20 "$LOG_DIR/api.log" || true
+        exit 1
+    fi
+    if [ "$i" -eq 20 ]; then
+        echo -e "${YELLOW}⚠️  API не ответил на /health за 20с, продолжаю запуск${NC}"
+    fi
+    sleep 1
+done
 
 # ==========================================
 # 5. Запуск Observer Worker
@@ -388,14 +443,15 @@ echo -e "${GREEN}  Telegram PID: $TG_PID${NC}"
 # ==========================================
 if [ -d frontend ]; then
     echo -e "${BLUE}🎨 Запускаю Frontend (Vite)...${NC}"
-    # Убиваем старые Vite-процессы чтобы не накапливались на разных портах
-    pkill -f "node.*vite" 2>/dev/null || true
+    # Убиваем старые Vite-процессы ТОЛЬКО этого проекта
+    pgrep -f "node.*vite.*$SCRIPT_DIR/frontend" 2>/dev/null | xargs kill 2>/dev/null || true
     sleep 1
     cd frontend
     if [ ! -d node_modules ]; then
         npm install --silent 2>&1 | tail -3
     fi
-    npm run dev > "$LOG_DIR/frontend.log" 2>&1 &
+    # Прокидываем API_KEY из .env в Vite
+    VITE_API_KEY="${API_KEY:-}" npm run dev > "$LOG_DIR/frontend.log" 2>&1 &
     FRONTEND_PID=$!
     echo "$FRONTEND_PID frontend" >> "$PID_FILE"
     echo -e "${GREEN}  Frontend PID: $FRONTEND_PID${NC}"
@@ -417,23 +473,29 @@ fi
 # 11. Проверка что процессы не завершились сразу
 # ==========================================
 sleep 2
-check_process_started "$API_PID" "API" "$LOG_DIR/api.log"
-check_process_started "$OBSERVER_PID" "Observer Worker" "$LOG_DIR/observer.log"
-check_process_started "$DISABLE_PID" "Disable Worker" "$LOG_DIR/disable_worker.log"
-check_process_started "$ENABLE_PID" "Enable Worker" "$LOG_DIR/enable_worker.log"
+BOOT_OK=1
+check_process_started "$API_PID" "API" "$LOG_DIR/api.log" || BOOT_OK=0
+check_process_started "$OBSERVER_PID" "Observer Worker" "$LOG_DIR/observer.log" || BOOT_OK=0
+check_process_started "$DISABLE_PID" "Disable Worker" "$LOG_DIR/disable_worker.log" || BOOT_OK=0
+check_process_started "$ENABLE_PID" "Enable Worker" "$LOG_DIR/enable_worker.log" || BOOT_OK=0
 if [ -n "${ENABLE_RECO_PID:-}" ]; then
-    check_process_started "$ENABLE_RECO_PID" "Enable Recommendation Worker" "$LOG_DIR/enable_recommendation_worker.log"
+    check_process_started "$ENABLE_RECO_PID" "Enable Recommendation Worker" "$LOG_DIR/enable_recommendation_worker.log" || BOOT_OK=0
 fi
-check_process_started "$TG_PID" "Telegram Poller" "$LOG_DIR/telegram.log"
+check_process_started "$TG_PID" "Telegram Poller" "$LOG_DIR/telegram.log" || BOOT_OK=0
 if [ -n "${FRONTEND_PID:-}" ]; then
-    check_process_started "$FRONTEND_PID" "Frontend" "$LOG_DIR/frontend.log"
+    check_process_started "$FRONTEND_PID" "Frontend" "$LOG_DIR/frontend.log" || BOOT_OK=0
+fi
+
+if [ "$BOOT_OK" -eq 0 ]; then
+    exit 1
 fi
 
 # ==========================================
 # 12. Caffeinate — запрет сна ноутбука
 # ==========================================
 if command -v caffeinate &>/dev/null; then
-    caffeinate -i -d &
+    # -w $$ — caffeinate завершится автоматически при гибели скрипта
+    caffeinate -i -d -w $$ &
     CAFFEINATE_PID=$!
     echo "$CAFFEINATE_PID caffeinate" >> "$PID_FILE"
     CAFFEINATE_ENABLED=1
@@ -465,6 +527,5 @@ fi
 echo ""
 
 # Ждём завершения — Ctrl+C останавливает всё
-trap 'stop_all; exit 0' INT TERM
 echo -e "${BLUE}Нажмите Ctrl+C для остановки всех сервисов${NC}"
 wait

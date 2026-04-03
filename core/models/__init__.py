@@ -128,6 +128,13 @@ class ObserverSettings(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     worker_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     worker_last_error: Mapped[str | None] = mapped_column(String(500))
     worker_last_error_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Глобальные настройки комиссий для расчёта profit
+    install_cost: Mapped[Decimal] = mapped_column(
+        Numeric(8, 4), default=Decimal("0.02"), server_default="0.02"
+    )
+    agent_commission_percent: Mapped[Decimal] = mapped_column(
+        Numeric(6, 2), default=Decimal("3"), server_default="3"
+    )
 
 
 class CabinetDayArchive(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -141,6 +148,7 @@ class CabinetDayArchive(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     ads_count: Mapped[int] = mapped_column(Integer, default=0)
     summary_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     campaigns_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    offer_stats_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 
 # === Telegram-настройки ===
@@ -249,7 +257,7 @@ class OfferRuleConfig(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         Numeric(8, 2), default=Decimal("5")
     )
 
-    # Ранний сигнал: низкая доходимость до лендинга
+    # Ранний сигнал: мало открытий PWA после клика
     early_lpv_ratio_signal_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     early_lpv_ratio_signal_min_percent: Mapped[Decimal] = mapped_column(
         Numeric(8, 2), default=Decimal("60")
@@ -350,6 +358,7 @@ class AlertEvent(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     """Событие алерта (WARNING или STOP)."""
 
     __tablename__ = "alert_events"
+    __table_args__ = (Index("ix_alert_event_created_at", "created_at"),)
 
     snapshot_id: Mapped[_uuid.UUID | None] = mapped_column(
         ForeignKey("ad_snapshots.id", ondelete="SET NULL"), index=True
@@ -386,6 +395,8 @@ class DisableTask(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         Index("ix_disable_task_queue", "status", "next_retry_at"),
         # Сверка по инциденту: поиск задач конкретного объявления в рамках токена
         Index("ix_disable_task_ad_incident", "fb_ad_id", "open_state_token"),
+        # Dashboard: фильтрация по времени завершения
+        Index("ix_disable_task_completed_at", "completed_at"),
     )
 
     snapshot_id: Mapped[_uuid.UUID | None] = mapped_column(

@@ -12,35 +12,29 @@ export default function SettingsPage() {
   const settings = useSettingsData();
 
   useEffect(() => {
-    if (!isMobile) {
-      setBrowserOpen(true);
-    }
+    if (!isMobile) setBrowserOpen(true);
   }, [isMobile]);
 
   if (settings.loading) {
     return (
-      <div className="settings-page animate-in">
-        <div className="page-header">
-          <div>
-            <h1 className="page-title">Настройки</h1>
-            <div className="page-subtitle">Загружаем конфигурацию…</div>
-          </div>
+      <div className="space-y-md animate-fade-in">
+        <div>
+          <h1 className="text-lg text-primary">Настройки</h1>
+          <p className="text-sm text-muted">Загружаем конфигурацию…</p>
         </div>
-        <div className="loading-state">
-          <div className="spinner" />
-          <div>Загрузка настроек...</div>
+        <div className="flex items-center gap-3 py-12 text-sm text-muted">
+          <div className="h-5 w-5 animate-spin rounded-full border-2 border-accent border-t-transparent" />
+          Загрузка настроек...
         </div>
       </div>
     );
   }
 
   return (
-    <div className="settings-page animate-in">
-      <div className="page-header">
-        <div>
-          <h1 className="page-title">Настройки</h1>
-          <div className="page-subtitle">Observer, пороги, Telegram и Vision.</div>
-        </div>
+    <div className="space-y-lg animate-fade-in">
+      <div>
+        <h1 className="text-lg text-primary">Настройки</h1>
+        <p className="text-sm text-muted">Observer, пороги, Telegram и Vision.</p>
       </div>
 
       <ObserverSettingsSection
@@ -79,9 +73,7 @@ export default function SettingsPage() {
         vision={settings.vision.value}
         visionProfiles={settings.vision.visionProfiles}
         showVisionToken={settings.vision.showVisionToken}
-        onToggleTokenVisibility={() =>
-          settings.vision.setShowVisionToken((value) => !value)
-        }
+        onToggleTokenVisibility={() => settings.vision.setShowVisionToken((v) => !v)}
         onVisionChange={settings.vision.setValue}
         onLoadProfiles={settings.vision.loadProfiles}
         profilesLoading={settings.vision.profilesLoading}
@@ -89,7 +81,7 @@ export default function SettingsPage() {
         onReconnect={settings.vision.reconnect}
         saving={settings.saving}
         browserOpen={browserOpen}
-        onToggleBrowserOpen={() => setBrowserOpen((value) => !value)}
+        onToggleBrowserOpen={() => setBrowserOpen((v) => !v)}
       />
 
       {settings.toast && (

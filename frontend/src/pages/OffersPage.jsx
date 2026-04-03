@@ -1,17 +1,20 @@
 import { useState, useEffect, useCallback } from 'react';
 import { getOffers, createOffer, updateOffer, deleteOffer, getOfferRules, updateOfferRules } from '../api.js';
 
-/* Тогл-переключатель с ARIA-атрибутами */
+/* Тогл-переключатель */
 function Toggle({ on, onChange, label }) {
   return (
     <button
-      className={`toggle-switch ${on ? 'on' : ''}`}
+      className="toggle-track"
+      data-active={on}
       onClick={() => onChange(!on)}
       type="button"
       role="switch"
       aria-checked={on}
       aria-label={label}
-    />
+    >
+      <span className="toggle-knob" data-active={on} />
+    </button>
   );
 }
 
@@ -21,12 +24,16 @@ function Toast({ message, type, onClose }) {
     const timer = setTimeout(onClose, 3000);
     return () => clearTimeout(timer);
   }, [onClose]);
+  const cls = type === 'error' ? 'border-danger/30 bg-danger-muted text-danger' : 'border-success/30 bg-success-muted text-success';
   return (
-    <div className={`toast toast-${type}`} role="alert">
+    <div className={`fixed bottom-4 right-4 z-50 rounded-md border px-4 py-3 text-sm animate-fade-in ${cls}`} role="alert">
       {message}
     </div>
   );
 }
+
+/* Инпут */
+const inputCls = 'w-full rounded bg-elevated border border-border px-3 py-2 text-sm text-primary focus:border-accent focus:ring-1 focus:ring-accent focus:outline-none disabled:opacity-50';
 
 /* Модалка создания/редактирования оффера */
 function OfferModal({ offer, onSave, onClose }) {
@@ -42,83 +49,37 @@ function OfferModal({ offer, onSave, onClose }) {
     e.preventDefault();
     setSaving(true);
     try {
-      await onSave({
-        code: form.code,
-        name: form.name,
-        cpa_amount: parseFloat(form.cpa) || 0,
-        is_active: form.is_active,
-      });
+      await onSave({ code: form.code, name: form.name, cpa_amount: parseFloat(form.cpa) || 0, is_active: form.is_active });
     } finally {
       setSaving(false);
     }
   };
 
   return (
-    <div className="modal-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-label={offer ? 'Редактировать оффер' : 'Создать оффер'}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h2 className="modal-title">{offer ? 'Редактировать оффер' : 'Новый оффер'}</h2>
-        <form onSubmit={handleSubmit}>
-          <div className="form-group" style={{ marginBottom: 16 }}>
-            <label className="form-label" htmlFor="offer-code">
-              Код оффера
-            </label>
-            <input
-              id="offer-code"
-              className="form-input"
-              type="text"
-              placeholder="OFFER_AU_42"
-              value={form.code}
-              onChange={(e) => setForm({ ...form, code: e.target.value.toUpperCase() })}
-              required
-              disabled={!!offer}
-            />
-            <div className="form-hint">
-              Код используется для сопоставления — ищется в названии кампании / объявления
-            </div>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 animate-fade-in" onClick={onClose} role="dialog" aria-modal="true">
+      <div className="panel w-full max-w-md p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
+        <h2 className="text-lg text-primary">{offer ? 'Редактировать оффер' : 'Новый оффер'}</h2>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="mb-1 block text-2xs font-semibold uppercase tracking-wider text-secondary" htmlFor="offer-code">Код оффера</label>
+            <input id="offer-code" className={inputCls} type="text" placeholder="OFFER_AU_42" value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value.toUpperCase() })} required disabled={!!offer} />
+            <div className="mt-1 text-2xs text-muted">Код используется для сопоставления — ищется в названии кампании</div>
           </div>
-          <div className="form-group" style={{ marginBottom: 16 }}>
-            <label className="form-label" htmlFor="offer-name">
-              Название
-            </label>
-            <input
-              id="offer-name"
-              className="form-input"
-              type="text"
-              placeholder="Australia — iPhone 15"
-              value={form.name}
-              onChange={(e) => setForm({ ...form, name: e.target.value })}
-              required
-            />
+          <div>
+            <label className="mb-1 block text-2xs font-semibold uppercase tracking-wider text-secondary" htmlFor="offer-name">Название</label>
+            <input id="offer-name" className={inputCls} type="text" placeholder="Australia — iPhone 15" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required />
           </div>
-          <div className="form-group" style={{ marginBottom: 16 }}>
-            <label className="form-label" htmlFor="offer-cpa">
-              CPA ($)
-            </label>
-            <input
-              id="offer-cpa"
-              className="form-input"
-              type="number"
-              step="0.01"
-              min="0"
-              placeholder="5.00"
-              value={form.cpa}
-              onChange={(e) => setForm({ ...form, cpa: e.target.value })}
-              required
-            />
+          <div>
+            <label className="mb-1 block text-2xs font-semibold uppercase tracking-wider text-secondary" htmlFor="offer-cpa">CPA ($)</label>
+            <input id="offer-cpa" className={inputCls} type="number" step="0.01" min="0" placeholder="5.00" value={form.cpa} onChange={(e) => setForm({ ...form, cpa: e.target.value })} required />
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+          <div className="flex items-center gap-3">
             <Toggle on={form.is_active} onChange={(v) => setForm({ ...form, is_active: v })} label="Оффер активен" />
-            <span style={{ color: 'var(--text-secondary)', fontSize: 14 }}>
-              {form.is_active ? 'Активен' : 'Выключен'}
-            </span>
+            <span className="text-sm text-secondary">{form.is_active ? 'Активен' : 'Выключен'}</span>
           </div>
-          <div className="modal-actions">
-            <button type="button" className="btn btn-outline" onClick={onClose}>
-              Отмена
-            </button>
-            <button type="submit" className="btn btn-primary" disabled={saving}>
-              {saving ? 'Сохранение...' : offer ? 'Сохранить' : 'Создать'}
-            </button>
+          <div className="flex gap-2 pt-2">
+            <button type="button" className="btn-secondary" onClick={onClose}>Отмена</button>
+            <button type="submit" className="btn-primary" disabled={saving}>{saving ? 'Сохранение...' : offer ? 'Сохранить' : 'Создать'}</button>
           </div>
         </form>
       </div>
@@ -126,44 +87,20 @@ function OfferModal({ offer, onSave, onClose }) {
   );
 }
 
-/* Шесть стоп-правил */
+/* Определения стоп-правил */
 const RULE_DEFS = [
   { key: 'cpc_percent', title: 'Правило 1: CPC > X% CPA', hint: 'Стоп при стоимости клика выше установленного % от целевого CPA', fields: [{ name: 'cpc_percent_stop', label: 'Процент стопа (%)', type: 'number' }] },
   { key: 'cpl_percent', title: 'Правило 2: CPL > X% CPA', hint: 'Стоп при стоимости лида выше установленного % от целевого CPA', fields: [{ name: 'cpl_percent_stop', label: 'Процент стопа (%)', type: 'number' }] },
   { key: 'cpr_percent', title: 'Правило 3: CPR > X% CPA', hint: 'Стоп при стоимости регистрации выше установленного % от целевого CPA', fields: [{ name: 'cpr_percent_stop', label: 'Процент стопа (%)', type: 'number' }] },
-  { key: 'regs_no_dep', title: 'Правило 4: N регистраций без депозитов', hint: 'Стоп при достижении заданного количества регистраций подряд без депозита', fields: [{ name: 'regs_no_dep_stop_count', label: 'Количество регистраций', type: 'number' }] },
+  { key: 'regs_no_dep', title: 'Правило 4: N регистраций без депозитов', hint: 'Стоп при заданном количестве регистраций без депозита', fields: [{ name: 'regs_no_dep_stop_count', label: 'Количество регистраций', type: 'number' }] },
   { key: 'spend_no_dep', title: 'Правило 5: Расход без депозитов', hint: 'Стоп при расходе в диапазоне % от CPA без депозитов', fields: [{ name: 'spend_no_dep_from_percent', label: 'Расход от (% CPA)', type: 'number' }, { name: 'spend_no_dep_to_percent', label: 'Расход до (% CPA)', type: 'number' }] },
   { key: 'spend_with_dep', title: 'Правило 6: Расход с депозитом', hint: 'Стоп при расходе в диапазоне % от CPA с депозитом', fields: [{ name: 'spend_with_dep_from_percent', label: 'Расход от (% CPA)', type: 'number' }, { name: 'spend_with_dep_to_percent', label: 'Расход до (% CPA)', type: 'number' }] },
 ];
 
 const EARLY_SIGNAL_DEFS = [
-  {
-    key: 'early_outbound_ctr_signal',
-    title: 'Ранний сигнал 1: слабый CTR исходящих кликов',
-    hint: 'Предупреждение при низком CTR кликов уходящих на лендинг',
-    fields: [
-      { name: 'early_outbound_ctr_signal_min_percent', label: 'Минимальный CTR исходящих кликов (%)', type: 'number' },
-      { name: 'early_outbound_ctr_signal_min_spend_percent', label: 'Минимальный расход для проверки (% CPA)', type: 'number' },
-    ],
-  },
-  {
-    key: 'early_lpv_ratio_signal',
-    title: 'Ранний сигнал 2: слабая доходимость до лендинга',
-    hint: 'Предупреждение при низкой доле просмотров лендинга от исходящих кликов',
-    fields: [
-      { name: 'early_lpv_ratio_signal_min_percent', label: 'Минимальная доля LPV (%)', type: 'number' },
-      { name: 'early_lpv_ratio_signal_min_outbound_clicks', label: 'Минимум исходящих кликов для проверки', type: 'number' },
-    ],
-  },
-  {
-    key: 'early_cost_per_lpv_signal',
-    title: 'Ранний сигнал 3: дорогой просмотр лендинга',
-    hint: 'Предупреждение при превышении целевой цены за просмотр лендинга',
-    fields: [
-      { name: 'early_cost_per_lpv_signal_percent_of_cpa', label: 'Лимит цены LPV (% CPA)', type: 'number' },
-      { name: 'early_cost_per_lpv_signal_min_views', label: 'Минимум LPV для проверки', type: 'number' },
-    ],
-  },
+  { key: 'early_outbound_ctr_signal', title: 'Ранний сигнал 1: мало переходов на PWA', hint: 'Предупреждение при низком CTR', fields: [{ name: 'early_outbound_ctr_signal_min_percent', label: 'Минимальный CTR (%)', type: 'number' }, { name: 'early_outbound_ctr_signal_min_spend_percent', label: 'Мин. расход (% CPA)', type: 'number' }] },
+  { key: 'early_lpv_ratio_signal', title: 'Ранний сигнал 2: мало открытий PWA после клика', hint: 'Предупреждение при низкой доле открытий', fields: [{ name: 'early_lpv_ratio_signal_min_percent', label: 'Минимальная доля открытий PWA (%)', type: 'number' }, { name: 'early_lpv_ratio_signal_min_outbound_clicks', label: 'Мин. кликов для проверки', type: 'number' }] },
+  { key: 'early_cost_per_lpv_signal', title: 'Ранний сигнал 3: дорогое открытие PWA', hint: 'Предупреждение при дорогом открытии', fields: [{ name: 'early_cost_per_lpv_signal_percent_of_cpa', label: 'Лимит цены открытия (% CPA)', type: 'number' }, { name: 'early_cost_per_lpv_signal_min_views', label: 'Мин. открытий для проверки', type: 'number' }] },
 ];
 
 const DIAGNOSTIC_FIELDS = [
@@ -185,26 +122,38 @@ const DEFAULT_RULES = {
   frequency_critical_threshold: '3',
 };
 
-function FieldHint({ fieldName, value }) {
-  const hints = {
-    cpc_percent_stop: `Стоп при CPC выше ${value || '—'}% от целевого CPA`,
-    cpl_percent_stop: `Стоп при CPL выше ${value || '—'}% от целевого CPA`,
-    cpr_percent_stop: `Стоп при CPR выше ${value || '—'}% от целевого CPA`,
-    regs_no_dep_stop_count: `Стоп при ${value || '—'} регистрациях без депозитов подряд`,
-    spend_no_dep_from_percent: 'Начальная граница расхода без депозитов (% от CPA)',
-    spend_no_dep_to_percent: 'Верхняя граница расхода без депозитов (% от CPA)',
-    spend_with_dep_from_percent: 'Начальная граница расхода с депозитом (% от CPA)',
-    spend_with_dep_to_percent: 'Верхняя граница расхода с депозитом (% от CPA)',
-    early_outbound_ctr_signal_min_percent: `Ранний сигнал при CTR исходящих кликов ниже ${value || '—'}%`,
-    early_outbound_ctr_signal_min_spend_percent: `Проверка ранних сигналов только при расходе выше ${value || '—'}% от CPA`,
-    early_lpv_ratio_signal_min_percent: `Ранний сигнал при доле LPV ниже ${value || '—'}% от исходящих кликов`,
-    early_lpv_ratio_signal_min_outbound_clicks: `Проверка только при минимум ${value || '—'} исходящих кликов`,
-    early_cost_per_lpv_signal_percent_of_cpa: `Ранний сигнал при цене LPV выше ${value || '—'}% от CPA`,
-    early_cost_per_lpv_signal_min_views: `Проверка только при минимум ${value || '—'} просмотров лендинга`,
-  };
-  return hints[fieldName] ? (
-    <p className="text-xs text-gray-400 mt-1">{hints[fieldName]}</p>
-  ) : null;
+/* Блок правила (используется для стоп-правил и ранних сигналов) */
+function RuleBlock({ rule, rules, setRules }) {
+  return (
+    <div className="rounded-md border border-border bg-elevated/50 p-4 space-y-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-medium text-primary">{rule.title}</div>
+          {rule.hint && <p className="mt-0.5 text-2xs text-muted">{rule.hint}</p>}
+        </div>
+        <Toggle on={rules[`${rule.key}_enabled`]} onChange={(v) => setRules({ ...rules, [`${rule.key}_enabled`]: v })} label={`Включить ${rule.title}`} />
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        {rule.fields.map((field) => (
+          <div key={field.name}>
+            <label className="mb-1 block text-2xs font-semibold uppercase tracking-wider text-secondary" htmlFor={`rule-${field.name}`}>
+              {field.label}
+            </label>
+            <input
+              id={`rule-${field.name}`}
+              className={inputCls}
+              type="text"
+              inputMode="numeric"
+              pattern="[0-9]*"
+              value={rules[field.name] || ''}
+              onChange={(e) => setRules({ ...rules, [field.name]: e.target.value.replace(/\D/g, '') })}
+              disabled={!rules[`${rule.key}_enabled`]}
+            />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 export default function OffersPage() {
@@ -219,7 +168,6 @@ export default function OffersPage() {
   const [toast, setToast] = useState(null);
   const [savingRules, setSavingRules] = useState(false);
 
-  /* Загрузка офферов */
   const fetchOffers = useCallback(async () => {
     try {
       setError(null);
@@ -232,25 +180,15 @@ export default function OffersPage() {
     }
   }, []);
 
-  useEffect(() => {
-    fetchOffers();
-  }, [fetchOffers]);
+  useEffect(() => { fetchOffers(); }, [fetchOffers]);
 
-  /* Загрузка правил при открытии редактора */
   const openRules = useCallback(async (offerId) => {
-    if (editingId === offerId) {
-      setEditingId(null);
-      return;
-    }
+    if (editingId === offerId) { setEditingId(null); return; }
     setEditingId(offerId);
     setRulesLoading(true);
     try {
       const data = await getOfferRules(offerId);
-      if (data && typeof data === 'object') {
-        setRules({ ...DEFAULT_RULES, ...data });
-      } else {
-        setRules(DEFAULT_RULES);
-      }
+      setRules(data && typeof data === 'object' ? { ...DEFAULT_RULES, ...data } : DEFAULT_RULES);
     } catch {
       setRules(DEFAULT_RULES);
     } finally {
@@ -258,7 +196,6 @@ export default function OffersPage() {
     }
   }, [editingId]);
 
-  /* Сохранение правил */
   const handleSaveRules = async () => {
     if (!editingId) return;
     setSavingRules(true);
@@ -272,7 +209,6 @@ export default function OffersPage() {
     }
   };
 
-  /* Создание / редактирование оффера */
   const handleSaveOffer = async (data) => {
     try {
       if (editOffer) {
@@ -290,7 +226,6 @@ export default function OffersPage() {
     }
   };
 
-  /* Удаление оффера */
   const handleDelete = async (offer) => {
     if (!confirm(`Удалить оффер "${offer.name}"?`)) return;
     try {
@@ -304,102 +239,72 @@ export default function OffersPage() {
   };
 
   return (
-    <div className="animate-in">
-      <div className="page-header">
+    <div className="space-y-md animate-fade-in">
+      {/* Заголовок */}
+      <div className="flex items-center justify-between">
         <div>
-          <h1 className="page-title">Офферы</h1>
-          <div className="page-subtitle">
-            Управление офферами и стоп-правилами • {offers.length} шт.
-          </div>
+          <h1 className="text-lg text-primary">Офферы</h1>
+          <p className="text-sm text-muted">Управление офферами и стоп-правилами · {offers.length} шт.</p>
         </div>
-        <button
-          className="btn btn-primary"
-          onClick={() => {
-            setEditOffer(null);
-            setShowModal(true);
-          }}
-        >
+        <button className="btn-primary" onClick={() => { setEditOffer(null); setShowModal(true); }}>
           + Добавить оффер
         </button>
       </div>
 
-      {/* Состояние загрузки */}
+      {/* Загрузка */}
       {loading && (
-        <div className="loading-state">
-          <div className="spinner" />
-          <div>Загрузка офферов...</div>
+        <div className="flex items-center gap-3 py-12 text-sm text-muted">
+          <div className="h-5 w-5 animate-spin rounded-full border-2 border-accent border-t-transparent" />
+          Загрузка офферов...
         </div>
       )}
 
       {/* Ошибка */}
       {error && !loading && (
-        <div className="error-state">
-          <div className="error-state-text">{error}</div>
-          <button className="btn btn-outline btn-sm" onClick={fetchOffers}>
-            Повторить
-          </button>
+        <div className="rounded-md bg-danger-muted border border-danger/30 px-4 py-3 text-sm text-danger">
+          {error}
+          <button className="btn-ghost ml-3" onClick={fetchOffers}>Повторить</button>
         </div>
       )}
 
       {/* Таблица офферов */}
       {!loading && !error && (
-        <section aria-label="Список офферов" className="table-container" style={{ marginBottom: 24 }}>
-          <div className="table-scroll">
-            <table>
+        <div className="panel overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
               <thead>
-                <tr>
-                  <th scope="col">Код</th>
-                  <th scope="col">Название</th>
-                  <th scope="col">CPA</th>
-                  <th scope="col">Статус</th>
-                  <th scope="col">Правила</th>
-                  <th scope="col" className="actions-col">Действия</th>
+                <tr className="border-b border-border bg-elevated/50">
+                  <th className="th-sortable px-3 py-2 text-left">Код</th>
+                  <th className="th-sortable px-3 py-2 text-left">Название</th>
+                  <th className="th-sortable px-3 py-2 text-right">CPA</th>
+                  <th className="th-sortable px-3 py-2 text-center">Статус</th>
+                  <th className="th-sortable px-3 py-2 text-center">Правила</th>
+                  <th className="th-sortable px-3 py-2 text-right">Действия</th>
                 </tr>
               </thead>
               <tbody>
                 {offers.map((o) => (
-                  <tr key={o.id}>
-                    <td>
-                      <code style={{ color: 'var(--accent-purple)' }}>{o.code}</code>
-                    </td>
-                    <td style={{ fontWeight: 500, color: 'var(--text-primary)' }}>{o.name}</td>
-                    <td style={{ fontWeight: 600 }}>${Number(o.cpa_amount ?? o.cpa).toFixed(2)}</td>
-                    <td>
-                      <span className={`badge ${o.is_active ? 'badge-success' : 'badge-muted'}`}>
+                  <tr key={o.id} className="tr-hover border-b border-border">
+                    <td className="px-3 py-2.5 font-mono text-accent">{o.code}</td>
+                    <td className="px-3 py-2.5 font-medium text-primary">{o.name}</td>
+                    <td className="px-3 py-2.5 text-right font-mono font-semibold text-primary">${Number(o.cpa_amount ?? o.cpa).toFixed(2)}</td>
+                    <td className="px-3 py-2.5 text-center">
+                      <span className={o.is_active ? 'badge-success' : 'badge-neutral'}>
                         {o.is_active ? 'Активен' : 'Выкл.'}
                       </span>
                     </td>
-                    <td style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                      {editingId === o.id ? '↓ развёрнуто' : '✎ натсройте'}
+                    <td className="px-3 py-2.5 text-center text-2xs text-muted">
+                      {editingId === o.id ? '↓ развёрнуто' : '✎ настройте'}
                     </td>
-                    <td className="actions-col">
-                      <div style={{ display: 'flex', gap: 8 }}>
-                        <button
-                          className="btn btn-outline btn-sm"
-                          onClick={() => openRules(o.id)}
-                          aria-expanded={editingId === o.id}
-                          title="Настроить правила"
-                        >
+                    <td className="px-3 py-2.5">
+                      <div className="flex justify-end gap-1.5">
+                        <button className="btn-ghost text-2xs" onClick={() => openRules(o.id)} aria-expanded={editingId === o.id}>
                           {editingId === o.id ? 'Свернуть' : 'Правила'}
                         </button>
-                        <button
-                          className="btn btn-outline btn-sm"
-                          onClick={() => {
-                            setEditOffer(o);
-                            setShowModal(true);
-                          }}
-                          aria-label={`Редактировать ${o.name}`}
-                          title="Редактировать"
-                        >
+                        <button className="btn-ghost text-2xs" onClick={() => { setEditOffer(o); setShowModal(true); }}>
                           Изменить
                         </button>
-                        <button
-                          className="btn btn-outline btn-sm"
-                          onClick={() => handleDelete(o)}
-                          aria-label={`Удалить ${o.name}`}
-                          title="Удалить"
-                          style={{ color: 'var(--accent-red)' }}
-                        >
+                        <button className="btn-ghost text-2xs text-danger" onClick={() => handleDelete(o)}>
                           Удалить
                         </button>
                       </div>
@@ -410,163 +315,63 @@ export default function OffersPage() {
             </table>
           </div>
           {offers.length === 0 && (
-            <div className="empty-state">
-              <div className="empty-state-icon">○</div>
-              <div className="empty-state-title">Нет офферов</div>
-              <div>Создайте первый оффер, чтобы начать мониторинг</div>
+            <div className="py-12 text-center">
+              <div className="text-2xl text-muted">○</div>
+              <div className="mt-2 text-sm font-medium text-primary">Нет офферов</div>
+              <div className="text-2xs text-muted">Создайте первый оффер, чтобы начать мониторинг</div>
             </div>
           )}
-        </section>
+        </div>
       )}
 
-      {/* Конфигурация стоп-правил для выбранного оффера */}
+      {/* Стоп-правила */}
       {editingId && (
-        <section className="form-section animate-in" aria-label="Стоп-правила">
-          <div className="form-section-title">
-            Стоп-правила для: {offers.find((o) => o.id === editingId)?.name || '—'}
-          </div>
+        <div className="panel p-5 space-y-4 animate-fade-in">
+          <h2 className="text-base font-semibold text-primary">
+            Стоп-правила: {offers.find((o) => o.id === editingId)?.name || '—'}
+          </h2>
 
           {rulesLoading ? (
-            <div className="loading-state" style={{ padding: '24px 0' }}>
-              <div className="spinner" />
-              <div>Загрузка правил...</div>
+            <div className="flex items-center gap-3 py-8 text-sm text-muted">
+              <div className="h-5 w-5 animate-spin rounded-full border-2 border-accent border-t-transparent" />
+              Загрузка правил...
             </div>
           ) : (
             <>
-              {RULE_DEFS.map((rule) => (
-                <div
-                  key={rule.key}
-                  className="form-section"
-                  style={{ background: 'var(--bg-secondary)', marginBottom: 12 }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 12, gap: 12 }}>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <strong style={{ display: 'block', marginBottom: 4 }}>{rule.title}</strong>
-                      {rule.hint && <p style={{ fontSize: '12px', color: 'var(--text-secondary)', margin: 0 }}>{rule.hint}</p>}
-                    </div>
-                    <Toggle
-                      on={rules[`${rule.key}_enabled`]}
-                      onChange={(v) => setRules({ ...rules, [`${rule.key}_enabled`]: v })}
-                      label={`Включить ${rule.title}`}
-                    />
-                  </div>
-                  <div className="form-grid">
-                    {rule.fields.map((field) => (
-                      <div className="form-group" key={field.name}>
-                        <label className="form-label" htmlFor={`rule-${field.name}`}>
-                          {field.label}
-                        </label>
-                        <input
-                          id={`rule-${field.name}`}
-                          className="form-input"
-                          type="text"
-                          inputMode="numeric"
-                          pattern="[0-9]*"
-                          value={rules[field.name] || ''}
-                          onChange={(e) => setRules({ ...rules, [field.name]: e.target.value.replace(/\D/g, '') })}
-                          disabled={!rules[`${rule.key}_enabled`]}
-                        />
-                        <FieldHint fieldName={field.name} value={rules[field.name]} />
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ))}
-
-              <div className="form-section-title" style={{ marginTop: 20 }}>
-                Ранние сигналы до лидов
+              <div className="space-y-3">
+                {RULE_DEFS.map((rule) => <RuleBlock key={rule.key} rule={rule} rules={rules} setRules={setRules} />)}
               </div>
-              {EARLY_SIGNAL_DEFS.map((rule) => (
-                <div
-                  key={rule.key}
-                  className="form-section"
-                  style={{ background: 'var(--bg-secondary)', marginBottom: 12 }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 12, gap: 12 }}>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <strong style={{ display: 'block', marginBottom: 4 }}>{rule.title}</strong>
-                      {rule.hint && <p style={{ fontSize: '12px', color: 'var(--text-secondary)', margin: 0 }}>{rule.hint}</p>}
-                    </div>
-                    <Toggle
-                      on={rules[`${rule.key}_enabled`]}
-                      onChange={(v) => setRules({ ...rules, [`${rule.key}_enabled`]: v })}
-                      label={`Включить ${rule.title}`}
-                    />
-                  </div>
-                  <div className="form-grid">
-                    {rule.fields.map((field) => (
-                      <div className="form-group" key={field.name}>
-                        <label className="form-label" htmlFor={`rule-${field.name}`}>
-                          {field.label}
-                        </label>
-                        <input
-                          id={`rule-${field.name}`}
-                          className="form-input"
-                          type={field.type}
-                          value={rules[field.name] || ''}
-                          onChange={(e) => setRules({ ...rules, [field.name]: e.target.value })}
-                          disabled={!rules[`${rule.key}_enabled`]}
-                        />
-                        <FieldHint fieldName={field.name} value={rules[field.name]} />
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ))}
 
-              <div className="form-section-title" style={{ marginTop: 20 }}>
-                Диагностика CPM / частоты
+              <h3 className="pt-2 text-sm font-semibold text-primary">Ранние сигналы до лидов</h3>
+              <div className="space-y-3">
+                {EARLY_SIGNAL_DEFS.map((rule) => <RuleBlock key={rule.key} rule={rule} rules={rules} setRules={setRules} />)}
               </div>
-              <div className="form-section" style={{ background: 'var(--bg-secondary)', marginBottom: 12 }}>
-                <div style={{ color: 'var(--text-secondary)', fontSize: 13, marginBottom: 12 }}>
-                  CPM считается динамически от медианы активных объявлений оффера. Здесь настраиваются только границы для частоты.
-                </div>
-                <div className="form-grid">
+
+              <h3 className="pt-2 text-sm font-semibold text-primary">Диагностика CPM / частоты</h3>
+              <div className="rounded-md border border-border bg-elevated/50 p-4">
+                <p className="mb-3 text-2xs text-muted">CPM считается от медианы. Здесь только границы для частоты.</p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   {DIAGNOSTIC_FIELDS.map((field) => (
-                    <div className="form-group" key={field.name}>
-                      <label className="form-label" htmlFor={`rule-${field.name}`}>
-                        {field.label}
-                      </label>
-                      <input
-                        id={`rule-${field.name}`}
-                        className="form-input"
-                        type="text"
-                        inputMode="numeric"
-                        pattern="[0-9]*"
-                        value={rules[field.name] || ''}
-                        onChange={(e) => setRules({ ...rules, [field.name]: e.target.value.replace(/\D/g, '') })}
-                      />
+                    <div key={field.name}>
+                      <label className="mb-1 block text-2xs font-semibold uppercase tracking-wider text-secondary" htmlFor={`rule-${field.name}`}>{field.label}</label>
+                      <input id={`rule-${field.name}`} className={inputCls} type="text" inputMode="numeric" pattern="[0-9]*" value={rules[field.name] || ''} onChange={(e) => setRules({ ...rules, [field.name]: e.target.value.replace(/\D/g, '') })} />
                     </div>
                   ))}
                 </div>
               </div>
 
-              <div style={{ display: 'flex', gap: 12, marginTop: 16 }}>
-                <button className="btn btn-primary" onClick={handleSaveRules} disabled={savingRules}>
+              <div className="flex gap-2 pt-2">
+                <button className="btn-primary" onClick={handleSaveRules} disabled={savingRules}>
                   {savingRules ? 'Сохранение...' : 'Сохранить правила'}
                 </button>
-                <button className="btn btn-outline" onClick={() => setEditingId(null)}>
-                  Закрыть
-                </button>
+                <button className="btn-secondary" onClick={() => setEditingId(null)}>Закрыть</button>
               </div>
             </>
           )}
-        </section>
+        </div>
       )}
 
-      {/* Модалка создания / редактирования */}
-      {showModal && (
-        <OfferModal
-          offer={editOffer}
-          onSave={handleSaveOffer}
-          onClose={() => {
-            setShowModal(false);
-            setEditOffer(null);
-          }}
-        />
-      )}
-
-      {/* Toast-уведомления */}
+      {showModal && <OfferModal offer={editOffer} onSave={handleSaveOffer} onClose={() => { setShowModal(false); setEditOffer(null); }} />}
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
     </div>
   );

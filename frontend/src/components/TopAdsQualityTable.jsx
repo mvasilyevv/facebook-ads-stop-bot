@@ -1,238 +1,51 @@
-// Таблица топ объявлений по расходу с детальными метриками и статусом
+import { StateIcon } from './StateIcon.jsx';
+
+const fmt$ = (v) => `$${Number(v || 0).toFixed(2)}`;
+
+/** Таблица топ объявлений по расходу */
 export function TopAdsQualityTable({ data = [] }) {
-  if (!data || data.length === 0) {
-    return null;
-  }
-
-  const stateConfig = {
-    NORMAL: { bg: 'var(--accent-emerald-dim)', color: 'var(--accent-emerald)', label: 'Норма' },
-    EARLY_SIGNAL_SENT: { bg: 'var(--accent-orchid-dim)', color: 'var(--accent-orchid)', label: 'Ранний' },
-    WARNING_SENT: { bg: 'var(--accent-gold-dim)', color: 'var(--accent-gold)', label: 'Warning' },
-    STOP_SENT: { bg: 'var(--accent-crimson-dim)', color: 'var(--accent-crimson)', label: 'Стоп' },
-    DISABLED: { bg: 'var(--bg-raised)', color: 'var(--text-muted)', label: 'Откл.' },
-  };
-
-  const getStateConfig = (state) => stateConfig[state] || stateConfig.NORMAL;
-
-  const formatCurrency = (value) => `$${Number(value || 0).toFixed(2)}`;
-
-  const depositsColor = (leads, deposits) => {
-    if (deposits > 0) return 'var(--accent-emerald)';
-    if (leads > 0) return 'var(--accent-crimson)';
-    return 'var(--text-primary)';
-  };
-
   return (
-    <div style={{
-      background: 'var(--bg-card)',
-      border: '1px solid var(--border-color)',
-      borderRadius: '6px',
-      boxShadow: 'var(--shadow-sm)',
-      marginBottom: '16px',
-      overflow: 'hidden',
-    }}>
-      {/* Header strip */}
-      <div style={{
-        padding: '12px 16px',
-        borderBottom: '1px solid var(--border-color)',
-      }}>
-        <h3 style={{
-          margin: 0,
-          fontSize: '13px',
-          fontWeight: 700,
-          textTransform: 'uppercase',
-          color: 'var(--text-muted)',
-          letterSpacing: '0.06em',
-        }}>
-          Топ объявления по расходу
-        </h3>
-      </div>
-
-      {/* Table */}
-      <div style={{ overflowX: 'auto' }}>
-        <table style={{
-          width: '100%',
-          borderCollapse: 'collapse',
-          fontSize: '12px',
-        }}>
+    <div>
+      <h3 className="mb-3 text-2xs font-bold uppercase tracking-widest text-muted">
+        Топ объявления по расходу
+      </h3>
+      {(!data || data.length === 0) && (
+        <div className="py-4 text-center text-sm text-muted">Нет данных по объявлениям</div>
+      )}
+      {data && data.length > 0 && <div className="overflow-x-auto">
+        <table className="w-full text-sm">
           <thead>
-            <tr style={{ background: 'var(--bg-raised)' }}>
-              <th style={{
-                padding: '8px 12px',
-                textAlign: 'left',
-                fontWeight: 600,
-                fontSize: '11px',
-                textTransform: 'uppercase',
-                color: 'var(--text-muted)',
-                letterSpacing: '0.06em',
-              }}>
-                Объявление
-              </th>
-              <th style={{
-                padding: '8px 12px',
-                textAlign: 'right',
-                fontWeight: 600,
-                fontSize: '11px',
-                textTransform: 'uppercase',
-                color: 'var(--text-muted)',
-                letterSpacing: '0.06em',
-              }}>
-                Расход
-              </th>
-              <th style={{
-                padding: '8px 12px',
-                textAlign: 'right',
-                fontWeight: 600,
-                fontSize: '11px',
-                textTransform: 'uppercase',
-                color: 'var(--text-muted)',
-                letterSpacing: '0.06em',
-              }}>
-                Клики
-              </th>
-              <th style={{
-                padding: '8px 12px',
-                textAlign: 'right',
-                fontWeight: 600,
-                fontSize: '11px',
-                textTransform: 'uppercase',
-                color: 'var(--text-muted)',
-                letterSpacing: '0.06em',
-              }}>
-                Лиды
-              </th>
-              <th style={{
-                padding: '8px 12px',
-                textAlign: 'right',
-                fontWeight: 600,
-                fontSize: '11px',
-                textTransform: 'uppercase',
-                color: 'var(--text-muted)',
-                letterSpacing: '0.06em',
-              }}>
-                Депозиты
-              </th>
-              <th style={{
-                padding: '8px 12px',
-                textAlign: 'center',
-                fontWeight: 600,
-                fontSize: '11px',
-                textTransform: 'uppercase',
-                color: 'var(--text-muted)',
-                letterSpacing: '0.06em',
-              }}>
-                Статус
-              </th>
+            <tr className="border-b border-border bg-elevated/50">
+              <th className="th-sortable px-3 py-2 text-left">Объявление</th>
+              <th className="th-sortable px-3 py-2 text-right">Расход</th>
+              <th className="th-sortable px-3 py-2 text-right">Клики</th>
+              <th className="th-sortable px-3 py-2 text-right">Лиды</th>
+              <th className="th-sortable px-3 py-2 text-right">Депозиты</th>
+              <th className="th-sortable px-3 py-2 text-center">Статус</th>
             </tr>
           </thead>
           <tbody>
-            {data.slice(0, 10).map((row) => {
-              const stateInfo = getStateConfig(row.state);
-              const depositsTextColor = depositsColor(row.leads, row.deposits);
-              return (
-                <tr
-                  key={row.fb_ad_id}
-                  style={{
-                    borderBottom: '1px solid var(--border-dim)',
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.background = 'var(--bg-raised)';
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.background = 'transparent';
-                  }}
-                >
-                  {/* Объявление */}
-                  <td style={{
-                    padding: '9px 12px',
-                    color: 'var(--text-primary)',
-                    fontSize: '12px',
-                  }}>
-                    <div
-                      title={row.name_full}
-                      style={{
-                        maxWidth: '200px',
-                        whiteSpace: 'nowrap',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        cursor: 'default',
-                      }}
-                    >
-                      {row.name}
-                    </div>
-                  </td>
-
-                  {/* Расход */}
-                  <td style={{
-                    padding: '9px 12px',
-                    textAlign: 'right',
-                    color: 'var(--text-primary)',
-                    fontFamily: 'JetBrains Mono, monospace',
-                    fontVariantNumeric: 'tabular-nums',
-                  }}>
-                    {formatCurrency(row.spend)}
-                  </td>
-
-                  {/* Клики */}
-                  <td style={{
-                    padding: '9px 12px',
-                    textAlign: 'right',
-                    color: 'var(--text-primary)',
-                    fontFamily: 'JetBrains Mono, monospace',
-                    fontVariantNumeric: 'tabular-nums',
-                  }}>
-                    {row.clicks}
-                  </td>
-
-                  {/* Лиды */}
-                  <td style={{
-                    padding: '9px 12px',
-                    textAlign: 'right',
-                    color: row.leads > 0 ? 'var(--accent-emerald)' : 'var(--text-primary)',
-                    fontFamily: 'JetBrains Mono, monospace',
-                    fontVariantNumeric: 'tabular-nums',
-                    fontWeight: row.leads > 0 ? 600 : 400,
-                  }}>
-                    {row.leads}
-                  </td>
-
-                  {/* Депозиты */}
-                  <td style={{
-                    padding: '9px 12px',
-                    textAlign: 'right',
-                    color: depositsTextColor,
-                    fontFamily: 'JetBrains Mono, monospace',
-                    fontVariantNumeric: 'tabular-nums',
-                    fontWeight: row.deposits > 0 || row.leads > 0 ? 600 : 400,
-                  }}>
-                    {row.deposits}
-                  </td>
-
-                  {/* Статус */}
-                  <td style={{
-                    padding: '9px 12px',
-                    textAlign: 'center',
-                  }}>
-                    <span
-                      style={{
-                        display: 'inline-block',
-                        padding: '3px 8px',
-                        borderRadius: '3px',
-                        fontSize: '10px',
-                        fontWeight: 600,
-                        backgroundColor: stateInfo.bg,
-                        color: stateInfo.color,
-                      }}
-                    >
-                      {stateInfo.label}
-                    </span>
-                  </td>
-                </tr>
-              );
-            })}
+            {data.slice(0, 10).map((row) => (
+              <tr key={row.fb_ad_id} className="tr-hover border-b border-border">
+                <td className="max-w-[200px] truncate px-3 py-2.5 text-primary" title={row.name_full}>
+                  {row.name}
+                </td>
+                <td className="px-3 py-2.5 text-right font-mono text-primary">{fmt$(row.spend)}</td>
+                <td className="px-3 py-2.5 text-right font-mono text-primary">{row.clicks}</td>
+                <td className={`px-3 py-2.5 text-right font-mono ${row.leads > 0 ? 'font-semibold text-success' : 'text-primary'}`}>
+                  {row.leads}
+                </td>
+                <td className={`px-3 py-2.5 text-right font-mono ${row.deposits > 0 ? 'font-semibold text-success' : row.leads > 0 ? 'font-semibold text-danger' : 'text-primary'}`}>
+                  {row.deposits}
+                </td>
+                <td className="px-3 py-2.5 text-center">
+                  <StateIcon state={row.state} size="sm" />
+                </td>
+              </tr>
+            ))}
           </tbody>
         </table>
-      </div>
+      </div>}
     </div>
   );
 }

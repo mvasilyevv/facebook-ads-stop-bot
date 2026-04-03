@@ -13,12 +13,13 @@ import pytest
 # Проверяем, что битый update не зацикливает poller на одном и том же offset.
 @pytest.mark.asyncio
 async def test_poller_advances_offset_after_failed_update():
-    """Даже при ошибке handle_update poller должен переходить к следующему update_id."""
-    from apps.telegram_poller.main import poller_loop
+    """Даже при ошибке handle_update _process_updates должен переходить к следующему update_id."""
+    from apps.telegram_poller.main import _process_updates
 
     updates = [{"update_id": 10}, {"update_id": 11}]
     client = SimpleNamespace(
-        get_updates=AsyncMock(side_effect=[updates, asyncio.CancelledError()]),
+        get_updates=AsyncMock(return_value=updates),
+        answer_callback_query=AsyncMock(),
     )
 
     async def fake_handle_update(_client, update):
@@ -26,11 +27,10 @@ async def test_poller_advances_offset_after_failed_update():
             raise RuntimeError("битый callback")
 
     with patch("apps.telegram_poller.main.handle_update", new=fake_handle_update):
-        with pytest.raises(asyncio.CancelledError):
-            await poller_loop(client)
+        new_offset = await _process_updates(client, offset=None)
 
-    assert client.get_updates.await_args_list[0].kwargs["offset"] is None
-    assert client.get_updates.await_args_list[1].kwargs["offset"] == 12
+    assert client.get_updates.await_args.kwargs["offset"] is None
+    assert new_offset == 12
 
 
 class _FakeRuntimeClient:

@@ -328,13 +328,21 @@ async def test_render_start_has_short_ops_hub_without_more_button():
     """Главный экран CONTROL должен показывать только пять рабочих разделов."""
     from core.telegram import bot_handler
 
+    # GROUP BY возвращает пары (alert_state, count)
+    group_by_result = MagicMock()
+    group_by_result.all.return_value = [
+        (AlertState.NORMAL, 1),
+        (AlertState.WARNING_SENT, 3),
+        (AlertState.STOP_SENT, 1),
+    ]
+
     session = _make_async_session(
+        execute_side_effect=[group_by_result],
         scalar_side_effect=[
             SimpleNamespace(is_scanning_enabled=True, interval_seconds=90),
-            3,
-            4,
+            # queue_count (DisableTask)
             5,
-        ]
+        ],
     )
     factory = _make_session_factory(session)
 
@@ -351,6 +359,7 @@ async def test_render_start_has_short_ops_hub_without_more_button():
     assert "CONTROL" in text
     buttons = [button["text"] for row in markup["inline_keyboard"] for button in row]
     assert buttons[0] == "Сегодня"
+    # alert_count = WARNING_SENT(3) + STOP_SENT(1) = 4
     assert buttons[1] == "Алерты (4)"
     assert buttons[2:] == ["Задачи", "Объявления", "Настройки"]
     assert "Ещё" not in buttons
@@ -563,20 +572,20 @@ async def test_execute_disable_all_uses_current_live_batch_only():
         scalar_return=live_last_scan,
     )
     factory = _make_session_factory(session)
-    create_disable_task = AsyncMock(
-        return_value={"fb_ad_id": current_ad.fb_ad_id, "ad_name": "Current", "created_new": True}
-    )
+    # _try_add_disable_task вызывается для каждого объявления внутри одной сессии
+    try_add = AsyncMock(return_value=True)
 
     with (
         patch.object(bot_handler, "get_session_factory", return_value=factory),
-        patch.object(bot_handler, "_create_disable_task", create_disable_task),
+        patch.object(bot_handler, "_try_add_disable_task", try_add),
     ):
         count, failed = await bot_handler._execute_disable_all(tg_user_id="tg-1", username="tester")
 
     assert count == 1
     assert failed == 0
-    create_disable_task.assert_awaited_once_with(
-        snapshot_token=current_ad.fb_ad_id,
+    try_add.assert_awaited_once_with(
+        session,
+        current_ad,
         tg_user_id="tg-1",
         username="tester",
     )

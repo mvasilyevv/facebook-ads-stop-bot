@@ -111,7 +111,7 @@ class RuleContext:
     early_outbound_ctr_signal_min_percent: Decimal = Decimal("0.80")  # outbound CTR < 0.80%
     early_outbound_ctr_signal_min_spend_percent: Decimal = Decimal("5")  # мин. расход 5% CPA
 
-    # Ранний сигнал 2: низкая доходимость до лендинга
+    # Ранний сигнал 2: мало открытий PWA после клика
     early_lpv_ratio_signal_enabled: bool = True
     early_lpv_ratio_signal_min_percent: Decimal = Decimal("60")  # LPV/outbound_clicks < 60%
     early_lpv_ratio_signal_min_outbound_clicks: int = 5  # мин. кол-во outbound кликов

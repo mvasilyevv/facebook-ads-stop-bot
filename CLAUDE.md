@@ -16,7 +16,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ./run.sh --logs       # просмотр логов
 
 # Ручной запуск сервисов (каждый в своём терминале)
-docker compose up -d                                                    # Postgres + Redis
+docker compose up -d                                                    # Postgres
 uvicorn apps.api.main:app --host 0.0.0.0 --port 8100 --reload          # API
 python run_observer.py                                                   # Observer worker
 python -m apps.telegram_poller.main                                      # Telegram poller
@@ -70,7 +70,7 @@ alembic upgrade head
 - **telegram/client.py** — минимальный async-клиент Bot API (send, edit, answer_callback, get_updates).
 - **telegram/renderer.py** — форматирование алертов с inline-кнопками «Отключить».
 - **telegram/bot_handler.py** — маршрутизация команд, пагинация объявлений, `_create_disable_task()` создаёт задачу в БД.
-- **config.py** — pydantic-settings из .env, синглтон `get_settings()`.
+- **config.py** — pydantic-settings из .env, синглтон `get_settings()`. API-ключ (`API_KEY`) для аутентификации запросов.
 - **db/** — `base.py` (declarative base), `__init__.py` (engine + session factory синглтоны).
 
 ### Матчинг офферов
@@ -83,7 +83,7 @@ alembic upgrade head
 
 ### Frontend (`frontend/`)
 
-React 19 + Vite (JSX, без TypeScript). Страницы: DashboardPage (чеклист запуска, таймер скана, тогл сканирования, KPI-стрипы, графики), AdsPage, OffersPage, SettingsPage. API-клиент в `api.js`. Компоненты в `components/` (CampaignScorecard, AlertTray, DrawerPanel, TaskQueuePanel, графики). Хуки: `useAsyncPolling`, `useRefreshOnResume`. Vite-порт динамический (run.sh читает из лога).
+React 19 + Vite (JSX, без TypeScript). Страницы: DashboardPage (чеклист запуска, таймер скана, тогл сканирования, KPI-стрипы, графики), AdsPage, OffersPage, SettingsPage. API-клиент в `api.js`. Компоненты в `components/` (CampaignScorecard, AlertTray, TaskQueuePanel, графики). Хуки: `useAsyncPolling`, `useRefreshOnResume`. Vite-порт динамический (run.sh читает из лога).
 
 ## Key design rules
 
@@ -98,7 +98,7 @@ React 19 + Vite (JSX, без TypeScript). Страницы: DashboardPage (че�
 
 ## Infrastructure
 
-- Postgres 16 (port 5433, bind 127.0.0.1) + Redis (port 6380) via `docker-compose.yml`. Данные Postgres в именованном томе `pgdata`.
+- Postgres 16 (port 5433, bind 127.0.0.1) via `docker-compose.yml`. Данные Postgres в именованном томе `pgdata`.
 - Vision anti-detect browser (external, port 3030) — requires `VISION_X_TOKEN` and `VISION_PROFILE_ID`.
 - Python 3.12+, Node.js (for frontend).
 - Единый скрипт запуска `run.sh` — Docker, venv, миграции, все сервисы.

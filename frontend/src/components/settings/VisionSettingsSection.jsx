@@ -1,150 +1,99 @@
-export function VisionSettingsSection({
-  vision,
-  visionProfiles,
-  showVisionToken,
-  onToggleTokenVisibility,
-  onVisionChange,
-  onLoadProfiles,
-  profilesLoading,
-  onSave,
-  onReconnect,
-  saving,
-  browserOpen,
-  onToggleBrowserOpen,
-}) {
+export function VisionSettingsSection({ vision, visionProfiles, showVisionToken, onToggleTokenVisibility, onVisionChange, onLoadProfiles, profilesLoading, onSave, onReconnect, saving, browserOpen, onToggleBrowserOpen }) {
   return (
-    <section aria-label="Настройки браузера" className="form-section">
-      <div
-        className="form-section-title settings-section-toggle"
+    <section aria-label="Настройки браузера" className="panel">
+      {/* Заголовок-аккордеон */}
+      <button
+        className="flex w-full items-center justify-between px-5 py-4 text-left"
         onClick={onToggleBrowserOpen}
-        role="button"
-        tabIndex={0}
         aria-expanded={browserOpen}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter' || event.key === ' ') {
-            event.preventDefault();
-            onToggleBrowserOpen();
-          }
-        }}
       >
-        <span>Anti-detect браузер (Vision)</span>
-        <span className="settings-section-toggle__meta">
-          {browserOpen ? 'Скрыть' : 'Показать'}
-          {vision.has_token && (
-            <span className="settings-section-toggle__status">✓ настроен</span>
-          )}
+        <span className="text-base font-semibold text-primary">Anti-detect браузер (Vision)</span>
+        <span className="flex items-center gap-2 text-2xs text-muted">
+          {vision.has_token && <span className="badge-success">настроен</span>}
+          {browserOpen ? '▼' : '▶'}
         </span>
-      </div>
+      </button>
 
       {browserOpen && (
-        <div className="settings-stack settings-stack--lg">
-          <div className="form-grid settings-form-grid">
-            <div className="form-group">
-              <label className="form-label" htmlFor="vision-url">
+        <div className="space-y-4 border-t border-border px-5 py-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="mb-1 block text-2xs font-semibold uppercase tracking-wider text-secondary" htmlFor="vision-url">
                 Vision API URL
               </label>
               <input
                 id="vision-url"
-                className="form-input"
+                className="w-full rounded bg-elevated border border-border px-3 py-2 text-sm text-primary focus:border-accent focus:ring-1 focus:ring-accent focus:outline-none"
                 type="text"
                 placeholder="http://127.0.0.1:3030"
                 value={vision.api_url}
-                onChange={(event) => onVisionChange({ ...vision, api_url: event.target.value })}
+                onChange={(e) => onVisionChange({ ...vision, api_url: e.target.value })}
               />
             </div>
-
-            <div className="form-group">
-              <label className="form-label" htmlFor="vision-token">
-                X-Token{' '}
-                {vision.has_token && (
-                  <span className="settings-inline-success">(сохранён)</span>
-                )}
+            <div>
+              <label className="mb-1 block text-2xs font-semibold uppercase tracking-wider text-secondary" htmlFor="vision-token">
+                X-Token {vision.has_token && <span className="text-success">(сохранён)</span>}
               </label>
-              <div className="settings-token-field">
+              <div className="flex gap-1">
                 <input
                   id="vision-token"
-                  className="form-input settings-token-field__input"
+                  className="flex-1 rounded bg-elevated border border-border px-3 py-2 text-sm text-primary focus:border-accent focus:ring-1 focus:ring-accent focus:outline-none"
                   type={showVisionToken ? 'text' : 'password'}
-                  placeholder={
-                    vision.has_token
-                      ? '••••••••••• (оставьте пустым, чтобы не менять)'
-                      : 'Введите X-Token'
-                  }
+                  placeholder={vision.has_token ? '••••• (оставьте пустым)' : 'Введите X-Token'}
                   value={vision.x_token}
-                  onChange={(event) => onVisionChange({ ...vision, x_token: event.target.value })}
+                  onChange={(e) => onVisionChange({ ...vision, x_token: e.target.value })}
                   autoComplete="off"
                 />
-                <button
-                  type="button"
-                  className="settings-token-field__toggle"
-                  onClick={onToggleTokenVisibility}
-                  aria-label={showVisionToken ? 'Скрыть токен' : 'Показать токен'}
-                >
+                <button className="btn-ghost px-2" onClick={onToggleTokenVisibility} aria-label={showVisionToken ? 'Скрыть' : 'Показать'}>
                   {showVisionToken ? '🙈' : '👁'}
                 </button>
               </div>
-              <div className="form-hint">Токен хранится в зашифрованном виде.</div>
+              <div className="mt-1 text-2xs text-muted">Токен хранится в зашифрованном виде.</div>
             </div>
           </div>
 
-          <div className="form-group settings-form-block">
-            <label className="form-label" htmlFor="vision-profile">
+          <div>
+            <label className="mb-1 block text-2xs font-semibold uppercase tracking-wider text-secondary" htmlFor="vision-profile">
               Профиль браузера
             </label>
-            <div className="settings-field-row">
+            <div className="flex gap-2">
               {visionProfiles.length > 0 ? (
                 <select
                   id="vision-profile"
-                  className="form-input"
+                  className="flex-1 rounded bg-elevated border border-border px-3 py-2 text-sm text-primary"
                   value={vision.profile_id}
-                  onChange={(event) => onVisionChange({ ...vision, profile_id: event.target.value })}
+                  onChange={(e) => onVisionChange({ ...vision, profile_id: e.target.value })}
                 >
                   <option value="">— Выберите профиль —</option>
-                  {visionProfiles.map((profile) => (
-                    <option key={profile.profile_id} value={profile.profile_id}>
-                      {profile.name || profile.profile_id}
-                      {profile.port ? ` (порт ${profile.port})` : ''}
+                  {visionProfiles.map((p) => (
+                    <option key={p.profile_id} value={p.profile_id}>
+                      {p.name || p.profile_id}{p.port ? ` (порт ${p.port})` : ''}
                     </option>
                   ))}
                 </select>
               ) : (
                 <input
                   id="vision-profile"
-                  className="form-input"
+                  className="flex-1 rounded bg-elevated border border-border px-3 py-2 text-sm text-primary focus:border-accent focus:ring-1 focus:ring-accent focus:outline-none"
                   type="text"
                   placeholder="ID профиля Vision"
                   value={vision.profile_id}
-                  onChange={(event) => onVisionChange({ ...vision, profile_id: event.target.value })}
+                  onChange={(e) => onVisionChange({ ...vision, profile_id: e.target.value })}
                 />
               )}
-              <button
-                className="btn btn-outline btn-sm settings-nowrap"
-                onClick={onLoadProfiles}
-                disabled={profilesLoading}
-              >
+              <button className="btn-secondary whitespace-nowrap" onClick={onLoadProfiles} disabled={profilesLoading}>
                 {profilesLoading ? '...' : 'Загрузить список'}
               </button>
             </div>
-            <div className="form-hint">
-              Нажмите «Загрузить список», чтобы получить доступные профили из Vision.
-            </div>
           </div>
 
-          <div className="settings-actions">
-            <button className="btn btn-primary" onClick={onSave} disabled={saving === 'vision'}>
+          <div className="flex flex-wrap gap-2 pt-2">
+            <button className="btn-primary" onClick={onSave} disabled={saving === 'vision'}>
               {saving === 'vision' ? 'Сохранение...' : 'Сохранить'}
             </button>
-            <button
-              className="btn btn-outline"
-              onClick={onReconnect}
-              disabled={saving === 'reconnect'}
-              title="Сразу перезапускает профиль Vision и запускает автоматическое переподключение observer. Используйте, если браузер завис или потерял CDP-порт."
-            >
+            <button className="btn-secondary" onClick={onReconnect} disabled={saving === 'reconnect'} title="Перезапуск профиля Vision + переподключение observer">
               {saving === 'reconnect' ? 'Отправка...' : 'Переподключить браузер'}
             </button>
-            <div className="form-hint settings-note">
-              Профиль Vision будет перезапущен сразу, без ожидания следующего скана.
-            </div>
           </div>
         </div>
       )}

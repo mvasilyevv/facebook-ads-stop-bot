@@ -842,16 +842,10 @@ def _timeline_bucket_start(value: datetime, period: str) -> datetime:
 
 def _build_current_risk_reason_rows(snapshots: list[AdSnapshot]) -> list[dict[str, int | str]]:
     """Строит топ причин по текущим рискованным объявлениям."""
+    from core.rules.labels import RULE_LABELS, RULE_LABELS_SHORT
+
     risk_labels = {
-        "cpc_stop": ("Дорогой клик", "Дорогой клик"),
-        "cpl_stop": ("Дорогой лид", "Дорогой лид"),
-        "cpr_stop": ("Дорогая рега", "Дорогая рега"),
-        "regs_no_dep_stop": ("Реги без депозитов", "Реги без депов"),
-        "spend_no_dep_range": ("Расход без депа", "Расход без депа"),
-        "spend_with_dep_range": ("Расход с депозитом", "Расход с депозитом"),
-        "early_outbound_ctr_signal": ("Слабый CTR исходящих кликов", "Слабый CTR"),
-        "early_lpv_ratio_signal": ("Клики не доходят до лендинга", "Мало LPV"),
-        "early_cost_per_lpv_signal": ("Дорогой просмотр лендинга", "Дорогой LPV"),
+        code: (full, RULE_LABELS_SHORT.get(code, code)) for code, full in RULE_LABELS.items()
     }
     risk_counts: dict[str, int] = {}
     for snapshot in snapshots:
@@ -2043,7 +2037,11 @@ async def create_disable_task(
 
     new_task = DisableTask(
         fb_ad_id=body.fb_ad_id,
+        ad_name=snapshot.ad_name,
+        snapshot_id=snapshot.id,
+        offer_id=snapshot.offer_id,
         open_state_token=incident_key,
+        idempotency_key=f"dashboard_{body.fb_ad_id}_{incident_key}",
         status=DisableTaskStatus.PENDING,
         requested_by_username="dashboard",
     )

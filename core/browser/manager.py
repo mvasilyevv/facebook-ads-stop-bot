@@ -7,6 +7,7 @@ Patchright Page для observer worker и disable worker.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -89,9 +90,12 @@ class VisionBrowserManager:
         cdp_url = self._vision.cdp_url(profile.port)
         logger.info("Подключение через CDP: %s", cdp_url)
 
-        # Подключаемся через Playwright
+        # Подключаемся через Playwright (таймаут 30с на CDP-подключение)
         self._playwright = await async_playwright().start()
-        self._browser = await self._playwright.chromium.connect_over_cdp(cdp_url)
+        self._browser = await asyncio.wait_for(
+            self._playwright.chromium.connect_over_cdp(cdp_url),
+            timeout=30,
+        )
 
         logger.info(
             "Подключён к Vision профилю %s, контекстов: %s",
@@ -113,7 +117,8 @@ class VisionBrowserManager:
         if self._browser is None:
             await self.connect()
 
-        assert self._browser is not None
+        if self._browser is None:
+            raise RuntimeError("Не удалось подключиться к браузеру")
         contexts = self._browser.contexts
         if not contexts:
             raise RuntimeError("Нет доступных контекстов в браузере")

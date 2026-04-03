@@ -526,7 +526,7 @@ def test_scenario_early_signal_builds_alert_and_snapshot():
     assert result.snapshot["alert_state"] == AlertState.EARLY_SIGNAL_SENT
     assert result.snapshot["early_signal_rule_codes"] == ["early_outbound_ctr_signal"]
     assert result.alert_candidate is not None
-    assert result.alert_candidate.reason_title == "Слабый CTR исходящих кликов"
+    assert result.alert_candidate.reason_title == "Мало переходов на PWA"
     assert "Ранний сигнал" in (result.alert_message_text or "")
     assert "Следующее действие:" in (result.alert_message_text or "")
     assert "задача на отключение создаётся отдельной цепочкой в STOP" in (

@@ -30,7 +30,6 @@ from decimal import Decimal
 from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 
-from core.config import get_settings
 from core.db import get_session_factory
 from core.domain import AlertStage, AlertState, DisableTaskStatus
 from core.enable_recommendations.service import promote_recommendation_to_enable_task
@@ -45,6 +44,7 @@ from core.models import (
     TelegramRecipient,
     TelegramSettings,
 )
+from core.rules.labels import RULE_LABELS as _RULE_LABELS
 from core.telegram.client import TelegramBotClient
 from core.telegram.delivery import (
     TelegramAdMessageContext,
@@ -87,19 +87,6 @@ _STATE_ICONS: dict[AlertState, str] = {
     AlertState.WARNING_SENT: "⚠️",
     AlertState.CLAIMED: "⏳",
     AlertState.DISABLED: "🚫",
-}
-
-# Человекочитаемые названия правил
-_RULE_LABELS: dict[str, str] = {
-    "cpc_stop": "Дорогой клик",
-    "cpl_stop": "Дорогой лид",
-    "cpr_stop": "Дорогая рега",
-    "regs_no_dep_stop": "Реги без депозитов",
-    "spend_no_dep_range": "Расход без депа",
-    "spend_with_dep_range": "Расход с депом",
-    "early_outbound_ctr_signal": "Слабый CTR исходящих кликов",
-    "early_lpv_ratio_signal": "Слабая доходимость до лендинга",
-    "early_cost_per_lpv_signal": "Дорогой просмотр лендинга",
 }
 
 
@@ -195,29 +182,9 @@ async def _load_telegram_settings_row():
         )
 
 
-def _auth_required_text() -> str:
-    """Сообщение для неавторизованного пользователя."""
-    return AUTH_REQUIRED_TEXT
-
-
-def _owner_only_text() -> str:
-    """Сообщение для действий только владельца."""
-    return OWNER_ONLY_TEXT
-
-
-def _private_chat_only_text() -> str:
-    """Сообщение для старого личного чата."""
-    return PRIVATE_CHAT_ONLY_TEXT
-
-
 def _can_manage_settings(access) -> bool:
     """Проверяет, что пользователь может менять глобальные настройки."""
     return access is not None and is_owner_role(access.role)
-
-
-def _control_topic_only_text() -> str:
-    """Сообщение о том, что общие команды работают только в CONTROL."""
-    return CONTROL_TOPIC_ONLY_TEXT
 
 
 def _is_control_topic(message_thread_id: int | None, access) -> bool:
@@ -225,6 +192,20 @@ def _is_control_topic(message_thread_id: int | None, access) -> bool:
     if access is None:
         return False
     return access.control_topic_id is not None and message_thread_id == access.control_topic_id
+
+
+async def _guard_control_topic(
+    client: TelegramBotClient,
+    *,
+    message_thread_id: int | None,
+    access,
+    callback_query_id: str,
+) -> bool:
+    """Проверяет что callback пришёл из CONTROL topic. Возвращает True если НЕ в CONTROL."""
+    if _is_control_topic(message_thread_id, access):
+        return False
+    await client.answer_callback_query(callback_query_id, text=CONTROL_TOPIC_CALLBACK_TEXT)
+    return True
 
 
 def _status_topic_notice(stream_name: str) -> str:
@@ -506,25 +487,17 @@ async def _render_start() -> tuple[str, dict]:
         else:
             in_batch = AdSnapshot.last_observed_at >= batch_start
 
-        active_count = (
-            await session.scalar(select(func.count()).select_from(AdSnapshot).where(in_batch)) or 0
+        # Один запрос вместо двух: GROUP BY alert_state
+        state_counts_result = await session.execute(
+            select(AdSnapshot.alert_state, func.count())
+            .where(in_batch)
+            .group_by(AdSnapshot.alert_state)
         )
-        alert_count = (
-            await session.scalar(
-                select(func.count())
-                .select_from(AdSnapshot)
-                .where(
-                    in_batch,
-                    AdSnapshot.alert_state.in_(
-                        [
-                            AlertState.EARLY_SIGNAL_SENT,
-                            AlertState.WARNING_SENT,
-                            AlertState.STOP_SENT,
-                        ]
-                    ),
-                )
-            )
-            or 0
+        state_counts: dict = dict(state_counts_result.all())
+        active_count = sum(state_counts.values())
+        alert_count = sum(
+            state_counts.get(s, 0)
+            for s in (AlertState.EARLY_SIGNAL_SENT, AlertState.WARNING_SENT, AlertState.STOP_SENT)
         )
         queue_count = (
             await session.scalar(
@@ -585,13 +558,6 @@ async def _render_start() -> tuple[str, dict]:
         ],
     ]
 
-    # Добавляем кнопку MiniApp если настроена
-    settings = get_settings()
-    if settings.miniapp_url:
-        keyboard_buttons.append(
-            [{"text": "📊 Открыть дашборд", "web_app": {"url": settings.miniapp_url}}]
-        )
-
     keyboard = {"inline_keyboard": keyboard_buttons}
     return text, keyboard
 
@@ -613,33 +579,17 @@ async def _render_status() -> tuple[str, dict]:
         else:
             in_batch = AdSnapshot.last_observed_at >= batch_start
 
-        total_ads = (
-            await session.scalar(select(func.count()).select_from(AdSnapshot).where(in_batch)) or 0
+        # Один запрос вместо четырёх: GROUP BY alert_state
+        state_counts_result = await session.execute(
+            select(AdSnapshot.alert_state, func.count())
+            .where(in_batch)
+            .group_by(AdSnapshot.alert_state)
         )
-        ads_in_warning = (
-            await session.scalar(
-                select(func.count())
-                .select_from(AdSnapshot)
-                .where(in_batch, AdSnapshot.alert_state == AlertState.WARNING_SENT)
-            )
-            or 0
-        )
-        ads_in_early_signal = (
-            await session.scalar(
-                select(func.count())
-                .select_from(AdSnapshot)
-                .where(in_batch, AdSnapshot.alert_state == AlertState.EARLY_SIGNAL_SENT)
-            )
-            or 0
-        )
-        ads_in_stop = (
-            await session.scalar(
-                select(func.count())
-                .select_from(AdSnapshot)
-                .where(in_batch, AdSnapshot.alert_state == AlertState.STOP_SENT)
-            )
-            or 0
-        )
+        state_counts: dict = dict(state_counts_result.all())
+        total_ads = sum(state_counts.values())
+        ads_in_warning = state_counts.get(AlertState.WARNING_SENT, 0)
+        ads_in_early_signal = state_counts.get(AlertState.EARLY_SIGNAL_SENT, 0)
+        ads_in_stop = state_counts.get(AlertState.STOP_SENT, 0)
         ads_disabled = (
             await session.scalar(
                 select(func.count())
@@ -1103,9 +1053,9 @@ async def _render_rules() -> tuple[str, dict]:
         "5️⃣ <b>Расход без депа</b> — расход 50-70% CPA, нет депов → стоп\n"
         "6️⃣ <b>Расход с депом</b> — есть деп, расход 70-90% CPA → стоп\n\n"
         "🔎 <b>Ранние сигналы</b> — отдельный тип уведомления до лидов:\n"
-        "• слабый CTR исходящих кликов\n"
-        "• слабая доходимость до лендинга\n"
-        "• дорогой просмотр лендинга\n\n"
+        "• мало переходов на PWA\n"
+        "• мало открытий PWA после клика\n"
+        "• дорогое открытие PWA\n\n"
         f"📉 Порог предупреждения: <b>{warning_pct}%</b> от стопа\n\n"
         "💡 Проценты и лимиты настраиваются через UI или индивидуально на оффер."
     )
@@ -1268,6 +1218,38 @@ COMMAND_HANDLERS = {
 }
 
 
+async def _handle_page_callback(
+    client: TelegramBotClient,
+    *,
+    data: str,
+    render_fn,
+    chat_id: str,
+    message_id: int,
+    message_thread_id: int | None,
+    error_text: str,
+) -> None:
+    """Общий обработчик пагинации: парсит номер страницы, рендерит и редактирует сообщение."""
+    try:
+        page = int(data.split(":")[2])
+    except (IndexError, ValueError):
+        await _send_current_topic_message(
+            client=client,
+            chat_id=chat_id,
+            message_thread_id=message_thread_id,
+            text=error_text,
+        )
+        return
+    text, markup = await render_fn(page=page)
+    await _safe_edit_current_message(
+        client,
+        chat_id=chat_id,
+        message_id=message_id,
+        message_thread_id=message_thread_id,
+        text=text,
+        reply_markup=markup,
+    )
+
+
 async def handle_update(client: TelegramBotClient, update: dict) -> None:
     """Обработка одного Telegram update (message или callback_query)."""
 
@@ -1315,8 +1297,12 @@ async def handle_update(client: TelegramBotClient, update: dict) -> None:
             return
 
         if data.startswith("cmd:"):
-            if not _is_control_topic(message_thread_id, access):
-                await client.answer_callback_query(cq["id"], text=CONTROL_TOPIC_CALLBACK_TEXT)
+            if await _guard_control_topic(
+                client,
+                message_thread_id=message_thread_id,
+                access=access,
+                callback_query_id=cq["id"],
+            ):
                 return
             await client.answer_callback_query(cq["id"])
             cmd = data.split(":")[1]
@@ -1341,7 +1327,7 @@ async def handle_update(client: TelegramBotClient, update: dict) -> None:
                     client,
                     chat_id=chat_id,
                     message_thread_id=message_thread_id,
-                    text=_owner_only_text(),
+                    text=OWNER_ONLY_TEXT,
                 )
                 return
             recommendation_event_id = data.split(":", 2)[2]
@@ -1386,86 +1372,72 @@ async def handle_update(client: TelegramBotClient, update: dict) -> None:
             return
 
         if data.startswith("ads:page:"):
-            if not _is_control_topic(message_thread_id, access):
-                await client.answer_callback_query(cq["id"], text=CONTROL_TOPIC_CALLBACK_TEXT)
+            if await _guard_control_topic(
+                client,
+                message_thread_id=message_thread_id,
+                access=access,
+                callback_query_id=cq["id"],
+            ):
                 return
             await client.answer_callback_query(cq["id"])
-            try:
-                page = int(data.split(":")[2])
-            except (IndexError, ValueError):
-                await _send_current_topic_message(
-                    chat_id=chat_id,
-                    client=client,
-                    message_thread_id=message_thread_id,
-                    text="❌ Не удалось открыть страницу объявлений. Попробуйте заново.",
-                )
-                return
-            text, markup = await _render_ads(page=page)
-            await _safe_edit_current_message(
+            await _handle_page_callback(
                 client,
+                data=data,
+                render_fn=_render_ads,
                 chat_id=chat_id,
                 message_id=message_id,
                 message_thread_id=message_thread_id,
-                text=text,
-                reply_markup=markup,
+                error_text="❌ Не удалось открыть страницу объявлений. Попробуйте заново.",
             )
             return
 
         if data.startswith("alerts:page:"):
-            if not _is_control_topic(message_thread_id, access):
-                await client.answer_callback_query(cq["id"], text=CONTROL_TOPIC_CALLBACK_TEXT)
+            if await _guard_control_topic(
+                client,
+                message_thread_id=message_thread_id,
+                access=access,
+                callback_query_id=cq["id"],
+            ):
                 return
             await client.answer_callback_query(cq["id"])
-            try:
-                page = int(data.split(":")[2])
-            except (IndexError, ValueError):
-                await _send_current_topic_message(
-                    client=client,
-                    chat_id=chat_id,
-                    message_thread_id=message_thread_id,
-                    text="❌ Не удалось открыть страницу алертов. Попробуйте заново.",
-                )
-                return
-            text, markup = await _render_alerts(page=page)
-            await _safe_edit_current_message(
+            await _handle_page_callback(
                 client,
+                data=data,
+                render_fn=_render_alerts,
                 chat_id=chat_id,
                 message_id=message_id,
                 message_thread_id=message_thread_id,
-                text=text,
-                reply_markup=markup,
+                error_text="❌ Не удалось открыть страницу алертов. Попробуйте заново.",
             )
             return
 
         if data.startswith("disabled:page:"):
-            if not _is_control_topic(message_thread_id, access):
-                await client.answer_callback_query(cq["id"], text=CONTROL_TOPIC_CALLBACK_TEXT)
+            if await _guard_control_topic(
+                client,
+                message_thread_id=message_thread_id,
+                access=access,
+                callback_query_id=cq["id"],
+            ):
                 return
             await client.answer_callback_query(cq["id"])
-            try:
-                page = int(data.split(":")[2])
-            except (IndexError, ValueError):
-                await _send_current_topic_message(
-                    client=client,
-                    chat_id=chat_id,
-                    message_thread_id=message_thread_id,
-                    text="❌ Не удалось открыть страницу отключённых объявлений. Попробуйте заново.",
-                )
-                return
-            text, markup = await _render_disabled(page=page)
-            await _safe_edit_current_message(
+            await _handle_page_callback(
                 client,
+                data=data,
+                render_fn=_render_disabled,
                 chat_id=chat_id,
                 message_id=message_id,
                 message_thread_id=message_thread_id,
-                text=text,
-                reply_markup=markup,
+                error_text="❌ Не удалось открыть страницу отключённых объявлений. Попробуйте заново.",
             )
             return
 
         if data.startswith("ad:detail:"):
-            if not _is_control_topic(message_thread_id, access):
-                await client.answer_callback_query(cq["id"], text=CONTROL_TOPIC_CALLBACK_TEXT)
+            if await _guard_control_topic(
+                client,
+                message_thread_id=message_thread_id,
+                access=access,
+                callback_query_id=cq["id"],
+            ):
                 return
             await client.answer_callback_query(cq["id"])
             parts = data.split(":", 3)
@@ -1483,8 +1455,12 @@ async def handle_update(client: TelegramBotClient, update: dict) -> None:
             return
 
         if data.startswith("ad:disable_confirm:"):
-            if not _is_control_topic(message_thread_id, access):
-                await client.answer_callback_query(cq["id"], text=CONTROL_TOPIC_CALLBACK_TEXT)
+            if await _guard_control_topic(
+                client,
+                message_thread_id=message_thread_id,
+                access=access,
+                callback_query_id=cq["id"],
+            ):
                 return
             await client.answer_callback_query(cq["id"])
             parts = data.split(":", 3)
@@ -1506,8 +1482,12 @@ async def handle_update(client: TelegramBotClient, update: dict) -> None:
             return
 
         if data.startswith("ad:disable:"):
-            if not _is_control_topic(message_thread_id, access):
-                await client.answer_callback_query(cq["id"], text=CONTROL_TOPIC_CALLBACK_TEXT)
+            if await _guard_control_topic(
+                client,
+                message_thread_id=message_thread_id,
+                access=access,
+                callback_query_id=cq["id"],
+            ):
                 return
             await client.answer_callback_query(cq["id"])
             parts = data.split(":")
@@ -1550,8 +1530,12 @@ async def handle_update(client: TelegramBotClient, update: dict) -> None:
             return
 
         if data.startswith("ad:enable:"):
-            if not _is_control_topic(message_thread_id, access):
-                await client.answer_callback_query(cq["id"], text=CONTROL_TOPIC_CALLBACK_TEXT)
+            if await _guard_control_topic(
+                client,
+                message_thread_id=message_thread_id,
+                access=access,
+                callback_query_id=cq["id"],
+            ):
                 return
             await client.answer_callback_query(cq["id"])
             if not _can_manage_settings(access):
@@ -1559,7 +1543,7 @@ async def handle_update(client: TelegramBotClient, update: dict) -> None:
                     client=client,
                     chat_id=chat_id,
                     message_thread_id=message_thread_id,
-                    text=_owner_only_text(),
+                    text=OWNER_ONLY_TEXT,
                 )
                 return
             fb_ad_id = data.split(":", 2)[2]
@@ -1596,8 +1580,12 @@ async def handle_update(client: TelegramBotClient, update: dict) -> None:
             return
 
         if data == "ads:disable_all":
-            if not _is_control_topic(message_thread_id, access):
-                await client.answer_callback_query(cq["id"], text=CONTROL_TOPIC_CALLBACK_TEXT)
+            if await _guard_control_topic(
+                client,
+                message_thread_id=message_thread_id,
+                access=access,
+                callback_query_id=cq["id"],
+            ):
                 return
             await client.answer_callback_query(cq["id"])
             if not _can_manage_settings(access):
@@ -1605,7 +1593,7 @@ async def handle_update(client: TelegramBotClient, update: dict) -> None:
                     client=client,
                     chat_id=chat_id,
                     message_thread_id=message_thread_id,
-                    text=_owner_only_text(),
+                    text=OWNER_ONLY_TEXT,
                 )
                 return
             text, markup = await _render_disable_all_confirm()
@@ -1620,8 +1608,12 @@ async def handle_update(client: TelegramBotClient, update: dict) -> None:
             return
 
         if data == "ads:disable_all:confirm":
-            if not _is_control_topic(message_thread_id, access):
-                await client.answer_callback_query(cq["id"], text=CONTROL_TOPIC_CALLBACK_TEXT)
+            if await _guard_control_topic(
+                client,
+                message_thread_id=message_thread_id,
+                access=access,
+                callback_query_id=cq["id"],
+            ):
                 return
             await client.answer_callback_query(cq["id"])
             if not _can_manage_settings(access):
@@ -1629,7 +1621,7 @@ async def handle_update(client: TelegramBotClient, update: dict) -> None:
                     client=client,
                     chat_id=chat_id,
                     message_thread_id=message_thread_id,
-                    text=_owner_only_text(),
+                    text=OWNER_ONLY_TEXT,
                 )
                 return
             count, failed = await _execute_disable_all(tg_user_id=tg_user_id, username=username)
@@ -1785,7 +1777,7 @@ async def handle_update(client: TelegramBotClient, update: dict) -> None:
         return
 
     if is_private_chat(chat_type):
-        await _send_current_topic_message(client, chat_id=chat_id, text=_private_chat_only_text())
+        await _send_current_topic_message(client, chat_id=chat_id, text=PRIVATE_CHAT_ONLY_TEXT)
         return
 
     if chat_id != FORUM_SUPERGROUP_CHAT_ID:
@@ -1814,7 +1806,7 @@ async def handle_update(client: TelegramBotClient, update: dict) -> None:
             client,
             chat_id=chat_id,
             message_thread_id=message_thread_id,
-            text=_control_topic_only_text(),
+            text=CONTROL_TOPIC_ONLY_TEXT,
         )
         return
 
@@ -1840,7 +1832,7 @@ async def handle_update(client: TelegramBotClient, update: dict) -> None:
             client,
             chat_id=chat_id,
             message_thread_id=message_thread_id,
-            text=_auth_required_text(),
+            text=AUTH_REQUIRED_TEXT,
         )
         return
 
@@ -1849,7 +1841,7 @@ async def handle_update(client: TelegramBotClient, update: dict) -> None:
             client,
             chat_id=chat_id,
             message_thread_id=message_thread_id,
-            text=_control_topic_only_text(),
+            text=CONTROL_TOPIC_ONLY_TEXT,
         )
         return
 
@@ -1859,7 +1851,7 @@ async def handle_update(client: TelegramBotClient, update: dict) -> None:
                 client,
                 chat_id=chat_id,
                 message_thread_id=message_thread_id,
-                text=_owner_only_text(),
+                text=OWNER_ONLY_TEXT,
             )
             return
         param = parts[1].lower()
@@ -2001,10 +1993,10 @@ async def _reset_ad_state(fb_ad_id: str) -> str | None:
 
 
 async def _execute_disable_all(*, tg_user_id: str, username: str) -> tuple[int, int]:
-    """Создаёт DisableTask для всех объявлений с алертами.
+    """Создаёт DisableTask для всех объявлений с алертами в одной сессии.
 
     Returns:
-        (успешно создано, не удалось обработать)
+        (успешно создано, пропущено)
     """
     factory = get_session_factory()
     async with factory() as session:
@@ -2025,20 +2017,82 @@ async def _execute_disable_all(*, tg_user_id: str, username: str) -> tuple[int, 
         )
         ads = result.scalars().all()
 
-    count = 0
-    failed = 0
-    for ad in ads:
-        task_info = await _create_disable_task(
-            snapshot_token=ad.fb_ad_id,
-            tg_user_id=tg_user_id,
-            username=username,
-        )
-        if task_info:
-            count += 1
-        else:
-            failed += 1
+        count = 0
+        skipped = 0
+        for ad in ads:
+            created = await _try_add_disable_task(
+                session,
+                ad,
+                tg_user_id=tg_user_id,
+                username=username,
+            )
+            if created:
+                count += 1
+            else:
+                skipped += 1
 
-    return count, failed
+        try:
+            await session.commit()
+        except IntegrityError:
+            await session.rollback()
+            return count, skipped
+
+    return count, skipped
+
+
+async def _try_add_disable_task(
+    session: object,
+    snapshot: object,
+    *,
+    tg_user_id: str,
+    username: str,
+) -> bool:
+    """Добавляет DisableTask в сессию для одного снэпшота (без commit).
+
+    Проверяет идемпотентность: если активная задача уже есть — пропускает.
+    """
+    stable_token = snapshot.open_state_token or uuid.uuid4().hex
+    snapshot.open_state_token = stable_token
+    snapshot.telegram_group_key = stable_token
+
+    idempotency_key = _disable_task_idempotency_key(
+        fb_ad_id=snapshot.fb_ad_id,
+        incident_key=stable_token,
+    )
+
+    # Проверка: уже есть активная задача на это объявление
+    existing = await session.scalar(
+        select(DisableTask.id).where(
+            DisableTask.fb_ad_id == snapshot.fb_ad_id,
+            DisableTask.open_state_token == stable_token,
+            DisableTask.status.in_(
+                [DisableTaskStatus.PENDING, DisableTaskStatus.RUNNING, DisableTaskStatus.RETRYING]
+            ),
+        )
+    )
+    if existing is not None:
+        return False
+
+    # Проверка по idempotency_key
+    existing_idem = await session.scalar(
+        select(DisableTask.id).where(DisableTask.idempotency_key == idempotency_key)
+    )
+    if existing_idem is not None:
+        return False
+
+    snapshot.alert_state = AlertState.CLAIMED
+    task = DisableTask(
+        snapshot_id=snapshot.id,
+        offer_id=snapshot.offer_id,
+        fb_ad_id=snapshot.fb_ad_id,
+        ad_name=snapshot.ad_name,
+        open_state_token=stable_token,
+        idempotency_key=idempotency_key,
+        requested_by_telegram_user_id=tg_user_id,
+        requested_by_username=username,
+    )
+    session.add(task)
+    return True
 
 
 async def _try_authorize(

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import signal
 import sys
 
 from core.config import get_settings
@@ -15,6 +16,9 @@ from core.telegram.service import touch_poller_heartbeat
 logger = logging.getLogger(__name__)
 TOKEN_RELOAD_INTERVAL_SECONDS = 3
 ERROR_RETRY_DELAY_SECONDS = 3
+
+# Глобальный флаг для graceful shutdown
+_shutdown_event: asyncio.Event | None = None
 
 
 async def _process_updates(
@@ -42,22 +46,6 @@ async def _process_updates(
             if isinstance(update_id, int):
                 offset = update_id + 1
     return offset
-
-
-async def poller_loop(client: TelegramBotClient) -> None:
-    """Бесконечный цикл long polling."""
-    offset: int | None = None
-
-    logger.info("Telegram poller запущен — жду сообщения и callback-и")
-
-    while True:
-        try:
-            offset = await _process_updates(client, offset=offset)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception("Ошибка в long polling цикле")
-            await asyncio.sleep(ERROR_RETRY_DELAY_SECONDS)
 
 
 async def _load_bot_token() -> str:
@@ -92,8 +80,10 @@ async def poller_runtime_loop(
     token_loader=_load_bot_token,
     client_factory=TelegramBotClient,
     reload_interval_seconds: int = TOKEN_RELOAD_INTERVAL_SECONDS,
+    shutdown_event: asyncio.Event | None = None,
 ) -> None:
     """Поддерживает живой poller, который ждёт появления токена и безопасно переживает ротацию."""
+    stop = shutdown_event or _shutdown_event or asyncio.Event()
     offset: int | None = None
     current_token = ""
     client: TelegramBotClient | None = None
@@ -102,7 +92,7 @@ async def poller_runtime_loop(
     logger.info("Telegram poller запущен")
 
     try:
-        while True:
+        while not stop.is_set():
             await touch_poller_heartbeat()
 
             token = (await token_loader()).strip()
@@ -114,7 +104,10 @@ async def poller_runtime_loop(
                 if not waiting_for_token_logged:
                     logger.info("Telegram poller ждёт bot_token и продолжает работать в фоне")
                     waiting_for_token_logged = True
-                await asyncio.sleep(reload_interval_seconds)
+                try:
+                    await asyncio.wait_for(stop.wait(), timeout=reload_interval_seconds)
+                except asyncio.TimeoutError:
+                    pass
                 continue
 
             if token != current_token or client is None:
@@ -135,22 +128,30 @@ async def poller_runtime_loop(
                 await client.close()
                 client = None
                 current_token = ""
-                await asyncio.sleep(ERROR_RETRY_DELAY_SECONDS)
+                try:
+                    await asyncio.wait_for(stop.wait(), timeout=ERROR_RETRY_DELAY_SECONDS)
+                except asyncio.TimeoutError:
+                    pass
     finally:
         if client is not None:
             await client.close()
+        logger.info("Telegram poller остановлен")
 
 
 async def main() -> None:
-    """Точка входа для Telegram poller."""
+    """Точка входа для Telegram poller с graceful shutdown."""
+    global _shutdown_event
+    _shutdown_event = asyncio.Event()
+
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, _shutdown_event.set)
+
     settings = get_settings()
     if not settings.telegram_chat_id:
         logger.info("TELEGRAM_CHAT_ID не задан — жду первое сообщение для определения...")
 
-    try:
-        await poller_runtime_loop()
-    except KeyboardInterrupt:
-        logger.info("Telegram poller остановлен")
+    await poller_runtime_loop(shutdown_event=_shutdown_event)
 
 
 if __name__ == "__main__":
@@ -159,4 +160,7 @@ if __name__ == "__main__":
         format="%(asctime)s %(levelname)-7s [%(name)s] %(message)s",
         stream=sys.stdout,
     )
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass

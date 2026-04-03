@@ -1,6 +1,22 @@
-// Таблица перекрута бюджета — факт vs ожидание по кампаниям
+// Перекрут бюджета: факт vs ожидание
+
+const STATUS_STYLES = {
+  OVER: { badge: 'badge-danger', text: 'text-danger', label: 'ПЕРЕКРУТ' },
+  ON_TARGET: { badge: 'badge-success', text: 'text-success', label: 'НОРМА' },
+  UNDER: { badge: 'badge-neutral', text: 'text-secondary', label: 'НЕДОКРУТ' },
+};
+
+const fmt$ = (v) => `$${Math.abs(v).toFixed(2)}`;
+
 export function BudgetOverrunChart({ data = [] }) {
-  if (!data.length) return null;
+  if (!data.length) {
+    return (
+      <div>
+        <h3 className="mb-3 text-2xs font-bold uppercase tracking-widest text-muted">Перекрут бюджета (сегодня)</h3>
+        <div className="py-4 text-center text-sm text-muted">Нет данных по бюджету</div>
+      </div>
+    );
+  }
 
   const rows = data.map((d) => ({
     campaign: String(d.campaign_full || d.campaign || ''),
@@ -13,57 +29,46 @@ export function BudgetOverrunChart({ data = [] }) {
     totalAds: Number(d.total_ads) || 0,
   }));
 
-  const statusLabel = { OVER: 'ПЕРЕКРУТ', ON_TARGET: 'НОРМА', UNDER: 'НЕДОКРУТ' };
-  const statusColor = {
-    OVER: 'var(--accent-crimson)',
-    ON_TARGET: 'var(--accent-emerald)',
-    UNDER: 'var(--accent-slate)',
-  };
-  const fmt$ = (v) => `$${Math.abs(v).toFixed(2)}`;
-  const fmtPct = (v) => `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v).toFixed(1)}%`;
-  const fmtDelta = (delta, pct) => `${delta >= 0 ? '+' : '−'}${fmt$(delta)} (${fmtPct(pct)})`;
-
   return (
-    <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-color)', padding: '16px', borderRadius: '6px', marginBottom: '16px', boxShadow: 'var(--shadow-sm)' }}>
-      <h3 style={{ margin: '0 0 12px 0', fontSize: '13px', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)', letterSpacing: '0.06em' }}>
-        Перекрут бюджета — факт vs ожидание (сегодня)
+    <div>
+      <h3 className="mb-3 text-2xs font-bold uppercase tracking-widest text-muted">
+        Перекрут бюджета (сегодня)
       </h3>
-
-      <div style={{ display: 'grid', gridTemplateColumns: 'auto repeat(4, max-content)', gap: '0 24px', alignItems: 'center' }}>
-        {/* Header */}
-        {['Кампания', 'Факт', 'Ожидание', 'Отклонение', 'Статус'].map((h) => (
-          <div key={h} style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', paddingBottom: '8px', borderBottom: '1px solid var(--border-color)' }}>
-            {h}
-          </div>
-        ))}
-
-        {/* Rows */}
-        {rows.map((row, i) => (
-          <>
-            <div key={`name-${i}`} style={{ fontSize: '13px', padding: '10px 0', borderBottom: '1px solid var(--border-color)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '320px' }} title={row.campaign}>
-              {row.campaign}
-              {row.affectedAds > 0 && (
-                <span style={{ marginLeft: '8px', fontSize: '11px', color: 'var(--text-muted)' }}>
-                  {row.affectedAds}/{row.totalAds} объявл.
-                </span>
-              )}
-            </div>
-            <div key={`actual-${i}`} style={{ fontSize: '14px', fontWeight: 600, padding: '10px 0', borderBottom: '1px solid var(--border-color)', textAlign: 'right' }}>
-              {fmt$(row.actual)}
-            </div>
-            <div key={`ideal-${i}`} style={{ fontSize: '13px', color: 'var(--text-muted)', padding: '10px 0', borderBottom: '1px solid var(--border-color)', textAlign: 'right' }}>
-              {fmt$(row.ideal)}
-            </div>
-            <div key={`delta-${i}`} style={{ fontSize: '14px', fontWeight: 700, padding: '10px 0', borderBottom: '1px solid var(--border-color)', textAlign: 'right', color: statusColor[row.status] || 'var(--text-primary)' }}>
-              {fmtDelta(row.delta, row.pct)}
-            </div>
-            <div key={`status-${i}`} style={{ padding: '10px 0', borderBottom: '1px solid var(--border-color)' }}>
-              <span style={{ fontSize: '11px', fontWeight: 600, padding: '2px 8px', borderRadius: '3px', background: statusColor[row.status] + '22', color: statusColor[row.status] }}>
-                {statusLabel[row.status] || row.status}
-              </span>
-            </div>
-          </>
-        ))}
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-border">
+              <th className="th-sortable px-3 py-2 text-left">Кампания</th>
+              <th className="th-sortable px-3 py-2 text-right">Факт</th>
+              <th className="th-sortable px-3 py-2 text-right">Ожидание</th>
+              <th className="th-sortable px-3 py-2 text-right">Отклонение</th>
+              <th className="th-sortable px-3 py-2 text-center">Статус</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, i) => {
+              const sts = STATUS_STYLES[row.status] || STATUS_STYLES.ON_TARGET;
+              return (
+                <tr key={i} className="tr-hover border-b border-border">
+                  <td className="max-w-[280px] truncate px-3 py-2.5 text-primary" title={row.campaign}>
+                    {row.campaign}
+                    {row.affectedAds > 0 && (
+                      <span className="ml-2 text-2xs text-muted">{row.affectedAds}/{row.totalAds}</span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2.5 text-right font-mono font-semibold text-primary">{fmt$(row.actual)}</td>
+                  <td className="px-3 py-2.5 text-right font-mono text-muted">{fmt$(row.ideal)}</td>
+                  <td className={`px-3 py-2.5 text-right font-mono font-bold ${sts.text}`}>
+                    {row.delta >= 0 ? '+' : '−'}{fmt$(row.delta)} ({row.pct > 0 ? '+' : ''}{row.pct.toFixed(1)}%)
+                  </td>
+                  <td className="px-3 py-2.5 text-center">
+                    <span className={sts.badge}>{sts.label}</span>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
       </div>
     </div>
   );

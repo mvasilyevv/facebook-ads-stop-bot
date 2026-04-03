@@ -84,7 +84,7 @@ cp .env.example .env
 ```
 
 Скрипт автоматически:
-- Поднимет Docker-контейнеры (Postgres + Redis)
+- Поднимет Docker-контейнеры (Postgres)
 - Создаст Python venv и установит зависимости
 - Применит миграции БД
 - Запустит API, Observer Worker, Disable Worker, Enable Recommendation Worker, Enable Worker, Telegram Poller и Frontend
@@ -109,7 +109,7 @@ make enable-recommendation-worker  # worker рекомендаций на вкл
 
 ### Ручной запуск (для разработки)
 ```bash
-docker compose up -d                                              # Postgres + Redis
+docker compose up -d                                              # Postgres
 python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'        # зависимости
 uvicorn apps.api.main:app --host 0.0.0.0 --port 8100 --reload    # API
 python run_observer.py                                             # Observer
@@ -153,10 +153,10 @@ make frontend
          │ Worker               │
          └──────────┬──────────┘
                     │
-            ┌───────▼───────┐     ┌─────────────┐
-            │   Postgres    │     │   Redis     │
-            │    :5433      │     │   :6380     │
-            └───────┬───────┘     └─────────────┘
+            ┌───────▼───────┐
+            │   Postgres    │
+            │    :5433      │
+            └───────┬───────┘
                     ▲
                     │
             ┌───────┴───────┐
@@ -203,7 +203,7 @@ make frontend
 ├── run_disable_worker.py        # Точка входа Disable Worker
 ├── run_enable_recommendation_worker.py # Точка входа Enable Recommendation Worker
 ├── run_enable_worker.py         # Точка входа Enable Worker
-├── docker-compose.yml           # Postgres + Redis
+├── docker-compose.yml           # Postgres
 └── .env.example                 # Переменные окружения
 ```
 
@@ -216,7 +216,7 @@ make frontend
 | `POSTGRES_DB` | Имя БД | `fb_stop_bot_v2` |
 | `POSTGRES_USER` | Пользователь | `fb_stop_bot_v2` |
 | `POSTGRES_PASSWORD` | Пароль | `fb_stop_bot_v2` |
-| `REDIS_URL` | URL Redis | `redis://localhost:6380/0` |
+| `API_KEY` | Ключ аутентификации API | — (без ключа API открыт) |
 | `TELEGRAM_BOT_TOKEN` | Токен Telegram-бота | — |
 | `TELEGRAM_CHAT_ID` | ID чата для алертов | — |
 | `VISION_X_TOKEN` | X-Token Vision API | — |

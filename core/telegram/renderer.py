@@ -10,17 +10,7 @@ from typing import Any
 from core.domain import AlertStage, AlertState, EnableRecommendationLevel
 
 # Человекочитаемые названия правил
-_RULE_LABELS: dict[str, str] = {
-    "cpc_stop": "Дорогой клик",
-    "cpl_stop": "Дорогой лид",
-    "cpr_stop": "Дорогая рега",
-    "regs_no_dep_stop": "Реги без депозитов",
-    "spend_no_dep_range": "Расход без депа",
-    "spend_with_dep_range": "Расход с депом",
-    "early_outbound_ctr_signal": "Слабый CTR исходящих кликов",
-    "early_lpv_ratio_signal": "Слабая доходимость до лендинга",
-    "early_cost_per_lpv_signal": "Дорогой просмотр лендинга",
-}
+from core.rules.labels import RULE_LABELS as _RULE_LABELS
 
 _NEUTRAL_ENABLE_RECOMMENDATION_REASON_TITLE = "Нет блокирующих сигналов"
 _NEUTRAL_ENABLE_RECOMMENDATION_REASON_TEXT = "По текущим правилам блокирующих сигналов нет."
@@ -34,15 +24,6 @@ _GENERIC_ENABLE_RECOMMENDATION_REASON_TEXTS = {
     _LEGACY_OK_ENABLE_RECOMMENDATION_REASON_TEXT,
     "Есть подтверждённые конверсии, и объявление проходит строгую проверку на включение.",
 }
-
-
-def _rule_label(code: str) -> str:
-    return _RULE_LABELS.get(code, code)
-
-
-def rule_label(code: str) -> str:
-    """Возвращает человекочитаемое название правила."""
-    return _rule_label(code)
 
 
 def build_ad_identity_lines(
@@ -87,7 +68,7 @@ def build_diagnosis_lines(
         for summary in summaries:
             lines.append(f"• {html.escape(summary)}")
     elif matched_rule_codes:
-        labels = ", ".join(_rule_label(code) for code in matched_rule_codes if code)
+        labels = ", ".join(_RULE_LABELS.get(code, code) for code in matched_rule_codes if code)
         if labels:
             lines.append(f"🎯 Сигналы: {html.escape(labels)}")
 
@@ -401,32 +382,3 @@ def render_enable_recommendation_message(
             ]
         },
     )
-
-
-def _render_state(state: AlertState) -> str:
-    """Человекочитаемый статус."""
-    mapping = {
-        AlertState.CLAIMED: "🔄 в работе",
-        AlertState.DISABLED: "✅ выключено",
-        AlertState.EARLY_SIGNAL_SENT: "🔎 ранний сигнал",
-        AlertState.STOP_SENT: "⏳ ждёт подтверждения",
-        AlertState.WARNING_SENT: "⚠️ предупреждение",
-    }
-    return mapping.get(state, "обычный")
-
-
-def _button_text(item: TelegramAlertItem) -> str:
-    """Текст на inline-кнопке."""
-    short = item.ad_name[:28].rstrip()
-    if item.alert_state == AlertState.CLAIMED:
-        return f"🔄 В работе: {short}"
-    if item.alert_state == AlertState.DISABLED:
-        return f"✅ Выключено: {short}"
-    return f"🛑 Отключить: {short}"
-
-
-def _button_callback(item: TelegramAlertItem) -> str:
-    """Callback data для inline-кнопки."""
-    if item.alert_state in {AlertState.CLAIMED, AlertState.DISABLED}:
-        return f"noop:{item.snapshot_id}"
-    return f"disable:{item.snapshot_id}"
