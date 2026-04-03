@@ -6,6 +6,8 @@ from __future__ import annotations
 from decimal import Decimal, InvalidOperation
 from typing import Any, Mapping
 
+from core.math_utils import safe_div_str, safe_percent
+
 _METRIC_FIELDS = (
     "spend",
     "clicks",
@@ -47,30 +49,21 @@ def is_cabinet_day_reset_scan(items: list[Mapping[str, Any] | Any]) -> bool:
     return all(not has_any_metric_value(item) for item in items)
 
 
-def _safe_decimal_div(numerator: Decimal, denominator: int) -> str | None:
-    """Строит строковое представление cost-метрики для JSON-архива."""
-    if denominator <= 0:
-        return None
-    return str((Decimal(numerator) / Decimal(denominator)).quantize(Decimal("0.0001")))
-
-
-def _safe_percent(numerator: int, denominator: int) -> float | None:
-    """Считает конверсию в процентах для JSON-архива."""
-    if denominator <= 0:
-        return None
-    return round((float(numerator) / float(denominator)) * 100, 1)
+_safe_decimal_div = safe_div_str
+_safe_percent = safe_percent
 
 
 def build_cabinet_day_archive_payload(
     items: list[Mapping[str, Any] | Any],
-) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """Собирает summary и breakdown по кампаниям для архива завершившихся суток."""
+) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Собирает summary, breakdown по кампаниям и per-ad данные для архива."""
     total_spend = Decimal("0")
     total_clicks = 0
     total_leads = 0
     total_regs = 0
     total_deps = 0
     campaign_map: dict[str, dict[str, Any]] = {}
+    ads_list: list[dict[str, Any]] = []
 
     for item in items:
         spend = Decimal(str(_extract_value(item, "spend") or 0))
@@ -85,6 +78,23 @@ def build_cabinet_day_archive_payload(
         total_leads += leads
         total_regs += regs
         total_deps += deps
+
+        # Per-ad запись для ads_json
+        fb_ad_id = str(_extract_value(item, "fb_ad_id") or "")
+        if fb_ad_id:
+            ads_list.append(
+                {
+                    "fb_ad_id": fb_ad_id,
+                    "ad_name": str(_extract_value(item, "ad_name") or ""),
+                    "campaign_name": campaign_name,
+                    "offer_code": _extract_value(item, "resolved_offer_code") or None,
+                    "spend": str(spend),
+                    "clicks": clicks,
+                    "leads": leads,
+                    "registrations": regs,
+                    "deposits": deps,
+                }
+            )
 
         if not campaign_name:
             continue
@@ -143,4 +153,7 @@ def build_cabinet_day_archive_payload(
             }
         )
 
-    return summary, campaigns
+    # Сортируем объявления по spend DESC
+    ads_list.sort(key=lambda a: Decimal(a["spend"]), reverse=True)
+
+    return summary, campaigns, ads_list

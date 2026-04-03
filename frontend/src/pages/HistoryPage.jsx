@@ -8,12 +8,14 @@ import {
   getHistoryCampaigns,
   getHistoryEvents,
   getHistoryOffers,
+  getHistoryAds,
 } from '../api.js';
 import { HistoryFilters } from '../components/history/HistoryFilters.jsx';
 import { HistoryKPIStrip } from '../components/history/HistoryKPIStrip.jsx';
 import { HistoryCampaignTable } from '../components/history/HistoryCampaignTable.jsx';
 import { HistoryOffersTable } from '../components/history/HistoryOffersTable.jsx';
 import { EventTimeline } from '../components/history/EventTimeline.jsx';
+import { HistoryAdsTable } from '../components/history/HistoryAdsTable.jsx';
 import { CampaignDetailPanel } from '../components/history/CampaignDetailPanel.jsx';
 
 const SpendTrendChart = lazy(() => import('../components/history/SpendTrendChart.jsx'));
@@ -53,6 +55,7 @@ export default function HistoryPage() {
   const [campaigns, setCampaigns] = useState([]);
   const [events, setEvents] = useState([]);
   const [offersStats, setOffersStats] = useState([]);
+  const [ads, setAds] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [selectedCampaign, setSelectedCampaign] = useState(null);
@@ -71,18 +74,20 @@ export default function HistoryPage() {
     setError(null);
     const params = buildParams(f);
     try {
-      const [sumRes, tlRes, campRes, evRes, offRes] = await Promise.all([
+      const [sumRes, tlRes, campRes, evRes, offRes, adsRes] = await Promise.all([
         getHistorySummary(params).catch(() => null),
         getHistoryTimeline(params).catch(() => []),
         getHistoryCampaigns(params).catch(() => []),
         getHistoryEvents({ ...params, limit: 50 }).catch(() => []),
         getHistoryOffers(params).catch(() => []),
+        getHistoryAds(params).catch(() => []),
       ]);
       setSummary(sumRes);
       setTimeline(Array.isArray(tlRes) ? tlRes : []);
       setCampaigns(Array.isArray(campRes) ? campRes : []);
       setEvents(evRes?.items ?? (Array.isArray(evRes) ? evRes : []));
       setOffersStats(Array.isArray(offRes) ? offRes : []);
+      setAds(Array.isArray(adsRes) ? adsRes : []);
       setEventsPage(1);
     } catch (e) {
       setError(e.message);
@@ -165,6 +170,10 @@ export default function HistoryPage() {
               data={campaigns}
               onSelect={setSelectedCampaign}
             />
+          </div>
+
+          <div className="panel p-4">
+            <HistoryAdsTable data={ads} />
           </div>
 
           <div className="panel p-4">

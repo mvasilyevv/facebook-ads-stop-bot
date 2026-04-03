@@ -19,7 +19,15 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.deps import get_db, verify_api_key
-from apps.api.routers import dashboard, history, offers, settings, vision_telegram
+from apps.api.routers import (
+    dashboard,
+    fake_deposits,
+    history,
+    naming_tracker,
+    offers,
+    settings,
+    vision_telegram,
+)
 from apps.api.schemas import (  # noqa: F401 - re-exported for backward compatibility
     ActiveIncidentSchema,
     AdDiagnosticsSchema,
@@ -36,6 +44,9 @@ from apps.api.schemas import (  # noqa: F401 - re-exported for backward compatib
     EnableTaskSchema,
     InviteCodeResponse,
     MetricDiagnosticSchema,
+    NamingPatternAdSchema,
+    NamingPatternGroupSchema,
+    NamingTrackerResponseSchema,
     ObserverSettingsSchema,
     OfferRuleConfigSchema,
     OfferSchema,
@@ -115,6 +126,8 @@ app.include_router(settings.router, dependencies=_api_key_dep)
 app.include_router(dashboard.router, dependencies=_api_key_dep)
 app.include_router(vision_telegram.router, dependencies=_api_key_dep)
 app.include_router(history.router, dependencies=_api_key_dep)
+app.include_router(fake_deposits.router, dependencies=_api_key_dep)
+app.include_router(naming_tracker.router, dependencies=_api_key_dep)
 
 
 # ==========================================

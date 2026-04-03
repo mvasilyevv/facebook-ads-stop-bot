@@ -1,4 +1,5 @@
 // Вертикальная лента событий
+import { formatTime } from '../../utils/timeUtils.js';
 
 const EVENT_STYLES = {
   alert_warning: { icon: '▲', color: 'text-warning', bg: 'bg-warning-muted' },
@@ -12,17 +13,6 @@ function getEventStyle(event) {
   if (event.event_type === 'enable') return EVENT_STYLES.enable;
   if (event.stage === 'STOP') return EVENT_STYLES.alert_stop;
   return EVENT_STYLES.alert_warning;
-}
-
-function formatTime(ts) {
-  if (!ts) return '';
-  const d = new Date(ts);
-  return d.toLocaleString('ru-RU', {
-    day: '2-digit',
-    month: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
 }
 
 function EventItem({ event }) {

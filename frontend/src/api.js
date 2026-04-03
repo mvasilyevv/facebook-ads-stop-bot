@@ -56,6 +56,15 @@ async function request(url, options = {}) {
   return resp.json();
 }
 
+/** GET-запрос с query-параметрами (фильтрует null/undefined/пустые строки). */
+function requestWithQuery(path, params = {}) {
+  const clean = Object.fromEntries(
+    Object.entries(params).filter(([, v]) => v != null && v !== ''),
+  );
+  const qs = new URLSearchParams(clean).toString();
+  return request(`${path}${qs ? '?' + qs : ''}`);
+}
+
 // Настройки observer
 export const getObserverSettings = () => request('/settings/observer');
 export const updateObserverSettings = (data) =>
@@ -88,30 +97,13 @@ export const updateOfferRules = (id, data) =>
 
 // Dashboard
 export const getDashboardStats = () => request('/dashboard/stats');
-export const getAdSnapshots = (params = {}) => {
-  // Фильтруем null/undefined чтобы не попадали в query string
-  const clean = Object.fromEntries(Object.entries(params).filter(([, v]) => v != null));
-  const qs = new URLSearchParams(clean).toString();
-  return request(`/dashboard/ads${qs ? '?' + qs : ''}`);
-};
-export const getAlertEvents = (params = {}) => {
-  const qs = new URLSearchParams(params).toString();
-  return request(`/dashboard/alerts${qs ? '?' + qs : ''}`);
-};
-export const getDashboardIncidents = (params = {}) => {
-  const qs = new URLSearchParams(params).toString();
-  return request(`/dashboard/incidents${qs ? '?' + qs : ''}`);
-};
-export const getDisableTasks = (params = {}) => {
-  const qs = new URLSearchParams(params).toString();
-  return request(`/dashboard/disable-tasks${qs ? '?' + qs : ''}`);
-};
+export const getAdSnapshots = (params = {}) => requestWithQuery('/dashboard/ads', params);
+export const getAlertEvents = (params = {}) => requestWithQuery('/dashboard/alerts', params);
+export const getDashboardIncidents = (params = {}) => requestWithQuery('/dashboard/incidents', params);
+export const getDisableTasks = (params = {}) => requestWithQuery('/dashboard/disable-tasks', params);
 export const createDisableTask = (fbAdId) =>
   request('/dashboard/disable-tasks', { method: 'POST', body: JSON.stringify({ fb_ad_id: fbAdId }) });
-export const getEnableRecommendations = (params = {}) => {
-  const qs = new URLSearchParams(params).toString();
-  return request(`/dashboard/enable-recommendations${qs ? '?' + qs : ''}`);
-};
+export const getEnableRecommendations = (params = {}) => requestWithQuery('/dashboard/enable-recommendations', params);
 export const createEnableTaskFromRecommendation = (eventId) =>
   request(`/dashboard/enable-recommendations/${eventId}/enable`, { method: 'POST' });
 export const getEnableTasks = (params = {}) => {
@@ -145,33 +137,25 @@ export const visionReconnect = () =>
 export const getVisionProfiles = () => request('/vision/profiles');
 
 // --- История заливов ---
-export const getHistorySummary = (params = {}) => {
-  const clean = Object.fromEntries(Object.entries(params).filter(([, v]) => v != null && v !== ''));
-  const qs = new URLSearchParams(clean).toString();
-  return request(`/history/summary${qs ? '?' + qs : ''}`);
-};
-export const getHistoryTimeline = (params = {}) => {
-  const clean = Object.fromEntries(Object.entries(params).filter(([, v]) => v != null && v !== ''));
-  const qs = new URLSearchParams(clean).toString();
-  return request(`/history/timeline${qs ? '?' + qs : ''}`);
-};
-export const getHistoryCampaigns = (params = {}) => {
-  const clean = Object.fromEntries(Object.entries(params).filter(([, v]) => v != null && v !== ''));
-  const qs = new URLSearchParams(clean).toString();
-  return request(`/history/campaigns${qs ? '?' + qs : ''}`);
-};
-export const getHistoryEvents = (params = {}) => {
-  const clean = Object.fromEntries(Object.entries(params).filter(([, v]) => v != null && v !== ''));
-  const qs = new URLSearchParams(clean).toString();
-  return request(`/history/events${qs ? '?' + qs : ''}`);
-};
+export const getHistorySummary = (params = {}) => requestWithQuery('/history/summary', params);
+export const getHistoryTimeline = (params = {}) => requestWithQuery('/history/timeline', params);
+export const getHistoryCampaigns = (params = {}) => requestWithQuery('/history/campaigns', params);
+export const getHistoryEvents = (params = {}) => requestWithQuery('/history/events', params);
+export const getHistoryOffers = (params = {}) => requestWithQuery('/history/offers', params);
+export const getHistoryAds = (params = {}) => requestWithQuery('/history/ads', params);
 
-// История заливов — офферы
-export const getHistoryOffers = (params = {}) => {
-  const clean = Object.fromEntries(Object.entries(params).filter(([, v]) => v != null && v !== ''));
-  const qs = new URLSearchParams(clean).toString();
-  return request(`/history/offers${qs ? '?' + qs : ''}`);
-};
+// --- Ложные депозиты ---
+export const getFakeDeposits = () => request('/fake-deposits');
+export const setFakeDeposits = (fbAdId, fakeCount, note = '') =>
+  request(`/fake-deposits/${fbAdId}`, {
+    method: 'PUT',
+    body: JSON.stringify({ fake_count: fakeCount, note }),
+  });
+export const deleteFakeDeposits = (fbAdId) =>
+  request(`/fake-deposits/${fbAdId}`, { method: 'DELETE' });
+
+// --- Трекер нейминга ---
+export const getNamingPatterns = (params = {}) => requestWithQuery('/naming-tracker/patterns', params);
 
 // Telegram получатели (мультипользователи)
 export const getTelegramRecipients = () => request('/settings/telegram/recipients');

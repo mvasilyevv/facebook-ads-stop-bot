@@ -274,12 +274,12 @@ export default function OffersPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border bg-elevated/50">
-                  <th className="th-sortable px-3 py-2 text-left">Код</th>
-                  <th className="th-sortable px-3 py-2 text-left">Название</th>
-                  <th className="th-sortable px-3 py-2 text-right">CPA</th>
-                  <th className="th-sortable px-3 py-2 text-center">Статус</th>
-                  <th className="th-sortable px-3 py-2 text-center">Правила</th>
-                  <th className="th-sortable px-3 py-2 text-right">Действия</th>
+                  <th className="px-3 py-2 text-2xs uppercase tracking-wider text-muted text-left">Код</th>
+                  <th className="px-3 py-2 text-2xs uppercase tracking-wider text-muted text-left">Название</th>
+                  <th className="px-3 py-2 text-2xs uppercase tracking-wider text-muted text-right">CPA</th>
+                  <th className="px-3 py-2 text-2xs uppercase tracking-wider text-muted text-center">Статус</th>
+                  <th className="px-3 py-2 text-2xs uppercase tracking-wider text-muted text-center">Правила</th>
+                  <th className="px-3 py-2 text-2xs uppercase tracking-wider text-muted text-right">Действия</th>
                 </tr>
               </thead>
               <tbody>

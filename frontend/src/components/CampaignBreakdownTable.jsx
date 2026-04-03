@@ -1,5 +1,8 @@
 // Разбивка по кампаниям с сортировкой
-import { useState } from 'react';
+import { useTableSort, sortRows } from '../hooks/useTableSort.js';
+import { SortableHeader } from './SortableHeader.jsx';
+
+const TEXT_KEYS = new Set(['campaign']);
 
 const COLUMNS = [
   { key: 'campaign', label: 'Кампания', align: 'text-left', mono: false },
@@ -12,8 +15,7 @@ const COLUMNS = [
 ];
 
 export function CampaignBreakdownTable({ data = [] }) {
-  const [sortKey, setSortKey] = useState('spend');
-  const [sortDir, setSortDir] = useState('desc');
+  const { sortKey, sortDir, handleSort } = useTableSort('spend');
 
   if (!data.length) {
     return (
@@ -24,21 +26,7 @@ export function CampaignBreakdownTable({ data = [] }) {
     );
   }
 
-  const handleSort = (key) => {
-    if (sortKey === key) {
-      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
-    } else {
-      setSortKey(key);
-      setSortDir('desc');
-    }
-  };
-
-  const sorted = [...data].sort((a, b) => {
-    const av = a[sortKey] ?? 0;
-    const bv = b[sortKey] ?? 0;
-    if (typeof av === 'string') return sortDir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av);
-    return sortDir === 'asc' ? av - bv : bv - av;
-  });
+  const sorted = sortRows(data, sortKey, sortDir, TEXT_KEYS);
 
   return (
     <div>
@@ -50,16 +38,13 @@ export function CampaignBreakdownTable({ data = [] }) {
           <thead>
             <tr className="border-b border-border bg-elevated/50">
               {COLUMNS.map((col) => (
-                <th
+                <SortableHeader
                   key={col.key}
-                  onClick={() => handleSort(col.key)}
-                  className={`th-sortable cursor-pointer select-none whitespace-nowrap px-3 py-2 ${col.align} ${sortKey === col.key ? 'text-accent' : ''}`}
-                >
-                  {col.label}
-                  {sortKey === col.key && (
-                    <span className="ml-1">{sortDir === 'asc' ? '↑' : '↓'}</span>
-                  )}
-                </th>
+                  col={col}
+                  sortKey={sortKey}
+                  sortDir={sortDir}
+                  onSort={handleSort}
+                />
               ))}
             </tr>
           </thead>

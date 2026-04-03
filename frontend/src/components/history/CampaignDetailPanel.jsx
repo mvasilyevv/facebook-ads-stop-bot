@@ -3,9 +3,8 @@ import { useState, useMemo } from 'react';
 import { EventTimeline } from './EventTimeline.jsx';
 import { AdDetailPanel } from './AdDetailPanel.jsx';
 
-const fmt$ = (v) => (v != null ? `$${Number(v).toFixed(2)}` : '—');
-const fmtN = (v) => (v != null ? String(v) : '—');
-const fmtRoas = (v) => (v != null && Number(v) > 0 ? `${Number(v).toFixed(2)}x` : '—');
+import { fmt$, fmtN, fmtRoas } from '../../utils/formatters.js';
+import { formatTime } from '../../utils/timeUtils.js';
 
 function PanelKPI({ label, value }) {
   return (
@@ -50,14 +49,6 @@ function extractUniqueAds(events) {
     }
   }
   return Array.from(map.values());
-}
-
-function formatTime(ts) {
-  if (!ts) return '';
-  return new Date(ts).toLocaleString('ru-RU', {
-    day: '2-digit', month: '2-digit',
-    hour: '2-digit', minute: '2-digit',
-  });
 }
 
 function AdsTable({ ads, onSelect }) {

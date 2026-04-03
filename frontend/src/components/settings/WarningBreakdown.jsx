@@ -85,14 +85,14 @@ export function WarningBreakdown({ observer }) {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-border">
-                    <th className="th-sortable px-2 py-2 text-left">Оффер</th>
-                    <th className="th-sortable px-2 py-2 text-right">CPA</th>
-                    <th className="th-sortable px-2 py-2 text-right">CPC стоп</th>
-                    <th className="th-sortable px-2 py-2 text-right text-warning">CPC warn</th>
-                    <th className="th-sortable px-2 py-2 text-right">CPL стоп</th>
-                    <th className="th-sortable px-2 py-2 text-right text-warning">CPL warn</th>
-                    <th className="th-sortable px-2 py-2 text-right">CPR стоп</th>
-                    <th className="th-sortable px-2 py-2 text-right text-warning">CPR warn</th>
+                    <th className="px-2 py-2 text-2xs uppercase tracking-wider text-muted text-left">Оффер</th>
+                    <th className="px-2 py-2 text-2xs uppercase tracking-wider text-muted text-right">CPA</th>
+                    <th className="px-2 py-2 text-2xs uppercase tracking-wider text-muted text-right">CPC стоп</th>
+                    <th className="px-2 py-2 text-2xs uppercase tracking-wider text-muted text-right text-warning">CPC warn</th>
+                    <th className="px-2 py-2 text-2xs uppercase tracking-wider text-muted text-right">CPL стоп</th>
+                    <th className="px-2 py-2 text-2xs uppercase tracking-wider text-muted text-right text-warning">CPL warn</th>
+                    <th className="px-2 py-2 text-2xs uppercase tracking-wider text-muted text-right">CPR стоп</th>
+                    <th className="px-2 py-2 text-2xs uppercase tracking-wider text-muted text-right text-warning">CPR warn</th>
                   </tr>
                 </thead>
                 <tbody>

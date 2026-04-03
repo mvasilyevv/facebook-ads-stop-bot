@@ -1,8 +1,5 @@
 // KPI-полоса истории: расход, лиды, реги, депозиты, ROAS + дельты
-
-const fmt$ = (v) => (v != null ? `$${Number(v).toFixed(2)}` : '—');
-const fmtN = (v) => (v != null ? String(v) : '—');
-const fmtRoas = (v) => (v != null && Number(v) > 0 ? `${Number(v).toFixed(2)}x` : '—');
+import { fmt$, fmtN, fmtRoas } from '../../utils/formatters.js';
 
 function Delta({ current, previous, lowerIsBetter = false }) {
   if (current == null || previous == null || previous === 0) return null;

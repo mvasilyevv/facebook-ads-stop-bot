@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ALERT_STATE_LABELS } from '../constants/alertStates.js';
+import { fmt$ as _fmt$, fmtN as _fmtN, fmtRoas as _fmtRoas } from '../utils/formatters.js';
 import {
   getDashboardStats,
   getDashboardIncidents,
@@ -203,10 +204,10 @@ function ScanStatusBar({ settings, onToggle, onScanNow, scanning, lastScanAt, ob
 function HeroKPIStrip({ performance, performanceYesterday }) {
   const s = performance?.summary;
   const y = performanceYesterday?.summary;
-  const fmt$ = (v) => (v != null ? `$${Number(v).toFixed(2)}` : '—');
-  const fmtN = (v) => (v != null ? String(v) : '—');
+  const fmt$ = _fmt$;
+  const fmtN = _fmtN;
   const fmtPct = (v) => (v != null ? `${Number(v).toFixed(1)}%` : '—');
-  const fmtRoas = (v) => (v != null && Number(v) > 0 ? `${Number(v).toFixed(2)}x` : '—');
+  const fmtRoas = _fmtRoas;
 
   const hasDeposits = Number(s?.deposits ?? 0) > 0;
   const hasSpend = Number(s?.spend ?? 0) > 0;

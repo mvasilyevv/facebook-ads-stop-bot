@@ -6,10 +6,8 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 
-from sqlalchemy import select
-
 from core.db import get_session_factory
-from core.models import ObserverSettings
+from core.settings_queries import get_or_create_observer_settings
 
 logger = logging.getLogger(__name__)
 
@@ -66,13 +64,7 @@ async def update_observer_runtime_status(
 
     try:
         async with factory() as session:
-            result = await session.execute(
-                select(ObserverSettings).where(ObserverSettings.singleton_key == "default")
-            )
-            row = result.scalar_one_or_none()
-            if row is None:
-                row = ObserverSettings(singleton_key="default")
-                session.add(row)
+            row = await get_or_create_observer_settings(session)
 
             row.worker_status = _truncate_text(status, _MAX_STATUS_LEN)
             row.worker_message = _truncate_text(message, _MAX_MESSAGE_LEN)

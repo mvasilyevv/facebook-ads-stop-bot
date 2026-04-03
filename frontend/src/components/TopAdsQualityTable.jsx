@@ -1,6 +1,5 @@
 import { StateIcon } from './StateIcon.jsx';
-
-const fmt$ = (v) => `$${Number(v || 0).toFixed(2)}`;
+import { fmt$ } from '../utils/formatters.js';
 
 /** Таблица топ объявлений по расходу */
 export function TopAdsQualityTable({ data = [] }) {
@@ -16,12 +15,12 @@ export function TopAdsQualityTable({ data = [] }) {
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-border bg-elevated/50">
-              <th className="th-sortable px-3 py-2 text-left">Объявление</th>
-              <th className="th-sortable px-3 py-2 text-right">Расход</th>
-              <th className="th-sortable px-3 py-2 text-right">Клики</th>
-              <th className="th-sortable px-3 py-2 text-right">Лиды</th>
-              <th className="th-sortable px-3 py-2 text-right">Депозиты</th>
-              <th className="th-sortable px-3 py-2 text-center">Статус</th>
+              <th className="px-3 py-2 text-2xs uppercase tracking-wider text-muted text-left">Объявление</th>
+              <th className="px-3 py-2 text-2xs uppercase tracking-wider text-muted text-right">Расход</th>
+              <th className="px-3 py-2 text-2xs uppercase tracking-wider text-muted text-right">Клики</th>
+              <th className="px-3 py-2 text-2xs uppercase tracking-wider text-muted text-right">Лиды</th>
+              <th className="px-3 py-2 text-2xs uppercase tracking-wider text-muted text-right">Депозиты</th>
+              <th className="px-3 py-2 text-2xs uppercase tracking-wider text-muted text-center">Статус</th>
             </tr>
           </thead>
           <tbody>

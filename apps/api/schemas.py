@@ -226,6 +226,8 @@ class AdSnapshotSchema(BaseModel):
     registrations: int
     cost_per_registration: Decimal | None = None
     deposits: int
+    fake_deposits: int = 0
+    effective_deposits: int = 0
     alert_state: str
     current_stage: str | None = None
     early_signal_rule_codes: list[str] = []
@@ -654,6 +656,50 @@ class HistoryEventItem(BaseModel):
     created_at: str
 
 
+# === Per-ad история ===
+
+
+class HistoryAdRow(BaseModel):
+    """Строка таблицы объявлений за период."""
+
+    fb_ad_id: str
+    ad_name: str
+    campaign_name: str
+    offer_code: str | None = None
+    total_spend: Decimal
+    total_clicks: int
+    total_leads: int
+    total_registrations: int
+    total_deposits: int
+    avg_cpc: Decimal | None = None
+    avg_cpl: Decimal | None = None
+    avg_cpr: Decimal | None = None
+    avg_spend_per_dep: Decimal | None = None
+
+
+# === Корректировка ложных депозитов ===
+
+
+class AdDepositCorrectionUpdateSchema(BaseModel):
+    """Тело запроса на установку ложных депозитов."""
+
+    fake_count: int = Field(ge=0, description="Количество ложных депозитов")
+    note: str = Field(default="", max_length=500, description="Причина корректировки")
+
+
+class AdDepositCorrectionSchema(BaseModel):
+    """Ответ с корректировкой ложных депозитов."""
+
+    id: str
+    fb_ad_id: str
+    fake_count: int
+    note: str
+    ad_name: str | None = None
+    campaign_name: str | None = None
+    created_at: str
+    updated_at: str
+
+
 class HistoryEventsPage(BaseModel):
     """Лента событий с пагинацией."""
 
@@ -661,3 +707,34 @@ class HistoryEventsPage(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+# ==========================================
+# Трекер нейминга объявлений
+# ==========================================
+
+
+class NamingPatternAdSchema(BaseModel):
+    """Пример объявления в группе нейминга."""
+
+    ad_name: str
+    fb_ad_id: str
+    last_observed_at: str | None = None
+
+
+class NamingPatternGroupSchema(BaseModel):
+    """Группа объявлений с одним префиксом нейминга."""
+
+    prefix: str
+    offer_code: str | None = None
+    offer_name: str | None = None
+    max_number: int
+    total_count: int
+    recent_ads: list[NamingPatternAdSchema] = []
+
+
+class NamingTrackerResponseSchema(BaseModel):
+    """Ответ трекера паттернов нейминга."""
+
+    patterns: list[NamingPatternGroupSchema] = []
+    total_patterns: int = 0

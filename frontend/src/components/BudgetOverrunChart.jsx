@@ -6,7 +6,8 @@ const STATUS_STYLES = {
   UNDER: { badge: 'badge-neutral', text: 'text-secondary', label: 'НЕДОКРУТ' },
 };
 
-const fmt$ = (v) => `$${Math.abs(v).toFixed(2)}`;
+/** Форматирует абсолютное значение (для дельт бюджета) */
+const fmtAbs$ = (v) => `$${Math.abs(v).toFixed(2)}`;
 
 export function BudgetOverrunChart({ data = [] }) {
   if (!data.length) {
@@ -38,11 +39,11 @@ export function BudgetOverrunChart({ data = [] }) {
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-border">
-              <th className="th-sortable px-3 py-2 text-left">Кампания</th>
-              <th className="th-sortable px-3 py-2 text-right">Факт</th>
-              <th className="th-sortable px-3 py-2 text-right">Ожидание</th>
-              <th className="th-sortable px-3 py-2 text-right">Отклонение</th>
-              <th className="th-sortable px-3 py-2 text-center">Статус</th>
+              <th className="px-3 py-2 text-2xs uppercase tracking-wider text-muted text-left">Кампания</th>
+              <th className="px-3 py-2 text-2xs uppercase tracking-wider text-muted text-right">Факт</th>
+              <th className="px-3 py-2 text-2xs uppercase tracking-wider text-muted text-right">Ожидание</th>
+              <th className="px-3 py-2 text-2xs uppercase tracking-wider text-muted text-right">Отклонение</th>
+              <th className="px-3 py-2 text-2xs uppercase tracking-wider text-muted text-center">Статус</th>
             </tr>
           </thead>
           <tbody>
@@ -56,10 +57,10 @@ export function BudgetOverrunChart({ data = [] }) {
                       <span className="ml-2 text-2xs text-muted">{row.affectedAds}/{row.totalAds}</span>
                     )}
                   </td>
-                  <td className="px-3 py-2.5 text-right font-mono font-semibold text-primary">{fmt$(row.actual)}</td>
-                  <td className="px-3 py-2.5 text-right font-mono text-muted">{fmt$(row.ideal)}</td>
+                  <td className="px-3 py-2.5 text-right font-mono font-semibold text-primary">{fmtAbs$(row.actual)}</td>
+                  <td className="px-3 py-2.5 text-right font-mono text-muted">{fmtAbs$(row.ideal)}</td>
                   <td className={`px-3 py-2.5 text-right font-mono font-bold ${sts.text}`}>
-                    {row.delta >= 0 ? '+' : '−'}{fmt$(row.delta)} ({row.pct > 0 ? '+' : ''}{row.pct.toFixed(1)}%)
+                    {row.delta >= 0 ? '+' : '−'}{fmtAbs$(row.delta)} ({row.pct > 0 ? '+' : ''}{row.pct.toFixed(1)}%)
                   </td>
                   <td className="px-3 py-2.5 text-center">
                     <span className={sts.badge}>{sts.label}</span>

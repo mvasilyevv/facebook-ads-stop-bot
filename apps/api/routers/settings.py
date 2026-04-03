@@ -28,7 +28,6 @@ from core.config import get_settings
 from core.crypto import decrypt, encrypt
 from core.domain import TelegramDeliveryMode, TelegramUserRole
 from core.models import (
-    ObserverSettings,
     TelegramInvite,
     TelegramSettings,
 )
@@ -37,6 +36,12 @@ from core.observer.thresholds import (
     derive_legacy_stop_percent_of_base,
     derive_legacy_warning_percent_of_stop,
     extract_observer_threshold_values,
+)
+from core.settings_queries import (
+    get_observer_settings as _get_settings,
+)
+from core.settings_queries import (
+    get_or_create_observer_settings as _get_or_create_settings,
 )
 from core.telegram.client import TelegramBotClient
 from core.telegram.service import (
@@ -60,10 +65,7 @@ router = APIRouter(prefix="/api", tags=["settings"])
 @router.get("/settings/observer", response_model=ObserverSettingsSchema)
 async def get_observer_settings(db: AsyncSession = Depends(get_db)):
     """Получить настройки observer."""
-    result = await db.execute(
-        select(ObserverSettings).where(ObserverSettings.singleton_key == "default")
-    )
-    row = result.scalar_one_or_none()
+    row = await _get_settings(db)
     threshold_values = extract_observer_threshold_values(row)
     if row is None:
         return ObserverSettingsSchema(**threshold_values)
@@ -80,13 +82,7 @@ async def update_observer_settings(
     body: ObserverSettingsSchema, db: AsyncSession = Depends(get_db)
 ):
     """Обновить настройки observer (upsert singleton)."""
-    result = await db.execute(
-        select(ObserverSettings).where(ObserverSettings.singleton_key == "default")
-    )
-    row = result.scalar_one_or_none()
-    if row is None:
-        row = ObserverSettings(singleton_key="default")
-        db.add(row)
+    row = await _get_or_create_settings(db)
     threshold_values = extract_observer_threshold_values(body)
     if "warning_percent_of_stop" not in body.model_fields_set:
         threshold_values["warning_percent_of_stop"] = derive_legacy_warning_percent_of_stop(
@@ -112,13 +108,7 @@ async def update_observer_settings(
 @router.patch("/settings/observer/scanning")
 async def toggle_scanning(body: ScanningToggleSchema, db: AsyncSession = Depends(get_db)):
     """Быстрое переключение сканирования без изменения остальных настроек."""
-    result = await db.execute(
-        select(ObserverSettings).where(ObserverSettings.singleton_key == "default")
-    )
-    row = result.scalar_one_or_none()
-    if row is None:
-        row = ObserverSettings(singleton_key="default")
-        db.add(row)
+    row = await _get_or_create_settings(db)
     row.is_scanning_enabled = body.enabled
     await db.commit()
     return {"is_scanning_enabled": row.is_scanning_enabled}
@@ -127,13 +117,7 @@ async def toggle_scanning(body: ScanningToggleSchema, db: AsyncSession = Depends
 @router.post("/settings/observer/scan-now")
 async def trigger_scan_now(db: AsyncSession = Depends(get_db)):
     """Установить флаг немедленного скана — воркер выполнит скан при следующей проверке."""
-    result = await db.execute(
-        select(ObserverSettings).where(ObserverSettings.singleton_key == "default")
-    )
-    row = result.scalar_one_or_none()
-    if row is None:
-        row = ObserverSettings(singleton_key="default")
-        db.add(row)
+    row = await _get_or_create_settings(db)
     row.scan_requested = True
     await db.commit()
     return {"scan_requested": True}

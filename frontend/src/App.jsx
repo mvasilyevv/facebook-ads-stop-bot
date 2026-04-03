@@ -4,6 +4,7 @@ import AdsPage from './pages/AdsPage.jsx';
 import OffersPage from './pages/OffersPage.jsx';
 import SettingsPage from './pages/SettingsPage.jsx';
 import HistoryPage from './pages/HistoryPage.jsx';
+import NamingTrackerPage from './pages/NamingTrackerPage.jsx';
 
 /** Error Boundary — ловит ошибки рендера и показывает fallback */
 class ErrorBoundary extends Component {
@@ -72,6 +73,11 @@ const NAV_ICONS = {
       <polyline points="10,5 10,10 13,12" />
     </svg>
   ),
+  naming: (
+    <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <text x="3" y="15" fontSize="14" fontWeight="bold" fill="currentColor" stroke="none">#</text>
+    </svg>
+  ),
   settings: (
     <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
       <circle cx="10" cy="10" r="3" />
@@ -85,6 +91,7 @@ const PAGES = [
   { id: 'ads', label: 'Объявления' },
   { id: 'offers', label: 'Офферы' },
   { id: 'history', label: 'История' },
+  { id: 'naming', label: 'Нейминг' },
   { id: 'settings', label: 'Настройки' },
 ];
 
@@ -137,6 +144,8 @@ export default function App() {
         return <OffersPage />;
       case 'history':
         return <HistoryPage onNavigate={navigate} />;
+      case 'naming':
+        return <NamingTrackerPage />;
       case 'settings':
         return <SettingsPage />;
       default:

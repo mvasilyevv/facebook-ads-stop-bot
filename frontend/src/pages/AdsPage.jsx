@@ -7,7 +7,11 @@ import {
   getAdTimeline,
   retryDisableTask,
   restartDisableWorker,
+  setFakeDeposits,
+  deleteFakeDeposits,
 } from '../api.js';
+import { fmt$ as _sharedFmt$, fmtN as _sharedFmtN } from '../utils/formatters.js';
+import { formatTime as _sharedFmtTime } from '../utils/timeUtils.js';
 import { useAsyncPolling } from '../hooks/useAsyncPolling.js';
 import { useRefreshOnResume } from '../hooks/useRefreshOnResume.js';
 import { StateIcon } from '../components/StateIcon.jsx';
@@ -62,23 +66,26 @@ const STATE_PRIORITY = {
 const QUICK_FILTERS = [
   {
     id: 'problems',
-    label: 'Проблемные ↑',
-    apply: (ads) => [...ads].sort((a, b) => STATE_PRIORITY[getAdDisplayState(b)] - STATE_PRIORITY[getAdDisplayState(a)]),
-  },
-  {
-    id: 'top-spend',
-    label: 'Топ расход',
-    apply: (ads) => [...ads].sort((a, b) => parseFloat(b.spend || 0) - parseFloat(a.spend || 0)),
+    label: 'Проблемные',
+    predicate: (ad) => {
+      const s = getAdDisplayState(ad);
+      return s === 'WARNING_SENT' || s === 'STOP_SENT' || s === 'EARLY_SIGNAL_SENT' || s === 'CLAIMED';
+    },
   },
   {
     id: 'no-deposits',
     label: 'Без депозитов',
-    apply: (ads) => ads.filter((ad) => ad.deposits === 0 && parseFloat(ad.spend || 0) > 0),
+    predicate: (ad) => (ad.effective_deposits ?? ad.deposits) === 0 && parseFloat(ad.spend || 0) > 0,
   },
   {
-    id: 'recent',
-    label: 'Недавние',
-    apply: (ads) => [...ads].sort((a, b) => new Date(b.last_observed_at || 0) - new Date(a.last_observed_at || 0)),
+    id: 'with-deposits',
+    label: 'С депозитами',
+    predicate: (ad) => (ad.effective_deposits ?? ad.deposits) > 0,
+  },
+  {
+    id: 'has-fake',
+    label: 'Есть фейки',
+    predicate: (ad) => (ad.fake_deposits || 0) > 0,
   },
 ];
 
@@ -130,8 +137,8 @@ function fmtNum(val) {
   return String(val);
 }
 
-const fmt$ = (v) => (v != null && v !== '') ? `$${Number(v).toFixed(2)}` : '—';
-const fmtN = (v) => (v != null && v !== '') ? String(Number(v)) : '—';
+const fmt$ = _sharedFmt$;
+const fmtN = _sharedFmtN;
 
 function extractListPayload(payload) {
   if (Array.isArray(payload)) return payload;
@@ -160,11 +167,7 @@ function normalizeIncidentList(payload) {
     .sort((left, right) => new Date(getIncidentActivityAt(right) || 0) - new Date(getIncidentActivityAt(left) || 0));
 }
 
-function fmtTime(isoStr) {
-  if (!isoStr) return '—';
-  const d = new Date(isoStr);
-  return d.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
-}
+const fmtTime = _sharedFmtTime;
 
 function formatNextRetry(isoStr) {
   if (!isoStr) return '';
@@ -303,7 +306,8 @@ function compareAds(a, b, sortBy, sortDirection) {
     sortBy === 'registrations' ||
     sortBy === 'deposits'
   ) {
-    result = compareNullableNumbers(a[sortBy], b[sortBy]);
+    const key = sortBy === 'deposits' ? 'effective_deposits' : sortBy;
+    result = compareNullableNumbers(a[key] ?? a[sortBy], b[key] ?? b[sortBy]);
   } else {
     result = compareNullableText(a[sortBy], b[sortBy]);
   }
@@ -527,52 +531,52 @@ function AdTimeline({ fbAdId, onClose }) {
         {data && !loading && (
           <div className="space-y-4 px-5 py-4">
             {/* Текущие метрики */}
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
               {data.current_incident && (
-                <div className="rounded bg-elevated px-3 py-2">
-                  <span>Инцидент</span>
-                  <strong>{getIncidentStateLabel(data.current_incident)}</strong>
+                <div className="flex flex-col rounded bg-elevated px-3 py-2">
+                  <span className="text-2xs text-muted">Инцидент</span>
+                  <strong className="text-sm text-primary font-mono">{getIncidentStateLabel(data.current_incident)}</strong>
                 </div>
               )}
-              <div className="rounded bg-elevated px-3 py-2">
-                <span>Расход</span>
-                <strong>{fmt(data.current_metrics?.spend)}</strong>
+              <div className="flex flex-col rounded bg-elevated px-3 py-2">
+                <span className="text-2xs text-muted">Расход</span>
+                <strong className="text-sm text-primary font-mono">{fmt(data.current_metrics?.spend)}</strong>
               </div>
-              <div className="rounded bg-elevated px-3 py-2">
-                <span>CPC</span>
-                <strong>{fmt(data.current_metrics?.cpc)}</strong>
+              <div className="flex flex-col rounded bg-elevated px-3 py-2">
+                <span className="text-2xs text-muted">CPC</span>
+                <strong className="text-sm text-primary font-mono">{fmt(data.current_metrics?.cpc)}</strong>
               </div>
-              <div className="rounded bg-elevated px-3 py-2">
-                <span>Статус Meta</span>
-                <strong>{data.current_metrics?.delivery_status || data.delivery_status || '—'}</strong>
+              <div className="flex flex-col rounded bg-elevated px-3 py-2">
+                <span className="text-2xs text-muted">Статус Meta</span>
+                <strong className="text-sm text-primary">{data.current_metrics?.delivery_status || data.delivery_status || '—'}</strong>
               </div>
-              <div className="rounded bg-elevated px-3 py-2">
-                <span>Исх. CTR</span>
-                <strong>{data.current_metrics?.outbound_ctr ? `${Number(data.current_metrics.outbound_ctr).toFixed(2)}%` : '—'}</strong>
+              <div className="flex flex-col rounded bg-elevated px-3 py-2">
+                <span className="text-2xs text-muted">Исх. CTR</span>
+                <strong className="text-sm text-primary font-mono">{data.current_metrics?.outbound_ctr ? `${Number(data.current_metrics.outbound_ctr).toFixed(2)}%` : '—'}</strong>
               </div>
-              <div className="rounded bg-elevated px-3 py-2">
-                <span>LPV</span>
-                <strong>{fmtNum(data.current_metrics?.landing_page_views)}</strong>
+              <div className="flex flex-col rounded bg-elevated px-3 py-2">
+                <span className="text-2xs text-muted">LPV</span>
+                <strong className="text-sm text-primary font-mono">{fmtNum(data.current_metrics?.landing_page_views)}</strong>
               </div>
-              <div className="rounded bg-elevated px-3 py-2">
-                <span>Лиды</span>
-                <strong>{fmtNum(data.current_metrics?.leads)}</strong>
+              <div className="flex flex-col rounded bg-elevated px-3 py-2">
+                <span className="text-2xs text-muted">Лиды</span>
+                <strong className="text-sm text-primary font-mono">{fmtNum(data.current_metrics?.leads)}</strong>
               </div>
-              <div className="rounded bg-elevated px-3 py-2">
-                <span>Реги</span>
-                <strong>{fmtNum(data.current_metrics?.registrations)}</strong>
+              <div className="flex flex-col rounded bg-elevated px-3 py-2">
+                <span className="text-2xs text-muted">Реги</span>
+                <strong className="text-sm text-primary font-mono">{fmtNum(data.current_metrics?.registrations)}</strong>
               </div>
-              <div className="rounded bg-elevated px-3 py-2">
-                <span>CPR</span>
-                <strong>{fmt(data.current_metrics?.cost_per_registration, 4)}</strong>
+              <div className="flex flex-col rounded bg-elevated px-3 py-2">
+                <span className="text-2xs text-muted">CPR</span>
+                <strong className="text-sm text-primary font-mono">{fmt(data.current_metrics?.cost_per_registration, 4)}</strong>
               </div>
-              <div className="rounded bg-elevated px-3 py-2">
-                <span>Депы</span>
-                <strong>{fmtNum(data.current_metrics?.deposits)}</strong>
+              <div className="flex flex-col rounded bg-elevated px-3 py-2">
+                <span className="text-2xs text-muted">Депы</span>
+                <strong className="text-sm text-primary font-mono">{fmtNum(data.current_metrics?.deposits)}</strong>
               </div>
-              <div className="rounded bg-elevated px-3 py-2">
-                <span>Последний скан</span>
-                <strong>{fmtTime(data.last_observed_at)}</strong>
+              <div className="flex flex-col rounded bg-elevated px-3 py-2">
+                <span className="text-2xs text-muted">Последний скан</span>
+                <strong className="text-sm text-primary font-mono">{fmtTime(data.last_observed_at)}</strong>
               </div>
             </div>
 
@@ -835,6 +839,7 @@ export default function AdsPage({ initialView = 'active', initialState = '' }) {
   const [timelineAdId, setTimelineAdId] = useState(null);
   const [restartingDisableWorker, setRestartingDisableWorker] = useState(false);
   const [activeQuickFilter, setActiveQuickFilter] = useState(null);
+  const [fakeDepModal, setFakeDepModal] = useState(null); // { fb_ad_id, ad_name, deposits, fake_deposits }
 
   useEffect(() => {
     setView(initialView);
@@ -884,11 +889,30 @@ export default function AdsPage({ initialView = 'active', initialState = '' }) {
     void loadAds();
   });
 
+  const handleSaveFakeDeps = useCallback(async (fbAdId, fakeCount, note) => {
+    try {
+      if (fakeCount <= 0) {
+        await deleteFakeDeposits(fbAdId);
+      } else {
+        await setFakeDeposits(fbAdId, fakeCount, note);
+      }
+      setFakeDepModal(null);
+      await loadAds();
+    } catch (e) {
+      console.error('Ошибка сохранения ложных депозитов:', e);
+    }
+  }, [loadAds]);
+
   const handleSort = useCallback((field) => {
-    setSortBy(field);
-    const opt = SORT_OPTIONS.find(o => o.value === field);
-    if (opt) setSortDirection(opt.defaultDirection);
-  }, []);
+    if (sortBy === field) {
+      // Повторный клик — переключить направление
+      setSortDirection((d) => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortBy(field);
+      const opt = SORT_OPTIONS.find((o) => o.value === field);
+      if (opt) setSortDirection(opt.defaultDirection);
+    }
+  }, [sortBy]);
 
   const handleRestartDisableWorker = useCallback(async (taskId) => {
     if (restartingDisableWorker) {
@@ -1004,15 +1028,15 @@ export default function AdsPage({ initialView = 'active', initialState = '' }) {
           : getAdDisplayState(a) === stateFilter
       ));
     }
-    // Применяем quick filter, если выбран
+    // Применяем quick filter (предикат), если выбран
     if (activeQuickFilter) {
       const filter = QUICK_FILTERS.find((f) => f.id === activeQuickFilter);
       if (filter) {
-        result = filter.apply(result);
+        result = result.filter(filter.predicate);
       }
-    } else {
-      result = [...result].sort((a, b) => compareAds(a, b, sortBy, sortDirection));
     }
+    // Сортировка всегда работает
+    result = [...result].sort((a, b) => compareAds(a, b, sortBy, sortDirection));
     return result;
   }, [sourceAds, offerFilter, stateFilter, sortBy, sortDirection, activeQuickFilter]);
 
@@ -1083,30 +1107,18 @@ export default function AdsPage({ initialView = 'active', initialState = '' }) {
           </select>
         </div>
 
-        {/* Сортировка */}
-        <div className="ml-auto flex items-center gap-2">
-          <span className="text-2xs text-muted">Сортировка</span>
-          <select className={selectCls} value={sortBy} onChange={(e) => { setSortBy(e.target.value); const opt = SORT_OPTIONS.find((o) => o.value === e.target.value); if (opt) setSortDirection(opt.defaultDirection); }}>
-            {SORT_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-          </select>
-          <select className={`${selectCls} w-[130px]`} value={sortDirection} onChange={(e) => setSortDirection(e.target.value)}>
-            <option value="asc">По возрастанию</option>
-            <option value="desc">По убыванию</option>
-          </select>
+        {/* Quick-фильтры */}
+        <div className="ml-auto flex gap-1.5">
+          {QUICK_FILTERS.map((f) => (
+            <button
+              key={f.id}
+              className={`rounded px-2.5 py-1.5 text-2xs font-medium transition-colors ${activeQuickFilter === f.id ? 'bg-accent-muted text-accent' : 'bg-elevated text-secondary hover:text-primary'}`}
+              onClick={() => setActiveQuickFilter(activeQuickFilter === f.id ? null : f.id)}
+            >
+              {f.label}
+            </button>
+          ))}
         </div>
-      </div>
-
-      {/* Quick-фильтры */}
-      <div className="flex gap-1.5">
-        {QUICK_FILTERS.map((f) => (
-          <button
-            key={f.id}
-            className={`rounded px-3 py-1 text-2xs font-medium transition-colors ${activeQuickFilter === f.id ? 'bg-accent-muted text-accent' : 'text-secondary hover:bg-elevated hover:text-primary'}`}
-            onClick={() => setActiveQuickFilter(activeQuickFilter === f.id ? null : f.id)}
-          >
-            {f.label}
-          </button>
-        ))}
       </div>
 
       {/* Счётчик */}
@@ -1137,12 +1149,22 @@ export default function AdsPage({ initialView = 'active', initialState = '' }) {
               <thead>
                 <tr className="border-b border-border bg-elevated/50">
                   <th className="w-9 px-2 py-2" />
-                  <th className="th-sortable cursor-pointer px-3 py-2 text-left" onClick={() => handleSort('ad_name')}>Название</th>
-                  <th className="th-sortable cursor-pointer px-3 py-2 text-right w-20" onClick={() => handleSort('spend')}>Расход</th>
-                  <th className="th-sortable cursor-pointer px-3 py-2 text-right w-[70px]" onClick={() => handleSort('cpc')}>CPC</th>
-                  <th className="th-sortable cursor-pointer px-3 py-2 text-right w-[60px]" onClick={() => handleSort('leads')}>Лиды</th>
-                  <th className="th-sortable cursor-pointer px-3 py-2 text-right w-[70px]" onClick={() => handleSort('deposits')}>Депозит</th>
-                  <th className="th-sortable px-3 py-2 text-left w-[120px]">Правила</th>
+                  <th className="th-sortable px-3 py-2 text-left" onClick={() => handleSort('ad_name')}>
+                    Название{sortBy === 'ad_name' && <span className="ml-1">{sortDirection === 'asc' ? '↑' : '↓'}</span>}
+                  </th>
+                  <th className={`th-sortable px-3 py-2 text-right w-20 ${sortBy === 'spend' ? 'text-accent' : ''}`} onClick={() => handleSort('spend')}>
+                    Расход{sortBy === 'spend' && <span className="ml-1">{sortDirection === 'asc' ? '↑' : '↓'}</span>}
+                  </th>
+                  <th className={`th-sortable px-3 py-2 text-right w-[70px] ${sortBy === 'cpc' ? 'text-accent' : ''}`} onClick={() => handleSort('cpc')}>
+                    CPC{sortBy === 'cpc' && <span className="ml-1">{sortDirection === 'asc' ? '↑' : '↓'}</span>}
+                  </th>
+                  <th className={`th-sortable px-3 py-2 text-right w-[60px] ${sortBy === 'leads' ? 'text-accent' : ''}`} onClick={() => handleSort('leads')}>
+                    Лиды{sortBy === 'leads' && <span className="ml-1">{sortDirection === 'asc' ? '↑' : '↓'}</span>}
+                  </th>
+                  <th className={`th-sortable px-3 py-2 text-right w-[70px] ${sortBy === 'deposits' ? 'text-accent' : ''}`} onClick={() => handleSort('deposits')}>
+                    Депозит{sortBy === 'deposits' && <span className="ml-1">{sortDirection === 'asc' ? '↑' : '↓'}</span>}
+                  </th>
+                  <th className="px-3 py-2 text-left w-[120px] text-2xs uppercase tracking-wider text-muted">Правила</th>
                   <th className="w-10 px-2 py-2" />
                 </tr>
               </thead>
@@ -1179,8 +1201,15 @@ export default function AdsPage({ initialView = 'active', initialState = '' }) {
                       <td className="px-3 py-2.5 text-right font-mono text-primary">{fmt$(ad.spend)}</td>
                       <td className="px-3 py-2.5 text-right font-mono text-primary">{fmt$(ad.cpc)}</td>
                       <td className="px-3 py-2.5 text-right font-mono text-primary">{fmtN(ad.leads)}</td>
-                      <td className={`px-3 py-2.5 text-right font-mono ${ad.deposits === 0 && Number(ad.spend) > 0 ? 'text-danger font-semibold' : 'text-primary'}`}>
-                        {fmtN(ad.deposits)}
+                      <td
+                        className={`px-3 py-2.5 text-right font-mono cursor-pointer hover:bg-elevated/50 ${ad.effective_deposits === 0 && Number(ad.spend) > 0 ? 'text-danger font-semibold' : 'text-primary'}`}
+                        onClick={(e) => { e.stopPropagation(); setFakeDepModal({ fb_ad_id: ad.fb_ad_id, ad_name: ad.ad_name, deposits: ad.deposits, fake_deposits: ad.fake_deposits || 0 }); }}
+                        title="Нажмите для настройки ложных депозитов"
+                      >
+                        {fmtN(ad.effective_deposits)}
+                        {ad.fake_deposits > 0 && (
+                          <span className="ml-1 text-[10px] text-warning">({ad.fake_deposits} фейк)</span>
+                        )}
                       </td>
                       <td className="px-3 py-2.5">
                         <div className="flex flex-wrap gap-1">
@@ -1209,6 +1238,87 @@ export default function AdsPage({ initialView = 'active', initialState = '' }) {
       {timelineAdId && (
         <AdTimeline fbAdId={timelineAdId} onClose={() => setTimelineAdId(null)} />
       )}
+
+      {/* Модалка ложных депозитов */}
+      {fakeDepModal && (
+        <FakeDepositModal
+          data={fakeDepModal}
+          onSave={handleSaveFakeDeps}
+          onClose={() => setFakeDepModal(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+
+function FakeDepositModal({ data, onSave, onClose }) {
+  const [fakeCount, setFakeCount] = useState(data.fake_deposits || 0);
+  const [note, setNote] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const handleSave = async () => {
+    setSaving(true);
+    await onSave(data.fb_ad_id, fakeCount, note);
+    setSaving(false);
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
+      <div className="bg-surface border border-border rounded-lg p-5 w-80 shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <h3 className="text-sm font-semibold text-primary mb-3">Ложные депозиты</h3>
+        <p className="text-xs text-secondary mb-3 truncate" title={data.ad_name}>{data.ad_name}</p>
+        <div className="flex items-center gap-3 mb-3">
+          <span className="text-xs text-secondary">Всего в FB:</span>
+          <span className="font-mono text-sm text-primary">{data.deposits}</span>
+        </div>
+        <div className="mb-3">
+          <label className="text-xs text-secondary block mb-1">Ложных:</label>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              className="w-7 h-7 rounded bg-elevated border border-border text-primary text-sm font-bold hover:bg-border"
+              onClick={() => setFakeCount(Math.max(0, fakeCount - 1))}
+            >−</button>
+            <input
+              type="number"
+              min={0}
+              max={data.deposits}
+              value={fakeCount}
+              onChange={(e) => setFakeCount(Math.max(0, Math.min(data.deposits, Number(e.target.value) || 0)))}
+              className="w-14 text-center font-mono text-sm bg-elevated border border-border rounded px-2 py-1 text-primary"
+            />
+            <button
+              type="button"
+              className="w-7 h-7 rounded bg-elevated border border-border text-primary text-sm font-bold hover:bg-border"
+              onClick={() => setFakeCount(Math.min(data.deposits, fakeCount + 1))}
+            >+</button>
+          </div>
+        </div>
+        <div className="mb-4">
+          <label className="text-xs text-secondary block mb-1">Причина:</label>
+          <input
+            type="text"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="Нет в Keitaro"
+            className="w-full text-sm bg-elevated border border-border rounded px-2 py-1 text-primary placeholder:text-secondary/50"
+          />
+        </div>
+        <div className="flex gap-2 justify-end">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-3 py-1.5 text-xs rounded bg-elevated border border-border text-secondary hover:text-primary"
+          >Отмена</button>
+          <button
+            type="button"
+            onClick={handleSave}
+            disabled={saving}
+            className="px-3 py-1.5 text-xs rounded bg-accent text-white hover:bg-accent/80 disabled:opacity-50"
+          >{saving ? 'Сохраняю...' : 'Сохранить'}</button>
+        </div>
+      </div>
     </div>
   );
 }

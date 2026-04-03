@@ -1,5 +1,8 @@
 // Таблица офферов с сортировкой
-import { useState } from 'react';
+import { useTableSort, sortRows } from '../../hooks/useTableSort.js';
+import { SortableHeader } from '../SortableHeader.jsx';
+
+const TEXT_KEYS = new Set(['offer_code', 'offer_name']);
 
 const COLUMNS = [
   { key: 'offer_code', label: 'Оффер', align: 'text-left', mono: false },
@@ -11,19 +14,6 @@ const COLUMNS = [
   { key: 'roas', label: 'ROAS', align: 'text-right', mono: true, fmt: (v) => v != null ? `${Number(v).toFixed(2)}x` : '—' },
   { key: 'profit', label: 'Profit', align: 'text-right', mono: true, fmt: (v) => v != null ? `$${Number(v).toFixed(2)}` : '—' },
 ];
-
-function SortableHeader({ col, sortKey, sortDir, onSort }) {
-  const isActive = sortKey === col.key;
-  return (
-    <th
-      onClick={() => onSort(col.key)}
-      className={`th-sortable cursor-pointer select-none whitespace-nowrap px-3 py-2 ${col.align} ${isActive ? 'text-accent' : ''}`}
-    >
-      {col.label}
-      {isActive && <span className="ml-1">{sortDir === 'asc' ? '↑' : '↓'}</span>}
-    </th>
-  );
-}
 
 function profitColor(val) {
   if (val == null) return 'text-primary';
@@ -52,8 +42,7 @@ function OfferRow({ row }) {
 }
 
 export function HistoryOffersTable({ data = [] }) {
-  const [sortKey, setSortKey] = useState('total_spend');
-  const [sortDir, setSortDir] = useState('desc');
+  const { sortKey, sortDir, handleSort } = useTableSort('total_spend');
 
   if (!data.length) {
     return (
@@ -66,23 +55,7 @@ export function HistoryOffersTable({ data = [] }) {
     );
   }
 
-  const handleSort = (key) => {
-    if (sortKey === key) {
-      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
-    } else {
-      setSortKey(key);
-      setSortDir('desc');
-    }
-  };
-
-  const sorted = [...data].sort((a, b) => {
-    const av = a[sortKey] ?? 0;
-    const bv = b[sortKey] ?? 0;
-    if (typeof av === 'string') {
-      return sortDir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av);
-    }
-    return sortDir === 'asc' ? av - bv : bv - av;
-  });
+  const sorted = sortRows(data, sortKey, sortDir, TEXT_KEYS);
 
   return (
     <div>

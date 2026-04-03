@@ -3,8 +3,8 @@ import { useState, useEffect } from 'react';
 import { getAdTimeline } from '../../api.js';
 import { StateIcon } from '../StateIcon.jsx';
 
-const fmt$ = (v) => (v != null ? `$${Number(v).toFixed(2)}` : '—');
-const fmtN = (v) => (v != null ? String(v) : '—');
+import { fmt$, fmtN } from '../../utils/formatters.js';
+import { formatTime } from '../../utils/timeUtils.js';
 
 function AdMetrics({ metrics }) {
   if (!metrics) return null;
@@ -32,14 +32,6 @@ function AdMetrics({ metrics }) {
       ))}
     </div>
   );
-}
-
-function formatTime(ts) {
-  if (!ts) return '';
-  return new Date(ts).toLocaleString('ru-RU', {
-    day: '2-digit', month: '2-digit',
-    hour: '2-digit', minute: '2-digit',
-  });
 }
 
 function TimelineEvent({ event }) {
