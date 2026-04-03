@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.deps import get_db
 from apps.api.schemas import (
+    HistoryAdRow,
     HistoryCampaignRow,
     HistoryEventItem,
     HistoryEventsPage,
@@ -21,20 +22,29 @@ from apps.api.schemas import (
     HistoryTimelinePoint,
 )
 from core.domain import DisableTaskStatus
+from core.fake_deposits import (
+    load_fake_deposits_by_campaign as _load_fake_deposits_by_campaign,
+)
+from core.fake_deposits import (
+    load_fake_deposits_by_offer as _load_fake_deposits_by_offer,
+)
+from core.fake_deposits import (
+    load_total_fake_deposits as _load_total_fake_deposits,
+)
+from core.math_utils import safe_div as _safe_div
 from core.models import (
     AdSnapshot,
     AlertEvent,
     CabinetDayArchive,
     DisableTask,
     EnableTask,
-    ObserverSettings,
     Offer,
 )
+from core.settings_queries import get_observer_settings as _load_observer_settings
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["history"])
-
 
 # ------------------------------------------------------------------
 # Вспомогательные функции
@@ -49,16 +59,6 @@ def _parse_iso_date(value: str) -> date:
 def _date_to_datetime(d: date) -> datetime:
     """Конвертирует date в datetime (начало дня UTC)."""
     return datetime(d.year, d.month, d.day)
-
-
-def _safe_div(
-    numerator: Decimal | int,
-    denominator: int,
-) -> Decimal | None:
-    """Безопасное деление, возвращает None при нулевом знаменателе."""
-    if not denominator:
-        return None
-    return Decimal(str(numerator)) / Decimal(str(denominator))
 
 
 async def _load_campaigns_for_offer(
@@ -147,7 +147,7 @@ async def _count_alerts_in_range(
     )
     # JOIN к AdSnapshot нужен при фильтре по офферу или кампании
     if offer_code or campaign_name:
-        q = q.join(AdSnapshot, AlertEvent.fb_ad_id == AdSnapshot.fb_ad_id)
+        q = q.join(AdSnapshot, AlertEvent.ad_id == AdSnapshot.ad_id)
         if offer_code:
             q = q.where(func.lower(AdSnapshot.resolved_offer_code) == offer_code.lower())
         if campaign_name:
@@ -180,7 +180,7 @@ async def _count_disables_in_range(
         )
     )
     if offer_code or campaign_name:
-        q = q.join(AdSnapshot, DisableTask.fb_ad_id == AdSnapshot.fb_ad_id)
+        q = q.join(AdSnapshot, DisableTask.ad_id == AdSnapshot.ad_id)
         if offer_code:
             q = q.where(func.lower(AdSnapshot.resolved_offer_code) == offer_code.lower())
         if campaign_name:
@@ -211,6 +211,17 @@ async def get_history_summary(
     archives = await _load_archives(db, dt_from, dt_to)
     totals = _aggregate_archives(archives, offer_campaigns, campaign_name)
 
+    # Добавляем live данные для «сегодня»
+    today = date.today()
+    if d_from <= today <= d_to:
+        live = await _load_live_ads_for_today(db, offer_campaigns, campaign_name)
+        for data in live.values():
+            totals["spend"] += data["spend"]
+            totals["clicks"] += data["clicks"]
+            totals["leads"] += data["leads"]
+            totals["regs"] += data["regs"]
+            totals["deps"] += data["deps"]
+
     total_alerts, total_stops = await _count_alerts_in_range(
         db, dt_from, dt_to, offer_code, campaign_name
     )
@@ -221,6 +232,11 @@ async def get_history_summary(
         offer_code,
         campaign_name,
     )
+
+    # Корректировка ложных депозитов
+    total_fake = await _load_total_fake_deposits(db)
+    if total_fake > 0:
+        totals["deps"] = max(0, totals["deps"] - total_fake)
 
     # ROAS: revenue = deps × средний CPA по офферам
     roas = await _calc_summary_roas(db, archives, totals, offer_code)
@@ -345,11 +361,13 @@ async def _calc_summary_roas(
         grouped = {k: v for k, v in grouped.items() if k.upper() == offer_code.upper()}
     codes = list(grouped.keys())
     offers_map = await _load_offers_map(db, codes)
+    # Используем deps из totals (уже скорректированные), распределяя пропорционально
     revenue = Decimal("0")
     for code, metrics in grouped.items():
         offer = offers_map.get(code.upper())
         cpa = offer.cpa_amount if offer else Decimal("0")
-        revenue += Decimal(str(metrics["deps"])) * cpa
+        deps = metrics["deps"]
+        revenue += Decimal(str(deps)) * cpa
     if not revenue:
         return Decimal("0")
     return (revenue / spend).quantize(Decimal("0.01"))
@@ -524,7 +542,7 @@ async def _count_campaign_events(
     # Алерты по кампаниям
     alerts_q = (
         select(AdSnapshot.campaign_name, func.count())
-        .join(AlertEvent, AlertEvent.fb_ad_id == AdSnapshot.fb_ad_id)
+        .join(AlertEvent, AlertEvent.ad_id == AdSnapshot.ad_id)
         .where(
             and_(
                 AlertEvent.created_at >= dt_from,
@@ -540,7 +558,7 @@ async def _count_campaign_events(
     # Отключения по кампаниям
     disables_q = (
         select(AdSnapshot.campaign_name, func.count())
-        .join(DisableTask, DisableTask.fb_ad_id == AdSnapshot.fb_ad_id)
+        .join(DisableTask, DisableTask.ad_id == AdSnapshot.ad_id)
         .where(
             and_(
                 DisableTask.created_at >= dt_from,
@@ -562,9 +580,13 @@ def _build_campaign_row(
     data: dict,
     alerts_count: int,
     disables_count: int,
+    fake_by_campaign: dict[str, int] | None = None,
 ) -> HistoryCampaignRow:
     """Строит строку таблицы кампаний."""
     spend = data["spend"]
+    raw_deps = data["deps"]
+    fake_count = (fake_by_campaign or {}).get(name, 0)
+    effective_deps = max(0, raw_deps - fake_count)
     return HistoryCampaignRow(
         campaign_name=name,
         offer_code=None,
@@ -572,10 +594,10 @@ def _build_campaign_row(
         total_clicks=data["clicks"],
         total_leads=data["leads"],
         total_registrations=data["regs"],
-        total_deposits=data["deps"],
+        total_deposits=effective_deps,
         avg_cpl=_safe_div(spend, data["leads"]),
         avg_cpr=_safe_div(spend, data["regs"]),
-        avg_spend_per_dep=_safe_div(spend, data["deps"]),
+        avg_spend_per_dep=_safe_div(spend, effective_deps),
         roas=None,
         alerts_count=alerts_count,
         disables_count=disables_count,
@@ -625,9 +647,33 @@ async def get_history_campaigns(
         campaign_name,
     )
 
+    # Добавляем live данные для «сегодня»
+    today = date.today()
+    if d_from <= today <= d_to:
+        live = await _load_live_ads_for_today(db, offer_campaigns, campaign_name)
+        for data in live.values():
+            cname = data["campaign_name"]
+            if not cname:
+                continue
+            if cname not in grouped:
+                grouped[cname] = {
+                    "spend": Decimal("0"),
+                    "clicks": 0,
+                    "leads": 0,
+                    "regs": 0,
+                    "deps": 0,
+                }
+            g = grouped[cname]
+            g["spend"] += data["spend"]
+            g["clicks"] += data["clicks"]
+            g["leads"] += data["leads"]
+            g["regs"] += data["regs"]
+            g["deps"] += data["deps"]
+
     alerts_map, disables_map = await _count_campaign_events(
         db, dt_from, dt_to, list(grouped.keys())
     )
+    fake_by_campaign = await _load_fake_deposits_by_campaign(db)
 
     rows = [
         _build_campaign_row(
@@ -635,6 +681,7 @@ async def get_history_campaigns(
             data,
             alerts_map.get(name, 0),
             disables_map.get(name, 0),
+            fake_by_campaign=fake_by_campaign,
         )
         for name, data in grouped.items()
     ]
@@ -661,7 +708,7 @@ async def _load_alert_events(
         )
     )
     if offer_code or campaign_name:
-        q = q.join(AdSnapshot, AlertEvent.fb_ad_id == AdSnapshot.fb_ad_id)
+        q = q.join(AdSnapshot, AlertEvent.ad_id == AdSnapshot.ad_id)
         if offer_code:
             q = q.where(func.lower(AdSnapshot.resolved_offer_code) == offer_code.lower())
         if campaign_name:
@@ -700,7 +747,7 @@ async def _load_disable_events(
         )
     )
     if offer_code or campaign_name:
-        q = q.join(AdSnapshot, DisableTask.fb_ad_id == AdSnapshot.fb_ad_id)
+        q = q.join(AdSnapshot, DisableTask.ad_id == AdSnapshot.ad_id)
         if offer_code:
             q = q.where(func.lower(AdSnapshot.resolved_offer_code) == offer_code.lower())
         if campaign_name:
@@ -737,7 +784,7 @@ async def _load_enable_events(
         )
     )
     if offer_code or campaign_name:
-        q = q.join(AdSnapshot, EnableTask.fb_ad_id == AdSnapshot.fb_ad_id)
+        q = q.join(AdSnapshot, EnableTask.ad_id == AdSnapshot.ad_id)
         if offer_code:
             q = q.where(func.lower(AdSnapshot.resolved_offer_code) == offer_code.lower())
         if campaign_name:
@@ -826,33 +873,50 @@ def _group_by_offer_code(
     archives: list[CabinetDayArchive],
     campaign_offer_map: dict[str, str],
 ) -> dict[str, dict]:
-    """Группирует метрики из campaigns_json по offer code через AdSnapshot."""
+    """Группирует метрики по offer code.
+
+    Приоритет: ads_json (offer_code per-ad), fallback на campaigns_json + campaign mapping.
+    """
     grouped: dict[str, dict] = {}
     for arch in archives:
-        for c in arch.campaigns_json or []:
-            campaign = c.get("campaign") or ""
-            code = campaign_offer_map.get(campaign)
-            if not code:
-                continue
-            if code not in grouped:
-                grouped[code] = {
-                    "spend": Decimal("0"),
-                    "clicks": 0,
-                    "regs": 0,
-                    "deps": 0,
-                }
-            g = grouped[code]
-            g["spend"] += Decimal(str(c.get("spend", 0)))
-            g["clicks"] += int(c.get("clicks", 0))
-            g["regs"] += int(c.get("registrations", 0))
-            g["deps"] += int(c.get("deposits", 0))
+        # Предпочитаем ads_json — там offer_code хранится напрямую
+        if arch.ads_json:
+            for ad in arch.ads_json:
+                code = ad.get("offer_code")
+                if not code:
+                    continue
+                if code not in grouped:
+                    grouped[code] = {
+                        "spend": Decimal("0"),
+                        "clicks": 0,
+                        "regs": 0,
+                        "deps": 0,
+                    }
+                g = grouped[code]
+                g["spend"] += Decimal(str(ad.get("spend", 0)))
+                g["clicks"] += int(ad.get("clicks", 0))
+                g["regs"] += int(ad.get("registrations", 0))
+                g["deps"] += int(ad.get("deposits", 0))
+        else:
+            # Fallback для старых архивов без ads_json
+            for c in arch.campaigns_json or []:
+                campaign = c.get("campaign") or ""
+                code = campaign_offer_map.get(campaign)
+                if not code:
+                    continue
+                if code not in grouped:
+                    grouped[code] = {
+                        "spend": Decimal("0"),
+                        "clicks": 0,
+                        "regs": 0,
+                        "deps": 0,
+                    }
+                g = grouped[code]
+                g["spend"] += Decimal(str(c.get("spend", 0)))
+                g["clicks"] += int(c.get("clicks", 0))
+                g["regs"] += int(c.get("registrations", 0))
+                g["deps"] += int(c.get("deposits", 0))
     return grouped
-
-
-async def _load_observer_settings(db: AsyncSession) -> ObserverSettings | None:
-    """Загружает глобальные настройки observer (для комиссий)."""
-    result = await db.execute(select(ObserverSettings).limit(1))
-    return result.scalar()
 
 
 async def _load_offers_map(
@@ -889,7 +953,7 @@ async def _count_offer_events(
             func.upper(AdSnapshot.resolved_offer_code),
             func.count(),
         )
-        .join(AlertEvent, AlertEvent.fb_ad_id == AdSnapshot.fb_ad_id)
+        .join(AlertEvent, AlertEvent.ad_id == AdSnapshot.ad_id)
         .where(
             and_(
                 AlertEvent.created_at >= dt_from,
@@ -908,7 +972,7 @@ async def _count_offer_events(
             func.upper(AdSnapshot.resolved_offer_code),
             func.count(),
         )
-        .join(DisableTask, DisableTask.fb_ad_id == AdSnapshot.fb_ad_id)
+        .join(DisableTask, DisableTask.ad_id == AdSnapshot.ad_id)
         .where(
             and_(
                 DisableTask.created_at >= dt_from,
@@ -946,11 +1010,14 @@ def _build_offer_summary(
     disables_count: int,
     install_cost: Decimal = Decimal("0"),
     agent_commission_pct: Decimal = Decimal("0"),
+    fake_by_offer: dict[str, int] | None = None,
 ) -> HistoryOfferSummary:
     """Строит HistoryOfferSummary для одного оффера."""
     spend = metrics["spend"]
     regs = metrics["regs"]
-    deps = metrics["deps"]
+    raw_deps = metrics["deps"]
+    fake_count = (fake_by_offer or {}).get(code.upper(), 0)
+    deps = max(0, raw_deps - fake_count)
     clicks = metrics.get("clicks", 0)
     cpa = offer.cpa_amount if offer else Decimal("0")
     revenue = Decimal(str(deps)) * cpa
@@ -989,6 +1056,28 @@ async def get_history_offers(
     archives = await _load_archives(db, dt_from, dt_to)
     campaign_offer_map = await _load_campaign_offer_map(db)
     grouped = _group_by_offer_code(archives, campaign_offer_map)
+
+    # Добавляем live данные для «сегодня»
+    today = date.today()
+    if d_from <= today <= d_to:
+        live = await _load_live_ads_for_today(db, None, None)
+        for data in live.values():
+            code = data.get("offer_code")
+            if not code:
+                continue
+            if code not in grouped:
+                grouped[code] = {
+                    "spend": Decimal("0"),
+                    "clicks": 0,
+                    "regs": 0,
+                    "deps": 0,
+                }
+            g = grouped[code]
+            g["spend"] += data["spend"]
+            g["clicks"] += data["clicks"]
+            g["regs"] += data["regs"]
+            g["deps"] += data["deps"]
+
     if not grouped:
         return []
 
@@ -1000,6 +1089,7 @@ async def get_history_offers(
     codes = list(grouped.keys())
     offers_map = await _load_offers_map(db, codes)
     alerts_map, disables_map = await _count_offer_events(db, dt_from, dt_to, codes)
+    fake_by_offer = await _load_fake_deposits_by_offer(db)
 
     rows = [
         _build_offer_summary(
@@ -1010,9 +1100,177 @@ async def get_history_offers(
             disables_map.get(code.upper(), 0),
             install_cost=install_cost,
             agent_commission_pct=agent_pct,
+            fake_by_offer=fake_by_offer,
         )
         for code, metrics in grouped.items()
     ]
     # Сортировка по spend DESC
     rows.sort(key=lambda r: r.total_spend, reverse=True)
+    return rows
+
+
+# ------------------------------------------------------------------
+# GET /history/ads — per-ad данные за период
+# ------------------------------------------------------------------
+
+_AD_SORT_KEYS = {
+    "spend": "total_spend",
+    "clicks": "total_clicks",
+    "leads": "total_leads",
+    "registrations": "total_registrations",
+    "deposits": "total_deposits",
+    "ad_name": "ad_name",
+    "campaign_name": "campaign_name",
+}
+
+
+def _group_ads_from_archives(
+    archives: list[CabinetDayArchive],
+    offer_campaigns: set[str] | None,
+    campaign_name: str | None = None,
+) -> dict[str, dict]:
+    """Группирует per-ad данные из архивов по fb_ad_id."""
+    grouped: dict[str, dict] = {}
+    for arch in archives:
+        for ad in arch.ads_json or []:
+            ad_campaign = ad.get("campaign_name", "")
+            # Фильтрация по кампании/офферу
+            if offer_campaigns is not None and ad_campaign not in offer_campaigns:
+                continue
+            if campaign_name and ad_campaign != campaign_name:
+                continue
+            fb_ad_id = ad.get("fb_ad_id", "")
+            if not fb_ad_id:
+                continue
+            if fb_ad_id not in grouped:
+                grouped[fb_ad_id] = {
+                    "fb_ad_id": fb_ad_id,
+                    "ad_name": ad.get("ad_name", ""),
+                    "campaign_name": ad_campaign,
+                    "offer_code": ad.get("offer_code"),
+                    "spend": Decimal("0"),
+                    "clicks": 0,
+                    "leads": 0,
+                    "regs": 0,
+                    "deps": 0,
+                }
+            g = grouped[fb_ad_id]
+            g["spend"] += Decimal(str(ad.get("spend", 0)))
+            g["clicks"] += int(ad.get("clicks", 0))
+            g["leads"] += int(ad.get("leads", 0))
+            g["regs"] += int(ad.get("registrations", 0))
+            g["deps"] += int(ad.get("deposits", 0))
+            # Обновляем имя/кампанию/оффер из последнего архива
+            if ad.get("ad_name"):
+                g["ad_name"] = ad["ad_name"]
+            if ad.get("offer_code"):
+                g["offer_code"] = ad["offer_code"]
+    return grouped
+
+
+async def _load_live_ads_for_today(
+    db: AsyncSession,
+    offer_campaigns: set[str] | None,
+    campaign_name: str | None = None,
+) -> dict[str, dict]:
+    """Загружает live AdSnapshot данные для текущего дня."""
+    q = select(AdSnapshot)
+    if campaign_name:
+        q = q.where(AdSnapshot.campaign_name == campaign_name)
+    result = await db.execute(q)
+    snapshots = result.scalars().all()
+
+    grouped: dict[str, dict] = {}
+    for s in snapshots:
+        if offer_campaigns is not None and s.campaign_name not in offer_campaigns:
+            continue
+        grouped[s.fb_ad_id] = {
+            "fb_ad_id": s.fb_ad_id,
+            "ad_name": s.ad_name,
+            "campaign_name": s.campaign_name,
+            "offer_code": s.resolved_offer_code,
+            "spend": Decimal(str(s.spend or 0)),
+            "clicks": int(s.clicks or 0),
+            "leads": int(s.leads or 0),
+            "regs": int(s.registrations or 0),
+            "deps": int(s.deposits or 0),
+        }
+    return grouped
+
+
+def _build_history_ad_row(data: dict) -> HistoryAdRow:
+    """Строит HistoryAdRow из агрегированных данных."""
+    spend = data["spend"]
+    clicks = data["clicks"]
+    leads = data["leads"]
+    regs = data["regs"]
+    deps = data["deps"]
+    return HistoryAdRow(
+        fb_ad_id=data["fb_ad_id"],
+        ad_name=data["ad_name"],
+        campaign_name=data["campaign_name"],
+        offer_code=data.get("offer_code"),
+        total_spend=spend,
+        total_clicks=clicks,
+        total_leads=leads,
+        total_registrations=regs,
+        total_deposits=deps,
+        avg_cpc=_safe_div(spend, clicks),
+        avg_cpl=_safe_div(spend, leads),
+        avg_cpr=_safe_div(spend, regs),
+        avg_spend_per_dep=_safe_div(spend, deps),
+    )
+
+
+@router.get("/history/ads", response_model=list[HistoryAdRow])
+async def get_history_ads(
+    date_from: str = Query(..., description="ISO дата начала"),
+    date_to: str = Query(..., description="ISO дата конца"),
+    offer_code: str | None = Query(None),
+    campaign_name: str | None = Query(None),
+    sort_by: str = Query("spend"),
+    sort_dir: str = Query("desc"),
+    db: AsyncSession = Depends(get_db),
+) -> list[HistoryAdRow]:
+    """Per-ad метрики за период (архив + live для сегодня)."""
+    d_from = _parse_iso_date(date_from)
+    d_to = _parse_iso_date(date_to)
+    dt_from = _date_to_datetime(d_from)
+    dt_to = _date_to_datetime(d_to + timedelta(days=1))
+
+    offer_campaigns: set[str] | None = None
+    if offer_code:
+        offer_campaigns = await _load_campaigns_for_offer(db, offer_code)
+
+    # Данные из архивов
+    archives = await _load_archives(db, dt_from, dt_to)
+    grouped = _group_ads_from_archives(archives, offer_campaigns, campaign_name)
+
+    # Добавляем live данные для «сегодня» если период включает текущий день
+    today = date.today()
+    if d_from <= today <= d_to:
+        live = await _load_live_ads_for_today(db, offer_campaigns, campaign_name)
+        for fb_ad_id, data in live.items():
+            if fb_ad_id in grouped:
+                # Суммируем к архивным данным
+                g = grouped[fb_ad_id]
+                g["spend"] += data["spend"]
+                g["clicks"] += data["clicks"]
+                g["leads"] += data["leads"]
+                g["regs"] += data["regs"]
+                g["deps"] += data["deps"]
+                # Обновляем имя из live (актуальнее)
+                g["ad_name"] = data["ad_name"]
+                g["campaign_name"] = data["campaign_name"]
+                g["offer_code"] = data.get("offer_code") or g.get("offer_code")
+            else:
+                grouped[fb_ad_id] = data
+
+    rows = [_build_history_ad_row(data) for data in grouped.values()]
+
+    # Сортировка
+    attr = _AD_SORT_KEYS.get(sort_by, "total_spend")
+    reverse = sort_dir.lower() == "desc"
+    rows.sort(key=lambda r: getattr(r, attr, 0) or 0, reverse=reverse)
+
     return rows

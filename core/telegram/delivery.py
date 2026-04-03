@@ -158,13 +158,14 @@ async def _load_disable_message_context(
     factory = get_session_factory()
     async with factory() as session:
         snapshot = await session.scalar(select(AdSnapshot).where(AdSnapshot.fb_ad_id == fb_ad_id))
+        ad_id = snapshot.ad_id if snapshot else None
 
         event: AlertEvent | None = None
-        if normalized_incident_key:
+        if ad_id is not None and normalized_incident_key:
             stop_result = await session.execute(
                 select(AlertEvent)
                 .where(
-                    AlertEvent.fb_ad_id == fb_ad_id,
+                    AlertEvent.ad_id == ad_id,
                     AlertEvent.telegram_group_key == normalized_incident_key,
                     AlertEvent.stage == AlertStage.STOP,
                 )
@@ -177,7 +178,7 @@ async def _load_disable_message_context(
                 latest_result = await session.execute(
                     select(AlertEvent)
                     .where(
-                        AlertEvent.fb_ad_id == fb_ad_id,
+                        AlertEvent.ad_id == ad_id,
                         AlertEvent.telegram_group_key == normalized_incident_key,
                     )
                     .order_by(AlertEvent.updated_at.desc(), AlertEvent.created_at.desc())
@@ -185,10 +186,10 @@ async def _load_disable_message_context(
                 )
                 event = latest_result.scalar_one_or_none()
 
-        if event is None:
+        if ad_id is not None and event is None:
             latest_result = await session.execute(
                 select(AlertEvent)
-                .where(AlertEvent.fb_ad_id == fb_ad_id)
+                .where(AlertEvent.ad_id == ad_id)
                 .order_by(AlertEvent.updated_at.desc(), AlertEvent.created_at.desc())
                 .limit(1)
             )
@@ -232,16 +233,17 @@ async def _load_enable_message_context(
     factory = get_session_factory()
     async with factory() as session:
         snapshot = await session.scalar(select(AdSnapshot).where(AdSnapshot.fb_ad_id == fb_ad_id))
+        ad_id = snapshot.ad_id if snapshot else None
 
         if event_uuid is not None:
             recommendation_event = await session.scalar(
                 select(EnableRecommendationEvent).where(EnableRecommendationEvent.id == event_uuid)
             )
 
-        if recommendation_event is None:
+        if recommendation_event is None and ad_id is not None:
             latest_result = await session.execute(
                 select(EnableRecommendationEvent)
-                .where(EnableRecommendationEvent.fb_ad_id == fb_ad_id)
+                .where(EnableRecommendationEvent.ad_id == ad_id)
                 .order_by(
                     EnableRecommendationEvent.updated_at.desc(),
                     EnableRecommendationEvent.created_at.desc(),

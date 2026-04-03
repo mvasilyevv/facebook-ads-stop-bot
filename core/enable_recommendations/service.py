@@ -23,7 +23,6 @@ from core.models import (
     AdSnapshot,
     EnableRecommendationEvent,
     EnableTask,
-    ObserverSettings,
     Offer,
     OfferRuleConfig,
 )
@@ -32,6 +31,7 @@ from core.observer.thresholds import extract_observer_threshold_values
 from core.rules.evaluator import determine_enable_recommendation_level, evaluate_stop_rules
 from core.rules.types import RuleEvaluation
 from core.scanner.models import ScannedAdRow
+from core.settings_queries import get_observer_settings
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +46,7 @@ OK_RECOMMENDATION_REASON_TEXT = (
 class EnableRecommendationCandidate:
     """Кандидат на рекомендацию включения."""
 
+    ad_id: _uuid.UUID | None
     snapshot_id: _uuid.UUID | None
     offer_id: _uuid.UUID | None
     fb_ad_id: str
@@ -207,9 +208,7 @@ def _normalize_recommendation_reason(
 
 async def _load_observer_rule_settings(session: AsyncSession) -> dict[str, Decimal]:
     """Загружает observer-настройки для evaluator."""
-    row = await session.scalar(
-        select(ObserverSettings).where(ObserverSettings.singleton_key == "default")
-    )
+    row = await get_observer_settings(session)
     return extract_observer_threshold_values(row)
 
 
@@ -310,6 +309,7 @@ async def collect_enable_recommendation_candidates_for_snapshots(
 
         candidates.append(
             EnableRecommendationCandidate(
+                ad_id=snapshot.ad_id,
                 snapshot_id=snapshot.id,
                 offer_id=snapshot.offer_id,
                 fb_ad_id=snapshot.fb_ad_id,
@@ -375,7 +375,6 @@ async def persist_enable_recommendation_candidates(
         if existing is not None:
             existing.snapshot_id = candidate.snapshot_id
             existing.offer_id = candidate.offer_id
-            existing.ad_name = candidate.ad_name
             existing.delivery_status = candidate.delivery_status
             existing.recommendation_level = candidate.recommendation_level
             existing.matched_rule_codes = list(candidate.matched_rule_codes)
@@ -385,10 +384,9 @@ async def persist_enable_recommendation_candidates(
             continue
 
         event = EnableRecommendationEvent(
+            ad_id=candidate.ad_id,
             snapshot_id=candidate.snapshot_id,
             offer_id=candidate.offer_id,
-            fb_ad_id=candidate.fb_ad_id,
-            ad_name=candidate.ad_name,
             delivery_status=candidate.delivery_status,
             recommendation_level=candidate.recommendation_level,
             matched_rule_codes=candidate.matched_rule_codes,
@@ -454,11 +452,8 @@ async def promote_recommendation_to_enable_task(
             detail="❌ Не удалось создать задачу на включение — рекомендация не найдена.",
         )
 
-    cabinet_day_start = await session.scalar(
-        select(ObserverSettings.cabinet_day_started_at).where(
-            ObserverSettings.singleton_key == "default"
-        )
-    )
+    _obs_settings = await get_observer_settings(session)
+    cabinet_day_start = _obs_settings.cabinet_day_started_at if _obs_settings else None
     if cabinet_day_start is not None and event.live_batch_started_at < cabinet_day_start:
         return EnableTaskPromotionResult(
             outcome="stale_cabinet_day",
@@ -593,10 +588,9 @@ async def promote_recommendation_to_enable_task(
         )
 
     task = EnableTask(
+        ad_id=snapshot.ad_id,
         snapshot_id=snapshot.id,
         recommendation_event_id=event.id,
-        fb_ad_id=snapshot.fb_ad_id,
-        ad_name=snapshot.ad_name,
         idempotency_key=idempotency_key,
         requested_by_telegram_user_id=requested_by_telegram_user_id,
         requested_by_username=requested_by_username,

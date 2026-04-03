@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 import random
 import time as _time
@@ -26,7 +27,7 @@ from core.diagnostics import (
 )
 from core.disable_tasks import is_delivery_disabled
 from core.domain import AlertStage, AlertState
-from core.models import AdSnapshot, AlertEvent
+from core.models import AdSnapshot, AlertEvent, FbAd
 from core.observer.db_queries import (
     check_scan_requested_flag,
     check_scanning_enabled,
@@ -34,6 +35,7 @@ from core.observer.db_queries import (
     collect_reminder_alerts,
     get_disable_queue_pause_reason,
     load_ad_states_from_db,
+    load_fake_deposits,
     load_observer_settings_from_db,
     load_offers_from_db,
     load_telegram_settings_from_db,
@@ -622,10 +624,14 @@ async def _send_alerts_to_telegram(
                 snapshot = await session.scalar(
                     select(AdSnapshot).where(AdSnapshot.fb_ad_id == a.fb_ad_id)
                 )
+                # Находим запись в справочнике fb_ads для ad_id FK
+                fb_ad = await session.scalar(select(FbAd).where(FbAd.fb_ad_id == a.fb_ad_id))
+                ad_id = fb_ad.id if fb_ad else None
+
                 existing_stage_event = await session.scalar(
                     select(AlertEvent)
                     .where(
-                        AlertEvent.fb_ad_id == a.fb_ad_id,
+                        AlertEvent.ad_id == ad_id,
                         AlertEvent.telegram_chat_id == destination.chat_id,
                         AlertEvent.telegram_group_key == a.snapshot_id,
                         AlertEvent.stage == a.stage,
@@ -640,9 +646,9 @@ async def _send_alerts_to_telegram(
                     snapshot.telegram_message_id = delivered_message_id
 
                 if existing_stage_event is not None:
+                    existing_stage_event.ad_id = ad_id
                     existing_stage_event.snapshot_id = snapshot.id if snapshot else None
                     existing_stage_event.offer_id = a.offer_id
-                    existing_stage_event.ad_name = a.ad_name
                     existing_stage_event.matched_rule_codes = a.matched_rule_codes
                     existing_stage_event.reason_title = a.reason_title
                     existing_stage_event.reason_text = a.reason_text
@@ -652,9 +658,8 @@ async def _send_alerts_to_telegram(
                 elif a.persist_event or existing_message_id is None:
                     session.add(
                         AlertEvent(
+                            ad_id=ad_id,
                             snapshot_id=(snapshot.id if snapshot else None),
-                            fb_ad_id=a.fb_ad_id,
-                            ad_name=a.ad_name,
                             offer_id=a.offer_id,
                             stage=a.stage,
                             state=alert_state,
@@ -775,6 +780,7 @@ async def observer_loop(
 
     # Счётчик циклов для периодической перезагрузки офферов и TG настроек
     cycle_count = 0
+    fake_deposits_map: dict[str, int] = {}
     RELOAD_EVERY = 10  # Перечитываем офферы, TG настройки и интервал каждые 10 циклов
 
     # Счётчик последовательных ошибок браузера (задача 2.4)
@@ -795,6 +801,13 @@ async def observer_loop(
                 except Exception:
                     logger.warning(
                         "Не удалось обновить офферы из БД, используем предыдущие",
+                        exc_info=True,
+                    )
+                try:
+                    fake_deposits_map = await load_fake_deposits()
+                except Exception:
+                    logger.warning(
+                        "Не удалось загрузить корректировки ложных депозитов",
                         exc_info=True,
                     )
                 # Перечитываем TG настройки — пользователь мог обновить через UI
@@ -1021,8 +1034,15 @@ async def observer_loop(
                         offer_code,
                     )
 
+                # Корректировка ложных депозитов перед оценкой правил
+                fake_count = fake_deposits_map.get(row.fb_ad_id, 0)
+                eval_row = row
+                if fake_count > 0 and row.deposits > 0:
+                    effective_deps = max(0, row.deposits - fake_count)
+                    eval_row = dataclasses.replace(row, deposits=effective_deps)
+
                 evaluation = evaluate_row(
-                    row=row,
+                    row=eval_row,
                     offer_cpa=(Decimal(offer_data["offer"].cpa_amount) if offer_data else None),
                     rule_config=(offer_data.get("rule_config") if offer_data else None),
                     warning_percent_of_stop=observer_thresholds["warning_percent_of_stop"],

@@ -38,13 +38,14 @@ from core.models import (
     AdSnapshot,
     AlertEvent,
     DisableTask,
-    ObserverSettings,
+    FbAd,
     Offer,
     TelegramInvite,
     TelegramRecipient,
     TelegramSettings,
 )
 from core.rules.labels import RULE_LABELS as _RULE_LABELS
+from core.settings_queries import get_observer_settings, get_or_create_observer_settings
 from core.telegram.client import TelegramBotClient
 from core.telegram.delivery import (
     TelegramAdMessageContext,
@@ -281,7 +282,8 @@ async def _load_latest_alert_event_for_incident(
     stage: AlertStage | None = None,
 ):
     """Возвращает последнее alert-событие по объявлению и incident."""
-    stmt = select(AlertEvent).where(AlertEvent.fb_ad_id == fb_ad_id)
+    ad_id_subq = select(FbAd.id).where(FbAd.fb_ad_id == fb_ad_id).scalar_subquery()
+    stmt = select(AlertEvent).where(AlertEvent.ad_id == ad_id_subq)
     if incident_key:
         stmt = stmt.where(AlertEvent.telegram_group_key == incident_key)
     if stage is not None:
@@ -475,9 +477,7 @@ async def _render_start() -> tuple[str, dict]:
     """Короткий ops-хаб для CONTROL topic."""
     factory = get_session_factory()
     async with factory() as session:
-        obs = await session.scalar(
-            select(ObserverSettings).where(ObserverSettings.singleton_key == "default")
-        )
+        obs = await get_observer_settings(session)
         is_scanning = obs.is_scanning_enabled if obs else False
         interval = obs.interval_seconds if obs else 90
 
@@ -566,9 +566,7 @@ async def _render_status() -> tuple[str, dict]:
     """Детальный статус мониторинга — данные из БД."""
     factory = get_session_factory()
     async with factory() as session:
-        obs = await session.scalar(
-            select(ObserverSettings).where(ObserverSettings.singleton_key == "default")
-        )
+        obs = await get_observer_settings(session)
         interval = obs.interval_seconds if obs else 90
         warning_pct = int(obs.warning_percent_of_stop) if obs else 80
         is_scanning = obs.is_scanning_enabled if obs else False
@@ -1039,9 +1037,7 @@ async def _render_rules() -> tuple[str, dict]:
     """Стоп-правила с актуальным порогом из БД."""
     factory = get_session_factory()
     async with factory() as session:
-        obs = await session.scalar(
-            select(ObserverSettings).where(ObserverSettings.singleton_key == "default")
-        )
+        obs = await get_observer_settings(session)
         warning_pct = int(obs.warning_percent_of_stop) if obs else 80
 
     text = (
@@ -1112,9 +1108,7 @@ async def _render_settings() -> tuple[str, dict]:
     """Текущие настройки из БД."""
     factory = get_session_factory()
     async with factory() as session:
-        obs = await session.scalar(
-            select(ObserverSettings).where(ObserverSettings.singleton_key == "default")
-        )
+        obs = await get_observer_settings(session)
         interval = obs.interval_seconds if obs else 90
         warning_pct = int(obs.warning_percent_of_stop) if obs else 80
 
@@ -1915,12 +1909,7 @@ async def _update_observer_setting(**kwargs: int) -> None:
     """Обновляет настройки Observer в БД."""
     factory = get_session_factory()
     async with factory() as session:
-        obs = await session.scalar(
-            select(ObserverSettings).where(ObserverSettings.singleton_key == "default")
-        )
-        if not obs:
-            obs = ObserverSettings(singleton_key="default")
-            session.add(obs)
+        obs = await get_or_create_observer_settings(session)
         for key, value in kwargs.items():
             if key == "warning_percent_of_stop":
                 normalized = Decimal(str(value))
@@ -2063,7 +2052,7 @@ async def _try_add_disable_task(
     # Проверка: уже есть активная задача на это объявление
     existing = await session.scalar(
         select(DisableTask.id).where(
-            DisableTask.fb_ad_id == snapshot.fb_ad_id,
+            DisableTask.ad_id == snapshot.ad_id,
             DisableTask.open_state_token == stable_token,
             DisableTask.status.in_(
                 [DisableTaskStatus.PENDING, DisableTaskStatus.RUNNING, DisableTaskStatus.RETRYING]
@@ -2082,10 +2071,9 @@ async def _try_add_disable_task(
 
     snapshot.alert_state = AlertState.CLAIMED
     task = DisableTask(
+        ad_id=snapshot.ad_id,
         snapshot_id=snapshot.id,
         offer_id=snapshot.offer_id,
-        fb_ad_id=snapshot.fb_ad_id,
-        ad_name=snapshot.ad_name,
         open_state_token=stable_token,
         idempotency_key=idempotency_key,
         requested_by_telegram_user_id=tg_user_id,
@@ -2276,7 +2264,7 @@ async def _create_disable_task(
             )
             existing_active_task = await session.scalar(
                 select(DisableTask).where(
-                    DisableTask.fb_ad_id == snapshot.fb_ad_id,
+                    DisableTask.ad_id == snapshot.ad_id,
                     DisableTask.open_state_token == stable_open_state_token,
                     DisableTask.status.in_(
                         [
@@ -2314,10 +2302,9 @@ async def _create_disable_task(
             snapshot.alert_state = AlertState.CLAIMED
 
             task = DisableTask(
+                ad_id=snapshot.ad_id,
                 snapshot_id=snapshot.id,
                 offer_id=snapshot.offer_id,
-                fb_ad_id=snapshot.fb_ad_id,
-                ad_name=snapshot.ad_name,
                 open_state_token=stable_open_state_token,
                 idempotency_key=idempotency_key,
                 requested_by_telegram_user_id=tg_user_id,

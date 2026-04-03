@@ -19,6 +19,7 @@ except ModuleNotFoundError:  # pragma: no cover - зависит от окруж
 
 
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
 from core.browser.ad_toggle import (
     confirm_dialog_if_present as shared_confirm_dialog_if_present,
@@ -145,6 +146,7 @@ async def claim_next_task():
 
         result = await session.execute(
             select(EnableTask)
+            .options(selectinload(EnableTask.fb_ad))
             .where(
                 (EnableTask.status == EnableTaskStatus.PENDING)
                 | (
@@ -475,13 +477,18 @@ async def _send_enable_task_runtime_update(
     """Рассылает runtime-обновление по задаче включения всем активным получателям."""
     factory = get_session_factory()
     async with factory() as session:
-        result = await session.execute(select(EnableTask).where(EnableTask.id == task.id))
+        result = await session.execute(
+            select(EnableTask)
+            .options(selectinload(EnableTask.fb_ad))
+            .where(EnableTask.id == task.id)
+        )
         persisted_task = result.scalar_one_or_none()
 
     task_row = persisted_task or task
+    fb_ad = task_row.fb_ad
     await broadcast_enable_task_runtime_message(
-        ad_name=task_row.ad_name,
-        fb_ad_id=task_row.fb_ad_id,
+        ad_name=fb_ad.ad_name if fb_ad else "",
+        fb_ad_id=fb_ad.fb_ad_id if fb_ad else "",
         requested_by_username=task_row.requested_by_username or "",
         status=status,
         incident_key=(
@@ -506,7 +513,7 @@ async def _process_enable_task_result(
     if success:
         await mark_succeeded(task.id)
         status = EnableTaskStatus.SUCCEEDED
-        logger.info("Объявление %s успешно включено", task.fb_ad_id)
+        logger.info("Объявление %s успешно включено", task.fb_ad.fb_ad_id)
     else:
         attempt = task.attempt_count
         max_attempts = task.max_attempts
@@ -516,7 +523,7 @@ async def _process_enable_task_result(
             logger.error(
                 "Задача %s для %s провалена: исчерпаны все %s попыток",
                 task.id,
-                task.fb_ad_id,
+                task.fb_ad.fb_ad_id,
                 max_attempts,
             )
         else:
@@ -526,7 +533,7 @@ async def _process_enable_task_result(
             status = EnableTaskStatus.RETRYING
             logger.warning(
                 "Не удалось включить %s: %s. Retry через %s сек",
-                task.fb_ad_id,
+                task.fb_ad.fb_ad_id,
                 message,
                 delay,
             )
@@ -540,8 +547,8 @@ async def _process_enable_task_result(
             await tg_client.send_message(
                 chat_id=tg_chat_id,
                 text=render_enable_task_runtime_message(
-                    ad_name=task.ad_name,
-                    fb_ad_id=task.fb_ad_id,
+                    ad_name=task.fb_ad.ad_name,
+                    fb_ad_id=task.fb_ad.fb_ad_id,
                     requested_by_username=task.requested_by_username or "",
                     status=status.value,
                     detail=message,
@@ -576,7 +583,7 @@ async def enable_worker_loop(
             logger.info(
                 "Enable worker: выполняю задачу %s для объявления %s",
                 task.id,
-                task.fb_ad_id,
+                task.fb_ad.fb_ad_id,
             )
 
             page, page_error = await _resolve_ads_manager_page(manager)
@@ -585,7 +592,7 @@ async def enable_worker_loop(
             else:
                 try:
                     success, message = await asyncio.wait_for(
-                        execute_enable_via_playwright(page, task.fb_ad_id),
+                        execute_enable_via_playwright(page, task.fb_ad.fb_ad_id),
                         timeout=ENABLE_BROWSER_TASK_TIMEOUT_SECONDS,
                     )
                 except asyncio.TimeoutError as exc:
@@ -595,7 +602,7 @@ async def enable_worker_loop(
                     logger.error(
                         "Enable worker: задача %s для %s зависла дольше %s сек, переподключаю браузер",
                         task.id,
-                        task.fb_ad_id,
+                        task.fb_ad.fb_ad_id,
                         ENABLE_BROWSER_TASK_TIMEOUT_SECONDS,
                     )
                     await _process_enable_task_result(

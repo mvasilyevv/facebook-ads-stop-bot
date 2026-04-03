@@ -3,11 +3,13 @@
 
 from __future__ import annotations
 
+import uuid as _uuid
+
 from sqlalchemy import select
 
 from core.db import get_session_factory
 from core.domain import AlertStage, TelegramNotificationStream
-from core.models import TelegramMessageRef
+from core.models import FbAd, TelegramMessageRef
 
 
 def normalize_incident_key(incident_key: str | None) -> str:
@@ -24,23 +26,28 @@ def stream_for_alert_stage(stage: AlertStage) -> TelegramNotificationStream:
     return TelegramNotificationStream.EARLY
 
 
+async def _resolve_ad_id(session, fb_ad_id: str) -> _uuid.UUID | None:
+    """Находит UUID записи fb_ads по fb_ad_id строке."""
+    return await session.scalar(select(FbAd.id).where(FbAd.fb_ad_id == fb_ad_id))
+
+
 async def load_message_refs_by_chat(
     *,
     fb_ad_id: str,
     incident_key: str | None,
     stream_kind: TelegramNotificationStream,
 ) -> dict[str, int]:
-    """Возвращает последние message_id по chat_id для конкретного потока.
-
-    Выбор `message_thread_id` намеренно остаётся в routing settings и не хранится в ref-кеше.
-    """
+    """Возвращает последние message_id по chat_id для конкретного потока."""
     normalized_incident_key = normalize_incident_key(incident_key)
     factory = get_session_factory()
     async with factory() as session:
+        ad_id = await _resolve_ad_id(session, fb_ad_id)
+        if ad_id is None:
+            return {}
         result = await session.execute(
             select(TelegramMessageRef.telegram_chat_id, TelegramMessageRef.telegram_message_id)
             .where(
-                TelegramMessageRef.fb_ad_id == fb_ad_id,
+                TelegramMessageRef.ad_id == ad_id,
                 TelegramMessageRef.incident_key == normalized_incident_key,
                 TelegramMessageRef.stream_kind == stream_kind,
             )
@@ -61,26 +68,26 @@ async def upsert_message_ref(
     incident_key: str | None,
     stream_kind: TelegramNotificationStream,
 ) -> None:
-    """Создаёт или обновляет delivery-ref Telegram-сообщения.
-
-    Ключ цепочки остаётся на уровне chat_id + fb_ad_id + incident_key + stream_kind.
-    """
+    """Создаёт или обновляет delivery-ref Telegram-сообщения."""
     normalized_incident_key = normalize_incident_key(incident_key)
     factory = get_session_factory()
     async with factory() as session:
+        ad_id = await _resolve_ad_id(session, fb_ad_id)
+        if ad_id is None:
+            return
         ref = await session.scalar(
             select(TelegramMessageRef).where(
                 TelegramMessageRef.telegram_chat_id == chat_id,
-                TelegramMessageRef.fb_ad_id == fb_ad_id,
+                TelegramMessageRef.ad_id == ad_id,
                 TelegramMessageRef.incident_key == normalized_incident_key,
                 TelegramMessageRef.stream_kind == stream_kind,
             )
         )
         if ref is None:
             ref = TelegramMessageRef(
+                ad_id=ad_id,
                 telegram_chat_id=chat_id,
                 telegram_message_id=message_id,
-                fb_ad_id=fb_ad_id,
                 incident_key=normalized_incident_key,
                 stream_kind=stream_kind,
             )

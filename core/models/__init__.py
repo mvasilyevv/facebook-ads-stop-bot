@@ -149,6 +149,7 @@ class CabinetDayArchive(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     summary_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     campaigns_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
     offer_stats_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    ads_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
 
 
 # === Telegram-настройки ===
@@ -282,6 +283,84 @@ class OfferRuleConfig(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     offer: Mapped[Offer] = relationship(back_populates="rule_config")
 
 
+# === Справочник объявлений ===
+
+
+class FbAd(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """Каноническая запись объявления Facebook — единая точка правды для FK-связей."""
+
+    __tablename__ = "fb_ads"
+    __table_args__ = (
+        Index("uq_fb_ad_fb_ad_id", "fb_ad_id", unique=True),
+        Index("ix_fb_ad_offer_id", "offer_id"),
+        Index("ix_fb_ad_campaign_name", "campaign_name"),
+        Index("ix_fb_ad_last_seen_at", "last_seen_at"),
+    )
+
+    fb_ad_id: Mapped[str] = mapped_column(String(32))
+    campaign_name: Mapped[str] = mapped_column(String(255), default="")
+    adset_name: Mapped[str] = mapped_column(String(255), default="")
+    ad_name: Mapped[str] = mapped_column(String(255), default="")
+    offer_id: Mapped[_uuid.UUID | None] = mapped_column(
+        ForeignKey("offers.id", ondelete="SET NULL"),
+    )
+    offer_code: Mapped[str | None] = mapped_column(String(100))
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    offer: Mapped[Offer | None] = relationship()
+    snapshot: Mapped[AdSnapshot | None] = relationship(back_populates="fb_ad")
+    metric_history: Mapped[list[AdMetricHistory]] = relationship(
+        back_populates="fb_ad", cascade="all, delete-orphan"
+    )
+    alert_events: Mapped[list[AlertEvent]] = relationship(back_populates="fb_ad")
+    disable_tasks: Mapped[list[DisableTask]] = relationship(back_populates="fb_ad")
+    enable_recommendation_events: Mapped[list[EnableRecommendationEvent]] = relationship(
+        back_populates="fb_ad"
+    )
+    enable_tasks: Mapped[list[EnableTask]] = relationship(back_populates="fb_ad")
+
+
+# === История метрик объявления ===
+
+
+class AdMetricHistory(UUIDPrimaryKeyMixin, Base):
+    """Гранулярная история метрик — запись только при изменении значений."""
+
+    __tablename__ = "ad_metric_history"
+    __table_args__ = (
+        Index("uq_ad_metric_history_ad_ts", "ad_id", "cycle_ts", unique=True),
+        Index("ix_ad_metric_history_cycle_ts", "cycle_ts"),
+    )
+
+    ad_id: Mapped[_uuid.UUID] = mapped_column(
+        ForeignKey("fb_ads.id", ondelete="CASCADE"), index=True
+    )
+    cycle_ts: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    # Метрики (зеркало AdSnapshot)
+    spend: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"))
+    reach: Mapped[int] = mapped_column(Integer, default=0)
+    impressions: Mapped[int] = mapped_column(Integer, default=0)
+    clicks: Mapped[int] = mapped_column(Integer, default=0)
+    cpc: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
+    ctr: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
+    cost_per_result: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
+    cpm: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
+    frequency: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
+    leads: Mapped[int] = mapped_column(Integer, default=0)
+    cost_per_lead: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
+    registrations: Mapped[int] = mapped_column(Integer, default=0)
+    cost_per_registration: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
+    deposits: Mapped[int] = mapped_column(Integer, default=0)
+    outbound_clicks: Mapped[int] = mapped_column(Integer, default=0)
+    outbound_ctr: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
+    landing_page_views: Mapped[int] = mapped_column(Integer, default=0)
+    cost_per_landing_page_view: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
+
+    fb_ad: Mapped[FbAd] = relationship(back_populates="metric_history")
+
+
 # === Снимок метрик объявления ===
 
 
@@ -296,6 +375,9 @@ class AdSnapshot(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         Index("ix_ad_snapshot_offer_alert", "offer_id", "alert_state"),
     )
 
+    ad_id: Mapped[_uuid.UUID] = mapped_column(
+        ForeignKey("fb_ads.id", ondelete="CASCADE"), index=True
+    )
     offer_id: Mapped[_uuid.UUID | None] = mapped_column(
         ForeignKey("offers.id", ondelete="SET NULL")
     )
@@ -343,6 +425,7 @@ class AdSnapshot(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # Снузер: если задан и не истёк, observer не шлёт повторный алерт
     snoozed_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+    fb_ad: Mapped[FbAd | None] = relationship(back_populates="snapshot")
     offer: Mapped[Offer | None] = relationship(back_populates="snapshots")
     alerts: Mapped[list[AlertEvent]] = relationship(back_populates="snapshot")
     disable_tasks: Mapped[list[DisableTask]] = relationship(back_populates="snapshot")
@@ -360,14 +443,15 @@ class AlertEvent(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "alert_events"
     __table_args__ = (Index("ix_alert_event_created_at", "created_at"),)
 
+    ad_id: Mapped[_uuid.UUID] = mapped_column(
+        ForeignKey("fb_ads.id", ondelete="CASCADE"), index=True
+    )
     snapshot_id: Mapped[_uuid.UUID | None] = mapped_column(
         ForeignKey("ad_snapshots.id", ondelete="SET NULL"), index=True
     )
     offer_id: Mapped[_uuid.UUID | None] = mapped_column(
         ForeignKey("offers.id", ondelete="SET NULL"), index=True
     )
-    fb_ad_id: Mapped[str] = mapped_column(String(32), index=True)
-    ad_name: Mapped[str] = mapped_column(String(255))
     stage: Mapped[AlertStage] = mapped_column(_ALERT_STAGE_ENUM, index=True)
     state: Mapped[AlertState] = mapped_column(_ALERT_STATE_ENUM, index=True)
     matched_rule_codes: Mapped[list[str]] = mapped_column(JSON, default=list)
@@ -379,6 +463,7 @@ class AlertEvent(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     telegram_message_id: Mapped[int | None] = mapped_column(Integer, index=True)
     telegram_group_key: Mapped[str | None] = mapped_column(String(64), index=True)
 
+    fb_ad: Mapped[FbAd | None] = relationship(back_populates="alert_events")
     snapshot: Mapped[AdSnapshot | None] = relationship(back_populates="alerts")
 
 
@@ -394,19 +479,20 @@ class DisableTask(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         # Очередь воркера: поиск задач по статусу и времени следующей попытки
         Index("ix_disable_task_queue", "status", "next_retry_at"),
         # Сверка по инциденту: поиск задач конкретного объявления в рамках токена
-        Index("ix_disable_task_ad_incident", "fb_ad_id", "open_state_token"),
+        Index("ix_disable_task_ad_incident", "ad_id", "open_state_token"),
         # Dashboard: фильтрация по времени завершения
         Index("ix_disable_task_completed_at", "completed_at"),
     )
 
+    ad_id: Mapped[_uuid.UUID] = mapped_column(
+        ForeignKey("fb_ads.id", ondelete="CASCADE"), index=True
+    )
     snapshot_id: Mapped[_uuid.UUID | None] = mapped_column(
         ForeignKey("ad_snapshots.id", ondelete="SET NULL"), index=True
     )
     offer_id: Mapped[_uuid.UUID | None] = mapped_column(
         ForeignKey("offers.id", ondelete="SET NULL"), index=True
     )
-    fb_ad_id: Mapped[str] = mapped_column(String(32), index=True)
-    ad_name: Mapped[str] = mapped_column(String(255))
     open_state_token: Mapped[str] = mapped_column(String(64), index=True)
     idempotency_key: Mapped[str] = mapped_column(String(128))
     status: Mapped[DisableTaskStatus] = mapped_column(
@@ -424,6 +510,7 @@ class DisableTask(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     last_error: Mapped[str | None] = mapped_column(String(500))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+    fb_ad: Mapped[FbAd | None] = relationship(back_populates="disable_tasks")
     snapshot: Mapped[AdSnapshot | None] = relationship(back_populates="disable_tasks")
 
 
@@ -438,14 +525,15 @@ class EnableRecommendationEvent(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         Index("uq_enable_recommendation_event_idempotency", "idempotency_key", unique=True),
     )
 
+    ad_id: Mapped[_uuid.UUID] = mapped_column(
+        ForeignKey("fb_ads.id", ondelete="CASCADE"), index=True
+    )
     snapshot_id: Mapped[_uuid.UUID | None] = mapped_column(
         ForeignKey("ad_snapshots.id", ondelete="SET NULL"), index=True
     )
     offer_id: Mapped[_uuid.UUID | None] = mapped_column(
         ForeignKey("offers.id", ondelete="SET NULL"), index=True
     )
-    fb_ad_id: Mapped[str] = mapped_column(String(32), index=True)
-    ad_name: Mapped[str] = mapped_column(String(255))
     delivery_status: Mapped[str] = mapped_column(String(64))
     recommendation_level: Mapped[EnableRecommendationLevel] = mapped_column(
         _ENABLE_RECOMMENDATION_LEVEL_ENUM,
@@ -460,6 +548,7 @@ class EnableRecommendationEvent(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     telegram_chat_id: Mapped[str | None] = mapped_column(String(64))
     telegram_message_id: Mapped[int | None] = mapped_column(Integer, index=True)
 
+    fb_ad: Mapped[FbAd] = relationship(back_populates="enable_recommendation_events")
     snapshot: Mapped[AdSnapshot | None] = relationship(
         back_populates="enable_recommendation_events"
     )
@@ -474,6 +563,19 @@ _ENABLE_STATUS_ENUM = Enum(
 )
 
 
+class AdDepositCorrection(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """Корректировка ложных депозитов по объявлению."""
+
+    __tablename__ = "ad_deposit_corrections"
+    __table_args__ = (Index("uq_ad_deposit_correction_ad_id", "ad_id", unique=True),)
+
+    ad_id: Mapped[_uuid.UUID] = mapped_column(
+        ForeignKey("fb_ads.id", ondelete="CASCADE"), index=True
+    )
+    fake_count: Mapped[int] = mapped_column(Integer, default=0)
+    note: Mapped[str] = mapped_column(String(500), default="")
+
+
 class EnableTask(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     """Задача на включение объявления (outbox-паттерн)."""
 
@@ -484,6 +586,9 @@ class EnableTask(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         Index("ix_enable_task_queue", "status", "next_retry_at"),
     )
 
+    ad_id: Mapped[_uuid.UUID] = mapped_column(
+        ForeignKey("fb_ads.id", ondelete="CASCADE"), index=True
+    )
     snapshot_id: Mapped[_uuid.UUID | None] = mapped_column(
         ForeignKey("ad_snapshots.id", ondelete="SET NULL"), index=True
     )
@@ -491,8 +596,6 @@ class EnableTask(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         ForeignKey("enable_recommendation_events.id", ondelete="SET NULL"),
         index=True,
     )
-    fb_ad_id: Mapped[str] = mapped_column(String(32), index=True)
-    ad_name: Mapped[str] = mapped_column(String(255))
     idempotency_key: Mapped[str] = mapped_column(String(128))
     status: Mapped[EnableTaskStatus] = mapped_column(
         _ENABLE_STATUS_ENUM, default=EnableTaskStatus.PENDING, index=True
@@ -508,6 +611,9 @@ class EnableTask(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     last_error: Mapped[str | None] = mapped_column(String(500))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    fb_ad: Mapped[FbAd | None] = relationship(back_populates="enable_tasks")
+    recommendation_event: Mapped[EnableRecommendationEvent | None] = relationship()
 
 
 # === Настройки Vision браузера ===
@@ -573,16 +679,18 @@ class TelegramMessageRef(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         Index(
             "uq_telegram_message_refs_stream",
             "telegram_chat_id",
-            "fb_ad_id",
+            "ad_id",
             "incident_key",
             "stream_kind",
             unique=True,
         ),
     )
 
+    ad_id: Mapped[_uuid.UUID] = mapped_column(
+        ForeignKey("fb_ads.id", ondelete="CASCADE"), index=True
+    )
     telegram_chat_id: Mapped[str] = mapped_column(String(64), index=True)
     telegram_message_id: Mapped[int] = mapped_column(Integer, index=True)
-    fb_ad_id: Mapped[str] = mapped_column(String(32), index=True)
     incident_key: Mapped[str] = mapped_column(String(64), default="", index=True)
     stream_kind: Mapped[TelegramNotificationStream] = mapped_column(
         _TELEGRAM_NOTIFICATION_STREAM_ENUM,

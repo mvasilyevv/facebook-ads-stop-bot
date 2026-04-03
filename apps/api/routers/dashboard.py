@@ -55,7 +55,25 @@ from core.enable_recommendations.service import (
     collect_enable_recommendation_candidates_for_snapshots,
     promote_recommendation_to_enable_task,
 )
+from core.fake_deposits import (
+    effective_deposits as _effective_deposits,
+)
+from core.fake_deposits import (
+    load_fake_deposits_map as _load_fake_deposits_map,
+)
 from core.live_batch import compute_live_batch_marker, is_within_live_batch, load_live_batch_bounds
+from core.math_utils import (
+    safe_div_quantized as _safe_decimal_div,
+)
+from core.math_utils import (
+    safe_percent as _safe_percent,
+)
+from core.math_utils import (
+    to_decimal as _json_decimal,
+)
+from core.math_utils import (
+    to_int as _json_int,
+)
 from core.models import (
     AdSnapshot,
     AlertEvent,
@@ -63,10 +81,12 @@ from core.models import (
     DisableTask,
     EnableRecommendationEvent,
     EnableTask,
+    FbAd,
     ObserverSettings,
     Offer,
     OfferRuleConfig,
 )
+from core.settings_queries import get_observer_settings as _get_observer_settings
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["dashboard"])
@@ -321,7 +341,7 @@ def _build_current_enable_tasks_query(
         EnableTask.id.label("task_id"),
         func.row_number()
         .over(
-            partition_by=EnableTask.fb_ad_id,
+            partition_by=EnableTask.ad_id,
             order_by=[
                 EnableTask.updated_at.desc(),
                 EnableTask.created_at.desc(),
@@ -512,20 +532,6 @@ async def _load_current_enable_recommendations(
     if limit is not None:
         rows = rows[:limit]
     return current_batch_marker, rows
-
-
-def _safe_decimal_div(numerator: Decimal, denominator: int) -> Decimal | None:
-    """Безопасно делит Decimal на целое число для cost-метрик."""
-    if denominator <= 0:
-        return None
-    return (Decimal(numerator) / Decimal(denominator)).quantize(Decimal("0.0001"))
-
-
-def _safe_percent(numerator: int, denominator: int) -> float | None:
-    """Возвращает конверсию в процентах или None, если делить нельзя."""
-    if denominator <= 0:
-        return None
-    return round((float(numerator) / float(denominator)) * 100, 1)
 
 
 def _safe_decimal_percent_over(value: Decimal, baseline: Decimal) -> Decimal | None:
@@ -799,12 +805,8 @@ def _to_dashboard_timezone(value: datetime) -> datetime:
 
 async def _get_cabinet_day_start(db: AsyncSession) -> datetime | None:
     """Возвращает зафиксированное начало текущих суток кабинета."""
-    row = await db.scalar(
-        select(ObserverSettings.cabinet_day_started_at).where(
-            ObserverSettings.singleton_key == "default"
-        )
-    )
-    return row
+    settings = await _get_observer_settings(db)
+    return settings.cabinet_day_started_at if settings else None
 
 
 def _serialize_observer_runtime_fields(
@@ -922,26 +924,6 @@ def _build_performance_summary(
     )
 
 
-def _json_decimal(value: object | None) -> Decimal:
-    """Преобразует число из JSON/ORM в Decimal без падения."""
-    if value in (None, ""):
-        return Decimal("0")
-    try:
-        return Decimal(str(value))
-    except Exception:
-        return Decimal("0")
-
-
-def _json_int(value: object | None) -> int:
-    """Преобразует число из JSON/ORM в int без падения."""
-    if value in (None, ""):
-        return 0
-    try:
-        return int(value)
-    except Exception:
-        return 0
-
-
 def _accumulate_campaign_metrics(
     campaign_map: dict[str, dict[str, object]],
     *,
@@ -1005,12 +987,14 @@ def _build_dashboard_performance_payload(
     now: datetime | None = None,
     cutoff: datetime | None = None,
     archives: list[CabinetDayArchive] | None = None,
+    fake_map: dict[str, int] | None = None,
 ) -> DashboardPerformanceSchema:
     """Агрегирует performance-данные из текущего дня и архива суток кабинета."""
     current_time = now or _dashboard_now()
     cutoff = cutoff or _performance_cutoff(period, current_time)
     archives = archives or []
     offers = offers or []
+    fake_map = fake_map or {}
     relevant = [
         snapshot
         for snapshot in snapshots
@@ -1076,7 +1060,7 @@ def _build_dashboard_performance_payload(
         clicks = int(snapshot.clicks or 0)
         leads = int(snapshot.leads or 0)
         registrations = int(snapshot.registrations or 0)
-        deposits = int(snapshot.deposits or 0)
+        deposits = _effective_deposits(int(snapshot.deposits or 0), snapshot.fb_ad_id, fake_map)
 
         total_spend += spend
         total_clicks += clicks
@@ -1313,9 +1297,7 @@ async def get_dashboard_stats(db: AsyncSession = Depends(get_db)):
             claimed = cnt
 
     # Активные офферы + задачи на отключение
-    observer_row = await db.scalar(
-        select(ObserverSettings).where(ObserverSettings.singleton_key == "default")
-    )
+    observer_row = await _get_observer_settings(db)
     cabinet_day_start = observer_row.cabinet_day_started_at if observer_row else None
     # Если zero-scan ещё ни разу не был зафиксирован, считаем только по актуальной скан-сессии,
     # чтобы не тащить вчерашние значения из календарной полуночи.
@@ -1457,6 +1439,7 @@ async def get_dashboard_performance(
     archives = []
     if period != "today":
         archives = await _load_dashboard_archives(db, cutoff=cutoff)
+    fake_map = await _load_fake_deposits_map(db)
     return _build_dashboard_performance_payload(
         snapshots,
         offers=offers,
@@ -1464,6 +1447,7 @@ async def get_dashboard_performance(
         now=now_for_payload,
         cutoff=cutoff,
         archives=archives,
+        fake_map=fake_map,
     )
 
 
@@ -1512,9 +1496,7 @@ async def get_dashboard_batch(
         elif state == AlertState.CLAIMED:
             claimed = cnt
 
-    observer_row = await db.scalar(
-        select(ObserverSettings).where(ObserverSettings.singleton_key == "default")
-    )
+    observer_row = await _get_observer_settings(db)
     cabinet_day_start = observer_row.cabinet_day_started_at if observer_row else None
     disabled_since = cabinet_day_start or scan_cutoff
 
@@ -1702,12 +1684,12 @@ async def get_dashboard_batch(
     incidents: list[ActiveIncidentSchema] = []
 
     if incident_snapshots:
-        incident_fb_ad_ids = [snapshot.fb_ad_id for snapshot in incident_snapshots]
+        incident_ad_ids = [snapshot.ad_id for snapshot in incident_snapshots]
         alert_events = (
             (
                 await db.execute(
                     select(AlertEvent)
-                    .where(AlertEvent.fb_ad_id.in_(incident_fb_ad_ids))
+                    .where(AlertEvent.ad_id.in_(incident_ad_ids))
                     .order_by(AlertEvent.created_at.desc())
                 )
             )
@@ -1718,7 +1700,7 @@ async def get_dashboard_batch(
             (
                 await db.execute(
                     select(DisableTask)
-                    .where(DisableTask.fb_ad_id.in_(incident_fb_ad_ids))
+                    .where(DisableTask.ad_id.in_(incident_ad_ids))
                     .order_by(DisableTask.updated_at.desc(), DisableTask.created_at.desc())
                 )
             )
@@ -1801,6 +1783,7 @@ async def list_ad_snapshots(
     result = await db.execute(q)
     snapshots = result.scalars().all()
     diagnostics_map = await _build_snapshot_diagnostics_map(db, snapshots)
+    fake_map = await _load_fake_deposits_map(db)
     return [
         AdSnapshotSchema(
             id=str(s.id),
@@ -1825,6 +1808,8 @@ async def list_ad_snapshots(
             registrations=s.registrations,
             cost_per_registration=s.cost_per_registration,
             deposits=s.deposits,
+            fake_deposits=fake_map.get(s.fb_ad_id, 0),
+            effective_deposits=_effective_deposits(s.deposits, s.fb_ad_id, fake_map),
             alert_state=s.alert_state.value,
             current_stage=s.current_stage.value if s.current_stage else None,
             early_signal_rule_codes=s.early_signal_rule_codes or [],
@@ -1879,12 +1864,12 @@ async def list_active_incidents(
     if not snapshots:
         return []
 
-    fb_ad_ids = [snapshot.fb_ad_id for snapshot in snapshots]
+    ad_ids = [snapshot.ad_id for snapshot in snapshots]
     alert_events = (
         (
             await db.execute(
                 select(AlertEvent)
-                .where(AlertEvent.fb_ad_id.in_(fb_ad_ids))
+                .where(AlertEvent.ad_id.in_(ad_ids))
                 .order_by(AlertEvent.created_at.desc())
             )
         )
@@ -1895,7 +1880,7 @@ async def list_active_incidents(
         (
             await db.execute(
                 select(DisableTask)
-                .where(DisableTask.fb_ad_id.in_(fb_ad_ids))
+                .where(DisableTask.ad_id.in_(ad_ids))
                 .order_by(DisableTask.updated_at.desc(), DisableTask.created_at.desc())
             )
         )
@@ -1934,7 +1919,8 @@ async def list_alert_events(
     """История алертов (для таблицы и модальных окон)."""
     q = select(AlertEvent).order_by(AlertEvent.created_at.desc())
     if fb_ad_id:
-        q = q.where(AlertEvent.fb_ad_id == fb_ad_id)
+        ad_id_subq = select(FbAd.id).where(FbAd.fb_ad_id == fb_ad_id).scalar_subquery()
+        q = q.where(AlertEvent.ad_id == ad_id_subq)
     if stage:
         from core.domain import AlertStage as AS
 
@@ -2019,7 +2005,7 @@ async def create_disable_task(
     existing_task = await db.scalar(
         select(DisableTask).where(
             and_(
-                DisableTask.fb_ad_id == body.fb_ad_id,
+                DisableTask.ad_id == snapshot.ad_id,
                 DisableTask.open_state_token == incident_key,
                 DisableTask.status.in_(
                     [
@@ -2036,8 +2022,7 @@ async def create_disable_task(
         return _serialize_disable_task(existing_task)
 
     new_task = DisableTask(
-        fb_ad_id=body.fb_ad_id,
-        ad_name=snapshot.ad_name,
+        ad_id=snapshot.ad_id,
         snapshot_id=snapshot.id,
         offer_id=snapshot.offer_id,
         open_state_token=incident_key,
@@ -2262,12 +2247,14 @@ async def get_chart_data(
     archives = []
     if period != "today":
         archives = await _load_dashboard_archives(db, cutoff=history_cutoff)
+    fake_map_2 = await _load_fake_deposits_map(db)
     performance_payload = _build_dashboard_performance_payload(
         snapshots,
         period=period,
         now=now,
         cutoff=history_cutoff,
         archives=archives,
+        fake_map=fake_map_2,
     )
     offer_rule_map = await _load_offer_rules_for_snapshots(db, snapshots)
     campaigns = [
@@ -2374,32 +2361,35 @@ async def get_ad_timeline(fb_ad_id: str, db: AsyncSession = Depends(get_db)):
     snapshot = snapshot_result.scalar_one_or_none()
 
     # История алертов
-    events_result = await db.execute(
-        select(AlertEvent)
-        .where(AlertEvent.fb_ad_id == fb_ad_id)
-        .order_by(AlertEvent.created_at.desc())
-    )
-    events = events_result.scalars().all()
+    ad_id = snapshot.ad_id if snapshot else None
+    if ad_id is not None:
+        events_result = await db.execute(
+            select(AlertEvent)
+            .where(AlertEvent.ad_id == ad_id)
+            .order_by(AlertEvent.created_at.desc())
+        )
+        events = events_result.scalars().all()
 
-    # Задачи на отключение
-    tasks_result = await db.execute(
-        select(DisableTask)
-        .where(DisableTask.fb_ad_id == fb_ad_id)
-        .order_by(DisableTask.created_at.desc())
-    )
-    tasks = tasks_result.scalars().all()
+        # Задачи на отключение
+        tasks_result = await db.execute(
+            select(DisableTask)
+            .where(DisableTask.ad_id == ad_id)
+            .order_by(DisableTask.created_at.desc())
+        )
+        tasks = tasks_result.scalars().all()
+    else:
+        events = []
+        tasks = []
 
     recommendation_events_result = await db.execute(
         select(EnableRecommendationEvent)
-        .where(EnableRecommendationEvent.fb_ad_id == fb_ad_id)
+        .where(EnableRecommendationEvent.ad_id == ad_id)
         .order_by(EnableRecommendationEvent.created_at.desc())
     )
     recommendation_events = recommendation_events_result.scalars().all()
 
     enable_tasks_result = await db.execute(
-        select(EnableTask)
-        .where(EnableTask.fb_ad_id == fb_ad_id)
-        .order_by(EnableTask.created_at.desc())
+        select(EnableTask).where(EnableTask.ad_id == ad_id).order_by(EnableTask.created_at.desc())
     )
     enable_tasks = enable_tasks_result.scalars().all()
 

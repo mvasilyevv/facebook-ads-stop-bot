@@ -12,7 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.disable_tasks import is_delivery_disabled
 from core.domain import EnableTaskStatus
 from core.live_batch import LIVE_BATCH_WINDOW
-from core.models import AdSnapshot, EnableRecommendationEvent, EnableTask, ObserverSettings
+from core.models import AdSnapshot, EnableRecommendationEvent, EnableTask
+from core.settings_queries import get_observer_settings
 
 logger = logging.getLogger(__name__)
 
@@ -34,11 +35,8 @@ async def reconcile_enable_tasks(
     current_time = now or datetime.now(UTC)
     stale_before = current_time - ENABLE_TASK_STALE_TIMEOUT
     last_scan = await session.scalar(select(func.max(AdSnapshot.last_observed_at)))
-    cabinet_day_start = await session.scalar(
-        select(ObserverSettings.cabinet_day_started_at).where(
-            ObserverSettings.singleton_key == "default"
-        )
-    )
+    _obs = await get_observer_settings(session)
+    cabinet_day_start = _obs.cabinet_day_started_at if _obs else None
     active_cutoff = last_scan - LIVE_BATCH_WINDOW if last_scan is not None else None
 
     completed_ids: list[str] = []
@@ -85,7 +83,7 @@ async def reconcile_enable_tasks(
     if active_cutoff is not None:
         archived_rows = await session.execute(
             select(EnableTask, AdSnapshot)
-            .join(AdSnapshot, AdSnapshot.fb_ad_id == EnableTask.fb_ad_id, isouter=True)
+            .join(AdSnapshot, AdSnapshot.ad_id == EnableTask.ad_id, isouter=True)
             .where(
                 EnableTask.status.in_(ACTIVE_ENABLE_TASK_STATUSES),
                 or_(
@@ -112,7 +110,7 @@ async def reconcile_enable_tasks(
 
     completed_rows = await session.execute(
         select(EnableTask, AdSnapshot)
-        .join(AdSnapshot, AdSnapshot.fb_ad_id == EnableTask.fb_ad_id)
+        .join(AdSnapshot, AdSnapshot.ad_id == EnableTask.ad_id)
         .where(EnableTask.status.in_(ACTIVE_ENABLE_TASK_STATUSES))
     )
     for task, snapshot in completed_rows.all():
@@ -135,7 +133,7 @@ async def reconcile_enable_tasks(
 
     stale_rows = await session.execute(
         select(EnableTask, AdSnapshot)
-        .join(AdSnapshot, AdSnapshot.fb_ad_id == EnableTask.fb_ad_id, isouter=True)
+        .join(AdSnapshot, AdSnapshot.ad_id == EnableTask.ad_id, isouter=True)
         .where(
             EnableTask.status == EnableTaskStatus.RUNNING,
             func.coalesce(EnableTask.updated_at, EnableTask.created_at) <= stale_before,

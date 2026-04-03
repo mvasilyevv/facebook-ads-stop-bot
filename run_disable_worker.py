@@ -12,6 +12,7 @@ import sys
 from datetime import UTC, datetime
 
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
 from core.browser.ad_toggle import (
     confirm_dialog_if_present as shared_confirm_dialog_if_present,
@@ -151,6 +152,7 @@ async def claim_next_task():
 
         result = await session.execute(
             select(DisableTask)
+            .options(selectinload(DisableTask.fb_ad))
             .where(
                 (DisableTask.status == DisableTaskStatus.PENDING)
                 | (
@@ -169,7 +171,7 @@ async def claim_next_task():
         task.status = DisableTaskStatus.RUNNING
         task.attempt_count += 1
         await session.commit()
-        await session.refresh(task)
+        await session.refresh(task, attribute_names=["fb_ad"])
         return task
 
 
@@ -184,6 +186,7 @@ async def claim_task_batch(limit: int = DISABLE_BATCH_SIZE) -> list[DisableTask]
 
         result = await session.execute(
             select(DisableTask)
+            .options(selectinload(DisableTask.fb_ad))
             .where(
                 (DisableTask.status == DisableTaskStatus.PENDING)
                 | (
@@ -516,9 +519,9 @@ async def execute_disable_batch_via_playwright(
         tasks_by_ad_id: dict[str, list[DisableTask]] = {}
         ordered_ad_ids: list[str] = []
         for task in tasks:
-            task_list = tasks_by_ad_id.setdefault(task.fb_ad_id, [])
+            task_list = tasks_by_ad_id.setdefault(task.fb_ad.fb_ad_id, [])
             if not task_list:
-                ordered_ad_ids.append(task.fb_ad_id)
+                ordered_ad_ids.append(task.fb_ad.fb_ad_id)
             task_list.append(task)
 
         remaining_ad_ids = set(ordered_ad_ids)
@@ -645,7 +648,7 @@ async def mark_succeeded(task_id) -> None:
             task.last_error = None
 
             snap_result = await session.execute(
-                select(AdSnapshot).where(AdSnapshot.fb_ad_id == task.fb_ad_id)
+                select(AdSnapshot).where(AdSnapshot.ad_id == task.ad_id)
             )
             snapshot = snap_result.scalar_one_or_none()
             if snapshot:
@@ -707,13 +710,18 @@ async def _send_disable_task_completion_update(
     """Рассылает lifecycle-обновление по disable task всем активным получателям."""
     factory = get_session_factory()
     async with factory() as session:
-        persisted_task = await session.scalar(select(DisableTask).where(DisableTask.id == task.id))
+        persisted_task = await session.scalar(
+            select(DisableTask)
+            .options(selectinload(DisableTask.fb_ad))
+            .where(DisableTask.id == task.id)
+        )
         if persisted_task is None:
             return
 
+    fb_ad = persisted_task.fb_ad
     await broadcast_disable_task_runtime_message(
-        ad_name=persisted_task.ad_name,
-        fb_ad_id=persisted_task.fb_ad_id,
+        ad_name=fb_ad.ad_name if fb_ad else "",
+        fb_ad_id=fb_ad.fb_ad_id if fb_ad else "",
         requested_by_username=persisted_task.requested_by_username or "",
         status=str(persisted_task.status),
         incident_key=persisted_task.open_state_token,

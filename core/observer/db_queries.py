@@ -13,15 +13,17 @@ from sqlalchemy.orm import selectinload
 from core.db import get_session_factory
 from core.domain import AlertStage, AlertState, DisableTaskStatus
 from core.models import (
+    AdDepositCorrection,
     AdSnapshot,
     AlertEvent,
     DisableTask,
-    ObserverSettings,
+    FbAd,
     Offer,
     VisionSettings,
 )
 from core.observer.service import AlertCandidate
 from core.observer.thresholds import extract_observer_threshold_values
+from core.settings_queries import get_observer_settings
 from core.telegram.service import TelegramDestination, load_telegram_runtime_config
 
 logger = logging.getLogger(__name__)
@@ -52,6 +54,24 @@ async def load_offers_from_db() -> dict:
                 }
         logger.info("Загружено %s активных офферов из БД", len(offers_map))
         return offers_map
+
+
+async def load_fake_deposits() -> dict[str, int]:
+    """Загружает карту fb_ad_id → fake_count из БД.
+
+    Returns:
+        dict[fb_ad_id -> fake_count] (только записи с fake_count > 0)
+    """
+    factory = get_session_factory()
+    async with factory() as session:
+        result = await session.execute(
+            select(FbAd.fb_ad_id, AdDepositCorrection.fake_count)
+            .join(FbAd, FbAd.id == AdDepositCorrection.ad_id)
+            .where(AdDepositCorrection.fake_count > 0)
+        )
+        fake_map = {fb_ad_id: count for fb_ad_id, count in result.all()}
+    logger.info("Загружено %s корректировок ложных депозитов", len(fake_map))
+    return fake_map
 
 
 async def load_ad_states_from_db() -> dict[str, tuple[AlertState, str | None]]:
@@ -100,10 +120,7 @@ async def load_observer_settings_from_db() -> tuple[int, int, dict[str, Decimal]
     """
     factory = get_session_factory()
     async with factory() as session:
-        result = await session.execute(
-            select(ObserverSettings).where(ObserverSettings.singleton_key == "default")
-        )
-        s = result.scalar_one_or_none()
+        s = await get_observer_settings(session)
         if s:
             return (
                 s.interval_seconds,
@@ -122,10 +139,7 @@ async def check_scanning_enabled() -> bool:
     factory = get_session_factory()
     try:
         async with factory() as session:
-            result = await session.execute(
-                select(ObserverSettings).where(ObserverSettings.singleton_key == "default")
-            )
-            row = result.scalar_one_or_none()
+            row = await get_observer_settings(session)
             if row is not None:
                 return bool(row.is_scanning_enabled)
     except Exception:
@@ -142,10 +156,7 @@ async def check_scan_requested_flag() -> bool:
     factory = get_session_factory()
     try:
         async with factory() as session:
-            result = await session.execute(
-                select(ObserverSettings).where(ObserverSettings.singleton_key == "default")
-            )
-            row = result.scalar_one_or_none()
+            row = await get_observer_settings(session)
             if row and row.scan_requested:
                 row.scan_requested = False
                 await session.commit()
@@ -293,15 +304,11 @@ async def load_telegram_settings_from_db(
 
 async def set_observer_scanning_enabled(enabled: bool) -> None:
     """Переключает флаг сканирования observer в singleton-настройках."""
+    from core.settings_queries import get_or_create_observer_settings
+
     factory = get_session_factory()
     async with factory() as session:
-        result = await session.execute(
-            select(ObserverSettings).where(ObserverSettings.singleton_key == "default")
-        )
-        row = result.scalar_one_or_none()
-        if row is None:
-            row = ObserverSettings(singleton_key="default")
-            session.add(row)
+        row = await get_or_create_observer_settings(session)
         row.is_scanning_enabled = enabled
         await session.commit()
 
@@ -361,7 +368,7 @@ async def collect_reminder_alerts(interval_seconds: int) -> list[AlertCandidate]
 
             incident_key = snap.open_state_token or ""
             last_event_at_stmt = select(func.max(AlertEvent.created_at)).where(
-                AlertEvent.fb_ad_id == snap.fb_ad_id
+                AlertEvent.ad_id == snap.ad_id
             )
             if incident_key:
                 last_event_at_stmt = last_event_at_stmt.where(
@@ -376,7 +383,7 @@ async def collect_reminder_alerts(interval_seconds: int) -> list[AlertCandidate]
 
             last_event_stmt = (
                 select(AlertEvent)
-                .where(AlertEvent.fb_ad_id == snap.fb_ad_id)
+                .where(AlertEvent.ad_id == snap.ad_id)
                 .order_by(AlertEvent.updated_at.desc(), AlertEvent.created_at.desc())
                 .limit(1)
             )

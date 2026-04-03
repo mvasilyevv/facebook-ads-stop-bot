@@ -60,10 +60,9 @@ async def _create_auto_disable_task_for_snapshot(
     stmt = (
         pg_insert(DisableTask)
         .values(
+            ad_id=snapshot.ad_id,
             snapshot_id=snapshot.id,
             offer_id=snapshot.offer_id,
-            fb_ad_id=snapshot.fb_ad_id,
-            ad_name=snapshot.ad_name,
             open_state_token=incident_key,
             idempotency_key=idempotency_key,
             requested_by_telegram_user_id=None,
@@ -115,7 +114,7 @@ async def reconcile_disable_incidents_after_scan() -> list[AlertCandidate]:
 
             active_count = await session.scalar(
                 select(func.count(DisableTask.id)).where(
-                    DisableTask.fb_ad_id == snapshot.fb_ad_id,
+                    DisableTask.ad_id == snapshot.ad_id,
                     DisableTask.open_state_token == incident_key,
                     DisableTask.status.in_(ACTIVE_DISABLE_TASK_STATUSES),
                 )
@@ -125,7 +124,7 @@ async def reconcile_disable_incidents_after_scan() -> list[AlertCandidate]:
 
             recent_succeeded = await session.scalar(
                 select(func.count(DisableTask.id)).where(
-                    DisableTask.fb_ad_id == snapshot.fb_ad_id,
+                    DisableTask.ad_id == snapshot.ad_id,
                     DisableTask.open_state_token == incident_key,
                     DisableTask.status == DisableTaskStatus.SUCCEEDED,
                     DisableTask.completed_at.is_not(None),
@@ -142,7 +141,7 @@ async def reconcile_disable_incidents_after_scan() -> list[AlertCandidate]:
             auto_attempts = (
                 await session.scalar(
                     select(func.count(DisableTask.id)).where(
-                        DisableTask.fb_ad_id == snapshot.fb_ad_id,
+                        DisableTask.ad_id == snapshot.ad_id,
                         DisableTask.open_state_token == incident_key,
                         DisableTask.requested_by_username == "bot_auto_stop",
                     )
@@ -153,7 +152,7 @@ async def reconcile_disable_incidents_after_scan() -> list[AlertCandidate]:
             latest_task = await session.scalar(
                 select(DisableTask)
                 .where(
-                    DisableTask.fb_ad_id == snapshot.fb_ad_id,
+                    DisableTask.ad_id == snapshot.ad_id,
                     DisableTask.open_state_token == incident_key,
                 )
                 .order_by(DisableTask.updated_at.desc(), DisableTask.created_at.desc())
@@ -282,7 +281,7 @@ async def auto_create_disable_tasks(
             auto_attempts = (
                 await session.scalar(
                     select(func.count(DisableTask.id)).where(
-                        DisableTask.fb_ad_id == alert.fb_ad_id,
+                        DisableTask.ad_id == snapshot.ad_id,
                         DisableTask.open_state_token == incident_key,
                         DisableTask.requested_by_username == "bot_auto_stop",
                     )

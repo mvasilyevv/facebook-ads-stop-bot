@@ -56,7 +56,7 @@ async def reconcile_disable_tasks(
 
     completed_rows = await session.execute(
         select(DisableTask, AdSnapshot)
-        .join(AdSnapshot, AdSnapshot.fb_ad_id == DisableTask.fb_ad_id)
+        .join(AdSnapshot, AdSnapshot.ad_id == DisableTask.ad_id)
         .where(
             DisableTask.status.in_(ACTIVE_DISABLE_TASK_STATUSES),
             AdSnapshot.delivery_status.in_(DISABLED_DELIVERY_STATUSES),
@@ -81,7 +81,7 @@ async def reconcile_disable_tasks(
 
     repaired_rows = await session.execute(
         select(AdSnapshot, DisableTask.id)
-        .join(DisableTask, DisableTask.fb_ad_id == AdSnapshot.fb_ad_id)
+        .join(DisableTask, DisableTask.ad_id == AdSnapshot.ad_id)
         .where(
             DisableTask.status == DisableTaskStatus.SUCCEEDED,
             AdSnapshot.delivery_status.in_(DISABLED_DELIVERY_STATUSES),
@@ -107,7 +107,7 @@ async def reconcile_disable_tasks(
     if active_cutoff is not None:
         archived_rows = await session.execute(
             select(DisableTask, AdSnapshot)
-            .join(AdSnapshot, AdSnapshot.fb_ad_id == DisableTask.fb_ad_id, isouter=True)
+            .join(AdSnapshot, AdSnapshot.ad_id == DisableTask.ad_id, isouter=True)
             .where(
                 DisableTask.status.in_(ACTIVE_DISABLE_TASK_STATUSES),
                 or_(
@@ -143,7 +143,7 @@ async def reconcile_disable_tasks(
 
     stale_rows = await session.execute(
         select(DisableTask, AdSnapshot)
-        .join(AdSnapshot, AdSnapshot.fb_ad_id == DisableTask.fb_ad_id, isouter=True)
+        .join(AdSnapshot, AdSnapshot.ad_id == DisableTask.ad_id, isouter=True)
         .where(
             DisableTask.status == DisableTaskStatus.RUNNING,
             func.coalesce(DisableTask.updated_at, DisableTask.created_at) <= stale_before,
