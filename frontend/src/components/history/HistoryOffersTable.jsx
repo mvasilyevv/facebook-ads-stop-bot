@@ -2,7 +2,7 @@
 import { useTableSort, sortRows } from '../../hooks/useTableSort.js';
 import { SortableHeader } from '../SortableHeader.jsx';
 
-const TEXT_KEYS = new Set(['offer_code', 'offer_name']);
+const TEXT_KEYS = new Set(['offer_code']);
 
 const COLUMNS = [
   { key: 'offer_code', label: 'Оффер', align: 'text-left', mono: false },
@@ -10,7 +10,7 @@ const COLUMNS = [
   { key: 'total_registrations', label: 'Реги', align: 'text-right', mono: true, fmt: (v) => String(v || 0) },
   { key: 'total_deposits', label: 'Депозиты', align: 'text-right', mono: true, fmt: (v) => String(v || 0) },
   { key: 'avg_cpr', label: 'CPR', align: 'text-right', mono: true, fmt: (v) => v != null ? `$${Number(v).toFixed(2)}` : '—' },
-  { key: 'avg_spend_per_dep', label: 'Spend/Dep', align: 'text-right', mono: true, fmt: (v) => v != null ? `$${Number(v).toFixed(2)}` : '—' },
+  { key: 'avg_cost_per_deposit', label: 'Spend/Dep', align: 'text-right', mono: true, fmt: (v) => v != null ? `$${Number(v).toFixed(2)}` : '—' },
   { key: 'roas', label: 'ROAS', align: 'text-right', mono: true, fmt: (v) => v != null ? `${Number(v).toFixed(2)}x` : '—' },
   { key: 'profit', label: 'Profit', align: 'text-right', mono: true, fmt: (v) => v != null ? `$${Number(v).toFixed(2)}` : '—' },
 ];

@@ -39,7 +39,6 @@ const inputCls = 'w-full rounded bg-elevated border border-border px-3 py-2 text
 function OfferModal({ offer, onSave, onClose }) {
   const [form, setForm] = useState({
     code: offer?.code || '',
-    name: offer?.name || '',
     cpa: offer?.cpa_amount || offer?.cpa || '',
     is_active: offer?.is_active ?? true,
   });
@@ -49,7 +48,7 @@ function OfferModal({ offer, onSave, onClose }) {
     e.preventDefault();
     setSaving(true);
     try {
-      await onSave({ code: form.code, name: form.name, cpa_amount: parseFloat(form.cpa) || 0, is_active: form.is_active });
+      await onSave({ code: form.code, cpa_amount: parseFloat(form.cpa) || 0, is_active: form.is_active });
     } finally {
       setSaving(false);
     }
@@ -64,10 +63,6 @@ function OfferModal({ offer, onSave, onClose }) {
             <label className="mb-1 block text-2xs font-semibold uppercase tracking-wider text-secondary" htmlFor="offer-code">Код оффера</label>
             <input id="offer-code" className={inputCls} type="text" placeholder="OFFER_AU_42" value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value.toUpperCase() })} required disabled={!!offer} />
             <div className="mt-1 text-2xs text-muted">Код используется для сопоставления — ищется в названии кампании</div>
-          </div>
-          <div>
-            <label className="mb-1 block text-2xs font-semibold uppercase tracking-wider text-secondary" htmlFor="offer-name">Название</label>
-            <input id="offer-name" className={inputCls} type="text" placeholder="Australia — iPhone 15" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required />
           </div>
           <div>
             <label className="mb-1 block text-2xs font-semibold uppercase tracking-wider text-secondary" htmlFor="offer-cpa">CPA ($)</label>
@@ -227,7 +222,7 @@ export default function OffersPage() {
   };
 
   const handleDelete = async (offer) => {
-    if (!confirm(`Удалить оффер "${offer.name}"?`)) return;
+    if (!confirm(`Удалить оффер "${offer.code}"?`)) return;
     try {
       await deleteOffer(offer.id);
       setToast({ message: 'Оффер удалён', type: 'success' });
@@ -275,7 +270,6 @@ export default function OffersPage() {
               <thead>
                 <tr className="border-b border-border bg-elevated/50">
                   <th className="px-3 py-2 text-2xs uppercase tracking-wider text-muted text-left">Код</th>
-                  <th className="px-3 py-2 text-2xs uppercase tracking-wider text-muted text-left">Название</th>
                   <th className="px-3 py-2 text-2xs uppercase tracking-wider text-muted text-right">CPA</th>
                   <th className="px-3 py-2 text-2xs uppercase tracking-wider text-muted text-center">Статус</th>
                   <th className="px-3 py-2 text-2xs uppercase tracking-wider text-muted text-center">Правила</th>
@@ -286,7 +280,6 @@ export default function OffersPage() {
                 {offers.map((o) => (
                   <tr key={o.id} className="tr-hover border-b border-border">
                     <td className="px-3 py-2.5 font-mono text-accent">{o.code}</td>
-                    <td className="px-3 py-2.5 font-medium text-primary">{o.name}</td>
                     <td className="px-3 py-2.5 text-right font-mono font-semibold text-primary">${Number(o.cpa_amount ?? o.cpa).toFixed(2)}</td>
                     <td className="px-3 py-2.5 text-center">
                       <span className={o.is_active ? 'badge-success' : 'badge-neutral'}>
@@ -328,7 +321,7 @@ export default function OffersPage() {
       {editingId && (
         <div className="panel p-5 space-y-4 animate-fade-in">
           <h2 className="text-base font-semibold text-primary">
-            Стоп-правила: {offers.find((o) => o.id === editingId)?.name || '—'}
+            Стоп-правила: {offers.find((o) => o.id === editingId)?.code || '—'}
           </h2>
 
           {rulesLoading ? (

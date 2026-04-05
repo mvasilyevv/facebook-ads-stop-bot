@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
 
-# Точность для cost-метрик (CPC, CPL, CPR, spend_per_dep)
+# Точность для cost-метрик (CPC, CPL, CPR, cost_per_deposit)
 COST_METRIC_PRECISION = Decimal("0.0001")
 
 

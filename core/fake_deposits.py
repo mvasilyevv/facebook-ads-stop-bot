@@ -6,7 +6,7 @@ from __future__ import annotations
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.models import AdDepositCorrection, AdSnapshot, FbAd
+from core.models import AdDepositCorrection, FbAd, FbAdset, FbCampaign
 
 
 async def load_fake_deposits_map(db: AsyncSession) -> dict[str, int]:
@@ -39,35 +39,39 @@ async def load_total_fake_deposits(db: AsyncSession) -> int:
 
 
 async def load_fake_deposits_by_campaign(db: AsyncSession) -> dict[str, int]:
-    """Суммарное количество ложных депозитов по кампании."""
+    """Суммарное количество ложных депозитов по кампании через JOIN."""
     rows = (
         await db.execute(
             select(
-                AdSnapshot.campaign_name,
+                FbCampaign.campaign_name,
                 func.sum(AdDepositCorrection.fake_count),
             )
-            .join(AdSnapshot, AdSnapshot.ad_id == AdDepositCorrection.ad_id)
+            .join(FbAd, FbAd.id == AdDepositCorrection.ad_id)
+            .join(FbAdset, FbAd.adset_id == FbAdset.id)
+            .join(FbCampaign, FbAdset.campaign_id == FbCampaign.id)
             .where(AdDepositCorrection.fake_count > 0)
-            .group_by(AdSnapshot.campaign_name)
+            .group_by(FbCampaign.campaign_name)
         )
     ).all()
     return {name: int(total) for name, total in rows}
 
 
 async def load_fake_deposits_by_offer(db: AsyncSession) -> dict[str, int]:
-    """Суммарное количество ложных депозитов по офферу."""
+    """Суммарное количество ложных депозитов по офферу через JOIN."""
     rows = (
         await db.execute(
             select(
-                AdSnapshot.resolved_offer_code,
+                FbCampaign.offer_code,
                 func.sum(AdDepositCorrection.fake_count),
             )
-            .join(AdSnapshot, AdSnapshot.ad_id == AdDepositCorrection.ad_id)
+            .join(FbAd, FbAd.id == AdDepositCorrection.ad_id)
+            .join(FbAdset, FbAd.adset_id == FbAdset.id)
+            .join(FbCampaign, FbAdset.campaign_id == FbCampaign.id)
             .where(
                 AdDepositCorrection.fake_count > 0,
-                AdSnapshot.resolved_offer_code.isnot(None),
+                FbCampaign.offer_code.isnot(None),
             )
-            .group_by(AdSnapshot.resolved_offer_code)
+            .group_by(FbCampaign.offer_code)
         )
     ).all()
     return {code: int(total) for code, total in rows if code}

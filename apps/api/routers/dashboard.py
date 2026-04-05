@@ -82,6 +82,8 @@ from core.models import (
     EnableRecommendationEvent,
     EnableTask,
     FbAd,
+    FbAdset,
+    FbCampaign,
     ObserverSettings,
     Offer,
     OfferRuleConfig,
@@ -90,6 +92,44 @@ from core.settings_queries import get_observer_settings as _get_observer_setting
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["dashboard"])
+
+
+async def _load_ad_context_map(
+    db: AsyncSession,
+    ad_ids: list[_uuid.UUID],
+) -> dict[_uuid.UUID, dict[str, object]]:
+    """Загружает контекст объявлений (campaign, adset, ad_name, offer) через JOIN.
+
+    Возвращает {ad_id: {campaign_name, adset_name, ad_name, offer_code, offer_id}}.
+    """
+    if not ad_ids:
+        return {}
+    q = (
+        select(
+            FbAd.id.label("ad_id"),
+            FbAd.fb_ad_id,
+            FbAd.ad_name,
+            FbAdset.adset_name,
+            FbCampaign.campaign_name,
+            FbCampaign.offer_code,
+            FbCampaign.offer_id,
+        )
+        .join(FbAdset, FbAd.adset_id == FbAdset.id)
+        .join(FbCampaign, FbAdset.campaign_id == FbCampaign.id)
+        .where(FbAd.id.in_(ad_ids))
+    )
+    result = await db.execute(q)
+    return {
+        row.ad_id: {
+            "fb_ad_id": row.fb_ad_id,
+            "ad_name": row.ad_name or "",
+            "adset_name": row.adset_name or "",
+            "campaign_name": row.campaign_name or "",
+            "offer_code": row.offer_code,
+            "offer_id": row.offer_id,
+        }
+        for row in result.all()
+    }
 
 
 def _performance_cutoff(period: str, now: datetime) -> datetime:
@@ -188,15 +228,20 @@ def _min_datetime(*values: datetime | None) -> datetime | None:
     return min(filtered)
 
 
-def _serialize_disable_task(task: DisableTask) -> DisableTaskSchema:
+def _serialize_disable_task(
+    task: DisableTask,
+    *,
+    ad_ctx: dict[str, object] | None = None,
+) -> DisableTaskSchema:
     """Сериализует DisableTask для API-ответа."""
-    incident_key = getattr(task, "open_state_token", "") or getattr(task, "fb_ad_id", "")
+    ctx = ad_ctx or {}
+    incident_key = getattr(task, "open_state_token", "") or str(ctx.get("fb_ad_id", ""))
     updated_at = getattr(task, "updated_at", None) or getattr(task, "created_at", None)
     return DisableTaskSchema(
         id=str(task.id),
         incident_key=incident_key,
-        fb_ad_id=task.fb_ad_id,
-        ad_name=task.ad_name,
+        fb_ad_id=str(ctx.get("fb_ad_id", "")),
+        ad_name=str(ctx.get("ad_name", "")),
         status=task.status.value,
         attempt_count=task.attempt_count,
         last_error=task.last_error,
@@ -213,6 +258,7 @@ def _build_active_incident_schema(
     *,
     alert_events: list[AlertEvent],
     disable_tasks: list[DisableTask],
+    ad_ctx: dict[str, object] | None = None,
 ) -> ActiveIncidentSchema:
     """Собирает API-представление текущего инцидента по snapshot и связанным данным."""
     incident_key = _incident_key_for_snapshot(snapshot)
@@ -256,12 +302,13 @@ def _build_active_incident_schema(
         snapshot.created_at,
     )
 
+    ctx = ad_ctx or {}
     return ActiveIncidentSchema(
         incident_key=incident_key,
         fb_ad_id=snapshot.fb_ad_id,
-        ad_name=snapshot.ad_name,
-        campaign_name=snapshot.campaign_name,
-        adset_name=snapshot.adset_name,
+        ad_name=str(ctx.get("ad_name", "")),
+        campaign_name=str(ctx.get("campaign_name", "")),
+        adset_name=str(ctx.get("adset_name", "")),
         current_state=snapshot.alert_state.value,
         current_stage=snapshot.current_stage.value if snapshot.current_stage else None,
         delivery_status=snapshot.delivery_status,
@@ -306,8 +353,13 @@ def _build_active_incident_schema(
     )
 
 
-def _serialize_enable_task(task: EnableTask) -> EnableTaskSchema:
+def _serialize_enable_task(
+    task: EnableTask,
+    *,
+    ad_ctx: dict[str, object] | None = None,
+) -> EnableTaskSchema:
     """Сериализует EnableTask для API-ответов."""
+    ctx = ad_ctx or {}
     updated_at = getattr(task, "updated_at", None) or task.created_at
     last_error = task.last_error
     next_retry_at = task.next_retry_at
@@ -319,8 +371,8 @@ def _serialize_enable_task(task: EnableTask) -> EnableTaskSchema:
         recommendation_event_id=(
             str(task.recommendation_event_id) if task.recommendation_event_id else None
         ),
-        fb_ad_id=task.fb_ad_id,
-        ad_name=task.ad_name,
+        fb_ad_id=str(ctx.get("fb_ad_id", "")),
+        ad_name=str(ctx.get("ad_name", "")),
         status=task.status.value,
         attempt_count=task.attempt_count,
         last_error=last_error,
@@ -392,6 +444,7 @@ def _serialize_enable_recommendation_event(
     related_task: EnableTask | None = None,
     current_snapshot: AdSnapshot | None = None,
     live_candidate: EnableRecommendationCandidate | None = None,
+    ad_ctx: dict[str, object] | None = None,
 ) -> EnableRecommendationEventSchema:
     """Сериализует recommendation event для dashboard."""
     state = "OPEN"
@@ -431,12 +484,13 @@ def _serialize_enable_recommendation_event(
     ):
         updated_at = current_snapshot.last_observed_at
 
+    ctx = ad_ctx or {}
     return EnableRecommendationEventSchema(
         id=str(event.id),
-        fb_ad_id=event.fb_ad_id,
-        ad_name=current_snapshot.ad_name if current_snapshot else event.ad_name,
-        campaign_name=current_snapshot.campaign_name if current_snapshot else None,
-        adset_name=current_snapshot.adset_name if current_snapshot else None,
+        fb_ad_id=str(ctx.get("fb_ad_id", "")),
+        ad_name=str(ctx.get("ad_name", "")),
+        campaign_name=str(ctx.get("campaign_name")) if ctx.get("campaign_name") else None,
+        adset_name=str(ctx.get("adset_name")) if ctx.get("adset_name") else None,
         delivery_status=current_snapshot.delivery_status
         if current_snapshot
         else event.delivery_status,
@@ -493,9 +547,17 @@ async def _load_current_enable_recommendations(
         )
     )
     events = result.scalars().all()
+    # Загружаем контекст для получения fb_ad_id через ad_id → FbAd
+    event_ad_ids = [event.ad_id for event in events]
+    ev_ctx_map = await _load_ad_context_map(db, event_ad_ids)
+    fb_ad_ids_for_events = [
+        str(ev_ctx_map.get(event.ad_id, {}).get("fb_ad_id", ""))
+        for event in events
+        if ev_ctx_map.get(event.ad_id, {}).get("fb_ad_id")
+    ]
     snapshot_by_ad = await _load_ad_snapshots_by_fb_ad_id(
         db,
-        fb_ad_ids=[event.fb_ad_id for event in events],
+        fb_ad_ids=fb_ad_ids_for_events,
     )
     live_snapshots = [
         snapshot
@@ -511,18 +573,20 @@ async def _load_current_enable_recommendations(
     candidate_by_ad = {candidate.fb_ad_id: candidate for candidate in live_candidates}
     latest_by_ad: dict[str, CurrentEnableRecommendationRow] = {}
     for event in events:
-        snapshot = snapshot_by_ad.get(event.fb_ad_id)
+        ctx = ev_ctx_map.get(event.ad_id, {})
+        fb_ad_id = str(ctx.get("fb_ad_id", ""))
+        snapshot = snapshot_by_ad.get(fb_ad_id)
         if snapshot is None:
             continue
         if not is_within_live_batch(snapshot.last_observed_at, batch_start):
             continue
         if snapshot.delivery_status not in RECOMMENDATION_DELIVERY_STATUSES:
             continue
-        candidate = candidate_by_ad.get(event.fb_ad_id)
+        candidate = candidate_by_ad.get(fb_ad_id)
         if candidate is None:
             continue
-        if event.fb_ad_id not in latest_by_ad:
-            latest_by_ad[event.fb_ad_id] = CurrentEnableRecommendationRow(
+        if fb_ad_id not in latest_by_ad:
+            latest_by_ad[fb_ad_id] = CurrentEnableRecommendationRow(
                 event=event,
                 snapshot=snapshot,
                 candidate=candidate,
@@ -638,10 +702,12 @@ def _build_snapshot_base_budget_reference(
 
 async def _load_offer_rules_for_snapshots(
     db: AsyncSession,
-    snapshots: list[AdSnapshot],
+    ad_context_map: dict[_uuid.UUID, dict[str, object]],
 ) -> dict[_uuid.UUID, tuple[Offer, OfferRuleConfig]]:
-    """Загружает offer + rule config для списка snapshot с offer_id."""
-    offer_ids = {snapshot.offer_id for snapshot in snapshots if snapshot.offer_id is not None}
+    """Загружает offer + rule config для snapshot-ов по offer_id из контекста."""
+    offer_ids = {
+        ctx["offer_id"] for ctx in ad_context_map.values() if ctx.get("offer_id") is not None
+    }
     if not offer_ids:
         return {}
 
@@ -656,14 +722,19 @@ async def _load_offer_rules_for_snapshots(
 def _build_campaign_stop_overrun_rows(
     snapshots: list[AdSnapshot],
     offer_rule_map: dict[_uuid.UUID, tuple[Offer, OfferRuleConfig]],
+    ad_context_map: dict[_uuid.UUID, dict[str, object]] | None = None,
 ) -> list[dict]:
     """Возвращает отклонение от базовой экономики в разрезе кампаний."""
     grouped: dict[str, dict[str, object]] = {}
+    ctx_map = ad_context_map or {}
 
     for snapshot in snapshots:
-        if not snapshot.campaign_name or snapshot.offer_id is None:
+        ctx = ctx_map.get(snapshot.ad_id, {})
+        campaign_name = str(ctx.get("campaign_name", ""))
+        offer_id = ctx.get("offer_id")
+        if not campaign_name or offer_id is None:
             continue
-        offer_bundle = offer_rule_map.get(snapshot.offer_id)
+        offer_bundle = offer_rule_map.get(offer_id)
         if offer_bundle is None:
             continue
 
@@ -675,8 +746,6 @@ def _build_campaign_stop_overrun_rows(
         )
         if budget_reference is None:
             continue
-
-        campaign_name = snapshot.campaign_name
         actual_spend = Decimal(budget_reference["actual_spend"])
         ideal_spend = Decimal(budget_reference["ideal_spend"])
         overrun_amount = Decimal(budget_reference["overrun_amount"])
@@ -717,7 +786,7 @@ def _build_campaign_stop_overrun_rows(
                 Decimal(overrun_percent) if overrun_percent is not None else Decimal("0")
             )
             bucket["dominant_metric"] = budget_reference["label"]
-            bucket["top_ad_name"] = snapshot.ad_name
+            bucket["top_ad_name"] = str(ctx.get("ad_name", ""))
 
     rows: list[dict[str, object]] = []
     for item in grouped.values():
@@ -916,7 +985,7 @@ def _build_performance_summary(
         cpc=_safe_decimal_div(spend, clicks),
         cpl=_safe_decimal_div(spend, leads),
         cpr=_safe_decimal_div(spend, registrations),
-        spend_per_dep=_safe_decimal_div(spend, deposits),
+        cost_per_deposit=_safe_decimal_div(spend, deposits),
         roas=roas,
         click_to_lead_rate=_safe_percent(leads, clicks),
         lead_to_reg_rate=_safe_percent(registrations, leads),
@@ -970,7 +1039,7 @@ def _finalize_campaign_rows(
             cpc=_safe_decimal_div(Decimal(row["spend"]), int(row["clicks"])),
             cpl=_safe_decimal_div(Decimal(row["spend"]), int(row["leads"])),
             cpr=_safe_decimal_div(Decimal(row["spend"]), int(row["registrations"])),
-            spend_per_dep=_safe_decimal_div(Decimal(row["spend"]), int(row["deposits"])),
+            cost_per_deposit=_safe_decimal_div(Decimal(row["spend"]), int(row["deposits"])),
             click_to_lead_rate=_safe_percent(int(row["leads"]), int(row["clicks"])),
             lead_to_reg_rate=_safe_percent(int(row["registrations"]), int(row["leads"])),
             reg_to_dep_rate=_safe_percent(int(row["deposits"]), int(row["registrations"])),
@@ -988,6 +1057,7 @@ def _build_dashboard_performance_payload(
     cutoff: datetime | None = None,
     archives: list[CabinetDayArchive] | None = None,
     fake_map: dict[str, int] | None = None,
+    ad_context_map: dict[_uuid.UUID, dict[str, object]] | None = None,
 ) -> DashboardPerformanceSchema:
     """Агрегирует performance-данные из текущего дня и архива суток кабинета."""
     current_time = now or _dashboard_now()
@@ -995,6 +1065,7 @@ def _build_dashboard_performance_payload(
     archives = archives or []
     offers = offers or []
     fake_map = fake_map or {}
+    ctx_map = ad_context_map or {}
     relevant = [
         snapshot
         for snapshot in snapshots
@@ -1074,7 +1145,8 @@ def _build_dashboard_performance_payload(
             timeline_map[bucket]["registrations"] += registrations
             timeline_map[bucket]["deposits"] += deposits
 
-        campaign_name = (snapshot.campaign_name or "").strip()
+        ctx = ctx_map.get(snapshot.ad_id, {})
+        campaign_name = str(ctx.get("campaign_name", "")).strip()
         _accumulate_campaign_metrics(
             campaign_map,
             campaign_name=campaign_name,
@@ -1215,21 +1287,28 @@ async def _build_snapshot_diagnostics_map(
         .order_by(AdSnapshot.last_observed_at.desc())
     )
     active_snapshots = active_result.scalars().all()
+
+    # Загружаем контекст для всех активных snapshot для определения offer_code
+    all_ad_ids = list({s.ad_id for s in active_snapshots} | {s.ad_id for s in snapshots})
+    diag_ctx_map = await _load_ad_context_map(db, all_ad_ids)
+
+    def _get_offer_code(s: AdSnapshot) -> str | None:
+        ctx = diag_ctx_map.get(s.ad_id, {})
+        return ctx.get("offer_code")
+
     cpm_baselines = compute_cpm_baselines_by_offer(
-        [snapshot for snapshot in active_snapshots if snapshot.resolved_offer_code],
-        offer_code_getter=lambda snapshot: _offer_code_lookup_key(snapshot.resolved_offer_code),
-        cpm_getter=lambda snapshot: snapshot.cpm,
+        [s for s in active_snapshots if _get_offer_code(s)],
+        offer_code_getter=lambda s: _offer_code_lookup_key(_get_offer_code(s)),
+        cpm_getter=lambda s: s.cpm,
     )
     frequency_thresholds = await _load_frequency_thresholds_by_offer(
         db,
-        offer_codes={
-            snapshot.resolved_offer_code for snapshot in snapshots if snapshot.resolved_offer_code
-        },
+        offer_codes={_get_offer_code(s) for s in snapshots if _get_offer_code(s)},
     )
 
     diagnostics_map: dict[str, AdDiagnosticsSchema] = {}
     for snapshot in snapshots:
-        offer_code_key = _offer_code_lookup_key(snapshot.resolved_offer_code)
+        offer_code_key = _offer_code_lookup_key(_get_offer_code(snapshot))
         elevated_threshold, critical_threshold = frequency_thresholds.get(
             offer_code_key,
             (Decimal("2"), Decimal("3")),
@@ -1440,6 +1519,7 @@ async def get_dashboard_performance(
     if period != "today":
         archives = await _load_dashboard_archives(db, cutoff=cutoff)
     fake_map = await _load_fake_deposits_map(db)
+    ad_ctx_map = await _load_ad_context_map(db, [s.ad_id for s in snapshots])
     return _build_dashboard_performance_payload(
         snapshots,
         offers=offers,
@@ -1448,6 +1528,7 @@ async def get_dashboard_performance(
         cutoff=cutoff,
         archives=archives,
         fake_map=fake_map,
+        ad_context_map=ad_ctx_map,
     )
 
 
@@ -1617,16 +1698,17 @@ async def get_dashboard_batch(
     result = await db.execute(q)
     snapshots = result.scalars().all()
     diagnostics_map = await _build_snapshot_diagnostics_map(db, snapshots)
+    ad_ctx_map = await _load_ad_context_map(db, [s.ad_id for s in snapshots])
 
     ads = [
         AdSnapshotSchema(
             id=str(s.id),
             fb_ad_id=s.fb_ad_id,
-            campaign_name=s.campaign_name,
-            adset_name=s.adset_name,
-            ad_name=s.ad_name,
+            campaign_name=str(ad_ctx_map.get(s.ad_id, {}).get("campaign_name", "")),
+            adset_name=str(ad_ctx_map.get(s.ad_id, {}).get("adset_name", "")),
+            ad_name=str(ad_ctx_map.get(s.ad_id, {}).get("ad_name", "")),
             delivery_status=s.delivery_status,
-            offer_code=s.resolved_offer_code,
+            offer_code=ad_ctx_map.get(s.ad_id, {}).get("offer_code"),
             spend=s.spend,
             budget=getattr(s, "budget", "") or "",
             reach=int(getattr(s, "reach", 0) or 0),
@@ -1685,6 +1767,7 @@ async def get_dashboard_batch(
 
     if incident_snapshots:
         incident_ad_ids = [snapshot.ad_id for snapshot in incident_snapshots]
+        incident_ctx_map = await _load_ad_context_map(db, incident_ad_ids)
         alert_events = (
             (
                 await db.execute(
@@ -1710,17 +1793,20 @@ async def get_dashboard_batch(
 
         events_by_ad: dict[str, list[AlertEvent]] = {}
         for event in alert_events:
-            events_by_ad.setdefault(event.fb_ad_id, []).append(event)
+            fb_id = str(incident_ctx_map.get(event.ad_id, {}).get("fb_ad_id", ""))
+            events_by_ad.setdefault(fb_id, []).append(event)
 
         tasks_by_ad: dict[str, list[DisableTask]] = {}
         for task in disable_tasks_for_incidents:
-            tasks_by_ad.setdefault(task.fb_ad_id, []).append(task)
+            fb_id = str(incident_ctx_map.get(task.ad_id, {}).get("fb_ad_id", ""))
+            tasks_by_ad.setdefault(fb_id, []).append(task)
 
         incidents = [
             _build_active_incident_schema(
                 snapshot,
                 alert_events=events_by_ad.get(snapshot.fb_ad_id, []),
                 disable_tasks=tasks_by_ad.get(snapshot.fb_ad_id, []),
+                ad_ctx=incident_ctx_map.get(snapshot.ad_id),
             )
             for snapshot in incident_snapshots
         ]
@@ -1744,7 +1830,9 @@ async def get_dashboard_batch(
 
     result_tasks = await db.execute(q_tasks)
     tasks = result_tasks.scalars().all()
-    disable_tasks = [_serialize_disable_task(t) for t in tasks]
+    task_ad_ids = [t.ad_id for t in tasks]
+    task_ctx_map = await _load_ad_context_map(db, task_ad_ids)
+    disable_tasks = [_serialize_disable_task(t, ad_ctx=task_ctx_map.get(t.ad_id)) for t in tasks]
 
     return DashboardBatchSchema(
         ads=ads,
@@ -1772,8 +1860,11 @@ async def list_ad_snapshots(
     if alert_state:
         q = q.where(AdSnapshot.alert_state == AlertState(alert_state))
     if offer_code:
-        q = q.where(
-            func.lower(AdSnapshot.resolved_offer_code) == _offer_code_lookup_key(offer_code)
+        q = (
+            q.join(FbAd, AdSnapshot.ad_id == FbAd.id)
+            .join(FbAdset, FbAd.adset_id == FbAdset.id)
+            .join(FbCampaign, FbAdset.campaign_id == FbCampaign.id)
+            .where(func.lower(FbCampaign.offer_code) == _offer_code_lookup_key(offer_code))
         )
     if since_hours is not None:
         cutoff = datetime.now(UTC) - timedelta(hours=since_hours)
@@ -1784,15 +1875,16 @@ async def list_ad_snapshots(
     snapshots = result.scalars().all()
     diagnostics_map = await _build_snapshot_diagnostics_map(db, snapshots)
     fake_map = await _load_fake_deposits_map(db)
+    ad_ctx_map = await _load_ad_context_map(db, [s.ad_id for s in snapshots])
     return [
         AdSnapshotSchema(
             id=str(s.id),
             fb_ad_id=s.fb_ad_id,
-            campaign_name=s.campaign_name,
-            adset_name=s.adset_name,
-            ad_name=s.ad_name,
+            campaign_name=str(ad_ctx_map.get(s.ad_id, {}).get("campaign_name", "")),
+            adset_name=str(ad_ctx_map.get(s.ad_id, {}).get("adset_name", "")),
+            ad_name=str(ad_ctx_map.get(s.ad_id, {}).get("ad_name", "")),
             delivery_status=s.delivery_status,
-            offer_code=s.resolved_offer_code,
+            offer_code=ad_ctx_map.get(s.ad_id, {}).get("offer_code"),
             spend=s.spend,
             budget=getattr(s, "budget", "") or "",
             reach=int(getattr(s, "reach", 0) or 0),
@@ -1865,6 +1957,7 @@ async def list_active_incidents(
         return []
 
     ad_ids = [snapshot.ad_id for snapshot in snapshots]
+    ad_ctx_map = await _load_ad_context_map(db, ad_ids)
     alert_events = (
         (
             await db.execute(
@@ -1890,17 +1983,20 @@ async def list_active_incidents(
 
     events_by_ad: dict[str, list[AlertEvent]] = {}
     for event in alert_events:
-        events_by_ad.setdefault(event.fb_ad_id, []).append(event)
+        fb_id = str(ad_ctx_map.get(event.ad_id, {}).get("fb_ad_id", ""))
+        events_by_ad.setdefault(fb_id, []).append(event)
 
     tasks_by_ad: dict[str, list[DisableTask]] = {}
     for task in disable_tasks:
-        tasks_by_ad.setdefault(task.fb_ad_id, []).append(task)
+        fb_id = str(ad_ctx_map.get(task.ad_id, {}).get("fb_ad_id", ""))
+        tasks_by_ad.setdefault(fb_id, []).append(task)
 
     incidents = [
         _build_active_incident_schema(
             snapshot,
             alert_events=events_by_ad.get(snapshot.fb_ad_id, []),
             disable_tasks=tasks_by_ad.get(snapshot.fb_ad_id, []),
+            ad_ctx=ad_ctx_map.get(snapshot.ad_id),
         )
         for snapshot in snapshots
     ]
@@ -1917,10 +2013,13 @@ async def list_alert_events(
     db: AsyncSession = Depends(get_db),
 ):
     """История алертов (для таблицы и модальных окон)."""
-    q = select(AlertEvent).order_by(AlertEvent.created_at.desc())
+    q = (
+        select(AlertEvent, FbAd.fb_ad_id, FbAd.ad_name)
+        .join(FbAd, AlertEvent.ad_id == FbAd.id)
+        .order_by(AlertEvent.created_at.desc())
+    )
     if fb_ad_id:
-        ad_id_subq = select(FbAd.id).where(FbAd.fb_ad_id == fb_ad_id).scalar_subquery()
-        q = q.where(AlertEvent.ad_id == ad_id_subq)
+        q = q.where(FbAd.fb_ad_id == fb_ad_id)
     if stage:
         from core.domain import AlertStage as AS
 
@@ -1928,13 +2027,13 @@ async def list_alert_events(
     q = q.limit(limit).offset(offset)
 
     result = await db.execute(q)
-    events = result.scalars().all()
+    rows = result.all()
     return [
         AlertEventSchema(
             id=str(e.id),
             incident_key=e.telegram_group_key,
-            fb_ad_id=e.fb_ad_id,
-            ad_name=e.ad_name,
+            fb_ad_id=fb_id,
+            ad_name=ad_nm or "",
             stage=e.stage.value,
             state=e.state.value,
             matched_rule_codes=e.matched_rule_codes or [],
@@ -1943,7 +2042,7 @@ async def list_alert_events(
             metrics_json=e.metrics_json or {},
             created_at=e.created_at.isoformat(),
         )
-        for e in events
+        for e, fb_id, ad_nm in rows
     ]
 
 
@@ -2019,12 +2118,18 @@ async def create_disable_task(
     )
     if existing_task is not None:
         await db.rollback()
-        return _serialize_disable_task(existing_task)
+        ctx = await _load_ad_context_map(db, [existing_task.ad_id])
+        return _serialize_disable_task(existing_task, ad_ctx=ctx.get(existing_task.ad_id))
+
+    # Получаем offer_id через JOIN FbAd → FbAdset → FbCampaign
+    ad_ctx_map = await _load_ad_context_map(db, [snapshot.ad_id])
+    ad_ctx = ad_ctx_map.get(snapshot.ad_id, {})
+    offer_id = ad_ctx.get("offer_id")
 
     new_task = DisableTask(
         ad_id=snapshot.ad_id,
         snapshot_id=snapshot.id,
-        offer_id=snapshot.offer_id,
+        offer_id=offer_id,
         open_state_token=incident_key,
         idempotency_key=f"dashboard_{body.fb_ad_id}_{incident_key}",
         status=DisableTaskStatus.PENDING,
@@ -2033,7 +2138,7 @@ async def create_disable_task(
     db.add(new_task)
     await db.commit()
     await db.refresh(new_task)
-    return _serialize_disable_task(new_task)
+    return _serialize_disable_task(new_task, ad_ctx=ad_ctx)
 
 
 @router.get("/dashboard/disable-tasks", response_model=list[DisableTaskSchema])
@@ -2062,7 +2167,8 @@ async def list_disable_tasks(
 
     result = await db.execute(q)
     tasks = result.scalars().all()
-    return [_serialize_disable_task(t) for t in tasks]
+    ctx_map = await _load_ad_context_map(db, [t.ad_id for t in tasks])
+    return [_serialize_disable_task(t, ad_ctx=ctx_map.get(t.ad_id)) for t in tasks]
 
 
 @router.get(
@@ -2089,6 +2195,8 @@ async def list_enable_recommendations(
         if task.recommendation_event_id and task.recommendation_event_id not in task_by_event_id:
             task_by_event_id[task.recommendation_event_id] = task
 
+    rec_ad_ids = [row.snapshot.ad_id for row in rows if row.snapshot]
+    rec_ctx_map = await _load_ad_context_map(db, rec_ad_ids)
     return [
         _serialize_enable_recommendation_event(
             row.event,
@@ -2096,6 +2204,7 @@ async def list_enable_recommendations(
             related_task=task_by_event_id.get(row.event.id),
             current_snapshot=row.snapshot,
             live_candidate=row.candidate,
+            ad_ctx=rec_ctx_map.get(row.snapshot.ad_id) if row.snapshot else None,
         )
         for row in rows
     ]
@@ -2124,11 +2233,15 @@ async def create_enable_task_from_recommendation(
             select(EnableTask).where(EnableTask.id == _uuid.UUID(result.task_id))
         )
 
+    task_ctx = None
+    if task:
+        ctx_map = await _load_ad_context_map(db, [task.ad_id])
+        task_ctx = ctx_map.get(task.ad_id)
     return {
         "ok": True,
         "created_new": result.created_new,
         "detail": result.detail,
-        "task": _serialize_enable_task(task).model_dump() if task else None,
+        "task": _serialize_enable_task(task, ad_ctx=task_ctx).model_dump() if task else None,
     }
 
 
@@ -2156,7 +2269,8 @@ async def list_enable_tasks(
 
     result = await db.execute(q)
     tasks = result.scalars().all()
-    return [_serialize_enable_task(task) for task in tasks]
+    et_ctx_map = await _load_ad_context_map(db, [t.ad_id for t in tasks])
+    return [_serialize_enable_task(task, ad_ctx=et_ctx_map.get(task.ad_id)) for task in tasks]
 
 
 @router.get("/dashboard/spend-history", response_model=list[SpendHistoryPoint])
@@ -2174,8 +2288,11 @@ async def get_spend_history(
         .order_by(AdSnapshot.last_observed_at.asc())
     )
     if offer_code:
-        q = q.where(
-            func.lower(AdSnapshot.resolved_offer_code) == _offer_code_lookup_key(offer_code)
+        q = (
+            q.join(FbAd, AdSnapshot.ad_id == FbAd.id)
+            .join(FbAdset, FbAd.adset_id == FbAdset.id)
+            .join(FbCampaign, FbAdset.campaign_id == FbCampaign.id)
+            .where(func.lower(FbCampaign.offer_code) == _offer_code_lookup_key(offer_code))
         )
 
     result = await db.execute(q)
@@ -2248,6 +2365,7 @@ async def get_chart_data(
     if period != "today":
         archives = await _load_dashboard_archives(db, cutoff=history_cutoff)
     fake_map_2 = await _load_fake_deposits_map(db)
+    chart_ctx_map = await _load_ad_context_map(db, [s.ad_id for s in snapshots])
     performance_payload = _build_dashboard_performance_payload(
         snapshots,
         period=period,
@@ -2255,8 +2373,9 @@ async def get_chart_data(
         cutoff=history_cutoff,
         archives=archives,
         fake_map=fake_map_2,
+        ad_context_map=chart_ctx_map,
     )
-    offer_rule_map = await _load_offer_rules_for_snapshots(db, snapshots)
+    offer_rule_map = await _load_offer_rules_for_snapshots(db, chart_ctx_map)
     campaigns = [
         {
             "campaign": row.campaign[:30] + "…" if len(row.campaign) > 30 else row.campaign,
@@ -2268,7 +2387,9 @@ async def get_chart_data(
         }
         for row in performance_payload.campaigns[:10]
     ]
-    campaign_budget_deltas = _build_campaign_stop_overrun_rows(snapshots, offer_rule_map)
+    campaign_budget_deltas = _build_campaign_stop_overrun_rows(
+        snapshots, offer_rule_map, ad_context_map=chart_ctx_map
+    )
 
     # 3. Распределение статусов — только по актуальному живому срезу.
     state_result = await db.execute(
@@ -2292,8 +2413,8 @@ async def get_chart_data(
     # 4. Топ объявлений по расходу — текущий живой срез, без исторического режима.
     top_ads_result = await db.execute(
         select(
-            AdSnapshot.ad_name,
-            AdSnapshot.adset_name,
+            FbAd.ad_name,
+            FbAdset.adset_name,
             AdSnapshot.fb_ad_id,
             AdSnapshot.spend,
             AdSnapshot.clicks,
@@ -2301,6 +2422,8 @@ async def get_chart_data(
             AdSnapshot.deposits,
             AdSnapshot.alert_state,
         )
+        .join(FbAd, AdSnapshot.ad_id == FbAd.id)
+        .join(FbAdset, FbAd.adset_id == FbAdset.id)
         .where(AdSnapshot.last_observed_at >= snapshot_cutoff)
         .where(AdSnapshot.spend > 0)
         .order_by(AdSnapshot.spend.desc())
@@ -2316,15 +2439,17 @@ async def get_chart_data(
     }
     top_ads_by_spend = [
         {
-            "name": row.ad_name[:25] + "…" if len(row.ad_name) > 25 else row.ad_name,
-            "name_full": row.ad_name,
-            "adset_name": row.adset_name,
-            "adset_short": row.adset_name[:18] + "…"
-            if len(row.adset_name) > 18
-            else row.adset_name,
+            "name": (row.ad_name or "")[:25] + "…"
+            if len(row.ad_name or "") > 25
+            else (row.ad_name or ""),
+            "name_full": row.ad_name or "",
+            "adset_name": row.adset_name or "",
+            "adset_short": (row.adset_name or "")[:18] + "…"
+            if len(row.adset_name or "") > 18
+            else (row.adset_name or ""),
             "label": (
-                f"{row.ad_name[:16] + '…' if len(row.ad_name) > 16 else row.ad_name} · "
-                f"{row.adset_name[:10] + '…' if len(row.adset_name) > 10 else row.adset_name}"
+                f"{(row.ad_name or '')[:16] + '…' if len(row.ad_name or '') > 16 else (row.ad_name or '')} · "
+                f"{(row.adset_name or '')[:10] + '…' if len(row.adset_name or '') > 10 else (row.adset_name or '')}"
             ),
             "fb_ad_id": row.fb_ad_id,
             "spend": float(row.spend or 0),
@@ -2398,11 +2523,18 @@ async def get_ad_timeline(fb_ad_id: str, db: AsyncSession = Depends(get_db)):
         diagnostics_map = await _build_snapshot_diagnostics_map(db, [snapshot])
         diagnostics = diagnostics_map.get(snapshot.fb_ad_id)
     current_incident_key = _incident_key_for_snapshot(snapshot) if snapshot is not None else None
+    # Загружаем контекст объявления через JOIN
+    tl_ctx: dict[str, object] = {}
+    if snapshot is not None:
+        tl_ctx_map = await _load_ad_context_map(db, [snapshot.ad_id])
+        tl_ctx = tl_ctx_map.get(snapshot.ad_id, {})
+
     current_incident = (
         _build_active_incident_schema(
             snapshot,
             alert_events=events,
             disable_tasks=tasks,
+            ad_ctx=tl_ctx,
         )
         if snapshot is not None
         and snapshot.alert_state
@@ -2504,9 +2636,9 @@ async def get_ad_timeline(fb_ad_id: str, db: AsyncSession = Depends(get_db)):
 
     return {
         "fb_ad_id": fb_ad_id,
-        "ad_name": snapshot.ad_name if snapshot else None,
-        "campaign_name": snapshot.campaign_name if snapshot else None,
-        "adset_name": snapshot.adset_name if snapshot else None,
+        "ad_name": str(tl_ctx.get("ad_name", "")) or None,
+        "campaign_name": str(tl_ctx.get("campaign_name", "")) or None,
+        "adset_name": str(tl_ctx.get("adset_name", "")) or None,
         "current_state": snapshot.alert_state.value if snapshot else None,
         "delivery_status": snapshot.delivery_status if snapshot else None,
         "current_incident": current_incident.model_dump() if current_incident else None,

@@ -18,6 +18,7 @@ from core.models import (
     AlertEvent,
     DisableTask,
     FbAd,
+    FbAdset,
     Offer,
     VisionSettings,
 )
@@ -333,7 +334,13 @@ async def collect_reminder_alerts(interval_seconds: int) -> list[AlertCandidate]
         active_cutoff = last_scan - ACTIVE_ALERT_WINDOW
 
         result = await session.execute(
-            select(AdSnapshot).where(
+            select(AdSnapshot)
+            .options(
+                selectinload(AdSnapshot.fb_ad)
+                .selectinload(FbAd.adset)
+                .selectinload(FbAdset.campaign),
+            )
+            .where(
                 AdSnapshot.alert_state.in_(
                     [
                         AlertState.EARLY_SIGNAL_SENT,
@@ -414,15 +421,25 @@ async def collect_reminder_alerts(interval_seconds: int) -> list[AlertCandidate]
                 if isinstance(raw_diagnostics, dict) and raw_diagnostics:
                     traffic_diagnostics = dict(raw_diagnostics)
 
+            # Получаем данные через нормализованную цепочку
+            _fb_ad = snap.fb_ad
+            _ad_name = _fb_ad.ad_name if _fb_ad else ""
+            _adset = _fb_ad.adset if _fb_ad else None
+            _campaign = _adset.campaign if _adset else None
+            _campaign_name = _campaign.campaign_name if _campaign else ""
+            _adset_name = _adset.adset_name if _adset else ""
+            _offer_code = _campaign.offer_code if _campaign else None
+            _offer_id = _campaign.offer_id if _campaign else None
+
             reminders.append(
                 AlertCandidate(
                     snapshot_id=snap.open_state_token or str(snap.id),
-                    offer_id=snap.offer_id,
+                    offer_id=_offer_id,
                     fb_ad_id=snap.fb_ad_id,
-                    ad_name=snap.ad_name,
-                    campaign_name=snap.campaign_name,
-                    adset_name=snap.adset_name,
-                    offer_code=snap.resolved_offer_code,
+                    ad_name=_ad_name,
+                    campaign_name=_campaign_name,
+                    adset_name=_adset_name,
+                    offer_code=_offer_code,
                     offer_name=None,
                     offer_cpa=None,
                     stage=stage,

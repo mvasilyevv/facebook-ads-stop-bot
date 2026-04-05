@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.deps import get_db
 from apps.api.schemas import AdDepositCorrectionSchema, AdDepositCorrectionUpdateSchema
-from core.models import AdDepositCorrection, FbAd
+from core.models import AdDepositCorrection, FbAd, FbAdset, FbCampaign
 
 router = APIRouter(prefix="/api", tags=["fake-deposits"])
 
@@ -23,15 +23,22 @@ async def _build_response(
     correction: AdDepositCorrection,
     db: AsyncSession,
 ) -> AdDepositCorrectionSchema:
-    """Собирает ответ с данными объявления через FbAd."""
-    fb_ad = await db.scalar(select(FbAd).where(FbAd.id == correction.ad_id))
+    """Собирает ответ с данными объявления через JOIN FbAd → FbAdset → FbCampaign."""
+    row = (
+        await db.execute(
+            select(FbAd.fb_ad_id, FbAd.ad_name, FbCampaign.campaign_name)
+            .join(FbAdset, FbAd.adset_id == FbAdset.id)
+            .join(FbCampaign, FbAdset.campaign_id == FbCampaign.id)
+            .where(FbAd.id == correction.ad_id)
+        )
+    ).first()
     return AdDepositCorrectionSchema(
         id=str(correction.id),
-        fb_ad_id=fb_ad.fb_ad_id if fb_ad else "",
+        fb_ad_id=row.fb_ad_id if row else "",
         fake_count=correction.fake_count,
         note=correction.note,
-        ad_name=fb_ad.ad_name if fb_ad else None,
-        campaign_name=fb_ad.campaign_name if fb_ad else None,
+        ad_name=row.ad_name if row else None,
+        campaign_name=row.campaign_name if row else None,
         created_at=correction.created_at.isoformat(),
         updated_at=correction.updated_at.isoformat(),
     )

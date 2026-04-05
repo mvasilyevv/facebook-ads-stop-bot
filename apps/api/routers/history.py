@@ -8,7 +8,8 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import and_, func, select
+from sqlalchemy import Date as SqlDate
+from sqlalchemy import and_, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.deps import get_db
@@ -33,11 +34,15 @@ from core.fake_deposits import (
 )
 from core.math_utils import safe_div as _safe_div
 from core.models import (
+    AdMetricHistory,
     AdSnapshot,
     AlertEvent,
     CabinetDayArchive,
     DisableTask,
     EnableTask,
+    FbAd,
+    FbAdset,
+    FbCampaign,
     Offer,
 )
 from core.settings_queries import get_observer_settings as _load_observer_settings
@@ -65,10 +70,10 @@ async def _load_campaigns_for_offer(
     db: AsyncSession,
     offer_code: str,
 ) -> set[str]:
-    """Возвращает имена кампаний, привязанных к офферу через AdSnapshot."""
+    """Возвращает имена кампаний, привязанных к офферу через fb_campaigns."""
     q = (
-        select(AdSnapshot.campaign_name)
-        .where(func.lower(AdSnapshot.resolved_offer_code) == offer_code.lower())
+        select(FbCampaign.campaign_name)
+        .where(func.lower(FbCampaign.offer_code) == offer_code.lower())
         .distinct()
     )
     result = await db.execute(q)
@@ -145,13 +150,15 @@ async def _count_alerts_in_range(
             AlertEvent.created_at < dt_to,
         )
     )
-    # JOIN к AdSnapshot нужен при фильтре по офферу или кампании
+    # JOIN через fb_ads → fb_adsets → fb_campaigns при фильтре по офферу/кампании
     if offer_code or campaign_name:
-        q = q.join(AdSnapshot, AlertEvent.ad_id == AdSnapshot.ad_id)
+        q = q.join(FbAd, AlertEvent.ad_id == FbAd.id)
+        q = q.join(FbAdset, FbAd.adset_id == FbAdset.id)
+        q = q.join(FbCampaign, FbAdset.campaign_id == FbCampaign.id)
         if offer_code:
-            q = q.where(func.lower(AdSnapshot.resolved_offer_code) == offer_code.lower())
+            q = q.where(func.lower(FbCampaign.offer_code) == offer_code.lower())
         if campaign_name:
-            q = q.where(AdSnapshot.campaign_name == campaign_name)
+            q = q.where(FbCampaign.campaign_name == campaign_name)
     q = q.group_by(AlertEvent.stage)
     rows = (await db.execute(q)).all()
 
@@ -180,11 +187,13 @@ async def _count_disables_in_range(
         )
     )
     if offer_code or campaign_name:
-        q = q.join(AdSnapshot, DisableTask.ad_id == AdSnapshot.ad_id)
+        q = q.join(FbAd, DisableTask.ad_id == FbAd.id)
+        q = q.join(FbAdset, FbAd.adset_id == FbAdset.id)
+        q = q.join(FbCampaign, FbAdset.campaign_id == FbCampaign.id)
         if offer_code:
-            q = q.where(func.lower(AdSnapshot.resolved_offer_code) == offer_code.lower())
+            q = q.where(func.lower(FbCampaign.offer_code) == offer_code.lower())
         if campaign_name:
-            q = q.where(AdSnapshot.campaign_name == campaign_name)
+            q = q.where(FbCampaign.campaign_name == campaign_name)
     result = await db.execute(q)
     return result.scalar() or 0
 
@@ -402,7 +411,7 @@ def _build_summary_schema(
         avg_cpc=_safe_div(spend, clicks),
         avg_cpl=_safe_div(spend, leads),
         avg_cpr=_safe_div(spend, regs),
-        avg_spend_per_dep=_safe_div(spend, deps),
+        avg_cost_per_deposit=_safe_div(spend, deps),
         roas=roas,
         total_alerts=total_alerts,
         total_stops=total_stops,
@@ -449,7 +458,7 @@ def _archive_to_timeline_point(
         cpc=_safe_div(spend, m["clicks"]),
         cpl=_safe_div(spend, m["leads"]),
         cpr=_safe_div(spend, m["regs"]),
-        spend_per_dep=_safe_div(spend, m["deps"]),
+        cost_per_deposit=_safe_div(spend, m["deps"]),
     )
 
 
@@ -539,35 +548,41 @@ async def _count_campaign_events(
     if not campaign_names:
         return {}, {}
 
-    # Алерты по кампаниям
+    # Алерты по кампаниям через JOIN fb_ads → fb_adsets → fb_campaigns
     alerts_q = (
-        select(AdSnapshot.campaign_name, func.count())
-        .join(AlertEvent, AlertEvent.ad_id == AdSnapshot.ad_id)
+        select(FbCampaign.campaign_name, func.count())
+        .select_from(AlertEvent)
+        .join(FbAd, AlertEvent.ad_id == FbAd.id)
+        .join(FbAdset, FbAd.adset_id == FbAdset.id)
+        .join(FbCampaign, FbAdset.campaign_id == FbCampaign.id)
         .where(
             and_(
                 AlertEvent.created_at >= dt_from,
                 AlertEvent.created_at < dt_to,
-                AdSnapshot.campaign_name.in_(campaign_names),
+                FbCampaign.campaign_name.in_(campaign_names),
             )
         )
-        .group_by(AdSnapshot.campaign_name)
+        .group_by(FbCampaign.campaign_name)
     )
     alerts_rows = (await db.execute(alerts_q)).all()
     alerts_map = {name: cnt for name, cnt in alerts_rows}
 
-    # Отключения по кампаниям
+    # Отключения по кампаниям через JOIN
     disables_q = (
-        select(AdSnapshot.campaign_name, func.count())
-        .join(DisableTask, DisableTask.ad_id == AdSnapshot.ad_id)
+        select(FbCampaign.campaign_name, func.count())
+        .select_from(DisableTask)
+        .join(FbAd, DisableTask.ad_id == FbAd.id)
+        .join(FbAdset, FbAd.adset_id == FbAdset.id)
+        .join(FbCampaign, FbAdset.campaign_id == FbCampaign.id)
         .where(
             and_(
                 DisableTask.created_at >= dt_from,
                 DisableTask.created_at < dt_to,
                 DisableTask.status == DisableTaskStatus.SUCCEEDED,
-                AdSnapshot.campaign_name.in_(campaign_names),
+                FbCampaign.campaign_name.in_(campaign_names),
             )
         )
-        .group_by(AdSnapshot.campaign_name)
+        .group_by(FbCampaign.campaign_name)
     )
     disables_rows = (await db.execute(disables_q)).all()
     disables_map = {name: cnt for name, cnt in disables_rows}
@@ -597,7 +612,7 @@ def _build_campaign_row(
         total_deposits=effective_deps,
         avg_cpl=_safe_div(spend, data["leads"]),
         avg_cpr=_safe_div(spend, data["regs"]),
-        avg_spend_per_dep=_safe_div(spend, effective_deps),
+        avg_cost_per_deposit=_safe_div(spend, effective_deps),
         roas=None,
         alerts_count=alerts_count,
         disables_count=disables_count,
@@ -700,29 +715,34 @@ async def _load_alert_events(
     offer_code: str | None,
     campaign_name: str | None = None,
 ) -> list[HistoryEventItem]:
-    """Загружает алерт-события за период."""
-    q = select(AlertEvent).where(
-        and_(
-            AlertEvent.created_at >= dt_from,
-            AlertEvent.created_at < dt_to,
+    """Загружает алерт-события за период через JOIN для имени объявления."""
+    q = (
+        select(AlertEvent, FbAd.fb_ad_id, FbAd.ad_name)
+        .join(FbAd, AlertEvent.ad_id == FbAd.id)
+        .where(
+            and_(
+                AlertEvent.created_at >= dt_from,
+                AlertEvent.created_at < dt_to,
+            )
         )
     )
     if offer_code or campaign_name:
-        q = q.join(AdSnapshot, AlertEvent.ad_id == AdSnapshot.ad_id)
+        q = q.join(FbAdset, FbAd.adset_id == FbAdset.id)
+        q = q.join(FbCampaign, FbAdset.campaign_id == FbCampaign.id)
         if offer_code:
-            q = q.where(func.lower(AdSnapshot.resolved_offer_code) == offer_code.lower())
+            q = q.where(func.lower(FbCampaign.offer_code) == offer_code.lower())
         if campaign_name:
-            q = q.where(AdSnapshot.campaign_name == campaign_name)
+            q = q.where(FbCampaign.campaign_name == campaign_name)
     result = await db.execute(q)
     items = []
-    for ev in result.scalars().all():
+    for ev, fb_ad_id, ad_name in result.all():
         stage_val = ev.stage.value if ev.stage else None
         items.append(
             HistoryEventItem(
                 id=str(ev.id),
                 event_type="alert",
-                fb_ad_id=ev.fb_ad_id,
-                ad_name=ev.ad_name,
+                fb_ad_id=fb_ad_id,
+                ad_name=ad_name or "",
                 summary=ev.reason_title or f"Алерт {stage_val}",
                 stage=stage_val,
                 matched_rule_codes=ev.matched_rule_codes or [],
@@ -739,28 +759,33 @@ async def _load_disable_events(
     offer_code: str | None,
     campaign_name: str | None = None,
 ) -> list[HistoryEventItem]:
-    """Загружает события отключения за период."""
-    q = select(DisableTask).where(
-        and_(
-            DisableTask.created_at >= dt_from,
-            DisableTask.created_at < dt_to,
+    """Загружает события отключения за период через JOIN для имени объявления."""
+    q = (
+        select(DisableTask, FbAd.fb_ad_id, FbAd.ad_name)
+        .join(FbAd, DisableTask.ad_id == FbAd.id)
+        .where(
+            and_(
+                DisableTask.created_at >= dt_from,
+                DisableTask.created_at < dt_to,
+            )
         )
     )
     if offer_code or campaign_name:
-        q = q.join(AdSnapshot, DisableTask.ad_id == AdSnapshot.ad_id)
+        q = q.join(FbAdset, FbAd.adset_id == FbAdset.id)
+        q = q.join(FbCampaign, FbAdset.campaign_id == FbCampaign.id)
         if offer_code:
-            q = q.where(func.lower(AdSnapshot.resolved_offer_code) == offer_code.lower())
+            q = q.where(func.lower(FbCampaign.offer_code) == offer_code.lower())
         if campaign_name:
-            q = q.where(AdSnapshot.campaign_name == campaign_name)
+            q = q.where(FbCampaign.campaign_name == campaign_name)
     result = await db.execute(q)
     items = []
-    for t in result.scalars().all():
+    for t, fb_ad_id, ad_name in result.all():
         items.append(
             HistoryEventItem(
                 id=str(t.id),
                 event_type="disable",
-                fb_ad_id=t.fb_ad_id,
-                ad_name=t.ad_name,
+                fb_ad_id=fb_ad_id,
+                ad_name=ad_name or "",
                 summary=f"Отключение: {t.status.value}",
                 status=t.status.value,
                 created_at=t.created_at.isoformat(),
@@ -776,28 +801,33 @@ async def _load_enable_events(
     offer_code: str | None,
     campaign_name: str | None = None,
 ) -> list[HistoryEventItem]:
-    """Загружает события включения за период."""
-    q = select(EnableTask).where(
-        and_(
-            EnableTask.created_at >= dt_from,
-            EnableTask.created_at < dt_to,
+    """Загружает события включения за период через JOIN для имени объявления."""
+    q = (
+        select(EnableTask, FbAd.fb_ad_id, FbAd.ad_name)
+        .join(FbAd, EnableTask.ad_id == FbAd.id)
+        .where(
+            and_(
+                EnableTask.created_at >= dt_from,
+                EnableTask.created_at < dt_to,
+            )
         )
     )
     if offer_code or campaign_name:
-        q = q.join(AdSnapshot, EnableTask.ad_id == AdSnapshot.ad_id)
+        q = q.join(FbAdset, FbAd.adset_id == FbAdset.id)
+        q = q.join(FbCampaign, FbAdset.campaign_id == FbCampaign.id)
         if offer_code:
-            q = q.where(func.lower(AdSnapshot.resolved_offer_code) == offer_code.lower())
+            q = q.where(func.lower(FbCampaign.offer_code) == offer_code.lower())
         if campaign_name:
-            q = q.where(AdSnapshot.campaign_name == campaign_name)
+            q = q.where(FbCampaign.campaign_name == campaign_name)
     result = await db.execute(q)
     items = []
-    for t in result.scalars().all():
+    for t, fb_ad_id, ad_name in result.all():
         items.append(
             HistoryEventItem(
                 id=str(t.id),
                 event_type="enable",
-                fb_ad_id=t.fb_ad_id,
-                ad_name=t.ad_name,
+                fb_ad_id=fb_ad_id,
+                ad_name=ad_name or "",
                 summary=f"Включение: {t.status.value}",
                 status=t.status.value,
                 created_at=t.created_at.isoformat(),
@@ -859,63 +889,96 @@ async def get_history_events(
 async def _load_campaign_offer_map(
     db: AsyncSession,
 ) -> dict[str, str]:
-    """Загружает маппинг campaign_name → resolved_offer_code из AdSnapshot."""
+    """Загружает маппинг campaign_name → offer_code из fb_campaigns."""
     q = (
-        select(AdSnapshot.campaign_name, AdSnapshot.resolved_offer_code)
-        .where(AdSnapshot.resolved_offer_code.isnot(None))
+        select(FbCampaign.campaign_name, FbCampaign.offer_code)
+        .where(FbCampaign.offer_code.isnot(None))
         .distinct()
     )
-    result = await db.execute(q)
-    return {row[0]: row[1] for row in result.all()}
+    result_map: dict[str, str] = {}
+    for row in (await db.execute(q)).all():
+        result_map[row[0]] = row[1]
+    return result_map
+
+
+async def _load_offers_from_metric_history(
+    db: AsyncSession,
+    dt_from: datetime,
+    dt_to: datetime,
+) -> dict[str, dict]:
+    """Загружает per-offer метрики из AdMetricHistory за период."""
+    day_col = cast(AdMetricHistory.cycle_ts, SqlDate).label("day")
+
+    # MAX per-ad per-day, затем SUM по дням и группировка по offer
+    subq = (
+        select(
+            AdMetricHistory.ad_id,
+            day_col,
+            func.max(AdMetricHistory.spend).label("spend"),
+            func.max(AdMetricHistory.clicks).label("clicks"),
+            func.max(AdMetricHistory.registrations).label("regs"),
+            func.max(AdMetricHistory.deposits).label("deps"),
+        )
+        .where(
+            AdMetricHistory.cycle_ts >= dt_from,
+            AdMetricHistory.cycle_ts < dt_to,
+        )
+        .group_by(AdMetricHistory.ad_id, day_col)
+        .subquery()
+    )
+
+    q = (
+        select(
+            FbCampaign.offer_code,
+            func.sum(subq.c.spend).label("spend"),
+            func.sum(subq.c.clicks).label("clicks"),
+            func.sum(subq.c.regs).label("regs"),
+            func.sum(subq.c.deps).label("deps"),
+        )
+        .join(FbAd, FbAd.id == subq.c.ad_id)
+        .join(FbAdset, FbAd.adset_id == FbAdset.id)
+        .join(FbCampaign, FbAdset.campaign_id == FbCampaign.id)
+        .where(FbCampaign.offer_code.isnot(None))
+        .group_by(FbCampaign.offer_code)
+    )
+    rows = (await db.execute(q)).all()
+
+    return {
+        row.offer_code: {
+            "spend": Decimal(str(row.spend or 0)),
+            "clicks": int(row.clicks or 0),
+            "regs": int(row.regs or 0),
+            "deps": int(row.deps or 0),
+        }
+        for row in rows
+        if row.offer_code
+    }
 
 
 def _group_by_offer_code(
     archives: list[CabinetDayArchive],
     campaign_offer_map: dict[str, str],
 ) -> dict[str, dict]:
-    """Группирует метрики по offer code.
-
-    Приоритет: ads_json (offer_code per-ad), fallback на campaigns_json + campaign mapping.
-    """
+    """Fallback: группирует метрики из campaigns_json для старых архивов без AdMetricHistory."""
     grouped: dict[str, dict] = {}
     for arch in archives:
-        # Предпочитаем ads_json — там offer_code хранится напрямую
-        if arch.ads_json:
-            for ad in arch.ads_json:
-                code = ad.get("offer_code")
-                if not code:
-                    continue
-                if code not in grouped:
-                    grouped[code] = {
-                        "spend": Decimal("0"),
-                        "clicks": 0,
-                        "regs": 0,
-                        "deps": 0,
-                    }
-                g = grouped[code]
-                g["spend"] += Decimal(str(ad.get("spend", 0)))
-                g["clicks"] += int(ad.get("clicks", 0))
-                g["regs"] += int(ad.get("registrations", 0))
-                g["deps"] += int(ad.get("deposits", 0))
-        else:
-            # Fallback для старых архивов без ads_json
-            for c in arch.campaigns_json or []:
-                campaign = c.get("campaign") or ""
-                code = campaign_offer_map.get(campaign)
-                if not code:
-                    continue
-                if code not in grouped:
-                    grouped[code] = {
-                        "spend": Decimal("0"),
-                        "clicks": 0,
-                        "regs": 0,
-                        "deps": 0,
-                    }
-                g = grouped[code]
-                g["spend"] += Decimal(str(c.get("spend", 0)))
-                g["clicks"] += int(c.get("clicks", 0))
-                g["regs"] += int(c.get("registrations", 0))
-                g["deps"] += int(c.get("deposits", 0))
+        for c in arch.campaigns_json or []:
+            campaign = c.get("campaign") or ""
+            code = campaign_offer_map.get(campaign)
+            if not code:
+                continue
+            if code not in grouped:
+                grouped[code] = {
+                    "spend": Decimal("0"),
+                    "clicks": 0,
+                    "regs": 0,
+                    "deps": 0,
+                }
+            g = grouped[code]
+            g["spend"] += Decimal(str(c.get("spend", 0)))
+            g["clicks"] += int(c.get("clicks", 0))
+            g["regs"] += int(c.get("registrations", 0))
+            g["deps"] += int(c.get("deposits", 0))
     return grouped
 
 
@@ -947,41 +1010,47 @@ async def _count_offer_events(
 
     upper_codes = [c.upper() for c in offer_codes]
 
-    # Алерты по офферам
+    # Алерты по офферам через JOIN fb_ads → fb_adsets → fb_campaigns
     alerts_q = (
         select(
-            func.upper(AdSnapshot.resolved_offer_code),
+            func.upper(FbCampaign.offer_code),
             func.count(),
         )
-        .join(AlertEvent, AlertEvent.ad_id == AdSnapshot.ad_id)
+        .select_from(AlertEvent)
+        .join(FbAd, AlertEvent.ad_id == FbAd.id)
+        .join(FbAdset, FbAd.adset_id == FbAdset.id)
+        .join(FbCampaign, FbAdset.campaign_id == FbCampaign.id)
         .where(
             and_(
                 AlertEvent.created_at >= dt_from,
                 AlertEvent.created_at < dt_to,
-                func.upper(AdSnapshot.resolved_offer_code).in_(upper_codes),
+                func.upper(FbCampaign.offer_code).in_(upper_codes),
             )
         )
-        .group_by(func.upper(AdSnapshot.resolved_offer_code))
+        .group_by(func.upper(FbCampaign.offer_code))
     )
     alerts_rows = (await db.execute(alerts_q)).all()
     alerts_map = {code: cnt for code, cnt in alerts_rows}
 
-    # Отключения по офферам
+    # Отключения по офферам через JOIN
     disables_q = (
         select(
-            func.upper(AdSnapshot.resolved_offer_code),
+            func.upper(FbCampaign.offer_code),
             func.count(),
         )
-        .join(DisableTask, DisableTask.ad_id == AdSnapshot.ad_id)
+        .select_from(DisableTask)
+        .join(FbAd, DisableTask.ad_id == FbAd.id)
+        .join(FbAdset, FbAd.adset_id == FbAdset.id)
+        .join(FbCampaign, FbAdset.campaign_id == FbCampaign.id)
         .where(
             and_(
                 DisableTask.created_at >= dt_from,
                 DisableTask.created_at < dt_to,
                 DisableTask.status == DisableTaskStatus.SUCCEEDED,
-                func.upper(AdSnapshot.resolved_offer_code).in_(upper_codes),
+                func.upper(FbCampaign.offer_code).in_(upper_codes),
             )
         )
-        .group_by(func.upper(AdSnapshot.resolved_offer_code))
+        .group_by(func.upper(FbCampaign.offer_code))
     )
     disables_rows = (await db.execute(disables_q)).all()
     disables_map = {code: cnt for code, cnt in disables_rows}
@@ -1028,12 +1097,11 @@ def _build_offer_summary(
 
     return HistoryOfferSummary(
         offer_code=code,
-        offer_name=offer.name if offer else code,
         total_spend=spend,
         total_deposits=deps,
         total_registrations=regs,
         avg_cpr=_safe_div(spend, regs),
-        avg_spend_per_dep=_safe_div(spend, deps),
+        avg_cost_per_deposit=_safe_div(spend, deps),
         roas=(revenue / spend).quantize(Decimal("0.01")) if spend > 0 else None,
         profit=profit,
         alerts_count=alerts_count,
@@ -1047,20 +1115,25 @@ async def get_history_offers(
     date_to: str = Query(..., description="ISO дата конца"),
     db: AsyncSession = Depends(get_db),
 ) -> list[HistoryOfferSummary]:
-    """Сводка по офферам за период."""
+    """Сводка по офферам за период из AdMetricHistory."""
     d_from = _parse_iso_date(date_from)
     d_to = _parse_iso_date(date_to)
     dt_from = _date_to_datetime(d_from)
     dt_to = _date_to_datetime(d_to + timedelta(days=1))
 
-    archives = await _load_archives(db, dt_from, dt_to)
-    campaign_offer_map = await _load_campaign_offer_map(db)
-    grouped = _group_by_offer_code(archives, campaign_offer_map)
+    # Основной источник — AdMetricHistory
+    grouped = await _load_offers_from_metric_history(db, dt_from, dt_to)
 
-    # Добавляем live данные для «сегодня»
+    # Fallback на архивы если AdMetricHistory пуст (старые данные)
+    if not grouped:
+        archives = await _load_archives(db, dt_from, dt_to)
+        campaign_offer_map = await _load_campaign_offer_map(db)
+        grouped = _group_by_offer_code(archives, campaign_offer_map)
+
+    # Live данные для «сегодня»
     today = date.today()
     if d_from <= today <= d_to:
-        live = await _load_live_ads_for_today(db, None, None)
+        live = await _load_live_ads_for_today(db)
         for data in live.values():
             code = data.get("offer_code")
             if not code:
@@ -1073,10 +1146,11 @@ async def get_history_offers(
                     "deps": 0,
                 }
             g = grouped[code]
-            g["spend"] += data["spend"]
-            g["clicks"] += data["clicks"]
-            g["regs"] += data["regs"]
-            g["deps"] += data["deps"]
+            # MAX с live для сегодня (кумулятивные значения)
+            g["spend"] = max(g["spend"], data["spend"])
+            g["clicks"] = max(g["clicks"], data["clicks"])
+            g["regs"] = max(g["regs"], data["regs"])
+            g["deps"] = max(g["deps"], data["deps"])
 
     if not grouped:
         return []
@@ -1124,71 +1198,116 @@ _AD_SORT_KEYS = {
 }
 
 
-def _group_ads_from_archives(
-    archives: list[CabinetDayArchive],
-    offer_campaigns: set[str] | None,
+async def _load_ads_from_metric_history(
+    db: AsyncSession,
+    dt_from: datetime,
+    dt_to: datetime,
+    offer_code: str | None = None,
     campaign_name: str | None = None,
 ) -> dict[str, dict]:
-    """Группирует per-ad данные из архивов по fb_ad_id."""
+    """Загружает per-ad метрики из AdMetricHistory за период.
+
+    Значения в AdMetricHistory кумулятивные (FB сбрасывает в начале суток).
+    Берём MAX по каждой метрике per-ad per-day, затем суммируем дни.
+    """
+    day_col = cast(AdMetricHistory.cycle_ts, SqlDate).label("day")
+
+    # Подзапрос: MAX метрик per-ad per-day
+    subq = (
+        select(
+            AdMetricHistory.ad_id,
+            day_col,
+            func.max(AdMetricHistory.spend).label("spend"),
+            func.max(AdMetricHistory.clicks).label("clicks"),
+            func.max(AdMetricHistory.leads).label("leads"),
+            func.max(AdMetricHistory.registrations).label("regs"),
+            func.max(AdMetricHistory.deposits).label("deps"),
+        )
+        .where(
+            AdMetricHistory.cycle_ts >= dt_from,
+            AdMetricHistory.cycle_ts < dt_to,
+        )
+        .group_by(AdMetricHistory.ad_id, day_col)
+        .subquery()
+    )
+
+    # Основной запрос: SUM по дням + JOIN FbAd → FbAdset → FbCampaign для имён
+    q = (
+        select(
+            FbAd.fb_ad_id,
+            FbAd.ad_name,
+            FbCampaign.campaign_name,
+            FbCampaign.offer_code,
+            func.sum(subq.c.spend).label("spend"),
+            func.sum(subq.c.clicks).label("clicks"),
+            func.sum(subq.c.leads).label("leads"),
+            func.sum(subq.c.regs).label("regs"),
+            func.sum(subq.c.deps).label("deps"),
+        )
+        .join(FbAd, FbAd.id == subq.c.ad_id)
+        .join(FbAdset, FbAd.adset_id == FbAdset.id)
+        .join(FbCampaign, FbAdset.campaign_id == FbCampaign.id)
+        .group_by(
+            FbAd.fb_ad_id,
+            FbAd.ad_name,
+            FbCampaign.campaign_name,
+            FbCampaign.offer_code,
+        )
+    )
+
+    if offer_code:
+        q = q.where(func.lower(FbCampaign.offer_code) == offer_code.lower())
+    if campaign_name:
+        q = q.where(FbCampaign.campaign_name == campaign_name)
+
+    rows = (await db.execute(q)).all()
+
     grouped: dict[str, dict] = {}
-    for arch in archives:
-        for ad in arch.ads_json or []:
-            ad_campaign = ad.get("campaign_name", "")
-            # Фильтрация по кампании/офферу
-            if offer_campaigns is not None and ad_campaign not in offer_campaigns:
-                continue
-            if campaign_name and ad_campaign != campaign_name:
-                continue
-            fb_ad_id = ad.get("fb_ad_id", "")
-            if not fb_ad_id:
-                continue
-            if fb_ad_id not in grouped:
-                grouped[fb_ad_id] = {
-                    "fb_ad_id": fb_ad_id,
-                    "ad_name": ad.get("ad_name", ""),
-                    "campaign_name": ad_campaign,
-                    "offer_code": ad.get("offer_code"),
-                    "spend": Decimal("0"),
-                    "clicks": 0,
-                    "leads": 0,
-                    "regs": 0,
-                    "deps": 0,
-                }
-            g = grouped[fb_ad_id]
-            g["spend"] += Decimal(str(ad.get("spend", 0)))
-            g["clicks"] += int(ad.get("clicks", 0))
-            g["leads"] += int(ad.get("leads", 0))
-            g["regs"] += int(ad.get("registrations", 0))
-            g["deps"] += int(ad.get("deposits", 0))
-            # Обновляем имя/кампанию/оффер из последнего архива
-            if ad.get("ad_name"):
-                g["ad_name"] = ad["ad_name"]
-            if ad.get("offer_code"):
-                g["offer_code"] = ad["offer_code"]
+    for row in rows:
+        grouped[row.fb_ad_id] = {
+            "fb_ad_id": row.fb_ad_id,
+            "ad_name": row.ad_name or "",
+            "campaign_name": row.campaign_name or "",
+            "offer_code": row.offer_code,
+            "spend": Decimal(str(row.spend or 0)),
+            "clicks": int(row.clicks or 0),
+            "leads": int(row.leads or 0),
+            "regs": int(row.regs or 0),
+            "deps": int(row.deps or 0),
+        }
     return grouped
 
 
 async def _load_live_ads_for_today(
     db: AsyncSession,
-    offer_campaigns: set[str] | None,
+    offer_code: str | None = None,
     campaign_name: str | None = None,
 ) -> dict[str, dict]:
-    """Загружает live AdSnapshot данные для текущего дня."""
-    q = select(AdSnapshot)
+    """Загружает live AdSnapshot данные для текущего дня через JOIN."""
+    q = (
+        select(
+            AdSnapshot,
+            FbAd.ad_name,
+            FbCampaign.campaign_name,
+            FbCampaign.offer_code,
+        )
+        .join(FbAd, AdSnapshot.ad_id == FbAd.id)
+        .join(FbAdset, FbAd.adset_id == FbAdset.id)
+        .join(FbCampaign, FbAdset.campaign_id == FbCampaign.id)
+    )
     if campaign_name:
-        q = q.where(AdSnapshot.campaign_name == campaign_name)
+        q = q.where(FbCampaign.campaign_name == campaign_name)
+    if offer_code:
+        q = q.where(func.lower(FbCampaign.offer_code) == offer_code.lower())
     result = await db.execute(q)
-    snapshots = result.scalars().all()
 
     grouped: dict[str, dict] = {}
-    for s in snapshots:
-        if offer_campaigns is not None and s.campaign_name not in offer_campaigns:
-            continue
+    for s, ad_name, camp_name, off_code in result.all():
         grouped[s.fb_ad_id] = {
             "fb_ad_id": s.fb_ad_id,
-            "ad_name": s.ad_name,
-            "campaign_name": s.campaign_name,
-            "offer_code": s.resolved_offer_code,
+            "ad_name": ad_name or "",
+            "campaign_name": camp_name or "",
+            "offer_code": off_code,
             "spend": Decimal(str(s.spend or 0)),
             "clicks": int(s.clicks or 0),
             "leads": int(s.leads or 0),
@@ -1218,7 +1337,7 @@ def _build_history_ad_row(data: dict) -> HistoryAdRow:
         avg_cpc=_safe_div(spend, clicks),
         avg_cpl=_safe_div(spend, leads),
         avg_cpr=_safe_div(spend, regs),
-        avg_spend_per_dep=_safe_div(spend, deps),
+        avg_cost_per_deposit=_safe_div(spend, deps),
     )
 
 
@@ -1232,34 +1351,29 @@ async def get_history_ads(
     sort_dir: str = Query("desc"),
     db: AsyncSession = Depends(get_db),
 ) -> list[HistoryAdRow]:
-    """Per-ad метрики за период (архив + live для сегодня)."""
+    """Per-ad метрики за период из AdMetricHistory + live AdSnapshot для сегодня."""
     d_from = _parse_iso_date(date_from)
     d_to = _parse_iso_date(date_to)
     dt_from = _date_to_datetime(d_from)
     dt_to = _date_to_datetime(d_to + timedelta(days=1))
 
-    offer_campaigns: set[str] | None = None
-    if offer_code:
-        offer_campaigns = await _load_campaigns_for_offer(db, offer_code)
+    # Основной источник — AdMetricHistory (прошлые дни)
+    grouped = await _load_ads_from_metric_history(db, dt_from, dt_to, offer_code, campaign_name)
 
-    # Данные из архивов
-    archives = await _load_archives(db, dt_from, dt_to)
-    grouped = _group_ads_from_archives(archives, offer_campaigns, campaign_name)
-
-    # Добавляем live данные для «сегодня» если период включает текущий день
+    # Live данные для «сегодня» из AdSnapshot (текущий цикл ещё не в истории)
     today = date.today()
     if d_from <= today <= d_to:
-        live = await _load_live_ads_for_today(db, offer_campaigns, campaign_name)
+        live = await _load_live_ads_for_today(db, offer_code, campaign_name)
         for fb_ad_id, data in live.items():
             if fb_ad_id in grouped:
-                # Суммируем к архивным данным
+                # Метрики за сегодня уже могут быть частично в history —
+                # берём максимум между live и тем что уже насчитали
                 g = grouped[fb_ad_id]
-                g["spend"] += data["spend"]
-                g["clicks"] += data["clicks"]
-                g["leads"] += data["leads"]
-                g["regs"] += data["regs"]
-                g["deps"] += data["deps"]
-                # Обновляем имя из live (актуальнее)
+                g["spend"] = max(g["spend"], data["spend"])
+                g["clicks"] = max(g["clicks"], data["clicks"])
+                g["leads"] = max(g["leads"], data["leads"])
+                g["regs"] = max(g["regs"], data["regs"])
+                g["deps"] = max(g["deps"], data["deps"])
                 g["ad_name"] = data["ad_name"]
                 g["campaign_name"] = data["campaign_name"]
                 g["offer_code"] = data.get("offer_code") or g.get("offer_code")
@@ -1268,7 +1382,6 @@ async def get_history_ads(
 
     rows = [_build_history_ad_row(data) for data in grouped.values()]
 
-    # Сортировка
     attr = _AD_SORT_KEYS.get(sort_by, "total_spend")
     reverse = sort_dir.lower() == "desc"
     rows.sort(key=lambda r: getattr(r, attr, 0) or 0, reverse=reverse)

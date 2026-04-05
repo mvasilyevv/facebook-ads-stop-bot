@@ -13,9 +13,11 @@ import pytest
 
 
 def _rows_result(rows):
-    """Создаёт мок результата scalars().all()."""
+    """Создаёт мок результата scalars().unique().all() и scalars().all()."""
     result = MagicMock()
-    result.scalars.return_value.all.return_value = rows
+    scalars_mock = result.scalars.return_value
+    scalars_mock.all.return_value = rows
+    scalars_mock.unique.return_value.all.return_value = rows
     return result
 
 
@@ -36,10 +38,18 @@ async def test_process_enable_recommendation_cycle_broadcasts_and_attaches_refs(
     session_create = _make_session()
     session_snapshot = _make_session()
     session_attach = _make_session()
+    # Мокируем JOIN-цепочку fb_ad → adset → campaign
     snapshot = SimpleNamespace(
         fb_ad_id="ad-1",
-        campaign_name="Campaign 1",
-        adset_name="Adset 1",
+        fb_ad=SimpleNamespace(
+            ad_name="Reco Ad",
+            adset=SimpleNamespace(
+                adset_name="Adset 1",
+                campaign=SimpleNamespace(
+                    campaign_name="Campaign 1",
+                ),
+            ),
+        ),
     )
     session_snapshot.execute = AsyncMock(return_value=_rows_result([snapshot]))
     factory = MagicMock(side_effect=[session_create, session_snapshot, session_attach])

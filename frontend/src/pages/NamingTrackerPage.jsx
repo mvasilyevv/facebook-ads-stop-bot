@@ -129,7 +129,7 @@ export default function NamingTrackerPage() {
             <option value="">Все офферы</option>
             {offers.map((o) => (
               <option key={o.id} value={o.code}>
-                {o.code} — {o.name}
+                {o.code}
               </option>
             ))}
           </select>
@@ -285,7 +285,6 @@ function PatternRow({ group, isExpanded, nextNumber, onToggle }) {
           {group.offer_code ? (
             <span className="badge badge-neutral text-2xs">
               {group.offer_code}
-              {group.offer_name ? ` — ${group.offer_name}` : ''}
             </span>
           ) : (
             <span className="text-xs text-muted">—</span>

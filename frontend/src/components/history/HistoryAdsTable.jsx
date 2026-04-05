@@ -14,7 +14,7 @@ const COLUMNS = [
   { key: 'total_registrations', label: 'Реги', align: 'text-right', mono: true, fmt: (v) => String(v || 0) },
   { key: 'avg_cpr', label: 'CPR', align: 'text-right', mono: true, fmt: (v) => v != null ? `$${Number(v).toFixed(2)}` : '—' },
   { key: 'total_deposits', label: 'Депозиты', align: 'text-right', mono: true, fmt: (v) => String(v || 0) },
-  { key: 'avg_spend_per_dep', label: 'Spend/Dep', align: 'text-right', mono: true, fmt: (v) => v != null ? `$${Number(v).toFixed(2)}` : '—' },
+  { key: 'avg_cost_per_deposit', label: 'Spend/Dep', align: 'text-right', mono: true, fmt: (v) => v != null ? `$${Number(v).toFixed(2)}` : '—' },
 ];
 
 export function HistoryAdsTable({ data = [] }) {
@@ -88,7 +88,7 @@ export function HistoryAdsTable({ data = [] }) {
                     {row.total_deposits || 0}
                   </td>
                   <td className="px-3 py-2.5 text-right font-mono text-primary">
-                    {row.avg_spend_per_dep != null ? `$${Number(row.avg_spend_per_dep).toFixed(2)}` : '—'}
+                    {row.avg_cost_per_deposit != null ? `$${Number(row.avg_cost_per_deposit).toFixed(2)}` : '—'}
                   </td>
                 </tr>
               );

@@ -21,10 +21,40 @@ _METRIC_FIELDS = (
 
 
 def _extract_value(item: Mapping[str, Any] | Any, field: str) -> Any:
-    """Достаёт значение поля из dict-подобного объекта или ORM-модели."""
+    """Достаёт значение поля из dict-подобного объекта или ORM-модели.
+
+    Для нормализованных полей (campaign_name, adset_name, ad_name, offer_code, offer_id)
+    навигирует через цепочку fb_ad → adset → campaign, если объект — AdSnapshot.
+    """
     if isinstance(item, Mapping):
         return item.get(field)
-    return getattr(item, field, None)
+
+    # Прямой доступ к атрибуту ORM
+    direct = getattr(item, field, None)
+    if direct is not None:
+        return direct
+
+    # Нормализованные поля — навигация через relationship chain
+    fb_ad = getattr(item, "fb_ad", None)
+    if fb_ad is None:
+        return None
+
+    if field == "ad_name":
+        return getattr(fb_ad, "ad_name", None)
+
+    adset = getattr(fb_ad, "adset", None)
+    if field == "adset_name":
+        return getattr(adset, "adset_name", None) if adset else None
+
+    campaign = getattr(adset, "campaign", None) if adset else None
+    if field == "campaign_name":
+        return getattr(campaign, "campaign_name", None) if campaign else None
+    if field == "offer_code":
+        return getattr(campaign, "offer_code", None) if campaign else None
+    if field == "offer_id":
+        return getattr(campaign, "offer_id", None) if campaign else None
+
+    return None
 
 
 def _is_zero_value(value: Any) -> bool:
@@ -87,7 +117,7 @@ def build_cabinet_day_archive_payload(
                     "fb_ad_id": fb_ad_id,
                     "ad_name": str(_extract_value(item, "ad_name") or ""),
                     "campaign_name": campaign_name,
-                    "offer_code": _extract_value(item, "resolved_offer_code") or None,
+                    "offer_code": _extract_value(item, "offer_code") or None,
                     "spend": str(spend),
                     "clicks": clicks,
                     "leads": leads,
@@ -126,7 +156,7 @@ def build_cabinet_day_archive_payload(
         "cpc": _safe_decimal_div(total_spend, total_clicks),
         "cpl": _safe_decimal_div(total_spend, total_leads),
         "cpr": _safe_decimal_div(total_spend, total_regs),
-        "spend_per_dep": _safe_decimal_div(total_spend, total_deps),
+        "cost_per_deposit": _safe_decimal_div(total_spend, total_deps),
         "click_to_lead_rate": _safe_percent(total_leads, total_clicks),
         "lead_to_reg_rate": _safe_percent(total_regs, total_leads),
         "reg_to_dep_rate": _safe_percent(total_deps, total_regs),
@@ -146,7 +176,7 @@ def build_cabinet_day_archive_payload(
                 "cpc": _safe_decimal_div(spend, row["clicks"]),
                 "cpl": _safe_decimal_div(spend, row["leads"]),
                 "cpr": _safe_decimal_div(spend, row["registrations"]),
-                "spend_per_dep": _safe_decimal_div(spend, row["deposits"]),
+                "cost_per_deposit": _safe_decimal_div(spend, row["deposits"]),
                 "click_to_lead_rate": _safe_percent(row["leads"], row["clicks"]),
                 "lead_to_reg_rate": _safe_percent(row["registrations"], row["leads"]),
                 "reg_to_dep_rate": _safe_percent(row["deposits"], row["registrations"]),

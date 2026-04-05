@@ -14,7 +14,14 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from core.db.base import Base
 from core.domain import AlertState, DisableTaskStatus, EnableRecommendationLevel, EnableTaskStatus
-from core.models import EnableRecommendationEvent, EnableTask, ObserverSettings
+from core.models import (
+    EnableRecommendationEvent,
+    EnableTask,
+    FbAd,
+    FbAdset,
+    FbCampaign,
+    ObserverSettings,
+)
 
 
 def _rows_result(rows):
@@ -46,10 +53,11 @@ async def test_list_enable_recommendations_deduplicates_by_ad_and_marks_task_cre
 
     last_scan = datetime(2026, 3, 29, 14, 5, tzinfo=UTC)
     shared_batch = datetime(2026, 3, 29, 14, 0, tzinfo=UTC)
+    ad_id_1 = uuid.uuid4()
+    ad_id_2 = uuid.uuid4()
     latest_event = SimpleNamespace(
         id=uuid.uuid4(),
-        fb_ad_id="ad-1",
-        ad_name="Ad 1 new",
+        ad_id=ad_id_1,
         delivery_status="OFF",
         recommendation_level=EnableRecommendationLevel.OK,
         matched_rule_codes=[],
@@ -62,8 +70,7 @@ async def test_list_enable_recommendations_deduplicates_by_ad_and_marks_task_cre
     )
     second_ad_event = SimpleNamespace(
         id=uuid.uuid4(),
-        fb_ad_id="ad-2",
-        ad_name="Ad 2",
+        ad_id=ad_id_2,
         delivery_status="NOT_DELIVERING",
         recommendation_level=EnableRecommendationLevel.EARLY_SIGNAL,
         matched_rule_codes=["early_outbound_ctr_signal"],
@@ -81,10 +88,8 @@ async def test_list_enable_recommendations_deduplicates_by_ad_and_marks_task_cre
         created_at=datetime(2026, 3, 29, 14, 4, tzinfo=UTC),
     )
     snapshot_ad_1 = SimpleNamespace(
+        ad_id=ad_id_1,
         fb_ad_id="ad-1",
-        ad_name="Ad 1 live",
-        campaign_name="Campaign A",
-        adset_name="Adset A",
         delivery_status="OFF",
         alert_state=AlertState.DISABLED,
         spend=Decimal("1.09"),
@@ -104,10 +109,8 @@ async def test_list_enable_recommendations_deduplicates_by_ad_and_marks_task_cre
         last_observed_at=last_scan,
     )
     snapshot_ad_2 = SimpleNamespace(
+        ad_id=ad_id_2,
         fb_ad_id="ad-2",
-        ad_name="Ad 2 live",
-        campaign_name="Campaign B",
-        adset_name="Adset B",
         delivery_status="NOT_DELIVERING",
         alert_state=AlertState.DISABLED,
         spend=Decimal("0.50"),
@@ -153,9 +156,30 @@ async def test_list_enable_recommendations_deduplicates_by_ad_and_marks_task_cre
     ]
     mock_db.execute = AsyncMock(return_value=_rows_result([task]))
 
-    with patch(
-        "apps.api.routers.dashboard._load_current_enable_recommendations",
-        new=AsyncMock(return_value=(shared_batch, live_rows)),
+    ad_ctx_map = {
+        ad_id_1: {
+            "fb_ad_id": "ad-1",
+            "ad_name": "Ad 1 live",
+            "campaign_name": "Campaign A",
+            "adset_name": "Adset A",
+        },
+        ad_id_2: {
+            "fb_ad_id": "ad-2",
+            "ad_name": "Ad 2 live",
+            "campaign_name": "Campaign B",
+            "adset_name": "Adset B",
+        },
+    }
+
+    with (
+        patch(
+            "apps.api.routers.dashboard._load_current_enable_recommendations",
+            new=AsyncMock(return_value=(shared_batch, live_rows)),
+        ),
+        patch(
+            "apps.api.routers.dashboard._load_ad_context_map",
+            new=AsyncMock(return_value=ad_ctx_map),
+        ),
     ):
         result = await list_enable_recommendations(limit=20, db=mock_db)
 
@@ -179,8 +203,7 @@ async def test_serialize_enable_recommendation_preserves_explicit_recovery_copy(
 
     event = SimpleNamespace(
         id=uuid.uuid4(),
-        fb_ad_id="ad-recovery",
-        ad_name="Recovery Ad",
+        ad_id=uuid.uuid4(),
         delivery_status="OFF",
         recommendation_level=EnableRecommendationLevel.OK,
         matched_rule_codes=[],
@@ -191,11 +214,13 @@ async def test_serialize_enable_recommendation_preserves_explicit_recovery_copy(
         created_at=datetime(2026, 3, 29, 15, 1, tzinfo=UTC),
         updated_at=datetime(2026, 3, 29, 15, 2, tzinfo=UTC),
     )
+    ad_ctx = {"fb_ad_id": "ad-recovery", "ad_name": "Recovery Ad"}
 
     serialized = _serialize_enable_recommendation_event(
         event,
         current_batch_marker=event.live_batch_started_at,
         current_snapshot=None,
+        ad_ctx=ad_ctx,
     )
 
     assert serialized.reason_title == "Можно вернуть в работу"
@@ -246,10 +271,10 @@ async def test_load_current_enable_recommendations_filters_out_ads_that_are_no_l
 
     last_scan = datetime(2026, 3, 29, 14, 35, tzinfo=UTC)
     shared_batch = datetime(2026, 3, 29, 14, 30, tzinfo=UTC)
+    ad_id = uuid.uuid4()
     stale_event = SimpleNamespace(
         id=uuid.uuid4(),
-        fb_ad_id="ad-enabled",
-        ad_name="Enabled Ad",
+        ad_id=ad_id,
         delivery_status="OFF",
         recommendation_level=EnableRecommendationLevel.OK,
         matched_rule_codes=[],
@@ -261,10 +286,8 @@ async def test_load_current_enable_recommendations_filters_out_ads_that_are_no_l
         updated_at=datetime(2026, 3, 29, 14, 31, tzinfo=UTC),
     )
     current_snapshot = SimpleNamespace(
+        ad_id=ad_id,
         fb_ad_id="ad-enabled",
-        ad_name="Enabled Ad",
-        campaign_name="Campaign C",
-        adset_name="Adset C",
         delivery_status="ACTIVE",
         alert_state=AlertState.DISABLED,
         spend=Decimal("0"),
@@ -314,10 +337,10 @@ async def test_load_current_enable_recommendations_filters_out_stale_live_event(
 
     last_scan = datetime(2026, 3, 29, 14, 45, tzinfo=UTC)
     shared_batch = datetime(2026, 3, 29, 14, 30, tzinfo=UTC)
+    ad_id = uuid.uuid4()
     event = SimpleNamespace(
         id=uuid.uuid4(),
-        fb_ad_id="ad-stale",
-        ad_name="Stale Ad",
+        ad_id=ad_id,
         delivery_status="OFF",
         recommendation_level=EnableRecommendationLevel.OK,
         matched_rule_codes=[],
@@ -329,10 +352,8 @@ async def test_load_current_enable_recommendations_filters_out_stale_live_event(
         updated_at=datetime(2026, 3, 29, 14, 31, tzinfo=UTC),
     )
     snapshot = SimpleNamespace(
+        ad_id=ad_id,
         fb_ad_id="ad-stale",
-        ad_name="Stale Ad",
-        campaign_name="Campaign S",
-        adset_name="Adset S",
         delivery_status="OFF",
         alert_state=AlertState.DISABLED,
         spend=Decimal("30.69"),
@@ -380,11 +401,11 @@ async def test_create_enable_task_from_recommendation_returns_task_payload(mock_
     from apps.api.main import create_enable_task_from_recommendation
 
     task_id = uuid.uuid4()
+    ad_id = uuid.uuid4()
     api_task = SimpleNamespace(
         id=task_id,
+        ad_id=ad_id,
         recommendation_event_id=uuid.uuid4(),
-        fb_ad_id="ad-10",
-        ad_name="Enable me",
         status=EnableTaskStatus.PENDING,
         attempt_count=0,
         last_error=None,
@@ -402,10 +423,17 @@ async def test_create_enable_task_from_recommendation_returns_task_payload(mock_
     )
 
     mock_db.scalar = AsyncMock(return_value=api_task)
+    ad_ctx_map = {ad_id: {"fb_ad_id": "ad-10", "ad_name": "Enable me"}}
 
-    with patch(
-        "apps.api.routers.dashboard.promote_recommendation_to_enable_task",
-        new=AsyncMock(return_value=service_result),
+    with (
+        patch(
+            "apps.api.routers.dashboard.promote_recommendation_to_enable_task",
+            new=AsyncMock(return_value=service_result),
+        ),
+        patch(
+            "apps.api.routers.dashboard._load_ad_context_map",
+            new=AsyncMock(return_value=ad_ctx_map),
+        ),
     ):
         result = await create_enable_task_from_recommendation("event-10", db=mock_db)
 
@@ -422,11 +450,11 @@ async def test_create_enable_task_from_recommendation_accepts_requeued_outcome(m
     from apps.api.main import create_enable_task_from_recommendation
 
     task_id = uuid.uuid4()
+    ad_id = uuid.uuid4()
     api_task = SimpleNamespace(
         id=task_id,
+        ad_id=ad_id,
         recommendation_event_id=uuid.uuid4(),
-        fb_ad_id="ad-11",
-        ad_name="Retry me",
         status=EnableTaskStatus.PENDING,
         attempt_count=0,
         last_error=None,
@@ -444,10 +472,17 @@ async def test_create_enable_task_from_recommendation_accepts_requeued_outcome(m
     )
 
     mock_db.scalar = AsyncMock(return_value=api_task)
+    ad_ctx_map = {ad_id: {"fb_ad_id": "ad-11", "ad_name": "Retry me"}}
 
-    with patch(
-        "apps.api.routers.dashboard.promote_recommendation_to_enable_task",
-        new=AsyncMock(return_value=service_result),
+    with (
+        patch(
+            "apps.api.routers.dashboard.promote_recommendation_to_enable_task",
+            new=AsyncMock(return_value=service_result),
+        ),
+        patch(
+            "apps.api.routers.dashboard._load_ad_context_map",
+            new=AsyncMock(return_value=ad_ctx_map),
+        ),
     ):
         result = await create_enable_task_from_recommendation("event-11", db=mock_db)
 
@@ -462,11 +497,11 @@ async def test_create_enable_task_from_recommendation_accepts_requeued_outcome(m
 async def test_list_enable_tasks_returns_monitoring_statuses_by_default(mock_db):
     from apps.api.main import list_enable_tasks
 
+    ad_id = uuid.uuid4()
     task = SimpleNamespace(
         id=uuid.uuid4(),
+        ad_id=ad_id,
         recommendation_event_id=uuid.uuid4(),
-        fb_ad_id="ad-20",
-        ad_name="Enable queue",
         status=EnableTaskStatus.RETRYING,
         attempt_count=2,
         last_error="Таймаут",
@@ -476,10 +511,19 @@ async def test_list_enable_tasks_returns_monitoring_statuses_by_default(mock_db)
         updated_at=datetime(2026, 3, 29, 15, 1, tzinfo=UTC),
         completed_at=None,
     )
-    mock_db.scalar = AsyncMock(return_value=None)
-    mock_db.execute = AsyncMock(return_value=_rows_result([task]))
+    # scalar: _get_cabinet_day_start → _get_observer_settings → execute → scalar_one_or_none
+    observer_result = MagicMock()
+    observer_result.scalar_one_or_none.return_value = None
+    mock_db.execute = AsyncMock(
+        side_effect=[observer_result, _rows_result([task])],
+    )
+    ad_ctx_map = {ad_id: {"fb_ad_id": "ad-20", "ad_name": "Enable queue"}}
 
-    result = await list_enable_tasks(status=None, limit=20, offset=0, db=mock_db)
+    with patch(
+        "apps.api.routers.dashboard._load_ad_context_map",
+        new=AsyncMock(return_value=ad_ctx_map),
+    ):
+        result = await list_enable_tasks(status=None, limit=20, offset=0, db=mock_db)
 
     assert len(result) == 1
     assert result[0].status == "RETRYING"
@@ -502,11 +546,22 @@ async def test_list_enable_tasks_hides_superseded_failed_task():
         success_time = datetime(2026, 3, 29, 15, 10, tzinfo=UTC)
 
         async with session_factory() as db:
+            # Создаём справочник: кампания → адсет → объявления
+            campaign = FbCampaign(campaign_name="Test Campaign")
+            db.add(campaign)
+            await db.flush()
+            adset = FbAdset(adset_name="Test Adset", campaign_id=campaign.id)
+            db.add(adset)
+            await db.flush()
+            ad_20 = FbAd(fb_ad_id="ad-20", ad_name="Enable queue", adset_id=adset.id)
+            ad_21 = FbAd(fb_ad_id="ad-21", ad_name="Still failing", adset_id=adset.id)
+            db.add_all([ad_20, ad_21])
+            await db.flush()
+
             db.add_all(
                 [
                     EnableTask(
-                        fb_ad_id="ad-20",
-                        ad_name="Enable queue",
+                        ad_id=ad_20.id,
                         idempotency_key="enable-task-old-failed",
                         status=EnableTaskStatus.FAILED,
                         attempt_count=10,
@@ -517,8 +572,7 @@ async def test_list_enable_tasks_hides_superseded_failed_task():
                         completed_at=failed_time,
                     ),
                     EnableTask(
-                        fb_ad_id="ad-20",
-                        ad_name="Enable queue",
+                        ad_id=ad_20.id,
                         idempotency_key="enable-task-new-success",
                         status=EnableTaskStatus.SUCCEEDED,
                         attempt_count=1,
@@ -528,8 +582,7 @@ async def test_list_enable_tasks_hides_superseded_failed_task():
                         completed_at=success_time,
                     ),
                     EnableTask(
-                        fb_ad_id="ad-21",
-                        ad_name="Still failing",
+                        ad_id=ad_21.id,
                         idempotency_key="enable-task-still-failed",
                         status=EnableTaskStatus.FAILED,
                         attempt_count=3,
@@ -578,9 +631,20 @@ async def test_list_enable_tasks_filters_out_previous_cabinet_day():
                     cabinet_day_started_at=cabinet_day_start,
                 )
             )
+            # Справочник: кампания → адсет → объявления
+            campaign = FbCampaign(campaign_name="Test Campaign")
+            db.add(campaign)
+            await db.flush()
+            adset = FbAdset(adset_name="Test Adset", campaign_id=campaign.id)
+            db.add(adset)
+            await db.flush()
+            ad_30 = FbAd(fb_ad_id="ad-30", ad_name="Yesterday recommendation", adset_id=adset.id)
+            ad_31 = FbAd(fb_ad_id="ad-31", ad_name="Today recommendation", adset_id=adset.id)
+            db.add_all([ad_30, ad_31])
+            await db.flush()
+
             stale_event = EnableRecommendationEvent(
-                fb_ad_id="ad-30",
-                ad_name="Yesterday recommendation",
+                ad_id=ad_30.id,
                 delivery_status="OFF",
                 recommendation_level=EnableRecommendationLevel.OK,
                 matched_rule_codes=[],
@@ -591,8 +655,7 @@ async def test_list_enable_tasks_filters_out_previous_cabinet_day():
                 idempotency_key="enable-reco-yesterday",
             )
             fresh_event = EnableRecommendationEvent(
-                fb_ad_id="ad-31",
-                ad_name="Today recommendation",
+                ad_id=ad_31.id,
                 delivery_status="OFF",
                 recommendation_level=EnableRecommendationLevel.OK,
                 matched_rule_codes=[],
@@ -607,9 +670,8 @@ async def test_list_enable_tasks_filters_out_previous_cabinet_day():
             db.add_all(
                 [
                     EnableTask(
+                        ad_id=ad_30.id,
                         recommendation_event_id=stale_event.id,
-                        fb_ad_id="ad-30",
-                        ad_name="Yesterday task",
                         idempotency_key="enable-task-yesterday",
                         status=EnableTaskStatus.SUCCEEDED,
                         attempt_count=1,
@@ -619,9 +681,8 @@ async def test_list_enable_tasks_filters_out_previous_cabinet_day():
                         completed_at=current_day_time,
                     ),
                     EnableTask(
+                        ad_id=ad_31.id,
                         recommendation_event_id=fresh_event.id,
-                        fb_ad_id="ad-31",
-                        ad_name="Today task",
                         idempotency_key="enable-task-today",
                         status=EnableTaskStatus.RETRYING,
                         attempt_count=2,
@@ -650,9 +711,8 @@ def test_serialize_enable_task_clears_stale_error_for_succeeded_task():
 
     task = SimpleNamespace(
         id=uuid.uuid4(),
+        ad_id=uuid.uuid4(),
         recommendation_event_id=uuid.uuid4(),
-        fb_ad_id="ad-22",
-        ad_name="Recovered ad",
         status=EnableTaskStatus.SUCCEEDED,
         attempt_count=2,
         last_error="Старый сбой",
@@ -662,8 +722,9 @@ def test_serialize_enable_task_clears_stale_error_for_succeeded_task():
         updated_at=datetime(2026, 3, 29, 15, 10, tzinfo=UTC),
         completed_at=datetime(2026, 3, 29, 15, 10, tzinfo=UTC),
     )
+    ad_ctx = {"fb_ad_id": "ad-22", "ad_name": "Recovered ad"}
 
-    serialized = _serialize_enable_task(task)
+    serialized = _serialize_enable_task(task, ad_ctx=ad_ctx)
 
     assert serialized.status == "SUCCEEDED"
     assert serialized.last_error is None
@@ -680,8 +741,10 @@ async def test_dashboard_stats_includes_enable_recommendation_counters(mock_db):
         (AlertState.NORMAL, 5, Decimal("10.00")),
         (AlertState.WARNING_SENT, 1, Decimal("5.00")),
     ]
-    mock_db.execute = AsyncMock(return_value=group_result)
-    mock_db.scalar = AsyncMock(side_effect=[None, None, 3, 2, 4, 1])
+    observer_result = MagicMock()
+    observer_result.scalar_one_or_none.return_value = None
+    mock_db.execute = AsyncMock(side_effect=[group_result, observer_result])
+    mock_db.scalar = AsyncMock(side_effect=[None, None, 3, 4, 2, 1])
 
     recommendation_events = [
         SimpleNamespace(
@@ -734,9 +797,20 @@ async def test_dashboard_stats_filters_pending_enable_tasks_by_cabinet_day():
                     cabinet_day_started_at=cabinet_day_start,
                 )
             )
+            # Справочник: кампания → адсет → объявления
+            campaign = FbCampaign(campaign_name="Test Campaign")
+            db.add(campaign)
+            await db.flush()
+            adset = FbAdset(adset_name="Test Adset", campaign_id=campaign.id)
+            db.add(adset)
+            await db.flush()
+            ad_old = FbAd(fb_ad_id="ad-old", ad_name="Yesterday recommendation", adset_id=adset.id)
+            ad_new = FbAd(fb_ad_id="ad-new", ad_name="Today recommendation", adset_id=adset.id)
+            db.add_all([ad_old, ad_new])
+            await db.flush()
+
             stale_event = EnableRecommendationEvent(
-                fb_ad_id="ad-old",
-                ad_name="Yesterday recommendation",
+                ad_id=ad_old.id,
                 delivery_status="OFF",
                 recommendation_level=EnableRecommendationLevel.OK,
                 matched_rule_codes=[],
@@ -747,8 +821,7 @@ async def test_dashboard_stats_filters_pending_enable_tasks_by_cabinet_day():
                 idempotency_key="enable-reco-old",
             )
             fresh_event = EnableRecommendationEvent(
-                fb_ad_id="ad-new",
-                ad_name="Today recommendation",
+                ad_id=ad_new.id,
                 delivery_status="OFF",
                 recommendation_level=EnableRecommendationLevel.OK,
                 matched_rule_codes=[],
@@ -763,18 +836,16 @@ async def test_dashboard_stats_filters_pending_enable_tasks_by_cabinet_day():
             db.add_all(
                 [
                     EnableTask(
+                        ad_id=ad_old.id,
                         recommendation_event_id=stale_event.id,
-                        fb_ad_id="ad-old",
-                        ad_name="Yesterday pending",
                         idempotency_key="enable-task-old-pending",
                         status=EnableTaskStatus.PENDING,
                         created_at=current_day_time,
                         updated_at=current_day_time,
                     ),
                     EnableTask(
+                        ad_id=ad_new.id,
                         recommendation_event_id=fresh_event.id,
-                        fb_ad_id="ad-new",
-                        ad_name="Today running",
                         idempotency_key="enable-task-new-running",
                         status=EnableTaskStatus.RUNNING,
                         created_at=current_day_time,
@@ -796,11 +867,10 @@ async def test_dashboard_stats_filters_pending_enable_tasks_by_cabinet_day():
 async def test_get_ad_timeline_includes_enable_recommendations_and_enable_tasks(mock_db):
     from apps.api.main import get_ad_timeline
 
+    ad_id = uuid.uuid4()
     snapshot = SimpleNamespace(
+        ad_id=ad_id,
         fb_ad_id="ad-42",
-        ad_name="Timeline Ad",
-        campaign_name="Campaign",
-        adset_name="Adset",
         open_state_token=None,
         telegram_group_key=None,
         alert_state=AlertState.WARNING_SENT,
@@ -877,9 +947,23 @@ async def test_get_ad_timeline_includes_enable_recommendations_and_enable_tasks(
         ]
     )
 
-    with patch(
-        "apps.api.routers.dashboard._build_snapshot_diagnostics_map",
-        new=AsyncMock(return_value={}),
+    ad_ctx_map = {
+        ad_id: {
+            "fb_ad_id": "ad-42",
+            "ad_name": "Timeline Ad",
+            "campaign_name": "Campaign",
+            "adset_name": "Adset",
+        },
+    }
+    with (
+        patch(
+            "apps.api.routers.dashboard._build_snapshot_diagnostics_map",
+            new=AsyncMock(return_value={}),
+        ),
+        patch(
+            "apps.api.routers.dashboard._load_ad_context_map",
+            new=AsyncMock(return_value=ad_ctx_map),
+        ),
     ):
         result = await get_ad_timeline("ad-42", db=mock_db)
 

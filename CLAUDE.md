@@ -2,6 +2,9 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Parallelism
+- Максимум 5 фоновых агентов/задач одновременно. Перед запуском нового — убедиться, что лимит не превышен.
+
 ## Language rules
 
 - All comments, error messages, log messages, and Telegram notifications must be in Russian.

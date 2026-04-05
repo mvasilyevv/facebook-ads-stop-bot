@@ -50,7 +50,7 @@ export function WarningBreakdown({ observer }) {
     const cplStop = roundMoney((cplBase * cplT.stopPercent) / 100);
     const cprStop = roundMoney((cprBase * cprT.stopPercent) / 100);
     return {
-      code: offer.code, name: offer.name, cpa,
+      code: offer.code, cpa,
       cpcStop, cpcWarn: roundMoney((cpcStop * cpcT.warningPercent) / 100), cpcPct,
       cplStop, cplWarn: roundMoney((cplStop * cplT.warningPercent) / 100), cplPct,
       cprStop, cprWarn: roundMoney((cprStop * cprT.warningPercent) / 100), cprPct,
@@ -100,7 +100,6 @@ export function WarningBreakdown({ observer }) {
                     <tr key={row.code} className="tr-hover border-b border-border">
                       <td className="px-2 py-2">
                         <div className="font-mono text-2xs font-bold text-accent">{row.code}</div>
-                        <div className="text-2xs text-muted">{row.name}</div>
                       </td>
                       <td className="px-2 py-2 text-right font-mono font-semibold text-primary">{fmtMoney(row.cpa)}</td>
                       <td className="px-2 py-2 text-right font-mono">{row.enabled.cpc ? <span className="text-danger">{fmtMoney(row.cpcStop)}</span> : <span className="text-muted">выкл</span>}</td>

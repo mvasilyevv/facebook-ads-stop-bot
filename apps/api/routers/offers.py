@@ -23,8 +23,8 @@ async def list_offers(db: AsyncSession = Depends(get_db)):
         OfferSchema(
             id=str(o.id),
             code=o.code,
-            name=o.name,
             cpa_amount=o.cpa_amount,
+            payout_per_deposit=o.payout_per_deposit,
             is_active=o.is_active,
         )
         for o in offers
@@ -36,7 +36,6 @@ async def create_offer(body: OfferSchema, db: AsyncSession = Depends(get_db)):
     """Создать оффер."""
     offer = Offer(
         code=body.code,
-        name=body.name,
         cpa_amount=body.cpa_amount,
         payout_per_deposit=body.payout_per_deposit,
         is_active=body.is_active,
@@ -60,7 +59,6 @@ async def update_offer(offer_id: str, body: OfferSchema, db: AsyncSession = Depe
     if offer is None:
         raise HTTPException(status_code=404, detail="Оффер не найден")
     offer.code = body.code
-    offer.name = body.name
     offer.cpa_amount = body.cpa_amount
     offer.payout_per_deposit = body.payout_per_deposit
     offer.is_active = body.is_active

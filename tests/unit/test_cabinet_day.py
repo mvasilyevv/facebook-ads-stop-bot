@@ -97,7 +97,7 @@ def test_build_cabinet_day_archive_payload_groups_campaigns():
         ),
     ]
 
-    summary, campaigns = build_cabinet_day_archive_payload(snapshots)
+    summary, campaigns, _ads = build_cabinet_day_archive_payload(snapshots)
 
     assert summary["spend"] == "15.50"
     assert summary["clicks"] == 30

@@ -33,16 +33,27 @@ def _snapshot(
     delivery_status: str,
     offer_id,
     last_observed_at: datetime | None = None,
+    offer_code: str = "OFFER-1",
+    campaign_name: str = "Campaign",
+    adset_name: str = "Adset",
     **overrides,
 ):
     """Создаёт упрощённый snapshot для recommendation service."""
+    ad_id = uuid.uuid4()
+    # Нормализованная цепочка fb_ad → adset → campaign
+    campaign = SimpleNamespace(
+        offer_id=offer_id,
+        offer_code=offer_code,
+        campaign_name=campaign_name,
+    )
+    adset = SimpleNamespace(adset_name=adset_name, campaign=campaign)
+    fb_ad = SimpleNamespace(ad_name=f"Ad {fb_ad_id}", adset=adset)
     snapshot = SimpleNamespace(
         id=uuid.uuid4(),
+        ad_id=ad_id,
         offer_id=offer_id,
         fb_ad_id=fb_ad_id,
-        ad_name=f"Ad {fb_ad_id}",
-        campaign_name="Campaign",
-        adset_name="Adset",
+        fb_ad=fb_ad,
         delivery_status=delivery_status,
         spend=Decimal("12.00"),
         clicks=10,
@@ -59,7 +70,6 @@ def _snapshot(
         cost_per_registration=None,
         deposits=0,
         alert_state=AlertState.DISABLED,
-        resolved_offer_code="OFFER-1",
         last_observed_at=last_observed_at or datetime(2026, 3, 29, 12, 0, tzinfo=UTC),
     )
     for key, value in overrides.items():
@@ -473,6 +483,7 @@ async def test_collect_enable_recommendation_candidates_skips_stage_none_without
 async def test_persist_enable_recommendation_candidates_deduplicates_by_level():
     batch_started_at = datetime(2026, 3, 29, 13, 0, tzinfo=UTC)
     candidate = EnableRecommendationCandidate(
+        ad_id=uuid.uuid4(),
         snapshot_id=uuid.uuid4(),
         offer_id=uuid.uuid4(),
         fb_ad_id="ad-dedupe",
@@ -506,6 +517,7 @@ async def test_persist_enable_recommendation_candidates_deduplicates_by_level():
 async def test_persist_enable_recommendation_candidates_updates_level_for_same_batch():
     batch_started_at = datetime(2026, 3, 29, 13, 0, tzinfo=UTC)
     candidate = EnableRecommendationCandidate(
+        ad_id=uuid.uuid4(),
         snapshot_id=uuid.uuid4(),
         offer_id=uuid.uuid4(),
         fb_ad_id="ad-level-shift",
@@ -547,6 +559,7 @@ async def test_persist_enable_recommendation_candidates_updates_level_for_same_b
 async def test_persist_enable_recommendation_candidates_refreshes_existing_payload():
     batch_started_at = datetime(2026, 3, 29, 13, 0, tzinfo=UTC)
     candidate = EnableRecommendationCandidate(
+        ad_id=uuid.uuid4(),
         snapshot_id=uuid.uuid4(),
         offer_id=uuid.uuid4(),
         fb_ad_id="ad-refresh",
@@ -562,7 +575,6 @@ async def test_persist_enable_recommendation_candidates_refreshes_existing_paylo
     existing = SimpleNamespace(
         snapshot_id=None,
         offer_id=None,
-        ad_name="Old Ad",
         delivery_status="OFF",
         matched_rule_codes=["old_rule"],
         reason_title="Старая причина",
@@ -578,7 +590,6 @@ async def test_persist_enable_recommendation_candidates_refreshes_existing_paylo
     created = await persist_enable_recommendation_candidates(session, [candidate])
 
     assert created == []
-    assert existing.ad_name == "Refreshed Ad"
     assert existing.reason_text == "Обновлённые метрики."
     assert existing.metrics_json == {"spend": "1.09", "clicks": 6}
 
@@ -589,13 +600,18 @@ async def test_promote_recommendation_to_enable_task_blocks_non_recommendable_sn
     event_id = uuid.uuid4()
     snapshot_id = uuid.uuid4()
     offer_id = uuid.uuid4()
+    ad_id = uuid.uuid4()
     live_scan = datetime(2026, 3, 29, 13, 30, tzinfo=UTC)
     event = SimpleNamespace(
         id=event_id,
+        ad_id=ad_id,
         snapshot_id=snapshot_id,
+        live_batch_started_at=live_scan,
+    )
+    event_fb_ad = SimpleNamespace(
         fb_ad_id="ad-blocked",
         ad_name="Blocked Ad",
-        live_batch_started_at=live_scan,
+        adset=SimpleNamespace(campaign=SimpleNamespace(offer_id=offer_id, offer_code="OFFER-1")),
     )
     snapshot = _snapshot(
         fb_ad_id="ad-blocked",
@@ -606,7 +622,10 @@ async def test_promote_recommendation_to_enable_task_blocks_non_recommendable_sn
     snapshot.id = snapshot_id
 
     session = AsyncMock()
-    session.scalar = AsyncMock(side_effect=[event, None, snapshot])
+    observer_result = MagicMock()
+    observer_result.scalar_one_or_none.return_value = None
+    session.execute = AsyncMock(return_value=observer_result)
+    session.scalar = AsyncMock(side_effect=[event, event_fb_ad, snapshot])
 
     with (
         patch(
@@ -640,13 +659,18 @@ async def test_promote_recommendation_to_enable_task_blocks_warning_snapshot():
     event_id = uuid.uuid4()
     snapshot_id = uuid.uuid4()
     offer_id = uuid.uuid4()
+    ad_id = uuid.uuid4()
     live_scan = datetime(2026, 3, 29, 13, 35, tzinfo=UTC)
     event = SimpleNamespace(
         id=event_id,
+        ad_id=ad_id,
         snapshot_id=snapshot_id,
+        live_batch_started_at=live_scan,
+    )
+    event_fb_ad = SimpleNamespace(
         fb_ad_id="ad-warning-blocked",
         ad_name="Warning Ad",
-        live_batch_started_at=live_scan,
+        adset=SimpleNamespace(campaign=SimpleNamespace(offer_id=offer_id, offer_code="OFFER-1")),
     )
     snapshot = _snapshot(
         fb_ad_id="ad-warning-blocked",
@@ -657,7 +681,10 @@ async def test_promote_recommendation_to_enable_task_blocks_warning_snapshot():
     snapshot.id = snapshot_id
 
     session = AsyncMock()
-    session.scalar = AsyncMock(side_effect=[event, None, snapshot])
+    observer_result = MagicMock()
+    observer_result.scalar_one_or_none.return_value = None
+    session.execute = AsyncMock(return_value=observer_result)
+    session.scalar = AsyncMock(side_effect=[event, event_fb_ad, snapshot])
 
     with (
         patch(
@@ -694,13 +721,18 @@ async def test_promote_recommendation_to_enable_task_requeues_failed_existing_ta
     event_id = uuid.uuid4()
     snapshot_id = uuid.uuid4()
     offer_id = uuid.uuid4()
+    ad_id = uuid.uuid4()
     live_scan = datetime(2026, 3, 29, 13, 35, tzinfo=UTC)
     event = SimpleNamespace(
         id=event_id,
+        ad_id=ad_id,
         snapshot_id=snapshot_id,
+        live_batch_started_at=live_scan,
+    )
+    event_fb_ad = SimpleNamespace(
         fb_ad_id="ad-requeue",
         ad_name="Retry Ad",
-        live_batch_started_at=live_scan,
+        adset=SimpleNamespace(campaign=SimpleNamespace(offer_id=offer_id, offer_code="OFFER-1")),
     )
     snapshot = _snapshot(
         fb_ad_id="ad-requeue",
@@ -721,7 +753,10 @@ async def test_promote_recommendation_to_enable_task_requeues_failed_existing_ta
     )
 
     session = AsyncMock()
-    session.scalar = AsyncMock(side_effect=[event, None, snapshot, existing_task])
+    observer_result = MagicMock()
+    observer_result.scalar_one_or_none.return_value = None
+    session.execute = AsyncMock(return_value=observer_result)
+    session.scalar = AsyncMock(side_effect=[event, event_fb_ad, snapshot, existing_task])
 
     with (
         patch(
@@ -763,17 +798,25 @@ async def test_promote_recommendation_to_enable_task_requeues_failed_existing_ta
 @pytest.mark.asyncio
 async def test_promote_recommendation_to_enable_task_rejects_stale_cabinet_day_event():
     event_id = uuid.uuid4()
+    ad_id = uuid.uuid4()
     event = SimpleNamespace(
         id=event_id,
+        ad_id=ad_id,
         snapshot_id=uuid.uuid4(),
-        fb_ad_id="ad-stale-day",
-        ad_name="Stale Day Ad",
         live_batch_started_at=datetime(2026, 3, 29, 23, 40, tzinfo=UTC),
     )
+    event_fb_ad = SimpleNamespace(
+        fb_ad_id="ad-stale-day",
+        ad_name="Stale Day Ad",
+    )
     cabinet_day_start = datetime(2026, 3, 30, 0, 0, tzinfo=UTC)
+    observer_row = SimpleNamespace(cabinet_day_started_at=cabinet_day_start)
+    observer_result = MagicMock()
+    observer_result.scalar_one_or_none.return_value = observer_row
 
     session = AsyncMock()
-    session.scalar = AsyncMock(side_effect=[event, cabinet_day_start])
+    session.scalar = AsyncMock(side_effect=[event, event_fb_ad])
+    session.execute = AsyncMock(return_value=observer_result)
 
     result = await promote_recommendation_to_enable_task(session, event_id=event_id)
 

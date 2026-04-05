@@ -34,17 +34,24 @@ def _make_state_rows(normal=0, early_signal=0, warning=0, stop=0, disabled=0):
 
 def _make_snapshot(
     *,
-    campaign_name: str,
     spend: str,
     clicks: int,
     leads: int,
     registrations: int,
     deposits: int,
     last_observed_at: datetime,
+    ad_id: object | None = None,
+    campaign_name: str = "",
 ):
-    """Создаёт упрощённый snapshot для helper-тестов performance."""
+    """Создаёт упрощённый snapshot для helper-тестов performance.
+
+    campaign_name принимается для удобства, но хранится как _campaign_name —
+    в реальной системе берётся через ad_context_map.
+    """
     return SimpleNamespace(
-        campaign_name=campaign_name,
+        ad_id=ad_id or uuid.uuid4(),
+        fb_ad_id=f"fb-{uuid.uuid4().hex[:8]}",
+        _campaign_name=campaign_name,
         spend=Decimal(spend),
         clicks=clicks,
         leads=leads,
@@ -102,6 +109,7 @@ def _make_stop_overrun_snapshot(
     offer_id,
     campaign_name: str,
     ad_name: str,
+    ad_id: object | None = None,
     spend: str = "0.00",
     clicks: int = 0,
     cpc: str | None = None,
@@ -111,11 +119,17 @@ def _make_stop_overrun_snapshot(
     cost_per_registration: str | None = None,
     deposits: int = 0,
 ):
-    """Создаёт snapshot для теста перекрута над базовыми стопами."""
+    """Создаёт snapshot для теста перекрута над базовыми стопами.
+
+    offer_id, campaign_name и ad_name передаются через ad_context_map, не как поля snapshot.
+    ad_id используется как ключ в ad_context_map.
+    """
+    _ad_id = ad_id or uuid.uuid4()
     return SimpleNamespace(
-        offer_id=offer_id,
-        campaign_name=campaign_name,
-        ad_name=ad_name,
+        ad_id=_ad_id,
+        _offer_id=offer_id,
+        _campaign_name=campaign_name,
+        _ad_name=ad_name,
         spend=Decimal(spend),
         clicks=clicks,
         cpc=Decimal(cpc) if cpc is not None else None,
@@ -140,7 +154,7 @@ def _make_scalars_result(rows):
 def test_offer_code_schemas_normalize_uppercase():
     from apps.api.main import AdSnapshotSchema, OfferSchema
 
-    offer = OfferSchema(code=" drc_cr2 ", name="Оффер", cpa_amount=Decimal("10"), is_active=True)
+    offer = OfferSchema(code=" drc_cr2 ", cpa_amount=Decimal("10"), is_active=True)
     snapshot = AdSnapshotSchema(
         id="1",
         fb_ad_id="ad-1",
@@ -209,10 +223,8 @@ def test_build_active_incident_schema_marks_manual_attention_after_retry_limit()
 
     now = datetime.now(UTC)
     snapshot = SimpleNamespace(
+        ad_id=uuid.uuid4(),
         fb_ad_id="ad-1",
-        ad_name="Объявление",
-        campaign_name="Campaign",
-        adset_name="Adset",
         alert_state=AlertState.CLAIMED,
         current_stage=AlertStage.STOP,
         delivery_status="UNKNOWN",
@@ -249,7 +261,18 @@ def test_build_active_incident_schema_marks_manual_attention_after_retry_limit()
         for index in range(4)
     ]
 
-    incident = _build_active_incident_schema(snapshot, alert_events=[event], disable_tasks=tasks)
+    ad_ctx = {
+        "fb_ad_id": "ad-1",
+        "ad_name": "Объявление",
+        "campaign_name": "Campaign",
+        "adset_name": "Adset",
+    }
+    incident = _build_active_incident_schema(
+        snapshot,
+        alert_events=[event],
+        disable_tasks=tasks,
+        ad_ctx=ad_ctx,
+    )
 
     assert incident.incident_key == "incident-1"
     assert incident.incident_retry_count == 3
@@ -290,6 +313,15 @@ def test_build_campaign_stop_overrun_rows_returns_aggregated_base_stop_excess_by
             cpc="0.09",
         ),
     ]
+    # Строим ad_context_map из _-полей snapshot
+    ad_context_map = {
+        s.ad_id: {
+            "offer_id": s._offer_id,
+            "campaign_name": s._campaign_name,
+            "ad_name": s._ad_name,
+        }
+        for s in snapshots
+    }
     offer_rule_map = {
         offer_id: (
             SimpleNamespace(id=offer_id, cpa_amount=Decimal("5.00")),
@@ -310,7 +342,11 @@ def test_build_campaign_stop_overrun_rows_returns_aggregated_base_stop_excess_by
         )
     }
 
-    rows = _build_campaign_stop_overrun_rows(snapshots, offer_rule_map)
+    rows = _build_campaign_stop_overrun_rows(
+        snapshots,
+        offer_rule_map,
+        ad_context_map=ad_context_map,
+    )
 
     assert len(rows) == 2
     assert rows[0]["campaign_full"] == "Campaign A"
@@ -364,6 +400,14 @@ def test_build_campaign_stop_overrun_rows_keeps_campaign_when_total_matches_base
             cost_per_lead="0.45",
         ),
     ]
+    ad_context_map = {
+        s.ad_id: {
+            "offer_id": s._offer_id,
+            "campaign_name": s._campaign_name,
+            "ad_name": s._ad_name,
+        }
+        for s in snapshots
+    }
     offer_rule_map = {
         offer_id: (
             SimpleNamespace(id=offer_id, cpa_amount=Decimal("5.00")),
@@ -384,7 +428,11 @@ def test_build_campaign_stop_overrun_rows_keeps_campaign_when_total_matches_base
         )
     }
 
-    rows = _build_campaign_stop_overrun_rows(snapshots, offer_rule_map)
+    rows = _build_campaign_stop_overrun_rows(
+        snapshots,
+        offer_rule_map,
+        ad_context_map=ad_context_map,
+    )
 
     assert len(rows) == 1
     assert rows[0]["campaign_full"] == "Campaign A"
@@ -407,11 +455,11 @@ async def test_list_active_incidents_sorts_by_last_activity(mock_db):
     from apps.api.main import list_active_incidents
 
     now = datetime.now(UTC)
+    old_ad_id = uuid.uuid4()
+    new_ad_id = uuid.uuid4()
     older_snapshot = SimpleNamespace(
+        ad_id=old_ad_id,
         fb_ad_id="ad-old",
-        ad_name="Старый инцидент",
-        campaign_name="Campaign",
-        adset_name="Adset",
         alert_state=AlertState.WARNING_SENT,
         current_stage=AlertStage.WARNING,
         delivery_status="ACTIVE",
@@ -425,10 +473,8 @@ async def test_list_active_incidents_sorts_by_last_activity(mock_db):
         created_at=now - timedelta(hours=2),
     )
     newer_snapshot = SimpleNamespace(
+        ad_id=new_ad_id,
         fb_ad_id="ad-new",
-        ad_name="Новый инцидент",
-        campaign_name="Campaign",
-        adset_name="Adset",
         alert_state=AlertState.CLAIMED,
         current_stage=AlertStage.STOP,
         delivery_status="UNKNOWN",
@@ -443,7 +489,7 @@ async def test_list_active_incidents_sorts_by_last_activity(mock_db):
     )
     events = [
         SimpleNamespace(
-            fb_ad_id="ad-old",
+            ad_id=old_ad_id,
             telegram_group_key="incident-old",
             created_at=now - timedelta(minutes=4),
             reason_title="Предупреждение",
@@ -452,7 +498,7 @@ async def test_list_active_incidents_sorts_by_last_activity(mock_db):
             stage=AlertStage.WARNING,
         ),
         SimpleNamespace(
-            fb_ad_id="ad-new",
+            ad_id=new_ad_id,
             telegram_group_key="incident-new",
             created_at=now - timedelta(minutes=1),
             reason_title="Стоп",
@@ -464,7 +510,7 @@ async def test_list_active_incidents_sorts_by_last_activity(mock_db):
     tasks = [
         SimpleNamespace(
             id="task-new",
-            fb_ad_id="ad-new",
+            ad_id=new_ad_id,
             open_state_token="incident-new",
             status=DisableTaskStatus.RETRYING,
             requested_by_username="bot_auto_stop",
@@ -476,6 +522,21 @@ async def test_list_active_incidents_sorts_by_last_activity(mock_db):
             last_error="Таймаут браузера",
         )
     ]
+    # ad_context_map мок — возвращает контекст по ad_id
+    ad_ctx_map = {
+        old_ad_id: {
+            "fb_ad_id": "ad-old",
+            "ad_name": "Старый инцидент",
+            "campaign_name": "Campaign",
+            "adset_name": "Adset",
+        },
+        new_ad_id: {
+            "fb_ad_id": "ad-new",
+            "ad_name": "Новый инцидент",
+            "campaign_name": "Campaign",
+            "adset_name": "Adset",
+        },
+    }
 
     mock_db.scalar = AsyncMock(return_value=now)
     mock_db.execute = AsyncMock(
@@ -486,7 +547,11 @@ async def test_list_active_incidents_sorts_by_last_activity(mock_db):
         ]
     )
 
-    incidents = await list_active_incidents(limit=10, db=mock_db)
+    with patch(
+        "apps.api.routers.dashboard._load_ad_context_map",
+        new=AsyncMock(return_value=ad_ctx_map),
+    ):
+        incidents = await list_active_incidents(limit=10, db=mock_db)
 
     assert [incident.fb_ad_id for incident in incidents] == ["ad-new", "ad-old"]
     assert incidents[0].latest_disable_task_status == DisableTaskStatus.RETRYING.value
@@ -505,13 +570,15 @@ def mock_db():
 async def test_dashboard_stats_counts(mock_db):
     state_rows = _make_state_rows(normal=10, warning=3, stop=2, disabled=1)
 
-    # Мокаем результат GROUP BY запроса
+    # Мокаем результат GROUP BY запроса + observer_settings (execute)
     group_result = MagicMock()
     group_result.all.return_value = state_rows
-    mock_db.execute = AsyncMock(return_value=group_result)
+    observer_result = MagicMock()
+    observer_result.scalar_one_or_none.return_value = None
+    mock_db.execute = AsyncMock(side_effect=[group_result, observer_result])
 
-    # scalar вызовы: last_scan, cabinet_day_start, active_offers, pending_tasks, disabled_today
-    mock_db.scalar = AsyncMock(side_effect=[None, None, 5, 2, 0, 1])
+    # scalar вызовы: last_scan, active_offers, pending_tasks, pending_enable_tasks, disabled_today
+    mock_db.scalar = AsyncMock(side_effect=[None, 5, 2, 0, 1])
 
     from apps.api.main import get_dashboard_stats
 
@@ -538,8 +605,10 @@ async def test_dashboard_stats_counts(mock_db):
 async def test_dashboard_stats_empty_db(mock_db):
     group_result = MagicMock()
     group_result.all.return_value = []
-    mock_db.execute = AsyncMock(return_value=group_result)
-    mock_db.scalar = AsyncMock(side_effect=[None, None, 0, 0, 0, 0])
+    observer_result = MagicMock()
+    observer_result.scalar_one_or_none.return_value = None
+    mock_db.execute = AsyncMock(side_effect=[group_result, observer_result])
+    mock_db.scalar = AsyncMock(side_effect=[None, 0, 0, 0, 0])
 
     from apps.api.main import get_dashboard_stats
 
@@ -565,8 +634,10 @@ async def test_dashboard_stats_empty_db(mock_db):
 async def test_dashboard_uses_single_group_by_query(mock_db):
     group_result = MagicMock()
     group_result.all.return_value = _make_state_rows(normal=5)
-    mock_db.execute = AsyncMock(return_value=group_result)
-    mock_db.scalar = AsyncMock(side_effect=[None, None, 1, 0, 0, 0])
+    observer_result = MagicMock()
+    observer_result.scalar_one_or_none.return_value = None
+    mock_db.execute = AsyncMock(side_effect=[group_result, observer_result])
+    mock_db.scalar = AsyncMock(side_effect=[None, 1, 0, 0, 0])
 
     from apps.api.main import get_dashboard_stats
 
@@ -576,10 +647,10 @@ async def test_dashboard_uses_single_group_by_query(mock_db):
     ):
         await get_dashboard_stats(db=mock_db)
 
-    # Один execute (GROUP BY) вместо нескольких scalar для каждого состояния
-    assert mock_db.execute.call_count == 1
-    # scalar: last_scan + cabinet_day_start + active_offers + pending_tasks + disabled_today = 5
-    assert mock_db.scalar.call_count == 6
+    # execute: GROUP BY + observer_settings = 2
+    assert mock_db.execute.call_count == 2
+    # scalar: last_scan + active_offers + pending_tasks + pending_enable_tasks + disabled_today = 5
+    assert mock_db.scalar.call_count == 5
 
 
 # Проверяем что dashboard считает ранние сигналы отдельно от warning и stop.
@@ -589,8 +660,10 @@ async def test_dashboard_stats_counts_early_signal_separately(mock_db):
 
     group_result = MagicMock()
     group_result.all.return_value = state_rows
-    mock_db.execute = AsyncMock(return_value=group_result)
-    mock_db.scalar = AsyncMock(side_effect=[None, None, 3, 0, 0, 0])
+    observer_result = MagicMock()
+    observer_result.scalar_one_or_none.return_value = None
+    mock_db.execute = AsyncMock(side_effect=[group_result, observer_result])
+    mock_db.scalar = AsyncMock(side_effect=[None, 3, 0, 0, 0])
 
     from apps.api.main import get_dashboard_stats
 
@@ -613,18 +686,20 @@ async def test_dashboard_stats_includes_observer_runtime_fields(mock_db):
     state_rows = _make_state_rows(normal=2)
     group_result = MagicMock()
     group_result.all.return_value = state_rows
-    mock_db.execute = AsyncMock(return_value=group_result)
+    observer_row = SimpleNamespace(
+        cabinet_day_started_at=now - timedelta(hours=3),
+        worker_status="ERROR",
+        worker_message="Vision запустил профиль без CDP-порта.",
+        worker_heartbeat_at=now,
+        worker_last_error="Vision запустил профиль без CDP-порта.",
+        worker_last_error_at=now - timedelta(seconds=10),
+    )
+    observer_result = MagicMock()
+    observer_result.scalar_one_or_none.return_value = observer_row
+    mock_db.execute = AsyncMock(side_effect=[group_result, observer_result])
     mock_db.scalar = AsyncMock(
         side_effect=[
             now - timedelta(minutes=5),
-            SimpleNamespace(
-                cabinet_day_started_at=now - timedelta(hours=3),
-                worker_status="ERROR",
-                worker_message="Vision запустил профиль без CDP-порта.",
-                worker_heartbeat_at=now,
-                worker_last_error="Vision запустил профиль без CDP-порта.",
-                worker_last_error_at=now - timedelta(seconds=10),
-            ),
             4,
             1,
             0,
@@ -650,29 +725,33 @@ async def test_dashboard_stats_includes_observer_runtime_fields(mock_db):
 # Проверяем что dashboard по умолчанию отдаёт только актуальные задачи отключения без SUCCEEDED
 @pytest.mark.asyncio
 async def test_list_disable_tasks_filters_to_operational_statuses_by_default(mock_db):
+    ad_id_1 = uuid.uuid4()
+    ad_id_2 = uuid.uuid4()
     tasks = [
         SimpleNamespace(
             id="task-1",
-            fb_ad_id="ad-1",
-            ad_name="Ad 1",
+            ad_id=ad_id_1,
             status=DisableTaskStatus.PENDING,
             attempt_count=0,
             last_error=None,
             next_retry_at=None,
             requested_by_username="bot",
+            open_state_token="tok-1",
             created_at=datetime(2026, 3, 29, 15, 0, tzinfo=UTC),
+            updated_at=datetime(2026, 3, 29, 15, 0, tzinfo=UTC),
             completed_at=None,
         ),
         SimpleNamespace(
             id="task-2",
-            fb_ad_id="ad-2",
-            ad_name="Ad 2",
+            ad_id=ad_id_2,
             status=DisableTaskStatus.SUCCEEDED,
             attempt_count=1,
             last_error=None,
             next_retry_at=None,
             requested_by_username="bot",
+            open_state_token="tok-2",
             created_at=datetime(2026, 3, 29, 15, 1, tzinfo=UTC),
+            updated_at=datetime(2026, 3, 29, 15, 2, tzinfo=UTC),
             completed_at=datetime(2026, 3, 29, 15, 2, tzinfo=UTC),
         ),
     ]
@@ -680,9 +759,18 @@ async def test_list_disable_tasks_filters_to_operational_statuses_by_default(moc
     result_mock.scalars.return_value.all.return_value = [tasks[0]]
     mock_db.execute = AsyncMock(return_value=result_mock)
 
+    ad_ctx_map = {
+        ad_id_1: {"fb_ad_id": "ad-1", "ad_name": "Ad 1"},
+        ad_id_2: {"fb_ad_id": "ad-2", "ad_name": "Ad 2"},
+    }
+
     from apps.api.main import list_disable_tasks
 
-    result = await list_disable_tasks(status=None, limit=50, offset=0, db=mock_db)
+    with patch(
+        "apps.api.routers.dashboard._load_ad_context_map",
+        new=AsyncMock(return_value=ad_ctx_map),
+    ):
+        result = await list_disable_tasks(status=None, limit=50, offset=0, db=mock_db)
 
     assert [item.status for item in result] == ["PENDING"]
 
@@ -690,25 +778,33 @@ async def test_list_disable_tasks_filters_to_operational_statuses_by_default(moc
 # Проверяем что dashboard может вернуть терминальные задачи по явному фильтру статуса
 @pytest.mark.asyncio
 async def test_list_disable_tasks_supports_explicit_succeeded_filter(mock_db):
+    ad_id = uuid.uuid4()
     task = SimpleNamespace(
         id="task-2",
-        fb_ad_id="ad-2",
-        ad_name="Ad 2",
+        ad_id=ad_id,
         status=DisableTaskStatus.SUCCEEDED,
         attempt_count=1,
         last_error=None,
         next_retry_at=None,
         requested_by_username="bot",
+        open_state_token="tok-2",
         created_at=datetime(2026, 3, 29, 15, 1, tzinfo=UTC),
+        updated_at=datetime(2026, 3, 29, 15, 2, tzinfo=UTC),
         completed_at=datetime(2026, 3, 29, 15, 2, tzinfo=UTC),
     )
     result_mock = MagicMock()
     result_mock.scalars.return_value.all.return_value = [task]
     mock_db.execute = AsyncMock(return_value=result_mock)
 
+    ad_ctx_map = {ad_id: {"fb_ad_id": "ad-2", "ad_name": "Ad 2"}}
+
     from apps.api.main import list_disable_tasks
 
-    result = await list_disable_tasks(status="SUCCEEDED", limit=50, offset=0, db=mock_db)
+    with patch(
+        "apps.api.routers.dashboard._load_ad_context_map",
+        new=AsyncMock(return_value=ad_ctx_map),
+    ):
+        result = await list_disable_tasks(status="SUCCEEDED", limit=50, offset=0, db=mock_db)
 
     assert [item.status for item in result] == ["SUCCEEDED"]
 
@@ -788,8 +884,17 @@ def test_build_dashboard_performance_payload_aggregates_metrics():
             last_observed_at=now - timedelta(hours=3),
         ),
     ]
+    ad_ctx = {
+        s.ad_id: {"campaign_name": cn}
+        for s, cn in zip(snapshots, ["Campaign A", "Campaign B"], strict=True)
+    }
 
-    payload = _build_dashboard_performance_payload(snapshots, period="today", now=now)
+    payload = _build_dashboard_performance_payload(
+        snapshots,
+        period="today",
+        now=now,
+        ad_context_map=ad_ctx,
+    )
 
     assert payload.summary.spend == Decimal("150.00")
     assert payload.summary.clicks == 300
@@ -799,7 +904,7 @@ def test_build_dashboard_performance_payload_aggregates_metrics():
     assert payload.summary.cpc == Decimal("0.5000")
     assert payload.summary.cpl == Decimal("2.1429")
     assert payload.summary.cpr == Decimal("5.0000")
-    assert payload.summary.spend_per_dep == Decimal("30.0000")
+    assert payload.summary.cost_per_deposit == Decimal("30.0000")
     assert payload.summary.click_to_lead_rate == pytest.approx(23.3)
     assert payload.summary.lead_to_reg_rate == pytest.approx(42.9)
     assert payload.summary.reg_to_dep_rate == pytest.approx(16.7)
@@ -815,6 +920,7 @@ def test_build_dashboard_performance_payload_respects_periods():
     from apps.api.main import _build_dashboard_performance_payload
 
     now = datetime(2026, 3, 28, 12, 0, tzinfo=UTC)
+    names = ["Today campaign", "Within week", "Within month"]
     snapshots = [
         _make_snapshot(
             campaign_name="Today campaign",
@@ -844,10 +950,26 @@ def test_build_dashboard_performance_payload_respects_periods():
             last_observed_at=datetime(2026, 3, 10, 11, 0, tzinfo=UTC),
         ),
     ]
+    ad_ctx = {s.ad_id: {"campaign_name": n} for s, n in zip(snapshots, names, strict=True)}
 
-    today_payload = _build_dashboard_performance_payload(snapshots, period="today", now=now)
-    week_payload = _build_dashboard_performance_payload(snapshots, period="7d", now=now)
-    month_payload = _build_dashboard_performance_payload(snapshots, period="30d", now=now)
+    today_payload = _build_dashboard_performance_payload(
+        snapshots,
+        period="today",
+        now=now,
+        ad_context_map=ad_ctx,
+    )
+    week_payload = _build_dashboard_performance_payload(
+        snapshots,
+        period="7d",
+        now=now,
+        ad_context_map=ad_ctx,
+    )
+    month_payload = _build_dashboard_performance_payload(
+        snapshots,
+        period="30d",
+        now=now,
+        ad_context_map=ad_ctx,
+    )
 
     assert today_payload.summary.spend == Decimal("20.00")
     assert today_payload.summary.deposits == 1
@@ -871,8 +993,9 @@ def test_build_dashboard_performance_payload_merges_archives_with_current_snapsh
             registrations=4,
             deposits=1,
             last_observed_at=now - timedelta(minutes=20),
-        )
+        ),
     ]
+    ad_ctx = {snapshots[0].ad_id: {"campaign_name": "Current campaign"}}
     archives = [
         _make_archive(
             started_at=datetime(2026, 3, 27, 8, 0, tzinfo=UTC),
@@ -901,6 +1024,7 @@ def test_build_dashboard_performance_payload_merges_archives_with_current_snapsh
         now=now,
         cutoff=now - timedelta(days=7),
         archives=archives,
+        ad_context_map=ad_ctx,
     )
 
     assert payload.summary.spend == Decimal("50.00")
@@ -914,6 +1038,7 @@ def test_build_dashboard_performance_payload_uses_local_day_cutoff():
 
     tz = ZoneInfo("Europe/Kaliningrad")
     now = datetime(2026, 3, 29, 0, 30, tzinfo=tz)
+    names = ["Вчера поздно", "Сегодня локально"]
     snapshots = [
         _make_snapshot(
             campaign_name="Вчера поздно",
@@ -934,8 +1059,14 @@ def test_build_dashboard_performance_payload_uses_local_day_cutoff():
             last_observed_at=datetime(2026, 3, 28, 22, 15, tzinfo=UTC),
         ),
     ]
+    ad_ctx = {s.ad_id: {"campaign_name": n} for s, n in zip(snapshots, names, strict=True)}
 
-    payload = _build_dashboard_performance_payload(snapshots, period="today", now=now)
+    payload = _build_dashboard_performance_payload(
+        snapshots,
+        period="today",
+        now=now,
+        ad_context_map=ad_ctx,
+    )
 
     assert payload.summary.spend == Decimal("7.00")
     assert [row.campaign for row in payload.campaigns] == ["Сегодня локально"]
@@ -958,16 +1089,22 @@ def test_build_dashboard_performance_payload_keeps_nulls_for_zero_denominators()
         )
     ]
 
-    payload = _build_dashboard_performance_payload(snapshots, period="today", now=now)
+    ad_ctx = {snapshots[0].ad_id: {"campaign_name": "Zero campaign"}}
+    payload = _build_dashboard_performance_payload(
+        snapshots,
+        period="today",
+        now=now,
+        ad_context_map=ad_ctx,
+    )
 
     assert payload.summary.cpc is None
     assert payload.summary.cpl is None
     assert payload.summary.cpr is None
-    assert payload.summary.spend_per_dep is None
+    assert payload.summary.cost_per_deposit is None
     assert payload.summary.click_to_lead_rate is None
     assert payload.summary.lead_to_reg_rate is None
     assert payload.summary.reg_to_dep_rate is None
-    assert payload.campaigns[0].spend_per_dep is None
+    assert payload.campaigns[0].cost_per_deposit is None
     assert payload.campaigns[0].reg_to_dep_rate is None
 
 
@@ -984,7 +1121,19 @@ async def test_dashboard_performance_today_uses_current_scan_cutoff(mock_db):
 
     from apps.api.main import get_dashboard_performance
 
-    await get_dashboard_performance(period="today", db=mock_db)
+    with (
+        patch(
+            "apps.api.routers.dashboard._load_fake_deposits_map",
+            new_callable=AsyncMock,
+            return_value={},
+        ),
+        patch(
+            "apps.api.routers.dashboard._load_ad_context_map",
+            new_callable=AsyncMock,
+            return_value={},
+        ),
+    ):
+        await get_dashboard_performance(period="today", db=mock_db)
 
     # Первый вызов execute — запрос снэпшотов с фильтром по last_observed_at
     stmt = mock_db.execute.call_args_list[0].args[0]
@@ -998,10 +1147,21 @@ async def test_chart_data_today_uses_local_day_fallback(mock_db):
     empty_result = MagicMock()
     empty_result.all.return_value = []
     empty_result.scalars.return_value.all.return_value = []
+    # observer_settings возвращает None (через execute → scalar_one_or_none)
+    observer_result = MagicMock()
+    observer_result.scalar_one_or_none.return_value = None
     mock_db.execute = AsyncMock(
-        side_effect=[empty_result, empty_result, empty_result, empty_result, empty_result]
+        side_effect=[
+            observer_result,
+            empty_result,
+            empty_result,
+            empty_result,
+            empty_result,
+            empty_result,
+        ]
     )
-    mock_db.scalar = AsyncMock(side_effect=[None, None, None])
+    # scalar: last_scan=None, last_archive_end=None
+    mock_db.scalar = AsyncMock(side_effect=[None, None])
 
     from unittest.mock import patch
 
@@ -1009,10 +1169,28 @@ async def test_chart_data_today_uses_local_day_fallback(mock_db):
 
     now = datetime(2026, 3, 28, 13, 45, tzinfo=ZoneInfo("Europe/Kaliningrad"))
 
-    with patch("apps.api.routers.dashboard._dashboard_now", return_value=now):
+    with (
+        patch("apps.api.routers.dashboard._dashboard_now", return_value=now),
+        patch(
+            "apps.api.routers.dashboard._load_fake_deposits_map",
+            new_callable=AsyncMock,
+            return_value={},
+        ),
+        patch(
+            "apps.api.routers.dashboard._load_ad_context_map",
+            new_callable=AsyncMock,
+            return_value={},
+        ),
+        patch(
+            "apps.api.routers.dashboard._load_offer_rules_for_snapshots",
+            new_callable=AsyncMock,
+            return_value={},
+        ),
+    ):
         await get_chart_data(period="today", db=mock_db)
 
-    stmt = mock_db.execute.call_args_list[0].args[0]
+    # call_args_list[0] = observer_settings, [1] = alerts query
+    stmt = mock_db.execute.call_args_list[1].args[0]
     where_clause = list(stmt._where_criteria)[0]
     assert where_clause.right.value == now.replace(hour=0, minute=0, second=0, microsecond=0)
 
@@ -1045,11 +1223,16 @@ def test_build_dashboard_performance_payload_respects_explicit_cabinet_cutoff():
         ),
     ]
 
+    ad_ctx = {
+        snapshots[0].ad_id: {"campaign_name": "До reset"},
+        snapshots[1].ad_id: {"campaign_name": "После reset"},
+    }
     payload = _build_dashboard_performance_payload(
         snapshots,
         period="today",
         now=now,
         cutoff=cutoff,
+        ad_context_map=ad_ctx,
     )
 
     assert payload.summary.spend == Decimal("4.00")
@@ -1060,27 +1243,41 @@ def test_build_dashboard_performance_payload_respects_explicit_cabinet_cutoff():
 @pytest.mark.asyncio
 async def test_dashboard_performance_endpoint_returns_payload(mock_db):
     observed_at = datetime.now(UTC) - timedelta(minutes=10)
+    snap = _make_snapshot(
+        campaign_name="Campaign A",
+        spend="42.00",
+        clicks=84,
+        leads=14,
+        registrations=7,
+        deposits=2,
+        last_observed_at=observed_at,
+    )
     snapshots_result = MagicMock()
-    snapshots_result.scalars.return_value.all.return_value = [
-        _make_snapshot(
-            campaign_name="Campaign A",
-            spend="42.00",
-            clicks=84,
-            leads=14,
-            registrations=7,
-            deposits=2,
-            last_observed_at=observed_at,
-        )
-    ]
+    snapshots_result.scalars.return_value.all.return_value = [snap]
     # Второй execute — запрос офферов (для ROAS), возвращаем пустой список
     offers_result = MagicMock()
     offers_result.scalars.return_value.all.return_value = []
     mock_db.execute = AsyncMock(side_effect=[snapshots_result, offers_result])
     mock_db.scalar = AsyncMock(return_value=observed_at)
 
+    from unittest.mock import patch
+
     from apps.api.main import get_dashboard_performance
 
-    payload = await get_dashboard_performance(period="today", db=mock_db)
+    ad_ctx = {snap.ad_id: {"campaign_name": "Campaign A"}}
+    with (
+        patch(
+            "apps.api.routers.dashboard._load_ad_context_map",
+            new_callable=AsyncMock,
+            return_value=ad_ctx,
+        ),
+        patch(
+            "apps.api.routers.dashboard._load_fake_deposits_map",
+            new_callable=AsyncMock,
+            return_value={},
+        ),
+    ):
+        payload = await get_dashboard_performance(period="today", db=mock_db)
 
     assert payload.period == "today"
     assert payload.summary.spend == Decimal("42.00")
@@ -1097,15 +1294,17 @@ async def test_dashboard_performance_endpoint_returns_payload(mock_db):
 # Проверяем что ручное создание задачи заполняет все обязательные поля DisableTask
 @pytest.mark.asyncio
 async def test_create_disable_task_sets_required_fields(mock_db):
+    from unittest.mock import patch
+
     from apps.api.main import create_disable_task
 
     snapshot_id = uuid.uuid4()
+    ad_id = uuid.uuid4()
     offer_id = uuid.uuid4()
     snapshot = SimpleNamespace(
         id=snapshot_id,
+        ad_id=ad_id,
         fb_ad_id="123456",
-        ad_name="Test Ad",
-        offer_id=offer_id,
         open_state_token="tok-abc",
     )
 
@@ -1127,13 +1326,18 @@ async def test_create_disable_task_sets_required_fields(mock_db):
 
     mock_db.refresh = AsyncMock(side_effect=_fake_refresh)
 
+    ad_ctx = {ad_id: {"fb_ad_id": "123456", "ad_name": "Test Ad", "offer_id": offer_id}}
     body = SimpleNamespace(fb_ad_id="123456")
-    await create_disable_task(body=body, db=mock_db)
+    with patch(
+        "apps.api.routers.dashboard._load_ad_context_map",
+        new_callable=AsyncMock,
+        return_value=ad_ctx,
+    ):
+        await create_disable_task(body=body, db=mock_db)
 
     # Проверяем что db.add вызван с DisableTask, у которого все поля заполнены
     added_task = mock_db.add.call_args[0][0]
-    assert added_task.fb_ad_id == "123456"
-    assert added_task.ad_name == "Test Ad"
+    assert added_task.ad_id == ad_id
     assert added_task.snapshot_id == snapshot_id
     assert added_task.offer_id == offer_id
     assert added_task.open_state_token == "tok-abc"
@@ -1145,13 +1349,15 @@ async def test_create_disable_task_sets_required_fields(mock_db):
 # Проверяем что при отсутствии open_state_token генерируется новый UUID
 @pytest.mark.asyncio
 async def test_create_disable_task_generates_token_when_missing(mock_db):
+    from unittest.mock import patch
+
     from apps.api.main import create_disable_task
 
+    ad_id = uuid.uuid4()
     snapshot = SimpleNamespace(
         id=uuid.uuid4(),
+        ad_id=ad_id,
         fb_ad_id="789",
-        ad_name="Ad No Token",
-        offer_id=uuid.uuid4(),
         open_state_token=None,
     )
     mock_db.scalar = AsyncMock(side_effect=[snapshot, None])
@@ -1172,8 +1378,14 @@ async def test_create_disable_task_generates_token_when_missing(mock_db):
 
     mock_db.refresh = AsyncMock(side_effect=_fake_refresh)
 
+    ad_ctx = {ad_id: {"fb_ad_id": "789", "ad_name": "Ad No Token", "offer_id": uuid.uuid4()}}
     body = SimpleNamespace(fb_ad_id="789")
-    await create_disable_task(body=body, db=mock_db)
+    with patch(
+        "apps.api.routers.dashboard._load_ad_context_map",
+        new_callable=AsyncMock,
+        return_value=ad_ctx,
+    ):
+        await create_disable_task(body=body, db=mock_db)
 
     # Snapshot должен получить сгенерированный токен
     assert snapshot.open_state_token is not None
@@ -1182,7 +1394,6 @@ async def test_create_disable_task_generates_token_when_missing(mock_db):
 
     added_task = mock_db.add.call_args[0][0]
     assert added_task.idempotency_key.startswith("dashboard_789_")
-    assert added_task.ad_name == "Ad No Token"
 
 
 # Проверяем что для несуществующего snapshot возвращается 404

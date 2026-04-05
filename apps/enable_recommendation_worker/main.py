@@ -7,6 +7,7 @@ import asyncio
 import logging
 
 from sqlalchemy import select
+from sqlalchemy.orm import joinedload
 
 from core.db import get_session_factory
 from core.enable_recommendations.service import (
@@ -15,7 +16,7 @@ from core.enable_recommendations.service import (
     collect_enable_recommendation_candidates,
     persist_enable_recommendation_candidates,
 )
-from core.models import AdSnapshot
+from core.models import AdSnapshot, FbAd, FbAdset
 from core.telegram.delivery import broadcast_enable_recommendation_message
 from core.telegram.renderer import normalize_enable_recommendation_reason
 
@@ -39,11 +40,15 @@ async def process_enable_recommendation_cycle() -> int:
     if created_events:
         async with factory() as session:
             result = await session.execute(
-                select(AdSnapshot).where(
-                    AdSnapshot.fb_ad_id.in_([event.fb_ad_id for event in created_events])
+                select(AdSnapshot)
+                .options(
+                    joinedload(AdSnapshot.fb_ad).joinedload(FbAd.adset).joinedload(FbAdset.campaign)
                 )
+                .where(AdSnapshot.fb_ad_id.in_([event.fb_ad_id for event in created_events]))
             )
-            snapshot_by_ad = {snapshot.fb_ad_id: snapshot for snapshot in result.scalars().all()}
+            snapshot_by_ad = {
+                snapshot.fb_ad_id: snapshot for snapshot in result.scalars().unique().all()
+            }
 
     delivered_count = 0
     for event in created_events:
@@ -53,12 +58,22 @@ async def process_enable_recommendation_cycle() -> int:
             reason_title=event.reason_title,
             reason_text=event.reason_text,
         )
+        # Получаем имена кампании и адсета через цепочку JOIN
+        campaign_name: str | None = None
+        adset_name: str | None = None
+        if snapshot is not None and snapshot.fb_ad is not None:
+            fb_ad = snapshot.fb_ad
+            if fb_ad.adset is not None:
+                adset_name = fb_ad.adset.adset_name
+                if fb_ad.adset.campaign is not None:
+                    campaign_name = fb_ad.adset.campaign.campaign_name
+
         refs = await broadcast_enable_recommendation_message(
             event_id=event.id,
             ad_name=event.ad_name,
             fb_ad_id=event.fb_ad_id,
-            campaign_name=snapshot.campaign_name if snapshot else None,
-            adset_name=snapshot.adset_name if snapshot else None,
+            campaign_name=campaign_name,
+            adset_name=adset_name,
             delivery_status=event.delivery_status,
             recommendation_level=event.recommendation_level.value,
             matched_rule_codes=event.matched_rule_codes or [],

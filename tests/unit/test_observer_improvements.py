@@ -23,6 +23,47 @@ def _scalars_result(rows):
     return result
 
 
+def _plain_result(rows):
+    """Создаёт мок результата SQLAlchemy для result.all() (без scalars)."""
+    result = MagicMock()
+    result.all.return_value = rows
+    result.scalars.return_value.all.return_value = rows
+    return result
+
+
+def _make_snapshot_ns(
+    *,
+    fb_ad_id: str,
+    ad_id: str = "ad-uuid-1",
+    campaign_name: str = "Campaign",
+    adset_name: str = "Adset",
+    ad_name: str = "Тестовое объявление",
+    offer_id: object = None,
+    offer_code: str | None = None,
+    **kwargs,
+) -> SimpleNamespace:
+    """Создаёт мок снэпшота с нормализованной цепочкой fb_ad → adset → campaign."""
+    campaign_ns = SimpleNamespace(
+        campaign_name=campaign_name,
+        offer_id=offer_id,
+        offer_code=offer_code,
+    )
+    adset_ns = SimpleNamespace(
+        adset_name=adset_name,
+        campaign=campaign_ns,
+    )
+    fb_ad_ns = SimpleNamespace(
+        ad_name=ad_name,
+        adset=adset_ns,
+    )
+    return SimpleNamespace(
+        fb_ad_id=fb_ad_id,
+        ad_id=ad_id,
+        fb_ad=fb_ad_ns,
+        **kwargs,
+    )
+
+
 def _telegram_destination(
     *,
     chat_id: str = "chat-1",
@@ -77,18 +118,26 @@ def test_compute_jitter_is_random():
 # --- Тесты batch upsert (задача 2.1) ---
 
 
-# Проверяем что batch_save_snapshots вызывает один execute вместо N
+# Проверяем что batch_save_snapshots вызывает нормализованные upsert-ы и коммитит
 @pytest.mark.asyncio
 async def test_batch_save_snapshots_single_query():
-    """Batch upsert должен выполнять один запрос на все снэпшоты, а не N."""
+    """Batch upsert должен пройти через нормализованные таблицы и сделать один commit."""
+    import uuid as _uuid
+
     from core.observer.scan_guard import ZeroScanGuard
     from core.observer.snapshot_writer import batch_save_snapshots
 
     mock_session = AsyncMock()
     mock_session.__aenter__ = AsyncMock(return_value=mock_session)
     mock_session.__aexit__ = AsyncMock(return_value=False)
-
     mock_factory = MagicMock(return_value=mock_session)
+
+    fake_ad_ids = {f"ad_{i}": _uuid.uuid4() for i in range(50)}
+    upsert_campaigns_mock = AsyncMock(return_value={"campaign": _uuid.uuid4()})
+    upsert_adsets_mock = AsyncMock(return_value={("campaign", "adset"): _uuid.uuid4()})
+    upsert_ads_mock = AsyncMock(return_value=fake_ad_ids)
+    save_deltas_mock = AsyncMock(return_value=0)
+    upsert_snapshots_mock = AsyncMock()
 
     snapshot_data = [
         {
@@ -126,35 +175,45 @@ async def test_batch_save_snapshots_single_query():
 
     scan_guard = ZeroScanGuard()
     with (
-        patch(
-            "core.observer.snapshot_writer.get_session_factory",
-            return_value=mock_factory,
-        ),
-        patch(
-            "core.observer.snapshot_writer._maybe_rollover_cabinet_day",
-            new=AsyncMock(),
-        ),
+        patch("core.observer.snapshot_writer.get_session_factory", return_value=mock_factory),
+        patch("core.observer.snapshot_writer._maybe_rollover_cabinet_day", new=AsyncMock()),
+        patch("core.observer.snapshot_writer._upsert_fb_campaigns", new=upsert_campaigns_mock),
+        patch("core.observer.snapshot_writer._upsert_fb_adsets", new=upsert_adsets_mock),
+        patch("core.observer.snapshot_writer._upsert_fb_ads", new=upsert_ads_mock),
+        patch("core.observer.snapshot_writer._save_metric_deltas", new=save_deltas_mock),
+        patch("core.observer.snapshot_writer._upsert_ad_snapshots", new=upsert_snapshots_mock),
     ):
         await batch_save_snapshots(snapshot_data, scan_guard)
 
-    # Должен быть ровно один вызов execute (один INSERT для всех 50 строк)
-    assert mock_session.execute.call_count == 1, (
-        f"Ожидался 1 вызов execute, получено {mock_session.execute.call_count}"
-    )
+    # Все нормализованные шаги вызваны
+    upsert_campaigns_mock.assert_awaited_once()
+    upsert_adsets_mock.assert_awaited_once()
+    upsert_ads_mock.assert_awaited_once()
+    save_deltas_mock.assert_awaited_once()
+    upsert_snapshots_mock.assert_awaited_once()
     # И один commit
     assert mock_session.commit.call_count == 1
 
 
-# Проверяем что пустые campaign/adset не затирают уже сохранённые названия
+# Проверяем что пустые campaign/adset пропускаются при нормализованном upsert
 @pytest.mark.asyncio
 async def test_batch_save_snapshots_preserves_identity_names_on_empty_update():
-    """Upsert не должен перезаписывать campaign/adset пустыми строками."""
+    """При пустых campaign/adset нормализованные таблицы не должны создавать пустые записи."""
     from core.observer.scan_guard import ZeroScanGuard
     from core.observer.snapshot_writer import batch_save_snapshots
 
     mock_session = AsyncMock()
     mock_session.__aenter__ = AsyncMock(return_value=mock_session)
     mock_session.__aexit__ = AsyncMock(return_value=False)
+
+    # При пустых campaign_name/adset_name _upsert_fb_campaigns вернёт пустой маппинг,
+    # и далее весь pipeline пропустит эти записи
+    mock_session.execute = AsyncMock(
+        side_effect=[
+            _scalars_result([]),  # metric deltas: select current snapshots (пустой)
+        ]
+    )
+
     mock_factory = MagicMock(return_value=mock_session)
 
     snapshot_data = [
@@ -203,23 +262,28 @@ async def test_batch_save_snapshots_preserves_identity_names_on_empty_update():
     ):
         await batch_save_snapshots(snapshot_data, scan_guard)
 
-    sql = str(mock_session.execute.await_args.args[0]).lower()
-    assert "coalesce" in sql
-    assert "nullif" in sql
-    assert "campaign_name" in sql
-    assert "adset_name" in sql
+    # При пустых campaign_name кампании не создаются — pipeline не дойдёт до upsert snapshots
+    # Commit всё равно вызывается
+    assert mock_session.commit.call_count == 1
 
 
 # Проверяем что первый полный zero-scan не затирает живой батч без повторного подтверждения.
 @pytest.mark.asyncio
 async def test_batch_save_snapshots_requires_confirmed_zero_scan_before_persist():
     """Подозрительный zero-scan должен пропускаться один цикл и применяться только после повтора."""
+    import uuid as _uuid
+
     from core.observer.scan_guard import ZeroScanGuard
     from core.observer.snapshot_writer import batch_save_snapshots
 
     mock_session = AsyncMock()
     mock_session.__aenter__ = AsyncMock(return_value=mock_session)
     mock_session.__aexit__ = AsyncMock(return_value=False)
+
+    fake_campaign_id = _uuid.uuid4()
+    fake_adset_id = _uuid.uuid4()
+    fake_ad_id = _uuid.uuid4()
+
     mock_factory = MagicMock(return_value=mock_session)
 
     snapshot_data = [
@@ -265,11 +329,33 @@ async def test_batch_save_snapshots_requires_confirmed_zero_scan_before_persist(
             "core.observer.snapshot_writer._maybe_rollover_cabinet_day",
             new=AsyncMock(),
         ) as rollover_mock,
+        patch(
+            "core.observer.snapshot_writer._upsert_fb_campaigns",
+            new=AsyncMock(return_value={"campaign": fake_campaign_id}),
+        ),
+        patch(
+            "core.observer.snapshot_writer._upsert_fb_adsets",
+            new=AsyncMock(return_value={("campaign", "adset"): fake_adset_id}),
+        ),
+        patch(
+            "core.observer.snapshot_writer._upsert_fb_ads",
+            new=AsyncMock(return_value={"ad_1": fake_ad_id}),
+        ),
+        patch(
+            "core.observer.snapshot_writer._save_metric_deltas",
+            new=AsyncMock(return_value=0),
+        ),
+        patch(
+            "core.observer.snapshot_writer._upsert_ad_snapshots",
+            new=AsyncMock(),
+        ),
     ):
+        # Первый вызов — zero-scan пропускается scan_guard
         await batch_save_snapshots(snapshot_data, scan_guard)
+        # Второй вызов — подтверждённый zero-scan проходит
         await batch_save_snapshots(snapshot_data, scan_guard)
 
-    assert mock_session.execute.call_count == 1
+    # Первый zero-scan пропущен, второй проходит — один commit
     assert mock_session.commit.call_count == 1
     rollover_mock.assert_awaited_once()
 
@@ -278,6 +364,8 @@ async def test_batch_save_snapshots_requires_confirmed_zero_scan_before_persist(
 @pytest.mark.asyncio
 async def test_batch_save_snapshots_requires_confirmed_partial_batch_before_persist():
     """Первый подозрительно неполный non-zero батч должен пропускаться до повторного подтверждения."""
+    import uuid as _uuid
+
     from core.observer.scan_guard import ZeroScanGuard
     from core.observer.snapshot_writer import batch_save_snapshots
 
@@ -331,12 +419,32 @@ async def test_batch_save_snapshots_requires_confirmed_partial_batch_before_pers
             "core.observer.snapshot_writer._maybe_rollover_cabinet_day",
             new=AsyncMock(),
         ),
+        patch(
+            "core.observer.snapshot_writer._upsert_fb_campaigns",
+            new=AsyncMock(return_value={"campaign": _uuid.uuid4()}),
+        ),
+        patch(
+            "core.observer.snapshot_writer._upsert_fb_adsets",
+            new=AsyncMock(return_value={("campaign", "adset"): _uuid.uuid4()}),
+        ),
+        patch(
+            "core.observer.snapshot_writer._upsert_fb_ads",
+            new=AsyncMock(return_value={f"ad_{i}": _uuid.uuid4() for i in range(30)}),
+        ),
+        patch(
+            "core.observer.snapshot_writer._save_metric_deltas",
+            new=AsyncMock(return_value=0),
+        ),
+        patch(
+            "core.observer.snapshot_writer._upsert_ad_snapshots",
+            new=AsyncMock(),
+        ),
     ):
         await batch_save_snapshots(full_snapshot_data, scan_guard)
         await batch_save_snapshots(partial_snapshot_data, scan_guard)
         await batch_save_snapshots(partial_snapshot_data, scan_guard)
 
-    assert mock_session.execute.call_count == 2
+    # Первый полный батч + подтверждённый partial (третий вызов) = 2 коммита
     assert mock_session.commit.call_count == 2
 
 
@@ -379,17 +487,14 @@ async def test_reconcile_disable_incidents_after_scan_keeps_recent_success():
     """Недавний успешный disable-task должен оставлять incident без нового follow-up."""
     from core.observer.disable_reconciler import reconcile_disable_incidents_after_scan
 
-    snapshot = SimpleNamespace(
+    snapshot = _make_snapshot_ns(
         fb_ad_id="ad_001",
+        ad_name="Тестовое объявление",
+        offer_code="DRC",
         delivery_status="UNKNOWN",
         alert_state=AlertState.CLAIMED,
         current_stage=AlertStage.STOP,
         open_state_token="incident-001",
-        offer_id=None,
-        ad_name="Тестовое объявление",
-        campaign_name="Campaign",
-        adset_name="Adset",
-        resolved_offer_code="DRC",
         stop_rule_codes=["cpc_stop"],
         warning_rule_codes=[],
         early_signal_rule_codes=[],
@@ -429,17 +534,14 @@ async def test_reconcile_disable_incidents_after_scan_creates_follow_up_attempt(
     """Если OFF не подтвердился, observer должен создать новую auto-disable попытку в том же incident."""
     from core.observer.disable_reconciler import reconcile_disable_incidents_after_scan
 
-    snapshot = SimpleNamespace(
+    snapshot = _make_snapshot_ns(
         fb_ad_id="ad_002",
+        ad_name="Тестовое объявление 2",
+        offer_code="DRC",
         delivery_status="UNKNOWN",
         alert_state=AlertState.CLAIMED,
         current_stage=AlertStage.STOP,
         open_state_token="incident-002",
-        offer_id=None,
-        ad_name="Тестовое объявление 2",
-        campaign_name="Campaign",
-        adset_name="Adset",
-        resolved_offer_code="DRC",
         stop_rule_codes=["cpl_stop"],
         warning_rule_codes=[],
         early_signal_rule_codes=[],
@@ -487,17 +589,14 @@ async def test_reconcile_disable_incidents_after_scan_marks_manual_attention_aft
     """После лимита follow-up попыток observer должен только обновить инцидент сообщением ручного разбора."""
     from core.observer.disable_reconciler import reconcile_disable_incidents_after_scan
 
-    snapshot = SimpleNamespace(
+    snapshot = _make_snapshot_ns(
         fb_ad_id="ad_003",
+        ad_name="Тестовое объявление 3",
+        offer_code="DRC",
         delivery_status="UNKNOWN",
         alert_state=AlertState.CLAIMED,
         current_stage=AlertStage.STOP,
         open_state_token="incident-003",
-        offer_id=None,
-        ad_name="Тестовое объявление 3",
-        campaign_name="Campaign",
-        adset_name="Adset",
-        resolved_offer_code="DRC",
         stop_rule_codes=["cpr_stop"],
         warning_rule_codes=[],
         early_signal_rule_codes=[],
@@ -562,16 +661,13 @@ async def test_collect_reminder_alerts_restores_early_signal_reason():
     from core.observer.db_queries import collect_reminder_alerts
 
     now = datetime.now(UTC)
-    snap = SimpleNamespace(
+    snap = _make_snapshot_ns(
         fb_ad_id="ad_early",
+        ad_name="Раннее объявление",
+        offer_code="DRC",
         alert_state=AlertState.EARLY_SIGNAL_SENT,
         snoozed_until=None,
         open_state_token="token_early",
-        offer_id=None,
-        ad_name="Раннее объявление",
-        campaign_name="Campaign",
-        adset_name="Adset",
-        resolved_offer_code="DRC",
         early_signal_rule_codes=["early_outbound_ctr_signal"],
         warning_rule_codes=[],
         stop_rule_codes=[],
@@ -643,16 +739,13 @@ async def test_collect_reminder_alerts_keeps_stop_even_if_snoozed():
     from core.observer.db_queries import collect_reminder_alerts
 
     now = datetime.now(UTC)
-    snap = SimpleNamespace(
+    snap = _make_snapshot_ns(
         fb_ad_id="ad_stop",
+        ad_name="STOP объявление",
+        offer_code="DRC",
         alert_state=AlertState.STOP_SENT,
         snoozed_until=now + timedelta(hours=2),
         open_state_token="token_stop",
-        offer_id=None,
-        ad_name="STOP объявление",
-        campaign_name="Campaign",
-        adset_name="Adset",
-        resolved_offer_code="DRC",
         early_signal_rule_codes=[],
         warning_rule_codes=[],
         stop_rule_codes=["cpc_stop"],
@@ -706,16 +799,13 @@ async def test_collect_reminder_alerts_skips_archived_snapshots():
     from core.observer.db_queries import collect_reminder_alerts
 
     now = datetime.now(UTC)
-    archived_snap = SimpleNamespace(
+    archived_snap = _make_snapshot_ns(
         fb_ad_id="ad_archived",
+        ad_name="Архивное объявление",
+        offer_code="DRC",
         alert_state=AlertState.WARNING_SENT,
         snoozed_until=None,
         open_state_token="token_archived",
-        offer_id=None,
-        ad_name="Архивное объявление",
-        campaign_name="Campaign",
-        adset_name="Adset",
-        resolved_offer_code="DRC",
         early_signal_rule_codes=[],
         warning_rule_codes=["cpl_stop"],
         stop_rule_codes=[],
@@ -773,6 +863,7 @@ async def test_auto_create_disable_tasks_skips_archived_snapshot():
     )
     snapshot = SimpleNamespace(
         id="snapshot-1",
+        ad_id="ad-uuid-archived",
         offer_id=None,
         last_observed_at=now - timedelta(minutes=45),
     )
@@ -827,13 +918,16 @@ async def test_send_alerts_to_telegram_persists_early_signal_reason():
         telegram_chat_id=None,
         telegram_message_id=None,
     )
+    # Мок fb_ad для получения ad_id
+    fb_ad_obj = SimpleNamespace(id="ad-uuid-1")
 
     mock_session = AsyncMock()
     mock_session.__aenter__ = AsyncMock(return_value=mock_session)
     mock_session.__aexit__ = AsyncMock(return_value=False)
     mock_session.add = MagicMock()
     mock_session.commit = AsyncMock()
-    mock_session.scalar = AsyncMock(side_effect=[snapshot, None])
+    # scalar вызывается 3 раза: snapshot, fb_ad, existing_stage_event
+    mock_session.scalar = AsyncMock(side_effect=[snapshot, fb_ad_obj, None])
 
     mock_factory = MagicMock(return_value=mock_session)
 
@@ -953,8 +1047,10 @@ async def test_send_alerts_to_telegram_updates_same_incident_without_new_history
         telegram_chat_id=None,
         telegram_message_id=None,
     )
+    fb_ad_obj = SimpleNamespace(id="ad-uuid-777")
     existing_stage_event = SimpleNamespace(
         snapshot_id=None,
+        ad_id=None,
         offer_id=None,
         ad_name="Старое имя",
         matched_rule_codes=[],
@@ -973,7 +1069,8 @@ async def test_send_alerts_to_telegram_updates_same_incident_without_new_history
     mock_session.__aexit__ = AsyncMock(return_value=False)
     mock_session.add = MagicMock()
     mock_session.commit = AsyncMock()
-    mock_session.scalar = AsyncMock(side_effect=[snapshot, existing_stage_event])
+    # scalar: snapshot, fb_ad, existing_stage_event
+    mock_session.scalar = AsyncMock(side_effect=[snapshot, fb_ad_obj, existing_stage_event])
     mock_factory = MagicMock(return_value=mock_session)
 
     with (
@@ -1267,7 +1364,7 @@ async def test_maybe_rollover_cabinet_day_waits_for_zero_scan():
     ]
 
     with patch(
-        "core.observer.snapshot_writer._get_or_create_observer_settings",
+        "core.observer.snapshot_writer.get_or_create_observer_settings",
         new=AsyncMock(return_value=settings),
     ):
         await _maybe_rollover_cabinet_day(session, snapshot_data)

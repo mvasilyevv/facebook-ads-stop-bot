@@ -50,9 +50,14 @@ async def test_reconcile_enable_tasks_retries_stale_running_task():
     stale_time = now - timedelta(minutes=10)
     task = FakeTask(created_at=stale_time, updated_at=stale_time)
     session = AsyncMock()
-    session.scalar = AsyncMock(side_effect=[None, None])
+    # scalar: last_scan=None → active_cutoff=None, cabinet_day_start=None
+    session.scalar = AsyncMock(return_value=None)
+    # execute: get_observer_settings, completed_rows, stale_running_tasks
+    obs_result = MagicMock()
+    obs_result.scalar_one_or_none.return_value = None
     session.execute = AsyncMock(
         side_effect=[
+            obs_result,
             _rows_result([]),
             _rows_result([(task, None)]),
         ]
@@ -80,9 +85,14 @@ async def test_reconcile_enable_tasks_fails_stale_task_when_attempts_exhausted()
         updated_at=stale_time,
     )
     session = AsyncMock()
-    session.scalar = AsyncMock(side_effect=[None, None])
+    # scalar: last_scan=None → active_cutoff=None, cabinet_day_start=None
+    session.scalar = AsyncMock(return_value=None)
+    # execute: get_observer_settings, completed_rows, stale_running_tasks
+    obs_result = MagicMock()
+    obs_result.scalar_one_or_none.return_value = None
     session.execute = AsyncMock(
         side_effect=[
+            obs_result,
             _rows_result([]),
             _rows_result([(task, None)]),
         ]
@@ -110,9 +120,16 @@ async def test_reconcile_enable_tasks_cancels_previous_cabinet_day_task():
     task.recommendation_event_id = "event-001"
     stale_event = MagicMock(live_batch_started_at=now - timedelta(hours=2))
     session = AsyncMock()
-    session.scalar = AsyncMock(side_effect=[now, now - timedelta(hours=1)])
+    # scalar: last_scan=now
+    session.scalar = AsyncMock(return_value=now)
+    # execute: get_observer_settings (cabinet_day_started_at=now-1h),
+    #   previous_day_tasks, archived_tasks, stale_running_tasks, completed_tasks
+    obs_settings = MagicMock(cabinet_day_started_at=now - timedelta(hours=1))
+    obs_result = MagicMock()
+    obs_result.scalar_one_or_none.return_value = obs_settings
     session.execute = AsyncMock(
         side_effect=[
+            obs_result,
             _rows_result([(task, stale_event)]),
             _rows_result([]),
             _rows_result([]),

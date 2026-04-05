@@ -11,6 +11,7 @@ from decimal import Decimal
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from core.domain import AlertStage, EnableRecommendationLevel, EnableTaskStatus
 from core.live_batch import (
@@ -23,6 +24,8 @@ from core.models import (
     AdSnapshot,
     EnableRecommendationEvent,
     EnableTask,
+    FbAd,
+    FbAdset,
     Offer,
     OfferRuleConfig,
 )
@@ -73,13 +76,55 @@ class EnableTaskPromotionResult:
     task_status: str | None = None
 
 
+def _snapshot_ad_name(snapshot: AdSnapshot) -> str:
+    """Имя объявления через цепочку fb_ad."""
+    return snapshot.fb_ad.ad_name if snapshot.fb_ad else ""
+
+
+def _snapshot_campaign_name(snapshot: AdSnapshot) -> str:
+    """Имя кампании через цепочку fb_ad → adset → campaign."""
+    fb_ad = snapshot.fb_ad
+    if fb_ad and fb_ad.adset and fb_ad.adset.campaign:
+        return fb_ad.adset.campaign.campaign_name
+    return ""
+
+
+def _snapshot_adset_name(snapshot: AdSnapshot) -> str:
+    """Имя адсета через цепочку fb_ad → adset."""
+    fb_ad = snapshot.fb_ad
+    if fb_ad and fb_ad.adset:
+        return fb_ad.adset.adset_name
+    return ""
+
+
+def _snapshot_offer_id(snapshot: AdSnapshot) -> _uuid.UUID | None:
+    """offer_id через цепочку fb_ad → adset → campaign."""
+    fb_ad = snapshot.fb_ad
+    if fb_ad and fb_ad.adset and fb_ad.adset.campaign:
+        return fb_ad.adset.campaign.offer_id
+    return None
+
+
+def _snapshot_offer_code(snapshot: AdSnapshot) -> str | None:
+    """offer_code через цепочку fb_ad → adset → campaign."""
+    fb_ad = snapshot.fb_ad
+    if fb_ad and fb_ad.adset and fb_ad.adset.campaign:
+        return fb_ad.adset.campaign.offer_code
+    return None
+
+
+def _snapshot_selectinload() -> selectinload:
+    """Стандартная цепочка eager-load для snapshot → fb_ad → adset → campaign."""
+    return selectinload(AdSnapshot.fb_ad).selectinload(FbAd.adset).selectinload(FbAdset.campaign)
+
+
 def _build_scanned_row_from_snapshot(snapshot: AdSnapshot) -> ScannedAdRow:
     """Преобразует snapshot в ScannedAdRow для evaluator."""
     return ScannedAdRow(
         fb_ad_id=snapshot.fb_ad_id,
-        campaign_name=snapshot.campaign_name,
-        adset_name=snapshot.adset_name,
-        ad_name=snapshot.ad_name,
+        campaign_name=_snapshot_campaign_name(snapshot),
+        adset_name=_snapshot_adset_name(snapshot),
+        ad_name=_snapshot_ad_name(snapshot),
         delivery_status=snapshot.delivery_status,
         spend=Decimal(snapshot.spend),
         budget=getattr(snapshot, "budget", "") or "",
@@ -114,7 +159,7 @@ def _build_scanned_row_from_snapshot(snapshot: AdSnapshot) -> ScannedAdRow:
             else None
         ),
         deposits=int(snapshot.deposits or 0),
-        resolved_offer_code=snapshot.resolved_offer_code,
+        resolved_offer_code=_snapshot_offer_code(snapshot),
     )
 
 
@@ -266,7 +311,7 @@ async def collect_enable_recommendation_candidates_for_snapshots(
     eligible_snapshots = [
         snapshot
         for snapshot in snapshots
-        if snapshot.offer_id is not None
+        if _snapshot_offer_id(snapshot) is not None
         and snapshot.delivery_status in RECOMMENDATION_DELIVERY_STATUSES
     ]
     if not eligible_snapshots:
@@ -274,13 +319,14 @@ async def collect_enable_recommendation_candidates_for_snapshots(
 
     observer_thresholds = await _load_observer_rule_settings(session)
     offer_ids = [
-        snapshot.offer_id for snapshot in eligible_snapshots if snapshot.offer_id is not None
+        oid for snapshot in eligible_snapshots if (oid := _snapshot_offer_id(snapshot)) is not None
     ]
     offer_map = await _load_offer_rule_map(session, offer_ids=offer_ids)
 
     candidates: list[EnableRecommendationCandidate] = []
     for snapshot in eligible_snapshots:
-        offer_bundle = offer_map.get(snapshot.offer_id)
+        s_offer_id = _snapshot_offer_id(snapshot)
+        offer_bundle = offer_map.get(s_offer_id) if s_offer_id else None
         if offer_bundle is None:
             continue
         offer, rule_config = offer_bundle
@@ -311,9 +357,9 @@ async def collect_enable_recommendation_candidates_for_snapshots(
             EnableRecommendationCandidate(
                 ad_id=snapshot.ad_id,
                 snapshot_id=snapshot.id,
-                offer_id=snapshot.offer_id,
+                offer_id=s_offer_id,
                 fb_ad_id=snapshot.fb_ad_id,
-                ad_name=snapshot.ad_name,
+                ad_name=_snapshot_ad_name(snapshot),
                 delivery_status=snapshot.delivery_status,
                 recommendation_level=recommendation_level,
                 matched_rule_codes=evaluation.matched_rule_codes,
@@ -341,6 +387,7 @@ async def collect_enable_recommendation_candidates(
     live_batch_started_at = compute_live_batch_marker(last_scan, window=LIVE_BATCH_WINDOW)
     snapshots_result = await session.execute(
         select(AdSnapshot)
+        .options(_snapshot_selectinload())
         .where(
             AdSnapshot.last_observed_at >= batch_start,
             AdSnapshot.delivery_status.in_(RECOMMENDATION_DELIVERY_STATUSES),
@@ -452,32 +499,49 @@ async def promote_recommendation_to_enable_task(
             detail="❌ Не удалось создать задачу на включение — рекомендация не найдена.",
         )
 
+    # Загружаем fb_ad для event, чтобы получить fb_ad_id и ad_name
+    event_fb_ad = await session.scalar(
+        select(FbAd)
+        .options(selectinload(FbAd.adset).selectinload(FbAdset.campaign))
+        .where(FbAd.id == event.ad_id)
+    )
+    event_fb_ad_id = event_fb_ad.fb_ad_id if event_fb_ad else ""
+    event_ad_name = event_fb_ad.ad_name if event_fb_ad else ""
+
     _obs_settings = await get_observer_settings(session)
     cabinet_day_start = _obs_settings.cabinet_day_started_at if _obs_settings else None
     if cabinet_day_start is not None and event.live_batch_started_at < cabinet_day_start:
         return EnableTaskPromotionResult(
             outcome="stale_cabinet_day",
-            fb_ad_id=event.fb_ad_id,
-            ad_name=event.ad_name,
+            fb_ad_id=event_fb_ad_id,
+            ad_name=event_ad_name,
             detail="⚠️ Рекомендация устарела: она была создана в прошлых сутках кабинета.",
         )
 
     snapshot = None
     if event.snapshot_id is not None:
         snapshot = await session.scalar(
-            select(AdSnapshot).where(AdSnapshot.id == event.snapshot_id)
+            select(AdSnapshot)
+            .options(_snapshot_selectinload())
+            .where(AdSnapshot.id == event.snapshot_id)
         )
     if snapshot is None:
         snapshot = await session.scalar(
-            select(AdSnapshot).where(AdSnapshot.fb_ad_id == event.fb_ad_id)
+            select(AdSnapshot)
+            .options(_snapshot_selectinload())
+            .where(AdSnapshot.fb_ad_id == event_fb_ad_id)
         )
     if snapshot is None:
         return EnableTaskPromotionResult(
             outcome="snapshot_not_found",
-            fb_ad_id=event.fb_ad_id,
-            ad_name=event.ad_name,
+            fb_ad_id=event_fb_ad_id,
+            ad_name=event_ad_name,
             detail="❌ Не удалось создать задачу на включение — объявление не найдено.",
         )
+
+    # Кэшируем нормализованные поля для snapshot
+    s_ad_name = _snapshot_ad_name(snapshot)
+    s_offer_id = _snapshot_offer_id(snapshot)
 
     last_scan, batch_start = await load_live_batch_bounds(session)
     if (
@@ -488,7 +552,7 @@ async def promote_recommendation_to_enable_task(
         return EnableTaskPromotionResult(
             outcome="stale_batch",
             fb_ad_id=snapshot.fb_ad_id,
-            ad_name=snapshot.ad_name,
+            ad_name=s_ad_name,
             detail="⚠️ Рекомендация устарела: объявление уже не входит в актуальный срез.",
         )
 
@@ -496,26 +560,24 @@ async def promote_recommendation_to_enable_task(
         return EnableTaskPromotionResult(
             outcome="not_disabled",
             fb_ad_id=snapshot.fb_ad_id,
-            ad_name=snapshot.ad_name,
+            ad_name=s_ad_name,
             detail="⚠️ Рекомендация устарела: объявление уже не выключено.",
         )
 
-    if snapshot.offer_id is None:
+    if s_offer_id is None:
         return EnableTaskPromotionResult(
             outcome="offer_not_found",
             fb_ad_id=snapshot.fb_ad_id,
-            ad_name=snapshot.ad_name,
+            ad_name=s_ad_name,
             detail="⚠️ Рекомендация устарела: для объявления больше не найден оффер.",
         )
 
-    offer_bundle = (await _load_offer_rule_map(session, offer_ids=[snapshot.offer_id])).get(
-        snapshot.offer_id
-    )
+    offer_bundle = (await _load_offer_rule_map(session, offer_ids=[s_offer_id])).get(s_offer_id)
     if offer_bundle is None or offer_bundle[1] is None:
         return EnableTaskPromotionResult(
             outcome="rules_not_found",
             fb_ad_id=snapshot.fb_ad_id,
-            ad_name=snapshot.ad_name,
+            ad_name=s_ad_name,
             detail="⚠️ Рекомендация устарела: для оффера нет актуальных правил.",
         )
 
@@ -531,21 +593,21 @@ async def promote_recommendation_to_enable_task(
         return EnableTaskPromotionResult(
             outcome="blocked_stop",
             fb_ad_id=snapshot.fb_ad_id,
-            ad_name=snapshot.ad_name,
+            ad_name=s_ad_name,
             detail="⚠️ Рекомендация устарела: объявление сейчас уже в стоп-зоне.",
         )
     if recommendation_level == EnableRecommendationLevel.WARNING:
         return EnableTaskPromotionResult(
             outcome="blocked_warning",
             fb_ad_id=snapshot.fb_ad_id,
-            ad_name=snapshot.ad_name,
+            ad_name=s_ad_name,
             detail="⚠️ Рекомендация устарела: у объявления сейчас активен warning.",
         )
     if recommendation_level is None:
         return EnableTaskPromotionResult(
             outcome="blocked_recommendation",
             fb_ad_id=snapshot.fb_ad_id,
-            ad_name=snapshot.ad_name,
+            ad_name=s_ad_name,
             detail="⚠️ Рекомендация устарела: объявление больше не проходит строгую проверку на включение.",
         )
 
@@ -570,7 +632,7 @@ async def promote_recommendation_to_enable_task(
             return EnableTaskPromotionResult(
                 outcome="requeued",
                 fb_ad_id=snapshot.fb_ad_id,
-                ad_name=snapshot.ad_name,
+                ad_name=s_ad_name,
                 created_new=False,
                 detail="✅ Существующая задача на включение возвращена в очередь.",
                 task_id=str(existing_task.id),
@@ -580,7 +642,7 @@ async def promote_recommendation_to_enable_task(
         return EnableTaskPromotionResult(
             outcome="existing",
             fb_ad_id=snapshot.fb_ad_id,
-            ad_name=snapshot.ad_name,
+            ad_name=s_ad_name,
             created_new=False,
             detail="ℹ️ Задача на включение уже была создана ранее.",
             task_id=str(existing_task.id),
@@ -600,7 +662,7 @@ async def promote_recommendation_to_enable_task(
     return EnableTaskPromotionResult(
         outcome="created",
         fb_ad_id=snapshot.fb_ad_id,
-        ad_name=snapshot.ad_name,
+        ad_name=s_ad_name,
         created_new=True,
         detail="✅ Создана задача на включение.",
         task_id=str(task.id),
@@ -614,7 +676,7 @@ async def cleanup_orphaned_recommendation_events(session: AsyncSession) -> int:
     Returns:
         Количество удалённых записей.
     """
-    cutoff = datetime.now(timezone=UTC) - timedelta(days=7)
+    cutoff = datetime.now(UTC) - timedelta(days=7)
     result = await session.execute(
         delete(EnableRecommendationEvent).where(
             EnableRecommendationEvent.created_at < cutoff,

@@ -11,21 +11,18 @@ import { useState, useCallback } from 'react';
  * @returns {{ sortKey, sortDir, handleSort, sortRows }}
  */
 export function useTableSort(defaultKey, defaultDir = 'desc') {
-  const [sortKey, setSortKey] = useState(defaultKey);
-  const [sortDir, setSortDir] = useState(defaultDir);
+  const [state, setState] = useState({ key: defaultKey, dir: defaultDir });
 
   const handleSort = useCallback((key) => {
-    setSortKey((prev) => {
-      if (prev === key) {
-        setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
-        return prev;
+    setState((prev) => {
+      if (prev.key === key) {
+        return { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' };
       }
-      setSortDir('desc');
-      return key;
+      return { key, dir: 'desc' };
     });
   }, []);
 
-  return { sortKey, sortDir, handleSort };
+  return { sortKey: state.key, sortDir: state.dir, handleSort };
 }
 
 /**

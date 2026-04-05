@@ -48,15 +48,14 @@ def test_ad_snapshots_unique_index_on_fb_ad_id():
     assert fb_ad_unique is not None, "Уникальный индекс по fb_ad_id не найден в ad_snapshots"
 
 
-# Проверяем наличие составного индекса (offer_id, alert_state) в ad_snapshots.
-def test_ad_snapshots_composite_offer_alert_index():
+# Проверяем наличие индекса по ad_id в ad_snapshots (FK на fb_ads после нормализации).
+def test_ad_snapshots_ad_id_index():
     from core.models import AdSnapshot
 
     table = AdSnapshot.__table__
     cols_sets = [frozenset(c.name for c in idx.columns) for idx in table.indexes]
-    assert frozenset({"offer_id", "alert_state"}) in cols_sets, (
-        "Составной индекс (offer_id, alert_state) не найден в ad_snapshots"
-    )
+    has_ad_id_index = any("ad_id" in cs for cs in cols_sets)
+    assert has_ad_id_index, "Индекс по ad_id не найден в ad_snapshots"
 
 
 # Проверяем наличие составного индекса (last_observed_at, alert_state) в ad_snapshots.
@@ -102,14 +101,14 @@ def test_disable_tasks_queue_composite_index():
     )
 
 
-# Проверяем наличие составного индекса (fb_ad_id, open_state_token) в disable_tasks.
+# Проверяем наличие составного индекса (ad_id, open_state_token) в disable_tasks.
 def test_disable_tasks_ad_incident_composite_index():
     from core.models import DisableTask
 
     table = DisableTask.__table__
     cols_sets = [frozenset(c.name for c in idx.columns) for idx in table.indexes]
-    assert frozenset({"fb_ad_id", "open_state_token"}) in cols_sets, (
-        "Составной индекс (fb_ad_id, open_state_token) не найден в disable_tasks"
+    assert frozenset({"ad_id", "open_state_token"}) in cols_sets, (
+        "Составной индекс (ad_id, open_state_token) не найден в disable_tasks"
     )
 
 

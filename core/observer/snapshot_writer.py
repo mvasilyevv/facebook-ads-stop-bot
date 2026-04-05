@@ -10,6 +10,8 @@ from decimal import Decimal
 
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from core.cabinet_day import (
     build_cabinet_day_archive_payload,
@@ -17,17 +19,22 @@ from core.cabinet_day import (
     is_cabinet_day_reset_scan,
 )
 from core.db import get_session_factory
-from core.models import AdMetricHistory, AdSnapshot, CabinetDayArchive, FbAd
+from core.models import (
+    AdMetricHistory,
+    AdSnapshot,
+    CabinetDayArchive,
+    FbAd,
+    FbAdset,
+    FbCampaign,
+)
 from core.observer.scan_guard import ZeroScanGuard
 from core.settings_queries import get_or_create_observer_settings
 
 logger = logging.getLogger(__name__)
 
 
-async def _maybe_rollover_cabinet_day(session, snapshot_data: list[dict]) -> None:
+async def _maybe_rollover_cabinet_day(session: AsyncSession, snapshot_data: list[dict]) -> None:
     """Переводит границу суток кабинета при полном zero-scan и архивирует прошлый день."""
-    from sqlalchemy import select
-
     if not snapshot_data:
         return
 
@@ -38,7 +45,9 @@ async def _maybe_rollover_cabinet_day(session, snapshot_data: list[dict]) -> Non
     )
     is_zero_scan = is_cabinet_day_reset_scan(snapshot_data)
 
-    stmt = select(AdSnapshot)
+    stmt = select(AdSnapshot).options(
+        selectinload(AdSnapshot.fb_ad).selectinload(FbAd.adset).selectinload(FbAdset.campaign),
+    )
     if settings.cabinet_day_started_at is not None:
         stmt = stmt.where(AdSnapshot.last_observed_at >= settings.cabinet_day_started_at)
 
@@ -117,15 +126,128 @@ _TRACKED_METRICS = (
 )
 
 
-async def _upsert_fb_ads(
-    session,
+async def _upsert_fb_campaigns(
+    session: AsyncSession,
     snapshot_data: list[dict],
+) -> dict[str, _uuid.UUID]:
+    """Upsert справочника fb_campaigns и возврат маппинга campaign_name → id.
+
+    Args:
+        session: Async SQLAlchemy сессия.
+        snapshot_data: Список словарей с данными снэпшотов.
+
+    Returns:
+        Маппинг campaign_name → UUID id записи в fb_campaigns.
+    """
+    now = datetime.now(UTC)
+    # Собираем уникальные кампании
+    campaigns_seen: dict[str, dict] = {}
+    for item in snapshot_data:
+        cname = item.get("campaign_name", "")
+        if not cname or cname in campaigns_seen:
+            continue
+        campaigns_seen[cname] = {
+            "id": _uuid.uuid4(),
+            "campaign_name": cname,
+            "offer_id": item.get("offer_id"),
+            "offer_code": item.get("resolved_offer_code"),
+            "first_seen_at": now,
+            "last_seen_at": now,
+        }
+
+    if not campaigns_seen:
+        return {}
+
+    rows = list(campaigns_seen.values())
+    stmt = pg_insert(FbCampaign).values(rows)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["campaign_name"],
+        set_={
+            "offer_id": stmt.excluded.offer_id,
+            "offer_code": stmt.excluded.offer_code,
+            "last_seen_at": stmt.excluded.last_seen_at,
+            "updated_at": func.now(),
+        },
+    )
+    await session.execute(stmt)
+
+    # Загружаем маппинг campaign_name → id
+    names = list(campaigns_seen.keys())
+    result = await session.execute(
+        select(FbCampaign.campaign_name, FbCampaign.id).where(FbCampaign.campaign_name.in_(names))
+    )
+    return {row.campaign_name: row.id for row in result.all()}
+
+
+async def _upsert_fb_adsets(
+    session: AsyncSession,
+    snapshot_data: list[dict],
+    campaign_id_map: dict[str, _uuid.UUID],
+) -> dict[tuple[str, str], _uuid.UUID]:
+    """Upsert справочника fb_adsets и возврат маппинга (campaign_name, adset_name) → id.
+
+    Args:
+        session: Async SQLAlchemy сессия.
+        snapshot_data: Список словарей с данными снэпшотов.
+        campaign_id_map: Маппинг campaign_name → fb_campaigns.id.
+
+    Returns:
+        Маппинг (campaign_name, adset_name) → UUID id записи в fb_adsets.
+    """
+    now = datetime.now(UTC)
+    adsets_seen: dict[tuple[str, str], dict] = {}
+    for item in snapshot_data:
+        cname = item.get("campaign_name", "")
+        aname = item.get("adset_name", "")
+        campaign_id = campaign_id_map.get(cname)
+        if not campaign_id or not aname:
+            continue
+        key = (cname, aname)
+        if key in adsets_seen:
+            continue
+        adsets_seen[key] = {
+            "id": _uuid.uuid4(),
+            "adset_name": aname,
+            "campaign_id": campaign_id,
+            "first_seen_at": now,
+            "last_seen_at": now,
+        }
+
+    if not adsets_seen:
+        return {}
+
+    rows = list(adsets_seen.values())
+    stmt = pg_insert(FbAdset).values(rows)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["campaign_id", "adset_name"],
+        set_={
+            "last_seen_at": stmt.excluded.last_seen_at,
+            "updated_at": func.now(),
+        },
+    )
+    await session.execute(stmt)
+
+    # Загружаем маппинг (campaign_name, adset_name) → id
+    campaign_ids = list(campaign_id_map.values())
+    result = await session.execute(
+        select(FbCampaign.campaign_name, FbAdset.adset_name, FbAdset.id)
+        .join(FbCampaign, FbCampaign.id == FbAdset.campaign_id)
+        .where(FbAdset.campaign_id.in_(campaign_ids))
+    )
+    return {(row.campaign_name, row.adset_name): row.id for row in result.all()}
+
+
+async def _upsert_fb_ads(
+    session: AsyncSession,
+    snapshot_data: list[dict],
+    adset_id_map: dict[tuple[str, str], _uuid.UUID],
 ) -> dict[str, _uuid.UUID]:
     """Upsert справочника fb_ads и возврат маппинга fb_ad_id → id.
 
     Args:
         session: Async SQLAlchemy сессия.
         snapshot_data: Список словарей с данными снэпшотов.
+        adset_id_map: Маппинг (campaign_name, adset_name) → fb_adsets.id.
 
     Returns:
         Маппинг fb_ad_id → UUID id записи в fb_ads.
@@ -133,35 +255,37 @@ async def _upsert_fb_ads(
     now = datetime.now(UTC)
     fb_ad_rows = []
     for item in snapshot_data:
+        cname = item.get("campaign_name", "")
+        aname = item.get("adset_name", "")
+        adset_id = adset_id_map.get((cname, aname))
+        if adset_id is None:
+            logger.warning(
+                "Пропускаю объявление %s — не найден адсет (%s, %s)",
+                item["fb_ad_id"],
+                cname,
+                aname,
+            )
+            continue
         fb_ad_rows.append(
             {
                 "id": _uuid.uuid4(),
                 "fb_ad_id": item["fb_ad_id"],
-                "campaign_name": item.get("campaign_name", ""),
-                "adset_name": item.get("adset_name", ""),
                 "ad_name": item.get("ad_name", ""),
-                "offer_id": item.get("offer_id"),
-                "offer_code": item.get("resolved_offer_code"),
+                "adset_id": adset_id,
                 "first_seen_at": now,
                 "last_seen_at": now,
             }
         )
 
+    if not fb_ad_rows:
+        return {}
+
     stmt = pg_insert(FbAd).values(fb_ad_rows)
     stmt = stmt.on_conflict_do_update(
         index_elements=["fb_ad_id"],
         set_={
-            "campaign_name": func.coalesce(
-                func.nullif(stmt.excluded.campaign_name, ""),
-                FbAd.campaign_name,
-            ),
-            "adset_name": func.coalesce(
-                func.nullif(stmt.excluded.adset_name, ""),
-                FbAd.adset_name,
-            ),
             "ad_name": stmt.excluded.ad_name,
-            "offer_id": stmt.excluded.offer_id,
-            "offer_code": stmt.excluded.offer_code,
+            "adset_id": stmt.excluded.adset_id,
             "last_seen_at": stmt.excluded.last_seen_at,
             "updated_at": func.now(),
         },
@@ -201,7 +325,7 @@ def _metrics_changed(
 
 
 async def _save_metric_deltas(
-    session,
+    session: AsyncSession,
     snapshot_data: list[dict],
     ad_id_map: dict[str, _uuid.UUID],
 ) -> int:
@@ -261,6 +385,83 @@ async def _save_metric_deltas(
     return len(history_rows)
 
 
+def _prepare_snapshot_upsert_data(
+    snapshot_data: list[dict],
+    ad_id_map: dict[str, _uuid.UUID],
+) -> list[dict]:
+    """Подготавливает данные снэпшотов для upsert, убирая лишние поля.
+
+    Удаляет campaign_name, adset_name, ad_name, resolved_offer_code, offer_id —
+    эти данные теперь живут в нормализованных таблицах fb_campaigns/fb_adsets/fb_ads.
+    """
+    # Поля, которых нет в ad_snapshots после нормализации
+    _REMOVED_FIELDS = {
+        "campaign_name",
+        "adset_name",
+        "ad_name",
+        "resolved_offer_code",
+        "offer_id",
+    }
+    cleaned: list[dict] = []
+    for item in snapshot_data:
+        ad_id = ad_id_map.get(item["fb_ad_id"])
+        if ad_id is None:
+            continue
+        row = {k: v for k, v in item.items() if k not in _REMOVED_FIELDS}
+        row["ad_id"] = ad_id
+        cleaned.append(row)
+    return cleaned
+
+
+async def _upsert_ad_snapshots(
+    session: AsyncSession,
+    snapshot_rows: list[dict],
+) -> None:
+    """Выполняет upsert ad_snapshots без нормализованных полей."""
+    if not snapshot_rows:
+        return
+
+    stmt = pg_insert(AdSnapshot).values(snapshot_rows)
+
+    update_cols = {
+        "ad_id": stmt.excluded.ad_id,
+        "delivery_status": stmt.excluded.delivery_status,
+        "spend": stmt.excluded.spend,
+        "budget": stmt.excluded.budget,
+        "reach": stmt.excluded.reach,
+        "impressions": stmt.excluded.impressions,
+        "clicks": stmt.excluded.clicks,
+        "cpc": stmt.excluded.cpc,
+        "ctr": stmt.excluded.ctr,
+        "cost_per_result": stmt.excluded.cost_per_result,
+        "cpm": stmt.excluded.cpm,
+        "frequency": stmt.excluded.frequency,
+        "leads": stmt.excluded.leads,
+        "cost_per_lead": stmt.excluded.cost_per_lead,
+        "registrations": stmt.excluded.registrations,
+        "cost_per_registration": stmt.excluded.cost_per_registration,
+        "deposits": stmt.excluded.deposits,
+        "outbound_clicks": stmt.excluded.outbound_clicks,
+        "outbound_ctr": stmt.excluded.outbound_ctr,
+        "landing_page_views": stmt.excluded.landing_page_views,
+        "cost_per_landing_page_view": stmt.excluded.cost_per_landing_page_view,
+        "alert_state": stmt.excluded.alert_state,
+        "current_stage": stmt.excluded.current_stage,
+        "early_signal_rule_codes": stmt.excluded.early_signal_rule_codes,
+        "warning_rule_codes": stmt.excluded.warning_rule_codes,
+        "stop_rule_codes": stmt.excluded.stop_rule_codes,
+        "open_state_token": stmt.excluded.open_state_token,
+        "telegram_group_key": stmt.excluded.telegram_group_key,
+        "last_observed_at": stmt.excluded.last_observed_at,
+    }
+
+    upsert_stmt = stmt.on_conflict_do_update(
+        index_elements=["fb_ad_id"],
+        set_=update_cols,
+    )
+    await session.execute(upsert_stmt)
+
+
 async def batch_save_snapshots(
     snapshot_data: list[dict],
     scan_guard: ZeroScanGuard,
@@ -276,72 +477,25 @@ async def batch_save_snapshots(
         return
 
     factory = get_session_factory()
-    # async with factory() as session автоматически делает rollback при исключении,
-    # поэтому cabinet_day rollover и upsert атомарны — либо всё, либо ничего.
     async with factory() as session:
         await _maybe_rollover_cabinet_day(session, snapshot_data)
 
-        # 1. Upsert в fb_ads — справочник объявлений
-        ad_id_map = await _upsert_fb_ads(session, snapshot_data)
+        # 1. Upsert fb_campaigns — справочник кампаний с привязкой оффера
+        campaign_id_map = await _upsert_fb_campaigns(session, snapshot_data)
 
-        # 2. Записываем дельты метрик в ad_metric_history (до перезаписи снэпшотов)
+        # 2. Upsert fb_adsets — справочник адсетов
+        adset_id_map = await _upsert_fb_adsets(session, snapshot_data, campaign_id_map)
+
+        # 3. Upsert fb_ads — справочник объявлений (adset_id FK)
+        ad_id_map = await _upsert_fb_ads(session, snapshot_data, adset_id_map)
+
+        # 4. Записываем дельты метрик в ad_metric_history (до перезаписи снэпшотов)
         history_count = await _save_metric_deltas(session, snapshot_data, ad_id_map)
         if history_count:
             logger.info("Записано %s строк в ad_metric_history", history_count)
 
-        # 3. Добавляем ad_id в данные снэпшотов
-        for item in snapshot_data:
-            item["ad_id"] = ad_id_map.get(item["fb_ad_id"])
+        # 5. Upsert ad_snapshots — только метрики и состояние алертов
+        snapshot_rows = _prepare_snapshot_upsert_data(snapshot_data, ad_id_map)
+        await _upsert_ad_snapshots(session, snapshot_rows)
 
-        stmt = pg_insert(AdSnapshot).values(snapshot_data)
-
-        update_cols = {
-            "ad_id": stmt.excluded.ad_id,
-            "campaign_name": func.coalesce(
-                func.nullif(stmt.excluded.campaign_name, ""),
-                AdSnapshot.campaign_name,
-            ),
-            "adset_name": func.coalesce(
-                func.nullif(stmt.excluded.adset_name, ""),
-                AdSnapshot.adset_name,
-            ),
-            "ad_name": stmt.excluded.ad_name,
-            "delivery_status": stmt.excluded.delivery_status,
-            "offer_id": stmt.excluded.offer_id,
-            "resolved_offer_code": stmt.excluded.resolved_offer_code,
-            "spend": stmt.excluded.spend,
-            "budget": stmt.excluded.budget,
-            "reach": stmt.excluded.reach,
-            "impressions": stmt.excluded.impressions,
-            "clicks": stmt.excluded.clicks,
-            "cpc": stmt.excluded.cpc,
-            "ctr": stmt.excluded.ctr,
-            "cost_per_result": stmt.excluded.cost_per_result,
-            "cpm": stmt.excluded.cpm,
-            "frequency": stmt.excluded.frequency,
-            "leads": stmt.excluded.leads,
-            "cost_per_lead": stmt.excluded.cost_per_lead,
-            "registrations": stmt.excluded.registrations,
-            "cost_per_registration": stmt.excluded.cost_per_registration,
-            "deposits": stmt.excluded.deposits,
-            "outbound_clicks": stmt.excluded.outbound_clicks,
-            "outbound_ctr": stmt.excluded.outbound_ctr,
-            "landing_page_views": stmt.excluded.landing_page_views,
-            "cost_per_landing_page_view": stmt.excluded.cost_per_landing_page_view,
-            "alert_state": stmt.excluded.alert_state,
-            "current_stage": stmt.excluded.current_stage,
-            "early_signal_rule_codes": stmt.excluded.early_signal_rule_codes,
-            "warning_rule_codes": stmt.excluded.warning_rule_codes,
-            "stop_rule_codes": stmt.excluded.stop_rule_codes,
-            "open_state_token": stmt.excluded.open_state_token,
-            "telegram_group_key": stmt.excluded.telegram_group_key,
-            "last_observed_at": stmt.excluded.last_observed_at,
-        }
-
-        upsert_stmt = stmt.on_conflict_do_update(
-            index_elements=["fb_ad_id"],
-            set_=update_cols,
-        )
-
-        await session.execute(upsert_stmt)
         await session.commit()

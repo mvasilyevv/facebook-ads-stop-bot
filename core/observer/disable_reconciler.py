@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.orm import selectinload
 
 from core.db import get_session_factory
 from core.disable_tasks import (
@@ -16,7 +17,7 @@ from core.disable_tasks import (
     reconcile_disable_tasks,
 )
 from core.domain import AlertStage, AlertState, DisableTaskStatus
-from core.models import AdSnapshot, DisableTask
+from core.models import AdSnapshot, DisableTask, FbAd, FbAdset
 from core.observer.db_queries import ACTIVE_ALERT_WINDOW
 from core.observer.service import AlertCandidate
 
@@ -48,6 +49,14 @@ def _build_manual_attention_reason_text(*, retry_count: int, last_error: str | N
     return message
 
 
+def _offer_id_from_snapshot(snapshot: AdSnapshot) -> object:
+    """Получает offer_id через цепочку fb_ad → adset → campaign."""
+    fb_ad = snapshot.fb_ad
+    if fb_ad and fb_ad.adset and fb_ad.adset.campaign:
+        return fb_ad.adset.campaign.offer_id
+    return None
+
+
 async def _create_auto_disable_task_for_snapshot(
     session,
     *,
@@ -62,7 +71,7 @@ async def _create_auto_disable_task_for_snapshot(
         .values(
             ad_id=snapshot.ad_id,
             snapshot_id=snapshot.id,
-            offer_id=snapshot.offer_id,
+            offer_id=_offer_id_from_snapshot(snapshot),
             open_state_token=incident_key,
             idempotency_key=idempotency_key,
             requested_by_telegram_user_id=None,
@@ -97,7 +106,13 @@ async def reconcile_disable_incidents_after_scan() -> list[AlertCandidate]:
         recent_cutoff = datetime.now(UTC) - DISABLE_SUCCESS_CONFIRMATION_GRACE_TIMEOUT
 
         result = await session.execute(
-            select(AdSnapshot).where(
+            select(AdSnapshot)
+            .options(
+                selectinload(AdSnapshot.fb_ad)
+                .selectinload(FbAd.adset)
+                .selectinload(FbAdset.campaign),
+            )
+            .where(
                 AdSnapshot.alert_state == AlertState.CLAIMED,
                 AdSnapshot.current_stage == AlertStage.STOP,
                 AdSnapshot.open_state_token.is_not(None),
@@ -160,15 +175,25 @@ async def reconcile_disable_incidents_after_scan() -> list[AlertCandidate]:
             )
 
             if retry_count >= SILENT_DISABLE_INCIDENT_RETRY_LIMIT:
+                # Получаем данные через нормализованную цепочку
+                fb_ad = snapshot.fb_ad
+                _ad_name = fb_ad.ad_name if fb_ad else ""
+                _adset = fb_ad.adset if fb_ad else None
+                _campaign = _adset.campaign if _adset else None
+                _campaign_name = _campaign.campaign_name if _campaign else ""
+                _adset_name = _adset.adset_name if _adset else ""
+                _offer_code = _campaign.offer_code if _campaign else None
+                _offer_id = _campaign.offer_id if _campaign else None
+
                 manual_attention_alerts.append(
                     AlertCandidate(
                         snapshot_id=incident_key,
-                        offer_id=snapshot.offer_id,
+                        offer_id=_offer_id,
                         fb_ad_id=snapshot.fb_ad_id,
-                        ad_name=snapshot.ad_name,
-                        campaign_name=snapshot.campaign_name,
-                        adset_name=snapshot.adset_name,
-                        offer_code=snapshot.resolved_offer_code,
+                        ad_name=_ad_name,
+                        campaign_name=_campaign_name,
+                        adset_name=_adset_name,
+                        offer_code=_offer_code,
                         offer_name=None,
                         offer_cpa=None,
                         stage=AlertStage.STOP,
@@ -258,7 +283,13 @@ async def auto_create_disable_tasks(
         modified_snapshots = 0
         for alert in stop_alerts:
             snapshot = await session.scalar(
-                select(AdSnapshot).where(AdSnapshot.fb_ad_id == alert.fb_ad_id)
+                select(AdSnapshot)
+                .options(
+                    selectinload(AdSnapshot.fb_ad)
+                    .selectinload(FbAd.adset)
+                    .selectinload(FbAdset.campaign),
+                )
+                .where(AdSnapshot.fb_ad_id == alert.fb_ad_id)
             )
             if snapshot is None:
                 logger.warning("Авто-стоп: снэпшот не найден для %s", alert.fb_ad_id)

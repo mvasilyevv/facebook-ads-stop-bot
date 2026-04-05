@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from sqlalchemy import select
+from sqlalchemy.orm import joinedload
 
 from core.db import get_session_factory
 from core.domain import (
@@ -19,7 +20,7 @@ from core.domain import (
     EnableTaskStatus,
     TelegramNotificationStream,
 )
-from core.models import AdSnapshot, AlertEvent, EnableRecommendationEvent
+from core.models import AdSnapshot, AlertEvent, EnableRecommendationEvent, FbAd, FbAdset
 from core.telegram.client import TelegramBotClient
 from core.telegram.message_refs import (
     load_message_refs_by_chat,
@@ -157,7 +158,13 @@ async def _load_disable_message_context(
     normalized_incident_key = normalize_incident_key(incident_key)
     factory = get_session_factory()
     async with factory() as session:
-        snapshot = await session.scalar(select(AdSnapshot).where(AdSnapshot.fb_ad_id == fb_ad_id))
+        snapshot = await session.scalar(
+            select(AdSnapshot)
+            .options(
+                joinedload(AdSnapshot.fb_ad).joinedload(FbAd.adset).joinedload(FbAdset.campaign)
+            )
+            .where(AdSnapshot.fb_ad_id == fb_ad_id)
+        )
         ad_id = snapshot.ad_id if snapshot else None
 
         event: AlertEvent | None = None
@@ -205,9 +212,18 @@ async def _load_disable_message_context(
             )
         )
 
+    campaign_name: str | None = None
+    adset_name: str | None = None
+    if snapshot is not None and snapshot.fb_ad is not None:
+        fb_ad = snapshot.fb_ad
+        if fb_ad.adset is not None:
+            adset_name = fb_ad.adset.adset_name
+            if fb_ad.adset.campaign is not None:
+                campaign_name = fb_ad.adset.campaign.campaign_name
+
     return TelegramAdMessageContext(
-        campaign_name=snapshot.campaign_name if snapshot else None,
-        adset_name=snapshot.adset_name if snapshot else None,
+        campaign_name=campaign_name,
+        adset_name=adset_name,
         matched_rule_codes=list(event.matched_rule_codes or []) if event else fallback_rule_codes,
         reason_title=event.reason_title if event else None,
         reason_text=event.reason_text if event else None,
@@ -232,7 +248,13 @@ async def _load_enable_message_context(
 
     factory = get_session_factory()
     async with factory() as session:
-        snapshot = await session.scalar(select(AdSnapshot).where(AdSnapshot.fb_ad_id == fb_ad_id))
+        snapshot = await session.scalar(
+            select(AdSnapshot)
+            .options(
+                joinedload(AdSnapshot.fb_ad).joinedload(FbAd.adset).joinedload(FbAdset.campaign)
+            )
+            .where(AdSnapshot.fb_ad_id == fb_ad_id)
+        )
         ad_id = snapshot.ad_id if snapshot else None
 
         if event_uuid is not None:
@@ -252,9 +274,18 @@ async def _load_enable_message_context(
             )
             recommendation_event = latest_result.scalar_one_or_none()
 
+    campaign_name: str | None = None
+    adset_name: str | None = None
+    if snapshot is not None and snapshot.fb_ad is not None:
+        fb_ad = snapshot.fb_ad
+        if fb_ad.adset is not None:
+            adset_name = fb_ad.adset.adset_name
+            if fb_ad.adset.campaign is not None:
+                campaign_name = fb_ad.adset.campaign.campaign_name
+
     return TelegramAdMessageContext(
-        campaign_name=snapshot.campaign_name if snapshot else None,
-        adset_name=snapshot.adset_name if snapshot else None,
+        campaign_name=campaign_name,
+        adset_name=adset_name,
         matched_rule_codes=(
             list(recommendation_event.matched_rule_codes or []) if recommendation_event else []
         ),

@@ -40,9 +40,11 @@ def _scalar_result(obj):
 
 
 def _rows_result(rows):
-    """Создаёт мок результата scalars().all()."""
+    """Создаёт мок результата scalars().unique().all() и scalars().all()."""
     result = MagicMock()
-    result.scalars.return_value.all.return_value = rows
+    scalars_mock = result.scalars.return_value
+    scalars_mock.all.return_value = rows
+    scalars_mock.unique.return_value.all.return_value = rows
     return result
 
 
@@ -328,7 +330,9 @@ async def test_render_start_has_short_ops_hub_without_more_button():
     """Главный экран CONTROL должен показывать только пять рабочих разделов."""
     from core.telegram import bot_handler
 
-    # GROUP BY возвращает пары (alert_state, count)
+    # get_observer_settings вызывает session.execute, потом GROUP BY тоже execute
+    obs_result = _scalar_result(SimpleNamespace(is_scanning_enabled=True, interval_seconds=90))
+
     group_by_result = MagicMock()
     group_by_result.all.return_value = [
         (AlertState.NORMAL, 1),
@@ -337,9 +341,8 @@ async def test_render_start_has_short_ops_hub_without_more_button():
     ]
 
     session = _make_async_session(
-        execute_side_effect=[group_by_result],
+        execute_side_effect=[obs_result, group_by_result],
         scalar_side_effect=[
-            SimpleNamespace(is_scanning_enabled=True, interval_seconds=90),
             # queue_count (DisableTask)
             5,
         ],
@@ -371,8 +374,11 @@ async def test_render_settings_exposes_secondary_level():
     """Экран настроек должен давать доступ к второму уровню меню."""
     from core.telegram import bot_handler
 
+    # get_observer_settings вызывает session.execute, а не scalar
     session = _make_async_session(
-        scalar_return=SimpleNamespace(interval_seconds=90, warning_percent_of_stop=80)
+        execute_side_effect=[
+            _scalar_result(SimpleNamespace(interval_seconds=90, warning_percent_of_stop=80)),
+        ],
     )
     factory = _make_session_factory(session)
 
@@ -437,11 +443,10 @@ async def test_disable_execute_updates_origin_message_and_broadcasts_stop():
     client = AsyncMock()
     access = SimpleNamespace(role=TelegramUserRole.RECIPIENT.value, control_topic_id=11)
 
+    # campaign_name/adset_name убраны из возвращаемого словаря _create_disable_task
     task_info = {
         "fb_ad_id": "ad-1",
         "ad_name": "Рекламное объявление",
-        "campaign_name": "Campaign",
-        "adset_name": "Adset",
         "created_new": True,
         "incident_key": "incident-1",
         "message_context": SimpleNamespace(),
@@ -496,11 +501,12 @@ async def test_snooze_alert_rejects_stop_alerts():
     """STOP-алерт не должен получать snoozed_until, потому что авто-отключение уже запущено."""
     from core.telegram.bot_handler import _snooze_alert
 
+    # Мокируем JOIN-цепочку fb_ad → adset → campaign
     stop_ad = SimpleNamespace(
         fb_ad_id="ad-1",
         open_state_token="token-1",
         alert_state=AlertState.STOP_SENT,
-        ad_name="STOP ad",
+        fb_ad=SimpleNamespace(ad_name="STOP ad", adset=None),
         snoozed_until=None,
     )
     session = _make_async_session(scalar_return=stop_ad)
@@ -521,11 +527,12 @@ async def test_snooze_alert_uses_minutes():
     """WARNING-алерт должен получать snoozed_until на указанное число минут."""
     from core.telegram.bot_handler import _snooze_alert
 
+    # Мокируем JOIN-цепочку fb_ad → adset → campaign
     warning_ad = SimpleNamespace(
         fb_ad_id="ad-2",
         open_state_token="token-2",
         alert_state=AlertState.WARNING_SENT,
-        ad_name="WARNING ad",
+        fb_ad=SimpleNamespace(ad_name="WARNING ad", adset=None),
         snoozed_until=None,
     )
     session = _make_async_session(scalar_return=warning_ad)
@@ -597,14 +604,16 @@ async def test_create_disable_task_uses_stable_idempotency_key():
     """Один и тот же incident должен давать одинаковый manual-idempotency key."""
     from core.telegram.bot_handler import _create_disable_task
 
+    # Мокируем JOIN-цепочку fb_ad → adset → campaign (offer_id убран из snapshot)
     snapshot = SimpleNamespace(
         id="snapshot-123",
+        ad_id="ad-uuid-123",
         open_state_token="token-abc",
         fb_ad_id="ad-123",
-        offer_id="offer-1",
-        ad_name="Тестовое объявление",
-        campaign_name=None,
-        adset_name=None,
+        fb_ad=SimpleNamespace(
+            ad_name="Тестовое объявление",
+            adset=None,
+        ),
         alert_state=AlertState.STOP_SENT,
         telegram_group_key=None,
         spend="0.00",
@@ -654,11 +663,10 @@ async def test_create_disable_task_uses_stable_idempotency_key():
     )
     task_by_ad = session_by_ad.add.call_args.args[0]
 
+    # campaign_name/adset_name убраны из возвращаемого словаря
     assert result_by_token == {
         "fb_ad_id": "ad-123",
         "ad_name": "Тестовое объявление",
-        "campaign_name": None,
-        "adset_name": None,
         "created_new": True,
         "incident_key": "token-abc",
         "message_context": result_by_token["message_context"],
@@ -666,14 +674,10 @@ async def test_create_disable_task_uses_stable_idempotency_key():
     assert result_by_ad == {
         "fb_ad_id": "ad-123",
         "ad_name": "Тестовое объявление",
-        "campaign_name": None,
-        "adset_name": None,
         "created_new": True,
         "incident_key": "token-abc",
         "message_context": result_by_ad["message_context"],
     }
-    assert result_by_token["message_context"].campaign_name is None
-    assert result_by_token["message_context"].adset_name is None
     assert task_by_token.idempotency_key == "manual:ad-123:token-abc"
     assert task_by_ad.idempotency_key == "manual:ad-123:token-abc"
     assert task_by_token.open_state_token == "token-abc"
@@ -686,14 +690,16 @@ async def test_create_disable_task_returns_existing_queue_state():
     """Если задача уже существует, helper должен вернуть created_new=False без новой записи."""
     from core.telegram.bot_handler import _create_disable_task
 
+    # Мокируем JOIN-цепочку fb_ad → adset → campaign (offer_id убран из snapshot)
     snapshot = SimpleNamespace(
         id="snapshot-123",
+        ad_id="ad-uuid-123",
         open_state_token="token-abc",
         fb_ad_id="ad-123",
-        offer_id="offer-1",
-        ad_name="Тестовое объявление",
-        campaign_name=None,
-        adset_name=None,
+        fb_ad=SimpleNamespace(
+            ad_name="Тестовое объявление",
+            adset=None,
+        ),
         alert_state=AlertState.WARNING_SENT,
         telegram_group_key=None,
         spend="0.00",
@@ -733,17 +739,14 @@ async def test_create_disable_task_returns_existing_queue_state():
             username="tester",
         )
 
+    # campaign_name/adset_name убраны из возвращаемого словаря
     assert result == {
         "fb_ad_id": "ad-123",
         "ad_name": "Тестовое объявление",
-        "campaign_name": None,
-        "adset_name": None,
         "created_new": False,
         "incident_key": "token-abc",
         "message_context": result["message_context"],
     }
-    assert result["message_context"].campaign_name is None
-    assert result["message_context"].adset_name is None
     session.add.assert_not_called()
     session.commit.assert_not_awaited()
 

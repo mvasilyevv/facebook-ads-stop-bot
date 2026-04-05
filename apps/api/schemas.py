@@ -158,11 +158,10 @@ class VisionSettingsUpdateSchema(BaseModel):
 
 
 class OfferSchema(BaseModel):
-    """Оффер с CPA."""
+    """Оффер с CPA. code = название оффера."""
 
     id: str | None = None
     code: str
-    name: str
     cpa_amount: Decimal
     payout_per_deposit: Decimal | None = None
     is_active: bool = True
@@ -445,7 +444,7 @@ class DashboardPerformanceSummarySchema(BaseModel):
     cpc: Decimal | None = None
     cpl: Decimal | None = None
     cpr: Decimal | None = None
-    spend_per_dep: Decimal | None = None
+    cost_per_deposit: Decimal | None = None
     roas: Decimal | None = None
     click_to_lead_rate: float | None = None
     lead_to_reg_rate: float | None = None
@@ -483,7 +482,7 @@ class DashboardPerformanceCampaignSchema(BaseModel):
     cpc: Decimal | None = None
     cpl: Decimal | None = None
     cpr: Decimal | None = None
-    spend_per_dep: Decimal | None = None
+    cost_per_deposit: Decimal | None = None
     click_to_lead_rate: float | None = None
     lead_to_reg_rate: float | None = None
     reg_to_dep_rate: float | None = None
@@ -580,7 +579,7 @@ class HistorySummarySchema(BaseModel):
     avg_cpc: Decimal | None = None
     avg_cpl: Decimal | None = None
     avg_cpr: Decimal | None = None
-    avg_spend_per_dep: Decimal | None = None
+    avg_cost_per_deposit: Decimal | None = None
     roas: Decimal | None = None
     total_alerts: int = 0
     total_stops: int = 0
@@ -604,7 +603,7 @@ class HistoryTimelinePoint(BaseModel):
     cpl: Decimal | None = None
     cpr: Decimal | None = None
     cpc: Decimal | None = None
-    spend_per_dep: Decimal | None = None
+    cost_per_deposit: Decimal | None = None
 
 
 class HistoryCampaignRow(BaseModel):
@@ -619,7 +618,7 @@ class HistoryCampaignRow(BaseModel):
     total_deposits: int = 0
     avg_cpl: Decimal | None = None
     avg_cpr: Decimal | None = None
-    avg_spend_per_dep: Decimal | None = None
+    avg_cost_per_deposit: Decimal | None = None
     roas: Decimal | None = None
     alerts_count: int = 0
     disables_count: int = 0
@@ -629,12 +628,11 @@ class HistoryOfferSummary(BaseModel):
     """Сводка по офферу за период."""
 
     offer_code: str
-    offer_name: str
     total_spend: Decimal = Decimal("0")
     total_deposits: int = 0
     total_registrations: int = 0
     avg_cpr: Decimal | None = None
-    avg_spend_per_dep: Decimal | None = None
+    avg_cost_per_deposit: Decimal | None = None
     roas: Decimal | None = None
     profit: Decimal | None = None
     alerts_count: int = 0
@@ -674,7 +672,7 @@ class HistoryAdRow(BaseModel):
     avg_cpc: Decimal | None = None
     avg_cpl: Decimal | None = None
     avg_cpr: Decimal | None = None
-    avg_spend_per_dep: Decimal | None = None
+    avg_cost_per_deposit: Decimal | None = None
 
 
 # === Корректировка ложных депозитов ===

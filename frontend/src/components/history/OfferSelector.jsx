@@ -6,8 +6,7 @@ function toggleValue(arr, val) {
 }
 
 function OfferLabel({ offer }) {
-  if (offer.code === offer.name || !offer.name) return offer.code;
-  return `${offer.code} — ${offer.name}`;
+  return offer.code;
 }
 
 export function OfferSelector({ offers = [], selected = [], onChange }) {

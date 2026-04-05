@@ -10,6 +10,7 @@ from datetime import timedelta
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from apps.api.deps import get_db
 from apps.api.schemas import (
@@ -17,7 +18,7 @@ from apps.api.schemas import (
     NamingPatternGroupSchema,
     NamingTrackerResponseSchema,
 )
-from core.models import AdSnapshot, Offer
+from core.models import AdSnapshot, FbAd, FbAdset, FbCampaign, Offer
 
 router = APIRouter(prefix="/api", tags=["naming-tracker"])
 
@@ -39,6 +40,19 @@ def _extract_naming_pattern(ad_name: str) -> tuple[str, int] | None:
     return m.group(1), int(m.group(2))
 
 
+def _snap_ad_name(snap: AdSnapshot) -> str:
+    """Имя объявления через fb_ad."""
+    return snap.fb_ad.ad_name if snap.fb_ad else ""
+
+
+def _snap_offer_code(snap: AdSnapshot) -> str | None:
+    """offer_code через fb_ad → adset → campaign."""
+    fb_ad = snap.fb_ad
+    if fb_ad and fb_ad.adset and fb_ad.adset.campaign:
+        return fb_ad.adset.campaign.offer_code
+    return None
+
+
 def _build_pattern_groups(
     snapshots: list[AdSnapshot],
     offers_map: dict[str, str],
@@ -55,11 +69,11 @@ def _build_pattern_groups(
     grouped: dict[tuple[str, str | None], list[tuple[int, AdSnapshot]]] = defaultdict(list)
 
     for snap in snapshots:
-        parsed = _extract_naming_pattern(snap.ad_name or "")
+        parsed = _extract_naming_pattern(_snap_ad_name(snap))
         if parsed is None:
             continue
         prefix, number = parsed
-        key = (prefix, snap.resolved_offer_code)
+        key = (prefix, _snap_offer_code(snap))
         grouped[key].append((number, snap))
 
     result: list[NamingPatternGroupSchema] = []
@@ -69,7 +83,7 @@ def _build_pattern_groups(
         seen_names: set[str] = set()
         recent: list[NamingPatternAdSchema] = []
         for _, snap in items:
-            name = snap.ad_name or ""
+            name = _snap_ad_name(snap)
             if name in seen_names:
                 continue
             seen_names.add(name)
@@ -100,9 +114,9 @@ def _build_pattern_groups(
 
 
 async def _load_offers_map(db: AsyncSession) -> dict[str, str]:
-    """Загружает маппинг offer_code -> offer_name из БД."""
-    rows = await db.execute(select(Offer.code, Offer.name))
-    return {code: name for code, name in rows.all()}
+    """Загружает маппинг offer_code -> offer_code (name убрано из модели)."""
+    rows = await db.execute(select(Offer.code))
+    return {code: code for (code,) in rows.all()}
 
 
 @router.get(
@@ -117,13 +131,25 @@ async def get_naming_patterns(
 ) -> NamingTrackerResponseSchema:
     """Возвращает группы объявлений по паттернам нейминга с макс. номером."""
     cutoff = func.now() - timedelta(days=days)
-    stmt = select(AdSnapshot).where(AdSnapshot.last_observed_at >= cutoff)
+    stmt = (
+        select(AdSnapshot)
+        .options(
+            selectinload(AdSnapshot.fb_ad).selectinload(FbAd.adset).selectinload(FbAdset.campaign),
+        )
+        .where(AdSnapshot.last_observed_at >= cutoff)
+    )
 
     if offer_code:
-        stmt = stmt.where(func.lower(AdSnapshot.resolved_offer_code) == offer_code.lower())
+        # Фильтр по offer_code через нормализованную цепочку
+        stmt = (
+            stmt.join(AdSnapshot.fb_ad)
+            .join(FbAd.adset)
+            .join(FbAdset.campaign)
+            .where(func.lower(FbCampaign.offer_code) == offer_code.lower())
+        )
 
     result = await db.execute(stmt)
-    snapshots = list(result.scalars().all())
+    snapshots = list(result.scalars().unique().all())
 
     offers_map = await _load_offers_map(db)
     groups = _build_pattern_groups(snapshots, offers_map)

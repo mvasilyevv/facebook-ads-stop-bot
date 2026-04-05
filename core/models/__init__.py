@@ -192,12 +192,11 @@ class TelegramSettings(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
 
 class Offer(UUIDPrimaryKeyMixin, TimestampMixin, Base):
-    """Оффер с CPA и конфигурацией правил."""
+    """Оффер с CPA и конфигурацией правил. code = название оффера."""
 
     __tablename__ = "offers"
 
     code: Mapped[str] = mapped_column(String(100), unique=True, index=True)
-    name: Mapped[str] = mapped_column(String(255))
     cpa_amount: Mapped[Decimal] = mapped_column(Numeric(10, 2))
     payout_per_deposit: Mapped[float] = mapped_column(
         Float, default=0.0, nullable=False, server_default="0"
@@ -207,7 +206,7 @@ class Offer(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     rule_config: Mapped[OfferRuleConfig | None] = relationship(
         back_populates="offer", cascade="all, delete-orphan", uselist=False
     )
-    snapshots: Mapped[list[AdSnapshot]] = relationship(back_populates="offer")
+    campaigns: Mapped[list[FbCampaign]] = relationship(back_populates="offer")
 
 
 # === Конфигурация правил для оффера ===
@@ -283,24 +282,19 @@ class OfferRuleConfig(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     offer: Mapped[Offer] = relationship(back_populates="rule_config")
 
 
-# === Справочник объявлений ===
+# === Справочник кампаний ===
 
 
-class FbAd(UUIDPrimaryKeyMixin, TimestampMixin, Base):
-    """Каноническая запись объявления Facebook — единая точка правды для FK-связей."""
+class FbCampaign(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """Кампания Facebook — группирует адсеты, привязывает оффер."""
 
-    __tablename__ = "fb_ads"
+    __tablename__ = "fb_campaigns"
     __table_args__ = (
-        Index("uq_fb_ad_fb_ad_id", "fb_ad_id", unique=True),
-        Index("ix_fb_ad_offer_id", "offer_id"),
-        Index("ix_fb_ad_campaign_name", "campaign_name"),
-        Index("ix_fb_ad_last_seen_at", "last_seen_at"),
+        Index("uq_fb_campaign_name", "campaign_name", unique=True),
+        Index("ix_fb_campaign_offer_id", "offer_id"),
     )
 
-    fb_ad_id: Mapped[str] = mapped_column(String(32))
-    campaign_name: Mapped[str] = mapped_column(String(255), default="")
-    adset_name: Mapped[str] = mapped_column(String(255), default="")
-    ad_name: Mapped[str] = mapped_column(String(255), default="")
+    campaign_name: Mapped[str] = mapped_column(String(255))
     offer_id: Mapped[_uuid.UUID | None] = mapped_column(
         ForeignKey("offers.id", ondelete="SET NULL"),
     )
@@ -308,7 +302,60 @@ class FbAd(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
-    offer: Mapped[Offer | None] = relationship()
+    offer: Mapped[Offer | None] = relationship(back_populates="campaigns")
+    adsets: Mapped[list[FbAdset]] = relationship(
+        back_populates="campaign", cascade="all, delete-orphan"
+    )
+
+
+# === Справочник адсетов ===
+
+
+class FbAdset(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """Адсет Facebook — группирует объявления внутри кампании."""
+
+    __tablename__ = "fb_adsets"
+    __table_args__ = (
+        Index("uq_fb_adset_campaign_name", "campaign_id", "adset_name", unique=True),
+        Index("ix_fb_adset_campaign_id", "campaign_id"),
+    )
+
+    adset_name: Mapped[str] = mapped_column(String(255))
+    campaign_id: Mapped[_uuid.UUID] = mapped_column(
+        ForeignKey("fb_campaigns.id", ondelete="CASCADE"),
+    )
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    campaign: Mapped[FbCampaign] = relationship(back_populates="adsets")
+    ads: Mapped[list[FbAd]] = relationship(back_populates="adset", cascade="all, delete-orphan")
+
+
+# === Справочник объявлений ===
+
+
+class FbAd(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """Каноническая запись объявления Facebook — единая точка правды для FK-связей.
+
+    Оффер наследуется от кампании: fb_ads → fb_adsets → fb_campaigns → offers.
+    """
+
+    __tablename__ = "fb_ads"
+    __table_args__ = (
+        Index("uq_fb_ad_fb_ad_id", "fb_ad_id", unique=True),
+        Index("ix_fb_ad_adset_id", "adset_id"),
+        Index("ix_fb_ad_last_seen_at", "last_seen_at"),
+    )
+
+    fb_ad_id: Mapped[str] = mapped_column(String(32))
+    ad_name: Mapped[str] = mapped_column(String(255), default="")
+    adset_id: Mapped[_uuid.UUID] = mapped_column(
+        ForeignKey("fb_adsets.id", ondelete="CASCADE"),
+    )
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    adset: Mapped[FbAdset] = relationship(back_populates="ads")
     snapshot: Mapped[AdSnapshot | None] = relationship(back_populates="fb_ad")
     metric_history: Mapped[list[AdMetricHistory]] = relationship(
         back_populates="fb_ad", cascade="all, delete-orphan"
@@ -365,28 +412,25 @@ class AdMetricHistory(UUIDPrimaryKeyMixin, Base):
 
 
 class AdSnapshot(UUIDPrimaryKeyMixin, TimestampMixin, Base):
-    """Текущий снимок метрик одного объявления."""
+    """Текущий снимок метрик одного объявления.
+
+    Идентификационные данные (campaign, adset, ad_name, offer) берутся через
+    JOIN: ad_snapshots → fb_ads → fb_adsets → fb_campaigns → offers.
+    """
 
     __tablename__ = "ad_snapshots"
     __table_args__ = (
         Index("uq_ad_snapshot_fb_ad", "fb_ad_id", unique=True),
         Index("ix_ad_snapshot_alert_state", "alert_state"),
         Index("ix_ad_snapshot_last_observed", "last_observed_at", "alert_state"),
-        Index("ix_ad_snapshot_offer_alert", "offer_id", "alert_state"),
+        Index("ix_ad_snapshot_ad_id", "ad_id"),
     )
 
     ad_id: Mapped[_uuid.UUID] = mapped_column(
         ForeignKey("fb_ads.id", ondelete="CASCADE"), index=True
     )
-    offer_id: Mapped[_uuid.UUID | None] = mapped_column(
-        ForeignKey("offers.id", ondelete="SET NULL")
-    )
     fb_ad_id: Mapped[str] = mapped_column(String(32))
-    campaign_name: Mapped[str] = mapped_column(String(255))
-    adset_name: Mapped[str] = mapped_column(String(255))
-    ad_name: Mapped[str] = mapped_column(String(255))
     delivery_status: Mapped[str] = mapped_column(String(64))
-    resolved_offer_code: Mapped[str | None] = mapped_column(String(100), index=True)
 
     # Метрики
     spend: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"))
@@ -426,7 +470,6 @@ class AdSnapshot(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     snoozed_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     fb_ad: Mapped[FbAd | None] = relationship(back_populates="snapshot")
-    offer: Mapped[Offer | None] = relationship(back_populates="snapshots")
     alerts: Mapped[list[AlertEvent]] = relationship(back_populates="snapshot")
     disable_tasks: Mapped[list[DisableTask]] = relationship(back_populates="snapshot")
     enable_recommendation_events: Mapped[list[EnableRecommendationEvent]] = relationship(

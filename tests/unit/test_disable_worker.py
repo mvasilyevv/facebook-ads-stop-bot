@@ -19,12 +19,19 @@ class FakeDisableTask:
     """Фейковая задача для тестов."""
 
     id: str = "task-001"
+    ad_id: str = "ad-uuid-001"
     fb_ad_id: str = "123456"
     ad_name: str = "Тестовое объявление"
     attempt_count: int = 0
     max_attempts: int = 10
     requested_by_username: str = "tester"
     status: str = DisableTaskStatus.RUNNING
+    fb_ad: object = None
+
+    def __post_init__(self) -> None:
+        """Заполняет fb_ad для навигации через relationship."""
+        if self.fb_ad is None:
+            self.fb_ad = SimpleNamespace(fb_ad_id=self.fb_ad_id, ad_name=self.ad_name)
 
 
 def _compute_backoff_delay(attempt: int) -> int:
