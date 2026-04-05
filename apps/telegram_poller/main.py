@@ -9,12 +9,13 @@ import signal
 import sys
 
 from core.config import get_settings
+from core.sentry import setup_sentry
 from core.telegram.bot_handler import handle_update
 from core.telegram.client import TelegramBotClient
 from core.telegram.service import touch_poller_heartbeat
 
 logger = logging.getLogger(__name__)
-TOKEN_RELOAD_INTERVAL_SECONDS = 3
+TOKEN_RELOAD_INTERVAL_SECONDS = 30
 ERROR_RETRY_DELAY_SECONDS = 3
 
 # Глобальный флаг для graceful shutdown
@@ -148,6 +149,7 @@ async def main() -> None:
         loop.add_signal_handler(sig, _shutdown_event.set)
 
     settings = get_settings()
+    setup_sentry(dsn=settings.sentry_dsn, environment=settings.sentry_environment)
     if not settings.telegram_chat_id:
         logger.info("TELEGRAM_CHAT_ID не задан — жду первое сообщение для определения...")
 

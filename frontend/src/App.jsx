@@ -1,10 +1,13 @@
-import { useState, useCallback, useEffect, Component } from 'react';
-import DashboardPage from './pages/DashboardPage.jsx';
-import AdsPage from './pages/AdsPage.jsx';
-import OffersPage from './pages/OffersPage.jsx';
-import SettingsPage from './pages/SettingsPage.jsx';
-import HistoryPage from './pages/HistoryPage.jsx';
-import NamingTrackerPage from './pages/NamingTrackerPage.jsx';
+import { useState, useCallback, useEffect, Component, lazy, Suspense } from 'react';
+import LoadingSpinner from './components/LoadingSpinner.jsx';
+
+// Ленивая загрузка страниц — каждая страница загружается только при первом посещении
+const DashboardPage = lazy(() => import('./pages/DashboardPage.jsx'));
+const AdsPage = lazy(() => import('./pages/AdsPage.jsx'));
+const OffersPage = lazy(() => import('./pages/OffersPage.jsx'));
+const SettingsPage = lazy(() => import('./pages/SettingsPage.jsx'));
+const HistoryPage = lazy(() => import('./pages/HistoryPage.jsx'));
+const NamingTrackerPage = lazy(() => import('./pages/NamingTrackerPage.jsx'));
 
 /** Error Boundary — ловит ошибки рендера и показывает fallback */
 class ErrorBoundary extends Component {
@@ -262,7 +265,10 @@ export default function App() {
       >
         <div className="mx-auto max-w-content p-md lg:p-lg">
           <ErrorBoundary>
-            {renderPage()}
+            {/* Suspense показывает спиннер пока чанк страницы загружается */}
+            <Suspense fallback={<LoadingSpinner />}>
+              {renderPage()}
+            </Suspense>
           </ErrorBoundary>
         </div>
       </main>

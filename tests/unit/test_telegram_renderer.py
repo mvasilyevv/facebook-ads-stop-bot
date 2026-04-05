@@ -7,12 +7,120 @@ from core.domain import AlertStage, AlertState, EnableRecommendationLevel
 from core.telegram.renderer import (
     TelegramAlertItem,
     TelegramEnableRecommendationItem,
+    build_ad_identity_lines,
+    build_detailed_metrics_block,
+    build_key_metric_line,
     render_alert_message,
     render_enable_recommendation_message,
 )
 
+# --- build_ad_identity_lines ---
 
-# Проверяем, что Telegram показывает фактический сработавший порог из rule_summaries.
+
+# Проверяем compact-режим: одна строка кампании, blockquote, без fb_ad_id.
+def test_build_ad_identity_lines_compact():
+    lines = build_ad_identity_lines(
+        campaign_name="Campaign A",
+        adset_name="Adset A",
+        ad_name="Ad Name",
+        fb_ad_id="123456",
+        compact=True,
+    )
+    text = "\n".join(lines)
+    assert "<blockquote>" in text
+    assert "Campaign A › Adset A" in text
+    assert "Ad Name" in text
+    assert "123456" not in text  # fb_ad_id скрыт в compact
+
+
+# Проверяем обычный режим: иерархия с отступами, fb_ad_id показан.
+def test_build_ad_identity_lines_default():
+    lines = build_ad_identity_lines(
+        campaign_name="Campaign A",
+        adset_name="Adset A",
+        ad_name="Ad Name",
+        fb_ad_id="123456",
+    )
+    text = "\n".join(lines)
+    assert "📁 Campaign A" in text
+    assert "  └ Adset A" in text
+    assert "🆔" in text
+    assert "123456" in text
+
+
+# --- build_key_metric_line ---
+
+
+# Проверяем inline rule_summary в строке расхода.
+def test_build_key_metric_line_with_summaries():
+    lines = build_key_metric_line(
+        {"spend": "0.09"},
+        rule_summaries=["CPC 0.09 > стоп 0.08 (базовый 0.10)"],
+    )
+    text = "\n".join(lines)
+    assert "💰 Расход: <b>$0.09</b>" in text
+    assert "📏 CPC 0.09 &gt; стоп 0.08" in text
+
+
+# --- build_detailed_metrics_block ---
+
+
+# Проверяем, что expandable-блок содержит секции Трафик/Конверсии/Аукцион.
+def test_build_detailed_metrics_block_full():
+    lines = build_detailed_metrics_block(
+        {
+            "cpc": "0.09",
+            "clicks": 5,
+            "outbound_clicks": 3,
+            "outbound_ctr": "1.20",
+            "landing_page_views": 2,
+            "cost_per_landing_page_view": "0.05",
+            "leads": 1,
+            "cost_per_lead": "0.09",
+            "registrations": 1,
+            "cost_per_registration": "0.09",
+            "deposits": 1,
+            "traffic_diagnostics": {
+                "cpm": {"status": "critical", "text": "CPM выше медианы"},
+                "frequency": {"status": "elevated", "text": "Частота растёт"},
+            },
+        }
+    )
+    text = "\n".join(lines)
+    assert "<blockquote expandable>" in text
+    assert "Трафик" in text
+    assert "CPC: $0.09" in text
+    assert "Исх. клики: 3" in text
+    assert "LPV: 2" in text
+    assert "Конверсии" in text
+    assert "Лидов: 1" in text
+    assert "Депозитов: 1" in text
+    assert "Аукцион" in text
+    assert "CPM выше медианы" in text
+    assert "Частота растёт" in text
+
+
+# Проверяем, что нулевые метрики скрываются.
+def test_build_detailed_metrics_block_hides_zeros():
+    lines = build_detailed_metrics_block(
+        {
+            "clicks": 0,
+            "outbound_clicks": 0,
+            "leads": 0,
+            "cost_per_lead": None,
+            "registrations": 0,
+            "cost_per_registration": None,
+            "deposits": 0,
+        }
+    )
+    # Всё нулевое — пустой результат (нет блока)
+    assert lines == []
+
+
+# --- render_alert_message ---
+
+
+# Проверяем, что STOP рендерит rule_summary и compact identity.
 def test_render_alert_message_includes_rule_summaries():
     item = TelegramAlertItem(
         snapshot_id="snap-1",
@@ -41,14 +149,23 @@ def test_render_alert_message_includes_rule_summaries():
 
     message = render_alert_message(stage=AlertStage.STOP, items=[item])
 
-    assert "Пороговые детали" in message.text
-    assert "стоп 0.08" in message.text
-    assert "базовый 0.10" in message.text
+    # Заголовок: стадия + причина в одной строке
+    assert "🛑" in message.text
+    assert "СТОП" in message.text
     assert "Дорогой клик" in message.text
-    assert "Цена клика вышла за допустимую границу." in message.text
+    # Compact identity: blockquote, одна строка
+    assert "<blockquote>" in message.text
+    assert "Campaign A › Adset A" in message.text
+    # Rule summary inline
+    assert "стоп 0.08" in message.text  # &gt; escaped в HTML
+    assert "базовый 0.10" in message.text  # часть rule_summary
+    # Убраны старые элементы
+    assert "Пороговые детали" not in message.text
+    assert "Ключевые метрики" not in message.text
+    assert "Следующее действие" not in message.text
 
 
-# Проверяем, что ранний сигнал рендерится с confirm-flow и обновлёнными кнопками snooze.
+# Проверяем, что ранний сигнал рендерится с confirm-flow и кнопками snooze.
 def test_render_alert_message_for_early_signal_has_confirm_and_snooze_buttons():
     item = TelegramAlertItem(
         snapshot_id="snap-2",
@@ -79,11 +196,11 @@ def test_render_alert_message_for_early_signal_has_confirm_and_snooze_buttons():
     message = render_alert_message(stage=AlertStage.EARLY_SIGNAL, items=[item])
 
     assert "Ранний сигнал" in message.text
-    assert "Причина:" in message.text
     assert "Мало открытий PWA после клика" in message.text
-    assert "Переходы теряются" in message.text
-    assert "CPM: $7.5000" not in message.text
-    assert "Частота: 1.4000" not in message.text
+    # Трафик в expandable-блоке
+    assert "<blockquote expandable>" in message.text
+    assert "LPV: 3" in message.text
+    # Кнопки
     assert message.reply_markup is not None
     keyboard = message.reply_markup["inline_keyboard"]
     assert keyboard[0][0]["text"].startswith("🛑 Создать задачу:")
@@ -96,7 +213,7 @@ def test_render_alert_message_for_early_signal_has_confirm_and_snooze_buttons():
     ]
 
 
-# Проверяем, что Telegram показывает короткую диагностику UI-уровня вместо сухих CPM/Frequency.
+# Проверяем, что traffic_diagnostics отображается в expandable-блоке.
 def test_render_alert_message_uses_human_readable_traffic_diagnostics():
     item = TelegramAlertItem(
         snapshot_id="snap-2b",
@@ -132,14 +249,15 @@ def test_render_alert_message_uses_human_readable_traffic_diagnostics():
 
     message = render_alert_message(stage=AlertStage.WARNING, items=[item])
 
-    assert "Трафик начал заметно дорожать." in message.text
+    # Диагностика в expandable-блоке
     assert "CPM заметно выше недавней медианы" in message.text
     assert "Частота уже растёт" in message.text
+    # Сырые числа CPM/Frequency НЕ дублируются вне expandable
     assert "CPM: $7.5000" not in message.text
     assert "Частота: 1.4000" not in message.text
 
 
-# Проверяем, что STOP-сообщение больше не тащит глобальную навигацию и кнопки задач.
+# Проверяем, что STOP-сообщение не имеет кнопок.
 def test_render_alert_message_stop_has_no_global_buttons():
     item = TelegramAlertItem(
         snapshot_id="snap-3",
@@ -165,11 +283,14 @@ def test_render_alert_message_stop_has_no_global_buttons():
 
     message = render_alert_message(stage=AlertStage.STOP, items=[item])
 
-    assert "Авто-отключение уже запущено" in message.text
+    assert "Авто-отключение запущено" in message.text
     assert message.reply_markup is None
 
 
-# Проверяем, что generic OK-рекомендация не обещает безопасное включение.
+# --- render_enable_recommendation_message ---
+
+
+# Проверяем, что generic OK-рекомендация нейтральна и compact.
 def test_render_enable_recommendation_message_for_off_status():
     message = render_enable_recommendation_message(
         item=TelegramEnableRecommendationItem(
@@ -195,12 +316,14 @@ def test_render_enable_recommendation_message_for_off_status():
 
     assert "Нет блокирующих сигналов" in message.text
     assert "Метрики в норме" not in message.text
-    assert "Можно включить" not in message.text
-    assert "Статус доставки Meta: <b>OFF</b>" in message.text
+    assert "Доставка Meta: <b>OFF</b>" in message.text
+    # Метрики в expandable-блоке
     assert "Лидов: 1" in message.text
     assert "Реги: 1" in message.text
     assert "CPR: $12.0000" in message.text
-    assert "Следующее действие: создать задачу на включение из этого сообщения." in message.text
+    # Убраны старые элементы
+    assert "Ключевые метрики" not in message.text
+    assert "Следующее действие" not in message.text
     assert message.reply_markup is not None
     assert (
         message.reply_markup["inline_keyboard"][0][0]["callback_data"] == "enable_reco:task:event-1"
@@ -223,11 +346,11 @@ def test_render_enable_recommendation_message_preserves_explicit_recovery_copy()
         )
     )
 
+    # reason_title в заголовке, reason_text убран (compact-формат)
     assert "Можно вернуть в работу" in message.text
-    assert "Проверка пройдена вручную" in message.text
 
 
-# Проверяем, что рекомендация не скрывает статус NOT_DELIVERING и помечает ранний сигнал.
+# Проверяем, что рекомендация не скрывает статус NOT_DELIVERING.
 def test_render_enable_recommendation_message_for_not_delivering_with_early_signal():
     message = render_enable_recommendation_message(
         item=TelegramEnableRecommendationItem(
@@ -243,13 +366,10 @@ def test_render_enable_recommendation_message_for_not_delivering_with_early_sign
         )
     )
 
-    assert "Статус доставки Meta: <b>NOT_DELIVERING</b>" in message.text
-    assert "Есть ранний сигнал" not in message.text
-    assert "Мало переходов на PWA" in message.text
-    assert "Следующее действие: проверьте сигнал вручную перед включением." in message.text
+    assert "Доставка Meta: <b>NOT_DELIVERING</b>" in message.text
 
 
-# Проверяем, что warning-рекомендация явно предупреждает о близости к порогу.
+# Проверяем, что warning-рекомендация предупреждает о близости к порогу.
 def test_render_enable_recommendation_message_for_warning():
     message = render_enable_recommendation_message(
         item=TelegramEnableRecommendationItem(
@@ -265,8 +385,6 @@ def test_render_enable_recommendation_message_for_warning():
         )
     )
 
-    assert "Рекомендация требует проверки перед включением" in message.text
-    assert "Можно включить" not in message.text
+    assert "Требует проверки" in message.text
     assert "Близко к порогу" in message.text
-    assert "Дорогая рега" in message.text
-    assert "Статус доставки Meta: <b>OFF</b>" in message.text
+    assert "Доставка Meta: <b>OFF</b>" in message.text

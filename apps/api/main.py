@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -28,40 +29,6 @@ from apps.api.routers import (
     settings,
     vision_telegram,
 )
-from apps.api.schemas import (  # noqa: F401 - re-exported for backward compatibility
-    ActiveIncidentSchema,
-    AdDiagnosticsSchema,
-    AdSnapshotSchema,
-    AlertEventSchema,
-    ChartDataSchema,
-    CreateDisableTaskRequest,
-    CurrentEnableRecommendationRow,
-    DashboardBatchSchema,
-    DashboardPerformanceSchema,
-    DashboardStatsSchema,
-    DisableTaskSchema,
-    EnableRecommendationEventSchema,
-    EnableTaskSchema,
-    InviteCodeResponse,
-    MetricDiagnosticSchema,
-    NamingPatternAdSchema,
-    NamingPatternGroupSchema,
-    NamingTrackerResponseSchema,
-    ObserverSettingsSchema,
-    OfferRuleConfigSchema,
-    OfferSchema,
-    ScanningToggleSchema,
-    SpendHistoryPoint,
-    TelegramForumCutoverResponseSchema,
-    TelegramPrimaryRecipientSchema,
-    TelegramRecipientSchema,
-    TelegramSettingsResponseSchema,
-    TelegramSetTokenRequest,
-    VisionSettingsSchema,
-    VisionSettingsUpdateSchema,
-    _normalize_offer_code_value,
-    _offer_code_lookup_key,
-)
 from core.config import get_settings
 from core.db import get_engine
 from core.db.base import Base
@@ -70,6 +37,8 @@ from core.sentry import setup_sentry
 # Инициализируем Sentry как можно раньше, до создания приложения
 _s = get_settings()
 setup_sentry(dsn=_s.sentry_dsn, environment=_s.sentry_environment)
+
+_startup_logger = logging.getLogger(__name__)
 
 
 # ==========================================
@@ -94,6 +63,15 @@ async def lifespan(app: FastAPI):
     if not _has_alembic_migrations():
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
+
+    # Предупреждение при старте, если API_KEY не задан
+    _cfg = get_settings()
+    if not _cfg.api_key:
+        _startup_logger.warning(
+            "ВНИМАНИЕ: API_KEY не задан — API будет доступен только с localhost. "
+            "Установите API_KEY в .env перед деплоем в production."
+        )
+
     yield
     await engine.dispose()
 
@@ -138,57 +116,6 @@ app.include_router(naming_tracker.router, dependencies=_api_key_dep)
 class HealthResponse(BaseModel):
     status: str = "ok"
     db: str = "ok"
-
-
-# Import these for backward compatibility - tests import them from here
-from apps.api.routers.dashboard import (  # noqa: E402, F401
-    _build_active_incident_schema,
-    _build_campaign_stop_overrun_rows,
-    _build_current_enable_tasks_query,
-    _build_current_risk_reason_rows,
-    _build_dashboard_performance_payload,
-    _build_snapshot_base_budget_reference,
-    _build_snapshot_metrics_json,
-    _current_scan_cutoff,
-    _is_disable_task_stale_for_manual_restart,
-    _load_current_enable_recommendations,
-    _serialize_enable_recommendation_event,
-    _serialize_enable_task,
-    create_disable_task,
-    create_enable_task_from_recommendation,
-    get_ad_timeline,
-    get_chart_data,
-    get_dashboard_performance,
-    get_dashboard_stats,
-    list_active_incidents,
-    list_disable_tasks,
-    list_enable_recommendations,
-    list_enable_tasks,
-    load_live_batch_bounds,
-    retry_disable_task,
-)
-from apps.api.routers.settings import (  # noqa: E402, F401
-    _activation_command,
-    _create_forum_topics_if_needed,
-    _mask_bot_token,
-    _prepare_telegram_forum_cutover,
-    _serialize_invite_response,
-    _serialize_primary_recipient,
-    _start_disable_process,
-    _start_observer_process,
-    _stop_disable_process,
-    _stop_observer_process,
-    get_telegram_settings,
-    prepare_telegram_forum_cutover,
-    restart_disable_worker,
-    restart_observer,
-    set_telegram_token,
-    update_observer_settings,
-)
-from apps.api.routers.vision_telegram import (  # noqa: E402, F401
-    create_invite_code,
-    vision_reconnect,
-)
 
 
 @app.get("/health", response_model=HealthResponse)

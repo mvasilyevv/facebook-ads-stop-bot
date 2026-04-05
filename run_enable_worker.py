@@ -62,6 +62,7 @@ from core.domain import EnableTaskStatus
 from core.enable_tasks import reconcile_enable_tasks
 from core.models import EnableTask, VisionSettings
 from core.sentry import setup_sentry
+from core.task_queue import PostgresTaskQueue
 from core.telegram.client import TelegramBotClient
 from core.telegram.delivery import (
     broadcast_enable_task_runtime_message,
@@ -92,6 +93,13 @@ _BROWSER_RUNTIME_ERROR_MARKERS = (
     "websocket",
     "pipe closed",
     "broken pipe",
+)
+
+# Общая очередь задач на включение
+_enable_queue = PostgresTaskQueue(
+    model_class=EnableTask,
+    status_enum=EnableTaskStatus,
+    eager_loads=[EnableTask.fb_ad],
 )
 
 
@@ -144,26 +152,10 @@ async def claim_next_task():
         if any(recovery_summary.values()):
             await session.commit()
 
-        result = await session.execute(
-            select(EnableTask)
-            .options(selectinload(EnableTask.fb_ad))
-            .where(
-                (EnableTask.status == EnableTaskStatus.PENDING)
-                | (
-                    (EnableTask.status == EnableTaskStatus.RETRYING)
-                    & (EnableTask.next_retry_at <= now)
-                )
-            )
-            .order_by(EnableTask.created_at.asc())
-            .limit(1)
-            .with_for_update(skip_locked=True)
-        )
-        task = result.scalar_one_or_none()
+        task = await _enable_queue.claim_next(session)
         if task is None:
             return None
 
-        task.status = EnableTaskStatus.RUNNING
-        task.attempt_count += 1
         await session.commit()
         await session.refresh(task)
         return task
@@ -429,24 +421,24 @@ async def execute_enable_via_playwright(page, fb_ad_id: str) -> tuple[bool, str]
 
 
 async def mark_succeeded(task_id) -> None:
+    """Помечает задачу включения как успешно выполненную."""
     factory = get_session_factory()
     async with factory() as session:
         result = await session.execute(select(EnableTask).where(EnableTask.id == task_id))
         task = result.scalar_one_or_none()
         if task:
-            task.status = EnableTaskStatus.SUCCEEDED
-            task.next_retry_at = None
-            task.last_error = None
-            task.completed_at = datetime.now(UTC)
+            await _enable_queue.mark_succeeded(session, task)
             await session.commit()
 
 
 async def mark_retrying(task_id, error: str, next_retry_at: datetime) -> None:
+    """Помечает задачу включения для повторной попытки."""
     factory = get_session_factory()
     async with factory() as session:
         result = await session.execute(select(EnableTask).where(EnableTask.id == task_id))
         task = result.scalar_one_or_none()
         if task:
+            # Используем переданный next_retry_at вместо автоматического расчёта
             task.status = EnableTaskStatus.RETRYING
             task.completed_at = None
             task.last_error = error[:500]
@@ -455,15 +447,13 @@ async def mark_retrying(task_id, error: str, next_retry_at: datetime) -> None:
 
 
 async def mark_failed(task_id, error: str) -> None:
+    """Помечает задачу включения как окончательно проваленную."""
     factory = get_session_factory()
     async with factory() as session:
         result = await session.execute(select(EnableTask).where(EnableTask.id == task_id))
         task = result.scalar_one_or_none()
         if task:
-            task.status = EnableTaskStatus.FAILED
-            task.next_retry_at = None
-            task.last_error = error[:500]
-            task.completed_at = datetime.now(UTC)
+            await _enable_queue.mark_failed(session, task)
             await session.commit()
 
 

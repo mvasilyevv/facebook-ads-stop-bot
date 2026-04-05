@@ -210,9 +210,12 @@ async def reconnect_browser_manager_with_vision_settings(
         except Exception:
             logger.debug("Не удалось закрыть старый Vision-клиент", exc_info=True)
 
-    browser_manager._vision = VisionClient(x_token=x_token, base_url=api_url)
-    browser_manager._profile_id = profile_id
-    browser_manager._folder_id = None
+    # Обновляем настройки через публичный метод вместо прямого доступа к полям
+    browser_manager.reconfigure(
+        vision_client=VisionClient(x_token=x_token, base_url=api_url),
+        profile_id=profile_id,
+        folder_id=None,
+    )
     await asyncio.wait_for(
         browser_manager.connect(),
         timeout=BROWSER_CONNECT_TIMEOUT_SECONDS,
@@ -555,7 +558,15 @@ async def _send_alerts_to_telegram(
     destination,
     alerts: list[AlertCandidate],
 ) -> None:
-    """Отправляет или обновляет алерты одному получателю по stream+incident."""
+    """Отправляет или обновляет алерты одному получателю по stream+incident.
+
+    Сначала отправляет все TG-сообщения, затем сохраняет все AlertEvent
+    в одной DB-сессии (один checkout из пула вместо N).
+    """
+    # Фаза 1: отправка TG-сообщений, сбор результатов
+    _DeliveryResult = tuple[AlertCandidate, AlertState, str, int | None, int | None, str]
+    delivered: list[_DeliveryResult] = []
+
     for a in alerts:
         alert_state = _state_for_emitted_stage(a.stage)
         stream_kind = stream_for_alert_stage(a.stage)
@@ -618,14 +629,37 @@ async def _send_alerts_to_telegram(
             except Exception:
                 logger.exception("Не удалось сохранить delivery-ref для %s", a.fb_ad_id)
 
-        factory = get_session_factory()
-        try:
-            async with factory() as session:
-                snapshot = await session.scalar(
-                    select(AdSnapshot).where(AdSnapshot.fb_ad_id == a.fb_ad_id)
-                )
-                # Находим запись в справочнике fb_ads для ad_id FK
-                fb_ad = await session.scalar(select(FbAd).where(FbAd.fb_ad_id == a.fb_ad_id))
+        delivered.append(
+            (a, alert_state, message.text, delivered_message_id, existing_message_id, stream_kind)
+        )
+
+    # Фаза 2: batch-сохранение AlertEvent в одной DB-сессии
+    if not delivered:
+        return
+
+    factory = get_session_factory()
+    try:
+        async with factory() as session:
+            # Загрузим все нужные snapshot и fb_ad одним batch-запросом
+            fb_ad_ids = list({a.fb_ad_id for a, *_ in delivered})
+            snap_result = await session.execute(
+                select(AdSnapshot).where(AdSnapshot.fb_ad_id.in_(fb_ad_ids))
+            )
+            snapshots_map = {s.fb_ad_id: s for s in snap_result.scalars().all()}
+
+            fb_ad_result = await session.execute(select(FbAd).where(FbAd.fb_ad_id.in_(fb_ad_ids)))
+            fb_ads_map = {f.fb_ad_id: f for f in fb_ad_result.scalars().all()}
+
+            for (
+                a,
+                alert_state,
+                message_text,
+                delivered_message_id,
+                existing_message_id,
+                _stream,
+            ) in delivered:
+                snapshot = snapshots_map.get(a.fb_ad_id)
+                fb_ad = fb_ads_map.get(a.fb_ad_id)
                 ad_id = fb_ad.id if fb_ad else None
 
                 existing_stage_event = await session.scalar(
@@ -653,7 +687,7 @@ async def _send_alerts_to_telegram(
                     existing_stage_event.reason_title = a.reason_title
                     existing_stage_event.reason_text = a.reason_text
                     existing_stage_event.metrics_json = a.metrics_json
-                    existing_stage_event.message_text = message.text
+                    existing_stage_event.message_text = message_text
                     existing_stage_event.telegram_message_id = delivered_message_id
                 elif a.persist_event or existing_message_id is None:
                     session.add(
@@ -667,23 +701,389 @@ async def _send_alerts_to_telegram(
                             reason_title=a.reason_title,
                             reason_text=a.reason_text,
                             metrics_json=a.metrics_json,
-                            message_text=message.text,
+                            message_text=message_text,
                             telegram_chat_id=destination.chat_id,
                             telegram_message_id=delivered_message_id,
                             telegram_group_key=a.snapshot_id,
                         )
                     )
-                await session.commit()
-            if a.persist_event:
-                logger.info("AlertEvent сохранён в БД: %s, стадия %s", a.fb_ad_id, a.stage)
-            else:
-                logger.info(
-                    "TG-инцидент обновлён без новой history-записи: %s, стадия %s",
-                    a.fb_ad_id,
-                    a.stage,
-                )
+
+            await session.commit()
+            logger.info("Batch AlertEvent сохранён: %d алертов", len(delivered))
+    except Exception:
+        logger.exception("Не удалось batch-сохранить AlertEvent (%d алертов)", len(delivered))
+
+
+async def _run_scan_cycle(
+    *,
+    page,
+    offers: dict,
+    rows: list[ScannedAdRow],
+    ad_states: dict,
+    fake_deposits_map: dict[str, int],
+    observer_thresholds: dict,
+) -> tuple[list[AlertCandidate], list[AlertCandidate], list[dict]]:
+    """Один полный цикл оценки правил: resolve офферов, evaluate, FSM-переходы.
+
+    Возвращает (alerts_to_send, stop_alerts, snapshot_batch).
+    """
+    resolved_rows = []
+    for row in rows:
+        offer_code = resolve_offer_code(row.ad_name, row.campaign_name, offers)
+        offer_data = offers.get(offer_code) if offer_code else None
+        resolved_rows.append((row, offer_code, offer_data))
+
+    cpm_baselines = compute_cpm_baselines_by_offer(
+        [item for item in resolved_rows if item[1]],
+        offer_code_getter=lambda item: item[1],
+        cpm_getter=lambda item: item[0].cpm,
+    )
+
+    alerts_to_send: list[AlertCandidate] = []
+    stop_alerts: list[AlertCandidate] = []
+    snapshot_batch: list[dict] = []
+    now = datetime.now(UTC)
+
+    for row, offer_code, offer_data in resolved_rows:
+        diagnostics = None
+        if offer_code and offer_data and offer_data.get("rule_config") is not None:
+            diagnostics = build_ad_quality_diagnostics(
+                cpm_value=row.cpm,
+                cpm_baseline=cpm_baselines.get(offer_code),
+                frequency_value=row.frequency,
+                frequency_elevated_threshold=offer_data["rule_config"].frequency_elevated_threshold,
+                frequency_critical_threshold=offer_data["rule_config"].frequency_critical_threshold,
+            )
+
+        # Выключенные объявления не оцениваем — сбрасываем FSM и идём дальше
+        if is_delivery_disabled(row.delivery_status):
+            current_state, _ = ad_states.get(row.fb_ad_id, (AlertState.NORMAL, None))
+            off_state = resolve_off_alert_state(current_state)
+            ad_states[row.fb_ad_id] = (off_state, None)
+            offer_id = None
+            if offer_code and offer_code in offers:
+                offer_id = offers[offer_code]["offer"].id
+            snapshot_batch.append(
+                {
+                    "fb_ad_id": row.fb_ad_id,
+                    "campaign_name": row.campaign_name,
+                    "adset_name": row.adset_name,
+                    "ad_name": row.ad_name,
+                    "delivery_status": row.delivery_status,
+                    "offer_id": offer_id,
+                    "resolved_offer_code": offer_code,
+                    "spend": row.spend,
+                    "budget": row.budget,
+                    "reach": row.reach,
+                    "impressions": row.impressions,
+                    "clicks": row.clicks,
+                    "cpc": row.cpc,
+                    "ctr": row.ctr,
+                    "outbound_clicks": row.outbound_clicks,
+                    "outbound_ctr": row.outbound_ctr,
+                    "landing_page_views": row.landing_page_views,
+                    "cost_per_result": row.cost_per_result,
+                    "cost_per_landing_page_view": row.cost_per_landing_page_view,
+                    "cpm": row.cpm,
+                    "frequency": row.frequency,
+                    "leads": row.leads,
+                    "cost_per_lead": row.cost_per_lead,
+                    "registrations": row.registrations,
+                    "cost_per_registration": row.cost_per_registration,
+                    "deposits": row.deposits,
+                    "alert_state": off_state,
+                    "current_stage": None,
+                    "early_signal_rule_codes": [],
+                    "warning_rule_codes": [],
+                    "stop_rule_codes": [],
+                    "open_state_token": None,
+                    "telegram_group_key": None,
+                    "last_observed_at": now,
+                }
+            )
+            continue
+
+        if offer_code is None:
+            logger.debug("Observer: %s — оффер не найден, пропуск", row.ad_name)
+        elif offer_data is None or offer_data.get("rule_config") is None:
+            logger.warning(
+                "Observer: %s — оффер '%s' найден, но правила не настроены",
+                row.ad_name,
+                offer_code,
+            )
+
+        # Корректировка ложных депозитов перед оценкой правил
+        fake_count = fake_deposits_map.get(row.fb_ad_id, 0)
+        eval_row = row
+        if fake_count > 0 and row.deposits > 0:
+            effective_deps = max(0, row.deposits - fake_count)
+            eval_row = dataclasses.replace(row, deposits=effective_deps)
+
+        evaluation = evaluate_row(
+            row=eval_row,
+            offer_cpa=(Decimal(offer_data["offer"].cpa_amount) if offer_data else None),
+            rule_config=(offer_data.get("rule_config") if offer_data else None),
+            warning_percent_of_stop=observer_thresholds["warning_percent_of_stop"],
+            stop_percent_of_base=observer_thresholds["stop_percent_of_base"],
+            observer_thresholds=observer_thresholds,
+        )
+
+        # FSM-переход
+        current_state, current_token = ad_states.get(row.fb_ad_id, (AlertState.NORMAL, None))
+        normalized_state, normalized_token = reopen_reactivated_alert_state(
+            current_state,
+            current_token,
+            row.delivery_status,
+        )
+        if normalized_state != current_state:
+            logger.info(
+                "Observer: %s — объявление снова активно, сбрасываю состояние %s → NORMAL",
+                row.fb_ad_id,
+                current_state,
+            )
+        current_state, current_token = normalized_state, normalized_token
+        next_state, token, should_emit = resolve_transition(
+            current_state=current_state,
+            current_token=current_token,
+            next_stage=evaluation.stage,
+        )
+
+        # Авто-стоп: при STOP-алерте сразу переводим в CLAIMED
+        is_auto_stop = should_emit and evaluation.stage == AlertStage.STOP
+        if is_auto_stop:
+            next_state = AlertState.CLAIMED
+
+        ad_states[row.fb_ad_id] = (next_state, token)
+
+        # Лог для диагностики: FSM заблокировал повторный алерт
+        if evaluation.stage is not None and not should_emit:
+            logger.info(
+                "Observer: %s — стадия=%s, FSM блокирует (состояние=%s)",
+                row.ad_name,
+                evaluation.stage,
+                current_state,
+            )
+
+        # Определяем offer_id
+        offer_id = None
+        if offer_code and offer_code in offers:
+            offer_id = offers[offer_code]["offer"].id
+
+        # Добавляем в батч снэпшотов
+        snapshot_batch.append(
+            {
+                "fb_ad_id": row.fb_ad_id,
+                "campaign_name": row.campaign_name,
+                "adset_name": row.adset_name,
+                "ad_name": row.ad_name,
+                "delivery_status": row.delivery_status,
+                "offer_id": offer_id,
+                "resolved_offer_code": offer_code,
+                "spend": row.spend,
+                "budget": row.budget,
+                "reach": row.reach,
+                "impressions": row.impressions,
+                "clicks": row.clicks,
+                "cpc": row.cpc,
+                "ctr": row.ctr,
+                "outbound_clicks": row.outbound_clicks,
+                "outbound_ctr": row.outbound_ctr,
+                "landing_page_views": row.landing_page_views,
+                "cost_per_result": row.cost_per_result,
+                "cost_per_landing_page_view": row.cost_per_landing_page_view,
+                "cpm": row.cpm,
+                "frequency": row.frequency,
+                "leads": row.leads,
+                "cost_per_lead": row.cost_per_lead,
+                "registrations": row.registrations,
+                "cost_per_registration": row.cost_per_registration,
+                "deposits": row.deposits,
+                "alert_state": next_state,
+                "current_stage": evaluation.stage,
+                "early_signal_rule_codes": evaluation.early_signal_rule_codes,
+                "warning_rule_codes": evaluation.warning_rule_codes,
+                "stop_rule_codes": evaluation.stop_rule_codes,
+                "open_state_token": token,
+                "telegram_group_key": token,
+                "last_observed_at": now,
+            }
+        )
+
+        # Собираем алерты для отправки
+        if should_emit and evaluation.stage is not None:
+            diagnostics_text = (
+                build_diagnostics_context_text(diagnostics) if diagnostics is not None else None
+            )
+            candidate = AlertCandidate(
+                snapshot_id=token or uuid.uuid4().hex,
+                offer_id=offer_id,
+                fb_ad_id=row.fb_ad_id,
+                ad_name=row.ad_name,
+                campaign_name=row.campaign_name,
+                adset_name=row.adset_name,
+                offer_code=offer_code,
+                offer_name=offer_data["offer"].code if offer_data else None,
+                offer_cpa=str(offer_data["offer"].cpa_amount) if offer_data else None,
+                stage=evaluation.stage,
+                matched_rule_codes=evaluation.matched_rule_codes,
+                reason_title=evaluation.reason_title,
+                reason_text=_compose_reason_text(evaluation.reason_text, diagnostics_text),
+                metrics_json=build_metrics_json(
+                    row,
+                    rule_summaries=[hit.summary for hit in evaluation.matched_hits],
+                    traffic_diagnostics=(
+                        diagnostics.as_dict() if diagnostics is not None else None
+                    ),
+                ),
+            )
+            alerts_to_send.append(candidate)
+            if is_auto_stop:
+                stop_alerts.append(candidate)
+            logger.info(
+                "AlertCandidate: %s | стадия=%s | правила=%s | fsm_было=%s",
+                row.ad_name,
+                evaluation.stage,
+                evaluation.matched_rule_codes,
+                current_state,
+            )
+
+    return alerts_to_send, stop_alerts, snapshot_batch
+
+
+async def _process_scan_results(
+    *,
+    alerts_to_send: list[AlertCandidate],
+    stop_alerts: list[AlertCandidate],
+    snapshot_batch: list[dict],
+    tg_client: TelegramBotClient | None,
+    tg_destinations: list,
+    interval_seconds: int,
+) -> None:
+    """Обработка результатов скана: сохранение снэпшотов, алерты, disable tasks."""
+    # Батчевый upsert снэпшотов
+    try:
+        await batch_save_snapshots(snapshot_batch, _scan_guard)
+        logger.info("Батч-сохранение: %s снэпшотов", len(snapshot_batch))
+    except Exception:
+        logger.warning(
+            "Не удалось выполнить батч-сохранение снэпшотов",
+            exc_info=True,
+        )
+    else:
+        try:
+            await reconcile_disable_tasks_in_db()
         except Exception:
-            logger.exception("Не удалось сохранить AlertEvent для %s", a.fb_ad_id)
+            logger.warning(
+                "Не удалось обновить очередь отключения после сохранения снэпшотов",
+                exc_info=True,
+            )
+
+    # Авто-стоп: создаём DisableTask для STOP-алертов
+    if stop_alerts:
+        await auto_create_disable_tasks(stop_alerts)
+
+    try:
+        manual_attention_alerts = await reconcile_disable_incidents_after_scan()
+        if manual_attention_alerts:
+            alerts_to_send.extend(manual_attention_alerts)
+            logger.warning(
+                "Observer: %s инцидентов переведены в режим ручного разбора без нового STOP-спама",
+                len(manual_attention_alerts),
+            )
+    except Exception:
+        logger.warning(
+            "Не удалось согласовать disable-инциденты после скана",
+            exc_info=True,
+        )
+
+    # Напоминания: повторно отправляем алерты, на которые не отреагировали
+    try:
+        reminders = await collect_reminder_alerts(interval_seconds)
+        if reminders:
+            alerts_to_send.extend(reminders)
+            logger.info("Observer: добавлено %s напоминаний в очередь отправки", len(reminders))
+    except Exception:
+        logger.warning("Не удалось собрать напоминания", exc_info=True)
+
+    # Диагностика: логируем статус алертов и TG перед отправкой
+    logger.info(
+        "Observer: алертов к отправке: %s (STOP авто-стоп: %s), tg_client: %s, получателей: %s",
+        len(alerts_to_send),
+        len(stop_alerts),
+        "есть" if tg_client else "НЕТ",
+        len(tg_destinations),
+    )
+
+    # Микропауза перед отправкой алертов
+    await _human_micro_pause()
+
+    # Отправка в Telegram всем активным получателям
+    if alerts_to_send and tg_client:
+        if not tg_destinations:
+            logger.warning(
+                "Observer: есть алерты, но список получателей TG пуст — "
+                "подготовьте forum-cutover в UI и активируйте owner через /start в CONTROL"
+            )
+        for destination in tg_destinations:
+            await _send_alerts_to_telegram(tg_client, destination, alerts_to_send)
+    elif alerts_to_send and not tg_client:
+        logger.warning(
+            "Observer: есть %s алертов, но tg_client=None — "
+            "Telegram не авторизован или не настроен",
+            len(alerts_to_send),
+        )
+
+
+async def _wait_for_next_cycle(
+    *,
+    interval_seconds: int,
+    jitter_seconds: int,
+    shutdown_event: asyncio.Event | None,
+    cycle_completed: bool,
+) -> bool:
+    """Прерываемый сон между циклами с поллингом флагов.
+
+    Возвращает True если нужно продолжить (не получен сигнал остановки).
+    """
+    sleep_time = compute_jitter(interval_seconds, jitter_seconds)
+    logger.info("Observer: следующий цикл через %.0f сек", sleep_time)
+
+    end_at = _time.monotonic() + sleep_time
+    poll_interval = 5.0  # проверяем флаги каждые 5 секунд
+
+    while True:
+        remaining = end_at - _time.monotonic()
+        if remaining <= 0:
+            break
+
+        # Завершаемся при shutdown
+        if shutdown_event is not None and shutdown_event.is_set():
+            logger.info("Observer: получен сигнал остановки, завершаем цикл")
+            return False
+
+        # Проверяем флаг немедленного скана
+        if await check_scan_requested_flag():
+            logger.info("Observer: прерываем сон — запрошен немедленный скан")
+            break
+
+        chunk = min(poll_interval, remaining)
+        if cycle_completed:
+            await update_observer_runtime_status(
+                status="RUNNING",
+                message="Ожидаем следующий цикл сканирования.",
+                clear_last_error=True,
+            )
+        if shutdown_event is not None:
+            try:
+                await asyncio.wait_for(shutdown_event.wait(), timeout=chunk)
+                logger.info("Observer: получен сигнал остановки, завершаем цикл")
+                return False
+            except asyncio.TimeoutError:
+                pass
+        else:
+            await asyncio.sleep(chunk)
+
+    return True
 
 
 async def observer_loop(
@@ -943,311 +1343,25 @@ async def observer_loop(
             )
             logger.info("Observer: получено %s объявлений", len(rows))
 
-            resolved_rows = []
-            for row in rows:
-                offer_code = resolve_offer_code(row.ad_name, row.campaign_name, offers)
-                offer_data = offers.get(offer_code) if offer_code else None
-                resolved_rows.append((row, offer_code, offer_data))
-
-            cpm_baselines = compute_cpm_baselines_by_offer(
-                [item for item in resolved_rows if item[1]],
-                offer_code_getter=lambda item: item[1],
-                cpm_getter=lambda item: item[0].cpm,
+            # 3. Оценка правил, FSM-переходы, сбор алертов
+            alerts_to_send, stop_alerts, snapshot_batch = await _run_scan_cycle(
+                page=page,
+                offers=offers,
+                rows=rows,
+                ad_states=ad_states,
+                fake_deposits_map=fake_deposits_map,
+                observer_thresholds=observer_thresholds,
             )
 
-            # 3. Оценка правил и сбор алертов + подготовка батча
-            alerts_to_send: list[AlertCandidate] = []
-            stop_alerts: list[AlertCandidate] = []  # для авто-стопа
-            snapshot_batch: list[dict] = []
-            now = datetime.now(UTC)
-
-            for row, offer_code, offer_data in resolved_rows:
-                diagnostics = None
-                if offer_code and offer_data and offer_data.get("rule_config") is not None:
-                    diagnostics = build_ad_quality_diagnostics(
-                        cpm_value=row.cpm,
-                        cpm_baseline=cpm_baselines.get(offer_code),
-                        frequency_value=row.frequency,
-                        frequency_elevated_threshold=offer_data[
-                            "rule_config"
-                        ].frequency_elevated_threshold,
-                        frequency_critical_threshold=offer_data[
-                            "rule_config"
-                        ].frequency_critical_threshold,
-                    )
-
-                # Выключенные объявления не оцениваем — сбрасываем FSM и идём дальше
-                if is_delivery_disabled(row.delivery_status):
-                    current_state, _ = ad_states.get(row.fb_ad_id, (AlertState.NORMAL, None))
-                    # Если объявление уже было в процессе отключения — фиксируем терминальное DISABLED.
-                    off_state = resolve_off_alert_state(current_state)
-                    ad_states[row.fb_ad_id] = (off_state, None)
-                    offer_id = None
-                    if offer_code and offer_code in offers:
-                        offer_id = offers[offer_code]["offer"].id
-                    snapshot_batch.append(
-                        {
-                            "fb_ad_id": row.fb_ad_id,
-                            "campaign_name": row.campaign_name,
-                            "adset_name": row.adset_name,
-                            "ad_name": row.ad_name,
-                            "delivery_status": row.delivery_status,
-                            "offer_id": offer_id,
-                            "resolved_offer_code": offer_code,
-                            "spend": row.spend,
-                            "budget": row.budget,
-                            "reach": row.reach,
-                            "impressions": row.impressions,
-                            "clicks": row.clicks,
-                            "cpc": row.cpc,
-                            "ctr": row.ctr,
-                            "outbound_clicks": row.outbound_clicks,
-                            "outbound_ctr": row.outbound_ctr,
-                            "landing_page_views": row.landing_page_views,
-                            "cost_per_result": row.cost_per_result,
-                            "cost_per_landing_page_view": row.cost_per_landing_page_view,
-                            "cpm": row.cpm,
-                            "frequency": row.frequency,
-                            "leads": row.leads,
-                            "cost_per_lead": row.cost_per_lead,
-                            "registrations": row.registrations,
-                            "cost_per_registration": row.cost_per_registration,
-                            "deposits": row.deposits,
-                            "alert_state": off_state,
-                            "current_stage": None,
-                            "early_signal_rule_codes": [],
-                            "warning_rule_codes": [],
-                            "stop_rule_codes": [],
-                            "open_state_token": None,
-                            "telegram_group_key": None,
-                            "last_observed_at": now,
-                        }
-                    )
-                    continue
-
-                if offer_code is None:
-                    logger.debug("Observer: %s — оффер не найден, пропуск", row.ad_name)
-                elif offer_data is None or offer_data.get("rule_config") is None:
-                    logger.warning(
-                        "Observer: %s — оффер '%s' найден, но правила не настроены",
-                        row.ad_name,
-                        offer_code,
-                    )
-
-                # Корректировка ложных депозитов перед оценкой правил
-                fake_count = fake_deposits_map.get(row.fb_ad_id, 0)
-                eval_row = row
-                if fake_count > 0 and row.deposits > 0:
-                    effective_deps = max(0, row.deposits - fake_count)
-                    eval_row = dataclasses.replace(row, deposits=effective_deps)
-
-                evaluation = evaluate_row(
-                    row=eval_row,
-                    offer_cpa=(Decimal(offer_data["offer"].cpa_amount) if offer_data else None),
-                    rule_config=(offer_data.get("rule_config") if offer_data else None),
-                    warning_percent_of_stop=observer_thresholds["warning_percent_of_stop"],
-                    stop_percent_of_base=observer_thresholds["stop_percent_of_base"],
-                    observer_thresholds=observer_thresholds,
-                )
-
-                # FSM-переход
-                current_state, current_token = ad_states.get(
-                    row.fb_ad_id, (AlertState.NORMAL, None)
-                )
-                normalized_state, normalized_token = reopen_reactivated_alert_state(
-                    current_state,
-                    current_token,
-                    row.delivery_status,
-                )
-                if normalized_state != current_state:
-                    logger.info(
-                        "Observer: %s — объявление снова активно, сбрасываю состояние %s → NORMAL",
-                        row.fb_ad_id,
-                        current_state,
-                    )
-                current_state, current_token = normalized_state, normalized_token
-                next_state, token, should_emit = resolve_transition(
-                    current_state=current_state,
-                    current_token=current_token,
-                    next_stage=evaluation.stage,
-                )
-
-                # Авто-стоп: при STOP-алерте сразу переводим в CLAIMED
-                is_auto_stop = should_emit and evaluation.stage == AlertStage.STOP
-                if is_auto_stop:
-                    next_state = AlertState.CLAIMED
-
-                ad_states[row.fb_ad_id] = (next_state, token)
-
-                # Лог для диагностики: FSM заблокировал повторный алерт
-                if evaluation.stage is not None and not should_emit:
-                    logger.info(
-                        "Observer: %s — стадия=%s, FSM блокирует (состояние=%s)",
-                        row.ad_name,
-                        evaluation.stage,
-                        current_state,
-                    )
-
-                # Определяем offer_id
-                offer_id = None
-                if offer_code and offer_code in offers:
-                    offer_id = offers[offer_code]["offer"].id
-
-                # Добавляем в батч снэпшотов (задача 2.1)
-                snapshot_batch.append(
-                    {
-                        "fb_ad_id": row.fb_ad_id,
-                        "campaign_name": row.campaign_name,
-                        "adset_name": row.adset_name,
-                        "ad_name": row.ad_name,
-                        "delivery_status": row.delivery_status,
-                        "offer_id": offer_id,
-                        "resolved_offer_code": offer_code,
-                        "spend": row.spend,
-                        "budget": row.budget,
-                        "reach": row.reach,
-                        "impressions": row.impressions,
-                        "clicks": row.clicks,
-                        "cpc": row.cpc,
-                        "ctr": row.ctr,
-                        "outbound_clicks": row.outbound_clicks,
-                        "outbound_ctr": row.outbound_ctr,
-                        "landing_page_views": row.landing_page_views,
-                        "cost_per_result": row.cost_per_result,
-                        "cost_per_landing_page_view": row.cost_per_landing_page_view,
-                        "cpm": row.cpm,
-                        "frequency": row.frequency,
-                        "leads": row.leads,
-                        "cost_per_lead": row.cost_per_lead,
-                        "registrations": row.registrations,
-                        "cost_per_registration": row.cost_per_registration,
-                        "deposits": row.deposits,
-                        "alert_state": next_state,
-                        "current_stage": evaluation.stage,
-                        "early_signal_rule_codes": evaluation.early_signal_rule_codes,
-                        "warning_rule_codes": evaluation.warning_rule_codes,
-                        "stop_rule_codes": evaluation.stop_rule_codes,
-                        "open_state_token": token,
-                        "telegram_group_key": token,
-                        "last_observed_at": now,
-                    }
-                )
-
-                # Собираем алерты для отправки
-                if should_emit and evaluation.stage is not None:
-                    diagnostics_text = (
-                        build_diagnostics_context_text(diagnostics)
-                        if diagnostics is not None
-                        else None
-                    )
-                    candidate = AlertCandidate(
-                        snapshot_id=token or uuid.uuid4().hex,
-                        offer_id=offer_id,
-                        fb_ad_id=row.fb_ad_id,
-                        ad_name=row.ad_name,
-                        campaign_name=row.campaign_name,
-                        adset_name=row.adset_name,
-                        offer_code=offer_code,
-                        offer_name=offer_data["offer"].name if offer_data else None,
-                        offer_cpa=str(offer_data["offer"].cpa_amount) if offer_data else None,
-                        stage=evaluation.stage,
-                        matched_rule_codes=evaluation.matched_rule_codes,
-                        reason_title=evaluation.reason_title,
-                        reason_text=_compose_reason_text(evaluation.reason_text, diagnostics_text),
-                        metrics_json=build_metrics_json(
-                            row,
-                            rule_summaries=[hit.summary for hit in evaluation.matched_hits],
-                            traffic_diagnostics=(
-                                diagnostics.as_dict() if diagnostics is not None else None
-                            ),
-                        ),
-                    )
-                    alerts_to_send.append(candidate)
-                    if is_auto_stop:
-                        stop_alerts.append(candidate)
-                    logger.info(
-                        "AlertCandidate: %s | стадия=%s | правила=%s | fsm_было=%s",
-                        row.ad_name,
-                        evaluation.stage,
-                        evaluation.matched_rule_codes,
-                        current_state,
-                    )
-
-            # Батчевый upsert снэпшотов (задача 2.1)
-            try:
-                await batch_save_snapshots(snapshot_batch, _scan_guard)
-                logger.info("Батч-сохранение: %s снэпшотов", len(snapshot_batch))
-            except Exception:
-                logger.warning(
-                    "Не удалось выполнить батч-сохранение снэпшотов",
-                    exc_info=True,
-                )
-            else:
-                try:
-                    await reconcile_disable_tasks_in_db()
-                except Exception:
-                    logger.warning(
-                        "Не удалось обновить очередь отключения после сохранения снэпшотов",
-                        exc_info=True,
-                    )
-
-            # Авто-стоп: создаём DisableTask для STOP-алертов
-            if stop_alerts:
-                await auto_create_disable_tasks(stop_alerts)
-
-            try:
-                manual_attention_alerts = await reconcile_disable_incidents_after_scan()
-                if manual_attention_alerts:
-                    alerts_to_send.extend(manual_attention_alerts)
-                    logger.warning(
-                        "Observer: %s инцидентов переведены в режим ручного разбора без нового STOP-спама",
-                        len(manual_attention_alerts),
-                    )
-            except Exception:
-                logger.warning(
-                    "Не удалось согласовать disable-инциденты после скана",
-                    exc_info=True,
-                )
-
-            # Напоминания: повторно отправляем алерты, на которые не отреагировали
-            try:
-                reminders = await collect_reminder_alerts(interval_seconds)
-                if reminders:
-                    alerts_to_send.extend(reminders)
-                    logger.info(
-                        "Observer: добавлено %s напоминаний в очередь отправки", len(reminders)
-                    )
-            except Exception:
-                logger.warning("Не удалось собрать напоминания", exc_info=True)
-
-            # Диагностика: логируем статус алертов и TG перед отправкой
-            logger.info(
-                "Observer: алертов к отправке: %s (STOP авто-стоп: %s), "
-                "tg_client: %s, получателей: %s",
-                len(alerts_to_send),
-                len(stop_alerts),
-                "есть" if tg_client else "НЕТ",
-                len(tg_destinations),
+            # 4. Сохранение снэпшотов, disable tasks, отправка алертов в TG
+            await _process_scan_results(
+                alerts_to_send=alerts_to_send,
+                stop_alerts=stop_alerts,
+                snapshot_batch=snapshot_batch,
+                tg_client=tg_client,
+                tg_destinations=tg_destinations,
+                interval_seconds=interval_seconds,
             )
-
-            # Микропауза перед отправкой алертов (задача 1.5)
-            await _human_micro_pause()
-
-            # 4. Отправка в Telegram всем активным получателям
-            if alerts_to_send and tg_client:
-                if not tg_destinations:
-                    logger.warning(
-                        "Observer: есть алерты, но список получателей TG пуст — "
-                        "подготовьте forum-cutover в UI и активируйте owner через /start в CONTROL"
-                    )
-                for destination in tg_destinations:
-                    await _send_alerts_to_telegram(tg_client, destination, alerts_to_send)
-            elif alerts_to_send and not tg_client:
-                logger.warning(
-                    "Observer: есть %s алертов, но tg_client=None — "
-                    "Telegram не авторизован или не настроен",
-                    len(alerts_to_send),
-                )
 
             # Успешный цикл — сбрасываем счётчик ошибок браузера
             consecutive_browser_errors = 0
@@ -1271,6 +1385,17 @@ async def observer_loop(
             except Exception:
                 logger.exception("Не удалось отправить Telegram-алерт о недоступности данных скана")
 
+            continue
+
+        except TimeoutError:
+            # asyncio.timeout бросает TimeoutError (BaseException в Python 3.11+).
+            # Ловим отдельно, чтобы таймаут DOM-стабилизации не крашил весь loop.
+            logger.warning("Observer: таймаут ожидания DOM-стабилизации, пропускаем цикл")
+            await update_observer_runtime_status(
+                status="WARNING",
+                message="Таймаут ожидания данных Ads Manager. Следующий цикл запустится по расписанию.",
+                last_error="TimeoutError при ожидании DOM",
+            )
             continue
 
         except Exception as exc:
@@ -1307,41 +1432,12 @@ async def observer_loop(
                 clear_last_error=True,
             )
 
-        # 5. Прерываемый сон с jitter + поллинг scan_requested каждые 5 сек
-        sleep_time = compute_jitter(interval_seconds, jitter_seconds)
-        logger.info("Observer: следующий цикл через %.0f сек", sleep_time)
-
-        end_at = _time.monotonic() + sleep_time
-        POLL_INTERVAL = 5.0  # проверяем флаги каждые 5 секунд
-
-        while True:
-            remaining = end_at - _time.monotonic()
-            if remaining <= 0:
-                break
-
-            # Завершаемся при shutdown
-            if shutdown_event is not None and shutdown_event.is_set():
-                logger.info("Observer: получен сигнал остановки, завершаем цикл")
-                return
-
-            # Проверяем флаг немедленного скана
-            if await check_scan_requested_flag():
-                logger.info("Observer: прерываем сон — запрошен немедленный скан")
-                break
-
-            chunk = min(POLL_INTERVAL, remaining)
-            if cycle_completed:
-                await update_observer_runtime_status(
-                    status="RUNNING",
-                    message="Ожидаем следующий цикл сканирования.",
-                    clear_last_error=True,
-                )
-            if shutdown_event is not None:
-                try:
-                    await asyncio.wait_for(shutdown_event.wait(), timeout=chunk)
-                    logger.info("Observer: получен сигнал остановки, завершаем цикл")
-                    return
-                except asyncio.TimeoutError:
-                    pass
-            else:
-                await asyncio.sleep(chunk)
+        # 5. Прерываемый сон с jitter + поллинг scan_requested
+        should_continue = await _wait_for_next_cycle(
+            interval_seconds=interval_seconds,
+            jitter_seconds=jitter_seconds,
+            shutdown_event=shutdown_event,
+            cycle_completed=cycle_completed,
+        )
+        if not should_continue:
+            return

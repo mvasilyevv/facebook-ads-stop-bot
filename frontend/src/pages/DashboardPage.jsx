@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ALERT_STATE_LABELS } from '../constants/alertStates.js';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { fmt$ as _fmt$, fmtN as _fmtN, fmtRoas as _fmtRoas } from '../utils/formatters.js';
 import {
   getDashboardStats,
@@ -8,7 +8,6 @@ import {
   getObserverSettings,
   toggleScanning,
   triggerScanNow,
-  restartObserver,
   retryDisableTask,
   getDashboardPerformance,
   getEnableTasks,
@@ -18,7 +17,6 @@ import {
   createDisableTask,
   createEnableTaskFromRecommendation,
 } from '../api.js';
-import { useAsyncPolling } from '../hooks/useAsyncPolling.js';
 import { useRefreshOnResume } from '../hooks/useRefreshOnResume.js';
 import { AlertTray } from '../components/AlertTray.jsx';
 import { CampaignScorecard, FunnelChart } from '../components/CampaignScorecard.jsx';
@@ -238,80 +236,102 @@ function HeroKPIStrip({ performance, performanceYesterday }) {
 /* === Основная страница === */
 
 export default function DashboardPage({ onNavigate }) {
-  const [stats, setStats] = useState(null);
-  const [incidents, setIncidents] = useState([]);
-  const [disableTasks, setDisableTasks] = useState([]);
-  const [settings, setSettings] = useState(null);
-  const [performance, setPerformance] = useState(null);
+  const queryClient = useQueryClient();
   const [error, setError] = useState(null);
   const [toggling, setToggling] = useState(false);
   const [scanning, setScanning] = useState(false);
+  // Баг 2: useRef для таймера polling — cleanup всегда ловит актуальный timerId
+  const scanTimerRef = useRef(null);
 
-  const [enableTasks, setEnableTasks] = useState([]);
-  const [enableRecs, setEnableRecs] = useState([]);
-  const [chartData, setChartData] = useState(null);
-  const [spendHistory, setSpendHistory] = useState([]);
-  const [performanceYesterday, setPerformanceYesterday] = useState(null);
+  /* --- Основные данные: обновление каждые 30 секунд --- */
+  const { data: settings } = useQuery({
+    queryKey: ['observerSettings'],
+    queryFn: getObserverSettings,
+    refetchInterval: 30_000,
+  });
 
-  const loadData = useCallback(async () => {
-    try {
-      const [statsRes, incidentsRes, tasksRes, settingsRes, perfRes, perfYestRes, enableTasksRes, enableRecsRes, chartRes, spendRes] = await Promise.all([
-        getDashboardStats(),
-        getDashboardIncidents({ limit: 50 }).catch(() => []),
-        getDisableTasks({ limit: 50 }),
-        getObserverSettings(),
-        getDashboardPerformance({ period: 'today' }),
-        getDashboardPerformance({ period: 'yesterday' }).catch(() => null),
-        getEnableTasks({ limit: 20 }).catch(() => []),
-        getEnableRecommendations({ limit: 10 }).catch(() => []),
-        getChartData({ period: 'today' }).catch(() => null),
-        getSpendHistory({ hours: 24 }).catch(() => []),
-      ]);
-      setStats(statsRes);
-      setIncidents(normalizeIncidentList(incidentsRes));
-      setDisableTasks(tasksRes);
-      setSettings(settingsRes);
-      setPerformance(perfRes);
-      setPerformanceYesterday(perfYestRes);
-      setEnableTasks(enableTasksRes);
-      setEnableRecs(enableRecsRes);
-      setChartData(chartRes);
-      setSpendHistory(spendRes);
-      setError(null);
-    } catch (e) {
-      setError(e.message);
-    }
-  }, []);
+  const { data: performance } = useQuery({
+    queryKey: ['performanceToday'],
+    queryFn: () => getDashboardPerformance({ period: 'today' }),
+    refetchInterval: 30_000,
+  });
 
-  const loadRealtimeStatus = useCallback(async () => {
-    try {
-      const [tasksRes, statsRes, incidentsRes] = await Promise.all([
-        getDisableTasks({ limit: 50 }),
-        getDashboardStats(),
-        getDashboardIncidents({ limit: 50 }).catch(() => []),
-      ]);
-      setDisableTasks(tasksRes);
-      setStats(statsRes);
-      setIncidents(normalizeIncidentList(incidentsRes));
-    } catch (_) {
-      /* тихо игнорируем ошибки realtime-поллинга */
-    }
-  }, []);
+  const { data: performanceYesterday } = useQuery({
+    queryKey: ['performanceYesterday'],
+    queryFn: () => getDashboardPerformance({ period: 'yesterday' }).catch(() => null),
+    refetchInterval: 30_000,
+  });
 
-  useEffect(() => {
-    void loadData();
-  }, [loadData]);
+  const { data: chartData } = useQuery({
+    queryKey: ['chartDataToday'],
+    queryFn: () => getChartData({ period: 'today' }).catch(() => null),
+    refetchInterval: 30_000,
+  });
 
-  useAsyncPolling(async () => { await loadData(); }, { enabled: true, intervalMs: 30000 });
-  useAsyncPolling(async () => { await loadRealtimeStatus(); }, { enabled: true, intervalMs: 5000 });
-  useRefreshOnResume(() => { void loadData(); });
+  const { data: spendHistory } = useQuery({
+    queryKey: ['spendHistory24h'],
+    // spendHistory — массив, поэтому fallback тоже массив
+    queryFn: () => getSpendHistory({ hours: 24 }).catch(() => []),
+    refetchInterval: 30_000,
+  });
+
+  const { data: enableRecs } = useQuery({
+    queryKey: ['enableRecs'],
+    queryFn: () => getEnableRecommendations({ limit: 10 }).catch(() => []),
+    refetchInterval: 30_000,
+  });
+
+  /* --- Realtime-данные: обновление каждые 5 секунд --- */
+  const { data: stats } = useQuery({
+    queryKey: ['dashboardStats'],
+    queryFn: getDashboardStats,
+    refetchInterval: 5_000,
+  });
+
+  const { data: rawIncidents } = useQuery({
+    queryKey: ['dashboardIncidents'],
+    queryFn: () => getDashboardIncidents({ limit: 50 }).catch(() => []),
+    refetchInterval: 5_000,
+  });
+
+  const { data: disableTasks } = useQuery({
+    queryKey: ['disableTasks'],
+    queryFn: () => getDisableTasks({ limit: 50 }),
+    refetchInterval: 5_000,
+  });
+
+  const { data: enableTasks } = useQuery({
+    queryKey: ['enableTasks'],
+    queryFn: () => getEnableTasks({ limit: 20 }).catch(() => []),
+    refetchInterval: 5_000,
+  });
+
+  /* Нормализуем инциденты из сырых данных */
+  const incidents = useMemo(
+    () => normalizeIncidentList(rawIncidents ?? []),
+    [rawIncidents],
+  );
+
+  /* Баг 5: при возврате из фона инвалидируем только stale-запросы, не всё подряд */
+  useRefreshOnResume(() => {
+    queryClient.invalidateQueries({ predicate: (q) => q.state.isStale });
+  });
 
   const handleToggle = async () => {
     if (toggling || !settings) return;
     setToggling(true);
+    /* Баг 4: сохраняем предыдущее состояние для отката при ошибке */
+    const previousData = queryClient.getQueryData(['observerSettings']);
+    /* Оптимистично обновляем кеш настроек */
+    queryClient.setQueryData(['observerSettings'], (cur) =>
+      cur ? { ...cur, is_scanning_enabled: !cur.is_scanning_enabled } : cur,
+    );
     try {
       await toggleScanning(!settings.is_scanning_enabled);
-      setSettings((cur) => ({ ...cur, is_scanning_enabled: !cur.is_scanning_enabled }));
+    } catch (e) {
+      /* Баг 4: откатываем оптимистичное обновление при ошибке */
+      queryClient.setQueryData(['observerSettings'], previousData);
+      setError(`Ошибка переключения сканирования: ${e.message}`);
     } finally {
       setToggling(false);
     }
@@ -320,28 +340,29 @@ export default function DashboardPage({ onNavigate }) {
   const handleScanNow = async () => {
     if (scanning) return;
     setScanning(true);
-    const scanStartedAt = stats?.last_scan_at ?? null;
+    /* Баг 9: читаем актуальное значение из кеша, не из замыкания */
+    const scanStartedAt = queryClient.getQueryData(['dashboardStats'])?.last_scan_at ?? null;
     try {
       await triggerScanNow();
       const deadline = Date.now() + 120_000;
-      let timerId = null;
+      /* Баг 2: используем ref, чтобы cleanup всегда видел актуальный timerId */
       const poll = async () => {
         if (Date.now() > deadline) { setScanning(false); return; }
         try {
           const fresh = await getDashboardStats();
           if (fresh?.last_scan_at && fresh.last_scan_at !== scanStartedAt) {
-            setStats(fresh);
+            /* Обновляем кеш статистики свежими данными */
+            queryClient.setQueryData(['dashboardStats'], fresh);
             setScanning(false);
             return;
           }
-        } catch (_) {
-          /* ожидаем */
+        } catch {
+          /* ожидаем следующей итерации */
         }
-        timerId = setTimeout(poll, 4000);
+        scanTimerRef.current = setTimeout(poll, 4000);
       };
-      timerId = setTimeout(poll, 4000);
-      // Cleanup при размонтировании — сохраняем ссылку для очистки
-      return () => { if (timerId) clearTimeout(timerId); };
+      scanTimerRef.current = setTimeout(poll, 4000);
+      return () => { if (scanTimerRef.current) clearTimeout(scanTimerRef.current); };
     } catch (e) {
       setScanning(false);
       setError(`Ошибка запуска скана: ${e.message}`);
@@ -351,8 +372,8 @@ export default function DashboardPage({ onNavigate }) {
   const handleDisable = async (fbAdId) => {
     try {
       await createDisableTask(fbAdId);
-      const tasksRes = await getDisableTasks({ limit: 50 });
-      setDisableTasks(tasksRes);
+      /* Инвалидируем кеш задач на отключение */
+      queryClient.invalidateQueries({ queryKey: ['disableTasks'] });
     } catch (e) {
       setError(`Ошибка отключения: ${e.message}`);
     }
@@ -361,12 +382,9 @@ export default function DashboardPage({ onNavigate }) {
   const handleEnableTask = async (recId) => {
     try {
       await createEnableTaskFromRecommendation(recId);
-      const [recsRes, enableTasksRes] = await Promise.all([
-        getEnableRecommendations({ limit: 10 }),
-        getEnableTasks({ limit: 20 }),
-      ]);
-      setEnableRecs(recsRes);
-      setEnableTasks(enableTasksRes);
+      /* Инвалидируем рекомендации и задачи на включение */
+      queryClient.invalidateQueries({ queryKey: ['enableRecs'] });
+      queryClient.invalidateQueries({ queryKey: ['enableTasks'] });
     } catch (e) {
       setError(`Ошибка включения: ${e.message}`);
     }
@@ -375,8 +393,8 @@ export default function DashboardPage({ onNavigate }) {
   const handleRetry = async (taskId) => {
     try {
       await retryDisableTask(taskId);
-      const tasksRes = await getDisableTasks({ limit: 50 });
-      setDisableTasks(tasksRes);
+      /* Инвалидируем кеш задач на отключение */
+      queryClient.invalidateQueries({ queryKey: ['disableTasks'] });
     } catch (e) {
       setError(`Ошибка повтора: ${e.message}`);
     }

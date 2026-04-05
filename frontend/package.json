@@ -15,6 +15,7 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
+    "@tanstack/react-query": "^5.96.2",
     "autoprefixer": "^10.4.27",
     "clsx": "^2.1.1",
     "postcss": "^8.5.8",

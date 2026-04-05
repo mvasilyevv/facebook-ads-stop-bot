@@ -852,19 +852,20 @@ export default function AdsPage({ initialView = 'active', initialState = '' }) {
   const loadAds = useCallback(async () => {
     try {
       setLoading(true);
-      const incidentsPromise = getDashboardIncidents({ limit: 200 }).catch(() => []);
+      /* Баг 8: все промисы обёрнуты в catch — один упавший запрос не крашит страницу */
       const [allData, statsData, taskData, incidentsData] = await Promise.all([
-        getAdSnapshots({ limit: 200 }),
-        getDashboardStats(),
-        getDisableTasks({ limit: 50 }),
-        incidentsPromise,
+        getAdSnapshots({ limit: 200 }).catch(() => []),
+        getDashboardStats().catch(() => null),
+        getDisableTasks({ limit: 50 }).catch(() => []),
+        getDashboardIncidents({ limit: 200 }).catch(() => []),
       ]);
-      setAllAds(allData);
-      setLastScanAt(statsData.last_scan_at || null);
-      setTasks(taskData);
+      setAllAds(Array.isArray(allData) ? allData : []);
+      setLastScanAt(statsData?.last_scan_at || null);
+      setTasks(Array.isArray(taskData) ? taskData : []);
       setIncidents(normalizeIncidentList(incidentsData));
       setError(null);
     } catch (e) {
+      /* Баг 6: обновляем error state при ошибках polling */
       setError(e.message);
     } finally {
       setLoading(false);
@@ -877,7 +878,12 @@ export default function AdsPage({ initialView = 'active', initialState = '' }) {
 
   useAsyncPolling(
     async () => {
-      await loadAds();
+      /* Баг 6: перехватываем ошибки polling и обновляем error state */
+      try {
+        await loadAds();
+      } catch (e) {
+        setError(e.message);
+      }
     },
     {
       enabled: true,
@@ -1235,8 +1241,9 @@ export default function AdsPage({ initialView = 'active', initialState = '' }) {
         </div>
       )}
 
+      {/* Баг 7: key={timelineAdId} гарантирует remount при смене объявления — polling перезапускается без stale closure */}
       {timelineAdId && (
-        <AdTimeline fbAdId={timelineAdId} onClose={() => setTimelineAdId(null)} />
+        <AdTimeline key={timelineAdId} fbAdId={timelineAdId} onClose={() => setTimelineAdId(null)} />
       )}
 
       {/* Модалка ложных депозитов */}

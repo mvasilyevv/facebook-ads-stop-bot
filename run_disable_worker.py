@@ -58,6 +58,7 @@ from core.disable_tasks import is_delivery_disabled, reconcile_disable_tasks
 from core.domain import AlertState, DisableTaskStatus
 from core.models import AdSnapshot, DisableTask, VisionSettings
 from core.sentry import setup_sentry
+from core.task_queue import PostgresTaskQueue
 from core.telegram.delivery import broadcast_disable_task_runtime_message
 from core.worker_utils import PidFileLock, wait_for_shutdown_or_timeout
 
@@ -81,6 +82,13 @@ DISABLE_SINGLE_SEARCH_MAX_SCROLL_PASSES = 120
 DISABLE_SINGLE_SEARCH_FALLBACK_MAX_STEPS = 60
 DISABLE_MANAGER_DISCONNECT_TIMEOUT_SECONDS = 15
 DISABLE_VISION_CLOSE_TIMEOUT_SECONDS = 10
+
+# Общая очередь задач на отключение
+_disable_queue = PostgresTaskQueue(
+    model_class=DisableTask,
+    status_enum=DisableTaskStatus,
+    eager_loads=[DisableTask.fb_ad],
+)
 
 
 async def _close_disable_runtime_resources(manager, vision) -> None:
@@ -150,26 +158,10 @@ async def claim_next_task():
         if any(recovery_summary.values()):
             await session.commit()
 
-        result = await session.execute(
-            select(DisableTask)
-            .options(selectinload(DisableTask.fb_ad))
-            .where(
-                (DisableTask.status == DisableTaskStatus.PENDING)
-                | (
-                    (DisableTask.status == DisableTaskStatus.RETRYING)
-                    & (DisableTask.next_retry_at <= now)
-                )
-            )
-            .order_by(DisableTask.created_at.asc())
-            .limit(1)
-            .with_for_update(skip_locked=True)
-        )
-        task = result.scalar_one_or_none()
+        task = await _disable_queue.claim_next(session)
         if task is None:
             return None
 
-        task.status = DisableTaskStatus.RUNNING
-        task.attempt_count += 1
         await session.commit()
         await session.refresh(task, attribute_names=["fb_ad"])
         return task
@@ -184,27 +176,9 @@ async def claim_task_batch(limit: int = DISABLE_BATCH_SIZE) -> list[DisableTask]
         if any(recovery_summary.values()):
             await session.commit()
 
-        result = await session.execute(
-            select(DisableTask)
-            .options(selectinload(DisableTask.fb_ad))
-            .where(
-                (DisableTask.status == DisableTaskStatus.PENDING)
-                | (
-                    (DisableTask.status == DisableTaskStatus.RETRYING)
-                    & (DisableTask.next_retry_at <= now)
-                )
-            )
-            .order_by(DisableTask.created_at.asc())
-            .limit(limit)
-            .with_for_update(skip_locked=True)
-        )
-        tasks = list(result.scalars())
+        tasks = await _disable_queue.claim_batch(session, limit)
         if not tasks:
             return []
-
-        for task in tasks:
-            task.status = DisableTaskStatus.RUNNING
-            task.attempt_count += 1
 
         await session.commit()
         for task in tasks:
@@ -642,10 +616,7 @@ async def mark_succeeded(task_id) -> None:
                     task.id,
                 )
                 return
-            task.status = DisableTaskStatus.SUCCEEDED
-            task.completed_at = datetime.now(UTC)
-            task.next_retry_at = None
-            task.last_error = None
+            await _disable_queue.mark_succeeded(session, task)
 
             snap_result = await session.execute(
                 select(AdSnapshot).where(AdSnapshot.ad_id == task.ad_id)
@@ -674,6 +645,7 @@ async def mark_retrying(task_id, error: str, next_retry_at: datetime) -> None:
                     task.id,
                 )
                 return
+            # Используем переданный next_retry_at вместо автоматического расчёта
             task.status = DisableTaskStatus.RETRYING
             task.last_error = error[:500]
             task.next_retry_at = next_retry_at
@@ -693,9 +665,7 @@ async def mark_failed(task_id, error: str) -> None:
                     task.id,
                 )
                 return
-            task.status = DisableTaskStatus.FAILED
-            task.last_error = error[:500]
-            task.completed_at = datetime.now(UTC)
+            await _disable_queue.mark_failed(session, task)
             await session.commit()
 
 

@@ -40,7 +40,7 @@ async def test_vision_reconnect_restarts_profile_immediately():
             "apps.api.routers.settings._start_observer_process", new=AsyncMock(return_value=2002)
         ),
     ):
-        from apps.api.main import vision_reconnect
+        from apps.api.routers.vision_telegram import vision_reconnect
 
         payload = await vision_reconnect(db=mock_db)
 

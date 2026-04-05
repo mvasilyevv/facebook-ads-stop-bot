@@ -25,7 +25,7 @@ def mock_db():
 # Проверяем, что GET настроек Telegram отдаёт forum-group поля и activation command.
 @pytest.mark.asyncio
 async def test_get_telegram_settings_returns_forum_group_fields(mock_db):
-    from apps.api.main import get_telegram_settings
+    from apps.api.routers.settings import get_telegram_settings
 
     invite = SimpleNamespace(
         code="654321",
@@ -79,11 +79,8 @@ async def test_get_telegram_settings_returns_forum_group_fields(mock_db):
 # Проверяем, что установка токена сразу готовит forum cutover и возвращает команду активации.
 @pytest.mark.asyncio
 async def test_set_telegram_token_prepares_forum_cutover(mock_db):
-    from apps.api.main import (
-        TelegramForumCutoverResponseSchema,
-        TelegramSetTokenRequest,
-        set_telegram_token,
-    )
+    from apps.api.routers.settings import set_telegram_token
+    from apps.api.schemas import TelegramForumCutoverResponseSchema, TelegramSetTokenRequest
 
     row = SimpleNamespace(
         singleton_key="default",
@@ -139,7 +136,7 @@ async def test_set_telegram_token_prepares_forum_cutover(mock_db):
 # Проверяем, что cutover endpoint отказывается работать без сохранённого токена.
 @pytest.mark.asyncio
 async def test_prepare_telegram_forum_cutover_requires_saved_token(mock_db):
-    from apps.api.main import prepare_telegram_forum_cutover
+    from apps.api.routers.settings import prepare_telegram_forum_cutover
 
     mock_db.scalar = AsyncMock(return_value=None)
 
@@ -153,7 +150,7 @@ async def test_prepare_telegram_forum_cutover_requires_saved_token(mock_db):
 # Проверяем, что инвайт в forum-режиме отдаёт только команду активации без deep link.
 @pytest.mark.asyncio
 async def test_create_invite_code_returns_activation_command_for_forum_group(mock_db):
-    from apps.api.main import create_invite_code
+    from apps.api.routers.vision_telegram import create_invite_code
 
     row = SimpleNamespace(
         singleton_key="default",

@@ -104,20 +104,20 @@ def _build_task_message(
     detail: str | None = None,
     retry_line: str | None = None,
     footer: str | None = None,
+    include_metrics: bool = True,
 ) -> str:
-    """Собирает lifecycle-сообщение с иерархией, контекстом и метриками."""
+    """Собирает compact lifecycle-сообщение с blockquote-иерархией."""
     lines = [title, ""]
     lines.extend(
         build_ad_identity_lines(
             campaign_name=context.campaign_name if context else None,
             adset_name=context.adset_name if context else None,
             ad_name=ad_name,
-            fb_ad_id=fb_ad_id,
+            compact=True,
         )
     )
-    lines.append("")
 
-    if context:
+    if context and include_metrics:
         rule_summaries = context.metrics_json.get("rule_summaries")
         if not isinstance(rule_summaries, list):
             rule_summaries = None
@@ -128,16 +128,16 @@ def _build_task_message(
             rule_summaries=rule_summaries,
         )
         if diagnosis_lines:
-            lines.extend(diagnosis_lines)
             lines.append("")
+            lines.extend(diagnosis_lines)
 
         metric_lines = build_metric_lines(context.metrics_json or {})
         if metric_lines:
-            lines.append("📌 <b>Ключевые метрики</b>")
-            lines.extend(metric_lines)
             lines.append("")
+            lines.extend(metric_lines)
 
     if status_line:
+        lines.append("")
         lines.append(status_line)
     if detail:
         lines.append(f"Причина: {html.escape(detail)}")
@@ -145,7 +145,7 @@ def _build_task_message(
         lines.append(retry_line)
     if footer:
         lines.append(footer)
-    lines.append(f"👤 Запросил: {_display_username(requested_by_username)}")
+    lines.append(f"👤 {_display_username(requested_by_username)}")
     return "\n".join(lines).strip()
 
 
@@ -321,7 +321,7 @@ def render_disable_task_queue_message(
         requested_by_username=requested_by_username,
         context=context,
         status_line=status_line,
-        footer="ℹ️ Дальнейший статус этой цепочки будет идти в STOP topic.",
+        footer="📍 STOP topic",
     )
 
 
@@ -347,7 +347,7 @@ def render_enable_task_queue_message(
         requested_by_username=requested_by_username,
         context=context,
         status_line=status_line,
-        footer="ℹ️ Дальнейший статус этой цепочки будет идти в ENABLE topic.",
+        footer="📍 ENABLE topic",
     )
 
 
@@ -369,7 +369,8 @@ def render_disable_task_runtime_message(
             fb_ad_id=fb_ad_id,
             requested_by_username=requested_by_username,
             context=context,
-            footer="🔎 Бот ждёт подтверждения статуса OFF в следующем скане; цепочка остаётся в STOP topic.",
+            include_metrics=False,
+            footer="🔎 Ждём подтверждения OFF в следующем скане",
         )
 
     if status == DisableTaskStatus.RETRYING.value:
@@ -383,6 +384,7 @@ def render_disable_task_runtime_message(
             fb_ad_id=fb_ad_id,
             requested_by_username=requested_by_username,
             context=context,
+            include_metrics=False,
             detail=detail or "Временная ошибка",
             retry_line=retry_line,
         )
@@ -393,6 +395,7 @@ def render_disable_task_runtime_message(
         fb_ad_id=fb_ad_id,
         requested_by_username=requested_by_username,
         context=context,
+        include_metrics=False,
         detail=detail or "Неизвестная ошибка",
     )
 
@@ -415,7 +418,8 @@ def render_enable_task_runtime_message(
             fb_ad_id=fb_ad_id,
             requested_by_username=requested_by_username,
             context=context,
-            footer="ℹ️ Дальнейшие статусы этой цепочки идут в ENABLE topic.",
+            include_metrics=False,
+            footer="📍 ENABLE topic",
         )
 
     if status == EnableTaskStatus.RETRYING.value:
@@ -429,6 +433,7 @@ def render_enable_task_runtime_message(
             fb_ad_id=fb_ad_id,
             requested_by_username=requested_by_username,
             context=context,
+            include_metrics=False,
             detail=detail or "Временная ошибка",
             retry_line=retry_line,
         )
@@ -439,6 +444,7 @@ def render_enable_task_runtime_message(
         fb_ad_id=fb_ad_id,
         requested_by_username=requested_by_username,
         context=context,
+        include_metrics=False,
         detail=detail or "Неизвестная ошибка",
     )
 

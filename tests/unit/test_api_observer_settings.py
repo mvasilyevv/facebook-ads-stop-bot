@@ -22,7 +22,8 @@ def mock_db():
 # Проверяем, что step-level payload сохраняет отдельные пороги и не схлопывается обратно в общий процент.
 @pytest.mark.asyncio
 async def test_update_observer_settings_persists_step_thresholds(mock_db):
-    from apps.api.main import ObserverSettingsSchema, update_observer_settings
+    from apps.api.routers.settings import update_observer_settings
+    from apps.api.schemas import ObserverSettingsSchema
 
     row = SimpleNamespace(
         singleton_key="default",
@@ -75,7 +76,7 @@ async def test_update_observer_settings_persists_step_thresholds(mock_db):
 
 # Проверяем, что отрицательный stop_percent_of_base отклоняется валидатором (B9).
 def test_observer_settings_schema_rejects_negative_stop_percent():
-    from apps.api.main import ObserverSettingsSchema
+    from apps.api.schemas import ObserverSettingsSchema
 
     with pytest.raises(ValidationError) as exc_info:
         ObserverSettingsSchema(stop_percent_of_base=Decimal("-10"))
@@ -85,7 +86,7 @@ def test_observer_settings_schema_rejects_negative_stop_percent():
 
 # Проверяем, что нулевой stop_percent_of_base тоже отклоняется (должен быть > 0).
 def test_observer_settings_schema_rejects_zero_stop_percent():
-    from apps.api.main import ObserverSettingsSchema
+    from apps.api.schemas import ObserverSettingsSchema
 
     with pytest.raises(ValidationError) as exc_info:
         ObserverSettingsSchema(stop_percent_of_base=Decimal("0"))
@@ -95,7 +96,7 @@ def test_observer_settings_schema_rejects_zero_stop_percent():
 
 # Проверяем, что interval_seconds < 10 отклоняется.
 def test_observer_settings_schema_rejects_too_short_interval():
-    from apps.api.main import ObserverSettingsSchema
+    from apps.api.schemas import ObserverSettingsSchema
 
     with pytest.raises(ValidationError) as exc_info:
         ObserverSettingsSchema(interval_seconds=5)
@@ -105,7 +106,7 @@ def test_observer_settings_schema_rejects_too_short_interval():
 
 # Проверяем, что warning_percent_of_stop > 100 отклоняется.
 def test_observer_settings_schema_rejects_warning_above_100():
-    from apps.api.main import ObserverSettingsSchema
+    from apps.api.schemas import ObserverSettingsSchema
 
     with pytest.raises(ValidationError) as exc_info:
         ObserverSettingsSchema(warning_percent_of_stop=Decimal("150"))
@@ -115,7 +116,7 @@ def test_observer_settings_schema_rejects_warning_above_100():
 
 # Проверяем, что корректные значения принимаются без ошибок.
 def test_observer_settings_schema_accepts_valid_values():
-    from apps.api.main import ObserverSettingsSchema
+    from apps.api.schemas import ObserverSettingsSchema
 
     schema = ObserverSettingsSchema(
         interval_seconds=60,
@@ -129,7 +130,7 @@ def test_observer_settings_schema_accepts_valid_values():
 
 # Проверяем, что cpc_stop_percent_of_base=None (отключено) проходит валидацию.
 def test_observer_settings_schema_accepts_null_step_thresholds():
-    from apps.api.main import ObserverSettingsSchema
+    from apps.api.schemas import ObserverSettingsSchema
 
     schema = ObserverSettingsSchema(
         cpc_stop_percent_of_base=None,

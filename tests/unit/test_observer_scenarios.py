@@ -362,7 +362,7 @@ def test_scenario_click_guardrail_creates_stop_alert_and_snapshot():
     ]
     assert "частота 3.20 при критической границе 3.00" in (result.alert_candidate.reason_text or "")
     assert "🛑 <b>СТОП</b>" in (result.alert_message_text or "")
-    assert "Причина:" in (result.alert_message_text or "")
+    assert "<blockquote>" in (result.alert_message_text or "")
 
 
 # Проверяем что наличие лида подавляет более раннее правило клика.
@@ -528,10 +528,7 @@ def test_scenario_early_signal_builds_alert_and_snapshot():
     assert result.alert_candidate is not None
     assert result.alert_candidate.reason_title == "Мало переходов на PWA"
     assert "Ранний сигнал" in (result.alert_message_text or "")
-    assert "Следующее действие:" in (result.alert_message_text or "")
-    assert "задача на отключение создаётся отдельной цепочкой в STOP" in (
-        result.alert_message_text or ""
-    )
+    assert "Мало переходов на PWA" in (result.alert_message_text or "")
 
 
 # Проверяем что CPM и Frequency остаются только диагностикой и не создают алерт сами по себе.

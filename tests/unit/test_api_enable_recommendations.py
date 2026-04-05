@@ -49,7 +49,7 @@ def mock_db():
 # Проверяем, что список рекомендаций отдаёт только последнюю запись на объявление и state TASK_CREATED.
 @pytest.mark.asyncio
 async def test_list_enable_recommendations_deduplicates_by_ad_and_marks_task_created(mock_db):
-    from apps.api.main import list_enable_recommendations
+    from apps.api.routers.dashboard import list_enable_recommendations
 
     last_scan = datetime(2026, 3, 29, 14, 5, tzinfo=UTC)
     shared_batch = datetime(2026, 3, 29, 14, 0, tzinfo=UTC)
@@ -199,7 +199,7 @@ async def test_list_enable_recommendations_deduplicates_by_ad_and_marks_task_cre
 # Проверяем, что явный recovery-кейс не теряет свой текст при сериализации.
 @pytest.mark.asyncio
 async def test_serialize_enable_recommendation_preserves_explicit_recovery_copy():
-    from apps.api.main import _serialize_enable_recommendation_event
+    from apps.api.routers.dashboard import _serialize_enable_recommendation_event
 
     event = SimpleNamespace(
         id=uuid.uuid4(),
@@ -229,7 +229,7 @@ async def test_serialize_enable_recommendation_preserves_explicit_recovery_copy(
 
 # Проверяем, что fallback-метрики snapshot включают дополнительные колонки из текущего пресета.
 def test_build_snapshot_metrics_json_includes_additional_ads_manager_columns():
-    from apps.api.main import _build_snapshot_metrics_json
+    from apps.api.routers.dashboard import _build_snapshot_metrics_json
 
     snapshot = SimpleNamespace(
         spend=Decimal("10.50"),
@@ -267,7 +267,7 @@ def test_build_snapshot_metrics_json_includes_additional_ads_manager_columns():
 async def test_load_current_enable_recommendations_filters_out_ads_that_are_no_longer_disabled(
     mock_db,
 ):
-    from apps.api.main import _load_current_enable_recommendations
+    from apps.api.routers.dashboard import _load_current_enable_recommendations
 
     last_scan = datetime(2026, 3, 29, 14, 35, tzinfo=UTC)
     shared_batch = datetime(2026, 3, 29, 14, 30, tzinfo=UTC)
@@ -333,7 +333,7 @@ async def test_load_current_enable_recommendations_filters_out_ads_that_are_no_l
 # Проверяем, что stale event скрывается, если live-переоценка уже не подтверждает рекомендацию.
 @pytest.mark.asyncio
 async def test_load_current_enable_recommendations_filters_out_stale_live_event(mock_db):
-    from apps.api.main import _load_current_enable_recommendations
+    from apps.api.routers.dashboard import _load_current_enable_recommendations
 
     last_scan = datetime(2026, 3, 29, 14, 45, tzinfo=UTC)
     shared_batch = datetime(2026, 3, 29, 14, 30, tzinfo=UTC)
@@ -398,7 +398,7 @@ async def test_load_current_enable_recommendations_filters_out_stale_live_event(
 # Проверяем, что API может создать enable-задачу из recommendation event и вернуть сериализованный task.
 @pytest.mark.asyncio
 async def test_create_enable_task_from_recommendation_returns_task_payload(mock_db):
-    from apps.api.main import create_enable_task_from_recommendation
+    from apps.api.routers.dashboard import create_enable_task_from_recommendation
 
     task_id = uuid.uuid4()
     ad_id = uuid.uuid4()
@@ -447,7 +447,7 @@ async def test_create_enable_task_from_recommendation_returns_task_payload(mock_
 # Проверяем, что API принимает переочередение существующей failed-задачи как успешный результат.
 @pytest.mark.asyncio
 async def test_create_enable_task_from_recommendation_accepts_requeued_outcome(mock_db):
-    from apps.api.main import create_enable_task_from_recommendation
+    from apps.api.routers.dashboard import create_enable_task_from_recommendation
 
     task_id = uuid.uuid4()
     ad_id = uuid.uuid4()
@@ -495,7 +495,7 @@ async def test_create_enable_task_from_recommendation_accepts_requeued_outcome(m
 # Проверяем, что список enable-задач по умолчанию отдаёт статусы для мониторинга.
 @pytest.mark.asyncio
 async def test_list_enable_tasks_returns_monitoring_statuses_by_default(mock_db):
-    from apps.api.main import list_enable_tasks
+    from apps.api.routers.dashboard import list_enable_tasks
 
     ad_id = uuid.uuid4()
     task = SimpleNamespace(
@@ -532,7 +532,7 @@ async def test_list_enable_tasks_returns_monitoring_statuses_by_default(mock_db)
 # Проверяем, что старый FAILED не торчит в мониторинге, если по тому же объявлению уже есть более поздний SUCCEEDED.
 @pytest.mark.asyncio
 async def test_list_enable_tasks_hides_superseded_failed_task():
-    from apps.api.main import list_enable_tasks
+    from apps.api.routers.dashboard import list_enable_tasks
 
     pytest.importorskip("aiosqlite")
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
@@ -610,7 +610,7 @@ async def test_list_enable_tasks_hides_superseded_failed_task():
 # Проверяем, что список enable-задач по умолчанию не тащит записи из прошлых суток кабинета.
 @pytest.mark.asyncio
 async def test_list_enable_tasks_filters_out_previous_cabinet_day():
-    from apps.api.main import list_enable_tasks
+    from apps.api.routers.dashboard import list_enable_tasks
 
     pytest.importorskip("aiosqlite")
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
@@ -707,7 +707,7 @@ async def test_list_enable_tasks_filters_out_previous_cabinet_day():
 
 # Проверяем, что успешная enable-задача не отдаёт старую ошибку и retry-поля в API.
 def test_serialize_enable_task_clears_stale_error_for_succeeded_task():
-    from apps.api.main import _serialize_enable_task
+    from apps.api.routers.dashboard import _serialize_enable_task
 
     task = SimpleNamespace(
         id=uuid.uuid4(),
@@ -734,7 +734,7 @@ def test_serialize_enable_task_clears_stale_error_for_succeeded_task():
 # Проверяем, что dashboard stats включает счётчики рекомендаций и очередь enable-задач.
 @pytest.mark.asyncio
 async def test_dashboard_stats_includes_enable_recommendation_counters(mock_db):
-    from apps.api.main import get_dashboard_stats
+    from apps.api.routers.dashboard import get_dashboard_stats
 
     group_result = MagicMock()
     group_result.all.return_value = [
@@ -776,7 +776,7 @@ async def test_dashboard_stats_includes_enable_recommendation_counters(mock_db):
 # Проверяем, что dashboard stats считает enable-очередь только в рамках текущих суток кабинета.
 @pytest.mark.asyncio
 async def test_dashboard_stats_filters_pending_enable_tasks_by_cabinet_day():
-    from apps.api.main import get_dashboard_stats
+    from apps.api.routers.dashboard import get_dashboard_stats
 
     pytest.importorskip("aiosqlite")
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
@@ -865,7 +865,7 @@ async def test_dashboard_stats_filters_pending_enable_tasks_by_cabinet_day():
 # Проверяем, что timeline объявления включает recommendation events и enable tasks.
 @pytest.mark.asyncio
 async def test_get_ad_timeline_includes_enable_recommendations_and_enable_tasks(mock_db):
-    from apps.api.main import get_ad_timeline
+    from apps.api.routers.dashboard import get_ad_timeline
 
     ad_id = uuid.uuid4()
     snapshot = SimpleNamespace(

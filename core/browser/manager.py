@@ -155,6 +155,28 @@ class VisionBrowserManager:
                 logger.debug("Ошибка при остановке Playwright", exc_info=True)
             self._playwright = None
 
+    def reconfigure(
+        self,
+        *,
+        vision_client: VisionClient,
+        profile_id: str,
+        folder_id: str | None = None,
+    ) -> None:
+        """Обновляет внутреннее состояние менеджера без переподключения.
+
+        Метод предназначен для смены Vision-клиента и профиля на лету
+        (например, при перезагрузке настроек из БД). Переподключение
+        выполняется отдельно через connect().
+
+        Args:
+            vision_client: новый Vision API-клиент.
+            profile_id: идентификатор профиля в Vision.
+            folder_id: идентификатор папки; если None — будет определён автоматически при connect().
+        """
+        self._vision = vision_client
+        self._profile_id = profile_id
+        self._folder_id = folder_id
+
     async def stop_profile(self) -> None:
         """Останавливает профиль в Vision."""
         await self.disconnect()

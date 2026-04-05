@@ -7,7 +7,7 @@ import logging
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import selectinload
 
 from core.db import get_session_factory
@@ -19,6 +19,7 @@ from core.models import (
     DisableTask,
     FbAd,
     FbAdset,
+    ObserverSettings,
     Offer,
     VisionSettings,
 )
@@ -75,12 +76,25 @@ async def load_fake_deposits() -> dict[str, int]:
     return fake_map
 
 
-async def load_ad_states_from_db() -> dict[str, tuple[AlertState, str | None]]:
+# Дефолтный горизонт: снэпшоты старше этого порога не участвуют в сканировании
+_DEFAULT_AD_STATE_WINDOW_HOURS = 24
+
+
+async def load_ad_states_from_db(
+    cutoff: datetime | None = None,
+) -> dict[str, tuple[AlertState, str | None]]:
     """Загружает FSM-состояния из БД при старте воркера.
 
-    Читает alert_state и open_state_token из всех активных снэпшотов,
-    чтобы восстановить состояние после перезапуска.
+    Читает alert_state и open_state_token только из «свежих» снэпшотов,
+    чтобы не тащить в память тысячи устаревших записей.
+
+    Args:
+        cutoff: нижняя граница last_observed_at; если None — дефолт 24 часа назад.
     """
+    # Вычисляем горизонт: только снэпшоты не старше cutoff
+    if cutoff is None:
+        cutoff = datetime.now(UTC) - timedelta(hours=_DEFAULT_AD_STATE_WINDOW_HOURS)
+
     factory = get_session_factory()
     async with factory() as session:
         result = await session.execute(
@@ -88,7 +102,7 @@ async def load_ad_states_from_db() -> dict[str, tuple[AlertState, str | None]]:
                 AdSnapshot.fb_ad_id,
                 AdSnapshot.alert_state,
                 AdSnapshot.open_state_token,
-            )
+            ).where(AdSnapshot.last_observed_at >= cutoff)
         )
         rows = result.all()
 
@@ -96,15 +110,25 @@ async def load_ad_states_from_db() -> dict[str, tuple[AlertState, str | None]]:
     for fb_ad_id, alert_state, token in rows:
         states[fb_ad_id] = (alert_state, token)
 
-    logger.info("Загружено %s FSM-состояний из БД", len(states))
+    logger.info(
+        "Загружено %s FSM-состояний из БД (за последние %s ч)",
+        len(states),
+        _DEFAULT_AD_STATE_WINDOW_HOURS,
+    )
     return states
 
 
 async def refresh_runtime_ad_states(
     current_states: dict[str, tuple[AlertState, str | None]],
+    cutoff: datetime | None = None,
 ) -> dict[str, tuple[AlertState, str | None]]:
-    """Синхронизирует in-memory FSM с БД, чтобы внешние действия сразу были видны observer."""
-    persisted_states = await load_ad_states_from_db()
+    """Синхронизирует in-memory FSM с БД, чтобы внешние действия сразу были видны observer.
+
+    Args:
+        current_states: текущий in-memory словарь состояний.
+        cutoff: горизонт для load_ad_states_from_db; если None — дефолт 24 часа.
+    """
+    persisted_states = await load_ad_states_from_db(cutoff=cutoff)
     if persisted_states != current_states:
         logger.info(
             "Observer: FSM-состояния синхронизированы с БД (%s записей)",
@@ -149,18 +173,26 @@ async def check_scanning_enabled() -> bool:
 
 
 async def check_scan_requested_flag() -> bool:
-    """Проверяет и сбрасывает флаг scan_requested в ObserverSettings.
+    """Атомарно проверяет и сбрасывает флаг scan_requested в ObserverSettings.
 
-    Returns:
-        True если нужно немедленно запустить скан.
+    Использует UPDATE...WHERE...RETURNING для предотвращения race condition
+    между observer и API.
     """
     factory = get_session_factory()
     try:
         async with factory() as session:
-            row = await get_observer_settings(session)
-            if row and row.scan_requested:
-                row.scan_requested = False
-                await session.commit()
+            result = await session.execute(
+                update(ObserverSettings)
+                .where(
+                    ObserverSettings.singleton_key == "default",
+                    ObserverSettings.scan_requested.is_(True),
+                )
+                .values(scan_requested=False)
+                .returning(ObserverSettings.id)
+            )
+            affected = result.first()
+            await session.commit()
+            if affected:
                 logger.info("Флаг scan_requested сброшен — выполняем немедленный скан")
                 return True
     except Exception:
@@ -169,21 +201,25 @@ async def check_scan_requested_flag() -> bool:
 
 
 async def check_vision_reconnect_flag() -> bool:
-    """Проверяет и сбрасывает флаг reconnect_requested в VisionSettings.
+    """Атомарно проверяет и сбрасывает флаг reconnect_requested в VisionSettings.
 
-    Returns:
-        True если observer должен переподключиться к браузеру.
+    Использует UPDATE...WHERE...RETURNING для предотвращения race condition.
     """
     factory = get_session_factory()
     try:
         async with factory() as session:
             result = await session.execute(
-                select(VisionSettings).where(VisionSettings.singleton_key == "default")
+                update(VisionSettings)
+                .where(
+                    VisionSettings.singleton_key == "default",
+                    VisionSettings.reconnect_requested.is_(True),
+                )
+                .values(reconnect_requested=False)
+                .returning(VisionSettings.id)
             )
-            row = result.scalar_one_or_none()
-            if row and row.reconnect_requested:
-                row.reconnect_requested = False
-                await session.commit()
+            affected = result.first()
+            await session.commit()
+            if affected:
                 logger.info(
                     "Флаг reconnect_requested сброшен — выполняем переподключение к браузеру"
                 )
@@ -356,7 +392,8 @@ async def collect_reminder_alerts(interval_seconds: int) -> list[AlertCandidate]
         if not candidates:
             return []
 
-        reminders: list[AlertCandidate] = []
+        # Фильтруем кандидатов до batch-запросов
+        filtered: list[AdSnapshot] = []
         for snap in candidates:
             if snap.last_observed_at is None or snap.last_observed_at < active_cutoff:
                 logger.info(
@@ -364,42 +401,46 @@ async def collect_reminder_alerts(interval_seconds: int) -> list[AlertCandidate]
                     snap.fb_ad_id,
                 )
                 continue
-
-            # Снуз подавляет только повторные EARLY/WARNING-напоминания.
             if (
                 snap.alert_state in {AlertState.EARLY_SIGNAL_SENT, AlertState.WARNING_SENT}
                 and snap.snoozed_until
                 and snap.snoozed_until > now
             ):
                 continue
+            filtered.append(snap)
 
-            incident_key = snap.open_state_token or ""
-            last_event_at_stmt = select(func.max(AlertEvent.created_at)).where(
-                AlertEvent.ad_id == snap.ad_id
-            )
-            if incident_key:
-                last_event_at_stmt = last_event_at_stmt.where(
-                    AlertEvent.telegram_group_key == incident_key
-                )
-            last_event_at = await session.scalar(last_event_at_stmt)
+        if not filtered:
+            return []
+
+        # Batch-загрузка: MAX(created_at) по ad_id — один запрос вместо N
+        ad_ids = [snap.ad_id for snap in filtered if snap.ad_id is not None]
+        last_event_at_result = await session.execute(
+            select(AlertEvent.ad_id, func.max(AlertEvent.created_at).label("max_at"))
+            .where(AlertEvent.ad_id.in_(ad_ids))
+            .group_by(AlertEvent.ad_id)
+        )
+        last_event_at_map: dict = {row.ad_id: row.max_at for row in last_event_at_result}
+
+        # Batch-загрузка: последний AlertEvent по ad_id — один запрос через DISTINCT ON
+        # (PostgreSQL-специфичный, но проект использует только Postgres)
+        latest_events_result = await session.execute(
+            select(AlertEvent)
+            .where(AlertEvent.ad_id.in_(ad_ids))
+            .order_by(AlertEvent.ad_id, AlertEvent.updated_at.desc(), AlertEvent.created_at.desc())
+            .distinct(AlertEvent.ad_id)
+        )
+        latest_events_map: dict = {evt.ad_id: evt for evt in latest_events_result.scalars().all()}
+
+        reminders: list[AlertCandidate] = []
+        for snap in filtered:
+            last_event_at = last_event_at_map.get(snap.ad_id)
             if last_event_at is None:
                 continue
             secs_since = (now - last_event_at).total_seconds()
             if secs_since < reminder_threshold:
                 continue
 
-            last_event_stmt = (
-                select(AlertEvent)
-                .where(AlertEvent.ad_id == snap.ad_id)
-                .order_by(AlertEvent.updated_at.desc(), AlertEvent.created_at.desc())
-                .limit(1)
-            )
-            if incident_key:
-                last_event_stmt = last_event_stmt.where(
-                    AlertEvent.telegram_group_key == incident_key
-                )
-            last_event_result = await session.execute(last_event_stmt)
-            last_event = last_event_result.scalar_one_or_none()
+            last_event = latest_events_map.get(snap.ad_id)
 
             if snap.alert_state == AlertState.STOP_SENT:
                 stage = AlertStage.STOP

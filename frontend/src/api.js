@@ -10,10 +10,13 @@ async function request(url, options = {}) {
   if (API_KEY) {
     headers['X-API-Key'] = API_KEY;
   }
+  // signal передаётся из AbortController для отмены запроса при unmount
+  const { signal, ...restOptions } = options;
   const resp = await fetch(`${BASE}${url}`, {
-    cache: options.cache ?? 'no-store',
+    cache: restOptions.cache ?? 'no-store',
     headers,
-    ...options,
+    ...(signal ? { signal } : {}),
+    ...restOptions,
   });
   if (!resp.ok) {
     let detail = '';
@@ -106,24 +109,13 @@ export const createDisableTask = (fbAdId) =>
 export const getEnableRecommendations = (params = {}) => requestWithQuery('/dashboard/enable-recommendations', params);
 export const createEnableTaskFromRecommendation = (eventId) =>
   request(`/dashboard/enable-recommendations/${eventId}/enable`, { method: 'POST' });
-export const getEnableTasks = (params = {}) => {
-  const qs = new URLSearchParams(params).toString();
-  return request(`/dashboard/enable-tasks${qs ? '?' + qs : ''}`);
-};
+// requestWithQuery фильтрует null/undefined автоматически
+export const getEnableTasks = (params = {}) => requestWithQuery('/dashboard/enable-tasks', params);
 export const retryDisableTask = (id) =>
   request(`/dashboard/disable-tasks/${id}/retry`, { method: 'POST' });
-export const getSpendHistory = (params = {}) => {
-  const qs = new URLSearchParams(params).toString();
-  return request(`/dashboard/spend-history${qs ? '?' + qs : ''}`);
-};
-export const getChartData = (params = {}) => {
-  const qs = new URLSearchParams(params).toString();
-  return request(`/dashboard/chart-data${qs ? '?' + qs : ''}`);
-};
-export const getDashboardPerformance = (params = {}) => {
-  const qs = new URLSearchParams(params).toString();
-  return request(`/dashboard/performance${qs ? '?' + qs : ''}`);
-};
+export const getSpendHistory = (params = {}) => requestWithQuery('/dashboard/spend-history', params);
+export const getChartData = (params = {}) => requestWithQuery('/dashboard/chart-data', params);
+export const getDashboardPerformance = (params = {}) => requestWithQuery('/dashboard/performance', params);
 export const getAdTimeline = (fb_ad_id) => request(`/ads/${fb_ad_id}/timeline`);
 export const restartObserver = () => request('/observer/restart', { method: 'POST' });
 export const restartDisableWorker = () => request('/disable-worker/restart', { method: 'POST' });

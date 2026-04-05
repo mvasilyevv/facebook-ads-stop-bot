@@ -152,7 +152,7 @@ def _make_scalars_result(rows):
 
 # Проверяем что схемы API всегда отдают код оффера в верхнем регистре
 def test_offer_code_schemas_normalize_uppercase():
-    from apps.api.main import AdSnapshotSchema, OfferSchema
+    from apps.api.schemas import AdSnapshotSchema, OfferSchema
 
     offer = OfferSchema(code=" drc_cr2 ", cpa_amount=Decimal("10"), is_active=True)
     snapshot = AdSnapshotSchema(
@@ -177,7 +177,7 @@ def test_offer_code_schemas_normalize_uppercase():
 
 # Проверяем что lookup-ключ для оффера не зависит от регистра и пробелов
 def test_offer_code_lookup_key_is_case_insensitive():
-    from apps.api.main import _offer_code_lookup_key
+    from apps.api.schemas import _offer_code_lookup_key
 
     assert _offer_code_lookup_key(" drc_cr2 ") == "drc_cr2"
     assert _offer_code_lookup_key("DRC_CR2") == "drc_cr2"
@@ -185,7 +185,7 @@ def test_offer_code_lookup_key_is_case_insensitive():
 
 # Проверяем что причины активных рисков считаются по живым риск-статусам, а не по архивным snapshot
 def test_build_current_risk_reason_rows_uses_active_snapshot_states():
-    from apps.api.main import _build_current_risk_reason_rows
+    from apps.api.routers.dashboard import _build_current_risk_reason_rows
 
     snapshots = [
         _make_risk_snapshot(
@@ -219,7 +219,7 @@ def test_build_current_risk_reason_rows_uses_active_snapshot_states():
 
 # Проверяем что current incident уходит в ручной разбор после лимита тихих автоповторов.
 def test_build_active_incident_schema_marks_manual_attention_after_retry_limit():
-    from apps.api.main import _build_active_incident_schema
+    from apps.api.routers.dashboard import _build_active_incident_schema
 
     now = datetime.now(UTC)
     snapshot = SimpleNamespace(
@@ -283,7 +283,7 @@ def test_build_active_incident_schema_marks_manual_attention_after_retry_limit()
 
 # Проверяем что отклонение по кампании возвращает и перерасход, и экономию относительно базы.
 def test_build_campaign_stop_overrun_rows_returns_aggregated_base_stop_excess_by_campaign():
-    from apps.api.main import _build_campaign_stop_overrun_rows
+    from apps.api.routers.dashboard import _build_campaign_stop_overrun_rows
 
     offer_id = uuid.uuid4()
     snapshots = [
@@ -378,7 +378,7 @@ def test_build_campaign_stop_overrun_rows_returns_aggregated_base_stop_excess_by
 
 # Проверяем что при нулевой суммарной дельте кампания остаётся в выдаче как точное попадание в базу.
 def test_build_campaign_stop_overrun_rows_keeps_campaign_when_total_matches_base():
-    from apps.api.main import _build_campaign_stop_overrun_rows
+    from apps.api.routers.dashboard import _build_campaign_stop_overrun_rows
 
     offer_id = uuid.uuid4()
     snapshots = [
@@ -452,7 +452,7 @@ def test_build_campaign_stop_overrun_rows_keeps_campaign_when_total_matches_base
 # Проверяем что endpoint current incidents сортирует кейсы по последней активности.
 @pytest.mark.asyncio
 async def test_list_active_incidents_sorts_by_last_activity(mock_db):
-    from apps.api.main import list_active_incidents
+    from apps.api.routers.dashboard import list_active_incidents
 
     now = datetime.now(UTC)
     old_ad_id = uuid.uuid4()
@@ -580,7 +580,7 @@ async def test_dashboard_stats_counts(mock_db):
     # scalar вызовы: last_scan, active_offers, pending_tasks, pending_enable_tasks, disabled_today
     mock_db.scalar = AsyncMock(side_effect=[None, 5, 2, 0, 1])
 
-    from apps.api.main import get_dashboard_stats
+    from apps.api.routers.dashboard import get_dashboard_stats
 
     with patch(
         "apps.api.routers.dashboard._load_current_enable_recommendations",
@@ -610,7 +610,7 @@ async def test_dashboard_stats_empty_db(mock_db):
     mock_db.execute = AsyncMock(side_effect=[group_result, observer_result])
     mock_db.scalar = AsyncMock(side_effect=[None, 0, 0, 0, 0])
 
-    from apps.api.main import get_dashboard_stats
+    from apps.api.routers.dashboard import get_dashboard_stats
 
     with patch(
         "apps.api.routers.dashboard._load_current_enable_recommendations",
@@ -639,7 +639,7 @@ async def test_dashboard_uses_single_group_by_query(mock_db):
     mock_db.execute = AsyncMock(side_effect=[group_result, observer_result])
     mock_db.scalar = AsyncMock(side_effect=[None, 1, 0, 0, 0])
 
-    from apps.api.main import get_dashboard_stats
+    from apps.api.routers.dashboard import get_dashboard_stats
 
     with patch(
         "apps.api.routers.dashboard._load_current_enable_recommendations",
@@ -665,7 +665,7 @@ async def test_dashboard_stats_counts_early_signal_separately(mock_db):
     mock_db.execute = AsyncMock(side_effect=[group_result, observer_result])
     mock_db.scalar = AsyncMock(side_effect=[None, 3, 0, 0, 0])
 
-    from apps.api.main import get_dashboard_stats
+    from apps.api.routers.dashboard import get_dashboard_stats
 
     with patch(
         "apps.api.routers.dashboard._load_current_enable_recommendations",
@@ -707,7 +707,7 @@ async def test_dashboard_stats_includes_observer_runtime_fields(mock_db):
         ]
     )
 
-    from apps.api.main import get_dashboard_stats
+    from apps.api.routers.dashboard import get_dashboard_stats
 
     with patch(
         "apps.api.routers.dashboard._load_current_enable_recommendations",
@@ -764,7 +764,7 @@ async def test_list_disable_tasks_filters_to_operational_statuses_by_default(moc
         ad_id_2: {"fb_ad_id": "ad-2", "ad_name": "Ad 2"},
     }
 
-    from apps.api.main import list_disable_tasks
+    from apps.api.routers.dashboard import list_disable_tasks
 
     with patch(
         "apps.api.routers.dashboard._load_ad_context_map",
@@ -798,7 +798,7 @@ async def test_list_disable_tasks_supports_explicit_succeeded_filter(mock_db):
 
     ad_ctx_map = {ad_id: {"fb_ad_id": "ad-2", "ad_name": "Ad 2"}}
 
-    from apps.api.main import list_disable_tasks
+    from apps.api.routers.dashboard import list_disable_tasks
 
     with patch(
         "apps.api.routers.dashboard._load_ad_context_map",
@@ -812,7 +812,7 @@ async def test_list_disable_tasks_supports_explicit_succeeded_filter(mock_db):
 # Проверяем что UI-перезапуск disable worker останавливает старый процесс и поднимает новый.
 @pytest.mark.asyncio
 async def test_restart_disable_worker_restarts_process():
-    from apps.api.main import restart_disable_worker
+    from apps.api.routers.settings import restart_disable_worker
 
     with (
         patch(
@@ -832,7 +832,7 @@ async def test_restart_disable_worker_restarts_process():
 # Проверяем что зависшую RUNNING-задачу можно вручную вернуть в очередь перед рестартом воркера.
 @pytest.mark.asyncio
 async def test_retry_disable_task_allows_stale_running_task(mock_db):
-    from apps.api.main import retry_disable_task
+    from apps.api.routers.dashboard import retry_disable_task
 
     stale_time = datetime.now(UTC) - timedelta(minutes=10)
     task = SimpleNamespace(
@@ -861,7 +861,7 @@ async def test_retry_disable_task_allows_stale_running_task(mock_db):
 
 # Проверяем что helper корректно собирает summary, funnel и сортировку кампаний
 def test_build_dashboard_performance_payload_aggregates_metrics():
-    from apps.api.main import _build_dashboard_performance_payload
+    from apps.api.routers.dashboard import _build_dashboard_performance_payload
 
     now = datetime(2026, 3, 28, 12, 0, tzinfo=UTC)
     snapshots = [
@@ -917,7 +917,7 @@ def test_build_dashboard_performance_payload_aggregates_metrics():
 
 # Проверяем что периоды today, 7d и 30d фильтруют снэпшоты по-разному
 def test_build_dashboard_performance_payload_respects_periods():
-    from apps.api.main import _build_dashboard_performance_payload
+    from apps.api.routers.dashboard import _build_dashboard_performance_payload
 
     now = datetime(2026, 3, 28, 12, 0, tzinfo=UTC)
     names = ["Today campaign", "Within week", "Within month"]
@@ -981,7 +981,7 @@ def test_build_dashboard_performance_payload_respects_periods():
 
 # Проверяем что архив суток и текущий срез суммируются в историческом period
 def test_build_dashboard_performance_payload_merges_archives_with_current_snapshots():
-    from apps.api.main import _build_dashboard_performance_payload
+    from apps.api.routers.dashboard import _build_dashboard_performance_payload
 
     now = datetime(2026, 3, 28, 12, 0, tzinfo=UTC)
     snapshots = [
@@ -1034,7 +1034,7 @@ def test_build_dashboard_performance_payload_merges_archives_with_current_snapsh
 
 # Проверяем что period=today режется по локальной дате dashboard, а не по UTC
 def test_build_dashboard_performance_payload_uses_local_day_cutoff():
-    from apps.api.main import _build_dashboard_performance_payload
+    from apps.api.routers.dashboard import _build_dashboard_performance_payload
 
     tz = ZoneInfo("Europe/Kaliningrad")
     now = datetime(2026, 3, 29, 0, 30, tzinfo=tz)
@@ -1074,7 +1074,7 @@ def test_build_dashboard_performance_payload_uses_local_day_cutoff():
 
 # Проверяем что zero-safe расчёты не подставляют ложные нули в cost и conversion
 def test_build_dashboard_performance_payload_keeps_nulls_for_zero_denominators():
-    from apps.api.main import _build_dashboard_performance_payload
+    from apps.api.routers.dashboard import _build_dashboard_performance_payload
 
     now = datetime(2026, 3, 28, 12, 0, tzinfo=UTC)
     snapshots = [
@@ -1119,7 +1119,7 @@ async def test_dashboard_performance_today_uses_current_scan_cutoff(mock_db):
     last_scan = datetime(2026, 3, 28, 10, 0, tzinfo=UTC)
     mock_db.scalar = AsyncMock(return_value=last_scan)
 
-    from apps.api.main import get_dashboard_performance
+    from apps.api.routers.dashboard import get_dashboard_performance
 
     with (
         patch(
@@ -1165,7 +1165,7 @@ async def test_chart_data_today_uses_local_day_fallback(mock_db):
 
     from unittest.mock import patch
 
-    from apps.api.main import get_chart_data
+    from apps.api.routers.dashboard import get_chart_data
 
     now = datetime(2026, 3, 28, 13, 45, tzinfo=ZoneInfo("Europe/Kaliningrad"))
 
@@ -1197,7 +1197,7 @@ async def test_chart_data_today_uses_local_day_fallback(mock_db):
 
 # Проверяем что кастомная граница суток кабинета отрезает данные до zero-scan
 def test_build_dashboard_performance_payload_respects_explicit_cabinet_cutoff():
-    from apps.api.main import _build_dashboard_performance_payload
+    from apps.api.routers.dashboard import _build_dashboard_performance_payload
 
     tz = ZoneInfo("Europe/Kaliningrad")
     cutoff = datetime(2026, 3, 28, 8, 0, tzinfo=tz)
@@ -1262,7 +1262,7 @@ async def test_dashboard_performance_endpoint_returns_payload(mock_db):
 
     from unittest.mock import patch
 
-    from apps.api.main import get_dashboard_performance
+    from apps.api.routers.dashboard import get_dashboard_performance
 
     ad_ctx = {snap.ad_id: {"campaign_name": "Campaign A"}}
     with (
@@ -1296,7 +1296,7 @@ async def test_dashboard_performance_endpoint_returns_payload(mock_db):
 async def test_create_disable_task_sets_required_fields(mock_db):
     from unittest.mock import patch
 
-    from apps.api.main import create_disable_task
+    from apps.api.routers.dashboard import create_disable_task
 
     snapshot_id = uuid.uuid4()
     ad_id = uuid.uuid4()
@@ -1351,7 +1351,7 @@ async def test_create_disable_task_sets_required_fields(mock_db):
 async def test_create_disable_task_generates_token_when_missing(mock_db):
     from unittest.mock import patch
 
-    from apps.api.main import create_disable_task
+    from apps.api.routers.dashboard import create_disable_task
 
     ad_id = uuid.uuid4()
     snapshot = SimpleNamespace(
@@ -1401,7 +1401,7 @@ async def test_create_disable_task_generates_token_when_missing(mock_db):
 async def test_create_disable_task_returns_404_for_missing_snapshot(mock_db):
     from fastapi import HTTPException
 
-    from apps.api.main import create_disable_task
+    from apps.api.routers.dashboard import create_disable_task
 
     mock_db.scalar = AsyncMock(return_value=None)
 

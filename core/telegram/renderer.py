@@ -32,9 +32,27 @@ def build_ad_identity_lines(
     adset_name: str | None,
     ad_name: str,
     fb_ad_id: str | None = None,
+    compact: bool = False,
 ) -> list[str]:
-    """Строит иерархию campaign -> adset -> ad для Telegram-сообщения."""
-    lines: list[str] = []
+    """Строит иерархию campaign -> adset -> ad для Telegram-сообщения.
+
+    compact=True: blockquote-обёртка, campaign › adset одной строкой, без fb_ad_id.
+    """
+    if compact:
+        lines: list[str] = ["<blockquote>"]
+        # Кампания › Адсет одной строкой
+        hierarchy_parts: list[str] = []
+        if campaign_name:
+            hierarchy_parts.append(html.escape(campaign_name))
+        if adset_name:
+            hierarchy_parts.append(html.escape(adset_name))
+        if hierarchy_parts:
+            lines.append(f"📁 {' › '.join(hierarchy_parts)}")
+        lines.append(f"📢 <b>{html.escape(ad_name)}</b>")
+        lines.append("</blockquote>")
+        return lines
+
+    lines = []
     if campaign_name:
         lines.append(f"📁 {html.escape(campaign_name)}")
     if adset_name:
@@ -73,6 +91,122 @@ def build_diagnosis_lines(
             lines.append(f"🎯 Сигналы: {html.escape(labels)}")
 
     return lines
+
+
+def build_key_metric_line(
+    metrics_json: dict[str, Any],
+    rule_summaries: list[str] | None = None,
+) -> list[str]:
+    """Возвращает 1-2 строки: расход + первый rule_summary inline."""
+    metrics = metrics_json or {}
+    lines: list[str] = []
+
+    spend = metrics.get("spend")
+    if spend is not None:
+        lines.append(f"💰 Расход: <b>${spend}</b>")
+
+    summaries = [str(s).strip() for s in (rule_summaries or []) if str(s).strip()]
+    if summaries:
+        lines.append(f"📏 {html.escape(summaries[0])}")
+
+    return lines
+
+
+def build_detailed_metrics_block(metrics_json: dict[str, Any]) -> list[str]:
+    """Возвращает <blockquote expandable> с секциями Трафик / Конверсии / Аукцион.
+
+    Скрывает нулевые/None метрики без связанной ненулевой пары.
+    Если блок пуст — возвращает пустой список.
+    """
+    metrics = metrics_json or {}
+    sections: list[str] = []
+
+    # --- Трафик ---
+    traffic: list[str] = []
+    cpc = metrics.get("cpc")
+    clicks = metrics.get("clicks")
+    if cpc is not None:
+        traffic.append(f"CPC: ${cpc}")
+    if clicks is not None and clicks > 0:
+        traffic.append(f"Кликов: {clicks}")
+
+    outbound_clicks = metrics.get("outbound_clicks")
+    outbound_ctr = metrics.get("outbound_ctr")
+    if outbound_clicks is not None and outbound_clicks > 0:
+        traffic.append(f"Исх. клики: {outbound_clicks}")
+    if outbound_ctr is not None:
+        traffic.append(f"CTR исх.: {outbound_ctr}%")
+
+    lpv = metrics.get("landing_page_views")
+    cost_per_lpv = metrics.get("cost_per_landing_page_view")
+    if lpv is not None and lpv > 0:
+        traffic.append(f"LPV: {lpv}")
+    if cost_per_lpv is not None:
+        traffic.append(f"Цена LPV: ${cost_per_lpv}")
+
+    if traffic:
+        sections.append("🖱 <b>Трафик</b>")
+        sections.append(" · ".join(traffic))
+
+    # --- Конверсии ---
+    conversions: list[str] = []
+    leads = metrics.get("leads")
+    cpl = metrics.get("cost_per_lead")
+    if leads is not None and (leads > 0 or cpl is not None):
+        conversions.append(f"Лидов: {leads}")
+    if cpl is not None:
+        conversions.append(f"CPL: ${cpl}")
+
+    regs = metrics.get("registrations")
+    cpr = metrics.get("cost_per_registration")
+    if regs is not None and (regs > 0 or cpr is not None):
+        conversions.append(f"Реги: {regs}")
+    if cpr is not None:
+        conversions.append(f"CPR: ${cpr}")
+
+    deps = metrics.get("deposits")
+    if deps is not None and deps > 0:
+        conversions.append(f"Депозитов: {deps}")
+
+    if conversions:
+        sections.append("📋 <b>Конверсии</b>")
+        sections.append(" · ".join(conversions))
+
+    # --- Аукцион ---
+    auction: list[str] = []
+    diagnostics = metrics.get("traffic_diagnostics")
+    if isinstance(diagnostics, dict):
+        for key, icon, title in (
+            ("cpm", "📈", "CPM"),
+            ("frequency", "🔁", "Частота"),
+        ):
+            payload = diagnostics.get(key)
+            if not isinstance(payload, dict):
+                continue
+            text = str(payload.get("text") or "").strip()
+            if text:
+                auction.append(f"{icon} {title}: {html.escape(text)}")
+    else:
+        # Fallback: показать CPM/frequency если есть
+        cpm = metrics.get("cpm")
+        frequency = metrics.get("frequency")
+        if cpm is not None:
+            auction.append(f"📈 CPM: ${cpm}")
+        if frequency is not None:
+            auction.append(f"🔁 Частота: {frequency}")
+
+    if auction:
+        sections.append("📈 <b>Аукцион</b>")
+        sections.extend(auction)
+
+    if not sections:
+        return []
+
+    return [
+        "<blockquote expandable>",
+        *sections,
+        "</blockquote>",
+    ]
 
 
 def build_metric_lines(metrics_json: dict[str, Any]) -> list[str]:
@@ -226,60 +360,53 @@ def render_alert_message(
     items: list[TelegramAlertItem],
     snooze_note: str | None = None,
 ) -> TelegramOutgoingMessage:
-    """Формирует TG-сообщение (одно на объявление) с кнопкой «Отключить» для STOP."""
+    """Формирует компактное TG-сообщение с blockquote-секциями."""
     lines: list[str] = []
     keyboard: list[list[dict[str, str]]] = []
 
     for item in items:
+        # --- Заголовок: стадия · причина ---
+        reason = html.escape(item.reason_title) if item.reason_title else ""
         if stage == AlertStage.STOP:
-            lines.append("🛑 <b>СТОП</b>")
+            header = "🛑 <b>СТОП</b>"
         elif stage == AlertStage.EARLY_SIGNAL:
-            lines.append("🔎 <b>Ранний сигнал</b>")
+            header = "🔎 <b>Ранний сигнал</b>"
         else:
-            lines.append("⚠️ <b>Предупреждение</b>")
-
+            header = "⚠️ <b>Предупреждение</b>"
+        lines.append(f"{header} · {reason}" if reason else header)
         lines.append("")
 
+        # --- Identity: compact blockquote ---
         lines.extend(
             build_ad_identity_lines(
                 campaign_name=item.campaign_name,
                 adset_name=item.adset_name,
                 ad_name=item.ad_name,
-                fb_ad_id=item.fb_ad_id,
+                compact=True,
             )
         )
 
-        lines.append("")
-
+        # --- Расход + правило (всегда видно) ---
         rule_summaries = item.metrics_json.get("rule_summaries")
         if not isinstance(rule_summaries, list):
             rule_summaries = None
-        diagnosis_lines = build_diagnosis_lines(
-            reason_title=item.reason_title,
-            reason_text=item.reason_text,
-            matched_rule_codes=item.matched_rule_codes,
-            rule_summaries=rule_summaries,
-        )
-        if diagnosis_lines:
-            lines.extend(diagnosis_lines)
+        key_lines = build_key_metric_line(item.metrics_json, rule_summaries)
+        if key_lines:
             lines.append("")
+            lines.extend(key_lines)
 
-        metric_lines = build_metric_lines(item.metrics_json)
-        if metric_lines:
-            lines.append("📌 <b>Ключевые метрики</b>")
-            lines.extend(metric_lines)
+        # --- Подробные метрики (сворачиваемый блок) ---
+        detail_lines = build_detailed_metrics_block(item.metrics_json)
+        if detail_lines:
             lines.append("")
+            lines.extend(detail_lines)
 
-        if stage == AlertStage.STOP:
-            lines.append("ℹ️ Следующее действие: ждать завершения цепочки STOP.")
-        else:
-            lines.append(
-                "ℹ️ Следующее действие: задача на отключение создаётся отдельной цепочкой в STOP."
-            )
-
+        # --- Snooze-примечание ---
         if snooze_note:
+            lines.append("")
             lines.append(html.escape(snooze_note))
 
+        # --- Футер / кнопки ---
         if stage in {AlertStage.WARNING, AlertStage.EARLY_SIGNAL}:
             keyboard.append(
                 [
@@ -306,7 +433,8 @@ def render_alert_message(
                 ]
             )
         else:
-            lines.append("⚡ Авто-отключение уже запущено.")
+            lines.append("")
+            lines.append("⚡ Авто-отключение запущено")
 
     return TelegramOutgoingMessage(
         text="\n".join(lines).strip(),
@@ -318,7 +446,7 @@ def render_enable_recommendation_message(
     *,
     item: TelegramEnableRecommendationItem,
 ) -> TelegramOutgoingMessage:
-    """Формирует Telegram-сообщение с рекомендацией на включение."""
+    """Формирует компактное Telegram-сообщение с рекомендацией на включение."""
     lines: list[str] = []
     metrics = item.metrics_json or {}
     reason_title, reason_text = normalize_enable_recommendation_reason(
@@ -327,47 +455,45 @@ def render_enable_recommendation_message(
         reason_text=item.reason_text,
     )
 
+    # --- Заголовок: уровень · причина ---
+    reason = html.escape(reason_title) if reason_title else ""
     if item.recommendation_level == EnableRecommendationLevel.WARNING:
-        lines.append("⚠️ <b>Рекомендация требует проверки перед включением</b>")
+        header = "⚠️ <b>Требует проверки</b>"
     elif item.recommendation_level == EnableRecommendationLevel.EARLY_SIGNAL:
-        lines.append("🔎 <b>Ранний сигнал восстановления</b>")
+        header = "🔎 <b>Ранний сигнал восстановления</b>"
     else:
-        lines.append("ℹ️ <b>Нет блокирующих сигналов</b>")
+        header = "ℹ️ <b>Нет блокирующих сигналов</b>"
+    lines.append(f"{header} · {reason}" if reason else header)
     lines.append("")
+
+    # --- Identity: compact blockquote ---
     lines.extend(
         build_ad_identity_lines(
             campaign_name=item.campaign_name,
             adset_name=item.adset_name,
             ad_name=item.ad_name,
-            fb_ad_id=item.fb_ad_id,
+            compact=True,
         )
     )
-    lines.append("")
 
+    # --- Расход + правило ---
     rule_summaries = metrics.get("rule_summaries")
     if not isinstance(rule_summaries, list):
         rule_summaries = None
-    diagnosis_lines = build_diagnosis_lines(
-        reason_title=reason_title,
-        reason_text=reason_text,
-        matched_rule_codes=item.matched_rule_codes,
-        rule_summaries=rule_summaries,
-    )
-    if diagnosis_lines:
-        lines.extend(diagnosis_lines)
+    key_lines = build_key_metric_line(metrics, rule_summaries)
+    if key_lines:
         lines.append("")
+        lines.extend(key_lines)
 
-    metric_lines = build_metric_lines(metrics)
-    if metric_lines:
-        lines.append("📌 <b>Ключевые метрики</b>")
-        lines.extend(metric_lines)
+    # --- Подробные метрики (сворачиваемый блок) ---
+    detail_lines = build_detailed_metrics_block(metrics)
+    if detail_lines:
         lines.append("")
+        lines.extend(detail_lines)
 
-    lines.append(f"📡 Статус доставки Meta: <b>{html.escape(item.delivery_status)}</b>")
-    if item.recommendation_level == EnableRecommendationLevel.OK:
-        lines.append("ℹ️ Следующее действие: создать задачу на включение из этого сообщения.")
-    else:
-        lines.append("ℹ️ Следующее действие: проверьте сигнал вручную перед включением.")
+    # --- Статус доставки ---
+    lines.append("")
+    lines.append(f"📡 Доставка Meta: <b>{html.escape(item.delivery_status)}</b>")
 
     return TelegramOutgoingMessage(
         text="\n".join(lines).strip(),

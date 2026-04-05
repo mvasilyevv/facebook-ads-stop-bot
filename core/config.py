@@ -46,6 +46,7 @@ class Settings(BaseSettings):
 
     # --- Шифрование (для хранения токенов в БД) ---
     encryption_key: str = ""
+    encryption_key_verify: str = ""
 
     # --- API ---
     api_host: str = "0.0.0.0"
