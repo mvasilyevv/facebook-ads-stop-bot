@@ -257,6 +257,61 @@ def compute_jitter(interval_seconds: int, jitter_seconds: int) -> float:
     return max(5.0, interval_seconds + offset)
 
 
+# ---------------------------------------------------------------------------
+# Адаптивный интервал: уровень угрозы определяет частоту сканирования
+# ---------------------------------------------------------------------------
+
+# Интервалы (секунды) для каждого уровня угрозы
+_ADAPTIVE_INTERVAL_CRITICAL = 15  # WARNING/STOP — сканируем максимально часто
+_ADAPTIVE_INTERVAL_ELEVATED = 30  # EARLY_SIGNAL — повышенное внимание
+_ADAPTIVE_INTERVAL_CALM = 45  # Всё спокойно, есть активные объявления
+_ADAPTIVE_INTERVAL_IDLE = 60  # Нет объявлений с офферами
+_FALLBACK_INTERVAL = 60  # Fallback при ошибках цикла
+
+
+def compute_adaptive_interval(
+    snapshot_batch: list[dict],
+    *,
+    has_stop_alerts: bool = False,
+) -> tuple[int, str]:
+    """Вычисляет интервал до следующего скана по уровню угрозы.
+
+    Анализирует current_stage всех объявлений в батче и выбирает
+    минимальный интервал, соответствующий максимальной угрозе.
+
+    Returns:
+        (interval_seconds, threat_level_name) — интервал и название уровня для логов.
+    """
+    # Немедленный ре-скан после STOP: интервал 0 (вызывающий код пропустит сон)
+    if has_stop_alerts:
+        return 0, "IMMEDIATE"
+
+    has_warning = False
+    has_early_signal = False
+    has_monitored_ads = False
+
+    for snap in snapshot_batch:
+        stage = snap.get("current_stage")
+        if stage is not None:
+            has_monitored_ads = True
+            stage_name = stage.value if hasattr(stage, "value") else str(stage)
+            if stage_name in ("STOP", "WARNING"):
+                has_warning = True
+            elif stage_name == "EARLY_SIGNAL":
+                has_early_signal = True
+        # Объявление с оффером тоже считается мониторимым
+        if snap.get("resolved_offer_code"):
+            has_monitored_ads = True
+
+    if has_warning:
+        return _ADAPTIVE_INTERVAL_CRITICAL, "CRITICAL"
+    if has_early_signal:
+        return _ADAPTIVE_INTERVAL_ELEVATED, "ELEVATED"
+    if has_monitored_ads:
+        return _ADAPTIVE_INTERVAL_CALM, "CALM"
+    return _ADAPTIVE_INTERVAL_IDLE, "IDLE"
+
+
 async def _human_micro_pause() -> None:
     """Случайная микропауза 0.5-2 сек между действиями (имитация человека)."""
     await asyncio.sleep(random.uniform(0.5, 2.0))
@@ -957,7 +1012,6 @@ async def _process_scan_results(
     snapshot_batch: list[dict],
     tg_client: TelegramBotClient | None,
     tg_destinations: list,
-    interval_seconds: int,
 ) -> None:
     """Обработка результатов скана: сохранение снэпшотов, алерты, disable tasks."""
     # Батчевый upsert снэпшотов
@@ -998,7 +1052,7 @@ async def _process_scan_results(
 
     # Напоминания: повторно отправляем алерты, на которые не отреагировали
     try:
-        reminders = await collect_reminder_alerts(interval_seconds)
+        reminders = await collect_reminder_alerts()
         if reminders:
             alerts_to_send.extend(reminders)
             logger.info("Observer: добавлено %s напоминаний в очередь отправки", len(reminders))
@@ -1013,9 +1067,6 @@ async def _process_scan_results(
         "есть" if tg_client else "НЕТ",
         len(tg_destinations),
     )
-
-    # Микропауза перед отправкой алертов
-    await _human_micro_pause()
 
     # Отправка в Telegram всем активным получателям
     if alerts_to_send and tg_client:
@@ -1036,17 +1087,27 @@ async def _process_scan_results(
 
 async def _wait_for_next_cycle(
     *,
-    interval_seconds: int,
-    jitter_seconds: int,
     shutdown_event: asyncio.Event | None,
     cycle_completed: bool,
+    adaptive_interval: int | None = None,
+    threat_level: str | None = None,
 ) -> bool:
     """Прерываемый сон между циклами с поллингом флагов.
 
+    Интервал определяется адаптивно по уровню угрозы.
     Возвращает True если нужно продолжить (не получен сигнал остановки).
     """
-    sleep_time = compute_jitter(interval_seconds, jitter_seconds)
-    logger.info("Observer: следующий цикл через %.0f сек", sleep_time)
+    interval = (
+        adaptive_interval if adaptive_interval and adaptive_interval > 0 else _FALLBACK_INTERVAL
+    )
+    adaptive_jitter = max(1, interval // 10)
+    sleep_time = compute_jitter(interval, adaptive_jitter)
+    logger.info(
+        "Observer: интервал %sс (угроза=%s), следующий цикл через %.0f сек",
+        interval,
+        threat_level or "FALLBACK",
+        sleep_time,
+    )
 
     end_at = _time.monotonic() + sleep_time
     poll_interval = 5.0  # проверяем флаги каждые 5 секунд
@@ -1092,8 +1153,6 @@ async def observer_loop(
     offers: dict,
     telegram_bot_token: str,
     telegram_chat_id: str,
-    interval_seconds: int = 90,
-    jitter_seconds: int = 10,
     warning_percent_of_stop: Decimal = DEFAULT_WARNING_PERCENT_OF_STOP,
     stop_percent_of_base: Decimal = DEFAULT_STOP_PERCENT_OF_BASE,
     parse_fn,
@@ -1103,13 +1162,15 @@ async def observer_loop(
 ) -> None:
     """Основной бесконечный цикл observer.
 
+    Интервал между сканами определяется адаптивно по уровню угрозы:
+    CRITICAL (15с) → ELEVATED (30с) → CALM (45с) → IDLE (60с).
+    После обнаружения STOP — немедленный ре-скан.
+
     Args:
         page: Playwright Page (уже открыта на Ads Manager)
         offers: dict[offer_code -> {offer, rule_config}]
         telegram_bot_token: токен TG-бота
         telegram_chat_id: ID чата для уведомлений
-        interval_seconds: интервал между обновлениями (дефолт, перезаписывается из БД)
-        jitter_seconds: случайный jitter в секундах (дефолт, перезаписывается из БД)
         warning_percent_of_stop: legacy warning для обратной совместимости
         stop_percent_of_base: legacy stop для обратной совместимости
         parse_fn: функция парсинга DOM → list[ScannedAdRow]
@@ -1150,18 +1211,12 @@ async def observer_loop(
         }
     )
 
-    # Загружаем настройки observer из БД при старте
+    # Загружаем пороги observer из БД при старте
     try:
-        (
-            interval_seconds,
-            jitter_seconds,
-            observer_thresholds,
-        ) = await load_observer_settings_from_db()
+        observer_thresholds = await load_observer_settings_from_db()
         logger.info(
-            "Настройки observer из БД: интервал=%sс, jitter=%sс, "
+            "Пороги observer из БД: "
             "warning(CPC/CPL/CPR)=%.0f/%.0f/%.0f%%, stop(CPC/CPL/CPR)=%.0f/%.0f/%.0f%%",
-            interval_seconds,
-            jitter_seconds,
             observer_thresholds["cpc_warning_percent_of_stop"],
             observer_thresholds["cpl_warning_percent_of_stop"],
             observer_thresholds["cpr_warning_percent_of_stop"],
@@ -1170,7 +1225,7 @@ async def observer_loop(
             observer_thresholds["cpr_stop_percent_of_base"],
         )
     except Exception:
-        logger.warning("Не удалось загрузить настройки observer из БД", exc_info=True)
+        logger.warning("Не удалось загрузить пороги observer из БД", exc_info=True)
 
     await update_observer_runtime_status(
         status="RUNNING",
@@ -1240,26 +1295,11 @@ async def observer_loop(
                 except Exception:
                     logger.debug("Не удалось обновить TG настройки", exc_info=True)
 
-                # Перечитываем интервал и jitter из БД
+                # Перечитываем пороги из БД
                 try:
-                    (
-                        new_interval,
-                        new_jitter,
-                        new_thresholds,
-                    ) = await load_observer_settings_from_db()
-                    if new_interval != interval_seconds or new_jitter != jitter_seconds:
-                        logger.info(
-                            "Настройки интервала обновлены: %sс→%sс, jitter %sс→%sс",
-                            interval_seconds,
-                            new_interval,
-                            jitter_seconds,
-                            new_jitter,
-                        )
-                    interval_seconds = new_interval
-                    jitter_seconds = new_jitter
-                    observer_thresholds = new_thresholds
+                    observer_thresholds = await load_observer_settings_from_db()
                 except Exception:
-                    logger.debug("Не удалось обновить настройки observer из БД", exc_info=True)
+                    logger.debug("Не удалось обновить пороги observer из БД", exc_info=True)
 
                 # Проверяем флаг переподключения к браузеру
                 try:
@@ -1360,7 +1400,6 @@ async def observer_loop(
                 snapshot_batch=snapshot_batch,
                 tg_client=tg_client,
                 tg_destinations=tg_destinations,
-                interval_seconds=interval_seconds,
             )
 
             # Успешный цикл — сбрасываем счётчик ошибок браузера
@@ -1425,19 +1464,41 @@ async def observer_loop(
             )
             logger.exception("Observer: ошибка в цикле")
 
+        # 5. Адаптивный интервал: вычисляем по уровню угрозы
+        adaptive_interval_secs = 0
+        threat_level_name = "IDLE"
         if cycle_completed:
+            adaptive_interval_secs, threat_level_name = compute_adaptive_interval(
+                snapshot_batch,
+                has_stop_alerts=bool(stop_alerts),
+            )
+            # Немедленный ре-скан после STOP: пропускаем ожидание
+            if adaptive_interval_secs == 0:
+                logger.info(
+                    "Observer: обнаружен STOP-алерт — немедленный ре-скан (пропускаем ожидание)"
+                )
+                await update_observer_runtime_status(
+                    status="RUNNING",
+                    message="STOP обнаружен — немедленный ре-скан.",
+                    clear_last_error=True,
+                )
+                continue
+
             await update_observer_runtime_status(
                 status="RUNNING",
-                message="Цикл завершён. Ожидаем следующий запуск.",
+                message=(
+                    f"Цикл завершён. Угроза: {threat_level_name}, "
+                    f"интервал: {adaptive_interval_secs}с."
+                ),
                 clear_last_error=True,
             )
 
-        # 5. Прерываемый сон с jitter + поллинг scan_requested
+        # 6. Прерываемый сон с адаптивным интервалом + поллинг scan_requested
         should_continue = await _wait_for_next_cycle(
-            interval_seconds=interval_seconds,
-            jitter_seconds=jitter_seconds,
             shutdown_event=shutdown_event,
             cycle_completed=cycle_completed,
+            adaptive_interval=adaptive_interval_secs if cycle_completed else None,
+            threat_level=threat_level_name if cycle_completed else None,
         )
         if not should_continue:
             return

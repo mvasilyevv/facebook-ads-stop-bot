@@ -19,7 +19,7 @@ def mock_db():
     return db
 
 
-# Проверяем, что step-level payload сохраняет отдельные пороги и не схлопывается обратно в общий процент.
+# Проверяем, что step-level payload сохраняет отдельные пороги.
 @pytest.mark.asyncio
 async def test_update_observer_settings_persists_step_thresholds(mock_db):
     from apps.api.routers.settings import update_observer_settings
@@ -45,8 +45,6 @@ async def test_update_observer_settings_persists_step_thresholds(mock_db):
 
     response = await update_observer_settings(
         ObserverSettingsSchema(
-            interval_seconds=120,
-            jitter_seconds=5,
             is_scanning_enabled=False,
             cpc_warning_percent_of_stop=Decimal("90"),
             cpc_stop_percent_of_base=Decimal("85"),
@@ -58,8 +56,6 @@ async def test_update_observer_settings_persists_step_thresholds(mock_db):
         db=mock_db,
     )
 
-    assert row.interval_seconds == 120
-    assert row.jitter_seconds == 5
     assert row.warning_percent_of_stop == Decimal("65")
     assert row.stop_percent_of_base == Decimal("60")
     assert row.cpc_warning_percent_of_stop == Decimal("90")
@@ -94,16 +90,6 @@ def test_observer_settings_schema_rejects_zero_stop_percent():
     assert any(e["loc"] == ("stop_percent_of_base",) for e in errors)
 
 
-# Проверяем, что interval_seconds < 10 отклоняется.
-def test_observer_settings_schema_rejects_too_short_interval():
-    from apps.api.schemas import ObserverSettingsSchema
-
-    with pytest.raises(ValidationError) as exc_info:
-        ObserverSettingsSchema(interval_seconds=5)
-    errors = exc_info.value.errors()
-    assert any(e["loc"] == ("interval_seconds",) for e in errors)
-
-
 # Проверяем, что warning_percent_of_stop > 100 отклоняется.
 def test_observer_settings_schema_rejects_warning_above_100():
     from apps.api.schemas import ObserverSettingsSchema
@@ -119,12 +105,9 @@ def test_observer_settings_schema_accepts_valid_values():
     from apps.api.schemas import ObserverSettingsSchema
 
     schema = ObserverSettingsSchema(
-        interval_seconds=60,
-        jitter_seconds=15,
         warning_percent_of_stop=Decimal("80"),
         stop_percent_of_base=Decimal("100"),
     )
-    assert schema.interval_seconds == 60
     assert schema.stop_percent_of_base == Decimal("100")
 
 

@@ -111,23 +111,15 @@ export function ObserverSettingsSection({ observer, onChange, onSave, saving }) 
     <section aria-label="Настройки Observer" className="panel p-5 space-y-5">
       <h2 className="text-base font-semibold text-primary">Observer — сканирование и пороги</h2>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <IntegerObserverField
-          id="obs-interval"
-          label="Интервал обновления (сек)"
-          value={observer.interval_seconds}
-          min={10} max={600}
-          hint="Как часто бот обновляет страницу Ads Manager. Рекомендуется 60-120 сек."
-          onChange={(v) => onChange({ ...observer, interval_seconds: v })}
-        />
-        <IntegerObserverField
-          id="obs-jitter"
-          label="Jitter (сек)"
-          value={observer.jitter_seconds}
-          min={0} max={60}
-          hint="Случайное отклонение ± сек для имитации человека."
-          onChange={(v) => onChange({ ...observer, jitter_seconds: v })}
-        />
+      <div className="rounded-md border border-border bg-elevated/50 p-3 mb-4">
+        <p className="text-xs text-muted">
+          Интервал сканирования подстраивается автоматически по уровню угрозы:
+          <span className="font-semibold text-red-400"> 15с</span> (критично) →
+          <span className="font-semibold text-amber-400"> 30с</span> (повышенно) →
+          <span className="font-semibold text-green-400"> 45с</span> (спокойно) →
+          <span className="font-semibold text-muted"> 60с</span> (нет объявлений).
+          После STOP — немедленный ре-скан.
+        </p>
       </div>
 
       {/* Пороги */}

@@ -23,8 +23,6 @@ import { useAsyncPolling } from './useAsyncPolling.js';
 import { useRefreshOnResume } from './useRefreshOnResume.js';
 
 const DEFAULT_OBSERVER = {
-  interval_seconds: 90,
-  jitter_seconds: 10,
   is_scanning_enabled: true,
   warning_percent_of_stop: 80,
   stop_percent_of_base: 100,
@@ -67,8 +65,6 @@ const DEFAULT_VISION = {
 
 function mergeObserverState(data) {
   return {
-    interval_seconds: data.interval_seconds ?? DEFAULT_OBSERVER.interval_seconds,
-    jitter_seconds: data.jitter_seconds ?? DEFAULT_OBSERVER.jitter_seconds,
     is_scanning_enabled:
       data.is_scanning_enabled ?? DEFAULT_OBSERVER.is_scanning_enabled,
     warning_percent_of_stop:
@@ -294,8 +290,6 @@ export function useSettingsData() {
     setSaving('observer');
     try {
       await updateObserverSettings({
-        interval_seconds: observer.interval_seconds,
-        jitter_seconds: observer.jitter_seconds,
         is_scanning_enabled: observer.is_scanning_enabled,
         cpc_warning_percent_of_stop: observer.cpc_warning_percent_of_stop,
         cpc_stop_percent_of_base: observer.cpc_stop_percent_of_base,

@@ -40,10 +40,8 @@ def _offer_code_lookup_key(value: str | None) -> str:
 
 
 class ObserverSettingsSchema(BaseModel):
-    """Настройки observer (интервал из UI)."""
+    """Настройки observer (пороги из UI, интервал адаптивный)."""
 
-    interval_seconds: int = Field(default=90, ge=10, le=3600)
-    jitter_seconds: int = Field(default=10, ge=0, le=300)
     warning_percent_of_stop: Decimal = Field(default=Decimal("80"), ge=0, le=100)
     stop_percent_of_base: Decimal = Field(default=Decimal("100"), gt=0)
     cpc_warning_percent_of_stop: Decimal | None = Field(default=None, ge=0, le=100)

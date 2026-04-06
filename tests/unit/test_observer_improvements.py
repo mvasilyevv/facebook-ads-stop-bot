@@ -688,29 +688,42 @@ async def test_collect_reminder_alerts_restores_early_signal_reason():
         id=101,
         last_observed_at=now - timedelta(minutes=2),
     )
-    last_event = SimpleNamespace(
-        reason_title="Слабый исходящий CTR",
-        reason_text="Сигнал раннего отсечения.",
-        metrics_json={
-            "rule_summaries": ["CTR ниже порога"],
-            "traffic_diagnostics": {
-                "summary_text": "Трафик начал дорожать.",
-                "cpm": {"status": "critical", "text": "CPM выше недавней медианы."},
-            },
-        },
-    )
+    # Добавляем ad_id и нормализованную цепочку для batch-запросов
+    snap.ad_id = 101
+    fb_ad_ns = SimpleNamespace(ad_name="Раннее объявление", adset=None)
+    snap.fb_ad = fb_ad_ns
 
+    # Мок результатов execute: candidates, last_event_at batch, latest_events batch
     candidates_result = MagicMock()
     candidates_result.scalars.return_value.all.return_value = [snap]
 
-    last_event_result = MagicMock()
-    last_event_result.scalar_one_or_none.return_value = last_event
+    last_event_at_row = SimpleNamespace(ad_id=101, max_at=now - timedelta(minutes=20))
+    last_event_at_result = MagicMock()
+    last_event_at_result.__iter__ = MagicMock(return_value=iter([last_event_at_row]))
+
+    latest_events_result = MagicMock()
+    latest_events_result.scalars.return_value.all.return_value = [
+        SimpleNamespace(
+            ad_id=101,
+            reason_title="Слабый исходящий CTR",
+            reason_text="Сигнал раннего отсечения.",
+            metrics_json={
+                "rule_summaries": ["CTR ниже порога"],
+                "traffic_diagnostics": {
+                    "summary_text": "Трафик начал дорожать.",
+                    "cpm": {"status": "critical", "text": "CPM выше недавней медианы."},
+                },
+            },
+        )
+    ]
 
     mock_session = AsyncMock()
     mock_session.__aenter__ = AsyncMock(return_value=mock_session)
     mock_session.__aexit__ = AsyncMock(return_value=False)
-    mock_session.execute = AsyncMock(side_effect=[candidates_result, last_event_result])
-    mock_session.scalar = AsyncMock(side_effect=[now, now - timedelta(minutes=20)])
+    mock_session.execute = AsyncMock(
+        side_effect=[candidates_result, last_event_at_result, latest_events_result]
+    )
+    mock_session.scalar = AsyncMock(return_value=now)
 
     mock_factory = MagicMock(return_value=mock_session)
 
@@ -718,7 +731,7 @@ async def test_collect_reminder_alerts_restores_early_signal_reason():
         "core.observer.db_queries.get_session_factory",
         return_value=mock_factory,
     ):
-        reminders = await collect_reminder_alerts(interval_seconds=90)
+        reminders = await collect_reminder_alerts()
 
     assert len(reminders) == 1
     reminder = reminders[0]
@@ -766,27 +779,38 @@ async def test_collect_reminder_alerts_keeps_stop_even_if_snoozed():
         id=303,
         last_observed_at=now - timedelta(minutes=1),
     )
-    last_event = SimpleNamespace(
-        reason_title="Стоп без подтверждения OFF",
-        reason_text="Нужно проверить отключение вручную.",
-        metrics_json={"rule_summaries": ["CPC выше стопа"]},
-    )
+    snap.ad_id = 303
+    fb_ad_ns = SimpleNamespace(ad_name="STOP объявление", adset=None)
+    snap.fb_ad = fb_ad_ns
 
     candidates_result = MagicMock()
     candidates_result.scalars.return_value.all.return_value = [snap]
 
-    last_event_result = MagicMock()
-    last_event_result.scalar_one_or_none.return_value = last_event
+    last_event_at_row = SimpleNamespace(ad_id=303, max_at=now - timedelta(minutes=20))
+    last_event_at_result = MagicMock()
+    last_event_at_result.__iter__ = MagicMock(return_value=iter([last_event_at_row]))
+
+    latest_events_result = MagicMock()
+    latest_events_result.scalars.return_value.all.return_value = [
+        SimpleNamespace(
+            ad_id=303,
+            reason_title="Стоп без подтверждения OFF",
+            reason_text="Нужно проверить отключение вручную.",
+            metrics_json={"rule_summaries": ["CPC выше стопа"]},
+        )
+    ]
 
     mock_session = AsyncMock()
     mock_session.__aenter__ = AsyncMock(return_value=mock_session)
     mock_session.__aexit__ = AsyncMock(return_value=False)
-    mock_session.execute = AsyncMock(side_effect=[candidates_result, last_event_result])
-    mock_session.scalar = AsyncMock(side_effect=[now, now - timedelta(minutes=20)])
+    mock_session.execute = AsyncMock(
+        side_effect=[candidates_result, last_event_at_result, latest_events_result]
+    )
+    mock_session.scalar = AsyncMock(return_value=now)
     mock_factory = MagicMock(return_value=mock_session)
 
     with patch("core.observer.db_queries.get_session_factory", return_value=mock_factory):
-        reminders = await collect_reminder_alerts(interval_seconds=90)
+        reminders = await collect_reminder_alerts()
 
     assert len(reminders) == 1
     assert reminders[0].stage == AlertStage.STOP
@@ -842,7 +866,7 @@ async def test_collect_reminder_alerts_skips_archived_snapshots():
         "core.observer.db_queries.get_session_factory",
         return_value=mock_factory,
     ):
-        reminders = await collect_reminder_alerts(interval_seconds=90)
+        reminders = await collect_reminder_alerts()
 
     assert reminders == []
     mock_session.execute.assert_awaited_once()
@@ -1535,7 +1559,6 @@ def _patch_observer_loop_runtime(stack: ExitStack, *, scan_side_effect) -> Async
             new=AsyncMock(return_value=[]),
         )
     )
-    stack.enter_context(patch("apps.observer_worker.main._human_micro_pause", new=AsyncMock()))
     stack.enter_context(
         patch("apps.observer_worker.main.broadcast_observer_runtime_message", new=AsyncMock())
     )
@@ -1585,7 +1608,6 @@ async def test_observer_loop_delegates_scan_to_recovery_helper():
             offers={},
             telegram_bot_token="",
             telegram_chat_id="",
-            interval_seconds=1,
             parse_fn=parse_fn,
             browser_manager=AsyncMock(),
             shutdown_event=shutdown_event,
@@ -1645,7 +1667,6 @@ async def test_observer_loop_disables_scanning_after_scan_recovery_exhausted():
             offers={},
             telegram_bot_token="fallback-token",
             telegram_chat_id="fallback-chat",
-            interval_seconds=1,
             parse_fn=AsyncMock(return_value=[]),
             browser_manager=AsyncMock(),
             shutdown_event=shutdown_event,
@@ -1720,7 +1741,6 @@ async def test_observer_loop_skips_rule_evaluation_for_not_delivering_rows():
             offers={},
             telegram_bot_token="",
             telegram_chat_id="",
-            interval_seconds=1,
             parse_fn=AsyncMock(return_value=[]),
             browser_manager=AsyncMock(),
             shutdown_event=shutdown_event,
@@ -1760,7 +1780,6 @@ async def test_reconnect_on_browser_error():
             offers={},
             telegram_bot_token="",
             telegram_chat_id="",
-            interval_seconds=1,
             parse_fn=AsyncMock(),
             browser_manager=mock_browser_manager,
             shutdown_event=shutdown_event,
@@ -1793,7 +1812,6 @@ async def test_reconnect_max_attempts_exit():
                 offers={},
                 telegram_bot_token="",
                 telegram_chat_id="",
-                interval_seconds=1,
                 parse_fn=AsyncMock(),
                 browser_manager=mock_browser_manager,
             )
@@ -1833,7 +1851,6 @@ async def test_reconnect_counter_resets_on_success():
             offers={},
             telegram_bot_token="",
             telegram_chat_id="",
-            interval_seconds=1,
             parse_fn=AsyncMock(),
             browser_manager=mock_browser_manager,
             shutdown_event=shutdown_event,

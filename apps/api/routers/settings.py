@@ -70,8 +70,6 @@ async def get_observer_settings(db: AsyncSession = Depends(get_db)):
     if row is None:
         return ObserverSettingsSchema(**threshold_values)
     return ObserverSettingsSchema(
-        interval_seconds=row.interval_seconds,
-        jitter_seconds=row.jitter_seconds,
         **threshold_values,
         is_scanning_enabled=row.is_scanning_enabled,
     )
@@ -92,14 +90,10 @@ async def update_observer_settings(
         threshold_values["stop_percent_of_base"] = derive_legacy_stop_percent_of_base(
             threshold_values
         )
-    row.interval_seconds = body.interval_seconds
-    row.jitter_seconds = body.jitter_seconds
     apply_observer_threshold_values(row, threshold_values)
     row.is_scanning_enabled = body.is_scanning_enabled
     await db.commit()
     return ObserverSettingsSchema(
-        interval_seconds=row.interval_seconds,
-        jitter_seconds=row.jitter_seconds,
         **extract_observer_threshold_values(row),
         is_scanning_enabled=row.is_scanning_enabled,
     )

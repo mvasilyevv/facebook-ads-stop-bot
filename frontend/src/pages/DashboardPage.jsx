@@ -107,18 +107,40 @@ function AlertBanner({ stats }) {
   );
 }
 
+/** Парсинг адаптивного интервала и уровня угрозы из статуса observer */
+function parseObserverStatusMessage(msg) {
+  if (!msg) return { intervalSec: null, threatLevel: null };
+  const intervalMatch = msg.match(/интервал:\s*(\d+)/);
+  const threatMatch = msg.match(/Угроза:\s*(\w+)/);
+  return {
+    intervalSec: intervalMatch ? parseInt(intervalMatch[1], 10) : null,
+    threatLevel: threatMatch ? threatMatch[1] : null,
+  };
+}
+
+/** Маппинг уровня угрозы → цвет и текст бейджа */
+const THREAT_BADGE = {
+  IMMEDIATE: { label: 'Ре-скан', color: 'bg-red-500/20 text-red-400 animate-pulse' },
+  CRITICAL:  { label: 'Критично', color: 'bg-red-500/20 text-red-400' },
+  ELEVATED:  { label: 'Повышенно', color: 'bg-amber-500/20 text-amber-400' },
+  CALM:      { label: 'Спокойно', color: 'bg-emerald-500/20 text-emerald-400' },
+  IDLE:      { label: 'Ожидание', color: 'bg-zinc-500/20 text-zinc-400' },
+};
+
 /** Полоса статуса сканирования */
 function ScanStatusBar({ settings, onToggle, onScanNow, scanning, lastScanAt, observerStatus, observerStatusMessage }) {
   const [secsLeft, setSecsLeft] = useState(null);
+  const { intervalSec, threatLevel } = parseObserverStatusMessage(observerStatusMessage);
+  const badge = threatLevel ? THREAT_BADGE[threatLevel] : null;
 
   useEffect(() => {
-    if (!lastScanAt || !settings?.interval_seconds) { setSecsLeft(null); return; }
-    const nextScanAt = new Date(lastScanAt).getTime() + settings.interval_seconds * 1000;
+    if (!lastScanAt || !intervalSec) { setSecsLeft(null); return; }
+    const nextScanAt = new Date(lastScanAt).getTime() + intervalSec * 1000;
     const tick = () => setSecsLeft(Math.max(0, Math.round((nextScanAt - Date.now()) / 1000)));
     tick();
     const id = setInterval(tick, 1000);
     return () => clearInterval(id);
-  }, [lastScanAt, settings?.interval_seconds]);
+  }, [lastScanAt, intervalSec]);
 
   const isEnabled = settings?.is_scanning_enabled ?? false;
   const isRunning = observerStatus === 'RUNNING' || scanning;
@@ -172,6 +194,12 @@ function ScanStatusBar({ settings, onToggle, onScanNow, scanning, lastScanAt, ob
         <span className={`flex items-center gap-1.5 text-2xs font-medium ${statusColor}`}>
           {showDot && <span className="status-dot bg-success animate-pulse-dot" />}
           {statusText}
+        </span>
+      )}
+
+      {badge && (
+        <span className={`rounded-full px-2 py-0.5 text-2xs font-semibold ${badge.color}`}>
+          {badge.label}{intervalSec ? ` ${intervalSec}с` : ''}
         </span>
       )}
 

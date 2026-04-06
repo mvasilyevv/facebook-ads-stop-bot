@@ -137,22 +137,18 @@ async def refresh_runtime_ad_states(
     return persisted_states
 
 
-async def load_observer_settings_from_db() -> tuple[int, int, dict[str, Decimal]]:
-    """Загружает interval_seconds, jitter_seconds и пороги observer из БД.
+async def load_observer_settings_from_db() -> dict[str, Decimal]:
+    """Загружает пороги observer из БД.
 
     Returns:
-        (interval_seconds, jitter_seconds, пороги по шагам)
+        Словарь порогов (warning/stop percent по шагам).
     """
     factory = get_session_factory()
     async with factory() as session:
         s = await get_observer_settings(session)
         if s:
-            return (
-                s.interval_seconds,
-                s.jitter_seconds,
-                extract_observer_threshold_values(s),
-            )
-        return 90, 10, extract_observer_threshold_values()
+            return extract_observer_threshold_values(s)
+        return extract_observer_threshold_values()
 
 
 async def check_scanning_enabled() -> bool:
@@ -350,16 +346,20 @@ async def set_observer_scanning_enabled(enabled: bool) -> None:
         await session.commit()
 
 
-async def collect_reminder_alerts(interval_seconds: int) -> list[AlertCandidate]:
+# Фиксированный порог для напоминаний: 10 минут (интервал теперь адаптивный)
+_REMINDER_THRESHOLD_SECONDS = 600
+
+
+async def collect_reminder_alerts() -> list[AlertCandidate]:
     """Собирает алерты для повторного напоминания.
 
     Условия:
     - alert_state IN [EARLY_SIGNAL_SENT, WARNING_SENT, STOP_SENT]
     - last_observed_at попадает в актуальную скан-сессию
     - snoozed_until IS NULL или уже истёк
-    - последний AlertEvent для этого fb_ad_id был > interval * 10 сек назад
+    - последний AlertEvent для этого fb_ad_id был > 10 мин назад
     """
-    reminder_threshold = interval_seconds * 10
+    reminder_threshold = _REMINDER_THRESHOLD_SECONDS
     now = datetime.now(UTC)
 
     factory = get_session_factory()
