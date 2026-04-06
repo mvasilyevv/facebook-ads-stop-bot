@@ -8,6 +8,7 @@ __pycache__/
 .DS_Store
 .claude/
 .claude-flow/
+.omc/
 .logs/
 .mcp.json
 .tmp
