@@ -24,7 +24,7 @@ def to_int(value: object | None, default: int = 0) -> int:
     if value is None or value == "":
         return default
     try:
-        return int(value)
+        return int(str(value))
     except (ValueError, TypeError):
         return default
 

@@ -28,7 +28,7 @@ def stream_for_alert_stage(stage: AlertStage) -> TelegramNotificationStream:
 
 async def _resolve_ad_id(session, fb_ad_id: str) -> _uuid.UUID | None:
     """Находит UUID записи fb_ads по fb_ad_id строке."""
-    return await session.scalar(select(FbAd.id).where(FbAd.fb_ad_id == fb_ad_id))
+    return await session.scalar(select(FbAd.id).where(FbAd.fb_ad_id == fb_ad_id))  # type: ignore[no-any-return]
 
 
 async def load_message_refs_by_chat(

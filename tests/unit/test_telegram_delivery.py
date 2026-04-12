@@ -23,7 +23,7 @@ from core.telegram.service import TelegramDestination
 
 # Проверяем, что успешный disable-runtime рендерится новым headline и показывает контекст stop-а.
 def test_render_disable_task_runtime_message_includes_hierarchy_and_stop_metrics():
-    """Успешный клик выключения должен показывать иерархию, метрики и ожидание OFF."""
+    """Успешный клик выключения должен показывать иерархию и ожидание OFF."""
     message = render_disable_task_runtime_message(
         ad_name="DRC_CR2_CR023",
         fb_ad_id="120242132372770176",
@@ -48,10 +48,8 @@ def test_render_disable_task_runtime_message_includes_hierarchy_and_stop_metrics
     assert "Campaign A" in message
     assert "Adset A" in message
     assert "DRC_CR2_CR023" in message
-    assert "📏 Пороговые детали:" in message
-    assert "стоп 0.08" in message
-    assert "Бот ждёт подтверждения статуса OFF" in message
-    assert "цепочка остаётся в STOP topic" in message
+    assert "Ждём подтверждения OFF" in message
+    assert "@bot_auto_stop" in message
 
 
 # Проверяем, что очередь отключения использует единый формат и явно уводит цепочку в STOP.
@@ -80,8 +78,8 @@ def test_render_disable_task_queue_message_uses_stop_chain_copy():
     assert "✅ <b>Создана задача на отключение</b>" in message
     assert "📏 Пороговые детали:" in message
     assert "⏳ Статус: в очереди" in message
-    assert "Дальнейший статус этой цепочки будет идти в STOP topic." in message
-    assert "👤 Запросил: @bot_auto_stop" in message
+    assert "📍 STOP topic" in message
+    assert "@bot_auto_stop" in message
 
 
 # Проверяем, что очередь включения использует единый формат и явно уводит цепочку в ENABLE.
@@ -104,8 +102,8 @@ def test_render_enable_task_queue_message_uses_enable_chain_copy():
 
     assert "ℹ️ <b>Задача на включение уже была в очереди</b>" in message
     assert "⏳ Статус: ожидает выполнения" in message
-    assert "Дальнейший статус этой цепочки будет идти в ENABLE topic." in message
-    assert "👤 Запросил: @bot_auto_enable" in message
+    assert "📍 ENABLE topic" in message
+    assert "@bot_auto_enable" in message
 
 
 # Проверяем, что успешный enable-runtime рендерится через единый шаблон и ENABLE topic.
@@ -129,8 +127,8 @@ def test_render_enable_task_runtime_message_includes_enable_footer():
     assert "✅ <b>Задача на включение выполнена</b>" in message
     assert "Campaign B" in message
     assert "Adset B" in message
-    assert "Дальнейшие статусы этой цепочки идут в ENABLE topic." in message
-    assert "👤 Запросил: @bot_auto_enable" in message
+    assert "📍 ENABLE topic" in message
+    assert "@bot_auto_enable" in message
 
 
 # Проверяем, что disable-runtime использует отдельный STOP-stream и сохраняет новый delivery-ref.

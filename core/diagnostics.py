@@ -20,7 +20,7 @@ def _to_decimal(value: object | None) -> Decimal | None:
     if value is None:
         return None
     try:
-        return Decimal(value)
+        return Decimal(str(value))
     except (InvalidOperation, TypeError, ValueError):
         return None
 

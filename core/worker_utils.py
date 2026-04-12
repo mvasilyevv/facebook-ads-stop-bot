@@ -56,7 +56,7 @@ class PidFileLock:
 
     def __init__(self, pid_file: str | pathlib.Path) -> None:
         self._path = pathlib.Path(pid_file)
-        self._fh = None
+        self._fh: object = None
 
     def acquire(self) -> None:
         """Получить эксклюзивную блокировку на PID-файл."""

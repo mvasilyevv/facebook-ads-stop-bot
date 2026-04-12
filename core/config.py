@@ -9,7 +9,7 @@ from pathlib import Path
 from urllib.parse import quote_plus
 
 from pydantic import model_validator
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings  # type: ignore[import-not-found]
 
 logger = logging.getLogger(__name__)
 

@@ -216,16 +216,37 @@ async def test_enable_worker_loop_reraises_browser_connection_error():
         },
     )()
 
-    shutdown_event = asyncio.Event()
+    fb_ad = type(
+        "Ad",
+        (),
+        {
+            "fb_ad_id": "123456",
+            "ad_name": "Ad 1",
+        },
+    )()
+
+    task = type(
+        "Task",
+        (),
+        {
+            "id": "task-1",
+            "fb_ad_id": "123456",
+            "ad_name": "Ad 1",
+            "attempt_count": 1,
+            "max_attempts": 10,
+            "requested_by_username": "dashboard",
+            "fb_ad": fb_ad,
+        },
+    )()
+
+    browser_error = RuntimeError(
+        "Page.query_selector: Target page, context or browser has been closed"
+    )
 
     with (
         patch(
             "run_enable_worker.execute_enable_via_playwright",
-            new=AsyncMock(
-                side_effect=RuntimeError(
-                    "Page.query_selector: Target page, context or browser has been closed"
-                )
-            ),
+            new=AsyncMock(side_effect=browser_error),
         ),
         patch(
             "run_enable_worker._resolve_ads_manager_page",
@@ -233,7 +254,7 @@ async def test_enable_worker_loop_reraises_browser_connection_error():
         ),
         patch(
             "run_enable_worker.claim_next_task",
-            new=AsyncMock(side_effect=[task]),
+            new=AsyncMock(side_effect=[task, browser_error]),
         ),
     ):
         with pytest.raises(RuntimeError, match="Target page, context or browser has been closed"):
@@ -242,7 +263,7 @@ async def test_enable_worker_loop_reraises_browser_connection_error():
                 tg_client=None,
                 tg_chat_id="",
                 poll_interval=0,
-                shutdown_event=shutdown_event,
+                shutdown_event=None,
                 send_completion_callback=None,
             )
 
@@ -252,6 +273,15 @@ async def test_enable_worker_loop_reraises_browser_connection_error():
 async def test_enable_worker_loop_marks_retrying_on_timeout():
     """Таймаут не должен оставлять задачу в RUNNING: воркер обязан вернуть её в RETRYING."""
     from run_enable_worker import EnableBrowserOperationTimeoutError, enable_worker_loop
+
+    fb_ad = type(
+        "Ad",
+        (),
+        {
+            "fb_ad_id": "654321",
+            "ad_name": "Ad 2",
+        },
+    )()
 
     task = type(
         "Task",
@@ -263,10 +293,13 @@ async def test_enable_worker_loop_marks_retrying_on_timeout():
             "attempt_count": 1,
             "max_attempts": 10,
             "requested_by_username": "dashboard",
+            "fb_ad": fb_ad,
         },
     )()
 
-    shutdown_event = asyncio.Event()
+    timeout_error = EnableBrowserOperationTimeoutError(
+        "Браузерная операция включения превысила таймаут"
+    )
 
     with (
         patch(
@@ -279,7 +312,7 @@ async def test_enable_worker_loop_marks_retrying_on_timeout():
         ),
         patch(
             "run_enable_worker.claim_next_task",
-            new=AsyncMock(side_effect=[task]),
+            new=AsyncMock(side_effect=[task, timeout_error]),
         ),
         patch("run_enable_worker.mark_retrying", new=AsyncMock()) as mark_retrying,
         patch("run_enable_worker.mark_failed", new=AsyncMock()) as mark_failed,
@@ -293,7 +326,7 @@ async def test_enable_worker_loop_marks_retrying_on_timeout():
                 tg_client=None,
                 tg_chat_id="",
                 poll_interval=0,
-                shutdown_event=shutdown_event,
+                shutdown_event=None,
                 send_completion_callback=None,
             )
 

@@ -18,7 +18,7 @@ import os
 import stat
 
 try:
-    from cryptography.fernet import Fernet, InvalidToken
+    from cryptography.fernet import Fernet, InvalidToken  # type: ignore[import-not-found]
 except ModuleNotFoundError:  # pragma: no cover - зависит от окружения
     Fernet = None  # type: ignore[assignment]
     InvalidToken = Exception  # type: ignore[assignment]
@@ -161,14 +161,14 @@ async def rotate_encryption_key(old_key: str, new_key: str) -> int:
 
     from sqlalchemy import select
 
-    from core.db import get_async_session
+    from core.db import get_session_factory  # type: ignore[attr-defined]
     from core.models import TelegramSettings, VisionSettings
 
     fernet_old = Fernet(old_key.encode() if isinstance(old_key, str) else old_key)
     fernet_new = Fernet(new_key.encode() if isinstance(new_key, str) else new_key)
     rotated = 0
 
-    async with get_async_session() as session:
+    async with get_session_factory()() as session:
         # Перешифровываем bot_token_encrypted в TelegramSettings
         result = await session.execute(select(TelegramSettings))
         for row in result.scalars().all():
@@ -255,7 +255,7 @@ def encrypt(plaintext: str) -> str:
     """Шифрует строку, возвращает base64-encoded ciphertext."""
     if not plaintext:
         return ""
-    return _get_fernet().encrypt(plaintext.encode()).decode()
+    return _get_fernet().encrypt(plaintext.encode()).decode()  # type: ignore[no-any-return]
 
 
 def decrypt(ciphertext: str) -> str:
@@ -263,7 +263,7 @@ def decrypt(ciphertext: str) -> str:
     if not ciphertext:
         return ""
     try:
-        return _get_fernet().decrypt(ciphertext.encode()).decode()
+        return _get_fernet().decrypt(ciphertext.encode()).decode()  # type: ignore[no-any-return]
     except InvalidToken:
         logger.error("Не удалось расшифровать данные — неверный ключ или повреждённые данные")
         return ""

@@ -941,17 +941,35 @@ async def test_send_alerts_to_telegram_persists_early_signal_reason():
         telegram_group_key=None,
         telegram_chat_id=None,
         telegram_message_id=None,
+        fb_ad_id="ad_early",
     )
-    # Мок fb_ad для получения ad_id
-    fb_ad_obj = SimpleNamespace(id="ad-uuid-1")
+    fb_ad_obj = SimpleNamespace(id="ad-uuid-1", fb_ad_id="ad_early")
 
     mock_session = AsyncMock()
     mock_session.__aenter__ = AsyncMock(return_value=mock_session)
     mock_session.__aexit__ = AsyncMock(return_value=False)
     mock_session.add = MagicMock()
     mock_session.commit = AsyncMock()
-    # scalar вызывается 3 раза: snapshot, fb_ad, existing_stage_event
-    mock_session.scalar = AsyncMock(side_effect=[snapshot, fb_ad_obj, None])
+    mock_session.scalar = AsyncMock(return_value=None)
+
+    # Мокаем execute для batch-запросов snapshot/fb_ad
+    mock_scalars_result = MagicMock()
+    mock_scalars_result.scalars = MagicMock(return_value=mock_scalars_result)
+    mock_scalars_result.all = MagicMock(return_value=[snapshot])
+    mock_fb_ad_result = MagicMock()
+    mock_fb_ad_result.scalars = MagicMock(return_value=mock_fb_ad_result)
+    mock_fb_ad_result.all = MagicMock(return_value=[fb_ad_obj])
+
+    call_count = 0
+
+    async def mock_execute(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return mock_scalars_result
+        return mock_fb_ad_result
+
+    mock_session.execute = mock_execute
 
     mock_factory = MagicMock(return_value=mock_session)
 
@@ -977,6 +995,7 @@ async def test_send_alerts_to_telegram_persists_early_signal_reason():
     assert rendered_item.reason_title == "Слабый исходящий CTR"
     assert rendered_item.reason_text == "Сигнал раннего отсечения."
 
+    assert mock_session.add.call_count == 1
     added_event = mock_session.add.call_args.args[0]
     assert added_event.state == AlertState.EARLY_SIGNAL_SENT
     assert added_event.reason_title == "Слабый исходящий CTR"
@@ -1018,6 +1037,11 @@ async def test_send_alerts_to_telegram_skips_persist_on_failure():
     mock_session.add = MagicMock()
     mock_session.commit = AsyncMock()
     mock_session.scalar = AsyncMock(return_value=None)
+
+    mock_empty_result = MagicMock()
+    mock_empty_result.scalars = MagicMock(return_value=mock_empty_result)
+    mock_empty_result.all = MagicMock(return_value=[])
+    mock_session.execute = AsyncMock(return_value=mock_empty_result)
 
     mock_factory = MagicMock(return_value=mock_session)
 
@@ -1070,8 +1094,9 @@ async def test_send_alerts_to_telegram_updates_same_incident_without_new_history
         telegram_group_key=None,
         telegram_chat_id=None,
         telegram_message_id=None,
+        fb_ad_id="ad_same_incident",
     )
-    fb_ad_obj = SimpleNamespace(id="ad-uuid-777")
+    fb_ad_obj = SimpleNamespace(id="ad-uuid-777", fb_ad_id="ad_same_incident")
     existing_stage_event = SimpleNamespace(
         snapshot_id=None,
         ad_id=None,
@@ -1093,8 +1118,27 @@ async def test_send_alerts_to_telegram_updates_same_incident_without_new_history
     mock_session.__aexit__ = AsyncMock(return_value=False)
     mock_session.add = MagicMock()
     mock_session.commit = AsyncMock()
-    # scalar: snapshot, fb_ad, existing_stage_event
-    mock_session.scalar = AsyncMock(side_effect=[snapshot, fb_ad_obj, existing_stage_event])
+    mock_session.scalar = AsyncMock(return_value=existing_stage_event)
+
+    # Мокаем execute для batch-запросов snapshot/fb_ad
+    mock_scalars_result = MagicMock()
+    mock_scalars_result.scalars = MagicMock(return_value=mock_scalars_result)
+    mock_scalars_result.all = MagicMock(return_value=[snapshot])
+    mock_fb_ad_result = MagicMock()
+    mock_fb_ad_result.scalars = MagicMock(return_value=mock_fb_ad_result)
+    mock_fb_ad_result.all = MagicMock(return_value=[fb_ad_obj])
+
+    call_count = 0
+
+    async def mock_execute(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return mock_scalars_result
+        return mock_fb_ad_result
+
+    mock_session.execute = mock_execute
+
     mock_factory = MagicMock(return_value=mock_session)
 
     with (
@@ -1412,32 +1456,36 @@ async def test_reconnect_browser_manager_uses_db_vision_settings():
     old_vision.close = AsyncMock()
 
     mock_page = AsyncMock()
-    browser_manager = AsyncMock()
+    browser_manager = MagicMock()
     browser_manager._vision = old_vision
     browser_manager._profile_id = "old-profile"
     browser_manager._folder_id = "old-folder"
+    browser_manager.disconnect = AsyncMock()
+    browser_manager.connect = AsyncMock()
     browser_manager.get_page = AsyncMock(return_value=mock_page)
+    browser_manager.reconfigure = MagicMock()
 
     new_vision = MagicMock()
 
     with (
         patch(
-            "core.observer.db_queries.load_vision_settings_from_db",
+            "apps.observer_worker.main.load_vision_settings_for_runtime",
             new=AsyncMock(return_value=("db-token", "http://db:3030", "db-profile")),
         ),
         patch("apps.observer_worker.main.VisionClient", return_value=new_vision) as vision_cls,
     ):
-        page = await reconnect_browser_manager_with_vision_settings(browser_manager)
+        await reconnect_browser_manager_with_vision_settings(browser_manager)
 
     vision_cls.assert_called_once_with(x_token="db-token", base_url="http://db:3030")
     browser_manager.disconnect.assert_awaited_once()
     old_vision.close.assert_awaited_once()
     browser_manager.connect.assert_awaited_once()
     browser_manager.get_page.assert_awaited_once()
-    assert browser_manager._vision is new_vision
-    assert browser_manager._profile_id == "db-profile"
-    assert browser_manager._folder_id is None
-    assert page is mock_page
+    browser_manager.reconfigure.assert_called_once_with(
+        vision_client=new_vision,
+        profile_id="db-profile",
+        folder_id=None,
+    )
 
 
 # Проверяем что reconnect ловит только профильные browser-ошибки

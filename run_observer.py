@@ -3,6 +3,10 @@
 
 from __future__ import annotations
 
+from core.browser.stealth import patch_patchright
+
+patch_patchright()
+
 import asyncio
 import logging
 import os

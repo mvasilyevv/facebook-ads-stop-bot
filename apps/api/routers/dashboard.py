@@ -6,6 +6,8 @@ import uuid as _uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from functools import lru_cache
+from typing import cast
+from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -731,7 +733,7 @@ def _build_campaign_stop_overrun_rows(
     for snapshot in snapshots:
         ctx = ctx_map.get(snapshot.ad_id, {})
         campaign_name = str(ctx.get("campaign_name", ""))
-        offer_id = ctx.get("offer_id")
+        offer_id = cast("UUID", ctx.get("offer_id"))
         if not campaign_name or offer_id is None:
             continue
         offer_bundle = offer_rule_map.get(offer_id)
@@ -746,9 +748,9 @@ def _build_campaign_stop_overrun_rows(
         )
         if budget_reference is None:
             continue
-        actual_spend = Decimal(budget_reference["actual_spend"])
-        ideal_spend = Decimal(budget_reference["ideal_spend"])
-        overrun_amount = Decimal(budget_reference["overrun_amount"])
+        actual_spend = Decimal(str(budget_reference["actual_spend"]))
+        ideal_spend = Decimal(str(budget_reference["ideal_spend"]))
+        overrun_amount = Decimal(str(budget_reference["overrun_amount"]))
         overrun_percent = budget_reference["overrun_percent"]
         bucket = grouped.setdefault(
             campaign_name,
@@ -768,30 +770,30 @@ def _build_campaign_stop_overrun_rows(
                 "max_ad_overrun_percent": Decimal("0"),
             },
         )
-        bucket["total_ads"] = int(bucket["total_ads"]) + 1
-        bucket["actual_spend_sum"] = Decimal(bucket["actual_spend_sum"]) + actual_spend
-        bucket["ideal_spend_sum"] = Decimal(bucket["ideal_spend_sum"]) + ideal_spend
+        bucket["total_ads"] = int(str(bucket["total_ads"])) + 1
+        bucket["actual_spend_sum"] = Decimal(str(bucket["actual_spend_sum"])) + actual_spend
+        bucket["ideal_spend_sum"] = Decimal(str(bucket["ideal_spend_sum"])) + ideal_spend
 
         if overrun_amount > 0:
-            bucket["affected_ads"] = int(bucket["affected_ads"]) + 1
-            bucket["over_budget_ads"] = int(bucket["over_budget_ads"]) + 1
+            bucket["affected_ads"] = int(str(bucket["affected_ads"])) + 1
+            bucket["over_budget_ads"] = int(str(bucket["over_budget_ads"])) + 1
         elif overrun_amount < 0:
-            bucket["under_budget_ads"] = int(bucket["under_budget_ads"]) + 1
+            bucket["under_budget_ads"] = int(str(bucket["under_budget_ads"])) + 1
         else:
-            bucket["on_target_ads"] = int(bucket["on_target_ads"]) + 1
+            bucket["on_target_ads"] = int(str(bucket["on_target_ads"])) + 1
 
-        if overrun_amount > Decimal(bucket["max_ad_overrun_amount"]):
+        if overrun_amount > Decimal(str(bucket["max_ad_overrun_amount"])):
             bucket["max_ad_overrun_amount"] = overrun_amount
             bucket["max_ad_overrun_percent"] = (
-                Decimal(overrun_percent) if overrun_percent is not None else Decimal("0")
+                Decimal(str(overrun_percent)) if overrun_percent is not None else Decimal("0")
             )
             bucket["dominant_metric"] = budget_reference["label"]
             bucket["top_ad_name"] = str(ctx.get("ad_name", ""))
 
     rows: list[dict[str, object]] = []
     for item in grouped.values():
-        ideal_spend = Decimal(item["ideal_spend_sum"])
-        actual_spend = Decimal(item["actual_spend_sum"])
+        ideal_spend = Decimal(str(item["ideal_spend_sum"]))
+        actual_spend = Decimal(str(item["actual_spend_sum"]))
         budget_delta_amount = actual_spend - ideal_spend
         budget_delta_percent = _safe_decimal_percent_delta(actual_spend, ideal_spend)
         if budget_delta_percent is None:
@@ -823,9 +825,9 @@ def _build_campaign_stop_overrun_rows(
             else 1
             if str(item["budget_status"]) == "UNDER"
             else 2,
-            -abs(Decimal(item["budget_delta_percent"])),
-            -abs(Decimal(item["budget_delta_amount"])),
-            -int(item["over_budget_ads"]),
+            -abs(Decimal(str(item["budget_delta_percent"]))),
+            -abs(Decimal(str(item["budget_delta_amount"]))),
+            -int(str(item["over_budget_ads"])),
             str(item["campaign_full"]),
         ),
     )
@@ -833,22 +835,22 @@ def _build_campaign_stop_overrun_rows(
         {
             "campaign": row["campaign"],
             "campaign_full": row["campaign_full"],
-            "budget_delta_percent": round(float(Decimal(row["budget_delta_percent"])), 1),
-            "budget_delta_amount": round(float(Decimal(row["budget_delta_amount"])), 2),
+            "budget_delta_percent": round(float(Decimal(str(row["budget_delta_percent"]))), 1),
+            "budget_delta_amount": round(float(Decimal(str(row["budget_delta_amount"]))), 2),
             "budget_status": row["budget_status"],
-            "overrun_percent": round(float(Decimal(row["overrun_percent"])), 1),
-            "actual_spend": round(float(Decimal(row["actual_spend"])), 2),
-            "ideal_spend": round(float(Decimal(row["ideal_spend"])), 2),
-            "overrun_amount": round(float(Decimal(row["overrun_amount"])), 2),
-            "total_ads": int(row["total_ads"]),
-            "affected_ads": int(row["affected_ads"]),
-            "over_budget_ads": int(row["over_budget_ads"]),
-            "under_budget_ads": int(row["under_budget_ads"]),
-            "on_target_ads": int(row["on_target_ads"]),
+            "overrun_percent": round(float(Decimal(str(row["overrun_percent"]))), 1),
+            "actual_spend": round(float(Decimal(str(row["actual_spend"]))), 2),
+            "ideal_spend": round(float(Decimal(str(row["ideal_spend"]))), 2),
+            "overrun_amount": round(float(Decimal(str(row["overrun_amount"]))), 2),
+            "total_ads": int(str(row["total_ads"])),
+            "affected_ads": int(str(row["affected_ads"])),
+            "over_budget_ads": int(str(row["over_budget_ads"])),
+            "under_budget_ads": int(str(row["under_budget_ads"])),
+            "on_target_ads": int(str(row["on_target_ads"])),
             "dominant_metric": row["dominant_metric"],
             "top_ad_name": row["top_ad_name"],
-            "max_ad_overrun_amount": round(float(Decimal(row["max_ad_overrun_amount"])), 2),
-            "max_ad_overrun_percent": round(float(Decimal(row["max_ad_overrun_percent"])), 1),
+            "max_ad_overrun_amount": round(float(Decimal(str(row["max_ad_overrun_amount"]))), 2),
+            "max_ad_overrun_percent": round(float(Decimal(str(row["max_ad_overrun_percent"]))), 1),
         }
         for row in rows
     ]
@@ -1017,11 +1019,11 @@ def _accumulate_campaign_metrics(
             "deposits": 0,
         },
     )
-    row["spend"] += spend
-    row["clicks"] += clicks
-    row["leads"] += leads
-    row["registrations"] += registrations
-    row["deposits"] += deposits
+    row["spend"] = cast("Decimal", row["spend"]) + spend
+    row["clicks"] = cast("int", row["clicks"]) + clicks
+    row["leads"] = cast("int", row["leads"]) + leads
+    row["registrations"] = cast("int", row["registrations"]) + registrations
+    row["deposits"] = cast("int", row["deposits"]) + deposits
 
 
 def _finalize_campaign_rows(
@@ -1031,20 +1033,26 @@ def _finalize_campaign_rows(
     return [
         DashboardPerformanceCampaignSchema(
             campaign=str(row["campaign"]),
-            spend=Decimal(row["spend"]),
-            clicks=int(row["clicks"]),
-            leads=int(row["leads"]),
-            registrations=int(row["registrations"]),
-            deposits=int(row["deposits"]),
-            cpc=_safe_decimal_div(Decimal(row["spend"]), int(row["clicks"])),
-            cpl=_safe_decimal_div(Decimal(row["spend"]), int(row["leads"])),
-            cpr=_safe_decimal_div(Decimal(row["spend"]), int(row["registrations"])),
-            cost_per_deposit=_safe_decimal_div(Decimal(row["spend"]), int(row["deposits"])),
-            click_to_lead_rate=_safe_percent(int(row["leads"]), int(row["clicks"])),
-            lead_to_reg_rate=_safe_percent(int(row["registrations"]), int(row["leads"])),
-            reg_to_dep_rate=_safe_percent(int(row["deposits"]), int(row["registrations"])),
+            spend=Decimal(str(row["spend"])),
+            clicks=int(str(row["clicks"])),
+            leads=int(str(row["leads"])),
+            registrations=int(str(row["registrations"])),
+            deposits=int(str(row["deposits"])),
+            cpc=_safe_decimal_div(Decimal(str(row["spend"])), int(str(row["clicks"]))),
+            cpl=_safe_decimal_div(Decimal(str(row["spend"])), int(str(row["leads"]))),
+            cpr=_safe_decimal_div(Decimal(str(row["spend"])), int(str(row["registrations"]))),
+            cost_per_deposit=_safe_decimal_div(
+                Decimal(str(row["spend"])), int(str(row["deposits"]))
+            ),
+            click_to_lead_rate=_safe_percent(int(str(row["leads"])), int(str(row["clicks"]))),
+            lead_to_reg_rate=_safe_percent(int(str(row["registrations"])), int(str(row["leads"]))),
+            reg_to_dep_rate=_safe_percent(
+                int(str(row["deposits"])), int(str(row["registrations"]))
+            ),
         )
-        for row in sorted(campaign_map.values(), key=lambda item: item["spend"], reverse=True)
+        for row in sorted(
+            campaign_map.values(), key=lambda item: Decimal(str(item["spend"])), reverse=True
+        )
     ]
 
 
@@ -1239,7 +1247,7 @@ async def _load_dashboard_archives(
         .where(CabinetDayArchive.ended_at >= cutoff)
         .order_by(CabinetDayArchive.started_at.asc())
     )
-    return result.scalars().all()
+    return list(result.scalars().all())
 
 
 async def _load_frequency_thresholds_by_offer(
@@ -1294,7 +1302,7 @@ async def _build_snapshot_diagnostics_map(
 
     def _get_offer_code(s: AdSnapshot) -> str | None:
         ctx = diag_ctx_map.get(s.ad_id, {})
-        return ctx.get("offer_code")
+        return cast("str | None", ctx.get("offer_code"))
 
     cpm_baselines = compute_cpm_baselines_by_offer(
         [s for s in active_snapshots if _get_offer_code(s)],
@@ -1512,9 +1520,9 @@ async def get_dashboard_performance(
         .where(AdSnapshot.last_observed_at >= snapshot_cutoff)
         .order_by(AdSnapshot.last_observed_at.asc())
     )
-    snapshots = result.scalars().all()
+    snapshots = list(result.scalars().all())
     offer_result = await db.execute(select(Offer).where(Offer.is_active))
-    offers = offer_result.scalars().all()
+    offers = list(offer_result.scalars().all())
     archives = []
     if period != "today":
         archives = await _load_dashboard_archives(db, cutoff=cutoff)

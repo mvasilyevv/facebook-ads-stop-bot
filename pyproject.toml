@@ -14,6 +14,7 @@ dependencies = [
   "fastapi>=0.115.0,<1.0.0",
   "httpx>=0.28.1,<1.0.0",
   "patchright>=1.52.0,<2.0.0",
+  # "rebrowser-patches>=0.5.0",  # пакет удалён из PyPI
   "pydantic-settings>=2.8.0,<3.0.0",
   "pydantic>=2.11.0,<3.0.0",
   "python-json-logger>=3.3.0,<4.0.0",
@@ -49,3 +50,29 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "ASYNC"]
 ignore = ["E501", "B008"]
+
+[tool.ruff.lint.per-file-ignores]
+"run_*.py" = ["E402"]
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+check_untyped_defs = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = false
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = [
+  "pytest.*",
+  "pytest_asyncio.*",
+  "tenacity.*",
+  "alembic.*",
+  "uvicorn.*",
+  "playwright.*",
+  "patchright.*",
+  "sentry_sdk.*",
+]
+ignore_missing_imports = true
