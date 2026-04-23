@@ -115,7 +115,6 @@ async def test_load_runtime_config_returns_single_forum_destination():
         is_authorized=True,
         delivery_mode=TelegramDeliveryMode.FORUM_GROUP.value,
         control_topic_id=11,
-        early_topic_id=12,
         warning_topic_id=13,
         stop_topic_id=14,
         enable_topic_id=15,
@@ -135,7 +134,6 @@ async def test_load_runtime_config_returns_single_forum_destination():
     destination = destinations[0]
     assert destination.chat_id == "-1003701505954"
     assert destination.control_topic_id == 11
-    assert destination.early_topic_id == 12
     assert destination.warning_topic_id == 13
     assert destination.stop_topic_id == 14
     assert destination.enable_topic_id == 15
@@ -229,7 +227,6 @@ def test_forum_cutover_status_requires_target_group():
         chat_id="-1000000000000",
         delivery_mode=TelegramDeliveryMode.FORUM_GROUP.value,
         control_topic_id=11,
-        early_topic_id=12,
         warning_topic_id=13,
         stop_topic_id=14,
         enable_topic_id=15,

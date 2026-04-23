@@ -6,23 +6,101 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from sqlalchemy import select
-from sqlalchemy.orm import joinedload
+from sqlalchemy import delete, select
 
 from core.db import get_session_factory
 from core.enable_recommendations.service import (
     attach_recommendation_telegram_delivery,
     cleanup_orphaned_recommendation_events,
     collect_enable_recommendation_candidates,
+    load_pending_enable_recommendation_events,
     persist_enable_recommendation_candidates,
+    promote_recommendation_to_enable_task,
 )
-from core.models import AdSnapshot, FbAd, FbAdset
-from core.telegram.delivery import broadcast_enable_recommendation_message
+from core.models import AdAutoEnableDisabled
+from core.settings_queries import get_observer_settings
+from core.telegram.delivery import (
+    broadcast_enable_recommendation_message,
+    broadcast_enable_task_queue_message,
+)
 from core.telegram.renderer import normalize_enable_recommendation_reason
 
 logger = logging.getLogger(__name__)
 
 RECOMMENDATION_POLL_INTERVAL_SECONDS = 30
+
+
+async def _reset_stale_auto_enable_disabled(cabinet_day_started_at: object) -> None:
+    """Удаляет записи AdAutoEnableDisabled, устаревшие при смене кабинетного дня."""
+    if cabinet_day_started_at is None:
+        return
+    factory = get_session_factory()
+    async with factory() as session:
+        await session.execute(
+            delete(AdAutoEnableDisabled).where(
+                AdAutoEnableDisabled.cabinet_day_started_at != cabinet_day_started_at
+            )
+        )
+        await session.commit()
+
+
+async def _load_auto_enable_disabled_set() -> set[str]:
+    """Возвращает множество fb_ad_id у которых автовключение выключено вручную."""
+    factory = get_session_factory()
+    async with factory() as session:
+        result = await session.execute(select(AdAutoEnableDisabled.fb_ad_id))
+        return set(result.scalars().all())
+
+
+async def _auto_enable_new_events(
+    created_events: list,
+    disabled_set: set[str],
+) -> None:
+    """Автоматически создаёт EnableTask для каждого нового recommendation event."""
+    factory = get_session_factory()
+    for event in created_events:
+        # Пропускаем объявления с выключенным автовключением
+        fb_ad = getattr(event, "fb_ad", None)
+        fb_ad_id = fb_ad.fb_ad_id if fb_ad else None
+        if fb_ad_id and fb_ad_id in disabled_set:
+            logger.debug(
+                "Авто-включение пропущено (выключено вручную) для %s",
+                fb_ad_id,
+            )
+            continue
+        try:
+            async with factory() as session:
+                result = await promote_recommendation_to_enable_task(
+                    session,
+                    event_id=event.id,
+                    requested_by_username="auto",
+                )
+                await session.commit()
+
+            if result.outcome in ("created", "requeued") and result.fb_ad_id:
+                await broadcast_enable_task_queue_message(
+                    ad_name=result.ad_name or "",
+                    fb_ad_id=result.fb_ad_id,
+                    requested_by_username="auto",
+                    created_new=result.created_new,
+                    incident_key=str(event.id),
+                )
+                logger.info(
+                    "Авто-включение: создана задача для %s (%s)",
+                    result.ad_name,
+                    result.fb_ad_id,
+                )
+            elif result.outcome not in ("existing",):
+                logger.debug(
+                    "Авто-включение пропущено для %s: %s",
+                    result.fb_ad_id,
+                    result.detail,
+                )
+        except Exception:
+            logger.exception(
+                "Ошибка авто-включения для события %s",
+                event.id,
+            )
 
 
 async def process_enable_recommendation_cycle() -> int:
@@ -36,42 +114,55 @@ async def process_enable_recommendation_cycle() -> int:
         created_events = await persist_enable_recommendation_candidates(session, candidates)
         await session.commit()
 
-    snapshot_by_ad: dict[str, AdSnapshot] = {}
-    if created_events:
-        async with factory() as session:
-            result = await session.execute(
-                select(AdSnapshot)
-                .options(
-                    joinedload(AdSnapshot.fb_ad).joinedload(FbAd.adset).joinedload(FbAdset.campaign)
-                )
-                .where(AdSnapshot.fb_ad_id.in_([event.fb_ad_id for event in created_events]))
-            )
-            snapshot_by_ad = {
-                snapshot.fb_ad_id: snapshot for snapshot in result.scalars().unique().all()
-            }
+        # Читаем флаг авто-включения и cabinet_day_started_at
+        obs_settings = await get_observer_settings(session)
+        auto_enable = bool(obs_settings.auto_enable_recommendations) if obs_settings else False
+        cabinet_day = obs_settings.cabinet_day_started_at if obs_settings else None
+
+    # Сброс устаревших per-ad отключений при смене кабинетного дня
+    try:
+        await _reset_stale_auto_enable_disabled(cabinet_day)
+    except Exception:
+        logger.debug("Ошибка при сбросе устаревших per-ad отключений", exc_info=True)
+
+    # Авто-включение новых рекомендаций
+    if auto_enable and created_events:
+        disabled_set = await _load_auto_enable_disabled_set()
+        await _auto_enable_new_events(created_events, disabled_set)
+
+    async with factory() as session:
+        pending_events = await load_pending_enable_recommendation_events(
+            session,
+            live_batch_started_at=live_batch_started_at,
+        )
 
     delivered_count = 0
-    for event in created_events:
-        snapshot = snapshot_by_ad.get(event.fb_ad_id)
+    for event in pending_events:
         reason_title, reason_text = normalize_enable_recommendation_reason(
             recommendation_level=event.recommendation_level,
             reason_title=event.reason_title,
             reason_text=event.reason_text,
         )
-        # Получаем имена кампании и адсета через цепочку JOIN
+        fb_ad = event.fb_ad
+        if fb_ad is None:
+            logger.warning(
+                "Recommendation worker: событие %s пропущено — объявление не найдено",
+                event.id,
+            )
+            continue
+
+        # Получаем имена кампании и адсета через цепочку fb_ad → adset → campaign
         campaign_name: str | None = None
         adset_name: str | None = None
-        if snapshot is not None and snapshot.fb_ad is not None:
-            fb_ad = snapshot.fb_ad
-            if fb_ad.adset is not None:
-                adset_name = fb_ad.adset.adset_name
-                if fb_ad.adset.campaign is not None:
-                    campaign_name = fb_ad.adset.campaign.campaign_name
+        if fb_ad.adset is not None:
+            adset_name = fb_ad.adset.adset_name
+            if fb_ad.adset.campaign is not None:
+                campaign_name = fb_ad.adset.campaign.campaign_name
 
         refs = await broadcast_enable_recommendation_message(
             event_id=event.id,
-            ad_name=event.ad_name,
-            fb_ad_id=event.fb_ad_id,
+            ad_name=fb_ad.ad_name,
+            fb_ad_id=fb_ad.fb_ad_id,
             campaign_name=campaign_name,
             adset_name=adset_name,
             delivery_status=event.delivery_status,
@@ -91,7 +182,7 @@ async def process_enable_recommendation_cycle() -> int:
                     message_id=first_message_id,
                 )
                 await session.commit()
-        delivered_count += 1
+                delivered_count += 1
 
     # Очистка orphaned events (раз в цикл, ошибки глотаем)
     try:

@@ -11,6 +11,7 @@ from core.domain import AlertStage, AlertState, EnableRecommendationLevel
 
 # Человекочитаемые названия правил
 from core.rules.labels import RULE_LABELS as _RULE_LABELS
+from core.rules.labels import RULE_LABELS_SHORT as _RULE_LABELS_SHORT
 
 _NEUTRAL_ENABLE_RECOMMENDATION_REASON_TITLE = "Нет блокирующих сигналов"
 _NEUTRAL_ENABLE_RECOMMENDATION_REASON_TEXT = "По текущим правилам блокирующих сигналов нет."
@@ -354,66 +355,122 @@ class TelegramEnableRecommendationItem:
     adset_name: str | None = None
 
 
+def _truncate(text: str, max_len: int) -> str:
+    """Обрезает строку до max_len символов с многоточием."""
+    return text if len(text) <= max_len else text[: max_len - 1].rstrip() + "…"
+
+
+def _build_compact_metrics_line(metrics_json: dict[str, Any]) -> list[str]:
+    """Две строки метрик: расход/клики/лиды/депозиты и CPR/CPC/CTR.
+
+    Нулевые метрики не показываются.
+    """
+    metrics = metrics_json or {}
+    lines: list[str] = []
+
+    # Строка 1: расход · клики · лиды · депозиты
+    row1: list[str] = []
+    spend = metrics.get("spend")
+    if spend is not None:
+        row1.append(f"💸 {spend}$")
+    clicks = metrics.get("clicks")
+    if clicks:
+        row1.append(f"👆 {clicks}")
+    leads = metrics.get("leads")
+    if leads:
+        row1.append(f"🎯 {leads}")
+    deps = metrics.get("deposits")
+    if deps:
+        row1.append(f"💰 {deps}")
+    if row1:
+        lines.append(" · ".join(row1))
+
+    # Строка 2: CPR · CPC · CTR
+    row2: list[str] = []
+    cpr = metrics.get("cost_per_registration")
+    if cpr is not None:
+        row2.append(f"CPR: {cpr}$")
+    cpc = metrics.get("cpc")
+    if cpc is not None:
+        row2.append(f"CPC: {cpc}$")
+    ctr = metrics.get("outbound_ctr")
+    if ctr is not None:
+        row2.append(f"CTR: {ctr}%")
+    if row2:
+        lines.append(f"📊 {' · '.join(row2)}")
+
+    return lines
+
+
 def render_alert_message(
     *,
     stage: AlertStage,
     items: list[TelegramAlertItem],
     snooze_note: str | None = None,
 ) -> TelegramOutgoingMessage:
-    """Формирует компактное TG-сообщение с blockquote-секциями."""
+    """Формирует компактное TG-сообщение — читается за 3 секунды."""
     lines: list[str] = []
     keyboard: list[list[dict[str, str]]] = []
 
     for item in items:
-        # --- Заголовок: стадия · причина ---
-        reason = html.escape(item.reason_title) if item.reason_title else ""
+        # --- Строка 1: стадия — название объявления ---
+        ad_short = html.escape(_truncate(item.ad_name, 25))
         if stage == AlertStage.STOP:
-            header = "🛑 <b>СТОП</b>"
-        elif stage == AlertStage.EARLY_SIGNAL:
-            header = "🔎 <b>Ранний сигнал</b>"
+            stage_icon = "🔴 <b>СТОП</b>"
         else:
-            header = "⚠️ <b>Предупреждение</b>"
-        lines.append(f"{header} · {reason}" if reason else header)
+            stage_icon = "🟡 <b>WARNING</b>"
+        lines.append(f"{stage_icon} — {ad_short}")
+
+        # --- Строка 2: оффер · кампания ---
+        parts: list[str] = []
+        if item.offer_code:
+            parts.append(html.escape(item.offer_code))
+        if item.campaign_name:
+            parts.append(html.escape(_truncate(item.campaign_name, 20)))
+        if parts:
+            lines.append(" · ".join(parts))
+
         lines.append("")
 
-        # --- Identity: compact blockquote ---
-        lines.extend(
-            build_ad_identity_lines(
-                campaign_name=item.campaign_name,
-                adset_name=item.adset_name,
-                ad_name=item.ad_name,
-                compact=True,
-            )
-        )
+        # --- Метрики: две строки ---
+        metric_lines = _build_compact_metrics_line(item.metrics_json)
+        lines.extend(metric_lines)
 
-        # --- Расход + правило (всегда видно) ---
-        rule_summaries = item.metrics_json.get("rule_summaries")
-        if not isinstance(rule_summaries, list):
-            rule_summaries = None
-        key_lines = build_key_metric_line(item.metrics_json, rule_summaries)
-        if key_lines:
-            lines.append("")
-            lines.extend(key_lines)
+        lines.append("")
 
-        # --- Подробные метрики (сворачиваемый блок) ---
-        detail_lines = build_detailed_metrics_block(item.metrics_json)
-        if detail_lines:
-            lines.append("")
-            lines.extend(detail_lines)
+        # --- Причина + коды правил ---
+        if item.reason_title:
+            lines.append(f"⚠️ {html.escape(item.reason_title)}")
+        if item.matched_rule_codes:
+            codes = ", ".join(_RULE_LABELS_SHORT.get(c, c) for c in item.matched_rule_codes if c)
+            if codes:
+                lines.append(html.escape(codes))
 
         # --- Snooze-примечание ---
         if snooze_note:
             lines.append("")
             lines.append(html.escape(snooze_note))
 
-        # --- Футер / кнопки ---
-        if stage in {AlertStage.WARNING, AlertStage.EARLY_SIGNAL}:
+        # --- Подробные метрики (сворачиваемый блок) ---
+        detail_lines = build_detailed_metrics_block(item.metrics_json or {})
+        if detail_lines:
+            lines.append("")
+            lines.extend(detail_lines)
+
+        lines.append("")
+
+        # --- Кнопки ---
+        if stage == AlertStage.WARNING:
             keyboard.append(
                 [
                     {
-                        "text": f"🛑 Создать задачу: {item.ad_name[:24].rstrip()}",
+                        "text": f"🛑 Отключить: {item.ad_name[:24].rstrip()}",
                         "callback_data": f"disable:{item.snapshot_id}",
-                    }
+                    },
+                    {
+                        "text": "👁 Игнорировать",
+                        "callback_data": f"snooze:{item.snapshot_id}:60",
+                    },
                 ]
             )
             keyboard.append(
@@ -433,7 +490,6 @@ def render_alert_message(
                 ]
             )
         else:
-            lines.append("")
             lines.append("⚡ Авто-отключение запущено")
 
     return TelegramOutgoingMessage(
@@ -459,8 +515,6 @@ def render_enable_recommendation_message(
     reason = html.escape(reason_title) if reason_title else ""
     if item.recommendation_level == EnableRecommendationLevel.WARNING:
         header = "⚠️ <b>Требует проверки</b>"
-    elif item.recommendation_level == EnableRecommendationLevel.EARLY_SIGNAL:
-        header = "🔎 <b>Ранний сигнал восстановления</b>"
     else:
         header = "ℹ️ <b>Нет блокирующих сигналов</b>"
     lines.append(f"{header} · {reason}" if reason else header)

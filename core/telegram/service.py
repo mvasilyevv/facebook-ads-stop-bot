@@ -21,7 +21,6 @@ FORUM_SUPERGROUP_CHAT_ID = "-1003701505954"
 CONTROL_TOPIC_NAME = "CONTROL"
 FORUM_STREAM_TOPIC_NAMES: dict[str, str] = {
     "CONTROL": CONTROL_TOPIC_NAME,
-    TelegramNotificationStream.EARLY.value: "EARLY",
     TelegramNotificationStream.WARNING.value: "WARNING",
     TelegramNotificationStream.STOP.value: "STOP",
     TelegramNotificationStream.ENABLE.value: "ENABLE",
@@ -41,7 +40,6 @@ class TelegramDestination:
     is_primary: bool = False
     delivery_mode: str = TelegramDeliveryMode.PRIVATE_CHAT.value
     control_topic_id: int | None = None
-    early_topic_id: int | None = None
     warning_topic_id: int | None = None
     stop_topic_id: int | None = None
     enable_topic_id: int | None = None
@@ -50,8 +48,6 @@ class TelegramDestination:
         """Возвращает topic id для потока уведомлений."""
         if self.delivery_mode != TelegramDeliveryMode.FORUM_GROUP.value:
             return None
-        if stream_kind == TelegramNotificationStream.EARLY:
-            return self.early_topic_id
         if stream_kind == TelegramNotificationStream.WARNING:
             return self.warning_topic_id
         if stream_kind == TelegramNotificationStream.STOP:
@@ -127,7 +123,6 @@ def forum_topics_ready(settings_row: TelegramSettings | None) -> bool:
         (value := getattr(settings_row, field_name, None)) is not None and int(value) > 0
         for field_name in (
             "control_topic_id",
-            "early_topic_id",
             "warning_topic_id",
             "stop_topic_id",
             "enable_topic_id",
@@ -211,7 +206,6 @@ def _destination_from_settings(settings_row: TelegramSettings) -> TelegramDestin
             getattr(settings_row, "delivery_mode", TelegramDeliveryMode.PRIVATE_CHAT.value)
         ),
         control_topic_id=settings_row.control_topic_id,
-        early_topic_id=settings_row.early_topic_id,
         warning_topic_id=settings_row.warning_topic_id,
         stop_topic_id=settings_row.stop_topic_id,
         enable_topic_id=settings_row.enable_topic_id,

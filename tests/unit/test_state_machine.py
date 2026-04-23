@@ -31,18 +31,6 @@ def test_normal_to_warning_sends():
     assert emit is True
 
 
-# Из NORMAL + EARLY_SIGNAL → EARLY_SIGNAL_SENT, должен отправить
-def test_normal_to_early_signal_sends():
-    state, token, emit = resolve_transition(
-        current_state=AlertState.NORMAL,
-        current_token=None,
-        next_stage=AlertStage.EARLY_SIGNAL,
-    )
-    assert state == AlertState.EARLY_SIGNAL_SENT
-    assert token is not None
-    assert emit is True
-
-
 # Из NORMAL + None → остаётся NORMAL, не отправляет
 def test_normal_stays_normal():
     state, token, emit = resolve_transition(
@@ -53,42 +41,6 @@ def test_normal_stays_normal():
     assert state == AlertState.NORMAL
     assert token is None
     assert emit is False
-
-
-# Из EARLY_SIGNAL_SENT + EARLY_SIGNAL → остаётся, НЕ отправляет повторно
-def test_early_signal_repeat_no_send():
-    state, token, emit = resolve_transition(
-        current_state=AlertState.EARLY_SIGNAL_SENT,
-        current_token="existing-token",
-        next_stage=AlertStage.EARLY_SIGNAL,
-    )
-    assert state == AlertState.EARLY_SIGNAL_SENT
-    assert token == "existing-token"
-    assert emit is False
-
-
-# Из EARLY_SIGNAL_SENT + WARNING → эскалация до WARNING_SENT, отправляет
-def test_early_signal_to_warning_escalates():
-    state, token, emit = resolve_transition(
-        current_state=AlertState.EARLY_SIGNAL_SENT,
-        current_token="existing-token",
-        next_stage=AlertStage.WARNING,
-    )
-    assert state == AlertState.WARNING_SENT
-    assert token == "existing-token"
-    assert emit is True
-
-
-# Из EARLY_SIGNAL_SENT + STOP → эскалация до STOP_SENT, отправляет
-def test_early_signal_to_stop_escalates():
-    state, token, emit = resolve_transition(
-        current_state=AlertState.EARLY_SIGNAL_SENT,
-        current_token="existing-token",
-        next_stage=AlertStage.STOP,
-    )
-    assert state == AlertState.STOP_SENT
-    assert token == "existing-token"
-    assert emit is True
 
 
 # Из WARNING_SENT + STOP → эскалация до STOP_SENT, отправляет
@@ -110,18 +62,6 @@ def test_warning_repeat_no_send():
         next_stage=AlertStage.WARNING,
     )
     assert state == AlertState.WARNING_SENT
-    assert emit is False
-
-
-# Из WARNING_SENT + EARLY_SIGNAL → остаётся WARNING_SENT, без понижения
-def test_warning_does_not_downgrade_to_early_signal():
-    state, token, emit = resolve_transition(
-        current_state=AlertState.WARNING_SENT,
-        current_token="existing-token",
-        next_stage=AlertStage.EARLY_SIGNAL,
-    )
-    assert state == AlertState.WARNING_SENT
-    assert token == "existing-token"
     assert emit is False
 
 

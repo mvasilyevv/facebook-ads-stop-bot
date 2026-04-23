@@ -32,9 +32,10 @@ def _rows_result(rows):
 
 
 def _scalar_result(obj):
-    """Создаёт мок результата scalar_one_or_none()."""
+    """Создаёт мок результата scalar_one_or_none() и scalar_one()."""
     result = MagicMock()
     result.scalar_one_or_none.return_value = obj
+    result.scalar_one.return_value = obj
     return result
 
 
@@ -72,10 +73,10 @@ async def test_list_enable_recommendations_deduplicates_by_ad_and_marks_task_cre
         id=uuid.uuid4(),
         ad_id=ad_id_2,
         delivery_status="NOT_DELIVERING",
-        recommendation_level=EnableRecommendationLevel.EARLY_SIGNAL,
-        matched_rule_codes=["early_outbound_ctr_signal"],
-        reason_title="Early",
-        reason_text="Есть ранний сигнал",
+        recommendation_level=EnableRecommendationLevel.OK,
+        matched_rule_codes=[],
+        reason_title="Нет блокирующих сигналов",
+        reason_text="Объявление проходит по текущим правилам.",
         metrics_json={},
         live_batch_started_at=shared_batch,
         created_at=datetime(2026, 3, 29, 14, 3, tzinfo=UTC),
@@ -135,11 +136,11 @@ async def test_list_enable_recommendations_deduplicates_by_ad_and_marks_task_cre
             event=second_ad_event,
             snapshot=snapshot_ad_2,
             candidate=SimpleNamespace(
-                recommendation_level=EnableRecommendationLevel.EARLY_SIGNAL,
-                matched_rule_codes=["early_outbound_ctr_signal"],
+                recommendation_level=EnableRecommendationLevel.OK,
+                matched_rule_codes=[],
                 reason_title="Early",
                 reason_text="Есть ранний сигнал",
-                metrics_json={"outbound_ctr": "0.80"},
+                metrics_json={},
             ),
         ),
         SimpleNamespace(
@@ -738,20 +739,15 @@ async def test_dashboard_stats_includes_enable_recommendation_counters(mock_db):
 
     group_result = MagicMock()
     group_result.all.return_value = [
-        (AlertState.NORMAL, 5, Decimal("10.00")),
-        (AlertState.WARNING_SENT, 1, Decimal("5.00")),
+        (AlertState.NORMAL, "ACTIVE", 5, Decimal("10.00")),
+        (AlertState.WARNING_SENT, "ACTIVE", 1, Decimal("5.00")),
     ]
-    observer_result = MagicMock()
-    observer_result.scalar_one_or_none.return_value = None
-    mock_db.execute = AsyncMock(side_effect=[group_result, observer_result])
-    mock_db.scalar = AsyncMock(side_effect=[None, None, 3, 4, 2, 1])
+    mock_db.execute = AsyncMock(side_effect=[group_result, _scalar_result(None)])
+    mock_db.scalar = AsyncMock(side_effect=[None, None, 3, 4, 2])
 
     recommendation_events = [
         SimpleNamespace(
             candidate=SimpleNamespace(recommendation_level=EnableRecommendationLevel.OK)
-        ),
-        SimpleNamespace(
-            candidate=SimpleNamespace(recommendation_level=EnableRecommendationLevel.EARLY_SIGNAL)
         ),
         SimpleNamespace(
             candidate=SimpleNamespace(recommendation_level=EnableRecommendationLevel.WARNING)
@@ -769,7 +765,6 @@ async def test_dashboard_stats_includes_enable_recommendation_counters(mock_db):
 
     assert result.pending_enable_tasks == 4
     assert result.enable_recommendations_ok == 1
-    assert result.enable_recommendations_early_signal == 1
     assert result.enable_recommendations_warning == 2
 
 
@@ -910,12 +905,12 @@ async def test_get_ad_timeline_includes_enable_recommendations_and_enable_tasks(
         last_error=None,
     )
     recommendation_event = SimpleNamespace(
-        recommendation_level=EnableRecommendationLevel.EARLY_SIGNAL,
+        recommendation_level=EnableRecommendationLevel.OK,
         delivery_status="NOT_DELIVERING",
-        matched_rule_codes=["early_outbound_ctr_signal"],
-        reason_title="Early",
-        reason_text="Есть ранний сигнал",
-        metrics_json={"outbound_ctr": "0.80"},
+        matched_rule_codes=[],
+        reason_title="Нет блокирующих сигналов",
+        reason_text="По текущим правилам блокирующих сигналов нет.",
+        metrics_json={},
         created_at=datetime(2026, 3, 29, 15, 5, tzinfo=UTC),
     )
     ok_recommendation_event = SimpleNamespace(

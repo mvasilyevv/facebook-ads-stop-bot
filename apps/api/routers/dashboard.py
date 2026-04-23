@@ -202,8 +202,6 @@ def _incident_key_for_snapshot(snapshot: AdSnapshot) -> str:
 
 def _matched_rule_codes_for_snapshot(snapshot: AdSnapshot) -> list[str]:
     """Возвращает набор правил для текущей стадии snapshot."""
-    if snapshot.current_stage == AlertStage.EARLY_SIGNAL:
-        return list(snapshot.early_signal_rule_codes or [])
     if snapshot.current_stage == AlertStage.WARNING:
         return list(snapshot.warning_rule_codes or [])
     return list(snapshot.stop_rule_codes or [])
@@ -922,9 +920,7 @@ def _build_current_risk_reason_rows(snapshots: list[AdSnapshot]) -> list[dict[st
     }
     risk_counts: dict[str, int] = {}
     for snapshot in snapshots:
-        if snapshot.alert_state == AlertState.EARLY_SIGNAL_SENT:
-            matched_codes = snapshot.early_signal_rule_codes or []
-        elif snapshot.alert_state == AlertState.WARNING_SENT:
+        if snapshot.alert_state == AlertState.WARNING_SENT:
             matched_codes = snapshot.warning_rule_codes or []
         elif snapshot.alert_state in (AlertState.STOP_SENT, AlertState.CLAIMED):
             matched_codes = snapshot.stop_rule_codes or []
@@ -1354,27 +1350,25 @@ async def get_dashboard_stats(db: AsyncSession = Depends(get_db)):
     state_stats = await db.execute(
         select(
             AdSnapshot.alert_state,
+            AdSnapshot.delivery_status,
             func.count().label("cnt"),
             func.coalesce(func.sum(AdSnapshot.spend), 0).label("spend"),
         )
         .where(AdSnapshot.last_observed_at >= scan_cutoff)
-        .group_by(AdSnapshot.alert_state)
+        .group_by(AdSnapshot.alert_state, AdSnapshot.delivery_status)
     )
     rows = state_stats.all()
 
     total = 0
-    early_signal = 0
     warning = 0
     stop = 0
     disabled = 0
     claimed = 0
     total_spend = Decimal("0")
-    for state, cnt, spend in rows:
+    for state, _delivery_status, cnt, spend in rows:
         total += cnt
         total_spend += spend or Decimal("0")
-        if state == AlertState.EARLY_SIGNAL_SENT:
-            early_signal = cnt
-        elif state == AlertState.WARNING_SENT:
+        if state == AlertState.WARNING_SENT:
             warning = cnt
         elif state == AlertState.STOP_SENT:
             stop = cnt
@@ -1470,11 +1464,6 @@ async def get_dashboard_stats(db: AsyncSession = Depends(get_db)):
         for row in current_enable_recommendations
         if row.candidate.recommendation_level == EnableRecommendationLevel.OK
     )
-    enable_recommendations_early_signal = sum(
-        1
-        for row in current_enable_recommendations
-        if row.candidate.recommendation_level == EnableRecommendationLevel.EARLY_SIGNAL
-    )
     enable_recommendations_warning = sum(
         1
         for row in current_enable_recommendations
@@ -1484,7 +1473,6 @@ async def get_dashboard_stats(db: AsyncSession = Depends(get_db)):
     return DashboardStatsSchema(
         total_ads_monitored=total,
         active_ads_count=total,
-        ads_in_early_signal=early_signal,
         ads_in_warning=warning,
         ads_in_stop=stop,
         ads_disabled=disabled,
@@ -1495,7 +1483,6 @@ async def get_dashboard_stats(db: AsyncSession = Depends(get_db)):
         pending_disable_tasks=pending_tasks,
         pending_enable_tasks=pending_enable_tasks,
         enable_recommendations_ok=enable_recommendations_ok,
-        enable_recommendations_early_signal=enable_recommendations_early_signal,
         enable_recommendations_warning=enable_recommendations_warning,
         last_scan_at=last_scan_str,
         **_serialize_observer_runtime_fields(observer_row),
@@ -1556,27 +1543,25 @@ async def get_dashboard_batch(
     state_stats = await db.execute(
         select(
             AdSnapshot.alert_state,
+            AdSnapshot.delivery_status,
             func.count().label("cnt"),
             func.coalesce(func.sum(AdSnapshot.spend), 0).label("spend"),
         )
         .where(AdSnapshot.last_observed_at >= scan_cutoff)
-        .group_by(AdSnapshot.alert_state)
+        .group_by(AdSnapshot.alert_state, AdSnapshot.delivery_status)
     )
     rows = state_stats.all()
 
     total = 0
-    early_signal = 0
     warning = 0
     stop = 0
     disabled = 0
     claimed = 0
     total_spend = Decimal("0")
-    for state, cnt, spend in rows:
+    for state, _delivery_status, cnt, spend in rows:
         total += cnt
         total_spend += spend or Decimal("0")
-        if state == AlertState.EARLY_SIGNAL_SENT:
-            early_signal = cnt
-        elif state == AlertState.WARNING_SENT:
+        if state == AlertState.WARNING_SENT:
             warning = cnt
         elif state == AlertState.STOP_SENT:
             stop = cnt
@@ -1670,11 +1655,6 @@ async def get_dashboard_batch(
         for row in current_enable_recommendations
         if row.candidate.recommendation_level == EnableRecommendationLevel.OK
     )
-    enable_recommendations_early_signal = sum(
-        1
-        for row in current_enable_recommendations
-        if row.candidate.recommendation_level == EnableRecommendationLevel.EARLY_SIGNAL
-    )
     enable_recommendations_warning = sum(
         1
         for row in current_enable_recommendations
@@ -1684,7 +1664,6 @@ async def get_dashboard_batch(
     stats = DashboardStatsSchema(
         total_ads_monitored=total,
         active_ads_count=total,
-        ads_in_early_signal=early_signal,
         ads_in_warning=warning,
         ads_in_stop=stop,
         ads_disabled=disabled,
@@ -1695,7 +1674,6 @@ async def get_dashboard_batch(
         pending_disable_tasks=pending_tasks,
         pending_enable_tasks=pending_enable_tasks,
         enable_recommendations_ok=enable_recommendations_ok,
-        enable_recommendations_early_signal=enable_recommendations_early_signal,
         enable_recommendations_warning=enable_recommendations_warning,
         last_scan_at=last_scan.isoformat() if last_scan else None,
         **_serialize_observer_runtime_fields(observer_row),
@@ -1734,7 +1712,6 @@ async def get_dashboard_batch(
             deposits=s.deposits,
             alert_state=s.alert_state.value,
             current_stage=s.current_stage.value if s.current_stage else None,
-            early_signal_rule_codes=s.early_signal_rule_codes or [],
             warning_rule_codes=s.warning_rule_codes or [],
             stop_rule_codes=s.stop_rule_codes or [],
             cpm_diagnostic_status=diagnostics_map[s.fb_ad_id].cpm.status
@@ -1760,7 +1737,6 @@ async def get_dashboard_batch(
             AdSnapshot.last_observed_at >= scan_cutoff,
             AdSnapshot.alert_state.in_(
                 [
-                    AlertState.EARLY_SIGNAL_SENT,
                     AlertState.WARNING_SENT,
                     AlertState.STOP_SENT,
                     AlertState.CLAIMED,
@@ -1912,7 +1888,6 @@ async def list_ad_snapshots(
             effective_deposits=_effective_deposits(s.deposits, s.fb_ad_id, fake_map),
             alert_state=s.alert_state.value,
             current_stage=s.current_stage.value if s.current_stage else None,
-            early_signal_rule_codes=s.early_signal_rule_codes or [],
             warning_rule_codes=s.warning_rule_codes or [],
             stop_rule_codes=s.stop_rule_codes or [],
             cpm_diagnostic_status=diagnostics_map[s.fb_ad_id].cpm.status
@@ -1948,7 +1923,6 @@ async def list_active_incidents(
             AdSnapshot.last_observed_at >= scan_cutoff,
             AdSnapshot.alert_state.in_(
                 [
-                    AlertState.EARLY_SIGNAL_SENT,
                     AlertState.WARNING_SENT,
                     AlertState.STOP_SENT,
                     AlertState.CLAIMED,
@@ -2087,6 +2061,42 @@ async def retry_disable_task(task_id: str, db: AsyncSession = Depends(get_db)):
     return {"ok": True}
 
 
+@router.delete("/dashboard/disable-tasks/{task_id}")
+async def cancel_disable_task(task_id: str, db: AsyncSession = Depends(get_db)):
+    """Отменяет задачу отключения и возвращает снэпшот в STOP_SENT."""
+    result = await db.execute(select(DisableTask).where(DisableTask.id == task_id))
+    task = result.scalar_one_or_none()
+    if not task:
+        raise HTTPException(status_code=404, detail="Задача не найдена")
+
+    # Завершённые задачи нельзя отменить
+    if task.status in (
+        DisableTaskStatus.SUCCEEDED,
+        DisableTaskStatus.CANCELLED,
+        DisableTaskStatus.FAILED,
+    ):
+        raise HTTPException(status_code=400, detail="Задача уже завершена")
+
+    task.status = DisableTaskStatus.CANCELLED
+    task.completed_at = datetime.now(UTC)
+    task.next_retry_at = None
+    task.last_error = "Задача удалена из очереди вручную через dashboard"
+
+    # Возвращаем снэпшот из CLAIMED обратно в STOP_SENT
+    snap_result = await db.execute(
+        select(AdSnapshot).where(
+            AdSnapshot.ad_id == task.ad_id,
+            AdSnapshot.open_state_token == task.open_state_token,
+        )
+    )
+    snapshot = snap_result.scalar_one_or_none()
+    if snapshot and snapshot.alert_state == AlertState.CLAIMED:
+        snapshot.alert_state = AlertState.STOP_SENT
+
+    await db.commit()
+    return {"ok": True}
+
+
 @router.post("/dashboard/disable-tasks", response_model=DisableTaskSchema, status_code=201)
 async def create_disable_task(
     body: CreateDisableTaskRequest,
@@ -2180,7 +2190,7 @@ async def list_disable_tasks(
 
 
 @router.get(
-    "/api/dashboard/enable-recommendations",
+    "/dashboard/enable-recommendations",
     response_model=list[EnableRecommendationEventSchema],
 )
 async def list_enable_recommendations(
@@ -2345,7 +2355,6 @@ async def get_chart_data(
         alerts_timeline[bucket_cursor] = {
             "hour": label,
             "label": label,
-            "early_signal": 0,
             "warning": 0,
             "stop": 0,
         }
@@ -2353,9 +2362,7 @@ async def get_chart_data(
     for stage, created_at in alert_rows:
         bucket = _timeline_bucket_start(_to_dashboard_timezone(created_at), period)
         if bucket in alerts_timeline:
-            if stage == AlertStage.EARLY_SIGNAL:
-                alerts_timeline[bucket]["early_signal"] += 1
-            elif stage == AlertStage.WARNING:
+            if stage == AlertStage.WARNING:
                 alerts_timeline[bucket]["warning"] += 1
             elif stage == AlertStage.STOP:
                 alerts_timeline[bucket]["stop"] += 1
@@ -2407,7 +2414,6 @@ async def get_chart_data(
     )
     _state_labels = {
         AlertState.NORMAL: "Норма",
-        AlertState.EARLY_SIGNAL_SENT: "Ранний сигнал",
         AlertState.WARNING_SENT: "Предупреждение",
         AlertState.STOP_SENT: "Стоп",
         AlertState.CLAIMED: "Ожидает OFF",
@@ -2438,7 +2444,6 @@ async def get_chart_data(
         .limit(8)
     )
     _state_icons = {
-        AlertState.EARLY_SIGNAL_SENT: "🔎",
         AlertState.STOP_SENT: "🛑",
         AlertState.WARNING_SENT: "⚠️",
         AlertState.CLAIMED: "🔄",
@@ -2547,7 +2552,6 @@ async def get_ad_timeline(fb_ad_id: str, db: AsyncSession = Depends(get_db)):
         if snapshot is not None
         and snapshot.alert_state
         in (
-            AlertState.EARLY_SIGNAL_SENT,
             AlertState.WARNING_SENT,
             AlertState.STOP_SENT,
             AlertState.CLAIMED,

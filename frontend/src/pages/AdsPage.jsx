@@ -9,12 +9,17 @@ import {
   restartDisableWorker,
   setFakeDeposits,
   deleteFakeDeposits,
+  disableAutoEnable,
+  enableAutoEnable,
+  getAutoEnableDisabled,
+  getObserverSettings,
 } from '../api.js';
 import { fmt$ as _sharedFmt$, fmtN as _sharedFmtN } from '../utils/formatters.js';
 import { formatTime as _sharedFmtTime } from '../utils/timeUtils.js';
 import { useAsyncPolling } from '../hooks/useAsyncPolling.js';
 import { useRefreshOnResume } from '../hooks/useRefreshOnResume.js';
 import { StateIcon } from '../components/StateIcon.jsx';
+import { TopAdsQualityTable } from '../components/TopAdsQualityTable.jsx';
 import { ALERT_STATE_LABELS } from '../constants/alertStates.js';
 
 // Буфер в минутах: объявления виденные в пределах N минут от последнего скана = "активные".
@@ -27,11 +32,10 @@ const TEXT_COLLATOR = new Intl.Collator('ru', { sensitivity: 'base', numeric: tr
 const STATE_ORDER = {
   STOP_SENT: 0,
   WARNING_SENT: 1,
-  EARLY_SIGNAL_SENT: 2,
-  CLAIMED: 3,
-  NORMAL: 4,
-  DISABLED: 5,
-  ARCHIVED: 6,
+  CLAIMED: 2,
+  NORMAL: 3,
+  DISABLED: 4,
+  ARCHIVED: 5,
 };
 
 const SORT_OPTIONS = [
@@ -54,9 +58,8 @@ const SORT_OPTIONS = [
 import { RULE_LABELS } from '../constants/ruleLabels.js';
 
 const STATE_PRIORITY = {
-  STOP_SENT: 5,
-  WARNING_SENT: 4,
-  EARLY_SIGNAL_SENT: 3,
+  STOP_SENT: 4,
+  WARNING_SENT: 3,
   CLAIMED: 2,
   NORMAL: 1,
   DISABLED: 0,
@@ -69,7 +72,7 @@ const QUICK_FILTERS = [
     label: 'Проблемные',
     predicate: (ad) => {
       const s = getAdDisplayState(ad);
-      return s === 'WARNING_SENT' || s === 'STOP_SENT' || s === 'EARLY_SIGNAL_SENT' || s === 'CLAIMED';
+      return s === 'WARNING_SENT' || s === 'STOP_SENT' || s === 'CLAIMED';
     },
   },
   {
@@ -243,11 +246,9 @@ function getIncidentStateLabel(incident) {
   if (state === 'DISABLED') return 'Отключено';
   if (state === 'STOP_SENT') return 'Стоп-алерт';
   if (state === 'WARNING_SENT') return 'Предупреждение';
-  if (state === 'EARLY_SIGNAL_SENT') return 'Ранний сигнал';
   const stage = String(incident?.current_stage || incident?.latest_alert_stage || '').toUpperCase();
   if (stage === 'STOP') return 'Стоп-алерт';
   if (stage === 'WARNING') return 'Предупреждение';
-  if (stage === 'EARLY_SIGNAL') return 'Ранний сигнал';
   return 'Активный инцидент';
 }
 
@@ -258,7 +259,6 @@ function getIncidentVariant(incident) {
   const stage = String(incident.current_stage || incident.latest_alert_stage || '').toUpperCase();
   if (state === 'CLAIMED' || state === 'STOP_SENT' || stage === 'STOP') return 'stop';
   if (state === 'WARNING_SENT' || stage === 'WARNING') return 'warning';
-  if (state === 'EARLY_SIGNAL_SENT' || stage === 'EARLY_SIGNAL') return 'signal';
   return 'normal';
 }
 
@@ -342,7 +342,6 @@ function normalizeArchiveAd(ad) {
     alert_state: ARCHIVE_STATE,
     incident_summary: null,
     current_stage: null,
-    early_signal_rule_codes: [],
     warning_rule_codes: [],
     stop_rule_codes: [],
     cpm_diagnostic_status: null,
@@ -375,7 +374,7 @@ function isDeliveryOff(ad) {
 
 // --- Таймлайн объявления ---
 
-const STAGE_ICONS = { EARLY_SIGNAL: '◎', WARNING: '△', STOP: '×' };
+const STAGE_ICONS = { WARNING: '△', STOP: '×' };
 const TASK_STATUS_ICONS = { PENDING: '○', RUNNING: '●', SUCCEEDED: '✓', RETRYING: '↻', FAILED: '×' };
 const ENABLE_TASK_STATUS_LABELS = {
   PENDING: 'В очереди',
@@ -389,12 +388,6 @@ const ENABLE_RECOMMENDATION_LEVEL_META = {
     label: 'Нет блокирующих сигналов',
     icon: '○',
     tone: 'signal',
-  },
-  EARLY_SIGNAL: {
-    label: 'Ранний сигнал восстановления',
-    icon: '◎',
-    tone: 'signal',
-    secondary: 'Есть ранний сигнал',
   },
   WARNING: {
     label: 'Требует проверки',
@@ -673,8 +666,6 @@ function AdTimeline({ fbAdId, onClose }) {
                       : ev.type === 'alert'
                       ? ev.stage === 'STOP'
                         ? 'border-danger/30 bg-danger-muted'
-                        : ev.stage === 'EARLY_SIGNAL'
-                        ? 'border-early/30 bg-early-muted'
                         : 'border-warning/30 bg-warning-muted'
                       : 'border-border bg-elevated/50'
                   }`}
@@ -686,9 +677,6 @@ function AdTimeline({ fbAdId, onClose }) {
                       <div className="min-w-0 flex-1">
                         <div className="text-sm font-medium text-primary">
                           {getEnableRecommendationMeta(ev.recommendation_level).label}
-                          {ev.recommendation_level === 'EARLY_SIGNAL' && (
-                            <span className="text-2xs text-muted"> · есть ранний сигнал</span>
-                          )}
                           {ev.recommendation_level === 'WARNING' && (
                             <span className="text-2xs text-muted"> · близко к порогу</span>
                           )}
@@ -722,7 +710,7 @@ function AdTimeline({ fbAdId, onClose }) {
                       <span className="mt-0.5 flex-shrink-0 text-sm text-secondary">{STAGE_ICONS[ev.stage] || '○'}</span>
                       <div className="min-w-0 flex-1">
                         <div className="text-sm font-medium text-primary">
-                          {ev.reason_title || (ev.stage === 'STOP' ? 'Стоп-алерт' : ev.stage === 'EARLY_SIGNAL' ? 'Ранний сигнал' : 'Предупреждение')}
+                          {ev.reason_title || (ev.stage === 'STOP' ? 'Стоп-алерт' : 'Предупреждение')}
                           {ev.matched_rules?.length > 0 && (
                             <span
                               className="text-2xs text-secondary"
@@ -807,7 +795,6 @@ function getTableRowState(ad) {
   const displayState = getAdDisplayState(ad);
   if (displayState === 'STOP_SENT') return 'stop';
   if (displayState === 'WARNING_SENT') return 'warning';
-  if (displayState === 'EARLY_SIGNAL_SENT') return 'signal';
   if (displayState === 'CLAIMED') return 'claimed';
   if (displayState === 'DISABLED') return 'disabled';
   return 'normal';
@@ -818,13 +805,12 @@ function getTableRowActionIcon(ad) {
   const displayState = getAdDisplayState(ad);
   if (displayState === 'STOP_SENT') return '×';
   if (displayState === 'WARNING_SENT') return '△';
-  if (displayState === 'EARLY_SIGNAL_SENT') return '◎';
   return null;
 }
 
 // --- Главный компонент ---
 
-export default function AdsPage({ initialView = 'active', initialState = '' }) {
+export default function AdsPage({ initialView = 'active', initialState = '', onOpenNaming }) {
   const [view, setView] = useState(initialView); // 'active' | 'archive' | 'all'
   const [offerFilter, setOfferFilter] = useState('');
   const [stateFilter, setStateFilter] = useState(initialState);
@@ -840,6 +826,8 @@ export default function AdsPage({ initialView = 'active', initialState = '' }) {
   const [restartingDisableWorker, setRestartingDisableWorker] = useState(false);
   const [activeQuickFilter, setActiveQuickFilter] = useState(null);
   const [fakeDepModal, setFakeDepModal] = useState(null); // { fb_ad_id, ad_name, deposits, fake_deposits }
+  const [autoEnableDisabledSet, setAutoEnableDisabledSet] = useState(new Set());
+  const [globalAutoEnable, setGlobalAutoEnable] = useState(false);
 
   useEffect(() => {
     setView(initialView);
@@ -853,16 +841,20 @@ export default function AdsPage({ initialView = 'active', initialState = '' }) {
     try {
       setLoading(true);
       /* Баг 8: все промисы обёрнуты в catch — один упавший запрос не крашит страницу */
-      const [allData, statsData, taskData, incidentsData] = await Promise.all([
+      const [allData, statsData, taskData, incidentsData, autoDisabledData, obsData] = await Promise.all([
         getAdSnapshots({ limit: 200 }).catch(() => []),
         getDashboardStats().catch(() => null),
         getDisableTasks({ limit: 50 }).catch(() => []),
         getDashboardIncidents({ limit: 200 }).catch(() => []),
+        getAutoEnableDisabled().catch(() => null),
+        getObserverSettings().catch(() => null),
       ]);
       setAllAds(Array.isArray(allData) ? allData : []);
       setLastScanAt(statsData?.last_scan_at || null);
       setTasks(Array.isArray(taskData) ? taskData : []);
       setIncidents(normalizeIncidentList(incidentsData));
+      setAutoEnableDisabledSet(new Set(autoDisabledData?.fb_ad_ids || []));
+      setGlobalAutoEnable(Boolean(obsData?.auto_enable_recommendations));
       setError(null);
     } catch (e) {
       /* Баг 6: обновляем error state при ошибках polling */
@@ -894,6 +886,26 @@ export default function AdsPage({ initialView = 'active', initialState = '' }) {
   useRefreshOnResume(() => {
     void loadAds();
   });
+
+  const handleToggleAutoEnable = useCallback(async (e, fbAdId) => {
+    e.stopPropagation();
+    const isDisabled = autoEnableDisabledSet.has(fbAdId);
+    try {
+      if (isDisabled) {
+        await enableAutoEnable(fbAdId);
+        setAutoEnableDisabledSet((prev) => {
+          const next = new Set(prev);
+          next.delete(fbAdId);
+          return next;
+        });
+      } else {
+        await disableAutoEnable(fbAdId);
+        setAutoEnableDisabledSet((prev) => new Set([...prev, fbAdId]));
+      }
+    } catch (err) {
+      setError(`Ошибка переключения автовключения: ${err.message}`);
+    }
+  }, [autoEnableDisabledSet]);
 
   const handleSaveFakeDeps = useCallback(async (fbAdId, fakeCount, note) => {
     try {
@@ -1104,7 +1116,6 @@ export default function AdsPage({ initialView = 'active', initialState = '' }) {
           <select className={selectCls} value={stateFilter} onChange={(e) => setStateFilter(e.target.value)}>
             <option value="">Все статусы</option>
             <option value="NORMAL">{ALERT_STATE_LABELS.NORMAL}</option>
-            <option value="EARLY_SIGNAL_SENT">{ALERT_STATE_LABELS.EARLY_SIGNAL_SENT}</option>
             <option value="WARNING_SENT">{ALERT_STATE_LABELS.WARNING_SENT}</option>
             <option value="STOP_SENT">{ALERT_STATE_LABELS.STOP_SENT}</option>
             <option value="CLAIMED">{ALERT_STATE_LABELS.CLAIMED}</option>
@@ -1124,6 +1135,13 @@ export default function AdsPage({ initialView = 'active', initialState = '' }) {
               {f.label}
             </button>
           ))}
+          <button
+            className="rounded px-2.5 py-1.5 text-2xs font-medium transition-colors bg-elevated text-secondary hover:text-primary"
+            onClick={() => onOpenNaming?.()}
+            title="Открыть трекер нейминга"
+          >
+            # Нейминг
+          </button>
         </div>
       </div>
 
@@ -1133,6 +1151,27 @@ export default function AdsPage({ initialView = 'active', initialState = '' }) {
         {view === 'active' && archiveAds.length > 0 && <span> · В архиве: {archiveAds.length}</span>}
         {lastScanAt && <span title={`Последний скан: ${fmtTime(lastScanAt)}`}> · Скан {timeAgo(lastScanAt)}</span>}
       </div>
+
+      {/* Топ объявлений по расходу — только для активных */}
+      {view === 'active' && activeAds.length > 0 && (
+        <div className="panel p-4">
+          <TopAdsQualityTable
+            data={[...activeAds]
+              .sort((a, b) => (Number(b.spend) || 0) - (Number(a.spend) || 0))
+              .slice(0, 10)
+              .map((ad) => ({
+                fb_ad_id: ad.fb_ad_id,
+                name: ad.ad_name,
+                name_full: ad.ad_name,
+                spend: ad.spend,
+                clicks: ad.clicks,
+                leads: ad.leads,
+                deposits: ad.effective_deposits ?? ad.deposits,
+                state: ad.alert_state,
+              }))}
+          />
+        </div>
+      )}
 
       {/* Таблица */}
       {loading && allAds.length === 0 ? (
@@ -1155,19 +1194,19 @@ export default function AdsPage({ initialView = 'active', initialState = '' }) {
               <thead>
                 <tr className="border-b border-border bg-elevated/50">
                   <th className="w-9 px-2 py-2" />
-                  <th className="th-sortable px-3 py-2 text-left" onClick={() => handleSort('ad_name')}>
+                  <th className="th-sortable px-3 py-2 text-left min-w-[140px]" onClick={() => handleSort('ad_name')}>
                     Название{sortBy === 'ad_name' && <span className="ml-1">{sortDirection === 'asc' ? '↑' : '↓'}</span>}
                   </th>
-                  <th className={`th-sortable px-3 py-2 text-right w-20 ${sortBy === 'spend' ? 'text-accent' : ''}`} onClick={() => handleSort('spend')}>
+                  <th className={`th-sortable px-3 py-2 text-right w-20 min-w-[80px] ${sortBy === 'spend' ? 'text-accent' : ''}`} onClick={() => handleSort('spend')}>
                     Расход{sortBy === 'spend' && <span className="ml-1">{sortDirection === 'asc' ? '↑' : '↓'}</span>}
                   </th>
-                  <th className={`th-sortable px-3 py-2 text-right w-[70px] ${sortBy === 'cpc' ? 'text-accent' : ''}`} onClick={() => handleSort('cpc')}>
+                  <th className={`th-sortable px-3 py-2 text-right w-[70px] min-w-[80px] ${sortBy === 'cpc' ? 'text-accent' : ''}`} onClick={() => handleSort('cpc')}>
                     CPC{sortBy === 'cpc' && <span className="ml-1">{sortDirection === 'asc' ? '↑' : '↓'}</span>}
                   </th>
-                  <th className={`th-sortable px-3 py-2 text-right w-[60px] ${sortBy === 'leads' ? 'text-accent' : ''}`} onClick={() => handleSort('leads')}>
+                  <th className={`th-sortable px-3 py-2 text-right w-[60px] min-w-[80px] ${sortBy === 'leads' ? 'text-accent' : ''}`} onClick={() => handleSort('leads')}>
                     Лиды{sortBy === 'leads' && <span className="ml-1">{sortDirection === 'asc' ? '↑' : '↓'}</span>}
                   </th>
-                  <th className={`th-sortable px-3 py-2 text-right w-[70px] ${sortBy === 'deposits' ? 'text-accent' : ''}`} onClick={() => handleSort('deposits')}>
+                  <th className={`th-sortable px-3 py-2 text-right w-[70px] min-w-[80px] ${sortBy === 'deposits' ? 'text-accent' : ''}`} onClick={() => handleSort('deposits')}>
                     Депозит{sortBy === 'deposits' && <span className="ml-1">{sortDirection === 'asc' ? '↑' : '↓'}</span>}
                   </th>
                   <th className="px-3 py-2 text-left w-[120px] text-2xs uppercase tracking-wider text-muted">Правила</th>
@@ -1182,7 +1221,6 @@ export default function AdsPage({ initialView = 'active', initialState = '' }) {
                   const allRules = [
                     ...ad.stop_rule_codes.map((c) => ({ code: c, sev: 'stop' })),
                     ...ad.warning_rule_codes.map((c) => ({ code: c, sev: 'warn' })),
-                    ...ad.early_signal_rule_codes.map((c) => ({ code: c, sev: 'signal' })),
                   ];
                   const shown = allRules.slice(0, 2);
                   const extra = allRules.length - shown.length;
@@ -1196,7 +1234,7 @@ export default function AdsPage({ initialView = 'active', initialState = '' }) {
                       <td className="w-9 px-2 py-2.5 text-center">
                         <StateIcon state={displayState} size="sm" />
                       </td>
-                      <td className="px-3 py-2.5">
+                      <td className="px-3 py-2.5 max-w-[200px] truncate">
                         <div className="truncate text-primary" title={ad.ad_name}>{ad.ad_name}</div>
                         {ad.offer_code && (
                           <span className={`mt-0.5 inline-block rounded-sm px-1.5 py-0.5 text-[10px] font-medium ${SEV_BADGE.offer}`}>
@@ -1230,7 +1268,18 @@ export default function AdsPage({ initialView = 'active', initialState = '' }) {
                         </div>
                       </td>
                       <td className="w-10 px-2 py-2.5 text-center text-base">
-                        {actionIcon}
+                        <div className="flex items-center justify-center gap-1">
+                          {globalAutoEnable && (
+                            <button
+                              title={autoEnableDisabledSet.has(ad.fb_ad_id) ? 'Автовключение выключено — нажмите чтобы включить' : 'Автовключение включено — нажмите чтобы выключить'}
+                              className={`text-xs leading-none transition-opacity ${autoEnableDisabledSet.has(ad.fb_ad_id) ? 'opacity-30 hover:opacity-70' : 'opacity-80 hover:opacity-100'}`}
+                              onClick={(e) => handleToggleAutoEnable(e, ad.fb_ad_id)}
+                            >
+                              {autoEnableDisabledSet.has(ad.fb_ad_id) ? '⏸' : '▶'}
+                            </button>
+                          )}
+                          {actionIcon}
+                        </div>
                       </td>
                     </tr>
                   );
@@ -1272,7 +1321,7 @@ function FakeDepositModal({ data, onSave, onClose }) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
-      <div className="bg-surface border border-border rounded-lg p-5 w-80 shadow-xl" onClick={(e) => e.stopPropagation()}>
+      <div className="bg-surface border border-border rounded-lg p-5 w-80 max-w-[90vw] shadow-xl" onClick={(e) => e.stopPropagation()}>
         <h3 className="text-sm font-semibold text-primary mb-3">Ложные депозиты</h3>
         <p className="text-xs text-secondary mb-3 truncate" title={data.ad_name}>{data.ad_name}</p>
         <div className="flex items-center gap-3 mb-3">

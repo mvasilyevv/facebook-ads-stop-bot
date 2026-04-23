@@ -68,7 +68,6 @@ def _telegram_destination(
     *,
     chat_id: str = "chat-1",
     delivery_mode: str = "PRIVATE_CHAT",
-    early_topic_id: int | None = None,
     warning_topic_id: int | None = None,
     stop_topic_id: int | None = None,
 ) -> TelegramDestination:
@@ -82,7 +81,6 @@ def _telegram_destination(
         is_primary=True,
         delivery_mode=delivery_mode,
         control_topic_id=11 if delivery_mode == "FORUM_GROUP" else None,
-        early_topic_id=early_topic_id,
         warning_topic_id=warning_topic_id,
         stop_topic_id=stop_topic_id,
         enable_topic_id=15 if delivery_mode == "FORUM_GROUP" else None,
@@ -448,16 +446,6 @@ async def test_batch_save_snapshots_requires_confirmed_partial_batch_before_pers
     assert mock_session.commit.call_count == 2
 
 
-# Проверяем что stage EARLY_SIGNAL переводится в состояние EARLY_SIGNAL_SENT
-def test_state_for_emitted_stage_maps_early_signal():
-    """Ранний сигнал должен отправляться в состоянии EARLY_SIGNAL_SENT."""
-    from core.observer.state_machine import _state_for_emitted_stage
-
-    assert _state_for_emitted_stage(AlertStage.EARLY_SIGNAL) == AlertState.EARLY_SIGNAL_SENT
-    assert _state_for_emitted_stage(AlertStage.WARNING) == AlertState.WARNING_SENT
-    assert _state_for_emitted_stage(AlertStage.STOP) == AlertState.CLAIMED
-
-
 # Проверяем что CLAIMED ждёт подтверждения OFF, а DISABLED снимается только при новой активации
 def test_reopen_reactivated_alert_state_keeps_claimed_and_resets_disabled():
     """CLAIMED не должен сбрасываться до подтверждения OFF следующим сканом."""
@@ -654,97 +642,6 @@ def test_compose_reason_text_appends_diagnostics_text():
     assert _compose_reason_text(None, "Только диагностика.") == "Только диагностика."
 
 
-# Проверяем что напоминание для EARLY_SIGNAL восстанавливает причину из последнего события
-@pytest.mark.asyncio
-async def test_collect_reminder_alerts_restores_early_signal_reason():
-    """Напоминание должно сохранить EARLY_SIGNAL и человекочитаемую причину."""
-    from core.observer.db_queries import collect_reminder_alerts
-
-    now = datetime.now(UTC)
-    snap = _make_snapshot_ns(
-        fb_ad_id="ad_early",
-        ad_name="Раннее объявление",
-        offer_code="DRC",
-        alert_state=AlertState.EARLY_SIGNAL_SENT,
-        snoozed_until=None,
-        open_state_token="token_early",
-        early_signal_rule_codes=["early_outbound_ctr_signal"],
-        warning_rule_codes=[],
-        stop_rule_codes=[],
-        spend=Decimal("12.34"),
-        clicks=7,
-        cpc=Decimal("1.76"),
-        outbound_clicks=5,
-        outbound_ctr=Decimal("0.4200"),
-        landing_page_views=4,
-        cost_per_landing_page_view=Decimal("3.0850"),
-        cpm=Decimal("14.1000"),
-        frequency=Decimal("1.4000"),
-        leads=0,
-        cost_per_lead=None,
-        registrations=0,
-        cost_per_registration=None,
-        deposits=0,
-        id=101,
-        last_observed_at=now - timedelta(minutes=2),
-    )
-    # Добавляем ad_id и нормализованную цепочку для batch-запросов
-    snap.ad_id = 101
-    fb_ad_ns = SimpleNamespace(ad_name="Раннее объявление", adset=None)
-    snap.fb_ad = fb_ad_ns
-
-    # Мок результатов execute: candidates, last_event_at batch, latest_events batch
-    candidates_result = MagicMock()
-    candidates_result.scalars.return_value.all.return_value = [snap]
-
-    last_event_at_row = SimpleNamespace(ad_id=101, max_at=now - timedelta(minutes=20))
-    last_event_at_result = MagicMock()
-    last_event_at_result.__iter__ = MagicMock(return_value=iter([last_event_at_row]))
-
-    latest_events_result = MagicMock()
-    latest_events_result.scalars.return_value.all.return_value = [
-        SimpleNamespace(
-            ad_id=101,
-            reason_title="Слабый исходящий CTR",
-            reason_text="Сигнал раннего отсечения.",
-            metrics_json={
-                "rule_summaries": ["CTR ниже порога"],
-                "traffic_diagnostics": {
-                    "summary_text": "Трафик начал дорожать.",
-                    "cpm": {"status": "critical", "text": "CPM выше недавней медианы."},
-                },
-            },
-        )
-    ]
-
-    mock_session = AsyncMock()
-    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-    mock_session.__aexit__ = AsyncMock(return_value=False)
-    mock_session.execute = AsyncMock(
-        side_effect=[candidates_result, last_event_at_result, latest_events_result]
-    )
-    mock_session.scalar = AsyncMock(return_value=now)
-
-    mock_factory = MagicMock(return_value=mock_session)
-
-    with patch(
-        "core.observer.db_queries.get_session_factory",
-        return_value=mock_factory,
-    ):
-        reminders = await collect_reminder_alerts()
-
-    assert len(reminders) == 1
-    reminder = reminders[0]
-    assert reminder.stage == AlertStage.EARLY_SIGNAL
-    assert reminder.matched_rule_codes == ["early_outbound_ctr_signal"]
-    assert reminder.reason_title == "Слабый исходящий CTR"
-    assert reminder.reason_text == "Сигнал раннего отсечения."
-    assert reminder.metrics_json["rule_summaries"] == ["CTR ниже порога"]
-    assert reminder.metrics_json["traffic_diagnostics"]["summary_text"] == "Трафик начал дорожать."
-    assert reminder.metrics_json["outbound_clicks"] == 5
-    assert reminder.metrics_json["frequency"] == "1.4000"
-
-
 # Проверяем, что snooze не подавляет STOP-напоминание.
 @pytest.mark.asyncio
 async def test_collect_reminder_alerts_keeps_stop_even_if_snoozed():
@@ -907,104 +804,6 @@ async def test_auto_create_disable_tasks_skips_archived_snapshot():
 
     mock_session.execute.assert_not_awaited()
     mock_session.commit.assert_not_awaited()
-
-
-# Проверяем что AlertEvent для раннего сигнала сохраняет причину и состояние
-@pytest.mark.asyncio
-async def test_send_alerts_to_telegram_persists_early_signal_reason():
-    """Отправка раннего сигнала должна сохранить EARLY_SIGNAL_SENT и причину в AlertEvent."""
-    from apps.observer_worker.main import _send_alerts_to_telegram  # Остаётся в main
-
-    destination = _telegram_destination(chat_id="chat-1")
-    candidate = MagicMock()
-    candidate.snapshot_id = "token-1"
-    candidate.fb_ad_id = "ad_early"
-    candidate.ad_name = "Раннее объявление"
-    candidate.campaign_name = "Campaign"
-    candidate.adset_name = "Adset"
-    candidate.offer_code = "DRC"
-    candidate.stage = AlertStage.EARLY_SIGNAL
-    candidate.matched_rule_codes = ["early_outbound_ctr_signal"]
-    candidate.reason_title = "Слабый исходящий CTR"
-    candidate.reason_text = "Сигнал раннего отсечения."
-    candidate.metrics_json = {"spend": "12.34"}
-    candidate.offer_id = None
-
-    sent_message = MagicMock()
-    sent_message.text = "текст"
-    sent_message.reply_markup = None
-
-    fake_client = AsyncMock()
-    fake_client.send_message = AsyncMock(return_value={"message_id": 777})
-    snapshot = SimpleNamespace(
-        id="snapshot-1",
-        telegram_group_key=None,
-        telegram_chat_id=None,
-        telegram_message_id=None,
-        fb_ad_id="ad_early",
-    )
-    fb_ad_obj = SimpleNamespace(id="ad-uuid-1", fb_ad_id="ad_early")
-
-    mock_session = AsyncMock()
-    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-    mock_session.__aexit__ = AsyncMock(return_value=False)
-    mock_session.add = MagicMock()
-    mock_session.commit = AsyncMock()
-    mock_session.scalar = AsyncMock(return_value=None)
-
-    # Мокаем execute для batch-запросов snapshot/fb_ad
-    mock_scalars_result = MagicMock()
-    mock_scalars_result.scalars = MagicMock(return_value=mock_scalars_result)
-    mock_scalars_result.all = MagicMock(return_value=[snapshot])
-    mock_fb_ad_result = MagicMock()
-    mock_fb_ad_result.scalars = MagicMock(return_value=mock_fb_ad_result)
-    mock_fb_ad_result.all = MagicMock(return_value=[fb_ad_obj])
-
-    call_count = 0
-
-    async def mock_execute(*args, **kwargs):
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
-            return mock_scalars_result
-        return mock_fb_ad_result
-
-    mock_session.execute = mock_execute
-
-    mock_factory = MagicMock(return_value=mock_session)
-
-    with (
-        patch(
-            "apps.observer_worker.main.render_alert_message", return_value=sent_message
-        ) as render_mock,
-        patch("apps.observer_worker.main.get_session_factory", return_value=mock_factory),
-        patch(
-            "apps.observer_worker.main.load_message_refs_by_chat",
-            new=AsyncMock(return_value={}),
-        ),
-        patch(
-            "apps.observer_worker.main.upsert_message_ref",
-            new=AsyncMock(),
-        ) as upsert_ref,
-    ):
-        await _send_alerts_to_telegram(fake_client, destination, [candidate])
-
-    render_args = render_mock.call_args.kwargs
-    rendered_item = render_args["items"][0]
-    assert rendered_item.alert_state == AlertState.EARLY_SIGNAL_SENT
-    assert rendered_item.reason_title == "Слабый исходящий CTR"
-    assert rendered_item.reason_text == "Сигнал раннего отсечения."
-
-    assert mock_session.add.call_count == 1
-    added_event = mock_session.add.call_args.args[0]
-    assert added_event.state == AlertState.EARLY_SIGNAL_SENT
-    assert added_event.reason_title == "Слабый исходящий CTR"
-    assert added_event.reason_text == "Сигнал раннего отсечения."
-    assert added_event.telegram_chat_id == destination.chat_id
-    assert added_event.telegram_message_id == 777
-    assert added_event.telegram_group_key == "token-1"
-    upsert_ref.assert_awaited_once()
-    mock_session.commit.assert_awaited_once()
 
 
 # Проверяем что при сбое Telegram алерт не сохраняется как доставленный
@@ -1309,15 +1108,17 @@ async def test_get_disable_queue_pause_reason_reports_active_queue():
     from core.domain import DisableTaskStatus
     from core.observer.db_queries import get_disable_queue_pause_reason
 
+    now = datetime.now(UTC)
     mock_result = MagicMock()
     mock_result.all.return_value = [
-        (DisableTaskStatus.PENDING, None),
-        (DisableTaskStatus.RETRYING, None),
+        (DisableTaskStatus.PENDING, None, now, now, now),
+        (DisableTaskStatus.RETRYING, None, now, now, now),
     ]
 
     mock_session = AsyncMock()
     mock_session.__aenter__ = AsyncMock(return_value=mock_session)
     mock_session.__aexit__ = AsyncMock(return_value=False)
+    mock_session.scalar = AsyncMock(return_value=now)
     mock_session.execute = AsyncMock(return_value=mock_result)
 
     mock_factory = MagicMock(return_value=mock_session)
@@ -1345,6 +1146,7 @@ async def test_get_disable_queue_pause_reason_returns_none_for_empty_queue():
     mock_session = AsyncMock()
     mock_session.__aenter__ = AsyncMock(return_value=mock_session)
     mock_session.__aexit__ = AsyncMock(return_value=False)
+    mock_session.scalar = AsyncMock(return_value=datetime.now(UTC))
     mock_session.execute = AsyncMock(return_value=mock_result)
 
     mock_factory = MagicMock(return_value=mock_session)
@@ -1365,14 +1167,22 @@ async def test_get_disable_queue_pause_reason_ignores_future_retry_only_queue():
     from core.domain import DisableTaskStatus
     from core.observer.db_queries import get_disable_queue_pause_reason
 
+    now = datetime.now(UTC)
     mock_result = MagicMock()
     mock_result.all.return_value = [
-        (DisableTaskStatus.RETRYING, datetime.now(UTC) + timedelta(minutes=3)),
+        (
+            DisableTaskStatus.RETRYING,
+            now + timedelta(minutes=3),
+            now,
+            now,
+            now,
+        ),
     ]
 
     mock_session = AsyncMock()
     mock_session.__aenter__ = AsyncMock(return_value=mock_session)
     mock_session.__aexit__ = AsyncMock(return_value=False)
+    mock_session.scalar = AsyncMock(return_value=now)
     mock_session.execute = AsyncMock(return_value=mock_result)
 
     mock_factory = MagicMock(return_value=mock_session)
@@ -1382,6 +1192,187 @@ async def test_get_disable_queue_pause_reason_ignores_future_retry_only_queue():
         return_value=mock_factory,
     ):
         reason = await get_disable_queue_pause_reason()
+
+    assert reason is None
+
+
+# Проверяем что устаревшие disable-задачи не держат observer в вечной паузе
+@pytest.mark.asyncio
+async def test_get_disable_queue_pause_reason_ignores_stale_snapshot_queue():
+    """Если snapshot устарел, очередь должна считаться неактуальной и не блокировать новый scan."""
+    from core.domain import DisableTaskStatus
+    from core.observer.db_queries import get_disable_queue_pause_reason
+
+    now = datetime.now(UTC)
+    stale_snapshot_time = now - timedelta(hours=2)
+    mock_result = MagicMock()
+    mock_result.all.return_value = [
+        (
+            DisableTaskStatus.RUNNING,
+            None,
+            now,
+            now,
+            stale_snapshot_time,
+        ),
+        (
+            DisableTaskStatus.PENDING,
+            None,
+            now,
+            now,
+            stale_snapshot_time,
+        ),
+    ]
+
+    mock_session = AsyncMock()
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=False)
+    mock_session.scalar = AsyncMock(return_value=stale_snapshot_time)
+    mock_session.execute = AsyncMock(return_value=mock_result)
+
+    mock_factory = MagicMock(return_value=mock_session)
+
+    with patch(
+        "core.observer.db_queries.get_session_factory",
+        return_value=mock_factory,
+    ):
+        reason = await get_disable_queue_pause_reason()
+
+    assert reason is None
+
+
+# Проверяем что активная очередь включения тоже ставит observer на паузу
+@pytest.mark.asyncio
+async def test_get_enable_queue_pause_reason_reports_active_queue():
+    """Если есть PENDING и RUNNING enable-задачи, observer должен видеть причину для паузы."""
+    from core.domain import EnableTaskStatus
+    from core.observer.db_queries import get_enable_queue_pause_reason
+
+    now = datetime.now(UTC)
+    mock_result = MagicMock()
+    mock_result.all.return_value = [
+        (EnableTaskStatus.PENDING, None, now, now, now, now),
+        (EnableTaskStatus.RUNNING, None, now, now, now, now),
+    ]
+
+    observer_settings = MagicMock(cabinet_day_started_at=now - timedelta(minutes=5))
+    mock_session = AsyncMock()
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=False)
+    mock_session.scalar = AsyncMock(return_value=now)
+    mock_session.execute = AsyncMock(return_value=mock_result)
+
+    mock_factory = MagicMock(return_value=mock_session)
+
+    with (
+        patch(
+            "core.observer.db_queries.get_session_factory",
+            return_value=mock_factory,
+        ),
+        patch(
+            "core.observer.db_queries.get_observer_settings",
+            new=AsyncMock(return_value=observer_settings),
+        ),
+    ):
+        reason = await get_enable_queue_pause_reason()
+
+    assert reason is not None
+    assert "ожидают: 1" in reason
+    assert "выполняются: 1" in reason
+
+
+# Проверяем что отложенный retry включения не должен ставить observer на паузу раньше времени
+@pytest.mark.asyncio
+async def test_get_enable_queue_pause_reason_ignores_future_retry_only_queue():
+    """Если в очереди остались только будущие RETRYING-enable-задачи, сканирование не должно стопориться."""
+    from core.domain import EnableTaskStatus
+    from core.observer.db_queries import get_enable_queue_pause_reason
+
+    now = datetime.now(UTC)
+    mock_result = MagicMock()
+    mock_result.all.return_value = [
+        (
+            EnableTaskStatus.RETRYING,
+            now + timedelta(minutes=3),
+            now,
+            now,
+            now,
+            now,
+        ),
+    ]
+
+    observer_settings = MagicMock(cabinet_day_started_at=now - timedelta(minutes=5))
+    mock_session = AsyncMock()
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=False)
+    mock_session.scalar = AsyncMock(return_value=now)
+    mock_session.execute = AsyncMock(return_value=mock_result)
+
+    mock_factory = MagicMock(return_value=mock_session)
+
+    with (
+        patch(
+            "core.observer.db_queries.get_session_factory",
+            return_value=mock_factory,
+        ),
+        patch(
+            "core.observer.db_queries.get_observer_settings",
+            new=AsyncMock(return_value=observer_settings),
+        ),
+    ):
+        reason = await get_enable_queue_pause_reason()
+
+    assert reason is None
+
+
+# Проверяем что устаревшие enable-задачи не держат observer в вечной паузе
+@pytest.mark.asyncio
+async def test_get_enable_queue_pause_reason_ignores_stale_snapshot_queue():
+    """Если live batch уже устарел, очередь включения не должна блокировать новый scan."""
+    from core.domain import EnableTaskStatus
+    from core.observer.db_queries import get_enable_queue_pause_reason
+
+    now = datetime.now(UTC)
+    stale_snapshot_time = now - timedelta(hours=2)
+    mock_result = MagicMock()
+    mock_result.all.return_value = [
+        (
+            EnableTaskStatus.RUNNING,
+            None,
+            now,
+            now,
+            stale_snapshot_time,
+            stale_snapshot_time,
+        ),
+        (
+            EnableTaskStatus.PENDING,
+            None,
+            now,
+            now,
+            stale_snapshot_time,
+            stale_snapshot_time,
+        ),
+    ]
+
+    observer_settings = MagicMock(cabinet_day_started_at=now - timedelta(minutes=5))
+    mock_session = AsyncMock()
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=False)
+    mock_session.scalar = AsyncMock(return_value=stale_snapshot_time)
+    mock_session.execute = AsyncMock(return_value=mock_result)
+
+    mock_factory = MagicMock(return_value=mock_session)
+
+    with (
+        patch(
+            "core.observer.db_queries.get_session_factory",
+            return_value=mock_factory,
+        ),
+        patch(
+            "core.observer.db_queries.get_observer_settings",
+            new=AsyncMock(return_value=observer_settings),
+        ),
+    ):
+        reason = await get_enable_queue_pause_reason()
 
     assert reason is None
 
@@ -1444,92 +1435,41 @@ async def test_maybe_rollover_cabinet_day_waits_for_zero_scan():
 # --- Тесты reconnect (задача 2.4) ---
 
 
-# Проверяем что reconnect берёт актуальные Vision-настройки из БД
 @pytest.mark.asyncio
 async def test_reconnect_browser_manager_uses_db_vision_settings():
-    """При reconnect должен создаваться новый VisionClient с настройками из БД."""
+    """При reconnect должен обновить конфиг и переподключить browser-agent."""
     from apps.observer_worker.main import reconnect_browser_manager_with_vision_settings
 
-    old_vision = MagicMock()
-    old_vision._headers = {"X-Token": "old-token"}
-    old_vision._base = "http://old:3030"
-    old_vision.close = AsyncMock()
-
-    mock_page = AsyncMock()
-    browser_manager = MagicMock()
-    browser_manager._vision = old_vision
-    browser_manager._profile_id = "old-profile"
-    browser_manager._folder_id = "old-folder"
-    browser_manager.disconnect = AsyncMock()
-    browser_manager.connect = AsyncMock()
-    browser_manager.get_page = AsyncMock(return_value=mock_page)
-    browser_manager.reconfigure = MagicMock()
-
-    new_vision = MagicMock()
+    mock_grpc_client = AsyncMock()
+    mock_grpc_client.config.vision_x_token = "old-token"
+    mock_grpc_client.config.vision_api_url = "http://old:3030"
+    mock_grpc_client.config.vision_profile_id = "old-profile"
+    mock_grpc_client.reconnect_browser = AsyncMock()
 
     with (
         patch(
             "apps.observer_worker.main.load_vision_settings_for_runtime",
             new=AsyncMock(return_value=("db-token", "http://db:3030", "db-profile")),
         ),
-        patch("apps.observer_worker.main.VisionClient", return_value=new_vision) as vision_cls,
     ):
-        await reconnect_browser_manager_with_vision_settings(browser_manager)
+        await reconnect_browser_manager_with_vision_settings(mock_grpc_client)
 
-    vision_cls.assert_called_once_with(x_token="db-token", base_url="http://db:3030")
-    browser_manager.disconnect.assert_awaited_once()
-    old_vision.close.assert_awaited_once()
-    browser_manager.connect.assert_awaited_once()
-    browser_manager.get_page.assert_awaited_once()
-    browser_manager.reconfigure.assert_called_once_with(
-        vision_client=new_vision,
-        profile_id="db-profile",
-        folder_id=None,
-    )
+    assert mock_grpc_client.config.vision_x_token == "db-token"
+    assert mock_grpc_client.config.vision_api_url == "http://db:3030"
+    assert mock_grpc_client.config.vision_profile_id == "db-profile"
+    mock_grpc_client.reconnect_browser.assert_awaited_once()
 
 
-# Проверяем что reconnect ловит только профильные browser-ошибки
 def test_is_browser_connection_error_filters_runtime_errors():
     """Reconnect-контур не должен маскировать произвольные RuntimeError."""
-    from apps.observer_worker.main import PatchrightError, _is_browser_connection_error
+    from apps.observer_worker.main import _is_browser_connection_error
 
     assert _is_browser_connection_error(ConnectionError("Потеряна связь"))
     assert _is_browser_connection_error(
         RuntimeError("Target page, context or browser has been closed")
     )
-    assert _is_browser_connection_error(PatchrightError("Patchright отключился"))
+    assert _is_browser_connection_error(OSError("Connection refused"))
     assert not _is_browser_connection_error(RuntimeError("Сбой Telegram"))
-
-
-# Проверяем что таблица принудительно возвращается к началу перед новым циклом
-@pytest.mark.asyncio
-async def test_reset_ads_table_scroll_rewinds_table_to_top():
-    """Observer должен уводить скролл таблицы вверх перед новым сканом."""
-    from apps.observer_worker.main import _reset_ads_table_scroll
-
-    page = AsyncMock()
-    page.viewport_size = {"width": 1200, "height": 800}
-    page.evaluate = AsyncMock(return_value=2)
-    page.mouse = AsyncMock()
-    page.mouse.move = AsyncMock()
-    page.mouse.wheel = AsyncMock()
-
-    with (
-        patch("apps.observer_worker.main.human_move", new=AsyncMock()) as human_move_mock,
-        patch(
-            "apps.observer_worker.main.human_wheel_scroll",
-            new=AsyncMock(),
-        ) as human_wheel_scroll_mock,
-    ):
-        await _reset_ads_table_scroll(page)
-
-    human_move_mock.assert_awaited_once_with(page, 600.0, 400.0)
-    page.evaluate.assert_awaited_once()
-    assert human_wheel_scroll_mock.await_count == 4
-    for call in human_wheel_scroll_mock.await_args_list:
-        assert call.args == (page, -1200)
-        assert call.kwargs["anchor"] == (600.0, 400.0)
-        assert call.kwargs["move_before"] is False
 
 
 def _patch_observer_loop_runtime(stack: ExitStack, *, scan_side_effect) -> AsyncMock:
@@ -1552,7 +1492,18 @@ def _patch_observer_loop_runtime(stack: ExitStack, *, scan_side_effect) -> Async
     stack.enter_context(
         patch(
             "apps.observer_worker.main.load_observer_settings_from_db",
-            new=AsyncMock(return_value=(1, 0, {})),
+            new=AsyncMock(
+                return_value={
+                    "warning_percent_of_stop": Decimal("80"),
+                    "stop_percent_of_base": Decimal("100"),
+                    "cpc_warning_percent_of_stop": Decimal("80"),
+                    "cpc_stop_percent_of_base": Decimal("100"),
+                    "cpl_warning_percent_of_stop": Decimal("80"),
+                    "cpl_stop_percent_of_base": Decimal("100"),
+                    "cpr_warning_percent_of_stop": Decimal("80"),
+                    "cpr_stop_percent_of_base": Decimal("100"),
+                }
+            ),
         )
     )
     stack.enter_context(
@@ -1587,14 +1538,14 @@ def _patch_observer_loop_runtime(stack: ExitStack, *, scan_side_effect) -> Async
     )
     stack.enter_context(
         patch(
-            "apps.observer_worker.main.check_vision_reconnect_flag",
-            new=AsyncMock(return_value=False),
+            "apps.observer_worker.main.get_enable_queue_pause_reason",
+            new=AsyncMock(return_value=None),
         )
     )
     stack.enter_context(
         patch(
-            "apps.observer_worker.main.scan_ads_with_page_recovery",
-            new=AsyncMock(side_effect=scan_side_effect),
+            "apps.observer_worker.main.check_vision_reconnect_flag",
+            new=AsyncMock(return_value=False),
         )
     )
     stack.enter_context(patch("apps.observer_worker.main.batch_save_snapshots", new=AsyncMock()))
@@ -1626,292 +1577,299 @@ def _patch_observer_loop_runtime(stack: ExitStack, *, scan_side_effect) -> Async
     )
 
 
-# Проверяем что observer делегирует скан отдельному recovery-helper
+# Проверяем что observer вызывает gRPC run_scan_cycle
 @pytest.mark.asyncio
-async def test_observer_loop_delegates_scan_to_recovery_helper():
-    """Каждый цикл должен вызывать отдельный helper восстановления скана."""
+async def test_observer_loop_delegates_scan_to_grpc():
+    """Каждый цикл должен вызывать run_scan_cycle через gRPC client."""
     from apps.observer_worker.main import observer_loop
 
-    mock_page = AsyncMock()
-    mock_page.viewport_size = {"width": 1200, "height": 800}
     shutdown_event = asyncio.Event()
-    parse_fn = AsyncMock(return_value=[])
 
-    async def scan_and_stop(**kwargs):
+    async def scan_cycle_generator():
+        from clients.python_grpc.client import ScanResult
+
         shutdown_event.set()
-        return []
+        yield ScanResult(rows=[], total_passes=0, duration_seconds=0.0)
 
-    scan_mock = AsyncMock(side_effect=scan_and_stop)
-
-    with ExitStack() as stack:
-        _patch_observer_loop_runtime(stack, scan_side_effect=AsyncMock(return_value=[]))
-        stack.enter_context(
-            patch(
-                "apps.observer_worker.main.scan_ads_with_page_recovery",
-                new=scan_mock,
-            )
-        )
-        await observer_loop(
-            page=mock_page,
-            offers={},
-            telegram_bot_token="",
-            telegram_chat_id="",
-            parse_fn=parse_fn,
-            browser_manager=AsyncMock(),
-            shutdown_event=shutdown_event,
-        )
-
-    scan_mock.assert_awaited_once()
-    assert scan_mock.await_args.kwargs["page"] is mock_page
-    assert scan_mock.await_args.kwargs["parse_fn"] is parse_fn
-    assert callable(scan_mock.await_args.kwargs["refresh_table_fn"])
-    assert callable(scan_mock.await_args.kwargs["reset_scroll_fn"])
-    assert callable(scan_mock.await_args.kwargs["scroll_and_parse_fn"])
-
-
-# Проверяем что после 5 неудачных попыток observer выключает сканирование и шлёт служебный TG-алерт.
-@pytest.mark.asyncio
-async def test_observer_loop_disables_scanning_after_scan_recovery_exhausted():
-    """После исчерпания recovery observer должен выключить сканирование и отправить alert."""
-    from apps.observer_worker.main import observer_loop
-    from core.scanner.recovery import ScanDataUnavailableError
-
-    shutdown_event = asyncio.Event()
-
-    with ExitStack() as stack:
-        _patch_observer_loop_runtime(stack, scan_side_effect=AsyncMock(return_value=[]))
-        broadcast_mock = stack.enter_context(
-            patch(
-                "apps.observer_worker.main.broadcast_observer_runtime_message",
-                new=AsyncMock(),
-            )
-        )
-        set_scanning_mock = stack.enter_context(
-            patch(
-                "apps.observer_worker.main.set_observer_scanning_enabled",
-                new=AsyncMock(side_effect=lambda enabled: shutdown_event.set()),
-            )
-        )
-        update_status_mock = stack.enter_context(
-            patch(
-                "apps.observer_worker.main.update_observer_runtime_status",
-                new=AsyncMock(),
-            )
-        )
-        stack.enter_context(
-            patch(
-                "apps.observer_worker.main.scan_ads_with_page_recovery",
-                new=AsyncMock(
-                    side_effect=ScanDataUnavailableError(
-                        attempts=5,
-                        retry_interval_seconds=60,
-                    )
-                ),
-            )
-        )
-
-        await observer_loop(
-            page=AsyncMock(),
-            offers={},
-            telegram_bot_token="fallback-token",
-            telegram_chat_id="fallback-chat",
-            parse_fn=AsyncMock(return_value=[]),
-            browser_manager=AsyncMock(),
-            shutdown_event=shutdown_event,
-        )
-
-    assert shutdown_event.is_set()
-    set_scanning_mock.assert_awaited_once_with(False)
-    broadcast_mock.assert_awaited_once()
-    assert "Observer отключён" in broadcast_mock.await_args.kwargs["text"]
-    assert any(call.kwargs.get("status") == "PAUSED" for call in update_status_mock.await_args_list)
-
-
-# Проверяем что NOT_DELIVERING обрабатывается как уже выключенное объявление и не идёт в rule-evaluation.
-@pytest.mark.asyncio
-async def test_observer_loop_skips_rule_evaluation_for_not_delivering_rows():
-    """Observer не должен повторно оценивать объявления со статусом NOT_DELIVERING."""
-    from apps.observer_worker.main import observer_loop
-
-    shutdown_event = asyncio.Event()
-    captured_snapshot_batch: list[dict] = []
-    scanned_row = SimpleNamespace(
-        fb_ad_id="ad_not_delivering",
-        campaign_name="Campaign",
-        adset_name="Adset",
-        ad_name="Ad",
-        delivery_status="NOT_DELIVERING",
-        spend=Decimal("1.00"),
-        budget=None,
-        reach=0,
-        impressions=0,
-        clicks=0,
-        cpc=None,
-        ctr=None,
-        outbound_clicks=0,
-        outbound_ctr=None,
-        landing_page_views=0,
-        cost_per_result=None,
-        cost_per_landing_page_view=None,
-        cpm=None,
-        frequency=None,
-        leads=0,
-        cost_per_lead=None,
-        registrations=0,
-        cost_per_registration=None,
-        deposits=0,
+    mock_grpc_client = AsyncMock()
+    mock_grpc_client.session_id = "test-session"
+    mock_grpc_client.run_scan_cycle = scan_cycle_generator
+    mock_grpc_client.validate_columns = AsyncMock(
+        return_value={
+            "valid": True,
+            "missing_columns": [],
+            "found_columns": [],
+            "error_message": "",
+        }
     )
 
-    async def capture_snapshot_batch(snapshot_batch, _scan_guard=None):
-        captured_snapshot_batch.extend(snapshot_batch)
+    with ExitStack() as stack:
+        _patch_observer_loop_runtime(stack, scan_side_effect=AsyncMock(return_value=[]))
+        stack.enter_context(
+            patch(
+                "apps.observer_worker.main._wait_for_next_cycle",
+                new=AsyncMock(return_value=False),
+            )
+        )
+        await observer_loop(
+            grpc_client=mock_grpc_client,
+            offers={},
+            telegram_bot_token="",
+            telegram_chat_id="",
+            shutdown_event=shutdown_event,
+        )
+
+    # gRPC client должен быть использован
+    assert mock_grpc_client.session_id == "test-session"
+
+
+# Проверяем что один пустой scan переводит observer в RECOVERING, но не выключает воркер
+@pytest.mark.asyncio
+async def test_observer_loop_recovers_after_single_empty_scan():
+    """Один пустой цикл должен дать recovery-статус и повторить scan, а не выключать observer."""
+    from apps.observer_worker.main import observer_loop
+    from clients.python_grpc.client import ScanResult
+
+    shutdown_event = asyncio.Event()
+    scan_calls = 0
+
+    async def scan_cycle_generator(*args, **kwargs):
+        nonlocal scan_calls
+        scan_calls += 1
+        if scan_calls == 1:
+            yield ScanResult(rows=[], total_passes=1, duration_seconds=0.0)
+            return
+
         shutdown_event.set()
+        yield ScanResult(
+            rows=[SimpleNamespace(fb_ad_id="ad-001", spend=None)],
+            total_passes=1,
+            duration_seconds=0.0,
+        )
+
+    mock_grpc_client = AsyncMock()
+    mock_grpc_client.session_id = "test-session"
+    mock_grpc_client.run_scan_cycle = scan_cycle_generator
+    mock_grpc_client.validate_columns = AsyncMock(
+        return_value={
+            "valid": True,
+            "missing_columns": [],
+            "found_columns": [],
+            "error_message": "",
+        }
+    )
+
+    update_runtime_status = AsyncMock()
+    set_scanning_enabled = AsyncMock()
 
     with ExitStack() as stack:
-        _patch_observer_loop_runtime(
-            stack,
-            scan_side_effect=AsyncMock(return_value=[scanned_row]),
+        _patch_observer_loop_runtime(stack, scan_side_effect=AsyncMock(return_value=[]))
+        stack.enter_context(
+            patch(
+                "apps.observer_worker.main._run_scan_cycle",
+                new=AsyncMock(return_value=([], [], [])),
+            )
         )
         stack.enter_context(
             patch(
-                "apps.observer_worker.main.batch_save_snapshots",
-                new=AsyncMock(side_effect=capture_snapshot_batch),
+                "apps.observer_worker.main._process_scan_results",
+                new=AsyncMock(),
             )
         )
-        evaluate_row_mock = stack.enter_context(
+        stack.enter_context(
             patch(
-                "apps.observer_worker.main.evaluate_row",
-                side_effect=AssertionError("evaluate_row не должен вызываться"),
+                "apps.observer_worker.main._wait_for_next_cycle",
+                new=AsyncMock(return_value=False),
+            )
+        )
+        stack.enter_context(
+            patch(
+                "apps.observer_worker.main.update_observer_runtime_status",
+                new=update_runtime_status,
+            )
+        )
+        stack.enter_context(
+            patch(
+                "apps.observer_worker.main.set_observer_scanning_enabled",
+                new=set_scanning_enabled,
             )
         )
 
         await observer_loop(
-            page=AsyncMock(),
+            grpc_client=mock_grpc_client,
             offers={},
             telegram_bot_token="",
             telegram_chat_id="",
-            parse_fn=AsyncMock(return_value=[]),
-            browser_manager=AsyncMock(),
             shutdown_event=shutdown_event,
         )
 
-    evaluate_row_mock.assert_not_called()
-    assert len(captured_snapshot_batch) == 1
-    assert captured_snapshot_batch[0]["fb_ad_id"] == "ad_not_delivering"
-    assert captured_snapshot_batch[0]["delivery_status"] == "NOT_DELIVERING"
+    assert scan_calls == 3
+    set_scanning_enabled.assert_not_awaited()
+    assert any(
+        call.kwargs.get("status") == "RECOVERING" and "0 строк" in call.kwargs.get("message", "")
+        for call in update_runtime_status.await_args_list
+    )
 
 
-# Проверяем retry-логику при ошибке браузера без зависания на бесконечном цикле
+# Проверяем, что пустая ошибка проверки колонок считается сбоем браузера, а не изменением layout.
 @pytest.mark.asyncio
-async def test_reconnect_on_browser_error():
-    """При ошибке связи с браузером должна быть попытка переподключения."""
+async def test_observer_loop_recovers_from_transient_column_validation_failure():
+    """Если ValidateColumns не вернул детали из-за закрытой страницы, observer не должен отключать сканирование."""
     from apps.observer_worker.main import observer_loop
 
-    mock_page = AsyncMock()
-    mock_browser_manager = AsyncMock()
-    mock_browser_manager.get_page.return_value = mock_page
     shutdown_event = asyncio.Event()
 
-    call_count = 0
-
-    async def failing_refresh(**kwargs):
-        nonlocal call_count
-        call_count += 1
-        if call_count <= 2:
-            raise ConnectionError("Потеряна связь с браузером")
+    async def validate_columns():
         shutdown_event.set()
-        return []
+        return {
+            "valid": False,
+            "missing_columns": [],
+            "found_columns": [],
+            "error_message": "Ошибка валидации колонок: page.evaluate: Target page, context or browser has been closed",
+        }
+
+    mock_grpc_client = AsyncMock()
+    mock_grpc_client.session_id = "test-session"
+    mock_grpc_client.validate_columns = AsyncMock(side_effect=validate_columns)
+    mock_grpc_client.reconnect_browser = AsyncMock()
+    mock_grpc_client.run_scan_cycle = AsyncMock(
+        side_effect=AssertionError("Скан не должен запускаться после сбоя ValidateColumns")
+    )
+
+    update_runtime_status = AsyncMock()
+    set_scanning_enabled = AsyncMock()
+    broadcast_runtime = AsyncMock()
 
     with ExitStack() as stack:
-        _patch_observer_loop_runtime(stack, scan_side_effect=failing_refresh)
-        await observer_loop(
-            page=mock_page,
-            offers={},
-            telegram_bot_token="",
-            telegram_chat_id="",
-            parse_fn=AsyncMock(),
-            browser_manager=mock_browser_manager,
-            shutdown_event=shutdown_event,
-        )
-
-    # Должно быть 2 попытки переподключения (disconnect + connect)
-    assert mock_browser_manager.disconnect.call_count == 2
-    assert mock_browser_manager.connect.call_count == 2
-
-
-# Проверяем что после MAX_RECONNECT_ATTEMPTS попыток воркер завершается детерминированно
-@pytest.mark.asyncio
-async def test_reconnect_max_attempts_exit():
-    """После MAX_RECONNECT_ATTEMPTS ошибок подряд воркер должен завершиться."""
-    from apps.observer_worker.main import MAX_RECONNECT_ATTEMPTS, observer_loop
-
-    mock_page = AsyncMock()
-    mock_browser_manager = AsyncMock()
-    mock_browser_manager.get_page.return_value = mock_page
-
-    # Всегда падаем с ошибкой связи
-    async def always_fail(**kwargs):
-        raise ConnectionError("Потеряна связь с браузером")
-
-    with ExitStack() as stack:
-        _patch_observer_loop_runtime(stack, scan_side_effect=always_fail)
-        with pytest.raises(ConnectionError):
-            await observer_loop(
-                page=mock_page,
-                offers={},
-                telegram_bot_token="",
-                telegram_chat_id="",
-                parse_fn=AsyncMock(),
-                browser_manager=mock_browser_manager,
+        _patch_observer_loop_runtime(stack, scan_side_effect=AsyncMock(return_value=[]))
+        stack.enter_context(
+            patch(
+                "apps.observer_worker.main.update_observer_runtime_status",
+                new=update_runtime_status,
             )
+        )
+        stack.enter_context(
+            patch(
+                "apps.observer_worker.main.set_observer_scanning_enabled",
+                new=set_scanning_enabled,
+            )
+        )
+        stack.enter_context(
+            patch(
+                "apps.observer_worker.main.broadcast_observer_runtime_message",
+                new=broadcast_runtime,
+            )
+        )
 
-    # На последней попытке воркер завершается до переподключения,
-    # поэтому disconnect вызывается MAX_RECONNECT_ATTEMPTS - 1 раз
-    assert mock_browser_manager.disconnect.call_count == MAX_RECONNECT_ATTEMPTS - 1
-
-
-# Проверяем что успешный цикл сбрасывает backoff перед следующей browser-ошибкой
-@pytest.mark.asyncio
-async def test_reconnect_counter_resets_on_success():
-    """Успешный цикл должен сбрасывать счётчик ошибок браузера."""
-    from apps.observer_worker.main import observer_loop
-
-    mock_page = AsyncMock()
-    mock_browser_manager = AsyncMock()
-    mock_browser_manager.get_page.return_value = mock_page
-    shutdown_event = asyncio.Event()
-
-    call_count = 0
-
-    async def mixed_refresh(**kwargs):
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
-            raise ConnectionError("Потеряна связь")
-        if call_count == 2:
-            return []
-        shutdown_event.set()
-        raise ConnectionError("Потеряна связь повторно")
-
-    with ExitStack() as stack:
-        sleep_mock = _patch_observer_loop_runtime(stack, scan_side_effect=mixed_refresh)
         await observer_loop(
-            page=mock_page,
+            grpc_client=mock_grpc_client,
             offers={},
             telegram_bot_token="",
             telegram_chat_id="",
-            parse_fn=AsyncMock(),
-            browser_manager=mock_browser_manager,
             shutdown_event=shutdown_event,
         )
 
-    reconnect_delays = [
-        call.args[0]
-        for call in sleep_mock.await_args_list
-        if call.args and call.args[0] in (10, 20, 30)
-    ]
+    mock_grpc_client.reconnect_browser.assert_awaited_once()
+    set_scanning_enabled.assert_not_awaited()
+    broadcast_runtime.assert_not_awaited()
+    assert any(
+        call.kwargs.get("status") == "RECOVERING"
+        and "временной проблемой браузера/CDP" in call.kwargs.get("message", "")
+        for call in update_runtime_status.await_args_list
+    )
 
-    assert reconnect_delays[:2] == [10, 10]
-    assert mock_browser_manager.disconnect.call_count == 2
+
+# Проверяем что несколько пустых scan подряд выключают observer с точной причиной
+@pytest.mark.asyncio
+async def test_observer_loop_pauses_after_consecutive_empty_scans():
+    """После нескольких подряд пустых scan observer должен отключить сканирование и отправить честный алерт."""
+    from apps.observer_worker.main import EMPTY_SCAN_FAILURE_LIMIT, observer_loop
+    from clients.python_grpc.client import ScanResult
+
+    shutdown_event = asyncio.Event()
+    scan_calls = 0
+
+    async def scan_cycle_generator(*args, **kwargs):
+        nonlocal scan_calls
+        scan_calls += 1
+        yield ScanResult(rows=[], total_passes=1, duration_seconds=0.0)
+
+    mock_grpc_client = AsyncMock()
+    mock_grpc_client.session_id = "test-session"
+    mock_grpc_client.run_scan_cycle = scan_cycle_generator
+    mock_grpc_client.validate_columns = AsyncMock(
+        return_value={
+            "valid": True,
+            "missing_columns": [],
+            "found_columns": [],
+            "error_message": "",
+        }
+    )
+
+    update_runtime_status = AsyncMock()
+    broadcast_runtime = AsyncMock()
+
+    async def set_scanning_enabled(enabled: bool):
+        if enabled is False:
+            shutdown_event.set()
+
+    set_scanning_enabled_mock = AsyncMock(side_effect=set_scanning_enabled)
+
+    with ExitStack() as stack:
+        _patch_observer_loop_runtime(stack, scan_side_effect=AsyncMock(return_value=[]))
+        stack.enter_context(
+            patch(
+                "apps.observer_worker.main.update_observer_runtime_status",
+                new=update_runtime_status,
+            )
+        )
+        stack.enter_context(
+            patch(
+                "apps.observer_worker.main.broadcast_observer_runtime_message",
+                new=broadcast_runtime,
+            )
+        )
+        stack.enter_context(
+            patch(
+                "apps.observer_worker.main.set_observer_scanning_enabled",
+                new=set_scanning_enabled_mock,
+            )
+        )
+
+        await observer_loop(
+            grpc_client=mock_grpc_client,
+            offers={},
+            telegram_bot_token="",
+            telegram_chat_id="",
+            shutdown_event=shutdown_event,
+        )
+
+    assert scan_calls == EMPTY_SCAN_FAILURE_LIMIT
+    set_scanning_enabled_mock.assert_awaited_once_with(False)
+    assert any(
+        call.kwargs.get("status") == "PAUSED" and "0 строк" in call.kwargs.get("message", "")
+        for call in update_runtime_status.await_args_list
+    )
+    broadcast_text = broadcast_runtime.await_args.kwargs["text"]
+    assert "0 строк" in broadcast_text
+    assert str(EMPTY_SCAN_FAILURE_LIMIT) in broadcast_text
+
+
+# ScanDataUnavailableError корректно создаётся и содержит нужные поля
+def test_scan_data_unavailable_error_has_correct_fields():
+    """ScanDataUnavailableError должен содержать attempts и retry_interval_seconds."""
+    from clients.python_grpc.client import ScanDataUnavailableError
+
+    exc = ScanDataUnavailableError(
+        attempts=3,
+        retry_interval_seconds=10,
+        reason="Ads Manager вернул 0 строк таблицы объявлений",
+    )
+    assert exc.attempts == 3
+    assert exc.retry_interval_seconds == 10
+    assert exc.reason == "Ads Manager вернул 0 строк таблицы объявлений"
+    assert "0 строк" in str(exc)
+    assert "3" in str(exc)
 
 
 # --- Word-boundary offer matching ---

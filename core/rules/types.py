@@ -27,13 +27,8 @@ class RuleEvaluation:
     """Результат оценки правил для одного объявления."""
 
     stage: AlertStage | None
-    early_signal_hits: tuple[RuleHit, ...]
     warning_hits: tuple[RuleHit, ...]
     stop_hits: tuple[RuleHit, ...]
-
-    @property
-    def early_signal_rule_codes(self) -> list[str]:
-        return [hit.code for hit in self.early_signal_hits]
 
     @property
     def warning_rule_codes(self) -> list[str]:
@@ -49,8 +44,6 @@ class RuleEvaluation:
             return self.stop_hits
         if self.stage == AlertStage.WARNING:
             return self.warning_hits
-        if self.stage == AlertStage.EARLY_SIGNAL:
-            return self.early_signal_hits
         return ()
 
     @property
@@ -105,21 +98,6 @@ class RuleContext:
     spend_with_dep_enabled: bool = True
     spend_with_dep_from_percent: Decimal = Decimal("70")
     spend_with_dep_to_percent: Decimal = Decimal("90")
-
-    # Ранний сигнал 1: низкий CTR исходящих кликов (post-click качество)
-    early_outbound_ctr_signal_enabled: bool = True
-    early_outbound_ctr_signal_min_percent: Decimal = Decimal("0.80")  # outbound CTR < 0.80%
-    early_outbound_ctr_signal_min_spend_percent: Decimal = Decimal("5")  # мин. расход 5% CPA
-
-    # Ранний сигнал 2: мало открытий PWA после клика
-    early_lpv_ratio_signal_enabled: bool = True
-    early_lpv_ratio_signal_min_percent: Decimal = Decimal("60")  # LPV/outbound_clicks < 60%
-    early_lpv_ratio_signal_min_outbound_clicks: int = 5  # мин. кол-во outbound кликов
-
-    # Ранний сигнал 3: высокая стоимость просмотра лендинга
-    early_cost_per_lpv_signal_enabled: bool = True
-    early_cost_per_lpv_signal_percent_of_cpa: Decimal = Decimal("5")  # cost_per_lpv > 5% CPA
-    early_cost_per_lpv_signal_min_views: int = 2  # мин. кол-во LPV
 
     # Предвычисленные пороги (init=False — заполняются в __post_init__)
     cpc_base_stop_threshold: Decimal = field(init=False)

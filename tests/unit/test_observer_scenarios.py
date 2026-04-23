@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from dataclasses import dataclass
 from decimal import Decimal
@@ -25,8 +26,108 @@ from core.observer.service import (
 )
 from core.observer.state_machine import _state_for_emitted_stage, resolve_transition
 from core.scanner.models import ScannedAdRow
-from core.scanner.parser import _parse_bulk_result
 from core.telegram.renderer import TelegramAlertItem, render_alert_message
+
+# Оригинальные функции парсинга из core/scanner/parser.py (удалён при миграции)
+_MONEY_RE = re.compile(r"[\d]+[.,]?\d*")
+
+
+def _detect_delivery_status(text: str) -> str:
+    lowered = text.lower()
+    if "active" in lowered or "активно" in lowered:
+        return "ACTIVE"
+    if "paused" in lowered or "пауза" in lowered:
+        return "PAUSED"
+    if "not delivering" in lowered or "не показывается" in lowered:
+        return "NOT_DELIVERING"
+    if "learning" in lowered or "обучение" in lowered:
+        return "LEARNING"
+    if "выкл" in lowered or "off" in lowered or "disabled" in lowered:
+        return "OFF"
+    return "UNKNOWN"
+
+
+def _parse_money(text: str, default: Decimal) -> Decimal:
+    if not text or text.strip() in ("\u2014", "-", "\u2013", "n/a", ""):
+        return default
+    cleaned = text.replace(",", ".").replace("\xa0", "").replace(" ", "")
+    match = _MONEY_RE.search(cleaned)
+    if not match:
+        return default
+    try:
+        return Decimal(match.group())
+    except Exception:
+        return default
+
+
+def _parse_money_or_none(text: str) -> Decimal | None:
+    if not text or text.strip() in ("\u2014", "-", "\u2013", "n/a", ""):
+        return None
+    cleaned = text.replace(",", ".").replace("\xa0", "").replace(" ", "")
+    match = _MONEY_RE.search(cleaned)
+    if not match:
+        return None
+    try:
+        return Decimal(match.group())
+    except Exception:
+        return None
+
+
+def _parse_int_value(text: str) -> int:
+    if not text or text.strip() in ("\u2014", "-", "\u2013", "n/a", ""):
+        return 0
+    cleaned = re.sub(r"[^\d]", "", text)
+    return int(cleaned) if cleaned else 0
+
+
+def _build_row_from_fields(fields: dict) -> ScannedAdRow | None:
+    ad_name = fields.get("ad_name", "")
+    if not ad_name or ad_name in ("\u2014", "-"):
+        return None
+    fb_ad_id = fields.get("_row_id", "")
+    if not fb_ad_id or len(fb_ad_id) < 10:
+        return None
+    return ScannedAdRow(
+        fb_ad_id=fb_ad_id,
+        campaign_name=fields.get("campaign_name", ""),
+        adset_name=fields.get("adset_name", ""),
+        ad_name=ad_name,
+        delivery_status=_detect_delivery_status(fields.get("delivery_status", "")),
+        spend=_parse_money(fields.get("spend", ""), Decimal("0")),
+        budget=fields.get("budget", ""),
+        reach=_parse_int_value(fields.get("reach", "")),
+        impressions=_parse_int_value(fields.get("impressions", "")),
+        clicks=_parse_int_value(fields.get("clicks", "")),
+        cpc=_parse_money_or_none(fields.get("cpc", "")),
+        ctr=_parse_money_or_none(fields.get("ctr", "")),
+        cost_per_result=_parse_money_or_none(fields.get("cost_per_result", "")),
+        cpm=_parse_money_or_none(fields.get("cpm", "")),
+        frequency=_parse_money_or_none(fields.get("frequency", "")),
+        leads=_parse_int_value(fields.get("leads", "")),
+        cost_per_lead=_parse_money_or_none(fields.get("cost_per_lead", "")),
+        registrations=_parse_int_value(fields.get("registrations", "")),
+        cost_per_registration=_parse_money_or_none(fields.get("cost_per_registration", "")),
+        deposits=_parse_int_value(fields.get("deposits", "")),
+        outbound_clicks=_parse_int_value(fields.get("outbound_clicks", "")),
+        outbound_ctr=_parse_money_or_none(fields.get("outbound_ctr", "")),
+        landing_page_views=_parse_int_value(fields.get("landing_page_views", "")),
+        cost_per_landing_page_view=_parse_money_or_none(
+            fields.get("cost_per_landing_page_view", "")
+        ),
+        resolved_offer_code=None,
+    )
+
+
+def _parse_bulk_result(raw_rows: list[dict]) -> list[ScannedAdRow]:
+    rows: list[ScannedAdRow] = []
+    for fields in raw_rows:
+        try:
+            row = _build_row_from_fields(fields)
+            if row is not None:
+                rows.append(row)
+        except Exception:
+            continue
+    return rows
 
 
 @dataclass(slots=True, frozen=True)
@@ -223,7 +324,7 @@ def _run_scenario(
         "deposits": row.deposits,
         "alert_state": next_state,
         "current_stage": evaluation.stage,
-        "early_signal_rule_codes": evaluation.early_signal_rule_codes,
+        "early_signal_rule_codes": [],
         "warning_rule_codes": evaluation.warning_rule_codes,
         "stop_rule_codes": evaluation.stop_rule_codes,
         "open_state_token": token,
@@ -361,8 +462,8 @@ def test_scenario_click_guardrail_creates_stop_alert_and_snapshot():
         "Расход 1.20 превысил стоп CPL 1.00 без лидов"
     ]
     assert "частота 3.20 при критической границе 3.00" in (result.alert_candidate.reason_text or "")
-    assert "🛑 <b>СТОП</b>" in (result.alert_message_text or "")
-    assert "<blockquote>" in (result.alert_message_text or "")
+    assert "🔴 <b>СТОП</b>" in (result.alert_message_text or "")
+    assert "<blockquote" in (result.alert_message_text or "")
 
 
 # Проверяем что наличие лида подавляет более раннее правило клика.
@@ -425,7 +526,7 @@ def test_scenario_regs_without_deposits_has_priority_over_spend_range():
     assert result.snapshot["stop_rule_codes"] == ["regs_no_dep_stop"]
     assert result.alert_candidate is not None
     assert result.alert_candidate.reason_title == "Реги без депозитов"
-    assert "Регистраций 5, депозитов 0" in (result.alert_message_text or "")
+    assert "Реги: 5" in (result.alert_message_text or "")
 
 
 # Проверяем что после первого депозита ранние ступени подавляются и остаётся только депозитная.
@@ -499,38 +600,6 @@ def test_scenario_deposit_stage_ignores_earlier_metrics_and_adds_cpm_context():
     assert "медианы оффера $10.00" in (result.alert_candidate.reason_text or "")
 
 
-# Проверяем полный цикл раннего сигнала по слабому исходящему CTR.
-def test_scenario_early_signal_builds_alert_and_snapshot():
-    """Слабый Outbound CTR должен создавать EARLY_SIGNAL без авто-стопа."""
-
-    result = _run_scenario(
-        raw_rows=[
-            _make_raw_row(
-                row_id="120241979860830176",
-                spend="$0.60",
-                clicks="20",
-                cpc="$0.03",
-                outbound_clicks="20",
-                outbound_ctr="0.50%",
-                landing_page_views="18",
-                cost_per_landing_page_view="$0.03",
-                cpm="$9.50",
-                frequency="1.10",
-            )
-        ],
-        target_fb_ad_id="120241979860830176",
-    )
-
-    assert result.evaluation.stage == AlertStage.EARLY_SIGNAL
-    assert result.evaluation.matched_rule_codes == ["early_outbound_ctr_signal"]
-    assert result.snapshot["alert_state"] == AlertState.EARLY_SIGNAL_SENT
-    assert result.snapshot["early_signal_rule_codes"] == ["early_outbound_ctr_signal"]
-    assert result.alert_candidate is not None
-    assert result.alert_candidate.reason_title == "Мало переходов на PWA"
-    assert "Ранний сигнал" in (result.alert_message_text or "")
-    assert "Мало переходов на PWA" in (result.alert_message_text or "")
-
-
 # Проверяем что CPM и Frequency остаются только диагностикой и не создают алерт сами по себе.
 def test_scenario_diagnostics_only_do_not_create_alert():
     """Высокий CPM и частота должны попадать в диагностику без создания алерта."""
@@ -601,67 +670,3 @@ def test_scenario_diagnostics_only_do_not_create_alert():
         result.diagnostics.summary_text
         == "И аукцион, и частота показывают ухудшение качества трафика."
     )
-
-
-# Проверяем последовательность одинакового скана и последующей эскалации.
-def test_scenario_repeated_scan_deduplicates_and_then_escalates():
-    """Повторный EARLY_SIGNAL не должен дублироваться, а STOP поверх него должен эскалировать."""
-
-    first = _run_scenario(
-        raw_rows=[
-            _make_raw_row(
-                row_id="120241979860880176",
-                spend="$0.60",
-                clicks="20",
-                cpc="$0.03",
-                outbound_clicks="20",
-                outbound_ctr="0.50%",
-                landing_page_views="18",
-                cost_per_landing_page_view="$0.03",
-            )
-        ],
-        target_fb_ad_id="120241979860880176",
-    )
-    second = _run_scenario(
-        raw_rows=[
-            _make_raw_row(
-                row_id="120241979860880176",
-                spend="$0.60",
-                clicks="20",
-                cpc="$0.03",
-                outbound_clicks="20",
-                outbound_ctr="0.50%",
-                landing_page_views="18",
-                cost_per_landing_page_view="$0.03",
-            )
-        ],
-        target_fb_ad_id="120241979860880176",
-        current_state=first.snapshot["alert_state"],
-        current_token=first.snapshot["open_state_token"],
-    )
-    third = _run_scenario(
-        raw_rows=[
-            _make_raw_row(
-                row_id="120241979860880176",
-                spend="$1.20",
-                clicks="8",
-                cpc="$0.06",
-                outbound_clicks="8",
-                outbound_ctr="1.30%",
-                landing_page_views="7",
-                cost_per_landing_page_view="$0.17",
-            )
-        ],
-        target_fb_ad_id="120241979860880176",
-        current_state=second.snapshot["alert_state"],
-        current_token=second.snapshot["open_state_token"],
-    )
-
-    assert first.evaluation.stage == AlertStage.EARLY_SIGNAL
-    assert first.should_emit is True
-    assert second.evaluation.stage == AlertStage.EARLY_SIGNAL
-    assert second.should_emit is False
-    assert second.alert_candidate is None
-    assert third.evaluation.stage == AlertStage.STOP
-    assert third.should_emit is True
-    assert third.snapshot["alert_state"] == AlertState.STOP_SENT

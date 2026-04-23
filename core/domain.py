@@ -7,9 +7,8 @@ from enum import StrEnum
 
 
 class AlertStage(StrEnum):
-    """Стадия алерта: ранний сигнал, предупреждение или стоп."""
+    """Стадия алерта: предупреждение или стоп."""
 
-    EARLY_SIGNAL = "EARLY_SIGNAL"
     WARNING = "WARNING"
     STOP = "STOP"
 
@@ -18,7 +17,6 @@ class AlertState(StrEnum):
     """Состояние объявления в конечном автомате."""
 
     NORMAL = "NORMAL"
-    EARLY_SIGNAL_SENT = "EARLY_SIGNAL_SENT"
     WARNING_SENT = "WARNING_SENT"
     STOP_SENT = "STOP_SENT"
     CLAIMED = "CLAIMED"
@@ -51,7 +49,6 @@ class EnableRecommendationLevel(StrEnum):
     """Уровень рекомендации на включение объявления."""
 
     OK = "OK"
-    EARLY_SIGNAL = "EARLY_SIGNAL"
     WARNING = "WARNING"
 
 
@@ -72,7 +69,6 @@ class TelegramDeliveryMode(StrEnum):
 class TelegramNotificationStream(StrEnum):
     """Независимый поток Telegram-уведомлений внутри одного чата."""
 
-    EARLY = "EARLY"
     WARNING = "WARNING"
     STOP = "STOP"
     ENABLE = "ENABLE"

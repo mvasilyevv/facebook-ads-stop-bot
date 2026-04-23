@@ -92,12 +92,6 @@ const RULE_DEFS = [
   { key: 'spend_with_dep', title: 'Правило 6: Расход с депозитом', hint: 'Стоп при расходе в диапазоне % от CPA с депозитом', fields: [{ name: 'spend_with_dep_from_percent', label: 'Расход от (% CPA)', type: 'number' }, { name: 'spend_with_dep_to_percent', label: 'Расход до (% CPA)', type: 'number' }] },
 ];
 
-const EARLY_SIGNAL_DEFS = [
-  { key: 'early_outbound_ctr_signal', title: 'Ранний сигнал 1: мало переходов на PWA', hint: 'Предупреждение при низком CTR', fields: [{ name: 'early_outbound_ctr_signal_min_percent', label: 'Минимальный CTR (%)', type: 'number' }, { name: 'early_outbound_ctr_signal_min_spend_percent', label: 'Мин. расход (% CPA)', type: 'number' }] },
-  { key: 'early_lpv_ratio_signal', title: 'Ранний сигнал 2: мало открытий PWA после клика', hint: 'Предупреждение при низкой доле открытий', fields: [{ name: 'early_lpv_ratio_signal_min_percent', label: 'Минимальная доля открытий PWA (%)', type: 'number' }, { name: 'early_lpv_ratio_signal_min_outbound_clicks', label: 'Мин. кликов для проверки', type: 'number' }] },
-  { key: 'early_cost_per_lpv_signal', title: 'Ранний сигнал 3: дорогое открытие PWA', hint: 'Предупреждение при дорогом открытии', fields: [{ name: 'early_cost_per_lpv_signal_percent_of_cpa', label: 'Лимит цены открытия (% CPA)', type: 'number' }, { name: 'early_cost_per_lpv_signal_min_views', label: 'Мин. открытий для проверки', type: 'number' }] },
-];
-
 const DIAGNOSTIC_FIELDS = [
   { name: 'frequency_elevated_threshold', label: 'Частота: повышено от', type: 'number' },
   { name: 'frequency_critical_threshold', label: 'Частота: критично от', type: 'number' },
@@ -110,9 +104,6 @@ const DEFAULT_RULES = {
   regs_no_dep_enabled: true, regs_no_dep_stop_count: '5',
   spend_no_dep_enabled: true, spend_no_dep_from_percent: '50', spend_no_dep_to_percent: '70',
   spend_with_dep_enabled: true, spend_with_dep_from_percent: '70', spend_with_dep_to_percent: '90',
-  early_outbound_ctr_signal_enabled: true, early_outbound_ctr_signal_min_percent: '0.80', early_outbound_ctr_signal_min_spend_percent: '5',
-  early_lpv_ratio_signal_enabled: true, early_lpv_ratio_signal_min_percent: '60', early_lpv_ratio_signal_min_outbound_clicks: '5',
-  early_cost_per_lpv_signal_enabled: true, early_cost_per_lpv_signal_percent_of_cpa: '5', early_cost_per_lpv_signal_min_views: '2',
   frequency_elevated_threshold: '2',
   frequency_critical_threshold: '3',
 };
@@ -333,11 +324,6 @@ export default function OffersPage() {
             <>
               <div className="space-y-3">
                 {RULE_DEFS.map((rule) => <RuleBlock key={rule.key} rule={rule} rules={rules} setRules={setRules} />)}
-              </div>
-
-              <h3 className="pt-2 text-sm font-semibold text-primary">Ранние сигналы до лидов</h3>
-              <div className="space-y-3">
-                {EARLY_SIGNAL_DEFS.map((rule) => <RuleBlock key={rule.key} rule={rule} rules={rules} setRules={setRules} />)}
               </div>
 
               <h3 className="pt-2 text-sm font-semibold text-primary">Диагностика CPM / частоты</h3>

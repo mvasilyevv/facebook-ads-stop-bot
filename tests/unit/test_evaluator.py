@@ -356,45 +356,6 @@ def test_deposit_without_registration_stays_on_pre_registration_ladder():
     assert result.matched_rule_codes == ["cpl_stop"]
 
 
-# Проверяем что ранний сигнал по CTR исходящих кликов работает до лида и раньше funnel-warning.
-def test_early_signal_outbound_ctr_triggers_before_leads():
-    row = _make_row(
-        spend=Decimal("0.30"),
-        clicks=10,
-        cpc=Decimal("0.03"),
-        outbound_clicks=10,
-        outbound_ctr=Decimal("0.50"),
-    )
-
-    result = evaluate_stop_rules(row, _make_ctx())
-
-    assert result.stage == AlertStage.EARLY_SIGNAL
-    assert result.matched_rule_codes == ["early_outbound_ctr_signal"]
-
-
-# Проверяем что gate по минимальному расходу для Outbound CTR берётся из явной конфигурации.
-def test_early_signal_outbound_ctr_respects_min_spend_gate():
-    row = _make_row(
-        spend=Decimal("0.30"),
-        clicks=10,
-        cpc=Decimal("0.03"),
-        outbound_clicks=10,
-        outbound_ctr=Decimal("0.50"),
-    )
-
-    result = evaluate_stop_rules(
-        row,
-        _make_ctx(
-            early_outbound_ctr_signal_min_spend_percent=Decimal("7"),
-            early_lpv_ratio_signal_enabled=False,
-            early_cost_per_lpv_signal_enabled=False,
-        ),
-    )
-
-    assert result.stage is None
-    assert result.matched_rule_codes == []
-
-
 # Проверяем что OFF-объявление с лидами и без рег/депов может получить OK-рекомендацию после выхода из стопа.
 def test_enable_recommendation_returns_ok_for_lead_recovery_without_registration():
     row = _make_row(
@@ -518,78 +479,6 @@ def test_enable_recommendation_blocks_zero_spend_off_ad():
     assert result is None
 
 
-# Проверяем что ранний сигнал по доходимости до лендинга срабатывает отдельно от warning/stop.
-def test_early_signal_lpv_ratio_triggers_before_leads():
-    row = _make_row(
-        spend=Decimal("0.20"),
-        clicks=10,
-        cpc=Decimal("0.02"),
-        outbound_clicks=10,
-        landing_page_views=3,
-    )
-
-    result = evaluate_stop_rules(row, _make_ctx())
-
-    assert result.stage == AlertStage.EARLY_SIGNAL
-    assert result.matched_rule_codes == ["early_lpv_ratio_signal"]
-
-
-# Проверяем что gate по количеству исходящих кликов для LPV ratio тоже задаётся явно.
-def test_early_signal_lpv_ratio_respects_min_outbound_clicks_gate():
-    row = _make_row(
-        spend=Decimal("0.20"),
-        clicks=10,
-        cpc=Decimal("0.02"),
-        outbound_clicks=10,
-        landing_page_views=3,
-    )
-
-    result = evaluate_stop_rules(
-        row,
-        _make_ctx(early_lpv_ratio_signal_min_outbound_clicks=12),
-    )
-
-    assert result.stage is None
-    assert result.matched_rule_codes == []
-
-
-# Проверяем что ранний сигнал по цене LPV срабатывает только на ранней стадии.
-def test_early_signal_cost_per_lpv_triggers_before_leads():
-    row = _make_row(
-        spend=Decimal("0.30"),
-        clicks=10,
-        cpc=Decimal("0.03"),
-        outbound_clicks=4,
-        landing_page_views=2,
-        cost_per_landing_page_view=Decimal("0.30"),
-    )
-
-    result = evaluate_stop_rules(row, _make_ctx())
-
-    assert result.stage == AlertStage.EARLY_SIGNAL
-    assert result.matched_rule_codes == ["early_cost_per_lpv_signal"]
-
-
-# Проверяем что gate по минимальному числу LPV не зашит и читается из конфигурации.
-def test_early_signal_cost_per_lpv_respects_min_views_gate():
-    row = _make_row(
-        spend=Decimal("0.30"),
-        clicks=10,
-        cpc=Decimal("0.03"),
-        outbound_clicks=4,
-        landing_page_views=2,
-        cost_per_landing_page_view=Decimal("0.30"),
-    )
-
-    result = evaluate_stop_rules(
-        row,
-        _make_ctx(early_cost_per_lpv_signal_min_views=3),
-    )
-
-    assert result.stage is None
-    assert result.matched_rule_codes == []
-
-
 # Проверяем что CPM и частота сами по себе не создают алерт или ранний сигнал.
 def test_cpm_and_frequency_are_diagnostics_only():
     row = _make_row(
@@ -604,22 +493,3 @@ def test_cpm_and_frequency_are_diagnostics_only():
 
     assert result.stage is None
     assert result.matched_rule_codes == []
-
-
-# Проверяем что при наличии лида ранние сигналы полностью подавляются более глубокой стадией.
-def test_early_signals_work_even_with_leads():
-    # Early signals на outbound_ctr должны срабатывать даже при наличии лидов
-    row = _make_row(
-        spend=Decimal("0.30"),
-        clicks=10,
-        cpc=Decimal("0.03"),
-        outbound_clicks=10,
-        outbound_ctr=Decimal("0.50"),  # Низкий CTR — сработает early signal
-        leads=1,
-        cost_per_lead=Decimal("0.30"),
-    )
-
-    result = evaluate_stop_rules(row, _make_ctx())
-
-    assert result.stage == AlertStage.EARLY_SIGNAL
-    assert "early_outbound_ctr_signal" in result.matched_rule_codes

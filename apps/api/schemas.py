@@ -59,6 +59,12 @@ class ScanningToggleSchema(BaseModel):
     enabled: bool
 
 
+class AutoEnableToggleSchema(BaseModel):
+    """Схема для переключения авто-включения объявлений."""
+
+    enabled: bool
+
+
 class TelegramSettingsSchema(BaseModel):
     """Настройки Telegram-бота."""
 
@@ -70,7 +76,6 @@ class TelegramSettingsSchema(BaseModel):
     auth_code: str = ""
     delivery_mode: str = TelegramDeliveryMode.PRIVATE_CHAT.value
     control_topic_id: int | None = None
-    early_topic_id: int | None = None
     warning_topic_id: int | None = None
     stop_topic_id: int | None = None
     enable_topic_id: int | None = None
@@ -119,7 +124,6 @@ class TelegramForumCutoverResponseSchema(BaseModel):
     auth_code: str = ""
     activation_command: str = ""
     control_topic_id: int | None = None
-    early_topic_id: int | None = None
     warning_topic_id: int | None = None
     stop_topic_id: int | None = None
     enable_topic_id: int | None = None
@@ -227,7 +231,6 @@ class AdSnapshotSchema(BaseModel):
     effective_deposits: int = 0
     alert_state: str
     current_stage: str | None = None
-    early_signal_rule_codes: list[str] = []
     warning_rule_codes: list[str] = []
     stop_rule_codes: list[str] = []
     cpm_diagnostic_status: str | None = None
@@ -399,7 +402,6 @@ class DashboardStatsSchema(BaseModel):
 
     total_ads_monitored: int = 0
     active_ads_count: int = 0  # объявления из последней скан-сессии (±30 мин от last_scan_at)
-    ads_in_early_signal: int = 0
     ads_in_warning: int = 0
     ads_in_stop: int = 0
     ads_disabled: int = 0
@@ -410,7 +412,6 @@ class DashboardStatsSchema(BaseModel):
     pending_disable_tasks: int = 0
     pending_enable_tasks: int = 0
     enable_recommendations_ok: int = 0
-    enable_recommendations_early_signal: int = 0
     enable_recommendations_warning: int = 0
     last_scan_at: str | None = None
     observer_status: str | None = None

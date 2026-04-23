@@ -16,19 +16,17 @@ from core.domain import AlertStage, AlertState, DisableTaskStatus
 
 
 # Вспомогательная фабрика мок-результата GROUP BY
-def _make_state_rows(normal=0, early_signal=0, warning=0, stop=0, disabled=0):
+def _make_state_rows(normal=0, warning=0, stop=0, disabled=0):
     """Создаёт строки как их возвращает GROUP BY alert_state."""
     rows = []
     if normal:
-        rows.append((AlertState.NORMAL, normal, Decimal("10.00")))
-    if early_signal:
-        rows.append((AlertState.EARLY_SIGNAL_SENT, early_signal, Decimal("12.00")))
+        rows.append((AlertState.NORMAL, "ACTIVE", normal, Decimal("10.00")))
     if warning:
-        rows.append((AlertState.WARNING_SENT, warning, Decimal("25.50")))
+        rows.append((AlertState.WARNING_SENT, "ACTIVE", warning, Decimal("25.50")))
     if stop:
-        rows.append((AlertState.STOP_SENT, stop, Decimal("50.00")))
+        rows.append((AlertState.STOP_SENT, "ACTIVE", stop, Decimal("50.00")))
     if disabled:
-        rows.append((AlertState.DISABLED, disabled, Decimal("5.00")))
+        rows.append((AlertState.DISABLED, "OFF", disabled, Decimal("5.00")))
     return rows
 
 
@@ -91,14 +89,12 @@ def _make_archive(
 def _make_risk_snapshot(
     *,
     alert_state: AlertState,
-    early_signal_rule_codes: list[str] | None = None,
     warning_rule_codes: list[str] | None = None,
     stop_rule_codes: list[str] | None = None,
 ):
     """Создаёт упрощённый snapshot для тестов причин активных рисков."""
     return SimpleNamespace(
         alert_state=alert_state,
-        early_signal_rule_codes=early_signal_rule_codes or [],
         warning_rule_codes=warning_rule_codes or [],
         stop_rule_codes=stop_rule_codes or [],
     )
@@ -150,6 +146,14 @@ def _make_scalars_result(rows):
     return result
 
 
+def _make_scalar_result(value):
+    """Создаёт мок SQLAlchemy-результата для scalar_one_or_none() и scalar_one()."""
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = value
+    result.scalar_one.return_value = value
+    return result
+
+
 # Проверяем что схемы API всегда отдают код оффера в верхнем регистре
 def test_offer_code_schemas_normalize_uppercase():
     from apps.api.schemas import AdSnapshotSchema, OfferSchema
@@ -189,10 +193,6 @@ def test_build_current_risk_reason_rows_uses_active_snapshot_states():
 
     snapshots = [
         _make_risk_snapshot(
-            alert_state=AlertState.EARLY_SIGNAL_SENT,
-            early_signal_rule_codes=["early_outbound_ctr_signal", "early_outbound_ctr_signal"],
-        ),
-        _make_risk_snapshot(
             alert_state=AlertState.WARNING_SENT,
             warning_rule_codes=["cpc_stop"],
         ),
@@ -211,7 +211,6 @@ def test_build_current_risk_reason_rows_uses_active_snapshot_states():
     reason_counts = {row["rule"]: row["count"] for row in rows}
 
     assert reason_counts == {
-        "Мало переходов на PWA": 1,
         "Дорогой клик": 1,
         "Дорогой лид": 1,
     }
@@ -232,7 +231,6 @@ def test_build_active_incident_schema_marks_manual_attention_after_retry_limit()
         telegram_group_key="incident-1",
         stop_rule_codes=["cpc_stop"],
         warning_rule_codes=[],
-        early_signal_rule_codes=[],
         last_observed_at=now,
         updated_at=now,
         created_at=now - timedelta(hours=1),
@@ -467,7 +465,6 @@ async def test_list_active_incidents_sorts_by_last_activity(mock_db):
         telegram_group_key="incident-old",
         warning_rule_codes=["cpl_stop"],
         stop_rule_codes=[],
-        early_signal_rule_codes=[],
         last_observed_at=now - timedelta(minutes=5),
         updated_at=now - timedelta(minutes=5),
         created_at=now - timedelta(hours=2),
@@ -482,7 +479,6 @@ async def test_list_active_incidents_sorts_by_last_activity(mock_db):
         telegram_group_key="incident-new",
         warning_rule_codes=[],
         stop_rule_codes=["cpc_stop"],
-        early_signal_rule_codes=[],
         last_observed_at=now,
         updated_at=now,
         created_at=now - timedelta(hours=1),
@@ -589,7 +585,6 @@ async def test_dashboard_stats_counts(mock_db):
         result = await get_dashboard_stats(db=mock_db)
 
     assert result.total_ads_monitored == 16  # 10+3+2+1
-    assert result.ads_in_early_signal == 0
     assert result.ads_in_warning == 3
     assert result.ads_in_stop == 2
     assert result.ads_disabled == 1
@@ -619,7 +614,6 @@ async def test_dashboard_stats_empty_db(mock_db):
         result = await get_dashboard_stats(db=mock_db)
 
     assert result.total_ads_monitored == 0
-    assert result.ads_in_early_signal == 0
     assert result.ads_in_warning == 0
     assert result.ads_in_stop == 0
     assert result.ads_disabled == 0
@@ -653,10 +647,10 @@ async def test_dashboard_uses_single_group_by_query(mock_db):
     assert mock_db.scalar.call_count == 5
 
 
-# Проверяем что dashboard считает ранние сигналы отдельно от warning и stop.
+# Проверяем что dashboard считает warning и stop отдельно.
 @pytest.mark.asyncio
-async def test_dashboard_stats_counts_early_signal_separately(mock_db):
-    state_rows = _make_state_rows(normal=7, early_signal=2, warning=1, stop=1)
+async def test_dashboard_stats_counts_warning_and_stop_separately(mock_db):
+    state_rows = _make_state_rows(normal=7, warning=2, stop=1)
 
     group_result = MagicMock()
     group_result.all.return_value = state_rows
@@ -673,10 +667,36 @@ async def test_dashboard_stats_counts_early_signal_separately(mock_db):
     ):
         result = await get_dashboard_stats(db=mock_db)
 
-    assert result.total_ads_monitored == 11
-    assert result.ads_in_early_signal == 2
-    assert result.ads_in_warning == 1
+    assert result.total_ads_monitored == 10
+    assert result.ads_in_warning == 2
     assert result.ads_in_stop == 1
+
+
+# Проверяем что объявления в состоянии DISABLED корректно считаются.
+@pytest.mark.asyncio
+async def test_dashboard_stats_counts_disabled_state(mock_db):
+    group_result = MagicMock()
+    group_result.all.return_value = [
+        (AlertState.NORMAL, "ACTIVE", 2, Decimal("1.00")),
+        (AlertState.WARNING_SENT, "ACTIVE", 1, Decimal("0.50")),
+        (AlertState.DISABLED, "OFF", 3, Decimal("2.00")),
+    ]
+    observer_result = MagicMock()
+    observer_result.scalar_one_or_none.return_value = None
+    mock_db.execute = AsyncMock(side_effect=[group_result, observer_result])
+    mock_db.scalar = AsyncMock(side_effect=[None, 1, 0, 0, 0])
+
+    from apps.api.routers.dashboard import get_dashboard_stats
+
+    with patch(
+        "apps.api.routers.dashboard._load_current_enable_recommendations",
+        new=AsyncMock(return_value=(None, [])),
+    ):
+        result = await get_dashboard_stats(db=mock_db)
+
+    assert result.total_ads_monitored == 6
+    assert result.ads_disabled == 3
+    assert result.ads_in_warning == 1
 
 
 # Проверяем что dashboard отдаёт runtime-статус observer вместе с основной статистикой
@@ -694,12 +714,15 @@ async def test_dashboard_stats_includes_observer_runtime_fields(mock_db):
         worker_last_error="Vision запустил профиль без CDP-порта.",
         worker_last_error_at=now - timedelta(seconds=10),
     )
-    observer_result = MagicMock()
-    observer_result.scalar_one_or_none.return_value = observer_row
-    mock_db.execute = AsyncMock(side_effect=[group_result, observer_result])
+    mock_db.execute = AsyncMock(
+        side_effect=[
+            group_result,
+            _make_scalar_result(observer_row),  # _get_observer_settings (прямой вызов)
+        ]
+    )
     mock_db.scalar = AsyncMock(
         side_effect=[
-            now - timedelta(minutes=5),
+            now - timedelta(minutes=5),  # func.max(last_observed_at)
             4,
             1,
             0,
@@ -857,6 +880,66 @@ async def test_retry_disable_task_allows_stale_running_task(mock_db):
     assert task.last_error is None
     assert task.completed_at is None
     mock_db.commit.assert_awaited_once_with()
+
+
+# Проверяем что задачу отключения можно вручную удалить из активной очереди.
+@pytest.mark.asyncio
+async def test_cancel_disable_task_marks_task_cancelled_and_restores_snapshot(mock_db):
+    from apps.api.routers.dashboard import cancel_disable_task
+
+    task_id = uuid.uuid4()
+    ad_id = uuid.uuid4()
+    task = SimpleNamespace(
+        id=task_id,
+        ad_id=ad_id,
+        open_state_token="incident-1",
+        status=DisableTaskStatus.RUNNING,
+        completed_at=None,
+        next_retry_at=datetime.now(UTC),
+        last_error=None,
+    )
+    snapshot = SimpleNamespace(
+        ad_id=ad_id,
+        open_state_token="incident-1",
+        delivery_status="ACTIVE",
+        alert_state=AlertState.CLAIMED,
+        current_stage=AlertStage.STOP,
+    )
+    task_result = MagicMock()
+    task_result.scalar_one_or_none.return_value = task
+    snapshot_result = MagicMock()
+    snapshot_result.scalar_one_or_none.return_value = snapshot
+    mock_db.execute = AsyncMock(side_effect=[task_result, snapshot_result])
+    mock_db.commit = AsyncMock()
+
+    result = await cancel_disable_task(str(task_id), db=mock_db)
+
+    assert result == {"ok": True}
+    assert task.status == DisableTaskStatus.CANCELLED
+    assert task.completed_at is not None
+    assert task.next_retry_at is None
+    assert task.last_error == "Задача удалена из очереди вручную через dashboard"
+    assert snapshot.alert_state == AlertState.STOP_SENT
+    mock_db.commit.assert_awaited_once_with()
+
+
+# Проверяем что завершённую задачу нельзя повторно удалить из очереди.
+@pytest.mark.asyncio
+async def test_cancel_disable_task_rejects_completed_task(mock_db):
+    from fastapi import HTTPException
+
+    from apps.api.routers.dashboard import cancel_disable_task
+
+    task = SimpleNamespace(id=uuid.uuid4(), status=DisableTaskStatus.SUCCEEDED)
+    task_result = MagicMock()
+    task_result.scalar_one_or_none.return_value = task
+    mock_db.execute = AsyncMock(return_value=task_result)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await cancel_disable_task(str(task.id), db=mock_db)
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == "Задача уже завершена"
 
 
 # Проверяем что helper корректно собирает summary, funnel и сортировку кампаний
@@ -1115,8 +1198,8 @@ async def test_dashboard_performance_today_uses_current_scan_cutoff(mock_db):
     snapshots_result.scalars.return_value.all.return_value = []
     offers_result = MagicMock()
     offers_result.scalars.return_value.all.return_value = []
-    mock_db.execute = AsyncMock(side_effect=[snapshots_result, offers_result])
     last_scan = datetime(2026, 3, 28, 10, 0, tzinfo=UTC)
+    mock_db.execute = AsyncMock(side_effect=[snapshots_result, offers_result])
     mock_db.scalar = AsyncMock(return_value=last_scan)
 
     from apps.api.routers.dashboard import get_dashboard_performance
@@ -1150,17 +1233,18 @@ async def test_chart_data_today_uses_local_day_fallback(mock_db):
     # observer_settings возвращает None (через execute → scalar_one_or_none)
     observer_result = MagicMock()
     observer_result.scalar_one_or_none.return_value = None
+    observer_result = _make_scalar_result(None)  # _get_cabinet_day_start → ObserverSettings
     mock_db.execute = AsyncMock(
         side_effect=[
-            observer_result,
-            empty_result,
-            empty_result,
+            observer_result,  # _get_cabinet_day_start для _resolve_dashboard_event_cutoff
+            empty_result,  # alerts query
+            empty_result,  # snapshots query
             empty_result,
             empty_result,
             empty_result,
         ]
     )
-    # scalar: last_scan=None, last_archive_end=None
+    # scalar: last_scan=None (snapshot_cutoff), last_archive_end=None
     mock_db.scalar = AsyncMock(side_effect=[None, None])
 
     from unittest.mock import patch

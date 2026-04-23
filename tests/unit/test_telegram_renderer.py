@@ -150,67 +150,15 @@ def test_render_alert_message_includes_rule_summaries():
     message = render_alert_message(stage=AlertStage.STOP, items=[item])
 
     # Заголовок: стадия + причина в одной строке
-    assert "🛑" in message.text
+    assert "🔴" in message.text
     assert "СТОП" in message.text
     assert "Дорогой клик" in message.text
-    # Compact identity: blockquote, одна строка
-    assert "<blockquote>" in message.text
-    assert "Campaign A › Adset A" in message.text
-    # Rule summary inline
-    assert "стоп 0.08" in message.text  # &gt; escaped в HTML
-    assert "базовый 0.10" in message.text  # часть rule_summary
+    # Expandable блок с метриками
+    assert "<blockquote expandable>" in message.text
     # Убраны старые элементы
     assert "Пороговые детали" not in message.text
     assert "Ключевые метрики" not in message.text
     assert "Следующее действие" not in message.text
-
-
-# Проверяем, что ранний сигнал рендерится с confirm-flow и кнопками snooze.
-def test_render_alert_message_for_early_signal_has_confirm_and_snooze_buttons():
-    item = TelegramAlertItem(
-        snapshot_id="snap-2",
-        fb_ad_id="ad-2",
-        ad_name="DRC_CR2_CR018",
-        campaign_name="Campaign B",
-        adset_name="Adset B",
-        offer_code="offer-b",
-        stage=AlertStage.EARLY_SIGNAL,
-        alert_state=AlertState.EARLY_SIGNAL_SENT,
-        matched_rule_codes=["early_lpv_ratio_signal"],
-        reason_title="Мало открытий PWA после клика",
-        reason_text="Переходы теряются между кликом и загрузкой страницы.",
-        metrics_json={
-            "spend": "0.20",
-            "clicks": 10,
-            "cpc": "0.0200",
-            "outbound_clicks": 10,
-            "landing_page_views": 3,
-            "cpm": "7.5000",
-            "frequency": "1.4000",
-            "leads": 0,
-            "registrations": 0,
-            "deposits": 0,
-        },
-    )
-
-    message = render_alert_message(stage=AlertStage.EARLY_SIGNAL, items=[item])
-
-    assert "Ранний сигнал" in message.text
-    assert "Мало открытий PWA после клика" in message.text
-    # Трафик в expandable-блоке
-    assert "<blockquote expandable>" in message.text
-    assert "LPV: 3" in message.text
-    # Кнопки
-    assert message.reply_markup is not None
-    keyboard = message.reply_markup["inline_keyboard"]
-    assert keyboard[0][0]["text"].startswith("🛑 Создать задачу:")
-    assert keyboard[0][0]["callback_data"] == "disable:snap-2"
-    assert [button["text"] for button in keyboard[1]] == ["⏸ 30м", "⏸ 1ч", "⏸ 2ч"]
-    assert [button["callback_data"] for button in keyboard[1]] == [
-        "snooze:snap-2:30",
-        "snooze:snap-2:60",
-        "snooze:snap-2:120",
-    ]
 
 
 # Проверяем, что traffic_diagnostics отображается в expandable-блоке.
@@ -348,25 +296,6 @@ def test_render_enable_recommendation_message_preserves_explicit_recovery_copy()
 
     # reason_title в заголовке, reason_text убран (compact-формат)
     assert "Можно вернуть в работу" in message.text
-
-
-# Проверяем, что рекомендация не скрывает статус NOT_DELIVERING.
-def test_render_enable_recommendation_message_for_not_delivering_with_early_signal():
-    message = render_enable_recommendation_message(
-        item=TelegramEnableRecommendationItem(
-            event_id="event-2",
-            fb_ad_id="ad-200",
-            ad_name="ND Ad",
-            delivery_status="NOT_DELIVERING",
-            recommendation_level=EnableRecommendationLevel.EARLY_SIGNAL,
-            matched_rule_codes=["early_outbound_ctr_signal"],
-            reason_title="Ранний сигнал",
-            reason_text="Конверсий пока нет, но объявление уже можно вернуть в работу.",
-            metrics_json={"outbound_ctr": "0.80"},
-        )
-    )
-
-    assert "Доставка Meta: <b>NOT_DELIVERING</b>" in message.text
 
 
 # Проверяем, что warning-рекомендация предупреждает о близости к порогу.
