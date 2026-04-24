@@ -41,6 +41,25 @@ function OfferRow({ row }) {
   );
 }
 
+function OfferCard({ row }) {
+  return (
+    <div className="rounded-md border border-border bg-elevated/35 px-3 py-2.5">
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <span className="font-mono text-sm font-semibold text-primary">{row.offer_code || '—'}</span>
+        <span className={`font-mono text-sm font-semibold ${profitColor(row.profit)}`}>
+          {row.profit != null ? `$${Number(row.profit).toFixed(2)}` : '—'}
+        </span>
+      </div>
+      <div className="grid grid-cols-4 gap-2 text-2xs">
+        <span className="text-muted">Расход <b className="font-mono text-primary">${Number(row.total_spend || 0).toFixed(2)}</b></span>
+        <span className="text-muted">Реги <b className="font-mono text-primary">{row.total_registrations || 0}</b></span>
+        <span className="text-muted">Деп <b className={`font-mono ${Number(row.total_deposits) > 0 ? 'text-success' : 'text-primary'}`}>{row.total_deposits || 0}</b></span>
+        <span className="text-muted">ROAS <b className={`font-mono ${row.roas != null && Number(row.roas) < 1 ? 'text-danger' : 'text-primary'}`}>{row.roas != null ? `${Number(row.roas).toFixed(2)}x` : '—'}</b></span>
+      </div>
+    </div>
+  );
+}
+
 export function HistoryOffersTable({ data = [] }) {
   const { sortKey, sortDir, handleSort } = useTableSort('total_spend');
 
@@ -62,7 +81,12 @@ export function HistoryOffersTable({ data = [] }) {
       <h3 className="mb-3 text-2xs font-bold uppercase tracking-widest text-muted">
         Офферы
       </h3>
-      <div className="overflow-x-auto">
+      <div className="grid gap-2 md:hidden">
+        {sorted.map((row, i) => (
+          <OfferCard key={row.offer_code || i} row={row} />
+        ))}
+      </div>
+      <div className="hidden overflow-x-auto md:block">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-border bg-elevated/50">

@@ -14,6 +14,7 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import selectinload
 
 from clients.python_grpc.client import BrowserAgentClient, BrowserAgentConfig, ScanResult
+from core.browser.lock import acquire_browser_lock
 from core.config import get_settings
 from core.crypto import decrypt
 from core.db import get_session_factory
@@ -44,6 +45,7 @@ DISABLE_VERIFY_SCAN_MAX_SCROLL_PASSES = 80
 DISABLE_VERIFY_TOGGLE_POLL_DELAYS_SECONDS = (0.0, 1.0, 1.0, 2.0)
 DISABLE_CONFIRMED_DELIVERY_STATUS = "OFF"
 DISABLE_ALREADY_OFF_MESSAGE_PREFIX = "Объявление уже отключено"
+DISABLE_BROWSER_LOCK_TIMEOUT_SECONDS = 180.0
 
 # Общая очередь задач на отключение
 _disable_queue = PostgresTaskQueue(
@@ -282,6 +284,24 @@ async def _execute_disable_single(
     )
 
 
+async def _execute_disable_single_locked(
+    client: BrowserAgentClient,
+    fb_ad_id: str,
+    *,
+    reset_table_before_search: bool = True,
+) -> tuple[bool, str]:
+    """Отключает одно объявление, удерживая общий lock браузера на весь flow."""
+    async with acquire_browser_lock(
+        owner="disable-worker",
+        timeout_seconds=DISABLE_BROWSER_LOCK_TIMEOUT_SECONDS,
+    ):
+        return await _execute_disable_single(
+            client,
+            fb_ad_id,
+            reset_table_before_search=reset_table_before_search,
+        )
+
+
 async def _scan_rows_for_disable_verification(client: BrowserAgentClient) -> dict[str, object]:
     """Запускает повторный scan после кликов и возвращает строки по fb_ad_id."""
     rows_by_ad_id: dict[str, object] = {}
@@ -370,14 +390,10 @@ async def _execute_disable_batch(
 
             if success:
                 if _is_already_disabled_message(message):
-                    await _mark_snapshot_disabled_from_verification(
-                        fb_ad_id,
-                        DISABLE_CONFIRMED_DELIVERY_STATUS,
-                    )
                     for task in tasks_by_ad_id[fb_ad_id]:
                         results[task.id] = (True, message)
                     logger.info(
-                        "Disable batch: %s уже OFF, повторный скан для задачи не нужен",
+                        "Disable batch: %s уже OFF, подтверждение delivery_status оставлено следующему скану",
                         fb_ad_id,
                     )
                 else:
@@ -475,6 +491,18 @@ async def _execute_disable_batch(
                 results[task.id] = result
 
     return results
+
+
+async def _execute_disable_batch_locked(
+    client: BrowserAgentClient,
+    tasks: list[DisableTask],
+) -> dict[str, tuple[bool, str]]:
+    """Отключает пачку объявлений, удерживая общий lock браузера на весь batch."""
+    async with acquire_browser_lock(
+        owner="disable-worker",
+        timeout_seconds=DISABLE_BROWSER_LOCK_TIMEOUT_SECONDS,
+    ):
+        return await _execute_disable_batch(client, tasks)
 
 
 async def mark_succeeded(task_id) -> None:
@@ -626,14 +654,18 @@ async def main() -> None:
                     poll_interval_seconds=5,
                     claim_next_task=claim_next_task,
                     claim_task_batch=claim_task_batch,
-                    execute_disable=lambda fb_ad_id, _client=grpc_client: _execute_disable_single(
-                        _client,  # type: ignore[arg-type]
-                        fb_ad_id,
-                        reset_table_before_search=True,
+                    execute_disable=lambda fb_ad_id, _client=grpc_client: (
+                        _execute_disable_single_locked(
+                            _client,  # type: ignore[arg-type]
+                            fb_ad_id,
+                            reset_table_before_search=True,
+                        )
                     ),
-                    execute_disable_batch=lambda tasks, _client=grpc_client: _execute_disable_batch(
-                        _client,  # type: ignore[arg-type]
-                        tasks,
+                    execute_disable_batch=lambda tasks, _client=grpc_client: (
+                        _execute_disable_batch_locked(
+                            _client,  # type: ignore[arg-type]
+                            tasks,
+                        )
                     ),
                     batch_size=DISABLE_BATCH_SIZE,
                     mark_succeeded=mark_succeeded,

@@ -447,3 +447,27 @@ async def touch_poller_heartbeat(*, create_if_missing: bool = False) -> None:
                 return
         settings_row.poller_heartbeat_at = datetime.now(UTC)
         await session.commit()
+
+
+async def load_poller_offset() -> int | None:
+    """Загружает последний обработанный offset Telegram poller-а."""
+    factory = get_session_factory()
+    async with factory() as session:
+        settings_row = await session.scalar(
+            select(TelegramSettings).where(TelegramSettings.singleton_key == "default")
+        )
+        if settings_row is None:
+            return None
+        return settings_row.poller_offset
+
+
+async def save_poller_offset(offset: int | None) -> None:
+    """Сохраняет последний обработанный offset Telegram poller-а."""
+    if offset is None:
+        return
+
+    factory = get_session_factory()
+    async with factory() as session:
+        settings_row = await get_or_create_telegram_settings(session)
+        settings_row.poller_offset = offset
+        await session.commit()

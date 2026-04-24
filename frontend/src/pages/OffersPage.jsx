@@ -256,7 +256,33 @@ export default function OffersPage() {
       {/* Таблица офферов */}
       {!loading && !error && (
         <div className="panel overflow-hidden">
-          <div className="overflow-x-auto">
+          <div className="grid gap-2 p-3 md:hidden">
+            {offers.map((o) => (
+              <div key={o.id} className="rounded-md border border-border bg-elevated/35 px-3 py-2.5">
+                <div className="mb-2 flex items-start justify-between gap-3">
+                  <div>
+                    <div className="font-mono text-sm font-semibold text-accent">{o.code}</div>
+                    <div className="mt-0.5 font-mono text-2xs text-primary">${Number(o.cpa_amount ?? o.cpa).toFixed(2)}</div>
+                  </div>
+                  <span className={o.is_active ? 'badge-success' : 'badge-neutral'}>
+                    {o.is_active ? 'Активен' : 'Выкл.'}
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  <button className="btn-ghost text-2xs" onClick={() => openRules(o.id)} aria-expanded={editingId === o.id}>
+                    {editingId === o.id ? 'Свернуть' : 'Правила'}
+                  </button>
+                  <button className="btn-ghost text-2xs" onClick={() => { setEditOffer(o); setShowModal(true); }}>
+                    Изменить
+                  </button>
+                  <button className="btn-ghost text-2xs text-danger" onClick={() => handleDelete(o)}>
+                    Удалить
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="hidden overflow-x-auto md:block">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border bg-elevated/50">

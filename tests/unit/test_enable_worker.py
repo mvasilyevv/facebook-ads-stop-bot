@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -46,6 +47,33 @@ async def test_execute_enable_single_enables_visible_toggle(monkeypatch):
     assert message == "Объявление включено: переключатель подтвердил состояние ON"
     client.find_toggle_cell.assert_awaited_once_with("120246283878900334", reset_to_top=True)
     client.toggle_ad.assert_awaited_once_with("120246283878900334", target_state=True)
+
+
+# Проверяем, что enable-flow удерживает общую блокировку браузера.
+@pytest.mark.asyncio
+async def test_execute_enable_single_locked_uses_common_browser_lock(monkeypatch):
+    import run_enable_worker
+
+    lock_calls = []
+
+    @asynccontextmanager
+    async def fake_lock(**kwargs):
+        lock_calls.append(kwargs)
+        yield
+
+    execute = AsyncMock(return_value=(True, "ok"))
+    monkeypatch.setattr(run_enable_worker, "acquire_browser_lock", fake_lock)
+    monkeypatch.setattr(run_enable_worker, "_execute_enable_single", execute)
+
+    result = await run_enable_worker._execute_enable_single_locked(
+        AsyncMock(),
+        "120246283878900334",
+    )
+
+    assert result == (True, "ok")
+    assert lock_calls[0]["owner"] == "enable-worker"
+    assert lock_calls[0]["timeout_seconds"] == run_enable_worker.ENABLE_BROWSER_LOCK_TIMEOUT_SECONDS
+    execute.assert_awaited_once()
 
 
 # Проверяем, что enable worker не кликает по toggle если объявление уже включено

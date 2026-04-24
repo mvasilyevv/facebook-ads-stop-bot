@@ -30,3 +30,27 @@ async def test_run_scan_cycle_raises_on_error_event():
     with pytest.raises(RuntimeError, match="Схема колонок Ads Manager изменилась"):
         async for _event in client.run_scan_cycle():
             pass
+
+
+# Проверяем, что navigate идет через BrowserSessionService, а не через ScannerService.
+@pytest.mark.asyncio
+async def test_navigate_uses_browser_session_stub():
+    called_requests = []
+
+    async def browser_navigate(request):
+        called_requests.append(request)
+
+    async def scanner_navigate(_request):
+        raise AssertionError("navigate не должен вызывать ScannerService")
+
+    client = BrowserAgentClient(BrowserAgentConfig())
+    client._browser_stub = SimpleNamespace(Navigate=browser_navigate)
+    client._scanner_stub = SimpleNamespace(Navigate=scanner_navigate)
+    client._session_id = "session-1"
+
+    await client.navigate("https://example.com/", wait_until="load")
+
+    assert len(called_requests) == 1
+    assert called_requests[0].session_id == "session-1"
+    assert called_requests[0].url == "https://example.com/"
+    assert called_requests[0].wait_until == "load"

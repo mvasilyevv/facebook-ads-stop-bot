@@ -304,3 +304,55 @@ async def test_reconcile_incidents_creates_auto_task_after_failed():
     assert created_flag["called"], (
         "reconciler должен создать auto-задачу для активного объявления без задач"
     )
+
+
+# Проверяем, что ручная отмена disable-задачи блокирует тихий автоповтор того же incident.
+@pytest.mark.asyncio
+async def test_reconcile_incidents_skips_cancelled_incident():
+    from unittest.mock import patch
+
+    now = datetime.now(UTC)
+
+    snapshot = FakeSnapshot(delivery_status="ACTIVE", alert_state=AlertState.CLAIMED)
+    snapshot.ad_id = "ad-uuid-001"
+    snapshot.id = "snap-uuid-001"
+    snapshot.fb_ad_id = "ad-001"
+    snapshot.open_state_token = "incident-key-001"
+    snapshot.current_stage = None
+    snapshot.fb_ad = None
+
+    latest_task = FakeTask(status=DisableTaskStatus.CANCELLED)
+    session = AsyncMock()
+    session.scalar = AsyncMock(
+        side_effect=[
+            now,
+            0,
+            0,
+            1,
+            latest_task,
+        ]
+    )
+    snapshots_result = MagicMock()
+    snapshots_result.scalars.return_value.all.return_value = [snapshot]
+    session.execute = AsyncMock(return_value=snapshots_result)
+
+    from core.observer import disable_reconciler
+
+    create_mock = AsyncMock(return_value=True)
+    with (
+        patch.object(disable_reconciler, "get_session_factory") as mock_factory,
+        patch.object(
+            disable_reconciler,
+            "_create_auto_disable_task_for_snapshot",
+            create_mock,
+        ),
+    ):
+        mock_cm = AsyncMock()
+        mock_cm.__aenter__ = AsyncMock(return_value=session)
+        mock_cm.__aexit__ = AsyncMock(return_value=False)
+        mock_factory.return_value.return_value = mock_cm
+
+        alerts = await disable_reconciler.reconcile_disable_incidents_after_scan()
+
+    assert alerts == []
+    create_mock.assert_not_awaited()

@@ -2,15 +2,28 @@ import { useEffect, useMemo, useState } from 'react';
 import { getOfferRules, getOffers } from '../../api.js';
 import { fmtMoney, getObserverStepThresholds, OBSERVER_STEP_CONFIGS, roundMoney } from './settingsUtils.js';
 
-/** Таблица порогов по офферам — разворачивается по клику */
+function getStepAmount(row, stepId, kind) {
+  return row?.[`${stepId}${kind}`] ?? null;
+}
+
+function formatMoneyRange(values) {
+  const clean = values.filter((value) => Number.isFinite(value));
+  if (clean.length === 0) return '—';
+  const min = Math.min(...clean);
+  const max = Math.max(...clean);
+  if (min === max) return fmtMoney(min);
+  return `${fmtMoney(min)}–${fmtMoney(max)}`;
+}
+
+/** Сводка порогов по офферам с подробной таблицей под раскрытием */
 export function WarningBreakdown({ observer }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [open, setOpen] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [error, setError] = useState('');
 
   useEffect(() => {
-    if (!open) return undefined;
-    setLoading(true);
+    let alive = true;
     getOffers()
       .then(async (offers) => {
         const active = (Array.isArray(offers) ? offers : []).filter((o) => o.is_active);
@@ -24,11 +37,21 @@ export function WarningBreakdown({ observer }) {
             }
           }),
         );
-        setRows(results);
+        if (alive) setRows(results);
       })
-      .catch(() => setRows([]))
-      .finally(() => setLoading(false));
-  }, [open]);
+      .catch(() => {
+        if (!alive) return;
+        setRows([]);
+        setError('Не удалось загрузить офферы для расчёта порогов');
+      })
+      .finally(() => {
+        if (alive) setLoading(false);
+      });
+
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   const thresholdsByStep = useMemo(
     () => Object.fromEntries(OBSERVER_STEP_CONFIGS.map((step) => [step.id, getObserverStepThresholds(observer, step)])),
@@ -62,26 +85,85 @@ export function WarningBreakdown({ observer }) {
     };
   }), [rows, thresholdsByStep]);
 
-  return (
-    <div className="mt-4">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-2 text-sm font-medium text-secondary hover:text-primary"
-      >
-        <span className="text-2xs">{open ? '▼' : '▶'}</span>
-        Разбивка порогов по офферам
-      </button>
+  const summaries = useMemo(() => OBSERVER_STEP_CONFIGS.map((step) => {
+    const activeRows = computed.filter((row) => row.enabled[step.id]);
+    return {
+      ...step,
+      activeCount: activeRows.length,
+      stopRange: formatMoneyRange(activeRows.map((row) => getStepAmount(row, step.id, 'Stop'))),
+      warnRange: formatMoneyRange(activeRows.map((row) => getStepAmount(row, step.id, 'Warn'))),
+    };
+  }), [computed]);
 
-      {open && (
-        <div className="mt-3">
-          {open && <p className="mb-2 text-2xs text-muted">Порог считается с точностью до цента.</p>}
-          {loading ? (
-            <div className="py-4 text-center text-sm text-muted">Загрузка офферов...</div>
-          ) : computed.length === 0 ? (
-            <div className="py-4 text-center text-sm text-muted">Нет активных офферов</div>
-          ) : (
-            <div className="overflow-x-auto">
+  return (
+    <div className="mb-4 rounded-md border border-border bg-elevated/40 p-4">
+      <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <h4 className="text-sm font-semibold text-primary">Суммы отключения по офферам</h4>
+          <p className="mt-1 text-2xs text-muted">
+            Значения пересчитываются сразу от текущих процентов CPC/CPL/CPR. Порог считается с точностью до цента.
+          </p>
+        </div>
+        {!loading && !error && (
+          <span className="rounded-md bg-surface px-2 py-1 text-2xs font-medium text-secondary">
+            {computed.length} активн.
+          </span>
+        )}
+      </div>
+
+      {loading ? (
+        <div className="grid gap-3 md:grid-cols-3">
+          {OBSERVER_STEP_CONFIGS.map((step) => (
+            <div key={step.id} className="h-24 animate-pulse rounded-md bg-surface" />
+          ))}
+        </div>
+      ) : error ? (
+        <div className="rounded-md border border-danger/25 bg-danger-muted px-3 py-2 text-sm text-danger">
+          {error}
+        </div>
+      ) : computed.length === 0 ? (
+        <div className="rounded-md border border-border bg-surface px-3 py-4 text-center text-sm text-muted">
+          Нет активных офферов
+        </div>
+      ) : (
+        <>
+          <div className="grid gap-3 md:grid-cols-3">
+            {summaries.map((summary) => (
+              <div key={summary.id} className="rounded-md border border-border bg-surface px-3 py-3">
+                <div className="mb-3 flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <span className="rounded bg-accent-muted px-2 py-0.5 font-mono text-2xs font-bold text-accent">
+                      {summary.code}
+                    </span>
+                    <span className="text-xs font-medium text-primary">{summary.title}</span>
+                  </div>
+                  <span className="text-2xs text-muted">{summary.activeCount} правил</span>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <div className="text-[10px] font-semibold uppercase tracking-wider text-muted">Стоп</div>
+                    <div className="mt-1 font-mono text-sm font-semibold text-danger">{summary.stopRange}</div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] font-semibold uppercase tracking-wider text-muted">Предупр.</div>
+                    <div className="mt-1 font-mono text-sm font-semibold text-warning">{summary.warnRange}</div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setDetailsOpen((v) => !v)}
+            className="mt-3 flex items-center gap-2 text-sm font-medium text-secondary hover:text-primary"
+          >
+            <span className="text-2xs">{detailsOpen ? '▼' : '▶'}</span>
+            {detailsOpen ? 'Скрыть таблицу по офферам' : 'Показать таблицу по офферам'}
+          </button>
+
+          {detailsOpen && (
+            <div className="mt-3 overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-border">
@@ -114,7 +196,7 @@ export function WarningBreakdown({ observer }) {
               </table>
             </div>
           )}
-        </div>
+        </>
       )}
     </div>
   );

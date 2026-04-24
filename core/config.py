@@ -61,6 +61,7 @@ class Settings(BaseSettings):
     vision_x_token: str = ""
     vision_api_url: str = "http://127.0.0.1:3030"
     vision_profile_id: str = ""
+    vision_auto_restart_on_missing_cdp: bool = True
 
     # --- Sentry (опционально) ---
     sentry_dsn: str = ""

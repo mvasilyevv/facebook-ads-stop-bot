@@ -15,7 +15,7 @@ Inline-кнопки:
   - Главное меню с динамическими счётчиками алертов
   - Список объявлений: кнопка на каждое → детальный вид
   - Детали: Отключить / Включить (сброс) / В обработке
-  - Отключить всех с алертами → экран подтверждения
+  - Отключить все стоп-сигналы → экран подтверждения
   - "Отключить" на алертах из renderer.py (legacy, сохранён)
 """
 
@@ -505,7 +505,7 @@ def _ads_keyboard(
 
     # Действия
     if has_alerts:
-        rows.append([{"text": "🛑 Отключить всех с алертами", "callback_data": "ads:disable_all"}])
+        rows.append([{"text": "🛑 Отключить все стоп-сигналы", "callback_data": "ads:disable_all"}])
     rows.append([{"text": "◀️ CONTROL", "callback_data": "cmd:start"}])
 
     return {"inline_keyboard": rows}
@@ -1002,22 +1002,17 @@ async def _ack_disable_task_messages(
 
 
 async def _render_disable_all_confirm() -> tuple[str, dict]:
-    """Экран подтверждения массового отключения объявлений с алертами."""
+    """Экран подтверждения массового отключения объявлений со стоп-сигналом."""
     factory = get_session_factory()
     async with factory() as session:
         last_scan, batch_start = await _load_current_live_batch_bounds(session)
         if last_scan is None or batch_start is None:
-            return "✅ Нет объявлений с алертами для отключения", _back_button()
+            return "✅ Нет объявлений со стоп-сигналом для отключения", _back_button()
         result = await session.execute(
             select(AdSnapshot)
             .options(*_snapshot_joinedload_options())
             .where(
-                AdSnapshot.alert_state.in_(
-                    [
-                        AlertState.WARNING_SENT,
-                        AlertState.STOP_SENT,
-                    ]
-                ),
+                AdSnapshot.alert_state == AlertState.STOP_SENT,
                 AdSnapshot.last_observed_at >= batch_start,
             )
             .order_by(AdSnapshot.spend.desc())
@@ -1025,12 +1020,11 @@ async def _render_disable_all_confirm() -> tuple[str, dict]:
         ads = result.scalars().unique().all()
 
     if not ads:
-        text = "✅ Нет объявлений с алертами для отключения"
+        text = "✅ Нет объявлений со стоп-сигналом для отключения"
         return text, _back_button()
 
     lines = [
-        f"🛑 <b>Отключить все объявления с активными сигналами?</b>\n\n"
-        f"Будет создано {len(ads)} задач:\n"
+        f"🛑 <b>Отключить все объявления со стоп-сигналом?</b>\n\nБудет создано {len(ads)} задач:\n"
     ]
     for ad in ads[:10]:
         icon = _STATE_ICONS.get(ad.alert_state, "")
@@ -2028,7 +2022,7 @@ async def _reset_ad_state(fb_ad_id: str) -> str | None:
 
 
 async def _execute_disable_all(*, tg_user_id: str, username: str) -> tuple[int, int]:
-    """Создаёт DisableTask для всех объявлений с алертами в одной сессии.
+    """Создаёт DisableTask для всех объявлений со стоп-сигналом в одной сессии.
 
     Returns:
         (успешно создано, пропущено)
@@ -2042,12 +2036,7 @@ async def _execute_disable_all(*, tg_user_id: str, username: str) -> tuple[int, 
             select(AdSnapshot)
             .options(*_snapshot_joinedload_options())
             .where(
-                AdSnapshot.alert_state.in_(
-                    [
-                        AlertState.WARNING_SENT,
-                        AlertState.STOP_SENT,
-                    ]
-                ),
+                AdSnapshot.alert_state == AlertState.STOP_SENT,
                 AdSnapshot.last_observed_at >= batch_start,
             )
         )

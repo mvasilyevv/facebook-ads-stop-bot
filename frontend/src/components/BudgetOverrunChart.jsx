@@ -47,7 +47,7 @@ export function BudgetOverrunChart({ data = [] }) {
           const isOver = row.delta > 0;
 
           return (
-            <div key={i} className="rounded-md px-3 py-2 hover:bg-surface-hover transition-colors">
+            <div key={i} className="rounded-md px-3 py-2 hover:bg-elevated/60 transition-colors">
               {/* Строка 1: название + бейдж */}
               <div className="flex items-center justify-between mb-1.5">
                 <span

@@ -119,13 +119,13 @@ export async function copyTextToClipboard(text) {
 export function getTelegramPollerStatusMeta(status) {
   const normalized = String(status || 'OFFLINE').toUpperCase();
   if (normalized === 'ONLINE') {
-    return { label: 'Онлайн', color: 'var(--accent-green)' };
+    return { label: 'Онлайн', color: '#10B981' };
   }
   if (normalized === 'WAITING_AUTHORIZATION') {
-    return { label: 'Ждёт авторизацию', color: 'var(--accent-orange)' };
+    return { label: 'Ждёт авторизацию', color: '#F59E0B' };
   }
   if (normalized === 'WAITING_BOT_TOKEN') {
-    return { label: 'Ждёт токен бота', color: 'var(--accent-orange)' };
+    return { label: 'Ждёт токен бота', color: '#F59E0B' };
   }
-  return { label: 'Оффлайн', color: 'var(--accent-red)' };
+  return { label: 'Оффлайн', color: '#EF4444' };
 }

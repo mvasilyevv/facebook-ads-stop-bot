@@ -51,6 +51,7 @@ class ObserverSettingsSchema(BaseModel):
     cpr_warning_percent_of_stop: Decimal | None = Field(default=None, ge=0, le=100)
     cpr_stop_percent_of_base: Decimal | None = Field(default=None, gt=0)
     is_scanning_enabled: bool = True
+    auto_enable_recommendations: bool = False
 
 
 class ScanningToggleSchema(BaseModel):
@@ -144,6 +145,7 @@ class VisionSettingsSchema(BaseModel):
     x_token: str = ""  # маскируется при GET
     profile_id: str = ""
     has_token: bool = False
+    auto_restart_on_missing_cdp: bool = True
 
 
 class VisionSettingsUpdateSchema(BaseModel):

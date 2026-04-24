@@ -176,7 +176,21 @@ export default function NamingTrackerPage() {
               Найдено паттернов: {totalPatterns}
             </span>
           </div>
-          <div className="overflow-x-auto">
+          <div className="grid gap-2 p-3 md:hidden">
+            {sorted.map((group) => {
+              const rowKey = `${group.prefix}::${group.offer_code}`;
+              const isExpanded = expandedRows.has(rowKey);
+              return (
+                <PatternCard
+                  key={`${rowKey}:${group.max_number}`}
+                  group={group}
+                  isExpanded={isExpanded}
+                  onToggle={() => toggleRow(group.prefix, group.offer_code)}
+                />
+              );
+            })}
+          </div>
+          <div className="hidden overflow-x-auto md:block">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border text-left text-xs text-muted">
@@ -212,16 +226,11 @@ export default function NamingTrackerPage() {
                 {sorted.map((group) => {
                   const rowKey = `${group.prefix}::${group.offer_code}`;
                   const isExpanded = expandedRows.has(rowKey);
-                  const nextNumber = String(group.max_number + 1).padStart(
-                    String(group.max_number).length >= 3 ? String(group.max_number).length : 3,
-                    '0'
-                  );
                   return (
                     <PatternRow
-                      key={rowKey}
+                      key={`${rowKey}:${group.max_number}`}
                       group={group}
                       isExpanded={isExpanded}
-                      nextNumber={nextNumber}
                       onToggle={() => toggleRow(group.prefix, group.offer_code)}
                     />
                   );
@@ -235,15 +244,70 @@ export default function NamingTrackerPage() {
   );
 }
 
-/* Строка таблицы с раскрывающимися деталями */
-function PatternRow({ group, isExpanded, nextNumber, onToggle }) {
+/* Мобильная карточка паттерна с тем же копированием следующего номера */
+function PatternCard({ group, isExpanded, onToggle }) {
   const [increment, setIncrement] = useState(0);
   const [copied, setCopied] = useState(false);
 
-  /* Сброс инкремента при обновлении данных */
-  useEffect(() => {
-    setIncrement(0);
-  }, [group.max_number]);
+  const baseNumber = group.max_number + 1;
+  const currentNumber = baseNumber + increment;
+  const padLen = Math.max(String(group.max_number).length, 3);
+  const displayNumber = String(currentNumber).padStart(padLen, '0');
+  const fullName = `${group.prefix}${displayNumber}`;
+
+  const handleCopy = (e) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(fullName).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    });
+    setIncrement((prev) => prev + 1);
+  };
+
+  return (
+    <div className="rounded-md border border-border bg-elevated/35 px-3 py-2.5">
+      <button type="button" className="w-full text-left" onClick={onToggle}>
+        <div className="mb-2 flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="truncate font-mono text-sm font-semibold text-primary">{group.prefix}</div>
+            <div className="mt-1 flex items-center gap-2 text-2xs text-muted">
+              <span>{group.offer_code || '—'}</span>
+              <span>№ {group.max_number}</span>
+              <span>{group.total_count} шт.</span>
+            </div>
+          </div>
+          <span className={`text-muted transition-transform ${isExpanded ? 'rotate-90' : ''}`}>▶</span>
+        </div>
+      </button>
+      <div className="flex items-center gap-2">
+        <span className="min-w-0 flex-1 truncate font-mono text-sm font-medium text-success">{fullName}</span>
+        <button
+          className={`rounded px-2 py-1 text-2xs font-medium transition-colors ${
+            copied ? 'bg-success/20 text-success' : 'bg-accent/10 text-accent hover:bg-accent/20'
+          }`}
+          onClick={handleCopy}
+        >
+          {copied ? 'Скопировано' : 'Копировать'}
+        </button>
+      </div>
+      {isExpanded && group.recent_ads?.length > 0 && (
+        <div className="mt-3 space-y-1 border-t border-border pt-2">
+          {group.recent_ads.map((ad) => (
+            <div key={ad.fb_ad_id} className="min-w-0 text-2xs">
+              <div className="truncate font-mono text-primary">{ad.ad_name}</div>
+              <div className="font-mono text-muted">{ad.fb_ad_id}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* Строка таблицы с раскрывающимися деталями */
+function PatternRow({ group, isExpanded, onToggle }) {
+  const [increment, setIncrement] = useState(0);
+  const [copied, setCopied] = useState(false);
 
   const baseNumber = group.max_number + 1;
   const currentNumber = baseNumber + increment;

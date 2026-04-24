@@ -38,6 +38,7 @@ async def test_update_observer_settings_persists_step_thresholds(mock_db):
         cpl_stop_percent_of_base=Decimal("100"),
         cpr_warning_percent_of_stop=Decimal("80"),
         cpr_stop_percent_of_base=Decimal("100"),
+        auto_enable_recommendations=False,
     )
     result = MagicMock()
     result.scalar_one_or_none.return_value = row
@@ -68,6 +69,101 @@ async def test_update_observer_settings_persists_step_thresholds(mock_db):
     assert response.cpl_stop_percent_of_base == Decimal("70")
     assert response.cpr_stop_percent_of_base == Decimal("60")
     mock_db.commit.assert_awaited_once()
+
+
+# Проверяем, что GET /settings/observer возвращает фактический флаг авто-включения.
+@pytest.mark.asyncio
+async def test_get_observer_settings_returns_auto_enable_flag(mock_db):
+    from apps.api.routers.settings import get_observer_settings
+
+    row = SimpleNamespace(
+        is_scanning_enabled=True,
+        warning_percent_of_stop=Decimal("80"),
+        stop_percent_of_base=Decimal("100"),
+        cpc_warning_percent_of_stop=Decimal("75"),
+        cpc_stop_percent_of_base=Decimal("95"),
+        cpl_warning_percent_of_stop=Decimal("70"),
+        cpl_stop_percent_of_base=Decimal("90"),
+        cpr_warning_percent_of_stop=Decimal("65"),
+        cpr_stop_percent_of_base=Decimal("85"),
+        auto_enable_recommendations=True,
+    )
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = row
+    mock_db.execute = AsyncMock(return_value=result)
+
+    response = await get_observer_settings(db=mock_db)
+
+    assert response.auto_enable_recommendations is True
+
+
+# Проверяем, что PUT /settings/observer сохраняет явно переданный флаг авто-включения и возвращает его обратно.
+@pytest.mark.asyncio
+async def test_update_observer_settings_round_trips_auto_enable_flag(mock_db):
+    from apps.api.routers.settings import update_observer_settings
+    from apps.api.schemas import ObserverSettingsSchema
+
+    row = SimpleNamespace(
+        singleton_key="default",
+        interval_seconds=90,
+        jitter_seconds=10,
+        is_scanning_enabled=True,
+        warning_percent_of_stop=Decimal("80"),
+        stop_percent_of_base=Decimal("100"),
+        cpc_warning_percent_of_stop=Decimal("80"),
+        cpc_stop_percent_of_base=Decimal("100"),
+        cpl_warning_percent_of_stop=Decimal("80"),
+        cpl_stop_percent_of_base=Decimal("100"),
+        cpr_warning_percent_of_stop=Decimal("80"),
+        cpr_stop_percent_of_base=Decimal("100"),
+        auto_enable_recommendations=False,
+    )
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = row
+    mock_db.execute = AsyncMock(return_value=result)
+
+    response = await update_observer_settings(
+        ObserverSettingsSchema(auto_enable_recommendations=True),
+        db=mock_db,
+    )
+
+    assert row.auto_enable_recommendations is True
+    assert response.auto_enable_recommendations is True
+    mock_db.commit.assert_awaited_once()
+
+
+# Проверяем, что PUT /settings/observer не выключает авто-включение, если поле отсутствует в payload.
+@pytest.mark.asyncio
+async def test_update_observer_settings_preserves_auto_enable_when_omitted(mock_db):
+    from apps.api.routers.settings import update_observer_settings
+    from apps.api.schemas import ObserverSettingsSchema
+
+    row = SimpleNamespace(
+        singleton_key="default",
+        interval_seconds=90,
+        jitter_seconds=10,
+        is_scanning_enabled=True,
+        warning_percent_of_stop=Decimal("80"),
+        stop_percent_of_base=Decimal("100"),
+        cpc_warning_percent_of_stop=Decimal("80"),
+        cpc_stop_percent_of_base=Decimal("100"),
+        cpl_warning_percent_of_stop=Decimal("80"),
+        cpl_stop_percent_of_base=Decimal("100"),
+        cpr_warning_percent_of_stop=Decimal("80"),
+        cpr_stop_percent_of_base=Decimal("100"),
+        auto_enable_recommendations=True,
+    )
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = row
+    mock_db.execute = AsyncMock(return_value=result)
+
+    response = await update_observer_settings(
+        ObserverSettingsSchema(stop_percent_of_base=Decimal("90")),
+        db=mock_db,
+    )
+
+    assert row.auto_enable_recommendations is True
+    assert response.auto_enable_recommendations is True
 
 
 # Проверяем, что отрицательный stop_percent_of_base отклоняется валидатором (B9).

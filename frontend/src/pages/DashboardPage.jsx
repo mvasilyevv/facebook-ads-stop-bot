@@ -168,6 +168,14 @@ const THREAT_BADGE = {
   IDLE:      { label: 'Ожидание', color: 'bg-zinc-500/20 text-zinc-400' },
 };
 
+const ANALYTICS_TABS = [
+  { id: 'cpr', label: 'CPR' },
+  { id: 'budget', label: 'Бюджет' },
+  { id: 'campaigns', label: 'Кампании' },
+  { id: 'offers', label: 'Офферы' },
+  { id: 'funnel', label: 'Воронка' },
+];
+
 /** Полоса статуса сканирования */
 function ScanStatusBar({ settings, onToggle, onScanNow, scanning, lastScanAt, observerStatus, observerStatusMessage }) {
   const [secsLeft, setSecsLeft] = useState(null);
@@ -348,6 +356,7 @@ export default function DashboardPage({ onNavigate }) {
   const [togglingAutoEnable, setTogglingAutoEnable] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [healthMapOpen, setHealthMapOpen] = useState(false);
+  const [analyticsView, setAnalyticsView] = useState('cpr');
   // Баг 2: useRef для таймера polling — cleanup всегда ловит актуальный timerId
   const scanTimerRef = useRef(null);
 
@@ -684,36 +693,55 @@ export default function DashboardPage({ onNavigate }) {
 
       {/* ЗОНА 3: Аналитика кампаний */}
       <hr className="border-border/40 my-1" />
-      <p className="text-[10px] font-semibold uppercase tracking-widest text-muted/50 mb-2">Аналитика кампаний</p>
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <p className="text-[10px] font-semibold uppercase tracking-widest text-muted/70">Аналитика кампаний</p>
+        <div className="flex gap-1 rounded-md bg-elevated p-1">
+          {ANALYTICS_TABS.map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              className={`rounded px-2.5 py-1 text-2xs font-medium transition-colors ${
+                analyticsView === tab.id
+                  ? 'bg-surface text-primary'
+                  : 'text-secondary hover:text-primary'
+              }`}
+              onClick={() => setAnalyticsView(tab.id)}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+      </div>
 
-      <div className="space-y-md">
-
-        {/* CPR по кампаниям */}
+      {analyticsView === 'cpr' && (
         <div className="panel p-4">
           <CampaignComparativeBars data={performance?.campaigns ?? []} />
         </div>
+      )}
 
-        {/* Бюджет + Кампании */}
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-md">
-          <div className="panel p-4">
-            <BudgetOverrunChart data={chartData?.campaign_budget_deltas ?? []} />
-          </div>
-          <div className="panel p-4">
-            <CampaignBreakdownTable data={performance?.campaigns ?? []} />
-          </div>
+      {analyticsView === 'budget' && (
+        <div className="panel p-4">
+          <BudgetOverrunChart data={chartData?.campaign_budget_deltas ?? []} />
         </div>
+      )}
 
-        {/* Офферы */}
+      {analyticsView === 'campaigns' && (
+        <div className="panel p-4">
+          <CampaignBreakdownTable data={performance?.campaigns ?? []} />
+        </div>
+      )}
+
+      {analyticsView === 'offers' && (
         <div className="panel p-4">
           <OfferLeaderboard data={performance?.campaigns ?? []} />
         </div>
+      )}
 
-        {/* Воронка */}
+      {analyticsView === 'funnel' && (
         <div className="panel p-4">
           <FunnelChart funnel={performance?.funnel ?? []} />
         </div>
-
-      </div>
+      )}
 
       {/* Состояние системы — collapsible */}
       <div className="panel overflow-hidden">

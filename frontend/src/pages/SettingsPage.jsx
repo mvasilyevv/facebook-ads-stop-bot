@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { ObserverSettingsSection } from '../components/settings/ObserverSettingsSection.jsx';
 import { SettingsToast } from '../components/settings/SettingsToast.jsx';
 import { TelegramSettingsSection } from '../components/settings/TelegramSettingsSection.jsx';
@@ -8,12 +8,9 @@ import { useSettingsData } from '../hooks/useSettingsData.js';
 
 export default function SettingsPage() {
   const isMobile = useIsMobile();
-  const [browserOpen, setBrowserOpen] = useState(() => !isMobile);
+  const [browserOpenOverride, setBrowserOpenOverride] = useState(null);
+  const browserOpen = browserOpenOverride ?? !isMobile;
   const settings = useSettingsData();
-
-  useEffect(() => {
-    if (!isMobile) setBrowserOpen(true);
-  }, [isMobile]);
 
   if (settings.loading) {
     return (
@@ -71,17 +68,14 @@ export default function SettingsPage() {
 
       <VisionSettingsSection
         vision={settings.vision.value}
-        visionProfiles={settings.vision.visionProfiles}
         showVisionToken={settings.vision.showVisionToken}
         onToggleTokenVisibility={() => settings.vision.setShowVisionToken((v) => !v)}
         onVisionChange={settings.vision.setValue}
-        onLoadProfiles={settings.vision.loadProfiles}
-        profilesLoading={settings.vision.profilesLoading}
         onSave={settings.vision.save}
         onReconnect={settings.vision.reconnect}
         saving={settings.saving}
         browserOpen={browserOpen}
-        onToggleBrowserOpen={() => setBrowserOpen((v) => !v)}
+        onToggleBrowserOpen={() => setBrowserOpenOverride((v) => !(v ?? !isMobile))}
       />
 
       {settings.toast && (

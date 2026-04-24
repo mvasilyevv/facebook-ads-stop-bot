@@ -4,6 +4,11 @@ exports.refreshTable = refreshTable;
 exports.parseAdsFromPage = parseAdsFromPage;
 exports.waitForParsedAdsRows = waitForParsedAdsRows;
 exports.detectLogicalDeliveryStatus = detectLogicalDeliveryStatus;
+exports.parseIntValue = parseIntValue;
+exports.parseMoney = parseMoney;
+exports.parseMoneyOrNull = parseMoneyOrNull;
+exports.parseDecimalOrNull = parseDecimalOrNull;
+exports.normalizeNumericText = normalizeNumericText;
 const ads_columns_js_1 = require("./ads-columns.js");
 const humanizer_js_1 = require("./humanizer.js");
 /** Нажать кнопку «Refresh» в Ads Manager. */
@@ -344,29 +349,73 @@ function detectDeliveryStatus(text) {
     return value;
 }
 function parseIntValue(text) {
-    const value = cleanCell(text);
-    if (!value)
+    const normalized = normalizeNumericText(text);
+    if (!normalized)
         return 0;
-    const match = value.replace(/\s/g, '').match(/-?\d+/);
-    return match ? Number.parseInt(match[0], 10) : 0;
+    return Number.parseInt(normalized, 10) || 0;
 }
 function parseMoney(text) {
-    const match = cleanCell(text).match(/[\d]+[.,]?\d*/);
-    return match ? match[0].replace(',', '.') : '0';
+    return normalizeNumericText(text) ?? '0';
 }
 function parseMoneyOrNull(text) {
     const value = cleanCell(text);
     if (!value || value === '--')
         return null;
-    const match = value.match(/[\d]+[.,]?\d*/);
-    return match ? match[0].replace(',', '.') : null;
+    return normalizeNumericText(value);
 }
 function parseDecimalOrNull(text) {
     const value = cleanCell(text);
     if (!value || value === '--')
         return null;
-    const match = value.match(/[\d]+[.,]?\d*/);
-    return match ? match[0].replace(',', '.') : null;
+    return normalizeNumericText(value);
+}
+function normalizeNumericText(text) {
+    const value = cleanCell(text);
+    if (!value)
+        return null;
+    const token = value
+        .replace(/[\u00a0\u202f]/g, ' ')
+        .match(/-?\d[\d\s.,']*/)?.[0]
+        ?.trim();
+    if (!token)
+        return null;
+    const negative = token.startsWith('-');
+    let raw = token
+        .replace(/-/g, '')
+        .replace(/[\s']/g, '')
+        .replace(/^[.,]+|[.,]+$/g, '');
+    if (!raw || !/\d/.test(raw))
+        return null;
+    const commaIndex = raw.lastIndexOf(',');
+    const dotIndex = raw.lastIndexOf('.');
+    let decimalSeparator = '';
+    if (commaIndex >= 0 && dotIndex >= 0) {
+        decimalSeparator = commaIndex > dotIndex ? ',' : '.';
+    }
+    else if (commaIndex >= 0 || dotIndex >= 0) {
+        const separator = commaIndex >= 0 ? ',' : '.';
+        const parts = raw.split(separator);
+        const fraction = parts[parts.length - 1] || '';
+        const integer = parts.slice(0, -1).join('');
+        if (parts.length === 2 && fraction.length > 0 && fraction.length <= 2) {
+            decimalSeparator = separator;
+        }
+        else if (parts.length === 2 && fraction.length === 3 && integer.length > 3) {
+            decimalSeparator = separator;
+        }
+    }
+    if (decimalSeparator) {
+        const separatorIndex = raw.lastIndexOf(decimalSeparator);
+        const integerPart = raw.slice(0, separatorIndex).replace(/[.,]/g, '');
+        const fractionPart = raw.slice(separatorIndex + 1).replace(/[.,]/g, '');
+        raw = `${integerPart}.${fractionPart}`;
+    }
+    else {
+        raw = raw.replace(/[.,]/g, '');
+    }
+    if (!raw || raw === '.')
+        return null;
+    return `${negative ? '-' : ''}${raw}`;
 }
 function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));

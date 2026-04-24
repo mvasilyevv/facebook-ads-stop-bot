@@ -42,7 +42,7 @@ def format_observer_runtime_message(error: Exception | str | None) -> str | None
         return (
             "Vision запустил профиль без CDP-порта. "
             "Автоперезапуск выключен, поэтому профиль нужно перезапустить вручную "
-            "или явно включить feature flag."
+            "или убрать VISION_AUTO_RESTART_ON_MISSING_CDP=false."
         )
     if "не удалось восстановить cdp-порт автоперезапуском профиля" in lowered:
         return (

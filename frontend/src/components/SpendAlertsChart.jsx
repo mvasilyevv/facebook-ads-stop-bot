@@ -1,58 +1,36 @@
-// Два мини-графика: линия расхода + stacked bar алертов
 import {
-  LineChart, BarChart, Bar, Line, XAxis, YAxis,
+  ComposedChart, Area, Bar, XAxis, YAxis,
   CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from 'recharts';
+import {
+  CHART_COLORS,
+  CHART_SERIES_LABELS,
+  ChartTooltipFrame,
+  TooltipRow,
+  commonAxisProps,
+  monoAxisTick,
+} from './charts/chartTheme.jsx';
 
-// Палитра дизайн-системы
-const COLORS = {
-  spend: '#6366F1',
-  warning: '#F59E0B',
-  stop: '#EF4444',
-  grid: 'rgba(255,255,255,0.06)',
-  axis: '#52525B',
-  tick: '#94A3B8',
-};
-
-const NAMES = {
-  spend: 'Расход',
-  warning: 'Предупреждение',
-  stop: 'Стоп',
-};
-
-function SpendTooltip({ active, payload, label }) {
+function CombinedTooltip({ active, payload, label }) {
   if (!active || !payload?.length) return null;
-  const val = payload[0]?.value;
-  if (!val || Number(val) === 0) return null;
-  return (
-    <div className="rounded-md border border-border bg-surface px-3 py-2 text-sm shadow-lg">
-      <div className="mb-1 font-bold text-primary">{label}</div>
-      <div className="flex items-center gap-2 text-2xs">
-        <span className="inline-block h-2 w-2 flex-shrink-0 rounded-full" style={{ background: COLORS.spend }} />
-        <span className="text-secondary">{NAMES.spend}:</span>
-        <span className="font-mono font-semibold text-primary">${Number(val).toFixed(2)}</span>
-      </div>
-    </div>
-  );
-}
+  const visible = payload.filter((p) => Number(p.value ?? 0) > 0);
+  if (!visible.length) return null;
 
-function AlertsTooltip({ active, payload, label }) {
-  if (!active || !payload?.length) return null;
-  if (payload.every((p) => !p.value || Number(p.value) === 0)) return null;
   return (
-    <div className="rounded-md border border-border bg-surface px-3 py-2 text-sm shadow-lg">
-      <div className="mb-1 font-bold text-primary">{label}</div>
-      {payload.map((p) => {
-        if (!p.value || Number(p.value) === 0) return null;
+    <ChartTooltipFrame label={label}>
+      {visible.map((p) => {
+        const isSpend = p.dataKey === 'spend';
         return (
-          <div key={p.dataKey} className="flex items-center gap-2 text-2xs">
-            <span className="inline-block h-2 w-2 flex-shrink-0 rounded-sm" style={{ background: p.color }} />
-            <span className="text-secondary">{NAMES[p.dataKey] || p.name}:</span>
-            <span className="font-mono font-semibold text-primary">{p.value}</span>
-          </div>
+          <TooltipRow
+            key={p.dataKey}
+            color={p.color || p.stroke || p.fill}
+            marker={isSpend ? 'dot' : 'bar'}
+            name={CHART_SERIES_LABELS[p.dataKey] || p.name}
+            value={isSpend ? `$${Number(p.value).toFixed(2)}` : p.value}
+          />
         );
       })}
-    </div>
+    </ChartTooltipFrame>
   );
 }
 
@@ -69,9 +47,9 @@ export function SpendAlertsChart({ spendData = [], alertsData = [] }) {
     warning: p.warning || 0, stop: p.stop || 0,
   }]));
 
-  const spendChartData = labels.map((label) => ({ label, spend: spendByLabel[label] ?? 0 }));
-  const alertsChartData = labels.map((label) => ({
+  const chartData = labels.map((label) => ({
     label,
+    spend: spendByLabel[label] ?? 0,
     ...(alertsByLabel[label] ?? { warning: 0, stop: 0 }),
   }));
 
@@ -92,62 +70,75 @@ export function SpendAlertsChart({ spendData = [], alertsData = [] }) {
   // Авто-интервал: при ≤12 точках показываем все метки, при большем — каждую 3-ю
   const tickInterval = labels.length <= 12 ? 0 : 3;
 
-  const axisProps = {
-    tick: { fontSize: 11, fill: COLORS.tick },
-    axisLine: { stroke: COLORS.axis },
-    tickLine: false,
-    interval: tickInterval,
-  };
-
   return (
     <div>
-      <h3 className="mb-3 text-2xs font-bold uppercase tracking-widest text-muted">
-        Расход и алерты — сегодня по часам
-      </h3>
-
-      {hasSpend && (
-        <div className="mb-3">
-          <div className="mb-1 text-2xs text-muted">Расход ($)</div>
-          <ResponsiveContainer width="100%" height={130}>
-            <LineChart data={spendChartData} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="0" stroke={COLORS.grid} vertical={false} />
-              <XAxis dataKey="label" {...axisProps} />
-              <YAxis
-                tick={{ fontSize: 11, fill: COLORS.tick, fontFamily: 'JetBrains Mono, monospace' }}
-                axisLine={false}
-                tickLine={false}
-                tickFormatter={(v) => `$${v}`}
-              />
-              <Tooltip content={<SpendTooltip />} />
-              <Line
-                type="monotone"
-                dataKey="spend"
-                stroke={COLORS.spend}
-                strokeWidth={2}
-                dot={false}
-                activeDot={{ r: 4, fill: COLORS.spend }}
-              />
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
-      )}
-
-      {hasAlerts && (
+      <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
         <div>
-          <div className="mb-1 text-2xs text-muted">Алерты</div>
-          <ResponsiveContainer width="100%" height={130}>
-            <BarChart data={alertsChartData} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="0" stroke={COLORS.grid} vertical={false} />
-              <XAxis dataKey="label" {...axisProps} />
-              <YAxis tick={{ fontSize: 11, fill: COLORS.tick }} axisLine={false} tickLine={false} allowDecimals={false} />
-              <Tooltip content={<AlertsTooltip />} />
-              <Legend wrapperStyle={{ fontSize: '12px', color: '#94A3B8', paddingTop: '4px' }} formatter={(v) => NAMES[v] || v} />
-              <Bar dataKey="warning" stackId="a" fill={COLORS.warning} opacity={0.8} />
-              <Bar dataKey="stop" stackId="a" fill={COLORS.stop} radius={[2, 2, 0, 0]} opacity={0.8} />
-            </BarChart>
-          </ResponsiveContainer>
+          <h3 className="text-2xs font-bold uppercase tracking-widest text-muted">
+            Расход и алерты — сегодня по часам
+          </h3>
+          <p className="mt-1 text-2xs text-secondary">
+            Сопоставление расхода и моментов, где появились предупреждения или стопы.
+          </p>
         </div>
-      )}
+      </div>
+
+      <ResponsiveContainer width="100%" height={260}>
+        <ComposedChart data={chartData} margin={{ top: 8, right: 18, left: 0, bottom: 0 }}>
+          <defs>
+            <linearGradient id="spendArea" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={CHART_COLORS.spend} stopOpacity={0.34} />
+              <stop offset="100%" stopColor={CHART_COLORS.spend} stopOpacity={0.02} />
+            </linearGradient>
+          </defs>
+          <CartesianGrid strokeDasharray="0" stroke={CHART_COLORS.grid} vertical={false} />
+          <XAxis
+            dataKey="label"
+            {...commonAxisProps}
+            interval={tickInterval}
+          />
+          <YAxis
+            yAxisId="spend"
+            orientation="left"
+            tick={monoAxisTick}
+            axisLine={false}
+            tickLine={false}
+            tickFormatter={(v) => `$${v}`}
+          />
+          <YAxis
+            yAxisId="alerts"
+            orientation="right"
+            tick={{ fontSize: 11, fill: CHART_COLORS.tick }}
+            axisLine={false}
+            tickLine={false}
+            allowDecimals={false}
+          />
+          <Tooltip content={<CombinedTooltip />} />
+          <Legend
+            verticalAlign="bottom"
+            wrapperStyle={{ fontSize: '12px', color: CHART_COLORS.tick, paddingTop: '8px' }}
+            formatter={(v) => CHART_SERIES_LABELS[v] || v}
+          />
+          {hasSpend && (
+            <Area
+              yAxisId="spend"
+              type="monotone"
+              dataKey="spend"
+              stroke={CHART_COLORS.spend}
+              fill="url(#spendArea)"
+              strokeWidth={2.5}
+              dot={false}
+              activeDot={{ r: 4, fill: CHART_COLORS.spend }}
+            />
+          )}
+          {hasAlerts && (
+            <>
+              <Bar yAxisId="alerts" dataKey="warning" stackId="alerts" fill={CHART_COLORS.warning} radius={[2, 2, 0, 0]} opacity={0.9} />
+              <Bar yAxisId="alerts" dataKey="stop" stackId="alerts" fill={CHART_COLORS.stop} radius={[2, 2, 0, 0]} opacity={0.95} />
+            </>
+          )}
+        </ComposedChart>
+      </ResponsiveContainer>
     </div>
   );
 }

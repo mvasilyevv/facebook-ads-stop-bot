@@ -182,6 +182,17 @@ async def reconcile_disable_incidents_after_scan() -> list[AlertCandidate]:
                 .order_by(DisableTask.updated_at.desc(), DisableTask.created_at.desc())
                 .limit(1)
             )
+            if (
+                latest_task is not None
+                and getattr(latest_task, "status", None) == DisableTaskStatus.CANCELLED
+            ):
+                logger.info(
+                    "Incident reconcile: %s — auto-disable не повторяется, "
+                    "последняя задача по incident %s отменена вручную",
+                    snapshot.fb_ad_id,
+                    incident_key,
+                )
+                continue
 
             if retry_count >= SILENT_DISABLE_INCIDENT_RETRY_LIMIT:
                 # Получаем данные через нормализованную цепочку

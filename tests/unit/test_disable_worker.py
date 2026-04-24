@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -50,6 +51,35 @@ async def test_execute_disable_single_falls_back_to_read_toggle_state(monkeypatc
     assert message == "Клик по выключению выполнен, toggle показал OFF"
     client.read_toggle_state.assert_awaited_once_with("120246285103310334")
     client.toggle_ad.assert_awaited_once_with("120246285103310334", target_state=False)
+
+
+# Проверяем, что disable-flow удерживает общую блокировку браузера.
+@pytest.mark.asyncio
+async def test_execute_disable_single_locked_uses_common_browser_lock(monkeypatch):
+    import run_disable_worker
+
+    lock_calls = []
+
+    @asynccontextmanager
+    async def fake_lock(**kwargs):
+        lock_calls.append(kwargs)
+        yield
+
+    execute = AsyncMock(return_value=(True, "ok"))
+    monkeypatch.setattr(run_disable_worker, "acquire_browser_lock", fake_lock)
+    monkeypatch.setattr(run_disable_worker, "_execute_disable_single", execute)
+
+    result = await run_disable_worker._execute_disable_single_locked(
+        AsyncMock(),
+        "120246285103310334",
+    )
+
+    assert result == (True, "ok")
+    assert lock_calls[0]["owner"] == "disable-worker"
+    assert (
+        lock_calls[0]["timeout_seconds"] == run_disable_worker.DISABLE_BROWSER_LOCK_TIMEOUT_SECONDS
+    )
+    execute.assert_awaited_once()
 
 
 # Проверяем, что cleanup disable worker не останавливает общий Vision-профиль.
@@ -113,7 +143,7 @@ async def test_execute_disable_batch_finishes_already_off_without_verify(monkeyp
 
     assert result == {"task-001": (True, "Объявление уже отключено (aria-checked=false)")}
     client.wait_for_toggle_confirmation.assert_not_awaited()
-    mark_snapshot_disabled.assert_awaited_once_with("120246605325150334", "OFF")
+    mark_snapshot_disabled.assert_not_awaited()
 
 
 # Проверяем, что ошибка execute_disable не теряет задачу — mark_retrying вызывается, задача остаётся в очереди для reconcile

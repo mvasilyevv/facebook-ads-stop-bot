@@ -97,6 +97,9 @@ from core.settings_queries import get_observer_settings as _get_observer_setting
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["dashboard"])
 
+# Сентинел для случая, когда ObserverSettings ещё нет или сутки кабинета не определены.
+_UNKNOWN_CABINET_DAY_STARTED_AT = datetime(1970, 1, 1, tzinfo=UTC)
+
 
 async def _load_ad_context_map(
     db: AsyncSession,
@@ -2725,16 +2728,20 @@ async def get_auto_enable_disabled(db: AsyncSession = Depends(get_db)):
 @router.post("/dashboard/auto-enable-disabled/{fb_ad_id}")
 async def disable_auto_enable(fb_ad_id: str, db: AsyncSession = Depends(get_db)):
     """Отключает авто-включение для конкретного объявления."""
-    from datetime import datetime, timezone
-
     existing = await db.execute(
         select(AdAutoEnableDisabled).where(AdAutoEnableDisabled.fb_ad_id == fb_ad_id)
     )
     if existing.scalar_one_or_none() is None:
+        observer_settings = await _get_observer_settings(db)
+        cabinet_day_started_at = (
+            observer_settings.cabinet_day_started_at
+            if observer_settings and observer_settings.cabinet_day_started_at
+            else _UNKNOWN_CABINET_DAY_STARTED_AT
+        )
         db.add(
             AdAutoEnableDisabled(
                 fb_ad_id=fb_ad_id,
-                cabinet_day_started_at=datetime.now(timezone.utc),
+                cabinet_day_started_at=cabinet_day_started_at,
             )
         )
         await db.commit()

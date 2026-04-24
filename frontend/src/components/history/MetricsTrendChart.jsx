@@ -4,34 +4,33 @@ import {
   LineChart, Line, XAxis, YAxis,
   CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts';
+import {
+  CHART_COLORS,
+  ChartTooltipFrame,
+  TooltipRow,
+  commonAxisProps,
+  monoAxisTick,
+} from '../charts/chartTheme.jsx';
 
 const METRICS = [
-  { key: 'cpl', label: 'CPL', color: '#6366F1' },
-  { key: 'cpr', label: 'CPR', color: '#F59E0B' },
-  { key: 'cpc', label: 'CPC', color: '#22C55E' },
+  { key: 'cpl', label: 'CPL', color: CHART_COLORS.spend },
+  { key: 'cpr', label: 'CPR', color: CHART_COLORS.warning },
+  { key: 'cpc', label: 'CPC', color: CHART_COLORS.success },
 ];
-
-const GRID_COLOR = 'rgba(255,255,255,0.06)';
-const TICK_COLOR = '#94A3B8';
 
 function MetricTooltip({ active, payload, label }) {
   if (!active || !payload?.length) return null;
   return (
-    <div className="rounded-md border border-border bg-surface px-3 py-2.5 text-sm shadow-lg">
-      <div className="mb-1.5 font-bold text-primary">{label}</div>
+    <ChartTooltipFrame label={label}>
       {payload.map((p) => (
-        <div key={p.dataKey} className="flex items-center gap-2 text-2xs">
-          <span
-            className="inline-block h-2 w-2 rounded-full flex-shrink-0"
-            style={{ background: p.color }}
-          />
-          <span className="text-secondary">{p.dataKey.toUpperCase()}:</span>
-          <span className="font-mono font-semibold text-primary">
-            ${Number(p.value).toFixed(2)}
-          </span>
-        </div>
+        <TooltipRow
+          key={p.dataKey}
+          color={p.color}
+          name={p.dataKey.toUpperCase()}
+          value={`$${Number(p.value).toFixed(2)}`}
+        />
       ))}
-    </div>
+    </ChartTooltipFrame>
   );
 }
 
@@ -79,15 +78,13 @@ export default function MetricsTrendChart({ data = [] }) {
       <MetricTabs active={metric} onSelect={setMetric} />
       <ResponsiveContainer width="100%" height={220}>
         <LineChart data={data} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
-          <CartesianGrid strokeDasharray="0" stroke={GRID_COLOR} vertical={false} />
+          <CartesianGrid strokeDasharray="0" stroke={CHART_COLORS.grid} vertical={false} />
           <XAxis
             dataKey="date"
-            tick={{ fontSize: 11, fill: TICK_COLOR }}
-            axisLine={{ stroke: '#52525B' }}
-            tickLine={false}
+            {...commonAxisProps}
           />
           <YAxis
-            tick={{ fontSize: 11, fill: TICK_COLOR, fontFamily: 'JetBrains Mono, monospace' }}
+            tick={monoAxisTick}
             axisLine={false}
             tickLine={false}
             tickFormatter={(v) => `$${v}`}

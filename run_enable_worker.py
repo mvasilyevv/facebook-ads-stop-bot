@@ -14,12 +14,13 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import selectinload
 
 from clients.python_grpc.client import BrowserAgentClient, BrowserAgentConfig
+from core.browser.lock import acquire_browser_lock
 from core.config import get_settings
 from core.crypto import decrypt
 from core.db import get_session_factory
-from core.domain import EnableTaskStatus
+from core.domain import AlertStage, AlertState, DisableTaskStatus, EnableTaskStatus
 from core.enable_tasks import reconcile_enable_tasks
-from core.models import EnableTask, VisionSettings
+from core.models import AdSnapshot, DisableTask, EnableTask, VisionSettings
 from core.sentry import setup_sentry
 from core.task_queue import PostgresTaskQueue
 from core.telegram.client import TelegramBotClient
@@ -43,6 +44,7 @@ ENABLE_CONFIRMATION_TRUE_READS_REQUIRED = 2
 ENABLE_CONFIRMATION_WINDOW_SECONDS = int(sum(ENABLE_CONFIRMATION_POLL_DELAYS_SECONDS))
 ENABLE_BROWSER_TASK_TIMEOUT_SECONDS = 60
 ENABLE_SINGLE_SEARCH_MAX_SCROLL_PASSES = 120
+ENABLE_BROWSER_LOCK_TIMEOUT_SECONDS = 180.0
 
 # Ошибки gRPC, указывающие на потерю соединения с браузером
 _GRPC_CONNECTION_ERROR_MARKERS = (
@@ -147,6 +149,30 @@ async def claim_next_task():
     factory = get_session_factory()
     async with factory() as session:
         now = datetime.now(UTC)
+        disable_count = await session.scalar(
+            select(func.count())
+            .select_from(DisableTask)
+            .where(
+                or_(
+                    DisableTask.status.in_(
+                        (
+                            DisableTaskStatus.PENDING,
+                            DisableTaskStatus.RUNNING,
+                        )
+                    ),
+                    and_(
+                        DisableTask.status == DisableTaskStatus.RETRYING,
+                        DisableTask.next_retry_at <= now,
+                    ),
+                )
+            )
+        )
+        if disable_count:
+            logger.info(
+                "Enable worker: задачи отключения имеют приоритет, включение ждёт освобождения браузера"
+            )
+            return None
+
         recovery_summary = await reconcile_enable_tasks(session, now=now)
         if any(recovery_summary.values()):
             await session.commit()
@@ -165,6 +191,27 @@ async def has_claimable_enable_tasks() -> bool:
     factory = get_session_factory()
     async with factory() as session:
         now = datetime.now(UTC)
+        disable_count = await session.scalar(
+            select(func.count())
+            .select_from(DisableTask)
+            .where(
+                or_(
+                    DisableTask.status.in_(
+                        (
+                            DisableTaskStatus.PENDING,
+                            DisableTaskStatus.RUNNING,
+                        )
+                    ),
+                    and_(
+                        DisableTask.status == DisableTaskStatus.RETRYING,
+                        DisableTask.next_retry_at <= now,
+                    ),
+                )
+            )
+        )
+        if disable_count:
+            return False
+
         recovery_summary = await reconcile_enable_tasks(session, now=now)
         if any(recovery_summary.values()):
             await session.commit()
@@ -255,6 +302,53 @@ async def _execute_enable_single(
         f"{confirm_result.get('message', 'Интерфейс не подтвердил ON')} "
         f"(около {ENABLE_CONFIRMATION_WINDOW_SECONDS} сек)",
     )
+
+
+async def _execute_enable_single_locked(
+    client: BrowserAgentClient,
+    fb_ad_id: str,
+) -> tuple[bool, str]:
+    """Включает объявление, удерживая общий lock браузера на весь flow."""
+    async with acquire_browser_lock(
+        owner="enable-worker",
+        timeout_seconds=ENABLE_BROWSER_LOCK_TIMEOUT_SECONDS,
+    ):
+        return await _execute_enable_single(client, fb_ad_id)
+
+
+async def _cancel_enable_task_if_alert_blocked(task_id) -> str | None:
+    """Отменяет включение, если свежий snapshot снова показывает предупреждение или стоп."""
+    factory = get_session_factory()
+    async with factory() as session:
+        task = await session.scalar(select(EnableTask).where(EnableTask.id == task_id))
+        if task is None:
+            return None
+
+        snapshot = await session.scalar(
+            select(AdSnapshot)
+            .where(AdSnapshot.ad_id == task.ad_id)
+            .order_by(AdSnapshot.last_observed_at.desc(), AdSnapshot.created_at.desc())
+            .limit(1)
+        )
+        if snapshot is None:
+            return None
+
+        blocked_by_stage = snapshot.current_stage in (AlertStage.WARNING, AlertStage.STOP)
+        blocked_by_state = snapshot.alert_state in (
+            AlertState.WARNING_SENT,
+            AlertState.STOP_SENT,
+            AlertState.CLAIMED,
+        )
+        if not blocked_by_stage and not blocked_by_state:
+            return None
+
+        message = "Задача отменена: у объявления снова активен предупреждающий или стоп-сигнал."
+        task.status = EnableTaskStatus.CANCELLED
+        task.completed_at = datetime.now(UTC)
+        task.next_retry_at = None
+        task.last_error = message
+        await session.commit()
+        return message
 
 
 async def mark_succeeded(task_id) -> None:
@@ -412,9 +506,24 @@ async def enable_worker_loop(
                 task.fb_ad.fb_ad_id,
             )
 
+            blocked_message = await _cancel_enable_task_if_alert_blocked(task.id)
+            if blocked_message:
+                logger.warning(
+                    "Enable worker: задача %s для %s отменена перед включением: %s",
+                    task.id,
+                    task.fb_ad.fb_ad_id,
+                    blocked_message,
+                )
+                await _send_enable_task_runtime_update(
+                    task,
+                    status=EnableTaskStatus.CANCELLED.value,
+                    detail=blocked_message,
+                )
+                continue
+
             try:
                 success, message = await asyncio.wait_for(
-                    _execute_enable_single(client, task.fb_ad.fb_ad_id),
+                    _execute_enable_single_locked(client, task.fb_ad.fb_ad_id),
                     timeout=ENABLE_BROWSER_TASK_TIMEOUT_SECONDS,
                 )
             except asyncio.TimeoutError:

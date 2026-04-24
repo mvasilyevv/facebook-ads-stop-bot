@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import pathlib
 import signal
 import sys
 
@@ -12,11 +13,13 @@ from core.config import get_settings
 from core.sentry import setup_sentry
 from core.telegram.bot_handler import handle_update
 from core.telegram.client import TelegramBotClient
-from core.telegram.service import touch_poller_heartbeat
+from core.telegram.service import load_poller_offset, save_poller_offset, touch_poller_heartbeat
+from core.worker_utils import PidFileLock
 
 logger = logging.getLogger(__name__)
 TOKEN_RELOAD_INTERVAL_SECONDS = 30
 ERROR_RETRY_DELAY_SECONDS = 3
+_PID_FILE = pathlib.Path("/tmp/fb_telegram_poller.pid")
 
 # Глобальный флаг для graceful shutdown
 _shutdown_event: asyncio.Event | None = None
@@ -80,12 +83,18 @@ async def poller_runtime_loop(
     *,
     token_loader=_load_bot_token,
     client_factory=TelegramBotClient,
+    offset_loader=load_poller_offset,
+    offset_saver=save_poller_offset,
     reload_interval_seconds: int = TOKEN_RELOAD_INTERVAL_SECONDS,
     shutdown_event: asyncio.Event | None = None,
 ) -> None:
     """Поддерживает живой poller, который ждёт появления токена и безопасно переживает ротацию."""
     stop = shutdown_event or _shutdown_event or asyncio.Event()
-    offset: int | None = None
+    try:
+        offset: int | None = await offset_loader()
+    except Exception:
+        logger.exception("Не удалось загрузить offset Telegram poller-а")
+        offset = None
     current_token = ""
     client: TelegramBotClient | None = None
     waiting_for_token_logged = False
@@ -120,7 +129,10 @@ async def poller_runtime_loop(
                 logger.info("Telegram poller подключён к актуальному bot_token")
 
             try:
-                offset = await _process_updates(client, offset=offset)
+                new_offset = await _process_updates(client, offset=offset)
+                if new_offset != offset:
+                    offset = new_offset
+                    await offset_saver(offset)
                 await touch_poller_heartbeat()
             except asyncio.CancelledError:
                 raise
@@ -153,7 +165,8 @@ async def main() -> None:
     if not settings.telegram_chat_id:
         logger.info("TELEGRAM_CHAT_ID не задан — жду первое сообщение для определения...")
 
-    await poller_runtime_loop(shutdown_event=_shutdown_event)
+    with PidFileLock(_PID_FILE):
+        await poller_runtime_loop(shutdown_event=_shutdown_event)
 
 
 if __name__ == "__main__":
@@ -164,5 +177,8 @@ if __name__ == "__main__":
     )
     try:
         asyncio.run(main())
+    except RuntimeError as exc:
+        logger.error("%s", exc)
+        sys.exit(1)
     except KeyboardInterrupt:
         pass

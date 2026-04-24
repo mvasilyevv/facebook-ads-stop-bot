@@ -364,6 +364,9 @@ async def _save_metric_deltas(
     Returns:
         Количество записанных строк истории.
     """
+    if not ad_id_map:
+        return 0
+
     # Загружаем текущие снэпшоты для сравнения
     fb_ad_ids = [item["fb_ad_id"] for item in snapshot_data]
     result = await session.execute(select(AdSnapshot).where(AdSnapshot.fb_ad_id.in_(fb_ad_ids)))

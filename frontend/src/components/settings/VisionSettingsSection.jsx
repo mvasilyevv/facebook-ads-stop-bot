@@ -1,4 +1,6 @@
-export function VisionSettingsSection({ vision, visionProfiles, showVisionToken, onToggleTokenVisibility, onVisionChange, onLoadProfiles, profilesLoading, onSave, onReconnect, saving, browserOpen, onToggleBrowserOpen }) {
+export function VisionSettingsSection({ vision, showVisionToken, onToggleTokenVisibility, onVisionChange, onSave, onReconnect, saving, browserOpen, onToggleBrowserOpen }) {
+  const autoRecoveryEnabled = Boolean(vision.auto_restart_on_missing_cdp);
+
   return (
     <section aria-label="Настройки браузера" className="panel">
       {/* Заголовок-аккордеон */}
@@ -52,47 +54,62 @@ export function VisionSettingsSection({ vision, visionProfiles, showVisionToken,
             </div>
           </div>
 
-          <div>
-            <label className="mb-1 block text-2xs font-semibold uppercase tracking-wider text-secondary" htmlFor="vision-profile">
-              Профиль браузера
-            </label>
-            <div className="flex gap-2">
-              {visionProfiles.length > 0 ? (
-                <select
-                  id="vision-profile"
-                  className="flex-1 rounded bg-elevated border border-border px-3 py-2 text-sm text-primary"
-                  value={vision.profile_id}
-                  onChange={(e) => onVisionChange({ ...vision, profile_id: e.target.value })}
-                >
-                  <option value="">— Выберите профиль —</option>
-                  {visionProfiles.map((p) => (
-                    <option key={p.profile_id} value={p.profile_id}>
-                      {p.name || p.profile_id}{p.port ? ` (порт ${p.port})` : ''}
-                    </option>
-                  ))}
-                </select>
-              ) : (
-                <input
-                  id="vision-profile"
-                  className="flex-1 rounded bg-elevated border border-border px-3 py-2 text-sm text-primary focus:border-accent focus:ring-1 focus:ring-accent focus:outline-none"
-                  type="text"
-                  placeholder="ID профиля Vision"
-                  value={vision.profile_id}
-                  onChange={(e) => onVisionChange({ ...vision, profile_id: e.target.value })}
-                />
-              )}
-              <button className="btn-secondary whitespace-nowrap" onClick={onLoadProfiles} disabled={profilesLoading}>
-                {profilesLoading ? '...' : 'Загрузить список'}
-              </button>
+          <div className="rounded-md border border-border bg-elevated/40 px-4 py-3">
+            <div className="mb-1 text-2xs font-semibold uppercase tracking-wider text-secondary">
+              Автоподбор профиля
             </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {vision.profile_id ? (
+                <>
+                  <span className="badge-success">выбран</span>
+                  <span className="font-mono text-sm text-primary">{vision.profile_id}</span>
+                </>
+              ) : (
+                <>
+                  <span className="badge-warning">ожидает выбора</span>
+                  <span className="text-sm text-secondary">
+                    Сохраните X-Token: единственный профиль Vision выберется автоматически.
+                  </span>
+                </>
+              )}
+            </div>
+          </div>
+
+          <div
+            className={`rounded-md border px-4 py-3 ${
+              autoRecoveryEnabled
+                ? 'border-success/25 bg-success/10'
+                : 'border-warning/25 bg-warning/10'
+            }`}
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <div className="text-2xs font-semibold uppercase tracking-wider text-secondary">
+                  Автовосстановление CDP
+                </div>
+                <p className="mt-1 text-sm text-primary">
+                  {autoRecoveryEnabled
+                    ? 'Включено: browser-agent сам перезапустит Vision-профиль, если порт CDP не появился.'
+                    : 'Выключено через .env: если Vision зависнет без CDP-порта, потребуется ручной перезапуск профиля.'}
+                </p>
+              </div>
+              <span className={autoRecoveryEnabled ? 'badge-success' : 'badge-warning'}>
+                {autoRecoveryEnabled ? 'авто' : 'ручной режим'}
+              </span>
+            </div>
+            <p className="mt-2 text-2xs text-muted">
+              {autoRecoveryEnabled
+                ? 'Принудительный перезапуск ниже оставлен как запасной сценарий, а не как ежедневное действие.'
+                : 'Автоматический recovery включён по умолчанию. Уберите VISION_AUTO_RESTART_ON_MISSING_CDP=false из .env и перезапустите сервисы.'}
+            </p>
           </div>
 
           <div className="flex flex-wrap gap-2 pt-2">
             <button className="btn-primary" onClick={onSave} disabled={saving === 'vision'}>
-              {saving === 'vision' ? 'Сохранение...' : 'Сохранить'}
+              {saving === 'vision' ? 'Сохранение...' : 'Сохранить настройки'}
             </button>
             <button className="btn-secondary" onClick={onReconnect} disabled={saving === 'reconnect'} title="Перезапуск профиля Vision + переподключение observer">
-              {saving === 'reconnect' ? 'Отправка...' : 'Переподключить браузер'}
+              {saving === 'reconnect' ? 'Отправка...' : 'Принудительный перезапуск'}
             </button>
           </div>
         </div>

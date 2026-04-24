@@ -18,6 +18,7 @@ import { fmt$ as _sharedFmt$, fmtN as _sharedFmtN } from '../utils/formatters.js
 import { formatTime as _sharedFmtTime } from '../utils/timeUtils.js';
 import { useAsyncPolling } from '../hooks/useAsyncPolling.js';
 import { useRefreshOnResume } from '../hooks/useRefreshOnResume.js';
+import { useIsMobile } from '../hooks/useIsMobile.js';
 import { StateIcon } from '../components/StateIcon.jsx';
 import { TopAdsQualityTable } from '../components/TopAdsQualityTable.jsx';
 import { ALERT_STATE_LABELS } from '../constants/alertStates.js';
@@ -808,9 +809,149 @@ function getTableRowActionIcon(ad) {
   return null;
 }
 
+function MobileMetric({ label, value, tone = 'text-primary' }) {
+  return (
+    <div className="rounded-md bg-elevated/55 px-2.5 py-2">
+      <div className="text-[10px] uppercase tracking-wider text-muted">{label}</div>
+      <div className={`mt-0.5 font-mono text-sm font-semibold ${tone}`}>{value}</div>
+    </div>
+  );
+}
+
+const ROW_BORDER = {
+  stop: 'border-l-2 border-l-danger',
+  warning: 'border-l-2 border-l-warning',
+  signal: 'border-l-2 border-l-early',
+  claimed: 'border-l-2 border-l-muted',
+  disabled: 'opacity-60',
+  normal: '',
+};
+
+function AdsMobileList({
+  rows,
+  setTimelineAdId,
+  setFakeDepModal,
+  globalAutoEnable,
+  autoEnableDisabledSet,
+  handleToggleAutoEnable,
+}) {
+  return (
+    <div className="grid gap-3 md:hidden">
+      {rows.map((ad) => {
+        const displayState = getAdDisplayState(ad);
+        const rowState = getTableRowState(ad);
+        const actionIcon = getTableRowActionIcon(ad);
+        const allRules = [
+          ...ad.stop_rule_codes.map((c) => ({ code: c, sev: 'stop' })),
+          ...ad.warning_rule_codes.map((c) => ({ code: c, sev: 'warn' })),
+        ];
+        const depositTone = ad.effective_deposits === 0 && Number(ad.spend) > 0
+          ? 'text-danger'
+          : Number(ad.effective_deposits ?? 0) > 0
+            ? 'text-success'
+            : 'text-primary';
+
+        return (
+          <div
+            key={ad.fb_ad_id}
+            role="button"
+            tabIndex={0}
+            className={`w-full rounded-md border border-border bg-surface px-3 py-3 text-left ${ROW_BORDER[rowState] || ''}`}
+            onClick={() => setTimelineAdId(ad.fb_ad_id)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') setTimelineAdId(ad.fb_ad_id);
+            }}
+          >
+            <div className="mb-3 flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="truncate text-sm font-medium text-primary" title={ad.ad_name}>{ad.ad_name}</div>
+                <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                  {ad.offer_code && (
+                    <span className="rounded-sm bg-accent-muted px-1.5 py-0.5 font-mono text-[10px] font-medium text-accent">
+                      {ad.offer_code}
+                    </span>
+                  )}
+                  {actionIcon && <span className="font-mono text-2xs text-secondary">{actionIcon}</span>}
+                </div>
+              </div>
+              <StateIcon state={displayState} size="sm" />
+            </div>
+
+            <div className="grid grid-cols-4 gap-2">
+              <MobileMetric label="Расход" value={fmt$(ad.spend)} />
+              <MobileMetric label="CPC" value={fmt$(ad.cpc)} />
+              <MobileMetric label="Лиды" value={fmtN(ad.leads)} />
+              <div
+                role="button"
+                tabIndex={0}
+                className="rounded-md bg-elevated/55 px-2.5 py-2"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setFakeDepModal({
+                    fb_ad_id: ad.fb_ad_id,
+                    ad_name: ad.ad_name,
+                    deposits: ad.deposits,
+                    fake_deposits: ad.fake_deposits || 0,
+                  });
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.stopPropagation();
+                    setFakeDepModal({
+                      fb_ad_id: ad.fb_ad_id,
+                      ad_name: ad.ad_name,
+                      deposits: ad.deposits,
+                      fake_deposits: ad.fake_deposits || 0,
+                    });
+                  }
+                }}
+              >
+                <div className="text-[10px] uppercase tracking-wider text-muted">Деп</div>
+                <div className={`mt-0.5 font-mono text-sm font-semibold ${depositTone}`}>
+                  {fmtN(ad.effective_deposits)}
+                  {ad.fake_deposits > 0 && <span className="ml-1 text-[10px] text-warning">+{ad.fake_deposits}</span>}
+                </div>
+              </div>
+            </div>
+
+            {(allRules.length > 0 || globalAutoEnable) && (
+              <div className="mt-3 flex flex-wrap items-center gap-1.5">
+                {allRules.slice(0, 4).map((r) => (
+                  <span key={r.code} className={`rounded-sm px-1.5 py-0.5 text-[10px] font-medium ${r.sev === 'stop' ? 'bg-danger-muted text-danger' : 'bg-warning-muted text-warning'}`}>
+                    {r.code}
+                  </span>
+                ))}
+                {allRules.length > 4 && (
+                  <span className="rounded-sm bg-elevated px-1.5 py-0.5 text-[10px] font-medium text-muted">
+                    +{allRules.length - 4}
+                  </span>
+                )}
+                {globalAutoEnable && (
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    className={`ml-auto rounded-sm px-2 py-1 text-[10px] font-semibold ${autoEnableDisabledSet.has(ad.fb_ad_id) ? 'bg-elevated text-muted' : 'bg-accent-muted text-accent'}`}
+                    onClick={(e) => handleToggleAutoEnable(e, ad.fb_ad_id)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') handleToggleAutoEnable(e, ad.fb_ad_id);
+                    }}
+                  >
+                    {autoEnableDisabledSet.has(ad.fb_ad_id) ? 'Авто OFF' : 'Авто ON'}
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // --- Главный компонент ---
 
 export default function AdsPage({ initialView = 'active', initialState = '', onOpenNaming }) {
+  const isMobile = useIsMobile();
   const [view, setView] = useState(initialView); // 'active' | 'archive' | 'all'
   const [offerFilter, setOfferFilter] = useState('');
   const [stateFilter, setStateFilter] = useState(initialState);
@@ -1060,15 +1201,6 @@ export default function AdsPage({ initialView = 'active', initialState = '', onO
 
   const selectCls = 'rounded bg-elevated border border-border px-3 py-1.5 text-sm text-secondary focus:border-accent focus:outline-none';
 
-  const ROW_BORDER = {
-    stop: 'border-l-2 border-l-danger',
-    warning: 'border-l-2 border-l-warning',
-    signal: 'border-l-2 border-l-early',
-    claimed: 'border-l-2 border-l-muted',
-    disabled: 'opacity-60',
-    normal: '',
-  };
-
   const SEV_BADGE = {
     stop: 'bg-danger-muted text-danger',
     warn: 'bg-warning-muted text-warning',
@@ -1125,7 +1257,7 @@ export default function AdsPage({ initialView = 'active', initialState = '', onO
         </div>
 
         {/* Quick-фильтры */}
-        <div className="ml-auto flex gap-1.5">
+        <div className="flex w-full flex-wrap gap-1.5 sm:ml-auto sm:w-auto">
           {QUICK_FILTERS.map((f) => (
             <button
               key={f.id}
@@ -1187,6 +1319,15 @@ export default function AdsPage({ initialView = 'active', initialState = '', onO
           </div>
           {stateFilter && <div className="mt-1 text-2xs text-muted">Попробуйте сбросить фильтр</div>}
         </div>
+      ) : isMobile ? (
+        <AdsMobileList
+          rows={filtered}
+          setTimelineAdId={setTimelineAdId}
+          setFakeDepModal={setFakeDepModal}
+          globalAutoEnable={globalAutoEnable}
+          autoEnableDisabledSet={autoEnableDisabledSet}
+          handleToggleAutoEnable={handleToggleAutoEnable}
+        />
       ) : (
         <div className="panel overflow-hidden">
           <div className="overflow-x-auto">

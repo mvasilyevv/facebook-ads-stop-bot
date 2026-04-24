@@ -12,12 +12,18 @@ const CDP_READY_WAIT_SECONDS = 20;
 const RECOVERY_STOP_TIMEOUT_SECONDS = 20;
 const RECOVERY_SETTLE_DELAY_MS = 1_000;
 const ADS_MANAGER_URL_MARKERS = ['adsmanager', 'facebook.com/ads'];
-const ENABLED_FLAG_VALUES = new Set(['1', 'true', 'yes', 'on']);
+const DISABLED_FLAG_VALUES = new Set(['0', 'false', 'no', 'off']);
 
 function isAutoRestartOnMissingCdpEnabled(): boolean {
-  return ENABLED_FLAG_VALUES.has(
-    String(process.env.VISION_AUTO_RESTART_ON_MISSING_CDP || '').trim().toLowerCase(),
-  );
+  const rawValue = process.env.VISION_AUTO_RESTART_ON_MISSING_CDP;
+  if (rawValue == null || String(rawValue).trim() === '') {
+    return true;
+  }
+  const normalized = String(rawValue).trim().toLowerCase();
+  if (DISABLED_FLAG_VALUES.has(normalized)) {
+    return false;
+  }
+  return true;
 }
 
 export function isAdsManagerUrl(url: string | null | undefined): boolean {
@@ -329,7 +335,7 @@ function buildMissingCdpRestartDisabledError(profileId: string): Error {
   return new Error(
     `Профиль ${profileId} запущен без CDP-порта. `
     + 'Автоперезапуск профиля для восстановления CDP-порта отключён. '
-    + 'Включите VISION_AUTO_RESTART_ON_MISSING_CDP=true или перезапустите профиль вручную.',
+    + 'Уберите VISION_AUTO_RESTART_ON_MISSING_CDP=false или перезапустите профиль вручную.',
   );
 }
 

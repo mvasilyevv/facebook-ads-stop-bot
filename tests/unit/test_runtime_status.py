@@ -9,13 +9,13 @@ def test_format_runtime_message_for_missing_cdp_with_restart_disabled():
     message = format_observer_runtime_message(
         "Профиль abc запущен без CDP-порта. "
         "Автоперезапуск профиля для восстановления CDP-порта отключён. "
-        "Включите VISION_AUTO_RESTART_ON_MISSING_CDP=true или перезапустите профиль вручную."
+        "Уберите VISION_AUTO_RESTART_ON_MISSING_CDP=false или перезапустите профиль вручную."
     )
 
     assert message == (
         "Vision запустил профиль без CDP-порта. "
         "Автоперезапуск выключен, поэтому профиль нужно перезапустить вручную "
-        "или явно включить feature flag."
+        "или убрать VISION_AUTO_RESTART_ON_MISSING_CDP=false."
     )
 
 

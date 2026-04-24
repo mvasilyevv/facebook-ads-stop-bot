@@ -3,7 +3,6 @@ import LoadingSpinner from './components/LoadingSpinner.jsx';
 
 // Ленивая загрузка страниц — каждая страница загружается только при первом посещении
 const DashboardPage = lazy(() => import('./pages/DashboardPage.jsx'));
-const HealthMapPage = lazy(() => import('./pages/HealthMapPage.jsx'));
 const AdsPage = lazy(() => import('./pages/AdsPage.jsx'));
 const OffersPage = lazy(() => import('./pages/OffersPage.jsx'));
 const SettingsPage = lazy(() => import('./pages/SettingsPage.jsx'));
@@ -112,7 +111,7 @@ export default function App() {
         const url = new URL('http://x' + (path.startsWith('/') ? path : '/' + path));
         setAdsInitialView(url.searchParams.get('view') || 'active');
         setAdsInitialState(url.searchParams.get('state') || '');
-      } catch (_) {
+      } catch {
         /* игнорируем ошибки парсинга URL */
       }
       setCurrentPage('ads');
@@ -135,8 +134,6 @@ export default function App() {
     switch (currentPage) {
       case 'dashboard':
         return <DashboardPage onNavigate={navigate} />;
-      case 'healthmap':
-        return <HealthMapPage />;
       case 'ads':
         return (
           <AdsPage
@@ -266,7 +263,7 @@ export default function App() {
         id="main-content"
         role="main"
       >
-        <div className="mx-auto max-w-content p-md lg:p-lg">
+        <div className="mx-auto max-w-content p-md pt-16 lg:p-lg">
           <ErrorBoundary>
             {/* Suspense показывает спиннер пока чанк страницы загружается */}
             <Suspense fallback={<LoadingSpinner />}>

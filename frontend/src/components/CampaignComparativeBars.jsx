@@ -24,8 +24,8 @@ export function CampaignComparativeBars({ data = [] }) {
     );
   }
 
-  const maxCpr = Math.max(...rows.map((r) => r.cpr));
-  const barWidth = (cpr) => Math.max(4, (1 - (cpr - rows[0].cpr) / (maxCpr - rows[0].cpr + 1)) * 100);
+  const maxCpr = Math.max(...rows.map((r) => r.cpr), 1);
+  const barWidth = (cpr) => Math.max(4, (cpr / maxCpr) * 100);
 
   const barColor = (row) => {
     if (row.deposits > 0) return 'bg-success';
@@ -80,7 +80,7 @@ export function CampaignComparativeBars({ data = [] }) {
         ))}
       </div>
       <div className="mt-2 text-[10px] text-muted">
-        Длина бара — относительная эффективность. Меньше CPR = лучше.
+        Длина бара — фактический CPR. Короче = дешевле регистрация.
       </div>
     </div>
   );

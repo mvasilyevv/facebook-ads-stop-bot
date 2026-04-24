@@ -15,6 +15,7 @@ from apps.api.schemas import (
     VisionSettingsSchema,
     VisionSettingsUpdateSchema,
 )
+from core.config import get_settings
 from core.crypto import decrypt, encrypt
 from core.domain import TelegramUserRole
 from core.models import TelegramRecipient, TelegramSettings, VisionSettings
@@ -30,20 +31,59 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["vision", "telegram"])
 
 
+async def _resolve_single_vision_profile_id(api_url: str, x_token: str) -> str | None:
+    """Возвращает единственный profile_id из Vision, если профиль ровно один."""
+    if not x_token:
+        return None
+
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{api_url.rstrip('/')}/list",
+                headers={"X-Token": x_token},
+            )
+        if resp.status_code != 200:
+            logger.warning("Vision API вернул %s при авто-выборе профиля", resp.status_code)
+            return None
+        data = resp.json()
+    except httpx.RequestError:
+        logger.warning("Не удалось подключиться к Vision API для авто-выбора профиля")
+        return None
+    except ValueError:
+        logger.warning("Vision API вернул некорректный JSON при авто-выборе профиля")
+        return None
+
+    raw = data.get("profiles") if isinstance(data, dict) else data
+    profiles = [
+        item
+        for item in (raw if isinstance(raw, list) else [])
+        if isinstance(item, dict) and item.get("profile_id")
+    ]
+    if len(profiles) != 1:
+        return None
+    return str(profiles[0]["profile_id"])
+
+
 @router.get("/settings/vision", response_model=VisionSettingsSchema)
 async def get_vision_settings(db: AsyncSession = Depends(get_db)):
     """Получить настройки Vision браузера (токен маскируется)."""
+    settings = get_settings()
     result = await db.execute(
         select(VisionSettings).where(VisionSettings.singleton_key == "default")
     )
     row = result.scalar_one_or_none()
     if row is None:
-        return VisionSettingsSchema()
+        return VisionSettingsSchema(
+            auto_restart_on_missing_cdp=settings.vision_auto_restart_on_missing_cdp
+        )
     return VisionSettingsSchema(
         api_url=row.api_url,
         x_token="",  # Никогда не возвращаем расшифрованный токен
         profile_id=row.profile_id,
         has_token=bool(row.x_token_encrypted),
+        auto_restart_on_missing_cdp=settings.vision_auto_restart_on_missing_cdp,
     )
 
 
@@ -52,6 +92,7 @@ async def update_vision_settings(
     body: VisionSettingsUpdateSchema, db: AsyncSession = Depends(get_db)
 ):
     """Обновить настройки Vision браузера."""
+    settings = get_settings()
     result = await db.execute(
         select(VisionSettings).where(VisionSettings.singleton_key == "default")
     )
@@ -62,13 +103,23 @@ async def update_vision_settings(
     row.api_url = body.api_url
     if body.x_token:
         row.x_token_encrypted = encrypt(body.x_token)
-    row.profile_id = body.profile_id
+
+    requested_profile_id = body.profile_id.strip()
+    if requested_profile_id:
+        row.profile_id = requested_profile_id
+    else:
+        x_token = body.x_token or decrypt(row.x_token_encrypted or "")
+        single_profile_id = await _resolve_single_vision_profile_id(row.api_url, x_token)
+        if single_profile_id:
+            row.profile_id = single_profile_id
+
     await db.commit()
     return VisionSettingsSchema(
         api_url=row.api_url,
         x_token="",
         profile_id=row.profile_id,
         has_token=bool(row.x_token_encrypted),
+        auto_restart_on_missing_cdp=settings.vision_auto_restart_on_missing_cdp,
     )
 
 

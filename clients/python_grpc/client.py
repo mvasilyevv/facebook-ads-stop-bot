@@ -170,7 +170,7 @@ class BrowserAgentClient:
 
     async def navigate(self, url: str, wait_until: str = "domcontentloaded") -> None:
         """Перейти на URL."""
-        await self._scanner_stub.Navigate(
+        await self._browser_stub.Navigate(
             browser_session_pb2.NavigateRequest(
                 session_id=self._session_id or "",
                 url=url,

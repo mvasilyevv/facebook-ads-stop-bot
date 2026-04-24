@@ -60,6 +60,7 @@ const DEFAULT_VISION = {
   x_token: '',
   profile_id: '',
   has_token: false,
+  auto_restart_on_missing_cdp: true,
 };
 
 function mergeObserverState(data) {
@@ -125,6 +126,7 @@ function mergeVisionState(data) {
     x_token: '',
     profile_id: data.profile_id || '',
     has_token: data.has_token || false,
+    auto_restart_on_missing_cdp: data.auto_restart_on_missing_cdp ?? true,
   };
 }
 
@@ -302,7 +304,7 @@ export function useSettingsData() {
     } finally {
       setSaving('');
     }
-  }, [observer]);
+  }, [observer, saving]);
 
   const connectTelegram = useCallback(async () => {
     if (!newToken.trim()) return;
@@ -332,7 +334,7 @@ export function useSettingsData() {
     } finally {
       setSaving('');
     }
-  }, [loadTelegramSettings, newToken]);
+  }, [loadRecipients, loadTelegramSettings, newToken]);
 
   const revokeTelegramSettings = useCallback(async () => {
     if (!confirm('Отключить Telegram и очистить привязку? Уведомления перестанут приходить.')) {
@@ -405,7 +407,6 @@ export function useSettingsData() {
     try {
       const result = await createInviteCode();
       const botUsername = normalizeBotUsername(result.bot_username || currentBotUsername);
-      const code = result.code || '';
       setInviteCode({
         ...result,
         bot_username: botUsername,
@@ -427,19 +428,19 @@ export function useSettingsData() {
       await updateVisionSettings({
         api_url: vision.api_url,
         x_token: vision.x_token,
-        profile_id: vision.profile_id,
+        profile_id: '',
       });
       setToast({ message: 'Vision настройки сохранены', type: 'success' });
       const visionData = await getVisionSettings();
       if (visionData && typeof visionData === 'object') {
-        setVision({ ...visionData, x_token: '' });
+        setVision(mergeVisionState(visionData));
       }
     } catch (err) {
       setToast({ message: err.message || 'Ошибка сохранения', type: 'error' });
     } finally {
       setSaving('');
     }
-  }, [vision]);
+  }, [saving, vision]);
 
   const visionReconnectAction = useCallback(async () => {
     setSaving('reconnect');

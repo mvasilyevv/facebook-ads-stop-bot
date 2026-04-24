@@ -87,6 +87,14 @@ def test_frontend_api_routes_are_registered_in_fastapi():
     assert missing == []
 
 
+# Проверяем, что новый маршрут фронтенда проверки колонок и старый серверный маршрут доступны одновременно.
+def test_browser_validate_columns_routes_keep_frontend_and_legacy_paths():
+    backend_routes = _collect_backend_routes()
+
+    assert ("GET", "/api/settings/browser/validate-columns") in backend_routes
+    assert ("GET", "/api/browser/validate-columns") in backend_routes
+
+
 # Проверяем, что после подключения роутеров не появляются пути с двойным префиксом /api/api.
 def test_registered_routes_do_not_have_double_api_prefix():
     backend_routes = _collect_backend_routes()

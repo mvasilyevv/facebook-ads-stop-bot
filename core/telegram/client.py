@@ -10,6 +10,10 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+# INFO-логи httpx/httpcore содержат полный URL Telegram Bot API вместе с токеном.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+
 # Лимит Telegram на длину сообщения
 _TG_MESSAGE_LIMIT = 4096
 
@@ -43,7 +47,7 @@ class TelegramBotClient:
 
     def __init__(self, bot_token: str, http_client: httpx.AsyncClient | None = None) -> None:
         if not bot_token.strip():
-            raise RuntimeError("Не задан Telegram bot token")
+            raise RuntimeError("Не задан токен Telegram-бота")
         self._base = f"https://api.telegram.org/bot{bot_token.strip()}"
         self._http = http_client or httpx.AsyncClient(timeout=30.0)
         self._owns_http_client = http_client is None
@@ -91,7 +95,7 @@ class TelegramBotClient:
 
         # Обработка 429: ждём и повторяем один раз
         wait = self._parse_retry_after(resp)
-        logger.warning("Telegram API rate limit (429) при вызове %s, ожидание %ss", method, wait)
+        logger.warning("Лимит Telegram API (429) при вызове %s, ожидание %s с", method, wait)
         await asyncio.sleep(wait)
 
         try:

@@ -99,7 +99,7 @@ function PipelineNode({ node }) {
   const tone = getToneStyles(node.tone);
   return (
     <div
-      className="flex flex-col gap-2 rounded-2xl border p-4 min-w-[180px] max-w-[220px]"
+      className="flex flex-col gap-2 rounded-md border p-4 min-w-[180px] max-w-[220px]"
       style={{
         borderColor: tone.border,
         background: `linear-gradient(135deg, ${tone.glow}, rgba(10,13,20,0.95))`,
@@ -140,7 +140,7 @@ function PipelineNode({ node }) {
             return (
               <div
                 key={m.label}
-                className="rounded-lg border px-2 py-1"
+                className="rounded-md border px-2 py-1"
                 style={{ borderColor: mt.border, backgroundColor: mt.lineSoft }}
               >
                 <span className="text-[9px] text-muted uppercase">{m.label} </span>
@@ -174,7 +174,7 @@ function PipelineArrow({ tone = 'neutral' }) {
 function PipelineSection({ title, nodeIds, nodeMap }) {
   const nodes = nodeIds.map((id) => nodeMap[id]).filter(Boolean);
   return (
-    <div className="rounded-2xl border border-border/50 bg-black/20 p-4">
+    <div className="rounded-md border border-border bg-surface p-4">
       <p className="text-[11px] font-semibold uppercase tracking-widest text-muted mb-4">{title}</p>
       <div className="flex items-stretch gap-0 overflow-x-auto pb-1">
         {nodes.map((node, i) => (
@@ -197,10 +197,10 @@ const PIPELINE_SECTIONS = [
 function SkeletonPipeline() {
   return (
     <div className="space-y-4">
-      <div className="h-28 animate-pulse rounded-2xl bg-white/5" />
-      <div className="h-40 animate-pulse rounded-2xl bg-white/5" />
-      <div className="h-32 animate-pulse rounded-2xl bg-white/5" />
-      <div className="h-32 animate-pulse rounded-2xl bg-white/5" />
+      <div className="h-28 animate-pulse rounded-md bg-white/5" />
+      <div className="h-40 animate-pulse rounded-md bg-white/5" />
+      <div className="h-32 animate-pulse rounded-md bg-white/5" />
+      <div className="h-32 animate-pulse rounded-md bg-white/5" />
     </div>
   );
 }
@@ -218,8 +218,8 @@ export default function HealthMapPage({ embedded = false }) {
     queryClient.invalidateQueries({ queryKey: ['dashboardHealthMap'] });
   });
 
-  const nodes = data?.nodes || [];
-  const warnings = data?.warnings || [];
+  const nodes = useMemo(() => data?.nodes || [], [data?.nodes]);
+  const warnings = useMemo(() => data?.warnings || [], [data?.warnings]);
   const healthSummary = useMemo(() => summarizeHealth(nodes), [nodes]);
   const nodeMap = useMemo(() => Object.fromEntries(nodes.map((n) => [n.id, n])), [nodes]);
 
@@ -229,7 +229,7 @@ export default function HealthMapPage({ embedded = false }) {
 
   if (error) {
     return (
-      <div className="rounded-2xl border border-danger/30 bg-danger-muted px-5 py-4">
+      <div className="rounded-md border border-danger/30 bg-danger-muted px-5 py-4">
         <p className="text-sm font-semibold text-danger">Не удалось загрузить health map</p>
         <p className="mt-1 text-sm text-danger/80">{error.message}</p>
       </div>
@@ -240,12 +240,7 @@ export default function HealthMapPage({ embedded = false }) {
     <div className={embedded ? 'space-y-4' : 'space-y-md'}>
       {/* Summary панель */}
       <section
-        className="overflow-hidden rounded-[28px] border border-border p-5"
-        style={{
-          background:
-            'radial-gradient(circle at top left, rgba(56, 189, 248, 0.14), rgba(15, 18, 24, 0.94) 32%), radial-gradient(circle at bottom right, rgba(34, 197, 94, 0.08), rgba(15, 18, 24, 0) 30%), rgba(15, 18, 24, 0.96)',
-          boxShadow: '0 28px 70px rgba(8, 12, 18, 0.32)',
-        }}
+        className="overflow-hidden rounded-md border border-border bg-surface p-5"
       >
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="max-w-3xl">
@@ -277,25 +272,25 @@ export default function HealthMapPage({ embedded = false }) {
         </div>
 
         <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-          <div className="rounded-2xl border border-success/20 bg-success/10 px-4 py-3">
+          <div className="rounded-md border border-success/20 bg-success/10 px-4 py-3">
             <p className="text-[11px] uppercase tracking-[0.16em] text-success/80">Стабильно</p>
             <p className="mt-1 text-2xl font-semibold text-success">{healthSummary.success}</p>
           </div>
-          <div className="rounded-2xl border border-warning/20 bg-warning/10 px-4 py-3">
+          <div className="rounded-md border border-warning/20 bg-warning/10 px-4 py-3">
             <p className="text-[11px] uppercase tracking-[0.16em] text-warning/80">Требует внимания</p>
             <p className="mt-1 text-2xl font-semibold text-warning">
               {healthSummary.warning + healthSummary.info}
             </p>
           </div>
-          <div className="rounded-2xl border border-danger/20 bg-danger/10 px-4 py-3">
+          <div className="rounded-md border border-danger/20 bg-danger/10 px-4 py-3">
             <p className="text-[11px] uppercase tracking-[0.16em] text-danger/80">Критично</p>
             <p className="mt-1 text-2xl font-semibold text-danger">{healthSummary.danger}</p>
           </div>
-          <div className="rounded-2xl border border-border bg-white/5 px-4 py-3">
+          <div className="rounded-md border border-border bg-white/5 px-4 py-3">
             <p className="text-[11px] uppercase tracking-[0.16em] text-muted">Узлы</p>
             <p className="mt-1 text-2xl font-semibold text-primary">{nodes.length}</p>
           </div>
-          <div className="rounded-2xl border border-border bg-white/5 px-4 py-3">
+          <div className="rounded-md border border-border bg-white/5 px-4 py-3">
             <p className="text-[11px] uppercase tracking-[0.16em] text-muted">Предупреждения</p>
             <p className="mt-1 text-2xl font-semibold text-primary">{warnings.length}</p>
           </div>
@@ -304,7 +299,7 @@ export default function HealthMapPage({ embedded = false }) {
 
       {/* Warnings секция */}
       {warnings.length > 0 && (
-        <section className="rounded-[24px] border border-warning/25 bg-warning/10 px-5 py-4">
+        <section className="rounded-md border border-warning/25 bg-warning/10 px-5 py-4">
           <div className="flex items-start gap-3">
             <span className="mt-1 inline-flex h-2.5 w-2.5 rounded-full bg-warning animate-pulse" />
             <div className="min-w-0">
@@ -313,7 +308,7 @@ export default function HealthMapPage({ embedded = false }) {
                 {warnings.map((warning) => (
                   <div
                     key={warning}
-                    className="rounded-2xl border border-warning/20 bg-black/10 px-3 py-2.5 text-sm text-warning/90"
+                    className="rounded-md border border-warning/20 bg-black/10 px-3 py-2.5 text-sm text-warning/90"
                   >
                     {warning}
                   </div>

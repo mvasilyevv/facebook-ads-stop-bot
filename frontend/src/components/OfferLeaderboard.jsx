@@ -61,8 +61,7 @@ export function OfferLeaderboard({ data = [] }) {
                 ? 'text-danger'
                 : 'text-muted';
 
-          // Условный ROAS: deposits / spend * 100
-          const roas = o.spend > 0 ? ((o.deposits / o.spend) * 100).toFixed(1) : null;
+          const depositsPer100 = o.spend > 0 ? ((o.deposits / o.spend) * 100).toFixed(1) : null;
 
           return (
             <div
@@ -92,10 +91,10 @@ export function OfferLeaderboard({ data = [] }) {
                 {o.leads}
               </span>
 
-              {/* ROAS */}
-              {roas !== null && (
+              {/* Плотность депозитов на $100 расхода */}
+              {depositsPer100 !== null && (
                 <span className="text-muted ml-auto">
-                  {roas}%
+                  {depositsPer100}
                 </span>
               )}
             </div>
@@ -108,7 +107,7 @@ export function OfferLeaderboard({ data = [] }) {
         <span className="w-16 text-right">Расход</span>
         <span className="w-8 text-right">Деп</span>
         <span className="w-8 text-right">Лиды</span>
-        <span className="ml-auto">ROAS</span>
+        <span className="ml-auto">Деп/$100</span>
       </div>
     </div>
   );

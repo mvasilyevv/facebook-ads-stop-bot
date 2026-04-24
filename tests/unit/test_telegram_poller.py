@@ -67,6 +67,8 @@ async def test_poller_runtime_waits_for_token_and_then_starts_polling():
             await poller_main.poller_runtime_loop(
                 token_loader=token_loader,
                 client_factory=client_factory,
+                offset_loader=AsyncMock(return_value=None),
+                offset_saver=AsyncMock(),
                 reload_interval_seconds=0,
             )
 
@@ -99,6 +101,8 @@ async def test_poller_runtime_rotates_client_when_token_changes():
             await poller_main.poller_runtime_loop(
                 token_loader=token_loader,
                 client_factory=client_factory,
+                offset_loader=AsyncMock(return_value=None),
+                offset_saver=AsyncMock(),
                 reload_interval_seconds=0,
             )
 

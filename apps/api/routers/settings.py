@@ -73,6 +73,7 @@ async def get_observer_settings(db: AsyncSession = Depends(get_db)):
     return ObserverSettingsSchema(
         **threshold_values,
         is_scanning_enabled=row.is_scanning_enabled,
+        auto_enable_recommendations=bool(row.auto_enable_recommendations),
     )
 
 
@@ -93,10 +94,13 @@ async def update_observer_settings(
         )
     apply_observer_threshold_values(row, threshold_values)
     row.is_scanning_enabled = body.is_scanning_enabled
+    if "auto_enable_recommendations" in body.model_fields_set:
+        row.auto_enable_recommendations = body.auto_enable_recommendations
     await db.commit()
     return ObserverSettingsSchema(
         **extract_observer_threshold_values(row),
         is_scanning_enabled=row.is_scanning_enabled,
+        auto_enable_recommendations=bool(row.auto_enable_recommendations),
     )
 
 
@@ -327,7 +331,8 @@ async def restart_observer():
     return {"restarted": True, "old_pid": old_pid, "new_pid": new_pid}
 
 
-@router.get("/browser/validate-columns")
+@router.get("/browser/validate-columns", include_in_schema=False)
+@router.get("/settings/browser/validate-columns")
 async def validate_browser_columns():
     """Проверить наличие всех необходимых колонок в таблице Ads Manager через gRPC."""
     import grpc

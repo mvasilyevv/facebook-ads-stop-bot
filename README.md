@@ -222,6 +222,7 @@ make frontend
 | `VISION_X_TOKEN` | X-Token Vision API | — |
 | `VISION_API_URL` | URL Vision API | `http://127.0.0.1:3030` |
 | `VISION_PROFILE_ID` | ID профиля Vision | — |
+| `VISION_AUTO_RESTART_ON_MISSING_CDP` | Автовосстановление CDP-порта Vision | `true` |
 | `DEFAULT_OBSERVER_INTERVAL_SECONDS` | Интервал сканирования | `90` |
 
 ## Тестирование

@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import ExitStack
+from contextlib import ExitStack, asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
@@ -1472,8 +1472,56 @@ def test_is_browser_connection_error_filters_runtime_errors():
     assert not _is_browser_connection_error(RuntimeError("Сбой Telegram"))
 
 
+# Проверяем, что adaptive wait не теряет строки полного скана при частичном повторном чтении.
+@pytest.mark.asyncio
+async def test_wait_for_data_load_merges_partial_retry_rows():
+    """Повторный poll с нижним фрагментом таблицы должен обновить данные, но сохранить исходные строки."""
+    from apps.observer_worker.main import _wait_for_data_load
+    from clients.python_grpc.client import ScanResult
+
+    initial_rows = [
+        SimpleNamespace(fb_ad_id="ad-1", spend=Decimal("0")),
+        SimpleNamespace(fb_ad_id="ad-2", spend=Decimal("0")),
+    ]
+    retry_rows = [SimpleNamespace(fb_ad_id="ad-2", spend=Decimal("4.25"))]
+
+    class Client:
+        def __init__(self):
+            self.scan_kwargs = None
+
+        def run_scan_cycle(self, **kwargs):
+            self.scan_kwargs = kwargs
+
+            async def _events():
+                yield ScanResult(rows=retry_rows, total_passes=1, duration_seconds=0.1)
+
+            return _events()
+
+    client = Client()
+
+    rows = await _wait_for_data_load(
+        client,
+        prev_had_spend=True,
+        initial_rows=initial_rows,
+    )
+
+    assert [row.fb_ad_id for row in rows] == ["ad-1", "ad-2"]
+    assert rows[0].spend == Decimal("0")
+    assert rows[1].spend == Decimal("4.25")
+    assert client.scan_kwargs["do_refresh"] is False
+    assert client.scan_kwargs["reset_scroll_first"] is True
+
+
 def _patch_observer_loop_runtime(stack: ExitStack, *, scan_side_effect) -> AsyncMock:
     """Изолирует observer_loop от БД и внешних интеграций."""
+
+    @asynccontextmanager
+    async def _noop_browser_lock(**_kwargs):
+        yield SimpleNamespace(waited_seconds=0.0)
+
+    stack.enter_context(
+        patch("apps.observer_worker.main.acquire_browser_lock", new=_noop_browser_lock)
+    )
     stack.enter_context(
         patch("apps.observer_worker.main.load_offers_from_db", new=AsyncMock(return_value={}))
     )
@@ -1514,6 +1562,12 @@ def _patch_observer_loop_runtime(stack: ExitStack, *, scan_side_effect) -> Async
     )
     stack.enter_context(
         patch(
+            "apps.observer_worker.main.reconcile_enable_tasks_in_db",
+            new=AsyncMock(),
+        )
+    )
+    stack.enter_context(
+        patch(
             "apps.observer_worker.main.reconcile_disable_incidents_after_scan",
             new=AsyncMock(return_value=[]),
         )
@@ -1546,6 +1600,12 @@ def _patch_observer_loop_runtime(stack: ExitStack, *, scan_side_effect) -> Async
         patch(
             "apps.observer_worker.main.check_vision_reconnect_flag",
             new=AsyncMock(return_value=False),
+        )
+    )
+    stack.enter_context(
+        patch(
+            "apps.observer_worker.main.load_fake_deposits",
+            new=AsyncMock(return_value={}),
         )
     )
     stack.enter_context(patch("apps.observer_worker.main.batch_save_snapshots", new=AsyncMock()))
@@ -1621,6 +1681,80 @@ async def test_observer_loop_delegates_scan_to_grpc():
 
     # gRPC client должен быть использован
     assert mock_grpc_client.session_id == "test-session"
+
+
+# Проверяем, что observer держит общую блокировку браузера во время scan.
+@pytest.mark.asyncio
+async def test_observer_loop_holds_browser_lock_during_scan():
+    """Сканирование должно выполняться внутри общего lock, а не только после проверки очередей."""
+    from apps.observer_worker.main import observer_loop
+    from clients.python_grpc.client import ScanResult
+
+    shutdown_event = asyncio.Event()
+    lock_state = {"locked": False, "owners": []}
+
+    @asynccontextmanager
+    async def fake_browser_lock(**kwargs):
+        lock_state["locked"] = True
+        lock_state["owners"].append(kwargs.get("owner"))
+        try:
+            yield SimpleNamespace(waited_seconds=0.0)
+        finally:
+            lock_state["locked"] = False
+
+    async def scan_cycle_generator(*_args, **_kwargs):
+        assert lock_state["locked"] is True
+        shutdown_event.set()
+        yield ScanResult(
+            rows=[SimpleNamespace(fb_ad_id="ad-001", spend=Decimal("1.00"))],
+            total_passes=1,
+            duration_seconds=0.0,
+        )
+
+    mock_grpc_client = AsyncMock()
+    mock_grpc_client.session_id = "test-session"
+    mock_grpc_client.run_scan_cycle = scan_cycle_generator
+    mock_grpc_client.validate_columns = AsyncMock(
+        return_value={
+            "valid": True,
+            "missing_columns": [],
+            "found_columns": [],
+            "error_message": "",
+        }
+    )
+
+    with ExitStack() as stack:
+        _patch_observer_loop_runtime(stack, scan_side_effect=AsyncMock(return_value=[]))
+        stack.enter_context(
+            patch("apps.observer_worker.main.acquire_browser_lock", new=fake_browser_lock)
+        )
+        stack.enter_context(
+            patch(
+                "apps.observer_worker.main._run_scan_cycle",
+                new=AsyncMock(return_value=([], [], [])),
+            )
+        )
+        stack.enter_context(
+            patch(
+                "apps.observer_worker.main._process_scan_results",
+                new=AsyncMock(),
+            )
+        )
+        stack.enter_context(
+            patch(
+                "apps.observer_worker.main._wait_for_next_cycle",
+                new=AsyncMock(return_value=False),
+            )
+        )
+        await observer_loop(
+            grpc_client=mock_grpc_client,
+            offers={},
+            telegram_bot_token="",
+            telegram_chat_id="",
+            shutdown_event=shutdown_event,
+        )
+
+    assert lock_state["owners"] == ["observer-scan"]
 
 
 # Проверяем что один пустой scan переводит observer в RECOVERING, но не выключает воркер
@@ -1703,7 +1837,7 @@ async def test_observer_loop_recovers_after_single_empty_scan():
             shutdown_event=shutdown_event,
         )
 
-    assert scan_calls == 3
+    assert scan_calls == 2
     set_scanning_enabled.assert_not_awaited()
     assert any(
         call.kwargs.get("status") == "RECOVERING" and "0 строк" in call.kwargs.get("message", "")

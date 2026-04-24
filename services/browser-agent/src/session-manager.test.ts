@@ -175,11 +175,11 @@ test('startBrowser waits for cdp readiness before connecting', async () => {
   }
 });
 
-// Проверяем, что профиль без CDP-порта не перезапускается без явного feature flag.
-test('startBrowser does not restart missing cdp profile by default', async () => {
+// Проверяем, что профиль без CDP-порта не перезапускается, если recovery явно выключен.
+test('startBrowser does not restart missing cdp profile when auto recovery is disabled', async () => {
   const manager = new SessionManager();
   const previousFlag = process.env.VISION_AUTO_RESTART_ON_MISSING_CDP;
-  delete process.env.VISION_AUTO_RESTART_ON_MISSING_CDP;
+  process.env.VISION_AUTO_RESTART_ON_MISSING_CDP = 'false';
 
   const originalResolveFolderId = VisionClient.prototype.resolveFolderId;
   const originalGetProfile = VisionClient.prototype.getProfile;
@@ -218,6 +218,73 @@ test('startBrowser does not restart missing cdp profile by default', async () =>
     VisionClient.prototype.getProfile = originalGetProfile;
     VisionClient.prototype.waitUntilProfileHasPort = originalWaitUntilProfileHasPort;
     VisionClient.prototype.restartProfileToRecoverPort = originalRestartProfileToRecoverPort;
+  }
+});
+
+// Проверяем, что профиль без CDP-порта перезапускается по умолчанию.
+test('startBrowser restarts missing cdp profile by default', async () => {
+  const manager = new SessionManager();
+  const previousFlag = process.env.VISION_AUTO_RESTART_ON_MISSING_CDP;
+  delete process.env.VISION_AUTO_RESTART_ON_MISSING_CDP;
+
+  const adsPage = { url: () => 'https://www.facebook.com/adsmanager/manage/campaigns' };
+  const browser = {
+    contexts: () => [
+      {
+        addInitScript: async () => {},
+        pages: () => [adsPage],
+      },
+    ],
+  };
+  let restartCalls = 0;
+
+  const originalResolveFolderId = VisionClient.prototype.resolveFolderId;
+  const originalGetProfile = VisionClient.prototype.getProfile;
+  const originalWaitUntilProfileHasPort = VisionClient.prototype.waitUntilProfileHasPort;
+  const originalRestartProfileToRecoverPort = VisionClient.prototype.restartProfileToRecoverPort;
+  const originalWaitUntilCdpReady = VisionClient.prototype.waitUntilCdpReady;
+  const originalConnectOverCDP = chromium.connectOverCDP;
+
+  VisionClient.prototype.resolveFolderId = async function resolveFolderId() {
+    return 'folder-1';
+  };
+  VisionClient.prototype.getProfile = async function getProfile() {
+    return { folder_id: 'folder-1', profile_id: 'profile-1', port: null };
+  };
+  VisionClient.prototype.waitUntilProfileHasPort = async function waitUntilProfileHasPort() {
+    return null;
+  };
+  VisionClient.prototype.restartProfileToRecoverPort = async function restartProfileToRecoverPort() {
+    restartCalls += 1;
+    return { folder_id: 'folder-1', profile_id: 'profile-1', port: 7101 };
+  };
+  VisionClient.prototype.waitUntilCdpReady = async function waitUntilCdpReady() {
+    return true;
+  };
+  (chromium as any).connectOverCDP = async () => browser as any;
+
+  try {
+    const session = await manager.startBrowser({
+      visionXToken: 'token',
+      visionApiUrl: 'http://127.0.0.1:3030',
+      visionProfileId: 'profile-1',
+    });
+
+    assert.equal(restartCalls, 1);
+    assert.equal(session.cdpPort, 7101);
+    assert.equal(session.primaryPage, adsPage as any);
+  } finally {
+    if (previousFlag === undefined) {
+      delete process.env.VISION_AUTO_RESTART_ON_MISSING_CDP;
+    } else {
+      process.env.VISION_AUTO_RESTART_ON_MISSING_CDP = previousFlag;
+    }
+    VisionClient.prototype.resolveFolderId = originalResolveFolderId;
+    VisionClient.prototype.getProfile = originalGetProfile;
+    VisionClient.prototype.waitUntilProfileHasPort = originalWaitUntilProfileHasPort;
+    VisionClient.prototype.restartProfileToRecoverPort = originalRestartProfileToRecoverPort;
+    VisionClient.prototype.waitUntilCdpReady = originalWaitUntilCdpReady;
+    (chromium as any).connectOverCDP = originalConnectOverCDP;
   }
 });
 

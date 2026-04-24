@@ -60,7 +60,7 @@ export default {
         // Текст
         primary: '#EEEFF1',
         secondary: '#94A3B8',
-        muted: '#52525B',
+        muted: '#7C8494',
 
         // Разделители
         border: 'rgba(255,255,255,0.08)',

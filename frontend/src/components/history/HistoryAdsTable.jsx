@@ -39,7 +39,27 @@ export function HistoryAdsTable({ data = [] }) {
         Объявления
         <span className="ml-2 text-muted font-normal normal-case tracking-normal">{data.length}</span>
       </h3>
-      <div className="overflow-x-auto">
+      <div className="grid gap-2 md:hidden">
+        {sorted.map((row, i) => {
+          const hasDeps = Number(row.total_deposits) > 0;
+          const noDepsWithSpend = !hasDeps && Number(row.total_spend) > 0;
+          return (
+            <div key={row.fb_ad_id || `${row.ad_name}:${row.campaign_name}:${i}`} className="rounded-md border border-border bg-elevated/35 px-3 py-2.5">
+              <div className="mb-2 min-w-0">
+                <div className="truncate text-sm font-medium text-primary" title={row.ad_name}>{row.ad_name}</div>
+                <div className="truncate text-2xs text-secondary" title={row.campaign_name}>{row.campaign_name}</div>
+              </div>
+              <div className="grid grid-cols-4 gap-2 text-2xs">
+                <span className="text-muted">Расход <b className="font-mono text-primary">${Number(row.total_spend || 0).toFixed(2)}</b></span>
+                <span className="text-muted">Лиды <b className="font-mono text-primary">{row.total_leads || 0}</b></span>
+                <span className="text-muted">Реги <b className="font-mono text-primary">{row.total_registrations || 0}</b></span>
+                <span className="text-muted">Деп <b className={`font-mono ${hasDeps ? 'text-success' : noDepsWithSpend ? 'text-danger' : 'text-primary'}`}>{row.total_deposits || 0}</b></span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div className="hidden overflow-x-auto md:block">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-border bg-elevated/50">
@@ -55,11 +75,11 @@ export function HistoryAdsTable({ data = [] }) {
             </tr>
           </thead>
           <tbody>
-            {sorted.map((row) => {
+            {sorted.map((row, i) => {
               const hasDeps = Number(row.total_deposits) > 0;
               const noDepsWithSpend = !hasDeps && Number(row.total_spend) > 0;
               return (
-                <tr key={row.fb_ad_id} className="tr-hover border-b border-border">
+                <tr key={row.fb_ad_id || `${row.ad_name}:${row.campaign_name}:${i}`} className="tr-hover border-b border-border">
                   <td className="max-w-[200px] truncate px-3 py-2.5 text-primary" title={row.ad_name}>
                     {row.ad_name}
                   </td>

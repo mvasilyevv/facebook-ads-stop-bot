@@ -184,6 +184,8 @@ class TelegramSettings(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     bot_username: Mapped[str] = mapped_column(String(128), default="")
     # Пульс poller-а для диагностики состояния Telegram-контура
     poller_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Последний обработанный offset Telegram long polling
+    poller_offset: Mapped[int | None] = mapped_column(Integer)
     # Topic IDs для forum supergroup.
     control_topic_id: Mapped[int | None] = mapped_column(Integer)
     warning_topic_id: Mapped[int | None] = mapped_column(Integer)

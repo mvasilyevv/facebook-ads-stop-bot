@@ -21,6 +21,8 @@ export default [
         setInterval: "readonly",
         clearInterval: "readonly",
         fetch: "readonly",
+        Headers: "readonly",
+        global: "readonly",
         navigator: "readonly",
         localStorage: "readonly",
         sessionStorage: "readonly",

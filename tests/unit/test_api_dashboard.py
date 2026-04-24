@@ -1494,3 +1494,53 @@ async def test_create_disable_task_returns_404_for_missing_snapshot(mock_db):
         await create_disable_task(body=body, db=mock_db)
 
     assert exc_info.value.status_code == 404
+
+
+# Проверяем, что ручное отключение автовключения использует текущие сутки кабинета из ObserverSettings.
+@pytest.mark.asyncio
+async def test_disable_auto_enable_uses_observer_cabinet_day(mock_db):
+    from apps.api.routers.dashboard import disable_auto_enable
+
+    cabinet_day_started_at = datetime(2026, 4, 24, 0, 0, tzinfo=UTC)
+    existing_result = MagicMock()
+    existing_result.scalar_one_or_none.return_value = None
+    settings_result = MagicMock()
+    settings_result.scalar_one_or_none.return_value = SimpleNamespace(
+        cabinet_day_started_at=cabinet_day_started_at
+    )
+    mock_db.execute = AsyncMock(side_effect=[existing_result, settings_result])
+    mock_db.add = MagicMock()
+    mock_db.commit = AsyncMock()
+
+    response = await disable_auto_enable("ad-42", db=mock_db)
+
+    assert response == {"ok": True}
+    added_row = mock_db.add.call_args.args[0]
+    assert added_row.fb_ad_id == "ad-42"
+    assert added_row.cabinet_day_started_at == cabinet_day_started_at
+    mock_db.commit.assert_awaited_once()
+
+
+# Проверяем, что отсутствие ObserverSettings не ломает ручное отключение автовключения.
+@pytest.mark.asyncio
+async def test_disable_auto_enable_handles_missing_observer_settings(mock_db):
+    from apps.api.routers.dashboard import (
+        _UNKNOWN_CABINET_DAY_STARTED_AT,
+        disable_auto_enable,
+    )
+
+    existing_result = MagicMock()
+    existing_result.scalar_one_or_none.return_value = None
+    settings_result = MagicMock()
+    settings_result.scalar_one_or_none.return_value = None
+    mock_db.execute = AsyncMock(side_effect=[existing_result, settings_result])
+    mock_db.add = MagicMock()
+    mock_db.commit = AsyncMock()
+
+    response = await disable_auto_enable("ad-no-settings", db=mock_db)
+
+    assert response == {"ok": True}
+    added_row = mock_db.add.call_args.args[0]
+    assert added_row.fb_ad_id == "ad-no-settings"
+    assert added_row.cabinet_day_started_at == _UNKNOWN_CABINET_DAY_STARTED_AT
+    mock_db.commit.assert_awaited_once()

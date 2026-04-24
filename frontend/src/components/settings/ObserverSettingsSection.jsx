@@ -129,6 +129,8 @@ export function ObserverSettingsSection({ observer, onChange, onSave, saving }) 
           Базовые лимиты из правил оффера. Здесь настраивается момент срабатывания.
         </p>
 
+        <WarningBreakdown observer={observer} />
+
         <div className="space-y-3">
           {stepThresholds.map((step) => (
             <div key={step.id} className="rounded-md border border-border bg-elevated/50 p-4">
@@ -156,8 +158,6 @@ export function ObserverSettingsSection({ observer, onChange, onSave, saving }) 
           ))}
         </div>
       </div>
-
-      <WarningBreakdown observer={observer} />
 
       <div className="pt-2">
         <button className="btn-primary" onClick={onSave} disabled={saving === 'observer'}>

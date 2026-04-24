@@ -19,6 +19,7 @@ import grpc
 from sqlalchemy import select
 
 from clients.python_grpc.client import BrowserAgentClient, ScanDataUnavailableError, ScanResult
+from core.browser.lock import BrowserLockTimeoutError, acquire_browser_lock
 from core.db import get_session_factory
 from core.diagnostics import (
     build_ad_quality_diagnostics,
@@ -89,6 +90,8 @@ logger = logging.getLogger(__name__)
 
 # Пока очередь действий не опустеет, observer не должен трогать общий браузер.
 BROWSER_QUEUE_SCAN_PAUSE_SECONDS = 5.0
+# Максимальное ожидание общего браузера перед переносом scan-цикла.
+BROWSER_SCAN_LOCK_TIMEOUT_SECONDS = 60.0
 # Проверку колонок подтверждаем повторной попыткой, чтобы не останавливать скан на перерисовке Ads Manager.
 COLUMN_VALIDATION_FAILURE_LIMIT = 2
 # Пустой scan ещё не считаем фатальным: сначала даём странице несколько шансов вернуть строки таблицы.
@@ -209,6 +212,19 @@ async def _update_scan_recovery_status(
         ),
         last_error=f"{reason}. Пустой цикл {attempt}/{max_attempts}.",
     )
+
+
+async def _get_browser_queue_pause() -> tuple[str | None, str | None]:
+    """Возвращает тип очереди и причину, если браузер занят задачами действий."""
+    reason: str | None = await get_disable_queue_pause_reason()
+    if reason:
+        return "disable", reason
+
+    reason = await get_enable_queue_pause_reason()
+    if reason:
+        return "enable", reason
+
+    return None, None
 
 
 def compute_jitter(interval_seconds: int, jitter_seconds: int) -> float:
@@ -750,52 +766,50 @@ async def _wait_for_data_load(
     grpc_client: BrowserAgentClient,
     *,
     prev_had_spend: bool,
+    initial_rows: list[ScannedAdRow],
 ) -> list[ScannedAdRow]:
     """Адаптивное ожидание загрузки данных после refresh.
 
     Если в предыдущем скане был spend > 0 — поллим до появления spend.
     Если предыдущий скан тоже был нулевым (начало дня) — сразу возвращаем текущие строки.
 
-    Возвращает последний полученный список строк.
+    Возвращает полный список строк, не заменяя его подозрительно частичным чтением.
     """
+    if any(r.spend and r.spend > 0 for r in initial_rows):
+        return initial_rows
+
     if not prev_had_spend:
-        # Начало дня или первый скан — не ждём, данные нулевые по природе
-        rows: list[ScannedAdRow] = []
-        async for event in grpc_client.run_scan_cycle(
-            max_scroll_passes=50,
-            do_refresh=False,
-            reset_scroll_first=False,
-            settle_delay_seconds=0.0,
-        ):
-            if isinstance(event, ScanResult):
-                rows = event.rows
-        return rows
+        # Начало дня или первый скан — не ждём, данные нулевые по природе.
+        return initial_rows
 
     elapsed = 0.0
     last_log_at = 0.0
-    rows = []
+    best_rows = initial_rows
 
     while elapsed < DATA_LOAD_MAX_WAIT_SECONDS:
-        # Читаем текущее состояние таблицы без повторного refresh
+        # Читаем текущее состояние таблицы без refresh, но всегда с верхней строки,
+        # чтобы не заменить полный scan нижним фрагментом виртуальной таблицы.
         current_rows: list[ScannedAdRow] = []
         async for event in grpc_client.run_scan_cycle(
             max_scroll_passes=50,
             do_refresh=False,
-            reset_scroll_first=False,
+            reset_scroll_first=True,
             settle_delay_seconds=0.0,
         ):
             if isinstance(event, ScanResult):
                 current_rows = event.rows
 
-        rows = current_rows
+        merged_rows = _merge_scan_rows(best_rows, current_rows)
+        if len(merged_rows) >= len(best_rows):
+            best_rows = merged_rows
 
         # Проверяем: есть ли хоть одно объявление со spend > 0
-        if any(r.spend and r.spend > 0 for r in rows):
+        if any(r.spend and r.spend > 0 for r in best_rows) and len(best_rows) >= len(initial_rows):
             logger.info(
                 "Observer: данные загружены за %.0f сек (spend > 0 обнаружен)",
                 elapsed,
             )
-            return rows
+            return best_rows
 
         elapsed += DATA_LOAD_POLL_INTERVAL_SECONDS
         if elapsed - last_log_at >= DATA_LOAD_LOG_INTERVAL_SECONDS:
@@ -810,10 +824,42 @@ async def _wait_for_data_load(
             await asyncio.sleep(DATA_LOAD_POLL_INTERVAL_SECONDS)
 
     logger.warning(
-        "Observer: данные не появились за %.0f сек — продолжаем со старыми данными",
+        "Observer: данные не появились за %.0f сек — продолжаем с последним полным срезом",
         DATA_LOAD_MAX_WAIT_SECONDS,
     )
-    return rows
+    return best_rows
+
+
+def _merge_scan_rows(
+    base_rows: list[ScannedAdRow],
+    update_rows: list[ScannedAdRow],
+) -> list[ScannedAdRow]:
+    """Обновляет строки по fb_ad_id, не теряя объявления из полного базового скана."""
+    if not update_rows:
+        return base_rows
+
+    updates_by_id = {row.fb_ad_id: row for row in update_rows if getattr(row, "fb_ad_id", None)}
+    seen_ids: set[str] = set()
+    merged: list[ScannedAdRow] = []
+
+    for row in base_rows:
+        fb_ad_id = getattr(row, "fb_ad_id", None)
+        if fb_ad_id and fb_ad_id in updates_by_id:
+            merged.append(updates_by_id[fb_ad_id])
+            seen_ids.add(fb_ad_id)
+        else:
+            merged.append(row)
+            if fb_ad_id:
+                seen_ids.add(fb_ad_id)
+
+    for row in update_rows:
+        fb_ad_id = getattr(row, "fb_ad_id", None)
+        if not fb_ad_id or fb_ad_id in seen_ids:
+            continue
+        merged.append(row)
+        seen_ids.add(fb_ad_id)
+
+    return merged
 
 
 async def _wait_for_next_cycle(
@@ -1077,14 +1123,7 @@ async def observer_loop(
                 await asyncio.sleep(10.0)
                 continue
 
-            browser_pause_kind_next: str | None = None
-            browser_pause_reason: str | None = await get_disable_queue_pause_reason()
-            if browser_pause_reason:
-                browser_pause_kind_next = "disable"
-            else:
-                browser_pause_reason = await get_enable_queue_pause_reason()
-                if browser_pause_reason:
-                    browser_pause_kind_next = "enable"
+            browser_pause_kind_next, browser_pause_reason = await _get_browser_queue_pause()
 
             if browser_pause_reason and browser_pause_kind_next == "disable":
                 consecutive_empty_scan_cycles = 0
@@ -1123,117 +1162,149 @@ async def observer_loop(
                 logger.info("Observer: очередь включения освободила браузер — возобновляю скан")
                 browser_pause_kind = None
 
-            validation = await grpc_client.validate_columns()
-            if not validation.get("valid", False):
-                consecutive_empty_scan_cycles = 0
-                missing_columns = list(validation.get("missing_columns") or [])
-                validation_error = str(validation.get("error_message") or "").strip()
-
-                if _is_transient_column_validation_failure(validation):
-                    consecutive_column_validation_errors = 0
-                    transient_message = (
-                        "Проверка колонок Ads Manager не получила данные от страницы. "
-                        "Считаю это временной проблемой браузера/CDP, а не изменением колонок."
-                    )
-                    await update_observer_runtime_status(
-                        status="RECOVERING",
-                        message=transient_message,
-                        last_error=validation_error or "Проверка колонок не вернула детали",
-                    )
-                    logger.warning(
-                        "Observer: временный сбой проверки колонок, пробую переподключиться: %s",
-                        validation_error or "детали не вернулись",
-                    )
-                    try:
-                        await grpc_client.reconnect_browser()
-                    except Exception:
-                        logger.warning(
-                            "Observer: не удалось переподключиться после сбоя проверки колонок",
-                            exc_info=True,
-                        )
-                    await asyncio.sleep(10.0)
-                    continue
-
-                consecutive_column_validation_errors += 1
-                columns_message = (
-                    "Проверка колонок Ads Manager не пройдена "
-                    f"({consecutive_column_validation_errors}/{COLUMN_VALIDATION_FAILURE_LIMIT}): "
-                    f"{', '.join(missing_columns) or 'детали не вернулись'}"
-                )
-
-                if consecutive_column_validation_errors < COLUMN_VALIDATION_FAILURE_LIMIT:
-                    await update_observer_runtime_status(
-                        status="WARNING",
-                        message=(
-                            "Колонки Ads Manager временно не совпали с ожидаемыми. "
-                            "Скан этого цикла пропущен, повторим проверку перед следующим сканом."
-                        ),
-                        last_error=columns_message,
-                    )
-                    logger.warning("Observer: %s", columns_message)
-                    await asyncio.sleep(10.0)
-                    continue
-
-                await set_observer_scanning_enabled(False)
-                await update_observer_runtime_status(
-                    status="PAUSED",
-                    message=(
-                        "Сканирование остановлено: обязательные колонки Ads Manager "
-                        "отсутствуют или идут в другом порядке."
-                    ),
-                    last_error=columns_message,
-                )
-                logger.error("Observer: %s", columns_message)
-                try:
-                    await broadcast_observer_runtime_message(
-                        text=_build_missing_columns_alert_text(missing_columns),
-                        fallback_token=tg_token or telegram_bot_token,
-                        fallback_chat_id=telegram_chat_id,
-                    )
-                except Exception:
-                    logger.exception("Не удалось отправить Telegram-алерт о колонках Ads Manager")
-                continue
-
-            consecutive_column_validation_errors = 0
-
-            await update_observer_runtime_status(
-                status="RUNNING",
-                message="Выполняем цикл сканирования объявлений.",
-                clear_last_error=True,
-            )
-
-            # 1-2. Сканирование через gRPC browser-agent: refresh + первый проход
             rows: list[ScannedAdRow] = []
-            async for event in grpc_client.run_scan_cycle(
-                max_scroll_passes=50,
-                do_refresh=True,
-                reset_scroll_first=True,
-                settle_delay_seconds=random.uniform(2.0, 4.0),
-            ):
-                if isinstance(event, ScanResult):
-                    rows = event.rows
-                    logger.info(
-                        "Observer: сканирование завершено — %d строк за %.1fs (%d проходов)",
-                        len(rows),
-                        event.duration_seconds,
-                        event.total_passes,
-                    )
-                elif hasattr(event, "pass_number"):
-                    logger.debug(
-                        "Observer: проход %d — %d строк пока, at_bottom=%s",
-                        event.pass_number,
-                        event.rows_so_far,
-                        event.at_bottom,
+            try:
+                async with acquire_browser_lock(
+                    owner="observer-scan",
+                    timeout_seconds=BROWSER_SCAN_LOCK_TIMEOUT_SECONDS,
+                ):
+                    browser_pause_kind_next, browser_pause_reason = await _get_browser_queue_pause()
+                    if browser_pause_reason:
+                        consecutive_empty_scan_cycles = 0
+                        await update_observer_runtime_status(
+                            status="WAITING_BROWSER",
+                            message=(
+                                "Браузер занят задачами "
+                                f"{'отключения' if browser_pause_kind_next == 'disable' else 'включения'}. "
+                                f"Причина: {browser_pause_reason}"
+                            ),
+                        )
+                        browser_pause_kind = browser_pause_kind_next
+                        raise BrowserLockTimeoutError(
+                            f"Браузер занят задачами: {browser_pause_reason}"
+                        )
+
+                    validation = await grpc_client.validate_columns()
+                    if not validation.get("valid", False):
+                        consecutive_empty_scan_cycles = 0
+                        missing_columns = list(validation.get("missing_columns") or [])
+                        validation_error = str(validation.get("error_message") or "").strip()
+
+                        if _is_transient_column_validation_failure(validation):
+                            consecutive_column_validation_errors = 0
+                            transient_message = (
+                                "Проверка колонок Ads Manager не получила данные от страницы. "
+                                "Считаю это временной проблемой браузера/CDP, а не изменением колонок."
+                            )
+                            await update_observer_runtime_status(
+                                status="RECOVERING",
+                                message=transient_message,
+                                last_error=validation_error or "Проверка колонок не вернула детали",
+                            )
+                            logger.warning(
+                                "Observer: временный сбой проверки колонок, пробую переподключиться: %s",
+                                validation_error or "детали не вернулись",
+                            )
+                            try:
+                                await grpc_client.reconnect_browser()
+                            except Exception:
+                                logger.warning(
+                                    "Observer: не удалось переподключиться после сбоя проверки колонок",
+                                    exc_info=True,
+                                )
+                            await asyncio.sleep(10.0)
+                            continue
+
+                        consecutive_column_validation_errors += 1
+                        columns_message = (
+                            "Проверка колонок Ads Manager не пройдена "
+                            f"({consecutive_column_validation_errors}/{COLUMN_VALIDATION_FAILURE_LIMIT}): "
+                            f"{', '.join(missing_columns) or 'детали не вернулись'}"
+                        )
+
+                        if consecutive_column_validation_errors < COLUMN_VALIDATION_FAILURE_LIMIT:
+                            await update_observer_runtime_status(
+                                status="WARNING",
+                                message=(
+                                    "Колонки Ads Manager временно не совпали с ожидаемыми. "
+                                    "Скан этого цикла пропущен, повторим проверку перед следующим сканом."
+                                ),
+                                last_error=columns_message,
+                            )
+                            logger.warning("Observer: %s", columns_message)
+                            await asyncio.sleep(10.0)
+                            continue
+
+                        await set_observer_scanning_enabled(False)
+                        await update_observer_runtime_status(
+                            status="PAUSED",
+                            message=(
+                                "Сканирование остановлено: обязательные колонки Ads Manager "
+                                "отсутствуют или идут в другом порядке."
+                            ),
+                            last_error=columns_message,
+                        )
+                        logger.error("Observer: %s", columns_message)
+                        try:
+                            await broadcast_observer_runtime_message(
+                                text=_build_missing_columns_alert_text(missing_columns),
+                                fallback_token=tg_token or telegram_bot_token,
+                                fallback_chat_id=telegram_chat_id,
+                            )
+                        except Exception:
+                            logger.exception(
+                                "Не удалось отправить Telegram-алерт о колонках Ads Manager"
+                            )
+                        continue
+
+                    consecutive_column_validation_errors = 0
+
+                    await update_observer_runtime_status(
+                        status="RUNNING",
+                        message="Выполняем цикл сканирования объявлений.",
+                        clear_last_error=True,
                     )
 
-            # 1b. Адаптивное ожидание загрузки данных после refresh
-            # Если предыдущий скан имел spend > 0 — ждём появления spend (макс 30с).
-            # Если предыдущий скан тоже был нулевым — не ждём (начало дня).
-            if rows:
-                rows = await _wait_for_data_load(
-                    grpc_client,
-                    prev_had_spend=prev_scan_had_spend,
+                    # 1-2. Сканирование через gRPC browser-agent: refresh + первый проход
+                    async for event in grpc_client.run_scan_cycle(
+                        max_scroll_passes=50,
+                        do_refresh=True,
+                        reset_scroll_first=True,
+                        settle_delay_seconds=random.uniform(2.0, 4.0),
+                    ):
+                        if isinstance(event, ScanResult):
+                            rows = event.rows
+                            logger.info(
+                                "Observer: сканирование завершено — %d строк за %.1fs (%d проходов)",
+                                len(rows),
+                                event.duration_seconds,
+                                event.total_passes,
+                            )
+                        elif hasattr(event, "pass_number"):
+                            logger.debug(
+                                "Observer: проход %d — %d строк пока, at_bottom=%s",
+                                event.pass_number,
+                                event.rows_so_far,
+                                event.at_bottom,
+                            )
+
+                    # 1b. Адаптивное ожидание загрузки данных после refresh.
+                    if rows:
+                        rows = await _wait_for_data_load(
+                            grpc_client,
+                            prev_had_spend=prev_scan_had_spend,
+                            initial_rows=rows,
+                        )
+            except BrowserLockTimeoutError as exc:
+                consecutive_empty_scan_cycles = 0
+                await update_observer_runtime_status(
+                    status="WAITING_BROWSER",
+                    message="Браузер занят другой операцией. Сканирование будет повторено позже.",
+                    last_error=str(exc),
                 )
+                logger.warning("Observer: %s", exc)
+                await asyncio.sleep(BROWSER_QUEUE_SCAN_PAUSE_SECONDS)
+                continue
 
             if not rows:
                 consecutive_empty_scan_cycles += 1

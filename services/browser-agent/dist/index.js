@@ -33,6 +33,8 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.writeSessionStatusEvent = writeSessionStatusEvent;
+exports.streamSessionStatusWithLookup = streamSessionStatusWithLookup;
 const grpc = __importStar(require("@grpc/grpc-js"));
 const protoLoader = __importStar(require("@grpc/proto-loader"));
 const path = __importStar(require("path"));
@@ -43,6 +45,7 @@ const humanizer_js_1 = require("./humanizer.js");
 const toggle_utils_js_1 = require("./toggle-utils.js");
 const PORT = process.env.GRPC_PORT ? parseInt(process.env.GRPC_PORT, 10) : 50051;
 const sessionManager = new session_manager_js_1.SessionManager();
+const SESSION_STATUS_HEARTBEAT_MS = 5_000;
 function loadProto(name) {
     const protoPath = path.resolve(__dirname, '../../../proto/v1', name);
     const packageDefinition = protoLoader.loadSync(protoPath, {
@@ -198,32 +201,57 @@ async function navigate(call, callback) {
         callback({ code, message: err.message });
     }
 }
+function writeSessionStatusEvent(call, sessionId, lookup) {
+    try {
+        const session = lookup(sessionId);
+        call.write({
+            session_id: session.id,
+            status: session.status,
+            detail: '',
+            current_url: session.primaryPage?.url() || '',
+            timestamp: Math.floor(Date.now() / 1000),
+        });
+        return true;
+    }
+    catch (err) {
+        call.write({
+            session_id: sessionId,
+            status: 'error',
+            detail: err.message || 'Не удалось получить статус сессии',
+            current_url: '',
+            timestamp: Math.floor(Date.now() / 1000),
+        });
+        return false;
+    }
+}
+function streamSessionStatusWithLookup(call, lookup) {
+    const sessionId = String(call.request?.session_id || '');
+    let closed = false;
+    const timer = setInterval(() => {
+        if (!writeSessionStatusEvent(call, sessionId, lookup)) {
+            closeStream(true);
+        }
+    }, SESSION_STATUS_HEARTBEAT_MS);
+    function closeStream(endCall) {
+        if (closed)
+            return;
+        closed = true;
+        clearInterval(timer);
+        if (endCall && typeof call.end === 'function') {
+            call.end();
+        }
+    }
+    timer.unref?.();
+    if (!writeSessionStatusEvent(call, sessionId, lookup)) {
+        closeStream(true);
+        return;
+    }
+    call.on('cancelled', () => closeStream(false));
+    call.on('close', () => closeStream(false));
+    call.on('error', () => closeStream(false));
+}
 function streamSessionStatus(call) {
-    // Простая реализация: отправляем статус по запросу клиента.
-    call.on('data', (req) => {
-        try {
-            const session = sessionManager.getSession(req.session_id);
-            call.write({
-                session_id: session.id,
-                status: session.status,
-                detail: '',
-                current_url: session.primaryPage?.url() || '',
-                timestamp: Math.floor(Date.now() / 1000),
-            });
-        }
-        catch (err) {
-            call.write({
-                session_id: req.session_id,
-                status: 'error',
-                detail: err.message,
-                current_url: '',
-                timestamp: Math.floor(Date.now() / 1000),
-            });
-        }
-    });
-    call.on('end', () => {
-        call.end();
-    });
+    streamSessionStatusWithLookup(call, (sessionId) => sessionManager.getSession(sessionId));
 }
 // --- Обработчики ScannerService ---
 async function runScanCycle(call) {
@@ -751,5 +779,7 @@ function main() {
         server.start();
     });
 }
-main();
+if (require.main === module) {
+    main();
+}
 //# sourceMappingURL=index.js.map
