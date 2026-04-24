@@ -3,6 +3,7 @@ import LoadingSpinner from './components/LoadingSpinner.jsx';
 
 // Ленивая загрузка страниц — каждая страница загружается только при первом посещении
 const DashboardPage = lazy(() => import('./pages/DashboardPage.jsx'));
+const HealthMapPage = lazy(() => import('./pages/HealthMapPage.jsx'));
 const AdsPage = lazy(() => import('./pages/AdsPage.jsx'));
 const OffersPage = lazy(() => import('./pages/OffersPage.jsx'));
 const SettingsPage = lazy(() => import('./pages/SettingsPage.jsx'));
@@ -94,7 +95,6 @@ const PAGES = [
   { id: 'ads', label: 'Объявления' },
   { id: 'offers', label: 'Офферы' },
   { id: 'history', label: 'История' },
-  { id: 'naming', label: 'Нейминг' },
   { id: 'settings', label: 'Настройки' },
 ];
 
@@ -135,12 +135,15 @@ export default function App() {
     switch (currentPage) {
       case 'dashboard':
         return <DashboardPage onNavigate={navigate} />;
+      case 'healthmap':
+        return <HealthMapPage />;
       case 'ads':
         return (
           <AdsPage
             key={`ads:${adsInitialView}:${adsInitialState}`}
             initialView={adsInitialView}
             initialState={adsInitialState}
+            onOpenNaming={() => navigate('naming')}
           />
         );
       case 'offers':

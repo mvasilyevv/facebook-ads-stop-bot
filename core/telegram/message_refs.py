@@ -21,9 +21,7 @@ def stream_for_alert_stage(stage: AlertStage) -> TelegramNotificationStream:
     """Возвращает поток Telegram для стадии алерта."""
     if stage == AlertStage.STOP:
         return TelegramNotificationStream.STOP
-    if stage == AlertStage.WARNING:
-        return TelegramNotificationStream.WARNING
-    return TelegramNotificationStream.EARLY
+    return TelegramNotificationStream.WARNING
 
 
 async def _resolve_ad_id(session, fb_ad_id: str) -> _uuid.UUID | None:

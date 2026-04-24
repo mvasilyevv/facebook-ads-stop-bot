@@ -253,12 +253,35 @@ async def _upsert_fb_ads(
         Маппинг fb_ad_id → UUID id записи в fb_ads.
     """
     now = datetime.now(UTC)
+
+    # Собираем fb_ad_id объявлений без адсета для fallback-запроса
+    missing_adset_fb_ids = [
+        item["fb_ad_id"]
+        for item in snapshot_data
+        if not adset_id_map.get((item.get("campaign_name", ""), item.get("adset_name", "")))
+    ]
+    # Fallback: ищем уже существующие fb_ads по fb_ad_id напрямую
+    fallback_ad_id_map: dict[str, _uuid.UUID] = {}
+    if missing_adset_fb_ids:
+        result = await session.execute(
+            select(FbAd.fb_ad_id, FbAd.id).where(FbAd.fb_ad_id.in_(missing_adset_fb_ids))
+        )
+        fallback_ad_id_map = {row.fb_ad_id: row.id for row in result.all()}
+
     fb_ad_rows = []
     for item in snapshot_data:
         cname = item.get("campaign_name", "")
         aname = item.get("adset_name", "")
         adset_id = adset_id_map.get((cname, aname))
         if adset_id is None:
+            if item["fb_ad_id"] in fallback_ad_id_map:
+                logger.debug(
+                    "Объявление %s: адсет (%s, %s) не найден, используем существующую запись fb_ads",
+                    item["fb_ad_id"],
+                    cname,
+                    aname,
+                )
+                continue  # не обновляем fb_ads, но ad_id уже есть в fallback_ad_id_map
             logger.warning(
                 "Пропускаю объявление %s — не найден адсет (%s, %s)",
                 item["fb_ad_id"],
@@ -277,22 +300,24 @@ async def _upsert_fb_ads(
             }
         )
 
-    if not fb_ad_rows:
+    if fb_ad_rows:
+        stmt = pg_insert(FbAd).values(fb_ad_rows)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["fb_ad_id"],
+            set_={
+                "ad_name": stmt.excluded.ad_name,
+                "adset_id": stmt.excluded.adset_id,
+                "last_seen_at": stmt.excluded.last_seen_at,
+                "updated_at": func.now(),
+            },
+        )
+        await session.execute(stmt)
+
+    # Если нет ни новых строк, ни fallback-записей — возвращаем пустой маппинг
+    if not fb_ad_rows and not fallback_ad_id_map:
         return {}
 
-    stmt = pg_insert(FbAd).values(fb_ad_rows)
-    stmt = stmt.on_conflict_do_update(
-        index_elements=["fb_ad_id"],
-        set_={
-            "ad_name": stmt.excluded.ad_name,
-            "adset_id": stmt.excluded.adset_id,
-            "last_seen_at": stmt.excluded.last_seen_at,
-            "updated_at": func.now(),
-        },
-    )
-    await session.execute(stmt)
-
-    # Загружаем маппинг fb_ad_id → id
+    # Загружаем маппинг fb_ad_id → id (включает и новые, и fallback-записи)
     fb_ad_ids = [item["fb_ad_id"] for item in snapshot_data]
     result = await session.execute(
         select(FbAd.fb_ad_id, FbAd.id).where(FbAd.fb_ad_id.in_(fb_ad_ids))
@@ -447,7 +472,6 @@ async def _upsert_ad_snapshots(
         "cost_per_landing_page_view": stmt.excluded.cost_per_landing_page_view,
         "alert_state": stmt.excluded.alert_state,
         "current_stage": stmt.excluded.current_stage,
-        "early_signal_rule_codes": stmt.excluded.early_signal_rule_codes,
         "warning_rule_codes": stmt.excluded.warning_rule_codes,
         "stop_rule_codes": stmt.excluded.stop_rule_codes,
         "open_state_token": stmt.excluded.open_state_token,

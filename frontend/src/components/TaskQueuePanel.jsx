@@ -17,11 +17,27 @@ function getStatusLabel(status) {
 }
 
 const ACTIVE_STATUSES = new Set(['PENDING', 'RUNNING', 'RETRYING', 'FAILED']);
+// FAILED-задачи старше этого порога не засоряют очередь
+const FAILED_TTL_MS = 24 * 60 * 60 * 1000;
+
+function isRelevant(task) {
+  if (task.status !== 'FAILED') return true;
+  const ts = task.updated_at || task.created_at;
+  if (!ts) return true;
+  return Date.now() - new Date(ts).getTime() < FAILED_TTL_MS;
+}
 
 /** Компактная панель очереди задач — показывает только активные */
-export function TaskQueuePanel({ disableTasks = [], enableTasks = [], enableRecs = [], onRetryDisable, onCreateEnableTask }) {
-  const activeDisable = disableTasks.filter((t) => ACTIVE_STATUSES.has(t.status));
-  const activeEnable = enableTasks.filter((t) => ACTIVE_STATUSES.has(t.status));
+export function TaskQueuePanel({
+  disableTasks = [],
+  enableTasks = [],
+  enableRecs = [],
+  onRetryDisable,
+  onCancelDisable,
+  onCreateEnableTask,
+}) {
+  const activeDisable = disableTasks.filter((t) => ACTIVE_STATUSES.has(t.status) && isRelevant(t));
+  const activeEnable = enableTasks.filter((t) => ACTIVE_STATUSES.has(t.status) && isRelevant(t));
   const isEmpty = activeDisable.length === 0 && activeEnable.length === 0 && enableRecs.length === 0;
 
   return (
@@ -52,14 +68,26 @@ export function TaskQueuePanel({ disableTasks = [], enableTasks = [], enableRecs
                     {task.attempt_count > 1 && <span> x{task.attempt_count}</span>}
                   </div>
                 </div>
-                {(task.status === 'FAILED' || task.status === 'RETRYING') && (
+                <div className="ml-2 flex shrink-0 items-center gap-1">
+                  {(task.status === 'FAILED' || task.status === 'RETRYING') && (
+                    <button
+                      type="button"
+                      onClick={() => onRetryDisable?.(task.id)}
+                      className="rounded-sm bg-danger-muted px-2 py-1 text-2xs font-semibold text-danger hover:bg-danger/20"
+                    >
+                      Повтор
+                    </button>
+                  )}
                   <button
-                    onClick={() => onRetryDisable?.(task.id)}
-                    className="ml-2 rounded-sm bg-danger-muted px-2 py-1 text-2xs font-semibold text-danger hover:bg-danger/20"
+                    type="button"
+                    onClick={() => onCancelDisable?.(task.id, task.ad_name)}
+                    className="grid h-7 w-7 place-items-center rounded-sm bg-elevated text-sm font-semibold text-muted hover:bg-danger-muted hover:text-danger"
+                    title="Удалить задачу из очереди"
+                    aria-label={`Удалить задачу отключения ${task.ad_name || task.fb_ad_id || ''}`}
                   >
-                    Повтор
+                    ×
                   </button>
-                )}
+                </div>
               </div>
             ))}
           </div>

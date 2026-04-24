@@ -117,6 +117,51 @@ cleanup_worker_singleton_pid_files() {
     cleanup_singleton_pid_file "/tmp/fb_enable_worker.pid" "run_enable_worker.py"
 }
 
+wait_for_postgres_ready() {
+    local timeout_seconds="${1:-45}"
+    local service_name="postgres"
+    local container_id=""
+    local health_status=""
+    local elapsed=0
+
+    while [ "$elapsed" -lt "$timeout_seconds" ]; do
+        container_id="$(docker compose ps -q "$service_name" 2>/dev/null | tr -d '[:space:]')"
+
+        if [ -n "$container_id" ]; then
+            health_status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}no-healthcheck{{end}}' "$container_id" 2>/dev/null || true)"
+
+            # Если healthcheck уже стал healthy, можно продолжать без дополнительных probe.
+            if [ "$health_status" = "healthy" ]; then
+                return 0
+            fi
+
+            # Проверяем фактическую готовность сервера без привязки к имени БД/роли из текущего .env.
+            if docker compose exec -T "$service_name" pg_isready -q &>/dev/null; then
+                return 0
+            fi
+
+            # На некоторых запусках exec может кратко флапать, хотя порт уже слушается.
+            if nc -z 127.0.0.1 5433 >/dev/null 2>&1; then
+                return 0
+            fi
+        fi
+
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+
+    echo -e "${RED}❌ Postgres не запустился за ${timeout_seconds} секунд${NC}"
+    echo -e "${YELLOW}Состояние docker compose:${NC}"
+    docker compose ps || true
+
+    if [ -n "$container_id" ]; then
+        echo -e "${YELLOW}Последние строки логов Postgres:${NC}"
+        docker compose logs --tail=40 "$service_name" || true
+    fi
+
+    return 1
+}
+
 check_process_started() {
     local pid="$1"
     local name="$2"
@@ -154,6 +199,23 @@ terminate_matching_processes() {
 stop_all() {
     echo -e "${YELLOW}⏹ Останавливаю сервисы...${NC}"
 
+    # Останавливаем supervisord если запущен
+    SUPERVISOR_CONF="$SCRIPT_DIR/supervisord.conf"
+    if [ -f "$SCRIPT_DIR/supervisord.pid" ]; then
+        SPID="$(cat "$SCRIPT_DIR/supervisord.pid" 2>/dev/null || true)"
+        if [ -n "$SPID" ] && kill -0 "$SPID" 2>/dev/null; then
+            echo -e "  Останавливаю supervisord (PID $SPID)"
+            if command -v supervisorctl &>/dev/null; then
+                supervisorctl -c "$SUPERVISOR_CONF" shutdown 2>/dev/null || true
+            elif [ -x "$SCRIPT_DIR/.venv/bin/supervisorctl" ]; then
+                "$SCRIPT_DIR/.venv/bin/supervisorctl" -c "$SUPERVISOR_CONF" shutdown 2>/dev/null || true
+            else
+                kill "$SPID" 2>/dev/null || true
+            fi
+            sleep 2
+        fi
+    fi
+
     if [ -f "$PID_FILE" ]; then
         while read -r pid name; do
             stop_process_by_pid "$pid" "$name"
@@ -161,6 +223,7 @@ stop_all() {
         rm -f "$PID_FILE"
     fi
 
+    terminate_matching_processes "Browser Agent" "node dist/index.js"
     terminate_matching_processes "Observer Worker" "run_observer.py"
     terminate_matching_processes "Disable Worker" "run_disable_worker.py"
     terminate_matching_processes "Enable Worker" "run_enable_worker.py"
@@ -171,7 +234,7 @@ stop_all() {
     cleanup_worker_singleton_pid_files
 
     echo -e "${YELLOW}⏹ Останавливаю Docker контейнеры...${NC}"
-    docker compose down 2>/dev/null || true
+    docker compose stop 2>/dev/null || true
 
     echo -e "${GREEN}✅ Все сервисы остановлены${NC}"
 }
@@ -270,6 +333,7 @@ if [ -f "$PID_FILE" ] && [ -s "$PID_FILE" ]; then
     done < "$PID_FILE"
 fi
 
+terminate_matching_processes "Browser Agent" "node dist/index.js"
 terminate_matching_processes "Observer Worker" "run_observer.py"
 terminate_matching_processes "Disable Worker" "run_disable_worker.py"
 terminate_matching_processes "Enable Worker" "run_enable_worker.py"
@@ -291,19 +355,11 @@ docker compose up -d
 
 # Ждём готовности Postgres
 echo -e "${BLUE}⏳ Жду готовности Postgres...${NC}"
-POSTGRES_USER_VALUE="${POSTGRES_USER:-fb_stop_bot_v2}"
-POSTGRES_DB_VALUE="${POSTGRES_DB:-fb_stop_bot_v2}"
-for i in $(seq 1 30); do
-    if docker compose exec -T postgres pg_isready -U "$POSTGRES_USER_VALUE" -d "$POSTGRES_DB_VALUE" &>/dev/null; then
-        echo -e "${GREEN}✅ Postgres готов${NC}"
-        break
-    fi
-    if [ "$i" -eq 30 ]; then
-        echo -e "${RED}❌ Postgres не запустился за 30 секунд${NC}"
-        exit 1
-    fi
-    sleep 1
-done
+if wait_for_postgres_ready 45; then
+    echo -e "${GREEN}✅ Postgres готов${NC}"
+else
+    exit 1
+fi
 
 # ==========================================
 # 2. Python venv + зависимости
@@ -390,53 +446,144 @@ for i in $(seq 1 20); do
 done
 
 # ==========================================
-# 5. Запуск Observer Worker
+# 5. Сборка и запуск Browser Agent (Node.js gRPC сервис)
 # ==========================================
-echo -e "${BLUE}🔍 Запускаю Observer Worker...${NC}"
-.venv/bin/python run_observer.py > "$LOG_DIR/observer.log" 2>&1 &
-OBSERVER_PID=$!
-echo "$OBSERVER_PID observer" >> "$PID_FILE"
-echo -e "${GREEN}  Observer PID: $OBSERVER_PID${NC}"
+echo -e "${BLUE}🌐 Запускаю Browser Agent (Node.js gRPC)...${NC}"
+if [ -d services/browser-agent ] && [ -d services/browser-agent/node_modules ]; then
+    cd services/browser-agent
+    echo -e "${BLUE}⏳ Собираю Browser Agent...${NC}"
+    npm run build > "$LOG_DIR/browser_agent_build.log" 2>&1
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}❌ Ошибка сборки Browser Agent${NC}"
+        tail -10 "$LOG_DIR/browser_agent_build.log" || true
+        exit 1
+    fi
+    echo -e "${GREEN}✅ Browser Agent собран${NC}"
+    node dist/index.js > "$LOG_DIR/browser_agent.log" 2>&1 &
+    BROWSER_AGENT_PID=$!
+    cd "$SCRIPT_DIR"
+    echo "$BROWSER_AGENT_PID browser_agent" >> "$PID_FILE"
+    echo -e "${GREEN}  Browser Agent PID: $BROWSER_AGENT_PID${NC}"
 
-# ==========================================
-# 6. Запуск Disable Worker
-# ==========================================
-echo -e "${BLUE}🔴 Запускаю Disable Worker...${NC}"
-.venv/bin/python run_disable_worker.py > "$LOG_DIR/disable_worker.log" 2>&1 &
-DISABLE_PID=$!
-echo "$DISABLE_PID disable_worker" >> "$PID_FILE"
-echo -e "${GREEN}  Disable Worker PID: $DISABLE_PID${NC}"
-
-# ==========================================
-# 7. Запуск Enable Worker
-# ==========================================
-echo -e "${BLUE}🟢 Запускаю Enable Worker...${NC}"
-.venv/bin/python run_enable_worker.py > "$LOG_DIR/enable_worker.log" 2>&1 &
-ENABLE_PID=$!
-echo "$ENABLE_PID enable_worker" >> "$PID_FILE"
-echo -e "${GREEN}  Enable Worker PID: $ENABLE_PID${NC}"
-
-# ==========================================
-# 8. Запуск Enable Recommendation Worker
-# ==========================================
-if [ -f run_enable_recommendation_worker.py ]; then
-    echo -e "${BLUE}🟡 Запускаю Enable Recommendation Worker...${NC}"
-    .venv/bin/python run_enable_recommendation_worker.py > "$LOG_DIR/enable_recommendation_worker.log" 2>&1 &
-    ENABLE_RECO_PID=$!
-    echo "$ENABLE_RECO_PID enable_recommendation_worker" >> "$PID_FILE"
-    echo -e "${GREEN}  Enable Recommendation Worker PID: $ENABLE_RECO_PID${NC}"
+    # Ждём готовности gRPC
+    echo -e "${BLUE}⏳ Жду готовности Browser Agent...${NC}"
+    for i in $(seq 1 10); do
+        if nc -z localhost 50051 2>/dev/null; then
+            echo -e "${GREEN}✅ Browser Agent отвечает на порту 50051${NC}"
+            break
+        fi
+        if ! is_process_active "$BROWSER_AGENT_PID"; then
+            echo -e "${RED}❌ Browser Agent процесс завершился при запуске${NC}"
+            tail -20 "$LOG_DIR/browser_agent.log" || true
+            exit 1
+        fi
+        if [ "$i" -eq 10 ]; then
+            echo -e "${YELLOW}⚠️  Browser Agent не ответил за 10с, продолжаю${NC}"
+        fi
+        sleep 1
+    done
 else
-    echo -e "${YELLOW}⚠️  run_enable_recommendation_worker.py не найден, пропускаю запуск Enable Recommendation Worker${NC}"
+    echo -e "${YELLOW}⚠️  services/browser-agent не найден или не установлен, пропускаю${NC}"
+    BROWSER_AGENT_PID=""
 fi
 
 # ==========================================
-# 9. Запуск Telegram Poller
+# 6–9. Запуск воркеров (через supervisord или напрямую)
 # ==========================================
-echo -e "${BLUE}🤖 Запускаю Telegram Poller...${NC}"
-.venv/bin/python -m apps.telegram_poller.main > "$LOG_DIR/telegram.log" 2>&1 &
-TG_PID=$!
-echo "$TG_PID telegram" >> "$PID_FILE"
-echo -e "${GREEN}  Telegram PID: $TG_PID${NC}"
+USE_SUPERVISOR=0
+if command -v supervisord &>/dev/null; then
+    USE_SUPERVISOR=1
+elif [ -x .venv/bin/supervisord ]; then
+    USE_SUPERVISOR=1
+    # Добавляем venv/bin в PATH чтобы supervisorctl тоже нашёлся
+    export PATH="$SCRIPT_DIR/.venv/bin:$PATH"
+fi
+
+if [ "$USE_SUPERVISOR" -eq 1 ]; then
+    echo -e "${BLUE}🛡 Запускаю воркеры через supervisord (автоперезапуск включён)...${NC}"
+
+    # Останавливаем предыдущий supervisord этого проекта если запущен
+    if [ -f "$SCRIPT_DIR/supervisord.pid" ]; then
+        OLD_SPID="$(cat "$SCRIPT_DIR/supervisord.pid" 2>/dev/null || true)"
+        if [ -n "$OLD_SPID" ] && kill -0 "$OLD_SPID" 2>/dev/null; then
+            echo -e "  Останавливаю предыдущий supervisord (PID $OLD_SPID)"
+            supervisorctl -c "$SCRIPT_DIR/supervisord.conf" shutdown 2>/dev/null || true
+            sleep 2
+        fi
+    fi
+
+    supervisord -c "$SCRIPT_DIR/supervisord.conf"
+    SUPERVISORD_PID="$(cat "$SCRIPT_DIR/supervisord.pid" 2>/dev/null || true)"
+    if [ -n "$SUPERVISORD_PID" ]; then
+        echo "$SUPERVISORD_PID supervisord" >> "$PID_FILE"
+        echo -e "${GREEN}  supervisord PID: $SUPERVISORD_PID${NC}"
+    fi
+
+    # Ждём пока supervisord поднимет процессы
+    sleep 3
+    echo -e "${GREEN}  Воркеры запущены под supervisord. Статус:${NC}"
+    supervisorctl -c "$SCRIPT_DIR/supervisord.conf" status || true
+
+    # Заглушки PID для проверки boot ниже — используем supervisorctl
+    OBSERVER_PID=""
+    DISABLE_PID=""
+    ENABLE_PID=""
+    ENABLE_RECO_PID=""
+    TG_PID=""
+else
+    echo -e "${YELLOW}⚠️  supervisord не найден — воркеры запускаются без автоперезапуска${NC}"
+    echo -e "${YELLOW}   Установи: pip install supervisor  или  brew install supervisor${NC}"
+
+    # ==========================================
+    # 6. Запуск Observer Worker
+    # ==========================================
+    echo -e "${BLUE}🔍 Запускаю Observer Worker...${NC}"
+    .venv/bin/python run_observer.py > "$LOG_DIR/observer.log" 2>&1 &
+    OBSERVER_PID=$!
+    echo "$OBSERVER_PID observer" >> "$PID_FILE"
+    echo -e "${GREEN}  Observer PID: $OBSERVER_PID${NC}"
+
+    # ==========================================
+    # 7. Запуск Disable Worker
+    # ==========================================
+    echo -e "${BLUE}🔴 Запускаю Disable Worker...${NC}"
+    .venv/bin/python run_disable_worker.py > "$LOG_DIR/disable_worker.log" 2>&1 &
+    DISABLE_PID=$!
+    echo "$DISABLE_PID disable_worker" >> "$PID_FILE"
+    echo -e "${GREEN}  Disable Worker PID: $DISABLE_PID${NC}"
+
+    # ==========================================
+    # 8. Запуск Enable Worker
+    # ==========================================
+    echo -e "${BLUE}🟢 Запускаю Enable Worker...${NC}"
+    .venv/bin/python run_enable_worker.py > "$LOG_DIR/enable_worker.log" 2>&1 &
+    ENABLE_PID=$!
+    echo "$ENABLE_PID enable_worker" >> "$PID_FILE"
+    echo -e "${GREEN}  Enable Worker PID: $ENABLE_PID${NC}"
+
+    # ==========================================
+    # 9. Запуск Enable Recommendation Worker
+    # ==========================================
+    if [ -f run_enable_recommendation_worker.py ]; then
+        echo -e "${BLUE}🟡 Запускаю Enable Recommendation Worker...${NC}"
+        .venv/bin/python run_enable_recommendation_worker.py > "$LOG_DIR/enable_recommendation_worker.log" 2>&1 &
+        ENABLE_RECO_PID=$!
+        echo "$ENABLE_RECO_PID enable_recommendation_worker" >> "$PID_FILE"
+        echo -e "${GREEN}  Enable Recommendation Worker PID: $ENABLE_RECO_PID${NC}"
+    else
+        echo -e "${YELLOW}⚠️  run_enable_recommendation_worker.py не найден, пропускаю${NC}"
+        ENABLE_RECO_PID=""
+    fi
+
+    # ==========================================
+    # 10. Запуск Telegram Poller
+    # ==========================================
+    echo -e "${BLUE}🤖 Запускаю Telegram Poller...${NC}"
+    .venv/bin/python -m apps.telegram_poller.main > "$LOG_DIR/telegram.log" 2>&1 &
+    TG_PID=$!
+    echo "$TG_PID telegram" >> "$PID_FILE"
+    echo -e "${GREEN}  Telegram PID: $TG_PID${NC}"
+fi
 
 # ==========================================
 # 10. Запуск Frontend (Vite)
@@ -475,13 +622,18 @@ fi
 sleep 2
 BOOT_OK=1
 check_process_started "$API_PID" "API" "$LOG_DIR/api.log" || BOOT_OK=0
-check_process_started "$OBSERVER_PID" "Observer Worker" "$LOG_DIR/observer.log" || BOOT_OK=0
-check_process_started "$DISABLE_PID" "Disable Worker" "$LOG_DIR/disable_worker.log" || BOOT_OK=0
-check_process_started "$ENABLE_PID" "Enable Worker" "$LOG_DIR/enable_worker.log" || BOOT_OK=0
-if [ -n "${ENABLE_RECO_PID:-}" ]; then
-    check_process_started "$ENABLE_RECO_PID" "Enable Recommendation Worker" "$LOG_DIR/enable_recommendation_worker.log" || BOOT_OK=0
+if [ -n "${BROWSER_AGENT_PID:-}" ]; then
+    check_process_started "$BROWSER_AGENT_PID" "Browser Agent" "$LOG_DIR/browser_agent.log" || BOOT_OK=0
 fi
-check_process_started "$TG_PID" "Telegram Poller" "$LOG_DIR/telegram.log" || BOOT_OK=0
+if [ "$USE_SUPERVISOR" -eq 0 ]; then
+    check_process_started "$OBSERVER_PID" "Observer Worker" "$LOG_DIR/observer.log" || BOOT_OK=0
+    check_process_started "$DISABLE_PID" "Disable Worker" "$LOG_DIR/disable_worker.log" || BOOT_OK=0
+    check_process_started "$ENABLE_PID" "Enable Worker" "$LOG_DIR/enable_worker.log" || BOOT_OK=0
+    if [ -n "${ENABLE_RECO_PID:-}" ]; then
+        check_process_started "$ENABLE_RECO_PID" "Enable Recommendation Worker" "$LOG_DIR/enable_recommendation_worker.log" || BOOT_OK=0
+    fi
+    check_process_started "$TG_PID" "Telegram Poller" "$LOG_DIR/telegram.log" || BOOT_OK=0
+fi
 if [ -n "${FRONTEND_PID:-}" ]; then
     check_process_started "$FRONTEND_PID" "Frontend" "$LOG_DIR/frontend.log" || BOOT_OK=0
 fi

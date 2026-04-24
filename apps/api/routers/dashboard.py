@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from apps.api.deps import get_db
 from apps.api.schemas import (
@@ -77,6 +78,7 @@ from core.math_utils import (
     to_int as _json_int,
 )
 from core.models import (
+    AdAutoEnableDisabled,
     AdSnapshot,
     AlertEvent,
     CabinetDayArchive,
@@ -521,7 +523,13 @@ async def _load_ad_snapshots_by_fb_ad_id(
     if not fb_ad_ids:
         return {}
 
-    result = await db.execute(select(AdSnapshot).where(AdSnapshot.fb_ad_id.in_(fb_ad_ids)))
+    result = await db.execute(
+        select(AdSnapshot)
+        .where(AdSnapshot.fb_ad_id.in_(fb_ad_ids))
+        .options(
+            selectinload(AdSnapshot.fb_ad).selectinload(FbAd.adset).selectinload(FbAdset.campaign)
+        )
+    )
     return {snapshot.fb_ad_id: snapshot for snapshot in result.scalars().all()}
 
 
@@ -2699,3 +2707,48 @@ async def get_ad_timeline(fb_ad_id: str, db: AsyncSession = Depends(get_db)):
 # ==========================================
 # Эндпоинты — Vision настройки
 # ==========================================
+
+
+# ==========================================
+# Эндпоинты — Авто-включение (исключения)
+# ==========================================
+
+
+@router.get("/dashboard/auto-enable-disabled")
+async def get_auto_enable_disabled(db: AsyncSession = Depends(get_db)):
+    """Возвращает список fb_ad_id у которых авто-включение отключено вручную."""
+    result = await db.execute(select(AdAutoEnableDisabled))
+    rows = result.scalars().all()
+    return {"fb_ad_ids": [r.fb_ad_id for r in rows]}
+
+
+@router.post("/dashboard/auto-enable-disabled/{fb_ad_id}")
+async def disable_auto_enable(fb_ad_id: str, db: AsyncSession = Depends(get_db)):
+    """Отключает авто-включение для конкретного объявления."""
+    from datetime import datetime, timezone
+
+    existing = await db.execute(
+        select(AdAutoEnableDisabled).where(AdAutoEnableDisabled.fb_ad_id == fb_ad_id)
+    )
+    if existing.scalar_one_or_none() is None:
+        db.add(
+            AdAutoEnableDisabled(
+                fb_ad_id=fb_ad_id,
+                cabinet_day_started_at=datetime.now(timezone.utc),
+            )
+        )
+        await db.commit()
+    return {"ok": True}
+
+
+@router.delete("/dashboard/auto-enable-disabled/{fb_ad_id}")
+async def enable_auto_enable(fb_ad_id: str, db: AsyncSession = Depends(get_db)):
+    """Включает авто-включение обратно (удаляет запись исключения)."""
+    result = await db.execute(
+        select(AdAutoEnableDisabled).where(AdAutoEnableDisabled.fb_ad_id == fb_ad_id)
+    )
+    row = result.scalar_one_or_none()
+    if row:
+        await db.delete(row)
+        await db.commit()
+    return {"ok": True}

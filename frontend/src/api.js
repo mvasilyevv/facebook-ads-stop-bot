@@ -113,6 +113,8 @@ export const createEnableTaskFromRecommendation = (eventId) =>
 export const getEnableTasks = (params = {}) => requestWithQuery('/dashboard/enable-tasks', params);
 export const retryDisableTask = (id) =>
   request(`/dashboard/disable-tasks/${id}/retry`, { method: 'POST' });
+export const cancelDisableTask = (id) =>
+  request(`/dashboard/disable-tasks/${id}`, { method: 'DELETE' });
 export const getSpendHistory = (params = {}) => requestWithQuery('/dashboard/spend-history', params);
 export const getChartData = (params = {}) => requestWithQuery('/dashboard/chart-data', params);
 export const getDashboardPerformance = (params = {}) => requestWithQuery('/dashboard/performance', params);
@@ -155,3 +157,22 @@ export const deleteTelegramRecipient = (id) =>
   request(`/settings/telegram/recipients/${id}`, { method: 'DELETE' });
 export const createInviteCode = () =>
   request('/settings/telegram/recipients/invite', { method: 'POST' });
+
+// --- Браузер ---
+export const validateBrowserColumns = () => request('/settings/browser/validate-columns');
+
+// --- Авто-включение ---
+export const toggleAutoEnable = (enabled) =>
+  request('/settings/observer/auto-enable', {
+    method: 'PATCH',
+    body: JSON.stringify({ enabled }),
+  });
+
+export const getAutoEnableDisabled = () => request('/dashboard/auto-enable-disabled');
+export const disableAutoEnable = (fbAdId) =>
+  request(`/dashboard/auto-enable-disabled/${fbAdId}`, { method: 'POST' });
+export const enableAutoEnable = (fbAdId) =>
+  request(`/dashboard/auto-enable-disabled/${fbAdId}`, { method: 'DELETE' });
+
+// --- Health Map (заглушка — endpoint не реализован) ---
+export const getDashboardHealthMap = () => Promise.resolve({ ads: [] });

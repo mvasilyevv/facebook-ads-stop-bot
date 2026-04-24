@@ -205,11 +205,7 @@ async def _load_disable_message_context(
     fallback_rule_codes: list[str] = []
     if snapshot is not None:
         fallback_rule_codes = list(
-            dict.fromkeys(
-                (snapshot.stop_rule_codes or [])
-                + (snapshot.warning_rule_codes or [])
-                + (snapshot.early_signal_rule_codes or [])
-            )
+            dict.fromkeys((snapshot.stop_rule_codes or []) + (snapshot.warning_rule_codes or []))
         )
 
     campaign_name: str | None = None

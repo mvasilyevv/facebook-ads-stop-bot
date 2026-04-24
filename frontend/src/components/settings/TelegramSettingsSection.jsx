@@ -69,7 +69,7 @@ function ConnectedTelegramPanel({ telegram, currentBotUsername, pollerStatusMeta
           {isForumMode && (
             <>
               <div>CONTROL: <code className="font-mono">{telegram.control_topic_id || '—'}</code></div>
-              <div>Topics: <code className="font-mono">{[telegram.early_topic_id, telegram.warning_topic_id, telegram.stop_topic_id, telegram.enable_topic_id].filter(Boolean).join(' / ') || '—'}</code></div>
+              <div>Topics: <code className="font-mono">{[telegram.warning_topic_id, telegram.stop_topic_id, telegram.enable_topic_id].filter(Boolean).join(' / ') || '—'}</code></div>
             </>
           )}
           {primaryRecipient?.username && <div>Telegram: @{primaryRecipient.username}</div>}

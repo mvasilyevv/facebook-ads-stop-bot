@@ -85,7 +85,6 @@ AUTH_CODE_CONTROL_ONLY_TEXT = "🔒 Код активации нужно отп�
 
 # Иконки состояний объявлений
 _STATE_ICONS: dict[AlertState, str] = {
-    AlertState.EARLY_SIGNAL_SENT: "🔎",
     AlertState.STOP_SENT: "🛑",
     AlertState.WARNING_SENT: "⚠️",
     AlertState.CLAIMED: "⏳",
@@ -103,7 +102,7 @@ def _key_metric_str(ad) -> str:
 
     Показывает CPC/CPL/CPR вместо расхода, если правило связано с этими метриками.
     """
-    rules = ad.stop_rule_codes or ad.warning_rule_codes or ad.early_signal_rule_codes or []
+    rules = ad.stop_rule_codes or ad.warning_rule_codes or []
     code = rules[0] if rules else ""
     if code == "cpc_stop":
         if ad.cpc is not None:
@@ -315,8 +314,6 @@ def _alert_stage_from_state(state: AlertState) -> AlertStage | None:
         return AlertStage.STOP
     if state == AlertState.WARNING_SENT:
         return AlertStage.WARNING
-    if state == AlertState.EARLY_SIGNAL_SENT:
-        return AlertStage.EARLY_SIGNAL
     return None
 
 
@@ -358,11 +355,7 @@ async def _build_disable_message_context_for_snapshot(
             incident_key=incident_key,
         )
     fallback_rule_codes = list(
-        dict.fromkeys(
-            (snapshot.stop_rule_codes or [])
-            + (snapshot.warning_rule_codes or [])
-            + (snapshot.early_signal_rule_codes or [])
-        )
+        dict.fromkeys((snapshot.stop_rule_codes or []) + (snapshot.warning_rule_codes or []))
     )
     fallback_metrics = {
         "spend": str(snapshot.spend),
@@ -446,7 +439,7 @@ async def _render_snoozed_alert_message(
                 if stage == AlertStage.STOP
                 else ad.warning_rule_codes
                 if stage == AlertStage.WARNING
-                else ad.early_signal_rule_codes
+                else []
             )
         )
 
@@ -546,8 +539,7 @@ async def _render_start() -> tuple[str, dict]:
         state_counts: dict = dict(state_counts_result.all())
         active_count = sum(state_counts.values())
         alert_count = sum(
-            state_counts.get(s, 0)
-            for s in (AlertState.EARLY_SIGNAL_SENT, AlertState.WARNING_SENT, AlertState.STOP_SENT)
+            state_counts.get(s, 0) for s in (AlertState.WARNING_SENT, AlertState.STOP_SENT)
         )
         queue_count = (
             await session.scalar(
@@ -636,7 +628,6 @@ async def _render_status() -> tuple[str, dict]:
         state_counts: dict = dict(state_counts_result.all())
         total_ads = sum(state_counts.values())
         ads_in_warning = state_counts.get(AlertState.WARNING_SENT, 0)
-        ads_in_early_signal = state_counts.get(AlertState.EARLY_SIGNAL_SENT, 0)
         ads_in_stop = state_counts.get(AlertState.STOP_SENT, 0)
         ads_disabled = (
             await session.scalar(
@@ -669,7 +660,6 @@ async def _render_status() -> tuple[str, dict]:
         f"🕐 Последний скан: {last_scan_str}"
         f"{stale_warning}\n\n"
         f"📋 Активных объявлений: <b>{total_ads}</b>\n"
-        f"🔎 Ранних сигналов: <b>{ads_in_early_signal}</b>\n"
         f"⚠️ Предупреждений: <b>{ads_in_warning}</b>\n"
         f"🛑 Стоп-алертов: <b>{ads_in_stop}</b>\n"
         f"🚫 Отключено: <b>{ads_disabled}</b>\n"
@@ -721,9 +711,7 @@ async def _render_ads(page: int = 0) -> tuple[str, dict]:
         all_ads = result.scalars().unique().all()
 
         has_alerts = any(
-            ad.alert_state
-            in {AlertState.EARLY_SIGNAL_SENT, AlertState.WARNING_SENT, AlertState.STOP_SENT}
-            for ad in all_ads
+            ad.alert_state in {AlertState.WARNING_SENT, AlertState.STOP_SENT} for ad in all_ads
         )
 
     if not all_ads:
@@ -744,10 +732,7 @@ async def _render_ads(page: int = 0) -> tuple[str, dict]:
         icon = _STATE_ICONS.get(ad.alert_state, "✅")
         leads_str = str(ad.leads) if ad.leads else "—"
         rules = [
-            _RULE_LABELS.get(c, c)
-            for c in (
-                ad.stop_rule_codes or ad.warning_rule_codes or ad.early_signal_rule_codes or []
-            )
+            _RULE_LABELS.get(c, c) for c in (ad.stop_rule_codes or ad.warning_rule_codes or [])
         ]
         rule_str = f" · {rules[0]}" if rules else ""
         ad_name = _snapshot_ad_name(ad)
@@ -772,7 +757,6 @@ async def _render_alerts(page: int = 0) -> tuple[str, dict]:
             .where(
                 AdSnapshot.alert_state.in_(
                     [
-                        AlertState.EARLY_SIGNAL_SENT,
                         AlertState.WARNING_SENT,
                         AlertState.STOP_SENT,
                     ]
@@ -800,10 +784,7 @@ async def _render_alerts(page: int = 0) -> tuple[str, dict]:
     for ad in ads:
         icon = _STATE_ICONS.get(ad.alert_state, "⚠️")
         rules = [
-            _RULE_LABELS.get(c, c)
-            for c in (
-                ad.stop_rule_codes or ad.warning_rule_codes or ad.early_signal_rule_codes or []
-            )
+            _RULE_LABELS.get(c, c) for c in (ad.stop_rule_codes or ad.warning_rule_codes or [])
         ]
         rule_str = f" · {rules[0]}" if rules else ""
         metric_str = _key_metric_str(ad)
@@ -873,7 +854,6 @@ async def _render_ad_detail(fb_ad_id: str, source: str = "ads") -> tuple[str, di
 
     state_labels = {
         AlertState.NORMAL: "✅ Норма",
-        AlertState.EARLY_SIGNAL_SENT: "🔎 Ранний сигнал",
         AlertState.WARNING_SENT: "⚠️ Предупреждение",
         AlertState.STOP_SENT: "🛑 Стоп",
         AlertState.CLAIMED: "⏳ Отключение в очереди",
@@ -881,13 +861,7 @@ async def _render_ad_detail(fb_ad_id: str, source: str = "ads") -> tuple[str, di
     }
     lines.append(f"📊 Статус: {state_labels.get(ad.alert_state, str(ad.alert_state))}")
 
-    rule_codes = list(
-        dict.fromkeys(
-            (ad.stop_rule_codes or [])
-            + (ad.warning_rule_codes or [])
-            + (ad.early_signal_rule_codes or [])
-        )
-    )
+    rule_codes = list(dict.fromkeys((ad.stop_rule_codes or []) + (ad.warning_rule_codes or [])))
     if rule_codes:
         rules_str = ", ".join(_RULE_LABELS.get(c, c) for c in rule_codes)
         lines.append(f"🔍 Правила: {html.escape(rules_str)}")
@@ -903,7 +877,6 @@ async def _render_ad_detail(fb_ad_id: str, source: str = "ads") -> tuple[str, di
     action_row: list[dict] = []
     if ad.alert_state in {
         AlertState.NORMAL,
-        AlertState.EARLY_SIGNAL_SENT,
         AlertState.WARNING_SENT,
     }:
         action_row = [
@@ -1041,7 +1014,6 @@ async def _render_disable_all_confirm() -> tuple[str, dict]:
             .where(
                 AdSnapshot.alert_state.in_(
                     [
-                        AlertState.EARLY_SIGNAL_SENT,
                         AlertState.WARNING_SENT,
                         AlertState.STOP_SENT,
                     ]
@@ -1155,10 +1127,7 @@ async def _render_disabled(page: int = 0) -> tuple[str, dict]:
         disabled_at = ad.updated_at.astimezone().strftime("%H:%M %d.%m") if ad.updated_at else "?"
         rules = (
             ", ".join(
-                _RULE_LABELS.get(c, c)
-                for c in (
-                    ad.stop_rule_codes or ad.warning_rule_codes or ad.early_signal_rule_codes or []
-                )
+                _RULE_LABELS.get(c, c) for c in (ad.stop_rule_codes or ad.warning_rule_codes or [])
             )
             or "—"
         )
@@ -2075,7 +2044,6 @@ async def _execute_disable_all(*, tg_user_id: str, username: str) -> tuple[int, 
             .where(
                 AdSnapshot.alert_state.in_(
                     [
-                        AlertState.EARLY_SIGNAL_SENT,
                         AlertState.WARNING_SENT,
                         AlertState.STOP_SENT,
                     ]

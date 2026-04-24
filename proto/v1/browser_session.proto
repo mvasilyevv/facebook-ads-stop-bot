@@ -1,0 +1,109 @@
+syntax = "proto3";
+
+package fb_agent.browser_session.v1;
+
+service BrowserSessionService {
+  // Запустить Vision профиль и подключиться через CDP.
+  // Возвращает session_id для всех последующих вызовов.
+  rpc StartBrowser(StartBrowserRequest) returns (StartBrowserResponse);
+
+  // Отключиться от браузера (закрыть CDP, не останавливая Vision профиль).
+  rpc DisconnectBrowser(DisconnectBrowserRequest) returns (DisconnectBrowserResponse);
+
+  // Полностью остановить Vision профиль (disconnect + stop profile).
+  rpc StopBrowser(StopBrowserRequest) returns (StopBrowserResponse);
+
+  // Переподключиться после разрыва или ошибки.
+  rpc ReconnectBrowser(ReconnectBrowserRequest) returns (StartBrowserResponse);
+
+  // Получить информацию о сессии (URL, контексты, страницы).
+  rpc GetSessionInfo(GetSessionInfoRequest) returns (GetSessionInfoResponse);
+
+  // Перейти на URL.
+  rpc Navigate(NavigateRequest) returns (NavigateResponse);
+
+  // Стриминг статусов сессии (heartbeat, ошибки, смена страницы).
+  rpc StreamSessionStatus(StreamSessionStatusRequest) returns (stream SessionStatusEvent);
+}
+
+message StartBrowserRequest {
+  string vision_x_token = 1;
+  string vision_api_url = 2;          // default: http://127.0.0.1:3030
+  string vision_profile_id = 3;
+  optional string vision_folder_id = 4;
+  int32 viewport_width = 5;           // default: 1280
+  int32 viewport_height = 6;          // default: 800
+}
+
+message StartBrowserResponse {
+  string session_id = 1;
+  VisionProfile profile = 2;
+  string initial_page_url = 3;
+  repeated PageInfo pages = 4;
+}
+
+message VisionProfile {
+  string folder_id = 1;
+  string profile_id = 2;
+  int32 cdp_port = 3;
+}
+
+message PageInfo {
+  string page_id = 1;
+  string url = 2;
+  string title = 3;
+}
+
+message DisconnectBrowserRequest {
+  string session_id = 1;
+}
+
+message DisconnectBrowserResponse {}
+
+message StopBrowserRequest {
+  string session_id = 1;
+}
+
+message StopBrowserResponse {}
+
+message ReconnectBrowserRequest {
+  string session_id = 1;
+  string vision_x_token = 2;
+  string vision_api_url = 3;
+  string vision_profile_id = 4;
+}
+
+message GetSessionInfoRequest {
+  string session_id = 1;
+}
+
+message GetSessionInfoResponse {
+  string session_id = 1;
+  bool connected = 2;
+  string current_url = 3;
+  repeated PageInfo pages = 4;
+  int64 connected_since = 5;
+}
+
+message NavigateRequest {
+  string session_id = 1;
+  optional string page_id = 2;
+  string url = 3;
+  string wait_until = 4;  // "load", "domcontentloaded", "networkidle"
+}
+
+message NavigateResponse {
+  string url = 1;
+}
+
+message StreamSessionStatusRequest {
+  string session_id = 1;
+}
+
+message SessionStatusEvent {
+  string session_id = 1;
+  string status = 2;  // "connected", "disconnected", "error", "page_changed"
+  string detail = 3;
+  string current_url = 4;
+  int64 timestamp = 5;
+}

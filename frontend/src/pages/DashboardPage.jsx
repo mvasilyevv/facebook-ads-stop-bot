@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { fmt$ as _fmt$, fmtN as _fmtN, fmtRoas as _fmtRoas } from '../utils/formatters.js';
 import {
@@ -7,8 +7,10 @@ import {
   getDisableTasks,
   getObserverSettings,
   toggleScanning,
+  toggleAutoEnable,
   triggerScanNow,
   retryDisableTask,
+  cancelDisableTask,
   getDashboardPerformance,
   getEnableTasks,
   getEnableRecommendations,
@@ -16,6 +18,7 @@ import {
   getSpendHistory,
   createDisableTask,
   createEnableTaskFromRecommendation,
+  validateBrowserColumns,
 } from '../api.js';
 import { useRefreshOnResume } from '../hooks/useRefreshOnResume.js';
 import { AlertTray } from '../components/AlertTray.jsx';
@@ -25,11 +28,56 @@ import { TaskQueuePanel } from '../components/TaskQueuePanel.jsx';
 import { BudgetOverrunChart } from '../components/BudgetOverrunChart.jsx';
 import { CampaignBreakdownTable } from '../components/CampaignBreakdownTable.jsx';
 import { RuleViolationRanking } from '../components/RuleViolationRanking.jsx';
-import { TopAdsQualityTable } from '../components/TopAdsQualityTable.jsx';
+import { OfferLeaderboard } from '../components/OfferLeaderboard.jsx';
 import { CampaignComparativeBars } from '../components/CampaignComparativeBars.jsx';
 import { SpendAlertsChart } from '../components/SpendAlertsChart.jsx';
 
+const HealthMapPage = lazy(() => import('./HealthMapPage.jsx'));
+
 /* === Вспомогательные компоненты === */
+
+/** Баннер ошибки валидации колонок — показывается если колонки отсутствуют. */
+function ColumnValidationBanner({ validationResult, onRecheck }) {
+  if (!validationResult || validationResult.valid) return null;
+
+  const missing = validationResult.missing_columns || [];
+  if (missing.length === 0) return null;
+
+  return (
+    <div className="rounded-md bg-danger-muted border border-danger/30 px-4 py-3 mb-md">
+      <div className="flex items-start gap-3">
+        <span className="status-dot bg-danger animate-pulse-dot mt-0.5" />
+        <div className="flex-1">
+          <p className="text-sm font-semibold text-danger mb-1">
+            Отсутствуют колонки в таблице Ads Manager
+          </p>
+          <p className="text-2xs text-danger/80 mb-2">
+            Сервис не может корректно сканировать объявления. Добавьте следующие колонки в таблицу Ads Manager:
+          </p>
+          <div className="flex flex-wrap gap-1.5 mb-2">
+            {missing.map((col) => (
+              <span key={col} className="rounded bg-danger/20 px-2 py-0.5 text-2xs font-mono text-danger">
+                {col}
+              </span>
+            ))}
+          </div>
+          <button
+            className="text-2xs text-danger/70 hover:text-danger underline"
+            onClick={onRecheck}
+          >
+            Проверить снова
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function isDeliveryDisabled(status) {
+  if (!status) return false;
+  const s = status.toLowerCase();
+  return s === 'off' || s.includes('off');
+}
 
 function normalizeIncidentList(payload) {
   if (!Array.isArray(payload)) return [];
@@ -43,6 +91,7 @@ function normalizeIncidentList(payload) {
     matched_rule_codes: item.matched_rule_codes || [],
     last_activity_at: item.last_activity_at,
     has_active_disable_task: item.has_active_disable_task,
+    delivery_status: item.delivery_status,
   }));
 }
 
@@ -69,9 +118,8 @@ function Delta({ today, yesterday, lowerIsBetter = false }) {
 function AlertBanner({ stats }) {
   const stopCount = stats?.ads_in_stop ?? 0;
   const warnCount = stats?.ads_in_warning ?? 0;
-  const earlyCount = stats?.ads_in_early_signal ?? 0;
 
-  if (stopCount === 0 && warnCount === 0 && earlyCount === 0) {
+  if (stopCount === 0 && warnCount === 0) {
     return (
       <div className="panel flex items-center gap-3 px-4 py-3 mb-md border-success/30 bg-success-muted">
         <span className="status-dot bg-success animate-pulse-dot" />
@@ -94,13 +142,6 @@ function AlertBanner({ stats }) {
           <span className="status-dot bg-warning animate-pulse-dot" />
           <span className="font-mono text-2xl text-warning">{warnCount}</span>
           <span className="text-2xs uppercase tracking-wider text-warning/70">WARNING</span>
-        </div>
-      )}
-      {earlyCount > 0 && (
-        <div className="flex items-center gap-2">
-          <span className="status-dot bg-early" />
-          <span className="font-mono text-xl text-early">{earlyCount}</span>
-          <span className="text-2xs uppercase tracking-wider text-early/70">РАННИЙ</span>
         </div>
       )}
     </div>
@@ -146,17 +187,47 @@ function ScanStatusBar({ settings, onToggle, onScanNow, scanning, lastScanAt, ob
   const isRunning = observerStatus === 'RUNNING' || scanning;
 
   let statusText = '';
+  let statusDetail = '';
   let statusColor = 'text-muted';
   let showDot = false;
   if (!isEnabled) {
     statusText = 'Выключено';
   } else if (observerStatus === 'WAITING_BROWSER') {
-    statusText = 'Браузер занят';
+    const rawMessage = (observerStatusMessage || '').trim();
+    const isEnableQueue = /^Браузер занят задачами включения/i.test(rawMessage);
+    const isDisableQueue = /^Браузер занят задачами отключения/i.test(rawMessage);
+    statusText = isEnableQueue
+      ? 'Браузер занят включением объявлений'
+      : isDisableQueue
+        ? 'Браузер занят отключением объявлений'
+        : 'Браузер занят обработкой объявлений';
+    const normalizedReason = rawMessage
+      .replace(/^Браузер занят задачами (отключения|включения)\.?\s*/i, '')
+      .trim();
+    if (isEnableQueue) {
+      statusDetail = normalizedReason
+        ? `Идёт очередь включения. ${normalizedReason} Скан продолжится автоматически.`
+        : 'Идёт очередь включения объявлений. Скан продолжится автоматически после её завершения.';
+    } else if (isDisableQueue) {
+      statusDetail = normalizedReason
+        ? `Идёт очередь отключения. ${normalizedReason} Скан продолжится автоматически.`
+        : 'Идёт очередь отключения объявлений. Скан продолжится автоматически после её завершения.';
+    } else {
+      statusDetail = normalizedReason
+        ? `Идёт фоновая обработка. ${normalizedReason} Скан продолжится автоматически.`
+        : 'Браузер временно занят фоновыми задачами. Скан продолжится автоматически после их завершения.';
+    }
     statusColor = 'text-warning';
   } else if (observerStatus === 'DISABLING') {
     statusText = 'Отключаем объявления…';
     statusColor = 'text-warning';
     showDot = true;
+  } else if (observerStatus === 'ERROR') {
+    statusText = 'Сканер не подключён к браузеру';
+    statusDetail = observerStatusMessage
+      ? `${observerStatusMessage} Сканирование не выполняется, пока подключение не восстановится.`
+      : 'Сканирование не выполняется, пока не восстановится подключение к браузеру.';
+    statusColor = 'text-danger';
   } else if (observerStatus === 'PAUSED') {
     statusText = observerStatusMessage ?? 'Пауза';
     statusColor = 'text-warning';
@@ -191,9 +262,16 @@ function ScanStatusBar({ settings, onToggle, onScanNow, scanning, lastScanAt, ob
       </span>
 
       {statusText && (
-        <span className={`flex items-center gap-1.5 text-2xs font-medium ${statusColor}`}>
-          {showDot && <span className="status-dot bg-success animate-pulse-dot" />}
-          {statusText}
+        <span className="flex flex-col">
+          <span className={`flex items-center gap-1.5 text-2xs font-medium ${statusColor}`}>
+            {showDot && <span className="status-dot bg-success animate-pulse-dot" />}
+            {statusText}
+          </span>
+          {statusDetail && (
+            <span className="text-[11px] leading-tight text-muted">
+              {statusDetail}
+            </span>
+          )}
         </span>
       )}
 
@@ -267,7 +345,9 @@ export default function DashboardPage({ onNavigate }) {
   const queryClient = useQueryClient();
   const [error, setError] = useState(null);
   const [toggling, setToggling] = useState(false);
+  const [togglingAutoEnable, setTogglingAutoEnable] = useState(false);
   const [scanning, setScanning] = useState(false);
+  const [healthMapOpen, setHealthMapOpen] = useState(false);
   // Баг 2: useRef для таймера polling — cleanup всегда ловит актуальный timerId
   const scanTimerRef = useRef(null);
 
@@ -278,11 +358,18 @@ export default function DashboardPage({ onNavigate }) {
     refetchInterval: 30_000,
   });
 
-  const { data: performance } = useQuery({
+  const { data: rawPerformance } = useQuery({
     queryKey: ['performanceToday'],
     queryFn: () => getDashboardPerformance({ period: 'today' }),
     refetchInterval: 30_000,
   });
+  // Держим последние ненулевые данные чтобы не мигать нулями во время скана
+  const lastNonZeroPerformanceRef = useRef(null);
+  const performance = useMemo(() => {
+    const spend = Number(rawPerformance?.summary?.spend ?? 0);
+    if (spend > 0) lastNonZeroPerformanceRef.current = rawPerformance;
+    return lastNonZeroPerformanceRef.current ?? rawPerformance;
+  }, [rawPerformance]);
 
   const { data: performanceYesterday } = useQuery({
     queryKey: ['performanceYesterday'],
@@ -307,6 +394,14 @@ export default function DashboardPage({ onNavigate }) {
     queryKey: ['enableRecs'],
     queryFn: () => getEnableRecommendations({ limit: 10 }).catch(() => []),
     refetchInterval: 30_000,
+  });
+
+  /* Валидация колонок — проверяем раз в 60с */
+  const { data: columnValidation, refetch: refetchColumns } = useQuery({
+    queryKey: ['columnValidation'],
+    queryFn: () => validateBrowserColumns().catch(() => ({ valid: true, missing_columns: [], found_columns: [], error_message: '' })),
+    refetchInterval: 60_000,
+    retry: false,
   });
 
   /* --- Realtime-данные: обновление каждые 5 секунд --- */
@@ -362,6 +457,23 @@ export default function DashboardPage({ onNavigate }) {
       setError(`Ошибка переключения сканирования: ${e.message}`);
     } finally {
       setToggling(false);
+    }
+  };
+
+  const handleAutoEnableToggle = async () => {
+    if (togglingAutoEnable || !settings) return;
+    setTogglingAutoEnable(true);
+    const previousData = queryClient.getQueryData(['observerSettings']);
+    queryClient.setQueryData(['observerSettings'], (cur) =>
+      cur ? { ...cur, auto_enable_recommendations: !cur.auto_enable_recommendations } : cur,
+    );
+    try {
+      await toggleAutoEnable(!settings.auto_enable_recommendations);
+    } catch (e) {
+      queryClient.setQueryData(['observerSettings'], previousData);
+      setError(`Ошибка переключения авто-включения: ${e.message}`);
+    } finally {
+      setTogglingAutoEnable(false);
     }
   };
 
@@ -428,7 +540,26 @@ export default function DashboardPage({ onNavigate }) {
     }
   };
 
-  const activeIncidents = incidents.filter((i) => i.current_state !== 'NORMAL');
+  const handleCancelDisableTask = async (taskId, adName) => {
+    const label = adName ? ` для ${adName}` : '';
+    if (!window.confirm(`Удалить задачу отключения${label} из очереди?`)) {
+      return;
+    }
+
+    try {
+      await cancelDisableTask(taskId);
+      /* Инвалидируем кеш задач и инцидентов после ручного удаления */
+      queryClient.invalidateQueries({ queryKey: ['disableTasks'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboardIncidents'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboardStats'] });
+    } catch (e) {
+      setError(`Ошибка удаления из очереди: ${e.message}`);
+    }
+  };
+
+  const activeIncidents = incidents.filter(
+    (i) => i.current_state !== 'NORMAL' && !isDeliveryDisabled(i.delivery_status),
+  );
 
   return (
     <div className="space-y-md">
@@ -439,6 +570,12 @@ export default function DashboardPage({ onNavigate }) {
           <button onClick={() => setError(null)} className="ml-3 text-danger/60 hover:text-danger">✕</button>
         </div>
       )}
+
+      {/* Валидация колонок */}
+      <ColumnValidationBanner
+        validationResult={columnValidation}
+        onRecheck={() => refetchColumns()}
+      />
 
       {/* 1. Hero-баннер алертов — ПЕРВОЕ, что видит медиабаер */}
       <AlertBanner stats={stats} />
@@ -454,13 +591,38 @@ export default function DashboardPage({ onNavigate }) {
         observerStatusMessage={stats?.observer_status_message}
       />
 
+      {/* 2b. Авто-включение по рекомендациям */}
+      <div className="panel flex items-center gap-3 px-4 py-2.5 mb-md">
+        <button
+          onClick={handleAutoEnableToggle}
+          className="toggle-track"
+          data-active={settings?.auto_enable_recommendations ?? false}
+          role="switch"
+          aria-checked={settings?.auto_enable_recommendations ?? false}
+          aria-label={(settings?.auto_enable_recommendations ?? false) ? 'Выключить авто-включение' : 'Включить авто-включение'}
+        >
+          <span className="toggle-knob" data-active={settings?.auto_enable_recommendations ?? false} />
+        </button>
+        <span className="text-2xs font-bold uppercase tracking-widest text-secondary">
+          Авто-включение
+        </span>
+        <span className="text-2xs text-muted">
+          {(settings?.auto_enable_recommendations ?? false)
+            ? 'Рекомендации принимаются автоматически'
+            : 'Рекомендации требуют ручного подтверждения'}
+        </span>
+      </div>
+
       {/* 3. KPI-полоса */}
       <HeroKPIStrip performance={performance} performanceYesterday={performanceYesterday} />
 
-      {/* 4. Двухколоночная компоновка: лево 65% / право 35% */}
+      {/* ЗОНА 2: Оперативный контроль */}
+      <hr className="border-border/40 my-1" />
+      <p className="text-[10px] font-semibold uppercase tracking-widest text-muted/50 mb-2">Оперативный контроль</p>
+
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_0.54fr] gap-md items-start">
 
-        {/* === ЛЕВАЯ КОЛОНКА === */}
+        {/* === ЛЕВАЯ КОЛОНКА (~65%) === */}
         <div className="space-y-md min-w-0">
 
           {/* Лента инцидентов */}
@@ -484,23 +646,9 @@ export default function DashboardPage({ onNavigate }) {
             />
           </div>
 
-          {/* CPR по кампаниям */}
-          <div className="panel p-4">
-            <CampaignComparativeBars data={performance?.campaigns ?? []} />
-          </div>
-
-          {/* Бюджет + Кампании */}
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-md">
-            <div className="panel p-4">
-              <BudgetOverrunChart data={chartData?.campaign_budget_deltas ?? []} />
-            </div>
-            <div className="panel p-4">
-              <CampaignBreakdownTable data={performance?.campaigns ?? []} />
-            </div>
-          </div>
         </div>
 
-        {/* === ПРАВАЯ КОЛОНКА === */}
+        {/* === ПРАВАЯ КОЛОНКА (~35%) === */}
         <div className="space-y-md min-w-0">
 
           {/* Очередь задач */}
@@ -508,8 +656,9 @@ export default function DashboardPage({ onNavigate }) {
             <TaskQueuePanel
               disableTasks={disableTasks}
               enableTasks={enableTasks}
-              enableRecs={enableRecs}
+              enableRecs={(enableRecs ?? []).filter((r) => !isDeliveryDisabled(r.delivery_status))}
               onRetryDisable={handleRetry}
+              onCancelDisable={handleCancelDisableTask}
               onCreateEnableTask={handleEnableTask}
             />
           </div>
@@ -518,6 +667,7 @@ export default function DashboardPage({ onNavigate }) {
           <div className="panel p-4">
             <CampaignScorecard
               stats={stats}
+              statsYesterday={null}
               performance={performance}
               spendHistory={spendHistory}
               onStateClick={(state) => onNavigate?.(`/ads?state=${state}`)}
@@ -529,16 +679,58 @@ export default function DashboardPage({ onNavigate }) {
             <RuleViolationRanking data={chartData?.rule_violations ?? []} />
           </div>
 
-          {/* Воронка */}
-          <div className="panel p-4">
-            <FunnelChart funnel={performance?.funnel ?? []} />
-          </div>
+        </div>
+      </div>
 
-          {/* Топ объявления */}
+      {/* ЗОНА 3: Аналитика кампаний */}
+      <hr className="border-border/40 my-1" />
+      <p className="text-[10px] font-semibold uppercase tracking-widest text-muted/50 mb-2">Аналитика кампаний</p>
+
+      <div className="space-y-md">
+
+        {/* CPR по кампаниям */}
+        <div className="panel p-4">
+          <CampaignComparativeBars data={performance?.campaigns ?? []} />
+        </div>
+
+        {/* Бюджет + Кампании */}
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-md">
           <div className="panel p-4">
-            <TopAdsQualityTable data={chartData?.top_ads_by_spend ?? []} />
+            <BudgetOverrunChart data={chartData?.campaign_budget_deltas ?? []} />
+          </div>
+          <div className="panel p-4">
+            <CampaignBreakdownTable data={performance?.campaigns ?? []} />
           </div>
         </div>
+
+        {/* Офферы */}
+        <div className="panel p-4">
+          <OfferLeaderboard data={performance?.campaigns ?? []} />
+        </div>
+
+        {/* Воронка */}
+        <div className="panel p-4">
+          <FunnelChart funnel={performance?.funnel ?? []} />
+        </div>
+
+      </div>
+
+      {/* Состояние системы — collapsible */}
+      <div className="panel overflow-hidden">
+        <button
+          className="flex w-full items-center justify-between px-4 py-3 text-left"
+          onClick={() => setHealthMapOpen(v => !v)}
+        >
+          <span className="text-2xs font-bold uppercase tracking-widest text-muted">Состояние системы</span>
+          <span className="text-muted text-sm">{healthMapOpen ? '▲' : '▼'}</span>
+        </button>
+        {healthMapOpen && (
+          <div className="px-4 pb-4">
+            <Suspense fallback={<div className="h-32 animate-pulse bg-elevated rounded" />}>
+              <HealthMapPage embedded />
+            </Suspense>
+          </div>
+        )}
       </div>
 
     </div>

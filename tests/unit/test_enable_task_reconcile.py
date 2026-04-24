@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from core.domain import EnableTaskStatus
-from core.enable_tasks import reconcile_enable_tasks
+from core.enable_tasks import calculate_active_enable_cutoff, reconcile_enable_tasks
 
 
 @dataclass
@@ -59,7 +59,8 @@ async def test_reconcile_enable_tasks_retries_stale_running_task():
         side_effect=[
             obs_result,
             _rows_result([]),
-            _rows_result([(task, None)]),
+            _rows_result([]),
+            _rows_result([(task, None, "ad-001")]),
         ]
     )
 
@@ -94,7 +95,8 @@ async def test_reconcile_enable_tasks_fails_stale_task_when_attempts_exhausted()
         side_effect=[
             obs_result,
             _rows_result([]),
-            _rows_result([(task, None)]),
+            _rows_result([]),
+            _rows_result([(task, None, "ad-001")]),
         ]
     )
 
@@ -130,7 +132,7 @@ async def test_reconcile_enable_tasks_cancels_previous_cabinet_day_task():
     session.execute = AsyncMock(
         side_effect=[
             obs_result,
-            _rows_result([(task, stale_event)]),
+            _rows_result([(task, stale_event, "ad-001")]),
             _rows_result([]),
             _rows_result([]),
             _rows_result([]),
@@ -144,3 +146,22 @@ async def test_reconcile_enable_tasks_cancels_previous_cabinet_day_task():
     assert task.completed_at == now
     assert task.next_retry_at is None
     assert "новые сутки кабинета" in (task.last_error or "")
+
+
+# Проверяем, что stale last_scan не удерживает enable-задачи бесконечно активными.
+def test_calculate_active_enable_cutoff_uses_now_for_stale_scan():
+    now = datetime(2026, 4, 16, 18, 0, tzinfo=UTC)
+    last_scan = now - timedelta(hours=8)
+
+    cutoff = calculate_active_enable_cutoff(now=now, last_scan=last_scan)
+
+    assert cutoff == now - timedelta(minutes=30)
+
+
+# Проверяем, что свежий last_scan сохраняет обычное окно живого батча.
+def test_calculate_active_enable_cutoff_preserves_fresh_scan_window():
+    now = datetime(2026, 4, 16, 18, 0, tzinfo=UTC)
+
+    cutoff = calculate_active_enable_cutoff(now=now, last_scan=now)
+
+    assert cutoff == now - timedelta(minutes=30)

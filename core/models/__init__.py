@@ -128,6 +128,10 @@ class ObserverSettings(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     worker_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     worker_last_error: Mapped[str | None] = mapped_column(String(500))
     worker_last_error_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Флаг автоматического включения объявлений по рекомендациям
+    auto_enable_recommendations: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
     # Глобальные настройки комиссий для расчёта profit
     install_cost: Mapped[Decimal] = mapped_column(
         Numeric(8, 4), default=Decimal("0.02"), server_default="0.02"
@@ -182,7 +186,6 @@ class TelegramSettings(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     poller_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Topic IDs для forum supergroup.
     control_topic_id: Mapped[int | None] = mapped_column(Integer)
-    early_topic_id: Mapped[int | None] = mapped_column(Integer)
     warning_topic_id: Mapped[int | None] = mapped_column(Integer)
     stop_topic_id: Mapped[int | None] = mapped_column(Integer)
     enable_topic_id: Mapped[int | None] = mapped_column(Integer)
@@ -247,29 +250,6 @@ class OfferRuleConfig(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         Numeric(8, 2), default=Decimal("70")
     )
     spend_with_dep_to_percent: Mapped[Decimal] = mapped_column(Numeric(8, 2), default=Decimal("90"))
-
-    # Ранний сигнал: низкий CTR исходящих кликов
-    early_outbound_ctr_signal_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
-    early_outbound_ctr_signal_min_percent: Mapped[Decimal] = mapped_column(
-        Numeric(8, 4), default=Decimal("0.80")
-    )
-    early_outbound_ctr_signal_min_spend_percent: Mapped[Decimal] = mapped_column(
-        Numeric(8, 2), default=Decimal("5")
-    )
-
-    # Ранний сигнал: мало открытий PWA после клика
-    early_lpv_ratio_signal_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
-    early_lpv_ratio_signal_min_percent: Mapped[Decimal] = mapped_column(
-        Numeric(8, 2), default=Decimal("60")
-    )
-    early_lpv_ratio_signal_min_outbound_clicks: Mapped[int] = mapped_column(Integer, default=5)
-
-    # Ранний сигнал: высокая стоимость просмотра лендинга
-    early_cost_per_lpv_signal_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
-    early_cost_per_lpv_signal_percent_of_cpa: Mapped[Decimal] = mapped_column(
-        Numeric(8, 2), default=Decimal("5")
-    )
-    early_cost_per_lpv_signal_min_views: Mapped[int] = mapped_column(Integer, default=2)
 
     # Диагностика частоты
     frequency_elevated_threshold: Mapped[Decimal] = mapped_column(
@@ -454,7 +434,6 @@ class AdSnapshot(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     cost_per_landing_page_view: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
 
     # Состояние алертов
-    early_signal_rule_codes: Mapped[list[str]] = mapped_column(JSON, default=list)
     warning_rule_codes: Mapped[list[str]] = mapped_column(JSON, default=list)
     stop_rule_codes: Mapped[list[str]] = mapped_column(JSON, default=list)
     current_stage: Mapped[AlertStage | None] = mapped_column(_ALERT_STAGE_ENUM)
@@ -555,6 +534,11 @@ class DisableTask(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     fb_ad: Mapped[FbAd | None] = relationship(back_populates="disable_tasks")
     snapshot: Mapped[AdSnapshot | None] = relationship(back_populates="disable_tasks")
+
+    @property
+    def fb_ad_id(self) -> str | None:
+        """Возвращает fb_ad_id из связанного объявления для обратной совместимости."""
+        return self.fb_ad.fb_ad_id if self.fb_ad else None
 
 
 # === Событие рекомендации на включение ===
@@ -657,6 +641,21 @@ class EnableTask(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     fb_ad: Mapped[FbAd | None] = relationship(back_populates="enable_tasks")
     recommendation_event: Mapped[EnableRecommendationEvent | None] = relationship()
+
+
+# === Per-ad флаг отключения автовключения ===
+
+
+class AdAutoEnableDisabled(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """Хранит fb_ad_id объявлений, у которых автовключение ВЫКЛЮЧЕНО вручную.
+
+    При смене cabinet_day_started_at устаревшие записи удаляются воркером.
+    """
+
+    __tablename__ = "ad_auto_enable_disabled"
+
+    fb_ad_id: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    cabinet_day_started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
 # === Настройки Vision браузера ===

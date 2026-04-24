@@ -53,7 +53,7 @@ export function AlertTray({ incidents = [], disableTasks = [], onSelectIncident,
     return null;
   }
 
-  const stateOrder = { STOP_SENT: 0, WARNING_SENT: 1, EARLY_SIGNAL_SENT: 2, CLAIMED: 3 };
+  const stateOrder = { STOP_SENT: 0, WARNING_SENT: 1, CLAIMED: 2 };
   const sorted = [...incidents].sort(
     (a, b) => (stateOrder[a.current_state] ?? 99) - (stateOrder[b.current_state] ?? 99)
   );
@@ -61,7 +61,6 @@ export function AlertTray({ incidents = [], disableTasks = [], onSelectIncident,
   const stateConfig = {
     STOP_SENT: 'stop',
     WARNING_SENT: 'warning',
-    EARLY_SIGNAL_SENT: 'signal',
     CLAIMED: 'claimed',
   };
 

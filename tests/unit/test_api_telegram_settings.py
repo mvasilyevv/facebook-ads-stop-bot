@@ -22,6 +22,19 @@ def mock_db():
     return db
 
 
+# Проверяем, что Vision settings зарегистрированы и для GET, и для PUT на одном пути.
+def test_vision_settings_route_supports_get_and_put():
+    from apps.api.main import app
+
+    methods = set()
+    for route in app.routes:
+        if getattr(route, "path", "") == "/api/settings/vision":
+            methods.update(getattr(route, "methods", set()))
+
+    assert "GET" in methods
+    assert "PUT" in methods
+
+
 # Проверяем, что GET настроек Telegram отдаёт forum-group поля и activation command.
 @pytest.mark.asyncio
 async def test_get_telegram_settings_returns_forum_group_fields(mock_db):
@@ -41,7 +54,6 @@ async def test_get_telegram_settings_returns_forum_group_fields(mock_db):
         auth_code="123456",
         delivery_mode=TelegramDeliveryMode.FORUM_GROUP.value,
         control_topic_id=11,
-        early_topic_id=12,
         warning_topic_id=13,
         stop_topic_id=14,
         enable_topic_id=15,
@@ -65,7 +77,6 @@ async def test_get_telegram_settings_returns_forum_group_fields(mock_db):
     assert result.forum_chat_id == "-1003701505954"
     assert result.chat_id == "-1003701505954"
     assert result.control_topic_id == 11
-    assert result.early_topic_id == 12
     assert result.warning_topic_id == 13
     assert result.stop_topic_id == 14
     assert result.enable_topic_id == 15
@@ -99,7 +110,6 @@ async def test_set_telegram_token_prepares_forum_cutover(mock_db):
         auth_code="123456",
         activation_command="/start 123456",
         control_topic_id=11,
-        early_topic_id=12,
         warning_topic_id=13,
         stop_topic_id=14,
         enable_topic_id=15,
@@ -160,7 +170,6 @@ async def test_create_invite_code_returns_activation_command_for_forum_group(moc
         owner_username="owner",
         delivery_mode=TelegramDeliveryMode.FORUM_GROUP.value,
         control_topic_id=11,
-        early_topic_id=12,
         warning_topic_id=13,
         stop_topic_id=14,
         enable_topic_id=15,

@@ -15,10 +15,10 @@ import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
 
+import grpc
 from sqlalchemy import select
 
-from core.browser.humanizer import human_move, human_wheel_scroll
-from core.browser.vision_client import VisionClient
+from clients.python_grpc.client import BrowserAgentClient, ScanDataUnavailableError, ScanResult
 from core.db import get_session_factory
 from core.diagnostics import (
     build_ad_quality_diagnostics,
@@ -34,6 +34,7 @@ from core.observer.db_queries import (
     check_vision_reconnect_flag,
     collect_reminder_alerts,
     get_disable_queue_pause_reason,
+    get_enable_queue_pause_reason,
     load_ad_states_from_db,
     load_fake_deposits,
     load_observer_settings_from_db,
@@ -47,6 +48,7 @@ from core.observer.disable_reconciler import (
     auto_create_disable_tasks,
     reconcile_disable_incidents_after_scan,
     reconcile_disable_tasks_in_db,
+    reconcile_enable_tasks_in_db,
 )
 from core.observer.runtime_status import (
     format_observer_runtime_message,
@@ -73,8 +75,6 @@ from core.observer.thresholds import (
     extract_observer_threshold_values,
 )
 from core.scanner.models import ScannedAdRow
-from core.scanner.parser import refresh_table
-from core.scanner.recovery import ScanDataUnavailableError, scan_ads_with_page_recovery
 from core.telegram.client import TelegramBotClient
 from core.telegram.delivery import broadcast_observer_runtime_message
 from core.telegram.message_refs import (
@@ -85,24 +85,19 @@ from core.telegram.message_refs import (
 from core.telegram.messaging import safe_edit_or_send_message
 from core.telegram.renderer import TelegramAlertItem, render_alert_message
 
-try:
-    from patchright.async_api import Error as PatchrightError
-except ModuleNotFoundError:  # pragma: no cover - зависит от окружения
-
-    class PatchrightError(RuntimeError):
-        """Фолбэк-тип ошибки, когда patchright недоступен в окружении."""
-
-
 logger = logging.getLogger(__name__)
 
-# Максимальное количество попыток переподключения к браузеру
-MAX_RECONNECT_ATTEMPTS = 5
-# Таймаут подключения к CDP браузеру (сек)
-BROWSER_CONNECT_TIMEOUT_SECONDS = 60
-# Базовая задержка для экспоненциального backoff (сек)
-BASE_RECONNECT_DELAY = 10
-# Пока очередь отключения не опустеет, observer не должен трогать общий браузер.
-DISABLE_QUEUE_SCAN_PAUSE_SECONDS = 5.0
+# Пока очередь действий не опустеет, observer не должен трогать общий браузер.
+BROWSER_QUEUE_SCAN_PAUSE_SECONDS = 5.0
+# Проверку колонок подтверждаем повторной попыткой, чтобы не останавливать скан на перерисовке Ads Manager.
+COLUMN_VALIDATION_FAILURE_LIMIT = 2
+# Пустой scan ещё не считаем фатальным: сначала даём странице несколько шансов вернуть строки таблицы.
+EMPTY_SCAN_FAILURE_LIMIT = 3
+EMPTY_SCAN_RETRY_DELAY_SECONDS = 10.0
+# Адаптивное ожидание загрузки данных после refresh
+DATA_LOAD_POLL_INTERVAL_SECONDS = 2.0
+DATA_LOAD_MAX_WAIT_SECONDS = 30.0
+DATA_LOAD_LOG_INTERVAL_SECONDS = 10.0
 
 _BROWSER_RUNTIME_ERROR_MARKERS = (
     "target page, context or browser has been closed",
@@ -121,8 +116,10 @@ _scan_guard = ZeroScanGuard()
 
 
 def _is_browser_connection_error(exc: Exception) -> bool:
-    """Определяет, относится ли ошибка к обрыву соединения с браузером."""
-    if isinstance(exc, (ConnectionError, OSError, PatchrightError)):
+    """Определяет, относится ли ошибка к обрыву соединения с browser-agent."""
+    if isinstance(exc, grpc.RpcError):
+        return True
+    if isinstance(exc, (ConnectionError, OSError)):
         return True
     if not isinstance(exc, RuntimeError):
         return False
@@ -130,120 +127,87 @@ def _is_browser_connection_error(exc: Exception) -> bool:
     return any(marker in message for marker in _BROWSER_RUNTIME_ERROR_MARKERS)
 
 
-def _get_reconnect_delay(attempt_number: int) -> int:
-    """Возвращает задержку перед очередной попыткой переподключения."""
-    return min(BASE_RECONNECT_DELAY * (2 ** (attempt_number - 1)), 30)
+def _is_transient_column_validation_failure(validation: dict) -> bool:
+    """Отличает временную проблему браузера от реального отсутствия колонок."""
+    missing_columns = list(validation.get("missing_columns") or [])
+    if missing_columns:
+        return False
 
+    error_message = str(validation.get("error_message") or "").casefold()
+    found_columns = list(validation.get("found_columns") or [])
+    if not found_columns:
+        return True
 
-async def _handle_browser_connection_error(
-    *,
-    exc: Exception,
-    attempt_number: int,
-    browser_manager,
-    page,
-):
-    """Пытается восстановить соединение с браузером после сетевой ошибки."""
-    logger.error(
-        "Ошибка связи с браузером (попытка %s/%s): %s",
-        attempt_number,
-        MAX_RECONNECT_ATTEMPTS,
-        exc,
-    )
-
-    if attempt_number >= MAX_RECONNECT_ATTEMPTS:
-        logger.critical(
-            "Превышено максимальное число попыток переподключения (%s). Завершение работы.",
-            MAX_RECONNECT_ATTEMPTS,
-        )
-        raise exc
-
-    delay = _get_reconnect_delay(attempt_number)
-    if browser_manager is None:
-        await asyncio.sleep(delay)
-        return page
-
-    logger.info("Пауза %s сек перед переподключением к браузеру", delay)
-    await asyncio.sleep(delay)
-
-    try:
-        await browser_manager.disconnect()
-        await asyncio.wait_for(
-            browser_manager.connect(),
-            timeout=BROWSER_CONNECT_TIMEOUT_SECONDS,
-        )
-        new_page = await browser_manager.get_page()
-        logger.info("Успешное переподключение к браузеру")
-        return new_page
-    except Exception:
-        logger.warning("Не удалось переподключиться к браузеру", exc_info=True)
-        return page
+    return any(marker in error_message for marker in _BROWSER_RUNTIME_ERROR_MARKERS)
 
 
 async def reconnect_browser_manager_with_vision_settings(
-    browser_manager,
-) -> object | None:
-    """Переподключает browser_manager с актуальными Vision-настройками."""
-    current_vision = getattr(browser_manager, "_vision", None)
-    fallback_x_token = ""
-    fallback_api_url = "http://127.0.0.1:3030"
-    if current_vision is not None:
-        fallback_x_token = getattr(current_vision, "_headers", {}).get("X-Token", "")
-        fallback_api_url = getattr(current_vision, "_base", fallback_api_url)
-    fallback_profile_id = getattr(browser_manager, "_profile_id", "")
-
+    grpc_client: BrowserAgentClient,
+) -> None:
+    """Переподключает browser-agent с актуальными Vision-настройками."""
     x_token, api_url, profile_id = await load_vision_settings_for_runtime(
-        fallback_x_token=fallback_x_token,
-        fallback_api_url=fallback_api_url,
-        fallback_profile_id=fallback_profile_id,
+        fallback_x_token=grpc_client.config.vision_x_token,
+        fallback_api_url=grpc_client.config.vision_api_url,
+        fallback_profile_id=grpc_client.config.vision_profile_id,
     )
     if not x_token or not profile_id:
         logger.warning("Vision-настройки для переподключения не найдены")
-        return None
+        return
 
-    if current_vision is not None:
-        try:
-            await browser_manager.disconnect()
-        except Exception:
-            logger.warning("Не удалось отключить старое Vision-соединение", exc_info=True)
-        try:
-            await current_vision.close()
-        except Exception:
-            logger.debug("Не удалось закрыть старый Vision-клиент", exc_info=True)
-
-    # Обновляем настройки через публичный метод вместо прямого доступа к полям
-    browser_manager.reconfigure(
-        vision_client=VisionClient(x_token=x_token, base_url=api_url),
-        profile_id=profile_id,
-        folder_id=None,
-    )
-    await asyncio.wait_for(
-        browser_manager.connect(),
-        timeout=BROWSER_CONNECT_TIMEOUT_SECONDS,
-    )
-    logger.info("Vision браузер переподключён с актуальными настройками")
-    return await browser_manager.get_page()
+    grpc_client.config.vision_x_token = x_token
+    grpc_client.config.vision_api_url = api_url
+    grpc_client.config.vision_profile_id = profile_id
+    await grpc_client.reconnect_browser()
+    logger.info("Browser-agent переподключён с актуальными Vision-настройками")
 
 
 def _build_scan_recovery_alert_text(exc: ScanDataUnavailableError) -> str:
     """Формирует Telegram-алерт о фатальной недоступности данных скана."""
     return (
         "🚨 <b>Observer отключён</b>\n\n"
-        "Причина: Ads Manager не вернул данные сканирования после "
-        f"{exc.attempts} попыток перезагрузки страницы.\n"
-        f"Интервал между попытками: {int(exc.retry_interval_seconds)} сек.\n"
+        f"Причина: {exc.reason}.\n"
+        f"Подряд циклов без данных: {exc.attempts}.\n"
+        f"Интервал между повторными циклами: {int(exc.retry_interval_seconds)} сек.\n"
         "Сканирование автоматически выключено.\n"
-        "Проверьте открытую страницу кабинета и затем включите воркер снова."
+        "Проверьте, что в открытом профиле Vision видна таблица объявлений Ads Manager, "
+        "а не loader, диалог или другая страница. Затем включите воркер снова."
     )
 
 
-async def _update_scan_recovery_status(attempt: int, max_attempts: int) -> None:
-    """Пишет в runtime-статус, что observer пытается восстановить данные страницы."""
+def _build_missing_columns_alert_text(missing_columns: list[str]) -> str:
+    """Формирует Telegram-алерт о фатальной проблеме с колонками Ads Manager."""
+    columns_text = "\n".join(f"• {column}" for column in missing_columns)
+    return (
+        "🚨 <b>Observer отключён</b>\n\n"
+        "Причина: в таблице Ads Manager не хватает обязательных колонок "
+        "или изменён их порядок.\n\n"
+        f"<b>Проблемы:</b>\n{columns_text}\n\n"
+        "Сканирование автоматически выключено, чтобы не записывать некорректные данные. "
+        "Верните нужный набор колонок в Ads Manager и включите сканирование снова."
+    )
+
+
+def _build_empty_scan_reason() -> str:
+    """Возвращает точную причину пустого scan-цикла для UI и Telegram."""
+    return "Ads Manager вернул 0 строк таблицы объявлений"
+
+
+async def _update_scan_recovery_status(
+    *,
+    reason: str,
+    attempt: int,
+    max_attempts: int,
+    retry_delay_seconds: float,
+) -> None:
+    """Пишет в runtime-статус, что observer повторяет пустой scan-цикл."""
     await update_observer_runtime_status(
         status="RECOVERING",
         message=(
-            "Данные сканирования недоступны. "
-            f"Перезагружаем страницу и повторяем попытку {attempt}/{max_attempts}."
+            f"{reason}. "
+            f"Повторяем цикл сканирования {attempt}/{max_attempts} "
+            f"через {int(retry_delay_seconds)} сек."
         ),
+        last_error=f"{reason}. Пустой цикл {attempt}/{max_attempts}.",
     )
 
 
@@ -263,10 +227,9 @@ def compute_jitter(interval_seconds: int, jitter_seconds: int) -> float:
 
 # Интервалы (секунды) для каждого уровня угрозы
 _ADAPTIVE_INTERVAL_CRITICAL = 15  # WARNING/STOP — сканируем максимально часто
-_ADAPTIVE_INTERVAL_ELEVATED = 30  # EARLY_SIGNAL — повышенное внимание
-_ADAPTIVE_INTERVAL_CALM = 45  # Всё спокойно, есть активные объявления
-_ADAPTIVE_INTERVAL_IDLE = 60  # Нет объявлений с офферами
-_FALLBACK_INTERVAL = 60  # Fallback при ошибках цикла
+_ADAPTIVE_INTERVAL_CALM = 25  # Всё спокойно, есть активные объявления
+_ADAPTIVE_INTERVAL_IDLE = 55  # Нет объявлений с офферами
+_FALLBACK_INTERVAL = 55  # Fallback при ошибках цикла
 
 
 def compute_adaptive_interval(
@@ -279,6 +242,8 @@ def compute_adaptive_interval(
     Анализирует current_stage всех объявлений в батче и выбирает
     минимальный интервал, соответствующий максимальной угрозе.
 
+    Уровни: IMMEDIATE(0) → CRITICAL(15) → CALM(25) → IDLE(55).
+
     Returns:
         (interval_seconds, threat_level_name) — интервал и название уровня для логов.
     """
@@ -287,7 +252,6 @@ def compute_adaptive_interval(
         return 0, "IMMEDIATE"
 
     has_warning = False
-    has_early_signal = False
     has_monitored_ads = False
 
     for snap in snapshot_batch:
@@ -297,315 +261,15 @@ def compute_adaptive_interval(
             stage_name = stage.value if hasattr(stage, "value") else str(stage)
             if stage_name in ("STOP", "WARNING"):
                 has_warning = True
-            elif stage_name == "EARLY_SIGNAL":
-                has_early_signal = True
         # Объявление с оффером тоже считается мониторимым
         if snap.get("resolved_offer_code"):
             has_monitored_ads = True
 
     if has_warning:
         return _ADAPTIVE_INTERVAL_CRITICAL, "CRITICAL"
-    if has_early_signal:
-        return _ADAPTIVE_INTERVAL_ELEVATED, "ELEVATED"
     if has_monitored_ads:
         return _ADAPTIVE_INTERVAL_CALM, "CALM"
     return _ADAPTIVE_INTERVAL_IDLE, "IDLE"
-
-
-async def _human_micro_pause() -> None:
-    """Случайная микропауза 0.5-2 сек между действиями (имитация человека)."""
-    await asyncio.sleep(random.uniform(0.5, 2.0))
-
-
-async def _maybe_macro_pause() -> None:
-    """С вероятностью ~15% — макропауза 5-15 сек (имитация отвлечения)."""
-    if random.random() < 0.15:
-        pause = random.uniform(5.0, 15.0)
-        logger.info("Макропауза %.1f сек (имитация отвлечения)", pause)
-        await asyncio.sleep(pause)
-
-
-async def _reset_ads_table_scroll(page) -> None:
-    """Возвращает таблицу Ads Manager в начало перед новым циклом сканирования."""
-    viewport = page.viewport_size or {"width": 1280, "height": 800}
-    table_x = viewport["width"] * 0.5
-    table_y = viewport["height"] * 0.5
-
-    await human_move(page, table_x, table_y)
-
-    reset_count = await page.evaluate("""() => {
-        const seen = new Set();
-        const scrollables = [];
-
-        const addScrollable = (node) => {
-            if (!(node instanceof HTMLElement)) {
-                return;
-            }
-            if (seen.has(node)) {
-                return;
-            }
-            seen.add(node);
-            if (node.scrollHeight - node.clientHeight > 40) {
-                scrollables.push(node);
-            }
-        };
-
-        const docScroller = document.scrollingElement;
-        if (docScroller instanceof HTMLElement) {
-            addScrollable(docScroller);
-        }
-
-        const firstRowCell = document.querySelector('[data-surface*="table_row:"]');
-        for (let node = firstRowCell; node; node = node.parentElement) {
-            addScrollable(node);
-        }
-
-        for (const selector of ['[role="grid"]', '[role="table"]', '[aria-rowcount]']) {
-            for (const node of document.querySelectorAll(selector)) {
-                addScrollable(node);
-            }
-        }
-
-        let changed = 0;
-        for (const node of scrollables) {
-            if (typeof node.scrollTo === 'function') {
-                node.scrollTo({top: 0, left: 0, behavior: 'auto'});
-            }
-            if (node.scrollTop > 0) {
-                node.scrollTop = 0;
-                changed += 1;
-            }
-        }
-
-        window.scrollTo(0, 0);
-        return changed;
-    }""")
-
-    for _ in range(4):
-        await human_wheel_scroll(
-            page,
-            -1200,
-            anchor=(table_x, table_y),
-            move_before=False,
-            settle_range=(0.12, 0.25),
-            drift_x_range=(-6, 6),
-            drift_y_range=(-4, 4),
-        )
-
-    if isinstance(reset_count, int) and reset_count > 0:
-        logger.info(
-            "Observer: перед сканированием позиция таблицы сброшена к началу (%s контейнеров)",
-            reset_count,
-        )
-
-
-async def _get_ads_table_scroll_metrics(page) -> dict[str, float | bool]:
-    """Возвращает текущее положение прокрутки таблицы Ads Manager."""
-    try:
-        metrics = await page.evaluate("""() => {
-            const seen = new Set();
-            const scrollables = [];
-
-            const addScrollable = (node) => {
-                if (!(node instanceof HTMLElement)) {
-                    return;
-                }
-                if (seen.has(node)) {
-                    return;
-                }
-                seen.add(node);
-                const maxScrollTop = node.scrollHeight - node.clientHeight;
-                if (maxScrollTop > 40) {
-                    scrollables.push(node);
-                }
-            };
-
-            const firstRowCell = document.querySelector('[data-surface*="table_row:"]');
-            for (let node = firstRowCell; node; node = node.parentElement) {
-                addScrollable(node);
-            }
-
-            for (const selector of ['[role="grid"]', '[role="table"]', '[aria-rowcount]']) {
-                for (const node of document.querySelectorAll(selector)) {
-                    addScrollable(node);
-                }
-            }
-
-            const docScroller = document.scrollingElement;
-            if (docScroller instanceof HTMLElement) {
-                addScrollable(docScroller);
-            }
-
-            if (!scrollables.length) {
-                return {
-                    found: false,
-                    scroll_top: 0,
-                    max_scroll_top: 0,
-                    at_bottom: false,
-                };
-            }
-
-            scrollables.sort((left, right) => {
-                const leftMax = left.scrollHeight - left.clientHeight;
-                const rightMax = right.scrollHeight - right.clientHeight;
-                return rightMax - leftMax;
-            });
-
-            const node = scrollables[0];
-            const maxScrollTop = Math.max(node.scrollHeight - node.clientHeight, 0);
-            const scrollTop = Math.max(node.scrollTop, 0);
-            return {
-                found: true,
-                scroll_top: scrollTop,
-                max_scroll_top: maxScrollTop,
-                at_bottom: maxScrollTop <= 0 ? true : scrollTop >= maxScrollTop - 4,
-            };
-        }""")
-    except Exception:
-        logger.debug("Observer: не удалось прочитать позицию прокрутки таблицы", exc_info=True)
-        return {
-            "found": False,
-            "scroll_top": 0.0,
-            "max_scroll_top": 0.0,
-            "at_bottom": False,
-        }
-
-    if not isinstance(metrics, dict):
-        return {
-            "found": False,
-            "scroll_top": 0.0,
-            "max_scroll_top": 0.0,
-            "at_bottom": False,
-        }
-
-    return {
-        "found": bool(metrics.get("found")),
-        "scroll_top": float(metrics.get("scroll_top") or 0.0),
-        "max_scroll_top": float(metrics.get("max_scroll_top") or 0.0),
-        "at_bottom": bool(metrics.get("at_bottom")),
-    }
-
-
-async def _wait_for_dom_stable(
-    page, *, timeout_seconds: float = 2.0, poll_interval: float = 0.1
-) -> None:
-    """Ждёт стабилизации числа DOM-строк таблицы перед парсингом.
-
-    Facebook Ads Manager использует виртуальную прокрутку — после wheel-скролла
-    новые строки появляются в DOM с небольшой задержкой рендеринга. Ждём, пока
-    количество [data-surface*="table_row:"] перестанет меняться.
-    """
-    async with asyncio.timeout(timeout_seconds):
-        prev = -1
-        while True:
-            count: int = await page.evaluate(
-                "() => document.querySelectorAll('[data-surface*=\"table_row:\"]').length"
-            )
-            if count == prev:
-                return
-            prev = count
-            await asyncio.sleep(poll_interval)
-
-
-async def _scroll_and_parse(page, parse_fn) -> list[ScannedAdRow]:
-    """Плавный скролл с рандомными паузами, имитирующий человека.
-
-    Прокручивает таблицу Ads Manager, парсит видимые строки после
-    каждого скролла, мерджит результаты. Останавливается когда
-    новых строк больше нет и таблица фактически перестаёт двигаться вниз.
-    """
-    all_rows: dict[str, ScannedAdRow] = {}
-    max_scroll_passes = 50  # Защита от бесконечного цикла
-    prev_count = -1
-    stalled_without_metrics = 0
-    max_stalled_without_metrics = 2
-    min_scroll_delta = 8.0
-
-    # Антидетект: перемещаем мышь в область таблицы перед скроллом
-    viewport = page.viewport_size or {"width": 1280, "height": 800}
-    table_x = viewport["width"] * random.uniform(0.3, 0.7)
-    table_y = viewport["height"] * random.uniform(0.4, 0.6)
-    await human_move(page, table_x, table_y)
-
-    for pass_num in range(max_scroll_passes):
-        # После скролла ждём стабилизации виртуального DOM перед парсингом.
-        # Первый проход пропускаем — страница ещё не прокручивалась.
-        if pass_num > 0:
-            await _wait_for_dom_stable(page)
-
-        # Парсим текущий view; таймаут защищает от зависания при заморозке Ads Manager
-        try:
-            visible_rows = await asyncio.wait_for(parse_fn(page), timeout=30.0)
-        except asyncio.TimeoutError:
-            logger.warning(
-                "Observer: parse_fn превысил таймаут 30 сек на проходе %s — пропускаю проход",
-                pass_num + 1,
-            )
-            visible_rows = []
-        for row in visible_rows:
-            all_rows[row.fb_ad_id] = row
-
-        current_count = len(all_rows)
-        got_new_rows = current_count != prev_count
-        prev_count = current_count
-        scroll_before = await _get_ads_table_scroll_metrics(page)
-
-        # Если уже стоим внизу и новых строк нет — дальше скроллить бессмысленно.
-        if not got_new_rows and scroll_before["found"] and scroll_before["at_bottom"]:
-            logger.info(
-                "Observer: скролл завершён, проход %s, всего строк %s, таблица уже внизу",
-                pass_num + 1,
-                current_count,
-            )
-            break
-
-        # Антидетект: mouse.wheel от текущей позиции мыши в области таблицы
-        # Уменьшаем шаг, чтобы не пролетать мимо середины виртуализированного списка.
-        scroll_amount = random.randint(160, 260)
-        await human_wheel_scroll(
-            page,
-            scroll_amount,
-            anchor=(table_x, table_y),
-            move_before=False,
-            settle_range=(0.4, 0.8),
-            drift_x_range=(-15, 15),
-            drift_y_range=(-10, 10),
-        )
-
-        if got_new_rows:
-            stalled_without_metrics = 0
-            continue
-
-        scroll_after = await _get_ads_table_scroll_metrics(page)
-        if scroll_before["found"] and scroll_after["found"]:
-            scroll_delta = scroll_after["scroll_top"] - scroll_before["scroll_top"]
-            if scroll_delta <= min_scroll_delta:
-                logger.info(
-                    "Observer: скролл завершён, проход %s, всего строк %s, новых ID нет и таблица вниз уже не двигается (delta=%.1f)",
-                    pass_num + 1,
-                    current_count,
-                    scroll_delta,
-                )
-                break
-
-            logger.debug(
-                "Observer: новых ID нет, но таблица ещё движется вниз (delta=%.1f) — продолжаю скролл",
-                scroll_delta,
-            )
-            stalled_without_metrics = 0
-            continue
-
-        # Фолбэк, если позицию таблицы не удалось прочитать.
-        stalled_without_metrics += 1
-        if stalled_without_metrics >= max_stalled_without_metrics:
-            logger.info(
-                "Observer: скролл завершён, проход %s, всего строк %s, новых ID нет и позиция таблицы недоступна",
-                pass_num + 1,
-                current_count,
-            )
-            break
-
-    return list(all_rows.values())
 
 
 async def _send_alerts_to_telegram(
@@ -771,7 +435,6 @@ async def _send_alerts_to_telegram(
 
 async def _run_scan_cycle(
     *,
-    page,
     offers: dict,
     rows: list[ScannedAdRow],
     ad_states: dict,
@@ -848,7 +511,6 @@ async def _run_scan_cycle(
                     "deposits": row.deposits,
                     "alert_state": off_state,
                     "current_stage": None,
-                    "early_signal_rule_codes": [],
                     "warning_rule_codes": [],
                     "stop_rule_codes": [],
                     "open_state_token": None,
@@ -955,7 +617,6 @@ async def _run_scan_cycle(
                 "deposits": row.deposits,
                 "alert_state": next_state,
                 "current_stage": evaluation.stage,
-                "early_signal_rule_codes": evaluation.early_signal_rule_codes,
                 "warning_rule_codes": evaluation.warning_rule_codes,
                 "stop_rule_codes": evaluation.stop_rule_codes,
                 "open_state_token": token,
@@ -1085,6 +746,76 @@ async def _process_scan_results(
         )
 
 
+async def _wait_for_data_load(
+    grpc_client: BrowserAgentClient,
+    *,
+    prev_had_spend: bool,
+) -> list[ScannedAdRow]:
+    """Адаптивное ожидание загрузки данных после refresh.
+
+    Если в предыдущем скане был spend > 0 — поллим до появления spend.
+    Если предыдущий скан тоже был нулевым (начало дня) — сразу возвращаем текущие строки.
+
+    Возвращает последний полученный список строк.
+    """
+    if not prev_had_spend:
+        # Начало дня или первый скан — не ждём, данные нулевые по природе
+        rows: list[ScannedAdRow] = []
+        async for event in grpc_client.run_scan_cycle(
+            max_scroll_passes=50,
+            do_refresh=False,
+            reset_scroll_first=False,
+            settle_delay_seconds=0.0,
+        ):
+            if isinstance(event, ScanResult):
+                rows = event.rows
+        return rows
+
+    elapsed = 0.0
+    last_log_at = 0.0
+    rows = []
+
+    while elapsed < DATA_LOAD_MAX_WAIT_SECONDS:
+        # Читаем текущее состояние таблицы без повторного refresh
+        current_rows: list[ScannedAdRow] = []
+        async for event in grpc_client.run_scan_cycle(
+            max_scroll_passes=50,
+            do_refresh=False,
+            reset_scroll_first=False,
+            settle_delay_seconds=0.0,
+        ):
+            if isinstance(event, ScanResult):
+                current_rows = event.rows
+
+        rows = current_rows
+
+        # Проверяем: есть ли хоть одно объявление со spend > 0
+        if any(r.spend and r.spend > 0 for r in rows):
+            logger.info(
+                "Observer: данные загружены за %.0f сек (spend > 0 обнаружен)",
+                elapsed,
+            )
+            return rows
+
+        elapsed += DATA_LOAD_POLL_INTERVAL_SECONDS
+        if elapsed - last_log_at >= DATA_LOAD_LOG_INTERVAL_SECONDS:
+            logger.info(
+                "Ожидание загрузки данных: %.0fс из %.0fс",
+                elapsed,
+                DATA_LOAD_MAX_WAIT_SECONDS,
+            )
+            last_log_at = elapsed
+
+        if elapsed < DATA_LOAD_MAX_WAIT_SECONDS:
+            await asyncio.sleep(DATA_LOAD_POLL_INTERVAL_SECONDS)
+
+    logger.warning(
+        "Observer: данные не появились за %.0f сек — продолжаем со старыми данными",
+        DATA_LOAD_MAX_WAIT_SECONDS,
+    )
+    return rows
+
+
 async def _wait_for_next_cycle(
     *,
     shutdown_event: asyncio.Event | None,
@@ -1149,33 +880,29 @@ async def _wait_for_next_cycle(
 
 async def observer_loop(
     *,
-    page,
+    grpc_client: BrowserAgentClient,
     offers: dict,
     telegram_bot_token: str,
     telegram_chat_id: str,
     warning_percent_of_stop: Decimal = DEFAULT_WARNING_PERCENT_OF_STOP,
     stop_percent_of_base: Decimal = DEFAULT_STOP_PERCENT_OF_BASE,
-    parse_fn,
     on_snapshot_update=None,
-    browser_manager=None,
     shutdown_event: asyncio.Event | None = None,
 ) -> None:
     """Основной бесконечный цикл observer.
 
     Интервал между сканами определяется адаптивно по уровню угрозы:
-    CRITICAL (15с) → ELEVATED (30с) → CALM (45с) → IDLE (60с).
+    IMMEDIATE (0с) → CRITICAL (15с) → CALM (25с) → IDLE (55с).
     После обнаружения STOP — немедленный ре-скан.
 
     Args:
-        page: Playwright Page (уже открыта на Ads Manager)
+        grpc_client: BrowserAgentClient для связи с Node.js browser-agent
         offers: dict[offer_code -> {offer, rule_config}]
         telegram_bot_token: токен TG-бота
         telegram_chat_id: ID чата для уведомлений
         warning_percent_of_stop: legacy warning для обратной совместимости
         stop_percent_of_base: legacy stop для обратной совместимости
-        parse_fn: функция парсинга DOM → list[ScannedAdRow]
         on_snapshot_update: callback для сохранения snapshot в БД
-        browser_manager: VisionBrowserManager для переподключения при сбое
         shutdown_event: asyncio.Event для graceful shutdown по Ctrl+C
     """
     # Загружаем FSM-состояния из БД при старте (задача 2.3)
@@ -1237,10 +964,14 @@ async def observer_loop(
     cycle_count = 0
     fake_deposits_map: dict[str, int] = {}
     RELOAD_EVERY = 10  # Перечитываем офферы, TG настройки и интервал каждые 10 циклов
+    # Флаг: был ли spend > 0 в предыдущем успешном скане (для адаптивного ожидания)
+    prev_scan_had_spend = False
 
     # Счётчик последовательных ошибок браузера (задача 2.4)
     consecutive_browser_errors = 0
-    disable_pause_logged = False
+    consecutive_column_validation_errors = 0
+    consecutive_empty_scan_cycles = 0
+    browser_pause_kind: str | None = None
 
     def _should_stop() -> bool:
         """Проверяет, нужно ли завершить работу."""
@@ -1303,24 +1034,27 @@ async def observer_loop(
 
                 # Проверяем флаг переподключения к браузеру
                 try:
-                    if await check_vision_reconnect_flag() and browser_manager is not None:
+                    if await check_vision_reconnect_flag():
                         logger.info("Переподключение к Vision браузеру по запросу из UI")
-                        reconnected_page = await reconnect_browser_manager_with_vision_settings(
-                            browser_manager
-                        )
-                        if reconnected_page is not None:
-                            page = reconnected_page
+                        await grpc_client.reconnect_browser()
                 except Exception:
                     logger.warning("Не удалось выполнить переподключение к браузеру", exc_info=True)
 
             cycle_count += 1
 
-            # Сначала приводим очередь отключения в консистентное состояние.
+            # Сначала приводим очереди отключения и включения в консистентное состояние.
             try:
                 await reconcile_disable_tasks_in_db()
             except Exception:
                 logger.warning(
                     "Не удалось согласовать очередь отключения с текущими снэпшотами",
+                    exc_info=True,
+                )
+            try:
+                await reconcile_enable_tasks_in_db()
+            except Exception:
+                logger.warning(
+                    "Не удалось согласовать очередь включения с текущими снэпшотами",
                     exc_info=True,
                 )
 
@@ -1333,6 +1067,7 @@ async def observer_loop(
 
             # Проверяем флаг is_scanning_enabled перед каждым сканом
             if not await check_scanning_enabled():
+                consecutive_empty_scan_cycles = 0
                 await update_observer_runtime_status(
                     status="PAUSED",
                     message="Сканирование выключено в настройках.",
@@ -1342,26 +1077,124 @@ async def observer_loop(
                 await asyncio.sleep(10.0)
                 continue
 
-            disable_queue_pause_reason = await get_disable_queue_pause_reason()
-            if disable_queue_pause_reason:
+            browser_pause_kind_next: str | None = None
+            browser_pause_reason: str | None = await get_disable_queue_pause_reason()
+            if browser_pause_reason:
+                browser_pause_kind_next = "disable"
+            else:
+                browser_pause_reason = await get_enable_queue_pause_reason()
+                if browser_pause_reason:
+                    browser_pause_kind_next = "enable"
+
+            if browser_pause_reason and browser_pause_kind_next == "disable":
+                consecutive_empty_scan_cycles = 0
                 await update_observer_runtime_status(
                     status="WAITING_BROWSER",
-                    message=(
-                        f"Браузер занят задачами отключения. Причина: {disable_queue_pause_reason}"
-                    ),
+                    message=(f"Браузер занят задачами отключения. Причина: {browser_pause_reason}"),
                 )
-                if not disable_pause_logged:
+                if browser_pause_kind != "disable":
                     logger.info(
-                        "Observer: ставлю скан на паузу, пока disable worker освобождает браузер: %s",
-                        disable_queue_pause_reason,
+                        "Observer: ставлю скан на паузу, пока очередь отключения освобождает браузер: %s",
+                        browser_pause_reason,
                     )
-                    disable_pause_logged = True
-                await asyncio.sleep(DISABLE_QUEUE_SCAN_PAUSE_SECONDS)
+                    browser_pause_kind = "disable"
+                await asyncio.sleep(BROWSER_QUEUE_SCAN_PAUSE_SECONDS)
                 continue
 
-            if disable_pause_logged:
+            if browser_pause_reason and browser_pause_kind_next == "enable":
+                consecutive_empty_scan_cycles = 0
+                await update_observer_runtime_status(
+                    status="WAITING_BROWSER",
+                    message=(f"Браузер занят задачами включения. Причина: {browser_pause_reason}"),
+                )
+                if browser_pause_kind != "enable":
+                    logger.info(
+                        "Observer: ставлю скан на паузу, пока очередь включения освобождает браузер: %s",
+                        browser_pause_reason,
+                    )
+                    browser_pause_kind = "enable"
+                await asyncio.sleep(BROWSER_QUEUE_SCAN_PAUSE_SECONDS)
+                continue
+
+            if browser_pause_kind == "disable":
                 logger.info("Observer: очередь отключения освободила браузер — возобновляю скан")
-                disable_pause_logged = False
+                browser_pause_kind = None
+            elif browser_pause_kind == "enable":
+                logger.info("Observer: очередь включения освободила браузер — возобновляю скан")
+                browser_pause_kind = None
+
+            validation = await grpc_client.validate_columns()
+            if not validation.get("valid", False):
+                consecutive_empty_scan_cycles = 0
+                missing_columns = list(validation.get("missing_columns") or [])
+                validation_error = str(validation.get("error_message") or "").strip()
+
+                if _is_transient_column_validation_failure(validation):
+                    consecutive_column_validation_errors = 0
+                    transient_message = (
+                        "Проверка колонок Ads Manager не получила данные от страницы. "
+                        "Считаю это временной проблемой браузера/CDP, а не изменением колонок."
+                    )
+                    await update_observer_runtime_status(
+                        status="RECOVERING",
+                        message=transient_message,
+                        last_error=validation_error or "Проверка колонок не вернула детали",
+                    )
+                    logger.warning(
+                        "Observer: временный сбой проверки колонок, пробую переподключиться: %s",
+                        validation_error or "детали не вернулись",
+                    )
+                    try:
+                        await grpc_client.reconnect_browser()
+                    except Exception:
+                        logger.warning(
+                            "Observer: не удалось переподключиться после сбоя проверки колонок",
+                            exc_info=True,
+                        )
+                    await asyncio.sleep(10.0)
+                    continue
+
+                consecutive_column_validation_errors += 1
+                columns_message = (
+                    "Проверка колонок Ads Manager не пройдена "
+                    f"({consecutive_column_validation_errors}/{COLUMN_VALIDATION_FAILURE_LIMIT}): "
+                    f"{', '.join(missing_columns) or 'детали не вернулись'}"
+                )
+
+                if consecutive_column_validation_errors < COLUMN_VALIDATION_FAILURE_LIMIT:
+                    await update_observer_runtime_status(
+                        status="WARNING",
+                        message=(
+                            "Колонки Ads Manager временно не совпали с ожидаемыми. "
+                            "Скан этого цикла пропущен, повторим проверку перед следующим сканом."
+                        ),
+                        last_error=columns_message,
+                    )
+                    logger.warning("Observer: %s", columns_message)
+                    await asyncio.sleep(10.0)
+                    continue
+
+                await set_observer_scanning_enabled(False)
+                await update_observer_runtime_status(
+                    status="PAUSED",
+                    message=(
+                        "Сканирование остановлено: обязательные колонки Ads Manager "
+                        "отсутствуют или идут в другом порядке."
+                    ),
+                    last_error=columns_message,
+                )
+                logger.error("Observer: %s", columns_message)
+                try:
+                    await broadcast_observer_runtime_message(
+                        text=_build_missing_columns_alert_text(missing_columns),
+                        fallback_token=tg_token or telegram_bot_token,
+                        fallback_chat_id=telegram_chat_id,
+                    )
+                except Exception:
+                    logger.exception("Не удалось отправить Telegram-алерт о колонках Ads Manager")
+                continue
+
+            consecutive_column_validation_errors = 0
 
             await update_observer_runtime_status(
                 status="RUNNING",
@@ -1369,23 +1202,72 @@ async def observer_loop(
                 clear_last_error=True,
             )
 
-            # 1-2. Обновляем таблицу и, если строки не появились,
-            # пробуем восстановить страницу через page reload.
-            rows = await scan_ads_with_page_recovery(
-                page=page,
-                parse_fn=parse_fn,
-                refresh_table_fn=refresh_table,
-                reset_scroll_fn=_reset_ads_table_scroll,
-                scroll_and_parse_fn=_scroll_and_parse,
-                sleep_fn=asyncio.sleep,
+            # 1-2. Сканирование через gRPC browser-agent: refresh + первый проход
+            rows: list[ScannedAdRow] = []
+            async for event in grpc_client.run_scan_cycle(
+                max_scroll_passes=50,
+                do_refresh=True,
+                reset_scroll_first=True,
                 settle_delay_seconds=random.uniform(2.0, 4.0),
-                on_recovery_attempt=_update_scan_recovery_status,
-            )
-            logger.info("Observer: получено %s объявлений", len(rows))
+            ):
+                if isinstance(event, ScanResult):
+                    rows = event.rows
+                    logger.info(
+                        "Observer: сканирование завершено — %d строк за %.1fs (%d проходов)",
+                        len(rows),
+                        event.duration_seconds,
+                        event.total_passes,
+                    )
+                elif hasattr(event, "pass_number"):
+                    logger.debug(
+                        "Observer: проход %d — %d строк пока, at_bottom=%s",
+                        event.pass_number,
+                        event.rows_so_far,
+                        event.at_bottom,
+                    )
+
+            # 1b. Адаптивное ожидание загрузки данных после refresh
+            # Если предыдущий скан имел spend > 0 — ждём появления spend (макс 30с).
+            # Если предыдущий скан тоже был нулевым — не ждём (начало дня).
+            if rows:
+                rows = await _wait_for_data_load(
+                    grpc_client,
+                    prev_had_spend=prev_scan_had_spend,
+                )
+
+            if not rows:
+                consecutive_empty_scan_cycles += 1
+                empty_scan_reason = _build_empty_scan_reason()
+                logger.warning(
+                    "Observer: пустой scan-цикл %s/%s — %s",
+                    consecutive_empty_scan_cycles,
+                    EMPTY_SCAN_FAILURE_LIMIT,
+                    empty_scan_reason,
+                )
+
+                if consecutive_empty_scan_cycles < EMPTY_SCAN_FAILURE_LIMIT:
+                    await _update_scan_recovery_status(
+                        reason=empty_scan_reason,
+                        attempt=consecutive_empty_scan_cycles,
+                        max_attempts=EMPTY_SCAN_FAILURE_LIMIT,
+                        retry_delay_seconds=EMPTY_SCAN_RETRY_DELAY_SECONDS,
+                    )
+                    await asyncio.sleep(EMPTY_SCAN_RETRY_DELAY_SECONDS)
+                    continue
+
+                raise ScanDataUnavailableError(
+                    attempts=consecutive_empty_scan_cycles,
+                    retry_interval_seconds=EMPTY_SCAN_RETRY_DELAY_SECONDS,
+                    reason=empty_scan_reason,
+                )
+
+            consecutive_empty_scan_cycles = 0
+
+            # Обновляем флаг spend для следующего цикла адаптивного ожидания
+            prev_scan_had_spend = any(r.spend and r.spend > 0 for r in rows)
 
             # 3. Оценка правил, FSM-переходы, сбор алертов
             alerts_to_send, stop_alerts, snapshot_batch = await _run_scan_cycle(
-                page=page,
                 offers=offers,
                 rows=rows,
                 ad_states=ad_states,
@@ -1407,6 +1289,7 @@ async def observer_loop(
             cycle_completed = True
 
         except ScanDataUnavailableError as exc:
+            consecutive_empty_scan_cycles = 0
             runtime_message = str(exc)
             await set_observer_scanning_enabled(False)
             await update_observer_runtime_status(
@@ -1427,6 +1310,7 @@ async def observer_loop(
             continue
 
         except TimeoutError:
+            consecutive_empty_scan_cycles = 0
             # asyncio.timeout бросает TimeoutError (BaseException в Python 3.11+).
             # Ловим отдельно, чтобы таймаут DOM-стабилизации не крашил весь loop.
             logger.warning("Observer: таймаут ожидания DOM-стабилизации, пропускаем цикл")
@@ -1438,7 +1322,8 @@ async def observer_loop(
             continue
 
         except Exception as exc:
-            if _is_browser_connection_error(exc):
+            consecutive_empty_scan_cycles = 0
+            if _is_browser_connection_error(exc) or isinstance(exc, grpc.RpcError):
                 runtime_message = format_observer_runtime_message(exc)
                 await update_observer_runtime_status(
                     status="ERROR",
@@ -1446,12 +1331,15 @@ async def observer_loop(
                     last_error=runtime_message,
                 )
                 consecutive_browser_errors += 1
-                page = await _handle_browser_connection_error(
-                    exc=exc,
-                    attempt_number=consecutive_browser_errors,
-                    browser_manager=browser_manager,
-                    page=page,
-                )
+                try:
+                    await grpc_client.reconnect_browser()
+                    logger.info("Браузер переподключён через gRPC")
+                except Exception as reconnect_err:
+                    logger.warning(
+                        "Не удалось переподключить браузер (попытка %d): %s",
+                        consecutive_browser_errors,
+                        reconnect_err,
+                    )
                 continue
 
             runtime_message = (

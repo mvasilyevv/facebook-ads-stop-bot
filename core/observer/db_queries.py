@@ -11,12 +11,16 @@ from sqlalchemy import func, select, update
 from sqlalchemy.orm import selectinload
 
 from core.db import get_session_factory
-from core.domain import AlertStage, AlertState, DisableTaskStatus
+from core.disable_tasks import calculate_active_disable_cutoff
+from core.domain import AlertStage, AlertState, DisableTaskStatus, EnableTaskStatus
+from core.enable_tasks import calculate_active_enable_cutoff
 from core.models import (
     AdDepositCorrection,
     AdSnapshot,
     AlertEvent,
     DisableTask,
+    EnableRecommendationEvent,
+    EnableTask,
     FbAd,
     FbAdset,
     ObserverSettings,
@@ -32,6 +36,50 @@ logger = logging.getLogger(__name__)
 
 # Период, за который объявление считается активным в рамках скан-сессии
 ACTIVE_ALERT_WINDOW = timedelta(minutes=30)
+
+
+def _format_task_queue_pause_reason(
+    active_rows: list[tuple[object, datetime | None]],
+    *,
+    pending_status,
+    running_status,
+    retrying_status,
+    now: datetime,
+) -> str | None:
+    """Собирает человекочитаемую причину паузы по активной очереди задач."""
+    if not active_rows:
+        return None
+
+    pending_count = sum(1 for status, _ in active_rows if status == pending_status)
+    running_count = sum(1 for status, _ in active_rows if status == running_status)
+    ready_retry_times = [
+        next_retry_at
+        for status, next_retry_at in active_rows
+        if status == retrying_status and next_retry_at is not None and next_retry_at <= now
+    ]
+    retry_count = sum(
+        1
+        for status, next_retry_at in active_rows
+        if status == retrying_status and (next_retry_at is None or next_retry_at <= now)
+    )
+
+    parts: list[str] = []
+    if pending_count:
+        parts.append(f"ожидают: {pending_count}")
+    if running_count:
+        parts.append(f"выполняются: {running_count}")
+    if retry_count:
+        nearest_retry_at = min(ready_retry_times) if ready_retry_times else None
+        if nearest_retry_at is not None:
+            retry_in_seconds = max(int((nearest_retry_at - now).total_seconds()), 0)
+            parts.append(f"повтор: {retry_count} (ближайший через {retry_in_seconds} сек)")
+        else:
+            parts.append(f"повтор: {retry_count}")
+
+    if not parts:
+        return None
+
+    return ", ".join(parts)
 
 
 async def load_offers_from_db() -> dict:
@@ -230,8 +278,17 @@ async def get_disable_queue_pause_reason() -> str | None:
     factory = get_session_factory()
     try:
         async with factory() as session:
+            last_scan = await session.scalar(select(func.max(AdSnapshot.last_observed_at)))
             result = await session.execute(
-                select(DisableTask.status, DisableTask.next_retry_at).where(
+                select(
+                    DisableTask.status,
+                    DisableTask.next_retry_at,
+                    DisableTask.created_at,
+                    DisableTask.updated_at,
+                    AdSnapshot.last_observed_at,
+                )
+                .join(AdSnapshot, AdSnapshot.ad_id == DisableTask.ad_id, isouter=True)
+                .where(
                     DisableTask.status.in_(
                         (
                             DisableTaskStatus.PENDING,
@@ -250,40 +307,110 @@ async def get_disable_queue_pause_reason() -> str | None:
         return None
 
     now = datetime.now(UTC)
-    pending_count = sum(1 for status, _ in rows if status == DisableTaskStatus.PENDING)
-    running_count = sum(1 for status, _ in rows if status == DisableTaskStatus.RUNNING)
-    ready_retry_times = [
-        next_retry_at
-        for status, next_retry_at in rows
-        if (
-            status == DisableTaskStatus.RETRYING
-            and next_retry_at is not None
-            and next_retry_at <= now
-        )
-    ]
-    retry_count = sum(
-        1
-        for status, next_retry_at in rows
-        if status == DisableTaskStatus.RETRYING and (next_retry_at is None or next_retry_at <= now)
-    )
+    active_cutoff = calculate_active_disable_cutoff(now=now, last_scan=last_scan)
+    active_rows: list[tuple[DisableTaskStatus, datetime | None]] = []
 
-    parts: list[str] = []
-    if pending_count:
-        parts.append(f"ожидают: {pending_count}")
-    if running_count:
-        parts.append(f"выполняются: {running_count}")
-    if retry_count:
-        nearest_retry_at = min(ready_retry_times) if ready_retry_times else None
-        if nearest_retry_at is not None:
-            retry_in_seconds = max(int((nearest_retry_at - now).total_seconds()), 0)
-            parts.append(f"повтор: {retry_count} (ближайший через {retry_in_seconds} сек)")
+    for status, next_retry_at, created_at, updated_at, snapshot_last_observed_at in rows:
+        if snapshot_last_observed_at is not None:
+            if snapshot_last_observed_at < active_cutoff:
+                continue
         else:
-            parts.append(f"повтор: {retry_count}")
+            task_activity_at = updated_at or created_at
+            if task_activity_at is None or task_activity_at < active_cutoff:
+                continue
+        active_rows.append((status, next_retry_at))
 
-    if not parts:
+    if not active_rows:
         return None
 
-    return ", ".join(parts)
+    return _format_task_queue_pause_reason(
+        active_rows,
+        pending_status=DisableTaskStatus.PENDING,
+        running_status=DisableTaskStatus.RUNNING,
+        retrying_status=DisableTaskStatus.RETRYING,
+        now=now,
+    )
+
+
+async def get_enable_queue_pause_reason() -> str | None:
+    """Возвращает причину паузы сканирования, если очередь включения блокирует браузер."""
+    factory = get_session_factory()
+    try:
+        async with factory() as session:
+            last_scan = await session.scalar(select(func.max(AdSnapshot.last_observed_at)))
+            observer_settings = await get_observer_settings(session)
+            cabinet_day_start = (
+                observer_settings.cabinet_day_started_at if observer_settings is not None else None
+            )
+            result = await session.execute(
+                select(
+                    EnableTask.status,
+                    EnableTask.next_retry_at,
+                    EnableTask.created_at,
+                    EnableTask.updated_at,
+                    AdSnapshot.last_observed_at,
+                    EnableRecommendationEvent.live_batch_started_at,
+                )
+                .join(AdSnapshot, AdSnapshot.ad_id == EnableTask.ad_id, isouter=True)
+                .join(
+                    EnableRecommendationEvent,
+                    EnableRecommendationEvent.id == EnableTask.recommendation_event_id,
+                    isouter=True,
+                )
+                .where(
+                    EnableTask.status.in_(
+                        (
+                            EnableTaskStatus.PENDING,
+                            EnableTaskStatus.RUNNING,
+                            EnableTaskStatus.RETRYING,
+                        )
+                    )
+                )
+            )
+            rows = result.all()
+    except Exception:
+        logger.debug("Не удалось проверить активную очередь включения", exc_info=True)
+        return None
+
+    if not rows:
+        return None
+
+    now = datetime.now(UTC)
+    active_cutoff = calculate_active_enable_cutoff(now=now, last_scan=last_scan)
+    active_rows: list[tuple[EnableTaskStatus, datetime | None]] = []
+
+    for (
+        status,
+        next_retry_at,
+        created_at,
+        updated_at,
+        snapshot_last_observed_at,
+        live_batch_started_at,
+    ) in rows:
+        if cabinet_day_start is not None:
+            if live_batch_started_at is not None:
+                if live_batch_started_at < cabinet_day_start:
+                    continue
+            elif created_at < cabinet_day_start:
+                continue
+
+        if snapshot_last_observed_at is not None:
+            if snapshot_last_observed_at < active_cutoff:
+                continue
+        else:
+            task_activity_at = updated_at or created_at
+            if task_activity_at is None or task_activity_at < active_cutoff:
+                continue
+
+        active_rows.append((status, next_retry_at))
+
+    return _format_task_queue_pause_reason(
+        active_rows,
+        pending_status=EnableTaskStatus.PENDING,
+        running_status=EnableTaskStatus.RUNNING,
+        retrying_status=EnableTaskStatus.RETRYING,
+        now=now,
+    )
 
 
 async def load_vision_settings_from_db() -> tuple[str, str, str]:
@@ -354,7 +481,7 @@ async def collect_reminder_alerts() -> list[AlertCandidate]:
     """Собирает алерты для повторного напоминания.
 
     Условия:
-    - alert_state IN [EARLY_SIGNAL_SENT, WARNING_SENT, STOP_SENT]
+    - alert_state IN [WARNING_SENT, STOP_SENT]
     - last_observed_at попадает в актуальную скан-сессию
     - snoozed_until IS NULL или уже истёк
     - последний AlertEvent для этого fb_ad_id был > 10 мин назад
@@ -379,7 +506,6 @@ async def collect_reminder_alerts() -> list[AlertCandidate]:
             .where(
                 AdSnapshot.alert_state.in_(
                     [
-                        AlertState.EARLY_SIGNAL_SENT,
                         AlertState.WARNING_SENT,
                         AlertState.STOP_SENT,
                     ]
@@ -402,7 +528,7 @@ async def collect_reminder_alerts() -> list[AlertCandidate]:
                 )
                 continue
             if (
-                snap.alert_state in {AlertState.EARLY_SIGNAL_SENT, AlertState.WARNING_SENT}
+                snap.alert_state == AlertState.WARNING_SENT
                 and snap.snoozed_until
                 and snap.snoozed_until > now
             ):
@@ -445,12 +571,9 @@ async def collect_reminder_alerts() -> list[AlertCandidate]:
             if snap.alert_state == AlertState.STOP_SENT:
                 stage = AlertStage.STOP
                 rule_codes = snap.stop_rule_codes or []
-            elif snap.alert_state == AlertState.WARNING_SENT:
+            else:
                 stage = AlertStage.WARNING
                 rule_codes = snap.warning_rule_codes or []
-            else:
-                stage = AlertStage.EARLY_SIGNAL
-                rule_codes = snap.early_signal_rule_codes or []
 
             rule_summaries = None
             traffic_diagnostics = None

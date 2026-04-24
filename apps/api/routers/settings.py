@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.deps import get_db
 from apps.api.schemas import (
+    AutoEnableToggleSchema,
     InviteCodeResponse,
     ObserverSettingsSchema,
     ScanningToggleSchema,
@@ -117,9 +118,18 @@ async def trigger_scan_now(db: AsyncSession = Depends(get_db)):
     return {"scan_requested": True}
 
 
+@router.patch("/settings/observer/auto-enable")
+async def toggle_auto_enable(body: AutoEnableToggleSchema, db: AsyncSession = Depends(get_db)):
+    """Быстрое переключение авто-включения объявлений по рекомендациям."""
+    row = await _get_or_create_settings(db)
+    row.auto_enable_recommendations = body.enabled
+    await db.commit()
+    return {"auto_enable_recommendations": row.auto_enable_recommendations}
+
+
 def _observer_runtime_paths() -> tuple[Path, Path, Path, str]:
     """Возвращает пути и python-бинарь для управления observer worker."""
-    project_root = Path(__file__).parent.parent.parent
+    project_root = Path(__file__).resolve().parents[3]
     pid_file = project_root / ".logs" / "pids.txt"
     log_file = project_root / ".logs" / "observer.log"
     run_script = project_root / "run_observer.py"
@@ -130,7 +140,7 @@ def _observer_runtime_paths() -> tuple[Path, Path, Path, str]:
 
 def _disable_runtime_paths() -> tuple[Path, Path, Path, str]:
     """Возвращает пути и python-бинарь для управления воркером отключения."""
-    project_root = Path(__file__).parent.parent.parent
+    project_root = Path(__file__).resolve().parents[3]
     pid_file = project_root / ".logs" / "pids.txt"
     log_file = project_root / ".logs" / "disable_worker.log"
     run_script = project_root / "run_disable_worker.py"
@@ -317,6 +327,46 @@ async def restart_observer():
     return {"restarted": True, "old_pid": old_pid, "new_pid": new_pid}
 
 
+@router.get("/browser/validate-columns")
+async def validate_browser_columns():
+    """Проверить наличие всех необходимых колонок в таблице Ads Manager через gRPC."""
+    import grpc
+
+    from clients.python_grpc.v1 import (
+        browser_session_pb2,
+        browser_session_pb2_grpc,
+        scanner_pb2,
+        scanner_pb2_grpc,
+    )
+
+    channel = grpc.aio.insecure_channel("localhost:50051")
+    try:
+        browser_stub = browser_session_pb2_grpc.BrowserSessionServiceStub(channel)
+        scanner_stub = scanner_pb2_grpc.ScannerServiceStub(channel)
+
+        # Получаем активную сессию
+        sessions_resp = await browser_stub.GetSessionInfo(
+            browser_session_pb2.GetSessionInfoRequest(session_id="")
+        )
+        session_id = sessions_resp.session_id
+
+        result = await scanner_stub.ValidateColumns(
+            scanner_pb2.ValidateColumnsRequest(session_id=session_id)
+        )
+        return {
+            "valid": result.valid,
+            "missing_columns": list(result.missing_columns),
+            "found_columns": list(result.found_columns),
+            "error_message": result.error_message,
+        }
+    except grpc.RpcError as e:
+        raise HTTPException(status_code=502, detail=f"gRPC ошибка: {e.details()}") from e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+    finally:
+        await channel.close()
+
+
 @router.post("/disable-worker/restart")
 async def restart_disable_worker():
     """Перезапуск воркера отключения: завершает зависший процесс и поднимает новый."""
@@ -386,7 +436,6 @@ async def _create_forum_topics_if_needed(
     if settings_row.chat_id == FORUM_SUPERGROUP_CHAT_ID and forum_topics_ready(settings_row):
         return {
             "control_topic_id": int(settings_row.control_topic_id or 0),
-            "early_topic_id": int(settings_row.early_topic_id or 0),
             "warning_topic_id": int(settings_row.warning_topic_id or 0),
             "stop_topic_id": int(settings_row.stop_topic_id or 0),
             "enable_topic_id": int(settings_row.enable_topic_id or 0),
@@ -415,8 +464,6 @@ async def _create_forum_topics_if_needed(
             topic_id = int(topic["message_thread_id"])
             if stream_key == "CONTROL":
                 created_topics["control_topic_id"] = topic_id
-            elif stream_key == "EARLY":
-                created_topics["early_topic_id"] = topic_id
             elif stream_key == "WARNING":
                 created_topics["warning_topic_id"] = topic_id
             elif stream_key == "STOP":
@@ -459,7 +506,6 @@ async def _prepare_telegram_forum_cutover(
     settings_row.owner_first_name = ""
     settings_row.bot_username = bot_username or settings_row.bot_username or ""
     settings_row.control_topic_id = topic_ids["control_topic_id"]
-    settings_row.early_topic_id = topic_ids["early_topic_id"]
     settings_row.warning_topic_id = topic_ids["warning_topic_id"]
     settings_row.stop_topic_id = topic_ids["stop_topic_id"]
     settings_row.enable_topic_id = topic_ids["enable_topic_id"]
@@ -471,7 +517,6 @@ async def _prepare_telegram_forum_cutover(
         auth_code=auth_code,
         activation_command=_activation_command(auth_code),
         control_topic_id=settings_row.control_topic_id,
-        early_topic_id=settings_row.early_topic_id,
         warning_topic_id=settings_row.warning_topic_id,
         stop_topic_id=settings_row.stop_topic_id,
         enable_topic_id=settings_row.enable_topic_id,
@@ -528,7 +573,6 @@ async def get_telegram_settings(db: AsyncSession = Depends(get_db)):
         auth_code=auth_code,
         delivery_mode=delivery_mode,
         control_topic_id=row.control_topic_id,
-        early_topic_id=row.early_topic_id,
         warning_topic_id=row.warning_topic_id,
         stop_topic_id=row.stop_topic_id,
         enable_topic_id=row.enable_topic_id,
@@ -594,7 +638,7 @@ async def set_telegram_token(body: TelegramSetTokenRequest, db: AsyncSession = D
 
 
 @router.post(
-    "/api/settings/telegram/forum/cutover",
+    "/settings/telegram/forum/cutover",
     response_model=TelegramForumCutoverResponseSchema,
 )
 async def prepare_telegram_forum_cutover(db: AsyncSession = Depends(get_db)):
@@ -635,7 +679,6 @@ async def revoke_telegram(db: AsyncSession = Depends(get_db)):
         row.owner_first_name = ""
         row.delivery_mode = TelegramDeliveryMode.PRIVATE_CHAT
         row.control_topic_id = None
-        row.early_topic_id = None
         row.warning_topic_id = None
         row.stop_topic_id = None
         row.enable_topic_id = None

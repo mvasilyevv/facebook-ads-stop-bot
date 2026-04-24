@@ -1,30 +1,52 @@
 // Scorecard распределения состояний + воронка конверсий
 
 const STATE_COLORS = {
-  NORMAL:            { bar: 'bg-success', label: 'Норма' },
-  EARLY_SIGNAL_SENT: { bar: 'bg-early', label: 'Ранний' },
-  WARNING_SENT:      { bar: 'bg-warning', label: 'Warning' },
-  STOP_SENT:         { bar: 'bg-danger', label: 'Стоп' },
-  DISABLED:          { bar: 'bg-neutral', label: 'Откл.' },
+  NORMAL:       { bar: 'bg-success', label: 'Норма' },
+  WARNING_SENT: { bar: 'bg-warning', label: 'Warning' },
+  STOP_SENT:    { bar: 'bg-danger', label: 'Стоп' },
+  DISABLED:     { bar: 'bg-neutral', label: 'Откл.' },
 };
 
 const FUNNEL_COLORS = ['#6366F1', '#A78BFA', '#F59E0B', '#10B981', '#EF4444'];
 
+// Для NORMAL: больше = лучше; для остальных: меньше = лучше
+const STATE_HIGHER_IS_BETTER = { NORMAL: true };
+
+function DeltaBadge({ today, yesterday, state }) {
+  if (yesterday == null) return null;
+  const delta = today - yesterday;
+  if (delta === 0) return null;
+
+  const higherIsBetter = STATE_HIGHER_IS_BETTER[state] ?? false;
+  const isGood = higherIsBetter ? delta > 0 : delta < 0;
+  const color = isGood ? 'text-success' : 'text-danger';
+  const arrow = delta > 0 ? '▲' : '▼';
+
+  return (
+    <span className={`font-mono text-[10px] ${color}`}>
+      {arrow}{Math.abs(delta)}
+    </span>
+  );
+}
+
 /** Распределение состояний */
-export function CampaignScorecard({ stats = null, onStateClick }) {
+export function CampaignScorecard({ stats = null, statsYesterday = null, onStateClick }) {
   if (!stats) {
     return <div className="py-6 text-center text-sm text-muted">Нет данных</div>;
   }
 
   const total = stats.total_ads_monitored || 1;
-  const normalCount = stats.total_ads_monitored - (stats.ads_in_early_signal + stats.ads_in_warning + stats.ads_in_stop + stats.ads_claimed + stats.ads_disabled);
+  const normalCount = stats.total_ads_monitored - (stats.ads_in_warning + stats.ads_in_stop + stats.ads_claimed + stats.ads_disabled);
+
+  const yesterdayNormalCount = statsYesterday
+    ? statsYesterday.total_ads_monitored - (statsYesterday.ads_in_warning + statsYesterday.ads_in_stop + (statsYesterday.ads_claimed ?? 0) + statsYesterday.ads_disabled)
+    : null;
 
   const distribution = [
-    { state: 'NORMAL', count: normalCount },
-    { state: 'EARLY_SIGNAL_SENT', count: stats.ads_in_early_signal },
-    { state: 'WARNING_SENT', count: stats.ads_in_warning },
-    { state: 'STOP_SENT', count: stats.ads_in_stop },
-    { state: 'DISABLED', count: stats.ads_disabled },
+    { state: 'NORMAL',       count: normalCount,           yesterday: yesterdayNormalCount },
+    { state: 'WARNING_SENT', count: stats.ads_in_warning,  yesterday: statsYesterday?.ads_in_warning ?? null },
+    { state: 'STOP_SENT',    count: stats.ads_in_stop,     yesterday: statsYesterday?.ads_in_stop ?? null },
+    { state: 'DISABLED',     count: stats.ads_disabled,    yesterday: statsYesterday?.ads_disabled ?? null },
   ];
 
   return (
@@ -54,6 +76,7 @@ export function CampaignScorecard({ stats = null, onStateClick }) {
               <span className="w-6 text-right font-mono text-sm font-semibold text-primary">
                 {row.count}
               </span>
+              <DeltaBadge today={row.count} yesterday={row.yesterday} state={row.state} />
             </button>
           );
         })}

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Движок правил: лесенка funnel-логики и ранние сигналы по post-click метрикам."""
+"""Движок правил: лесенка funnel-логики."""
 
 from __future__ import annotations
 
@@ -19,13 +19,10 @@ def evaluate_stop_rules(row: ScannedAdRow, ctx: RuleContext) -> RuleEvaluation:
     """Оценивает объявление по последовательной лесенке."""
 
     hit = _evaluate_funnel_ladder(row, ctx)
-    if hit is None:
-        hit = _evaluate_early_signals(row, ctx)
 
     if hit is None:
         return RuleEvaluation(
             stage=None,
-            early_signal_hits=(),
             warning_hits=(),
             stop_hits=(),
         )
@@ -33,21 +30,12 @@ def evaluate_stop_rules(row: ScannedAdRow, ctx: RuleContext) -> RuleEvaluation:
     if hit.stage == AlertStage.STOP:
         return RuleEvaluation(
             stage=AlertStage.STOP,
-            early_signal_hits=(),
             warning_hits=(),
             stop_hits=(hit,),
         )
-    if hit.stage == AlertStage.WARNING:
-        return RuleEvaluation(
-            stage=AlertStage.WARNING,
-            early_signal_hits=(),
-            warning_hits=(hit,),
-            stop_hits=(),
-        )
     return RuleEvaluation(
-        stage=AlertStage.EARLY_SIGNAL,
-        early_signal_hits=(hit,),
-        warning_hits=(),
+        stage=AlertStage.WARNING,
+        warning_hits=(hit,),
         stop_hits=(),
     )
 
@@ -67,8 +55,6 @@ def determine_enable_recommendation_level(
         return None
     if evaluation.stage == AlertStage.WARNING:
         return EnableRecommendationLevel.WARNING
-    if evaluation.stage == AlertStage.EARLY_SIGNAL:
-        return EnableRecommendationLevel.EARLY_SIGNAL
     if not _has_safe_enable_recovery_signal(row):
         return None
     return EnableRecommendationLevel.OK
@@ -203,92 +189,12 @@ def _evaluate_deposit_stage(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | No
     )
 
 
-def _evaluate_early_signals(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | None:
-    # CPM и частота — только диагностика, ранние сигналы не создают
-
-    spend_percent = _ratio_percent(row.spend, ctx.cpa_amount)
-
-    # Ранний сигнал 1: мало переходов на PWA — трафик не кликает
-    if (
-        ctx.early_outbound_ctr_signal_enabled
-        and row.outbound_ctr is not None
-        and spend_percent >= ctx.early_outbound_ctr_signal_min_spend_percent
-    ):
-        current = _round_percent(row.outbound_ctr)
-        threshold = _round_percent(ctx.early_outbound_ctr_signal_min_percent)
-        if current < threshold:
-            return RuleHit(
-                code="early_outbound_ctr_signal",
-                title=rule_label("early_outbound_ctr_signal"),
-                stage=AlertStage.EARLY_SIGNAL,
-                value=current,
-                threshold=threshold,
-                summary=f"Outbound CTR {current:.2f}% < минимум {threshold:.2f}%",
-                reason_text=(
-                    f"Мало переходов на PWA: CTR сейчас {current:.2f}% "
-                    f"при расходе {_format_money_value(row.spend)}. "
-                    f"Минимальный порог {threshold:.2f}% — трафик не конвертируется в переходы."
-                ),
-            )
-
-    # Ранний сигнал 2: мало открытий PWA после клика — высокий отвал
-    if (
-        ctx.early_lpv_ratio_signal_enabled
-        and row.outbound_clicks >= ctx.early_lpv_ratio_signal_min_outbound_clicks
-    ):
-        ratio = _ratio_percent(Decimal(row.landing_page_views), Decimal(row.outbound_clicks))
-        current = _round_percent(ratio)
-        threshold = _round_percent(ctx.early_lpv_ratio_signal_min_percent)
-        if current < threshold:
-            return RuleHit(
-                code="early_lpv_ratio_signal",
-                title=rule_label("early_lpv_ratio_signal"),
-                stage=AlertStage.EARLY_SIGNAL,
-                value=current,
-                threshold=threshold,
-                summary=f"LPV/клики {current:.2f}% < минимум {threshold:.2f}%",
-                reason_text=(
-                    f"Только {current:.2f}% кликов открывают PWA ({row.landing_page_views} из "
-                    f"{row.outbound_clicks}). "
-                    f"Порог {threshold:.2f}% — большой отвал после клика указывает на проблемы с загрузкой PWA."
-                ),
-            )
-
-    # Ранний сигнал 3: дорогое открытие PWA — слишком дорогой post-click
-    if (
-        ctx.early_cost_per_lpv_signal_enabled
-        and row.landing_page_views >= ctx.early_cost_per_lpv_signal_min_views
-        and row.cost_per_landing_page_view is not None
-    ):
-        current = _round_money(row.cost_per_landing_page_view)
-        threshold = _round_money(
-            _percent_of_cpa(ctx.cpa_amount, ctx.early_cost_per_lpv_signal_percent_of_cpa)
-        )
-        if current > threshold:
-            return RuleHit(
-                code="early_cost_per_lpv_signal",
-                title=rule_label("early_cost_per_lpv_signal"),
-                stage=AlertStage.EARLY_SIGNAL,
-                value=current,
-                threshold=threshold,
-                summary=f"Cost/LPV {_format_money_value(current)} > лимит {_format_money_value(threshold)}",
-                reason_text=(
-                    f"Открытие PWA обходится слишком дорого: {_format_money_value(current)} "
-                    f"при лимите {_format_money_value(threshold)} "
-                    f"({ctx.early_cost_per_lpv_signal_percent_of_cpa:.0f}% от CPA). "
-                    f"Экономика следующих шагов воронки будет нереалистичной."
-                ),
-            )
-
-    return None
-
-
 def _pick_highest_priority_hit(*hits: RuleHit | None) -> RuleHit | None:
     candidates = tuple(hit for hit in hits if hit is not None)
     if not candidates:
         return None
 
-    for stage in (AlertStage.STOP, AlertStage.WARNING, AlertStage.EARLY_SIGNAL):
+    for stage in (AlertStage.STOP, AlertStage.WARNING):
         for hit in candidates:
             if hit.stage == stage:
                 return hit

@@ -298,7 +298,7 @@ function PatternRow({ group, isExpanded, nextNumber, onToggle }) {
         <td className="px-4 py-2.5 text-right text-xs text-secondary">
           {group.total_count}
         </td>
-        <td className="px-4 py-2.5 text-right">
+        <td className="px-4 py-2.5 text-right min-w-[180px]">
           <div className="flex items-center justify-end gap-2">
             <span className="font-mono text-sm font-medium text-success">
               {fullName}
@@ -330,10 +330,10 @@ function PatternRow({ group, isExpanded, nextNumber, onToggle }) {
         <tr>
           <td colSpan={6} className="bg-elevated/50 px-8 py-3">
             <p className="text-2xs text-muted mb-2">Последние объявления:</p>
-            <div className="grid grid-cols-[auto_auto_auto] gap-x-4 gap-y-1 w-fit text-xs">
+            <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] gap-x-4 gap-y-1 text-xs">
               {group.recent_ads.map((ad) => (
                 <div key={ad.fb_ad_id} className="contents">
-                  <span className="font-mono text-primary">{ad.ad_name}</span>
+                  <span className="font-mono text-primary truncate min-w-0">{ad.ad_name}</span>
                   <span className="text-muted tabular-nums">ID: {ad.fb_ad_id}</span>
                   <span className="text-muted tabular-nums">
                     {ad.last_observed_at

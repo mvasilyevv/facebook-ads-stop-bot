@@ -14,10 +14,15 @@ FRONTEND_DIR := frontend
 
 .DEFAULT_GOAL := help
 
+PROTO_DIR := proto/v1
+GRPC_PY_OUT := clients/python_grpc
+GRPC_NODE_DIR := services/browser-agent
+
 .PHONY: help check-env check-tools venv install-backend install-frontend install \
 	docker-up docker-down db-wait migrate bootstrap api observer telegram \
 	disable-worker enable-worker enable-recommendation-worker frontend frontend-build lint format test \
-	test-unit test-telegram verify start stop logs
+	test-unit test-telegram verify start stop logs \
+	proto-compile proto-watch browser-agent browser-agent-dev browser-agent-build
 
 help: ## Показать доступные команды
 	@awk 'BEGIN {FS = ":.*## "}; /^[a-zA-Z0-9_.-]+:.*## / {printf "  %-20s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -131,3 +136,31 @@ stop: ## Остановить весь проект через run.sh
 
 logs: ## Показать логи run.sh
 	./run.sh --logs
+
+proto-compile: ## Скомпилировать proto файлы в Python и Node.js stubs
+	@mkdir -p $(GRPC_PY_OUT)
+	# Python stubs
+	$(PY) -m grpc_tools.protoc \
+		-Iproto \
+		--python_out=$(GRPC_PY_OUT) \
+		--grpc_python_out=$(GRPC_PY_OUT) \
+		--pyi_out=$(GRPC_PY_OUT) \
+		$(PROTO_DIR)/browser_session.proto \
+		$(PROTO_DIR)/scanner.proto
+	# grpc_tools генерирует absolute import `from v1 import ...`, который ломает пакет clients.python_grpc.
+	$(PY) -c "from pathlib import Path; [path.write_text(path.read_text().replace('from v1 import ', 'from . import ')) for path in Path('$(GRPC_PY_OUT)/v1').glob('*_pb2_grpc.py')]"
+	@echo "Python stubs сгенерированы в $(GRPC_PY_OUT)"
+	# Node.js stubs
+	cd $(GRPC_NODE_DIR) && npm run proto 2>/dev/null || echo "Node.js stubs: запустите 'cd services/browser-agent && npm install && npm run proto'"
+
+proto-watch: ## Следить за proto/ и перекомпилировать
+	nodemon --watch proto/ -e proto --exec "make proto-compile"
+
+browser-agent-dev: ## Запустить browser-agent в dev-режиме
+	cd $(GRPC_NODE_DIR) && npm run dev
+
+browser-agent-build: ## Собрать browser-agent
+	cd $(GRPC_NODE_DIR) && npm run build
+
+browser-agent: ## Запустить собранный browser-agent
+	cd $(GRPC_NODE_DIR) && npm start

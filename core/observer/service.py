@@ -99,23 +99,6 @@ def build_rule_context(
         spend_with_dep_enabled=bool(rule_config.spend_with_dep_enabled),
         spend_with_dep_from_percent=Decimal(rule_config.spend_with_dep_from_percent),
         spend_with_dep_to_percent=Decimal(rule_config.spend_with_dep_to_percent),
-        early_outbound_ctr_signal_enabled=bool(rule_config.early_outbound_ctr_signal_enabled),
-        early_outbound_ctr_signal_min_percent=Decimal(
-            rule_config.early_outbound_ctr_signal_min_percent
-        ),
-        early_outbound_ctr_signal_min_spend_percent=Decimal(
-            rule_config.early_outbound_ctr_signal_min_spend_percent
-        ),
-        early_lpv_ratio_signal_enabled=bool(rule_config.early_lpv_ratio_signal_enabled),
-        early_lpv_ratio_signal_min_percent=Decimal(rule_config.early_lpv_ratio_signal_min_percent),
-        early_lpv_ratio_signal_min_outbound_clicks=int(
-            rule_config.early_lpv_ratio_signal_min_outbound_clicks
-        ),
-        early_cost_per_lpv_signal_enabled=bool(rule_config.early_cost_per_lpv_signal_enabled),
-        early_cost_per_lpv_signal_percent_of_cpa=Decimal(
-            rule_config.early_cost_per_lpv_signal_percent_of_cpa
-        ),
-        early_cost_per_lpv_signal_min_views=int(rule_config.early_cost_per_lpv_signal_min_views),
     )
 
 
@@ -130,7 +113,7 @@ def evaluate_row(
 ) -> RuleEvaluation:
     """Оценивает одну строку. Без оффера — пропуск."""
     if offer_cpa is None or rule_config is None:
-        return RuleEvaluation(stage=None, early_signal_hits=(), warning_hits=(), stop_hits=())
+        return RuleEvaluation(stage=None, warning_hits=(), stop_hits=())
     ctx = build_rule_context(
         cpa_amount=offer_cpa,
         warning_percent_of_stop=warning_percent_of_stop,

@@ -1,60 +1,19 @@
 # -*- coding: utf-8 -*-
-"""Точка входа: запускает disable worker с подключением к Vision и БД."""
+"""Точка входа: запускает disable worker с подключением к Node.js browser-agent через gRPC."""
 
 from __future__ import annotations
-
-from core.browser.stealth import patch_patchright
-
-patch_patchright()
 
 import asyncio
 import logging
 import pathlib
-import random
 import signal
 import sys
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import selectinload
 
-from core.browser.ad_toggle import (
-    confirm_dialog_if_present as shared_confirm_dialog_if_present,
-)
-from core.browser.ad_toggle import (
-    get_toggle_aria_checked_via_js as shared_get_toggle_aria_checked_via_js,
-)
-from core.browser.ad_toggle import (
-    normalize_aria_checked as shared_normalize_aria_checked,
-)
-from core.browser.ad_toggle import (
-    reset_ads_table_to_top as shared_reset_ads_table_to_top,
-)
-from core.browser.ad_toggle import (
-    restore_toggle_row_visibility as shared_restore_toggle_row_visibility,
-)
-from core.browser.ad_toggle import (
-    scan_for_toggle_cell,
-)
-from core.browser.ad_toggle import (
-    wait_for_toggle_confirmation as shared_wait_for_toggle_confirmation,
-)
-from core.browser.ads_table import (
-    find_toggle_cell_in_dom as _find_toggle_cell_in_dom_raw,
-)
-from core.browser.ads_table import (
-    get_ads_table_scroll_anchor,
-    get_ads_table_scroll_metrics,
-    get_visible_ads_table_row_ids,
-    reset_ads_table_scroll,
-    scroll_ads_table_down,
-)
-from core.browser.ads_table import (
-    toggle_cell_selector as _toggle_cell_selector_raw,
-)
-from core.browser.humanizer import human_click, human_move, human_scroll_to_find, human_wheel_scroll
-from core.browser.manager import VisionBrowserManager
-from core.browser.vision_client import VisionClient
+from clients.python_grpc.client import BrowserAgentClient, BrowserAgentConfig, ScanResult
 from core.config import get_settings
 from core.crypto import decrypt
 from core.db import get_session_factory
@@ -74,18 +33,17 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 VISION_SETTINGS_POLL_INTERVAL_SECONDS = 5
 
-# Расширенное окно подтверждения нужно, потому что Meta может обновлять aria-checked
-# заметно позже самого клика по переключателю.
-DISABLE_CONFIRMATION_POLL_DELAYS_SECONDS = (0.0, 3.0, 3.0, 3.0, 3.0, 4.0, 4.0, 5.0, 5.0)
-DISABLE_CONFIRMATION_FALSE_READS_REQUIRED = 2
-DISABLE_CONFIRMATION_WINDOW_SECONDS = int(sum(DISABLE_CONFIRMATION_POLL_DELAYS_SECONDS))
+# Параметры поиска, клика и повторной проверки для disable
 DISABLE_BATCH_SIZE = 10
-DISABLE_BATCH_SCROLL_STEP_PX = 220
 DISABLE_BATCH_MAX_SCROLL_PASSES = 50
 DISABLE_SINGLE_SEARCH_MAX_SCROLL_PASSES = 120
-DISABLE_SINGLE_SEARCH_FALLBACK_MAX_STEPS = 60
 DISABLE_MANAGER_DISCONNECT_TIMEOUT_SECONDS = 15
 DISABLE_VISION_CLOSE_TIMEOUT_SECONDS = 10
+DISABLE_APPLY_DELAY_SECONDS = 3.0
+DISABLE_VERIFY_SCAN_MAX_SCROLL_PASSES = 80
+DISABLE_VERIFY_TOGGLE_POLL_DELAYS_SECONDS = (0.0, 1.0, 1.0, 2.0)
+DISABLE_CONFIRMED_DELIVERY_STATUS = "OFF"
+DISABLE_ALREADY_OFF_MESSAGE_PREFIX = "Объявление уже отключено"
 
 # Общая очередь задач на отключение
 _disable_queue = PostgresTaskQueue(
@@ -95,39 +53,42 @@ _disable_queue = PostgresTaskQueue(
 )
 
 
-async def _close_disable_runtime_resources(manager, vision) -> None:
-    """Закрывает browser/Vision ресурсы с таймаутами, чтобы worker не зависал в cleanup."""
-    if manager is not None:
+def _is_already_disabled_message(message: str) -> bool:
+    """Проверяет, что результат пришёл от уже выключенного тумблера."""
+    return message.startswith(DISABLE_ALREADY_OFF_MESSAGE_PREFIX)
+
+
+async def _close_disable_runtime_resources(grpc_client: BrowserAgentClient | None) -> None:
+    """Закрывает gRPC канал и browser-agent сессию с таймаутами."""
+    if grpc_client is not None:
         try:
             await asyncio.wait_for(
-                manager.disconnect(),
+                grpc_client.disconnect_browser(),
                 timeout=DISABLE_MANAGER_DISCONNECT_TIMEOUT_SECONDS,
             )
         except asyncio.TimeoutError:
             logger.warning(
-                "Disable worker: таймаут %s сек при отключении браузера — продолжаю восстановление",
+                "Disable worker: таймаут %s сек при отключении от browser-agent — продолжаю восстановление",
                 DISABLE_MANAGER_DISCONNECT_TIMEOUT_SECONDS,
             )
         except Exception:
             logger.debug(
-                "Disable worker: не удалось корректно отключить браузер",
+                "Disable worker: не удалось отключиться от browser-agent",
                 exc_info=True,
             )
-
-    if vision is not None:
         try:
             await asyncio.wait_for(
-                vision.close(),
+                grpc_client.close(),
                 timeout=DISABLE_VISION_CLOSE_TIMEOUT_SECONDS,
             )
         except asyncio.TimeoutError:
             logger.warning(
-                "Disable worker: таймаут %s сек при закрытии Vision клиента — продолжаю восстановление",
+                "Disable worker: таймаут %s сек при закрытии gRPC канала",
                 DISABLE_VISION_CLOSE_TIMEOUT_SECONDS,
             )
         except Exception:
             logger.debug(
-                "Disable worker: не удалось закрыть Vision клиент",
+                "Disable worker: не удалось закрыть gRPC канал",
                 exc_info=True,
             )
 
@@ -151,6 +112,35 @@ async def _load_vision_settings() -> tuple[str, str, str]:
         logger.debug("Не удалось загрузить Vision-настройки из БД", exc_info=True)
 
     return settings.vision_x_token, settings.vision_api_url, settings.vision_profile_id
+
+
+def _build_client_config(
+    vision_token: str, vision_url: str, vision_profile: str
+) -> BrowserAgentConfig:
+    """Создаёт конфигурацию gRPC клиента из Vision настроек."""
+    settings = get_settings()
+    return BrowserAgentConfig(
+        vision_x_token=vision_token,
+        vision_api_url=vision_url,
+        vision_profile_id=vision_profile,
+        vision_folder_id=settings.vision_folder_id
+        if hasattr(settings, "vision_folder_id")
+        else None,
+    )
+
+
+async def _init_grpc_client(
+    vision_token: str,
+    vision_url: str,
+    vision_profile: str,
+) -> BrowserAgentClient:
+    """Создаёт, запускает и подключает gRPC клиент к browser-agent."""
+    config = _build_client_config(vision_token, vision_url, vision_profile)
+    client = BrowserAgentClient(config)
+    await client.start()
+    await client.start_browser()
+    logger.info("gRPC клиент подключён, session_id=%s", client.session_id)
+    return client
 
 
 async def claim_next_task():
@@ -190,421 +180,301 @@ async def claim_task_batch(limit: int = DISABLE_BATCH_SIZE) -> list[DisableTask]
         return tasks
 
 
-def _find_ads_manager_page(manager) -> object | None:
-    """Ищет вкладку Ads Manager среди всех открытых страниц браузера."""
-    browser = manager._browser
-    if browser is None:
-        return None
-    for context in browser.contexts:
-        for p in context.pages:
-            url = p.url or ""
-            if "adsmanager" in url or "facebook.com/ads" in url:
-                return p
-    # Fallback: первая страница
-    for context in browser.contexts:
-        if context.pages:
-            return context.pages[0]
-    return None
+async def has_claimable_disable_tasks() -> bool:
+    """Проверяет, есть ли задачи отключения, ради которых нужно занимать браузер."""
+    factory = get_session_factory()
+    async with factory() as session:
+        now = datetime.now(UTC)
+        recovery_summary = await reconcile_disable_tasks(session, now=now)
+        if any(recovery_summary.values()):
+            await session.commit()
 
-
-async def _confirm_dialog_if_present(page) -> bool:
-    """Проверяет появился ли диалог подтверждения и нажимает кнопку подтвердить.
-
-    Кнопки в диалоге Facebook — это div[role="button"], не <button>.
-    """
-    confirm_words = {
-        "подтвердить",
-        "ok",
-        "да",
-        "продолжить",
-        "отключить",
-        "confirm",
-        "yes",
-        "pause",
-        "приостановить",
-        "опубликовать",
-        "publish",
-    }
-    try:
-        return await shared_confirm_dialog_if_present(
-            page,
-            confirm_words=confirm_words,
-            click_fn=human_click,
-            logger=logger,
-            sleep_range=(0.5, 1.0),
-            log_message="Подтверждаю диалог: '%s'",
+        count = await session.scalar(
+            select(func.count())
+            .select_from(DisableTask)
+            .where(
+                or_(
+                    DisableTask.status == DisableTaskStatus.PENDING,
+                    and_(
+                        DisableTask.status == DisableTaskStatus.RETRYING,
+                        DisableTask.next_retry_at <= now,
+                    ),
+                )
+            )
         )
-    except Exception:
-        logger.debug("Ошибка при проверке диалога", exc_info=True)
-    return False
+    return bool(count)
 
 
-async def _get_aria_checked_via_js(page, fb_ad_id: str) -> str:
-    """Получает текущее значение aria-checked у реального переключателя объявления."""
-    return await shared_get_toggle_aria_checked_via_js(
-        page,
-        fb_ad_id,
-        selector_builder=_toggle_cell_selector,
-    )
-
-
-def _normalize_aria_checked(value: str | None) -> str:
-    """Нормализует значение aria-checked для строгого сравнения."""
-    return shared_normalize_aria_checked(value)
-
-
-async def _reset_ads_table_scroll(page) -> None:
-    """Сбрасывает внутреннюю прокрутку таблицы Ads Manager к началу."""
-    await shared_reset_ads_table_to_top(
-        page,
-        get_scroll_anchor=get_ads_table_scroll_anchor,
-        reset_scroll=reset_ads_table_scroll,
-        move_mouse=human_move,
-        wheel_scroll=human_wheel_scroll,
-        logger=logger,
-    )
-
-
-async def _restore_toggle_row_visibility(page, fb_ad_id: str) -> None:
-    """Возвращает строку объявления в DOM, если она пропала после обновления таблицы."""
-    await shared_restore_toggle_row_visibility(
-        page,
-        fb_ad_id,
-        find_in_dom=_find_toggle_cell_in_dom,
-        scan_in_table=_find_toggle_cell_with_table_scan,
-        logger=logger,
-        log_message="Строка %s временно пропала из DOM — возвращаю объявление в область видимости",
-        max_scroll_passes=DISABLE_SINGLE_SEARCH_MAX_SCROLL_PASSES,
-        step_px=DISABLE_BATCH_SCROLL_STEP_PX,
-        fallback_max_steps=DISABLE_SINGLE_SEARCH_FALLBACK_MAX_STEPS,
-    )
-
-
-async def _wait_for_disable_confirmation(page, fb_ad_id: str) -> tuple[bool, str]:
-    """Ждёт подтверждения OFF в интерфейсе Meta без снижения критерия надёжности."""
-    return await shared_wait_for_toggle_confirmation(
-        page,
-        fb_ad_id,
-        poll_delays_seconds=DISABLE_CONFIRMATION_POLL_DELAYS_SECONDS,
-        required_reads=DISABLE_CONFIRMATION_FALSE_READS_REQUIRED,
-        expected_checked="false",
-        read_state=_get_aria_checked_via_js,
-        restore_visibility=_restore_toggle_row_visibility,
-        logger=logger,
-        progress_log_message="Проверка отключения %s: попытка %s/%s, aria-checked=%s",
-        success_message="Объявление выключено: переключатель дважды подтвердил состояние OFF",
-        failure_message="Переключатель нажат, но интерфейс не подтвердил OFF даже после расширенной проверки",
-        recoverable_states={"not_found", "no_toggle", "no_input", "error", "null"},
-    )
-
-
-def _toggle_cell_selector(fb_ad_id: str) -> str:
-    """Возвращает селектор ячейки toggle для конкретного объявления."""
-    return _toggle_cell_selector_raw(fb_ad_id)
-
-
-async def _resolve_ads_manager_page(manager) -> tuple[object | None, str | None]:
-    """Находит рабочую вкладку Ads Manager и при необходимости переподключается."""
-    page = _find_ads_manager_page(manager)
-    if page is not None:
-        return page, None
-
-    logger.warning("Страница не найдена, переподключаюсь к браузеру...")
-    try:
-        await manager.disconnect()
-        await manager.connect()
-    except Exception as reconnect_err:
-        return None, f"Не удалось переподключиться к браузеру: {reconnect_err}"
-
-    page = _find_ads_manager_page(manager)
-    if page is None:
-        return None, "Не найдена страница браузера после переподключения"
-    return page, None
-
-
-async def _find_toggle_cell_in_dom(page, fb_ad_id: str):
-    """Ищет ячейку toggle для объявления среди уже видимых строк."""
-    return await _find_toggle_cell_in_dom_raw(page, fb_ad_id)
-
-
-async def _find_toggle_cell_with_table_scan(
-    page,
+async def _execute_disable_single(
+    client: BrowserAgentClient,
     fb_ad_id: str,
     *,
-    reset_to_top: bool,
-):
-    """Ищет строку объявления проходом сверху вниз до реального низа таблицы."""
-    logger.info(
-        "Объявление %s не в DOM, прохожу таблицу Ads Manager сверху вниз до конца",
-        fb_ad_id,
-    )
-
-    return await scan_for_toggle_cell(
-        page,
-        fb_ad_id,
-        selector_builder=_toggle_cell_selector,
-        find_in_dom=_find_toggle_cell_in_dom,
-        reset_to_top_fn=_reset_ads_table_scroll,
-        get_scroll_metrics=get_ads_table_scroll_metrics,
-        scroll_down=scroll_ads_table_down,
-        legacy_scroll_to_find=human_scroll_to_find,
-        reset_to_top=reset_to_top,
-        max_scroll_passes=DISABLE_SINGLE_SEARCH_MAX_SCROLL_PASSES,
-        step_px=DISABLE_BATCH_SCROLL_STEP_PX,
-        fallback_max_steps=DISABLE_SINGLE_SEARCH_FALLBACK_MAX_STEPS,
-        logger=logger,
-        reached_bottom_log="Поиск %s дошёл до низа таблицы на проходе %s",
-        found_log="Объявление %s найдено в таблице на проходе %s",
-        stalled_log="Поиск %s остановлен: таблица перестала двигаться на проходе %s",
-        fallback_log="Поиск %s не получил метрик таблицы, пробую резервный humanized-поиск",
-    )
-
-
-async def _execute_disable_on_page(
-    page,
-    fb_ad_id: str,
-    *,
-    reset_table_before_search: bool,
-    allow_scroll_search: bool,
+    reset_table_before_search: bool = True,
 ) -> tuple[bool, str]:
-    """Отключает объявление на уже найденной странице Ads Manager."""
-    found_cell = await _find_toggle_cell_in_dom(page, fb_ad_id)
-    if found_cell is None and allow_scroll_search:
-        found_cell = await _find_toggle_cell_with_table_scan(
-            page,
-            fb_ad_id,
-            reset_to_top=reset_table_before_search,
-        )
+    """Отключает одно объявление через gRPC.
 
-    if found_cell is None:
-        return False, f"Строка с Ad ID {fb_ad_id} не найдена в таблице после прокрутки"
+    Шаги:
+    1. Найти toggle-ячейку (со скроллом при необходимости).
+    2. Проверить aria-checked=true (уже включено).
+    3. Вызвать toggle_ad(target_state=False).
+    4. Подождать применения toggle без нажатия publish/confirm.
+    5. Быстро подтвердить OFF через aria-checked.
+    """
+    # Шаг 1: Поиск toggle-ячейки
+    find_result = await client.find_toggle_cell(
+        fb_ad_id,
+        reset_to_top=reset_table_before_search,
+    )
 
-    # Работаем только с точным switch-контролом объявления.
-    # Любые другие aria-checked элементы считаем недостоверными.
-    toggle = await found_cell.query_selector('[role="switch"][aria-checked]')
+    if not find_result["found"]:
+        return False, f"Строка с Ad ID {fb_ad_id} не найдена в таблице"
 
-    if toggle is None:
-        return (
-            False,
-            "Не найден точный switch-переключатель объявления; batch-checkbox и fallback-контролы отключены",
-        )
+    # Шаг 2: Проверка текущего состояния
+    initial_checked = find_result.get("aria_checked", "")
+    if initial_checked not in {"true", "false"}:
+        # Делаем отдельное чтение toggle, если быстрый поиск ячейки не смог вернуть aria-checked.
+        initial_checked = await client.read_toggle_state(fb_ad_id)
 
-    toggle_label = await toggle.get_attribute("aria-label") or "switch"
-    initial_checked = _normalize_aria_checked(await toggle.get_attribute("aria-checked"))
     logger.info(
-        "Переключатель найден: '%s' aria-checked=%s для %s",
-        toggle_label,
+        "Disable: toggle найден x=%.0f y=%.0f, aria-checked=%s для %s",
+        find_result["cell_x"],
+        find_result["cell_y"],
         initial_checked or "null",
         fb_ad_id,
     )
 
     if initial_checked == "false":
-        return True, f"Объявление уже отключено (aria-checked={initial_checked})"
+        return True, f"{DISABLE_ALREADY_OFF_MESSAGE_PREFIX} (aria-checked={initial_checked})"
+
     if initial_checked != "true":
         return (
             False,
-            f"Не удалось однозначно определить состояние переключателя: aria-checked={initial_checked or 'null'}",
+            f"Не удалось определить состояние переключателя: aria-checked={initial_checked or 'null'}",
         )
 
-    try:
-        await human_click(page, toggle, double_check_pause=True)
-    except Exception:
-        logger.debug(
-            "human_click не сработал, повторная попытка через humanizer",
-            exc_info=True,
+    # Шаг 3: Клик по toggle (выключение)
+    toggle_result = await client.toggle_ad(fb_ad_id, target_state=False)
+
+    if not toggle_result["success"]:
+        return (
+            False,
+            f"Не удалось переключить toggle: final_state={toggle_result.get('final_state', 'unknown')}",
         )
-        await asyncio.sleep(random.uniform(0.2, 0.4))
-        try:
-            await human_click(page, toggle, double_check_pause=False)
-        except Exception as second_click_error:
-            return False, f"Не удалось нажать переключатель через humanizer: {second_click_error}"
 
-    await asyncio.sleep(random.uniform(1.5, 2.0))
+    # Шаг 4: Ads Manager применяет toggle через несколько секунд, отдельное подтверждение не нужно.
+    await asyncio.sleep(DISABLE_APPLY_DELAY_SECONDS)
 
-    dialog_confirmed = await _confirm_dialog_if_present(page)
-    if dialog_confirmed:
-        await asyncio.sleep(random.uniform(0.5, 1.0))
+    # Шаг 5: Быстро проверяем aria-checked, а финальный статус подтвердит повторный скан пачки.
+    confirm_result = await client.wait_for_toggle_confirmation(
+        fb_ad_id,
+        expected_checked="false",
+        required_reads=1,
+        poll_delays_seconds=[0.0, 1.0, 1.0],
+        max_scroll_passes_restore=DISABLE_SINGLE_SEARCH_MAX_SCROLL_PASSES,
+    )
 
-    success, confirmation_message = await _wait_for_disable_confirmation(page, fb_ad_id)
-    if success:
-        return True, confirmation_message
-
-    try:
-        screenshot_path = f"/tmp/disable_fail_{fb_ad_id}.png"
-        await page.screenshot(path=screenshot_path)
-        logger.error("Отключение не подтверждено — скриншот: %s", screenshot_path)
-    except Exception:
-        pass
+    if confirm_result["success"]:
+        return True, "Клик по выключению выполнен, toggle показал OFF"
 
     return (
         False,
-        f"{confirmation_message} (около {DISABLE_CONFIRMATION_WINDOW_SECONDS} сек)",
+        confirm_result.get("message", "Интерфейс не подтвердил OFF после клика"),
     )
 
 
-async def execute_disable_via_playwright(manager, fb_ad_id: str) -> tuple[bool, str]:
-    """Выполняет клик для отключения объявления через Playwright.
-
-    Ищет строку по data-surface атрибуту (Ad ID) и нажимает переключатель.
-    После клика проверяет результат через свежий JS-запрос (избегает stale element).
-    """
-    page = None
-    try:
-        page, page_error = await _resolve_ads_manager_page(manager)
-        if page is None:
-            return False, page_error or "Не найдена страница браузера после переподключения"
-        logger.info("Disable: используем страницу %s", (page.url or "")[:80])
-        return await _execute_disable_on_page(
-            page,
-            fb_ad_id,
-            reset_table_before_search=True,
-            allow_scroll_search=True,
-        )
-    except Exception as e:
-        logger.exception("Ошибка Playwright при отключении %s", fb_ad_id)
-        try:
-            screenshot_path = f"/tmp/disable_error_{fb_ad_id}.png"
-            await page.screenshot(path=screenshot_path)
-            logger.error("Скриншот ошибки: %s", screenshot_path)
-        except Exception:
-            pass
-        return False, f"Ошибка Playwright: {e}"
+async def _scan_rows_for_disable_verification(client: BrowserAgentClient) -> dict[str, object]:
+    """Запускает повторный scan после кликов и возвращает строки по fb_ad_id."""
+    rows_by_ad_id: dict[str, object] = {}
+    async for event in client.run_scan_cycle(
+        max_scroll_passes=DISABLE_VERIFY_SCAN_MAX_SCROLL_PASSES,
+        do_refresh=True,
+        reset_scroll_first=True,
+        settle_delay_seconds=2.0,
+    ):
+        if isinstance(event, ScanResult):
+            rows_by_ad_id = {row.fb_ad_id: row for row in event.rows}
+    return rows_by_ad_id
 
 
-async def execute_disable_batch_via_playwright(
-    manager, tasks: list[DisableTask]
+async def _mark_snapshot_disabled_from_verification(fb_ad_id: str, delivery_status: str) -> None:
+    """Обновляет UI-снимок после повторного скана, подтвердившего отключение."""
+    factory = get_session_factory()
+    async with factory() as session:
+        result = await session.execute(select(AdSnapshot).where(AdSnapshot.fb_ad_id == fb_ad_id))
+        snapshot = result.scalar_one_or_none()
+        if snapshot:
+            snapshot.delivery_status = delivery_status
+            snapshot.alert_state = AlertState.DISABLED
+            snapshot.last_observed_at = datetime.now(UTC)
+            await session.commit()
+
+
+async def _execute_disable_batch(
+    client: BrowserAgentClient,
+    tasks: list[DisableTask],
 ) -> dict[str, tuple[bool, str]]:
-    """Проходит таблицу сверху вниз и пытается отключить сразу несколько объявлений."""
+    """Проходит таблицу сверху вниз и отключает все найденные объявления.
+
+    Для каждой задачи:
+    1. Ищем toggle через find_toggle_cell (со скроллом).
+    2. Если найден и aria-checked=true — переключаем.
+    3. Без подтверждений идём дальше по целям.
+    4. После пачки запускаем повторный скан и подтверждаем OFF по toggle,
+       а delivery_status используем как дополнительную синхронизацию снимка.
+    """
     results: dict[str, tuple[bool, str]] = {}
     if not tasks:
         return results
 
-    page = None
-    try:
-        page, page_error = await _resolve_ads_manager_page(manager)
-        if page is None:
-            error_message = page_error or "Не найдена страница браузера после переподключения"
-            return {task.id: (False, error_message) for task in tasks}
+    # Группируем задачи по ad_id (могут быть дубликаты)
+    tasks_by_ad_id: dict[str, list[DisableTask]] = {}
+    for task in tasks:
+        ad_id = task.fb_ad.fb_ad_id
+        if ad_id not in tasks_by_ad_id:
+            tasks_by_ad_id[ad_id] = []
+        tasks_by_ad_id[ad_id].append(task)
 
-        logger.info(
-            "Disable: начинаю проход сверху вниз по таблице для %s задач",
-            len(tasks),
-        )
+    remaining_ad_ids = set(tasks_by_ad_id.keys())
+    pending_verify_ad_ids: set[str] = set()
+    stalled_scroll_passes = 0
+    logger.info(
+        "Disable batch: начинаю отключение %s задач (%s уникальных объявлений)",
+        len(tasks),
+        len(remaining_ad_ids),
+    )
 
-        await _reset_ads_table_scroll(page)
-        await asyncio.sleep(random.uniform(0.3, 0.6))
+    # Сброс таблицы перед проходом
+    await client.reset_scroll()
+    await asyncio.sleep(0.5)
 
-        tasks_by_ad_id: dict[str, list[DisableTask]] = {}
-        ordered_ad_ids: list[str] = []
-        for task in tasks:
-            task_list = tasks_by_ad_id.setdefault(task.fb_ad.fb_ad_id, [])
-            if not task_list:
-                ordered_ad_ids.append(task.fb_ad.fb_ad_id)
-            task_list.append(task)
+    for pass_num in range(1, DISABLE_BATCH_MAX_SCROLL_PASSES + 1):
+        visible_ids = set(await client.get_visible_row_ids())
+        visible_targets = [aid for aid in remaining_ad_ids if aid in visible_ids]
 
-        remaining_ad_ids = set(ordered_ad_ids)
-        stalled_passes = 0
-        should_fallback_to_legacy_search = False
+        if visible_targets:
+            logger.info(
+                "Disable batch: проход %s, видно %s целевых объявлений",
+                pass_num,
+                len(visible_targets),
+            )
 
-        for pass_num in range(1, DISABLE_BATCH_MAX_SCROLL_PASSES + 1):
-            visible_row_ids = set(await get_visible_ads_table_row_ids(page))
-            visible_target_ids = [
-                fb_ad_id
-                for fb_ad_id in ordered_ad_ids
-                if fb_ad_id in remaining_ad_ids and fb_ad_id in visible_row_ids
-            ]
-
-            if visible_target_ids:
-                logger.info(
-                    "Disable: проход %s, в видимой части таблицы найдено %s целевых объявлений",
-                    pass_num,
-                    len(visible_target_ids),
-                )
-
-            for fb_ad_id in visible_target_ids:
-                if fb_ad_id not in remaining_ad_ids:
-                    continue
-
-                found_cell = await _find_toggle_cell_in_dom(page, fb_ad_id)
-                if found_cell is None:
-                    continue
-
-                success, message = await _execute_disable_on_page(
-                    page,
-                    fb_ad_id,
-                    reset_table_before_search=False,
-                    allow_scroll_search=False,
-                )
-                for task in tasks_by_ad_id[fb_ad_id]:
-                    results[task.id] = (success, message)
-                remaining_ad_ids.discard(fb_ad_id)
-
-                await asyncio.sleep(random.uniform(0.2, 0.5))
-
-            if not remaining_ad_ids:
-                logger.info("Disable: все объявления из пачки найдены за один проход таблицы")
-                break
-
-            scroll_before = await get_ads_table_scroll_metrics(page)
-            if scroll_before["found"] and scroll_before["at_bottom"]:
-                logger.info(
-                    "Disable: достигнут низ таблицы, не найдено ещё %s объявлений, возвращаюсь к точечному поиску",
-                    len(remaining_ad_ids),
-                )
-                should_fallback_to_legacy_search = True
-                break
-
-            scroll_after = await scroll_ads_table_down(page, step_px=DISABLE_BATCH_SCROLL_STEP_PX)
-            if scroll_after.get("moved"):
-                stalled_passes = 0
+        for fb_ad_id in visible_targets:
+            if fb_ad_id not in remaining_ad_ids:
                 continue
 
-            stalled_passes += 1
-            if stalled_passes >= 2:
-                logger.info(
-                    "Disable: таблица перестала двигаться вниз, возвращаюсь к поиску сверху для %s объявлений",
-                    len(remaining_ad_ids),
-                )
-                should_fallback_to_legacy_search = True
-                break
-
-        if remaining_ad_ids and should_fallback_to_legacy_search:
-            logger.info(
-                "Disable: запускаю fallback-поиск сверху для %s объявлений",
-                len(remaining_ad_ids),
+            success, message = await _execute_disable_single(
+                client,
+                fb_ad_id,
+                reset_table_before_search=False,
             )
-            await _reset_ads_table_scroll(page)
-            await asyncio.sleep(random.uniform(0.3, 0.6))
 
-            for fb_ad_id in ordered_ad_ids:
-                if fb_ad_id not in remaining_ad_ids:
-                    continue
-
-                success, message = await _execute_disable_on_page(
-                    page,
-                    fb_ad_id,
-                    reset_table_before_search=True,
-                    allow_scroll_search=True,
-                )
+            if success:
+                if _is_already_disabled_message(message):
+                    await _mark_snapshot_disabled_from_verification(
+                        fb_ad_id,
+                        DISABLE_CONFIRMED_DELIVERY_STATUS,
+                    )
+                    for task in tasks_by_ad_id[fb_ad_id]:
+                        results[task.id] = (True, message)
+                    logger.info(
+                        "Disable batch: %s уже OFF, повторный скан для задачи не нужен",
+                        fb_ad_id,
+                    )
+                else:
+                    pending_verify_ad_ids.add(fb_ad_id)
+                    logger.info(
+                        "Disable batch: %s выключен в UI, финально проверим повторным сканом",
+                        fb_ad_id,
+                    )
+            else:
                 for task in tasks_by_ad_id[fb_ad_id]:
                     results[task.id] = (success, message)
-                remaining_ad_ids.discard(fb_ad_id)
-                await asyncio.sleep(random.uniform(0.2, 0.5))
+            remaining_ad_ids.discard(fb_ad_id)
+            await asyncio.sleep(0.3)
 
-        for fb_ad_id in remaining_ad_ids:
-            for task in tasks_by_ad_id[fb_ad_id]:
-                results[task.id] = (
+        if not remaining_ad_ids:
+            logger.info("Disable batch: все объявления обработаны за %s проходов", pass_num)
+            break
+
+        before_scroll_ids = list(visible_ids)
+
+        # Проверяем достигнут ли низ таблицы
+        metrics = await client.get_scroll_metrics()
+        if metrics.get("at_bottom", False):
+            logger.info(
+                "Disable batch: достигнут низ, не найдено %s объявлений",
+                len(remaining_ad_ids),
+            )
+            break
+
+        # Скролл вниз
+        await client.scroll_and_parse(scroll_amount=320, wait_for_stable=True)
+        await asyncio.sleep(1.0)
+        after_scroll_ids = await client.get_visible_row_ids()
+        if set(after_scroll_ids) == set(before_scroll_ids):
+            stalled_scroll_passes += 1
+            if stalled_scroll_passes >= 3:
+                logger.info("Disable batch: видимые строки перестали меняться, завершаю проход")
+                break
+        else:
+            stalled_scroll_passes = 0
+
+    # Не найденные объявления
+    for fb_ad_id in remaining_ad_ids:
+        for task in tasks_by_ad_id[fb_ad_id]:
+            results[task.id] = (
+                False,
+                "Объявление не найдено в таблице за проход сверху вниз",
+            )
+
+    if pending_verify_ad_ids:
+        logger.info(
+            "Disable batch: запускаю повторный скан для проверки %s отключённых объявлений",
+            len(pending_verify_ad_ids),
+        )
+        rows_by_ad_id = await _scan_rows_for_disable_verification(client)
+        for fb_ad_id in pending_verify_ad_ids:
+            row = rows_by_ad_id.get(fb_ad_id)
+            toggle_result = await client.wait_for_toggle_confirmation(
+                fb_ad_id,
+                expected_checked="false",
+                required_reads=1,
+                poll_delays_seconds=list(DISABLE_VERIFY_TOGGLE_POLL_DELAYS_SECONDS),
+                max_scroll_passes_restore=DISABLE_SINGLE_SEARCH_MAX_SCROLL_PASSES,
+            )
+            delivery_status = getattr(row, "delivery_status", "") if row is not None else ""
+
+            if row is None:
+                result = (False, "После клика объявление не найдено при повторном скане")
+            elif not toggle_result.get("success", False):
+                result = (
                     False,
-                    "Объявление не найдено в таблице за проход сверху вниз",
+                    "Повторная проверка не подтвердила OFF по toggle: "
+                    f"aria-checked={toggle_result.get('final_aria_checked', 'unknown')}",
                 )
+            elif is_delivery_disabled(delivery_status):
+                await _mark_snapshot_disabled_from_verification(
+                    fb_ad_id,
+                    delivery_status,
+                )
+                result = (True, "Объявление отключено: toggle OFF и delivery_status подтверждены")
+            else:
+                # Meta иногда держит промежуточный delivery_status дольше, чем сам toggle,
+                # поэтому считаем задачу успешно выключенной, но явно логируем лаг статуса.
+                logger.info(
+                    "Disable batch: %s подтверждён OFF по toggle, но delivery_status пока=%s",
+                    fb_ad_id,
+                    delivery_status or "пусто",
+                )
+                result = (
+                    True,
+                    "Toggle подтверждён в OFF, но delivery_status ещё не обновился: "
+                    f"{delivery_status or 'пусто'}",
+                )
+            for task in tasks_by_ad_id[fb_ad_id]:
+                results[task.id] = result
 
-        return results
-    except Exception as e:
-        logger.exception("Ошибка пакетного обхода таблицы при отключении")
-        error_message = f"Ошибка Playwright: {e}"
-        for task in tasks:
-            results.setdefault(task.id, (False, error_message))
-        return results
+    return results
 
 
 async def mark_succeeded(task_id) -> None:
@@ -649,7 +519,6 @@ async def mark_retrying(task_id, error: str, next_retry_at: datetime) -> None:
                     task.id,
                 )
                 return
-            # Используем переданный next_retry_at вместо автоматического расчёта
             task.status = DisableTaskStatus.RETRYING
             task.last_error = error[:500]
             task.next_retry_at = next_retry_at
@@ -721,6 +590,14 @@ async def main() -> None:
         from apps.disable_worker.main import disable_worker_loop
 
         while not shutdown_event.is_set():
+            if not await has_claimable_disable_tasks():
+                if await wait_for_shutdown_or_timeout(
+                    shutdown_event,
+                    VISION_SETTINGS_POLL_INTERVAL_SECONDS,
+                ):
+                    break
+                continue
+
             vision_x_token, vision_api_url, vision_profile_id = await _load_vision_settings()
             if not vision_x_token or not vision_profile_id:
                 if not waiting_for_vision_logged:
@@ -736,34 +613,27 @@ async def main() -> None:
                 continue
 
             waiting_for_vision_logged = False
-            vision = VisionClient(
-                x_token=vision_x_token,
-                base_url=vision_api_url,
-            )
-            manager = VisionBrowserManager(
-                vision_client=vision,
-                profile_id=vision_profile_id,
-            )
+            grpc_client: BrowserAgentClient | None = None
 
             try:
-                await manager.connect()
-                logger.info("Disable worker подключён к Vision")
+                grpc_client = await _init_grpc_client(
+                    vision_x_token,
+                    vision_api_url,
+                    vision_profile_id,
+                )
 
                 await disable_worker_loop(
                     poll_interval_seconds=5,
                     claim_next_task=claim_next_task,
                     claim_task_batch=claim_task_batch,
-                    execute_disable=lambda fb_ad_id, manager=manager: (
-                        execute_disable_via_playwright(
-                            manager,
-                            fb_ad_id,
-                        )
+                    execute_disable=lambda fb_ad_id, _client=grpc_client: _execute_disable_single(
+                        _client,  # type: ignore[arg-type]
+                        fb_ad_id,
+                        reset_table_before_search=True,
                     ),
-                    execute_disable_batch=lambda tasks, manager=manager: (
-                        execute_disable_batch_via_playwright(
-                            manager,
-                            tasks,
-                        )
+                    execute_disable_batch=lambda tasks, _client=grpc_client: _execute_disable_batch(
+                        _client,  # type: ignore[arg-type]
+                        tasks,
                     ),
                     batch_size=DISABLE_BATCH_SIZE,
                     mark_succeeded=mark_succeeded,
@@ -788,14 +658,14 @@ async def main() -> None:
             except Exception:
                 if shutdown_event.is_set():
                     break
-                logger.exception("Disable worker: ошибка запуска или подключения к Vision")
+                logger.exception("Disable worker: ошибка запуска или подключения к browser-agent")
                 if await wait_for_shutdown_or_timeout(
                     shutdown_event,
                     VISION_SETTINGS_POLL_INTERVAL_SECONDS,
                 ):
                     break
             finally:
-                await _close_disable_runtime_resources(manager, vision)
+                await _close_disable_runtime_resources(grpc_client)
     except KeyboardInterrupt:
         logger.info("Disable worker остановлен по Ctrl+C")
     finally:

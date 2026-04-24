@@ -18,11 +18,6 @@ describe("StateIcon", () => {
     expect(screen.getByText("Предупреждение")).toBeInTheDocument();
   });
 
-  it("отображает метку для статуса EARLY_SIGNAL_SENT", () => {
-    render(<StateIcon state="EARLY_SIGNAL_SENT" />);
-    expect(screen.getByText("Ранний сигнал")).toBeInTheDocument();
-  });
-
   it("отображает '?' для неизвестного статуса", () => {
     render(<StateIcon state="UNKNOWN_STATE" />);
     expect(screen.getByText("?")).toBeInTheDocument();

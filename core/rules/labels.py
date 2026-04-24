@@ -31,7 +31,6 @@ RULE_LABELS_SHORT: dict[str, str] = {
 # Человекочитаемые названия состояний алерта
 ALERT_STATE_LABELS: dict[str, str] = {
     "NORMAL": "Норма",
-    "EARLY_SIGNAL_SENT": "Ранний",
     "WARNING_SENT": "Warning",
     "STOP_SENT": "Стоп",
     "CLAIMED": "В работе",

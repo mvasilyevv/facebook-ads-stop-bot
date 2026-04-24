@@ -253,9 +253,9 @@ async def test_collect_enable_recommendation_candidates_builds_click_ok_candidat
     )
 
 
-# Проверяем, что NOT_DELIVERING с EARLY_SIGNAL остаётся допустимой рекомендацией.
+# Проверяем, что NOT_DELIVERING больше не попадает в рекомендации на включение без реального OFF-тумблера.
 @pytest.mark.asyncio
-async def test_collect_enable_recommendation_candidates_keeps_early_signal():
+async def test_collect_enable_recommendation_candidates_skips_not_delivering_without_off_toggle():
     offer_id = uuid.uuid4()
     snapshot = _snapshot(
         fb_ad_id="ad-early",
@@ -284,8 +284,8 @@ async def test_collect_enable_recommendation_candidates_keeps_early_signal():
         patch(
             "core.enable_recommendations.service._evaluate_enable_recommendation",
             return_value=(
-                EnableRecommendationLevel.EARLY_SIGNAL,
-                _evaluation(AlertStage.EARLY_SIGNAL, code="early_outbound_ctr_signal"),
+                EnableRecommendationLevel.WARNING,
+                _evaluation(AlertStage.WARNING, code="cpc_stop"),
             ),
         ),
         patch(
@@ -295,9 +295,7 @@ async def test_collect_enable_recommendation_candidates_keeps_early_signal():
     ):
         _, candidates = await collect_enable_recommendation_candidates(session)
 
-    assert len(candidates) == 1
-    assert candidates[0].delivery_status == "NOT_DELIVERING"
-    assert candidates[0].recommendation_level == EnableRecommendationLevel.EARLY_SIGNAL
+    assert candidates == []
 
 
 # Проверяем, что WARNING больше не попадает в resume-рекомендации.

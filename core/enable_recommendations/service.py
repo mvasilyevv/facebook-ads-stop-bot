@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -38,7 +38,7 @@ from core.settings_queries import get_observer_settings
 
 logger = logging.getLogger(__name__)
 
-RECOMMENDATION_DELIVERY_STATUSES = ("OFF", "NOT_DELIVERING")
+RECOMMENDATION_DELIVERY_STATUSES = ("OFF",)
 OK_RECOMMENDATION_REASON_TITLE = "Строгая проверка пройдена"
 OK_RECOMMENDATION_REASON_TEXT = (
     "Есть подтверждённые конверсии, и объявление проходит строгую проверку на включение."
@@ -116,6 +116,15 @@ def _snapshot_offer_code(snapshot: AdSnapshot) -> str | None:
 def _snapshot_selectinload() -> selectinload:
     """Стандартная цепочка eager-load для snapshot → fb_ad → adset → campaign."""
     return selectinload(AdSnapshot.fb_ad).selectinload(FbAd.adset).selectinload(FbAdset.campaign)
+
+
+def _recommendation_event_selectinload() -> selectinload:
+    """Стандартная цепочка eager-load для recommendation event → fb_ad → adset → campaign."""
+    return (
+        selectinload(EnableRecommendationEvent.fb_ad)
+        .selectinload(FbAd.adset)
+        .selectinload(FbAdset.campaign)
+    )
 
 
 def _build_scanned_row_from_snapshot(snapshot: AdSnapshot) -> ScannedAdRow:
@@ -447,6 +456,27 @@ async def persist_enable_recommendation_candidates(
         await session.flush()
         created_events.append(event)
     return created_events
+
+
+async def load_pending_enable_recommendation_events(
+    session: AsyncSession,
+    *,
+    live_batch_started_at: datetime,
+) -> list[EnableRecommendationEvent]:
+    """Загружает рекомендации текущего live-batch без сохранённой Telegram-доставки."""
+    result = await session.execute(
+        select(EnableRecommendationEvent)
+        .options(_recommendation_event_selectinload())
+        .where(
+            EnableRecommendationEvent.live_batch_started_at == live_batch_started_at,
+            or_(
+                EnableRecommendationEvent.telegram_chat_id.is_(None),
+                EnableRecommendationEvent.telegram_message_id.is_(None),
+            ),
+        )
+        .order_by(EnableRecommendationEvent.created_at.asc())
+    )
+    return result.scalars().unique().all()
 
 
 async def attach_recommendation_telegram_delivery(

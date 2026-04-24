@@ -17,6 +17,7 @@ from core.disable_tasks import (
     reconcile_disable_tasks,
 )
 from core.domain import AlertStage, AlertState, DisableTaskStatus
+from core.enable_tasks import reconcile_enable_tasks
 from core.models import AdSnapshot, DisableTask, FbAd, FbAdset
 from core.observer.db_queries import ACTIVE_ALERT_WINDOW
 from core.observer.service import AlertCandidate
@@ -31,8 +32,6 @@ MANUAL_ATTENTION_REASON_TITLE = "Нужна ручная проверка отк
 
 def _matched_rule_codes_for_snapshot(snapshot: AdSnapshot) -> list[str]:
     """Возвращает текущие коды правил для открытого инцидента."""
-    if snapshot.current_stage == AlertStage.EARLY_SIGNAL:
-        return list(snapshot.early_signal_rule_codes or [])
     if snapshot.current_stage == AlertStage.WARNING:
         return list(snapshot.warning_rule_codes or [])
     return list(snapshot.stop_rule_codes or [])
@@ -93,6 +92,16 @@ async def reconcile_disable_tasks_in_db() -> dict[str, list[str]]:
         return summary
 
 
+async def reconcile_enable_tasks_in_db() -> dict[str, list[str]]:
+    """Согласовывает очередь включения с актуальным состоянием снэпшотов."""
+    factory = get_session_factory()
+    async with factory() as session:
+        summary = await reconcile_enable_tasks(session)
+        if any(summary.values()):
+            await session.commit()
+        return summary
+
+
 async def reconcile_disable_incidents_after_scan() -> list[AlertCandidate]:
     """Переоткрывает disable-попытки внутри того же инцидента без нового STOP-спама."""
     factory = get_session_factory()
@@ -117,7 +126,7 @@ async def reconcile_disable_incidents_after_scan() -> list[AlertCandidate]:
                 AdSnapshot.current_stage == AlertStage.STOP,
                 AdSnapshot.open_state_token.is_not(None),
                 AdSnapshot.last_observed_at >= active_cutoff,
-                AdSnapshot.delivery_status.notin_(["OFF", "NOT_DELIVERING"]),
+                AdSnapshot.delivery_status != "OFF",
             )
         )
         snapshots = result.scalars().all()

@@ -38,6 +38,17 @@ def format_observer_runtime_message(error: Exception | str | None) -> str | None
 
     lowered = text.casefold()
 
+    if "автоперезапуск профиля для восстановления cdp-порта отключён" in lowered:
+        return (
+            "Vision запустил профиль без CDP-порта. "
+            "Автоперезапуск выключен, поэтому профиль нужно перезапустить вручную "
+            "или явно включить feature flag."
+        )
+    if "не удалось восстановить cdp-порт автоперезапуском профиля" in lowered:
+        return (
+            "Vision не смог восстановить CDP-порт автоматическим перезапуском профиля. "
+            "Проверьте профиль вручную и запустите его заново."
+        )
     if "cdp-порт" in lowered:
         return "Vision запустил профиль без CDP-порта. Воркер не может подключиться к браузеру."
     if "не задан vision x-token" in lowered:

@@ -19,6 +19,10 @@ class BrowserOperationTimeoutError(RuntimeError):
     """Браузерная операция disable worker превысила допустимый таймаут."""
 
 
+class BrowserOperationRuntimeError(RuntimeError):
+    """Браузерная операция disable worker завершилась ошибкой runtime."""
+
+
 def _build_browser_timeout_message(timeout_seconds: int, *, batch_size: int | None = None) -> str:
     """Формирует текст ошибки таймаута браузерной операции."""
     if batch_size and batch_size > 1:
@@ -27,6 +31,14 @@ def _build_browser_timeout_message(timeout_seconds: int, *, batch_size: int | No
             f"превысила таймаут {timeout_seconds} сек"
         )
     return f"Браузерная операция превысила таймаут {timeout_seconds} сек"
+
+
+def _build_browser_runtime_error_message(exc: Exception) -> str:
+    """Формирует текст ошибки браузерной операции для retry-задачи."""
+    detail = str(exc).strip()
+    if not detail:
+        return "Браузерная операция завершилась ошибкой"
+    return f"Браузерная операция завершилась ошибкой: {detail}"
 
 
 async def _process_disable_result(
@@ -43,7 +55,7 @@ async def _process_disable_result(
     if success:
         await mark_succeeded(task.id)
         logger.info(
-            "Клик по выключению выполнен для %s, ждём подтверждения OFF: %s",
+            "Отключение подтверждено для %s: %s",
             task.fb_ad_id,
             message,
         )
@@ -148,6 +160,23 @@ async def disable_worker_loop(
                             send_completion_callback=send_completion_callback,
                         )
                     raise BrowserOperationTimeoutError(timeout_message) from exc
+                except Exception as exc:
+                    runtime_message = _build_browser_runtime_error_message(exc)
+                    logger.error(
+                        "Disable worker: пакетная обработка завершилась ошибкой, переподключаю браузер",
+                        exc_info=True,
+                    )
+                    for task in tasks:
+                        await _process_disable_result(
+                            task=task,
+                            success=False,
+                            message=runtime_message,
+                            mark_succeeded=mark_succeeded,
+                            mark_retrying=mark_retrying,
+                            mark_failed=mark_failed,
+                            send_completion_callback=send_completion_callback,
+                        )
+                    raise BrowserOperationRuntimeError(runtime_message) from exc
 
                 for task in tasks:
                     success, message = batch_results.get(
@@ -208,6 +237,24 @@ async def disable_worker_loop(
                     send_completion_callback=send_completion_callback,
                 )
                 raise BrowserOperationTimeoutError(timeout_message) from exc
+            except Exception as exc:
+                runtime_message = _build_browser_runtime_error_message(exc)
+                logger.error(
+                    "Disable worker: задача %s для %s завершилась ошибкой, переподключаю браузер",
+                    task.id,
+                    task.fb_ad_id,
+                    exc_info=True,
+                )
+                await _process_disable_result(
+                    task=task,
+                    success=False,
+                    message=runtime_message,
+                    mark_succeeded=mark_succeeded,
+                    mark_retrying=mark_retrying,
+                    mark_failed=mark_failed,
+                    send_completion_callback=send_completion_callback,
+                )
+                raise BrowserOperationRuntimeError(runtime_message) from exc
 
             await _process_disable_result(
                 task=task,
@@ -219,7 +266,7 @@ async def disable_worker_loop(
                 send_completion_callback=send_completion_callback,
             )
 
-        except BrowserOperationTimeoutError:
+        except (BrowserOperationTimeoutError, BrowserOperationRuntimeError):
             raise
         except Exception:
             logger.exception("Disable worker: ошибка в цикле")

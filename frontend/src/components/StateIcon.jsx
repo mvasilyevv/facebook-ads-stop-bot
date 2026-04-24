@@ -3,13 +3,12 @@ import { twMerge } from 'tailwind-merge';
 
 // Маппинг состояний на Tailwind-цвета
 const STATE_STYLES = {
-  NORMAL:            'bg-success-muted text-success border-success/40',
-  EARLY_SIGNAL_SENT: 'bg-early-muted text-early border-early/40',
-  WARNING_SENT:      'bg-warning-muted text-warning border-warning/40',
-  STOP_SENT:         'bg-danger-muted text-danger border-danger/40',
-  CLAIMED:           'bg-elevated text-muted border-border',
-  DISABLED:          'bg-elevated text-muted border-border opacity-60',
-  ARCHIVED:          'bg-elevated text-muted border-border opacity-60',
+  NORMAL:       'bg-success-muted text-success border-success/40',
+  WARNING_SENT: 'bg-warning-muted text-warning border-warning/40',
+  STOP_SENT:    'bg-danger-muted text-danger border-danger/40',
+  CLAIMED:      'bg-elevated text-muted border-border',
+  DISABLED:     'bg-elevated text-muted border-border opacity-60',
+  ARCHIVED:     'bg-elevated text-muted border-border opacity-60',
 };
 
 const SIZE_STYLES = {
