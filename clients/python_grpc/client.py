@@ -71,6 +71,7 @@ class ScanProgress:
     rows_so_far: int
     at_bottom: bool
     new_rows_count: int
+    new_rows: list
 
 
 @dataclass
@@ -211,32 +212,43 @@ class BrowserAgentClient:
             settle_delay_seconds=settle_delay_seconds,
         )
 
-        async for event in self._scanner_stub.RunScanCycle(req):
-            if event.HasField("progress"):
-                p = event.progress
-                yield ScanProgress(
-                    pass_number=p.pass_number,
-                    rows_so_far=p.rows_so_far,
-                    at_bottom=p.scroll_metrics.at_bottom if p.HasField("scroll_metrics") else False,
-                    new_rows_count=len(p.new_rows),
-                )
-            elif event.HasField("complete"):
-                c = event.complete
-                rows = [_proto_to_row(r) for r in c.all_rows]
-                yield ScanResult(
-                    rows=rows,
-                    total_passes=c.total_passes,
-                    duration_seconds=c.duration_seconds,
-                )
-            elif event.HasField("error"):
-                e = event.error
-                logger.warning(
-                    "Ошибка сканирования (attempt %d, recoverable=%s): %s",
-                    e.attempt,
-                    e.recoverable,
-                    e.message,
-                )
-                raise RuntimeError(e.message or "Browser-agent вернул ошибку сканирования.")
+        stream = self._scanner_stub.RunScanCycle(req)
+        completed = False
+        try:
+            async for event in stream:
+                if event.HasField("progress"):
+                    p = event.progress
+                    new_rows = [_proto_to_row(r) for r in p.new_rows]
+                    yield ScanProgress(
+                        pass_number=p.pass_number,
+                        rows_so_far=p.rows_so_far,
+                        at_bottom=p.scroll_metrics.at_bottom
+                        if p.HasField("scroll_metrics")
+                        else False,
+                        new_rows_count=len(new_rows),
+                        new_rows=new_rows,
+                    )
+                elif event.HasField("complete"):
+                    c = event.complete
+                    rows = [_proto_to_row(r) for r in c.all_rows]
+                    completed = True
+                    yield ScanResult(
+                        rows=rows,
+                        total_passes=c.total_passes,
+                        duration_seconds=c.duration_seconds,
+                    )
+                elif event.HasField("error"):
+                    e = event.error
+                    logger.warning(
+                        "Ошибка сканирования (attempt %d, recoverable=%s): %s",
+                        e.attempt,
+                        e.recoverable,
+                        e.message,
+                    )
+                    raise RuntimeError(e.message or "Browser-agent вернул ошибку сканирования.")
+        finally:
+            if not completed and hasattr(stream, "cancel"):
+                stream.cancel()
 
     async def refresh_table(self) -> bool:
         """Нажать кнопку «Refresh» в Ads Manager."""

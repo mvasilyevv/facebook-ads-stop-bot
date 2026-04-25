@@ -376,6 +376,20 @@ async function waitForVisibleRowsAfterScroll(
 
 async function runScanCycle(call: any) {
   const req = call.request;
+  let cancelled = false;
+  call.on('cancelled', () => {
+    cancelled = true;
+  });
+  call.on('close', () => {
+    cancelled = true;
+  });
+
+  const endIfActive = () => {
+    if (!call.destroyed && !call.writableEnded) {
+      call.end();
+    }
+  };
+
   try {
     const session = sessionManager.getSession(req.session_id);
     const page = getPage(session, req.page_id);
@@ -397,19 +411,26 @@ async function runScanCycle(call: any) {
       resetFirst,
       settleDelayMs: settleDelay,
     });
+    if (cancelled) {
+      endIfActive();
+      return;
+    }
 
     // Скроллим до стабилизации: Ads Manager держит в DOM только видимый фрагмент таблицы.
     for (let pass = 1; pass <= maxPasses; pass++) {
+      if (cancelled) break;
       completedPasses = pass;
 
       // Ждем стабилизации DOM перед чтением видимых строк.
       await waitForDomStable(page, 2.0, 0.1);
+      if (cancelled) break;
 
       // Meta может на короткое время очистить виртуальную таблицу после refresh/scroll.
       const rows = await waitForParsedAdsRows(page, {
         timeoutMs: 6_000,
         pollMs: 300,
       });
+      if (cancelled) break;
       const newRows: any[] = [];
 
       for (const row of rows) {
@@ -422,6 +443,7 @@ async function runScanCycle(call: any) {
       }
 
       const metrics = await getAdsTableScrollMetrics(page);
+      if (cancelled) break;
 
       call.write({
         session_id: req.session_id,
@@ -439,9 +461,11 @@ async function runScanCycle(call: any) {
       });
 
       if (pass >= maxPasses) break;
+      if (cancelled) break;
 
       const beforeScrollIds = await getVisibleAdsTableRowIds(page);
       const scrollAfter = await scrollAdsTableDown(page);
+      if (cancelled) break;
       let rowsChangedAfterScroll = false;
       if (!scrollAfter.atBottom) {
         if (scrollAfter.moved) {
@@ -450,6 +474,7 @@ async function runScanCycle(call: any) {
           rowsChangedAfterScroll = await waitForVisibleRowsAfterScroll(page, beforeScrollIds);
         }
       }
+      if (cancelled) break;
       if (newRows.length > 0 || scrollAfter.moved || rowsChangedAfterScroll) {
         stalledPasses = 0;
       } else {
@@ -460,6 +485,10 @@ async function runScanCycle(call: any) {
     }
 
     const duration = (Date.now() - startTime) / 1000;
+    if (cancelled) {
+      endIfActive();
+      return;
+    }
 
     // Отправляем финальный результат сканирования.
     call.write({
@@ -471,8 +500,12 @@ async function runScanCycle(call: any) {
       },
     });
 
-    call.end();
+    endIfActive();
   } catch (err: any) {
+    if (cancelled) {
+      endIfActive();
+      return;
+    }
     call.write({
       session_id: req?.session_id || '',
       error: {
@@ -481,7 +514,7 @@ async function runScanCycle(call: any) {
         attempt: 1,
       },
     });
-    call.end();
+    endIfActive();
   }
 }
 

@@ -539,20 +539,26 @@ async def _upsert_ad_snapshots(
 async def batch_save_snapshots(
     snapshot_data: list[dict],
     scan_guard: ZeroScanGuard,
+    *,
+    allow_cabinet_rollover: bool = True,
+    bypass_scan_guard: bool = False,
 ) -> None:
     """Батчевый upsert снэпшотов через INSERT ... ON CONFLICT DO UPDATE.
 
     Принимает список словарей с данными для AdSnapshot.
     Одна сессия, один запрос для всех снэпшотов.
+    bypass_scan_guard используется только для точечного сохранения одной или нескольких
+    STOP-строк быстрого стопа, а не для полного среза сканирования.
     """
     if not snapshot_data:
         return
-    if scan_guard.should_skip(snapshot_data):
+    if not bypass_scan_guard and scan_guard.should_skip(snapshot_data):
         return
 
     factory = get_session_factory()
     async with factory() as session:
-        await _maybe_rollover_cabinet_day(session, snapshot_data)
+        if allow_cabinet_rollover:
+            await _maybe_rollover_cabinet_day(session, snapshot_data)
 
         # 1. Upsert fb_campaigns — справочник кампаний с привязкой оффера
         campaign_id_map = await _upsert_fb_campaigns(session, snapshot_data)

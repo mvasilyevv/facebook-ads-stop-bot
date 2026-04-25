@@ -515,6 +515,99 @@ async def test_batch_save_snapshots_requires_confirmed_partial_batch_before_pers
     assert mock_session.commit.call_count == 2
 
 
+# Проверяем что быстрый STOP может сохранить одну строку, не ломая защиту от частичных батчей.
+@pytest.mark.asyncio
+async def test_batch_save_snapshots_bypasses_guard_for_fast_stop_partial_batch():
+    """Быстрый стоп сохраняет точечный снэпшот сразу, но не меняет базовый размер scan_guard."""
+    import uuid as _uuid
+
+    from core.observer.scan_guard import ZeroScanGuard
+    from core.observer.snapshot_writer import batch_save_snapshots
+
+    def build_snapshot(index: int) -> dict:
+        return {
+            "fb_ad_id": f"ad_{index}",
+            "campaign_name": "campaign",
+            "adset_name": "adset",
+            "ad_name": f"ad_{index}",
+            "delivery_status": "ACTIVE",
+            "offer_id": None,
+            "resolved_offer_code": None,
+            "spend": Decimal("1"),
+            "clicks": 1,
+            "cpc": Decimal("1"),
+            "outbound_clicks": 0,
+            "outbound_ctr": None,
+            "landing_page_views": 0,
+            "cost_per_landing_page_view": None,
+            "cpm": None,
+            "frequency": None,
+            "leads": 0,
+            "cost_per_lead": None,
+            "registrations": 0,
+            "cost_per_registration": None,
+            "deposits": 0,
+            "alert_state": AlertState.NORMAL,
+            "current_stage": None,
+            "early_signal_rule_codes": [],
+            "warning_rule_codes": [],
+            "stop_rule_codes": [],
+            "open_state_token": None,
+            "last_observed_at": datetime.now(UTC),
+        }
+
+    full_snapshot_data = [build_snapshot(index) for index in range(30)]
+    fast_stop_snapshot = [build_snapshot(0) | {"current_stage": AlertStage.STOP}]
+
+    mock_session = AsyncMock()
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=False)
+    mock_factory = MagicMock(return_value=mock_session)
+
+    scan_guard = ZeroScanGuard()
+    with (
+        patch(
+            "core.observer.snapshot_writer.get_session_factory",
+            return_value=mock_factory,
+        ),
+        patch(
+            "core.observer.snapshot_writer._maybe_rollover_cabinet_day",
+            new=AsyncMock(),
+        ),
+        patch(
+            "core.observer.snapshot_writer._upsert_fb_campaigns",
+            new=AsyncMock(return_value={"campaign": _uuid.uuid4()}),
+        ),
+        patch(
+            "core.observer.snapshot_writer._upsert_fb_adsets",
+            new=AsyncMock(return_value={("campaign", "adset"): _uuid.uuid4()}),
+        ),
+        patch(
+            "core.observer.snapshot_writer._upsert_fb_ads",
+            new=AsyncMock(return_value={f"ad_{i}": _uuid.uuid4() for i in range(30)}),
+        ),
+        patch(
+            "core.observer.snapshot_writer._save_metric_deltas",
+            new=AsyncMock(return_value=0),
+        ),
+        patch(
+            "core.observer.snapshot_writer._upsert_ad_snapshots",
+            new=AsyncMock(),
+        ),
+    ):
+        await batch_save_snapshots(full_snapshot_data, scan_guard)
+        await batch_save_snapshots(
+            fast_stop_snapshot,
+            scan_guard,
+            allow_cabinet_rollover=False,
+            bypass_scan_guard=True,
+        )
+        await batch_save_snapshots(fast_stop_snapshot, scan_guard)
+
+    # Полный срез и быстрый стоп сохранены, обычный частичный батч после этого всё ещё блокируется.
+    assert mock_session.commit.call_count == 2
+
+
 # Проверяем что CLAIMED ждёт подтверждения OFF, а DISABLED снимается только при новой активации
 def test_reopen_reactivated_alert_state_keeps_claimed_and_resets_disabled():
     """CLAIMED не должен сбрасываться до подтверждения OFF следующим сканом."""
@@ -572,7 +665,7 @@ async def test_reconcile_disable_incidents_after_scan_keeps_recent_success():
         deposits=0,
         last_observed_at=now,
     )
-    latest_succeeded = SimpleNamespace(completed_at=now - timedelta(seconds=30))
+    latest_succeeded = SimpleNamespace(completed_at=now - timedelta(seconds=10))
     mock_session = AsyncMock()
     mock_session.__aenter__ = AsyncMock(return_value=mock_session)
     mock_session.__aexit__ = AsyncMock(return_value=False)
@@ -1809,6 +1902,111 @@ async def test_observer_loop_delegates_scan_to_grpc():
 
     # gRPC client должен быть использован
     assert mock_grpc_client.session_id == "test-session"
+
+
+# Проверяем, что observer создаёт задачу отключения по промежуточному событию и не ждёт конец полного сканирования.
+@pytest.mark.asyncio
+async def test_observer_loop_fast_stops_from_scan_progress():
+    """STOP из промежуточного прохода должен досрочно завершить сканирование и создать задачу отключения."""
+    from apps.observer_worker.main import observer_loop
+    from clients.python_grpc.client import ScanProgress
+    from core.observer.service import AlertCandidate
+
+    shutdown_event = asyncio.Event()
+    row = SimpleNamespace(fb_ad_id="ad-stop", spend=Decimal("12.00"))
+    stop_alert = AlertCandidate(
+        snapshot_id="incident-fast",
+        offer_id=None,
+        fb_ad_id="ad-stop",
+        ad_name="Быстрый стоп",
+        campaign_name="Кампания",
+        adset_name="Группа",
+        offer_code="DRC",
+        offer_name=None,
+        offer_cpa=None,
+        stage=AlertStage.STOP,
+        matched_rule_codes=["cpc_stop"],
+        reason_title="CPC выше стопа",
+        reason_text="CPC выше стопа",
+        metrics_json={},
+    )
+    stop_snapshot = {
+        "fb_ad_id": "ad-stop",
+        "resolved_offer_code": "DRC",
+        "delivery_status": "ACTIVE",
+        "current_stage": AlertStage.STOP,
+    }
+
+    async def scan_cycle_generator(*_args, **_kwargs):
+        yield ScanProgress(
+            pass_number=1,
+            rows_so_far=1,
+            at_bottom=False,
+            new_rows_count=1,
+            new_rows=[row],
+        )
+        raise AssertionError("Observer должен остановить gRPC-поток после первого STOP")
+
+    mock_grpc_client = AsyncMock()
+    mock_grpc_client.session_id = "test-session"
+    mock_grpc_client.run_scan_cycle = scan_cycle_generator
+    mock_grpc_client.validate_columns = AsyncMock(
+        return_value={
+            "valid": True,
+            "missing_columns": [],
+            "found_columns": [],
+            "error_message": "",
+        }
+    )
+    run_scan_cycle_mock = AsyncMock(return_value=([stop_alert], [stop_alert], [stop_snapshot]))
+    batch_save_mock = AsyncMock()
+    lock_state = {"locked": False}
+
+    async def auto_create_and_stop(_alerts):
+        assert lock_state["locked"] is False
+        shutdown_event.set()
+
+    auto_create_mock = AsyncMock(side_effect=auto_create_and_stop)
+
+    @asynccontextmanager
+    async def fake_browser_lock(**_kwargs):
+        lock_state["locked"] = True
+        try:
+            yield SimpleNamespace(waited_seconds=0.0)
+        finally:
+            lock_state["locked"] = False
+
+    with ExitStack() as stack:
+        _patch_observer_loop_runtime(stack, scan_side_effect=AsyncMock(return_value=[]))
+        stack.enter_context(
+            patch("apps.observer_worker.main.acquire_browser_lock", new=fake_browser_lock)
+        )
+        stack.enter_context(
+            patch("apps.observer_worker.main._run_scan_cycle", new=run_scan_cycle_mock)
+        )
+        stack.enter_context(
+            patch("apps.observer_worker.main.batch_save_snapshots", new=batch_save_mock)
+        )
+        stack.enter_context(
+            patch("apps.observer_worker.main.auto_create_disable_tasks", new=auto_create_mock)
+        )
+        await observer_loop(
+            grpc_client=mock_grpc_client,
+            offers={},
+            telegram_bot_token="",
+            telegram_chat_id="",
+            shutdown_event=shutdown_event,
+        )
+
+    run_scan_cycle_mock.assert_awaited_once()
+    auto_create_mock.assert_awaited_once_with([stop_alert])
+    assert any(
+        call.kwargs.get("allow_cabinet_rollover") is False
+        for call in batch_save_mock.await_args_list
+    )
+    assert any(
+        call.kwargs.get("bypass_scan_guard") is True for call in batch_save_mock.await_args_list
+    )
 
 
 # Проверяем, что observer держит общую блокировку браузера во время scan.

@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 # После успешного клика даём Meta короткое окно на подтверждение OFF.
 # Если следующий свежий STOP-скан всё ещё видит активное объявление, повторяем отключение.
-DISABLE_SUCCESS_CONFIRMATION_GRACE_TIMEOUT = timedelta(minutes=2)
+DISABLE_SUCCESS_CONFIRMATION_GRACE_TIMEOUT = timedelta(seconds=30)
 MANUAL_ATTENTION_REASON_TITLE = "Нужна ручная проверка отключения"
 
 

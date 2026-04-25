@@ -100,11 +100,10 @@ async def test_close_disable_runtime_disconnects_without_stopping_profile():
     client.close.assert_awaited_once()
 
 
-# Проверяем, что batch не считает задачу успешной, пока повторный scan не подтвердил OFF.
+# Проверяем, что batch не ждёт повторный scan, если toggle уже OFF.
 @pytest.mark.asyncio
-async def test_execute_disable_batch_retries_already_off_toggle_without_delivery_off(monkeypatch):
+async def test_execute_disable_batch_accepts_already_off_toggle_without_delivery_scan(monkeypatch):
     import run_disable_worker
-    from clients.python_grpc.client import ScanResult
 
     client = AsyncMock()
     client.reset_scroll = AsyncMock()
@@ -120,94 +119,12 @@ async def test_execute_disable_batch_retries_already_off_toggle_without_delivery
     client.wait_for_toggle_confirmation = AsyncMock(
         return_value={"success": True, "final_aria_checked": "false"}
     )
-
-    async def fake_scan_cycle(**_kwargs):
-        yield ScanResult(
-            rows=[
-                SimpleNamespace(
-                    fb_ad_id="120246605325150334",
-                    delivery_status="ACTIVE",
-                )
-            ],
-            total_passes=1,
-            duration_seconds=0.1,
-        )
-
-    client.run_scan_cycle = fake_scan_cycle
-    mark_snapshot_disabled = AsyncMock()
+    client.run_scan_cycle = AsyncMock()
 
     async def _no_sleep(_seconds: float) -> None:
         return None
 
     monkeypatch.setattr(run_disable_worker.asyncio, "sleep", _no_sleep)
-    monkeypatch.setattr(
-        run_disable_worker,
-        "_mark_snapshot_disabled_from_verification",
-        mark_snapshot_disabled,
-    )
-
-    task = SimpleNamespace(
-        id="task-001",
-        fb_ad=SimpleNamespace(fb_ad_id="120246605325150334"),
-    )
-
-    result = await run_disable_worker._execute_disable_batch(client, [task])
-
-    assert result == {
-        "task-001": (
-            False,
-            "Повторный скан ещё видит delivery_status=ACTIVE",
-        )
-    }
-    client.wait_for_toggle_confirmation.assert_not_awaited()
-    mark_snapshot_disabled.assert_not_awaited()
-
-
-# Проверяем, что batch подтверждает успех только по delivery_status из повторного scan без лишнего чтения toggle.
-@pytest.mark.asyncio
-async def test_execute_disable_batch_confirms_by_delivery_status_without_extra_toggle_poll(
-    monkeypatch,
-):
-    import run_disable_worker
-    from clients.python_grpc.client import ScanResult
-
-    client = AsyncMock()
-    client.reset_scroll = AsyncMock()
-    client.get_visible_row_ids = AsyncMock(return_value=["120246605325150334"])
-    client.find_toggle_cell = AsyncMock(
-        return_value={
-            "found": True,
-            "cell_x": 113,
-            "cell_y": 353,
-            "aria_checked": "false",
-        }
-    )
-    client.wait_for_toggle_confirmation = AsyncMock()
-
-    async def fake_scan_cycle(**_kwargs):
-        yield ScanResult(
-            rows=[
-                SimpleNamespace(
-                    fb_ad_id="120246605325150334",
-                    delivery_status="OFF",
-                )
-            ],
-            total_passes=1,
-            duration_seconds=0.1,
-        )
-
-    client.run_scan_cycle = fake_scan_cycle
-    mark_snapshot_disabled = AsyncMock()
-
-    async def _no_sleep(_seconds: float) -> None:
-        return None
-
-    monkeypatch.setattr(run_disable_worker.asyncio, "sleep", _no_sleep)
-    monkeypatch.setattr(
-        run_disable_worker,
-        "_mark_snapshot_disabled_from_verification",
-        mark_snapshot_disabled,
-    )
 
     task = SimpleNamespace(
         id="task-001",
@@ -219,11 +136,57 @@ async def test_execute_disable_batch_confirms_by_delivery_status_without_extra_t
     assert result == {
         "task-001": (
             True,
-            "Объявление отключено: повторный скан подтвердил delivery_status=OFF",
+            "Объявление уже отключено (aria-checked=false). "
+            "Финальный delivery_status проверит следующий скан.",
         )
     }
     client.wait_for_toggle_confirmation.assert_not_awaited()
-    mark_snapshot_disabled.assert_awaited_once_with("120246605325150334", "OFF")
+    client.run_scan_cycle.assert_not_called()
+
+
+# Проверяем, что batch считает задачу выполненной сразу после подтверждённого OFF toggle.
+@pytest.mark.asyncio
+async def test_execute_disable_batch_succeeds_after_toggle_off_without_delivery_scan(
+    monkeypatch,
+):
+    import run_disable_worker
+
+    client = AsyncMock()
+    client.reset_scroll = AsyncMock()
+    client.get_visible_row_ids = AsyncMock(return_value=["120246605325150334"])
+    client.find_toggle_cell = AsyncMock(
+        return_value={
+            "found": True,
+            "cell_x": 113,
+            "cell_y": 353,
+            "aria_checked": "true",
+        }
+    )
+    client.toggle_ad = AsyncMock(return_value={"success": True, "final_state": "false"})
+    client.wait_for_toggle_confirmation = AsyncMock()
+    client.run_scan_cycle = AsyncMock()
+
+    async def _no_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(run_disable_worker.asyncio, "sleep", _no_sleep)
+
+    task = SimpleNamespace(
+        id="task-001",
+        fb_ad=SimpleNamespace(fb_ad_id="120246605325150334"),
+    )
+
+    result = await run_disable_worker._execute_disable_batch(client, [task])
+
+    assert result == {
+        "task-001": (
+            True,
+            "Клик по выключению выполнен, toggle показал OFF",
+        )
+    }
+    client.toggle_ad.assert_awaited_once_with("120246605325150334", target_state=False)
+    client.wait_for_toggle_confirmation.assert_not_awaited()
+    client.run_scan_cycle.assert_not_called()
 
 
 # Проверяем, что ошибка execute_disable не теряет задачу — mark_retrying вызывается, задача остаётся в очереди для reconcile

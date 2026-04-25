@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import selectinload
 
-from clients.python_grpc.client import BrowserAgentClient, BrowserAgentConfig, ScanResult
+from clients.python_grpc.client import BrowserAgentClient, BrowserAgentConfig
 from core.browser.lock import acquire_browser_lock
 from core.config import get_settings
 from core.crypto import decrypt
@@ -32,7 +32,7 @@ logging.basicConfig(
     stream=sys.stdout,
 )
 logger = logging.getLogger(__name__)
-VISION_SETTINGS_POLL_INTERVAL_SECONDS = 5
+VISION_SETTINGS_POLL_INTERVAL_SECONDS = 1
 
 # Параметры поиска, клика и повторной проверки для disable
 DISABLE_BATCH_SIZE = 10
@@ -41,8 +41,6 @@ DISABLE_SINGLE_SEARCH_MAX_SCROLL_PASSES = 120
 DISABLE_VISIBLE_ROW_TOGGLE_SEARCH_PASSES = 8
 DISABLE_MANAGER_DISCONNECT_TIMEOUT_SECONDS = 15
 DISABLE_VISION_CLOSE_TIMEOUT_SECONDS = 10
-DISABLE_APPLY_DELAY_SECONDS = 3.0
-DISABLE_VERIFY_SCAN_MAX_SCROLL_PASSES = 80
 DISABLE_CONFIRMED_DELIVERY_STATUS = "OFF"
 DISABLE_ALREADY_OFF_MESSAGE_PREFIX = "Объявление уже отключено"
 DISABLE_BROWSER_LOCK_TIMEOUT_SECONDS = 180.0
@@ -220,8 +218,6 @@ async def _execute_disable_single(
     1. Найти toggle-ячейку (со скроллом при необходимости).
     2. Проверить aria-checked=true (уже включено).
     3. Вызвать toggle_ad(target_state=False).
-    4. Подождать применения toggle без нажатия publish/confirm.
-    5. Быстро подтвердить OFF через aria-checked.
     """
     # Шаг 1: Поиск toggle-ячейки
     find_result = await client.find_toggle_cell(
@@ -265,25 +261,11 @@ async def _execute_disable_single(
             f"Не удалось переключить toggle: final_state={toggle_result.get('final_state', 'unknown')}",
         )
 
-    # Шаг 4: Ads Manager применяет toggle через несколько секунд, отдельное подтверждение не нужно.
-    await asyncio.sleep(DISABLE_APPLY_DELAY_SECONDS)
+    final_state = toggle_result.get("final_state", "unknown")
+    if final_state != "false":
+        return False, f"Интерфейс не подтвердил OFF после клика: aria-checked={final_state}"
 
-    # Шаг 5: Быстро проверяем aria-checked, а финальный статус подтвердит повторный скан пачки.
-    confirm_result = await client.wait_for_toggle_confirmation(
-        fb_ad_id,
-        expected_checked="false",
-        required_reads=1,
-        poll_delays_seconds=[0.0, 1.0, 1.0],
-        max_scroll_passes_restore=DISABLE_SINGLE_SEARCH_MAX_SCROLL_PASSES,
-    )
-
-    if confirm_result["success"]:
-        return True, "Клик по выключению выполнен, toggle показал OFF"
-
-    return (
-        False,
-        confirm_result.get("message", "Интерфейс не подтвердил OFF после клика"),
-    )
+    return True, "Клик по выключению выполнен, toggle показал OFF"
 
 
 async def _execute_disable_single_locked(
@@ -304,33 +286,6 @@ async def _execute_disable_single_locked(
         )
 
 
-async def _scan_rows_for_disable_verification(client: BrowserAgentClient) -> dict[str, object]:
-    """Запускает повторный scan после кликов и возвращает строки по fb_ad_id."""
-    rows_by_ad_id: dict[str, object] = {}
-    async for event in client.run_scan_cycle(
-        max_scroll_passes=DISABLE_VERIFY_SCAN_MAX_SCROLL_PASSES,
-        do_refresh=True,
-        reset_scroll_first=True,
-        settle_delay_seconds=2.0,
-    ):
-        if isinstance(event, ScanResult):
-            rows_by_ad_id = {row.fb_ad_id: row for row in event.rows}
-    return rows_by_ad_id
-
-
-async def _mark_snapshot_disabled_from_verification(fb_ad_id: str, delivery_status: str) -> None:
-    """Обновляет UI-снимок после повторного скана, подтвердившего отключение."""
-    factory = get_session_factory()
-    async with factory() as session:
-        result = await session.execute(select(AdSnapshot).where(AdSnapshot.fb_ad_id == fb_ad_id))
-        snapshot = result.scalar_one_or_none()
-        if snapshot:
-            snapshot.delivery_status = delivery_status
-            snapshot.alert_state = AlertState.DISABLED
-            snapshot.last_observed_at = datetime.now(UTC)
-            await session.commit()
-
-
 async def _execute_disable_batch(
     client: BrowserAgentClient,
     tasks: list[DisableTask],
@@ -341,7 +296,7 @@ async def _execute_disable_batch(
     1. Ищем toggle через find_toggle_cell (со скроллом).
     2. Если найден и aria-checked=true — переключаем.
     3. Без подтверждений идём дальше по целям.
-    4. После пачки запускаем повторный скан и подтверждаем OFF только по delivery_status.
+    4. Финальный delivery_status подтвердит следующий скан наблюдателя.
     """
     results: dict[str, tuple[bool, str]] = {}
     if not tasks:
@@ -356,7 +311,6 @@ async def _execute_disable_batch(
         tasks_by_ad_id[ad_id].append(task)
 
     remaining_ad_ids = set(tasks_by_ad_id.keys())
-    pending_verify_ad_ids: set[str] = set()
     stalled_scroll_passes = 0
     logger.info(
         "Disable batch: начинаю отключение %s задач (%s уникальных объявлений)",
@@ -391,17 +345,22 @@ async def _execute_disable_batch(
             )
 
             if success:
-                pending_verify_ad_ids.add(fb_ad_id)
+                result_message = message
                 if _is_already_disabled_message(message):
+                    result_message = (
+                        f"{message}. Финальный delivery_status проверит следующий скан."
+                    )
                     logger.info(
-                        "Disable batch: %s уже OFF по toggle, финально проверим повторным сканом",
+                        "Пачка отключения: %s уже OFF по тумблеру, финальную сверку оставляю следующему скану",
                         fb_ad_id,
                     )
                 else:
                     logger.info(
-                        "Disable batch: %s выключен в UI, финально проверим повторным сканом",
+                        "Пачка отключения: %s выключен в интерфейсе, финальную сверку оставляю следующему скану",
                         fb_ad_id,
                     )
+                for task in tasks_by_ad_id[fb_ad_id]:
+                    results[task.id] = (True, result_message)
             else:
                 for task in tasks_by_ad_id[fb_ad_id]:
                     results[task.id] = (success, message)
@@ -442,40 +401,6 @@ async def _execute_disable_batch(
                 False,
                 "Объявление не найдено в таблице за проход сверху вниз",
             )
-
-    if pending_verify_ad_ids:
-        logger.info(
-            "Disable batch: запускаю повторный скан для проверки %s отключённых объявлений",
-            len(pending_verify_ad_ids),
-        )
-        rows_by_ad_id = await _scan_rows_for_disable_verification(client)
-        for fb_ad_id in pending_verify_ad_ids:
-            row = rows_by_ad_id.get(fb_ad_id)
-            delivery_status = getattr(row, "delivery_status", "") if row is not None else ""
-
-            if row is None:
-                result = (False, "После клика объявление не найдено при повторном скане")
-            elif is_delivery_disabled(delivery_status):
-                await _mark_snapshot_disabled_from_verification(
-                    fb_ad_id,
-                    delivery_status,
-                )
-                result = (
-                    True,
-                    "Объявление отключено: повторный скан подтвердил delivery_status=OFF",
-                )
-            else:
-                logger.warning(
-                    "Disable batch: %s не подтверждён OFF: повторный скан видит delivery_status=%s",
-                    fb_ad_id,
-                    delivery_status or "пусто",
-                )
-                result = (
-                    False,
-                    f"Повторный скан ещё видит delivery_status={delivery_status or 'пусто'}",
-                )
-            for task in tasks_by_ad_id[fb_ad_id]:
-                results[task.id] = result
 
     return results
 
@@ -638,7 +563,7 @@ async def main() -> None:
                 )
 
                 await disable_worker_loop(
-                    poll_interval_seconds=5,
+                    poll_interval_seconds=1,
                     claim_next_task=claim_next_task,
                     claim_task_batch=claim_task_batch,
                     execute_disable=lambda fb_ad_id, _client=grpc_client: (

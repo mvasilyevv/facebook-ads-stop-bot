@@ -348,6 +348,18 @@ async function waitForVisibleRowsAfterScroll(page, beforeIds, timeoutMs = SCAN_P
 }
 async function runScanCycle(call) {
     const req = call.request;
+    let cancelled = false;
+    call.on('cancelled', () => {
+        cancelled = true;
+    });
+    call.on('close', () => {
+        cancelled = true;
+    });
+    const endIfActive = () => {
+        if (!call.destroyed && !call.writableEnded) {
+            call.end();
+        }
+    };
     try {
         const session = sessionManager.getSession(req.session_id);
         const page = getPage(session, req.page_id);
@@ -367,16 +379,26 @@ async function runScanCycle(call) {
             resetFirst,
             settleDelayMs: settleDelay,
         });
+        if (cancelled) {
+            endIfActive();
+            return;
+        }
         // Скроллим до стабилизации: Ads Manager держит в DOM только видимый фрагмент таблицы.
         for (let pass = 1; pass <= maxPasses; pass++) {
+            if (cancelled)
+                break;
             completedPasses = pass;
             // Ждем стабилизации DOM перед чтением видимых строк.
             await waitForDomStable(page, 2.0, 0.1);
+            if (cancelled)
+                break;
             // Meta может на короткое время очистить виртуальную таблицу после refresh/scroll.
             const rows = await (0, parser_js_1.waitForParsedAdsRows)(page, {
                 timeoutMs: 6_000,
                 pollMs: 300,
             });
+            if (cancelled)
+                break;
             const newRows = [];
             for (const row of rows) {
                 if (!seenRowIds.has(row.fb_ad_id)) {
@@ -387,6 +409,8 @@ async function runScanCycle(call) {
                 }
             }
             const metrics = await (0, ads_table_js_1.getAdsTableScrollMetrics)(page);
+            if (cancelled)
+                break;
             call.write({
                 session_id: req.session_id,
                 progress: {
@@ -403,8 +427,12 @@ async function runScanCycle(call) {
             });
             if (pass >= maxPasses)
                 break;
+            if (cancelled)
+                break;
             const beforeScrollIds = await (0, ads_table_js_1.getVisibleAdsTableRowIds)(page);
             const scrollAfter = await (0, ads_table_js_1.scrollAdsTableDown)(page);
+            if (cancelled)
+                break;
             let rowsChangedAfterScroll = false;
             if (!scrollAfter.atBottom) {
                 if (scrollAfter.moved) {
@@ -414,6 +442,8 @@ async function runScanCycle(call) {
                     rowsChangedAfterScroll = await waitForVisibleRowsAfterScroll(page, beforeScrollIds);
                 }
             }
+            if (cancelled)
+                break;
             if (newRows.length > 0 || scrollAfter.moved || rowsChangedAfterScroll) {
                 stalledPasses = 0;
             }
@@ -424,6 +454,10 @@ async function runScanCycle(call) {
                 break;
         }
         const duration = (Date.now() - startTime) / 1000;
+        if (cancelled) {
+            endIfActive();
+            return;
+        }
         // Отправляем финальный результат сканирования.
         call.write({
             session_id: req.session_id,
@@ -433,9 +467,13 @@ async function runScanCycle(call) {
                 duration_seconds: duration,
             },
         });
-        call.end();
+        endIfActive();
     }
     catch (err) {
+        if (cancelled) {
+            endIfActive();
+            return;
+        }
         call.write({
             session_id: req?.session_id || '',
             error: {
@@ -444,7 +482,7 @@ async function runScanCycle(call) {
                 attempt: 1,
             },
         });
-        call.end();
+        endIfActive();
     }
 }
 async function refreshTableHandler(call, callback) {

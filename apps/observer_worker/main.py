@@ -18,7 +18,12 @@ from decimal import Decimal
 import grpc
 from sqlalchemy import select
 
-from clients.python_grpc.client import BrowserAgentClient, ScanDataUnavailableError, ScanResult
+from clients.python_grpc.client import (
+    BrowserAgentClient,
+    ScanDataUnavailableError,
+    ScanProgress,
+    ScanResult,
+)
 from core.browser.lock import BrowserLockTimeoutError, acquire_browser_lock
 from core.db import get_session_factory
 from core.diagnostics import (
@@ -781,6 +786,33 @@ async def _process_scan_results(
         )
 
 
+async def _process_fast_stop_results(
+    *,
+    stop_alerts: list[AlertCandidate],
+    snapshot_batch: list[dict],
+) -> None:
+    """Сохраняет STOP-строки и ставит задачи отключения до завершения полного сканирования."""
+    if not stop_alerts:
+        return
+
+    stop_ids = {alert.fb_ad_id for alert in stop_alerts}
+    stop_snapshots = [snap for snap in snapshot_batch if snap.get("fb_ad_id") in stop_ids]
+    if stop_snapshots:
+        await batch_save_snapshots(
+            stop_snapshots,
+            _scan_guard,
+            allow_cabinet_rollover=False,
+            bypass_scan_guard=True,
+        )
+        logger.info(
+            "Быстрый стоп: сохранено %s STOP-снэпшотов до конца сканирования",
+            len(stop_snapshots),
+        )
+
+    await auto_create_disable_tasks(stop_alerts)
+    logger.info("Быстрый стоп: создано или проверено задач отключения: %s", len(stop_alerts))
+
+
 async def _wait_for_data_load(
     grpc_client: BrowserAgentClient,
     *,
@@ -1050,6 +1082,10 @@ async def observer_loop(
 
     while not _should_stop():
         cycle_completed = False
+        alerts_to_send: list[AlertCandidate] = []
+        stop_alerts: list[AlertCandidate] = []
+        snapshot_batch: list[dict] = []
+        fast_stop_triggered = False
         try:
             # Перезагружаем офферы и TG настройки каждые N циклов
             if cycle_count % RELOAD_EVERY == 0:
@@ -1189,6 +1225,7 @@ async def observer_loop(
                 browser_pause_kind = None
 
             rows: list[ScannedAdRow] = []
+            scanned_rows_by_id: dict[str, ScannedAdRow] = {}
             try:
                 async with acquire_browser_lock(
                     owner="observer-scan",
@@ -1292,12 +1329,13 @@ async def observer_loop(
                     )
 
                     # 1-2. Сканирование через gRPC browser-agent: refresh + первый проход
-                    async for event in grpc_client.run_scan_cycle(
+                    scan_events = grpc_client.run_scan_cycle(
                         max_scroll_passes=50,
                         do_refresh=True,
                         reset_scroll_first=True,
                         settle_delay_seconds=random.uniform(2.0, 4.0),
-                    ):
+                    )
+                    async for event in scan_events:
                         if isinstance(event, ScanResult):
                             rows = event.rows
                             logger.info(
@@ -1306,16 +1344,62 @@ async def observer_loop(
                                 event.duration_seconds,
                                 event.total_passes,
                             )
-                        elif hasattr(event, "pass_number"):
+                        elif isinstance(event, ScanProgress):
+                            for row in event.new_rows:
+                                scanned_rows_by_id[row.fb_ad_id] = row
                             logger.debug(
                                 "Observer: проход %d — %d строк пока, at_bottom=%s",
                                 event.pass_number,
                                 event.rows_so_far,
                                 event.at_bottom,
                             )
+                            if not event.new_rows:
+                                continue
+
+                            progress_ad_states = dict(ad_states)
+                            (
+                                progress_alerts,
+                                progress_stop_alerts,
+                                progress_snapshot_batch,
+                            ) = await _run_scan_cycle(
+                                offers=offers,
+                                rows=event.new_rows,
+                                ad_states=progress_ad_states,
+                                fake_deposits_map=fake_deposits_map,
+                                observer_thresholds=observer_thresholds,
+                            )
+                            if not progress_stop_alerts:
+                                continue
+
+                            stop_ids = {alert.fb_ad_id for alert in progress_stop_alerts}
+                            for fb_ad_id in stop_ids:
+                                if fb_ad_id in progress_ad_states:
+                                    ad_states[fb_ad_id] = progress_ad_states[fb_ad_id]
+                            fast_snapshot_batch = [
+                                snap
+                                for snap in progress_snapshot_batch
+                                if snap.get("fb_ad_id") in stop_ids
+                            ]
+                            alerts_to_send.extend(
+                                alert
+                                for alert in progress_alerts
+                                if alert.fb_ad_id in stop_ids and alert.stage == AlertStage.STOP
+                            )
+                            stop_alerts.extend(progress_stop_alerts)
+                            snapshot_batch.extend(fast_snapshot_batch)
+                            fast_stop_triggered = True
+                            rows = list(scanned_rows_by_id.values())
+                            logger.info(
+                                "Быстрый стоп: STOP найден на проходе %d, завершаю сканирование досрочно",
+                                event.pass_number,
+                            )
+                            close_stream = getattr(scan_events, "aclose", None)
+                            if close_stream is not None:
+                                await close_stream()
+                            break
 
                     # 1b. Адаптивное ожидание загрузки данных после refresh.
-                    if rows:
+                    if rows and not fast_stop_triggered:
                         rows = await _wait_for_data_load(
                             grpc_client,
                             prev_had_spend=prev_scan_had_spend,
@@ -1332,54 +1416,71 @@ async def observer_loop(
                 await asyncio.sleep(BROWSER_QUEUE_SCAN_PAUSE_SECONDS)
                 continue
 
-            if not rows:
-                consecutive_empty_scan_cycles += 1
-                empty_scan_reason = _build_empty_scan_reason()
-                logger.warning(
-                    "Observer: пустой scan-цикл %s/%s — %s",
-                    consecutive_empty_scan_cycles,
-                    EMPTY_SCAN_FAILURE_LIMIT,
-                    empty_scan_reason,
+            if fast_stop_triggered:
+                consecutive_empty_scan_cycles = 0
+                prev_scan_had_spend = prev_scan_had_spend or any(
+                    r.spend and r.spend > 0 for r in rows
                 )
-
-                if consecutive_empty_scan_cycles < EMPTY_SCAN_FAILURE_LIMIT:
-                    await _update_scan_recovery_status(
-                        reason=empty_scan_reason,
-                        attempt=consecutive_empty_scan_cycles,
-                        max_attempts=EMPTY_SCAN_FAILURE_LIMIT,
-                        retry_delay_seconds=EMPTY_SCAN_RETRY_DELAY_SECONDS,
+                await _process_fast_stop_results(
+                    stop_alerts=stop_alerts,
+                    snapshot_batch=snapshot_batch,
+                )
+                await _process_scan_results(
+                    alerts_to_send=alerts_to_send,
+                    stop_alerts=[],
+                    snapshot_batch=[],
+                    tg_client=tg_client,
+                    tg_destinations=tg_destinations,
+                )
+            else:
+                if not rows:
+                    consecutive_empty_scan_cycles += 1
+                    empty_scan_reason = _build_empty_scan_reason()
+                    logger.warning(
+                        "Observer: пустой scan-цикл %s/%s — %s",
+                        consecutive_empty_scan_cycles,
+                        EMPTY_SCAN_FAILURE_LIMIT,
+                        empty_scan_reason,
                     )
-                    await asyncio.sleep(EMPTY_SCAN_RETRY_DELAY_SECONDS)
-                    continue
 
-                raise ScanDataUnavailableError(
-                    attempts=consecutive_empty_scan_cycles,
-                    retry_interval_seconds=EMPTY_SCAN_RETRY_DELAY_SECONDS,
-                    reason=empty_scan_reason,
+                    if consecutive_empty_scan_cycles < EMPTY_SCAN_FAILURE_LIMIT:
+                        await _update_scan_recovery_status(
+                            reason=empty_scan_reason,
+                            attempt=consecutive_empty_scan_cycles,
+                            max_attempts=EMPTY_SCAN_FAILURE_LIMIT,
+                            retry_delay_seconds=EMPTY_SCAN_RETRY_DELAY_SECONDS,
+                        )
+                        await asyncio.sleep(EMPTY_SCAN_RETRY_DELAY_SECONDS)
+                        continue
+
+                    raise ScanDataUnavailableError(
+                        attempts=consecutive_empty_scan_cycles,
+                        retry_interval_seconds=EMPTY_SCAN_RETRY_DELAY_SECONDS,
+                        reason=empty_scan_reason,
+                    )
+
+                consecutive_empty_scan_cycles = 0
+
+                # Обновляем флаг spend для следующего цикла адаптивного ожидания
+                prev_scan_had_spend = any(r.spend and r.spend > 0 for r in rows)
+
+                # 3. Оценка правил, FSM-переходы, сбор алертов
+                alerts_to_send, stop_alerts, snapshot_batch = await _run_scan_cycle(
+                    offers=offers,
+                    rows=rows,
+                    ad_states=ad_states,
+                    fake_deposits_map=fake_deposits_map,
+                    observer_thresholds=observer_thresholds,
                 )
 
-            consecutive_empty_scan_cycles = 0
-
-            # Обновляем флаг spend для следующего цикла адаптивного ожидания
-            prev_scan_had_spend = any(r.spend and r.spend > 0 for r in rows)
-
-            # 3. Оценка правил, FSM-переходы, сбор алертов
-            alerts_to_send, stop_alerts, snapshot_batch = await _run_scan_cycle(
-                offers=offers,
-                rows=rows,
-                ad_states=ad_states,
-                fake_deposits_map=fake_deposits_map,
-                observer_thresholds=observer_thresholds,
-            )
-
-            # 4. Сохранение снэпшотов, disable tasks, отправка алертов в TG
-            await _process_scan_results(
-                alerts_to_send=alerts_to_send,
-                stop_alerts=stop_alerts,
-                snapshot_batch=snapshot_batch,
-                tg_client=tg_client,
-                tg_destinations=tg_destinations,
-            )
+                # 4. Сохранение снэпшотов, disable tasks, отправка алертов в TG
+                await _process_scan_results(
+                    alerts_to_send=alerts_to_send,
+                    stop_alerts=stop_alerts,
+                    snapshot_batch=snapshot_batch,
+                    tg_client=tg_client,
+                    tg_destinations=tg_destinations,
+                )
 
             # Успешный цикл — сбрасываем счётчик ошибок браузера
             consecutive_browser_errors = 0
