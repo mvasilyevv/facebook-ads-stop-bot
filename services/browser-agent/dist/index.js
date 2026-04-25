@@ -46,6 +46,11 @@ const toggle_utils_js_1 = require("./toggle-utils.js");
 const PORT = process.env.GRPC_PORT ? parseInt(process.env.GRPC_PORT, 10) : 50051;
 const sessionManager = new session_manager_js_1.SessionManager();
 const SESSION_STATUS_HEARTBEAT_MS = 5_000;
+const SCAN_TOP_RESET_SETTLE_MS = 700;
+const SCAN_POST_REFRESH_MIN_ROWS_WAIT_MS = 12_000;
+const SCAN_POST_REFRESH_EXTRA_WAIT_MS = 8_000;
+const SCAN_POST_SCROLL_CHANGE_WAIT_MS = 4_000;
+const SCAN_POST_SCROLL_POLL_MS = 250;
 function loadProto(name) {
     const protoPath = path.resolve(__dirname, '../../../proto/v1', name);
     const packageDefinition = protoLoader.loadSync(protoPath, {
@@ -77,6 +82,12 @@ function getPage(session, pageId) {
     }
     return session.primaryPage;
 }
+function getSessionForOptionalId(sessionId) {
+    const normalizedSessionId = String(sessionId || '').trim();
+    return normalizedSessionId
+        ? sessionManager.getSession(normalizedSessionId)
+        : sessionManager.getPreferredSession();
+}
 async function confirmMetaDialogIfPresent(page, targetState) {
     const confirmWords = targetState
         ? ['подтвердить', 'ok', 'да', 'продолжить', 'включить', 'confirm', 'yes', 'publish', 'опубликовать']
@@ -98,6 +109,39 @@ async function confirmMetaDialogIfPresent(page, targetState) {
         // Ошибка чтения диалога не должна обрывать основной клик по toggle.
     }
     return false;
+}
+async function readToggleStateFromHandle(toggle) {
+    const ariaChecked = await toggle.getAttribute('aria-checked');
+    if (ariaChecked !== null) {
+        return ariaChecked || 'null';
+    }
+    try {
+        const inputChecked = await toggle.evaluate((node) => {
+            if (node instanceof HTMLInputElement && node.type === 'checkbox') {
+                return node.checked ? 'true' : 'false';
+            }
+            return null;
+        });
+        if (inputChecked) {
+            return inputChecked;
+        }
+    }
+    catch {
+        // Если handle устарел, внешний retry заново найдёт toggle.
+    }
+    return 'unknown';
+}
+async function clickToggleAttempt(page, toggle, attempt) {
+    if (attempt === 1) {
+        await (0, humanizer_js_1.humanClick)(page, toggle);
+        return;
+    }
+    if (attempt === 2) {
+        await toggle.click({ force: true, timeout: 2500 });
+        return;
+    }
+    await toggle.focus().catch(() => undefined);
+    await page.keyboard.press('Space');
 }
 // --- Обработчики BrowserSessionService ---
 async function startBrowser(call, callback) {
@@ -173,7 +217,7 @@ async function reconnectBrowser(call, callback) {
 }
 async function getSessionInfo(call, callback) {
     try {
-        const session = sessionManager.getSession(call.request.session_id);
+        const session = getSessionForOptionalId(call.request.session_id);
         const page = getPage(session);
         callback(null, {
             session_id: session.id,
@@ -254,6 +298,54 @@ function streamSessionStatus(call) {
     streamSessionStatusWithLookup(call, (sessionId) => sessionManager.getSession(sessionId));
 }
 // --- Обработчики ScannerService ---
+function sameStringList(left, right) {
+    if (left.length !== right.length)
+        return false;
+    return left.every((value, index) => value === right[index]);
+}
+async function waitForInitialAdsRows(page, timeoutMs) {
+    const rows = await (0, parser_js_1.waitForParsedAdsRows)(page, {
+        timeoutMs,
+        pollMs: 500,
+    });
+    if (rows.length === 0) {
+        console.warn(`Browser-agent: строки таблицы не появились за ${Math.round(timeoutMs / 1000)}с после refresh`);
+    }
+    await waitForDomStable(page, 3.0, 0.1);
+}
+async function prepareAdsTableForScan(page, options) {
+    const { doRefresh, resetFirst, settleDelayMs } = options;
+    // Перед refresh уходим наверх, чтобы Meta обновляла таблицу из начала списка, а не из середины виртуального окна.
+    if (resetFirst) {
+        await (0, ads_table_js_1.resetAdsTableScroll)(page);
+        await sleep(SCAN_TOP_RESET_SETTLE_MS);
+    }
+    if (doRefresh) {
+        await (0, parser_js_1.refreshTable)(page);
+        await sleep(settleDelayMs);
+        await waitForInitialAdsRows(page, Math.max(SCAN_POST_REFRESH_MIN_ROWS_WAIT_MS, settleDelayMs + SCAN_POST_REFRESH_EXTRA_WAIT_MS));
+    }
+    // После refresh закрепляем верхнюю позицию ещё раз: Ads Manager иногда восстанавливает старое виртуальное окно.
+    if (resetFirst) {
+        await (0, ads_table_js_1.resetAdsTableScroll)(page);
+        await sleep(SCAN_TOP_RESET_SETTLE_MS);
+        await waitForDomStable(page, 2.0, 0.1);
+    }
+}
+async function waitForVisibleRowsAfterScroll(page, beforeIds, timeoutMs = SCAN_POST_SCROLL_CHANGE_WAIT_MS) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+        await sleep(SCAN_POST_SCROLL_POLL_MS);
+        const currentIds = await (0, ads_table_js_1.getVisibleAdsTableRowIds)(page);
+        if (currentIds.length === 0)
+            continue;
+        if (beforeIds.length === 0 || !sameStringList(beforeIds, currentIds)) {
+            await waitForDomStable(page, 1.5, 0.1);
+            return true;
+        }
+    }
+    return false;
+}
 async function runScanCycle(call) {
     const req = call.request;
     try {
@@ -270,16 +362,11 @@ async function runScanCycle(call) {
         let completedPasses = 0;
         // Не привязываемся к текущим 30 объявлениям: конец списка определяем по нескольким проходам без новых ID.
         const stallLimit = 3;
-        // Обновляем таблицу до сброса, чтобы стартовать сканирование с верхних строк свежего DOM.
-        if (doRefresh) {
-            await (0, parser_js_1.refreshTable)(page);
-            await sleep(settleDelay);
-        }
-        // Сбрасываем также виртуальный список, где scrollTop может не отражать реальное положение.
-        if (resetFirst) {
-            await (0, ads_table_js_1.resetAdsTableScroll)(page);
-            await sleep(300);
-        }
+        await prepareAdsTableForScan(page, {
+            doRefresh,
+            resetFirst,
+            settleDelayMs: settleDelay,
+        });
         // Скроллим до стабилизации: Ads Manager держит в DOM только видимый фрагмент таблицы.
         for (let pass = 1; pass <= maxPasses; pass++) {
             completedPasses = pass;
@@ -316,8 +403,18 @@ async function runScanCycle(call) {
             });
             if (pass >= maxPasses)
                 break;
+            const beforeScrollIds = await (0, ads_table_js_1.getVisibleAdsTableRowIds)(page);
             const scrollAfter = await (0, ads_table_js_1.scrollAdsTableDown)(page);
-            if (newRows.length > 0 || scrollAfter.moved) {
+            let rowsChangedAfterScroll = false;
+            if (!scrollAfter.atBottom) {
+                if (scrollAfter.moved) {
+                    await waitForDomStable(page, 1.0, 0.1);
+                }
+                else {
+                    rowsChangedAfterScroll = await waitForVisibleRowsAfterScroll(page, beforeScrollIds);
+                }
+            }
+            if (newRows.length > 0 || scrollAfter.moved || rowsChangedAfterScroll) {
                 stalledPasses = 0;
             }
             else {
@@ -474,7 +571,7 @@ async function findToggleCell(call, callback) {
         if (cell) {
             const box = await cell.boundingBox();
             const toggle = await (0, toggle_utils_js_1.resolveToggleHandleFromCell)(cell);
-            const ariaChecked = (await toggle?.getAttribute('aria-checked')) || 'unknown';
+            const ariaChecked = toggle ? await readToggleStateFromHandle(toggle) : 'no_toggle';
             callback(null, {
                 found: true,
                 cell_x: box?.x ?? 0,
@@ -523,18 +620,53 @@ async function toggleAd(call, callback) {
             return;
         }
         const targetChecked = call.request.target_state ? 'true' : 'false';
-        const initialChecked = (await toggle.getAttribute('aria-checked')) || 'unknown';
+        const initialChecked = await readToggleStateFromHandle(toggle);
         if (initialChecked === targetChecked) {
             callback(null, { success: true, final_state: initialChecked });
             return;
         }
-        await (0, humanizer_js_1.humanClick)(page, toggle);
-        await sleep(800);
-        await confirmMetaDialogIfPresent(page, Boolean(call.request.target_state));
-        await sleep(800);
-        // Читаем состояние после клика через тот же поиск строки, что и для toggle.
-        const ariaChecked = await (0, ads_table_js_1.readToggleAriaChecked)(page, fbAdId);
-        callback(null, { success: true, final_state: ariaChecked });
+        let finalState = initialChecked;
+        let currentToggle = toggle;
+        for (let attempt = 1; attempt <= 3; attempt++) {
+            if (attempt > 1) {
+                const freshCell = await (0, ads_table_js_1.findToggleCellWithTableScan)(page, fbAdId, {
+                    resetToTop: false,
+                    maxScrollPasses: 4,
+                });
+                if (!freshCell) {
+                    finalState = 'not_found';
+                    continue;
+                }
+                const freshToggle = await (0, toggle_utils_js_1.resolveToggleHandleFromCell)(freshCell);
+                if (!freshToggle) {
+                    finalState = 'no_toggle';
+                    continue;
+                }
+                currentToggle = freshToggle;
+            }
+            const beforeClick = await readToggleStateFromHandle(currentToggle);
+            if (beforeClick === targetChecked) {
+                callback(null, { success: true, final_state: beforeClick });
+                return;
+            }
+            try {
+                await clickToggleAttempt(page, currentToggle, attempt);
+            }
+            catch (clickErr) {
+                finalState = `ошибка_клика: ${clickErr.message || clickErr}`;
+                continue;
+            }
+            await sleep(700);
+            await confirmMetaDialogIfPresent(page, Boolean(call.request.target_state));
+            await sleep(900);
+            // Читаем состояние после клика через тот же поиск строки, что и для toggle.
+            finalState = await (0, ads_table_js_1.readToggleAriaChecked)(page, fbAdId);
+            if (finalState === targetChecked) {
+                callback(null, { success: true, final_state: finalState });
+                return;
+            }
+        }
+        callback(null, { success: false, final_state: finalState || 'не_подтверждено' });
     }
     catch (err) {
         const code = grpcCodeForError(err);
@@ -720,7 +852,7 @@ function rand(min, max) {
 }
 async function validateColumnsHandler(call, callback) {
     try {
-        const session = sessionManager.getSession(call.request.session_id);
+        const session = getSessionForOptionalId(call.request.session_id);
         const page = getPage(session, call.request.page_id);
         const result = await (0, ads_table_js_1.validateAdsTableColumns)(page);
         callback(null, {
@@ -728,6 +860,25 @@ async function validateColumnsHandler(call, callback) {
             missing_columns: result.missingColumns,
             found_columns: result.foundColumns,
             error_message: result.errorMessage || '',
+        });
+    }
+    catch (err) {
+        const code = grpcCodeForError(err);
+        callback({ code, message: err.message });
+    }
+}
+async function applyColumnWidthsHandler(call, callback) {
+    try {
+        const session = getSessionForOptionalId(call.request.session_id);
+        const page = getPage(session, call.request.page_id);
+        const result = await (0, ads_table_js_1.applyAdsTableColumnWidthPreset)(page);
+        callback(null, {
+            applied: result.applied,
+            matched_columns: result.matchedColumns,
+            missing_columns: result.missingColumns,
+            error_message: result.errorMessage || '',
+            adjusted_cells: result.adjustedCells,
+            total_width_px: result.totalWidthPx,
         });
     }
     catch (err) {
@@ -769,6 +920,7 @@ function main() {
         humanWheelScroll: humanWheelScrollHandler,
         waitForToggleConfirmation: waitForToggleConfirmation,
         validateColumns: validateColumnsHandler,
+        applyColumnWidths: applyColumnWidthsHandler,
     });
     server.bindAsync(`0.0.0.0:${PORT}`, grpc.ServerCredentials.createInsecure(), (error, port) => {
         if (error) {

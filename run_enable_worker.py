@@ -55,6 +55,7 @@ _GRPC_CONNECTION_ERROR_MARKERS = (
     "transport closed",
     "goaway",
     "stream closed",
+    "deadline exceeded",
 )
 
 # Общая очередь задач на включение
@@ -71,6 +72,14 @@ def _is_grpc_connection_error(exc: Exception) -> bool:
         return True
     message = str(exc).casefold()
     return any(marker in message for marker in _GRPC_CONNECTION_ERROR_MARKERS)
+
+
+def _build_browser_runtime_error_message(exc: Exception) -> str:
+    """Формирует текст ошибки браузерной операции для retry-задачи."""
+    detail = str(exc).strip()
+    if not detail:
+        return "Браузерная операция включения завершилась ошибкой"
+    return f"Браузерная операция включения завершилась ошибкой: {detail}"
 
 
 def _build_client_config(
@@ -249,6 +258,7 @@ async def _execute_enable_single(
     find_result = await client.find_toggle_cell(
         fb_ad_id,
         reset_to_top=True,
+        max_scroll_passes=ENABLE_SINGLE_SEARCH_MAX_SCROLL_PASSES,
     )
 
     if not find_result["found"]:
@@ -256,6 +266,9 @@ async def _execute_enable_single(
 
     # Шаг 2: Проверка текущего состояния
     initial_checked = find_result.get("aria_checked", "")
+    if initial_checked not in {"true", "false"}:
+        initial_checked = await client.read_toggle_state(fb_ad_id)
+
     logger.info(
         "Enable: toggle найден x=%.0f y=%.0f, aria-checked=%s для %s",
         find_result["cell_x"],
@@ -546,6 +559,24 @@ async def enable_worker_loop(
                     send_completion_callback=send_completion_callback,
                 )
                 # Переподключаем браузер при таймауте
+                await _reconnect_browser(client)
+                continue
+            except Exception as exc:
+                runtime_message = _build_browser_runtime_error_message(exc)
+                logger.error(
+                    "Enable worker: задача %s для %s завершилась ошибкой, переподключаю браузер",
+                    task.id,
+                    task.fb_ad.fb_ad_id,
+                    exc_info=True,
+                )
+                await _process_enable_task_result(
+                    task=task,
+                    success=False,
+                    message=runtime_message,
+                    tg_client=tg_client,
+                    tg_chat_id=tg_chat_id,
+                    send_completion_callback=send_completion_callback,
+                )
                 await _reconnect_browser(client)
                 continue
 

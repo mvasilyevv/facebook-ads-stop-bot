@@ -53,11 +53,13 @@ def resolve_transition(
             return AlertState.STOP_SENT, token, True
         return AlertState.WARNING_SENT, token, False
 
-    # Из STOP_SENT, CLAIMED, DISABLED — ничего не отправляем (уже обработано)
+    # Из STOP_SENT, CLAIMED, DISABLED — STOP не дублируем, но CLAIMED может откатиться до WARNING.
     if previous == AlertState.STOP_SENT:
         return AlertState.STOP_SENT, token, False
 
     if previous == AlertState.CLAIMED:
+        if next_stage == AlertStage.WARNING:
+            return AlertState.WARNING_SENT, token, False
         return AlertState.CLAIMED, token, False
 
     if previous == AlertState.DISABLED:

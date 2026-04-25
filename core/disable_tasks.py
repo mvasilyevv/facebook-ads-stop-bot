@@ -9,11 +9,12 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.domain import AlertState, DisableTaskStatus
+from core.domain import AlertStage, AlertState, DisableTaskStatus
 from core.models import AdSnapshot, DisableTask, FbAd
 
 logger = logging.getLogger(__name__)
 
+AUTO_DISABLE_REQUEST_USERNAME = "bot_auto_stop"
 DISABLE_TASK_STALE_MINUTES = 2
 DISABLE_TASK_STALE_TIMEOUT = timedelta(minutes=DISABLE_TASK_STALE_MINUTES)
 ACTIVE_DISABLE_TASK_WINDOW = timedelta(minutes=30)
@@ -86,8 +87,9 @@ async def reconcile_disable_tasks(
 ) -> dict[str, list[str]]:
     """Согласовывает очередь отключений с фактическим состоянием объявлений.
 
-    Делает две вещи:
+    Делает несколько вещей:
     - завершает активные задачи, если observer уже увидел выключенный статус доставки;
+    - отменяет auto-disable, если свежий снэпшот уже откатился ниже STOP;
     - отменяет задачи по объявлениям, которые уже выпали из актуальной скан-сессии;
     - возвращает застрявшие `RUNNING`-задачи в повторную обработку.
     """
@@ -114,22 +116,44 @@ async def reconcile_disable_tasks(
         )
     )
     for task, snapshot, fb_ad_id in completed_rows.all():
-        if not is_delivery_disabled(snapshot.delivery_status):
+        if is_delivery_disabled(snapshot.delivery_status):
+            task.status = DisableTaskStatus.SUCCEEDED
+            task.completed_at = current_time
+            task.next_retry_at = None
+            task.last_error = None
+            snapshot.alert_state = AlertState.DISABLED
+            completed_ids.append(fb_ad_id)
+            logger.info(
+                "Задача %s для %s завершена автоматически: объявление уже %s",
+                task.id,
+                fb_ad_id,
+                snapshot.delivery_status,
+            )
             continue
-        task.status = DisableTaskStatus.SUCCEEDED
-        task.completed_at = current_time
-        task.next_retry_at = None
-        task.last_error = None
-        snapshot.alert_state = AlertState.DISABLED
-        completed_ids.append(fb_ad_id)
-        logger.info(
-            "Задача %s для %s завершена автоматически: объявление уже %s",
-            task.id,
-            fb_ad_id,
-            snapshot.delivery_status,
-        )
 
-    if completed_ids:
+        if (
+            task.requested_by_username == AUTO_DISABLE_REQUEST_USERNAME
+            and snapshot.current_stage != AlertStage.STOP
+        ):
+            task.status = DisableTaskStatus.CANCELLED
+            task.completed_at = current_time
+            task.next_retry_at = None
+            task.last_error = "Задача отменена: свежий снэпшот больше не находится в STOP"
+            cancelled_ids.append(fb_ad_id)
+            if snapshot.current_stage == AlertStage.WARNING:
+                snapshot.alert_state = AlertState.WARNING_SENT
+            else:
+                snapshot.alert_state = AlertState.NORMAL
+                if hasattr(snapshot, "open_state_token"):
+                    snapshot.open_state_token = None
+            logger.info(
+                "Задача %s для %s отменена: свежий снэпшот уже не STOP",
+                task.id,
+                fb_ad_id,
+            )
+            continue
+
+    if completed_ids or cancelled_ids:
         await session.flush()
 
     repaired_rows = await session.execute(

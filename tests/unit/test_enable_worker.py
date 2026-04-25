@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock
 
@@ -45,7 +46,11 @@ async def test_execute_enable_single_enables_visible_toggle(monkeypatch):
 
     assert success is True
     assert message == "Объявление включено: переключатель подтвердил состояние ON"
-    client.find_toggle_cell.assert_awaited_once_with("120246283878900334", reset_to_top=True)
+    client.find_toggle_cell.assert_awaited_once_with(
+        "120246283878900334",
+        reset_to_top=True,
+        max_scroll_passes=run_enable_worker.ENABLE_SINGLE_SEARCH_MAX_SCROLL_PASSES,
+    )
     client.toggle_ad.assert_awaited_once_with("120246283878900334", target_state=True)
 
 
@@ -155,3 +160,56 @@ async def test_execute_enable_single_returns_false_on_toggle_failure(monkeypatch
 
     assert success is False
     assert "toggle" in message.lower() or "final_state" in message.lower()
+
+
+# Проверяем, что runtime-ошибка browser-agent возвращает enable-задачу в retry.
+@pytest.mark.asyncio
+async def test_enable_worker_loop_runtime_error_calls_mark_retrying(monkeypatch):
+    import run_enable_worker
+
+    shutdown = asyncio.Event()
+    call_count = 0
+
+    task = MagicMock()
+    task.id = "task-enable-001"
+    task.attempt_count = 1
+    task.max_attempts = 10
+    task.fb_ad = MagicMock(fb_ad_id="120246283878900334", ad_name="Test Ad")
+    task.requested_by_username = "dashboard"
+    task.recommendation_event_id = None
+
+    async def fake_claim():
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return task
+        shutdown.set()
+        return None
+
+    async def fake_execute(_client, _fb_ad_id):
+        raise RuntimeError("deadline exceeded")
+
+    monkeypatch.setattr(run_enable_worker, "claim_next_task", fake_claim)
+    monkeypatch.setattr(
+        run_enable_worker, "_cancel_enable_task_if_alert_blocked", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(run_enable_worker, "_execute_enable_single_locked", fake_execute)
+    monkeypatch.setattr(
+        run_enable_worker, "_reconnect_browser", AsyncMock(return_value="session-2")
+    )
+    mark_retrying = AsyncMock()
+    monkeypatch.setattr(run_enable_worker, "mark_retrying", mark_retrying)
+    monkeypatch.setattr(run_enable_worker, "mark_succeeded", AsyncMock())
+    monkeypatch.setattr(run_enable_worker, "mark_failed", AsyncMock())
+
+    await run_enable_worker.enable_worker_loop(
+        client=AsyncMock(),
+        tg_client=None,
+        tg_chat_id="",
+        poll_interval=0,
+        shutdown_event=shutdown,
+    )
+
+    mark_retrying.assert_awaited_once()
+    assert mark_retrying.call_args.args[0] == "task-enable-001"
+    assert "Браузерная операция включения завершилась ошибкой" in mark_retrying.call_args.args[1]

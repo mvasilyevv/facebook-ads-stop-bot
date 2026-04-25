@@ -131,6 +131,12 @@ class ScannerServiceStub(object):
             response_deserializer=v1_dot_scanner__pb2.ValidateColumnsResponse.FromString,
             _registered_method=True,
         )
+        self.ApplyColumnWidths = channel.unary_unary(
+            "/fb_agent.scanner.v1.ScannerService/ApplyColumnWidths",
+            request_serializer=v1_dot_scanner__pb2.ApplyColumnWidthsRequest.SerializeToString,
+            response_deserializer=v1_dot_scanner__pb2.ApplyColumnWidthsResponse.FromString,
+            _registered_method=True,
+        )
 
 
 class ScannerServiceServicer(object):
@@ -234,6 +240,12 @@ class ScannerServiceServicer(object):
         context.set_details("Method not implemented!")
         raise NotImplementedError("Method not implemented!")
 
+    def ApplyColumnWidths(self, request, context):
+        """Применить сохранённый пресет ширины колонок Ads Manager."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details("Method not implemented!")
+        raise NotImplementedError("Method not implemented!")
+
 
 def add_ScannerServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -316,6 +328,11 @@ def add_ScannerServiceServicer_to_server(servicer, server):
             servicer.ValidateColumns,
             request_deserializer=v1_dot_scanner__pb2.ValidateColumnsRequest.FromString,
             response_serializer=v1_dot_scanner__pb2.ValidateColumnsResponse.SerializeToString,
+        ),
+        "ApplyColumnWidths": grpc.unary_unary_rpc_method_handler(
+            servicer.ApplyColumnWidths,
+            request_deserializer=v1_dot_scanner__pb2.ApplyColumnWidthsRequest.FromString,
+            response_serializer=v1_dot_scanner__pb2.ApplyColumnWidthsResponse.SerializeToString,
         ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -798,6 +815,36 @@ class ScannerService(object):
             "/fb_agent.scanner.v1.ScannerService/ValidateColumns",
             v1_dot_scanner__pb2.ValidateColumnsRequest.SerializeToString,
             v1_dot_scanner__pb2.ValidateColumnsResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True,
+        )
+
+    @staticmethod
+    def ApplyColumnWidths(
+        request,
+        target,
+        options=(),
+        channel_credentials=None,
+        call_credentials=None,
+        insecure=False,
+        compression=None,
+        wait_for_ready=None,
+        timeout=None,
+        metadata=None,
+    ):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            "/fb_agent.scanner.v1.ScannerService/ApplyColumnWidths",
+            v1_dot_scanner__pb2.ApplyColumnWidthsRequest.SerializeToString,
+            v1_dot_scanner__pb2.ApplyColumnWidthsResponse.FromString,
             options,
             channel_credentials,
             insecure,

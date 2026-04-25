@@ -4,6 +4,28 @@
 var grpc = require('grpc');
 var v1_scanner_pb = require('../v1/scanner_pb.js');
 
+function serialize_fb_agent_scanner_v1_ApplyColumnWidthsRequest(arg) {
+  if (!(arg instanceof v1_scanner_pb.ApplyColumnWidthsRequest)) {
+    throw new Error('Expected argument of type fb_agent.scanner.v1.ApplyColumnWidthsRequest');
+  }
+  return Buffer.from(arg.serializeBinary());
+}
+
+function deserialize_fb_agent_scanner_v1_ApplyColumnWidthsRequest(buffer_arg) {
+  return v1_scanner_pb.ApplyColumnWidthsRequest.deserializeBinary(new Uint8Array(buffer_arg));
+}
+
+function serialize_fb_agent_scanner_v1_ApplyColumnWidthsResponse(arg) {
+  if (!(arg instanceof v1_scanner_pb.ApplyColumnWidthsResponse)) {
+    throw new Error('Expected argument of type fb_agent.scanner.v1.ApplyColumnWidthsResponse');
+  }
+  return Buffer.from(arg.serializeBinary());
+}
+
+function deserialize_fb_agent_scanner_v1_ApplyColumnWidthsResponse(buffer_arg) {
+  return v1_scanner_pb.ApplyColumnWidthsResponse.deserializeBinary(new Uint8Array(buffer_arg));
+}
+
 function serialize_fb_agent_scanner_v1_FindToggleCellRequest(arg) {
   if (!(arg instanceof v1_scanner_pb.FindToggleCellRequest)) {
     throw new Error('Expected argument of type fb_agent.scanner.v1.FindToggleCellRequest');
@@ -550,6 +572,18 @@ validateColumns: {
     requestDeserialize: deserialize_fb_agent_scanner_v1_ValidateColumnsRequest,
     responseSerialize: serialize_fb_agent_scanner_v1_ValidateColumnsResponse,
     responseDeserialize: deserialize_fb_agent_scanner_v1_ValidateColumnsResponse,
+  },
+  // Применить сохранённый пресет ширины колонок Ads Manager.
+applyColumnWidths: {
+    path: '/fb_agent.scanner.v1.ScannerService/ApplyColumnWidths',
+    requestStream: false,
+    responseStream: false,
+    requestType: v1_scanner_pb.ApplyColumnWidthsRequest,
+    responseType: v1_scanner_pb.ApplyColumnWidthsResponse,
+    requestSerialize: serialize_fb_agent_scanner_v1_ApplyColumnWidthsRequest,
+    requestDeserialize: deserialize_fb_agent_scanner_v1_ApplyColumnWidthsRequest,
+    responseSerialize: serialize_fb_agent_scanner_v1_ApplyColumnWidthsResponse,
+    responseDeserialize: deserialize_fb_agent_scanner_v1_ApplyColumnWidthsResponse,
   },
 };
 

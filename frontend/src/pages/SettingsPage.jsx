@@ -38,6 +38,11 @@ export default function SettingsPage() {
         observer={settings.observer.value}
         onChange={settings.observer.setValue}
         onSave={settings.observer.save}
+        recommendations={settings.observer.thresholdRecommendations}
+        recommendationsLoading={settings.observer.thresholdRecommendationsLoading}
+        recommendationsError={settings.observer.thresholdRecommendationsError}
+        onReloadRecommendations={settings.observer.reloadThresholdRecommendations}
+        onApplyRecommendations={settings.observer.applyThresholdRecommendations}
         saving={settings.saving}
       />
 
@@ -73,6 +78,7 @@ export default function SettingsPage() {
         onVisionChange={settings.vision.setValue}
         onSave={settings.vision.save}
         onReconnect={settings.vision.reconnect}
+        onApplyColumnWidths={settings.vision.applyColumnWidths}
         saving={settings.saving}
         browserOpen={browserOpen}
         onToggleBrowserOpen={() => setBrowserOpenOverride((v) => !(v ?? !isMobile))}

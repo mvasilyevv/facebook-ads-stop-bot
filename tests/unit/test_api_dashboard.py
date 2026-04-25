@@ -789,9 +789,15 @@ async def test_list_disable_tasks_filters_to_operational_statuses_by_default(moc
 
     from apps.api.routers.dashboard import list_disable_tasks
 
-    with patch(
-        "apps.api.routers.dashboard._load_ad_context_map",
-        new=AsyncMock(return_value=ad_ctx_map),
+    with (
+        patch(
+            "apps.api.routers.dashboard.reconcile_disable_tasks",
+            new=AsyncMock(return_value={}),
+        ),
+        patch(
+            "apps.api.routers.dashboard._load_ad_context_map",
+            new=AsyncMock(return_value=ad_ctx_map),
+        ),
     ):
         result = await list_disable_tasks(status=None, limit=50, offset=0, db=mock_db)
 
@@ -823,9 +829,15 @@ async def test_list_disable_tasks_supports_explicit_succeeded_filter(mock_db):
 
     from apps.api.routers.dashboard import list_disable_tasks
 
-    with patch(
-        "apps.api.routers.dashboard._load_ad_context_map",
-        new=AsyncMock(return_value=ad_ctx_map),
+    with (
+        patch(
+            "apps.api.routers.dashboard.reconcile_disable_tasks",
+            new=AsyncMock(return_value={}),
+        ),
+        patch(
+            "apps.api.routers.dashboard._load_ad_context_map",
+            new=AsyncMock(return_value=ad_ctx_map),
+        ),
     ):
         result = await list_disable_tasks(status="SUCCEEDED", limit=50, offset=0, db=mock_db)
 
@@ -1191,20 +1203,56 @@ def test_build_dashboard_performance_payload_keeps_nulls_for_zero_denominators()
     assert payload.campaigns[0].reg_to_dep_rate is None
 
 
-# Проверяем что today в endpoint опирается на актуальную скан-сессию, а не на полночь
+# Проверяем что performance-срез предпочитает начало текущих суток кабинета.
 @pytest.mark.asyncio
-async def test_dashboard_performance_today_uses_current_scan_cutoff(mock_db):
+async def test_resolve_dashboard_performance_cutoff_prefers_cabinet_day(mock_db):
+    from apps.api.routers.dashboard import _resolve_dashboard_performance_cutoff
+
+    cabinet_day_start = datetime(2026, 3, 28, 8, 0, tzinfo=UTC)
+
+    with patch(
+        "apps.api.routers.dashboard._get_cabinet_day_start",
+        new=AsyncMock(return_value=cabinet_day_start),
+    ):
+        result = await _resolve_dashboard_performance_cutoff(mock_db)
+
+    assert result == cabinet_day_start
+
+
+# Проверяем что без зафиксированных суток кабинета performance остаётся на старом live-fallback.
+@pytest.mark.asyncio
+async def test_resolve_dashboard_performance_cutoff_falls_back_to_current_scan(mock_db):
+    from apps.api.routers.dashboard import _resolve_dashboard_performance_cutoff
+
+    last_scan = datetime(2026, 3, 28, 10, 0, tzinfo=UTC)
+    mock_db.scalar = AsyncMock(return_value=last_scan)
+
+    with patch(
+        "apps.api.routers.dashboard._get_cabinet_day_start",
+        new=AsyncMock(return_value=None),
+    ):
+        result = await _resolve_dashboard_performance_cutoff(mock_db)
+
+    assert result == last_scan - timedelta(minutes=30)
+
+
+# Проверяем что today в endpoint использует границу performance-среза, а не только live-сессию.
+@pytest.mark.asyncio
+async def test_dashboard_performance_today_uses_performance_cutoff(mock_db):
     snapshots_result = MagicMock()
     snapshots_result.scalars.return_value.all.return_value = []
     offers_result = MagicMock()
     offers_result.scalars.return_value.all.return_value = []
-    last_scan = datetime(2026, 3, 28, 10, 0, tzinfo=UTC)
+    cutoff = datetime(2026, 3, 28, 8, 0, tzinfo=UTC)
     mock_db.execute = AsyncMock(side_effect=[snapshots_result, offers_result])
-    mock_db.scalar = AsyncMock(return_value=last_scan)
 
     from apps.api.routers.dashboard import get_dashboard_performance
 
     with (
+        patch(
+            "apps.api.routers.dashboard._resolve_dashboard_performance_cutoff",
+            new=AsyncMock(return_value=cutoff),
+        ),
         patch(
             "apps.api.routers.dashboard._load_fake_deposits_map",
             new_callable=AsyncMock,
@@ -1221,7 +1269,7 @@ async def test_dashboard_performance_today_uses_current_scan_cutoff(mock_db):
     # Первый вызов execute — запрос снэпшотов с фильтром по last_observed_at
     stmt = mock_db.execute.call_args_list[0].args[0]
     where_clause = list(stmt._where_criteria)[0]
-    assert where_clause.right.value == last_scan - timedelta(minutes=30)
+    assert where_clause.right.value == cutoff
 
 
 # Проверяем что chart-data для today без zero-scan использует fallback начала локального дня
@@ -1255,6 +1303,14 @@ async def test_chart_data_today_uses_local_day_fallback(mock_db):
 
     with (
         patch("apps.api.routers.dashboard._dashboard_now", return_value=now),
+        patch(
+            "apps.api.routers.dashboard._resolve_dashboard_snapshot_cutoff",
+            new=AsyncMock(return_value=now.replace(hour=0, minute=0, second=0, microsecond=0)),
+        ),
+        patch(
+            "apps.api.routers.dashboard._resolve_dashboard_performance_cutoff",
+            new=AsyncMock(return_value=now.replace(hour=0, minute=0, second=0, microsecond=0)),
+        ),
         patch(
             "apps.api.routers.dashboard._load_fake_deposits_map",
             new_callable=AsyncMock,
@@ -1350,6 +1406,10 @@ async def test_dashboard_performance_endpoint_returns_payload(mock_db):
 
     ad_ctx = {snap.ad_id: {"campaign_name": "Campaign A"}}
     with (
+        patch(
+            "apps.api.routers.dashboard._resolve_dashboard_performance_cutoff",
+            new=AsyncMock(return_value=observed_at - timedelta(minutes=30)),
+        ),
         patch(
             "apps.api.routers.dashboard._load_ad_context_map",
             new_callable=AsyncMock,

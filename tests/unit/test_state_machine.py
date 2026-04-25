@@ -87,6 +87,18 @@ def test_claimed_stays():
     assert emit is False
 
 
+# Из CLAIMED + WARNING — снимаем pending disable без повторного сообщения.
+def test_claimed_downgrades_to_warning_without_send():
+    state, token, emit = resolve_transition(
+        current_state=AlertState.CLAIMED,
+        current_token="existing-token",
+        next_stage=AlertStage.WARNING,
+    )
+    assert state == AlertState.WARNING_SENT
+    assert token == "existing-token"
+    assert emit is False
+
+
 # Из DISABLED — ничего не отправляется (уже выключено)
 def test_disabled_stays():
     state, token, emit = resolve_transition(

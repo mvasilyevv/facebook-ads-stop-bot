@@ -286,6 +286,22 @@ export class SessionManager {
     return session;
   }
 
+  getPreferredSession(): BrowserSession {
+    const sessions = Array.from(this.sessions.values())
+      .filter((session) => session.status === 'connected' && session.browser)
+      .sort((left, right) => right.connectedAt.getTime() - left.connectedAt.getTime());
+
+    const adsSession = sessions.find((session) => {
+      const preferredPage = findPreferredPrimaryPage(session.browser);
+      return preferredPage ? isAdsManagerUrl(preferredPage.url()) : false;
+    });
+    const session = adsSession || sessions[0];
+    if (!session) {
+      throw new Error('Активная browser-agent сессия не найдена');
+    }
+    return session;
+  }
+
   listSessions(): Array<{ id: string; status: string; connectedAt: string }> {
     const result: Array<{ id: string; status: string; connectedAt: string }> = [];
     for (const [id, session] of this.sessions) {

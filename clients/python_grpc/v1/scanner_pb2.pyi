@@ -518,6 +518,45 @@ class ValidateColumnsResponse(_message.Message):
         error_message: _Optional[str] = ...,
     ) -> None: ...
 
+class ApplyColumnWidthsRequest(_message.Message):
+    __slots__ = ("session_id", "page_id")
+    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
+    PAGE_ID_FIELD_NUMBER: _ClassVar[int]
+    session_id: str
+    page_id: str
+    def __init__(self, session_id: _Optional[str] = ..., page_id: _Optional[str] = ...) -> None: ...
+
+class ApplyColumnWidthsResponse(_message.Message):
+    __slots__ = (
+        "applied",
+        "matched_columns",
+        "missing_columns",
+        "error_message",
+        "adjusted_cells",
+        "total_width_px",
+    )
+    APPLIED_FIELD_NUMBER: _ClassVar[int]
+    MATCHED_COLUMNS_FIELD_NUMBER: _ClassVar[int]
+    MISSING_COLUMNS_FIELD_NUMBER: _ClassVar[int]
+    ERROR_MESSAGE_FIELD_NUMBER: _ClassVar[int]
+    ADJUSTED_CELLS_FIELD_NUMBER: _ClassVar[int]
+    TOTAL_WIDTH_PX_FIELD_NUMBER: _ClassVar[int]
+    applied: bool
+    matched_columns: _containers.RepeatedScalarFieldContainer[str]
+    missing_columns: _containers.RepeatedScalarFieldContainer[str]
+    error_message: str
+    adjusted_cells: int
+    total_width_px: int
+    def __init__(
+        self,
+        applied: bool = ...,
+        matched_columns: _Optional[_Iterable[str]] = ...,
+        missing_columns: _Optional[_Iterable[str]] = ...,
+        error_message: _Optional[str] = ...,
+        adjusted_cells: _Optional[int] = ...,
+        total_width_px: _Optional[int] = ...,
+    ) -> None: ...
+
 class ScannedAdRow(_message.Message):
     __slots__ = (
         "fb_ad_id",

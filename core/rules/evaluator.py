@@ -220,16 +220,17 @@ def _evaluate_metric_only(
     current = _round_money(metric_value)
     threshold_text = _format_threshold_value(stop_threshold, base_stop_threshold)
 
-    if current > stop_threshold:
+    if current >= stop_threshold:
         return RuleHit(
             code=code,
             title=title,
             stage=AlertStage.STOP,
             value=current,
             threshold=stop_threshold,
-            summary=f"{label} {_format_money_value(current)} > стоп {threshold_text}",
+            summary=f"{label} {_format_money_value(current)} достиг или превысил стоп {threshold_text}",
             reason_text=(
-                f"Цена {stage_name} вышла за допустимую границу: {label} сейчас {_format_money_value(current)}. "
+                f"Цена {stage_name} достигла или вышла за допустимую границу: "
+                f"{label} сейчас {_format_money_value(current)}. "
                 f"Стоп для этого правила {threshold_text}."
             ),
         )
@@ -421,11 +422,7 @@ def _has_safe_enable_recovery_signal(row: ScannedAdRow) -> bool:
         return True
     if row.deposits > 0 and row.registrations <= 0:
         return False
-    if row.registrations >= 1:
-        return row.cost_per_registration is not None
-    if row.leads >= 1:
-        return row.cost_per_lead is not None
-    return row.clicks >= 1 and row.cpc is not None
+    return row.registrations >= 1 and row.cost_per_registration is not None
 
 
 def _percent_of_cpa(cpa: Decimal, percent: Decimal) -> Decimal:

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  buildAdsTableColumnWidthTargets,
   buildParserColumnLayout,
   collectMissingValidationColumns,
   normalizeVisibleHeaders,
@@ -18,25 +19,26 @@ function buildFullHeaderSet(): HeaderSnapshot[] {
     header('name', 'Название объявления', 40),
     header('delivery', 'Статус показа', 120),
     header('budget', 'Бюджет', 200),
-    header('actions', 'Завершенные регистрации', 280),
-    header('actions', 'Лиды', 360),
-    header('reach', 'Охват', 440),
-    header('impressions', 'Показы', 520),
-    header('cost_per_result', 'Цена за результат', 600),
-    header('spend', 'Сумма затрат', 680),
-    header('clicks', 'Клики', 760),
-    header('cpc', 'CPC', 840),
-    header('cost_per_action_type', 'Цена за завершенную регистрацию', 920),
-    header('cost_per_action_type', 'Цена за лид', 1000),
-    header('ctr', 'CTR', 1080),
-    header('campaign_group_name', 'Название кампании', 1160),
-    header('campaign_name', 'Название группы объявлений', 1240),
-    header('outbound_clicks', 'Исходящие клики', 1320),
-    header('outbound_clicks_ctr', 'CTR исходящих кликов', 1400),
-    header('actions', 'Просмотры целевой страницы', 1480),
-    header('cost_per_action_type', 'Цена за просмотр целевой страницы', 1560),
-    header('cpm', 'CPM', 1640),
-    header('frequency', 'Частота', 1720),
+    header('results', 'Результат', 280),
+    header('reach', 'Охват', 360),
+    header('impressions', 'Показы', 440),
+    header('cost_per_result', 'Цена за результат', 520),
+    header('spend', 'Сумма затрат', 600),
+    header('clicks', 'Клики', 680),
+    header('cpc', 'CPC', 760),
+    header('actions', 'Лиды', 840),
+    header('cost_per_action_type', 'Цена за лид', 920),
+    header('actions', 'Завершенные регистрации', 1000),
+    header('cost_per_action_type', 'Цена за завершенную регистрацию', 1080),
+    header('ctr', 'CTR', 1160),
+    header('campaign_group_name', 'Название кампании', 1240),
+    header('campaign_name', 'Название группы объявлений', 1320),
+    header('outbound_clicks', 'Исходящие клики', 1400),
+    header('outbound_clicks_ctr', 'CTR исходящих кликов', 1480),
+    header('actions', 'Просмотры целевой страницы', 1560),
+    header('cost_per_action_type', 'Цена за просмотр целевой страницы', 1640),
+    header('cpm', 'CPM', 1720),
+    header('frequency', 'Частота', 1800),
   ];
 }
 
@@ -46,8 +48,9 @@ test('buildParserColumnLayout учитывает реальный порядок
   const orderedFields = layout.map((column) => column.fieldName);
 
   assert.deepEqual(missingColumns, []);
-  assert.ok(orderedFields.indexOf('registrations') < orderedFields.indexOf('leads'));
-  assert.ok(orderedFields.indexOf('cost_per_registration') < orderedFields.indexOf('cost_per_lead'));
+  assert.ok(orderedFields.indexOf('deposits') < orderedFields.indexOf('cost_per_result'));
+  assert.ok(orderedFields.indexOf('leads') < orderedFields.indexOf('registrations'));
+  assert.ok(orderedFields.indexOf('cost_per_lead') < orderedFields.indexOf('cost_per_registration'));
 });
 
 // Сценарий: если обязательную колонку переименовали, валидация должна явно пометить её как отсутствующую.
@@ -64,12 +67,37 @@ test('collectMissingValidationColumns находит переименованн�
   assert.ok(!missingColumns.includes('Лиды'));
 });
 
+// Сценарий: диагностические и ранние traffic-колонки можно скрыть без поломки обязательного парсинга.
+test('buildParserColumnLayout не требует необязательные traffic-колонки', () => {
+  const headers = buildFullHeaderSet().filter((item) => ![
+    'outbound_clicks',
+    'outbound_clicks_ctr',
+    'cpm',
+    'frequency',
+  ].includes(item.surfaceKey));
+
+  const { layout, missingColumns } = buildParserColumnLayout(headers);
+  const fields = layout.map((column) => column.fieldName);
+
+  assert.deepEqual(missingColumns, []);
+  assert.ok(fields.includes('deposits'));
+  assert.ok(!fields.includes('outbound_clicks'));
+});
+
+// Сценарий: колонка результата обязательна, потому что в текущем Ads Manager она означает депозиты.
+test('collectMissingValidationColumns требует колонку результата для депозитов', () => {
+  const headers = buildFullHeaderSet().filter((item) => item.surfaceKey !== 'results');
+  const missingColumns = collectMissingValidationColumns(headers);
+
+  assert.ok(missingColumns.includes('Результат'));
+});
+
 // Сценарий: дубли header-нод не должны ломать подсчёт заголовков и смещение ячеек.
 test('normalizeVisibleHeaders удаляет дублирующиеся заголовки', () => {
   const headers = [
     ...buildFullHeaderSet(),
-    header('spend', 'Сумма затрат', 680.4),
-    header('spend', 'Сумма затрат', 681.1),
+    header('spend', 'Сумма затрат', 600.4),
+    header('spend', 'Сумма затрат', 601.1),
   ];
 
   const normalized = normalizeVisibleHeaders(headers);
@@ -105,4 +133,17 @@ test('normalizeVisibleHeaders отбрасывает пустой дубль sur
       { surfaceKey: 'reach', text: 'охват' },
     ],
   );
+});
+
+// Сценарий: пресет автоширины должен повторять текущую ручную раскладку Ads Manager один в один.
+test('buildAdsTableColumnWidthTargets возвращает сохранённые ширины Ads Manager', () => {
+  const widths = Object.fromEntries(
+    buildAdsTableColumnWidthTargets().map((target) => [target.key, target.widthPx]),
+  );
+
+  assert.equal(widths.toggle, 40);
+  assert.equal(widths.name, 194);
+  assert.equal(widths.deposits, 137);
+  assert.equal(widths.cost_per_registration, 100);
+  assert.equal(widths.frequency, 40);
 });

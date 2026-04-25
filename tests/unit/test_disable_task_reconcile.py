@@ -14,7 +14,7 @@ from core.disable_tasks import (
     is_delivery_disabled,
     reconcile_disable_tasks,
 )
-from core.domain import AlertState, DisableTaskStatus
+from core.domain import AlertStage, AlertState, DisableTaskStatus
 
 
 @dataclass
@@ -31,6 +31,7 @@ class FakeTask:
     completed_at: datetime | None = None
     next_retry_at: datetime | None = None
     last_error: str | None = None
+    requested_by_username: str | None = None
 
 
 @dataclass
@@ -40,6 +41,8 @@ class FakeSnapshot:
     fb_ad_id: str = "ad-001"
     delivery_status: str = "ACTIVE"
     alert_state: AlertState = AlertState.CLAIMED
+    current_stage: AlertStage | None = AlertStage.STOP
+    open_state_token: str | None = "incident-token"
 
 
 def _result(rows):
@@ -152,6 +155,41 @@ async def test_reconcile_repairs_off_snapshot_with_succeeded_task():
     assert summary["repaired"] == ["ad-001"]
     assert snapshot.alert_state == AlertState.DISABLED
     session.flush.assert_awaited_once()
+
+
+# Проверяем, что авто-отключение снимается с очереди, если свежий снэпшот уже не STOP.
+@pytest.mark.asyncio
+async def test_reconcile_cancels_auto_disable_when_snapshot_downgrades_to_warning():
+    now = datetime.now(UTC)
+    task = FakeTask(
+        status=DisableTaskStatus.RETRYING,
+        requested_by_username="bot_auto_stop",
+    )
+    snapshot = FakeSnapshot(
+        delivery_status="ACTIVE",
+        alert_state=AlertState.CLAIMED,
+        current_stage=AlertStage.WARNING,
+    )
+    session = AsyncMock()
+    session.scalar = AsyncMock(return_value=None)
+    session.execute = AsyncMock(
+        side_effect=[
+            _result([(task, snapshot, "ad-001")]),
+            _result([]),
+            _result([]),
+            _result([]),
+        ]
+    )
+
+    summary = await reconcile_disable_tasks(session, now=now)
+
+    assert summary["cancelled"] == ["ad-001"]
+    assert task.status == DisableTaskStatus.CANCELLED
+    assert task.completed_at == now
+    assert task.next_retry_at is None
+    assert "больше не находится в STOP" in (task.last_error or "")
+    assert snapshot.alert_state == AlertState.WARNING_SENT
+    assert snapshot.open_state_token == "incident-token"
 
 
 # Проверяем, что зависшая RUNNING-задача возвращается в RETRYING
@@ -271,7 +309,7 @@ async def test_reconcile_incidents_creates_auto_task_after_failed():
         side_effect=[
             now,  # func.max(AdSnapshot.last_observed_at)
             0,  # active_count (нет активных задач)
-            0,  # recent_succeeded (нет недавних успешных)
+            None,  # latest_succeeded (нет успешных попыток)
             0,  # auto_attempts (ни одной auto-попытки ещё)
             None,  # latest_task
         ]
@@ -327,7 +365,7 @@ async def test_reconcile_incidents_skips_cancelled_incident():
         side_effect=[
             now,
             0,
-            0,
+            None,
             1,
             latest_task,
         ]

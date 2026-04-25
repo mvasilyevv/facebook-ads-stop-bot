@@ -59,6 +59,16 @@ def test_click_stage_returns_cpc_stop():
     assert result.matched_rule_codes == ["cpc_stop"]
 
 
+# Проверяем что точное попадание CPC в стоп-порог уже отключает объявление.
+def test_click_stage_returns_cpc_stop_on_exact_threshold():
+    row = _make_row(spend=Decimal("0.35"), clicks=4, cpc=Decimal("0.09"))
+
+    result = evaluate_stop_rules(row, _make_ctx(stop_percent_of_base=Decimal("90")))
+
+    assert result.stage == AlertStage.STOP
+    assert result.matched_rule_codes == ["cpc_stop"]
+
+
 # Проверяем что cent-level warning по CPC остаётся рабочим после округления до цента.
 def test_click_stage_returns_cpc_warning_after_cent_rounding():
     row = _make_row(
@@ -356,8 +366,8 @@ def test_deposit_without_registration_stays_on_pre_registration_ladder():
     assert result.matched_rule_codes == ["cpl_stop"]
 
 
-# Проверяем что OFF-объявление с лидами и без рег/депов может получить OK-рекомендацию после выхода из стопа.
-def test_enable_recommendation_returns_ok_for_lead_recovery_without_registration():
+# Проверяем что OFF-объявление с лидами без рег/депов не получает OK-рекомендацию.
+def test_enable_recommendation_blocks_lead_recovery_without_registration():
     row = _make_row(
         delivery_status="OFF",
         spend=Decimal("0.10"),
@@ -378,11 +388,11 @@ def test_enable_recommendation_returns_ok_for_lead_recovery_without_registration
     )
 
     assert stop_evaluation.stage is None
-    assert result == EnableRecommendationLevel.OK
+    assert result is None
 
 
-# Проверяем что OFF-объявление только с кликами тоже может получить OK после выхода из stop/warning.
-def test_enable_recommendation_returns_ok_for_click_only_recovery():
+# Проверяем что OFF-объявление только с кликами не получает OK после выхода из stop/warning.
+def test_enable_recommendation_blocks_click_only_recovery():
     row = _make_row(
         delivery_status="OFF",
         spend=Decimal("0.08"),
@@ -396,7 +406,7 @@ def test_enable_recommendation_returns_ok_for_click_only_recovery():
 
     result = determine_enable_recommendation_level(row, ctx)
 
-    assert result == EnableRecommendationLevel.OK
+    assert result is None
 
 
 # Проверяем что partial metrics на стадии регистрации блокируют recommendation даже без stop-сигнала.

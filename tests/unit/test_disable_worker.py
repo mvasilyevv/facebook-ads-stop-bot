@@ -100,10 +100,11 @@ async def test_close_disable_runtime_disconnects_without_stopping_profile():
     client.close.assert_awaited_once()
 
 
-# Проверяем, что batch не запускает долгую проверку, если тумблер уже OFF.
+# Проверяем, что batch не считает задачу успешной, пока повторный scan не подтвердил OFF.
 @pytest.mark.asyncio
-async def test_execute_disable_batch_finishes_already_off_without_verify(monkeypatch):
+async def test_execute_disable_batch_retries_already_off_toggle_without_delivery_off(monkeypatch):
     import run_disable_worker
+    from clients.python_grpc.client import ScanResult
 
     client = AsyncMock()
     client.reset_scroll = AsyncMock()
@@ -117,11 +118,22 @@ async def test_execute_disable_batch_finishes_already_off_without_verify(monkeyp
         }
     )
     client.wait_for_toggle_confirmation = AsyncMock(
-        side_effect=AssertionError("Повторная проверка не должна запускаться")
+        return_value={"success": True, "final_aria_checked": "false"}
     )
-    client.run_scan_cycle = MagicMock(
-        side_effect=AssertionError("Повторный scan не должен запускаться")
-    )
+
+    async def fake_scan_cycle(**_kwargs):
+        yield ScanResult(
+            rows=[
+                SimpleNamespace(
+                    fb_ad_id="120246605325150334",
+                    delivery_status="ACTIVE",
+                )
+            ],
+            total_passes=1,
+            duration_seconds=0.1,
+        )
+
+    client.run_scan_cycle = fake_scan_cycle
     mark_snapshot_disabled = AsyncMock()
 
     async def _no_sleep(_seconds: float) -> None:
@@ -141,9 +153,77 @@ async def test_execute_disable_batch_finishes_already_off_without_verify(monkeyp
 
     result = await run_disable_worker._execute_disable_batch(client, [task])
 
-    assert result == {"task-001": (True, "Объявление уже отключено (aria-checked=false)")}
+    assert result == {
+        "task-001": (
+            False,
+            "Повторный скан ещё видит delivery_status=ACTIVE",
+        )
+    }
     client.wait_for_toggle_confirmation.assert_not_awaited()
     mark_snapshot_disabled.assert_not_awaited()
+
+
+# Проверяем, что batch подтверждает успех только по delivery_status из повторного scan без лишнего чтения toggle.
+@pytest.mark.asyncio
+async def test_execute_disable_batch_confirms_by_delivery_status_without_extra_toggle_poll(
+    monkeypatch,
+):
+    import run_disable_worker
+    from clients.python_grpc.client import ScanResult
+
+    client = AsyncMock()
+    client.reset_scroll = AsyncMock()
+    client.get_visible_row_ids = AsyncMock(return_value=["120246605325150334"])
+    client.find_toggle_cell = AsyncMock(
+        return_value={
+            "found": True,
+            "cell_x": 113,
+            "cell_y": 353,
+            "aria_checked": "false",
+        }
+    )
+    client.wait_for_toggle_confirmation = AsyncMock()
+
+    async def fake_scan_cycle(**_kwargs):
+        yield ScanResult(
+            rows=[
+                SimpleNamespace(
+                    fb_ad_id="120246605325150334",
+                    delivery_status="OFF",
+                )
+            ],
+            total_passes=1,
+            duration_seconds=0.1,
+        )
+
+    client.run_scan_cycle = fake_scan_cycle
+    mark_snapshot_disabled = AsyncMock()
+
+    async def _no_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(run_disable_worker.asyncio, "sleep", _no_sleep)
+    monkeypatch.setattr(
+        run_disable_worker,
+        "_mark_snapshot_disabled_from_verification",
+        mark_snapshot_disabled,
+    )
+
+    task = SimpleNamespace(
+        id="task-001",
+        fb_ad=SimpleNamespace(fb_ad_id="120246605325150334"),
+    )
+
+    result = await run_disable_worker._execute_disable_batch(client, [task])
+
+    assert result == {
+        "task-001": (
+            True,
+            "Объявление отключено: повторный скан подтвердил delivery_status=OFF",
+        )
+    }
+    client.wait_for_toggle_confirmation.assert_not_awaited()
+    mark_snapshot_disabled.assert_awaited_once_with("120246605325150334", "OFF")
 
 
 # Проверяем, что ошибка execute_disable не теряет задачу — mark_retrying вызывается, задача остаётся в очереди для reconcile

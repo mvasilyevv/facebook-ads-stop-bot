@@ -7,8 +7,18 @@ export interface ColumnValidationResult {
     foundColumns: string[];
     errorMessage: string;
 }
+export interface ColumnWidthApplyResult {
+    applied: boolean;
+    matchedColumns: string[];
+    missingColumns: string[];
+    errorMessage: string;
+    adjustedCells: number;
+    totalWidthPx: number;
+}
 /** Проверить наличие всех необходимых колонок в таблице Ads Manager. */
 export declare function validateAdsTableColumns(page: Page): Promise<ColumnValidationResult>;
+/** Применить ручной пресет ширины колонок Ads Manager без запуска сканирования. */
+export declare function applyAdsTableColumnWidthPreset(page: Page): Promise<ColumnWidthApplyResult>;
 export declare function getAdsTableScrollAnchor(page: Page): Promise<[number, number] | null>;
 export declare function resetAdsTableScroll(page: Page): Promise<number>;
 export declare function getAdsTableScrollMetrics(page: Page): Promise<ScrollMetrics>;

@@ -1055,6 +1055,71 @@ export namespace ValidateColumnsResponse {
     }
 }
 
+export class ApplyColumnWidthsRequest extends jspb.Message { 
+    getSessionId(): string;
+    setSessionId(value: string): ApplyColumnWidthsRequest;
+
+    hasPageId(): boolean;
+    clearPageId(): void;
+    getPageId(): string | undefined;
+    setPageId(value: string): ApplyColumnWidthsRequest;
+
+    serializeBinary(): Uint8Array;
+    toObject(includeInstance?: boolean): ApplyColumnWidthsRequest.AsObject;
+    static toObject(includeInstance: boolean, msg: ApplyColumnWidthsRequest): ApplyColumnWidthsRequest.AsObject;
+    static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
+    static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
+    static serializeBinaryToWriter(message: ApplyColumnWidthsRequest, writer: jspb.BinaryWriter): void;
+    static deserializeBinary(bytes: Uint8Array): ApplyColumnWidthsRequest;
+    static deserializeBinaryFromReader(message: ApplyColumnWidthsRequest, reader: jspb.BinaryReader): ApplyColumnWidthsRequest;
+}
+
+export namespace ApplyColumnWidthsRequest {
+    export type AsObject = {
+        sessionId: string,
+        pageId?: string,
+    }
+}
+
+export class ApplyColumnWidthsResponse extends jspb.Message { 
+    getApplied(): boolean;
+    setApplied(value: boolean): ApplyColumnWidthsResponse;
+    clearMatchedColumnsList(): void;
+    getMatchedColumnsList(): Array<string>;
+    setMatchedColumnsList(value: Array<string>): ApplyColumnWidthsResponse;
+    addMatchedColumns(value: string, index?: number): string;
+    clearMissingColumnsList(): void;
+    getMissingColumnsList(): Array<string>;
+    setMissingColumnsList(value: Array<string>): ApplyColumnWidthsResponse;
+    addMissingColumns(value: string, index?: number): string;
+    getErrorMessage(): string;
+    setErrorMessage(value: string): ApplyColumnWidthsResponse;
+    getAdjustedCells(): number;
+    setAdjustedCells(value: number): ApplyColumnWidthsResponse;
+    getTotalWidthPx(): number;
+    setTotalWidthPx(value: number): ApplyColumnWidthsResponse;
+
+    serializeBinary(): Uint8Array;
+    toObject(includeInstance?: boolean): ApplyColumnWidthsResponse.AsObject;
+    static toObject(includeInstance: boolean, msg: ApplyColumnWidthsResponse): ApplyColumnWidthsResponse.AsObject;
+    static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
+    static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
+    static serializeBinaryToWriter(message: ApplyColumnWidthsResponse, writer: jspb.BinaryWriter): void;
+    static deserializeBinary(bytes: Uint8Array): ApplyColumnWidthsResponse;
+    static deserializeBinaryFromReader(message: ApplyColumnWidthsResponse, reader: jspb.BinaryReader): ApplyColumnWidthsResponse;
+}
+
+export namespace ApplyColumnWidthsResponse {
+    export type AsObject = {
+        applied: boolean,
+        matchedColumnsList: Array<string>,
+        missingColumnsList: Array<string>,
+        errorMessage: string,
+        adjustedCells: number,
+        totalWidthPx: number,
+    }
+}
+
 export class ScannedAdRow extends jspb.Message { 
     getFbAdId(): string;
     setFbAdId(value: string): ScannedAdRow;

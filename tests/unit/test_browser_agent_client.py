@@ -37,7 +37,7 @@ async def test_run_scan_cycle_raises_on_error_event():
 async def test_navigate_uses_browser_session_stub():
     called_requests = []
 
-    async def browser_navigate(request):
+    async def browser_navigate(request, **_kwargs):
         called_requests.append(request)
 
     async def scanner_navigate(_request):

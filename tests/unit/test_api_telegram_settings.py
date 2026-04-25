@@ -35,6 +35,18 @@ def test_vision_settings_route_supports_get_and_put():
     assert "PUT" in methods
 
 
+# Проверяем, что endpoint мягкой проверки CDP зарегистрирован для bootstrap из run.sh.
+def test_vision_ensure_cdp_route_is_registered():
+    from apps.api.main import app
+
+    methods = set()
+    for route in app.routes:
+        if getattr(route, "path", "") == "/api/vision/ensure-cdp":
+            methods.update(getattr(route, "methods", set()))
+
+    assert "POST" in methods
+
+
 # Проверяем, что GET настроек Telegram отдаёт forum-group поля и activation command.
 @pytest.mark.asyncio
 async def test_get_telegram_settings_returns_forum_group_fields(mock_db):

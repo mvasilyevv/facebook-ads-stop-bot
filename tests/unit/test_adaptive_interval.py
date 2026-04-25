@@ -4,17 +4,28 @@
 from __future__ import annotations
 
 from apps.observer_worker.main import (
+    _ADAPTIVE_INTERVAL_ACTIVE,
     _ADAPTIVE_INTERVAL_CALM,
     _ADAPTIVE_INTERVAL_CRITICAL,
+    _ADAPTIVE_INTERVAL_ELEVATED,
     _ADAPTIVE_INTERVAL_IDLE,
     compute_adaptive_interval,
 )
 from core.domain import AlertStage
 
 
-def _snap(*, stage: AlertStage | None = None, offer_code: str | None = None) -> dict:
+def _snap(
+    *,
+    stage: AlertStage | None = None,
+    offer_code: str | None = None,
+    delivery_status: str = "ACTIVE",
+) -> dict:
     """Создаёт минимальный snapshot для тестов."""
-    return {"current_stage": stage, "resolved_offer_code": offer_code}
+    return {
+        "current_stage": stage,
+        "resolved_offer_code": offer_code,
+        "delivery_status": delivery_status,
+    }
 
 
 # Тест: немедленный ре-скан при наличии STOP-алертов
@@ -28,17 +39,17 @@ def test_immediate_rescan_on_stop_alerts():
     assert level == "IMMEDIATE"
 
 
-# Тест: CRITICAL при WARNING-стадии в батче
-def test_critical_on_warning_stage():
-    """Если есть объявление с WARNING — интервал минимальный (CRITICAL)."""
+# Тест: ELEVATED при WARNING-стадии в батче
+def test_elevated_on_warning_stage():
+    """Если есть объявление с WARNING — интервал повышенной частоты."""
     interval, level = compute_adaptive_interval(
         [
             _snap(stage=AlertStage.WARNING, offer_code="DRC"),
             _snap(stage=None, offer_code="ABC"),
         ]
     )
-    assert interval == _ADAPTIVE_INTERVAL_CRITICAL
-    assert level == "CRITICAL"
+    assert interval == _ADAPTIVE_INTERVAL_ELEVATED
+    assert level == "ELEVATED"
 
 
 # Тест: CRITICAL при STOP-стадии в батче (без stop_alerts)
@@ -53,13 +64,26 @@ def test_critical_on_stop_stage_in_batch():
     assert level == "CRITICAL"
 
 
-# Тест: CALM при активных объявлениях без сигналов
-def test_calm_with_monitored_ads():
-    """Объявления с офферами, но без сигналов — CALM."""
+# Тест: ACTIVE при активных объявлениях без сигналов
+def test_active_with_monitored_ads():
+    """Объявления с офферами, но без сигналов — ACTIVE."""
     interval, level = compute_adaptive_interval(
         [
             _snap(offer_code="DRC"),
             _snap(offer_code="ABC"),
+        ]
+    )
+    assert interval == _ADAPTIVE_INTERVAL_ACTIVE
+    assert level == "ACTIVE"
+
+
+# Тест: CALM при выключенных объявлениях с офферами
+def test_calm_with_disabled_monitored_ads():
+    """Выключенные объявления с офферами оставляют спокойный режим."""
+    interval, level = compute_adaptive_interval(
+        [
+            _snap(offer_code="DRC", delivery_status="OFF"),
+            _snap(offer_code="ABC", delivery_status="OFF"),
         ]
     )
     assert interval == _ADAPTIVE_INTERVAL_CALM
@@ -90,6 +114,8 @@ def test_idle_when_no_offers():
 # Тест: конкретные значения интервалов
 def test_interval_values():
     """Проверяем конкретные значения интервалов из спецификации."""
-    assert _ADAPTIVE_INTERVAL_CRITICAL == 15
-    assert _ADAPTIVE_INTERVAL_CALM == 25
+    assert _ADAPTIVE_INTERVAL_CRITICAL == 10
+    assert _ADAPTIVE_INTERVAL_ELEVATED == 13
+    assert _ADAPTIVE_INTERVAL_ACTIVE == 15
+    assert _ADAPTIVE_INTERVAL_CALM == 30
     assert _ADAPTIVE_INTERVAL_IDLE == 55

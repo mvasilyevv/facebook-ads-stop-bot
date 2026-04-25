@@ -8,7 +8,7 @@ import uuid as _uuid
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -124,6 +124,32 @@ _TRACKED_METRICS = (
     "outbound_clicks",
     "landing_page_views",
 )
+_CUMULATIVE_METRICS = (
+    "spend",
+    "clicks",
+    "leads",
+    "registrations",
+    "deposits",
+    "outbound_clicks",
+    "landing_page_views",
+)
+
+
+def _has_cumulative_metric_regression(
+    old_snap: AdSnapshot | None,
+    new_data: dict,
+) -> bool:
+    """Проверяет, что накопительные метрики не откатились назад внутри дня."""
+    if old_snap is None:
+        return False
+    for key in _CUMULATIVE_METRICS:
+        old_val = getattr(old_snap, key, None)
+        new_val = new_data.get(key)
+        if old_val is None or new_val is None:
+            continue
+        if Decimal(str(new_val)) < Decimal(str(old_val)):
+            return True
+    return False
 
 
 async def _upsert_fb_campaigns(
@@ -380,6 +406,12 @@ async def _save_metric_deltas(
         if ad_id is None:
             continue
         old_snap = current_snaps.get(fb_ad_id)
+        if _has_cumulative_metric_regression(old_snap, item):
+            logger.warning(
+                "Observer: пропускаю запись истории для %s — накопительные метрики откатились назад",
+                fb_ad_id,
+            )
+            continue
         if not _metrics_changed(old_snap, item):
             continue
         history_rows.append(
@@ -444,6 +476,8 @@ def _prepare_snapshot_upsert_data(
 async def _upsert_ad_snapshots(
     session: AsyncSession,
     snapshot_rows: list[dict],
+    *,
+    allow_metric_regression: bool = False,
 ) -> None:
     """Выполняет upsert ad_snapshots без нормализованных полей."""
     if not snapshot_rows:
@@ -482,10 +516,23 @@ async def _upsert_ad_snapshots(
         "last_observed_at": stmt.excluded.last_observed_at,
     }
 
-    upsert_stmt = stmt.on_conflict_do_update(
-        index_elements=["fb_ad_id"],
-        set_=update_cols,
-    )
+    upsert_kwargs = {
+        "index_elements": ["fb_ad_id"],
+        "set_": update_cols,
+    }
+    if not allow_metric_regression:
+        upsert_kwargs["where"] = and_(
+            *(
+                or_(
+                    getattr(AdSnapshot, metric).is_(None),
+                    getattr(stmt.excluded, metric).is_(None),
+                    getattr(stmt.excluded, metric) >= getattr(AdSnapshot, metric),
+                )
+                for metric in _CUMULATIVE_METRICS
+            )
+        )
+
+    upsert_stmt = stmt.on_conflict_do_update(**upsert_kwargs)
     await session.execute(upsert_stmt)
 
 
@@ -523,6 +570,10 @@ async def batch_save_snapshots(
 
         # 5. Upsert ad_snapshots — только метрики и состояние алертов
         snapshot_rows = _prepare_snapshot_upsert_data(snapshot_data, ad_id_map)
-        await _upsert_ad_snapshots(session, snapshot_rows)
+        await _upsert_ad_snapshots(
+            session,
+            snapshot_rows,
+            allow_metric_regression=is_cabinet_day_reset_scan(snapshot_data),
+        )
 
         await session.commit()

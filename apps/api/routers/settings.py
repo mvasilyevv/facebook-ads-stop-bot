@@ -10,7 +10,7 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,6 +19,8 @@ from apps.api.schemas import (
     AutoEnableToggleSchema,
     InviteCodeResponse,
     ObserverSettingsSchema,
+    ObserverThresholdRecommendationsResponseSchema,
+    ObserverThresholdRecommendationStepSchema,
     ScanningToggleSchema,
     TelegramForumCutoverResponseSchema,
     TelegramPrimaryRecipientSchema,
@@ -31,7 +33,9 @@ from core.domain import TelegramDeliveryMode, TelegramUserRole
 from core.models import (
     TelegramInvite,
     TelegramSettings,
+    VisionSettings,
 )
+from core.observer.threshold_recommendations import collect_threshold_recommendations
 from core.observer.thresholds import (
     apply_observer_threshold_values,
     derive_legacy_stop_percent_of_base,
@@ -61,6 +65,57 @@ from core.telegram.service import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["settings"])
+
+
+async def _get_or_start_browser_agent_session_id(
+    browser_stub, db: AsyncSession, *, start_if_missing: bool
+) -> str:
+    """Вернуть активную browser-agent сессию и стартовать её только для явной команды."""
+    import grpc
+
+    from clients.python_grpc.v1 import browser_session_pb2
+
+    try:
+        session_resp = await browser_stub.GetSessionInfo(
+            browser_session_pb2.GetSessionInfoRequest(session_id="")
+        )
+        if session_resp.session_id:
+            return session_resp.session_id
+    except grpc.RpcError as exc:
+        if exc.code() != grpc.StatusCode.NOT_FOUND:
+            raise
+
+    if not start_if_missing:
+        raise HTTPException(
+            status_code=409,
+            detail="Активная browser-agent сессия не найдена",
+        )
+
+    row = await db.scalar(select(VisionSettings).where(VisionSettings.singleton_key == "default"))
+    settings = get_settings()
+    x_token = decrypt(row.x_token_encrypted or "") if row and row.x_token_encrypted else ""
+    api_url = (row.api_url if row else "") or settings.vision_api_url
+    profile_id = (row.profile_id if row else "") or settings.vision_profile_id
+
+    if not x_token:
+        x_token = settings.vision_x_token
+
+    if not x_token or not profile_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Vision X-Token или профиль не настроены",
+        )
+
+    start_resp = await browser_stub.StartBrowser(
+        browser_session_pb2.StartBrowserRequest(
+            vision_x_token=x_token,
+            vision_api_url=api_url,
+            vision_profile_id=profile_id,
+            viewport_width=1280,
+            viewport_height=800,
+        )
+    )
+    return start_resp.session_id
 
 
 @router.get("/settings/observer", response_model=ObserverSettingsSchema)
@@ -101,6 +156,48 @@ async def update_observer_settings(
         **extract_observer_threshold_values(row),
         is_scanning_enabled=row.is_scanning_enabled,
         auto_enable_recommendations=bool(row.auto_enable_recommendations),
+    )
+
+
+@router.get(
+    "/settings/observer/threshold-recommendations",
+    response_model=ObserverThresholdRecommendationsResponseSchema,
+)
+async def get_observer_threshold_recommendations(
+    days: int = Query(14, ge=3, le=60),
+    min_samples: int = Query(10, ge=3, le=100),
+    db: AsyncSession = Depends(get_db),
+):
+    """Рассчитать рекомендации порогов observer по истории метрик."""
+    result = await collect_threshold_recommendations(
+        db,
+        days=days,
+        min_samples=min_samples,
+    )
+    return ObserverThresholdRecommendationsResponseSchema(
+        generated_at=result.generated_at.isoformat(),
+        since=result.since.isoformat(),
+        days=result.days,
+        min_samples=result.min_samples,
+        steps=[
+            ObserverThresholdRecommendationStepSchema(
+                step_id=step.step_id,
+                code=step.code,
+                title=step.title,
+                sample_count=step.sample_count,
+                confidence=step.confidence,
+                current_stop_percent=step.current_stop_percent,
+                current_warning_percent=step.current_warning_percent,
+                recommended_stop_percent=step.recommended_stop_percent,
+                recommended_warning_percent=step.recommended_warning_percent,
+                p50_ratio=step.p50_ratio,
+                p80_ratio=step.p80_ratio,
+                p90_ratio=step.p90_ratio,
+                reason=step.reason,
+                can_apply=step.can_apply,
+            )
+            for step in result.steps
+        ],
     )
 
 
@@ -333,12 +430,11 @@ async def restart_observer():
 
 @router.get("/browser/validate-columns", include_in_schema=False)
 @router.get("/settings/browser/validate-columns")
-async def validate_browser_columns():
+async def validate_browser_columns(db: AsyncSession = Depends(get_db)):
     """Проверить наличие всех необходимых колонок в таблице Ads Manager через gRPC."""
     import grpc
 
     from clients.python_grpc.v1 import (
-        browser_session_pb2,
         browser_session_pb2_grpc,
         scanner_pb2,
         scanner_pb2_grpc,
@@ -348,12 +444,9 @@ async def validate_browser_columns():
     try:
         browser_stub = browser_session_pb2_grpc.BrowserSessionServiceStub(channel)
         scanner_stub = scanner_pb2_grpc.ScannerServiceStub(channel)
-
-        # Получаем активную сессию
-        sessions_resp = await browser_stub.GetSessionInfo(
-            browser_session_pb2.GetSessionInfoRequest(session_id="")
+        session_id = await _get_or_start_browser_agent_session_id(
+            browser_stub, db, start_if_missing=False
         )
-        session_id = sessions_resp.session_id
 
         result = await scanner_stub.ValidateColumns(
             scanner_pb2.ValidateColumnsRequest(session_id=session_id)
@@ -363,6 +456,45 @@ async def validate_browser_columns():
             "missing_columns": list(result.missing_columns),
             "found_columns": list(result.found_columns),
             "error_message": result.error_message,
+        }
+    except grpc.RpcError as e:
+        raise HTTPException(status_code=502, detail=f"gRPC ошибка: {e.details()}") from e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+    finally:
+        await channel.close()
+
+
+@router.post("/browser/apply-column-widths", include_in_schema=False)
+@router.post("/settings/browser/apply-column-widths")
+async def apply_browser_column_widths(db: AsyncSession = Depends(get_db)):
+    """Применить сохранённую ручную ширину колонок Ads Manager через gRPC."""
+    import grpc
+
+    from clients.python_grpc.v1 import (
+        browser_session_pb2_grpc,
+        scanner_pb2,
+        scanner_pb2_grpc,
+    )
+
+    channel = grpc.aio.insecure_channel("localhost:50051")
+    try:
+        browser_stub = browser_session_pb2_grpc.BrowserSessionServiceStub(channel)
+        scanner_stub = scanner_pb2_grpc.ScannerServiceStub(channel)
+        session_id = await _get_or_start_browser_agent_session_id(
+            browser_stub, db, start_if_missing=True
+        )
+
+        result = await scanner_stub.ApplyColumnWidths(
+            scanner_pb2.ApplyColumnWidthsRequest(session_id=session_id)
+        )
+        return {
+            "applied": result.applied,
+            "matched_columns": list(result.matched_columns),
+            "missing_columns": list(result.missing_columns),
+            "error_message": result.error_message,
+            "adjusted_cells": result.adjusted_cells,
+            "total_width_px": result.total_width_px,
         }
     except grpc.RpcError as e:
         raise HTTPException(status_code=502, detail=f"gRPC ошибка: {e.details()}") from e

@@ -3,6 +3,8 @@ type ToggleLikeHandle = {
   $(selector: string): Promise<ToggleLikeHandle | null>;
 };
 
+export const TOGGLE_SELECTOR = '[role="switch"]';
+
 export async function resolveToggleHandleFromCell<T extends ToggleLikeHandle>(
   cell: T | null,
 ): Promise<T | null> {
@@ -14,5 +16,5 @@ export async function resolveToggleHandleFromCell<T extends ToggleLikeHandle>(
     return cell;
   }
 
-  return cell.$('[role="switch"]') as Promise<T | null>;
+  return cell.$(TOGGLE_SELECTOR) as Promise<T | null>;
 }

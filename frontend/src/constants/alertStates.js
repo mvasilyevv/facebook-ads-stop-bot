@@ -29,8 +29,10 @@ export const TASK_STATUS_LABELS = {
   PENDING: "Ожидает",
   RUNNING: "Выполняется",
   RETRYING: "Повтор",
+  SUCCEEDED: "Выполнено",
   SUCCESS: "Выполнено",
   FAILED: "Ошибка",
+  CANCELLED: "Отменено",
 };
 
 export const RECOMMENDATION_LEVEL_LABELS = {

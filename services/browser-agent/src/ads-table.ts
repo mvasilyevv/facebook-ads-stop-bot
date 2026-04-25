@@ -1,9 +1,13 @@
 import type { Page, ElementHandle } from 'playwright';
 import { humanWheelScroll } from './humanizer.js';
+import { TOGGLE_SELECTOR } from './toggle-utils.js';
 import type { ScrollMetrics } from './types.js';
 import {
+  buildAdsTableColumnWidthTargets,
   collectFoundValidationColumns,
   collectMissingValidationColumns,
+  type ColumnWidthTarget,
+  type HeaderSnapshot,
 } from './ads-columns.js';
 
 export { REQUIRED_COLUMNS } from './ads-columns.js';
@@ -15,24 +19,37 @@ export interface ColumnValidationResult {
   errorMessage: string;
 }
 
+export interface ColumnWidthApplyResult {
+  applied: boolean;
+  matchedColumns: string[];
+  missingColumns: string[];
+  errorMessage: string;
+  adjustedCells: number;
+  totalWidthPx: number;
+}
+
+async function collectVisibleHeaderSnapshots(page: Page): Promise<HeaderSnapshot[]> {
+  const headers = await page.evaluate(() => {
+    return Array.from(document.querySelectorAll('[data-surface*="table_column_header:"]'))
+      .map((el) => {
+        const surface = el.getAttribute('data-surface') || '';
+        const match = surface.match(/table_column_header:([^/]+)/);
+        const rect = el.getBoundingClientRect();
+        return {
+          surfaceKey: match ? match[1] : '',
+          text: (el.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase(),
+          left: rect.left,
+        };
+      })
+      .filter((header) => header.surfaceKey || header.text);
+  });
+  return Array.isArray(headers) ? headers : [];
+}
+
 /** Проверить наличие всех необходимых колонок в таблице Ads Manager. */
 export async function validateAdsTableColumns(page: Page): Promise<ColumnValidationResult> {
   try {
-    const headers = await page.evaluate(() => {
-      return Array.from(document.querySelectorAll('[data-surface*="table_column_header:"]'))
-        .map((el) => {
-          const surface = el.getAttribute('data-surface') || '';
-          const match = surface.match(/table_column_header:([^/]+)/);
-          const rect = el.getBoundingClientRect();
-          return {
-            surfaceKey: match ? match[1] : '',
-            text: (el.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase(),
-            left: rect.left,
-          };
-        })
-        .filter((header) => header.surfaceKey || header.text);
-    });
-    const safeHeaders = Array.isArray(headers) ? headers : [];
+    const safeHeaders = await collectVisibleHeaderSnapshots(page);
     const missingColumns = collectMissingValidationColumns(safeHeaders);
     const foundColumns = collectFoundValidationColumns(safeHeaders);
 
@@ -50,6 +67,216 @@ export async function validateAdsTableColumns(page: Page): Promise<ColumnValidat
       missingColumns: [],
       foundColumns: [],
       errorMessage: `Ошибка валидации колонок: ${err.message}`,
+    };
+  }
+}
+
+/** Применить ручной пресет ширины колонок Ads Manager без запуска сканирования. */
+export async function applyAdsTableColumnWidthPreset(page: Page): Promise<ColumnWidthApplyResult> {
+  const targets = buildAdsTableColumnWidthTargets();
+
+  try {
+    const result = await page.evaluate((columnTargets: ColumnWidthTarget[]) => {
+      const SELECTION_COLUMN_WIDTH = 49;
+      const CUSTOMIZE_COLUMN_WIDTH = 32;
+      const PINNED_TARGET_COUNT = 2;
+
+      function normalizeText(value: string | null | undefined): string {
+        return String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+      }
+
+      function readSurfaceKey(el: Element): string {
+        const surface = el.getAttribute('data-surface') || '';
+        const match = surface.match(/table_column_header:([^/]+)/);
+        return match ? match[1] : '';
+      }
+
+      function targetMatches(target: ColumnWidthTarget, surfaceKey: string, text: string): boolean {
+        if (target.surfaceKey !== surfaceKey) return false;
+        if (!target.textNeedles?.length) return true;
+        const normalizedText = normalizeText(text);
+        return target.textNeedles.some((needle) => normalizedText.includes(normalizeText(needle)));
+      }
+
+      function findColumnCell(headerNode: Element): HTMLElement | null {
+        let node: Element | null = headerNode.parentElement;
+        while (node instanceof HTMLElement) {
+          const rect = node.getBoundingClientRect();
+          if (rect.width > 20 && rect.height > 20 && node.style.width) {
+            return node;
+          }
+          node = node.parentElement;
+        }
+        return null;
+      }
+
+      function px(value: number): string {
+        return `${Math.round(value)}px`;
+      }
+
+      function setWidth(node: HTMLElement, widthPx: number): void {
+        node.style.width = px(widthPx);
+        node.style.minWidth = px(widthPx);
+        node.style.maxWidth = px(widthPx);
+      }
+
+      function updateHeaderChain(headerNode: Element, widthPx: number, leftPx: number): number {
+        let changed = 0;
+        let node: Element | null = headerNode.parentElement;
+        while (node instanceof HTMLElement) {
+          const role = node.getAttribute('role') || '';
+          if (role === 'row') break;
+
+          const classList = node.classList;
+          const shouldSetWidth =
+            classList.contains('_4lg0')
+            || classList.contains('_3pzj')
+            || classList.contains('_1eyb')
+            || classList.contains('_1eyh')
+            || role === 'columnheader';
+
+          if (shouldSetWidth) {
+            setWidth(node, widthPx);
+            changed += 1;
+          }
+
+          if (classList.contains('_1eyh') || role === 'columnheader') {
+            node.style.left = px(leftPx);
+          }
+
+          node = node.parentElement;
+        }
+        return changed;
+      }
+
+      const headerNodes = Array.from(
+        document.querySelectorAll('[data-surface*="table_column_header:"]'),
+      );
+      const matchedHeaders = new Map<string, Element>();
+      const matchedColumns: string[] = [];
+      const missingColumns: string[] = [];
+
+      for (const target of columnTargets) {
+        const match = headerNodes.find((node) => (
+          targetMatches(target, readSurfaceKey(node), node.textContent || '')
+          && findColumnCell(node)
+        ));
+
+        if (match) {
+          matchedHeaders.set(target.key, match);
+          matchedColumns.push(target.title);
+        } else {
+          missingColumns.push(target.title);
+        }
+      }
+
+      const targetWidthSum = columnTargets.reduce((total, target) => total + target.widthPx, 0);
+      const totalWidthPx = SELECTION_COLUMN_WIDTH + targetWidthSum + CUSTOMIZE_COLUMN_WIDTH;
+
+      if (missingColumns.length > 0) {
+        return {
+          applied: false,
+          matchedColumns,
+          missingColumns,
+          errorMessage: `Не найдены колонки для автоширины: ${missingColumns.join(', ')}`,
+          adjustedCells: 0,
+          totalWidthPx,
+        };
+      }
+
+      let adjustedCells = 0;
+      const rowNodes = Array.from(new Set([
+        ...document.querySelectorAll('[role="row"]'),
+        ...document.querySelectorAll('._1gda._2djg'),
+      ]));
+
+      for (const rowNode of rowNodes) {
+        if (!(rowNode instanceof HTMLElement)) continue;
+        const cells = Array.from(rowNode.querySelectorAll('._4lg0'))
+          .filter((node): node is HTMLElement => node instanceof HTMLElement)
+          .sort((left, right) => {
+            const leftRect = left.getBoundingClientRect();
+            const rightRect = right.getBoundingClientRect();
+            return leftRect.left - rightRect.left || leftRect.top - rightRect.top;
+          });
+
+        if (cells.length < columnTargets.length + 1) continue;
+
+        const isBodyRow = rowNode.classList.contains('_1gda') && rowNode.classList.contains('_2djg');
+        setWidth(cells[0], SELECTION_COLUMN_WIDTH);
+        if (isBodyRow) cells[0].style.left = '0px';
+        adjustedCells += 1;
+
+        let pinnedLeft = SELECTION_COLUMN_WIDTH;
+        let scrollLeft = 0;
+        for (let index = 0; index < columnTargets.length; index++) {
+          const cell = cells[index + 1];
+          const target = columnTargets[index];
+          if (!cell) continue;
+
+          setWidth(cell, target.widthPx);
+          if (isBodyRow) {
+            const leftPx = index < PINNED_TARGET_COUNT ? pinnedLeft : scrollLeft;
+            cell.style.left = px(leftPx);
+          }
+
+          if (index < PINNED_TARGET_COUNT) {
+            pinnedLeft += target.widthPx;
+          } else {
+            scrollLeft += target.widthPx;
+          }
+          adjustedCells += 1;
+        }
+
+        const customizeCell = cells[columnTargets.length + 1];
+        if (customizeCell) {
+          setWidth(customizeCell, CUSTOMIZE_COLUMN_WIDTH);
+          if (isBodyRow) customizeCell.style.left = px(scrollLeft);
+          adjustedCells += 1;
+        }
+      }
+
+      let pinnedLeft = SELECTION_COLUMN_WIDTH;
+      let scrollLeft = 0;
+      for (let index = 0; index < columnTargets.length; index++) {
+        const target = columnTargets[index];
+        const headerNode = matchedHeaders.get(target.key);
+        if (!headerNode) continue;
+        const leftPx = index < PINNED_TARGET_COUNT ? pinnedLeft : scrollLeft;
+        adjustedCells += updateHeaderChain(headerNode, target.widthPx, leftPx);
+        if (index < PINNED_TARGET_COUNT) {
+          pinnedLeft += target.widthPx;
+        } else {
+          scrollLeft += target.widthPx;
+        }
+      }
+
+      return {
+        applied: adjustedCells > 0,
+        matchedColumns,
+        missingColumns: [],
+        errorMessage: '',
+        adjustedCells,
+        totalWidthPx,
+      };
+    }, targets);
+
+    return {
+      applied: Boolean(result.applied),
+      matchedColumns: Array.isArray(result.matchedColumns) ? result.matchedColumns : [],
+      missingColumns: Array.isArray(result.missingColumns) ? result.missingColumns : [],
+      errorMessage: String(result.errorMessage || ''),
+      adjustedCells: Number(result.adjustedCells) || 0,
+      totalWidthPx: Number(result.totalWidthPx) || 0,
+    };
+  } catch (err: any) {
+    return {
+      applied: false,
+      matchedColumns: [],
+      missingColumns: [],
+      errorMessage: `Ошибка применения автоширины колонок: ${err.message}`,
+      adjustedCells: 0,
+      totalWidthPx: 0,
     };
   }
 }
@@ -325,7 +552,7 @@ export async function findToggleCellInDom(page: Page, fbAdId: string): Promise<E
   const dataSurfaceCell = await page.$(toggleCellSelector(fbAdId));
   if (dataSurfaceCell) return dataSurfaceCell;
 
-  const handle = await page.evaluateHandle((targetId) => {
+  const handle = await page.evaluateHandle((args) => {
     function walkReactValue(value: any, seen: Set<any>, depth: number): string {
       if (!value || depth > 7) return '';
       if (typeof value !== 'object' && typeof value !== 'function') return '';
@@ -359,7 +586,7 @@ export async function findToggleCellInDom(page: Page, fbAdId: string): Promise<E
     }
 
     function reactObjectId(element: Element): string {
-      const nodes = [element, ...element.querySelectorAll('._4lg0, [role="switch"], input[type="checkbox"]')];
+      const nodes = [element, ...element.querySelectorAll(`._4lg0, ${args.toggleSelector}`)];
       for (const node of nodes) {
         for (const key of Object.getOwnPropertyNames(node)) {
           if (!key.startsWith('__reactProps') && !key.startsWith('__reactFiber')) continue;
@@ -371,12 +598,12 @@ export async function findToggleCellInDom(page: Page, fbAdId: string): Promise<E
     }
 
     for (const row of document.querySelectorAll('._1gda._2djg')) {
-      if (reactObjectId(row) !== targetId) continue;
-      const switchNode = row.querySelector('[role="switch"]');
+      if (reactObjectId(row) !== args.fbAdId) continue;
+      const switchNode = row.querySelector(args.toggleSelector);
       return switchNode?.closest('._4lg0') || switchNode || row;
     }
     return null;
-  }, fbAdId);
+  }, { fbAdId, toggleSelector: TOGGLE_SELECTOR });
 
   const element = handle.asElement();
   if (!element) {
@@ -421,7 +648,7 @@ export async function readToggleAriaChecked(page: Page, fbAdId: string): Promise
     }
 
     function reactObjectId(element: Element): string {
-      const nodes = [element, ...element.querySelectorAll('._4lg0, [role="switch"], input[type="checkbox"]')];
+      const nodes = [element, ...element.querySelectorAll(`._4lg0, ${args.toggleSelector}`)];
       for (const node of nodes) {
         for (const key of Object.getOwnPropertyNames(node)) {
           if (!key.startsWith('__reactProps') && !key.startsWith('__reactFiber')) continue;
@@ -442,10 +669,17 @@ export async function readToggleAriaChecked(page: Page, fbAdId: string): Promise
       }
     }
     if (!container) return 'not_found';
-    const toggle = container.querySelector('[role="switch"]');
+    const toggle = container.matches(args.toggleSelector)
+      ? container
+      : container.querySelector(args.toggleSelector);
     if (!toggle) return 'no_toggle';
-    return toggle.getAttribute('aria-checked') || 'null';
-  }, { selector: toggleCellSelector(fbAdId), fbAdId });
+    const ariaChecked = toggle.getAttribute('aria-checked');
+    if (ariaChecked !== null) return ariaChecked;
+    if (toggle instanceof HTMLInputElement && toggle.type === 'checkbox') {
+      return toggle.checked ? 'true' : 'false';
+    }
+    return 'null';
+  }, { selector: toggleCellSelector(fbAdId), fbAdId, toggleSelector: TOGGLE_SELECTOR });
 }
 
 export async function findToggleCellWithTableScan(

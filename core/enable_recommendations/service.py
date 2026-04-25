@@ -9,11 +9,11 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from sqlalchemy import delete, or_, select
+from sqlalchemy import and_, delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from core.domain import AlertStage, EnableRecommendationLevel, EnableTaskStatus
+from core.domain import AlertStage, DisableTaskStatus, EnableRecommendationLevel, EnableTaskStatus
 from core.live_batch import (
     LIVE_BATCH_WINDOW,
     compute_live_batch_marker,
@@ -22,6 +22,7 @@ from core.live_batch import (
 )
 from core.models import (
     AdSnapshot,
+    DisableTask,
     EnableRecommendationEvent,
     EnableTask,
     FbAd,
@@ -43,6 +44,8 @@ OK_RECOMMENDATION_REASON_TITLE = "Строгая проверка пройден
 OK_RECOMMENDATION_REASON_TEXT = (
     "Есть подтверждённые конверсии, и объявление проходит строгую проверку на включение."
 )
+AUTO_DISABLE_REQUEST_USERNAME = "bot_auto_stop"
+AUTO_ENABLE_REQUEST_USERNAME = "auto"
 
 
 @dataclass(slots=True, frozen=True)
@@ -243,6 +246,35 @@ def _is_zero_activity_row(row: ScannedAdRow) -> bool:
     )
 
 
+def _has_confirmed_enable_resume_signal(row: ScannedAdRow) -> bool:
+    """Разрешает resume только после подтверждённой регистрации или депозита."""
+    if row.registrations >= 1 and row.deposits >= 1:
+        return True
+    return row.registrations >= 1 and row.cost_per_registration is not None
+
+
+async def _has_manual_disable_auto_block(
+    session: AsyncSession,
+    *,
+    ad_id: _uuid.UUID,
+    cabinet_day_started_at: datetime | None,
+) -> bool:
+    """Проверяет, что объявление вручную отключали в текущих сутках кабинета."""
+    conditions = [
+        DisableTask.ad_id == ad_id,
+        DisableTask.status == DisableTaskStatus.SUCCEEDED,
+        or_(
+            DisableTask.requested_by_username.is_(None),
+            DisableTask.requested_by_username != AUTO_DISABLE_REQUEST_USERNAME,
+        ),
+    ]
+    if cabinet_day_started_at is not None:
+        conditions.append(DisableTask.created_at >= cabinet_day_started_at)
+
+    result = await session.execute(select(DisableTask.id).where(and_(*conditions)).limit(1))
+    return result.scalar_one_or_none() is not None
+
+
 def _normalize_recommendation_reason(
     *,
     row: ScannedAdRow,
@@ -343,6 +375,9 @@ async def collect_enable_recommendation_candidates_for_snapshots(
             continue
 
         row = _build_scanned_row_from_snapshot(snapshot)
+        if not _has_confirmed_enable_resume_signal(row):
+            continue
+
         recommendation_level, evaluation = _evaluate_enable_recommendation(
             row=row,
             offer_cpa=Decimal(offer.cpa_amount),
@@ -567,6 +602,24 @@ async def promote_recommendation_to_enable_task(
             fb_ad_id=event_fb_ad_id,
             ad_name=event_ad_name,
             detail="❌ Не удалось создать задачу на включение — объявление не найдено.",
+        )
+
+    if (
+        requested_by_username == AUTO_ENABLE_REQUEST_USERNAME
+        and await _has_manual_disable_auto_block(
+            session,
+            ad_id=snapshot.ad_id,
+            cabinet_day_started_at=cabinet_day_start,
+        )
+    ):
+        return EnableTaskPromotionResult(
+            outcome="blocked_manual_disable",
+            fb_ad_id=snapshot.fb_ad_id,
+            ad_name=_snapshot_ad_name(snapshot),
+            detail=(
+                "⚠️ Авто-включение заблокировано: объявление было отключено вручную "
+                "в текущих сутках кабинета."
+            ),
         )
 
     # Кэшируем нормализованные поля для snapshot

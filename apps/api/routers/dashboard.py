@@ -44,6 +44,7 @@ from core.disable_tasks import (
     DISABLE_TASK_STALE_TIMEOUT,
     SILENT_DISABLE_INCIDENT_RETRY_LIMIT,
     is_delivery_disabled,
+    reconcile_disable_tasks,
 )
 from core.domain import (
     AlertStage,
@@ -58,6 +59,7 @@ from core.enable_recommendations.service import (
     collect_enable_recommendation_candidates_for_snapshots,
     promote_recommendation_to_enable_task,
 )
+from core.enable_tasks import reconcile_enable_tasks
 from core.fake_deposits import (
     effective_deposits as _effective_deposits,
 )
@@ -900,6 +902,10 @@ def _serialize_observer_runtime_fields(
             "observer_heartbeat_at": None,
             "observer_last_error": None,
             "observer_last_error_at": None,
+            "current_scan_interval_seconds": None,
+            "current_scan_jitter_seconds": None,
+            "current_scan_threat_level": None,
+            "next_scan_at": None,
         }
 
     return {
@@ -911,6 +917,14 @@ def _serialize_observer_runtime_fields(
         "observer_last_error": row.worker_last_error,
         "observer_last_error_at": (
             row.worker_last_error_at.isoformat() if row.worker_last_error_at else None
+        ),
+        "current_scan_interval_seconds": getattr(row, "current_scan_interval_seconds", None),
+        "current_scan_jitter_seconds": getattr(row, "current_scan_jitter_seconds", None),
+        "current_scan_threat_level": getattr(row, "current_scan_threat_level", None),
+        "next_scan_at": (
+            getattr(row, "next_scan_at", None).isoformat()
+            if getattr(row, "next_scan_at", None)
+            else None
         ),
     }
 
@@ -1224,6 +1238,16 @@ async def _resolve_dashboard_snapshot_cutoff(
     return _current_scan_cutoff(last_scan)
 
 
+async def _resolve_dashboard_performance_cutoff(
+    db: AsyncSession,
+) -> datetime:
+    """Возвращает границу performance-среза текущих суток кабинета."""
+    cabinet_day_start = await _get_cabinet_day_start(db)
+    if cabinet_day_start is not None:
+        return cabinet_day_start
+    return await _resolve_dashboard_snapshot_cutoff(db)
+
+
 async def _resolve_dashboard_event_cutoff(
     db: AsyncSession,
     *,
@@ -1507,15 +1531,18 @@ async def get_dashboard_performance(
 ):
     """Performance-срез для гибридного dashboard."""
     now = _dashboard_now()
-    snapshot_cutoff = await _resolve_dashboard_snapshot_cutoff(db)
-    cutoff = snapshot_cutoff if period == "today" else _performance_cutoff(period, now)
+    cutoff = (
+        await _resolve_dashboard_performance_cutoff(db)
+        if period == "today"
+        else _performance_cutoff(period, now)
+    )
     # Для yesterday: «сейчас» = полночь сегодня, чтобы timeline = только вчерашний день
     now_for_payload = (
         now.replace(hour=0, minute=0, second=0, microsecond=0) if period == "yesterday" else now
     )
     result = await db.execute(
         select(AdSnapshot)
-        .where(AdSnapshot.last_observed_at >= snapshot_cutoff)
+        .where(AdSnapshot.last_observed_at >= cutoff)
         .order_by(AdSnapshot.last_observed_at.asc())
     )
     snapshots = list(result.scalars().all())
@@ -2178,6 +2205,10 @@ async def list_disable_tasks(
     db: AsyncSession = Depends(get_db),
 ):
     """Задачи на отключение (для мониторинга)."""
+    recovery_summary = await reconcile_disable_tasks(db)
+    if any(recovery_summary.values()):
+        await db.commit()
+
     q = select(DisableTask).order_by(DisableTask.updated_at.desc(), DisableTask.created_at.desc())
     if status:
         q = q.where(DisableTask.status == DisableTaskStatus(status))
@@ -2209,6 +2240,10 @@ async def list_enable_recommendations(
     db: AsyncSession = Depends(get_db),
 ):
     """Рекомендации на включение из текущего живого батча."""
+    recovery_summary = await reconcile_enable_tasks(db)
+    if any(recovery_summary.values()):
+        await db.commit()
+
     current_batch_marker, rows = await _load_current_enable_recommendations(db, limit=limit)
     if not rows:
         return []
@@ -2286,6 +2321,10 @@ async def list_enable_tasks(
     По умолчанию показываем только актуальную последнюю задачу на каждое объявление,
     чтобы старые ошибки не маскировались под текущее состояние после успешного повтора.
     """
+    recovery_summary = await reconcile_enable_tasks(db)
+    if any(recovery_summary.values()):
+        await db.commit()
+
     if status:
         q = (
             select(EnableTask)
@@ -2347,7 +2386,11 @@ async def get_chart_data(
     """Данные для операционной аналитики dashboard с учётом выбранного периода."""
     now = _dashboard_now()
     snapshot_cutoff = await _resolve_dashboard_snapshot_cutoff(db)
-    history_cutoff = snapshot_cutoff if period == "today" else _performance_cutoff(period, now)
+    history_cutoff = (
+        await _resolve_dashboard_performance_cutoff(db)
+        if period == "today"
+        else _performance_cutoff(period, now)
+    )
     event_cutoff = await _resolve_dashboard_event_cutoff(db, period=period, now=now)
 
     # 1. Алерты по выбранному периоду
@@ -2382,11 +2425,16 @@ async def get_chart_data(
     # 2. Кампании за период собираем тем же способом, что верхний performance-блок.
     snapshot_result = await db.execute(
         select(AdSnapshot)
-        .where(AdSnapshot.last_observed_at >= snapshot_cutoff)
+        .where(AdSnapshot.last_observed_at >= history_cutoff)
         .order_by(AdSnapshot.last_observed_at.asc())
     )
     snapshots = snapshot_result.scalars().all()
-    rule_violations = _build_current_risk_reason_rows(snapshots)
+    current_snapshots = [
+        snapshot
+        for snapshot in snapshots
+        if snapshot.last_observed_at and snapshot.last_observed_at >= snapshot_cutoff
+    ]
+    rule_violations = _build_current_risk_reason_rows(current_snapshots)
     archives = []
     if period != "today":
         archives = await _load_dashboard_archives(db, cutoff=history_cutoff)

@@ -24,6 +24,7 @@ interface IScannerServiceService extends grpc.ServiceDefinition<grpc.UntypedServ
     humanWheelScroll: IScannerServiceService_IHumanWheelScroll;
     waitForToggleConfirmation: IScannerServiceService_IWaitForToggleConfirmation;
     validateColumns: IScannerServiceService_IValidateColumns;
+    applyColumnWidths: IScannerServiceService_IApplyColumnWidths;
 }
 
 interface IScannerServiceService_IRunScanCycle extends grpc.MethodDefinition<v1_scanner_pb.RunScanCycleRequest, v1_scanner_pb.ScanCycleEvent> {
@@ -170,6 +171,15 @@ interface IScannerServiceService_IValidateColumns extends grpc.MethodDefinition<
     responseSerialize: grpc.serialize<v1_scanner_pb.ValidateColumnsResponse>;
     responseDeserialize: grpc.deserialize<v1_scanner_pb.ValidateColumnsResponse>;
 }
+interface IScannerServiceService_IApplyColumnWidths extends grpc.MethodDefinition<v1_scanner_pb.ApplyColumnWidthsRequest, v1_scanner_pb.ApplyColumnWidthsResponse> {
+    path: "/fb_agent.scanner.v1.ScannerService/ApplyColumnWidths";
+    requestStream: false;
+    responseStream: false;
+    requestSerialize: grpc.serialize<v1_scanner_pb.ApplyColumnWidthsRequest>;
+    requestDeserialize: grpc.deserialize<v1_scanner_pb.ApplyColumnWidthsRequest>;
+    responseSerialize: grpc.serialize<v1_scanner_pb.ApplyColumnWidthsResponse>;
+    responseDeserialize: grpc.deserialize<v1_scanner_pb.ApplyColumnWidthsResponse>;
+}
 
 export const ScannerServiceService: IScannerServiceService;
 
@@ -190,6 +200,7 @@ export interface IScannerServiceServer {
     humanWheelScroll: grpc.handleUnaryCall<v1_scanner_pb.HumanWheelScrollRequest, v1_scanner_pb.HumanWheelScrollResponse>;
     waitForToggleConfirmation: grpc.handleUnaryCall<v1_scanner_pb.WaitForToggleConfirmationRequest, v1_scanner_pb.WaitForToggleConfirmationResponse>;
     validateColumns: grpc.handleUnaryCall<v1_scanner_pb.ValidateColumnsRequest, v1_scanner_pb.ValidateColumnsResponse>;
+    applyColumnWidths: grpc.handleUnaryCall<v1_scanner_pb.ApplyColumnWidthsRequest, v1_scanner_pb.ApplyColumnWidthsResponse>;
 }
 
 export interface IScannerServiceClient {
@@ -240,6 +251,9 @@ export interface IScannerServiceClient {
     validateColumns(request: v1_scanner_pb.ValidateColumnsRequest, callback: (error: grpc.ServiceError | null, response: v1_scanner_pb.ValidateColumnsResponse) => void): grpc.ClientUnaryCall;
     validateColumns(request: v1_scanner_pb.ValidateColumnsRequest, metadata: grpc.Metadata, callback: (error: grpc.ServiceError | null, response: v1_scanner_pb.ValidateColumnsResponse) => void): grpc.ClientUnaryCall;
     validateColumns(request: v1_scanner_pb.ValidateColumnsRequest, metadata: grpc.Metadata, options: Partial<grpc.CallOptions>, callback: (error: grpc.ServiceError | null, response: v1_scanner_pb.ValidateColumnsResponse) => void): grpc.ClientUnaryCall;
+    applyColumnWidths(request: v1_scanner_pb.ApplyColumnWidthsRequest, callback: (error: grpc.ServiceError | null, response: v1_scanner_pb.ApplyColumnWidthsResponse) => void): grpc.ClientUnaryCall;
+    applyColumnWidths(request: v1_scanner_pb.ApplyColumnWidthsRequest, metadata: grpc.Metadata, callback: (error: grpc.ServiceError | null, response: v1_scanner_pb.ApplyColumnWidthsResponse) => void): grpc.ClientUnaryCall;
+    applyColumnWidths(request: v1_scanner_pb.ApplyColumnWidthsRequest, metadata: grpc.Metadata, options: Partial<grpc.CallOptions>, callback: (error: grpc.ServiceError | null, response: v1_scanner_pb.ApplyColumnWidthsResponse) => void): grpc.ClientUnaryCall;
 }
 
 export class ScannerServiceClient extends grpc.Client implements IScannerServiceClient {
@@ -291,4 +305,7 @@ export class ScannerServiceClient extends grpc.Client implements IScannerService
     public validateColumns(request: v1_scanner_pb.ValidateColumnsRequest, callback: (error: grpc.ServiceError | null, response: v1_scanner_pb.ValidateColumnsResponse) => void): grpc.ClientUnaryCall;
     public validateColumns(request: v1_scanner_pb.ValidateColumnsRequest, metadata: grpc.Metadata, callback: (error: grpc.ServiceError | null, response: v1_scanner_pb.ValidateColumnsResponse) => void): grpc.ClientUnaryCall;
     public validateColumns(request: v1_scanner_pb.ValidateColumnsRequest, metadata: grpc.Metadata, options: Partial<grpc.CallOptions>, callback: (error: grpc.ServiceError | null, response: v1_scanner_pb.ValidateColumnsResponse) => void): grpc.ClientUnaryCall;
+    public applyColumnWidths(request: v1_scanner_pb.ApplyColumnWidthsRequest, callback: (error: grpc.ServiceError | null, response: v1_scanner_pb.ApplyColumnWidthsResponse) => void): grpc.ClientUnaryCall;
+    public applyColumnWidths(request: v1_scanner_pb.ApplyColumnWidthsRequest, metadata: grpc.Metadata, callback: (error: grpc.ServiceError | null, response: v1_scanner_pb.ApplyColumnWidthsResponse) => void): grpc.ClientUnaryCall;
+    public applyColumnWidths(request: v1_scanner_pb.ApplyColumnWidthsRequest, metadata: grpc.Metadata, options: Partial<grpc.CallOptions>, callback: (error: grpc.ServiceError | null, response: v1_scanner_pb.ApplyColumnWidthsResponse) => void): grpc.ClientUnaryCall;
 }

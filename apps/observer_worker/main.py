@@ -12,7 +12,7 @@ import logging
 import random
 import time as _time
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import grpc
@@ -242,10 +242,18 @@ def compute_jitter(interval_seconds: int, jitter_seconds: int) -> float:
 # ---------------------------------------------------------------------------
 
 # Интервалы (секунды) для каждого уровня угрозы
-_ADAPTIVE_INTERVAL_CRITICAL = 15  # WARNING/STOP — сканируем максимально часто
-_ADAPTIVE_INTERVAL_CALM = 25  # Всё спокойно, есть активные объявления
+_ADAPTIVE_INTERVAL_CRITICAL = 10  # STOP в текущем срезе
+_ADAPTIVE_INTERVAL_ELEVATED = 13  # WARNING в текущем срезе
+_ADAPTIVE_INTERVAL_ACTIVE = 15  # Активный залив без сигналов
+_ADAPTIVE_INTERVAL_CALM = 30  # Есть мониторинг, но активного залива нет
 _ADAPTIVE_INTERVAL_IDLE = 55  # Нет объявлений с офферами
 _FALLBACK_INTERVAL = 55  # Fallback при ошибках цикла
+
+
+def _snapshot_delivery_is_disabled(snapshot: dict) -> bool:
+    """Проверяет, что snapshot относится к выключенному объявлению."""
+    status = str(snapshot.get("delivery_status") or "").casefold()
+    return status == "off" or "off" in status
 
 
 def compute_adaptive_interval(
@@ -258,7 +266,8 @@ def compute_adaptive_interval(
     Анализирует current_stage всех объявлений в батче и выбирает
     минимальный интервал, соответствующий максимальной угрозе.
 
-    Уровни: IMMEDIATE(0) → CRITICAL(15) → CALM(25) → IDLE(55).
+    Уровни: IMMEDIATE(0) → CRITICAL(10) → ELEVATED(13) → ACTIVE(15)
+    → CALM(30) → IDLE(55).
 
     Returns:
         (interval_seconds, threat_level_name) — интервал и название уровня для логов.
@@ -267,7 +276,9 @@ def compute_adaptive_interval(
     if has_stop_alerts:
         return 0, "IMMEDIATE"
 
+    has_stop = False
     has_warning = False
+    has_active_monitored_ads = False
     has_monitored_ads = False
 
     for snap in snapshot_batch:
@@ -275,14 +286,22 @@ def compute_adaptive_interval(
         if stage is not None:
             has_monitored_ads = True
             stage_name = stage.value if hasattr(stage, "value") else str(stage)
-            if stage_name in ("STOP", "WARNING"):
+            if stage_name == "STOP":
+                has_stop = True
+            elif stage_name == "WARNING":
                 has_warning = True
         # Объявление с оффером тоже считается мониторимым
         if snap.get("resolved_offer_code"):
             has_monitored_ads = True
+            if not _snapshot_delivery_is_disabled(snap):
+                has_active_monitored_ads = True
 
-    if has_warning:
+    if has_stop:
         return _ADAPTIVE_INTERVAL_CRITICAL, "CRITICAL"
+    if has_warning:
+        return _ADAPTIVE_INTERVAL_ELEVATED, "ELEVATED"
+    if has_active_monitored_ads:
+        return _ADAPTIVE_INTERVAL_ACTIVE, "ACTIVE"
     if has_monitored_ads:
         return _ADAPTIVE_INTERVAL_CALM, "CALM"
     return _ADAPTIVE_INTERVAL_IDLE, "IDLE"
@@ -879,6 +898,7 @@ async def _wait_for_next_cycle(
     )
     adaptive_jitter = max(1, interval // 10)
     sleep_time = compute_jitter(interval, adaptive_jitter)
+    next_scan_at = datetime.now(UTC) + timedelta(seconds=sleep_time)
     logger.info(
         "Observer: интервал %sс (угроза=%s), следующий цикл через %.0f сек",
         interval,
@@ -909,6 +929,10 @@ async def _wait_for_next_cycle(
             await update_observer_runtime_status(
                 status="RUNNING",
                 message="Ожидаем следующий цикл сканирования.",
+                current_scan_interval_seconds=interval,
+                current_scan_jitter_seconds=adaptive_jitter,
+                current_scan_threat_level=threat_level or "FALLBACK",
+                next_scan_at=next_scan_at,
                 clear_last_error=True,
             )
         if shutdown_event is not None:
@@ -938,7 +962,8 @@ async def observer_loop(
     """Основной бесконечный цикл observer.
 
     Интервал между сканами определяется адаптивно по уровню угрозы:
-    IMMEDIATE (0с) → CRITICAL (15с) → CALM (25с) → IDLE (55с).
+    IMMEDIATE (0с) → CRITICAL (10с) → ELEVATED (13с) → ACTIVE (15с)
+    → CALM (30с) → IDLE (55с).
     После обнаружения STOP — немедленный ре-скан.
 
     Args:
@@ -1117,6 +1142,7 @@ async def observer_loop(
                 await update_observer_runtime_status(
                     status="PAUSED",
                     message="Сканирование выключено в настройках.",
+                    clear_scan_schedule=True,
                 )
                 logger.info("Observer: сканирование отключено, пропускаем цикл")
                 # Короткий сон перед следующей проверкой
@@ -1439,6 +1465,7 @@ async def observer_loop(
                 await update_observer_runtime_status(
                     status="RUNNING",
                     message="STOP обнаружен — немедленный ре-скан.",
+                    clear_scan_schedule=True,
                     clear_last_error=True,
                 )
                 continue
@@ -1449,6 +1476,9 @@ async def observer_loop(
                     f"Цикл завершён. Угроза: {threat_level_name}, "
                     f"интервал: {adaptive_interval_secs}с."
                 ),
+                current_scan_interval_seconds=adaptive_interval_secs,
+                current_scan_jitter_seconds=max(1, adaptive_interval_secs // 10),
+                current_scan_threat_level=threat_level_name,
                 clear_last_error=True,
             )
 

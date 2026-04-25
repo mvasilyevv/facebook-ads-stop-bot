@@ -51,6 +51,9 @@ service ScannerService {
 
   // Проверить наличие всех необходимых колонок в таблице Ads Manager.
   rpc ValidateColumns(ValidateColumnsRequest) returns (ValidateColumnsResponse);
+
+  // Применить сохранённый пресет ширины колонок Ads Manager.
+  rpc ApplyColumnWidths(ApplyColumnWidthsRequest) returns (ApplyColumnWidthsResponse);
 }
 
 // --- RunScanCycle: streaming RPC ---
@@ -301,6 +304,22 @@ message ValidateColumnsResponse {
   repeated string missing_columns = 2;
   repeated string found_columns = 3;
   string error_message = 4;
+}
+
+// --- ApplyColumnWidths ---
+
+message ApplyColumnWidthsRequest {
+  string session_id = 1;
+  optional string page_id = 2;
+}
+
+message ApplyColumnWidthsResponse {
+  bool applied = 1;
+  repeated string matched_columns = 2;
+  repeated string missing_columns = 3;
+  string error_message = 4;
+  int32 adjusted_cells = 5;
+  int32 total_width_px = 6;
 }
 
 // --- ScannedAdRow: зеркало Python dataclass, Decimal как string ---

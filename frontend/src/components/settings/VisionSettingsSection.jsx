@@ -1,4 +1,15 @@
-export function VisionSettingsSection({ vision, showVisionToken, onToggleTokenVisibility, onVisionChange, onSave, onReconnect, saving, browserOpen, onToggleBrowserOpen }) {
+export function VisionSettingsSection({
+  vision,
+  showVisionToken,
+  onToggleTokenVisibility,
+  onVisionChange,
+  onSave,
+  onReconnect,
+  onApplyColumnWidths,
+  saving,
+  browserOpen,
+  onToggleBrowserOpen,
+}) {
   const autoRecoveryEnabled = Boolean(vision.auto_restart_on_missing_cdp);
 
   return (
@@ -110,6 +121,14 @@ export function VisionSettingsSection({ vision, showVisionToken, onToggleTokenVi
             </button>
             <button className="btn-secondary" onClick={onReconnect} disabled={saving === 'reconnect'} title="Перезапуск профиля Vision + переподключение observer">
               {saving === 'reconnect' ? 'Отправка...' : 'Принудительный перезапуск'}
+            </button>
+            <button
+              className="btn-secondary"
+              onClick={onApplyColumnWidths}
+              disabled={saving === 'column-widths'}
+              title="Применить сохранённую ширину колонок Ads Manager"
+            >
+              {saving === 'column-widths' ? 'Применение...' : 'Автоширина колонок'}
             </button>
           </div>
         </div>

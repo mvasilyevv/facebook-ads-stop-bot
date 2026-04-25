@@ -22,6 +22,11 @@ from clients.python_grpc.v1 import (
 )
 
 logger = logging.getLogger(__name__)
+_RPC_BROWSER_CONTROL_TIMEOUT_SECONDS = 30.0
+_RPC_TOGGLE_FIND_TIMEOUT_SECONDS = 45.0
+_RPC_TOGGLE_READ_TIMEOUT_SECONDS = 12.0
+_RPC_TOGGLE_CLICK_TIMEOUT_SECONDS = 15.0
+_RPC_TOGGLE_CONFIRM_EXTRA_TIMEOUT_SECONDS = 15.0
 
 
 class ScanDataUnavailableError(RuntimeError):
@@ -129,7 +134,10 @@ class BrowserAgentClient:
             viewport_width=self.config.viewport_width,
             viewport_height=self.config.viewport_height,
         )
-        resp = await self._browser_stub.StartBrowser(req)
+        resp = await self._browser_stub.StartBrowser(
+            req,
+            timeout=_RPC_BROWSER_CONTROL_TIMEOUT_SECONDS,
+        )
         self._session_id = resp.session_id
         logger.info(
             "Браузер запущен, session_id=%s, cdp_port=%d", resp.session_id, resp.profile.cdp_port
@@ -141,7 +149,8 @@ class BrowserAgentClient:
         if not self._session_id:
             return
         await self._browser_stub.DisconnectBrowser(
-            browser_session_pb2.DisconnectBrowserRequest(session_id=self._session_id)
+            browser_session_pb2.DisconnectBrowserRequest(session_id=self._session_id),
+            timeout=_RPC_BROWSER_CONTROL_TIMEOUT_SECONDS,
         )
         logger.info("Браузер отключён")
 
@@ -150,7 +159,8 @@ class BrowserAgentClient:
         if not self._session_id:
             return
         await self._browser_stub.StopBrowser(
-            browser_session_pb2.StopBrowserRequest(session_id=self._session_id)
+            browser_session_pb2.StopBrowserRequest(session_id=self._session_id),
+            timeout=_RPC_BROWSER_CONTROL_TIMEOUT_SECONDS,
         )
         logger.info("Браузер остановлен")
         self._session_id = None
@@ -163,7 +173,10 @@ class BrowserAgentClient:
             vision_api_url=self.config.vision_api_url,
             vision_profile_id=self.config.vision_profile_id,
         )
-        resp = await self._browser_stub.ReconnectBrowser(req)
+        resp = await self._browser_stub.ReconnectBrowser(
+            req,
+            timeout=_RPC_BROWSER_CONTROL_TIMEOUT_SECONDS,
+        )
         self._session_id = resp.session_id
         logger.info("Браузер переподключён, session_id=%s", resp.session_id)
         return resp.session_id
@@ -175,7 +188,8 @@ class BrowserAgentClient:
                 session_id=self._session_id or "",
                 url=url,
                 wait_until=wait_until,
-            )
+            ),
+            timeout=_RPC_BROWSER_CONTROL_TIMEOUT_SECONDS,
         )
 
     async def run_scan_cycle(
@@ -281,14 +295,21 @@ class BrowserAgentClient:
         )
         return list(resp.row_ids)
 
-    async def find_toggle_cell(self, fb_ad_id: str, reset_to_top: bool = True) -> dict:
+    async def find_toggle_cell(
+        self,
+        fb_ad_id: str,
+        reset_to_top: bool = True,
+        max_scroll_passes: int | None = None,
+    ) -> dict:
         """Найти toggle-ячейку для объявления."""
         resp = await self._scanner_stub.FindToggleCell(
             scanner_pb2.FindToggleCellRequest(
                 session_id=self._session_id or "",
                 fb_ad_id=fb_ad_id,
                 reset_to_top=reset_to_top,
-            )
+                max_scroll_passes=max_scroll_passes or 0,
+            ),
+            timeout=_RPC_TOGGLE_FIND_TIMEOUT_SECONDS,
         )
         return {
             "found": resp.found,
@@ -303,7 +324,8 @@ class BrowserAgentClient:
             scanner_pb2.ReadToggleStateRequest(
                 session_id=self._session_id or "",
                 fb_ad_id=fb_ad_id,
-            )
+            ),
+            timeout=_RPC_TOGGLE_READ_TIMEOUT_SECONDS,
         )
         return resp.aria_checked
 
@@ -319,7 +341,8 @@ class BrowserAgentClient:
                 session_id=self._session_id or "",
                 fb_ad_id=fb_ad_id,
                 target_state=target_state,
-            )
+            ),
+            timeout=_RPC_TOGGLE_CLICK_TIMEOUT_SECONDS,
         )
         return {
             "success": resp.success,
@@ -347,6 +370,7 @@ class BrowserAgentClient:
             dict с полями success, message, final_aria_checked, reads_matched.
         """
         delays = poll_delays_seconds or [0.0, 3.0, 3.0, 3.0, 3.0, 4.0, 4.0, 5.0, 5.0]
+        rpc_timeout = sum(delays) + _RPC_TOGGLE_CONFIRM_EXTRA_TIMEOUT_SECONDS
         resp = await self._scanner_stub.WaitForToggleConfirmation(
             scanner_pb2.WaitForToggleConfirmationRequest(
                 session_id=self._session_id or "",
@@ -355,7 +379,8 @@ class BrowserAgentClient:
                 required_reads=required_reads,
                 poll_delays_seconds=delays,
                 max_scroll_passes_restore=max_scroll_passes_restore,
-            )
+            ),
+            timeout=rpc_timeout,
         )
         return {
             "success": resp.success,

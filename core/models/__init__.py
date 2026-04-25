@@ -128,6 +128,10 @@ class ObserverSettings(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     worker_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     worker_last_error: Mapped[str | None] = mapped_column(String(500))
     worker_last_error_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    current_scan_interval_seconds: Mapped[int | None] = mapped_column(Integer)
+    current_scan_jitter_seconds: Mapped[int | None] = mapped_column(Integer)
+    current_scan_threat_level: Mapped[str | None] = mapped_column(String(32))
+    next_scan_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Флаг автоматического включения объявлений по рекомендациям
     auto_enable_recommendations: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false"

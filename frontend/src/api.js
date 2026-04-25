@@ -72,6 +72,8 @@ function requestWithQuery(path, params = {}) {
 export const getObserverSettings = () => request('/settings/observer');
 export const updateObserverSettings = (data) =>
   request('/settings/observer', { method: 'PUT', body: JSON.stringify(data) });
+export const getObserverThresholdRecommendations = (params = {}) =>
+  requestWithQuery('/settings/observer/threshold-recommendations', params);
 // Быстрое переключение сканирования
 export const toggleScanning = (enabled) =>
   request('/settings/observer/scanning', { method: 'PATCH', body: JSON.stringify({ enabled }) });
@@ -160,6 +162,8 @@ export const createInviteCode = () =>
 
 // --- Браузер ---
 export const validateBrowserColumns = () => request('/settings/browser/validate-columns');
+export const applyBrowserColumnWidths = () =>
+  request('/settings/browser/apply-column-widths', { method: 'POST' });
 
 // --- Авто-включение ---
 export const toggleAutoEnable = (enabled) =>
@@ -218,10 +222,14 @@ export async function getDashboardHealthMap() {
   const telegramOnline = String(telegram?.poller_status || '').toUpperCase() === 'ONLINE';
   const visionReady = Boolean(vision?.profile_id && vision?.has_token);
   const visionAutoRestart = vision?.auto_restart_on_missing_cdp ?? true;
+  const visionRuntimeStatus = String(vision?.runtime_status || 'NOT_CONFIGURED').toUpperCase();
+  const visionCdpReady = Boolean(vision?.cdp_ready);
   const warnings = [];
 
   if (!stats) warnings.push('Dashboard stats недоступны.');
   if (!visionReady) warnings.push('Vision профиль или токен не настроены.');
+  if (visionReady && visionRuntimeStatus === 'NOT_RUNNING') warnings.push('Профиль Vision не запущен.');
+  if (visionReady && ['MISSING_CDP', 'CDP_NOT_READY'].includes(visionRuntimeStatus)) warnings.push('CDP-порт Vision недоступен.');
   if (!telegramOnline) warnings.push('Telegram poller не в состоянии ONLINE.');
   if (disableActive > 0) warnings.push(`В очереди отключения ${disableActive} задач.`);
   if (enableActive > 0) warnings.push(`В очереди включения ${enableActive} задач.`);
@@ -243,19 +251,20 @@ export async function getDashboardHealthMap() {
     makeHealthNode(
       'browser_agent',
       'Browser',
-      visionReady ? 'READY' : 'WAITING',
-      visionReady ? 'success' : 'warning',
-      visionReady ? 'Vision профиль выбран' : 'Vision требует настройки',
+      visionCdpReady ? 'READY' : visionRuntimeStatus,
+      visionCdpReady ? 'success' : visionRuntimeStatus === 'NOT_RUNNING' ? 'warning' : visionReady ? 'danger' : 'warning',
+      visionCdpReady ? 'Vision CDP готов' : visionReady ? 'Vision требует проверки CDP' : 'Vision требует настройки',
       [
         vision?.profile_id ? `Профиль: ${vision.profile_id}` : 'Профиль не выбран.',
         visionAutoRestart ? 'Автовосстановление CDP включено.' : 'Автовосстановление CDP выключено.',
+        vision?.runtime_status_message || 'Runtime-статус Vision недоступен.',
       ],
       [
         { label: 'Token', value: vision?.has_token ? 'ok' : '—', tone: vision?.has_token ? 'success' : 'warning' },
         {
           label: 'CDP',
-          value: visionAutoRestart ? 'auto' : 'manual',
-          tone: visionAutoRestart ? 'success' : 'warning',
+          value: vision?.cdp_port || (visionCdpReady ? 'ready' : '—'),
+          tone: visionCdpReady ? 'success' : 'warning',
         },
       ],
       stats?.last_scan_at,

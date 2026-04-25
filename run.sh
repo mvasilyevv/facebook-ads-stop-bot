@@ -21,6 +21,45 @@ NC='\033[0m' # No Color
 
 LOG_DIR="$SCRIPT_DIR/.logs"
 PID_FILE="$LOG_DIR/pids.txt"
+SUPERVISOR_CONF="$SCRIPT_DIR/supervisord.conf"
+SUPERVISOR_PID_FILE="$SCRIPT_DIR/supervisord.pid"
+SUPERVISOR_SOCK="/tmp/fb_agent_supervisor.sock"
+
+append_pid() {
+    local pid="$1"
+    local name="$2"
+
+    mkdir -p "$LOG_DIR"
+    echo "$pid $name" >> "$PID_FILE"
+}
+
+get_supervisorctl_bin() {
+    if command -v supervisorctl >/dev/null 2>&1; then
+        command -v supervisorctl
+        return 0
+    fi
+
+    if [ -x "$SCRIPT_DIR/.venv/bin/supervisorctl" ]; then
+        echo "$SCRIPT_DIR/.venv/bin/supervisorctl"
+        return 0
+    fi
+
+    return 1
+}
+
+get_supervisord_bin() {
+    if command -v supervisord >/dev/null 2>&1; then
+        command -v supervisord
+        return 0
+    fi
+
+    if [ -x "$SCRIPT_DIR/.venv/bin/supervisord" ]; then
+        echo "$SCRIPT_DIR/.venv/bin/supervisord"
+        return 0
+    fi
+
+    return 1
+}
 
 wait_for_process_exit() {
     local pid="$1"
@@ -141,7 +180,7 @@ wait_for_postgres_ready() {
             fi
 
             # На некоторых запусках exec может кратко флапать, хотя порт уже слушается.
-            if nc -z 127.0.0.1 5433 >/dev/null 2>&1; then
+            if nc -z 127.0.0.1 "${POSTGRES_PORT:-5433}" >/dev/null 2>&1; then
                 return 0
             fi
         fi
@@ -179,6 +218,56 @@ check_process_started() {
     return 1
 }
 
+show_worker_logs_tail() {
+    local logs=(
+        "$LOG_DIR/observer.log"
+        "$LOG_DIR/disable_worker.log"
+        "$LOG_DIR/enable_worker.log"
+        "$LOG_DIR/enable_recommendation_worker.log"
+        "$LOG_DIR/telegram.log"
+    )
+    local log_file=""
+
+    for log_file in "${logs[@]}"; do
+        [ -f "$log_file" ] || continue
+        echo -e "${YELLOW}Последние строки $(basename "$log_file"):${NC}"
+        tail -15 "$log_file" || true
+    done
+}
+
+wait_for_supervisor_running() {
+    local supervisorctl_bin="$1"
+    local timeout_seconds="${2:-30}"
+    local elapsed=0
+    local status_output=""
+    local not_running_count=0
+
+    while [ "$elapsed" -lt "$timeout_seconds" ]; do
+        status_output="$("$supervisorctl_bin" -c "$SUPERVISOR_CONF" status 2>&1 || true)"
+
+        if printf '%s\n' "$status_output" | grep -Eq '\b(FATAL|BACKOFF|EXITED|STOPPED)\b'; then
+            echo -e "${RED}❌ Один из воркеров supervisord не запустился${NC}"
+            printf '%s\n' "$status_output"
+            show_worker_logs_tail
+            return 1
+        fi
+
+        not_running_count="$(printf '%s\n' "$status_output" | awk 'NF > 0 && $2 != "RUNNING" { count += 1 } END { print count + 0 }')"
+        if [ "$not_running_count" -eq 0 ]; then
+            printf '%s\n' "$status_output"
+            return 0
+        fi
+
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+
+    echo -e "${RED}❌ Воркеры не перешли в RUNNING за ${timeout_seconds}с${NC}"
+    printf '%s\n' "$status_output"
+    show_worker_logs_tail
+    return 1
+}
+
 terminate_matching_processes() {
     local name="$1"
     local pattern="$2"
@@ -193,37 +282,131 @@ terminate_matching_processes() {
     done
 }
 
+get_process_cwd() {
+    local pid="$1"
+
+    lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1
+}
+
+terminate_matching_processes_in_dir() {
+    local name="$1"
+    local pattern="$2"
+    local expected_cwd="$3"
+    local pids=""
+    local pid=""
+    local cwd=""
+    local found=0
+
+    pids="$(pgrep -f "$pattern" 2>/dev/null || true)"
+    [ -n "$pids" ] || return 0
+
+    for pid in $pids; do
+        cwd="$(get_process_cwd "$pid")"
+        [ "$cwd" = "$expected_cwd" ] || continue
+        if [ "$found" -eq 0 ]; then
+            echo -e "${YELLOW}🔄 Найдены старые процессы $name:${NC}"
+            found=1
+        fi
+        stop_process_by_pid "$pid" "$name"
+    done
+}
+
+stop_supervisord() {
+    local timeout_seconds="${1:-20}"
+    local spid=""
+    local supervisorctl_bin=""
+    local output=""
+
+    if [ ! -f "$SUPERVISOR_PID_FILE" ]; then
+        rm -f "$SUPERVISOR_SOCK"
+        return 0
+    fi
+
+    spid="$(cat "$SUPERVISOR_PID_FILE" 2>/dev/null || true)"
+    if [ -z "$spid" ] || ! is_process_active "$spid"; then
+        rm -f "$SUPERVISOR_PID_FILE" "$SUPERVISOR_SOCK"
+        return 0
+    fi
+
+    echo -e "  Останавливаю supervisord (PID $spid)"
+    if supervisorctl_bin="$(get_supervisorctl_bin 2>/dev/null)"; then
+        output="$("$supervisorctl_bin" -c "$SUPERVISOR_CONF" shutdown 2>&1 || true)"
+        if printf '%s\n' "$output" | grep -qi "already shutting down"; then
+            echo -e "  supervisord уже останавливается"
+        elif printf '%s\n' "$output" | grep -qi "shut down"; then
+            echo -e "  команда остановки supervisord отправлена"
+        elif [ -n "$output" ]; then
+            printf '%s\n' "$output"
+        fi
+    else
+        kill "$spid" 2>/dev/null || true
+    fi
+
+    if wait_for_process_exit "$spid" "$timeout_seconds"; then
+        rm -f "$SUPERVISOR_PID_FILE" "$SUPERVISOR_SOCK"
+        echo -e "  supervisord остановлен"
+        return 0
+    fi
+
+    stop_process_by_pid "$spid" "supervisord" 5 || true
+    rm -f "$SUPERVISOR_PID_FILE" "$SUPERVISOR_SOCK"
+}
+
+ensure_port_free() {
+    local port="$1"
+    local name="$2"
+    local listeners=""
+
+    listeners="$(lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)"
+    if [ -z "$listeners" ]; then
+        return 0
+    fi
+
+    echo -e "${RED}❌ Порт $port уже занят, не могу запустить $name${NC}"
+    echo -e "${YELLOW}Слушатели порта $port:${NC}"
+    printf '%s\n' "$listeners"
+    return 1
+}
+
+install_node_dependencies_if_needed() {
+    local service_dir="$1"
+    local log_file="$2"
+
+    if [ -d "$service_dir/node_modules" ]; then
+        return 0
+    fi
+
+    if ! command -v npm >/dev/null 2>&1; then
+        echo -e "${RED}❌ npm не установлен, не могу установить зависимости для $service_dir${NC}"
+        return 1
+    fi
+
+    echo -e "${BLUE}📦 Устанавливаю Node.js зависимости: $service_dir${NC}"
+    if [ -f "$service_dir/package-lock.json" ]; then
+        (cd "$service_dir" && npm ci --silent) > "$log_file" 2>&1
+    else
+        (cd "$service_dir" && npm install --silent) > "$log_file" 2>&1
+    fi
+}
+
 # ==========================================
 # Остановка сервисов
 # ==========================================
 stop_all() {
     echo -e "${YELLOW}⏹ Останавливаю сервисы...${NC}"
 
-    # Останавливаем supervisord если запущен
-    SUPERVISOR_CONF="$SCRIPT_DIR/supervisord.conf"
-    if [ -f "$SCRIPT_DIR/supervisord.pid" ]; then
-        SPID="$(cat "$SCRIPT_DIR/supervisord.pid" 2>/dev/null || true)"
-        if [ -n "$SPID" ] && kill -0 "$SPID" 2>/dev/null; then
-            echo -e "  Останавливаю supervisord (PID $SPID)"
-            if command -v supervisorctl &>/dev/null; then
-                supervisorctl -c "$SUPERVISOR_CONF" shutdown 2>/dev/null || true
-            elif [ -x "$SCRIPT_DIR/.venv/bin/supervisorctl" ]; then
-                "$SCRIPT_DIR/.venv/bin/supervisorctl" -c "$SUPERVISOR_CONF" shutdown 2>/dev/null || true
-            else
-                kill "$SPID" 2>/dev/null || true
-            fi
-            sleep 2
-        fi
-    fi
+    stop_supervisord 20
 
     if [ -f "$PID_FILE" ]; then
         while read -r pid name; do
+            [ "$name" != "supervisord" ] || continue
             stop_process_by_pid "$pid" "$name"
         done < "$PID_FILE"
         rm -f "$PID_FILE"
     fi
 
-    terminate_matching_processes "Browser Agent" "node dist/index.js"
+    terminate_matching_processes "Browser Agent" "$SCRIPT_DIR/services/browser-agent/dist/index.js"
+    terminate_matching_processes_in_dir "Browser Agent" "node dist/index.js" "$SCRIPT_DIR/services/browser-agent"
     terminate_matching_processes "Observer Worker" "run_observer.py"
     terminate_matching_processes "Disable Worker" "run_disable_worker.py"
     terminate_matching_processes "Enable Worker" "run_enable_worker.py"
@@ -231,6 +414,8 @@ stop_all() {
     terminate_matching_processes "Enable Recommendation Worker" "apps.enable_recommendation_worker.main"
     terminate_matching_processes "Telegram Poller" "apps.telegram_poller.main"
     terminate_matching_processes "API" "uvicorn apps.api.main:app"
+    terminate_matching_processes "Frontend" "$SCRIPT_DIR/frontend/node_modules/.bin/vite"
+    terminate_matching_processes_in_dir "Frontend" "npm run dev|node .*vite" "$SCRIPT_DIR/frontend"
     cleanup_worker_singleton_pid_files
 
     echo -e "${YELLOW}⏹ Останавливаю Docker контейнеры...${NC}"
@@ -271,12 +456,21 @@ case "${1:-}" in
         show_logs
         exit 0
         ;;
+    "")
+        ;;
+    *)
+        echo -e "${RED}❌ Неизвестный аргумент: $1${NC}"
+        echo "Использование: ./run.sh [--dev|--down|--restart|--logs]"
+        exit 1
+        ;;
 esac
 
-# Ловим Ctrl+C / SIGTERM / аварийный выход на любом этапе запуска
+# Ловим Ctrl+C / SIGTERM / аварийный выход после начала запуска сервисов
 CLEANUP_DONE=0
+RUN_STARTED=0
 do_cleanup() {
     [ "$CLEANUP_DONE" -eq 0 ] || return 0
+    [ "$RUN_STARTED" -eq 1 ] || return 0
     CLEANUP_DONE=1
     stop_all
 }
@@ -307,6 +501,13 @@ set -a
 . ./.env
 set +a
 
+API_HOST="${API_HOST:-0.0.0.0}"
+API_PORT="${API_PORT:-8100}"
+POSTGRES_PORT="${POSTGRES_PORT:-5433}"
+GRPC_PORT="${GRPC_PORT:-50051}"
+FRONTEND_HOST="${FRONTEND_HOST:-127.0.0.1}"
+FRONTEND_PORT="${FRONTEND_PORT:-5174}"
+
 # Проверяем Docker
 if ! command -v docker &>/dev/null; then
     echo -e "${RED}❌ Docker не установлен${NC}"
@@ -326,14 +527,17 @@ if ! python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 12) e
 fi
 
 # Останавливаем старые процессы если они запущены
+stop_supervisord 20
 if [ -f "$PID_FILE" ] && [ -s "$PID_FILE" ]; then
     echo -e "${YELLOW}🔄 Останавливаю предыдущие процессы...${NC}"
     while read -r pid name; do
+        [ "$name" != "supervisord" ] || continue
         stop_process_by_pid "$pid" "$name"
     done < "$PID_FILE"
 fi
 
-terminate_matching_processes "Browser Agent" "node dist/index.js"
+terminate_matching_processes "Browser Agent" "$SCRIPT_DIR/services/browser-agent/dist/index.js"
+terminate_matching_processes_in_dir "Browser Agent" "node dist/index.js" "$SCRIPT_DIR/services/browser-agent"
 terminate_matching_processes "Observer Worker" "run_observer.py"
 terminate_matching_processes "Disable Worker" "run_disable_worker.py"
 terminate_matching_processes "Enable Worker" "run_enable_worker.py"
@@ -341,7 +545,15 @@ terminate_matching_processes "Enable Recommendation Worker" "run_enable_recommen
 terminate_matching_processes "Enable Recommendation Worker" "apps.enable_recommendation_worker.main"
 terminate_matching_processes "Telegram Poller" "apps.telegram_poller.main"
 terminate_matching_processes "API" "uvicorn apps.api.main:app"
+terminate_matching_processes "Frontend" "$SCRIPT_DIR/frontend/node_modules/.bin/vite"
+terminate_matching_processes_in_dir "Frontend" "npm run dev|node .*vite" "$SCRIPT_DIR/frontend"
 cleanup_worker_singleton_pid_files
+
+ensure_port_free "$API_PORT" "API"
+ensure_port_free "$GRPC_PORT" "Browser Agent"
+ensure_port_free "$FRONTEND_PORT" "Frontend"
+
+RUN_STARTED=1
 
 # Создаём директорию для логов
 mkdir -p "$LOG_DIR"
@@ -351,7 +563,10 @@ mkdir -p "$LOG_DIR"
 # 1. Docker — Postgres
 # ==========================================
 echo -e "${BLUE}🐳 Запускаю Docker контейнеры (Postgres)...${NC}"
-docker compose up -d
+if ! docker compose up -d; then
+    echo -e "${RED}❌ Docker Compose не смог запустить контейнеры${NC}"
+    exit 1
+fi
 
 # Ждём готовности Postgres
 echo -e "${BLUE}⏳ Жду готовности Postgres...${NC}"
@@ -376,7 +591,13 @@ CACHED_HASH=""
 
 if [ "$CURRENT_HASH" != "$CACHED_HASH" ]; then
     echo -e "${BLUE}📦 Устанавливаю зависимости...${NC}"
-    .venv/bin/pip install -q -e '.[dev]' 2>&1 | tail -3
+    PIP_INSTALL_LOG="$LOG_DIR/pip_install.log"
+    if ! .venv/bin/pip install -q -e '.[dev]' > "$PIP_INSTALL_LOG" 2>&1; then
+        echo -e "${RED}❌ Ошибка установки Python-зависимостей${NC}"
+        tail -20 "$PIP_INSTALL_LOG" || true
+        exit 1
+    fi
+    tail -3 "$PIP_INSTALL_LOG" || true
     echo "$CURRENT_HASH" > "$DEPS_HASH_FILE"
 else
     echo -e "${GREEN}📦 Зависимости актуальны (pyproject.toml не менялся)${NC}"
@@ -415,22 +636,22 @@ DEV_MODE="${DEV_MODE:-0}"
 UVICORN_EXTRA_ARGS=""
 if [ "$DEV_MODE" -eq 1 ]; then
     UVICORN_EXTRA_ARGS="--reload"
-    echo -e "${BLUE}🚀 Запускаю API (порт 8100, dev mode)...${NC}"
+    echo -e "${BLUE}🚀 Запускаю API (порт $API_PORT, dev mode)...${NC}"
 else
-    echo -e "${BLUE}🚀 Запускаю API (порт 8100)...${NC}"
+    echo -e "${BLUE}🚀 Запускаю API (порт $API_PORT)...${NC}"
 fi
 # shellcheck disable=SC2086
 .venv/bin/uvicorn apps.api.main:app \
-    --host 0.0.0.0 --port 8100 $UVICORN_EXTRA_ARGS \
+    --host "$API_HOST" --port "$API_PORT" $UVICORN_EXTRA_ARGS \
     > "$LOG_DIR/api.log" 2>&1 &
 API_PID=$!
-echo "$API_PID api" >> "$PID_FILE"
+append_pid "$API_PID" "api"
 echo -e "${GREEN}  API PID: $API_PID${NC}"
 
 # Ждём готовности API через /health
 echo -e "${BLUE}⏳ Жду готовности API...${NC}"
 for i in $(seq 1 20); do
-    if curl -sf http://localhost:8100/health >/dev/null 2>&1; then
+    if curl -sf "http://localhost:$API_PORT/health" >/dev/null 2>&1; then
         echo -e "${GREEN}✅ API отвечает на /health${NC}"
         break
     fi
@@ -445,31 +666,75 @@ for i in $(seq 1 20); do
     sleep 1
 done
 
+echo -e "${BLUE}🧭 Проверяю CDP-порт Vision...${NC}"
+VISION_BOOTSTRAP_BODY="$(mktemp)"
+VISION_BOOTSTRAP_STATUS="$(
+    if [ -n "${API_KEY:-}" ]; then
+        curl -sS -m 90 -w "%{http_code}" -o "$VISION_BOOTSTRAP_BODY" \
+            -X POST -H "X-API-Key: $API_KEY" \
+            "http://localhost:$API_PORT/api/vision/ensure-cdp" || true
+    else
+        curl -sS -m 90 -w "%{http_code}" -o "$VISION_BOOTSTRAP_BODY" \
+            -X POST "http://localhost:$API_PORT/api/vision/ensure-cdp" || true
+    fi
+)"
+if [ "$VISION_BOOTSTRAP_STATUS" = "200" ]; then
+    VISION_BOOTSTRAP_SUMMARY="$(
+        .venv/bin/python - "$VISION_BOOTSTRAP_BODY" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+with open(path, encoding="utf-8") as fh:
+    data = json.load(fh)
+
+prefix = "ok" if data.get("ok", True) else "warn"
+status = data.get("status") or "UNKNOWN"
+action = data.get("action") or "none"
+message = data.get("message") or "Без сообщения"
+print(f"{prefix}|{status}|{action}|{message}")
+PY
+    )"
+    IFS='|' read -r VISION_BOOTSTRAP_OK VISION_BOOTSTRAP_STATE VISION_BOOTSTRAP_ACTION VISION_BOOTSTRAP_MESSAGE <<< "$VISION_BOOTSTRAP_SUMMARY"
+    if [ "$VISION_BOOTSTRAP_OK" = "ok" ]; then
+        echo -e "${GREEN}✅ Vision CDP: $VISION_BOOTSTRAP_STATE ($VISION_BOOTSTRAP_ACTION) — $VISION_BOOTSTRAP_MESSAGE${NC}"
+    else
+        echo -e "${YELLOW}⚠️  Vision CDP: $VISION_BOOTSTRAP_STATE ($VISION_BOOTSTRAP_ACTION) — $VISION_BOOTSTRAP_MESSAGE${NC}"
+    fi
+else
+    echo -e "${YELLOW}⚠️  Не удалось проверить CDP-порт Vision при старте (HTTP ${VISION_BOOTSTRAP_STATUS:-нет ответа})${NC}"
+    tail -5 "$VISION_BOOTSTRAP_BODY" 2>/dev/null || true
+fi
+rm -f "$VISION_BOOTSTRAP_BODY"
+
 # ==========================================
 # 5. Сборка и запуск Browser Agent (Node.js gRPC сервис)
 # ==========================================
 echo -e "${BLUE}🌐 Запускаю Browser Agent (Node.js gRPC)...${NC}"
-if [ -d services/browser-agent ] && [ -d services/browser-agent/node_modules ]; then
-    cd services/browser-agent
-    echo -e "${BLUE}⏳ Собираю Browser Agent...${NC}"
-    npm run build > "$LOG_DIR/browser_agent_build.log" 2>&1
-    if [ $? -ne 0 ]; then
-        echo -e "${RED}❌ Ошибка сборки Browser Agent${NC}"
-        tail -10 "$LOG_DIR/browser_agent_build.log" || true
+if [ -d services/browser-agent ]; then
+    if ! install_node_dependencies_if_needed "$SCRIPT_DIR/services/browser-agent" "$LOG_DIR/browser_agent_npm_install.log"; then
+        tail -20 "$LOG_DIR/browser_agent_npm_install.log" || true
         exit 1
     fi
+
+    echo -e "${BLUE}⏳ Собираю Browser Agent...${NC}"
+    if ! (cd "$SCRIPT_DIR/services/browser-agent" && npm run build) > "$LOG_DIR/browser_agent_build.log" 2>&1; then
+        echo -e "${RED}❌ Ошибка сборки Browser Agent${NC}"
+        tail -20 "$LOG_DIR/browser_agent_build.log" || true
+        exit 1
+    fi
+
     echo -e "${GREEN}✅ Browser Agent собран${NC}"
-    node dist/index.js > "$LOG_DIR/browser_agent.log" 2>&1 &
+    GRPC_PORT="$GRPC_PORT" node "$SCRIPT_DIR/services/browser-agent/dist/index.js" > "$LOG_DIR/browser_agent.log" 2>&1 &
     BROWSER_AGENT_PID=$!
-    cd "$SCRIPT_DIR"
-    echo "$BROWSER_AGENT_PID browser_agent" >> "$PID_FILE"
+    append_pid "$BROWSER_AGENT_PID" "browser_agent"
     echo -e "${GREEN}  Browser Agent PID: $BROWSER_AGENT_PID${NC}"
 
     # Ждём готовности gRPC
     echo -e "${BLUE}⏳ Жду готовности Browser Agent...${NC}"
     for i in $(seq 1 10); do
-        if nc -z localhost 50051 2>/dev/null; then
-            echo -e "${GREEN}✅ Browser Agent отвечает на порту 50051${NC}"
+        if nc -z localhost "$GRPC_PORT" 2>/dev/null; then
+            echo -e "${GREEN}✅ Browser Agent отвечает на порту $GRPC_PORT${NC}"
             break
         fi
         if ! is_process_active "$BROWSER_AGENT_PID"; then
@@ -483,7 +748,7 @@ if [ -d services/browser-agent ] && [ -d services/browser-agent/node_modules ]; 
         sleep 1
     done
 else
-    echo -e "${YELLOW}⚠️  services/browser-agent не найден или не установлен, пропускаю${NC}"
+    echo -e "${YELLOW}⚠️  services/browser-agent не найден, пропускаю${NC}"
     BROWSER_AGENT_PID=""
 fi
 
@@ -491,38 +756,31 @@ fi
 # 6–9. Запуск воркеров (через supervisord или напрямую)
 # ==========================================
 USE_SUPERVISOR=0
-if command -v supervisord &>/dev/null; then
+SUPERVISORD_BIN=""
+SUPERVISORCTL_BIN=""
+if SUPERVISORD_BIN="$(get_supervisord_bin 2>/dev/null)" && SUPERVISORCTL_BIN="$(get_supervisorctl_bin 2>/dev/null)"; then
     USE_SUPERVISOR=1
-elif [ -x .venv/bin/supervisord ]; then
-    USE_SUPERVISOR=1
-    # Добавляем venv/bin в PATH чтобы supervisorctl тоже нашёлся
-    export PATH="$SCRIPT_DIR/.venv/bin:$PATH"
 fi
 
 if [ "$USE_SUPERVISOR" -eq 1 ]; then
     echo -e "${BLUE}🛡 Запускаю воркеры через supervisord (автоперезапуск включён)...${NC}"
 
     # Останавливаем предыдущий supervisord этого проекта если запущен
-    if [ -f "$SCRIPT_DIR/supervisord.pid" ]; then
-        OLD_SPID="$(cat "$SCRIPT_DIR/supervisord.pid" 2>/dev/null || true)"
-        if [ -n "$OLD_SPID" ] && kill -0 "$OLD_SPID" 2>/dev/null; then
-            echo -e "  Останавливаю предыдущий supervisord (PID $OLD_SPID)"
-            supervisorctl -c "$SCRIPT_DIR/supervisord.conf" shutdown 2>/dev/null || true
-            sleep 2
-        fi
-    fi
+    stop_supervisord 20
 
-    supervisord -c "$SCRIPT_DIR/supervisord.conf"
-    SUPERVISORD_PID="$(cat "$SCRIPT_DIR/supervisord.pid" 2>/dev/null || true)"
+    "$SUPERVISORD_BIN" -c "$SUPERVISOR_CONF"
+    SUPERVISORD_PID="$(cat "$SUPERVISOR_PID_FILE" 2>/dev/null || true)"
     if [ -n "$SUPERVISORD_PID" ]; then
-        echo "$SUPERVISORD_PID supervisord" >> "$PID_FILE"
+        append_pid "$SUPERVISORD_PID" "supervisord"
         echo -e "${GREEN}  supervisord PID: $SUPERVISORD_PID${NC}"
     fi
 
-    # Ждём пока supervisord поднимет процессы
-    sleep 3
-    echo -e "${GREEN}  Воркеры запущены под supervisord. Статус:${NC}"
-    supervisorctl -c "$SCRIPT_DIR/supervisord.conf" status || true
+    echo -e "${BLUE}⏳ Жду готовности воркеров supervisord...${NC}"
+    if wait_for_supervisor_running "$SUPERVISORCTL_BIN" 35; then
+        echo -e "${GREEN}  Воркеры запущены под supervisord${NC}"
+    else
+        exit 1
+    fi
 
     # Заглушки PID для проверки boot ниже — используем supervisorctl
     OBSERVER_PID=""
@@ -540,7 +798,7 @@ else
     echo -e "${BLUE}🔍 Запускаю Observer Worker...${NC}"
     .venv/bin/python run_observer.py > "$LOG_DIR/observer.log" 2>&1 &
     OBSERVER_PID=$!
-    echo "$OBSERVER_PID observer" >> "$PID_FILE"
+    append_pid "$OBSERVER_PID" "observer"
     echo -e "${GREEN}  Observer PID: $OBSERVER_PID${NC}"
 
     # ==========================================
@@ -549,7 +807,7 @@ else
     echo -e "${BLUE}🔴 Запускаю Disable Worker...${NC}"
     .venv/bin/python run_disable_worker.py > "$LOG_DIR/disable_worker.log" 2>&1 &
     DISABLE_PID=$!
-    echo "$DISABLE_PID disable_worker" >> "$PID_FILE"
+    append_pid "$DISABLE_PID" "disable_worker"
     echo -e "${GREEN}  Disable Worker PID: $DISABLE_PID${NC}"
 
     # ==========================================
@@ -558,7 +816,7 @@ else
     echo -e "${BLUE}🟢 Запускаю Enable Worker...${NC}"
     .venv/bin/python run_enable_worker.py > "$LOG_DIR/enable_worker.log" 2>&1 &
     ENABLE_PID=$!
-    echo "$ENABLE_PID enable_worker" >> "$PID_FILE"
+    append_pid "$ENABLE_PID" "enable_worker"
     echo -e "${GREEN}  Enable Worker PID: $ENABLE_PID${NC}"
 
     # ==========================================
@@ -568,7 +826,7 @@ else
         echo -e "${BLUE}🟡 Запускаю Enable Recommendation Worker...${NC}"
         .venv/bin/python run_enable_recommendation_worker.py > "$LOG_DIR/enable_recommendation_worker.log" 2>&1 &
         ENABLE_RECO_PID=$!
-        echo "$ENABLE_RECO_PID enable_recommendation_worker" >> "$PID_FILE"
+        append_pid "$ENABLE_RECO_PID" "enable_recommendation_worker"
         echo -e "${GREEN}  Enable Recommendation Worker PID: $ENABLE_RECO_PID${NC}"
     else
         echo -e "${YELLOW}⚠️  run_enable_recommendation_worker.py не найден, пропускаю${NC}"
@@ -581,7 +839,7 @@ else
     echo -e "${BLUE}🤖 Запускаю Telegram Poller...${NC}"
     .venv/bin/python -m apps.telegram_poller.main > "$LOG_DIR/telegram.log" 2>&1 &
     TG_PID=$!
-    echo "$TG_PID telegram" >> "$PID_FILE"
+    append_pid "$TG_PID" "telegram"
     echo -e "${GREEN}  Telegram PID: $TG_PID${NC}"
 fi
 
@@ -589,31 +847,43 @@ fi
 # 10. Запуск Frontend (Vite)
 # ==========================================
 if [ -d frontend ]; then
-    echo -e "${BLUE}🎨 Запускаю Frontend (Vite)...${NC}"
-    # Убиваем старые Vite-процессы ТОЛЬКО этого проекта
-    pgrep -f "node.*vite.*$SCRIPT_DIR/frontend" 2>/dev/null | xargs kill 2>/dev/null || true
-    sleep 1
-    cd frontend
-    if [ ! -d node_modules ]; then
-        npm install --silent 2>&1 | tail -3
-    fi
-    # Прокидываем API_KEY из .env в Vite
-    VITE_API_KEY="${API_KEY:-}" npm run dev > "$LOG_DIR/frontend.log" 2>&1 &
-    FRONTEND_PID=$!
-    echo "$FRONTEND_PID frontend" >> "$PID_FILE"
-    echo -e "${GREEN}  Frontend PID: $FRONTEND_PID${NC}"
-    cd "$SCRIPT_DIR"
+    echo -e "${BLUE}🎨 Запускаю Frontend (Vite, порт $FRONTEND_PORT)...${NC}"
+    terminate_matching_processes "Frontend" "$SCRIPT_DIR/frontend/node_modules/.bin/vite"
+    terminate_matching_processes_in_dir "Frontend" "npm run dev|node .*vite" "$SCRIPT_DIR/frontend"
 
-    # Ждём пока Vite напишет реальный порт в лог
-    FRONTEND_URL="http://localhost:5173"
+    if ! install_node_dependencies_if_needed "$SCRIPT_DIR/frontend" "$LOG_DIR/frontend_npm_install.log"; then
+        tail -20 "$LOG_DIR/frontend_npm_install.log" || true
+        exit 1
+    fi
+
+    FRONTEND_URL="http://localhost:$FRONTEND_PORT"
+    # Прокидываем API_KEY из .env в Vite
+    (
+        cd "$SCRIPT_DIR/frontend"
+        VITE_API_KEY="${API_KEY:-}" npm run dev -- --host "$FRONTEND_HOST" --port "$FRONTEND_PORT" --strictPort
+    ) > "$LOG_DIR/frontend.log" 2>&1 &
+    FRONTEND_PID=$!
+    append_pid "$FRONTEND_PID" "frontend"
+    echo -e "${GREEN}  Frontend PID: $FRONTEND_PID${NC}"
+
+    # Ждём готовности Vite на фиксированном порту.
     for i in $(seq 1 15); do
-        VITE_PORT=$(sed -n 's/.*Local: *http:\/\/localhost:\([0-9]*\).*/\1/p' "$LOG_DIR/frontend.log" 2>/dev/null | head -1)
-        if [ -n "$VITE_PORT" ]; then
-            FRONTEND_URL="http://localhost:$VITE_PORT"
+        if nc -z "$FRONTEND_HOST" "$FRONTEND_PORT" 2>/dev/null; then
+            echo -e "${GREEN}✅ Frontend отвечает на порту $FRONTEND_PORT${NC}"
             break
+        fi
+        if ! is_process_active "$FRONTEND_PID"; then
+            echo -e "${RED}❌ Frontend процесс завершился при запуске${NC}"
+            tail -20 "$LOG_DIR/frontend.log" || true
+            exit 1
+        fi
+        if [ "$i" -eq 15 ]; then
+            echo -e "${YELLOW}⚠️  Frontend не ответил за 15с, продолжаю запуск${NC}"
         fi
         sleep 1
     done
+else
+    FRONTEND_URL="не запущен"
 fi
 
 # ==========================================
@@ -649,7 +919,7 @@ if command -v caffeinate &>/dev/null; then
     # -w $$ — caffeinate завершится автоматически при гибели скрипта
     caffeinate -i -d -w $$ &
     CAFFEINATE_PID=$!
-    echo "$CAFFEINATE_PID caffeinate" >> "$PID_FILE"
+    append_pid "$CAFFEINATE_PID" "caffeinate"
     CAFFEINATE_ENABLED=1
 else
     CAFFEINATE_ENABLED=0
@@ -663,9 +933,9 @@ echo -e "${GREEN}═════════════════════
 echo -e "${GREEN}  ✅ FB Stop Bot запущен!${NC}"
 echo -e "${GREEN}══════════════════════════════════════════${NC}"
 echo ""
-echo -e "  🌐 API:       ${BLUE}http://localhost:8100/docs${NC}"
+echo -e "  🌐 API:       ${BLUE}http://localhost:$API_PORT/docs${NC}"
 echo -e "  📊 Dashboard: ${BLUE}${FRONTEND_URL}${NC}"
-echo -e "  🗄️ Postgres:  localhost:5433"
+echo -e "  🗄️ Postgres:  localhost:$POSTGRES_PORT"
 echo ""
 echo -e "  📋 Логи:      ${YELLOW}$LOG_DIR/${NC}"
 echo -e "  ⏹  Остановка: ${YELLOW}./run.sh --down${NC}"

@@ -54,6 +54,35 @@ class ObserverSettingsSchema(BaseModel):
     auto_enable_recommendations: bool = False
 
 
+class ObserverThresholdRecommendationStepSchema(BaseModel):
+    """Рекомендация по одному observer-порогу."""
+
+    step_id: str
+    code: str
+    title: str
+    sample_count: int
+    confidence: str
+    current_stop_percent: Decimal
+    current_warning_percent: Decimal
+    recommended_stop_percent: Decimal | None = None
+    recommended_warning_percent: Decimal | None = None
+    p50_ratio: Decimal | None = None
+    p80_ratio: Decimal | None = None
+    p90_ratio: Decimal | None = None
+    reason: str
+    can_apply: bool
+
+
+class ObserverThresholdRecommendationsResponseSchema(BaseModel):
+    """Ответ с рекомендациями observer-порогов по истории."""
+
+    generated_at: str
+    since: str
+    days: int
+    min_samples: int
+    steps: list[ObserverThresholdRecommendationStepSchema]
+
+
 class ScanningToggleSchema(BaseModel):
     """Схема для быстрого переключения сканирования."""
 
@@ -146,6 +175,11 @@ class VisionSettingsSchema(BaseModel):
     profile_id: str = ""
     has_token: bool = False
     auto_restart_on_missing_cdp: bool = True
+    runtime_status: str = "NOT_CONFIGURED"
+    runtime_status_message: str = "Vision ещё не настроен"
+    profile_running: bool = False
+    cdp_port: int | None = None
+    cdp_ready: bool = False
 
 
 class VisionSettingsUpdateSchema(BaseModel):
@@ -154,6 +188,18 @@ class VisionSettingsUpdateSchema(BaseModel):
     api_url: str = "http://127.0.0.1:3030"
     x_token: str = ""  # пустая строка = не менять токен
     profile_id: str = ""
+
+
+class VisionCdpEnsureResponseSchema(BaseModel):
+    """Результат мягкой проверки CDP-порта Vision при старте приложения."""
+
+    ok: bool = True
+    status: str = "UNKNOWN"
+    message: str = ""
+    action: str = "none"
+    profile_running: bool = False
+    cdp_port: int | None = None
+    cdp_ready: bool = False
 
 
 # ==========================================
@@ -421,6 +467,10 @@ class DashboardStatsSchema(BaseModel):
     observer_heartbeat_at: str | None = None
     observer_last_error: str | None = None
     observer_last_error_at: str | None = None
+    current_scan_interval_seconds: int | None = None
+    current_scan_jitter_seconds: int | None = None
+    current_scan_threat_level: str | None = None
+    next_scan_at: str | None = None
 
 
 class SpendHistoryPoint(BaseModel):

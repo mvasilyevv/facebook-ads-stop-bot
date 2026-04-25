@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -24,9 +24,9 @@ from core.observer.service import AlertCandidate
 
 logger = logging.getLogger(__name__)
 
-# После успешного клика Meta может ещё долго отдавать UNKNOWN/ACTIVE, поэтому
-# не сбрасываем CLAIMED слишком рано и ждём подтверждение следующими сканами.
-DISABLE_SUCCESS_CONFIRMATION_GRACE_TIMEOUT = timedelta(minutes=30)
+# После успешного клика даём Meta короткое окно на подтверждение OFF.
+# Если следующий свежий STOP-скан всё ещё видит активное объявление, повторяем отключение.
+DISABLE_SUCCESS_CONFIRMATION_GRACE_TIMEOUT = timedelta(minutes=2)
 MANUAL_ATTENTION_REASON_TITLE = "Нужна ручная проверка отключения"
 
 
@@ -46,6 +46,21 @@ def _build_manual_attention_reason_text(*, retry_count: int, last_error: str | N
     if last_error:
         return f"{message} Последняя ошибка: {last_error}"
     return message
+
+
+def _is_disable_success_still_in_grace(
+    *,
+    completed_at: datetime | None,
+    snapshot_last_observed_at: datetime | None,
+) -> bool:
+    """Проверяет, можно ли ещё ждать подтверждение OFF после успешной disable-попытки."""
+    if completed_at is None:
+        return False
+    if snapshot_last_observed_at is None:
+        return True
+    if snapshot_last_observed_at <= completed_at:
+        return True
+    return snapshot_last_observed_at - completed_at < DISABLE_SUCCESS_CONFIRMATION_GRACE_TIMEOUT
 
 
 def _offer_id_from_snapshot(snapshot: AdSnapshot) -> object:
@@ -112,8 +127,6 @@ async def reconcile_disable_incidents_after_scan() -> list[AlertCandidate]:
         if last_scan is None:
             return []
         active_cutoff = last_scan - ACTIVE_ALERT_WINDOW
-        recent_cutoff = datetime.now(UTC) - DISABLE_SUCCESS_CONFIRMATION_GRACE_TIMEOUT
-
         result = await session.execute(
             select(AdSnapshot)
             .options(
@@ -146,18 +159,23 @@ async def reconcile_disable_incidents_after_scan() -> list[AlertCandidate]:
             if active_count:
                 continue
 
-            recent_succeeded = await session.scalar(
-                select(func.count(DisableTask.id)).where(
+            latest_succeeded = await session.scalar(
+                select(DisableTask)
+                .where(
                     DisableTask.ad_id == snapshot.ad_id,
                     DisableTask.open_state_token == incident_key,
                     DisableTask.status == DisableTaskStatus.SUCCEEDED,
                     DisableTask.completed_at.is_not(None),
-                    DisableTask.completed_at >= recent_cutoff,
                 )
+                .order_by(DisableTask.completed_at.desc())
+                .limit(1)
             )
-            if recent_succeeded:
+            if latest_succeeded is not None and _is_disable_success_still_in_grace(
+                completed_at=latest_succeeded.completed_at,
+                snapshot_last_observed_at=snapshot.last_observed_at,
+            ):
                 logger.debug(
-                    "Incident reconcile: %s — ждём подтверждение OFF после недавнего успешного клика",
+                    "Incident reconcile: %s — ждём подтверждение OFF после недавней успешной попытки",
                     snapshot.fb_ad_id,
                 )
                 continue

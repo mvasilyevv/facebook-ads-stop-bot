@@ -16,6 +16,33 @@ function getStatusLabel(status) {
   return TASK_STATUS_LABELS[status] || status;
 }
 
+function getRecommendationText(rec) {
+  return rec.reason_title || rec.reason_text || 'Рекомендация';
+}
+
+const RECOMMENDATION_BLOCKING_TASK_STATUSES = new Set(['PENDING', 'RUNNING', 'RETRYING']);
+
+function getRelatedEnableStatus(rec) {
+  return rec.related_enable_task_status || null;
+}
+
+function canCreateEnableTask(rec) {
+  const status = getRelatedEnableStatus(rec);
+  if (!status) return rec.state !== 'TASK_CREATED';
+  return !RECOMMENDATION_BLOCKING_TASK_STATUSES.has(status) && status !== 'SUCCEEDED';
+}
+
+function getRecommendationButtonLabel(rec) {
+  const status = getRelatedEnableStatus(rec);
+  if (status === 'PENDING') return 'В очереди';
+  if (status === 'RUNNING') return 'Включаем';
+  if (status === 'RETRYING') return 'Повтор';
+  if (status === 'FAILED') return 'Повторить';
+  if (status === 'SUCCEEDED') return 'Включено';
+  if (status === 'CANCELLED') return 'Включить';
+  return rec.state === 'TASK_CREATED' ? 'В очереди' : 'Включить';
+}
+
 const ACTIVE_STATUSES = new Set(['PENDING', 'RUNNING', 'RETRYING', 'FAILED']);
 // FAILED-задачи старше этого порога не засоряют очередь
 const FAILED_TTL_MS = 24 * 60 * 60 * 1000;
@@ -122,20 +149,33 @@ export function TaskQueuePanel({
             РЕКОМЕНДАЦИИ ({enableRecs.length})
           </div>
           <div className="space-y-1.5">
-            {enableRecs.slice(0, 5).map((rec) => (
-              <div key={rec.id} className="flex items-center justify-between rounded bg-elevated px-3 py-2">
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-sm text-primary">{rec.ad_name || 'N/A'}</div>
-                  <div className="mt-0.5 text-2xs text-muted">{rec.reason || 'Рекомендация'}</div>
+            {enableRecs.slice(0, 5).map((rec) => {
+              const relatedStatus = getRelatedEnableStatus(rec);
+              const isActionAllowed = canCreateEnableTask(rec);
+              return (
+                <div key={rec.id} className="flex items-center justify-between rounded bg-elevated px-3 py-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm text-primary">{rec.ad_name || 'N/A'}</div>
+                    <div className="mt-0.5 text-2xs text-muted">{getRecommendationText(rec)}</div>
+                    {relatedStatus && (
+                      <div className={`mt-0.5 font-mono text-2xs ${STATUS_COLOR[relatedStatus] || 'text-primary'}`}>
+                        {statusSymbol(relatedStatus)} Задача: {getStatusLabel(relatedStatus)}
+                      </div>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (isActionAllowed) onCreateEnableTask?.(rec.id);
+                    }}
+                    disabled={!isActionAllowed}
+                    className="ml-2 rounded-sm bg-accent-muted px-2 py-1 text-2xs font-semibold text-accent hover:bg-accent/20 disabled:opacity-40"
+                  >
+                    {getRecommendationButtonLabel(rec)}
+                  </button>
                 </div>
-                <button
-                  onClick={() => onCreateEnableTask?.(rec.id)}
-                  className="ml-2 rounded-sm bg-accent-muted px-2 py-1 text-2xs font-semibold text-accent hover:bg-accent/20"
-                >
-                  Включить
-                </button>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}

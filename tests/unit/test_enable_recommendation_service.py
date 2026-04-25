@@ -11,7 +11,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from core.domain import AlertStage, AlertState, EnableRecommendationLevel, EnableTaskStatus
+from core.domain import (
+    AlertStage,
+    AlertState,
+    EnableRecommendationLevel,
+    EnableTaskStatus,
+)
 from core.enable_recommendations.service import (
     EnableRecommendationCandidate,
     collect_enable_recommendation_candidates,
@@ -139,9 +144,9 @@ async def test_collect_enable_recommendation_candidates_builds_ok_candidate():
     )
 
 
-# Проверяем, что OK-рекомендация по лидам получает человекочитаемую причину без требования регистрации.
+# Проверяем, что лиды без регистрации не дают resume-рекомендацию.
 @pytest.mark.asyncio
-async def test_collect_enable_recommendation_candidates_builds_lead_ok_candidate():
+async def test_collect_enable_recommendation_candidates_skips_lead_only_candidate():
     offer_id = uuid.uuid4()
     snapshot = _snapshot(
         fb_ad_id="ad-lead-ok",
@@ -186,19 +191,12 @@ async def test_collect_enable_recommendation_candidates_builds_lead_ok_candidate
     ):
         _, candidates = await collect_enable_recommendation_candidates(session)
 
-    assert len(candidates) == 1
-    assert candidates[0].fb_ad_id == "ad-lead-ok"
-    assert candidates[0].recommendation_level == EnableRecommendationLevel.OK
-    assert candidates[0].reason_title == "Строгая проверка пройдена"
-    assert (
-        candidates[0].reason_text
-        == "Есть лиды: 2 · CPL $0.3500. По текущим правилам блокирующих сигналов нет."
-    )
+    assert candidates == []
 
 
-# Проверяем, что OK-рекомендация только по кликам тоже получает понятную причину.
+# Проверяем, что клики без лида/регистрации не дают resume-рекомендацию.
 @pytest.mark.asyncio
-async def test_collect_enable_recommendation_candidates_builds_click_ok_candidate():
+async def test_collect_enable_recommendation_candidates_skips_click_only_candidate():
     offer_id = uuid.uuid4()
     snapshot = _snapshot(
         fb_ad_id="ad-click-ok",
@@ -243,14 +241,57 @@ async def test_collect_enable_recommendation_candidates_builds_click_ok_candidat
     ):
         _, candidates = await collect_enable_recommendation_candidates(session)
 
-    assert len(candidates) == 1
-    assert candidates[0].fb_ad_id == "ad-click-ok"
-    assert candidates[0].recommendation_level == EnableRecommendationLevel.OK
-    assert candidates[0].reason_title == "Строгая проверка пройдена"
-    assert (
-        candidates[0].reason_text
-        == "Есть клики: 2 · CPC $0.0400. По текущим правилам блокирующих сигналов нет."
+    assert candidates == []
+
+
+# Проверяем, что сценарий DRC_CR2_CR009 с лидами без регистраций не уходит в авто-resume.
+@pytest.mark.asyncio
+async def test_collect_enable_recommendation_candidates_blocks_drc_cr009_lead_only_resume():
+    offer_id = uuid.uuid4()
+    snapshot = _snapshot(
+        fb_ad_id="120246606041500334",
+        delivery_status="OFF",
+        offer_id=offer_id,
+        offer_code="DRC_CR2",
+        campaign_name="MV | DRC | CR2 | adset.pro | 22.04 | 2",
+        adset_name="1",
+        spend=Decimal("0.48"),
+        clicks=11,
+        cpc=Decimal("0.0400"),
+        leads=2,
+        cost_per_lead=Decimal("0.2400"),
+        registrations=0,
+        cost_per_registration=None,
+        deposits=0,
     )
+    snapshot.fb_ad.ad_name = "DRC_CR2_CR009"
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=_rows_result([snapshot]))
+    last_scan = datetime(2026, 4, 25, 8, 32, tzinfo=UTC)
+
+    with (
+        patch(
+            "core.enable_recommendations.service.load_live_batch_bounds",
+            new=AsyncMock(return_value=(last_scan, last_scan - timedelta(minutes=30))),
+        ),
+        patch(
+            "core.enable_recommendations.service._load_observer_rule_settings",
+            new=AsyncMock(return_value=(Decimal("75"), Decimal("90"))),
+        ),
+        patch(
+            "core.enable_recommendations.service._load_offer_rule_map",
+            new=AsyncMock(
+                return_value={offer_id: (SimpleNamespace(cpa_amount=Decimal("5")), object())}
+            ),
+        ),
+        patch(
+            "core.enable_recommendations.service._evaluate_enable_recommendation",
+            return_value=(EnableRecommendationLevel.OK, _evaluation(None)),
+        ),
+    ):
+        _, candidates = await collect_enable_recommendation_candidates(session)
+
+    assert candidates == []
 
 
 # Проверяем, что NOT_DELIVERING больше не попадает в рекомендации на включение без реального OFF-тумблера.
@@ -713,6 +754,56 @@ async def test_promote_recommendation_to_enable_task_blocks_warning_snapshot():
     assert "активен warning" in result.detail
 
 
+# Проверяем, что авто-resume блокируется после ручного отключения в текущих сутках.
+@pytest.mark.asyncio
+async def test_promote_recommendation_to_enable_task_blocks_auto_after_manual_disable():
+    event_id = uuid.uuid4()
+    snapshot_id = uuid.uuid4()
+    offer_id = uuid.uuid4()
+    ad_id = uuid.uuid4()
+    live_scan = datetime(2026, 4, 25, 8, 32, tzinfo=UTC)
+    event = SimpleNamespace(
+        id=event_id,
+        ad_id=ad_id,
+        snapshot_id=snapshot_id,
+        live_batch_started_at=live_scan,
+    )
+    event_fb_ad = SimpleNamespace(
+        fb_ad_id="120246606041500334",
+        ad_name="DRC_CR2_CR009",
+        adset=SimpleNamespace(campaign=SimpleNamespace(offer_id=offer_id, offer_code="DRC_CR2")),
+    )
+    snapshot = _snapshot(
+        fb_ad_id="120246606041500334",
+        delivery_status="OFF",
+        offer_id=offer_id,
+        last_observed_at=live_scan,
+        registrations=2,
+        cost_per_registration=Decimal("0.4000"),
+    )
+    snapshot.id = snapshot_id
+    snapshot.ad_id = ad_id
+    observer_result = MagicMock()
+    observer_result.scalar_one_or_none.return_value = SimpleNamespace(
+        cabinet_day_started_at=live_scan - timedelta(hours=1)
+    )
+    manual_disable_result = MagicMock()
+    manual_disable_result.scalar_one_or_none.return_value = uuid.uuid4()
+
+    session = AsyncMock()
+    session.execute = AsyncMock(side_effect=[observer_result, manual_disable_result])
+    session.scalar = AsyncMock(side_effect=[event, event_fb_ad, snapshot])
+
+    result = await promote_recommendation_to_enable_task(
+        session,
+        event_id=event_id,
+        requested_by_username="auto",
+    )
+
+    assert result.outcome == "blocked_manual_disable"
+    assert "отключено вручную" in result.detail
+
+
 # Проверяем, что существующая failed-enable-задача возвращается в очередь после повторной проверки.
 @pytest.mark.asyncio
 async def test_promote_recommendation_to_enable_task_requeues_failed_existing_task():
@@ -737,6 +828,8 @@ async def test_promote_recommendation_to_enable_task_requeues_failed_existing_ta
         delivery_status="OFF",
         offer_id=offer_id,
         last_observed_at=live_scan,
+        registrations=2,
+        cost_per_registration=Decimal("0.4000"),
     )
     snapshot.id = snapshot_id
     existing_task = SimpleNamespace(

@@ -67,6 +67,11 @@ async def update_observer_runtime_status(
     message: str | None = None,
     last_error: str | None = None,
     clear_last_error: bool = False,
+    current_scan_interval_seconds: int | None = None,
+    current_scan_jitter_seconds: int | None = None,
+    current_scan_threat_level: str | None = None,
+    next_scan_at: datetime | None = None,
+    clear_scan_schedule: bool = False,
     heartbeat_at: datetime | None = None,
 ) -> None:
     """Сохраняет текущий runtime-статус observer worker в singleton-настройках."""
@@ -87,6 +92,24 @@ async def update_observer_runtime_status(
             elif last_error:
                 row.worker_last_error = _truncate_text(last_error, _MAX_MESSAGE_LEN)
                 row.worker_last_error_at = now
+
+            if clear_scan_schedule:
+                row.current_scan_interval_seconds = None
+                row.current_scan_jitter_seconds = None
+                row.current_scan_threat_level = None
+                row.next_scan_at = None
+            else:
+                if current_scan_interval_seconds is not None:
+                    row.current_scan_interval_seconds = int(current_scan_interval_seconds)
+                if current_scan_jitter_seconds is not None:
+                    row.current_scan_jitter_seconds = int(current_scan_jitter_seconds)
+                if current_scan_threat_level is not None:
+                    row.current_scan_threat_level = _truncate_text(
+                        current_scan_threat_level,
+                        _MAX_STATUS_LEN,
+                    )
+                if next_scan_at is not None:
+                    row.next_scan_at = next_scan_at
 
             await session.commit()
     except Exception:

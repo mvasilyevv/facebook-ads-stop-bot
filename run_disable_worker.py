@@ -38,11 +38,11 @@ VISION_SETTINGS_POLL_INTERVAL_SECONDS = 5
 DISABLE_BATCH_SIZE = 10
 DISABLE_BATCH_MAX_SCROLL_PASSES = 50
 DISABLE_SINGLE_SEARCH_MAX_SCROLL_PASSES = 120
+DISABLE_VISIBLE_ROW_TOGGLE_SEARCH_PASSES = 8
 DISABLE_MANAGER_DISCONNECT_TIMEOUT_SECONDS = 15
 DISABLE_VISION_CLOSE_TIMEOUT_SECONDS = 10
 DISABLE_APPLY_DELAY_SECONDS = 3.0
 DISABLE_VERIFY_SCAN_MAX_SCROLL_PASSES = 80
-DISABLE_VERIFY_TOGGLE_POLL_DELAYS_SECONDS = (0.0, 1.0, 1.0, 2.0)
 DISABLE_CONFIRMED_DELIVERY_STATUS = "OFF"
 DISABLE_ALREADY_OFF_MESSAGE_PREFIX = "Объявление уже отключено"
 DISABLE_BROWSER_LOCK_TIMEOUT_SECONDS = 180.0
@@ -212,6 +212,7 @@ async def _execute_disable_single(
     fb_ad_id: str,
     *,
     reset_table_before_search: bool = True,
+    search_max_scroll_passes: int = DISABLE_SINGLE_SEARCH_MAX_SCROLL_PASSES,
 ) -> tuple[bool, str]:
     """Отключает одно объявление через gRPC.
 
@@ -226,6 +227,7 @@ async def _execute_disable_single(
     find_result = await client.find_toggle_cell(
         fb_ad_id,
         reset_to_top=reset_table_before_search,
+        max_scroll_passes=search_max_scroll_passes,
     )
 
     if not find_result["found"]:
@@ -339,8 +341,7 @@ async def _execute_disable_batch(
     1. Ищем toggle через find_toggle_cell (со скроллом).
     2. Если найден и aria-checked=true — переключаем.
     3. Без подтверждений идём дальше по целям.
-    4. После пачки запускаем повторный скан и подтверждаем OFF по toggle,
-       а delivery_status используем как дополнительную синхронизацию снимка.
+    4. После пачки запускаем повторный скан и подтверждаем OFF только по delivery_status.
     """
     results: dict[str, tuple[bool, str]] = {}
     if not tasks:
@@ -386,18 +387,17 @@ async def _execute_disable_batch(
                 client,
                 fb_ad_id,
                 reset_table_before_search=False,
+                search_max_scroll_passes=DISABLE_VISIBLE_ROW_TOGGLE_SEARCH_PASSES,
             )
 
             if success:
+                pending_verify_ad_ids.add(fb_ad_id)
                 if _is_already_disabled_message(message):
-                    for task in tasks_by_ad_id[fb_ad_id]:
-                        results[task.id] = (True, message)
                     logger.info(
-                        "Disable batch: %s уже OFF, подтверждение delivery_status оставлено следующему скану",
+                        "Disable batch: %s уже OFF по toggle, финально проверим повторным сканом",
                         fb_ad_id,
                     )
                 else:
-                    pending_verify_ad_ids.add(fb_ad_id)
                     logger.info(
                         "Disable batch: %s выключен в UI, финально проверим повторным сканом",
                         fb_ad_id,
@@ -451,41 +451,28 @@ async def _execute_disable_batch(
         rows_by_ad_id = await _scan_rows_for_disable_verification(client)
         for fb_ad_id in pending_verify_ad_ids:
             row = rows_by_ad_id.get(fb_ad_id)
-            toggle_result = await client.wait_for_toggle_confirmation(
-                fb_ad_id,
-                expected_checked="false",
-                required_reads=1,
-                poll_delays_seconds=list(DISABLE_VERIFY_TOGGLE_POLL_DELAYS_SECONDS),
-                max_scroll_passes_restore=DISABLE_SINGLE_SEARCH_MAX_SCROLL_PASSES,
-            )
             delivery_status = getattr(row, "delivery_status", "") if row is not None else ""
 
             if row is None:
                 result = (False, "После клика объявление не найдено при повторном скане")
-            elif not toggle_result.get("success", False):
-                result = (
-                    False,
-                    "Повторная проверка не подтвердила OFF по toggle: "
-                    f"aria-checked={toggle_result.get('final_aria_checked', 'unknown')}",
-                )
             elif is_delivery_disabled(delivery_status):
                 await _mark_snapshot_disabled_from_verification(
                     fb_ad_id,
                     delivery_status,
                 )
-                result = (True, "Объявление отключено: toggle OFF и delivery_status подтверждены")
+                result = (
+                    True,
+                    "Объявление отключено: повторный скан подтвердил delivery_status=OFF",
+                )
             else:
-                # Meta иногда держит промежуточный delivery_status дольше, чем сам toggle,
-                # поэтому считаем задачу успешно выключенной, но явно логируем лаг статуса.
-                logger.info(
-                    "Disable batch: %s подтверждён OFF по toggle, но delivery_status пока=%s",
+                logger.warning(
+                    "Disable batch: %s не подтверждён OFF: повторный скан видит delivery_status=%s",
                     fb_ad_id,
                     delivery_status or "пусто",
                 )
                 result = (
-                    True,
-                    "Toggle подтверждён в OFF, но delivery_status ещё не обновился: "
-                    f"{delivery_status or 'пусто'}",
+                    False,
+                    f"Повторный скан ещё видит delivery_status={delivery_status or 'пусто'}",
                 )
             for task in tasks_by_ad_id[fb_ad_id]:
                 results[task.id] = result

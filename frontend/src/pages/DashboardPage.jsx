@@ -6,6 +6,7 @@ import {
   getDashboardIncidents,
   getDisableTasks,
   getObserverSettings,
+  getVisionSettings,
   toggleScanning,
   toggleAutoEnable,
   triggerScanNow,
@@ -159,11 +160,58 @@ function parseObserverStatusMessage(msg) {
   };
 }
 
+function formatScanDuration(seconds) {
+  const value = Number(seconds);
+  if (!Number.isFinite(value) || value <= 0) return '—';
+  if (value < 60) return `${Math.round(value)}с`;
+  const minutes = Math.floor(value / 60);
+  const rest = Math.round(value % 60);
+  return rest > 0 ? `${minutes}м ${rest}с` : `${minutes}м`;
+}
+
+function getVisionRuntimeMeta(vision) {
+  const status = String(vision?.runtime_status || 'NOT_CONFIGURED').toUpperCase();
+  if (status === 'READY') {
+    return {
+      label: vision?.cdp_port ? `CDP ${vision.cdp_port}` : 'CDP готов',
+      color: 'bg-success-muted text-success border-success/30',
+      message: vision?.runtime_status_message || 'CDP-порт готов.',
+    };
+  }
+  if (status === 'NOT_RUNNING') {
+    return {
+      label: 'Vision не запущен',
+      color: 'bg-warning/10 text-warning border-warning/30',
+      message: vision?.runtime_status_message || 'Профиль стартует при первом обращении к браузеру.',
+    };
+  }
+  if (status === 'MISSING_CDP' || status === 'CDP_NOT_READY') {
+    return {
+      label: 'Vision без CDP',
+      color: 'bg-danger-muted text-danger border-danger/30',
+      message: vision?.runtime_status_message || 'Профиль запущен, но CDP-порт недоступен.',
+    };
+  }
+  if (status === 'API_UNAVAILABLE') {
+    return {
+      label: 'Vision API недоступен',
+      color: 'bg-danger-muted text-danger border-danger/30',
+      message: vision?.runtime_status_message || 'Не удалось подключиться к Vision API.',
+    };
+  }
+  return {
+    label: 'Vision не настроен',
+    color: 'bg-elevated text-muted border-border',
+    message: vision?.runtime_status_message || 'Vision X-Token или профиль ещё не настроены.',
+  };
+}
+
 /** Маппинг уровня угрозы → цвет и текст бейджа */
 const THREAT_BADGE = {
   IMMEDIATE: { label: 'Ре-скан', color: 'bg-red-500/20 text-red-400 animate-pulse' },
   CRITICAL:  { label: 'Критично', color: 'bg-red-500/20 text-red-400' },
   ELEVATED:  { label: 'Повышенно', color: 'bg-amber-500/20 text-amber-400' },
+  ACTIVE:    { label: 'Активно', color: 'bg-sky-500/20 text-sky-400' },
   CALM:      { label: 'Спокойно', color: 'bg-emerald-500/20 text-emerald-400' },
   IDLE:      { label: 'Ожидание', color: 'bg-zinc-500/20 text-zinc-400' },
 };
@@ -177,22 +225,45 @@ const ANALYTICS_TABS = [
 ];
 
 /** Полоса статуса сканирования */
-function ScanStatusBar({ settings, onToggle, onScanNow, scanning, lastScanAt, observerStatus, observerStatusMessage }) {
+function ScanStatusBar({
+  settings,
+  onToggle,
+  onScanNow,
+  scanning,
+  lastScanAt,
+  observerStatus,
+  observerStatusMessage,
+  scanIntervalSec,
+  scanJitterSec,
+  scanThreatLevel,
+  nextScanAt,
+  vision,
+}) {
   const [secsLeft, setSecsLeft] = useState(null);
-  const { intervalSec, threatLevel } = parseObserverStatusMessage(observerStatusMessage);
+  const parsedStatus = parseObserverStatusMessage(observerStatusMessage);
+  const intervalSec = scanIntervalSec ?? parsedStatus.intervalSec;
+  const threatLevel = scanThreatLevel ?? parsedStatus.threatLevel;
   const badge = threatLevel ? THREAT_BADGE[threatLevel] : null;
+  const visionMeta = getVisionRuntimeMeta(vision);
 
   useEffect(() => {
-    if (!lastScanAt || !intervalSec) { setSecsLeft(null); return; }
-    const nextScanAt = new Date(lastScanAt).getTime() + intervalSec * 1000;
-    const tick = () => setSecsLeft(Math.max(0, Math.round((nextScanAt - Date.now()) / 1000)));
+    const explicitNextScanAt = nextScanAt ? new Date(nextScanAt).getTime() : null;
+    const fallbackNextScanAt = lastScanAt && intervalSec
+      ? new Date(lastScanAt).getTime() + intervalSec * 1000
+      : null;
+    const targetScanAt = Number.isFinite(explicitNextScanAt) ? explicitNextScanAt : fallbackNextScanAt;
+    if (!targetScanAt) { setSecsLeft(null); return; }
+    const tick = () => setSecsLeft(Math.max(0, Math.round((targetScanAt - Date.now()) / 1000)));
     tick();
     const id = setInterval(tick, 1000);
     return () => clearInterval(id);
-  }, [lastScanAt, intervalSec]);
+  }, [lastScanAt, intervalSec, nextScanAt]);
 
   const isEnabled = settings?.is_scanning_enabled ?? false;
-  const isRunning = observerStatus === 'RUNNING' || scanning;
+  const isWaitingNextScan = isEnabled
+    && observerStatus === 'RUNNING'
+    && (Boolean(nextScanAt) || /^Ожидаем следующий цикл/i.test(observerStatusMessage || ''));
+  const isActivelyScanning = scanning || (observerStatus === 'RUNNING' && !isWaitingNextScan);
 
   let statusText = '';
   let statusDetail = '';
@@ -239,7 +310,11 @@ function ScanStatusBar({ settings, onToggle, onScanNow, scanning, lastScanAt, ob
   } else if (observerStatus === 'PAUSED') {
     statusText = observerStatusMessage ?? 'Пауза';
     statusColor = 'text-warning';
-  } else if (isRunning) {
+  } else if (isWaitingNextScan) {
+    statusText = 'Ожидание';
+    statusDetail = nextScanAt ? `Следующий скан запланирован с учетом jitter.` : '';
+    statusColor = 'text-secondary';
+  } else if (isActivelyScanning) {
     statusText = 'Сканирую…';
     statusColor = 'text-success';
     showDot = true;
@@ -248,8 +323,8 @@ function ScanStatusBar({ settings, onToggle, onScanNow, scanning, lastScanAt, ob
     statusColor = 'text-secondary';
   }
 
-  const showCountdown = isEnabled && !isRunning && secsLeft !== null && secsLeft > 0;
-  const showLastScan = isEnabled && !isRunning && !showCountdown && lastScanAt;
+  const showCountdown = isEnabled && isWaitingNextScan && secsLeft !== null && secsLeft > 0;
+  const showLastScan = isEnabled && !isActivelyScanning && !showCountdown && lastScanAt;
 
   return (
     <div className="panel flex items-center gap-3 px-4 py-2.5 mb-md flex-wrap">
@@ -285,7 +360,17 @@ function ScanStatusBar({ settings, onToggle, onScanNow, scanning, lastScanAt, ob
 
       {badge && (
         <span className={`rounded-full px-2 py-0.5 text-2xs font-semibold ${badge.color}`}>
-          {badge.label}{intervalSec ? ` ${intervalSec}с` : ''}
+          {badge.label}{intervalSec ? ` ${formatScanDuration(intervalSec)}` : ''}
+          {scanJitterSec ? ` ±${formatScanDuration(scanJitterSec)}` : ''}
+        </span>
+      )}
+
+      {visionMeta && (
+        <span
+          className={`rounded-full border px-2 py-0.5 text-2xs font-semibold ${visionMeta.color}`}
+          title={visionMeta.message}
+        >
+          {visionMeta.label}
         </span>
       )}
 
@@ -365,6 +450,12 @@ export default function DashboardPage({ onNavigate }) {
     queryKey: ['observerSettings'],
     queryFn: getObserverSettings,
     refetchInterval: 30_000,
+  });
+
+  const { data: visionStatus } = useQuery({
+    queryKey: ['visionStatus'],
+    queryFn: getVisionSettings,
+    refetchInterval: 10_000,
   });
 
   const { data: rawPerformance } = useQuery({
@@ -598,6 +689,11 @@ export default function DashboardPage({ onNavigate }) {
         lastScanAt={stats?.last_scan_at}
         observerStatus={stats?.observer_status}
         observerStatusMessage={stats?.observer_status_message}
+        scanIntervalSec={stats?.current_scan_interval_seconds}
+        scanJitterSec={stats?.current_scan_jitter_seconds}
+        scanThreatLevel={stats?.current_scan_threat_level}
+        nextScanAt={stats?.next_scan_at}
+        vision={visionStatus}
       />
 
       {/* 2b. Авто-включение по рекомендациям */}
@@ -665,7 +761,7 @@ export default function DashboardPage({ onNavigate }) {
             <TaskQueuePanel
               disableTasks={disableTasks}
               enableTasks={enableTasks}
-              enableRecs={(enableRecs ?? []).filter((r) => !isDeliveryDisabled(r.delivery_status))}
+              enableRecs={enableRecs ?? []}
               onRetryDisable={handleRetry}
               onCancelDisable={handleCancelDisableTask}
               onCreateEnableTask={handleEnableTask}

@@ -17,8 +17,8 @@ from core.settings_queries import get_observer_settings
 
 logger = logging.getLogger(__name__)
 
-ENABLE_TASK_STALE_MINUTES = 2
-ENABLE_TASK_STALE_TIMEOUT = timedelta(minutes=ENABLE_TASK_STALE_MINUTES)
+ENABLE_TASK_STALE_SECONDS = 75
+ENABLE_TASK_STALE_TIMEOUT = timedelta(seconds=ENABLE_TASK_STALE_SECONDS)
 ACTIVE_ENABLE_TASK_STATUSES = (
     EnableTaskStatus.PENDING,
     EnableTaskStatus.RUNNING,
@@ -192,7 +192,7 @@ async def reconcile_enable_tasks(
         task.completed_at = None
         task.next_retry_at = current_time
         task.last_error = (
-            f"Предыдущая попытка зависла в RUNNING более {ENABLE_TASK_STALE_MINUTES} минут"
+            f"Предыдущая попытка зависла в RUNNING более {ENABLE_TASK_STALE_SECONDS} сек"
         )
         retried_ids.append(fb_ad_id)
         logger.warning(

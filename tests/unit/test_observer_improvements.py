@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
 from contextlib import ExitStack, asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -358,6 +359,74 @@ async def test_batch_save_snapshots_requires_confirmed_zero_scan_before_persist(
     rollover_mock.assert_awaited_once()
 
 
+# Проверяем, что регресс накопительных метрик считается подозрительным.
+def test_has_cumulative_metric_regression_detects_daily_metric_drop():
+    """Новый срез с меньшим расходом не должен затирать дневные накопительные метрики."""
+    from core.observer.snapshot_writer import _has_cumulative_metric_regression
+
+    old_snapshot = SimpleNamespace(
+        spend=Decimal("12.34"),
+        clicks=20,
+        leads=3,
+        registrations=1,
+        deposits=0,
+        outbound_clicks=10,
+        landing_page_views=4,
+    )
+    new_row = {
+        "spend": Decimal("0.02"),
+        "clicks": 0,
+        "leads": 0,
+        "registrations": 0,
+        "deposits": 0,
+        "outbound_clicks": 0,
+        "landing_page_views": 0,
+    }
+
+    assert _has_cumulative_metric_regression(old_snapshot, new_row) is True
+
+
+# Проверяем, что история метрик не загрязняется неполным срезом с откатом.
+@pytest.mark.asyncio
+async def test_save_metric_deltas_skips_cumulative_metric_regression():
+    """Регресс дневных метрик должен быть пропущен до записи в ad_metric_history."""
+    from core.observer.snapshot_writer import _save_metric_deltas
+
+    ad_id = uuid.uuid4()
+    old_snapshot = SimpleNamespace(
+        fb_ad_id="ad-regression",
+        spend=Decimal("8.00"),
+        clicks=12,
+        leads=2,
+        registrations=1,
+        deposits=0,
+        outbound_clicks=7,
+        landing_page_views=3,
+    )
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=_scalars_result([old_snapshot]))
+
+    inserted = await _save_metric_deltas(
+        session,
+        [
+            {
+                "fb_ad_id": "ad-regression",
+                "spend": Decimal("0.02"),
+                "clicks": 0,
+                "leads": 0,
+                "registrations": 0,
+                "deposits": 0,
+                "outbound_clicks": 0,
+                "landing_page_views": 0,
+            }
+        ],
+        {"ad-regression": ad_id},
+    )
+
+    assert inserted == 0
+    assert session.execute.await_count == 1
+
+
 # Проверяем что резкое проседание количества строк не затирает live-срез без подтверждения.
 @pytest.mark.asyncio
 async def test_batch_save_snapshots_requires_confirmed_partial_batch_before_persist():
@@ -475,6 +544,7 @@ async def test_reconcile_disable_incidents_after_scan_keeps_recent_success():
     """Недавний успешный disable-task должен оставлять incident без нового follow-up."""
     from core.observer.disable_reconciler import reconcile_disable_incidents_after_scan
 
+    now = datetime.now(UTC)
     snapshot = _make_snapshot_ns(
         fb_ad_id="ad_001",
         ad_name="Тестовое объявление",
@@ -500,13 +570,14 @@ async def test_reconcile_disable_incidents_after_scan_keeps_recent_success():
         registrations=0,
         cost_per_registration=None,
         deposits=0,
-        last_observed_at=datetime.now(UTC),
+        last_observed_at=now,
     )
+    latest_succeeded = SimpleNamespace(completed_at=now - timedelta(seconds=30))
     mock_session = AsyncMock()
     mock_session.__aenter__ = AsyncMock(return_value=mock_session)
     mock_session.__aexit__ = AsyncMock(return_value=False)
     mock_session.execute = AsyncMock(return_value=_scalars_result([snapshot]))
-    mock_session.scalar = AsyncMock(side_effect=[datetime.now(UTC), 0, 1])
+    mock_session.scalar = AsyncMock(side_effect=[now, 0, latest_succeeded])
     mock_factory = MagicMock(return_value=mock_session)
 
     with patch("core.observer.disable_reconciler.get_session_factory", return_value=mock_factory):
@@ -514,6 +585,63 @@ async def test_reconcile_disable_incidents_after_scan_keeps_recent_success():
 
     assert alerts == []
     mock_session.commit.assert_not_awaited()
+
+
+# Проверяем что короткий grace после SUCCEEDED не держит активный STOP-инцидент слишком долго.
+@pytest.mark.asyncio
+async def test_reconcile_disable_incidents_after_scan_retries_after_success_grace_expired():
+    """Если после успешной попытки свежий STOP-скан всё ещё активен, нужен повторный disable."""
+    from core.observer.disable_reconciler import reconcile_disable_incidents_after_scan
+
+    now = datetime.now(UTC)
+    snapshot = _make_snapshot_ns(
+        fb_ad_id="ad_001_retry",
+        ad_name="Тестовое объявление retry",
+        offer_code="DRC",
+        delivery_status="ACTIVE",
+        alert_state=AlertState.CLAIMED,
+        current_stage=AlertStage.STOP,
+        open_state_token="incident-retry",
+        stop_rule_codes=["cpr_stop"],
+        warning_rule_codes=[],
+        early_signal_rule_codes=[],
+        spend=Decimal("1.70"),
+        clicks=28,
+        cpc=Decimal("0.0600"),
+        outbound_clicks=11,
+        outbound_ctr=Decimal("0.8600"),
+        landing_page_views=5,
+        cost_per_landing_page_view=Decimal("0.1900"),
+        cpm=Decimal("0.7300"),
+        frequency=Decimal("1.2000"),
+        leads=7,
+        cost_per_lead=Decimal("0.2400"),
+        registrations=0,
+        cost_per_registration=None,
+        deposits=0,
+        last_observed_at=now,
+    )
+    latest_succeeded = SimpleNamespace(completed_at=now - timedelta(minutes=3), last_error=None)
+    latest_task = SimpleNamespace(last_error=None)
+    mock_session = AsyncMock()
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=False)
+    mock_session.execute = AsyncMock(return_value=_scalars_result([snapshot]))
+    mock_session.scalar = AsyncMock(side_effect=[now, 0, latest_succeeded, 1, latest_task])
+    mock_factory = MagicMock(return_value=mock_session)
+
+    with (
+        patch("core.observer.disable_reconciler.get_session_factory", return_value=mock_factory),
+        patch(
+            "core.observer.disable_reconciler._create_auto_disable_task_for_snapshot",
+            new=AsyncMock(return_value=True),
+        ) as create_attempt,
+    ):
+        alerts = await reconcile_disable_incidents_after_scan()
+
+    assert alerts == []
+    create_attempt.assert_awaited_once()
+    mock_session.commit.assert_awaited_once()
 
 
 # Проверяем что исчерпанный grace создаёт тихий follow-up disable без нового STOP-алерта.
@@ -554,7 +682,7 @@ async def test_reconcile_disable_incidents_after_scan_creates_follow_up_attempt(
     mock_session.__aenter__ = AsyncMock(return_value=mock_session)
     mock_session.__aexit__ = AsyncMock(return_value=False)
     mock_session.execute = AsyncMock(return_value=_scalars_result([snapshot]))
-    mock_session.scalar = AsyncMock(side_effect=[datetime.now(UTC), 0, 0, 1, latest_task])
+    mock_session.scalar = AsyncMock(side_effect=[datetime.now(UTC), 0, None, 1, latest_task])
     mock_factory = MagicMock(return_value=mock_session)
 
     with (
@@ -609,7 +737,7 @@ async def test_reconcile_disable_incidents_after_scan_marks_manual_attention_aft
     mock_session.__aenter__ = AsyncMock(return_value=mock_session)
     mock_session.__aexit__ = AsyncMock(return_value=False)
     mock_session.execute = AsyncMock(return_value=_scalars_result([snapshot]))
-    mock_session.scalar = AsyncMock(side_effect=[datetime.now(UTC), 0, 0, 4, latest_task])
+    mock_session.scalar = AsyncMock(side_effect=[datetime.now(UTC), 0, None, 4, latest_task])
     mock_factory = MagicMock(return_value=mock_session)
 
     with (

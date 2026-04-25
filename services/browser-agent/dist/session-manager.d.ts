@@ -21,6 +21,7 @@ export declare class SessionManager {
         visionProfileId?: string;
     }): Promise<BrowserSession>;
     getSession(sessionId: string): BrowserSession;
+    getPreferredSession(): BrowserSession;
     listSessions(): Array<{
         id: string;
         status: string;

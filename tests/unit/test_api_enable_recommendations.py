@@ -174,6 +174,10 @@ async def test_list_enable_recommendations_deduplicates_by_ad_and_marks_task_cre
 
     with (
         patch(
+            "apps.api.routers.dashboard.reconcile_enable_tasks",
+            new=AsyncMock(return_value={}),
+        ),
+        patch(
             "apps.api.routers.dashboard._load_current_enable_recommendations",
             new=AsyncMock(return_value=(shared_batch, live_rows)),
         ),
@@ -520,9 +524,15 @@ async def test_list_enable_tasks_returns_monitoring_statuses_by_default(mock_db)
     )
     ad_ctx_map = {ad_id: {"fb_ad_id": "ad-20", "ad_name": "Enable queue"}}
 
-    with patch(
-        "apps.api.routers.dashboard._load_ad_context_map",
-        new=AsyncMock(return_value=ad_ctx_map),
+    with (
+        patch(
+            "apps.api.routers.dashboard.reconcile_enable_tasks",
+            new=AsyncMock(return_value={}),
+        ),
+        patch(
+            "apps.api.routers.dashboard._load_ad_context_map",
+            new=AsyncMock(return_value=ad_ctx_map),
+        ),
     ):
         result = await list_enable_tasks(status=None, limit=20, offset=0, db=mock_db)
 
@@ -597,7 +607,11 @@ async def test_list_enable_tasks_hides_superseded_failed_task():
             )
             await db.commit()
 
-            result = await list_enable_tasks(status=None, limit=20, offset=0, db=db)
+            with patch(
+                "apps.api.routers.dashboard.reconcile_enable_tasks",
+                new=AsyncMock(return_value={}),
+            ):
+                result = await list_enable_tasks(status=None, limit=20, offset=0, db=db)
 
         assert [(item.fb_ad_id, item.status) for item in result] == [
             ("ad-20", "SUCCEEDED"),
@@ -697,7 +711,11 @@ async def test_list_enable_tasks_filters_out_previous_cabinet_day():
             )
             await db.commit()
 
-            result = await list_enable_tasks(status=None, limit=20, offset=0, db=db)
+            with patch(
+                "apps.api.routers.dashboard.reconcile_enable_tasks",
+                new=AsyncMock(return_value={}),
+            ):
+                result = await list_enable_tasks(status=None, limit=20, offset=0, db=db)
 
         assert [(item.fb_ad_id, item.status) for item in result] == [
             ("ad-31", "RETRYING"),
