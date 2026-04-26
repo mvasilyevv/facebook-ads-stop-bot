@@ -17,7 +17,7 @@ function cellHtml(content) {
     const page = await browser.newPage();
     try {
         const targets = (0, ads_columns_js_1.buildAdsTableColumnWidthTargets)();
-        const headerCells = targets.map((target) => cellHtml(`<div role="columnheader" style="width:80px;height:30px">
+        const headerCells = targets.slice(0, 3).map((target) => cellHtml(`<div role="columnheader" style="width:80px;height:30px">
         <span data-surface="table_column_header:${target.surfaceKey}">${target.title}</span>
       </div>`));
         const partialBodyCells = [
@@ -37,6 +37,7 @@ function cellHtml(content) {
         const result = await (0, ads_table_js_1.applyAdsTableColumnWidthPreset)(page);
         const bodyWidths = await page.$$eval('#body-row ._4lg0', (nodes) => (nodes.map((node) => node.style.width)));
         strict_1.default.equal(result.applied, true);
+        strict_1.default.deepEqual(result.missingColumns, []);
         strict_1.default.deepEqual(bodyWidths, ['49px', '40px', '194px', '110px']);
     }
     finally {

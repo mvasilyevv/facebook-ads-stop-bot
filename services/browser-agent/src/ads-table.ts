@@ -176,12 +176,12 @@ export async function applyAdsTableColumnWidthPreset(page: Page): Promise<Column
       const targetWidthSum = columnTargets.reduce((total, target) => total + target.widthPx, 0);
       const totalWidthPx = SELECTION_COLUMN_WIDTH + targetWidthSum + CUSTOMIZE_COLUMN_WIDTH;
 
-      if (missingColumns.length > 0) {
+      if (matchedHeaders.size === 0) {
         return {
           applied: false,
           matchedColumns,
           missingColumns,
-          errorMessage: `Не найдены колонки для автоширины: ${missingColumns.join(', ')}`,
+          errorMessage: 'Не найдены видимые заголовки таблицы Ads Manager для автоширины',
           adjustedCells: 0,
           totalWidthPx,
         };

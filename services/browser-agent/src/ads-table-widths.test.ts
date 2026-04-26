@@ -15,7 +15,7 @@ test('applyAdsTableColumnWidthPreset применяет ширины к част
   const page = await browser.newPage();
   try {
     const targets = buildAdsTableColumnWidthTargets();
-    const headerCells = targets.map((target) => cellHtml(
+    const headerCells = targets.slice(0, 3).map((target) => cellHtml(
       `<div role="columnheader" style="width:80px;height:30px">
         <span data-surface="table_column_header:${target.surfaceKey}">${target.title}</span>
       </div>`,
@@ -42,6 +42,7 @@ test('applyAdsTableColumnWidthPreset применяет ширины к част
     ));
 
     assert.equal(result.applied, true);
+    assert.deepEqual(result.missingColumns, []);
     assert.deepEqual(bodyWidths, ['49px', '40px', '194px', '110px']);
   } finally {
     await browser.close();
