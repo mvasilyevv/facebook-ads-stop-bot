@@ -75,12 +75,16 @@ async function applyAdsTableColumnWidthPreset(page) {
                 return match ? match[1] : '';
             }
             function targetMatches(target, surfaceKey, text) {
+                const normalizedText = normalizeText(text);
+                const titleMatches = Boolean(normalizedText) && normalizedText === normalizeText(target.title);
                 if (target.surfaceKey !== surfaceKey)
-                    return false;
+                    return titleMatches;
                 if (!target.textNeedles?.length)
                     return true;
-                const normalizedText = normalizeText(text);
-                return target.textNeedles.some((needle) => normalizedText.includes(normalizeText(needle)));
+                if (!normalizedText)
+                    return true;
+                return titleMatches
+                    || target.textNeedles.some((needle) => normalizedText.includes(normalizeText(needle)));
             }
             function findColumnCell(headerNode) {
                 let node = headerNode.parentElement;
@@ -155,6 +159,7 @@ async function applyAdsTableColumnWidthPreset(page) {
             let adjustedCells = 0;
             const rowNodes = Array.from(new Set([
                 ...document.querySelectorAll('[role="row"]'),
+                ...document.querySelectorAll('[data-surface*="table_row:"]'),
                 ...document.querySelectorAll('._1gda._2djg'),
             ]));
             for (const rowNode of rowNodes) {
@@ -167,16 +172,19 @@ async function applyAdsTableColumnWidthPreset(page) {
                     const rightRect = right.getBoundingClientRect();
                     return leftRect.left - rightRect.left || leftRect.top - rightRect.top;
                 });
-                if (cells.length < columnTargets.length + 1)
+                if (cells.length < 2)
                     continue;
                 const isBodyRow = rowNode.classList.contains('_1gda') && rowNode.classList.contains('_2djg');
+                rowNode.style.width = px(totalWidthPx);
+                rowNode.style.minWidth = px(totalWidthPx);
                 setWidth(cells[0], SELECTION_COLUMN_WIDTH);
                 if (isBodyRow)
                     cells[0].style.left = '0px';
                 adjustedCells += 1;
                 let pinnedLeft = SELECTION_COLUMN_WIDTH;
                 let scrollLeft = 0;
-                for (let index = 0; index < columnTargets.length; index++) {
+                const visibleTargetCount = Math.min(columnTargets.length, cells.length - 1);
+                for (let index = 0; index < visibleTargetCount; index++) {
                     const cell = cells[index + 1];
                     const target = columnTargets[index];
                     if (!cell)
@@ -194,7 +202,9 @@ async function applyAdsTableColumnWidthPreset(page) {
                     }
                     adjustedCells += 1;
                 }
-                const customizeCell = cells[columnTargets.length + 1];
+                const customizeCell = cells.length >= columnTargets.length + 2
+                    ? cells[columnTargets.length + 1]
+                    : null;
                 if (customizeCell) {
                     setWidth(customizeCell, CUSTOMIZE_COLUMN_WIDTH);
                     if (isBodyRow)

@@ -135,6 +135,26 @@ test('normalizeVisibleHeaders отбрасывает пустой дубль sur
   );
 });
 
+// Сценарий: колонки кампании и группы объявлений распознаются по тексту, если Meta поменяла data-surface.
+test('buildParserColumnLayout распознаёт campaign/adset при изменившихся surfaceKey', () => {
+  const headers = buildFullHeaderSet().map((item) => {
+    if (item.surfaceKey === 'campaign_group_name') {
+      return header('campaign_name', 'Название кампании', item.left);
+    }
+    if (item.surfaceKey === 'campaign_name') {
+      return header('adset_name', 'Название группы объявлений', item.left);
+    }
+    return item;
+  });
+
+  const { layout, missingColumns } = buildParserColumnLayout(headers);
+  const fields = layout.map((column) => column.fieldName);
+
+  assert.deepEqual(missingColumns, []);
+  assert.ok(fields.includes('campaign_name'));
+  assert.ok(fields.includes('adset_name'));
+});
+
 // Сценарий: пресет автоширины должен повторять текущую ручную раскладку Ads Manager один в один.
 test('buildAdsTableColumnWidthTargets возвращает сохранённые ширины Ads Manager', () => {
   const widths = Object.fromEntries(

@@ -38,11 +38,12 @@ const HealthMapPage = lazy(() => import('./HealthMapPage.jsx'));
 /* === Вспомогательные компоненты === */
 
 /** Баннер ошибки валидации колонок — показывается если колонки отсутствуют. */
-function ColumnValidationBanner({ validationResult, onRecheck }) {
+function ColumnValidationBanner({ validationResult, onRecheck, checking = false }) {
   if (!validationResult || validationResult.valid) return null;
 
   const missing = validationResult.missing_columns || [];
-  if (missing.length === 0) return null;
+  const errorMessage = validationResult.error_message || '';
+  if (missing.length === 0 && !errorMessage) return null;
 
   return (
     <div className="rounded-md bg-danger-muted border border-danger/30 px-4 py-3 mb-md">
@@ -53,25 +54,47 @@ function ColumnValidationBanner({ validationResult, onRecheck }) {
             Отсутствуют колонки в таблице Ads Manager
           </p>
           <p className="text-2xs text-danger/80 mb-2">
-            Сервис не может корректно сканировать объявления. Добавьте следующие колонки в таблицу Ads Manager:
+            {missing.length > 0
+              ? 'Сервис не может корректно сканировать объявления. Добавьте следующие колонки в таблицу Ads Manager:'
+              : errorMessage}
           </p>
-          <div className="flex flex-wrap gap-1.5 mb-2">
-            {missing.map((col) => (
-              <span key={col} className="rounded bg-danger/20 px-2 py-0.5 text-2xs font-mono text-danger">
-                {col}
-              </span>
-            ))}
-          </div>
+          {missing.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 mb-2">
+              {missing.map((col) => (
+                <span key={col} className="rounded bg-danger/20 px-2 py-0.5 text-2xs font-mono text-danger">
+                  {col}
+                </span>
+              ))}
+            </div>
+          )}
           <button
-            className="text-2xs text-danger/70 hover:text-danger underline"
+            className="text-2xs text-danger/70 hover:text-danger underline disabled:opacity-60"
             onClick={onRecheck}
+            disabled={checking}
           >
-            Проверить снова
+            {checking ? 'Проверяем...' : 'Проверить снова'}
           </button>
         </div>
       </div>
     </div>
   );
+}
+
+function emptyColumnValidationResult() {
+  return { valid: true, missing_columns: [], found_columns: [], error_message: '' };
+}
+
+function failedColumnValidationResult(err) {
+  return {
+    valid: false,
+    missing_columns: [],
+    found_columns: [],
+    error_message: err?.message || 'Не удалось проверить колонки Ads Manager',
+  };
+}
+
+function isMissingBrowserSessionError(err) {
+  return String(err?.message || '').includes('Активная browser-agent сессия не найдена');
 }
 
 function isDeliveryDisabled(status) {
@@ -440,6 +463,7 @@ export default function DashboardPage({ onNavigate }) {
   const [toggling, setToggling] = useState(false);
   const [togglingAutoEnable, setTogglingAutoEnable] = useState(false);
   const [scanning, setScanning] = useState(false);
+  const [columnRechecking, setColumnRechecking] = useState(false);
   const [healthMapOpen, setHealthMapOpen] = useState(false);
   const [analyticsView, setAnalyticsView] = useState('cpr');
   // Баг 2: useRef для таймера polling — cleanup всегда ловит актуальный timerId
@@ -497,9 +521,11 @@ export default function DashboardPage({ onNavigate }) {
   });
 
   /* Валидация колонок — проверяем раз в 60с */
-  const { data: columnValidation, refetch: refetchColumns } = useQuery({
+  const { data: columnValidation } = useQuery({
     queryKey: ['columnValidation'],
-    queryFn: () => validateBrowserColumns().catch(() => ({ valid: true, missing_columns: [], found_columns: [], error_message: '' })),
+    queryFn: () => validateBrowserColumns().catch((err) => (
+      isMissingBrowserSessionError(err) ? emptyColumnValidationResult() : failedColumnValidationResult(err)
+    )),
     refetchInterval: 60_000,
     retry: false,
   });
@@ -609,6 +635,19 @@ export default function DashboardPage({ onNavigate }) {
     }
   };
 
+  const handleRecheckColumns = async () => {
+    if (columnRechecking) return;
+    setColumnRechecking(true);
+    try {
+      const result = await validateBrowserColumns({ startIfMissing: true });
+      queryClient.setQueryData(['columnValidation'], result);
+    } catch (err) {
+      queryClient.setQueryData(['columnValidation'], failedColumnValidationResult(err));
+    } finally {
+      setColumnRechecking(false);
+    }
+  };
+
   const handleDisable = async (fbAdId) => {
     try {
       await createDisableTask(fbAdId);
@@ -674,7 +713,8 @@ export default function DashboardPage({ onNavigate }) {
       {/* Валидация колонок */}
       <ColumnValidationBanner
         validationResult={columnValidation}
-        onRecheck={() => refetchColumns()}
+        onRecheck={handleRecheckColumns}
+        checking={columnRechecking}
       />
 
       {/* 1. Hero-баннер алертов — ПЕРВОЕ, что видит медиабаер */}

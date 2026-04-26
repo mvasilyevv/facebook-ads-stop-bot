@@ -430,7 +430,10 @@ async def restart_observer():
 
 @router.get("/browser/validate-columns", include_in_schema=False)
 @router.get("/settings/browser/validate-columns")
-async def validate_browser_columns(db: AsyncSession = Depends(get_db)):
+async def validate_browser_columns(
+    start_if_missing: bool = Query(False),
+    db: AsyncSession = Depends(get_db),
+):
     """Проверить наличие всех необходимых колонок в таблице Ads Manager через gRPC."""
     import grpc
 
@@ -445,7 +448,7 @@ async def validate_browser_columns(db: AsyncSession = Depends(get_db)):
         browser_stub = browser_session_pb2_grpc.BrowserSessionServiceStub(channel)
         scanner_stub = scanner_pb2_grpc.ScannerServiceStub(channel)
         session_id = await _get_or_start_browser_agent_session_id(
-            browser_stub, db, start_if_missing=False
+            browser_stub, db, start_if_missing=start_if_missing
         )
 
         result = await scanner_stub.ValidateColumns(
@@ -459,6 +462,8 @@ async def validate_browser_columns(db: AsyncSession = Depends(get_db)):
         }
     except grpc.RpcError as e:
         raise HTTPException(status_code=502, detail=f"gRPC ошибка: {e.details()}") from e
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
     finally:
@@ -498,6 +503,8 @@ async def apply_browser_column_widths(db: AsyncSession = Depends(get_db)):
         }
     except grpc.RpcError as e:
         raise HTTPException(status_code=502, detail=f"gRPC ошибка: {e.details()}") from e
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
     finally:

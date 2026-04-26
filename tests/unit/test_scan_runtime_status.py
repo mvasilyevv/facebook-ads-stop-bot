@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from fastapi import HTTPException
 
 
 # Проверяем, что dashboard отдаёт структурированные поля расписания сканирования.
@@ -114,3 +115,26 @@ async def test_vision_runtime_reports_missing_cdp(monkeypatch):
     assert result["runtime_status"] == "MISSING_CDP"
     assert result["profile_running"] is True
     assert result["folder_id"] == "folder-1"
+
+
+# Проверяем, что протухший Vision X-Token показывается отдельным runtime-статусом.
+@pytest.mark.asyncio
+async def test_vision_runtime_reports_invalid_token(monkeypatch):
+    from apps.api.routers import vision_telegram
+
+    async def fake_vision_request(api_url: str, x_token: str, path: str):
+        raise HTTPException(
+            status_code=401,
+            detail="Vision X-Token недействителен или истёк.",
+        )
+
+    monkeypatch.setattr(vision_telegram, "_vision_request", fake_vision_request)
+
+    result = await vision_telegram._build_vision_runtime_status(
+        api_url="http://vision.local",
+        x_token="token",
+        profile_id="profile-1",
+    )
+
+    assert result["runtime_status"] == "INVALID_TOKEN"
+    assert "истёк" in result["runtime_status_message"]

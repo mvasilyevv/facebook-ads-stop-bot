@@ -107,6 +107,23 @@ function buildFullHeaderSet() {
         { surfaceKey: 'reach', text: 'охват' },
     ]);
 });
+// Сценарий: колонки кампании и группы объявлений распознаются по тексту, если Meta поменяла data-surface.
+(0, node_test_1.default)('buildParserColumnLayout распознаёт campaign/adset при изменившихся surfaceKey', () => {
+    const headers = buildFullHeaderSet().map((item) => {
+        if (item.surfaceKey === 'campaign_group_name') {
+            return header('campaign_name', 'Название кампании', item.left);
+        }
+        if (item.surfaceKey === 'campaign_name') {
+            return header('adset_name', 'Название группы объявлений', item.left);
+        }
+        return item;
+    });
+    const { layout, missingColumns } = (0, ads_columns_js_1.buildParserColumnLayout)(headers);
+    const fields = layout.map((column) => column.fieldName);
+    strict_1.default.deepEqual(missingColumns, []);
+    strict_1.default.ok(fields.includes('campaign_name'));
+    strict_1.default.ok(fields.includes('adset_name'));
+});
 // Сценарий: пресет автоширины должен повторять текущую ручную раскладку Ads Manager один в один.
 (0, node_test_1.default)('buildAdsTableColumnWidthTargets возвращает сохранённые ширины Ads Manager', () => {
     const widths = Object.fromEntries((0, ads_columns_js_1.buildAdsTableColumnWidthTargets)().map((target) => [target.key, target.widthPx]));

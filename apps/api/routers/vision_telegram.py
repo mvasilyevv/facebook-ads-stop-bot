@@ -64,6 +64,15 @@ async def _vision_request(api_url: str, x_token: str, path: str) -> dict | None:
             detail=f"Не удалось подключиться к Vision API: {exc}",
         ) from exc
 
+    if resp.status_code == 401:
+        raise HTTPException(
+            status_code=401,
+            detail=(
+                "Vision X-Token недействителен или истёк. "
+                "Обновите X-Token в настройках Vision и повторите перезапуск профиля. "
+                f"Ответ Vision: {resp.text}"
+            ),
+        )
     if resp.status_code >= 400:
         raise HTTPException(
             status_code=502,
@@ -135,8 +144,9 @@ async def _build_vision_runtime_status(
     try:
         data = await _vision_request(api_url, x_token, "/list")
     except HTTPException as exc:
+        runtime_status = "INVALID_TOKEN" if exc.status_code == 401 else "API_UNAVAILABLE"
         return {
-            "runtime_status": "API_UNAVAILABLE",
+            "runtime_status": runtime_status,
             "runtime_status_message": str(exc.detail),
             "profile_running": False,
             "cdp_port": None,
@@ -516,11 +526,6 @@ async def vision_ensure_cdp(db: AsyncSession = Depends(get_db)):
 @router.post("/vision/reconnect")
 async def vision_reconnect(db: AsyncSession = Depends(get_db)):
     """Немедленно перезапустить профиль Vision и попросить observer переподключиться."""
-    from apps.api.routers.settings import (
-        _start_observer_process,
-        _stop_observer_process,
-    )
-
     result = await db.execute(
         select(VisionSettings).where(VisionSettings.singleton_key == "default")
     )
@@ -537,21 +542,8 @@ async def vision_reconnect(db: AsyncSession = Depends(get_db)):
     if not x_token:
         raise HTTPException(status_code=400, detail="Не удалось расшифровать Vision X-Token")
 
-    old_observer_pid = await _stop_observer_process()
-
-    # Прямые HTTP-запросы к Vision API (без VisionClient)
-    async def _vision_request(path: str, method: str = "GET") -> dict | None:
-        import httpx
-
-        url = f"{row.api_url}{path}"
-        async with httpx.AsyncClient() as http_client:
-            resp = await http_client.request(method, url, headers={"X-Token": x_token})
-            if resp.status_code >= 400:
-                raise HTTPException(status_code=502, detail=f"Vision API error: {resp.text}")
-            return resp.json() if resp.content else None
-
     async def _resolve_folder_id() -> str:
-        data = await _vision_request("/list")
+        data = await _vision_request(row.api_url, x_token, "/list")
         profiles = data.get("profiles", []) if data else []
         for p in profiles:
             if p.get("profile_id") == row.profile_id:
@@ -560,16 +552,18 @@ async def vision_reconnect(db: AsyncSession = Depends(get_db)):
 
     async def _stop_profile(folder_id: str) -> None:
         try:
-            await _vision_request(f"/stop/{folder_id}/{row.profile_id}")
-        except HTTPException:
-            pass  # Profile may already be stopped
+            await _vision_request(row.api_url, x_token, f"/stop/{folder_id}/{row.profile_id}")
+        except HTTPException as exc:
+            if exc.status_code == 401:
+                raise
+            pass  # Профиль мог уже остановиться или исчезнуть из списка Vision.
 
     async def _wait_stopped(timeout_secs: float = 15.0) -> bool:
         import asyncio
 
         deadline = __import__("time").time() + timeout_secs
         while __import__("time").time() < deadline:
-            data = await _vision_request("/list")
+            data = await _vision_request(row.api_url, x_token, "/list")
             profiles = data.get("profiles", []) if data else []
             if not any(p.get("profile_id") == row.profile_id for p in profiles):
                 return True
@@ -579,14 +573,14 @@ async def vision_reconnect(db: AsyncSession = Depends(get_db)):
     async def _start_profile(folder_id: str) -> int | None:
         import asyncio
 
-        data = await _vision_request(f"/start/{folder_id}/{row.profile_id}")
+        data = await _vision_request(row.api_url, x_token, f"/start/{folder_id}/{row.profile_id}")
         port = data.get("port") or data.get("cdp_port") if data else None
         if port:
             return port
         # Poll for port
         deadline = __import__("time").time() + 15.0
         while __import__("time").time() < deadline:
-            data = await _vision_request("/list")
+            data = await _vision_request(row.api_url, x_token, "/list")
             profiles = data.get("profiles", []) if data else []
             for p in profiles:
                 if p.get("profile_id") == row.profile_id and p.get("port"):
@@ -595,7 +589,6 @@ async def vision_reconnect(db: AsyncSession = Depends(get_db)):
         return None
 
     profile_port: int | None = None
-    new_observer_pid: int | None = None
     reconnect_error: HTTPException | None = None
 
     try:
@@ -615,10 +608,6 @@ async def vision_reconnect(db: AsyncSession = Depends(get_db)):
             status_code=502,
             detail=f"Не удалось перезапустить профиль Vision: {exc}",
         )
-    finally:
-        new_observer_pid = await _start_observer_process(
-            reason="Ручное переподключение Vision через UI"
-        )
 
     if reconnect_error is not None:
         raise reconnect_error
@@ -627,22 +616,20 @@ async def vision_reconnect(db: AsyncSession = Depends(get_db)):
         return {
             "ok": True,
             "message": (
-                "Observer был временно остановлен, профиль Vision перезапущен, "
-                "воркер запущен заново."
+                "Профиль Vision перезапущен. Observer переподключится автоматически "
+                "на следующем цикле."
             ),
             "port": profile_port,
-            "old_observer_pid": old_observer_pid,
-            "new_observer_pid": new_observer_pid,
+            "observer_reconnect_requested": True,
         }
 
     return {
         "ok": True,
         "message": (
-            "Observer был перезапущен, профиль Vision тоже перезапущен, "
-            "но CDP-порт пока не появился."
+            "Профиль Vision перезапущен, но CDP-порт пока не появился. "
+            "Observer переподключится автоматически на следующем цикле."
         ),
-        "old_observer_pid": old_observer_pid,
-        "new_observer_pid": new_observer_pid,
+        "observer_reconnect_requested": True,
     }
 
 
@@ -667,6 +654,11 @@ async def get_vision_profiles(db: AsyncSession = Depends(get_db)):
             resp = await client.get(
                 f"{row.api_url.rstrip('/')}/list",
                 headers={"X-Token": x_token},
+            )
+        if resp.status_code == 401:
+            raise HTTPException(
+                status_code=401,
+                detail="Vision X-Token недействителен или истёк. Обновите X-Token в настройках Vision.",
             )
         if resp.status_code != 200:
             raise HTTPException(status_code=502, detail=f"Vision API вернул {resp.status_code}")

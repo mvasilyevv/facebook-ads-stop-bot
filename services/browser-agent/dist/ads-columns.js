@@ -136,6 +136,7 @@ const COLUMN_SPECS = [
         key: 'campaign_name',
         title: 'Название кампании',
         surfaceKey: 'campaign_group_name',
+        textNeedles: ['название кампании'],
         parserField: 'campaign_name',
         valueKind: 'text',
         widthPx: 40,
@@ -144,6 +145,7 @@ const COLUMN_SPECS = [
         key: 'adset_name',
         title: 'Название группы объявлений',
         surfaceKey: 'campaign_name',
+        textNeedles: ['название группы объявлений'],
         parserField: 'adset_name',
         valueKind: 'text',
         widthPx: 40,
@@ -230,11 +232,16 @@ function normalizeHeaderText(value) {
     return String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
 }
 function matchesHeaderSpec(header, spec) {
+    const title = normalizeHeaderText(spec.title);
+    const titleMatches = Boolean(header.text) && header.text === title;
     if (header.surfaceKey !== spec.surfaceKey)
-        return false;
+        return titleMatches;
     if (!spec.textNeedles?.length)
         return true;
-    return spec.textNeedles.some((needle) => header.text.includes(needle));
+    if (!header.text)
+        return true;
+    return titleMatches
+        || spec.textNeedles.some((needle) => header.text.includes(normalizeHeaderText(needle)));
 }
 function normalizeVisibleHeaders(headers) {
     const normalized = headers
