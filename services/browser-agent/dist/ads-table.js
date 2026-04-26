@@ -62,10 +62,12 @@ async function validateAdsTableColumns(page) {
 async function applyAdsTableColumnWidthPreset(page) {
     const targets = (0, ads_columns_js_1.buildAdsTableColumnWidthTargets)();
     try {
-        const result = await page.evaluate((columnTargets) => {
+        const result = await page.evaluate(async (columnTargets) => {
             const SELECTION_COLUMN_WIDTH = 49;
             const CUSTOMIZE_COLUMN_WIDTH = 32;
             const PINNED_TARGET_COUNT = 2;
+            const SCROLL_SETTLE_MS = 160;
+            const MAX_HORIZONTAL_PASSES = Math.max(8, columnTargets.length + 4);
             function normalizeText(value) {
                 return String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
             }
@@ -105,6 +107,11 @@ async function applyAdsTableColumnWidthPreset(page) {
                 node.style.minWidth = px(widthPx);
                 node.style.maxWidth = px(widthPx);
             }
+            function wait(ms) {
+                return new Promise((resolve) => {
+                    window.setTimeout(resolve, ms);
+                });
+            }
             function updateHeaderChain(headerNode, widthPx, leftPx) {
                 let changed = 0;
                 let node = headerNode.parentElement;
@@ -129,108 +136,222 @@ async function applyAdsTableColumnWidthPreset(page) {
                 }
                 return changed;
             }
-            const headerNodes = Array.from(document.querySelectorAll('[data-surface*="table_column_header:"]'));
-            const matchedHeaders = new Map();
-            const matchedColumns = [];
-            const missingColumns = [];
-            for (const target of columnTargets) {
-                const match = headerNodes.find((node) => (targetMatches(target, readSurfaceKey(node), node.textContent || '')
-                    && findColumnCell(node)));
-                if (match) {
-                    matchedHeaders.set(target.key, match);
-                    matchedColumns.push(target.title);
+            function targetLeftPx(targetIndex) {
+                if (targetIndex < PINNED_TARGET_COUNT) {
+                    return SELECTION_COLUMN_WIDTH + columnTargets
+                        .slice(0, targetIndex)
+                        .reduce((total, target) => total + target.widthPx, 0);
                 }
-                else {
-                    missingColumns.push(target.title);
-                }
+                return columnTargets
+                    .slice(PINNED_TARGET_COUNT, targetIndex)
+                    .reduce((total, target) => total + target.widthPx, 0);
             }
             const targetWidthSum = columnTargets.reduce((total, target) => total + target.widthPx, 0);
             const totalWidthPx = SELECTION_COLUMN_WIDTH + targetWidthSum + CUSTOMIZE_COLUMN_WIDTH;
-            if (matchedHeaders.size === 0) {
+            function collectHorizontalScrollables() {
+                const seen = new Set();
+                const scrollables = [];
+                function addScrollable(node) {
+                    if (!(node instanceof HTMLElement) || seen.has(node))
+                        return;
+                    seen.add(node);
+                    const maxScrollLeft = node.scrollWidth - node.clientWidth;
+                    if (node.clientHeight > 20 && node.clientWidth > 80 && maxScrollLeft > 8) {
+                        scrollables.push(node);
+                    }
+                }
+                const anchors = [
+                    document.querySelector('[data-surface*="table_column_header:"]'),
+                    document.querySelector('[data-surface*="table_row:"], ._1gda._2djg'),
+                    document.querySelector('[role="grid"]'),
+                    document.querySelector('[role="table"]'),
+                    document.querySelector('[aria-rowcount]'),
+                ];
+                for (const anchor of anchors) {
+                    for (let node = anchor; node; node = node.parentElement) {
+                        addScrollable(node);
+                    }
+                }
+                for (const selector of ['[role="grid"]', '[role="table"]', '[aria-rowcount]']) {
+                    for (const node of document.querySelectorAll(selector))
+                        addScrollable(node);
+                }
+                const docScroller = document.scrollingElement;
+                if (docScroller instanceof HTMLElement)
+                    addScrollable(docScroller);
+                return scrollables.sort((left, right) => {
+                    const leftMax = left.scrollWidth - left.clientWidth;
+                    const rightMax = right.scrollWidth - right.clientWidth;
+                    return rightMax - leftMax;
+                });
+            }
+            function resetHorizontalScroll() {
+                for (const node of collectHorizontalScrollables()) {
+                    node.scrollLeft = 0;
+                    node.dispatchEvent(new Event('scroll', { bubbles: true }));
+                }
+            }
+            function scrollRight() {
+                const scroller = collectHorizontalScrollables()[0] || null;
+                if (!scroller)
+                    return { moved: false, atRight: true, scrollLeft: 0, maxScrollLeft: 0 };
+                const maxScrollLeft = Math.max(scroller.scrollWidth - scroller.clientWidth, 0);
+                const prevScrollLeft = Math.max(scroller.scrollLeft, 0);
+                const stepPx = Math.max(160, Math.round(scroller.clientWidth * 0.75));
+                scroller.scrollLeft = Math.min(prevScrollLeft + stepPx, maxScrollLeft);
+                scroller.dispatchEvent(new Event('scroll', { bubbles: true }));
+                const nextScrollLeft = Math.max(scroller.scrollLeft, 0);
+                return {
+                    moved: nextScrollLeft > prevScrollLeft + 2,
+                    atRight: maxScrollLeft <= 0 || nextScrollLeft >= maxScrollLeft - 4,
+                    scrollLeft: nextScrollLeft,
+                    maxScrollLeft,
+                };
+            }
+            function applyVisibleWidths() {
+                const headerNodes = Array.from(document.querySelectorAll('[data-surface*="table_column_header:"]'));
+                const matchedEntries = [];
+                const matchedKeys = new Set();
+                const matchedColumns = new Set();
+                columnTargets.forEach((target, targetIndex) => {
+                    const match = headerNodes.find((node) => (targetMatches(target, readSurfaceKey(node), node.textContent || '')
+                        && findColumnCell(node)));
+                    if (!match)
+                        return;
+                    const headerCell = findColumnCell(match);
+                    if (!headerCell)
+                        return;
+                    matchedEntries.push({ headerNode: match, headerCell, target, targetIndex });
+                    matchedKeys.add(target.key);
+                    matchedColumns.add(target.title);
+                });
+                let adjustedCells = 0;
+                for (const entry of matchedEntries) {
+                    adjustedCells += updateHeaderChain(entry.headerNode, entry.target.widthPx, targetLeftPx(entry.targetIndex));
+                }
+                const headerRects = matchedEntries.map((entry) => ({
+                    ...entry,
+                    left: entry.headerCell.getBoundingClientRect().left,
+                }));
+                const rowNodes = Array.from(new Set([
+                    ...document.querySelectorAll('[role="row"]'),
+                    ...document.querySelectorAll('[data-surface*="table_row:"]'),
+                    ...document.querySelectorAll('._1gda._2djg'),
+                ]));
+                for (const rowNode of rowNodes) {
+                    if (!(rowNode instanceof HTMLElement))
+                        continue;
+                    const cells = Array.from(rowNode.querySelectorAll('._4lg0'))
+                        .filter((node) => node instanceof HTMLElement)
+                        .sort((left, right) => {
+                        const leftRect = left.getBoundingClientRect();
+                        const rightRect = right.getBoundingClientRect();
+                        return leftRect.left - rightRect.left || leftRect.top - rightRect.top;
+                    });
+                    if (cells.length < 1)
+                        continue;
+                    const isBodyRow = rowNode.classList.contains('_1gda') && rowNode.classList.contains('_2djg');
+                    rowNode.style.width = px(totalWidthPx);
+                    rowNode.style.minWidth = px(totalWidthPx);
+                    const cellRects = cells.map((cell) => ({
+                        cell,
+                        left: cell.getBoundingClientRect().left,
+                    }));
+                    setWidth(cells[0], SELECTION_COLUMN_WIDTH);
+                    if (isBodyRow)
+                        cells[0].style.left = '0px';
+                    adjustedCells += 1;
+                    const usedCells = new Set([cells[0]]);
+                    for (const headerRect of headerRects) {
+                        let best = null;
+                        for (const cellRect of cellRects) {
+                            if (usedCells.has(cellRect.cell))
+                                continue;
+                            const delta = Math.abs(cellRect.left - headerRect.left);
+                            if (!best || delta < best.delta)
+                                best = { cell: cellRect.cell, delta };
+                        }
+                        if (!best || best.delta > 96)
+                            continue;
+                        setWidth(best.cell, headerRect.target.widthPx);
+                        if (isBodyRow) {
+                            best.cell.style.left = px(targetLeftPx(headerRect.targetIndex));
+                        }
+                        usedCells.add(best.cell);
+                        adjustedCells += 1;
+                    }
+                    const customizeCell = cells.length >= columnTargets.length + 2
+                        ? cells[columnTargets.length + 1]
+                        : null;
+                    if (customizeCell) {
+                        const customizeLeft = columnTargets
+                            .slice(PINNED_TARGET_COUNT)
+                            .reduce((total, target) => total + target.widthPx, 0);
+                        setWidth(customizeCell, CUSTOMIZE_COLUMN_WIDTH);
+                        if (isBodyRow)
+                            customizeCell.style.left = px(customizeLeft);
+                        adjustedCells += 1;
+                    }
+                }
+                return {
+                    adjustedCells,
+                    matchedColumns: Array.from(matchedColumns),
+                    matchedKeys: Array.from(matchedKeys),
+                };
+            }
+            resetHorizontalScroll();
+            await wait(SCROLL_SETTLE_MS);
+            const matchedColumns = new Set();
+            const matchedKeys = new Set();
+            let adjustedCells = 0;
+            for (let pass = 0; pass < MAX_HORIZONTAL_PASSES; pass++) {
+                const step = applyVisibleWidths();
+                adjustedCells += step.adjustedCells;
+                for (const column of step.matchedColumns)
+                    matchedColumns.add(column);
+                for (const key of step.matchedKeys)
+                    matchedKeys.add(key);
+                if (matchedKeys.size >= columnTargets.length)
+                    break;
+                const scroll = scrollRight();
+                if (!scroll.moved || scroll.atRight) {
+                    if (scroll.atRight) {
+                        await wait(SCROLL_SETTLE_MS);
+                        const finalStep = applyVisibleWidths();
+                        adjustedCells += finalStep.adjustedCells;
+                        for (const column of finalStep.matchedColumns)
+                            matchedColumns.add(column);
+                        for (const key of finalStep.matchedKeys)
+                            matchedKeys.add(key);
+                    }
+                    break;
+                }
+                await wait(SCROLL_SETTLE_MS);
+            }
+            resetHorizontalScroll();
+            await wait(SCROLL_SETTLE_MS);
+            const leftStep = applyVisibleWidths();
+            adjustedCells += leftStep.adjustedCells;
+            for (const column of leftStep.matchedColumns)
+                matchedColumns.add(column);
+            for (const key of leftStep.matchedKeys)
+                matchedKeys.add(key);
+            const missingColumns = columnTargets
+                .filter((target) => !matchedKeys.has(target.key))
+                .map((target) => target.title);
+            if (matchedKeys.size === 0) {
                 return {
                     applied: false,
-                    matchedColumns,
+                    matchedColumns: [],
                     missingColumns,
                     errorMessage: 'Не найдены видимые заголовки таблицы Ads Manager для автоширины',
                     adjustedCells: 0,
                     totalWidthPx,
                 };
             }
-            let adjustedCells = 0;
-            const rowNodes = Array.from(new Set([
-                ...document.querySelectorAll('[role="row"]'),
-                ...document.querySelectorAll('[data-surface*="table_row:"]'),
-                ...document.querySelectorAll('._1gda._2djg'),
-            ]));
-            for (const rowNode of rowNodes) {
-                if (!(rowNode instanceof HTMLElement))
-                    continue;
-                const cells = Array.from(rowNode.querySelectorAll('._4lg0'))
-                    .filter((node) => node instanceof HTMLElement)
-                    .sort((left, right) => {
-                    const leftRect = left.getBoundingClientRect();
-                    const rightRect = right.getBoundingClientRect();
-                    return leftRect.left - rightRect.left || leftRect.top - rightRect.top;
-                });
-                if (cells.length < 2)
-                    continue;
-                const isBodyRow = rowNode.classList.contains('_1gda') && rowNode.classList.contains('_2djg');
-                rowNode.style.width = px(totalWidthPx);
-                rowNode.style.minWidth = px(totalWidthPx);
-                setWidth(cells[0], SELECTION_COLUMN_WIDTH);
-                if (isBodyRow)
-                    cells[0].style.left = '0px';
-                adjustedCells += 1;
-                let pinnedLeft = SELECTION_COLUMN_WIDTH;
-                let scrollLeft = 0;
-                const visibleTargetCount = Math.min(columnTargets.length, cells.length - 1);
-                for (let index = 0; index < visibleTargetCount; index++) {
-                    const cell = cells[index + 1];
-                    const target = columnTargets[index];
-                    if (!cell)
-                        continue;
-                    setWidth(cell, target.widthPx);
-                    if (isBodyRow) {
-                        const leftPx = index < PINNED_TARGET_COUNT ? pinnedLeft : scrollLeft;
-                        cell.style.left = px(leftPx);
-                    }
-                    if (index < PINNED_TARGET_COUNT) {
-                        pinnedLeft += target.widthPx;
-                    }
-                    else {
-                        scrollLeft += target.widthPx;
-                    }
-                    adjustedCells += 1;
-                }
-                const customizeCell = cells.length >= columnTargets.length + 2
-                    ? cells[columnTargets.length + 1]
-                    : null;
-                if (customizeCell) {
-                    setWidth(customizeCell, CUSTOMIZE_COLUMN_WIDTH);
-                    if (isBodyRow)
-                        customizeCell.style.left = px(scrollLeft);
-                    adjustedCells += 1;
-                }
-            }
-            let pinnedLeft = SELECTION_COLUMN_WIDTH;
-            let scrollLeft = 0;
-            for (let index = 0; index < columnTargets.length; index++) {
-                const target = columnTargets[index];
-                const headerNode = matchedHeaders.get(target.key);
-                if (!headerNode)
-                    continue;
-                const leftPx = index < PINNED_TARGET_COUNT ? pinnedLeft : scrollLeft;
-                adjustedCells += updateHeaderChain(headerNode, target.widthPx, leftPx);
-                if (index < PINNED_TARGET_COUNT) {
-                    pinnedLeft += target.widthPx;
-                }
-                else {
-                    scrollLeft += target.widthPx;
-                }
-            }
             return {
                 applied: adjustedCells > 0,
-                matchedColumns,
+                matchedColumns: Array.from(matchedColumns),
                 missingColumns: [],
                 errorMessage: '',
                 adjustedCells,
