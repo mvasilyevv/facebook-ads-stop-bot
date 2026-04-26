@@ -318,6 +318,7 @@ async def get_vision_settings(db: AsyncSession = Depends(get_db)):
         profile_running=bool(runtime_status["profile_running"]),
         cdp_port=runtime_status["cdp_port"],
         cdp_ready=bool(runtime_status["cdp_ready"]),
+        column_widths_saved_count=len(row.column_widths_json or []),
     )
 
 
@@ -365,6 +366,7 @@ async def update_vision_settings(
         profile_running=bool(runtime_status["profile_running"]),
         cdp_port=runtime_status["cdp_port"],
         cdp_ready=bool(runtime_status["cdp_ready"]),
+        column_widths_saved_count=len(row.column_widths_json or []),
     )
 
 

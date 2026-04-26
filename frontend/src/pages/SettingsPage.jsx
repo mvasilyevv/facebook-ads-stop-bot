@@ -78,6 +78,7 @@ export default function SettingsPage() {
         onVisionChange={settings.vision.setValue}
         onSave={settings.vision.save}
         onReconnect={settings.vision.reconnect}
+        onSaveColumnWidths={settings.vision.saveColumnWidths}
         onApplyColumnWidths={settings.vision.applyColumnWidths}
         saving={settings.saving}
         browserOpen={browserOpen}

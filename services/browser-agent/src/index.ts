@@ -14,6 +14,7 @@ import {
   scrollAdsTableDown,
   readToggleAriaChecked,
   validateAdsTableColumns,
+  captureAdsTableColumnWidths,
   applyAdsTableColumnWidthPreset,
 } from './ads-table.js';
 import { humanMove, humanClick, humanWheelScroll } from './humanizer.js';
@@ -969,11 +970,50 @@ async function validateColumnsHandler(call: any, callback: any) {
   }
 }
 
+function mapProtoColumnWidth(raw: any): any {
+  return {
+    key: String(raw.key || ''),
+    title: String(raw.title || ''),
+    surfaceKey: String(raw.surface_key || raw.surfaceKey || ''),
+    textNeedles: Array.isArray(raw.text_needles) ? raw.text_needles.map(String) : [],
+    widthPx: Number(raw.width_px || raw.widthPx || 0),
+  };
+}
+
+async function captureColumnWidthsHandler(call: any, callback: any) {
+  try {
+    const session = getSessionForOptionalId(call.request.session_id);
+    const page = getPage(session, call.request.page_id);
+    const result = await captureAdsTableColumnWidths(page);
+    callback(null, {
+      captured: result.captured,
+      column_widths: result.columnWidths.map((column) => ({
+        key: column.key,
+        title: column.title,
+        surface_key: column.surfaceKey,
+        width_px: column.widthPx,
+        text_needles: column.textNeedles || [],
+      })),
+      matched_columns: result.matchedColumns,
+      error_message: result.errorMessage || '',
+      total_width_px: result.totalWidthPx,
+    });
+  } catch (err: any) {
+    const code = grpcCodeForError(err);
+    callback({ code, message: err.message });
+  }
+}
+
 async function applyColumnWidthsHandler(call: any, callback: any) {
   try {
     const session = getSessionForOptionalId(call.request.session_id);
     const page = getPage(session, call.request.page_id);
-    const result = await applyAdsTableColumnWidthPreset(page);
+    const columnWidths = Array.isArray(call.request.column_widths)
+      ? call.request.column_widths.map(mapProtoColumnWidth).filter((column: any) => (
+        column.key && column.surfaceKey && Number.isFinite(column.widthPx) && column.widthPx > 0
+      ))
+      : [];
+    const result = await applyAdsTableColumnWidthPreset(page, columnWidths);
     callback(null, {
       applied: result.applied,
       matched_columns: result.matchedColumns,
@@ -1027,6 +1067,7 @@ function main() {
     humanWheelScroll: humanWheelScrollHandler,
     waitForToggleConfirmation: waitForToggleConfirmation,
     validateColumns: validateColumnsHandler,
+    captureColumnWidths: captureColumnWidthsHandler,
     applyColumnWidths: applyColumnWidthsHandler,
   });
 

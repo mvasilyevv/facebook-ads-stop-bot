@@ -677,6 +677,9 @@ class VisionSettings(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # Токен хранится зашифрованным (Fernet)
     x_token_encrypted: Mapped[str] = mapped_column(Text, default="")
     profile_id: Mapped[str] = mapped_column(String(128), default="")
+    column_widths_json: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON, default=list, nullable=False
+    )
     # Флаг для observer: переподключиться к браузеру при следующем цикле
     reconnect_requested: Mapped[bool] = mapped_column(Boolean, default=False)
 

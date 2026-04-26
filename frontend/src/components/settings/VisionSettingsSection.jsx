@@ -5,6 +5,7 @@ export function VisionSettingsSection({
   onVisionChange,
   onSave,
   onReconnect,
+  onSaveColumnWidths,
   onApplyColumnWidths,
   saving,
   browserOpen,
@@ -124,12 +125,25 @@ export function VisionSettingsSection({
             </button>
             <button
               className="btn-secondary"
+              onClick={onSaveColumnWidths}
+              disabled={saving === 'save-column-widths'}
+              title="Сохранить текущие ручные ширины колонок Ads Manager"
+            >
+              {saving === 'save-column-widths' ? 'Сохранение...' : 'Сохранить ширины'}
+            </button>
+            <button
+              className="btn-secondary"
               onClick={onApplyColumnWidths}
               disabled={saving === 'column-widths'}
               title="Применить сохранённую ширину колонок Ads Manager"
             >
               {saving === 'column-widths' ? 'Применение...' : 'Автоширина колонок'}
             </button>
+            {vision.column_widths_saved_count > 0 && (
+              <span className="self-center text-2xs text-muted">
+                Сохранено: {vision.column_widths_saved_count} колонок
+              </span>
+            )}
           </div>
         </div>
       )}

@@ -470,6 +470,118 @@ async def validate_browser_columns(
         await channel.close()
 
 
+def _normalize_saved_column_widths(raw_value: object) -> list[dict[str, object]]:
+    """Нормализовать сохранённый JSON слепка ширины колонок Ads Manager."""
+    if not isinstance(raw_value, list):
+        return []
+
+    result: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for item in raw_value:
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("key") or "").strip()
+        title = str(item.get("title") or "").strip()
+        surface_key = str(item.get("surface_key") or item.get("surfaceKey") or "").strip()
+        try:
+            width_px = int(float(item.get("width_px") or item.get("widthPx") or 0))
+        except (TypeError, ValueError):
+            width_px = 0
+        text_needles_raw = item.get("text_needles") or item.get("textNeedles") or []
+        text_needles = (
+            [str(needle).strip() for needle in text_needles_raw if str(needle).strip()]
+            if isinstance(text_needles_raw, list)
+            else []
+        )
+        if not key or not surface_key or width_px <= 0 or key in seen:
+            continue
+        seen.add(key)
+        result.append(
+            {
+                "key": key,
+                "title": title,
+                "surface_key": surface_key,
+                "width_px": width_px,
+                "text_needles": text_needles,
+            }
+        )
+    return result
+
+
+@router.post("/browser/save-column-widths", include_in_schema=False)
+@router.post("/settings/browser/save-column-widths")
+async def save_browser_column_widths(db: AsyncSession = Depends(get_db)):
+    """Сохранить текущий слепок ширины колонок Ads Manager через gRPC."""
+    import grpc
+
+    from clients.python_grpc.v1 import (
+        browser_session_pb2_grpc,
+        scanner_pb2,
+        scanner_pb2_grpc,
+    )
+
+    channel = grpc.aio.insecure_channel("localhost:50051")
+    try:
+        browser_stub = browser_session_pb2_grpc.BrowserSessionServiceStub(channel)
+        scanner_stub = scanner_pb2_grpc.ScannerServiceStub(channel)
+        session_id = await _get_or_start_browser_agent_session_id(
+            browser_stub, db, start_if_missing=True
+        )
+
+        result = await scanner_stub.CaptureColumnWidths(
+            scanner_pb2.CaptureColumnWidthsRequest(session_id=session_id)
+        )
+        column_widths = [
+            {
+                "key": column.key,
+                "title": column.title,
+                "surface_key": column.surface_key,
+                "width_px": int(column.width_px),
+                "text_needles": list(column.text_needles),
+            }
+            for column in result.column_widths
+            if column.key and column.surface_key and int(column.width_px) > 0
+        ]
+
+        if not result.captured or not column_widths:
+            return {
+                "saved": False,
+                "saved_count": 0,
+                "matched_columns": list(result.matched_columns),
+                "error_message": result.error_message
+                or "Не удалось сохранить слепок ширины колонок Ads Manager",
+                "total_width_px": result.total_width_px,
+            }
+
+        row = await db.scalar(
+            select(VisionSettings).where(VisionSettings.singleton_key == "default")
+        )
+        if row is None:
+            row = VisionSettings(singleton_key="default")
+            db.add(row)
+        row.column_widths_json = column_widths
+        await db.commit()
+
+        return {
+            "saved": True,
+            "saved_count": len(column_widths),
+            "matched_columns": [column["title"] for column in column_widths],
+            "error_message": "",
+            "total_width_px": result.total_width_px,
+        }
+    except grpc.RpcError as e:
+        raise HTTPException(status_code=502, detail=f"gRPC ошибка: {e.details()}") from e
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Не удалось сохранить слепок ширины колонок: {e}",
+        ) from e
+    finally:
+        await channel.close()
+
+
 @router.post("/browser/apply-column-widths", include_in_schema=False)
 @router.post("/settings/browser/apply-column-widths")
 async def apply_browser_column_widths(db: AsyncSession = Depends(get_db)):
@@ -489,9 +601,27 @@ async def apply_browser_column_widths(db: AsyncSession = Depends(get_db)):
         session_id = await _get_or_start_browser_agent_session_id(
             browser_stub, db, start_if_missing=True
         )
+        row = await db.scalar(
+            select(VisionSettings).where(VisionSettings.singleton_key == "default")
+        )
+        saved_widths = _normalize_saved_column_widths(
+            row.column_widths_json if row is not None else []
+        )
 
         result = await scanner_stub.ApplyColumnWidths(
-            scanner_pb2.ApplyColumnWidthsRequest(session_id=session_id)
+            scanner_pb2.ApplyColumnWidthsRequest(
+                session_id=session_id,
+                column_widths=[
+                    scanner_pb2.ColumnWidth(
+                        key=str(column["key"]),
+                        title=str(column["title"]),
+                        surface_key=str(column["surface_key"]),
+                        width_px=int(column["width_px"]),
+                        text_needles=list(column["text_needles"]),
+                    )
+                    for column in saved_widths
+                ],
+            )
         )
         return {
             "applied": result.applied,
@@ -500,13 +630,17 @@ async def apply_browser_column_widths(db: AsyncSession = Depends(get_db)):
             "error_message": result.error_message,
             "adjusted_cells": result.adjusted_cells,
             "total_width_px": result.total_width_px,
+            "used_saved_widths": bool(saved_widths),
         }
     except grpc.RpcError as e:
         raise HTTPException(status_code=502, detail=f"gRPC ошибка: {e.details()}") from e
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(
+            status_code=500,
+            detail=f"Не удалось применить ширины колонок: {e}",
+        ) from e
     finally:
         await channel.close()
 

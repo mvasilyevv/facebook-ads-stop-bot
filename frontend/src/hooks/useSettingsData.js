@@ -10,6 +10,7 @@ import {
   getVisionProfiles,
   getVisionSettings,
   revokeTelegram,
+  saveBrowserColumnWidths,
   setTelegramToken,
   updateObserverSettings,
   updateVisionSettings,
@@ -69,6 +70,7 @@ const DEFAULT_VISION = {
   profile_running: false,
   cdp_port: null,
   cdp_ready: false,
+  column_widths_saved_count: 0,
 };
 
 function mergeObserverState(data) {
@@ -142,6 +144,8 @@ function mergeVisionState(data) {
     profile_running: data.profile_running || false,
     cdp_port: data.cdp_port ?? null,
     cdp_ready: data.cdp_ready || false,
+    column_widths_saved_count:
+      data.column_widths_saved_count ?? DEFAULT_VISION.column_widths_saved_count,
   };
 }
 
@@ -551,11 +555,39 @@ export function useSettingsData() {
         return;
       }
       setToast({
-        message: `Автоширина колонок применена (${response.adjusted_cells || 0} элементов)`,
+        message: response.used_saved_widths
+          ? `Сохранённые ширины применены (${response.adjusted_cells || 0} колонок)`
+          : `Автоширина колонок применена (${response.adjusted_cells || 0} колонок)`,
         type: 'success',
       });
     } catch (err) {
       setToast({ message: err.message || 'Ошибка автоширины колонок', type: 'error' });
+    } finally {
+      setSaving('');
+    }
+  }, []);
+
+  const saveColumnWidthsAction = useCallback(async () => {
+    setSaving('save-column-widths');
+    try {
+      const response = await saveBrowserColumnWidths();
+      if (!response?.saved) {
+        setToast({
+          message: response?.error_message || 'Не удалось сохранить ширины колонок',
+          type: 'error',
+        });
+        return;
+      }
+      setVision((current) => ({
+        ...current,
+        column_widths_saved_count: response.saved_count || 0,
+      }));
+      setToast({
+        message: `Слепок ширины колонок сохранён (${response.saved_count || 0} колонок)`,
+        type: 'success',
+      });
+    } catch (err) {
+      setToast({ message: err.message || 'Ошибка сохранения ширины колонок', type: 'error' });
     } finally {
       setSaving('');
     }
@@ -650,6 +682,7 @@ export function useSettingsData() {
       profilesLoading,
       save: saveVision,
       reconnect: visionReconnectAction,
+      saveColumnWidths: saveColumnWidthsAction,
       applyColumnWidths: applyColumnWidthsAction,
       loadProfiles,
     },

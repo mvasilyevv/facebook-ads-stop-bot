@@ -180,6 +180,7 @@ class VisionSettingsSchema(BaseModel):
     profile_running: bool = False
     cdp_port: int | None = None
     cdp_ready: bool = False
+    column_widths_saved_count: int = 0
 
 
 class VisionSettingsUpdateSchema(BaseModel):

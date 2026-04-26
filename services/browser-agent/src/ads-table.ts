@@ -28,6 +28,14 @@ export interface ColumnWidthApplyResult {
   totalWidthPx: number;
 }
 
+export interface ColumnWidthCaptureResult {
+  captured: boolean;
+  columnWidths: ColumnWidthTarget[];
+  matchedColumns: string[];
+  errorMessage: string;
+  totalWidthPx: number;
+}
+
 async function collectVisibleHeaderSnapshots(page: Page): Promise<HeaderSnapshot[]> {
   const headers = await page.evaluate(() => {
     return Array.from(document.querySelectorAll('[data-surface*="table_column_header:"]'))
@@ -71,120 +79,109 @@ export async function validateAdsTableColumns(page: Page): Promise<ColumnValidat
   }
 }
 
-/** Применить ручной пресет ширины колонок Ads Manager без запуска сканирования. */
-export async function applyAdsTableColumnWidthPreset(page: Page): Promise<ColumnWidthApplyResult> {
+/** Снять текущую ручную ширину видимых и горизонтально доступных колонок Ads Manager. */
+export async function captureAdsTableColumnWidths(page: Page): Promise<ColumnWidthCaptureResult> {
   const targets = buildAdsTableColumnWidthTargets();
 
   try {
-    const result = await page.evaluate(async (columnTargets: ColumnWidthTarget[]) => {
-      const SELECTION_COLUMN_WIDTH = 49;
-      const CUSTOMIZE_COLUMN_WIDTH = 32;
-      const PINNED_TARGET_COUNT = 2;
-      const SCROLL_SETTLE_MS = 160;
-      const MAX_HORIZONTAL_PASSES = Math.max(8, columnTargets.length + 4);
+    const SCROLL_SETTLE_MS = 180;
+    const MAX_HORIZONTAL_PASSES = Math.max(8, targets.length + 4);
+    const captured = new Map<string, ColumnWidthTarget>();
 
-      function normalizeText(value: string | null | undefined): string {
-        return String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
-      }
-
-      function readSurfaceKey(el: Element): string {
-        const surface = el.getAttribute('data-surface') || '';
-        const match = surface.match(/table_column_header:([^/]+)/);
-        return match ? match[1] : '';
-      }
-
-      function targetMatches(target: ColumnWidthTarget, surfaceKey: string, text: string): boolean {
-        const normalizedText = normalizeText(text);
-        const titleMatches = Boolean(normalizedText) && normalizedText === normalizeText(target.title);
-        if (target.surfaceKey !== surfaceKey) return titleMatches;
-        if (!target.textNeedles?.length) return true;
-        if (!normalizedText) return true;
-        return titleMatches
-          || target.textNeedles.some((needle) => normalizedText.includes(normalizeText(needle)));
-      }
-
-      function findColumnCell(headerNode: Element): HTMLElement | null {
-        let node: Element | null = headerNode.parentElement;
-        while (node instanceof HTMLElement) {
-          const rect = node.getBoundingClientRect();
-          if (rect.width > 20 && rect.height > 20 && node.style.width) {
-            return node;
-          }
-          node = node.parentElement;
+    async function collectVisibleWidths(): Promise<ColumnWidthTarget[]> {
+      return page.evaluate((columnTargets: ColumnWidthTarget[]) => {
+        function normalizeText(value: string | null | undefined): string {
+          return String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
         }
-        return null;
-      }
 
-      function px(value: number): string {
-        return `${Math.round(value)}px`;
-      }
+        function readSurfaceKey(el: Element): string {
+          const surface = el.getAttribute('data-surface') || '';
+          const match = surface.match(/table_column_header:([^/]+)/);
+          return match ? match[1] : '';
+        }
 
-      function setWidth(node: HTMLElement, widthPx: number): void {
-        node.style.width = px(widthPx);
-        node.style.minWidth = px(widthPx);
-        node.style.maxWidth = px(widthPx);
-      }
+        function targetMatches(target: ColumnWidthTarget, surfaceKey: string, text: string): boolean {
+          const normalizedText = normalizeText(text);
+          const titleMatches = Boolean(normalizedText) && normalizedText === normalizeText(target.title);
+          if (target.surfaceKey !== surfaceKey) return titleMatches;
+          if (!target.textNeedles?.length) return true;
+          if (!normalizedText) return true;
+          return titleMatches
+            || target.textNeedles.some((needle) => normalizedText.includes(normalizeText(needle)));
+        }
 
-      function wait(ms: number): Promise<void> {
-        return new Promise((resolve) => {
-          window.setTimeout(resolve, ms);
-        });
-      }
-
-      function updateHeaderChain(headerNode: Element, widthPx: number, leftPx: number): number {
-        let changed = 0;
-        let node: Element | null = headerNode.parentElement;
-        while (node instanceof HTMLElement) {
-          const role = node.getAttribute('role') || '';
-          if (role === 'row') break;
-
-          const classList = node.classList;
-          const shouldSetWidth =
-            classList.contains('_4lg0')
-            || classList.contains('_3pzj')
-            || classList.contains('_1eyb')
-            || classList.contains('_1eyh')
-            || role === 'columnheader';
-
-          if (shouldSetWidth) {
-            setWidth(node, widthPx);
-            changed += 1;
+        function findColumnCell(headerNode: Element): HTMLElement | null {
+          const directCell = headerNode.closest('._4lg0');
+          if (directCell instanceof HTMLElement) {
+            const rect = directCell.getBoundingClientRect();
+            if (rect.width > 20 && rect.height > 20) return directCell;
           }
 
-          if (classList.contains('_1eyh') || role === 'columnheader') {
-            node.style.left = px(leftPx);
+          let node: Element | null = headerNode.parentElement;
+          while (node instanceof HTMLElement) {
+            const rect = node.getBoundingClientRect();
+            if (rect.width > 20 && rect.height > 20 && node.style.width) return node;
+            node = node.parentElement;
           }
-
-          node = node.parentElement;
+          return null;
         }
-        return changed;
-      }
 
-      function targetLeftPx(targetIndex: number): number {
-        if (targetIndex < PINNED_TARGET_COUNT) {
-          return SELECTION_COLUMN_WIDTH + columnTargets
-            .slice(0, targetIndex)
-            .reduce((total, target) => total + target.widthPx, 0);
+        function buildFallbackTarget(
+          surfaceKey: string,
+          text: string,
+          index: number,
+        ): ColumnWidthTarget | null {
+          const normalizedText = normalizeText(text);
+          const title = String(text || surfaceKey).replace(/\s+/g, ' ').trim();
+          if (!surfaceKey && !normalizedText) return null;
+          return {
+            key: `custom:${surfaceKey || 'text'}:${normalizedText || index}`,
+            title: title || surfaceKey,
+            surfaceKey,
+            textNeedles: normalizedText ? [normalizedText] : [],
+            widthPx: 0,
+          };
         }
-        return columnTargets
-          .slice(PINNED_TARGET_COUNT, targetIndex)
-          .reduce((total, target) => total + target.widthPx, 0);
-      }
 
-      const targetWidthSum = columnTargets.reduce((total, target) => total + target.widthPx, 0);
-      const totalWidthPx = SELECTION_COLUMN_WIDTH + targetWidthSum + CUSTOMIZE_COLUMN_WIDTH;
+        const result = new Map<string, ColumnWidthTarget>();
+        const headerNodes = Array.from(
+          document.querySelectorAll('[data-surface*="table_column_header:"]'),
+        );
 
-      function collectHorizontalScrollables(): HTMLElement[] {
+        for (const [index, headerNode] of headerNodes.entries()) {
+          const surfaceKey = readSurfaceKey(headerNode);
+          const text = headerNode.textContent || '';
+          const target = columnTargets.find((item) => targetMatches(item, surfaceKey, text))
+            || buildFallbackTarget(surfaceKey, text, index);
+          if (!target || result.has(target.key)) continue;
+
+          const cell = findColumnCell(headerNode);
+          if (!(cell instanceof HTMLElement)) continue;
+          const rect = cell.getBoundingClientRect();
+          if (rect.width <= 20 || rect.height <= 20) continue;
+
+          result.set(target.key, {
+            key: target.key,
+            title: target.title,
+            surfaceKey: target.surfaceKey,
+            textNeedles: target.textNeedles,
+            widthPx: Math.round(rect.width),
+          });
+        }
+
+        return Array.from(result.values());
+      }, targets);
+    }
+
+    async function resetHorizontalScroll(): Promise<void> {
+      await page.evaluate(() => {
         const seen = new Set<HTMLElement>();
         const scrollables: HTMLElement[] = [];
 
         function addScrollable(node: Node | null): void {
           if (!(node instanceof HTMLElement) || seen.has(node)) return;
           seen.add(node);
-          const maxScrollLeft = node.scrollWidth - node.clientWidth;
-          if (node.clientHeight > 20 && node.clientWidth > 80 && maxScrollLeft > 8) {
-            scrollables.push(node);
-          }
+          if (node.clientWidth > 80 && node.scrollWidth - node.clientWidth > 8) scrollables.push(node);
         }
 
         const anchors = [
@@ -205,25 +202,289 @@ export async function applyAdsTableColumnWidthPreset(page: Page): Promise<Column
           for (const node of document.querySelectorAll(selector)) addScrollable(node);
         }
 
-        const docScroller = document.scrollingElement;
-        if (docScroller instanceof HTMLElement) addScrollable(docScroller);
+        for (const node of scrollables) {
+          node.scrollLeft = 0;
+          node.dispatchEvent(new Event('scroll', { bubbles: true }));
+        }
+      });
+    }
 
-        return scrollables.sort((left, right) => {
+    async function scrollRight(): Promise<{ moved: boolean; atRight: boolean }> {
+      return page.evaluate(() => {
+        const seen = new Set<HTMLElement>();
+        const scrollables: HTMLElement[] = [];
+
+        function addScrollable(node: Node | null): void {
+          if (!(node instanceof HTMLElement) || seen.has(node)) return;
+          seen.add(node);
+          if (node.clientWidth > 80 && node.scrollWidth - node.clientWidth > 8) scrollables.push(node);
+        }
+
+        const anchors = [
+          document.querySelector('[data-surface*="table_column_header:"]'),
+          document.querySelector('[data-surface*="table_row:"], ._1gda._2djg'),
+          document.querySelector('[role="grid"]'),
+          document.querySelector('[role="table"]'),
+          document.querySelector('[aria-rowcount]'),
+        ];
+
+        for (const anchor of anchors) {
+          for (let node: Node | null = anchor; node; node = (node as HTMLElement).parentElement) {
+            addScrollable(node);
+          }
+        }
+
+        for (const selector of ['[role="grid"]', '[role="table"]', '[aria-rowcount]']) {
+          for (const node of document.querySelectorAll(selector)) addScrollable(node);
+        }
+
+        scrollables.sort((left, right) => {
           const leftMax = left.scrollWidth - left.clientWidth;
           const rightMax = right.scrollWidth - right.clientWidth;
           return rightMax - leftMax;
         });
-      }
 
-      function resetHorizontalScroll(): void {
-        for (const node of collectHorizontalScrollables()) {
+        const scroller = scrollables[0] || null;
+        if (!scroller) return { moved: false, atRight: true };
+
+        const maxScrollLeft = Math.max(scroller.scrollWidth - scroller.clientWidth, 0);
+        const prevScrollLeft = Math.max(scroller.scrollLeft, 0);
+        const stepPx = Math.max(160, Math.round(scroller.clientWidth * 0.75));
+        scroller.scrollLeft = Math.min(prevScrollLeft + stepPx, maxScrollLeft);
+        scroller.dispatchEvent(new Event('scroll', { bubbles: true }));
+
+        const nextScrollLeft = Math.max(scroller.scrollLeft, 0);
+        return {
+          moved: nextScrollLeft > prevScrollLeft + 2,
+          atRight: maxScrollLeft <= 0 || nextScrollLeft >= maxScrollLeft - 4,
+        };
+      });
+    }
+
+    await resetHorizontalScroll();
+    await page.waitForTimeout(SCROLL_SETTLE_MS);
+
+    for (let pass = 0; pass < MAX_HORIZONTAL_PASSES; pass += 1) {
+      for (const column of await collectVisibleWidths()) captured.set(column.key, column);
+      if (captured.size >= targets.length) break;
+
+      const scroll = await scrollRight();
+      await page.waitForTimeout(SCROLL_SETTLE_MS);
+      if (!scroll.moved || scroll.atRight) {
+        for (const column of await collectVisibleWidths()) captured.set(column.key, column);
+        break;
+      }
+    }
+
+    await resetHorizontalScroll();
+    await page.waitForTimeout(SCROLL_SETTLE_MS);
+
+    const columnWidths = Array.from(captured.values());
+    const totalWidthPx = columnWidths.reduce((total, column) => total + column.widthPx, 0);
+    return {
+      captured: columnWidths.length > 0,
+      columnWidths,
+      matchedColumns: columnWidths.map((column) => column.title),
+      errorMessage: columnWidths.length > 0
+        ? ''
+        : 'Не найдены видимые заголовки таблицы Ads Manager для сохранения ширин',
+      totalWidthPx,
+    };
+  } catch (err: any) {
+    return {
+      captured: false,
+      columnWidths: [],
+      matchedColumns: [],
+      errorMessage: `Ошибка сохранения слепка ширины колонок: ${err.message}`,
+      totalWidthPx: 0,
+    };
+  }
+}
+
+/** Применить сохранённый пресет ширины колонок Ads Manager без запуска сканирования. */
+export async function applyAdsTableColumnWidthPreset(
+  page: Page,
+  savedTargets: ColumnWidthTarget[] = [],
+): Promise<ColumnWidthApplyResult> {
+  const targets = savedTargets.length > 0 ? savedTargets : buildAdsTableColumnWidthTargets();
+
+  try {
+    const SCROLL_SETTLE_MS = 180;
+    const RESIZE_SETTLE_MS = 220;
+    const WIDTH_TOLERANCE_PX = 3;
+    const MAX_HORIZONTAL_PASSES = Math.max(8, targets.length + 4);
+    const totalWidthPx = targets.reduce((total, target) => total + target.widthPx, 0);
+    const matchedColumns = new Set<string>();
+    const matchedKeys = new Set<string>();
+    let adjustedCells = 0;
+
+    type ResizeCandidate = {
+      key: string;
+      title: string;
+      widthPx: number;
+      currentWidthPx: number;
+      separatorX: number;
+      separatorY: number;
+      left: number;
+    };
+    type ScrollResult = {
+      moved: boolean;
+      atRight: boolean;
+      scrollLeft: number;
+      maxScrollLeft: number;
+    };
+
+    async function collectVisibleResizeCandidates(): Promise<ResizeCandidate[]> {
+      return page.evaluate((columnTargets: ColumnWidthTarget[]) => {
+        function normalizeText(value: string | null | undefined): string {
+          return String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+        }
+
+        function readSurfaceKey(el: Element): string {
+          const surface = el.getAttribute('data-surface') || '';
+          const match = surface.match(/table_column_header:([^/]+)/);
+          return match ? match[1] : '';
+        }
+
+        function targetMatches(target: ColumnWidthTarget, surfaceKey: string, text: string): boolean {
+          const normalizedText = normalizeText(text);
+          const titleMatches = Boolean(normalizedText) && normalizedText === normalizeText(target.title);
+          if (target.surfaceKey !== surfaceKey) return titleMatches;
+          if (!target.textNeedles?.length) return true;
+          if (!normalizedText) return true;
+          return titleMatches
+            || target.textNeedles.some((needle) => normalizedText.includes(normalizeText(needle)));
+        }
+
+        function findColumnCell(headerNode: Element): HTMLElement | null {
+          const directCell = headerNode.closest('._4lg0');
+          if (directCell instanceof HTMLElement) {
+            const rect = directCell.getBoundingClientRect();
+            if (rect.width > 20 && rect.height > 20) return directCell;
+          }
+
+          let node: Element | null = headerNode.parentElement;
+          while (node instanceof HTMLElement) {
+            const rect = node.getBoundingClientRect();
+            if (rect.width > 20 && rect.height > 20 && node.style.width) return node;
+            node = node.parentElement;
+          }
+          return null;
+        }
+
+        const candidates = new Map<string, ResizeCandidate>();
+        const headerNodes = Array.from(
+          document.querySelectorAll('[data-surface*="table_column_header:"]'),
+        );
+
+        for (const headerNode of headerNodes) {
+          const surfaceKey = readSurfaceKey(headerNode);
+          const text = headerNode.textContent || '';
+          const target = columnTargets.find((item) => targetMatches(item, surfaceKey, text));
+          if (!target || candidates.has(target.key)) continue;
+
+          const cell = findColumnCell(headerNode);
+          const separator = cell?.querySelector('._4lg9[role="separator"], [role="separator"]');
+          if (!(cell instanceof HTMLElement) || !(separator instanceof HTMLElement)) continue;
+
+          const cellRect = cell.getBoundingClientRect();
+          const separatorRect = separator.getBoundingClientRect();
+          if (
+            cellRect.width <= 20
+            || cellRect.height <= 20
+            || separatorRect.width <= 0
+            || separatorRect.height <= 0
+          ) {
+            continue;
+          }
+
+          candidates.set(target.key, {
+            key: target.key,
+            title: target.title,
+            widthPx: target.widthPx,
+            currentWidthPx: cellRect.width,
+            separatorX: separatorRect.left + separatorRect.width / 2,
+            separatorY: separatorRect.top + separatorRect.height / 2,
+            left: cellRect.left,
+          });
+        }
+
+        return Array.from(candidates.values()).sort((left, right) => left.left - right.left);
+      }, targets);
+    }
+
+    async function resetHorizontalScroll(): Promise<void> {
+      await page.evaluate(() => {
+        const seen = new Set<HTMLElement>();
+        const scrollables: HTMLElement[] = [];
+
+        function addScrollable(node: Node | null): void {
+          if (!(node instanceof HTMLElement) || seen.has(node)) return;
+          seen.add(node);
+          if (node.clientWidth > 80 && node.scrollWidth - node.clientWidth > 8) scrollables.push(node);
+        }
+
+        const anchors = [
+          document.querySelector('[data-surface*="table_column_header:"]'),
+          document.querySelector('[data-surface*="table_row:"], ._1gda._2djg'),
+          document.querySelector('[role="grid"]'),
+          document.querySelector('[role="table"]'),
+          document.querySelector('[aria-rowcount]'),
+        ];
+
+        for (const anchor of anchors) {
+          for (let node: Node | null = anchor; node; node = (node as HTMLElement).parentElement) {
+            addScrollable(node);
+          }
+        }
+
+        for (const selector of ['[role="grid"]', '[role="table"]', '[aria-rowcount]']) {
+          for (const node of document.querySelectorAll(selector)) addScrollable(node);
+        }
+
+        for (const node of scrollables) {
           node.scrollLeft = 0;
           node.dispatchEvent(new Event('scroll', { bubbles: true }));
         }
-      }
+      });
+    }
 
-      function scrollRight(): { moved: boolean; atRight: boolean; scrollLeft: number; maxScrollLeft: number } {
-        const scroller = collectHorizontalScrollables()[0] || null;
+    async function scrollRight(): Promise<ScrollResult> {
+      return page.evaluate(() => {
+        const seen = new Set<HTMLElement>();
+        const scrollables: HTMLElement[] = [];
+
+        function addScrollable(node: Node | null): void {
+          if (!(node instanceof HTMLElement) || seen.has(node)) return;
+          seen.add(node);
+          if (node.clientWidth > 80 && node.scrollWidth - node.clientWidth > 8) scrollables.push(node);
+        }
+
+        const anchors = [
+          document.querySelector('[data-surface*="table_column_header:"]'),
+          document.querySelector('[data-surface*="table_row:"], ._1gda._2djg'),
+          document.querySelector('[role="grid"]'),
+          document.querySelector('[role="table"]'),
+          document.querySelector('[aria-rowcount]'),
+        ];
+
+        for (const anchor of anchors) {
+          for (let node: Node | null = anchor; node; node = (node as HTMLElement).parentElement) {
+            addScrollable(node);
+          }
+        }
+
+        for (const selector of ['[role="grid"]', '[role="table"]', '[aria-rowcount]']) {
+          for (const node of document.querySelectorAll(selector)) addScrollable(node);
+        }
+
+        scrollables.sort((left, right) => {
+          const leftMax = left.scrollWidth - left.clientWidth;
+          const rightMax = right.scrollWidth - right.clientWidth;
+          return rightMax - leftMax;
+        });
+
+        const scroller = scrollables[0] || null;
         if (!scroller) return { moved: false, atRight: true, scrollLeft: 0, maxScrollLeft: 0 };
 
         const maxScrollLeft = Math.max(scroller.scrollWidth - scroller.clientWidth, 0);
@@ -239,182 +500,69 @@ export async function applyAdsTableColumnWidthPreset(page: Page): Promise<Column
           scrollLeft: nextScrollLeft,
           maxScrollLeft,
         };
+      });
+    }
+
+    async function resizeVisibleCandidate(candidate: ResizeCandidate): Promise<boolean> {
+      const deltaPx = Math.round(candidate.widthPx - candidate.currentWidthPx);
+      matchedColumns.add(candidate.title);
+      matchedKeys.add(candidate.key);
+      if (Math.abs(deltaPx) <= WIDTH_TOLERANCE_PX) return false;
+
+      const steps = Math.max(3, Math.min(12, Math.ceil(Math.abs(deltaPx) / 18)));
+      await page.mouse.move(candidate.separatorX, candidate.separatorY);
+      await page.mouse.down();
+      await page.mouse.move(candidate.separatorX + deltaPx, candidate.separatorY, { steps });
+      await page.mouse.up();
+      await page.waitForTimeout(RESIZE_SETTLE_MS);
+      return true;
+    }
+
+    async function resizeVisibleColumns(): Promise<void> {
+      for (let guard = 0; guard < targets.length + 2; guard += 1) {
+        const candidates = await collectVisibleResizeCandidates();
+        const candidate = candidates.find((item) => !matchedKeys.has(item.key));
+        if (!candidate) return;
+
+        const resized = await resizeVisibleCandidate(candidate);
+        adjustedCells += 1;
+        if (!resized) continue;
       }
+    }
 
-      function applyVisibleWidths(): {
-        adjustedCells: number;
-        matchedColumns: string[];
-        matchedKeys: string[];
-      } {
-        const headerNodes = Array.from(
-          document.querySelectorAll('[data-surface*="table_column_header:"]'),
-        );
-        const matchedEntries: {
-          headerNode: Element;
-          headerCell: HTMLElement;
-          target: ColumnWidthTarget;
-          targetIndex: number;
-        }[] = [];
-        const matchedKeys = new Set<string>();
-        const matchedColumns = new Set<string>();
+    await resetHorizontalScroll();
+    await page.waitForTimeout(SCROLL_SETTLE_MS);
 
-        columnTargets.forEach((target, targetIndex) => {
-          const match = headerNodes.find((node) => (
-            targetMatches(target, readSurfaceKey(node), node.textContent || '')
-            && findColumnCell(node)
-          ));
+    for (let pass = 0; pass < MAX_HORIZONTAL_PASSES; pass += 1) {
+      await resizeVisibleColumns();
+      if (matchedKeys.size >= targets.length) break;
 
-          if (!match) return;
-          const headerCell = findColumnCell(match);
-          if (!headerCell) return;
-          matchedEntries.push({ headerNode: match, headerCell, target, targetIndex });
-          matchedKeys.add(target.key);
-          matchedColumns.add(target.title);
-        });
+      const scroll = await scrollRight();
+      await page.waitForTimeout(SCROLL_SETTLE_MS);
 
-        let adjustedCells = 0;
-
-        for (const entry of matchedEntries) {
-          adjustedCells += updateHeaderChain(
-            entry.headerNode,
-            entry.target.widthPx,
-            targetLeftPx(entry.targetIndex),
-          );
-        }
-
-        const headerRects = matchedEntries.map((entry) => ({
-          ...entry,
-          left: entry.headerCell.getBoundingClientRect().left,
-        }));
-        const rowNodes = Array.from(new Set([
-          ...document.querySelectorAll('[role="row"]'),
-          ...document.querySelectorAll('[data-surface*="table_row:"]'),
-          ...document.querySelectorAll('._1gda._2djg'),
-        ]));
-
-        for (const rowNode of rowNodes) {
-          if (!(rowNode instanceof HTMLElement)) continue;
-          const cells = Array.from(rowNode.querySelectorAll('._4lg0'))
-            .filter((node): node is HTMLElement => node instanceof HTMLElement)
-            .sort((left, right) => {
-              const leftRect = left.getBoundingClientRect();
-              const rightRect = right.getBoundingClientRect();
-              return leftRect.left - rightRect.left || leftRect.top - rightRect.top;
-            });
-
-          if (cells.length < 1) continue;
-
-          const isBodyRow = rowNode.classList.contains('_1gda') && rowNode.classList.contains('_2djg');
-          rowNode.style.width = px(totalWidthPx);
-          rowNode.style.minWidth = px(totalWidthPx);
-
-          const cellRects = cells.map((cell) => ({
-            cell,
-            left: cell.getBoundingClientRect().left,
-          }));
-
-          setWidth(cells[0], SELECTION_COLUMN_WIDTH);
-          if (isBodyRow) cells[0].style.left = '0px';
-          adjustedCells += 1;
-
-          const usedCells = new Set<HTMLElement>([cells[0]]);
-          for (const headerRect of headerRects) {
-            let best: { cell: HTMLElement; delta: number } | null = null;
-            for (const cellRect of cellRects) {
-              if (usedCells.has(cellRect.cell)) continue;
-              const delta = Math.abs(cellRect.left - headerRect.left);
-              if (!best || delta < best.delta) best = { cell: cellRect.cell, delta };
-            }
-            if (!best || best.delta > 96) continue;
-
-            setWidth(best.cell, headerRect.target.widthPx);
-            if (isBodyRow) {
-              best.cell.style.left = px(targetLeftPx(headerRect.targetIndex));
-            }
-            usedCells.add(best.cell);
-            adjustedCells += 1;
-          }
-
-          const customizeCell = cells.length >= columnTargets.length + 2
-            ? cells[columnTargets.length + 1]
-            : null;
-          if (customizeCell) {
-            const customizeLeft = columnTargets
-              .slice(PINNED_TARGET_COUNT)
-              .reduce((total, target) => total + target.widthPx, 0);
-            setWidth(customizeCell, CUSTOMIZE_COLUMN_WIDTH);
-            if (isBodyRow) customizeCell.style.left = px(customizeLeft);
-            adjustedCells += 1;
-          }
-        }
-
-        return {
-          adjustedCells,
-          matchedColumns: Array.from(matchedColumns),
-          matchedKeys: Array.from(matchedKeys),
-        };
+      if (!scroll.moved || scroll.atRight) {
+        await resizeVisibleColumns();
+        break;
       }
+    }
 
-      resetHorizontalScroll();
-      await wait(SCROLL_SETTLE_MS);
+    await resetHorizontalScroll();
+    await page.waitForTimeout(SCROLL_SETTLE_MS);
 
-      const matchedColumns = new Set<string>();
-      const matchedKeys = new Set<string>();
-      let adjustedCells = 0;
+    const missingColumns = targets
+      .filter((target) => !matchedKeys.has(target.key))
+      .map((target) => target.title);
 
-      for (let pass = 0; pass < MAX_HORIZONTAL_PASSES; pass++) {
-        const step = applyVisibleWidths();
-        adjustedCells += step.adjustedCells;
-        for (const column of step.matchedColumns) matchedColumns.add(column);
-        for (const key of step.matchedKeys) matchedKeys.add(key);
-
-        if (matchedKeys.size >= columnTargets.length) break;
-
-        const scroll = scrollRight();
-        if (!scroll.moved || scroll.atRight) {
-          if (scroll.atRight) {
-            await wait(SCROLL_SETTLE_MS);
-            const finalStep = applyVisibleWidths();
-            adjustedCells += finalStep.adjustedCells;
-            for (const column of finalStep.matchedColumns) matchedColumns.add(column);
-            for (const key of finalStep.matchedKeys) matchedKeys.add(key);
-          }
-          break;
-        }
-        await wait(SCROLL_SETTLE_MS);
-      }
-
-      resetHorizontalScroll();
-      await wait(SCROLL_SETTLE_MS);
-      const leftStep = applyVisibleWidths();
-      adjustedCells += leftStep.adjustedCells;
-      for (const column of leftStep.matchedColumns) matchedColumns.add(column);
-      for (const key of leftStep.matchedKeys) matchedKeys.add(key);
-
-      const missingColumns = columnTargets
-        .filter((target) => !matchedKeys.has(target.key))
-        .map((target) => target.title);
-
-      if (matchedKeys.size === 0) {
-        return {
-          applied: false,
-          matchedColumns: [],
-          missingColumns,
-          errorMessage: 'Не найдены видимые заголовки таблицы Ads Manager для автоширины',
-          adjustedCells: 0,
-          totalWidthPx,
-        };
-      }
-
-      return {
-        applied: adjustedCells > 0,
-        matchedColumns: Array.from(matchedColumns),
-        missingColumns: [],
-        errorMessage: '',
-        adjustedCells,
-        totalWidthPx,
-      };
-    }, targets);
+    const result = {
+      applied: adjustedCells > 0,
+      matchedColumns: Array.from(matchedColumns),
+      missingColumns: matchedKeys.size === 0 ? missingColumns : [],
+      errorMessage: matchedKeys.size === 0
+        ? 'Не найдены видимые separator-элементы таблицы Ads Manager для автоширины'
+        : '',
+      adjustedCells,
+      totalWidthPx,
+    };
 
     return {
       applied: Boolean(result.applied),

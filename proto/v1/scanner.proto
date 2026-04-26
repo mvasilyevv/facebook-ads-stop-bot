@@ -52,6 +52,9 @@ service ScannerService {
   // Проверить наличие всех необходимых колонок в таблице Ads Manager.
   rpc ValidateColumns(ValidateColumnsRequest) returns (ValidateColumnsResponse);
 
+  // Снять текущую ручную ширину колонок Ads Manager.
+  rpc CaptureColumnWidths(CaptureColumnWidthsRequest) returns (CaptureColumnWidthsResponse);
+
   // Применить сохранённый пресет ширины колонок Ads Manager.
   rpc ApplyColumnWidths(ApplyColumnWidthsRequest) returns (ApplyColumnWidthsResponse);
 }
@@ -308,9 +311,33 @@ message ValidateColumnsResponse {
 
 // --- ApplyColumnWidths ---
 
+message ColumnWidth {
+  string key = 1;
+  string title = 2;
+  string surface_key = 3;
+  int32 width_px = 4;
+  repeated string text_needles = 5;
+}
+
+// --- CaptureColumnWidths ---
+
+message CaptureColumnWidthsRequest {
+  string session_id = 1;
+  optional string page_id = 2;
+}
+
+message CaptureColumnWidthsResponse {
+  bool captured = 1;
+  repeated ColumnWidth column_widths = 2;
+  repeated string matched_columns = 3;
+  string error_message = 4;
+  int32 total_width_px = 5;
+}
+
 message ApplyColumnWidthsRequest {
   string session_id = 1;
   optional string page_id = 2;
+  repeated ColumnWidth column_widths = 3;
 }
 
 message ApplyColumnWidthsResponse {

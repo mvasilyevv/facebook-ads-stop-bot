@@ -905,11 +905,47 @@ async function validateColumnsHandler(call, callback) {
         callback({ code, message: err.message });
     }
 }
+function mapProtoColumnWidth(raw) {
+    return {
+        key: String(raw.key || ''),
+        title: String(raw.title || ''),
+        surfaceKey: String(raw.surface_key || raw.surfaceKey || ''),
+        textNeedles: Array.isArray(raw.text_needles) ? raw.text_needles.map(String) : [],
+        widthPx: Number(raw.width_px || raw.widthPx || 0),
+    };
+}
+async function captureColumnWidthsHandler(call, callback) {
+    try {
+        const session = getSessionForOptionalId(call.request.session_id);
+        const page = getPage(session, call.request.page_id);
+        const result = await (0, ads_table_js_1.captureAdsTableColumnWidths)(page);
+        callback(null, {
+            captured: result.captured,
+            column_widths: result.columnWidths.map((column) => ({
+                key: column.key,
+                title: column.title,
+                surface_key: column.surfaceKey,
+                width_px: column.widthPx,
+                text_needles: column.textNeedles || [],
+            })),
+            matched_columns: result.matchedColumns,
+            error_message: result.errorMessage || '',
+            total_width_px: result.totalWidthPx,
+        });
+    }
+    catch (err) {
+        const code = grpcCodeForError(err);
+        callback({ code, message: err.message });
+    }
+}
 async function applyColumnWidthsHandler(call, callback) {
     try {
         const session = getSessionForOptionalId(call.request.session_id);
         const page = getPage(session, call.request.page_id);
-        const result = await (0, ads_table_js_1.applyAdsTableColumnWidthPreset)(page);
+        const columnWidths = Array.isArray(call.request.column_widths)
+            ? call.request.column_widths.map(mapProtoColumnWidth).filter((column) => (column.key && column.surfaceKey && Number.isFinite(column.widthPx) && column.widthPx > 0))
+            : [];
+        const result = await (0, ads_table_js_1.applyAdsTableColumnWidthPreset)(page, columnWidths);
         callback(null, {
             applied: result.applied,
             matched_columns: result.matchedColumns,
@@ -958,6 +994,7 @@ function main() {
         humanWheelScroll: humanWheelScrollHandler,
         waitForToggleConfirmation: waitForToggleConfirmation,
         validateColumns: validateColumnsHandler,
+        captureColumnWidths: captureColumnWidthsHandler,
         applyColumnWidths: applyColumnWidthsHandler,
     });
     server.bindAsync(`0.0.0.0:${PORT}`, grpc.ServerCredentials.createInsecure(), (error, port) => {

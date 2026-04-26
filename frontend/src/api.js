@@ -165,6 +165,8 @@ export const validateBrowserColumns = ({ startIfMissing = false } = {}) =>
   requestWithQuery('/settings/browser/validate-columns', {
     start_if_missing: startIfMissing ? 'true' : '',
   });
+export const saveBrowserColumnWidths = () =>
+  request('/settings/browser/save-column-widths', { method: 'POST' });
 export const applyBrowserColumnWidths = () =>
   request('/settings/browser/apply-column-widths', { method: 'POST' });
 

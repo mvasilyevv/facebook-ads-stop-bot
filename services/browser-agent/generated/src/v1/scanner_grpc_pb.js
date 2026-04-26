@@ -26,6 +26,28 @@ function deserialize_fb_agent_scanner_v1_ApplyColumnWidthsResponse(buffer_arg) {
   return v1_scanner_pb.ApplyColumnWidthsResponse.deserializeBinary(new Uint8Array(buffer_arg));
 }
 
+function serialize_fb_agent_scanner_v1_CaptureColumnWidthsRequest(arg) {
+  if (!(arg instanceof v1_scanner_pb.CaptureColumnWidthsRequest)) {
+    throw new Error('Expected argument of type fb_agent.scanner.v1.CaptureColumnWidthsRequest');
+  }
+  return Buffer.from(arg.serializeBinary());
+}
+
+function deserialize_fb_agent_scanner_v1_CaptureColumnWidthsRequest(buffer_arg) {
+  return v1_scanner_pb.CaptureColumnWidthsRequest.deserializeBinary(new Uint8Array(buffer_arg));
+}
+
+function serialize_fb_agent_scanner_v1_CaptureColumnWidthsResponse(arg) {
+  if (!(arg instanceof v1_scanner_pb.CaptureColumnWidthsResponse)) {
+    throw new Error('Expected argument of type fb_agent.scanner.v1.CaptureColumnWidthsResponse');
+  }
+  return Buffer.from(arg.serializeBinary());
+}
+
+function deserialize_fb_agent_scanner_v1_CaptureColumnWidthsResponse(buffer_arg) {
+  return v1_scanner_pb.CaptureColumnWidthsResponse.deserializeBinary(new Uint8Array(buffer_arg));
+}
+
 function serialize_fb_agent_scanner_v1_FindToggleCellRequest(arg) {
   if (!(arg instanceof v1_scanner_pb.FindToggleCellRequest)) {
     throw new Error('Expected argument of type fb_agent.scanner.v1.FindToggleCellRequest');
@@ -572,6 +594,18 @@ validateColumns: {
     requestDeserialize: deserialize_fb_agent_scanner_v1_ValidateColumnsRequest,
     responseSerialize: serialize_fb_agent_scanner_v1_ValidateColumnsResponse,
     responseDeserialize: deserialize_fb_agent_scanner_v1_ValidateColumnsResponse,
+  },
+  // Снять текущую ручную ширину колонок Ads Manager.
+captureColumnWidths: {
+    path: '/fb_agent.scanner.v1.ScannerService/CaptureColumnWidths',
+    requestStream: false,
+    responseStream: false,
+    requestType: v1_scanner_pb.CaptureColumnWidthsRequest,
+    responseType: v1_scanner_pb.CaptureColumnWidthsResponse,
+    requestSerialize: serialize_fb_agent_scanner_v1_CaptureColumnWidthsRequest,
+    requestDeserialize: deserialize_fb_agent_scanner_v1_CaptureColumnWidthsRequest,
+    responseSerialize: serialize_fb_agent_scanner_v1_CaptureColumnWidthsResponse,
+    responseDeserialize: deserialize_fb_agent_scanner_v1_CaptureColumnWidthsResponse,
   },
   // Применить сохранённый пресет ширины колонок Ads Manager.
 applyColumnWidths: {

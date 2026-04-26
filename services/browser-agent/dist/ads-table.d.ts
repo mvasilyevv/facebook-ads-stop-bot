@@ -1,5 +1,6 @@
 import type { Page, ElementHandle } from 'playwright';
 import type { ScrollMetrics } from './types.js';
+import { type ColumnWidthTarget } from './ads-columns.js';
 export { REQUIRED_COLUMNS } from './ads-columns.js';
 export interface ColumnValidationResult {
     valid: boolean;
@@ -15,10 +16,19 @@ export interface ColumnWidthApplyResult {
     adjustedCells: number;
     totalWidthPx: number;
 }
+export interface ColumnWidthCaptureResult {
+    captured: boolean;
+    columnWidths: ColumnWidthTarget[];
+    matchedColumns: string[];
+    errorMessage: string;
+    totalWidthPx: number;
+}
 /** Проверить наличие всех необходимых колонок в таблице Ads Manager. */
 export declare function validateAdsTableColumns(page: Page): Promise<ColumnValidationResult>;
-/** Применить ручной пресет ширины колонок Ads Manager без запуска сканирования. */
-export declare function applyAdsTableColumnWidthPreset(page: Page): Promise<ColumnWidthApplyResult>;
+/** Снять текущую ручную ширину видимых и горизонтально доступных колонок Ads Manager. */
+export declare function captureAdsTableColumnWidths(page: Page): Promise<ColumnWidthCaptureResult>;
+/** Применить сохранённый пресет ширины колонок Ads Manager без запуска сканирования. */
+export declare function applyAdsTableColumnWidthPreset(page: Page, savedTargets?: ColumnWidthTarget[]): Promise<ColumnWidthApplyResult>;
 export declare function getAdsTableScrollAnchor(page: Page): Promise<[number, number] | null>;
 export declare function resetAdsTableScroll(page: Page): Promise<number>;
 export declare function getAdsTableScrollMetrics(page: Page): Promise<ScrollMetrics>;

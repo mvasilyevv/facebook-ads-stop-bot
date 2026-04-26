@@ -518,13 +518,70 @@ class ValidateColumnsResponse(_message.Message):
         error_message: _Optional[str] = ...,
     ) -> None: ...
 
-class ApplyColumnWidthsRequest(_message.Message):
+class ColumnWidth(_message.Message):
+    __slots__ = ("key", "title", "surface_key", "width_px", "text_needles")
+    KEY_FIELD_NUMBER: _ClassVar[int]
+    TITLE_FIELD_NUMBER: _ClassVar[int]
+    SURFACE_KEY_FIELD_NUMBER: _ClassVar[int]
+    WIDTH_PX_FIELD_NUMBER: _ClassVar[int]
+    TEXT_NEEDLES_FIELD_NUMBER: _ClassVar[int]
+    key: str
+    title: str
+    surface_key: str
+    width_px: int
+    text_needles: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(
+        self,
+        key: _Optional[str] = ...,
+        title: _Optional[str] = ...,
+        surface_key: _Optional[str] = ...,
+        width_px: _Optional[int] = ...,
+        text_needles: _Optional[_Iterable[str]] = ...,
+    ) -> None: ...
+
+class CaptureColumnWidthsRequest(_message.Message):
     __slots__ = ("session_id", "page_id")
     SESSION_ID_FIELD_NUMBER: _ClassVar[int]
     PAGE_ID_FIELD_NUMBER: _ClassVar[int]
     session_id: str
     page_id: str
     def __init__(self, session_id: _Optional[str] = ..., page_id: _Optional[str] = ...) -> None: ...
+
+class CaptureColumnWidthsResponse(_message.Message):
+    __slots__ = ("captured", "column_widths", "matched_columns", "error_message", "total_width_px")
+    CAPTURED_FIELD_NUMBER: _ClassVar[int]
+    COLUMN_WIDTHS_FIELD_NUMBER: _ClassVar[int]
+    MATCHED_COLUMNS_FIELD_NUMBER: _ClassVar[int]
+    ERROR_MESSAGE_FIELD_NUMBER: _ClassVar[int]
+    TOTAL_WIDTH_PX_FIELD_NUMBER: _ClassVar[int]
+    captured: bool
+    column_widths: _containers.RepeatedCompositeFieldContainer[ColumnWidth]
+    matched_columns: _containers.RepeatedScalarFieldContainer[str]
+    error_message: str
+    total_width_px: int
+    def __init__(
+        self,
+        captured: bool = ...,
+        column_widths: _Optional[_Iterable[_Union[ColumnWidth, _Mapping]]] = ...,
+        matched_columns: _Optional[_Iterable[str]] = ...,
+        error_message: _Optional[str] = ...,
+        total_width_px: _Optional[int] = ...,
+    ) -> None: ...
+
+class ApplyColumnWidthsRequest(_message.Message):
+    __slots__ = ("session_id", "page_id", "column_widths")
+    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
+    PAGE_ID_FIELD_NUMBER: _ClassVar[int]
+    COLUMN_WIDTHS_FIELD_NUMBER: _ClassVar[int]
+    session_id: str
+    page_id: str
+    column_widths: _containers.RepeatedCompositeFieldContainer[ColumnWidth]
+    def __init__(
+        self,
+        session_id: _Optional[str] = ...,
+        page_id: _Optional[str] = ...,
+        column_widths: _Optional[_Iterable[_Union[ColumnWidth, _Mapping]]] = ...,
+    ) -> None: ...
 
 class ApplyColumnWidthsResponse(_message.Message):
     __slots__ = (
