@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { getObserverSettings, getOffers, getAdSnapshots } from './api.js';
+import {
+  createCreativeUniquifyJob,
+  getAdSnapshots,
+  getObserverSettings,
+  getOffers,
+} from './api.js';
 
 // Хелпер: создаёт минимальный объект Response, совместимый с fetch
 function makeResponse({ status = 200, body = null, contentType = 'application/json' }) {
@@ -120,5 +125,25 @@ describe('API-клиент: фильтрация query-параметров', ()
 
     const [url] = fetch.mock.calls[0];
     expect(url).toBe('/api/dashboard/ads');
+  });
+});
+
+describe('API-клиент: загрузка файлов', () => {
+  // Сценарий: FormData отправляется без ручного Content-Type, чтобы браузер добавил boundary
+  it('не выставляет Content-Type для multipart-загрузки', async () => {
+    global.fetch.mockResolvedValueOnce(makeResponse({ body: { ok: true } }));
+    const file = new globalThis.File(['data'], 'creative.png', { type: 'image/png' });
+
+    await createCreativeUniquifyJob({
+      offerName: 'DRC_CR2',
+      copies: 2,
+      files: [file],
+    });
+
+    const [url, options] = fetch.mock.calls[0];
+    expect(url).toBe('/api/tools/creative-uniquify');
+    expect(options.method).toBe('POST');
+    expect(options.headers['Content-Type']).toBeUndefined();
+    expect(options.body).toBeInstanceOf(globalThis.FormData);
   });
 });

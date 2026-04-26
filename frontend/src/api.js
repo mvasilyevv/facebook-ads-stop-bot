@@ -6,12 +6,16 @@ const BASE = '/api';
 const API_KEY = import.meta.env.VITE_API_KEY || localStorage.getItem('api_key') || '';
 
 async function request(url, options = {}) {
-  const headers = { 'Content-Type': 'application/json', ...options.headers };
+  const { signal, headers: optionHeaders = {}, ...restOptions } = options;
+  const FormDataCtor = globalThis.FormData;
+  const isFormData = typeof FormDataCtor !== 'undefined' && restOptions.body instanceof FormDataCtor;
+  const headers = { ...optionHeaders };
+  if (!isFormData && !headers['Content-Type'] && !headers['content-type']) {
+    headers['Content-Type'] = 'application/json';
+  }
   if (API_KEY) {
     headers['X-API-Key'] = API_KEY;
   }
-  // signal передаётся из AbortController для отмены запроса при unmount
-  const { signal, ...restOptions } = options;
   const resp = await fetch(`${BASE}${url}`, {
     cache: restOptions.cache ?? 'no-store',
     headers,
@@ -152,6 +156,21 @@ export const deleteFakeDeposits = (fbAdId) =>
 
 // --- Трекер нейминга ---
 export const getNamingPatterns = (params = {}) => requestWithQuery('/naming-tracker/patterns', params);
+
+// --- Скрипты: уникализация креативов ---
+export const createCreativeUniquifyJob = ({ offerName, copies, files }) => {
+  const body = new globalThis.FormData();
+  body.append('offer_name', offerName);
+  body.append('copies', String(copies));
+  Array.from(files || []).forEach((file) => body.append('files', file));
+  return request('/tools/creative-uniquify', { method: 'POST', body });
+};
+
+export const openCreativeOutputFolder = (path) =>
+  request('/tools/creative-uniquify/open-folder', {
+    method: 'POST',
+    body: JSON.stringify({ path }),
+  });
 
 // Telegram получатели (мультипользователи)
 export const getTelegramRecipients = () => request('/settings/telegram/recipients');

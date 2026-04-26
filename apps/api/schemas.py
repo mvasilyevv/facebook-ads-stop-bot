@@ -204,6 +204,43 @@ class VisionCdpEnsureResponseSchema(BaseModel):
 
 
 # ==========================================
+# Инструменты
+# ==========================================
+
+
+class CreativeUniquifyFileSchema(BaseModel):
+    """Один файл, созданный уникализатором креативов."""
+
+    copy_index: int
+    source_name: str
+    output_name: str
+    output_path: str
+
+
+class CreativeUniquifyResponseSchema(BaseModel):
+    """Ответ после пакетной уникализации креативов."""
+
+    root_dir: str
+    iteration_dir: str
+    iteration_name: str
+    creative_count: int
+    copy_count: int
+    files: list[CreativeUniquifyFileSchema]
+
+
+class OpenCreativeFolderRequestSchema(BaseModel):
+    """Запрос на открытие папки результата."""
+
+    path: str
+
+
+class OpenCreativeFolderResponseSchema(BaseModel):
+    """Ответ после команды открытия папки результата."""
+
+    ok: bool = True
+
+
+# ==========================================
 # Офферы
 # ==========================================
 

@@ -8,6 +8,7 @@ const OffersPage = lazy(() => import('./pages/OffersPage.jsx'));
 const SettingsPage = lazy(() => import('./pages/SettingsPage.jsx'));
 const HistoryPage = lazy(() => import('./pages/HistoryPage.jsx'));
 const NamingTrackerPage = lazy(() => import('./pages/NamingTrackerPage.jsx'));
+const ScriptsPage = lazy(() => import('./pages/ScriptsPage.jsx'));
 
 /** Error Boundary — ловит ошибки рендера и показывает fallback */
 class ErrorBoundary extends Component {
@@ -87,6 +88,14 @@ const NAV_ICONS = {
       <path d="M10 1v2M10 17v2M18.36 4.64l-1.42 1.42M3.06 13.94l-1.42 1.42M19 10h-2M3 10H1M15.78 15.78l-1.42-1.42M5.64 5.64L4.22 4.22" />
     </svg>
   ),
+  scripts: (
+    <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 3H16V17H4V3Z" />
+      <path d="M7 7H13" />
+      <path d="M7 10H13" />
+      <path d="M7 13H10" />
+    </svg>
+  ),
 };
 
 const PAGES = [
@@ -94,6 +103,7 @@ const PAGES = [
   { id: 'ads', label: 'Объявления' },
   { id: 'offers', label: 'Офферы' },
   { id: 'history', label: 'История' },
+  { id: 'scripts', label: 'Скрипты' },
   { id: 'settings', label: 'Настройки' },
 ];
 
@@ -149,6 +159,8 @@ export default function App() {
         return <HistoryPage onNavigate={navigate} />;
       case 'naming':
         return <NamingTrackerPage />;
+      case 'scripts':
+        return <ScriptsPage />;
       case 'settings':
         return <SettingsPage />;
       default:
