@@ -56,6 +56,7 @@ from core.observer.disable_reconciler import (
     reconcile_disable_tasks_in_db,
     reconcile_enable_tasks_in_db,
 )
+from core.observer.regression_guard import RegressionGuard
 from core.observer.runtime_status import (
     format_observer_runtime_message,
     update_observer_runtime_status,
@@ -127,6 +128,8 @@ _BROWSER_RUNTIME_ERROR_MARKERS = (
 
 # Инкапсулированный zero-scan guard вместо трёх глобальных переменных
 _scan_guard = ZeroScanGuard()
+# Гард от ложных откатов накопительных метрик (N подряд → принять новые значения)
+_regression_guard = RegressionGuard()
 
 
 def _is_browser_connection_error(exc: Exception) -> bool:
@@ -749,7 +752,9 @@ async def _process_scan_results(
     # Батчевый upsert снэпшотов
     snapshots_saved = False
     try:
-        snapshots_saved = await batch_save_snapshots(snapshot_batch, _scan_guard)
+        snapshots_saved = await batch_save_snapshots(
+            snapshot_batch, _scan_guard, regression_guard=_regression_guard
+        )
         if snapshots_saved:
             logger.info("Батч-сохранение: %s снэпшотов", len(snapshot_batch))
         else:
