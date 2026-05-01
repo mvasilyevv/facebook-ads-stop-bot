@@ -210,6 +210,7 @@ class Offer(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     payout_per_deposit: Mapped[float] = mapped_column(
         Float, default=0.0, nullable=False, server_default="0"
     )
+    country_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     rule_config: Mapped[OfferRuleConfig | None] = relationship(

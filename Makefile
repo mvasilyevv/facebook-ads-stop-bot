@@ -149,6 +149,7 @@ proto-compile: ## Скомпилировать proto файлы в Python и Nod
 		$(PROTO_DIR)/scanner.proto
 	# grpc_tools генерирует absolute import `from v1 import ...`, который ломает пакет clients.python_grpc.
 	$(PY) -c "from pathlib import Path; [path.write_text(path.read_text().replace('from v1 import ', 'from . import ')) for path in Path('$(GRPC_PY_OUT)/v1').glob('*_pb2_grpc.py')]"
+	@if [ -x "$(RUFF)" ]; then $(RUFF) check $(GRPC_PY_OUT)/v1 --fix; fi
 	@echo "Python stubs сгенерированы в $(GRPC_PY_OUT)"
 	# Node.js stubs
 	cd $(GRPC_NODE_DIR) && npm run proto 2>/dev/null || echo "Node.js stubs: запустите 'cd services/browser-agent && npm install && npm run proto'"

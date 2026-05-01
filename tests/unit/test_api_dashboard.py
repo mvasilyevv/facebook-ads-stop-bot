@@ -1010,6 +1010,66 @@ def test_build_dashboard_performance_payload_aggregates_metrics():
     assert payload.campaigns[1].reg_to_dep_rate == pytest.approx(10.0)
 
 
+# Проверяем, что 30-минутный график переносит последнее значение объявления вперёд.
+def test_build_performance_timeline_from_metric_history_carries_forward_cumulative_spend():
+    from apps.api.routers.dashboard import _build_performance_timeline_from_metric_history_rows
+
+    ad_1 = uuid.uuid4()
+    ad_2 = uuid.uuid4()
+    cutoff = datetime(2026, 3, 28, 7, 0, tzinfo=UTC)
+    rows = [
+        SimpleNamespace(
+            ad_id=ad_1,
+            fb_ad_id="fb-1",
+            cycle_ts=cutoff + timedelta(minutes=5),
+            spend=Decimal("0.10"),
+            registrations=0,
+            deposits=0,
+        ),
+        SimpleNamespace(
+            ad_id=ad_2,
+            fb_ad_id="fb-2",
+            cycle_ts=cutoff + timedelta(minutes=10),
+            spend=Decimal("0.20"),
+            registrations=0,
+            deposits=0,
+        ),
+        SimpleNamespace(
+            ad_id=ad_1,
+            fb_ad_id="fb-1",
+            cycle_ts=cutoff + timedelta(hours=1, minutes=15),
+            spend=Decimal("0.50"),
+            registrations=1,
+            deposits=0,
+        ),
+    ]
+
+    timeline = _build_performance_timeline_from_metric_history_rows(
+        rows,
+        period="today",
+        now=cutoff + timedelta(hours=2, minutes=30),
+        cutoff=cutoff,
+    )
+
+    assert [point.label for point in timeline] == [
+        "07:00",
+        "07:30",
+        "08:00",
+        "08:30",
+        "09:00",
+        "09:30",
+    ]
+    assert [point.spend for point in timeline] == [
+        Decimal("0.30"),
+        Decimal("0.30"),
+        Decimal("0.70"),
+        Decimal("0.70"),
+        Decimal("0.70"),
+        Decimal("0.70"),
+    ]
+    assert [point.registrations for point in timeline] == [0, 0, 1, 1, 1, 1]
+
+
 # Проверяем что периоды today, 7d и 30d фильтруют снэпшоты по-разному
 def test_build_dashboard_performance_payload_respects_periods():
     from apps.api.routers.dashboard import _build_dashboard_performance_payload
@@ -1244,7 +1304,9 @@ async def test_dashboard_performance_today_uses_performance_cutoff(mock_db):
     offers_result = MagicMock()
     offers_result.scalars.return_value.all.return_value = []
     cutoff = datetime(2026, 3, 28, 8, 0, tzinfo=UTC)
-    mock_db.execute = AsyncMock(side_effect=[snapshots_result, offers_result])
+    history_result = MagicMock()
+    history_result.all.return_value = []
+    mock_db.execute = AsyncMock(side_effect=[snapshots_result, offers_result, history_result])
 
     from apps.api.routers.dashboard import get_dashboard_performance
 
@@ -1397,7 +1459,9 @@ async def test_dashboard_performance_endpoint_returns_payload(mock_db):
     # Второй execute — запрос офферов (для ROAS), возвращаем пустой список
     offers_result = MagicMock()
     offers_result.scalars.return_value.all.return_value = []
-    mock_db.execute = AsyncMock(side_effect=[snapshots_result, offers_result])
+    history_result = MagicMock()
+    history_result.all.return_value = []
+    mock_db.execute = AsyncMock(side_effect=[snapshots_result, offers_result, history_result])
     mock_db.scalar = AsyncMock(return_value=observed_at)
 
     from unittest.mock import patch
@@ -1427,7 +1491,7 @@ async def test_dashboard_performance_endpoint_returns_payload(mock_db):
     assert payload.summary.spend == Decimal("42.00")
     assert payload.summary.cpc == Decimal("0.5000")
     assert payload.campaigns[0].campaign == "Campaign A"
-    assert mock_db.execute.call_count == 2
+    assert mock_db.execute.call_count == 3
 
 
 # =====================================================================

@@ -366,8 +366,8 @@ def test_deposit_without_registration_stays_on_pre_registration_ladder():
     assert result.matched_rule_codes == ["cpl_stop"]
 
 
-# Проверяем что OFF-объявление с лидами без рег/депов не получает OK-рекомендацию.
-def test_enable_recommendation_blocks_lead_recovery_without_registration():
+# Проверяем что OFF-объявление с лидами без рег/депов получает OK, если метрики не нарушены.
+def test_enable_recommendation_returns_ok_for_lead_recovery_without_registration():
     row = _make_row(
         delivery_status="OFF",
         spend=Decimal("0.10"),
@@ -388,11 +388,11 @@ def test_enable_recommendation_blocks_lead_recovery_without_registration():
     )
 
     assert stop_evaluation.stage is None
-    assert result is None
+    assert result == EnableRecommendationLevel.OK
 
 
-# Проверяем что OFF-объявление только с кликами не получает OK после выхода из stop/warning.
-def test_enable_recommendation_blocks_click_only_recovery():
+# Проверяем что OFF-объявление только с кликами получает OK после выхода из stop/warning.
+def test_enable_recommendation_returns_ok_for_click_only_recovery():
     row = _make_row(
         delivery_status="OFF",
         spend=Decimal("0.08"),
@@ -406,7 +406,7 @@ def test_enable_recommendation_blocks_click_only_recovery():
 
     result = determine_enable_recommendation_level(row, ctx)
 
-    assert result is None
+    assert result == EnableRecommendationLevel.OK
 
 
 # Проверяем что partial metrics на стадии регистрации блокируют recommendation даже без stop-сигнала.

@@ -359,6 +359,89 @@ async def test_batch_save_snapshots_requires_confirmed_zero_scan_before_persist(
     rollover_mock.assert_awaited_once()
 
 
+# Проверяем, что подтверждённый zero-scan не начинает бесконечно пропускаться через цикл.
+@pytest.mark.asyncio
+async def test_batch_save_snapshots_accepts_zero_scan_after_confirmation():
+    """После подтверждения zero-scan следующие нулевые срезы должны сохраняться сразу."""
+    import uuid as _uuid
+
+    from core.observer.scan_guard import ZeroScanGuard
+    from core.observer.snapshot_writer import batch_save_snapshots
+
+    mock_session = AsyncMock()
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=False)
+
+    fake_campaign_id = _uuid.uuid4()
+    fake_adset_id = _uuid.uuid4()
+    fake_ad_id = _uuid.uuid4()
+    mock_factory = MagicMock(return_value=mock_session)
+
+    snapshot_data = [
+        {
+            "fb_ad_id": "ad_1",
+            "campaign_name": "campaign",
+            "adset_name": "adset",
+            "ad_name": "ad_1",
+            "delivery_status": "ACTIVE",
+            "offer_id": None,
+            "resolved_offer_code": None,
+            "spend": Decimal("0"),
+            "clicks": 0,
+            "cpc": None,
+            "outbound_clicks": 0,
+            "outbound_ctr": None,
+            "landing_page_views": 0,
+            "cost_per_landing_page_view": None,
+            "cpm": None,
+            "frequency": None,
+            "leads": 0,
+            "cost_per_lead": None,
+            "registrations": 0,
+            "cost_per_registration": None,
+            "deposits": 0,
+            "alert_state": AlertState.NORMAL,
+            "current_stage": None,
+            "early_signal_rule_codes": [],
+            "warning_rule_codes": [],
+            "stop_rule_codes": [],
+            "open_state_token": None,
+            "last_observed_at": datetime.now(UTC),
+        }
+    ]
+
+    scan_guard = ZeroScanGuard()
+    with (
+        patch("core.observer.snapshot_writer.get_session_factory", return_value=mock_factory),
+        patch(
+            "core.observer.snapshot_writer._maybe_rollover_cabinet_day",
+            new=AsyncMock(),
+        ),
+        patch(
+            "core.observer.snapshot_writer._upsert_fb_campaigns",
+            new=AsyncMock(return_value={"campaign": fake_campaign_id}),
+        ),
+        patch(
+            "core.observer.snapshot_writer._upsert_fb_adsets",
+            new=AsyncMock(return_value={("campaign", "adset"): fake_adset_id}),
+        ),
+        patch(
+            "core.observer.snapshot_writer._upsert_fb_ads",
+            new=AsyncMock(return_value={"ad_1": fake_ad_id}),
+        ),
+        patch("core.observer.snapshot_writer._save_metric_deltas", new=AsyncMock(return_value=0)),
+        patch("core.observer.snapshot_writer._upsert_ad_snapshots", new=AsyncMock()),
+    ):
+        first_saved = await batch_save_snapshots(snapshot_data, scan_guard)
+        second_saved = await batch_save_snapshots(snapshot_data, scan_guard)
+        third_saved = await batch_save_snapshots(snapshot_data, scan_guard)
+
+    assert first_saved is False
+    assert second_saved is True
+    assert third_saved is True
+    assert mock_session.commit.call_count == 2
+
+
 # Проверяем, что регресс накопительных метрик считается подозрительным.
 def test_has_cumulative_metric_regression_detects_daily_metric_drop():
     """Новый срез с меньшим расходом не должен затирать дневные накопительные метрики."""

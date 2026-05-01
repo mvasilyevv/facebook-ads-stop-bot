@@ -25,6 +25,7 @@ class ZeroScanGuard:
         self._pending_zero_scan_at: datetime | None = None
         self._pending_partial_batch_at: datetime | None = None
         self._last_accepted_size: int | None = None
+        self._last_accepted_was_zero_scan = False
 
     def initialize_from_count(self, count: int) -> None:
         """Инициализирует базовый размер батча из БД при старте воркера.
@@ -62,6 +63,7 @@ class ZeroScanGuard:
                     "продолжаю работать по прежнему живому срезу"
                 )
             self._pending_zero_scan_at = None
+            self._last_accepted_was_zero_scan = False
 
             previous_snapshot_count = self._last_accepted_size
             suspicious_partial_batch = (
@@ -100,6 +102,10 @@ class ZeroScanGuard:
             return False
 
         self._pending_partial_batch_at = None
+        if self._last_accepted_was_zero_scan:
+            self._last_accepted_size = snapshot_count
+            return False
+
         if self._pending_zero_scan_at is None:
             self._pending_zero_scan_at = scan_started_at
             logger.warning(
@@ -113,4 +119,5 @@ class ZeroScanGuard:
         )
         self._pending_zero_scan_at = None
         self._last_accepted_size = snapshot_count
+        self._last_accepted_was_zero_scan = True
         return False

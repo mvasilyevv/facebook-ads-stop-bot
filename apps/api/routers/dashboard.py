@@ -81,6 +81,7 @@ from core.math_utils import (
 )
 from core.models import (
     AdAutoEnableDisabled,
+    AdMetricHistory,
     AdSnapshot,
     AlertEvent,
     CabinetDayArchive,
@@ -933,7 +934,8 @@ def _timeline_bucket_start(value: datetime, period: str) -> datetime:
     """Нормализует время до начала бакета."""
     if period in {"7d", "30d"}:
         return value.replace(hour=0, minute=0, second=0, microsecond=0)
-    return value.replace(minute=0, second=0, microsecond=0)
+    minute = 30 if value.minute >= 30 else 0
+    return value.replace(minute=minute, second=0, microsecond=0)
 
 
 def _build_current_risk_reason_rows(snapshots: list[AdSnapshot]) -> list[dict[str, int | str]]:
@@ -970,12 +972,12 @@ def _build_current_risk_reason_rows(snapshots: list[AdSnapshot]) -> list[dict[st
 
 def _timeline_bucket_step(period: str) -> timedelta:
     """Шаг бакета для таймлайна."""
-    return timedelta(days=1) if period in {"7d", "30d"} else timedelta(hours=1)
+    return timedelta(days=1) if period in {"7d", "30d"} else timedelta(minutes=30)
 
 
 def _timeline_bucket_label(value: datetime, period: str) -> str:
     """Подпись бакета для UI."""
-    return value.strftime("%d.%m") if period in {"7d", "30d"} else value.strftime("%H:00")
+    return value.strftime("%d.%m") if period in {"7d", "30d"} else value.strftime("%H:%M")
 
 
 def _build_performance_summary(
@@ -1227,6 +1229,100 @@ def _build_dashboard_performance_payload(
         funnel=funnel,
         timeline=timeline,
         campaigns=campaigns,
+    )
+
+
+def _build_performance_timeline_from_metric_history_rows(
+    rows: list[object],
+    *,
+    period: str,
+    now: datetime | None = None,
+    cutoff: datetime,
+    fake_map: dict[str, int] | None = None,
+) -> list[DashboardPerformanceTimelinePointSchema]:
+    """Строит динамику из истории, перенося последнее значение объявления вперёд."""
+    current_time = now or _dashboard_now()
+    fake_map = fake_map or {}
+    step = _timeline_bucket_step(period)
+    bucket_cursor = _timeline_bucket_start(cutoff, period)
+    last_bucket = _timeline_bucket_start(current_time, period)
+    buckets: list[datetime] = []
+    while bucket_cursor <= last_bucket:
+        buckets.append(bucket_cursor)
+        bucket_cursor += step
+
+    rows_by_bucket: dict[datetime, list[object]] = {bucket: [] for bucket in buckets}
+    for row in rows:
+        cycle_ts = getattr(row, "cycle_ts", None)
+        if cycle_ts is None:
+            continue
+        bucket = _timeline_bucket_start(_to_dashboard_timezone(cycle_ts), period)
+        if bucket in rows_by_bucket:
+            rows_by_bucket[bucket].append(row)
+
+    latest_by_ad: dict[_uuid.UUID, tuple[Decimal, int, int, str]] = {}
+    timeline: list[DashboardPerformanceTimelinePointSchema] = []
+    for bucket in buckets:
+        for row in sorted(rows_by_bucket[bucket], key=lambda item: item.cycle_ts):
+            fb_ad_id = str(getattr(row, "fb_ad_id", "") or "")
+            deposits = _effective_deposits(
+                int(getattr(row, "deposits", 0) or 0),
+                fb_ad_id,
+                fake_map,
+            )
+            latest_by_ad[row.ad_id] = (
+                Decimal(getattr(row, "spend", 0) or 0),
+                int(getattr(row, "registrations", 0) or 0),
+                deposits,
+                fb_ad_id,
+            )
+
+        timeline.append(
+            DashboardPerformanceTimelinePointSchema(
+                timestamp=bucket.isoformat(),
+                label=_timeline_bucket_label(bucket, period),
+                spend=sum((item[0] for item in latest_by_ad.values()), Decimal("0")),
+                registrations=sum(item[1] for item in latest_by_ad.values()),
+                deposits=sum(item[2] for item in latest_by_ad.values()),
+            )
+        )
+    return timeline
+
+
+async def _load_performance_timeline_from_metric_history(
+    db: AsyncSession,
+    *,
+    period: str,
+    now: datetime,
+    cutoff: datetime,
+    fake_map: dict[str, int] | None = None,
+) -> list[DashboardPerformanceTimelinePointSchema]:
+    """Загружает историю метрик и строит честную динамику расхода по времени."""
+    result = await db.execute(
+        select(
+            AdMetricHistory.ad_id,
+            FbAd.fb_ad_id,
+            AdMetricHistory.cycle_ts,
+            AdMetricHistory.spend,
+            AdMetricHistory.registrations,
+            AdMetricHistory.deposits,
+        )
+        .join(FbAd, FbAd.id == AdMetricHistory.ad_id)
+        .where(
+            AdMetricHistory.cycle_ts >= cutoff,
+            AdMetricHistory.cycle_ts <= now,
+        )
+        .order_by(AdMetricHistory.cycle_ts.asc())
+    )
+    rows = list(result.all())
+    if not rows:
+        return []
+    return _build_performance_timeline_from_metric_history_rows(
+        rows,
+        period=period,
+        now=now,
+        cutoff=cutoff,
+        fake_map=fake_map,
     )
 
 
@@ -1553,7 +1649,7 @@ async def get_dashboard_performance(
         archives = await _load_dashboard_archives(db, cutoff=cutoff)
     fake_map = await _load_fake_deposits_map(db)
     ad_ctx_map = await _load_ad_context_map(db, [s.ad_id for s in snapshots])
-    return _build_dashboard_performance_payload(
+    payload = _build_dashboard_performance_payload(
         snapshots,
         offers=offers,
         period=period,
@@ -1563,6 +1659,16 @@ async def get_dashboard_performance(
         fake_map=fake_map,
         ad_context_map=ad_ctx_map,
     )
+    metric_timeline = await _load_performance_timeline_from_metric_history(
+        db,
+        period=period,
+        now=now_for_payload,
+        cutoff=cutoff,
+        fake_map=fake_map,
+    )
+    if metric_timeline:
+        payload.timeline = metric_timeline
+    return payload
 
 
 @router.get("/dashboard/batch", response_model=DashboardBatchSchema)

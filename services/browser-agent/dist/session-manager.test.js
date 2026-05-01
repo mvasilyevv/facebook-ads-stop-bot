@@ -16,8 +16,8 @@ const vision_client_js_1 = require("./vision-client.js");
 });
 // Проверяем, что primary page выбирается по вкладке Ads Manager, а не по первой вкладке профиля.
 (0, node_test_1.default)('findPreferredPrimaryPage prefers ads manager tab over first page', () => {
-    const inboxPage = { url: () => 'https://www.facebook.com/messages/' };
-    const adsPage = { url: () => 'https://www.facebook.com/adsmanager/manage/campaigns' };
+    const inboxPage = { isClosed: () => false, url: () => 'https://www.facebook.com/messages/' };
+    const adsPage = { isClosed: () => false, url: () => 'https://www.facebook.com/adsmanager/manage/campaigns' };
     const browser = {
         contexts: () => [
             { pages: () => [inboxPage, adsPage] },
@@ -27,13 +27,24 @@ const vision_client_js_1 = require("./vision-client.js");
 });
 // Проверяем, что при отсутствии Ads Manager helper возвращает первую доступную вкладку.
 (0, node_test_1.default)('findPreferredPrimaryPage falls back to first available page', () => {
-    const firstPage = { url: () => 'https://www.facebook.com/' };
+    const firstPage = { isClosed: () => false, url: () => 'https://www.facebook.com/' };
     const browser = {
         contexts: () => [
             { pages: () => [firstPage] },
         ],
     };
     strict_1.default.equal((0, session_manager_js_1.findPreferredPrimaryPage)(browser), firstPage);
+});
+// Проверяем, что закрытая вкладка не возвращается как рабочая primaryPage.
+(0, node_test_1.default)('findPreferredPrimaryPage игнорирует закрытые вкладки', () => {
+    const closedAdsPage = { isClosed: () => true, url: () => 'https://www.facebook.com/adsmanager/manage/campaigns' };
+    const openAdsPage = { isClosed: () => false, url: () => 'https://adsmanager.facebook.com/adsmanager/manage/campaigns' };
+    const browser = {
+        contexts: () => [
+            { pages: () => [closedAdsPage, openAdsPage] },
+        ],
+    };
+    strict_1.default.equal((0, session_manager_js_1.findPreferredPrimaryPage)(browser), openAdsPage);
 });
 function makeSession(overrides = {}) {
     return {

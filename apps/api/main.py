@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.deps import get_db, verify_api_key
 from apps.api.routers import (
+    campaign_scripts,
     creative_tools,
     dashboard,
     fake_deposits,
@@ -108,6 +109,7 @@ app.include_router(history.router, dependencies=_api_key_dep)
 app.include_router(fake_deposits.router, dependencies=_api_key_dep)
 app.include_router(naming_tracker.router, dependencies=_api_key_dep)
 app.include_router(creative_tools.router, dependencies=_api_key_dep)
+app.include_router(campaign_scripts.router, dependencies=_api_key_dep)
 
 
 # ==========================================

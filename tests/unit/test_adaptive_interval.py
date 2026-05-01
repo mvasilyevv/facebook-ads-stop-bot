@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
+
 from apps.observer_worker.main import (
     _ADAPTIVE_INTERVAL_ACTIVE,
     _ADAPTIVE_INTERVAL_CALM,
@@ -19,12 +21,18 @@ def _snap(
     stage: AlertStage | None = None,
     offer_code: str | None = None,
     delivery_status: str = "ACTIVE",
+    spend: Decimal | str | int = Decimal("0"),
+    impressions: int = 0,
+    clicks: int = 0,
 ) -> dict:
     """Создаёт минимальный snapshot для тестов."""
     return {
         "current_stage": stage,
         "resolved_offer_code": offer_code,
         "delivery_status": delivery_status,
+        "spend": spend,
+        "impressions": impressions,
+        "clicks": clicks,
     }
 
 
@@ -66,15 +74,28 @@ def test_critical_on_stop_stage_in_batch():
 
 # Тест: ACTIVE при активных объявлениях без сигналов
 def test_active_with_monitored_ads():
-    """Объявления с офферами, но без сигналов — ACTIVE."""
+    """Объявления с офферами и трафиком, но без сигналов — ACTIVE."""
+    interval, level = compute_adaptive_interval(
+        [
+            _snap(offer_code="DRC", spend=Decimal("1.23")),
+            _snap(offer_code="ABC"),
+        ]
+    )
+    assert interval == _ADAPTIVE_INTERVAL_ACTIVE
+    assert level == "ACTIVE"
+
+
+# Тест: CALM при включённых объявлениях с офферами, но полностью нулевыми метриками
+def test_calm_with_zero_metric_monitored_ads():
+    """Включённые объявления без трафика не должны считаться активным заливом."""
     interval, level = compute_adaptive_interval(
         [
             _snap(offer_code="DRC"),
             _snap(offer_code="ABC"),
         ]
     )
-    assert interval == _ADAPTIVE_INTERVAL_ACTIVE
-    assert level == "ACTIVE"
+    assert interval == _ADAPTIVE_INTERVAL_CALM
+    assert level == "CALM"
 
 
 # Тест: CALM при выключенных объявлениях с офферами

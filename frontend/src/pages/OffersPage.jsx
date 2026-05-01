@@ -40,6 +40,7 @@ function OfferModal({ offer, onSave, onClose }) {
   const [form, setForm] = useState({
     code: offer?.code || '',
     cpa: offer?.cpa_amount || offer?.cpa || '',
+    country_name: offer?.country_name || '',
     is_active: offer?.is_active ?? true,
   });
   const [saving, setSaving] = useState(false);
@@ -48,7 +49,12 @@ function OfferModal({ offer, onSave, onClose }) {
     e.preventDefault();
     setSaving(true);
     try {
-      await onSave({ code: form.code, cpa_amount: parseFloat(form.cpa) || 0, is_active: form.is_active });
+      await onSave({
+        code: form.code,
+        cpa_amount: parseFloat(form.cpa) || 0,
+        country_name: form.country_name.trim() || null,
+        is_active: form.is_active,
+      });
     } finally {
       setSaving(false);
     }
@@ -63,6 +69,11 @@ function OfferModal({ offer, onSave, onClose }) {
             <label className="mb-1 block text-2xs font-semibold uppercase tracking-wider text-secondary" htmlFor="offer-code">Код оффера</label>
             <input id="offer-code" className={inputCls} type="text" placeholder="OFFER_AU_42" value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value.toUpperCase() })} required disabled={!!offer} />
             <div className="mt-1 text-2xs text-muted">Код используется для сопоставления — ищется в названии кампании</div>
+          </div>
+          <div>
+            <label className="mb-1 block text-2xs font-semibold uppercase tracking-wider text-secondary" htmlFor="offer-country">Страна оффера</label>
+            <input id="offer-country" className={inputCls} type="text" placeholder="Демократическая Республика Конго" value={form.country_name} onChange={(e) => setForm({ ...form, country_name: e.target.value })} />
+            <div className="mt-1 text-2xs text-muted">Используется в скрипте создания кампаний как страна уровня Страна/регион</div>
           </div>
           <div>
             <label className="mb-1 block text-2xs font-semibold uppercase tracking-wider text-secondary" htmlFor="offer-cpa">CPA ($)</label>
@@ -263,6 +274,7 @@ export default function OffersPage() {
                   <div>
                     <div className="font-mono text-sm font-semibold text-accent">{o.code}</div>
                     <div className="mt-0.5 font-mono text-2xs text-primary">${Number(o.cpa_amount ?? o.cpa).toFixed(2)}</div>
+                    <div className="mt-0.5 text-2xs text-muted">{o.country_name || 'Страна не задана'}</div>
                   </div>
                   <span className={o.is_active ? 'badge-success' : 'badge-neutral'}>
                     {o.is_active ? 'Активен' : 'Выкл.'}
@@ -288,6 +300,7 @@ export default function OffersPage() {
                 <tr className="border-b border-border bg-elevated/50">
                   <th className="px-3 py-2 text-2xs uppercase tracking-wider text-muted text-left">Код</th>
                   <th className="px-3 py-2 text-2xs uppercase tracking-wider text-muted text-right">CPA</th>
+                  <th className="px-3 py-2 text-2xs uppercase tracking-wider text-muted text-left">Страна</th>
                   <th className="px-3 py-2 text-2xs uppercase tracking-wider text-muted text-center">Статус</th>
                   <th className="px-3 py-2 text-2xs uppercase tracking-wider text-muted text-center">Правила</th>
                   <th className="px-3 py-2 text-2xs uppercase tracking-wider text-muted text-right">Действия</th>
@@ -298,6 +311,7 @@ export default function OffersPage() {
                   <tr key={o.id} className="tr-hover border-b border-border">
                     <td className="px-3 py-2.5 font-mono text-accent">{o.code}</td>
                     <td className="px-3 py-2.5 text-right font-mono font-semibold text-primary">${Number(o.cpa_amount ?? o.cpa).toFixed(2)}</td>
+                    <td className="px-3 py-2.5 text-secondary">{o.country_name || '—'}</td>
                     <td className="px-3 py-2.5 text-center">
                       <span className={o.is_active ? 'badge-success' : 'badge-neutral'}>
                         {o.is_active ? 'Активен' : 'Выкл.'}

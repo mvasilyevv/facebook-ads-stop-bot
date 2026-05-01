@@ -172,8 +172,7 @@ export async function humanClick(
 
   const box = await element.boundingBox();
   if (!box) {
-    await element.click();
-    return;
+    throw new Error('Не удалось выполнить humanized click: элемент недоступен для физического клика');
   }
 
   const clickX = box.x + box.width * rand(0.25, 0.75);
@@ -204,6 +203,234 @@ export async function humanClick(
   const driftX = clickX + rand(-6, 6) * prof.jitterFactor;
   const driftY = clickY + rand(-3, 3) * prof.jitterFactor;
   await page.mouse.move(driftX, driftY);
+}
+
+export async function humanPressKey(
+  page: Page,
+  key: string,
+  options?: { profile?: HumanProfile; beforeRange?: [number, number]; afterRange?: [number, number] },
+): Promise<void> {
+  const prof = options?.profile ?? generateHumanProfile();
+  const beforeRange = options?.beforeRange ?? [0.12, 0.45];
+  const afterRange = options?.afterRange ?? [0.16, 0.55];
+
+  await sleep(rand(...beforeRange) * prof.pauseFactor * 1000);
+  await page.keyboard.press(key);
+  await sleep(rand(...afterRange) * prof.pauseFactor * 1000);
+}
+
+async function readEditableText(element: ElementHandle): Promise<string> {
+  return element.evaluate((node) => {
+    const editable = node as HTMLInputElement | HTMLTextAreaElement | HTMLElement;
+    if (typeof (editable as HTMLInputElement | HTMLTextAreaElement).value === 'string') {
+      return (editable as HTMLInputElement | HTMLTextAreaElement).value;
+    }
+    if ((editable as HTMLElement).isContentEditable) {
+      return (editable as HTMLElement).innerText || (editable as HTMLElement).textContent || '';
+    }
+    return node.textContent || '';
+  });
+}
+
+function normalizeNumericText(value: string): string {
+  const normalized = String(value || '')
+    .replace(/\s+/g, '')
+    .replace(',', '.')
+    .trim();
+  if (!normalized) return normalized;
+  const numeric = Number(normalized);
+  return Number.isFinite(numeric) ? String(numeric) : normalized;
+}
+
+async function editableTextMatches(
+  element: ElementHandle,
+  actual: string,
+  expected: string,
+): Promise<boolean> {
+  if (actual === expected) return true;
+  const meta = await element.evaluate((node) => {
+    const anyNode = node as HTMLInputElement & { type?: string; getAttribute?: (name: string) => string | null };
+    return {
+      type: anyNode.getAttribute?.('type') || anyNode.type || '',
+      role: anyNode.getAttribute?.('role') || '',
+      ariaValueNow: anyNode.getAttribute?.('aria-valuenow') || '',
+    };
+  }).catch(() => ({ type: '', role: '', ariaValueNow: '' }));
+
+  if (String(meta.type || '').toLowerCase() === 'number') {
+    return normalizeNumericText(actual) === normalizeNumericText(expected);
+  }
+  if (String(meta.role || '').toLowerCase() === 'spinbutton') {
+    return normalizeNumericText(actual || meta.ariaValueNow) === normalizeNumericText(expected);
+  }
+
+  return false;
+}
+
+async function selectEditableContents(element: ElementHandle): Promise<void> {
+  await element.evaluate((node) => {
+    const editable = node as HTMLInputElement | HTMLTextAreaElement | HTMLElement;
+    if (typeof editable.focus === 'function') {
+      editable.focus();
+    }
+
+    const input = editable as HTMLInputElement | HTMLTextAreaElement;
+    if (typeof input.value === 'string') {
+      if (typeof (input as HTMLInputElement).select === 'function') {
+        try {
+          (input as HTMLInputElement).select();
+          return;
+        } catch {
+          // Некоторые numeric-поля Meta не дают выделить значение через select().
+        }
+      }
+      if (typeof input.setSelectionRange === 'function') {
+        try {
+          input.setSelectionRange(0, input.value.length);
+          return;
+        } catch {
+          // input[type=number] не поддерживает setSelectionRange, ниже пробуем contenteditable-ветку.
+        }
+      }
+    }
+
+    if ((editable as HTMLElement).isContentEditable && typeof document !== 'undefined') {
+      const range = document.createRange();
+      range.selectNodeContents(editable);
+      const selection = window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+    }
+  });
+}
+
+async function clearEditableText(
+  page: Page,
+  element: ElementHandle,
+  profile: HumanProfile,
+): Promise<void> {
+  const selectAllKey = process.platform === 'darwin' ? 'Meta+A' : 'Control+A';
+  await humanPressKey(page, selectAllKey, {
+    profile,
+    beforeRange: [0.08, 0.18],
+    afterRange: [0.08, 0.22],
+  });
+  await humanPressKey(page, 'Backspace', {
+    profile,
+    beforeRange: [0.08, 0.18],
+    afterRange: [0.10, 0.25],
+  });
+
+  if (!(await readEditableText(element))) return;
+
+  // Если горячая клавиша не выделила всё поле, выделяем содержимое самого editable-элемента и удаляем его обычной клавишей.
+  await selectEditableContents(element);
+  await humanPressKey(page, 'Backspace', {
+    profile,
+    beforeRange: [0.08, 0.18],
+    afterRange: [0.10, 0.25],
+  });
+
+  if (!(await readEditableText(element))) return;
+
+  await selectEditableContents(element);
+  await humanPressKey(page, 'Delete', {
+    profile,
+    beforeRange: [0.08, 0.18],
+    afterRange: [0.10, 0.25],
+  });
+
+  if (!(await readEditableText(element))) return;
+
+  // Поля Meta иногда удерживают значение после клавиатурной очистки; синхронизируем DOM-состояние напрямую.
+  await element.evaluate((node) => {
+    const editable = node as HTMLInputElement | HTMLTextAreaElement | HTMLElement;
+    if (typeof (editable as HTMLInputElement | HTMLTextAreaElement).value === 'string') {
+      const input = editable as HTMLInputElement | HTMLTextAreaElement;
+      const prototype = Object.getPrototypeOf(input);
+      const descriptor = Object.getOwnPropertyDescriptor(prototype, 'value');
+      if (descriptor?.set) {
+        descriptor.set.call(input, '');
+      } else {
+        input.value = '';
+      }
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      return;
+    }
+    if ((editable as HTMLElement).isContentEditable) {
+      editable.textContent = '';
+      editable.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+  });
+
+  const actual = await readEditableText(element);
+  if (actual) {
+    throw new Error(`Не удалось очистить поле перед вводом. Текущее значение: ${actual}`);
+  }
+}
+
+async function typeTextWithHumanDelay(
+  page: Page,
+  text: string,
+  profile: HumanProfile,
+  perCharDelayRange: [number, number],
+): Promise<void> {
+  for (const char of text) {
+    if (char === '\n') {
+      await humanPressKey(page, 'Enter', {
+        profile,
+        beforeRange: [0.04, 0.12],
+        afterRange: [0.08, 0.22],
+      });
+      continue;
+    }
+    await page.keyboard.type(char);
+    await sleep(rand(...perCharDelayRange) * profile.pauseFactor * 1000);
+  }
+}
+
+export async function humanTypeText(
+  page: Page,
+  element: ElementHandle,
+  text: string,
+  options?: {
+    clearBefore?: boolean;
+    submitKey?: string;
+    profile?: HumanProfile;
+    perCharDelayRange?: [number, number];
+  },
+): Promise<void> {
+  const prof = options?.profile ?? generateHumanProfile();
+  const clearBefore = options?.clearBefore ?? true;
+  const perCharDelayRange = options?.perCharDelayRange ?? [0.045, 0.16];
+
+  await humanClick(page, element, { profile: prof });
+
+  if (clearBefore) {
+    await clearEditableText(page, element, prof);
+  }
+
+  await typeTextWithHumanDelay(page, text, prof, perCharDelayRange);
+
+  let actual = await readEditableText(element);
+  let matches = await editableTextMatches(element, actual, text);
+  if (clearBefore && !matches) {
+    await clearEditableText(page, element, prof);
+    await typeTextWithHumanDelay(page, text, prof, perCharDelayRange);
+    actual = await readEditableText(element);
+    matches = await editableTextMatches(element, actual, text);
+  }
+
+  if (clearBefore && !matches) {
+    throw new Error(`После ввода поле содержит неверное значение. Ожидалось: ${text}. Сейчас: ${actual}`);
+  }
+
+  if (options?.submitKey) {
+    await humanPressKey(page, options.submitKey, { profile: prof });
+  } else {
+    await sleep(rand(0.15, 0.45) * prof.pauseFactor * 1000);
+  }
 }
 
 export async function humanScrollToFind(

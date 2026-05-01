@@ -64,7 +64,7 @@ class TelegramBotClient:
         При HTTP 429 ждёт Retry-After (max 30s) и повторяет один раз.
         """
         resp = await self._do_request(method, payload=payload, request_timeout=request_timeout)
-        data = resp.json()
+        data = self._decode_response(method, resp)
         if not data.get("ok"):
             raise TelegramAPIError(
                 method=method,
@@ -88,10 +88,9 @@ class TelegramBotClient:
                 timeout=request_timeout,
             )
             if resp.status_code != 429:
-                resp.raise_for_status()
                 return resp
-        except httpx.HTTPError as exc:
-            raise RuntimeError(f"Не удалось выполнить запрос к Telegram API ({method})") from exc
+        except httpx.HTTPError:
+            raise RuntimeError(f"Не удалось выполнить запрос к Telegram API ({method})") from None
 
         # Обработка 429: ждём и повторяем один раз
         wait = self._parse_retry_after(resp)
@@ -104,15 +103,36 @@ class TelegramBotClient:
                 json=payload,
                 timeout=request_timeout,
             )
-            resp.raise_for_status()
-        except httpx.HTTPError as exc:
-            raise RuntimeError(f"Не удалось выполнить запрос к Telegram API ({method})") from exc
+        except httpx.HTTPError:
+            raise RuntimeError(f"Не удалось выполнить запрос к Telegram API ({method})") from None
         return resp
+
+    @staticmethod
+    def _decode_response(method: str, resp: httpx.Response) -> dict:
+        """Декодирует JSON Telegram API без утечки полного URL с токеном в traceback."""
+        try:
+            data = resp.json()
+        except ValueError:
+            if resp.is_error:
+                raise RuntimeError(
+                    f"Не удалось выполнить запрос к Telegram API ({method}): HTTP {resp.status_code}"
+                ) from None
+            raise RuntimeError(f"Telegram API вернул некорректный JSON ({method})") from None
+
+        if not isinstance(data, dict):
+            raise RuntimeError(f"Telegram API вернул неожиданный JSON ({method})")
+        return data
 
     @staticmethod
     def _parse_retry_after(resp: httpx.Response) -> float:
         """Извлекает Retry-After из ответа (cap 30s, default 5s)."""
         raw = resp.headers.get("Retry-After")
+        if raw is None:
+            try:
+                data = resp.json()
+                raw = (data.get("parameters") or {}).get("retry_after")
+            except (AttributeError, ValueError, TypeError):
+                raw = None
         if raw is None:
             return 5.0
         try:

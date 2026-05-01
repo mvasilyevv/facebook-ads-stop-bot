@@ -285,7 +285,7 @@ terminate_matching_processes() {
 get_process_cwd() {
     local pid="$1"
 
-    lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1
+    { lsof -a -p "$pid" -d cwd -Fn 2>/dev/null || true; } | sed -n 's/^n//p' | head -1
 }
 
 terminate_matching_processes_in_dir() {
@@ -507,6 +507,14 @@ POSTGRES_PORT="${POSTGRES_PORT:-5433}"
 GRPC_PORT="${GRPC_PORT:-50051}"
 FRONTEND_HOST="${FRONTEND_HOST:-127.0.0.1}"
 FRONTEND_PORT="${FRONTEND_PORT:-5174}"
+export GRPC_PORT
+
+USE_SUPERVISOR=0
+SUPERVISORD_BIN=""
+SUPERVISORCTL_BIN=""
+if SUPERVISORD_BIN="$(get_supervisord_bin 2>/dev/null)" && SUPERVISORCTL_BIN="$(get_supervisorctl_bin 2>/dev/null)"; then
+    USE_SUPERVISOR=1
+fi
 
 # Проверяем Docker
 if ! command -v docker &>/dev/null; then
@@ -725,28 +733,33 @@ if [ -d services/browser-agent ]; then
     fi
 
     echo -e "${GREEN}✅ Browser Agent собран${NC}"
-    GRPC_PORT="$GRPC_PORT" node "$SCRIPT_DIR/services/browser-agent/dist/index.js" > "$LOG_DIR/browser_agent.log" 2>&1 &
-    BROWSER_AGENT_PID=$!
-    append_pid "$BROWSER_AGENT_PID" "browser_agent"
-    echo -e "${GREEN}  Browser Agent PID: $BROWSER_AGENT_PID${NC}"
+    if [ "$USE_SUPERVISOR" -eq 1 ]; then
+        BROWSER_AGENT_PID=""
+        echo -e "${BLUE}🛡 Browser Agent будет запущен через supervisord с автоперезапуском${NC}"
+    else
+        GRPC_PORT="$GRPC_PORT" node "$SCRIPT_DIR/services/browser-agent/dist/index.js" > "$LOG_DIR/browser_agent.log" 2>&1 &
+        BROWSER_AGENT_PID=$!
+        append_pid "$BROWSER_AGENT_PID" "browser_agent"
+        echo -e "${GREEN}  Browser Agent PID: $BROWSER_AGENT_PID${NC}"
 
-    # Ждём готовности gRPC
-    echo -e "${BLUE}⏳ Жду готовности Browser Agent...${NC}"
-    for i in $(seq 1 10); do
-        if nc -z localhost "$GRPC_PORT" 2>/dev/null; then
-            echo -e "${GREEN}✅ Browser Agent отвечает на порту $GRPC_PORT${NC}"
-            break
-        fi
-        if ! is_process_active "$BROWSER_AGENT_PID"; then
-            echo -e "${RED}❌ Browser Agent процесс завершился при запуске${NC}"
-            tail -20 "$LOG_DIR/browser_agent.log" || true
-            exit 1
-        fi
-        if [ "$i" -eq 10 ]; then
-            echo -e "${YELLOW}⚠️  Browser Agent не ответил за 10с, продолжаю${NC}"
-        fi
-        sleep 1
-    done
+        # Ждём готовности gRPC
+        echo -e "${BLUE}⏳ Жду готовности Browser Agent...${NC}"
+        for i in $(seq 1 10); do
+            if nc -z localhost "$GRPC_PORT" 2>/dev/null; then
+                echo -e "${GREEN}✅ Browser Agent отвечает на порту $GRPC_PORT${NC}"
+                break
+            fi
+            if ! is_process_active "$BROWSER_AGENT_PID"; then
+                echo -e "${RED}❌ Browser Agent процесс завершился при запуске${NC}"
+                tail -20 "$LOG_DIR/browser_agent.log" || true
+                exit 1
+            fi
+            if [ "$i" -eq 10 ]; then
+                echo -e "${YELLOW}⚠️  Browser Agent не ответил за 10с, продолжаю${NC}"
+            fi
+            sleep 1
+        done
+    fi
 else
     echo -e "${YELLOW}⚠️  services/browser-agent не найден, пропускаю${NC}"
     BROWSER_AGENT_PID=""
@@ -755,15 +768,8 @@ fi
 # ==========================================
 # 6–9. Запуск воркеров (через supervisord или напрямую)
 # ==========================================
-USE_SUPERVISOR=0
-SUPERVISORD_BIN=""
-SUPERVISORCTL_BIN=""
-if SUPERVISORD_BIN="$(get_supervisord_bin 2>/dev/null)" && SUPERVISORCTL_BIN="$(get_supervisorctl_bin 2>/dev/null)"; then
-    USE_SUPERVISOR=1
-fi
-
 if [ "$USE_SUPERVISOR" -eq 1 ]; then
-    echo -e "${BLUE}🛡 Запускаю воркеры через supervisord (автоперезапуск включён)...${NC}"
+    echo -e "${BLUE}🛡 Запускаю browser-agent и воркеры через supervisord (автоперезапуск включён)...${NC}"
 
     # Останавливаем предыдущий supervisord этого проекта если запущен
     stop_supervisord 20
@@ -777,10 +783,25 @@ if [ "$USE_SUPERVISOR" -eq 1 ]; then
 
     echo -e "${BLUE}⏳ Жду готовности воркеров supervisord...${NC}"
     if wait_for_supervisor_running "$SUPERVISORCTL_BIN" 35; then
-        echo -e "${GREEN}  Воркеры запущены под supervisord${NC}"
+        echo -e "${GREEN}  Browser Agent и воркеры запущены под supervisord${NC}"
     else
         exit 1
     fi
+
+    echo -e "${BLUE}⏳ Жду готовности Browser Agent...${NC}"
+    for i in $(seq 1 15); do
+        if nc -z localhost "$GRPC_PORT" 2>/dev/null; then
+            echo -e "${GREEN}✅ Browser Agent отвечает на порту $GRPC_PORT${NC}"
+            break
+        fi
+        if [ "$i" -eq 15 ]; then
+            echo -e "${RED}❌ Browser Agent не ответил за 15с${NC}"
+            "$SUPERVISORCTL_BIN" -c "$SUPERVISOR_CONF" status || true
+            tail -20 "$LOG_DIR/browser_agent.log" || true
+            exit 1
+        fi
+        sleep 1
+    done
 
     # Заглушки PID для проверки boot ниже — используем supervisorctl
     OBSERVER_PID=""
