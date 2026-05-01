@@ -229,7 +229,36 @@ function getVisionRuntimeMeta(vision) {
   };
 }
 
-/** Маппинг уровня угрозы → цвет и текст бейджа */
+/** Форматирует время «N сек назад» / «N мин назад» для индикатора обновления */
+function formatUpdatedAgo(updatedAt) {
+  if (!updatedAt) return null;
+  const diffMs = Date.now() - updatedAt;
+  const diffSec = Math.round(diffMs / 1000);
+  if (diffSec < 5) return 'только что';
+  if (diffSec < 60) return `${diffSec} сек назад`;
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `${diffMin} мин назад`;
+  return null;
+}
+
+/** Живой индикатор времени последнего обновления — тикает каждую секунду */
+function UpdatedAgoLabel({ updatedAt }) {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!updatedAt) return undefined;
+    const id = setInterval(() => setTick((n) => n + 1), 1000);
+    return () => clearInterval(id);
+  }, [updatedAt]);
+  const label = formatUpdatedAgo(updatedAt);
+  if (!label) return null;
+  return (
+    <span className="font-mono text-[11px] text-muted/60 leading-none">
+      обновлено {label}
+    </span>
+  );
+}
+
+
 const THREAT_BADGE = {
   IMMEDIATE: { label: 'Ре-скан', color: 'bg-red-500/20 text-red-400 animate-pulse' },
   CRITICAL:  { label: 'Критично', color: 'bg-red-500/20 text-red-400' },
@@ -501,10 +530,10 @@ export default function DashboardPage({ onNavigate }) {
     refetchInterval: 30_000,
   });
 
-  const { data: chartData } = useQuery({
+  const { data: chartData, dataUpdatedAt: chartDataUpdatedAt } = useQuery({
     queryKey: ['chartDataToday'],
     queryFn: () => getChartData({ period: 'today' }).catch(() => null),
-    refetchInterval: 30_000,
+    refetchInterval: 10_000,
   });
 
   const { data: spendHistory } = useQuery({
@@ -785,6 +814,9 @@ export default function DashboardPage({ onNavigate }) {
 
           {/* Чарт: расход + алерты */}
           <div className="panel p-4">
+            <div className="flex items-center justify-between mb-1">
+              <UpdatedAgoLabel updatedAt={chartDataUpdatedAt} />
+            </div>
             <SpendAlertsChart
               spendData={performance?.timeline ?? []}
               alertsData={chartData?.alerts_by_hour ?? []}

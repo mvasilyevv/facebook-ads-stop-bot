@@ -27,6 +27,7 @@ from core.models import (
     FbAdset,
     FbCampaign,
 )
+from core.observer.regression_guard import RegressionGuard
 from core.observer.scan_guard import ZeroScanGuard
 from core.settings_queries import get_or_create_observer_settings
 
@@ -379,6 +380,7 @@ async def _save_metric_deltas(
     session: AsyncSession,
     snapshot_data: list[dict],
     ad_id_map: dict[str, _uuid.UUID],
+    regression_guard: RegressionGuard | None = None,
 ) -> int:
     """Записывает в ad_metric_history только изменённые метрики.
 
@@ -406,7 +408,17 @@ async def _save_metric_deltas(
         if ad_id is None:
             continue
         old_snap = current_snaps.get(fb_ad_id)
-        if _has_cumulative_metric_regression(old_snap, item):
+        if regression_guard is not None:
+            if regression_guard.should_block(fb_ad_id, old_snap, item):
+                logger.warning(
+                    "Observer: пропускаю запись истории для %s — "
+                    "накопительные метрики откатились назад (цикл %d из %d)",
+                    fb_ad_id,
+                    regression_guard._counters.get(fb_ad_id, 1),
+                    3,
+                )
+                continue
+        elif _has_cumulative_metric_regression(old_snap, item):
             logger.warning(
                 "Observer: пропускаю запись истории для %s — накопительные метрики откатились назад",
                 fb_ad_id,
@@ -478,9 +490,24 @@ async def _upsert_ad_snapshots(
     snapshot_rows: list[dict],
     *,
     allow_metric_regression: bool = False,
+    force_accept_fb_ad_ids: frozenset[str] = frozenset(),
 ) -> None:
-    """Выполняет upsert ad_snapshots без нормализованных полей."""
+    """Выполняет upsert ad_snapshots без нормализованных полей.
+
+    force_accept_fb_ad_ids — набор fb_ad_id, для которых WHERE-условие регрессии
+    не применяется (принудительно принятый новый базовый снимок через RegressionGuard).
+    """
     if not snapshot_rows:
+        return
+
+    # Разбиваем на две группы: принудительно принятые и обычные
+    if force_accept_fb_ad_ids and not allow_metric_regression:
+        force_rows = [r for r in snapshot_rows if r["fb_ad_id"] in force_accept_fb_ad_ids]
+        normal_rows = [r for r in snapshot_rows if r["fb_ad_id"] not in force_accept_fb_ad_ids]
+        if force_rows:
+            await _upsert_ad_snapshots(session, force_rows, allow_metric_regression=True)
+        if normal_rows:
+            await _upsert_ad_snapshots(session, normal_rows, allow_metric_regression=False)
         return
 
     stmt = pg_insert(AdSnapshot).values(snapshot_rows)
@@ -540,6 +567,7 @@ async def batch_save_snapshots(
     snapshot_data: list[dict],
     scan_guard: ZeroScanGuard,
     *,
+    regression_guard: RegressionGuard | None = None,
     allow_cabinet_rollover: bool = True,
     bypass_scan_guard: bool = False,
 ) -> bool:
@@ -549,6 +577,8 @@ async def batch_save_snapshots(
     Одна сессия, один запрос для всех снэпшотов.
     bypass_scan_guard используется только для точечного сохранения одной или нескольких
     STOP-строк быстрого стопа, а не для полного среза сканирования.
+    regression_guard — гард от ложных откатов накопительных метрик; при None используется
+    старое поведение (любая регрессия блокирует).
     """
     if not snapshot_data:
         return False
@@ -570,16 +600,23 @@ async def batch_save_snapshots(
         ad_id_map = await _upsert_fb_ads(session, snapshot_data, adset_id_map)
 
         # 4. Записываем дельты метрик в ad_metric_history (до перезаписи снэпшотов)
-        history_count = await _save_metric_deltas(session, snapshot_data, ad_id_map)
+        history_count = await _save_metric_deltas(
+            session, snapshot_data, ad_id_map, regression_guard
+        )
         if history_count:
             logger.info("Записано %s строк в ad_metric_history", history_count)
 
         # 5. Upsert ad_snapshots — только метрики и состояние алертов
         snapshot_rows = _prepare_snapshot_upsert_data(snapshot_data, ad_id_map)
+        is_reset = is_cabinet_day_reset_scan(snapshot_data)
+        force_ids: frozenset[str] = frozenset()
+        if regression_guard and not is_reset:
+            force_ids = frozenset(regression_guard.pop_force_accepted())
         await _upsert_ad_snapshots(
             session,
             snapshot_rows,
-            allow_metric_regression=is_cabinet_day_reset_scan(snapshot_data),
+            allow_metric_regression=is_reset,
+            force_accept_fb_ad_ids=force_ids,
         )
 
         await session.commit()
