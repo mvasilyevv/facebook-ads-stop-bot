@@ -135,6 +135,14 @@ export class ScanComplete extends jspb.Message {
     setTotalPasses(value: number): ScanComplete;
     getDurationSeconds(): number;
     setDurationSeconds(value: number): ScanComplete;
+    clearDismissedModalsList(): void;
+    getDismissedModalsList(): Array<string>;
+    setDismissedModalsList(value: Array<string>): ScanComplete;
+    addDismissedModals(value: string, index?: number): string;
+    clearUnknownModalArtifactsList(): void;
+    getUnknownModalArtifactsList(): Array<string>;
+    setUnknownModalArtifactsList(value: Array<string>): ScanComplete;
+    addUnknownModalArtifacts(value: string, index?: number): string;
 
     serializeBinary(): Uint8Array;
     toObject(includeInstance?: boolean): ScanComplete.AsObject;
@@ -151,6 +159,8 @@ export namespace ScanComplete {
         allRowsList: Array<ScannedAdRow.AsObject>,
         totalPasses: number,
         durationSeconds: number,
+        dismissedModalsList: Array<string>,
+        unknownModalArtifactsList: Array<string>,
     }
 }
 

@@ -44,6 +44,7 @@ const ads_table_js_1 = require("./ads-table.js");
 const humanizer_js_1 = require("./humanizer.js");
 const toggle_utils_js_1 = require("./toggle-utils.js");
 const ads_columns_js_1 = require("./ads-columns.js");
+const modal_dismisser_js_1 = require("./modal-dismisser.js");
 const PORT = process.env.GRPC_PORT ? parseInt(process.env.GRPC_PORT, 10) : 50051;
 const sessionManager = new session_manager_js_1.SessionManager();
 const SESSION_STATUS_HEARTBEAT_MS = 5_000;
@@ -376,11 +377,21 @@ async function runScanCycle(call) {
         let completedPasses = 0;
         // Не привязываемся к текущим 30 объявлениям: конец списка определяем по нескольким проходам без новых ID.
         const stallLimit = 3;
+        const allDismissedModals = [];
+        const allUnknownModalArtifacts = [];
+        // Закрываем модальные окна до обновления таблицы
+        const preModalResult = await (0, modal_dismisser_js_1.dismissKnownModals)(page);
+        preModalResult.dismissed.forEach((d) => allDismissedModals.push(d.id));
+        preModalResult.unknown.forEach((u) => allUnknownModalArtifacts.push(u.screenshotPath));
         await prepareAdsTableForScan(page, {
             doRefresh,
             resetFirst,
             settleDelayMs: settleDelay,
         });
+        // Закрываем модальные окна, которые могли появиться после refresh
+        const postRefreshModalResult = await (0, modal_dismisser_js_1.dismissKnownModals)(page);
+        postRefreshModalResult.dismissed.forEach((d) => allDismissedModals.push(d.id));
+        postRefreshModalResult.unknown.forEach((u) => allUnknownModalArtifacts.push(u.screenshotPath));
         if (cancelled) {
             endIfActive();
             return;
@@ -467,6 +478,8 @@ async function runScanCycle(call) {
                 all_rows: allRows,
                 total_passes: completedPasses,
                 duration_seconds: duration,
+                dismissed_modals: allDismissedModals,
+                unknown_modal_artifacts: allUnknownModalArtifacts,
             },
         });
         endIfActive();

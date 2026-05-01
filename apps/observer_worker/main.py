@@ -61,6 +61,7 @@ from core.observer.runtime_status import (
     update_observer_runtime_status,
 )
 from core.observer.scan_guard import ZeroScanGuard
+from core.observer.self_healing import SelfHealingEscalator
 from core.observer.service import (
     AlertCandidate,
     _compose_reason_text,
@@ -1055,6 +1056,9 @@ async def observer_loop(
         )
         ad_states = {}
 
+    # Self-healing эскалатор: счётчик последовательных провалов цикла
+    _self_healing = SelfHealingEscalator()
+
     # Загружаем TG настройки из БД (с fallback на .env)
     tg_token, tg_destinations = await load_telegram_settings_from_db(
         fallback_token=telegram_bot_token,
@@ -1380,6 +1384,19 @@ async def observer_loop(
                                 event.duration_seconds,
                                 event.total_passes,
                             )
+                            # Проверяем неизвестные модальные окна (Wave 1 modal-dismisser)
+                            unknown_modals = getattr(event, "unknown_modal_artifacts", []) or []
+                            if unknown_modals:
+                                _tg_chat_for_healing = (
+                                    tg_destinations[0].chat_id
+                                    if tg_destinations
+                                    else telegram_chat_id
+                                )
+                                await _self_healing.handle_unknown_modal_artifacts(
+                                    unknown_modals,
+                                    tg_client=tg_client,
+                                    tg_chat_id=_tg_chat_for_healing,
+                                )
                         elif isinstance(event, ScanProgress):
                             for row in event.new_rows:
                                 scanned_rows_by_id[row.fb_ad_id] = row
@@ -1518,8 +1535,9 @@ async def observer_loop(
                     tg_destinations=tg_destinations,
                 )
 
-            # Успешный цикл — сбрасываем счётчик ошибок браузера
+            # Успешный цикл — сбрасываем счётчик ошибок браузера и self-healing
             consecutive_browser_errors = 0
+            _self_healing.record_success()
             cycle_completed = True
 
         except ScanDataUnavailableError as exc:
@@ -1541,6 +1559,15 @@ async def observer_loop(
             except Exception:
                 logger.exception("Не удалось отправить Telegram-алерт о недоступности данных скана")
 
+            # Считаем ScanDataUnavailableError провалом цикла для self-healing
+            _tg_chat_for_healing = (
+                tg_destinations[0].chat_id if tg_destinations else telegram_chat_id
+            )
+            await _self_healing.record_failure(
+                grpc_client=grpc_client,
+                tg_client=tg_client,
+                tg_chat_id=_tg_chat_for_healing,
+            )
             continue
 
         except TimeoutError:
@@ -1552,6 +1579,14 @@ async def observer_loop(
                 status="WARNING",
                 message="Таймаут ожидания данных Ads Manager. Следующий цикл запустится по расписанию.",
                 last_error="TimeoutError при ожидании DOM",
+            )
+            _tg_chat_for_healing = (
+                tg_destinations[0].chat_id if tg_destinations else telegram_chat_id
+            )
+            await _self_healing.record_failure(
+                grpc_client=grpc_client,
+                tg_client=tg_client,
+                tg_chat_id=_tg_chat_for_healing,
             )
             continue
 
@@ -1565,15 +1600,14 @@ async def observer_loop(
                     last_error=runtime_message,
                 )
                 consecutive_browser_errors += 1
-                try:
-                    await grpc_client.reconnect_browser()
-                    logger.info("Браузер переподключён через gRPC")
-                except Exception as reconnect_err:
-                    logger.warning(
-                        "Не удалось переподключить браузер (попытка %d): %s",
-                        consecutive_browser_errors,
-                        reconnect_err,
-                    )
+                _tg_chat_for_healing = (
+                    tg_destinations[0].chat_id if tg_destinations else telegram_chat_id
+                )
+                await _self_healing.record_failure(
+                    grpc_client=grpc_client,
+                    tg_client=tg_client,
+                    tg_chat_id=_tg_chat_for_healing,
+                )
                 continue
 
             runtime_message = (

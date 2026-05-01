@@ -25,6 +25,7 @@ from apps.api.routers import (
     creative_tools,
     dashboard,
     fake_deposits,
+    health,
     history,
     naming_tracker,
     offers,
@@ -110,6 +111,8 @@ app.include_router(fake_deposits.router, dependencies=_api_key_dep)
 app.include_router(naming_tracker.router, dependencies=_api_key_dep)
 app.include_router(creative_tools.router, dependencies=_api_key_dep)
 app.include_router(campaign_scripts.router, dependencies=_api_key_dep)
+# Health-check роутер без авторизации
+app.include_router(health.router)
 
 
 # ==========================================

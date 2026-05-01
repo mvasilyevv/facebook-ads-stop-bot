@@ -24,6 +24,7 @@ import {
   buildAdsTableColumnWidthTargets,
   type ColumnWidthTarget,
 } from './ads-columns.js';
+import { dismissKnownModals } from './modal-dismisser.js';
 
 const PORT = process.env.GRPC_PORT ? parseInt(process.env.GRPC_PORT, 10) : 50051;
 const sessionManager = new SessionManager();
@@ -411,12 +412,24 @@ async function runScanCycle(call: any) {
     let completedPasses = 0;
     // Не привязываемся к текущим 30 объявлениям: конец списка определяем по нескольким проходам без новых ID.
     const stallLimit = 3;
+    const allDismissedModals: string[] = [];
+    const allUnknownModalArtifacts: string[] = [];
+
+    // Закрываем модальные окна до обновления таблицы
+    const preModalResult = await dismissKnownModals(page);
+    preModalResult.dismissed.forEach((d) => allDismissedModals.push(d.id));
+    preModalResult.unknown.forEach((u) => allUnknownModalArtifacts.push(u.screenshotPath));
 
     await prepareAdsTableForScan(page, {
       doRefresh,
       resetFirst,
       settleDelayMs: settleDelay,
     });
+
+    // Закрываем модальные окна, которые могли появиться после refresh
+    const postRefreshModalResult = await dismissKnownModals(page);
+    postRefreshModalResult.dismissed.forEach((d) => allDismissedModals.push(d.id));
+    postRefreshModalResult.unknown.forEach((u) => allUnknownModalArtifacts.push(u.screenshotPath));
     if (cancelled) {
       endIfActive();
       return;
@@ -503,6 +516,8 @@ async function runScanCycle(call: any) {
         all_rows: allRows,
         total_passes: completedPasses,
         duration_seconds: duration,
+        dismissed_modals: allDismissedModals,
+        unknown_modal_artifacts: allUnknownModalArtifacts,
       },
     });
 
