@@ -194,12 +194,11 @@ async def health_liveness(db: AsyncSession = Depends(get_db)):
     return {"status": "ok"}
 
 
-@router.get("/health/details", response_model=HealthDetails)
-async def health_details(db: AsyncSession = Depends(get_db)) -> HealthDetails:
-    """Readiness-проверка всех компонентов системы.
+async def collect_health_details(db: AsyncSession) -> HealthDetails:
+    """Собирает полный health-статус всех компонентов системы.
 
-    Всегда возвращает HTTP 200. Если что-то не в порядке — overall_healthy=false.
-    Не требует авторизации.
+    Используется как в HTTP-эндпоинте /api/health/details,
+    так и в health_watchdog для периодических проверок.
     """
     checked_at = datetime.now(UTC)
 
@@ -323,3 +322,13 @@ async def health_details(db: AsyncSession = Depends(get_db)) -> HealthDetails:
         queues=queues,
         last_successful_scan=last_scan,
     )
+
+
+@router.get("/health/details", response_model=HealthDetails)
+async def health_details(db: AsyncSession = Depends(get_db)) -> HealthDetails:
+    """Readiness-проверка всех компонентов системы.
+
+    Всегда возвращает HTTP 200. Если что-то не в порядке — overall_healthy=false.
+    Не требует авторизации.
+    """
+    return await collect_health_details(db)
