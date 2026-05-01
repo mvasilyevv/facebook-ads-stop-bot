@@ -91,6 +91,8 @@ message ScanComplete {
   repeated ScannedAdRow all_rows = 1;
   int32 total_passes = 2;
   double duration_seconds = 3;
+  repeated string dismissed_modals = 4;         // id модалок из каталога, которые были закрыты
+  repeated string unknown_modal_artifacts = 5;  // пути вида ".logs/modals/..."
 }
 
 message ScanError {

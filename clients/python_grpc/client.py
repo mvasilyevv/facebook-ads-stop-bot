@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import AsyncIterator, TypeVar
 
@@ -83,6 +83,8 @@ class ScanResult:
     rows: list  # list of ScannedAdRow (из core.scanner.models)
     total_passes: int
     duration_seconds: float
+    dismissed_modals: list[str] = field(default_factory=list)
+    unknown_modal_artifacts: list[str] = field(default_factory=list)
 
 
 class BrowserAgentClient:
@@ -269,6 +271,8 @@ class BrowserAgentClient:
                             rows=rows,
                             total_passes=c.total_passes,
                             duration_seconds=c.duration_seconds,
+                            dismissed_modals=list(c.dismissed_modals),
+                            unknown_modal_artifacts=list(c.unknown_modal_artifacts),
                         )
                     elif event.HasField("error"):
                         e = event.error

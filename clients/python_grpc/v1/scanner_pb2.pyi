@@ -78,18 +78,30 @@ class ScanProgress(_message.Message):
     ) -> None: ...
 
 class ScanComplete(_message.Message):
-    __slots__ = ("all_rows", "total_passes", "duration_seconds")
+    __slots__ = (
+        "all_rows",
+        "total_passes",
+        "duration_seconds",
+        "dismissed_modals",
+        "unknown_modal_artifacts",
+    )
     ALL_ROWS_FIELD_NUMBER: _ClassVar[int]
     TOTAL_PASSES_FIELD_NUMBER: _ClassVar[int]
     DURATION_SECONDS_FIELD_NUMBER: _ClassVar[int]
+    DISMISSED_MODALS_FIELD_NUMBER: _ClassVar[int]
+    UNKNOWN_MODAL_ARTIFACTS_FIELD_NUMBER: _ClassVar[int]
     all_rows: _containers.RepeatedCompositeFieldContainer[ScannedAdRow]
     total_passes: int
     duration_seconds: float
+    dismissed_modals: _containers.RepeatedScalarFieldContainer[str]
+    unknown_modal_artifacts: _containers.RepeatedScalarFieldContainer[str]
     def __init__(
         self,
         all_rows: _Optional[_Iterable[_Union[ScannedAdRow, _Mapping]]] = ...,
         total_passes: _Optional[int] = ...,
         duration_seconds: _Optional[float] = ...,
+        dismissed_modals: _Optional[_Iterable[str]] = ...,
+        unknown_modal_artifacts: _Optional[_Iterable[str]] = ...,
     ) -> None: ...
 
 class ScanError(_message.Message):

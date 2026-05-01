@@ -1853,7 +1853,7 @@ proto.fb_agent.scanner.v1.ScanProgress.prototype.clearNewRowsList = function() {
  * @private {!Array<number>}
  * @const
  */
-proto.fb_agent.scanner.v1.ScanComplete.repeatedFields_ = [1];
+proto.fb_agent.scanner.v1.ScanComplete.repeatedFields_ = [1,4,5];
 
 
 
@@ -1889,7 +1889,9 @@ proto.fb_agent.scanner.v1.ScanComplete.toObject = function(includeInstance, msg)
     allRowsList: jspb.Message.toObjectList(msg.getAllRowsList(),
     proto.fb_agent.scanner.v1.ScannedAdRow.toObject, includeInstance),
     totalPasses: jspb.Message.getFieldWithDefault(msg, 2, 0),
-    durationSeconds: jspb.Message.getFloatingPointFieldWithDefault(msg, 3, 0.0)
+    durationSeconds: jspb.Message.getFloatingPointFieldWithDefault(msg, 3, 0.0),
+    dismissedModalsList: (f = jspb.Message.getRepeatedField(msg, 4)) == null ? undefined : f,
+    unknownModalArtifactsList: (f = jspb.Message.getRepeatedField(msg, 5)) == null ? undefined : f
   };
 
   if (includeInstance) {
@@ -1939,6 +1941,14 @@ proto.fb_agent.scanner.v1.ScanComplete.deserializeBinaryFromReader = function(ms
       var value = /** @type {number} */ (reader.readDouble());
       msg.setDurationSeconds(value);
       break;
+    case 4:
+      var value = /** @type {string} */ (reader.readString());
+      msg.addDismissedModals(value);
+      break;
+    case 5:
+      var value = /** @type {string} */ (reader.readString());
+      msg.addUnknownModalArtifacts(value);
+      break;
     default:
       reader.skipField();
       break;
@@ -1987,6 +1997,20 @@ proto.fb_agent.scanner.v1.ScanComplete.serializeBinaryToWriter = function(messag
   if (f !== 0.0) {
     writer.writeDouble(
       3,
+      f
+    );
+  }
+  f = message.getDismissedModalsList();
+  if (f.length > 0) {
+    writer.writeRepeatedString(
+      4,
+      f
+    );
+  }
+  f = message.getUnknownModalArtifactsList();
+  if (f.length > 0) {
+    writer.writeRepeatedString(
+      5,
       f
     );
   }
@@ -2064,6 +2088,80 @@ proto.fb_agent.scanner.v1.ScanComplete.prototype.getDurationSeconds = function()
  */
 proto.fb_agent.scanner.v1.ScanComplete.prototype.setDurationSeconds = function(value) {
   return jspb.Message.setProto3FloatField(this, 3, value);
+};
+
+
+/**
+ * repeated string dismissed_modals = 4;
+ * @return {!Array<string>}
+ */
+proto.fb_agent.scanner.v1.ScanComplete.prototype.getDismissedModalsList = function() {
+  return /** @type {!Array<string>} */ (jspb.Message.getRepeatedField(this, 4));
+};
+
+
+/**
+ * @param {!Array<string>} value
+ * @return {!proto.fb_agent.scanner.v1.ScanComplete} returns this
+ */
+proto.fb_agent.scanner.v1.ScanComplete.prototype.setDismissedModalsList = function(value) {
+  return jspb.Message.setField(this, 4, value || []);
+};
+
+
+/**
+ * @param {string} value
+ * @param {number=} opt_index
+ * @return {!proto.fb_agent.scanner.v1.ScanComplete} returns this
+ */
+proto.fb_agent.scanner.v1.ScanComplete.prototype.addDismissedModals = function(value, opt_index) {
+  return jspb.Message.addToRepeatedField(this, 4, value, opt_index);
+};
+
+
+/**
+ * Clears the list making it empty but non-null.
+ * @return {!proto.fb_agent.scanner.v1.ScanComplete} returns this
+ */
+proto.fb_agent.scanner.v1.ScanComplete.prototype.clearDismissedModalsList = function() {
+  return this.setDismissedModalsList([]);
+};
+
+
+/**
+ * repeated string unknown_modal_artifacts = 5;
+ * @return {!Array<string>}
+ */
+proto.fb_agent.scanner.v1.ScanComplete.prototype.getUnknownModalArtifactsList = function() {
+  return /** @type {!Array<string>} */ (jspb.Message.getRepeatedField(this, 5));
+};
+
+
+/**
+ * @param {!Array<string>} value
+ * @return {!proto.fb_agent.scanner.v1.ScanComplete} returns this
+ */
+proto.fb_agent.scanner.v1.ScanComplete.prototype.setUnknownModalArtifactsList = function(value) {
+  return jspb.Message.setField(this, 5, value || []);
+};
+
+
+/**
+ * @param {string} value
+ * @param {number=} opt_index
+ * @return {!proto.fb_agent.scanner.v1.ScanComplete} returns this
+ */
+proto.fb_agent.scanner.v1.ScanComplete.prototype.addUnknownModalArtifacts = function(value, opt_index) {
+  return jspb.Message.addToRepeatedField(this, 5, value, opt_index);
+};
+
+
+/**
+ * Clears the list making it empty but non-null.
+ * @return {!proto.fb_agent.scanner.v1.ScanComplete} returns this
+ */
+proto.fb_agent.scanner.v1.ScanComplete.prototype.clearUnknownModalArtifactsList = function() {
+  return this.setUnknownModalArtifactsList([]);
 };
 
 
