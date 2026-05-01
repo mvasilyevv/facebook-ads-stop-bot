@@ -418,11 +418,18 @@ def _has_confirmed_deposit_signal(row: ScannedAdRow) -> bool:
 
 
 def _has_safe_enable_recovery_signal(row: ScannedAdRow) -> bool:
-    if _has_confirmed_deposit_signal(row):
-        return True
+    """Проверяет только неконсистентные сигналы; решение о resume идёт по метрикам."""
     if row.deposits > 0 and row.registrations <= 0:
         return False
-    return row.registrations >= 1 and row.cost_per_registration is not None
+    if (
+        Decimal(row.spend) <= Decimal("0")
+        and row.clicks <= 0
+        and row.leads <= 0
+        and row.registrations <= 0
+        and row.deposits <= 0
+    ):
+        return False
+    return True
 
 
 def _percent_of_cpa(cpa: Decimal, percent: Decimal) -> Decimal:

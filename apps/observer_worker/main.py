@@ -92,6 +92,11 @@ from core.telegram.messaging import safe_edit_or_send_message
 from core.telegram.renderer import TelegramAlertItem, render_alert_message
 
 logger = logging.getLogger(__name__)
+_TELEGRAM_DELIVERY_ACTION_LABELS = {
+    "edited": "обновлён",
+    "sent": "отправлен",
+    "unchanged": "без изменений",
+}
 
 # Пока очередь действий не опустеет, observer не должен трогать общий браузер.
 BROWSER_QUEUE_SCAN_PAUSE_SECONDS = 5.0
@@ -261,6 +266,31 @@ def _snapshot_delivery_is_disabled(snapshot: dict) -> bool:
     return status == "off" or "off" in status
 
 
+def _snapshot_has_traffic(snapshot: dict) -> bool:
+    """Проверяет, что snapshot содержит ненулевой трафик или расход."""
+    metric_names = (
+        "spend",
+        "reach",
+        "impressions",
+        "clicks",
+        "outbound_clicks",
+        "landing_page_views",
+        "leads",
+        "registrations",
+        "deposits",
+    )
+    for metric_name in metric_names:
+        value = snapshot.get(metric_name)
+        if value is None:
+            continue
+        try:
+            if Decimal(str(value)) > 0:
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def compute_adaptive_interval(
     snapshot_batch: list[dict],
     *,
@@ -298,7 +328,7 @@ def compute_adaptive_interval(
         # Объявление с оффером тоже считается мониторимым
         if snap.get("resolved_offer_code"):
             has_monitored_ads = True
-            if not _snapshot_delivery_is_disabled(snap):
+            if not _snapshot_delivery_is_disabled(snap) and _snapshot_has_traffic(snap):
                 has_active_monitored_ads = True
 
     if has_stop:
@@ -368,7 +398,7 @@ async def _send_alerts_to_telegram(
             )
             logger.info(
                 "TG-алерт %s для %s, стадия=%s",
-                "обновлён" if delivery_action == "edited" else "отправлен",
+                _TELEGRAM_DELIVERY_ACTION_LABELS.get(delivery_action, delivery_action),
                 a.ad_name,
                 a.stage,
             )
@@ -716,22 +746,27 @@ async def _process_scan_results(
 ) -> None:
     """Обработка результатов скана: сохранение снэпшотов, алерты, disable tasks."""
     # Батчевый upsert снэпшотов
+    snapshots_saved = False
     try:
-        await batch_save_snapshots(snapshot_batch, _scan_guard)
-        logger.info("Батч-сохранение: %s снэпшотов", len(snapshot_batch))
+        snapshots_saved = await batch_save_snapshots(snapshot_batch, _scan_guard)
+        if snapshots_saved:
+            logger.info("Батч-сохранение: %s снэпшотов", len(snapshot_batch))
+        else:
+            logger.info("Батч-сохранение пропущено guard-ом: %s снэпшотов", len(snapshot_batch))
     except Exception:
         logger.warning(
             "Не удалось выполнить батч-сохранение снэпшотов",
             exc_info=True,
         )
     else:
-        try:
-            await reconcile_disable_tasks_in_db()
-        except Exception:
-            logger.warning(
-                "Не удалось обновить очередь отключения после сохранения снэпшотов",
-                exc_info=True,
-            )
+        if snapshots_saved:
+            try:
+                await reconcile_disable_tasks_in_db()
+            except Exception:
+                logger.warning(
+                    "Не удалось обновить очередь отключения после сохранения снэпшотов",
+                    exc_info=True,
+                )
 
     # Авто-стоп: создаём DisableTask для STOP-алертов
     if stop_alerts:
@@ -798,16 +833,17 @@ async def _process_fast_stop_results(
     stop_ids = {alert.fb_ad_id for alert in stop_alerts}
     stop_snapshots = [snap for snap in snapshot_batch if snap.get("fb_ad_id") in stop_ids]
     if stop_snapshots:
-        await batch_save_snapshots(
+        saved = await batch_save_snapshots(
             stop_snapshots,
             _scan_guard,
             allow_cabinet_rollover=False,
             bypass_scan_guard=True,
         )
-        logger.info(
-            "Быстрый стоп: сохранено %s STOP-снэпшотов до конца сканирования",
-            len(stop_snapshots),
-        )
+        if saved:
+            logger.info(
+                "Быстрый стоп: сохранено %s STOP-снэпшотов до конца сканирования",
+                len(stop_snapshots),
+            )
 
     await auto_create_disable_tasks(stop_alerts)
     logger.info("Быстрый стоп: создано или проверено задач отключения: %s", len(stop_alerts))

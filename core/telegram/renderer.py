@@ -402,73 +402,185 @@ def _build_compact_metrics_line(metrics_json: dict[str, Any]) -> list[str]:
     return lines
 
 
+def _stage_title(stage: AlertStage) -> str:
+    """Возвращает короткий заголовок стадии алерта."""
+    return "STOP" if stage == AlertStage.STOP else "WARNING"
+
+
+def _append_label_block(lines: list[str], label: str, value: str | None) -> None:
+    """Добавляет блок с подписью и полным значением."""
+    text = str(value or "").strip()
+    if not text:
+        return
+    lines.append(f"<b>{html.escape(label)}:</b>")
+    lines.append(html.escape(text))
+    lines.append("")
+
+
+def _format_money_metric(value: Any) -> str:
+    """Форматирует денежную метрику с долларом перед значением."""
+    return f"${value}"
+
+
+def _append_metric_line(
+    lines: list[str],
+    *,
+    label: str,
+    value: Any,
+    money: bool = False,
+    suffix: str = "",
+) -> None:
+    """Добавляет строку метрики, если значение есть."""
+    if value is None:
+        return
+    formatted = _format_money_metric(value) if money else str(value)
+    lines.append(f"{html.escape(label)}: {html.escape(formatted)}{html.escape(suffix)}")
+
+
+def _build_alert_metric_lines(metrics_json: dict[str, Any]) -> list[str]:
+    """Формирует ключевые метрики алерта в читаемом вертикальном виде."""
+    metrics = metrics_json or {}
+    lines: list[str] = []
+
+    _append_metric_line(lines, label="Расход", value=metrics.get("spend"), money=True)
+    _append_metric_line(lines, label="Клики", value=metrics.get("clicks"))
+    _append_metric_line(lines, label="Исходящие клики", value=metrics.get("outbound_clicks"))
+    _append_metric_line(lines, label="Лиды", value=metrics.get("leads"))
+    _append_metric_line(lines, label="Регистрации", value=metrics.get("registrations"))
+    _append_metric_line(lines, label="Депозиты", value=metrics.get("deposits"))
+    _append_metric_line(lines, label="CPC", value=metrics.get("cpc"), money=True)
+    _append_metric_line(lines, label="CPL", value=metrics.get("cost_per_lead"), money=True)
+    _append_metric_line(
+        lines,
+        label="CPR",
+        value=metrics.get("cost_per_registration"),
+        money=True,
+    )
+    _append_metric_line(
+        lines,
+        label="CTR исходящий",
+        value=metrics.get("outbound_ctr"),
+        suffix="%",
+    )
+    _append_metric_line(lines, label="LPV", value=metrics.get("landing_page_views"))
+    _append_metric_line(
+        lines,
+        label="Цена LPV",
+        value=metrics.get("cost_per_landing_page_view"),
+        money=True,
+    )
+
+    return lines
+
+
+def _build_alert_reason_lines(item: TelegramAlertItem, *, stage: AlertStage) -> list[str]:
+    """Формирует причины алерта без технических кодов."""
+    lines: list[str] = []
+    seen: set[str] = set()
+    if item.reason_title:
+        reason_title = str(item.reason_title).strip()
+        if reason_title:
+            lines.append(html.escape(reason_title))
+            seen.add(reason_title.casefold())
+
+    for code in item.matched_rule_codes:
+        label = str(_RULE_LABELS_SHORT.get(code, code)).strip()
+        if not label or label.casefold() in seen:
+            continue
+        lines.append(html.escape(label))
+        seen.add(label.casefold())
+
+    if not lines and item.reason_text:
+        lines.append(html.escape(str(item.reason_text).strip()))
+
+    if not lines:
+        return []
+
+    title = "Причина стопа" if stage == AlertStage.STOP else "Причина"
+    return [f"<b>{title}:</b>", *lines]
+
+
+def _build_alert_diagnostics_lines(metrics_json: dict[str, Any]) -> list[str]:
+    """Формирует человекочитаемую диагностику трафика."""
+    metrics = metrics_json or {}
+    diagnostics = metrics.get("traffic_diagnostics")
+    lines: list[str] = []
+
+    if isinstance(diagnostics, dict):
+        for key in ("cpm", "frequency"):
+            payload = diagnostics.get(key)
+            if not isinstance(payload, dict):
+                continue
+            text = str(payload.get("text") or "").strip()
+            if text:
+                lines.append(html.escape(text))
+    else:
+        cpm = metrics.get("cpm")
+        frequency = metrics.get("frequency")
+        if cpm is not None:
+            lines.append(f"CPM: {html.escape(str(cpm))}")
+        if frequency is not None:
+            lines.append(f"Частота: {html.escape(str(frequency))}")
+
+    return lines
+
+
 def render_alert_message(
     *,
     stage: AlertStage,
     items: list[TelegramAlertItem],
     snooze_note: str | None = None,
 ) -> TelegramOutgoingMessage:
-    """Формирует компактное TG-сообщение — читается за 3 секунды."""
+    """Формирует Telegram-alert с полной иерархией объявления и метриками."""
     lines: list[str] = []
     keyboard: list[list[dict[str, str]]] = []
 
-    for item in items:
-        # --- Строка 1: стадия — название объявления ---
-        ad_short = html.escape(_truncate(item.ad_name, 25))
-        if stage == AlertStage.STOP:
-            stage_icon = "🔴 <b>СТОП</b>"
-        else:
-            stage_icon = "🟡 <b>WARNING</b>"
-        lines.append(f"{stage_icon} — {ad_short}")
+    for index, item in enumerate(items):
+        if index > 0:
+            lines.append("")
+            lines.append("-----")
+            lines.append("")
 
-        # --- Строка 2: оффер · кампания ---
-        parts: list[str] = []
-        if item.offer_code:
-            parts.append(html.escape(item.offer_code))
-        if item.campaign_name:
-            parts.append(html.escape(_truncate(item.campaign_name, 20)))
-        if parts:
-            lines.append(" · ".join(parts))
-
+        lines.append(f"<b>{_stage_title(stage)}</b>")
         lines.append("")
 
-        # --- Метрики: две строки ---
-        metric_lines = _build_compact_metrics_line(item.metrics_json)
-        lines.extend(metric_lines)
+        _append_label_block(lines, "Кампания", item.campaign_name)
+        _append_label_block(lines, "Адсет", item.adset_name)
+        _append_label_block(lines, "Объявление", item.ad_name)
 
-        lines.append("")
+        reason_lines = _build_alert_reason_lines(item, stage=stage)
+        if reason_lines:
+            lines.extend(reason_lines)
+            lines.append("")
 
-        # --- Причина + коды правил ---
-        if item.reason_title:
-            lines.append(f"⚠️ {html.escape(item.reason_title)}")
-        if item.matched_rule_codes:
-            codes = ", ".join(_RULE_LABELS_SHORT.get(c, c) for c in item.matched_rule_codes if c)
-            if codes:
-                lines.append(html.escape(codes))
+        metric_lines = _build_alert_metric_lines(item.metrics_json)
+        if metric_lines:
+            metrics_title = (
+                "Метрики на момент стопа" if stage == AlertStage.STOP else "Ключевые метрики"
+            )
+            lines.append(f"<b>{metrics_title}:</b>")
+            lines.extend(metric_lines)
+            lines.append("")
 
-        # --- Snooze-примечание ---
         if snooze_note:
-            lines.append("")
             lines.append(html.escape(snooze_note))
-
-        # --- Подробные метрики (сворачиваемый блок) ---
-        detail_lines = build_detailed_metrics_block(item.metrics_json or {})
-        if detail_lines:
             lines.append("")
-            lines.extend(detail_lines)
 
-        lines.append("")
+        diagnostics_lines = _build_alert_diagnostics_lines(item.metrics_json or {})
+        if diagnostics_lines:
+            lines.append("<b>Диагностика:</b>")
+            lines.extend(diagnostics_lines)
+            lines.append("")
 
-        # --- Кнопки ---
         if stage == AlertStage.WARNING:
             keyboard.append(
                 [
                     {
-                        "text": f"🛑 Отключить: {item.ad_name[:24].rstrip()}",
+                        "text": f"Отключить: {item.ad_name[:24].rstrip()}",
                         "callback_data": f"disable:{item.snapshot_id}",
                     },
                     {
-                        "text": "👁 Игнорировать",
+                        "text": "Игнорировать",
                         "callback_data": f"snooze:{item.snapshot_id}:60",
                     },
                 ]
@@ -476,21 +588,22 @@ def render_alert_message(
             keyboard.append(
                 [
                     {
-                        "text": "⏸ 30м",
+                        "text": "30 мин",
                         "callback_data": f"snooze:{item.snapshot_id}:30",
                     },
                     {
-                        "text": "⏸ 1ч",
+                        "text": "1 час",
                         "callback_data": f"snooze:{item.snapshot_id}:60",
                     },
                     {
-                        "text": "⏸ 2ч",
+                        "text": "2 часа",
                         "callback_data": f"snooze:{item.snapshot_id}:120",
                     },
                 ]
             )
         else:
-            lines.append("⚡ Авто-отключение запущено")
+            lines.append("<b>Действие:</b>")
+            lines.append("Создана задача на отключение.")
 
     return TelegramOutgoingMessage(
         text="\n".join(lines).strip(),

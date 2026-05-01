@@ -31,6 +31,10 @@ export function isAdsManagerUrl(url: string | null | undefined): boolean {
   return ADS_MANAGER_URL_MARKERS.some((marker) => normalized.includes(marker));
 }
 
+function isPageClosed(page: Page): boolean {
+  return typeof page.isClosed === 'function' && page.isClosed();
+}
+
 export function findPreferredPrimaryPage(browser: Browser | null): Page | null {
   if (!browser) {
     return null;
@@ -39,6 +43,9 @@ export function findPreferredPrimaryPage(browser: Browser | null): Page | null {
   let fallbackPage: Page | null = null;
   for (const context of browser.contexts()) {
     for (const page of context.pages()) {
+      if (isPageClosed(page)) {
+        continue;
+      }
       fallbackPage = fallbackPage || page;
       if (isAdsManagerUrl(page.url())) {
         return page;

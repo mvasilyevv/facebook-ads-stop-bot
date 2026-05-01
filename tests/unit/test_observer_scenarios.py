@@ -462,8 +462,8 @@ def test_scenario_click_guardrail_creates_stop_alert_and_snapshot():
         "Расход 1.20 превысил стоп CPL 1.00 без лидов"
     ]
     assert "частота 3.20 при критической границе 3.00" in (result.alert_candidate.reason_text or "")
-    assert "🔴 <b>СТОП</b>" in (result.alert_message_text or "")
-    assert "<blockquote" in (result.alert_message_text or "")
+    assert "<b>STOP</b>" in (result.alert_message_text or "")
+    assert "<b>Диагностика:</b>" in (result.alert_message_text or "")
 
 
 # Проверяем что наличие лида подавляет более раннее правило клика.
@@ -526,7 +526,7 @@ def test_scenario_regs_without_deposits_has_priority_over_spend_range():
     assert result.snapshot["stop_rule_codes"] == ["regs_no_dep_stop"]
     assert result.alert_candidate is not None
     assert result.alert_candidate.reason_title == "Реги без депозитов"
-    assert "Реги: 5" in (result.alert_message_text or "")
+    assert "Регистрации: 5" in (result.alert_message_text or "")
 
 
 # Проверяем что после первого депозита ранние ступени подавляются и остаётся только депозитная.

@@ -30,6 +30,9 @@ function isAdsManagerUrl(url) {
     const normalized = String(url || '').toLowerCase();
     return ADS_MANAGER_URL_MARKERS.some((marker) => normalized.includes(marker));
 }
+function isPageClosed(page) {
+    return typeof page.isClosed === 'function' && page.isClosed();
+}
 function findPreferredPrimaryPage(browser) {
     if (!browser) {
         return null;
@@ -37,6 +40,9 @@ function findPreferredPrimaryPage(browser) {
     let fallbackPage = null;
     for (const context of browser.contexts()) {
         for (const page of context.pages()) {
+            if (isPageClosed(page)) {
+                continue;
+            }
             fallbackPage = fallbackPage || page;
             if (isAdsManagerUrl(page.url())) {
                 return page;

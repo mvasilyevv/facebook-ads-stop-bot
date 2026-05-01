@@ -240,6 +240,110 @@ class OpenCreativeFolderResponseSchema(BaseModel):
     ok: bool = True
 
 
+class CampaignCreativeFolderSchema(BaseModel):
+    """Папка креативов, доступная для сценария создания кампании."""
+
+    name: str
+    path: str
+    adset_count: int
+    creative_count: int
+    media_type: str
+    updated_at: float
+    is_valid: bool = True
+    validation_error: str = ""
+
+
+class CampaignScriptPlanRequestSchema(BaseModel):
+    """Запрос на построение плана создания кампании."""
+
+    offer_code: str
+    creative_folder_name: str
+    cabinet_id: str
+
+    @field_validator("offer_code")
+    @classmethod
+    def normalize_offer_code(cls, value: str) -> str:
+        """Нормализует код оффера для поиска."""
+        normalized = _normalize_offer_code_value(value)
+        return normalized or ""
+
+    @field_validator(
+        "creative_folder_name",
+        "cabinet_id",
+    )
+    @classmethod
+    def normalize_required_text(cls, value: str) -> str:
+        """Очищает обязательные текстовые поля."""
+        normalized = " ".join(str(value or "").strip().split())
+        if not normalized:
+            raise ValueError("Поле обязательно для заполнения")
+        return normalized
+
+
+class CampaignAdPlanSchema(BaseModel):
+    """План одного объявления."""
+
+    name: str
+    media_file_name: str
+    media_search_name: str
+    media_path: str
+    media_type: str
+    url_params: str
+
+
+class CampaignAdSetPlanSchema(BaseModel):
+    """План одной группы объявлений."""
+
+    name: str
+    folder_path: str
+    ads: list[CampaignAdPlanSchema]
+
+
+class CampaignLocationPlanSchema(BaseModel):
+    """План работы с гео."""
+
+    add_locations: list[str]
+    offer_country_name: str
+    required_location_type: str
+    remove_initial_location_after_add: bool
+    rejected_location_terms: list[str]
+
+
+class CampaignManualGuideItemSchema(BaseModel):
+    """Одно значение ручного помощника."""
+
+    label: str
+    value: str
+    copyable: bool = True
+
+
+class CampaignManualGuideSectionSchema(BaseModel):
+    """Секция ручного помощника."""
+
+    title: str
+    items: list[CampaignManualGuideItemSchema]
+
+
+class CampaignScriptPlanSchema(BaseModel):
+    """Полный план создания кампании."""
+
+    campaign_name: str
+    offer_code: str
+    offer_country_name: str
+    creative_folder_name: str
+    creative_folder_path: str
+    conversion_event: str
+    cabinet_id: str
+    sub2: str
+    media_type: str
+    adset_count: int
+    ad_count: int
+    adsets: list[CampaignAdSetPlanSchema]
+    location_plan: CampaignLocationPlanSchema
+    manual_guide: list[CampaignManualGuideSectionSchema]
+    safety_notes: list[str]
+
+
 # ==========================================
 # Офферы
 # ==========================================
@@ -252,6 +356,7 @@ class OfferSchema(BaseModel):
     code: str
     cpa_amount: Decimal
     payout_per_deposit: Decimal | None = None
+    country_name: str | None = None
     is_active: bool = True
 
     @field_validator("code")
@@ -260,6 +365,15 @@ class OfferSchema(BaseModel):
         """Нормализует код оффера в верхний регистр."""
         normalized = _normalize_offer_code_value(value)
         return normalized or ""
+
+    @field_validator("country_name")
+    @classmethod
+    def normalize_country_name(cls, value: str | None) -> str | None:
+        """Нормализует страну оффера для сценариев создания кампаний."""
+        if value is None:
+            return None
+        normalized = " ".join(value.strip().split())
+        return normalized or None
 
 
 class OfferRuleConfigSchema(BaseModel):

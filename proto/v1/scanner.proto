@@ -57,6 +57,7 @@ service ScannerService {
 
   // Применить сохранённый пресет ширины колонок Ads Manager.
   rpc ApplyColumnWidths(ApplyColumnWidthsRequest) returns (ApplyColumnWidthsResponse);
+
 }
 
 // --- RunScanCycle: streaming RPC ---

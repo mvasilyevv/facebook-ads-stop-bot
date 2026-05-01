@@ -6,7 +6,7 @@
 
 import * as jspb from "google-protobuf";
 
-export class RunScanCycleRequest extends jspb.Message {
+export class RunScanCycleRequest extends jspb.Message { 
     getSessionId(): string;
     setSessionId(value: string): RunScanCycleRequest;
 
@@ -44,7 +44,7 @@ export namespace RunScanCycleRequest {
     }
 }
 
-export class ScanCycleEvent extends jspb.Message {
+export class ScanCycleEvent extends jspb.Message { 
     getSessionId(): string;
     setSessionId(value: string): ScanCycleEvent;
 
@@ -92,7 +92,7 @@ export namespace ScanCycleEvent {
 
 }
 
-export class ScanProgress extends jspb.Message {
+export class ScanProgress extends jspb.Message { 
     getPassNumber(): number;
     setPassNumber(value: number): ScanProgress;
     getRowsSoFar(): number;
@@ -126,7 +126,7 @@ export namespace ScanProgress {
     }
 }
 
-export class ScanComplete extends jspb.Message {
+export class ScanComplete extends jspb.Message { 
     clearAllRowsList(): void;
     getAllRowsList(): Array<ScannedAdRow>;
     setAllRowsList(value: Array<ScannedAdRow>): ScanComplete;
@@ -154,7 +154,7 @@ export namespace ScanComplete {
     }
 }
 
-export class ScanError extends jspb.Message {
+export class ScanError extends jspb.Message { 
     getMessage(): string;
     setMessage(value: string): ScanError;
     getRecoverable(): boolean;
@@ -180,7 +180,7 @@ export namespace ScanError {
     }
 }
 
-export class RefreshTableRequest extends jspb.Message {
+export class RefreshTableRequest extends jspb.Message { 
     getSessionId(): string;
     setSessionId(value: string): RefreshTableRequest;
 
@@ -206,7 +206,7 @@ export namespace RefreshTableRequest {
     }
 }
 
-export class RefreshTableResponse extends jspb.Message {
+export class RefreshTableResponse extends jspb.Message { 
     getRefreshed(): boolean;
     setRefreshed(value: boolean): RefreshTableResponse;
     getFallbackReload(): boolean;
@@ -229,7 +229,7 @@ export namespace RefreshTableResponse {
     }
 }
 
-export class ParseVisibleRowsRequest extends jspb.Message {
+export class ParseVisibleRowsRequest extends jspb.Message { 
     getSessionId(): string;
     setSessionId(value: string): ParseVisibleRowsRequest;
 
@@ -255,7 +255,7 @@ export namespace ParseVisibleRowsRequest {
     }
 }
 
-export class ParseVisibleRowsResponse extends jspb.Message {
+export class ParseVisibleRowsResponse extends jspb.Message { 
     clearRowsList(): void;
     getRowsList(): Array<ScannedAdRow>;
     setRowsList(value: Array<ScannedAdRow>): ParseVisibleRowsResponse;
@@ -277,7 +277,7 @@ export namespace ParseVisibleRowsResponse {
     }
 }
 
-export class ScrollAndParseRequest extends jspb.Message {
+export class ScrollAndParseRequest extends jspb.Message { 
     getSessionId(): string;
     setSessionId(value: string): ScrollAndParseRequest;
 
@@ -312,7 +312,7 @@ export namespace ScrollAndParseRequest {
     }
 }
 
-export class ScrollAndParseResponse extends jspb.Message {
+export class ScrollAndParseResponse extends jspb.Message { 
     clearNewRowsList(): void;
     getNewRowsList(): Array<ScannedAdRow>;
     setNewRowsList(value: Array<ScannedAdRow>): ScrollAndParseResponse;
@@ -343,7 +343,7 @@ export namespace ScrollAndParseResponse {
     }
 }
 
-export class WaitForDomStableRequest extends jspb.Message {
+export class WaitForDomStableRequest extends jspb.Message { 
     getSessionId(): string;
     setSessionId(value: string): WaitForDomStableRequest;
 
@@ -375,7 +375,7 @@ export namespace WaitForDomStableRequest {
     }
 }
 
-export class WaitForDomStableResponse extends jspb.Message {
+export class WaitForDomStableResponse extends jspb.Message { 
     getStabilized(): boolean;
     setStabilized(value: boolean): WaitForDomStableResponse;
     getFinalRowCount(): number;
@@ -398,7 +398,7 @@ export namespace WaitForDomStableResponse {
     }
 }
 
-export class ResetScrollRequest extends jspb.Message {
+export class ResetScrollRequest extends jspb.Message { 
     getSessionId(): string;
     setSessionId(value: string): ResetScrollRequest;
 
@@ -424,7 +424,7 @@ export namespace ResetScrollRequest {
     }
 }
 
-export class ResetScrollResponse extends jspb.Message {
+export class ResetScrollResponse extends jspb.Message { 
     getContainersReset(): number;
     setContainersReset(value: number): ResetScrollResponse;
 
@@ -444,7 +444,7 @@ export namespace ResetScrollResponse {
     }
 }
 
-export class GetScrollMetricsRequest extends jspb.Message {
+export class GetScrollMetricsRequest extends jspb.Message { 
     getSessionId(): string;
     setSessionId(value: string): GetScrollMetricsRequest;
 
@@ -470,7 +470,7 @@ export namespace GetScrollMetricsRequest {
     }
 }
 
-export class GetScrollMetricsResponse extends jspb.Message {
+export class GetScrollMetricsResponse extends jspb.Message { 
 
     hasMetrics(): boolean;
     clearMetrics(): void;
@@ -493,7 +493,7 @@ export namespace GetScrollMetricsResponse {
     }
 }
 
-export class ScrollMetrics extends jspb.Message {
+export class ScrollMetrics extends jspb.Message { 
     getFound(): boolean;
     setFound(value: boolean): ScrollMetrics;
     getScrollTop(): number;
@@ -522,7 +522,7 @@ export namespace ScrollMetrics {
     }
 }
 
-export class GetVisibleRowIdsRequest extends jspb.Message {
+export class GetVisibleRowIdsRequest extends jspb.Message { 
     getSessionId(): string;
     setSessionId(value: string): GetVisibleRowIdsRequest;
 
@@ -548,7 +548,7 @@ export namespace GetVisibleRowIdsRequest {
     }
 }
 
-export class GetVisibleRowIdsResponse extends jspb.Message {
+export class GetVisibleRowIdsResponse extends jspb.Message { 
     clearRowIdsList(): void;
     getRowIdsList(): Array<string>;
     setRowIdsList(value: Array<string>): GetVisibleRowIdsResponse;
@@ -570,7 +570,7 @@ export namespace GetVisibleRowIdsResponse {
     }
 }
 
-export class FindToggleCellRequest extends jspb.Message {
+export class FindToggleCellRequest extends jspb.Message { 
     getSessionId(): string;
     setSessionId(value: string): FindToggleCellRequest;
 
@@ -605,7 +605,7 @@ export namespace FindToggleCellRequest {
     }
 }
 
-export class FindToggleCellResponse extends jspb.Message {
+export class FindToggleCellResponse extends jspb.Message { 
     getFound(): boolean;
     setFound(value: boolean): FindToggleCellResponse;
     getCellX(): number;
@@ -634,7 +634,7 @@ export namespace FindToggleCellResponse {
     }
 }
 
-export class ReadToggleStateRequest extends jspb.Message {
+export class ReadToggleStateRequest extends jspb.Message { 
     getSessionId(): string;
     setSessionId(value: string): ReadToggleStateRequest;
 
@@ -663,7 +663,7 @@ export namespace ReadToggleStateRequest {
     }
 }
 
-export class ReadToggleStateResponse extends jspb.Message {
+export class ReadToggleStateResponse extends jspb.Message { 
     getFound(): boolean;
     setFound(value: boolean): ReadToggleStateResponse;
     getAriaChecked(): string;
@@ -686,7 +686,7 @@ export namespace ReadToggleStateResponse {
     }
 }
 
-export class ToggleAdRequest extends jspb.Message {
+export class ToggleAdRequest extends jspb.Message { 
     getSessionId(): string;
     setSessionId(value: string): ToggleAdRequest;
 
@@ -718,7 +718,7 @@ export namespace ToggleAdRequest {
     }
 }
 
-export class ToggleAdResponse extends jspb.Message {
+export class ToggleAdResponse extends jspb.Message { 
     getSuccess(): boolean;
     setSuccess(value: boolean): ToggleAdResponse;
     getFinalState(): string;
@@ -741,7 +741,7 @@ export namespace ToggleAdResponse {
     }
 }
 
-export class HumanMoveRequest extends jspb.Message {
+export class HumanMoveRequest extends jspb.Message { 
     getSessionId(): string;
     setSessionId(value: string): HumanMoveRequest;
 
@@ -779,7 +779,7 @@ export namespace HumanMoveRequest {
     }
 }
 
-export class HumanMoveResponse extends jspb.Message {
+export class HumanMoveResponse extends jspb.Message { 
 
     serializeBinary(): Uint8Array;
     toObject(includeInstance?: boolean): HumanMoveResponse.AsObject;
@@ -796,7 +796,7 @@ export namespace HumanMoveResponse {
     }
 }
 
-export class HumanClickRequest extends jspb.Message {
+export class HumanClickRequest extends jspb.Message { 
     getSessionId(): string;
     setSessionId(value: string): HumanClickRequest;
 
@@ -837,7 +837,7 @@ export namespace HumanClickRequest {
     }
 }
 
-export class HumanClickResponse extends jspb.Message {
+export class HumanClickResponse extends jspb.Message { 
 
     serializeBinary(): Uint8Array;
     toObject(includeInstance?: boolean): HumanClickResponse.AsObject;
@@ -854,7 +854,7 @@ export namespace HumanClickResponse {
     }
 }
 
-export class HumanWheelScrollRequest extends jspb.Message {
+export class HumanWheelScrollRequest extends jspb.Message { 
     getSessionId(): string;
     setSessionId(value: string): HumanWheelScrollRequest;
 
@@ -901,7 +901,7 @@ export namespace HumanWheelScrollRequest {
     }
 }
 
-export class HumanWheelScrollResponse extends jspb.Message {
+export class HumanWheelScrollResponse extends jspb.Message { 
     getFinalX(): number;
     setFinalX(value: number): HumanWheelScrollResponse;
     getFinalY(): number;
@@ -924,7 +924,7 @@ export namespace HumanWheelScrollResponse {
     }
 }
 
-export class WaitForToggleConfirmationRequest extends jspb.Message {
+export class WaitForToggleConfirmationRequest extends jspb.Message { 
     getSessionId(): string;
     setSessionId(value: string): WaitForToggleConfirmationRequest;
 
@@ -967,7 +967,7 @@ export namespace WaitForToggleConfirmationRequest {
     }
 }
 
-export class WaitForToggleConfirmationResponse extends jspb.Message {
+export class WaitForToggleConfirmationResponse extends jspb.Message { 
     getSuccess(): boolean;
     setSuccess(value: boolean): WaitForToggleConfirmationResponse;
     getMessage(): string;
@@ -996,7 +996,7 @@ export namespace WaitForToggleConfirmationResponse {
     }
 }
 
-export class ValidateColumnsRequest extends jspb.Message {
+export class ValidateColumnsRequest extends jspb.Message { 
     getSessionId(): string;
     setSessionId(value: string): ValidateColumnsRequest;
 
@@ -1022,7 +1022,7 @@ export namespace ValidateColumnsRequest {
     }
 }
 
-export class ValidateColumnsResponse extends jspb.Message {
+export class ValidateColumnsResponse extends jspb.Message { 
     getValid(): boolean;
     setValid(value: boolean): ValidateColumnsResponse;
     clearMissingColumnsList(): void;
@@ -1055,7 +1055,7 @@ export namespace ValidateColumnsResponse {
     }
 }
 
-export class ColumnWidth extends jspb.Message {
+export class ColumnWidth extends jspb.Message { 
     getKey(): string;
     setKey(value: string): ColumnWidth;
     getTitle(): string;
@@ -1089,7 +1089,7 @@ export namespace ColumnWidth {
     }
 }
 
-export class CaptureColumnWidthsRequest extends jspb.Message {
+export class CaptureColumnWidthsRequest extends jspb.Message { 
     getSessionId(): string;
     setSessionId(value: string): CaptureColumnWidthsRequest;
 
@@ -1115,7 +1115,7 @@ export namespace CaptureColumnWidthsRequest {
     }
 }
 
-export class CaptureColumnWidthsResponse extends jspb.Message {
+export class CaptureColumnWidthsResponse extends jspb.Message { 
     getCaptured(): boolean;
     setCaptured(value: boolean): CaptureColumnWidthsResponse;
     clearColumnWidthsList(): void;
@@ -1151,7 +1151,7 @@ export namespace CaptureColumnWidthsResponse {
     }
 }
 
-export class ApplyColumnWidthsRequest extends jspb.Message {
+export class ApplyColumnWidthsRequest extends jspb.Message { 
     getSessionId(): string;
     setSessionId(value: string): ApplyColumnWidthsRequest;
 
@@ -1182,7 +1182,7 @@ export namespace ApplyColumnWidthsRequest {
     }
 }
 
-export class ApplyColumnWidthsResponse extends jspb.Message {
+export class ApplyColumnWidthsResponse extends jspb.Message { 
     getApplied(): boolean;
     setApplied(value: boolean): ApplyColumnWidthsResponse;
     clearMatchedColumnsList(): void;
@@ -1221,7 +1221,7 @@ export namespace ApplyColumnWidthsResponse {
     }
 }
 
-export class ScannedAdRow extends jspb.Message {
+export class ScannedAdRow extends jspb.Message { 
     getFbAdId(): string;
     setFbAdId(value: string): ScannedAdRow;
     getCampaignName(): string;
@@ -1313,7 +1313,7 @@ export namespace ScannedAdRow {
     }
 }
 
-export class HumanProfile extends jspb.Message {
+export class HumanProfile extends jspb.Message { 
     getSpeedFactor(): number;
     setSpeedFactor(value: number): HumanProfile;
     getJitterFactor(): number;

@@ -43,6 +43,7 @@ const parser_js_1 = require("./parser.js");
 const ads_table_js_1 = require("./ads-table.js");
 const humanizer_js_1 = require("./humanizer.js");
 const toggle_utils_js_1 = require("./toggle-utils.js");
+const ads_columns_js_1 = require("./ads-columns.js");
 const PORT = process.env.GRPC_PORT ? parseInt(process.env.GRPC_PORT, 10) : 50051;
 const sessionManager = new session_manager_js_1.SessionManager();
 const SESSION_STATUS_HEARTBEAT_MS = 5_000;
@@ -77,7 +78,8 @@ function getPage(session, pageId) {
     if (preferredPage && preferredPage !== session.primaryPage) {
         session.primaryPage = preferredPage;
     }
-    if (!session.primaryPage) {
+    const primaryPageClosed = typeof session.primaryPage?.isClosed === 'function' && session.primaryPage.isClosed();
+    if (!session.primaryPage || primaryPageClosed) {
         throw new Error('Основная страница браузера недоступна');
     }
     return session.primaryPage;
@@ -137,11 +139,11 @@ async function clickToggleAttempt(page, toggle, attempt) {
         return;
     }
     if (attempt === 2) {
-        await toggle.click({ force: true, timeout: 2500 });
+        await (0, humanizer_js_1.humanClick)(page, toggle, { doubleCheckPause: false });
         return;
     }
     await toggle.focus().catch(() => undefined);
-    await page.keyboard.press('Space');
+    await (0, humanizer_js_1.humanPressKey)(page, 'Space');
 }
 // --- Обработчики BrowserSessionService ---
 async function startBrowser(call, callback) {
@@ -729,11 +731,13 @@ async function humanClickHandler(call, callback) {
     try {
         const session = sessionManager.getSession(call.request.session_id);
         const page = getPage(session, call.request.page_id);
-        // Для клика по координатам работаем напрямую через мышь страницы.
-        await page.mouse.move(call.request.x, call.request.y);
+        const profile = call.request.profile ? mapProtoProfile(call.request.profile) : undefined;
+        await (0, humanizer_js_1.humanMove)(page, call.request.x, call.request.y, { profile });
+        await sleep(rand(80, 250));
         await page.mouse.down();
         await sleep(rand(60, 180));
         await page.mouse.up();
+        await sleep(rand(80, 240));
         callback(null, {});
     }
     catch (err) {
@@ -914,6 +918,22 @@ function mapProtoColumnWidth(raw) {
         widthPx: Number(raw.width_px || raw.widthPx || 0),
     };
 }
+function mergeColumnWidthTargets(savedTargets) {
+    if (savedTargets.length === 0)
+        return [];
+    const byKey = new Map();
+    for (const target of (0, ads_columns_js_1.buildAdsTableColumnWidthTargets)())
+        byKey.set(target.key, target);
+    for (const target of savedTargets) {
+        const fallback = byKey.get(target.key);
+        byKey.set(target.key, {
+            ...fallback,
+            ...target,
+            textNeedles: target.textNeedles?.length ? target.textNeedles : fallback?.textNeedles,
+        });
+    }
+    return Array.from(byKey.values());
+}
 async function captureColumnWidthsHandler(call, callback) {
     try {
         const session = getSessionForOptionalId(call.request.session_id);
@@ -945,7 +965,7 @@ async function applyColumnWidthsHandler(call, callback) {
         const columnWidths = Array.isArray(call.request.column_widths)
             ? call.request.column_widths.map(mapProtoColumnWidth).filter((column) => (column.key && column.surfaceKey && Number.isFinite(column.widthPx) && column.widthPx > 0))
             : [];
-        const result = await (0, ads_table_js_1.applyAdsTableColumnWidthPreset)(page, columnWidths);
+        const result = await (0, ads_table_js_1.applyAdsTableColumnWidthPreset)(page, mergeColumnWidthTargets(columnWidths));
         callback(null, {
             applied: result.applied,
             matched_columns: result.matchedColumns,
@@ -1002,6 +1022,14 @@ function main() {
             console.error(`Не удалось запустить gRPC-сервер: ${error.message}`);
             process.exit(1);
         }
+        // Явно держим event loop живым: в detached-запуске gRPC server может не удержать процесс сам.
+        const keepAliveTimer = setInterval(() => undefined, 60_000);
+        const shutdown = () => {
+            clearInterval(keepAliveTimer);
+            server.tryShutdown(() => process.exit(0));
+        };
+        process.once('SIGINT', shutdown);
+        process.once('SIGTERM', shutdown);
         console.log(`gRPC-сервер Browser Agent слушает порт ${port}`);
         server.start();
     });

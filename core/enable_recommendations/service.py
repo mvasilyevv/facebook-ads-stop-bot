@@ -246,13 +246,6 @@ def _is_zero_activity_row(row: ScannedAdRow) -> bool:
     )
 
 
-def _has_confirmed_enable_resume_signal(row: ScannedAdRow) -> bool:
-    """Разрешает resume только после подтверждённой регистрации или депозита."""
-    if row.registrations >= 1 and row.deposits >= 1:
-        return True
-    return row.registrations >= 1 and row.cost_per_registration is not None
-
-
 async def _has_manual_disable_auto_block(
     session: AsyncSession,
     *,
@@ -375,9 +368,6 @@ async def collect_enable_recommendation_candidates_for_snapshots(
             continue
 
         row = _build_scanned_row_from_snapshot(snapshot)
-        if not _has_confirmed_enable_resume_signal(row):
-            continue
-
         recommendation_level, evaluation = _evaluate_enable_recommendation(
             row=row,
             offer_cpa=Decimal(offer.cpa_amount),

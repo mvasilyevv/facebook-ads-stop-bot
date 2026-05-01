@@ -144,9 +144,9 @@ async def test_collect_enable_recommendation_candidates_builds_ok_candidate():
     )
 
 
-# Проверяем, что лиды без регистрации не дают resume-рекомендацию.
+# Проверяем, что лиды без регистрации дают resume-рекомендацию, если метрики не нарушены.
 @pytest.mark.asyncio
-async def test_collect_enable_recommendation_candidates_skips_lead_only_candidate():
+async def test_collect_enable_recommendation_candidates_allows_lead_only_candidate():
     offer_id = uuid.uuid4()
     snapshot = _snapshot(
         fb_ad_id="ad-lead-ok",
@@ -191,12 +191,19 @@ async def test_collect_enable_recommendation_candidates_skips_lead_only_candidat
     ):
         _, candidates = await collect_enable_recommendation_candidates(session)
 
-    assert candidates == []
+    assert len(candidates) == 1
+    assert candidates[0].fb_ad_id == "ad-lead-ok"
+    assert candidates[0].recommendation_level == EnableRecommendationLevel.OK
+    assert candidates[0].reason_title == "Строгая проверка пройдена"
+    assert (
+        candidates[0].reason_text
+        == "Есть лиды: 2 · CPL $0.3500. По текущим правилам блокирующих сигналов нет."
+    )
 
 
-# Проверяем, что клики без лида/регистрации не дают resume-рекомендацию.
+# Проверяем, что клики без лида/регистрации дают resume-рекомендацию, если метрики не нарушены.
 @pytest.mark.asyncio
-async def test_collect_enable_recommendation_candidates_skips_click_only_candidate():
+async def test_collect_enable_recommendation_candidates_allows_click_only_candidate():
     offer_id = uuid.uuid4()
     snapshot = _snapshot(
         fb_ad_id="ad-click-ok",
@@ -241,12 +248,19 @@ async def test_collect_enable_recommendation_candidates_skips_click_only_candida
     ):
         _, candidates = await collect_enable_recommendation_candidates(session)
 
-    assert candidates == []
+    assert len(candidates) == 1
+    assert candidates[0].fb_ad_id == "ad-click-ok"
+    assert candidates[0].recommendation_level == EnableRecommendationLevel.OK
+    assert candidates[0].reason_title == "Строгая проверка пройдена"
+    assert (
+        candidates[0].reason_text
+        == "Есть клики: 2 · CPC $0.0400. По текущим правилам блокирующих сигналов нет."
+    )
 
 
-# Проверяем, что сценарий DRC_CR2_CR009 с лидами без регистраций не уходит в авто-resume.
+# Проверяем, что DRC_CR2 с лидами без регистраций уходит в resume, если метрики не нарушены.
 @pytest.mark.asyncio
-async def test_collect_enable_recommendation_candidates_blocks_drc_cr009_lead_only_resume():
+async def test_collect_enable_recommendation_candidates_allows_drc_cr2_lead_only_resume():
     offer_id = uuid.uuid4()
     snapshot = _snapshot(
         fb_ad_id="120246606041500334",
@@ -288,10 +302,16 @@ async def test_collect_enable_recommendation_candidates_blocks_drc_cr009_lead_on
             "core.enable_recommendations.service._evaluate_enable_recommendation",
             return_value=(EnableRecommendationLevel.OK, _evaluation(None)),
         ),
+        patch(
+            "core.enable_recommendations.service.build_metrics_json",
+            return_value={"spend": "0.48"},
+        ),
     ):
         _, candidates = await collect_enable_recommendation_candidates(session)
 
-    assert candidates == []
+    assert len(candidates) == 1
+    assert candidates[0].fb_ad_id == "120246606041500334"
+    assert candidates[0].recommendation_level == EnableRecommendationLevel.OK
 
 
 # Проверяем, что NOT_DELIVERING больше не попадает в рекомендации на включение без реального OFF-тумблера.

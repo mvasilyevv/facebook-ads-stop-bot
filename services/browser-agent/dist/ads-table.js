@@ -268,13 +268,15 @@ async function applyAdsTableColumnWidthPreset(page, savedTargets = []) {
     try {
         const SCROLL_SETTLE_MS = 180;
         const RESIZE_SETTLE_MS = 220;
+        const SMALL_HORIZONTAL_SCROLL_PX = 80;
         const WIDTH_TOLERANCE_PX = 3;
         const MAX_HORIZONTAL_PASSES = Math.max(8, targets.length + 4);
         const totalWidthPx = targets.reduce((total, target) => total + target.widthPx, 0);
         const matchedColumns = new Set();
         const matchedKeys = new Set();
-        let adjustedCells = 0;
-        async function collectVisibleResizeCandidates() {
+        const draggedKeys = new Set();
+        const adjustedKeys = new Set();
+        async function collectVisibleResizeState() {
             return page.evaluate((columnTargets) => {
                 function normalizeText(value) {
                     return String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
@@ -312,7 +314,33 @@ async function applyAdsTableColumnWidthPreset(page, savedTargets = []) {
                     }
                     return null;
                 }
+                function getClippingBounds(node) {
+                    let left = 4;
+                    let right = window.innerWidth - 4;
+                    let top = 4;
+                    let bottom = window.innerHeight - 4;
+                    for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+                        const style = getComputedStyle(parent);
+                        const clipsX = ['auto', 'hidden', 'scroll', 'clip'].includes(style.overflowX);
+                        const clipsY = ['auto', 'hidden', 'scroll', 'clip'].includes(style.overflowY);
+                        if (!clipsX && !clipsY)
+                            continue;
+                        const rect = parent.getBoundingClientRect();
+                        if (rect.width <= 0 || rect.height <= 0)
+                            continue;
+                        if (clipsX) {
+                            left = Math.max(left, rect.left + 2);
+                            right = Math.min(right, rect.right - 2);
+                        }
+                        if (clipsY) {
+                            top = Math.max(top, rect.top + 2);
+                            bottom = Math.min(bottom, rect.bottom - 2);
+                        }
+                    }
+                    return { left, right, top, bottom };
+                }
                 const candidates = new Map();
+                const blockedKeys = new Set();
                 const headerNodes = Array.from(document.querySelectorAll('[data-surface*="table_column_header:"]'));
                 for (const headerNode of headerNodes) {
                     const surfaceKey = readSurfaceKey(headerNode);
@@ -321,15 +349,27 @@ async function applyAdsTableColumnWidthPreset(page, savedTargets = []) {
                     if (!target || candidates.has(target.key))
                         continue;
                     const cell = findColumnCell(headerNode);
-                    const separator = cell?.querySelector('._4lg9[role="separator"], [role="separator"]');
-                    if (!(cell instanceof HTMLElement) || !(separator instanceof HTMLElement))
+                    if (!(cell instanceof HTMLElement))
                         continue;
                     const cellRect = cell.getBoundingClientRect();
+                    if (cellRect.width <= 20 || cellRect.height <= 20)
+                        continue;
+                    const separator = cell.querySelector('._4lg9[role="separator"], [role="separator"]');
+                    if (!(separator instanceof HTMLElement)) {
+                        blockedKeys.add(target.key);
+                        continue;
+                    }
                     const separatorRect = separator.getBoundingClientRect();
-                    if (cellRect.width <= 20
-                        || cellRect.height <= 20
-                        || separatorRect.width <= 0
-                        || separatorRect.height <= 0) {
+                    const separatorX = separatorRect.left + separatorRect.width / 2;
+                    const separatorY = separatorRect.top + separatorRect.height / 2;
+                    const clipping = getClippingBounds(separator);
+                    if (separatorRect.width <= 0
+                        || separatorRect.height <= 0
+                        || separatorX < clipping.left
+                        || separatorX > clipping.right
+                        || separatorY < clipping.top
+                        || separatorY > clipping.bottom) {
+                        blockedKeys.add(target.key);
                         continue;
                     }
                     candidates.set(target.key, {
@@ -337,13 +377,75 @@ async function applyAdsTableColumnWidthPreset(page, savedTargets = []) {
                         title: target.title,
                         widthPx: target.widthPx,
                         currentWidthPx: cellRect.width,
-                        separatorX: separatorRect.left + separatorRect.width / 2,
-                        separatorY: separatorRect.top + separatorRect.height / 2,
+                        separatorX,
+                        separatorY,
                         left: cellRect.left,
+                        clipLeft: clipping.left,
+                        clipRight: clipping.right,
                     });
                 }
-                return Array.from(candidates.values()).sort((left, right) => left.left - right.left);
+                return {
+                    candidates: Array.from(candidates.values()).sort((left, right) => left.left - right.left),
+                    blockedKeys: Array.from(blockedKeys),
+                };
             }, targets);
+        }
+        async function readVisibleColumnWidth(targetKey) {
+            return page.evaluate((args) => {
+                function normalizeText(value) {
+                    return String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+                }
+                function readSurfaceKey(el) {
+                    const surface = el.getAttribute('data-surface') || '';
+                    const match = surface.match(/table_column_header:([^/]+)/);
+                    return match ? match[1] : '';
+                }
+                function targetMatches(target, surfaceKey, text) {
+                    const normalizedText = normalizeText(text);
+                    const titleMatches = Boolean(normalizedText) && normalizedText === normalizeText(target.title);
+                    if (target.surfaceKey !== surfaceKey)
+                        return titleMatches;
+                    if (!target.textNeedles?.length)
+                        return true;
+                    if (!normalizedText)
+                        return true;
+                    return titleMatches
+                        || target.textNeedles.some((needle) => normalizedText.includes(normalizeText(needle)));
+                }
+                function findColumnCell(headerNode) {
+                    const directCell = headerNode.closest('._4lg0');
+                    if (directCell instanceof HTMLElement) {
+                        const rect = directCell.getBoundingClientRect();
+                        if (rect.width > 20 && rect.height > 20)
+                            return directCell;
+                    }
+                    let node = headerNode.parentElement;
+                    while (node instanceof HTMLElement) {
+                        const rect = node.getBoundingClientRect();
+                        if (rect.width > 20 && rect.height > 20 && node.style.width)
+                            return node;
+                        node = node.parentElement;
+                    }
+                    return null;
+                }
+                const target = args.columnTargets.find((item) => item.key === args.targetKey);
+                if (!target)
+                    return null;
+                const headerNodes = Array.from(document.querySelectorAll('[data-surface*="table_column_header:"]'));
+                for (const headerNode of headerNodes) {
+                    const surfaceKey = readSurfaceKey(headerNode);
+                    const text = headerNode.textContent || '';
+                    if (!targetMatches(target, surfaceKey, text))
+                        continue;
+                    const cell = findColumnCell(headerNode);
+                    if (!(cell instanceof HTMLElement))
+                        continue;
+                    const rect = cell.getBoundingClientRect();
+                    if (rect.width > 20 && rect.height > 20)
+                        return rect.width;
+                }
+                return null;
+            }, { columnTargets: targets, targetKey });
         }
         async function resetHorizontalScroll() {
             await page.evaluate(() => {
@@ -372,14 +474,16 @@ async function applyAdsTableColumnWidthPreset(page, savedTargets = []) {
                     for (const node of document.querySelectorAll(selector))
                         addScrollable(node);
                 }
+                for (const node of document.querySelectorAll('*'))
+                    addScrollable(node);
                 for (const node of scrollables) {
                     node.scrollLeft = 0;
                     node.dispatchEvent(new Event('scroll', { bubbles: true }));
                 }
             });
         }
-        async function scrollRight() {
-            return page.evaluate(() => {
+        async function scrollRight(stepPx = null) {
+            return page.evaluate((requestedStepPx) => {
                 const seen = new Set();
                 const scrollables = [];
                 function addScrollable(node) {
@@ -405,6 +509,8 @@ async function applyAdsTableColumnWidthPreset(page, savedTargets = []) {
                     for (const node of document.querySelectorAll(selector))
                         addScrollable(node);
                 }
+                for (const node of document.querySelectorAll('*'))
+                    addScrollable(node);
                 scrollables.sort((left, right) => {
                     const leftMax = left.scrollWidth - left.clientWidth;
                     const rightMax = right.scrollWidth - right.clientWidth;
@@ -415,8 +521,9 @@ async function applyAdsTableColumnWidthPreset(page, savedTargets = []) {
                     return { moved: false, atRight: true, scrollLeft: 0, maxScrollLeft: 0 };
                 const maxScrollLeft = Math.max(scroller.scrollWidth - scroller.clientWidth, 0);
                 const prevScrollLeft = Math.max(scroller.scrollLeft, 0);
-                const stepPx = Math.max(160, Math.round(scroller.clientWidth * 0.75));
-                scroller.scrollLeft = Math.min(prevScrollLeft + stepPx, maxScrollLeft);
+                const defaultStepPx = Math.max(160, Math.round(scroller.clientWidth * 0.75));
+                const nextStepPx = requestedStepPx && requestedStepPx > 0 ? requestedStepPx : defaultStepPx;
+                scroller.scrollLeft = Math.min(prevScrollLeft + nextStepPx, maxScrollLeft);
                 scroller.dispatchEvent(new Event('scroll', { bubbles: true }));
                 const nextScrollLeft = Math.max(scroller.scrollLeft, 0);
                 return {
@@ -425,40 +532,199 @@ async function applyAdsTableColumnWidthPreset(page, savedTargets = []) {
                     scrollLeft: nextScrollLeft,
                     maxScrollLeft,
                 };
-            });
+            }, stepPx);
+        }
+        async function scrollLeft(stepPx = null) {
+            return page.evaluate((requestedStepPx) => {
+                const seen = new Set();
+                const scrollables = [];
+                function addScrollable(node) {
+                    if (!(node instanceof HTMLElement) || seen.has(node))
+                        return;
+                    seen.add(node);
+                    if (node.clientWidth > 80 && node.scrollWidth - node.clientWidth > 8)
+                        scrollables.push(node);
+                }
+                const anchors = [
+                    document.querySelector('[data-surface*="table_column_header:"]'),
+                    document.querySelector('[data-surface*="table_row:"], ._1gda._2djg'),
+                    document.querySelector('[role="grid"]'),
+                    document.querySelector('[role="table"]'),
+                    document.querySelector('[aria-rowcount]'),
+                ];
+                for (const anchor of anchors) {
+                    for (let node = anchor; node; node = node.parentElement) {
+                        addScrollable(node);
+                    }
+                }
+                for (const selector of ['[role="grid"]', '[role="table"]', '[aria-rowcount]']) {
+                    for (const node of document.querySelectorAll(selector))
+                        addScrollable(node);
+                }
+                for (const node of document.querySelectorAll('*'))
+                    addScrollable(node);
+                scrollables.sort((left, right) => {
+                    const leftMax = left.scrollWidth - left.clientWidth;
+                    const rightMax = right.scrollWidth - right.clientWidth;
+                    return rightMax - leftMax;
+                });
+                const scroller = scrollables[0] || null;
+                if (!scroller)
+                    return { moved: false, atRight: true, scrollLeft: 0, maxScrollLeft: 0 };
+                const maxScrollLeft = Math.max(scroller.scrollWidth - scroller.clientWidth, 0);
+                const prevScrollLeft = Math.max(scroller.scrollLeft, 0);
+                const defaultStepPx = Math.max(160, Math.round(scroller.clientWidth * 0.75));
+                const nextStepPx = requestedStepPx && requestedStepPx > 0 ? requestedStepPx : defaultStepPx;
+                scroller.scrollLeft = Math.max(prevScrollLeft - nextStepPx, 0);
+                scroller.dispatchEvent(new Event('scroll', { bubbles: true }));
+                const nextScrollLeft = Math.max(scroller.scrollLeft, 0);
+                return {
+                    moved: nextScrollLeft < prevScrollLeft - 2,
+                    atRight: maxScrollLeft <= 0 || nextScrollLeft >= maxScrollLeft - 4,
+                    scrollLeft: nextScrollLeft,
+                    maxScrollLeft,
+                };
+            }, stepPx);
+        }
+        function markMatched(candidate) {
+            matchedColumns.add(candidate.title);
+            matchedKeys.add(candidate.key);
+            if (draggedKeys.has(candidate.key))
+                adjustedKeys.add(candidate.key);
+        }
+        async function dismissResizeObstructions() {
+            await page.keyboard.press('Escape').catch(() => undefined);
+            await page.mouse.move(8, 8).catch(() => undefined);
+            await page.waitForTimeout(80);
         }
         async function resizeVisibleCandidate(candidate) {
             const deltaPx = Math.round(candidate.widthPx - candidate.currentWidthPx);
-            matchedColumns.add(candidate.title);
-            matchedKeys.add(candidate.key);
-            if (Math.abs(deltaPx) <= WIDTH_TOLERANCE_PX)
-                return false;
+            if (Math.abs(deltaPx) <= WIDTH_TOLERANCE_PX) {
+                markMatched(candidate);
+                return {
+                    matched: true,
+                    changed: false,
+                    needsScrollLeft: false,
+                    needsScrollRight: false,
+                };
+            }
+            const viewport = page.viewportSize();
+            const viewportWidth = viewport?.width ?? await page.evaluate(() => window.innerWidth);
+            const minDragX = 6;
+            const maxDragX = Math.max(minDragX + 2, viewportWidth - 6);
+            let endX = candidate.separatorX + deltaPx;
+            const clampedLeft = deltaPx < 0 && endX < minDragX;
+            const clampedRight = deltaPx > 0 && endX > maxDragX;
+            if (clampedLeft)
+                endX = minDragX;
+            if (clampedRight)
+                endX = maxDragX;
+            if (!Number.isFinite(endX) || Math.abs(endX - candidate.separatorX) < 2) {
+                return {
+                    matched: false,
+                    changed: false,
+                    needsScrollLeft: clampedLeft,
+                    needsScrollRight: clampedRight,
+                };
+            }
             const steps = Math.max(3, Math.min(12, Math.ceil(Math.abs(deltaPx) / 18)));
+            await dismissResizeObstructions();
             await page.mouse.move(candidate.separatorX, candidate.separatorY);
             await page.mouse.down();
-            await page.mouse.move(candidate.separatorX + deltaPx, candidate.separatorY, { steps });
+            await page.mouse.move(endX, candidate.separatorY, { steps });
             await page.mouse.up();
+            await dismissResizeObstructions();
             await page.waitForTimeout(RESIZE_SETTLE_MS);
-            return true;
+            draggedKeys.add(candidate.key);
+            const actualWidth = await readVisibleColumnWidth(candidate.key);
+            const strictWidthMatched = actualWidth !== null
+                && Math.abs(candidate.widthPx - actualWidth) <= WIDTH_TOLERANCE_PX;
+            const dragWasFullyInsideViewport = !clampedLeft && !clampedRight;
+            if (strictWidthMatched || (actualWidth === null && dragWasFullyInsideViewport)) {
+                markMatched(candidate);
+                return {
+                    matched: true,
+                    changed: true,
+                    needsScrollLeft: false,
+                    needsScrollRight: false,
+                };
+            }
+            const previousGap = Math.abs(candidate.widthPx - candidate.currentWidthPx);
+            const actualGap = actualWidth === null ? previousGap : Math.abs(candidate.widthPx - actualWidth);
+            const widthImproved = actualWidth !== null && actualGap < previousGap - WIDTH_TOLERANCE_PX;
+            if (dragWasFullyInsideViewport && !widthImproved) {
+                return {
+                    matched: false,
+                    changed: false,
+                    needsScrollLeft: false,
+                    needsScrollRight: false,
+                };
+            }
+            return {
+                matched: false,
+                changed: true,
+                needsScrollLeft: clampedLeft
+                    && (actualWidth === null || actualWidth > candidate.widthPx + WIDTH_TOLERANCE_PX),
+                needsScrollRight: clampedRight
+                    && (actualWidth === null || actualWidth < candidate.widthPx - WIDTH_TOLERANCE_PX),
+            };
         }
         async function resizeVisibleColumns() {
+            const blockedInPass = new Set();
             for (let guard = 0; guard < targets.length + 2; guard += 1) {
-                const candidates = await collectVisibleResizeCandidates();
-                const candidate = candidates.find((item) => !matchedKeys.has(item.key));
-                if (!candidate)
-                    return;
-                const resized = await resizeVisibleCandidate(candidate);
-                adjustedCells += 1;
-                if (!resized)
+                const scan = await collectVisibleResizeState();
+                const candidate = scan.candidates.find((item) => (!matchedKeys.has(item.key) && !blockedInPass.has(item.key)));
+                if (!candidate) {
+                    return {
+                        needsSeparatorNudge: matchedKeys.size < targets.length
+                            && (scan.blockedKeys.some((key) => !matchedKeys.has(key))
+                                || blockedInPass.size > 0),
+                        needsScrollLeft: false,
+                    };
+                }
+                const outcome = await resizeVisibleCandidate(candidate);
+                if (outcome.matched)
                     continue;
+                if (outcome.needsScrollLeft) {
+                    return { needsSeparatorNudge: false, needsScrollLeft: true };
+                }
+                if (outcome.needsScrollRight) {
+                    return { needsSeparatorNudge: true, needsScrollLeft: false };
+                }
+                if (outcome.changed)
+                    continue;
+                blockedInPass.add(candidate.key);
             }
+            return { needsSeparatorNudge: false, needsScrollLeft: false };
         }
         await resetHorizontalScroll();
         await page.waitForTimeout(SCROLL_SETTLE_MS);
         for (let pass = 0; pass < MAX_HORIZONTAL_PASSES; pass += 1) {
-            await resizeVisibleColumns();
+            const resizeState = await resizeVisibleColumns();
             if (matchedKeys.size >= targets.length)
                 break;
+            if (resizeState.needsScrollLeft) {
+                const backtrack = await scrollLeft();
+                await page.waitForTimeout(SCROLL_SETTLE_MS);
+                if (backtrack.moved) {
+                    await resizeVisibleColumns();
+                    if (matchedKeys.size >= targets.length)
+                        break;
+                    continue;
+                }
+            }
+            if (resizeState.needsSeparatorNudge) {
+                const matchedBeforeNudge = matchedKeys.size;
+                const nudge = await scrollRight(SMALL_HORIZONTAL_SCROLL_PX);
+                await page.waitForTimeout(SCROLL_SETTLE_MS);
+                if (nudge.moved) {
+                    await resizeVisibleColumns();
+                    if (matchedKeys.size >= targets.length)
+                        break;
+                    if (matchedKeys.size > matchedBeforeNudge)
+                        continue;
+                }
+            }
             const scroll = await scrollRight();
             await page.waitForTimeout(SCROLL_SETTLE_MS);
             if (!scroll.moved || scroll.atRight) {
@@ -472,13 +738,15 @@ async function applyAdsTableColumnWidthPreset(page, savedTargets = []) {
             .filter((target) => !matchedKeys.has(target.key))
             .map((target) => target.title);
         const result = {
-            applied: adjustedCells > 0,
+            applied: matchedKeys.size > 0 && missingColumns.length === 0,
             matchedColumns: Array.from(matchedColumns),
-            missingColumns: matchedKeys.size === 0 ? missingColumns : [],
+            missingColumns,
             errorMessage: matchedKeys.size === 0
                 ? 'Не найдены видимые separator-элементы таблицы Ads Manager для автоширины'
-                : '',
-            adjustedCells,
+                : missingColumns.length > 0
+                    ? `Не обработаны колонки автоширины: ${missingColumns.join(', ')}`
+                    : '',
+            adjustedCells: adjustedKeys.size,
             totalWidthPx,
         };
         return {

@@ -11,6 +11,17 @@ export declare function humanClick(page: Page, element: ElementHandle, options?:
     doubleCheckPause?: boolean;
     profile?: HumanProfile;
 }): Promise<void>;
+export declare function humanPressKey(page: Page, key: string, options?: {
+    profile?: HumanProfile;
+    beforeRange?: [number, number];
+    afterRange?: [number, number];
+}): Promise<void>;
+export declare function humanTypeText(page: Page, element: ElementHandle, text: string, options?: {
+    clearBefore?: boolean;
+    submitKey?: string;
+    profile?: HumanProfile;
+    perCharDelayRange?: [number, number];
+}): Promise<void>;
 export declare function humanScrollToFind(page: Page, selector: string, options?: {
     maxSteps?: number;
     stepPx?: number;

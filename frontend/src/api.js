@@ -172,6 +172,15 @@ export const openCreativeOutputFolder = (path) =>
     body: JSON.stringify({ path }),
   });
 
+// --- Скрипты: создание кампании из папки креативов ---
+export const getCampaignCreativeFolders = () => request('/tools/campaign-create/folders');
+
+export const buildCampaignCreatePlan = (data) =>
+  request('/tools/campaign-create/plan', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+
 // Telegram получатели (мультипользователи)
 export const getTelegramRecipients = () => request('/settings/telegram/recipients');
 export const deleteTelegramRecipient = (id) =>

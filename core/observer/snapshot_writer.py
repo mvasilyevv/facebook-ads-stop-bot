@@ -542,7 +542,7 @@ async def batch_save_snapshots(
     *,
     allow_cabinet_rollover: bool = True,
     bypass_scan_guard: bool = False,
-) -> None:
+) -> bool:
     """Батчевый upsert снэпшотов через INSERT ... ON CONFLICT DO UPDATE.
 
     Принимает список словарей с данными для AdSnapshot.
@@ -551,9 +551,9 @@ async def batch_save_snapshots(
     STOP-строк быстрого стопа, а не для полного среза сканирования.
     """
     if not snapshot_data:
-        return
+        return False
     if not bypass_scan_guard and scan_guard.should_skip(snapshot_data):
-        return
+        return False
 
     factory = get_session_factory()
     async with factory() as session:
@@ -583,3 +583,4 @@ async def batch_save_snapshots(
         )
 
         await session.commit()
+        return True

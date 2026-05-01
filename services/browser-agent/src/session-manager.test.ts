@@ -13,8 +13,8 @@ test('isAdsManagerUrl detects ads manager pages', () => {
 
 // Проверяем, что primary page выбирается по вкладке Ads Manager, а не по первой вкладке профиля.
 test('findPreferredPrimaryPage prefers ads manager tab over first page', () => {
-  const inboxPage = { url: () => 'https://www.facebook.com/messages/' };
-  const adsPage = { url: () => 'https://www.facebook.com/adsmanager/manage/campaigns' };
+  const inboxPage = { isClosed: () => false, url: () => 'https://www.facebook.com/messages/' };
+  const adsPage = { isClosed: () => false, url: () => 'https://www.facebook.com/adsmanager/manage/campaigns' };
   const browser = {
     contexts: () => [
       { pages: () => [inboxPage, adsPage] },
@@ -26,7 +26,7 @@ test('findPreferredPrimaryPage prefers ads manager tab over first page', () => {
 
 // Проверяем, что при отсутствии Ads Manager helper возвращает первую доступную вкладку.
 test('findPreferredPrimaryPage falls back to first available page', () => {
-  const firstPage = { url: () => 'https://www.facebook.com/' };
+  const firstPage = { isClosed: () => false, url: () => 'https://www.facebook.com/' };
   const browser = {
     contexts: () => [
       { pages: () => [firstPage] },
@@ -34,6 +34,19 @@ test('findPreferredPrimaryPage falls back to first available page', () => {
   };
 
   assert.equal(findPreferredPrimaryPage(browser as any), firstPage);
+});
+
+// Проверяем, что закрытая вкладка не возвращается как рабочая primaryPage.
+test('findPreferredPrimaryPage игнорирует закрытые вкладки', () => {
+  const closedAdsPage = { isClosed: () => true, url: () => 'https://www.facebook.com/adsmanager/manage/campaigns' };
+  const openAdsPage = { isClosed: () => false, url: () => 'https://adsmanager.facebook.com/adsmanager/manage/campaigns' };
+  const browser = {
+    contexts: () => [
+      { pages: () => [closedAdsPage, openAdsPage] },
+    ],
+  };
+
+  assert.equal(findPreferredPrimaryPage(browser as any), openAdsPage);
 });
 
 function makeSession(overrides: Record<string, unknown> = {}) {

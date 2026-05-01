@@ -1,5 +1,5 @@
 import {
-  ComposedChart, Area, Bar, XAxis, YAxis,
+  ComposedChart, Bar, Line, XAxis, YAxis,
   CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from 'recharts';
 import {
@@ -60,37 +60,31 @@ export function SpendAlertsChart({ spendData = [], alertsData = [] }) {
     return (
       <div>
         <h3 className="mb-3 text-2xs font-bold uppercase tracking-widest text-muted">
-          Расход и алерты — сегодня по часам
+          Расход и алерты — сегодня по 30 минутам
         </h3>
         <div className="py-8 text-center text-sm text-muted">Нет данных за сегодня</div>
       </div>
     );
   }
 
-  // Авто-интервал: при ≤12 точках показываем все метки, при большем — каждую 3-ю
-  const tickInterval = labels.length <= 12 ? 0 : 3;
+  // Авто-интервал: при ≤16 точках показываем все метки, при большем — каждую 3-ю.
+  const tickInterval = labels.length <= 16 ? 0 : 3;
 
   return (
     <div>
       <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
         <div>
           <h3 className="text-2xs font-bold uppercase tracking-widest text-muted">
-            Расход и алерты — сегодня по часам
+            Расход и алерты — сегодня по 30 минутам
           </h3>
           <p className="mt-1 text-2xs text-secondary">
-            Сопоставление расхода и моментов, где появились предупреждения или стопы.
+            30-минутная динамика расхода и моменты появления предупреждений или стопов.
           </p>
         </div>
       </div>
 
       <ResponsiveContainer width="100%" height={260}>
         <ComposedChart data={chartData} margin={{ top: 8, right: 18, left: 0, bottom: 0 }}>
-          <defs>
-            <linearGradient id="spendArea" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor={CHART_COLORS.spend} stopOpacity={0.34} />
-              <stop offset="100%" stopColor={CHART_COLORS.spend} stopOpacity={0.02} />
-            </linearGradient>
-          </defs>
           <CartesianGrid strokeDasharray="0" stroke={CHART_COLORS.grid} vertical={false} />
           <XAxis
             dataKey="label"
@@ -119,23 +113,22 @@ export function SpendAlertsChart({ spendData = [], alertsData = [] }) {
             wrapperStyle={{ fontSize: '12px', color: CHART_COLORS.tick, paddingTop: '8px' }}
             formatter={(v) => CHART_SERIES_LABELS[v] || v}
           />
-          {hasSpend && (
-            <Area
-              yAxisId="spend"
-              type="monotone"
-              dataKey="spend"
-              stroke={CHART_COLORS.spend}
-              fill="url(#spendArea)"
-              strokeWidth={2.5}
-              dot={false}
-              activeDot={{ r: 4, fill: CHART_COLORS.spend }}
-            />
-          )}
           {hasAlerts && (
             <>
               <Bar yAxisId="alerts" dataKey="warning" stackId="alerts" fill={CHART_COLORS.warning} radius={[2, 2, 0, 0]} opacity={0.9} />
               <Bar yAxisId="alerts" dataKey="stop" stackId="alerts" fill={CHART_COLORS.stop} radius={[2, 2, 0, 0]} opacity={0.95} />
             </>
+          )}
+          {hasSpend && (
+            <Line
+              yAxisId="spend"
+              type="monotone"
+              dataKey="spend"
+              stroke={CHART_COLORS.spend}
+              strokeWidth={3}
+              dot={false}
+              activeDot={{ r: 4, fill: CHART_COLORS.spend }}
+            />
           )}
         </ComposedChart>
       </ResponsiveContainer>

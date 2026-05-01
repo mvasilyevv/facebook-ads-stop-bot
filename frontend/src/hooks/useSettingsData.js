@@ -554,10 +554,14 @@ export function useSettingsData() {
         });
         return;
       }
+      const matchedCount = Array.isArray(response.matched_columns)
+        ? response.matched_columns.length
+        : 0;
+      const adjustedCount = response.adjusted_cells || 0;
       setToast({
         message: response.used_saved_widths
-          ? `Сохранённые ширины применены (${response.adjusted_cells || 0} колонок)`
-          : `Автоширина колонок применена (${response.adjusted_cells || 0} колонок)`,
+          ? `Сохранённые ширины применены: обработано ${matchedCount}, изменено ${adjustedCount}`
+          : `Автоширина колонок применена: обработано ${matchedCount}, изменено ${adjustedCount}`,
         type: 'success',
       });
     } catch (err) {

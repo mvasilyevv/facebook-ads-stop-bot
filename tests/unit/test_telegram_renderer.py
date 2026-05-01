@@ -120,14 +120,14 @@ def test_build_detailed_metrics_block_hides_zeros():
 # --- render_alert_message ---
 
 
-# Проверяем, что STOP рендерит rule_summary и compact identity.
+# Проверяем, что STOP рендерит полный формат без обрезки названий.
 def test_render_alert_message_includes_rule_summaries():
     item = TelegramAlertItem(
         snapshot_id="snap-1",
         fb_ad_id="ad-1",
-        ad_name="DRC_CR2_CR017",
-        campaign_name="Campaign A",
-        adset_name="Adset A",
+        ad_name="DRC_CR2_CR017_FULL_AD_NAME_WITH_LONG_SUFFIX",
+        campaign_name="Campaign A With Long Full Name",
+        adset_name="Adset A With Long Full Name",
         offer_code="offer-a",
         stage=AlertStage.STOP,
         alert_state=AlertState.CLAIMED,
@@ -149,19 +149,25 @@ def test_render_alert_message_includes_rule_summaries():
 
     message = render_alert_message(stage=AlertStage.STOP, items=[item])
 
-    # Заголовок: стадия + причина в одной строке
-    assert "🔴" in message.text
-    assert "СТОП" in message.text
+    assert "<b>STOP</b>" in message.text
+    assert "Campaign A With Long Full Name" in message.text
+    assert "Adset A With Long Full Name" in message.text
+    assert "DRC_CR2_CR017_FULL_AD_NAME_WITH_LONG_SUFFIX" in message.text
+    assert "…" not in message.text
     assert "Дорогой клик" in message.text
-    # Expandable блок с метриками
-    assert "<blockquote expandable>" in message.text
-    # Убраны старые элементы
+    assert "<b>Метрики на момент стопа:</b>" in message.text
+    assert "Расход: $0.09" in message.text
+    assert "CPC: $0.0900" in message.text
+    assert "Создана задача на отключение." in message.text
+    # Убраны старые элементы и эмодзи из alert-тела
+    assert "🔴" not in message.text
+    assert "💸" not in message.text
+    assert "<blockquote expandable>" not in message.text
     assert "Пороговые детали" not in message.text
-    assert "Ключевые метрики" not in message.text
     assert "Следующее действие" not in message.text
 
 
-# Проверяем, что traffic_diagnostics отображается в expandable-блоке.
+# Проверяем, что traffic_diagnostics отображается отдельным блоком.
 def test_render_alert_message_uses_human_readable_traffic_diagnostics():
     item = TelegramAlertItem(
         snapshot_id="snap-2b",
@@ -197,10 +203,12 @@ def test_render_alert_message_uses_human_readable_traffic_diagnostics():
 
     message = render_alert_message(stage=AlertStage.WARNING, items=[item])
 
-    # Диагностика в expandable-блоке
+    # Диагностика в отдельном блоке
+    assert "<b>WARNING</b>" in message.text
+    assert "<b>Диагностика:</b>" in message.text
     assert "CPM заметно выше недавней медианы" in message.text
     assert "Частота уже растёт" in message.text
-    # Сырые числа CPM/Frequency НЕ дублируются вне expandable
+    # Сырые числа CPM/Frequency НЕ дублируются
     assert "CPM: $7.5000" not in message.text
     assert "Частота: 1.4000" not in message.text
 
@@ -231,7 +239,7 @@ def test_render_alert_message_stop_has_no_global_buttons():
 
     message = render_alert_message(stage=AlertStage.STOP, items=[item])
 
-    assert "Авто-отключение запущено" in message.text
+    assert "Создана задача на отключение." in message.text
     assert message.reply_markup is None
 
 
