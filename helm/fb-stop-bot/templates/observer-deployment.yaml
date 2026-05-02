@@ -1,0 +1,34 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fb-stop-bot-observer
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "fb-stop-bot.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker-observer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "fb-stop-bot.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: worker-observer
+  template:
+    metadata:
+      labels:
+        {{- include "fb-stop-bot.labels" . | nindent 8 }}
+        app.kubernetes.io/component: worker-observer
+    spec:
+      containers:
+        - name: worker
+          image: "{{ .Values.image.registry }}/{{ .Values.image.workers.repository }}:{{ .Values.image.workers.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: WORKER_TYPE
+              value: "observer"
+          envFrom:
+            - configMapRef:
+                name: fb-stop-bot-config
+            - secretRef:
+                name: fb-stop-bot-secrets
+          resources:
+            {{- toYaml .Values.resources.worker | nindent 12 }}

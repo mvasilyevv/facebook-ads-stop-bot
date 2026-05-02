@@ -1,0 +1,76 @@
+{{/* Один Deployment + Service на каждый Vision-профиль из browserAgents */}}
+{{- range .Values.browserAgents }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: browser-agent-{{ .slug }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "fb-stop-bot.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: browser-agent
+    browser-agent/slug: {{ .slug }}
+spec:
+  replicas: {{ .replicas | default 1 }}
+  selector:
+    matchLabels:
+      {{- include "fb-stop-bot.selectorLabels" $ | nindent 6 }}
+      app.kubernetes.io/component: browser-agent
+      browser-agent/slug: {{ .slug }}
+  template:
+    metadata:
+      labels:
+        {{- include "fb-stop-bot.labels" $ | nindent 8 }}
+        app.kubernetes.io/component: browser-agent
+        browser-agent/slug: {{ .slug }}
+    spec:
+      containers:
+        - name: browser-agent
+          image: "{{ $.Values.image.registry }}/{{ $.Values.image.browserAgent.repository }}:{{ $.Values.image.browserAgent.tag }}"
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          ports:
+            - containerPort: 50051
+              name: grpc
+          env:
+            - name: VISION_PROFILE_ID
+              value: {{ .visionProfileId | quote }}
+            - name: VISION_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: fb-stop-bot-config
+                  key: VISION_HOST
+            - name: VISION_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: fb-stop-bot-config
+                  key: VISION_PORT
+            - name: VISION_X_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: fb-stop-bot-secrets
+                  key: VISION_X_TOKEN
+            - name: GRPC_PORT
+              value: "50051"
+          resources:
+            {{- toYaml $.Values.resources.browserAgent | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: browser-agent-{{ .slug }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "fb-stop-bot.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: browser-agent
+    browser-agent/slug: {{ .slug }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "fb-stop-bot.selectorLabels" $ | nindent 4 }}
+    app.kubernetes.io/component: browser-agent
+    browser-agent/slug: {{ .slug }}
+  ports:
+    - port: 50051
+      targetPort: 50051
+      name: grpc
+{{- end }}

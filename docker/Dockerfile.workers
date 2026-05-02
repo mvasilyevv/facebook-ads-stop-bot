@@ -1,0 +1,13 @@
+# Универсальный образ для всех Python-воркеров
+# Воркер выбирается через переменную окружения WORKER_TYPE
+FROM fb-stop-bot/python-base:latest AS runtime
+
+# Копируем entrypoint-скрипт
+COPY docker/worker-entrypoint.sh /usr/local/bin/worker-entrypoint.sh
+RUN chmod +x /usr/local/bin/worker-entrypoint.sh
+
+# WORKER_TYPE должен быть переопределён при запуске контейнера
+# Допустимые значения: observer, disable, enable, enable_recommendation, telegram_poller, health_watchdog
+ENV WORKER_TYPE=observer
+
+ENTRYPOINT ["/usr/local/bin/worker-entrypoint.sh"]

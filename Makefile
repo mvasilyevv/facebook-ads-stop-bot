@@ -172,3 +172,40 @@ tma-dev: ## Запустить Telegram Mini App в dev-режиме (порт 5
 
 tma-build: ## Собрать Telegram Mini App
 	cd frontend-mini && $(NPM) ci && $(NPM) run build
+
+# ─── Kubernetes ──────────────────────────────────────────────────────────────
+
+DOCKER_REGISTRY ?= localhost
+IMAGE_TAG ?= latest
+
+.PHONY: docker-build k3s-import helm-install helm-uninstall k8s-logs
+
+docker-build: ## Собрать все Docker-образы
+	docker build -f docker/Dockerfile.python-base -t $(DOCKER_REGISTRY)/fb-stop-bot/python-base:$(IMAGE_TAG) .
+	docker build -f docker/Dockerfile.api -t $(DOCKER_REGISTRY)/fb-stop-bot/api:$(IMAGE_TAG) \
+		--build-arg BASE_IMAGE=$(DOCKER_REGISTRY)/fb-stop-bot/python-base:$(IMAGE_TAG) .
+	docker build -f docker/Dockerfile.workers -t $(DOCKER_REGISTRY)/fb-stop-bot/workers:$(IMAGE_TAG) \
+		--build-arg BASE_IMAGE=$(DOCKER_REGISTRY)/fb-stop-bot/python-base:$(IMAGE_TAG) .
+	docker build -f docker/Dockerfile.browser-agent -t $(DOCKER_REGISTRY)/fb-stop-bot/browser-agent:$(IMAGE_TAG) .
+	docker build -f docker/Dockerfile.frontend -t $(DOCKER_REGISTRY)/fb-stop-bot/frontend:$(IMAGE_TAG) .
+	docker build -f docker/Dockerfile.mini-app -t $(DOCKER_REGISTRY)/fb-stop-bot/mini-app:$(IMAGE_TAG) .
+
+k3s-import: ## Импортировать Docker-образы в k3s (требует sudo)
+	@for img in api workers browser-agent frontend mini-app; do \
+		echo "Импортируем $(DOCKER_REGISTRY)/fb-stop-bot/$$img:$(IMAGE_TAG) в k3s..."; \
+		docker save $(DOCKER_REGISTRY)/fb-stop-bot/$$img:$(IMAGE_TAG) | sudo k3s ctr images import -; \
+	done
+	@echo "Все образы импортированы в k3s"
+
+helm-install: ## Установить/обновить Helm chart
+	helm upgrade --install fb-stop-bot helm/fb-stop-bot \
+		-f helm/fb-stop-bot/values.yaml \
+		-f helm/fb-stop-bot/values-mini-pc.yaml \
+		-f helm/fb-stop-bot/secrets.yaml \
+		--namespace fb-stop-bot --create-namespace
+
+helm-uninstall: ## Удалить Helm release
+	helm uninstall fb-stop-bot -n fb-stop-bot
+
+k8s-logs: ## Показать логи всех подов fb-stop-bot
+	kubectl logs -n fb-stop-bot -l app.kubernetes.io/name=fb-stop-bot --tail=50 -f

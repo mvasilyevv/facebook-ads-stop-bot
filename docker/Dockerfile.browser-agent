@@ -1,0 +1,32 @@
+# Browser-agent: Node.js + gRPC-сервер для управления Vision-профилями
+# Vision браузер работает на хосте — этот образ только gRPC-клиент + сервер
+FROM node:20-slim AS builder
+
+WORKDIR /app
+
+# Копируем файлы зависимостей
+COPY services/browser-agent/package.json services/browser-agent/package-lock.json ./
+
+# Устанавливаем только production зависимости для финального образа
+RUN npm ci
+
+# Копируем исходный код и конфиги
+COPY services/browser-agent/src ./src
+COPY services/browser-agent/tsconfig.json ./
+
+# Собираем TypeScript → JavaScript
+RUN npm run build
+
+# Финальный образ
+FROM node:20-slim AS runtime
+
+WORKDIR /app
+
+# Копируем собранный dist и production node_modules
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/node_modules ./node_modules
+COPY services/browser-agent/package.json ./
+
+EXPOSE 50051
+
+CMD ["node", "dist/index.js"]

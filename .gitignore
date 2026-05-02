@@ -23,3 +23,4 @@ services/browser-agent/node_modules/
 logs/
 supervisord.pid
 supervisord.log
+helm/fb-stop-bot/secrets.yaml

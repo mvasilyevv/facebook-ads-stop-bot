@@ -1,0 +1,11 @@
+apiVersion: v2
+name: fb-stop-bot
+description: FB Ads stop-bot с Telegram-алертами и Vision-сканированием
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - facebook-ads
+  - telegram
+  - monitoring
+maintainers:
+  - name: fb-agent-team

@@ -1,0 +1,47 @@
+# Реальные значения для mini-PC (WSL2 + k3s)
+# Скопируй этот файл и заполни реальными значениями
+# Используется вместе с values.yaml: helm install ... -f values.yaml -f values-mini-pc.yaml
+
+# Переопределение образов если нужен другой тег
+# image:
+#   api:
+#     tag: "1.0.0"
+
+# Postgres: убедись что доступен с хоста WSL2
+postgres:
+  host: host.docker.internal
+  port: 5433
+  database: fb_stop_bot_v2
+  user: fb_stop_bot_v2
+
+# Vision на хосте Windows
+vision:
+  host: host.docker.internal
+  port: 3030
+
+# Vision-профили: заполни реальными ID из Vision dashboard
+# Каждый профиль создаст отдельный browser-agent pod
+browserAgents:
+  - slug: profile-1
+    visionProfileId: "ВСТАВЬ_РЕАЛЬНЫЙ_PROFILE_ID_ИЗ_VISION"
+    replicas: 1
+  # Раскомментируй для второго профиля:
+  # - slug: profile-2
+  #   visionProfileId: "PROFILE_ID_2"
+  #   replicas: 1
+
+# URL для доступа (добавь в /etc/hosts Windows: 127.0.0.1 api.fbbot.local app.fbbot.local tma.fbbot.local)
+urls:
+  frontendUrl: "http://app.fbbot.local"
+  webAppUrl: "http://tma.fbbot.local/tma/"
+  apiUrl: "http://api.fbbot.local"
+
+ingress:
+  enabled: true
+  className: traefik
+  hosts:
+    api: api.fbbot.local
+    web: app.fbbot.local
+    tma: tma.fbbot.local
+  tls:
+    enabled: false

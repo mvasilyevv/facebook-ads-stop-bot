@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fb-stop-bot-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "fb-stop-bot.labels" . | nindent 4 }}
+data:
+  # Postgres (нечувствительные параметры)
+  POSTGRES_HOST: {{ .Values.postgres.host | quote }}
+  POSTGRES_PORT: {{ .Values.postgres.port | quote }}
+  POSTGRES_DB: {{ .Values.postgres.database | quote }}
+  POSTGRES_USER: {{ .Values.postgres.user | quote }}
+
+  # Vision браузер на хосте Windows
+  VISION_HOST: {{ .Values.vision.host | quote }}
+  VISION_PORT: {{ .Values.vision.port | quote }}
+
+  # URL фронтенда и mini-app
+  FRONTEND_URL: {{ .Values.urls.frontendUrl | quote }}
+  WEB_APP_URL: {{ .Values.urls.webAppUrl | quote }}
+  API_URL: {{ .Values.urls.apiUrl | quote }}
+
+  # gRPC-хосты browser-agent (для observer)
+  BROWSER_AGENT_HOSTS: {{ include "fb-stop-bot.browserAgentHosts" . | quote }}

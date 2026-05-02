@@ -1,0 +1,44 @@
+# Многоступенчатая сборка Python-образа для FB Stop Bot
+# Стадия сборки: устанавливаем зависимости через uv
+FROM python:3.12-slim AS builder
+
+# Системные зависимости для сборки
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libpq-dev \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Устанавливаем uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+WORKDIR /app
+
+# Копируем файлы зависимостей для кэширования слоёв
+COPY pyproject.toml uv.lock ./
+
+# Устанавливаем зависимости в /opt/venv
+RUN uv sync --frozen --no-dev --no-install-project \
+    --python python3.12
+
+# Финальный образ: только runtime
+FROM python:3.12-slim AS runtime
+
+# Только runtime-зависимости libpq
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq5 \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Копируем виртуальное окружение из builder
+COPY --from=builder /app/.venv /app/.venv
+
+# Добавляем venv в PATH
+ENV PATH="/app/.venv/bin:$PATH" \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+# Копируем весь исходный код
+COPY . .

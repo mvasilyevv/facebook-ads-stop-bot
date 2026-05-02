@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: fb-stop-bot-mini-app
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "fb-stop-bot.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mini-app
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "fb-stop-bot.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: mini-app
+  ports:
+    - port: 80
+      targetPort: 80
+      name: http
