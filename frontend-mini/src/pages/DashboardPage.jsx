@@ -1,5 +1,10 @@
 import React, { useEffect, useState } from "react";
 import { fetchJson } from "../api.js";
+import Loader from "../components/Loader.jsx";
+import ErrorBox from "../components/ErrorBox.jsx";
+import MetricBadge from "../components/MetricBadge.jsx";
+import Card from "../components/Card.jsx";
+import { haptic } from "../theme.js";
 
 // Страница дашборда — KPI и управление сканированием
 export default function DashboardPage() {
@@ -35,43 +40,39 @@ export default function DashboardPage() {
 
   const doToggle = async (enabled) => {
     setToggling(true);
+    haptic.impact("medium");
     try {
       await fetchJson("/settings/observer/scanning", {
         method: "PATCH",
         body: JSON.stringify({ enabled }),
       });
-      setObsSettings((prev) => prev ? { ...prev, is_scanning_enabled: enabled, pause_until: enabled ? null : prev.pause_until } : prev);
+      setObsSettings((prev) =>
+        prev ? { ...prev, is_scanning_enabled: enabled, pause_until: enabled ? null : prev.pause_until } : prev
+      );
+      haptic.notify("success");
     } catch (err) {
       setError(err.message);
+      haptic.notify("error");
     } finally {
       setToggling(false);
     }
   };
 
-  if (loading) return <div className="loading">Загрузка...</div>;
-  if (error) return <div className="error-screen"><p className="status-error">{error}</p></div>;
+  if (loading) return <Loader />;
+  if (error) return <ErrorBox message={error} onRetry={loadData} />;
 
   return (
     <div>
       <h1>Дашборд</h1>
 
+      {/* KPI-плитки — горизонтальный скролл */}
       <div className="kpi-strip">
-        <div className="kpi-item">
-          <div className="kpi-value">{stats?.active_ads_count ?? "—"}</div>
-          <div className="kpi-label">Активных объявлений</div>
-        </div>
-        <div className="kpi-item">
-          <div className="kpi-value">{stats?.ads_in_stop ?? "—"}</div>
-          <div className="kpi-label">Стоп-сигналов</div>
-        </div>
-        <div className="kpi-item">
-          <div className="kpi-value">{stats?.ads_disabled_today ?? "—"}</div>
-          <div className="kpi-label">Отключено сегодня</div>
-        </div>
+        <MetricBadge value={stats?.active_ads_count ?? "—"} label="Активных" />
+        <MetricBadge value={stats?.ads_in_stop ?? "—"} label="Стоп-сигналов" danger={(stats?.ads_in_stop ?? 0) > 0} />
+        <MetricBadge value={stats?.ads_disabled_today ?? "—"} label="Отключено сегодня" />
       </div>
 
-      <div className="card" style={{ marginTop: 16 }}>
-        <h2>Сканирование</h2>
+      <Card title="Сканирование" style={{ marginTop: 6 }}>
         <p>
           Статус:{" "}
           <span className={scanning ? "status-ok" : "status-error"}>
@@ -79,8 +80,13 @@ export default function DashboardPage() {
           </span>
         </p>
         {pauseActive && (
-          <p className="status-warning" style={{ fontSize: 13 }}>
-            ⏸ Пауза до {new Date(obsSettings.pause_until).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })} (осталось {pauseMinsLeft} мин)
+          <p className="hint" style={{ marginTop: 4 }}>
+            ⏸ Пауза до{" "}
+            {new Date(obsSettings.pause_until).toLocaleTimeString("ru-RU", {
+              hour: "2-digit",
+              minute: "2-digit",
+            })}{" "}
+            (осталось {pauseMinsLeft} мин)
           </p>
         )}
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
@@ -94,7 +100,7 @@ export default function DashboardPage() {
             </button>
           )}
         </div>
-      </div>
+      </Card>
 
       <button className="btn btn-secondary" onClick={loadData} style={{ marginTop: 8 }}>
         Обновить

@@ -1,5 +1,9 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { fetchJson } from "../api.js";
+import Loader from "../components/Loader.jsx";
+import ErrorBox from "../components/ErrorBox.jsx";
+import EmptyState from "../components/EmptyState.jsx";
+import Card from "../components/Card.jsx";
 
 function fmt$(v) {
   if (v == null || v === "") return "—";
@@ -73,7 +77,7 @@ export default function HistoryPage() {
       <h1>История</h1>
 
       {/* Фильтры дат */}
-      <div className="card" style={{ padding: "10px 14px" }}>
+      <Card style={{ padding: "10px 14px" }}>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
           <div className="form-group" style={{ marginBottom: 0 }}>
             <label className="form-label">От</label>
@@ -109,22 +113,18 @@ export default function HistoryPage() {
             ))}
           </select>
         </div>
-      </div>
+      </Card>
 
-      {error && (
-        <div className="card" style={{ borderLeft: "3px solid var(--color-danger)" }}>
-          <span className="status-error">{error}</span>
-        </div>
-      )}
+      {error && <ErrorBox message={error} onRetry={load} />}
 
-      {loading && <div className="loading">Загрузка истории...</div>}
+      {loading && <Loader text="Загрузка истории..." />}
 
       {/* KPI summary */}
       {summary && !loading && (
         <div className="hist-kpi">
           <div className="hist-kpi-item">
             <div className="hist-kpi-value">{fmt$(summary.total_spend)}</div>
-            <div className="hist-kpi-label">Общий расход</div>
+            <div className="hist-kpi-label">Расход</div>
           </div>
           <div className="hist-kpi-item">
             <div className="hist-kpi-value">{fmtN(summary.total_leads)}</div>
@@ -151,8 +151,7 @@ export default function HistoryPage() {
 
       {/* По офферам */}
       {offersStats.length > 0 && !loading && (
-        <div className="card">
-          <div className="card-title">По офферам</div>
+        <Card title="По офферам">
           {offersStats.map((o, i) => (
             <div key={o.offer_code ?? i} className="hist-row">
               <div className="hist-row-name">{o.offer_code ?? "—"}</div>
@@ -163,13 +162,12 @@ export default function HistoryPage() {
               </div>
             </div>
           ))}
-        </div>
+        </Card>
       )}
 
       {/* По кампаниям */}
       {campaigns.length > 0 && !loading && (
-        <div className="card">
-          <div className="card-title">Кампании ({campaigns.length})</div>
+        <Card title={`Кампании (${campaigns.length})`}>
           {campaigns.slice(0, 20).map((c, i) => (
             <div key={c.campaign_name ?? i} className="hist-row">
               <div
@@ -195,13 +193,13 @@ export default function HistoryPage() {
               +{campaigns.length - 20} кампаний
             </p>
           )}
-        </div>
+        </Card>
       )}
 
       {!loading && !summary && campaigns.length === 0 && offersStats.length === 0 && (
-        <div className="card" style={{ textAlign: "center", padding: "32px 16px" }}>
-          <p className="hint">Нет данных за выбранный период</p>
-        </div>
+        <Card>
+          <EmptyState icon="📅" title="Нет данных" subtitle="Нет данных за выбранный период" />
+        </Card>
       )}
     </div>
   );

@@ -1,5 +1,10 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { fetchJson } from "../api.js";
+import Loader from "../components/Loader.jsx";
+import ErrorBox from "../components/ErrorBox.jsx";
+import EmptyState from "../components/EmptyState.jsx";
+import Card from "../components/Card.jsx";
+import { haptic } from "../theme.js";
 
 // Тост-уведомление
 function Toast({ message, type, onClose }) {
@@ -27,6 +32,7 @@ function OfferModal({ offer, onSave, onClose }) {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setSaving(true);
+    haptic.impact("medium");
     try {
       await onSave({
         code: form.code.toUpperCase().trim(),
@@ -143,34 +149,41 @@ export default function OffersPage() {
           method: "PUT",
           body: JSON.stringify(data),
         });
+        haptic.notify("success");
         setToast({ type: "ok", text: "Оффер обновлён" });
       } else {
         await fetchJson("/offers", {
           method: "POST",
           body: JSON.stringify(data),
         });
+        haptic.notify("success");
         setToast({ type: "ok", text: "Оффер создан" });
       }
       setShowModal(false);
       setEditOffer(null);
       load();
     } catch (err) {
+      haptic.notify("error");
       setToast({ type: "error", text: err.message });
     }
   };
 
   const handleDelete = async (offer) => {
     if (!window.confirm(`Удалить оффер "${offer.code}"?`)) return;
+    haptic.impact("medium");
     try {
       await fetchJson(`/offers/${offer.id}`, { method: "DELETE" });
+      haptic.notify("success");
       setToast({ type: "ok", text: "Оффер удалён" });
       load();
     } catch (err) {
+      haptic.notify("error");
       setToast({ type: "error", text: err.message });
     }
   };
 
   const handleToggleActive = async (offer) => {
+    haptic.selection();
     try {
       await fetchJson(`/offers/${offer.id}`, {
         method: "PUT",
@@ -184,7 +197,7 @@ export default function OffersPage() {
     }
   };
 
-  if (loading) return <div className="loading">Загрузка офферов...</div>;
+  if (loading) return <Loader text="Загрузка офферов..." />;
 
   return (
     <div>
@@ -201,74 +214,77 @@ export default function OffersPage() {
         </button>
       </div>
 
-      {error && (
-        <div className="card" style={{ borderLeft: "3px solid var(--color-danger)", marginBottom: 10 }}>
-          <span className="status-error">{error}</span>
-          <button className="btn btn-secondary btn-sm" style={{ marginTop: 8 }} onClick={load}>
-            Повторить
-          </button>
-        </div>
-      )}
+      {error && <ErrorBox message={error} onRetry={load} />}
 
       {offers.length === 0 && !loading && (
-        <div className="card" style={{ textAlign: "center", padding: "32px 16px" }}>
-          <p style={{ fontSize: 32, marginBottom: 8 }}>○</p>
-          <p style={{ fontSize: 14, fontWeight: 500 }}>Нет офферов</p>
-          <p className="hint">Создайте первый оффер</p>
-        </div>
+        <Card>
+          <EmptyState icon="🎯" title="Нет офферов" subtitle="Создайте первый оффер" />
+        </Card>
       )}
 
-      <div className="card" style={{ padding: "8px 14px" }}>
-        {offers.map((o) => (
-          <div key={o.id} className="offer-row">
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div className="offer-code">{o.code}</div>
-              <div className="offer-meta">
-                <span style={{ fontWeight: 600 }}>${Number(o.cpa_amount ?? o.cpa).toFixed(2)}</span>
-                {o.country_name && <span> · {o.country_name}</span>}
+      {offers.length > 0 && (
+        <Card style={{ padding: "8px 14px" }}>
+          {offers.map((o) => (
+            <div key={o.id} className="offer-row">
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div className="offer-code">{o.code}</div>
+                <div className="offer-meta">
+                  <span style={{ fontWeight: 600 }}>${Number(o.cpa_amount ?? o.cpa).toFixed(2)}</span>
+                  {o.country_name && <span> · {o.country_name}</span>}
+                </div>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span
+                  className={o.is_active ? "badge badge-active" : "badge badge-disabled"}
+                  style={{ cursor: "pointer" }}
+                  onClick={() => handleToggleActive(o)}
+                >
+                  {o.is_active ? "Активен" : "Выкл."}
+                </span>
+                <button
+                  style={{
+                    background: "none",
+                    border: "none",
+                    padding: "8px",
+                    cursor: "pointer",
+                    color: "var(--tg-hint-color)",
+                    fontSize: 16,
+                    minWidth: 36,
+                    minHeight: 44,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                  onClick={() => {
+                    setEditOffer(o);
+                    setShowModal(true);
+                  }}
+                >
+                  ✎
+                </button>
+                <button
+                  style={{
+                    background: "none",
+                    border: "none",
+                    padding: "8px",
+                    cursor: "pointer",
+                    color: "var(--color-danger)",
+                    fontSize: 16,
+                    minWidth: 36,
+                    minHeight: 44,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                  onClick={() => handleDelete(o)}
+                >
+                  ✕
+                </button>
               </div>
             </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <span
-                className={o.is_active ? "badge badge-active" : "badge badge-disabled"}
-                style={{ cursor: "pointer" }}
-                onClick={() => handleToggleActive(o)}
-              >
-                {o.is_active ? "Активен" : "Выкл."}
-              </span>
-              <button
-                style={{
-                  background: "none",
-                  border: "none",
-                  padding: "4px 6px",
-                  cursor: "pointer",
-                  color: "var(--tg-hint)",
-                  fontSize: 16,
-                }}
-                onClick={() => {
-                  setEditOffer(o);
-                  setShowModal(true);
-                }}
-              >
-                ✎
-              </button>
-              <button
-                style={{
-                  background: "none",
-                  border: "none",
-                  padding: "4px 6px",
-                  cursor: "pointer",
-                  color: "var(--color-danger)",
-                  fontSize: 16,
-                }}
-                onClick={() => handleDelete(o)}
-              >
-                ✕
-              </button>
-            </div>
-          </div>
-        ))}
-      </div>
+          ))}
+        </Card>
+      )}
 
       {showModal && (
         <OfferModal

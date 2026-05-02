@@ -4,6 +4,7 @@
 # Использование:
 #   ./run.sh            — запуск всех сервисов
 #   ./run.sh --dev      — запуск в dev-режиме (API с --reload)
+#   ./run.sh --tunnel   — поднять cloudflared quick-tunnels для API/web/mini-app
 #   ./run.sh --down     — остановка всех сервисов
 #   ./run.sh --restart  — перезапуск (--down + запуск)
 #   ./run.sh --logs     — логи всех процессов
@@ -416,6 +417,8 @@ stop_all() {
     terminate_matching_processes "API" "uvicorn apps.api.main:app"
     terminate_matching_processes "Frontend" "$SCRIPT_DIR/frontend/node_modules/.bin/vite"
     terminate_matching_processes_in_dir "Frontend" "npm run dev|node .*vite" "$SCRIPT_DIR/frontend"
+    terminate_matching_processes_in_dir "Mini-app" "npm run dev|node .*vite" "$SCRIPT_DIR/frontend-mini"
+    terminate_matching_processes "Cloudflared" "cloudflared tunnel --url"
     cleanup_worker_singleton_pid_files
 
     echo -e "${YELLOW}⏹ Останавливаю Docker контейнеры...${NC}"
@@ -439,6 +442,7 @@ show_logs() {
 # ==========================================
 # Обработка аргументов
 # ==========================================
+ENABLE_TUNNEL=0
 case "${1:-}" in
     --down|--stop)
         stop_all
@@ -456,11 +460,14 @@ case "${1:-}" in
         show_logs
         exit 0
         ;;
+    --tunnel)
+        ENABLE_TUNNEL=1
+        ;;
     "")
         ;;
     *)
         echo -e "${RED}❌ Неизвестный аргумент: $1${NC}"
-        echo "Использование: ./run.sh [--dev|--down|--restart|--logs]"
+        echo "Использование: ./run.sh [--dev|--down|--restart|--logs|--tunnel]"
         exit 1
         ;;
 esac
@@ -506,7 +513,8 @@ API_PORT="${API_PORT:-8100}"
 POSTGRES_PORT="${POSTGRES_PORT:-5433}"
 GRPC_PORT="${GRPC_PORT:-50051}"
 FRONTEND_HOST="${FRONTEND_HOST:-127.0.0.1}"
-FRONTEND_PORT="${FRONTEND_PORT:-5174}"
+FRONTEND_PORT="${FRONTEND_PORT:-5173}"
+MINI_PORT="${MINI_PORT:-5174}"
 export GRPC_PORT
 
 USE_SUPERVISOR=0
@@ -555,11 +563,13 @@ terminate_matching_processes "Telegram Poller" "apps.telegram_poller.main"
 terminate_matching_processes "API" "uvicorn apps.api.main:app"
 terminate_matching_processes "Frontend" "$SCRIPT_DIR/frontend/node_modules/.bin/vite"
 terminate_matching_processes_in_dir "Frontend" "npm run dev|node .*vite" "$SCRIPT_DIR/frontend"
+terminate_matching_processes_in_dir "Mini-app" "npm run dev|node .*vite" "$SCRIPT_DIR/frontend-mini"
 cleanup_worker_singleton_pid_files
 
 ensure_port_free "$API_PORT" "API"
 ensure_port_free "$GRPC_PORT" "Browser Agent"
 ensure_port_free "$FRONTEND_PORT" "Frontend"
+ensure_port_free "$MINI_PORT" "Mini-app"
 
 RUN_STARTED=1
 
@@ -908,8 +918,81 @@ else
 fi
 
 # ==========================================
-# 11. Проверка что процессы не завершились сразу
+# 11. Запуск Mini-app (Vite, frontend-mini)
 # ==========================================
+if [ -d frontend-mini ]; then
+    echo -e "${BLUE}📱 Запускаю Mini-app (Vite, порт $MINI_PORT)...${NC}"
+    terminate_matching_processes_in_dir "Mini-app" "npm run dev|node .*vite" "$SCRIPT_DIR/frontend-mini"
+
+    if ! install_node_dependencies_if_needed "$SCRIPT_DIR/frontend-mini" "$LOG_DIR/frontend_mini_npm_install.log"; then
+        tail -20 "$LOG_DIR/frontend_mini_npm_install.log" || true
+        exit 1
+    fi
+
+    (
+        cd "$SCRIPT_DIR/frontend-mini"
+        VITE_API_KEY="${API_KEY:-}" npm run dev -- --host "$FRONTEND_HOST" --port "$MINI_PORT" --strictPort
+    ) > "$LOG_DIR/frontend_mini.log" 2>&1 &
+    MINI_PID=$!
+    append_pid "$MINI_PID" "frontend_mini"
+    echo -e "${GREEN}  Mini-app PID: $MINI_PID${NC}"
+
+    # Ждём готовности Vite
+    for i in $(seq 1 15); do
+        if nc -z "$FRONTEND_HOST" "$MINI_PORT" 2>/dev/null; then
+            echo -e "${GREEN}✅ Mini-app отвечает на порту $MINI_PORT${NC}"
+            break
+        fi
+        if ! is_process_active "$MINI_PID"; then
+            echo -e "${RED}❌ Mini-app процесс завершился при запуске${NC}"
+            tail -20 "$LOG_DIR/frontend_mini.log" || true
+            exit 1
+        fi
+        if [ "$i" -eq 15 ]; then
+            echo -e "${YELLOW}⚠️  Mini-app не ответил за 15с, продолжаю запуск${NC}"
+        fi
+        sleep 1
+    done
+else
+    echo -e "${YELLOW}⚠️  frontend-mini не найден, пропускаю${NC}"
+    MINI_PID=""
+fi
+
+# ==========================================
+# 12. Cloudflared quick-tunnels (если --tunnel)
+# ==========================================
+# Функция запуска одного туннеля; возвращает URL через stdout переменной
+start_tunnel() {
+    local name="$1"
+    local port="$2"
+    local log_file="$LOG_DIR/cloudflared_${name}.log"
+
+    cloudflared tunnel --url "http://localhost:$port" --no-autoupdate \
+        > "$log_file" 2>&1 &
+    local tpid=$!
+    append_pid "$tpid" "cloudflared_${name}"
+
+    # Даём туннелю время установить соединение и записать URL в лог
+    sleep 4
+
+    grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$log_file" 2>/dev/null | head -1 || true
+}
+
+API_TUNNEL_URL=""
+WEB_TUNNEL_URL=""
+MINI_TUNNEL_URL=""
+
+if [ "$ENABLE_TUNNEL" -eq 1 ]; then
+    if command -v cloudflared >/dev/null 2>&1; then
+        echo -e "${BLUE}🚇 Поднимаю cloudflared туннели...${NC}"
+        API_TUNNEL_URL="$(start_tunnel "api" "$API_PORT")"
+        WEB_TUNNEL_URL="$(start_tunnel "web" "$FRONTEND_PORT")"
+        MINI_TUNNEL_URL="$(start_tunnel "mini" "$MINI_PORT")"
+        echo -e "${GREEN}✅ Туннели запущены${NC}"
+    else
+        echo -e "${YELLOW}⚠️  cloudflared не найден, туннели не будут подняты${NC}"
+    fi
+fi
 sleep 2
 BOOT_OK=1
 check_process_started "$API_PID" "API" "$LOG_DIR/api.log" || BOOT_OK=0
@@ -927,6 +1010,9 @@ if [ "$USE_SUPERVISOR" -eq 0 ]; then
 fi
 if [ -n "${FRONTEND_PID:-}" ]; then
     check_process_started "$FRONTEND_PID" "Frontend" "$LOG_DIR/frontend.log" || BOOT_OK=0
+fi
+if [ -n "${MINI_PID:-}" ]; then
+    check_process_started "$MINI_PID" "Mini-app" "$LOG_DIR/frontend_mini.log" || BOOT_OK=0
 fi
 
 if [ "$BOOT_OK" -eq 0 ]; then
@@ -956,6 +1042,7 @@ echo -e "${GREEN}═════════════════════
 echo ""
 echo -e "  🌐 API:       ${BLUE}http://localhost:$API_PORT/docs${NC}"
 echo -e "  📊 Dashboard: ${BLUE}${FRONTEND_URL}${NC}"
+echo -e "  📱 Mini-app:  ${BLUE}http://localhost:$MINI_PORT/tma/${NC}"
 echo -e "  🗄️ Postgres:  localhost:$POSTGRES_PORT"
 echo ""
 echo -e "  📋 Логи:      ${YELLOW}$LOG_DIR/${NC}"
@@ -966,6 +1053,13 @@ if [ "${CAFFEINATE_ENABLED:-0}" -eq 1 ]; then
     echo -e "${YELLOW}☕ Сон ноутбука заблокирован (caffeinate)${NC}"
 else
     echo -e "${YELLOW}⚠️  caffeinate недоступен — запрет сна не включён${NC}"
+fi
+if [ "$ENABLE_TUNNEL" -eq 1 ] && { [ -n "$API_TUNNEL_URL" ] || [ -n "$WEB_TUNNEL_URL" ] || [ -n "$MINI_TUNNEL_URL" ]; }; then
+    echo ""
+    echo -e "${BLUE}🚇 Туннели:${NC}"
+    echo -e "  API:      ${GREEN}${API_TUNNEL_URL:-не определён}${NC}"
+    echo -e "  Web UI:   ${GREEN}${WEB_TUNNEL_URL:-не определён}${NC}"
+    echo -e "  Mini-app: ${GREEN}${MINI_TUNNEL_URL:-не определён}${NC}  ← подставь в BotFather → Bot Settings → Menu Button"
 fi
 echo ""
 

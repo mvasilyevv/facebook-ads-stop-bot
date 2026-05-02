@@ -1,5 +1,10 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { fetchJson } from "../api.js";
+import Loader from "../components/Loader.jsx";
+import ErrorBox from "../components/ErrorBox.jsx";
+import EmptyState from "../components/EmptyState.jsx";
+import Card from "../components/Card.jsx";
+import { haptic } from "../theme.js";
 
 const STATE_LABELS = {
   NORMAL: "Норма",
@@ -90,29 +95,19 @@ export default function AdsPage() {
   }, [load]);
 
   const filtered = stateFilter
-    ? ads.filter((ad) => {
-        const s = ad.alert_state || "NORMAL";
-        return s === stateFilter;
-      })
+    ? ads.filter((ad) => (ad.alert_state || "NORMAL") === stateFilter)
     : ads;
 
-  if (loading && ads.length === 0)
-    return <div className="loading">Загрузка объявлений...</div>;
+  if (loading && ads.length === 0) return <Loader text="Загрузка объявлений..." />;
 
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
         <h1 style={{ marginBottom: 0 }}>Объявления</h1>
-        {lastScanAt && (
-          <span className="hint">скан {timeAgo(lastScanAt)} назад</span>
-        )}
+        {lastScanAt && <span className="hint">скан {timeAgo(lastScanAt)} назад</span>}
       </div>
 
-      {error && (
-        <div className="card" style={{ borderLeft: "3px solid var(--color-danger)", marginBottom: 10 }}>
-          <span className="status-error">{error}</span>
-        </div>
-      )}
+      {error && <ErrorBox message={error} onRetry={load} />}
 
       {/* Фильтры */}
       <div className="filter-row">
@@ -120,7 +115,7 @@ export default function AdsPage() {
           <button
             key={f.id}
             className={`filter-chip${stateFilter === f.id ? " active" : ""}`}
-            onClick={() => setStateFilter(f.id)}
+            onClick={() => { haptic.selection(); setStateFilter(f.id); }}
           >
             {f.label}
           </button>
@@ -132,9 +127,9 @@ export default function AdsPage() {
       </p>
 
       {filtered.length === 0 && !loading && (
-        <div className="card" style={{ textAlign: "center", padding: "32px 16px" }}>
-          <p className="hint">Объявлений не найдено</p>
-        </div>
+        <Card>
+          <EmptyState icon="📋" title="Объявлений не найдено" />
+        </Card>
       )}
 
       {filtered.map((ad) => {
@@ -157,8 +152,8 @@ export default function AdsPage() {
                 style={{
                   fontFamily: "monospace",
                   fontSize: 11,
-                  background: "rgba(36,129,204,0.12)",
-                  color: "var(--tg-link)",
+                  background: "rgba(10,132,255,0.14)",
+                  color: "var(--tg-link-color)",
                   borderRadius: 4,
                   padding: "1px 6px",
                   marginBottom: 6,
@@ -210,8 +205,8 @@ export default function AdsPage() {
                       borderRadius: 4,
                       background:
                         r.type === "stop"
-                          ? "rgba(220,53,69,0.12)"
-                          : "rgba(230,168,23,0.12)",
+                          ? "rgba(255,69,58,0.14)"
+                          : "rgba(255,214,10,0.14)",
                       color:
                         r.type === "stop"
                           ? "var(--color-danger)"

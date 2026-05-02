@@ -1,6 +1,10 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { fetchJson } from "../api.js";
 import { getStoredRole } from "../auth.js";
+import Loader from "../components/Loader.jsx";
+import ErrorBox from "../components/ErrorBox.jsx";
+import Card from "../components/Card.jsx";
+import { haptic } from "../theme.js";
 
 // Тост-уведомление
 function Toast({ message, type, onClose }) {
@@ -35,7 +39,6 @@ function ObserverSection({ data, onSave, saving }) {
     auto_enable_recommendations: data?.auto_enable_recommendations ?? false,
   });
 
-  // Синхронизируем при изменении data извне
   useEffect(() => {
     if (data) {
       setForm({
@@ -48,12 +51,12 @@ function ObserverSection({ data, onSave, saving }) {
 
   const handleSubmit = (e) => {
     e.preventDefault();
+    haptic.impact("medium");
     onSave("observer", { ...form, scan_interval_seconds: Number(form.scan_interval_seconds) });
   };
 
   return (
-    <div className="card">
-      <div className="card-title">Observer</div>
+    <Card title="Observer">
       <form onSubmit={handleSubmit}>
         <div className="toggle-row">
           <div>
@@ -90,7 +93,7 @@ function ObserverSection({ data, onSave, saving }) {
           {saving ? "Сохранение..." : "Сохранить"}
         </button>
       </form>
-    </div>
+    </Card>
   );
 }
 
@@ -101,19 +104,20 @@ function TelegramSection({ data, onSave, saving }) {
   const handleSave = (e) => {
     e.preventDefault();
     if (!token.trim()) return;
+    haptic.impact("medium");
     onSave("telegram-token", { bot_token: token.trim() });
     setToken("");
   };
 
   const handleRevoke = () => {
     if (window.confirm("Отозвать токен Telegram-бота?")) {
+      haptic.impact("heavy");
       onSave("telegram-revoke", null);
     }
   };
 
   return (
-    <div className="card">
-      <div className="card-title">Telegram</div>
+    <Card title="Telegram">
       <div style={{ marginBottom: 10 }}>
         <span className="hint">Статус поллера: </span>
         <span className={data?.poller_status === "ONLINE" ? "status-ok" : "status-warn"}>
@@ -144,7 +148,7 @@ function TelegramSection({ data, onSave, saving }) {
           Отозвать токен
         </button>
       )}
-    </div>
+    </Card>
   );
 }
 
@@ -166,12 +170,12 @@ function VisionSection({ data, onSave, saving }) {
 
   const handleSubmit = (e) => {
     e.preventDefault();
+    haptic.impact("medium");
     onSave("vision", form);
   };
 
   return (
-    <div className="card">
-      <div className="card-title">Vision Browser</div>
+    <Card title="Vision Browser">
       <div style={{ marginBottom: 10 }}>
         <span className="hint">Статус: </span>
         <span className={data?.cdp_ready ? "status-ok" : "status-warn"}>
@@ -203,7 +207,7 @@ function VisionSection({ data, onSave, saving }) {
           {saving ? "Сохранение..." : "Сохранить"}
         </button>
       </form>
-    </div>
+    </Card>
   );
 }
 
@@ -247,62 +251,57 @@ export default function SettingsPage() {
       if (section === "observer") {
         await fetchJson("/settings/observer", { method: "PUT", body: JSON.stringify(payload) });
         setObserverData((prev) => ({ ...prev, ...payload }));
+        haptic.notify("success");
         setToast({ type: "ok", text: "Observer сохранён" });
       } else if (section === "telegram-token") {
         await fetchJson("/settings/telegram/token", { method: "PUT", body: JSON.stringify(payload) });
+        haptic.notify("success");
         setToast({ type: "ok", text: "Токен обновлён" });
         await fetchJson("/settings/telegram").then(setTelegramData).catch(() => {});
       } else if (section === "telegram-revoke") {
         await fetchJson("/settings/telegram", { method: "DELETE" });
+        haptic.notify("success");
         setToast({ type: "ok", text: "Токен отозван" });
         setTelegramData((prev) => ({ ...prev, is_authorized: false }));
       } else if (section === "vision") {
         await fetchJson("/settings/vision", { method: "PUT", body: JSON.stringify(payload) });
         setVisionData((prev) => ({ ...prev, ...payload }));
+        haptic.notify("success");
         setToast({ type: "ok", text: "Vision сохранён" });
       }
     } catch (err) {
+      haptic.notify("error");
       setToast({ type: "error", text: err.message });
     } finally {
       setSaving(false);
     }
   };
 
-  if (loading) return <div className="loading">Загрузка...</div>;
-  if (error)
-    return (
-      <div className="error-screen">
-        <p className="status-error">{error}</p>
-        <button className="btn btn-secondary" style={{ marginTop: 16 }} onClick={load}>
-          Повторить
-        </button>
-      </div>
-    );
+  if (loading) return <Loader />;
+  if (error) return <ErrorBox message={error} onRetry={load} />;
 
   return (
     <div>
       <h1>Настройки</h1>
 
       {/* Роль */}
-      <div className="card">
-        <div className="card-title">Роль</div>
+      <Card title="Роль">
         <p>{role === "owner" ? "Владелец" : "Получатель"}</p>
-      </div>
+      </Card>
 
       <ObserverSection data={observerData} onSave={handleSave} saving={saving} />
       <TelegramSection data={telegramData} onSave={handleSave} saving={saving} />
       <VisionSection data={visionData} onSave={handleSave} saving={saving} />
 
       {/* Ссылка на полный интерфейс */}
-      <div className="card">
-        <div className="card-title">Полные настройки</div>
+      <Card title="Полные настройки">
         <p className="hint" style={{ marginBottom: 8 }}>
           Детальные настройки правил, браузера и нейминга — в веб-версии.
         </p>
         <a href="/settings" className="btn btn-secondary" style={{ textAlign: "center" }}>
           Открыть в браузере
         </a>
-      </div>
+      </Card>
 
       {toast && (
         <Toast message={toast.text} type={toast.type} onClose={() => setToast(null)} />

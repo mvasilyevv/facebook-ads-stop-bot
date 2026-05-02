@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { BrowserRouter, NavLink, Route, Routes, useNavigate } from "react-router-dom";
+import { BrowserRouter, NavLink, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { getStoredToken, loginToBackend, logout } from "./auth.js";
 import DashboardPage from "./pages/DashboardPage.jsx";
 import HealthPage from "./pages/HealthPage.jsx";
@@ -12,7 +12,6 @@ import HistoryPage from "./pages/HistoryPage.jsx";
 // Гард аутентификации — выполняет логин при первом рендере
 function AuthGuard({ children }) {
   const [status, setStatus] = useState("loading");
-  const navigate = useNavigate();
 
   useEffect(() => {
     if (getStoredToken()) {
@@ -29,7 +28,12 @@ function AuthGuard({ children }) {
   }, []);
 
   if (status === "loading") {
-    return <div className="loading">Авторизация...</div>;
+    return (
+      <div className="loader-wrap">
+        <div className="spinner" />
+        <span>Авторизация...</span>
+      </div>
+    );
   }
   if (status === "error") {
     return (
@@ -69,10 +73,37 @@ function TabBar() {
   );
 }
 
+// Управление MainButton Telegram на странице настроек
+function TelegramBackButton() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const tg = window.Telegram?.WebApp;
+
+  useEffect(() => {
+    if (!tg) return;
+    // BackButton показываем только на вложенных страницах (health, scripts)
+    const showBack = ["/health", "/scripts"].includes(location.pathname);
+    if (showBack) {
+      tg.BackButton.show();
+      const handler = () => navigate(-1);
+      tg.BackButton.onClick(handler);
+      return () => {
+        tg.BackButton.offClick(handler);
+        tg.BackButton.hide();
+      };
+    } else {
+      tg.BackButton.hide();
+    }
+  }, [location.pathname, navigate, tg]);
+
+  return null;
+}
+
 export default function App() {
   return (
     <BrowserRouter basename="/tma">
       <AuthGuard>
+        <TelegramBackButton />
         <div className="container page-content">
           <Routes>
             <Route path="/" element={<DashboardPage />} />

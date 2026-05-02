@@ -1,35 +1,47 @@
-/* Telegram theme variables для Mini App */
+/* ============================================================
+   Telegram Mini App — базовые CSS-переменные
+   Значения пробрасываются из theme.js при инициализации.
+   Здесь — fallback для работы вне Telegram (тёмная тема).
+   ============================================================ */
 :root {
-  --tg-bg: var(--tg-theme-bg-color, #ffffff);
-  --tg-text: var(--tg-theme-text-color, #000000);
-  --tg-hint: var(--tg-theme-hint-color, #999999);
-  --tg-link: var(--tg-theme-link-color, #2481cc);
-  --tg-button: var(--tg-theme-button-color, #2481cc);
-  --tg-button-text: var(--tg-theme-button-text-color, #ffffff);
-  --tg-secondary-bg: var(--tg-theme-secondary-bg-color, #f1f1f1);
-  --tg-accent: var(--tg-theme-accent-text-color, #2481cc);
+  --tg-bg-color:            #1c1c1e;
+  --tg-text-color:          #ffffff;
+  --tg-hint-color:          #8e8e93;
+  --tg-link-color:          #0a84ff;
+  --tg-button-color:        #0a84ff;
+  --tg-button-text-color:   #ffffff;
+  --tg-secondary-bg-color:  #2c2c2e;
 
-  --color-danger: #dc3545;
-  --color-warning: #e6a817;
-  --color-success: #28a745;
-  --color-info: #17a2b8;
+  /* Семантические алиасы */
+  --color-danger:   #ff453a;
+  --color-warning:  #ffd60a;
+  --color-success:  #32d74b;
+  --color-info:     #64d2ff;
+
+  /* Макет */
   --tab-bar-height: 58px;
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --radius-card: 12px;
+  --radius-btn:  10px;
 }
 
-* {
+/* === Сброс === */
+*, *::before, *::after {
   box-sizing: border-box;
   margin: 0;
   padding: 0;
 }
 
+/* === Тело === */
 body {
-  background-color: var(--tg-bg);
-  color: var(--tg-text);
+  background-color: var(--tg-bg-color);
+  color: var(--tg-text-color);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   font-size: 15px;
   line-height: 1.5;
-  /* Отступ под нижний tab-bar */
-  padding-bottom: var(--tab-bar-height);
+  /* Отступ под нижний tab-bar + safe area */
+  padding-bottom: calc(var(--tab-bar-height) + var(--safe-bottom));
+  -webkit-tap-highlight-color: transparent;
 }
 
 /* === Контейнер === */
@@ -45,9 +57,10 @@ body {
   bottom: 0;
   left: 0;
   right: 0;
-  height: var(--tab-bar-height);
-  background: var(--tg-bg);
-  border-top: 1px solid rgba(0, 0, 0, 0.08);
+  height: calc(var(--tab-bar-height) + var(--safe-bottom));
+  padding-bottom: var(--safe-bottom);
+  background: var(--tg-bg-color);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
   display: flex;
   align-items: stretch;
   z-index: 100;
@@ -62,25 +75,27 @@ body {
   align-items: center;
   justify-content: center;
   text-decoration: none;
-  color: var(--tg-hint);
-  font-size: 10px;
-  gap: 2px;
+  color: var(--tg-hint-color);
+  font-size: 11px;
+  gap: 3px;
   transition: color 0.15s;
+  /* Минимальный touch target */
+  min-height: 44px;
 }
 
 .tab-bar a .tab-icon {
-  font-size: 20px;
+  font-size: 22px;
   line-height: 1;
 }
 
 .tab-bar a.active {
-  color: var(--tg-button);
+  color: var(--tg-button-color);
 }
 
 /* === Карточка === */
 .card {
-  background: var(--tg-secondary-bg);
-  border-radius: 12px;
+  background: var(--tg-secondary-bg-color);
+  border-radius: var(--radius-card);
   padding: 14px;
   margin-bottom: 10px;
 }
@@ -89,25 +104,28 @@ body {
   font-size: 14px;
   font-weight: 600;
   margin-bottom: 8px;
-  color: var(--tg-text);
+  color: var(--tg-text-color);
 }
 
-/* === Кнопки === */
+/* === Кнопки (минимум 44px touch target) === */
 .btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: var(--tg-button);
-  color: var(--tg-button-text);
+  background: var(--tg-button-color);
+  color: var(--tg-button-text-color);
   border: none;
-  border-radius: 10px;
-  padding: 11px 20px;
+  border-radius: var(--radius-btn);
+  padding: 12px 20px;
+  min-height: 44px;
   font-size: 15px;
   font-weight: 500;
   cursor: pointer;
   width: 100%;
   margin-top: 8px;
   transition: opacity 0.15s;
+  text-decoration: none;
+  text-align: center;
 }
 
 .btn:disabled {
@@ -120,9 +138,9 @@ body {
 }
 
 .btn-secondary {
-  background: var(--tg-secondary-bg);
-  color: var(--tg-text);
-  border: 1px solid rgba(0, 0, 0, 0.12);
+  background: var(--tg-secondary-bg-color);
+  color: var(--tg-text-color);
+  border: 1px solid rgba(255, 255, 255, 0.12);
 }
 
 .btn-danger {
@@ -131,7 +149,8 @@ body {
 }
 
 .btn-sm {
-  padding: 6px 14px;
+  padding: 8px 14px;
+  min-height: 36px;
   font-size: 13px;
   border-radius: 8px;
   width: auto;
@@ -139,68 +158,138 @@ body {
 }
 
 /* === Статусы === */
-.status-ok   { color: var(--color-success); font-weight: 500; }
-.status-warn { color: var(--color-warning); font-weight: 500; }
-.status-error { color: var(--color-danger); font-weight: 500; }
-.status-info  { color: var(--color-info); font-weight: 500; }
+.status-ok    { color: var(--color-success); font-weight: 500; }
+.status-warn  { color: var(--color-warning); font-weight: 500; }
+.status-error { color: var(--color-danger);  font-weight: 500; }
+.status-info  { color: var(--color-info);    font-weight: 500; }
 
 /* === Бейджи === */
 .badge {
   display: inline-block;
-  padding: 2px 8px;
+  padding: 3px 8px;
   border-radius: 20px;
   font-size: 11px;
   font-weight: 600;
 }
-.badge-stop    { background: rgba(220, 53, 69, 0.15); color: var(--color-danger); }
-.badge-warning { background: rgba(230, 168, 23, 0.15); color: var(--color-warning); }
-.badge-normal  { background: rgba(40, 167, 69, 0.15); color: var(--color-success); }
-.badge-disabled { background: rgba(0, 0, 0, 0.07); color: var(--tg-hint); }
-.badge-active  { background: rgba(36, 129, 204, 0.15); color: var(--tg-button); }
+.badge-stop    { background: rgba(255, 69, 58, 0.18);  color: var(--color-danger); }
+.badge-warning { background: rgba(255, 214, 10, 0.18); color: var(--color-warning); }
+.badge-normal  { background: rgba(50, 215, 75, 0.18);  color: var(--color-success); }
+.badge-disabled { background: rgba(255, 255, 255, 0.08); color: var(--tg-hint-color); }
+.badge-active  { background: rgba(10, 132, 255, 0.18); color: var(--tg-button-color); }
 
 /* === Hint === */
 .hint {
-  color: var(--tg-hint);
+  color: var(--tg-hint-color);
   font-size: 12px;
 }
 
 /* === KPI-стрип === */
 .kpi-strip {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  display: flex;
   gap: 8px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
   margin-bottom: 10px;
+  padding-bottom: 2px;
 }
 
+.kpi-strip::-webkit-scrollbar { display: none; }
+
 .kpi-item {
-  background: var(--tg-secondary-bg);
+  background: var(--tg-secondary-bg-color);
   border-radius: 10px;
-  padding: 10px;
+  padding: 10px 14px;
   text-align: center;
+  flex-shrink: 0;
+  min-width: 90px;
 }
 
 .kpi-value {
   font-size: 20px;
   font-weight: 700;
-  color: var(--tg-text);
+  color: var(--tg-text-color);
 }
 
 .kpi-label {
   font-size: 11px;
-  color: var(--tg-hint);
+  color: var(--tg-hint-color);
   margin-top: 2px;
+}
+
+/* === Лоадер === */
+.loader-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 20px;
+  gap: 12px;
+  color: var(--tg-hint-color);
+  font-size: 14px;
+}
+
+.spinner {
+  width: 28px;
+  height: 28px;
+  border: 3px solid rgba(255, 255, 255, 0.12);
+  border-top-color: var(--tg-button-color);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 
 /* === Состояния загрузки / ошибки === */
 .loading {
   text-align: center;
   padding: 48px 20px;
-  color: var(--tg-hint);
+  color: var(--tg-hint-color);
 }
 
 .error-screen {
   text-align: center;
   padding: 40px 20px;
+}
+
+/* === Блок ошибки === */
+.error-box {
+  background: rgba(255, 69, 58, 0.1);
+  border: 1px solid rgba(255, 69, 58, 0.25);
+  border-radius: var(--radius-card);
+  padding: 14px;
+  margin-bottom: 10px;
+  text-align: center;
+}
+
+.error-box p {
+  font-size: 14px;
+  color: var(--color-danger);
+  margin-bottom: 10px;
+}
+
+/* === Пустое состояние === */
+.empty-state {
+  text-align: center;
+  padding: 36px 16px;
+}
+
+.empty-state .empty-icon {
+  font-size: 44px;
+  margin-bottom: 10px;
+}
+
+.empty-state .empty-title {
+  font-size: 15px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.empty-state .empty-sub {
+  font-size: 13px;
+  color: var(--tg-hint-color);
 }
 
 /* === Заголовки === */
@@ -224,19 +313,18 @@ h3 {
 
 /* === Объявления: карточка === */
 .ad-card {
-  background: var(--tg-secondary-bg);
-  border-radius: 12px;
+  background: var(--tg-secondary-bg-color);
+  border-radius: var(--radius-card);
   padding: 12px;
   margin-bottom: 8px;
   position: relative;
-  cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
 
 .ad-card-stop    { border-left: 3px solid var(--color-danger); }
 .ad-card-warning { border-left: 3px solid var(--color-warning); }
 .ad-card-normal  { border-left: 3px solid transparent; }
-.ad-card-disabled { border-left: 3px solid rgba(0,0,0,0.15); opacity: 0.7; }
+.ad-card-disabled { border-left: 3px solid rgba(255,255,255,0.15); opacity: 0.6; }
 
 .ad-card-header {
   display: flex;
@@ -263,13 +351,13 @@ h3 {
 }
 
 .metric-chip {
-  background: rgba(0, 0, 0, 0.04);
+  background: rgba(255, 255, 255, 0.06);
   border-radius: 6px;
   padding: 5px 6px;
   text-align: center;
 }
 
-.metric-chip .label { font-size: 10px; color: var(--tg-hint); }
+.metric-chip .label { font-size: 10px; color: var(--tg-hint-color); }
 .metric-chip .value { font-size: 13px; font-weight: 600; font-family: monospace; }
 
 /* === Форма === */
@@ -283,28 +371,35 @@ h3 {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: var(--tg-hint);
+  color: var(--tg-hint-color);
   margin-bottom: 5px;
 }
 
 .form-input {
   width: 100%;
-  background: var(--tg-secondary-bg);
-  border: 1px solid rgba(0, 0, 0, 0.1);
+  background: var(--tg-secondary-bg-color);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 8px;
   padding: 10px 12px;
   font-size: 15px;
-  color: var(--tg-text);
+  color: var(--tg-text-color);
   outline: none;
   transition: border-color 0.15s;
+  min-height: 44px;
 }
 
 .form-input:focus {
-  border-color: var(--tg-button);
+  border-color: var(--tg-button-color);
 }
 
 .form-input:disabled {
   opacity: 0.5;
+}
+
+/* select — цвет текста явно для тёмной темы */
+select.form-input {
+  appearance: none;
+  -webkit-appearance: none;
 }
 
 /* === Toggle === */
@@ -313,7 +408,8 @@ h3 {
   align-items: center;
   justify-content: space-between;
   padding: 12px 0;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  min-height: 44px;
 }
 
 .toggle-row:last-child {
@@ -327,7 +423,7 @@ h3 {
 
 .toggle-sub {
   font-size: 12px;
-  color: var(--tg-hint);
+  color: var(--tg-hint-color);
   margin-top: 1px;
 }
 
@@ -349,14 +445,14 @@ h3 {
 .toggle-track {
   position: absolute;
   inset: 0;
-  background: #ccc;
+  background: rgba(255, 255, 255, 0.2);
   border-radius: 31px;
   transition: background 0.2s;
   cursor: pointer;
 }
 
 .toggle-switch input:checked + .toggle-track {
-  background: var(--tg-button);
+  background: var(--tg-button-color);
 }
 
 .toggle-knob {
@@ -367,13 +463,9 @@ h3 {
   height: 25px;
   background: #fff;
   border-radius: 50%;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.35);
   transition: transform 0.2s;
-}
-
-.toggle-switch input:checked ~ .toggle-track .toggle-knob,
-.toggle-switch input:checked + .toggle-track + .toggle-knob {
-  transform: translateX(20px);
+  pointer-events: none;
 }
 
 /* === Список офферов === */
@@ -383,7 +475,8 @@ h3 {
   justify-content: space-between;
   gap: 10px;
   padding: 10px 0;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  min-height: 44px;
 }
 
 .offer-row:last-child {
@@ -394,12 +487,12 @@ h3 {
   font-family: monospace;
   font-size: 14px;
   font-weight: 700;
-  color: var(--tg-link);
+  color: var(--tg-link-color);
 }
 
 .offer-meta {
   font-size: 12px;
-  color: var(--tg-hint);
+  color: var(--tg-hint-color);
 }
 
 /* === История: KPI === */
@@ -411,7 +504,7 @@ h3 {
 }
 
 .hist-kpi-item {
-  background: var(--tg-secondary-bg);
+  background: var(--tg-secondary-bg-color);
   border-radius: 10px;
   padding: 10px 12px;
 }
@@ -424,7 +517,7 @@ h3 {
 
 .hist-kpi-label {
   font-size: 11px;
-  color: var(--tg-hint);
+  color: var(--tg-hint-color);
   margin-top: 2px;
 }
 
@@ -432,16 +525,16 @@ h3 {
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background: rgba(0, 0, 0, 0.6);
   z-index: 200;
   display: flex;
   align-items: flex-end;
 }
 
 .modal-sheet {
-  background: var(--tg-bg);
+  background: var(--tg-bg-color);
   border-radius: 20px 20px 0 0;
-  padding: 20px 16px 32px;
+  padding: 20px 16px calc(20px + var(--safe-bottom));
   width: 100%;
   max-height: 90vh;
   overflow-y: auto;
@@ -454,20 +547,21 @@ h3 {
 /* === Toast === */
 .toast {
   position: fixed;
-  bottom: calc(var(--tab-bar-height) + 12px);
+  bottom: calc(var(--tab-bar-height) + var(--safe-bottom) + 12px);
   left: 50%;
   transform: translateX(-50%);
-  background: rgba(0, 0, 0, 0.75);
+  background: rgba(40, 40, 40, 0.92);
   color: #fff;
   padding: 10px 20px;
   border-radius: 20px;
   font-size: 13px;
   z-index: 300;
   white-space: nowrap;
+  backdrop-filter: blur(8px);
 }
 
-.toast-success { background: rgba(40, 167, 69, 0.9); }
-.toast-error   { background: rgba(220, 53, 69, 0.9); }
+.toast-success { background: rgba(50, 215, 75, 0.85); }
+.toast-error   { background: rgba(255, 69, 58, 0.85); }
 
 /* === Страница скриптов === */
 .scripts-notice {
@@ -486,7 +580,8 @@ h3 {
   align-items: flex-start;
   gap: 10px;
   padding: 10px 0;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  min-height: 44px;
 }
 
 .health-node:last-child {
@@ -504,7 +599,7 @@ h3 {
 .health-dot-success { background: var(--color-success); }
 .health-dot-warning { background: var(--color-warning); }
 .health-dot-danger  { background: var(--color-danger); }
-.health-dot-neutral { background: var(--tg-hint); }
+.health-dot-neutral { background: var(--tg-hint-color); }
 
 /* === Фильтр-строка === */
 .filter-row {
@@ -514,31 +609,34 @@ h3 {
   overflow-x: auto;
   scrollbar-width: none;
   -ms-overflow-style: none;
+  padding-bottom: 2px;
 }
 
 .filter-row::-webkit-scrollbar { display: none; }
 
 .filter-chip {
   flex-shrink: 0;
-  background: var(--tg-secondary-bg);
+  background: var(--tg-secondary-bg-color);
   border: none;
   border-radius: 16px;
-  padding: 5px 12px;
+  padding: 7px 14px;
+  min-height: 34px;
   font-size: 13px;
-  color: var(--tg-text);
+  color: var(--tg-text-color);
   cursor: pointer;
   white-space: nowrap;
+  transition: background 0.15s, color 0.15s;
 }
 
 .filter-chip.active {
-  background: var(--tg-button);
-  color: var(--tg-button-text);
+  background: var(--tg-button-color);
+  color: var(--tg-button-text-color);
 }
 
 /* === Строка в списке истории === */
 .hist-row {
   padding: 10px 0;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 .hist-row:last-child { border-bottom: none; }
@@ -553,18 +651,18 @@ h3 {
   display: flex;
   gap: 10px;
   font-size: 12px;
-  color: var(--tg-hint);
+  color: var(--tg-hint-color);
   font-family: monospace;
 }
 
 /* === Разделитель === */
 .divider {
   height: 1px;
-  background: rgba(0, 0, 0, 0.07);
+  background: rgba(255, 255, 255, 0.07);
   margin: 12px 0;
 }
 
 /* === Скролл-область страниц === */
 .page-content {
-  min-height: calc(100vh - var(--tab-bar-height));
+  min-height: calc(100vh - var(--tab-bar-height) - var(--safe-bottom));
 }

@@ -1,5 +1,9 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { fetchJson } from "../api.js";
+import Loader from "../components/Loader.jsx";
+import ErrorBox from "../components/ErrorBox.jsx";
+import Card from "../components/Card.jsx";
+import { haptic } from "../theme.js";
 
 const WORKER_LABELS = {
   observer: "Observer",
@@ -50,28 +54,23 @@ export default function HealthPage() {
   const handleReconnect = async () => {
     setReconnecting(true);
     setReconnectMsg(null);
+    haptic.impact("medium");
     try {
       await fetchJson("/vision/reconnect", { method: "POST" });
+      haptic.notify("success");
       setReconnectMsg({ type: "ok", text: "Переподключение запущено" });
       // Обновляем статус через 2 секунды
       setTimeout(load, 2000);
     } catch (err) {
+      haptic.notify("error");
       setReconnectMsg({ type: "err", text: err.message });
     } finally {
       setReconnecting(false);
     }
   };
 
-  if (loading) return <div className="loading">Загрузка...</div>;
-  if (error)
-    return (
-      <div className="error-screen">
-        <p className="status-error">{error}</p>
-        <button className="btn btn-secondary" style={{ marginTop: 16 }} onClick={load}>
-          Повторить
-        </button>
-      </div>
-    );
+  if (loading) return <Loader />;
+  if (error) return <ErrorBox message={error} onRetry={load} />;
 
   const workers = details?.workers ?? {};
 
@@ -80,24 +79,25 @@ export default function HealthPage() {
       <h1>Состояние системы</h1>
 
       {/* Кнопка переподключения Vision */}
-      <div className="card">
-        <div className="card-title">Vision Browser</div>
+      <Card title="Vision Browser">
         <p className="hint" style={{ marginBottom: 8 }}>
           Переподключает CDP-соединение с anti-detect браузером.
         </p>
         {reconnectMsg && (
-          <p className={reconnectMsg.type === "ok" ? "status-ok" : "status-error"} style={{ marginBottom: 8, fontSize: 13 }}>
+          <p
+            className={reconnectMsg.type === "ok" ? "status-ok" : "status-error"}
+            style={{ marginBottom: 8, fontSize: 13 }}
+          >
             {reconnectMsg.text}
           </p>
         )}
         <button className="btn" onClick={handleReconnect} disabled={reconnecting}>
           {reconnecting ? "Переподключаю..." : "🔄 Reconnect Vision"}
         </button>
-      </div>
+      </Card>
 
       {/* Воркеры */}
-      <div className="card">
-        <div className="card-title">Воркеры</div>
+      <Card title="Воркеры">
         {Object.entries(workers).map(([key, info]) => (
           <div className="health-node" key={key}>
             <div className={dotClass(info?.status)} />
@@ -117,7 +117,7 @@ export default function HealthPage() {
         {Object.keys(workers).length === 0 && (
           <p className="hint">Данные о воркерах недоступны.</p>
         )}
-      </div>
+      </Card>
 
       <button className="btn btn-secondary" onClick={load}>
         Обновить
