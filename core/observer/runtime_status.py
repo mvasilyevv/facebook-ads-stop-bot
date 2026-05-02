@@ -4,9 +4,13 @@
 from __future__ import annotations
 
 import logging
+import os
 from datetime import UTC, datetime
 
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+
 from core.db import get_session_factory
+from core.models import WorkerHeartbeat
 from core.settings_queries import get_or_create_observer_settings
 
 logger = logging.getLogger(__name__)
@@ -114,3 +118,48 @@ async def update_observer_runtime_status(
             await session.commit()
     except Exception:
         logger.debug("Не удалось обновить runtime-статус observer", exc_info=True)
+
+
+async def update_worker_heartbeat(
+    worker_name: str,
+    *,
+    status: str = "running",
+    message: str | None = None,
+) -> None:
+    """Записывает heartbeat воркера в таблицу worker_heartbeats (upsert).
+
+    Не падает при ошибках БД — используй в finally-блоках воркеров.
+    Значения: worker_name — строковый идентификатор воркера,
+    например "disable", "enable", "enable_recommendation", "health_watchdog".
+    """
+    factory = get_session_factory()
+    now = datetime.now(UTC)
+    pid = os.getpid()
+
+    try:
+        async with factory() as session:
+            stmt = (
+                pg_insert(WorkerHeartbeat)
+                .values(
+                    worker_name=worker_name,
+                    last_heartbeat_at=now,
+                    pid=pid,
+                    status=status,
+                    message=message,
+                    updated_at=now,
+                )
+                .on_conflict_do_update(
+                    index_elements=["worker_name"],
+                    set_={
+                        "last_heartbeat_at": now,
+                        "pid": pid,
+                        "status": status,
+                        "message": message,
+                        "updated_at": now,
+                    },
+                )
+            )
+            await session.execute(stmt)
+            await session.commit()
+    except Exception:
+        logger.debug("Не удалось записать heartbeat воркера '%s'", worker_name, exc_info=True)

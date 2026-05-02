@@ -1,0 +1,570 @@
+/* Telegram theme variables для Mini App */
+:root {
+  --tg-bg: var(--tg-theme-bg-color, #ffffff);
+  --tg-text: var(--tg-theme-text-color, #000000);
+  --tg-hint: var(--tg-theme-hint-color, #999999);
+  --tg-link: var(--tg-theme-link-color, #2481cc);
+  --tg-button: var(--tg-theme-button-color, #2481cc);
+  --tg-button-text: var(--tg-theme-button-text-color, #ffffff);
+  --tg-secondary-bg: var(--tg-theme-secondary-bg-color, #f1f1f1);
+  --tg-accent: var(--tg-theme-accent-text-color, #2481cc);
+
+  --color-danger: #dc3545;
+  --color-warning: #e6a817;
+  --color-success: #28a745;
+  --color-info: #17a2b8;
+  --tab-bar-height: 58px;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background-color: var(--tg-bg);
+  color: var(--tg-text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+  /* Отступ под нижний tab-bar */
+  padding-bottom: var(--tab-bar-height);
+}
+
+/* === Контейнер === */
+.container {
+  max-width: 480px;
+  margin: 0 auto;
+  padding: 12px 12px 0;
+}
+
+/* === Нижний tab-bar === */
+.tab-bar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: var(--tab-bar-height);
+  background: var(--tg-bg);
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+  display: flex;
+  align-items: stretch;
+  z-index: 100;
+  max-width: 480px;
+  margin: 0 auto;
+}
+
+.tab-bar a {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  color: var(--tg-hint);
+  font-size: 10px;
+  gap: 2px;
+  transition: color 0.15s;
+}
+
+.tab-bar a .tab-icon {
+  font-size: 20px;
+  line-height: 1;
+}
+
+.tab-bar a.active {
+  color: var(--tg-button);
+}
+
+/* === Карточка === */
+.card {
+  background: var(--tg-secondary-bg);
+  border-radius: 12px;
+  padding: 14px;
+  margin-bottom: 10px;
+}
+
+.card-title {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 8px;
+  color: var(--tg-text);
+}
+
+/* === Кнопки === */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--tg-button);
+  color: var(--tg-button-text);
+  border: none;
+  border-radius: 10px;
+  padding: 11px 20px;
+  font-size: 15px;
+  font-weight: 500;
+  cursor: pointer;
+  width: 100%;
+  margin-top: 8px;
+  transition: opacity 0.15s;
+}
+
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.btn:active:not(:disabled) {
+  opacity: 0.8;
+}
+
+.btn-secondary {
+  background: var(--tg-secondary-bg);
+  color: var(--tg-text);
+  border: 1px solid rgba(0, 0, 0, 0.12);
+}
+
+.btn-danger {
+  background: var(--color-danger);
+  color: #fff;
+}
+
+.btn-sm {
+  padding: 6px 14px;
+  font-size: 13px;
+  border-radius: 8px;
+  width: auto;
+  margin-top: 0;
+}
+
+/* === Статусы === */
+.status-ok   { color: var(--color-success); font-weight: 500; }
+.status-warn { color: var(--color-warning); font-weight: 500; }
+.status-error { color: var(--color-danger); font-weight: 500; }
+.status-info  { color: var(--color-info); font-weight: 500; }
+
+/* === Бейджи === */
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.badge-stop    { background: rgba(220, 53, 69, 0.15); color: var(--color-danger); }
+.badge-warning { background: rgba(230, 168, 23, 0.15); color: var(--color-warning); }
+.badge-normal  { background: rgba(40, 167, 69, 0.15); color: var(--color-success); }
+.badge-disabled { background: rgba(0, 0, 0, 0.07); color: var(--tg-hint); }
+.badge-active  { background: rgba(36, 129, 204, 0.15); color: var(--tg-button); }
+
+/* === Hint === */
+.hint {
+  color: var(--tg-hint);
+  font-size: 12px;
+}
+
+/* === KPI-стрип === */
+.kpi-strip {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.kpi-item {
+  background: var(--tg-secondary-bg);
+  border-radius: 10px;
+  padding: 10px;
+  text-align: center;
+}
+
+.kpi-value {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--tg-text);
+}
+
+.kpi-label {
+  font-size: 11px;
+  color: var(--tg-hint);
+  margin-top: 2px;
+}
+
+/* === Состояния загрузки / ошибки === */
+.loading {
+  text-align: center;
+  padding: 48px 20px;
+  color: var(--tg-hint);
+}
+
+.error-screen {
+  text-align: center;
+  padding: 40px 20px;
+}
+
+/* === Заголовки === */
+h1 {
+  font-size: 18px;
+  font-weight: 700;
+  margin-bottom: 14px;
+}
+
+h2 {
+  font-size: 15px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+h3 {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+/* === Объявления: карточка === */
+.ad-card {
+  background: var(--tg-secondary-bg);
+  border-radius: 12px;
+  padding: 12px;
+  margin-bottom: 8px;
+  position: relative;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.ad-card-stop    { border-left: 3px solid var(--color-danger); }
+.ad-card-warning { border-left: 3px solid var(--color-warning); }
+.ad-card-normal  { border-left: 3px solid transparent; }
+.ad-card-disabled { border-left: 3px solid rgba(0,0,0,0.15); opacity: 0.7; }
+
+.ad-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.ad-name {
+  font-size: 13px;
+  font-weight: 500;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.ad-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.metric-chip {
+  background: rgba(0, 0, 0, 0.04);
+  border-radius: 6px;
+  padding: 5px 6px;
+  text-align: center;
+}
+
+.metric-chip .label { font-size: 10px; color: var(--tg-hint); }
+.metric-chip .value { font-size: 13px; font-weight: 600; font-family: monospace; }
+
+/* === Форма === */
+.form-group {
+  margin-bottom: 14px;
+}
+
+.form-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--tg-hint);
+  margin-bottom: 5px;
+}
+
+.form-input {
+  width: 100%;
+  background: var(--tg-secondary-bg);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 15px;
+  color: var(--tg-text);
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.form-input:focus {
+  border-color: var(--tg-button);
+}
+
+.form-input:disabled {
+  opacity: 0.5;
+}
+
+/* === Toggle === */
+.toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 0;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.toggle-row:last-child {
+  border-bottom: none;
+}
+
+.toggle-label {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.toggle-sub {
+  font-size: 12px;
+  color: var(--tg-hint);
+  margin-top: 1px;
+}
+
+/* iOS-style toggle */
+.toggle-switch {
+  position: relative;
+  width: 51px;
+  height: 31px;
+  flex-shrink: 0;
+}
+
+.toggle-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+  position: absolute;
+}
+
+.toggle-track {
+  position: absolute;
+  inset: 0;
+  background: #ccc;
+  border-radius: 31px;
+  transition: background 0.2s;
+  cursor: pointer;
+}
+
+.toggle-switch input:checked + .toggle-track {
+  background: var(--tg-button);
+}
+
+.toggle-knob {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 25px;
+  height: 25px;
+  background: #fff;
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+  transition: transform 0.2s;
+}
+
+.toggle-switch input:checked ~ .toggle-track .toggle-knob,
+.toggle-switch input:checked + .toggle-track + .toggle-knob {
+  transform: translateX(20px);
+}
+
+/* === Список офферов === */
+.offer-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.offer-row:last-child {
+  border-bottom: none;
+}
+
+.offer-code {
+  font-family: monospace;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--tg-link);
+}
+
+.offer-meta {
+  font-size: 12px;
+  color: var(--tg-hint);
+}
+
+/* === История: KPI === */
+.hist-kpi {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.hist-kpi-item {
+  background: var(--tg-secondary-bg);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+.hist-kpi-value {
+  font-size: 18px;
+  font-weight: 700;
+  font-family: monospace;
+}
+
+.hist-kpi-label {
+  font-size: 11px;
+  color: var(--tg-hint);
+  margin-top: 2px;
+}
+
+/* === Модальный экран === */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 200;
+  display: flex;
+  align-items: flex-end;
+}
+
+.modal-sheet {
+  background: var(--tg-bg);
+  border-radius: 20px 20px 0 0;
+  padding: 20px 16px 32px;
+  width: 100%;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+.modal-sheet h2 {
+  margin-bottom: 16px;
+}
+
+/* === Toast === */
+.toast {
+  position: fixed;
+  bottom: calc(var(--tab-bar-height) + 12px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.75);
+  color: #fff;
+  padding: 10px 20px;
+  border-radius: 20px;
+  font-size: 13px;
+  z-index: 300;
+  white-space: nowrap;
+}
+
+.toast-success { background: rgba(40, 167, 69, 0.9); }
+.toast-error   { background: rgba(220, 53, 69, 0.9); }
+
+/* === Страница скриптов === */
+.scripts-notice {
+  text-align: center;
+  padding: 32px 16px;
+}
+
+.scripts-notice .icon {
+  font-size: 48px;
+  margin-bottom: 12px;
+}
+
+/* === Health: узел === */
+.health-node {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.health-node:last-child {
+  border-bottom: none;
+}
+
+.health-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-top: 5px;
+  flex-shrink: 0;
+}
+
+.health-dot-success { background: var(--color-success); }
+.health-dot-warning { background: var(--color-warning); }
+.health-dot-danger  { background: var(--color-danger); }
+.health-dot-neutral { background: var(--tg-hint); }
+
+/* === Фильтр-строка === */
+.filter-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.filter-row::-webkit-scrollbar { display: none; }
+
+.filter-chip {
+  flex-shrink: 0;
+  background: var(--tg-secondary-bg);
+  border: none;
+  border-radius: 16px;
+  padding: 5px 12px;
+  font-size: 13px;
+  color: var(--tg-text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.filter-chip.active {
+  background: var(--tg-button);
+  color: var(--tg-button-text);
+}
+
+/* === Строка в списке истории === */
+.hist-row {
+  padding: 10px 0;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.hist-row:last-child { border-bottom: none; }
+
+.hist-row-name {
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: 3px;
+}
+
+.hist-row-meta {
+  display: flex;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--tg-hint);
+  font-family: monospace;
+}
+
+/* === Разделитель === */
+.divider {
+  height: 1px;
+  background: rgba(0, 0, 0, 0.07);
+  margin: 12px 0;
+}
+
+/* === Скролл-область страниц === */
+.page-content {
+  min-height: calc(100vh - var(--tab-bar-height));
+}

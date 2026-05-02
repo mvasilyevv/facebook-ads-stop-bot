@@ -72,3 +72,4 @@ class TelegramNotificationStream(StrEnum):
     WARNING = "WARNING"
     STOP = "STOP"
     ENABLE = "ENABLE"
+    OPS = "OPS"

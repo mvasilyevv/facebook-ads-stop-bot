@@ -34,6 +34,17 @@
       "text_markers": ["Произошла ошибка", "Something went wrong", "Try again"],
       "safe_button_texts": ["Закрыть", "Close", "X"],
       "forbidden_button_texts": []
+    },
+    {
+      "id": "fb_notifications_jewel",
+      "name": "FB notifications jewel flyout",
+      "detect_selector": "#fbNotificationsFlyout",
+      "dismiss_strategy": "click_outside",
+      "dismiss_selector": "body",
+      "severity": "normal",
+      "text_markers": [],
+      "safe_button_texts": [],
+      "forbidden_button_texts": []
     }
   ]
 }

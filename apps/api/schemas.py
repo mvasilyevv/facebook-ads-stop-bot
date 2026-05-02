@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal
 
 from pydantic import BaseModel, Field, field_validator
@@ -52,6 +53,7 @@ class ObserverSettingsSchema(BaseModel):
     cpr_stop_percent_of_base: Decimal | None = Field(default=None, gt=0)
     is_scanning_enabled: bool = True
     auto_enable_recommendations: bool = False
+    pause_until: datetime | None = None
 
 
 class ObserverThresholdRecommendationStepSchema(BaseModel):

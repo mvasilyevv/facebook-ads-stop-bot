@@ -6,7 +6,7 @@ from __future__ import annotations
 import sys
 import time
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 # Добавляем корень проекта в sys.path, чтобы импортировать bin/
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "bin"))
@@ -104,3 +104,49 @@ def test_no_telegram_for_ignored_event(monkeypatch):
         mock_send("should not happen")
 
     mock_send.assert_not_called()
+
+
+# Сценарий 5: при forum_topics_enabled=True и topic_ops_thread_id=42 — алерт с message_thread_id=42
+def test_send_telegram_uses_ops_thread_id():
+    """При наличии ops thread_id в TelegramSettings — send_message получает message_thread_id=42."""
+    import asyncio
+
+    from supervisor_crashmail import _send_telegram
+
+    # Мок TelegramSettings с forum topics включёнными
+    fake_settings_row = MagicMock()
+    fake_settings_row.forum_topics_enabled = True
+    fake_settings_row.topic_ops_thread_id = 42
+
+    # Мок сессии БД
+    fake_session = AsyncMock()
+    fake_session.__aenter__ = AsyncMock(return_value=fake_session)
+    fake_session.__aexit__ = AsyncMock(return_value=None)
+    fake_session.scalar = AsyncMock(return_value=fake_settings_row)
+
+    fake_factory = MagicMock(return_value=fake_session)
+
+    captured_kwargs: dict = {}
+
+    async def _fake_send(**kwargs) -> None:
+        captured_kwargs.update(kwargs)
+
+    fake_client = MagicMock()
+    fake_client.send_message = _fake_send
+    fake_client.close = AsyncMock()
+
+    from core.config import Settings
+
+    fake_settings_cfg = MagicMock(spec=Settings)
+    fake_settings_cfg.telegram_bot_token = "token"
+    fake_settings_cfg.telegram_chat_id = "chat123"
+
+    with (
+        patch("supervisor_crashmail.asyncio.run", side_effect=asyncio.run),
+        patch("core.config.get_settings", return_value=fake_settings_cfg),
+        patch("core.db.get_session_factory", return_value=fake_factory),
+        patch("core.telegram.client.TelegramBotClient", return_value=fake_client),
+    ):
+        _send_telegram("тест ops thread")
+
+    assert captured_kwargs.get("message_thread_id") == 42

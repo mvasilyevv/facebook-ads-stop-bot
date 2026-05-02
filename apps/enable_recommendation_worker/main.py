@@ -19,6 +19,7 @@ from core.enable_recommendations.service import (
     promote_recommendation_to_enable_task,
 )
 from core.models import AdAutoEnableDisabled, EnableRecommendationEvent, FbAd
+from core.observer.runtime_status import update_worker_heartbeat
 from core.settings_queries import get_observer_settings
 from core.telegram.delivery import (
     broadcast_enable_recommendation_message,
@@ -29,6 +30,14 @@ from core.telegram.renderer import normalize_enable_recommendation_reason
 logger = logging.getLogger(__name__)
 
 RECOMMENDATION_POLL_INTERVAL_SECONDS = 30
+HEARTBEAT_INTERVAL_SECONDS = 30
+
+
+async def _heartbeat_loop() -> None:
+    """Фоновая задача: отправляет heartbeat enable_recommendation worker каждые 30 секунд."""
+    while True:
+        await update_worker_heartbeat("enable_recommendation", status="running")
+        await asyncio.sleep(HEARTBEAT_INTERVAL_SECONDS)
 
 
 @dataclass(frozen=True)
@@ -268,20 +277,24 @@ async def recommendation_worker_loop(
 ) -> None:
     """Бесконечный цикл recommendation worker."""
     process_cycle = process_cycle or process_enable_recommendation_cycle
-    while not (shutdown_event and shutdown_event.is_set()):
-        try:
-            created_count = await process_cycle()
-            if created_count:
-                logger.info(
-                    "Воркер рекомендаций: опубликовано новых рекомендаций: %s",
-                    created_count,
-                )
-        except Exception:
-            logger.exception("Воркер рекомендаций: ошибка в цикле")
+    heartbeat_task = asyncio.create_task(_heartbeat_loop())
+    try:
+        while not (shutdown_event and shutdown_event.is_set()):
+            try:
+                created_count = await process_cycle()
+                if created_count:
+                    logger.info(
+                        "Воркер рекомендаций: опубликовано новых рекомендаций: %s",
+                        created_count,
+                    )
+            except Exception:
+                logger.exception("Воркер рекомендаций: ошибка в цикле")
 
-        try:
-            if shutdown_event:
-                await asyncio.wait_for(shutdown_event.wait(), timeout=poll_interval_seconds)
-                break
-        except asyncio.TimeoutError:
-            continue
+            try:
+                if shutdown_event:
+                    await asyncio.wait_for(shutdown_event.wait(), timeout=poll_interval_seconds)
+                    break
+            except asyncio.TimeoutError:
+                continue
+    finally:
+        heartbeat_task.cancel()

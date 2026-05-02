@@ -21,6 +21,7 @@ from core.db import get_session_factory
 from core.domain import AlertStage, AlertState, DisableTaskStatus, EnableTaskStatus
 from core.enable_tasks import reconcile_enable_tasks
 from core.models import AdSnapshot, DisableTask, EnableTask, VisionSettings
+from core.observer.runtime_status import update_worker_heartbeat
 from core.sentry import setup_sentry
 from core.task_queue import PostgresTaskQueue
 from core.telegram.client import TelegramBotClient
@@ -37,6 +38,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 VISION_SETTINGS_POLL_INTERVAL_SECONDS = 5
+HEARTBEAT_INTERVAL_SECONDS = 30
 
 # Параметры подтверждения для enable
 ENABLE_CONFIRMATION_POLL_DELAYS_SECONDS = (0.0, 3.0, 3.0, 3.0, 4.0, 4.0)
@@ -57,6 +59,18 @@ _GRPC_CONNECTION_ERROR_MARKERS = (
     "stream closed",
     "deadline exceeded",
 )
+
+
+async def _heartbeat_loop(status_ref: list[str], message_ref: list[str | None]) -> None:
+    """Фоновая задача: отправляет heartbeat enable worker каждые 30 секунд."""
+    while True:
+        await update_worker_heartbeat(
+            "enable",
+            status=status_ref[0],
+            message=message_ref[0],
+        )
+        await asyncio.sleep(HEARTBEAT_INTERVAL_SECONDS)
+
 
 # Общая очередь задач на включение
 _enable_queue = PostgresTaskQueue(
@@ -499,12 +513,18 @@ async def enable_worker_loop(
     poll_interval: int = 5,
     shutdown_event: asyncio.Event | None = None,
     send_completion_callback=None,
+    status_ref: list[str] | None = None,
+    message_ref: list[str | None] | None = None,
 ) -> None:
     """Бесконечный цикл обработки задач на включение."""
     while not (shutdown_event and shutdown_event.is_set()):
         try:
             task = await claim_next_task()
             if task is None:
+                if status_ref is not None:
+                    status_ref[0] = "idle"
+                if message_ref is not None:
+                    message_ref[0] = None
                 try:
                     if shutdown_event:
                         await asyncio.wait_for(shutdown_event.wait(), timeout=poll_interval)
@@ -512,6 +532,11 @@ async def enable_worker_loop(
                 except asyncio.TimeoutError:
                     pass
                 continue
+
+            if status_ref is not None:
+                status_ref[0] = "busy"
+            if message_ref is not None:
+                message_ref[0] = f"Задача {task.id} для {task.fb_ad.fb_ad_id}"
 
             logger.info(
                 "Enable worker: выполняю задачу %s для объявления %s",
@@ -622,9 +647,16 @@ async def main() -> None:
 
     grpc_client: BrowserAgentClient | None = None
 
+    # Разделяемый статус для heartbeat-задачи
+    status_ref: list[str] = ["idle"]
+    message_ref: list[str | None] = [None]
+    heartbeat_task = asyncio.create_task(_heartbeat_loop(status_ref, message_ref))
+
     try:
         while not shutdown_event.is_set():
             if not await has_claimable_enable_tasks():
+                status_ref[0] = "idle"
+                message_ref[0] = None
                 if await wait_for_shutdown_or_timeout(
                     shutdown_event,
                     VISION_SETTINGS_POLL_INTERVAL_SECONDS,
@@ -639,6 +671,7 @@ async def main() -> None:
                         "Enable worker ждёт Vision-настройки из UI или .env и продолжает работать в фоне"
                     )
                     waiting_for_vision_logged = True
+                status_ref[0] = "idle"
                 if await wait_for_shutdown_or_timeout(
                     shutdown_event,
                     VISION_SETTINGS_POLL_INTERVAL_SECONDS,
@@ -660,6 +693,8 @@ async def main() -> None:
                     tg_client=tg_client,
                     tg_chat_id=settings.telegram_chat_id,
                     shutdown_event=shutdown_event,
+                    status_ref=status_ref,
+                    message_ref=message_ref,
                     send_completion_callback=lambda task, status, detail, next_retry_at: (
                         _send_enable_task_runtime_update(
                             task,
@@ -687,6 +722,7 @@ async def main() -> None:
     except KeyboardInterrupt:
         logger.info("Enable worker остановлен по Ctrl+C")
     finally:
+        heartbeat_task.cancel()
         if tg_client is not None:
             await tg_client.close()
         logger.info("Enable worker: ресурсы освобождены")

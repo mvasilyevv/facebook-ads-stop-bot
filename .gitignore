@@ -2,6 +2,8 @@ __pycache__/
 *.pyc
 .venv/
 .env
+.env.local
+**/.env.local
 *.egg-info/
 .ruff_cache/
 .pytest_cache/
@@ -15,6 +17,8 @@ __pycache__/
 .tmp/
 frontend/dist/
 frontend/node_modules/
+frontend-mini/dist/
+frontend-mini/node_modules/
 services/browser-agent/node_modules/
 logs/
 supervisord.pid

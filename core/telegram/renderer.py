@@ -530,6 +530,7 @@ def render_alert_message(
     stage: AlertStage,
     items: list[TelegramAlertItem],
     snooze_note: str | None = None,
+    account_id: str | None = None,
 ) -> TelegramOutgoingMessage:
     """Формирует Telegram-alert с полной иерархией объявления и метриками."""
     lines: list[str] = []
@@ -566,44 +567,47 @@ def render_alert_message(
             lines.append(html.escape(snooze_note))
             lines.append("")
 
+        if stage == AlertStage.STOP:
+            lines.append("Создана задача на отключение.")
+            lines.append("")
+
         diagnostics_lines = _build_alert_diagnostics_lines(item.metrics_json or {})
         if diagnostics_lines:
             lines.append("<b>Диагностика:</b>")
             lines.extend(diagnostics_lines)
             lines.append("")
 
-        if stage == AlertStage.WARNING:
-            keyboard.append(
-                [
-                    {
-                        "text": f"Отключить: {item.ad_name[:24].rstrip()}",
-                        "callback_data": f"disable:{item.snapshot_id}",
-                    },
-                    {
-                        "text": "Игнорировать",
-                        "callback_data": f"snooze:{item.snapshot_id}:60",
-                    },
-                ]
+        # Ряд 1: Отключить | Снуз 30 мин
+        row1: list[dict[str, str]] = [
+            {
+                "text": "⛔ Отключить",
+                "callback_data": f"disable:{item.fb_ad_id}:{item.snapshot_id}",
+            },
+            {
+                "text": "😴 Снуз 30 мин",
+                "callback_data": f"snooze:{item.fb_ad_id}:30:{item.snapshot_id}",
+            },
+        ]
+        keyboard.append(row1)
+
+        # Ряд 2: Снять алерт [+ Открыть в Ads Manager]
+        row2: list[dict[str, str]] = [
+            {
+                "text": "✅ Снять алерт",
+                "callback_data": f"claim:{item.fb_ad_id}:{item.snapshot_id}",
+            },
+        ]
+        if account_id:
+            row2.append(
+                {
+                    "text": "🔗 Открыть в Ads Manager",
+                    "url": (
+                        f"https://adsmanager.facebook.com/adsmanager/manage/ads"
+                        f"?act={account_id}&selected_ad_ids={item.fb_ad_id}"
+                    ),
+                }
             )
-            keyboard.append(
-                [
-                    {
-                        "text": "30 мин",
-                        "callback_data": f"snooze:{item.snapshot_id}:30",
-                    },
-                    {
-                        "text": "1 час",
-                        "callback_data": f"snooze:{item.snapshot_id}:60",
-                    },
-                    {
-                        "text": "2 часа",
-                        "callback_data": f"snooze:{item.snapshot_id}:120",
-                    },
-                ]
-            )
-        else:
-            lines.append("<b>Действие:</b>")
-            lines.append("Создана задача на отключение.")
+        keyboard.append(row2)
 
     return TelegramOutgoingMessage(
         text="\n".join(lines).strip(),

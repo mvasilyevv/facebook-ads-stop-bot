@@ -39,6 +39,7 @@ async def test_update_observer_settings_persists_step_thresholds(mock_db):
         cpr_warning_percent_of_stop=Decimal("80"),
         cpr_stop_percent_of_base=Decimal("100"),
         auto_enable_recommendations=False,
+        pause_until=None,
     )
     result = MagicMock()
     result.scalar_one_or_none.return_value = row
@@ -87,6 +88,7 @@ async def test_get_observer_settings_returns_auto_enable_flag(mock_db):
         cpr_warning_percent_of_stop=Decimal("65"),
         cpr_stop_percent_of_base=Decimal("85"),
         auto_enable_recommendations=True,
+        pause_until=None,
     )
     result = MagicMock()
     result.scalar_one_or_none.return_value = row
@@ -117,6 +119,7 @@ async def test_update_observer_settings_round_trips_auto_enable_flag(mock_db):
         cpr_warning_percent_of_stop=Decimal("80"),
         cpr_stop_percent_of_base=Decimal("100"),
         auto_enable_recommendations=False,
+        pause_until=None,
     )
     result = MagicMock()
     result.scalar_one_or_none.return_value = row
@@ -152,6 +155,7 @@ async def test_update_observer_settings_preserves_auto_enable_when_omitted(mock_
         cpr_warning_percent_of_stop=Decimal("80"),
         cpr_stop_percent_of_base=Decimal("100"),
         auto_enable_recommendations=True,
+        pause_until=None,
     )
     result = MagicMock()
     result.scalar_one_or_none.return_value = row

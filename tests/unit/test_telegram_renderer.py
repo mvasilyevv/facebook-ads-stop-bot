@@ -240,7 +240,11 @@ def test_render_alert_message_stop_has_no_global_buttons():
     message = render_alert_message(stage=AlertStage.STOP, items=[item])
 
     assert "Создана задача на отключение." in message.text
-    assert message.reply_markup is None
+    # STOP-алерт тоже содержит inline-клавиатуру с кнопками управления (Wave A.2)
+    assert message.reply_markup is not None
+    keyboard = message.reply_markup["inline_keyboard"]
+    assert len(keyboard) == 2
+    assert keyboard[0][0]["callback_data"] == "disable:ad-3:snap-3"
 
 
 # --- render_enable_recommendation_message ---

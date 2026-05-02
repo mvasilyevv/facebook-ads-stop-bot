@@ -24,6 +24,7 @@ from core.models import (
     EnableTask,
     ObserverSettings,
     TelegramSettings,
+    WorkerHeartbeat,
 )
 
 logger = logging.getLogger(__name__)
@@ -241,12 +242,35 @@ async def collect_health_details(db: AsyncSession) -> HealthDetails:
     workers: dict[str, WorkerHealth] = {
         "observer": _worker_health(observer_heartbeat, _WORKERS["observer"]),
         "telegram_poller": _worker_health(poller_heartbeat, _WORKERS["telegram_poller"]),
-        # Воркеры без heartbeat в БД — всегда помечаются как недоступные
+        # Воркеры с heartbeat в таблице worker_heartbeats — читаем ниже
         "disable": WorkerHealth(healthy=False),
         "enable": WorkerHealth(healthy=False),
         "enable_recommendation": WorkerHealth(healthy=False),
         "health_watchdog": WorkerHealth(healthy=False),
     }
+
+    if db_healthy:
+        try:
+            hb_rows = (
+                (
+                    await db.execute(
+                        select(WorkerHeartbeat).where(
+                            WorkerHeartbeat.worker_name.in_(
+                                ["disable", "enable", "enable_recommendation", "health_watchdog"]
+                            )
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            for row in hb_rows:
+                if row.worker_name in _WORKERS:
+                    workers[row.worker_name] = _worker_health(
+                        row.last_heartbeat_at, _WORKERS[row.worker_name]
+                    )
+        except Exception as exc:
+            logger.warning("Health: не удалось прочитать worker_heartbeats: %s", exc)
 
     # --- Внешние сервисы (параллельно) ---
     cfg = get_settings()

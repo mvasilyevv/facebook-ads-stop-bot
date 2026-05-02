@@ -1093,6 +1093,11 @@ def _build_dashboard_performance_payload(
     """Агрегирует performance-данные из текущего дня и архива суток кабинета."""
     current_time = now or _dashboard_now()
     cutoff = cutoff or _performance_cutoff(period, current_time)
+    # Приводим cutoff к dashboard-TZ, чтобы ключи timeline_map и bucket'ы из snapshot
+    # (которые тоже строятся через _to_dashboard_timezone) были в одной TZ.
+    # Без этого UTC-ключи в timeline_map не совпадали с локальными bucket'ами и spend
+    # за свежие часы терялся — UI показывал "график замер".
+    cutoff = _to_dashboard_timezone(cutoff)
     archives = archives or []
     offers = offers or []
     fake_map = fake_map or {}
@@ -1240,8 +1245,20 @@ def _build_performance_timeline_from_metric_history_rows(
     cutoff: datetime,
     fake_map: dict[str, int] | None = None,
 ) -> list[DashboardPerformanceTimelinePointSchema]:
-    """Строит динамику из истории, перенося последнее значение объявления вперёд."""
+    """Строит cumulative-таймлайн из истории метрик.
+
+    В каждом баккете показывается **накопленный итог** на конец баккета
+    (последнее известное значение spend/regs/deps по каждому объявлению),
+    а не приращение. Если за период между сканами метрика не менялась —
+    значение сохраняется (горизонтальная линия), а не падает к нулю.
+
+    Сброс кабинетных метрик (cur < prev) обрабатывается через carry-over:
+    разница, потерянная при сбросе, добавляется в carry, чтобы итог не «проседал».
+    """
     current_time = now or _dashboard_now()
+    # Приводим cutoff к dashboard-TZ — иначе bucket-ключи (UTC) расходятся с
+    # bucket'ами snapshot-ов (local) и UI замирает на старых часах.
+    cutoff = _to_dashboard_timezone(cutoff)
     fake_map = fake_map or {}
     step = _timeline_bucket_step(period)
     bucket_cursor = _timeline_bucket_start(cutoff, period)
@@ -1260,30 +1277,52 @@ def _build_performance_timeline_from_metric_history_rows(
         if bucket in rows_by_bucket:
             rows_by_bucket[bucket].append(row)
 
-    latest_by_ad: dict[_uuid.UUID, tuple[Decimal, int, int, str]] = {}
+    # running хранит ПОСЛЕДНЕЕ известное значение по каждому объявлению.
+    # carry — накопительный сдвиг, защищающий от падения cumulative при сбросах
+    # кабинетных метрик (новый день в Ads Manager).
+    running: dict[_uuid.UUID, tuple[Decimal, int, int]] = {}
+    carry_spend = Decimal("0")
+    carry_regs = 0
+    carry_deps = 0
+
     timeline: list[DashboardPerformanceTimelinePointSchema] = []
     for bucket in buckets:
         for row in sorted(rows_by_bucket[bucket], key=lambda item: item.cycle_ts):
+            ad_id = row.ad_id
             fb_ad_id = str(getattr(row, "fb_ad_id", "") or "")
-            deposits = _effective_deposits(
+            cur_spend = Decimal(getattr(row, "spend", 0) or 0)
+            cur_regs = int(getattr(row, "registrations", 0) or 0)
+            cur_deps = _effective_deposits(
                 int(getattr(row, "deposits", 0) or 0),
                 fb_ad_id,
                 fake_map,
             )
-            latest_by_ad[row.ad_id] = (
-                Decimal(getattr(row, "spend", 0) or 0),
-                int(getattr(row, "registrations", 0) or 0),
-                deposits,
-                fb_ad_id,
-            )
+
+            prev_spend, prev_regs, prev_deps = running.get(ad_id, (Decimal("0"), 0, 0))
+
+            # Сброс (новый день кабинета): то что уже было — переносим в carry,
+            # чтобы cumulative не «проседал» при обнулении внутри объявления.
+            if cur_spend < prev_spend:
+                carry_spend += prev_spend
+            if cur_regs < prev_regs:
+                carry_regs += prev_regs
+            if cur_deps < prev_deps:
+                carry_deps += prev_deps
+
+            running[ad_id] = (cur_spend, cur_regs, cur_deps)
+
+        # Cumulative: сумма последних значений по всем объявлениям + carry от сбросов.
+        cum_spend = sum((s for s, _, _ in running.values()), Decimal("0")) + carry_spend
+        cum_regs = sum(r for _, r, _ in running.values()) + carry_regs
+        cum_deps = sum(d for _, _, d in running.values()) + carry_deps
 
         timeline.append(
             DashboardPerformanceTimelinePointSchema(
                 timestamp=bucket.isoformat(),
                 label=_timeline_bucket_label(bucket, period),
-                spend=sum((item[0] for item in latest_by_ad.values()), Decimal("0")),
-                registrations=sum(item[1] for item in latest_by_ad.values()),
-                deposits=sum(item[2] for item in latest_by_ad.values()),
+                spend=cum_spend,
+                registrations=cum_regs,
+                deposits=cum_deps,
             )
         )
     return timeline
@@ -1666,8 +1705,32 @@ async def get_dashboard_performance(
         cutoff=cutoff,
         fake_map=fake_map,
     )
-    if metric_timeline:
+    # Используем metric_timeline только если есть хотя бы одна точка с реальными данными.
+    # Массив из одних нулей не должен перезаписывать корректный snapshot-based timeline.
+    has_real_data = any(
+        (float(pt.spend) > 0 or (pt.registrations or 0) > 0 or (pt.deposits or 0) > 0)
+        for pt in metric_timeline
+    )
+    snapshot_pts = len(payload.timeline)
+    metric_pts = len(metric_timeline)
+    if metric_timeline and has_real_data:
+        import logging as _logging
+
+        _logging.getLogger(__name__).debug(
+            "DashboardTimeline: выбран metric_history (%d точек), snapshot имел %d точек",
+            metric_pts,
+            snapshot_pts,
+        )
         payload.timeline = metric_timeline
+    else:
+        import logging as _logging
+
+        _logging.getLogger(__name__).debug(
+            "DashboardTimeline: оставлен snapshot-based (%d точек), "
+            "metric_history имел %d точек (все нули или пуст)",
+            snapshot_pts,
+            metric_pts,
+        )
     return payload
 
 
@@ -2508,7 +2571,9 @@ async def get_chart_data(
     alert_rows = alerts_result.all()
 
     alerts_timeline: dict[datetime, dict] = {}
-    bucket_cursor = _timeline_bucket_start(event_cutoff, period)
+    # Приводим event_cutoff к dashboard-TZ, чтобы лейблы bucket'ов совпадали
+    # с performance-таймлайном (иначе ось X дублируется и перекрывается).
+    bucket_cursor = _timeline_bucket_start(_to_dashboard_timezone(event_cutoff), period)
     last_bucket = _timeline_bucket_start(now, period)
     while bucket_cursor <= last_bucket:
         label = _timeline_bucket_label(bucket_cursor, period)

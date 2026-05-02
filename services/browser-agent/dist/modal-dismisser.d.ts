@@ -5,6 +5,9 @@ export interface KnownModal {
     text_markers: string[];
     safe_button_texts: string[];
     forbidden_button_texts: string[];
+    detect_selector?: string;
+    dismiss_strategy?: 'click_outside' | 'button';
+    dismiss_selector?: string;
 }
 export interface DismissedEntry {
     id: string;

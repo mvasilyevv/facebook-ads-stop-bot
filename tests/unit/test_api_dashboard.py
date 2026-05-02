@@ -1010,8 +1010,10 @@ def test_build_dashboard_performance_payload_aggregates_metrics():
     assert payload.campaigns[1].reg_to_dep_rate == pytest.approx(10.0)
 
 
-# Проверяем, что 30-минутный график переносит последнее значение объявления вперёд.
-def test_build_performance_timeline_from_metric_history_carries_forward_cumulative_spend():
+# Проверяем, что 30-минутный график показывает накопительный (нарастающий) итог.
+def test_build_performance_timeline_from_metric_history_cumulative_spend():
+    # Проверяем что timeline показывает нарастающий итог — после появления значения
+    # оно сохраняется в последующих бакетах до следующего обновления.
     from apps.api.routers.dashboard import _build_performance_timeline_from_metric_history_rows
 
     ad_1 = uuid.uuid4()
@@ -1051,14 +1053,19 @@ def test_build_performance_timeline_from_metric_history_carries_forward_cumulati
         cutoff=cutoff,
     )
 
+    # Метки в TZ дашборда (UTC+2 для Europe/Kaliningrad): 07:00 UTC → 09:00 локально.
     assert [point.label for point in timeline] == [
-        "07:00",
-        "07:30",
-        "08:00",
-        "08:30",
         "09:00",
         "09:30",
+        "10:00",
+        "10:30",
+        "11:00",
+        "11:30",
     ]
+    # 09:00 — ad_1(0.10) + ad_2(0.20) = 0.30
+    # 09:30 — нет новых данных → переносим 0.30
+    # 10:00 — ad_1 вырос до 0.50, ad_2=0.20 → 0.70
+    # 10:30..11:30 — нет данных → переносим 0.70
     assert [point.spend for point in timeline] == [
         Decimal("0.30"),
         Decimal("0.30"),
@@ -1067,6 +1074,7 @@ def test_build_performance_timeline_from_metric_history_carries_forward_cumulati
         Decimal("0.70"),
         Decimal("0.70"),
     ]
+    # registrations: 0 до 10:00, потом 1 (нарастающий)
     assert [point.registrations for point in timeline] == [0, 0, 1, 1, 1, 1]
 
 
@@ -1668,3 +1676,177 @@ async def test_disable_auto_enable_handles_missing_observer_settings(mock_db):
     assert added_row.fb_ad_id == "ad-no-settings"
     assert added_row.cabinet_day_started_at == _UNKNOWN_CABINET_DAY_STARTED_AT
     mock_db.commit.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# Тесты логики выбора источника таймлайна в get_dashboard_performance
+# ---------------------------------------------------------------------------
+
+
+def _make_timeline_point(spend="0.00", registrations=0, deposits=0):
+    """Создаёт точку таймлайна с заданными значениями."""
+    from decimal import Decimal
+
+    from apps.api.schemas import DashboardPerformanceTimelinePointSchema
+
+    return DashboardPerformanceTimelinePointSchema(
+        timestamp="2026-01-01T00:00:00+00:00",
+        label="00:00",
+        spend=Decimal(spend),
+        registrations=registrations,
+        deposits=deposits,
+    )
+
+
+# metric_timeline — пустой массив, должен остаться snapshot-based timeline
+@pytest.mark.asyncio
+async def test_get_dashboard_performance_uses_snapshot_when_metric_timeline_empty(mock_db):
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from apps.api.routers.dashboard import get_dashboard_performance
+
+    snapshot_point = _make_timeline_point(spend="0.43")
+    fake_payload = MagicMock()
+    fake_payload.timeline = [snapshot_point]
+
+    mock_db.scalar = AsyncMock(return_value=None)
+    mock_db.execute = AsyncMock(
+        return_value=MagicMock(
+            scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[])))
+        )
+    )
+
+    with (
+        patch(
+            "apps.api.routers.dashboard._dashboard_now",
+            return_value=datetime(2026, 1, 1, 12, tzinfo=UTC),
+        ),
+        patch(
+            "apps.api.routers.dashboard._resolve_dashboard_performance_cutoff",
+            new=AsyncMock(return_value=datetime(2026, 1, 1, 0, tzinfo=UTC)),
+        ),
+        patch(
+            "apps.api.routers.dashboard._load_dashboard_archives", new=AsyncMock(return_value=[])
+        ),
+        patch("apps.api.routers.dashboard._load_fake_deposits_map", new=AsyncMock(return_value={})),
+        patch("apps.api.routers.dashboard._load_ad_context_map", new=AsyncMock(return_value={})),
+        patch(
+            "apps.api.routers.dashboard._build_dashboard_performance_payload",
+            return_value=fake_payload,
+        ),
+        # metric_timeline возвращает пустой список
+        patch(
+            "apps.api.routers.dashboard._load_performance_timeline_from_metric_history",
+            new=AsyncMock(return_value=[]),
+        ),
+    ):
+        result = await get_dashboard_performance(period="today", db=mock_db)
+
+    # Таймлайн должен остаться snapshot-based
+    assert result.timeline == [snapshot_point]
+
+
+# metric_timeline — все нули, должен остаться snapshot-based timeline
+@pytest.mark.asyncio
+async def test_get_dashboard_performance_uses_snapshot_when_metric_timeline_all_zeros(mock_db):
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from apps.api.routers.dashboard import get_dashboard_performance
+
+    snapshot_point = _make_timeline_point(spend="0.43")
+    fake_payload = MagicMock()
+    fake_payload.timeline = [snapshot_point]
+
+    zero_points = [
+        _make_timeline_point(spend="0.00", registrations=0, deposits=0) for _ in range(3)
+    ]
+
+    mock_db.scalar = AsyncMock(return_value=None)
+    mock_db.execute = AsyncMock(
+        return_value=MagicMock(
+            scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[])))
+        )
+    )
+
+    with (
+        patch(
+            "apps.api.routers.dashboard._dashboard_now",
+            return_value=datetime(2026, 1, 1, 12, tzinfo=UTC),
+        ),
+        patch(
+            "apps.api.routers.dashboard._resolve_dashboard_performance_cutoff",
+            new=AsyncMock(return_value=datetime(2026, 1, 1, 0, tzinfo=UTC)),
+        ),
+        patch(
+            "apps.api.routers.dashboard._load_dashboard_archives", new=AsyncMock(return_value=[])
+        ),
+        patch("apps.api.routers.dashboard._load_fake_deposits_map", new=AsyncMock(return_value={})),
+        patch("apps.api.routers.dashboard._load_ad_context_map", new=AsyncMock(return_value={})),
+        patch(
+            "apps.api.routers.dashboard._build_dashboard_performance_payload",
+            return_value=fake_payload,
+        ),
+        # metric_timeline возвращает массив из нулевых точек
+        patch(
+            "apps.api.routers.dashboard._load_performance_timeline_from_metric_history",
+            new=AsyncMock(return_value=zero_points),
+        ),
+    ):
+        result = await get_dashboard_performance(period="today", db=mock_db)
+
+    # Таймлайн должен остаться snapshot-based
+    assert result.timeline == [snapshot_point]
+
+
+# metric_timeline — есть реальные данные, должен использоваться metric_timeline
+@pytest.mark.asyncio
+async def test_get_dashboard_performance_uses_metric_timeline_when_has_real_data(mock_db):
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from apps.api.routers.dashboard import get_dashboard_performance
+
+    snapshot_point = _make_timeline_point(spend="0.43")
+    fake_payload = MagicMock()
+    fake_payload.timeline = [snapshot_point]
+
+    real_points = [
+        _make_timeline_point(spend="0.00"),
+        _make_timeline_point(spend="1.50", registrations=2),
+        _make_timeline_point(spend="0.00"),
+    ]
+
+    mock_db.scalar = AsyncMock(return_value=None)
+    mock_db.execute = AsyncMock(
+        return_value=MagicMock(
+            scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[])))
+        )
+    )
+
+    with (
+        patch(
+            "apps.api.routers.dashboard._dashboard_now",
+            return_value=datetime(2026, 1, 1, 12, tzinfo=UTC),
+        ),
+        patch(
+            "apps.api.routers.dashboard._resolve_dashboard_performance_cutoff",
+            new=AsyncMock(return_value=datetime(2026, 1, 1, 0, tzinfo=UTC)),
+        ),
+        patch(
+            "apps.api.routers.dashboard._load_dashboard_archives", new=AsyncMock(return_value=[])
+        ),
+        patch("apps.api.routers.dashboard._load_fake_deposits_map", new=AsyncMock(return_value={})),
+        patch("apps.api.routers.dashboard._load_ad_context_map", new=AsyncMock(return_value={})),
+        patch(
+            "apps.api.routers.dashboard._build_dashboard_performance_payload",
+            return_value=fake_payload,
+        ),
+        # metric_timeline содержит точку с реальными данными
+        patch(
+            "apps.api.routers.dashboard._load_performance_timeline_from_metric_history",
+            new=AsyncMock(return_value=real_points),
+        ),
+    ):
+        result = await get_dashboard_performance(period="today", db=mock_db)
+
+    # Таймлайн должен быть из metric_history
+    assert result.timeline == real_points

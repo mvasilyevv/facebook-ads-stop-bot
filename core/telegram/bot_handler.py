@@ -38,6 +38,7 @@ from core.live_batch import load_live_batch_bounds as load_live_batch_bounds_sha
 from core.models import (
     AdSnapshot,
     AlertEvent,
+    AlertSnooze,
     DisableTask,
     FbAd,
     FbAdset,
@@ -1169,6 +1170,14 @@ async def _render_help() -> tuple[str, dict]:
         "/tasks — Очередь задач\n"
         "/settings — Быстрые настройки\n\n"
         "/more — Второй уровень CONTROL\n\n"
+        "<b>Диагностика и управление:</b>\n"
+        "/health — Статус всех компонентов\n"
+        "/pause [N] — Пауза сканирования на N мин (по умолчанию 15)\n"
+        "/resume — Возобновить сканирование\n"
+        "/reconnect — Переподключиться к Vision браузеру\n"
+        "/last [N] — Последние N алертов (по умолчанию 5)\n"
+        "/why &lt;ad_id&gt; — Почему сработал стоп для объявления\n"
+        "/app — Открыть мини-приложение\n\n"
         "Действия из stream-topics не перетирают друг друга:\n"
         "EARLY/WARNING живут отдельно, STOP ведёт свой lifecycle, ENABLE ведёт включения."
     )
@@ -1221,6 +1230,523 @@ async def _render_tasks() -> tuple[str, dict]:
         lines.append(f"{icon} {name}{extra}")
 
     return "\n".join(lines), _back_button()
+
+
+# ==========================================
+# Новые команды Wave A.3
+# ==========================================
+
+
+async def _cmd_health(
+    client: TelegramBotClient,
+    *,
+    chat_id: str,
+    message_thread_id: int | None,
+) -> None:
+    """Команда /health — статус всех компонентов системы."""
+    from apps.api.routers.health import collect_health_details
+
+    factory = get_session_factory()
+    async with factory() as session:
+        details = await collect_health_details(session)
+
+    def _icon(healthy: bool) -> str:
+        return "✅" if healthy else "❌"
+
+    # Форматируем воркеры
+    obs = details.workers.get("observer")
+    tg = details.workers.get("telegram_poller")
+
+    obs_text = "❌ нет данных"
+    if obs and obs.healthy and obs.heartbeat_age_seconds is not None:
+        obs_text = f"✅ heartbeat {int(obs.heartbeat_age_seconds)}s"
+    elif obs and not obs.healthy and obs.heartbeat_age_seconds is not None:
+        obs_text = f"⚠️ heartbeat {int(obs.heartbeat_age_seconds)}s"
+    elif obs and not obs.healthy:
+        obs_text = "❌ нет данных"
+
+    tg_text = "❌ нет данных"
+    if tg and tg.healthy and tg.heartbeat_age_seconds is not None:
+        tg_text = f"✅ heartbeat {int(tg.heartbeat_age_seconds)}s"
+    elif tg and not tg.healthy and tg.heartbeat_age_seconds is not None:
+        tg_text = f"⚠️ heartbeat {int(tg.heartbeat_age_seconds)}s"
+
+    browser_icon = _icon(details.browser_agent.healthy)
+    browser_err = (
+        f": {html.escape(details.browser_agent.error[:60])}" if details.browser_agent.error else ""
+    )
+    vision_icon = _icon(details.vision.healthy)
+    vision_err = f": {html.escape(details.vision.error[:60])}" if details.vision.error else ""
+
+    disable_q = details.queues.disable_pending + details.queues.disable_running
+    enable_q = details.queues.enable_pending + details.queues.enable_running
+
+    scan_text = "нет данных"
+    if details.last_successful_scan.age_seconds is not None:
+        sec = int(details.last_successful_scan.age_seconds)
+        if sec < 60:
+            scan_text = f"{sec}s назад"
+        else:
+            scan_text = f"{sec // 60}мин назад"
+
+    lines = [
+        "🩺 <b>Состояние:</b>",
+        f"Observer {obs_text}",
+        f"Telegram {tg_text}",
+        f"Browser {browser_icon}{browser_err}",
+        f"Vision {vision_icon}{vision_err}",
+        f"Очереди: disable={disable_q}, enable={enable_q}",
+        f"Последнее сканирование: {scan_text}",
+    ]
+    await _send_current_topic_message(
+        client,
+        chat_id=chat_id,
+        message_thread_id=message_thread_id,
+        text="\n".join(lines),
+    )
+
+
+async def _cmd_pause(
+    client: TelegramBotClient,
+    *,
+    chat_id: str,
+    message_thread_id: int | None,
+    parts: list[str],
+) -> None:
+    """Команда /pause [N] — приостановить сканирование на N минут (по умолч. 15)."""
+    from core.settings_queries import get_or_create_observer_settings
+
+    # Разбираем аргумент
+    minutes = 15
+    if len(parts) >= 2:
+        try:
+            minutes = int(parts[1])
+        except ValueError:
+            await _send_current_topic_message(
+                client,
+                chat_id=chat_id,
+                message_thread_id=message_thread_id,
+                text="❌ Аргумент должен быть числом: <code>/pause 30</code>",
+            )
+            return
+    if minutes <= 0 or minutes > 1440:
+        await _send_current_topic_message(
+            client,
+            chat_id=chat_id,
+            message_thread_id=message_thread_id,
+            text="❌ Минуты должны быть в диапазоне 1–1440.",
+        )
+        return
+
+    now = datetime.now(UTC)
+    pause_until = now + timedelta(minutes=minutes)
+
+    factory = get_session_factory()
+    async with factory() as session:
+        row = await get_or_create_observer_settings(session)
+        row.is_scanning_enabled = False
+        row.pause_until = pause_until
+        await session.commit()
+
+    until_str = pause_until.strftime("%H:%M")
+    await _send_current_topic_message(
+        client,
+        chat_id=chat_id,
+        message_thread_id=message_thread_id,
+        text=f"⏸ Пауза до {until_str} (UTC), {minutes} мин",
+    )
+
+
+async def _cmd_resume(
+    client: TelegramBotClient,
+    *,
+    chat_id: str,
+    message_thread_id: int | None,
+) -> None:
+    """Команда /resume — возобновить сканирование."""
+    from core.settings_queries import get_or_create_observer_settings
+
+    factory = get_session_factory()
+    async with factory() as session:
+        row = await get_or_create_observer_settings(session)
+        row.is_scanning_enabled = True
+        row.pause_until = None
+        await session.commit()
+
+    await _send_current_topic_message(
+        client,
+        chat_id=chat_id,
+        message_thread_id=message_thread_id,
+        text="▶️ Сканирование возобновлено",
+    )
+
+
+async def _cmd_reconnect(
+    client: TelegramBotClient,
+    *,
+    chat_id: str,
+    message_thread_id: int | None,
+) -> None:
+    """Команда /reconnect — шаг 1: запрос подтверждения переподключения к Vision."""
+    token = uuid.uuid4().hex[:16]
+    markup = {
+        "inline_keyboard": [
+            [
+                {"text": "✅ Да", "callback_data": f"reconnect_confirm:{token}"},
+                {"text": "❌ Отмена", "callback_data": f"reconnect_cancel:{token}"},
+            ]
+        ]
+    }
+    await _send_current_topic_message(
+        client,
+        chat_id=chat_id,
+        message_thread_id=message_thread_id,
+        text="🔄 Переподключить Vision браузер?\n\nПосле подтверждения observer перезапустит соединение.",
+        reply_markup=markup,
+    )
+
+
+async def _handle_reconnect_confirm(
+    client: TelegramBotClient,
+    *,
+    chat_id: str,
+    message_id: int,
+    message_thread_id: int | None,
+) -> None:
+    """Шаг 2 /reconnect: выполняет POST /api/vision/reconnect."""
+    import httpx
+
+    from core.config import get_settings
+
+    settings = get_settings()
+    await _safe_edit_current_message(
+        client,
+        chat_id=chat_id,
+        message_id=message_id,
+        message_thread_id=message_thread_id,
+        text="🔄 Vision: пере-подключаюсь…",
+    )
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as http_client:
+            resp = await http_client.post(
+                f"http://localhost:{settings.api_port}/api/vision/reconnect",
+                headers={"X-API-Key": settings.api_key},
+            )
+            if resp.status_code < 300:
+                await _safe_edit_current_message(
+                    client,
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    message_thread_id=message_thread_id,
+                    text="✅ Готово — Vision браузер переподключён",
+                )
+            else:
+                detail = resp.text[:200] if resp.text else str(resp.status_code)
+                await _safe_edit_current_message(
+                    client,
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    message_thread_id=message_thread_id,
+                    text=f"❌ Ошибка: HTTP {resp.status_code} — {html.escape(detail)}",
+                )
+    except Exception as exc:
+        await _safe_edit_current_message(
+            client,
+            chat_id=chat_id,
+            message_id=message_id,
+            message_thread_id=message_thread_id,
+            text=f"❌ Ошибка: {html.escape(str(exc)[:200])}",
+        )
+
+
+async def _cmd_last(
+    client: TelegramBotClient,
+    *,
+    chat_id: str,
+    message_thread_id: int | None,
+    parts: list[str],
+) -> None:
+    """Команда /last [N] — последние N алертов, сгруппированных по кампании и адсету."""
+    from zoneinfo import ZoneInfo
+
+    from core.config import get_settings
+    from core.observer.db_queries import load_recent_alerts_with_context
+
+    limit = 10
+    if len(parts) >= 2:
+        try:
+            limit = max(1, min(int(parts[1]), 20))
+        except ValueError:
+            pass
+
+    settings = get_settings()
+    tz = ZoneInfo(settings.app_timezone)
+
+    factory = get_session_factory()
+    async with factory() as session:
+        rows = await load_recent_alerts_with_context(session, limit=limit)
+
+    if not rows:
+        await _send_current_topic_message(
+            client,
+            chat_id=chat_id,
+            message_thread_id=message_thread_id,
+            text="📋 <b>Последние алерты</b>\n\nАлертов за последние 24 часа нет.",
+        )
+        return
+
+    _STATE_ICONS = {
+        "WARNING_SENT": "⚠️",
+        "STOP_SENT": "🛑",
+        "CLAIMED": "✅",
+        "DISABLED": "⛔",
+        "NORMAL": "🟢",
+    }
+
+    # Группировка: campaign_name → adset_name → список строк алертов
+    # Для сортировки кампаний/адсетов по последнему алерту — собираем max(created_at)
+    from collections import defaultdict
+
+    # Структура: {campaign: {adset: [(created_at, alert_line)]}}
+    grouped: dict[str, dict[str, list[tuple[datetime, str]]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
+    campaign_latest: dict[str, datetime] = {}
+    adset_latest: dict[str, dict[str, datetime]] = defaultdict(dict)
+
+    for row in rows:
+        campaign = row["campaign_name"]
+        adset = row["adset_name"]
+        ad_name = row["ad_name"]
+        state = row["fsm_state"]
+        created_at = row["created_at"]
+        icon = _STATE_ICONS.get(state, "❓")
+
+        time_str = created_at.astimezone(tz).strftime("%H:%M") if created_at else "—"
+        # Короткое имя объявления — до 35 символов
+        short_ad = html.escape(ad_name[:35])
+        line = f"    {icon} <b>{short_ad}</b> — {state} в {time_str}"
+
+        grouped[campaign][adset].append((created_at or datetime.min.replace(tzinfo=UTC), line))
+
+        if campaign not in campaign_latest or (
+            created_at and created_at > campaign_latest[campaign]
+        ):
+            campaign_latest[campaign] = created_at or datetime.min.replace(tzinfo=UTC)
+        prev_adset = adset_latest[campaign].get(adset)
+        if prev_adset is None or (created_at and created_at > prev_adset):
+            adset_latest[campaign][adset] = created_at or datetime.min.replace(tzinfo=UTC)
+
+    # Сортируем кампании по последнему алерту (свежее — выше)
+    sorted_campaigns = sorted(campaign_latest, key=lambda c: campaign_latest[c], reverse=True)
+
+    lines = ["📋 <b>Последние алерты</b> (за 24ч)\n"]
+    for campaign in sorted_campaigns:
+        lines.append(f"🎯 <b>{html.escape(campaign)}</b>")
+        adsets = grouped[campaign]
+        sorted_adsets = sorted(
+            adsets,
+            key=lambda a: adset_latest[campaign].get(a, datetime.min.replace(tzinfo=UTC)),
+            reverse=True,
+        )
+        for adset in sorted_adsets:
+            lines.append(f"  📁 <i>{html.escape(adset)}</i>")
+            # Сортируем алерты внутри адсета: новее — выше
+            alert_entries = sorted(adsets[adset], key=lambda x: x[0], reverse=True)
+            for _, alert_line in alert_entries:
+                lines.append(alert_line)
+        lines.append("")  # пустая строка между кампаниями
+
+    text = "\n".join(lines).rstrip()
+
+    await _send_current_topic_message(
+        client,
+        chat_id=chat_id,
+        message_thread_id=message_thread_id,
+        text=text,
+    )
+
+
+async def _cmd_why(
+    client: TelegramBotClient,
+    *,
+    chat_id: str,
+    message_thread_id: int | None,
+    parts: list[str],
+) -> None:
+    """Команда /why <ad_id> — почему сработал стоп для объявления."""
+    from core.observer.service import build_rule_context
+    from core.rules.evaluator import evaluate_stop_rules
+
+    if len(parts) < 2:
+        await _send_current_topic_message(
+            client,
+            chat_id=chat_id,
+            message_thread_id=message_thread_id,
+            text="❌ Укажите ad_id: <code>/why 123456789</code>",
+        )
+        return
+
+    ad_id_str = parts[1].strip()
+    factory = get_session_factory()
+    async with factory() as session:
+        # Ищем AdSnapshot по fb_ad_id
+        snap = await session.scalar(
+            select(AdSnapshot)
+            .options(*_snapshot_joinedload_options())
+            .where(AdSnapshot.fb_ad_id == ad_id_str)
+        )
+        if snap is None:
+            await _send_current_topic_message(
+                client,
+                chat_id=chat_id,
+                message_thread_id=message_thread_id,
+                text=f"🔍 Объявление <code>{html.escape(ad_id_str)}</code> не найдено.",
+            )
+            return
+
+        # Последний AlertEvent
+        last_event = await session.scalar(
+            select(AlertEvent)
+            .where(AlertEvent.ad_id == snap.ad_id)
+            .order_by(AlertEvent.created_at.desc())
+            .limit(1)
+        )
+
+        # Получаем offer/rule_config для оценки правил
+        offer_code = _snapshot_offer_code(snap)
+        offer_obj = None
+        rule_config_obj = None
+        if offer_code:
+            offer_result = await session.scalar(
+                select(Offer)
+                .options(joinedload(Offer.rule_config))
+                .where(Offer.code.ilike(offer_code))
+            )
+            if offer_result:
+                offer_obj = offer_result
+                rule_config_obj = offer_result.rule_config
+
+        # Активный снуз
+        now = datetime.now(UTC)
+        snooze_text = "нет"
+        from core.models import AlertSnooze
+
+        snooze = await session.scalar(
+            select(AlertSnooze)
+            .where(AlertSnooze.fb_ad_id == ad_id_str, AlertSnooze.snoozed_until > now)
+            .order_by(AlertSnooze.snoozed_until.desc())
+            .limit(1)
+        )
+        if snooze:
+            snooze_text = snooze.snoozed_until.strftime("%H:%M")
+
+    ad_name = snap.fb_ad.ad_name if snap.fb_ad else ad_id_str
+    state_str = snap.alert_state.value if snap.alert_state else "NORMAL"
+    state_time = ""
+    if last_event and last_event.created_at:
+        state_time = f" (с {last_event.created_at.strftime('%H:%M')})"
+
+    lines = [
+        f"🔍 <b>#{html.escape(ad_id_str[:16])}</b> ({html.escape(ad_name[:40])}):",
+        f"Текущие метрики: spend={snap.spend}, "
+        f"cpa={snap.cost_per_result or '—'}, ctr={snap.ctr or '—'}",
+        f"FSM: {state_str}{state_time}",
+        f"Активный снуз: до {snooze_text}",
+    ]
+
+    if offer_obj and rule_config_obj:
+        from decimal import Decimal
+
+        from core.observer.db_queries import load_observer_settings_from_db
+
+        observer_thresholds = await load_observer_settings_from_db()
+        from core.scanner.models import ScannedAdRow
+
+        eval_row = ScannedAdRow(
+            fb_ad_id=snap.fb_ad_id,
+            campaign_name=_snapshot_campaign_name(snap) or "",
+            adset_name=_snapshot_adset_name(snap) or "",
+            ad_name=ad_name,
+            delivery_status=snap.delivery_status or "",
+            spend=snap.spend or Decimal("0"),
+            cpc=snap.cpc,
+            ctr=snap.ctr,
+            cost_per_result=snap.cost_per_result,
+            leads=snap.leads or 0,
+            cost_per_lead=snap.cost_per_lead,
+            registrations=snap.registrations or 0,
+            cost_per_registration=snap.cost_per_registration,
+            deposits=snap.deposits or 0,
+        )
+        ctx = build_rule_context(
+            cpa_amount=Decimal(offer_obj.cpa_amount),
+            rule_config=rule_config_obj,
+            observer_thresholds=observer_thresholds,
+        )
+        evaluation = evaluate_stop_rules(eval_row, ctx)
+        lines.append("Правила:")
+        all_hits = list(evaluation.warning_hits) + list(evaluation.stop_hits)
+        hit_codes = {h.rule_code for h in all_hits}
+        # Набор всех known-правил
+        from core.rules.labels import RULE_LABELS
+
+        for rule_code, label in RULE_LABELS.items():
+            if rule_code in hit_codes:
+                hit = next((h for h in all_hits if h.rule_code == rule_code), None)
+                if hit:
+                    icon = "🛑" if rule_code in [h.rule_code for h in evaluation.stop_hits] else "⚠️"
+                    lines.append(f"  {icon} {label}: {html.escape(hit.summary[:60])}")
+                    continue
+            lines.append(f"  ✅ {label}: ок")
+    else:
+        lines.append("Правила: оффер не найден или не настроен")
+
+    await _send_current_topic_message(
+        client,
+        chat_id=chat_id,
+        message_thread_id=message_thread_id,
+        text="\n".join(lines),
+    )
+
+
+async def _cmd_app(
+    client: TelegramBotClient,
+    *,
+    chat_id: str,
+    message_thread_id: int | None,
+) -> None:
+    """Команда /app — открыть мини-приложение."""
+    from core.config import get_settings
+
+    settings = get_settings()
+    url = settings.web_app_url
+    if not url:
+        await _send_current_topic_message(
+            client,
+            chat_id=chat_id,
+            message_thread_id=message_thread_id,
+            text="📱 Mini-app не настроена. Задайте WEB_APP_URL в .env или настройках.",
+        )
+        return
+
+    markup = {
+        "inline_keyboard": [
+            [
+                {
+                    "text": "🚀 Открыть приложение",
+                    "web_app": {"url": url},
+                }
+            ]
+        ]
+    }
+    await _send_current_topic_message(
+        client,
+        chat_id=chat_id,
+        message_thread_id=message_thread_id,
+        text="📱 <b>FB Stop Bot — приложение</b>",
+        reply_markup=markup,
+    )
 
 
 # ==========================================
@@ -1318,6 +1844,36 @@ async def handle_update(client: TelegramBotClient, update: dict) -> None:
                 message_id=message_id,
                 message_thread_id=message_thread_id,
                 text=_render_action_cancelled_text(),
+            )
+            return
+
+        if data.startswith("reconnect_confirm:"):
+            await client.answer_callback_query(cq["id"])
+            if not _can_manage_settings(access):
+                await _safe_edit_current_message(
+                    client,
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    message_thread_id=message_thread_id,
+                    text=OWNER_ONLY_TEXT,
+                )
+                return
+            await _handle_reconnect_confirm(
+                client,
+                chat_id=chat_id,
+                message_id=message_id,
+                message_thread_id=message_thread_id,
+            )
+            return
+
+        if data.startswith("reconnect_cancel:"):
+            await client.answer_callback_query(cq["id"], text="Отменено")
+            await _safe_edit_current_message(
+                client,
+                chat_id=chat_id,
+                message_id=message_id,
+                message_thread_id=message_thread_id,
+                text="❌ Переподключение отменено.",
             )
             return
 
@@ -1728,6 +2284,81 @@ async def handle_update(client: TelegramBotClient, update: dict) -> None:
                 )
             return
 
+        # Новый формат: snooze:<fb_ad_id>:<minutes>:<token> (4 части после split ":"))
+        if data.startswith("snooze:") and len(data.split(":")) == 4:
+            parts = data.split(":")
+            fb_ad_id_snz = parts[1]
+            try:
+                minutes_snz = int(parts[2])
+            except ValueError:
+                await client.answer_callback_query(cq["id"], text="Кнопка устарела")
+                return
+            token_snz = parts[3]
+            snz_valid = await _validate_alert_token(fb_ad_id=fb_ad_id_snz, token=token_snz)
+            if not snz_valid:
+                await client.answer_callback_query(cq["id"], text="Кнопка устарела")
+                return
+            snooze_ok = await _create_alert_snooze(
+                fb_ad_id=fb_ad_id_snz,
+                minutes=minutes_snz,
+                tg_user_id=tg_user_id,
+            )
+            if snooze_ok:
+                until_dt = datetime.now(UTC) + timedelta(minutes=minutes_snz)
+                until_str = until_dt.strftime("%H:%M")
+                await client.answer_callback_query(cq["id"], text="Снуз поставлен")
+                try:
+                    await client.edit_message(
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        text=(cq["message"].get("text", "") + f"\n\n😴 Снуз до {until_str} (UTC)"),
+                        reply_markup=None,
+                    )
+                except Exception:
+                    logger.debug("Не удалось убрать клавиатуру после snooze")
+                logger.info(
+                    "AlertSnooze: %s мин для %s (запросил @%s)",
+                    minutes_snz,
+                    fb_ad_id_snz,
+                    username,
+                )
+            else:
+                await client.answer_callback_query(cq["id"], text="Не удалось поставить снуз")
+            return
+
+        if data.startswith("claim:"):
+            parts = data.split(":")
+            if len(parts) < 3:
+                await client.answer_callback_query(cq["id"], text="Кнопка устарела")
+                return
+            fb_ad_id_clm = parts[1]
+            token_clm = parts[2]
+            clm_valid = await _validate_alert_token(fb_ad_id=fb_ad_id_clm, token=token_clm)
+            if not clm_valid:
+                await client.answer_callback_query(cq["id"], text="Кнопка устарела")
+                return
+            claimed_ok = await _claim_alert(fb_ad_id=fb_ad_id_clm, token=token_clm)
+            if claimed_ok:
+                await client.answer_callback_query(cq["id"], text="Алерт снят")
+                suffix = f"@{username}" if username else tg_user_id
+                try:
+                    await client.edit_message(
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        text=(
+                            cq["message"].get("text", "")
+                            + f"\n\n✅ Алерт снят пользователем {suffix}, "
+                            "объявление продолжает работать."
+                        ),
+                        reply_markup=None,
+                    )
+                except Exception:
+                    logger.debug("Не удалось убрать клавиатуру после claim")
+                logger.info("Claim алерта %s (запросил @%s)", fb_ad_id_clm, username)
+            else:
+                await client.answer_callback_query(cq["id"], text="Кнопка устарела")
+            return
+
         if data.startswith("snooze:"):
             await client.answer_callback_query(cq["id"])
             parts = data.split(":")
@@ -1870,6 +2501,22 @@ async def handle_update(client: TelegramBotClient, update: dict) -> None:
         )
         return
 
+    if cmd == "setup_topics":
+        if not _can_manage_settings(access):
+            await _send_current_topic_message(
+                client,
+                chat_id=chat_id,
+                message_thread_id=message_thread_id,
+                text=OWNER_ONLY_TEXT,
+            )
+            return
+        await _handle_setup_topics(
+            client,
+            chat_id=chat_id,
+            message_thread_id=message_thread_id,
+        )
+        return
+
     if cmd == "set" and len(parts) >= 3:
         if not _can_manage_settings(access):
             await _send_current_topic_message(
@@ -1920,7 +2567,71 @@ async def handle_update(client: TelegramBotClient, update: dict) -> None:
             )
         return
 
-    handler = COMMAND_HANDLERS.get(cmd, _render_help)
+    handler = COMMAND_HANDLERS.get(cmd)
+
+    # Новые команды Wave A.3 — не входят в COMMAND_HANDLERS (имеют аргументы или своё поведение)
+    if cmd == "health":
+        if not _can_manage_settings(access):
+            await _send_current_topic_message(
+                client,
+                chat_id=chat_id,
+                message_thread_id=message_thread_id,
+                text=OWNER_ONLY_TEXT,
+            )
+            return
+        await _cmd_health(client, chat_id=chat_id, message_thread_id=message_thread_id)
+        return
+
+    if cmd == "pause":
+        if not _can_manage_settings(access):
+            await _send_current_topic_message(
+                client,
+                chat_id=chat_id,
+                message_thread_id=message_thread_id,
+                text=OWNER_ONLY_TEXT,
+            )
+            return
+        await _cmd_pause(client, chat_id=chat_id, message_thread_id=message_thread_id, parts=parts)
+        return
+
+    if cmd == "resume":
+        if not _can_manage_settings(access):
+            await _send_current_topic_message(
+                client,
+                chat_id=chat_id,
+                message_thread_id=message_thread_id,
+                text=OWNER_ONLY_TEXT,
+            )
+            return
+        await _cmd_resume(client, chat_id=chat_id, message_thread_id=message_thread_id)
+        return
+
+    if cmd == "reconnect":
+        if not _can_manage_settings(access):
+            await _send_current_topic_message(
+                client,
+                chat_id=chat_id,
+                message_thread_id=message_thread_id,
+                text=OWNER_ONLY_TEXT,
+            )
+            return
+        await _cmd_reconnect(client, chat_id=chat_id, message_thread_id=message_thread_id)
+        return
+
+    if cmd == "last":
+        await _cmd_last(client, chat_id=chat_id, message_thread_id=message_thread_id, parts=parts)
+        return
+
+    if cmd == "why":
+        await _cmd_why(client, chat_id=chat_id, message_thread_id=message_thread_id, parts=parts)
+        return
+
+    if cmd == "app":
+        await _cmd_app(client, chat_id=chat_id, message_thread_id=message_thread_id)
+        return
+
+    if handler is None:
+        handler = _render_help
     text, markup = await handler()
     await _send_current_topic_message(
         client,
@@ -1928,6 +2639,113 @@ async def handle_update(client: TelegramBotClient, update: dict) -> None:
         message_thread_id=message_thread_id,
         text=text,
         reply_markup=markup,
+    )
+
+
+# ==========================================
+# Команда /setup_topics
+# ==========================================
+_FORUM_TOPIC_SPECS: list[tuple[str, str]] = [
+    ("alert", "🚨 Alerts"),
+    ("disabled", "🔕 Disabled"),
+    ("recommendation", "💡 Recommendations"),
+    ("ops", "🩺 Ops & Health"),
+    ("logs", "📜 Logs"),
+]
+
+# Поля TelegramSettings, в которые записываются thread_id по порядку specs.
+_FORUM_TOPIC_FIELDS: list[str] = [
+    "topic_alerts_thread_id",
+    "topic_disabled_thread_id",
+    "topic_recommendations_thread_id",
+    "topic_ops_thread_id",
+    "topic_logs_thread_id",
+]
+
+
+async def _handle_setup_topics(
+    client: TelegramBotClient,
+    *,
+    chat_id: str,
+    message_thread_id: int | None,
+) -> None:
+    """Создаёт forum topics и сохраняет их thread_id в TelegramSettings.
+
+    Алгоритм:
+    1. getChat → проверяем is_forum.
+    2. Если нет — сообщаем пользователю.
+    3. Создаём 5 topic-ов через createForumTopic.
+    4. Сохраняем thread_id и ставим forum_topics_enabled=True.
+    """
+    # Проверяем, что чат является форумом
+    try:
+        chat_info = await client.get_chat(chat_id=chat_id)
+    except Exception:
+        logger.exception("Ошибка getChat при /setup_topics для chat_id=%s", chat_id)
+        await _send_current_topic_message(
+            client,
+            chat_id=chat_id,
+            message_thread_id=message_thread_id,
+            text="❌ Не удалось получить информацию о чате. Проверьте права бота.",
+        )
+        return
+
+    if not chat_info.get("is_forum"):
+        await _send_current_topic_message(
+            client,
+            chat_id=chat_id,
+            message_thread_id=message_thread_id,
+            text=(
+                "❌ Чат не является форумом. Включи Topics в настройках группы и повтори команду."
+            ),
+        )
+        return
+
+    # Создаём topic-и по одному
+    created_thread_ids: dict[str, int] = {}
+    for stream_key, topic_name in _FORUM_TOPIC_SPECS:
+        try:
+            result = await client.create_forum_topic(chat_id=chat_id, name=topic_name)
+            thread_id = result.get("message_thread_id")
+            if thread_id is not None:
+                created_thread_ids[stream_key] = int(thread_id)
+        except Exception:
+            logger.exception(
+                "Ошибка createForumTopic '%s' для chat_id=%s при /setup_topics",
+                topic_name,
+                chat_id,
+            )
+            await _send_current_topic_message(
+                client,
+                chat_id=chat_id,
+                message_thread_id=message_thread_id,
+                text=f"❌ Не удалось создать topic «{topic_name}». Проверьте права бота.",
+            )
+            return
+
+    # Сохраняем в БД
+    factory = get_session_factory()
+    async with factory() as session:
+        settings_row = await get_or_create_telegram_settings(session)
+        for (stream_key, _), field_name in zip(
+            _FORUM_TOPIC_SPECS, _FORUM_TOPIC_FIELDS, strict=True
+        ):
+            thread_id = created_thread_ids.get(stream_key)
+            if thread_id is not None:
+                setattr(settings_row, field_name, thread_id)
+        settings_row.forum_topics_enabled = True
+        await session.commit()
+
+    logger.info(
+        "Forum topics созданы для chat_id=%s: %s",
+        chat_id,
+        created_thread_ids,
+    )
+    await _send_current_topic_message(
+        client,
+        chat_id=chat_id,
+        message_thread_id=message_thread_id,
+        text="✅ Темы созданы. Алерты теперь идут по своим темам.",
     )
 
 
@@ -1957,6 +2775,72 @@ async def _update_observer_setting(**kwargs: int) -> None:
             else:
                 setattr(obs, key, value)
         await session.commit()
+
+
+async def _validate_alert_token(*, fb_ad_id: str, token: str) -> bool:
+    """Проверяет, что snapshot с fb_ad_id имеет open_state_token == token.
+
+    Возвращает True если токен валиден (соответствует активному инциденту).
+    """
+    try:
+        factory = get_session_factory()
+        async with factory() as session:
+            snapshot = await session.scalar(
+                select(AdSnapshot).where(
+                    AdSnapshot.fb_ad_id == fb_ad_id,
+                    AdSnapshot.open_state_token == token,
+                )
+            )
+            return snapshot is not None
+    except Exception:
+        logger.exception("Ошибка при валидации alert-токена %s/%s", fb_ad_id, token)
+        return False
+
+
+async def _create_alert_snooze(*, fb_ad_id: str, minutes: int, tg_user_id: str) -> bool:
+    """Создаёт запись AlertSnooze в БД.
+
+    Возвращает True при успехе.
+    """
+    try:
+        factory = get_session_factory()
+        async with factory() as session:
+            snooze = AlertSnooze(
+                fb_ad_id=fb_ad_id,
+                snoozed_until=datetime.now(UTC) + timedelta(minutes=minutes),
+                created_by_telegram_user_id=tg_user_id,
+            )
+            session.add(snooze)
+            await session.commit()
+            return True
+    except Exception:
+        logger.exception("Ошибка при создании AlertSnooze для %s", fb_ad_id)
+        return False
+
+
+async def _claim_alert(*, fb_ad_id: str, token: str) -> bool:
+    """Переводит AlertEvent/AdSnapshot в состояние CLAIMED по fb_ad_id+token.
+
+    Возвращает True при успехе, False если токен устарел или запись не найдена.
+    """
+    try:
+        factory = get_session_factory()
+        async with factory() as session:
+            snapshot = await session.scalar(
+                select(AdSnapshot).where(
+                    AdSnapshot.fb_ad_id == fb_ad_id,
+                    AdSnapshot.open_state_token == token,
+                    AdSnapshot.alert_state.in_([AlertState.WARNING_SENT, AlertState.STOP_SENT]),
+                )
+            )
+            if snapshot is None:
+                return False
+            snapshot.alert_state = AlertState.CLAIMED
+            await session.commit()
+            return True
+    except Exception:
+        logger.exception("Ошибка при claim алерта %s", fb_ad_id)
+        return False
 
 
 async def _snooze_alert(snapshot_token: str, minutes: int) -> tuple[str | None, bool]:

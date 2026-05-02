@@ -10,6 +10,10 @@ export interface KnownModal {
   text_markers: string[];
   safe_button_texts: string[];
   forbidden_button_texts: string[];
+  // Поля для flyout/popover-элементов (не role=dialog)
+  detect_selector?: string;
+  dismiss_strategy?: 'click_outside' | 'button';
+  dismiss_selector?: string;
 }
 
 interface KnownModalsFile {
@@ -65,9 +69,59 @@ export async function dismissKnownModals(
   const dismissed: DismissedEntry[] = [];
   const unknown: UnknownEntry[] = [];
 
+  // Идентификаторы (outerHTML[:200]) элементов, обработанных через detect_selector —
+  // их нужно исключить из последующего сканирования role=dialog, чтобы не сохранить как unknown.
+  const seen = new Set<string>();
+
+  // --- Шаг 0: обработка элементов по detect_selector (flyout'ы, в т.ч. с role=dialog) ---
+  for (const modal of knownModals) {
+    if (!modal.detect_selector) continue;
+    let element: any = null;
+    try {
+      element = await page.$(modal.detect_selector);
+    } catch {
+      continue;
+    }
+    if (!element) continue;
+
+    // Запоминаем outerHTML элемента, чтобы основной цикл не подобрал его как unknown.
+    // Для FB jewel-flyout этот элемент висит в DOM всегда (даже закрытым с классом toggleTargetClosed),
+    // и role="dialog" заставляет основной сканер обрабатывать его — нам нужно его проигнорировать.
+    let isOpen = false;
+    try {
+      const info = await element.evaluate((el: Element) => ({
+        domId: el.outerHTML.slice(0, 200),
+        classList: el.className || '',
+        ariaHidden: el.getAttribute('aria-hidden'),
+      }));
+      seen.add(info.domId);
+      // Считаем flyout «открытым» только если на нём НЕТ класса toggleTargetClosed
+      // и aria-hidden != "true". Иначе click_outside не нужен.
+      const closedByClass = typeof info.classList === 'string' && info.classList.includes('toggleTargetClosed');
+      const closedByAria = info.ariaHidden === 'true';
+      isOpen = !closedByClass && !closedByAria;
+    } catch {
+      // Не критично — продолжаем
+    }
+
+    if (isOpen && modal.dismiss_strategy === 'click_outside') {
+      try {
+        const selector = modal.dismiss_selector ?? 'body';
+        await page.click(selector, { position: { x: 5, y: 200 }, force: true });
+      } catch {
+        // Если клик не удался — всё равно считаем известным, артефакт не сохраняем
+      }
+    }
+    // Добавляем в dismissed только если flyout был реально открыт.
+    // Иначе просто помечаем «seen», чтобы основной цикл не сохранил unknown-артефакт.
+    if (isOpen) {
+      dismissed.push({ id: modal.id, severity: modal.severity });
+      console.log(`[modal-dismisser] Jewel/flyout «${modal.id}» закрыт (detect_selector=${modal.detect_selector})`);
+    }
+  }
+
   // Собираем уникальные элементы-диалоги по всем селекторам
   const dialogHandles: any[] = [];
-  const seen = new Set<string>();
 
   for (const selector of DIALOG_SELECTORS) {
     let handles: any[] = [];

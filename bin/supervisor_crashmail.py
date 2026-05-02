@@ -93,6 +93,8 @@ class CooldownTracker:
 
 def _send_telegram(text: str) -> None:
     """Синхронно отправляет сообщение в Telegram через asyncio.run."""
+    import os
+
     from core.config import get_settings
     from core.telegram.client import TelegramBotClient
 
@@ -104,10 +106,44 @@ def _send_telegram(text: str) -> None:
         )
         return
 
+    # Пробуем получить ops thread_id из БД; fallback — переменная окружения
+    message_thread_id: int | None = None
+    try:
+        from sqlalchemy import select
+
+        from core.db import get_session_factory
+        from core.models import TelegramSettings
+        from core.telegram.delivery import resolve_thread_id
+
+        async def _load_thread_id() -> int | None:
+            factory = get_session_factory()
+            async with factory() as db:
+                row = await db.scalar(
+                    select(TelegramSettings).where(TelegramSettings.singleton_key == "default")
+                )
+                if row:
+                    return resolve_thread_id("ops", row)
+            return None
+
+        message_thread_id = asyncio.run(_load_thread_id())
+    except Exception as exc:
+        print(
+            f"supervisor_crashmail: не удалось загрузить ops thread_id из БД: {exc}",
+            file=sys.stderr,
+        )
+        # Fallback на ENV-переменную
+        env_val = os.getenv("TELEGRAM_TOPIC_OPS_THREAD_ID", "").strip()
+        if env_val.isdigit():
+            message_thread_id = int(env_val)
+
     async def _send() -> None:
         client = TelegramBotClient(settings.telegram_bot_token)
         try:
-            await client.send_message(chat_id=settings.telegram_chat_id, text=text)
+            await client.send_message(
+                chat_id=settings.telegram_chat_id,
+                text=text,
+                message_thread_id=message_thread_id,
+            )
         finally:
             await client.close()
 

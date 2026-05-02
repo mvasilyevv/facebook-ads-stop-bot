@@ -18,6 +18,7 @@ from core.models import (
     AdDepositCorrection,
     AdSnapshot,
     AlertEvent,
+    AlertSnooze,
     DisableTask,
     EnableRecommendationEvent,
     EnableTask,
@@ -649,3 +650,90 @@ async def collect_reminder_alerts() -> list[AlertCandidate]:
             len(reminders),
         )
     return reminders
+
+
+async def load_active_snooze_ad_ids(session=None) -> set[str]:
+    """Возвращает множество fb_ad_id с активным снузом (snoozed_until > now).
+
+    Если session не передана — создаёт собственную.
+    """
+    now = datetime.now(UTC)
+
+    async def _query(s) -> set[str]:
+        result = await s.execute(
+            select(AlertSnooze.fb_ad_id).where(AlertSnooze.snoozed_until > now)
+        )
+        return {row for (row,) in result.all()}
+
+    if session is not None:
+        return await _query(session)
+
+    factory = get_session_factory()
+    async with factory() as s:
+        return await _query(s)
+
+
+async def load_recent_alerts_with_context(
+    session,
+    *,
+    limit: int = 10,
+    since_hours: int = 24,
+) -> list[dict]:
+    """Загружает последние N AlertEvent за указанный период с контекстом кампании и адсета.
+
+    Возвращает список словарей:
+    {
+        "alert_event": AlertEvent,
+        "fb_ad_id": str,
+        "ad_name": str,
+        "campaign_name": str,
+        "adset_name": str,
+        "fsm_state": str,   # значение AlertState
+        "created_at": datetime,
+    }
+    """
+    cutoff = datetime.now(tz=UTC) - timedelta(hours=since_hours)
+
+    result = await session.execute(
+        select(AlertEvent)
+        .options(
+            selectinload(AlertEvent.fb_ad).selectinload(FbAd.adset).selectinload(FbAdset.campaign)
+        )
+        .where(AlertEvent.created_at >= cutoff)
+        .order_by(AlertEvent.created_at.desc())
+        .limit(limit)
+    )
+    events = result.scalars().unique().all()
+
+    rows = []
+    for event in events:
+        fb_ad = event.fb_ad
+        if fb_ad is None:
+            fb_ad_id = ""
+            ad_name = "—"
+            campaign_name = "Без кампании"
+            adset_name = "Без адсета"
+        else:
+            fb_ad_id = fb_ad.fb_ad_id
+            ad_name = fb_ad.ad_name or fb_ad_id
+            adset = fb_ad.adset
+            if adset is None:
+                campaign_name = "Без кампании"
+                adset_name = "Без адсета"
+            else:
+                adset_name = adset.adset_name or "Без адсета"
+                campaign = adset.campaign
+                campaign_name = campaign.campaign_name if campaign else "Без кампании"
+
+        rows.append(
+            {
+                "alert_event": event,
+                "fb_ad_id": fb_ad_id,
+                "ad_name": ad_name,
+                "campaign_name": campaign_name,
+                "adset_name": adset_name,
+                "fsm_state": str(event.state.value) if event.state else "—",
+                "created_at": event.created_at,
+            }
+        )
+    return rows

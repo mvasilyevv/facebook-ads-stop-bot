@@ -22,7 +22,8 @@ GRPC_NODE_DIR := services/browser-agent
 	docker-up docker-down db-wait migrate bootstrap api observer telegram \
 	disable-worker enable-worker enable-recommendation-worker frontend frontend-build lint format test \
 	test-unit test-telegram verify start stop logs \
-	proto-compile proto-watch browser-agent browser-agent-dev browser-agent-build
+	proto-compile proto-watch browser-agent browser-agent-dev browser-agent-build \
+	tma-dev tma-build
 
 help: ## Показать доступные команды
 	@awk 'BEGIN {FS = ":.*## "}; /^[a-zA-Z0-9_.-]+:.*## / {printf "  %-20s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -165,3 +166,9 @@ browser-agent-build: ## Собрать browser-agent
 
 browser-agent: ## Запустить собранный browser-agent
 	cd $(GRPC_NODE_DIR) && npm start
+
+tma-dev: ## Запустить Telegram Mini App в dev-режиме (порт 5174)
+	cd frontend-mini && $(NPM) run dev
+
+tma-build: ## Собрать Telegram Mini App
+	cd frontend-mini && $(NPM) ci && $(NPM) run build

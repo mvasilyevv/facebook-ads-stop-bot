@@ -129,6 +129,7 @@ async def get_observer_settings(db: AsyncSession = Depends(get_db)):
         **threshold_values,
         is_scanning_enabled=row.is_scanning_enabled,
         auto_enable_recommendations=bool(row.auto_enable_recommendations),
+        pause_until=row.pause_until,
     )
 
 
@@ -156,6 +157,7 @@ async def update_observer_settings(
         **extract_observer_threshold_values(row),
         is_scanning_enabled=row.is_scanning_enabled,
         auto_enable_recommendations=bool(row.auto_enable_recommendations),
+        pause_until=row.pause_until,
     )
 
 
@@ -206,8 +208,11 @@ async def toggle_scanning(body: ScanningToggleSchema, db: AsyncSession = Depends
     """Быстрое переключение сканирования без изменения остальных настроек."""
     row = await _get_or_create_settings(db)
     row.is_scanning_enabled = body.enabled
+    if body.enabled:
+        # При включении сканирования снимаем паузу
+        row.pause_until = None
     await db.commit()
-    return {"is_scanning_enabled": row.is_scanning_enabled}
+    return {"is_scanning_enabled": row.is_scanning_enabled, "pause_until": row.pause_until}
 
 
 @router.post("/settings/observer/scan-now")

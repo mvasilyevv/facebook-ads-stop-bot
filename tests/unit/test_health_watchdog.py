@@ -66,6 +66,14 @@ def _ctx_mock() -> MagicMock:
     return ctx
 
 
+def _patch_tg_settings(chat_id: str = "chat123", settings=None):
+    """Патч _get_telegram_settings, возвращающий (chat_id, settings)."""
+    return patch(
+        "apps.health_watchdog.main._get_telegram_settings",
+        new=AsyncMock(return_value=(chat_id, settings)),
+    )
+
+
 # Все компоненты здоровы — watchdog не должен ничего делать
 @pytest.mark.asyncio
 async def test_healthy_no_actions():
@@ -84,6 +92,7 @@ async def test_healthy_no_actions():
             "apps.health_watchdog.main.get_session_factory",
             return_value=MagicMock(return_value=_ctx_mock()),
         ),
+        _patch_tg_settings(),
         patch("apps.health_watchdog.main.restart_via_supervisor", new=AsyncMock()) as restart_mock,
         patch("apps.health_watchdog.main.os.stat", side_effect=_fresh_stat),
     ):
@@ -126,6 +135,7 @@ async def test_observer_stale_heartbeat_triggers_restart():
             "apps.health_watchdog.main.get_session_factory",
             return_value=MagicMock(return_value=_ctx_mock()),
         ),
+        _patch_tg_settings(),
         patch("apps.health_watchdog.main.restart_via_supervisor", new=AsyncMock()) as restart_mock,
         patch("apps.health_watchdog.main.asyncio.sleep", new=AsyncMock()),
         patch("apps.health_watchdog.main.os.stat", side_effect=_fresh_stat),
@@ -135,9 +145,9 @@ async def test_observer_stale_heartbeat_triggers_restart():
         await _run_iteration(tg_mock, "chat123")
 
     tg_mock.send_message.assert_called()
-    # Первый TG-алерт должен быть про observer
+    # Первый TG-алерт должен быть про observer (в новых текстах используется русское «сканер»)
     first_text = tg_mock.send_message.call_args_list[0][1]["text"]
-    assert "observer" in first_text.lower()
+    assert "сканер" in first_text.lower() or "observer" in first_text.lower()
     restart_mock.assert_called_with("observer_worker")
 
 
@@ -174,6 +184,7 @@ async def test_browser_agent_unhealthy_triggers_restart():
             "apps.health_watchdog.main.get_session_factory",
             return_value=MagicMock(return_value=_ctx_mock()),
         ),
+        _patch_tg_settings(),
         patch("apps.health_watchdog.main.restart_via_supervisor", new=AsyncMock()) as restart_mock,
         patch("apps.health_watchdog.main.asyncio.sleep", new=AsyncMock()),
         patch("apps.health_watchdog.main.os.stat", side_effect=_fresh_stat),
@@ -210,6 +221,7 @@ async def test_vision_unhealthy_no_restart():
             "apps.health_watchdog.main.get_session_factory",
             return_value=MagicMock(return_value=_ctx_mock()),
         ),
+        _patch_tg_settings(),
         patch("apps.health_watchdog.main.restart_via_supervisor", new=AsyncMock()) as restart_mock,
         patch("apps.health_watchdog.main.os.stat", side_effect=_fresh_stat),
     ):
@@ -250,6 +262,7 @@ async def test_cooldown_suppresses_duplicate_alert():
             "apps.health_watchdog.main.get_session_factory",
             return_value=MagicMock(return_value=_ctx_mock()),
         ),
+        _patch_tg_settings(),
         patch("apps.health_watchdog.main.restart_via_supervisor", new=AsyncMock()),
         patch("apps.health_watchdog.main.os.stat", side_effect=_fresh_stat),
     ):
@@ -290,6 +303,7 @@ async def test_stale_log_triggers_alert():
             "apps.health_watchdog.main.get_session_factory",
             return_value=MagicMock(return_value=_ctx_mock()),
         ),
+        _patch_tg_settings(),
         patch("apps.health_watchdog.main.os.stat", side_effect=_stale_stat),
         patch("apps.health_watchdog.main.restart_via_supervisor", new=AsyncMock()),
     ):
@@ -300,4 +314,47 @@ async def test_stale_log_triggers_alert():
     # Должен быть хотя бы один алерт о stale-логе
     assert tg_mock.send_message.called
     texts = [c[1]["text"] for c in tg_mock.send_message.call_args_list]
-    assert any("не пишет" in t for t in texts)
+    assert any("молчит" in t.lower() or "не пишет" in t.lower() for t in texts)
+
+
+# При forum_topics_enabled=True и topic_ops_thread_id=42 — алерт уходит с message_thread_id=42
+@pytest.mark.asyncio
+async def test_ops_thread_id_passed_to_send_message():
+    """Сценарий 7: forum_topics_enabled=True, topic_ops_thread_id=42 → send_message получает message_thread_id=42."""
+    from apps.health_watchdog.main import _cooldown
+
+    _cooldown._last_sent.clear()
+
+    details = _make_healthy_details()
+    details.overall_healthy = False
+    details.vision = ExternalServiceHealth(healthy=False, error="timeout")
+
+    # Мок TelegramSettings с forum topics включёнными
+    fake_settings = MagicMock()
+    fake_settings.forum_topics_enabled = True
+    fake_settings.topic_ops_thread_id = 42
+
+    tg_mock = AsyncMock()
+    tg_mock.send_message = AsyncMock()
+
+    with (
+        patch(
+            "apps.health_watchdog.main.collect_health_details",
+            new=AsyncMock(return_value=details),
+        ),
+        patch(
+            "apps.health_watchdog.main.get_session_factory",
+            return_value=MagicMock(return_value=_ctx_mock()),
+        ),
+        _patch_tg_settings(chat_id="chat123", settings=fake_settings),
+        patch("apps.health_watchdog.main.restart_via_supervisor", new=AsyncMock()),
+        patch("apps.health_watchdog.main.os.stat", side_effect=_fresh_stat),
+    ):
+        from apps.health_watchdog.main import _run_iteration
+
+        await _run_iteration(tg_mock, "chat123")
+
+    # send_message должен быть вызван с message_thread_id=42
+    assert tg_mock.send_message.called
+    call_kwargs = tg_mock.send_message.call_args_list[0][1]
+    assert call_kwargs.get("message_thread_id") == 42

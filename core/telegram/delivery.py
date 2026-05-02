@@ -20,7 +20,14 @@ from core.domain import (
     EnableTaskStatus,
     TelegramNotificationStream,
 )
-from core.models import AdSnapshot, AlertEvent, EnableRecommendationEvent, FbAd, FbAdset
+from core.models import (
+    AdSnapshot,
+    AlertEvent,
+    EnableRecommendationEvent,
+    FbAd,
+    FbAdset,
+    TelegramSettings,
+)
 from core.telegram.client import TelegramBotClient
 from core.telegram.message_refs import (
     load_message_refs_by_chat,
@@ -51,6 +58,23 @@ class TelegramAdMessageContext:
     reason_title: str | None = None
     reason_text: str | None = None
     metrics_json: dict = field(default_factory=dict)
+
+
+def resolve_thread_id(stream_kind: str, settings: TelegramSettings) -> int | None:
+    """Возвращает message_thread_id для forum-topic по виду потока.
+
+    Если forum_topics_enabled=False или topic не задан — возвращает None.
+    """
+    if not settings.forum_topics_enabled:
+        return None
+    mapping: dict[str, int | None] = {
+        "alert": settings.topic_alerts_thread_id,
+        "disabled": settings.topic_disabled_thread_id,
+        "recommendation": settings.topic_recommendations_thread_id,
+        "ops": settings.topic_ops_thread_id,
+        "logs": settings.topic_logs_thread_id,
+    }
+    return mapping.get(stream_kind)
 
 
 def _display_username(username: str | None) -> str:

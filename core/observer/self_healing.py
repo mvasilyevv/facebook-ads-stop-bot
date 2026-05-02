@@ -16,10 +16,42 @@ import logging
 import uuid
 from datetime import UTC, datetime
 
+from sqlalchemy import select
+
+from core.db import get_session_factory
+from core.models import TelegramSettings
+from core.telegram.delivery import resolve_thread_id
+
 logger = logging.getLogger(__name__)
 
 # Интервал между повторными крит-алертами, пока проблема не ушла
 _CRITICAL_ALERT_COOLDOWN_SECONDS = 30 * 60  # 30 минут
+
+# Backoff между провалами цикла (секунды): экспоненциальный, с верхним пределом.
+# Без этого observer уходит в тугой цикл и за минуту накручивает тысячи провалов,
+# спамит логи и не даёт реального шанса инфраструктуре восстановиться.
+_FAILURE_BACKOFF_SCHEDULE_SECONDS: tuple[float, ...] = (
+    5.0,  # после 1-го провала
+    10.0,  # после 2-го (после reconnect)
+    20.0,  # после 3-го (после жёсткого stop+start)
+    60.0,  # после 4-го (крит-алерт уже ушёл)
+)
+_FAILURE_BACKOFF_MAX_SECONDS = 60.0
+
+
+async def _load_ops_thread_id() -> int | None:
+    """Загружает message_thread_id для ops-потока из TelegramSettings."""
+    try:
+        factory = get_session_factory()
+        async with factory() as db:
+            row = await db.scalar(
+                select(TelegramSettings).where(TelegramSettings.singleton_key == "default")
+            )
+            if row:
+                return resolve_thread_id("ops", row)
+    except Exception:
+        logger.debug("self_healing: не удалось загрузить ops thread_id из БД", exc_info=True)
+    return None
 
 
 class SelfHealingEscalator:
@@ -39,6 +71,8 @@ class SelfHealingEscalator:
     def __init__(self) -> None:
         self.consecutive_failure_count: int = 0
         self._last_critical_alert_at: datetime | None = None
+        # Дедуп для алертов о неизвестных модалках — не чаще раза в 30 минут
+        self._last_modal_alert_at: datetime | None = None
 
     def record_success(self) -> None:
         """Сбросить счётчик провалов при успешном цикле."""
@@ -106,6 +140,16 @@ class SelfHealingEscalator:
                 count=count,
             )
 
+        # Backoff после провала, чтобы не уходить в тугой цикл и дать инфраструктуре
+        # шанс на восстановление (например, перезапуск browser_agent через supervisor).
+        idx = min(count, len(_FAILURE_BACKOFF_SCHEDULE_SECONDS)) - 1
+        backoff = (
+            _FAILURE_BACKOFF_SCHEDULE_SECONDS[idx] if idx >= 0 else _FAILURE_BACKOFF_MAX_SECONDS
+        )
+        if backoff > 0:
+            logger.info("Observer: пауза %.0fс перед следующей попыткой (count=%d)", backoff, count)
+            await asyncio.sleep(backoff)
+
     async def handle_unknown_modal_artifacts(
         self,
         artifacts: list,
@@ -114,6 +158,9 @@ class SelfHealingEscalator:
         tg_chat_id: str,
     ) -> None:
         """Отправить TG-алерт о неизвестной модалке (счётчик провалов НЕ увеличивается).
+
+        Алерт шлётся не чаще раза в 30 минут, чтобы не флудить при повторных
+        срабатываниях одной и той же неизвестной модалки.
 
         Args:
             artifacts: список артефактов модалки из ScanResult.
@@ -131,13 +178,32 @@ class SelfHealingEscalator:
         if not tg_client or not tg_chat_id:
             return
 
+        # Дедуп: не чаще раза в 30 минут
+        now = datetime.now(UTC)
+        if self._last_modal_alert_at is not None:
+            elapsed = (now - self._last_modal_alert_at).total_seconds()
+            if elapsed < _CRITICAL_ALERT_COOLDOWN_SECONDS:
+                logger.info(
+                    "Observer: алерт о неизвестной модалке подавлен (последний %.0f мин назад)",
+                    elapsed / 60,
+                )
+                return
+
         text = (
-            "⚠️ Замечена неизвестная модалка в Ads Manager.\n"
-            f"Артефакты: {paths}.\n"
-            "Скан текущего цикла приостановлен."
+            "👀 <b>В Ads Manager появилось окно, которое бот не умеет закрывать</b>\n\n"
+            "Что произошло: текущий цикл скана пропущен, чтобы не нажать что-то лишнее.\n"
+            "Что делать: открой Ads Manager, закрой окно вручную — следующий цикл "
+            "пойдёт нормально.\n\n"
+            "<i>Если это окно появляется регулярно — пришли скриншот, добавлю его "
+            "в каталог известных модалок.</i>\n"
+            f"<i>Артефакты для разбора: {paths}</i>"
         )
         try:
-            await tg_client.send_message(chat_id=tg_chat_id, text=text)
+            ops_thread_id = await _load_ops_thread_id()
+            await tg_client.send_message(
+                chat_id=tg_chat_id, text=text, message_thread_id=ops_thread_id
+            )
+            self._last_modal_alert_at = now
         except Exception:
             logger.exception("Observer: не удалось отправить алерт о неизвестной модалке в TG")
 
@@ -170,14 +236,19 @@ class SelfHealingEscalator:
 
         request_id = str(uuid.uuid4())
         text = (
-            f"🚨 Observer: {count} подряд провала цикла. "
-            "Soft и hard reconnect не помогли. "
-            "Требуется ручное вмешательство: "
-            "supervisorctl restart browser_agent observer_worker. "
-            f"request_id={request_id}"
+            "🚨 <b>Сканер не оживает</b>\n\n"
+            f"После {count} подряд неудачных циклов автоматический мягкий и жёсткий "
+            "перезапуск браузера не помог.\n\n"
+            "Что делать: открой терминал и выполни:\n"
+            "<code>supervisorctl restart browser_agent observer_worker</code>\n\n"
+            "Если не помогло — проверь, что Vision-профиль запущен и доступен.\n"
+            f"<i>request_id={request_id}</i>"
         )
         try:
-            await tg_client.send_message(chat_id=tg_chat_id, text=text)
+            ops_thread_id = await _load_ops_thread_id()
+            await tg_client.send_message(
+                chat_id=tg_chat_id, text=text, message_thread_id=ops_thread_id
+            )
             self._last_critical_alert_at = now
             logger.error(
                 "Observer: крит-алерт отправлен в TG (count=%d, request_id=%s)",

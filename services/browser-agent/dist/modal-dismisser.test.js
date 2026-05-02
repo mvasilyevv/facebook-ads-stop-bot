@@ -141,4 +141,23 @@ async function withPage(html, fn) {
         fs.rmSync(tmpDir, { recursive: true, force: true });
     });
 });
+// Сценарий 5: FB jewel-flyout #fbNotificationsFlyout — считается known, артефакты не сохраняются
+(0, node_test_1.default)('dismissKnownModals — jewel-flyout #fbNotificationsFlyout не попадает в unknown', async () => {
+    const html = `
+    <html><body>
+      <div id="fbNotificationsFlyout">
+        <p>Уведомления Facebook</p>
+        <a href="#">Уведомление 1</a>
+        <a href="#">Уведомление 2</a>
+      </div>
+    </body></html>
+  `;
+    await withPage(html, async (page) => {
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'modal-test-'));
+        const result = await (0, modal_dismisser_js_1.dismissKnownModals)(page, { artifactsDir: tmpDir });
+        strict_1.default.ok(result.dismissed.some((d) => d.id === 'fb_notifications_jewel'), 'dismissed должен содержать fb_notifications_jewel');
+        strict_1.default.equal(result.unknown.length, 0, 'unknown должен быть пуст — flyout не артефакт');
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+});
 //# sourceMappingURL=modal-dismisser.test.js.map

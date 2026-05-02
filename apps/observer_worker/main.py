@@ -41,6 +41,7 @@ from core.observer.db_queries import (
     collect_reminder_alerts,
     get_disable_queue_pause_reason,
     get_enable_queue_pause_reason,
+    load_active_snooze_ad_ids,
     load_ad_states_from_db,
     load_fake_deposits,
     load_observer_settings_from_db,
@@ -801,6 +802,20 @@ async def _process_scan_results(
     except Exception:
         logger.warning("Не удалось собрать напоминания", exc_info=True)
 
+    # Фильтрация снузов: пропускаем алерты для ad_id с активным снузом.
+    # FSM-состояние не меняем — алерт вернётся после истечения снуза.
+    if alerts_to_send:
+        try:
+            snoozed_ids = await load_active_snooze_ad_ids()
+            if snoozed_ids:
+                before_count = len(alerts_to_send)
+                alerts_to_send = [a for a in alerts_to_send if a.fb_ad_id not in snoozed_ids]
+                skipped = before_count - len(alerts_to_send)
+                if skipped:
+                    logger.info("Observer: %s алертов пропущено из-за активного снуза", skipped)
+        except Exception:
+            logger.warning("Не удалось загрузить активные снузы", exc_info=True)
+
     # Диагностика: логируем статус алертов и TG перед отправкой
     logger.info(
         "Observer: алертов к отправке: %s (STOP авто-стоп: %s), tg_client: %s, получателей: %s",
@@ -1022,6 +1037,24 @@ async def _wait_for_next_cycle(
     return True
 
 
+async def _maybe_auto_resume_scanning() -> None:
+    """Авто-resume: если pause_until истёк — включаем сканирование обратно."""
+    factory = get_session_factory()
+    async with factory() as session:
+        from core.settings_queries import get_or_create_observer_settings
+
+        settings = await get_or_create_observer_settings(session)
+        if (
+            settings.pause_until is not None
+            and not settings.is_scanning_enabled
+            and settings.pause_until <= datetime.now(UTC)
+        ):
+            settings.is_scanning_enabled = True
+            settings.pause_until = None
+            await session.commit()
+            logger.info("Авто-возобновление сканирования по истечении паузы")
+
+
 async def observer_loop(
     *,
     grpc_client: BrowserAgentClient,
@@ -1216,6 +1249,12 @@ async def observer_loop(
                 ad_states = await refresh_runtime_ad_states(ad_states)
             except Exception:
                 logger.debug("Не удалось синхронизировать FSM-состояния из БД", exc_info=True)
+
+            # Авто-resume: если pause_until истёк — возобновляем сканирование
+            try:
+                await _maybe_auto_resume_scanning()
+            except Exception:
+                logger.debug("Не удалось проверить авто-resume", exc_info=True)
 
             # Проверяем флаг is_scanning_enabled перед каждым сканом
             if not await check_scanning_enabled():

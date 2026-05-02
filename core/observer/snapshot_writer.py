@@ -393,6 +393,7 @@ async def _save_metric_deltas(
         Количество записанных строк истории.
     """
     if not ad_id_map:
+        logger.debug("MetricHistory: ad_id_map пуст — пропускаю запись истории")
         return 0
 
     # Загружаем текущие снэпшоты для сравнения
@@ -400,8 +401,16 @@ async def _save_metric_deltas(
     result = await session.execute(select(AdSnapshot).where(AdSnapshot.fb_ad_id.in_(fb_ad_ids)))
     current_snaps = {snap.fb_ad_id: snap for snap in result.scalars().all()}
 
+    logger.debug(
+        "MetricHistory: проверяю %d объявлений, в БД найдено %d текущих снэпшотов",
+        len(snapshot_data),
+        len(current_snaps),
+    )
+
     now = datetime.now(UTC)
     history_rows = []
+    skipped_regression = 0
+    skipped_no_change = 0
     for item in snapshot_data:
         fb_ad_id = item["fb_ad_id"]
         ad_id = ad_id_map.get(fb_ad_id)
@@ -411,20 +420,23 @@ async def _save_metric_deltas(
         if regression_guard is not None:
             if regression_guard.should_block(fb_ad_id, old_snap, item):
                 logger.warning(
-                    "Observer: пропускаю запись истории для %s — "
+                    "MetricHistory: пропускаю запись для %s — "
                     "накопительные метрики откатились назад (цикл %d из %d)",
                     fb_ad_id,
                     regression_guard._counters.get(fb_ad_id, 1),
                     3,
                 )
+                skipped_regression += 1
                 continue
         elif _has_cumulative_metric_regression(old_snap, item):
             logger.warning(
-                "Observer: пропускаю запись истории для %s — накопительные метрики откатились назад",
+                "MetricHistory: пропускаю запись для %s — накопительные метрики откатились назад",
                 fb_ad_id,
             )
+            skipped_regression += 1
             continue
         if not _metrics_changed(old_snap, item):
+            skipped_no_change += 1
             continue
         history_rows.append(
             {
@@ -452,8 +464,20 @@ async def _save_metric_deltas(
             }
         )
 
+    logger.info(
+        "MetricHistory: проверено %d, пропущено регрессия=%d, без изменений=%d, к записи=%d",
+        len(snapshot_data),
+        skipped_regression,
+        skipped_no_change,
+        len(history_rows),
+    )
+
     if history_rows:
-        await session.execute(pg_insert(AdMetricHistory).values(history_rows))
+        stmt = pg_insert(AdMetricHistory).values(history_rows)
+        # on_conflict_do_nothing защищает от IntegrityError при повторной вставке
+        # с одинаковым (ad_id, cycle_ts) — например при быстром рестарте воркера
+        stmt = stmt.on_conflict_do_nothing(constraint="uq_ad_metric_history_ad_ts")
+        await session.execute(stmt)
     return len(history_rows)
 
 
@@ -604,7 +628,11 @@ async def batch_save_snapshots(
             session, snapshot_data, ad_id_map, regression_guard
         )
         if history_count:
-            logger.info("Записано %s строк в ad_metric_history", history_count)
+            logger.info("MetricHistory: записано %s строк в ad_metric_history", history_count)
+        else:
+            logger.info(
+                "MetricHistory: 0 строк записано — метрики не изменились или все заблокированы"
+            )
 
         # 5. Upsert ad_snapshots — только метрики и состояние алертов
         snapshot_rows = _prepare_snapshot_upsert_data(snapshot_data, ad_id_map)

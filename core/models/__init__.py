@@ -136,6 +136,10 @@ class ObserverSettings(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     auto_enable_recommendations: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false"
     )
+    # Идентификатор рекламного кабинета Facebook (для ссылок в Ads Manager)
+    fb_account_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Время до которого сканирование стоит на паузе (авто-resume по истечении)
+    pause_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # Глобальные настройки комиссий для расчёта profit
     install_cost: Mapped[Decimal] = mapped_column(
         Numeric(8, 4), default=Decimal("0.02"), server_default="0.02"
@@ -195,6 +199,18 @@ class TelegramSettings(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     warning_topic_id: Mapped[int | None] = mapped_column(Integer)
     stop_topic_id: Mapped[int | None] = mapped_column(Integer)
     enable_topic_id: Mapped[int | None] = mapped_column(Integer)
+    # Новые topic IDs для Wave A.1 (команда /setup_topics).
+    topic_alerts_thread_id: Mapped[int | None] = mapped_column(Integer)
+    topic_disabled_thread_id: Mapped[int | None] = mapped_column(Integer)
+    topic_recommendations_thread_id: Mapped[int | None] = mapped_column(Integer)
+    topic_ops_thread_id: Mapped[int | None] = mapped_column(Integer)
+    topic_logs_thread_id: Mapped[int | None] = mapped_column(Integer)
+    # Флаг активации forum-topic маршрутизации через /setup_topics.
+    forum_topics_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
+    # URL мини-приложения (Web App) для inline-кнопки.
+    web_app_url: Mapped[str | None] = mapped_column(String(512))
 
 
 # === Оффер ===
@@ -747,4 +763,46 @@ class TelegramMessageRef(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     stream_kind: Mapped[TelegramNotificationStream] = mapped_column(
         _TELEGRAM_NOTIFICATION_STREAM_ENUM,
         index=True,
+    )
+
+
+# === Heartbeat воркеров ===
+
+
+class WorkerHeartbeat(Base):
+    """Универсальная таблица heartbeat'ов всех воркеров системы.
+
+    Каждый воркер записывает сюда свой пульс (upsert по worker_name).
+    Используется health_watchdog и /api/health/details для проверки живости.
+    """
+
+    __tablename__ = "worker_heartbeats"
+
+    worker_name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    last_heartbeat_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    pid: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    message: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+
+# === Снуз алертов ===
+
+
+class AlertSnooze(UUIDPrimaryKeyMixin, Base):
+    """Запись о временном снузе алерта для конкретного объявления."""
+
+    __tablename__ = "alert_snoozes"
+    __table_args__ = (
+        Index("ix_alert_snoozes_fb_ad_id", "fb_ad_id"),
+        Index("ix_alert_snoozes_snoozed_until", "snoozed_until"),
+    )
+
+    fb_ad_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    snoozed_until: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_by_telegram_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
     )

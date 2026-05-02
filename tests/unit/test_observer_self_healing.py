@@ -10,6 +10,15 @@ import pytest
 
 from core.observer.self_healing import _CRITICAL_ALERT_COOLDOWN_SECONDS, SelfHealingEscalator
 
+
+# Все тесты этого модуля автоматически замокивают asyncio.sleep внутри self_healing,
+# чтобы backoff между провалами не тормозил тестовый прогон.
+@pytest.fixture(autouse=True)
+def _mock_sleep():
+    with patch("core.observer.self_healing.asyncio.sleep", new=AsyncMock()):
+        yield
+
+
 # ---------------------------------------------------------------------------
 # Вспомогательные фикстуры
 # ---------------------------------------------------------------------------
@@ -206,7 +215,8 @@ async def test_unknown_modal_sends_alert_without_incrementing_counter():
     assert escalator.consecutive_failure_count == 0
     tg_client.send_message.assert_called_once()
     msg_text = tg_client.send_message.call_args[1]["text"]
-    assert "модалка" in msg_text.lower() or "⚠️" in msg_text
+    # Текст должен говорить о неумении закрыть окно и содержать пути артефактов
+    assert "окно" in msg_text.lower() or "модалка" in msg_text.lower()
     assert "/am/modal/unknown_overlay" in msg_text
 
 
@@ -260,3 +270,37 @@ async def test_heartbeat_calls_update_observer_runtime_status():
             assert before <= heartbeat <= after, (
                 f"heartbeat_at={heartbeat} должен быть между {before} и {after}"
             )
+
+
+# ---------------------------------------------------------------------------
+# Сценарий 6: крит-алерт уходит на ops-stream (message_thread_id корректный)
+# ---------------------------------------------------------------------------
+
+
+# Сценарий 6a: при count=4 send_message вызван с message_thread_id из ops-потока
+@pytest.mark.asyncio
+async def test_critical_alert_uses_ops_thread_id():
+    """При forum_topics_enabled=True и topic_ops_thread_id=42 — send_message получает message_thread_id=42."""
+    escalator = SelfHealingEscalator()
+    grpc_client = _make_grpc_client()
+    tg_client = _make_tg_client()
+
+    fake_settings_row = MagicMock()
+    fake_settings_row.forum_topics_enabled = True
+    fake_settings_row.topic_ops_thread_id = 42
+
+    fake_session = MagicMock()
+    fake_session.__aenter__ = AsyncMock(return_value=fake_session)
+    fake_session.__aexit__ = AsyncMock(return_value=None)
+    fake_session.scalar = AsyncMock(return_value=fake_settings_row)
+    fake_factory = MagicMock(return_value=fake_session)
+
+    with patch("core.observer.self_healing.get_session_factory", return_value=fake_factory):
+        for _ in range(4):
+            await escalator.record_failure(
+                grpc_client=grpc_client, tg_client=tg_client, tg_chat_id="chat123"
+            )
+
+    assert tg_client.send_message.call_count == 1
+    call_kwargs = tg_client.send_message.call_args[1]
+    assert call_kwargs.get("message_thread_id") == 42

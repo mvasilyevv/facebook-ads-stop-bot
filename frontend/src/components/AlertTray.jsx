@@ -96,17 +96,25 @@ export function AlertTray({ incidents = [], disableTasks = [], onSelectIncident,
           </div>
         )}
 
-        {/* Пусто: сканирование выключено */}
-        {isEmpty && settings !== null && !settings.is_scanning_enabled && (
-          <div className="flex flex-col items-center gap-3 py-8 text-center">
-            <span className="text-sm font-semibold text-primary">Сканирование приостановлено</span>
-            {onEnableScanning && (
-              <button className="btn-primary text-sm" onClick={onEnableScanning}>
-                Включить сканирование
-              </button>
-            )}
-          </div>
-        )}
+        {/* Пусто: сканирование выключено или на паузе */}
+        {isEmpty && settings !== null && !settings.is_scanning_enabled && (() => {
+          const pauseUntilMs = settings.pause_until ? new Date(settings.pause_until).getTime() : null;
+          const pauseActive = pauseUntilMs != null && pauseUntilMs > Date.now();
+          return (
+            <div className="flex flex-col items-center gap-3 py-8 text-center">
+              <span className="text-sm font-semibold text-primary">
+                {pauseActive
+                  ? `Сканирование на паузе до ${new Date(settings.pause_until).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}`
+                  : 'Сканирование приостановлено'}
+              </span>
+              {onEnableScanning && (
+                <button className="btn-primary text-sm" onClick={onEnableScanning}>
+                  {pauseActive ? 'Возобновить' : 'Включить сканирование'}
+                </button>
+              )}
+            </div>
+          );
+        })()}
 
         {/* Скелетон загрузки */}
         {isEmpty && settings === null && (

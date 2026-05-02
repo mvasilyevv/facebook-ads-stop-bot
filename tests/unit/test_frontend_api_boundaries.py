@@ -9,6 +9,8 @@ FRONTEND_SRC = Path("frontend/src")
 ALLOWED_FETCH_FILES = {
     FRONTEND_SRC / "api.js",
     FRONTEND_SRC / "api.test.js",
+    # Shared API-клиент — тоже официальный HTTP-слой
+    FRONTEND_SRC / "shared" / "api.js",
 }
 
 

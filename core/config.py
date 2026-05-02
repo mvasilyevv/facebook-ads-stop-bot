@@ -67,6 +67,10 @@ class Settings(BaseSettings):
     sentry_dsn: str = ""
     sentry_environment: str = "production"
 
+    # --- Telegram Mini App ---
+    tma_session_ttl_seconds: int = 3600
+    web_app_url: str | None = None
+
     @model_validator(mode="after")
     def _warn_insecure_defaults(self) -> "Settings":
         """Предупреждаем о небезопасных настройках при старте."""

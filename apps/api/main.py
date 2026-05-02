@@ -19,7 +19,7 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from apps.api.deps import get_db, verify_api_key
+from apps.api.deps import get_db, require_api_key_or_tma, verify_api_key
 from apps.api.routers import (
     campaign_scripts,
     creative_tools,
@@ -30,6 +30,7 @@ from apps.api.routers import (
     naming_tracker,
     offers,
     settings,
+    tma,
     vision_telegram,
 )
 from core.config import get_settings
@@ -83,6 +84,8 @@ app = FastAPI(title="FB Stop Bot API", version="0.1.0", lifespan=lifespan)
 
 # Общая зависимость API-ключа для всех роутеров (кроме /health)
 _api_key_dep = [Depends(verify_api_key)]
+# Зависимость для роутеров, доступных и из UI, и из mini-app
+_api_key_or_tma_dep = [Depends(require_api_key_or_tma)]
 
 # CORS для React-фронтенда (localhost-порты Vite)
 _CORS_ORIGINS = [
@@ -102,9 +105,9 @@ app.add_middleware(
 )
 
 # Включаем роутеры для основного API (с аутентификацией по API-ключу)
-app.include_router(offers.router, dependencies=_api_key_dep)
-app.include_router(settings.router, dependencies=_api_key_dep)
-app.include_router(dashboard.router, dependencies=_api_key_dep)
+app.include_router(offers.router, dependencies=_api_key_or_tma_dep)
+app.include_router(settings.router, dependencies=_api_key_or_tma_dep)
+app.include_router(dashboard.router, dependencies=_api_key_or_tma_dep)
 app.include_router(vision_telegram.router, dependencies=_api_key_dep)
 app.include_router(history.router, dependencies=_api_key_dep)
 app.include_router(fake_deposits.router, dependencies=_api_key_dep)
@@ -113,6 +116,8 @@ app.include_router(creative_tools.router, dependencies=_api_key_dep)
 app.include_router(campaign_scripts.router, dependencies=_api_key_dep)
 # Health-check роутер без авторизации
 app.include_router(health.router)
+# TMA роутер (аутентификация собственная, через initData)
+app.include_router(tma.router)
 
 
 # ==========================================

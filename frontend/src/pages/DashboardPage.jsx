@@ -280,6 +280,7 @@ const ANALYTICS_TABS = [
 function ScanStatusBar({
   settings,
   onToggle,
+  onResume,
   onScanNow,
   scanning,
   lastScanAt,
@@ -291,6 +292,9 @@ function ScanStatusBar({
   nextScanAt,
   vision,
 }) {
+  const pauseUntilMs = settings?.pause_until ? new Date(settings.pause_until).getTime() : null;
+  const pauseActive = pauseUntilMs != null && pauseUntilMs > Date.now();
+  const pauseMinsLeft = pauseActive ? Math.max(1, Math.round((pauseUntilMs - Date.now()) / 60000)) : null;
   const [secsLeft, setSecsLeft] = useState(null);
   const parsedStatus = parseObserverStatusMessage(observerStatusMessage);
   const intervalSec = scanIntervalSec ?? parsedStatus.intervalSec;
@@ -396,7 +400,20 @@ function ScanStatusBar({
         Скан
       </span>
 
-      {statusText && (
+      {/* Бейдж паузы */}
+      {pauseActive && (
+        <span className="flex items-center gap-1.5">
+          <span className="rounded-full bg-warning/20 px-2 py-0.5 text-2xs font-semibold text-warning">
+            ⏸ Пауза до {new Date(settings.pause_until).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })} (осталось {pauseMinsLeft} мин)
+          </span>
+          <button
+            className="btn-ghost text-2xs px-1.5 py-0.5"
+            onClick={onResume}
+          >
+            ▶ Возобновить
+          </button>
+        </span>
+      )}
         <span className="flex flex-col">
           <span className={`flex items-center gap-1.5 text-2xs font-medium ${statusColor}`}>
             {showDot && <span className="status-dot bg-success animate-pulse-dot" />}
@@ -408,7 +425,6 @@ function ScanStatusBar({
             </span>
           )}
         </span>
-      )}
 
       {badge && (
         <span className={`rounded-full px-2 py-0.5 text-2xs font-semibold ${badge.color}`}>
@@ -615,6 +631,23 @@ export default function DashboardPage({ onNavigate }) {
     }
   };
 
+  const handleResume = async () => {
+    if (toggling || !settings) return;
+    setToggling(true);
+    const previousData = queryClient.getQueryData(['observerSettings']);
+    queryClient.setQueryData(['observerSettings'], (cur) =>
+      cur ? { ...cur, is_scanning_enabled: true, pause_until: null } : cur,
+    );
+    try {
+      await toggleScanning(true);
+    } catch (e) {
+      queryClient.setQueryData(['observerSettings'], previousData);
+      setError(`Ошибка возобновления сканирования: ${e.message}`);
+    } finally {
+      setToggling(false);
+    }
+  };
+
   const handleAutoEnableToggle = async () => {
     if (togglingAutoEnable || !settings) return;
     setTogglingAutoEnable(true);
@@ -753,6 +786,7 @@ export default function DashboardPage({ onNavigate }) {
       <ScanStatusBar
         settings={settings}
         onToggle={handleToggle}
+        onResume={handleResume}
         onScanNow={handleScanNow}
         scanning={scanning}
         lastScanAt={stats?.last_scan_at}
