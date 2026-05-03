@@ -12,6 +12,7 @@ import {
   revokeTelegram,
   saveBrowserColumnWidths,
   setTelegramToken,
+  setTelegramWebAppUrl,
   updateObserverSettings,
   updateVisionSettings,
   visionReconnect,
@@ -41,20 +42,13 @@ const DEFAULT_OBSERVER = {
 const DEFAULT_TELEGRAM = {
   bot_token: '',
   chat_id: '',
-  forum_chat_id: '',
   is_authorized: false,
   bot_username: '',
   auth_code: '',
-  delivery_mode: 'PRIVATE_CHAT',
-  control_topic_id: null,
-  warning_topic_id: null,
-  stop_topic_id: null,
-  enable_topic_id: null,
   poller_status: 'OFFLINE',
   last_poller_heartbeat_at: null,
   auth_deep_link: '',
   activation_command: '',
-  forum_cutover_status: 'NOT_STARTED',
   primary_recipient: null,
   active_invite: null,
 };
@@ -113,20 +107,14 @@ function mergeTelegramState(data) {
   return {
     bot_token: data.bot_token || '',
     chat_id: data.chat_id || '',
-    forum_chat_id: data.forum_chat_id || '',
     is_authorized: data.is_authorized || false,
     bot_username: data.bot_username || '',
     auth_code: data.auth_code || '',
-    delivery_mode: data.delivery_mode || 'PRIVATE_CHAT',
-    control_topic_id: data.control_topic_id ?? null,
-    warning_topic_id: data.warning_topic_id ?? null,
-    stop_topic_id: data.stop_topic_id ?? null,
-    enable_topic_id: data.enable_topic_id ?? null,
     poller_status: data.poller_status || 'OFFLINE',
     last_poller_heartbeat_at: data.last_poller_heartbeat_at || null,
     auth_deep_link: data.auth_deep_link || '',
     activation_command: data.activation_command || '',
-    forum_cutover_status: data.forum_cutover_status || 'NOT_STARTED',
+    web_app_url: data.web_app_url || '',
     primary_recipient: data.primary_recipient || null,
     active_invite: data.active_invite || null,
   };
@@ -173,24 +161,18 @@ export function useSettingsData() {
   );
   const pollerStatusMeta = getTelegramPollerStatusMeta(telegram.poller_status);
   const primaryRecipient = telegram.primary_recipient;
-  const effectiveDeliveryMode =
-    authResult?.delivery_mode || telegram.delivery_mode || 'PRIVATE_CHAT';
-  const isForumMode = effectiveDeliveryMode === 'FORUM_GROUP';
   const pendingAuthCode = authResult?.auth_code || telegram.auth_code || '';
   const pendingAuthCommand =
     authResult?.activation_command ||
     telegram.activation_command ||
     (pendingAuthCode ? `/start ${pendingAuthCode}` : '');
-  const pendingAuthDeepLink = isForumMode
-    ? ''
-    : authResult?.auth_deep_link ||
-      telegram.auth_deep_link ||
-      makeTelegramDeepLink(currentBotUsername, pendingAuthCode);
+  const pendingAuthDeepLink =
+    authResult?.auth_deep_link ||
+    telegram.auth_deep_link ||
+    makeTelegramDeepLink(currentBotUsername, pendingAuthCode);
   const inviteDeepLink =
-    telegram.delivery_mode === 'FORUM_GROUP'
-      ? ''
-      : inviteCode?.deep_link ||
-        makeTelegramDeepLink(inviteCode?.bot_username || currentBotUsername, inviteCode?.code);
+    inviteCode?.deep_link ||
+    makeTelegramDeepLink(inviteCode?.bot_username || currentBotUsername, inviteCode?.code);
   const isWaitingTelegramAuth = !telegram.is_authorized && Boolean(pendingAuthCode);
 
   const loadObserverSettings = useCallback(
@@ -437,6 +419,19 @@ export function useSettingsData() {
     }
   }, []);
 
+  const saveWebAppUrl = useCallback(async (url) => {
+    setSaving('telegram-webapp');
+    try {
+      const result = await setTelegramWebAppUrl(url);
+      setTelegram((prev) => ({ ...prev, web_app_url: result.web_app_url ?? url }));
+      setToast({ message: 'Web App URL сохранён', type: 'success' });
+    } catch (err) {
+      setToast({ message: err.message || 'Ошибка', type: 'error' });
+    } finally {
+      setSaving('');
+    }
+  }, []);
+
   const checkAuthStatus = useCallback(
     async (silent = false) => {
       setAuthChecking(true);
@@ -676,6 +671,7 @@ export function useSettingsData() {
       createInvite,
       clearInvite,
       openTelegram: handleOpenTelegram,
+      saveWebAppUrl,
     },
     vision: {
       value: vision,

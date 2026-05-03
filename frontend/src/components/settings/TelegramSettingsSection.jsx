@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { formatDateTimeRu } from './settingsUtils.js';
 
 function RecipientCard({ recipient, onDelete }) {
@@ -17,15 +18,13 @@ function RecipientCard({ recipient, onDelete }) {
   );
 }
 
-function InvitePanel({ inviteCode, inviteDeepLink, currentBotUsername, isForumMode, onOpenTelegram, onCopyCommand, onCopyLink, onDone }) {
+function InvitePanel({ inviteCode, inviteDeepLink, currentBotUsername, onOpenTelegram, onCopyCommand, onCopyLink, onDone }) {
   const inviteCommand = inviteCode.code ? `/start ${inviteCode.code}` : '';
   return (
     <div className="space-y-3 rounded-md border border-accent/30 bg-accent-muted p-4">
       <div className="text-sm font-semibold text-accent">Инвайт-код создан</div>
       <div className="text-2xs text-secondary">
-        {isForumMode
-          ? <>Попросите пользователя отправить команду в topic <strong>CONTROL</strong>.</>
-          : <>Попросите пользователя открыть бота <strong>@{inviteCode.bot_username || currentBotUsername || '—'}</strong>.</>}
+        Попросите пользователя открыть бота <strong>@{inviteCode.bot_username || currentBotUsername || '—'}</strong>.
       </div>
       <div className="rounded bg-elevated px-3 py-2 font-mono text-sm text-primary">{inviteCommand || 'Код не получен'}</div>
       <div className="space-y-0.5 text-2xs text-muted">
@@ -34,8 +33,8 @@ function InvitePanel({ inviteCode, inviteDeepLink, currentBotUsername, isForumMo
       </div>
       <div className="flex flex-wrap gap-2">
         <button className="btn-secondary text-2xs" onClick={() => onCopyCommand(inviteCommand)} disabled={!inviteCommand}>Скопировать команду</button>
-        {!isForumMode && <button className="btn-secondary text-2xs" onClick={() => onOpenTelegram(inviteDeepLink)} disabled={!inviteDeepLink}>Открыть бота</button>}
-        {!isForumMode && <button className="btn-secondary text-2xs" onClick={() => onCopyLink(inviteDeepLink)} disabled={!inviteDeepLink}>Скопировать ссылку</button>}
+        <button className="btn-secondary text-2xs" onClick={() => onOpenTelegram(inviteDeepLink)} disabled={!inviteDeepLink}>Открыть бота</button>
+        <button className="btn-secondary text-2xs" onClick={() => onCopyLink(inviteDeepLink)} disabled={!inviteDeepLink}>Скопировать ссылку</button>
         <button className="btn-ghost text-2xs" onClick={onDone}>Готово</button>
       </div>
     </div>
@@ -43,7 +42,6 @@ function InvitePanel({ inviteCode, inviteDeepLink, currentBotUsername, isForumMo
 }
 
 function ConnectedTelegramPanel({ telegram, currentBotUsername, pollerStatusMeta, primaryRecipient, recipients, inviteCode, inviteDeepLink, onCreateInvite, onClearInvite, onDeleteRecipient, onRevokeTelegram, onOpenTelegram, onCopyWithToast, saving }) {
-  const isForumMode = telegram.delivery_mode === 'FORUM_GROUP';
   return (
     <div className="space-y-4">
       <div className="flex items-start gap-3 rounded-md border border-success/30 bg-success-muted p-4">
@@ -54,24 +52,17 @@ function ConnectedTelegramPanel({ telegram, currentBotUsername, pollerStatusMeta
             <div>Бот: @{currentBotUsername || telegram.bot_username || '—'}</div>
             <div>Poller: <span style={{ color: pollerStatusMeta.color }}>{pollerStatusMeta.label}</span></div>
             <div>Heartbeat: {formatDateTimeRu(telegram.last_poller_heartbeat_at)}</div>
-            <div>Режим: {isForumMode ? 'forum-группа' : 'личный чат'}</div>
           </div>
         </div>
       </div>
 
       <div>
         <h4 className="mb-2 text-2xs font-bold uppercase tracking-widest text-muted">
-          {isForumMode ? 'Группа и topics' : 'Основной чат'}
+          Основной чат
         </h4>
         <div className="rounded-md border border-border bg-elevated p-4 space-y-1 text-2xs text-secondary">
-          <div className="text-sm font-medium text-primary">{isForumMode ? 'Рабочая forum-группа' : 'Основной чат уведомлений'}</div>
-          <div>ID чата: <code className="font-mono text-primary">{primaryRecipient?.masked_chat_id || telegram.forum_chat_id || telegram.chat_id || '—'}</code></div>
-          {isForumMode && (
-            <>
-              <div>CONTROL: <code className="font-mono">{telegram.control_topic_id || '—'}</code></div>
-              <div>Topics: <code className="font-mono">{[telegram.warning_topic_id, telegram.stop_topic_id, telegram.enable_topic_id].filter(Boolean).join(' / ') || '—'}</code></div>
-            </>
-          )}
+          <div className="text-sm font-medium text-primary">Основной чат уведомлений</div>
+          <div>ID чата: <code className="font-mono text-primary">{primaryRecipient?.masked_chat_id || telegram.chat_id || '—'}</code></div>
           {primaryRecipient?.username && <div>Telegram: @{primaryRecipient.username}</div>}
         </div>
       </div>
@@ -81,7 +72,7 @@ function ConnectedTelegramPanel({ telegram, currentBotUsername, pollerStatusMeta
           Участники ({recipients.length})
         </h4>
         {inviteCode ? (
-          <InvitePanel inviteCode={inviteCode} inviteDeepLink={inviteDeepLink} currentBotUsername={currentBotUsername} isForumMode={isForumMode} onOpenTelegram={onOpenTelegram} onCopyCommand={(v) => onCopyWithToast(v, 'Команда скопирована')} onCopyLink={(v) => onCopyWithToast(v, 'Ссылка скопирована')} onDone={onClearInvite} />
+          <InvitePanel inviteCode={inviteCode} inviteDeepLink={inviteDeepLink} currentBotUsername={currentBotUsername} onOpenTelegram={onOpenTelegram} onCopyCommand={(v) => onCopyWithToast(v, 'Команда скопирована')} onCopyLink={(v) => onCopyWithToast(v, 'Ссылка скопирована')} onDone={onClearInvite} />
         ) : (
           <button className="btn-secondary text-2xs" onClick={onCreateInvite} disabled={saving === 'invite'}>
             {saving === 'invite' ? 'Генерация...' : '+ Добавить пользователя'}
@@ -103,22 +94,19 @@ function ConnectedTelegramPanel({ telegram, currentBotUsername, pollerStatusMeta
 }
 
 function WaitingTelegramPanel({ telegram, currentBotUsername, pollerStatusMeta, pendingAuthCommand, pendingAuthDeepLink, onOpenTelegram, onCopyWithToast, onRefreshStatus, onRevokeTelegram, authChecking }) {
-  const isForumMode = telegram.delivery_mode === 'FORUM_GROUP';
   return (
     <div className="space-y-4">
       <div className="rounded-md border border-accent/30 bg-accent-muted p-4 space-y-3">
         <div className="text-sm font-semibold text-accent">Ожидание подтверждения</div>
         <div className="text-2xs text-secondary">
-          {isForumMode
-            ? <>Откройте группу и отправьте команду в topic <strong>CONTROL</strong>.</>
-            : <>Откройте бота <strong>@{currentBotUsername || telegram.bot_username || '—'}</strong> и отправьте команду.</>}
+          Откройте бота <strong>@{currentBotUsername || telegram.bot_username || '—'}</strong> и отправьте команду.
         </div>
         <div className="rounded bg-elevated px-3 py-2 font-mono text-sm text-primary">{pendingAuthCommand || 'Команда не найдена'}</div>
         <div className="text-2xs text-muted">Статус обновляется автоматически каждые 2 секунды.</div>
       </div>
       <div className="flex flex-wrap gap-2">
         <button className="btn-secondary text-2xs" onClick={() => onCopyWithToast(pendingAuthCommand, 'Команда скопирована')} disabled={!pendingAuthCommand}>Скопировать</button>
-        {!isForumMode && <button className="btn-secondary text-2xs" onClick={() => onOpenTelegram(pendingAuthDeepLink)} disabled={!pendingAuthDeepLink}>Открыть бота</button>}
+        <button className="btn-secondary text-2xs" onClick={() => onOpenTelegram(pendingAuthDeepLink)} disabled={!pendingAuthDeepLink}>Открыть бота</button>
         <button className="btn-ghost text-2xs" onClick={onRefreshStatus}>{authChecking ? 'Проверяем...' : 'Обновить статус'}</button>
         <button className="btn-ghost text-danger text-2xs" onClick={onRevokeTelegram}>Отмена</button>
       </div>
@@ -158,7 +146,15 @@ function DisconnectedTelegramPanel({ telegram, newToken, onNewTokenChange, onCon
   );
 }
 
-export function TelegramSettingsSection({ telegram, newToken, onNewTokenChange, authChecking, currentBotUsername, pollerStatusMeta, primaryRecipient, recipients, inviteCode, inviteDeepLink, pendingAuthCommand, pendingAuthDeepLink, isWaitingTelegramAuth, onConnectTelegram, onRevokeTelegram, onRefreshStatus, onDeleteRecipient, onCreateInvite, onClearInvite, onOpenTelegram, onCopyWithToast, saving }) {
+export function TelegramSettingsSection({ telegram, newToken, onNewTokenChange, authChecking, currentBotUsername, pollerStatusMeta, primaryRecipient, recipients, inviteCode, inviteDeepLink, pendingAuthCommand, pendingAuthDeepLink, isWaitingTelegramAuth, onConnectTelegram, onRevokeTelegram, onRefreshStatus, onDeleteRecipient, onCreateInvite, onClearInvite, onOpenTelegram, onCopyWithToast, onSaveWebAppUrl, saving }) {
+  const [webAppUrl, setWebAppUrl] = useState(telegram.web_app_url || '');
+
+  // Обновлять локальный стейт при загрузке данных
+  const currentWebAppUrl = telegram.web_app_url || '';
+  if (webAppUrl === '' && currentWebAppUrl !== '') {
+    setWebAppUrl(currentWebAppUrl);
+  }
+
   return (
     <section aria-label="Настройки Telegram" className="panel p-5 space-y-4">
       <h2 className="text-base font-semibold text-primary">Telegram — уведомления</h2>
@@ -170,6 +166,29 @@ export function TelegramSettingsSection({ telegram, newToken, onNewTokenChange, 
       ) : (
         <DisconnectedTelegramPanel telegram={telegram} newToken={newToken} onNewTokenChange={onNewTokenChange} onConnectTelegram={onConnectTelegram} pollerStatusMeta={pollerStatusMeta} />
       )}
+
+      <div className="border-t border-border pt-4 space-y-2">
+        <h4 className="text-2xs font-bold uppercase tracking-widest text-muted">Web App (Mini App)</h4>
+        <label className="block text-2xs font-semibold uppercase tracking-wider text-secondary" htmlFor="tg-webapp-url">
+          Web App URL
+        </label>
+        <input
+          id="tg-webapp-url"
+          className="w-full rounded bg-elevated border border-border px-3 py-2 text-sm text-primary focus:border-accent focus:ring-1 focus:ring-accent focus:outline-none"
+          type="url"
+          value={webAppUrl}
+          onChange={(e) => setWebAppUrl(e.target.value)}
+          placeholder="https://app.example.com/tma/"
+        />
+        <p className="text-2xs text-muted">HTTPS-URL Mini App. Пусто = использовать значение из .env.</p>
+        <button
+          className="btn-secondary text-2xs"
+          onClick={() => onSaveWebAppUrl(webAppUrl)}
+          disabled={saving === 'telegram-webapp'}
+        >
+          {saving === 'telegram-webapp' ? 'Сохранение...' : 'Сохранить'}
+        </button>
+      </div>
     </section>
   );
 }

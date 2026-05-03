@@ -68,6 +68,7 @@ export default function SettingsPage() {
         onClearInvite={settings.telegram.clearInvite}
         onOpenTelegram={settings.telegram.openTelegram}
         onCopyWithToast={settings.telegram.copyWithToast}
+        onSaveWebAppUrl={settings.telegram.saveWebAppUrl}
         saving={settings.saving}
       />
 

@@ -319,7 +319,7 @@ export async function getDashboardHealthMap() {
       telegramOnline ? 'success' : telegram?.is_authorized ? 'warning' : 'danger',
       telegramOnline ? 'Доставка уведомлений активна' : 'Доставка требует проверки',
       [telegram?.is_authorized ? 'Бот авторизован.' : 'Бот не авторизован.'],
-      [{ label: 'Mode', value: telegram?.delivery_mode || '—', tone: 'neutral' }],
+      [],
       telegram?.last_poller_heartbeat_at,
     ),
     makeHealthNode(

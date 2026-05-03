@@ -91,6 +91,8 @@ export const setTelegramToken = (bot_token) =>
   request('/settings/telegram/token', { method: 'PUT', body: JSON.stringify({ bot_token }) });
 export const revokeTelegram = () =>
   request('/settings/telegram', { method: 'DELETE' });
+export const setTelegramWebAppUrl = (web_app_url) =>
+  request('/settings/telegram/web-app-url', { method: 'PUT', body: JSON.stringify({ web_app_url }) });
 
 // Офферы
 export const getOffers = () => request('/offers');
@@ -319,7 +321,7 @@ export async function getDashboardHealthMap() {
       telegramOnline ? 'success' : telegram?.is_authorized ? 'warning' : 'danger',
       telegramOnline ? 'Доставка уведомлений активна' : 'Доставка требует проверки',
       [telegram?.is_authorized ? 'Бот авторизован.' : 'Бот не авторизован.'],
-      [{ label: 'Mode', value: telegram?.delivery_mode || '—', tone: 'neutral' }],
+      [],
       telegram?.last_poller_heartbeat_at,
     ),
     makeHealthNode(
