@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from core.domain import AlertState, TelegramDeliveryMode, TelegramUserRole
+from core.domain import AlertState, TelegramUserRole
 
 
 def _make_async_session(*, execute_side_effect=None, scalar_side_effect=None, scalar_return=None):
@@ -48,34 +48,39 @@ def _rows_result(rows):
     return result
 
 
-# Проверяем, что старый private chat получает сообщение о переезде в группу.
+# Проверяем, что private chat без авторизации получает текст AUTH_REQUIRED.
 @pytest.mark.asyncio
-async def test_handle_update_redirects_private_chat_to_group():
-    """После cutover личный чат должен отправлять пользователя в forum-группу."""
+async def test_handle_update_private_chat_no_access_sends_auth_required():
+    """Личный чат без авторизации должен отправлять AUTH_REQUIRED текст."""
     from core.telegram import bot_handler
 
     client = AsyncMock()
 
-    await bot_handler.handle_update(
-        client,
-        {
-            "message": {
-                "chat": {"id": "100", "type": "private"},
-                "from": {"id": 7, "username": "tester"},
-                "text": "/ads",
+    with patch.object(
+        bot_handler,
+        "resolve_telegram_access",
+        new=AsyncMock(return_value=None),
+    ):
+        await bot_handler.handle_update(
+            client,
+            {
+                "message": {
+                    "chat": {"id": "100", "type": "private"},
+                    "from": {"id": 7, "username": "tester"},
+                    "text": "/start",
+                },
             },
-        },
-    )
+        )
 
     client.send_message.assert_awaited_once()
-    assert "перенесён в группу" in client.send_message.await_args.kwargs["text"]
+    assert bot_handler.AUTH_REQUIRED_TEXT in client.send_message.await_args.kwargs["text"]
     client.edit_message.assert_not_awaited()
 
 
-# Проверяем, что /start с кодом авторизует владельца в CONTROL topic forum-группы.
+# Проверяем, что /start с кодом авторизует владельца и открывает меню.
 @pytest.mark.asyncio
 async def test_handle_update_authorizes_via_start_code_and_returns_menu():
-    """/start <код> в CONTROL должен привязать owner к supergroup и открыть CONTROL-меню."""
+    """/start <код> должен привязать owner к чату и открыть меню."""
     from core.telegram import bot_handler
 
     settings_row = SimpleNamespace(
@@ -86,8 +91,6 @@ async def test_handle_update_authorizes_via_start_code_and_returns_menu():
         owner_telegram_user_id="",
         owner_username="",
         owner_first_name="",
-        delivery_mode=TelegramDeliveryMode.FORUM_GROUP.value,
-        control_topic_id=11,
     )
     session = _make_async_session()
     factory = _make_session_factory(session)
@@ -128,13 +131,12 @@ async def test_handle_update_authorizes_via_start_code_and_returns_menu():
     client.send_message.assert_awaited_once()
     sent_text = client.send_message.await_args.kwargs["text"]
     assert "Авторизация прошла успешно" in sent_text
-    assert "CONTROL" in sent_text
 
 
-# Проверяем, что callback из старого private chat тоже уводит пользователя в группу.
+# Проверяем, что callback из old private chat даёт ответ без доступа.
 @pytest.mark.asyncio
-async def test_handle_update_redirects_private_callback_to_group():
-    """Старые inline-кнопки из лички не должны больше работать после cutover."""
+async def test_handle_update_private_callback_no_access():
+    """Inline-кнопки из личного чата без авторизации должны возвращать отказ."""
     from core.telegram import bot_handler
 
     client = AsyncMock()
@@ -151,22 +153,19 @@ async def test_handle_update_redirects_private_callback_to_group():
         },
     )
 
-    client.answer_callback_query.assert_awaited_once_with("cb-1", text="Контур перенесён в группу")
+    client.answer_callback_query.assert_awaited_once_with("cb-1", text="Контур не активирован")
     client.edit_message.assert_not_awaited()
 
 
-# Проверяем, что получатель не может менять настройки через /set в CONTROL.
+# Проверяем, что получатель не может менять настройки через /set.
 @pytest.mark.asyncio
 async def test_recipient_cannot_run_set_command():
-    """Роль recipient должна получать owner-only отказ на /set даже в forum-группе."""
+    """Роль recipient должна получать owner-only отказ на /set."""
     from core.telegram import bot_handler
 
     client = AsyncMock()
-    access = SimpleNamespace(role=TelegramUserRole.RECIPIENT.value, control_topic_id=11)
-    settings_row = SimpleNamespace(
-        delivery_mode=TelegramDeliveryMode.FORUM_GROUP.value,
-        control_topic_id=11,
-    )
+    access = SimpleNamespace(role=TelegramUserRole.RECIPIENT.value)
+    settings_row = SimpleNamespace()
 
     with (
         patch.object(
@@ -202,18 +201,15 @@ async def test_recipient_cannot_run_set_command():
     assert bot_handler.OWNER_ONLY_TEXT in client.send_message.await_args.kwargs["text"]
 
 
-# Проверяем, что владелец может менять настройки через /set в CONTROL.
+# Проверяем, что владелец может менять настройки через /set.
 @pytest.mark.asyncio
 async def test_owner_can_run_set_command():
-    """Роль owner должна успешно обновлять observer-настройку через /set в CONTROL."""
+    """Роль owner должна успешно обновлять observer-настройку через /set."""
     from core.telegram import bot_handler
 
     client = AsyncMock()
-    access = SimpleNamespace(role=TelegramUserRole.OWNER.value, control_topic_id=11)
-    settings_row = SimpleNamespace(
-        delivery_mode=TelegramDeliveryMode.FORUM_GROUP.value,
-        control_topic_id=11,
-    )
+    access = SimpleNamespace(role=TelegramUserRole.OWNER.value)
+    settings_row = SimpleNamespace()
 
     with (
         patch.object(
@@ -249,64 +245,19 @@ async def test_owner_can_run_set_command():
     assert "Интервал обновления" in client.send_message.await_args.kwargs["text"]
 
 
-# Проверяем, что получатель не может запускать bulk disable из CONTROL-callback.
+# Проверяем, что неподдерживаемая команда возвращает понятный отказ.
 @pytest.mark.asyncio
-async def test_recipient_cannot_trigger_disable_all():
-    """Роль recipient не должна проходить на ads:disable_all в CONTROL."""
+async def test_handle_update_unknown_command_sends_unsupported():
+    """Команда /ads (нет обработчика) должна вернуть сообщение о неподдерживаемой команде."""
     from core.telegram import bot_handler
 
     client = AsyncMock()
-    access = SimpleNamespace(role=TelegramUserRole.RECIPIENT.value, control_topic_id=11)
+    access = SimpleNamespace(role=TelegramUserRole.OWNER.value)
 
     with patch.object(
         bot_handler,
         "resolve_telegram_access",
         new=AsyncMock(return_value=access),
-    ):
-        await bot_handler.handle_update(
-            client,
-            {
-                "callback_query": {
-                    "id": "cb-disable-all",
-                    "data": "ads:disable_all",
-                    "message": {
-                        "chat": {"id": "-1003701505954", "type": "supergroup"},
-                        "message_id": 11,
-                        "message_thread_id": 11,
-                    },
-                    "from": {"id": 7, "username": "guest"},
-                },
-            },
-        )
-
-    client.send_message.assert_awaited_once()
-    assert bot_handler.OWNER_ONLY_TEXT in client.send_message.await_args.kwargs["text"]
-
-
-# Проверяем, что общие команды вне CONTROL не разворачивают полноценный экран.
-@pytest.mark.asyncio
-async def test_handle_update_blocks_general_command_outside_control_topic():
-    """Команда /ads вне CONTROL должна вернуть короткое указание открыть CONTROL."""
-    from core.telegram import bot_handler
-
-    client = AsyncMock()
-    access = SimpleNamespace(role=TelegramUserRole.OWNER.value, control_topic_id=11)
-    settings_row = SimpleNamespace(
-        delivery_mode=TelegramDeliveryMode.FORUM_GROUP.value,
-        control_topic_id=11,
-    )
-
-    with (
-        patch.object(
-            bot_handler,
-            "resolve_telegram_access",
-            new=AsyncMock(return_value=access),
-        ),
-        patch.object(
-            bot_handler,
-            "_load_telegram_settings_row",
-            new=AsyncMock(return_value=settings_row),
-        ),
     ):
         await bot_handler.handle_update(
             client,
@@ -321,73 +272,7 @@ async def test_handle_update_blocks_general_command_outside_control_topic():
         )
 
     client.send_message.assert_awaited_once()
-    assert "topic <b>CONTROL</b>" in client.send_message.await_args.kwargs["text"]
-
-
-# Проверяем, что главное меню CONTROL остаётся коротким ops-хабом.
-@pytest.mark.asyncio
-async def test_render_start_has_short_ops_hub_without_more_button():
-    """Главный экран CONTROL должен показывать только пять рабочих разделов."""
-    from core.telegram import bot_handler
-
-    # get_observer_settings вызывает session.execute, потом GROUP BY тоже execute
-    obs_result = _scalar_result(SimpleNamespace(is_scanning_enabled=True, interval_seconds=90))
-
-    group_by_result = MagicMock()
-    group_by_result.all.return_value = [
-        (AlertState.NORMAL, 1),
-        (AlertState.WARNING_SENT, 3),
-        (AlertState.STOP_SENT, 1),
-    ]
-
-    session = _make_async_session(
-        execute_side_effect=[obs_result, group_by_result],
-        scalar_side_effect=[
-            # queue_count (DisableTask)
-            5,
-        ],
-    )
-    factory = _make_session_factory(session)
-
-    with (
-        patch.object(bot_handler, "get_session_factory", return_value=factory),
-        patch.object(
-            bot_handler,
-            "_load_current_live_batch_bounds",
-            new=AsyncMock(return_value=(None, None)),
-        ),
-    ):
-        text, markup = await bot_handler._render_start()
-
-    assert "CONTROL" in text
-    buttons = [button["text"] for row in markup["inline_keyboard"] for button in row]
-    assert buttons[0] == "Сегодня"
-    # alert_count = WARNING_SENT(3) + STOP_SENT(1) = 4
-    assert buttons[1] == "Алерты (4)"
-    assert buttons[2:] == ["Задачи", "Объявления", "Настройки"]
-    assert "Ещё" not in buttons
-
-
-# Проверяем, что настройки открывают вторичный уровень CONTROL.
-@pytest.mark.asyncio
-async def test_render_settings_exposes_secondary_level():
-    """Экран настроек должен давать доступ к второму уровню меню."""
-    from core.telegram import bot_handler
-
-    # get_observer_settings вызывает session.execute, а не scalar
-    session = _make_async_session(
-        execute_side_effect=[
-            _scalar_result(SimpleNamespace(interval_seconds=90, warning_percent_of_stop=80)),
-        ],
-    )
-    factory = _make_session_factory(session)
-
-    with patch.object(bot_handler, "get_session_factory", return_value=factory):
-        text, markup = await bot_handler._render_settings()
-
-    assert "Настройки" in text
-    assert markup["inline_keyboard"][0][0]["text"] == "➕ Ещё"
-    assert markup["inline_keyboard"][1][0]["text"] == "◀️ CONTROL"
+    assert "не поддерживается" in client.send_message.await_args.kwargs["text"]
 
 
 # Проверяем, что confirm-экран для отключения помнит исходное сообщение.
@@ -397,7 +282,7 @@ async def test_stream_disable_confirm_keeps_origin_message_id():
     from core.telegram import bot_handler
 
     client = AsyncMock()
-    access = SimpleNamespace(role=TelegramUserRole.RECIPIENT.value, control_topic_id=11)
+    access = SimpleNamespace(role=TelegramUserRole.RECIPIENT.value)
 
     with (
         patch.object(
@@ -441,7 +326,7 @@ async def test_disable_execute_updates_origin_message_and_broadcasts_stop():
     from core.telegram import bot_handler
 
     client = AsyncMock()
-    access = SimpleNamespace(role=TelegramUserRole.RECIPIENT.value, control_topic_id=11)
+    access = SimpleNamespace(role=TelegramUserRole.RECIPIENT.value)
 
     # campaign_name/adset_name убраны из возвращаемого словаря _create_disable_task
     task_info = {
@@ -557,45 +442,6 @@ def test_normalize_snooze_minutes_supports_legacy_three_hours():
 
     assert _normalize_snooze_minutes(3) == 180
     assert _normalize_snooze_minutes(30) == 30
-
-
-# Проверяем, что массовое отключение берёт только текущий живой батч.
-@pytest.mark.asyncio
-async def test_execute_disable_all_uses_current_live_batch_only():
-    """Bulk disable должен брать только объявления из текущего скана, а не исторические хвосты."""
-    from core.telegram import bot_handler
-
-    current_ad = SimpleNamespace(fb_ad_id="current-ad")
-    live_last_scan = datetime(2026, 3, 28, 12, 0, tzinfo=UTC)
-
-    async def execute_side_effect(stmt):
-        stmt_text = str(stmt)
-        assert "last_observed_at" in stmt_text
-        assert ">=" in stmt_text
-        return _rows_result([current_ad])
-
-    session = _make_async_session(
-        execute_side_effect=execute_side_effect,
-        scalar_return=live_last_scan,
-    )
-    factory = _make_session_factory(session)
-    # _try_add_disable_task вызывается для каждого объявления внутри одной сессии
-    try_add = AsyncMock(return_value=True)
-
-    with (
-        patch.object(bot_handler, "get_session_factory", return_value=factory),
-        patch.object(bot_handler, "_try_add_disable_task", try_add),
-    ):
-        count, failed = await bot_handler._execute_disable_all(tg_user_id="tg-1", username="tester")
-
-    assert count == 1
-    assert failed == 0
-    try_add.assert_awaited_once_with(
-        session,
-        current_ad,
-        tg_user_id="tg-1",
-        username="tester",
-    )
 
 
 # Проверяем, что ручной disable привязывается к ключу инцидента, а не к snapshot.id.
@@ -757,7 +603,7 @@ async def test_enable_recommendation_callback_is_owner_only():
     from core.telegram import bot_handler
 
     client = AsyncMock()
-    access = SimpleNamespace(role=TelegramUserRole.RECIPIENT.value, control_topic_id=11)
+    access = SimpleNamespace(role=TelegramUserRole.RECIPIENT.value)
 
     with patch.object(
         bot_handler,
@@ -793,7 +639,7 @@ async def test_enable_recommendation_callback_routes_to_enable_stream():
     from core.telegram import bot_handler
 
     client = AsyncMock()
-    access = SimpleNamespace(role=TelegramUserRole.OWNER.value, control_topic_id=11)
+    access = SimpleNamespace(role=TelegramUserRole.OWNER.value)
     safe_edit = AsyncMock()
 
     with (
@@ -854,7 +700,7 @@ async def test_enable_recommendation_callback_shows_stale_message():
     from core.telegram import bot_handler
 
     client = AsyncMock()
-    access = SimpleNamespace(role=TelegramUserRole.OWNER.value, control_topic_id=11)
+    access = SimpleNamespace(role=TelegramUserRole.OWNER.value)
     safe_edit = AsyncMock()
 
     with (
@@ -910,7 +756,7 @@ async def test_enable_recommendation_callback_shows_stop_reject():
     from core.telegram import bot_handler
 
     client = AsyncMock()
-    access = SimpleNamespace(role=TelegramUserRole.OWNER.value, control_topic_id=11)
+    access = SimpleNamespace(role=TelegramUserRole.OWNER.value)
     safe_edit = AsyncMock()
 
     with (
@@ -960,7 +806,7 @@ async def test_confirm_cancel_edits_current_message_to_cancelled_text():
     from core.telegram import bot_handler
 
     client = AsyncMock()
-    access = SimpleNamespace(role=TelegramUserRole.OWNER.value, control_topic_id=11)
+    access = SimpleNamespace(role=TelegramUserRole.OWNER.value)
     safe_edit = AsyncMock()
 
     with (
@@ -998,7 +844,7 @@ async def test_disable_execute_keeps_local_ack_and_broadcasts_stop_stream():
     from core.telegram import bot_handler
 
     client = AsyncMock()
-    access = SimpleNamespace(role=TelegramUserRole.OWNER.value, control_topic_id=11)
+    access = SimpleNamespace(role=TelegramUserRole.OWNER.value)
     safe_edit = AsyncMock()
     task_info = {
         "fb_ad_id": "ad-500",
@@ -1061,20 +907,18 @@ async def test_disable_execute_keeps_local_ack_and_broadcasts_stop_stream():
     )
 
 
-# Проверяем, что код активации вне CONTROL не авторизует owner и даёт короткое указание.
+# Проверяем, что _try_authorize авторизует владельца по корректному коду.
 @pytest.mark.asyncio
-async def test_try_authorize_requires_control_topic_in_forum_mode():
+async def test_try_authorize_succeeds_with_correct_code():
     from core.telegram.bot_handler import _try_authorize
 
     settings_row = SimpleNamespace(
-        chat_id="-1003701505954",
+        chat_id="",
         is_authorized=False,
         auth_code="123456",
         owner_telegram_user_id="",
         owner_username="",
         owner_first_name="",
-        delivery_mode=TelegramDeliveryMode.FORUM_GROUP.value,
-        control_topic_id=11,
     )
     session = _make_async_session()
     factory = _make_session_factory(session)
@@ -1092,14 +936,15 @@ async def test_try_authorize_requires_control_topic_in_forum_mode():
             "-1003701505954",
             "123456",
             {"from": {"id": 42, "username": "ivan", "first_name": "Иван"}},
-            message_thread_id=99,
+            message_thread_id=None,
         )
 
     assert handled is True
-    assert settings_row.is_authorized is False
-    session.commit.assert_not_awaited()
+    assert settings_row.is_authorized is True
+    assert settings_row.owner_telegram_user_id == "42"
+    session.commit.assert_awaited_once()
     client.send_message.assert_awaited_once()
-    assert "только в topic <b>CONTROL</b>" in client.send_message.await_args.kwargs["text"]
+    assert "Авторизация прошла успешно" in client.send_message.await_args.kwargs["text"]
 
 
 # Проверяем, что helper коммитит новую enable-задачу, если сервис вернул created.

@@ -2,9 +2,10 @@
 # -*- coding: utf-8 -*-
 # Единый скрипт запуска FB Stop Bot
 # Использование:
-#   ./run.sh            — запуск всех сервисов
+#   ./run.sh            — запуск всех сервисов (cloudflared туннели по умолчанию ON)
 #   ./run.sh --dev      — запуск в dev-режиме (API с --reload)
-#   ./run.sh --tunnel   — поднять cloudflared quick-tunnels для API/web/mini-app
+#   ./run.sh --tunnel   — явно включить cloudflared quick-tunnels (по умолчанию)
+#   ./run.sh --no-tunnel — выключить туннели
 #   ./run.sh --down     — остановка всех сервисов
 #   ./run.sh --restart  — перезапуск (--down + запуск)
 #   ./run.sh --logs     — логи всех процессов
@@ -442,7 +443,7 @@ show_logs() {
 # ==========================================
 # Обработка аргументов
 # ==========================================
-ENABLE_TUNNEL=0
+ENABLE_TUNNEL=1
 case "${1:-}" in
     --down|--stop)
         stop_all
@@ -463,11 +464,14 @@ case "${1:-}" in
     --tunnel)
         ENABLE_TUNNEL=1
         ;;
+    --no-tunnel)
+        ENABLE_TUNNEL=0
+        ;;
     "")
         ;;
     *)
         echo -e "${RED}❌ Неизвестный аргумент: $1${NC}"
-        echo "Использование: ./run.sh [--dev|--down|--restart|--logs|--tunnel]"
+        echo "Использование: ./run.sh [--dev|--down|--restart|--logs|--tunnel|--no-tunnel]"
         exit 1
         ;;
 esac
@@ -972,15 +976,39 @@ start_tunnel() {
     local tpid=$!
     append_pid "$tpid" "cloudflared_${name}"
 
-    # Даём туннелю время установить соединение и записать URL в лог
-    sleep 4
-
-    grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$log_file" 2>/dev/null | head -1 || true
+    # Ждём появления URL в логе до 20 секунд (cloudflared иногда стартует медленно)
+    local found=""
+    for _ in {1..20}; do
+        found=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$log_file" 2>/dev/null | head -1 || true)
+        if [[ -n "$found" ]]; then break; fi
+        sleep 1
+    done
+    echo "$found"
 }
 
 API_TUNNEL_URL=""
 WEB_TUNNEL_URL=""
 MINI_TUNNEL_URL=""
+MINI_WEB_APP_URL=""
+
+auto_register_web_app_url() {
+    local url="$1"
+    if [[ -z "$url" ]]; then return; fi
+    echo "[run.sh] Жду готовности API на http://localhost:${API_PORT}/health ..."
+    for i in {1..30}; do
+        if curl -s -f -m 1 "http://localhost:${API_PORT}/health" >/dev/null 2>&1; then break; fi
+        sleep 1
+    done
+    local headers=(-H "Content-Type: application/json")
+    if [[ -n "${API_KEY:-}" ]]; then headers+=(-H "X-API-Key: ${API_KEY}"); fi
+    if curl -s -X PUT "http://localhost:${API_PORT}/api/settings/telegram/web-app-url" \
+         "${headers[@]}" -d "{\"web_app_url\": \"${url}\"}" -o /dev/null -w "%{http_code}" \
+         | grep -q "^200$"; then
+        echo -e "${GREEN}✅ web_app_url прописан в БД: ${url}${NC}"
+    else
+        echo -e "${YELLOW}⚠️  Не удалось прописать web_app_url через API. Введите его вручную в Settings.${NC}"
+    fi
+}
 
 if [ "$ENABLE_TUNNEL" -eq 1 ]; then
     if command -v cloudflared >/dev/null 2>&1; then
@@ -989,6 +1017,10 @@ if [ "$ENABLE_TUNNEL" -eq 1 ]; then
         WEB_TUNNEL_URL="$(start_tunnel "web" "$FRONTEND_PORT")"
         MINI_TUNNEL_URL="$(start_tunnel "mini" "$MINI_PORT")"
         echo -e "${GREEN}✅ Туннели запущены${NC}"
+        if [[ -n "$MINI_TUNNEL_URL" ]]; then
+            MINI_WEB_APP_URL="${MINI_TUNNEL_URL%/}/tma/"
+            auto_register_web_app_url "$MINI_WEB_APP_URL"
+        fi
     else
         echo -e "${YELLOW}⚠️  cloudflared не найден, туннели не будут подняты${NC}"
     fi
@@ -1059,7 +1091,10 @@ if [ "$ENABLE_TUNNEL" -eq 1 ] && { [ -n "$API_TUNNEL_URL" ] || [ -n "$WEB_TUNNEL
     echo -e "${BLUE}🚇 Туннели:${NC}"
     echo -e "  API:      ${GREEN}${API_TUNNEL_URL:-не определён}${NC}"
     echo -e "  Web UI:   ${GREEN}${WEB_TUNNEL_URL:-не определён}${NC}"
-    echo -e "  Mini-app: ${GREEN}${MINI_TUNNEL_URL:-не определён}${NC}  ← подставь в BotFather → Bot Settings → Menu Button"
+    echo -e "  Mini-app: ${GREEN}${MINI_TUNNEL_URL:-не определён}${NC}"
+    if [[ -n "${MINI_WEB_APP_URL:-}" ]]; then
+        echo -e "  Mini App URL (для алертов): ${GREEN}${MINI_WEB_APP_URL}${NC}  ← подставь в BotFather → Bot Settings → Menu Button"
+    fi
 fi
 echo ""
 

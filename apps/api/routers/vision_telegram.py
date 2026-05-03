@@ -22,10 +22,8 @@ from core.crypto import decrypt, encrypt
 from core.domain import TelegramUserRole
 from core.models import TelegramRecipient, TelegramSettings, VisionSettings
 from core.telegram.service import (
-    CONTROL_TOPIC_NAME,
+    build_telegram_deep_link,
     create_telegram_invite,
-    forum_topics_ready,
-    is_forum_delivery_mode,
     mask_chat_id,
 )
 
@@ -736,12 +734,6 @@ async def create_invite_code(db: AsyncSession = Depends(get_db)):
     )
     if row is None or not row.is_authorized:
         raise HTTPException(status_code=400, detail="Telegram-бот не настроен")
-    if not is_forum_delivery_mode(getattr(row, "delivery_mode", None)):
-        raise HTTPException(
-            status_code=400, detail="Инвайты доступны только после cutover в группу"
-        )
-    if not forum_topics_ready(row):
-        raise HTTPException(status_code=400, detail="Forum topics ещё не готовы")
 
     invite = await create_telegram_invite(
         db,
@@ -756,7 +748,7 @@ async def create_invite_code(db: AsyncSession = Depends(get_db)):
         bot_username=row.bot_username or "",
         role=invite.role or TelegramUserRole.RECIPIENT.value,
         expires_at=invite.expires_at.isoformat() if invite.expires_at else None,
-        deep_link="",
+        deep_link=build_telegram_deep_link(row.bot_username or "", invite.code),
         activation_command=_activation_command(invite.code),
-        activation_target=CONTROL_TOPIC_NAME,
+        activation_target="",
     )

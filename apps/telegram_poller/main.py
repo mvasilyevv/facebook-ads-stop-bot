@@ -8,12 +8,18 @@ import logging
 import pathlib
 import signal
 import sys
+import time
 
 from core.config import get_settings
 from core.sentry import setup_sentry
 from core.telegram.bot_handler import handle_update
 from core.telegram.client import TelegramBotClient
-from core.telegram.service import load_poller_offset, save_poller_offset, touch_poller_heartbeat
+from core.telegram.service import (
+    load_poller_offset,
+    load_web_app_url,
+    save_poller_offset,
+    touch_poller_heartbeat,
+)
 from core.worker_utils import PidFileLock
 
 logger = logging.getLogger(__name__)
@@ -23,6 +29,46 @@ _PID_FILE = pathlib.Path("/tmp/fb_telegram_poller.pid")
 
 # Глобальный флаг для graceful shutdown
 _shutdown_event: asyncio.Event | None = None
+
+
+async def _register_bot_ui(client: TelegramBotClient) -> str:
+    """Регистрирует список команд и web_app menu button.
+
+    Возвращает URL, который был установлен (или пустую строку если не установлен).
+    """
+    commands = [
+        {"command": "start", "description": "Главное меню"},
+        {"command": "app", "description": "Открыть приложение"},
+        {"command": "help", "description": "Справка"},
+    ]
+    # Регистрируем для всех scope, иначе в группах команды не отображаются.
+    for scope in (
+        {"type": "default"},
+        {"type": "all_private_chats"},
+        {"type": "all_group_chats"},
+        {"type": "all_chat_administrators"},
+    ):
+        try:
+            await client.set_my_commands(commands, scope=scope)
+        except Exception:
+            logger.exception(
+                "Не удалось зарегистрировать команды (setMyCommands, scope=%s)",
+                scope.get("type"),
+            )
+
+    web_app_url = await load_web_app_url()
+    if not web_app_url:
+        logger.warning("WEB_APP_URL не задан (ни в БД, ни в .env) — пропускаем setChatMenuButton")
+        return ""
+    if not web_app_url.startswith("https://"):
+        logger.warning("WEB_APP_URL не https (%s) — пропускаем setChatMenuButton", web_app_url)
+        return ""
+    try:
+        await client.set_chat_menu_button(web_app_url=web_app_url)
+        return web_app_url
+    except Exception:
+        logger.exception("Не удалось установить chat menu button (setChatMenuButton)")
+        return ""
 
 
 async def _process_updates(
@@ -96,6 +142,8 @@ async def poller_runtime_loop(
         logger.exception("Не удалось загрузить offset Telegram poller-а")
         offset = None
     current_token = ""
+    current_web_app_url: str = ""
+    last_web_app_check: float = 0.0
     client: TelegramBotClient | None = None
     waiting_for_token_logged = False
 
@@ -111,6 +159,7 @@ async def poller_runtime_loop(
                     await client.close()
                     client = None
                     current_token = ""
+                    current_web_app_url = ""
                 if not waiting_for_token_logged:
                     logger.info("Telegram poller ждёт bot_token и продолжает работать в фоне")
                     waiting_for_token_logged = True
@@ -125,8 +174,35 @@ async def poller_runtime_loop(
                     await client.close()
                 client = client_factory(token)
                 current_token = token
+                current_web_app_url = ""
+                last_web_app_check = 0.0
                 waiting_for_token_logged = False
                 logger.info("Telegram poller подключён к актуальному bot_token")
+                current_web_app_url = await _register_bot_ui(client)
+                last_web_app_check = time.monotonic()
+
+            now = time.monotonic()
+            if now - last_web_app_check >= 60:
+                last_web_app_check = now
+                try:
+                    new_url = await load_web_app_url()
+                except Exception:
+                    logger.debug("Не удалось перепроверить web_app_url", exc_info=True)
+                    new_url = current_web_app_url
+                if new_url != current_web_app_url:
+                    logger.info(
+                        "web_app_url изменён: %s → %s",
+                        current_web_app_url or "(пусто)",
+                        new_url or "(пусто)",
+                    )
+                    if new_url and new_url.startswith("https://"):
+                        try:
+                            await client.set_chat_menu_button(web_app_url=new_url)
+                            current_web_app_url = new_url
+                        except Exception:
+                            logger.exception("Не удалось переустановить chat menu button")
+                    else:
+                        current_web_app_url = new_url
 
             try:
                 new_offset = await _process_updates(client, offset=offset)
@@ -141,6 +217,7 @@ async def poller_runtime_loop(
                 await client.close()
                 client = None
                 current_token = ""
+                current_web_app_url = ""
                 try:
                     await asyncio.wait_for(stop.wait(), timeout=ERROR_RETRY_DELAY_SECONDS)
                 except asyncio.TimeoutError:

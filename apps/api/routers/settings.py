@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,14 +23,13 @@ from apps.api.schemas import (
     ObserverThresholdRecommendationsResponseSchema,
     ObserverThresholdRecommendationStepSchema,
     ScanningToggleSchema,
-    TelegramForumCutoverResponseSchema,
     TelegramPrimaryRecipientSchema,
     TelegramSettingsResponseSchema,
     TelegramSetTokenRequest,
 )
 from core.config import get_settings
 from core.crypto import decrypt, encrypt
-from core.domain import TelegramDeliveryMode, TelegramUserRole
+from core.domain import TelegramUserRole
 from core.models import (
     TelegramInvite,
     TelegramSettings,
@@ -48,14 +48,8 @@ from core.settings_queries import (
 from core.settings_queries import (
     get_or_create_observer_settings as _get_or_create_settings,
 )
-from core.telegram.client import TelegramBotClient
 from core.telegram.service import (
-    CONTROL_TOPIC_NAME,
-    FORUM_STREAM_TOPIC_NAMES,
-    FORUM_SUPERGROUP_CHAT_ID,
     build_telegram_deep_link,
-    forum_cutover_status_from_settings,
-    forum_topics_ready,
     get_latest_active_invite,
     get_or_create_telegram_settings,
     mask_chat_id,
@@ -689,7 +683,6 @@ def _serialize_invite_response(
     invite: TelegramInvite | None,
     *,
     bot_username: str,
-    delivery_mode: str = TelegramDeliveryMode.PRIVATE_CHAT.value,
 ) -> InviteCodeResponse | None:
     """Сериализует активный инвайт для UI."""
     if invite is None:
@@ -700,114 +693,9 @@ def _serialize_invite_response(
         bot_username=bot_username or "",
         role=invite.role or TelegramUserRole.RECIPIENT.value,
         expires_at=invite.expires_at.isoformat() if invite.expires_at else None,
-        deep_link=(
-            ""
-            if str(delivery_mode).upper() == TelegramDeliveryMode.FORUM_GROUP.value
-            else build_telegram_deep_link(bot_username or "", invite.code)
-        ),
+        deep_link=build_telegram_deep_link(bot_username or "", invite.code),
         activation_command=activation_command,
-        activation_target=CONTROL_TOPIC_NAME,
-    )
-
-
-async def _create_forum_topics_if_needed(
-    *,
-    bot_token: str,
-    settings_row: TelegramSettings,
-) -> dict[str, int]:
-    """Создаёт production topics для forum supergroup или переиспользует уже сохранённые."""
-    if settings_row.chat_id == FORUM_SUPERGROUP_CHAT_ID and forum_topics_ready(settings_row):
-        return {
-            "control_topic_id": int(settings_row.control_topic_id or 0),
-            "warning_topic_id": int(settings_row.warning_topic_id or 0),
-            "stop_topic_id": int(settings_row.stop_topic_id or 0),
-            "enable_topic_id": int(settings_row.enable_topic_id or 0),
-        }
-
-    client = TelegramBotClient(bot_token)
-    try:
-        chat = await client.get_chat(chat_id=FORUM_SUPERGROUP_CHAT_ID)
-        if str(chat.get("type") or "") != "supergroup":
-            raise HTTPException(
-                status_code=400,
-                detail="Telegram-группа для cutover должна быть supergroup.",
-            )
-        if not bool(chat.get("is_forum")):
-            raise HTTPException(
-                status_code=400,
-                detail="В Telegram-группе не включён режим forum topics.",
-            )
-
-        created_topics: dict[str, int] = {}
-        for stream_key, title in FORUM_STREAM_TOPIC_NAMES.items():
-            topic = await client.create_forum_topic(
-                chat_id=FORUM_SUPERGROUP_CHAT_ID,
-                name=title,
-            )
-            topic_id = int(topic["message_thread_id"])
-            if stream_key == "CONTROL":
-                created_topics["control_topic_id"] = topic_id
-            elif stream_key == "WARNING":
-                created_topics["warning_topic_id"] = topic_id
-            elif stream_key == "STOP":
-                created_topics["stop_topic_id"] = topic_id
-            elif stream_key == "ENABLE":
-                created_topics["enable_topic_id"] = topic_id
-        return created_topics
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(
-            status_code=400,
-            detail="Не удалось подготовить forum topics. Проверьте права бота в группе.",
-        ) from exc
-    finally:
-        await client.close()
-
-
-async def _prepare_telegram_forum_cutover(
-    *,
-    db: AsyncSession,
-    settings_row: TelegramSettings,
-    bot_token: str,
-    bot_username: str,
-) -> TelegramForumCutoverResponseSchema:
-    """Готовит Telegram-контур к переезду в forum supergroup."""
-    topic_ids = await _create_forum_topics_if_needed(
-        bot_token=bot_token,
-        settings_row=settings_row,
-    )
-    auth_code = str(secrets.randbelow(900000) + 100000)
-    await revoke_telegram_access_records(db)
-
-    settings_row.delivery_mode = TelegramDeliveryMode.FORUM_GROUP
-    settings_row.chat_id = FORUM_SUPERGROUP_CHAT_ID
-    settings_row.is_authorized = False
-    settings_row.auth_code = auth_code
-    settings_row.owner_telegram_user_id = ""
-    settings_row.owner_username = ""
-    settings_row.owner_first_name = ""
-    settings_row.bot_username = bot_username or settings_row.bot_username or ""
-    settings_row.control_topic_id = topic_ids["control_topic_id"]
-    settings_row.warning_topic_id = topic_ids["warning_topic_id"]
-    settings_row.stop_topic_id = topic_ids["stop_topic_id"]
-    settings_row.enable_topic_id = topic_ids["enable_topic_id"]
-    await db.commit()
-
-    return TelegramForumCutoverResponseSchema(
-        bot_username=settings_row.bot_username or "",
-        chat_id=FORUM_SUPERGROUP_CHAT_ID,
-        auth_code=auth_code,
-        activation_command=_activation_command(auth_code),
-        control_topic_id=settings_row.control_topic_id,
-        warning_topic_id=settings_row.warning_topic_id,
-        stop_topic_id=settings_row.stop_topic_id,
-        enable_topic_id=settings_row.enable_topic_id,
-        forum_cutover_status=forum_cutover_status_from_settings(settings_row),
-        message=(
-            "Forum topics готовы. Откройте topic CONTROL в группе AdGuard FB Bot "
-            "и отправьте команду активации."
-        ),
+        activation_target="",
     )
 
 
@@ -829,49 +717,35 @@ async def get_telegram_settings(db: AsyncSession = Depends(get_db)):
         return TelegramSettingsResponseSchema(
             bot_token=_mask_bot_token(s.telegram_bot_token),
             chat_id=s.telegram_chat_id,
-            forum_chat_id="",
             is_authorized=bool(s.telegram_chat_id),
-            delivery_mode=TelegramDeliveryMode.PRIVATE_CHAT.value,
             poller_status="OFFLINE",
-            forum_cutover_status="NOT_CONFIGURED",
             activation_command="",
             primary_recipient=primary_recipient,
+            web_app_url=(s.web_app_url or ""),
         )
 
     token = decrypt(row.bot_token_encrypted) if row.bot_token_encrypted else ""
     active_invite = await get_latest_active_invite(db)
-    delivery_mode = str(getattr(row, "delivery_mode", TelegramDeliveryMode.PRIVATE_CHAT.value))
     auth_code = row.auth_code if not row.is_authorized else ""
-    auth_deep_link = ""
-    if delivery_mode != TelegramDeliveryMode.FORUM_GROUP.value:
-        auth_deep_link = build_telegram_deep_link(row.bot_username or "", auth_code or "")
+    auth_deep_link = build_telegram_deep_link(row.bot_username or "", auth_code or "")
     return TelegramSettingsResponseSchema(
         bot_token=_mask_bot_token(token),
         chat_id=row.chat_id,
-        forum_chat_id=row.chat_id
-        if delivery_mode == TelegramDeliveryMode.FORUM_GROUP.value
-        else "",
         is_authorized=row.is_authorized,
         bot_username=row.bot_username,
         auth_code=auth_code,
-        delivery_mode=delivery_mode,
-        control_topic_id=row.control_topic_id,
-        warning_topic_id=row.warning_topic_id,
-        stop_topic_id=row.stop_topic_id,
-        enable_topic_id=row.enable_topic_id,
         poller_status=poller_status_from_settings(row),
         last_poller_heartbeat_at=(
             row.poller_heartbeat_at.isoformat() if row.poller_heartbeat_at else None
         ),
         auth_deep_link=auth_deep_link,
         activation_command=_activation_command(auth_code),
-        forum_cutover_status=forum_cutover_status_from_settings(row),
         primary_recipient=_serialize_primary_recipient(row),
         active_invite=_serialize_invite_response(
             active_invite,
             bot_username=row.bot_username or "",
-            delivery_mode=delivery_mode,
         ),
+        web_app_url=(getattr(row, "web_app_url", None) or ""),
     )
 
 
@@ -901,47 +775,32 @@ async def set_telegram_token(body: TelegramSetTokenRequest, db: AsyncSession = D
     row = await get_or_create_telegram_settings(db)
     row.bot_token_encrypted = encrypt(token)
     row.bot_username = bot_username
-    await db.flush()
-
-    cutover = await _prepare_telegram_forum_cutover(
-        db=db,
-        settings_row=row,
-        bot_token=token,
-        bot_username=bot_username,
-    )
+    row.auth_code = str(secrets.randbelow(900000) + 100000)
+    await db.commit()
     return {
-        "bot_username": cutover.bot_username,
-        "auth_code": cutover.auth_code,
-        "auth_deep_link": "",
-        "activation_command": cutover.activation_command,
-        "control_topic_id": cutover.control_topic_id,
-        "forum_cutover_status": cutover.forum_cutover_status,
-        "message": cutover.message,
+        "bot_username": bot_username,
+        "auth_code": row.auth_code,
+        "auth_deep_link": build_telegram_deep_link(bot_username, row.auth_code),
+        "activation_command": _activation_command(row.auth_code),
+        "message": "Токен сохранён. Отправьте /start с кодом активации боту.",
     }
 
 
-@router.post(
-    "/settings/telegram/forum/cutover",
-    response_model=TelegramForumCutoverResponseSchema,
-)
-async def prepare_telegram_forum_cutover(db: AsyncSession = Depends(get_db)):
-    """Готовит Telegram-контур к переезду в forum supergroup без смены токена."""
-    row = await db.scalar(
-        select(TelegramSettings).where(TelegramSettings.singleton_key == "default")
-    )
-    if row is None or not row.bot_token_encrypted:
-        raise HTTPException(status_code=400, detail="Telegram-бот не настроен")
+class WebAppUrlRequest(BaseModel):
+    web_app_url: str
 
-    token = decrypt(row.bot_token_encrypted)
-    if not token:
-        raise HTTPException(status_code=400, detail="Не удалось прочитать токен Telegram-бота")
 
-    return await _prepare_telegram_forum_cutover(
-        db=db,
-        settings_row=row,
-        bot_token=token,
-        bot_username=row.bot_username or "",
-    )
+@router.put("/settings/telegram/web-app-url")
+async def set_web_app_url(body: WebAppUrlRequest, db: AsyncSession = Depends(get_db)):
+    """Сохранить web_app_url в TelegramSettings. Пустая строка очищает (fallback на .env)."""
+    url = body.web_app_url.strip()
+    if url and not url.startswith("https://"):
+        raise HTTPException(status_code=400, detail="URL должен быть HTTPS или пустым")
+    row = await get_or_create_telegram_settings(db)
+    row.web_app_url = url or None
+    await db.commit()
+    logger.info("web_app_url обновлён: %s", url or "(сброс на .env)")
+    return {"ok": True, "web_app_url": url}
 
 
 @router.delete("/settings/telegram")
@@ -960,10 +819,5 @@ async def revoke_telegram(db: AsyncSession = Depends(get_db)):
         row.owner_telegram_user_id = ""
         row.owner_username = ""
         row.owner_first_name = ""
-        row.delivery_mode = TelegramDeliveryMode.PRIVATE_CHAT
-        row.control_topic_id = None
-        row.warning_topic_id = None
-        row.stop_topic_id = None
-        row.enable_topic_id = None
         await db.commit()
     return {"status": "ok"}

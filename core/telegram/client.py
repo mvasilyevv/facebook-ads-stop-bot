@@ -229,6 +229,53 @@ class TelegramBotClient:
         data = await self._post_json("createForumTopic", payload=payload)
         return dict(data["result"])
 
+    async def set_my_commands(
+        self,
+        commands: list[dict],
+        *,
+        scope: dict | None = None,
+        language_code: str | None = None,
+    ) -> None:
+        """Регистрирует список команд бота через Bot API setMyCommands.
+        commands: [{"command": "start", "description": "..."}, ...]
+        scope: BotCommandScope (например, {"type": "all_group_chats"} или {"type": "all_private_chats"}).
+            Если None — используется default scope.
+        """
+        payload: dict = {"commands": commands}
+        if scope is not None:
+            payload["scope"] = scope
+        if language_code is not None:
+            payload["language_code"] = language_code
+        await self._post_json("setMyCommands", payload=payload)
+        logger.info(
+            "setMyCommands: %d команд зарегистрировано (scope=%s)",
+            len(commands),
+            (scope or {}).get("type", "default"),
+        )
+
+    async def set_chat_menu_button(
+        self,
+        *,
+        web_app_url: str,
+        button_text: str = "📱 Открыть",
+    ) -> None:
+        """Ставит default-scope MenuButtonWebApp для бота.
+        web_app_url должен быть HTTPS.
+        """
+        if not web_app_url.startswith("https://"):
+            raise ValueError("web_app_url должен быть HTTPS")
+        await self._post_json(
+            "setChatMenuButton",
+            payload={
+                "menu_button": {
+                    "type": "web_app",
+                    "text": button_text,
+                    "web_app": {"url": web_app_url},
+                }
+            },
+        )
+        logger.info("setChatMenuButton: web_app_url=%s", web_app_url)
+
     async def close(self) -> None:
         """Закрывает внутренний HTTP-клиент, если он был создан внутри."""
         if self._owns_http_client:

@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock, patch
+
 from core.domain import AlertStage, AlertState, EnableRecommendationLevel
 from core.telegram.renderer import (
     TelegramAlertItem,
@@ -213,8 +215,8 @@ def test_render_alert_message_uses_human_readable_traffic_diagnostics():
     assert "Частота: 1.4000" not in message.text
 
 
-# Проверяем, что STOP-сообщение не имеет кнопок.
-def test_render_alert_message_stop_has_no_global_buttons():
+# Проверяем, что STOP-сообщение содержит WebApp-кнопку при наличии web_app_url.
+def test_render_alert_message_stop_has_webapp_button():
     item = TelegramAlertItem(
         snapshot_id="snap-3",
         fb_ad_id="ad-3",
@@ -237,14 +239,47 @@ def test_render_alert_message_stop_has_no_global_buttons():
         },
     )
 
-    message = render_alert_message(stage=AlertStage.STOP, items=[item])
+    mock_settings = MagicMock()
+    mock_settings.web_app_url = "https://example.com/tma"
+
+    with patch("core.telegram.renderer.get_settings", return_value=mock_settings):
+        message = render_alert_message(stage=AlertStage.STOP, items=[item])
 
     assert "Создана задача на отключение." in message.text
-    # STOP-алерт тоже содержит inline-клавиатуру с кнопками управления (Wave A.2)
     assert message.reply_markup is not None
     keyboard = message.reply_markup["inline_keyboard"]
-    assert len(keyboard) == 2
-    assert keyboard[0][0]["callback_data"] == "disable:ad-3:snap-3"
+    # Ровно 1 ряд с 1 кнопкой
+    assert len(keyboard) == 1
+    assert len(keyboard[0]) == 1
+    btn = keyboard[0][0]
+    assert btn["text"] == "🔧 Открыть в приложении"
+    assert btn["web_app"]["url"] == "https://example.com/tma/ads/ad-3"
+
+
+# Проверяем, что без web_app_url клавиатура пустая.
+def test_render_alert_message_no_keyboard_without_webapp_url():
+    item = TelegramAlertItem(
+        snapshot_id="snap-4",
+        fb_ad_id="ad-4",
+        ad_name="DRC_CR2_CR020",
+        campaign_name="Campaign D",
+        adset_name="Adset D",
+        offer_code="offer-d",
+        stage=AlertStage.STOP,
+        alert_state=AlertState.CLAIMED,
+        matched_rule_codes=["cpc_stop"],
+        reason_title="Дорогой клик",
+        reason_text="Цена клика вышла за допустимую границу.",
+        metrics_json={"spend": "0.50", "clicks": 1},
+    )
+
+    mock_settings = MagicMock()
+    mock_settings.web_app_url = ""
+
+    with patch("core.telegram.renderer.get_settings", return_value=mock_settings):
+        message = render_alert_message(stage=AlertStage.STOP, items=[item])
+
+    assert message.reply_markup is None
 
 
 # --- render_enable_recommendation_message ---
@@ -329,3 +364,31 @@ def test_render_enable_recommendation_message_for_warning():
     assert "Требует проверки" in message.text
     assert "Близко к порогу" in message.text
     assert "Доставка Meta: <b>OFF</b>" in message.text
+
+
+# Проверяем, что явно переданный web_app_url использует переданное значение, а не settings.
+def test_render_alert_message_uses_explicit_web_app_url():
+    item = TelegramAlertItem(
+        snapshot_id="snap-override",
+        fb_ad_id="ad-override",
+        ad_name="Ad Override",
+        campaign_name="Campaign",
+        adset_name="Adset",
+        offer_code="offer",
+        stage=AlertStage.STOP,
+        alert_state=AlertState.CLAIMED,
+        matched_rule_codes=["cpc_stop"],
+        reason_title="Дорогой клик",
+        reason_text=None,
+        metrics_json={},
+    )
+
+    message = render_alert_message(
+        stage=AlertStage.STOP,
+        items=[item],
+        web_app_url="https://override.example/tma/",
+    )
+
+    assert message.reply_markup is not None
+    btn = message.reply_markup["inline_keyboard"][0][0]
+    assert btn["web_app"]["url"] == "https://override.example/tma/ads/ad-override"

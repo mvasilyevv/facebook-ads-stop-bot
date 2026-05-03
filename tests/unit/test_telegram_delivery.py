@@ -142,11 +142,6 @@ async def test_broadcast_disable_task_runtime_message_uses_stop_stream():
         username="owner",
         first_name="Иван",
         is_primary=True,
-        delivery_mode="FORUM_GROUP",
-        control_topic_id=11,
-        warning_topic_id=13,
-        stop_topic_id=14,
-        enable_topic_id=15,
     )
 
     with (
@@ -188,7 +183,7 @@ async def test_broadcast_disable_task_runtime_message_uses_stop_stream():
         incident_key="incident-1",
         stream_kind=TelegramNotificationStream.STOP,
     )
-    assert send_mock.await_args.kwargs["message_thread_id"] == 14
+    assert send_mock.await_args.kwargs["message_thread_id"] is None
 
 
 # Проверяем, что recommendation на включение публикуется в ENABLE-stream с event_id как incident key.
@@ -202,11 +197,6 @@ async def test_broadcast_enable_recommendation_message_uses_enable_stream():
         username="owner",
         first_name="Иван",
         is_primary=True,
-        delivery_mode="FORUM_GROUP",
-        control_topic_id=11,
-        warning_topic_id=13,
-        stop_topic_id=14,
-        enable_topic_id=15,
     )
 
     with (
@@ -253,13 +243,13 @@ async def test_broadcast_enable_recommendation_message_uses_enable_stream():
         incident_key="event-1",
         stream_kind=TelegramNotificationStream.ENABLE,
     )
-    assert send_mock.await_args.kwargs["message_thread_id"] == 15
+    assert send_mock.await_args.kwargs["message_thread_id"] is None
 
 
-# Проверяем, что служебный alert observer идёт в CONTROL topic forum-группы.
+# Проверяем, что служебный alert observer отправляется без forum-topic (message_thread_id=None).
 @pytest.mark.asyncio
-async def test_broadcast_observer_runtime_message_uses_control_topic():
-    """Служебное сообщение observer должно уходить в CONTROL topic."""
+async def test_broadcast_observer_runtime_message_uses_no_topic():
+    """Служебное сообщение observer должно уходить без message_thread_id (простой чат)."""
     destination = TelegramDestination(
         chat_id="-1003701505954",
         telegram_user_id="42",
@@ -267,11 +257,6 @@ async def test_broadcast_observer_runtime_message_uses_control_topic():
         username="owner",
         first_name="Иван",
         is_primary=True,
-        delivery_mode="FORUM_GROUP",
-        control_topic_id=11,
-        warning_topic_id=13,
-        stop_topic_id=14,
-        enable_topic_id=15,
     )
     fake_client = AsyncMock()
 
@@ -289,7 +274,7 @@ async def test_broadcast_observer_runtime_message_uses_control_topic():
 
     fake_client.send_message.assert_awaited_once_with(
         chat_id="-1003701505954",
-        message_thread_id=11,
+        message_thread_id=None,
         text="Служебное сообщение",
     )
     fake_client.close.assert_awaited_once()

@@ -26,7 +26,6 @@ from core.models import (
     EnableRecommendationEvent,
     FbAd,
     FbAdset,
-    TelegramSettings,
 )
 from core.telegram.client import TelegramBotClient
 from core.telegram.message_refs import (
@@ -58,23 +57,6 @@ class TelegramAdMessageContext:
     reason_title: str | None = None
     reason_text: str | None = None
     metrics_json: dict = field(default_factory=dict)
-
-
-def resolve_thread_id(stream_kind: str, settings: TelegramSettings) -> int | None:
-    """Возвращает message_thread_id для forum-topic по виду потока.
-
-    Если forum_topics_enabled=False или topic не задан — возвращает None.
-    """
-    if not settings.forum_topics_enabled:
-        return None
-    mapping: dict[str, int | None] = {
-        "alert": settings.topic_alerts_thread_id,
-        "disabled": settings.topic_disabled_thread_id,
-        "recommendation": settings.topic_recommendations_thread_id,
-        "ops": settings.topic_ops_thread_id,
-        "logs": settings.topic_logs_thread_id,
-    }
-    return mapping.get(stream_kind)
 
 
 def _display_username(username: str | None) -> str:
@@ -562,13 +544,10 @@ async def broadcast_observer_runtime_message(
     client = TelegramBotClient(token)
     try:
         for destination in destinations:
-            message_thread_id = None
-            if destination.delivery_mode == "FORUM_GROUP":
-                message_thread_id = destination.control_topic_id
             try:
                 await client.send_message(
                     chat_id=destination.chat_id,
-                    message_thread_id=message_thread_id,
+                    message_thread_id=None,
                     text=text,
                 )
             except Exception:

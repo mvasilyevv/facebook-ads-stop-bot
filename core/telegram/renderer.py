@@ -4,14 +4,18 @@
 from __future__ import annotations
 
 import html
+import logging
 from dataclasses import dataclass
 from typing import Any
 
+from core.config import get_settings
 from core.domain import AlertStage, AlertState, EnableRecommendationLevel
-
-# Человекочитаемые названия правил
 from core.rules.labels import RULE_LABELS as _RULE_LABELS
 from core.rules.labels import RULE_LABELS_SHORT as _RULE_LABELS_SHORT
+
+logger = logging.getLogger(__name__)
+
+# Человекочитаемые названия правил
 
 _NEUTRAL_ENABLE_RECOMMENDATION_REASON_TITLE = "Нет блокирующих сигналов"
 _NEUTRAL_ENABLE_RECOMMENDATION_REASON_TEXT = "По текущим правилам блокирующих сигналов нет."
@@ -531,10 +535,11 @@ def render_alert_message(
     items: list[TelegramAlertItem],
     snooze_note: str | None = None,
     account_id: str | None = None,
+    web_app_url: str | None = None,
 ) -> TelegramOutgoingMessage:
     """Формирует Telegram-alert с полной иерархией объявления и метриками."""
     lines: list[str] = []
-    keyboard: list[list[dict[str, str]]] = []
+    keyboard: list[list[dict[str, str | dict]]] = []
 
     for index, item in enumerate(items):
         if index > 0:
@@ -577,37 +582,21 @@ def render_alert_message(
             lines.extend(diagnostics_lines)
             lines.append("")
 
-        # Ряд 1: Отключить | Снуз 30 мин
-        row1: list[dict[str, str]] = [
-            {
-                "text": "⛔ Отключить",
-                "callback_data": f"disable:{item.fb_ad_id}:{item.snapshot_id}",
-            },
-            {
-                "text": "😴 Снуз 30 мин",
-                "callback_data": f"snooze:{item.fb_ad_id}:30:{item.snapshot_id}",
-            },
-        ]
-        keyboard.append(row1)
-
-        # Ряд 2: Снять алерт [+ Открыть в Ads Manager]
-        row2: list[dict[str, str]] = [
-            {
-                "text": "✅ Снять алерт",
-                "callback_data": f"claim:{item.fb_ad_id}:{item.snapshot_id}",
-            },
-        ]
-        if account_id:
-            row2.append(
-                {
-                    "text": "🔗 Открыть в Ads Manager",
-                    "url": (
-                        f"https://adsmanager.facebook.com/adsmanager/manage/ads"
-                        f"?act={account_id}&selected_ad_ids={item.fb_ad_id}"
-                    ),
-                }
-            )
-        keyboard.append(row2)
+        _url = (
+            web_app_url if web_app_url is not None else (get_settings().web_app_url or "")
+        ).strip()
+        if _url:
+            if not _url.startswith("https://"):
+                logger.warning("WEB_APP_URL не https — кнопка алерта пропущена")
+            else:
+                keyboard.append(
+                    [
+                        {
+                            "text": "🔧 Открыть в приложении",
+                            "web_app": {"url": f"{_url.rstrip('/')}/ads/{item.fb_ad_id}"},
+                        }
+                    ]
+                )
 
     return TelegramOutgoingMessage(
         text="\n".join(lines).strip(),

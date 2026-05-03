@@ -31,7 +31,6 @@ from core.domain import (
     DisableTaskStatus,
     EnableRecommendationLevel,
     EnableTaskStatus,
-    TelegramDeliveryMode,
     TelegramNotificationStream,
     TelegramUserRole,
 )
@@ -74,11 +73,6 @@ _DISABLE_STATUS_ENUM = Enum(
 _ENABLE_RECOMMENDATION_LEVEL_ENUM = Enum(
     EnableRecommendationLevel,
     name="enable_recommendation_level_enum",
-    values_callable=lambda e: [i.value for i in e],
-)
-_TELEGRAM_DELIVERY_MODE_ENUM = Enum(
-    TelegramDeliveryMode,
-    name="telegram_delivery_mode_enum",
     values_callable=lambda e: [i.value for i in e],
 )
 _TELEGRAM_NOTIFICATION_STREAM_ENUM = Enum(
@@ -181,11 +175,6 @@ class TelegramSettings(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     owner_first_name: Mapped[str] = mapped_column(String(128), default="")
     # Авторизация: пользователь должен отправить /start боту
     is_authorized: Mapped[bool] = mapped_column(Boolean, default=False)
-    # Режим доставки: legacy private chat или forum supergroup.
-    delivery_mode: Mapped[TelegramDeliveryMode] = mapped_column(
-        _TELEGRAM_DELIVERY_MODE_ENUM,
-        default=TelegramDeliveryMode.PRIVATE_CHAT,
-    )
     # Одноразовый код для привязки (6 цифр)
     auth_code: Mapped[str] = mapped_column(String(16), default="")
     # Имя бота (кэшируем после getMe)
@@ -194,21 +183,6 @@ class TelegramSettings(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     poller_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Последний обработанный offset Telegram long polling
     poller_offset: Mapped[int | None] = mapped_column(Integer)
-    # Topic IDs для forum supergroup.
-    control_topic_id: Mapped[int | None] = mapped_column(Integer)
-    warning_topic_id: Mapped[int | None] = mapped_column(Integer)
-    stop_topic_id: Mapped[int | None] = mapped_column(Integer)
-    enable_topic_id: Mapped[int | None] = mapped_column(Integer)
-    # Новые topic IDs для Wave A.1 (команда /setup_topics).
-    topic_alerts_thread_id: Mapped[int | None] = mapped_column(Integer)
-    topic_disabled_thread_id: Mapped[int | None] = mapped_column(Integer)
-    topic_recommendations_thread_id: Mapped[int | None] = mapped_column(Integer)
-    topic_ops_thread_id: Mapped[int | None] = mapped_column(Integer)
-    topic_logs_thread_id: Mapped[int | None] = mapped_column(Integer)
-    # Флаг активации forum-topic маршрутизации через /setup_topics.
-    forum_topics_enabled: Mapped[bool] = mapped_column(
-        Boolean, default=False, server_default="false"
-    )
     # URL мини-приложения (Web App) для inline-кнопки.
     web_app_url: Mapped[str | None] = mapped_column(String(512))
 

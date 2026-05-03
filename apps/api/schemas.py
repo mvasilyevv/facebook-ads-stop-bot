@@ -9,14 +9,13 @@ from decimal import Decimal
 
 from pydantic import BaseModel, Field, field_validator
 
-from core.domain import EnableRecommendationLevel, TelegramDeliveryMode, TelegramUserRole
+from core.domain import EnableRecommendationLevel, TelegramUserRole
 from core.enable_recommendations.service import (
     OK_RECOMMENDATION_REASON_TEXT,
     OK_RECOMMENDATION_REASON_TITLE,
     EnableRecommendationCandidate,
 )
 from core.models import AdSnapshot, EnableRecommendationEvent
-from core.telegram.service import CONTROL_TOPIC_NAME
 
 
 def _normalize_offer_code_value(value: str | None) -> str | None:
@@ -102,15 +101,10 @@ class TelegramSettingsSchema(BaseModel):
 
     bot_token: str = ""
     chat_id: str = ""
-    forum_chat_id: str = ""
     is_authorized: bool = False
     bot_username: str = ""
     auth_code: str = ""
-    delivery_mode: str = TelegramDeliveryMode.PRIVATE_CHAT.value
-    control_topic_id: int | None = None
-    warning_topic_id: int | None = None
-    stop_topic_id: int | None = None
-    enable_topic_id: int | None = None
+    web_app_url: str = ""
 
 
 class TelegramPrimaryRecipientSchema(BaseModel):
@@ -133,7 +127,7 @@ class InviteCodeResponse(BaseModel):
     expires_at: str | None = None
     deep_link: str = ""
     activation_command: str = ""
-    activation_target: str = CONTROL_TOPIC_NAME
+    activation_target: str = ""
 
 
 class TelegramSettingsResponseSchema(TelegramSettingsSchema):
@@ -143,24 +137,8 @@ class TelegramSettingsResponseSchema(TelegramSettingsSchema):
     last_poller_heartbeat_at: str | None = None
     auth_deep_link: str = ""
     activation_command: str = ""
-    forum_cutover_status: str = "NOT_STARTED"
     primary_recipient: TelegramPrimaryRecipientSchema | None = None
     active_invite: InviteCodeResponse | None = None
-
-
-class TelegramForumCutoverResponseSchema(BaseModel):
-    """Ответ на подготовку cutover в forum supergroup."""
-
-    bot_username: str = ""
-    chat_id: str = ""
-    auth_code: str = ""
-    activation_command: str = ""
-    control_topic_id: int | None = None
-    warning_topic_id: int | None = None
-    stop_topic_id: int | None = None
-    enable_topic_id: int | None = None
-    forum_cutover_status: str = "WAITING_OWNER_AUTH"
-    message: str = ""
 
 
 class TelegramSetTokenRequest(BaseModel):

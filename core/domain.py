@@ -59,13 +59,6 @@ class TelegramUserRole(StrEnum):
     RECIPIENT = "recipient"
 
 
-class TelegramDeliveryMode(StrEnum):
-    """Режим доставки Telegram-контура."""
-
-    PRIVATE_CHAT = "PRIVATE_CHAT"
-    FORUM_GROUP = "FORUM_GROUP"
-
-
 class TelegramNotificationStream(StrEnum):
     """Независимый поток Telegram-уведомлений внутри одного чата."""
 
