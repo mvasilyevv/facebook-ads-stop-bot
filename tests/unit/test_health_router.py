@@ -48,27 +48,35 @@ def _make_db(
     # 1. text("SELECT 1") через execute
     # 2. scalar для ObserverSettings
     # 3. scalar для TelegramSettings
-    # 4. execute для DisableTask counts
-    # 5. execute для EnableTask counts
-    # 6. scalar для max(AdSnapshot.last_observed_at)
+    # 4. execute для WorkerHeartbeat (disable/enable/enable_recommendation/health_watchdog)
+    # 5. execute для DisableTask counts
+    # 6. execute для EnableTask counts
+    # 7. scalar для max(AdSnapshot.last_observed_at)
 
     obs_row = SimpleNamespace(worker_heartbeat_at=observer_heartbeat)
     tg_row = SimpleNamespace(poller_heartbeat_at=poller_heartbeat)
 
     select_1_result = MagicMock()
 
+    # Пустой scalars().all() для WorkerHeartbeat
+    worker_hb_result = MagicMock()
+    worker_hb_result.scalars.return_value.all.return_value = []
+
     call_count = [0]
 
     async def _execute(stmt, *args, **kwargs):
         call_count[0] += 1
-        # Первый вызов — SELECT 1
+        # 1 — SELECT 1
         if call_count[0] == 1:
             return select_1_result
-        # Второй — disable task counts
+        # 2 — WorkerHeartbeat
         if call_count[0] == 2:
-            return _make_execute_result(disable_counts or [])
-        # Третий — enable task counts
+            return worker_hb_result
+        # 3 — disable task counts
         if call_count[0] == 3:
+            return _make_execute_result(disable_counts or [])
+        # 4 — enable task counts
+        if call_count[0] == 4:
             return _make_execute_result(enable_counts or [])
         return _make_execute_result([])
 
