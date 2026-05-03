@@ -277,30 +277,19 @@ async def test_heartbeat_calls_update_observer_runtime_status():
 # ---------------------------------------------------------------------------
 
 
-# Сценарий 6a: при count=4 send_message вызван с message_thread_id из ops-потока
+# Сценарий 6a: при count=4 send_message вызван без message_thread_id (forum-topic удалён)
 @pytest.mark.asyncio
 async def test_critical_alert_uses_ops_thread_id():
-    """При forum_topics_enabled=True и topic_ops_thread_id=42 — send_message получает message_thread_id=42."""
+    """Forum-topic режим удалён — send_message всегда получает message_thread_id=None."""
     escalator = SelfHealingEscalator()
     grpc_client = _make_grpc_client()
     tg_client = _make_tg_client()
 
-    fake_settings_row = MagicMock()
-    fake_settings_row.forum_topics_enabled = True
-    fake_settings_row.topic_ops_thread_id = 42
-
-    fake_session = MagicMock()
-    fake_session.__aenter__ = AsyncMock(return_value=fake_session)
-    fake_session.__aexit__ = AsyncMock(return_value=None)
-    fake_session.scalar = AsyncMock(return_value=fake_settings_row)
-    fake_factory = MagicMock(return_value=fake_session)
-
-    with patch("core.observer.self_healing.get_session_factory", return_value=fake_factory):
-        for _ in range(4):
-            await escalator.record_failure(
-                grpc_client=grpc_client, tg_client=tg_client, tg_chat_id="chat123"
-            )
+    for _ in range(4):
+        await escalator.record_failure(
+            grpc_client=grpc_client, tg_client=tg_client, tg_chat_id="chat123"
+        )
 
     assert tg_client.send_message.call_count == 1
     call_kwargs = tg_client.send_message.call_args[1]
-    assert call_kwargs.get("message_thread_id") == 42
+    assert call_kwargs.get("message_thread_id") is None

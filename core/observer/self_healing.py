@@ -16,12 +16,6 @@ import logging
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import select
-
-from core.db import get_session_factory
-from core.models import TelegramSettings
-from core.telegram.delivery import resolve_thread_id
-
 logger = logging.getLogger(__name__)
 
 # Интервал между повторными крит-алертами, пока проблема не ушла
@@ -40,17 +34,7 @@ _FAILURE_BACKOFF_MAX_SECONDS = 60.0
 
 
 async def _load_ops_thread_id() -> int | None:
-    """Загружает message_thread_id для ops-потока из TelegramSettings."""
-    try:
-        factory = get_session_factory()
-        async with factory() as db:
-            row = await db.scalar(
-                select(TelegramSettings).where(TelegramSettings.singleton_key == "default")
-            )
-            if row:
-                return resolve_thread_id("ops", row)
-    except Exception:
-        logger.debug("self_healing: не удалось загрузить ops thread_id из БД", exc_info=True)
+    """Всегда возвращает None — forum-topic режим удалён."""
     return None
 
 

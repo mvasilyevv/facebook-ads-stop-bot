@@ -114,6 +114,8 @@ async def disable_worker_loop(
     telegram_bot_token: str = "",
     telegram_chat_id: str = "",
     shutdown_event=None,
+    status_ref: list[str] | None = None,
+    message_ref: list[str | None] | None = None,
     **kwargs,
 ) -> None:
     """Бесконечный цикл обработки disable-задач из outbox.
@@ -130,12 +132,20 @@ async def disable_worker_loop(
         execute_disable_batch: async (tasks) -> {task_id: (success, message)} — пакетный обход
         telegram_bot_token: резервный токен Telegram для lifecycle-колбэка
         telegram_chat_id: резервный chat_id Telegram для lifecycle-колбэка
+        status_ref: внешний контейнер статуса (если передан — внешний heartbeat уже запущен)
+        message_ref: внешний контейнер сообщения (если передан — внешний heartbeat уже запущен)
     """
-    # Мутабельные контейнеры для передачи текущего статуса в heartbeat-задачу
-    status_ref: list[str] = ["idle"]
-    message_ref: list[str | None] = [None]
+    # Если внешний heartbeat уже запущен — используем переданные ссылки.
+    # Иначе создаём локальные и запускаем собственный heartbeat (обратная совместимость для тестов).
+    _owns_heartbeat = status_ref is None or message_ref is None
+    if status_ref is None:
+        status_ref = ["idle"]
+    if message_ref is None:
+        message_ref = [None]
 
-    heartbeat_task = asyncio.create_task(_heartbeat_loop(status_ref, message_ref))
+    heartbeat_task = (
+        asyncio.create_task(_heartbeat_loop(status_ref, message_ref)) if _owns_heartbeat else None
+    )
     try:
         while not (shutdown_event and shutdown_event.is_set()):
             try:
@@ -306,8 +316,9 @@ async def disable_worker_loop(
                 logger.exception("Disable worker: ошибка в цикле")
                 await asyncio.sleep(poll_interval_seconds)
     finally:
-        heartbeat_task.cancel()
-        try:
-            await heartbeat_task
-        except asyncio.CancelledError:
-            pass
+        if heartbeat_task is not None:
+            heartbeat_task.cancel()
+            try:
+                await heartbeat_task
+            except asyncio.CancelledError:
+                pass

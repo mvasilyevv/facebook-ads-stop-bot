@@ -17,10 +17,9 @@ from sqlalchemy import select
 from apps.api.routers.health import HealthDetails, collect_health_details
 from core.config import get_settings
 from core.db import get_session_factory
-from core.models import TelegramSettings
+from core.models import ObserverSettings, TelegramSettings
 from core.observer.runtime_status import update_worker_heartbeat
 from core.telegram.client import TelegramBotClient
-from core.telegram.delivery import resolve_thread_id
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +123,25 @@ async def restart_via_supervisor(name: str) -> None:
 # --- Получение настроек Telegram из БД ---
 
 
+async def _is_scanning_enabled() -> bool:
+    """Возвращает True, если сканирование включено в ObserverSettings.
+
+    При ошибке доступа к БД считаем включённым (fail-open),
+    чтобы не маскировать настоящие проблемы.
+    """
+    try:
+        factory = get_session_factory()
+        async with factory() as db:
+            row = await db.scalar(
+                select(ObserverSettings).where(ObserverSettings.singleton_key == "default")
+            )
+            if row is not None:
+                return bool(row.is_scanning_enabled)
+    except Exception as exc:
+        logger.warning("Watchdog: не удалось прочитать ObserverSettings: %s", exc)
+    return True
+
+
 async def _get_telegram_settings() -> tuple[str, TelegramSettings | None]:
     """Возвращает (chat_id, TelegramSettings | None) из БД или config как fallback."""
     try:
@@ -137,6 +155,19 @@ async def _get_telegram_settings() -> tuple[str, TelegramSettings | None]:
     except Exception as exc:
         logger.warning("Watchdog: не удалось прочитать TelegramSettings из БД: %s", exc)
     return get_settings().telegram_chat_id, None
+
+
+def _ops_chat_id(group_chat_id: str, settings: TelegramSettings | None) -> str:
+    """Возвращает chat_id для системных ops-алертов.
+
+    Приоритет: личка владельца (owner_telegram_user_id) → группа.
+    Системные шумные сообщения уводим из общей супергруппы в DM владельцу.
+    """
+    if settings is not None:
+        owner = (settings.owner_telegram_user_id or "").strip()
+        if owner:
+            return owner
+    return group_chat_id
 
 
 # --- Анти-флуд cooldown ---
@@ -213,15 +244,25 @@ async def _run_iteration(tg: TelegramBotClient, chat_id: str) -> None:
 
     # --- Загружаем ops thread_id для всех системных алертов этой итерации ---
     _, tg_settings = await _get_telegram_settings()
-    ops_thread_id = resolve_thread_id("ops", tg_settings) if tg_settings else None
+    ops_thread_id = None  # forum-topic режим удалён
+    # Системные ops-сообщения летят в личку владельца, чтобы не шуметь в супергруппе.
+    ops_chat_id = _ops_chat_id(chat_id, tg_settings)
+
+    # Если сканирование выключено пользователем — observer и Vision молчат намеренно,
+    # подавляем шумные алерты про них (browser_agent, БД, очереди — продолжают работать).
+    scanning_enabled = await _is_scanning_enabled()
+    if not scanning_enabled:
+        logger.debug("Watchdog: сканирование выключено — алерты observer/Vision подавлены")
 
     # --- Рост лог-файлов проверяем всегда (независимо от overall_healthy) ---
     for log_path, log_name in _WATCHED_LOGS:
+        if log_name == "observer" and not scanning_enabled:
+            continue
         if not _check_log_growth(log_path):
             alert_key = f"alert:{log_name}:log_stale"
             await _send_alert(
                 tg,
-                chat_id,
+                ops_chat_id,
                 (
                     f"📭 <b>{log_name} молчит</b>\n\n"
                     f"Лог-файл не обновлялся {_LOG_STALE_THRESHOLD // 60} минут — "
@@ -251,6 +292,9 @@ async def _run_iteration(tg: TelegramBotClient, chat_id: str) -> None:
             continue
         if worker_name == "health_watchdog":
             continue  # Сам себя не перезапускаем
+        # observer молчит намеренно при выключенном сканировании — не шумим.
+        if worker_name == "observer" and not scanning_enabled:
+            continue
 
         supervisor_name = _WORKER_TO_SUPERVISOR.get(worker_name)
         age_str = (
@@ -266,7 +310,7 @@ async def _run_iteration(tg: TelegramBotClient, chat_id: str) -> None:
             f"Не подавал признаков жизни {age_str}. Сейчас попробую перезапустить "
             "автоматически — отдельное сообщение придёт, если не получится."
         )
-        await _send_alert(tg, chat_id, alert_text, alert_key, message_thread_id=ops_thread_id)
+        await _send_alert(tg, ops_chat_id, alert_text, alert_key, message_thread_id=ops_thread_id)
 
         if supervisor_name:
             logger.warning(
@@ -296,7 +340,7 @@ async def _run_iteration(tg: TelegramBotClient, chat_id: str) -> None:
                     worker_label = _WORKER_FRIENDLY_NAMES.get(worker_name, worker_name)
                     await _send_alert(
                         tg,
-                        chat_id,
+                        ops_chat_id,
                         (
                             f"🚨 <b>Воркер «{worker_label}» не оживает</b>\n\n"
                             "Я попробовал перезапустить его — без результата.\n\n"
@@ -313,12 +357,12 @@ async def _run_iteration(tg: TelegramBotClient, chat_id: str) -> None:
                 logger.error("Watchdog: ошибка при рестарте '%s': %s", supervisor_name, exc)
 
     # --- browser_agent gRPC unhealthy ---
-    if not health.browser_agent.healthy:
+    if not health.browser_agent.healthy and scanning_enabled:
         alert_key = "alert:browser_agent:grpc_unhealthy"
         error_detail = health.browser_agent.error or "нет деталей"
         await _send_alert(
             tg,
-            chat_id,
+            ops_chat_id,
             (
                 "🌐 <b>Браузер-агент не отвечает</b>\n\n"
                 "Сканер не может получить доступ к Ads Manager. Сейчас попробую "
@@ -339,7 +383,7 @@ async def _run_iteration(tg: TelegramBotClient, chat_id: str) -> None:
                 logger.critical("Watchdog: рестарт browser_agent не помог")
                 await _send_alert(
                     tg,
-                    chat_id,
+                    ops_chat_id,
                     (
                         "🚨 <b>Браузер-агент не оживает</b>\n\n"
                         "Я попробовал перезапустить его — без результата.\n\n"
@@ -356,12 +400,12 @@ async def _run_iteration(tg: TelegramBotClient, chat_id: str) -> None:
             logger.error("Watchdog: ошибка при рестарте browser_agent: %s", exc)
 
     # --- Vision API unhealthy ---
-    if not health.vision.healthy:
+    if not health.vision.healthy and scanning_enabled:
         alert_key = "alert:vision:unhealthy"
         error_detail = health.vision.error or "нет деталей"
         await _send_alert(
             tg,
-            chat_id,
+            ops_chat_id,
             (
                 "🛰 <b>Vision (anti-detect) не отвечает</b>\n\n"
                 "Не получается достучаться до Vision API. Без него браузер-агент "
@@ -378,7 +422,7 @@ async def _run_iteration(tg: TelegramBotClient, chat_id: str) -> None:
         alert_key = "alert:queues:stuck_running"
         await _send_alert(
             tg,
-            chat_id,
+            ops_chat_id,
             (
                 "📦 <b>Задачи в очереди застряли</b>\n\n"
                 f"Выключение: {health.queues.disable_running} задач(и) висят более "
@@ -416,6 +460,9 @@ async def main() -> None:
 
     try:
         while True:
+            # Обновляем heartbeat в самом начале итерации — до любой работы,
+            # которая может занять десятки секунд (рестарты через supervisor).
+            await update_worker_heartbeat("health_watchdog", status="running")
             chat_id, _ = await _get_telegram_settings()
             in_grace = time.monotonic() < startup_grace_until
             if in_grace:
@@ -425,7 +472,6 @@ async def main() -> None:
                     await _run_iteration(tg, chat_id)
             except Exception as exc:
                 logger.exception("Watchdog: необработанная ошибка в итерации: %s", exc)
-            await update_worker_heartbeat("health_watchdog", status="running")
             await asyncio.sleep(WATCHDOG_INTERVAL_SECONDS)
     finally:
         await tg.close()

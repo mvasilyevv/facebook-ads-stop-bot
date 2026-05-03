@@ -93,6 +93,7 @@ from core.telegram.message_refs import (
 )
 from core.telegram.messaging import safe_edit_or_send_message
 from core.telegram.renderer import TelegramAlertItem, render_alert_message
+from core.telegram.service import load_web_app_url
 
 logger = logging.getLogger(__name__)
 _TELEGRAM_DELIVERY_ACTION_LABELS = {
@@ -114,6 +115,8 @@ EMPTY_SCAN_RETRY_DELAY_SECONDS = 10.0
 DATA_LOAD_POLL_INTERVAL_SECONDS = 2.0
 DATA_LOAD_MAX_WAIT_SECONDS = 30.0
 DATA_LOAD_LOG_INTERVAL_SECONDS = 10.0
+# Интервал фонового heartbeat observer (обновляет worker_heartbeat_at независимо от длины скана)
+OBSERVER_HEARTBEAT_INTERVAL_SECONDS = 20
 
 _BROWSER_RUNTIME_ERROR_MARKERS = (
     "target page, context or browser has been closed",
@@ -379,7 +382,8 @@ async def _send_alerts_to_telegram(
             reason_text=a.reason_text,
             metrics_json=a.metrics_json,
         )
-        message = render_alert_message(stage=a.stage, items=[item])
+        web_app_url = await load_web_app_url()
+        message = render_alert_message(stage=a.stage, items=[item], web_app_url=web_app_url)
         existing_message_id = None
         try:
             refs_by_chat = await load_message_refs_by_chat(
@@ -1055,6 +1059,20 @@ async def _maybe_auto_resume_scanning() -> None:
             logger.info("Авто-возобновление сканирования по истечении паузы")
 
 
+async def _observer_heartbeat_loop(status_ref: list[str], message_ref: list[str | None]) -> None:
+    """Фоновый цикл: обновляет worker_heartbeat_at каждые OBSERVER_HEARTBEAT_INTERVAL_SECONDS.
+
+    Благодаря этому watchdog видит свежий heartbeat независимо от длины scan-цикла,
+    что устраняет ложные перезапуски observer при сканах длиннее порога watchdog.
+    """
+    while True:
+        try:
+            await update_observer_runtime_status(status=status_ref[0], message=message_ref[0])
+        except Exception:
+            logger.debug("Observer: фоновый heartbeat не удалось записать", exc_info=True)
+        await asyncio.sleep(OBSERVER_HEARTBEAT_INTERVAL_SECONDS)
+
+
 async def observer_loop(
     *,
     grpc_client: BrowserAgentClient,
@@ -1158,492 +1176,493 @@ async def observer_loop(
         """Проверяет, нужно ли завершить работу."""
         return shutdown_event is not None and shutdown_event.is_set()
 
-    while not _should_stop():
-        cycle_completed = False
-        alerts_to_send: list[AlertCandidate] = []
-        stop_alerts: list[AlertCandidate] = []
-        snapshot_batch: list[dict] = []
-        fast_stop_triggered = False
-        try:
-            # Перезагружаем офферы и TG настройки каждые N циклов
-            if cycle_count % RELOAD_EVERY == 0:
-                try:
-                    offers = await load_offers_from_db()
-                except Exception:
-                    logger.warning(
-                        "Не удалось обновить офферы из БД, используем предыдущие",
-                        exc_info=True,
-                    )
-                try:
-                    fake_deposits_map = await load_fake_deposits()
-                except Exception:
-                    logger.warning(
-                        "Не удалось загрузить корректировки ложных депозитов",
-                        exc_info=True,
-                    )
-                # Перечитываем TG настройки — пользователь мог обновить через UI
-                try:
-                    new_token, new_destinations = await load_telegram_settings_from_db(
-                        fallback_token=telegram_bot_token,
-                        fallback_chat_id=telegram_chat_id,
-                    )
-                    if new_token and new_destinations:
-                        if new_token != tg_token:
+    # Ссылки на текущий статус/сообщение для фонового heartbeat-цикла.
+    # Фоновая задача читает эти значения и пишет heartbeat каждые
+    # OBSERVER_HEARTBEAT_INTERVAL_SECONDS секунд, независимо от длины скана.
+    status_ref: list[str] = ["RUNNING"]
+    message_ref: list[str | None] = ["Запущен."]
+    heartbeat_task = asyncio.create_task(
+        _observer_heartbeat_loop(status_ref, message_ref),
+        name="observer-heartbeat",
+    )
+
+    try:
+        while not _should_stop():
+            cycle_completed = False
+            alerts_to_send: list[AlertCandidate] = []
+            stop_alerts: list[AlertCandidate] = []
+            snapshot_batch: list[dict] = []
+            fast_stop_triggered = False
+            try:
+                # Перезагружаем офферы и TG настройки каждые N циклов
+                if cycle_count % RELOAD_EVERY == 0:
+                    try:
+                        offers = await load_offers_from_db()
+                    except Exception:
+                        logger.warning(
+                            "Не удалось обновить офферы из БД, используем предыдущие",
+                            exc_info=True,
+                        )
+                    try:
+                        fake_deposits_map = await load_fake_deposits()
+                    except Exception:
+                        logger.warning(
+                            "Не удалось загрузить корректировки ложных депозитов",
+                            exc_info=True,
+                        )
+                    # Перечитываем TG настройки — пользователь мог обновить через UI
+                    try:
+                        new_token, new_destinations = await load_telegram_settings_from_db(
+                            fallback_token=telegram_bot_token,
+                            fallback_chat_id=telegram_chat_id,
+                        )
+                        if new_token and new_destinations:
+                            if new_token != tg_token:
+                                if tg_client is not None:
+                                    await tg_client.close()
+                                tg_token = new_token
+                                tg_client = TelegramBotClient(tg_token)
+                                logger.info("Telegram настройки обновлены из БД")
+                            elif tg_client is None:
+                                tg_client = TelegramBotClient(tg_token)
+                            if new_destinations != tg_destinations:
+                                tg_destinations = new_destinations
+                                logger.info(
+                                    "Список получателей Telegram обновлён: %s",
+                                    len(tg_destinations),
+                                )
+                        elif not new_token or not new_destinations:
                             if tg_client is not None:
                                 await tg_client.close()
-                            tg_token = new_token
-                            tg_client = TelegramBotClient(tg_token)
-                            logger.info("Telegram настройки обновлены из БД")
-                        elif tg_client is None:
-                            tg_client = TelegramBotClient(tg_token)
-                        if new_destinations != tg_destinations:
-                            tg_destinations = new_destinations
-                            logger.info(
-                                "Список получателей Telegram обновлён: %s",
-                                len(tg_destinations),
-                            )
-                    elif not new_token or not new_destinations:
-                        if tg_client is not None:
-                            await tg_client.close()
-                        tg_client = None
-                        tg_token = ""
-                        tg_destinations = []
-                except Exception:
-                    logger.debug("Не удалось обновить TG настройки", exc_info=True)
+                            tg_client = None
+                            tg_token = ""
+                            tg_destinations = []
+                    except Exception:
+                        logger.debug("Не удалось обновить TG настройки", exc_info=True)
 
-                # Перечитываем пороги из БД
+                    # Перечитываем пороги из БД
+                    try:
+                        observer_thresholds = await load_observer_settings_from_db()
+                    except Exception:
+                        logger.debug("Не удалось обновить пороги observer из БД", exc_info=True)
+
+                    # Проверяем флаг переподключения к браузеру
+                    try:
+                        if await check_vision_reconnect_flag():
+                            logger.info("Переподключение к Vision браузеру по запросу из UI")
+                            await grpc_client.reconnect_browser()
+                    except Exception:
+                        logger.warning(
+                            "Не удалось выполнить переподключение к браузеру", exc_info=True
+                        )
+
+                cycle_count += 1
+
+                # Сначала приводим очереди отключения и включения в консистентное состояние.
                 try:
-                    observer_thresholds = await load_observer_settings_from_db()
+                    await reconcile_disable_tasks_in_db()
                 except Exception:
-                    logger.debug("Не удалось обновить пороги observer из БД", exc_info=True)
-
-                # Проверяем флаг переподключения к браузеру
+                    logger.warning(
+                        "Не удалось согласовать очередь отключения с текущими снэпшотами",
+                        exc_info=True,
+                    )
                 try:
-                    if await check_vision_reconnect_flag():
-                        logger.info("Переподключение к Vision браузеру по запросу из UI")
-                        await grpc_client.reconnect_browser()
+                    await reconcile_enable_tasks_in_db()
                 except Exception:
-                    logger.warning("Не удалось выполнить переподключение к браузеру", exc_info=True)
-
-            cycle_count += 1
-
-            # Сначала приводим очереди отключения и включения в консистентное состояние.
-            try:
-                await reconcile_disable_tasks_in_db()
-            except Exception:
-                logger.warning(
-                    "Не удалось согласовать очередь отключения с текущими снэпшотами",
-                    exc_info=True,
-                )
-            try:
-                await reconcile_enable_tasks_in_db()
-            except Exception:
-                logger.warning(
-                    "Не удалось согласовать очередь включения с текущими снэпшотами",
-                    exc_info=True,
-                )
-
-            # Telegram, UI и фоновые задачи могут менять alert_state вне observer.
-            # Перед новым сканом подтягиваем БД, чтобы не слать повторный алерт поверх CLAIMED.
-            try:
-                ad_states = await refresh_runtime_ad_states(ad_states)
-            except Exception:
-                logger.debug("Не удалось синхронизировать FSM-состояния из БД", exc_info=True)
-
-            # Авто-resume: если pause_until истёк — возобновляем сканирование
-            try:
-                await _maybe_auto_resume_scanning()
-            except Exception:
-                logger.debug("Не удалось проверить авто-resume", exc_info=True)
-
-            # Проверяем флаг is_scanning_enabled перед каждым сканом
-            if not await check_scanning_enabled():
-                consecutive_empty_scan_cycles = 0
-                await update_observer_runtime_status(
-                    status="PAUSED",
-                    message="Сканирование выключено в настройках.",
-                    clear_scan_schedule=True,
-                )
-                logger.info("Observer: сканирование отключено, пропускаем цикл")
-                # Короткий сон перед следующей проверкой
-                await asyncio.sleep(10.0)
-                continue
-
-            browser_pause_kind_next, browser_pause_reason = await _get_browser_queue_pause()
-
-            if browser_pause_reason and browser_pause_kind_next == "disable":
-                consecutive_empty_scan_cycles = 0
-                await update_observer_runtime_status(
-                    status="WAITING_BROWSER",
-                    message=(f"Браузер занят задачами отключения. Причина: {browser_pause_reason}"),
-                )
-                if browser_pause_kind != "disable":
-                    logger.info(
-                        "Observer: ставлю скан на паузу, пока очередь отключения освобождает браузер: %s",
-                        browser_pause_reason,
+                    logger.warning(
+                        "Не удалось согласовать очередь включения с текущими снэпшотами",
+                        exc_info=True,
                     )
-                    browser_pause_kind = "disable"
-                await asyncio.sleep(BROWSER_QUEUE_SCAN_PAUSE_SECONDS)
-                continue
 
-            if browser_pause_reason and browser_pause_kind_next == "enable":
-                consecutive_empty_scan_cycles = 0
-                await update_observer_runtime_status(
-                    status="WAITING_BROWSER",
-                    message=(f"Браузер занят задачами включения. Причина: {browser_pause_reason}"),
-                )
-                if browser_pause_kind != "enable":
-                    logger.info(
-                        "Observer: ставлю скан на паузу, пока очередь включения освобождает браузер: %s",
-                        browser_pause_reason,
+                # Telegram, UI и фоновые задачи могут менять alert_state вне observer.
+                # Перед новым сканом подтягиваем БД, чтобы не слать повторный алерт поверх CLAIMED.
+                try:
+                    ad_states = await refresh_runtime_ad_states(ad_states)
+                except Exception:
+                    logger.debug("Не удалось синхронизировать FSM-состояния из БД", exc_info=True)
+
+                # Авто-resume: если pause_until истёк — возобновляем сканирование
+                try:
+                    await _maybe_auto_resume_scanning()
+                except Exception:
+                    logger.debug("Не удалось проверить авто-resume", exc_info=True)
+
+                # Проверяем флаг is_scanning_enabled перед каждым сканом
+                if not await check_scanning_enabled():
+                    consecutive_empty_scan_cycles = 0
+                    status_ref[0] = "PAUSED"
+                    message_ref[0] = "Сканирование выключено в настройках."
+                    await update_observer_runtime_status(
+                        status="PAUSED",
+                        message="Сканирование выключено в настройках.",
+                        clear_scan_schedule=True,
                     )
-                    browser_pause_kind = "enable"
-                await asyncio.sleep(BROWSER_QUEUE_SCAN_PAUSE_SECONDS)
-                continue
+                    logger.info("Observer: сканирование отключено, пропускаем цикл")
+                    # Короткий сон перед следующей проверкой
+                    await asyncio.sleep(10.0)
+                    continue
 
-            if browser_pause_kind == "disable":
-                logger.info("Observer: очередь отключения освободила браузер — возобновляю скан")
-                browser_pause_kind = None
-            elif browser_pause_kind == "enable":
-                logger.info("Observer: очередь включения освободила браузер — возобновляю скан")
-                browser_pause_kind = None
+                browser_pause_kind_next, browser_pause_reason = await _get_browser_queue_pause()
 
-            rows: list[ScannedAdRow] = []
-            scanned_rows_by_id: dict[str, ScannedAdRow] = {}
-            try:
-                async with acquire_browser_lock(
-                    owner="observer-scan",
-                    timeout_seconds=BROWSER_SCAN_LOCK_TIMEOUT_SECONDS,
-                ):
-                    browser_pause_kind_next, browser_pause_reason = await _get_browser_queue_pause()
-                    if browser_pause_reason:
-                        consecutive_empty_scan_cycles = 0
-                        await update_observer_runtime_status(
-                            status="WAITING_BROWSER",
-                            message=(
-                                "Браузер занят задачами "
-                                f"{'отключения' if browser_pause_kind_next == 'disable' else 'включения'}. "
-                                f"Причина: {browser_pause_reason}"
-                            ),
+                if browser_pause_reason and browser_pause_kind_next == "disable":
+                    consecutive_empty_scan_cycles = 0
+                    status_ref[0] = "WAITING_BROWSER"
+                    await update_observer_runtime_status(
+                        status="WAITING_BROWSER",
+                        message=(
+                            f"Браузер занят задачами отключения. Причина: {browser_pause_reason}"
+                        ),
+                    )
+                    if browser_pause_kind != "disable":
+                        logger.info(
+                            "Observer: ставлю скан на паузу, пока очередь отключения освобождает браузер: %s",
+                            browser_pause_reason,
                         )
-                        browser_pause_kind = browser_pause_kind_next
-                        raise BrowserLockTimeoutError(
-                            f"Браузер занят задачами: {browser_pause_reason}"
+                        browser_pause_kind = "disable"
+                    await asyncio.sleep(BROWSER_QUEUE_SCAN_PAUSE_SECONDS)
+                    continue
+
+                if browser_pause_reason and browser_pause_kind_next == "enable":
+                    consecutive_empty_scan_cycles = 0
+                    status_ref[0] = "WAITING_BROWSER"
+                    await update_observer_runtime_status(
+                        status="WAITING_BROWSER",
+                        message=(
+                            f"Браузер занят задачами включения. Причина: {browser_pause_reason}"
+                        ),
+                    )
+                    if browser_pause_kind != "enable":
+                        logger.info(
+                            "Observer: ставлю скан на паузу, пока очередь включения освобождает браузер: %s",
+                            browser_pause_reason,
                         )
+                        browser_pause_kind = "enable"
+                    await asyncio.sleep(BROWSER_QUEUE_SCAN_PAUSE_SECONDS)
+                    continue
 
-                    validation = await grpc_client.validate_columns()
-                    if not validation.get("valid", False):
-                        consecutive_empty_scan_cycles = 0
-                        missing_columns = list(validation.get("missing_columns") or [])
-                        validation_error = str(validation.get("error_message") or "").strip()
+                if browser_pause_kind == "disable":
+                    logger.info(
+                        "Observer: очередь отключения освободила браузер — возобновляю скан"
+                    )
+                    browser_pause_kind = None
+                elif browser_pause_kind == "enable":
+                    logger.info("Observer: очередь включения освободила браузер — возобновляю скан")
+                    browser_pause_kind = None
 
-                        if _is_transient_column_validation_failure(validation):
-                            consecutive_column_validation_errors = 0
-                            transient_message = (
-                                "Проверка колонок Ads Manager не получила данные от страницы. "
-                                "Считаю это временной проблемой браузера/CDP, а не изменением колонок."
-                            )
+                rows: list[ScannedAdRow] = []
+                scanned_rows_by_id: dict[str, ScannedAdRow] = {}
+                try:
+                    async with acquire_browser_lock(
+                        owner="observer-scan",
+                        timeout_seconds=BROWSER_SCAN_LOCK_TIMEOUT_SECONDS,
+                    ):
+                        (
+                            browser_pause_kind_next,
+                            browser_pause_reason,
+                        ) = await _get_browser_queue_pause()
+                        if browser_pause_reason:
+                            consecutive_empty_scan_cycles = 0
+                            status_ref[0] = "WAITING_BROWSER"
                             await update_observer_runtime_status(
-                                status="RECOVERING",
-                                message=transient_message,
-                                last_error=validation_error or "Проверка колонок не вернула детали",
-                            )
-                            logger.warning(
-                                "Observer: временный сбой проверки колонок, пробую переподключиться: %s",
-                                validation_error or "детали не вернулись",
-                            )
-                            try:
-                                await grpc_client.reconnect_browser()
-                            except Exception:
-                                logger.warning(
-                                    "Observer: не удалось переподключиться после сбоя проверки колонок",
-                                    exc_info=True,
-                                )
-                            await asyncio.sleep(10.0)
-                            continue
-
-                        consecutive_column_validation_errors += 1
-                        columns_message = (
-                            "Проверка колонок Ads Manager не пройдена "
-                            f"({consecutive_column_validation_errors}/{COLUMN_VALIDATION_FAILURE_LIMIT}): "
-                            f"{', '.join(missing_columns) or 'детали не вернулись'}"
-                        )
-
-                        if consecutive_column_validation_errors < COLUMN_VALIDATION_FAILURE_LIMIT:
-                            await update_observer_runtime_status(
-                                status="WARNING",
+                                status="WAITING_BROWSER",
                                 message=(
-                                    "Колонки Ads Manager временно не совпали с ожидаемыми. "
-                                    "Скан этого цикла пропущен, повторим проверку перед следующим сканом."
+                                    "Браузер занят задачами "
+                                    f"{'отключения' if browser_pause_kind_next == 'disable' else 'включения'}. "
+                                    f"Причина: {browser_pause_reason}"
+                                ),
+                            )
+                            browser_pause_kind = browser_pause_kind_next
+                            raise BrowserLockTimeoutError(
+                                f"Браузер занят задачами: {browser_pause_reason}"
+                            )
+
+                        validation = await grpc_client.validate_columns()
+                        if not validation.get("valid", False):
+                            consecutive_empty_scan_cycles = 0
+                            missing_columns = list(validation.get("missing_columns") or [])
+                            validation_error = str(validation.get("error_message") or "").strip()
+
+                            if _is_transient_column_validation_failure(validation):
+                                consecutive_column_validation_errors = 0
+                                transient_message = (
+                                    "Проверка колонок Ads Manager не получила данные от страницы. "
+                                    "Считаю это временной проблемой браузера/CDP, а не изменением колонок."
+                                )
+                                await update_observer_runtime_status(
+                                    status="RECOVERING",
+                                    message=transient_message,
+                                    last_error=validation_error
+                                    or "Проверка колонок не вернула детали",
+                                )
+                                logger.warning(
+                                    "Observer: временный сбой проверки колонок, пробую переподключиться: %s",
+                                    validation_error or "детали не вернулись",
+                                )
+                                try:
+                                    await grpc_client.reconnect_browser()
+                                except Exception:
+                                    logger.warning(
+                                        "Observer: не удалось переподключиться после сбоя проверки колонок",
+                                        exc_info=True,
+                                    )
+                                await asyncio.sleep(10.0)
+                                continue
+
+                            consecutive_column_validation_errors += 1
+                            columns_message = (
+                                "Проверка колонок Ads Manager не пройдена "
+                                f"({consecutive_column_validation_errors}/{COLUMN_VALIDATION_FAILURE_LIMIT}): "
+                                f"{', '.join(missing_columns) or 'детали не вернулись'}"
+                            )
+
+                            if (
+                                consecutive_column_validation_errors
+                                < COLUMN_VALIDATION_FAILURE_LIMIT
+                            ):
+                                await update_observer_runtime_status(
+                                    status="WARNING",
+                                    message=(
+                                        "Колонки Ads Manager временно не совпали с ожидаемыми. "
+                                        "Скан этого цикла пропущен, повторим проверку перед следующим сканом."
+                                    ),
+                                    last_error=columns_message,
+                                )
+                                logger.warning("Observer: %s", columns_message)
+                                await asyncio.sleep(10.0)
+                                continue
+
+                            await set_observer_scanning_enabled(False)
+                            await update_observer_runtime_status(
+                                status="PAUSED",
+                                message=(
+                                    "Сканирование остановлено: обязательные колонки Ads Manager "
+                                    "отсутствуют или идут в другом порядке."
                                 ),
                                 last_error=columns_message,
                             )
-                            logger.warning("Observer: %s", columns_message)
-                            await asyncio.sleep(10.0)
+                            logger.error("Observer: %s", columns_message)
+                            try:
+                                await broadcast_observer_runtime_message(
+                                    text=_build_missing_columns_alert_text(missing_columns),
+                                    fallback_token=tg_token or telegram_bot_token,
+                                    fallback_chat_id=telegram_chat_id,
+                                )
+                            except Exception:
+                                logger.exception(
+                                    "Не удалось отправить Telegram-алерт о колонках Ads Manager"
+                                )
                             continue
 
-                        await set_observer_scanning_enabled(False)
+                        consecutive_column_validation_errors = 0
+
+                        status_ref[0] = "RUNNING"
+                        message_ref[0] = "Выполняем цикл сканирования объявлений."
                         await update_observer_runtime_status(
-                            status="PAUSED",
-                            message=(
-                                "Сканирование остановлено: обязательные колонки Ads Manager "
-                                "отсутствуют или идут в другом порядке."
-                            ),
-                            last_error=columns_message,
+                            status="RUNNING",
+                            message="Выполняем цикл сканирования объявлений.",
+                            clear_last_error=True,
                         )
-                        logger.error("Observer: %s", columns_message)
-                        try:
-                            await broadcast_observer_runtime_message(
-                                text=_build_missing_columns_alert_text(missing_columns),
-                                fallback_token=tg_token or telegram_bot_token,
-                                fallback_chat_id=telegram_chat_id,
-                            )
-                        except Exception:
-                            logger.exception(
-                                "Не удалось отправить Telegram-алерт о колонках Ads Manager"
-                            )
-                        continue
 
-                    consecutive_column_validation_errors = 0
+                        # 1-2. Сканирование через gRPC browser-agent: refresh + первый проход
+                        scan_events = grpc_client.run_scan_cycle(
+                            max_scroll_passes=50,
+                            do_refresh=True,
+                            reset_scroll_first=True,
+                            settle_delay_seconds=random.uniform(2.0, 4.0),
+                        )
+                        async for event in scan_events:
+                            if isinstance(event, ScanResult):
+                                rows = event.rows
+                                logger.info(
+                                    "Observer: сканирование завершено — %d строк за %.1fs (%d проходов)",
+                                    len(rows),
+                                    event.duration_seconds,
+                                    event.total_passes,
+                                )
+                                # Проверяем неизвестные модальные окна (Wave 1 modal-dismisser)
+                                unknown_modals = getattr(event, "unknown_modal_artifacts", []) or []
+                                if unknown_modals:
+                                    _tg_chat_for_healing = (
+                                        tg_destinations[0].chat_id
+                                        if tg_destinations
+                                        else telegram_chat_id
+                                    )
+                                    await _self_healing.handle_unknown_modal_artifacts(
+                                        unknown_modals,
+                                        tg_client=tg_client,
+                                        tg_chat_id=_tg_chat_for_healing,
+                                    )
+                            elif isinstance(event, ScanProgress):
+                                for row in event.new_rows:
+                                    scanned_rows_by_id[row.fb_ad_id] = row
+                                logger.debug(
+                                    "Observer: проход %d — %d строк пока, at_bottom=%s",
+                                    event.pass_number,
+                                    event.rows_so_far,
+                                    event.at_bottom,
+                                )
+                                if not event.new_rows:
+                                    continue
 
+                                progress_ad_states = dict(ad_states)
+                                (
+                                    progress_alerts,
+                                    progress_stop_alerts,
+                                    progress_snapshot_batch,
+                                ) = await _run_scan_cycle(
+                                    offers=offers,
+                                    rows=event.new_rows,
+                                    ad_states=progress_ad_states,
+                                    fake_deposits_map=fake_deposits_map,
+                                    observer_thresholds=observer_thresholds,
+                                )
+                                if not progress_stop_alerts:
+                                    continue
+
+                                stop_ids = {alert.fb_ad_id for alert in progress_stop_alerts}
+                                for fb_ad_id in stop_ids:
+                                    if fb_ad_id in progress_ad_states:
+                                        ad_states[fb_ad_id] = progress_ad_states[fb_ad_id]
+                                fast_snapshot_batch = [
+                                    snap
+                                    for snap in progress_snapshot_batch
+                                    if snap.get("fb_ad_id") in stop_ids
+                                ]
+                                alerts_to_send.extend(
+                                    alert
+                                    for alert in progress_alerts
+                                    if alert.fb_ad_id in stop_ids and alert.stage == AlertStage.STOP
+                                )
+                                stop_alerts.extend(progress_stop_alerts)
+                                snapshot_batch.extend(fast_snapshot_batch)
+                                fast_stop_triggered = True
+                                rows = list(scanned_rows_by_id.values())
+                                logger.info(
+                                    "Быстрый стоп: STOP найден на проходе %d, завершаю сканирование досрочно",
+                                    event.pass_number,
+                                )
+                                close_stream = getattr(scan_events, "aclose", None)
+                                if close_stream is not None:
+                                    await close_stream()
+                                break
+
+                        # 1b. Адаптивное ожидание загрузки данных после refresh.
+                        if rows and not fast_stop_triggered:
+                            rows = await _wait_for_data_load(
+                                grpc_client,
+                                prev_had_spend=prev_scan_had_spend,
+                                initial_rows=rows,
+                            )
+                except BrowserLockTimeoutError as exc:
+                    consecutive_empty_scan_cycles = 0
+                    status_ref[0] = "WAITING_BROWSER"
+                    message_ref[0] = (
+                        "Браузер занят другой операцией. Сканирование будет повторено позже."
+                    )
                     await update_observer_runtime_status(
-                        status="RUNNING",
-                        message="Выполняем цикл сканирования объявлений.",
-                        clear_last_error=True,
+                        status="WAITING_BROWSER",
+                        message="Браузер занят другой операцией. Сканирование будет повторено позже.",
+                        last_error=str(exc),
                     )
+                    logger.warning("Observer: %s", exc)
+                    await asyncio.sleep(BROWSER_QUEUE_SCAN_PAUSE_SECONDS)
+                    continue
 
-                    # 1-2. Сканирование через gRPC browser-agent: refresh + первый проход
-                    scan_events = grpc_client.run_scan_cycle(
-                        max_scroll_passes=50,
-                        do_refresh=True,
-                        reset_scroll_first=True,
-                        settle_delay_seconds=random.uniform(2.0, 4.0),
+                if fast_stop_triggered:
+                    consecutive_empty_scan_cycles = 0
+                    prev_scan_had_spend = prev_scan_had_spend or any(
+                        r.spend and r.spend > 0 for r in rows
                     )
-                    async for event in scan_events:
-                        if isinstance(event, ScanResult):
-                            rows = event.rows
-                            logger.info(
-                                "Observer: сканирование завершено — %d строк за %.1fs (%d проходов)",
-                                len(rows),
-                                event.duration_seconds,
-                                event.total_passes,
-                            )
-                            # Проверяем неизвестные модальные окна (Wave 1 modal-dismisser)
-                            unknown_modals = getattr(event, "unknown_modal_artifacts", []) or []
-                            if unknown_modals:
-                                _tg_chat_for_healing = (
-                                    tg_destinations[0].chat_id
-                                    if tg_destinations
-                                    else telegram_chat_id
-                                )
-                                await _self_healing.handle_unknown_modal_artifacts(
-                                    unknown_modals,
-                                    tg_client=tg_client,
-                                    tg_chat_id=_tg_chat_for_healing,
-                                )
-                        elif isinstance(event, ScanProgress):
-                            for row in event.new_rows:
-                                scanned_rows_by_id[row.fb_ad_id] = row
-                            logger.debug(
-                                "Observer: проход %d — %d строк пока, at_bottom=%s",
-                                event.pass_number,
-                                event.rows_so_far,
-                                event.at_bottom,
-                            )
-                            if not event.new_rows:
-                                continue
-
-                            progress_ad_states = dict(ad_states)
-                            (
-                                progress_alerts,
-                                progress_stop_alerts,
-                                progress_snapshot_batch,
-                            ) = await _run_scan_cycle(
-                                offers=offers,
-                                rows=event.new_rows,
-                                ad_states=progress_ad_states,
-                                fake_deposits_map=fake_deposits_map,
-                                observer_thresholds=observer_thresholds,
-                            )
-                            if not progress_stop_alerts:
-                                continue
-
-                            stop_ids = {alert.fb_ad_id for alert in progress_stop_alerts}
-                            for fb_ad_id in stop_ids:
-                                if fb_ad_id in progress_ad_states:
-                                    ad_states[fb_ad_id] = progress_ad_states[fb_ad_id]
-                            fast_snapshot_batch = [
-                                snap
-                                for snap in progress_snapshot_batch
-                                if snap.get("fb_ad_id") in stop_ids
-                            ]
-                            alerts_to_send.extend(
-                                alert
-                                for alert in progress_alerts
-                                if alert.fb_ad_id in stop_ids and alert.stage == AlertStage.STOP
-                            )
-                            stop_alerts.extend(progress_stop_alerts)
-                            snapshot_batch.extend(fast_snapshot_batch)
-                            fast_stop_triggered = True
-                            rows = list(scanned_rows_by_id.values())
-                            logger.info(
-                                "Быстрый стоп: STOP найден на проходе %d, завершаю сканирование досрочно",
-                                event.pass_number,
-                            )
-                            close_stream = getattr(scan_events, "aclose", None)
-                            if close_stream is not None:
-                                await close_stream()
-                            break
-
-                    # 1b. Адаптивное ожидание загрузки данных после refresh.
-                    if rows and not fast_stop_triggered:
-                        rows = await _wait_for_data_load(
-                            grpc_client,
-                            prev_had_spend=prev_scan_had_spend,
-                            initial_rows=rows,
+                    await _process_fast_stop_results(
+                        stop_alerts=stop_alerts,
+                        snapshot_batch=snapshot_batch,
+                    )
+                    await _process_scan_results(
+                        alerts_to_send=alerts_to_send,
+                        stop_alerts=[],
+                        snapshot_batch=[],
+                        tg_client=tg_client,
+                        tg_destinations=tg_destinations,
+                    )
+                else:
+                    if not rows:
+                        consecutive_empty_scan_cycles += 1
+                        empty_scan_reason = _build_empty_scan_reason()
+                        logger.warning(
+                            "Observer: пустой scan-цикл %s/%s — %s",
+                            consecutive_empty_scan_cycles,
+                            EMPTY_SCAN_FAILURE_LIMIT,
+                            empty_scan_reason,
                         )
-            except BrowserLockTimeoutError as exc:
-                consecutive_empty_scan_cycles = 0
-                await update_observer_runtime_status(
-                    status="WAITING_BROWSER",
-                    message="Браузер занят другой операцией. Сканирование будет повторено позже.",
-                    last_error=str(exc),
-                )
-                logger.warning("Observer: %s", exc)
-                await asyncio.sleep(BROWSER_QUEUE_SCAN_PAUSE_SECONDS)
-                continue
 
-            if fast_stop_triggered:
-                consecutive_empty_scan_cycles = 0
-                prev_scan_had_spend = prev_scan_had_spend or any(
-                    r.spend and r.spend > 0 for r in rows
-                )
-                await _process_fast_stop_results(
-                    stop_alerts=stop_alerts,
-                    snapshot_batch=snapshot_batch,
-                )
-                await _process_scan_results(
-                    alerts_to_send=alerts_to_send,
-                    stop_alerts=[],
-                    snapshot_batch=[],
-                    tg_client=tg_client,
-                    tg_destinations=tg_destinations,
-                )
-            else:
-                if not rows:
-                    consecutive_empty_scan_cycles += 1
-                    empty_scan_reason = _build_empty_scan_reason()
-                    logger.warning(
-                        "Observer: пустой scan-цикл %s/%s — %s",
-                        consecutive_empty_scan_cycles,
-                        EMPTY_SCAN_FAILURE_LIMIT,
-                        empty_scan_reason,
-                    )
+                        if consecutive_empty_scan_cycles < EMPTY_SCAN_FAILURE_LIMIT:
+                            await _update_scan_recovery_status(
+                                reason=empty_scan_reason,
+                                attempt=consecutive_empty_scan_cycles,
+                                max_attempts=EMPTY_SCAN_FAILURE_LIMIT,
+                                retry_delay_seconds=EMPTY_SCAN_RETRY_DELAY_SECONDS,
+                            )
+                            await asyncio.sleep(EMPTY_SCAN_RETRY_DELAY_SECONDS)
+                            continue
 
-                    if consecutive_empty_scan_cycles < EMPTY_SCAN_FAILURE_LIMIT:
-                        await _update_scan_recovery_status(
+                        raise ScanDataUnavailableError(
+                            attempts=consecutive_empty_scan_cycles,
+                            retry_interval_seconds=EMPTY_SCAN_RETRY_DELAY_SECONDS,
                             reason=empty_scan_reason,
-                            attempt=consecutive_empty_scan_cycles,
-                            max_attempts=EMPTY_SCAN_FAILURE_LIMIT,
-                            retry_delay_seconds=EMPTY_SCAN_RETRY_DELAY_SECONDS,
                         )
-                        await asyncio.sleep(EMPTY_SCAN_RETRY_DELAY_SECONDS)
-                        continue
 
-                    raise ScanDataUnavailableError(
-                        attempts=consecutive_empty_scan_cycles,
-                        retry_interval_seconds=EMPTY_SCAN_RETRY_DELAY_SECONDS,
-                        reason=empty_scan_reason,
+                    consecutive_empty_scan_cycles = 0
+
+                    # Обновляем флаг spend для следующего цикла адаптивного ожидания
+                    prev_scan_had_spend = any(r.spend and r.spend > 0 for r in rows)
+
+                    # 3. Оценка правил, FSM-переходы, сбор алертов
+                    alerts_to_send, stop_alerts, snapshot_batch = await _run_scan_cycle(
+                        offers=offers,
+                        rows=rows,
+                        ad_states=ad_states,
+                        fake_deposits_map=fake_deposits_map,
+                        observer_thresholds=observer_thresholds,
                     )
 
+                    # 4. Сохранение снэпшотов, disable tasks, отправка алертов в TG
+                    await _process_scan_results(
+                        alerts_to_send=alerts_to_send,
+                        stop_alerts=stop_alerts,
+                        snapshot_batch=snapshot_batch,
+                        tg_client=tg_client,
+                        tg_destinations=tg_destinations,
+                    )
+
+                # Успешный цикл — сбрасываем счётчик ошибок браузера и self-healing
+                consecutive_browser_errors = 0
+                _self_healing.record_success()
+                cycle_completed = True
+
+            except ScanDataUnavailableError as exc:
                 consecutive_empty_scan_cycles = 0
-
-                # Обновляем флаг spend для следующего цикла адаптивного ожидания
-                prev_scan_had_spend = any(r.spend and r.spend > 0 for r in rows)
-
-                # 3. Оценка правил, FSM-переходы, сбор алертов
-                alerts_to_send, stop_alerts, snapshot_batch = await _run_scan_cycle(
-                    offers=offers,
-                    rows=rows,
-                    ad_states=ad_states,
-                    fake_deposits_map=fake_deposits_map,
-                    observer_thresholds=observer_thresholds,
-                )
-
-                # 4. Сохранение снэпшотов, disable tasks, отправка алертов в TG
-                await _process_scan_results(
-                    alerts_to_send=alerts_to_send,
-                    stop_alerts=stop_alerts,
-                    snapshot_batch=snapshot_batch,
-                    tg_client=tg_client,
-                    tg_destinations=tg_destinations,
-                )
-
-            # Успешный цикл — сбрасываем счётчик ошибок браузера и self-healing
-            consecutive_browser_errors = 0
-            _self_healing.record_success()
-            cycle_completed = True
-
-        except ScanDataUnavailableError as exc:
-            consecutive_empty_scan_cycles = 0
-            runtime_message = str(exc)
-            await set_observer_scanning_enabled(False)
-            await update_observer_runtime_status(
-                status="PAUSED",
-                message=runtime_message,
-                last_error=runtime_message,
-            )
-            logger.error("Observer: %s", runtime_message)
-            try:
-                await broadcast_observer_runtime_message(
-                    text=_build_scan_recovery_alert_text(exc),
-                    fallback_token=tg_token or telegram_bot_token,
-                    fallback_chat_id=telegram_chat_id,
-                )
-            except Exception:
-                logger.exception("Не удалось отправить Telegram-алерт о недоступности данных скана")
-
-            # Считаем ScanDataUnavailableError провалом цикла для self-healing
-            _tg_chat_for_healing = (
-                tg_destinations[0].chat_id if tg_destinations else telegram_chat_id
-            )
-            await _self_healing.record_failure(
-                grpc_client=grpc_client,
-                tg_client=tg_client,
-                tg_chat_id=_tg_chat_for_healing,
-            )
-            continue
-
-        except TimeoutError:
-            consecutive_empty_scan_cycles = 0
-            # asyncio.timeout бросает TimeoutError (BaseException в Python 3.11+).
-            # Ловим отдельно, чтобы таймаут DOM-стабилизации не крашил весь loop.
-            logger.warning("Observer: таймаут ожидания DOM-стабилизации, пропускаем цикл")
-            await update_observer_runtime_status(
-                status="WARNING",
-                message="Таймаут ожидания данных Ads Manager. Следующий цикл запустится по расписанию.",
-                last_error="TimeoutError при ожидании DOM",
-            )
-            _tg_chat_for_healing = (
-                tg_destinations[0].chat_id if tg_destinations else telegram_chat_id
-            )
-            await _self_healing.record_failure(
-                grpc_client=grpc_client,
-                tg_client=tg_client,
-                tg_chat_id=_tg_chat_for_healing,
-            )
-            continue
-
-        except Exception as exc:
-            consecutive_empty_scan_cycles = 0
-            if _is_browser_connection_error(exc) or isinstance(exc, grpc.RpcError):
-                runtime_message = format_observer_runtime_message(exc)
+                runtime_message = str(exc)
+                await set_observer_scanning_enabled(False)
+                status_ref[0] = "PAUSED"
+                message_ref[0] = runtime_message
                 await update_observer_runtime_status(
-                    status="ERROR",
+                    status="PAUSED",
                     message=runtime_message,
                     last_error=runtime_message,
                 )
-                consecutive_browser_errors += 1
+                logger.error("Observer: %s", runtime_message)
+                try:
+                    await broadcast_observer_runtime_message(
+                        text=_build_scan_recovery_alert_text(exc),
+                        fallback_token=tg_token or telegram_bot_token,
+                        fallback_chat_id=telegram_chat_id,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Не удалось отправить Telegram-алерт о недоступности данных скана"
+                    )
+
+                # Считаем ScanDataUnavailableError провалом цикла для self-healing
                 _tg_chat_for_healing = (
                     tg_destinations[0].chat_id if tg_destinations else telegram_chat_id
                 )
@@ -1654,55 +1673,117 @@ async def observer_loop(
                 )
                 continue
 
-            runtime_message = (
-                format_observer_runtime_message(exc) or "Внутренняя ошибка в цикле observer."
-            )
-            await update_observer_runtime_status(
-                status="ERROR",
-                message=runtime_message,
-                last_error=runtime_message,
-            )
-            logger.exception("Observer: ошибка в цикле")
-
-        # 5. Адаптивный интервал: вычисляем по уровню угрозы
-        adaptive_interval_secs = 0
-        threat_level_name = "IDLE"
-        if cycle_completed:
-            adaptive_interval_secs, threat_level_name = compute_adaptive_interval(
-                snapshot_batch,
-                has_stop_alerts=bool(stop_alerts),
-            )
-            # Немедленный ре-скан после STOP: пропускаем ожидание
-            if adaptive_interval_secs == 0:
-                logger.info(
-                    "Observer: обнаружен STOP-алерт — немедленный ре-скан (пропускаем ожидание)"
+            except TimeoutError:
+                consecutive_empty_scan_cycles = 0
+                # asyncio.timeout бросает TimeoutError (BaseException в Python 3.11+).
+                # Ловим отдельно, чтобы таймаут DOM-стабилизации не крашил весь loop.
+                logger.warning("Observer: таймаут ожидания DOM-стабилизации, пропускаем цикл")
+                status_ref[0] = "WARNING"
+                message_ref[0] = (
+                    "Таймаут ожидания данных Ads Manager. Следующий цикл запустится по расписанию."
                 )
                 await update_observer_runtime_status(
-                    status="RUNNING",
-                    message="STOP обнаружен — немедленный ре-скан.",
-                    clear_scan_schedule=True,
-                    clear_last_error=True,
+                    status="WARNING",
+                    message="Таймаут ожидания данных Ads Manager. Следующий цикл запустится по расписанию.",
+                    last_error="TimeoutError при ожидании DOM",
+                )
+                _tg_chat_for_healing = (
+                    tg_destinations[0].chat_id if tg_destinations else telegram_chat_id
+                )
+                await _self_healing.record_failure(
+                    grpc_client=grpc_client,
+                    tg_client=tg_client,
+                    tg_chat_id=_tg_chat_for_healing,
                 )
                 continue
 
-            await update_observer_runtime_status(
-                status="RUNNING",
-                message=(
+            except Exception as exc:
+                consecutive_empty_scan_cycles = 0
+                if _is_browser_connection_error(exc) or isinstance(exc, grpc.RpcError):
+                    runtime_message = format_observer_runtime_message(exc)
+                    status_ref[0] = "ERROR"
+                    message_ref[0] = runtime_message
+                    await update_observer_runtime_status(
+                        status="ERROR",
+                        message=runtime_message,
+                        last_error=runtime_message,
+                    )
+                    consecutive_browser_errors += 1
+                    _tg_chat_for_healing = (
+                        tg_destinations[0].chat_id if tg_destinations else telegram_chat_id
+                    )
+                    await _self_healing.record_failure(
+                        grpc_client=grpc_client,
+                        tg_client=tg_client,
+                        tg_chat_id=_tg_chat_for_healing,
+                    )
+                    continue
+
+                runtime_message = (
+                    format_observer_runtime_message(exc) or "Внутренняя ошибка в цикле observer."
+                )
+                status_ref[0] = "ERROR"
+                message_ref[0] = runtime_message
+                await update_observer_runtime_status(
+                    status="ERROR",
+                    message=runtime_message,
+                    last_error=runtime_message,
+                )
+                logger.exception("Observer: ошибка в цикле")
+
+            # 5. Адаптивный интервал: вычисляем по уровню угрозы
+            adaptive_interval_secs = 0
+            threat_level_name = "IDLE"
+            if cycle_completed:
+                adaptive_interval_secs, threat_level_name = compute_adaptive_interval(
+                    snapshot_batch,
+                    has_stop_alerts=bool(stop_alerts),
+                )
+                # Немедленный ре-скан после STOP: пропускаем ожидание
+                if adaptive_interval_secs == 0:
+                    logger.info(
+                        "Observer: обнаружен STOP-алерт — немедленный ре-скан (пропускаем ожидание)"
+                    )
+                    status_ref[0] = "RUNNING"
+                    message_ref[0] = "STOP обнаружен — немедленный ре-скан."
+                    await update_observer_runtime_status(
+                        status="RUNNING",
+                        message="STOP обнаружен — немедленный ре-скан.",
+                        clear_scan_schedule=True,
+                        clear_last_error=True,
+                    )
+                    continue
+
+                status_ref[0] = "RUNNING"
+                message_ref[0] = (
                     f"Цикл завершён. Угроза: {threat_level_name}, "
                     f"интервал: {adaptive_interval_secs}с."
-                ),
-                current_scan_interval_seconds=adaptive_interval_secs,
-                current_scan_jitter_seconds=max(1, adaptive_interval_secs // 10),
-                current_scan_threat_level=threat_level_name,
-                clear_last_error=True,
-            )
+                )
+                await update_observer_runtime_status(
+                    status="RUNNING",
+                    message=(
+                        f"Цикл завершён. Угроза: {threat_level_name}, "
+                        f"интервал: {adaptive_interval_secs}с."
+                    ),
+                    current_scan_interval_seconds=adaptive_interval_secs,
+                    current_scan_jitter_seconds=max(1, adaptive_interval_secs // 10),
+                    current_scan_threat_level=threat_level_name,
+                    clear_last_error=True,
+                )
 
-        # 6. Прерываемый сон с адаптивным интервалом + поллинг scan_requested
-        should_continue = await _wait_for_next_cycle(
-            shutdown_event=shutdown_event,
-            cycle_completed=cycle_completed,
-            adaptive_interval=adaptive_interval_secs if cycle_completed else None,
-            threat_level=threat_level_name if cycle_completed else None,
-        )
-        if not should_continue:
-            return
+            # 6. Прерываемый сон с адаптивным интервалом + поллинг scan_requested
+            should_continue = await _wait_for_next_cycle(
+                shutdown_event=shutdown_event,
+                cycle_completed=cycle_completed,
+                adaptive_interval=adaptive_interval_secs if cycle_completed else None,
+                threat_level=threat_level_name if cycle_completed else None,
+            )
+            if not should_continue:
+                return
+    finally:
+        # Отменяем фоновый heartbeat при выходе из цикла
+        heartbeat_task.cancel()
+        try:
+            await heartbeat_task
+        except asyncio.CancelledError:
+            pass

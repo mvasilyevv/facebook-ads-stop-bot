@@ -106,25 +106,12 @@ def test_no_telegram_for_ignored_event(monkeypatch):
     mock_send.assert_not_called()
 
 
-# Сценарий 5: при forum_topics_enabled=True и topic_ops_thread_id=42 — алерт с message_thread_id=42
-def test_send_telegram_uses_ops_thread_id():
-    """При наличии ops thread_id в TelegramSettings — send_message получает message_thread_id=42."""
+# Сценарий 5: send_message всегда вызывается без message_thread_id (forum-topic удалён)
+def test_send_telegram_uses_no_thread_id():
+    """После удаления forum-topic режима send_message всегда получает message_thread_id=None."""
     import asyncio
 
     from supervisor_crashmail import _send_telegram
-
-    # Мок TelegramSettings с forum topics включёнными
-    fake_settings_row = MagicMock()
-    fake_settings_row.forum_topics_enabled = True
-    fake_settings_row.topic_ops_thread_id = 42
-
-    # Мок сессии БД
-    fake_session = AsyncMock()
-    fake_session.__aenter__ = AsyncMock(return_value=fake_session)
-    fake_session.__aexit__ = AsyncMock(return_value=None)
-    fake_session.scalar = AsyncMock(return_value=fake_settings_row)
-
-    fake_factory = MagicMock(return_value=fake_session)
 
     captured_kwargs: dict = {}
 
@@ -144,9 +131,8 @@ def test_send_telegram_uses_ops_thread_id():
     with (
         patch("supervisor_crashmail.asyncio.run", side_effect=asyncio.run),
         patch("core.config.get_settings", return_value=fake_settings_cfg),
-        patch("core.db.get_session_factory", return_value=fake_factory),
         patch("core.telegram.client.TelegramBotClient", return_value=fake_client),
     ):
         _send_telegram("тест ops thread")
 
-    assert captured_kwargs.get("message_thread_id") == 42
+    assert captured_kwargs.get("message_thread_id") is None

@@ -317,10 +317,10 @@ async def test_stale_log_triggers_alert():
     assert any("молчит" in t.lower() or "не пишет" in t.lower() for t in texts)
 
 
-# При forum_topics_enabled=True и topic_ops_thread_id=42 — алерт уходит с message_thread_id=42
+# После удаления forum-topic режима ops_thread_id всегда None
 @pytest.mark.asyncio
-async def test_ops_thread_id_passed_to_send_message():
-    """Сценарий 7: forum_topics_enabled=True, topic_ops_thread_id=42 → send_message получает message_thread_id=42."""
+async def test_ops_thread_id_always_none():
+    """Сценарий 7: forum-topic удалён → send_message получает message_thread_id=None."""
     from apps.health_watchdog.main import _cooldown
 
     _cooldown._last_sent.clear()
@@ -329,10 +329,7 @@ async def test_ops_thread_id_passed_to_send_message():
     details.overall_healthy = False
     details.vision = ExternalServiceHealth(healthy=False, error="timeout")
 
-    # Мок TelegramSettings с forum topics включёнными
     fake_settings = MagicMock()
-    fake_settings.forum_topics_enabled = True
-    fake_settings.topic_ops_thread_id = 42
 
     tg_mock = AsyncMock()
     tg_mock.send_message = AsyncMock()
@@ -354,7 +351,6 @@ async def test_ops_thread_id_passed_to_send_message():
 
         await _run_iteration(tg_mock, "chat123")
 
-    # send_message должен быть вызван с message_thread_id=42
     assert tg_mock.send_message.called
     call_kwargs = tg_mock.send_message.call_args_list[0][1]
-    assert call_kwargs.get("message_thread_id") == 42
+    assert call_kwargs.get("message_thread_id") is None

@@ -68,9 +68,6 @@ def _make_snapshot_ns(
 def _telegram_destination(
     *,
     chat_id: str = "chat-1",
-    delivery_mode: str = "PRIVATE_CHAT",
-    warning_topic_id: int | None = None,
-    stop_topic_id: int | None = None,
 ) -> TelegramDestination:
     """Собирает тестовый destination для доставки Telegram-алертов."""
     return TelegramDestination(
@@ -80,11 +77,6 @@ def _telegram_destination(
         username="owner",
         first_name="Иван",
         is_primary=True,
-        delivery_mode=delivery_mode,
-        control_topic_id=11 if delivery_mode == "FORUM_GROUP" else None,
-        warning_topic_id=warning_topic_id,
-        stop_topic_id=stop_topic_id,
-        enable_topic_id=15 if delivery_mode == "FORUM_GROUP" else None,
     )
 
 
@@ -1170,8 +1162,6 @@ async def test_send_alerts_to_telegram_updates_same_incident_without_new_history
 
     destination = _telegram_destination(
         chat_id="chat-1",
-        delivery_mode="FORUM_GROUP",
-        stop_topic_id=14,
     )
     candidate = MagicMock()
     candidate.snapshot_id = "incident-777"
@@ -1262,7 +1252,7 @@ async def test_send_alerts_to_telegram_updates_same_incident_without_new_history
         await _send_alerts_to_telegram(fake_client, destination, [candidate])
 
     fake_client.edit_message.assert_awaited_once()
-    assert fake_client.edit_message.await_args.kwargs["message_thread_id"] == 14
+    assert fake_client.edit_message.await_args.kwargs["message_thread_id"] is None
     mock_session.add.assert_not_called()
     assert existing_stage_event.reason_title == "Нужна ручная проверка отключения"
     assert existing_stage_event.telegram_message_id == 321
@@ -1927,6 +1917,15 @@ def _patch_observer_loop_runtime(stack: ExitStack, *, scan_side_effect) -> Async
     )
     stack.enter_context(
         patch("apps.observer_worker.main.update_observer_runtime_status", new=AsyncMock())
+    )
+
+    async def _noop_heartbeat(*_args, **_kwargs):
+        # Замокать фоновый heartbeat-loop, чтобы он не крутился вечно
+        # на mocked asyncio.sleep и не блокировал event loop в тестах.
+        return None
+
+    stack.enter_context(
+        patch("apps.observer_worker.main._observer_heartbeat_loop", new=_noop_heartbeat)
     )
     stack.enter_context(
         patch(

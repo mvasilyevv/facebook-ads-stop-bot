@@ -527,7 +527,13 @@ async def main() -> None:
     loop.add_signal_handler(signal.SIGINT, shutdown_event.set)
 
     try:
-        from apps.disable_worker.main import disable_worker_loop
+        from apps.disable_worker.main import _heartbeat_loop, disable_worker_loop
+
+        # Heartbeat запускается немедленно — до любой проверки очереди.
+        # Это гарантирует, что watchdog не перезапустит воркер при пустой очереди.
+        status_ref: list[str] = ["idle"]
+        message_ref: list[str | None] = [None]
+        heartbeat_task = asyncio.create_task(_heartbeat_loop(status_ref, message_ref))
 
         while not shutdown_event.is_set():
             if not await has_claimable_disable_tasks():
@@ -595,6 +601,8 @@ async def main() -> None:
                     telegram_bot_token="",
                     telegram_chat_id="",
                     shutdown_event=shutdown_event,
+                    status_ref=status_ref,
+                    message_ref=message_ref,
                 )
             except KeyboardInterrupt:
                 logger.info("Disable worker остановлен по Ctrl+C")
@@ -613,6 +621,11 @@ async def main() -> None:
     except KeyboardInterrupt:
         logger.info("Disable worker остановлен по Ctrl+C")
     finally:
+        heartbeat_task.cancel()
+        try:
+            await heartbeat_task
+        except asyncio.CancelledError:
+            pass
         logger.info("Disable worker: ресурсы освобождены")
 
 
