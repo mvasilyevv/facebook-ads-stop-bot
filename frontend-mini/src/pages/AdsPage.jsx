@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback } from "react";
+import { useNavigate } from "react-router-dom";
 import { fetchJson } from "../api.js";
 import Loader from "../components/Loader.jsx";
 import ErrorBox from "../components/ErrorBox.jsx";
@@ -65,6 +66,7 @@ const FILTERS = [
 
 // Страница объявлений — мобильные карточки
 export default function AdsPage() {
+  const navigate = useNavigate();
   const [ads, setAds] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -139,7 +141,7 @@ export default function AdsPage() {
           ...(ad.warning_rule_codes || []).map((c) => ({ code: c, type: "warn" })),
         ];
         return (
-          <div key={ad.fb_ad_id} className={adCardClass(state)}>
+          <div key={ad.fb_ad_id} className={adCardClass(state)} onClick={() => { haptic.selection(); navigate(`/ads/${ad.fb_ad_id}`); }} style={{ cursor: "pointer" }}>
             <div className="ad-card-header">
               <div className="ad-name" style={{ flex: 1 }}>
                 {ad.ad_name || ad.fb_ad_id}

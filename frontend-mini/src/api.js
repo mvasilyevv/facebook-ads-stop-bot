@@ -25,3 +25,29 @@ export async function fetchJson(path, opts = {}) {
 
   return resp.json();
 }
+
+export async function setTelegramWebAppUrl(web_app_url) {
+  return fetchJson("/settings/telegram/web-app-url", { method: "PUT", body: JSON.stringify({ web_app_url }) });
+}
+
+export async function getAdDetail(fbAdId) {
+  return fetchJson(`/tma/ads/${encodeURIComponent(fbAdId)}`);
+}
+export async function disableAd(fbAdId, reason) {
+  return fetchJson(`/tma/ads/${encodeURIComponent(fbAdId)}/disable`, {
+    method: "POST",
+    body: JSON.stringify({ reason: reason || null }),
+  });
+}
+export async function snoozeAd(fbAdId, minutes) {
+  return fetchJson(`/tma/ads/${encodeURIComponent(fbAdId)}/snooze`, {
+    method: "POST",
+    body: JSON.stringify({ minutes }),
+  });
+}
+export async function claimAd(fbAdId) {
+  return fetchJson(`/tma/ads/${encodeURIComponent(fbAdId)}/claim`, {
+    method: "POST",
+    body: "{}",
+  });
+}

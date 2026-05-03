@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from "react";
-import { fetchJson } from "../api.js";
+import { fetchJson, setTelegramWebAppUrl } from "../api.js";
 import { getStoredRole } from "../auth.js";
 import Loader from "../components/Loader.jsx";
 import ErrorBox from "../components/ErrorBox.jsx";
@@ -100,6 +100,13 @@ function ObserverSection({ data, onSave, saving }) {
 // Секция настроек Telegram
 function TelegramSection({ data, onSave, saving }) {
   const [token, setToken] = useState("");
+  const [webAppUrl, setWebAppUrl] = useState(data?.web_app_url || "");
+
+  useEffect(() => {
+    if (data?.web_app_url !== undefined) {
+      setWebAppUrl(data.web_app_url || "");
+    }
+  }, [data?.web_app_url]);
 
   const handleSave = (e) => {
     e.preventDefault();
@@ -114,6 +121,11 @@ function TelegramSection({ data, onSave, saving }) {
       haptic.impact("heavy");
       onSave("telegram-revoke", null);
     }
+  };
+
+  const handleSaveWebAppUrl = () => {
+    haptic.impact("medium");
+    onSave("telegram-webapp", { web_app_url: webAppUrl });
   };
 
   return (
@@ -148,6 +160,20 @@ function TelegramSection({ data, onSave, saving }) {
           Отозвать токен
         </button>
       )}
+      <div className="form-group" style={{ marginTop: 16 }}>
+        <label className="form-label">Web App URL (Mini App)</label>
+        <input
+          className="form-input"
+          type="url"
+          value={webAppUrl}
+          onChange={(e) => setWebAppUrl(e.target.value)}
+          placeholder="https://app.example.com/tma/"
+        />
+        <p className="hint" style={{ marginTop: 4 }}>HTTPS-URL Mini App. Пусто = использовать значение из .env.</p>
+        <button className="btn" style={{ marginTop: 8 }} onClick={handleSaveWebAppUrl} disabled={saving}>
+          {saving ? "Сохранение..." : "Сохранить"}
+        </button>
+      </div>
     </Card>
   );
 }
@@ -263,6 +289,11 @@ export default function SettingsPage() {
         haptic.notify("success");
         setToast({ type: "ok", text: "Токен отозван" });
         setTelegramData((prev) => ({ ...prev, is_authorized: false }));
+      } else if (section === "telegram-webapp") {
+        const result = await setTelegramWebAppUrl(payload.web_app_url);
+        setTelegramData((prev) => ({ ...prev, web_app_url: result.web_app_url ?? payload.web_app_url }));
+        haptic.notify("success");
+        setToast({ type: "ok", text: "Web App URL сохранён" });
       } else if (section === "vision") {
         await fetchJson("/settings/vision", { method: "PUT", body: JSON.stringify(payload) });
         setVisionData((prev) => ({ ...prev, ...payload }));
