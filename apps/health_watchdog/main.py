@@ -210,6 +210,44 @@ async def _send_alert(
         logger.info("Watchdog: TG-алерт отправлен (ключ: %s)", key)
     except Exception as exc:
         logger.error("Watchdog: не удалось отправить TG-алерт: %s", exc)
+        return
+
+    # Авто-диагностика для эскалаций (если AI настроен)
+    if _is_escalation_key(key):
+        asyncio.create_task(
+            _send_ai_diagnosis(tg, chat_id, key, text, message_thread_id=message_thread_id)
+        )
+
+
+def _is_escalation_key(key: str) -> bool:
+    """Эскалационные ключи — требуют AI-диагностики."""
+    return (
+        key.endswith("_after_restart")
+        or key.endswith(":restart_failed")
+        or key.endswith(":log_stale_after_restart")
+    )
+
+
+async def _send_ai_diagnosis(
+    tg: TelegramBotClient,
+    chat_id: str,
+    alert_key: str,
+    original_text: str,
+    *,
+    message_thread_id: int | None = None,
+) -> None:
+    """Запросить у AI диагноз и отправить отдельным сообщением (без cooldown)."""
+    try:
+        from core.ai_assistant.diagnostics import diagnose_alert
+
+        diagnosis = await diagnose_alert(alert_key=alert_key, context=original_text)
+        if not diagnosis:
+            return
+        body = f"🤖 <b>AI-диагноз</b>\n\n{diagnosis}"
+        await tg.send_message(chat_id=chat_id, text=body, message_thread_id=message_thread_id)
+        logger.info("Watchdog: AI-диагноз отправлен для %s", alert_key)
+    except Exception as exc:
+        logger.warning("Watchdog: AI-диагноз не отправлен (%s): %s", alert_key, exc)
 
 
 # --- Проверка роста лог-файлов ---

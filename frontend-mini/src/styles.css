@@ -666,3 +666,103 @@ select.form-input {
 .page-content {
   min-height: calc(100vh - var(--tab-bar-height) - var(--safe-bottom));
 }
+
+/* === AI Chat === */
+.chat-page {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 8rem);
+  gap: 0.75rem;
+}
+.chat-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.chat-header h2 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+.chat-messages {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  border-radius: 0.75rem;
+  background: var(--tg-theme-secondary-bg-color, #1a1a1a);
+}
+.chat-empty {
+  text-align: center;
+  color: var(--tg-theme-hint-color, #888);
+  font-size: 0.9rem;
+  padding: 2rem 1rem;
+}
+.chat-msg {
+  max-width: 85%;
+  padding: 0.6rem 0.85rem;
+  border-radius: 0.7rem;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  font-size: 0.92rem;
+}
+.chat-msg-user {
+  align-self: flex-end;
+  background: var(--tg-theme-button-color, #5288c1);
+  color: var(--tg-theme-button-text-color, #fff);
+}
+.chat-msg-assistant {
+  align-self: flex-start;
+  background: var(--tg-theme-bg-color, #2a2a2a);
+  color: var(--tg-theme-text-color, #eee);
+}
+.chat-tool-calls {
+  margin-top: 0.4rem;
+  font-size: 0.78rem;
+  opacity: 0.8;
+}
+.chat-tool {
+  margin-top: 0.3rem;
+  padding: 0.4rem;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 0.4rem;
+}
+.chat-tool code {
+  font-size: 0.78rem;
+}
+.chat-tool-result {
+  margin: 0.3rem 0 0 0;
+  font-size: 0.72rem;
+  white-space: pre-wrap;
+}
+.chat-tool-error {
+  color: #f88;
+  font-size: 0.78rem;
+  margin-top: 0.3rem;
+}
+.chat-error {
+  background: rgba(255, 80, 80, 0.15);
+  color: #f88;
+  padding: 0.6rem;
+  border-radius: 0.5rem;
+  font-size: 0.85rem;
+}
+.chat-input {
+  display: flex;
+  gap: 0.5rem;
+  align-items: stretch;
+}
+.chat-input textarea {
+  flex: 1;
+  padding: 0.6rem;
+  border-radius: 0.5rem;
+  border: 1px solid var(--tg-theme-hint-color, #444);
+  background: var(--tg-theme-secondary-bg-color, #1a1a1a);
+  color: var(--tg-theme-text-color, #eee);
+  font-size: 0.95rem;
+  resize: none;
+}
+.chat-input button {
+  padding: 0 1rem;
+}

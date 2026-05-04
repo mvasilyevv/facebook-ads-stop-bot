@@ -9,6 +9,7 @@ const SettingsPage = lazy(() => import('./pages/SettingsPage.jsx'));
 const HistoryPage = lazy(() => import('./pages/HistoryPage.jsx'));
 const NamingTrackerPage = lazy(() => import('./pages/NamingTrackerPage.jsx'));
 const ScriptsPage = lazy(() => import('./pages/ScriptsPage.jsx'));
+const ChatPage = lazy(() => import('./pages/ChatPage.jsx'));
 
 /** Error Boundary — ловит ошибки рендера и показывает fallback */
 class ErrorBoundary extends Component {
@@ -96,6 +97,12 @@ const NAV_ICONS = {
       <path d="M7 13H10" />
     </svg>
   ),
+  chat: (
+    <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 5h14v9H8l-4 3V5z" />
+      <line x1="6" y1="9" x2="14" y2="9" />
+    </svg>
+  ),
 };
 
 const PAGES = [
@@ -104,6 +111,7 @@ const PAGES = [
   { id: 'offers', label: 'Офферы' },
   { id: 'history', label: 'История' },
   { id: 'scripts', label: 'Скрипты' },
+  { id: 'chat', label: 'AI-помощник' },
   { id: 'settings', label: 'Настройки' },
 ];
 
@@ -161,6 +169,8 @@ export default function App() {
         return <NamingTrackerPage />;
       case 'scripts':
         return <ScriptsPage />;
+      case 'chat':
+        return <ChatPage />;
       case 'settings':
         return <SettingsPage />;
       default:

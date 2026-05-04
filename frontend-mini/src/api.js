@@ -51,3 +51,11 @@ export async function claimAd(fbAdId) {
     body: "{}",
   });
 }
+
+// AI-чат: отправляет историю, получает ответ + tool_calls
+export async function askAI(messages, allowTools = true) {
+  return fetchJson("/chat/ask", {
+    method: "POST",
+    body: JSON.stringify({ messages, allow_tools: allowTools }),
+  });
+}

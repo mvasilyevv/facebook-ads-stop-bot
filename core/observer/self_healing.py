@@ -237,7 +237,44 @@ class SelfHealingEscalator:
                 count,
                 request_id,
             )
+            # Авто-диагностика — отдельным сообщением, не блокирует основной алерт.
+            asyncio.create_task(
+                self._send_ai_diagnosis(
+                    tg_client=tg_client,
+                    tg_chat_id=tg_chat_id,
+                    count=count,
+                    request_id=request_id,
+                    ops_thread_id=ops_thread_id,
+                )
+            )
         except Exception:
             logger.exception("Observer: не удалось отправить крит-алерт в TG")
             # Всё равно ставим временну́ю метку, чтобы не флудить при неработающем TG
             self._last_critical_alert_at = now
+
+    async def _send_ai_diagnosis(
+        self,
+        *,
+        tg_client,
+        tg_chat_id: str,
+        count: int,
+        request_id: str,
+        ops_thread_id: int | None,
+    ) -> None:
+        """Запросить у AI диагноз и отправить отдельным сообщением."""
+        try:
+            from core.ai_assistant.diagnostics import diagnose_alert
+
+            diagnosis = await diagnose_alert(
+                alert_key=f"observer:scanner_dead:{count}",
+                context=f"observer не оживает после {count} провалов; request_id={request_id}",
+                log_name="observer.log",
+            )
+            if not diagnosis:
+                return
+            body = f"🤖 <b>AI-диагноз</b>\n\n{diagnosis}"
+            await tg_client.send_message(
+                chat_id=tg_chat_id, text=body, message_thread_id=ops_thread_id
+            )
+        except Exception:
+            logger.warning("Observer: AI-диагноз не отправлен", exc_info=True)

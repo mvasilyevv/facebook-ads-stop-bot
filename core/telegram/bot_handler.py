@@ -537,6 +537,7 @@ async def _render_help(
         "<b>Команды</b>\n\n"
         "/start — главное меню\n"
         "/app — открыть приложение\n"
+        "/ask &lt;вопрос&gt; — спросить AI-помощника\n"
         "/help — эта справка\n\n"
         "Все настройки, статистика, отключение объявлений и снуз — в Mini-App. "
         "Откройте приложение из меню слева от поля ввода или командой /app."
@@ -584,6 +585,81 @@ async def _cmd_app(
         message_thread_id=message_thread_id,
         text="📱 <b>FB Stop Bot — приложение</b>",
         reply_markup=markup,
+    )
+
+
+# ==========================================
+# Команда /ask — AI-помощник
+# ==========================================
+
+
+async def _cmd_ask(
+    client: TelegramBotClient,
+    *,
+    chat_id: str,
+    message_thread_id: int | None,
+    question: str,
+    tg_user_id: str,
+) -> None:
+    """Команда /ask <вопрос> — one-shot запрос к AI с tools."""
+    if not question:
+        await _send_current_topic_message(
+            client,
+            chat_id=chat_id,
+            message_thread_id=message_thread_id,
+            text="❓ Использование: <code>/ask твой вопрос</code>",
+        )
+        return
+
+    from core.ai_assistant.chat import (
+        ChatMessage,
+        ChatRateLimitedError,
+        ChatSession,
+    )
+    from core.ai_assistant.client import AIUnavailableError
+
+    try:
+        session = ChatSession(allow_tools=True)
+        result = await session.ask(
+            [ChatMessage(role="user", content=question)],
+            client_key=f"tg:{tg_user_id}",
+        )
+    except ChatRateLimitedError as exc:
+        await _send_current_topic_message(
+            client,
+            chat_id=chat_id,
+            message_thread_id=message_thread_id,
+            text=f"⏳ {html.escape(str(exc))}",
+        )
+        return
+    except AIUnavailableError as exc:
+        await _send_current_topic_message(
+            client,
+            chat_id=chat_id,
+            message_thread_id=message_thread_id,
+            text=f"🤖 AI недоступен: {html.escape(str(exc))}",
+        )
+        return
+    except Exception:
+        logger.exception("Ошибка /ask")
+        await _send_current_topic_message(
+            client,
+            chat_id=chat_id,
+            message_thread_id=message_thread_id,
+            text="🤖 Внутренняя ошибка AI-помощника.",
+        )
+        return
+
+    answer = result.answer.strip() or "(пустой ответ)"
+    suffix = ""
+    if result.tool_calls:
+        names = ", ".join(t.name for t in result.tool_calls)
+        suffix = f"\n\n<i>Использованы инструменты: {html.escape(names)}</i>"
+    await _send_current_topic_message(
+        client,
+        chat_id=chat_id,
+        message_thread_id=message_thread_id,
+        text=f"🤖 {answer}{suffix}",
     )
 
 
@@ -983,6 +1059,17 @@ async def handle_update(client: TelegramBotClient, update: dict) -> None:
 
     if cmd == "app":
         await _cmd_app(client, chat_id=chat_id, message_thread_id=message_thread_id)
+        return
+
+    if cmd == "ask":
+        question = text_in[len("/ask") :].strip()
+        await _cmd_ask(
+            client,
+            chat_id=chat_id,
+            message_thread_id=message_thread_id,
+            question=question,
+            tg_user_id=tg_user_id,
+        )
         return
 
     handler = COMMAND_HANDLERS.get(cmd)

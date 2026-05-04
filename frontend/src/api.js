@@ -213,6 +213,13 @@ export const disableAutoEnable = (fbAdId) =>
 export const enableAutoEnable = (fbAdId) =>
   request(`/dashboard/auto-enable-disabled/${fbAdId}`, { method: 'DELETE' });
 
+/** AI-чат: отправляет историю сообщений, получает ответ + tool_calls. */
+export const askAI = (messages, allowTools = true) =>
+  request('/chat/ask', {
+    method: 'POST',
+    body: JSON.stringify({ messages, allow_tools: allowTools }),
+  });
+
 function activeTaskCount(tasks = []) {
   return tasks.filter((task) => ['PENDING', 'RUNNING', 'RETRYING', 'FAILED'].includes(task.status)).length;
 }
