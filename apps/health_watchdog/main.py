@@ -260,20 +260,39 @@ async def _run_iteration(tg: TelegramBotClient, chat_id: str) -> None:
             continue
         if not _check_log_growth(log_path):
             alert_key = f"alert:{log_name}:log_stale"
+            supervisor_name = _WORKER_TO_SUPERVISOR.get(log_name, log_name)
+            label = _WORKER_FRIENDLY_NAMES.get(log_name, log_name)
             await _send_alert(
                 tg,
                 ops_chat_id,
                 (
-                    f"📭 <b>{log_name} молчит</b>\n\n"
-                    f"Лог-файл не обновлялся {_LOG_STALE_THRESHOLD // 60} минут — "
-                    "процесс либо завис, либо ничего не делает.\n"
-                    f"Что делать: <code>supervisorctl restart {log_name}</code> "
-                    "или загляни в логи.\n"
-                    f"<i>Файл: {log_path}</i>"
+                    f"📭 <b>{label} молчит</b>\n\n"
+                    f"Лог не обновлялся {_LOG_STALE_THRESHOLD // 60} минут — "
+                    "процесс мог зависнуть. Сейчас попробую перезапустить автоматически."
                 ),
                 alert_key,
                 message_thread_id=ops_thread_id,
             )
+            # Авто-восстановление через supervisor — отдельное сообщение придёт, если не помогло
+            try:
+                await restart_via_supervisor(supervisor_name)
+                await asyncio.sleep(_RESTART_VERIFY_DELAY)
+                # Повторная проверка роста лога — если всё ещё молчит, эскалируем
+                if not _check_log_growth(log_path):
+                    await _send_alert(
+                        tg,
+                        ops_chat_id,
+                        (
+                            f"🚨 <b>{label} не оживает</b>\n\n"
+                            "Я перезапустил процесс автоматически — лог всё ещё не "
+                            "растёт. Похоже, нужен внешний разбор: проверь Vision и "
+                            "доступность браузера."
+                        ),
+                        f"alert:{log_name}:log_stale_after_restart",
+                        message_thread_id=ops_thread_id,
+                    )
+            except Exception as exc:
+                logger.error("Watchdog: ошибка авто-рестарта по log_stale (%s): %s", log_name, exc)
 
     if health.overall_healthy:
         logger.debug("Watchdog: все компоненты здоровы")
@@ -343,10 +362,8 @@ async def _run_iteration(tg: TelegramBotClient, chat_id: str) -> None:
                         ops_chat_id,
                         (
                             f"🚨 <b>Воркер «{worker_label}» не оживает</b>\n\n"
-                            "Я попробовал перезапустить его — без результата.\n\n"
-                            "Что делать: открой терминал и выполни:\n"
-                            f"<code>supervisorctl restart {supervisor_name}</code>\n"
-                            "Если не помогло — посмотри логи в .logs/."
+                            "Я попробовал перезапустить его автоматически — без результата. "
+                            "Похоже, нужен внешний разбор: проверь логи в .logs/ и Vision-профиль."
                         ),
                         escalation_key,
                         message_thread_id=ops_thread_id,
@@ -386,12 +403,9 @@ async def _run_iteration(tg: TelegramBotClient, chat_id: str) -> None:
                     ops_chat_id,
                     (
                         "🚨 <b>Браузер-агент не оживает</b>\n\n"
-                        "Я попробовал перезапустить его — без результата.\n\n"
-                        "Что делать:\n"
-                        "1. Проверь, что Vision-профиль запущен.\n"
-                        "2. Открой терминал и выполни:\n"
-                        "<code>supervisorctl restart browser_agent</code>\n"
-                        "3. Если не помогло — посмотри .logs/browser_agent.log."
+                        "Я перезапустил его автоматически — без результата. "
+                        "Скорее всего, проблема снаружи: проверь, что Vision-профиль "
+                        "запущен и подписка активна."
                     ),
                     "alert:browser_agent:restart_failed",
                     message_thread_id=ops_thread_id,
