@@ -38,7 +38,7 @@ async def create_offer(body: OfferSchema, db: AsyncSession = Depends(get_db)):
     offer = Offer(
         code=body.code,
         cpa_amount=body.cpa_amount,
-        payout_per_deposit=body.payout_per_deposit,
+        payout_per_deposit=body.payout_per_deposit if body.payout_per_deposit is not None else 0.0,
         country_name=body.country_name,
         is_active=body.is_active,
     )
@@ -62,7 +62,9 @@ async def update_offer(offer_id: str, body: OfferSchema, db: AsyncSession = Depe
         raise HTTPException(status_code=404, detail="Оффер не найден")
     offer.code = body.code
     offer.cpa_amount = body.cpa_amount
-    offer.payout_per_deposit = body.payout_per_deposit
+    # payout_per_deposit имеет NOT NULL в БД, поэтому не затираем его None из тела запроса
+    if body.payout_per_deposit is not None:
+        offer.payout_per_deposit = body.payout_per_deposit
     offer.country_name = body.country_name
     offer.is_active = body.is_active
     await db.commit()
