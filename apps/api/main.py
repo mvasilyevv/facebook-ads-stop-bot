@@ -34,6 +34,7 @@ from apps.api.routers import (
     tma,
     vision_telegram,
 )
+from apps.api.routers.campaign_recorder import router as campaign_recorder_router
 from core.config import get_settings
 from core.db import get_engine
 from core.db.base import Base
@@ -121,6 +122,8 @@ app.include_router(chat.router, dependencies=_api_key_or_tma_dep)
 app.include_router(health.router)
 # TMA роутер (аутентификация собственная, через initData)
 app.include_router(tma.router)
+# Campaign Recorder — без авторизации (внутренний инструмент)
+app.include_router(campaign_recorder_router, dependencies=_api_key_dep)
 
 
 # ==========================================

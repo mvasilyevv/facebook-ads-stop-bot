@@ -919,3 +919,40 @@ class NamingTrackerResponseSchema(BaseModel):
 
     patterns: list[NamingPatternGroupSchema] = []
     total_patterns: int = 0
+
+
+# --- Campaign Recorder ---
+
+
+class RecorderStartRequestSchema(BaseModel):
+    """Запрос на старт записи сессии."""
+
+    offer_code: str
+    cdp_url: str
+
+
+class RecorderStartResponseSchema(BaseModel):
+    """Ответ после старта записи."""
+
+    session_id: str
+    started: bool
+
+
+class RecorderStopResponseSchema(BaseModel):
+    """Ответ после остановки записи."""
+
+    session_id: str
+    event_count: int
+    file_path: str
+
+
+class RecorderAnalyzeResponseSchema(BaseModel):
+    """Отчёт анализатора по последней сессии."""
+
+    offer_code: str
+    total_events: int
+    by_type: dict[str, int]
+    stable_selectors: list[dict]
+    fragile_selectors: list[dict]
+    steps_summary: list[dict]
+    recommendations: list[str]
