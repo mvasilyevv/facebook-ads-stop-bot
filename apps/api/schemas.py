@@ -956,3 +956,28 @@ class RecorderAnalyzeResponseSchema(BaseModel):
     fragile_selectors: list[dict]
     steps_summary: list[dict]
     recommendations: list[str]
+
+
+# --- Campaign Creator ---
+
+
+class CampaignCreatorStartRequestSchema(BaseModel):
+    """Запрос на запуск автосоздания кампании."""
+
+    offer_code: str
+    creative_folder: str
+    cabinet_id: str
+    cdp_url: str = "ws://localhost:9222"
+
+
+class CampaignCreatorTaskSchema(BaseModel):
+    """Статус задачи автосоздания."""
+
+    id: str
+    status: str
+    current_step: str | None
+    checkpoint_data: dict | None
+    error_message: str | None
+    campaign_name: str | None
+    offer_code: str
+    created_at: str
