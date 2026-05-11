@@ -46,7 +46,6 @@ async def test_runner_pauses_on_checkpoint():
         creative_folder="test",
         cabinet_id="123",
         campaign_name="MV | DRC",
-        cdp_url="ws://localhost:9222",
         extra={},
     )
     runner = CampaignCreatorRunner(

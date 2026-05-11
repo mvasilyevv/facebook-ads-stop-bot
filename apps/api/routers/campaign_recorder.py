@@ -35,7 +35,7 @@ async def start_recording(body: RecorderStartRequestSchema):
     writer = SessionWriter(offer_code=body.offer_code)
 
     async def _run_session():
-        session = CdpSession(cdp_url=body.cdp_url)
+        session = CdpSession()
         try:
             async with session.connect() as page:
                 await inject_event_listener(page)

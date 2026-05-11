@@ -800,7 +800,6 @@ class CampaignCreatorTask(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     offer_code: Mapped[str] = mapped_column(String(64), nullable=False)
     creative_folder: Mapped[str] = mapped_column(String(256), nullable=False)
     cabinet_id: Mapped[str] = mapped_column(String(64), nullable=False)
-    cdp_url: Mapped[str] = mapped_column(String(256), nullable=False)
     status: Mapped[CampaignCreatorTaskStatus] = mapped_column(
         _CAMPAIGN_CREATOR_STATUS_ENUM,
         default=CampaignCreatorTaskStatus.PENDING,

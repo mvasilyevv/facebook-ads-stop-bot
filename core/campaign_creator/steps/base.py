@@ -16,7 +16,6 @@ class StepContext:
     creative_folder: str
     cabinet_id: str
     campaign_name: str
-    cdp_url: str
     extra: dict = field(default_factory=dict)
 
 

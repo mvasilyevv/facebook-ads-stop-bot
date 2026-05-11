@@ -60,7 +60,6 @@ export default function ScriptsPage() {
   const [offersError, setOffersError] = useState('');
 
   const [recorderOffer, setRecorderOffer] = useState('');
-  const [recorderCdpUrl, setRecorderCdpUrl] = useState('ws://localhost:9222');
   const [recorderSessionId, setRecorderSessionId] = useState(null);
   const [recorderStatus, setRecorderStatus] = useState('idle');
   const [recorderReport, setRecorderReport] = useState(null);
@@ -69,7 +68,6 @@ export default function ScriptsPage() {
   const [autoOffer, setAutoOffer] = useState('');
   const [autoFolder, setAutoFolder] = useState('');
   const [autoCabinetId, setAutoCabinetId] = useState('');
-  const [autoCdpUrl, setAutoCdpUrl] = useState('ws://localhost:9222');
   const [autoTask, setAutoTask] = useState(null);
   const [autoError, setAutoError] = useState('');
   const [autoFolders, setAutoFolders] = useState([]);
@@ -136,13 +134,13 @@ export default function ScriptsPage() {
     }
     setRecorderError('');
     try {
-      const res = await startRecording({ offer_code: recorderOffer, cdp_url: recorderCdpUrl });
+      const res = await startRecording({ offer_code: recorderOffer });
       setRecorderSessionId(res.session_id);
       setRecorderStatus('recording');
     } catch (err) {
       setRecorderError(err.message || 'Не удалось запустить запись');
     }
-  }, [recorderOffer, recorderCdpUrl]);
+  }, [recorderOffer]);
 
   const handleStopRecording = useCallback(async () => {
     if (!recorderSessionId) return;
@@ -172,13 +170,12 @@ export default function ScriptsPage() {
         offer_code: autoOffer,
         creative_folder: autoFolder,
         cabinet_id: autoCabinetId,
-        cdp_url: autoCdpUrl,
       });
       setAutoTask(task);
     } catch (err) {
       setAutoError(err.message || 'Не удалось запустить');
     }
-  }, [autoOffer, autoFolder, autoCabinetId, autoCdpUrl]);
+  }, [autoOffer, autoFolder, autoCabinetId]);
 
   const handleConfirm = useCallback(async () => {
     if (!autoTask?.id) return;
@@ -278,18 +275,6 @@ export default function ScriptsPage() {
                     </option>
                   ))}
                 </select>
-              </div>
-
-              <div className="flex flex-col gap-2">
-                <label htmlFor="recorder-cdp" className="text-sm font-medium text-secondary">CDP URL браузера</label>
-                <input
-                  id="recorder-cdp"
-                  className={INPUT_BASE_CLASS}
-                  value={recorderCdpUrl}
-                  onChange={(e) => setRecorderCdpUrl(e.target.value)}
-                  disabled={recorderStatus === 'recording'}
-                  placeholder="ws://localhost:9222"
-                />
               </div>
 
               {recorderError && (
@@ -408,16 +393,6 @@ export default function ScriptsPage() {
                   value={autoCabinetId}
                   onChange={(e) => setAutoCabinetId(e.target.value)}
                   placeholder="например, act_1234567890"
-                />
-              </div>
-
-              <div className="flex flex-col gap-2">
-                <label className="text-sm font-medium text-secondary" htmlFor="auto-cdp">CDP URL браузера</label>
-                <input
-                  id="auto-cdp"
-                  className={INPUT_BASE_CLASS}
-                  value={autoCdpUrl}
-                  onChange={(e) => setAutoCdpUrl(e.target.value)}
                 />
               </div>
 

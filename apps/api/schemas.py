@@ -928,7 +928,6 @@ class RecorderStartRequestSchema(BaseModel):
     """Запрос на старт записи сессии."""
 
     offer_code: str
-    cdp_url: str
 
 
 class RecorderStartResponseSchema(BaseModel):
@@ -967,7 +966,6 @@ class CampaignCreatorStartRequestSchema(BaseModel):
     offer_code: str
     creative_folder: str
     cabinet_id: str
-    cdp_url: str = "ws://localhost:9222"
 
 
 class CampaignCreatorTaskSchema(BaseModel):
