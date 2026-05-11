@@ -15,12 +15,17 @@ from apps.api.schemas import (
 )
 from core.campaign_recorder.analyzer import analyze_session_file
 from core.campaign_recorder.cdp_session import CdpConnectionError, CdpSession
-from core.campaign_recorder.event_injector import collect_events, inject_event_listener
+from core.campaign_recorder.event_injector import (
+    clear_events,
+    collect_events,
+    inject_event_listener,
+)
 from core.campaign_recorder.session_writer import SessionWriter
 
 router = APIRouter(prefix="/api/campaign-recorder", tags=["campaign-recorder"])
 logger = logging.getLogger(__name__)
 _active_sessions: dict[str, dict] = {}
+_RECORDINGS_DIR = Path("recordings")
 
 
 @router.post("/start", response_model=RecorderStartResponseSchema)
@@ -37,11 +42,17 @@ async def start_recording(body: RecorderStartRequestSchema):
                 _active_sessions[session_id]["page"] = page
                 _active_sessions[session_id]["status"] = "recording"
                 stop_event: asyncio.Event = _active_sessions[session_id]["stop_event"]
-                while not stop_event.is_set():
-                    await asyncio.sleep(2)
-                    events = await collect_events(page)
-                    if events:
-                        writer.add_events(events)
+                try:
+                    while not stop_event.is_set():
+                        await asyncio.sleep(2)
+                        events = await collect_events(page)
+                        if events:
+                            writer.add_events(events)
+                            await clear_events(page)
+                except Exception as exc:
+                    logger.error("Ошибка в цикле записи: %s", exc)
+                    _active_sessions[session_id]["status"] = "error"
+                    _active_sessions[session_id]["error"] = str(exc)
         except CdpConnectionError as exc:
             logger.error("Ошибка CDP: %s", exc)
             _active_sessions[session_id]["status"] = "error"
@@ -73,7 +84,7 @@ async def stop_recording(session_id: str):
         entry["task"].cancel()
     writer: SessionWriter = entry["writer"]
     path = writer.save()
-    event_count = len(writer._events)
+    event_count = writer.event_count
     _active_sessions.pop(session_id, None)
     return RecorderStopResponseSchema(
         session_id=session_id, event_count=event_count, file_path=str(path)
@@ -83,7 +94,7 @@ async def stop_recording(session_id: str):
 @router.get("/analyze", response_model=RecorderAnalyzeResponseSchema)
 async def analyze_last_recording(offer_code: str | None = None):
     """Проанализировать последний JSON-файл записи."""
-    recordings_dir = Path("recordings")
+    recordings_dir = _RECORDINGS_DIR
 
     def _find_files() -> list[Path]:
         if not recordings_dir.exists():

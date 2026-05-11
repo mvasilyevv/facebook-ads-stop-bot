@@ -18,6 +18,11 @@ class SessionWriter:
         self._events: list[dict] = []
         self._started_at = datetime.now(UTC)
 
+    @property
+    def event_count(self) -> int:
+        """Количество накопленных событий."""
+        return len(self._events)
+
     def add_events(self, events: list[dict]) -> None:
         """Добавляет пачку событий в буфер."""
         self._events.extend(events)

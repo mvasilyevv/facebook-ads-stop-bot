@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json  # noqa: F401
 import logging
 
 from playwright.async_api import Page
