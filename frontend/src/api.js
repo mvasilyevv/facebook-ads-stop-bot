@@ -220,6 +220,32 @@ export const askAI = (messages, allowTools = true) =>
     body: JSON.stringify({ messages, allow_tools: allowTools }),
   });
 
+// --- Campaign Recorder ---
+export const startRecording = (data) =>
+  request('/campaign-recorder/start', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+
+export const stopRecording = (sessionId) =>
+  request(`/campaign-recorder/stop/${sessionId}`, { method: 'POST' });
+
+export const analyzeLastRecording = (offerCode) =>
+  request(`/campaign-recorder/analyze${offerCode ? `?offer_code=${encodeURIComponent(offerCode)}` : ''}`);
+
+// --- Campaign Creator ---
+export const startCampaignCreator = (data) =>
+  request('/campaign-creator/start', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+
+export const confirmCampaignCheckpoint = (taskId) =>
+  request(`/campaign-creator/${taskId}/confirm`, { method: 'POST' });
+
+export const getCampaignCreatorStatus = (taskId) =>
+  request(`/campaign-creator/${taskId}/status`);
+
 function activeTaskCount(tasks = []) {
   return tasks.filter((task) => ['PENDING', 'RUNNING', 'RETRYING', 'FAILED'].includes(task.status)).length;
 }

@@ -14,6 +14,7 @@ from core.db.base import Base
 from core.models import (  # noqa: F401 — нужен для metadata
     AdSnapshot,
     AlertEvent,
+    CampaignCreatorTask,
     DisableTask,
     ObserverSettings,
     Offer,

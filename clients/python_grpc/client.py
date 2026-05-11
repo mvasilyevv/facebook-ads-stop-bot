@@ -105,6 +105,7 @@ class BrowserAgentClient:
         self._browser_stub: browser_session_pb2_grpc.BrowserSessionServiceStub | None = None
         self._scanner_stub: scanner_pb2_grpc.ScannerServiceStub | None = None
         self._session_id: str | None = None
+        self._cdp_port: int | None = None
 
     async def start(self) -> None:
         """Открыть gRPC канал."""
@@ -155,10 +156,18 @@ class BrowserAgentClient:
             timeout=_RPC_BROWSER_CONTROL_TIMEOUT_SECONDS,
         )
         self._session_id = resp.session_id
+        self._cdp_port = resp.profile.cdp_port
         logger.info(
             "Браузер запущен, session_id=%s, cdp_port=%d", resp.session_id, resp.profile.cdp_port
         )
         return resp.session_id
+
+    @property
+    def cdp_url(self) -> str | None:
+        """CDP WebSocket URL для прямого подключения Playwright."""
+        if self._cdp_port is None:
+            return None
+        return f"ws://localhost:{self._cdp_port}"
 
     async def disconnect_browser(self) -> None:
         """Отключиться от браузера (не останавливая Vision профиль)."""
