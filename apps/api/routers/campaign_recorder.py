@@ -84,18 +84,24 @@ async def stop_recording(session_id: str):
 async def analyze_last_recording(offer_code: str | None = None):
     """Проанализировать последний JSON-файл записи."""
     recordings_dir = Path("recordings")
-    if not recordings_dir.exists():
-        raise HTTPException(status_code=404, detail="Папка recordings не найдена")
-    files = sorted(
-        [
-            f
-            for f in recordings_dir.glob("*.json")
-            if (not offer_code or offer_code.upper() in f.name.upper())
-        ],
-        key=lambda f: f.stat().st_mtime,
-        reverse=True,
-    )
+
+    def _find_files() -> list[Path]:
+        if not recordings_dir.exists():
+            return []
+        return sorted(
+            [
+                f
+                for f in recordings_dir.glob("*.json")
+                if (not offer_code or offer_code.upper() in f.name.upper())
+            ],
+            key=lambda f: f.stat().st_mtime,
+            reverse=True,
+        )
+
+    files = await asyncio.to_thread(_find_files)
     if not files:
+        if not await asyncio.to_thread(recordings_dir.exists):
+            raise HTTPException(status_code=404, detail="Папка recordings не найдена")
         raise HTTPException(status_code=404, detail="Нет файлов записи")
-    report = analyze_session_file(files[0])
+    report = await asyncio.to_thread(analyze_session_file, files[0])
     return RecorderAnalyzeResponseSchema(**report)
