@@ -15,7 +15,7 @@ from core.campaign_creator.steps.create_campaign import CreateCampaignStep
 from core.campaign_creator.steps.set_geo import SetGeoStep
 from core.db import get_session_factory
 from core.domain import CampaignCreatorTaskStatus
-from core.models import CampaignCreatorTask
+from core.models import CampaignCreatorTask, Offer
 
 router = APIRouter(prefix="/api/campaign-creator", tags=["campaign-creator"])
 logger = logging.getLogger(__name__)
@@ -49,12 +49,37 @@ async def _set_task_status(
         await db.commit()
 
 
+async def _load_offer_country_name(offer_code: str) -> str:
+    """Загружает country_name оффера из БД по коду. Возвращает пустую строку если не найден."""
+    factory = get_session_factory()
+    async with factory() as db:
+        result = await db.execute(
+            select(Offer).where(Offer.code == offer_code)
+        )
+        offer = result.scalar_one_or_none()
+        if offer is None or not offer.country_name:
+            logger.warning("Оффер %s не найден или не имеет country_name", offer_code)
+            return ""
+        return offer.country_name
+
+
 async def _run_creator(task_id: str, context: StepContext) -> None:
     """Фоновая задача: выполняет шаги создания кампании через CDP."""
     from playwright.async_api import async_playwright
 
     async def set_status(status, *, step=None, data=None):
         await _set_task_status(task_id, status, step=step, data=data)
+
+    # Загружаем country_name оффера и подставляем в context.extra
+    country_name = await _load_offer_country_name(context.offer_code)
+    context = StepContext(
+        offer_code=context.offer_code,
+        creative_folder=context.creative_folder,
+        cabinet_id=context.cabinet_id,
+        campaign_name=context.campaign_name,
+        cdp_url=context.cdp_url,
+        extra={**context.extra, "offer_country_name": country_name},
+    )
 
     steps = [CreateCampaignStep(), SetGeoStep()]
     runner = CampaignCreatorRunner(steps=steps, set_status=set_status)
@@ -81,6 +106,18 @@ async def _continue_creator(task_id: str, context: StepContext, start_index: int
 
     async def set_status(status, *, step=None, data=None):
         await _set_task_status(task_id, status, step=step, data=data)
+
+    # Загружаем country_name оффера если ещё не передан
+    if not context.extra.get("offer_country_name"):
+        country_name = await _load_offer_country_name(context.offer_code)
+        context = StepContext(
+            offer_code=context.offer_code,
+            creative_folder=context.creative_folder,
+            cabinet_id=context.cabinet_id,
+            campaign_name=context.campaign_name,
+            cdp_url=context.cdp_url,
+            extra={**context.extra, "offer_country_name": country_name},
+        )
 
     steps = [CreateCampaignStep(), SetGeoStep()]
     runner = CampaignCreatorRunner(steps=steps, set_status=set_status)
@@ -152,7 +189,9 @@ async def confirm_checkpoint(task_id: str):
     factory = get_session_factory()
     async with factory() as db:
         result = await db.execute(
-            select(CampaignCreatorTask).where(CampaignCreatorTask.id == task_id)
+            select(CampaignCreatorTask)
+            .where(CampaignCreatorTask.id == task_id)
+            .with_for_update()
         )
         task = result.scalar_one_or_none()
         if task is None:
