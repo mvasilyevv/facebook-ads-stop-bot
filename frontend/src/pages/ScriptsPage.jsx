@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   buildCampaignCreatePlan,
   createCreativeUniquifyJob,
@@ -113,14 +113,18 @@ export default function ScriptsPage() {
 
   const handleStopRecording = useCallback(async () => {
     if (!recorderSessionId) return;
+    setRecorderError('');
+    setRecorderStatus('analyzing');
     try {
       await stopRecording(recorderSessionId);
-      setRecorderStatus('stopped');
       setRecorderSessionId(null);
       const report = await analyzeLastRecording(recorderOffer);
       setRecorderReport(report);
+      setRecorderStatus('stopped');
     } catch (err) {
-      setRecorderError(err.message || 'Не удалось остановить запись');
+      setRecorderError(err.message || 'Не удалось остановить или проанализировать запись');
+      setRecorderStatus('stopped');
+      setRecorderSessionId(null);
     }
   }, [recorderSessionId, recorderOffer]);
 
@@ -197,8 +201,9 @@ export default function ScriptsPage() {
           {activeModuleId === 'campaigns' && activeSubmodule.id === 'record' && (
             <div className="flex flex-col gap-4">
               <div className="flex flex-col gap-2">
-                <label className="text-sm font-medium text-secondary">Оффер</label>
+                <label htmlFor="recorder-offer" className="text-sm font-medium text-secondary">Оффер</label>
                 <select
+                  id="recorder-offer"
                   className={INPUT_BASE_CLASS}
                   value={recorderOffer}
                   onChange={(e) => setRecorderOffer(e.target.value)}
@@ -214,8 +219,9 @@ export default function ScriptsPage() {
               </div>
 
               <div className="flex flex-col gap-2">
-                <label className="text-sm font-medium text-secondary">CDP URL браузера</label>
+                <label htmlFor="recorder-cdp" className="text-sm font-medium text-secondary">CDP URL браузера</label>
                 <input
+                  id="recorder-cdp"
                   className={INPUT_BASE_CLASS}
                   value={recorderCdpUrl}
                   onChange={(e) => setRecorderCdpUrl(e.target.value)}
@@ -261,10 +267,10 @@ export default function ScriptsPage() {
                     <span className="text-secondary">Всего событий:</span>
                     <span className="font-medium">{recorderReport.total_events}</span>
                     {Object.entries(recorderReport.by_type || {}).map(([type, count]) => (
-                      <>
-                        <span key={type + '_label'} className="text-secondary capitalize">{type}:</span>
-                        <span key={type + '_val'} className="font-medium">{count}</span>
-                      </>
+                      <Fragment key={type}>
+                        <span className="text-secondary capitalize">{type}:</span>
+                        <span className="font-medium">{count}</span>
+                      </Fragment>
                     ))}
                     <span className="text-secondary">Стабильных элементов:</span>
                     <span className="font-medium text-green-600">{recorderReport.stable_selectors?.length ?? 0}</span>
