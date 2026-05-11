@@ -28,6 +28,7 @@ from core.db.base import Base
 from core.domain import (
     AlertStage,
     AlertState,
+    CampaignCreatorTaskStatus,
     DisableTaskStatus,
     EnableRecommendationLevel,
     EnableTaskStatus,
@@ -780,3 +781,32 @@ class AlertSnooze(UUIDPrimaryKeyMixin, Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utcnow
     )
+
+
+# === Задача автоматического создания кампании ===
+
+_CAMPAIGN_CREATOR_STATUS_ENUM = Enum(
+    CampaignCreatorTaskStatus,
+    name="campaign_creator_task_status_enum",
+    values_callable=lambda e: [i.value for i in e],
+)
+
+
+class CampaignCreatorTask(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    """Задача автоматического создания кампании в Ads Manager."""
+
+    __tablename__ = "campaign_creator_tasks"
+
+    offer_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    creative_folder: Mapped[str] = mapped_column(String(256), nullable=False)
+    cabinet_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    cdp_url: Mapped[str] = mapped_column(String(256), nullable=False)
+    status: Mapped[CampaignCreatorTaskStatus] = mapped_column(
+        _CAMPAIGN_CREATOR_STATUS_ENUM,
+        default=CampaignCreatorTaskStatus.PENDING,
+        nullable=False,
+    )
+    current_step: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    checkpoint_data: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    campaign_name: Mapped[str | None] = mapped_column(String(256), nullable=True)
