@@ -20,6 +20,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    UniqueConstraint,
     Uuid,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -94,21 +95,6 @@ class ObserverSettings(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     singleton_key: Mapped[str] = mapped_column(String(32), unique=True, default="default")
     interval_seconds: Mapped[int] = mapped_column(Integer, default=90)
     jitter_seconds: Mapped[int] = mapped_column(Integer, default=10)
-    warning_percent_of_stop: Mapped[Decimal] = mapped_column(Numeric(6, 2), default=Decimal("80"))
-    # Глобальный коэффициент досрочного стопа для CPA-правил. 100 = без смещения.
-    stop_percent_of_base: Mapped[Decimal] = mapped_column(Numeric(6, 2), default=Decimal("100"))
-    cpc_warning_percent_of_stop: Mapped[Decimal] = mapped_column(
-        Numeric(6, 2), default=Decimal("80")
-    )
-    cpc_stop_percent_of_base: Mapped[Decimal] = mapped_column(Numeric(6, 2), default=Decimal("100"))
-    cpl_warning_percent_of_stop: Mapped[Decimal] = mapped_column(
-        Numeric(6, 2), default=Decimal("80")
-    )
-    cpl_stop_percent_of_base: Mapped[Decimal] = mapped_column(Numeric(6, 2), default=Decimal("100"))
-    cpr_warning_percent_of_stop: Mapped[Decimal] = mapped_column(
-        Numeric(6, 2), default=Decimal("80")
-    )
-    cpr_stop_percent_of_base: Mapped[Decimal] = mapped_column(Numeric(6, 2), default=Decimal("100"))
     # Флаг включения/выключения сканирования из UI
     is_scanning_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     # Флаг немедленного скана (устанавливается из UI, сбрасывается воркером)
@@ -257,6 +243,22 @@ class OfferRuleConfig(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         Numeric(8, 2), default=Decimal("3")
     )
 
+    # Пороги warning/stop для этого оффера.
+    warning_percent_of_stop: Mapped[Decimal] = mapped_column(Numeric(6, 2), default=Decimal("80"))
+    stop_percent_of_base: Mapped[Decimal] = mapped_column(Numeric(6, 2), default=Decimal("80"))
+    cpc_warning_percent_of_stop: Mapped[Decimal] = mapped_column(
+        Numeric(6, 2), default=Decimal("80")
+    )
+    cpc_stop_percent_of_base: Mapped[Decimal] = mapped_column(Numeric(6, 2), default=Decimal("80"))
+    cpl_warning_percent_of_stop: Mapped[Decimal] = mapped_column(
+        Numeric(6, 2), default=Decimal("80")
+    )
+    cpl_stop_percent_of_base: Mapped[Decimal] = mapped_column(Numeric(6, 2), default=Decimal("80"))
+    cpr_warning_percent_of_stop: Mapped[Decimal] = mapped_column(
+        Numeric(6, 2), default=Decimal("80")
+    )
+    cpr_stop_percent_of_base: Mapped[Decimal] = mapped_column(Numeric(6, 2), default=Decimal("80"))
+
     offer: Mapped[Offer] = relationship(back_populates="rule_config")
 
 
@@ -354,7 +356,7 @@ class AdMetricHistory(UUIDPrimaryKeyMixin, Base):
 
     __tablename__ = "ad_metric_history"
     __table_args__ = (
-        Index("uq_ad_metric_history_ad_ts", "ad_id", "cycle_ts", unique=True),
+        UniqueConstraint("ad_id", "cycle_ts", name="uq_ad_metric_history_ad_ts"),
         Index("ix_ad_metric_history_cycle_ts", "cycle_ts"),
     )
 

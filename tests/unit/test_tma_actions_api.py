@@ -21,6 +21,7 @@ FAKE_DTO.__dict__ = {
     "fb_ad_id": "abc",
     "ad_name": "Test Ad",
     "campaign_name": "Test Campaign",
+    "adset_name": "Test Adset",
     "state": "NORMAL",
     "account_id": "act_123",
     "metrics": {"spend": 100.0},

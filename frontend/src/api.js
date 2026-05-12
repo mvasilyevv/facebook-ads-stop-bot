@@ -76,8 +76,6 @@ function requestWithQuery(path, params = {}) {
 export const getObserverSettings = () => request('/settings/observer');
 export const updateObserverSettings = (data) =>
   request('/settings/observer', { method: 'PUT', body: JSON.stringify(data) });
-export const getObserverThresholdRecommendations = (params = {}) =>
-  requestWithQuery('/settings/observer/threshold-recommendations', params);
 // Быстрое переключение сканирования
 export const toggleScanning = (enabled) =>
   request('/settings/observer/scanning', { method: 'PATCH', body: JSON.stringify({ enabled }) });

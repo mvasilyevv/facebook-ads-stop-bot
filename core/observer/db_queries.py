@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
 
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import selectinload
@@ -29,7 +28,6 @@ from core.models import (
     VisionSettings,
 )
 from core.observer.service import AlertCandidate
-from core.observer.thresholds import extract_observer_threshold_values
 from core.settings_queries import get_observer_settings
 from core.telegram.service import TelegramDestination, load_telegram_runtime_config
 
@@ -186,20 +184,6 @@ async def refresh_runtime_ad_states(
     return persisted_states
 
 
-async def load_observer_settings_from_db() -> dict[str, Decimal]:
-    """Загружает пороги observer из БД.
-
-    Returns:
-        Словарь порогов (warning/stop percent по шагам).
-    """
-    factory = get_session_factory()
-    async with factory() as session:
-        s = await get_observer_settings(session)
-        if s:
-            return extract_observer_threshold_values(s)
-        return extract_observer_threshold_values()
-
-
 async def check_scanning_enabled() -> bool:
     """Проверяет флаг is_scanning_enabled из ObserverSettings.
 
@@ -217,11 +201,28 @@ async def check_scanning_enabled() -> bool:
     return True
 
 
-async def check_scan_requested_flag() -> bool:
+async def peek_scan_requested_flag() -> bool:
+    """Возвращает True если флаг scan_requested сейчас выставлен.
+
+    В отличие от consume_scan_requested_flag — флаг НЕ сбрасывается. Используется
+    для пробуждения наблюдателя из адаптивного сна без потребления флага.
+    """
+    factory = get_session_factory()
+    try:
+        async with factory() as session:
+            row = await get_observer_settings(session)
+            if row is not None:
+                return bool(row.scan_requested)
+    except Exception:
+        logger.debug("Не удалось прочитать флаг scan_requested", exc_info=True)
+    return False
+
+
+async def consume_scan_requested_flag() -> bool:
     """Атомарно проверяет и сбрасывает флаг scan_requested в ObserverSettings.
 
     Использует UPDATE...WHERE...RETURNING для предотвращения race condition
-    между observer и API.
+    между observer и API. Возвращает True ровно один раз на каждое выставление флага.
     """
     factory = get_session_factory()
     try:
@@ -241,7 +242,7 @@ async def check_scan_requested_flag() -> bool:
                 logger.info("Флаг scan_requested сброшен — выполняем немедленный скан")
                 return True
     except Exception:
-        logger.debug("Не удалось проверить флаг scan_requested", exc_info=True)
+        logger.debug("Не удалось сбросить флаг scan_requested", exc_info=True)
     return False
 
 

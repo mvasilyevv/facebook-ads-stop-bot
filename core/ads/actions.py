@@ -32,6 +32,7 @@ class AdDetailDTO:
     fb_ad_id: str
     ad_name: str | None
     campaign_name: str | None
+    adset_name: str | None
     state: str  # AlertState.value
     account_id: str | None
     metrics: dict  # spend, leads, deposits, cpc, cpl, ctr, holds из снапшота
@@ -84,12 +85,14 @@ async def get_ad_detail(*, fb_ad_id: str) -> AdDetailDTO:
                 "holds": snap.registrations,
             }
 
-        # Имя кампании через связи fb_ad → adset → campaign
+        # Имя кампании и адсета через связи fb_ad → adset → campaign
         campaign_name: str | None = None
+        adset_name: str | None = None
         ad_name: str | None = fb_ad.ad_name or None
         try:
             await session.refresh(fb_ad, ["adset"])
             if fb_ad.adset:
+                adset_name = fb_ad.adset.adset_name or None
                 await session.refresh(fb_ad.adset, ["campaign"])
                 if fb_ad.adset.campaign:
                     campaign_name = fb_ad.adset.campaign.campaign_name
@@ -136,6 +139,7 @@ async def get_ad_detail(*, fb_ad_id: str) -> AdDetailDTO:
             fb_ad_id=fb_ad_id,
             ad_name=ad_name,
             campaign_name=campaign_name,
+            adset_name=adset_name,
             state=state_val,
             account_id=account_id,
             metrics=metrics,

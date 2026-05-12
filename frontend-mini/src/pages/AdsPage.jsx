@@ -143,8 +143,42 @@ export default function AdsPage() {
         return (
           <div key={ad.fb_ad_id} className={adCardClass(state)} onClick={() => { haptic.selection(); navigate(`/ads/${ad.fb_ad_id}`); }} style={{ cursor: "pointer" }}>
             <div className="ad-card-header">
-              <div className="ad-name" style={{ flex: 1 }}>
-                {ad.ad_name || ad.fb_ad_id}
+              <div style={{ flex: 1, minWidth: 0 }}>
+                {ad.campaign_name && (
+                  <div
+                    className="hint"
+                    style={{
+                      fontSize: 11,
+                      lineHeight: 1.25,
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      marginBottom: 1,
+                    }}
+                    title={ad.campaign_name}
+                  >
+                    📁 {ad.campaign_name}
+                  </div>
+                )}
+                {ad.adset_name && (
+                  <div
+                    className="hint"
+                    style={{
+                      fontSize: 11,
+                      lineHeight: 1.25,
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      marginBottom: 2,
+                    }}
+                    title={ad.adset_name}
+                  >
+                    🎯 {ad.adset_name}
+                  </div>
+                )}
+                <div className="ad-name">
+                  {ad.ad_name || ad.fb_ad_id}
+                </div>
               </div>
               <StateBadge state={state} />
             </div>

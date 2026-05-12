@@ -114,10 +114,6 @@ async def test_collect_enable_recommendation_candidates_builds_ok_candidate():
             new=AsyncMock(return_value=(last_scan, last_scan - timedelta(minutes=30))),
         ),
         patch(
-            "core.enable_recommendations.service._load_observer_rule_settings",
-            new=AsyncMock(return_value=(Decimal("80"), Decimal("100"))),
-        ),
-        patch(
             "core.enable_recommendations.service._load_offer_rule_map",
             new=AsyncMock(
                 return_value={offer_id: (SimpleNamespace(cpa_amount=Decimal("20")), object())}
@@ -171,10 +167,6 @@ async def test_collect_enable_recommendation_candidates_allows_lead_only_candida
             new=AsyncMock(return_value=(last_scan, last_scan - timedelta(minutes=30))),
         ),
         patch(
-            "core.enable_recommendations.service._load_observer_rule_settings",
-            new=AsyncMock(return_value=(Decimal("80"), Decimal("100"))),
-        ),
-        patch(
             "core.enable_recommendations.service._load_offer_rule_map",
             new=AsyncMock(
                 return_value={offer_id: (SimpleNamespace(cpa_amount=Decimal("20")), object())}
@@ -226,10 +218,6 @@ async def test_collect_enable_recommendation_candidates_allows_click_only_candid
         patch(
             "core.enable_recommendations.service.load_live_batch_bounds",
             new=AsyncMock(return_value=(last_scan, last_scan - timedelta(minutes=30))),
-        ),
-        patch(
-            "core.enable_recommendations.service._load_observer_rule_settings",
-            new=AsyncMock(return_value=(Decimal("80"), Decimal("100"))),
         ),
         patch(
             "core.enable_recommendations.service._load_offer_rule_map",
@@ -289,10 +277,6 @@ async def test_collect_enable_recommendation_candidates_allows_drc_cr2_lead_only
             new=AsyncMock(return_value=(last_scan, last_scan - timedelta(minutes=30))),
         ),
         patch(
-            "core.enable_recommendations.service._load_observer_rule_settings",
-            new=AsyncMock(return_value=(Decimal("75"), Decimal("90"))),
-        ),
-        patch(
             "core.enable_recommendations.service._load_offer_rule_map",
             new=AsyncMock(
                 return_value={offer_id: (SimpleNamespace(cpa_amount=Decimal("5")), object())}
@@ -333,10 +317,6 @@ async def test_collect_enable_recommendation_candidates_skips_not_delivering_wit
             new=AsyncMock(return_value=(last_scan, last_scan - timedelta(minutes=30))),
         ),
         patch(
-            "core.enable_recommendations.service._load_observer_rule_settings",
-            new=AsyncMock(return_value=(Decimal("80"), Decimal("100"))),
-        ),
-        patch(
             "core.enable_recommendations.service._load_offer_rule_map",
             new=AsyncMock(
                 return_value={offer_id: (SimpleNamespace(cpa_amount=Decimal("20")), object())}
@@ -372,10 +352,6 @@ async def test_collect_enable_recommendation_candidates_skips_warning_candidate(
         patch(
             "core.enable_recommendations.service.load_live_batch_bounds",
             new=AsyncMock(return_value=(last_scan, last_scan - timedelta(minutes=30))),
-        ),
-        patch(
-            "core.enable_recommendations.service._load_observer_rule_settings",
-            new=AsyncMock(return_value=(Decimal("80"), Decimal("100"))),
         ),
         patch(
             "core.enable_recommendations.service._load_offer_rule_map",
@@ -428,10 +404,6 @@ async def test_collect_enable_recommendation_candidates_skips_manual_zero_spend_
             new=AsyncMock(return_value=(last_scan, last_scan - timedelta(minutes=30))),
         ),
         patch(
-            "core.enable_recommendations.service._load_observer_rule_settings",
-            new=AsyncMock(return_value=(Decimal("80"), Decimal("100"))),
-        ),
-        patch(
             "core.enable_recommendations.service._load_offer_rule_map",
             new=AsyncMock(
                 return_value={offer_id: (SimpleNamespace(cpa_amount=Decimal("20")), object())}
@@ -477,10 +449,6 @@ async def test_collect_enable_recommendation_candidates_skips_non_actionable_row
             new=AsyncMock(return_value=(last_scan, last_scan - timedelta(minutes=30))),
         ),
         patch(
-            "core.enable_recommendations.service._load_observer_rule_settings",
-            new=AsyncMock(return_value=(Decimal("80"), Decimal("100"))),
-        ),
-        patch(
             "core.enable_recommendations.service._load_offer_rule_map",
             new=AsyncMock(
                 return_value={
@@ -516,10 +484,6 @@ async def test_collect_enable_recommendation_candidates_skips_stage_none_without
         patch(
             "core.enable_recommendations.service.load_live_batch_bounds",
             new=AsyncMock(return_value=(last_scan, last_scan - timedelta(minutes=30))),
-        ),
-        patch(
-            "core.enable_recommendations.service._load_observer_rule_settings",
-            new=AsyncMock(return_value=(Decimal("80"), Decimal("100"))),
         ),
         patch(
             "core.enable_recommendations.service._load_offer_rule_map",
@@ -698,10 +662,6 @@ async def test_promote_recommendation_to_enable_task_blocks_non_recommendable_sn
             ),
         ),
         patch(
-            "core.enable_recommendations.service._load_observer_rule_settings",
-            new=AsyncMock(return_value=(Decimal("80"), Decimal("100"))),
-        ),
-        patch(
             "core.enable_recommendations.service._evaluate_enable_recommendation",
             return_value=(None, _evaluation(None)),
         ),
@@ -755,10 +715,6 @@ async def test_promote_recommendation_to_enable_task_blocks_warning_snapshot():
             new=AsyncMock(
                 return_value={offer_id: (SimpleNamespace(cpa_amount=Decimal("20")), object())}
             ),
-        ),
-        patch(
-            "core.enable_recommendations.service._load_observer_rule_settings",
-            new=AsyncMock(return_value=(Decimal("80"), Decimal("100"))),
         ),
         patch(
             "core.enable_recommendations.service._evaluate_enable_recommendation",
@@ -879,10 +835,6 @@ async def test_promote_recommendation_to_enable_task_requeues_failed_existing_ta
             new=AsyncMock(
                 return_value={offer_id: (SimpleNamespace(cpa_amount=Decimal("20")), object())}
             ),
-        ),
-        patch(
-            "core.enable_recommendations.service._load_observer_rule_settings",
-            new=AsyncMock(return_value=(Decimal("80"), Decimal("100"))),
         ),
         patch(
             "core.enable_recommendations.service._evaluate_enable_recommendation",

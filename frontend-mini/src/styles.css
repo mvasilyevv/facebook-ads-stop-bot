@@ -20,7 +20,8 @@
 
   /* Макет */
   --tab-bar-height: 58px;
-  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  /* min 12px чтобы tab-bar не прилипал к нижнему краю iOS Mini App, где Telegram рисует свою полоску */
+  --safe-bottom: max(env(safe-area-inset-bottom, 0px), 12px);
   --radius-card: 12px;
   --radius-btn:  10px;
 }

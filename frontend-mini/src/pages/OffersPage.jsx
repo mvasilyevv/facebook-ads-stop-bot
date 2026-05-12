@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from "react";
-import { fetchJson } from "../api.js";
+import { fetchJson, getOfferRules, updateOfferRules } from "../api.js";
 import Loader from "../components/Loader.jsx";
 import ErrorBox from "../components/ErrorBox.jsx";
 import EmptyState from "../components/EmptyState.jsx";
@@ -27,22 +27,95 @@ function OfferModal({ offer, onSave, onClose }) {
     country_name: offer?.country_name ?? "",
     is_active: offer?.is_active ?? true,
   });
+  const [rules, setRules] = useState(null);
+  const [rulesLoading, setRulesLoading] = useState(!!offer);
   const [saving, setSaving] = useState(false);
+
+  // Загружаем правила оффера при открытии режима редактирования
+  useEffect(() => {
+    let alive = true;
+    if (!offer) {
+      setRules(null);
+      setRulesLoading(false);
+      return;
+    }
+    setRulesLoading(true);
+    (async () => {
+      try {
+        const data = await getOfferRules(offer.id);
+        if (alive) setRules(data || {});
+      } catch {
+        if (alive) setRules({});
+      } finally {
+        if (alive) setRulesLoading(false);
+      }
+    })();
+    return () => { alive = false; };
+  }, [offer]);
+
+  // Возвращает значение поля порога как строку
+  const overrideValue = (key) => {
+    const v = rules?.[key];
+    return v === null || v === undefined || v === "" ? "" : String(v);
+  };
+
+  const setOverride = (key, value) => {
+    setRules((prev) => ({ ...(prev || {}), [key]: value === "" ? null : value }));
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setSaving(true);
     haptic.impact("medium");
     try {
-      await onSave({
-        code: form.code.toUpperCase().trim(),
-        cpa_amount: parseFloat(form.cpa_amount) || 0,
-        country_name: form.country_name.trim() || null,
-        is_active: form.is_active,
-      });
+      await onSave(
+        {
+          code: form.code.toUpperCase().trim(),
+          cpa_amount: parseFloat(form.cpa_amount) || 0,
+          country_name: form.country_name.trim() || null,
+          is_active: form.is_active,
+        },
+        offer ? rules : null,
+      );
     } finally {
       setSaving(false);
     }
+  };
+
+  // Хелпер: рендер пары инпутов warning/stop для одного шага (cpc/cpl/cpr)
+  const ThresholdRow = ({ stepKey, label }) => {
+    const warnKey = `${stepKey}_warning_percent_of_stop`;
+    const stopKey = `${stepKey}_stop_percent_of_base`;
+    return (
+      <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+        <div style={{ flex: 1 }}>
+          <label className="form-label" style={{ fontSize: 12 }}>{label} warning %</label>
+          <input
+            className="form-input"
+            type="number"
+            min="50"
+            max="100"
+            step="1"
+            placeholder="80"
+            value={overrideValue(warnKey)}
+            onChange={(e) => setOverride(warnKey, e.target.value)}
+          />
+        </div>
+        <div style={{ flex: 1 }}>
+          <label className="form-label" style={{ fontSize: 12 }}>{label} stop %</label>
+          <input
+            className="form-input"
+            type="number"
+            min="1"
+            max="100"
+            step="1"
+            placeholder="80"
+            value={overrideValue(stopKey)}
+            onChange={(e) => setOverride(stopKey, e.target.value)}
+          />
+        </div>
+      </div>
+    );
   };
 
   return (
@@ -103,11 +176,32 @@ function OfferModal({ offer, onSave, onClose }) {
               </div>
             </label>
           </div>
+
+          {offer && (
+            <div className="form-group" style={{ marginTop: 12 }}>
+              <div className="form-label" style={{ fontWeight: 600, marginBottom: 6 }}>
+                Пороги stop / warning (этого оффера)
+              </div>
+              <p className="hint" style={{ marginBottom: 8 }}>
+                По умолчанию: warning 80%, stop 100%. Измените под нужды оффера.
+              </p>
+              {rulesLoading ? (
+                <p className="hint">Загрузка правил...</p>
+              ) : (
+                <>
+                  <ThresholdRow stepKey="cpc" label="CPC" />
+                  <ThresholdRow stepKey="cpl" label="CPL" />
+                  <ThresholdRow stepKey="cpr" label="CPR" />
+                </>
+              )}
+            </div>
+          )}
+
           <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
             <button type="button" className="btn btn-secondary" onClick={onClose}>
               Отмена
             </button>
-            <button type="submit" className="btn" disabled={saving}>
+            <button type="submit" className="btn" disabled={saving || rulesLoading}>
               {saving ? "Сохранение..." : offer ? "Сохранить" : "Создать"}
             </button>
           </div>
@@ -142,8 +236,9 @@ export default function OffersPage() {
     load();
   }, [load]);
 
-  const handleSave = async (data) => {
+  const handleSave = async (data, rulesOverride) => {
     try {
+      let savedOfferId = editOffer?.id;
       if (editOffer) {
         await fetchJson(`/offers/${editOffer.id}`, {
           method: "PUT",
@@ -152,12 +247,21 @@ export default function OffersPage() {
         haptic.notify("success");
         setToast({ type: "ok", text: "Оффер обновлён" });
       } else {
-        await fetchJson("/offers", {
+        const created = await fetchJson("/offers", {
           method: "POST",
           body: JSON.stringify(data),
         });
+        savedOfferId = created?.id;
         haptic.notify("success");
         setToast({ type: "ok", text: "Оффер создан" });
+      }
+      // Если редактируем — сохраняем правила (включая per-offer пороги)
+      if (rulesOverride && savedOfferId) {
+        try {
+          await updateOfferRules(savedOfferId, rulesOverride);
+        } catch (err) {
+          setToast({ type: "error", text: `Правила: ${err.message}` });
+        }
       }
       setShowModal(false);
       setEditOffer(null);

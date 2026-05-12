@@ -357,17 +357,21 @@ stop_supervisord() {
 ensure_port_free() {
     local port="$1"
     local name="$2"
-    local listeners=""
+    local pids=""
 
-    listeners="$(lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)"
-    if [ -z "$listeners" ]; then
-        return 0
+    pids="$(lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null || true)"
+    [ -n "$pids" ] || return 0
+
+    echo -e "${YELLOW}🔄 Порт $port занят — завершаю старые процессы перед запуском $name${NC}"
+    for pid in $pids; do
+        stop_process_by_pid "$pid" "$name (порт $port)"
+    done
+
+    # Проверяем, освободился ли порт
+    if lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
+        echo -e "${RED}❌ Порт $port всё ещё занят, не могу запустить $name${NC}"
+        return 1
     fi
-
-    echo -e "${RED}❌ Порт $port уже занят, не могу запустить $name${NC}"
-    echo -e "${YELLOW}Слушатели порта $port:${NC}"
-    printf '%s\n' "$listeners"
-    return 1
 }
 
 install_node_dependencies_if_needed() {
@@ -1091,9 +1095,9 @@ if [ "$ENABLE_TUNNEL" -eq 1 ] && { [ -n "$API_TUNNEL_URL" ] || [ -n "$WEB_TUNNEL
     echo -e "${BLUE}🚇 Туннели:${NC}"
     echo -e "  API:      ${GREEN}${API_TUNNEL_URL:-не определён}${NC}"
     echo -e "  Web UI:   ${GREEN}${WEB_TUNNEL_URL:-не определён}${NC}"
-    echo -e "  Mini-app: ${GREEN}${MINI_TUNNEL_URL:-не определён}${NC}"
+    echo -e "  Mini-app: ${GREEN}${MINI_TUNNEL_URL:-не определён}${NC}  ← для BotFather → Bot Settings → Menu Button"
     if [[ -n "${MINI_WEB_APP_URL:-}" ]]; then
-        echo -e "  Mini App URL (для алертов): ${GREEN}${MINI_WEB_APP_URL}${NC}  ← подставь в BotFather → Bot Settings → Menu Button"
+        echo -e "  Mini App URL (для inline-кнопок в алертах): ${GREEN}${MINI_WEB_APP_URL}${NC}"
     fi
 fi
 echo ""

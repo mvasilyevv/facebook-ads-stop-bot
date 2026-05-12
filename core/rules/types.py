@@ -65,7 +65,7 @@ class RuleContext:
 
     cpa_amount: Decimal
     warning_percent_of_stop: Decimal
-    stop_percent_of_base: Decimal = Decimal("100")
+    stop_percent_of_base: Decimal = Decimal("80")
     cpc_warning_percent_of_stop: Decimal | None = None
     cpc_stop_percent_of_base: Decimal | None = None
     cpl_warning_percent_of_stop: Decimal | None = None

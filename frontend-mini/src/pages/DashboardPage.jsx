@@ -13,6 +13,8 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [toggling, setToggling] = useState(false);
+  const [scanRequesting, setScanRequesting] = useState(false);
+  const [toast, setToast] = useState(null);
 
   const loadData = () => {
     setLoading(true);
@@ -55,6 +57,24 @@ export default function DashboardPage() {
       haptic.notify("error");
     } finally {
       setToggling(false);
+    }
+  };
+
+  // Принудительный скан: ставит флаг scan_requested, observer подхватит на ближайшем тике.
+  const triggerScan = async () => {
+    setScanRequesting(true);
+    haptic.impact("medium");
+    try {
+      await fetchJson("/settings/observer/scan-now", { method: "POST" });
+      haptic.notify("success");
+      setToast({ type: "ok", text: "Сканирование запущено" });
+      setTimeout(() => loadData(), 3000);
+    } catch (err) {
+      haptic.notify("error");
+      setToast({ type: "error", text: err.message });
+    } finally {
+      setScanRequesting(false);
+      setTimeout(() => setToast(null), 3000);
     }
   };
 
@@ -103,8 +123,21 @@ export default function DashboardPage() {
       </Card>
 
       <button className="btn btn-secondary" onClick={loadData} style={{ marginTop: 8 }}>
-        Обновить
+        Обновить данные
       </button>
+      <button
+        className="btn"
+        onClick={triggerScan}
+        disabled={scanRequesting}
+        style={{ marginTop: 8, marginLeft: 8 }}
+      >
+        {scanRequesting ? "Запрос..." : "⚡ Сканировать сейчас"}
+      </button>
+      {toast && (
+        <p className={toast.type === "error" ? "status-error" : "status-ok"} style={{ marginTop: 8 }}>
+          {toast.text}
+        </p>
+      )}
     </div>
   );
 }

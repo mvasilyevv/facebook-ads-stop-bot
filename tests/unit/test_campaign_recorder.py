@@ -8,33 +8,50 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-
 # --- Task 1: CdpSession ---
 
 
 @pytest.mark.asyncio
 async def test_cdp_session_returns_page():
-    """cdp_session.connect() должен вернуть CDP-страницу Vision."""
+    """cdp_session.connect() должен вернуть CDP-страницу Vision через gRPC-клиент."""
     mock_page = MagicMock()
     mock_page.url = "https://adsmanager.facebook.com"
 
-    with patch("core.campaign_recorder.cdp_session.async_playwright") as mock_pw:
-        mock_browser = MagicMock(
-            contexts=[MagicMock(pages=[mock_page])],
-            close=AsyncMock(),
-        )
+    mock_client = MagicMock(
+        start=AsyncMock(),
+        start_browser=AsyncMock(),
+        disconnect_browser=AsyncMock(),
+        close=AsyncMock(),
+        cdp_url="http://localhost:9222",
+    )
+
+    mock_browser = MagicMock(
+        contexts=[MagicMock(pages=[mock_page])],
+        close=AsyncMock(),
+    )
+
+    with (
+        patch(
+            "core.campaign_recorder.cdp_session._make_browser_client",
+            return_value=mock_client,
+        ),
+        patch("core.campaign_recorder.cdp_session.async_playwright") as mock_pw,
+    ):
         mock_pw.return_value.__aenter__ = AsyncMock(
             return_value=MagicMock(
-                chromium=MagicMock(
-                    connect_over_cdp=AsyncMock(return_value=mock_browser)
-                )
+                chromium=MagicMock(connect_over_cdp=AsyncMock(return_value=mock_browser))
             )
         )
+        mock_pw.return_value.__aexit__ = AsyncMock(return_value=None)
+
         from core.campaign_recorder.cdp_session import CdpSession
 
-        session = CdpSession(cdp_url="http://localhost:9222")
+        session = CdpSession()
         async with session.connect() as page:
             assert page is mock_page
+
+        mock_client.start.assert_awaited_once()
+        mock_client.start_browser.assert_awaited_once()
 
 
 # --- Task 2: EventInjector ---

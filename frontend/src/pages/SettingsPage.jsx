@@ -31,20 +31,10 @@ export default function SettingsPage() {
     <div className="space-y-lg animate-fade-in">
       <div>
         <h1 className="text-lg text-primary">Настройки</h1>
-        <p className="text-sm text-muted">Observer, пороги, Telegram и Vision.</p>
+        <p className="text-sm text-muted">Observer, Telegram и Vision. Пороги — в разделе «Офферы».</p>
       </div>
 
-      <ObserverSettingsSection
-        observer={settings.observer.value}
-        onChange={settings.observer.setValue}
-        onSave={settings.observer.save}
-        recommendations={settings.observer.thresholdRecommendations}
-        recommendationsLoading={settings.observer.thresholdRecommendationsLoading}
-        recommendationsError={settings.observer.thresholdRecommendationsError}
-        onReloadRecommendations={settings.observer.reloadThresholdRecommendations}
-        onApplyRecommendations={settings.observer.applyThresholdRecommendations}
-        saving={settings.saving}
-      />
+      <ObserverSettingsSection />
 
       <TelegramSettingsSection
         telegram={settings.telegram.value}

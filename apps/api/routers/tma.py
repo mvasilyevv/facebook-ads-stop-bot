@@ -113,6 +113,7 @@ class AdDetailResponse(BaseModel):
     fb_ad_id: str
     ad_name: str | None
     campaign_name: str | None
+    adset_name: str | None
     state: str
     account_id: str | None
     metrics: dict

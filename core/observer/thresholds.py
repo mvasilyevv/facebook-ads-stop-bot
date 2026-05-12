@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Нормализация и совместимость порогов observer по шагам."""
+"""Нормализация порогов observer по шагам."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from decimal import Decimal
 from typing import Any
 
 DEFAULT_WARNING_PERCENT_OF_STOP = Decimal("80")
-DEFAULT_STOP_PERCENT_OF_BASE = Decimal("100")
+DEFAULT_STOP_PERCENT_OF_BASE = Decimal("80")
 MIN_WARNING_PERCENT_OF_STOP = Decimal("50")
 MAX_WARNING_PERCENT_OF_STOP = Decimal("100")
 MIN_STOP_PERCENT_OF_BASE = Decimal("1")
@@ -47,8 +47,8 @@ def normalize_stop_percent_of_base(
     return min(MAX_STOP_PERCENT_OF_BASE, max(MIN_STOP_PERCENT_OF_BASE, numeric))
 
 
-def extract_observer_threshold_values(source: Any | None = None) -> dict[str, Decimal]:
-    """Возвращает полный набор нормализованных порогов observer."""
+def extract_threshold_values(source: Any) -> dict[str, Decimal]:
+    """Возвращает полный набор нормализованных порогов из rule_config оффера."""
     legacy_warning = normalize_warning_percent_of_stop(
         _read_value(source, "warning_percent_of_stop")
     )
@@ -67,40 +67,3 @@ def extract_observer_threshold_values(source: Any | None = None) -> dict[str, De
             default=legacy_stop,
         )
     return values
-
-
-def apply_observer_threshold_values(target: Any, values: dict[str, Decimal]) -> None:
-    """Применяет нормализованные пороги к ORM-объекту."""
-    target.warning_percent_of_stop = values["warning_percent_of_stop"]
-    target.stop_percent_of_base = values["stop_percent_of_base"]
-    for step in THRESHOLD_STEPS:
-        setattr(
-            target,
-            f"{step}_warning_percent_of_stop",
-            values[f"{step}_warning_percent_of_stop"],
-        )
-        setattr(
-            target,
-            f"{step}_stop_percent_of_base",
-            values[f"{step}_stop_percent_of_base"],
-        )
-
-
-def derive_legacy_warning_percent_of_stop(values: dict[str, Decimal]) -> Decimal:
-    """Собирает legacy warning как самый ранний шаг для безопасного fallback."""
-    return min(values[f"{step}_warning_percent_of_stop"] for step in THRESHOLD_STEPS)
-
-
-def derive_legacy_stop_percent_of_base(values: dict[str, Decimal]) -> Decimal:
-    """Собирает legacy stop как самый ранний шаг для безопасного fallback."""
-    return min(values[f"{step}_stop_percent_of_base"] for step in THRESHOLD_STEPS)
-
-
-def step_thresholds_are_uniform(values: dict[str, Decimal], *, kind: str) -> bool:
-    """Проверяет, одинаковы ли step-level значения warning или stop."""
-    if kind == "warning":
-        field_suffix = "warning_percent_of_stop"
-    else:
-        field_suffix = "stop_percent_of_base"
-    current_values = [values[f"{step}_{field_suffix}"] for step in THRESHOLD_STEPS]
-    return len(set(current_values)) == 1

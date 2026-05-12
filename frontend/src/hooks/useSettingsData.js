@@ -4,7 +4,6 @@ import {
   createInviteCode,
   deleteTelegramRecipient,
   getObserverSettings,
-  getObserverThresholdRecommendations,
   getTelegramRecipients,
   getTelegramSettings,
   getVisionProfiles,
@@ -29,13 +28,13 @@ import { useRefreshOnResume } from './useRefreshOnResume.js';
 const DEFAULT_OBSERVER = {
   is_scanning_enabled: true,
   warning_percent_of_stop: 80,
-  stop_percent_of_base: 100,
+  stop_percent_of_base: 80,
   cpc_warning_percent_of_stop: 80,
-  cpc_stop_percent_of_base: 100,
+  cpc_stop_percent_of_base: 80,
   cpl_warning_percent_of_stop: 80,
-  cpl_stop_percent_of_base: 100,
+  cpl_stop_percent_of_base: 80,
   cpr_warning_percent_of_stop: 80,
-  cpr_stop_percent_of_base: 100,
+  cpr_stop_percent_of_base: 80,
   auto_enable_recommendations: false,
 };
 
@@ -148,9 +147,6 @@ export function useSettingsData() {
   const [vision, setVision] = useState(DEFAULT_VISION);
   const [visionProfiles, setVisionProfiles] = useState([]);
   const [showVisionToken, setShowVisionToken] = useState(false);
-  const [thresholdRecommendations, setThresholdRecommendations] = useState(null);
-  const [thresholdRecommendationsLoading, setThresholdRecommendationsLoading] = useState(false);
-  const [thresholdRecommendationsError, setThresholdRecommendationsError] = useState('');
   const [profilesLoading, setProfilesLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState('');
@@ -188,30 +184,6 @@ export function useSettingsData() {
           setToast({ message: err.message || 'Не удалось загрузить настройки Observer', type: 'error' });
         }
         return null;
-      }
-    },
-    [],
-  );
-
-  const loadThresholdRecommendations = useCallback(
-    async (silent = false) => {
-      setThresholdRecommendationsLoading(true);
-      try {
-        const data = await getObserverThresholdRecommendations({ days: 14, min_samples: 10 });
-        setThresholdRecommendations(data);
-        setThresholdRecommendationsError('');
-        return data;
-      } catch (err) {
-        setThresholdRecommendationsError(err.message || 'Не удалось рассчитать рекомендации');
-        if (!silent) {
-          setToast({
-            message: err.message || 'Не удалось рассчитать рекомендации порогов',
-            type: 'error',
-          });
-        }
-        return null;
-      } finally {
-        setThresholdRecommendationsLoading(false);
       }
     },
     [],
@@ -283,7 +255,6 @@ export function useSettingsData() {
         loadObserverSettings(true),
         loadTelegramSettings(true),
         loadVisionSettings(true),
-        loadThresholdRecommendations(true),
       ]);
       if (telegramData?.is_authorized) {
         await loadRecipients(true);
@@ -297,7 +268,6 @@ export function useSettingsData() {
     loadObserverSettings,
     loadTelegramSettings,
     loadVisionSettings,
-    loadThresholdRecommendations,
     loadRecipients,
   ]);
 
@@ -340,34 +310,6 @@ export function useSettingsData() {
       setSaving('');
     }
   }, [observer, saving]);
-
-  const applyThresholdRecommendations = useCallback((stepId = null) => {
-    const steps = thresholdRecommendations?.steps || [];
-    const applicable = steps.filter(
-      (step) => step.can_apply && (!stepId || step.step_id === stepId),
-    );
-    if (applicable.length === 0) {
-      setToast({ message: 'Нет рекомендаций для применения', type: 'info' });
-      return;
-    }
-
-    setObserver((prev) => {
-      const next = { ...prev };
-      for (const step of applicable) {
-        if (step.recommended_stop_percent != null) {
-          next[`${step.step_id}_stop_percent_of_base`] = Number(step.recommended_stop_percent);
-        }
-        if (step.recommended_warning_percent != null) {
-          next[`${step.step_id}_warning_percent_of_stop`] = Number(step.recommended_warning_percent);
-        }
-      }
-      return next;
-    });
-    setToast({
-      message: 'Рекомендации перенесены в форму. Сохраните настройки Observer.',
-      type: 'info',
-    });
-  }, [thresholdRecommendations]);
 
   const connectTelegram = useCallback(async () => {
     if (!newToken.trim()) return;
@@ -638,11 +580,6 @@ export function useSettingsData() {
       value: observer,
       setValue: setObserver,
       save: saveObserver,
-      thresholdRecommendations,
-      thresholdRecommendationsLoading,
-      thresholdRecommendationsError,
-      reloadThresholdRecommendations: loadThresholdRecommendations,
-      applyThresholdRecommendations,
     },
     telegram: {
       value: telegram,

@@ -20,8 +20,6 @@ from apps.api.schemas import (
     AutoEnableToggleSchema,
     InviteCodeResponse,
     ObserverSettingsSchema,
-    ObserverThresholdRecommendationsResponseSchema,
-    ObserverThresholdRecommendationStepSchema,
     ScanningToggleSchema,
     TelegramPrimaryRecipientSchema,
     TelegramSettingsResponseSchema,
@@ -34,13 +32,6 @@ from core.models import (
     TelegramInvite,
     TelegramSettings,
     VisionSettings,
-)
-from core.observer.threshold_recommendations import collect_threshold_recommendations
-from core.observer.thresholds import (
-    apply_observer_threshold_values,
-    derive_legacy_stop_percent_of_base,
-    derive_legacy_warning_percent_of_stop,
-    extract_observer_threshold_values,
 )
 from core.settings_queries import (
     get_observer_settings as _get_settings,
@@ -116,11 +107,9 @@ async def _get_or_start_browser_agent_session_id(
 async def get_observer_settings(db: AsyncSession = Depends(get_db)):
     """Получить настройки observer."""
     row = await _get_settings(db)
-    threshold_values = extract_observer_threshold_values(row)
     if row is None:
-        return ObserverSettingsSchema(**threshold_values)
+        return ObserverSettingsSchema()
     return ObserverSettingsSchema(
-        **threshold_values,
         is_scanning_enabled=row.is_scanning_enabled,
         auto_enable_recommendations=bool(row.auto_enable_recommendations),
         pause_until=row.pause_until,
@@ -133,67 +122,14 @@ async def update_observer_settings(
 ):
     """Обновить настройки observer (upsert singleton)."""
     row = await _get_or_create_settings(db)
-    threshold_values = extract_observer_threshold_values(body)
-    if "warning_percent_of_stop" not in body.model_fields_set:
-        threshold_values["warning_percent_of_stop"] = derive_legacy_warning_percent_of_stop(
-            threshold_values
-        )
-    if "stop_percent_of_base" not in body.model_fields_set:
-        threshold_values["stop_percent_of_base"] = derive_legacy_stop_percent_of_base(
-            threshold_values
-        )
-    apply_observer_threshold_values(row, threshold_values)
     row.is_scanning_enabled = body.is_scanning_enabled
     if "auto_enable_recommendations" in body.model_fields_set:
         row.auto_enable_recommendations = body.auto_enable_recommendations
     await db.commit()
     return ObserverSettingsSchema(
-        **extract_observer_threshold_values(row),
         is_scanning_enabled=row.is_scanning_enabled,
         auto_enable_recommendations=bool(row.auto_enable_recommendations),
         pause_until=row.pause_until,
-    )
-
-
-@router.get(
-    "/settings/observer/threshold-recommendations",
-    response_model=ObserverThresholdRecommendationsResponseSchema,
-)
-async def get_observer_threshold_recommendations(
-    days: int = Query(14, ge=3, le=60),
-    min_samples: int = Query(10, ge=3, le=100),
-    db: AsyncSession = Depends(get_db),
-):
-    """Рассчитать рекомендации порогов observer по истории метрик."""
-    result = await collect_threshold_recommendations(
-        db,
-        days=days,
-        min_samples=min_samples,
-    )
-    return ObserverThresholdRecommendationsResponseSchema(
-        generated_at=result.generated_at.isoformat(),
-        since=result.since.isoformat(),
-        days=result.days,
-        min_samples=result.min_samples,
-        steps=[
-            ObserverThresholdRecommendationStepSchema(
-                step_id=step.step_id,
-                code=step.code,
-                title=step.title,
-                sample_count=step.sample_count,
-                confidence=step.confidence,
-                current_stop_percent=step.current_stop_percent,
-                current_warning_percent=step.current_warning_percent,
-                recommended_stop_percent=step.recommended_stop_percent,
-                recommended_warning_percent=step.recommended_warning_percent,
-                p50_ratio=step.p50_ratio,
-                p80_ratio=step.p80_ratio,
-                p90_ratio=step.p90_ratio,
-                reason=step.reason,
-                can_apply=step.can_apply,
-            )
-            for step in result.steps
-        ],
     )
 
 

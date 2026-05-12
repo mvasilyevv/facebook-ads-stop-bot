@@ -108,6 +108,77 @@ const DIAGNOSTIC_FIELDS = [
   { name: 'frequency_critical_threshold', label: 'Частота: критично от', type: 'number' },
 ];
 
+/* Блок порогов warning/stop для шагов CPC/CPL/CPR (per-offer) */
+const THRESHOLD_STEPS = [
+  { key: 'cpc', label: 'CPC', hint: 'Шаг 1 — клик' },
+  { key: 'cpl', label: 'CPL', hint: 'Шаг 2 — лид' },
+  { key: 'cpr', label: 'CPR', hint: 'Шаг 3 — регистрация' },
+];
+
+function ThresholdsBlock({ rules, setRules }) {
+  const setNum = (name, value) => {
+    const digits = value.replace(/\D/g, '');
+    setRules({ ...rules, [name]: digits });
+  };
+
+  return (
+    <div className="rounded-md border border-border bg-elevated/50 p-4 space-y-3">
+      <div>
+        <div className="text-sm font-medium text-primary">Пороги срабатывания (этого оффера)</div>
+        <p className="mt-0.5 text-2xs text-muted">
+          По умолчанию warning 80%, stop 80%. Меняйте под особенности конкретного оффера.
+        </p>
+      </div>
+      {THRESHOLD_STEPS.map((step) => {
+        const warnKey = `${step.key}_warning_percent_of_stop`;
+        const stopKey = `${step.key}_stop_percent_of_base`;
+        return (
+          <div key={step.key} className="space-y-2">
+            <div className="flex items-center gap-2">
+              <span className="rounded bg-accent-muted px-2 py-0.5 font-mono text-2xs font-bold text-accent">
+                {step.label}
+              </span>
+              <span className="text-2xs text-muted">{step.hint}</span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="mb-1 block text-2xs font-semibold uppercase tracking-wider text-secondary" htmlFor={`th-${warnKey}`}>
+                  warning % от стопа
+                </label>
+                <input
+                  id={`th-${warnKey}`}
+                  className={inputCls}
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  placeholder="80"
+                  value={rules[warnKey] ?? ''}
+                  onChange={(e) => setNum(warnKey, e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-2xs font-semibold uppercase tracking-wider text-secondary" htmlFor={`th-${stopKey}`}>
+                  stop % от базового
+                </label>
+                <input
+                  id={`th-${stopKey}`}
+                  className={inputCls}
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  placeholder="80"
+                  value={rules[stopKey] ?? ''}
+                  onChange={(e) => setNum(stopKey, e.target.value)}
+                />
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 const DEFAULT_RULES = {
   cpc_percent_enabled: true, cpc_percent_stop: '2',
   cpl_percent_enabled: true, cpl_percent_stop: '10',
@@ -365,6 +436,8 @@ export default function OffersPage() {
               <div className="space-y-3">
                 {RULE_DEFS.map((rule) => <RuleBlock key={rule.key} rule={rule} rules={rules} setRules={setRules} />)}
               </div>
+
+              <ThresholdsBlock rules={rules} setRules={setRules} />
 
               <h3 className="pt-2 text-sm font-semibold text-primary">Диагностика CPM / частоты</h3>
               <div className="rounded-md border border-border bg-elevated/50 p-4">

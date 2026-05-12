@@ -35,19 +35,19 @@ from core.disable_tasks import is_delivery_disabled
 from core.domain import AlertStage, AlertState
 from core.models import AdSnapshot, AlertEvent, FbAd
 from core.observer.db_queries import (
-    check_scan_requested_flag,
     check_scanning_enabled,
     check_vision_reconnect_flag,
     collect_reminder_alerts,
+    consume_scan_requested_flag,
     get_disable_queue_pause_reason,
     get_enable_queue_pause_reason,
     load_active_snooze_ad_ids,
     load_ad_states_from_db,
     load_fake_deposits,
-    load_observer_settings_from_db,
     load_offers_from_db,
     load_telegram_settings_from_db,
     load_vision_settings_for_runtime,
+    peek_scan_requested_flag,
     refresh_runtime_ad_states,
     set_observer_scanning_enabled,
 )
@@ -77,11 +77,6 @@ from core.observer.state_machine import (
     reopen_reactivated_alert_state,
     resolve_off_alert_state,
     resolve_transition,
-)
-from core.observer.thresholds import (
-    DEFAULT_STOP_PERCENT_OF_BASE,
-    DEFAULT_WARNING_PERCENT_OF_STOP,
-    extract_observer_threshold_values,
 )
 from core.scanner.models import ScannedAdRow
 from core.telegram.client import TelegramBotClient
@@ -518,7 +513,6 @@ async def _run_scan_cycle(
     rows: list[ScannedAdRow],
     ad_states: dict,
     fake_deposits_map: dict[str, int],
-    observer_thresholds: dict,
 ) -> tuple[list[AlertCandidate], list[AlertCandidate], list[dict]]:
     """Один полный цикл оценки правил: resolve офферов, evaluate, FSM-переходы.
 
@@ -619,9 +613,6 @@ async def _run_scan_cycle(
             row=eval_row,
             offer_cpa=(Decimal(offer_data["offer"].cpa_amount) if offer_data else None),
             rule_config=(offer_data.get("rule_config") if offer_data else None),
-            warning_percent_of_stop=observer_thresholds["warning_percent_of_stop"],
-            stop_percent_of_base=observer_thresholds["stop_percent_of_base"],
-            observer_thresholds=observer_thresholds,
         )
 
         # FSM-переход
@@ -985,6 +976,8 @@ async def _wait_for_next_cycle(
 
     Интервал определяется адаптивно по уровню угрозы.
     Возвращает True если нужно продолжить (не получен сигнал остановки).
+    Флаг scan_requested здесь НЕ сбрасывается — мы только просыпаемся при его
+    появлении, а потребляет его уже основной цикл через consume_scan_requested_flag.
     """
     interval = (
         adaptive_interval if adaptive_interval and adaptive_interval > 0 else _FALLBACK_INTERVAL
@@ -1012,10 +1005,11 @@ async def _wait_for_next_cycle(
             logger.info("Observer: получен сигнал остановки, завершаем цикл")
             return False
 
-        # Проверяем флаг немедленного скана
-        if await check_scan_requested_flag():
+        # Просыпаемся при запросе немедленного скана. Флаг НЕ потребляем —
+        # это сделает основной цикл, чтобы решение принималось в одном месте.
+        if await peek_scan_requested_flag():
             logger.info("Observer: прерываем сон — запрошен немедленный скан")
-            break
+            return True
 
         chunk = min(poll_interval, remaining)
         if cycle_completed:
@@ -1079,28 +1073,10 @@ async def observer_loop(
     offers: dict,
     telegram_bot_token: str,
     telegram_chat_id: str,
-    warning_percent_of_stop: Decimal = DEFAULT_WARNING_PERCENT_OF_STOP,
-    stop_percent_of_base: Decimal = DEFAULT_STOP_PERCENT_OF_BASE,
     on_snapshot_update=None,
     shutdown_event: asyncio.Event | None = None,
 ) -> None:
-    """Основной бесконечный цикл observer.
-
-    Интервал между сканами определяется адаптивно по уровню угрозы:
-    IMMEDIATE (0с) → CRITICAL (10с) → ELEVATED (13с) → ACTIVE (15с)
-    → CALM (30с) → IDLE (55с).
-    После обнаружения STOP — немедленный ре-скан.
-
-    Args:
-        grpc_client: BrowserAgentClient для связи с Node.js browser-agent
-        offers: dict[offer_code -> {offer, rule_config}]
-        telegram_bot_token: токен TG-бота
-        telegram_chat_id: ID чата для уведомлений
-        warning_percent_of_stop: legacy warning для обратной совместимости
-        stop_percent_of_base: legacy stop для обратной совместимости
-        on_snapshot_update: callback для сохранения snapshot в БД
-        shutdown_event: asyncio.Event для graceful shutdown по Ctrl+C
-    """
+    """Основной бесконечный цикл observer."""
     # Загружаем FSM-состояния из БД при старте (задача 2.3)
     try:
         ad_states = await load_ad_states_from_db()
@@ -1129,29 +1105,6 @@ async def observer_loop(
             "есть" if tg_token else "пусто",
             len(tg_destinations),
         )
-
-    observer_thresholds = extract_observer_threshold_values(
-        {
-            "warning_percent_of_stop": warning_percent_of_stop,
-            "stop_percent_of_base": stop_percent_of_base,
-        }
-    )
-
-    # Загружаем пороги observer из БД при старте
-    try:
-        observer_thresholds = await load_observer_settings_from_db()
-        logger.info(
-            "Пороги observer из БД: "
-            "warning(CPC/CPL/CPR)=%.0f/%.0f/%.0f%%, stop(CPC/CPL/CPR)=%.0f/%.0f/%.0f%%",
-            observer_thresholds["cpc_warning_percent_of_stop"],
-            observer_thresholds["cpl_warning_percent_of_stop"],
-            observer_thresholds["cpr_warning_percent_of_stop"],
-            observer_thresholds["cpc_stop_percent_of_base"],
-            observer_thresholds["cpl_stop_percent_of_base"],
-            observer_thresholds["cpr_stop_percent_of_base"],
-        )
-    except Exception:
-        logger.warning("Не удалось загрузить пороги observer из БД", exc_info=True)
 
     await update_observer_runtime_status(
         status="RUNNING",
@@ -1240,12 +1193,6 @@ async def observer_loop(
                     except Exception:
                         logger.debug("Не удалось обновить TG настройки", exc_info=True)
 
-                    # Перечитываем пороги из БД
-                    try:
-                        observer_thresholds = await load_observer_settings_from_db()
-                    except Exception:
-                        logger.debug("Не удалось обновить пороги observer из БД", exc_info=True)
-
                     # Проверяем флаг переподключения к браузеру
                     try:
                         if await check_vision_reconnect_flag():
@@ -1287,8 +1234,15 @@ async def observer_loop(
                 except Exception:
                     logger.debug("Не удалось проверить авто-resume", exc_info=True)
 
+                # Принудительный скан: атомарно потребляем флаг ДО гарда тоггла,
+                # чтобы кнопка "Сканировать сейчас" работала и в режиме PAUSED.
+                # Флаг одноразовый — после этого скана observer вернётся в paused.
+                forced_scan = await consume_scan_requested_flag()
+                if forced_scan:
+                    logger.info("Observer: запрошен немедленный скан — пробиваем паузу мониторинга")
+
                 # Проверяем флаг is_scanning_enabled перед каждым сканом
-                if not await check_scanning_enabled():
+                if not forced_scan and not await check_scanning_enabled():
                     consecutive_empty_scan_cycles = 0
                     status_ref[0] = "PAUSED"
                     message_ref[0] = "Сканирование выключено в настройках."
@@ -1514,7 +1468,6 @@ async def observer_loop(
                                     rows=event.new_rows,
                                     ad_states=progress_ad_states,
                                     fake_deposits_map=fake_deposits_map,
-                                    observer_thresholds=observer_thresholds,
                                 )
                                 if not progress_stop_alerts:
                                     continue
@@ -1622,7 +1575,6 @@ async def observer_loop(
                         rows=rows,
                         ad_states=ad_states,
                         fake_deposits_map=fake_deposits_map,
-                        observer_thresholds=observer_thresholds,
                     )
 
                     # 4. Сохранение снэпшотов, disable tasks, отправка алертов в TG

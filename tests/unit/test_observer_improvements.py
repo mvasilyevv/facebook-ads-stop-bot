@@ -1833,23 +1833,6 @@ def _patch_observer_loop_runtime(stack: ExitStack, *, scan_side_effect) -> Async
     )
     stack.enter_context(
         patch(
-            "apps.observer_worker.main.load_observer_settings_from_db",
-            new=AsyncMock(
-                return_value={
-                    "warning_percent_of_stop": Decimal("80"),
-                    "stop_percent_of_base": Decimal("100"),
-                    "cpc_warning_percent_of_stop": Decimal("80"),
-                    "cpc_stop_percent_of_base": Decimal("100"),
-                    "cpl_warning_percent_of_stop": Decimal("80"),
-                    "cpl_stop_percent_of_base": Decimal("100"),
-                    "cpr_warning_percent_of_stop": Decimal("80"),
-                    "cpr_stop_percent_of_base": Decimal("100"),
-                }
-            ),
-        )
-    )
-    stack.enter_context(
-        patch(
             "apps.observer_worker.main.reconcile_disable_tasks_in_db",
             new=AsyncMock(),
         )
@@ -1929,7 +1912,13 @@ def _patch_observer_loop_runtime(stack: ExitStack, *, scan_side_effect) -> Async
     )
     stack.enter_context(
         patch(
-            "apps.observer_worker.main.check_scan_requested_flag",
+            "apps.observer_worker.main.peek_scan_requested_flag",
+            new=AsyncMock(return_value=False),
+        )
+    )
+    stack.enter_context(
+        patch(
+            "apps.observer_worker.main.consume_scan_requested_flag",
             new=AsyncMock(return_value=False),
         )
     )
@@ -2450,3 +2439,75 @@ def test_resolve_offer_code_case_insensitive():
 
     offers = {"DRC_CR2": object()}
     assert resolve_offer_code("drc_cr2_v3", "campaign", offers) == "DRC_CR2"
+
+
+def test_resolve_offer_code_ad_name_priority_over_campaign():
+    """Имя объявления приоритетнее имени кампании при конфликте кодов."""
+    from core.observer.service import resolve_offer_code
+
+    offers = {"KE_CR2": object(), "KEN_CR2": object()}
+    # В объявлении KE_CR2, в кампании KEN_CR2 — должен победить код из объявления,
+    # даже если код в кампании длиннее.
+    assert resolve_offer_code("KE_CR2_CR001", "KEN_CR2 | main", offers) == "KE_CR2"
+
+
+def test_resolve_offer_code_falls_back_to_campaign_when_ad_has_no_code():
+    """Если в имени объявления кода нет — берём код из имени кампании."""
+    from core.observer.service import resolve_offer_code
+
+    offers = {"KEN_CR2": object()}
+    assert resolve_offer_code("creative_001", "KEN_CR2 | mv", offers) == "KEN_CR2"
+
+
+def test_resolve_offer_code_distinguishes_similar_prefixes():
+    """Похожие префиксы (KE/KEN/CDR) различаются по word-boundary."""
+    from core.observer.service import resolve_offer_code
+
+    offers = {"CDR_CR2": object(), "KE_CR2": object(), "KEN_CR2": object()}
+    assert resolve_offer_code("CDR_CR2_CR001", "campaign", offers) == "CDR_CR2"
+    assert resolve_offer_code("KE_CR2_CR001", "campaign", offers) == "KE_CR2"
+    assert resolve_offer_code("KEN_CR2_CR001", "campaign", offers) == "KEN_CR2"
+
+
+# --- Per-offer пороги warning/stop ---
+
+
+def test_build_rule_context_uses_per_offer_thresholds():
+    """build_rule_context читает пороги напрямую из rule_config оффера."""
+    from decimal import Decimal
+    from types import SimpleNamespace
+
+    from core.observer.service import build_rule_context
+
+    rule_config = SimpleNamespace(
+        cpc_percent_enabled=True,
+        cpc_percent_stop=Decimal("2"),
+        cpl_percent_enabled=True,
+        cpl_percent_stop=Decimal("10"),
+        cpr_percent_enabled=True,
+        cpr_percent_stop=Decimal("20"),
+        regs_no_dep_enabled=True,
+        regs_no_dep_stop_count=5,
+        spend_no_dep_enabled=True,
+        spend_no_dep_from_percent=Decimal("50"),
+        spend_no_dep_to_percent=Decimal("70"),
+        spend_with_dep_enabled=True,
+        spend_with_dep_from_percent=Decimal("70"),
+        spend_with_dep_to_percent=Decimal("90"),
+        warning_percent_of_stop=Decimal("80"),
+        stop_percent_of_base=Decimal("100"),
+        cpc_warning_percent_of_stop=Decimal("60"),
+        cpc_stop_percent_of_base=Decimal("100"),
+        cpl_warning_percent_of_stop=Decimal("80"),
+        cpl_stop_percent_of_base=Decimal("50"),
+        cpr_warning_percent_of_stop=Decimal("80"),
+        cpr_stop_percent_of_base=Decimal("100"),
+    )
+    ctx = build_rule_context(
+        cpa_amount=Decimal("5"),
+        rule_config=rule_config,
+    )
+    assert ctx.cpc_warning_percent_of_stop == Decimal("60")
+    assert ctx.cpl_stop_percent_of_base == Decimal("50")
+    assert ctx.cpr_warning_percent_of_stop == Decimal("80")
+    assert ctx.cpr_stop_percent_of_base == Decimal("100")

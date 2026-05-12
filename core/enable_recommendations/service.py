@@ -31,7 +31,6 @@ from core.models import (
     OfferRuleConfig,
 )
 from core.observer.service import build_metrics_json, build_rule_context
-from core.observer.thresholds import extract_observer_threshold_values
 from core.rules.evaluator import determine_enable_recommendation_level, evaluate_stop_rules
 from core.rules.types import RuleEvaluation
 from core.scanner.models import ScannedAdRow
@@ -285,12 +284,6 @@ def _normalize_recommendation_reason(
     return reason_title, reason_text
 
 
-async def _load_observer_rule_settings(session: AsyncSession) -> dict[str, Decimal]:
-    """Загружает observer-настройки для evaluator."""
-    row = await get_observer_settings(session)
-    return extract_observer_threshold_values(row)
-
-
 async def _load_offer_rule_map(
     session: AsyncSession,
     *,
@@ -316,15 +309,11 @@ def _evaluate_enable_recommendation(
     row: ScannedAdRow,
     offer_cpa: Decimal,
     rule_config: object,
-    observer_thresholds: dict[str, Decimal],
 ) -> tuple[EnableRecommendationLevel | None, RuleEvaluation]:
     """Вычисляет безопасный уровень рекомендации и исходную rule-оценку."""
     ctx = build_rule_context(
         cpa_amount=offer_cpa,
-        warning_percent_of_stop=observer_thresholds["warning_percent_of_stop"],
-        stop_percent_of_base=observer_thresholds["stop_percent_of_base"],
         rule_config=rule_config,
-        observer_thresholds=observer_thresholds,
     )
     rule_evaluation = evaluate_stop_rules(row, ctx)
     recommendation_level = determine_enable_recommendation_level(
@@ -351,7 +340,6 @@ async def collect_enable_recommendation_candidates_for_snapshots(
     if not eligible_snapshots:
         return []
 
-    observer_thresholds = await _load_observer_rule_settings(session)
     offer_ids = [
         oid for snapshot in eligible_snapshots if (oid := _snapshot_offer_id(snapshot)) is not None
     ]
@@ -372,7 +360,6 @@ async def collect_enable_recommendation_candidates_for_snapshots(
             row=row,
             offer_cpa=Decimal(offer.cpa_amount),
             rule_config=rule_config,
-            observer_thresholds=observer_thresholds,
         )
         if recommendation_level is None:
             continue
@@ -654,13 +641,11 @@ async def promote_recommendation_to_enable_task(
             detail="⚠️ Рекомендация устарела: для оффера нет актуальных правил.",
         )
 
-    observer_thresholds = await _load_observer_rule_settings(session)
     offer, rule_config = offer_bundle
     recommendation_level, evaluation = _evaluate_enable_recommendation(
         row=_build_scanned_row_from_snapshot(snapshot),
         offer_cpa=Decimal(offer.cpa_amount),
         rule_config=rule_config,
-        observer_thresholds=observer_thresholds,
     )
     if evaluation.stage == AlertStage.STOP:
         return EnableTaskPromotionResult(

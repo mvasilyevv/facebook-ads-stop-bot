@@ -9,11 +9,7 @@ from decimal import Decimal
 from typing import Any
 
 from core.domain import AlertStage
-from core.observer.thresholds import (
-    DEFAULT_STOP_PERCENT_OF_BASE,
-    DEFAULT_WARNING_PERCENT_OF_STOP,
-    extract_observer_threshold_values,
-)
+from core.observer.thresholds import extract_threshold_values
 from core.rules.evaluator import evaluate_stop_rules
 from core.rules.types import RuleContext, RuleEvaluation
 from core.scanner.models import ScannedAdRow
@@ -62,19 +58,10 @@ def _make_json_safe(value: Any) -> Any:
 def build_rule_context(
     *,
     cpa_amount: Decimal,
-    warning_percent_of_stop: Decimal = DEFAULT_WARNING_PERCENT_OF_STOP,
-    stop_percent_of_base: Decimal = DEFAULT_STOP_PERCENT_OF_BASE,
     rule_config: object,
-    observer_thresholds: dict[str, Decimal] | None = None,
 ) -> RuleContext:
     """Строит RuleContext из конфигурации правил оффера."""
-    threshold_values = extract_observer_threshold_values(
-        observer_thresholds
-        or {
-            "warning_percent_of_stop": warning_percent_of_stop,
-            "stop_percent_of_base": stop_percent_of_base,
-        }
-    )
+    threshold_values = extract_threshold_values(rule_config)
     return RuleContext(
         cpa_amount=Decimal(cpa_amount),
         warning_percent_of_stop=threshold_values["warning_percent_of_stop"],
@@ -107,19 +94,13 @@ def evaluate_row(
     row: ScannedAdRow,
     offer_cpa: Decimal | None,
     rule_config: object | None,
-    warning_percent_of_stop: Decimal = DEFAULT_WARNING_PERCENT_OF_STOP,
-    stop_percent_of_base: Decimal = DEFAULT_STOP_PERCENT_OF_BASE,
-    observer_thresholds: dict[str, Decimal] | None = None,
 ) -> RuleEvaluation:
     """Оценивает одну строку. Без оффера — пропуск."""
     if offer_cpa is None or rule_config is None:
         return RuleEvaluation(stage=None, warning_hits=(), stop_hits=())
     ctx = build_rule_context(
         cpa_amount=offer_cpa,
-        warning_percent_of_stop=warning_percent_of_stop,
-        stop_percent_of_base=stop_percent_of_base,
         rule_config=rule_config,
-        observer_thresholds=observer_thresholds,
     )
     return evaluate_stop_rules(row, ctx)
 
@@ -138,24 +119,36 @@ def resolve_offer_code(
 ) -> str | None:
     """Сопоставляет объявление с оффером по вхождению кода в название.
 
-    Оффер содержит часть названия объявления/кампании.
-    Например, оффер "DRC_CR2" → объявление "DRC_CR2_CR002".
+    Имя объявления и имя кампании рассматриваются по отдельности:
+    сначала ищем код только в имени объявления (приоритетный источник),
+    и лишь если там ничего не нашлось — пробуем имя кампании.
 
     Используется word-boundary matching: код не должен быть частью другого
     слова. Символы [a-z0-9_] считаются «внутри слова».
+    Например, для оффера "KE_CR2" в строке "KEN_CR2_CR001" совпадения нет,
+    а в "KE_CR2_CR001" — есть.
+    При нескольких совпадениях побеждает самый длинный код.
     """
-    text_lower = f"{campaign_name} {ad_name}".casefold()
-    best_match: str | None = None
-    best_len = 0
 
-    for code in offers:
-        code_lower = code.casefold()
-        pattern = r"(?<![a-z0-9])" + re.escape(code_lower) + r"(?![a-z0-9])"
-        if re.search(pattern, text_lower) and len(code) > best_len:
-            best_match = code
-            best_len = len(code)
+    def _best_match_in(text: str) -> str | None:
+        text_lower = text.casefold()
+        best_code: str | None = None
+        best_len = 0
+        for code in offers:
+            code_lower = code.casefold()
+            pattern = r"(?<![a-z0-9])" + re.escape(code_lower) + r"(?![a-z0-9])"
+            if re.search(pattern, text_lower) and len(code) > best_len:
+                best_code = code
+                best_len = len(code)
+        return best_code
 
-    return best_match
+    # Имя объявления — приоритетный источник истины
+    match_in_ad = _best_match_in(ad_name)
+    if match_in_ad is not None:
+        return match_in_ad
+
+    # Fallback на имя кампании, если в объявлении кода нет
+    return _best_match_in(campaign_name)
 
 
 def build_metrics_json(

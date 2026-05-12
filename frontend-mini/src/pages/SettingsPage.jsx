@@ -34,7 +34,6 @@ function Toggle({ checked, onChange, disabled }) {
 // Секция настроек observer
 function ObserverSection({ data, onSave, saving }) {
   const [form, setForm] = useState({
-    scan_interval_seconds: data?.scan_interval_seconds ?? 60,
     is_scanning_enabled: data?.is_scanning_enabled ?? true,
     auto_enable_recommendations: data?.auto_enable_recommendations ?? false,
   });
@@ -42,7 +41,6 @@ function ObserverSection({ data, onSave, saving }) {
   useEffect(() => {
     if (data) {
       setForm({
-        scan_interval_seconds: data.scan_interval_seconds ?? 60,
         is_scanning_enabled: data.is_scanning_enabled ?? true,
         auto_enable_recommendations: data.auto_enable_recommendations ?? false,
       });
@@ -52,7 +50,7 @@ function ObserverSection({ data, onSave, saving }) {
   const handleSubmit = (e) => {
     e.preventDefault();
     haptic.impact("medium");
-    onSave("observer", { ...form, scan_interval_seconds: Number(form.scan_interval_seconds) });
+    onSave("observer", { ...form });
   };
 
   return (
@@ -78,17 +76,9 @@ function ObserverSection({ data, onSave, saving }) {
             onChange={(v) => setForm({ ...form, auto_enable_recommendations: v })}
           />
         </div>
-        <div className="form-group" style={{ marginTop: 12 }}>
-          <label className="form-label">Интервал скана (сек)</label>
-          <input
-            className="form-input"
-            type="number"
-            min="10"
-            max="600"
-            value={form.scan_interval_seconds}
-            onChange={(e) => setForm({ ...form, scan_interval_seconds: e.target.value })}
-          />
-        </div>
+        <p className="hint" style={{ marginTop: 10, marginBottom: 10 }}>
+          Интервал скана управляется автоматически (адаптивный). Ручная настройка — в веб-версии.
+        </p>
         <button type="submit" className="btn" disabled={saving}>
           {saving ? "Сохранение..." : "Сохранить"}
         </button>
@@ -275,7 +265,16 @@ export default function SettingsPage() {
     setSaving(true);
     try {
       if (section === "observer") {
-        await fetchJson("/settings/observer", { method: "PUT", body: JSON.stringify(payload) });
+        // Сохраняем сканирование через отдельный PATCH (не затирает auto_enable_recommendations).
+        await fetchJson("/settings/observer/scanning", {
+          method: "PATCH",
+          body: JSON.stringify({ enabled: payload.is_scanning_enabled }),
+        });
+        // Авто-включение — отдельный PATCH, как в web-UI, чтобы не было рассинхрона.
+        await fetchJson("/settings/observer/auto-enable", {
+          method: "PATCH",
+          body: JSON.stringify({ enabled: payload.auto_enable_recommendations }),
+        });
         setObserverData((prev) => ({ ...prev, ...payload }));
         haptic.notify("success");
         setToast({ type: "ok", text: "Observer сохранён" });
@@ -323,16 +322,6 @@ export default function SettingsPage() {
       <ObserverSection data={observerData} onSave={handleSave} saving={saving} />
       <TelegramSection data={telegramData} onSave={handleSave} saving={saving} />
       <VisionSection data={visionData} onSave={handleSave} saving={saving} />
-
-      {/* Ссылка на полный интерфейс */}
-      <Card title="Полные настройки">
-        <p className="hint" style={{ marginBottom: 8 }}>
-          Детальные настройки правил, браузера и нейминга — в веб-версии.
-        </p>
-        <a href="/settings" className="btn btn-secondary" style={{ textAlign: "center" }}>
-          Открыть в браузере
-        </a>
-      </Card>
 
       {toast && (
         <Toast message={toast.text} type={toast.type} onClose={() => setToast(null)} />

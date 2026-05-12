@@ -85,6 +85,7 @@ async def main() -> None:
         load_ad_states_from_db,
         load_offers_from_db,
         load_vision_settings_for_runtime,
+        peek_scan_requested_flag,
     )
 
     # Graceful shutdown
@@ -102,7 +103,14 @@ async def main() -> None:
 
     try:
         while not shutdown_event.is_set():
-            if not await check_scanning_enabled():
+            scanning_enabled = await check_scanning_enabled()
+            forced_scan_pending = False
+            if not scanning_enabled:
+                # Кнопка «Сканировать сейчас» должна работать даже при выключенном
+                # тогле: проверяем флаг scan_requested без потребления (consume идёт
+                # уже внутри observer_loop). Если флаг есть — идём подключаться.
+                forced_scan_pending = await peek_scan_requested_flag()
+            if not scanning_enabled and not forced_scan_pending:
                 await update_observer_runtime_status(
                     status="PAUSED",
                     message="Сканирование выключено в настройках.",

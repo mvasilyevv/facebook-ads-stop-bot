@@ -152,14 +152,17 @@ export default function AdDetailPage() {
   if (error) return <ErrorBox message={error} onRetry={loadDetail} />;
   if (!data) return null;
 
-  const { ad_name, campaign_name, state, snooze_until, metrics = {}, recent_alerts = [], can_open_in_ads_manager } = data;
+  const { ad_name, campaign_name, adset_name, state, snooze_until, metrics = {}, recent_alerts = [], can_open_in_ads_manager } = data;
 
   return (
     <div style={{ paddingBottom: 24 }}>
       {/* Шапка */}
       <div style={{ marginBottom: 12 }}>
         {campaign_name && (
-          <div className="hint" style={{ marginBottom: 2 }}>{campaign_name}</div>
+          <div className="hint" style={{ marginBottom: 2, fontSize: 12 }}>📁 {campaign_name}</div>
+        )}
+        {adset_name && (
+          <div className="hint" style={{ marginBottom: 4, fontSize: 12 }}>🎯 {adset_name}</div>
         )}
         <div style={{ fontWeight: 700, fontSize: 16, lineHeight: 1.3, marginBottom: 4 }}>
           {ad_name || fbAdId}

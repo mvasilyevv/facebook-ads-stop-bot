@@ -79,7 +79,9 @@ async def require_api_key_or_tma(
 
     # Попытка аутентификации через TMA Bearer-токен
     auth_header = request.headers.get("authorization", "")
-    if auth_header.startswith("Bearer "):
+    bearer_present = auth_header.startswith("Bearer ")
+    bearer_error: str | None = None
+    if bearer_present:
         bearer_token = auth_header[len("Bearer ") :]
         try:
             payload = verify_session_token(
@@ -87,8 +89,8 @@ async def require_api_key_or_tma(
             )
             request.state.tma_user_id = payload.get("telegram_user_id", "")
             return
-        except InvalidInitDataError:
-            pass
+        except InvalidInitDataError as exc:
+            bearer_error = str(exc)
 
     # Если ключ не задан — разрешаем localhost (как verify_api_key)
     if not settings.api_key:
@@ -100,6 +102,20 @@ async def require_api_key_or_tma(
             detail="API-ключ не задан — доступ разрешён только с localhost",
         )
 
+    # Диагностика: видим в логе конкретную причину 401.
+    logger.warning(
+        "Auth 401 на %s %s: x_api_key=%s, bearer=%s, причина=%s",
+        request.method,
+        request.url.path,
+        "есть" if x_api_key else "нет",
+        "есть" if bearer_present else "нет",
+        bearer_error or ("ключ не совпал" if x_api_key else "ни ключа, ни токена"),
+    )
+    if bearer_present:
+        raise HTTPException(
+            status_code=401,
+            detail=f"Сессия TMA недействительна: {bearer_error or 'неизвестная ошибка'}",
+        )
     raise HTTPException(status_code=401, detail="Неверный API-ключ или токен")
 
 

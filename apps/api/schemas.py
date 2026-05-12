@@ -40,48 +40,11 @@ def _offer_code_lookup_key(value: str | None) -> str:
 
 
 class ObserverSettingsSchema(BaseModel):
-    """Настройки observer (пороги из UI, интервал адаптивный)."""
+    """Настройки observer."""
 
-    warning_percent_of_stop: Decimal = Field(default=Decimal("80"), ge=0, le=100)
-    stop_percent_of_base: Decimal = Field(default=Decimal("100"), gt=0)
-    cpc_warning_percent_of_stop: Decimal | None = Field(default=None, ge=0, le=100)
-    cpc_stop_percent_of_base: Decimal | None = Field(default=None, gt=0)
-    cpl_warning_percent_of_stop: Decimal | None = Field(default=None, ge=0, le=100)
-    cpl_stop_percent_of_base: Decimal | None = Field(default=None, gt=0)
-    cpr_warning_percent_of_stop: Decimal | None = Field(default=None, ge=0, le=100)
-    cpr_stop_percent_of_base: Decimal | None = Field(default=None, gt=0)
     is_scanning_enabled: bool = True
     auto_enable_recommendations: bool = False
     pause_until: datetime | None = None
-
-
-class ObserverThresholdRecommendationStepSchema(BaseModel):
-    """Рекомендация по одному observer-порогу."""
-
-    step_id: str
-    code: str
-    title: str
-    sample_count: int
-    confidence: str
-    current_stop_percent: Decimal
-    current_warning_percent: Decimal
-    recommended_stop_percent: Decimal | None = None
-    recommended_warning_percent: Decimal | None = None
-    p50_ratio: Decimal | None = None
-    p80_ratio: Decimal | None = None
-    p90_ratio: Decimal | None = None
-    reason: str
-    can_apply: bool
-
-
-class ObserverThresholdRecommendationsResponseSchema(BaseModel):
-    """Ответ с рекомендациями observer-порогов по истории."""
-
-    generated_at: str
-    since: str
-    days: int
-    min_samples: int
-    steps: list[ObserverThresholdRecommendationStepSchema]
 
 
 class ScanningToggleSchema(BaseModel):
@@ -375,6 +338,16 @@ class OfferRuleConfigSchema(BaseModel):
     spend_with_dep_to_percent: Decimal = Decimal("90")
     frequency_elevated_threshold: Decimal = Decimal("2")
     frequency_critical_threshold: Decimal = Decimal("3")
+
+    # Пороги warning/stop для этого оффера.
+    warning_percent_of_stop: Decimal = Decimal("80")
+    stop_percent_of_base: Decimal = Decimal("80")
+    cpc_warning_percent_of_stop: Decimal = Decimal("80")
+    cpc_stop_percent_of_base: Decimal = Decimal("80")
+    cpl_warning_percent_of_stop: Decimal = Decimal("80")
+    cpl_stop_percent_of_base: Decimal = Decimal("80")
+    cpr_warning_percent_of_stop: Decimal = Decimal("80")
+    cpr_stop_percent_of_base: Decimal = Decimal("80")
 
 
 # ==========================================

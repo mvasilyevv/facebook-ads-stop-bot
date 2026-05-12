@@ -39,7 +39,7 @@ export function clampStepValue(value, min, max, step) {
 
 export function getObserverStepThresholds(observer, stepConfig) {
   const stopPercent = clampStepValue(
-    observer?.[stepConfig.stopKey] ?? observer?.stop_percent_of_base ?? 100,
+    observer?.[stepConfig.stopKey] ?? observer?.stop_percent_of_base ?? 80,
     5,
     100,
     5,

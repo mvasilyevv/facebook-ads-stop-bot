@@ -110,6 +110,14 @@ async def get_offer_rules(offer_id: str, db: AsyncSession = Depends(get_db)):
         spend_with_dep_to_percent=rc.spend_with_dep_to_percent,
         frequency_elevated_threshold=rc.frequency_elevated_threshold,
         frequency_critical_threshold=rc.frequency_critical_threshold,
+        warning_percent_of_stop=rc.warning_percent_of_stop,
+        stop_percent_of_base=rc.stop_percent_of_base,
+        cpc_warning_percent_of_stop=rc.cpc_warning_percent_of_stop,
+        cpc_stop_percent_of_base=rc.cpc_stop_percent_of_base,
+        cpl_warning_percent_of_stop=rc.cpl_warning_percent_of_stop,
+        cpl_stop_percent_of_base=rc.cpl_stop_percent_of_base,
+        cpr_warning_percent_of_stop=rc.cpr_warning_percent_of_stop,
+        cpr_stop_percent_of_base=rc.cpr_stop_percent_of_base,
     )
 
 

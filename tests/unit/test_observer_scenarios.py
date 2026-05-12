@@ -253,8 +253,6 @@ def _run_scenario(
     target_fb_ad_id: str,
     offer_code: str = "DRC_CR2",
     cpa_amount: str | Decimal = "10.00",
-    warning_percent_of_stop: Decimal = Decimal("80"),
-    stop_percent_of_base: Decimal = Decimal("100"),
     current_state: AlertState | None = AlertState.NORMAL,
     current_token: str | None = None,
     rule_overrides: dict[str, object] | None = None,
@@ -284,8 +282,6 @@ def _run_scenario(
         row=row,
         offer_cpa=Decimal(cpa_amount),
         rule_config=rule_config,
-        warning_percent_of_stop=warning_percent_of_stop,
-        stop_percent_of_base=stop_percent_of_base,
     )
     diagnostics = build_ad_quality_diagnostics(
         cpm_value=row.cpm,
@@ -459,7 +455,7 @@ def test_scenario_click_guardrail_creates_stop_alert_and_snapshot():
     assert result.snapshot["current_stage"] == AlertStage.STOP
     assert result.alert_candidate is not None
     assert result.alert_candidate.metrics_json["rule_summaries"] == [
-        "Расход 1.20 превысил стоп CPL 1.00 без лидов"
+        "Расход 1.20 превысил стоп CPL 0.80 (базовый 1.00) без лидов"
     ]
     assert "частота 3.20 при критической границе 3.00" in (result.alert_candidate.reason_text or "")
     assert "<b>STOP</b>" in (result.alert_message_text or "")
