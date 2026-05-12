@@ -27,6 +27,11 @@ async def list_offers(db: AsyncSession = Depends(get_db)):
             payout_per_deposit=o.payout_per_deposit,
             country_name=o.country_name,
             is_active=o.is_active,
+            landing_url=o.landing_url,
+            cabinet_id=o.cabinet_id,
+            pixel_id=o.pixel_id,
+            geo_code=o.geo_code,
+            geo_slot_name=o.geo_slot_name,
         )
         for o in offers
     ]
@@ -41,6 +46,11 @@ async def create_offer(body: OfferSchema, db: AsyncSession = Depends(get_db)):
         payout_per_deposit=body.payout_per_deposit if body.payout_per_deposit is not None else 0.0,
         country_name=body.country_name,
         is_active=body.is_active,
+        landing_url=body.landing_url,
+        cabinet_id=body.cabinet_id,
+        pixel_id=body.pixel_id,
+        geo_code=body.geo_code,
+        geo_slot_name=body.geo_slot_name,
     )
     db.add(offer)
     await db.flush()
@@ -67,6 +77,11 @@ async def update_offer(offer_id: str, body: OfferSchema, db: AsyncSession = Depe
         offer.payout_per_deposit = body.payout_per_deposit
     offer.country_name = body.country_name
     offer.is_active = body.is_active
+    offer.landing_url = body.landing_url
+    offer.cabinet_id = body.cabinet_id
+    offer.pixel_id = body.pixel_id
+    offer.geo_code = body.geo_code
+    offer.geo_slot_name = body.geo_slot_name
     await db.commit()
     body.id = offer_id
     return body
