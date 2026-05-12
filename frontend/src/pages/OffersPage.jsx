@@ -43,6 +43,11 @@ function OfferModal({ offer, onSave, onClose }) {
     cpa: offer?.cpa_amount || offer?.cpa || '',
     country_name: offer?.country_name || '',
     is_active: offer?.is_active ?? true,
+    landing_url: offer?.landing_url || '',
+    cabinet_id: offer?.cabinet_id || '',
+    pixel_id: offer?.pixel_id || '',
+    geo_code: offer?.geo_code || '',
+    geo_slot_name: offer?.geo_slot_name || '',
   });
   const [saving, setSaving] = useState(false);
 
@@ -55,6 +60,11 @@ function OfferModal({ offer, onSave, onClose }) {
         cpa_amount: parseFloat(form.cpa) || 0,
         country_name: form.country_name.trim() || null,
         is_active: form.is_active,
+        landing_url: form.landing_url.trim() || null,
+        cabinet_id: form.cabinet_id.trim() || null,
+        pixel_id: form.pixel_id.trim() || null,
+        geo_code: form.geo_code.trim().toUpperCase().slice(0, 2) || null,
+        geo_slot_name: form.geo_slot_name.trim() || null,
       });
     } finally {
       setSaving(false);
@@ -63,7 +73,7 @@ function OfferModal({ offer, onSave, onClose }) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 animate-fade-in" onClick={onClose} role="dialog" aria-modal="true">
-      <div className="panel w-full max-w-md p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
+      <div className="panel w-full max-w-md p-6 space-y-4 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <h2 className="text-lg text-primary">{offer ? 'Редактировать оффер' : 'Новый оффер'}</h2>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
@@ -80,6 +90,35 @@ function OfferModal({ offer, onSave, onClose }) {
             <label className="mb-1 block text-2xs font-semibold uppercase tracking-wider text-secondary" htmlFor="offer-cpa">CPA ($)</label>
             <input id="offer-cpa" className={inputCls} type="number" step="0.01" min="0" placeholder="5.00" value={form.cpa} onChange={(e) => setForm({ ...form, cpa: e.target.value })} required />
           </div>
+
+          <div className="pt-2 border-t border-border">
+            <div className="text-2xs font-semibold uppercase tracking-wider text-muted mb-3">Параметры автосоздания кампании</div>
+            <div className="space-y-3">
+              <div>
+                <label className="mb-1 block text-2xs font-semibold uppercase tracking-wider text-secondary" htmlFor="offer-landing">Landing URL</label>
+                <input id="offer-landing" className={inputCls} type="text" placeholder="https://landing.example.com" value={form.landing_url} onChange={(e) => setForm({ ...form, landing_url: e.target.value })} />
+              </div>
+              <div>
+                <label className="mb-1 block text-2xs font-semibold uppercase tracking-wider text-secondary" htmlFor="offer-cabinet">Cabinet ID</label>
+                <input id="offer-cabinet" className={inputCls} type="text" placeholder="act_123456789" value={form.cabinet_id} onChange={(e) => setForm({ ...form, cabinet_id: e.target.value })} />
+              </div>
+              <div>
+                <label className="mb-1 block text-2xs font-semibold uppercase tracking-wider text-secondary" htmlFor="offer-pixel">Pixel ID</label>
+                <input id="offer-pixel" className={inputCls} type="text" placeholder="123456789012345" value={form.pixel_id} onChange={(e) => setForm({ ...form, pixel_id: e.target.value })} />
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                <div>
+                  <label className="mb-1 block text-2xs font-semibold uppercase tracking-wider text-secondary" htmlFor="offer-geo-code">GEO код</label>
+                  <input id="offer-geo-code" className={inputCls} type="text" placeholder="KE" maxLength={2} value={form.geo_code} onChange={(e) => setForm({ ...form, geo_code: e.target.value.toUpperCase() })} />
+                </div>
+                <div className="col-span-2">
+                  <label className="mb-1 block text-2xs font-semibold uppercase tracking-wider text-secondary" htmlFor="offer-geo-slot">GEO слот (как в FB)</label>
+                  <input id="offer-geo-slot" className={inputCls} type="text" placeholder="Кения" value={form.geo_slot_name} onChange={(e) => setForm({ ...form, geo_slot_name: e.target.value })} />
+                </div>
+              </div>
+            </div>
+          </div>
+
           <div className="flex items-center gap-3">
             <Toggle on={form.is_active} onChange={(v) => setForm({ ...form, is_active: v })} label="Оффер активен" />
             <span className="text-sm text-secondary">{form.is_active ? 'Активен' : 'Выключен'}</span>
