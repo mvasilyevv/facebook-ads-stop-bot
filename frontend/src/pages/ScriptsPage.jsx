@@ -10,7 +10,6 @@ import {
   getRecordingStatus,
   analyzeLastRecording,
   startCampaignCreator,
-  confirmCampaignCheckpoint,
   getCampaignCreatorStatus,
 } from '../api';
 
@@ -68,8 +67,14 @@ export default function ScriptsPage() {
   const [recorderLive, setRecorderLive] = useState({ status: 'idle', event_count: 0, recent_events: [] });
 
   const [autoOffer, setAutoOffer] = useState('');
-  const [autoFolder, setAutoFolder] = useState('');
-  const [autoCabinetId, setAutoCabinetId] = useState('');
+  const [autoIterNum, setAutoIterNum] = useState(1);
+  const [autoDailyBudget, setAutoDailyBudget] = useState(10);
+  const [autoBudgetLevel, setAutoBudgetLevel] = useState('CBO');
+  const [autoAttribution, setAutoAttribution] = useState(7);
+  const [autoCreoFolder, setAutoCreoFolder] = useState('');
+  const [autoAdsets, setAutoAdsets] = useState([
+    { name: '', headline: '', primary_text: '', creo_subfolder: '' },
+  ]);
   const [autoTask, setAutoTask] = useState(null);
   const [autoError, setAutoError] = useState('');
   const [autoFolders, setAutoFolders] = useState([]);
@@ -184,31 +189,56 @@ export default function ScriptsPage() {
 
   const handleStartAutoCreate = useCallback(async () => {
     setAutoError('');
-    if (!autoOffer || !autoFolder || !autoCabinetId) {
-      setAutoError('Заполните оффер, папку и ID кабинета');
+    if (!autoOffer) {
+      setAutoError('Выберите оффер');
       return;
+    }
+    if (!autoCreoFolder) {
+      setAutoError('Укажите папку с креативами');
+      return;
+    }
+    if (!autoAdsets.length) {
+      setAutoError('Добавьте хотя бы один адсет');
+      return;
+    }
+    for (const [i, a] of autoAdsets.entries()) {
+      if (!a.name || !a.headline || !a.primary_text || !a.creo_subfolder) {
+        setAutoError(`Адсет #${i + 1}: заполните все поля`);
+        return;
+      }
     }
     try {
       const task = await startCampaignCreator({
         offer_code: autoOffer,
-        creative_folder: autoFolder,
-        cabinet_id: autoCabinetId,
+        iter_num: Number(autoIterNum) || 1,
+        daily_budget: Number(autoDailyBudget),
+        budget_level: autoBudgetLevel,
+        attribution_days: Number(autoAttribution),
+        creo_folder: autoCreoFolder,
+        adsets: autoAdsets,
       });
       setAutoTask(task);
     } catch (err) {
       setAutoError(err.message || 'Не удалось запустить');
     }
-  }, [autoOffer, autoFolder, autoCabinetId]);
+  }, [autoOffer, autoIterNum, autoDailyBudget, autoBudgetLevel, autoAttribution, autoCreoFolder, autoAdsets]);
 
-  const handleConfirm = useCallback(async () => {
-    if (!autoTask?.id) return;
-    try {
-      const updated = await confirmCampaignCheckpoint(autoTask.id);
-      setAutoTask(updated);
-    } catch (err) {
-      setAutoError(err.message || 'Не удалось подтвердить');
-    }
-  }, [autoTask?.id]);
+  const updateAdset = (idx, field, value) => {
+    setAutoAdsets((current) =>
+      current.map((a, i) => (i === idx ? { ...a, [field]: value } : a)),
+    );
+  };
+
+  const addAdset = () => {
+    setAutoAdsets((current) => [
+      ...current,
+      { name: '', headline: '', primary_text: '', creo_subfolder: '' },
+    ]);
+  };
+
+  const removeAdset = (idx) => {
+    setAutoAdsets((current) => current.filter((_, i) => i !== idx));
+  };
 
   return (
     <div className="space-y-md animate-fade-in">
@@ -372,59 +402,184 @@ export default function ScriptsPage() {
           )}
           {activeModuleId === 'campaigns' && activeSubmodule?.id === 'autocreate' && (
             <div className="flex flex-col gap-4">
-              <div className="flex flex-col gap-2">
-                <label className="text-sm font-medium text-secondary" htmlFor="auto-offer">Оффер</label>
-                <select
-                  id="auto-offer"
-                  className={INPUT_BASE_CLASS}
-                  value={autoOffer}
-                  onChange={(e) => setAutoOffer(e.target.value)}
-                  disabled={!!autoTask && autoTask.status !== 'SUCCEEDED' && autoTask.status !== 'FAILED'}
-                >
-                  <option value="">— выберите оффер —</option>
-                  {sortedOffers.map((o) => (
-                    <option key={o.code} value={o.code}>{o.code}</option>
-                  ))}
-                </select>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="flex flex-col gap-2">
+                  <label className="text-sm font-medium text-secondary" htmlFor="auto-offer">Оффер</label>
+                  <select
+                    id="auto-offer"
+                    className={INPUT_BASE_CLASS}
+                    value={autoOffer}
+                    onChange={(e) => setAutoOffer(e.target.value)}
+                    disabled={!!autoTask && !['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(autoTask.status)}
+                  >
+                    <option value="">— выберите оффер —</option>
+                    {sortedOffers.map((o) => (
+                      <option key={o.code} value={o.code}>{o.code}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="flex flex-col gap-2">
+                  <label className="text-sm font-medium text-secondary" htmlFor="auto-iter">Номер итерации</label>
+                  <input
+                    id="auto-iter"
+                    type="number"
+                    min="1"
+                    className={INPUT_BASE_CLASS}
+                    value={autoIterNum}
+                    onChange={(e) => setAutoIterNum(e.target.value)}
+                  />
+                </div>
+
+                <div className="flex flex-col gap-2">
+                  <label className="text-sm font-medium text-secondary" htmlFor="auto-budget">Дневной бюджет, USD</label>
+                  <input
+                    id="auto-budget"
+                    type="number"
+                    min="1"
+                    step="0.01"
+                    className={INPUT_BASE_CLASS}
+                    value={autoDailyBudget}
+                    onChange={(e) => setAutoDailyBudget(e.target.value)}
+                  />
+                </div>
+
+                <div className="flex flex-col gap-2">
+                  <span className="text-sm font-medium text-secondary">Уровень бюджета</span>
+                  <div className="flex gap-4 pt-1">
+                    <label className="flex items-center gap-2 text-sm">
+                      <input
+                        type="radio"
+                        name="budget-level"
+                        value="CBO"
+                        checked={autoBudgetLevel === 'CBO'}
+                        onChange={(e) => setAutoBudgetLevel(e.target.value)}
+                      />
+                      CBO (на кампанию)
+                    </label>
+                    <label className="flex items-center gap-2 text-sm">
+                      <input
+                        type="radio"
+                        name="budget-level"
+                        value="ABO"
+                        checked={autoBudgetLevel === 'ABO'}
+                        onChange={(e) => setAutoBudgetLevel(e.target.value)}
+                      />
+                      ABO (на адсет)
+                    </label>
+                  </div>
+                </div>
+
+                <div className="flex flex-col gap-2">
+                  <span className="text-sm font-medium text-secondary">Окно атрибуции</span>
+                  <div className="flex gap-4 pt-1">
+                    <label className="flex items-center gap-2 text-sm">
+                      <input
+                        type="radio"
+                        name="attribution"
+                        value="1"
+                        checked={Number(autoAttribution) === 1}
+                        onChange={() => setAutoAttribution(1)}
+                      />
+                      1 день по клику
+                    </label>
+                    <label className="flex items-center gap-2 text-sm">
+                      <input
+                        type="radio"
+                        name="attribution"
+                        value="7"
+                        checked={Number(autoAttribution) === 7}
+                        onChange={() => setAutoAttribution(7)}
+                      />
+                      7 дней по клику
+                    </label>
+                  </div>
+                </div>
+
+                <div className="flex flex-col gap-2 sm:col-span-2">
+                  <label className="text-sm font-medium text-secondary" htmlFor="auto-creo">Папка с креативами (путь)</label>
+                  <div className="flex gap-2">
+                    <input
+                      id="auto-creo"
+                      className={INPUT_BASE_CLASS}
+                      value={autoCreoFolder}
+                      onChange={(e) => setAutoCreoFolder(e.target.value)}
+                      placeholder="/Users/markvasilev/Documents/FB_Agent_Creo/<папка>"
+                      list="auto-creo-folders"
+                    />
+                  </div>
+                  <datalist id="auto-creo-folders">
+                    {autoFolders.map((f) => (
+                      <option key={f.name} value={f.path || f.name}>{f.name}</option>
+                    ))}
+                  </datalist>
+                </div>
               </div>
 
-              <div className="flex flex-col gap-2">
-                <label className="text-sm font-medium text-secondary" htmlFor="auto-folder">Папка креативов</label>
-                <select
-                  id="auto-folder"
-                  className={INPUT_BASE_CLASS}
-                  value={autoFolder}
-                  onChange={(e) => setAutoFolder(e.target.value)}
-                >
-                  <option value="">— выберите папку —</option>
-                  {autoFolders.map((f) => (
-                    <option key={f.name} value={f.name}>
-                      {f.name} ({f.adset_count} адсетов × {f.creative_count})
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="flex flex-col gap-2">
-                <label className="text-sm font-medium text-secondary" htmlFor="auto-cabinet">ID кабинета</label>
-                <input
-                  id="auto-cabinet"
-                  className={INPUT_BASE_CLASS}
-                  value={autoCabinetId}
-                  onChange={(e) => setAutoCabinetId(e.target.value)}
-                  placeholder="например, act_1234567890"
-                />
+              <div className="flex flex-col gap-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-sm font-medium text-primary">Адсеты ({autoAdsets.length})</h4>
+                  <button
+                    type="button"
+                    className="rounded-md border border-border px-3 py-1 text-xs hover:bg-elevated"
+                    onClick={addAdset}
+                  >
+                    + Добавить адсет
+                  </button>
+                </div>
+                {autoAdsets.map((adset, idx) => (
+                  <div key={idx} className="rounded-md border border-border bg-surface p-3">
+                    <div className="mb-2 flex items-center justify-between">
+                      <span className="text-xs font-medium text-secondary">Адсет #{idx + 1}</span>
+                      {autoAdsets.length > 1 && (
+                        <button
+                          type="button"
+                          className="text-xs text-red-500 hover:underline"
+                          onClick={() => removeAdset(idx)}
+                        >
+                          удалить
+                        </button>
+                      )}
+                    </div>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      <input
+                        className={INPUT_BASE_CLASS}
+                        placeholder="Имя адсета"
+                        value={adset.name}
+                        onChange={(e) => updateAdset(idx, 'name', e.target.value)}
+                      />
+                      <input
+                        className={INPUT_BASE_CLASS}
+                        placeholder="Подпапка с креативами"
+                        value={adset.creo_subfolder}
+                        onChange={(e) => updateAdset(idx, 'creo_subfolder', e.target.value)}
+                      />
+                      <input
+                        className={`${INPUT_BASE_CLASS} sm:col-span-2`}
+                        placeholder="Заголовок"
+                        value={adset.headline}
+                        onChange={(e) => updateAdset(idx, 'headline', e.target.value)}
+                      />
+                      <textarea
+                        className={`${INPUT_BASE_CLASS} sm:col-span-2`}
+                        rows="3"
+                        placeholder="Основной текст"
+                        value={adset.primary_text}
+                        onChange={(e) => updateAdset(idx, 'primary_text', e.target.value)}
+                      />
+                    </div>
+                  </div>
+                ))}
               </div>
 
               {autoError && <p className="text-sm text-red-500">{autoError}</p>}
 
-              {!autoTask && (
+              {(!autoTask || ['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(autoTask.status)) && (
                 <button
                   className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
                   onClick={handleStartAutoCreate}
-                  disabled={!autoOffer || !autoFolder || !autoCabinetId}
                 >
-                  Создать автоматически
+                  Запустить
                 </button>
               )}
 
@@ -437,7 +592,6 @@ export default function ScriptsPage() {
                     <span className={`text-xs px-2 py-1 rounded font-medium ${
                       autoTask.status === 'SUCCEEDED' ? 'bg-green-100 text-green-800' :
                       autoTask.status === 'FAILED' ? 'bg-red-100 text-red-800' :
-                      autoTask.status === 'WAITING_CONFIRMATION' ? 'bg-yellow-100 text-yellow-800' :
                       'bg-blue-100 text-blue-800'
                     }`}>
                       {autoTask.status}
@@ -454,26 +608,6 @@ export default function ScriptsPage() {
                   {autoTask.error_message && (
                     <div className="rounded bg-red-50 border border-red-200 p-2 text-xs text-red-800">
                       {autoTask.error_message}
-                    </div>
-                  )}
-
-                  {autoTask.status === 'WAITING_CONFIRMATION' && (
-                    <div className="flex flex-col gap-2 rounded-md border border-yellow-400 bg-yellow-50 p-3">
-                      <p className="text-sm text-yellow-900">
-                        ⏸ Шаг <strong>{autoTask.current_step}</strong> завершён.
-                        Проверь результат в браузере и подтверди продолжение.
-                      </p>
-                      {autoTask.checkpoint_data && (
-                        <pre className="text-xs bg-white border border-yellow-200 rounded p-2 overflow-auto max-h-32">
-                          {JSON.stringify(autoTask.checkpoint_data, null, 2)}
-                        </pre>
-                      )}
-                      <button
-                        className="rounded-md bg-yellow-600 px-4 py-2 text-sm font-medium text-white self-start"
-                        onClick={handleConfirm}
-                      >
-                        ✓ Подтвердить и продолжить
-                      </button>
                     </div>
                   )}
 
