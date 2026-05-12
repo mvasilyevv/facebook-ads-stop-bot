@@ -6,6 +6,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -960,12 +961,25 @@ class RecorderAnalyzeResponseSchema(BaseModel):
 # --- Campaign Creator ---
 
 
+class AdsetInSchema(BaseModel):
+    """Спецификация одного адсета в запросе автосоздания."""
+
+    name: str
+    headline: str
+    primary_text: str
+    creo_subfolder: str
+
+
 class CampaignCreatorStartRequestSchema(BaseModel):
     """Запрос на запуск автосоздания кампании."""
 
     offer_code: str
-    creative_folder: str
-    cabinet_id: str
+    iter_num: int = 1
+    daily_budget: float
+    budget_level: Literal["CBO", "ABO"] = "CBO"
+    attribution_days: Literal[1, 7] = 7
+    creo_folder: str
+    adsets: list[AdsetInSchema]
 
 
 class CampaignCreatorTaskSchema(BaseModel):

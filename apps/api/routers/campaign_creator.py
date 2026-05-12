@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
-"""API роутер для автоматического создания кампаний в Ads Manager."""
+"""API роутер для автоматического создания кампаний в Ads Manager (full autopilot)."""
+
 from __future__ import annotations
 
 import asyncio
@@ -11,10 +12,20 @@ from sqlalchemy import select
 
 from apps.api.schemas import CampaignCreatorStartRequestSchema, CampaignCreatorTaskSchema
 from clients.python_grpc.client import BrowserAgentClient, BrowserAgentConfig
+from core.campaign_creator.naming import build_campaign_name
 from core.campaign_creator.runner import CampaignCreatorRunner
-from core.campaign_creator.steps.base import StepContext
+from core.campaign_creator.steps.base import AdsetSpec, StepContext
+from core.campaign_creator.steps.create_adset import CreateAdsetStep
 from core.campaign_creator.steps.create_campaign import CreateCampaignStep
+from core.campaign_creator.steps.fill_texts import FillTextsStep
+from core.campaign_creator.steps.save_draft import SaveDraftStep
+from core.campaign_creator.steps.set_attribution import SetAttributionStep
+from core.campaign_creator.steps.set_budget import SetBudgetStep
+from core.campaign_creator.steps.set_cta import SetCtaStep
 from core.campaign_creator.steps.set_geo import SetGeoStep
+from core.campaign_creator.steps.set_pixel_event import SetPixelEventStep
+from core.campaign_creator.steps.set_tracking_url import SetTrackingUrlStep
+from core.campaign_creator.steps.upload_creatives import UploadCreativesStep
 from core.config import get_settings
 from core.db import get_session_factory
 from core.domain import CampaignCreatorTaskStatus
@@ -34,6 +45,23 @@ def _make_browser_client() -> BrowserAgentClient:
     return BrowserAgentClient(config)
 
 
+def _build_steps() -> list:
+    """Полный pipeline создания кампании — порядок критичен."""
+    return [
+        CreateCampaignStep(),
+        SetBudgetStep(),
+        SetAttributionStep(),
+        CreateAdsetStep(),
+        SetPixelEventStep(),
+        SetGeoStep(),
+        UploadCreativesStep(),
+        FillTextsStep(),
+        SetCtaStep(),
+        SetTrackingUrlStep(),
+        SaveDraftStep(),
+    ]
+
+
 async def _set_task_status(
     task_id: str,
     status: CampaignCreatorTaskStatus,
@@ -41,7 +69,6 @@ async def _set_task_status(
     step: str | None = None,
     data: dict | None = None,
 ) -> None:
-    """Обновляет статус задачи в БД через новую сессию (безопасно для background tasks)."""
     factory = get_session_factory()
     async with factory() as db:
         result = await db.execute(
@@ -62,37 +89,20 @@ async def _set_task_status(
         await db.commit()
 
 
-async def _load_offer_country_name(offer_code: str) -> str:
-    """Загружает country_name оффера из БД по коду. Возвращает пустую строку если не найден."""
+async def _load_offer(offer_code: str) -> Offer | None:
     factory = get_session_factory()
     async with factory() as db:
-        result = await db.execute(
-            select(Offer).where(Offer.code == offer_code)
-        )
-        offer = result.scalar_one_or_none()
-        if offer is None or not offer.country_name:
-            logger.warning("Оффер %s не найден или не имеет country_name", offer_code)
-            return ""
-        return offer.country_name
+        result = await db.execute(select(Offer).where(Offer.code == offer_code))
+        return result.scalar_one_or_none()
 
 
 async def _run_creator(task_id: str, context: StepContext) -> None:
-    """Фоновая задача: запускает Vision-профиль и выполняет шаги создания кампании."""
+    """Фоновая задача — запуск pipeline до 'Сохранить как черновик'."""
 
     async def set_status(status, *, step=None, data=None):
         await _set_task_status(task_id, status, step=step, data=data)
 
-    country_name = await _load_offer_country_name(context.offer_code)
-    context = StepContext(
-        offer_code=context.offer_code,
-        creative_folder=context.creative_folder,
-        cabinet_id=context.cabinet_id,
-        campaign_name=context.campaign_name,
-        extra={**context.extra, "offer_country_name": country_name},
-    )
-
-    steps = [CreateCampaignStep(), SetGeoStep()]
-    runner = CampaignCreatorRunner(steps=steps, set_status=set_status)
+    runner = CampaignCreatorRunner(steps=_build_steps(), set_status=set_status)
 
     client = _make_browser_client()
     try:
@@ -106,56 +116,10 @@ async def _run_creator(task_id: str, context: StepContext) -> None:
             browser = await pw.chromium.connect_over_cdp(cdp_url)
             pages = browser.contexts[0].pages if browser.contexts else []
             page = pages[0] if pages else await browser.new_page()
-            await runner.run_until_checkpoint(page, context)
+            await runner.run_all(page, context)
             await browser.close()
     except Exception as exc:
-        logger.error("Критическая ошибка в campaign_creator task %s: %s", task_id, exc)
-        await _set_task_status(
-            task_id,
-            CampaignCreatorTaskStatus.FAILED,
-            data={"error": str(exc)},
-        )
-    finally:
-        await client.disconnect_browser()
-        await client.close()
-
-
-async def _continue_creator(task_id: str, context: StepContext, start_index: int) -> None:
-    """Продолжение выполнения после подтверждения checkpoint."""
-
-    async def set_status(status, *, step=None, data=None):
-        await _set_task_status(task_id, status, step=step, data=data)
-
-    if not context.extra.get("offer_country_name"):
-        country_name = await _load_offer_country_name(context.offer_code)
-        context = StepContext(
-            offer_code=context.offer_code,
-            creative_folder=context.creative_folder,
-            cabinet_id=context.cabinet_id,
-            campaign_name=context.campaign_name,
-            extra={**context.extra, "offer_country_name": country_name},
-        )
-
-    steps = [CreateCampaignStep(), SetGeoStep()]
-    runner = CampaignCreatorRunner(steps=steps, set_status=set_status)
-    runner._current_index = start_index
-
-    client = _make_browser_client()
-    try:
-        await client.start()
-        await client.start_browser()
-        cdp_url = client.cdp_url
-        if not cdp_url:
-            raise RuntimeError("Vision не вернул cdp_port после старта браузера")
-
-        async with async_playwright() as pw:
-            browser = await pw.chromium.connect_over_cdp(cdp_url)
-            pages = browser.contexts[0].pages if browser.contexts else []
-            page = pages[0] if pages else await browser.new_page()
-            await runner.run_until_checkpoint(page, context)
-            await browser.close()
-    except Exception as exc:
-        logger.error("Ошибка при продолжении campaign_creator task %s: %s", task_id, exc)
+        logger.error("Критическая ошибка campaign_creator %s: %s", task_id, exc)
         await _set_task_status(
             task_id,
             CampaignCreatorTaskStatus.FAILED,
@@ -168,15 +132,30 @@ async def _continue_creator(task_id: str, context: StepContext, start_index: int
 
 @router.post("/start", response_model=CampaignCreatorTaskSchema)
 async def start_campaign_creator(body: CampaignCreatorStartRequestSchema):
-    """Создать задачу автосоздания кампании и запустить её в фоне."""
-    factory = get_session_factory()
-    campaign_name = f"{body.offer_code.upper()} | AUTO"
+    """Создать задачу автосоздания и запустить её в фоне (full autopilot)."""
+    offer = await _load_offer(body.offer_code)
+    if offer is None:
+        raise HTTPException(status_code=404, detail=f"Оффер не найден: {body.offer_code}")
 
+    missing = [
+        f
+        for f in ("cabinet_id", "pixel_id", "landing_url", "geo_slot_name")
+        if not getattr(offer, f)
+    ]
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"У оффера {offer.code} не заполнены поля: {', '.join(missing)}",
+        )
+
+    campaign_name = build_campaign_name(iter_num=body.iter_num, offer_code=offer.code)
+
+    factory = get_session_factory()
     async with factory() as db:
         task = CampaignCreatorTask(
             offer_code=body.offer_code,
-            creative_folder=body.creative_folder,
-            cabinet_id=body.cabinet_id,
+            creative_folder=body.creo_folder,
+            cabinet_id=offer.cabinet_id,
             status=CampaignCreatorTaskStatus.PENDING,
             campaign_name=campaign_name,
         )
@@ -186,10 +165,20 @@ async def start_campaign_creator(body: CampaignCreatorStartRequestSchema):
         task_id = str(task.id)
 
     context = StepContext(
-        offer_code=body.offer_code,
-        creative_folder=body.creative_folder,
-        cabinet_id=body.cabinet_id,
+        offer_code=offer.code,
+        cabinet_id=offer.cabinet_id,
         campaign_name=campaign_name,
+        pixel_id=offer.pixel_id,
+        landing_url=offer.landing_url,
+        geo_code=offer.geo_code or "",
+        geo_slot_name=offer.geo_slot_name,
+        daily_budget=body.daily_budget,
+        attribution_days=body.attribution_days,
+        budget_level=body.budget_level,
+        iter_num=body.iter_num,
+        adsets=[AdsetSpec(**a.model_dump()) for a in body.adsets],
+        creo_folder=body.creo_folder,
+        extra={"offer_country_name": offer.country_name or ""},
     )
     asyncio.create_task(_run_creator(task_id, context))
 
@@ -205,58 +194,9 @@ async def start_campaign_creator(body: CampaignCreatorStartRequestSchema):
     )
 
 
-@router.post("/{task_id}/confirm", response_model=CampaignCreatorTaskSchema)
-async def confirm_checkpoint(task_id: str):
-    """Подтвердить checkpoint и продолжить выполнение шагов."""
-    factory = get_session_factory()
-    async with factory() as db:
-        result = await db.execute(
-            select(CampaignCreatorTask)
-            .where(CampaignCreatorTask.id == task_id)
-            .with_for_update()
-        )
-        task = result.scalar_one_or_none()
-        if task is None:
-            raise HTTPException(status_code=404, detail="Задача не найдена")
-        if task.status != CampaignCreatorTaskStatus.WAITING_CONFIRMATION:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Задача не ожидает подтверждения (статус: {task.status})",
-            )
-        task.status = CampaignCreatorTaskStatus.CONFIRMED
-        await db.commit()
-
-        all_step_names = ["create_campaign", "set_geo"]
-        current_step_name = task.current_step or ""
-        try:
-            step_index = all_step_names.index(current_step_name) + 1
-        except ValueError:
-            step_index = 1
-
-        context = StepContext(
-            offer_code=task.offer_code,
-            creative_folder=task.creative_folder,
-            cabinet_id=task.cabinet_id,
-            campaign_name=task.campaign_name or f"{task.offer_code.upper()} | AUTO",
-        )
-
-        asyncio.create_task(_continue_creator(task_id, context, step_index))
-
-        return CampaignCreatorTaskSchema(
-            id=str(task.id),
-            status=CampaignCreatorTaskStatus.CONFIRMED.value,
-            current_step=task.current_step,
-            checkpoint_data=task.checkpoint_data,
-            error_message=task.error_message,
-            campaign_name=task.campaign_name,
-            offer_code=task.offer_code,
-            created_at=task.created_at.isoformat(),
-        )
-
-
 @router.get("/{task_id}/status", response_model=CampaignCreatorTaskSchema)
 async def get_task_status(task_id: str):
-    """Получить текущий статус задачи автосоздания."""
+    """Получить текущий статус задачи."""
     factory = get_session_factory()
     async with factory() as db:
         result = await db.execute(

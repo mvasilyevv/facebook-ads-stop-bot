@@ -241,9 +241,6 @@ export const startCampaignCreator = (data) =>
     body: JSON.stringify(data),
   });
 
-export const confirmCampaignCheckpoint = (taskId) =>
-  request(`/campaign-creator/${taskId}/confirm`, { method: 'POST' });
-
 export const getCampaignCreatorStatus = (taskId) =>
   request(`/campaign-creator/${taskId}/status`);
 
