@@ -7,6 +7,7 @@ import {
   openCreativeOutputFolder,
   startRecording,
   stopRecording,
+  getRecordingStatus,
   analyzeLastRecording,
   startCampaignCreator,
   confirmCampaignCheckpoint,
@@ -64,6 +65,7 @@ export default function ScriptsPage() {
   const [recorderStatus, setRecorderStatus] = useState('idle');
   const [recorderReport, setRecorderReport] = useState(null);
   const [recorderError, setRecorderError] = useState('');
+  const [recorderLive, setRecorderLive] = useState({ status: 'idle', event_count: 0, recent_events: [] });
 
   const [autoOffer, setAutoOffer] = useState('');
   const [autoFolder, setAutoFolder] = useState('');
@@ -123,6 +125,25 @@ export default function ScriptsPage() {
     return () => clearInterval(timer);
   }, [autoTask?.id, autoTask?.status]);
 
+  useEffect(() => {
+    if (!recorderSessionId || recorderStatus !== 'recording') return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const data = await getRecordingStatus(recorderSessionId, 30);
+        if (!cancelled) setRecorderLive(data);
+      } catch {
+        // молча игнорируем ошибку поллинга — запись может ещё стартовать
+      }
+    };
+    tick();
+    const id = setInterval(tick, 1500);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [recorderSessionId, recorderStatus]);
+
   const selectModule = (module) => {
     setActiveModuleId(module.id);
     setActiveSubmoduleId(module.submodules[0]?.id || '');
@@ -137,6 +158,8 @@ export default function ScriptsPage() {
       const res = await startRecording({ offer_code: recorderOffer });
       setRecorderSessionId(res.session_id);
       setRecorderStatus('recording');
+      setRecorderReport(null);
+      setRecorderLive({ status: 'connecting', event_count: 0, recent_events: [] });
     } catch (err) {
       setRecorderError(err.message || 'Не удалось запустить запись');
     }
@@ -301,10 +324,7 @@ export default function ScriptsPage() {
               </div>
 
               {recorderStatus === 'recording' && (
-                <div className="flex items-center gap-2 rounded-md border border-yellow-400 bg-yellow-50 px-3 py-2 text-sm text-yellow-800">
-                  <span className="animate-pulse">●</span>
-                  Запись активна — выполните действия в Ads Manager
-                </div>
+                <RecorderLivePanel live={recorderLive} />
               )}
 
               {recorderReport && (
@@ -470,6 +490,76 @@ export default function ScriptsPage() {
             </div>
           )}
         </main>
+      </div>
+    </div>
+  );
+}
+
+function RecorderLivePanel({ live }) {
+  const events = Array.isArray(live?.recent_events) ? live.recent_events : [];
+  const status = live?.status || 'unknown';
+  const statusLabel = {
+    connecting: 'Подключение к браузеру…',
+    recording: 'Запись активна — выполните действия в Ads Manager',
+    error: 'Ошибка записи',
+    unknown: 'Состояние неизвестно',
+  }[status] || status;
+
+  const TYPE_BADGE = {
+    click: 'bg-blue-100 text-blue-800',
+    input: 'bg-purple-100 text-purple-800',
+    change: 'bg-amber-100 text-amber-800',
+    select: 'bg-emerald-100 text-emerald-800',
+    focus: 'bg-slate-100 text-slate-700',
+  };
+
+  return (
+    <div className="flex flex-col gap-2 rounded-md border border-yellow-400 bg-yellow-50 p-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2 text-sm text-yellow-900">
+          <span className={status === 'recording' ? 'animate-pulse text-red-600' : 'text-yellow-700'}>●</span>
+          <span>{statusLabel}</span>
+        </div>
+        <div className="text-xs font-mono text-yellow-900">
+          событий: <span className="font-semibold">{live?.event_count ?? 0}</span>
+        </div>
+      </div>
+
+      {live?.error && (
+        <div className="rounded bg-red-50 border border-red-200 px-2 py-1 text-xs text-red-800">
+          {live.error}
+        </div>
+      )}
+
+      <div className="rounded border border-yellow-200 bg-white">
+        <div className="border-b border-yellow-100 px-2 py-1 text-2xs uppercase tracking-wide text-yellow-800">
+          Лог действий (последние {events.length})
+        </div>
+        {events.length === 0 ? (
+          <div className="px-2 py-3 text-center text-xs text-muted">
+            Пока нет событий. Кликните по любому элементу в Ads Manager — оно появится здесь.
+          </div>
+        ) : (
+          <div className="max-h-56 overflow-y-auto">
+            {events.slice().reverse().map((ev, idx) => {
+              const label = ev.text || ev.aria_label || ev.value || ev.tag || '—';
+              return (
+                <div
+                  key={`${ev.ts}-${idx}`}
+                  className="flex items-center gap-2 border-b border-yellow-50 px-2 py-1 text-xs last:border-0"
+                >
+                  <span className={`shrink-0 rounded px-1.5 py-0.5 font-mono text-2xs ${TYPE_BADGE[ev.type] || 'bg-gray-100 text-gray-700'}`}>
+                    {ev.type}
+                  </span>
+                  {ev.tag && (
+                    <span className="shrink-0 font-mono text-2xs text-muted">{ev.tag}</span>
+                  )}
+                  <span className="truncate text-primary">{label}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     </div>
   );

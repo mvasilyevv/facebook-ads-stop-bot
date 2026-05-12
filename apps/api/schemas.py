@@ -918,6 +918,28 @@ class RecorderStopResponseSchema(BaseModel):
     file_path: str
 
 
+class RecorderEventSchema(BaseModel):
+    """Упрощённое событие для live-лога в UI."""
+
+    ts: float | None = None
+    type: str
+    tag: str | None = None
+    text: str | None = None
+    value: str | None = None
+    aria_label: str | None = None
+    role: str | None = None
+
+
+class RecorderStatusResponseSchema(BaseModel):
+    """Текущее состояние активной сессии записи."""
+
+    session_id: str
+    status: str
+    event_count: int
+    error: str | None = None
+    recent_events: list[RecorderEventSchema] = Field(default_factory=list)
+
+
 class RecorderAnalyzeResponseSchema(BaseModel):
     """Отчёт анализатора по последней сессии."""
 

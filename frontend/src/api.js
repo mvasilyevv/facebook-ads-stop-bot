@@ -228,6 +228,9 @@ export const startRecording = (data) =>
 export const stopRecording = (sessionId) =>
   request(`/campaign-recorder/stop/${sessionId}`, { method: 'POST' });
 
+export const getRecordingStatus = (sessionId, tail = 30) =>
+  request(`/campaign-recorder/status/${sessionId}?tail=${tail}`);
+
 export const analyzeLastRecording = (offerCode) =>
   request(`/campaign-recorder/analyze${offerCode ? `?offer_code=${encodeURIComponent(offerCode)}` : ''}`);
 

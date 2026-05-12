@@ -27,6 +27,12 @@ class SessionWriter:
         """Добавляет пачку событий в буфер."""
         self._events.extend(events)
 
+    def recent_events(self, limit: int = 30) -> list[dict]:
+        """Возвращает последние N событий (для live-лога в UI)."""
+        if limit <= 0:
+            return []
+        return self._events[-limit:]
+
     def save(self) -> Path:
         """Записывает сессию в файл и возвращает путь."""
         self._dir.mkdir(parents=True, exist_ok=True)

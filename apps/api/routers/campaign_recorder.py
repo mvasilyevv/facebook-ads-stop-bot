@@ -9,16 +9,18 @@ from fastapi import APIRouter, HTTPException
 
 from apps.api.schemas import (
     RecorderAnalyzeResponseSchema,
+    RecorderEventSchema,
     RecorderStartRequestSchema,
     RecorderStartResponseSchema,
+    RecorderStatusResponseSchema,
     RecorderStopResponseSchema,
 )
 from core.campaign_recorder.analyzer import analyze_session_file
 from core.campaign_recorder.cdp_session import CdpConnectionError, CdpSession
 from core.campaign_recorder.event_injector import (
+    attach_recorder,
     clear_events,
     collect_events,
-    inject_event_listener,
 )
 from core.campaign_recorder.session_writer import SessionWriter
 
@@ -38,17 +40,33 @@ async def start_recording(body: RecorderStartRequestSchema):
         session = CdpSession()
         try:
             async with session.connect() as page:
-                await inject_event_listener(page)
+                context = page.context
+                await attach_recorder(context)
                 _active_sessions[session_id]["page"] = page
                 _active_sessions[session_id]["status"] = "recording"
+                logger.info(
+                    "Запись стартовала. session=%s, url=%s, pages=%d",
+                    session_id,
+                    page.url,
+                    len(context.pages),
+                )
                 stop_event: asyncio.Event = _active_sessions[session_id]["stop_event"]
                 try:
                     while not stop_event.is_set():
-                        await asyncio.sleep(2)
-                        events = await collect_events(page)
+                        await asyncio.sleep(1)
+                        try:
+                            events = await collect_events(context)
+                        except Exception as poll_exc:
+                            logger.warning("Сбой опроса событий: %s", poll_exc)
+                            events = []
                         if events:
                             writer.add_events(events)
-                            await clear_events(page)
+                            await clear_events(context)
+                            logger.debug(
+                                "Собрано %d событий, всего: %d",
+                                len(events),
+                                writer.event_count,
+                            )
                 except Exception as exc:
                     logger.error("Ошибка в цикле записи: %s", exc)
                     _active_sessions[session_id]["status"] = "error"
@@ -88,6 +106,35 @@ async def stop_recording(session_id: str):
     _active_sessions.pop(session_id, None)
     return RecorderStopResponseSchema(
         session_id=session_id, event_count=event_count, file_path=str(path)
+    )
+
+
+@router.get("/status/{session_id}", response_model=RecorderStatusResponseSchema)
+async def get_session_status(session_id: str, tail: int = 30):
+    """Возвращает текущее состояние активной сессии записи."""
+    entry = _active_sessions.get(session_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Сессия записи не найдена")
+    writer: SessionWriter = entry["writer"]
+    recent = writer.recent_events(tail)
+    events_payload = [
+        RecorderEventSchema(
+            ts=e.get("ts"),
+            type=str(e.get("type") or ""),
+            tag=e.get("tag") or None,
+            text=(e.get("text") or None),
+            value=None if e.get("value") is None else str(e.get("value"))[:120],
+            aria_label=e.get("aria_label") or None,
+            role=e.get("role") or None,
+        )
+        for e in recent
+    ]
+    return RecorderStatusResponseSchema(
+        session_id=session_id,
+        status=entry.get("status", "unknown"),
+        event_count=writer.event_count,
+        error=entry.get("error"),
+        recent_events=events_payload,
     )
 
 
