@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { getOffers, createOffer, updateOffer, deleteOffer, getOfferRules, updateOfferRules } from '../api.js';
+import ThresholdsModal from '../components/offers/ThresholdsModal.jsx';
 
 /* Тогл-переключатель */
 function Toggle({ on, onChange, label }) {
@@ -108,77 +109,6 @@ const DIAGNOSTIC_FIELDS = [
   { name: 'frequency_critical_threshold', label: 'Частота: критично от', type: 'number' },
 ];
 
-/* Блок порогов warning/stop для шагов CPC/CPL/CPR (per-offer) */
-const THRESHOLD_STEPS = [
-  { key: 'cpc', label: 'CPC', hint: 'Шаг 1 — клик' },
-  { key: 'cpl', label: 'CPL', hint: 'Шаг 2 — лид' },
-  { key: 'cpr', label: 'CPR', hint: 'Шаг 3 — регистрация' },
-];
-
-function ThresholdsBlock({ rules, setRules }) {
-  const setNum = (name, value) => {
-    const digits = value.replace(/\D/g, '');
-    setRules({ ...rules, [name]: digits });
-  };
-
-  return (
-    <div className="rounded-md border border-border bg-elevated/50 p-4 space-y-3">
-      <div>
-        <div className="text-sm font-medium text-primary">Пороги срабатывания (этого оффера)</div>
-        <p className="mt-0.5 text-2xs text-muted">
-          По умолчанию warning 80%, stop 80%. Меняйте под особенности конкретного оффера.
-        </p>
-      </div>
-      {THRESHOLD_STEPS.map((step) => {
-        const warnKey = `${step.key}_warning_percent_of_stop`;
-        const stopKey = `${step.key}_stop_percent_of_base`;
-        return (
-          <div key={step.key} className="space-y-2">
-            <div className="flex items-center gap-2">
-              <span className="rounded bg-accent-muted px-2 py-0.5 font-mono text-2xs font-bold text-accent">
-                {step.label}
-              </span>
-              <span className="text-2xs text-muted">{step.hint}</span>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label className="mb-1 block text-2xs font-semibold uppercase tracking-wider text-secondary" htmlFor={`th-${warnKey}`}>
-                  warning % от стопа
-                </label>
-                <input
-                  id={`th-${warnKey}`}
-                  className={inputCls}
-                  type="text"
-                  inputMode="numeric"
-                  pattern="[0-9]*"
-                  placeholder="80"
-                  value={rules[warnKey] ?? ''}
-                  onChange={(e) => setNum(warnKey, e.target.value)}
-                />
-              </div>
-              <div>
-                <label className="mb-1 block text-2xs font-semibold uppercase tracking-wider text-secondary" htmlFor={`th-${stopKey}`}>
-                  stop % от базового
-                </label>
-                <input
-                  id={`th-${stopKey}`}
-                  className={inputCls}
-                  type="text"
-                  inputMode="numeric"
-                  pattern="[0-9]*"
-                  placeholder="80"
-                  value={rules[stopKey] ?? ''}
-                  onChange={(e) => setNum(stopKey, e.target.value)}
-                />
-              </div>
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
 const DEFAULT_RULES = {
   cpc_percent_enabled: true, cpc_percent_stop: '2',
   cpl_percent_enabled: true, cpl_percent_stop: '10',
@@ -235,6 +165,7 @@ export default function OffersPage() {
   const [editOffer, setEditOffer] = useState(null);
   const [toast, setToast] = useState(null);
   const [savingRules, setSavingRules] = useState(false);
+  const [thresholdsFor, setThresholdsFor] = useState(null);
 
   const fetchOffers = useCallback(async () => {
     try {
@@ -355,6 +286,9 @@ export default function OffersPage() {
                   <button className="btn-ghost text-2xs" onClick={() => openRules(o.id)} aria-expanded={editingId === o.id}>
                     {editingId === o.id ? 'Свернуть' : 'Правила'}
                   </button>
+                  <button className="btn-ghost text-2xs" onClick={() => setThresholdsFor(o)}>
+                    Пороги
+                  </button>
                   <button className="btn-ghost text-2xs" onClick={() => { setEditOffer(o); setShowModal(true); }}>
                     Изменить
                   </button>
@@ -373,7 +307,7 @@ export default function OffersPage() {
                   <th className="px-3 py-2 text-2xs uppercase tracking-wider text-muted text-right">CPA</th>
                   <th className="px-3 py-2 text-2xs uppercase tracking-wider text-muted text-left">Страна</th>
                   <th className="px-3 py-2 text-2xs uppercase tracking-wider text-muted text-center">Статус</th>
-                  <th className="px-3 py-2 text-2xs uppercase tracking-wider text-muted text-center">Правила</th>
+                  <th className="px-3 py-2 text-2xs uppercase tracking-wider text-muted text-center">Пороги</th>
                   <th className="px-3 py-2 text-2xs uppercase tracking-wider text-muted text-right">Действия</th>
                 </tr>
               </thead>
@@ -388,8 +322,10 @@ export default function OffersPage() {
                         {o.is_active ? 'Активен' : 'Выкл.'}
                       </span>
                     </td>
-                    <td className="px-3 py-2.5 text-center text-2xs text-muted">
-                      {editingId === o.id ? '↓ развёрнуто' : '✎ настройте'}
+                    <td className="px-3 py-2.5 text-center">
+                      <button className="btn-ghost text-2xs" onClick={() => setThresholdsFor(o)}>
+                        Настроить пороги
+                      </button>
                     </td>
                     <td className="px-3 py-2.5">
                       <div className="flex justify-end gap-1.5">
@@ -437,8 +373,6 @@ export default function OffersPage() {
                 {RULE_DEFS.map((rule) => <RuleBlock key={rule.key} rule={rule} rules={rules} setRules={setRules} />)}
               </div>
 
-              <ThresholdsBlock rules={rules} setRules={setRules} />
-
               <h3 className="pt-2 text-sm font-semibold text-primary">Диагностика CPM / частоты</h3>
               <div className="rounded-md border border-border bg-elevated/50 p-4">
                 <p className="mb-3 text-2xs text-muted">CPM считается от медианы. Здесь только границы для частоты.</p>
@@ -464,6 +398,13 @@ export default function OffersPage() {
       )}
 
       {showModal && <OfferModal offer={editOffer} onSave={handleSaveOffer} onClose={() => { setShowModal(false); setEditOffer(null); }} />}
+      {thresholdsFor && (
+        <ThresholdsModal
+          offer={thresholdsFor}
+          onClose={() => setThresholdsFor(null)}
+          onSaved={() => setToast({ message: 'Пороги обновлены', type: 'success' })}
+        />
+      )}
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
     </div>
   );
