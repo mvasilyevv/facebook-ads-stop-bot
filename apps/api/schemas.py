@@ -301,6 +301,11 @@ class OfferSchema(BaseModel):
     payout_per_deposit: Decimal | None = None
     country_name: str | None = None
     is_active: bool = True
+    landing_url: str | None = None
+    cabinet_id: str | None = None
+    pixel_id: str | None = None
+    geo_code: str | None = Field(default=None, max_length=2)
+    geo_slot_name: str | None = None
 
     @field_validator("code")
     @classmethod
