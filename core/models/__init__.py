@@ -190,6 +190,13 @@ class Offer(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     country_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
+    # Поля для автосоздания кампании
+    landing_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    cabinet_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    pixel_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    geo_code: Mapped[str | None] = mapped_column(String(2), nullable=True)
+    geo_slot_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
     rule_config: Mapped[OfferRuleConfig | None] = relationship(
         back_populates="offer", cascade="all, delete-orphan", uselist=False
     )
