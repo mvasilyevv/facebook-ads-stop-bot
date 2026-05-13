@@ -55,6 +55,41 @@ def BUILD_JS_INJECTOR(session_id: str = "") -> str:
       }}, '');
     }}
 
+    function shortXPath(el) {{
+      // Последние 6 сегментов — для случаев, когда нет нормального селектора.
+      var full = getXPath(el);
+      if (!full) return '';
+      var parts = full.split('/').filter(Boolean);
+      if (parts.length <= 6) return '/' + parts.join('/');
+      return '/.../' + parts.slice(-6).join('/');
+    }}
+
+    var INTERACTIVE_TAGS = {{button:1,a:1,input:1,select:1,textarea:1,label:1,summary:1}};
+    var INTERACTIVE_ROLES = {{button:1,link:1,option:1,menuitem:1,menuitemcheckbox:1,menuitemradio:1,
+                              tab:1,switch:1,checkbox:1,radio:1,combobox:1,listbox:1,searchbox:1,
+                              textbox:1,slider:1,treeitem:1}};
+
+    function isInteractive(el) {{
+      if (!el || el.nodeType !== 1) return false;
+      var tag = el.tagName ? el.tagName.toLowerCase() : '';
+      if (INTERACTIVE_TAGS[tag]) return true;
+      var role = el.getAttribute && el.getAttribute('role');
+      if (role && INTERACTIVE_ROLES[role]) return true;
+      if (el.getAttribute && el.getAttribute('tabindex') !== null) return true;
+      if (el.onclick) return true;
+      return false;
+    }}
+
+    function findInteractiveAncestor(el) {{
+      // Поднимаемся максимум на 8 уровней в поисках кнопки/ссылки/инпута.
+      var node = el;
+      for (var i = 0; i < 8 && node; i++) {{
+        if (isInteractive(node)) return node;
+        node = node.parentElement;
+      }}
+      return el;
+    }}
+
     function getDataAttrs(el) {{
       return safe(function() {{
         var result = {{}};
@@ -118,55 +153,129 @@ def BUILD_JS_INJECTOR(session_id: str = "") -> str:
     function getAccessibleName(el) {{
       return safe(function() {{
         if (el.getAttribute('aria-label')) return el.getAttribute('aria-label');
+        var labelledBy = el.getAttribute('aria-labelledby');
+        if (labelledBy) {{
+          var ref = document.getElementById(labelledBy);
+          if (ref) return (ref.innerText || '').trim();
+        }}
         if (el.id) {{
           var lbl = document.querySelector('label[for="' + el.id + '"]');
           if (lbl) return (lbl.innerText || '').trim();
         }}
         var t = (el.innerText || el.textContent || '').trim();
-        return t || null;
+        // Только короткий текст идёт в имя — длинные простыни это контейнер, не кнопка.
+        if (t && t.length <= 80 && t.indexOf('\\n') === -1) return t;
+        return null;
       }}, null);
     }}
 
     function isStableClass(c) {{
       if (!c) return false;
-      return !/^x[a-z0-9]{{6,}}$/i.test(c);
+      return !/^x[a-z0-9]{{6,}}$/i.test(c)
+          && !/^_[a-z0-9]{{4,}}$/i.test(c)
+          && !/^[a-z]{{1,3}}[0-9a-f]{{6,}}$/i.test(c);
+    }}
+
+    function findScopeAttr(el) {{
+      // Ищем data-pagelet/data-surface/data-testid на самом элементе или у предков (≤5).
+      var node = el;
+      for (var i = 0; i < 5 && node; i++) {{
+        if (node.getAttribute) {{
+          var keys = ['data-testid', 'data-pagelet', 'data-surface'];
+          for (var k = 0; k < keys.length; k++) {{
+            var v = node.getAttribute(keys[k]);
+            if (v) return {{ key: keys[k], value: v, isSelf: i === 0 }};
+          }}
+        }}
+        node = node.parentElement;
+      }}
+      return null;
+    }}
+
+    function effectiveRole(el) {{
+      var role = el.getAttribute && el.getAttribute('role');
+      if (role) return role;
+      var tag = el.tagName ? el.tagName.toLowerCase() : '';
+      if (tag === 'button') return 'button';
+      if (tag === 'a' && el.getAttribute && el.getAttribute('href')) return 'link';
+      if (tag === 'input') {{
+        var type = (el.getAttribute('type') || 'text').toLowerCase();
+        if (type === 'checkbox') return 'checkbox';
+        if (type === 'radio') return 'radio';
+        if (type === 'button' || type === 'submit') return 'button';
+        return 'textbox';
+      }}
+      if (tag === 'select') return 'combobox';
+      if (tag === 'textarea') return 'textbox';
+      return null;
     }}
 
     function getSelectorCandidates(el) {{
       return safe(function() {{
         var cands = [];
-        var role = el.getAttribute && el.getAttribute('role');
+        var role = effectiveRole(el);
         var name = getAccessibleName(el);
+        var tag = el.tagName ? el.tagName.toLowerCase() : '';
+
         if (role && name && name.length <= 80) {{
           cands.push('role=' + role + '[name="' + cssEscape(name) + '"]');
         }}
+
         var aria = el.getAttribute && el.getAttribute('aria-label');
         if (aria) cands.push('[aria-label="' + cssEscape(aria) + '"]');
+
+        var placeholder = el.getAttribute && el.getAttribute('placeholder');
+        if (placeholder) cands.push('[placeholder="' + cssEscape(placeholder) + '"]');
+
         var dataAttrs = ['data-testid', 'data-pagelet', 'data-surface'];
         for (var i = 0; i < dataAttrs.length; i++) {{
           var v = el.getAttribute && el.getAttribute(dataAttrs[i]);
           if (v) cands.push('[' + dataAttrs[i] + '="' + cssEscape(v) + '"]');
         }}
-        var tag = el.tagName ? el.tagName.toLowerCase() : '';
+
+        // Scope от предка с data-* + текст/role
+        var scope = findScopeAttr(el);
+        if (scope && !scope.isSelf && name && name.length <= 80) {{
+          var scopeSel = '[' + scope.key + '="' + cssEscape(scope.value) + '"]';
+          if (role) {{
+            cands.push(scopeSel + ' >> role=' + role + '[name="' + cssEscape(name) + '"]');
+          }} else {{
+            cands.push(scopeSel + ' >> text="' + cssEscape(name) + '"');
+          }}
+        }}
+
         var txt = (el.innerText || el.textContent || '').trim();
-        if (txt && txt.length <= 60 && (tag === 'button' || tag === 'a' || role === 'button')) {{
+        var isClickable = (tag === 'button' || tag === 'a' || role === 'button'
+                           || role === 'link' || role === 'option' || role === 'menuitem');
+        if (txt && txt.length <= 60 && txt.indexOf('\\n') === -1 && isClickable) {{
           cands.push('text="' + cssEscape(txt) + '"');
         }}
+
         var stableClasses = Array.from(el.classList || []).filter(isStableClass);
         if (stableClasses.length) {{
           cands.push(tag + '.' + stableClasses.join('.'));
         }}
-        cands.push('xpath=' + getXPath(el));
+
+        // xpath даём только если ничего лучше нет, и в короткой форме
+        if (cands.length === 0) {{
+          cands.push('xpath=' + getXPath(el));
+        }} else {{
+          cands.push('xpath=' + shortXPath(el));
+        }}
         return cands;
       }}, []);
     }}
 
     function record(type, target, value) {{
       try {{
-        var el = (target && target.nodeType === 1) ? target
+        var raw = (target && target.nodeType === 1) ? target
                 : (target && target.parentElement) ? target.parentElement
                 : null;
-        if (!el) return;
+        if (!raw) return;
+        // Для click/pointerdown/mousedown поднимаемся до интерактивного предка.
+        // Для input/change/keydown оставляем сам элемент — нужен реальный инпут.
+        var liftTypes = {{click: 1, pointerdown: 1, mousedown: 1}};
+        var el = liftTypes[type] ? findInteractiveAncestor(raw) : raw;
         var rect = safe(function() {{ return el.getBoundingClientRect(); }}, {{x: 0, y: 0}});
         var ev = {{
           ts: Date.now() / 1000,
