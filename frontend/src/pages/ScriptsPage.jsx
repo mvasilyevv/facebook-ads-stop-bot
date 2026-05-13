@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   buildCampaignCreatePlan,
   createCreativeUniquifyJob,
@@ -11,7 +11,13 @@ import {
   analyzeLastRecording,
   startCampaignCreator,
   getCampaignCreatorStatus,
+  listCampaignCreatorSteps,
+  runCampaignCreatorStep,
+  runCampaignCreatorFrom,
+  resumeCampaignCreator,
+  cancelCampaignCreator,
 } from '../api';
+import CampaignCreatorTimeline from '../components/CampaignCreatorTimeline';
 
 const ACCEPTED_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 const INPUT_BASE_CLASS = 'w-full rounded-md border border-border bg-base px-3 py-2 text-sm text-primary outline-none focus:border-accent disabled:opacity-60';
@@ -65,6 +71,22 @@ export default function ScriptsPage() {
   const [recorderReport, setRecorderReport] = useState(null);
   const [recorderError, setRecorderError] = useState('');
   const [recorderLive, setRecorderLive] = useState({ status: 'idle', event_count: 0, recent_events: [] });
+  const [showReport, setShowReport] = useState(true);
+
+  const handleDownloadMd = useCallback(() => {
+    if (!recorderReport?.markdown) return;
+    const mdPath = recorderReport.md_path || 'report.md';
+    const baseName = mdPath.split(/[\\/]/).pop() || 'report.md';
+    const blob = new Blob([recorderReport.markdown], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = baseName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, [recorderReport]);
 
   const [autoOffer, setAutoOffer] = useState('');
   const [autoIterNum, setAutoIterNum] = useState(1);
@@ -72,12 +94,30 @@ export default function ScriptsPage() {
   const [autoBudgetLevel, setAutoBudgetLevel] = useState('CBO');
   const [autoAttribution, setAutoAttribution] = useState(7);
   const [autoCreoFolder, setAutoCreoFolder] = useState('');
-  const [autoAdsets, setAutoAdsets] = useState([
-    { name: '', headline: '', primary_text: '', creo_subfolder: '' },
-  ]);
+  const [autoAdsets, setAutoAdsets] = useState([]);
   const [autoTask, setAutoTask] = useState(null);
   const [autoError, setAutoError] = useState('');
   const [autoFolders, setAutoFolders] = useState([]);
+  const [autoSteps, setAutoSteps] = useState([]);
+  const [autoStepBusy, setAutoStepBusy] = useState(false);
+  const selectedAutoFolder = useMemo(
+    () => autoFolders.find((f) => (f.path || f.name) === autoCreoFolder) || null,
+    [autoFolders, autoCreoFolder],
+  );
+
+  useEffect(() => {
+    const count = Number(selectedAutoFolder?.adset_count || 0);
+    if (!count) {
+      setAutoAdsets([]);
+      return;
+    }
+    setAutoAdsets((current) => {
+      const next = Array.from({ length: count }, (_, i) =>
+        current[i] || { name_suffix: '', headline: '', primary_text: '' },
+      );
+      return next;
+    });
+  }, [selectedAutoFolder?.adset_count]);
 
   const activeModule = SCRIPT_MODULES.find((module) => module.id === activeModuleId) || SCRIPT_MODULES[0];
   const activeSubmodule =
@@ -113,6 +153,9 @@ export default function ScriptsPage() {
     getCampaignCreativeFolders()
       .then((data) => setAutoFolders(Array.isArray(data) ? data.filter((f) => f.is_valid) : []))
       .catch(() => setAutoFolders([]));
+    listCampaignCreatorSteps()
+      .then((data) => setAutoSteps(Array.isArray(data?.steps) ? data.steps : []))
+      .catch(() => setAutoSteps([]));
   }, [activeSubmodule?.id]);
 
   useEffect(() => {
@@ -198,14 +241,8 @@ export default function ScriptsPage() {
       return;
     }
     if (!autoAdsets.length) {
-      setAutoError('Добавьте хотя бы один адсет');
+      setAutoError('Выберите папку с креативами (адсеты подтянутся автоматически)');
       return;
-    }
-    for (const [i, a] of autoAdsets.entries()) {
-      if (!a.name || !a.headline || !a.primary_text || !a.creo_subfolder) {
-        setAutoError(`Адсет #${i + 1}: заполните все поля`);
-        return;
-      }
     }
     try {
       const task = await startCampaignCreator({
@@ -229,16 +266,61 @@ export default function ScriptsPage() {
     );
   };
 
-  const addAdset = () => {
-    setAutoAdsets((current) => [
-      ...current,
-      { name: '', headline: '', primary_text: '', creo_subfolder: '' },
-    ]);
-  };
+  const handleRunStep = useCallback(async (stepName) => {
+    if (!autoTask?.id) return;
+    setAutoError('');
+    setAutoStepBusy(true);
+    try {
+      const updated = await runCampaignCreatorStep(autoTask.id, stepName);
+      setAutoTask(updated);
+    } catch (err) {
+      setAutoError(err.message || 'Не удалось запустить шаг');
+    } finally {
+      setAutoStepBusy(false);
+    }
+  }, [autoTask?.id]);
 
-  const removeAdset = (idx) => {
-    setAutoAdsets((current) => current.filter((_, i) => i !== idx));
-  };
+  const handleRunFromStep = useCallback(async (stepName) => {
+    if (!autoTask?.id) return;
+    setAutoError('');
+    setAutoStepBusy(true);
+    try {
+      const updated = await runCampaignCreatorFrom(autoTask.id, stepName);
+      setAutoTask(updated);
+    } catch (err) {
+      setAutoError(err.message || 'Не удалось запустить с шага');
+    } finally {
+      setAutoStepBusy(false);
+    }
+  }, [autoTask?.id]);
+
+  const handleResume = useCallback(async () => {
+    if (!autoTask?.id) return;
+    setAutoError('');
+    setAutoStepBusy(true);
+    try {
+      const updated = await resumeCampaignCreator(autoTask.id);
+      setAutoTask(updated);
+    } catch (err) {
+      setAutoError(err.message || 'Не удалось возобновить');
+    } finally {
+      setAutoStepBusy(false);
+    }
+  }, [autoTask?.id]);
+
+  const handleCancel = useCallback(async () => {
+    if (!autoTask?.id) return;
+    setAutoError('');
+    setAutoStepBusy(true);
+    try {
+      const updated = await cancelCampaignCreator(autoTask.id);
+      setAutoTask(updated);
+    } catch (err) {
+      setAutoError(err.message || 'Не удалось остановить задачу');
+    } finally {
+      setAutoStepBusy(false);
+    }
+  }, [autoTask?.id]);
 
   return (
     <div className="space-y-md animate-fade-in">
@@ -359,42 +441,40 @@ export default function ScriptsPage() {
 
               {recorderReport && (
                 <div className="flex flex-col gap-3 rounded-md border border-border bg-surface p-4">
-                  <h3 className="text-sm font-semibold text-primary">Отчёт анализа</h3>
-                  <div className="grid grid-cols-2 gap-2 text-sm">
-                    <span className="text-secondary">Всего событий:</span>
-                    <span className="font-medium">{recorderReport.total_events}</span>
-                    {Object.entries(recorderReport.by_type || {}).map(([type, count]) => (
-                      <Fragment key={type}>
-                        <span className="text-secondary capitalize">{type}:</span>
-                        <span className="font-medium">{count}</span>
-                      </Fragment>
-                    ))}
-                    <span className="text-secondary">Стабильных элементов:</span>
-                    <span className="font-medium text-green-600">{recorderReport.stable_selectors?.length ?? 0}</span>
-                    <span className="text-secondary">Ненадёжных элементов:</span>
-                    <span className="font-medium text-yellow-600">{recorderReport.fragile_selectors?.length ?? 0}</span>
+                  <div className="flex items-center justify-between gap-3">
+                    <h3 className="text-sm font-semibold text-primary">Отчёт анализа</h3>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        className="rounded-md border border-border bg-base px-3 py-1 text-xs text-primary hover:border-accent"
+                        onClick={handleDownloadMd}
+                        disabled={!recorderReport.markdown}
+                      >
+                        Скачать .md
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded-md border border-border bg-base px-3 py-1 text-xs text-primary hover:border-accent"
+                        onClick={() => setShowReport((v) => !v)}
+                      >
+                        {showReport ? 'Скрыть отчёт' : 'Показать отчёт'}
+                      </button>
+                    </div>
                   </div>
-                  {recorderReport.recommendations?.length > 0 && (
-                    <div className="flex flex-col gap-1">
-                      <p className="text-xs font-medium text-secondary uppercase tracking-wide">Рекомендации</p>
-                      {recorderReport.recommendations.map((rec, i) => (
-                        <p key={i} className="text-sm text-primary">{rec}</p>
-                      ))}
-                    </div>
-                  )}
-                  {recorderReport.steps_summary?.length > 0 && (
-                    <div className="flex flex-col gap-1">
-                      <p className="text-xs font-medium text-secondary uppercase tracking-wide">Шаги ({recorderReport.steps_summary.length})</p>
-                      <div className="max-h-48 overflow-y-auto rounded border border-border bg-base p-2">
-                        {recorderReport.steps_summary.map((step) => (
-                          <div key={step.step} className="flex gap-2 py-1 text-xs border-b border-border last:border-0">
-                            <span className="w-6 shrink-0 text-secondary">{step.step}.</span>
-                            <span className="font-mono text-accent">{step.type}</span>
-                            <span className="text-primary truncate">{step.text || step.value || '—'}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
+                  <div className="grid grid-cols-2 gap-2 text-sm">
+                    <span className="text-secondary">Действий:</span>
+                    <span className="font-medium">{recorderReport.actions_count ?? 0}</span>
+                    <span className="text-secondary">Сырых событий:</span>
+                    <span className="font-medium">{recorderReport.raw_events_count ?? 0}</span>
+                  </div>
+                  <div className="flex flex-col gap-1 text-xs text-secondary">
+                    <div>JSON: <code className="font-mono text-primary break-all">{recorderReport.json_path}</code></div>
+                    <div>MD: <code className="font-mono text-primary break-all">{recorderReport.md_path}</code></div>
+                  </div>
+                  {showReport && recorderReport.markdown && (
+                    <pre className="max-h-96 overflow-auto rounded-md border border-border bg-base p-3 font-mono text-xs text-primary" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                      {recorderReport.markdown}
+                    </pre>
                   )}
                 </div>
               )}
@@ -497,79 +577,74 @@ export default function ScriptsPage() {
                 </div>
 
                 <div className="flex flex-col gap-2 sm:col-span-2">
-                  <label className="text-sm font-medium text-secondary" htmlFor="auto-creo">Папка с креативами (путь)</label>
-                  <div className="flex gap-2">
-                    <input
-                      id="auto-creo"
-                      className={INPUT_BASE_CLASS}
-                      value={autoCreoFolder}
-                      onChange={(e) => setAutoCreoFolder(e.target.value)}
-                      placeholder="/Users/markvasilev/Documents/FB_Agent_Creo/<папка>"
-                      list="auto-creo-folders"
-                    />
-                  </div>
-                  <datalist id="auto-creo-folders">
+                  <label className="text-sm font-medium text-secondary" htmlFor="auto-creo">Папка с креативами</label>
+                  <select
+                    id="auto-creo"
+                    className={INPUT_BASE_CLASS}
+                    value={autoCreoFolder}
+                    onChange={(e) => setAutoCreoFolder(e.target.value)}
+                  >
+                    <option value="">— выберите папку —</option>
                     {autoFolders.map((f) => (
-                      <option key={f.name} value={f.path || f.name}>{f.name}</option>
+                      <option key={f.name} value={f.path || f.name}>
+                        {f.name} ({f.adset_count} адсетов)
+                      </option>
                     ))}
-                  </datalist>
+                  </select>
                 </div>
               </div>
 
               <div className="flex flex-col gap-3">
                 <div className="flex items-center justify-between">
-                  <h4 className="text-sm font-medium text-primary">Адсеты ({autoAdsets.length})</h4>
-                  <button
-                    type="button"
-                    className="rounded-md border border-border px-3 py-1 text-xs hover:bg-elevated"
-                    onClick={addAdset}
-                  >
-                    + Добавить адсет
-                  </button>
+                  <h4 className="text-sm font-medium text-primary">
+                    Адсеты ({autoAdsets.length})
+                    {selectedAutoFolder && (
+                      <span className="ml-2 text-xs text-muted">
+                        — авто из папки «{selectedAutoFolder.name}»
+                      </span>
+                    )}
+                  </h4>
                 </div>
-                {autoAdsets.map((adset, idx) => (
-                  <div key={idx} className="rounded-md border border-border bg-surface p-3">
-                    <div className="mb-2 flex items-center justify-between">
-                      <span className="text-xs font-medium text-secondary">Адсет #{idx + 1}</span>
-                      {autoAdsets.length > 1 && (
-                        <button
-                          type="button"
-                          className="text-xs text-red-500 hover:underline"
-                          onClick={() => removeAdset(idx)}
-                        >
-                          удалить
-                        </button>
-                      )}
+                {!autoAdsets.length && (
+                  <p className="text-xs text-muted">
+                    Выберите папку с креативами — количество адсетов и подпапки определятся автоматически.
+                  </p>
+                )}
+                {autoAdsets.map((adset, idx) => {
+                  const computedName = adset.name_suffix?.trim()
+                    ? `${idx + 1} | ${adset.name_suffix.trim()}`
+                    : `${idx + 1}`;
+                  return (
+                    <div key={idx} className="rounded-md border border-border bg-surface p-3">
+                      <div className="mb-2 flex items-center justify-between">
+                        <span className="text-xs font-medium text-secondary">
+                          Адсет «{computedName}» — папка /{idx + 1}
+                        </span>
+                      </div>
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        <input
+                          className={INPUT_BASE_CLASS}
+                          placeholder={`Суффикс к имени (необязательно). Без него: «${idx + 1}»`}
+                          value={adset.name_suffix}
+                          onChange={(e) => updateAdset(idx, 'name_suffix', e.target.value)}
+                        />
+                        <input
+                          className={INPUT_BASE_CLASS}
+                          placeholder="Заголовок (необязательно)"
+                          value={adset.headline}
+                          onChange={(e) => updateAdset(idx, 'headline', e.target.value)}
+                        />
+                        <textarea
+                          className={`${INPUT_BASE_CLASS} sm:col-span-2`}
+                          rows="3"
+                          placeholder="Основной текст (необязательно)"
+                          value={adset.primary_text}
+                          onChange={(e) => updateAdset(idx, 'primary_text', e.target.value)}
+                        />
+                      </div>
                     </div>
-                    <div className="grid gap-2 sm:grid-cols-2">
-                      <input
-                        className={INPUT_BASE_CLASS}
-                        placeholder="Имя адсета"
-                        value={adset.name}
-                        onChange={(e) => updateAdset(idx, 'name', e.target.value)}
-                      />
-                      <input
-                        className={INPUT_BASE_CLASS}
-                        placeholder="Подпапка с креативами"
-                        value={adset.creo_subfolder}
-                        onChange={(e) => updateAdset(idx, 'creo_subfolder', e.target.value)}
-                      />
-                      <input
-                        className={`${INPUT_BASE_CLASS} sm:col-span-2`}
-                        placeholder="Заголовок"
-                        value={adset.headline}
-                        onChange={(e) => updateAdset(idx, 'headline', e.target.value)}
-                      />
-                      <textarea
-                        className={`${INPUT_BASE_CLASS} sm:col-span-2`}
-                        rows="3"
-                        placeholder="Основной текст"
-                        value={adset.primary_text}
-                        onChange={(e) => updateAdset(idx, 'primary_text', e.target.value)}
-                      />
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
 
               {autoError && <p className="text-sm text-red-500">{autoError}</p>}
@@ -584,41 +659,34 @@ export default function ScriptsPage() {
               )}
 
               {autoTask && (
-                <div className="flex flex-col gap-3 rounded-md border border-border bg-surface p-4">
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-sm font-semibold text-primary">
-                      Задача {autoTask.id.slice(0, 8)}...
-                    </h3>
-                    <span className={`text-xs px-2 py-1 rounded font-medium ${
-                      autoTask.status === 'SUCCEEDED' ? 'bg-green-100 text-green-800' :
-                      autoTask.status === 'FAILED' ? 'bg-red-100 text-red-800' :
-                      'bg-blue-100 text-blue-800'
-                    }`}>
-                      {autoTask.status}
-                    </span>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2 text-sm">
-                    <span className="text-secondary">Кампания:</span>
-                    <span className="font-medium">{autoTask.campaign_name || '—'}</span>
-                    <span className="text-secondary">Текущий шаг:</span>
-                    <span className="font-medium">{autoTask.current_step || '—'}</span>
-                  </div>
-
-                  {autoTask.error_message && (
-                    <div className="rounded bg-red-50 border border-red-200 p-2 text-xs text-red-800">
-                      {autoTask.error_message}
+                <div className="flex flex-col gap-3 rounded-md border border-border bg-surface/40 p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.2em] text-muted">
+                      <span>Задача</span>
+                      <span className="rounded-sm border border-border px-1.5 py-0.5 text-primary">
+                        {autoTask.id.slice(0, 8)}
+                      </span>
                     </div>
-                  )}
+                    {['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(autoTask.status) && (
+                      <button
+                        type="button"
+                        className="text-[11px] text-muted hover:text-primary"
+                        onClick={() => { setAutoTask(null); setAutoError(''); }}
+                      >
+                        Закрыть ↗
+                      </button>
+                    )}
+                  </div>
 
-                  {['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(autoTask.status) && (
-                    <button
-                      className="rounded-md border border-border px-3 py-1 text-sm self-start"
-                      onClick={() => { setAutoTask(null); setAutoError(''); }}
-                    >
-                      Закрыть и начать новую
-                    </button>
-                  )}
+                  <CampaignCreatorTimeline
+                    steps={autoSteps}
+                    task={autoTask}
+                    busy={autoStepBusy}
+                    onRunStep={handleRunStep}
+                    onRunFromStep={handleRunFromStep}
+                    onResume={handleResume}
+                    onCancel={handleCancel}
+                  />
                 </div>
               )}
             </div>
@@ -647,6 +715,11 @@ function RecorderLivePanel({ live }) {
     focus: 'bg-slate-100 text-slate-700',
   };
 
+  const injectionOk = live?.injection_ok;
+  const targetUrl = live?.target_url || '';
+  const pagesInjected = live?.pages_injected ?? 0;
+  const showInjectionRow = status !== 'connecting' && (injectionOk === true || injectionOk === false);
+
   return (
     <div className="flex flex-col gap-2 rounded-md border border-yellow-400 bg-yellow-50 p-3">
       <div className="flex items-center justify-between gap-3">
@@ -656,8 +729,23 @@ function RecorderLivePanel({ live }) {
         </div>
         <div className="text-xs font-mono text-yellow-900">
           событий: <span className="font-semibold">{live?.event_count ?? 0}</span>
+          <span className="ml-2">страниц: <span className="font-semibold">{pagesInjected}</span></span>
         </div>
       </div>
+
+      {showInjectionRow && (
+        <div className="flex items-center gap-2 text-xs">
+          <span className={injectionOk ? 'text-green-600' : 'text-red-600'}>●</span>
+          <span className={injectionOk ? 'text-green-800' : 'text-red-800'}>
+            {injectionOk ? 'Инжектор активен' : 'Инжектор не зацепился'}
+          </span>
+          {targetUrl && (
+            <span className="truncate font-mono text-2xs text-secondary" title={targetUrl}>
+              {targetUrl}
+            </span>
+          )}
+        </div>
+      )}
 
       {live?.error && (
         <div className="rounded bg-red-50 border border-red-200 px-2 py-1 text-xs text-red-800">

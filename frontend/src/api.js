@@ -229,7 +229,7 @@ export const stopRecording = (sessionId) =>
   request(`/campaign-recorder/stop/${sessionId}`, { method: 'POST' });
 
 export const getRecordingStatus = (sessionId, tail = 30) =>
-  request(`/campaign-recorder/status/${sessionId}?tail=${tail}`);
+  requestWithQuery(`/campaign-recorder/status/${sessionId}`, { tail });
 
 export const analyzeLastRecording = (offerCode) =>
   request(`/campaign-recorder/analyze${offerCode ? `?offer_code=${encodeURIComponent(offerCode)}` : ''}`);
@@ -243,6 +243,25 @@ export const startCampaignCreator = (data) =>
 
 export const getCampaignCreatorStatus = (taskId) =>
   request(`/campaign-creator/${taskId}/status`);
+
+export const listCampaignCreatorSteps = () =>
+  request('/campaign-creator/steps');
+
+export const runCampaignCreatorStep = (taskId, stepName) =>
+  request(`/campaign-creator/${taskId}/run-step/${encodeURIComponent(stepName)}`, {
+    method: 'POST',
+  });
+
+export const runCampaignCreatorFrom = (taskId, stepName) =>
+  request(`/campaign-creator/${taskId}/run-from/${encodeURIComponent(stepName)}`, {
+    method: 'POST',
+  });
+
+export const resumeCampaignCreator = (taskId) =>
+  request(`/campaign-creator/${taskId}/resume`, { method: 'POST' });
+
+export const cancelCampaignCreator = (taskId) =>
+  request(`/campaign-creator/${taskId}/cancel`, { method: 'POST' });
 
 function activeTaskCount(tasks = []) {
   return tasks.filter((task) => ['PENDING', 'RUNNING', 'RETRYING', 'FAILED'].includes(task.status)).length;
