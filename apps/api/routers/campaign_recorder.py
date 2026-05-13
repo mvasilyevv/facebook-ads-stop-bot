@@ -144,12 +144,18 @@ async def get_session_status(session_id: str, tail: int = 30):
         )
         for e in recent
     ]
+    report = entry.get("injection_report")
+    injection_ok = bool(report and report.ok)
+    pages_injected = report.pages_injected if report else 0
     return RecorderStatusResponseSchema(
         session_id=session_id,
         status=entry.get("status", "unknown"),
         event_count=writer.event_count,
         error=entry.get("error"),
         recent_events=events_payload,
+        injection_ok=injection_ok,
+        target_url=entry.get("target_url"),
+        pages_injected=pages_injected,
     )
 
 

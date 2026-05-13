@@ -944,6 +944,9 @@ class RecorderStatusResponseSchema(BaseModel):
     event_count: int
     error: str | None = None
     recent_events: list[RecorderEventSchema] = Field(default_factory=list)
+    injection_ok: bool = False
+    target_url: str | None = None
+    pages_injected: int = 0
 
 
 class RecorderAnalyzeResponseSchema(BaseModel):
@@ -962,12 +965,15 @@ class RecorderAnalyzeResponseSchema(BaseModel):
 
 
 class AdsetInSchema(BaseModel):
-    """Спецификация одного адсета в запросе автосоздания."""
+    """Спецификация одного адсета в запросе автосоздания.
 
-    name: str
-    headline: str
-    primary_text: str
-    creo_subfolder: str
+    Все поля опциональные. Имя адсета и подпапка креативов
+    достраиваются на бэке из позиции в списке.
+    """
+
+    name_suffix: str = ""
+    headline: str = ""
+    primary_text: str = ""
 
 
 class CampaignCreatorStartRequestSchema(BaseModel):
@@ -993,3 +999,17 @@ class CampaignCreatorTaskSchema(BaseModel):
     campaign_name: str | None
     offer_code: str
     created_at: str
+    context_json: dict | None = None
+
+
+class CampaignCreatorStepInfoSchema(BaseModel):
+    """Описание шага в реестре."""
+
+    name: str
+    idempotent: bool
+
+
+class CampaignCreatorStepsListSchema(BaseModel):
+    """Список доступных шагов."""
+
+    steps: list[CampaignCreatorStepInfoSchema]
