@@ -119,3 +119,46 @@ def test_session_writer_filename_contains_offer():
         writer.add_events([])
         path = writer.save()
         assert "DRC_CR2" in path.name
+
+
+def test_analyze_endpoint_returns_markdown(tmp_path, monkeypatch):
+    """GET /analyze должен прочитать JSON, сгенерировать .md и вернуть markdown."""
+    import json
+
+    from fastapi.testclient import TestClient
+
+    from apps.api.routers import campaign_recorder as rec_module
+
+    monkeypatch.setattr(rec_module, "_RECORDINGS_DIR", tmp_path)
+    session = {
+        "offer_code": "KE_CR2",
+        "started_at": "2026-05-13T10:00:00",
+        "events": [
+            {
+                "type": "click",
+                "ts": 1.0,
+                "xpath": "/html/body/button",
+                "selector_candidates": ['role=button[name="Save"]'],
+                "text": "Save",
+                "label_text": "Save",
+                "nearest_heading": "Section A",
+            }
+        ],
+    }
+    json_path = tmp_path / "20260513_100000_KE_CR2.json"
+    json_path.write_text(json.dumps(session), encoding="utf-8")
+
+    from fastapi import FastAPI
+
+    app = FastAPI()
+    app.include_router(rec_module.router)
+    client = TestClient(app)
+    resp = client.get("/api/campaign-recorder/analyze")
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["json_path"].endswith(".json")
+    assert data["md_path"].endswith(".md")
+    assert "KE_CR2" in data["markdown"]
+    assert data["actions_count"] >= 1
+    assert data["raw_events_count"] == 1
+    assert (tmp_path / "20260513_100000_KE_CR2.md").exists()

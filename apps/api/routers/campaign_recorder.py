@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import uuid
 from pathlib import Path
@@ -15,13 +16,14 @@ from apps.api.schemas import (
     RecorderStatusResponseSchema,
     RecorderStopResponseSchema,
 )
-from core.campaign_recorder.analyzer import analyze_session_file
+from core.campaign_recorder.analyzer import denoise
 from core.campaign_recorder.cdp_session import CdpConnectionError, CdpSession
 from core.campaign_recorder.event_injector import (
     attach_recorder,
     clear_events,
     collect_events,
 )
+from core.campaign_recorder.markdown_report import build_markdown
 from core.campaign_recorder.session_writer import SessionWriter
 
 router = APIRouter(prefix="/api/campaign-recorder", tags=["campaign-recorder"])
@@ -182,5 +184,21 @@ async def analyze_last_recording(offer_code: str | None = None):
         if not await asyncio.to_thread(recordings_dir.exists):
             raise HTTPException(status_code=404, detail="Папка recordings не найдена")
         raise HTTPException(status_code=404, detail="Нет файлов записи")
-    report = await asyncio.to_thread(analyze_session_file, files[0])
-    return RecorderAnalyzeResponseSchema(**report)
+
+    def _build() -> RecorderAnalyzeResponseSchema:
+        json_path = files[0]
+        session = json.loads(json_path.read_text(encoding="utf-8"))
+        actions = denoise(session.get("events", []))
+        session["path"] = str(json_path)
+        md = build_markdown(session, actions)
+        md_path = json_path.with_suffix(".md")
+        md_path.write_text(md, encoding="utf-8")
+        return RecorderAnalyzeResponseSchema(
+            json_path=str(json_path),
+            md_path=str(md_path),
+            markdown=md,
+            actions_count=len(actions),
+            raw_events_count=len(session.get("events", [])),
+        )
+
+    return await asyncio.to_thread(_build)

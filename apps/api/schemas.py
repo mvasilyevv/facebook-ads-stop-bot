@@ -950,15 +950,13 @@ class RecorderStatusResponseSchema(BaseModel):
 
 
 class RecorderAnalyzeResponseSchema(BaseModel):
-    """Отчёт анализатора по последней сессии."""
+    """Отчёт анализатора в виде markdown."""
 
-    offer_code: str
-    total_events: int
-    by_type: dict[str, int]
-    stable_selectors: list[dict]
-    fragile_selectors: list[dict]
-    steps_summary: list[dict]
-    recommendations: list[str]
+    json_path: str
+    md_path: str
+    markdown: str
+    actions_count: int
+    raw_events_count: int
 
 
 # --- Campaign Creator ---
