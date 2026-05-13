@@ -74,6 +74,93 @@ def BUILD_JS_INJECTOR(session_id: str = "") -> str:
       }}, '');
     }}
 
+    function getLabelText(el) {{
+      return safe(function() {{
+        if (!el) return null;
+        if (el.id) {{
+          var lbl = document.querySelector('label[for="' + el.id + '"]');
+          if (lbl) return (lbl.innerText || '').trim().slice(0, 200) || null;
+        }}
+        var p = el.parentElement;
+        for (var i = 0; i < 4 && p; i++, p = p.parentElement) {{
+          if (p.tagName && p.tagName.toLowerCase() === 'label') {{
+            return (p.innerText || '').trim().slice(0, 200) || null;
+          }}
+        }}
+        return null;
+      }}, null);
+    }}
+
+    function getNearestHeading(el) {{
+      return safe(function() {{
+        var node = el;
+        for (var i = 0; i < 8 && node; i++) {{
+          var sib = node.previousElementSibling;
+          while (sib) {{
+            if (sib.matches && (sib.matches('h1,h2,h3,h4') || sib.getAttribute('role') === 'heading')) {{
+              return (sib.innerText || '').trim().slice(0, 200) || null;
+            }}
+            sib = sib.previousElementSibling;
+          }}
+          node = node.parentElement;
+          if (node && node.matches && (node.matches('h1,h2,h3,h4') || node.getAttribute('role') === 'heading')) {{
+            return (node.innerText || '').trim().slice(0, 200) || null;
+          }}
+        }}
+        return null;
+      }}, null);
+    }}
+
+    function cssEscape(s) {{
+      return String(s).replace(/(["\\\\])/g, '\\\\$1');
+    }}
+
+    function getAccessibleName(el) {{
+      return safe(function() {{
+        if (el.getAttribute('aria-label')) return el.getAttribute('aria-label');
+        if (el.id) {{
+          var lbl = document.querySelector('label[for="' + el.id + '"]');
+          if (lbl) return (lbl.innerText || '').trim();
+        }}
+        var t = (el.innerText || el.textContent || '').trim();
+        return t || null;
+      }}, null);
+    }}
+
+    function isStableClass(c) {{
+      if (!c) return false;
+      return !/^x[a-z0-9]{{6,}}$/i.test(c);
+    }}
+
+    function getSelectorCandidates(el) {{
+      return safe(function() {{
+        var cands = [];
+        var role = el.getAttribute && el.getAttribute('role');
+        var name = getAccessibleName(el);
+        if (role && name && name.length <= 80) {{
+          cands.push('role=' + role + '[name="' + cssEscape(name) + '"]');
+        }}
+        var aria = el.getAttribute && el.getAttribute('aria-label');
+        if (aria) cands.push('[aria-label="' + cssEscape(aria) + '"]');
+        var dataAttrs = ['data-testid', 'data-pagelet', 'data-surface'];
+        for (var i = 0; i < dataAttrs.length; i++) {{
+          var v = el.getAttribute && el.getAttribute(dataAttrs[i]);
+          if (v) cands.push('[' + dataAttrs[i] + '="' + cssEscape(v) + '"]');
+        }}
+        var tag = el.tagName ? el.tagName.toLowerCase() : '';
+        var txt = (el.innerText || el.textContent || '').trim();
+        if (txt && txt.length <= 60 && (tag === 'button' || tag === 'a' || role === 'button')) {{
+          cands.push('text="' + cssEscape(txt) + '"');
+        }}
+        var stableClasses = Array.from(el.classList || []).filter(isStableClass);
+        if (stableClasses.length) {{
+          cands.push(tag + '.' + stableClasses.join('.'));
+        }}
+        cands.push('xpath=' + getXPath(el));
+        return cands;
+      }}, []);
+    }}
+
     function record(type, target, value) {{
       try {{
         var el = (target && target.nodeType === 1) ? target
@@ -95,6 +182,10 @@ def BUILD_JS_INJECTOR(session_id: str = "") -> str:
           y: Math.round(rect.y || 0),
           role: safe(function() {{ return el.getAttribute && el.getAttribute('role'); }}, null),
           aria_label: safe(function() {{ return el.getAttribute && el.getAttribute('aria-label'); }}, null),
+          label_text: getLabelText(el),
+          placeholder: safe(function() {{ return el.placeholder || null; }}, null),
+          nearest_heading: getNearestHeading(el),
+          selector_candidates: getSelectorCandidates(el),
           url: location ? location.href : ''
         }};
         window.__fbRecorder.events.push(ev);

@@ -68,6 +68,20 @@ def test_injector_js_contains_event_listeners():
     assert "session_id" in js
 
 
+def test_injector_js_collects_extended_fields():
+    """JS должен собирать label_text, placeholder, nearest_heading, selector_candidates."""
+    from core.campaign_recorder.event_injector import BUILD_JS_INJECTOR
+
+    js = BUILD_JS_INJECTOR("sid")
+    for fragment in [
+        "label_text",
+        "placeholder",
+        "nearest_heading",
+        "selector_candidates",
+    ]:
+        assert fragment in js, f"JS не содержит {fragment}"
+
+
 @pytest.mark.asyncio
 async def test_injector_injects_into_page():
     """inject_event_listener должен вызвать evaluate на каждом фрейме страницы."""
