@@ -8,14 +8,17 @@ logger = logging.getLogger(__name__)
 _MAX_TEXT_LEN = 200
 
 
-def BUILD_JS_INJECTOR() -> str:
+def BUILD_JS_INJECTOR(session_id: str = "") -> str:
     """Возвращает JS-сниппет, который собирает события DOM."""
+    js_sid = repr(session_id)
     return f"""
 (function() {{
   try {{
-    if (window.__fbRecorder && window.__fbRecorder.installed) return;
+    var SESSION_ID = {js_sid};
+    if (window.__fbRecorder && window.__fbRecorder.installed && window.__fbRecorder.session_id === SESSION_ID) return;
     window.__fbRecorder = window.__fbRecorder || {{ events: [] }};
     window.__fbRecorder.installed = true;
+    window.__fbRecorder.session_id = SESSION_ID;
 
     function safe(fn, fallback) {{
       try {{ return fn(); }} catch (e) {{ return fallback; }}
@@ -111,28 +114,28 @@ def BUILD_JS_INJECTOR() -> str:
 """
 
 
-async def _inject_into_frame(frame: Frame) -> None:
+async def _inject_into_frame(frame: Frame, session_id: str = "") -> None:
     """Инжектирует слушатели в один фрейм. Не падает при ошибках."""
     try:
-        await frame.evaluate(BUILD_JS_INJECTOR())
+        await frame.evaluate(BUILD_JS_INJECTOR(session_id))
     except Exception as exc:
         logger.debug("Не удалось инжектить в фрейм %s: %s", getattr(frame, "url", "?"), exc)
 
 
-async def inject_into_page(page: Page) -> None:
+async def inject_into_page(page: Page, session_id: str = "") -> None:
     """Инжектирует слушатели во все фреймы страницы."""
     for frame in page.frames:
-        await _inject_into_frame(frame)
+        await _inject_into_frame(frame, session_id)
 
 
-async def attach_recorder(context: BrowserContext) -> None:
+async def attach_recorder(context: BrowserContext, session_id: str = "") -> None:
     """Подключает запись ко всему контексту: текущим страницам, новым страницам и фреймам.
 
     1. init_script — сработает на новых страницах/фреймах автоматически.
     2. Текущие страницы инжектим вручную (init_script на них не действует).
     3. Слушаем page/framenavigated — заново инжектим после SPA-навигаций.
     """
-    js = BUILD_JS_INJECTOR()
+    js = BUILD_JS_INJECTOR(session_id)
     try:
         await context.add_init_script(js)
         logger.info("init_script зарегистрирован для контекста")
@@ -140,16 +143,19 @@ async def attach_recorder(context: BrowserContext) -> None:
         logger.warning("Не удалось зарегистрировать init_script: %s", exc)
 
     for page in context.pages:
-        await inject_into_page(page)
+        await inject_into_page(page, session_id)
 
     def _on_new_page(page: Page) -> None:
         logger.info("Новая вкладка: %s", page.url)
 
         async def _setup():
-            await inject_into_page(page)
+            await inject_into_page(page, session_id)
 
         try:
-            page.on("framenavigated", lambda fr: _safe_create_task(_inject_into_frame(fr)))
+            page.on(
+                "framenavigated",
+                lambda fr: _safe_create_task(_inject_into_frame(fr, session_id)),
+            )
         except Exception:
             pass
         _safe_create_task(_setup())
@@ -157,7 +163,10 @@ async def attach_recorder(context: BrowserContext) -> None:
     context.on("page", _on_new_page)
 
     for page in context.pages:
-        page.on("framenavigated", lambda fr: _safe_create_task(_inject_into_frame(fr)))
+        page.on(
+            "framenavigated",
+            lambda fr: _safe_create_task(_inject_into_frame(fr, session_id)),
+        )
 
     logger.info(
         "Recorder подключён. Страниц в контексте: %d, фреймов суммарно: %d",
@@ -176,9 +185,9 @@ def _safe_create_task(coro) -> None:
         pass
 
 
-async def inject_event_listener(page: Page) -> None:
+async def inject_event_listener(page: Page, session_id: str = "") -> None:
     """Старая совместимая обёртка — инжект в одну страницу."""
-    await inject_into_page(page)
+    await inject_into_page(page, session_id)
 
 
 async def collect_events(page_or_context) -> list[dict]:

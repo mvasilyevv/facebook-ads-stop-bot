@@ -58,22 +58,25 @@ async def test_cdp_session_returns_page():
 
 
 def test_injector_js_contains_event_listeners():
-    """JS-сниппет должен слушать click, input, change, select, focus."""
+    """JS-сниппет должен слушать click, input, change, keydown, submit и проставлять session_id."""
     from core.campaign_recorder.event_injector import BUILD_JS_INJECTOR
 
-    js = BUILD_JS_INJECTOR()
-    for event in ["click", "input", "change", "select", "focus"]:
+    js = BUILD_JS_INJECTOR("test-session-id")
+    for event in ["click", "input", "change", "keydown", "submit"]:
         assert event in js, f"JS не содержит обработчик события {event}"
+    assert "test-session-id" in js
+    assert "session_id" in js
 
 
 @pytest.mark.asyncio
 async def test_injector_injects_into_page():
-    """inject_event_listener должен вызвать evaluate на странице."""
-    mock_page = AsyncMock()
+    """inject_event_listener должен вызвать evaluate на каждом фрейме страницы."""
+    mock_frame = MagicMock(evaluate=AsyncMock(), url="about:blank")
+    mock_page = MagicMock(frames=[mock_frame])
     from core.campaign_recorder.event_injector import inject_event_listener
 
     await inject_event_listener(mock_page)
-    mock_page.evaluate.assert_called_once()
+    mock_frame.evaluate.assert_awaited_once()
 
 
 # --- Task 3: SessionWriter ---
