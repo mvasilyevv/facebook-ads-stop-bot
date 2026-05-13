@@ -88,6 +88,17 @@ class CdpSession:
                 await client.close()
                 raise CdpConnectionError(f"Не удалось подключиться к CDP {cdp_url}: {exc}") from exc
 
+            logger.info("CDP контекстов в браузере: %d", len(browser.contexts))
+            for ci, ctx in enumerate(browser.contexts):
+                for pi, p in enumerate(ctx.pages):
+                    logger.info(
+                        "  ctx[%d] page[%d] url=%s frames=%d",
+                        ci,
+                        pi,
+                        p.url,
+                        len(p.frames),
+                    )
+
             page = _pick_target_page(browser)
             if page is None:
                 await browser.close()
