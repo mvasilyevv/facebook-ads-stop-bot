@@ -1,11 +1,32 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass, field
 
 from playwright.async_api import BrowserContext, Frame, Page
 
 logger = logging.getLogger(__name__)
 _MAX_TEXT_LEN = 200
+
+
+@dataclass(frozen=True)
+class PageInjection:
+    url: str
+    frames_total: int
+    frames_injected: int
+
+
+@dataclass(frozen=True)
+class InjectionReport:
+    pages: tuple[PageInjection, ...] = field(default_factory=tuple)
+
+    @property
+    def pages_injected(self) -> int:
+        return sum(1 for p in self.pages if p.frames_injected > 0)
+
+    @property
+    def ok(self) -> bool:
+        return self.pages_injected > 0
 
 
 def BUILD_JS_INJECTOR(session_id: str = "") -> str:
@@ -128,7 +149,41 @@ async def inject_into_page(page: Page, session_id: str = "") -> None:
         await _inject_into_frame(frame, session_id)
 
 
-async def attach_recorder(context: BrowserContext, session_id: str = "") -> None:
+async def _check_frame_installed(frame: Frame, session_id: str) -> bool:
+    try:
+        return bool(
+            await frame.evaluate(
+                "(sid) => !!(window.__fbRecorder && window.__fbRecorder.installed"
+                " && window.__fbRecorder.session_id === sid)",
+                session_id,
+            )
+        )
+    except Exception:
+        return False
+
+
+async def _build_injection_report(context: BrowserContext, session_id: str) -> InjectionReport:
+    pages = []
+    for page in context.pages:
+        injected = 0
+        for frame in page.frames:
+            if await _check_frame_installed(frame, session_id):
+                injected += 1
+            else:
+                await _inject_into_frame(frame, session_id)
+                if await _check_frame_installed(frame, session_id):
+                    injected += 1
+        pages.append(
+            PageInjection(
+                url=page.url or "",
+                frames_total=len(page.frames),
+                frames_injected=injected,
+            )
+        )
+    return InjectionReport(pages=tuple(pages))
+
+
+async def attach_recorder(context: BrowserContext, session_id: str = "") -> InjectionReport:
     """Подключает запись ко всему контексту: текущим страницам, новым страницам и фреймам.
 
     1. init_script — сработает на новых страницах/фреймах автоматически.
@@ -173,6 +228,8 @@ async def attach_recorder(context: BrowserContext, session_id: str = "") -> None
         len(context.pages),
         sum(len(p.frames) for p in context.pages),
     )
+
+    return await _build_injection_report(context, session_id)
 
 
 def _safe_create_task(coro) -> None:
