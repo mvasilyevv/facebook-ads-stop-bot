@@ -41,19 +41,29 @@ async def start_recording(body: RecorderStartRequestSchema):
         try:
             async with session.connect() as page:
                 context = page.context
-                await attach_recorder(context)
+                report = await attach_recorder(context, session_id=session_id)
+                _active_sessions[session_id]["injection_report"] = report
+                _active_sessions[session_id]["target_url"] = page.url
                 _active_sessions[session_id]["page"] = page
+                if not report.ok:
+                    _active_sessions[session_id]["status"] = "error"
+                    _active_sessions[session_id]["error"] = (
+                        "Ни в один фрейм не удалось инжектить recorder"
+                    )
+                    return
                 _active_sessions[session_id]["status"] = "recording"
                 logger.info(
-                    "Запись стартовала. session=%s, url=%s, pages=%d",
+                    "Запись стартовала. session=%s, url=%s, pages_injected=%d",
                     session_id,
                     page.url,
-                    len(context.pages),
+                    report.pages_injected,
                 )
                 stop_event: asyncio.Event = _active_sessions[session_id]["stop_event"]
+                tick = 0
                 try:
                     while not stop_event.is_set():
                         await asyncio.sleep(1)
+                        tick += 1
                         try:
                             events = await collect_events(context)
                         except Exception as poll_exc:
@@ -62,9 +72,12 @@ async def start_recording(body: RecorderStartRequestSchema):
                         if events:
                             writer.add_events(events)
                             await clear_events(context)
-                            logger.debug(
-                                "Собрано %d событий, всего: %d",
-                                len(events),
+                        if tick % 10 == 0:
+                            logger.info(
+                                "recording session=%s pages=%d frames=%d events_total=%d",
+                                session_id,
+                                len(context.pages),
+                                sum(len(p.frames) for p in context.pages),
                                 writer.event_count,
                             )
                 except Exception as exc:
@@ -83,6 +96,8 @@ async def start_recording(body: RecorderStartRequestSchema):
         "stop_event": stop_event,
         "status": "connecting",
         "error": None,
+        "injection_report": None,
+        "target_url": None,
     }
     task = asyncio.create_task(_run_session())
     _active_sessions[session_id]["task"] = task
