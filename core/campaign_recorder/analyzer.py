@@ -1,90 +1,203 @@
+"""Денойз сырых событий записи → list[UserAction]."""
+
 from __future__ import annotations
 
 import json
-import logging
-from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
-logger = logging.getLogger(__name__)
-
-
-def _selector_for_event(event: dict) -> str | None:
-    if event.get("id"):
-        return f"#{event['id']}"
-    if event.get("aria_label"):
-        return f"[aria-label=\"{event['aria_label']}\"]"
-    data = event.get("data_attrs", {})
-    if data:
-        key, val = next(iter(data.items()))
-        return f"[{key}=\"{val}\"]"
-    return None
+ActionKind = Literal["click", "fill", "select", "key", "submit"]
 
 
-def _is_stable(event: dict) -> bool:
-    return bool(event.get("id") or event.get("aria_label") or event.get("data_attrs"))
+@dataclass(frozen=True)
+class UserAction:
+    kind: ActionKind
+    selectors: tuple[str, ...]
+    value: str | None
+    label: str | None
+    section: str | None
+    ts: float
+    raw_indices: tuple[int, ...]
+
+
+_CLICK_WINDOW_S = 0.2
+_KEY_SUBMITS = {"Enter", "Escape", "Tab"}
+
+
+def _label_for(event: dict) -> str | None:
+    return event.get("label_text") or event.get("aria_label") or (event.get("text") or None)
+
+
+def _selectors_for(event: dict) -> tuple[str, ...]:
+    cands = event.get("selector_candidates") or []
+    return tuple(str(s) for s in cands if s)
+
+
+def denoise(events: list[dict]) -> list[UserAction]:
+    """Свёртка сырых событий в значимые действия."""
+    actions: list[UserAction] = []
+    i = 0
+    n = len(events)
+    pending_fill: dict[str, list[int]] = {}
+
+    def flush_fill(xpath: str) -> None:
+        idxs = pending_fill.pop(xpath, [])
+        if not idxs:
+            return
+        last = events[idxs[-1]]
+        selectors = _selectors_for(last)
+        actions.append(
+            UserAction(
+                kind="fill",
+                selectors=selectors,
+                value=None if last.get("value") is None else str(last["value"]),
+                label=_label_for(last),
+                section=last.get("nearest_heading"),
+                ts=float(last.get("ts") or 0),
+                raw_indices=tuple(idxs),
+            )
+        )
+
+    while i < n:
+        e = events[i]
+        kind = e.get("type")
+        xpath = e.get("xpath") or ""
+
+        if kind in ("pointerdown", "mousedown", "click"):
+            for xk in list(pending_fill.keys()):
+                flush_fill(xk)
+            group = [i]
+            j = i + 1
+            click_idx: int | None = i if kind == "click" else None
+            while j < n:
+                ne = events[j]
+                if ne.get("xpath") != xpath:
+                    break
+                if (float(ne.get("ts") or 0) - float(e.get("ts") or 0)) > _CLICK_WINDOW_S:
+                    break
+                if ne.get("type") not in ("pointerdown", "mousedown", "click"):
+                    break
+                group.append(j)
+                if ne.get("type") == "click":
+                    click_idx = j
+                j += 1
+            if click_idx is not None:
+                src = events[click_idx]
+                selectors = _selectors_for(src)
+                text = (src.get("text") or "").strip()
+                if selectors or text:
+                    actions.append(
+                        UserAction(
+                            kind="click",
+                            selectors=selectors,
+                            value=None,
+                            label=_label_for(src),
+                            section=src.get("nearest_heading"),
+                            ts=float(src.get("ts") or 0),
+                            raw_indices=tuple(group),
+                        )
+                    )
+            i = j
+            continue
+
+        if kind == "input":
+            pending_fill.setdefault(xpath, []).append(i)
+            i += 1
+            continue
+
+        if kind == "change":
+            tag = (e.get("tag") or "").lower()
+            if tag == "select":
+                for xk in list(pending_fill.keys()):
+                    flush_fill(xk)
+                actions.append(
+                    UserAction(
+                        kind="select",
+                        selectors=_selectors_for(e),
+                        value=None if e.get("value") is None else str(e["value"]),
+                        label=_label_for(e),
+                        section=e.get("nearest_heading"),
+                        ts=float(e.get("ts") or 0),
+                        raw_indices=(i,),
+                    )
+                )
+            else:
+                if xpath in pending_fill:
+                    pending_fill[xpath].append(i)
+                    flush_fill(xpath)
+                else:
+                    pending_fill.setdefault(xpath, []).append(i)
+                    flush_fill(xpath)
+            i += 1
+            continue
+
+        if kind == "keydown":
+            key = e.get("value")
+            is_last = not any(ev.get("xpath") == xpath for ev in events[i + 1 :])
+            if key in _KEY_SUBMITS and is_last:
+                for xk in list(pending_fill.keys()):
+                    flush_fill(xk)
+                actions.append(
+                    UserAction(
+                        kind="key",
+                        selectors=_selectors_for(e),
+                        value=str(key),
+                        label=_label_for(e),
+                        section=e.get("nearest_heading"),
+                        ts=float(e.get("ts") or 0),
+                        raw_indices=(i,),
+                    )
+                )
+            i += 1
+            continue
+
+        if kind == "submit":
+            for xk in list(pending_fill.keys()):
+                flush_fill(xk)
+            actions.append(
+                UserAction(
+                    kind="submit",
+                    selectors=_selectors_for(e),
+                    value=None,
+                    label=_label_for(e),
+                    section=e.get("nearest_heading"),
+                    ts=float(e.get("ts") or 0),
+                    raw_indices=(i,),
+                )
+            )
+            i += 1
+            continue
+
+        i += 1
+
+    for xk in list(pending_fill.keys()):
+        flush_fill(xk)
+
+    return actions
 
 
 def analyze_session(session: dict) -> dict:
-    """Анализирует сессию и возвращает отчёт с паттернами."""
     events: list[dict] = session.get("events", [])
-    by_type: Counter = Counter(e.get("type") for e in events)
-
-    stable: list[dict] = []
-    fragile: list[dict] = []
-    for event in events:
-        selector = _selector_for_event(event)
-        entry = {
-            "selector": selector or event.get("xpath", ""),
-            "type": event.get("type"),
-            "tag": event.get("tag"),
-            "text": event.get("text", "")[:80],
-            "value": event.get("value"),
-            "is_stable": _is_stable(event),
-        }
-        if _is_stable(event) and selector:
-            stable.append(entry)
-        else:
-            fragile.append(entry)
-
-    steps = [
-        {
-            "step": i + 1,
-            "type": e.get("type"),
-            "text": (e.get("text") or "")[:60],
-            "value": e.get("value"),
-        }
-        for i, e in enumerate(events)
-        if e.get("type") in ("click", "input", "change")
-    ]
-
+    actions = denoise(events)
     return {
         "offer_code": session.get("offer_code", ""),
-        "total_events": len(events),
-        "by_type": dict(by_type),
-        "stable_selectors": stable,
-        "fragile_selectors": fragile,
-        "steps_summary": steps,
-        "recommendations": _build_recommendations(stable, fragile),
+        "raw_events_count": len(events),
+        "actions_count": len(actions),
+        "actions": [
+            {
+                "kind": a.kind,
+                "selectors": list(a.selectors),
+                "value": a.value,
+                "label": a.label,
+                "section": a.section,
+                "ts": a.ts,
+            }
+            for a in actions
+        ],
     }
 
 
-def _build_recommendations(stable: list, fragile: list) -> list[str]:
-    recs = []
-    if fragile:
-        recs.append(
-            f"{len(fragile)} элементов без стабильного селектора — "
-            "возможны проблемы при автоматизации. Используй aria-label или data-атрибуты."
-        )
-    if stable:
-        recs.append(
-            f"{len(stable)} элементов имеют надёжные селекторы — готовы к автоматизации."
-        )
-    if not recs:
-        recs.append("Недостаточно данных для анализа.")
-    return recs
-
-
 def analyze_session_file(path: Path) -> dict:
-    """Загружает JSON-файл сессии и возвращает отчёт."""
     data = json.loads(path.read_text(encoding="utf-8"))
     return analyze_session(data)
