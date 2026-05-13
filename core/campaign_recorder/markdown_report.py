@@ -66,6 +66,26 @@ def _action_block(idx: int, action: UserAction) -> str:
         what = f"«{action.label}»" if action.label else "—"
     lines.append(f"**Что:** {what}")
 
+    widget = action.widget or {}
+    if widget and not widget.get("is_self"):
+        # Семантический контекст: клик внутри какого виджета сделан.
+        role = widget.get("role")
+        wname = (
+            widget.get("name")
+            or widget.get("aria_label")
+            or widget.get("labelled_by")
+            or widget.get("inner_text")
+        )
+        if role and wname:
+            lines.append(f"**Виджет:** `role={role}` «{wname}»")
+        elif role:
+            lines.append(f"**Виджет:** `role={role}`")
+
+    if action.opened_after:
+        # Что появилось на экране после клика — раскрылся ли диалог/меню.
+        preview = ", ".join(action.opened_after[:6])
+        lines.append(f"**Открылось после клика:** {preview}")
+
     if action.section:
         lines.append(f"**Секция:** {action.section}")
 

@@ -82,6 +82,10 @@ def BUILD_JS_INJECTOR(session_id: str = "") -> str:
     var INTERACTIVE_ROLES = {{button:1,link:1,option:1,menuitem:1,menuitemcheckbox:1,menuitemradio:1,
                               tab:1,switch:1,checkbox:1,radio:1,combobox:1,listbox:1,searchbox:1,
                               textbox:1,slider:1,treeitem:1}};
+    // Виджет — это интерактивная обёртка вокруг кликнутого элемента.
+    // Помогает понять «клик внутри какого комбобокса/кнопки/таба сделан».
+    var WIDGET_ROLES = {{combobox:1,button:1,tab:1,menuitem:1,menuitemcheckbox:1,menuitemradio:1,
+                         link:1,switch:1,radio:1,checkbox:1,treeitem:1,dialog:1,listbox:1,grid:1}};
 
     function isInteractive(el) {{
       if (!el || el.nodeType !== 1) return false;
@@ -120,6 +124,72 @@ def BUILD_JS_INJECTOR(session_id: str = "") -> str:
         node = node.parentElement;
       }}
       return last;
+    }}
+
+    function findWidgetAncestor(el) {{
+      // Ближайший предок с понятной семантической ролью виджета.
+      // Это «что было кликнуто на уровне UI» (комбобокс, кнопка, таб...).
+      var node = el;
+      for (var i = 0; i < 10 && node; i++) {{
+        var role = node.getAttribute && node.getAttribute('role');
+        if (role && WIDGET_ROLES[role]) return {{ el: node, role: role }};
+        node = node.parentElement;
+      }}
+      return null;
+    }}
+
+    function widgetInfo(el) {{
+      return safe(function() {{
+        var w = findWidgetAncestor(el);
+        if (!w) return null;
+        var name = getAccessibleName(w.el);
+        var aria = w.el.getAttribute && w.el.getAttribute('aria-label');
+        var labelledBy = w.el.getAttribute && w.el.getAttribute('aria-labelledby');
+        var labelledByText = null;
+        if (labelledBy) {{
+          var ref = document.getElementById(labelledBy);
+          if (ref) labelledByText = (ref.innerText || '').trim().slice(0, 200) || null;
+        }}
+        // Текст внутри виджета — текущее значение (FB кладёт его как gridcell child).
+        var inner = (w.el.innerText || '').trim().replace(/\\u200b/g, '');
+        if (inner.length > 80 || inner.indexOf('\\n') !== -1) inner = null;
+        return {{
+          role: w.role,
+          name: name || null,
+          aria_label: aria || null,
+          labelled_by: labelledByText,
+          inner_text: inner,
+          is_self: w.el === el,
+        }};
+      }}, null);
+    }}
+
+    function snapshotOpened() {{
+      // Собираем заголовки в текущих popover/dialog/listbox/menu-контейнерах.
+      // Идея: после клика что-то могло раскрыться, и мы хотим знать содержимое.
+      return safe(function() {{
+        var out = [];
+        var containers = document.querySelectorAll(
+          '[role="dialog"],[role="menu"],[role="listbox"],[role="tooltip"],[data-visualcompletion="ignore"][role],[data-visualcompletion="ignore-dynamic"]'
+        );
+        for (var i = 0; i < containers.length && out.length < 12; i++) {{
+          var c = containers[i];
+          if (!c.offsetWidth || !c.offsetHeight) continue;
+          // Заголовки
+          var headings = c.querySelectorAll('[role="heading"],h1,h2,h3,h4');
+          for (var h = 0; h < headings.length && out.length < 12; h++) {{
+            var t = (headings[h].innerText || '').trim().replace(/\\s+/g, ' ');
+            if (t && t.length <= 80) out.push('heading: ' + t);
+          }}
+          // gridcell — FB-карточки выбора («Сайт», «Одно»)
+          var cells = c.querySelectorAll('[role="gridcell"]');
+          for (var g = 0; g < cells.length && out.length < 12; g++) {{
+            var ct = (cells[g].innerText || '').trim().replace(/\\s+/g, ' ').replace(/\\u200b/g, '');
+            if (ct && ct.length <= 80) out.push('gridcell: ' + ct);
+          }}
+        }}
+        return out;
+      }}, []);
     }}
 
     function getDataAttrs(el) {{
@@ -327,10 +397,25 @@ def BUILD_JS_INJECTOR(session_id: str = "") -> str:
           label_text: getLabelText(el),
           placeholder: safe(function() {{ return el.placeholder || null; }}, null),
           nearest_heading: getNearestHeading(el),
+          widget: widgetInfo(el),
           selector_candidates: getSelectorCandidates(el),
           url: location ? location.href : ''
         }};
         window.__fbRecorder.events.push(ev);
+        // Для click — через ~400мс снимаем «что открылось». Это покажет, что клик
+        // открыл диалог/меню, и какие в нём заголовки/карточки.
+        if (type === 'click') {{
+          var snapIdx = window.__fbRecorder.events.length - 1;
+          setTimeout(function() {{
+            try {{
+              var opened = snapshotOpened();
+              if (opened && opened.length) {{
+                var prev = window.__fbRecorder.events[snapIdx];
+                if (prev) prev.opened_after = opened;
+              }}
+            }} catch (e) {{}}
+          }}, 400);
+        }}
       }} catch (e) {{
         // молча игнорируем — не ломаем браузер пользователя
       }}

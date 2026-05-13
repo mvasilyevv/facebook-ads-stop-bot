@@ -19,6 +19,8 @@ class UserAction:
     section: str | None
     ts: float
     raw_indices: tuple[int, ...]
+    widget: dict | None = None
+    opened_after: tuple[str, ...] = ()
 
 
 _CLICK_WINDOW_S = 0.2
@@ -87,6 +89,7 @@ def denoise(events: list[dict]) -> list[UserAction]:
                 selectors = _selectors_for(src)
                 text = (src.get("text") or "").strip()
                 if selectors or text:
+                    opened = src.get("opened_after") or []
                     actions.append(
                         UserAction(
                             kind="click",
@@ -96,6 +99,8 @@ def denoise(events: list[dict]) -> list[UserAction]:
                             section=src.get("nearest_heading"),
                             ts=float(src.get("ts") or 0),
                             raw_indices=tuple(group),
+                            widget=src.get("widget"),
+                            opened_after=tuple(str(x) for x in opened if x),
                         )
                     )
             i = j
@@ -192,6 +197,8 @@ def analyze_session(session: dict) -> dict:
                 "label": a.label,
                 "section": a.section,
                 "ts": a.ts,
+                "widget": a.widget,
+                "opened_after": list(a.opened_after),
             }
             for a in actions
         ],
