@@ -37,9 +37,23 @@ def BUILD_JS_INJECTOR(session_id: str = "") -> str:
   try {{
     var SESSION_ID = {js_sid};
     if (window.__fbRecorder && window.__fbRecorder.installed && window.__fbRecorder.session_id === SESSION_ID) return;
+    // Снимаем слушатели предыдущей инъекции, иначе старый код продолжит писать события в параллель.
+    if (window.__fbRecorder && window.__fbRecorder.listeners) {{
+      try {{
+        window.__fbRecorder.listeners.forEach(function(l) {{
+          document.removeEventListener(l.type, l.fn, l.capture);
+        }});
+      }} catch (e) {{}}
+    }}
     window.__fbRecorder = window.__fbRecorder || {{ events: [] }};
     window.__fbRecorder.installed = true;
     window.__fbRecorder.session_id = SESSION_ID;
+    window.__fbRecorder.listeners = [];
+
+    function on(type, fn, capture) {{
+      document.addEventListener(type, fn, capture);
+      window.__fbRecorder.listeners.push({{ type: type, fn: fn, capture: !!capture }});
+    }}
 
     function safe(fn, fallback) {{
       try {{ return fn(); }} catch (e) {{ return fallback; }}
@@ -77,17 +91,35 @@ def BUILD_JS_INJECTOR(session_id: str = "") -> str:
       if (role && INTERACTIVE_ROLES[role]) return true;
       if (el.getAttribute && el.getAttribute('tabindex') !== null) return true;
       if (el.onclick) return true;
+      // FB-специфика: data-auto-logging-id висит на семантически кликабельных див-кнопках.
+      if (el.getAttribute && el.getAttribute('data-auto-logging-id')) return true;
       return false;
     }}
 
+    function isPointerCursor(el) {{
+      return safe(function() {{
+        return el && el.nodeType === 1 && getComputedStyle(el).cursor === 'pointer';
+      }}, false);
+    }}
+
     function findInteractiveAncestor(el) {{
-      // Поднимаемся максимум на 8 уровней в поисках кнопки/ссылки/инпута.
+      // Сначала ищем «настоящий» интерактивный предок до 12 уровней — это сильный сигнал.
       var node = el;
-      for (var i = 0; i < 8 && node; i++) {{
+      for (var i = 0; i < 12 && node; i++) {{
         if (isInteractive(node)) return node;
         node = node.parentElement;
       }}
-      return el;
+      // Запасной путь: подняться по цепочке cursor:pointer до последнего такого узла.
+      // Так мы попадём на «корень» кликабельной зоны (FB любит вкладывать pointer-див в pointer-див).
+      if (!isPointerCursor(el)) return el;
+      var last = el;
+      node = el.parentElement;
+      for (var j = 0; j < 12 && node; j++) {{
+        if (!isPointerCursor(node)) break;
+        last = node;
+        node = node.parentElement;
+      }}
+      return last;
     }}
 
     function getDataAttrs(el) {{
@@ -177,11 +209,11 @@ def BUILD_JS_INJECTOR(session_id: str = "") -> str:
     }}
 
     function findScopeAttr(el) {{
-      // Ищем data-pagelet/data-surface/data-testid на самом элементе или у предков (≤5).
+      // Ищем стабильный data-* атрибут на элементе или у предков (≤6 уровней).
       var node = el;
-      for (var i = 0; i < 5 && node; i++) {{
+      for (var i = 0; i < 6 && node; i++) {{
         if (node.getAttribute) {{
-          var keys = ['data-testid', 'data-pagelet', 'data-surface'];
+          var keys = ['data-testid', 'data-pagelet', 'data-surface', 'data-auto-logging-id'];
           for (var k = 0; k < keys.length; k++) {{
             var v = node.getAttribute(keys[k]);
             if (v) return {{ key: keys[k], value: v, isSelf: i === 0 }};
@@ -216,6 +248,8 @@ def BUILD_JS_INJECTOR(session_id: str = "") -> str:
         var role = effectiveRole(el);
         var name = getAccessibleName(el);
         var tag = el.tagName ? el.tagName.toLowerCase() : '';
+        var txt = (el.innerText || el.textContent || '').trim();
+        var shortTxt = (txt && txt.length <= 60 && txt.indexOf('\\n') === -1) ? txt : null;
 
         if (role && name && name.length <= 80) {{
           cands.push('role=' + role + '[name="' + cssEscape(name) + '"]');
@@ -227,28 +261,27 @@ def BUILD_JS_INJECTOR(session_id: str = "") -> str:
         var placeholder = el.getAttribute && el.getAttribute('placeholder');
         if (placeholder) cands.push('[placeholder="' + cssEscape(placeholder) + '"]');
 
-        var dataAttrs = ['data-testid', 'data-pagelet', 'data-surface'];
+        var dataAttrs = ['data-testid', 'data-pagelet', 'data-surface', 'data-auto-logging-id'];
         for (var i = 0; i < dataAttrs.length; i++) {{
           var v = el.getAttribute && el.getAttribute(dataAttrs[i]);
           if (v) cands.push('[' + dataAttrs[i] + '="' + cssEscape(v) + '"]');
         }}
 
-        // Scope от предка с data-* + текст/role
+        // Scope от предка с data-* + текст/role — спасает «голые» div со текстом.
         var scope = findScopeAttr(el);
-        if (scope && !scope.isSelf && name && name.length <= 80) {{
+        if (scope && !scope.isSelf) {{
           var scopeSel = '[' + scope.key + '="' + cssEscape(scope.value) + '"]';
-          if (role) {{
+          if (role && name && name.length <= 80) {{
             cands.push(scopeSel + ' >> role=' + role + '[name="' + cssEscape(name) + '"]');
-          }} else {{
-            cands.push(scopeSel + ' >> text="' + cssEscape(name) + '"');
+          }} else if (shortTxt) {{
+            cands.push(scopeSel + ' >> text="' + cssEscape(shortTxt) + '"');
           }}
         }}
 
-        var txt = (el.innerText || el.textContent || '').trim();
-        var isClickable = (tag === 'button' || tag === 'a' || role === 'button'
-                           || role === 'link' || role === 'option' || role === 'menuitem');
-        if (txt && txt.length <= 60 && txt.indexOf('\\n') === -1 && isClickable) {{
-          cands.push('text="' + cssEscape(txt) + '"');
+        // text="..." — даём для любого элемента с коротким однострочным текстом, не только кликабельных.
+        // FB часто использует <div>Сайт</div> как кнопку без role/onclick.
+        if (shortTxt) {{
+          cands.push('text="' + cssEscape(shortTxt) + '"');
         }}
 
         var stableClasses = Array.from(el.classList || []).filter(isStableClass);
@@ -317,17 +350,17 @@ def BUILD_JS_INJECTOR(session_id: str = "") -> str:
       return e.target;
     }}
 
-    document.addEventListener('pointerdown', function(e) {{ record('pointerdown', pickTarget(e)); }}, true);
-    document.addEventListener('mousedown',   function(e) {{ record('mousedown',   pickTarget(e)); }}, true);
-    document.addEventListener('click',  function(e) {{ record('click',  pickTarget(e)); }}, true);
-    document.addEventListener('input',  function(e) {{ var t = pickTarget(e); record('input',  t, t && t.value); }}, true);
-    document.addEventListener('change', function(e) {{ var t = pickTarget(e); record('change', t, t && t.value); }}, true);
-    document.addEventListener('keydown',function(e) {{
+    on('pointerdown', function(e) {{ record('pointerdown', pickTarget(e)); }}, true);
+    on('mousedown',   function(e) {{ record('mousedown',   pickTarget(e)); }}, true);
+    on('click',  function(e) {{ record('click',  pickTarget(e)); }}, true);
+    on('input',  function(e) {{ var t = pickTarget(e); record('input',  t, t && t.value); }}, true);
+    on('change', function(e) {{ var t = pickTarget(e); record('change', t, t && t.value); }}, true);
+    on('keydown',function(e) {{
       if (e.key === 'Enter' || e.key === 'Tab' || e.key === 'Escape' || e.key === ' ' || e.key === 'ArrowDown' || e.key === 'ArrowUp') {{
         record('keydown', pickTarget(e), e.key);
       }}
     }}, true);
-    document.addEventListener('submit', function(e) {{ record('submit', pickTarget(e)); }}, true);
+    on('submit', function(e) {{ record('submit', pickTarget(e)); }}, true);
   }} catch (e) {{
     /* swallow */
   }}
