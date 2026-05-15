@@ -816,5 +816,13 @@ class CampaignCreatorTask(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     )
     current_step: Mapped[str | None] = mapped_column(String(128), nullable=True)
     checkpoint_data: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    context_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    spec_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    plan_json: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    progress_index: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    fb_state_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    last_error_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     campaign_name: Mapped[str | None] = mapped_column(String(256), nullable=True)
