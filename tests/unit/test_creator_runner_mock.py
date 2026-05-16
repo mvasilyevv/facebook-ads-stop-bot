@@ -25,7 +25,7 @@ def _make_context() -> StepContext:
         attribution_days=7,
         budget_level="CBO",
         iter_num=1,
-        adsets=[AdsetSpec(name="A1", headline="H", primary_text="T", creo_subfolder="sub")],
+        adsets=[AdsetSpec(name_suffix="A1", headline="H", primary_text="T")],
         creo_folder="/tmp",
     )
 
@@ -33,14 +33,14 @@ def _make_context() -> StepContext:
 class _OkStep(BaseStep):
     name = "ok"
 
-    async def execute(self, page, context):
+    async def execute(self, page, context, params=None):
         return StepResult(success=True, message="ok")
 
 
 class _FailStep(BaseStep):
     name = "fail"
 
-    async def execute(self, page, context):
+    async def execute(self, page, context, params=None):
         return StepResult(success=False, message="boom")
 
 
