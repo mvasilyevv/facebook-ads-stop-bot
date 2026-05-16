@@ -12,12 +12,24 @@ from playwright.async_api import Page
 
 @dataclass
 class AdsetSpec:
-    """Спецификация одного адсета: имя, тексты, подпапка с креативами."""
+    """Опциональный суффикс к имени адсета и тексты.
 
-    name: str
-    headline: str
-    primary_text: str
-    creo_subfolder: str
+    Имя адсета и подпапка с креативами выводятся из позиции в списке.
+    """
+
+    name_suffix: str = ""
+    headline: str = ""
+    primary_text: str = ""
+
+    def display_name(self, idx: int) -> str:
+        """Имя адсета: '{N}' или '{N} | {suffix}'."""
+        n = idx + 1
+        suffix = (self.name_suffix or "").strip()
+        return f"{n} | {suffix}" if suffix else f"{n}"
+
+    def subfolder(self, idx: int) -> str:
+        """Подпапка с креативами по индексу: '1', '2', ..."""
+        return str(idx + 1)
 
 
 @dataclass
@@ -54,8 +66,12 @@ class BaseStep(ABC):
 
     name: str = "base"
     is_checkpoint: bool = False
+    # Можно ли безопасно перезапускать на той же странице (для подсказки UI при resume).
+    idempotent: bool = False
 
     @abstractmethod
-    async def execute(self, page: Page, context: StepContext) -> StepResult:
-        """Выполнить шаг в браузере."""
+    async def execute(
+        self, page: Page, context: StepContext, params: dict | None = None
+    ) -> StepResult:
+        """Выполнить шаг в браузере. params — для декларативного плана; None для legacy-runner."""
         ...
