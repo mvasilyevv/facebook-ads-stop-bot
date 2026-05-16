@@ -60,3 +60,42 @@ def test_build_plan_passes_params():
     assert upload.params["file"] == "v0.mp4"
     geo = next(a for a in plan if a.step == "set_geo")
     assert geo.params["countries"] == ["KE"]
+
+
+# Сценарий: для CBO бюджет задаётся на уровне кампании (между create_campaign и click_next)
+def test_build_plan_cbo_budget_on_campaign_level():
+    spec = _spec(1, 1)  # budget_level=CBO
+    plan = build_plan(spec)
+    names = [a.step for a in plan]
+    cc = names.index("create_campaign")
+    nx = names.index("click_next")
+    budgets = [i for i, n in enumerate(names) if n == "set_budget"]
+    # ровно один set_budget между create_campaign и click_next, level=CBO
+    assert len(budgets) == 1
+    assert cc < budgets[0] < nx
+    assert plan[budgets[0]].params["level"] == "CBO"
+
+
+# Сценарий: для ABO бюджет задаётся внутри каждого адсета, не на уровне кампании
+def test_build_plan_abo_budget_per_adset():
+    spec = _spec(2, 1)
+    # переключаем на ABO
+    spec.budget_level = "ABO"
+    plan = build_plan(spec)
+    names = [a.step for a in plan]
+    nx = names.index("click_next")
+    pre_next_budgets = [n for n in names[:nx] if n == "set_budget"]
+    assert pre_next_budgets == []  # на уровне кампании бюджета нет
+    abo_budgets = [a for a in plan if a.step == "set_budget"]
+    assert len(abo_budgets) == 2  # по одному на каждый адсет
+    assert all(a.params["level"] == "ABO" for a in abo_budgets)
+
+
+# Сценарий: между set_age первого адсета и rename_ad первого объявления есть click_next_to_ad
+def test_build_plan_click_next_to_ad_after_first_adset():
+    spec = _spec(1, 1)
+    plan = build_plan(spec)
+    names = [a.step for a in plan]
+    age = names.index("set_age")
+    rename = names.index("rename_ad")
+    assert "click_next_to_ad" in names[age:rename]

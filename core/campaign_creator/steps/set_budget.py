@@ -8,11 +8,12 @@ import logging
 from playwright.async_api import Page
 
 from core.campaign_creator.humanizer import human_click_label, human_type, human_wait
-from core.campaign_creator.selectors import SELECTORS
 
 from .base import BaseStep, StepContext, StepResult
 
 logger = logging.getLogger(__name__)
+
+DAILY_BUDGET_INPUT = 'input[placeholder="Укажите сумму"]'
 
 
 class SetBudgetStep(BaseStep):
@@ -37,7 +38,7 @@ class SetBudgetStep(BaseStep):
             else:
                 # FB в RU-локали ожидает запятую как десятичный разделитель.
                 budget_text = f"{amount:.2f}".replace(".", ",")
-            await human_type(page, SELECTORS["daily_budget"], budget_text)
+            await human_type(page, DAILY_BUDGET_INPUT, budget_text)
             logger.info("Бюджет %s = %s USD", level, daily_budget)
             return StepResult(
                 success=True,

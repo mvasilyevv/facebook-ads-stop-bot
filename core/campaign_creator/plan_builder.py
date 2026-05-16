@@ -20,8 +20,24 @@ def build_plan(spec: CampaignSpec) -> list[PlanAction]:
         )
     )
 
+    # CBO: бюджет задаётся на уровне кампании ДО перехода в адсет.
+    if spec.budget_level == "CBO":
+        plan.append(
+            PlanAction(
+                "set_budget",
+                {"daily_budget": spec.daily_budget, "level": "CBO"},
+            )
+        )
+
+    # Переход с уровня кампании на уровень первого адсета.
+    plan.append(PlanAction("click_next", {}, idempotent=False))
+
     first = spec.adsets[0]
+    # Первый адсет тоже переименовываем: «1» или «1 | <suffix>».
+    plan.append(PlanAction("rename_adset", {"adset_idx": 0, "suffix": first.name_suffix}))
     plan.extend(_adset_setup(first, idx=0, spec=spec))
+    # Переход с уровня адсета на уровень объявления.
+    plan.append(PlanAction("click_next_to_ad", {}, idempotent=False))
     plan.extend(_ads_for_first_adset(first, adset_idx=0))
 
     for i, adset in enumerate(spec.adsets[1:], start=1):
@@ -36,22 +52,31 @@ def build_plan(spec: CampaignSpec) -> list[PlanAction]:
 
 
 def _adset_setup(adset: AdsetSpec, *, idx: int, spec: CampaignSpec) -> list[PlanAction]:
-    return [
+    actions: list[PlanAction] = [
         PlanAction("set_conversion_location", {"adset_idx": idx}),
         PlanAction("set_pixel_event", {"adset_idx": idx, "pixel_id": spec.pixel_id}),
         PlanAction("set_attribution", {"adset_idx": idx, "days": spec.attribution_days}),
-        PlanAction(
-            "set_budget",
-            {
-                "adset_idx": idx,
-                "daily_budget": spec.daily_budget,
-                "level": spec.budget_level,
-            },
-        ),
-        PlanAction("set_schedule_start", {"adset_idx": idx}),
-        PlanAction("set_geo", {"adset_idx": idx, "countries": list(spec.countries)}),
-        PlanAction("set_age", {"adset_idx": idx}),
     ]
+    # ABO: бюджет на уровне адсета. CBO уже выставлен на кампании.
+    if spec.budget_level == "ABO":
+        actions.append(
+            PlanAction(
+                "set_budget",
+                {
+                    "adset_idx": idx,
+                    "daily_budget": spec.daily_budget,
+                    "level": "ABO",
+                },
+            )
+        )
+    actions.extend(
+        [
+            PlanAction("set_schedule_start", {"adset_idx": idx}),
+            PlanAction("set_geo", {"adset_idx": idx, "countries": list(spec.countries)}),
+            PlanAction("set_age", {"adset_idx": idx}),
+        ]
+    )
+    return actions
 
 
 def _ads_for_first_adset(adset: AdsetSpec, *, adset_idx: int) -> list[PlanAction]:

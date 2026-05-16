@@ -8,12 +8,13 @@ import logging
 from playwright.async_api import Page
 
 from core.campaign_creator.humanizer import human_wait
-from core.campaign_creator.selectors import SELECTORS
 from core.campaign_creator.tree_nav import ad_items_for_adset, get_item_name
 
 from .base import BaseStep, StepContext, StepResult
 
 logger = logging.getLogger(__name__)
+
+AD_NAME_INPUT = 'input[placeholder="Введите название объявления..."]'
 
 
 class RenameAdStep(BaseStep):
@@ -43,7 +44,7 @@ class RenameAdStep(BaseStep):
             await human_wait(300, 600)
 
             # Меняем имя в инпуте имени объявления.
-            inp = page.locator(SELECTORS["ad_name"]).first
+            inp = page.locator(AD_NAME_INPUT).first
             await inp.wait_for(state="visible", timeout=8000)
             await inp.click(click_count=3)
             await human_wait(50, 120)

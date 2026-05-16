@@ -164,10 +164,10 @@ class BrowserAgentClient:
 
     @property
     def cdp_url(self) -> str | None:
-        """CDP WebSocket URL для прямого подключения Playwright."""
+        """HTTP-URL CDP-эндпоинта (Playwright connect_over_cdp сам резолвит ws через /json/version)."""
         if self._cdp_port is None:
             return None
-        return f"ws://localhost:{self._cdp_port}"
+        return f"http://localhost:{self._cdp_port}"
 
     async def disconnect_browser(self) -> None:
         """Отключиться от браузера (не останавливая Vision профиль)."""

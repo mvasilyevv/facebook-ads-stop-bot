@@ -2,9 +2,23 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 
 from core.campaign_recorder.analyzer import UserAction
+
+# data-auto-logging-id переезжает между сессиями FB — считаем нестабильным.
+# xpath ломается при любой перестановке DOM. Эти селекторы выводим отдельно,
+# чтобы разработчик не копировал их в код шага.
+_UNSTABLE_PATTERNS = (
+    re.compile(r"^xpath="),
+    re.compile(r"data-auto-logging-id="),
+    re.compile(r"^[a-z]+\.[A-Za-z0-9_-]{4,}"),  # tag.classlist из обфусцированных x-классов
+)
+
+
+def _is_unstable(selector: str) -> bool:
+    return any(rx.search(selector) for rx in _UNSTABLE_PATTERNS)
 
 
 def _format_duration(seconds: float) -> str:
@@ -55,6 +69,10 @@ def _source(session: dict) -> str:
 
 
 def _action_block(idx: int, action: UserAction) -> str:
+    if action.kind == "marker":
+        title = action.label or "—"
+        return f"# === МЕТКА: {title} ===\n"
+
     lines: list[str] = [f"## Шаг {idx} — {action.kind}", ""]
     if action.kind == "fill":
         what = f"поле «{action.label}»" if action.label else "поле"
@@ -93,10 +111,18 @@ def _action_block(idx: int, action: UserAction) -> str:
         lines.append(f"**Значение:** `{action.value}`")
 
     if action.selectors:
-        lines.append("")
-        lines.append("Селекторы:")
-        for n, sel in enumerate(action.selectors, start=1):
-            lines.append(f"{n}. `{sel}`")
+        stable = [s for s in action.selectors if not _is_unstable(s)]
+        unstable = [s for s in action.selectors if _is_unstable(s)]
+        if stable:
+            lines.append("")
+            lines.append("Селекторы (стабильные):")
+            for n, sel in enumerate(stable, start=1):
+                lines.append(f"{n}. `{sel}`")
+        if unstable:
+            lines.append("")
+            lines.append("Селекторы (нестабильные — только для отладки, в код не копировать):")
+            for n, sel in enumerate(unstable, start=1):
+                lines.append(f"{n}. `{sel}`")
 
     return "\n".join(lines)
 

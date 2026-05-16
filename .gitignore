@@ -24,3 +24,5 @@ logs/
 supervisord.pid
 supervisord.log
 helm/fb-stop-bot/secrets.yaml
+recordings/
+.playwright-mcp/

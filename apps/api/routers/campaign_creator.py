@@ -1,5 +1,12 @@
 # -*- coding: utf-8 -*-
-"""API роутер для автоматического создания кампаний в Ads Manager (full autopilot)."""
+"""API роутер для автоматического создания кампаний в Ads Manager.
+
+Поддерживает три режима выполнения:
+  - /start                           — полный пайплайн (full autopilot)
+  - /{task_id}/run-step/{step_name}  — один шаг на текущей странице
+  - /{task_id}/run-from/{step_name}  — от указанного шага до конца
+  - /{task_id}/resume                — продолжить с упавшего шага
+"""
 
 from __future__ import annotations
 
@@ -7,25 +14,25 @@ import asyncio
 import logging
 
 from fastapi import APIRouter, HTTPException
-from playwright.async_api import async_playwright
 from sqlalchemy import select
 
-from apps.api.schemas import CampaignCreatorStartRequestSchema, CampaignCreatorTaskSchema
+from apps.api.schemas import (
+    CampaignCreatorStartRequestSchema,
+    CampaignCreatorStepInfoSchema,
+    CampaignCreatorStepsListSchema,
+    CampaignCreatorTaskSchema,
+)
 from clients.python_grpc.client import BrowserAgentClient, BrowserAgentConfig
+from core.campaign_creator.context_codec import context_from_dict, context_to_dict
 from core.campaign_creator.naming import build_campaign_name
-from core.campaign_creator.runner import CampaignCreatorRunner
-from core.campaign_creator.steps.base import AdsetSpec, StepContext
-from core.campaign_creator.steps.create_adset import CreateAdsetStep
-from core.campaign_creator.steps.create_campaign import CreateCampaignStep
-from core.campaign_creator.steps.fill_texts import FillTextsStep
-from core.campaign_creator.steps.save_draft import SaveDraftStep
-from core.campaign_creator.steps.set_attribution import SetAttributionStep
-from core.campaign_creator.steps.set_budget import SetBudgetStep
-from core.campaign_creator.steps.set_cta import SetCtaStep
-from core.campaign_creator.steps.set_geo import SetGeoStep
-from core.campaign_creator.steps.set_pixel_event import SetPixelEventStep
-from core.campaign_creator.steps.set_tracking_url import SetTrackingUrlStep
-from core.campaign_creator.steps.upload_creatives import UploadCreativesStep
+from core.campaign_creator.step_executor import execute_steps, open_page
+from core.campaign_creator.steps.base import AdsetSpec, BaseStep, StepContext
+from core.campaign_creator.steps.registry import (
+    STEPS_ORDER,
+    build_pipeline,
+    build_step,
+    step_idempotent,
+)
 from core.config import get_settings
 from core.db import get_session_factory
 from core.domain import CampaignCreatorTaskStatus
@@ -33,6 +40,15 @@ from core.models import CampaignCreatorTask, Offer
 
 router = APIRouter(prefix="/api/campaign-creator", tags=["campaign-creator"])
 logger = logging.getLogger(__name__)
+
+
+# Регистр активных asyncio-задач для возможности cancel.
+_active_tasks: dict[str, asyncio.Task] = {}
+
+
+def _register_task(task_id: str, async_task: asyncio.Task) -> None:
+    _active_tasks[task_id] = async_task
+    async_task.add_done_callback(lambda _t: _active_tasks.pop(task_id, None))
 
 
 def _make_browser_client() -> BrowserAgentClient:
@@ -43,23 +59,6 @@ def _make_browser_client() -> BrowserAgentClient:
         vision_profile_id=settings.vision_profile_id,
     )
     return BrowserAgentClient(config)
-
-
-def _build_steps() -> list:
-    """Полный pipeline создания кампании — порядок критичен."""
-    return [
-        CreateCampaignStep(),
-        SetBudgetStep(),
-        SetAttributionStep(),
-        CreateAdsetStep(),
-        SetPixelEventStep(),
-        SetGeoStep(),
-        UploadCreativesStep(),
-        FillTextsStep(),
-        SetCtaStep(),
-        SetTrackingUrlStep(),
-        SaveDraftStep(),
-    ]
 
 
 async def _set_task_status(
@@ -79,6 +78,9 @@ async def _set_task_status(
             logger.warning("Задача campaign_creator не найдена: %s", task_id)
             return
         task.status = status
+        if status == CampaignCreatorTaskStatus.RUNNING:
+            # Сбрасываем прошлую ошибку, чтобы UI не показывал красный баннер.
+            task.error_message = None
         if step is not None:
             task.current_step = step
         if data is not None:
@@ -89,6 +91,18 @@ async def _set_task_status(
         await db.commit()
 
 
+async def _load_task(task_id: str) -> CampaignCreatorTask:
+    factory = get_session_factory()
+    async with factory() as db:
+        result = await db.execute(
+            select(CampaignCreatorTask).where(CampaignCreatorTask.id == task_id)
+        )
+        task = result.scalar_one_or_none()
+        if task is None:
+            raise HTTPException(status_code=404, detail="Задача не найдена")
+        return task
+
+
 async def _load_offer(offer_code: str) -> Offer | None:
     factory = get_session_factory()
     async with factory() as db:
@@ -96,43 +110,73 @@ async def _load_offer(offer_code: str) -> Offer | None:
         return result.scalar_one_or_none()
 
 
-async def _run_creator(task_id: str, context: StepContext) -> None:
-    """Фоновая задача — запуск pipeline до 'Сохранить как черновик'."""
+def _task_to_schema(task: CampaignCreatorTask) -> CampaignCreatorTaskSchema:
+    return CampaignCreatorTaskSchema(
+        id=str(task.id),
+        status=task.status.value,
+        current_step=task.current_step,
+        checkpoint_data=task.checkpoint_data,
+        error_message=task.error_message,
+        campaign_name=task.campaign_name,
+        offer_code=task.offer_code,
+        created_at=task.created_at.isoformat(),
+        context_json=task.context_json,
+    )
+
+
+async def _run_steps_for_task(task_id: str, steps: list[BaseStep]) -> None:
+    """Подключиться к браузеру и выполнить заданный список шагов на задаче."""
 
     async def set_status(status, *, step=None, data=None):
         await _set_task_status(task_id, status, step=step, data=data)
 
-    runner = CampaignCreatorRunner(steps=_build_steps(), set_status=set_status)
+    task = await _load_task(task_id)
+    if not task.context_json:
+        await set_status(
+            CampaignCreatorTaskStatus.FAILED,
+            data={"error": "context_json пуст — нельзя запустить шаги"},
+        )
+        return
+    try:
+        context = context_from_dict(task.context_json)
+    except Exception as exc:
+        logger.exception("Не удалось разобрать context_json для задачи %s", task_id)
+        await set_status(CampaignCreatorTaskStatus.FAILED, data={"error": str(exc)})
+        return
 
     client = _make_browser_client()
     try:
-        await client.start()
-        await client.start_browser()
-        cdp_url = client.cdp_url
-        if not cdp_url:
-            raise RuntimeError("Vision не вернул cdp_port после старта браузера")
-
-        async with async_playwright() as pw:
-            browser = await pw.chromium.connect_over_cdp(cdp_url)
-            pages = browser.contexts[0].pages if browser.contexts else []
-            page = pages[0] if pages else await browser.new_page()
-            await runner.run_all(page, context)
-            await browser.close()
+        async with open_page(client) as page:
+            await execute_steps(steps, page, context, set_status)
+    except asyncio.CancelledError:
+        logger.warning("Задача campaign_creator %s отменена пользователем", task_id)
+        await set_status(
+            CampaignCreatorTaskStatus.FAILED,
+            data={"error": "Остановлено пользователем"},
+        )
+        raise
     except Exception as exc:
         logger.error("Критическая ошибка campaign_creator %s: %s", task_id, exc)
-        await _set_task_status(
-            task_id,
-            CampaignCreatorTaskStatus.FAILED,
-            data={"error": str(exc)},
-        )
-    finally:
-        await client.disconnect_browser()
-        await client.close()
+        await set_status(CampaignCreatorTaskStatus.FAILED, data={"error": str(exc)})
+
+
+# === Endpoints =============================================================
+
+
+@router.get("/steps", response_model=CampaignCreatorStepsListSchema)
+async def list_steps() -> CampaignCreatorStepsListSchema:
+    """Список всех шагов в каноничном порядке."""
+    return CampaignCreatorStepsListSchema(
+        steps=[
+            CampaignCreatorStepInfoSchema(name=n, idempotent=step_idempotent(n))
+            for n in STEPS_ORDER
+        ]
+    )
 
 
 @router.post("/start", response_model=CampaignCreatorTaskSchema)
 async def start_campaign_creator(body: CampaignCreatorStartRequestSchema):
-    """Создать задачу автосоздания и запустить её в фоне (full autopilot)."""
+    """Создать задачу автосоздания и запустить полный пайплайн в фоне."""
     offer = await _load_offer(body.offer_code)
     if offer is None:
         raise HTTPException(status_code=404, detail=f"Оффер не найден: {body.offer_code}")
@@ -148,21 +192,10 @@ async def start_campaign_creator(body: CampaignCreatorStartRequestSchema):
             detail=f"У оффера {offer.code} не заполнены поля: {', '.join(missing)}",
         )
 
-    campaign_name = build_campaign_name(iter_num=body.iter_num, offer_code=offer.code)
-
-    factory = get_session_factory()
-    async with factory() as db:
-        task = CampaignCreatorTask(
-            offer_code=body.offer_code,
-            creative_folder=body.creo_folder,
-            cabinet_id=offer.cabinet_id,
-            status=CampaignCreatorTaskStatus.PENDING,
-            campaign_name=campaign_name,
-        )
-        db.add(task)
-        await db.commit()
-        await db.refresh(task)
-        task_id = str(task.id)
+    campaign_name = build_campaign_name(
+        iter_num=body.iter_num,
+        geo_code=offer.geo_code or offer.code,
+    )
 
     context = StepContext(
         offer_code=offer.code,
@@ -180,38 +213,108 @@ async def start_campaign_creator(body: CampaignCreatorStartRequestSchema):
         creo_folder=body.creo_folder,
         extra={"offer_country_name": offer.country_name or ""},
     )
-    asyncio.create_task(_run_creator(task_id, context))
 
-    return CampaignCreatorTaskSchema(
-        id=task_id,
-        status=CampaignCreatorTaskStatus.PENDING.value,
-        current_step=None,
-        checkpoint_data=None,
-        error_message=None,
-        campaign_name=campaign_name,
-        offer_code=body.offer_code,
-        created_at=task.created_at.isoformat(),
+    factory = get_session_factory()
+    async with factory() as db:
+        task = CampaignCreatorTask(
+            offer_code=body.offer_code,
+            creative_folder=body.creo_folder,
+            cabinet_id=offer.cabinet_id,
+            status=CampaignCreatorTaskStatus.PENDING,
+            campaign_name=campaign_name,
+            context_json=context_to_dict(context),
+        )
+        db.add(task)
+        await db.commit()
+        await db.refresh(task)
+        task_id = str(task.id)
+
+    _register_task(task_id, asyncio.create_task(_run_steps_for_task(task_id, build_pipeline())))
+
+    return _task_to_schema(task)
+
+
+@router.post("/{task_id}/run-step/{step_name}", response_model=CampaignCreatorTaskSchema)
+async def run_single_step(task_id: str, step_name: str) -> CampaignCreatorTaskSchema:
+    """Выполнить ровно один шаг на текущей странице задачи."""
+    if step_name not in STEPS_ORDER:
+        raise HTTPException(status_code=400, detail=f"Неизвестный шаг: {step_name}")
+    task = await _load_task(task_id)
+    if task.status == CampaignCreatorTaskStatus.RUNNING:
+        raise HTTPException(status_code=409, detail="Задача уже выполняется")
+    # Сразу переводим в RUNNING, чтобы UI не залипал на FAILED до старта корутины.
+    await _set_task_status(task_id, CampaignCreatorTaskStatus.RUNNING, step=step_name)
+    _register_task(
+        task_id, asyncio.create_task(_run_steps_for_task(task_id, [build_step(step_name)]))
     )
+    return _task_to_schema(await _load_task(task_id))
+
+
+@router.post("/{task_id}/run-from/{step_name}", response_model=CampaignCreatorTaskSchema)
+async def run_from_step(task_id: str, step_name: str) -> CampaignCreatorTaskSchema:
+    """Запустить пайплайн начиная с указанного шага до конца."""
+    if step_name not in STEPS_ORDER:
+        raise HTTPException(status_code=400, detail=f"Неизвестный шаг: {step_name}")
+    task = await _load_task(task_id)
+    if task.status == CampaignCreatorTaskStatus.RUNNING:
+        raise HTTPException(status_code=409, detail="Задача уже выполняется")
+    await _set_task_status(task_id, CampaignCreatorTaskStatus.RUNNING, step=step_name)
+    _register_task(
+        task_id,
+        asyncio.create_task(_run_steps_for_task(task_id, build_pipeline(start_from=step_name))),
+    )
+    return _task_to_schema(await _load_task(task_id))
+
+
+@router.post("/{task_id}/resume", response_model=CampaignCreatorTaskSchema)
+async def resume_task(task_id: str) -> CampaignCreatorTaskSchema:
+    """Продолжить упавшую задачу с упавшего шага."""
+    task = await _load_task(task_id)
+    if task.status != CampaignCreatorTaskStatus.FAILED:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Resume доступен только для FAILED, текущий статус: {task.status.value}",
+        )
+    if not task.current_step:
+        raise HTTPException(status_code=409, detail="current_step пуст — некуда возобновлять")
+    await _set_task_status(task_id, CampaignCreatorTaskStatus.RUNNING, step=task.current_step)
+    _register_task(
+        task_id,
+        asyncio.create_task(
+            _run_steps_for_task(task_id, build_pipeline(start_from=task.current_step))
+        ),
+    )
+    return _task_to_schema(await _load_task(task_id))
+
+
+@router.post("/{task_id}/cancel", response_model=CampaignCreatorTaskSchema)
+async def cancel_task(task_id: str) -> CampaignCreatorTaskSchema:
+    """Принудительно остановить выполняющуюся задачу."""
+    async_task = _active_tasks.get(task_id)
+    if async_task is None or async_task.done():
+        # На случай "висящего" статуса RUNNING без живой asyncio-задачи —
+        # переведём в FAILED, чтобы UI разблокировался.
+        task = await _load_task(task_id)
+        if task.status == CampaignCreatorTaskStatus.RUNNING:
+            await _set_task_status(
+                task_id,
+                CampaignCreatorTaskStatus.FAILED,
+                data={"error": "Остановлено пользователем"},
+            )
+            task = await _load_task(task_id)
+        return _task_to_schema(task)
+
+    async_task.cancel()
+    try:
+        await asyncio.wait_for(async_task, timeout=5)
+    except (asyncio.CancelledError, asyncio.TimeoutError, Exception):
+        pass
+    task = await _load_task(task_id)
+    return _task_to_schema(task)
 
 
 @router.get("/{task_id}/status", response_model=CampaignCreatorTaskSchema)
 async def get_task_status(task_id: str):
     """Получить текущий статус задачи."""
-    factory = get_session_factory()
-    async with factory() as db:
-        result = await db.execute(
-            select(CampaignCreatorTask).where(CampaignCreatorTask.id == task_id)
-        )
-        task = result.scalar_one_or_none()
-        if task is None:
-            raise HTTPException(status_code=404, detail="Задача не найдена")
-        return CampaignCreatorTaskSchema(
-            id=str(task.id),
-            status=task.status.value,
-            current_step=task.current_step,
-            checkpoint_data=task.checkpoint_data,
-            error_message=task.error_message,
-            campaign_name=task.campaign_name,
-            offer_code=task.offer_code,
-            created_at=task.created_at.isoformat(),
-        )
+    task = await _load_task(task_id)
+    return _task_to_schema(task)

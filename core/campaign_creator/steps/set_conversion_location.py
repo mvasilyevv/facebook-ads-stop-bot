@@ -58,8 +58,14 @@ class SetConversionLocationStep(BaseStep):
             return False
 
     async def _open_combobox(self, page: Page) -> None:
-        # Комбобокс открывается кликом по его текущему значению («Сайт и звонки»).
-        combo = page.get_by_role("combobox").filter(has_text="Сайт и звонки").first
+        # Дефолтное значение combobox'а варьируется («Сайт и звонки», «Сайт,
+        # звонки и т. д.»), поэтому ищем по containing «Сайт» с явным
+        # исключением уже выбранного «Сайт» (ровно — тогда шаг не нужен).
+        combo = (
+            page.get_by_role("combobox").filter(has_text="Сайт").filter(has_not_text="Сайт​").first
+        )
+        if not await combo.count():
+            combo = page.get_by_role("combobox").filter(has_text="Сайт").first
         await combo.wait_for(state="visible", timeout=8000)
         await combo.scroll_into_view_if_needed()
         await human_wait(80, 180)

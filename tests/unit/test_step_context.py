@@ -7,12 +7,23 @@ from core.campaign_creator.steps.base import AdsetSpec, StepContext
 
 
 def test_adsetspec_holds_required_fields():
-    """AdsetSpec — простая dataclass-обёртка для имени, текстов и подпапки."""
-    spec = AdsetSpec(name="ADS1", headline="hh", primary_text="pp", creo_subfolder="adset1")
-    assert spec.name == "ADS1"
+    """AdsetSpec — суффикс к имени и опциональные тексты, имя и подпапка от индекса."""
+    spec = AdsetSpec(name_suffix="ADS1", headline="hh", primary_text="pp")
+    assert spec.name_suffix == "ADS1"
     assert spec.headline == "hh"
     assert spec.primary_text == "pp"
-    assert spec.creo_subfolder == "adset1"
+    assert spec.display_name(0) == "1 | ADS1"
+    assert spec.subfolder(0) == "1"
+
+
+def test_adsetspec_defaults_and_naming_without_suffix():
+    """Без суффикса имя адсета — это просто его номер."""
+    spec = AdsetSpec()
+    assert spec.name_suffix == ""
+    assert spec.headline == ""
+    assert spec.primary_text == ""
+    assert spec.display_name(2) == "3"
+    assert spec.subfolder(2) == "3"
 
 
 def test_stepcontext_minimal_construction():

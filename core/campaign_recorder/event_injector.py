@@ -294,6 +294,20 @@ def BUILD_JS_INJECTOR(session_id: str = "") -> str:
       return null;
     }}
 
+    var POPOVER_ROLES = {{listbox:1, menu:1, dialog:1, tree:1}};
+
+    function findPopoverAncestor(el) {{
+      // Ближайший контейнер «выпадашки» — listbox/menu/dialog. Даёт устойчивый
+      // якорь для опций, у которых FB убрал role=option и data-* атрибуты.
+      var node = el;
+      for (var i = 0; i < 8 && node; i++) {{
+        var role = node.getAttribute && node.getAttribute('role');
+        if (role && POPOVER_ROLES[role]) return {{ role: role, el: node }};
+        node = node.parentElement;
+      }}
+      return null;
+    }}
+
     function effectiveRole(el) {{
       var role = el.getAttribute && el.getAttribute('role');
       if (role) return role;
@@ -346,6 +360,13 @@ def BUILD_JS_INJECTOR(session_id: str = "") -> str:
           }} else if (shortTxt) {{
             cands.push(scopeSel + ' >> text="' + cssEscape(shortTxt) + '"');
           }}
+        }}
+
+        // Опция внутри listbox/menu/dialog — устойчивый якорь по тексту опции.
+        // FB у listbox-опций уже не ставит role=option, поэтому идём от контейнера + text.
+        var popover = findPopoverAncestor(el);
+        if (popover && shortTxt) {{
+          cands.push('[role="' + popover.role + '"] >> text="' + cssEscape(shortTxt) + '"');
         }}
 
         // text="..." — даём для любого элемента с коротким однострочным текстом, не только кликабельных.
@@ -446,6 +467,42 @@ def BUILD_JS_INJECTOR(session_id: str = "") -> str:
       }}
     }}, true);
     on('submit', function(e) {{ record('submit', pickTarget(e)); }}, true);
+
+    // Хоткей Ctrl+Shift+M (или Cmd+Shift+M на macOS) — ручная метка шага.
+    // Пользователь жмёт перед каждым логическим шагом, вводит подпись,
+    // и в записи появляется событие marker с этим текстом.
+    on('keydown', function(e) {{
+      var isMarker = (e.ctrlKey || e.metaKey) && e.shiftKey
+        && (e.key === 'M' || e.key === 'm');
+      if (!isMarker) return;
+      e.preventDefault();
+      e.stopPropagation();
+      try {{
+        var label = window.prompt('Метка шага записи:');
+        if (!label) return;
+        window.__fbRecorder.events.push({{
+          ts: Date.now() / 1000,
+          type: 'marker',
+          tag: '',
+          id: '',
+          classes: [],
+          data_attrs: {{}},
+          xpath: '',
+          text: '',
+          value: String(label),
+          x: 0,
+          y: 0,
+          role: null,
+          aria_label: null,
+          label_text: '',
+          placeholder: null,
+          nearest_heading: '',
+          widget: null,
+          selector_candidates: [],
+          url: location ? location.href : ''
+        }});
+      }} catch (err) {{}}
+    }}, true);
   }} catch (e) {{
     /* swallow */
   }}

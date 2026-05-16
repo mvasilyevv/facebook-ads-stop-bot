@@ -8,11 +8,12 @@ import logging
 from playwright.async_api import Page
 
 from core.campaign_creator.humanizer import human_click_label, human_wait
-from core.campaign_creator.selectors import SELECTORS
 
 from .base import BaseStep, StepContext, StepResult
 
 logger = logging.getLogger(__name__)
+
+ADSET_NAME_INPUT = 'input[placeholder="Введите название группы объявлений..."]'
 
 
 class CreateAdsetStep(BaseStep):
@@ -35,7 +36,7 @@ class CreateAdsetStep(BaseStep):
                 name = adset.display_name(idx)
                 # Не используем human_type — он добавляет паузу/scroll после ввода,
                 # за это время фокус слетает и Enter уходит мимо поля.
-                locator = page.locator(SELECTORS["adset_name"]).first
+                locator = page.locator(ADSET_NAME_INPUT).first
                 await locator.wait_for(state="visible", timeout=10000)
                 await locator.scroll_into_view_if_needed()
                 await human_wait(120, 220)

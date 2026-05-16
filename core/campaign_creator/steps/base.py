@@ -75,3 +75,22 @@ class BaseStep(ABC):
     ) -> StepResult:
         """Выполнить шаг в браузере. params — для декларативного плана; None для legacy-runner."""
         ...
+
+    async def pre_check(  # noqa: B027 — намеренно no-op, переопределяется в подклассах
+        self, page: Page, context: StepContext, params: dict | None = None
+    ) -> None:
+        """Проверка готовности UI к выполнению шага.
+
+        Контракт: убедиться, что нужный drawer/уровень/секция активны. Если
+        нет — поднять исключение со внятным сообщением. Без авто-исправления
+        состояния — это задача execute. По умолчанию no-op.
+        """
+
+    async def verify(  # noqa: B027 — намеренно no-op, переопределяется в подклассах
+        self, page: Page, context: StepContext, params: dict | None = None
+    ) -> None:
+        """Пост-проверка: результат execute виден в DOM.
+
+        Бросает исключение, если результат не подтвердился. По умолчанию no-op —
+        многие шаги уже валидируют успех внутри execute.
+        """

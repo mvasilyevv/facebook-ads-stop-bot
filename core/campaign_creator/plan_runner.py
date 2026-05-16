@@ -17,6 +17,10 @@ class _Step(Protocol):
 
     async def execute(self, page, context, params=None) -> StepResult: ...
 
+    async def pre_check(self, page, context, params=None) -> None: ...
+
+    async def verify(self, page, context, params=None) -> None: ...
+
 
 SetStatus = Callable[..., None]
 
@@ -45,7 +49,10 @@ class PlanRunner:
 
             try:
                 step = factory()
+                await self._run_hook(step, "pre_check", page, ctx, action.params)
                 result: StepResult = await step.execute(page, ctx, action.params)
+                if result.success:
+                    await self._run_hook(step, "verify", page, ctx, action.params)
             except Exception as exc:
                 logger.exception("Шаг %s упал с исключением", action.step)
                 set_status(i, action.step, "FAILED", f"{type(exc).__name__}: {exc}")
@@ -62,3 +69,16 @@ class PlanRunner:
             set_status(i, action.step, "SUCCEEDED", result.message)
 
         return True
+
+    @staticmethod
+    async def _run_hook(step, hook: str, page, ctx, params) -> None:
+        """Вызвать pre_check/verify, если шаг их переопределил.
+
+        Если хук — это унаследованный no-op из BaseStep, дополнительной работы
+        не делаем. Это даёт совместимость со старыми шагами без обязательной
+        миграции.
+        """
+        fn = getattr(step, hook, None)
+        if fn is None:
+            return
+        await fn(page, ctx, params)

@@ -6,23 +6,23 @@ from __future__ import annotations
 from core.campaign_creator.naming import build_campaign_name
 
 
-# Сценарий: имя строится по шаблону CR{N} | {OFFER} | MV | {date}.
+# Сценарий: имя строится по шаблону MV | {GEO} | CR{N} | adset.pro | {date} | {N}.
 def test_format_with_explicit_date():
-    name = build_campaign_name(iter_num=2, offer_code="drc_cr2", date="25.03")
-    assert name == "CR2 | DRC_CR2 | MV | 25.03"
+    name = build_campaign_name(iter_num=2, geo_code="ke", date="13.05")
+    assert name == "MV | KE | CR2 | adset.pro | 13.05 | 2"
 
 
-# Сценарий: код оффера приводится к верхнему регистру.
-def test_offer_code_uppercased():
-    name = build_campaign_name(iter_num=1, offer_code="kenya", date="01.01")
-    assert " | KENYA | " in name
+# Сценарий: код гео приводится к верхнему регистру.
+def test_geo_code_uppercased():
+    name = build_campaign_name(iter_num=1, geo_code="ke", date="01.01")
+    assert " | KE | " in name
 
 
-# Сценарий: без даты используется сегодняшняя в формате DD.MM.
-def test_default_date_today():
-    from datetime import datetime
+# Сценарий: без даты используется завтрашняя в формате DD.MM (запуск на следующие сутки).
+def test_default_date_tomorrow():
+    from datetime import datetime, timedelta
 
-    name = build_campaign_name(iter_num=5, offer_code="x")
-    today = datetime.now().strftime("%d.%m")
-    assert name.endswith(f" | {today}")
-    assert name.startswith("CR5 | X | MV | ")
+    name = build_campaign_name(iter_num=5, geo_code="us")
+    tomorrow = (datetime.now() + timedelta(days=1)).strftime("%d.%m")
+    assert f" | {tomorrow} | 5" in name
+    assert name.startswith("MV | US | CR5 | adset.pro | ")

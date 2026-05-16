@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-ActionKind = Literal["click", "fill", "select", "key", "submit"]
+ActionKind = Literal["click", "fill", "select", "key", "submit", "marker"]
 
 
 @dataclass(frozen=True)
@@ -66,6 +66,24 @@ def denoise(events: list[dict]) -> list[UserAction]:
         kind = e.get("type")
         xpath = e.get("xpath") or ""
 
+        if kind == "marker":
+            for xk in list(pending_fill.keys()):
+                flush_fill(xk)
+            label = e.get("value")
+            actions.append(
+                UserAction(
+                    kind="marker",
+                    selectors=(),
+                    value=None,
+                    label=str(label) if label is not None else None,
+                    section=None,
+                    ts=float(e.get("ts") or 0),
+                    raw_indices=(i,),
+                )
+            )
+            i += 1
+            continue
+
         if kind in ("pointerdown", "mousedown", "click"):
             for xk in list(pending_fill.keys()):
                 flush_fill(xk)
@@ -86,6 +104,19 @@ def denoise(events: list[dict]) -> list[UserAction]:
                 j += 1
             if click_idx is not None:
                 src = events[click_idx]
+            else:
+                # FB-листбоксы закрываются на mousedown без последующего click —
+                # такой жест тоже значимое действие. Берём последний pointerdown/
+                # mousedown с непустыми селекторами/текстом как источник.
+                src = None
+                for idx in reversed(group):
+                    cand = events[idx]
+                    if cand.get("type") in ("pointerdown", "mousedown") and (
+                        _selectors_for(cand) or (cand.get("text") or "").strip()
+                    ):
+                        src = cand
+                        break
+            if src is not None:
                 selectors = _selectors_for(src)
                 text = (src.get("text") or "").strip()
                 if selectors or text:

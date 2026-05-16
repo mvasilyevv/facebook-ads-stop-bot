@@ -9,11 +9,13 @@ import re
 from playwright.async_api import Page
 
 from core.campaign_creator.humanizer import human_type, human_wait
-from core.campaign_creator.selectors import SELECTORS
 
 from .base import BaseStep, StepContext, StepResult
 
 logger = logging.getLogger(__name__)
+
+HEADLINE_INPUT = 'div[aria-label="Заголовок"], textarea[aria-label="Заголовок"]'
+PRIMARY_TEXT_INPUT = 'div[aria-label="Основной текст"], textarea[aria-label="Основной текст"]'
 
 
 async def _type_into_label(page: Page, label: str, text: str) -> None:
@@ -63,13 +65,13 @@ class FillTextsStep(BaseStep):
                 headline = (params.get("headline") or "").strip()
                 if primary:
                     try:
-                        await human_type(page, SELECTORS.get("primary_text", ""), primary)
+                        await human_type(page, PRIMARY_TEXT_INPUT, primary)
                     except Exception:
                         await _type_into_label(page, "Основной текст", primary)
                     await human_wait(200, 400)
                 if headline:
                     try:
-                        await human_type(page, SELECTORS["headline"], headline)
+                        await human_type(page, HEADLINE_INPUT, headline)
                     except Exception:
                         await _type_into_label(page, "Заголовок", headline)
                 return StepResult(success=True, message="Тексты заполнены")
@@ -79,13 +81,13 @@ class FillTextsStep(BaseStep):
                 headline = (adset.headline or "").strip()
                 if primary:
                     try:
-                        await human_type(page, SELECTORS.get("primary_text", ""), primary)
+                        await human_type(page, PRIMARY_TEXT_INPUT, primary)
                     except Exception:
                         await _type_into_label(page, "Основной текст", primary)
                     await human_wait(200, 400)
                 if headline:
                     try:
-                        await human_type(page, SELECTORS["headline"], headline)
+                        await human_type(page, HEADLINE_INPUT, headline)
                     except Exception:
                         await _type_into_label(page, "Заголовок", headline)
                 if primary or headline:
