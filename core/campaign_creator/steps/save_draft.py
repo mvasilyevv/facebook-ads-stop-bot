@@ -7,7 +7,7 @@ import logging
 
 from playwright.async_api import Page
 
-from core.campaign_creator.humanizer import human_click, human_wait
+from core.campaign_creator.humanizer import human_click_label, human_wait
 
 from .base import BaseStep, StepContext, StepResult
 
@@ -20,9 +20,11 @@ class SaveDraftStep(BaseStep):
     name = "save_draft"
     is_checkpoint = False
 
-    async def execute(self, page: Page, context: StepContext) -> StepResult:
+    async def execute(
+        self, page: Page, context: StepContext, params: dict | None = None
+    ) -> StepResult:
         try:
-            await human_click(page, '[aria-label="Сохранить как черновик"]')
+            await human_click_label(page, "Сохранить как черновик")
             await human_wait(1000, 2000)
             logger.info("Черновик сохранён")
             return StepResult(success=True, message="Черновик сохранён")

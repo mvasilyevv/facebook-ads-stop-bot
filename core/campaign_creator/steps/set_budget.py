@@ -7,7 +7,7 @@ import logging
 
 from playwright.async_api import Page
 
-from core.campaign_creator.humanizer import human_click, human_type, human_wait
+from core.campaign_creator.humanizer import human_click_label, human_type, human_wait
 from core.campaign_creator.selectors import SELECTORS
 
 from .base import BaseStep, StepContext, StepResult
@@ -21,16 +21,27 @@ class SetBudgetStep(BaseStep):
     name = "set_budget"
     is_checkpoint = False
 
-    async def execute(self, page: Page, context: StepContext) -> StepResult:
+    async def execute(
+        self, page: Page, context: StepContext, params: dict | None = None
+    ) -> StepResult:
         try:
-            label = "Бюджет кампании" if context.budget_level == "CBO" else "Бюджет группы"
-            await human_click(page, f'[aria-label="{label}"]')
+            p = params or {}
+            level = p.get("level", context.budget_level)
+            daily_budget = p.get("daily_budget", context.daily_budget)
+            label = "Бюджет кампании" if level == "CBO" else "Бюджет группы"
+            await human_click_label(page, label)
             await human_wait(200, 500)
-            await human_type(page, SELECTORS["daily_budget"], str(int(context.daily_budget)))
-            logger.info("Бюджет %s = %s USD", context.budget_level, context.daily_budget)
+            amount = float(daily_budget)
+            if amount == int(amount):
+                budget_text = str(int(amount))
+            else:
+                # FB в RU-локали ожидает запятую как десятичный разделитель.
+                budget_text = f"{amount:.2f}".replace(".", ",")
+            await human_type(page, SELECTORS["daily_budget"], budget_text)
+            logger.info("Бюджет %s = %s USD", level, daily_budget)
             return StepResult(
                 success=True,
-                message=f"Бюджет {context.budget_level} {context.daily_budget} USD",
+                message=f"Бюджет {level} {daily_budget} USD",
             )
         except Exception as exc:
             return StepResult(success=False, message=f"Ошибка set_budget: {exc}")

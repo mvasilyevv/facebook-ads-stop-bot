@@ -27,7 +27,9 @@ class SetConversionLocationStep(BaseStep):
     is_checkpoint = False
     idempotent = True
 
-    async def execute(self, page: Page, context: StepContext) -> StepResult:
+    async def execute(
+        self, page: Page, context: StepContext, params: dict | None = None
+    ) -> StepResult:
         try:
             if await self._already_website(page):
                 logger.info("Место получения конверсий уже = Сайт, шаг пропущен")

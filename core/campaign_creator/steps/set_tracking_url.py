@@ -38,13 +38,24 @@ class SetTrackingUrlStep(BaseStep):
     name = "set_tracking_url"
     is_checkpoint = False
 
-    async def execute(self, page: Page, context: StepContext) -> StepResult:
+    async def execute(
+        self, page: Page, context: StepContext, params: dict | None = None
+    ) -> StepResult:
         try:
-            await human_type(page, SELECTORS["landing_url"], context.landing_url)
-            for adset in context.adsets:
-                params = build_url_params(ad_name=adset.name, cabinet_id=context.cabinet_id)
-                await human_type(page, SELECTORS["url_params"], params)
-                logger.info("Tracking-параметры для %s: %s", adset.name, params)
+            p = params or {}
+            landing_url = p.get("landing_url", context.landing_url)
+            cabinet_id = p.get("cabinet_id", context.cabinet_id)
+            await human_type(page, SELECTORS["landing_url"], landing_url)
+            if "ad_name" in p:
+                url_params = build_url_params(ad_name=p["ad_name"], cabinet_id=cabinet_id)
+                await human_type(page, SELECTORS["url_params"], url_params)
+                logger.info("Tracking-параметры для %s: %s", p["ad_name"], url_params)
+            else:
+                for adset in context.adsets:
+                    ad_name = getattr(adset, "name", None) or adset.display_name(0)
+                    url_params = build_url_params(ad_name=ad_name, cabinet_id=cabinet_id)
+                    await human_type(page, SELECTORS["url_params"], url_params)
+                    logger.info("Tracking-параметры для %s: %s", ad_name, url_params)
             return StepResult(success=True, message="Tracking URL установлен")
         except Exception as exc:
             return StepResult(success=False, message=f"Ошибка set_tracking_url: {exc}")
