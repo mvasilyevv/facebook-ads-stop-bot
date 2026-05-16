@@ -43,6 +43,9 @@ STEPS_ORDER: list[str] = [cls.name for cls in _STEP_CLASSES]
 
 _REGISTRY: dict[str, type[BaseStep]] = {cls.name: cls for cls in _STEP_CLASSES}
 
+# Публичный реестр для PlanRunner — keyed by step.name. Содержит ВСЕ известные классы.
+STEP_REGISTRY: dict[str, type[BaseStep]] = dict(_REGISTRY)
+
 # В реестре уникальность гарантируется — каждый шаг с собственным name.
 assert len(_REGISTRY) == len(_STEP_CLASSES), "Дублирующиеся имена шагов в registry"
 
