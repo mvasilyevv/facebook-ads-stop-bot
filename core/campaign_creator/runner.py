@@ -1,45 +1,38 @@
 # -*- coding: utf-8 -*-
-"""Runner шагов создания кампании — full autopilot без checkpoint-пауз."""
+"""Тонкая обёртка над step_executor — поддерживает legacy steps и декларативный plan."""
 
 from __future__ import annotations
 
-import logging
-from typing import Awaitable, Callable
-
 from playwright.async_api import Page
 
-from core.campaign_creator.steps.base import BaseStep, StepContext, StepResult
-from core.domain import CampaignCreatorTaskStatus
-
-logger = logging.getLogger(__name__)
+from core.campaign_creator.plan_types import PlanAction
+from core.campaign_creator.step_executor import SetStatus, execute_plan, execute_steps
+from core.campaign_creator.steps.base import BaseStep, StepContext
 
 
 class CampaignCreatorRunner:
-    """Выполняет список шагов до конца или до первой ошибки."""
+    """Выполняет либо linear pipeline (legacy), либо декларативный план."""
 
     def __init__(
         self,
-        steps: list[BaseStep],
-        set_status: Callable[..., Awaitable[None]],
+        steps: list[BaseStep] | None = None,
+        set_status: SetStatus = None,  # type: ignore[assignment]
+        *,
+        plan: list[PlanAction] | None = None,
     ) -> None:
         self._steps = steps
+        self._plan = plan
         self._set_status = set_status
 
-    async def run_all(self, page: Page, context: StepContext) -> bool:
-        """Выполнить все шаги последовательно. True — успех, False — ошибка."""
-        for idx, step in enumerate(self._steps, start=1):
-            logger.info("Выполняю шаг %d/%d: %s", idx, len(self._steps), step.name)
-            await self._set_status(CampaignCreatorTaskStatus.RUNNING, step=step.name)
-            result: StepResult = await step.execute(page, context)
-            if not result.success:
-                await self._set_status(
-                    CampaignCreatorTaskStatus.FAILED,
-                    step=step.name,
-                    data={"error": result.message},
-                )
-                logger.error("Шаг %s провалился: %s", step.name, result.message)
-                return False
-            logger.info("Шаг %s завершён: %s", step.name, result.message)
-
-        await self._set_status(CampaignCreatorTaskStatus.SUCCEEDED)
-        return True
+    async def run_all(
+        self,
+        page: Page,
+        context: StepContext,
+        *,
+        state: dict | None = None,
+    ) -> bool:
+        if self._plan is not None:
+            return await execute_plan(self._plan, page, context, self._set_status, state=state)
+        if self._steps is None:
+            raise ValueError("CampaignCreatorRunner: нужны либо plan, либо steps")
+        return await execute_steps(self._steps, page, context, self._set_status)
