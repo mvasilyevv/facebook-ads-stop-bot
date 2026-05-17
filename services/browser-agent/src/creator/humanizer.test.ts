@@ -1,7 +1,7 @@
 import { describe, it, before } from 'node:test';
 import assert from 'node:assert';
 import { JSDOM } from 'jsdom';
-import { humanIdle, IdleRange, humanClick } from './humanizer.js';
+import { humanIdle, IdleRange, humanClick, humanType } from './humanizer.js';
 
 before(() => {
   const dom = new JSDOM('<!doctype html><html><body></body></html>', {
@@ -40,5 +40,20 @@ describe('humanClick', () => {
     );
     await humanClick(div);
     assert.deepEqual(events.slice(-3), ['pointerdown', 'pointerup', 'click']);
+  });
+});
+
+describe('humanType', () => {
+  it('вводит текст символ за символом и диспатчит input/keydown', async () => {
+    const input = document.createElement('input');
+    document.body.appendChild(input);
+    const events: string[] = [];
+    ['keydown', 'keypress', 'input', 'keyup'].forEach((t) =>
+      input.addEventListener(t, () => events.push(t)),
+    );
+    await humanType(input, 'ab');
+    assert.equal(input.value, 'ab');
+    assert.ok(events.includes('input'));
+    assert.ok(events.includes('keydown'));
   });
 });

@@ -56,3 +56,41 @@ export async function humanClick(el: Element): Promise<void> {
     new MouseEvent('click', { bubbles: true, cancelable: true, clientX: x, clientY: y }),
   );
 }
+
+function setNativeInputValue(
+  el: HTMLInputElement | HTMLTextAreaElement,
+  value: string,
+): void {
+  const proto =
+    el instanceof HTMLTextAreaElement
+      ? HTMLTextAreaElement.prototype
+      : HTMLInputElement.prototype;
+  const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+  setter?.call(el, value);
+}
+
+// Посимвольный гуманизированный ввод текста через native value setter и
+// эмуляцию key/input событий, чтобы React контролируемые поля обновились.
+export async function humanType(
+  el: HTMLInputElement | HTMLTextAreaElement,
+  text: string,
+): Promise<void> {
+  el.focus();
+  await humanIdle(IdleRange.SHORT);
+  let current = '';
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]!;
+    el.dispatchEvent(new KeyboardEvent('keydown', { key: ch, bubbles: true }));
+    el.dispatchEvent(new KeyboardEvent('keypress', { key: ch, bubbles: true }));
+    current += ch;
+    setNativeInputValue(el, current);
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new KeyboardEvent('keyup', { key: ch, bubbles: true }));
+    await humanIdle(IdleRange.TYPING);
+    if (i > 0 && i % (3 + Math.floor(Math.random() * 6)) === 0) {
+      await humanIdle(IdleRange.TYPING_BURST_PAUSE);
+    }
+  }
+  el.dispatchEvent(new Event('change', { bubbles: true }));
+  el.blur();
+}
