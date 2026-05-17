@@ -36,7 +36,7 @@ _RECORDINGS_DIR = Path("recordings")
 async def start_recording(body: RecorderStartRequestSchema):
     """Подключиться к Vision CDP и начать запись событий."""
     session_id = str(uuid.uuid4())
-    writer = SessionWriter(offer_code=body.offer_code)
+    writer = SessionWriter()
 
     async def _run_session():
         session = CdpSession()
@@ -162,7 +162,7 @@ async def get_session_status(session_id: str, tail: int = 30):
 
 
 @router.get("/analyze", response_model=RecorderAnalyzeResponseSchema)
-async def analyze_last_recording(offer_code: str | None = None):
+async def analyze_last_recording():
     """Проанализировать последний JSON-файл записи."""
     recordings_dir = _RECORDINGS_DIR
 
@@ -170,11 +170,7 @@ async def analyze_last_recording(offer_code: str | None = None):
         if not recordings_dir.exists():
             return []
         return sorted(
-            [
-                f
-                for f in recordings_dir.glob("*.json")
-                if (not offer_code or offer_code.upper() in f.name.upper())
-            ],
+            list(recordings_dir.glob("*.json")),
             key=lambda f: f.stat().st_mtime,
             reverse=True,
         )

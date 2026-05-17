@@ -67,8 +67,8 @@ test('collectMissingValidationColumns находит переименованн�
   assert.ok(!missingColumns.includes('Лиды'));
 });
 
-// Сценарий: диагностические и ранние traffic-колонки можно скрыть без поломки обязательного парсинга.
-test('buildParserColumnLayout не требует необязательные traffic-колонки', () => {
+// Сценарий: если убрать ранее опциональные traffic-колонки, валидация теперь обязана сообщить об отсутствии.
+test('buildParserColumnLayout требует traffic-колонки (опциональность снята)', () => {
   const headers = buildFullHeaderSet().filter((item) => ![
     'outbound_clicks',
     'outbound_clicks_ctr',
@@ -76,12 +76,12 @@ test('buildParserColumnLayout не требует необязательные t
     'frequency',
   ].includes(item.surfaceKey));
 
-  const { layout, missingColumns } = buildParserColumnLayout(headers);
-  const fields = layout.map((column) => column.fieldName);
+  const { missingColumns } = buildParserColumnLayout(headers);
 
-  assert.deepEqual(missingColumns, []);
-  assert.ok(fields.includes('deposits'));
-  assert.ok(!fields.includes('outbound_clicks'));
+  assert.ok(missingColumns.includes('Исходящие клики'));
+  assert.ok(missingColumns.includes('CTR исходящих кликов'));
+  assert.ok(missingColumns.includes('CPM'));
+  assert.ok(missingColumns.includes('Частота'));
 });
 
 // Сценарий: колонка результата обязательна, потому что в текущем Ads Manager она означает депозиты.

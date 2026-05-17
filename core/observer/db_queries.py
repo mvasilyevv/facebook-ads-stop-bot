@@ -275,6 +275,59 @@ async def check_vision_reconnect_flag() -> bool:
     return False
 
 
+async def consume_scan_flags_combined() -> tuple[bool, bool, bool]:
+    """Объединённый префлайт: за одну сессию читает и сбрасывает три флага.
+
+    Возвращает кортеж (scanning_enabled, scan_requested_consumed, vision_reconnect_consumed).
+
+    Экономит 2 round-trip к Postgres на каждый цикл observer по сравнению с
+    последовательными вызовами check_scanning_enabled + consume_scan_requested_flag +
+    check_vision_reconnect_flag.
+    """
+    scanning_enabled = True
+    scan_requested = False
+    vision_reconnect = False
+    factory = get_session_factory()
+    try:
+        async with factory() as session:
+            observer_row = await get_observer_settings(session)
+            if observer_row is not None:
+                scanning_enabled = bool(observer_row.is_scanning_enabled)
+                if observer_row.scan_requested:
+                    upd_scan = await session.execute(
+                        update(ObserverSettings)
+                        .where(
+                            ObserverSettings.singleton_key == "default",
+                            ObserverSettings.scan_requested.is_(True),
+                        )
+                        .values(scan_requested=False)
+                        .returning(ObserverSettings.id)
+                    )
+                    if upd_scan.first():
+                        scan_requested = True
+
+            upd_vision = await session.execute(
+                update(VisionSettings)
+                .where(
+                    VisionSettings.singleton_key == "default",
+                    VisionSettings.reconnect_requested.is_(True),
+                )
+                .values(reconnect_requested=False)
+                .returning(VisionSettings.id)
+            )
+            if upd_vision.first():
+                vision_reconnect = True
+
+            await session.commit()
+    except Exception:
+        logger.debug("Объединённый префлайт-запрос флагов не выполнен", exc_info=True)
+    if scan_requested:
+        logger.info("Флаг scan_requested сброшен — выполняем немедленный скан")
+    if vision_reconnect:
+        logger.info("Флаг reconnect_requested сброшен — выполняем переподключение к браузеру")
+    return scanning_enabled, scan_requested, vision_reconnect
+
+
 async def get_disable_queue_pause_reason() -> str | None:
     """Возвращает причину паузы сканирования, если очередь отключения блокирует браузер."""
     factory = get_session_factory()

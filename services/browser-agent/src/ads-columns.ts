@@ -184,8 +184,6 @@ const COLUMN_SPECS: ColumnSpec[] = [
     surfaceKey: 'outbound_clicks',
     parserField: 'outbound_clicks',
     valueKind: 'metric',
-    requiredForValidation: false,
-    requiredForParsing: false,
     widthPx: 40,
   },
   {
@@ -194,8 +192,6 @@ const COLUMN_SPECS: ColumnSpec[] = [
     surfaceKey: 'outbound_clicks_ctr',
     parserField: 'outbound_ctr',
     valueKind: 'metric',
-    requiredForValidation: false,
-    requiredForParsing: false,
     widthPx: 40,
   },
   {
@@ -205,8 +201,6 @@ const COLUMN_SPECS: ColumnSpec[] = [
     textNeedles: ['целев', 'цільов', 'landing page'],
     parserField: 'landing_page_views',
     valueKind: 'metric',
-    requiredForValidation: false,
-    requiredForParsing: false,
     widthPx: 40,
   },
   {
@@ -216,8 +210,6 @@ const COLUMN_SPECS: ColumnSpec[] = [
     textNeedles: ['целев', 'цільов', 'landing page'],
     parserField: 'cost_per_landing_page_view',
     valueKind: 'metric',
-    requiredForValidation: false,
-    requiredForParsing: false,
     widthPx: 40,
   },
   {
@@ -226,8 +218,6 @@ const COLUMN_SPECS: ColumnSpec[] = [
     surfaceKey: 'cpm',
     parserField: 'cpm',
     valueKind: 'metric',
-    requiredForValidation: false,
-    requiredForParsing: false,
     widthPx: 40,
   },
   {
@@ -236,8 +226,6 @@ const COLUMN_SPECS: ColumnSpec[] = [
     surfaceKey: 'frequency',
     parserField: 'frequency',
     valueKind: 'metric',
-    requiredForValidation: false,
-    requiredForParsing: false,
     widthPx: 40,
   },
 ];

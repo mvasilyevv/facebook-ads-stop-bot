@@ -23,7 +23,7 @@ from .base import BaseStep, StepContext, StepResult
 
 logger = logging.getLogger(__name__)
 
-ANTARCTICA_QUERY = "Антарктида"  # FB ищет «Антарктика» по запросу «Антарктида»
+ANTARCTICA_QUERY = "Антарктика"
 ANTARCTICA_OPTION = "Антарктика"
 SECTION_LABEL = "Местоположения"
 SEARCH_INPUT_SELECTOR = 'input[placeholder="Поиск местоположений"]'

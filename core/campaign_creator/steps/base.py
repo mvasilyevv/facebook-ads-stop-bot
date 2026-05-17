@@ -9,27 +9,9 @@ from typing import Literal
 
 from playwright.async_api import Page
 
+from core.campaign_creator.plan_types import AdsetSpec  # noqa: F401 — реэкспорт
 
-@dataclass
-class AdsetSpec:
-    """Опциональный суффикс к имени адсета и тексты.
-
-    Имя адсета и подпапка с креативами выводятся из позиции в списке.
-    """
-
-    name_suffix: str = ""
-    headline: str = ""
-    primary_text: str = ""
-
-    def display_name(self, idx: int) -> str:
-        """Имя адсета: '{N}' или '{N} | {suffix}'."""
-        n = idx + 1
-        suffix = (self.name_suffix or "").strip()
-        return f"{n} | {suffix}" if suffix else f"{n}"
-
-    def subfolder(self, idx: int) -> str:
-        """Подпапка с креативами по индексу: '1', '2', ..."""
-        return str(idx + 1)
+__all__ = ["AdsetSpec", "BaseStep", "StepContext", "StepResult"]
 
 
 @dataclass

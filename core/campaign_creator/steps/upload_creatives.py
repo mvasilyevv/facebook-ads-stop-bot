@@ -199,12 +199,23 @@ class UploadCreativesStep(BaseStep):
         await human_wait(400, 700)
 
     async def _finish_creative_dialog(self, page: Page) -> None:
-        await self._click_dialog_button(page, "Далее")
-        await human_wait(500, 900)
-        await self._click_dialog_button(page, "Далее")
-        await human_wait(500, 900)
-        await self._click_dialog_button(page, "Готово")
-        await human_wait(800, 1500)
+        """Жмём «Далее» пока не появится «Готово»; затем нажимаем «Готово».
+
+        Защита от бесконечного цикла — max 10 итераций.
+        """
+        for _ in range(10):
+            done_btn = page.get_by_role("button", name="Готово", exact=True).last
+            try:
+                if await done_btn.is_visible():
+                    await human_wait(120, 260)
+                    await done_btn.click()
+                    await human_wait(800, 1500)
+                    return
+            except Exception:
+                pass
+            await self._click_dialog_button(page, "Далее")
+            await human_wait(500, 900)
+        raise RuntimeError("Wizard креатива: не появилась кнопка «Готово» за 10 итераций")
 
     async def _click_dialog_button(self, page: Page, name: str) -> None:
         btn = page.get_by_role("button", name=name, exact=True).last

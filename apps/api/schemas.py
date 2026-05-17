@@ -906,7 +906,7 @@ class NamingTrackerResponseSchema(BaseModel):
 class RecorderStartRequestSchema(BaseModel):
     """Запрос на старт записи сессии."""
 
-    offer_code: str
+    pass
 
 
 class RecorderStartResponseSchema(BaseModel):

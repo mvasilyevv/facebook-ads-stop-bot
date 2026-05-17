@@ -314,6 +314,7 @@ async function waitForInitialAdsRows(page, timeoutMs) {
     if (rows.length === 0) {
         console.warn(`Browser-agent: строки таблицы не появились за ${Math.round(timeoutMs / 1000)}с после refresh`);
     }
+    // Оптимизация: 2 совпадения вместо 3, ранний выход при count ≥ 5 уже на 2-м совпадении.
     await waitForDomStable(page, 3.0, 0.1);
 }
 async function prepareAdsTableForScan(page, options) {
@@ -321,19 +322,15 @@ async function prepareAdsTableForScan(page, options) {
     // Перед refresh уходим наверх, чтобы Meta обновляла таблицу из начала списка, а не из середины виртуального окна.
     if (resetFirst) {
         await (0, ads_table_js_1.resetAdsTableScroll)(page);
-        await sleep(SCAN_TOP_RESET_SETTLE_MS);
+        // settle после reset убран: waitForInitialAdsRows + waitForDomStable ниже сами дождутся рендера.
     }
     if (doRefresh) {
         await (0, parser_js_1.refreshTable)(page);
-        await sleep(settleDelayMs);
+        // settleDelayMs игнорируем намеренно: waitForInitialAdsRows ждёт реальные строки, а не фиксированный sleep.
         await waitForInitialAdsRows(page, Math.max(SCAN_POST_REFRESH_MIN_ROWS_WAIT_MS, settleDelayMs + SCAN_POST_REFRESH_EXTRA_WAIT_MS));
     }
-    // После refresh закрепляем верхнюю позицию ещё раз: Ads Manager иногда восстанавливает старое виртуальное окно.
-    if (resetFirst) {
-        await (0, ads_table_js_1.resetAdsTableScroll)(page);
-        await sleep(SCAN_TOP_RESET_SETTLE_MS);
-        await waitForDomStable(page, 2.0, 0.1);
-    }
+    // Второй reset+sleep+waitForDomStable убран: основной reset уже сделан выше, а виртуальное окно
+    // стабилизируется внутри waitForInitialAdsRows.
 }
 async function waitForVisibleRowsAfterScroll(page, beforeIds, timeoutMs = SCAN_POST_SCROLL_CHANGE_WAIT_MS) {
     const deadline = Date.now() + timeoutMs;
@@ -842,11 +839,16 @@ async function waitForDomStable(page, timeoutSec, pollIntervalSec) {
     const deadline = Date.now() + timeoutSec * 1000;
     let lastCount = -1;
     let stableCount = 0;
+    // Оптимизация latency: 2 совпадения вместо 3; если строк уже ≥ 5 — выходим сразу после 2-го совпадения.
+    const REQUIRED_STABLE = 2;
+    const EARLY_EXIT_COUNT = 5;
     while (Date.now() < deadline) {
         const count = await page.evaluate(() => document.querySelectorAll('._1gda._2djg').length);
         if (count === lastCount && count > 0) {
             stableCount++;
-            if (stableCount >= 3)
+            if (stableCount >= REQUIRED_STABLE)
+                return true;
+            if (count >= EARLY_EXIT_COUNT && stableCount >= 1)
                 return true;
         }
         else {
@@ -855,7 +857,7 @@ async function waitForDomStable(page, timeoutSec, pollIntervalSec) {
         lastCount = count;
         await sleep(pollIntervalSec * 1000);
     }
-    return stableCount >= 2;
+    return stableCount >= 1;
 }
 function toProtoRow(row) {
     return {

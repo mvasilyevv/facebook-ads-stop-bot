@@ -13,9 +13,46 @@ async def adset_items(page: Page) -> Locator:
 
 
 async def ad_items_for_adset(page: Page, adset_idx: int) -> Locator:
-    """Все треюитемы объявлений внутри адсета по индексу."""
+    """Все треюитемы объявлений внутри адсета по индексу.
+
+    Гарантирует, что дерево уже отрисовало адсет и сам адсет раскрыт
+    (если был свёрнут — кликаем chevron / по самому узлу, пока
+    `aria-expanded` не станет `true`). После раскрытия ждём появления
+    хотя бы одного `aria-level="3"`-узла.
+    """
     adsets = page.locator('[role="tree"] [role="treeitem"][aria-level="2"]')
-    return adsets.nth(adset_idx).locator('[role="treeitem"][aria-level="3"]')
+    # Ждём, что нужный адсет вообще существует в дереве.
+    await adsets.nth(adset_idx).wait_for(state="visible", timeout=15000)
+    adset = adsets.nth(adset_idx)
+
+    # Если адсет свёрнут — раскрываем.
+    expanded = await adset.get_attribute("aria-expanded")
+    if expanded == "false":
+        # Сначала пробуем найти chevron/кнопку раскрытия внутри узла.
+        chevron = adset.locator(
+            '[aria-label*="азверн" i], [aria-label*="аскры" i], [aria-label*="xpand" i]'
+        ).first
+        try:
+            if await chevron.count() > 0 and await chevron.is_visible():
+                await chevron.click()
+            else:
+                await adset.click()
+        except Exception:
+            await adset.click()
+        # Дожидаемся фактического раскрытия.
+        try:
+            await page.wait_for_function(
+                """(el) => el && el.getAttribute('aria-expanded') === 'true'""",
+                arg=await adset.element_handle(),
+                timeout=8000,
+            )
+        except Exception:
+            pass
+
+    ads = adset.locator('[role="treeitem"][aria-level="3"]')
+    # Ждём, что появилось хотя бы одно объявление под адсетом.
+    await ads.first.wait_for(state="visible", timeout=15000)
+    return ads
 
 
 async def click_more_actions(item: Locator) -> None:

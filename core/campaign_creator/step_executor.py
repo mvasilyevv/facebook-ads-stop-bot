@@ -53,7 +53,14 @@ async def open_page(client: BrowserAgentClient):
     try:
         browser = await pw.chromium.connect_over_cdp(cdp_url)
         pages = browser.contexts[0].pages if browser.contexts else []
-        page = pages[0] if pages else await browser.new_page()
+        # Ищем вкладку Ads Manager среди открытых. Если нет — открываем новую.
+        page = next(
+            (p for p in pages if "adsmanager.facebook.com" in p.url),
+            None,
+        )
+        if page is None:
+            page = pages[0] if pages else await browser.new_page()
+        await page.bring_to_front()
         yield page
     finally:
         if browser is not None:

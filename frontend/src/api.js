@@ -219,10 +219,10 @@ export const askAI = (messages, allowTools = true) =>
   });
 
 // --- Campaign Recorder ---
-export const startRecording = (data) =>
+export const startRecording = () =>
   request('/campaign-recorder/start', {
     method: 'POST',
-    body: JSON.stringify(data),
+    body: JSON.stringify({}),
   });
 
 export const stopRecording = (sessionId) =>
@@ -231,8 +231,8 @@ export const stopRecording = (sessionId) =>
 export const getRecordingStatus = (sessionId, tail = 30) =>
   requestWithQuery(`/campaign-recorder/status/${sessionId}`, { tail });
 
-export const analyzeLastRecording = (offerCode) =>
-  request(`/campaign-recorder/analyze${offerCode ? `?offer_code=${encodeURIComponent(offerCode)}` : ''}`);
+export const analyzeLastRecording = () =>
+  request('/campaign-recorder/analyze');
 
 // --- Campaign Creator ---
 export const startCampaignCreator = (data) =>

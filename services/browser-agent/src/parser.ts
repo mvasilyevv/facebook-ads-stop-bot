@@ -8,6 +8,10 @@ type RawAdFields = Record<string, string>;
 type BrowserParseRowArgs = {
   layout: ParserColumnLayout[];
 };
+type RawExtractResult = {
+  rows: RawAdFields[];
+  missingFields: { fbAdId: string; adName: string; fields: string[] }[];
+};
 type ParseRowsReader = (page: Page) => Promise<ScannedAdRow[]>;
 type WaitForParsedAdsRowsOptions = {
   timeoutMs?: number;
@@ -56,7 +60,7 @@ async function collectVisibleHeaderSnapshots(page: Page): Promise<HeaderSnapshot
 async function extractRawRowsFromPage(
   page: Page,
   args: BrowserParseRowArgs,
-): Promise<RawAdFields[]> {
+): Promise<RawExtractResult> {
   return page.evaluate(({ layout }) => {
     const BUTTON_LABELS = new Set([
       'дублировать', 'редактировать', 'удалить', 'предпросмотр',
@@ -196,6 +200,7 @@ async function extractRawRowsFromPage(
     }
 
     const result: RawAdFields[] = [];
+    const missingFields: { fbAdId: string; adName: string; fields: string[] }[] = [];
     const rows = Array.from(document.querySelectorAll('._1gda._2djg'));
 
     for (const row of rows) {
@@ -221,11 +226,15 @@ async function extractRawRowsFromPage(
         ad_name: adName,
       };
 
+      const rowMissing: string[] = [];
       for (const column of layout) {
         const relativeIndex = column.headerIndex - nameColumn.headerIndex;
         const cellIndex = nameCellIndex + relativeIndex;
         const cell = cells[cellIndex];
-        if (!cell) continue;
+        if (!cell) {
+          rowMissing.push(column.title);
+          continue;
+        }
         fields[column.fieldName] = column.valueKind === 'metric'
           ? getMetricText(cell)
           : column.valueKind === 'name'
@@ -233,10 +242,14 @@ async function extractRawRowsFromPage(
             : getFirstText(cell);
       }
 
+      if (rowMissing.length > 0) {
+        missingFields.push({ fbAdId, adName, fields: rowMissing });
+      }
+
       result.push(fields);
     }
 
-    return result;
+    return { rows: result, missingFields };
   }, args);
 }
 
@@ -250,9 +263,22 @@ export async function parseAdsFromPage(page: Page): Promise<ScannedAdRow[]> {
     );
   }
 
-  const rawRows = await extractRawRowsFromPage(page, { layout });
-  if (!Array.isArray(rawRows)) return [];
-  return rawRows
+  const rawResult = await extractRawRowsFromPage(page, { layout });
+  if (!rawResult || !Array.isArray(rawResult.rows)) return [];
+  if (rawResult.missingFields.length > 0) {
+    const missingSet = new Set<string>();
+    for (const item of rawResult.missingFields) {
+      for (const fieldTitle of item.fields) missingSet.add(fieldTitle);
+    }
+    const sample = rawResult.missingFields
+      .slice(0, 3)
+      .map((item) => `${item.adName} (${item.fbAdId}): ${item.fields.join(', ')}`)
+      .join('; ');
+    throw new Error(
+      `Не удалось распарсить колонки Ads Manager: ${Array.from(missingSet).join(', ')}. Примеры строк: ${sample}.`,
+    );
+  }
+  return rawResult.rows
     .map((fields) => buildRowFromFields(fields))
     .filter((row): row is ScannedAdRow => row !== null);
 }

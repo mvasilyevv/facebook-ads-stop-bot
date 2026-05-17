@@ -19,10 +19,9 @@ from sqlalchemy import select
 from clients.python_grpc.client import BrowserAgentClient, BrowserAgentConfig
 from core.campaign_creator.naming import build_campaign_name
 from core.campaign_creator.plan_builder import build_plan
-from core.campaign_creator.plan_types import AdsetSpec as PlanAdsetSpec
-from core.campaign_creator.plan_types import CampaignSpec
+from core.campaign_creator.plan_types import AdsetSpec, CampaignSpec
 from core.campaign_creator.step_executor import execute_plan, open_page
-from core.campaign_creator.steps.base import AdsetSpec, StepContext
+from core.campaign_creator.steps.base import StepContext
 from core.config import get_settings
 from core.db import get_session_factory
 from core.domain import CampaignCreatorTaskStatus
@@ -68,7 +67,7 @@ def _build_specs(
     )
 
     adsets_plan = [
-        PlanAdsetSpec(
+        AdsetSpec(
             name_suffix=adset_subtype,
             creo_subfolder=str(idx + 1) if (creo_root / str(idx + 1)).exists() else "1",
             headline="Заголовок dry-run",

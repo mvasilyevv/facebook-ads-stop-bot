@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 HEADLINE_INPUT = 'div[aria-label="Заголовок"], textarea[aria-label="Заголовок"]'
 PRIMARY_TEXT_INPUT = 'div[aria-label="Основной текст"], textarea[aria-label="Основной текст"]'
+DESCRIPTION_INPUT = 'div[aria-label="Описание"], textarea[aria-label="Описание"]'
 
 
 async def _type_into_label(page: Page, label: str, text: str) -> None:
@@ -59,10 +60,13 @@ class FillTextsStep(BaseStep):
         self, page: Page, context: StepContext, params: dict | None = None
     ) -> StepResult:
         try:
-            if params and ("headline" in params or "primary_text" in params):
+            if params and (
+                "headline" in params or "primary_text" in params or "description" in params
+            ):
                 # Декларативный путь: одно объявление за вызов.
                 primary = (params.get("primary_text") or "").strip()
                 headline = (params.get("headline") or "").strip()
+                description = (params.get("description") or "").strip()
                 if primary:
                     try:
                         await human_type(page, PRIMARY_TEXT_INPUT, primary)
@@ -74,11 +78,18 @@ class FillTextsStep(BaseStep):
                         await human_type(page, HEADLINE_INPUT, headline)
                     except Exception:
                         await _type_into_label(page, "Заголовок", headline)
+                    await human_wait(200, 400)
+                if description:
+                    try:
+                        await human_type(page, DESCRIPTION_INPUT, description)
+                    except Exception:
+                        await _type_into_label(page, "Описание", description)
                 return StepResult(success=True, message="Тексты заполнены")
 
             for idx, adset in enumerate(context.adsets):
                 primary = (adset.primary_text or "").strip()
                 headline = (adset.headline or "").strip()
+                description = (getattr(adset, "description", "") or "").strip()
                 if primary:
                     try:
                         await human_type(page, PRIMARY_TEXT_INPUT, primary)
@@ -90,7 +101,13 @@ class FillTextsStep(BaseStep):
                         await human_type(page, HEADLINE_INPUT, headline)
                     except Exception:
                         await _type_into_label(page, "Заголовок", headline)
-                if primary or headline:
+                    await human_wait(200, 400)
+                if description:
+                    try:
+                        await human_type(page, DESCRIPTION_INPUT, description)
+                    except Exception:
+                        await _type_into_label(page, "Описание", description)
+                if primary or headline or description:
                     logger.info("Тексты адсета %s заполнены", adset.display_name(idx))
                 else:
                     logger.info("Тексты адсета %s пропущены (пусто)", adset.display_name(idx))

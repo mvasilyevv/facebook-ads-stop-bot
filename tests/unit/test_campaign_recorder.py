@@ -101,24 +101,24 @@ def test_session_writer_creates_file():
     from core.campaign_recorder.session_writer import SessionWriter
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        writer = SessionWriter(offer_code="DRC_CR2", recordings_dir=Path(tmpdir))
+        writer = SessionWriter(recordings_dir=Path(tmpdir))
         writer.add_events([{"type": "click", "ts": 1.0, "tag": "button"}])
         path = writer.save()
         assert path.exists()
         data = json.loads(path.read_text())
-        assert data["offer_code"] == "DRC_CR2"
         assert len(data["events"]) == 1
 
 
-def test_session_writer_filename_contains_offer():
-    """Имя файла должно содержать код оффера."""
+def test_session_writer_filename_uses_timestamp():
+    """Имя файла должно содержать только timestamp."""
     from core.campaign_recorder.session_writer import SessionWriter
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        writer = SessionWriter(offer_code="DRC_CR2", recordings_dir=Path(tmpdir))
+        writer = SessionWriter(recordings_dir=Path(tmpdir))
         writer.add_events([])
         path = writer.save()
-        assert "DRC_CR2" in path.name
+        assert path.suffix == ".json"
+        assert path.name.replace(".json", "").replace("_", "").isdigit()
 
 
 def test_analyze_endpoint_returns_markdown(tmp_path, monkeypatch):

@@ -82,7 +82,7 @@ def _adset_setup(adset: AdsetSpec, *, idx: int, spec: CampaignSpec) -> list[Plan
 def _ads_for_first_adset(adset: AdsetSpec, *, adset_idx: int) -> list[PlanAction]:
     out: list[PlanAction] = []
     first_creo = adset.creatives[0]
-    out.append(PlanAction("rename_ad", {"adset_idx": adset_idx, "ad_idx": 0, "suffix": first_creo}))
+    # rename_ad для ad_idx=0 не нужен — upload_creatives сам выставит имя из имени файла.
     out.append(
         PlanAction(
             "upload_creatives",
@@ -103,6 +103,7 @@ def _ads_for_first_adset(adset: AdsetSpec, *, adset_idx: int) -> list[PlanAction
                 "ad_idx": 0,
                 "headline": adset.headline,
                 "primary_text": adset.primary_text,
+                "description": adset.description,
             },
         )
     )
@@ -164,6 +165,7 @@ def _ads_for_duplicated_adset(adset: AdsetSpec, *, adset_idx: int) -> list[PlanA
                 "ad_idx": 0,
                 "headline": adset.headline,
                 "primary_text": adset.primary_text,
+                "description": adset.description,
             },
         )
     )

@@ -35,10 +35,8 @@ from core.disable_tasks import is_delivery_disabled
 from core.domain import AlertStage, AlertState
 from core.models import AdSnapshot, AlertEvent, FbAd
 from core.observer.db_queries import (
-    check_scanning_enabled,
-    check_vision_reconnect_flag,
     collect_reminder_alerts,
-    consume_scan_requested_flag,
+    consume_scan_flags_combined,
     get_disable_queue_pause_reason,
     get_enable_queue_pause_reason,
     load_active_snooze_ad_ids,
@@ -201,6 +199,20 @@ def _build_missing_columns_alert_text(missing_columns: list[str]) -> str:
         "Сканирование автоматически выключено, чтобы не записывать некорректные данные. "
         "Верните нужный набор колонок в Ads Manager и включите сканирование снова."
     )
+
+
+_PARSER_MISSING_COLUMNS_MARKER = "Не удалось распарсить колонки"
+
+
+def _extract_parser_missing_columns(message: str) -> list[str]:
+    """Парсит список колонок из текста ошибки парсера Ads Manager."""
+    if _PARSER_MISSING_COLUMNS_MARKER not in message:
+        return []
+    after_marker = message.split(_PARSER_MISSING_COLUMNS_MARKER, 1)[1]
+    after_colon = after_marker.split(":", 1)[1] if ":" in after_marker else after_marker
+    head = after_colon.split(". Примеры", 1)[0]
+    head = head.strip().rstrip(".")
+    return [item.strip() for item in head.split(",") if item.strip()]
 
 
 def _build_empty_scan_reason() -> str:
@@ -1146,6 +1158,8 @@ async def observer_loop(
             stop_alerts: list[AlertCandidate] = []
             snapshot_batch: list[dict] = []
             fast_stop_triggered = False
+            # Timing-инструментация: замеряем фазы цикла для baseline/после-сравнения.
+            timing: dict[str, float] = {"cycle_start": _time.monotonic()}
             try:
                 # Перезагружаем офферы и TG настройки каждые N циклов
                 if cycle_count % RELOAD_EVERY == 0:
@@ -1193,15 +1207,8 @@ async def observer_loop(
                     except Exception:
                         logger.debug("Не удалось обновить TG настройки", exc_info=True)
 
-                    # Проверяем флаг переподключения к браузеру
-                    try:
-                        if await check_vision_reconnect_flag():
-                            logger.info("Переподключение к Vision браузеру по запросу из UI")
-                            await grpc_client.reconnect_browser()
-                    except Exception:
-                        logger.warning(
-                            "Не удалось выполнить переподключение к браузеру", exc_info=True
-                        )
+                    # Флаг vision reconnect теперь читается в объединённом префлайт-запросе ниже
+                    # (consume_scan_flags_combined).
 
                 cycle_count += 1
 
@@ -1234,15 +1241,25 @@ async def observer_loop(
                 except Exception:
                     logger.debug("Не удалось проверить авто-resume", exc_info=True)
 
-                # Принудительный скан: атомарно потребляем флаг ДО гарда тоггла,
-                # чтобы кнопка "Сканировать сейчас" работала и в режиме PAUSED.
-                # Флаг одноразовый — после этого скана observer вернётся в paused.
-                forced_scan = await consume_scan_requested_flag()
+                # Принудительный скан + проверка is_scanning_enabled + флаг vision reconnect —
+                # одним запросом к БД (вместо трёх раздельных round-trip).
+                (
+                    scanning_enabled,
+                    forced_scan,
+                    vision_reconnect_requested,
+                ) = await consume_scan_flags_combined()
+                if vision_reconnect_requested:
+                    try:
+                        await grpc_client.reconnect_browser()
+                    except Exception:
+                        logger.warning(
+                            "Не удалось выполнить переподключение к браузеру", exc_info=True
+                        )
                 if forced_scan:
                     logger.info("Observer: запрошен немедленный скан — пробиваем паузу мониторинга")
 
                 # Проверяем флаг is_scanning_enabled перед каждым сканом
-                if not forced_scan and not await check_scanning_enabled():
+                if not forced_scan and not scanning_enabled:
                     consecutive_empty_scan_cycles = 0
                     status_ref[0] = "PAUSED"
                     message_ref[0] = "Сканирование выключено в настройках."
@@ -1257,6 +1274,10 @@ async def observer_loop(
                     continue
 
                 browser_pause_kind_next, browser_pause_reason = await _get_browser_queue_pause()
+                # Кэшируем результат на короткий интервал: второй вызов внутри лока (ниже)
+                # переиспользует это значение, если прошло < 5 с.
+                _queue_pause_cached_at = _time.monotonic()
+                _queue_pause_cached_value = (browser_pause_kind_next, browser_pause_reason)
 
                 if browser_pause_reason and browser_pause_kind_next == "disable":
                     consecutive_empty_scan_cycles = 0
@@ -1305,15 +1326,24 @@ async def observer_loop(
 
                 rows: list[ScannedAdRow] = []
                 scanned_rows_by_id: dict[str, ScannedAdRow] = {}
+                timing["preflight_end"] = _time.monotonic()
                 try:
                     async with acquire_browser_lock(
                         owner="observer-scan",
                         timeout_seconds=BROWSER_SCAN_LOCK_TIMEOUT_SECONDS,
                     ):
-                        (
-                            browser_pause_kind_next,
-                            browser_pause_reason,
-                        ) = await _get_browser_queue_pause()
+                        timing["lock_acquired"] = _time.monotonic()
+                        # Если первый вызов был < 5 с назад — переиспользуем результат,
+                        # не делая повторный SELECT внутри лока.
+                        if _time.monotonic() - _queue_pause_cached_at < 5.0:
+                            browser_pause_kind_next, browser_pause_reason = (
+                                _queue_pause_cached_value
+                            )
+                        else:
+                            (
+                                browser_pause_kind_next,
+                                browser_pause_reason,
+                            ) = await _get_browser_queue_pause()
                         if browser_pause_reason:
                             consecutive_empty_scan_cycles = 0
                             status_ref[0] = "WAITING_BROWSER"
@@ -1418,14 +1448,18 @@ async def observer_loop(
                         )
 
                         # 1-2. Сканирование через gRPC browser-agent: refresh + первый проход
+                        # settle_delay_seconds=0.0 — фиксированный sleep после refresh убран.
+                        # Ожидание реальных строк/стабильности DOM на TS-стороне делает его лишним.
                         scan_events = grpc_client.run_scan_cycle(
                             max_scroll_passes=50,
                             do_refresh=True,
                             reset_scroll_first=True,
-                            settle_delay_seconds=random.uniform(2.0, 4.0),
+                            settle_delay_seconds=0.0,
                         )
+                        timing["validate_columns_done"] = _time.monotonic()
                         async for event in scan_events:
                             if isinstance(event, ScanResult):
+                                timing["scan_result"] = _time.monotonic()
                                 rows = event.rows
                                 logger.info(
                                     "Observer: сканирование завершено — %d строк за %.1fs (%d проходов)",
@@ -1447,6 +1481,8 @@ async def observer_loop(
                                         tg_chat_id=_tg_chat_for_healing,
                                     )
                             elif isinstance(event, ScanProgress):
+                                if "first_progress" not in timing:
+                                    timing["first_progress"] = _time.monotonic()
                                 for row in event.new_rows:
                                     scanned_rows_by_id[row.fb_ad_id] = row
                                 logger.debug(
@@ -1591,6 +1627,35 @@ async def observer_loop(
                 _self_healing.record_success()
                 cycle_completed = True
 
+                # Timing-лог: одна строка в формате OBSERVER_TIMING cycle=… preflight_ms=…
+                # для пост-фактум агрегации через tools/timing_percentiles.py.
+                try:
+                    _ts0 = timing.get("cycle_start", 0.0)
+                    _now = _time.monotonic()
+                    _parts = [f"cycle={cycle_count}"]
+                    _preflight = timing.get("preflight_end")
+                    _lock = timing.get("lock_acquired")
+                    _validate = timing.get("validate_columns_done")
+                    _first_prog = timing.get("first_progress")
+                    _scan_res = timing.get("scan_result")
+                    if _preflight is not None:
+                        _parts.append(f"preflight_ms={int((_preflight - _ts0) * 1000)}")
+                    if _lock is not None and _preflight is not None:
+                        _parts.append(f"lock_wait_ms={int((_lock - _preflight) * 1000)}")
+                    if _validate is not None and _lock is not None:
+                        _parts.append(f"validate_ms={int((_validate - _lock) * 1000)}")
+                    if _first_prog is not None and _validate is not None:
+                        _parts.append(
+                            f"refresh_to_first_row_ms={int((_first_prog - _validate) * 1000)}"
+                        )
+                    if _scan_res is not None and _validate is not None:
+                        _parts.append(f"scan_total_ms={int((_scan_res - _validate) * 1000)}")
+                    _parts.append(f"rows={len(rows)}")
+                    _parts.append(f"cycle_ms={int((_now - _ts0) * 1000)}")
+                    logger.info("OBSERVER_TIMING %s", " ".join(_parts))
+                except Exception:
+                    pass
+
             except ScanDataUnavailableError as exc:
                 consecutive_empty_scan_cycles = 0
                 runtime_message = str(exc)
@@ -1651,6 +1716,39 @@ async def observer_loop(
 
             except Exception as exc:
                 consecutive_empty_scan_cycles = 0
+                exc_message_text = str(exc)
+                if _PARSER_MISSING_COLUMNS_MARKER in exc_message_text:
+                    parser_missing_columns = _extract_parser_missing_columns(exc_message_text)
+                    columns_message = (
+                        "Парсер Ads Manager не смог прочитать колонки: "
+                        f"{', '.join(parser_missing_columns) or 'детали не вернулись'}"
+                    )
+                    await set_observer_scanning_enabled(False)
+                    status_ref[0] = "PAUSED"
+                    message_ref[0] = columns_message
+                    await update_observer_runtime_status(
+                        status="PAUSED",
+                        message=(
+                            "Сканирование остановлено: парсер не смог прочитать обязательные "
+                            "колонки Ads Manager в строках таблицы."
+                        ),
+                        last_error=columns_message,
+                    )
+                    logger.error("Observer: %s", columns_message)
+                    try:
+                        await broadcast_observer_runtime_message(
+                            text=_build_missing_columns_alert_text(
+                                parser_missing_columns or ["детали не вернулись"]
+                            ),
+                            fallback_token=tg_token or telegram_bot_token,
+                            fallback_chat_id=telegram_chat_id,
+                        )
+                    except Exception:
+                        logger.exception(
+                            "Не удалось отправить Telegram-алерт о парсере колонок Ads Manager"
+                        )
+                    continue
+
                 if _is_browser_connection_error(exc) or isinstance(exc, grpc.RpcError):
                     runtime_message = format_observer_runtime_message(exc)
                     status_ref[0] = "ERROR"

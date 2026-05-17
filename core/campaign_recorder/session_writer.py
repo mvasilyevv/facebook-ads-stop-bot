@@ -12,8 +12,7 @@ _DEFAULT_RECORDINGS_DIR = Path("recordings")
 class SessionWriter:
     """Накапливает события сессии и записывает в JSON."""
 
-    def __init__(self, offer_code: str, recordings_dir: Path | None = None) -> None:
-        self._offer_code = offer_code.upper().strip()
+    def __init__(self, recordings_dir: Path | None = None) -> None:
         self._dir = (recordings_dir or _DEFAULT_RECORDINGS_DIR).expanduser().resolve()
         self._events: list[dict] = []
         self._started_at = datetime.now(UTC)
@@ -37,10 +36,9 @@ class SessionWriter:
         """Записывает сессию в файл и возвращает путь."""
         self._dir.mkdir(parents=True, exist_ok=True)
         ts = self._started_at.strftime("%Y%m%d_%H%M%S")
-        filename = f"{ts}_{self._offer_code}.json"
+        filename = f"{ts}.json"
         path = self._dir / filename
         payload = {
-            "offer_code": self._offer_code,
             "started_at": self._started_at.isoformat(),
             "saved_at": datetime.now(UTC).isoformat(),
             "event_count": len(self._events),

@@ -55,19 +55,19 @@ function buildFullHeaderSet() {
     strict_1.default.ok(missingColumns.includes('Завершенные регистрации'));
     strict_1.default.ok(!missingColumns.includes('Лиды'));
 });
-// Сценарий: диагностические и ранние traffic-колонки можно скрыть без поломки обязательного парсинга.
-(0, node_test_1.default)('buildParserColumnLayout не требует необязательные traffic-колонки', () => {
+// Сценарий: если убрать ранее опциональные traffic-колонки, валидация теперь обязана сообщить об отсутствии.
+(0, node_test_1.default)('buildParserColumnLayout требует traffic-колонки (опциональность снята)', () => {
     const headers = buildFullHeaderSet().filter((item) => ![
         'outbound_clicks',
         'outbound_clicks_ctr',
         'cpm',
         'frequency',
     ].includes(item.surfaceKey));
-    const { layout, missingColumns } = (0, ads_columns_js_1.buildParserColumnLayout)(headers);
-    const fields = layout.map((column) => column.fieldName);
-    strict_1.default.deepEqual(missingColumns, []);
-    strict_1.default.ok(fields.includes('deposits'));
-    strict_1.default.ok(!fields.includes('outbound_clicks'));
+    const { missingColumns } = (0, ads_columns_js_1.buildParserColumnLayout)(headers);
+    strict_1.default.ok(missingColumns.includes('Исходящие клики'));
+    strict_1.default.ok(missingColumns.includes('CTR исходящих кликов'));
+    strict_1.default.ok(missingColumns.includes('CPM'));
+    strict_1.default.ok(missingColumns.includes('Частота'));
 });
 // Сценарий: колонка результата обязательна, потому что в текущем Ads Manager она означает депозиты.
 (0, node_test_1.default)('collectMissingValidationColumns требует колонку результата для депозитов', () => {

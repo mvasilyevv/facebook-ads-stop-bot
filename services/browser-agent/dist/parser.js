@@ -193,6 +193,7 @@ async function extractRawRowsFromPage(page, args) {
             throw new Error('Не удалось определить колонку «Название объявления» для парсинга Ads Manager.');
         }
         const result = [];
+        const missingFields = [];
         const rows = Array.from(document.querySelectorAll('._1gda._2djg'));
         for (const row of rows) {
             const rowRect = row.getBoundingClientRect();
@@ -216,21 +217,27 @@ async function extractRawRowsFromPage(page, args) {
                 _toggle_aria_checked: getToggleAriaChecked(row),
                 ad_name: adName,
             };
+            const rowMissing = [];
             for (const column of layout) {
                 const relativeIndex = column.headerIndex - nameColumn.headerIndex;
                 const cellIndex = nameCellIndex + relativeIndex;
                 const cell = cells[cellIndex];
-                if (!cell)
+                if (!cell) {
+                    rowMissing.push(column.title);
                     continue;
+                }
                 fields[column.fieldName] = column.valueKind === 'metric'
                     ? getMetricText(cell)
                     : column.valueKind === 'name'
                         ? getAdName(cell)
                         : getFirstText(cell);
             }
+            if (rowMissing.length > 0) {
+                missingFields.push({ fbAdId, adName, fields: rowMissing });
+            }
             result.push(fields);
         }
-        return result;
+        return { rows: result, missingFields };
     }, args);
 }
 /** Распарсить все видимые строки из текущей страницы. */
@@ -240,10 +247,22 @@ async function parseAdsFromPage(page) {
     if (missingColumns.length > 0) {
         throw new Error(`Не удалось распарсить таблицу Ads Manager: отсутствуют обязательные колонки: ${missingColumns.join(', ')}.`);
     }
-    const rawRows = await extractRawRowsFromPage(page, { layout });
-    if (!Array.isArray(rawRows))
+    const rawResult = await extractRawRowsFromPage(page, { layout });
+    if (!rawResult || !Array.isArray(rawResult.rows))
         return [];
-    return rawRows
+    if (rawResult.missingFields.length > 0) {
+        const missingSet = new Set();
+        for (const item of rawResult.missingFields) {
+            for (const fieldTitle of item.fields)
+                missingSet.add(fieldTitle);
+        }
+        const sample = rawResult.missingFields
+            .slice(0, 3)
+            .map((item) => `${item.adName} (${item.fbAdId}): ${item.fields.join(', ')}`)
+            .join('; ');
+        throw new Error(`Не удалось распарсить колонки Ads Manager: ${Array.from(missingSet).join(', ')}. Примеры строк: ${sample}.`);
+    }
+    return rawResult.rows
         .map((fields) => buildRowFromFields(fields))
         .filter((row) => row !== null);
 }

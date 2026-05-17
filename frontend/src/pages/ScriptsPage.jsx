@@ -65,7 +65,6 @@ export default function ScriptsPage() {
   const [offersLoading, setOffersLoading] = useState(true);
   const [offersError, setOffersError] = useState('');
 
-  const [recorderOffer, setRecorderOffer] = useState('');
   const [recorderSessionId, setRecorderSessionId] = useState(null);
   const [recorderStatus, setRecorderStatus] = useState('idle');
   const [recorderReport, setRecorderReport] = useState(null);
@@ -197,13 +196,10 @@ export default function ScriptsPage() {
     setActiveSubmoduleId(module.submodules[0]?.id || '');
   };
 
-  const handleStartRecording = useCallback(async () => {    if (!recorderOffer) {
-      setRecorderError('Выберите оффер для записи');
-      return;
-    }
+  const handleStartRecording = useCallback(async () => {
     setRecorderError('');
     try {
-      const res = await startRecording({ offer_code: recorderOffer });
+      const res = await startRecording();
       setRecorderSessionId(res.session_id);
       setRecorderStatus('recording');
       setRecorderReport(null);
@@ -211,7 +207,7 @@ export default function ScriptsPage() {
     } catch (err) {
       setRecorderError(err.message || 'Не удалось запустить запись');
     }
-  }, [recorderOffer]);
+  }, []);
 
   const handleStopRecording = useCallback(async () => {
     if (!recorderSessionId) return;
@@ -220,7 +216,7 @@ export default function ScriptsPage() {
     try {
       await stopRecording(recorderSessionId);
       setRecorderSessionId(null);
-      const report = await analyzeLastRecording(recorderOffer);
+      const report = await analyzeLastRecording();
       setRecorderReport(report);
       setRecorderStatus('stopped');
     } catch (err) {
@@ -228,7 +224,7 @@ export default function ScriptsPage() {
       setRecorderStatus('stopped');
       setRecorderSessionId(null);
     }
-  }, [recorderSessionId, recorderOffer]);
+  }, [recorderSessionId]);
 
   const handleStartAutoCreate = useCallback(async () => {
     setAutoError('');
@@ -394,24 +390,6 @@ export default function ScriptsPage() {
           )}
           {activeModuleId === 'campaigns' && activeSubmodule.id === 'record' && (
             <div className="flex flex-col gap-4">
-              <div className="flex flex-col gap-2">
-                <label htmlFor="recorder-offer" className="text-sm font-medium text-secondary">Оффер</label>
-                <select
-                  id="recorder-offer"
-                  className={INPUT_BASE_CLASS}
-                  value={recorderOffer}
-                  onChange={(e) => setRecorderOffer(e.target.value)}
-                  disabled={recorderStatus === 'recording'}
-                >
-                  <option value="">— выберите оффер —</option>
-                  {sortedOffers.map((offer) => (
-                    <option key={offer.code} value={offer.code}>
-                      {offer.code}{offer.is_active ? '' : ' (неактивен)'}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
               {recorderError && (
                 <p className="text-sm text-red-500">{recorderError}</p>
               )}
@@ -421,7 +399,6 @@ export default function ScriptsPage() {
                   <button
                     className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
                     onClick={handleStartRecording}
-                    disabled={offersLoading || !recorderOffer}
                   >
                     Начать запись
                   </button>
