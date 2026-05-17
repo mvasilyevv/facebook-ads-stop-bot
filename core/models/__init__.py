@@ -855,12 +855,15 @@ class PlanRun(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "creator_plan_runs"
 
     plan_id: Mapped[_uuid.UUID] = mapped_column(
-        Uuid, ForeignKey("creator_plans.id", ondelete="CASCADE"), nullable=False
+        Uuid,
+        ForeignKey("creator_plans.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
     )
     profile_id: Mapped[str] = mapped_column(String(128), nullable=False)
     variables: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     status: Mapped[PlanRunStatus] = mapped_column(
-        _PLAN_RUN_STATUS_ENUM, nullable=False, default=PlanRunStatus.QUEUED
+        _PLAN_RUN_STATUS_ENUM, nullable=False, default=PlanRunStatus.QUEUED, index=True
     )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
