@@ -1,0 +1,1 @@
+{"version":3,"file":"attribution.d.ts","sourceRoot":"","sources":["../../../src/creator/enums/attribution.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,QAAQ,EAAE,MAAM,YAAY,CAAC;AAE3C,eAAO,MAAM,iBAAiB;;;;;CAKpB,CAAC;AACX,MAAM,MAAM,iBAAiB,GAAG,CAAC,OAAO,iBAAiB,CAAC,CAAC,MAAM,OAAO,iBAAiB,CAAC,CAAC;AAE3F,eAAO,MAAM,iBAAiB,EAAE,QAAQ,CAAC,iBAAiB,CAWzD,CAAC"}

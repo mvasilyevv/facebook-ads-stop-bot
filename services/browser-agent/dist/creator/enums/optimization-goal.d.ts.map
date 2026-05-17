@@ -1,0 +1,1 @@
+{"version":3,"file":"optimization-goal.d.ts","sourceRoot":"","sources":["../../../src/creator/enums/optimization-goal.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,QAAQ,EAAE,MAAM,YAAY,CAAC;AAE3C,eAAO,MAAM,gBAAgB;;;;;;;CAOnB,CAAC;AACX,MAAM,MAAM,gBAAgB,GAAG,CAAC,OAAO,gBAAgB,CAAC,CAAC,MAAM,OAAO,gBAAgB,CAAC,CAAC;AAExF,eAAO,MAAM,sBAAsB,EAAE,QAAQ,CAAC,gBAAgB,CAO7D,CAAC"}
