@@ -1,3 +1,4 @@
+import './steps/index.js';
 import { runPlan } from './executor.js';
 import type { Plan } from './types.js';
 

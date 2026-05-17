@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.api = void 0;
+require("./steps/index.js");
 const executor_js_1 = require("./executor.js");
 const VERSION = '2.0.0';
 const api = {

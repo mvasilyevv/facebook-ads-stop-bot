@@ -1,3 +1,4 @@
+import './steps/index.js';
 import type { Plan } from './types.js';
 interface FbAgentApi {
     run(plan: Plan, variables: Record<string, unknown>): Promise<{

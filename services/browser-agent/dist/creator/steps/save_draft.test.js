@@ -1,0 +1,17 @@
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+const node_test_1 = require("node:test");
+const node_assert_1 = __importDefault(require("node:assert"));
+const save_draft_js_1 = require("./save_draft.js");
+// Идемпотентность: если индикатор «Сохранено» уже виден — пропуск.
+(0, node_test_1.describe)('SaveDraftStep', () => {
+    (0, node_test_1.it)('isSatisfied при наличии индикатора saved', () => {
+        const s = new save_draft_js_1.SaveDraftStep();
+        node_assert_1.default.equal(s.isSatisfied({ kind: 'matched', current: 'saved' }), true);
+        node_assert_1.default.equal(s.isSatisfied({ kind: 'missing' }), false);
+    });
+});
+//# sourceMappingURL=save_draft.test.js.map
