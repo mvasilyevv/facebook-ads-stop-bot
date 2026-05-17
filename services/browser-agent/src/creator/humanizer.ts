@@ -94,3 +94,18 @@ export async function humanType(
   el.dispatchEvent(new Event('change', { bubbles: true }));
   el.blur();
 }
+
+// Гуманизированный скролл: несколько wheel-событий с переменной скоростью.
+export async function humanScroll(el: Element, deltaY: number): Promise<void> {
+  const ticks = 6 + Math.floor(Math.random() * 6);
+  const per = deltaY / ticks;
+  for (let i = 0; i < ticks; i++) {
+    el.dispatchEvent(
+      new WheelEvent('wheel', {
+        bubbles: true,
+        deltaY: per * (0.7 + Math.random() * 0.6),
+      }),
+    );
+    await humanIdle([30, 110] as const);
+  }
+}

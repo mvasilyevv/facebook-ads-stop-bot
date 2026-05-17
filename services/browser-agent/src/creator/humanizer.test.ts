@@ -1,7 +1,7 @@
 import { describe, it, before } from 'node:test';
 import assert from 'node:assert';
 import { JSDOM } from 'jsdom';
-import { humanIdle, IdleRange, humanClick, humanType } from './humanizer.js';
+import { humanIdle, IdleRange, humanClick, humanType, humanScroll } from './humanizer.js';
 
 before(() => {
   const dom = new JSDOM('<!doctype html><html><body></body></html>', {
@@ -55,5 +55,16 @@ describe('humanType', () => {
     assert.equal(input.value, 'ab');
     assert.ok(events.includes('input'));
     assert.ok(events.includes('keydown'));
+  });
+});
+
+describe('humanScroll', () => {
+  it('диспатчит wheel-события', async () => {
+    const div = document.createElement('div');
+    document.body.appendChild(div);
+    let count = 0;
+    div.addEventListener('wheel', () => count++);
+    await humanScroll(div, 300);
+    assert.ok(count >= 3, `wheel events=${count}`);
   });
 });
