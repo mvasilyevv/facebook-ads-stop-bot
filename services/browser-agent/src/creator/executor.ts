@@ -56,9 +56,10 @@ export async function runPlan(
       const state = await impl.detect(ctx);
       await impl.execute(state, input, ctx);
       emit('step_finished', { step: step.step });
-    } catch (e: any) {
-      emit('step_failed', { step: step.step, error: String(e?.message ?? e) });
-      return { ok: false, error: String(e?.message ?? e) };
+    } catch (e: unknown) {
+      const msg = String((e as Error)?.message ?? e);
+      emit('step_failed', { step: step.step, error: msg });
+      return { ok: false, error: msg };
     }
     await humanIdle(IdleRange.BETWEEN_STEPS);
   }

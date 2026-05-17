@@ -7,6 +7,10 @@ export const IdleRange = {
   TYPING_BURST_PAUSE: [200, 800] as const,
 } as const;
 
+// Параметры частоты «вспышек» паузы при наборе: модуль = TYPING_BURST_MIN + rand(0..TYPING_BURST_JITTER).
+const TYPING_BURST_MIN = 3;
+const TYPING_BURST_JITTER = 6;
+
 export type IdleRangeKey = readonly [number, number];
 
 function rand(min: number, max: number): number {
@@ -30,7 +34,7 @@ function dispatchPointer(el: Element, type: string, x: number, y: number): void 
   el.dispatchEvent(ev);
 }
 
-async function bezierHover(el: Element): Promise<void> {
+async function jitterHover(el: Element): Promise<void> {
   const rect = el.getBoundingClientRect();
   const tx = rect.left + rect.width / 2;
   const ty = rect.top + rect.height / 2;
@@ -44,7 +48,7 @@ async function bezierHover(el: Element): Promise<void> {
 
 // Гуманизированный клик: hover с jitter → pointerdown → пауза → pointerup → click.
 export async function humanClick(el: Element): Promise<void> {
-  await bezierHover(el);
+  await jitterHover(el);
   await humanIdle(IdleRange.SHORT);
   const rect = el.getBoundingClientRect();
   const x = rect.left + rect.width / 2;
@@ -53,7 +57,14 @@ export async function humanClick(el: Element): Promise<void> {
   await humanIdle([20, 90] as const);
   dispatchPointer(el, 'pointerup', x, y);
   el.dispatchEvent(
-    new MouseEvent('click', { bubbles: true, cancelable: true, clientX: x, clientY: y }),
+    new MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+      clientX: x,
+      clientY: y,
+      button: 0,
+      detail: 1,
+    }),
   );
 }
 
@@ -87,7 +98,7 @@ export async function humanType(
     el.dispatchEvent(new Event('input', { bubbles: true }));
     el.dispatchEvent(new KeyboardEvent('keyup', { key: ch, bubbles: true }));
     await humanIdle(IdleRange.TYPING);
-    if (i > 0 && i % (3 + Math.floor(Math.random() * 6)) === 0) {
+    if (i > 0 && i % (TYPING_BURST_MIN + Math.floor(Math.random() * TYPING_BURST_JITTER)) === 0) {
       await humanIdle(IdleRange.TYPING_BURST_PAUSE);
     }
   }
