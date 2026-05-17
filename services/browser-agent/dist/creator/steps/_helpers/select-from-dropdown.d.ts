@@ -1,8 +1,6 @@
 import type { BlockLookup } from '../../locator.js';
-export type LabelMap<T extends string> = Record<T, {
-    ru: string[];
-    en: string[];
-}>;
+import type { LabelMap } from '../../enums/index.js';
+export type { LabelMap };
 export declare function resolveLabelToEnum<T extends string>(label: string, labels: LabelMap<T>): T | null;
 export interface DropdownSpec<T extends string> {
     block: BlockLookup;

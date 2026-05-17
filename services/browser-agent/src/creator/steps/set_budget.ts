@@ -36,7 +36,10 @@ export class SetBudgetStep extends BaseStep<BudgetInput, void> {
 
   isSatisfied(state: StepState, input: BudgetInput): boolean {
     const c = state.current as { amount: number; currency: string } | undefined;
-    return !!c && c.amount === input.amount;
+    if (!c || c.amount !== input.amount) return false;
+    // Если currency задан явно — проверяем совпадение, иначе валюту игнорируем.
+    if (input.currency && c.currency !== input.currency) return false;
+    return true;
   }
 
   protected async run(_s: StepState, input: BudgetInput): Promise<void> {

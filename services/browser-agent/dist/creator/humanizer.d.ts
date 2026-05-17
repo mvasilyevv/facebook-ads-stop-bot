@@ -8,6 +8,7 @@ export declare const IdleRange: {
 export type IdleRangeKey = readonly [number, number];
 export declare function humanIdle(range: IdleRangeKey): Promise<void>;
 export declare function humanClick(el: Element): Promise<void>;
+export declare function humanDoubleClick(el: Element): Promise<void>;
 export declare function humanType(el: HTMLInputElement | HTMLTextAreaElement, text: string): Promise<void>;
 export declare function humanScroll(el: Element, deltaY: number): Promise<void>;
 //# sourceMappingURL=humanizer.d.ts.map

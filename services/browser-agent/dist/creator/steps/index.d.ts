@@ -12,15 +12,11 @@ import { FillTextsStep } from './fill_texts.js';
 import { UploadCreativesStep } from './upload_creatives.js';
 import { CreateCampaignStep } from './create_campaign.js';
 import { CreateAdsetStep } from './create_adset.js';
-import { DuplicateAdsetStep } from './duplicate_adset.js';
-import { DuplicateAdStep } from './duplicate_ad.js';
-import { RenameAdsetStep } from './rename_adset.js';
-import { RenameAdStep } from './rename_ad.js';
 import { ReattachCreativeStep } from './reattach_creative.js';
 import { SwitchToAdsetStep } from './switch_to_adset.js';
 import { ClickNextStep } from './click_next.js';
 import { SaveDraftStep } from './save_draft.js';
 import { UnknownStep } from './unknown.js';
-declare const STEPS: (SetConversionLocationStep | SetPixelEventStep | SetOptimizationGoalStep | SetAttributionStep | SetCtaStep | SetGeoStep | SetAgeStep | SetBudgetStep | SetScheduleStartStep | SetTrackingUrlStep | FillTextsStep | UploadCreativesStep | CreateCampaignStep | CreateAdsetStep | DuplicateAdsetStep | DuplicateAdStep | RenameAdsetStep | RenameAdStep | ReattachCreativeStep | SwitchToAdsetStep | ClickNextStep | SaveDraftStep | UnknownStep)[];
+declare const STEPS: (SetConversionLocationStep | SetPixelEventStep | SetOptimizationGoalStep | SetAttributionStep | SetCtaStep | SetGeoStep | SetAgeStep | SetBudgetStep | SetScheduleStartStep | SetTrackingUrlStep | FillTextsStep | UploadCreativesStep | CreateCampaignStep | CreateAdsetStep | import("./base.js").BaseStep<import("./_helpers/tree-actions.js").DuplicateInput, void> | import("./base.js").BaseStep<import("./_helpers/tree-actions.js").RenameInput, void> | ReattachCreativeStep | SwitchToAdsetStep | ClickNextStep | SaveDraftStep | UnknownStep)[];
 export { STEPS };
 //# sourceMappingURL=index.d.ts.map

@@ -46,22 +46,22 @@ class SetPixelEventStep extends base_js_1.BaseStep {
     async run(_state, input) {
         // Выбор пикселя по ID через поле поиска источника данных.
         const pxBlock = (0, locator_js_1.findBlock)(PIXEL_BLOCK);
-        if (pxBlock) {
-            const trigger = pxBlock.querySelector('button[aria-haspopup="listbox"], [role="combobox"]');
-            if (trigger) {
-                await (0, humanizer_js_1.humanClick)(trigger);
-                await (0, humanizer_js_1.humanIdle)(humanizer_js_1.IdleRange.SHORT);
-                const search = document.querySelector('input[role="combobox"], input[type="search"]');
-                if (search) {
-                    await (0, humanizer_js_1.humanType)(search, input.pixelId);
-                    await (0, humanizer_js_1.humanIdle)(humanizer_js_1.IdleRange.BETWEEN_STEPS);
-                    const option = document.querySelector(`[role="option"][data-pixel-id="${input.pixelId}"]`) ?? document.querySelector('[role="option"]');
-                    if (!option)
-                        throw new Error(`Пиксель ${input.pixelId} не найден в списке`);
-                    await (0, humanizer_js_1.humanClick)(option);
-                    await (0, humanizer_js_1.humanIdle)(humanizer_js_1.IdleRange.BETWEEN_STEPS);
-                }
-            }
+        if (!pxBlock)
+            throw new Error('Не найден блок выбора Pixel в UI');
+        const trigger = pxBlock.querySelector('button[aria-haspopup="listbox"], [role="combobox"]');
+        if (!trigger)
+            throw new Error('Не найден триггер открытия списка Pixel');
+        await (0, humanizer_js_1.humanClick)(trigger);
+        await (0, humanizer_js_1.humanIdle)(humanizer_js_1.IdleRange.SHORT);
+        const search = document.querySelector('input[role="combobox"], input[type="search"]');
+        if (search) {
+            await (0, humanizer_js_1.humanType)(search, input.pixelId);
+            await (0, humanizer_js_1.humanIdle)(humanizer_js_1.IdleRange.BETWEEN_STEPS);
+            const option = document.querySelector(`[role="option"][data-pixel-id="${input.pixelId}"]`) ?? document.querySelector('[role="option"]');
+            if (!option)
+                throw new Error(`Пиксель ${input.pixelId} не найден в списке`);
+            await (0, humanizer_js_1.humanClick)(option);
+            await (0, humanizer_js_1.humanIdle)(humanizer_js_1.IdleRange.BETWEEN_STEPS);
         }
         await (0, select_from_dropdown_js_1.selectValue)(EVENT_SPEC, input.event);
     }

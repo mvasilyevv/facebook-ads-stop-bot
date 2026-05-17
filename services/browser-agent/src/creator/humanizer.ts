@@ -68,6 +68,49 @@ export async function humanClick(el: Element): Promise<void> {
   );
 }
 
+// Гуманизированный двойной клик: два полных pointer-цикла подряд с паузой 80-130мс,
+// координаты сохраняются с микро-jitter +/-1px. Завершается событием dblclick
+// (detail: 2), чтобы React-обработчики корректно распознали двойной клик.
+export async function humanDoubleClick(el: Element): Promise<void> {
+  const rect = el.getBoundingClientRect();
+  const baseX = rect.left + rect.width / 2;
+  const baseY = rect.top + rect.height / 2;
+
+  const doPointerCycle = async (x: number, y: number, detail: number): Promise<void> => {
+    dispatchPointer(el, 'pointerdown', x, y);
+    await humanIdle([20, 90] as const);
+    dispatchPointer(el, 'pointerup', x, y);
+    el.dispatchEvent(
+      new MouseEvent('click', {
+        bubbles: true,
+        cancelable: true,
+        clientX: x,
+        clientY: y,
+        button: 0,
+        detail,
+      }),
+    );
+  };
+
+  await jitterHover(el);
+  await humanIdle(IdleRange.SHORT);
+  await doPointerCycle(baseX, baseY, 1);
+  await humanIdle([80, 130] as const);
+  const x2 = baseX + (Math.random() * 2 - 1);
+  const y2 = baseY + (Math.random() * 2 - 1);
+  await doPointerCycle(x2, y2, 2);
+  el.dispatchEvent(
+    new MouseEvent('dblclick', {
+      bubbles: true,
+      cancelable: true,
+      clientX: x2,
+      clientY: y2,
+      button: 0,
+      detail: 2,
+    }),
+  );
+}
+
 function setNativeInputValue(
   el: HTMLInputElement | HTMLTextAreaElement,
   value: string,

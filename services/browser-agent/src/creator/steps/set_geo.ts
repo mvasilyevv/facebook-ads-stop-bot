@@ -29,6 +29,7 @@ export class SetGeoStep extends BaseStep<{ countries: string[] }, void> {
 
   isSatisfied(state: StepState, input: { countries: string[] }): boolean {
     const cur = new Set((state.current as string[]) || []);
+    // Append-only by design — лишние страны не удаляем, чтобы не сломать ручные правки.
     return input.countries.every((c) => cur.has(c));
   }
 

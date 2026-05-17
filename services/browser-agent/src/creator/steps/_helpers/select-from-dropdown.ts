@@ -4,8 +4,9 @@ import { humanClick, humanIdle, IdleRange } from '../../humanizer.js';
 import { findBlock, findByNormalizedText } from '../../locator.js';
 import { normalizeText } from '../../text.js';
 import type { BlockLookup } from '../../locator.js';
+import type { LabelMap } from '../../enums/index.js';
 
-export type LabelMap<T extends string> = Record<T, { ru: string[]; en: string[] }>;
+export type { LabelMap };
 
 export function resolveLabelToEnum<T extends string>(
   label: string,

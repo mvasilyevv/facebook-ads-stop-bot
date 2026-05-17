@@ -25,6 +25,7 @@ class SetGeoStep extends base_js_1.BaseStep {
     }
     isSatisfied(state, input) {
         const cur = new Set(state.current || []);
+        // Append-only by design — лишние страны не удаляем, чтобы не сломать ручные правки.
         return input.countries.every((c) => cur.has(c));
     }
     async run(_s, input) {

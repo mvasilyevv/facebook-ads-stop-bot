@@ -26,7 +26,12 @@ class SetBudgetStep extends base_js_1.BaseStep {
     }
     isSatisfied(state, input) {
         const c = state.current;
-        return !!c && c.amount === input.amount;
+        if (!c || c.amount !== input.amount)
+            return false;
+        // Если currency задан явно — проверяем совпадение, иначе валюту игнорируем.
+        if (input.currency && c.currency !== input.currency)
+            return false;
+        return true;
     }
     async run(_s, input) {
         const block = (0, locator_js_1.findBlock)(BLOCK);

@@ -58,28 +58,26 @@ export class SetPixelEventStep extends BaseStep<PixelEventInput, void> {
   protected async run(_state: StepState, input: PixelEventInput): Promise<void> {
     // Выбор пикселя по ID через поле поиска источника данных.
     const pxBlock = findBlock(PIXEL_BLOCK);
-    if (pxBlock) {
-      const trigger = pxBlock.querySelector<HTMLElement>(
-        'button[aria-haspopup="listbox"], [role="combobox"]',
-      );
-      if (trigger) {
-        await humanClick(trigger);
-        await humanIdle(IdleRange.SHORT);
-        const search = document.querySelector<HTMLInputElement>(
-          'input[role="combobox"], input[type="search"]',
-        );
-        if (search) {
-          await humanType(search, input.pixelId);
-          await humanIdle(IdleRange.BETWEEN_STEPS);
-          const option =
-            document.querySelector<HTMLElement>(
-              `[role="option"][data-pixel-id="${input.pixelId}"]`,
-            ) ?? document.querySelector<HTMLElement>('[role="option"]');
-          if (!option) throw new Error(`Пиксель ${input.pixelId} не найден в списке`);
-          await humanClick(option);
-          await humanIdle(IdleRange.BETWEEN_STEPS);
-        }
-      }
+    if (!pxBlock) throw new Error('Не найден блок выбора Pixel в UI');
+    const trigger = pxBlock.querySelector<HTMLElement>(
+      'button[aria-haspopup="listbox"], [role="combobox"]',
+    );
+    if (!trigger) throw new Error('Не найден триггер открытия списка Pixel');
+    await humanClick(trigger);
+    await humanIdle(IdleRange.SHORT);
+    const search = document.querySelector<HTMLInputElement>(
+      'input[role="combobox"], input[type="search"]',
+    );
+    if (search) {
+      await humanType(search, input.pixelId);
+      await humanIdle(IdleRange.BETWEEN_STEPS);
+      const option =
+        document.querySelector<HTMLElement>(
+          `[role="option"][data-pixel-id="${input.pixelId}"]`,
+        ) ?? document.querySelector<HTMLElement>('[role="option"]');
+      if (!option) throw new Error(`Пиксель ${input.pixelId} не найден в списке`);
+      await humanClick(option);
+      await humanIdle(IdleRange.BETWEEN_STEPS);
     }
     await selectValue(EVENT_SPEC, input.event);
   }
