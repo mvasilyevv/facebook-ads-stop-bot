@@ -33,6 +33,7 @@ from core.domain import (
     DisableTaskStatus,
     EnableRecommendationLevel,
     EnableTaskStatus,
+    PlanRunStatus,
     TelegramNotificationStream,
     TelegramUserRole,
 )
@@ -826,3 +827,42 @@ class CampaignCreatorTask(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     last_error_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     campaign_name: Mapped[str | None] = mapped_column(String(256), nullable=True)
+
+
+# === Creator v2: Plan / PlanRun ===
+
+_PLAN_RUN_STATUS_ENUM = Enum(
+    PlanRunStatus,
+    name="plan_run_status_enum",
+    values_callable=lambda e: [i.value for i in e],
+)
+
+
+class Plan(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """Декларативный план создания FB-кампании (creator v2)."""
+
+    __tablename__ = "creator_plans"
+
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    schema_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    steps: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, default=list)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+
+class PlanRun(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """Запуск плана на конкретном профиле (creator v2)."""
+
+    __tablename__ = "creator_plan_runs"
+
+    plan_id: Mapped[_uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("creator_plans.id", ondelete="CASCADE"), nullable=False
+    )
+    profile_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    variables: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    status: Mapped[PlanRunStatus] = mapped_column(
+        _PLAN_RUN_STATUS_ENUM, nullable=False, default=PlanRunStatus.QUEUED
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    step_log: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, default=list)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
