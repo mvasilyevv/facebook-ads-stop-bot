@@ -78,3 +78,13 @@ class CampaignCreatorTaskStatus(StrEnum):
     SUCCEEDED = "SUCCEEDED"
     FAILED = "FAILED"
     CANCELLED = "CANCELLED"
+
+
+class PlanRunStatus(StrEnum):
+    """Статус запуска плана creator-агента v2."""
+
+    QUEUED = "queued"
+    RUNNING = "running"
+    SUCCESS = "success"
+    FAILED = "failed"
+    REQUIRES_ATTENTION = "requires_attention"
