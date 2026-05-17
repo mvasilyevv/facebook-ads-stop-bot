@@ -11,4 +11,10 @@ describe('creator entrypoint', () => {
     assert.equal(typeof win.__fbAgent.startRecording, 'function');
     assert.equal(typeof win.__fbAgent.stopRecording, 'function');
   });
+
+  it('window.__fbAgent.run делегирует в runPlan', async () => {
+    const win: any = (globalThis as any).window;
+    const result = await win.__fbAgent.run({ schema_version: 1, steps: [] }, {});
+    assert.equal(result.ok, true);
+  });
 });
