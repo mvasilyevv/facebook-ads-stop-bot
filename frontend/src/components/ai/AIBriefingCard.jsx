@@ -30,9 +30,6 @@ export default function AIBriefingCard() {
     }
   };
 
-  useEffect(() => {
-    fetchBriefing(false);
-  }, []);
 
   // Форматирование даты
   const formatDate = (isoString) => {

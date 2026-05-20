@@ -59,9 +59,6 @@ export default function AIBriefingCard() {
     }
   };
 
-  useEffect(() => {
-    fetchBriefing(false);
-  }, []);
 
   // Форматирование времени
   const formatTime = (isoString) => {
