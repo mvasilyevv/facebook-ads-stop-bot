@@ -45,6 +45,7 @@ const humanizer_js_1 = require("./humanizer.js");
 const toggle_utils_js_1 = require("./toggle-utils.js");
 const ads_columns_js_1 = require("./ads-columns.js");
 const modal_dismisser_js_1 = require("./modal-dismisser.js");
+const creator_service_js_1 = require("./creator-service.js");
 const PORT = process.env.GRPC_PORT ? parseInt(process.env.GRPC_PORT, 10) : 50051;
 const sessionManager = new session_manager_js_1.SessionManager();
 const SESSION_STATUS_HEARTBEAT_MS = 5_000;
@@ -1001,8 +1002,10 @@ function main() {
     // Загружаем proto-описания сервисов.
     const browserSessionProto = loadProto('browser_session.proto');
     const scannerProto = loadProto('scanner.proto');
+    const creatorProto = loadProto('creator.proto');
     const browserSessionService = browserSessionProto.fb_agent.browser_session.v1.BrowserSessionService;
     const scannerService = scannerProto.fb_agent.scanner.v1.ScannerService;
+    const creatorService = creatorProto.fb_agent.creator.v1.CreatorService;
     server.addService(browserSessionService.service, {
         startBrowser,
         disconnectBrowser,
@@ -1031,6 +1034,13 @@ function main() {
         validateColumns: validateColumnsHandler,
         captureColumnWidths: captureColumnWidthsHandler,
         applyColumnWidths: applyColumnWidthsHandler,
+    });
+    const creatorHandlers = (0, creator_service_js_1.createCreatorServiceHandlers)(sessionManager);
+    server.addService(creatorService.service, {
+        runPlan: creatorHandlers.runPlan,
+        startRecording: creatorHandlers.startRecording,
+        stopRecording: creatorHandlers.stopRecording,
+        getRecorderStatus: creatorHandlers.getRecorderStatus,
     });
     server.bindAsync(`0.0.0.0:${PORT}`, grpc.ServerCredentials.createInsecure(), (error, port) => {
         if (error) {

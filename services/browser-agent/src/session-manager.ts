@@ -4,6 +4,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { VisionClient } from './vision-client.js';
 import { STEALTH_INIT_SCRIPT } from './stealth.js';
 import { generateHumanProfile } from './humanizer.js';
+import { injectCreator } from './creator-injector.js';
 import type { BrowserSession, HumanProfile } from './types.js';
 
 const EXISTING_PROFILE_PORT_GRACE_SECONDS = 8;
@@ -83,37 +84,51 @@ export class SessionManager {
       folderId = await visionClient.resolveFolderId(visionProfileId);
     }
 
+    console.log(`[session-manager] startBrowser: profile=${visionProfileId} folder=${folderId}`);
     const existingProfile = await visionClient.getProfile(visionProfileId);
+    console.log(
+      `[session-manager] /list для ${visionProfileId}: ${
+        existingProfile ? `port=${existingProfile.port}` : 'НЕТ в списке'
+      }`,
+    );
     let profile: { port: number | null };
 
     if (existingProfile?.port) {
       // Не стартуем второй экземпляр профиля, иначе можно потерять открытую вкладку.
+      console.log(`[session-manager] профиль уже с CDP-портом ${existingProfile.port}, использую как есть`);
       profile = { port: existingProfile.port };
     } else if (existingProfile) {
       // У Vision порт иногда появляется с задержкой, поэтому сначала даем ему короткий grace period.
+      console.log(`[session-manager] профиль без CDP, жду до ${EXISTING_PROFILE_PORT_GRACE_SECONDS}с`);
       const delayedPort = await visionClient.waitUntilProfileHasPort(
         visionProfileId,
         EXISTING_PROFILE_PORT_GRACE_SECONDS,
       );
       if (delayedPort) {
+        console.log(`[session-manager] порт появился сам: ${delayedPort}`);
         profile = { port: delayedPort };
       } else if (isAutoRestartOnMissingCdpEnabled()) {
         // Перезапуск уже открытого профиля потенциально разрушителен, поэтому он только по feature flag.
+        console.log(`[session-manager] auto-restart включён, перезапускаю профиль stop+start`);
         profile = await this.restartProfileForMissingCdp(
           visionClient,
           folderId,
           visionProfileId,
         );
+        console.log(`[session-manager] restartProfileForMissingCdp вернул port=${profile.port}`);
       } else {
         throw buildMissingCdpRestartDisabledError(visionProfileId);
       }
     } else {
       try {
         // Если Vision не поднял CDP-порт, рестарт разрешён только явным feature flag.
+        console.log(`[session-manager] профиль не запущен, стартую через /start`);
         profile = await visionClient.startProfile(folderId, visionProfileId, {
           portWaitTimeoutSec: START_PROFILE_PORT_WAIT_SECONDS,
         });
+        console.log(`[session-manager] /start вернул port=${profile.port}`);
       } catch (error) {
+        console.log(`[session-manager] /start упал: ${error instanceof Error ? error.message : String(error)}`);
         if (!isMissingCdpPortError(error)) {
           throw error;
         }
@@ -133,20 +148,31 @@ export class SessionManager {
     }
 
     // Подключаемся через CDP как внешний клиент, не владеющий жизненным циклом браузера.
+    console.log(`[session-manager] подключаюсь по CDP к порту ${profile.port}`);
     const playwright = chromium;
-    const browser = await this.connectOverReadyCdp(
-      visionClient,
-      visionProfileId,
-      profile.port,
-    );
+    let browser: Browser;
+    try {
+      browser = await this.connectOverReadyCdp(
+        visionClient,
+        visionProfileId,
+        profile.port,
+      );
+      console.log(`[session-manager] CDP-подключение установлено`);
+    } catch (error) {
+      console.log(
+        `[session-manager] connectOverReadyCdp упал на порту ${profile.port}: ${
+          error instanceof Error ? error.stack || error.message : String(error)
+        }`,
+      );
+      throw error;
+    }
 
     // Stealth добавляем в существующий контекст, не пересоздавая профиль и вкладки.
     const contexts = browser.contexts();
     if (contexts.length > 0) {
       await contexts[0].addInitScript(STEALTH_INIT_SCRIPT);
+      await injectCreator(contexts[0]);
     }
-
-    // Берем уже открытую страницу и никуда ее не перенаправляем.
     let primaryPage = findPreferredPrimaryPage(browser);
     if (!primaryPage && contexts[0]) {
       primaryPage = await contexts[0].newPage();
@@ -263,6 +289,7 @@ export class SessionManager {
     const contexts = browser.contexts();
     if (contexts.length > 0) {
       await contexts[0].addInitScript(STEALTH_INIT_SCRIPT);
+      await injectCreator(contexts[0]);
     }
 
     // Сохраняем текущую вкладку как primaryPage, чтобы восстановить работу без навигации.

@@ -1,6 +1,17 @@
 import './steps/index.js';
 import { runPlan } from './executor.js';
-import type { Plan } from './types.js';
+import {
+  startRecording as recStart,
+  stopRecording as recStop,
+  getStatus as recStatus,
+} from './recorder.js';
+import type { Plan, PlanStep } from './types.js';
+
+interface RecorderStatus {
+  active: boolean;
+  planName: string;
+  recordedSteps: number;
+}
 
 interface FbAgentApi {
   run(
@@ -8,7 +19,8 @@ interface FbAgentApi {
     variables: Record<string, unknown>,
   ): Promise<{ ok: boolean; error?: string }>;
   startRecording(planName: string): Promise<void>;
-  stopRecording(): Promise<void>;
+  stopRecording(): Promise<{ planName: string; steps: PlanStep[] }>;
+  getRecorderStatus(): RecorderStatus;
   version: string;
 }
 
@@ -23,11 +35,14 @@ const api: FbAgentApi = {
     };
     return runPlan(plan, variables, emit);
   },
-  async startRecording(_planName) {
-    throw new Error('recorder wired in phase 4');
+  async startRecording(planName) {
+    recStart(planName);
   },
   async stopRecording() {
-    throw new Error('recorder wired in phase 4');
+    return recStop();
+  },
+  getRecorderStatus() {
+    return recStatus();
   },
 };
 

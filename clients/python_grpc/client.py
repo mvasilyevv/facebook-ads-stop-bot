@@ -18,6 +18,8 @@ import grpc
 from clients.python_grpc.v1 import (
     browser_session_pb2,
     browser_session_pb2_grpc,
+    creator_pb2,
+    creator_pb2_grpc,
     scanner_pb2,
     scanner_pb2_grpc,
 )
@@ -104,6 +106,7 @@ class BrowserAgentClient:
         self._channel: grpc.aio.Channel | None = None
         self._browser_stub: browser_session_pb2_grpc.BrowserSessionServiceStub | None = None
         self._scanner_stub: scanner_pb2_grpc.ScannerServiceStub | None = None
+        self._creator_stub: creator_pb2_grpc.CreatorServiceStub | None = None
         self._session_id: str | None = None
         self._cdp_port: int | None = None
 
@@ -118,6 +121,7 @@ class BrowserAgentClient:
         )
         self._browser_stub = browser_session_pb2_grpc.BrowserSessionServiceStub(self._channel)
         self._scanner_stub = scanner_pb2_grpc.ScannerServiceStub(self._channel)
+        self._creator_stub = creator_pb2_grpc.CreatorServiceStub(self._channel)
         logger.info("gRPC канал открыт: %s:%d", self.config.grpc_host, self.config.grpc_port)
 
     async def close(self) -> None:
@@ -503,6 +507,65 @@ class BrowserAgentClient:
             "found_columns": list(resp.found_columns),
             "error_message": resp.error_message,
         }
+
+    async def start_recording(self, plan_name: str) -> tuple[bool, str]:
+        """Запустить запись плана через recorder в браузере."""
+        resp = await self._call_with_session_recovery(
+            "запуска recorder",
+            lambda: self._creator_stub.StartRecording(
+                creator_pb2.StartRecordingRequest(
+                    session_id=self._session_id or "",
+                    plan_name=plan_name,
+                ),
+                timeout=_RPC_BROWSER_CONTROL_TIMEOUT_SECONDS,
+            ),
+        )
+        return resp.started, resp.message
+
+    async def stop_recording(self) -> tuple[bool, str, int]:
+        """Остановить запись и получить JSON-плана."""
+        resp = await self._call_with_session_recovery(
+            "остановки recorder",
+            lambda: self._creator_stub.StopRecording(
+                creator_pb2.StopRecordingRequest(session_id=self._session_id or ""),
+                timeout=_RPC_BROWSER_CONTROL_TIMEOUT_SECONDS,
+            ),
+        )
+        return resp.stopped, resp.plan_json, resp.recorded_steps
+
+    async def get_recorder_status(self) -> tuple[bool, str, int]:
+        """Получить текущий статус recorder."""
+        resp = await self._call_with_session_recovery(
+            "статуса recorder",
+            lambda: self._creator_stub.GetRecorderStatus(
+                creator_pb2.GetRecorderStatusRequest(session_id=self._session_id or ""),
+                timeout=_RPC_BROWSER_CONTROL_TIMEOUT_SECONDS,
+            ),
+        )
+        return resp.recording, resp.plan_name, resp.recorded_steps
+
+    async def run_plan(
+        self,
+        plan_json: str,
+        variables_json: str,
+    ) -> AsyncIterator["creator_pb2.PlanEvent"]:
+        """Запустить план через executor в браузере. Стримит PlanEvent."""
+        await self.ensure_browser_session()
+        req = creator_pb2.RunPlanRequest(
+            session_id=self._session_id or "",
+            plan_json=plan_json,
+            variables_json=variables_json,
+        )
+        stream = self._creator_stub.RunPlan(req)
+        try:
+            async for event in stream:
+                yield event
+        finally:
+            if hasattr(stream, "cancel"):
+                try:
+                    stream.cancel()
+                except Exception:
+                    pass
 
     async def _call_with_session_recovery(
         self,

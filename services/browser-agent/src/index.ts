@@ -25,6 +25,7 @@ import {
   type ColumnWidthTarget,
 } from './ads-columns.js';
 import { dismissKnownModals } from './modal-dismisser.js';
+import { createCreatorServiceHandlers } from './creator-service.js';
 
 const PORT = process.env.GRPC_PORT ? parseInt(process.env.GRPC_PORT, 10) : 50051;
 const sessionManager = new SessionManager();
@@ -1077,9 +1078,11 @@ function main() {
   // Загружаем proto-описания сервисов.
   const browserSessionProto = loadProto('browser_session.proto') as any;
   const scannerProto = loadProto('scanner.proto') as any;
+  const creatorProto = loadProto('creator.proto') as any;
 
   const browserSessionService = browserSessionProto.fb_agent.browser_session.v1.BrowserSessionService;
   const scannerService = scannerProto.fb_agent.scanner.v1.ScannerService;
+  const creatorService = creatorProto.fb_agent.creator.v1.CreatorService;
 
   server.addService(browserSessionService.service, {
     startBrowser,
@@ -1110,6 +1113,14 @@ function main() {
     validateColumns: validateColumnsHandler,
     captureColumnWidths: captureColumnWidthsHandler,
     applyColumnWidths: applyColumnWidthsHandler,
+  });
+
+  const creatorHandlers = createCreatorServiceHandlers(sessionManager);
+  server.addService(creatorService.service, {
+    runPlan: creatorHandlers.runPlan,
+    startRecording: creatorHandlers.startRecording,
+    stopRecording: creatorHandlers.stopRecording,
+    getRecorderStatus: creatorHandlers.getRecorderStatus,
   });
 
   server.bindAsync(`0.0.0.0:${PORT}`, grpc.ServerCredentials.createInsecure(), (error, port) => {

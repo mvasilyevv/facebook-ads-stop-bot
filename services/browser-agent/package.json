@@ -7,7 +7,8 @@
   "scripts": {
     "proto": "grpc_tools_node_protoc --grpc_out=generated/src --js_out=import_style=commonjs,binary:generated/src --ts_out=generated/src -I../../proto ../../proto/v1/*.proto",
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
-    "build": "tsc",
+    "build": "tsc && npm run bundle:creator",
+    "bundle:creator": "esbuild src/creator/index.ts --bundle --format=iife --platform=browser --target=es2022 --outfile=dist/creator-bundle.js",
     "start": "node dist/index.js",
     "lint": "eslint src/",
     "test": "npm run build && node --test 'dist/**/*.test.js'"
@@ -23,6 +24,7 @@
     "@types/node": "^22.0.0",
     "@types/uuid": "^10.0.0",
     "@typescript-eslint/parser": "^8.59.3",
+    "esbuild": "^0.28.0",
     "grpc_tools_node_protoc_ts": "^5.3.0",
     "grpc-tools": "^1.12.0",
     "jsdom": "^29.1.1",

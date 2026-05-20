@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.api = void 0;
 require("./steps/index.js");
 const executor_js_1 = require("./executor.js");
+const recorder_js_1 = require("./recorder.js");
 const VERSION = '2.0.0';
 const api = {
     version: VERSION,
@@ -14,11 +15,14 @@ const api = {
         };
         return (0, executor_js_1.runPlan)(plan, variables, emit);
     },
-    async startRecording(_planName) {
-        throw new Error('recorder wired in phase 4');
+    async startRecording(planName) {
+        (0, recorder_js_1.startRecording)(planName);
     },
     async stopRecording() {
-        throw new Error('recorder wired in phase 4');
+        return (0, recorder_js_1.stopRecording)();
+    },
+    getRecorderStatus() {
+        return (0, recorder_js_1.getStatus)();
     },
 };
 exports.api = api;
