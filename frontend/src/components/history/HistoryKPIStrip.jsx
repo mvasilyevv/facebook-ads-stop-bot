@@ -20,8 +20,10 @@ function KPICard({ label, value, color, delta }) {
   return (
     <div className="kpi-cell">
       <span className="kpi-label">{label}</span>
-      <span className={`kpi-value ${color}`}>{value}</span>
-      {delta}
+      <div className="flex items-baseline justify-between mt-xs">
+        <span className={`kpi-value ${color}`}>{value}</span>
+        {delta}
+      </div>
     </div>
   );
 }

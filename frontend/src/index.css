@@ -165,15 +165,14 @@
 
   .kpi-cell,
   .kpi-card {
-    @apply flex flex-col gap-1 border border-border bg-surface px-4 py-3
-           transition-colors duration-150 hover:border-border-hover;
+    @apply flex flex-col justify-between border border-border bg-surface px-4 py-3.5
+           transition-colors duration-150 hover:border-border-hover rounded-md;
   }
   .kpi-value {
-    @apply text-xl text-primary;
+    @apply text-lg font-semibold font-mono tracking-tight;
   }
   .kpi-label {
-    @apply text-2xs text-secondary;
-    font-family: Fraunces, Georgia, serif;
+    @apply text-[10px] uppercase tracking-wider text-text-dim font-mono;
   }
 
   .th-sortable {

@@ -206,8 +206,10 @@ function HeroKPIStrip({ performance, performanceYesterday }) {
           style={{ animationDelay: `${120 + i * 50}ms` }}
         >
           <span className="kpi-label">{kpi.label}</span>
-          <span className={`kpi-value ${kpi.color}`}>{kpi.value}</span>
-          <Delta today={s?.[kpi.key]} yesterday={y?.[kpi.key]} />
+          <div className="flex items-baseline justify-between mt-xs">
+            <span className={`kpi-value ${kpi.color}`}>{kpi.value}</span>
+            <Delta today={s?.[kpi.key]} yesterday={y?.[kpi.key]} />
+          </div>
         </div>
       ))}
     </div>
