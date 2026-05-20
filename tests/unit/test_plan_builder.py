@@ -91,11 +91,11 @@ def test_build_plan_abo_budget_per_adset():
     assert all(a.params["level"] == "ABO" for a in abo_budgets)
 
 
-# Сценарий: между set_age первого адсета и rename_ad первого объявления есть click_next_to_ad
+# Сценарий: между set_age первого адсета и upload_creatives первого объявления есть click_next_to_ad
 def test_build_plan_click_next_to_ad_after_first_adset():
     spec = _spec(1, 1)
     plan = build_plan(spec)
     names = [a.step for a in plan]
     age = names.index("set_age")
-    rename = names.index("rename_ad")
-    assert "click_next_to_ad" in names[age:rename]
+    upload = names.index("upload_creatives")
+    assert "click_next_to_ad" in names[age:upload]

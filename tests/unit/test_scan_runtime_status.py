@@ -50,10 +50,6 @@ async def test_wait_for_next_cycle_records_jittered_next_scan():
             "apps.observer_worker.main.peek_scan_requested_flag",
             new=AsyncMock(return_value=False),
         ),
-        patch(
-            "apps.observer_worker.main.consume_scan_requested_flag",
-            new=AsyncMock(return_value=False),
-        ),
         patch("apps.observer_worker.main.update_observer_runtime_status", new=update_status),
     ):
         result = await observer_main._wait_for_next_cycle(

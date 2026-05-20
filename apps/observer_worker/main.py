@@ -101,6 +101,10 @@ BROWSER_QUEUE_SCAN_PAUSE_SECONDS = 5.0
 BROWSER_SCAN_LOCK_TIMEOUT_SECONDS = 60.0
 # Проверку колонок подтверждаем повторной попыткой, чтобы не останавливать скан на перерисовке Ads Manager.
 COLUMN_VALIDATION_FAILURE_LIMIT = 2
+# Парсер ячеек может временно не дочитать правые колонки (CPM, Частота) из-за горизонтальной
+# виртуализации Ads Manager — даём 3 подряд провала, прежде чем считать это фатальным.
+PARSER_MISSING_COLUMNS_FAILURE_LIMIT = 3
+PARSER_MISSING_COLUMNS_RETRY_DELAY_SECONDS = 10.0
 # Пустой scan ещё не считаем фатальным: сначала даём странице несколько шансов вернуть строки таблицы.
 EMPTY_SCAN_FAILURE_LIMIT = 3
 EMPTY_SCAN_RETRY_DELAY_SECONDS = 10.0
@@ -433,6 +437,20 @@ async def _send_alerts_to_telegram(
                 )
             except Exception:
                 logger.exception("Не удалось сохранить delivery-ref для %s", a.fb_ad_id)
+
+            try:
+                from core.telegram.delivery import _maybe_post_general_link
+
+                await _maybe_post_general_link(
+                    client,
+                    destination=destination,
+                    stream_kind=stream_kind,
+                    ad_name=a.ad_name,
+                    topic_thread_id=message_thread_id,
+                    topic_message_id=delivered_message_id,
+                )
+            except Exception:
+                logger.exception("Не удалось отправить cross-link в General для %s", a.fb_ad_id)
 
         delivered.append(
             (a, alert_state, message.text, delivered_message_id, existing_message_id, stream_kind)
@@ -1134,6 +1152,7 @@ async def observer_loop(
     # Счётчик последовательных ошибок браузера (задача 2.4)
     consecutive_browser_errors = 0
     consecutive_column_validation_errors = 0
+    consecutive_parser_missing_columns_errors = 0
     consecutive_empty_scan_cycles = 0
     browser_pause_kind: str | None = None
 
@@ -1624,6 +1643,7 @@ async def observer_loop(
 
                 # Успешный цикл — сбрасываем счётчик ошибок браузера и self-healing
                 consecutive_browser_errors = 0
+                consecutive_parser_missing_columns_errors = 0
                 _self_healing.record_success()
                 cycle_completed = True
 
@@ -1719,10 +1739,41 @@ async def observer_loop(
                 exc_message_text = str(exc)
                 if _PARSER_MISSING_COLUMNS_MARKER in exc_message_text:
                     parser_missing_columns = _extract_parser_missing_columns(exc_message_text)
+                    consecutive_parser_missing_columns_errors += 1
                     columns_message = (
-                        "Парсер Ads Manager не смог прочитать колонки: "
+                        "Парсер Ads Manager не смог прочитать колонки "
+                        f"({consecutive_parser_missing_columns_errors}/"
+                        f"{PARSER_MISSING_COLUMNS_FAILURE_LIMIT}): "
                         f"{', '.join(parser_missing_columns) or 'детали не вернулись'}"
                     )
+
+                    if (
+                        consecutive_parser_missing_columns_errors
+                        < PARSER_MISSING_COLUMNS_FAILURE_LIMIT
+                    ):
+                        status_ref[0] = "WARNING"
+                        message_ref[0] = columns_message
+                        await update_observer_runtime_status(
+                            status="WARNING",
+                            message=(
+                                "Парсер Ads Manager временно не дочитал колонки в строках таблицы "
+                                "(вероятно, виртуализация скрыла правые ячейки). "
+                                "Пробую переподключиться и повторить скан."
+                            ),
+                            last_error=columns_message,
+                        )
+                        logger.warning("Observer: %s", columns_message)
+                        try:
+                            await grpc_client.reconnect_browser()
+                        except Exception:
+                            logger.warning(
+                                "Observer: не удалось переподключиться после сбоя парсера колонок",
+                                exc_info=True,
+                            )
+                        await asyncio.sleep(PARSER_MISSING_COLUMNS_RETRY_DELAY_SECONDS)
+                        continue
+
+                    consecutive_parser_missing_columns_errors = 0
                     await set_observer_scanning_enabled(False)
                     status_ref[0] = "PAUSED"
                     message_ref[0] = columns_message
@@ -1730,7 +1781,8 @@ async def observer_loop(
                         status="PAUSED",
                         message=(
                             "Сканирование остановлено: парсер не смог прочитать обязательные "
-                            "колонки Ads Manager в строках таблицы."
+                            "колонки Ads Manager в строках таблицы "
+                            f"{PARSER_MISSING_COLUMNS_FAILURE_LIMIT} раза подряд."
                         ),
                         last_error=columns_message,
                     )

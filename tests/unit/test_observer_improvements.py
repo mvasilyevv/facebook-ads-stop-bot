@@ -1857,8 +1857,8 @@ def _patch_observer_loop_runtime(stack: ExitStack, *, scan_side_effect) -> Async
     )
     stack.enter_context(
         patch(
-            "apps.observer_worker.main.check_scanning_enabled",
-            new=AsyncMock(return_value=True),
+            "apps.observer_worker.main.consume_scan_flags_combined",
+            new=AsyncMock(return_value=(True, False, False)),
         )
     )
     stack.enter_context(
@@ -1871,12 +1871,6 @@ def _patch_observer_loop_runtime(stack: ExitStack, *, scan_side_effect) -> Async
         patch(
             "apps.observer_worker.main.get_enable_queue_pause_reason",
             new=AsyncMock(return_value=None),
-        )
-    )
-    stack.enter_context(
-        patch(
-            "apps.observer_worker.main.check_vision_reconnect_flag",
-            new=AsyncMock(return_value=False),
         )
     )
     stack.enter_context(
@@ -1916,12 +1910,7 @@ def _patch_observer_loop_runtime(stack: ExitStack, *, scan_side_effect) -> Async
             new=AsyncMock(return_value=False),
         )
     )
-    stack.enter_context(
-        patch(
-            "apps.observer_worker.main.consume_scan_requested_flag",
-            new=AsyncMock(return_value=False),
-        )
-    )
+
     stack.enter_context(patch("apps.observer_worker.main.random.uniform", return_value=0))
     stack.enter_context(patch("apps.observer_worker.main.compute_jitter", return_value=0))
     return stack.enter_context(
