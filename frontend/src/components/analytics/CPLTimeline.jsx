@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { getAIAnalysis } from '../../api';
+import { renderMarkdown } from '../../utils/markdown';
 
 /**
  * Временная шкала CPL / CPD за период с интерактивным графиком и дрилл-дауном.
@@ -163,9 +164,10 @@ export default function CPLTimeline() {
           {aiAnalysis && (
             <div className="mt-md border-t border-border pt-md">
               <span className="font-mono text-[10px] uppercase text-accent">✦ AI Тренд-Аналитика:</span>
-              <div className="mt-xs text-2xs text-text-dim leading-relaxed whitespace-pre-wrap font-sans">
-                {aiAnalysis}
-              </div>
+              <div 
+                className="mt-xs text-2xs text-text-dim leading-relaxed whitespace-pre-wrap font-sans"
+                dangerouslySetInnerHTML={{ __html: renderMarkdown(aiAnalysis) }}
+              />
             </div>
           )}
         </div>

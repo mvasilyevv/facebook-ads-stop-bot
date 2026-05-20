@@ -1,6 +1,37 @@
 import React, { useState, useEffect } from "react";
 import { getAIAnalysis } from "../../api.js";
 
+// Простая функция для безопасного рендеринга базового Markdown в HTML
+function renderMarkdown(text) {
+  if (!text) return "";
+
+  // Экранирование HTML тегов от XSS
+  let html = text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+
+  // Парсинг заголовков ### (h3)
+  html = html.replace(/^###\s+(.+)$/gm, '<h3 style="font-size: 14px; font-weight: 700; margin-top: 14px; margin-bottom: 6px; color: var(--tg-link-color, #FF6B00);">$1</h3>');
+  
+  // Парсинг заголовков ## (h2)
+  html = html.replace(/^##\s+(.+)$/gm, '<h2 style="font-size: 15px; font-weight: 700; margin-top: 16px; margin-bottom: 8px; color: var(--tg-link-color, #FF6B00);">$1</h2>');
+
+  // Парсинг заголовков # (h1)
+  html = html.replace(/^#\s+(.+)$/gm, '<h1 style="font-size: 16px; font-weight: 800; margin-top: 18px; margin-bottom: 10px; color: var(--tg-link-color, #FF6B00);">$1</h1>');
+
+  // Парсинг жирного текста **текст**
+  html = html.replace(/\*\*(.*?)\*\*/g, '<strong style="font-weight: 700; color: var(--tg-text-color, #E8EBEE);">$1</strong>');
+
+  // Парсинг списков "- элемент" или "* элемент"
+  html = html.replace(/^\s*[-*]\s+(.+)$/gm, '<div style="display: flex; align-items: flex-start; gap: 6px; margin-left: 4px; margin-bottom: 4px;"><span style="color: var(--tg-link-color, #FF6B00);">•</span><span>$1</span></div>');
+
+  // Парсинг инлайн-кода `код`
+  html = html.replace(/`(.*?)`/g, '<code style="font-family: monospace; background: rgba(255,255,255,0.06); padding: 2px 5px; border-radius: 4px; font-size: 12px; color: var(--color-info, #5CE6FF); border: 1px solid rgba(255,255,255,0.08); word-break: break-all;">$1</code>');
+
+  return html;
+}
+
 /**
  * Карточка глобального AI брифинга для Telegram Mini App.
  * Neo Control Room мобильный дизайн.
@@ -125,15 +156,16 @@ export default function AIBriefingCard() {
           </span>
         </div>
       ) : content ? (
-        <div style={{ 
-          fontSize: "13px", 
-          color: "var(--tg-text-color)", 
-          lineHeight: "1.6", 
-          whiteSpace: "pre-wrap", 
-          fontFamily: "sans-serif" 
-        }}>
-          {content}
-        </div>
+        <div 
+          style={{ 
+            fontSize: "13px", 
+            color: "var(--tg-text-color)", 
+            lineHeight: "1.6", 
+            whiteSpace: "pre-wrap", 
+            fontFamily: "sans-serif" 
+          }}
+          dangerouslySetInnerHTML={{ __html: renderMarkdown(content) }}
+        />
       ) : (
         <div style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: "16px 0", fontSize: "11px", color: "var(--tg-hint-color)", fontFamily: "monospace" }}>
           Нажмите кнопку «Сводка», чтобы получить AI сводку.

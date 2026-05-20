@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { getAIAnalysis } from '../../api';
+import { renderMarkdown } from '../../utils/markdown';
 
 /**
  * Карточка глобального AI брифинга с поддержкой кэширования и принудительного обновления.
@@ -88,9 +89,10 @@ export default function AIBriefingCard() {
           <span className="font-mono text-2xs text-text-dim">Сбор данных и генерация AI сводки...</span>
         </div>
       ) : content ? (
-        <div className="prose prose-invert max-w-none text-xs text-text-dim leading-relaxed whitespace-pre-wrap font-sans">
-          {content}
-        </div>
+        <div 
+          className="prose prose-invert max-w-none text-xs text-text-dim leading-relaxed whitespace-pre-wrap font-sans"
+          dangerouslySetInnerHTML={{ __html: renderMarkdown(content) }}
+        />
       ) : (
         <div className="flex h-24 items-center justify-center font-mono text-2xs text-text-muted">
           Нажмите кнопку выше, чтобы сгенерировать AI-сводку
