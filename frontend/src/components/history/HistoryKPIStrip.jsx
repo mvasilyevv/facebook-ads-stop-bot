@@ -18,7 +18,7 @@ function Delta({ current, previous, lowerIsBetter = false }) {
 
 function KPICard({ label, value, color, delta }) {
   return (
-    <div className="kpi-card">
+    <div className="kpi-cell">
       <span className="kpi-label">{label}</span>
       <span className={`kpi-value ${color}`}>{value}</span>
       {delta}

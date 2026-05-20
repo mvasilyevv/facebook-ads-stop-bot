@@ -1,244 +1,29 @@
-import { useState, useEffect } from 'react';
-import { getOfferRules, updateOfferRules } from '../../api.js';
+import OfferThresholdsTab from './OfferThresholdsTab.jsx';
 
-const STEPS = [
-  { key: 'cpc', label: 'CPC', basePctField: 'cpc_percent_stop', defaultBasePct: 2 },
-  { key: 'cpl', label: 'CPL', basePctField: 'cpl_percent_stop', defaultBasePct: 10 },
-  { key: 'cpr', label: 'CPR', basePctField: 'cpr_percent_stop', defaultBasePct: 20 },
-];
-
-const THRESHOLD_KEYS = STEPS.flatMap((s) => [
-  `${s.key}_warning_percent_of_stop`,
-  `${s.key}_stop_percent_of_base`,
-]);
-
-const DEFAULT_WARNING = 80;
-const DEFAULT_STOP = 80;
-
-function clampPct(v) {
-  const n = Number(v);
-  if (!Number.isFinite(n)) return null;
-  return Math.min(100, Math.max(1, Math.round(n)));
-}
-
-function fmtMoney(v) {
-  const n = Number(v);
-  if (!Number.isFinite(n)) return '—';
-  return `$${n.toFixed(2)}`;
-}
-
+/** Обёртка для обратной совместимости; предпочтительно OfferThresholdsTab в панели деталей. */
 export default function ThresholdsModal({ offer, onClose, onSaved }) {
-  const cpa = Number(offer?.cpa_amount ?? offer?.cpa) || 0;
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [values, setValues] = useState(() =>
-    Object.fromEntries(THRESHOLD_KEYS.map((k) => [k, null]))
-  );
-  const [basePct, setBasePct] = useState({ cpc: 2, cpl: 10, cpr: 20 });
-  const [baseRules, setBaseRules] = useState(null);
-  const [error, setError] = useState(null);
-
-  useEffect(() => {
-    let alive = true;
-    setLoading(true);
-    (async () => {
-      try {
-        const data = await getOfferRules(offer.id);
-        if (!alive) return;
-        setBaseRules(data || {});
-        setValues(
-          Object.fromEntries(
-            THRESHOLD_KEYS.map((k) => {
-              const raw = data?.[k];
-              return [k, raw === null || raw === undefined || raw === '' ? null : Number(raw)];
-            })
-          )
-        );
-        setBasePct({
-          cpc: Number(data?.cpc_percent_stop) || 2,
-          cpl: Number(data?.cpl_percent_stop) || 10,
-          cpr: Number(data?.cpr_percent_stop) || 20,
-        });
-      } catch (err) {
-        if (alive) setError(err.message || 'Не удалось загрузить пороги');
-      } finally {
-        if (alive) setLoading(false);
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [offer.id]);
-
-  // Вычисления дешёвые (3 умножения × 3 шага) — мемоизация не нужна.
-  const effective = {};
-  for (const step of STEPS) {
-    const warnKey = `${step.key}_warning_percent_of_stop`;
-    const stopKey = `${step.key}_stop_percent_of_base`;
-    const warnPct = values[warnKey] ?? DEFAULT_WARNING;
-    const stopPct = values[stopKey] ?? DEFAULT_STOP;
-    const base = cpa * (basePct[step.key] / 100);
-    const stopValue = base * (stopPct / 100);
-    const warnValue = stopValue * (warnPct / 100);
-    effective[step.key] = { warnPct, stopPct, base, stopValue, warnValue };
-  }
-
-  const setPct = (key, raw) => {
-    const v = clampPct(raw);
-    setValues((prev) => ({ ...prev, [key]: v }));
-  };
-
-  const handleReset = () => {
-    setValues(Object.fromEntries(THRESHOLD_KEYS.map((k) => [k, null])));
-  };
-
-  const handleSave = async () => {
-    setSaving(true);
-    setError(null);
-    try {
-      // Шлём полный набор: базу правил + переопределения порогов (null → дефолт из схемы).
-      const payload = { ...(baseRules || {}) };
-      for (const k of THRESHOLD_KEYS) {
-        if (values[k] === null || values[k] === undefined) {
-          delete payload[k];
-        } else {
-          payload[k] = values[k];
-        }
-      }
-      await updateOfferRules(offer.id, payload);
-      onSaved?.();
-      onClose();
-    } catch (err) {
-      setError(err.message || 'Ошибка сохранения');
-    } finally {
-      setSaving(false);
-    }
-  };
-
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 animate-fade-in"
+      className="fixed inset-0 z-50 flex animate-fade-in items-center justify-center bg-black/60"
       onClick={onClose}
       role="dialog"
       aria-modal="true"
     >
       <div
-        className="panel w-full max-w-lg p-6 space-y-4"
+        className="panel max-h-[90vh] w-full max-w-lg space-y-4 overflow-y-auto p-6"
         onClick={(e) => e.stopPropagation()}
       >
-        <div>
-          <h2 className="text-lg text-primary">Пороги оффера {offer.code}</h2>
-          <p className="mt-1 text-2xs text-muted">
-            CPA оффера: <span className="font-semibold text-primary">{fmtMoney(cpa)}</span>. По умолчанию warning 80%, stop 80%.
-          </p>
-        </div>
-
-        {loading ? (
-          <div className="flex items-center gap-3 py-8 text-sm text-muted">
-            <div className="h-5 w-5 animate-spin rounded-full border-2 border-accent border-t-transparent" />
-            Загрузка порогов...
-          </div>
-        ) : (
-          <div className="space-y-5">
-            {STEPS.map((step) => {
-              const warnKey = `${step.key}_warning_percent_of_stop`;
-              const stopKey = `${step.key}_stop_percent_of_base`;
-              const eff = effective[step.key];
-              const warnOverridden = values[warnKey] !== null;
-              const stopOverridden = values[stopKey] !== null;
-              return (
-                <div key={step.key} className="space-y-2 border-t border-border/40 pt-4 first:border-t-0 first:pt-0">
-                  <div className="flex items-center justify-between">
-                    <span className="rounded bg-accent-muted px-2 py-0.5 font-mono text-2xs font-bold text-accent">
-                      {step.label}
-                    </span>
-                    <span className="text-2xs text-muted">
-                      база: {fmtMoney(eff.base)} ({basePct[step.key]}% CPA)
-                    </span>
-                  </div>
-
-                  {/* Stop slider */}
-                  <div>
-                    <div className="mb-1 flex items-baseline justify-between">
-                      <label
-                        className="text-2xs font-semibold uppercase tracking-wider text-secondary"
-                        htmlFor={`th-${stopKey}`}
-                      >
-                        stop % от базового {!stopOverridden && <span className="text-muted normal-case font-normal">(по умолчанию)</span>}
-                      </label>
-                      <span className="text-xs font-mono text-primary">
-                        {eff.stopPct}% → <span className="font-semibold text-danger">{fmtMoney(eff.stopValue)}</span>
-                      </span>
-                    </div>
-                    <input
-                      id={`th-${stopKey}`}
-                      type="range"
-                      min="1"
-                      max="100"
-                      step="1"
-                      value={eff.stopPct}
-                      onChange={(e) => setPct(stopKey, e.target.value)}
-                      className="slider-range w-full"
-                      style={{ '--pct': eff.stopPct, '--slider-fill': '#EF4444' }}
-                    />
-                  </div>
-
-                  {/* Warning slider */}
-                  <div>
-                    <div className="mb-1 flex items-baseline justify-between">
-                      <label
-                        className="text-2xs font-semibold uppercase tracking-wider text-secondary"
-                        htmlFor={`th-${warnKey}`}
-                      >
-                        warning % от стопа {!warnOverridden && <span className="text-muted normal-case font-normal">(по умолчанию)</span>}
-                      </label>
-                      <span className="text-xs font-mono text-primary">
-                        {eff.warnPct}% → <span className="font-semibold text-warning">{fmtMoney(eff.warnValue)}</span>
-                      </span>
-                    </div>
-                    <input
-                      id={`th-${warnKey}`}
-                      type="range"
-                      min="1"
-                      max="100"
-                      step="1"
-                      value={eff.warnPct}
-                      onChange={(e) => setPct(warnKey, e.target.value)}
-                      className="slider-range w-full"
-                      style={{ '--pct': eff.warnPct, '--slider-fill': '#F59E0B' }}
-                    />
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-
-        {error && (
-          <div className="rounded-md bg-danger-muted border border-danger/30 px-3 py-2 text-2xs text-danger">
-            {error}
-          </div>
-        )}
-
-        <div className="flex gap-2 pt-2">
+        <h2 className="text-lg text-primary">Пороги оффера {offer.code}</h2>
+        <OfferThresholdsTab
+          offer={offer}
+          onSaved={() => {
+            onSaved?.();
+            onClose();
+          }}
+        />
+        <div className="flex justify-end pt-2">
           <button type="button" className="btn-secondary" onClick={onClose}>
-            Отмена
-          </button>
-          <button
-            type="button"
-            className="btn-ghost"
-            onClick={handleReset}
-            disabled={loading || saving}
-          >
-            Сбросить на дефолты
-          </button>
-          <button
-            type="button"
-            className="btn-primary ml-auto"
-            onClick={handleSave}
-            disabled={loading || saving}
-          >
-            {saving ? 'Сохранение...' : 'Сохранить'}
+            Закрыть
           </button>
         </div>
       </div>

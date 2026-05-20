@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback } from "react";
+import { Link } from "react-router-dom";
 import { fetchJson, setTelegramWebAppUrl } from "../api.js";
 import { getStoredRole } from "../auth.js";
 import Loader from "../components/Loader.jsx";
@@ -88,7 +89,7 @@ function ObserverSection({ data, onSave, saving }) {
 }
 
 // Секция настроек Telegram
-function TelegramSection({ data, onSave, saving }) {
+function TelegramSection({ data, onSave, saving, isOwner }) {
   const [token, setToken] = useState("");
   const [webAppUrl, setWebAppUrl] = useState(data?.web_app_url || "");
 
@@ -130,25 +131,33 @@ function TelegramSection({ data, onSave, saving }) {
         <span className="hint">Авторизован: </span>
         <span>{data?.is_authorized ? "✓ да" : "✗ нет"}</span>
       </div>
-      <form onSubmit={handleSave}>
-        <div className="form-group">
-          <label className="form-label">Новый Bot Token</label>
-          <input
-            className="form-input"
-            type="text"
-            placeholder="1234567890:AABBcc..."
-            value={token}
-            onChange={(e) => setToken(e.target.value)}
-          />
-        </div>
-        <button type="submit" className="btn" disabled={saving || !token.trim()}>
-          Обновить токен
-        </button>
-      </form>
-      {data?.is_authorized && (
-        <button className="btn btn-danger" style={{ marginTop: 8 }} onClick={handleRevoke} disabled={saving}>
-          Отозвать токен
-        </button>
+      {isOwner ? (
+        <>
+          <form onSubmit={handleSave}>
+            <div className="form-group">
+              <label className="form-label">Новый Bot Token</label>
+              <input
+                className="form-input"
+                type="text"
+                placeholder="1234567890:AABBcc..."
+                value={token}
+                onChange={(e) => setToken(e.target.value)}
+              />
+            </div>
+            <button type="submit" className="btn" disabled={saving || !token.trim()}>
+              Обновить токен
+            </button>
+          </form>
+          {data?.is_authorized && (
+            <button className="btn btn-danger" style={{ marginTop: 8 }} onClick={handleRevoke} disabled={saving}>
+              Отозвать токен
+            </button>
+          )}
+        </>
+      ) : (
+        <p className="hint" style={{ marginBottom: 10 }}>
+          Изменение токена бота доступно только владельцу.
+        </p>
       )}
       <div className="form-group" style={{ marginTop: 16 }}>
         <label className="form-label">Web App URL (Mini App)</label>
@@ -319,8 +328,19 @@ export default function SettingsPage() {
         <p>{role === "owner" ? "Владелец" : "Получатель"}</p>
       </Card>
 
+      <Card title="Сервис">
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <Link to="/health" className="btn btn-secondary" style={{ textDecoration: "none", textAlign: "center" }}>
+            Карта здоровья
+          </Link>
+          <Link to="/scripts" className="btn btn-secondary" style={{ textDecoration: "none", textAlign: "center" }}>
+            Скрипты кампаний
+          </Link>
+        </div>
+      </Card>
+
       <ObserverSection data={observerData} onSave={handleSave} saving={saving} />
-      <TelegramSection data={telegramData} onSave={handleSave} saving={saving} />
+      <TelegramSection data={telegramData} onSave={handleSave} saving={saving} isOwner={role === "owner"} />
       <VisionSection data={visionData} onSave={handleSave} saving={saving} />
 
       {toast && (

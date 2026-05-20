@@ -4,7 +4,8 @@ export default {
   theme: {
     fontFamily: {
       sans: ['Inter', 'system-ui', 'sans-serif'],
-      mono: ['JetBrains Mono', 'Geist Mono', 'monospace'],
+      mono: ['JetBrains Mono', 'monospace'],
+      display: ['Inter', 'system-ui', 'sans-serif'],
     },
     fontSize: {
       '2xs': ['11px', { lineHeight: '16px', fontWeight: '400' }],
@@ -13,8 +14,8 @@ export default {
       base: ['14px', { lineHeight: '20px', fontWeight: '400' }],
       md: ['16px', { lineHeight: '24px', fontWeight: '500' }],
       lg: ['18px', { lineHeight: '28px', fontWeight: '600' }],
-      xl: ['24px', { lineHeight: '32px', fontWeight: '700', letterSpacing: '-0.03em' }],
-      '2xl': ['32px', { lineHeight: '40px', fontWeight: '800', letterSpacing: '-0.04em' }],
+      xl: ['24px', { lineHeight: '32px', fontWeight: '600', letterSpacing: '-0.02em' }],
+      '2xl': ['32px', { lineHeight: '40px', fontWeight: '600', letterSpacing: '-0.03em' }],
     },
     borderRadius: {
       none: '0',
@@ -22,52 +23,57 @@ export default {
       DEFAULT: '4px',
       md: '6px',
       lg: '8px',
+      xl: '12px',
       full: '9999px',
     },
     extend: {
       colors: {
-        // Фоны
-        base: '#0F1117',
-        surface: '#151520',
-        elevated: '#1E2030',
-
-        // Акцент
+        bg: '#0E1116',
+        base: '#0E1116',
+        surface: '#14181E',
+        'surface-2': '#1A1F26',
+        elevated: '#1A1F26',
+        border: '#232A33',
+        'border-hover': 'rgba(255, 255, 255, 0.15)',
+        text: '#E8EBEE',
+        'text-dim': '#8A929D',
+        'text-muted': '#5A6270',
+        primary: '#E8EBEE',
+        secondary: '#8A929D',
+        muted: '#5A6270',
         accent: {
-          DEFAULT: '#6366F1',
-          muted: 'rgba(99,102,241,0.15)',
-          hover: '#818CF8',
+          DEFAULT: '#FF6B00',
+          soft: 'rgba(255, 107, 0, 0.13)',
+          muted: 'rgba(255, 107, 0, 0.13)',
+          hover: '#FF7A00',
         },
-
-        // Семантические
         danger: {
-          DEFAULT: '#EF4444',
-          muted: '#2D1515',
+          DEFAULT: '#FF3B3B',
+          muted: 'rgba(255, 59, 59, 0.12)',
         },
         warning: {
-          DEFAULT: '#F59E0B',
-          muted: '#291D0A',
+          DEFAULT: '#FFB020',
+          muted: 'rgba(255, 176, 32, 0.12)',
         },
         success: {
-          DEFAULT: '#10B981',
-          muted: '#0A2118',
+          DEFAULT: '#5AFF6A',
+          muted: 'rgba(90, 255, 106, 0.12)',
         },
         early: {
-          DEFAULT: '#A78BFA',
-          muted: '#1E1530',
+          DEFAULT: '#5CE6FF',
+          muted: 'rgba(92, 230, 255, 0.12)',
         },
-        neutral: '#52525B',
-
-        // Текст
-        primary: '#EEEFF1',
-        secondary: '#94A3B8',
-        muted: '#7C8494',
-
-        // Разделители
-        border: 'rgba(255,255,255,0.08)',
-        'border-hover': 'rgba(255,255,255,0.15)',
+        neutral: '#5A6270',
+        ok: '#5AFF6A',
+        warn: '#FFB020',
+        stop: '#FF3B3B',
+        info: '#5CE6FF',
       },
       backgroundColor: {
-        page: '#0F1117',
+        page: 'var(--bg)',
+      },
+      boxShadow: {
+        panel: '0 1px 0 rgba(255, 107, 0, 0.04)',
       },
       spacing: {
         xs: '4px',
@@ -83,9 +89,12 @@ export default {
         content: '1440px',
       },
       animation: {
-        'fade-in': 'fadeIn 0.2s ease-out',
+        'fade-in': 'fadeIn 0.25s ease-out forwards',
         'slide-in-right': 'slideInRight 0.25s ease-out',
         'pulse-dot': 'pulseDot 2s ease-in-out infinite',
+        'scan-pulse': 'scanPulse 1.8s ease-in-out infinite',
+        'stagger-in': 'staggerIn 0.4s ease-out forwards',
+        'incident-enter': 'incidentEnter 0.32s ease-out forwards',
       },
       keyframes: {
         fadeIn: {
@@ -97,8 +106,20 @@ export default {
           to: { transform: 'translateX(0)' },
         },
         pulseDot: {
-          '0%, 100%': { opacity: '1' },
-          '50%': { opacity: '0.5' },
+          '0%, 100%': { opacity: '1', transform: 'scale(1)' },
+          '50%': { opacity: '0.45', transform: 'scale(0.85)' },
+        },
+        scanPulse: {
+          '0%, 100%': { boxShadow: '0 0 0 0 rgba(255, 107, 0, 0)' },
+          '50%': { boxShadow: '0 0 0 2px rgba(255, 107, 0, 0.12)' },
+        },
+        staggerIn: {
+          from: { opacity: '0', transform: 'translateY(6px)' },
+          to: { opacity: '1', transform: 'translateY(0)' },
+        },
+        incidentEnter: {
+          from: { opacity: '0', transform: 'translateX(-4px)' },
+          to: { opacity: '1', transform: 'translateX(0)' },
         },
       },
     },

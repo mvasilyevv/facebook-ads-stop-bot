@@ -148,7 +148,9 @@ export default function ScriptsPage() {
           Уникализация креативов и создание кампаний из папки — только в веб-версии.
         </p>
         <a
-          href="/scripts"
+          href={`${window.location.origin}/scripts`}
+          target="_blank"
+          rel="noopener noreferrer"
           className="btn btn-secondary"
           style={{ textDecoration: "none", textAlign: "center" }}
         >

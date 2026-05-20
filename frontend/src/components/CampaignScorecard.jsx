@@ -4,6 +4,7 @@ const STATE_COLORS = {
   NORMAL:       { bar: 'bg-success', label: 'Норма' },
   WARNING_SENT: { bar: 'bg-warning', label: 'Warning' },
   STOP_SENT:    { bar: 'bg-danger', label: 'Стоп' },
+  CLAIMED:      { bar: 'bg-indigo-500', label: 'Claimed' },
   DISABLED:     { bar: 'bg-neutral', label: 'Откл.' },
 };
 
@@ -46,6 +47,7 @@ export function CampaignScorecard({ stats = null, statsYesterday = null, onState
     { state: 'NORMAL',       count: normalCount,           yesterday: yesterdayNormalCount },
     { state: 'WARNING_SENT', count: stats.ads_in_warning,  yesterday: statsYesterday?.ads_in_warning ?? null },
     { state: 'STOP_SENT',    count: stats.ads_in_stop,     yesterday: statsYesterday?.ads_in_stop ?? null },
+    { state: 'CLAIMED',      count: stats.ads_claimed ?? 0, yesterday: statsYesterday?.ads_claimed ?? null },
     { state: 'DISABLED',     count: stats.ads_disabled,    yesterday: statsYesterday?.ads_disabled ?? null },
   ];
 
@@ -108,7 +110,10 @@ export function FunnelChart({ funnel }) {
           const count = step.count ?? 0;
           const barWidth = count > 0 ? Math.max((count / maxCount) * 100, 3) : 0;
           const prevCount = i > 0 ? (funnel[i - 1].count ?? 0) : null;
-          const convRate = prevCount != null && prevCount > 0 ? (count / prevCount) * 100 : null;
+          const backendRate = step.conversion_rate != null ? Number(step.conversion_rate) : null;
+          const convRate = backendRate != null && Number.isFinite(backendRate)
+            ? backendRate
+            : (prevCount != null && prevCount > 0 ? (count / prevCount) * 100 : null);
           const barColor = FUNNEL_COLORS[i % FUNNEL_COLORS.length];
 
           const convColor = convRate == null ? 'text-secondary'

@@ -61,6 +61,20 @@ export async function getObserverSettings() {
   return fetchJson("/settings/observer");
 }
 
+export async function getDashboardIncidents({ limit = 5 } = {}) {
+  const params = new URLSearchParams();
+  if (limit != null) params.set("limit", String(limit));
+  const qs = params.toString();
+  return fetchJson(`/dashboard/incidents${qs ? `?${qs}` : ""}`);
+}
+
+export async function getDisableTasks({ limit = 20 } = {}) {
+  const params = new URLSearchParams();
+  if (limit != null) params.set("limit", String(limit));
+  const qs = params.toString();
+  return fetchJson(`/dashboard/disable-tasks${qs ? `?${qs}` : ""}`);
+}
+
 export async function getAdDetail(fbAdId) {
   return fetchJson(`/tma/ads/${encodeURIComponent(fbAdId)}`);
 }
@@ -89,4 +103,9 @@ export async function askAI(messages, allowTools = true) {
     method: "POST",
     body: JSON.stringify({ messages, allow_tools: allowTools }),
   });
+}
+
+// AI-аналитика с кэшированием
+export async function getAIAnalysis(blockType, scopeKey, forceRefresh = false) {
+  return fetchJson(`/ai/analyze?block_type=${blockType}&scope_key=${scopeKey}&force_refresh=${forceRefresh}`);
 }

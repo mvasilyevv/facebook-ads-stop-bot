@@ -2,18 +2,32 @@
 
 export function CampaignComparativeBars({ data = [] }) {
   const rows = (!data || data.length === 0) ? [] : [...data]
-    .filter((item) => parseFloat(item.cpr) > 0)
-    .sort((a, b) => parseFloat(a.cpr) - parseFloat(b.cpr))
+    .filter((item) => parseFloat(item.spend) > 0)
+    .sort((a, b) => {
+      const cprA = parseFloat(a.cpr);
+      const cprB = parseFloat(b.cpr);
+      const aKey = Number.isFinite(cprA) && cprA > 0 ? cprA : Number.POSITIVE_INFINITY;
+      const bKey = Number.isFinite(cprB) && cprB > 0 ? cprB : Number.POSITIVE_INFINITY;
+      return aKey - bKey;
+    })
     .slice(0, 8)
-    .map((item) => ({
-      campaign: item.campaign || '',
-      label: (item.campaign || '').replace(/\s*\|\s*/g, ' · ').substring(0, 28) +
-             ((item.campaign || '').length > 28 ? '…' : ''),
-      cpr: parseFloat(item.cpr),
-      spend: parseFloat(item.spend) || 0,
-      deposits: parseInt(item.deposits, 10) || 0,
-      leads: parseInt(item.leads, 10) || 0,
-    }));
+    .map((item) => {
+      const regs = parseInt(item.registrations, 10) || 0;
+      const spend = parseFloat(item.spend) || 0;
+      const cprRaw = parseFloat(item.cpr);
+      const cpr = Number.isFinite(cprRaw) && cprRaw > 0 ? cprRaw : null;
+      return {
+        campaign: item.campaign || '',
+        label: (item.campaign || '').replace(/\s*\|\s*/g, ' · ').substring(0, 28) +
+               ((item.campaign || '').length > 28 ? '…' : ''),
+        cpr,
+        cprLabel: cpr != null ? `$${cpr.toFixed(2)}` : '—',
+        spend,
+        deposits: parseInt(item.deposits, 10) || 0,
+        leads: parseInt(item.leads, 10) || 0,
+        registrations: regs,
+      };
+    });
 
   if (rows.length === 0) {
     return (
@@ -24,8 +38,9 @@ export function CampaignComparativeBars({ data = [] }) {
     );
   }
 
-  const maxCpr = Math.max(...rows.map((r) => r.cpr), 1);
-  const barWidth = (cpr) => Math.max(4, (cpr / maxCpr) * 100);
+  const finiteCprs = rows.map((r) => r.cpr).filter((v) => v != null);
+  const maxCpr = Math.max(...finiteCprs, 1);
+  const barWidth = (cpr) => (cpr != null ? Math.max(4, (cpr / maxCpr) * 100) : 4);
 
   const barColor = (row) => {
     if (row.deposits > 0) return 'bg-success';
@@ -68,8 +83,11 @@ export function CampaignComparativeBars({ data = [] }) {
             </div>
             <div className="flex flex-shrink-0 items-center gap-1.5" style={{ minWidth: '80px' }}>
               <span className="font-mono text-2xs font-semibold text-secondary">
-                ${row.cpr.toFixed(2)}
+                {row.cprLabel}
               </span>
+              {row.registrations === 0 && row.spend > 0 && (
+                <span className="text-[10px] text-muted">CPR ∞</span>
+              )}
               {row.deposits > 0 && (
                 <span className="badge-success text-[10px]">
                   {row.deposits} деп.
@@ -80,7 +98,7 @@ export function CampaignComparativeBars({ data = [] }) {
         ))}
       </div>
       <div className="mt-2 text-[10px] text-muted">
-        Длина бара — фактический CPR. Короче = дешевле регистрация.
+        Длина бара — фактический CPR (короче = дешевле регистрация). Без регистраций — «—» / CPR ∞.
       </div>
     </div>
   );

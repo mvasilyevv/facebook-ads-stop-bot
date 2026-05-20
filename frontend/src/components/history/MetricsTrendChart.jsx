@@ -20,9 +20,11 @@ const METRICS = [
 
 function MetricTooltip({ active, payload, label }) {
   if (!active || !payload?.length) return null;
+  const rows = payload.filter((p) => p.value != null && Number.isFinite(Number(p.value)));
+  if (!rows.length) return null;
   return (
     <ChartTooltipFrame label={label}>
-      {payload.map((p) => (
+      {rows.map((p) => (
         <TooltipRow
           key={p.dataKey}
           color={p.color}
@@ -96,6 +98,7 @@ export default function MetricsTrendChart({ data = [] }) {
             stroke={cfg.color}
             strokeWidth={2}
             dot={false}
+            connectNulls={false}
             activeDot={{ r: 4, fill: cfg.color }}
           />
         </LineChart>

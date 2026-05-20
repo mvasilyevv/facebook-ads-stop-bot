@@ -1,22 +1,29 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap');
+
 /* ============================================================
    Telegram Mini App — базовые CSS-переменные
    Значения пробрасываются из theme.js при инициализации.
    Здесь — fallback для работы вне Telegram (тёмная тема).
    ============================================================ */
 :root {
-  --tg-bg-color:            #1c1c1e;
-  --tg-text-color:          #ffffff;
-  --tg-hint-color:          #8e8e93;
-  --tg-link-color:          #0a84ff;
-  --tg-button-color:        #0a84ff;
-  --tg-button-text-color:   #ffffff;
-  --tg-secondary-bg-color:  #2c2c2e;
+  --tg-bg-color:            #0E1116;
+  --tg-text-color:          #E8EBEE;
+  --tg-hint-color:          #8A929D;
+  --tg-link-color:          #FF6B00;
+  --tg-button-color:        #FF6B00;
+  --tg-button-text-color:   #0E1116;
+  --tg-secondary-bg-color:  #14181E;
+
+  --border:                 #232A33;
+  --ops-accent:             #FF6B00;
+  --ops-accent-muted:       rgba(255, 107, 0, 0.13);
+  --shadow-glow-sm:         rgba(255, 107, 0, 0.13);
 
   /* Семантические алиасы */
-  --color-danger:   #ff453a;
-  --color-warning:  #ffd60a;
-  --color-success:  #32d74b;
-  --color-info:     #64d2ff;
+  --color-danger:   #FF3B3B;
+  --color-warning:  #FFB020;
+  --color-success:  #5AFF6A;
+  --color-info:     #5CE6FF;
 
   /* Макет */
   --tab-bar-height: 58px;
@@ -37,7 +44,7 @@
 body {
   background-color: var(--tg-bg-color);
   color: var(--tg-text-color);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-size: 15px;
   line-height: 1.5;
   /* Отступ под нижний tab-bar + safe area */
@@ -99,6 +106,8 @@ body {
   border-radius: var(--radius-card);
   padding: 14px;
   margin-bottom: 10px;
+  border: 1px solid var(--border);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
 }
 
 .card-title {
@@ -204,6 +213,7 @@ body {
   text-align: center;
   flex-shrink: 0;
   min-width: 90px;
+  border: 1px solid var(--border);
 }
 
 .kpi-value {
@@ -470,30 +480,346 @@ select.form-input {
 }
 
 /* === Список офферов === */
-.offer-row {
+.offer-row,
+.offer-card {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding: 10px 0;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  padding: 12px;
+  margin-bottom: 8px;
+  border-radius: var(--radius-card);
+  background: var(--tg-secondary-bg-color);
+  border: 1px solid var(--border);
   min-height: 44px;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.offer-card:active {
+  border-color: var(--ops-accent);
+  box-shadow: 0 0 12px var(--shadow-glow-sm);
+}
+
+.offer-row {
+  padding: 10px 0;
+  margin-bottom: 0;
+  border-radius: 0;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 .offer-row:last-child {
   border-bottom: none;
 }
 
-.offer-code {
+.offer-row-selectable {
+  border-radius: var(--radius-card);
+  background: var(--tg-secondary-bg-color);
+  border: 1px solid var(--border);
+  padding: 12px !important;
+  margin-bottom: 8px;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.offer-row-selected {
+  border-color: var(--ops-accent) !important;
+  box-shadow: 0 0 14px var(--shadow-glow-sm);
+}
+
+.offer-row-selectable {
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  border: none;
+  background: none;
+  color: inherit;
+}
+
+.offer-row-selectable:active {
+  opacity: 0.85;
+}
+
+.offer-row-selected {
+  background: rgba(10, 132, 255, 0.08);
+  border-radius: 8px;
+  margin: 0 -6px;
+  padding-left: 6px;
+  padding-right: 6px;
+}
+
+.offer-row-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.offer-row-tail {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.offer-row-chevron {
+  color: var(--tg-hint-color);
+  font-size: 20px;
+  line-height: 1;
+  padding: 0 4px;
+}
+
+.offer-meta-truncate {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.form-section-label {
+  margin: 12px 0 8px;
+  font-weight: 600;
+}
+
+.form-row-geo {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+.form-group-grow {
+  flex: 1;
+  min-width: 0;
+}
+
+.offer-detail-sheet h2 {
+  margin-bottom: 0;
+}
+
+.offer-detail-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.offer-detail-close {
+  background: var(--tg-secondary-bg-color);
+  border: none;
+  color: var(--tg-hint-color);
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  font-size: 16px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.offer-detail-dl {
+  margin: 14px 0;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 12px;
+  font-size: 13px;
+}
+
+.offer-detail-dl dt {
+  color: var(--tg-hint-color);
+  margin: 0;
+}
+
+.offer-detail-dl dd {
+  margin: 0;
+  word-break: break-word;
+}
+
+.offer-detail-mono {
   font-family: monospace;
+  font-size: 12px;
+}
+
+.offer-detail-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.offer-detail-actions .btn {
+  margin-top: 0;
+}
+
+.disable-task-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.disable-task-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.disable-task-row:last-child {
+  border-bottom: none;
+}
+
+.disable-task-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.disable-task-name {
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.disable-task-meta {
+  margin-top: 2px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.disable-task-row-stop {
+  border-left: 3px solid var(--color-danger);
+  padding-left: 8px;
+}
+
+.disable-task-row-warning {
+  border-left: 3px solid var(--color-warning);
+  padding-left: 8px;
+}
+
+.offer-code {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
   font-size: 14px;
   font-weight: 700;
-  color: var(--tg-link-color);
+  color: var(--ops-accent);
 }
 
 .offer-meta {
   font-size: 12px;
   color: var(--tg-hint-color);
+}
+
+.offer-meta-ids {
+  margin-top: 2px;
+  font-family: monospace;
+  font-size: 11px;
+}
+
+.offer-id-copy,
+.copy-chip {
+  margin-top: 4px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--ops-accent-muted);
+  color: var(--ops-accent);
+  font-size: 11px;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.copy-chip:active,
+.offer-id-copy:active {
+  background: var(--ops-accent-muted);
+  border-color: var(--ops-accent);
+}
+
+.incident-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.incident-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 12px;
+  margin-bottom: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--tg-text-color);
+  text-align: left;
+  cursor: pointer;
+  opacity: 0;
+  animation: incidentEnter 0.35s ease-out forwards;
+  transition: background 0.2s, border-color 0.2s, transform 0.15s;
+}
+
+.incident-row:active {
+  transform: scale(0.99);
+  background: var(--ops-accent-muted);
+}
+
+.incident-row:last-child {
+  border-bottom: none;
+}
+
+.incident-row-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.incident-ad-name {
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.incident-reason {
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.incident-row-stop {
+  border-left: 3px solid var(--color-danger);
+  box-shadow: inset 0 0 20px rgba(248, 113, 113, 0.06);
+}
+
+.incident-row-warning {
+  border-left: 3px solid var(--color-warning);
+  box-shadow: inset 0 0 20px rgba(251, 191, 36, 0.05);
+}
+
+@keyframes incidentEnter {
+  from {
+    opacity: 0;
+    transform: translateX(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .incident-row {
+    animation: none;
+    opacity: 1;
+  }
+  .spinner {
+    animation: none;
+  }
 }
 
 /* === История: KPI === */
@@ -777,7 +1103,7 @@ select.form-input {
   border-radius: 3px;
   background: linear-gradient(
     to right,
-    var(--slider-fill, #6366F1) 0 calc(var(--pct, 0) * 1%),
+    var(--slider-fill, #C9A227) 0 calc(var(--pct, 0) * 1%),
     var(--tg-theme-hint-color, rgba(255, 255, 255, 0.12)) calc(var(--pct, 0) * 1%) 100%
   );
   outline: none;

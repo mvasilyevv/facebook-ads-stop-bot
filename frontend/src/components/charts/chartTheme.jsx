@@ -13,6 +13,8 @@ export const CHART_COLORS = {
 
 export const CHART_SERIES_LABELS = {
   spend: 'Расход',
+  spendDelta: 'Прирост расхода',
+  spendCumulative: 'Накоплено за день',
   warning: 'Предупреждение',
   stop: 'Стоп',
   deposits: 'Депозиты',

@@ -7,6 +7,33 @@ import Card from "../components/Card.jsx";
 import ThresholdsModal from "../components/ThresholdsModal.jsx";
 import { haptic } from "../theme.js";
 
+async function copyOfferId(id) {
+  const value = String(id ?? "").trim();
+  if (!value) return false;
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value);
+      return true;
+    }
+  } catch {
+    /* fallback ниже */
+  }
+  try {
+    const el = document.createElement("textarea");
+    el.value = value;
+    el.setAttribute("readonly", "");
+    el.style.position = "absolute";
+    el.style.left = "-9999px";
+    document.body.appendChild(el);
+    el.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(el);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
 // Тост-уведомление
 function Toast({ message, type, onClose }) {
   useEffect(() => {
@@ -20,12 +47,99 @@ function Toast({ message, type, onClose }) {
   );
 }
 
+// Детали оффера — bottom sheet (master-detail lite)
+function OfferDetailSheet({ offer, onClose, onEdit, onThresholds, onToggleActive, onDelete, onCopyId }) {
+  if (!offer) return null;
+
+  const payout = offer.payout_per_deposit != null ? Number(offer.payout_per_deposit) : null;
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-sheet offer-detail-sheet" onClick={(e) => e.stopPropagation()}>
+        <div className="offer-detail-header">
+          <h2>{offer.code}</h2>
+          <button type="button" className="offer-detail-close" onClick={onClose} aria-label="Закрыть">
+            ✕
+          </button>
+        </div>
+        <span className={offer.is_active ? "badge badge-active" : "badge badge-disabled"}>
+          {offer.is_active ? "Активен" : "Выключен"}
+        </span>
+        <dl className="offer-detail-dl">
+          <dt>CPA</dt>
+          <dd>${Number(offer.cpa_amount ?? offer.cpa).toFixed(2)}</dd>
+          {payout != null && !Number.isNaN(payout) && (
+            <>
+              <dt>Выплата за депозит</dt>
+              <dd>${payout.toFixed(2)}</dd>
+            </>
+          )}
+          {offer.country_name && (
+            <>
+              <dt>Страна</dt>
+              <dd>{offer.country_name}</dd>
+            </>
+          )}
+          {offer.landing_url && (
+            <>
+              <dt>Landing URL</dt>
+              <dd className="offer-detail-mono">{offer.landing_url}</dd>
+            </>
+          )}
+          {(offer.geo_code || offer.geo_slot_name) && (
+            <>
+              <dt>GEO</dt>
+              <dd>
+                {offer.geo_code}
+                {offer.geo_slot_name ? ` · ${offer.geo_slot_name}` : ""}
+              </dd>
+            </>
+          )}
+          {offer.cabinet_id && (
+            <>
+              <dt>Кабинет</dt>
+              <dd className="offer-detail-mono">{offer.cabinet_id}</dd>
+            </>
+          )}
+          {offer.pixel_id && (
+            <>
+              <dt>Пиксель</dt>
+              <dd className="offer-detail-mono">{offer.pixel_id}</dd>
+            </>
+          )}
+        </dl>
+        <button type="button" className="offer-id-copy" onClick={() => onCopyId(offer)}>
+          UUID: {String(offer.id)}
+        </button>
+        <div className="offer-detail-actions">
+          <button type="button" className="btn btn-secondary" onClick={() => onThresholds(offer)}>
+            Пороги
+          </button>
+          <button type="button" className="btn btn-secondary" onClick={() => onEdit(offer)}>
+            Редактировать
+          </button>
+          <button type="button" className="btn btn-secondary" onClick={() => onToggleActive(offer)}>
+            {offer.is_active ? "Выключить" : "Включить"}
+          </button>
+          <button type="button" className="btn btn-danger" onClick={() => onDelete(offer)}>
+            Удалить
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Модальный bottom sheet для добавления/редактирования оффера
 function OfferModal({ offer, onSave, onClose }) {
   const [form, setForm] = useState({
     code: offer?.code ?? "",
     cpa_amount: offer?.cpa_amount ?? offer?.cpa ?? "",
+    payout_per_deposit: offer?.payout_per_deposit ?? "",
     country_name: offer?.country_name ?? "",
+    landing_url: offer?.landing_url ?? "",
+    geo_code: offer?.geo_code ?? "",
+    geo_slot_name: offer?.geo_slot_name ?? "",
     is_active: offer?.is_active ?? true,
   });
   const [saving, setSaving] = useState(false);
@@ -38,7 +152,11 @@ function OfferModal({ offer, onSave, onClose }) {
       await onSave({
         code: form.code.toUpperCase().trim(),
         cpa_amount: parseFloat(form.cpa_amount) || 0,
+        payout_per_deposit: parseFloat(form.payout_per_deposit) || 0,
         country_name: form.country_name.trim() || null,
+        landing_url: form.landing_url.trim() || null,
+        geo_code: form.geo_code.trim().toUpperCase().slice(0, 2) || null,
+        geo_slot_name: form.geo_slot_name.trim() || null,
         is_active: form.is_active,
       });
     } finally {
@@ -77,6 +195,18 @@ function OfferModal({ offer, onSave, onClose }) {
             />
           </div>
           <div className="form-group">
+            <label className="form-label">Выплата за депозит ($)</label>
+            <input
+              className="form-input"
+              type="number"
+              step="0.01"
+              min="0"
+              placeholder="0.00"
+              value={form.payout_per_deposit}
+              onChange={(e) => setForm({ ...form, payout_per_deposit: e.target.value })}
+            />
+          </div>
+          <div className="form-group">
             <label className="form-label">Страна</label>
             <input
               className="form-input"
@@ -85,6 +215,40 @@ function OfferModal({ offer, onSave, onClose }) {
               value={form.country_name}
               onChange={(e) => setForm({ ...form, country_name: e.target.value })}
             />
+          </div>
+          <p className="hint form-section-label">Параметры автосоздания кампании</p>
+          <div className="form-group">
+            <label className="form-label">Landing URL</label>
+            <input
+              className="form-input"
+              type="text"
+              placeholder="https://landing.example.com"
+              value={form.landing_url}
+              onChange={(e) => setForm({ ...form, landing_url: e.target.value })}
+            />
+          </div>
+          <div className="form-row-geo">
+            <div className="form-group">
+              <label className="form-label">GEO код</label>
+              <input
+                className="form-input"
+                type="text"
+                placeholder="KE"
+                maxLength={2}
+                value={form.geo_code}
+                onChange={(e) => setForm({ ...form, geo_code: e.target.value.toUpperCase() })}
+              />
+            </div>
+            <div className="form-group form-group-grow">
+              <label className="form-label">GEO слот (как в FB)</label>
+              <input
+                className="form-input"
+                type="text"
+                placeholder="Кения"
+                value={form.geo_slot_name}
+                onChange={(e) => setForm({ ...form, geo_slot_name: e.target.value })}
+              />
+            </div>
           </div>
           <div className="toggle-row">
             <div>
@@ -127,6 +291,7 @@ export default function OffersPage() {
   const [showModal, setShowModal] = useState(false);
   const [editOffer, setEditOffer] = useState(null);
   const [thresholdsFor, setThresholdsFor] = useState(null);
+  const [selectedOffer, setSelectedOffer] = useState(null);
   const [toast, setToast] = useState(null);
 
   const load = useCallback(async () => {
@@ -150,7 +315,7 @@ export default function OffersPage() {
       if (editOffer) {
         await fetchJson(`/offers/${editOffer.id}`, {
           method: "PUT",
-          body: JSON.stringify(data),
+          body: JSON.stringify({ ...editOffer, ...data }),
         });
         haptic.notify("success");
         setToast({ type: "ok", text: "Оффер обновлён" });
@@ -164,6 +329,7 @@ export default function OffersPage() {
       }
       setShowModal(false);
       setEditOffer(null);
+      setSelectedOffer(null);
       load();
     } catch (err) {
       haptic.notify("error");
@@ -178,10 +344,23 @@ export default function OffersPage() {
       await fetchJson(`/offers/${offer.id}`, { method: "DELETE" });
       haptic.notify("success");
       setToast({ type: "ok", text: "Оффер удалён" });
+      setSelectedOffer(null);
       load();
     } catch (err) {
       haptic.notify("error");
       setToast({ type: "error", text: err.message });
+    }
+  };
+
+  const handleCopyId = async (offer) => {
+    haptic.selection();
+    const ok = await copyOfferId(offer.id);
+    if (ok) {
+      haptic.notify("success");
+      setToast({ type: "ok", text: "UUID скопирован" });
+    } else {
+      haptic.notify("error");
+      setToast({ type: "error", text: "Не удалось скопировать UUID" });
     }
   };
 
@@ -192,9 +371,9 @@ export default function OffersPage() {
         method: "PUT",
         body: JSON.stringify({ ...offer, is_active: !offer.is_active }),
       });
-      setOffers((prev) =>
-        prev.map((o) => (o.id === offer.id ? { ...o, is_active: !o.is_active } : o))
-      );
+      const next = { ...offer, is_active: !offer.is_active };
+      setOffers((prev) => prev.map((o) => (o.id === offer.id ? next : o)));
+      setSelectedOffer((prev) => (prev?.id === offer.id ? next : prev));
     } catch (err) {
       setToast({ type: "error", text: err.message });
     }
@@ -228,85 +407,75 @@ export default function OffersPage() {
       {offers.length > 0 && (
         <Card style={{ padding: "8px 14px" }}>
           {offers.map((o) => (
-            <div key={o.id} className="offer-row">
-              <div style={{ flex: 1, minWidth: 0 }}>
+            <div
+              key={o.id}
+              className={`offer-row offer-row-selectable${selectedOffer?.id === o.id ? " offer-row-selected" : ""}`}
+              role="button"
+              tabIndex={0}
+              onClick={() => {
+                haptic.selection();
+                setSelectedOffer(o);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  setSelectedOffer(o);
+                }
+              }}
+            >
+              <div className="offer-row-body">
                 <div className="offer-code">{o.code}</div>
                 <div className="offer-meta">
                   <span style={{ fontWeight: 600 }}>${Number(o.cpa_amount ?? o.cpa).toFixed(2)}</span>
                   {o.country_name && <span> · {o.country_name}</span>}
+                  {o.geo_code && <span> · {o.geo_code}</span>}
                 </div>
+                {(o.cabinet_id || o.pixel_id || o.landing_url) && (
+                  <div className="offer-meta offer-meta-ids">
+                    {o.landing_url && <span className="offer-meta-truncate">URL: {o.landing_url}</span>}
+                    {o.cabinet_id && <span>Кабинет: {o.cabinet_id}</span>}
+                    {o.pixel_id && <span>{o.cabinet_id || o.landing_url ? " · " : ""}Пиксель: {o.pixel_id}</span>}
+                  </div>
+                )}
               </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <div className="offer-row-tail">
                 <span
                   className={o.is_active ? "badge badge-active" : "badge badge-disabled"}
-                  style={{ cursor: "pointer" }}
-                  onClick={() => handleToggleActive(o)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleToggleActive(o);
+                  }}
                 >
                   {o.is_active ? "Активен" : "Выкл."}
                 </span>
-                <button
-                  aria-label="Настроить пороги"
-                  title="Настроить пороги"
-                  style={{
-                    background: "none",
-                    border: "none",
-                    padding: "8px",
-                    cursor: "pointer",
-                    color: "var(--tg-hint-color)",
-                    fontSize: 16,
-                    minWidth: 36,
-                    minHeight: 44,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                  }}
-                  onClick={() => setThresholdsFor(o)}
-                >
-                  ⚙
-                </button>
-                <button
-                  style={{
-                    background: "none",
-                    border: "none",
-                    padding: "8px",
-                    cursor: "pointer",
-                    color: "var(--tg-hint-color)",
-                    fontSize: 16,
-                    minWidth: 36,
-                    minHeight: 44,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                  }}
-                  onClick={() => {
-                    setEditOffer(o);
-                    setShowModal(true);
-                  }}
-                >
-                  ✎
-                </button>
-                <button
-                  style={{
-                    background: "none",
-                    border: "none",
-                    padding: "8px",
-                    cursor: "pointer",
-                    color: "var(--color-danger)",
-                    fontSize: 16,
-                    minWidth: 36,
-                    minHeight: 44,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                  }}
-                  onClick={() => handleDelete(o)}
-                >
-                  ✕
-                </button>
+                <span className="offer-row-chevron" aria-hidden>
+                  ›
+                </span>
               </div>
             </div>
           ))}
         </Card>
+      )}
+
+      {selectedOffer && (
+        <OfferDetailSheet
+          offer={selectedOffer}
+          onClose={() => setSelectedOffer(null)}
+          onEdit={(o) => {
+            setSelectedOffer(null);
+            setEditOffer(o);
+            setShowModal(true);
+          }}
+          onThresholds={(o) => {
+            setSelectedOffer(null);
+            setThresholdsFor(o);
+          }}
+          onToggleActive={handleToggleActive}
+          onDelete={async (o) => {
+            await handleDelete(o);
+          }}
+          onCopyId={handleCopyId}
+        />
       )}
 
       {showModal && (

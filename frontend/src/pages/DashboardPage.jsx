@@ -2,9 +2,7 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { fmt$ as _fmt$, fmtN as _fmtN, fmtRoas as _fmtRoas } from '../utils/formatters.js';
 import {
-  getDashboardStats,
-  getDashboardIncidents,
-  getDisableTasks,
+  getDashboardBatch,
   getObserverSettings,
   getVisionSettings,
   toggleScanning,
@@ -16,22 +14,20 @@ import {
   getEnableTasks,
   getEnableRecommendations,
   getChartData,
-  getSpendHistory,
   createDisableTask,
   createEnableTaskFromRecommendation,
   validateBrowserColumns,
 } from '../api.js';
+import { DashboardOperations } from '../components/dashboard/DashboardOperations.jsx';
 import { useRefreshOnResume } from '../hooks/useRefreshOnResume.js';
-import { AlertTray } from '../components/AlertTray.jsx';
 import { CampaignScorecard, FunnelChart } from '../components/CampaignScorecard.jsx';
-
-import { TaskQueuePanel } from '../components/TaskQueuePanel.jsx';
 import { BudgetOverrunChart } from '../components/BudgetOverrunChart.jsx';
 import { CampaignBreakdownTable } from '../components/CampaignBreakdownTable.jsx';
 import { RuleViolationRanking } from '../components/RuleViolationRanking.jsx';
 import { OfferLeaderboard } from '../components/OfferLeaderboard.jsx';
 import { CampaignComparativeBars } from '../components/CampaignComparativeBars.jsx';
 import { SpendAlertsChart } from '../components/SpendAlertsChart.jsx';
+import AIBriefingCard from '../components/ai/AIBriefingCard.jsx';
 
 const HealthMapPage = lazy(() => import('./HealthMapPage.jsx'));
 
@@ -138,96 +134,7 @@ function Delta({ today, yesterday, lowerIsBetter = false }) {
   );
 }
 
-/** Hero-баннер алертов — полная ширина, первое что видит медиабаер */
-function AlertBanner({ stats }) {
-  const stopCount = stats?.ads_in_stop ?? 0;
-  const warnCount = stats?.ads_in_warning ?? 0;
-
-  if (stopCount === 0 && warnCount === 0) {
-    return (
-      <div className="panel flex items-center gap-3 px-4 py-3 mb-md border-success/30 bg-success-muted">
-        <span className="status-dot bg-success animate-pulse-dot" />
-        <span className="text-sm font-medium text-success">Все объявления в норме</span>
-      </div>
-    );
-  }
-
-  return (
-    <div className="panel flex items-center gap-4 px-4 py-3 mb-md">
-      {stopCount > 0 && (
-        <div className="flex items-center gap-2">
-          <span className="status-dot bg-danger animate-pulse-dot" />
-          <span className="font-mono text-2xl text-danger">{stopCount}</span>
-          <span className="text-2xs uppercase tracking-wider text-danger/70">СТОП</span>
-        </div>
-      )}
-      {warnCount > 0 && (
-        <div className="flex items-center gap-2">
-          <span className="status-dot bg-warning animate-pulse-dot" />
-          <span className="font-mono text-2xl text-warning">{warnCount}</span>
-          <span className="text-2xs uppercase tracking-wider text-warning/70">WARNING</span>
-        </div>
-      )}
-    </div>
-  );
-}
-
-/** Парсинг адаптивного интервала и уровня угрозы из статуса observer */
-function parseObserverStatusMessage(msg) {
-  if (!msg) return { intervalSec: null, threatLevel: null };
-  const intervalMatch = msg.match(/интервал:\s*(\d+)/);
-  const threatMatch = msg.match(/Угроза:\s*(\w+)/);
-  return {
-    intervalSec: intervalMatch ? parseInt(intervalMatch[1], 10) : null,
-    threatLevel: threatMatch ? threatMatch[1] : null,
-  };
-}
-
-function formatScanDuration(seconds) {
-  const value = Number(seconds);
-  if (!Number.isFinite(value) || value <= 0) return '—';
-  if (value < 60) return `${Math.round(value)}с`;
-  const minutes = Math.floor(value / 60);
-  const rest = Math.round(value % 60);
-  return rest > 0 ? `${minutes}м ${rest}с` : `${minutes}м`;
-}
-
-function getVisionRuntimeMeta(vision) {
-  const status = String(vision?.runtime_status || 'NOT_CONFIGURED').toUpperCase();
-  if (status === 'READY') {
-    return {
-      label: vision?.cdp_port ? `CDP ${vision.cdp_port}` : 'CDP готов',
-      color: 'bg-success-muted text-success border-success/30',
-      message: vision?.runtime_status_message || 'CDP-порт готов.',
-    };
-  }
-  if (status === 'NOT_RUNNING') {
-    return {
-      label: 'Vision не запущен',
-      color: 'bg-warning/10 text-warning border-warning/30',
-      message: vision?.runtime_status_message || 'Профиль стартует при первом обращении к браузеру.',
-    };
-  }
-  if (status === 'MISSING_CDP' || status === 'CDP_NOT_READY') {
-    return {
-      label: 'Vision без CDP',
-      color: 'bg-danger-muted text-danger border-danger/30',
-      message: vision?.runtime_status_message || 'Профиль запущен, но CDP-порт недоступен.',
-    };
-  }
-  if (status === 'API_UNAVAILABLE') {
-    return {
-      label: 'Vision API недоступен',
-      color: 'bg-danger-muted text-danger border-danger/30',
-      message: vision?.runtime_status_message || 'Не удалось подключиться к Vision API.',
-    };
-  }
-  return {
-    label: 'Vision не настроен',
-    color: 'bg-elevated text-muted border-border',
-    message: vision?.runtime_status_message || 'Vision X-Token или профиль ещё не настроены.',
-  };
-}
+const DASHBOARD_BATCH_QUERY = { limit: 50 };
 
 /** Форматирует время «N сек назад» / «N мин назад» для индикатора обновления */
 function formatUpdatedAgo(updatedAt) {
@@ -259,14 +166,6 @@ function UpdatedAgoLabel({ updatedAt }) {
 }
 
 
-const THREAT_BADGE = {
-  IMMEDIATE: { label: 'Ре-скан', color: 'bg-red-500/20 text-red-400 animate-pulse' },
-  CRITICAL:  { label: 'Критично', color: 'bg-red-500/20 text-red-400' },
-  ELEVATED:  { label: 'Повышенно', color: 'bg-amber-500/20 text-amber-400' },
-  ACTIVE:    { label: 'Активно', color: 'bg-sky-500/20 text-sky-400' },
-  CALM:      { label: 'Спокойно', color: 'bg-emerald-500/20 text-emerald-400' },
-  IDLE:      { label: 'Ожидание', color: 'bg-zinc-500/20 text-zinc-400' },
-};
 
 const ANALYTICS_TABS = [
   { id: 'cpr', label: 'CPR' },
@@ -275,195 +174,6 @@ const ANALYTICS_TABS = [
   { id: 'offers', label: 'Офферы' },
   { id: 'funnel', label: 'Воронка' },
 ];
-
-/** Полоса статуса сканирования */
-function ScanStatusBar({
-  settings,
-  onToggle,
-  onResume,
-  onScanNow,
-  scanning,
-  lastScanAt,
-  observerStatus,
-  observerStatusMessage,
-  scanIntervalSec,
-  scanJitterSec,
-  scanThreatLevel,
-  nextScanAt,
-  vision,
-}) {
-  const pauseUntilMs = settings?.pause_until ? new Date(settings.pause_until).getTime() : null;
-  const pauseActive = pauseUntilMs != null && pauseUntilMs > Date.now();
-  const pauseMinsLeft = pauseActive ? Math.max(1, Math.round((pauseUntilMs - Date.now()) / 60000)) : null;
-  const [secsLeft, setSecsLeft] = useState(null);
-  const parsedStatus = parseObserverStatusMessage(observerStatusMessage);
-  const intervalSec = scanIntervalSec ?? parsedStatus.intervalSec;
-  const threatLevel = scanThreatLevel ?? parsedStatus.threatLevel;
-  const badge = threatLevel ? THREAT_BADGE[threatLevel] : null;
-  const visionMeta = getVisionRuntimeMeta(vision);
-
-  useEffect(() => {
-    const explicitNextScanAt = nextScanAt ? new Date(nextScanAt).getTime() : null;
-    const fallbackNextScanAt = lastScanAt && intervalSec
-      ? new Date(lastScanAt).getTime() + intervalSec * 1000
-      : null;
-    const targetScanAt = Number.isFinite(explicitNextScanAt) ? explicitNextScanAt : fallbackNextScanAt;
-    if (!targetScanAt) { setSecsLeft(null); return; }
-    const tick = () => setSecsLeft(Math.max(0, Math.round((targetScanAt - Date.now()) / 1000)));
-    tick();
-    const id = setInterval(tick, 1000);
-    return () => clearInterval(id);
-  }, [lastScanAt, intervalSec, nextScanAt]);
-
-  const isEnabled = settings?.is_scanning_enabled ?? false;
-  const isWaitingNextScan = isEnabled
-    && observerStatus === 'RUNNING'
-    && (Boolean(nextScanAt) || /^Ожидаем следующий цикл/i.test(observerStatusMessage || ''));
-  const isActivelyScanning = scanning || (observerStatus === 'RUNNING' && !isWaitingNextScan);
-
-  let statusText = '';
-  let statusDetail = '';
-  let statusColor = 'text-muted';
-  let showDot = false;
-  if (!isEnabled) {
-    statusText = 'Выключено';
-  } else if (observerStatus === 'WAITING_BROWSER') {
-    const rawMessage = (observerStatusMessage || '').trim();
-    const isEnableQueue = /^Браузер занят задачами включения/i.test(rawMessage);
-    const isDisableQueue = /^Браузер занят задачами отключения/i.test(rawMessage);
-    statusText = isEnableQueue
-      ? 'Браузер занят включением объявлений'
-      : isDisableQueue
-        ? 'Браузер занят отключением объявлений'
-        : 'Браузер занят обработкой объявлений';
-    const normalizedReason = rawMessage
-      .replace(/^Браузер занят задачами (отключения|включения)\.?\s*/i, '')
-      .trim();
-    if (isEnableQueue) {
-      statusDetail = normalizedReason
-        ? `Идёт очередь включения. ${normalizedReason} Скан продолжится автоматически.`
-        : 'Идёт очередь включения объявлений. Скан продолжится автоматически после её завершения.';
-    } else if (isDisableQueue) {
-      statusDetail = normalizedReason
-        ? `Идёт очередь отключения. ${normalizedReason} Скан продолжится автоматически.`
-        : 'Идёт очередь отключения объявлений. Скан продолжится автоматически после её завершения.';
-    } else {
-      statusDetail = normalizedReason
-        ? `Идёт фоновая обработка. ${normalizedReason} Скан продолжится автоматически.`
-        : 'Браузер временно занят фоновыми задачами. Скан продолжится автоматически после их завершения.';
-    }
-    statusColor = 'text-warning';
-  } else if (observerStatus === 'DISABLING') {
-    statusText = 'Отключаем объявления…';
-    statusColor = 'text-warning';
-    showDot = true;
-  } else if (observerStatus === 'ERROR') {
-    statusText = 'Сканер не подключён к браузеру';
-    statusDetail = observerStatusMessage
-      ? `${observerStatusMessage} Сканирование не выполняется, пока подключение не восстановится.`
-      : 'Сканирование не выполняется, пока не восстановится подключение к браузеру.';
-    statusColor = 'text-danger';
-  } else if (observerStatus === 'PAUSED') {
-    statusText = observerStatusMessage ?? 'Пауза';
-    statusColor = 'text-warning';
-  } else if (isWaitingNextScan) {
-    statusText = 'Ожидание';
-    statusDetail = nextScanAt ? `Следующий скан запланирован с учетом jitter.` : '';
-    statusColor = 'text-secondary';
-  } else if (isActivelyScanning) {
-    statusText = 'Сканирую…';
-    statusColor = 'text-success';
-    showDot = true;
-  } else if (isEnabled) {
-    statusText = 'Ожидание';
-    statusColor = 'text-secondary';
-  }
-
-  const showCountdown = isEnabled && isWaitingNextScan && secsLeft !== null && secsLeft > 0;
-  const showLastScan = isEnabled && !isActivelyScanning && !showCountdown && lastScanAt;
-
-  return (
-    <div className="panel flex items-center gap-3 px-4 py-2.5 mb-md flex-wrap">
-      {/* Тогл сканирования */}
-      <button
-        onClick={onToggle}
-        className="toggle-track"
-        data-active={isEnabled}
-        role="switch"
-        aria-checked={isEnabled}
-        aria-label={isEnabled ? 'Выключить сканирование' : 'Включить сканирование'}
-      >
-        <span className="toggle-knob" data-active={isEnabled} />
-      </button>
-
-      <span className="text-2xs font-bold uppercase tracking-widest text-secondary">
-        Скан
-      </span>
-
-      {/* Бейдж паузы */}
-      {pauseActive && (
-        <span className="flex items-center gap-1.5">
-          <span className="rounded-full bg-warning/20 px-2 py-0.5 text-2xs font-semibold text-warning">
-            ⏸ Пауза до {new Date(settings.pause_until).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })} (осталось {pauseMinsLeft} мин)
-          </span>
-          <button
-            className="btn-ghost text-2xs px-1.5 py-0.5"
-            onClick={onResume}
-          >
-            ▶ Возобновить
-          </button>
-        </span>
-      )}
-        <span className="flex flex-col">
-          <span className={`flex items-center gap-1.5 text-2xs font-medium ${statusColor}`}>
-            {showDot && <span className="status-dot bg-success animate-pulse-dot" />}
-            {statusText}
-          </span>
-          {statusDetail && (
-            <span className="text-[11px] leading-tight text-muted">
-              {statusDetail}
-            </span>
-          )}
-        </span>
-
-      {badge && (
-        <span className={`rounded-full px-2 py-0.5 text-2xs font-semibold ${badge.color}`}>
-          {badge.label}{intervalSec ? ` ${formatScanDuration(intervalSec)}` : ''}
-          {scanJitterSec ? ` ±${formatScanDuration(scanJitterSec)}` : ''}
-        </span>
-      )}
-
-      {visionMeta && (
-        <span
-          className={`rounded-full border px-2 py-0.5 text-2xs font-semibold ${visionMeta.color}`}
-          title={visionMeta.message}
-        >
-          {visionMeta.label}
-        </span>
-      )}
-
-      {showCountdown && (
-        <span className="font-mono text-sm font-semibold text-secondary">
-          {Math.floor(secsLeft / 60)}:{String(secsLeft % 60).padStart(2, '0')}
-        </span>
-      )}
-      {showLastScan && (
-        <span className="font-mono text-2xs text-muted">
-          {new Date(lastScanAt).toLocaleTimeString('ru-RU')}
-        </span>
-      )}
-
-      <button
-        className="btn-ghost ml-auto flex items-center gap-1.5"
-        onClick={onScanNow}
-        disabled={scanning}
-      >
-        <span className={scanning ? 'animate-spin' : ''}>↻</span>
-        {scanning ? 'Сканирую' : 'Обновить'}
-      </button>
-    </div>
-  );
-}
 
 /** KPI-полоса */
 function HeroKPIStrip({ performance, performanceYesterday }) {
@@ -489,8 +199,12 @@ function HeroKPIStrip({ performance, performanceYesterday }) {
 
   return (
     <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-md">
-      {kpis.map((kpi) => (
-        <div key={kpi.label} className="kpi-card group hover:border-border-hover transition-all">
+      {kpis.map((kpi, i) => (
+        <div
+          key={kpi.label}
+          className="kpi-cell stagger-item"
+          style={{ animationDelay: `${120 + i * 50}ms` }}
+        >
           <span className="kpi-label">{kpi.label}</span>
           <span className={`kpi-value ${kpi.color}`}>{kpi.value}</span>
           <Delta today={s?.[kpi.key]} yesterday={y?.[kpi.key]} />
@@ -510,7 +224,9 @@ export default function DashboardPage({ onNavigate }) {
   const [scanning, setScanning] = useState(false);
   const [columnRechecking, setColumnRechecking] = useState(false);
   const [healthMapOpen, setHealthMapOpen] = useState(false);
+  const [analyticsOpen, setAnalyticsOpen] = useState(false);
   const [analyticsView, setAnalyticsView] = useState('cpr');
+  const alertTrayRef = useRef(null);
   // Баг 2: useRef для таймера polling — cleanup всегда ловит актуальный timerId
   const scanTimerRef = useRef(null);
 
@@ -532,13 +248,45 @@ export default function DashboardPage({ onNavigate }) {
     queryFn: () => getDashboardPerformance({ period: 'today' }),
     refetchInterval: 30_000,
   });
-  // Держим последние ненулевые данные чтобы не мигать нулями во время скана
-  const lastNonZeroPerformanceRef = useRef(null);
-  const performance = useMemo(() => {
-    const spend = Number(rawPerformance?.summary?.spend ?? 0);
-    if (spend > 0) lastNonZeroPerformanceRef.current = rawPerformance;
-    return lastNonZeroPerformanceRef.current ?? rawPerformance;
-  }, [rawPerformance]);
+  const performance = rawPerformance;
+
+  const [chartPeriod, setChartPeriod] = useState('today');
+  const STALE_CHART_TTL_MS = 3 * 60 * 1000;
+  const lastNonZeroChartPerformanceRef = useRef(null);
+  const chartPerformanceCachedAtRef = useRef(0);
+  const prevLastScanAtRef = useRef(null);
+
+  const { data: rawChartPerformance } = useQuery({
+    queryKey: ['performanceChart', chartPeriod],
+    queryFn: () => getDashboardPerformance({ period: chartPeriod }),
+    refetchInterval: 30_000,
+  });
+
+  const chartPerformance = useMemo(() => {
+    const spend = Number(rawChartPerformance?.summary?.spend ?? 0);
+    if (spend > 0) {
+      lastNonZeroChartPerformanceRef.current = rawChartPerformance;
+      chartPerformanceCachedAtRef.current = Date.now();
+      return rawChartPerformance;
+    }
+    return lastNonZeroChartPerformanceRef.current ?? rawChartPerformance;
+  }, [rawChartPerformance]);
+
+  const isStaleChartPerformance = useMemo(() => {
+    const spend = Number(rawChartPerformance?.summary?.spend ?? 0);
+    if (spend > 0 || !lastNonZeroChartPerformanceRef.current) return false;
+    const age = Date.now() - chartPerformanceCachedAtRef.current;
+    return age > STALE_CHART_TTL_MS || Boolean(settings?.is_scanning_enabled);
+  }, [rawChartPerformance, settings?.is_scanning_enabled]);
+
+  useEffect(() => {
+    const scanAt = settings?.last_scan_at;
+    if (scanAt && scanAt !== prevLastScanAtRef.current) {
+      lastNonZeroChartPerformanceRef.current = null;
+      chartPerformanceCachedAtRef.current = 0;
+      prevLastScanAtRef.current = scanAt;
+    }
+  }, [settings?.last_scan_at]);
 
   const { data: performanceYesterday } = useQuery({
     queryKey: ['performanceYesterday'],
@@ -547,16 +295,9 @@ export default function DashboardPage({ onNavigate }) {
   });
 
   const { data: chartData, dataUpdatedAt: chartDataUpdatedAt } = useQuery({
-    queryKey: ['chartDataToday'],
-    queryFn: () => getChartData({ period: 'today' }).catch(() => null),
+    queryKey: ['chartData', chartPeriod],
+    queryFn: () => getChartData({ period: chartPeriod }).catch(() => null),
     refetchInterval: 10_000,
-  });
-
-  const { data: spendHistory } = useQuery({
-    queryKey: ['spendHistory24h'],
-    // spendHistory — массив, поэтому fallback тоже массив
-    queryFn: () => getSpendHistory({ hours: 24 }).catch(() => []),
-    refetchInterval: 30_000,
   });
 
   const { data: enableRecs } = useQuery({
@@ -575,24 +316,16 @@ export default function DashboardPage({ onNavigate }) {
     retry: false,
   });
 
-  /* --- Realtime-данные: обновление каждые 5 секунд --- */
-  const { data: stats } = useQuery({
-    queryKey: ['dashboardStats'],
-    queryFn: getDashboardStats,
+  /* --- Realtime: stats + incidents + disable-tasks одним batch-запросом --- */
+  const { data: dashboardBatch } = useQuery({
+    queryKey: ['dashboardBatch', DASHBOARD_BATCH_QUERY],
+    queryFn: () => getDashboardBatch(DASHBOARD_BATCH_QUERY),
     refetchInterval: 5_000,
   });
 
-  const { data: rawIncidents } = useQuery({
-    queryKey: ['dashboardIncidents'],
-    queryFn: () => getDashboardIncidents({ limit: 50 }).catch(() => []),
-    refetchInterval: 5_000,
-  });
-
-  const { data: disableTasks } = useQuery({
-    queryKey: ['disableTasks'],
-    queryFn: () => getDisableTasks({ limit: 50 }),
-    refetchInterval: 5_000,
-  });
+  const stats = dashboardBatch?.stats;
+  const rawIncidents = dashboardBatch?.incidents;
+  const disableTasks = dashboardBatch?.disable_tasks ?? [];
 
   const { data: enableTasks } = useQuery({
     queryKey: ['enableTasks'],
@@ -669,7 +402,8 @@ export default function DashboardPage({ onNavigate }) {
     if (scanning) return;
     setScanning(true);
     /* Баг 9: читаем актуальное значение из кеша, не из замыкания */
-    const scanStartedAt = queryClient.getQueryData(['dashboardStats'])?.last_scan_at ?? null;
+    const batchKey = ['dashboardBatch', DASHBOARD_BATCH_QUERY];
+    const scanStartedAt = queryClient.getQueryData(batchKey)?.stats?.last_scan_at ?? null;
     try {
       await triggerScanNow();
       const deadline = Date.now() + 120_000;
@@ -677,10 +411,9 @@ export default function DashboardPage({ onNavigate }) {
       const poll = async () => {
         if (Date.now() > deadline) { setScanning(false); return; }
         try {
-          const fresh = await getDashboardStats();
-          if (fresh?.last_scan_at && fresh.last_scan_at !== scanStartedAt) {
-            /* Обновляем кеш статистики свежими данными */
-            queryClient.setQueryData(['dashboardStats'], fresh);
+          const fresh = await getDashboardBatch(DASHBOARD_BATCH_QUERY);
+          if (fresh?.stats?.last_scan_at && fresh.stats.last_scan_at !== scanStartedAt) {
+            queryClient.setQueryData(batchKey, fresh);
             setScanning(false);
             return;
           }
@@ -714,7 +447,7 @@ export default function DashboardPage({ onNavigate }) {
     try {
       await createDisableTask(fbAdId);
       /* Инвалидируем кеш задач на отключение */
-      queryClient.invalidateQueries({ queryKey: ['disableTasks'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboardBatch'] });
     } catch (e) {
       setError(`Ошибка отключения: ${e.message}`);
     }
@@ -735,7 +468,7 @@ export default function DashboardPage({ onNavigate }) {
     try {
       await retryDisableTask(taskId);
       /* Инвалидируем кеш задач на отключение */
-      queryClient.invalidateQueries({ queryKey: ['disableTasks'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboardBatch'] });
     } catch (e) {
       setError(`Ошибка повтора: ${e.message}`);
     }
@@ -750,9 +483,7 @@ export default function DashboardPage({ onNavigate }) {
     try {
       await cancelDisableTask(taskId);
       /* Инвалидируем кеш задач и инцидентов после ручного удаления */
-      queryClient.invalidateQueries({ queryKey: ['disableTasks'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboardIncidents'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboardStats'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboardBatch'] });
     } catch (e) {
       setError(`Ошибка удаления из очереди: ${e.message}`);
     }
@@ -761,6 +492,27 @@ export default function DashboardPage({ onNavigate }) {
   const activeIncidents = incidents.filter(
     (i) => i.current_state !== 'NORMAL' && !isDeliveryDisabled(i.delivery_status),
   );
+
+  const handleSelectIncident = (incident) => {
+    if (!incident?.fb_ad_id) return;
+    onNavigate?.(`/ads?fb_ad_id=${encodeURIComponent(incident.fb_ad_id)}`);
+  };
+
+  const handleBannerStopClick = () => {
+    if ((stats?.ads_in_stop ?? 0) > 0) {
+      onNavigate?.('/ads?state=STOP_SENT');
+      return;
+    }
+    alertTrayRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  const handleBannerWarningClick = () => {
+    if ((stats?.ads_in_warning ?? 0) > 0) {
+      onNavigate?.('/ads?state=WARNING_SENT');
+      return;
+    }
+    alertTrayRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
 
   return (
     <div className="space-y-md">
@@ -779,125 +531,102 @@ export default function DashboardPage({ onNavigate }) {
         checking={columnRechecking}
       />
 
-      {/* 1. Hero-баннер алертов — ПЕРВОЕ, что видит медиабаер */}
-      <AlertBanner stats={stats} />
-
-      {/* 2. Статус сканирования */}
-      <ScanStatusBar
+      <DashboardOperations
+        alertTrayRef={alertTrayRef}
+        stats={stats}
         settings={settings}
+        vision={visionStatus}
+        scanning={scanning}
         onToggle={handleToggle}
         onResume={handleResume}
         onScanNow={handleScanNow}
-        scanning={scanning}
-        lastScanAt={stats?.last_scan_at}
-        observerStatus={stats?.observer_status}
-        observerStatusMessage={stats?.observer_status_message}
-        scanIntervalSec={stats?.current_scan_interval_seconds}
-        scanJitterSec={stats?.current_scan_jitter_seconds}
-        scanThreatLevel={stats?.current_scan_threat_level}
-        nextScanAt={stats?.next_scan_at}
-        vision={visionStatus}
+        onAutoEnableToggle={handleAutoEnableToggle}
+        onStopClick={handleBannerStopClick}
+        onWarningClick={handleBannerWarningClick}
+        activeIncidents={activeIncidents}
+        disableTasks={disableTasks}
+        onSelectIncident={handleSelectIncident}
+        onDisable={handleDisable}
+        onEnableScanning={handleToggle}
+        enableTasks={enableTasks}
+        enableRecs={enableRecs ?? []}
+        onRetryDisable={handleRetry}
+        onCancelDisable={handleCancelDisableTask}
+        onCreateEnableTask={handleEnableTask}
       />
 
-      {/* 2b. Авто-включение по рекомендациям */}
-      <div className="panel flex items-center gap-3 px-4 py-2.5 mb-md">
-        <button
-          onClick={handleAutoEnableToggle}
-          className="toggle-track"
-          data-active={settings?.auto_enable_recommendations ?? false}
-          role="switch"
-          aria-checked={settings?.auto_enable_recommendations ?? false}
-          aria-label={(settings?.auto_enable_recommendations ?? false) ? 'Выключить авто-включение' : 'Включить авто-включение'}
-        >
-          <span className="toggle-knob" data-active={settings?.auto_enable_recommendations ?? false} />
-        </button>
-        <span className="text-2xs font-bold uppercase tracking-widest text-secondary">
-          Авто-включение
-        </span>
-        <span className="text-2xs text-muted">
-          {(settings?.auto_enable_recommendations ?? false)
-            ? 'Рекомендации принимаются автоматически'
-            : 'Рекомендации требуют ручного подтверждения'}
-        </span>
-      </div>
-
-      {/* 3. KPI-полоса */}
       <HeroKPIStrip performance={performance} performanceYesterday={performanceYesterday} />
 
-      {/* ЗОНА 2: Оперативный контроль */}
-      <hr className="border-border/40 my-1" />
-      <p className="text-[10px] font-semibold uppercase tracking-widest text-muted/50 mb-2">Оперативный контроль</p>
+      <div className="mb-md">
+        <AIBriefingCard />
+      </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-[1fr_0.54fr] gap-md items-start">
-
-        {/* === ЛЕВАЯ КОЛОНКА (~65%) === */}
-        <div className="space-y-md min-w-0">
-
-          {/* Лента инцидентов */}
-          <div className="panel overflow-hidden">
-            <AlertTray
-              incidents={activeIncidents}
-              disableTasks={disableTasks}
-              onSelectIncident={() => {}}
-              onDisable={handleDisable}
-              settings={settings}
-              lastScanAt={stats?.last_scan_at}
-              onEnableScanning={handleToggle}
-            />
-          </div>
-
-          {/* Чарт: расход + алерты */}
-          <div className="panel p-4">
-            <div className="flex items-center justify-between mb-1">
-              <UpdatedAgoLabel updatedAt={chartDataUpdatedAt} />
+      <div className="grid grid-cols-1 items-start gap-md lg:grid-cols-[1fr_0.54fr]">
+        <div className="panel min-w-0 p-4">
+          <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex gap-1 rounded-md bg-elevated p-0.5">
+                {[
+                  { id: 'today', label: 'Сегодня' },
+                  { id: '7d', label: '7 дней' },
+                ].map((opt) => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    className={`rounded px-2 py-0.5 text-2xs font-medium transition-colors ${
+                      chartPeriod === opt.id
+                        ? 'bg-surface text-primary'
+                        : 'text-secondary hover:text-primary'
+                    }`}
+                    onClick={() => setChartPeriod(opt.id)}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+              {isStaleChartPerformance && (
+                <span className="rounded bg-warning/15 px-2 py-0.5 text-[10px] font-medium text-warning">
+                  данные предыдущего цикла
+                </span>
+              )}
             </div>
-            <SpendAlertsChart
-              spendData={performance?.timeline ?? []}
-              alertsData={chartData?.alerts_by_hour ?? []}
-            />
+            <UpdatedAgoLabel updatedAt={chartDataUpdatedAt} />
           </div>
-
+          <SpendAlertsChart
+            spendData={chartPerformance?.timeline ?? []}
+            alertsData={chartData?.alerts_by_hour ?? []}
+            period={chartPeriod}
+          />
         </div>
 
-        {/* === ПРАВАЯ КОЛОНКА (~35%) === */}
-        <div className="space-y-md min-w-0">
-
-          {/* Очередь задач */}
-          <div className="panel">
-            <TaskQueuePanel
-              disableTasks={disableTasks}
-              enableTasks={enableTasks}
-              enableRecs={enableRecs ?? []}
-              onRetryDisable={handleRetry}
-              onCancelDisable={handleCancelDisableTask}
-              onCreateEnableTask={handleEnableTask}
-            />
-          </div>
-
-          {/* Scorecard состояний */}
+        <div className="min-w-0 space-y-md">
           <div className="panel p-4">
             <CampaignScorecard
               stats={stats}
               statsYesterday={null}
-              performance={performance}
-              spendHistory={spendHistory}
               onStateClick={(state) => onNavigate?.(`/ads?state=${state}`)}
             />
           </div>
-
-          {/* Нарушения правил */}
           <div className="panel p-4">
             <RuleViolationRanking data={chartData?.rule_violations ?? []} />
           </div>
-
         </div>
       </div>
 
-      {/* ЗОНА 3: Аналитика кампаний */}
+      {/* ЗОНА 3: Аналитика кампаний — свёрнута по умолчанию */}
       <hr className="border-border/40 my-1" />
-      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-        <p className="text-[10px] font-semibold uppercase tracking-widest text-muted/70">Аналитика кампаний</p>
-        <div className="flex gap-1 rounded-md bg-elevated p-1">
+      <div className="panel overflow-hidden">
+        <button
+          type="button"
+          className="flex w-full items-center justify-between px-4 py-3 text-left"
+          onClick={() => setAnalyticsOpen((v) => !v)}
+        >
+          <span className="text-[10px] font-semibold uppercase tracking-widest text-muted/70">Аналитика кампаний</span>
+          <span className="text-muted text-sm">{analyticsOpen ? '▲' : '▼'}</span>
+        </button>
+        {analyticsOpen && (
+          <div className="space-y-md px-4 pb-4">
+            <div className="flex flex-wrap justify-end gap-1 rounded-md bg-elevated p-1">
           {ANALYTICS_TABS.map((tab) => (
             <button
               key={tab.id}
@@ -912,18 +641,20 @@ export default function DashboardPage({ onNavigate }) {
               {tab.label}
             </button>
           ))}
-        </div>
-      </div>
+            </div>
 
-      {analyticsView === 'cpr' && (
-        <div className="panel p-4">
-          <CampaignComparativeBars data={performance?.campaigns ?? []} />
-        </div>
-      )}
+            {analyticsView === 'cpr' && (
+              <div className="panel p-4">
+                <CampaignComparativeBars data={performance?.campaigns ?? []} />
+              </div>
+            )}
 
       {analyticsView === 'budget' && (
         <div className="panel p-4">
-          <BudgetOverrunChart data={chartData?.campaign_budget_deltas ?? []} />
+          <BudgetOverrunChart
+            data={chartData?.campaign_budget_deltas ?? []}
+            period={chartPeriod}
+          />
         </div>
       )}
 
@@ -944,6 +675,9 @@ export default function DashboardPage({ onNavigate }) {
           <FunnelChart funnel={performance?.funnel ?? []} />
         </div>
       )}
+          </div>
+        )}
+      </div>
 
       {/* Состояние системы — collapsible */}
       <div className="panel overflow-hidden">

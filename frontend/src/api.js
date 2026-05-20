@@ -106,6 +106,7 @@ export const updateOfferRules = (id, data) =>
 
 // Dashboard
 export const getDashboardStats = () => request('/dashboard/stats');
+export const getDashboardBatch = (params = {}) => requestWithQuery('/dashboard/batch', params);
 export const getAdSnapshots = (params = {}) => requestWithQuery('/dashboard/ads', params);
 export const getAlertEvents = (params = {}) => requestWithQuery('/dashboard/alerts', params);
 export const getDashboardIncidents = (params = {}) => requestWithQuery('/dashboard/incidents', params);
@@ -121,6 +122,7 @@ export const retryDisableTask = (id) =>
   request(`/dashboard/disable-tasks/${id}/retry`, { method: 'POST' });
 export const cancelDisableTask = (id) =>
   request(`/dashboard/disable-tasks/${id}`, { method: 'DELETE' });
+/** Сырые AdSnapshot за окно hours (не бакеты). Для графиков — /dashboard/performance. */
 export const getSpendHistory = (params = {}) => requestWithQuery('/dashboard/spend-history', params);
 export const getChartData = (params = {}) => requestWithQuery('/dashboard/chart-data', params);
 export const getDashboardPerformance = (params = {}) => requestWithQuery('/dashboard/performance', params);
@@ -440,3 +442,9 @@ export async function getDashboardHealthMap() {
     warnings,
   };
 }
+
+export const getAIAnalysis = (block_type, scope_key = 'global', force_refresh = false) =>
+  request('/ai/analyze', {
+    method: 'POST',
+    body: JSON.stringify({ block_type, scope_key, force_refresh }),
+  });

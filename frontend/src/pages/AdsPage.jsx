@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   getAdSnapshots,
   getDashboardStats,
@@ -834,6 +834,7 @@ function AdsMobileList({
   globalAutoEnable,
   autoEnableDisabledSet,
   handleToggleAutoEnable,
+  highlightedAdId,
 }) {
   return (
     <div className="grid gap-3 md:hidden">
@@ -856,7 +857,8 @@ function AdsMobileList({
             key={ad.fb_ad_id}
             role="button"
             tabIndex={0}
-            className={`w-full rounded-md border border-border bg-surface px-3 py-3 text-left ${ROW_BORDER[rowState] || ''}`}
+            data-fb-ad-id={ad.fb_ad_id}
+            className={`w-full rounded-md border border-border bg-surface px-3 py-3 text-left ${ROW_BORDER[rowState] || ''} ${highlightedAdId === ad.fb_ad_id ? 'ring-2 ring-accent/60 bg-accent-muted/20' : ''}`}
             onClick={() => setTimelineAdId(ad.fb_ad_id)}
             onKeyDown={(e) => {
               if (e.key === 'Enter' || e.key === ' ') setTimelineAdId(ad.fb_ad_id);
@@ -950,7 +952,7 @@ function AdsMobileList({
 
 // --- Главный компонент ---
 
-export default function AdsPage({ initialView = 'active', initialState = '', onOpenNaming }) {
+export default function AdsPage({ initialView = 'active', initialState = '', initialHighlightAdId = '', onOpenNaming }) {
   const isMobile = useIsMobile();
   const [view, setView] = useState(initialView); // 'active' | 'archive' | 'all'
   const [offerFilter, setOfferFilter] = useState('');
@@ -964,6 +966,8 @@ export default function AdsPage({ initialView = 'active', initialState = '', onO
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [timelineAdId, setTimelineAdId] = useState(null);
+  const [highlightedAdId, setHighlightedAdId] = useState(initialHighlightAdId || '');
+  const highlightHandledRef = useRef(false);
   const [restartingDisableWorker, setRestartingDisableWorker] = useState(false);
   const [activeQuickFilter, setActiveQuickFilter] = useState(null);
   const [fakeDepModal, setFakeDepModal] = useState(null); // { fb_ad_id, ad_name, deposits, fake_deposits }
@@ -975,7 +979,9 @@ export default function AdsPage({ initialView = 'active', initialState = '', onO
     setStateFilter(initialState);
     setOfferFilter('');
     setTimelineAdId(null);
-  }, [initialView, initialState]);
+    setHighlightedAdId(initialHighlightAdId || '');
+    highlightHandledRef.current = false;
+  }, [initialView, initialState, initialHighlightAdId]);
 
   // Загружаем все данные одним запросом
   const loadAds = useCallback(async () => {
@@ -1199,6 +1205,36 @@ export default function AdsPage({ initialView = 'active', initialState = '', onO
     return result;
   }, [sourceAds, offerFilter, stateFilter, sortBy, sortDirection, activeQuickFilter]);
 
+  useEffect(() => {
+    if (!initialHighlightAdId || highlightHandledRef.current || loading) return;
+    const targetId = initialHighlightAdId;
+    const ad = allAds.find((item) => item.fb_ad_id === targetId);
+    if (!ad) return;
+
+    const inActive = activeAds.some((item) => item.fb_ad_id === targetId);
+    if (!inActive && view === 'active') {
+      setView('all');
+    }
+
+    highlightHandledRef.current = true;
+    setHighlightedAdId(targetId);
+    setTimelineAdId(targetId);
+
+    const scrollTimer = window.setTimeout(() => {
+      const row = document.querySelector(`[data-fb-ad-id="${targetId}"]`);
+      row?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 150);
+
+    const clearHighlightTimer = window.setTimeout(() => {
+      setHighlightedAdId('');
+    }, 4000);
+
+    return () => {
+      window.clearTimeout(scrollTimer);
+      window.clearTimeout(clearHighlightTimer);
+    };
+  }, [initialHighlightAdId, loading, allAds, activeAds, view]);
+
   const selectCls = 'rounded bg-elevated border border-border px-3 py-1.5 text-sm text-secondary focus:border-accent focus:outline-none';
 
   const SEV_BADGE = {
@@ -1327,6 +1363,7 @@ export default function AdsPage({ initialView = 'active', initialState = '', onO
           globalAutoEnable={globalAutoEnable}
           autoEnableDisabledSet={autoEnableDisabledSet}
           handleToggleAutoEnable={handleToggleAutoEnable}
+          highlightedAdId={highlightedAdId}
         />
       ) : (
         <div className="panel overflow-hidden">
@@ -1369,7 +1406,8 @@ export default function AdsPage({ initialView = 'active', initialState = '', onO
                   return (
                     <tr
                       key={ad.fb_ad_id}
-                      className={`tr-hover cursor-pointer border-b border-border ${ROW_BORDER[rowState] || ''}`}
+                      data-fb-ad-id={ad.fb_ad_id}
+                      className={`tr-hover cursor-pointer border-b border-border ${ROW_BORDER[rowState] || ''} ${highlightedAdId === ad.fb_ad_id ? 'bg-accent-muted/30 ring-1 ring-inset ring-accent/50' : ''}`}
                       onClick={() => setTimelineAdId(ad.fb_ad_id)}
                     >
                       <td className="w-9 px-2 py-2.5 text-center">

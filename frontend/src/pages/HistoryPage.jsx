@@ -38,11 +38,12 @@ function defaultFilters() {
 }
 
 function buildParams(filters) {
+  const codes = (filters.offerCodes ?? []).filter(Boolean);
   return {
     date_from: filters.dateFrom,
     date_to: filters.dateTo,
-    // Backend принимает один offer_code — передаём первый из массива
-    offer_code: filters.offerCodes?.[0] || undefined,
+    ...(codes.length === 1 ? { offer_code: codes[0] } : {}),
+    ...(codes.length > 1 ? { offer_codes: codes.join(',') } : {}),
     campaign_name: filters.campaignNames?.[0] || undefined,
   };
 }

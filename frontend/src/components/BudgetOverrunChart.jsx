@@ -12,11 +12,20 @@ const fmtDelta = (delta, pct) => {
   return `${sign}$${Math.abs(delta).toFixed(2)} (${pctSign}${Math.abs(pct).toFixed(1)}%)`;
 };
 
-export function BudgetOverrunChart({ data = [] }) {
+const PERIOD_TITLES = {
+  today: 'сегодня',
+  '7d': '7 дней',
+  '30d': '30 дней',
+};
+
+export function BudgetOverrunChart({ data = [], period = 'today' }) {
+  const periodLabel = PERIOD_TITLES[period] || period;
   if (!data.length) {
     return (
       <div>
-        <h3 className="mb-3 text-2xs font-bold uppercase tracking-widest text-muted">Перекрут бюджета (сегодня)</h3>
+        <h3 className="mb-3 text-2xs font-bold uppercase tracking-widest text-muted">
+          Перекрут бюджета ({periodLabel})
+        </h3>
         <div className="py-4 text-center text-sm text-muted">Нет данных по бюджету</div>
       </div>
     );
@@ -37,7 +46,7 @@ export function BudgetOverrunChart({ data = [] }) {
   return (
     <div>
       <h3 className="mb-3 text-2xs font-bold uppercase tracking-widest text-muted">
-        Перекрут бюджета (сегодня)
+        Перекрут бюджета ({periodLabel})
       </h3>
       <div className="flex flex-col gap-2">
         {rows.map((row, i) => {

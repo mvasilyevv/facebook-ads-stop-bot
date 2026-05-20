@@ -1,8 +1,9 @@
+@import './styles/tokens.css';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-/* === Минимальный reset === */
 @layer base {
   *,
   *::before,
@@ -19,11 +20,20 @@
   }
 
   body {
-    @apply bg-page font-sans text-base text-primary;
+    @apply bg-page font-sans text-base text-text;
     min-height: 100vh;
   }
 
-  /* Скроллбары — тонкие, тёмные */
+  #root {
+    min-height: 100vh;
+  }
+
+  h1,
+  h2 {
+    @apply font-sans font-semibold;
+    letter-spacing: -0.02em;
+  }
+
   ::-webkit-scrollbar {
     width: 6px;
     height: 6px;
@@ -32,19 +42,19 @@
     background: transparent;
   }
   ::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.1);
+    background: rgba(242, 239, 232, 0.12);
     border-radius: 3px;
   }
   ::-webkit-scrollbar-thumb:hover {
-    background: rgba(255, 255, 255, 0.2);
+    background: rgba(201, 162, 39, 0.35);
   }
 
-  /* Числа — всегда monospace */
-  .font-mono {
+  .font-mono,
+  [class*='font-mono'] {
     font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
   }
 
-  /* Плавные переходы по умолчанию */
   button,
   a,
   input,
@@ -53,40 +63,80 @@
     @apply transition-colors duration-150;
   }
 
-  /* Placeholder */
   ::placeholder {
     @apply text-muted;
   }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
 }
 
-/* === Утилити-компоненты === */
 @layer components {
-  /* Карточка/панель */
   .panel {
-    @apply rounded-md border border-border bg-surface;
+    @apply border border-border bg-surface;
   }
 
-  /* Акцентная кнопка */
+  .panel-ops {
+    @apply border border-border bg-surface;
+  }
+
+  .layout-split {
+    @apply flex min-h-0 flex-col border border-border bg-surface sm:flex-row;
+  }
+
+  .signal-row {
+    @apply flex cursor-pointer items-start gap-3 px-3 py-2.5
+           transition-colors duration-150
+           hover:bg-elevated/60;
+  }
+  .signal-row-stop {
+    @apply border-l-2 border-l-danger;
+  }
+  .signal-row-warning {
+    @apply border-l-2 border-l-warning;
+  }
+
+  .copy-chip {
+    @apply inline-flex shrink-0 items-center gap-1 rounded border border-border
+           bg-elevated px-1.5 py-0.5 text-2xs text-secondary
+           transition-colors duration-150
+           hover:border-border-hover hover:text-accent
+           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-base;
+  }
+  .copy-chip-copied {
+    @apply border-success/40 text-success;
+  }
+
+  .stagger-item {
+    opacity: 0;
+    animation: staggerIn 0.4s ease-out forwards;
+  }
+
   .btn-primary {
-    @apply rounded-md bg-accent px-4 py-2 text-sm font-medium text-white
+    @apply rounded-md bg-accent px-4 py-2 text-sm font-medium text-base
            hover:bg-accent-hover active:opacity-90
            focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-base;
   }
 
-  /* Вторичная кнопка */
   .btn-secondary {
     @apply rounded-md border border-border bg-elevated px-4 py-2 text-sm font-medium text-secondary
            hover:border-border-hover hover:text-primary
            focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-base;
   }
 
-  /* Ghost-кнопка */
   .btn-ghost {
     @apply rounded-md px-3 py-1.5 text-sm text-secondary
-           hover:bg-elevated hover:text-primary;
+           hover:bg-elevated hover:text-primary
+           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:ring-offset-2 focus-visible:ring-offset-base;
   }
 
-  /* Badge */
   .badge {
     @apply inline-flex items-center rounded-sm px-2 py-0.5 text-2xs font-medium;
   }
@@ -106,48 +156,48 @@
     @apply badge bg-elevated text-muted;
   }
 
-  /* StatusDot — 8px цветная точка для inline-статуса */
   .status-dot {
     @apply inline-block h-2 w-2 rounded-full;
   }
+  .status-dot-pulse {
+    @apply animate-pulse-dot;
+  }
 
-  /* KPI карточка */
+  .kpi-cell,
   .kpi-card {
-    @apply panel flex flex-col gap-1 px-4 py-3;
+    @apply flex flex-col gap-1 border border-border bg-surface px-4 py-3
+           transition-colors duration-150 hover:border-border-hover;
   }
   .kpi-value {
-    @apply font-mono text-xl text-primary;
+    @apply text-xl text-primary;
   }
   .kpi-label {
-    @apply text-2xs uppercase tracking-wider text-secondary;
+    @apply text-2xs text-secondary;
+    font-family: Fraunces, Georgia, serif;
   }
 
-  /* Сортируемый заголовок таблицы */
   .th-sortable {
-    @apply cursor-pointer select-none text-2xs uppercase tracking-wider text-muted
-           hover:text-secondary;
+    @apply cursor-pointer select-none text-2xs uppercase tracking-wider text-muted hover:text-accent;
   }
 
-  /* Строка таблицы */
   .tr-hover {
     @apply transition-colors hover:bg-elevated/50;
   }
 
-  /* Toggle */
   .toggle-track {
-    @apply relative h-5 w-9 cursor-pointer rounded-full bg-elevated transition-colors;
+    @apply relative h-5 w-9 cursor-pointer rounded-full bg-elevated transition-colors
+           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-base;
   }
   .toggle-track[data-active='true'] {
     @apply bg-accent;
   }
   .toggle-knob {
-    @apply absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform;
+    @apply absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-primary transition-transform;
   }
   .toggle-knob[data-active='true'] {
-    @apply translate-x-4;
+    @apply translate-x-4 bg-base;
   }
 
-  /* Кастомный range-slider: заполненная часть окрашена, незаполненная — в цвет border */
   .slider-range {
     -webkit-appearance: none;
     appearance: none;
@@ -156,8 +206,8 @@
     border-radius: 3px;
     background: linear-gradient(
       to right,
-      var(--slider-fill, #6366F1) 0 calc(var(--pct, 0) * 1%),
-      rgba(255, 255, 255, 0.08) calc(var(--pct, 0) * 1%) 100%
+      var(--color-accent) 0 calc(var(--pct, 0) * 1%),
+      rgba(242, 239, 232, 0.1) calc(var(--pct, 0) * 1%) 100%
     );
     outline: none;
     cursor: pointer;
@@ -168,20 +218,43 @@
     width: 16px;
     height: 16px;
     border-radius: 50%;
-    background: var(--slider-fill, #6366F1);
-    border: 2px solid #0F1117;
+    background: var(--color-accent);
+    border: 2px solid #0c0c0c;
     cursor: pointer;
   }
   .slider-range::-moz-range-thumb {
     width: 16px;
     height: 16px;
     border-radius: 50%;
-    background: var(--slider-fill, #6366F1);
-    border: 2px solid #0F1117;
+    background: var(--color-accent);
+    border: 2px solid #0c0c0c;
     cursor: pointer;
   }
   .slider-range::-moz-range-track {
     background: transparent;
     border: none;
+  }
+
+  .nav-item {
+    @apply flex items-center gap-3 rounded-md px-3 py-2.5 text-sm
+           transition-colors duration-150
+           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface;
+  }
+  .nav-item-active {
+    @apply bg-accent-muted font-medium text-accent;
+  }
+  .nav-item-idle {
+    @apply text-secondary hover:bg-elevated hover:text-primary;
+  }
+}
+
+@keyframes staggerIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
   }
 }

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   createCreativeUniquifyJob,
   getAdSnapshots,
+  getDashboardBatch,
   getObserverSettings,
   getOffers,
 } from './api.js';
@@ -28,6 +29,18 @@ afterEach(() => {
 });
 
 describe('API-клиент: успешные запросы', () => {
+  // Сценарий: batch-эндпоинт дашборда собирает stats, incidents и задачи
+  it('getDashboardBatch запрашивает /dashboard/batch с limit', async () => {
+    const mockData = { stats: { ads_in_stop: 1 }, incidents: [], disable_tasks: [] };
+    global.fetch.mockResolvedValueOnce(makeResponse({ body: mockData }));
+
+    const result = await getDashboardBatch({ limit: 50 });
+
+    const [url] = fetch.mock.calls[0];
+    expect(url).toBe('/api/dashboard/batch?limit=50');
+    expect(result).toEqual(mockData);
+  });
+
   // Сценарий: GET-запрос возвращает корректные данные
   it('успешный GET-запрос возвращает данные из ответа', async () => {
     const mockData = { interval: 30, enabled: true };

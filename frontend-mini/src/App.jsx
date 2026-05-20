@@ -53,6 +53,7 @@ function TabBar() {
   const tabs = [
     { to: "/", icon: "📊", label: "Дашборд", end: true },
     { to: "/ads", icon: "📢", label: "Объявления" },
+    { to: "/offers", icon: "🎯", label: "Офферы" },
     { to: "/chat", icon: "🤖", label: "AI" },
     { to: "/history", icon: "📅", label: "История" },
     { to: "/settings", icon: "⚙️", label: "Настройки" },
