@@ -12,12 +12,23 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from apps.api.deps import get_db
 from core.ai_assistant.client import AIUnavailableError, get_ai_client
-from core.models import AICache, AlertEvent, DisableTask, EnableTask, FbCampaign, Offer
+from core.models import (
+    AdSnapshot,
+    AICache,
+    AlertEvent,
+    DisableTask,
+    EnableTask,
+    FbAd,
+    FbAdset,
+    FbCampaign,
+    Offer,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/ai", tags=["ai"])
@@ -69,24 +80,39 @@ async def gather_context_data(db: AsyncSession, block_type: str, scope_key: str)
         active_offers = await db.scalars(select(Offer).where(Offer.is_active.is_(True)))
         offers_list = [{"code": o.code, "cpa": float(o.cpa_amount)} for o in active_offers]
 
-        campaigns = await db.scalars(select(FbCampaign).where(FbCampaign.is_active.is_(True)))
-        campaigns_list = [
-            {"name": c.campaign_name, "spend": float(c.daily_spend or 0)} for c in campaigns
-        ]
-
-        # Недавние 5 алертов
-        alerts = await db.scalars(
-            select(AlertEvent).order_by(AlertEvent.created_at.desc()).limit(5)
+        # Собираем активные кампании и их расходы за сегодня через связь с AdSnapshot
+        campaign_spends_query = (
+            select(FbCampaign.campaign_name, AdSnapshot.spend, AdSnapshot.delivery_status)
+            .join(FbAdset, FbCampaign.id == FbAdset.campaign_id)
+            .join(FbAd, FbAdset.id == FbAd.adset_id)
+            .join(AdSnapshot, FbAd.id == AdSnapshot.ad_id)
         )
+        campaigns_res = await db.execute(campaign_spends_query)
+        campaign_map = {}
+        for name, spend, delivery_status in campaigns_res.all():
+            is_ad_active = delivery_status != "OFF"
+            if is_ad_active:
+                campaign_map[name] = campaign_map.get(name, 0.0) + float(spend or 0)
+
+        campaigns_list = [{"name": name, "spend": spend} for name, spend in campaign_map.items()]
+
+        # Недавние 5 алертов с подгрузкой офферов
+        alerts_query = (
+            select(AlertEvent, Offer.code.label("offer_code"))
+            .outerjoin(Offer, AlertEvent.offer_id == Offer.id)
+            .order_by(AlertEvent.created_at.desc())
+            .limit(5)
+        )
+        alerts_res = await db.execute(alerts_query)
         alerts_list = [
             {
                 "id": str(al.id),
-                "offer_code": al.offer_code,
-                "rule": al.rule_name,
-                "reason": al.incident_reason,
+                "offer_code": offer_code or "N/A",
+                "rule": ", ".join(al.matched_rule_codes or []) or al.reason_title or "N/A",
+                "reason": al.reason_title or "N/A",
                 "created_at": al.created_at.isoformat(),
             }
-            for al in alerts
+            for al, offer_code in alerts_res.all()
         ]
 
         data = {
@@ -112,20 +138,24 @@ async def gather_context_data(db: AsyncSession, block_type: str, scope_key: str)
         data = {"offers": offers_list}
 
     elif block_type == "alerts":
-        alerts = await db.scalars(
-            select(AlertEvent).order_by(AlertEvent.created_at.desc()).limit(15)
+        alerts_query = (
+            select(AlertEvent, Offer.code.label("offer_code"))
+            .outerjoin(Offer, AlertEvent.offer_id == Offer.id)
+            .order_by(AlertEvent.created_at.desc())
+            .limit(15)
         )
+        alerts_res = await db.execute(alerts_query)
         data = {
             "alerts": [
                 {
                     "id": str(al.id),
-                    "offer_code": al.offer_code,
-                    "rule": al.rule_name,
-                    "reason": al.incident_reason,
+                    "offer_code": offer_code or "N/A",
+                    "rule": ", ".join(al.matched_rule_codes or []) or al.reason_title or "N/A",
+                    "reason": al.reason_title or "N/A",
                     "stage": al.stage.value if hasattr(al.stage, "value") else str(al.stage),
                     "created_at": al.created_at.isoformat(),
                 }
-                for al in alerts
+                for al, offer_code in alerts_res.all()
             ]
         }
 
@@ -138,40 +168,70 @@ async def gather_context_data(db: AsyncSession, block_type: str, scope_key: str)
                 status_code=400, detail=f"Неверный UUID алерта: {scope_key}"
             ) from exc
 
-        alert = await db.scalar(select(AlertEvent).where(AlertEvent.id == alert_uuid))
-        if not alert:
+        alert_query = (
+            select(AlertEvent, Offer.code.label("offer_code"), FbAd.ad_name.label("ad_name"))
+            .outerjoin(Offer, AlertEvent.offer_id == Offer.id)
+            .outerjoin(FbAd, AlertEvent.ad_id == FbAd.id)
+            .where(AlertEvent.id == alert_uuid)
+        )
+        row = (await db.execute(alert_query)).first()
+        if not row:
             raise HTTPException(status_code=404, detail=f"Алерт {scope_key} не найден")
 
+        al, offer_code, ad_name = row
         data = {
             "alert": {
-                "id": str(alert.id),
-                "offer_code": alert.offer_code,
-                "ad_name": alert.ad_name,
-                "rule": alert.rule_name,
-                "reason": alert.incident_reason,
-                "stage": alert.stage.value if hasattr(alert.stage, "value") else str(alert.stage),
-                "created_at": alert.created_at.isoformat(),
+                "id": str(al.id),
+                "offer_code": offer_code or "N/A",
+                "ad_name": ad_name or "N/A",
+                "rule": ", ".join(al.matched_rule_codes or []) or al.reason_title or "N/A",
+                "reason": al.reason_title or "N/A",
+                "stage": al.stage.value if hasattr(al.stage, "value") else str(al.stage),
+                "created_at": al.created_at.isoformat(),
             }
         }
 
     elif block_type == "pacing":
-        campaigns = await db.scalars(select(FbCampaign))
-        campaigns_list = []
-        for c in campaigns:
-            campaigns_list.append(
-                {
-                    "name": c.campaign_name,
-                    "offer_code": c.offer_code,
-                    "is_active": c.is_active,
-                    "daily_spend": float(c.daily_spend or 0),
-                    "lifetime_spend": float(c.lifetime_spend or 0),
-                }
+        # Собираем данные по кампаниям, объединяя с AdSnapshot
+        q = (
+            select(
+                FbCampaign.campaign_name,
+                FbCampaign.offer_code,
+                AdSnapshot.spend,
+                AdSnapshot.delivery_status,
             )
-        data = {"campaigns": campaigns_list}
+            .join(FbAdset, FbCampaign.id == FbAdset.campaign_id)
+            .join(FbAd, FbAdset.id == FbAd.adset_id)
+            .join(AdSnapshot, FbAd.id == AdSnapshot.ad_id)
+        )
+        res = await db.execute(q)
+        campaign_map = {}
+        for name, offer_code, spend, delivery_status in res.all():
+            is_ad_active = delivery_status != "OFF"
+            if name not in campaign_map:
+                campaign_map[name] = {
+                    "name": name,
+                    "offer_code": offer_code,
+                    "is_active": False,
+                    "daily_spend": 0.0,
+                    "lifetime_spend": 0.0,
+                }
+            item = campaign_map[name]
+            if is_ad_active:
+                item["is_active"] = True
+            item["daily_spend"] += float(spend or 0)
+            item["lifetime_spend"] += float(spend or 0)
+
+        data = {"campaigns": list(campaign_map.values())}
 
     elif block_type == "heatmap":
         # Подсчет алертов по дням недели и часам за последние 14 дней
-        cutoff = datetime.now(UTC) - timedelta(days=14)
+        # Находим максимальную дату алерта в БД для корректной работы в демо-окружении
+        max_date = await db.scalar(select(func.max(AlertEvent.created_at)))
+        if max_date:
+            cutoff = max_date - timedelta(days=14)
+        else:
+            cutoff = datetime.now(UTC) - timedelta(days=14)
         alerts = await db.scalars(select(AlertEvent).where(AlertEvent.created_at >= cutoff))
 
         # Строим матрицу 7 дней * 24 часа
@@ -190,23 +250,33 @@ async def gather_context_data(db: AsyncSession, block_type: str, scope_key: str)
         )
         reasons_count: dict[str, int] = {}
         for al in alerts:
-            reason = al.incident_reason or "Неизвестная причина"
+            reason = al.reason_title or "Неизвестная причина"
             reasons_count[reason] = reasons_count.get(reason, 0) + 1
         data = {"reasons": reasons_count}
 
     elif block_type == "cpl_timeline":
         # Временная шкала CPL за последние 10 дней
-        cutoff = datetime.now(UTC) - timedelta(days=10)
-        alerts = await db.scalars(select(AlertEvent).where(AlertEvent.created_at >= cutoff))
+        # Находим максимальную дату алерта в БД для корректной работы в демо-окружении
+        max_date = await db.scalar(select(func.max(AlertEvent.created_at)))
+        if max_date:
+            cutoff = max_date - timedelta(days=10)
+        else:
+            cutoff = datetime.now(UTC) - timedelta(days=10)
+        alerts_query = (
+            select(AlertEvent, Offer.code.label("offer_code"))
+            .outerjoin(Offer, AlertEvent.offer_id == Offer.id)
+            .where(AlertEvent.created_at >= cutoff)
+        )
+        alerts_res = await db.execute(alerts_query)
 
         timeline: dict[str, dict[str, Any]] = {}
-        for al in alerts:
+        for al, offer_code in alerts_res.all():
             day_str = al.created_at.date().isoformat()
             if day_str not in timeline:
                 timeline[day_str] = {"alerts_count": 0, "offers": set()}
             timeline[day_str]["alerts_count"] += 1
-            if al.offer_code:
-                timeline[day_str]["offers"].add(al.offer_code)
+            if offer_code:
+                timeline[day_str]["offers"].add(offer_code)
 
         formatted_timeline = [
             {
@@ -220,17 +290,23 @@ async def gather_context_data(db: AsyncSession, block_type: str, scope_key: str)
 
     elif block_type == "history":
         disable_tasks = await db.scalars(
-            select(DisableTask).order_by(DisableTask.created_at.desc()).limit(10)
+            select(DisableTask)
+            .options(selectinload(DisableTask.fb_ad))
+            .order_by(DisableTask.created_at.desc())
+            .limit(10)
         )
         enable_tasks = await db.scalars(
-            select(EnableTask).order_by(EnableTask.created_at.desc()).limit(10)
+            select(EnableTask)
+            .options(selectinload(EnableTask.fb_ad))
+            .order_by(EnableTask.created_at.desc())
+            .limit(10)
         )
 
         data = {
             "disable_tasks": [
                 {
                     "id": str(t.id),
-                    "fb_ad_id": t.fb_ad_id,
+                    "fb_ad_id": t.fb_ad.fb_ad_id if t.fb_ad else None,
                     "status": t.status.value if hasattr(t.status, "value") else str(t.status),
                     "created_at": t.created_at.isoformat(),
                 }
@@ -239,7 +315,7 @@ async def gather_context_data(db: AsyncSession, block_type: str, scope_key: str)
             "enable_tasks": [
                 {
                     "id": str(t.id),
-                    "fb_ad_id": t.fb_ad_id,
+                    "fb_ad_id": t.fb_ad.fb_ad_id if t.fb_ad else None,
                     "status": t.status.value if hasattr(t.status, "value") else str(t.status),
                     "created_at": t.created_at.isoformat(),
                 }
