@@ -95,3 +95,49 @@ test('detectLogicalDeliveryStatus учитывает aria-checked тумблер
   assert.equal(detectLogicalDeliveryStatus('Показ кампании прекращен', 'false'), 'OFF');
   assert.equal(detectLogicalDeliveryStatus('Показ кампании прекращен', 'true'), 'NOT_DELIVERING');
 });
+
+// Сценарий: если при чтении возникает ошибка (например, колонка CPM ещё не прогрузилась), но затем загружается успешно
+test('waitForParsedAdsRows пробует повторить чтение при ошибке и возвращает строки при успехе', async () => {
+  let attempts = 0;
+
+  const rows = await waitForParsedAdsRows({} as never, {
+    timeoutMs: 100,
+    pollMs: 1,
+    readRows: async () => {
+      attempts += 1;
+      if (attempts < 3) {
+        throw new Error('Не удалось распарсить таблицу Ads Manager: отсутствуют обязательные колонки: CPM');
+      }
+      return [makeRow({ cpm: '15.50' })];
+    },
+  });
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]?.cpm, '15.50');
+  assert.equal(attempts, 3);
+});
+
+// Сценарий: если при чтении постоянно возникают ошибки вплоть до таймаута, выбрасывается последняя ошибка
+test('waitForParsedAdsRows пробрасывает ошибку парсинга наружу по истечении таймаута', async () => {
+  let attempts = 0;
+
+  await assert.rejects(
+    async () => {
+      await waitForParsedAdsRows({} as never, {
+        timeoutMs: 20,
+        pollMs: 1,
+        readRows: async () => {
+          attempts += 1;
+          throw new Error('Фатальный сбой: колонка CPM отсутствует');
+        },
+      });
+    },
+    (err: Error) => {
+      assert.equal(err.message, 'Фатальный сбой: колонка CPM отсутствует');
+      return true;
+    }
+  );
+
+  assert.ok(attempts >= 1);
+});
+

@@ -87,4 +87,40 @@ function makeRow(overrides = {}) {
     strict_1.default.equal((0, parser_js_1.detectLogicalDeliveryStatus)('Показ кампании прекращен', 'false'), 'OFF');
     strict_1.default.equal((0, parser_js_1.detectLogicalDeliveryStatus)('Показ кампании прекращен', 'true'), 'NOT_DELIVERING');
 });
+// Сценарий: если при чтении возникает ошибка (например, колонка CPM ещё не прогрузилась), но затем загружается успешно
+(0, node_test_1.default)('waitForParsedAdsRows пробует повторить чтение при ошибке и возвращает строки при успехе', async () => {
+    let attempts = 0;
+    const rows = await (0, parser_js_1.waitForParsedAdsRows)({}, {
+        timeoutMs: 100,
+        pollMs: 1,
+        readRows: async () => {
+            attempts += 1;
+            if (attempts < 3) {
+                throw new Error('Не удалось распарсить таблицу Ads Manager: отсутствуют обязательные колонки: CPM');
+            }
+            return [makeRow({ cpm: '15.50' })];
+        },
+    });
+    strict_1.default.equal(rows.length, 1);
+    strict_1.default.equal(rows[0]?.cpm, '15.50');
+    strict_1.default.equal(attempts, 3);
+});
+// Сценарий: если при чтении постоянно возникают ошибки вплоть до таймаута, выбрасывается последняя ошибка
+(0, node_test_1.default)('waitForParsedAdsRows пробрасывает ошибку парсинга наружу по истечении таймаута', async () => {
+    let attempts = 0;
+    await strict_1.default.rejects(async () => {
+        await (0, parser_js_1.waitForParsedAdsRows)({}, {
+            timeoutMs: 20,
+            pollMs: 1,
+            readRows: async () => {
+                attempts += 1;
+                throw new Error('Фатальный сбой: колонка CPM отсутствует');
+            },
+        });
+    }, (err) => {
+        strict_1.default.equal(err.message, 'Фатальный сбой: колонка CPM отсутствует');
+        return true;
+    });
+    strict_1.default.ok(attempts >= 1);
+});
 //# sourceMappingURL=parser-retry.test.js.map

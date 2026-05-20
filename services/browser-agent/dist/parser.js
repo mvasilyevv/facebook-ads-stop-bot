@@ -272,13 +272,24 @@ async function waitForParsedAdsRows(page, options = {}) {
     const pollMs = options.pollMs ?? 300;
     const readRows = options.readRows ?? parseAdsFromPage;
     const deadline = Date.now() + timeoutMs;
+    let lastError = null;
     while (true) {
-        const rows = await readRows(page);
-        if (rows.length > 0)
-            return rows;
+        try {
+            const rows = await readRows(page);
+            if (rows.length > 0)
+                return rows;
+        }
+        catch (err) {
+            // Сохраняем последнюю ошибку парсинга колонок (например, если колонка CPM ещё не прогрузилась)
+            lastError = err;
+        }
         const remainingMs = deadline - Date.now();
-        if (remainingMs <= 0)
-            return rows;
+        if (remainingMs <= 0) {
+            if (lastError !== null) {
+                throw lastError;
+            }
+            return [];
+        }
         await sleep(Math.min(pollMs, remainingMs));
     }
 }
