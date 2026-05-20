@@ -8,6 +8,13 @@ const STEPS = [
   { key: "cpr", label: "CPR", defaultBasePct: 20 },
 ];
 
+// Русскоязычные подсказки для правил настройки порогов
+const RULE_HINTS = {
+  cpc: "Стоп при стоимости клика выше установленного % от CPA",
+  cpl: "Стоп при стоимости лида выше установленного % от CPA",
+  cpr: "Стоп при стоимости регистрации выше установленного % от CPA",
+};
+
 const KEYS = STEPS.flatMap((s) => [
   `${s.key}_warning_percent_of_stop`,
   `${s.key}_stop_percent_of_base`,
@@ -154,13 +161,16 @@ export default function ThresholdsModal({ offer, onClose, onSaved, onError }) {
                       display: "flex",
                       justifyContent: "space-between",
                       alignItems: "baseline",
-                      marginBottom: 6,
+                      marginBottom: 4,
                     }}
                   >
                     <span style={{ fontWeight: 700, fontSize: 14 }}>{step.label}</span>
                     <span className="hint" style={{ fontSize: 11 }}>
                       база: {fmtMoney(eff.base)} ({basePct[step.key]}% CPA)
                     </span>
+                  </div>
+                  <div style={{ fontSize: "11px", color: "var(--tg-hint-color)", marginTop: "-2px", marginBottom: "8px", lineHeight: "1.3" }}>
+                    {RULE_HINTS[step.key]}
                   </div>
 
                   {/* Stop slider */}

@@ -7,6 +7,8 @@ import Card from "../components/Card.jsx";
 import { haptic } from "../theme.js";
 import KPIPlate from "../components/kpi/KPIPlate.jsx";
 import AIBriefingCard from "../components/ai/AIBriefingCard.jsx";
+import { useNetworkStatus } from "../App.jsx";
+
 
 const STATE_LABELS = {
   STOP_SENT: "Стоп",
@@ -68,8 +70,10 @@ function tgAlert(msg) {
 // Страница дашборда — KPI, AI брифинг и управление сканированием
 export default function DashboardPage() {
   const navigate = useNavigate();
+  const isOnline = useNetworkStatus();
   const [stats, setStats] = useState(null);
   const [incidents, setIncidents] = useState([]);
+
   const [disableTasks, setDisableTasks] = useState([]);
   const [obsSettings, setObsSettings] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -241,8 +245,9 @@ export default function DashboardPage() {
                         e.stopPropagation();
                         handleDirectDisable(inc.fb_ad_id, inc.ad_name);
                       }}
+                      disabled={!isOnline}
                     >
-                      ⛔ Отключить
+                      {!isOnline ? "⛔ Офлайн" : "⛔ Отключить"}
                     </button>
                   )}
                 </div>
@@ -304,24 +309,24 @@ export default function DashboardPage() {
         )}
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
           {pauseActive ? (
-            <button className="btn" onClick={() => doToggle(true)} disabled={toggling}>
+            <button className="btn" onClick={() => doToggle(true)} disabled={toggling || !isOnline}>
               {toggling ? "..." : "▶ Возобновить"}
             </button>
           ) : (
-            <button className="btn" onClick={() => doToggle(!scanning)} disabled={toggling}>
+            <button className="btn" onClick={() => doToggle(!scanning)} disabled={toggling || !isOnline}>
               {toggling ? "..." : scanning ? "Приостановить" : "Возобновить"}
             </button>
           )}
         </div>
       </Card>
 
-      <button className="btn btn-secondary" onClick={loadData} style={{ marginTop: 8 }}>
-        Обновить данные
+      <button className="btn btn-secondary" onClick={loadData} style={{ marginTop: 8 }} disabled={!isOnline}>
+        {!isOnline ? "Офлайн-режим" : "Обновить данные"}
       </button>
       <button
         className="btn"
         onClick={triggerScan}
-        disabled={scanRequesting}
+        disabled={scanRequesting || !isOnline}
         style={{ marginTop: 8, marginLeft: 8 }}
       >
         {scanRequesting ? "Запрос..." : "⚡ Сканировать сейчас"}

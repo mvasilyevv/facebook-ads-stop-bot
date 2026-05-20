@@ -1133,3 +1133,96 @@ select.form-input {
   background: transparent;
   border: none;
 }
+
+/* === Улучшение UX: Скелетоны для карточек объявлений === */
+.skeleton-card {
+  background: linear-gradient(90deg, #14181E 25%, #1c222a 50%, #14181E 75%);
+  background-size: 200% 100%;
+  animation: loading-shimmer 1.5s infinite;
+  border-radius: var(--radius-card);
+  height: 140px;
+  margin-bottom: 10px;
+  border: 1px solid var(--border);
+}
+
+@keyframes loading-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* === Улучшение UX: Фиксированный офлайн-баннер вверху === */
+.offline-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  background: var(--color-warning);
+  color: #0E1116;
+  font-size: 13px;
+  font-weight: 700;
+  text-align: center;
+  padding: 10px 16px;
+  z-index: 9999;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  animation: slideDown 0.35s ease-out;
+  max-width: 480px;
+  margin: 0 auto;
+  border-bottom-left-radius: var(--radius-card);
+  border-bottom-right-radius: var(--radius-card);
+}
+
+@keyframes slideDown {
+  from { transform: translateY(-100%); }
+  to { transform: translateY(0); }
+}
+
+/* Изменяем верхний отступ контейнера страниц, если активен офлайн-баннер */
+.container.has-offline-banner {
+  padding-top: 50px;
+}
+
+/* === Улучшение UX: Стили для удобного поиска === */
+.search-input-wrap {
+  margin-bottom: 12px;
+  position: relative;
+  width: 100%;
+}
+
+.search-input {
+  width: 100%;
+  background: var(--tg-secondary-bg-color);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 14px;
+  color: var(--tg-text-color);
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  min-height: 40px;
+}
+
+.search-input:focus {
+  border-color: var(--ops-accent);
+  box-shadow: 0 0 10px var(--shadow-glow-sm);
+}
+
+.search-input-clear {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  color: var(--tg-hint-color);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+

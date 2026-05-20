@@ -102,12 +102,39 @@ function TelegramBackButton() {
   return null;
 }
 
+// Пользовательский хук для отслеживания онлайн-статуса
+export function useNetworkStatus() {
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+    };
+  }, []);
+
+  return isOnline;
+}
+
 export default function App() {
+  const isOnline = useNetworkStatus();
+
   return (
     <BrowserRouter basename="/tma">
       <AuthGuard>
         <TelegramBackButton />
-        <div className="container page-content">
+        {!isOnline && (
+          <div className="offline-banner">
+            ⚠️ Отсутствует подключение к сети. Используются кэшированные данные.
+          </div>
+        )}
+        <div className={`container page-content${!isOnline ? " has-offline-banner" : ""}`}>
           <Routes>
             <Route path="/" element={<DashboardPage />} />
             <Route path="/ads" element={<AdsPage />} />
@@ -125,3 +152,4 @@ export default function App() {
     </BrowserRouter>
   );
 }
+
