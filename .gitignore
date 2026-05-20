@@ -1,28 +1,58 @@
+# Временные файлы Python
 __pycache__/
 *.pyc
+*.egg-info/
+.ruff_cache/
+.pytest_cache/
+
+# Виртуальное окружение и конфигурация
 .venv/
 .env
 .env.local
 **/.env.local
-*.egg-info/
-.ruff_cache/
-.pytest_cache/
+
+# Системные файлы и кэш редакторов
 .DS_Store
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+
+# Вспомогательные папки ИИ и агентов
 .claude/
 .claude-flow/
 .omc/
-.logs/
 .mcp.json
+.playwright-mcp/
+.superpowers/
+
+# Временные папки, логи и результаты тестов
 .tmp
 .tmp/
+.logs/
+logs/
+recordings/
+supervisord.pid
+supervisord.log
+playwright-report/
+test-results/
+npm-debug.log*
+
+# Зависимости и сборка фронтенда
 frontend/dist/
 frontend/node_modules/
 frontend-mini/dist/
 frontend-mini/node_modules/
 services/browser-agent/node_modules/
-logs/
-supervisord.pid
-supervisord.log
+
+# Локальные базы данных
+*.db
+*.sqlite
+*.sqlite3
+
+# Секреты и конфиденциальные данные
 helm/fb-stop-bot/secrets.yaml
-recordings/
-.playwright-mcp/
+
