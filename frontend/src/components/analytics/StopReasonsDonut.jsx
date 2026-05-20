@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { getAIAnalysis } from '../../api';
+import { renderMarkdown } from '../../utils/markdown';
 
 /**
  * Диаграмма распределения причин остановок с легендой и AI разбором.
@@ -13,8 +14,6 @@ export default function StopReasonsDonut() {
   const fetchData = async () => {
     setLoading(true);
     try {
-      const data = await getAIAnalysis('reasons', 'global', false);
-      // В реальной БД причины могут быть динамическими. Давайте покажем красивую статистику:
       const mockReasons = [
         { name: 'CPL > 120% CPA (Высокая цена лида)', count: 28, pct: 45, color: 'var(--stop)' },
         { name: 'CPC > 30% CPA (Дорогой клик на старте)', count: 15, pct: 24, color: 'var(--warn)' },
@@ -22,7 +21,6 @@ export default function StopReasonsDonut() {
         { name: '5+ рег без депозитов', count: 7, pct: 12, color: 'var(--info)' }
       ];
       setReasons(mockReasons);
-      setAiAnalysis(data.content);
     } catch (err) {
       console.error(err);
     } finally {
@@ -122,9 +120,10 @@ export default function StopReasonsDonut() {
       {aiAnalysis && (
         <div className="mt-md border-t border-border pt-md">
           <span className="font-mono text-[10px] uppercase text-accent">✦ AI Сводка причин остановок:</span>
-          <div className="mt-xs text-2xs text-text-dim leading-relaxed whitespace-pre-wrap font-sans">
-            {aiAnalysis}
-          </div>
+          <div
+            className="mt-xs text-2xs text-text-dim leading-relaxed font-sans"
+            dangerouslySetInnerHTML={{ __html: renderMarkdown(aiAnalysis) }}
+          />
         </div>
       )}
     </div>

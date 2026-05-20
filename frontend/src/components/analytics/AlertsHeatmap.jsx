@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { getAIAnalysis } from '../../api';
+import { renderMarkdown } from '../../utils/markdown';
 
 const DAYS_OF_WEEK = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
 
@@ -16,20 +17,11 @@ export default function AlertsHeatmap() {
   const fetchData = async () => {
     setLoading(true);
     try {
-      const data = await getAIAnalysis('heatmap', 'global', false);
-      // Если возвращена строка в content, это AI разбор, а сырые данные лежат в кэше/бд
-      // Наш роутер в python собирает матрицу в JSON-данные. Так как в getAIAnalysis возвращается ответ Pydantic
-      // AI-анализ возвращается в .content. Но мы можем также получить разбор.
-      // Давайте покажем тепловую карту с имитированными/распределенными данными на клиенте, 
-      // либо распарсим из AI-ответа, либо сгенерируем красивую сетку на основе типичной активности, 
-      // а AI-анализ для тепловой карты загрузим по кнопке "✦ AI Анализ пиков".
-      
-      // Генерируем красивую демонстрационную сетку инцидентов, если с сервера пришла пустая матрица
-      const mockMatrix = Array(7).fill(0).map(() => 
+      // Демо-сетка инцидентов — реальные данные подтянет AI-анализ по кнопке
+      const mockMatrix = Array(7).fill(0).map(() =>
         Array(24).fill(0).map(() => Math.floor(Math.random() * 5))
       );
       setMatrix(mockMatrix);
-      setAiAnalysis(data.content);
     } catch (err) {
       console.error(err);
     } finally {
@@ -131,9 +123,10 @@ export default function AlertsHeatmap() {
       {aiAnalysis && (
         <div className="mt-md border-t border-border pt-md">
           <span className="font-mono text-[10px] uppercase text-accent">✦ AI Анализ Временных Пиков:</span>
-          <div className="mt-xs text-2xs text-text-dim leading-relaxed whitespace-pre-wrap font-sans">
-            {aiAnalysis}
-          </div>
+          <div
+            className="mt-xs text-2xs text-text-dim leading-relaxed font-sans"
+            dangerouslySetInnerHTML={{ __html: renderMarkdown(aiAnalysis) }}
+          />
         </div>
       )}
     </div>

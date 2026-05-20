@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { getAIAnalysis } from '../../api';
+import { renderMarkdown } from '../../utils/markdown';
 
 /**
  * Лента принятых ботом решений с фильтрацией по офферу/правилу и AI сводкой.
@@ -14,8 +15,6 @@ export default function DecisionsHistoryFeed() {
   const fetchData = async () => {
     setLoading(true);
     try {
-      const data = await getAIAnalysis('history', 'global', false);
-      
       const mockEvents = [
         { id: 1, type: 'stop', offer: 'Casino_CZ', rule: 'CPL > 120%', adId: 'fb_ad_9921', time: '14:25:12', date: '19 мая', status: 'SUCCESS' },
         { id: 2, type: 'stop', offer: 'Bet_PL', rule: 'CPC > 30%', adId: 'fb_ad_4021', time: '11:15:02', date: '19.05', status: 'SUCCESS' },
@@ -23,9 +22,7 @@ export default function DecisionsHistoryFeed() {
         { id: 4, type: 'stop', offer: 'Casino_CZ', rule: 'Spend > 70% CPA', adId: 'fb_ad_1223', time: '18:43:00', date: '18.05', status: 'SUCCESS' },
         { id: 5, type: 'stop', offer: 'Poker_BR', rule: '5+ Regs No Dep', adId: 'fb_ad_7720', time: '15:20:10', date: '18 мая', status: 'SUCCESS' }
       ];
-      
       setEvents(mockEvents);
-      setAiAnalysis(data.content);
     } catch (err) {
       console.error(err);
     } finally {
@@ -125,9 +122,10 @@ export default function DecisionsHistoryFeed() {
       {aiAnalysis && (
         <div className="mt-md border-t border-border pt-md">
           <span className="font-mono text-[10px] uppercase text-accent">✦ AI Сводка действий:</span>
-          <div className="mt-xs text-2xs text-text-dim leading-relaxed whitespace-pre-wrap font-sans">
-            {aiAnalysis}
-          </div>
+          <div
+            className="mt-xs text-2xs text-text-dim leading-relaxed font-sans"
+            dangerouslySetInnerHTML={{ __html: renderMarkdown(aiAnalysis) }}
+          />
         </div>
       )}
     </div>
