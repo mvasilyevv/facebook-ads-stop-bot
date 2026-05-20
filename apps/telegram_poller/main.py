@@ -41,12 +41,19 @@ async def _register_bot_ui(client: TelegramBotClient) -> str:
         {"command": "app", "description": "Открыть приложение"},
         {"command": "help", "description": "Справка"},
     ]
+    # Админские команды супергруппы — показываем только администраторам.
+    admin_commands = commands + [
+        {"command": "init_topics", "description": "Создать форумные топики и привязать к стримам"},
+        {
+            "command": "bind_thread",
+            "description": "Привязать текущий топик к стриму (WARNING/STOP/...)",
+        },
+    ]
     # Регистрируем для всех scope, иначе в группах команды не отображаются.
     for scope in (
         {"type": "default"},
         {"type": "all_private_chats"},
         {"type": "all_group_chats"},
-        {"type": "all_chat_administrators"},
     ):
         try:
             await client.set_my_commands(commands, scope=scope)
@@ -55,6 +62,13 @@ async def _register_bot_ui(client: TelegramBotClient) -> str:
                 "Не удалось зарегистрировать команды (setMyCommands, scope=%s)",
                 scope.get("type"),
             )
+    # В admin-scope добавляем bind_thread / init_topics.
+    try:
+        await client.set_my_commands(admin_commands, scope={"type": "all_chat_administrators"})
+    except Exception:
+        logger.exception(
+            "Не удалось зарегистрировать admin-команды (setMyCommands, scope=all_chat_administrators)"
+        )
 
     web_app_url = await load_web_app_url()
     if not web_app_url:

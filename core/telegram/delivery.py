@@ -451,6 +451,70 @@ def render_enable_task_runtime_message(
     )
 
 
+_GENERAL_LINK_STREAMS = (
+    TelegramNotificationStream.WARNING,
+    TelegramNotificationStream.STOP,
+    TelegramNotificationStream.ENABLE,
+)
+
+_GENERAL_LINK_PREFIX = {
+    TelegramNotificationStream.WARNING: "⚠️ WARNING",
+    TelegramNotificationStream.STOP: "🛑 STOP",
+    TelegramNotificationStream.ENABLE: "▶️ Включение",
+}
+
+
+def _build_supergroup_deeplink(chat_id: str, thread_id: int, message_id: int) -> str | None:
+    """Строит deep-link на сообщение в форумном топике супергруппы."""
+    try:
+        cid = int(chat_id)
+    except (TypeError, ValueError):
+        return None
+    if cid >= 0:
+        return None
+    public_chat_id = abs(cid) - 1_000_000_000_000
+    if public_chat_id <= 0:
+        return None
+    return f"https://t.me/c/{public_chat_id}/{thread_id}/{message_id}"
+
+
+async def _maybe_post_general_link(
+    client: TelegramBotClient,
+    *,
+    destination,
+    stream_kind: TelegramNotificationStream,
+    ad_name: str,
+    topic_thread_id: int | None,
+    topic_message_id: int,
+) -> None:
+    """Дублирует короткую ссылку в General на полное сообщение в нужном топике."""
+    if stream_kind not in _GENERAL_LINK_STREAMS:
+        return
+    general_thread_id = destination.thread_id_general
+    if general_thread_id is None:
+        return
+    if topic_thread_id is None or topic_thread_id == general_thread_id:
+        return
+    deeplink = _build_supergroup_deeplink(destination.chat_id, topic_thread_id, topic_message_id)
+    if not deeplink:
+        return
+    safe_ad_name = html.escape(ad_name or "—")
+    prefix = _GENERAL_LINK_PREFIX[stream_kind]
+    short_text = f'{prefix} по <b>{safe_ad_name}</b> — <a href="{deeplink}">подробности</a>'
+    try:
+        await client.send_message(
+            chat_id=destination.chat_id,
+            message_thread_id=general_thread_id,
+            text=short_text,
+        )
+    except Exception:
+        logger.exception(
+            "Не удалось отправить cross-link в General для chat_id=%s stream=%s",
+            destination.chat_id,
+            stream_kind,
+        )
+
+
 async def _broadcast_message(
     *,
     fb_ad_id: str,
@@ -462,6 +526,7 @@ async def _broadcast_message(
     fallback_chat_id: str = "",
     skip_chat_id: str | None = None,
     skip_message_id: int | None = None,
+    general_link_ad_name: str = "",
 ) -> list[tuple[str, int]]:
     """Отправляет или обновляет сообщение в конкретном Telegram-потоке."""
     token, destinations = await load_telegram_runtime_config(
@@ -514,6 +579,14 @@ async def _broadcast_message(
                     stream_kind=stream_kind,
                 )
                 delivered_refs.append((destination.chat_id, delivered_message_id))
+                await _maybe_post_general_link(
+                    client,
+                    destination=destination,
+                    stream_kind=stream_kind,
+                    ad_name=general_link_ad_name,
+                    topic_thread_id=message_thread_id,
+                    topic_message_id=delivered_message_id,
+                )
             except Exception:
                 logger.exception(
                     "Не удалось доставить Telegram-сообщение для %s в chat_id=%s, stream=%s",
@@ -593,6 +666,7 @@ async def broadcast_disable_task_queue_message(
         fallback_chat_id=fallback_chat_id,
         skip_chat_id=skip_chat_id,
         skip_message_id=skip_message_id,
+        general_link_ad_name=ad_name,
     )
 
 
@@ -630,6 +704,7 @@ async def broadcast_enable_task_queue_message(
         fallback_chat_id=fallback_chat_id,
         skip_chat_id=skip_chat_id,
         skip_message_id=skip_message_id,
+        general_link_ad_name=ad_name,
     )
 
 
@@ -667,6 +742,7 @@ async def broadcast_disable_task_runtime_message(
         text=text,
         fallback_token=fallback_token,
         fallback_chat_id=fallback_chat_id,
+        general_link_ad_name=ad_name,
     )
 
 
@@ -704,6 +780,7 @@ async def broadcast_enable_task_runtime_message(
         text=text,
         fallback_token=fallback_token,
         fallback_chat_id=fallback_chat_id,
+        general_link_ad_name=ad_name,
     )
 
 
@@ -754,4 +831,5 @@ async def broadcast_enable_recommendation_message(
         reply_markup=message.reply_markup,
         fallback_token=fallback_token,
         fallback_chat_id=fallback_chat_id,
+        general_link_ad_name=ad_name,
     )

@@ -173,6 +173,12 @@ class TelegramSettings(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     poller_offset: Mapped[int | None] = mapped_column(Integer)
     # URL мини-приложения (Web App) для inline-кнопки.
     web_app_url: Mapped[str | None] = mapped_column(String(512))
+    # Привязки форумных топиков супергруппы для маршрутизации уведомлений.
+    thread_id_warning: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    thread_id_stop: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    thread_id_enable: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    thread_id_ops: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    thread_id_general: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 # === Оффер ===
@@ -869,3 +875,23 @@ class PlanRun(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     step_log: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, default=list)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class AICache(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """Кэш AI-аналитики для Neo Control Room.
+
+    Хранит результаты анализа панелей, алертов и брифингов
+    во избежание избыточных обращений к LLM.
+    """
+
+    __tablename__ = "ai_cache"
+
+    block_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    scope_key: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    payload_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    tokens_in: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    tokens_out: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )

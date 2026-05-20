@@ -1328,6 +1328,33 @@ def _build_performance_timeline_from_metric_history_rows(
     return timeline
 
 
+def _build_flat_performance_timeline(
+    *,
+    period: str,
+    now: datetime,
+    cutoff: datetime,
+) -> list[DashboardPerformanceTimelinePointSchema]:
+    """Плоский таймлайн с нулями — без snapshot-buckets, которые вводят в заблуждение."""
+    current_time = now or _dashboard_now()
+    cutoff = _to_dashboard_timezone(cutoff)
+    step = _timeline_bucket_step(period)
+    bucket_cursor = _timeline_bucket_start(cutoff, period)
+    last_bucket = _timeline_bucket_start(current_time, period)
+    timeline: list[DashboardPerformanceTimelinePointSchema] = []
+    while bucket_cursor <= last_bucket:
+        timeline.append(
+            DashboardPerformanceTimelinePointSchema(
+                timestamp=bucket_cursor.isoformat(),
+                label=_timeline_bucket_label(bucket_cursor, period),
+                spend=Decimal("0"),
+                registrations=0,
+                deposits=0,
+            )
+        )
+        bucket_cursor += step
+    return timeline
+
+
 async def _load_performance_timeline_from_metric_history(
     db: AsyncSession,
     *,
@@ -1705,31 +1732,31 @@ async def get_dashboard_performance(
         cutoff=cutoff,
         fake_map=fake_map,
     )
-    # Используем metric_timeline только если есть хотя бы одна точка с реальными данными.
-    # Массив из одних нулей не должен перезаписывать корректный snapshot-based timeline.
+    # Таймлайн строим только из metric_history; без неё — плоские нули (не snapshot-buckets).
     has_real_data = any(
         (float(pt.spend) > 0 or (pt.registrations or 0) > 0 or (pt.deposits or 0) > 0)
         for pt in metric_timeline
     )
-    snapshot_pts = len(payload.timeline)
     metric_pts = len(metric_timeline)
     if metric_timeline and has_real_data:
         import logging as _logging
 
         _logging.getLogger(__name__).debug(
-            "DashboardTimeline: выбран metric_history (%d точек), snapshot имел %d точек",
+            "DashboardTimeline: выбран metric_history (%d точек)",
             metric_pts,
-            snapshot_pts,
         )
         payload.timeline = metric_timeline
     else:
         import logging as _logging
 
         _logging.getLogger(__name__).debug(
-            "DashboardTimeline: оставлен snapshot-based (%d точек), "
-            "metric_history имел %d точек (все нули или пуст)",
-            snapshot_pts,
+            "DashboardTimeline: metric_history пуст или нулевой (%d точек) — плоский таймлайн",
             metric_pts,
+        )
+        payload.timeline = _build_flat_performance_timeline(
+            period=period,
+            now=now_for_payload,
+            cutoff=cutoff,
         )
     return payload
 
@@ -2516,8 +2543,12 @@ async def get_spend_history(
     hours: int = Query(24, ge=1, le=168),
     db: AsyncSession = Depends(get_db),
 ):
-    """История расходов — агрегация из AlertEvent по временным бакетам."""
-    # Возвращаем последние снэпшоты как историю
+    """Сырые строки AdSnapshot за окно hours (не агрегированные бакеты).
+
+    Каждая запись — состояние объявления на момент last_observed_at с кумулятивными
+    метриками Ads Manager. Для графиков dashboard используйте /dashboard/performance
+    или /dashboard/chart-data. Эндпоинт сохранён для обратной совместимости.
+    """
     cutoff = datetime.now(UTC) - timedelta(hours=hours)
     q = (
         select(AdSnapshot)

@@ -35,7 +35,7 @@ from core.models import (
     TelegramSettings,
 )
 from core.settings_queries import get_or_create_observer_settings
-from core.telegram.client import TelegramBotClient
+from core.telegram.client import TelegramAPIError, TelegramBotClient
 from core.telegram.delivery import (
     TelegramAdMessageContext,
     broadcast_disable_task_queue_message,
@@ -47,6 +47,7 @@ from core.telegram.service import (
     get_or_create_telegram_settings,
     is_owner_role,
     is_private_chat,
+    is_supergroup_chat,
     load_web_app_url,
     resolve_telegram_access,
 )
@@ -538,6 +539,8 @@ async def _render_help(
         "/start — главное меню\n"
         "/app — открыть приложение\n"
         "/ask &lt;вопрос&gt; — спросить AI-помощника\n"
+        "/bind_thread &lt;WARNING|STOP|ENABLE|OPS|GENERAL&gt; — привязать текущий форумный топик к стриму\n"
+        "/init_topics — создать недостающие форумные топики (WARNING/STOP/ENABLE/OPS) и привязать их\n"
         "/help — эта справка\n\n"
         "Все настройки, статистика, отключение объявлений и снуз — в Mini-App. "
         "Откройте приложение из меню слева от поля ввода или командой /app."
@@ -547,6 +550,186 @@ async def _render_help(
         chat_id=chat_id,
         message_thread_id=message_thread_id,
         text=text,
+    )
+
+
+_BIND_THREAD_STREAMS = ("WARNING", "STOP", "ENABLE", "OPS", "GENERAL")
+_BIND_THREAD_USAGE = (
+    "❌ Использование: <code>/bind_thread WARNING|STOP|ENABLE|OPS|GENERAL</code>\n"
+    "Команда должна быть отправлена из нужного форумного топика."
+)
+
+
+async def _handle_bind_thread(
+    client: TelegramBotClient,
+    *,
+    chat_id: str,
+    chat_type: str | None,
+    message_thread_id: int | None,
+    access,
+    parts: list[str],
+) -> None:
+    """Привязывает текущий форумный топик к выбранному стриму уведомлений."""
+    if not _can_manage_settings(access):
+        await _send_current_topic_message(
+            client,
+            chat_id=chat_id,
+            message_thread_id=message_thread_id,
+            text=OWNER_ONLY_TEXT,
+        )
+        return
+
+    if not is_supergroup_chat(chat_type) or message_thread_id is None:
+        await _send_current_topic_message(
+            client,
+            chat_id=chat_id,
+            message_thread_id=message_thread_id,
+            text=(
+                "❌ Команду <code>/bind_thread</code> нужно вызывать из конкретного "
+                "форумного топика супергруппы."
+            ),
+        )
+        return
+
+    if len(parts) < 2:
+        await _send_current_topic_message(
+            client,
+            chat_id=chat_id,
+            message_thread_id=message_thread_id,
+            text=_BIND_THREAD_USAGE,
+        )
+        return
+
+    stream_arg = parts[1].strip().upper()
+    if stream_arg not in _BIND_THREAD_STREAMS:
+        await _send_current_topic_message(
+            client,
+            chat_id=chat_id,
+            message_thread_id=message_thread_id,
+            text=_BIND_THREAD_USAGE,
+        )
+        return
+
+    column_name = f"thread_id_{stream_arg.lower()}"
+    factory = get_session_factory()
+    async with factory() as session:
+        settings_row = await get_or_create_telegram_settings(session)
+        setattr(settings_row, column_name, int(message_thread_id))
+        await session.commit()
+
+    await _send_current_topic_message(
+        client,
+        chat_id=chat_id,
+        message_thread_id=message_thread_id,
+        text=(
+            f"✅ Топик привязан как <b>{stream_arg}</b> "
+            f"(thread_id=<code>{message_thread_id}</code>)."
+        ),
+    )
+
+
+# Целевые форумные топики: stream-ключ → (имя топика, цвет иконки).
+# Цвета — из официального списка Bot API createForumTopic.icon_color.
+_INIT_TOPICS_SPEC: tuple[tuple[str, str, int], ...] = (
+    ("warning", "⚠️ WARNING", 0xF1A30B),
+    ("stop", "🛑 STOP", 0xFB6F5F),
+    ("enable", "▶️ ENABLE", 0x6FB9F0),
+    ("ops", "🛠 OPS", 0x8EEE98),
+)
+
+
+async def _handle_init_topics(
+    client: TelegramBotClient,
+    *,
+    chat_id: str,
+    chat_type: str | None,
+    message_thread_id: int | None,
+    access,
+) -> None:
+    """Создаёт недостающие форумные топики и привязывает их к стримам.
+
+    Существующие привязки не трогает — пересоздание топиков не делает.
+    General (thread_id=1) проставляется автоматически, если ещё не задан.
+    """
+    if not _can_manage_settings(access):
+        await _send_current_topic_message(
+            client,
+            chat_id=chat_id,
+            message_thread_id=message_thread_id,
+            text=OWNER_ONLY_TEXT,
+        )
+        return
+
+    if not is_supergroup_chat(chat_type):
+        await _send_current_topic_message(
+            client,
+            chat_id=chat_id,
+            message_thread_id=message_thread_id,
+            text="❌ Команду <code>/init_topics</code> можно вызывать только в супергруппе.",
+        )
+        return
+
+    factory = get_session_factory()
+    created: list[tuple[str, int]] = []
+    kept: list[tuple[str, int]] = []
+    errors: list[str] = []
+
+    async with factory() as session:
+        settings_row = await get_or_create_telegram_settings(session)
+
+        # General — всегда thread_id=1 в форумах. Привязываем, если ещё пуст.
+        if settings_row.thread_id_general is None:
+            settings_row.thread_id_general = 1
+
+        for stream_key, topic_name, icon_color in _INIT_TOPICS_SPEC:
+            column = f"thread_id_{stream_key}"
+            current = getattr(settings_row, column, None)
+            if current is not None:
+                kept.append((stream_key.upper(), int(current)))
+                continue
+            try:
+                result = await client.create_forum_topic(
+                    chat_id=chat_id,
+                    name=topic_name,
+                    icon_color=icon_color,
+                )
+            except TelegramAPIError as exc:
+                logger.exception("createForumTopic failed for %s", stream_key)
+                errors.append(f"{stream_key.upper()}: {exc.description or 'ошибка API'}")
+                continue
+            new_thread_id = int(result.get("message_thread_id") or 0)
+            if new_thread_id <= 0:
+                errors.append(f"{stream_key.upper()}: пустой message_thread_id в ответе")
+                continue
+            setattr(settings_row, column, new_thread_id)
+            created.append((stream_key.upper(), new_thread_id))
+
+        await session.commit()
+
+    lines: list[str] = ["<b>Инициализация форумных топиков</b>"]
+    if created:
+        lines.append("\n✅ Созданы и привязаны:")
+        for name, tid in created:
+            lines.append(f"  • {name} — thread_id=<code>{tid}</code>")
+    if kept:
+        lines.append("\nℹ️ Уже были привязаны (не пересоздавались):")
+        for name, tid in kept:
+            lines.append(f"  • {name} — thread_id=<code>{tid}</code>")
+    if errors:
+        lines.append("\n⚠️ Ошибки:")
+        for err in errors:
+            lines.append(f"  • {err}")
+        lines.append(
+            "\nПроверьте, что бот — администратор супергруппы с правом <b>can_manage_topics</b>."
+        )
+    if not created and not errors and not kept:
+        lines.append("\nНечего делать.")
+
+    await _send_current_topic_message(
+        client,
+        chat_id=chat_id,
+        message_thread_id=message_thread_id,
+        text="\n".join(lines),
     )
 
 
@@ -1055,6 +1238,27 @@ async def handle_update(client: TelegramBotClient, update: dict) -> None:
                     "<code>/set warning 75</code>"
                 ),
             )
+        return
+
+    if cmd == "bind_thread":
+        await _handle_bind_thread(
+            client,
+            chat_id=chat_id,
+            chat_type=chat_type,
+            message_thread_id=message_thread_id,
+            access=access,
+            parts=parts,
+        )
+        return
+
+    if cmd == "init_topics":
+        await _handle_init_topics(
+            client,
+            chat_id=chat_id,
+            chat_type=chat_type,
+            message_thread_id=message_thread_id,
+            access=access,
+        )
         return
 
     if cmd == "app":

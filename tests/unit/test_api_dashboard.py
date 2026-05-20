@@ -1698,16 +1698,19 @@ def _make_timeline_point(spend="0.00", registrations=0, deposits=0):
     )
 
 
-# metric_timeline — пустой массив, должен остаться snapshot-based timeline
+# metric_timeline — пустой массив, должен быть плоский таймлайн (не snapshot-buckets)
 @pytest.mark.asyncio
-async def test_get_dashboard_performance_uses_snapshot_when_metric_timeline_empty(mock_db):
+async def test_get_dashboard_performance_uses_flat_timeline_when_metric_timeline_empty(mock_db):
     from unittest.mock import AsyncMock, MagicMock, patch
 
     from apps.api.routers.dashboard import get_dashboard_performance
 
-    snapshot_point = _make_timeline_point(spend="0.43")
+    flat_points = [
+        _make_timeline_point(spend="0.00"),
+        _make_timeline_point(spend="0.00"),
+    ]
     fake_payload = MagicMock()
-    fake_payload.timeline = [snapshot_point]
+    fake_payload.timeline = [_make_timeline_point(spend="99.00")]
 
     mock_db.scalar = AsyncMock(return_value=None)
     mock_db.execute = AsyncMock(
@@ -1734,7 +1737,10 @@ async def test_get_dashboard_performance_uses_snapshot_when_metric_timeline_empt
             "apps.api.routers.dashboard._build_dashboard_performance_payload",
             return_value=fake_payload,
         ),
-        # metric_timeline возвращает пустой список
+        patch(
+            "apps.api.routers.dashboard._build_flat_performance_timeline",
+            return_value=flat_points,
+        ),
         patch(
             "apps.api.routers.dashboard._load_performance_timeline_from_metric_history",
             new=AsyncMock(return_value=[]),
@@ -1742,20 +1748,19 @@ async def test_get_dashboard_performance_uses_snapshot_when_metric_timeline_empt
     ):
         result = await get_dashboard_performance(period="today", db=mock_db)
 
-    # Таймлайн должен остаться snapshot-based
-    assert result.timeline == [snapshot_point]
+    assert result.timeline == flat_points
 
 
-# metric_timeline — все нули, должен остаться snapshot-based timeline
+# metric_timeline — все нули, должен быть плоский таймлайн
 @pytest.mark.asyncio
-async def test_get_dashboard_performance_uses_snapshot_when_metric_timeline_all_zeros(mock_db):
+async def test_get_dashboard_performance_uses_flat_timeline_when_metric_timeline_all_zeros(mock_db):
     from unittest.mock import AsyncMock, MagicMock, patch
 
     from apps.api.routers.dashboard import get_dashboard_performance
 
-    snapshot_point = _make_timeline_point(spend="0.43")
+    flat_points = [_make_timeline_point(spend="0.00", registrations=0, deposits=0)]
     fake_payload = MagicMock()
-    fake_payload.timeline = [snapshot_point]
+    fake_payload.timeline = [_make_timeline_point(spend="0.43")]
 
     zero_points = [
         _make_timeline_point(spend="0.00", registrations=0, deposits=0) for _ in range(3)
@@ -1786,7 +1791,10 @@ async def test_get_dashboard_performance_uses_snapshot_when_metric_timeline_all_
             "apps.api.routers.dashboard._build_dashboard_performance_payload",
             return_value=fake_payload,
         ),
-        # metric_timeline возвращает массив из нулевых точек
+        patch(
+            "apps.api.routers.dashboard._build_flat_performance_timeline",
+            return_value=flat_points,
+        ),
         patch(
             "apps.api.routers.dashboard._load_performance_timeline_from_metric_history",
             new=AsyncMock(return_value=zero_points),
@@ -1794,8 +1802,7 @@ async def test_get_dashboard_performance_uses_snapshot_when_metric_timeline_all_
     ):
         result = await get_dashboard_performance(period="today", db=mock_db)
 
-    # Таймлайн должен остаться snapshot-based
-    assert result.timeline == [snapshot_point]
+    assert result.timeline == flat_points
 
 
 # metric_timeline — есть реальные данные, должен использоваться metric_timeline

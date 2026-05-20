@@ -13,6 +13,7 @@ from sqlalchemy import and_, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.deps import get_db
+from apps.api.routers.dashboard import _resolve_dashboard_performance_cutoff
 from apps.api.schemas import (
     HistoryAdRow,
     HistoryCampaignRow,
@@ -24,10 +25,16 @@ from apps.api.schemas import (
 )
 from core.domain import DisableTaskStatus
 from core.fake_deposits import (
+    effective_deposits as _effective_deposits,
+)
+from core.fake_deposits import (
     load_fake_deposits_by_campaign as _load_fake_deposits_by_campaign,
 )
 from core.fake_deposits import (
     load_fake_deposits_by_offer as _load_fake_deposits_by_offer,
+)
+from core.fake_deposits import (
+    load_fake_deposits_map as _load_fake_deposits_map,
 )
 from core.fake_deposits import (
     load_total_fake_deposits as _load_total_fake_deposits,
@@ -66,6 +73,27 @@ def _date_to_datetime(d: date) -> datetime:
     return datetime(d.year, d.month, d.day)
 
 
+def _resolve_offer_codes(
+    offer_code: str | None,
+    offer_codes: str | None = None,
+) -> list[str]:
+    """Собирает уникальный список кодов офферов из offer_code и offer_codes (через запятую)."""
+    merged: list[str] = []
+    if offer_codes:
+        merged.extend(part.strip() for part in offer_codes.split(",") if part.strip())
+    if offer_code and offer_code.strip():
+        merged.append(offer_code.strip())
+    seen: set[str] = set()
+    result: list[str] = []
+    for code in merged:
+        key = code.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(code)
+    return result
+
+
 async def _load_campaigns_for_offer(
     db: AsyncSession,
     offer_code: str,
@@ -78,6 +106,38 @@ async def _load_campaigns_for_offer(
     )
     result = await db.execute(q)
     return {row[0] for row in result.all()}
+
+
+async def _load_campaigns_for_offers(
+    db: AsyncSession,
+    offer_codes: list[str],
+) -> set[str] | None:
+    """Объединяет кампании для нескольких офферов."""
+    if not offer_codes:
+        return None
+    names: set[str] = set()
+    for code in offer_codes:
+        names |= await _load_campaigns_for_offer(db, code)
+    return names
+
+
+async def _fake_deposit_adjustment_for_offer_codes(
+    db: AsyncSession,
+    resolved_codes: list[str],
+) -> int:
+    """Сколько ложных депозитов вычесть при фильтре по офферу(ам)."""
+    if not resolved_codes:
+        return await _load_total_fake_deposits(db)
+    fake_by_offer = await _load_fake_deposits_by_offer(db)
+    return sum(fake_by_offer.get(code.upper(), 0) for code in resolved_codes)
+
+
+def _fake_from_campaign_rows(
+    campaigns: list[dict],
+    fake_by_campaign: dict[str, int],
+) -> int:
+    """Сумма ложных депозитов по списку кампаний архива."""
+    return sum(fake_by_campaign.get(str(c.get("campaign") or "").strip(), 0) for c in campaigns)
 
 
 def _filter_campaigns_by_offer(
@@ -138,6 +198,7 @@ async def _count_alerts_in_range(
     dt_to: datetime,
     offer_code: str | None,
     campaign_name: str | None = None,
+    offer_codes: list[str] | None = None,
 ) -> tuple[int, int]:
     """Считает общее кол-во алертов и стопов за период.
 
@@ -151,11 +212,14 @@ async def _count_alerts_in_range(
         )
     )
     # JOIN через fb_ads → fb_adsets → fb_campaigns при фильтре по офферу/кампании
-    if offer_code or campaign_name:
+    if offer_code or offer_codes or campaign_name:
         q = q.join(FbAd, AlertEvent.ad_id == FbAd.id)
         q = q.join(FbAdset, FbAd.adset_id == FbAdset.id)
         q = q.join(FbCampaign, FbAdset.campaign_id == FbCampaign.id)
-        if offer_code:
+        if offer_codes:
+            lowered = [code.lower() for code in offer_codes]
+            q = q.where(func.lower(FbCampaign.offer_code).in_(lowered))
+        elif offer_code:
             q = q.where(func.lower(FbCampaign.offer_code) == offer_code.lower())
         if campaign_name:
             q = q.where(FbCampaign.campaign_name == campaign_name)
@@ -177,6 +241,7 @@ async def _count_disables_in_range(
     dt_to: datetime,
     offer_code: str | None,
     campaign_name: str | None = None,
+    offer_codes: list[str] | None = None,
 ) -> int:
     """Считает успешные отключения за период."""
     q = select(func.count()).where(
@@ -186,11 +251,14 @@ async def _count_disables_in_range(
             DisableTask.status == DisableTaskStatus.SUCCEEDED,
         )
     )
-    if offer_code or campaign_name:
+    if offer_code or offer_codes or campaign_name:
         q = q.join(FbAd, DisableTask.ad_id == FbAd.id)
         q = q.join(FbAdset, FbAd.adset_id == FbAdset.id)
         q = q.join(FbCampaign, FbAdset.campaign_id == FbCampaign.id)
-        if offer_code:
+        if offer_codes:
+            lowered = [code.lower() for code in offer_codes]
+            q = q.where(func.lower(FbCampaign.offer_code).in_(lowered))
+        elif offer_code:
             q = q.where(func.lower(FbCampaign.offer_code) == offer_code.lower())
         if campaign_name:
             q = q.where(FbCampaign.campaign_name == campaign_name)
@@ -203,6 +271,7 @@ async def get_history_summary(
     date_from: str = Query(..., description="ISO дата начала"),
     date_to: str = Query(..., description="ISO дата конца"),
     offer_code: str | None = Query(None),
+    offer_codes: str | None = Query(None, description="Коды офферов через запятую"),
     campaign_name: str | None = Query(None, description="Фильтр по кампании"),
     db: AsyncSession = Depends(get_db),
 ) -> HistorySummarySchema:
@@ -211,44 +280,53 @@ async def get_history_summary(
     d_to = _parse_iso_date(date_to)
     dt_from = _date_to_datetime(d_from)
     dt_to = _date_to_datetime(d_to + timedelta(days=1))
+    resolved_codes = _resolve_offer_codes(offer_code, offer_codes)
+    primary_offer = resolved_codes[0] if len(resolved_codes) == 1 else offer_code
 
-    # Загружаем кампании оффера, если указан offer_code
     offer_campaigns: set[str] | None = None
-    if offer_code:
-        offer_campaigns = await _load_campaigns_for_offer(db, offer_code)
+    if resolved_codes:
+        offer_campaigns = await _load_campaigns_for_offers(db, resolved_codes)
 
     archives = await _load_archives(db, dt_from, dt_to)
     totals = _aggregate_archives(archives, offer_campaigns, campaign_name)
 
-    # Добавляем live данные для «сегодня»
-    today = date.today()
-    if d_from <= today <= d_to:
-        live = await _load_live_ads_for_today(db, offer_campaigns, campaign_name)
-        for data in live.values():
-            totals["spend"] += data["spend"]
-            totals["clicks"] += data["clicks"]
-            totals["leads"] += data["leads"]
-            totals["regs"] += data["regs"]
-            totals["deps"] += data["deps"]
+    # Live за сегодня — только если архив за сегодня ещё не закрыт (как в timeline).
+    if _should_merge_live_for_today(d_from, d_to, archives):
+        await _merge_live_totals_into_summary(
+            db,
+            totals,
+            offer_code=primary_offer,
+            campaign_name=campaign_name,
+            offer_codes=resolved_codes or None,
+        )
 
+    filter_offer = primary_offer if len(resolved_codes) == 1 else None
+    multi_codes = resolved_codes if len(resolved_codes) > 1 else None
     total_alerts, total_stops = await _count_alerts_in_range(
-        db, dt_from, dt_to, offer_code, campaign_name
+        db,
+        dt_from,
+        dt_to,
+        filter_offer,
+        campaign_name,
+        offer_codes=multi_codes,
     )
     total_disables = await _count_disables_in_range(
         db,
         dt_from,
         dt_to,
-        offer_code,
+        filter_offer,
         campaign_name,
+        offer_codes=multi_codes,
     )
 
-    # Корректировка ложных депозитов
-    total_fake = await _load_total_fake_deposits(db)
-    if total_fake > 0:
-        totals["deps"] = max(0, totals["deps"] - total_fake)
+    # Ложные депозиты в архивах — глобально; live уже скорректирован per-ad.
+    if archives:
+        total_fake = await _fake_deposit_adjustment_for_offer_codes(db, resolved_codes)
+        if total_fake > 0:
+            totals["deps"] = max(0, totals["deps"] - total_fake)
 
     # ROAS: revenue = deps × средний CPA по офферам
-    roas = await _calc_summary_roas(db, archives, totals, offer_code)
+    roas = await _calc_summary_roas(db, archives, totals, primary_offer)
 
     schema = _build_summary_schema(
         d_from,
@@ -428,8 +506,10 @@ def _archive_to_timeline_point(
     arch: CabinetDayArchive,
     offer_campaigns: set[str] | None,
     campaign_name: str | None = None,
+    fake_by_campaign: dict[str, int] | None = None,
 ) -> HistoryTimelinePoint:
     """Конвертирует один архив в точку таймлайна."""
+    filtered: list[dict] = []
     if offer_campaigns is not None or campaign_name:
         filtered = _apply_campaign_filters(
             arch.campaigns_json or [],
@@ -446,6 +526,16 @@ def _archive_to_timeline_point(
             "regs": int(s.get("regs", 0)),
             "deps": int(s.get("deps", 0)),
         }
+        if fake_by_campaign and arch.campaigns_json:
+            filtered = arch.campaigns_json
+
+    if fake_by_campaign:
+        fake_rows = filtered if filtered else (arch.campaigns_json or [])
+        if fake_rows:
+            m = {
+                **m,
+                "deps": max(0, m["deps"] - _fake_from_campaign_rows(fake_rows, fake_by_campaign)),
+            }
 
     spend = m["spend"]
     return HistoryTimelinePoint(
@@ -467,6 +557,7 @@ async def get_history_timeline(
     date_from: str = Query(..., description="ISO дата начала"),
     date_to: str = Query(..., description="ISO дата конца"),
     offer_code: str | None = Query(None),
+    offer_codes: str | None = Query(None, description="Коды офферов через запятую"),
     campaign_name: str | None = Query(None, description="Фильтр по кампании"),
     db: AsyncSession = Depends(get_db),
 ) -> list[HistoryTimelinePoint]:
@@ -475,14 +566,66 @@ async def get_history_timeline(
     d_to = _parse_iso_date(date_to)
     dt_from = _date_to_datetime(d_from)
     dt_to = _date_to_datetime(d_to + timedelta(days=1))
+    resolved_codes = _resolve_offer_codes(offer_code, offer_codes)
+    primary_offer = resolved_codes[0] if len(resolved_codes) == 1 else offer_code
 
-    # Загружаем кампании оффера, если указан offer_code
     offer_campaigns: set[str] | None = None
-    if offer_code:
-        offer_campaigns = await _load_campaigns_for_offer(db, offer_code)
+    if resolved_codes:
+        offer_campaigns = await _load_campaigns_for_offers(db, resolved_codes)
 
+    fake_by_campaign = await _load_fake_deposits_by_campaign(db)
     archives = await _load_archives(db, dt_from, dt_to)
-    return [_archive_to_timeline_point(arch, offer_campaigns, campaign_name) for arch in archives]
+    points = [
+        _archive_to_timeline_point(arch, offer_campaigns, campaign_name, fake_by_campaign)
+        for arch in archives
+    ]
+
+    # Точка за «сегодня» из live AdSnapshot — как в summary/campaigns, иначе график
+    # обрывается на вчера, пока сутки не заархивированы.
+    if _should_merge_live_for_today(d_from, d_to, archives) and not {
+        p.date for p in points
+    }.intersection({date.today().isoformat()}):
+        live = await _load_live_ads_for_today(
+            db,
+            offer_code=primary_offer,
+            campaign_name=campaign_name,
+            offer_codes=resolved_codes or None,
+        )
+        if live:
+            fake_map = await _load_fake_deposits_map(db)
+            totals = _sum_campaign_metrics(
+                [
+                    {
+                        "spend": data["spend"],
+                        "clicks": data["clicks"],
+                        "leads": data["leads"],
+                        "registrations": data["regs"],
+                        "deposits": _effective_deposits(
+                            data["deps"],
+                            data["fb_ad_id"],
+                            fake_map,
+                        ),
+                    }
+                    for data in live.values()
+                ]
+            )
+            spend = totals["spend"]
+            points.append(
+                HistoryTimelinePoint(
+                    date=date.today().isoformat(),
+                    spend=spend,
+                    clicks=totals["clicks"],
+                    leads=totals["leads"],
+                    registrations=totals["regs"],
+                    deposits=totals["deps"],
+                    cpc=_safe_div(spend, totals["clicks"]),
+                    cpl=_safe_div(spend, totals["leads"]),
+                    cpr=_safe_div(spend, totals["regs"]),
+                    cost_per_deposit=_safe_div(spend, totals["deps"]),
+                )
+            )
+
+    return points
 
 
 # ------------------------------------------------------------------
@@ -639,6 +782,7 @@ async def get_history_campaigns(
     date_from: str = Query(..., description="ISO дата начала"),
     date_to: str = Query(..., description="ISO дата конца"),
     offer_code: str | None = Query(None),
+    offer_codes: str | None = Query(None, description="Коды офферов через запятую"),
     campaign_name: str | None = Query(None, description="Фильтр по кампании"),
     sort_by: str = Query("spend"),
     sort_dir: str = Query("desc"),
@@ -649,11 +793,12 @@ async def get_history_campaigns(
     d_to = _parse_iso_date(date_to)
     dt_from = _date_to_datetime(d_from)
     dt_to = _date_to_datetime(d_to + timedelta(days=1))
+    resolved_codes = _resolve_offer_codes(offer_code, offer_codes)
+    primary_offer = resolved_codes[0] if len(resolved_codes) == 1 else offer_code
 
-    # Загружаем кампании оффера, если указан offer_code
     offer_campaigns: set[str] | None = None
-    if offer_code:
-        offer_campaigns = await _load_campaigns_for_offer(db, offer_code)
+    if resolved_codes:
+        offer_campaigns = await _load_campaigns_for_offers(db, resolved_codes)
 
     archives = await _load_archives(db, dt_from, dt_to)
     grouped = _group_campaigns_from_archives(
@@ -662,10 +807,14 @@ async def get_history_campaigns(
         campaign_name,
     )
 
-    # Добавляем live данные для «сегодня»
-    today = date.today()
-    if d_from <= today <= d_to:
-        live = await _load_live_ads_for_today(db, offer_campaigns, campaign_name)
+    # Добавляем live данные для «сегодня» (только актуальный срез кабинета).
+    if _should_merge_live_for_today(d_from, d_to, archives):
+        live = await _load_live_ads_for_today(
+            db,
+            offer_code=primary_offer,
+            campaign_name=campaign_name,
+            offer_codes=resolved_codes or None,
+        )
         for data in live.values():
             cname = data["campaign_name"]
             if not cname:
@@ -1278,12 +1427,65 @@ async def _load_ads_from_metric_history(
     return grouped
 
 
+def _period_includes_today(d_from: date, d_to: date) -> bool:
+    """Проверяет, попадает ли сегодняшняя дата в выбранный период."""
+    today = date.today()
+    return d_from <= today <= d_to
+
+
+def _has_archive_for_today(archives: list[CabinetDayArchive]) -> bool:
+    """Есть ли уже заархивированные сутки кабинета за сегодня."""
+    today = date.today()
+    return any(arch.started_at.date() == today for arch in archives)
+
+
+def _should_merge_live_for_today(
+    d_from: date,
+    d_to: date,
+    archives: list[CabinetDayArchive],
+) -> bool:
+    """Нужно ли подмешивать live-срез: период включает сегодня и архив за сегодня ещё не закрыт."""
+    return _period_includes_today(d_from, d_to) and not _has_archive_for_today(archives)
+
+
+async def _merge_live_totals_into_summary(
+    db: AsyncSession,
+    totals: dict,
+    *,
+    offer_code: str | None,
+    campaign_name: str | None,
+    offer_codes: list[str] | None,
+) -> None:
+    """Добавляет в totals актуальный live-срез (как dashboard performance)."""
+    live = await _load_live_ads_for_today(
+        db,
+        offer_code=offer_code,
+        campaign_name=campaign_name,
+        offer_codes=offer_codes,
+    )
+    if not live:
+        return
+    fake_map = await _load_fake_deposits_map(db)
+    for data in live.values():
+        totals["spend"] += data["spend"]
+        totals["clicks"] += data["clicks"]
+        totals["leads"] += data["leads"]
+        totals["regs"] += data["regs"]
+        totals["deps"] += _effective_deposits(
+            data["deps"],
+            data["fb_ad_id"],
+            fake_map,
+        )
+
+
 async def _load_live_ads_for_today(
     db: AsyncSession,
     offer_code: str | None = None,
     campaign_name: str | None = None,
+    offer_codes: list[str] | None = None,
 ) -> dict[str, dict]:
-    """Загружает live AdSnapshot данные для текущего дня через JOIN."""
+    """Загружает live AdSnapshot за текущие сутки кабинета (как dashboard performance)."""
+    observed_since = await _resolve_dashboard_performance_cutoff(db)
     q = (
         select(
             AdSnapshot,
@@ -1294,11 +1496,14 @@ async def _load_live_ads_for_today(
         .join(FbAd, AdSnapshot.ad_id == FbAd.id)
         .join(FbAdset, FbAd.adset_id == FbAdset.id)
         .join(FbCampaign, FbAdset.campaign_id == FbCampaign.id)
+        .where(AdSnapshot.last_observed_at >= observed_since)
     )
     if campaign_name:
         q = q.where(FbCampaign.campaign_name == campaign_name)
-    if offer_code:
-        q = q.where(func.lower(FbCampaign.offer_code) == offer_code.lower())
+    codes = offer_codes or ([offer_code] if offer_code else None)
+    if codes:
+        lowered = [code.lower() for code in codes]
+        q = q.where(func.lower(FbCampaign.offer_code).in_(lowered))
     result = await db.execute(q)
 
     grouped: dict[str, dict] = {}
@@ -1346,6 +1551,7 @@ async def get_history_ads(
     date_from: str = Query(..., description="ISO дата начала"),
     date_to: str = Query(..., description="ISO дата конца"),
     offer_code: str | None = Query(None),
+    offer_codes: str | None = Query(None, description="Коды офферов через запятую"),
     campaign_name: str | None = Query(None),
     sort_by: str = Query("spend"),
     sort_dir: str = Query("desc"),
@@ -1356,14 +1562,21 @@ async def get_history_ads(
     d_to = _parse_iso_date(date_to)
     dt_from = _date_to_datetime(d_from)
     dt_to = _date_to_datetime(d_to + timedelta(days=1))
+    resolved_codes = _resolve_offer_codes(offer_code, offer_codes)
+    primary_offer = resolved_codes[0] if len(resolved_codes) == 1 else offer_code
 
     # Основной источник — AdMetricHistory (прошлые дни)
-    grouped = await _load_ads_from_metric_history(db, dt_from, dt_to, offer_code, campaign_name)
+    grouped = await _load_ads_from_metric_history(db, dt_from, dt_to, primary_offer, campaign_name)
 
     # Live данные для «сегодня» из AdSnapshot (текущий цикл ещё не в истории)
     today = date.today()
     if d_from <= today <= d_to:
-        live = await _load_live_ads_for_today(db, offer_code, campaign_name)
+        live = await _load_live_ads_for_today(
+            db,
+            offer_code=primary_offer,
+            campaign_name=campaign_name,
+            offer_codes=resolved_codes or None,
+        )
         for fb_ad_id, data in live.items():
             if fb_ad_id in grouped:
                 # Метрики за сегодня уже могут быть частично в history —

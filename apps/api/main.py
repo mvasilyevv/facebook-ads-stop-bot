@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.deps import get_db, require_api_key_or_tma, verify_api_key
 from apps.api.routers import (
+    ai,
     campaign_scripts,
     chat,
     creative_tools,
@@ -119,6 +120,8 @@ app.include_router(creative_tools.router, dependencies=_api_key_dep)
 app.include_router(campaign_scripts.router, dependencies=_api_key_dep)
 # AI-чат — доступен из web-UI (api-key) и mini-app (TMA bearer)
 app.include_router(chat.router, dependencies=_api_key_or_tma_dep)
+# AI-анализ — доступен из web-UI и mini-app
+app.include_router(ai.router, dependencies=_api_key_or_tma_dep)
 # Health-check роутер без авторизации
 app.include_router(health.router)
 # TMA роутер (аутентификация собственная, через initData)

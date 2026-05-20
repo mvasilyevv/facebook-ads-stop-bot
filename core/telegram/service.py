@@ -31,9 +31,22 @@ class TelegramDestination:
     username: str
     first_name: str
     is_primary: bool = False
+    thread_id_warning: int | None = None
+    thread_id_stop: int | None = None
+    thread_id_enable: int | None = None
+    thread_id_ops: int | None = None
+    thread_id_general: int | None = None
 
     def thread_id_for_stream(self, stream_kind: TelegramNotificationStream) -> int | None:
-        """Всегда возвращает None — forum-topic режим удалён."""
+        """Возвращает thread_id топика для указанного стрима или None."""
+        if stream_kind == TelegramNotificationStream.WARNING:
+            return self.thread_id_warning
+        if stream_kind == TelegramNotificationStream.STOP:
+            return self.thread_id_stop
+        if stream_kind == TelegramNotificationStream.ENABLE:
+            return self.thread_id_enable
+        if stream_kind == TelegramNotificationStream.OPS:
+            return self.thread_id_ops
         return None
 
 
@@ -141,6 +154,11 @@ def _destination_from_settings(settings_row: TelegramSettings) -> TelegramDestin
         username=settings_row.owner_username or "",
         first_name=settings_row.owner_first_name or "",
         is_primary=True,
+        thread_id_warning=settings_row.thread_id_warning,
+        thread_id_stop=settings_row.thread_id_stop,
+        thread_id_enable=settings_row.thread_id_enable,
+        thread_id_ops=settings_row.thread_id_ops,
+        thread_id_general=settings_row.thread_id_general,
     )
 
 
