@@ -16,8 +16,6 @@ export default function CPLTimeline() {
   const fetchData = async () => {
     setLoading(true);
     try {
-      const data = await getAIAnalysis('cpl_timeline', 'global', false);
-      
       // Демонстрационные исторические данные за 8 дней
       const cplPoints = [
         { date: '12 мая', value: 4.2, details: 'Зарегистрировано: 48 лидов, CPA = 5.0$' },
@@ -42,7 +40,6 @@ export default function CPLTimeline() {
       ];
 
       setPoints(metricMode === 'CPL' ? cplPoints : cpdPoints);
-      setAiAnalysis(data.content);
     } catch (err) {
       console.error(err);
     } finally {

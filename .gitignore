@@ -28,6 +28,7 @@ __pycache__/
 .mcp.json
 .playwright-mcp/
 .superpowers/
+scratch/
 
 # Временные папки, логи и результаты тестов
 .tmp

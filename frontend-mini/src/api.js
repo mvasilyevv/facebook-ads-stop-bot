@@ -106,6 +106,13 @@ export async function askAI(messages, allowTools = true) {
 }
 
 // AI-аналитика с кэшированием
-export async function getAIAnalysis(blockType, scopeKey, forceRefresh = false) {
-  return fetchJson(`/ai/analyze?block_type=${blockType}&scope_key=${scopeKey}&force_refresh=${forceRefresh}`);
+export async function getAIAnalysis(blockType, scopeKey = "global", forceRefresh = false) {
+  return fetchJson("/ai/analyze", {
+    method: "POST",
+    body: JSON.stringify({
+      block_type: blockType,
+      scope_key: scopeKey,
+      force_refresh: forceRefresh,
+    }),
+  });
 }
