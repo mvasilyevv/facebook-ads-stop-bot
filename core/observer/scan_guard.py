@@ -1,12 +1,19 @@
 # -*- coding: utf-8 -*-
-"""ZeroScanGuard: инкапсулирует логику пропуска подозрительных батчей снэпшотов."""
+"""ZeroScanGuard: инкапсулирует логику пропуска подозрительных батчей снэпшотов.
+
+Защищает от затирания живого среза в случае временного сбоя парсинга
+или временно неполного ответа Facebook. Любой пустой или подозрительно
+урезанный батч требует подтверждения на следующем цикле.
+
+Логика смены суток кабинета вынесена в endpoint
+POST /api/observer/start-new-cabinet-day и больше не триггерится guard'ом.
+"""
 
 from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
-
-from core.cabinet_day import is_cabinet_day_reset_scan
+from enum import Enum
 
 logger = logging.getLogger(__name__)
 
@@ -14,37 +21,64 @@ _SUSPICIOUS_PARTIAL_BATCH_DROP_RATIO = 0.85
 _SUSPICIOUS_PARTIAL_BATCH_MIN_DROP = 5
 
 
+class GuardSkipReason(str, Enum):
+    """Причина, по которой guard просит пропустить батч."""
+
+    ZERO_SCAN_PENDING = "guard_pending_zero"
+    PARTIAL_BATCH_PENDING = "guard_pending_partial"
+
+
+def _is_zero_batch(snapshot_data: list[dict]) -> bool:
+    """True, если в батче все ключевые метрики у всех записей равны нулю/None."""
+    metrics_to_check = (
+        "spend",
+        "clicks",
+        "leads",
+        "registrations",
+        "deposits",
+    )
+    for item in snapshot_data:
+        for metric in metrics_to_check:
+            value = item.get(metric)
+            if value in (None, 0, "0", "0.0", "0.00"):
+                continue
+            try:
+                if float(value) != 0.0:
+                    return False
+            except (TypeError, ValueError):
+                continue
+    return True
+
+
 class ZeroScanGuard:
     """Отслеживает подозрительные zero-scan и partial-batch сигналы.
 
-    Предотвращает затирание актуального снимка в случае временного
-    сбоя парсинга или reset-кабинета без второго подтверждения.
+    Возвращает GuardSkipReason | None из should_skip:
+        - ZERO_SCAN_PENDING — первый полный zero-batch, ждём подтверждения.
+        - PARTIAL_BATCH_PENDING — первый подозрительно урезанный батч.
+        - None — батч принят (сохраняется).
     """
 
     def __init__(self) -> None:
         self._pending_zero_scan_at: datetime | None = None
         self._pending_partial_batch_at: datetime | None = None
         self._last_accepted_size: int | None = None
-        self._last_accepted_was_zero_scan = False
 
     def initialize_from_count(self, count: int) -> None:
-        """Инициализирует базовый размер батча из БД при старте воркера.
-
-        Вызывается один раз перед первым циклом сканирования, чтобы защита
-        от частичных батчей работала с первого же цикла после перезапуска.
-        """
+        """Восстанавливает базовый размер батча из БД при старте воркера."""
         if self._last_accepted_size is None and count > 0:
             self._last_accepted_size = count
             logger.info(
-                "ZeroScanGuard: базовый размер батча восстановлен из БД: %s снэпшотов", count
+                "ZeroScanGuard: базовый размер батча восстановлен из БД: %s снэпшотов",
+                count,
             )
 
-    def should_skip(self, snapshot_data: list[dict]) -> bool:
-        """Возвращает True если батч подозрителен и должен быть пропущен."""
+    def should_skip(self, snapshot_data: list[dict]) -> GuardSkipReason | None:
+        """Возвращает причину skip или None если батч можно сохранять."""
         if not snapshot_data:
             self._pending_zero_scan_at = None
             self._pending_partial_batch_at = None
-            return False
+            return None
 
         scan_started_at = max(
             (
@@ -56,68 +90,54 @@ class ZeroScanGuard:
         )
         snapshot_count = len(snapshot_data)
 
-        if not is_cabinet_day_reset_scan(snapshot_data):
-            if self._pending_zero_scan_at is not None:
+        if _is_zero_batch(snapshot_data):
+            if self._pending_zero_scan_at is None:
+                self._pending_zero_scan_at = scan_started_at
                 logger.warning(
-                    "Observer: zero-scan не подтвердился на следующем цикле, "
-                    "продолжаю работать по прежнему живому срезу"
+                    "Observer: получен полный zero-batch без подтверждения — "
+                    "пропускаю сохранение до следующего цикла"
                 )
+                return GuardSkipReason.ZERO_SCAN_PENDING
+            logger.warning("Observer: повторный zero-batch подтверждён — принимаю нулевой срез")
             self._pending_zero_scan_at = None
-            self._last_accepted_was_zero_scan = False
+            self._last_accepted_size = snapshot_count
+            return None
 
-            previous_snapshot_count = self._last_accepted_size
-            suspicious_partial_batch = (
-                previous_snapshot_count is not None
-                and previous_snapshot_count - snapshot_count >= _SUSPICIOUS_PARTIAL_BATCH_MIN_DROP
-                and snapshot_count < previous_snapshot_count * _SUSPICIOUS_PARTIAL_BATCH_DROP_RATIO
+        if self._pending_zero_scan_at is not None:
+            logger.warning(
+                "Observer: zero-batch не подтвердился на следующем цикле, "
+                "продолжаю работать по живому срезу"
             )
-            if suspicious_partial_batch:
-                if self._pending_partial_batch_at is None:
-                    self._pending_partial_batch_at = scan_started_at
-                    logger.warning(
-                        "Observer: получен подозрительно неполный батч (%s вместо %s) — "
-                        "пропускаю сохранение до повторного подтверждения",
-                        snapshot_count,
-                        previous_snapshot_count,
-                    )
-                    return True
+        self._pending_zero_scan_at = None
 
+        previous_size = self._last_accepted_size
+        suspicious_partial = (
+            previous_size is not None
+            and previous_size - snapshot_count >= _SUSPICIOUS_PARTIAL_BATCH_MIN_DROP
+            and snapshot_count < previous_size * _SUSPICIOUS_PARTIAL_BATCH_DROP_RATIO
+        )
+        if suspicious_partial:
+            if self._pending_partial_batch_at is None:
+                self._pending_partial_batch_at = scan_started_at
                 logger.warning(
-                    "Observer: повторный неполный батч подтверждён (%s вместо %s) — "
-                    "принимаю новый урезанный срез",
+                    "Observer: подозрительно неполный батч (%s вместо %s) — "
+                    "пропускаю сохранение до подтверждения",
                     snapshot_count,
-                    previous_snapshot_count,
+                    previous_size,
                 )
-                self._pending_partial_batch_at = None
-                self._last_accepted_size = snapshot_count
-                return False
-
-            if self._pending_partial_batch_at is not None:
-                logger.warning(
-                    "Observer: неполный батч не подтвердился на следующем цикле, "
-                    "сохраняю только восстановленный полный срез"
-                )
+                return GuardSkipReason.PARTIAL_BATCH_PENDING
+            logger.warning(
+                "Observer: повторный неполный батч подтверждён (%s вместо %s) — "
+                "принимаю урезанный срез",
+                snapshot_count,
+                previous_size,
+            )
             self._pending_partial_batch_at = None
             self._last_accepted_size = snapshot_count
-            return False
+            return None
 
+        if self._pending_partial_batch_at is not None:
+            logger.warning("Observer: неполный батч не подтвердился, сохраняю восстановленный срез")
         self._pending_partial_batch_at = None
-        if self._last_accepted_was_zero_scan:
-            self._last_accepted_size = snapshot_count
-            return False
-
-        if self._pending_zero_scan_at is None:
-            self._pending_zero_scan_at = scan_started_at
-            logger.warning(
-                "Observer: получен полный zero-scan без подтверждения — "
-                "пропускаю сохранение текущего батча до следующего цикла"
-            )
-            return True
-
-        logger.warning(
-            "Observer: повторный zero-scan подтверждён — принимаю новый нулевой срез кабинета"
-        )
-        self._pending_zero_scan_at = None
         self._last_accepted_size = snapshot_count
-        self._last_accepted_was_zero_scan = True
-        return False
+        return None

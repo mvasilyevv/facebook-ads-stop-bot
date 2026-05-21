@@ -1,5 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Батчевый upsert снэпшотов и управление границей суток кабинета."""
+"""Батчевый upsert снэпшотов observer'а.
+
+Граница суток кабинета теперь сдвигается только вручную через
+POST /api/observer/start-new-cabinet-day и не зависит от scan-цикла.
+"""
 
 from __future__ import annotations
 
@@ -11,108 +15,19 @@ from decimal import Decimal
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
-from core.cabinet_day import (
-    build_cabinet_day_archive_payload,
-    has_any_metric_value,
-    is_cabinet_day_reset_scan,
-)
 from core.db import get_session_factory
 from core.models import (
     AdMetricHistory,
     AdSnapshot,
-    CabinetDayArchive,
     FbAd,
     FbAdset,
     FbCampaign,
 )
 from core.observer.regression_guard import RegressionGuard
 from core.observer.scan_guard import ZeroScanGuard
-from core.settings_queries import get_or_create_observer_settings
 
 logger = logging.getLogger(__name__)
-
-
-async def _maybe_rollover_cabinet_day(session: AsyncSession, snapshot_data: list[dict]) -> None:
-    """Переводит границу суток кабинета при полном zero-scan и архивирует прошлый день."""
-    if not snapshot_data:
-        return
-
-    settings = await get_or_create_observer_settings(session)
-    scan_started_at = max(
-        (item.get("last_observed_at") for item in snapshot_data if item.get("last_observed_at")),
-        default=datetime.now(UTC),
-    )
-    is_zero_scan = is_cabinet_day_reset_scan(snapshot_data)
-
-    stmt = select(AdSnapshot).options(
-        selectinload(AdSnapshot.fb_ad).selectinload(FbAd.adset).selectinload(FbAdset.campaign),
-    )
-    if settings.cabinet_day_started_at is not None:
-        stmt = stmt.where(AdSnapshot.last_observed_at >= settings.cabinet_day_started_at)
-
-    current_snapshots = (await session.execute(stmt)).scalars().all()
-
-    if settings.cabinet_day_started_at is None:
-        if not is_zero_scan:
-            return
-
-        baseline_started_at = min(
-            (
-                snapshot.last_observed_at
-                for snapshot in current_snapshots
-                if snapshot.last_observed_at is not None
-            ),
-            default=scan_started_at,
-        )
-        if current_snapshots and any(
-            has_any_metric_value(snapshot) for snapshot in current_snapshots
-        ):
-            summary_json, campaigns_json, ads_json = build_cabinet_day_archive_payload(
-                current_snapshots
-            )
-            session.add(
-                CabinetDayArchive(
-                    started_at=baseline_started_at,
-                    ended_at=scan_started_at,
-                    reset_detected_at=scan_started_at,
-                    ads_count=len(current_snapshots),
-                    summary_json=summary_json,
-                    campaigns_json=campaigns_json,
-                    ads_json=ads_json,
-                )
-            )
-        settings.cabinet_day_started_at = scan_started_at
-        logger.info("Observer: впервые зафиксировано начало суток кабинета по zero-scan")
-        return
-
-    if not is_zero_scan:
-        return
-
-    if not current_snapshots or not any(
-        has_any_metric_value(snapshot) for snapshot in current_snapshots
-    ):
-        return
-
-    summary_json, campaigns_json, ads_json = build_cabinet_day_archive_payload(current_snapshots)
-    session.add(
-        CabinetDayArchive(
-            started_at=settings.cabinet_day_started_at,
-            ended_at=scan_started_at,
-            reset_detected_at=scan_started_at,
-            ads_count=len(current_snapshots),
-            summary_json=summary_json,
-            campaigns_json=campaigns_json,
-            ads_json=ads_json,
-        )
-    )
-    settings.cabinet_day_started_at = scan_started_at
-    logger.info(
-        "Observer: зафиксировано начало новых суток кабинета по zero-scan, "
-        "архивировано %s объявлений",
-        len(current_snapshots),
-    )
 
 
 # Метрики, изменение которых триггерит запись в ad_metric_history
@@ -615,14 +530,16 @@ async def batch_save_snapshots(
     """
     if not snapshot_data:
         return False
-    if not bypass_scan_guard and scan_guard.should_skip(snapshot_data):
+    if not bypass_scan_guard and scan_guard.should_skip(snapshot_data) is not None:
         return False
+
+    # Параметр allow_cabinet_rollover зарезервирован для обратной совместимости:
+    # rollover суток теперь делается только вручную через
+    # POST /api/observer/start-new-cabinet-day и больше не триггерится из observer'а.
+    _ = allow_cabinet_rollover
 
     factory = get_session_factory()
     async with factory() as session:
-        if allow_cabinet_rollover:
-            await _maybe_rollover_cabinet_day(session, snapshot_data)
-
         # 1. Upsert fb_campaigns — справочник кампаний с привязкой оффера
         campaign_id_map = await _upsert_fb_campaigns(session, snapshot_data)
 
@@ -647,14 +564,16 @@ async def batch_save_snapshots(
         snapshot_rows = _prepare_snapshot_upsert_data(
             snapshot_data, ad_id_map, current_scan_id=current_scan_id
         )
-        is_reset = is_cabinet_day_reset_scan(snapshot_data)
+        # После выноса cabinet_day rollover в отдельный endpoint observer всегда
+        # работает только с инкрементальными метриками — regression guard поднимает
+        # принудительно принятые fb_ad_id без автоматических исключений.
         force_ids: frozenset[str] = frozenset()
-        if regression_guard and not is_reset:
+        if regression_guard:
             force_ids = frozenset(regression_guard.pop_force_accepted())
         await _upsert_ad_snapshots(
             session,
             snapshot_rows,
-            allow_metric_regression=is_reset,
+            allow_metric_regression=False,
             force_accept_fb_ad_ids=force_ids,
         )
 

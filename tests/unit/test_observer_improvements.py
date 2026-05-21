@@ -167,7 +167,6 @@ async def test_batch_save_snapshots_single_query():
     scan_guard = ZeroScanGuard()
     with (
         patch("core.observer.snapshot_writer.get_session_factory", return_value=mock_factory),
-        patch("core.observer.snapshot_writer._maybe_rollover_cabinet_day", new=AsyncMock()),
         patch("core.observer.snapshot_writer._upsert_fb_campaigns", new=upsert_campaigns_mock),
         patch("core.observer.snapshot_writer._upsert_fb_adsets", new=upsert_adsets_mock),
         patch("core.observer.snapshot_writer._upsert_fb_ads", new=upsert_ads_mock),
@@ -246,10 +245,6 @@ async def test_batch_save_snapshots_preserves_identity_names_on_empty_update():
             "core.observer.snapshot_writer.get_session_factory",
             return_value=mock_factory,
         ),
-        patch(
-            "core.observer.snapshot_writer._maybe_rollover_cabinet_day",
-            new=AsyncMock(),
-        ),
     ):
         await batch_save_snapshots(snapshot_data, scan_guard, current_scan_id=1)
 
@@ -317,10 +312,6 @@ async def test_batch_save_snapshots_requires_confirmed_zero_scan_before_persist(
             return_value=mock_factory,
         ),
         patch(
-            "core.observer.snapshot_writer._maybe_rollover_cabinet_day",
-            new=AsyncMock(),
-        ) as rollover_mock,
-        patch(
             "core.observer.snapshot_writer._upsert_fb_campaigns",
             new=AsyncMock(return_value={"campaign": fake_campaign_id}),
         ),
@@ -348,7 +339,6 @@ async def test_batch_save_snapshots_requires_confirmed_zero_scan_before_persist(
 
     # Первый zero-scan пропущен, второй проходит — один commit
     assert mock_session.commit.call_count == 1
-    rollover_mock.assert_awaited_once()
 
 
 # Проверяем, что подтверждённый zero-scan не начинает бесконечно пропускаться через цикл.
@@ -406,10 +396,6 @@ async def test_batch_save_snapshots_accepts_zero_scan_after_confirmation():
     with (
         patch("core.observer.snapshot_writer.get_session_factory", return_value=mock_factory),
         patch(
-            "core.observer.snapshot_writer._maybe_rollover_cabinet_day",
-            new=AsyncMock(),
-        ),
-        patch(
             "core.observer.snapshot_writer._upsert_fb_campaigns",
             new=AsyncMock(return_value={"campaign": fake_campaign_id}),
         ),
@@ -424,14 +410,16 @@ async def test_batch_save_snapshots_accepts_zero_scan_after_confirmation():
         patch("core.observer.snapshot_writer._save_metric_deltas", new=AsyncMock(return_value=0)),
         patch("core.observer.snapshot_writer._upsert_ad_snapshots", new=AsyncMock()),
     ):
+        # Упрощённый guard всегда требует подтверждения для zero-batch:
+        # после принятого нулевого среза следующий zero снова попадает в pending.
         first_saved = await batch_save_snapshots(snapshot_data, scan_guard, current_scan_id=1)
         second_saved = await batch_save_snapshots(snapshot_data, scan_guard, current_scan_id=2)
         third_saved = await batch_save_snapshots(snapshot_data, scan_guard, current_scan_id=3)
 
     assert first_saved is False
     assert second_saved is True
-    assert third_saved is True
-    assert mock_session.commit.call_count == 2
+    assert third_saved is False
+    assert mock_session.commit.call_count == 1
 
 
 # Проверяем, что регресс накопительных метрик считается подозрительным.
@@ -558,10 +546,6 @@ async def test_batch_save_snapshots_requires_confirmed_partial_batch_before_pers
             return_value=mock_factory,
         ),
         patch(
-            "core.observer.snapshot_writer._maybe_rollover_cabinet_day",
-            new=AsyncMock(),
-        ),
-        patch(
             "core.observer.snapshot_writer._upsert_fb_campaigns",
             new=AsyncMock(return_value={"campaign": _uuid.uuid4()}),
         ),
@@ -644,10 +628,6 @@ async def test_batch_save_snapshots_bypasses_guard_for_fast_stop_partial_batch()
         patch(
             "core.observer.snapshot_writer.get_session_factory",
             return_value=mock_factory,
-        ),
-        patch(
-            "core.observer.snapshot_writer._maybe_rollover_cabinet_day",
-            new=AsyncMock(),
         ),
         patch(
             "core.observer.snapshot_writer._upsert_fb_campaigns",
@@ -1688,43 +1668,6 @@ async def test_refresh_runtime_ad_states_uses_db_as_source_of_truth():
         refreshed = await refresh_runtime_ad_states(current_states)
 
     assert refreshed == persisted_states
-
-
-# Проверяем что обычный ненулевой скан не инициализирует границу суток кабинета
-@pytest.mark.asyncio
-async def test_maybe_rollover_cabinet_day_waits_for_zero_scan():
-    """До первого полного zero-scan cabinet_day_started_at не должен выставляться."""
-    from core.observer.snapshot_writer import _maybe_rollover_cabinet_day
-
-    settings = MagicMock()
-    settings.cabinet_day_started_at = None
-
-    execute_result = MagicMock()
-    execute_result.scalars.return_value.all.return_value = []
-
-    session = AsyncMock()
-    session.execute = AsyncMock(return_value=execute_result)
-
-    snapshot_data = [
-        {
-            "fb_ad_id": "ad_1",
-            "campaign_name": "Campaign A",
-            "spend": Decimal("10.00"),
-            "clicks": 5,
-            "leads": 1,
-            "registrations": 0,
-            "deposits": 0,
-        }
-    ]
-
-    with patch(
-        "core.observer.snapshot_writer.get_or_create_observer_settings",
-        new=AsyncMock(return_value=settings),
-    ):
-        await _maybe_rollover_cabinet_day(session, snapshot_data)
-
-    assert settings.cabinet_day_started_at is None
-    session.add.assert_not_called()
 
 
 # --- Тесты reconnect (задача 2.4) ---
