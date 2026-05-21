@@ -1313,7 +1313,6 @@ async def observer_loop(
                         message="Сканирование выключено в настройках.",
                         clear_scan_schedule=True,
                     )
-                    logger.info("Observer: сканирование отключено, пропускаем цикл")
                     # Короткий сон перед следующей проверкой
                     await asyncio.sleep(10.0)
                     continue
