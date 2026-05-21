@@ -10,6 +10,7 @@ from typing import Any
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Boolean,
     DateTime,
     Enum,
@@ -98,6 +99,11 @@ class ObserverSettings(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     jitter_seconds: Mapped[int] = mapped_column(Integer, default=10)
     # Флаг включения/выключения сканирования из UI
     is_scanning_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Монотонный счётчик циклов observer. Инкрементируется в начале каждого реального
+    # сканирования и проставляется всем AdSnapshot этого батча в поле last_scan_id.
+    current_scan_id: Mapped[int] = mapped_column(
+        BigInteger, default=0, server_default="0", nullable=False
+    )
     # Флаг немедленного скана (устанавливается из UI, сбрасывается воркером)
     scan_requested: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     # Граница текущих суток кабинета, определяемая по zero-scan в observer
@@ -459,6 +465,9 @@ class AdSnapshot(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     telegram_message_id: Mapped[int | None] = mapped_column(Integer)
     telegram_group_key: Mapped[str | None] = mapped_column(String(64), index=True)
     last_observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    # Идентификатор последнего scan-цикла observer, обновившего эту запись.
+    # NULL у снэпшотов, созданных до внедрения механизма scan_id.
+    last_scan_id: Mapped[int | None] = mapped_column(BigInteger, index=True)
     # Снузер: если задан и не истёк, observer не шлёт повторный алерт
     snoozed_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
