@@ -95,7 +95,12 @@ from core.models import (
     Offer,
     OfferRuleConfig,
 )
-from core.settings_queries import get_observer_settings as _get_observer_settings
+from core.settings_queries import (
+    get_observer_settings as _get_observer_settings,
+)
+from core.settings_queries import (
+    get_or_create_observer_settings,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["dashboard"])
@@ -161,6 +166,38 @@ def _current_scan_cutoff(last_scan: datetime | None) -> datetime:
     if last_scan is None:
         return datetime.now(UTC)
     return last_scan - timedelta(minutes=30)
+
+
+_STATE_LABELS = {
+    AlertState.NORMAL: "Норма",
+    AlertState.WARNING_SENT: "Предупреждение",
+    AlertState.STOP_SENT: "Стоп",
+    AlertState.CLAIMED: "Ожидает OFF",
+    AlertState.DISABLED: "Отключён",
+}
+
+
+async def _build_state_distribution(
+    db: AsyncSession,
+    *,
+    current_scan_id: int,
+) -> list[dict[str, object]]:
+    """Распределение alert_state по последнему принятому батчу observer.
+
+    Берём только снэпшоты с last_scan_id == current_scan_id. Это ровно те,
+    которые попали в последний полный проход сканера, без зависимости от окна
+    времени. До первого скана возвращаем пустой список.
+    """
+    if current_scan_id <= 0:
+        return []
+    result = await db.execute(
+        select(AdSnapshot.alert_state, func.count().label("cnt"))
+        .where(AdSnapshot.last_scan_id == current_scan_id)
+        .group_by(AdSnapshot.alert_state)
+    )
+    return [
+        {"state": _STATE_LABELS.get(state, str(state)), "count": cnt} for state, cnt in result.all()
+    ]
 
 
 def _serialize_optional_datetime(value: datetime | None) -> str | None:
@@ -1300,14 +1337,15 @@ def _build_performance_timeline_from_metric_history_rows(
 
             prev_spend, prev_regs, prev_deps = running.get(ad_id, (Decimal("0"), 0, 0))
 
-            # Сброс (новый день кабинета): то что уже было — переносим в carry,
-            # чтобы cumulative не «проседал» при обнулении внутри объявления.
+            # Сброс (новый день кабинета): в carry уходит ровно разница,
+            # потерянная при обнулении, а не всё накопленное значение —
+            # иначе расход двоится при каждой переатрибуции FB.
             if cur_spend < prev_spend:
-                carry_spend += prev_spend
+                carry_spend += prev_spend - cur_spend
             if cur_regs < prev_regs:
-                carry_regs += prev_regs
+                carry_regs += prev_regs - cur_regs
             if cur_deps < prev_deps:
-                carry_deps += prev_deps
+                carry_deps += prev_deps - cur_deps
 
             running[ad_id] = (cur_spend, cur_regs, cur_deps)
 
@@ -2667,23 +2705,11 @@ async def get_chart_data(
         snapshots, offer_rule_map, ad_context_map=chart_ctx_map
     )
 
-    # 3. Распределение статусов — только по актуальному живому срезу.
-    state_result = await db.execute(
-        select(AdSnapshot.alert_state, func.count().label("cnt"))
-        .where(AdSnapshot.last_observed_at >= snapshot_cutoff)
-        .group_by(AdSnapshot.alert_state)
+    # 3. Распределение статусов — по последнему полному батчу observer (scan_id).
+    settings_row = await get_or_create_observer_settings(db)
+    state_distribution = await _build_state_distribution(
+        db, current_scan_id=int(settings_row.current_scan_id or 0)
     )
-    _state_labels = {
-        AlertState.NORMAL: "Норма",
-        AlertState.WARNING_SENT: "Предупреждение",
-        AlertState.STOP_SENT: "Стоп",
-        AlertState.CLAIMED: "Ожидает OFF",
-        AlertState.DISABLED: "Отключён",
-    }
-    state_distribution = [
-        {"state": _state_labels.get(state, str(state)), "count": cnt}
-        for state, cnt in state_result.all()
-    ]
 
     # 4. Топ объявлений по расходу — текущий живой срез, без исторического режима.
     top_ads_result = await db.execute(
