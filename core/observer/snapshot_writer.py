@@ -484,11 +484,15 @@ async def _save_metric_deltas(
 def _prepare_snapshot_upsert_data(
     snapshot_data: list[dict],
     ad_id_map: dict[str, _uuid.UUID],
+    *,
+    current_scan_id: int | None,
 ) -> list[dict]:
     """Подготавливает данные снэпшотов для upsert, убирая лишние поля.
 
     Удаляет campaign_name, adset_name, ad_name, resolved_offer_code, offer_id —
     эти данные теперь живут в нормализованных таблицах fb_campaigns/fb_adsets/fb_ads.
+    Дополнительно проставляет last_scan_id для каждого ряда — это ссылка на
+    текущий монотонный scan_id наблюдателя.
     """
     # Поля, которых нет в ad_snapshots после нормализации
     _REMOVED_FIELDS = {
@@ -505,6 +509,7 @@ def _prepare_snapshot_upsert_data(
             continue
         row = {k: v for k, v in item.items() if k not in _REMOVED_FIELDS}
         row["ad_id"] = ad_id
+        row["last_scan_id"] = current_scan_id
         cleaned.append(row)
     return cleaned
 
@@ -565,6 +570,7 @@ async def _upsert_ad_snapshots(
         "open_state_token": stmt.excluded.open_state_token,
         "telegram_group_key": stmt.excluded.telegram_group_key,
         "last_observed_at": stmt.excluded.last_observed_at,
+        "last_scan_id": stmt.excluded.last_scan_id,
     }
 
     upsert_kwargs = {
@@ -594,6 +600,7 @@ async def batch_save_snapshots(
     regression_guard: RegressionGuard | None = None,
     allow_cabinet_rollover: bool = True,
     bypass_scan_guard: bool = False,
+    current_scan_id: int | None = None,
 ) -> bool:
     """Батчевый upsert снэпшотов через INSERT ... ON CONFLICT DO UPDATE.
 
@@ -603,6 +610,8 @@ async def batch_save_snapshots(
     STOP-строк быстрого стопа, а не для полного среза сканирования.
     regression_guard — гард от ложных откатов накопительных метрик; при None используется
     старое поведение (любая регрессия блокирует).
+    current_scan_id — текущий монотонный scan_id наблюдателя, проставляется в last_scan_id
+    каждой записи ad_snapshots для последующей фильтрации stale-снимков.
     """
     if not snapshot_data:
         return False
@@ -635,7 +644,9 @@ async def batch_save_snapshots(
             )
 
         # 5. Upsert ad_snapshots — только метрики и состояние алертов
-        snapshot_rows = _prepare_snapshot_upsert_data(snapshot_data, ad_id_map)
+        snapshot_rows = _prepare_snapshot_upsert_data(
+            snapshot_data, ad_id_map, current_scan_id=current_scan_id
+        )
         is_reset = is_cabinet_day_reset_scan(snapshot_data)
         force_ids: frozenset[str] = frozenset()
         if regression_guard and not is_reset:
