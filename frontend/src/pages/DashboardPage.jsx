@@ -28,6 +28,7 @@ import { OfferLeaderboard } from '../components/OfferLeaderboard.jsx';
 import { CampaignComparativeBars } from '../components/CampaignComparativeBars.jsx';
 import { SpendAlertsChart } from '../components/SpendAlertsChart.jsx';
 import AIBriefingCard from '../components/ai/AIBriefingCard.jsx';
+import ObserverStatusTile from '../components/observer/ObserverStatusTile.jsx';
 
 const HealthMapPage = lazy(() => import('./HealthMapPage.jsx'));
 
@@ -178,11 +179,54 @@ const ANALYTICS_TABS = [
 /** KPI-полоса */
 function HeroKPIStrip({ performance, performanceYesterday }) {
   const s = performance?.summary;
-  const y = performanceYesterday?.summary;
   const fmt$ = _fmt$;
   const fmtN = _fmtN;
   const fmtPct = (v) => (v != null ? `${Number(v).toFixed(1)}%` : '—');
   const fmtRoas = _fmtRoas;
+
+  // Сравнение «как было вчера в это же время суток»: суммируем timeline
+  // вчерашнего дня по бакетам с timestamp <= текущего момента дня.
+  // Без этого ↓% сравнивает неполный сегодняшний день с полным вчерашним
+  // и в начале дня всегда «падает».
+  const yComparable = useMemo(() => {
+    const yTimeline = performanceYesterday?.timeline ?? [];
+    const yFullSummary = performanceYesterday?.summary ?? null;
+    if (!yTimeline.length) return yFullSummary;
+    const now = new Date();
+    const minutesOfDay = now.getHours() * 60 + now.getMinutes();
+    let spend = 0;
+    let leads = 0;
+    let registrations = 0;
+    let deposits = 0;
+    let lastPoint = null;
+    for (const pt of yTimeline) {
+      const ts = pt?.timestamp ? new Date(pt.timestamp) : null;
+      if (!ts || Number.isNaN(ts.getTime())) continue;
+      const pmin = ts.getHours() * 60 + ts.getMinutes();
+      if (pmin > minutesOfDay) break;
+      lastPoint = pt;
+    }
+    if (lastPoint) {
+      // timeline у нас уже cumulative, значит последняя точка ≤ «сейчас»
+      // и даёт расход/реги/депы вчера до того же часа.
+      spend = Number(lastPoint.spend ?? 0);
+      registrations = Number(lastPoint.registrations ?? 0);
+      deposits = Number(lastPoint.deposits ?? 0);
+    }
+    // Лиды и производные ставки берём из общего summary как fallback —
+    // в timeline их нет, но они меняются медленнее spend'а.
+    leads = Number(yFullSummary?.leads ?? 0);
+    const regToDep = registrations > 0 ? (deposits / registrations) * 100 : null;
+    const roas = yFullSummary?.roas ?? null;
+    return {
+      spend,
+      leads,
+      registrations,
+      deposits,
+      reg_to_dep_rate: regToDep,
+      roas,
+    };
+  }, [performanceYesterday]);
 
   const hasDeposits = Number(s?.deposits ?? 0) > 0;
   const hasSpend = Number(s?.spend ?? 0) > 0;
@@ -208,7 +252,7 @@ function HeroKPIStrip({ performance, performanceYesterday }) {
           <span className="kpi-label">{kpi.label}</span>
           <div className="flex items-baseline justify-between mt-xs">
             <span className={`kpi-value ${kpi.color}`}>{kpi.value}</span>
-            <Delta today={s?.[kpi.key]} yesterday={y?.[kpi.key]} />
+            <Delta today={s?.[kpi.key]} yesterday={yComparable?.[kpi.key]} />
           </div>
         </div>
       ))}
@@ -265,6 +309,11 @@ export default function DashboardPage({ onNavigate }) {
   });
 
   const chartPerformance = useMemo(() => {
+    // Для "today" sticky отключён: ноль на старте дня — валидное состояние,
+    // нельзя подменять его прошлым ненулевым значением (висла вчерашняя сумма).
+    if (chartPeriod === 'today') {
+      return rawChartPerformance;
+    }
     const spend = Number(rawChartPerformance?.summary?.spend ?? 0);
     if (spend > 0) {
       lastNonZeroChartPerformanceRef.current = rawChartPerformance;
@@ -272,14 +321,15 @@ export default function DashboardPage({ onNavigate }) {
       return rawChartPerformance;
     }
     return lastNonZeroChartPerformanceRef.current ?? rawChartPerformance;
-  }, [rawChartPerformance]);
+  }, [rawChartPerformance, chartPeriod]);
 
   const isStaleChartPerformance = useMemo(() => {
+    if (chartPeriod === 'today') return false;
     const spend = Number(rawChartPerformance?.summary?.spend ?? 0);
     if (spend > 0 || !lastNonZeroChartPerformanceRef.current) return false;
     const age = Date.now() - chartPerformanceCachedAtRef.current;
     return age > STALE_CHART_TTL_MS || Boolean(settings?.is_scanning_enabled);
-  }, [rawChartPerformance, settings?.is_scanning_enabled]);
+  }, [rawChartPerformance, settings?.is_scanning_enabled, chartPeriod]);
 
   useEffect(() => {
     const scanAt = settings?.last_scan_at;
@@ -556,6 +606,10 @@ export default function DashboardPage({ onNavigate }) {
         onCancelDisable={handleCancelDisableTask}
         onCreateEnableTask={handleEnableTask}
       />
+
+      <div className="mb-md">
+        <ObserverStatusTile />
+      </div>
 
       <HeroKPIStrip performance={performance} performanceYesterday={performanceYesterday} />
 

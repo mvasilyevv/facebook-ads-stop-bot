@@ -130,6 +130,11 @@ export const getAdTimeline = (fb_ad_id) => request(`/ads/${fb_ad_id}/timeline`);
 export const restartObserver = () => request('/observer/restart', { method: 'POST' });
 export const restartDisableWorker = () => request('/disable-worker/restart', { method: 'POST' });
 
+// Observer наблюдатель: статус для UI-плитки и ручная смена суток кабинета
+export const getObserverStatus = () => request('/observer/status');
+export const startNewCabinetDay = () =>
+  request('/observer/start-new-cabinet-day', { method: 'POST' });
+
 // Vision настройки
 export const getVisionSettings = () => request('/settings/vision');
 export const updateVisionSettings = (data) =>
@@ -212,13 +217,6 @@ export const disableAutoEnable = (fbAdId) =>
   request(`/dashboard/auto-enable-disabled/${fbAdId}`, { method: 'POST' });
 export const enableAutoEnable = (fbAdId) =>
   request(`/dashboard/auto-enable-disabled/${fbAdId}`, { method: 'DELETE' });
-
-/** AI-чат: отправляет историю сообщений, получает ответ + tool_calls. */
-export const askAI = (messages, allowTools = true) =>
-  request('/chat/ask', {
-    method: 'POST',
-    body: JSON.stringify({ messages, allow_tools: allowTools }),
-  });
 
 // --- Campaign Recorder ---
 export const startRecording = () =>
@@ -443,8 +441,8 @@ export async function getDashboardHealthMap() {
   };
 }
 
-export const getAIAnalysis = (block_type, scope_key = 'global', force_refresh = false) =>
+export const getAIAnalysis = (block_type, scope_key = 'global', force_refresh = false, client_data = null) =>
   request('/ai/analyze', {
     method: 'POST',
-    body: JSON.stringify({ block_type, scope_key, force_refresh }),
+    body: JSON.stringify({ block_type, scope_key, force_refresh, client_data }),
   });
