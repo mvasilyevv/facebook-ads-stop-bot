@@ -35,6 +35,7 @@ from core.disable_tasks import is_delivery_disabled
 from core.domain import AlertStage, AlertState
 from core.models import AdSnapshot, AlertEvent, FbAd
 from core.observer.db_queries import (
+    check_scanning_enabled,
     collect_reminder_alerts,
     consume_scan_flags_combined,
     get_disable_queue_pause_reason,
@@ -537,12 +538,31 @@ async def _send_alerts_to_telegram(
         logger.exception("Не удалось batch-сохранить AlertEvent (%d алертов)", len(delivered))
 
 
+async def _increment_scan_id() -> int:
+    """Атомарно инкрементирует current_scan_id и возвращает новое значение.
+
+    Используется в начале каждого реального scan-цикла observer'а, чтобы
+    помечать AdSnapshot этого батча. Идёт отдельной короткой транзакцией,
+    чтобы не зависеть от длинного цикла сканирования.
+    """
+    from core.settings_queries import get_or_create_observer_settings
+
+    factory = get_session_factory()
+    async with factory() as session:
+        settings = await get_or_create_observer_settings(session)
+        settings.current_scan_id = (settings.current_scan_id or 0) + 1
+        new_id = settings.current_scan_id
+        await session.commit()
+        return new_id
+
+
 async def _run_scan_cycle(
     *,
     offers: dict,
     rows: list[ScannedAdRow],
     ad_states: dict,
     fake_deposits_map: dict[str, int],
+    current_scan_id: int,
 ) -> tuple[list[AlertCandidate], list[AlertCandidate], list[dict]]:
     """Один полный цикл оценки правил: resolve офферов, evaluate, FSM-переходы.
 
@@ -773,13 +793,17 @@ async def _process_scan_results(
     snapshot_batch: list[dict],
     tg_client: TelegramBotClient | None,
     tg_destinations: list,
+    current_scan_id: int | None = None,
 ) -> None:
     """Обработка результатов скана: сохранение снэпшотов, алерты, disable tasks."""
     # Батчевый upsert снэпшотов
     snapshots_saved = False
     try:
         snapshots_saved = await batch_save_snapshots(
-            snapshot_batch, _scan_guard, regression_guard=_regression_guard
+            snapshot_batch,
+            _scan_guard,
+            regression_guard=_regression_guard,
+            current_scan_id=current_scan_id,
         )
         if snapshots_saved:
             logger.info("Батч-сохранение: %s снэпшотов", len(snapshot_batch))
@@ -871,6 +895,7 @@ async def _process_fast_stop_results(
     *,
     stop_alerts: list[AlertCandidate],
     snapshot_batch: list[dict],
+    current_scan_id: int | None = None,
 ) -> None:
     """Сохраняет STOP-строки и ставит задачи отключения до завершения полного сканирования."""
     if not stop_alerts:
@@ -884,6 +909,7 @@ async def _process_fast_stop_results(
             _scan_guard,
             allow_cabinet_rollover=False,
             bypass_scan_guard=True,
+            current_scan_id=current_scan_id,
         )
         if saved:
             logger.info(
@@ -1466,6 +1492,10 @@ async def observer_loop(
                             clear_last_error=True,
                         )
 
+                        # Инкрементируем scan_id один раз на полный цикл скана — все
+                        # снэпшоты этого батча получат одинаковый last_scan_id.
+                        current_scan_id = await _increment_scan_id()
+
                         # 1-2. Сканирование через gRPC browser-agent: refresh + первый проход
                         # settle_delay_seconds=0.0 — фиксированный sleep после refresh убран.
                         # Ожидание реальных строк/стабильности DOM на TS-стороне делает его лишним.
@@ -1477,6 +1507,16 @@ async def observer_loop(
                         )
                         timing["validate_columns_done"] = _time.monotonic()
                         async for event in scan_events:
+                            # Проверяем, не отключил ли пользователь сканирование в настройках
+                            if not await check_scanning_enabled():
+                                logger.info(
+                                    "Observer: сканирование отключено пользователем, экстренно закрываем поток"
+                                )
+                                close_stream = getattr(scan_events, "aclose", None)
+                                if close_stream is not None:
+                                    await close_stream()
+                                break
+
                             if isinstance(event, ScanResult):
                                 timing["scan_result"] = _time.monotonic()
                                 rows = event.rows
@@ -1523,6 +1563,7 @@ async def observer_loop(
                                     rows=event.new_rows,
                                     ad_states=progress_ad_states,
                                     fake_deposits_map=fake_deposits_map,
+                                    current_scan_id=current_scan_id,
                                 )
                                 if not progress_stop_alerts:
                                     continue
@@ -1584,6 +1625,7 @@ async def observer_loop(
                     await _process_fast_stop_results(
                         stop_alerts=stop_alerts,
                         snapshot_batch=snapshot_batch,
+                        current_scan_id=current_scan_id,
                     )
                     await _process_scan_results(
                         alerts_to_send=alerts_to_send,
@@ -1591,6 +1633,7 @@ async def observer_loop(
                         snapshot_batch=[],
                         tg_client=tg_client,
                         tg_destinations=tg_destinations,
+                        current_scan_id=current_scan_id,
                     )
                 else:
                     if not rows:
@@ -1630,6 +1673,7 @@ async def observer_loop(
                         rows=rows,
                         ad_states=ad_states,
                         fake_deposits_map=fake_deposits_map,
+                        current_scan_id=current_scan_id,
                     )
 
                     # 4. Сохранение снэпшотов, disable tasks, отправка алертов в TG
@@ -1639,6 +1683,7 @@ async def observer_loop(
                         snapshot_batch=snapshot_batch,
                         tg_client=tg_client,
                         tg_destinations=tg_destinations,
+                        current_scan_id=current_scan_id,
                     )
 
                 # Успешный цикл — сбрасываем счётчик ошибок браузера и self-healing
