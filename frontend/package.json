@@ -12,7 +12,9 @@
     "format": "prettier --write src",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "//postinstall": "Доставляем нативные rollup/esbuild-биндинги для всех актуальных платформ (обходим баг npm #4828 и совместимость arm64/x64 Node на macOS).",
+    "postinstall": "node scripts/install-native-bindings.js"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.96.2",
