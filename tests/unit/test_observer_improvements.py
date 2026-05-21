@@ -174,7 +174,7 @@ async def test_batch_save_snapshots_single_query():
         patch("core.observer.snapshot_writer._save_metric_deltas", new=save_deltas_mock),
         patch("core.observer.snapshot_writer._upsert_ad_snapshots", new=upsert_snapshots_mock),
     ):
-        await batch_save_snapshots(snapshot_data, scan_guard)
+        await batch_save_snapshots(snapshot_data, scan_guard, current_scan_id=1)
 
     # Все нормализованные шаги вызваны
     upsert_campaigns_mock.assert_awaited_once()
@@ -251,7 +251,7 @@ async def test_batch_save_snapshots_preserves_identity_names_on_empty_update():
             new=AsyncMock(),
         ),
     ):
-        await batch_save_snapshots(snapshot_data, scan_guard)
+        await batch_save_snapshots(snapshot_data, scan_guard, current_scan_id=1)
 
     # При пустых campaign_name кампании не создаются — pipeline не дойдёт до upsert snapshots
     # Commit всё равно вызывается
@@ -342,9 +342,9 @@ async def test_batch_save_snapshots_requires_confirmed_zero_scan_before_persist(
         ),
     ):
         # Первый вызов — zero-scan пропускается scan_guard
-        await batch_save_snapshots(snapshot_data, scan_guard)
+        await batch_save_snapshots(snapshot_data, scan_guard, current_scan_id=1)
         # Второй вызов — подтверждённый zero-scan проходит
-        await batch_save_snapshots(snapshot_data, scan_guard)
+        await batch_save_snapshots(snapshot_data, scan_guard, current_scan_id=2)
 
     # Первый zero-scan пропущен, второй проходит — один commit
     assert mock_session.commit.call_count == 1
@@ -424,9 +424,9 @@ async def test_batch_save_snapshots_accepts_zero_scan_after_confirmation():
         patch("core.observer.snapshot_writer._save_metric_deltas", new=AsyncMock(return_value=0)),
         patch("core.observer.snapshot_writer._upsert_ad_snapshots", new=AsyncMock()),
     ):
-        first_saved = await batch_save_snapshots(snapshot_data, scan_guard)
-        second_saved = await batch_save_snapshots(snapshot_data, scan_guard)
-        third_saved = await batch_save_snapshots(snapshot_data, scan_guard)
+        first_saved = await batch_save_snapshots(snapshot_data, scan_guard, current_scan_id=1)
+        second_saved = await batch_save_snapshots(snapshot_data, scan_guard, current_scan_id=2)
+        third_saved = await batch_save_snapshots(snapshot_data, scan_guard, current_scan_id=3)
 
     assert first_saved is False
     assert second_saved is True
@@ -582,9 +582,9 @@ async def test_batch_save_snapshots_requires_confirmed_partial_batch_before_pers
             new=AsyncMock(),
         ),
     ):
-        await batch_save_snapshots(full_snapshot_data, scan_guard)
-        await batch_save_snapshots(partial_snapshot_data, scan_guard)
-        await batch_save_snapshots(partial_snapshot_data, scan_guard)
+        await batch_save_snapshots(full_snapshot_data, scan_guard, current_scan_id=1)
+        await batch_save_snapshots(partial_snapshot_data, scan_guard, current_scan_id=2)
+        await batch_save_snapshots(partial_snapshot_data, scan_guard, current_scan_id=3)
 
     # Первый полный батч + подтверждённый partial (третий вызов) = 2 коммита
     assert mock_session.commit.call_count == 2
@@ -670,14 +670,15 @@ async def test_batch_save_snapshots_bypasses_guard_for_fast_stop_partial_batch()
             new=AsyncMock(),
         ),
     ):
-        await batch_save_snapshots(full_snapshot_data, scan_guard)
+        await batch_save_snapshots(full_snapshot_data, scan_guard, current_scan_id=1)
         await batch_save_snapshots(
             fast_stop_snapshot,
             scan_guard,
             allow_cabinet_rollover=False,
             bypass_scan_guard=True,
+            current_scan_id=2,
         )
-        await batch_save_snapshots(fast_stop_snapshot, scan_guard)
+        await batch_save_snapshots(fast_stop_snapshot, scan_guard, current_scan_id=3)
 
     # Полный срез и быстрый стоп сохранены, обычный частичный батч после этого всё ещё блокируется.
     assert mock_session.commit.call_count == 2
