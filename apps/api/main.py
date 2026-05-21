@@ -23,13 +23,13 @@ from apps.api.deps import get_db, require_api_key_or_tma, verify_api_key
 from apps.api.routers import (
     ai,
     campaign_scripts,
-    chat,
     creative_tools,
     dashboard,
     fake_deposits,
     health,
     history,
     naming_tracker,
+    observer,
     offers,
     settings,
     tma,
@@ -112,14 +112,13 @@ app.add_middleware(
 app.include_router(offers.router, dependencies=_api_key_or_tma_dep)
 app.include_router(settings.router, dependencies=_api_key_or_tma_dep)
 app.include_router(dashboard.router, dependencies=_api_key_or_tma_dep)
+app.include_router(observer.router, dependencies=_api_key_or_tma_dep)
 app.include_router(vision_telegram.router, dependencies=_api_key_dep)
 app.include_router(history.router, dependencies=_api_key_dep)
 app.include_router(fake_deposits.router, dependencies=_api_key_dep)
 app.include_router(naming_tracker.router, dependencies=_api_key_dep)
 app.include_router(creative_tools.router, dependencies=_api_key_dep)
 app.include_router(campaign_scripts.router, dependencies=_api_key_dep)
-# AI-чат — доступен из web-UI (api-key) и mini-app (TMA bearer)
-app.include_router(chat.router, dependencies=_api_key_or_tma_dep)
 # AI-анализ — доступен из web-UI и mini-app
 app.include_router(ai.router, dependencies=_api_key_or_tma_dep)
 # Health-check роутер без авторизации
