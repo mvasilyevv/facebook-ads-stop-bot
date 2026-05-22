@@ -1,40 +1,54 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import { getObserverStatus, startNewCabinetDay } from '../../api.js';
+import ScanRunsHistoryModal from './ScanRunsHistoryModal.jsx';
 
-// Маппинг worker_status / guard-причин на цвет бейджа и человекочитаемый лейбл.
-const STATUS_META = {
-  RUNNING: { label: 'Работает', tone: 'bg-success-muted text-success border-success/30' },
-  SCANNING: { label: 'Сканирует', tone: 'bg-accent-muted text-accent border-accent/30' },
-  PAUSED: { label: 'Выключен', tone: 'bg-elevated text-muted border-border' },
+// Маппинг outcome последнего цикла / worker_status → бейдж.
+const OUTCOME_BADGES = {
+  OK: {
+    label: 'Сканирую',
+    tone: 'bg-success-muted text-success border-success/30',
+    dot: true,
+  },
+  OK_PARTIAL: {
+    label: 'Сканирую (неполные данные)',
+    tone: 'bg-success-muted text-success border-success/30',
+    dot: true,
+  },
+  EMPTY_OK: { label: 'Кабинет пуст', tone: 'bg-elevated text-muted border-border' },
+  EMPTY_BAD: {
+    label: 'Не вижу таблицу',
+    tone: 'bg-warning/10 text-warning border-warning/30',
+  },
+  STALE_DATA: {
+    label: 'Данные не пришли — перезагружаю',
+    tone: 'bg-orange-500/10 text-orange-400 border-orange-500/30',
+  },
+  BROWSER_LOST: {
+    label: 'Браузер отвалился — переподключаюсь',
+    tone: 'bg-danger-muted text-danger border-danger/30',
+  },
   WAITING_BROWSER: {
-    label: 'Ждёт браузер',
+    label: 'Браузер занят',
     tone: 'bg-warning/10 text-warning border-warning/30',
   },
-  GUARD_PENDING_ZERO: {
-    label: 'Guard: ждёт zero',
-    tone: 'bg-warning/10 text-warning border-warning/30',
-  },
-  GUARD_PENDING_PARTIAL: {
-    label: 'Guard: ждёт partial',
-    tone: 'bg-warning/10 text-warning border-warning/30',
-  },
+  PAUSED: { label: 'Выключено', tone: 'bg-elevated text-muted border-border' },
   ERROR: { label: 'Ошибка', tone: 'bg-danger-muted text-danger border-danger/30' },
+  RUNNING: {
+    label: 'Сканирую',
+    tone: 'bg-success-muted text-success border-success/30',
+    dot: true,
+  },
+  IDLE: { label: 'Ожидание', tone: 'bg-elevated text-muted border-border' },
 };
 
-function formatTimestamp(value) {
-  if (!value) return '—';
-  try {
-    const date = new Date(value);
-    return date.toLocaleTimeString('ru-RU', {
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-    });
-  } catch {
-    return '—';
-  }
-}
+const PHASE_LABELS = {
+  refresh: 'обновление таблицы',
+  scrolling: 'сканирование строк',
+  parsing: 'парсинг данных',
+  evaluating: 'оценка правил',
+  sleeping: 'ожидание следующего цикла',
+};
 
 function formatRelative(value) {
   if (!value) return '—';
@@ -44,13 +58,26 @@ function formatRelative(value) {
   if (sec < 60) return `${sec} с назад`;
   const min = Math.floor(sec / 60);
   if (min < 60) return `${min} мин назад`;
-  const hours = Math.floor(min / 60);
-  return `${hours} ч назад`;
+  return `${Math.floor(min / 60)} ч назад`;
+}
+
+function formatTimestamp(value) {
+  if (!value) return '—';
+  try {
+    return new Date(value).toLocaleTimeString('ru-RU', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+  } catch {
+    return '—';
+  }
 }
 
 export default function ObserverStatusTile() {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [rolloverBusy, setRolloverBusy] = useState(false);
 
   useEffect(() => {
@@ -67,7 +94,7 @@ export default function ObserverStatusTile() {
       }
     };
     fetchOnce();
-    const id = setInterval(fetchOnce, 5000);
+    const id = setInterval(fetchOnce, 2000);
     return () => {
       alive = false;
       clearInterval(id);
@@ -88,6 +115,18 @@ export default function ObserverStatusTile() {
     }
   };
 
+  const badge = useMemo(() => {
+    if (!data) return null;
+    // Если сканирование отключено пользователем — показываем PAUSED, остальное игнорируем.
+    if (data.is_scanning_enabled === false) return OUTCOME_BADGES.PAUSED;
+    const outcome = data.last_run?.outcome;
+    const workerStatus = String(data.worker_status || '').toUpperCase();
+    const key = outcome || workerStatus || 'IDLE';
+    return (
+      OUTCOME_BADGES[key] || { label: key, tone: 'bg-elevated text-muted border-border' }
+    );
+  }, [data]);
+
   if (error && !data) {
     return (
       <div className="rounded-lg border border-danger/30 bg-danger-muted px-3 py-2 text-xs text-danger">
@@ -103,53 +142,108 @@ export default function ObserverStatusTile() {
     );
   }
 
-  const statusKey = String(data.worker_status || 'RUNNING').toUpperCase();
-  const meta = STATUS_META[statusKey] || {
-    label: statusKey,
-    tone: 'bg-elevated text-muted border-border',
-  };
+  const phaseLabel = PHASE_LABELS[data.active_phase] || data.active_phase || '—';
+  const lastRun = data.last_run;
 
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-elevated px-4 py-3 shadow-sm">
-      <div className="flex flex-wrap items-center gap-4">
-        <div>
-          <div className="text-2xs uppercase tracking-wide text-muted">Observer</div>
-          <div
-            className={`mt-0.5 inline-flex items-center gap-1 rounded border px-2 py-0.5 text-xs font-medium ${meta.tone}`}
-          >
-            <span className="h-1.5 w-1.5 rounded-full bg-current" />
-            {meta.label}
+    <>
+      <div className="rounded-lg border border-border bg-elevated p-4 shadow-sm">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="text-2xs uppercase tracking-wide text-muted">Observer</div>
+            <div
+              className={`inline-flex items-center gap-1.5 rounded border px-2 py-0.5 text-xs font-medium ${badge.tone}`}
+            >
+              {badge.dot && (
+                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-current" />
+              )}
+              {badge.label}
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setHistoryOpen(true)}
+              className="rounded border border-border bg-surface px-3 py-1 text-xs text-muted hover:text-text"
+            >
+              Подробнее
+            </button>
+            <button
+              type="button"
+              onClick={handleRollover}
+              disabled={rolloverBusy}
+              className="rounded border border-border bg-surface px-3 py-1 text-xs text-muted hover:text-text disabled:opacity-50"
+            >
+              {rolloverBusy ? 'Архивируем…' : 'Сутки'}
+            </button>
           </div>
         </div>
-        <div>
-          <div className="text-2xs uppercase tracking-wide text-muted">Цикл</div>
-          <div className="font-mono text-xs">#{data.current_scan_id ?? 0}</div>
-        </div>
-        <div>
-          <div className="text-2xs uppercase tracking-wide text-muted">Последний батч</div>
-          <div className="font-mono text-xs">
-            {data.last_batch_size}/{data.active_total}
+
+        <div className="mb-3 flex items-center justify-between text-xs">
+          <div>
+            <span className="text-muted">Фаза: </span>
+            <span className="text-text">{phaseLabel}</span>
+          </div>
+          <div>
+            <span className="text-muted">Цикл </span>
+            <span className="font-mono text-text">#{data.current_scan_id ?? 0}</span>
           </div>
         </div>
-        <div>
-          <div className="text-2xs uppercase tracking-wide text-muted">Последний пульс</div>
-          <div className="text-xs">{formatRelative(data.worker_heartbeat_at)}</div>
-        </div>
-        <div>
-          <div className="text-2xs uppercase tracking-wide text-muted">Сутки кабинета</div>
-          <div className="text-xs">
-            {data.cabinet_day_started_at ? formatTimestamp(data.cabinet_day_started_at) : '—'}
+
+        {lastRun && (
+          <div className="mb-3 grid grid-cols-4 gap-3 rounded border border-border bg-surface px-3 py-2">
+            <div>
+              <div className="text-2xs uppercase tracking-wide text-muted">Объявлений</div>
+              <div className="font-mono text-xs">
+                {lastRun.rows_total ?? 0} / {data.active_total ?? 0}
+              </div>
+            </div>
+            <div>
+              <div className="text-2xs uppercase tracking-wide text-muted">С данными</div>
+              <div className="font-mono text-xs">
+                {lastRun.rows_with_data ?? 0}
+                {lastRun.rows_partial > 0 && (
+                  <span className="text-warning"> ({lastRun.rows_partial} неполн.)</span>
+                )}
+              </div>
+            </div>
+            <div>
+              <div className="text-2xs uppercase tracking-wide text-muted">Время</div>
+              <div className="font-mono text-xs">
+                {lastRun.duration_seconds
+                  ? `${lastRun.duration_seconds.toFixed(1)}с`
+                  : '—'}
+              </div>
+            </div>
+            <div>
+              <div className="text-2xs uppercase tracking-wide text-muted">Угроза</div>
+              <div className="font-mono text-xs">{lastRun.threat_level || '—'}</div>
+            </div>
+          </div>
+        )}
+
+        <div className="flex items-center justify-between text-2xs text-muted">
+          <div>
+            Следующий цикл:{' '}
+            {data.next_scan_at ? formatTimestamp(data.next_scan_at) : '—'}
+          </div>
+          <div>Пульс: {formatRelative(data.worker_heartbeat_at)}</div>
+          <div>
+            Сутки:{' '}
+            {data.cabinet_day_started_at
+              ? formatTimestamp(data.cabinet_day_started_at)
+              : '—'}
           </div>
         </div>
+
+        {lastRun?.error_message && (
+          <div className="mt-2 border-l-2 border-danger/40 pl-2 text-xs text-danger">
+            {lastRun.error_message}
+          </div>
+        )}
       </div>
-      <button
-        type="button"
-        onClick={handleRollover}
-        disabled={rolloverBusy}
-        className="rounded border border-border bg-surface px-3 py-1.5 text-xs font-medium text-muted transition-colors hover:bg-elevated hover:text-text disabled:cursor-not-allowed disabled:opacity-50"
-      >
-        {rolloverBusy ? 'Архивируем…' : 'Начать новые сутки'}
-      </button>
-    </div>
+
+      {historyOpen && <ScanRunsHistoryModal onClose={() => setHistoryOpen(false)} />}
+    </>
   );
 }
