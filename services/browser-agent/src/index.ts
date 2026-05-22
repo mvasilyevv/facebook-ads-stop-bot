@@ -319,7 +319,7 @@ function sameStringList(left: string[], right: string[]): boolean {
 }
 
 async function waitForInitialAdsRows(page: any, timeoutMs: number, isCancelled?: () => boolean): Promise<void> {
-  const rows = await waitForParsedAdsRows(page, {
+  const { rows } = await waitForParsedAdsRows(page, {
     timeoutMs,
     pollMs: 500,
     isCancelled,
@@ -428,6 +428,10 @@ async function runScanCycle(call: any) {
     let scrollAccumMs = 0;
     let parseAccumMs = 0;
     const allRows: any[] = [];
+    // fb_ad_id строк, у которых хоть в одном проходе нашёлся spinner-loader или
+    // ненайденная ячейка. Отдаются в ScanComplete.partial_row_ids — observer пометит
+    // OK_PARTIAL и дочитает эти строки в следующем цикле.
+    const accumulatedPartialIds = new Set<string>();
     let seenRowIds = new Set<string>();
     let stalledPasses = 0;
     let completedPasses = 0;
@@ -470,7 +474,7 @@ async function runScanCycle(call: any) {
 
       // Meta может на короткое время очистить виртуальную таблицу после refresh/scroll.
       const parseStart = Date.now();
-      const rows = await waitForParsedAdsRows(page, {
+      const { rows, partialRowIds: passPartialIds } = await waitForParsedAdsRows(page, {
         timeoutMs: 6_000,
         pollMs: 300,
         isCancelled: () => cancelled,
@@ -480,6 +484,10 @@ async function runScanCycle(call: any) {
         firstRowAt = Date.now();
       }
       if (cancelled) break;
+      // Накапливаем partial fb_ad_id всех проходов цикла — отдадим их в ScanComplete.
+      for (const id of passPartialIds) {
+        accumulatedPartialIds.add(id);
+      }
       const newRows: any[] = [];
 
       for (const row of rows) {
@@ -569,7 +577,11 @@ async function runScanCycle(call: any) {
     }
 
     const rowsWithAllMetricsEmpty = countEmptyMetricsRows(allRows as any);
-    const partialRowIds = findPartialRows(allRows as any);
+    // Объединяем partial-id от парсера (загруженные асинхронно метрики/missing-cells)
+    // и от пост-фактум анализа строк (findPartialRows проверяет ad_name/campaign_name).
+    const partialRowIds = Array.from(
+      new Set<string>([...accumulatedPartialIds, ...findPartialRows(allRows as any)]),
+    );
 
     const emptyReason = detectEmptyReason({
       hasTableHeader: tableState.hasTableHeader,
@@ -628,7 +640,7 @@ async function parseVisibleRows(call: any, callback: any) {
   try {
     const session = sessionManager.getSession(call.request.session_id);
     const page = getPage(session, call.request.page_id);
-    const rows = await waitForParsedAdsRows(page, {
+    const { rows } = await waitForParsedAdsRows(page, {
       timeoutMs: 3_000,
       pollMs: 250,
     });
@@ -650,7 +662,7 @@ async function scrollAndParse(call: any, callback: any) {
 
     const metricsBefore = await getAdsTableScrollMetrics(page);
     await scrollAdsTableDown(page, call.request.scroll_amount || undefined);
-    const rows = await waitForParsedAdsRows(page, {
+    const { rows } = await waitForParsedAdsRows(page, {
       timeoutMs: 3_000,
       pollMs: 250,
     });

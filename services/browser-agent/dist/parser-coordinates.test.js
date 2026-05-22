@@ -131,17 +131,20 @@ const TEST_COLUMNS = [
                 });
             });
         }, TEST_COLUMNS);
-        // Вызываем парсер. Так как колонка spend (Сумма затрат) обязательна для валидации и парсинга,
-        // но ячейка отсутствует, парсер должен бросить ошибку с перечислением пропущенных ячеек.
-        // Это доказывает, что колонка spend не была ложно считана из ячейки "Показы" (100) или "Результат" (5).
-        await strict_1.default.rejects(async () => {
-            await (0, parser_js_1.parseAdsFromPage)(page);
-        }, (err) => {
-            strict_1.default.ok(err.message.includes('Сумма затрат'), `Ошибка должна сообщать об отсутствии Суммы затрат: ${err.message}`);
-            strict_1.default.ok(!err.message.includes('Показы'), `Показы не должны считаться отсутствующими`);
-            strict_1.default.ok(!err.message.includes('Результат'), `Результат не должен считаться отсутствующим`);
-            return true;
-        });
+        // По новой семантике (после редизайна цикла): парсер не бросает throw при отсутствии
+        // отдельной ячейки в строке. Вместо этого:
+        //   - строка попадает в rows с тем что прочиталось (impressions=100, results=5);
+        //   - её fb_ad_id попадает в partialRowIds — observer пометит цикл OK_PARTIAL.
+        // Это доказывает, что колонка spend не была ложно считана из ячейки "Показы" (100)
+        // или "Результат" (5) — её просто нет в rowMissing, но fb_ad_id флагнут как partial.
+        const result = await (0, parser_js_1.parseAdsFromPage)(page);
+        strict_1.default.equal(result.rows.length, 1, 'строка должна попасть в rows даже при отсутствии одной ячейки');
+        strict_1.default.equal(result.rows[0].fb_ad_id, '1234567890123');
+        // Показы и Результат должны быть прочитаны корректно (не подменены)
+        strict_1.default.equal(result.rows[0].impressions, 100, 'Показы не должны быть ложно подменены');
+        strict_1.default.equal(result.rows[0].deposits, 5, 'Результат не должен быть ложно подменён');
+        // fb_ad_id попал в partialRowIds — это сигнал observer'у пометить OK_PARTIAL
+        strict_1.default.ok(result.partialRowIds.includes('1234567890123'), `partialRowIds должен содержать fb_ad_id строки с пропущенной ячейкой: ${JSON.stringify(result.partialRowIds)}`);
     });
 });
 // Сценарий: Парсер успешно считывает все данные, если ячейки на своих координатах, даже при наличии сдвигов и пустых значений в других метриках
@@ -279,12 +282,12 @@ const TEST_COLUMNS = [
             });
         }, TEST_COLUMNS);
         const parsed = await (0, parser_js_1.parseAdsFromPage)(page);
-        strict_1.default.equal(parsed.length, 1);
-        strict_1.default.equal(parsed[0].fb_ad_id, '9876543210987');
-        strict_1.default.equal(parsed[0].ad_name, 'Ad 2');
-        strict_1.default.equal(parsed[0].deposits, 7);
-        strict_1.default.equal(parsed[0].spend, '12.50');
-        strict_1.default.equal(parsed[0].impressions, 1000);
+        strict_1.default.equal(parsed.rows.length, 1);
+        strict_1.default.equal(parsed.rows[0].fb_ad_id, '9876543210987');
+        strict_1.default.equal(parsed.rows[0].ad_name, 'Ad 2');
+        strict_1.default.equal(parsed.rows[0].deposits, 7);
+        strict_1.default.equal(parsed.rows[0].spend, '12.50');
+        strict_1.default.equal(parsed.rows[0].impressions, 1000);
     });
 });
 //# sourceMappingURL=parser-coordinates.test.js.map

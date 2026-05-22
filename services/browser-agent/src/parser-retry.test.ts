@@ -44,11 +44,11 @@ test('waitForParsedAdsRows сразу возвращает непустой ре
     pollMs: 1,
     readRows: async () => {
       attempts += 1;
-      return [makeRow()];
+      return { rows: [makeRow()], partialRowIds: [] };
     },
   });
 
-  assert.equal(rows.length, 1);
+  assert.equal(rows.rows.length, 1);
   assert.equal(attempts, 1);
 });
 
@@ -62,14 +62,14 @@ test('waitForParsedAdsRows повторяет чтение после време
     readRows: async () => {
       attempts += 1;
       if (attempts < 3) {
-        return [];
+        return { rows: [], partialRowIds: [] };
       }
-      return [makeRow({ ad_name: 'DRC_CR2_CR010' })];
+      return { rows: [makeRow({ ad_name: 'DRC_CR2_CR010' })], partialRowIds: [] };
     },
   });
 
-  assert.equal(rows.length, 1);
-  assert.equal(rows[0]?.ad_name, 'DRC_CR2_CR010');
+  assert.equal(rows.rows.length, 1);
+  assert.equal(rows.rows[0]?.ad_name, 'DRC_CR2_CR010');
   assert.equal(attempts, 3);
 });
 
@@ -82,11 +82,12 @@ test('waitForParsedAdsRows завершает ожидание пустым ма
     pollMs: 1,
     readRows: async () => {
       attempts += 1;
-      return [];
+      return { rows: [], partialRowIds: [] };
     },
   });
 
-  assert.deepEqual(rows, []);
+  assert.deepEqual(rows.rows, []);
+  assert.deepEqual(rows.partialRowIds, []);
   assert.ok(attempts >= 1);
 });
 
@@ -108,12 +109,12 @@ test('waitForParsedAdsRows пробует повторить чтение при
       if (attempts < 3) {
         throw new Error('Не удалось распарсить таблицу Ads Manager: отсутствуют обязательные колонки: CPM');
       }
-      return [makeRow({ cpm: '15.50' })];
+      return { rows: [makeRow({ cpm: '15.50' })], partialRowIds: [] };
     },
   });
 
-  assert.equal(rows.length, 1);
-  assert.equal(rows[0]?.cpm, '15.50');
+  assert.equal(rows.rows.length, 1);
+  assert.equal(rows.rows[0]?.cpm, '15.50');
   assert.equal(attempts, 3);
 });
 
@@ -141,26 +142,27 @@ test('waitForParsedAdsRows пробрасывает ошибку парсинг�
   assert.ok(attempts >= 1);
 });
 
-// Сценарий: если при чтении обнаруживается пустая метрика (данные еще не подгрузились),
-// то выбрасывается ошибка, и waitForParsedAdsRows повторяет попытку до успешного появления данных.
-test('waitForParsedAdsRows ожидает загрузки пустых метрик до появления значений', async () => {
+// Сценарий: если ячейка в spinner-загрузке, парсер возвращает строку с пустым полем
+// и кладёт fb_ad_id в partialRowIds — никаких throw, никаких retry. Observer пометит
+// цикл как OK_PARTIAL и дочитает в следующем цикле.
+test('waitForParsedAdsRows возвращает partialRowIds для строки со spinner-метрикой', async () => {
   let attempts = 0;
 
-  const rows = await waitForParsedAdsRows({} as never, {
+  const result = await waitForParsedAdsRows({} as never, {
     timeoutMs: 100,
     pollMs: 1,
     readRows: async () => {
       attempts += 1;
-      if (attempts < 3) {
-        throw new Error('Данные таблицы Ads Manager еще не загружены: пустая ячейка в колонке "Сумма затрат" для объявления "Объявление"');
-      }
-      return [makeRow({ spend: '0.20' })];
+      return {
+        rows: [makeRow({ fb_ad_id: '120243762575150044', spend: '' })],
+        partialRowIds: ['120243762575150044'],
+      };
     },
   });
 
-  assert.equal(rows.length, 1);
-  assert.equal(rows[0]?.spend, '0.20');
-  assert.equal(attempts, 3);
+  assert.equal(result.rows.length, 1);
+  assert.deepEqual(result.partialRowIds, ['120243762575150044']);
+  assert.equal(attempts, 1);
 });
 
 

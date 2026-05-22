@@ -10,9 +10,21 @@ type BrowserParseRowArgs = {
 };
 type RawExtractResult = {
   rows: RawAdFields[];
+  // Поля, не дочитанные из-за того что cell.textContent пустой/мусорный — обычно когда
+  // Ads Manager асинхронно подгружает значение конкретной ячейки и сейчас в DOM лежит
+  // skeleton/spinner вместо данных. Раньше эти случаи кидали exception на весь цикл.
+  loadingFields: { fbAdId: string; adName: string; fields: string[] }[];
+  // Поля, у которых ячейки физически нет в DOM (виртуализация по горизонтали).
   missingFields: { fbAdId: string; adName: string; fields: string[] }[];
 };
-type ParseRowsReader = (page: Page) => Promise<ScannedAdRow[]>;
+
+export type ParseAdsResult = {
+  rows: ScannedAdRow[];
+  /** fb_ad_id строк, у которых какие-то метрики не прочитались (loading-spinner или missing cell). */
+  partialRowIds: string[];
+};
+
+type ParseRowsReader = (page: Page) => Promise<ParseAdsResult>;
 type WaitForParsedAdsRowsOptions = {
   timeoutMs?: number;
   pollMs?: number;
@@ -202,6 +214,18 @@ async function extractRawRowsFromPage(
 
     const result: RawAdFields[] = [];
     const missingFields: { fbAdId: string; adName: string; fields: string[] }[] = [];
+    const loadingFields: { fbAdId: string; adName: string; fields: string[] }[] = [];
+
+    // Skeleton-loader Ads Manager: пока конкретная ячейка ждёт данные с бэкенда,
+    // Facebook рендерит в ней <div role="progressbar" aria-busy="true"
+    // aria-valuetext="Загрузка…">. Раньше парсер видел пустой textContent и кидал
+    // exception на весь цикл — теперь мы помечаем такую строку как partial.
+    function isCellLoading(cell: Element): boolean {
+      if (cell.querySelector('[aria-busy="true"]')) return true;
+      if (cell.querySelector('[role="progressbar"]')) return true;
+      return false;
+    }
+
     const rows = Array.from(document.querySelectorAll('._1gda._2djg'));
 
     for (const row of rows) {
@@ -234,6 +258,7 @@ async function extractRawRowsFromPage(
       }));
 
       const rowMissing: string[] = [];
+      const rowLoading: string[] = [];
       for (const column of layout) {
         let cell: Element | undefined = undefined;
 
@@ -264,6 +289,17 @@ async function extractRawRowsFromPage(
           rowMissing.push(column.title);
           continue;
         }
+
+        // Ячейка нашлась, но Facebook ещё не подгрузил значение — внутри spinner.
+        // Не пишем пустую строку (на которой потом сломается проверка), пишем "" и
+        // отмечаем строку как partial: observer сохранит остальные поля и пометит,
+        // что эту строку нужно дочитать в следующем цикле.
+        if (column.valueKind === 'metric' && isCellLoading(cell)) {
+          rowLoading.push(column.title);
+          fields[column.fieldName] = '';
+          continue;
+        }
+
         fields[column.fieldName] = column.valueKind === 'metric'
           ? getMetricText(cell)
           : column.valueKind === 'name'
@@ -274,16 +310,29 @@ async function extractRawRowsFromPage(
       if (rowMissing.length > 0) {
         missingFields.push({ fbAdId, adName, fields: rowMissing });
       }
+      if (rowLoading.length > 0) {
+        loadingFields.push({ fbAdId, adName, fields: rowLoading });
+      }
 
       result.push(fields);
     }
 
-    return { rows: result, missingFields };
+    return { rows: result, missingFields, loadingFields };
   }, args);
 }
 
-/** Распарсить все видимые строки из текущей страницы. */
-export async function parseAdsFromPage(page: Page): Promise<ScannedAdRow[]> {
+/** Распарсить все видимые строки из текущей страницы.
+ *
+ * Возвращает rows + partialRowIds. Партиал — это строки, у которых:
+ *  - часть метрик пока в spinner-загрузке (Facebook ещё не отдал данные конкретно для этого объявления);
+ *  - или часть ячеек не нашлась по координате/индексу (горизонтальная виртуализация).
+ *
+ * Эти случаи НЕ катастрофические — мы возвращаем строку с тем что прочиталось, observer
+ * пишет snapshot, оценивает правила по доступным колонкам и помечает что часть данных
+ * будет дочитана в следующем цикле. Throw остаётся ТОЛЬКО для одной катастрофы: в хедере
+ * таблицы нет обязательных колонок (пользователь сам сломал layout Ads Manager).
+ */
+export async function parseAdsFromPage(page: Page): Promise<ParseAdsResult> {
   const headers = await collectVisibleHeaderSnapshots(page);
   const { layout, missingColumns } = buildParserColumnLayout(headers);
   if (missingColumns.length > 0) {
@@ -293,46 +342,34 @@ export async function parseAdsFromPage(page: Page): Promise<ScannedAdRow[]> {
   }
 
   const rawResult = await extractRawRowsFromPage(page, { layout });
-  if (!rawResult || !Array.isArray(rawResult.rows)) return [];
+  if (!rawResult || !Array.isArray(rawResult.rows)) return { rows: [], partialRowIds: [] };
 
-  // Проверяем, что ключевые числовые метрики для всех строк успешно загружены (не равны пустой строке "")
-  const coreMetrics = ['spend', 'impressions', 'reach'];
-  for (const fields of rawResult.rows) {
-    for (const column of layout) {
-      if (coreMetrics.includes(column.fieldName)) {
-        const val = fields[column.fieldName];
-        if (val === '') {
-          throw new Error(
-            `Данные таблицы Ads Manager еще не загружены: пустая ячейка в ключевой колонке "${column.title}" для объявления "${fields.ad_name || 'Неизвестно'}"`
-          );
-        }
-      }
-    }
+  // Накапливаем fb_ad_id строк, которые мы не дочитали полностью.
+  const partialSet = new Set<string>();
+  for (const item of rawResult.loadingFields) {
+    if (item.fbAdId) partialSet.add(item.fbAdId);
+  }
+  for (const item of rawResult.missingFields) {
+    if (item.fbAdId) partialSet.add(item.fbAdId);
   }
 
-  if (rawResult.missingFields.length > 0) {
-    const missingSet = new Set<string>();
-    for (const item of rawResult.missingFields) {
-      for (const fieldTitle of item.fields) missingSet.add(fieldTitle);
-    }
-    const sample = rawResult.missingFields
-      .slice(0, 3)
-      .map((item) => `${item.adName} (${item.fbAdId}): ${item.fields.join(', ')}`)
-      .join('; ');
-    throw new Error(
-      `Не удалось распарсить колонки Ads Manager: ${Array.from(missingSet).join(', ')}. Примеры строк: ${sample}.`,
-    );
-  }
-  return rawResult.rows
+  const rows = rawResult.rows
     .map((fields) => buildRowFromFields(fields))
     .filter((row): row is ScannedAdRow => row !== null);
+
+  return { rows, partialRowIds: Array.from(partialSet) };
 }
 
-/** Дождаться, пока Meta вернет строки после краткого пустого состояния таблицы. */
+/** Дождаться, пока Meta вернет строки после краткого пустого состояния таблицы.
+ *
+ * Возвращает {rows, partialRowIds}. partialRowIds — это fb_ad_id строк, у которых
+ * не дочитались часть колонок (skeleton-loader или missing-cell) — observer
+ * пометит их как partial и дочитает в следующем цикле.
+ */
 export async function waitForParsedAdsRows(
   page: Page,
   options: WaitForParsedAdsRowsOptions = {},
-): Promise<ScannedAdRow[]> {
+): Promise<ParseAdsResult> {
   const timeoutMs = options.timeoutMs ?? 6_000;
   const pollMs = options.pollMs ?? 300;
   const readRows = options.readRows ?? parseAdsFromPage;
@@ -342,20 +379,20 @@ export async function waitForParsedAdsRows(
   while (true) {
     // Мгновенно выходим, если сканирование было отменено
     if (options.isCancelled?.()) {
-      return [];
+      return { rows: [], partialRowIds: [] };
     }
 
     try {
-      const rows = await readRows(page);
-      if (rows.length > 0) return rows;
+      const result = await readRows(page);
+      if (result.rows.length > 0) return result;
     } catch (err) {
-      // Сохраняем последнюю ошибку парсинга колонок (например, если колонка CPM ещё не прогрузилась)
+      // Сохраняем последнюю ошибку парсинга (например, отсутствуют обязательные колонки в хедере)
       lastError = err;
     }
 
     // Повторно проверяем флаг отмены
     if (options.isCancelled?.()) {
-      return [];
+      return { rows: [], partialRowIds: [] };
     }
 
     const remainingMs = deadline - Date.now();
@@ -363,7 +400,7 @@ export async function waitForParsedAdsRows(
       if (lastError !== null) {
         throw lastError;
       }
-      return [];
+      return { rows: [], partialRowIds: [] };
     }
 
     await sleep(Math.min(pollMs, remainingMs));

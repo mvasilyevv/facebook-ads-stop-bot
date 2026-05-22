@@ -44,10 +44,10 @@ function makeRow(overrides = {}) {
         pollMs: 1,
         readRows: async () => {
             attempts += 1;
-            return [makeRow()];
+            return { rows: [makeRow()], partialRowIds: [] };
         },
     });
-    strict_1.default.equal(rows.length, 1);
+    strict_1.default.equal(rows.rows.length, 1);
     strict_1.default.equal(attempts, 1);
 });
 // Сценарий: после краткого пустого состояния helper должен дождаться появления строк.
@@ -59,13 +59,13 @@ function makeRow(overrides = {}) {
         readRows: async () => {
             attempts += 1;
             if (attempts < 3) {
-                return [];
+                return { rows: [], partialRowIds: [] };
             }
-            return [makeRow({ ad_name: 'DRC_CR2_CR010' })];
+            return { rows: [makeRow({ ad_name: 'DRC_CR2_CR010' })], partialRowIds: [] };
         },
     });
-    strict_1.default.equal(rows.length, 1);
-    strict_1.default.equal(rows[0]?.ad_name, 'DRC_CR2_CR010');
+    strict_1.default.equal(rows.rows.length, 1);
+    strict_1.default.equal(rows.rows[0]?.ad_name, 'DRC_CR2_CR010');
     strict_1.default.equal(attempts, 3);
 });
 // Сценарий: если строки так и не появились, helper должен вернуть пустой результат по таймауту.
@@ -76,10 +76,11 @@ function makeRow(overrides = {}) {
         pollMs: 1,
         readRows: async () => {
             attempts += 1;
-            return [];
+            return { rows: [], partialRowIds: [] };
         },
     });
-    strict_1.default.deepEqual(rows, []);
+    strict_1.default.deepEqual(rows.rows, []);
+    strict_1.default.deepEqual(rows.partialRowIds, []);
     strict_1.default.ok(attempts >= 1);
 });
 // Сценарий: выключенный тумблер имеет приоритет над текстом доставки и должен давать канонический OFF.
@@ -98,11 +99,11 @@ function makeRow(overrides = {}) {
             if (attempts < 3) {
                 throw new Error('Не удалось распарсить таблицу Ads Manager: отсутствуют обязательные колонки: CPM');
             }
-            return [makeRow({ cpm: '15.50' })];
+            return { rows: [makeRow({ cpm: '15.50' })], partialRowIds: [] };
         },
     });
-    strict_1.default.equal(rows.length, 1);
-    strict_1.default.equal(rows[0]?.cpm, '15.50');
+    strict_1.default.equal(rows.rows.length, 1);
+    strict_1.default.equal(rows.rows[0]?.cpm, '15.50');
     strict_1.default.equal(attempts, 3);
 });
 // Сценарий: если при чтении постоянно возникают ошибки вплоть до таймаута, выбрасывается последняя ошибка
@@ -123,23 +124,24 @@ function makeRow(overrides = {}) {
     });
     strict_1.default.ok(attempts >= 1);
 });
-// Сценарий: если при чтении обнаруживается пустая метрика (данные еще не подгрузились),
-// то выбрасывается ошибка, и waitForParsedAdsRows повторяет попытку до успешного появления данных.
-(0, node_test_1.default)('waitForParsedAdsRows ожидает загрузки пустых метрик до появления значений', async () => {
+// Сценарий: если ячейка в spinner-загрузке, парсер возвращает строку с пустым полем
+// и кладёт fb_ad_id в partialRowIds — никаких throw, никаких retry. Observer пометит
+// цикл как OK_PARTIAL и дочитает в следующем цикле.
+(0, node_test_1.default)('waitForParsedAdsRows возвращает partialRowIds для строки со spinner-метрикой', async () => {
     let attempts = 0;
-    const rows = await (0, parser_js_1.waitForParsedAdsRows)({}, {
+    const result = await (0, parser_js_1.waitForParsedAdsRows)({}, {
         timeoutMs: 100,
         pollMs: 1,
         readRows: async () => {
             attempts += 1;
-            if (attempts < 3) {
-                throw new Error('Данные таблицы Ads Manager еще не загружены: пустая ячейка в колонке "Сумма затрат" для объявления "Объявление"');
-            }
-            return [makeRow({ spend: '0.20' })];
+            return {
+                rows: [makeRow({ fb_ad_id: '120243762575150044', spend: '' })],
+                partialRowIds: ['120243762575150044'],
+            };
         },
     });
-    strict_1.default.equal(rows.length, 1);
-    strict_1.default.equal(rows[0]?.spend, '0.20');
-    strict_1.default.equal(attempts, 3);
+    strict_1.default.equal(result.rows.length, 1);
+    strict_1.default.deepEqual(result.partialRowIds, ['120243762575150044']);
+    strict_1.default.equal(attempts, 1);
 });
 //# sourceMappingURL=parser-retry.test.js.map
