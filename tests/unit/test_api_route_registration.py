@@ -13,8 +13,12 @@ def _normalize_route_path(path: str) -> str:
 
 
 def _normalize_front_path(path: str) -> str:
-    """Нормализует шаблонные литералы фронтенда до общего шаблона."""
-    return re.sub(r"\$\{[^}]+\}", "{param}", path)
+    """Нормализует шаблонные литералы фронтенда до общего шаблона.
+
+    Отбрасывает query-string — бэкенд-роуты сравниваются без неё.
+    """
+    without_query = path.split("?", 1)[0]
+    return re.sub(r"\$\{[^}]+\}", "{param}", without_query)
 
 
 def _collect_backend_routes() -> set[tuple[str, str]]:
