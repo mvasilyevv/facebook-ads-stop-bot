@@ -87,6 +87,16 @@ class ScanResult:
     duration_seconds: float
     dismissed_modals: list[str] = field(default_factory=list)
     unknown_modal_artifacts: list[str] = field(default_factory=list)
+    # Тайминги фаз цикла, заполненные browser-agent'ом
+    phase_timings: dict[str, int] = field(default_factory=dict)
+    # fb_ad_id строк, у которых какие-то обязательные колонки не дочитались
+    partial_row_ids: list[str] = field(default_factory=list)
+    # Коды-маркеры аномалий: "loader_visible_long", "header_missing_columns", ...
+    warnings: list[str] = field(default_factory=list)
+    # "no_active_ads" | "filter_excludes_all" | "table_not_found" | None
+    empty_reason: str | None = None
+    # Строк, у которых все критические метрики пустые (для детекции STALE_DATA)
+    rows_with_all_metrics_empty: int = 0
 
 
 class BrowserAgentClient:
@@ -219,6 +229,31 @@ class BrowserAgentClient:
         logger.info("Браузер переподключён, session_id=%s", resp.session_id)
         return resp.session_id
 
+    async def hard_reload(self, *, bypass_cache: bool = True) -> bool:
+        """Жёсткая перезагрузка страницы Ads Manager с обходом кеша.
+
+        Возвращает True при успехе, False при ошибке (логирует причину).
+        """
+        if not self._scanner_stub or not self._session_id:
+            logger.warning("hard_reload: нет активной сессии browser-agent")
+            return False
+        req = scanner_pb2.HardReloadPageRequest(
+            session_id=self._session_id,
+            bypass_cache=bypass_cache,
+        )
+        try:
+            resp = await self._scanner_stub.HardReloadPage(
+                req, timeout=_RPC_BROWSER_CONTROL_TIMEOUT_SECONDS * 2
+            )
+        except grpc.RpcError as exc:
+            logger.warning("hard_reload: gRPC error: %s", exc)
+            return False
+        if not resp.success:
+            logger.warning("hard_reload: %s", resp.error_message)
+            return False
+        logger.info("hard_reload: success за %d мс", resp.reload_ms)
+        return True
+
     async def navigate(self, url: str, wait_until: str = "domcontentloaded") -> None:
         """Перейти на URL."""
         await self._call_with_session_recovery(
@@ -286,6 +321,17 @@ class BrowserAgentClient:
                             duration_seconds=c.duration_seconds,
                             dismissed_modals=list(c.dismissed_modals),
                             unknown_modal_artifacts=list(c.unknown_modal_artifacts),
+                            phase_timings={
+                                "refresh_ms": c.phase_timings.refresh_ms,
+                                "first_row_ms": c.phase_timings.first_row_ms,
+                                "scroll_ms": c.phase_timings.scroll_ms,
+                                "parse_ms": c.phase_timings.parse_ms,
+                                "total_ms": c.phase_timings.total_ms,
+                            },
+                            partial_row_ids=list(c.partial_row_ids),
+                            warnings=list(c.warnings),
+                            empty_reason=c.empty_reason or None,
+                            rows_with_all_metrics_empty=c.rows_with_all_metrics_empty,
                         )
                     elif event.HasField("error"):
                         e = event.error
