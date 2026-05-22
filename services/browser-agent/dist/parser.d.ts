@@ -9,6 +9,13 @@ type ParseRowsReader = (page: Page) => Promise<ParseAdsResult>;
 type WaitForParsedAdsRowsOptions = {
     timeoutMs?: number;
     pollMs?: number;
+    /**
+     * Максимально допустимая доля partial-строк, при которой результат считается «хорошим»
+     * и возвращается сразу. Если фактическая доля выше — функция продолжает поллить, пока
+     * partial не упадёт или не истечёт timeoutMs. Защищает от снепшота, в котором половина
+     * метрик ещё в spinner-загрузке. По умолчанию 0.1 (10%).
+     */
+    maxPartialRatio?: number;
     readRows?: ParseRowsReader;
     isCancelled?: () => boolean;
 };
@@ -28,9 +35,16 @@ export declare function refreshTable(page: Page): Promise<boolean>;
 export declare function parseAdsFromPage(page: Page): Promise<ParseAdsResult>;
 /** Дождаться, пока Meta вернет строки после краткого пустого состояния таблицы.
  *
- * Возвращает {rows, partialRowIds}. partialRowIds — это fb_ad_id строк, у которых
- * не дочитались часть колонок (skeleton-loader или missing-cell) — observer
- * пометит их как partial и дочитает в следующем цикле.
+ * Adaptive wait: возвращает результат СРАЗУ если доля partial-строк низкая (< maxPartialRatio).
+ * Если partial много (Facebook ещё подгружает метрики для большинства строк), продолжает
+ * поллить страницу до тех пор пока:
+ *   а) доля partial не упадёт ниже порога — возвращаем,
+ *   б) не истечёт timeoutMs — возвращаем best-so-far результат (с наименьшим partial).
+ *
+ * Это защищает от ситуации, когда мы успели прочитать таблицу в плохой момент: spinner'ы
+ * в большинстве ячеек дают snapshot с почти-пустыми метриками, по которому правила
+ * не сработают. Ждём 1-5 секунд — Facebook успевает дозаполнить, snapshot становится
+ * репрезентативным.
  */
 export declare function waitForParsedAdsRows(page: Page, options?: WaitForParsedAdsRowsOptions): Promise<ParseAdsResult>;
 export declare function detectLogicalDeliveryStatus(text?: string, toggleAriaChecked?: string): string;

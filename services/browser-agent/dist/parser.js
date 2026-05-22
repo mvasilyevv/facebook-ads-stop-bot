@@ -327,39 +327,59 @@ async function parseAdsFromPage(page) {
 }
 /** Дождаться, пока Meta вернет строки после краткого пустого состояния таблицы.
  *
- * Возвращает {rows, partialRowIds}. partialRowIds — это fb_ad_id строк, у которых
- * не дочитались часть колонок (skeleton-loader или missing-cell) — observer
- * пометит их как partial и дочитает в следующем цикле.
+ * Adaptive wait: возвращает результат СРАЗУ если доля partial-строк низкая (< maxPartialRatio).
+ * Если partial много (Facebook ещё подгружает метрики для большинства строк), продолжает
+ * поллить страницу до тех пор пока:
+ *   а) доля partial не упадёт ниже порога — возвращаем,
+ *   б) не истечёт timeoutMs — возвращаем best-so-far результат (с наименьшим partial).
+ *
+ * Это защищает от ситуации, когда мы успели прочитать таблицу в плохой момент: spinner'ы
+ * в большинстве ячеек дают snapshot с почти-пустыми метриками, по которому правила
+ * не сработают. Ждём 1-5 секунд — Facebook успевает дозаполнить, snapshot становится
+ * репрезентативным.
  */
 async function waitForParsedAdsRows(page, options = {}) {
-    const timeoutMs = options.timeoutMs ?? 6_000;
-    const pollMs = options.pollMs ?? 300;
+    const timeoutMs = options.timeoutMs ?? 10_000;
+    const pollMs = options.pollMs ?? 500;
+    const maxPartialRatio = options.maxPartialRatio ?? 0.1;
     const readRows = options.readRows ?? parseAdsFromPage;
     const deadline = Date.now() + timeoutMs;
     let lastError = null;
+    // Лучший результат на случай timeout: тот, где доля partial минимальная.
+    let bestResult = null;
+    let bestPartialCount = Infinity;
     while (true) {
-        // Мгновенно выходим, если сканирование было отменено
         if (options.isCancelled?.()) {
-            return { rows: [], partialRowIds: [] };
+            return bestResult ?? { rows: [], partialRowIds: [] };
         }
         try {
             const result = await readRows(page);
-            if (result.rows.length > 0)
-                return result;
+            if (result.rows.length > 0) {
+                const partialRatio = result.partialRowIds.length / result.rows.length;
+                // Хороший результат — возвращаем немедленно.
+                if (partialRatio <= maxPartialRatio)
+                    return result;
+                // Иначе запоминаем как fallback если он лучше предыдущего.
+                if (result.partialRowIds.length < bestPartialCount) {
+                    bestResult = result;
+                    bestPartialCount = result.partialRowIds.length;
+                }
+            }
         }
         catch (err) {
-            // Сохраняем последнюю ошибку парсинга (например, отсутствуют обязательные колонки в хедере)
+            // Сохраняем последнюю ошибку (например, отсутствуют обязательные колонки в хедере)
             lastError = err;
         }
-        // Повторно проверяем флаг отмены
         if (options.isCancelled?.()) {
-            return { rows: [], partialRowIds: [] };
+            return bestResult ?? { rows: [], partialRowIds: [] };
         }
         const remainingMs = deadline - Date.now();
         if (remainingMs <= 0) {
-            if (lastError !== null) {
+            // Timeout: отдаём то что собрали (лучшее по partial), либо ошибку, либо пусто.
+            if (bestResult)
+                return bestResult;
+            if (lastError !== null)
                 throw lastError;
-            }
             return { rows: [], partialRowIds: [] };
         }
         await sleep(Math.min(pollMs, remainingMs));

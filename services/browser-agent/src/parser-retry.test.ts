@@ -143,14 +143,15 @@ test('waitForParsedAdsRows пробрасывает ошибку парсинг�
 });
 
 // Сценарий: если ячейка в spinner-загрузке, парсер возвращает строку с пустым полем
-// и кладёт fb_ad_id в partialRowIds — никаких throw, никаких retry. Observer пометит
-// цикл как OK_PARTIAL и дочитает в следующем цикле.
+// и кладёт fb_ad_id в partialRowIds. С maxPartialRatio=1.0 любая доля приемлема —
+// возвращаем сразу (без adaptive wait).
 test('waitForParsedAdsRows возвращает partialRowIds для строки со spinner-метрикой', async () => {
   let attempts = 0;
 
   const result = await waitForParsedAdsRows({} as never, {
     timeoutMs: 100,
     pollMs: 1,
+    maxPartialRatio: 1.0,
     readRows: async () => {
       attempts += 1;
       return {
@@ -163,6 +164,66 @@ test('waitForParsedAdsRows возвращает partialRowIds для строк�
   assert.equal(result.rows.length, 1);
   assert.deepEqual(result.partialRowIds, ['120243762575150044']);
   assert.equal(attempts, 1);
+});
+
+// Сценарий adaptive wait: если первая попытка дала 100% partial, ждём ещё и возвращаем
+// результат когда доля partial упадёт ниже maxPartialRatio.
+test('waitForParsedAdsRows ждёт пока partial-доля упадёт ниже порога', async () => {
+  let attempts = 0;
+
+  const result = await waitForParsedAdsRows({} as never, {
+    timeoutMs: 200,
+    pollMs: 5,
+    maxPartialRatio: 0.5,
+    readRows: async () => {
+      attempts += 1;
+      // На 1-2 попытках все строки partial; на 3-й только 1/3.
+      if (attempts <= 2) {
+        return {
+          rows: [makeRow({ fb_ad_id: '1' }), makeRow({ fb_ad_id: '2' }), makeRow({ fb_ad_id: '3' })],
+          partialRowIds: ['1', '2', '3'],
+        };
+      }
+      return {
+        rows: [makeRow({ fb_ad_id: '1' }), makeRow({ fb_ad_id: '2' }), makeRow({ fb_ad_id: '3' })],
+        partialRowIds: ['3'],
+      };
+    },
+  });
+
+  assert.equal(result.rows.length, 3);
+  assert.deepEqual(result.partialRowIds, ['3']);
+  assert.equal(attempts, 3);
+});
+
+// Сценарий timeout: если partial-доля так и не упала ниже порога, возвращаем best-so-far
+// (тот результат, где partial был минимальным) — не throw, не пусто.
+test('waitForParsedAdsRows по таймауту возвращает best-so-far результат', async () => {
+  let attempts = 0;
+
+  const result = await waitForParsedAdsRows({} as never, {
+    timeoutMs: 60,
+    pollMs: 5,
+    maxPartialRatio: 0.1,
+    readRows: async () => {
+      attempts += 1;
+      // Чередуем "плохой" (100%) и "получше" (60%) — best-so-far должен быть с 60%.
+      if (attempts % 2 === 1) {
+        return {
+          rows: [makeRow({ fb_ad_id: '1' }), makeRow({ fb_ad_id: '2' })],
+          partialRowIds: ['1', '2'],
+        };
+      }
+      return {
+        rows: [makeRow({ fb_ad_id: '1' }), makeRow({ fb_ad_id: '2' })],
+        partialRowIds: ['1'],
+      };
+    },
+  });
+
+  assert.equal(result.rows.length, 2);
+  // Best-so-far — это вариант с 1 partial, а не 2.
+  assert.equal(result.partialRowIds.length, 1);
 });
 
 

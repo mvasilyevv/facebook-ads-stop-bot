@@ -434,11 +434,14 @@ async function runScanCycle(call) {
             await waitForDomStable(page, 2.0, 0.1, () => cancelled);
             if (cancelled)
                 break;
-            // Meta может на короткое время очистить виртуальную таблицу после refresh/scroll.
+            // Adaptive wait: возвращается сразу, если ≤10% строк в spinner-загрузке.
+            // Иначе ждёт до 10с пока Facebook дозаполнит метрики — иначе snapshot будет
+            // полупустой и правила не сработают.
             const parseStart = Date.now();
             const { rows, partialRowIds: passPartialIds } = await (0, parser_js_1.waitForParsedAdsRows)(page, {
-                timeoutMs: 6_000,
-                pollMs: 300,
+                timeoutMs: 10_000,
+                pollMs: 500,
+                maxPartialRatio: 0.1,
                 isCancelled: () => cancelled,
             });
             parseAccumMs += Date.now() - parseStart;
