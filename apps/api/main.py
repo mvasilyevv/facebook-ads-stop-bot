@@ -9,14 +9,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from sqlalchemy import text
+from sqlalchemy import delete, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.deps import get_db, require_api_key_or_tma, verify_api_key
@@ -38,8 +40,10 @@ from apps.api.routers import (
 from apps.api.routers.campaign_creator import router as campaign_creator_router
 from apps.api.routers.campaign_recorder import router as campaign_recorder_router
 from core.config import get_settings
-from core.db import get_engine
+from core.db import get_engine, get_session_factory
 from core.db.base import Base
+from core.models import ScanRun
+from core.observer.scan_run_writer import mark_interrupted_runs
 from core.sentry import setup_sentry
 
 # Инициализируем Sentry как можно раньше, до создания приложения
@@ -64,6 +68,42 @@ def _has_alembic_migrations() -> bool:
     )
 
 
+_housekeeping_logger = logging.getLogger(__name__)
+
+
+async def _scan_runs_housekeeping_loop() -> None:
+    """Каждые 5 мин помечает зависшие RUNNING-черновики как INTERRUPTED.
+    Раз в сутки удаляет scan_runs старше 30 дней.
+    """
+    factory = get_session_factory()
+    next_retention_at = datetime.now(UTC)
+    while True:
+        try:
+            async with factory() as session:
+                cutoff = datetime.now(UTC) - timedelta(minutes=5)
+                marked = await mark_interrupted_runs(session, older_than=cutoff)
+                await session.commit()
+                if marked:
+                    _housekeeping_logger.info(
+                        "scan_runs: %d черновиков помечены INTERRUPTED", marked
+                    )
+
+                if datetime.now(UTC) >= next_retention_at:
+                    retention_cutoff = datetime.now(UTC) - timedelta(days=30)
+                    result = await session.execute(
+                        delete(ScanRun).where(ScanRun.finished_at < retention_cutoff)
+                    )
+                    await session.commit()
+                    if result.rowcount:
+                        _housekeeping_logger.info(
+                            "scan_runs: %d старых строк удалено", result.rowcount
+                        )
+                    next_retention_at = datetime.now(UTC) + timedelta(days=1)
+        except Exception:
+            _housekeeping_logger.exception("scan_runs housekeeping упал, продолжаю через 5 мин")
+        await asyncio.sleep(5 * 60)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Создаём таблицы только когда проект работает без Alembic-миграций."""
@@ -80,7 +120,19 @@ async def lifespan(app: FastAPI):
             "Установите API_KEY в .env перед деплоем в production."
         )
 
+    # Фоновая задача housekeeping scan_runs
+    housekeeping_task = asyncio.create_task(
+        _scan_runs_housekeeping_loop(),
+        name="scan-runs-housekeeping",
+    )
+
     yield
+
+    housekeeping_task.cancel()
+    try:
+        await housekeeping_task
+    except asyncio.CancelledError:
+        pass
     await engine.dispose()
 
 
