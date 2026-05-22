@@ -6,7 +6,7 @@ import { renderMarkdown } from "../../utils/markdown.js";
  * Карточка глобального AI брифинга для Telegram Mini App.
  * Neo Control Room мобильный дизайн.
  */
-export default function AIBriefingCard() {
+export default function AIBriefingCard({ clientData = null }) {
   const [loading, setLoading] = useState(false);
   const [content, setContent] = useState("");
   const [cachedAt, setCachedAt] = useState(null);
@@ -17,7 +17,7 @@ export default function AIBriefingCard() {
     setLoading(true);
     setError(null);
     try {
-      const data = await getAIAnalysis("briefing", "global", force);
+      const data = await getAIAnalysis("briefing", "global", force, clientData);
       setContent(data.content);
       setCachedAt(data.cached_at);
       setWarning(data.warning);

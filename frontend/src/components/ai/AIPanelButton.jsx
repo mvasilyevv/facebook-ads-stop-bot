@@ -4,7 +4,7 @@ import { getAIAnalysis } from '../../api';
 /**
  * Кнопка панели "✦ Анализ" для Офферов или Алертов, открывающая оверлей с AI-аналитикой.
  */
-export default function AIPanelButton({ blockType, title = 'Анализ панели' }) {
+export default function AIPanelButton({ blockType, title = 'Анализ панели', clientData = null }) {
   const [isOpen, setIsOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [content, setContent] = useState('');
@@ -16,7 +16,7 @@ export default function AIPanelButton({ blockType, title = 'Анализ пан�
     setLoading(true);
     setError(null);
     try {
-      const data = await getAIAnalysis(blockType, 'global', force);
+      const data = await getAIAnalysis(blockType, 'global', force, clientData);
       setContent(data.content);
       setCachedAt(data.cached_at);
       setWarning(data.warning);

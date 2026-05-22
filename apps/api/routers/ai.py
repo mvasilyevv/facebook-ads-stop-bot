@@ -56,6 +56,13 @@ class AIAnalyzeRequest(BaseModel):
         "global", description="Ключ области (например, 'global' или UUID алерта)"
     )
     force_refresh: bool = Field(False, description="Принудительно обновить кэш")
+    client_data: dict[str, Any] | None = Field(
+        None,
+        description=(
+            "Данные графика/таблицы, которые видит пользователь в этот момент. "
+            "Если переданы — AI анализирует именно их, а не выборку из БД."
+        ),
+    )
 
 
 class AIAnalyzeResponse(BaseModel):
@@ -80,13 +87,22 @@ async def gather_context_data(db: AsyncSession, block_type: str, scope_key: str)
         active_offers = await db.scalars(select(Offer).where(Offer.is_active.is_(True)))
         offers_list = [{"code": o.code, "cpa": float(o.cpa_amount)} for o in active_offers]
 
-        # Собираем активные кампании и их расходы за сегодня через связь с AdSnapshot
+        # Находим время последнего сканирования
+        last_scan = await db.scalar(select(func.max(AdSnapshot.last_observed_at)))
+        scan_cutoff = last_scan - timedelta(minutes=30) if last_scan else None
+
+        # Собираем активные кампании и их расходы за сегодня через связь с AdSnapshot (только свежие за 30 минут)
         campaign_spends_query = (
             select(FbCampaign.campaign_name, AdSnapshot.spend, AdSnapshot.delivery_status)
             .join(FbAdset, FbCampaign.id == FbAdset.campaign_id)
             .join(FbAd, FbAdset.id == FbAd.adset_id)
             .join(AdSnapshot, FbAd.id == AdSnapshot.ad_id)
         )
+        if scan_cutoff:
+            campaign_spends_query = campaign_spends_query.where(
+                AdSnapshot.last_observed_at >= scan_cutoff
+            )
+
         campaigns_res = await db.execute(campaign_spends_query)
         campaign_map = {}
         for name, spend, delivery_status in campaigns_res.all():
@@ -96,13 +112,17 @@ async def gather_context_data(db: AsyncSession, block_type: str, scope_key: str)
 
         campaigns_list = [{"name": name, "spend": spend} for name, spend in campaign_map.items()]
 
-        # Недавние 5 алертов с подгрузкой офферов
-        alerts_query = (
-            select(AlertEvent, Offer.code.label("offer_code"))
-            .outerjoin(Offer, AlertEvent.offer_id == Offer.id)
-            .order_by(AlertEvent.created_at.desc())
-            .limit(5)
+        # Недавние 5 алертов с подгрузкой офферов (только за последние 24 часа от последнего сканирования)
+        alerts_query = select(AlertEvent, Offer.code.label("offer_code")).outerjoin(
+            Offer, AlertEvent.offer_id == Offer.id
         )
+        if last_scan:
+            alerts_query = alerts_query.where(
+                AlertEvent.created_at >= last_scan - timedelta(hours=24)
+            )
+
+        alerts_query = alerts_query.order_by(AlertEvent.created_at.desc()).limit(5)
+
         alerts_res = await db.execute(alerts_query)
         alerts_list = [
             {
@@ -192,7 +212,11 @@ async def gather_context_data(db: AsyncSession, block_type: str, scope_key: str)
         }
 
     elif block_type == "pacing":
-        # Собираем данные по кампаниям, объединяя с AdSnapshot
+        # Находим время последнего сканирования
+        last_scan = await db.scalar(select(func.max(AdSnapshot.last_observed_at)))
+        scan_cutoff = last_scan - timedelta(minutes=30) if last_scan else None
+
+        # Собираем данные по кампаниям, объединяя с AdSnapshot (только свежие за 30 минут)
         q = (
             select(
                 FbCampaign.campaign_name,
@@ -204,6 +228,9 @@ async def gather_context_data(db: AsyncSession, block_type: str, scope_key: str)
             .join(FbAd, FbAdset.id == FbAd.adset_id)
             .join(AdSnapshot, FbAd.id == AdSnapshot.ad_id)
         )
+        if scan_cutoff:
+            q = q.where(AdSnapshot.last_observed_at >= scan_cutoff)
+
         res = await db.execute(q)
         campaign_map = {}
         for name, offer_code, spend, delivery_status in res.all():
@@ -329,13 +356,27 @@ async def gather_context_data(db: AsyncSession, block_type: str, scope_key: str)
 
 
 def build_ai_prompt(block_type: str, data: dict[str, Any]) -> tuple[str, str]:
-    """Формирует системный и пользовательский промпт на русском языке."""
+    """Формирует системный и пользовательский промпт на русском языке.
+
+    Если в data передан client_snapshot (source == "client_snapshot"), промпт
+    рассказывает AI, что данные взяты ровно те, которые сейчас отображены
+    пользователю на графике — это устраняет рассинхрон UI↔AI.
+    """
     system_prompt = (
         "Вы — профессиональный AI-аналитик Neo Control Room в панели AdGuard FB Bot. "
         "Ваша цель — анализировать метрики закупки трафика, выявлять аномалии, давать краткие и полезные советы на русском языке. "
         "Ответ должен быть написан в профессиональном, сжатом стиле в формате Markdown. "
         "Используйте списки, таблицы и выделения для структурирования информации. "
         "Не лейте воду, пишите строго по делу."
+    )
+
+    is_client_snapshot = data.get("source") == "client_snapshot"
+    snapshot_note = (
+        "\nИсточник данных: снимок графика/таблицы, который пользователь видит прямо сейчас в UI. "
+        "Анализируйте именно эти значения, не запрашивайте дополнительных данных и не упоминайте, "
+        "что чего-то не хватает, если поле просто отсутствует — работайте с тем, что есть.\n"
+        if is_client_snapshot
+        else ""
     )
 
     prompt = ""
@@ -398,6 +439,9 @@ def build_ai_prompt(block_type: str, data: dict[str, Any]) -> tuple[str, str]:
             "Дайте оценку активности автоматики бота и успешности выполнения задач."
         )
 
+    if is_client_snapshot and prompt:
+        prompt = snapshot_note + prompt
+
     return system_prompt, prompt
 
 
@@ -412,14 +456,17 @@ async def ai_analyze(
     if block_type not in TTL_POLICIES:
         raise HTTPException(status_code=400, detail=f"Недопустимый block_type: {block_type}")
 
-    # 1. Собираем свежие метрики
-    try:
-        metrics = await gather_context_data(db, block_type, scope_key)
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.error("Ошибка сбора метрик для AI: %s", exc, exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Ошибка сбора метрик: {str(exc)}") from exc
+    # 1. Собираем свежие метрики (из БД или из клиентского снимка)
+    if body.client_data is not None:
+        metrics = {**body.client_data, "source": "client_snapshot"}
+    else:
+        try:
+            metrics = await gather_context_data(db, block_type, scope_key)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.error("Ошибка сбора метрик для AI: %s", exc, exc_info=True)
+            raise HTTPException(status_code=500, detail=f"Ошибка сбора метрик: {str(exc)}") from exc
 
     # 2. Вычисляем хэш от метрик
     payload_hash = calculate_hash(metrics)

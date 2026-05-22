@@ -5,7 +5,7 @@ import { renderMarkdown } from '../../utils/markdown';
 /**
  * Карточка глобального AI брифинга с поддержкой кэширования и принудительного обновления.
  */
-export default function AIBriefingCard() {
+export default function AIBriefingCard({ clientData = null }) {
   const [loading, setLoading] = useState(false);
   const [content, setContent] = useState('');
   const [cachedAt, setCachedAt] = useState(null);
@@ -17,7 +17,7 @@ export default function AIBriefingCard() {
     setLoading(true);
     setError(null);
     try {
-      const data = await getAIAnalysis('briefing', 'global', force);
+      const data = await getAIAnalysis('briefing', 'global', force, clientData);
       setContent(data.content);
       setCachedAt(data.cached_at);
       setExpiresAt(data.expires_at);
@@ -39,7 +39,7 @@ export default function AIBriefingCard() {
   };
 
   return (
-    <div className="relative overflow-hidden rounded-md border border-border bg-surface p-md transition-all hover:shadow-[0_0_15px_rgba(255,107,0,0.05)]">
+    <div className="panel relative h-full overflow-hidden p-md transition-all hover:shadow-[0_0_15px_rgba(255,107,0,0.05)]">
       {/* Шапка карточки */}
       <div className="flex items-center justify-between border-b border-border pb-sm mb-md">
         <div className="flex items-center gap-xs">
@@ -80,21 +80,23 @@ export default function AIBriefingCard() {
       )}
 
       {/* Содержимое брифинга */}
-      {loading ? (
-        <div className="flex h-32 flex-col items-center justify-center gap-sm">
-          <span className="h-6 w-6 animate-spin rounded-full border-2 border-accent border-t-transparent" />
-          <span className="font-mono text-2xs text-text-dim">Сбор данных и генерация AI сводки...</span>
-        </div>
-      ) : content ? (
-        <div 
-          className="prose prose-invert max-w-none text-xs text-text-dim leading-relaxed whitespace-pre-wrap font-sans"
-          dangerouslySetInnerHTML={{ __html: renderMarkdown(content) }}
-        />
-      ) : (
-        <div className="flex h-24 items-center justify-center font-mono text-2xs text-text-muted">
-          Нажмите кнопку выше, чтобы сгенерировать AI-сводку
-        </div>
-      )}
+      <div className="flex min-h-[6rem] flex-1 flex-col">
+        {loading ? (
+          <div className="flex flex-1 flex-col items-center justify-center gap-sm">
+            <span className="h-6 w-6 animate-spin rounded-full border-2 border-accent border-t-transparent" />
+            <span className="font-mono text-2xs text-text-dim">Сбор данных и генерация AI сводки...</span>
+          </div>
+        ) : content ? (
+          <div
+            className="prose prose-invert max-w-none text-xs text-text-dim leading-relaxed whitespace-pre-wrap font-sans"
+            dangerouslySetInnerHTML={{ __html: renderMarkdown(content) }}
+          />
+        ) : (
+          <div className="flex flex-1 items-center justify-center font-mono text-2xs text-text-muted">
+            Нажмите кнопку выше, чтобы сгенерировать AI-сводку
+          </div>
+        )}
+      </div>
     </div>
   );
 }

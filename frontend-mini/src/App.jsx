@@ -9,7 +9,6 @@ import OffersPage from "./pages/OffersPage.jsx";
 import ScriptsPage from "./pages/ScriptsPage.jsx";
 import HistoryPage from "./pages/HistoryPage.jsx";
 import AdDetailPage from "./pages/AdDetailPage.jsx";
-import ChatPage from "./pages/ChatPage.jsx";
 
 // Гард аутентификации — выполняет логин при первом рендере
 function AuthGuard({ children }) {
@@ -54,7 +53,6 @@ function TabBar() {
     { to: "/", icon: "📊", label: "Дашборд", end: true },
     { to: "/ads", icon: "📢", label: "Объявления" },
     { to: "/offers", icon: "🎯", label: "Офферы" },
-    { to: "/chat", icon: "🤖", label: "AI" },
     { to: "/history", icon: "📅", label: "История" },
     { to: "/settings", icon: "⚙️", label: "Настройки" },
   ];
@@ -143,7 +141,6 @@ export default function App() {
             <Route path="/health" element={<HealthPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/scripts" element={<ScriptsPage />} />
-            <Route path="/chat" element={<ChatPage />} />
             <Route path="/ads/:fbAdId" element={<AdDetailPage />} />
           </Routes>
         </div>

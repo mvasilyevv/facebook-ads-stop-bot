@@ -97,22 +97,15 @@ export async function claimAd(fbAdId) {
   });
 }
 
-// AI-чат: отправляет историю, получает ответ + tool_calls
-export async function askAI(messages, allowTools = true) {
-  return fetchJson("/chat/ask", {
-    method: "POST",
-    body: JSON.stringify({ messages, allow_tools: allowTools }),
-  });
-}
-
 // AI-аналитика с кэшированием
-export async function getAIAnalysis(blockType, scopeKey = "global", forceRefresh = false) {
+export async function getAIAnalysis(blockType, scopeKey = "global", forceRefresh = false, clientData = null) {
   return fetchJson("/ai/analyze", {
     method: "POST",
     body: JSON.stringify({
       block_type: blockType,
       scope_key: scopeKey,
       force_refresh: forceRefresh,
+      client_data: clientData,
     }),
   });
 }
