@@ -119,6 +119,9 @@ class ObserverSettings(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     current_scan_interval_seconds: Mapped[int | None] = mapped_column(Integer)
     current_scan_jitter_seconds: Mapped[int | None] = mapped_column(Integer)
     current_scan_threat_level: Mapped[str | None] = mapped_column(String(32))
+    # Активная фаза текущего цикла (для UI realtime-плитки)
+    active_phase: Mapped[str | None] = mapped_column(String(32))
+    phase_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     next_scan_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Флаг автоматического включения объявлений по рекомендациям
     auto_enable_recommendations: Mapped[bool] = mapped_column(

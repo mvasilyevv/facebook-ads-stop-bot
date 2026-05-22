@@ -153,7 +153,9 @@ async def get_observer_status(db: AsyncSession = Depends(get_db)) -> dict[str, A
         "cabinet_day_started_at": (
             settings.cabinet_day_started_at.isoformat() if settings.cabinet_day_started_at else None
         ),
-        "active_phase": None,  # TODO(T15): реальная фаза будет тут
-        "phase_started_at": None,  # TODO(T15)
+        "active_phase": settings.active_phase,
+        "phase_started_at": (
+            settings.phase_started_at.isoformat() if settings.phase_started_at else None
+        ),
         "last_run": last_run_payload,
     }

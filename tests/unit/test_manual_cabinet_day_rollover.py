@@ -74,6 +74,8 @@ def test_get_observer_status_returns_fields():
         worker_last_error_at=None,
         current_scan_id=7,
         next_scan_at=datetime(2026, 5, 21, 12, 1, tzinfo=UTC),
+        active_phase=None,
+        phase_started_at=None,
     )
     db = AsyncMock()
     db.scalar = AsyncMock(side_effect=[42, 50])

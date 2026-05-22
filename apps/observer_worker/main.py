@@ -64,6 +64,7 @@ from core.observer.outcome_classifier import (
 from core.observer.regression_guard import RegressionGuard
 from core.observer.runtime_status import (
     format_observer_runtime_message,
+    set_observer_phase,
     update_observer_runtime_status,
 )
 from core.observer.scan_guard import ZeroScanGuard
@@ -1468,6 +1469,7 @@ async def observer_loop(
                         # 1-2. Сканирование через gRPC browser-agent: refresh + первый проход
                         # settle_delay_seconds=0.0 — фиксированный sleep после refresh убран.
                         # Ожидание реальных строк/стабильности DOM на TS-стороне делает его лишним.
+                        await set_observer_phase("scrolling")
                         scan_events = grpc_client.run_scan_cycle(
                             max_scroll_passes=50,
                             do_refresh=True,
@@ -1493,6 +1495,7 @@ async def observer_loop(
 
                             if isinstance(event, ScanResult):
                                 scan_result_obj = event
+                                await set_observer_phase("parsing")
                                 timing["scan_result"] = _time.monotonic()
                                 rows = event.rows
                                 logger.info(
@@ -1646,6 +1649,7 @@ async def observer_loop(
                     consecutive_empty_scan_cycles = 0
 
                     # 3. Оценка правил, FSM-переходы, сбор алертов
+                    await set_observer_phase("evaluating")
                     alerts_to_send, stop_alerts, snapshot_batch = await _run_scan_cycle(
                         offers=offers,
                         rows=rows,
@@ -2060,6 +2064,7 @@ async def observer_loop(
                 )
 
             # 6. Прерываемый сон с адаптивным интервалом + поллинг scan_requested
+            await set_observer_phase("sleeping")
             should_continue = await _wait_for_next_cycle(
                 shutdown_event=shutdown_event,
                 cycle_completed=cycle_completed,
@@ -2069,6 +2074,10 @@ async def observer_loop(
             if not should_continue:
                 return
     finally:
+        try:
+            await set_observer_phase(None)
+        except Exception:
+            pass
         # Отменяем фоновый heartbeat при выходе из цикла
         heartbeat_task.cancel()
         try:

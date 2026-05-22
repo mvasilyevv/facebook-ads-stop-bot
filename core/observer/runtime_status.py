@@ -7,10 +7,11 @@ import logging
 import os
 from datetime import UTC, datetime
 
+from sqlalchemy import update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from core.db import get_session_factory
-from core.models import WorkerHeartbeat
+from core.models import ObserverSettings, WorkerHeartbeat
 from core.settings_queries import get_or_create_observer_settings
 
 logger = logging.getLogger(__name__)
@@ -118,6 +119,26 @@ async def update_observer_runtime_status(
             await session.commit()
     except Exception:
         logger.debug("Не удалось обновить runtime-статус observer", exc_info=True)
+
+
+async def set_observer_phase(phase: str | None) -> None:
+    """Записывает текущую фазу цикла observer'а в БД.
+
+    phase ∈ {None, "refresh", "scrolling", "parsing", "evaluating", "sleeping"} —
+    конкретные значения определяет вызывающий код.
+    """
+    factory = get_session_factory()
+    try:
+        async with factory() as session:
+            await session.execute(
+                update(ObserverSettings).values(
+                    active_phase=phase,
+                    phase_started_at=datetime.now(UTC) if phase else None,
+                )
+            )
+            await session.commit()
+    except Exception:
+        logger.debug("Не удалось записать active_phase observer'а", exc_info=True)
 
 
 async def update_worker_heartbeat(
