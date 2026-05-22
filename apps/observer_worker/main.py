@@ -1118,6 +1118,40 @@ async def observer_loop(
         """Проверяет, нужно ли завершить работу."""
         return shutdown_event is not None and shutdown_event.is_set()
 
+    # run_id живёт между фазами одной итерации цикла; при ранних выходах
+    # (fast-stop, empty-retry, timeout, user-disable) закрывается через
+    # _ensure_scan_run_finished_with. nonlocal требует объявления в enclosing scope.
+    run_id: int | None = None
+
+    async def _ensure_scan_run_finished_with(
+        outcome: str,
+        error_kind: str | None = None,
+        error_message: str | None = None,
+    ) -> None:
+        """Безопасно закрывает run_id если он ещё открыт.
+
+        Используется в early-exit путях (fast-stop, empty-scan retry, user disable,
+        timeout) чтобы не оставлять RUNNING-черновик в scan_runs.
+        """
+        nonlocal run_id
+        if run_id is None:
+            return
+        factory_local = get_session_factory()
+        try:
+            async with factory_local() as session_local:
+                await finish_scan_run(
+                    session_local,
+                    run_id=run_id,
+                    outcome=outcome,
+                    error_kind=error_kind,
+                    error_message=(error_message or "")[:500] or None,
+                )
+                await session_local.commit()
+        except Exception:
+            logger.exception("Не удалось закрыть scan_run (%s)", outcome)
+        finally:
+            run_id = None
+
     # Запускаем фоновую задачу heartbeat, которая читает глобальные переменные
     # и пишет heartbeat каждые OBSERVER_HEARTBEAT_INTERVAL_SECONDS секунд.
     heartbeat_task = asyncio.create_task(
@@ -1133,7 +1167,7 @@ async def observer_loop(
             snapshot_batch: list[dict] = []
             fast_stop_triggered = False
             scan_result_obj: ScanResult | None = None
-            run_id: int | None = None
+            run_id = None
             # Timing-инструментация: замеряем фазы цикла для baseline/после-сравнения.
             timing: dict[str, float] = {"cycle_start": _time.monotonic()}
             try:
@@ -1450,6 +1484,11 @@ async def observer_loop(
                                 close_stream = getattr(scan_events, "aclose", None)
                                 if close_stream is not None:
                                     await close_stream()
+                                await _ensure_scan_run_finished_with(
+                                    outcome="INTERRUPTED",
+                                    error_kind="user_disabled",
+                                    error_message="Сканирование отключено пользователем посреди стрима",
+                                )
                                 break
 
                             if isinstance(event, ScanResult):
@@ -1533,6 +1572,11 @@ async def observer_loop(
 
                 except BrowserLockTimeoutError as exc:
                     consecutive_empty_scan_cycles = 0
+                    await _ensure_scan_run_finished_with(
+                        outcome="INTERRUPTED",
+                        error_kind="browser_lock_timeout",
+                        error_message=str(exc),
+                    )
                     status_ref[0] = "WAITING_BROWSER"
                     message_ref[0] = (
                         "Браузер занят другой операцией. Сканирование будет повторено позже."
@@ -1561,6 +1605,7 @@ async def observer_loop(
                         tg_destinations=tg_destinations,
                         current_scan_id=current_scan_id,
                     )
+                    await _ensure_scan_run_finished_with(outcome="OK")
                 else:
                     if not rows:
                         consecutive_empty_scan_cycles += 1
@@ -1579,9 +1624,19 @@ async def observer_loop(
                                 max_attempts=EMPTY_SCAN_FAILURE_LIMIT,
                                 retry_delay_seconds=EMPTY_SCAN_RETRY_DELAY_SECONDS,
                             )
+                            await _ensure_scan_run_finished_with(
+                                outcome="EMPTY_BAD",
+                                error_kind="empty_scan",
+                                error_message=empty_scan_reason,
+                            )
                             await asyncio.sleep(EMPTY_SCAN_RETRY_DELAY_SECONDS)
                             continue
 
+                        await _ensure_scan_run_finished_with(
+                            outcome="EMPTY_BAD",
+                            error_kind="empty_scan",
+                            error_message=empty_scan_reason,
+                        )
                         raise ScanDataUnavailableError(
                             attempts=consecutive_empty_scan_cycles,
                             retry_interval_seconds=EMPTY_SCAN_RETRY_DELAY_SECONDS,
@@ -1798,6 +1853,11 @@ async def observer_loop(
                 continue
 
             except TimeoutError:
+                await _ensure_scan_run_finished_with(
+                    outcome="INTERRUPTED",
+                    error_kind="timeout",
+                    error_message="TimeoutError при ожидании DOM",
+                )
                 consecutive_empty_scan_cycles = 0
                 # asyncio.timeout бросает TimeoutError (BaseException в Python 3.11+).
                 # Ловим отдельно, чтобы таймаут DOM-стабилизации не крашил весь loop.
