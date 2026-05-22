@@ -2,7 +2,8 @@
 """Client and server classes corresponding to protobuf-defined services."""
 
 import grpc
-from v1 import scanner_pb2 as v1_dot_scanner__pb2
+
+from . import scanner_pb2 as v1_dot_scanner__pb2
 
 GRPC_GENERATED_VERSION = "1.80.0"
 GRPC_VERSION = grpc.__version__
