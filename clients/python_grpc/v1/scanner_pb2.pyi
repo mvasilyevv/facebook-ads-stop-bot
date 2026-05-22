@@ -84,17 +84,32 @@ class ScanComplete(_message.Message):
         "duration_seconds",
         "dismissed_modals",
         "unknown_modal_artifacts",
+        "phase_timings",
+        "partial_row_ids",
+        "warnings",
+        "empty_reason",
+        "rows_with_all_metrics_empty",
     )
     ALL_ROWS_FIELD_NUMBER: _ClassVar[int]
     TOTAL_PASSES_FIELD_NUMBER: _ClassVar[int]
     DURATION_SECONDS_FIELD_NUMBER: _ClassVar[int]
     DISMISSED_MODALS_FIELD_NUMBER: _ClassVar[int]
     UNKNOWN_MODAL_ARTIFACTS_FIELD_NUMBER: _ClassVar[int]
+    PHASE_TIMINGS_FIELD_NUMBER: _ClassVar[int]
+    PARTIAL_ROW_IDS_FIELD_NUMBER: _ClassVar[int]
+    WARNINGS_FIELD_NUMBER: _ClassVar[int]
+    EMPTY_REASON_FIELD_NUMBER: _ClassVar[int]
+    ROWS_WITH_ALL_METRICS_EMPTY_FIELD_NUMBER: _ClassVar[int]
     all_rows: _containers.RepeatedCompositeFieldContainer[ScannedAdRow]
     total_passes: int
     duration_seconds: float
     dismissed_modals: _containers.RepeatedScalarFieldContainer[str]
     unknown_modal_artifacts: _containers.RepeatedScalarFieldContainer[str]
+    phase_timings: PhaseTimings
+    partial_row_ids: _containers.RepeatedScalarFieldContainer[str]
+    warnings: _containers.RepeatedScalarFieldContainer[str]
+    empty_reason: str
+    rows_with_all_metrics_empty: int
     def __init__(
         self,
         all_rows: _Optional[_Iterable[_Union[ScannedAdRow, _Mapping]]] = ...,
@@ -102,6 +117,32 @@ class ScanComplete(_message.Message):
         duration_seconds: _Optional[float] = ...,
         dismissed_modals: _Optional[_Iterable[str]] = ...,
         unknown_modal_artifacts: _Optional[_Iterable[str]] = ...,
+        phase_timings: _Optional[_Union[PhaseTimings, _Mapping]] = ...,
+        partial_row_ids: _Optional[_Iterable[str]] = ...,
+        warnings: _Optional[_Iterable[str]] = ...,
+        empty_reason: _Optional[str] = ...,
+        rows_with_all_metrics_empty: _Optional[int] = ...,
+    ) -> None: ...
+
+class PhaseTimings(_message.Message):
+    __slots__ = ("refresh_ms", "first_row_ms", "scroll_ms", "parse_ms", "total_ms")
+    REFRESH_MS_FIELD_NUMBER: _ClassVar[int]
+    FIRST_ROW_MS_FIELD_NUMBER: _ClassVar[int]
+    SCROLL_MS_FIELD_NUMBER: _ClassVar[int]
+    PARSE_MS_FIELD_NUMBER: _ClassVar[int]
+    TOTAL_MS_FIELD_NUMBER: _ClassVar[int]
+    refresh_ms: int
+    first_row_ms: int
+    scroll_ms: int
+    parse_ms: int
+    total_ms: int
+    def __init__(
+        self,
+        refresh_ms: _Optional[int] = ...,
+        first_row_ms: _Optional[int] = ...,
+        scroll_ms: _Optional[int] = ...,
+        parse_ms: _Optional[int] = ...,
+        total_ms: _Optional[int] = ...,
     ) -> None: ...
 
 class ScanError(_message.Message):
@@ -731,6 +772,36 @@ class ScannedAdRow(_message.Message):
         cost_per_registration: _Optional[str] = ...,
         deposits: _Optional[int] = ...,
         resolved_offer_code: _Optional[str] = ...,
+    ) -> None: ...
+
+class HardReloadPageRequest(_message.Message):
+    __slots__ = ("session_id", "page_id", "bypass_cache")
+    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
+    PAGE_ID_FIELD_NUMBER: _ClassVar[int]
+    BYPASS_CACHE_FIELD_NUMBER: _ClassVar[int]
+    session_id: str
+    page_id: str
+    bypass_cache: bool
+    def __init__(
+        self,
+        session_id: _Optional[str] = ...,
+        page_id: _Optional[str] = ...,
+        bypass_cache: bool = ...,
+    ) -> None: ...
+
+class HardReloadPageResponse(_message.Message):
+    __slots__ = ("success", "error_message", "reload_ms")
+    SUCCESS_FIELD_NUMBER: _ClassVar[int]
+    ERROR_MESSAGE_FIELD_NUMBER: _ClassVar[int]
+    RELOAD_MS_FIELD_NUMBER: _ClassVar[int]
+    success: bool
+    error_message: str
+    reload_ms: int
+    def __init__(
+        self,
+        success: bool = ...,
+        error_message: _Optional[str] = ...,
+        reload_ms: _Optional[int] = ...,
     ) -> None: ...
 
 class HumanProfile(_message.Message):

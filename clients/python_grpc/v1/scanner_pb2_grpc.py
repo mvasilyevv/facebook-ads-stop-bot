@@ -143,6 +143,12 @@ class ScannerServiceStub(object):
             response_deserializer=v1_dot_scanner__pb2.ApplyColumnWidthsResponse.FromString,
             _registered_method=True,
         )
+        self.HardReloadPage = channel.unary_unary(
+            "/fb_agent.scanner.v1.ScannerService/HardReloadPage",
+            request_serializer=v1_dot_scanner__pb2.HardReloadPageRequest.SerializeToString,
+            response_deserializer=v1_dot_scanner__pb2.HardReloadPageResponse.FromString,
+            _registered_method=True,
+        )
 
 
 class ScannerServiceServicer(object):
@@ -258,6 +264,12 @@ class ScannerServiceServicer(object):
         context.set_details("Method not implemented!")
         raise NotImplementedError("Method not implemented!")
 
+    def HardReloadPage(self, request, context):
+        """Жёсткая перезагрузка страницы с очисткой кеша (через CDP Network.clearBrowserCache)."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details("Method not implemented!")
+        raise NotImplementedError("Method not implemented!")
+
 
 def add_ScannerServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -350,6 +362,11 @@ def add_ScannerServiceServicer_to_server(servicer, server):
             servicer.ApplyColumnWidths,
             request_deserializer=v1_dot_scanner__pb2.ApplyColumnWidthsRequest.FromString,
             response_serializer=v1_dot_scanner__pb2.ApplyColumnWidthsResponse.SerializeToString,
+        ),
+        "HardReloadPage": grpc.unary_unary_rpc_method_handler(
+            servicer.HardReloadPage,
+            request_deserializer=v1_dot_scanner__pb2.HardReloadPageRequest.FromString,
+            response_serializer=v1_dot_scanner__pb2.HardReloadPageResponse.SerializeToString,
         ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -892,6 +909,36 @@ class ScannerService(object):
             "/fb_agent.scanner.v1.ScannerService/ApplyColumnWidths",
             v1_dot_scanner__pb2.ApplyColumnWidthsRequest.SerializeToString,
             v1_dot_scanner__pb2.ApplyColumnWidthsResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True,
+        )
+
+    @staticmethod
+    def HardReloadPage(
+        request,
+        target,
+        options=(),
+        channel_credentials=None,
+        call_credentials=None,
+        insecure=False,
+        compression=None,
+        wait_for_ready=None,
+        timeout=None,
+        metadata=None,
+    ):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            "/fb_agent.scanner.v1.ScannerService/HardReloadPage",
+            v1_dot_scanner__pb2.HardReloadPageRequest.SerializeToString,
+            v1_dot_scanner__pb2.HardReloadPageResponse.FromString,
             options,
             channel_credentials,
             insecure,

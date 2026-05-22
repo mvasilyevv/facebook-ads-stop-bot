@@ -58,6 +58,8 @@ service ScannerService {
   // Применить сохранённый пресет ширины колонок Ads Manager.
   rpc ApplyColumnWidths(ApplyColumnWidthsRequest) returns (ApplyColumnWidthsResponse);
 
+  // Жёсткая перезагрузка страницы с очисткой кеша (через CDP Network.clearBrowserCache).
+  rpc HardReloadPage(HardReloadPageRequest) returns (HardReloadPageResponse);
 }
 
 // --- RunScanCycle: streaming RPC ---
@@ -91,8 +93,23 @@ message ScanComplete {
   repeated ScannedAdRow all_rows = 1;
   int32 total_passes = 2;
   double duration_seconds = 3;
-  repeated string dismissed_modals = 4;         // id модалок из каталога, которые были закрыты
-  repeated string unknown_modal_artifacts = 5;  // пути вида ".logs/modals/..."
+  repeated string dismissed_modals = 4;
+  repeated string unknown_modal_artifacts = 5;
+
+  // НОВЫЕ ПОЛЯ:
+  PhaseTimings phase_timings = 6;
+  repeated string partial_row_ids = 7;
+  repeated string warnings = 8;
+  string empty_reason = 9;
+  int32 rows_with_all_metrics_empty = 10;
+}
+
+message PhaseTimings {
+  int32 refresh_ms = 1;
+  int32 first_row_ms = 2;
+  int32 scroll_ms = 3;
+  int32 parse_ms = 4;
+  int32 total_ms = 5;
 }
 
 message ScanError {
@@ -380,6 +397,20 @@ message ScannedAdRow {
   string cost_per_registration = 23;
   int32 deposits = 24;
   string resolved_offer_code = 25;
+}
+
+// --- HardReloadPage ---
+
+message HardReloadPageRequest {
+  string session_id = 1;
+  optional string page_id = 2;
+  bool bypass_cache = 3;
+}
+
+message HardReloadPageResponse {
+  bool success = 1;
+  string error_message = 2;
+  int32 reload_ms = 3;
 }
 
 // --- HumanProfile: сессионный "почерк" ---
