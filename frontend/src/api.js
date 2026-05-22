@@ -134,6 +134,9 @@ export const restartDisableWorker = () => request('/disable-worker/restart', { m
 export const getObserverStatus = () => request('/observer/status');
 export const startNewCabinetDay = () =>
   request('/observer/start-new-cabinet-day', { method: 'POST' });
+// История циклов observer'а для модалки. filter ∈ {all,errors,slow,with_alerts}.
+export const getScanRuns = ({ limit = 50, filter = 'all' } = {}) =>
+  request(`/observer/scan-runs?limit=${limit}&filter=${filter}`);
 
 // Vision настройки
 export const getVisionSettings = () => request('/settings/vision');
