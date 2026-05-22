@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import func, select
+from sqlalchemy import Integer, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -159,3 +159,59 @@ async def get_observer_status(db: AsyncSession = Depends(get_db)) -> dict[str, A
         ),
         "last_run": last_run_payload,
     }
+
+
+@router.get("/scan-runs")
+async def list_scan_runs(
+    db: AsyncSession = Depends(get_db),
+    limit: int = 50,
+    filter: str = "all",
+) -> dict[str, Any]:
+    """Возвращает последние N циклов observer'а с опциональным фильтром.
+
+    Используется UI-модалкой «История сканов».
+    Фильтры:
+        - all: все циклы
+        - errors: outcome NOT IN (OK, OK_PARTIAL, EMPTY_OK)
+        - slow: phase_timings.total_ms > 10000
+        - with_alerts: alerts_warning + alerts_stop > 0
+    """
+    limit = max(1, min(limit, 200))
+
+    stmt = select(ScanRun).order_by(ScanRun.started_at.desc()).limit(limit)
+
+    if filter == "errors":
+        stmt = stmt.where(ScanRun.outcome.notin_(["OK", "OK_PARTIAL", "EMPTY_OK"]))
+    elif filter == "slow":
+        stmt = stmt.where(ScanRun.phase_timings["total_ms"].astext.cast(Integer) > 10_000)
+    elif filter == "with_alerts":
+        stmt = stmt.where((ScanRun.alerts_warning + ScanRun.alerts_stop) > 0)
+
+    rows = (await db.execute(stmt)).scalars().all()
+
+    def _to_dict(row: ScanRun) -> dict[str, Any]:
+        duration_seconds = None
+        if row.finished_at is not None:
+            duration_seconds = (row.finished_at - row.started_at).total_seconds()
+        return {
+            "id": row.id,
+            "scan_id": int(row.scan_id),
+            "started_at": row.started_at.isoformat(),
+            "finished_at": row.finished_at.isoformat() if row.finished_at else None,
+            "duration_seconds": duration_seconds,
+            "outcome": row.outcome,
+            "rows_total": row.rows_total,
+            "rows_partial": row.rows_partial,
+            "rows_with_data": row.rows_with_data,
+            "alerts_warning": row.alerts_warning,
+            "alerts_stop": row.alerts_stop,
+            "phase_timings": row.phase_timings or {},
+            "warnings": row.warnings or [],
+            "empty_reason": row.empty_reason,
+            "error_kind": row.error_kind,
+            "error_message": row.error_message,
+            "threat_level": row.threat_level,
+            "next_interval_s": row.next_interval_s,
+        }
+
+    return {"runs": [_to_dict(r) for r in rows]}
