@@ -4,7 +4,9 @@ import * as path from 'path';
 import * as fs from 'fs';
 import type { ServiceDefinition } from '@grpc/grpc-js';
 import { SessionManager, findPreferredPrimaryPage } from './session-manager.js';
-import { refreshTable, parseAdsFromPage, waitForParsedAdsRows } from './parser.js';
+import { refreshTable, parseAdsFromPage, waitForParsedAdsRows, countEmptyMetricsRows, findPartialRows } from './parser.js';
+import { detectEmptyReason } from './empty-reason.js';
+import { hardReloadPage } from './hard-reload.js';
 import {
   getAdsTableScrollAnchor,
   resetAdsTableScroll,
@@ -316,10 +318,11 @@ function sameStringList(left: string[], right: string[]): boolean {
   return left.every((value, index) => value === right[index]);
 }
 
-async function waitForInitialAdsRows(page: any, timeoutMs: number): Promise<void> {
+async function waitForInitialAdsRows(page: any, timeoutMs: number, isCancelled?: () => boolean): Promise<void> {
   const rows = await waitForParsedAdsRows(page, {
     timeoutMs,
     pollMs: 500,
+    isCancelled,
   });
   if (rows.length === 0) {
     console.warn(
@@ -327,7 +330,7 @@ async function waitForInitialAdsRows(page: any, timeoutMs: number): Promise<void
     );
   }
   // Оптимизация: 2 совпадения вместо 3, ранний выход при count ≥ 5 уже на 2-м совпадении.
-  await waitForDomStable(page, 3.0, 0.1);
+  await waitForDomStable(page, 3.0, 0.1, isCancelled);
 }
 
 async function prepareAdsTableForScan(
@@ -337,21 +340,26 @@ async function prepareAdsTableForScan(
     resetFirst: boolean;
     settleDelayMs: number;
   },
+  isCancelled?: () => boolean,
 ): Promise<void> {
   const { doRefresh, resetFirst, settleDelayMs } = options;
 
   // Перед refresh уходим наверх, чтобы Meta обновляла таблицу из начала списка, а не из середины виртуального окна.
   if (resetFirst) {
+    if (isCancelled?.()) return;
     await resetAdsTableScroll(page);
     // settle после reset убран: waitForInitialAdsRows + waitForDomStable ниже сами дождутся рендера.
   }
 
   if (doRefresh) {
+    if (isCancelled?.()) return;
     await refreshTable(page);
+    if (isCancelled?.()) return;
     // settleDelayMs игнорируем намеренно: waitForInitialAdsRows ждёт реальные строки, а не фиксированный sleep.
     await waitForInitialAdsRows(
       page,
       Math.max(SCAN_POST_REFRESH_MIN_ROWS_WAIT_MS, settleDelayMs + SCAN_POST_REFRESH_EXTRA_WAIT_MS),
+      isCancelled,
     );
   }
 
@@ -363,15 +371,17 @@ async function waitForVisibleRowsAfterScroll(
   page: any,
   beforeIds: string[],
   timeoutMs = SCAN_POST_SCROLL_CHANGE_WAIT_MS,
+  isCancelled?: () => boolean,
 ): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
+    if (isCancelled?.()) return false;
     await sleep(SCAN_POST_SCROLL_POLL_MS);
     const currentIds = await getVisibleAdsTableRowIds(page);
     if (currentIds.length === 0) continue;
     if (beforeIds.length === 0 || !sameStringList(beforeIds, currentIds)) {
-      await waitForDomStable(page, 1.5, 0.1);
+      await waitForDomStable(page, 1.5, 0.1, isCancelled);
       return true;
     }
   }
@@ -404,6 +414,20 @@ async function runScanCycle(call: any) {
     const settleDelay = (req.settle_delay_seconds || 3) * 1000;
 
     const startTime = Date.now();
+    // Тайминги фаз — для UI/диагностики (поля ScanComplete.phase_timings).
+    const phaseTimings = {
+      refresh_ms: 0,
+      first_row_ms: 0,
+      scroll_ms: 0,
+      parse_ms: 0,
+      total_ms: 0,
+    };
+    const warnings: string[] = [];
+    let scanStartedAt = startTime;
+    let refreshEndedAt = startTime;
+    let firstRowAt = 0;
+    let scrollAccumMs = 0;
+    let parseAccumMs = 0;
     const allRows: any[] = [];
     let seenRowIds = new Set<string>();
     let stalledPasses = 0;
@@ -418,11 +442,14 @@ async function runScanCycle(call: any) {
     preModalResult.dismissed.forEach((d) => allDismissedModals.push(d.id));
     preModalResult.unknown.forEach((u) => allUnknownModalArtifacts.push(u.screenshotPath));
 
+    const refreshStartedAt = Date.now();
     await prepareAdsTableForScan(page, {
       doRefresh,
       resetFirst,
       settleDelayMs: settleDelay,
-    });
+    }, () => cancelled);
+    refreshEndedAt = Date.now();
+    phaseTimings.refresh_ms = refreshEndedAt - refreshStartedAt;
 
     // Закрываем модальные окна, которые могли появиться после refresh
     const postRefreshModalResult = await dismissKnownModals(page);
@@ -439,14 +466,20 @@ async function runScanCycle(call: any) {
       completedPasses = pass;
 
       // Ждем стабилизации DOM перед чтением видимых строк.
-      await waitForDomStable(page, 2.0, 0.1);
+      await waitForDomStable(page, 2.0, 0.1, () => cancelled);
       if (cancelled) break;
 
       // Meta может на короткое время очистить виртуальную таблицу после refresh/scroll.
+      const parseStart = Date.now();
       const rows = await waitForParsedAdsRows(page, {
         timeoutMs: 6_000,
         pollMs: 300,
+        isCancelled: () => cancelled,
       });
+      parseAccumMs += Date.now() - parseStart;
+      if (firstRowAt === 0 && rows.length > 0) {
+        firstRowAt = Date.now();
+      }
       if (cancelled) break;
       const newRows: any[] = [];
 
@@ -481,16 +514,18 @@ async function runScanCycle(call: any) {
       if (cancelled) break;
 
       const beforeScrollIds = await getVisibleAdsTableRowIds(page);
-      const scrollAfter = await scrollAdsTableDown(page);
+      const scrollStart = Date.now();
+      const scrollAfter = await scrollAdsTableDown(page, undefined, () => cancelled);
       if (cancelled) break;
       let rowsChangedAfterScroll = false;
       if (!scrollAfter.atBottom) {
         if (scrollAfter.moved) {
-          await waitForDomStable(page, 1.0, 0.1);
+          await waitForDomStable(page, 1.0, 0.1, () => cancelled);
         } else {
-          rowsChangedAfterScroll = await waitForVisibleRowsAfterScroll(page, beforeScrollIds);
+          rowsChangedAfterScroll = await waitForVisibleRowsAfterScroll(page, beforeScrollIds, undefined, () => cancelled);
         }
       }
+      scrollAccumMs += Date.now() - scrollStart;
       if (cancelled) break;
       if (newRows.length > 0 || scrollAfter.moved || rowsChangedAfterScroll) {
         stalledPasses = 0;
@@ -507,6 +542,42 @@ async function runScanCycle(call: any) {
       return;
     }
 
+    // Финализируем тайминги фаз
+    phaseTimings.scroll_ms = scrollAccumMs;
+    phaseTimings.parse_ms = parseAccumMs;
+    phaseTimings.first_row_ms = firstRowAt > 0 ? firstRowAt - refreshEndedAt : 0;
+    phaseTimings.total_ms = Date.now() - scanStartedAt;
+
+    // Собираем факты о DOM для empty_reason и warnings
+    let tableState = { hasTableHeader: true, hasFilterChips: false };
+    try {
+      tableState = await page.evaluate(() => {
+        const header = document.querySelector('[role="columnheader"]') as HTMLElement | null;
+        const filterIndicators = document.querySelectorAll(
+          '[aria-label*="фильтр" i], [aria-label*="filter" i], [data-testid*="filter" i]'
+        );
+        return {
+          hasTableHeader: !!header,
+          hasFilterChips: filterIndicators.length > 0,
+        };
+      });
+    } catch {
+      // Если page.evaluate упал — оставляем дефолт (предполагаем, что хедер есть)
+    }
+
+    if (!tableState.hasTableHeader) {
+      warnings.push('header_missing_columns');
+    }
+
+    const rowsWithAllMetricsEmpty = countEmptyMetricsRows(allRows as any);
+    const partialRowIds = findPartialRows(allRows as any);
+
+    const emptyReason = detectEmptyReason({
+      hasTableHeader: tableState.hasTableHeader,
+      hasFilterChips: tableState.hasFilterChips,
+      rowCount: allRows.length,
+    });
+
     // Отправляем финальный результат сканирования.
     call.write({
       session_id: req.session_id,
@@ -516,6 +587,11 @@ async function runScanCycle(call: any) {
         duration_seconds: duration,
         dismissed_modals: allDismissedModals,
         unknown_modal_artifacts: allUnknownModalArtifacts,
+        phase_timings: phaseTimings,
+        partial_row_ids: partialRowIds,
+        warnings,
+        empty_reason: emptyReason ?? '',
+        rows_with_all_metrics_empty: rowsWithAllMetricsEmpty,
       },
     });
 
@@ -900,7 +976,12 @@ async function restoreToggleVisibility(page: any, fbAdId: string, maxPasses: num
 
 // --- Вспомогательные функции ---
 
-async function waitForDomStable(page: any, timeoutSec: number, pollIntervalSec: number): Promise<boolean> {
+async function waitForDomStable(
+  page: any,
+  timeoutSec: number,
+  pollIntervalSec: number,
+  isCancelled?: () => boolean,
+): Promise<boolean> {
   const deadline = Date.now() + timeoutSec * 1000;
   let lastCount = -1;
   let stableCount = 0;
@@ -909,9 +990,11 @@ async function waitForDomStable(page: any, timeoutSec: number, pollIntervalSec: 
   const EARLY_EXIT_COUNT = 5;
 
   while (Date.now() < deadline) {
+    if (isCancelled?.()) return false;
     const count = await page.evaluate(() =>
       document.querySelectorAll('._1gda._2djg').length,
     );
+    if (isCancelled?.()) return false;
     if (count === lastCount && count > 0) {
       stableCount++;
       if (stableCount >= REQUIRED_STABLE) return true;
@@ -1070,6 +1153,26 @@ async function applyColumnWidthsHandler(call: any, callback: any) {
   }
 }
 
+async function hardReloadPageHandler(call: any, callback: any) {
+  try {
+    const session = sessionManager.getSession(call.request.session_id);
+    if (!session) {
+      callback({ code: grpc.status.NOT_FOUND, message: 'session not found' });
+      return;
+    }
+    const page = getPage(session, call.request.page_id);
+    const bypassCache = call.request.bypass_cache !== false;
+    const result = await hardReloadPage(page, bypassCache);
+    callback(null, {
+      success: result.success,
+      error_message: result.errorMessage,
+      reload_ms: result.reloadMs,
+    });
+  } catch (err: any) {
+    callback({ code: grpcCodeForError(err), message: String(err?.message ?? err) });
+  }
+}
+
 // --- Запуск сервера ---
 
 function main() {
@@ -1113,6 +1216,7 @@ function main() {
     validateColumns: validateColumnsHandler,
     captureColumnWidths: captureColumnWidthsHandler,
     applyColumnWidths: applyColumnWidthsHandler,
+    hardReloadPage: hardReloadPageHandler,
   });
 
   const creatorHandlers = createCreatorServiceHandlers(sessionManager);
