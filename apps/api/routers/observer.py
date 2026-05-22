@@ -14,7 +14,7 @@ from sqlalchemy.orm import selectinload
 
 from apps.api.deps import get_db
 from core.cabinet_day import build_cabinet_day_archive_payload, has_any_metric_value
-from core.models import AdSnapshot, CabinetDayArchive, FbAd, FbAdset
+from core.models import AdSnapshot, CabinetDayArchive, FbAd, FbAdset, ScanRun
 from core.settings_queries import get_or_create_observer_settings
 
 logger = logging.getLogger(__name__)
@@ -99,6 +99,42 @@ async def get_observer_status(db: AsyncSession = Depends(get_db)) -> dict[str, A
         )
     active_total = await db.scalar(active_stmt) or 0
 
+    # Последний завершённый цикл из scan_runs (для UI-плитки)
+    last_run_row = (
+        await db.execute(
+            select(ScanRun)
+            .where(ScanRun.outcome != "RUNNING")
+            .order_by(ScanRun.started_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+    last_run_payload = None
+    if last_run_row is not None:
+        duration_seconds = None
+        if last_run_row.finished_at is not None:
+            duration_seconds = (last_run_row.finished_at - last_run_row.started_at).total_seconds()
+        last_run_payload = {
+            "scan_id": int(last_run_row.scan_id),
+            "outcome": last_run_row.outcome,
+            "started_at": last_run_row.started_at.isoformat(),
+            "finished_at": last_run_row.finished_at.isoformat()
+            if last_run_row.finished_at
+            else None,
+            "duration_seconds": duration_seconds,
+            "rows_total": last_run_row.rows_total,
+            "rows_partial": last_run_row.rows_partial,
+            "rows_with_data": last_run_row.rows_with_data,
+            "alerts_warning": last_run_row.alerts_warning,
+            "alerts_stop": last_run_row.alerts_stop,
+            "phase_timings": last_run_row.phase_timings or {},
+            "warnings": last_run_row.warnings or [],
+            "empty_reason": last_run_row.empty_reason,
+            "error_kind": last_run_row.error_kind,
+            "error_message": last_run_row.error_message,
+            "threat_level": last_run_row.threat_level,
+        }
+
     return {
         "is_scanning_enabled": bool(settings.is_scanning_enabled),
         "worker_status": settings.worker_status,
@@ -117,4 +153,7 @@ async def get_observer_status(db: AsyncSession = Depends(get_db)) -> dict[str, A
         "cabinet_day_started_at": (
             settings.cabinet_day_started_at.isoformat() if settings.cabinet_day_started_at else None
         ),
+        "active_phase": None,  # TODO(T15): реальная фаза будет тут
+        "phase_started_at": None,  # TODO(T15)
+        "last_run": last_run_payload,
     }

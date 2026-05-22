@@ -77,6 +77,10 @@ def test_get_observer_status_returns_fields():
     )
     db = AsyncMock()
     db.scalar = AsyncMock(side_effect=[42, 50])
+    # Запрос последнего ScanRun возвращает пустой результат
+    scan_run_result = MagicMock()
+    scan_run_result.scalar_one_or_none.return_value = None
+    db.execute = AsyncMock(return_value=scan_run_result)
 
     from apps.api.deps import require_api_key_or_tma
 
