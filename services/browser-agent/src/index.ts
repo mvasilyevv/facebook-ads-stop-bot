@@ -4,7 +4,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import type { ServiceDefinition } from '@grpc/grpc-js';
 import { SessionManager, findPreferredPrimaryPage } from './session-manager.js';
-import { refreshTable, parseAdsFromPage, waitForParsedAdsRows, countEmptyMetricsRows, findPartialRows } from './parser.js';
+import { refreshTable, waitForParsedAdsRows, countEmptyMetricsRows, findPartialRows } from './parser.js';
 import { detectEmptyReason } from './empty-reason.js';
 import { hardReloadPage } from './hard-reload.js';
 import {
@@ -423,7 +423,6 @@ async function runScanCycle(call: any) {
       total_ms: 0,
     };
     const warnings: string[] = [];
-    let scanStartedAt = startTime;
     let refreshEndedAt = startTime;
     let firstRowAt = 0;
     let scrollAccumMs = 0;
@@ -546,7 +545,7 @@ async function runScanCycle(call: any) {
     phaseTimings.scroll_ms = scrollAccumMs;
     phaseTimings.parse_ms = parseAccumMs;
     phaseTimings.first_row_ms = firstRowAt > 0 ? firstRowAt - refreshEndedAt : 0;
-    phaseTimings.total_ms = Date.now() - scanStartedAt;
+    phaseTimings.total_ms = Date.now() - startTime;
 
     // Собираем факты о DOM для empty_reason и warnings
     let tableState = { hasTableHeader: true, hasFilterChips: false };
@@ -1165,7 +1164,7 @@ async function hardReloadPageHandler(call: any, callback: any) {
     const result = await hardReloadPage(page, bypassCache);
     callback(null, {
       success: result.success,
-      error_message: result.errorMessage,
+      error_message: result.errorMessage ?? '',
       reload_ms: result.reloadMs,
     });
   } catch (err: any) {
