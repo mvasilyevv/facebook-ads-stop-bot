@@ -135,6 +135,11 @@ class ObserverSettings(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     agent_commission_percent: Mapped[Decimal] = mapped_column(
         Numeric(6, 2), default=Decimal("3"), server_default="3"
     )
+    # Порог детекции STALE_DATA: доля строк с пустыми метриками, выше которой
+    # цикл считается STALE_DATA. Default 0.9 — 90% строк с прочерками.
+    stale_data_threshold: Mapped[Decimal] = mapped_column(
+        Numeric(3, 2), default=Decimal("0.9"), server_default="0.9"
+    )
 
 
 class CabinetDayArchive(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -904,3 +909,7 @@ class AICache(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     expires_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, index=True
     )
+
+
+# === Регистрация модели ScanRun (история циклов observer'а) ===
+from core.models.scan_runs import ScanRun  # noqa: E402, F401
