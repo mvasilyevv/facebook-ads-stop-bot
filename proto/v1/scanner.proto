@@ -93,14 +93,20 @@ message ScanComplete {
   repeated ScannedAdRow all_rows = 1;
   int32 total_passes = 2;
   double duration_seconds = 3;
-  repeated string dismissed_modals = 4;
-  repeated string unknown_modal_artifacts = 5;
+  repeated string dismissed_modals = 4;         // id модалок из каталога, которые были закрыты
+  repeated string unknown_modal_artifacts = 5;  // пути вида ".logs/modals/..."
 
-  // НОВЫЕ ПОЛЯ:
+  // Тайминги фаз цикла (заполняется browser-agent) — для UI/диагностики.
   PhaseTimings phase_timings = 6;
+  // fb_ad_id строк, где какие-то обязательные колонки не дочитались.
   repeated string partial_row_ids = 7;
+  // Коды-маркеры аномалий, замеченных в скане. Возможные: "loader_visible_long", "header_missing_columns".
   repeated string warnings = 8;
+  // TODO: вынести в enum EmptyReason после стабилизации значений.
+  // Возможные значения: "" (есть строки), "no_active_ads", "filter_excludes_all", "table_not_found".
   string empty_reason = 9;
+  // Строк, где все критические метрики (impressions/spend/cpm/cpc/ctr) пустые.
+  // Используется для детекции STALE_DATA в observer.
   int32 rows_with_all_metrics_empty = 10;
 }
 
