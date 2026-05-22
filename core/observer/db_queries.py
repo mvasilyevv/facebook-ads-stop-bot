@@ -791,3 +791,28 @@ async def load_recent_alerts_with_context(
             }
         )
     return rows
+
+
+async def load_history_ad_ids_with_metrics(
+    fb_ad_ids: list[str], *, lookback_hours: int = 24
+) -> set[str]:
+    """Возвращает подмножество fb_ad_id, у которых за последние N часов были непустые метрики.
+
+    Используется outcome_classifier'ом как гард: если у текущих объявлений никогда
+    не было данных, то отсутствие метрик — норма, а не STALE_DATA.
+    """
+    if not fb_ad_ids:
+        return set()
+    cutoff = datetime.now(UTC) - timedelta(hours=lookback_hours)
+    factory = get_session_factory()
+    async with factory() as session:
+        result = await session.execute(
+            select(AdSnapshot.fb_ad_id)
+            .where(
+                AdSnapshot.fb_ad_id.in_(fb_ad_ids),
+                AdSnapshot.last_observed_at >= cutoff,
+                AdSnapshot.impressions > 0,
+            )
+            .distinct()
+        )
+        return {row[0] for row in result.all()}

@@ -34,6 +34,7 @@ from core.diagnostics import (
 from core.disable_tasks import is_delivery_disabled
 from core.domain import AlertStage, AlertState
 from core.models import AdSnapshot, AlertEvent, FbAd
+from core.observer.browser_recovery import BrowserRecoveryEscalator
 from core.observer.db_queries import (
     check_scanning_enabled,
     collect_reminder_alerts,
@@ -43,6 +44,7 @@ from core.observer.db_queries import (
     load_active_snooze_ad_ids,
     load_ad_states_from_db,
     load_fake_deposits,
+    load_history_ad_ids_with_metrics,
     load_offers_from_db,
     load_telegram_settings_from_db,
     load_vision_settings_for_runtime,
@@ -55,12 +57,17 @@ from core.observer.disable_reconciler import (
     reconcile_disable_tasks_in_db,
     reconcile_enable_tasks_in_db,
 )
+from core.observer.outcome_classifier import (
+    ScanOutcome,
+    classify_scan_outcome,
+)
 from core.observer.regression_guard import RegressionGuard
 from core.observer.runtime_status import (
     format_observer_runtime_message,
     update_observer_runtime_status,
 )
 from core.observer.scan_guard import ZeroScanGuard
+from core.observer.scan_run_writer import begin_scan_run, finish_scan_run
 from core.observer.self_healing import SelfHealingEscalator
 from core.observer.service import (
     AlertCandidate,
@@ -70,6 +77,7 @@ from core.observer.service import (
     resolve_offer_code,
 )
 from core.observer.snapshot_writer import batch_save_snapshots
+from core.observer.stale_data_handler import StaleAction, StaleDataEscalator
 from core.observer.state_machine import (
     _state_for_emitted_stage,
     reopen_reactivated_alert_state,
@@ -77,6 +85,7 @@ from core.observer.state_machine import (
     resolve_transition,
 )
 from core.scanner.models import ScannedAdRow
+from core.settings_queries import get_or_create_observer_settings
 from core.telegram.client import TelegramBotClient
 from core.telegram.delivery import broadcast_observer_runtime_message
 from core.telegram.message_refs import (
@@ -1101,6 +1110,10 @@ async def observer_loop(
     status_ref: list[str] = ["RUNNING"]
     message_ref: list[str | None] = ["Запущен."]
 
+    # Эскалаторы для STALE_DATA и BROWSER_LOST. Живут между итерациями.
+    stale_escalator = StaleDataEscalator()
+    recovery_escalator = BrowserRecoveryEscalator()
+
     def _should_stop() -> bool:
         """Проверяет, нужно ли завершить работу."""
         return shutdown_event is not None and shutdown_event.is_set()
@@ -1119,6 +1132,8 @@ async def observer_loop(
             stop_alerts: list[AlertCandidate] = []
             snapshot_batch: list[dict] = []
             fast_stop_triggered = False
+            scan_result_obj: ScanResult | None = None
+            run_id: int | None = None
             # Timing-инструментация: замеряем фазы цикла для baseline/после-сравнения.
             timing: dict[str, float] = {"cycle_start": _time.monotonic()}
             try:
@@ -1410,6 +1425,12 @@ async def observer_loop(
                         # снэпшоты этого батча получат одинаковый last_scan_id.
                         current_scan_id = await _increment_scan_id()
 
+                        # Создаём черновик в scan_runs: outcome='RUNNING', finished_at=NULL
+                        factory_for_run = get_session_factory()
+                        async with factory_for_run() as run_session:
+                            run_id = await begin_scan_run(run_session, scan_id=current_scan_id)
+                            await run_session.commit()
+
                         # 1-2. Сканирование через gRPC browser-agent: refresh + первый проход
                         # settle_delay_seconds=0.0 — фиксированный sleep после refresh убран.
                         # Ожидание реальных строк/стабильности DOM на TS-стороне делает его лишним.
@@ -1432,6 +1453,7 @@ async def observer_loop(
                                 break
 
                             if isinstance(event, ScanResult):
+                                scan_result_obj = event
                                 timing["scan_result"] = _time.monotonic()
                                 rows = event.rows
                                 logger.info(
@@ -1587,6 +1609,126 @@ async def observer_loop(
                         current_scan_id=current_scan_id,
                     )
 
+                    # Классификация outcome для записи в scan_runs
+                    stale_threshold = 0.9
+                    try:
+                        factory_for_threshold = get_session_factory()
+                        async with factory_for_threshold() as settings_session:
+                            observer_settings_for_threshold = await get_or_create_observer_settings(
+                                settings_session
+                            )
+                            stale_threshold = float(
+                                getattr(
+                                    observer_settings_for_threshold,
+                                    "stale_data_threshold",
+                                    0.9,
+                                )
+                                or 0.9
+                            )
+                    except Exception:
+                        logger.warning(
+                            "Не удалось прочитать stale_data_threshold, использую 0.9",
+                            exc_info=True,
+                        )
+
+                    ad_ids_in_scan = [
+                        getattr(r, "fb_ad_id", "") for r in rows if getattr(r, "fb_ad_id", "")
+                    ]
+                    try:
+                        history_ids = await load_history_ad_ids_with_metrics(
+                            ad_ids_in_scan, lookback_hours=24
+                        )
+                    except Exception:
+                        history_ids = set()
+                        logger.warning("history-предикат не доступен", exc_info=True)
+
+                    if scan_result_obj is not None:
+                        outcome_details = classify_scan_outcome(
+                            scan_result_obj,
+                            stale_threshold=stale_threshold,
+                            has_history_for_ids=lambda ids, _h=history_ids: bool(
+                                _h.intersection(ids)
+                            ),
+                        )
+                    else:
+                        # Fallback (fast-stop путь): считаем OK
+                        outcome_details = None
+
+                    # STALE_DATA: эскалируем hard reload
+                    if (
+                        outcome_details is not None
+                        and outcome_details.kind == ScanOutcome.STALE_DATA
+                    ):
+                        step = stale_escalator.next_action()
+                        logger.warning(
+                            "Observer: STALE_DATA попытка %d, action=%s, stale_ratio=%.2f",
+                            step.attempt,
+                            step.kind.value,
+                            outcome_details.stale_ratio,
+                        )
+                        if step.kind == StaleAction.HARD_RELOAD:
+                            try:
+                                await grpc_client.hard_reload(bypass_cache=True)
+                            except Exception:
+                                logger.warning("hard_reload упал", exc_info=True)
+                        if step.should_send_alert:
+                            try:
+                                await broadcast_observer_runtime_message(
+                                    text=(
+                                        "🚨 Ads Manager не отдаёт метрики уже 5 циклов подряд. "
+                                        "Перезагружаю с очисткой кеша. Проверь сеть/прокси."
+                                    ),
+                                    fallback_token=tg_token or telegram_bot_token,
+                                    fallback_chat_id=telegram_chat_id,
+                                )
+                            except Exception:
+                                logger.exception("Не удалось отправить TG-алерт STALE_DATA")
+                    else:
+                        # Любой не-STALE_DATA исход — сбрасываем счётчик
+                        stale_escalator.reset()
+
+                    # BROWSER_LOST счётчик сбрасываем — мы дошли до здесь, значит браузер жив
+                    recovery_escalator.reset()
+
+                    # Финиш scan_runs записи
+                    if run_id is not None and outcome_details is not None:
+                        rows_with_data = max(
+                            0,
+                            len(rows)
+                            - (
+                                scan_result_obj.rows_with_all_metrics_empty
+                                if scan_result_obj
+                                else 0
+                            ),
+                        )
+                        try:
+                            async with factory_for_run() as run_session:
+                                await finish_scan_run(
+                                    run_session,
+                                    run_id=run_id,
+                                    outcome=outcome_details.kind.value,
+                                    rows_total=len(rows),
+                                    rows_partial=outcome_details.partial_count,
+                                    rows_with_data=rows_with_data,
+                                    alerts_warning=len(
+                                        [a for a in alerts_to_send if a.stage == AlertStage.WARNING]
+                                    ),
+                                    alerts_stop=len(stop_alerts),
+                                    phase_timings=scan_result_obj.phase_timings
+                                    if scan_result_obj
+                                    else None,
+                                    warnings=scan_result_obj.warnings if scan_result_obj else None,
+                                    empty_reason=outcome_details.empty_reason,
+                                    error_kind=None,
+                                    error_message=outcome_details.note or None,
+                                    threat_level=None,
+                                    next_interval_s=None,
+                                )
+                                await run_session.commit()
+                                run_id = None
+                        except Exception:
+                            logger.exception("Не удалось записать scan_run finish")
+
                 # Успешный цикл — сбрасываем счётчик ошибок браузера и self-healing
                 consecutive_browser_errors = 0
                 consecutive_parser_missing_columns_errors = 0
@@ -1680,6 +1822,27 @@ async def observer_loop(
                 continue
 
             except Exception as exc:
+                # Если был открыт run_id и ещё не закрыт — фиксируем как INTERRUPTED/BROWSER_LOST
+                if run_id is not None:
+                    factory_for_run = get_session_factory()
+                    try:
+                        async with factory_for_run() as run_session:
+                            await finish_scan_run(
+                                run_session,
+                                run_id=run_id,
+                                outcome="BROWSER_LOST"
+                                if _is_browser_connection_error(exc)
+                                else "INTERRUPTED",
+                                error_kind="browser_disconnect"
+                                if _is_browser_connection_error(exc)
+                                else "internal",
+                                error_message=str(exc)[:500],
+                            )
+                            await run_session.commit()
+                            run_id = None
+                    except Exception:
+                        logger.exception("Не удалось записать scan_run при ошибке")
+
                 consecutive_empty_scan_cycles = 0
                 exc_message_text = str(exc)
                 if _PARSER_MISSING_COLUMNS_MARKER in exc_message_text:
@@ -1763,6 +1926,25 @@ async def observer_loop(
                         tg_client=tg_client,
                         tg_chat_id=_tg_chat_for_healing,
                     )
+                    step = recovery_escalator.next_step()
+                    logger.warning(
+                        "Observer: BROWSER_LOST попытка %d, sleep %ds",
+                        step.attempt,
+                        step.sleep_seconds,
+                    )
+                    if step.should_send_alert:
+                        try:
+                            await broadcast_observer_runtime_message(
+                                text=(
+                                    "🚨 Observer не может подключиться к браузеру 5 циклов подряд. "
+                                    "Проверь Vision."
+                                ),
+                                fallback_token=tg_token or telegram_bot_token,
+                                fallback_chat_id=telegram_chat_id,
+                            )
+                        except Exception:
+                            logger.exception("Не удалось отправить TG-алерт BROWSER_LOST")
+                    await asyncio.sleep(step.sleep_seconds)
                     continue
 
                 runtime_message = (
