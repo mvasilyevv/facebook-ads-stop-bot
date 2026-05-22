@@ -35,7 +35,10 @@ export default function StopReasonsDonut() {
   const fetchAIHelp = async () => {
     setAiLoading(true);
     try {
-      const data = await getAIAnalysis('reasons', 'global', true);
+      const snapshot = {
+        reasons: reasons.reduce((acc, r) => ({ ...acc, [r.name]: r.count }), {}),
+      };
+      const data = await getAIAnalysis('reasons', 'global', true, snapshot);
       setAiAnalysis(data.content);
     } catch (err) {
       console.error(err);
@@ -45,7 +48,7 @@ export default function StopReasonsDonut() {
   };
 
   return (
-    <div className="rounded-md border border-border bg-surface p-md">
+    <div className="panel h-full p-md">
       <div className="flex items-center justify-between border-b border-border pb-sm mb-md">
         <span className="font-mono text-2xs uppercase tracking-wider text-text">
           Причины остановок рекламы

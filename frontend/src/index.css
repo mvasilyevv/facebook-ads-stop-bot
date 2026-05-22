@@ -79,16 +79,29 @@
 }
 
 @layer components {
+  /* Базовая «карточка»: рамка + поверхность + flex-колонка,
+     чтобы при h-full контент мог растягиваться по высоте. */
   .panel {
-    @apply border border-border bg-surface;
+    @apply flex flex-col rounded-md border border-border bg-surface;
   }
 
   .panel-ops {
-    @apply border border-border bg-surface;
+    @apply flex flex-col rounded-md border border-border bg-surface;
+  }
+
+  /* Сетка карточек с равной высотой строк на широких экранах.
+     На узких экранах одна колонка — высота строк естественная. */
+  .card-grid {
+    @apply grid items-stretch gap-md lg:auto-rows-fr;
+  }
+
+  /* Внутренний контейнер карточки, занимающий всю высоту панели. */
+  .card-body {
+    @apply flex h-full min-h-0 flex-1 flex-col;
   }
 
   .layout-split {
-    @apply flex min-h-0 flex-col border border-border bg-surface sm:flex-row;
+    @apply flex min-h-0 flex-col overflow-hidden rounded-md border border-border bg-surface sm:flex-row;
   }
 
   .signal-row {
@@ -165,7 +178,7 @@
 
   .kpi-cell,
   .kpi-card {
-    @apply flex flex-col justify-between border border-border bg-surface px-4 py-3.5
+    @apply flex h-full min-h-[5.25rem] flex-col justify-between gap-2 border border-border bg-surface px-4 py-3.5
            transition-colors duration-150 hover:border-border-hover rounded-md;
   }
   .kpi-value {

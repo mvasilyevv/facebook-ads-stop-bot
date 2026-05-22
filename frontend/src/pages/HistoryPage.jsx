@@ -153,13 +153,13 @@ export default function HistoryPage() {
             <HistoryOffersTable data={offersStats} />
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-md">
-            <div className="panel p-4">
+          <div className="card-grid grid-cols-1 lg:grid-cols-2">
+            <div className="panel h-full p-4">
               <Suspense fallback={<ChartFallback />}>
                 <SpendTrendChart data={timeline} />
               </Suspense>
             </div>
-            <div className="panel p-4">
+            <div className="panel h-full p-4">
               <Suspense fallback={<ChartFallback />}>
                 <MetricsTrendChart data={timeline} />
               </Suspense>

@@ -65,7 +65,7 @@ export function AlertTray({ incidents = [], disableTasks = [], onSelectIncident,
   const stopCount = sorted.filter((i) => i.current_state === 'STOP_SENT').length;
 
   return (
-    <div>
+    <div className="flex h-full flex-col">
       <div className="flex items-center gap-2 border-b border-border px-4 py-3">
         <span
           className={`status-dot ${isEmpty ? 'bg-success' : stopCount > 0 ? 'bg-danger status-dot-pulse' : 'bg-warning'}`}
@@ -80,9 +80,9 @@ export function AlertTray({ incidents = [], disableTasks = [], onSelectIncident,
         )}
       </div>
 
-      <div className="divide-y divide-border">
+      <div className="flex flex-1 flex-col divide-y divide-border">
         {isEmpty && settings !== null && settings.is_scanning_enabled && (
-          <div className="flex flex-col items-center py-8 text-center">
+          <div className="flex flex-1 flex-col items-center justify-center py-8 text-center">
             <span className="text-sm font-medium text-primary">Всё чисто</span>
             {lastScanAt && (
               <span className="mt-1 text-2xs text-muted">
@@ -96,7 +96,7 @@ export function AlertTray({ incidents = [], disableTasks = [], onSelectIncident,
           const pauseUntilMs = settings.pause_until ? new Date(settings.pause_until).getTime() : null;
           const pauseActive = pauseUntilMs != null && pauseUntilMs > Date.now();
           return (
-            <div className="flex flex-col items-center gap-3 py-8 text-center">
+            <div className="flex flex-1 flex-col items-center justify-center gap-3 py-8 text-center">
               <span className="text-sm font-medium text-primary">
                 {pauseActive
                   ? `Сканирование на паузе до ${new Date(settings.pause_until).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}`

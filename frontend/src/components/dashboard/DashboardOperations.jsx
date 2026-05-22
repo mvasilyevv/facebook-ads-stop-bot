@@ -45,8 +45,8 @@ export function DashboardOperations({
         onWarningClick={onWarningClick}
       />
 
-      <div className="grid grid-cols-1 items-start gap-md lg:grid-cols-[1fr_0.54fr]">
-        <div ref={alertTrayRef} className="panel-ops min-w-0 overflow-hidden scroll-mt-4">
+      <div className="card-grid grid-cols-1 lg:grid-cols-[1fr_0.54fr]">
+        <div ref={alertTrayRef} className="panel-ops h-full min-w-0 overflow-hidden scroll-mt-4">
           <AlertTray
             incidents={activeIncidents}
             disableTasks={disableTasks}
@@ -58,7 +58,7 @@ export function DashboardOperations({
           />
         </div>
 
-        <div className="panel-ops min-w-0">
+        <div className="panel-ops h-full min-w-0 overflow-hidden">
           <TaskQueuePanel
             disableTasks={disableTasks}
             enableTasks={enableTasks}

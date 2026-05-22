@@ -20,8 +20,8 @@ export default function AnalyticsPage() {
         </p>
       </div>
 
-      {/* Grid сетка 2x2 */}
-      <div className="grid grid-cols-1 gap-md lg:grid-cols-2">
+      {/* Grid сетка 2x2 — все карточки одной высоты в пределах строки */}
+      <div className="card-grid grid-cols-1 lg:grid-cols-2">
         <CPLTimeline />
         <StopReasonsDonut />
         <AlertsHeatmap />

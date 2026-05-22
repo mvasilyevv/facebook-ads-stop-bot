@@ -1,6 +1,28 @@
 import React, { useState, useEffect } from 'react';
-import { getAIAnalysis } from '../../api';
+import { getAIAnalysis, getHistoryTimeline } from '../../api';
 import { renderMarkdown } from '../../utils/markdown';
+
+// Форматирование даты в формат YYYY-MM-DD без сдвигов часовых поясов
+const formatDateISO = (date) => {
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const dd = String(date.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+};
+
+// Форматирование даты YYYY-MM-DD в красивую русскую запись (например, "12 мая")
+const formatRussianDate = (isoString) => {
+  if (!isoString) return '';
+  const parts = isoString.split('-');
+  if (parts.length !== 3) return isoString;
+  const day = parseInt(parts[2], 10);
+  const monthIdx = parseInt(parts[1], 10) - 1;
+  const months = [
+    'января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
+    'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'
+  ];
+  return `${day} ${months[monthIdx] || ''}`.trim();
+};
 
 /**
  * Временная шкала CPL / CPD за период с интерактивным графиком и дрилл-дауном.
@@ -8,6 +30,7 @@ import { renderMarkdown } from '../../utils/markdown';
 export default function CPLTimeline() {
   const [loading, setLoading] = useState(false);
   const [metricMode, setMetricMode] = useState('CPL'); // CPL или CPD
+  const [rawData, setRawData] = useState([]);
   const [points, setPoints] = useState([]);
   const [selectedPoint, setSelectedPoint] = useState(null);
   const [aiAnalysis, setAiAnalysis] = useState('');
@@ -16,30 +39,14 @@ export default function CPLTimeline() {
   const fetchData = async () => {
     setLoading(true);
     try {
-      // Демонстрационные исторические данные за 8 дней
-      const cplPoints = [
-        { date: '12 мая', value: 4.2, details: 'Зарегистрировано: 48 лидов, CPA = 5.0$' },
-        { date: '13 мая', value: 4.8, details: 'Зарегистрировано: 36 лидов, CPA = 5.0$' },
-        { date: '14 мая', value: 5.5, details: 'Зарегистрировано: 28 лидов (Превышение лимита!), CPA = 5.0$' },
-        { date: '15 мая', value: 3.9, details: 'Зарегистрировано: 54 лида, CPA = 5.0$' },
-        { date: '16 мая', value: 3.2, details: 'Зарегистрировано: 62 лида (Отличные показатели), CPA = 5.0$' },
-        { date: '17 мая', value: 4.0, details: 'Зарегистрировано: 41 лид, CPA = 5.0$' },
-        { date: '18 мая', value: 4.7, details: 'Зарегистрировано: 33 лида, CPA = 5.0$' },
-        { date: '19 мая', value: 4.4, details: 'Зарегистрировано: 45 лидов, CPA = 5.0$' }
-      ];
+      const today = new Date();
+      const tenDaysAgo = new Date();
+      tenDaysAgo.setDate(today.getDate() - 10);
+      const date_from = formatDateISO(tenDaysAgo);
+      const date_to = formatDateISO(today);
 
-      const cpdPoints = [
-        { date: '12 мая', value: 22.0, details: 'Депозитов: 12, Стоимость: 264$' },
-        { date: '13 мая', value: 24.5, details: 'Депозитов: 8, Стоимость: 196$' },
-        { date: '14 мая', value: 31.0, details: 'Депозитов: 5 (Высокая цена депа!), Стоимость: 155$' },
-        { date: '15 мая', value: 19.5, details: 'Депозитов: 16, Стоимость: 312$' },
-        { date: '16 мая', value: 18.0, details: 'Депозитов: 20 (Отличный конверт), Стоимость: 360$' },
-        { date: '17 мая', value: 21.0, details: 'Депозитов: 11, Стоимость: 231$' },
-        { date: '18 мая', value: 26.8, details: 'Депозитов: 7, Стоимость: 187$' },
-        { date: '19 мая', value: 23.5, details: 'Депозитов: 10, Стоимость: 235$' }
-      ];
-
-      setPoints(metricMode === 'CPL' ? cplPoints : cpdPoints);
+      const data = await getHistoryTimeline({ date_from, date_to });
+      setRawData(Array.isArray(data) ? data : []);
     } catch (err) {
       console.error(err);
     } finally {
@@ -49,7 +56,34 @@ export default function CPLTimeline() {
 
   useEffect(() => {
     fetchData();
-  }, [metricMode]);
+  }, []);
+
+  useEffect(() => {
+    const mappedPoints = rawData.map((item) => {
+      const formattedDate = formatRussianDate(item.date);
+      if (metricMode === 'CPL') {
+        const val = parseFloat(Number(item.cpl || 0).toFixed(2));
+        return {
+          date: formattedDate,
+          value: val,
+          details: `Зарегистрировано лидов: ${item.leads || 0}, Расход: ${Number(item.spend || 0).toFixed(1)}$`
+        };
+      } else {
+        const val = parseFloat(Number(item.cost_per_deposit || 0).toFixed(2));
+        return {
+          date: formattedDate,
+          value: val,
+          details: `Депозитов: ${item.deposits || 0}, Расход: ${Number(item.spend || 0).toFixed(1)}$`
+        };
+      }
+    });
+    setPoints(mappedPoints);
+    if (mappedPoints.length > 0) {
+      setSelectedPoint(mappedPoints[mappedPoints.length - 1]);
+    } else {
+      setSelectedPoint(null);
+    }
+  }, [rawData, metricMode]);
 
   const handlePointClick = (point) => {
     setSelectedPoint(point);
@@ -58,7 +92,15 @@ export default function CPLTimeline() {
   const fetchAIHelp = async () => {
     setAiLoading(true);
     try {
-      const data = await getAIAnalysis('cpl_timeline', 'global', true);
+      const snapshot = {
+        metric: metricMode,
+        timeline: points.map((p) => ({
+          date: p.date,
+          value: p.value,
+          details: p.details,
+        })),
+      };
+      const data = await getAIAnalysis('cpl_timeline', 'global', true, snapshot);
       setAiAnalysis(data.content);
     } catch (err) {
       console.error(err);
@@ -77,7 +119,7 @@ export default function CPLTimeline() {
   const pathD = points.map((p, idx) => `${idx === 0 ? 'M' : 'L'} ${getX(idx)} ${getY(p.value)}`).join(' ');
 
   return (
-    <div className="rounded-md border border-border bg-surface p-md">
+    <div className="panel h-full p-md">
       {/* Шапка */}
       <div className="flex items-center justify-between border-b border-border pb-sm mb-md">
         <div className="flex items-center gap-md">

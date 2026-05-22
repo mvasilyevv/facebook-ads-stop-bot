@@ -68,13 +68,13 @@ export function TaskQueuePanel({
   const isEmpty = activeDisable.length === 0 && activeEnable.length === 0 && enableRecs.length === 0;
 
   return (
-    <div className="p-4">
+    <div className="flex h-full flex-col p-4">
       <h3 className="mb-3 text-2xs font-bold uppercase tracking-widest text-muted">
         Очередь
       </h3>
 
       {isEmpty && (
-        <div className="py-6 text-center text-sm text-muted">
+        <div className="flex flex-1 items-center justify-center py-6 text-center text-sm text-muted">
           Очередь пуста — всё в норме
         </div>
       )}

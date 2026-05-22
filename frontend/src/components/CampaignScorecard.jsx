@@ -33,7 +33,11 @@ function DeltaBadge({ today, yesterday, state }) {
 /** Распределение состояний */
 export function CampaignScorecard({ stats = null, statsYesterday = null, onStateClick }) {
   if (!stats) {
-    return <div className="py-6 text-center text-sm text-muted">Нет данных</div>;
+    return (
+      <div className="flex h-full min-h-[8rem] items-center justify-center py-6 text-center text-sm text-muted">
+        Нет данных
+      </div>
+    );
   }
 
   const total = stats.total_ads_monitored || 1;
@@ -52,11 +56,11 @@ export function CampaignScorecard({ stats = null, statsYesterday = null, onState
   ];
 
   return (
-    <div>
+    <div className="flex h-full flex-col">
       <h3 className="mb-3 text-2xs font-bold uppercase tracking-widest text-muted">
         Распределение
       </h3>
-      <div className="space-y-2">
+      <div className="flex flex-1 flex-col justify-center gap-2">
         {distribution.map((row) => {
           const cfg = STATE_COLORS[row.state];
           const barWidth = row.count > 0 ? Math.max(4, (row.count / total) * 100) : 0;

@@ -7,12 +7,14 @@ const BADGE_STYLES = [
 
 export function RuleViolationRanking({ data = [] }) {
   return (
-    <div>
+    <div className="flex h-full flex-col">
       <h3 className="mb-3 text-2xs font-bold uppercase tracking-widest text-muted">
         Нарушения правил
       </h3>
       {!data.length && (
-        <div className="py-4 text-center text-sm text-muted">Нарушений нет</div>
+        <div className="flex flex-1 items-center justify-center py-4 text-center text-sm text-muted">
+          Нарушений нет
+        </div>
       )}
       <div className="divide-y divide-border">
         {data.map((item, i) => (

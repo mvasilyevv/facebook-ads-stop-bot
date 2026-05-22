@@ -34,10 +34,26 @@ export default function DecisionsHistoryFeed() {
     fetchData();
   }, []);
 
+  const filteredEvents = filterOffer === 'ALL'
+    ? events
+    : events.filter((e) => e.offer === filterOffer);
+
   const fetchAIHelp = async () => {
     setAiLoading(true);
     try {
-      const data = await getAIAnalysis('history', 'global', true);
+      const snapshot = {
+        filter: filterOffer,
+        events: filteredEvents.map((ev) => ({
+          type: ev.type,
+          offer: ev.offer,
+          rule: ev.rule,
+          ad_id: ev.adId,
+          date: ev.date,
+          time: ev.time,
+          status: ev.status,
+        })),
+      };
+      const data = await getAIAnalysis('history', 'global', true, snapshot);
       setAiAnalysis(data.content);
     } catch (err) {
       console.error(err);
@@ -46,12 +62,8 @@ export default function DecisionsHistoryFeed() {
     }
   };
 
-  const filteredEvents = filterOffer === 'ALL'
-    ? events
-    : events.filter((e) => e.offer === filterOffer);
-
   return (
-    <div className="rounded-md border border-border bg-surface p-md">
+    <div className="panel h-full p-md">
       {/* Шапка */}
       <div className="flex items-center justify-between border-b border-border pb-sm mb-md">
         <div className="flex items-center gap-md">

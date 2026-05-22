@@ -242,7 +242,7 @@ function HeroKPIStrip({ performance, performanceYesterday }) {
   ];
 
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-md">
+    <div className="mb-md grid auto-rows-fr grid-cols-2 items-stretch gap-3 sm:grid-cols-3 lg:grid-cols-6">
       {kpis.map((kpi, i) => (
         <div
           key={kpi.label}
@@ -250,7 +250,7 @@ function HeroKPIStrip({ performance, performanceYesterday }) {
           style={{ animationDelay: `${120 + i * 50}ms` }}
         >
           <span className="kpi-label">{kpi.label}</span>
-          <div className="flex items-baseline justify-between mt-xs">
+          <div className="mt-auto flex items-baseline justify-between gap-2">
             <span className={`kpi-value ${kpi.color}`}>{kpi.value}</span>
             <Delta today={s?.[kpi.key]} yesterday={yComparable?.[kpi.key]} />
           </div>
@@ -617,8 +617,8 @@ export default function DashboardPage({ onNavigate }) {
         <AIBriefingCard />
       </div>
 
-      <div className="grid grid-cols-1 items-start gap-md lg:grid-cols-[1fr_0.54fr]">
-        <div className="panel min-w-0 p-4">
+      <div className="card-grid grid-cols-1 lg:grid-cols-[1fr_0.54fr]">
+        <div className="panel h-full min-w-0 p-4">
           <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
             <div className="flex flex-wrap items-center gap-2">
               <div className="flex gap-1 rounded-md bg-elevated p-0.5">
@@ -648,14 +648,16 @@ export default function DashboardPage({ onNavigate }) {
             </div>
             <UpdatedAgoLabel updatedAt={chartDataUpdatedAt} />
           </div>
-          <SpendAlertsChart
-            spendData={chartPerformance?.timeline ?? []}
-            alertsData={chartData?.alerts_by_hour ?? []}
-            period={chartPeriod}
-          />
+          <div className="flex flex-1 flex-col justify-center">
+            <SpendAlertsChart
+              spendData={chartPerformance?.timeline ?? []}
+              alertsData={chartData?.alerts_by_hour ?? []}
+              period={chartPeriod}
+            />
+          </div>
         </div>
 
-        <div className="min-w-0 space-y-md">
+        <div className="grid h-full min-w-0 grid-cols-1 gap-md lg:grid-rows-[1fr_1fr]">
           <div className="panel p-4">
             <CampaignScorecard
               stats={stats}

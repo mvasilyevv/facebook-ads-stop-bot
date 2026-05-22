@@ -52,7 +52,8 @@ export default function AlertsHeatmap() {
   const fetchAIHelp = async () => {
     setAiLoading(true);
     try {
-      const data = await getAIAnalysis('heatmap', 'global', true);
+      const snapshot = { matrix };
+      const data = await getAIAnalysis('heatmap', 'global', true, snapshot);
       setAiAnalysis(data.content);
     } catch (err) {
       console.error(err);
@@ -62,7 +63,7 @@ export default function AlertsHeatmap() {
   };
 
   return (
-    <div className="rounded-md border border-border bg-surface p-md">
+    <div className="panel h-full p-md">
       <div className="flex items-center justify-between border-b border-border pb-sm mb-md">
         <span className="font-mono text-2xs uppercase tracking-wider text-text">
           Тепловая карта инцидентов (24x7)
