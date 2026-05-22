@@ -48,7 +48,6 @@ from core.observer.db_queries import (
     load_vision_settings_for_runtime,
     peek_scan_requested_flag,
     refresh_runtime_ad_states,
-    set_observer_scanning_enabled,
 )
 from core.observer.disable_reconciler import (
     auto_create_disable_tasks,
@@ -109,10 +108,6 @@ PARSER_MISSING_COLUMNS_RETRY_DELAY_SECONDS = 10.0
 # Пустой scan ещё не считаем фатальным: сначала даём странице несколько шансов вернуть строки таблицы.
 EMPTY_SCAN_FAILURE_LIMIT = 3
 EMPTY_SCAN_RETRY_DELAY_SECONDS = 10.0
-# Адаптивное ожидание загрузки данных после refresh
-DATA_LOAD_POLL_INTERVAL_SECONDS = 2.0
-DATA_LOAD_MAX_WAIT_SECONDS = 30.0
-DATA_LOAD_LOG_INTERVAL_SECONDS = 10.0
 # Интервал фонового heartbeat observer (обновляет worker_heartbeat_at независимо от длины скана)
 OBSERVER_HEARTBEAT_INTERVAL_SECONDS = 20
 
@@ -132,6 +127,27 @@ _BROWSER_RUNTIME_ERROR_MARKERS = (
 _scan_guard = ZeroScanGuard()
 # Гард от ложных откатов накопительных метрик (N подряд → принять новые значения)
 _regression_guard = RegressionGuard()
+
+# Глобальные переменные для хранения текущего статуса воркера
+_observer_status: str = "RUNNING"
+_observer_message: str | None = "Запущен."
+
+
+async def update_observer_status(
+    *,
+    status: str,
+    message: str | None = None,
+    **kwargs,
+) -> None:
+    """Обновляет статус observer как локально (для фонового heartbeat), так и в БД.
+
+    Это гарантирует, что фоновый поток heartbeat не перезапишет актуальный статус
+    устаревшими значениями при долгой работе воркера.
+    """
+    global _observer_status, _observer_message
+    _observer_status = status
+    _observer_message = message
+    await update_observer_runtime_status(status=status, message=message, **kwargs)
 
 
 def _is_browser_connection_error(exc: Exception) -> bool:
@@ -233,7 +249,7 @@ async def _update_scan_recovery_status(
     retry_delay_seconds: float,
 ) -> None:
     """Пишет в runtime-статус, что observer повторяет пустой scan-цикл."""
-    await update_observer_runtime_status(
+    await update_observer_status(
         status="RECOVERING",
         message=(
             f"{reason}. "
@@ -921,106 +937,6 @@ async def _process_fast_stop_results(
     logger.info("Быстрый стоп: создано или проверено задач отключения: %s", len(stop_alerts))
 
 
-async def _wait_for_data_load(
-    grpc_client: BrowserAgentClient,
-    *,
-    prev_had_spend: bool,
-    initial_rows: list[ScannedAdRow],
-) -> list[ScannedAdRow]:
-    """Адаптивное ожидание загрузки данных после refresh.
-
-    Если в предыдущем скане был spend > 0 — поллим до появления spend.
-    Если предыдущий скан тоже был нулевым (начало дня) — сразу возвращаем текущие строки.
-
-    Возвращает полный список строк, не заменяя его подозрительно частичным чтением.
-    """
-    if any(r.spend and r.spend > 0 for r in initial_rows):
-        return initial_rows
-
-    if not prev_had_spend:
-        # Начало дня или первый скан — не ждём, данные нулевые по природе.
-        return initial_rows
-
-    elapsed = 0.0
-    last_log_at = 0.0
-    best_rows = initial_rows
-
-    while elapsed < DATA_LOAD_MAX_WAIT_SECONDS:
-        # Читаем текущее состояние таблицы без refresh, но всегда с верхней строки,
-        # чтобы не заменить полный scan нижним фрагментом виртуальной таблицы.
-        current_rows: list[ScannedAdRow] = []
-        async for event in grpc_client.run_scan_cycle(
-            max_scroll_passes=50,
-            do_refresh=False,
-            reset_scroll_first=True,
-            settle_delay_seconds=0.0,
-        ):
-            if isinstance(event, ScanResult):
-                current_rows = event.rows
-
-        merged_rows = _merge_scan_rows(best_rows, current_rows)
-        if len(merged_rows) >= len(best_rows):
-            best_rows = merged_rows
-
-        # Проверяем: есть ли хоть одно объявление со spend > 0
-        if any(r.spend and r.spend > 0 for r in best_rows) and len(best_rows) >= len(initial_rows):
-            logger.info(
-                "Observer: данные загружены за %.0f сек (spend > 0 обнаружен)",
-                elapsed,
-            )
-            return best_rows
-
-        elapsed += DATA_LOAD_POLL_INTERVAL_SECONDS
-        if elapsed - last_log_at >= DATA_LOAD_LOG_INTERVAL_SECONDS:
-            logger.info(
-                "Ожидание загрузки данных: %.0fс из %.0fс",
-                elapsed,
-                DATA_LOAD_MAX_WAIT_SECONDS,
-            )
-            last_log_at = elapsed
-
-        if elapsed < DATA_LOAD_MAX_WAIT_SECONDS:
-            await asyncio.sleep(DATA_LOAD_POLL_INTERVAL_SECONDS)
-
-    logger.warning(
-        "Observer: данные не появились за %.0f сек — продолжаем с последним полным срезом",
-        DATA_LOAD_MAX_WAIT_SECONDS,
-    )
-    return best_rows
-
-
-def _merge_scan_rows(
-    base_rows: list[ScannedAdRow],
-    update_rows: list[ScannedAdRow],
-) -> list[ScannedAdRow]:
-    """Обновляет строки по fb_ad_id, не теряя объявления из полного базового скана."""
-    if not update_rows:
-        return base_rows
-
-    updates_by_id = {row.fb_ad_id: row for row in update_rows if getattr(row, "fb_ad_id", None)}
-    seen_ids: set[str] = set()
-    merged: list[ScannedAdRow] = []
-
-    for row in base_rows:
-        fb_ad_id = getattr(row, "fb_ad_id", None)
-        if fb_ad_id and fb_ad_id in updates_by_id:
-            merged.append(updates_by_id[fb_ad_id])
-            seen_ids.add(fb_ad_id)
-        else:
-            merged.append(row)
-            if fb_ad_id:
-                seen_ids.add(fb_ad_id)
-
-    for row in update_rows:
-        fb_ad_id = getattr(row, "fb_ad_id", None)
-        if not fb_ad_id or fb_ad_id in seen_ids:
-            continue
-        merged.append(row)
-        seen_ids.add(fb_ad_id)
-
-    return merged
-
-
 async def _wait_for_next_cycle(
     *,
     shutdown_event: asyncio.Event | None,
@@ -1069,7 +985,7 @@ async def _wait_for_next_cycle(
 
         chunk = min(poll_interval, remaining)
         if cycle_completed:
-            await update_observer_runtime_status(
+            await update_observer_status(
                 status="RUNNING",
                 message="Ожидаем следующий цикл сканирования.",
                 current_scan_interval_seconds=interval,
@@ -1109,7 +1025,7 @@ async def _maybe_auto_resume_scanning() -> None:
             logger.info("Авто-возобновление сканирования по истечении паузы")
 
 
-async def _observer_heartbeat_loop(status_ref: list[str], message_ref: list[str | None]) -> None:
+async def _observer_heartbeat_loop() -> None:
     """Фоновый цикл: обновляет worker_heartbeat_at каждые OBSERVER_HEARTBEAT_INTERVAL_SECONDS.
 
     Благодаря этому watchdog видит свежий heartbeat независимо от длины scan-цикла,
@@ -1117,7 +1033,7 @@ async def _observer_heartbeat_loop(status_ref: list[str], message_ref: list[str 
     """
     while True:
         try:
-            await update_observer_runtime_status(status=status_ref[0], message=message_ref[0])
+            await update_observer_runtime_status(status=_observer_status, message=_observer_message)
         except Exception:
             logger.debug("Observer: фоновый heartbeat не удалось записать", exc_info=True)
         await asyncio.sleep(OBSERVER_HEARTBEAT_INTERVAL_SECONDS)
@@ -1162,7 +1078,7 @@ async def observer_loop(
             len(tg_destinations),
         )
 
-    await update_observer_runtime_status(
+    await update_observer_status(
         status="RUNNING",
         message="Observer подключён к браузеру и готовит первый цикл сканирования.",
         clear_last_error=True,
@@ -1172,8 +1088,6 @@ async def observer_loop(
     cycle_count = 0
     fake_deposits_map: dict[str, int] = {}
     RELOAD_EVERY = 10  # Перечитываем офферы, TG настройки и интервал каждые 10 циклов
-    # Флаг: был ли spend > 0 в предыдущем успешном скане (для адаптивного ожидания)
-    prev_scan_had_spend = False
 
     # Счётчик последовательных ошибок браузера (задача 2.4)
     consecutive_browser_errors = 0
@@ -1182,17 +1096,19 @@ async def observer_loop(
     consecutive_empty_scan_cycles = 0
     browser_pause_kind: str | None = None
 
+    # Локальные list-обёртки для совместимости с heartbeat-замыканием — будут
+    # удалены полностью в T13b при переходе на outcome-driven цикл.
+    status_ref: list[str] = ["RUNNING"]
+    message_ref: list[str | None] = ["Запущен."]
+
     def _should_stop() -> bool:
         """Проверяет, нужно ли завершить работу."""
         return shutdown_event is not None and shutdown_event.is_set()
 
-    # Ссылки на текущий статус/сообщение для фонового heartbeat-цикла.
-    # Фоновая задача читает эти значения и пишет heartbeat каждые
-    # OBSERVER_HEARTBEAT_INTERVAL_SECONDS секунд, независимо от длины скана.
-    status_ref: list[str] = ["RUNNING"]
-    message_ref: list[str | None] = ["Запущен."]
+    # Запускаем фоновую задачу heartbeat, которая читает глобальные переменные
+    # и пишет heartbeat каждые OBSERVER_HEARTBEAT_INTERVAL_SECONDS секунд.
     heartbeat_task = asyncio.create_task(
-        _observer_heartbeat_loop(status_ref, message_ref),
+        _observer_heartbeat_loop(),
         name="observer-heartbeat",
     )
 
@@ -1459,7 +1375,6 @@ async def observer_loop(
                                 await asyncio.sleep(10.0)
                                 continue
 
-                            await set_observer_scanning_enabled(False)
                             await update_observer_runtime_status(
                                 status="PAUSED",
                                 message=(
@@ -1594,13 +1509,6 @@ async def observer_loop(
                                     await close_stream()
                                 break
 
-                        # 1b. Адаптивное ожидание загрузки данных после refresh.
-                        if rows and not fast_stop_triggered:
-                            rows = await _wait_for_data_load(
-                                grpc_client,
-                                prev_had_spend=prev_scan_had_spend,
-                                initial_rows=rows,
-                            )
                 except BrowserLockTimeoutError as exc:
                     consecutive_empty_scan_cycles = 0
                     status_ref[0] = "WAITING_BROWSER"
@@ -1618,9 +1526,6 @@ async def observer_loop(
 
                 if fast_stop_triggered:
                     consecutive_empty_scan_cycles = 0
-                    prev_scan_had_spend = prev_scan_had_spend or any(
-                        r.spend and r.spend > 0 for r in rows
-                    )
                     await _process_fast_stop_results(
                         stop_alerts=stop_alerts,
                         snapshot_batch=snapshot_batch,
@@ -1662,9 +1567,6 @@ async def observer_loop(
                         )
 
                     consecutive_empty_scan_cycles = 0
-
-                    # Обновляем флаг spend для следующего цикла адаптивного ожидания
-                    prev_scan_had_spend = any(r.spend and r.spend > 0 for r in rows)
 
                     # 3. Оценка правил, FSM-переходы, сбор алертов
                     alerts_to_send, stop_alerts, snapshot_batch = await _run_scan_cycle(
@@ -1723,7 +1625,6 @@ async def observer_loop(
             except ScanDataUnavailableError as exc:
                 consecutive_empty_scan_cycles = 0
                 runtime_message = str(exc)
-                await set_observer_scanning_enabled(False)
                 status_ref[0] = "PAUSED"
                 message_ref[0] = runtime_message
                 await update_observer_runtime_status(
@@ -1818,7 +1719,6 @@ async def observer_loop(
                         continue
 
                     consecutive_parser_missing_columns_errors = 0
-                    await set_observer_scanning_enabled(False)
                     status_ref[0] = "PAUSED"
                     message_ref[0] = columns_message
                     await update_observer_runtime_status(
