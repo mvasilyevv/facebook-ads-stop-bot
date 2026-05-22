@@ -124,19 +124,37 @@ async function dismissKnownModals(page, options) {
             continue;
         }
         for (const handle of handles) {
-            let domId;
+            let probe = null;
             try {
-                domId = await handle.evaluate((el) => {
-                    // Уникальный идентификатор через outerHTML-хэш (кратко: берём первые 200 символов)
-                    return el.outerHTML.slice(0, 200);
+                probe = await handle.evaluate((el) => {
+                    const domId = el.outerHTML.slice(0, 200);
+                    const html = el;
+                    const className = typeof html.className === 'string' ? html.className : '';
+                    // Служебный wrapper FB: висит в DOM для тултипов/поповеров, role="dialog",
+                    // но визуально это не модалка. Текст пустой, кнопок нет — только layer_close_elem.
+                    const isContextLayer = className.includes('uiContextualLayer');
+                    // Скрытые диалоги: aria-hidden или нулевые размеры/display:none.
+                    const ariaHidden = el.getAttribute('aria-hidden') === 'true';
+                    const rect = html.getBoundingClientRect ? html.getBoundingClientRect() : null;
+                    const zeroSize = !!rect && rect.width === 0 && rect.height === 0;
+                    const style = html.ownerDocument?.defaultView?.getComputedStyle(html);
+                    const hiddenByStyle = !!style && (style.display === 'none' || style.visibility === 'hidden');
+                    // Пустой по тексту — нечего матчить с text_markers, нечего показывать пользователю.
+                    const innerText = (html.innerText || '').trim();
+                    const skip = isContextLayer || ariaHidden || zeroSize || hiddenByStyle || innerText.length === 0;
+                    return { domId, skip };
                 });
             }
             catch {
                 continue;
             }
-            if (seen.has(domId))
+            if (!probe)
                 continue;
-            seen.add(domId);
+            if (seen.has(probe.domId))
+                continue;
+            seen.add(probe.domId);
+            if (probe.skip)
+                continue;
             dialogHandles.push(handle);
         }
     }

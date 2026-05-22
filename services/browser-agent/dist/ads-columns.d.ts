@@ -21,6 +21,7 @@ export interface ParserColumnLayout {
     title: string;
     fieldName: string;
     valueKind: ColumnValueKind;
+    left?: number;
 }
 export interface ColumnWidthTarget {
     key: string;

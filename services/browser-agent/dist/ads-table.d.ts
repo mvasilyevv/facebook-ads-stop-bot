@@ -41,6 +41,7 @@ export declare function findToggleCellWithTableScan(page: Page, fbAdId: string, 
     maxScrollPasses?: number;
     stepPx?: number;
     fallbackMaxSteps?: number;
+    isCancelled?: () => boolean;
 }): Promise<ElementHandle | null>;
-export declare function scrollAdsTableDown(page: Page, stepPx?: number): Promise<ScrollMetrics>;
+export declare function scrollAdsTableDown(page: Page, stepPx?: number, isCancelled?: () => boolean): Promise<ScrollMetrics>;
 //# sourceMappingURL=ads-table.d.ts.map

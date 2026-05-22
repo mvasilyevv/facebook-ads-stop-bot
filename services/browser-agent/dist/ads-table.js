@@ -1186,6 +1186,8 @@ async function findToggleCellWithTableScan(page, fbAdId, options) {
     let foundCell = await findToggleCellInDom(page, fbAdId);
     if (foundCell)
         return foundCell;
+    if (options?.isCancelled?.())
+        return null;
     if (resetToTop)
         await resetAdsTableScroll(page);
     foundCell = await findToggleCellInDom(page, fbAdId);
@@ -1194,13 +1196,17 @@ async function findToggleCellWithTableScan(page, fbAdId, options) {
     let metricsSeen = false;
     let stalledPasses = 0;
     for (let i = 0; i < maxScrollPasses; i++) {
+        if (options?.isCancelled?.())
+            return null;
         const scrollBefore = await getAdsTableScrollMetrics(page);
         metricsSeen = metricsSeen || scrollBefore.found;
-        const scrollAfter = await scrollAdsTableDown(page, stepPx);
+        const scrollAfter = await scrollAdsTableDown(page, stepPx, options?.isCancelled);
         metricsSeen = metricsSeen || scrollAfter.found;
         foundCell = await findToggleCellInDom(page, fbAdId);
         if (foundCell)
             return foundCell;
+        if (options?.isCancelled?.())
+            return null;
         if (scrollAfter.moved) {
             stalledPasses = 0;
             continue;
@@ -1213,13 +1219,17 @@ async function findToggleCellWithTableScan(page, fbAdId, options) {
         }
         break;
     }
+    if (options?.isCancelled?.())
+        return null;
     if (metricsSeen)
         return null;
     // Последний запасной вариант нужен для старых DOM-структур.
-    return humanScrollToFindFallback(page, selector, fallbackMaxSteps, stepPx);
+    return humanScrollToFindFallback(page, selector, fallbackMaxSteps, stepPx, options?.isCancelled);
 }
-async function humanScrollToFindFallback(page, selector, maxSteps, stepPx) {
+async function humanScrollToFindFallback(page, selector, maxSteps, stepPx, isCancelled) {
     for (let i = 0; i < maxSteps; i++) {
+        if (isCancelled?.())
+            return null;
         const el = await page.$(selector);
         if (el)
             return el;
@@ -1228,7 +1238,10 @@ async function humanScrollToFindFallback(page, selector, maxSteps, stepPx) {
     }
     return null;
 }
-async function scrollAdsTableDown(page, stepPx) {
+async function scrollAdsTableDown(page, stepPx, isCancelled) {
+    if (isCancelled?.()) {
+        return defaultScrollMetrics(false);
+    }
     const deltaY = stepPx ?? randInt(160, 260);
     const before = await getAdsTableScrollMetrics(page);
     const beforeIds = await getVisibleAdsTableRowIds(page);

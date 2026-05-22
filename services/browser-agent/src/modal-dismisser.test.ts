@@ -148,3 +148,49 @@ test('dismissKnownModals — jewel-flyout #fbNotificationsFlyout не попад
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 });
+
+// Сценарий 6: пустой uiContextualLayer (служебный wrapper FB) не должен ловиться как unknown.
+// Это реальный артефакт из .logs/modals: role="dialog", класс uiContextualLayer, внутри только
+// невидимый layer_close_elem. Раньше каждый цикл скана слал TG-алерт «бот не умеет закрывать окно».
+test('dismissKnownModals — пустой uiContextualLayer не попадает в unknown', async () => {
+  const html = `
+    <html><body>
+      <div class="uiContextualLayer uiContextualLayerRight" role="dialog" aria-labelledby="">
+        <div class="_5v-0 _53in">
+          <div data-non-int-surface="/am/int:_/table/int:Foo.react"></div>
+          <a class="accessible_elem layer_close_elem" href="#" role="button" tabindex="0">Закрыть всплывающее окно и продолжить</a>
+        </div>
+      </div>
+    </body></html>
+  `;
+
+  await withPage(html, async (page) => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'modal-test-'));
+    const result = await dismissKnownModals(page, { artifactsDir: tmpDir });
+
+    assert.equal(result.unknown.length, 0, 'uiContextualLayer не должен сохраняться как unknown');
+    assert.equal(result.dismissed.length, 0, 'И не должен попасть в dismissed');
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+});
+
+// Сценарий 7: скрытый диалог (aria-hidden=true) не считается активным.
+test('dismissKnownModals — aria-hidden диалог не попадает в unknown', async () => {
+  const html = `
+    <html><body>
+      <div role="dialog" aria-hidden="true">
+        <p>Закрытый служебный диалог</p>
+      </div>
+    </body></html>
+  `;
+
+  await withPage(html, async (page) => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'modal-test-'));
+    const result = await dismissKnownModals(page, { artifactsDir: tmpDir });
+
+    assert.equal(result.unknown.length, 0, 'aria-hidden диалог пропускается');
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+});

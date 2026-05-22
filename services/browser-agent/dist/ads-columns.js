@@ -292,6 +292,7 @@ function buildParserColumnLayout(headers) {
             title: spec.title,
             fieldName: spec.parserField,
             valueKind: spec.valueKind || 'metric',
+            left: header.left,
         });
     });
     const missingColumns = REQUIRED_PARSER_SPECS

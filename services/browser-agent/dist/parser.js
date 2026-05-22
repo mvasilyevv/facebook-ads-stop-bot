@@ -9,6 +9,8 @@ exports.parseMoney = parseMoney;
 exports.parseMoneyOrNull = parseMoneyOrNull;
 exports.parseDecimalOrNull = parseDecimalOrNull;
 exports.normalizeNumericText = normalizeNumericText;
+exports.countEmptyMetricsRows = countEmptyMetricsRows;
+exports.findPartialRows = findPartialRows;
 const ads_columns_js_1 = require("./ads-columns.js");
 const humanizer_js_1 = require("./humanizer.js");
 /** Нажать кнопку «Refresh» в Ads Manager. */
@@ -217,11 +219,34 @@ async function extractRawRowsFromPage(page, args) {
                 _toggle_aria_checked: getToggleAriaChecked(row),
                 ad_name: adName,
             };
+            // Получаем координаты left для всех ячеек в строке, чтобы повысить производительность сопоставления
+            const cellsWithLeft = cells.map((cell) => ({
+                cell,
+                left: cell.getBoundingClientRect().left,
+            }));
             const rowMissing = [];
             for (const column of layout) {
-                const relativeIndex = column.headerIndex - nameColumn.headerIndex;
-                const cellIndex = nameCellIndex + relativeIndex;
-                const cell = cells[cellIndex];
+                let cell = undefined;
+                // Если задана координата left колонки, сопоставляем ячейку по физической координате
+                if (column.left !== undefined && typeof column.left === 'number') {
+                    let minDiff = Infinity;
+                    let bestCell = undefined;
+                    for (const item of cellsWithLeft) {
+                        const diff = Math.abs(item.left - column.left);
+                        // Допуск 15px, так как минимальная ширина колонки в Ads Manager 40px
+                        if (diff < 15 && diff < minDiff) {
+                            minDiff = diff;
+                            bestCell = item.cell;
+                        }
+                    }
+                    cell = bestCell;
+                }
+                // Резервный расчет по относительному индексу (если left отсутствует или ячейка не нашлась по координате)
+                if (!cell) {
+                    const relativeIndex = column.headerIndex - nameColumn.headerIndex;
+                    const cellIndex = nameCellIndex + relativeIndex;
+                    cell = cells[cellIndex];
+                }
                 if (!cell) {
                     rowMissing.push(column.title);
                     continue;
@@ -250,6 +275,18 @@ async function parseAdsFromPage(page) {
     const rawResult = await extractRawRowsFromPage(page, { layout });
     if (!rawResult || !Array.isArray(rawResult.rows))
         return [];
+    // Проверяем, что ключевые числовые метрики для всех строк успешно загружены (не равны пустой строке "")
+    const coreMetrics = ['spend', 'impressions', 'reach'];
+    for (const fields of rawResult.rows) {
+        for (const column of layout) {
+            if (coreMetrics.includes(column.fieldName)) {
+                const val = fields[column.fieldName];
+                if (val === '') {
+                    throw new Error(`Данные таблицы Ads Manager еще не загружены: пустая ячейка в ключевой колонке "${column.title}" для объявления "${fields.ad_name || 'Неизвестно'}"`);
+                }
+            }
+        }
+    }
     if (rawResult.missingFields.length > 0) {
         const missingSet = new Set();
         for (const item of rawResult.missingFields) {
@@ -274,6 +311,10 @@ async function waitForParsedAdsRows(page, options = {}) {
     const deadline = Date.now() + timeoutMs;
     let lastError = null;
     while (true) {
+        // Мгновенно выходим, если сканирование было отменено
+        if (options.isCancelled?.()) {
+            return [];
+        }
         try {
             const rows = await readRows(page);
             if (rows.length > 0)
@@ -282,6 +323,10 @@ async function waitForParsedAdsRows(page, options = {}) {
         catch (err) {
             // Сохраняем последнюю ошибку парсинга колонок (например, если колонка CPM ещё не прогрузилась)
             lastError = err;
+        }
+        // Повторно проверяем флаг отмены
+        if (options.isCancelled?.()) {
+            return [];
         }
         const remainingMs = deadline - Date.now();
         if (remainingMs <= 0) {
@@ -449,5 +494,46 @@ function normalizeNumericText(text) {
 }
 function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
+}
+// --- Helpers для детекции STALE_DATA и partial-строк ---
+const EMPTY_METRIC_PLACEHOLDERS = new Set(['', '—', '-', '–', 'N/A']);
+function isEmptyMetric(value) {
+    if (value === null || value === undefined)
+        return true;
+    if (typeof value === 'number')
+        return value === 0;
+    return EMPTY_METRIC_PLACEHOLDERS.has(value.trim());
+}
+/**
+ * Строки, у которых все критические метрики (impressions/spend/cpm/cpc/ctr) пустые.
+ * Используется для детекции STALE_DATA в observer.
+ */
+function countEmptyMetricsRows(rows) {
+    let count = 0;
+    for (const row of rows) {
+        const allEmpty = isEmptyMetric(row.impressions) &&
+            isEmptyMetric(row.spend) &&
+            isEmptyMetric(row.cpm) &&
+            isEmptyMetric(row.cpc) &&
+            isEmptyMetric(row.ctr);
+        if (allEmpty)
+            count += 1;
+    }
+    return count;
+}
+/**
+ * fb_ad_id строк, у которых пустые обязательные текстовые поля
+ * (ad_name / campaign_name) — индикатор, что парсер не дочитал ячейки.
+ */
+function findPartialRows(rows) {
+    const partial = [];
+    for (const row of rows) {
+        if (!row.fb_ad_id)
+            continue;
+        if (!row.ad_name || !row.campaign_name) {
+            partial.push(row.fb_ad_id);
+        }
+    }
+    return partial;
 }
 //# sourceMappingURL=parser.js.map

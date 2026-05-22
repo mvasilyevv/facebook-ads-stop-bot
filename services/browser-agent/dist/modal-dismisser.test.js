@@ -160,4 +160,42 @@ async function withPage(html, fn) {
         fs.rmSync(tmpDir, { recursive: true, force: true });
     });
 });
+// Сценарий 6: пустой uiContextualLayer (служебный wrapper FB) не должен ловиться как unknown.
+// Это реальный артефакт из .logs/modals: role="dialog", класс uiContextualLayer, внутри только
+// невидимый layer_close_elem. Раньше каждый цикл скана слал TG-алерт «бот не умеет закрывать окно».
+(0, node_test_1.default)('dismissKnownModals — пустой uiContextualLayer не попадает в unknown', async () => {
+    const html = `
+    <html><body>
+      <div class="uiContextualLayer uiContextualLayerRight" role="dialog" aria-labelledby="">
+        <div class="_5v-0 _53in">
+          <div data-non-int-surface="/am/int:_/table/int:Foo.react"></div>
+          <a class="accessible_elem layer_close_elem" href="#" role="button" tabindex="0">Закрыть всплывающее окно и продолжить</a>
+        </div>
+      </div>
+    </body></html>
+  `;
+    await withPage(html, async (page) => {
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'modal-test-'));
+        const result = await (0, modal_dismisser_js_1.dismissKnownModals)(page, { artifactsDir: tmpDir });
+        strict_1.default.equal(result.unknown.length, 0, 'uiContextualLayer не должен сохраняться как unknown');
+        strict_1.default.equal(result.dismissed.length, 0, 'И не должен попасть в dismissed');
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+});
+// Сценарий 7: скрытый диалог (aria-hidden=true) не считается активным.
+(0, node_test_1.default)('dismissKnownModals — aria-hidden диалог не попадает в unknown', async () => {
+    const html = `
+    <html><body>
+      <div role="dialog" aria-hidden="true">
+        <p>Закрытый служебный диалог</p>
+      </div>
+    </body></html>
+  `;
+    await withPage(html, async (page) => {
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'modal-test-'));
+        const result = await (0, modal_dismisser_js_1.dismissKnownModals)(page, { artifactsDir: tmpDir });
+        strict_1.default.equal(result.unknown.length, 0, 'aria-hidden диалог пропускается');
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+});
 //# sourceMappingURL=modal-dismisser.test.js.map

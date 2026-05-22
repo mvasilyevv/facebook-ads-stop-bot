@@ -24,6 +24,8 @@ export interface ParserColumnLayout {
   title: string;
   fieldName: string;
   valueKind: ColumnValueKind;
+  // Координата X левой границы заголовка в пикселях для точного сопоставления ячеек
+  left?: number;
 }
 
 export interface ColumnWidthTarget {
@@ -336,6 +338,7 @@ export function buildParserColumnLayout(headers: HeaderSnapshot[]): {
       title: spec.title,
       fieldName: spec.parserField,
       valueKind: spec.valueKind || 'metric',
+      left: header.left,
     });
   });
 

@@ -123,4 +123,23 @@ function makeRow(overrides = {}) {
     });
     strict_1.default.ok(attempts >= 1);
 });
+// Сценарий: если при чтении обнаруживается пустая метрика (данные еще не подгрузились),
+// то выбрасывается ошибка, и waitForParsedAdsRows повторяет попытку до успешного появления данных.
+(0, node_test_1.default)('waitForParsedAdsRows ожидает загрузки пустых метрик до появления значений', async () => {
+    let attempts = 0;
+    const rows = await (0, parser_js_1.waitForParsedAdsRows)({}, {
+        timeoutMs: 100,
+        pollMs: 1,
+        readRows: async () => {
+            attempts += 1;
+            if (attempts < 3) {
+                throw new Error('Данные таблицы Ads Manager еще не загружены: пустая ячейка в колонке "Сумма затрат" для объявления "Объявление"');
+            }
+            return [makeRow({ spend: '0.20' })];
+        },
+    });
+    strict_1.default.equal(rows.length, 1);
+    strict_1.default.equal(rows[0]?.spend, '0.20');
+    strict_1.default.equal(attempts, 3);
+});
 //# sourceMappingURL=parser-retry.test.js.map

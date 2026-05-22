@@ -5,6 +5,7 @@ type WaitForParsedAdsRowsOptions = {
     timeoutMs?: number;
     pollMs?: number;
     readRows?: ParseRowsReader;
+    isCancelled?: () => boolean;
 };
 /** Нажать кнопку «Refresh» в Ads Manager. */
 export declare function refreshTable(page: Page): Promise<boolean>;
@@ -18,5 +19,15 @@ export declare function parseMoney(text?: string): string;
 export declare function parseMoneyOrNull(text?: string): string | null;
 export declare function parseDecimalOrNull(text?: string): string | null;
 export declare function normalizeNumericText(text?: string): string | null;
+/**
+ * Строки, у которых все критические метрики (impressions/spend/cpm/cpc/ctr) пустые.
+ * Используется для детекции STALE_DATA в observer.
+ */
+export declare function countEmptyMetricsRows(rows: ScannedAdRow[]): number;
+/**
+ * fb_ad_id строк, у которых пустые обязательные текстовые поля
+ * (ad_name / campaign_name) — индикатор, что парсер не дочитал ячейки.
+ */
+export declare function findPartialRows(rows: ScannedAdRow[]): string[];
 export {};
 //# sourceMappingURL=parser.d.ts.map
