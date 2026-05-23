@@ -398,7 +398,11 @@ async function runScanCycle(call) {
         // ненайденная ячейка. Отдаются в ScanComplete.partial_row_ids — observer пометит
         // OK_PARTIAL и дочитает эти строки в следующем цикле.
         const accumulatedPartialIds = new Set();
-        let seenRowIds = new Set();
+        // fb_ad_id → индекс в allRows. Нужен для апгрейда partial-строки до полной,
+        // если она ещё раз попала в DOM (overlap при скролле) и в этот раз все ячейки
+        // прочитались. Без апгрейда строка остаётся partial навсегда, потому что
+        // виртуализация Ads Manager выбрасывает её после следующего скролла.
+        const seenRowIds = new Map();
         let stalledPasses = 0;
         let completedPasses = 0;
         // Не привязываемся к текущим 30 объявлениям: конец списка определяем по нескольким проходам без новых ID.
@@ -450,18 +454,27 @@ async function runScanCycle(call) {
             }
             if (cancelled)
                 break;
-            // Накапливаем partial fb_ad_id всех проходов цикла — отдадим их в ScanComplete.
-            for (const id of passPartialIds) {
-                accumulatedPartialIds.add(id);
-            }
+            const passPartialSet = new Set(passPartialIds);
             const newRows = [];
             for (const row of rows) {
-                if (!seenRowIds.has(row.fb_ad_id)) {
-                    seenRowIds.add(row.fb_ad_id);
+                const adId = row.fb_ad_id;
+                const existingIndex = seenRowIds.get(adId);
+                const nowPartial = passPartialSet.has(adId);
+                if (existingIndex === undefined) {
+                    // Новая строка — добавляем в allRows и (если partial) в accumulated.
                     const protoRow = toProtoRow(row);
-                    newRows.push(protoRow);
+                    seenRowIds.set(adId, allRows.length);
                     allRows.push(protoRow);
+                    newRows.push(protoRow);
+                    if (nowPartial)
+                        accumulatedPartialIds.add(adId);
                 }
+                else if (accumulatedPartialIds.has(adId) && !nowPartial) {
+                    // Апгрейд: ранее партиал, сейчас все ячейки прочитались — обновляем slot.
+                    allRows[existingIndex] = toProtoRow(row);
+                    accumulatedPartialIds.delete(adId);
+                }
+                // Иначе: строка уже full ИЛИ всё ещё partial, оставляем как есть.
             }
             const metrics = await (0, ads_table_js_1.getAdsTableScrollMetrics)(page);
             if (cancelled)
@@ -509,6 +522,83 @@ async function runScanCycle(call) {
             }
             if (stalledPasses >= stallLimit)
                 break;
+        }
+        // Re-fetch фаза: если после прохода вниз остались partial-строки, они уже
+        // ушли из виртуализированного DOM. Прокручиваем таблицу к началу и идём
+        // ещё один полный проход — но НЕ добавляем новые строки, а ТОЛЬКО апгрейдим
+        // partial-строки до full когда находим их в DOM с уже подгруженными метриками.
+        if (!cancelled && accumulatedPartialIds.size > 0) {
+            const partialBefore = accumulatedPartialIds.size;
+            console.log(`[scan] re-fetch: остались partial=${partialBefore}, прокручиваю к началу`);
+            try {
+                await (0, ads_table_js_1.resetAdsTableScroll)(page);
+                await waitForDomStable(page, 2.0, 0.1, () => cancelled);
+                const refetchMaxPasses = Math.min(maxPasses, 30);
+                let refetchStalledPasses = 0;
+                for (let pass = 1; pass <= refetchMaxPasses; pass++) {
+                    if (cancelled)
+                        break;
+                    if (accumulatedPartialIds.size === 0)
+                        break;
+                    await waitForDomStable(page, 1.0, 0.1, () => cancelled);
+                    if (cancelled)
+                        break;
+                    const refetchStart = Date.now();
+                    // Дольше ждём, чтобы дать Facebook догрузить именно эти partial-ячейки.
+                    const { rows: refetchRows, partialRowIds: refetchPassPartial } = await (0, parser_js_1.waitForParsedAdsRows)(page, {
+                        timeoutMs: 8_000,
+                        pollMs: 400,
+                        maxPartialRatio: 0.0,
+                        isCancelled: () => cancelled,
+                    });
+                    parseAccumMs += Date.now() - refetchStart;
+                    if (cancelled)
+                        break;
+                    const refetchPartialSet = new Set(refetchPassPartial);
+                    let upgraded = 0;
+                    for (const row of refetchRows) {
+                        const idx = seenRowIds.get(row.fb_ad_id);
+                        if (idx === undefined)
+                            continue;
+                        if (accumulatedPartialIds.has(row.fb_ad_id) && !refetchPartialSet.has(row.fb_ad_id)) {
+                            allRows[idx] = toProtoRow(row);
+                            accumulatedPartialIds.delete(row.fb_ad_id);
+                            upgraded += 1;
+                        }
+                    }
+                    if (upgraded > 0) {
+                        refetchStalledPasses = 0;
+                        console.log(`[scan] re-fetch pass=${pass} upgraded=${upgraded} remaining=${accumulatedPartialIds.size}`);
+                    }
+                    else {
+                        refetchStalledPasses += 1;
+                    }
+                    if (refetchStalledPasses >= stallLimit)
+                        break;
+                    if (accumulatedPartialIds.size === 0)
+                        break;
+                    const beforeIds = await (0, ads_table_js_1.getVisibleAdsTableRowIds)(page);
+                    const scrollStart = Date.now();
+                    const scrollAfter = await (0, ads_table_js_1.scrollAdsTableDown)(page, undefined, () => cancelled);
+                    if (cancelled)
+                        break;
+                    if (!scrollAfter.atBottom) {
+                        if (scrollAfter.moved) {
+                            await waitForDomStable(page, 1.0, 0.1, () => cancelled);
+                        }
+                        else {
+                            await waitForVisibleRowsAfterScroll(page, beforeIds, undefined, () => cancelled);
+                        }
+                    }
+                    scrollAccumMs += Date.now() - scrollStart;
+                    if (scrollAfter.atBottom)
+                        break;
+                }
+                console.log(`[scan] re-fetch завершён: partial ${partialBefore} → ${accumulatedPartialIds.size}`);
+            }
+            catch (err) {
+                console.warn(`[scan] re-fetch упал: ${err?.message || err}`);
+            }
         }
         const duration = (Date.now() - startTime) / 1000;
         if (cancelled) {
