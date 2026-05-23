@@ -523,6 +523,107 @@ async function runScanCycle(call) {
             if (stalledPasses >= stallLimit)
                 break;
         }
+        // Cold-start защита: если в footer таблицы написано N объявлений, а мы
+        // насобирали меньше — значит refresh ещё не дозагрузил таблицу до конца,
+        // мы стартовали с виртуальным окном из части строк и dailyскролл просто
+        // не нашёл остальных. Ждём и идём второй проход скролла-парсинга, добирая
+        // недостающие строки.
+        if (!cancelled) {
+            const tableTotal = await (0, parser_js_1.getAdsTableTotalCount)(page);
+            if (tableTotal !== null && allRows.length < tableTotal) {
+                console.log(`[scan] cold-start: собрано ${allRows.length}/${tableTotal}, добираю недостающие`);
+                const coldStartDeadline = Date.now() + 30_000;
+                let coldStartPasses = 0;
+                const coldStartMaxPasses = Math.min(maxPasses, 25);
+                while (!cancelled && allRows.length < tableTotal && Date.now() < coldStartDeadline && coldStartPasses < coldStartMaxPasses) {
+                    coldStartPasses += 1;
+                    // Сбрасываем скролл наверх, чтобы пройти таблицу заново — недостающие
+                    // строки могут быть где угодно по диапазону, не только внизу.
+                    await (0, ads_table_js_1.resetAdsTableScroll)(page);
+                    await waitForDomStable(page, 1.5, 0.1, () => cancelled);
+                    if (cancelled)
+                        break;
+                    let coldStalled = 0;
+                    for (let pass = 1; pass <= coldStartMaxPasses; pass++) {
+                        if (cancelled)
+                            break;
+                        if (allRows.length >= tableTotal)
+                            break;
+                        await waitForDomStable(page, 1.0, 0.1, () => cancelled);
+                        if (cancelled)
+                            break;
+                        const parseStart = Date.now();
+                        const { rows: addRows, partialRowIds: addPartial } = await (0, parser_js_1.waitForParsedAdsRows)(page, {
+                            timeoutMs: 8_000,
+                            pollMs: 400,
+                            maxPartialRatio: 0.1,
+                            isCancelled: () => cancelled,
+                        });
+                        parseAccumMs += Date.now() - parseStart;
+                        if (cancelled)
+                            break;
+                        const addPartialSet = new Set(addPartial);
+                        let added = 0;
+                        let upgraded = 0;
+                        for (const row of addRows) {
+                            const adId = row.fb_ad_id;
+                            const existingIndex = seenRowIds.get(adId);
+                            const nowPartial = addPartialSet.has(adId);
+                            if (existingIndex === undefined) {
+                                seenRowIds.set(adId, allRows.length);
+                                allRows.push(toProtoRow(row));
+                                if (nowPartial)
+                                    accumulatedPartialIds.add(adId);
+                                added += 1;
+                            }
+                            else if (accumulatedPartialIds.has(adId) && !nowPartial) {
+                                allRows[existingIndex] = toProtoRow(row);
+                                accumulatedPartialIds.delete(adId);
+                                upgraded += 1;
+                            }
+                        }
+                        if (added > 0 || upgraded > 0) {
+                            coldStalled = 0;
+                            console.log(`[scan] cold-start pass=${pass} added=${added} upgraded=${upgraded} total=${allRows.length}/${tableTotal}`);
+                        }
+                        else {
+                            coldStalled += 1;
+                        }
+                        if (allRows.length >= tableTotal)
+                            break;
+                        if (coldStalled >= stallLimit)
+                            break;
+                        const beforeIds = await (0, ads_table_js_1.getVisibleAdsTableRowIds)(page);
+                        const scrollStart = Date.now();
+                        const scrollAfter = await (0, ads_table_js_1.scrollAdsTableDown)(page, undefined, () => cancelled);
+                        if (cancelled)
+                            break;
+                        if (!scrollAfter.atBottom) {
+                            if (scrollAfter.moved) {
+                                await waitForDomStable(page, 1.0, 0.1, () => cancelled);
+                            }
+                            else {
+                                await waitForVisibleRowsAfterScroll(page, beforeIds, undefined, () => cancelled);
+                            }
+                        }
+                        scrollAccumMs += Date.now() - scrollStart;
+                        if (scrollAfter.atBottom)
+                            break;
+                    }
+                    if (allRows.length < tableTotal) {
+                        // Не докрутили — даём Facebook ещё немного и повторяем reset+проход.
+                        await sleep(2_000);
+                    }
+                }
+                if (allRows.length < tableTotal) {
+                    warnings.push('cold_start_incomplete');
+                    console.warn(`[scan] cold-start не дособрал: ${allRows.length}/${tableTotal}`);
+                }
+                else {
+                    console.log(`[scan] cold-start завершён: ${allRows.length}/${tableTotal}`);
+                }
+            }
+        }
         // Re-fetch фаза: если после прохода вниз остались partial-строки, они уже
         // ушли из виртуализированного DOM. Прокручиваем таблицу к началу и идём
         // ещё один полный проход — но НЕ добавляем новые строки, а ТОЛЬКО апгрейдим

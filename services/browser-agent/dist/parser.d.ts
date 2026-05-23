@@ -63,5 +63,12 @@ export declare function countEmptyMetricsRows(rows: ScannedAdRow[]): number;
  * (ad_name / campaign_name) — индикатор, что парсер не дочитал ячейки.
  */
 export declare function findPartialRows(rows: ScannedAdRow[]): string[];
+/**
+ * Возвращает реальное количество объявлений в таблице Ads Manager из footer-строки
+ * «Результаты, число объявлений: N». Это источник истины: позволяет понять, что
+ * наш скан недосканил (allRows.length < total). Возвращает null, если строка
+ * не нашлась/не распарсилась.
+ */
+export declare function getAdsTableTotalCount(page: Page): Promise<number | null>;
 export {};
 //# sourceMappingURL=parser.d.ts.map

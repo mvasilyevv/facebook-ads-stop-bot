@@ -651,3 +651,28 @@ export function findPartialRows(rows: ScannedAdRow[]): string[] {
   }
   return partial;
 }
+
+/**
+ * Возвращает реальное количество объявлений в таблице Ads Manager из footer-строки
+ * «Результаты, число объявлений: N». Это источник истины: позволяет понять, что
+ * наш скан недосканил (allRows.length < total). Возвращает null, если строка
+ * не нашлась/не распарсилась.
+ */
+export async function getAdsTableTotalCount(page: Page): Promise<number | null> {
+  try {
+    const value = await page.evaluate(() => {
+      // У footer-строки уникальный data-surface */total_count, она единственная такая.
+      const el = document.querySelector('[data-surface*="total_count"]');
+      if (!el) return null;
+      const text = (el.textContent || '').replace(/\s+/g, ' ');
+      // Разные локали: «Результаты, число объявлений: 42», "Results, number of ads: 42",
+      // "Total ad count: 42" и т.п. Берём первое число длиной 1-6 в строке.
+      const match = text.match(/(\d{1,6})/);
+      return match ? Number(match[1]) : null;
+    });
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return null;
+    return value;
+  } catch {
+    return null;
+  }
+}
