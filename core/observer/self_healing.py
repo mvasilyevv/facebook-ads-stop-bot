@@ -183,13 +183,19 @@ class SelfHealingEscalator:
             f"<i>Артефакты для разбора: {paths}</i>"
         )
         try:
+            from core.alerts.send import send_telegram_via_queue
+
             ops_thread_id = await _load_ops_thread_id()
-            await tg_client.send_message(
-                chat_id=tg_chat_id, text=text, message_thread_id=ops_thread_id
+            # Алерт об неизвестной модалке — критичный, идёт через Redis-очередь
+            await send_telegram_via_queue(
+                chat_id=tg_chat_id,
+                text=text,
+                fallback_client=tg_client,
+                message_thread_id=ops_thread_id,
             )
             self._last_modal_alert_at = now
         except Exception:
-            logger.exception("Observer: не удалось отправить алерт о неизвестной модалке в TG")
+            logger.exception("Observer: не удалось поставить алерт о неизвестной модалке в очередь")
 
     async def _send_critical_alert_if_needed(
         self,
@@ -227,9 +233,15 @@ class SelfHealingEscalator:
             f"<i>request_id={request_id}</i>"
         )
         try:
+            from core.alerts.send import send_telegram_via_queue
+
             ops_thread_id = await _load_ops_thread_id()
-            await tg_client.send_message(
-                chat_id=tg_chat_id, text=text, message_thread_id=ops_thread_id
+            # Критичный алерт сканера — идёт через Redis-очередь для надёжной доставки
+            await send_telegram_via_queue(
+                chat_id=tg_chat_id,
+                text=text,
+                fallback_client=tg_client,
+                message_thread_id=ops_thread_id,
             )
             self._last_critical_alert_at = now
             logger.error(

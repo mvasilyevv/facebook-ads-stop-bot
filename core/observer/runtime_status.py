@@ -121,6 +121,24 @@ async def update_observer_runtime_status(
         logger.debug("Не удалось обновить runtime-статус observer", exc_info=True)
 
 
+async def record_successful_scan(finished_at: datetime | None = None) -> None:
+    """Записывает timestamp успешно завершённого scan-цикла в БД.
+
+    Вызывается ТОЛЬКО при outcome=OK (нормальный цикл) или fast-stop (STOP найден).
+    Ошибки, пустые циклы, INTERRUPTED и STALE_DATA НЕ вызывают эту функцию.
+    Поле монотонное — следующая запись всегда новее предыдущей.
+    """
+    factory = get_session_factory()
+    now = finished_at or datetime.now(UTC)
+    try:
+        async with factory() as session:
+            row = await get_or_create_observer_settings(session)
+            row.last_successful_scan_at = now
+            await session.commit()
+    except Exception:
+        logger.debug("Не удалось записать last_successful_scan_at", exc_info=True)
+
+
 async def set_observer_phase(phase: str | None) -> None:
     """Записывает текущую фазу цикла observer'а в БД.
 

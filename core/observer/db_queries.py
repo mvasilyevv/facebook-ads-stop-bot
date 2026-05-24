@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
+from statistics import median as _statistics_median
 
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import selectinload
@@ -15,6 +17,7 @@ from core.domain import AlertStage, AlertState, DisableTaskStatus, EnableTaskSta
 from core.enable_tasks import calculate_active_enable_cutoff
 from core.models import (
     AdDepositCorrection,
+    AdMetricHistory,
     AdSnapshot,
     AlertEvent,
     AlertSnooze,
@@ -23,8 +26,10 @@ from core.models import (
     EnableTask,
     FbAd,
     FbAdset,
+    FbCampaign,
     ObserverSettings,
     Offer,
+    OfferRuleStat,
     VisionSettings,
 )
 from core.observer.service import AlertCandidate
@@ -816,3 +821,246 @@ async def load_history_ad_ids_with_metrics(
             .distinct()
         )
         return {row[0] for row in result.all()}
+
+
+# Горизонт для вычисления медиан CPL/CPR по офферу (дни)
+_CPL_CPR_BASELINE_WINDOW_DAYS = 14
+# Минимальное число объявлений для надёжной медианы
+_CPL_CPR_MIN_POINTS = 5
+
+
+async def compute_cpl_cpr_baselines_by_offer(
+    session=None,
+) -> dict[str, tuple[Decimal | None, Decimal | None]]:
+    """Считает медианные CPL и CPR по офферу из DISABLED-снэпшотов за последние 14 дней.
+
+    Берём только отключённые объявления (DISABLED): они отработали полный цикл
+    и дают репрезентативную статистику. Минимум 5 объявлений на оффер — иначе
+    медиана не вычисляется (None).
+
+    Возвращает:
+        dict[offer_code_lower -> (median_cpl, median_cpr)]
+        Одно из значений может быть None, если данных недостаточно.
+    """
+    cutoff = datetime.now(UTC) - timedelta(days=_CPL_CPR_BASELINE_WINDOW_DAYS)
+
+    async def _query(s) -> dict[str, tuple[Decimal | None, Decimal | None]]:
+        result = await s.execute(
+            select(
+                FbCampaign.offer_code,
+                AdSnapshot.cost_per_lead,
+                AdSnapshot.cost_per_registration,
+            )
+            .join(FbAd, FbAd.id == AdSnapshot.ad_id)
+            .join(FbAdset, FbAdset.id == FbAd.adset_id)
+            .join(FbCampaign, FbCampaign.id == FbAdset.campaign_id)
+            .where(
+                AdSnapshot.alert_state == AlertState.DISABLED,
+                AdSnapshot.last_observed_at >= cutoff,
+                FbCampaign.offer_code.is_not(None),
+            )
+        )
+        rows = result.all()
+
+        # Группируем значения по офферу
+        cpl_by_offer: dict[str, list[Decimal]] = {}
+        cpr_by_offer: dict[str, list[Decimal]] = {}
+        for offer_code, cpl_val, cpr_val in rows:
+            if not offer_code:
+                continue
+            key = offer_code.casefold()
+            if cpl_val is not None and cpl_val > 0:
+                cpl_by_offer.setdefault(key, []).append(Decimal(str(cpl_val)))
+            if cpr_val is not None and cpr_val > 0:
+                cpr_by_offer.setdefault(key, []).append(Decimal(str(cpr_val)))
+
+        # Собираем объединённое множество офферов
+        all_offer_codes = cpl_by_offer.keys() | cpr_by_offer.keys()
+        baselines: dict[str, tuple[Decimal | None, Decimal | None]] = {}
+        for code in all_offer_codes:
+            cpl_vals = cpl_by_offer.get(code, [])
+            cpr_vals = cpr_by_offer.get(code, [])
+            med_cpl = (
+                Decimal(str(_statistics_median(cpl_vals))).quantize(Decimal("0.0001"))
+                if len(cpl_vals) >= _CPL_CPR_MIN_POINTS
+                else None
+            )
+            med_cpr = (
+                Decimal(str(_statistics_median(cpr_vals))).quantize(Decimal("0.0001"))
+                if len(cpr_vals) >= _CPL_CPR_MIN_POINTS
+                else None
+            )
+            baselines[code] = (med_cpl, med_cpr)
+
+        return baselines
+
+    if session is not None:
+        return await _query(session)
+
+    factory = get_session_factory()
+    async with factory() as s:
+        return await _query(s)
+
+
+async def compute_adaptive_cpa_by_offer(
+    session=None,
+    *,
+    window_days: int = 7,
+    min_samples: int = 5,
+) -> dict[str, Decimal]:
+    """Rolling median CPA по успешно отключённым объявлениям за последние N дней.
+
+    Берём только DISABLED-снэпшоты (полный цикл) за последние window_days дней.
+    CPA считается как spend / deposits (минимум 1 депозит, чтобы избежать деления на ноль).
+    Если для оффера меньше min_samples объявлений — ключ не попадает в результат (→ fallback).
+
+    Возвращает:
+        dict[offer_code_lower -> median_cpa]
+    """
+    cutoff = datetime.now(UTC) - timedelta(days=window_days)
+
+    async def _query(s) -> dict[str, Decimal]:
+        result = await s.execute(
+            select(
+                FbCampaign.offer_code,
+                AdSnapshot.spend,
+                AdSnapshot.deposits,
+            )
+            .join(FbAd, FbAd.id == AdSnapshot.ad_id)
+            .join(FbAdset, FbAdset.id == FbAd.adset_id)
+            .join(FbCampaign, FbCampaign.id == FbAdset.campaign_id)
+            .where(
+                AdSnapshot.alert_state == AlertState.DISABLED,
+                AdSnapshot.last_observed_at >= cutoff,
+                FbCampaign.offer_code.is_not(None),
+                AdSnapshot.deposits > 0,  # только с депозитами — реальные CPA
+            )
+        )
+        rows = result.all()
+
+        # Группируем вычисленные CPA по офферу
+        cpa_by_offer: dict[str, list[Decimal]] = {}
+        for offer_code, spend, deposits in rows:
+            if not offer_code:
+                continue
+            try:
+                spend_dec = Decimal(str(spend))
+                deps = int(deposits)
+                if deps <= 0 or spend_dec <= 0:
+                    continue
+                cpa_val = spend_dec / Decimal(deps)
+            except Exception:
+                continue
+            key = offer_code.casefold()
+            cpa_by_offer.setdefault(key, []).append(cpa_val)
+
+        # Вычисляем медиану только если достаточно образцов
+        baselines: dict[str, Decimal] = {}
+        for code, vals in cpa_by_offer.items():
+            if len(vals) >= min_samples:
+                baselines[code] = Decimal(str(_statistics_median(vals))).quantize(Decimal("0.01"))
+
+        return baselines
+
+    if session is not None:
+        return await _query(session)
+
+    factory = get_session_factory()
+    async with factory() as s:
+        return await _query(s)
+
+
+async def get_frequency_baselines_for_ads(
+    ad_ids: list[str],
+    hours_ago: float = 1.0,
+) -> dict[str, Decimal | None]:
+    """Возвращает значения frequency из AdMetricHistory примерно час назад.
+
+    Для каждого fb_ad_id берём первую запись в AdMetricHistory после момента
+    (now - hours_ago * часов). Если истории нет — возвращаем None для этого ad.
+
+    Args:
+        ad_ids: список fb_ad_id для которых нужны данные.
+        hours_ago: горизонт поиска в часах (по умолчанию 1 час).
+
+    Returns:
+        dict[fb_ad_id -> frequency_value | None]
+    """
+    if not ad_ids:
+        return {}
+
+    cutoff = datetime.now(UTC) - timedelta(hours=hours_ago)
+
+    factory = get_session_factory()
+    try:
+        async with factory() as session:
+            # Соединяем AdMetricHistory с FbAd для получения fb_ad_id
+            # Берём первую запись >= cutoff для каждого объявления
+            subq = (
+                select(
+                    FbAd.fb_ad_id,
+                    AdMetricHistory.frequency,
+                    func.row_number()
+                    .over(
+                        partition_by=FbAd.fb_ad_id,
+                        order_by=AdMetricHistory.cycle_ts.asc(),
+                    )
+                    .label("rn"),
+                )
+                .join(FbAd, FbAd.id == AdMetricHistory.ad_id)
+                .where(
+                    FbAd.fb_ad_id.in_(ad_ids),
+                    AdMetricHistory.cycle_ts >= cutoff,
+                    AdMetricHistory.frequency.is_not(None),
+                )
+                .subquery()
+            )
+            result = await session.execute(
+                select(subq.c.fb_ad_id, subq.c.frequency).where(subq.c.rn == 1)
+            )
+            rows = result.all()
+    except Exception:
+        logger.debug(
+            "Не удалось загрузить frequency-историю из AdMetricHistory",
+            exc_info=True,
+        )
+        return {}
+
+    baselines: dict[str, Decimal | None] = {}
+    for fb_ad_id, freq_val in rows:
+        baselines[fb_ad_id] = Decimal(str(freq_val)) if freq_val is not None else None
+
+    logger.debug(
+        "frequency-история: найдено %s из %s запрошенных объявлений",
+        len(baselines),
+        len(ad_ids),
+    )
+    return baselines
+
+
+async def load_rule_confidence_by_offer() -> dict[str, dict[str, Decimal]]:
+    """Загружает ML-confidence из offer_rule_stats.
+
+    Возвращает словарь: offer_code → {rule_name: confidence}.
+    Если таблица пуста или запрос упал — возвращает пустой dict
+    (evaluator использует prior 0.5 для всех правил).
+    """
+    factory = get_session_factory()
+    try:
+        async with factory() as session:
+            result = await session.execute(
+                select(OfferRuleStat.offer_code, OfferRuleStat.rule_name, OfferRuleStat.confidence)
+            )
+            rows = result.all()
+    except Exception:
+        logger.debug("Не удалось загрузить rule confidence из БД", exc_info=True)
+        return {}
+
+    confidence_map: dict[str, dict[str, Decimal]] = {}
+    for offer_code, rule_name, confidence in rows:
+        if offer_code not in confidence_map:
+            confidence_map[offer_code] = {}
+        confidence_map[offer_code][rule_name] = Decimal(str(confidence))
+
+    logger.debug("ML-confidence загружен: %s офферов", len(confidence_map))
+    return confidence_map

@@ -6,17 +6,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import signal
-import sys
 
 from apps.enable_recommendation_worker.main import recommendation_worker_loop
 from core.config import get_settings
+from core.logging import setup_logging
 from core.sentry import setup_sentry
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)-7s [%(name)s] %(message)s",
-    stream=sys.stdout,
-)
+setup_logging("enable_recommendation_worker")
 logger = logging.getLogger(__name__)
 
 
