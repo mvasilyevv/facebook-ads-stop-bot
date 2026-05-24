@@ -94,6 +94,8 @@ export const setTelegramWebAppUrl = (web_app_url) =>
 
 // Офферы
 export const getOffers = () => request('/offers');
+export const getOffersCompare = (days = 7) =>
+  requestWithQuery('/offers/compare', { days });
 export const createOffer = (data) =>
   request('/offers', { method: 'POST', body: JSON.stringify(data) });
 export const updateOffer = (id, data) =>
@@ -236,6 +238,9 @@ export const getRecordingStatus = (sessionId, tail = 30) =>
 
 export const analyzeLastRecording = () =>
   request('/campaign-recorder/analyze');
+
+// --- Health ---
+export const getHealthDetails = (signal) => request('/health/details', { signal });
 
 // --- Campaign Creator ---
 export const startCampaignCreator = (data) =>

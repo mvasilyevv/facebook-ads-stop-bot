@@ -11,7 +11,9 @@ const HistoryPage = lazy(() => import('./pages/HistoryPage.jsx'));
 const NamingTrackerPage = lazy(() => import('./pages/NamingTrackerPage.jsx'));
 const ScriptsPage = lazy(() => import('./pages/ScriptsPage.jsx'));
 const AnalyticsPage = lazy(() => import('./pages/AnalyticsPage.jsx'));
+const OfferComparePage = lazy(() => import('./pages/OfferComparePage.jsx'));
 import SystemStatusBar from './components/system/SystemStatusBar.jsx';
+import HealthBar from './components/HealthBar.jsx';
 
 
 /** Error Boundary — ловит ошибки рендера и показывает fallback */
@@ -108,12 +110,20 @@ const NAV_ICONS = {
       <line x1="2" y1="20" x2="2" y2="8" />
     </svg>
   ),
+  'offer-compare': (
+    <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="2" y="3" width="16" height="14" rx="2" />
+      <line x1="2" y1="8" x2="18" y2="8" />
+      <line x1="7" y1="8" x2="7" y2="17" />
+    </svg>
+  ),
 };
 
 const PAGES = [
   { id: 'dashboard', label: 'Мониторинг' },
   { id: 'ads', label: 'Объявления' },
   { id: 'offers', label: 'Офферы' },
+  { id: 'offer-compare', label: 'Сравнение' },
   { id: 'analytics', label: 'Аналитика' },
   { id: 'history', label: 'История' },
   { id: 'scripts', label: 'Скрипты' },
@@ -174,6 +184,8 @@ export default function App() {
         );
       case 'offers':
         return <OffersPage />;
+      case 'offer-compare':
+        return <OfferComparePage />;
       case 'analytics':
         return <AnalyticsPage />;
       case 'history':
@@ -289,6 +301,11 @@ export default function App() {
           <span className="text-2xs text-muted">v0.1.0</span>
         </div>
       </aside>
+
+      {/* HealthBar — фиксированная полоска статуса воркеров */}
+      <div className="fixed top-0 left-0 right-0 z-30 lg:left-sidebar">
+        <HealthBar />
+      </div>
 
       {/* Основной контент */}
       <main
