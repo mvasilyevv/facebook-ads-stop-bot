@@ -10,27 +10,29 @@ import signal
 import sys
 from datetime import UTC, datetime
 
+from core.logging import setup_logging
+from core.pubsub import CHANNEL_TASK_CHANGED, RedisPubSub
+from core.task_queue.grpc_worker_mixin import (
+    close_grpc_client,
+    init_grpc_client,
+    load_vision_settings,
+)
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import selectinload
 
-from clients.python_grpc.client import BrowserAgentClient, BrowserAgentConfig
+from clients.python_grpc.client import BrowserAgentClient
 from core.browser.lock import acquire_browser_lock
 from core.config import get_settings
-from core.crypto import decrypt
 from core.db import get_session_factory
 from core.disable_tasks import is_delivery_disabled, reconcile_disable_tasks
 from core.domain import AlertState, DisableTaskStatus
-from core.models import AdSnapshot, DisableTask, VisionSettings
+from core.models import AdSnapshot, DisableTask
 from core.sentry import setup_sentry
 from core.task_queue import PostgresTaskQueue
 from core.telegram.delivery import broadcast_disable_task_runtime_message
 from core.worker_utils import PidFileLock, wait_for_shutdown_or_timeout
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)-7s [%(name)s] %(message)s",
-    stream=sys.stdout,
-)
+setup_logging("disable_worker")
 logger = logging.getLogger(__name__)
 VISION_SETTINGS_POLL_INTERVAL_SECONDS = 1
 
@@ -44,6 +46,12 @@ DISABLE_VISION_CLOSE_TIMEOUT_SECONDS = 10
 DISABLE_CONFIRMED_DELIVERY_STATUS = "OFF"
 DISABLE_ALREADY_OFF_MESSAGE_PREFIX = "Объявление уже отключено"
 DISABLE_BROWSER_LOCK_TIMEOUT_SECONDS = 180.0
+
+# Параметры подтверждения для disable: симметрично enable, но реже опрашиваем,
+# чтобы быстро ловить откат тумблера (диалоги FB, баги UI).
+DISABLE_CONFIRMATION_POLL_DELAYS_SECONDS = (0.0, 2.0, 2.0, 3.0, 3.0)
+DISABLE_CONFIRMATION_FALSE_READS_REQUIRED = 2
+DISABLE_CONFIRMATION_WINDOW_SECONDS = int(sum(DISABLE_CONFIRMATION_POLL_DELAYS_SECONDS))
 
 # Общая очередь задач на отключение
 _disable_queue = PostgresTaskQueue(
@@ -93,39 +101,25 @@ async def _close_disable_runtime_resources(grpc_client: BrowserAgentClient | Non
             )
 
 
+# Псевдонимы для обратной совместимости с тестами
 async def _load_vision_settings() -> tuple[str, str, str]:
     """Загружает Vision-настройки из БД с fallback на .env."""
-    settings = get_settings()
-    factory = get_session_factory()
-    try:
-        async with factory() as session:
-            result = await session.execute(
-                select(VisionSettings).where(VisionSettings.singleton_key == "default")
-            )
-            row = result.scalar_one_or_none()
-            if row and row.x_token_encrypted and row.profile_id:
-                token = decrypt(row.x_token_encrypted)
-                if token:
-                    logger.info("Vision-настройки загружены из БД")
-                    return token, row.api_url or settings.vision_api_url, row.profile_id
-    except Exception:
-        logger.debug("Не удалось загрузить Vision-настройки из БД", exc_info=True)
-
-    return settings.vision_x_token, settings.vision_api_url, settings.vision_profile_id
+    return await load_vision_settings()
 
 
-def _build_client_config(
-    vision_token: str, vision_url: str, vision_profile: str
-) -> BrowserAgentConfig:
-    """Создаёт конфигурацию gRPC клиента из Vision настроек."""
+def _build_client_config(vision_token: str, vision_url: str, vision_profile: str):
+    """Создаёт конфигурацию gRPC клиента из Vision настроек.
+
+    Использует get_settings() из текущего модуля, чтобы тесты могли патчить его.
+    """
+    from clients.python_grpc.client import BrowserAgentConfig
+
     settings = get_settings()
     return BrowserAgentConfig(
         vision_x_token=vision_token,
         vision_api_url=vision_url,
         vision_profile_id=vision_profile,
-        vision_folder_id=settings.vision_folder_id
-        if hasattr(settings, "vision_folder_id")
-        else None,
+        vision_folder_id=getattr(settings, "vision_folder_id", None),
     )
 
 
@@ -135,12 +129,9 @@ async def _init_grpc_client(
     vision_profile: str,
 ) -> BrowserAgentClient:
     """Создаёт, запускает и подключает gRPC клиент к browser-agent."""
-    config = _build_client_config(vision_token, vision_url, vision_profile)
-    client = BrowserAgentClient(config)
-    await client.start()
-    await client.start_browser()
-    logger.info("gRPC клиент подключён, session_id=%s", client.session_id)
-    return client
+    return await init_grpc_client(
+        vision_token, vision_url, vision_profile, worker_name="disable_worker"
+    )
 
 
 async def claim_next_task():
@@ -211,6 +202,7 @@ async def _execute_disable_single(
     *,
     reset_table_before_search: bool = True,
     search_max_scroll_passes: int = DISABLE_SINGLE_SEARCH_MAX_SCROLL_PASSES,
+    verify_after_click: bool = True,
 ) -> tuple[bool, str]:
     """Отключает одно объявление через gRPC.
 
@@ -218,6 +210,8 @@ async def _execute_disable_single(
     1. Найти toggle-ячейку (со скроллом при необходимости).
     2. Проверить aria-checked=true (уже включено).
     3. Вызвать toggle_ad(target_state=False).
+    4. Если verify_after_click=True — повторно убедиться через wait_for_toggle_confirmation,
+       что тумблер не откатился (диалоги FB, баги UI).
     """
     # Шаг 1: Поиск toggle-ячейки
     find_result = await client.find_toggle_cell(
@@ -265,7 +259,29 @@ async def _execute_disable_single(
     if final_state != "false":
         return False, f"Интерфейс не подтвердил OFF после клика: aria-checked={final_state}"
 
-    return True, "Клик по выключению выполнен, toggle показал OFF"
+    if not verify_after_click:
+        # Batch-flow подтверждение оставляет следующему сканеру observer'а — здесь
+        # лишний wait тормозил бы пачку.
+        return True, "Клик по выключению выполнен, toggle показал OFF"
+
+    # Шаг 4: Post-click verification — повторно читаем aria-checked, чтобы поймать
+    # откат тумблера (диалоги FB, баги UI) до следующего скана observer'а.
+    confirm_result = await client.wait_for_toggle_confirmation(
+        fb_ad_id,
+        expected_checked="false",
+        required_reads=DISABLE_CONFIRMATION_FALSE_READS_REQUIRED,
+        poll_delays_seconds=list(DISABLE_CONFIRMATION_POLL_DELAYS_SECONDS),
+        max_scroll_passes_restore=DISABLE_VISIBLE_ROW_TOGGLE_SEARCH_PASSES,
+    )
+
+    if confirm_result["success"]:
+        return True, "Клик по выключению выполнен, toggle показал OFF"
+
+    return (
+        False,
+        f"{confirm_result.get('message', 'Интерфейс не подтвердил OFF')} "
+        f"(около {DISABLE_CONFIRMATION_WINDOW_SECONDS} сек)",
+    )
 
 
 async def _execute_disable_single_locked(
@@ -342,6 +358,7 @@ async def _execute_disable_batch(
                 fb_ad_id,
                 reset_table_before_search=False,
                 search_max_scroll_passes=DISABLE_VISIBLE_ROW_TOGGLE_SEARCH_PASSES,
+                verify_after_click=False,
             )
 
             if success:
@@ -514,6 +531,24 @@ async def _send_disable_task_completion_update(
         fallback_chat_id=fallback_chat_id,
     )
 
+    # Публикуем событие в шину для WS-дашборда
+    try:
+        _pubsub = RedisPubSub(get_settings().redis_url)
+        await _pubsub.publish(
+            CHANNEL_TASK_CHANGED,
+            {
+                "type": "task_changed",
+                "task_kind": "disable",
+                "task_id": str(persisted_task.id),
+                "fb_ad_id": fb_ad.fb_ad_id if fb_ad else "",
+                "success": success,
+                "status": str(persisted_task.status),
+            },
+        )
+        await _pubsub.close()
+    except Exception:
+        logger.debug("Disable worker: не удалось опубликовать task_changed", exc_info=True)
+
 
 async def main() -> None:
     """Запуск disable worker."""
@@ -617,7 +652,12 @@ async def main() -> None:
                 ):
                     break
             finally:
-                await _close_disable_runtime_resources(grpc_client)
+                await close_grpc_client(
+                    grpc_client,
+                    worker_name="disable_worker",
+                    disconnect_timeout=DISABLE_MANAGER_DISCONNECT_TIMEOUT_SECONDS,
+                    close_timeout=DISABLE_VISION_CLOSE_TIMEOUT_SECONDS,
+                )
     except KeyboardInterrupt:
         logger.info("Disable worker остановлен по Ctrl+C")
     finally:
