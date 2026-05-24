@@ -24,6 +24,53 @@ _WATCHED_EVENTS = {
 
 
 # ---------------------------------------------------------------------------
+# Гейт по is_scanning_enabled (синхронное чтение через asyncpg)
+# ---------------------------------------------------------------------------
+
+
+def _is_scanning_enabled_sync() -> bool:
+    """Синхронно читает ObserverSettings.is_scanning_enabled из БД.
+
+    Запускает короткий asyncio.run с asyncpg, чтобы не тянуть psycopg2.
+    При любой ошибке возвращает True (failsafe — лучше отправить, чем замолчать).
+    """
+    try:
+        from core.config import get_settings
+
+        settings = get_settings()
+
+        async def _read() -> bool:
+            import asyncpg  # импорт ленивый, чтобы не требовать его на старте процесса
+
+            conn = await asyncpg.connect(
+                host=settings.postgres_host,
+                port=settings.postgres_port,
+                user=settings.postgres_user,
+                password=settings.postgres_password,
+                database=settings.postgres_db,
+                timeout=3.0,
+            )
+            try:
+                row = await conn.fetchrow(
+                    "SELECT is_scanning_enabled FROM observer_settings "
+                    "WHERE singleton_key = 'default' LIMIT 1"
+                )
+                if row is None:
+                    return True
+                return bool(row["is_scanning_enabled"])
+            finally:
+                await conn.close()
+
+        return asyncio.run(_read())
+    except Exception as exc:
+        print(
+            f"supervisor_crashmail: не удалось прочитать is_scanning_enabled: {exc}",
+            file=sys.stderr,
+        )
+        return True
+
+
+# ---------------------------------------------------------------------------
 # Чистые функции (тестируемы без IO)
 # ---------------------------------------------------------------------------
 
@@ -176,7 +223,15 @@ def main() -> None:
                 payload["eventname"] = eventname
                 processname = payload.get("processname", "?")
 
-                if cooldown.should_send(processname):
+                # Гейт по is_scanning_enabled: при ./run.sh --down пользователь
+                # намеренно останавливает воркеры — не шуметь FATAL/EXITED алертами.
+                if not _is_scanning_enabled_sync():
+                    print(
+                        f"supervisor_crashmail: событие для '{processname}' проигнорировано "
+                        "— сканирование выключено",
+                        file=sys.stderr,
+                    )
+                elif cooldown.should_send(processname):
                     text = format_alert_text(payload)
                     try:
                         _send_telegram(text)
