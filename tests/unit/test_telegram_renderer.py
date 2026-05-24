@@ -253,7 +253,8 @@ def test_render_alert_message_stop_has_webapp_button():
     assert len(keyboard[0]) == 1
     btn = keyboard[0][0]
     assert btn["text"] == "🔧 Открыть в приложении"
-    assert btn["web_app"]["url"] == "https://example.com/tma/ads/ad-3"
+    # Используем url-кнопку (не web_app), т.к. web_app не разрешён в супергруппах.
+    assert btn["url"] == "https://example.com/tma/ads/ad-3"
 
 
 # Проверяем, что без web_app_url клавиатура пустая.
@@ -391,4 +392,5 @@ def test_render_alert_message_uses_explicit_web_app_url():
 
     assert message.reply_markup is not None
     btn = message.reply_markup["inline_keyboard"][0][0]
-    assert btn["web_app"]["url"] == "https://override.example/tma/ads/ad-override"
+    # url-кнопка (web_app не разрешён в супергруппах: BUTTON_TYPE_INVALID).
+    assert btn["url"] == "https://override.example/tma/ads/ad-override"

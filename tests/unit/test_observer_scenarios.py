@@ -208,6 +208,8 @@ def _make_raw_row(
     ad_name: str | None = None,
     delivery_status: str = "Active",
     spend: str = "$0.00",
+    impressions: str = "0",
+    reach: str = "0",
     clicks: str = "0",
     cpc: str = "-",
     outbound_clicks: str = "0",
@@ -231,6 +233,8 @@ def _make_raw_row(
         "ad_name": ad_name or f"{offer_code}_CR015",
         "delivery_status": delivery_status,
         "spend": spend,
+        "impressions": impressions,
+        "reach": reach,
         "clicks": clicks,
         "cpc": cpc,
         "outbound_clicks": outbound_clicks,
@@ -435,6 +439,10 @@ def test_scenario_click_guardrail_creates_stop_alert_and_snapshot():
             _make_raw_row(
                 row_id="120241979860890176",
                 spend="$1.20",
+                # impressions/reach выше guardrail_min_impressions=200 (FIX #30):
+                # без этого sanity-check справедливо пропустил бы правило.
+                impressions="1200",
+                reach="800",
                 clicks="8",
                 cpc="$0.06",
                 outbound_clicks="8",
@@ -598,7 +606,11 @@ def test_scenario_deposit_stage_ignores_earlier_metrics_and_adds_cpm_context():
 
 # Проверяем что CPM и Frequency остаются только диагностикой и не создают алерт сами по себе.
 def test_scenario_diagnostics_only_do_not_create_alert():
-    """Высокий CPM и частота должны попадать в диагностику без создания алерта."""
+    """Высокий CPM и частота должны попадать в диагностику без создания алерта.
+
+    frequency_anomaly правило отключено: тест проверяет именно диагностику CPM/частоты,
+    а не frequency_anomaly стоп-правило (оно проверяется в test_frequency_anomaly.py).
+    """
 
     raw_rows = [
         _make_raw_row(
@@ -654,6 +666,7 @@ def test_scenario_diagnostics_only_do_not_create_alert():
     result = _run_scenario(
         raw_rows=raw_rows,
         target_fb_ad_id="120241979860840176",
+        rule_overrides={"frequency_anomaly_enabled": False},
     )
 
     assert result.evaluation.stage is None

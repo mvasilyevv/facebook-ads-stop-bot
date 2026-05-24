@@ -127,6 +127,7 @@ def test_send_telegram_uses_no_thread_id():
     fake_settings_cfg = MagicMock(spec=Settings)
     fake_settings_cfg.telegram_bot_token = "token"
     fake_settings_cfg.telegram_chat_id = "chat123"
+    fake_settings_cfg.alerts_queue_enabled = False  # обходим Redis в тесте
 
     with (
         patch("supervisor_crashmail.asyncio.run", side_effect=asyncio.run),
