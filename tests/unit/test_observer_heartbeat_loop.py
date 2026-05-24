@@ -9,7 +9,7 @@ import pytest
 
 
 # Проверяем, что _observer_heartbeat_loop вызывает update_observer_runtime_status
-# с текущими значениями из status_ref и message_ref.
+# со значениями из глобальных _observer_status и _observer_message.
 @pytest.mark.asyncio
 async def test_heartbeat_loop_calls_update_with_status_and_message(monkeypatch):
     import apps.observer_worker.main as observer_main
@@ -21,6 +21,10 @@ async def test_heartbeat_loop_calls_update_with_status_and_message(monkeypatch):
 
     monkeypatch.setattr(observer_main, "update_observer_runtime_status", fake_update)
 
+    # Устанавливаем глобальные переменные статуса
+    monkeypatch.setattr(observer_main, "_observer_status", "RUNNING")
+    monkeypatch.setattr(observer_main, "_observer_message", "Запущен.")
+
     sleep_called = asyncio.Event()
 
     async def fake_sleep(seconds):
@@ -30,10 +34,8 @@ async def test_heartbeat_loop_calls_update_with_status_and_message(monkeypatch):
 
     monkeypatch.setattr(observer_main.asyncio, "sleep", fake_sleep)
 
-    status_ref: list[str] = ["RUNNING"]
-    message_ref: list[str | None] = ["Запущен."]
-
-    task = asyncio.create_task(observer_main._observer_heartbeat_loop(status_ref, message_ref))
+    # Запускаем без аргументов — используются глобальные переменные
+    task = asyncio.create_task(observer_main._observer_heartbeat_loop())
     try:
         await asyncio.wait_for(sleep_called.wait(), timeout=2.0)
     finally:
@@ -47,7 +49,7 @@ async def test_heartbeat_loop_calls_update_with_status_and_message(monkeypatch):
     assert calls[0] == ("RUNNING", "Запущен.")
 
 
-# Проверяем, что при изменении status_ref/message_ref фоновый цикл
+# Проверяем, что при изменении глобальных переменных фоновый цикл
 # передаёт обновлённые значения при следующем вызове.
 @pytest.mark.asyncio
 async def test_heartbeat_loop_reflects_updated_refs(monkeypatch):
@@ -61,6 +63,10 @@ async def test_heartbeat_loop_reflects_updated_refs(monkeypatch):
 
     monkeypatch.setattr(observer_main, "update_observer_runtime_status", fake_update)
 
+    # Устанавливаем начальный статус
+    monkeypatch.setattr(observer_main, "_observer_status", "RUNNING")
+    monkeypatch.setattr(observer_main, "_observer_message", "Первое сообщение")
+
     async def fake_sleep(seconds):
         sleep_called.set()
         # Блокируемся до отмены задачи
@@ -68,10 +74,7 @@ async def test_heartbeat_loop_reflects_updated_refs(monkeypatch):
 
     monkeypatch.setattr(observer_main.asyncio, "sleep", fake_sleep)
 
-    status_ref: list[str] = ["RUNNING"]
-    message_ref: list[str | None] = ["Первое сообщение"]
-
-    task = asyncio.create_task(observer_main._observer_heartbeat_loop(status_ref, message_ref))
+    task = asyncio.create_task(observer_main._observer_heartbeat_loop())
     try:
         # Дождёмся первого вызова heartbeat (до sleep)
         await asyncio.wait_for(sleep_called.wait(), timeout=2.0)
@@ -101,6 +104,8 @@ async def test_heartbeat_loop_survives_update_error(monkeypatch):
             raise RuntimeError("БД недоступна")
 
     monkeypatch.setattr(observer_main, "update_observer_runtime_status", flaky_update)
+    monkeypatch.setattr(observer_main, "_observer_status", "RUNNING")
+    monkeypatch.setattr(observer_main, "_observer_message", None)
 
     async def fake_sleep(seconds):
         sleep_called.set()
@@ -108,10 +113,7 @@ async def test_heartbeat_loop_survives_update_error(monkeypatch):
 
     monkeypatch.setattr(observer_main.asyncio, "sleep", fake_sleep)
 
-    status_ref: list[str] = ["RUNNING"]
-    message_ref: list[str | None] = [None]
-
-    task = asyncio.create_task(observer_main._observer_heartbeat_loop(status_ref, message_ref))
+    task = asyncio.create_task(observer_main._observer_heartbeat_loop())
     try:
         # Цикл не должен упасть — он должен дойти до sleep даже после ошибки
         await asyncio.wait_for(sleep_called.wait(), timeout=2.0)

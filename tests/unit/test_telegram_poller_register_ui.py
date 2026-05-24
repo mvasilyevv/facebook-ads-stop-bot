@@ -36,10 +36,11 @@ async def test_register_bot_ui_calls_set_my_commands():
     actual_scopes = {call.kwargs["scope"]["type"] for call in client.set_my_commands.call_args_list}
     assert actual_scopes == expected_scopes
     commands = client.set_my_commands.call_args_list[0].args[0]
-    assert len(commands) == 3
+    # Проверяем наличие обязательных команд (количество может расти при добавлении новых)
     assert any(c["command"] == "start" for c in commands)
     assert any(c["command"] == "app" for c in commands)
     assert any(c["command"] == "help" for c in commands)
+    assert any(c["command"] == "digest" for c in commands)
 
 
 @pytest.mark.asyncio
