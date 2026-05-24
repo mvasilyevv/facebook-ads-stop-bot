@@ -16,6 +16,9 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import grpc
+from core.ai_assistant.explain import explain_alert
+from core.logging import bind_contextvars, unbind_contextvars
+from core.pubsub import CHANNEL_ALERT_CREATED, CHANNEL_SCAN_FINISHED, RedisPubSub
 from sqlalchemy import select
 
 from clients.python_grpc.client import (
@@ -38,14 +41,18 @@ from core.observer.browser_recovery import BrowserRecoveryEscalator
 from core.observer.db_queries import (
     check_scanning_enabled,
     collect_reminder_alerts,
+    compute_adaptive_cpa_by_offer,
+    compute_cpl_cpr_baselines_by_offer,
     consume_scan_flags_combined,
     get_disable_queue_pause_reason,
     get_enable_queue_pause_reason,
+    get_frequency_baselines_for_ads,
     load_active_snooze_ad_ids,
     load_ad_states_from_db,
     load_fake_deposits,
     load_history_ad_ids_with_metrics,
     load_offers_from_db,
+    load_rule_confidence_by_offer,
     load_telegram_settings_from_db,
     load_vision_settings_for_runtime,
     peek_scan_requested_flag,
@@ -64,6 +71,7 @@ from core.observer.outcome_classifier import (
 from core.observer.regression_guard import RegressionGuard
 from core.observer.runtime_status import (
     format_observer_runtime_message,
+    record_successful_scan,
     set_observer_phase,
     update_observer_runtime_status,
 )
@@ -406,6 +414,15 @@ async def _send_alerts_to_telegram(
         alert_state = _state_for_emitted_stage(a.stage)
         stream_kind = stream_for_alert_stage(a.stage)
         message_thread_id = destination.thread_id_for_stream(stream_kind)
+        # Генерируем LLM-объяснение для STOP/WARNING алертов (не блокирует отправку)
+        rule_name = a.matched_rule_codes[0] if a.matched_rule_codes else ""
+        explanation = await explain_alert(
+            rule_name=rule_name,
+            stage=a.stage.value,
+            metrics=dict(a.metrics_json or {}),
+            thresholds={},
+            offer_context={"offer_code": a.offer_code} if a.offer_code else None,
+        )
         item = TelegramAlertItem(
             snapshot_id=a.snapshot_id,
             fb_ad_id=a.fb_ad_id,
@@ -419,6 +436,7 @@ async def _send_alerts_to_telegram(
             reason_title=a.reason_title,
             reason_text=a.reason_text,
             metrics_json=a.metrics_json,
+            explanation=explanation,
         )
         web_app_url = await load_web_app_url()
         message = render_alert_message(stage=a.stage, items=[item], web_app_url=web_app_url)
@@ -606,6 +624,19 @@ async def _run_scan_cycle(
         cpm_getter=lambda item: item[0].cpm,
     )
 
+    # Медианы CPL/CPR по офферу для Bayesian-сглаживания при малой выборке
+    cpl_cpr_baselines = await compute_cpl_cpr_baselines_by_offer()
+
+    # Rolling median CPA по DISABLED-объявлениям оффера за последние N дней (adaptive baseline)
+    adaptive_cpa_by_offer = await compute_adaptive_cpa_by_offer()
+
+    # Frequency ~час назад для правила выгорания аудитории (правило 7)
+    all_ad_ids = [row.fb_ad_id for row in rows]
+    frequency_baselines = await get_frequency_baselines_for_ads(all_ad_ids, hours_ago=1.0)
+
+    # ML-confidence: загружаем статистику confidence по (оффер, правило)
+    confidence_by_offer = await load_rule_confidence_by_offer()
+
     alerts_to_send: list[AlertCandidate] = []
     stop_alerts: list[AlertCandidate] = []
     snapshot_batch: list[dict] = []
@@ -685,10 +716,28 @@ async def _run_scan_cycle(
             effective_deps = max(0, row.deposits - fake_count)
             eval_row = dataclasses.replace(row, deposits=effective_deps)
 
+        # Получаем медианы CPL/CPR для данного оффера (None → сглаживание не применяется)
+        _baseline_cpl, _baseline_cpr = (
+            cpl_cpr_baselines.get(offer_code, (None, None)) if offer_code else (None, None)
+        )
+        _freq_1h_ago = frequency_baselines.get(row.fb_ad_id)
+        # Adaptive CPA baseline: rolling median по офферу (если включён)
+        _rule_cfg = offer_data.get("rule_config") if offer_data else None
+        _use_adaptive = bool(getattr(_rule_cfg, "use_adaptive_cpa", False)) if _rule_cfg else False
+        _adaptive_cpa = adaptive_cpa_by_offer.get(offer_code) if offer_code else None
+        # ML-confidence: словарь rule_name → confidence для данного оффера
+        _rule_confidence = confidence_by_offer.get(offer_code) if offer_code else None
         evaluation = evaluate_row(
             row=eval_row,
             offer_cpa=(Decimal(offer_data["offer"].cpa_amount) if offer_data else None),
-            rule_config=(offer_data.get("rule_config") if offer_data else None),
+            rule_config=_rule_cfg,
+            offer_median_cpl=_baseline_cpl,
+            offer_median_cpr=_baseline_cpr,
+            frequency_1h_ago=_freq_1h_ago,
+            adaptive_cpa=_adaptive_cpa,
+            use_adaptive_cpa=_use_adaptive,
+            observed_at=now,
+            rule_confidence_map=_rule_confidence,
         )
 
         # FSM-переход
@@ -947,6 +996,34 @@ async def _process_fast_stop_results(
     logger.info("Быстрый стоп: создано или проверено задач отключения: %s", len(stop_alerts))
 
 
+def _merge_progress_into_fast_stop(
+    *,
+    progress_alerts: list,
+    progress_stop_alerts: list,
+    progress_snapshot_batch: list[dict],
+    progress_ad_states: dict,
+    ad_states: dict,
+    alerts_to_send: list,
+    stop_alerts: list,
+    snapshot_batch: list[dict],
+) -> set[str]:
+    """Сливает результаты progress-прохода в общие списки fast-stop ветки.
+
+    Возвращает set fb_ad_id, по которым нашёлся STOP. WARNING-алерты и non-STOP
+    снэпшоты из того же progress-прохода тоже сохраняются: иначе observer
+    теряет их до конца fast-stop и ломает baseline regression_guard для
+    следующего полного цикла.
+    """
+    stop_ids = {alert.fb_ad_id for alert in progress_stop_alerts}
+    for fb_ad_id in stop_ids:
+        if fb_ad_id in progress_ad_states:
+            ad_states[fb_ad_id] = progress_ad_states[fb_ad_id]
+    alerts_to_send.extend(progress_alerts)
+    stop_alerts.extend(progress_stop_alerts)
+    snapshot_batch.extend(progress_snapshot_batch)
+    return stop_ids
+
+
 async def _wait_for_next_cycle(
     *,
     shutdown_event: asyncio.Event | None,
@@ -957,6 +1034,9 @@ async def _wait_for_next_cycle(
     """Прерываемый сон между циклами с поллингом флагов.
 
     Интервал определяется адаптивно по уровню угрозы.
+    poll_interval (частота проверки флагов) тоже адаптивен:
+    - IMMEDIATE/CRITICAL/ELEVATED: 0.2 сек
+    - CALM/IDLE и прочие: 5.0 сек
     Возвращает True если нужно продолжить (не получен сигнал остановки).
     Флаг scan_requested здесь НЕ сбрасывается — мы только просыпаемся при его
     появлении, а потребляет его уже основной цикл через consume_scan_requested_flag.
@@ -975,7 +1055,11 @@ async def _wait_for_next_cycle(
     )
 
     end_at = _time.monotonic() + sleep_time
-    poll_interval = 5.0  # проверяем флаги каждые 5 секунд
+    # Адаптивный poll_interval: в режимах высокой угрозы проверяем флаги чаще
+    if threat_level in ("IMMEDIATE", "CRITICAL", "ELEVATED"):
+        poll_interval = 0.2
+    else:
+        poll_interval = 5.0
 
     while True:
         remaining = end_at - _time.monotonic()
@@ -1093,6 +1177,11 @@ async def observer_loop(
         message="Observer подключён к браузеру и готовит первый цикл сканирования.",
         clear_last_error=True,
     )
+
+    # Шина событий: один экземпляр на весь жизненный цикл воркера
+    from core.config import get_settings as _get_settings
+
+    _pubsub = RedisPubSub(_get_settings().redis_url)
 
     # Счётчик циклов для периодической перезагрузки офферов и TG настроек
     cycle_count = 0
@@ -1459,6 +1548,8 @@ async def observer_loop(
                         # Инкрементируем scan_id один раз на полный цикл скана — все
                         # снэпшоты этого батча получат одинаковый last_scan_id.
                         current_scan_id = await _increment_scan_id()
+                        # Инжектируем scan_id в structlog contextvars — появится в каждом лог-событии цикла
+                        bind_contextvars(scan_id=current_scan_id)
 
                         # Создаём черновик в scan_runs: outcome='RUNNING', finished_at=NULL
                         factory_for_run = get_session_factory()
@@ -1546,22 +1637,16 @@ async def observer_loop(
                                 if not progress_stop_alerts:
                                     continue
 
-                                stop_ids = {alert.fb_ad_id for alert in progress_stop_alerts}
-                                for fb_ad_id in stop_ids:
-                                    if fb_ad_id in progress_ad_states:
-                                        ad_states[fb_ad_id] = progress_ad_states[fb_ad_id]
-                                fast_snapshot_batch = [
-                                    snap
-                                    for snap in progress_snapshot_batch
-                                    if snap.get("fb_ad_id") in stop_ids
-                                ]
-                                alerts_to_send.extend(
-                                    alert
-                                    for alert in progress_alerts
-                                    if alert.fb_ad_id in stop_ids and alert.stage == AlertStage.STOP
+                                _merge_progress_into_fast_stop(
+                                    progress_alerts=progress_alerts,
+                                    progress_stop_alerts=progress_stop_alerts,
+                                    progress_snapshot_batch=progress_snapshot_batch,
+                                    progress_ad_states=progress_ad_states,
+                                    ad_states=ad_states,
+                                    alerts_to_send=alerts_to_send,
+                                    stop_alerts=stop_alerts,
+                                    snapshot_batch=snapshot_batch,
                                 )
-                                stop_alerts.extend(progress_stop_alerts)
-                                snapshot_batch.extend(fast_snapshot_batch)
                                 fast_stop_triggered = True
                                 rows = list(scanned_rows_by_id.values())
                                 logger.info(
@@ -1600,15 +1685,41 @@ async def observer_loop(
                         snapshot_batch=snapshot_batch,
                         current_scan_id=current_scan_id,
                     )
-                    await _process_scan_results(
-                        alerts_to_send=alerts_to_send,
-                        stop_alerts=[],
-                        snapshot_batch=[],
-                        tg_client=tg_client,
-                        tg_destinations=tg_destinations,
-                        current_scan_id=current_scan_id,
-                    )
+                    # WARNING-алерты и non-STOP снэпшоты обрабатываем здесь же,
+                    # без полного _process_scan_results: тяжёлые reconcile_* и
+                    # сбор напоминаний — задача следующего полного цикла.
+                    stop_ad_ids = {a.fb_ad_id for a in stop_alerts}
+                    non_stop_snapshots = [
+                        s for s in snapshot_batch if s.get("fb_ad_id") not in stop_ad_ids
+                    ]
+                    if non_stop_snapshots:
+                        try:
+                            await batch_save_snapshots(
+                                non_stop_snapshots,
+                                _scan_guard,
+                                regression_guard=_regression_guard,
+                                current_scan_id=current_scan_id,
+                            )
+                        except Exception:
+                            logger.warning(
+                                "Не удалось сохранить non-STOP снэпшоты в fast-stop пути",
+                                exc_info=True,
+                            )
+                    warning_alerts = [a for a in alerts_to_send if a.stage != AlertStage.STOP]
+                    if warning_alerts and tg_client:
+                        for destination in tg_destinations:
+                            try:
+                                await _send_alerts_to_telegram(
+                                    tg_client, destination, warning_alerts
+                                )
+                            except Exception:
+                                logger.warning(
+                                    "Не удалось отправить WARNING-алерты в fast-stop",
+                                    exc_info=True,
+                                )
                     await _ensure_scan_run_finished_with(outcome="OK")
+                    # Фиксируем успешный scan для «пульса» (fast-stop путь)
+                    await record_successful_scan()
                 else:
                     if not rows:
                         consecutive_empty_scan_cycles += 1
@@ -1793,6 +1904,42 @@ async def observer_loop(
                 consecutive_parser_missing_columns_errors = 0
                 _self_healing.record_success()
                 cycle_completed = True
+                # Фиксируем успешный scan для «пульса» (обычный путь)
+                await record_successful_scan()
+                # Очищаем scan_id из structlog contextvars по окончании цикла
+                unbind_contextvars("scan_id")
+
+                # Публикуем событие scan_finished для подписчиков WS-дашборда
+                try:
+                    _cycle_duration = _time.monotonic() - timing.get(
+                        "cycle_start", _time.monotonic()
+                    )
+                    await _pubsub.publish(
+                        CHANNEL_SCAN_FINISHED,
+                        {
+                            "type": "scan_finished",
+                            "scan_id": current_scan_id,
+                            "ads_count": len(rows),
+                            "alerts_count": len(alerts_to_send),
+                            "duration_sec": round(_cycle_duration, 1),
+                        },
+                    )
+                    # Публикуем отдельное событие для каждого нового алерта
+                    for _alert in alerts_to_send:
+                        await _pubsub.publish(
+                            CHANNEL_ALERT_CREATED,
+                            {
+                                "type": "alert_created",
+                                "ad_id": _alert.fb_ad_id,
+                                "ad_name": _alert.ad_name,
+                                "rule_name": _alert.matched_rule_codes[0]
+                                if _alert.matched_rule_codes
+                                else "",
+                                "stage": _alert.stage.value if _alert.stage else "",
+                            },
+                        )
+                except Exception:
+                    logger.debug("Observer: не удалось опубликовать scan_finished", exc_info=True)
 
                 # Timing-лог: одна строка в формате OBSERVER_TIMING cycle=… preflight_ms=…
                 # для пост-фактум агрегации через tools/timing_percentiles.py.
@@ -2076,6 +2223,11 @@ async def observer_loop(
     finally:
         try:
             await set_observer_phase(None)
+        except Exception:
+            pass
+        # Закрываем publish-соединение шины событий
+        try:
+            await _pubsub.close()
         except Exception:
             pass
         # Отменяем фоновый heartbeat при выходе из цикла
