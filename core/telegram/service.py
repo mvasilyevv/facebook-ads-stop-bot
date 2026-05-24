@@ -8,7 +8,7 @@ import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import delete, or_, select, update
+from sqlalchemy import delete, select, update
 
 from core.config import get_settings
 from core.crypto import decrypt
@@ -258,13 +258,16 @@ async def resolve_telegram_access(
         if not is_private_chat(chat_type) and not is_supergroup_chat(chat_type):
             return None
 
+        # OWNER-роль выдаётся только при ТОЧНОМ совпадении owner_telegram_user_id.
+        # Пустой owner_telegram_user_id означает «owner ещё не привязан»: такой
+        # пользователь должен пройти стандартный flow авторизации через auth_code,
+        # а не получить OWNER автоматически по совпадению chat_id.
+        owner_id = (settings_row.owner_telegram_user_id or "").strip()
         if (
             settings_row.is_authorized
             and settings_row.chat_id == chat_id
-            and (
-                not settings_row.owner_telegram_user_id
-                or settings_row.owner_telegram_user_id == telegram_user_id
-            )
+            and owner_id
+            and owner_id == telegram_user_id
         ):
             return TelegramAccessContext(
                 chat_id=chat_id,
@@ -275,19 +278,20 @@ async def resolve_telegram_access(
                 is_primary=True,
             )
 
-        recipient_filters = [
-            TelegramRecipient.chat_id == chat_id,
-            TelegramRecipient.is_active.is_(True),
-            or_(
-                TelegramRecipient.telegram_user_id == telegram_user_id,
-                TelegramRecipient.telegram_user_id == "",
-            ),
-        ]
-
-        recipient = await session.scalar(select(TelegramRecipient).where(*recipient_filters))
-        if recipient is None:
+        # Recipient ищем только по точному совпадению telegram_user_id.
+        # Placeholder-записи с пустым telegram_user_id не дают доступ —
+        # пользователю нужно сначала привязаться через invite-код.
+        if not telegram_user_id:
             return None
-        if recipient.telegram_user_id and recipient.telegram_user_id != telegram_user_id:
+
+        recipient = await session.scalar(
+            select(TelegramRecipient).where(
+                TelegramRecipient.chat_id == chat_id,
+                TelegramRecipient.is_active.is_(True),
+                TelegramRecipient.telegram_user_id == telegram_user_id,
+            )
+        )
+        if recipient is None:
             return None
 
         return TelegramAccessContext(

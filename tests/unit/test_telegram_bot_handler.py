@@ -282,7 +282,8 @@ async def test_stream_disable_confirm_keeps_origin_message_id():
     from core.telegram import bot_handler
 
     client = AsyncMock()
-    access = SimpleNamespace(role=TelegramUserRole.RECIPIENT.value)
+    # OWNER, потому что disable-кнопки доступны только владельцу (auth-фикс B1).
+    access = SimpleNamespace(role=TelegramUserRole.OWNER.value)
 
     with (
         patch.object(
@@ -326,7 +327,8 @@ async def test_disable_execute_updates_origin_message_and_broadcasts_stop():
     from core.telegram import bot_handler
 
     client = AsyncMock()
-    access = SimpleNamespace(role=TelegramUserRole.RECIPIENT.value)
+    # OWNER, потому что disable-кнопки доступны только владельцу (auth-фикс B1).
+    access = SimpleNamespace(role=TelegramUserRole.OWNER.value)
 
     # campaign_name/adset_name убраны из возвращаемого словаря _create_disable_task
     task_info = {
