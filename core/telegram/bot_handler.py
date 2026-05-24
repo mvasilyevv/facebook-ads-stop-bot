@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import html
 import logging
+import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -511,10 +512,11 @@ async def _render_start(
     )
     markup = None
     if web_app_url and web_app_url.startswith("https://"):
+        # url-кнопка работает в группах (web_app — только в ЛС, иначе BUTTON_TYPE_INVALID).
         markup = {
             "inline_keyboard": [
                 [
-                    {"text": "🚀 Открыть приложение", "web_app": {"url": web_app_url}},
+                    {"text": "🚀 Открыть приложение", "url": web_app_url},
                 ]
             ]
         }
@@ -752,12 +754,13 @@ async def _cmd_app(
         )
         return
 
+    # url-кнопка работает и в группах, и в ЛС (web_app — только в ЛС).
     markup = {
         "inline_keyboard": [
             [
                 {
                     "text": "🚀 Открыть приложение",
-                    "web_app": {"url": url},
+                    "url": url,
                 }
             ]
         ]
@@ -843,6 +846,45 @@ async def _cmd_ask(
         chat_id=chat_id,
         message_thread_id=message_thread_id,
         text=f"🤖 {answer}{suffix}",
+    )
+
+
+# ==========================================
+# Команда /digest — ручной запрос daily digest
+# ==========================================
+
+
+async def _cmd_digest(
+    client: TelegramBotClient,
+    *,
+    chat_id: str,
+    message_thread_id: int | None,
+) -> None:
+    """Команда /digest — немедленно отправляет daily digest за вчера."""
+    from core.db import get_session_factory
+    from core.telegram.digest import render_digest_message
+    from core.telegram.digest_queries import get_digest_data
+
+    try:
+        factory = get_session_factory()
+        async with factory() as session:
+            data = await get_digest_data(session, now=datetime.now(UTC))
+        text = render_digest_message(data)
+    except Exception:
+        logger.exception("Ошибка при формировании /digest")
+        await _send_current_topic_message(
+            client,
+            chat_id=chat_id,
+            message_thread_id=message_thread_id,
+            text="❌ Не удалось получить данные дайджеста. Попробуйте позже.",
+        )
+        return
+
+    await _send_current_topic_message(
+        client,
+        chat_id=chat_id,
+        message_thread_id=message_thread_id,
+        text=text,
     )
 
 
@@ -953,10 +995,38 @@ async def handle_update(client: TelegramBotClient, update: dict) -> None:
 
         if data.startswith("disable_confirm:"):
             await client.answer_callback_query(cq["id"])
-            snapshot_token = data.split(":", 1)[1]
+            if not _can_manage_settings(access):
+                await _send_current_topic_message(
+                    client,
+                    chat_id=chat_id,
+                    message_thread_id=message_thread_id,
+                    text=OWNER_ONLY_TEXT,
+                )
+                return
+            # Формат callback_data:
+            #   новый:  disable_confirm:{open_state_token}:{fb_ad_id}
+            #   legacy: disable_confirm:{open_state_token | fb_ad_id}
+            confirm_parts = data.split(":")
+            snapshot_token = confirm_parts[1] if len(confirm_parts) > 1 else ""
+            fb_ad_id_hint = confirm_parts[2] if len(confirm_parts) > 2 else ""
+            # Stale-проверка: callback_token должен соответствовать активному
+            # snapshot.open_state_token. Если в новой схеме известен fb_ad_id —
+            # проверяем строго: токен инцидента не должен отличаться от текущего.
+            if fb_ad_id_hint:
+                is_fresh = await _validate_alert_token(fb_ad_id=fb_ad_id_hint, token=snapshot_token)
+                if not is_fresh:
+                    await client.answer_callback_query(
+                        cq["id"], text="Кнопка устарела, обновите алерт"
+                    )
+                    return
+            execute_callback = (
+                f"disable_execute:{snapshot_token}:{message_id}:{fb_ad_id_hint}"
+                if fb_ad_id_hint
+                else f"disable_execute:{snapshot_token}:{message_id}"
+            )
             text, markup = await _render_disable_confirm(
                 snapshot_token=snapshot_token,
-                confirm_callback=f"disable_execute:{snapshot_token}:{message_id}",
+                confirm_callback=execute_callback,
                 cancel_callback="confirm_cancel",
             )
             await _send_current_topic_message(
@@ -970,11 +1040,46 @@ async def handle_update(client: TelegramBotClient, update: dict) -> None:
 
         if data.startswith("disable_execute:") or data.startswith("disable:"):
             await client.answer_callback_query(cq["id"])
+            if not _can_manage_settings(access):
+                await _send_current_topic_message(
+                    client,
+                    chat_id=chat_id,
+                    message_thread_id=message_thread_id,
+                    text=OWNER_ONLY_TEXT,
+                )
+                return
+            # Формат callback_data:
+            #   новый:  disable_execute:{open_state_token}:{origin_message_id}:{fb_ad_id}
+            #   legacy: disable_execute:{snapshot_token}:{origin_message_id?}
             parts = data.split(":")
-            snapshot_token = parts[1]
-            origin_message_id = int(parts[2]) if len(parts) > 2 else None
+            snapshot_token = parts[1] if len(parts) > 1 else ""
+            origin_message_id = None
+            if len(parts) > 2 and parts[2]:
+                try:
+                    origin_message_id = int(parts[2])
+                except ValueError:
+                    origin_message_id = None
+            fb_ad_id_hint = parts[3] if len(parts) > 3 else ""
+            if fb_ad_id_hint:
+                # Новая схема: токен инцидента должен совпадать со снапшотом.
+                is_fresh = await _validate_alert_token(fb_ad_id=fb_ad_id_hint, token=snapshot_token)
+                if not is_fresh:
+                    await client.answer_callback_query(
+                        cq["id"], text="Кнопка устарела, обновите алерт"
+                    )
+                    return
+            else:
+                # Legacy callback без fb_ad_id — фиксируем в логе для отладки.
+                logger.info(
+                    "disable_execute legacy callback (без fb_ad_id): token=%s",
+                    snapshot_token,
+                )
             task_info = await _create_disable_task(
-                snapshot_token=snapshot_token, tg_user_id=tg_user_id, username=username
+                snapshot_token=snapshot_token,
+                tg_user_id=tg_user_id,
+                username=username,
+                callback_token=snapshot_token if fb_ad_id_hint else None,
+                fb_ad_id_hint=fb_ad_id_hint or None,
             )
             if task_info:
                 ack_text = _render_disable_task_ack_text(
@@ -1036,15 +1141,18 @@ async def handle_update(client: TelegramBotClient, update: dict) -> None:
                 until_dt = datetime.now(UTC) + timedelta(minutes=minutes_snz)
                 until_str = until_dt.strftime("%H:%M")
                 await client.answer_callback_query(cq["id"], text="Снуз поставлен")
+                # Отдельное plain-text сообщение со статусом — оригинальный алерт
+                # не трогаем, поэтому неэкранированные символы в имени объявления
+                # (например `<` или `&`) не ломают разметку.
                 try:
-                    await client.edit_message(
+                    await client.send_message(
                         chat_id=chat_id,
-                        message_id=message_id,
-                        text=(cq["message"].get("text", "") + f"\n\n😴 Снуз до {until_str} (UTC)"),
-                        reply_markup=None,
+                        message_thread_id=message_thread_id,
+                        text=f"😴 Снуз до {until_str} (UTC)",
+                        parse_mode=None,
                     )
                 except Exception:
-                    logger.debug("Не удалось убрать клавиатуру после snooze")
+                    logger.debug("Не удалось отправить уведомление о snooze")
                 logger.info(
                     "AlertSnooze: %s мин для %s (запросил @%s)",
                     minutes_snz,
@@ -1070,19 +1178,20 @@ async def handle_update(client: TelegramBotClient, update: dict) -> None:
             if claimed_ok:
                 await client.answer_callback_query(cq["id"], text="Алерт снят")
                 suffix = f"@{username}" if username else tg_user_id
+                # Отдельное plain-text сообщение со статусом — оригинальный
+                # алерт не трогаем, чтобы избежать parse-ошибок HTML на
+                # неэкранированных символах в имени объявления.
                 try:
-                    await client.edit_message(
+                    await client.send_message(
                         chat_id=chat_id,
-                        message_id=message_id,
+                        message_thread_id=message_thread_id,
                         text=(
-                            cq["message"].get("text", "")
-                            + f"\n\n✅ Алерт снят пользователем {suffix}, "
-                            "объявление продолжает работать."
+                            f"✅ Алерт снят пользователем {suffix}, объявление продолжает работать."
                         ),
-                        reply_markup=None,
+                        parse_mode=None,
                     )
                 except Exception:
-                    logger.debug("Не удалось убрать клавиатуру после claim")
+                    logger.debug("Не удалось отправить уведомление о claim")
                 logger.info("Claim алерта %s (запросил @%s)", fb_ad_id_clm, username)
             else:
                 await client.answer_callback_query(cq["id"], text="Кнопка устарела")
@@ -1265,6 +1374,10 @@ async def handle_update(client: TelegramBotClient, update: dict) -> None:
         await _cmd_app(client, chat_id=chat_id, message_thread_id=message_thread_id)
         return
 
+    if cmd == "digest":
+        await _cmd_digest(client, chat_id=chat_id, message_thread_id=message_thread_id)
+        return
+
     if cmd == "ask":
         question = text_in[len("/ask") :].strip()
         await _cmd_ask(
@@ -1440,7 +1553,7 @@ async def _try_authorize(
             first_name = user.get("first_name", "") or ""
             now = datetime.now(UTC)
 
-            if row.auth_code and row.auth_code == auth_code:
+            if row.auth_code and secrets.compare_digest(row.auth_code or "", auth_code or ""):
                 row.chat_id = chat_id
                 row.owner_telegram_user_id = telegram_user_id
                 row.owner_username = username
@@ -1544,8 +1657,19 @@ async def _create_disable_task(
     snapshot_token: str,
     tg_user_id: str,
     username: str,
+    callback_token: str | None = None,
+    fb_ad_id_hint: str | None = None,
 ) -> dict | None:
     """Создаёт DisableTask в БД по токену снэпшота или fb_ad_id.
+
+    Args:
+        snapshot_token: токен из callback (open_state_token или fb_ad_id legacy).
+        callback_token: явный токен инцидента из callback_data (новая схема).
+            Используется в idempotency_key вместо текущего snapshot.open_state_token,
+            чтобы повторные клики по одной и той же кнопке не плодили дубль задач,
+            даже если observer успел открыть новый incident.
+        fb_ad_id_hint: явный fb_ad_id из новой схемы callback_data — позволяет
+            искать снапшот напрямую, минуя fallback по open_state_token.
 
     Returns:
         dict с fb_ad_id, ad_name, incident_key и контекстом сообщения; None если снэпшот не найден
@@ -1553,15 +1677,27 @@ async def _create_disable_task(
     try:
         factory = get_session_factory()
         async with factory() as session:
-            # Ищем снэпшот по open_state_token
-            result = await session.execute(
-                select(AdSnapshot)
-                .options(*_snapshot_joinedload_options())
-                .where(AdSnapshot.open_state_token == snapshot_token)
-            )
-            snapshot = result.scalar_one_or_none()
+            snapshot = None
+            # Новая схема: ищем снэпшот по явному fb_ad_id из callback_data.
+            if fb_ad_id_hint:
+                result = await session.execute(
+                    select(AdSnapshot)
+                    .options(*_snapshot_joinedload_options())
+                    .where(AdSnapshot.fb_ad_id == fb_ad_id_hint)
+                )
+                snapshot = result.scalar_one_or_none()
+
             if snapshot is None:
-                # Пробуем по fb_ad_id
+                # Legacy: ищем по open_state_token
+                result = await session.execute(
+                    select(AdSnapshot)
+                    .options(*_snapshot_joinedload_options())
+                    .where(AdSnapshot.open_state_token == snapshot_token)
+                )
+                snapshot = result.scalar_one_or_none()
+
+            if snapshot is None:
+                # Пробуем по fb_ad_id (legacy callback, где snapshot_token == fb_ad_id)
                 result = await session.execute(
                     select(AdSnapshot)
                     .options(*_snapshot_joinedload_options())
@@ -1573,9 +1709,15 @@ async def _create_disable_task(
                 logger.warning("Снэпшот не найден по токену %s", snapshot_token)
                 return None
 
-            stable_open_state_token = snapshot.open_state_token or uuid.uuid4().hex
-            snapshot.open_state_token = stable_open_state_token
-            snapshot.telegram_group_key = stable_open_state_token
+            # Если есть явный callback_token из новой схемы — используем его как
+            # incident_key. Это защищает от создания дубля при retry-кликах после
+            # того, как observer открыл новый incident на том же snapshot.
+            if callback_token:
+                stable_open_state_token = callback_token
+            else:
+                stable_open_state_token = snapshot.open_state_token or uuid.uuid4().hex
+                snapshot.open_state_token = stable_open_state_token
+                snapshot.telegram_group_key = stable_open_state_token
             message_context = await _build_disable_message_context_for_snapshot(session, snapshot)
             idempotency_key = _disable_task_idempotency_key(
                 fb_ad_id=snapshot.fb_ad_id,
