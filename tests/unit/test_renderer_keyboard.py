@@ -41,8 +41,9 @@ def test_render_alert_message_single_webapp_button():
     assert len(keyboard) == 1, "Должен быть 1 ряд"
     assert len(keyboard[0]) == 1, "В ряду должна быть 1 кнопка"
     btn = keyboard[0][0]
-    assert "web_app" in btn, "Кнопка должна быть web_app-типа"
-    assert "12345" in btn["web_app"]["url"]
+    # url-кнопка вместо web_app: совместима с группами (web_app даёт BUTTON_TYPE_INVALID).
+    assert "url" in btn, "Кнопка должна быть url-типа"
+    assert "12345" in btn["url"]
 
 
 # Проверяем, что без web_app_url клавиатура не добавляется.
