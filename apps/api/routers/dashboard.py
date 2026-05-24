@@ -2722,6 +2722,7 @@ async def get_chart_data(
             AdSnapshot.leads,
             AdSnapshot.deposits,
             AdSnapshot.alert_state,
+            AdSnapshot.delivery_status,  # нужен для is_delivery_disabled
         )
         .join(FbAd, AdSnapshot.ad_id == FbAd.id)
         .join(FbAdset, FbAd.adset_id == FbAdset.id)
@@ -2737,6 +2738,20 @@ async def get_chart_data(
         AlertState.DISABLED: "🚫",
         AlertState.NORMAL: "✅",
     }
+
+    def _resolve_ad_status(delivery_status: str | None, alert_state: AlertState | None) -> str:
+        """Определяет отображаемый статус объявления с учётом реального состояния доставки.
+
+        Приоритет: is_delivery_disabled > FSM-состояние.
+        Если объявление реально выключено в FB — показываем DISABLED,
+        даже если FSM-состояние ещё NORMAL (задержка сканирования).
+        """
+        if is_delivery_disabled(delivery_status):
+            return AlertState.DISABLED.value
+        if alert_state is not None:
+            return alert_state.value
+        return AlertState.NORMAL.value
+
     top_ads_by_spend = [
         {
             "name": (row.ad_name or "")[:25] + "…"
@@ -2756,7 +2771,7 @@ async def get_chart_data(
             "clicks": int(row.clicks or 0),
             "leads": int(row.leads or 0),
             "deposits": int(row.deposits or 0),
-            "state": row.alert_state.value if row.alert_state else "NORMAL",
+            "state": _resolve_ad_status(row.delivery_status, row.alert_state),
             "state_icon": _state_icons.get(row.alert_state, "✅"),
         }
         for row in top_ads_result.all()

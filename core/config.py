@@ -63,6 +63,10 @@ class Settings(BaseSettings):
     vision_profile_id: str = ""
     vision_auto_restart_on_missing_cdp: bool = True
 
+    # --- Redis (очередь алёртов) ---
+    redis_url: str = "redis://localhost:6380/0"
+    alerts_queue_enabled: bool = True
+
     # --- Sentry (опционально) ---
     sentry_dsn: str = ""
     sentry_environment: str = "production"
@@ -70,6 +74,11 @@ class Settings(BaseSettings):
     # --- Telegram Mini App ---
     tma_session_ttl_seconds: int = 3600
     web_app_url: str | None = None
+
+    # --- Telegram Daily Digest ---
+    digest_enabled: bool = True
+    digest_hour: int = 9
+    digest_timezone: str = "Europe/Moscow"
 
     # --- AI Assistant (Claude + OpenAI fallback) ---
     ai_diagnostics_enabled: bool = True
@@ -85,6 +94,11 @@ class Settings(BaseSettings):
     ai_max_log_lines: int = 200
     ai_max_tool_iterations: int = 5
     ai_rate_limit_per_hour: int = 30
+    # Объяснения причин алертов через AI (приклеиваются к STOP/WARNING в Telegram)
+    ai_explain_alerts_enabled: bool = True
+    # 8s было мало для сторонних gateway: 💡-объяснение всегда падало по timeout.
+    # 20s — компромисс между UX и блокировкой алерта.
+    ai_explain_timeout_seconds: float = 20.0
 
     @model_validator(mode="after")
     def _warn_insecure_defaults(self) -> "Settings":

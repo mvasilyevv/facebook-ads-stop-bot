@@ -8,10 +8,11 @@ import http.client
 import logging
 import os
 import socket
-import sys
 import time
 from xmlrpc.client import ServerProxy, Transport
 
+from core.alerts.send import send_telegram_via_queue
+from core.metrics import WORKER_HEARTBEAT_AGE
 from sqlalchemy import select
 
 from apps.api.routers.health import HealthDetails, collect_health_details
@@ -200,16 +201,22 @@ async def _send_alert(
     key: str,
     message_thread_id: int | None = None,
 ) -> None:
-    """Отправляет TG-алерт если cooldown истёк."""
+    """Отправляет TG-алерт через Redis-очередь если cooldown истёк."""
     if not _cooldown.can_send(key):
         logger.debug("Watchdog: cooldown активен для ключа '%s', алерт пропущен", key)
         return
     try:
-        await tg.send_message(chat_id=chat_id, text=text, message_thread_id=message_thread_id)
+        # Критичные алерты воркера идут через Redis-очередь для надёжности
+        await send_telegram_via_queue(
+            chat_id=chat_id,
+            text=text,
+            fallback_client=tg,
+            message_thread_id=message_thread_id,
+        )
         _cooldown.mark_sent(key)
-        logger.info("Watchdog: TG-алерт отправлен (ключ: %s)", key)
+        logger.info("Watchdog: TG-алерт поставлен в очередь (ключ: %s)", key)
     except Exception as exc:
-        logger.error("Watchdog: не удалось отправить TG-алерт: %s", exc)
+        logger.error("Watchdog: не удалось поставить TG-алерт в очередь: %s", exc)
         return
 
     # Авто-диагностика для эскалаций (если AI настроен)
@@ -279,6 +286,13 @@ async def _run_iteration(tg: TelegramBotClient, chat_id: str) -> None:
         except Exception as exc:
             logger.error("Watchdog: не удалось получить health-данные: %s", exc)
             return
+
+    # --- Выставляем Prometheus-метрики возраста heartbeat'ов ---
+    for _worker_name, _worker_health in health.workers.items():
+        if _worker_health.heartbeat_age_seconds is not None:
+            WORKER_HEARTBEAT_AGE.labels(worker=_worker_name).set(
+                _worker_health.heartbeat_age_seconds
+            )
 
     # --- Загружаем ops thread_id для всех системных алертов этой итерации ---
     _, tg_settings = await _get_telegram_settings()
@@ -493,11 +507,9 @@ async def _run_iteration(tg: TelegramBotClient, chat_id: str) -> None:
 
 async def main() -> None:
     """Главный цикл health_watchdog."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)-7s [%(name)s] %(message)s",
-        stream=sys.stdout,
-    )
+    from core.logging import setup_logging
+
+    setup_logging("health_watchdog")
     logger.info(
         "Health Watchdog запущен, интервал=%dс, cooldown=%dс",
         WATCHDOG_INTERVAL_SECONDS,

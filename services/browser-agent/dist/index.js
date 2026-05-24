@@ -338,9 +338,18 @@ async function prepareAdsTableForScan(page, options, isCancelled) {
             return;
         // settleDelayMs игнорируем намеренно: waitForInitialAdsRows ждёт реальные строки, а не фиксированный sleep.
         await waitForInitialAdsRows(page, Math.max(SCAN_POST_REFRESH_MIN_ROWS_WAIT_MS, settleDelayMs + SCAN_POST_REFRESH_EXTRA_WAIT_MS), isCancelled);
+        if (isCancelled?.())
+            return;
+        // Второй reset нужен после refresh: Meta во время обновления данных
+        // может оставить виртуальное окно таблицы НЕ наверху, и pass 1 основного
+        // цикла увидит «середину» списка, а первые объявления выпадут до того
+        // как scroll до них дойдёт. resetAdsTableScroll + waitForDomStable
+        // гарантируют что мы начинаем парсинг с верхней границы виртуального окна.
+        await (0, ads_table_js_1.resetAdsTableScroll)(page);
+        if (isCancelled?.())
+            return;
+        await waitForDomStable(page, 1.5, 0.1, isCancelled);
     }
-    // Второй reset+sleep+waitForDomStable убран: основной reset уже сделан выше, а виртуальное окно
-    // стабилизируется внутри waitForInitialAdsRows.
 }
 async function waitForVisibleRowsAfterScroll(page, beforeIds, timeoutMs = SCAN_POST_SCROLL_CHANGE_WAIT_MS, isCancelled) {
     const deadline = Date.now() + timeoutMs;
