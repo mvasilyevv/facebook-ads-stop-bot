@@ -73,6 +73,14 @@ class RuleContext:
     cpr_warning_percent_of_stop: Decimal | None = None
     cpr_stop_percent_of_base: Decimal | None = None
 
+    # Медианы CPL/CPR по офферу для Bayesian-сглаживания при малых выборках
+    offer_median_cpl: Decimal | None = None
+    offer_median_cpr: Decimal | None = None
+
+    # Адаптивный CPA baseline: rolling median по офферу (если включено)
+    use_adaptive_cpa: bool = False
+    adaptive_cpa: Decimal | None = None
+
     # Правило 1: CPC
     cpc_enabled: bool = True
     cpc_percent_stop: Decimal = Decimal("2")
@@ -98,6 +106,42 @@ class RuleContext:
     spend_with_dep_enabled: bool = True
     spend_with_dep_from_percent: Decimal = Decimal("70")
     spend_with_dep_to_percent: Decimal = Decimal("90")
+
+    # Временны́е веса (time-of-day / day-of-week)
+    time_weights_enabled: bool = False
+    hour_of_day: int | None = None  # 0–23 по локальному TZ
+    day_of_week: int | None = None  # 0=Пн … 6=Вс
+    # Итоговый множитель: hour_weights[hour] * day_weights[day]
+    # При time_weights_enabled=False всегда 1.0
+    time_weight: Decimal = Decimal("1.0")
+
+    # Правило 7: frequency-anomaly (выгорание аудитории)
+    frequency_anomaly_enabled: bool = True
+    frequency_current: Decimal | None = None
+    frequency_1h_ago: Decimal | None = None
+    frequency_warning_threshold: Decimal = Decimal("2.5")
+    frequency_growth_warning_pct: Decimal = Decimal("30.0")
+    frequency_stop_threshold: Decimal = Decimal("3.5")
+    # Sanity-данные для frequency-anomaly: на старте объявления FB не успевает
+    # пересчитать reach и frequency может временно скакать до 50-100 (impr/reach<10).
+    # Чтобы не стопать новые объявления по переходному шуму — требуем минимум
+    # impressions и reach, а также игнорируем выбросы выше абсолютного потолка.
+    impressions: int | None = None
+    reach: int | None = None
+    frequency_min_impressions: int = 500
+    frequency_min_reach: int = 100
+    frequency_outlier_cap: Decimal = Decimal("10.0")
+    # Sanity-минимум для guardrail-правил (cpc/cpl/cpr при 0 событий): при <N показов
+    # данных нет вообще (могла быть аномалия CPM, накрутка). При impr>=10 уже видна
+    # стартовая статистика; дальше работает обычный порог spend>=stop_threshold,
+    # который сам по себе фильтрует мизерный спенд (правило не сработает пока
+    # денег не вложено хотя бы на stop-порог = 2% × CPA × 0.8).
+    guardrail_min_impressions: int = 10
+
+    # ML-confidence: словарь rule_name → confidence (0.0–1.0).
+    # Заполняется из OfferRuleStat; если ключа нет — используется prior 0.5.
+    # Frequency-anomaly из этого словаря не читается (у неё своя логика).
+    rule_confidence: dict[str, Decimal] = field(default_factory=dict)
 
     # Предвычисленные пороги (init=False — заполняются в __post_init__)
     cpc_base_stop_threshold: Decimal = field(init=False)

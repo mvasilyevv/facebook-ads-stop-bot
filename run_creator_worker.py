@@ -17,15 +17,12 @@ from core.config import get_settings
 from core.crypto import decrypt
 from core.db import get_session_factory
 from core.domain import PlanRunStatus
+from core.logging import setup_logging
 from core.models import PlanRun, VisionSettings
 from core.sentry import setup_sentry
 from core.worker_utils import PidFileLock, wait_for_shutdown_or_timeout
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)-7s [%(name)s] %(message)s",
-    stream=sys.stdout,
-)
+setup_logging("creator_worker")
 logger = logging.getLogger(__name__)
 
 VISION_SETTINGS_POLL_INTERVAL_SECONDS = 2

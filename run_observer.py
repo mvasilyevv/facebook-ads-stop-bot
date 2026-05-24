@@ -44,11 +44,9 @@ def _release_pid_lock() -> None:
         pass
 
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)-7s [%(name)s] %(message)s",
-    stream=sys.stdout,
-)
+from core.logging import setup_logging
+
+setup_logging("observer")
 logger = logging.getLogger(__name__)
 VISION_SETTINGS_POLL_INTERVAL_SECONDS = 5
 

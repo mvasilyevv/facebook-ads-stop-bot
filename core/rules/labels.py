@@ -13,6 +13,7 @@ RULE_LABELS: dict[str, str] = {
     "early_outbound_ctr_signal": "Мало переходов на PWA",
     "early_lpv_ratio_signal": "Мало открытий PWA после клика",
     "early_cost_per_lpv_signal": "Дорогое открытие PWA",
+    "frequency_anomaly": "Выгорание аудитории",
 }
 
 # Короткие названия — для бейджей и таблиц (max ~20 символов)
@@ -26,6 +27,7 @@ RULE_LABELS_SHORT: dict[str, str] = {
     "early_outbound_ctr_signal": "Мало переходов",
     "early_lpv_ratio_signal": "Мало открытий PWA",
     "early_cost_per_lpv_signal": "Дорогое открытие",
+    "frequency_anomaly": "Выгорание",
 }
 
 # Человекочитаемые названия состояний алерта
