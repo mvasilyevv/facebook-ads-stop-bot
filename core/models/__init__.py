@@ -143,6 +143,12 @@ class ObserverSettings(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     stale_data_threshold: Mapped[Decimal] = mapped_column(
         Numeric(3, 2), default=Decimal("0.9"), server_default="0.9"
     )
+    # Единая точка истины для «пульса»: timestamp последнего УСПЕШНО
+    # завершённого scan-цикла (outcome OK или fast-stop OK). Обновляется
+    # только при реальном успехе — ошибки и пустые циклы не меняют это поле.
+    last_successful_scan_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 class CabinetDayArchive(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -193,6 +199,8 @@ class TelegramSettings(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     thread_id_enable: Mapped[int | None] = mapped_column(Integer, nullable=True)
     thread_id_ops: Mapped[int | None] = mapped_column(Integer, nullable=True)
     thread_id_general: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # ISO-дата (YYYY-MM-DD) последней успешной отправки daily digest — переживает рестарт поллера
+    digest_last_sent_date: Mapped[str | None] = mapped_column(String(10), nullable=True)
 
 
 # === Оффер ===
@@ -263,12 +271,29 @@ class OfferRuleConfig(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     spend_with_dep_to_percent: Mapped[Decimal] = mapped_column(Numeric(8, 2), default=Decimal("90"))
 
-    # Диагностика частоты
+    # Диагностика частоты (информационная, без алерта)
     frequency_elevated_threshold: Mapped[Decimal] = mapped_column(
         Numeric(8, 2), default=Decimal("2")
     )
     frequency_critical_threshold: Mapped[Decimal] = mapped_column(
         Numeric(8, 2), default=Decimal("3")
+    )
+
+    # Правило 7: frequency-anomaly (выгорание аудитории)
+    frequency_anomaly_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true"
+    )
+    # Абсолютный порог WARNING: frequency > этого значения при росте >= growth_%
+    frequency_warning_threshold: Mapped[Decimal] = mapped_column(
+        Numeric(8, 2), default=Decimal("2.5"), server_default="2.5"
+    )
+    # % роста frequency за ~1 час, при котором WARNING срабатывает совместно с absolute
+    frequency_growth_warning_pct: Mapped[Decimal] = mapped_column(
+        Numeric(6, 2), default=Decimal("30.0"), server_default="30.0"
+    )
+    # Абсолютный порог STOP: frequency > этого значения — сразу STOP
+    frequency_stop_threshold: Mapped[Decimal] = mapped_column(
+        Numeric(8, 2), default=Decimal("3.5"), server_default="3.5"
     )
 
     # Пороги warning/stop для этого оффера.
@@ -286,6 +311,24 @@ class OfferRuleConfig(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         Numeric(6, 2), default=Decimal("80")
     )
     cpr_stop_percent_of_base: Mapped[Decimal] = mapped_column(Numeric(6, 2), default=Decimal("80"))
+
+    # Адаптивный CPA baseline: rolling median по успешно отключённым объявлениям
+    use_adaptive_cpa: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    # Окно в днях для вычисления rolling median (по умолчанию 7 дней)
+    adaptive_cpa_window_days: Mapped[int] = mapped_column(Integer, default=7, server_default="7")
+    # Минимальное число объявлений-образцов; при нехватке — fallback на статичный CPA
+    adaptive_cpa_min_samples: Mapped[int] = mapped_column(Integer, default=5, server_default="5")
+
+    # Временны́е веса для смягчения/ужесточения порогов по часу и дню недели
+    # Мастер-переключатель: если False — time_weight всегда 1.0
+    time_weights_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
+    # JSON-массив из 24 элементов (часы 0-23); None → все 1.0
+    # Значения 0.5–2.0: < 1 означает мягче (ночь), > 1 — жёстче (пик)
+    hour_weights: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # JSON-массив из 7 элементов (дни 0=Пн … 6=Вс); None → все 1.0
+    day_weights: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
     offer: Mapped[Offer] = relationship(back_populates="rule_config")
 
@@ -912,6 +955,35 @@ class AICache(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     expires_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, index=True
     )
+
+
+# === Статистика confidence для правил по офферу ===
+
+
+class OfferRuleStat(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """Накопленная статистика confidence для пары (оффер, правило).
+
+    Обновляется offline-скриптом recalc_rule_confidence.py (раз в сутки).
+    confidence=0.5 означает «недостаточно данных» (prior).
+    """
+
+    __tablename__ = "offer_rule_stats"
+    __table_args__ = (UniqueConstraint("offer_code", "rule_name", name="uq_offer_rule_stats"),)
+
+    # Код оффера (не FK — устойчивость к удалению оффера)
+    offer_code: Mapped[str] = mapped_column(String(64), index=True)
+    # Идентификатор правила: "cpl_stop", "cpc_stop", "cpr_stop" и т.д.
+    rule_name: Mapped[str] = mapped_column(String(64), index=True)
+    # Доля подтверждённых алертов (0.0–1.0); 0.5 = нет данных
+    confidence: Mapped[Decimal] = mapped_column(Numeric(4, 3), default=Decimal("0.5"))
+    # Всего алертов за окно наблюдения
+    alerts_total: Mapped[int] = mapped_column(Integer, default=0)
+    # Подтверждённых алертов (дошли до DISABLED)
+    alerts_confirmed: Mapped[int] = mapped_column(Integer, default=0)
+    # Момент последнего пересчёта
+    calculated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    # Окно наблюдения в днях (по умолчанию 7)
+    window_days: Mapped[int] = mapped_column(Integer, default=7)
 
 
 # === Регистрация модели ScanRun (история циклов observer'а) ===

@@ -42,7 +42,8 @@ async def test_render_start_with_web_app_url():
     assert markup is not None
     assert "inline_keyboard" in markup
     btn = markup["inline_keyboard"][0][0]
-    assert btn.get("web_app", {}).get("url") == "https://example.com/app"
+    # url-кнопка вместо web_app: совместима с группами (см. bot_handler._render_start).
+    assert btn.get("url") == "https://example.com/app"
 
 
 # Проверяем, что /start без WEB_APP_URL не добавляет кнопку.

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 
 import httpx
 
@@ -17,13 +18,84 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 # Лимит Telegram на длину сообщения
 _TG_MESSAGE_LIMIT = 4096
 
+# Теги HTML mode Telegram, у которых есть парная закрывашка.
+# Остальные ( <br>, <hr>, void-теги) Telegram HTML не поддерживает, игнорируем.
+_TG_HTML_TAGS = (
+    "b",
+    "strong",
+    "i",
+    "em",
+    "u",
+    "ins",
+    "s",
+    "strike",
+    "del",
+    "code",
+    "pre",
+    "a",
+    "blockquote",
+    "tg-spoiler",
+    "span",
+)
+
+# Регекс матчит открывающие и закрывающие теги, регистронезависимо.
+# Имя тега захватывается без учёта атрибутов.
+_TAG_RE = re.compile(r"<\s*(/?)\s*([a-zA-Z][a-zA-Z0-9-]*)\b[^>]*>")
+
+
+def _balance_html_tags(text: str) -> str:
+    """Закрывает незакрытые HTML-теги Telegram в обрезанном тексте.
+
+    Простой линейный проход: считаем стек открытых тегов; на каждый </tag> ищем
+    ближайший подходящий открытый тег и снимаем его (с учётом возможной
+    рассинхронизации из-за обрезки). В конце дописываем закрывающие теги для
+    оставшихся в стеке элементов в обратном порядке.
+    """
+    if "<" not in text:
+        return text
+
+    stack: list[str] = []
+    for match in _TAG_RE.finditer(text):
+        is_closing = match.group(1) == "/"
+        name = match.group(2).lower()
+        if name not in _TG_HTML_TAGS:
+            continue
+        if is_closing:
+            # Снимаем ближайший подходящий открытый тег (если есть).
+            for i in range(len(stack) - 1, -1, -1):
+                if stack[i] == name:
+                    del stack[i]
+                    break
+        else:
+            stack.append(name)
+
+    if not stack:
+        return text
+
+    closing = "".join(f"</{name}>" for name in reversed(stack))
+    return text + closing
+
 
 def _truncate_message(text: str, limit: int = _TG_MESSAGE_LIMIT) -> str:
-    """Обрезает сообщение до лимита Telegram, добавляя маркер обрезки."""
+    """Обрезает сообщение до лимита Telegram, балансируя HTML-теги.
+
+    После грубой обрезки до limit могут остаться незакрытые `<b>`, `<code>` и
+    т.п. — Telegram отклоняет такое сообщение с «can't parse entities».
+    Дописываем закрывающие теги в обратном порядке. Также отрезаем «обрубок»
+    открывающего тега в конце (например, «<cod»), который Telegram пытался бы
+    интерпретировать как литерал.
+    """
     if len(text) <= limit:
         return text
     suffix = "\n\n... (сообщение обрезано)"
-    return text[: limit - len(suffix)] + suffix
+    truncated = text[: limit - len(suffix)]
+    # Если обрезка пришлась внутрь незавершённого `<...`, отбрасываем недописанное.
+    last_lt = truncated.rfind("<")
+    last_gt = truncated.rfind(">")
+    if last_lt > last_gt:
+        truncated = truncated[:last_lt]
+    balanced = _balance_html_tags(truncated)
+    return balanced + suffix
 
 
 class TelegramAPIError(RuntimeError):
@@ -39,7 +111,12 @@ class TelegramAPIError(RuntimeError):
         self.method = method
         self.description = description
         self.error_code = error_code
-        super().__init__(f"Ошибка Telegram API при вызове {method}")
+        details = ""
+        if error_code:
+            details = f" [code={error_code}]"
+        if description:
+            details = f"{details}: {description}"
+        super().__init__(f"Ошибка Telegram API при вызове {method}{details}")
 
 
 class TelegramBotClient:
@@ -147,14 +224,20 @@ class TelegramBotClient:
         text: str,
         message_thread_id: int | None = None,
         reply_markup: dict | None = None,
+        parse_mode: str | None = "HTML",
     ) -> dict:
-        """Отправляет сообщение в чат. Обрезает текст до лимита Telegram."""
+        """Отправляет сообщение в чат. Обрезает текст до лимита Telegram.
+
+        parse_mode: режим разметки Telegram (HTML/MarkdownV2). None — без разметки.
+        Дефолт HTML сохраняет обратную совместимость со старыми вызовами.
+        """
         text = _truncate_message(text)
         payload: dict = {
             "chat_id": chat_id,
             "text": text,
-            "parse_mode": "HTML",
         }
+        if parse_mode is not None:
+            payload["parse_mode"] = parse_mode
         if message_thread_id is not None:
             payload["message_thread_id"] = message_thread_id
         if reply_markup:
