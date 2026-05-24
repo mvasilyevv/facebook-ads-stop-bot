@@ -332,6 +332,8 @@ class TelegramAlertItem:
     reason_title: str | None
     reason_text: str | None
     metrics_json: dict[str, Any]
+    # LLM-объяснение почему сработало правило (опционально, None = не показывать)
+    explanation: str | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -582,6 +584,11 @@ def render_alert_message(
             lines.extend(diagnostics_lines)
             lines.append("")
 
+        # LLM-объяснение: только для STOP/WARNING алертов, не для напоминаний/health
+        if item.explanation:
+            lines.append(f"💡 <i>{html.escape(item.explanation)}</i>")
+            lines.append("")
+
         _url = (
             web_app_url if web_app_url is not None else (get_settings().web_app_url or "")
         ).strip()
@@ -589,11 +596,14 @@ def render_alert_message(
             if not _url.startswith("https://"):
                 logger.warning("WEB_APP_URL не https — кнопка алерта пропущена")
             else:
+                # Telegram запрещает web_app в inline-клавиатуре групп/супергрупп
+                # (BUTTON_TYPE_INVALID). Используем обычную url-кнопку — она работает
+                # везде и открывает Mini App в браузере / в Telegram при клике.
                 keyboard.append(
                     [
                         {
                             "text": "🔧 Открыть в приложении",
-                            "web_app": {"url": f"{_url.rstrip('/')}/ads/{item.fb_ad_id}"},
+                            "url": f"{_url.rstrip('/')}/ads/{item.fb_ad_id}",
                         }
                     ]
                 )

@@ -12,6 +12,9 @@ _FALLBACK_TO_SEND_DESCRIPTIONS = (
     "message to edit not found",
     "message can't be edited",
     "there is no text in the message to edit",
+    "message thread not found",  # топик удалён — отправим как обычное сообщение
+    "chat not found",  # маловероятно, но безопаснее fallback
+    "message_thread_id is invalid",
 )
 
 
@@ -53,11 +56,21 @@ async def safe_edit_or_send_message(
         if any(item in description for item in _IGNORABLE_EDIT_DESCRIPTIONS):
             return "unchanged", message_id
         if any(item in description for item in _FALLBACK_TO_SEND_DESCRIPTIONS):
-            result = await client.send_message(
-                chat_id=chat_id,
-                message_thread_id=message_thread_id,
-                text=text,
-                reply_markup=reply_markup,
-            )
+            # Если в самом thread проблема — пробуем сначала без thread_id,
+            # потом уже как новое сообщение в основной чат.
+            thread_invalid = "thread" in description
+            try:
+                result = await client.send_message(
+                    chat_id=chat_id,
+                    message_thread_id=None if thread_invalid else message_thread_id,
+                    text=text,
+                    reply_markup=reply_markup,
+                )
+            except TelegramAPIError as send_exc:
+                # Если и без thread_id не удалось — отдаём None как fallback.
+                send_desc = _normalized_description(send_exc)
+                if "thread" in send_desc or "chat not found" in send_desc:
+                    return "failed", None
+                raise
             return "sent", result.get("message_id") if isinstance(result, dict) else None
         raise
