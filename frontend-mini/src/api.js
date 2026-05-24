@@ -98,6 +98,10 @@ export async function claimAd(fbAdId) {
 }
 
 // AI-аналитика с кэшированием
+export async function getHealthDetails() {
+  return fetchJson("/health/details");
+}
+
 export async function getAIAnalysis(blockType, scopeKey = "global", forceRefresh = false, clientData = null) {
   return fetchJson("/ai/analyze", {
     method: "POST",

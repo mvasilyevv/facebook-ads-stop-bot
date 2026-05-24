@@ -68,4 +68,8 @@ export const DEFAULT_RULES = {
   spend_with_dep_to_percent: '90',
   frequency_elevated_threshold: '2',
   frequency_critical_threshold: '3',
+  // Временны́е веса (по умолчанию выключены)
+  time_weights_enabled: false,
+  hour_weights: null,
+  day_weights: null,
 };

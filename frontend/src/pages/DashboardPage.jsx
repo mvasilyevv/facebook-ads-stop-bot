@@ -20,6 +20,7 @@ import {
 } from '../api.js';
 import { DashboardOperations } from '../components/dashboard/DashboardOperations.jsx';
 import { useRefreshOnResume } from '../hooks/useRefreshOnResume.js';
+import { useWebSocket } from '../hooks/useWebSocket.js';
 import { CampaignScorecard, FunnelChart } from '../components/CampaignScorecard.jsx';
 import { BudgetOverrunChart } from '../components/BudgetOverrunChart.jsx';
 import { CampaignBreakdownTable } from '../components/CampaignBreakdownTable.jsx';
@@ -368,11 +369,58 @@ export default function DashboardPage({ onNavigate }) {
     retry: false,
   });
 
+  /* --- WebSocket: realtime-события от observer --- */
+  // Строим WS URL из текущего host: ws(s)://host/ws/dashboard
+  const wsUrl = (() => {
+    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${proto}//${window.location.host}/ws/dashboard`;
+  })();
+
+  const wsDisconnectedSinceRef = useRef(null);
+
+  const { connected: wsConnected } = useWebSocket(wsUrl, {
+    enabled: true,
+    autoReconnect: true,
+    onMessage: (event) => {
+      // scan_finished → инвалидируем основные данные дашборда
+      if (event.type === 'scan_finished') {
+        queryClient.invalidateQueries({ queryKey: ['dashboardBatch'] });
+        queryClient.invalidateQueries({ queryKey: ['observerSettings'] });
+        queryClient.invalidateQueries({ queryKey: ['chartData'] });
+        queryClient.invalidateQueries({ queryKey: ['performanceToday'] });
+      }
+      // alert_created → инвалидируем алерты и инциденты
+      if (event.type === 'alert_created') {
+        queryClient.invalidateQueries({ queryKey: ['dashboardBatch'] });
+      }
+      // task_changed → инвалидируем задачи
+      if (event.type === 'task_changed') {
+        queryClient.invalidateQueries({ queryKey: ['dashboardBatch'] });
+        queryClient.invalidateQueries({ queryKey: ['enableTasks'] });
+      }
+    },
+  });
+
+  // Fallback на polling: если WS не подключён — polling каждые 5с, иначе каждые 60с
+  useEffect(() => {
+    if (!wsConnected) {
+      if (wsDisconnectedSinceRef.current === null) {
+        wsDisconnectedSinceRef.current = Date.now();
+      }
+    } else {
+      wsDisconnectedSinceRef.current = null;
+    }
+  }, [wsConnected]);
+
+  // WS подключён → polling для критичных данных раз в 60с (вместо 5с)
+  const batchPollInterval = wsConnected ? 60_000 : 5_000;
+  const enableTasksPollInterval = wsConnected ? 60_000 : 5_000;
+
   /* --- Realtime: stats + incidents + disable-tasks одним batch-запросом --- */
   const { data: dashboardBatch } = useQuery({
     queryKey: ['dashboardBatch', DASHBOARD_BATCH_QUERY],
     queryFn: () => getDashboardBatch(DASHBOARD_BATCH_QUERY),
-    refetchInterval: 5_000,
+    refetchInterval: batchPollInterval,
   });
 
   const stats = dashboardBatch?.stats;
@@ -382,7 +430,7 @@ export default function DashboardPage({ onNavigate }) {
   const { data: enableTasks } = useQuery({
     queryKey: ['enableTasks'],
     queryFn: () => getEnableTasks({ limit: 20 }).catch(() => []),
-    refetchInterval: 5_000,
+    refetchInterval: enableTasksPollInterval,
   });
 
   /* Нормализуем инциденты из сырых данных */

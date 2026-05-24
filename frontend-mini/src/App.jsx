@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { BrowserRouter, NavLink, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { getStoredToken, loginToBackend, logout } from "./auth.js";
+import HealthBar from "./components/HealthBar.jsx";
 import DashboardPage from "./pages/DashboardPage.jsx";
 import HealthPage from "./pages/HealthPage.jsx";
 import SettingsPage from "./pages/SettingsPage.jsx";
@@ -132,6 +133,7 @@ export default function App() {
             ⚠️ Отсутствует подключение к сети. Используются кэшированные данные.
           </div>
         )}
+        <HealthBar />
         <div className={`container page-content${!isOnline ? " has-offline-banner" : ""}`}>
           <Routes>
             <Route path="/" element={<DashboardPage />} />
