@@ -94,7 +94,6 @@ class CooldownTracker:
 def _send_telegram(text: str) -> None:
     """Синхронно отправляет сообщение через Redis-очередь (или напрямую как fallback)."""
     from core.alerts.send import send_telegram_via_queue
-
     from core.config import get_settings
     from core.telegram.client import TelegramBotClient
 

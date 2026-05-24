@@ -12,12 +12,11 @@ import time
 
 from core.alerts.drain_worker import run_drain_loop
 from core.alerts.queue import AlertQueue
-from core.telegram.digest_scheduler import run_digest_scheduler
-
 from core.config import get_settings
 from core.sentry import setup_sentry
 from core.telegram.bot_handler import handle_update
 from core.telegram.client import TelegramBotClient
+from core.telegram.digest_scheduler import run_digest_scheduler
 from core.telegram.service import (
     load_poller_offset,
     load_web_app_url,

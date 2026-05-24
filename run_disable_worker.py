@@ -10,13 +10,6 @@ import signal
 import sys
 from datetime import UTC, datetime
 
-from core.logging import setup_logging
-from core.pubsub import CHANNEL_TASK_CHANGED, RedisPubSub
-from core.task_queue.grpc_worker_mixin import (
-    close_grpc_client,
-    init_grpc_client,
-    load_vision_settings,
-)
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import selectinload
 
@@ -26,9 +19,16 @@ from core.config import get_settings
 from core.db import get_session_factory
 from core.disable_tasks import is_delivery_disabled, reconcile_disable_tasks
 from core.domain import AlertState, DisableTaskStatus
+from core.logging import setup_logging
 from core.models import AdSnapshot, DisableTask
+from core.pubsub import CHANNEL_TASK_CHANGED, RedisPubSub
 from core.sentry import setup_sentry
 from core.task_queue import PostgresTaskQueue
+from core.task_queue.grpc_worker_mixin import (
+    close_grpc_client,
+    init_grpc_client,
+    load_vision_settings,
+)
 from core.telegram.delivery import broadcast_disable_task_runtime_message
 from core.worker_utils import PidFileLock, wait_for_shutdown_or_timeout
 

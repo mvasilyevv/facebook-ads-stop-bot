@@ -16,9 +16,6 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import grpc
-from core.ai_assistant.explain import explain_alert
-from core.logging import bind_contextvars, unbind_contextvars
-from core.pubsub import CHANNEL_ALERT_CREATED, CHANNEL_SCAN_FINISHED, RedisPubSub
 from sqlalchemy import select
 
 from clients.python_grpc.client import (
@@ -27,6 +24,7 @@ from clients.python_grpc.client import (
     ScanProgress,
     ScanResult,
 )
+from core.ai_assistant.explain import explain_alert
 from core.browser.lock import BrowserLockTimeoutError, acquire_browser_lock
 from core.db import get_session_factory
 from core.diagnostics import (
@@ -36,6 +34,7 @@ from core.diagnostics import (
 )
 from core.disable_tasks import is_delivery_disabled
 from core.domain import AlertStage, AlertState
+from core.logging import bind_contextvars, unbind_contextvars
 from core.models import AdSnapshot, AlertEvent, FbAd
 from core.observer.browser_recovery import BrowserRecoveryEscalator
 from core.observer.db_queries import (
@@ -93,6 +92,7 @@ from core.observer.state_machine import (
     resolve_off_alert_state,
     resolve_transition,
 )
+from core.pubsub import CHANNEL_ALERT_CREATED, CHANNEL_SCAN_FINISHED, RedisPubSub
 from core.scanner.models import ScannedAdRow
 from core.settings_queries import get_or_create_observer_settings
 from core.telegram.client import TelegramBotClient

@@ -14,7 +14,6 @@ from decimal import Decimal
 from typing import AsyncIterator, TypeVar
 
 import grpc
-from core.browser.circuit_breaker import AsyncCircuitBreaker, CircuitOpenError
 
 from clients.python_grpc.v1 import (
     browser_session_pb2,
@@ -24,6 +23,7 @@ from clients.python_grpc.v1 import (
     scanner_pb2,
     scanner_pb2_grpc,
 )
+from core.browser.circuit_breaker import AsyncCircuitBreaker, CircuitOpenError
 
 logger = logging.getLogger(__name__)
 _RPC_BROWSER_CONTROL_TIMEOUT_SECONDS = 30.0

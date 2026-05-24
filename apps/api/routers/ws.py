@@ -11,10 +11,10 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from core.pubsub import ALL_DASHBOARD_CHANNELS, RedisPubSub
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from core.config import get_settings
+from core.pubsub import ALL_DASHBOARD_CHANNELS, RedisPubSub
 
 logger = logging.getLogger(__name__)
 

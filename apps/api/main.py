@@ -15,7 +15,6 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from core.logging import setup_logging
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_client import make_asgi_app as _make_prometheus_asgi_app
@@ -45,6 +44,7 @@ from apps.api.routers.ws import router as ws_router
 from core.config import get_settings
 from core.db import get_engine, get_session_factory
 from core.db.base import Base
+from core.logging import setup_logging
 from core.models import ScanRun
 from core.observer.scan_run_writer import mark_interrupted_runs
 from core.sentry import setup_sentry

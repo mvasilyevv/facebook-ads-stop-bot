@@ -11,13 +11,13 @@ import socket
 import time
 from xmlrpc.client import ServerProxy, Transport
 
-from core.alerts.send import send_telegram_via_queue
-from core.metrics import WORKER_HEARTBEAT_AGE
 from sqlalchemy import select
 
 from apps.api.routers.health import HealthDetails, collect_health_details
+from core.alerts.send import send_telegram_via_queue
 from core.config import get_settings
 from core.db import get_session_factory
+from core.metrics import WORKER_HEARTBEAT_AGE
 from core.models import ObserverSettings, TelegramSettings
 from core.observer.runtime_status import update_worker_heartbeat
 from core.telegram.client import TelegramBotClient
