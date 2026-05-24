@@ -19,7 +19,6 @@ from apps.api.deps import get_db
 from core.config import get_settings
 from core.domain import DisableTaskStatus, EnableTaskStatus
 from core.models import (
-    AdSnapshot,
     DisableTask,
     EnableTask,
     ObserverSettings,
@@ -316,17 +315,24 @@ async def collect_health_details(db: AsyncSession) -> HealthDetails:
         except Exception as exc:
             logger.warning("Health: не удалось прочитать очереди: %s", exc)
 
-    # --- Последний успешный скан ---
+    # --- Последний успешный скан (единая точка истины) ---
+    # Читаем last_successful_scan_at из ObserverSettings — это timestamp,
+    # который воркер записывает ТОЛЬКО при реальном успешном завершении цикла.
+    # Ошибки, пустые циклы и STALE_DATA не меняют это поле → пульс монотонен.
     last_scan = LastScanInfo()
     if db_healthy:
         try:
-            max_observed = await db.scalar(select(func.max(AdSnapshot.last_observed_at)))
-            if max_observed:
-                ts = max_observed if max_observed.tzinfo else max_observed.replace(tzinfo=UTC)
+            # obs_row уже может быть прочитан выше; повторно запрашиваем если нет
+            obs_row_for_scan = await db.scalar(
+                select(ObserverSettings).where(ObserverSettings.singleton_key == "default")
+            )
+            if obs_row_for_scan and obs_row_for_scan.last_successful_scan_at:
+                ts = obs_row_for_scan.last_successful_scan_at
+                ts = ts if ts.tzinfo else ts.replace(tzinfo=UTC)
                 age = (checked_at - ts).total_seconds()
                 last_scan = LastScanInfo(at=ts, age_seconds=round(age, 1))
         except Exception as exc:
-            logger.warning("Health: не удалось прочитать last_observed_at: %s", exc)
+            logger.warning("Health: не удалось прочитать last_successful_scan_at: %s", exc)
 
     # --- overall_healthy ---
     # Считаем только observer и telegram_poller как критичные воркеры.

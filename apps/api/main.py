@@ -15,8 +15,10 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from core.logging import setup_logging
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from prometheus_client import make_asgi_app as _make_prometheus_asgi_app
 from pydantic import BaseModel
 from sqlalchemy import delete, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -39,6 +41,7 @@ from apps.api.routers import (
 )
 from apps.api.routers.campaign_creator import router as campaign_creator_router
 from apps.api.routers.campaign_recorder import router as campaign_recorder_router
+from apps.api.routers.ws import router as ws_router
 from core.config import get_settings
 from core.db import get_engine, get_session_factory
 from core.db.base import Base
@@ -107,6 +110,7 @@ async def _scan_runs_housekeeping_loop() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Создаём таблицы только когда проект работает без Alembic-миграций."""
+    setup_logging("api")
     engine = get_engine()
     if not _has_alembic_migrations():
         async with engine.begin() as conn:
@@ -181,6 +185,12 @@ app.include_router(tma.router)
 app.include_router(campaign_recorder_router, dependencies=_api_key_dep)
 # Campaign Creator — запуск автосоздания кампаний
 app.include_router(campaign_creator_router, dependencies=_api_key_dep)
+# WebSocket — realtime-события для дашборда (без явной аутентификации для MVP)
+app.include_router(ws_router)
+
+# Prometheus-метрики — открыт без аутентификации (защищается на уровне reverse-proxy/VPN)
+_metrics_app = _make_prometheus_asgi_app()
+app.mount("/metrics", _metrics_app)
 
 
 # ==========================================

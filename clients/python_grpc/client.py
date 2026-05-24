@@ -14,6 +14,7 @@ from decimal import Decimal
 from typing import AsyncIterator, TypeVar
 
 import grpc
+from core.browser.circuit_breaker import AsyncCircuitBreaker, CircuitOpenError
 
 from clients.python_grpc.v1 import (
     browser_session_pb2,
@@ -31,6 +32,17 @@ _RPC_TOGGLE_READ_TIMEOUT_SECONDS = 12.0
 _RPC_TOGGLE_CLICK_TIMEOUT_SECONDS = 15.0
 _RPC_TOGGLE_CONFIRM_EXTRA_TIMEOUT_SECONDS = 15.0
 _T = TypeVar("_T")
+
+
+class BrowserUnavailableError(RuntimeError):
+    """Browser-agent недоступен — circuit-breaker открыт.
+
+    Вызывающий код может поймать это исключение вместо ожидания таймаута gRPC.
+    """
+
+    def __init__(self, cause: CircuitOpenError) -> None:
+        self.cause = cause
+        super().__init__(f"Browser-agent недоступен: circuit-breaker открыт. {cause}")
 
 
 class ScanDataUnavailableError(RuntimeError):
@@ -119,6 +131,13 @@ class BrowserAgentClient:
         self._creator_stub: creator_pb2_grpc.CreatorServiceStub | None = None
         self._session_id: str | None = None
         self._cdp_port: int | None = None
+        # Circuit-breaker для gRPC-вызовов к browser-agent:
+        # 3 фейла подряд → OPEN на 60 сек, пробный запрос → CLOSED или OPEN снова.
+        self._circuit_breaker = AsyncCircuitBreaker(
+            name="browser-agent",
+            failure_threshold=3,
+            recovery_timeout=60.0,
+        )
 
     async def start(self) -> None:
         """Открыть gRPC канал."""
@@ -279,6 +298,12 @@ class BrowserAgentClient:
 
         Стримит ScanProgress для каждого прохода, в конце возвращает ScanResult.
         """
+        # Проверяем circuit-breaker до начала стриминга (включая переход OPEN → HALF_OPEN)
+        try:
+            await self._circuit_breaker.check_open()
+        except CircuitOpenError as exc:
+            raise BrowserUnavailableError(exc) from exc
+
         yielded_any = False
         recovered_missing_session = False
 
@@ -342,6 +367,8 @@ class BrowserAgentClient:
                             e.message,
                         )
                         raise RuntimeError(e.message or "Browser-agent вернул ошибку сканирования.")
+                # Поток завершён успешно — фиксируем успех в circuit-breaker
+                await self._circuit_breaker.record_success()
                 return
             except Exception as exc:
                 if (
@@ -352,6 +379,9 @@ class BrowserAgentClient:
                     recovered_missing_session = True
                     await self._recover_missing_browser_session(exc, "сканирования")
                     continue
+                # Фиксируем транспортную ошибку в circuit-breaker (не сессионные сбои)
+                if not _is_missing_browser_session_error(exc):
+                    await self._circuit_breaker.record_failure(exc)
                 raise
             finally:
                 if stream is not None and not completed and hasattr(stream, "cancel"):
@@ -618,14 +648,21 @@ class BrowserAgentClient:
         operation_name: str,
         call_factory: Callable[[], Awaitable[_T]],
     ) -> _T:
+        """Выполнить gRPC-вызов с восстановлением сессии и защитой circuit-breaker."""
         await self.ensure_browser_session()
         try:
-            return await call_factory()
+            return await self._circuit_breaker.call(call_factory)
+        except CircuitOpenError as exc:
+            raise BrowserUnavailableError(exc) from exc
         except Exception as exc:
             if not _is_missing_browser_session_error(exc):
                 raise
             await self._recover_missing_browser_session(exc, operation_name)
-            return await call_factory()
+            # Повторный вызов тоже проходит через circuit-breaker
+            try:
+                return await self._circuit_breaker.call(call_factory)
+            except CircuitOpenError as cb_exc:
+                raise BrowserUnavailableError(cb_exc) from cb_exc
 
     async def _recover_missing_browser_session(self, exc: Exception, operation_name: str) -> str:
         old_session_id = self._session_id

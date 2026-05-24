@@ -361,10 +361,17 @@ async function prepareAdsTableForScan(
       Math.max(SCAN_POST_REFRESH_MIN_ROWS_WAIT_MS, settleDelayMs + SCAN_POST_REFRESH_EXTRA_WAIT_MS),
       isCancelled,
     );
-  }
+    if (isCancelled?.()) return;
 
-  // Второй reset+sleep+waitForDomStable убран: основной reset уже сделан выше, а виртуальное окно
-  // стабилизируется внутри waitForInitialAdsRows.
+    // Второй reset нужен после refresh: Meta во время обновления данных
+    // может оставить виртуальное окно таблицы НЕ наверху, и pass 1 основного
+    // цикла увидит «середину» списка, а первые объявления выпадут до того
+    // как scroll до них дойдёт. resetAdsTableScroll + waitForDomStable
+    // гарантируют что мы начинаем парсинг с верхней границы виртуального окна.
+    await resetAdsTableScroll(page);
+    if (isCancelled?.()) return;
+    await waitForDomStable(page, 1.5, 0.1, isCancelled);
+  }
 }
 
 async function waitForVisibleRowsAfterScroll(

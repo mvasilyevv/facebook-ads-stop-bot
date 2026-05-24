@@ -10,6 +10,10 @@ import signal
 import sys
 import time
 
+from core.alerts.drain_worker import run_drain_loop
+from core.alerts.queue import AlertQueue
+from core.telegram.digest_scheduler import run_digest_scheduler
+
 from core.config import get_settings
 from core.sentry import setup_sentry
 from core.telegram.bot_handler import handle_update
@@ -39,6 +43,7 @@ async def _register_bot_ui(client: TelegramBotClient) -> str:
     commands = [
         {"command": "start", "description": "Главное меню"},
         {"command": "app", "description": "Открыть приложение"},
+        {"command": "digest", "description": "Ежедневный дайджест за вчера"},
         {"command": "help", "description": "Справка"},
     ]
     # Админские команды супергруппы — показываем только администраторам.
@@ -257,15 +262,57 @@ async def main() -> None:
         logger.info("TELEGRAM_CHAT_ID не задан — жду первое сообщение для определения...")
 
     with PidFileLock(_PID_FILE):
-        await poller_runtime_loop(shutdown_event=_shutdown_event)
+        # Запускаем drain-loop для Redis-очереди алёртов как background-task
+        alert_queue = AlertQueue(redis_url=settings.redis_url)
+        # Создаём временный клиент для drain-loop (токен может меняться, но для
+        # доставки алёртов используем значение из настроек — не из БД)
+        drain_client = TelegramBotClient(bot_token=settings.telegram_bot_token)
+        drain_task = asyncio.create_task(
+            run_drain_loop(alert_queue, drain_client),
+            name="alerts-drain-loop",
+        )
+
+        # Запускаем планировщик daily digest если включён и задан chat_id
+        digest_task = None
+        if settings.digest_enabled and settings.telegram_chat_id:
+            digest_client = TelegramBotClient(bot_token=settings.telegram_bot_token)
+            digest_task = asyncio.create_task(
+                run_digest_scheduler(
+                    digest_client,
+                    settings.telegram_chat_id,
+                    tz=settings.digest_timezone,
+                    hour=settings.digest_hour,
+                ),
+                name="digest-scheduler",
+            )
+        else:
+            digest_client = None
+
+        try:
+            await poller_runtime_loop(shutdown_event=_shutdown_event)
+        finally:
+            drain_task.cancel()
+            try:
+                await drain_task
+            except asyncio.CancelledError:
+                pass
+            await alert_queue.close()
+            await drain_client.close()
+
+            if digest_task is not None:
+                digest_task.cancel()
+                try:
+                    await digest_task
+                except asyncio.CancelledError:
+                    pass
+            if digest_client is not None:
+                await digest_client.close()
 
 
 if __name__ == "__main__":
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)-7s [%(name)s] %(message)s",
-        stream=sys.stdout,
-    )
+    from core.logging import setup_logging
+
+    setup_logging("telegram_poller")
     try:
         asyncio.run(main())
     except RuntimeError as exc:

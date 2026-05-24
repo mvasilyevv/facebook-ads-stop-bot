@@ -92,7 +92,9 @@ class CooldownTracker:
 
 
 def _send_telegram(text: str) -> None:
-    """Синхронно отправляет сообщение в Telegram через asyncio.run."""
+    """Синхронно отправляет сообщение через Redis-очередь (или напрямую как fallback)."""
+    from core.alerts.send import send_telegram_via_queue
+
     from core.config import get_settings
     from core.telegram.client import TelegramBotClient
 
@@ -104,16 +106,17 @@ def _send_telegram(text: str) -> None:
         )
         return
 
-    # forum-topic режим удалён — ops thread_id всегда None
-    message_thread_id: int | None = None
+    # Создаём клиент заранее — передаём как fallback_client, чтобы тесты
+    # могли мокировать TelegramBotClient и видеть вызовы send_message.
+    client = TelegramBotClient(bot_token=settings.telegram_bot_token)
 
     async def _send() -> None:
-        client = TelegramBotClient(settings.telegram_bot_token)
         try:
-            await client.send_message(
+            # Crash-алерт от supervisor — идёт через Redis-очередь для надёжной доставки
+            await send_telegram_via_queue(
                 chat_id=settings.telegram_chat_id,
                 text=text,
-                message_thread_id=message_thread_id,
+                fallback_client=client,
             )
         finally:
             await client.close()
