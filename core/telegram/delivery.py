@@ -27,7 +27,7 @@ from core.models import (
     FbAd,
     FbAdset,
 )
-from core.telegram.client import TelegramBotClient
+from core.telegram.client import TelegramAPIError, TelegramBotClient
 from core.telegram.message_refs import (
     load_message_refs_by_chat,
     normalize_incident_key,
@@ -371,7 +371,9 @@ def render_disable_task_runtime_message(
             fb_ad_id=fb_ad_id,
             requested_by_username=requested_by_username,
             context=context,
-            include_metrics=False,
+            # Включаем метрики и причину стопа: если основной STOP-алерт не дошёл
+            # (TG fault), это сообщение остаётся единственным источником информации.
+            include_metrics=True,
             footer="🔎 Ждём подтверждения OFF в следующем скане",
         )
 
@@ -507,6 +509,22 @@ async def _maybe_post_general_link(
             message_thread_id=general_thread_id,
             text=short_text,
         )
+    except TelegramAPIError as exc:
+        # Топик General был удалён — это нормальная ситуация, не алёрт-блокер.
+        desc = (exc.description or "").lower()
+        if "thread" in desc or exc.error_code == 400:
+            logger.warning(
+                "Cross-link в General пропущен (chat_id=%s stream=%s): %s",
+                destination.chat_id,
+                stream_kind,
+                exc.description or exc.error_code,
+            )
+        else:
+            logger.exception(
+                "Не удалось отправить cross-link в General для chat_id=%s stream=%s",
+                destination.chat_id,
+                stream_kind,
+            )
     except Exception:
         logger.exception(
             "Не удалось отправить cross-link в General для chat_id=%s stream=%s",
