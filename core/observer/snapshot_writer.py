@@ -12,11 +12,12 @@ import uuid as _uuid
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.db import get_session_factory
+from core.domain import AlertState
 from core.models import (
     AdMetricHistory,
     AdSnapshot,
@@ -456,6 +457,17 @@ async def _upsert_ad_snapshots(
 
     stmt = pg_insert(AdSnapshot).values(snapshot_rows)
 
+    # CAS-инвариант FSM: терминальные состояния DISABLED/CLAIMED никогда
+    # не должны быть перезаписаны observer'ом обратно в STOP_SENT/WARNING_SENT/NORMAL.
+    # Это сохраняет однонаправленность FSM при гонке observer ↔ disable_worker.
+    alert_state_cas = case(
+        (
+            AdSnapshot.alert_state.in_([AlertState.DISABLED, AlertState.CLAIMED]),
+            AdSnapshot.alert_state,
+        ),
+        else_=stmt.excluded.alert_state,
+    )
+
     update_cols = {
         "ad_id": stmt.excluded.ad_id,
         "delivery_status": stmt.excluded.delivery_status,
@@ -478,7 +490,7 @@ async def _upsert_ad_snapshots(
         "outbound_ctr": stmt.excluded.outbound_ctr,
         "landing_page_views": stmt.excluded.landing_page_views,
         "cost_per_landing_page_view": stmt.excluded.cost_per_landing_page_view,
-        "alert_state": stmt.excluded.alert_state,
+        "alert_state": alert_state_cas,
         "current_stage": stmt.excluded.current_stage,
         "warning_rule_codes": stmt.excluded.warning_rule_codes,
         "stop_rule_codes": stmt.excluded.stop_rule_codes,
