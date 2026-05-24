@@ -17,7 +17,9 @@ from core.settings_queries import get_observer_settings
 
 logger = logging.getLogger(__name__)
 
-ENABLE_TASK_STALE_SECONDS = 75
+# Таймаут согласован с ENABLE_BROWSER_TASK_TIMEOUT_SECONDS=60 и даёт 60-секундный
+# запас, по аналогии с DISABLE_TASK_STALE_MINUTES=2 в disable-очереди.
+ENABLE_TASK_STALE_SECONDS = 120
 ENABLE_TASK_STALE_TIMEOUT = timedelta(seconds=ENABLE_TASK_STALE_SECONDS)
 ACTIVE_ENABLE_TASK_STATUSES = (
     EnableTaskStatus.PENDING,

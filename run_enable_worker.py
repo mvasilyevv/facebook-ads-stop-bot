@@ -8,37 +8,35 @@ import logging
 import pathlib
 import signal
 import sys
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
+from core.logging import setup_logging
+from core.pubsub import CHANNEL_TASK_CHANGED, RedisPubSub
+from core.task_queue.grpc_worker_mixin import (
+    close_grpc_client,
+    init_grpc_client,
+    load_vision_settings,
+)
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import selectinload
 
-from clients.python_grpc.client import BrowserAgentClient, BrowserAgentConfig
+from clients.python_grpc.client import BrowserAgentClient
 from core.browser.lock import acquire_browser_lock
 from core.config import get_settings
-from core.crypto import decrypt
 from core.db import get_session_factory
 from core.domain import AlertStage, AlertState, DisableTaskStatus, EnableTaskStatus
 from core.enable_tasks import reconcile_enable_tasks
-from core.models import AdSnapshot, DisableTask, EnableTask, VisionSettings
-from core.observer.runtime_status import update_worker_heartbeat
+from core.models import AdSnapshot, DisableTask, EnableTask
+from core.observer.runtime_status import update_worker_heartbeat  # noqa: F401 (тесты патчат)
 from core.sentry import setup_sentry
 from core.task_queue import PostgresTaskQueue
 from core.telegram.client import TelegramBotClient
-from core.telegram.delivery import (
-    broadcast_enable_task_runtime_message,
-    render_enable_task_runtime_message,
-)
-from core.worker_utils import PidFileLock, calculate_retry_delay, wait_for_shutdown_or_timeout
+from core.telegram.delivery import broadcast_enable_task_runtime_message
+from core.worker_utils import PidFileLock, wait_for_shutdown_or_timeout
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)-7s [%(name)s] %(message)s",
-    stream=sys.stdout,
-)
+setup_logging("enable_worker")
 logger = logging.getLogger(__name__)
 VISION_SETTINGS_POLL_INTERVAL_SECONDS = 5
-HEARTBEAT_INTERVAL_SECONDS = 30
 
 # Параметры подтверждения для enable
 ENABLE_CONFIRMATION_POLL_DELAYS_SECONDS = (0.0, 3.0, 3.0, 3.0, 4.0, 4.0)
@@ -48,115 +46,12 @@ ENABLE_BROWSER_TASK_TIMEOUT_SECONDS = 60
 ENABLE_SINGLE_SEARCH_MAX_SCROLL_PASSES = 120
 ENABLE_BROWSER_LOCK_TIMEOUT_SECONDS = 180.0
 
-# Ошибки gRPC, указывающие на потерю соединения с браузером
-_GRPC_CONNECTION_ERROR_MARKERS = (
-    "unavailable",
-    "connection refused",
-    "connection closed",
-    "connection reset",
-    "transport closed",
-    "goaway",
-    "stream closed",
-    "deadline exceeded",
-)
-
-
-async def _heartbeat_loop(status_ref: list[str], message_ref: list[str | None]) -> None:
-    """Фоновая задача: отправляет heartbeat enable worker каждые 30 секунд."""
-    while True:
-        await update_worker_heartbeat(
-            "enable",
-            status=status_ref[0],
-            message=message_ref[0],
-        )
-        await asyncio.sleep(HEARTBEAT_INTERVAL_SECONDS)
-
-
 # Общая очередь задач на включение
 _enable_queue = PostgresTaskQueue(
     model_class=EnableTask,
     status_enum=EnableTaskStatus,
     eager_loads=[EnableTask.fb_ad],
 )
-
-
-def _is_grpc_connection_error(exc: Exception) -> bool:
-    """Определяет, относится ли ошибка к потере соединения с browser-agent."""
-    if isinstance(exc, (ConnectionError, OSError)):
-        return True
-    message = str(exc).casefold()
-    return any(marker in message for marker in _GRPC_CONNECTION_ERROR_MARKERS)
-
-
-def _build_browser_runtime_error_message(exc: Exception) -> str:
-    """Формирует текст ошибки браузерной операции для retry-задачи."""
-    detail = str(exc).strip()
-    if not detail:
-        return "Браузерная операция включения завершилась ошибкой"
-    return f"Браузерная операция включения завершилась ошибкой: {detail}"
-
-
-def _build_client_config(
-    vision_token: str, vision_url: str, vision_profile: str
-) -> BrowserAgentConfig:
-    """Создаёт конфигурацию gRPC клиента из Vision настроек."""
-    settings = get_settings()
-    return BrowserAgentConfig(
-        vision_x_token=vision_token,
-        vision_api_url=vision_url,
-        vision_profile_id=vision_profile,
-        vision_folder_id=settings.vision_folder_id
-        if hasattr(settings, "vision_folder_id")
-        else None,
-    )
-
-
-async def _init_grpc_client(
-    vision_token: str,
-    vision_url: str,
-    vision_profile: str,
-) -> BrowserAgentClient:
-    """Создаёт, запускает и подключает gRPC клиент к browser-agent."""
-    config = _build_client_config(vision_token, vision_url, vision_profile)
-    client = BrowserAgentClient(config)
-    await client.start()
-    await client.start_browser()
-    logger.info("gRPC клиент подключён, session_id=%s", client.session_id)
-    return client
-
-
-async def _close_runtime_resources(grpc_client: BrowserAgentClient | None) -> None:
-    """Закрывает gRPC клиент с таймаутами."""
-    if grpc_client is not None:
-        try:
-            await asyncio.wait_for(grpc_client.disconnect_browser(), timeout=15)
-        except (asyncio.TimeoutError, Exception):
-            logger.debug("Enable worker: не удалось отключиться от browser-agent", exc_info=True)
-        try:
-            await asyncio.wait_for(grpc_client.close(), timeout=10)
-        except (asyncio.TimeoutError, Exception):
-            logger.debug("Enable worker: не удалось закрыть gRPC канал", exc_info=True)
-
-
-async def _load_vision_settings() -> tuple[str, str, str]:
-    """Загружает Vision-настройки из БД с fallback на .env."""
-    settings = get_settings()
-    factory = get_session_factory()
-    try:
-        async with factory() as session:
-            result = await session.execute(
-                select(VisionSettings).where(VisionSettings.singleton_key == "default")
-            )
-            row = result.scalar_one_or_none()
-            if row and row.x_token_encrypted and row.profile_id:
-                token = decrypt(row.x_token_encrypted)
-                if token:
-                    logger.info("Vision-настройки загружены из БД")
-                    return token, row.api_url or settings.vision_api_url, row.profile_id
-    except Exception:
-        logger.debug("Не удалось загрузить Vision-настройки из БД", exc_info=True)
-
-    return settings.vision_x_token, settings.vision_api_url, settings.vision_profile_id
 
 
 async def _reconnect_browser(client: BrowserAgentClient) -> str:
@@ -172,17 +67,13 @@ async def claim_next_task():
     factory = get_session_factory()
     async with factory() as session:
         now = datetime.now(UTC)
+        # Disable-задачи имеют приоритет — enable ждёт освобождения браузера
         disable_count = await session.scalar(
             select(func.count())
             .select_from(DisableTask)
             .where(
                 or_(
-                    DisableTask.status.in_(
-                        (
-                            DisableTaskStatus.PENDING,
-                            DisableTaskStatus.RUNNING,
-                        )
-                    ),
+                    DisableTask.status.in_((DisableTaskStatus.PENDING, DisableTaskStatus.RUNNING)),
                     and_(
                         DisableTask.status == DisableTaskStatus.RETRYING,
                         DisableTask.next_retry_at <= now,
@@ -219,12 +110,7 @@ async def has_claimable_enable_tasks() -> bool:
             .select_from(DisableTask)
             .where(
                 or_(
-                    DisableTask.status.in_(
-                        (
-                            DisableTaskStatus.PENDING,
-                            DisableTaskStatus.RUNNING,
-                        )
-                    ),
+                    DisableTask.status.in_((DisableTaskStatus.PENDING, DisableTaskStatus.RUNNING)),
                     and_(
                         DisableTask.status == DisableTaskStatus.RETRYING,
                         DisableTask.next_retry_at <= now,
@@ -385,7 +271,30 @@ async def mark_succeeded(task_id) -> None:
         result = await session.execute(select(EnableTask).where(EnableTask.id == task_id))
         task = result.scalar_one_or_none()
         if task:
+            if task.status == EnableTaskStatus.CANCELLED:
+                logger.info(
+                    "Задача %s уже отменена как неактуальная — пропускаю mark_succeeded",
+                    task.id,
+                )
+                return
             await _enable_queue.mark_succeeded(session, task)
+
+            # После успешного включения сбрасываем alert_state снэпшота: объявление снова крутится.
+            # FSM формально не предусматривает переход из DISABLED обратно, но включение — это
+            # естественный сброс терминального состояния, поэтому пишем поле напрямую.
+            snap_result = await session.execute(
+                select(AdSnapshot).where(AdSnapshot.ad_id == task.ad_id)
+            )
+            snapshot = snap_result.scalar_one_or_none()
+            if snapshot and snapshot.alert_state in (
+                AlertState.DISABLED,
+                AlertState.CLAIMED,
+                AlertState.STOP_SENT,
+                AlertState.WARNING_SENT,
+            ):
+                snapshot.alert_state = AlertState.NORMAL
+                snapshot.open_state_token = None
+
             await session.commit()
 
 
@@ -396,6 +305,12 @@ async def mark_retrying(task_id, error: str, next_retry_at: datetime) -> None:
         result = await session.execute(select(EnableTask).where(EnableTask.id == task_id))
         task = result.scalar_one_or_none()
         if task:
+            if task.status == EnableTaskStatus.CANCELLED:
+                logger.info(
+                    "Задача %s уже отменена как неактуальная — пропускаю mark_retrying",
+                    task.id,
+                )
+                return
             task.status = EnableTaskStatus.RETRYING
             task.completed_at = None
             task.last_error = error[:500]
@@ -410,6 +325,12 @@ async def mark_failed(task_id, error: str) -> None:
         result = await session.execute(select(EnableTask).where(EnableTask.id == task_id))
         task = result.scalar_one_or_none()
         if task:
+            if task.status == EnableTaskStatus.CANCELLED:
+                logger.info(
+                    "Задача %s уже отменена как неактуальная — пропускаю mark_failed",
+                    task.id,
+                )
+                return
             await _enable_queue.mark_failed(session, task)
             await session.commit()
 
@@ -445,6 +366,23 @@ async def _send_enable_task_runtime_update(
         next_retry_at=next_retry_at,
     )
 
+    # Публикуем событие в шину для WS-дашборда
+    try:
+        _pubsub = RedisPubSub(get_settings().redis_url)
+        await _pubsub.publish(
+            CHANNEL_TASK_CHANGED,
+            {
+                "type": "task_changed",
+                "task_kind": "enable",
+                "task_id": str(task_row.id),
+                "fb_ad_id": fb_ad.fb_ad_id if fb_ad else "",
+                "status": status,
+            },
+        )
+        await _pubsub.close()
+    except Exception:
+        logger.debug("Enable worker: не удалось опубликовать task_changed", exc_info=True)
+
 
 async def _process_enable_task_result(
     *,
@@ -453,61 +391,61 @@ async def _process_enable_task_result(
     message: str,
     tg_client,
     tg_chat_id: str,
-    send_completion_callback,
+    send_completion_callback=None,
 ) -> None:
-    """Фиксирует итог обработки enable-задачи и рассылает runtime-обновление."""
-    next_retry_at = None
-    if success:
-        await mark_succeeded(task.id)
-        status = EnableTaskStatus.SUCCEEDED
-        logger.info("Объявление %s успешно включено", task.fb_ad.fb_ad_id)
-    else:
-        attempt = task.attempt_count
-        max_attempts = task.max_attempts
-        if attempt >= max_attempts:
-            await mark_failed(task.id, message)
-            status = EnableTaskStatus.FAILED
-            logger.error(
-                "Задача %s для %s провалена: исчерпаны все %s попыток",
-                task.id,
-                task.fb_ad.fb_ad_id,
-                max_attempts,
-            )
-        else:
-            delay = calculate_retry_delay(attempt)
-            next_retry_at = datetime.now(tz=UTC) + timedelta(seconds=delay)
-            await mark_retrying(task.id, message, next_retry_at)
-            status = EnableTaskStatus.RETRYING
-            logger.warning(
-                "Не удалось включить %s: %s. Retry через %s сек",
-                task.fb_ad.fb_ad_id,
-                message,
-                delay,
-            )
+    """Фиксирует итог enable-задачи (обёртка для обратной совместимости с тестами).
 
-    if send_completion_callback:
-        await send_completion_callback(task, status.value, message, next_retry_at)
-        return
+    Берёт mark_* из текущего модульного пространства, чтобы monkeypatch работал.
+    """
+    from apps.enable_worker.main import _process_enable_task_result as _inner
 
-    if tg_client and tg_chat_id:
-        try:
-            await tg_client.send_message(
-                chat_id=tg_chat_id,
-                text=render_enable_task_runtime_message(
-                    ad_name=task.fb_ad.ad_name,
-                    fb_ad_id=task.fb_ad.fb_ad_id,
-                    requested_by_username=task.requested_by_username or "",
-                    status=status.value,
-                    detail=message,
-                    next_retry_at=next_retry_at,
-                ),
-            )
-        except Exception:
-            logger.exception("Не удалось отправить уведомление в TG")
+    await _inner(
+        task=task,
+        success=success,
+        message=message,
+        tg_client=tg_client,
+        tg_chat_id=tg_chat_id,
+        send_completion_callback=send_completion_callback,
+        mark_succeeded=mark_succeeded,
+        mark_retrying=mark_retrying,
+        mark_failed=mark_failed,
+    )
+
+
+def _build_client_config(vision_token: str, vision_url: str, vision_profile: str):
+    """Создаёт конфигурацию gRPC клиента из Vision настроек.
+
+    Использует get_settings() из текущего модуля, чтобы тесты могли патчить его.
+    """
+    from clients.python_grpc.client import BrowserAgentConfig
+
+    settings = get_settings()
+    return BrowserAgentConfig(
+        vision_x_token=vision_token,
+        vision_api_url=vision_url,
+        vision_profile_id=vision_profile,
+        vision_folder_id=getattr(settings, "vision_folder_id", None),
+    )
+
+
+async def _heartbeat_loop(status_ref: list[str], message_ref: list[str | None]) -> None:
+    """Фоновая задача: отправляет heartbeat enable worker каждые 30 секунд.
+
+    Использует update_worker_heartbeat из пространства текущего модуля,
+    чтобы тесты могли патчить run_enable_worker.update_worker_heartbeat.
+    """
+    _HEARTBEAT_INTERVAL = 30
+    while True:
+        await update_worker_heartbeat(
+            "enable",
+            status=status_ref[0],
+            message=message_ref[0],
+        )
+        await asyncio.sleep(_HEARTBEAT_INTERVAL)
 
 
 async def enable_worker_loop(
-    client: BrowserAgentClient,
+    client,
     tg_client,
     tg_chat_id: str,
     poll_interval: int = 5,
@@ -516,118 +454,26 @@ async def enable_worker_loop(
     status_ref: list[str] | None = None,
     message_ref: list[str | None] | None = None,
 ) -> None:
-    """Бесконечный цикл обработки задач на включение."""
-    while not (shutdown_event and shutdown_event.is_set()):
-        try:
-            task = await claim_next_task()
-            if task is None:
-                if status_ref is not None:
-                    status_ref[0] = "idle"
-                if message_ref is not None:
-                    message_ref[0] = None
-                try:
-                    if shutdown_event:
-                        await asyncio.wait_for(shutdown_event.wait(), timeout=poll_interval)
-                        break
-                except asyncio.TimeoutError:
-                    pass
-                continue
+    """Бесконечный цикл обработки задач на включение (обратная совместимость)."""
+    from apps.enable_worker.main import enable_worker_loop as _inner_loop
 
-            if status_ref is not None:
-                status_ref[0] = "busy"
-            if message_ref is not None:
-                message_ref[0] = f"Задача {task.id} для {task.fb_ad.fb_ad_id}"
-
-            logger.info(
-                "Enable worker: выполняю задачу %s для объявления %s",
-                task.id,
-                task.fb_ad.fb_ad_id,
-            )
-
-            blocked_message = await _cancel_enable_task_if_alert_blocked(task.id)
-            if blocked_message:
-                logger.warning(
-                    "Enable worker: задача %s для %s отменена перед включением: %s",
-                    task.id,
-                    task.fb_ad.fb_ad_id,
-                    blocked_message,
-                )
-                await _send_enable_task_runtime_update(
-                    task,
-                    status=EnableTaskStatus.CANCELLED.value,
-                    detail=blocked_message,
-                )
-                continue
-
-            try:
-                success, message = await asyncio.wait_for(
-                    _execute_enable_single_locked(client, task.fb_ad.fb_ad_id),
-                    timeout=ENABLE_BROWSER_TASK_TIMEOUT_SECONDS,
-                )
-            except asyncio.TimeoutError:
-                timeout_message = (
-                    f"Браузерная операция включения превысила таймаут "
-                    f"{ENABLE_BROWSER_TASK_TIMEOUT_SECONDS} сек"
-                )
-                logger.error(
-                    "Enable worker: задача %s для %s зависла дольше %s сек, переподключаю браузер",
-                    task.id,
-                    task.fb_ad.fb_ad_id,
-                    ENABLE_BROWSER_TASK_TIMEOUT_SECONDS,
-                )
-                await _process_enable_task_result(
-                    task=task,
-                    success=False,
-                    message=timeout_message,
-                    tg_client=tg_client,
-                    tg_chat_id=tg_chat_id,
-                    send_completion_callback=send_completion_callback,
-                )
-                # Переподключаем браузер при таймауте
-                await _reconnect_browser(client)
-                continue
-            except Exception as exc:
-                runtime_message = _build_browser_runtime_error_message(exc)
-                logger.error(
-                    "Enable worker: задача %s для %s завершилась ошибкой, переподключаю браузер",
-                    task.id,
-                    task.fb_ad.fb_ad_id,
-                    exc_info=True,
-                )
-                await _process_enable_task_result(
-                    task=task,
-                    success=False,
-                    message=runtime_message,
-                    tg_client=tg_client,
-                    tg_chat_id=tg_chat_id,
-                    send_completion_callback=send_completion_callback,
-                )
-                await _reconnect_browser(client)
-                continue
-
-            await _process_enable_task_result(
-                task=task,
-                success=success,
-                message=message,
-                tg_client=tg_client,
-                tg_chat_id=tg_chat_id,
-                send_completion_callback=send_completion_callback,
-            )
-
-        except Exception as exc:
-            if _is_grpc_connection_error(exc):
-                logger.error(
-                    "Enable worker: потеряно соединение с browser-agent, нужен reconnect: %s",
-                    exc,
-                )
-                try:
-                    await _reconnect_browser(client)
-                except Exception:
-                    logger.exception("Enable worker: не удалось переподключить browser-agent")
-                    await asyncio.sleep(poll_interval)
-                continue
-            logger.exception("Enable worker: ошибка в цикле")
-            await asyncio.sleep(poll_interval)
+    await _inner_loop(
+        client,
+        tg_client,
+        tg_chat_id,
+        poll_interval=poll_interval,
+        shutdown_event=shutdown_event,
+        send_completion_callback=send_completion_callback,
+        status_ref=status_ref,
+        message_ref=message_ref,
+        claim_next_task=claim_next_task,
+        execute_enable=_execute_enable_single_locked,
+        mark_succeeded=mark_succeeded,
+        mark_retrying=mark_retrying,
+        mark_failed=mark_failed,
+        cancel_if_alert_blocked=_cancel_enable_task_if_alert_blocked,
+        reconnect_browser=_reconnect_browser,
+    )
 
 
 async def main() -> None:
@@ -647,7 +493,6 @@ async def main() -> None:
 
     grpc_client: BrowserAgentClient | None = None
 
-    # Разделяемый статус для heartbeat-задачи
     status_ref: list[str] = ["idle"]
     message_ref: list[str | None] = [None]
     heartbeat_task = asyncio.create_task(_heartbeat_loop(status_ref, message_ref))
@@ -658,13 +503,12 @@ async def main() -> None:
                 status_ref[0] = "idle"
                 message_ref[0] = None
                 if await wait_for_shutdown_or_timeout(
-                    shutdown_event,
-                    VISION_SETTINGS_POLL_INTERVAL_SECONDS,
+                    shutdown_event, VISION_SETTINGS_POLL_INTERVAL_SECONDS
                 ):
                     break
                 continue
 
-            vision_x_token, vision_api_url, vision_profile_id = await _load_vision_settings()
+            vision_x_token, vision_api_url, vision_profile_id = await load_vision_settings()
             if not vision_x_token or not vision_profile_id:
                 if not waiting_for_vision_logged:
                     logger.info(
@@ -673,8 +517,7 @@ async def main() -> None:
                     waiting_for_vision_logged = True
                 status_ref[0] = "idle"
                 if await wait_for_shutdown_or_timeout(
-                    shutdown_event,
-                    VISION_SETTINGS_POLL_INTERVAL_SECONDS,
+                    shutdown_event, VISION_SETTINGS_POLL_INTERVAL_SECONDS
                 ):
                     break
                 continue
@@ -682,10 +525,11 @@ async def main() -> None:
             waiting_for_vision_logged = False
 
             try:
-                grpc_client = await _init_grpc_client(
+                grpc_client = await init_grpc_client(
                     vision_x_token,
                     vision_api_url,
                     vision_profile_id,
+                    worker_name="enable_worker",
                 )
 
                 await enable_worker_loop(
@@ -712,12 +556,11 @@ async def main() -> None:
                     break
                 logger.exception("Enable worker: ошибка запуска или подключения к browser-agent")
                 if await wait_for_shutdown_or_timeout(
-                    shutdown_event,
-                    VISION_SETTINGS_POLL_INTERVAL_SECONDS,
+                    shutdown_event, VISION_SETTINGS_POLL_INTERVAL_SECONDS
                 ):
                     break
             finally:
-                await _close_runtime_resources(grpc_client)
+                await close_grpc_client(grpc_client, worker_name="enable_worker")
                 grpc_client = None
     except KeyboardInterrupt:
         logger.info("Enable worker остановлен по Ctrl+C")

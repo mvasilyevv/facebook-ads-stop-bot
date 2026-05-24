@@ -93,8 +93,8 @@ React 19 + Vite (JSX, без TypeScript). Страницы: DashboardPage (че�
 - Сканирование, оценка правил и выполнение действий — в отдельных модулях/воркерах.
 - Весь I/O — async (httpx, asyncpg, Playwright async).
 - SQLAlchemy 2.x async, FastAPI, Pydantic v2.
-- Отключение объявления требует явного подтверждения через Telegram-кнопку.
-- FSM однонаправленная (нельзя вернуться из STOP_SENT/CLAIMED/DISABLED).
+- Отключение объявления выполняется двумя путями: (1) автоматически — observer/disable_reconciler создаёт DisableTask при срабатывании STOP-правила (`requested_by_username="bot_auto_stop"`); (2) вручную — пользователь подтверждает кнопкой в Telegram (`/ads` или inline-кнопка под алертом). В обоих случаях исполнение проходит через disable_worker; auto-задача отменяется reconcile-логикой, если объявление успело уйти из STOP до клика.
+- FSM однонаправленная: повторный WARNING после WARNING_SENT не дублируется, эскалация WARNING_SENT → STOP_SENT возможна. Обратные сбросы из STOP_SENT/CLAIMED/DISABLED разрешены только двум сервисам: observer'у через `reopen_reactivated_alert_state` (если объявление снова крутится после ранее зафиксированного DISABLED) и enable_worker'у в `mark_succeeded` (после успешного включения сбрасываем alert_state в NORMAL, минуя state_machine).
 - Доменные структуры (`ScannedAdRow`, `RuleHit`, `AlertCandidate`) — frozen dataclasses.
 - Ruff: line-length=100, target py312, rules E/F/I/B/ASYNC (E501, B008 ignored).
 - AdSnapshot — upsert по fb_ad_id (хранит последнее состояние). AlertEvent — append-only история алертов.
