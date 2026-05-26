@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
+import sqlalchemy as sa
 from sqlalchemy import (
     JSON,
     BigInteger,
@@ -987,4 +988,149 @@ class OfferRuleStat(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
 
 # === Регистрация модели ScanRun (история циклов observer'а) ===
+# === Marketing API: audit-лог и outbox мутаций ===
+from sqlalchemy.dialects.postgresql import JSONB as _JSONB  # noqa: E402
+
 from core.models.scan_runs import ScanRun  # noqa: E402, F401
+
+# В SQLite-тестах JSONB заменяем на JSON
+_JSONB_COMPAT = _JSONB().with_variant(JSON(), "sqlite")
+
+
+class MetaApiAuditLog(Base):
+    """Append-only лог всех вызовов Marketing API (для аудита и rate-limit мониторинга).
+
+    BigInteger PK (не UUID) — высокая частота вставки, нет UPDATE.
+    """
+
+    __tablename__ = "meta_api_audit_log"
+    __table_args__ = (
+        # Составной индекс для аудита по источнику
+        Index("ix_meta_api_audit_log_initiated_by_created_at", "initiated_by", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    # Только created_at — append-only, UPDATE не предусмотрен
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+    # HTTP-метод вызова к Graph API
+    method: Mapped[str] = mapped_column(String(8), nullable=False)
+    # Путь endpoint без base URL, например "/act_X/insights"
+    endpoint: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Query-параметры запроса (GET)
+    params_json: Mapped[dict[str, Any] | None] = mapped_column(_JSONB_COMPAT, nullable=True)
+    # Тело запроса (POST/PUT)
+    request_body_json: Mapped[dict[str, Any] | None] = mapped_column(_JSONB_COMPAT, nullable=True)
+    # HTTP-статус ответа; 0 при network error
+    response_status: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Полный JSON-ответ Meta
+    response_json: Mapped[dict[str, Any] | None] = mapped_column(_JSONB_COMPAT, nullable=True)
+    # Время выполнения запроса в миллисекундах
+    duration_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Инициатор вызова: "bot_observer", "ai_assistant", "manual_tg:<user_id>", и т.д.
+    initiated_by: Mapped[str] = mapped_column(String(64), nullable=False)
+    # Код ошибки Meta API (190, 17, ...)
+    error_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Subcode ошибки Meta API
+    error_subcode: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Идентификатор browser-agent сессии
+    session_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Идентификатор рекламного кабинета, если извлекаемо из endpoint
+    ad_account_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
+
+# Индекс на created_at вынесен через DDL (не в __table_args__ — иначе дублируется при migrate)
+Index("ix_meta_api_audit_log_created_at", MetaApiAuditLog.created_at)
+# Partial-индекс на ошибки — только DDL через Index с postgresql_where
+Index(
+    "ix_meta_api_audit_log_errors",
+    MetaApiAuditLog.response_status,
+    MetaApiAuditLog.created_at,
+    postgresql_where=MetaApiAuditLog.response_status >= 400,
+)
+# Partial-индекс по аккаунту — только для строк с заполненным ad_account_id
+Index(
+    "ix_meta_api_audit_log_ad_account_created_at",
+    MetaApiAuditLog.ad_account_id,
+    MetaApiAuditLog.created_at,
+    postgresql_where=MetaApiAuditLog.ad_account_id.isnot(None),
+)
+
+
+class MetaApiMutationTask(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """Outbox-задача на write-операцию через Marketing API.
+
+    Жизненный цикл: DRAFT → PENDING → RUNNING → SUCCESS/FAILED.
+    DRAFT-задачи создаются AI-ассистентом и требуют подтверждения пользователя.
+    PENDING/RETRYING-задачи исполняются meta_api_worker.
+    """
+
+    __tablename__ = "meta_api_mutation_tasks"
+    __table_args__ = (
+        # UNIQUE по idempotency_key — защита от дублирования задач
+        UniqueConstraint("idempotency_key", name="uq_meta_api_mutation_tasks_idempotency_key"),
+        # CHECK constraint — допустимые статусы (строки, не Enum)
+        sa.CheckConstraint(
+            "status IN ('DRAFT', 'PENDING', 'RUNNING', 'SUCCESS', 'FAILED', 'CANCELLED')",
+            name="ck_meta_api_mutation_tasks_status",
+        ),
+        # Индекс для PostgresTaskQueue: SELECT ... WHERE status IN (PENDING, RUNNING)
+        # AND next_retry_at <= now ORDER BY created_at
+        Index("ix_meta_api_mutation_tasks_queue", "status", "next_retry_at"),
+        # Индекс для rate-limit мониторинга per account
+        Index("ix_meta_api_mutation_tasks_account_status", "ad_account_id", "status"),
+        # Индекс для аналитики по типу мутации
+        Index(
+            "ix_meta_api_mutation_tasks_kind_status_created",
+            "mutation_kind",
+            "status",
+            "created_at",
+        ),
+        # Индекс для аудита по источнику запроса
+        Index(
+            "ix_meta_api_mutation_tasks_requested_by_status",
+            "requested_by",
+            "status",
+            "created_at",
+        ),
+    )
+
+    # Тип мутации: "pause_ad", "activate_ad", "set_budget", "clone_campaign", и т.д.
+    mutation_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    # FB entity id (ad_id / campaign_id / adset_id); "" для bulk-операций
+    target_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    # Рекламный кабинет — обязателен для rate-limit учёта per account
+    ad_account_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    # Параметры мутации в JSON
+    payload_json: Mapped[dict[str, Any]] = mapped_column(
+        _JSONB_COMPAT, nullable=False, default=dict
+    )
+    # Статус задачи (строка с CHECK constraint, не Python Enum)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="PENDING")
+    # Ключ идемпотентности — уникален в системе
+    idempotency_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    # Счётчик попыток выполнения
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Максимальное количество попыток
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
+    # Время следующей попытки (для retry с backoff)
+    next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Последняя ошибка
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Код ошибки Meta API
+    error_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Subcode ошибки Meta API
+    error_subcode: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Кто создал задачу: "ai_assistant", "manual_tg:<user_id>", "bot_auto"
+    requested_by: Mapped[str] = mapped_column(String(64), nullable=False)
+    # Кто подтвердил DRAFT→PENDING (заполняется при апруве)
+    approved_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Когда подтверждено
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # message_id TG-сообщения с inline-кнопкой подтверждения
+    approval_telegram_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    # JSON-ответ Marketing API при SUCCESS
+    result_json: Mapped[dict[str, Any] | None] = mapped_column(_JSONB_COMPAT, nullable=True)
+    # Время завершения (SUCCESS или FAILED)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
