@@ -42,11 +42,15 @@ async def _register_bot_ui(client: TelegramBotClient) -> str:
     commands = [
         {"command": "start", "description": "Главное меню"},
         {"command": "app", "description": "Открыть приложение"},
+        {"command": "ask", "description": "Спросить AI-помощника"},
         {"command": "digest", "description": "Ежедневный дайджест за вчера"},
         {"command": "help", "description": "Справка"},
     ]
     # Админские команды супергруппы — показываем только администраторам.
     admin_commands = commands + [
+        {"command": "clone", "description": "Черновик клонирования кампании"},
+        {"command": "budget", "description": "Черновик изменения бюджета"},
+        {"command": "pause_offer", "description": "Черновик массовой паузы по офферу"},
         {"command": "init_topics", "description": "Создать форумные топики и привязать к стримам"},
         {
             "command": "bind_thread",

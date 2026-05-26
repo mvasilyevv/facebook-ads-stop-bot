@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import html
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -678,3 +679,66 @@ def render_enable_recommendation_message(
             ]
         },
     )
+
+
+# ─── Draft-task (mutation outbox) сообщения ───────────────────────────────────
+
+_TASK_ID_RE = re.compile(
+    r"task_id:\s*([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"
+)
+
+
+def extract_task_id_from_tool_output(output: str) -> str | None:
+    """Извлекает UUID task_id из текста, который вернул DRAFT-tool.
+
+    DRAFT-tools (request_budget_change/clone/bulk_pause/create_campaign) возвращают
+    форматированную строку, в первой строке после "task_id: " идёт UUID. Этот хелпер
+    нужен, чтобы прицепить inline-кнопки Confirm/Reject к сообщению.
+    """
+    match = _TASK_ID_RE.search(output)
+    return match.group(1) if match else None
+
+
+def render_draft_task_message(
+    *, tool_output: str, task_id: str, header: str | None = None
+) -> TelegramOutgoingMessage:
+    """Рендер сообщения с DRAFT-задачей и inline-кнопками Confirm/Reject.
+
+    `tool_output` — текстовый результат `.run()` соответствующего DRAFT-tool.
+    `task_id` — UUID задачи (для callback_data).
+    `header` — опциональная подсказка над содержимым (например, «Изменение бюджета»).
+    """
+    header_part = (
+        f"🗒 <b>{html.escape(header)}</b>\n\n" if header else "🗒 <b>Черновик задачи</b>\n\n"
+    )
+    # Используем <pre> чтобы не ломать форматирование tool_output
+    body = f"<pre>{html.escape(tool_output)}</pre>"
+    text = header_part + body
+
+    reply_markup = {
+        "inline_keyboard": [
+            [
+                {
+                    "text": "✅ Подтвердить",
+                    "callback_data": f"draft_confirm:{task_id}",
+                },
+                {
+                    "text": "❌ Отменить",
+                    "callback_data": f"draft_reject:{task_id}",
+                },
+            ]
+        ]
+    }
+    return TelegramOutgoingMessage(text=text, reply_markup=reply_markup)
+
+
+def render_draft_task_confirmed(*, original_text: str, approved_by: str) -> str:
+    """Текст, заменяющий draft-сообщение после подтверждения (без кнопок)."""
+    safe_by = html.escape(approved_by or "—")
+    return f"{original_text}\n\n✅ <i>Подтверждено @{safe_by}, задача в очереди.</i>"
+
+
+def render_draft_task_rejected(*, original_text: str, cancelled_by: str) -> str:
+    """Текст, заменяющий draft-сообщение после отмены (без кнопок)."""
+    safe_by = html.escape(cancelled_by or "—")
+    return f"{original_text}\n\n❌ <i>Отменено @{safe_by}.</i>"

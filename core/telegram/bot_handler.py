@@ -16,6 +16,7 @@ import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from typing import Any
 
 from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
@@ -43,7 +44,15 @@ from core.telegram.delivery import (
     broadcast_enable_task_queue_message,
 )
 from core.telegram.messaging import safe_edit_or_send_message
-from core.telegram.renderer import TelegramAlertItem, build_ad_identity_lines, render_alert_message
+from core.telegram.renderer import (
+    TelegramAlertItem,
+    build_ad_identity_lines,
+    extract_task_id_from_tool_output,
+    render_alert_message,
+    render_draft_task_confirmed,
+    render_draft_task_message,
+    render_draft_task_rejected,
+)
 from core.telegram.service import (
     get_or_create_telegram_settings,
     is_owner_role,
@@ -541,9 +550,15 @@ async def _render_help(
         "/start — главное меню\n"
         "/app — открыть приложение\n"
         "/ask &lt;вопрос&gt; — спросить AI-помощника\n"
+        "/clone &lt;act_X&gt; &lt;campaign_id&gt; — черновик клонирования кампании\n"
+        "/budget &lt;act_X&gt; &lt;entity_id&gt; &lt;amount_usd&gt; — черновик изменения дневного бюджета\n"
+        "/pause_offer &lt;act_X&gt; &lt;offer_code&gt; [cpl_max] — черновик массовой паузы по офферу\n"
+        "/digest — отправить дайджест за вчера\n"
         "/bind_thread &lt;WARNING|STOP|ENABLE|OPS|GENERAL&gt; — привязать текущий форумный топик к стриму\n"
         "/init_topics — создать недостающие форумные топики (WARNING/STOP/ENABLE/OPS) и привязать их\n"
         "/help — эта справка\n\n"
+        "После /clone, /budget и /pause_offer бот пришлёт сообщение с кнопками "
+        "✅ Подтвердить / ❌ Отменить — фактическая мутация выполняется только после подтверждения.\n\n"
         "Все настройки, статистика, отключение объявлений и снуз — в Mini-App. "
         "Откройте приложение из меню слева от поля ввода или командой /app."
     )
@@ -889,6 +904,303 @@ async def _cmd_digest(
 
 
 # ==========================================
+# Команды управления mutations (DRAFT-tasks)
+# ==========================================
+
+_DRAFT_CMD_USAGE = {
+    "clone": (
+        "❓ Использование: <code>/clone &lt;ad_account_id&gt; &lt;campaign_id&gt; [причина]</code>\n"
+        "Пример: <code>/clone act_123 120201234567890 тест нового гео</code>"
+    ),
+    "budget": (
+        "❓ Использование: <code>/budget &lt;ad_account_id&gt; &lt;entity_id&gt; "
+        "&lt;amount_usd&gt; [причина]</code>\n"
+        "Пример: <code>/budget act_123 23842 50 высокий CPL</code>\n"
+        "По умолчанию меняется дневной бюджет адсета."
+    ),
+    "pause_offer": (
+        "❓ Использование: <code>/pause_offer &lt;ad_account_id&gt; &lt;offer_code&gt; "
+        "[cpl_max] [причина]</code>\n"
+        "Пример: <code>/pause_offer act_123 DRC_CR2 30 CPL выше эталона</code>"
+    ),
+}
+
+
+async def _send_draft_or_error(
+    client: TelegramBotClient,
+    *,
+    chat_id: str,
+    message_thread_id: int | None,
+    tool_output: str,
+    header: str,
+) -> None:
+    """Парсит task_id из tool_output и отправляет сообщение с кнопками Confirm/Reject."""
+    task_id = extract_task_id_from_tool_output(tool_output)
+    if task_id is None:
+        # На случай если tool изменил формат вывода — отправим как есть с пометкой
+        await _send_current_topic_message(
+            client,
+            chat_id=chat_id,
+            message_thread_id=message_thread_id,
+            text=(
+                "⚠️ Черновик создан, но не удалось извлечь task_id для inline-кнопок.\n\n"
+                f"<pre>{html.escape(tool_output)}</pre>"
+            ),
+        )
+        return
+
+    msg = render_draft_task_message(
+        tool_output=tool_output,
+        task_id=task_id,
+        header=header,
+    )
+    await _send_current_topic_message(
+        client,
+        chat_id=chat_id,
+        message_thread_id=message_thread_id,
+        text=msg.text,
+        reply_markup=msg.reply_markup,
+    )
+
+
+async def _cmd_clone(
+    client: TelegramBotClient,
+    *,
+    chat_id: str,
+    message_thread_id: int | None,
+    parts: list[str],
+    username: str,
+) -> None:
+    """Команда /clone — создать DRAFT на клонирование кампании.
+
+    Формат: /clone <ad_account_id> <source_campaign_id> [причина...]
+    """
+    if len(parts) < 3:
+        await _send_current_topic_message(
+            client,
+            chat_id=chat_id,
+            message_thread_id=message_thread_id,
+            text=_DRAFT_CMD_USAGE["clone"],
+        )
+        return
+
+    ad_account_id = parts[1].strip()
+    source_campaign_id = parts[2].strip()
+    reason = " ".join(parts[3:]).strip()
+    if not reason and username:
+        reason = f"Запрос @{username}"
+
+    from core.ai_assistant.tools.base import ToolError
+    from core.ai_assistant.tools.drafts.request_clone_campaign import RequestCloneCampaignTool
+
+    tool = RequestCloneCampaignTool()
+    try:
+        tool_output = await tool.run(
+            {
+                "ad_account_id": ad_account_id,
+                "source_campaign_id": source_campaign_id,
+                "deep_copy": True,
+                "reason": reason,
+            }
+        )
+    except ToolError as exc:
+        await _send_current_topic_message(
+            client,
+            chat_id=chat_id,
+            message_thread_id=message_thread_id,
+            text=f"❌ Не удалось создать черновик: {html.escape(str(exc))}",
+        )
+        return
+    except Exception:
+        logger.exception("Ошибка /clone")
+        await _send_current_topic_message(
+            client,
+            chat_id=chat_id,
+            message_thread_id=message_thread_id,
+            text="❌ Внутренняя ошибка при создании черновика клонирования.",
+        )
+        return
+
+    await _send_draft_or_error(
+        client,
+        chat_id=chat_id,
+        message_thread_id=message_thread_id,
+        tool_output=tool_output,
+        header="Клонирование кампании",
+    )
+
+
+async def _cmd_budget(
+    client: TelegramBotClient,
+    *,
+    chat_id: str,
+    message_thread_id: int | None,
+    parts: list[str],
+    username: str,
+) -> None:
+    """Команда /budget — создать DRAFT на изменение бюджета adset/ad.
+
+    Формат: /budget <ad_account_id> <entity_id> <amount_usd> [причина...]
+    """
+    if len(parts) < 4:
+        await _send_current_topic_message(
+            client,
+            chat_id=chat_id,
+            message_thread_id=message_thread_id,
+            text=_DRAFT_CMD_USAGE["budget"],
+        )
+        return
+
+    ad_account_id = parts[1].strip()
+    entity_id = parts[2].strip()
+    try:
+        amount_usd = float(parts[3].replace(",", "."))
+    except ValueError:
+        await _send_current_topic_message(
+            client,
+            chat_id=chat_id,
+            message_thread_id=message_thread_id,
+            text=f"❌ Бюджет должен быть числом (получили: <code>{html.escape(parts[3])}</code>)",
+        )
+        return
+
+    if amount_usd <= 0:
+        await _send_current_topic_message(
+            client,
+            chat_id=chat_id,
+            message_thread_id=message_thread_id,
+            text="❌ Бюджет должен быть положительным числом.",
+        )
+        return
+
+    reason = " ".join(parts[4:]).strip()
+    if not reason and username:
+        reason = f"Запрос @{username}"
+
+    from core.ai_assistant.tools.base import ToolError
+    from core.ai_assistant.tools.drafts.request_budget_change import RequestBudgetChangeTool
+
+    tool = RequestBudgetChangeTool()
+    try:
+        tool_output = await tool.run(
+            {
+                "ad_account_id": ad_account_id,
+                "entity_id": entity_id,
+                "entity_type": "adset",  # по умолчанию меняем бюджет адсета
+                "daily_budget_usd": amount_usd,
+                "reason": reason,
+            }
+        )
+    except ToolError as exc:
+        await _send_current_topic_message(
+            client,
+            chat_id=chat_id,
+            message_thread_id=message_thread_id,
+            text=f"❌ Не удалось создать черновик: {html.escape(str(exc))}",
+        )
+        return
+    except Exception:
+        logger.exception("Ошибка /budget")
+        await _send_current_topic_message(
+            client,
+            chat_id=chat_id,
+            message_thread_id=message_thread_id,
+            text="❌ Внутренняя ошибка при создании черновика бюджета.",
+        )
+        return
+
+    await _send_draft_or_error(
+        client,
+        chat_id=chat_id,
+        message_thread_id=message_thread_id,
+        tool_output=tool_output,
+        header="Изменение бюджета",
+    )
+
+
+async def _cmd_pause_offer(
+    client: TelegramBotClient,
+    *,
+    chat_id: str,
+    message_thread_id: int | None,
+    parts: list[str],
+    username: str,
+) -> None:
+    """Команда /pause_offer — создать DRAFT на пакетную паузу объявлений по офферу.
+
+    Формат: /pause_offer <ad_account_id> <offer_code> [cpl_max] [причина...]
+    Если cpl_max задан числом — будет фильтр cpl_gt=cpl_max.
+    """
+    if len(parts) < 3:
+        await _send_current_topic_message(
+            client,
+            chat_id=chat_id,
+            message_thread_id=message_thread_id,
+            text=_DRAFT_CMD_USAGE["pause_offer"],
+        )
+        return
+
+    ad_account_id = parts[1].strip()
+    offer_code = parts[2].strip()
+
+    # Третий опциональный аргумент — cpl_max (число). Если не число — это начало причины.
+    cpl_max: float | None = None
+    reason_start = 3
+    if len(parts) >= 4:
+        try:
+            cpl_max = float(parts[3].replace(",", "."))
+            reason_start = 4
+        except ValueError:
+            cpl_max = None
+
+    reason = " ".join(parts[reason_start:]).strip()
+    if not reason and username:
+        reason = f"Запрос @{username}"
+
+    filter_dict: dict[str, Any] = {"offer_code": offer_code}
+    if cpl_max is not None:
+        filter_dict["cpl_gt"] = cpl_max
+
+    from core.ai_assistant.tools.base import ToolError
+    from core.ai_assistant.tools.drafts.request_bulk_pause import RequestBulkPauseTool
+
+    tool = RequestBulkPauseTool()
+    try:
+        tool_output = await tool.run(
+            {
+                "ad_account_id": ad_account_id,
+                "filter": filter_dict,
+                "reason": reason,
+            }
+        )
+    except ToolError as exc:
+        await _send_current_topic_message(
+            client,
+            chat_id=chat_id,
+            message_thread_id=message_thread_id,
+            text=f"❌ Не удалось создать черновик: {html.escape(str(exc))}",
+        )
+        return
+    except Exception:
+        logger.exception("Ошибка /pause_offer")
+        await _send_current_topic_message(
+            client,
+            chat_id=chat_id,
+            message_thread_id=message_thread_id,
+            text="❌ Внутренняя ошибка при создании черновика паузы.",
+        )
+        return
+
+    await _send_draft_or_error(
+        client,
+        chat_id=chat_id,
+        message_thread_id=message_thread_id,
+        tool_output=tool_output,
+        header=f"Пауза объявлений ({offer_code})",
+    )
+
+
+# ==========================================
 # Маршрутизация
 # ==========================================
 
@@ -990,6 +1302,77 @@ async def handle_update(client: TelegramBotClient, update: dict) -> None:
                 message_id=message_id,
                 message_thread_id=message_thread_id,
                 text=task_info["detail"],
+            )
+            return
+
+        if data.startswith("draft_confirm:") or data.startswith("draft_reject:"):
+            await client.answer_callback_query(cq["id"])
+            if not _can_manage_settings(access):
+                await _send_current_topic_message(
+                    client,
+                    chat_id=chat_id,
+                    message_thread_id=message_thread_id,
+                    text=OWNER_ONLY_TEXT,
+                )
+                return
+
+            action, _, task_id_str = data.partition(":")
+            try:
+                task_uuid = uuid.UUID(task_id_str)
+            except ValueError:
+                await _safe_edit_current_message(
+                    client,
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    message_thread_id=message_thread_id,
+                    text="❌ Некорректный task_id в кнопке (стейл/ручная правка).",
+                )
+                return
+
+            original_text = (cq.get("message") or {}).get("text") or ""
+            actor_label = username or tg_user_id or "—"
+
+            try:
+                if action == "draft_confirm":
+                    await _approve_draft_task_from_tg(
+                        task_id=task_uuid,
+                        approved_by=actor_label,
+                        approval_telegram_message_id=int(message_id),
+                    )
+                    new_text = render_draft_task_confirmed(
+                        original_text=original_text, approved_by=actor_label
+                    )
+                else:
+                    await _cancel_draft_task_from_tg(task_id=task_uuid, cancelled_by=actor_label)
+                    new_text = render_draft_task_rejected(
+                        original_text=original_text, cancelled_by=actor_label
+                    )
+            except ValueError as exc:
+                # approve/cancel бросают ValueError, если задача не DRAFT или не найдена
+                await _safe_edit_current_message(
+                    client,
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    message_thread_id=message_thread_id,
+                    text=f"❌ {html.escape(str(exc))}",
+                )
+                return
+            except Exception:
+                logger.exception("Ошибка обработки draft callback %s", data)
+                await _send_current_topic_message(
+                    client,
+                    chat_id=chat_id,
+                    message_thread_id=message_thread_id,
+                    text="❌ Внутренняя ошибка при обработке черновика.",
+                )
+                return
+
+            await _safe_edit_current_message(
+                client,
+                chat_id=chat_id,
+                message_id=message_id,
+                message_thread_id=message_thread_id,
+                text=new_text,
             )
             return
 
@@ -1389,6 +1772,42 @@ async def handle_update(client: TelegramBotClient, update: dict) -> None:
         )
         return
 
+    if cmd in {"clone", "budget", "pause_offer"}:
+        if not _can_manage_settings(access):
+            await _send_current_topic_message(
+                client,
+                chat_id=chat_id,
+                message_thread_id=message_thread_id,
+                text=OWNER_ONLY_TEXT,
+            )
+            return
+        username = user.get("username", "") or ""
+        if cmd == "clone":
+            await _cmd_clone(
+                client,
+                chat_id=chat_id,
+                message_thread_id=message_thread_id,
+                parts=parts,
+                username=username,
+            )
+        elif cmd == "budget":
+            await _cmd_budget(
+                client,
+                chat_id=chat_id,
+                message_thread_id=message_thread_id,
+                parts=parts,
+                username=username,
+            )
+        else:  # pause_offer
+            await _cmd_pause_offer(
+                client,
+                chat_id=chat_id,
+                message_thread_id=message_thread_id,
+                parts=parts,
+                username=username,
+            )
+        return
+
     handler = COMMAND_HANDLERS.get(cmd)
     if handler is not None:
         await handler(client, chat_id=chat_id, message_thread_id=message_thread_id)
@@ -1650,6 +2069,49 @@ async def _try_authorize(
         logger.exception("Ошибка в _try_authorize")
 
     return False
+
+
+async def _approve_draft_task_from_tg(
+    *,
+    task_id: uuid.UUID,
+    approved_by: str,
+    approval_telegram_message_id: int | None = None,
+) -> None:
+    """Approve DRAFT mutation task → PENDING. Открывает свою сессию и коммитит.
+
+    Бросает ValueError если задача не DRAFT или не найдена (queue.approve_draft_task).
+    """
+    from core.meta_api.queue import approve_draft_task
+
+    factory = get_session_factory()
+    async with factory() as session:
+        await approve_draft_task(
+            session,
+            task_id=task_id,
+            approved_by=approved_by,
+            approval_telegram_message_id=approval_telegram_message_id,
+        )
+        await session.commit()
+
+
+async def _cancel_draft_task_from_tg(
+    *,
+    task_id: uuid.UUID,
+    cancelled_by: str,
+    reason: str = "",
+) -> None:
+    """Cancel DRAFT mutation task → CANCELLED. Открывает свою сессию и коммитит."""
+    from core.meta_api.queue import cancel_draft_task
+
+    factory = get_session_factory()
+    async with factory() as session:
+        await cancel_draft_task(
+            session,
+            task_id=task_id,
+            cancelled_by=cancelled_by,
+            reason=reason,
+        )
+        await session.commit()
 
 
 async def _create_disable_task(

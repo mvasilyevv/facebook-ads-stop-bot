@@ -1,20 +1,30 @@
 # -*- coding: utf-8 -*-
-"""Tool request_create_campaign — черновик создания новой кампании из CampaignSpec."""
+"""Tool request_create_campaign — черновик создания новой кампании из CampaignSpec.
+
+NL parser активирован в wave 3 — natural_language_description парсится через
+LLM по system prompt `core/ai_assistant/prompts/creator_nl_parser.md`.
+"""
 
 from __future__ import annotations
 
+import json
+import logging
+import re
 from typing import Any, ClassVar
 
+from core.ai_assistant.prompts import PromptNotFoundError, load_prompt
 from core.ai_assistant.tools.base import RiskLevel, ToolError
 from core.db import get_session_factory
 from core.meta_api.queue import create_mutation_task
+
+logger = logging.getLogger(__name__)
 
 
 class RequestCreateCampaignTool:
     """Создаёт DRAFT mutation_task на создание новой кампании.
 
-    На wave 1 поддерживается только structured spec_summary.
-    natural_language_description будет реализован в wave 3 (промпты).
+    Принимает либо structured `spec_summary`, либо `natural_language_description` —
+    второй парсится LLM-ом через prompt `creator_nl_parser`.
     """
 
     name: ClassVar[str] = "request_create_campaign"
@@ -60,8 +70,8 @@ class RequestCreateCampaignTool:
                 "natural_language_description": {
                     "type": "string",
                     "description": (
-                        "Альтернатива spec_summary — текст 'создай кампанию по DRC_CR2 на Гваделупу...' "
-                        "для AI-парсинга. На wave 1 — не поддерживается."
+                        "Альтернатива spec_summary — текст 'создай кампанию по DRC_CR2 на Гваделупу...'. "
+                        "Парсится LLM-ом в structured spec_summary (creator_nl_parser prompt)."
                     ),
                 },
                 "reason": {"type": "string"},
@@ -77,17 +87,15 @@ class RequestCreateCampaignTool:
         natural_language: str | None = args.get("natural_language_description")
         reason: str = args.get("reason", "")
 
-        # NL-парсер реализуется в wave 3
+        # NL parser: если задано описание без structured spec — парсим через LLM
+        nl_warnings: list[str] = []
         if natural_language and not spec_summary:
-            raise ToolError(
-                "NL parser реализуется в wave 3 (промпты). "
-                "Используйте spec_summary для структурированного ввода."
-            )
+            spec_summary, nl_warnings = await _parse_nl_description(natural_language)
 
         if not spec_summary:
             raise ToolError(
                 "Укажите spec_summary (структурированные параметры кампании) или "
-                "дождитесь реализации NL parser в wave 3."
+                "natural_language_description (свободное текстовое описание)."
             )
 
         # Валидация обязательного поля offer_code
@@ -123,15 +131,96 @@ class RequestCreateCampaignTool:
         budget = spec_summary.get("daily_budget_usd")
         budget_text = f"{budget:.2f} USD/день" if budget else "не указан"
 
-        return (
-            f"Черновик создан.\n"
-            f"task_id: {task.id}\n"
-            f"mutation_kind: create_campaign\n"
-            f"Кабинет: {ad_account_id}\n"
-            f"Оффер: {offer_code}\n"
-            f"Цель: {objective}\n"
-            f"Страны: {countries_text}\n"
-            f"Бюджет: {budget_text}\n"
-            f"Причина: {reason or '—'}\n"
-            f"Подтвердите в Telegram чтобы исполнить."
+        lines = [
+            "Черновик создан.",
+            f"task_id: {task.id}",
+            "mutation_kind: create_campaign",
+            f"Кабинет: {ad_account_id}",
+            f"Оффер: {offer_code}",
+            f"Цель: {objective}",
+            f"Страны: {countries_text}",
+            f"Бюджет: {budget_text}",
+            f"Причина: {reason or '—'}",
+        ]
+        if nl_warnings:
+            lines.append("Предупреждения NL-парсера: " + "; ".join(nl_warnings))
+        lines.append("Подтвердите в Telegram чтобы исполнить.")
+        return "\n".join(lines)
+
+
+async def _parse_nl_description(text: str) -> tuple[dict[str, Any], list[str]]:
+    """Парсит свободное описание кампании через LLM (creator_nl_parser prompt).
+
+    Возвращает кортеж (spec_summary, warnings). Бросает ToolError если LLM
+    вернул `_errors` или невалидный JSON.
+    """
+    from core.ai_assistant.client import AIUnavailableError, get_ai_client
+
+    ai = get_ai_client()
+    if not ai.is_available:
+        raise ToolError(
+            "AI не настроен — natural_language_description требует ANTHROPIC_API_KEY "
+            "или OPENAI_API_KEY в .env. Используйте spec_summary вместо описания."
         )
+
+    try:
+        system_prompt = load_prompt("creator_nl_parser")
+    except PromptNotFoundError as exc:
+        raise ToolError(f"system prompt 'creator_nl_parser' не найден: {exc}") from exc
+
+    logger.info("creator_nl_parser: разбираем описание длины %d", len(text))
+
+    try:
+        response = await ai.chat(
+            messages=[{"role": "user", "content": text}],
+            system=system_prompt,
+            max_tokens=512,
+        )
+    except AIUnavailableError as exc:
+        raise ToolError(f"AI недоступен для NL-парсинга: {exc}") from exc
+
+    parsed = _extract_json_object(response.text.strip())
+
+    errors: list[str] = list(parsed.pop("_errors", None) or [])
+    warnings: list[str] = list(parsed.pop("_warnings", None) or [])
+
+    if errors:
+        raise ToolError("NL parser не смог распознать описание: " + "; ".join(errors))
+
+    if not parsed.get("offer_code"):
+        raise ToolError(
+            "NL parser не извлёк offer_code из описания. "
+            "Уточните: 'оффер DRC_CR2' / 'по офферу BetOnline_FR'."
+        )
+
+    return parsed, warnings
+
+
+def _extract_json_object(raw: str) -> dict[str, Any]:
+    """Извлекает первый JSON-объект из ответа LLM.
+
+    Пробует прямой json.loads, затем regex-поиск. Бросает ToolError при невалидном JSON.
+    """
+    # Убираем markdown-блоки ```json ... ```
+    cleaned = re.sub(r"```(?:json)?\s*([\s\S]*?)```", r"\1", raw).strip()
+
+    try:
+        data = json.loads(cleaned)
+        if isinstance(data, dict):
+            return data
+    except json.JSONDecodeError:
+        pass
+
+    match = re.search(r"(\{[\s\S]*\})", cleaned)
+    if match:
+        try:
+            data = json.loads(match.group(1))
+            if isinstance(data, dict):
+                return data
+        except json.JSONDecodeError:
+            pass
+
+    raise ToolError(
+        "NL parser вернул невалидный JSON — попробуйте упростить описание "
+        "или использовать structured spec_summary."
+    )

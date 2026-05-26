@@ -359,19 +359,119 @@ async def test_create_campaign_with_spec_summary_creates_task() -> None:
     assert "create_campaign" in result
 
 
-# Сценарий: natural_language_description без spec_summary → ToolError "NL parser в wave 3".
+# Сценарий: natural_language_description, но AI не настроен → ToolError "AI не настроен".
 @pytest.mark.asyncio
-async def test_create_campaign_nl_description_raises_tool_error() -> None:
+async def test_create_campaign_nl_without_ai_raises_tool_error() -> None:
     from core.ai_assistant.tools.drafts.request_create_campaign import RequestCreateCampaignTool
 
-    tool = RequestCreateCampaignTool()
-    with pytest.raises(ToolError, match="wave 3"):
-        await tool.run(
+    ai_mock = MagicMock()
+    ai_mock.is_available = False
+    with patch(
+        "core.ai_assistant.client.get_ai_client",
+        return_value=ai_mock,
+    ):
+        tool = RequestCreateCampaignTool()
+        with pytest.raises(ToolError, match="AI не настроен"):
+            await tool.run(
+                {
+                    "ad_account_id": "act_444",
+                    "natural_language_description": "создай кампанию по DRC_CR2 на Гваделупу",
+                }
+            )
+
+
+# Сценарий: NL-описание с моком AI → парсится в spec_summary → задача создаётся.
+@pytest.mark.asyncio
+async def test_create_campaign_nl_description_parses_via_ai() -> None:
+    from core.ai_assistant.tools.drafts.request_create_campaign import RequestCreateCampaignTool
+
+    # LLM возвращает корректный JSON
+    ai_response = MagicMock()
+    ai_response.text = (
+        '{"offer_code": "DRC_CR2", "countries": ["GP"], '
+        '"daily_budget_usd": 50.0, "objective": "OUTCOME_LEADS", "attribution_days": 7}'
+    )
+    ai_mock = MagicMock()
+    ai_mock.is_available = True
+    ai_mock.chat = AsyncMock(return_value=ai_response)
+
+    task = _make_task(mutation_kind="create_campaign")
+    factory, _db = _make_session_factory(task)
+    captured: dict[str, Any] = {}
+
+    async def fake_create(db_session: Any, **kwargs: Any) -> MagicMock:
+        captured.update(kwargs)
+        return task
+
+    with (
+        patch(
+            "core.ai_assistant.tools.drafts.request_create_campaign.get_session_factory",
+            return_value=factory,
+        ),
+        patch(
+            "core.ai_assistant.tools.drafts.request_create_campaign.create_mutation_task",
+            new=AsyncMock(side_effect=fake_create),
+        ),
+        patch("core.ai_assistant.client.get_ai_client", return_value=ai_mock),
+    ):
+        tool = RequestCreateCampaignTool()
+        result = await tool.run(
             {
                 "ad_account_id": "act_444",
-                "natural_language_description": "создай кампанию по DRC_CR2 на Гваделупу",
+                "natural_language_description": "Создай кампанию по DRC_CR2 на Гваделупу, $50/день",
             }
         )
+
+    assert captured["mutation_kind"] == "create_campaign"
+    payload = captured["payload"]
+    assert payload["offer_code"] == "DRC_CR2"
+    assert payload["countries"] == ["GP"]
+    assert payload["daily_budget_usd"] == 50.0
+    assert str(task.id) in result
+
+
+# Сценарий: NL-парсер вернул _errors → ToolError "не смог распознать".
+@pytest.mark.asyncio
+async def test_create_campaign_nl_errors_field_raises() -> None:
+    from core.ai_assistant.tools.drafts.request_create_campaign import RequestCreateCampaignTool
+
+    ai_response = MagicMock()
+    ai_response.text = '{"_errors": ["offer_code не определён"]}'
+    ai_mock = MagicMock()
+    ai_mock.is_available = True
+    ai_mock.chat = AsyncMock(return_value=ai_response)
+
+    with patch("core.ai_assistant.client.get_ai_client", return_value=ai_mock):
+        tool = RequestCreateCampaignTool()
+        with pytest.raises(ToolError, match="не смог распознать"):
+            await tool.run(
+                {
+                    "ad_account_id": "act_444",
+                    "natural_language_description": "что-нибудь запусти",
+                }
+            )
+
+
+# Сценарий: NL-парсер вернул мусор вместо JSON → ToolError "невалидный JSON".
+@pytest.mark.asyncio
+async def test_create_campaign_nl_invalid_json_raises() -> None:
+    from core.ai_assistant.tools.drafts.request_create_campaign import RequestCreateCampaignTool
+
+    ai_response = MagicMock()
+    ai_response.text = "что-то невнятное без JSON"
+    ai_mock = MagicMock()
+    ai_mock.is_available = True
+    ai_mock.chat = AsyncMock(return_value=ai_response)
+
+    with patch("core.ai_assistant.client.get_ai_client", return_value=ai_mock):
+        tool = RequestCreateCampaignTool()
+        with pytest.raises(ToolError, match="невалидный JSON"):
+            await tool.run(
+                {
+                    "ad_account_id": "act_444",
+                    "natural_language_description": "создай DRC_CR2",
+                }
+            )
 
 
 # ─── Идемпотентность ──────────────────────────────────────────────────────

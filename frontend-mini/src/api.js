@@ -113,3 +113,32 @@ export async function getAIAnalysis(blockType, scopeKey = "global", forceRefresh
     }),
   });
 }
+
+// ─── Draft mutation tasks (Marketing API outbox) ────────────────────────────
+
+export async function listDraftTasks({ status = "DRAFT", kind, limit = 50 } = {}) {
+  const params = new URLSearchParams();
+  if (status) params.set("status", status);
+  if (kind) params.set("kind", kind);
+  if (limit != null) params.set("limit", String(limit));
+  const qs = params.toString();
+  return fetchJson(`/tma/draft-tasks${qs ? `?${qs}` : ""}`);
+}
+
+export async function getDraftTask(taskId) {
+  return fetchJson(`/tma/draft-tasks/${encodeURIComponent(taskId)}`);
+}
+
+export async function confirmDraftTask(taskId) {
+  return fetchJson(`/tma/draft-tasks/${encodeURIComponent(taskId)}/confirm`, {
+    method: "POST",
+    body: "{}",
+  });
+}
+
+export async function rejectDraftTask(taskId, reason) {
+  return fetchJson(`/tma/draft-tasks/${encodeURIComponent(taskId)}/reject`, {
+    method: "POST",
+    body: JSON.stringify({ reason: reason || null }),
+  });
+}

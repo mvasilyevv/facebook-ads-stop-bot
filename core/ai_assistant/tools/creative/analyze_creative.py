@@ -1,5 +1,8 @@
 # -*- coding: utf-8 -*-
-"""Tool analyze_creative — LLM-анализ структуры текста рекламного объявления."""
+"""Tool analyze_creative — LLM-анализ структуры текста рекламного объявления.
+
+System prompt вынесен в `core/ai_assistant/prompts/competitor_extraction.md` (wave 3).
+"""
 
 from __future__ import annotations
 
@@ -8,35 +11,10 @@ import logging
 import re
 from typing import Any, ClassVar
 
+from core.ai_assistant.prompts import PromptNotFoundError, load_prompt
 from core.ai_assistant.tools.base import RiskLevel, ToolError
 
 logger = logging.getLogger(__name__)
-
-# Системный промпт для анализа текста объявления
-_SYSTEM_PROMPT = """\
-Проанализируй текст рекламы Facebook. Извлеки структуру в JSON.
-
-Primary text: "{primary_text}"
-Headline: "{headline}"
-Description: "{description}"
-CTA: "{cta_type}"
-
-Ответ строго в JSON:
-{{
-  "hook": "первая зацепляющая фраза 5-15 слов",
-  "hook_type": "curiosity|fear|greed|urgency|social_proof|authority",
-  "pain_point": "что болит у целевой аудитории",
-  "value_prop": "что обещают",
-  "proof_elements": ["конкретные числа, отзывы, авторитеты"],
-  "urgency_signals": ["ограничения времени/количества или null"],
-  "cta_strength": "soft|medium|hard",
-  "language_register": "formal|casual|aggressive|emotional|conspiratorial",
-  "target_persona_guess": "1 предложение про ЦА",
-  "policy_risk": 0.0
-}}
-
-Не объясняй ничего вне JSON.\
-"""
 
 
 class AnalyzeCreativeTool:
@@ -87,12 +65,22 @@ class AnalyzeCreativeTool:
         if not primary_text.strip():
             raise ToolError("primary_text не может быть пустым")
 
-        # Формируем промпт
-        prompt = _SYSTEM_PROMPT.format(
-            primary_text=primary_text,
-            headline=headline,
-            description=description,
-            cta_type=cta_type or "не указан",
+        # Загружаем system-prompt из prompts/competitor_extraction.md
+        try:
+            system_prompt = load_prompt("competitor_extraction")
+        except PromptNotFoundError as exc:
+            raise ToolError(f"system prompt 'competitor_extraction' не найден: {exc}") from exc
+
+        # Параметры — в user-сообщении (JSON)
+        user_content = json.dumps(
+            {
+                "primary_text": primary_text,
+                "headline": headline,
+                "description": description,
+                "cta_type": cta_type or "не указан",
+            },
+            ensure_ascii=False,
+            indent=2,
         )
 
         logger.info(
@@ -103,7 +91,8 @@ class AnalyzeCreativeTool:
         # Вызываем LLM
         try:
             response = await ai.chat(
-                messages=[{"role": "user", "content": prompt}],
+                messages=[{"role": "user", "content": user_content}],
+                system=system_prompt,
                 max_tokens=1024,
             )
         except AIUnavailableError as exc:

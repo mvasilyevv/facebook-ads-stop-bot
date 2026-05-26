@@ -1,5 +1,11 @@
 # -*- coding: utf-8 -*-
-"""Tool generate_ad_copy — LLM-генерация текстов рекламного объявления."""
+"""Tool generate_ad_copy — LLM-генерация текстов рекламного объявления.
+
+System prompt вынесен в `core/ai_assistant/prompts/ad_copy.md` (wave 3).
+Параметры конкретного вызова передаются в user-message в виде JSON —
+это удобнее для LLM (system = правила, user = данные) и безопаснее
+по отношению к format-string injection.
+"""
 
 from __future__ import annotations
 
@@ -8,45 +14,10 @@ import logging
 import re
 from typing import Any, ClassVar
 
+from core.ai_assistant.prompts import PromptNotFoundError, load_prompt
 from core.ai_assistant.tools.base import RiskLevel, ToolError
 
 logger = logging.getLogger(__name__)
-
-# Системный промпт для генерации текстов объявления
-_SYSTEM_PROMPT = """\
-Ты — копирайтер арбитражной рекламы Facebook. Сгенерируй варианты текстов для нашего объявления.
-
-Оффер: {offer_code}
-Вертикаль: {vertical}
-Гео: {country}
-Лендинг: {landing_url_summary}
-Тон: {tone}
-Язык: {language}
-Запрещено: {forbidden_words}
-
-Правила:
-- Primary text до 125 символов
-- Headline до 40 символов
-- Description до 30 символов
-- НЕ использовать слово "Facebook"
-- НЕ использовать прямое обещание выигрыша/доходности
-- НЕ использовать кликбейт (CAPS, !!!, обилие эмодзи)
-- НЕ использовать запрещённые слова
-
-Сгенерируй {max_variants} вариантов в формате JSON:
-[
-  {{
-    "primary_text": "...",
-    "headline": "...",
-    "description": "...",
-    "predicted_hook_strength": 0.0,
-    "predicted_policy_risk": 0.0,
-    "reasoning": "1 предложение почему сработает"
-  }}
-]
-
-Не объясняй ничего вне JSON.\
-"""
 
 
 class GenerateAdCopyTool:
@@ -145,16 +116,26 @@ class GenerateAdCopyTool:
         forbidden_words = list(args.get("forbidden_words") or [])
         max_variants = int(args.get("max_variants", 3))
 
-        # Формируем промпт
-        prompt = _SYSTEM_PROMPT.format(
-            offer_code=offer_code,
-            vertical=vertical,
-            country=country,
-            landing_url_summary=landing_url_summary,
-            tone=tone,
-            language=language,
-            forbidden_words=", ".join(forbidden_words) if forbidden_words else "нет",
-            max_variants=max_variants,
+        # Загружаем system-prompt из prompts/ad_copy.md
+        try:
+            system_prompt = load_prompt("ad_copy")
+        except PromptNotFoundError as exc:
+            raise ToolError(f"system prompt 'ad_copy' не найден: {exc}") from exc
+
+        # Параметры конкретного вызова — в user-сообщении (JSON)
+        user_content = json.dumps(
+            {
+                "offer_code": offer_code,
+                "vertical": vertical,
+                "country": country,
+                "landing_url_summary": landing_url_summary,
+                "tone": tone,
+                "language": language,
+                "forbidden_words": forbidden_words,
+                "max_variants": max_variants,
+            },
+            ensure_ascii=False,
+            indent=2,
         )
 
         logger.info(
@@ -168,7 +149,8 @@ class GenerateAdCopyTool:
         # Вызываем LLM
         try:
             response = await ai.chat(
-                messages=[{"role": "user", "content": prompt}],
+                messages=[{"role": "user", "content": user_content}],
+                system=system_prompt,
                 max_tokens=2048,
             )
         except AIUnavailableError as exc:

@@ -12,7 +12,11 @@ from core.telegram.renderer import (
     build_ad_identity_lines,
     build_detailed_metrics_block,
     build_key_metric_line,
+    extract_task_id_from_tool_output,
     render_alert_message,
+    render_draft_task_confirmed,
+    render_draft_task_message,
+    render_draft_task_rejected,
     render_enable_recommendation_message,
 )
 
@@ -394,3 +398,58 @@ def test_render_alert_message_uses_explicit_web_app_url():
     btn = message.reply_markup["inline_keyboard"][0][0]
     # url-кнопка (web_app не разрешён в супергруппах: BUTTON_TYPE_INVALID).
     assert btn["url"] == "https://override.example/tma/ads/ad-override"
+
+
+# --- Draft-task сообщения (wave 3) ---
+
+
+# Сценарий: парсер извлекает UUID из tool_output draft-tool.
+def test_extract_task_id_from_tool_output_valid():
+    output = (
+        "Черновик создан.\ntask_id: 12345678-1234-1234-1234-123456789012\nmutation_kind: set_budget"
+    )
+    assert extract_task_id_from_tool_output(output) == "12345678-1234-1234-1234-123456789012"
+
+
+# Сценарий: текст без UUID → None.
+def test_extract_task_id_from_tool_output_missing():
+    assert extract_task_id_from_tool_output("какой-то текст без uuid") is None
+
+
+# Сценарий: render_draft_task_message содержит обе кнопки и оборачивает текст в <pre>.
+def test_render_draft_task_message_has_both_buttons():
+    msg = render_draft_task_message(
+        tool_output="task_id: aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\nmutation_kind: set_budget",
+        task_id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        header="Изменение бюджета",
+    )
+    assert "Изменение бюджета" in msg.text
+    assert "<pre>" in msg.text
+    assert msg.reply_markup is not None
+    buttons = msg.reply_markup["inline_keyboard"][0]
+    assert len(buttons) == 2
+    callback_data = {b["callback_data"] for b in buttons}
+    assert "draft_confirm:aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" in callback_data
+    assert "draft_reject:aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" in callback_data
+
+
+# Сценарий: render_draft_task_confirmed добавляет к тексту подпись подтверждения.
+def test_render_draft_task_confirmed_appends_approval():
+    result = render_draft_task_confirmed(
+        original_text="Черновик задачи XYZ",
+        approved_by="markv",
+    )
+    assert "Подтверждено" in result
+    assert "markv" in result
+    assert "Черновик задачи XYZ" in result
+
+
+# Сценарий: render_draft_task_rejected добавляет к тексту подпись отмены.
+def test_render_draft_task_rejected_appends_cancellation():
+    result = render_draft_task_rejected(
+        original_text="Черновик задачи XYZ",
+        cancelled_by="markv",
+    )
+    assert "Отменено" in result
+    assert "markv" in result
+    assert "Черновик задачи XYZ" in result

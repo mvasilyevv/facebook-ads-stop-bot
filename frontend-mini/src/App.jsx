@@ -10,6 +10,7 @@ import OffersPage from "./pages/OffersPage.jsx";
 import ScriptsPage from "./pages/ScriptsPage.jsx";
 import HistoryPage from "./pages/HistoryPage.jsx";
 import AdDetailPage from "./pages/AdDetailPage.jsx";
+import DraftsPage from "./pages/DraftsPage.jsx";
 
 // Гард аутентификации — выполняет логин при первом рендере
 function AuthGuard({ children }) {
@@ -83,8 +84,10 @@ function TelegramBackButton() {
 
   useEffect(() => {
     if (!tg) return;
-    // BackButton показываем только на вложенных страницах (health, scripts)
-    const showBack = ["/health", "/scripts"].includes(location.pathname) || /^\/ads\/[^/]+$/.test(location.pathname);
+    // BackButton показываем только на вложенных страницах (health, scripts, drafts)
+    const showBack =
+      ["/health", "/scripts", "/drafts"].includes(location.pathname) ||
+      /^\/ads\/[^/]+$/.test(location.pathname);
     if (showBack) {
       tg.BackButton.show();
       const handler = () => navigate(-1);
@@ -143,6 +146,7 @@ export default function App() {
             <Route path="/health" element={<HealthPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/scripts" element={<ScriptsPage />} />
+            <Route path="/drafts" element={<DraftsPage />} />
             <Route path="/ads/:fbAdId" element={<AdDetailPage />} />
           </Routes>
         </div>
