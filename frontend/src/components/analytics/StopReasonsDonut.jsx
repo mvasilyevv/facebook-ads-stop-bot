@@ -1,133 +1,149 @@
-import React, { useState, useEffect } from 'react';
-import { getAIAnalysis } from '../../api';
-import { renderMarkdown } from '../../utils/markdown';
+import React, { useState, useEffect, useMemo } from 'react';
+import { getAlertEvents } from '../../api';
+import { RULE_LABELS_SHORT } from '../../constants/ruleLabels.js';
+
+const PERIODS = [
+  { value: 7, label: '7д' },
+  { value: 14, label: '14д' },
+  { value: 30, label: '30д' },
+];
 
 /**
- * Диаграмма распределения причин остановок с легендой и AI разбором.
+ * Распределение причин остановок: реальные данные из /dashboard/alerts?stage=STOP.
+ * Группируем по matched_rule_codes, рисуем горизонтальные бары.
  */
 export default function StopReasonsDonut() {
+  const [days, setDays] = useState(14);
   const [loading, setLoading] = useState(false);
-  const [reasons, setReasons] = useState([]);
-  const [aiAnalysis, setAiAnalysis] = useState('');
-  const [aiLoading, setAiLoading] = useState(false);
-
-  const fetchData = async () => {
-    setLoading(true);
-    try {
-      const mockReasons = [
-        { name: 'CPL > 120% CPA (Высокая цена лида)', count: 28, pct: 45, color: 'var(--stop)' },
-        { name: 'CPC > 30% CPA (Дорогой клик на старте)', count: 15, pct: 24, color: 'var(--warn)' },
-        { name: 'Расход > 70% CPA без лидов (Слив бюджета)', count: 12, pct: 19, color: 'var(--accent)' },
-        { name: '5+ рег без депозитов', count: 7, pct: 12, color: 'var(--info)' }
-      ];
-      setReasons(mockReasons);
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const [error, setError] = useState(null);
+  const [events, setEvents] = useState([]);
 
   useEffect(() => {
-    fetchData();
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    /* limit берём с запасом — на 14 дней обычно сотня-полторы алертов */
+    getAlertEvents({ stage: 'STOP', limit: 200 })
+      .then((data) => {
+        if (cancelled) return;
+        setEvents(Array.isArray(data) ? data : []);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        console.error(err);
+        setError('Не удалось загрузить алерты');
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  const fetchAIHelp = async () => {
-    setAiLoading(true);
-    try {
-      const snapshot = {
-        reasons: reasons.reduce((acc, r) => ({ ...acc, [r.name]: r.count }), {}),
-      };
-      const data = await getAIAnalysis('reasons', 'global', true, snapshot);
-      setAiAnalysis(data.content);
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setAiLoading(false);
+  const reasons = useMemo(() => {
+    const cutoff = Date.now() - days * 86400000;
+    const counts = new Map();
+    let total = 0;
+    for (const ev of events) {
+      const ts = ev.created_at ? new Date(ev.created_at).getTime() : 0;
+      if (ts < cutoff) continue;
+      const codes = ev.matched_rule_codes && ev.matched_rule_codes.length > 0
+        ? ev.matched_rule_codes
+        : ['unknown'];
+      total += 1;
+      for (const code of codes) {
+        counts.set(code, (counts.get(code) || 0) + 1);
+      }
     }
-  };
+    const arr = Array.from(counts.entries()).map(([code, count]) => ({
+      code,
+      count,
+      label: RULE_LABELS_SHORT[code] || code,
+    }));
+    arr.sort((a, b) => b.count - a.count);
+    const max = arr.length > 0 ? arr[0].count : 0;
+    return { items: arr, total, max };
+  }, [events, days]);
 
   return (
     <div className="panel h-full p-md">
-      <div className="flex items-center justify-between border-b border-border pb-sm mb-md">
-        <span className="font-mono text-2xs uppercase tracking-wider text-text">
-          Причины остановок рекламы
-        </span>
-        <button
-          onClick={fetchAIHelp}
-          disabled={aiLoading}
-          className="rounded border border-accent bg-accent-soft px-xs py-2xs font-mono text-[9px] font-semibold text-accent transition hover:bg-accent hover:text-bg"
-        >
-          {aiLoading ? 'Анализ...' : '✦ AI Анализ причин'}
-        </button>
+      {/* Шапка */}
+      <div className="flex flex-wrap items-center justify-between gap-sm border-b border-border pb-sm mb-md">
+        <div className="flex flex-col gap-2xs">
+          <span className="font-mono text-2xs uppercase tracking-wider text-text">
+            Причины остановок
+          </span>
+          <span className="text-2xs text-muted">
+            Сколько раз каждое правило приводило к стопу
+          </span>
+        </div>
+        <div className="flex items-center gap-2xs">
+          {PERIODS.map((p) => (
+            <button
+              key={p.value}
+              onClick={() => setDays(p.value)}
+              className={`rounded border px-sm py-2xs font-mono text-[10px] font-semibold transition ${
+                days === p.value
+                  ? 'border-accent bg-accent text-bg'
+                  : 'border-border bg-elevated text-muted hover:text-primary'
+              }`}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
       </div>
 
-      {loading ? (
-        <div className="flex h-48 items-center justify-center">
-          <span className="h-6 w-6 animate-spin rounded-full border-2 border-accent border-t-transparent" />
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-md items-center">
-          {/* Легенда и полосы */}
-          <div className="space-y-sm">
-            {reasons.map((r, i) => (
-              <div key={i} className="space-y-xs">
-                <div className="flex justify-between text-2xs font-mono">
-                  <span className="text-text-dim truncate max-w-[200px]" title={r.name}>{r.name}</span>
-                  <span className="text-text font-semibold">{r.count} шт ({r.pct}%)</span>
-                </div>
-                <div className="h-1.5 w-full rounded-full bg-surface-2 overflow-hidden border border-border">
-                  <div
-                    className="h-full rounded-full transition-all duration-500"
-                    style={{ width: `${r.pct}%`, backgroundColor: r.color }}
-                  />
-                </div>
-              </div>
-            ))}
-          </div>
-
-          {/* Визуальный круг Donut */}
-          <div className="flex justify-center relative">
-            <svg width="120" height="120" viewBox="0 0 40 40" className="transform -rotate-95">
-              <circle cx="20" cy="20" r="15.915" fill="transparent" stroke="var(--border)" strokeWidth="3" />
-              {/* Сегменты */}
-              {reasons.reduce((acc, r, idx) => {
-                const strokeDasharray = `${r.pct} ${100 - r.pct}`;
-                const strokeDashoffset = 100 - acc.totalPct;
-                acc.totalPct += r.pct;
-                acc.elements.push(
-                  <circle
-                    key={idx}
-                    cx="20"
-                    cy="20"
-                    r="15.915"
-                    fill="transparent"
-                    stroke={r.color}
-                    strokeWidth="3"
-                    strokeDasharray={strokeDasharray}
-                    strokeDashoffset={strokeDashoffset}
-                  />
-                );
-                return acc;
-              }, { totalPct: 0, elements: [] }).elements}
-            </svg>
-            <div className="absolute inset-0 flex flex-col items-center justify-center font-mono">
-              <span className="text-sm font-bold text-text">62</span>
-              <span className="text-[9px] text-text-muted">всего стопов</span>
-            </div>
-          </div>
+      {/* Состояния */}
+      {loading && (
+        <div className="py-lg text-center text-2xs text-muted">Загрузка…</div>
+      )}
+      {error && !loading && (
+        <div className="py-lg text-center text-2xs text-stop">{error}</div>
+      )}
+      {!loading && !error && reasons.items.length === 0 && (
+        <div className="py-lg text-center text-2xs text-muted">
+          За {days}д стоп-алертов нет
         </div>
       )}
 
-      {/* AI разбор под блоком */}
-      {aiAnalysis && (
-        <div className="mt-md border-t border-border pt-md">
-          <span className="font-mono text-[10px] uppercase text-accent">✦ AI Сводка причин остановок:</span>
-          <div
-            className="mt-xs text-2xs text-text-dim leading-relaxed font-sans"
-            dangerouslySetInnerHTML={{ __html: renderMarkdown(aiAnalysis) }}
-          />
-        </div>
+      {/* Бары */}
+      {!loading && !error && reasons.items.length > 0 && (
+        <>
+          <div className="mb-md flex items-baseline gap-xs">
+            <span className="font-display text-xl font-semibold text-primary leading-none">
+              {reasons.total}
+            </span>
+            <span className="text-2xs text-muted">всего стопов за {days}д</span>
+          </div>
+          <div className="space-y-sm">
+            {reasons.items.map((r) => {
+              const pct = reasons.max > 0 ? Math.round((r.count / reasons.max) * 100) : 0;
+              const sharePct = reasons.total > 0
+                ? ((r.count / reasons.total) * 100).toFixed(0)
+                : 0;
+              return (
+                <div key={r.code} className="space-y-2xs">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-primary truncate pr-sm" title={r.label}>
+                      {r.label}
+                    </span>
+                    <span className="whitespace-nowrap font-mono text-secondary">
+                      {r.count} <span className="text-muted">· {sharePct}%</span>
+                    </span>
+                  </div>
+                  <div className="h-2 w-full overflow-hidden rounded-full bg-elevated">
+                    <div
+                      className="h-full rounded-full bg-accent transition-all duration-500"
+                      style={{ width: `${pct}%` }}
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </>
       )}
     </div>
   );

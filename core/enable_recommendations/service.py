@@ -30,7 +30,6 @@ from core.models import (
     FbAdset,
     Offer,
     OfferRuleConfig,
-    OfferRuleStat,
 )
 from core.observer.service import build_metrics_json, build_rule_context
 from core.rules.evaluator import determine_enable_recommendation_level, evaluate_stop_rules
@@ -363,31 +362,18 @@ def _evaluate_enable_recommendation(
     row: ScannedAdRow,
     offer_cpa: Decimal,
     rule_config: object,
-    offer_median_cpl: Decimal | None = None,
-    offer_median_cpr: Decimal | None = None,
     adaptive_cpa: Decimal | None = None,
     use_adaptive_cpa: bool = False,
-    observed_at: datetime | None = None,
-    rule_confidence_map: dict[str, Decimal] | None = None,
 ) -> tuple[EnableRecommendationLevel | None, RuleEvaluation]:
-    """Вычисляет безопасный уровень рекомендации и исходную rule-оценку.
-
-    Доп.поля выравнивают ctx с observer.evaluate_row: Bayesian smoothing
-    (offer_median_*), adaptive CPA, time-weights через observed_at,
-    ML-калибровка (rule_confidence_map). impressions/reach берутся из row.
-    """
+    """Вычисляет безопасный уровень рекомендации и исходную rule-оценку."""
     ctx = build_rule_context(
         cpa_amount=offer_cpa,
         rule_config=rule_config,
-        offer_median_cpl=offer_median_cpl,
-        offer_median_cpr=offer_median_cpr,
         frequency_current=Decimal(str(row.frequency)) if row.frequency is not None else None,
         impressions=int(row.impressions) if row.impressions is not None else None,
         reach=int(row.reach) if getattr(row, "reach", None) is not None else None,
         adaptive_cpa=adaptive_cpa,
         use_adaptive_cpa=use_adaptive_cpa,
-        observed_at=observed_at,
-        rule_confidence_map=rule_confidence_map,
     )
     rule_evaluation = evaluate_stop_rules(row, ctx)
     recommendation_level = determine_enable_recommendation_level(
@@ -396,144 +382,6 @@ def _evaluate_enable_recommendation(
         stop_evaluation=rule_evaluation,
     )
     return recommendation_level, rule_evaluation
-
-
-async def _load_offer_baselines(
-    session: AsyncSession,
-    *,
-    offer_codes: set[str],
-) -> dict[str, tuple[Decimal | None, Decimal | None]]:
-    """Загружает медианные CPL/CPR по офферам для Bayesian smoothing.
-
-    Берём те же DISABLED-снэпшоты, что и observer (compute_cpl_cpr_baselines_by_offer).
-    Возвращает словарь по casefold-коду оффера: {(med_cpl, med_cpr)}. При любой
-    ошибке (нет данных, мок-сессия в тестах не отдаёт нужные поля) — возвращает {}:
-    отсутствие baselines не критично для evaluator (smoothing просто не применится).
-    """
-    from datetime import timedelta as _td
-    from statistics import median as _median
-
-    if not offer_codes:
-        return {}
-
-    # Окно 14 дней, как и в observer
-    cutoff = datetime.now(UTC) - _td(days=14)
-    from core.models import FbCampaign  # локальный импорт, чтобы не плодить циклы
-
-    try:
-        result = await session.execute(
-            select(
-                FbCampaign.offer_code,
-                AdSnapshot.cost_per_lead,
-                AdSnapshot.cost_per_registration,
-            )
-            .join(FbAd, FbAd.id == AdSnapshot.ad_id)
-            .join(FbAdset, FbAdset.id == FbAd.adset_id)
-            .join(FbCampaign, FbCampaign.id == FbAdset.campaign_id)
-            .where(
-                AdSnapshot.last_observed_at >= cutoff,
-                FbCampaign.offer_code.is_not(None),
-            )
-        )
-        raw_rows = result.all()
-    except Exception:
-        logger.debug("Не удалось загрузить offer baselines из БД", exc_info=True)
-        return {}
-
-    cpl_by_offer: dict[str, list[Decimal]] = {}
-    cpr_by_offer: dict[str, list[Decimal]] = {}
-    for row in raw_rows:
-        try:
-            offer_code, cpl_val, cpr_val = row
-        except Exception:
-            continue
-        if not offer_code:
-            continue
-        key = offer_code.casefold()
-        if key not in offer_codes and offer_code not in offer_codes:
-            continue
-        if cpl_val is not None and cpl_val > 0:
-            cpl_by_offer.setdefault(key, []).append(Decimal(str(cpl_val)))
-        if cpr_val is not None and cpr_val > 0:
-            cpr_by_offer.setdefault(key, []).append(Decimal(str(cpr_val)))
-
-    # Минимум 5 точек — иначе медиана не считается (как в observer)
-    min_points = 5
-    baselines: dict[str, tuple[Decimal | None, Decimal | None]] = {}
-    for code in cpl_by_offer.keys() | cpr_by_offer.keys():
-        cpl_vals = cpl_by_offer.get(code, [])
-        cpr_vals = cpr_by_offer.get(code, [])
-        med_cpl = (
-            Decimal(str(_median(cpl_vals))).quantize(Decimal("0.0001"))
-            if len(cpl_vals) >= min_points
-            else None
-        )
-        med_cpr = (
-            Decimal(str(_median(cpr_vals))).quantize(Decimal("0.0001"))
-            if len(cpr_vals) >= min_points
-            else None
-        )
-        baselines[code] = (med_cpl, med_cpr)
-    return baselines
-
-
-async def _load_rule_confidence_map(
-    session: AsyncSession,
-    *,
-    offer_codes: set[str],
-) -> dict[str, dict[str, Decimal]]:
-    """Загружает rule confidence из OfferRuleStat по списку офферов.
-
-    Если таблица пустая или ошибка — возвращает пустой словарь
-    (evaluator использует prior 0.5). Ключ — оригинальный offer_code.
-    """
-    if not offer_codes:
-        return {}
-    try:
-        result = await session.execute(
-            select(OfferRuleStat.offer_code, OfferRuleStat.rule_name, OfferRuleStat.confidence)
-        )
-        rows = result.all()
-    except Exception:
-        logger.debug("Не удалось загрузить rule confidence из БД", exc_info=True)
-        return {}
-    confidence_map: dict[str, dict[str, Decimal]] = {}
-    for row in rows:
-        try:
-            offer_code, rule_name, confidence = row
-        except Exception:
-            continue
-        if not offer_code:
-            continue
-        confidence_map.setdefault(offer_code, {})[rule_name] = Decimal(str(confidence))
-    return confidence_map
-
-
-def _confidence_for_offer(
-    confidence_map: dict[str, dict[str, Decimal]],
-    offer_code: str | None,
-) -> dict[str, Decimal] | None:
-    """Извлекает confidence-словарь для оффера с fallback по casefold."""
-    if not offer_code:
-        return None
-    if offer_code in confidence_map:
-        return confidence_map[offer_code]
-    lowered = offer_code.casefold()
-    for key, value in confidence_map.items():
-        if key.casefold() == lowered:
-            return value
-    return None
-
-
-def _baseline_for_offer(
-    baselines: dict[str, tuple[Decimal | None, Decimal | None]],
-    offer_code: str | None,
-) -> tuple[Decimal | None, Decimal | None]:
-    """Извлекает (median_cpl, median_cpr) для оффера с fallback по casefold."""
-    if not offer_code:
-        return (None, None)
-    lowered = offer_code.casefold()
-    return baselines.get(lowered, baselines.get(offer_code, (None, None)))
 
 
 async def collect_enable_recommendation_candidates_for_snapshots(
@@ -557,15 +405,6 @@ async def collect_enable_recommendation_candidates_for_snapshots(
     ]
     offer_map = await _load_offer_rule_map(session, offer_ids=offer_ids)
 
-    # Подгружаем baselines/confidence один раз для batch'а (как делает observer)
-    offer_codes = {
-        code for snapshot in eligible_snapshots if (code := _snapshot_offer_code(snapshot))
-    }
-    # Дополняем casefold-варианты, чтобы lookup из baselines/confidence не промахивался
-    offer_codes |= {c.casefold() for c in list(offer_codes)}
-    baselines_map = await _load_offer_baselines(session, offer_codes=offer_codes)
-    confidence_map = await _load_rule_confidence_map(session, offer_codes=offer_codes)
-
     candidates: list[EnableRecommendationCandidate] = []
     for snapshot in eligible_snapshots:
         s_offer_id = _snapshot_offer_id(snapshot)
@@ -577,26 +416,17 @@ async def collect_enable_recommendation_candidates_for_snapshots(
             continue
 
         row = _build_scanned_row_from_snapshot(snapshot)
-        offer_code = _snapshot_offer_code(snapshot)
-        median_cpl, median_cpr = _baseline_for_offer(baselines_map, offer_code)
         use_adaptive = bool(getattr(rule_config, "use_adaptive_cpa", False))
         # adaptive_cpa для OFF-снэпшотов недоступен: rolling median считается
         # observer'ом по горячему батчу и в DB не сохраняется. Оставляем None —
         # build_rule_context при use_adaptive_cpa=True и adaptive_cpa=None
         # fallback'ит на статичный cpa_amount.
-        adaptive_cpa: Decimal | None = None
-        observed_at = getattr(snapshot, "last_observed_at", None)
-        rule_confidence = _confidence_for_offer(confidence_map, offer_code)
         recommendation_level, evaluation = _evaluate_enable_recommendation(
             row=row,
             offer_cpa=Decimal(offer.cpa_amount),
             rule_config=rule_config,
-            offer_median_cpl=median_cpl,
-            offer_median_cpr=median_cpr,
-            adaptive_cpa=adaptive_cpa,
+            adaptive_cpa=None,
             use_adaptive_cpa=use_adaptive,
-            observed_at=observed_at,
-            rule_confidence_map=rule_confidence,
         )
         if recommendation_level is None:
             continue
@@ -902,28 +732,13 @@ async def promote_recommendation_to_enable_task(
         )
 
     offer, rule_config = offer_bundle
-    # Выравниваем ctx с observer: baselines/confidence/observed_at и т.д.
-    offer_code_for_lookup = _snapshot_offer_code(snapshot)
-    lookup_codes: set[str] = set()
-    if offer_code_for_lookup:
-        lookup_codes.add(offer_code_for_lookup)
-        lookup_codes.add(offer_code_for_lookup.casefold())
-    baselines_map = await _load_offer_baselines(session, offer_codes=lookup_codes)
-    confidence_map = await _load_rule_confidence_map(session, offer_codes=lookup_codes)
-    median_cpl, median_cpr = _baseline_for_offer(baselines_map, offer_code_for_lookup)
     use_adaptive = bool(getattr(rule_config, "use_adaptive_cpa", False))
-    observed_at = getattr(snapshot, "last_observed_at", None)
-    rule_confidence = _confidence_for_offer(confidence_map, offer_code_for_lookup)
     recommendation_level, evaluation = _evaluate_enable_recommendation(
         row=_build_scanned_row_from_snapshot(snapshot),
         offer_cpa=Decimal(offer.cpa_amount),
         rule_config=rule_config,
-        offer_median_cpl=median_cpl,
-        offer_median_cpr=median_cpr,
         adaptive_cpa=None,
         use_adaptive_cpa=use_adaptive,
-        observed_at=observed_at,
-        rule_confidence_map=rule_confidence,
     )
     if evaluation.stage == AlertStage.STOP:
         return EnableTaskPromotionResult(

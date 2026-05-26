@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.deps import get_db
 from apps.api.schemas import OfferRuleConfigSchema, OfferSchema
+from core.fake_deposits import load_fake_deposits_by_offer
 from core.models import AdMetricHistory, FbAd, FbAdset, FbCampaign, Offer, OfferRuleConfig
 
 router = APIRouter(prefix="/api", tags=["offers"])
@@ -152,11 +153,15 @@ async def compare_offers(
     # Строим список дат за период
     date_labels = [(period_start + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(days)]
 
+    # Учитываем корректировки депозитов: вычитаем fake_count, агрегированный по офферу
+    fake_by_offer = await load_fake_deposits_by_offer(db)
+
     result = []
     for code, data in offer_days.items():
         spend_total = float(data["spend_total"])
         leads = data["leads"]
-        deps = data["deps"]
+        deps_raw = data["deps"]
+        deps = max(0, deps_raw - int(fake_by_offer.get(code, 0)))
         cr = round(deps / leads * 100, 1) if leads > 0 else 0.0
         spend_by_day = [data["by_day"].get(d, 0.0) for d in date_labels]
         result.append(

@@ -11,7 +11,6 @@ const HistoryPage = lazy(() => import('./pages/HistoryPage.jsx'));
 const NamingTrackerPage = lazy(() => import('./pages/NamingTrackerPage.jsx'));
 const ScriptsPage = lazy(() => import('./pages/ScriptsPage.jsx'));
 const AnalyticsPage = lazy(() => import('./pages/AnalyticsPage.jsx'));
-const OfferComparePage = lazy(() => import('./pages/OfferComparePage.jsx'));
 import SystemStatusBar from './components/system/SystemStatusBar.jsx';
 import HealthBar from './components/HealthBar.jsx';
 
@@ -110,20 +109,12 @@ const NAV_ICONS = {
       <line x1="2" y1="20" x2="2" y2="8" />
     </svg>
   ),
-  'offer-compare': (
-    <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="2" y="3" width="16" height="14" rx="2" />
-      <line x1="2" y1="8" x2="18" y2="8" />
-      <line x1="7" y1="8" x2="7" y2="17" />
-    </svg>
-  ),
 };
 
 const PAGES = [
   { id: 'dashboard', label: 'Мониторинг' },
   { id: 'ads', label: 'Объявления' },
   { id: 'offers', label: 'Офферы' },
-  { id: 'offer-compare', label: 'Сравнение' },
   { id: 'analytics', label: 'Аналитика' },
   { id: 'history', label: 'История' },
   { id: 'scripts', label: 'Скрипты' },
@@ -184,8 +175,6 @@ export default function App() {
         );
       case 'offers':
         return <OffersPage />;
-      case 'offer-compare':
-        return <OfferComparePage />;
       case 'analytics':
         return <AnalyticsPage />;
       case 'history':
@@ -313,7 +302,7 @@ export default function App() {
         id="main-content"
         role="main"
       >
-        <div className="mx-auto max-w-content p-md pt-16 lg:p-lg">
+        <div className="mx-auto max-w-content p-md pt-16 lg:px-lg lg:pb-lg lg:pt-16">
           <ErrorBoundary>
             {/* Suspense показывает спиннер пока чанк страницы загружается */}
             <Suspense fallback={<LoadingSpinner />}>

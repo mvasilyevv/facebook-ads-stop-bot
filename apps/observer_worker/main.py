@@ -41,7 +41,6 @@ from core.observer.db_queries import (
     check_scanning_enabled,
     collect_reminder_alerts,
     compute_adaptive_cpa_by_offer,
-    compute_cpl_cpr_baselines_by_offer,
     consume_scan_flags_combined,
     get_disable_queue_pause_reason,
     get_enable_queue_pause_reason,
@@ -51,7 +50,6 @@ from core.observer.db_queries import (
     load_fake_deposits,
     load_history_ad_ids_with_metrics,
     load_offers_from_db,
-    load_rule_confidence_by_offer,
     load_telegram_settings_from_db,
     load_vision_settings_for_runtime,
     peek_scan_requested_flag,
@@ -624,18 +622,12 @@ async def _run_scan_cycle(
         cpm_getter=lambda item: item[0].cpm,
     )
 
-    # Медианы CPL/CPR по офферу для Bayesian-сглаживания при малой выборке
-    cpl_cpr_baselines = await compute_cpl_cpr_baselines_by_offer()
-
     # Rolling median CPA по DISABLED-объявлениям оффера за последние N дней (adaptive baseline)
     adaptive_cpa_by_offer = await compute_adaptive_cpa_by_offer()
 
     # Frequency ~час назад для правила выгорания аудитории (правило 7)
     all_ad_ids = [row.fb_ad_id for row in rows]
     frequency_baselines = await get_frequency_baselines_for_ads(all_ad_ids, hours_ago=1.0)
-
-    # ML-confidence: загружаем статистику confidence по (оффер, правило)
-    confidence_by_offer = await load_rule_confidence_by_offer()
 
     alerts_to_send: list[AlertCandidate] = []
     stop_alerts: list[AlertCandidate] = []
@@ -716,28 +708,18 @@ async def _run_scan_cycle(
             effective_deps = max(0, row.deposits - fake_count)
             eval_row = dataclasses.replace(row, deposits=effective_deps)
 
-        # Получаем медианы CPL/CPR для данного оффера (None → сглаживание не применяется)
-        _baseline_cpl, _baseline_cpr = (
-            cpl_cpr_baselines.get(offer_code, (None, None)) if offer_code else (None, None)
-        )
         _freq_1h_ago = frequency_baselines.get(row.fb_ad_id)
         # Adaptive CPA baseline: rolling median по офферу (если включён)
         _rule_cfg = offer_data.get("rule_config") if offer_data else None
         _use_adaptive = bool(getattr(_rule_cfg, "use_adaptive_cpa", False)) if _rule_cfg else False
         _adaptive_cpa = adaptive_cpa_by_offer.get(offer_code) if offer_code else None
-        # ML-confidence: словарь rule_name → confidence для данного оффера
-        _rule_confidence = confidence_by_offer.get(offer_code) if offer_code else None
         evaluation = evaluate_row(
             row=eval_row,
             offer_cpa=(Decimal(offer_data["offer"].cpa_amount) if offer_data else None),
             rule_config=_rule_cfg,
-            offer_median_cpl=_baseline_cpl,
-            offer_median_cpr=_baseline_cpr,
             frequency_1h_ago=_freq_1h_ago,
             adaptive_cpa=_adaptive_cpa,
             use_adaptive_cpa=_use_adaptive,
-            observed_at=now,
-            rule_confidence_map=_rule_confidence,
         )
 
         # FSM-переход

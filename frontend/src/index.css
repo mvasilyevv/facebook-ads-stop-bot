@@ -218,8 +218,8 @@
     border-radius: 3px;
     background: linear-gradient(
       to right,
-      var(--color-accent) 0 calc(var(--pct, 0) * 1%),
-      rgba(242, 239, 232, 0.1) calc(var(--pct, 0) * 1%) 100%
+      var(--slider-fill, var(--accent, #FF6B00)) 0 calc(var(--pct, 0) * 1%),
+      rgba(242, 239, 232, 0.15) calc(var(--pct, 0) * 1%) 100%
     );
     outline: none;
     cursor: pointer;
@@ -230,7 +230,7 @@
     width: 16px;
     height: 16px;
     border-radius: 50%;
-    background: var(--color-accent);
+    background: var(--slider-fill, var(--accent, #FF6B00));
     border: 2px solid #0c0c0c;
     cursor: pointer;
   }
@@ -238,7 +238,7 @@
     width: 16px;
     height: 16px;
     border-radius: 50%;
-    background: var(--color-accent);
+    background: var(--slider-fill, var(--accent, #FF6B00));
     border: 2px solid #0c0c0c;
     cursor: pointer;
   }

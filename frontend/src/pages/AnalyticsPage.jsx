@@ -3,24 +3,33 @@ import AlertsHeatmap from '../components/analytics/AlertsHeatmap.jsx';
 import StopReasonsDonut from '../components/analytics/StopReasonsDonut.jsx';
 import CPLTimeline from '../components/analytics/CPLTimeline.jsx';
 import DecisionsHistoryFeed from '../components/analytics/DecisionsHistoryFeed.jsx';
+import AnalyticsKPIStrip from '../components/analytics/AnalyticsKPIStrip.jsx';
+import OfferComparisonTable from '../components/analytics/OfferComparisonTable.jsx';
 
 /**
- * Страница Аналитики, объединяющая тепловую карту, причины остановок, таймлайн CPL и лог принятых решений.
+ * Аналитика: KPI за 7 дней, сравнение офферов, причины остановок,
+ * таймлайн CPL/CPD, тепловая карта алертов и журнал решений.
  */
 export default function AnalyticsPage() {
   return (
     <div className="space-y-md pb-xl">
       {/* Шапка страницы */}
-      <div className="flex flex-col gap-xs">
+      <div className="flex flex-col gap-2xs">
         <h1 className="text-xl font-bold uppercase tracking-wider text-text">
-          ✦ AI Аналитический Центр
+          ✦ Аналитический центр
         </h1>
         <p className="text-xs text-text-dim">
-          Интеллектуальный разбор закупки трафика, выявление паттернов зацепки и автоматизированный аудит стоп-правил.
+          Сводка за 7 дней, сравнение офферов и разбор причин остановок — чтобы видеть, куда уходит бюджет и где он окупается.
         </p>
       </div>
 
-      {/* Grid сетка 2x2 — все карточки одной высоты в пределах строки */}
+      {/* KPI-стрип: быстрый снимок за 7 дней */}
+      <AnalyticsKPIStrip />
+
+      {/* Сравнение офферов: главный блок страницы */}
+      <OfferComparisonTable />
+
+      {/* Детализирующие виджеты */}
       <div className="card-grid grid-cols-1 lg:grid-cols-2">
         <CPLTimeline />
         <StopReasonsDonut />

@@ -6,9 +6,7 @@ from __future__ import annotations
 from decimal import ROUND_CEILING, ROUND_HALF_UP, Decimal
 
 from core.domain import AlertStage, EnableRecommendationLevel
-from core.rules.confidence import apply_confidence
 from core.rules.labels import rule_label
-from core.rules.smoothing import smoothed_metric
 from core.rules.types import RuleContext, RuleEvaluation, RuleHit
 from core.scanner.models import ScannedAdRow
 
@@ -71,11 +69,6 @@ def determine_enable_recommendation_level(
     return EnableRecommendationLevel.OK
 
 
-def _scale(threshold: Decimal, weight: Decimal) -> Decimal:
-    """Применяет временно́й вес к порогу: threshold * weight."""
-    return (threshold * weight).quantize(_MONEY_STEP, rounding=ROUND_HALF_UP)
-
-
 def _evaluate_funnel_ladder(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | None:
     if _has_confirmed_deposit_signal(row):
         return _evaluate_deposit_stage(row, ctx)
@@ -87,22 +80,13 @@ def _evaluate_funnel_ladder(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | No
 
 
 def _evaluate_click_stage(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | None:
-    # Масштабируем пороги CPC/CPL по временно́му весу (пиковые часы — жёстче, ночь — мягче)
-    tw = ctx.time_weight
     if row.clicks == 0:
-        # Применяем confidence после time_weight (порядок: static → time_weight → confidence)
-        cpc_conf = ctx.rule_confidence.get("cpc_stop", Decimal("0.5"))
-        cpc_stop_adj = apply_confidence(_scale(ctx.cpc_stop_threshold, tw), cpc_conf)
-        if cpc_stop_adj is None:
-            return None  # confidence слишком низкий — правило отключено
-        cpc_warn_adj = apply_confidence(_scale(ctx.cpc_warning_threshold, tw), cpc_conf)
-        cpc_base_adj = apply_confidence(_scale(ctx.cpc_base_stop_threshold, tw), cpc_conf)
         return _evaluate_guardrail_only(
             spend=row.spend,
             enabled=ctx.cpc_enabled,
-            base_stop_threshold=cpc_base_adj or _scale(ctx.cpc_base_stop_threshold, tw),
-            stop_threshold=cpc_stop_adj,
-            warning_threshold=cpc_warn_adj or _scale(ctx.cpc_warning_threshold, tw),
+            base_stop_threshold=ctx.cpc_base_stop_threshold,
+            stop_threshold=ctx.cpc_stop_threshold,
+            warning_threshold=ctx.cpc_warning_threshold,
             code="cpc_stop",
             title=rule_label("cpc_stop"),
             label="CPC",
@@ -111,25 +95,13 @@ def _evaluate_click_stage(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | None
             min_impressions=ctx.guardrail_min_impressions,
         )
 
-    # Применяем confidence к CPC
-    cpc_conf = ctx.rule_confidence.get("cpc_stop", Decimal("0.5"))
-    cpc_stop_adj = apply_confidence(_scale(ctx.cpc_stop_threshold, tw), cpc_conf)
-    cpc_warn_adj = apply_confidence(_scale(ctx.cpc_warning_threshold, tw), cpc_conf)
-    cpc_base_adj = apply_confidence(_scale(ctx.cpc_base_stop_threshold, tw), cpc_conf)
-
-    # Применяем confidence к CPL
-    cpl_conf = ctx.rule_confidence.get("cpl_stop", Decimal("0.5"))
-    cpl_stop_adj = apply_confidence(_scale(ctx.cpl_stop_threshold, tw), cpl_conf)
-    cpl_warn_adj = apply_confidence(_scale(ctx.cpl_warning_threshold, tw), cpl_conf)
-    cpl_base_adj = apply_confidence(_scale(ctx.cpl_base_stop_threshold, tw), cpl_conf)
-
     return _pick_highest_priority_hit(
         _evaluate_metric_only(
             metric_value=row.cpc,
-            enabled=ctx.cpc_enabled and cpc_stop_adj is not None,
-            base_stop_threshold=cpc_base_adj or _scale(ctx.cpc_base_stop_threshold, tw),
-            stop_threshold=cpc_stop_adj or _scale(ctx.cpc_stop_threshold, tw),
-            warning_threshold=cpc_warn_adj or _scale(ctx.cpc_warning_threshold, tw),
+            enabled=ctx.cpc_enabled,
+            base_stop_threshold=ctx.cpc_base_stop_threshold,
+            stop_threshold=ctx.cpc_stop_threshold,
+            warning_threshold=ctx.cpc_warning_threshold,
             code="cpc_stop",
             title=rule_label("cpc_stop"),
             label="CPC",
@@ -137,10 +109,10 @@ def _evaluate_click_stage(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | None
         ),
         _evaluate_guardrail_only(
             spend=row.spend,
-            enabled=ctx.cpl_enabled and cpl_stop_adj is not None,
-            base_stop_threshold=cpl_base_adj or _scale(ctx.cpl_base_stop_threshold, tw),
-            stop_threshold=cpl_stop_adj or _scale(ctx.cpl_stop_threshold, tw),
-            warning_threshold=cpl_warn_adj or _scale(ctx.cpl_warning_threshold, tw),
+            enabled=ctx.cpl_enabled,
+            base_stop_threshold=ctx.cpl_base_stop_threshold,
+            stop_threshold=ctx.cpl_stop_threshold,
+            warning_threshold=ctx.cpl_warning_threshold,
             code="cpl_stop",
             title=rule_label("cpl_stop"),
             label="CPL",
@@ -152,33 +124,13 @@ def _evaluate_click_stage(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | None
 
 
 def _evaluate_lead_stage(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | None:
-    # Сглаживаем CPL при малой выборке лидов (< 5), чтобы не ловить шум на старте
-    cpl_value = (
-        smoothed_metric(row.cost_per_lead, row.leads, ctx.offer_median_cpl)
-        if row.cost_per_lead is not None
-        else None
-    )
-    tw = ctx.time_weight
-
-    # Применяем confidence к CPL (после time_weight)
-    cpl_conf = ctx.rule_confidence.get("cpl_stop", Decimal("0.5"))
-    cpl_stop_adj = apply_confidence(_scale(ctx.cpl_stop_threshold, tw), cpl_conf)
-    cpl_warn_adj = apply_confidence(_scale(ctx.cpl_warning_threshold, tw), cpl_conf)
-    cpl_base_adj = apply_confidence(_scale(ctx.cpl_base_stop_threshold, tw), cpl_conf)
-
-    # Применяем confidence к CPR
-    cpr_conf = ctx.rule_confidence.get("cpr_stop", Decimal("0.5"))
-    cpr_stop_adj = apply_confidence(_scale(ctx.cpr_stop_threshold, tw), cpr_conf)
-    cpr_warn_adj = apply_confidence(_scale(ctx.cpr_warning_threshold, tw), cpr_conf)
-    cpr_base_adj = apply_confidence(_scale(ctx.cpr_base_stop_threshold, tw), cpr_conf)
-
     return _pick_highest_priority_hit(
         _evaluate_metric_only(
-            metric_value=cpl_value,
-            enabled=ctx.cpl_enabled and cpl_stop_adj is not None,
-            base_stop_threshold=cpl_base_adj or _scale(ctx.cpl_base_stop_threshold, tw),
-            stop_threshold=cpl_stop_adj or _scale(ctx.cpl_stop_threshold, tw),
-            warning_threshold=cpl_warn_adj or _scale(ctx.cpl_warning_threshold, tw),
+            metric_value=row.cost_per_lead,
+            enabled=ctx.cpl_enabled,
+            base_stop_threshold=ctx.cpl_base_stop_threshold,
+            stop_threshold=ctx.cpl_stop_threshold,
+            warning_threshold=ctx.cpl_warning_threshold,
             code="cpl_stop",
             title=rule_label("cpl_stop"),
             label="CPL",
@@ -186,10 +138,10 @@ def _evaluate_lead_stage(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | None:
         ),
         _evaluate_guardrail_only(
             spend=row.spend,
-            enabled=ctx.cpr_enabled and cpr_stop_adj is not None,
-            base_stop_threshold=cpr_base_adj or _scale(ctx.cpr_base_stop_threshold, tw),
-            stop_threshold=cpr_stop_adj or _scale(ctx.cpr_stop_threshold, tw),
-            warning_threshold=cpr_warn_adj or _scale(ctx.cpr_warning_threshold, tw),
+            enabled=ctx.cpr_enabled,
+            base_stop_threshold=ctx.cpr_base_stop_threshold,
+            stop_threshold=ctx.cpr_stop_threshold,
+            warning_threshold=ctx.cpr_warning_threshold,
             code="cpr_stop",
             title=rule_label("cpr_stop"),
             label="CPR",
@@ -201,28 +153,12 @@ def _evaluate_lead_stage(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | None:
 
 
 def _evaluate_registration_stage(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | None:
-    # Сглаживаем CPR при малой выборке регистраций (< 3), чтобы не ловить шум на старте
-    cpr_value = (
-        smoothed_metric(
-            row.cost_per_registration, row.registrations, ctx.offer_median_cpr, prior_weight=3
-        )
-        if row.cost_per_registration is not None
-        else None
-    )
-    tw = ctx.time_weight
-
-    # Применяем confidence к CPR (после time_weight)
-    cpr_conf = ctx.rule_confidence.get("cpr_stop", Decimal("0.5"))
-    cpr_stop_adj = apply_confidence(_scale(ctx.cpr_stop_threshold, tw), cpr_conf)
-    cpr_warn_adj = apply_confidence(_scale(ctx.cpr_warning_threshold, tw), cpr_conf)
-    cpr_base_adj = apply_confidence(_scale(ctx.cpr_base_stop_threshold, tw), cpr_conf)
-
     cpr_hit = _evaluate_metric_only(
-        metric_value=cpr_value,
-        enabled=ctx.cpr_enabled and cpr_stop_adj is not None,
-        base_stop_threshold=cpr_base_adj or _scale(ctx.cpr_base_stop_threshold, tw),
-        stop_threshold=cpr_stop_adj or _scale(ctx.cpr_stop_threshold, tw),
-        warning_threshold=cpr_warn_adj or _scale(ctx.cpr_warning_threshold, tw),
+        metric_value=row.cost_per_registration,
+        enabled=ctx.cpr_enabled,
+        base_stop_threshold=ctx.cpr_base_stop_threshold,
+        stop_threshold=ctx.cpr_stop_threshold,
+        warning_threshold=ctx.cpr_warning_threshold,
         code="cpr_stop",
         title=rule_label("cpr_stop"),
         label="CPR",
@@ -582,10 +518,7 @@ def _evaluate_spend_range(
 def _is_registration_normal(row: ScannedAdRow, ctx: RuleContext) -> bool:
     if row.registrations <= 0 or row.cost_per_registration is None:
         return False
-    # Применяем time_weight к порогу нормальной регистрации
-    return _round_money(row.cost_per_registration) <= _scale(
-        ctx.cpr_stop_threshold, ctx.time_weight
-    )
+    return _round_money(row.cost_per_registration) <= ctx.cpr_stop_threshold
 
 
 def _has_enable_data_gap(row: ScannedAdRow) -> bool:

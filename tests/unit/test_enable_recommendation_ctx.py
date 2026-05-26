@@ -16,8 +16,6 @@ from core.domain import (
     EnableRecommendationLevel,
 )
 from core.enable_recommendations.service import (
-    _baseline_for_offer,
-    _confidence_for_offer,
     _evaluate_enable_recommendation,
     collect_enable_recommendation_candidates,
 )
@@ -57,9 +55,6 @@ def _rule_config_default():
         use_adaptive_cpa=False,
         adaptive_cpa_window_days=7,
         adaptive_cpa_min_samples=5,
-        time_weights_enabled=False,
-        hour_weights=None,
-        day_weights=None,
     )
 
 
@@ -93,7 +88,7 @@ def _scanned_row(**overrides):
 # RuleContext recommendation worker содержит те же поля, что observer передаёт.
 @pytest.mark.asyncio
 async def test_ctx_includes_all_observer_aligned_fields(monkeypatch):
-    """Проверяем, что _evaluate_enable_recommendation строит ctx с теми же полями."""
+    """Проверяем, что _evaluate_enable_recommendation строит ctx с нужными полями."""
     captured_ctx = {}
 
     def _capture_ctx(*args, **kwargs):
@@ -122,25 +117,17 @@ async def test_ctx_includes_all_observer_aligned_fields(monkeypatch):
         _capture_recommendation_level,
     )
 
-    observed_at = datetime(2026, 4, 25, 10, 0, tzinfo=UTC)
     row = _scanned_row(impressions=500, reach=300, frequency=Decimal("2.1"))
     _evaluate_enable_recommendation(
         row=row,
         offer_cpa=Decimal("20"),
         rule_config=_rule_config_default(),
-        offer_median_cpl=Decimal("2.5000"),
-        offer_median_cpr=Decimal("4.2000"),
         adaptive_cpa=Decimal("18.5000"),
         use_adaptive_cpa=True,
-        observed_at=observed_at,
-        rule_confidence_map={"cpc_stop": Decimal("0.7"), "cpr_stop": Decimal("0.6")},
     )
 
     ctx = captured_ctx["ctx"]
     assert ctx is not None
-    # offer_median_* передан
-    assert ctx.offer_median_cpl == Decimal("2.5000")
-    assert ctx.offer_median_cpr == Decimal("4.2000")
     # adaptive_cpa учтён: cpa_amount должен равняться adaptive (use_adaptive_cpa=True)
     assert ctx.use_adaptive_cpa is True
     assert ctx.adaptive_cpa == Decimal("18.5000")
@@ -150,100 +137,11 @@ async def test_ctx_includes_all_observer_aligned_fields(monkeypatch):
     assert ctx.reach == 300
     # frequency_current из row
     assert ctx.frequency_current == Decimal("2.1")
-    # rule_confidence_map проброшен
-    assert ctx.rule_confidence == {"cpc_stop": Decimal("0.7"), "cpr_stop": Decimal("0.6")}
 
 
-# Time weight использует observed_at снэпшота, а не datetime.now().
+# collect загружает offer_rule_map и передаёт в evaluate.
 @pytest.mark.asyncio
-async def test_time_weight_uses_observed_at_not_now(monkeypatch):
-    """С enabled time_weights observed_at в прошлом даёт детерминированный вес."""
-    captured_ctx = {}
-
-    def _capture_ctx(row, ctx):
-        captured_ctx["ctx"] = ctx
-        return SimpleNamespace(
-            stage=None,
-            warning_hits=(),
-            stop_hits=(),
-            matched_rule_codes=[],
-            reason_title=None,
-            reason_text=None,
-            matched_hits=[],
-        )
-
-    def _stub_level(row, ctx, *, stop_evaluation):
-        return EnableRecommendationLevel.OK
-
-    monkeypatch.setattr(
-        "core.enable_recommendations.service.evaluate_stop_rules",
-        _capture_ctx,
-    )
-    monkeypatch.setattr(
-        "core.enable_recommendations.service.determine_enable_recommendation_level",
-        _stub_level,
-    )
-
-    # Включаем time_weights: hour=3 ночь, day=0 (Пн) — задаём явные веса
-    rule_config = _rule_config_default()
-    rule_config.time_weights_enabled = True
-    hour_weights = [Decimal("0.5")] * 24
-    hour_weights[3] = Decimal("0.7")
-    rule_config.hour_weights = hour_weights
-    day_weights = [Decimal("1.0")] * 7
-    rule_config.day_weights = day_weights
-
-    # observed_at — конкретный момент. Берём UTC время, при котором локальный час MSK
-    # совпадёт с известным. Europe/Moscow = UTC+3, hour=3 локальный → UTC=0.
-    observed_at = datetime(2024, 1, 1, 0, 0, tzinfo=UTC)  # Пн 03:00 MSK
-    row = _scanned_row()
-    _evaluate_enable_recommendation(
-        row=row,
-        offer_cpa=Decimal("20"),
-        rule_config=rule_config,
-        observed_at=observed_at,
-    )
-
-    ctx = captured_ctx["ctx"]
-    assert ctx.time_weights_enabled is True
-    # hour_of_day должен быть 3 (из observed_at локально), а не текущий час
-    assert ctx.hour_of_day == 3
-    assert ctx.day_of_week == 0  # 2024-01-01 — понедельник
-    # Вес: hour_w * day_w = 0.7 * 1.0 = 0.7
-    assert ctx.time_weight == Decimal("0.7000")
-
-
-# Helper _baseline_for_offer возвращает значения по casefold-ключу.
-def test_baseline_for_offer_casefold_lookup():
-    baselines = {
-        "drc_cr2": (Decimal("2.0000"), Decimal("5.0000")),
-    }
-    # Прямой регистр
-    cpl, cpr = _baseline_for_offer(baselines, "DRC_CR2")
-    assert cpl == Decimal("2.0000")
-    assert cpr == Decimal("5.0000")
-    # Несуществующий
-    cpl, cpr = _baseline_for_offer(baselines, "OTHER")
-    assert cpl is None and cpr is None
-    # None
-    cpl, cpr = _baseline_for_offer(baselines, None)
-    assert cpl is None and cpr is None
-
-
-# Helper _confidence_for_offer находит словарь по casefold.
-def test_confidence_for_offer_casefold_lookup():
-    confidence = {
-        "DRC_CR2": {"cpl_stop": Decimal("0.8")},
-    }
-    found = _confidence_for_offer(confidence, "drc_cr2")
-    assert found == {"cpl_stop": Decimal("0.8")}
-    assert _confidence_for_offer(confidence, "OTHER") is None
-    assert _confidence_for_offer(confidence, None) is None
-
-
-# collect загружает baselines/confidence один раз и пробрасывает в evaluate.
-@pytest.mark.asyncio
-async def test_collect_uses_loaded_baselines_and_confidence():
+async def test_collect_uses_loaded_offer_rule_map():
     offer_id = uuid.uuid4()
     ad_id = uuid.uuid4()
     last_observed = datetime(2026, 4, 25, 10, 0, tzinfo=UTC)
@@ -320,14 +218,6 @@ async def test_collect_uses_loaded_baselines_and_confidence():
             ),
         ),
         patch(
-            "core.enable_recommendations.service._load_offer_baselines",
-            new=AsyncMock(return_value={"offer_x": (Decimal("1.5000"), Decimal("3.0000"))}),
-        ),
-        patch(
-            "core.enable_recommendations.service._load_rule_confidence_map",
-            new=AsyncMock(return_value={"OFFER_X": {"cpl_stop": Decimal("0.9")}}),
-        ),
-        patch(
             "core.enable_recommendations.service._evaluate_enable_recommendation",
             side_effect=_capture_evaluate,
         ),
@@ -340,13 +230,6 @@ async def test_collect_uses_loaded_baselines_and_confidence():
 
     assert len(candidates) == 1
     kwargs = captured["kwargs"]
-    # Baseline передан с casefold-ключом
-    assert kwargs["offer_median_cpl"] == Decimal("1.5000")
-    assert kwargs["offer_median_cpr"] == Decimal("3.0000")
-    # Confidence передан
-    assert kwargs["rule_confidence_map"] == {"cpl_stop": Decimal("0.9")}
-    # observed_at — это last_observed_at из snapshot, а не now()
-    assert kwargs["observed_at"] == last_observed
     # use_adaptive_cpa берётся из rule_config
     assert kwargs["use_adaptive_cpa"] is False
     # adaptive_cpa для OFF-снэпшотов недоступен → None (документировано)

@@ -1,143 +1,149 @@
-import React, { useState, useEffect } from 'react';
-import { getAIAnalysis } from '../../api';
-import { renderMarkdown } from '../../utils/markdown';
+import React, { useState, useEffect, useMemo } from 'react';
+import { getAlertEvents } from '../../api';
+import { RULE_LABELS_SHORT } from '../../constants/ruleLabels.js';
+
+const STAGE_FILTERS = [
+  { value: 'ALL', label: 'Все' },
+  { value: 'STOP', label: 'STOP' },
+  { value: 'WARNING', label: 'WARNING' },
+];
+
+const stageStyle = (stage) => {
+  if (stage === 'STOP') return { dot: 'bg-stop', chip: 'bg-stop/15 text-stop' };
+  if (stage === 'WARNING') return { dot: 'bg-warn', chip: 'bg-warn/15 text-warn' };
+  return { dot: 'bg-muted', chip: 'bg-elevated text-muted' };
+};
+
+const formatTime = (iso) => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  const dd = String(d.getDate()).padStart(2, '0');
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mi = String(d.getMinutes()).padStart(2, '0');
+  return `${dd}.${mm} ${hh}:${mi}`;
+};
+
+const ruleLabels = (codes) => {
+  if (!codes || codes.length === 0) return '—';
+  return codes.map((c) => RULE_LABELS_SHORT[c] || c).join(' · ');
+};
 
 /**
- * Лента принятых ботом решений с фильтрацией по офферу/правилу и AI сводкой.
+ * Лента реальных алертов из /dashboard/alerts.
+ * Каждая запись — две строки: верхняя крупная (правило + оффер), нижняя серая (ad_id + время).
  */
 export default function DecisionsHistoryFeed() {
   const [loading, setLoading] = useState(false);
-  const [filterOffer, setFilterOffer] = useState('ALL');
+  const [error, setError] = useState(null);
+  const [stageFilter, setStageFilter] = useState('ALL');
   const [events, setEvents] = useState([]);
-  const [aiAnalysis, setAiAnalysis] = useState('');
-  const [aiLoading, setAiLoading] = useState(false);
-
-  const fetchData = async () => {
-    setLoading(true);
-    try {
-      const mockEvents = [
-        { id: 1, type: 'stop', offer: 'Casino_CZ', rule: 'CPL > 120%', adId: 'fb_ad_9921', time: '14:25:12', date: '19 мая', status: 'SUCCESS' },
-        { id: 2, type: 'stop', offer: 'Bet_PL', rule: 'CPC > 30%', adId: 'fb_ad_4021', time: '11:15:02', date: '19.05', status: 'SUCCESS' },
-        { id: 3, type: 'enable_recommendation', offer: 'Casino_CZ', rule: 'CPL Normal', adId: 'fb_ad_8830', time: '09:05:43', date: '19 мая', status: 'CLAIMED' },
-        { id: 4, type: 'stop', offer: 'Casino_CZ', rule: 'Spend > 70% CPA', adId: 'fb_ad_1223', time: '18:43:00', date: '18.05', status: 'SUCCESS' },
-        { id: 5, type: 'stop', offer: 'Poker_BR', rule: '5+ Regs No Dep', adId: 'fb_ad_7720', time: '15:20:10', date: '18 мая', status: 'SUCCESS' }
-      ];
-      setEvents(mockEvents);
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setLoading(false);
-    }
-  };
 
   useEffect(() => {
-    fetchData();
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    getAlertEvents({ limit: 50 })
+      .then((data) => {
+        if (cancelled) return;
+        setEvents(Array.isArray(data) ? data : []);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        console.error(err);
+        setError('Не удалось загрузить ленту решений');
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  const filteredEvents = filterOffer === 'ALL'
-    ? events
-    : events.filter((e) => e.offer === filterOffer);
-
-  const fetchAIHelp = async () => {
-    setAiLoading(true);
-    try {
-      const snapshot = {
-        filter: filterOffer,
-        events: filteredEvents.map((ev) => ({
-          type: ev.type,
-          offer: ev.offer,
-          rule: ev.rule,
-          ad_id: ev.adId,
-          date: ev.date,
-          time: ev.time,
-          status: ev.status,
-        })),
-      };
-      const data = await getAIAnalysis('history', 'global', true, snapshot);
-      setAiAnalysis(data.content);
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setAiLoading(false);
-    }
-  };
+  const filtered = useMemo(() => {
+    if (stageFilter === 'ALL') return events;
+    return events.filter((e) => e.stage === stageFilter);
+  }, [events, stageFilter]);
 
   return (
     <div className="panel h-full p-md">
       {/* Шапка */}
-      <div className="flex items-center justify-between border-b border-border pb-sm mb-md">
-        <div className="flex items-center gap-md">
+      <div className="flex flex-wrap items-center justify-between gap-sm border-b border-border pb-sm mb-md">
+        <div className="flex flex-col gap-2xs">
           <span className="font-mono text-2xs uppercase tracking-wider text-text">
-            История принятых решений
+            Последние алерты
           </span>
-          {/* Фильтр */}
-          <select
-            value={filterOffer}
-            onChange={(e) => setFilterOffer(e.target.value)}
-            className="rounded border border-border bg-surface-2 px-xs py-2xs font-mono text-[10px] text-text-dim focus:border-accent outline-none"
-          >
-            <option value="ALL">Все офферы</option>
-            <option value="Casino_CZ">Casino_CZ</option>
-            <option value="Bet_PL">Bet_PL</option>
-            <option value="Poker_BR">Poker_BR</option>
-          </select>
+          <span className="text-2xs text-muted">
+            Что бот заметил и какие правила сработали
+          </span>
         </div>
-
-        <button
-          onClick={fetchAIHelp}
-          disabled={aiLoading}
-          className="rounded border border-accent bg-accent-soft px-xs py-2xs font-mono text-[9px] font-semibold text-accent transition hover:bg-accent hover:text-bg"
-        >
-          {aiLoading ? 'Анализ...' : '✦ AI Анализ действий'}
-        </button>
+        <div className="flex items-center gap-2xs">
+          {STAGE_FILTERS.map((f) => (
+            <button
+              key={f.value}
+              onClick={() => setStageFilter(f.value)}
+              className={`rounded border px-sm py-2xs font-mono text-[10px] font-semibold transition ${
+                stageFilter === f.value
+                  ? 'border-accent bg-accent text-bg'
+                  : 'border-border bg-elevated text-muted hover:text-primary'
+              }`}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
       </div>
 
-      {loading ? (
-        <div className="flex h-48 items-center justify-center">
-          <span className="h-6 w-6 animate-spin rounded-full border-2 border-accent border-t-transparent" />
-        </div>
-      ) : (
-        <div className="space-y-xs">
-          {filteredEvents.map((ev) => (
-            <div
-              key={ev.id}
-              className="flex items-center justify-between rounded border border-border/40 bg-surface-2/40 px-sm py-xs font-mono text-2xs transition hover:border-border hover:bg-surface-2"
-            >
-              <div className="flex items-center gap-sm">
-                <span className={`h-1.5 w-1.5 rounded-full ${ev.type === 'stop' ? 'bg-stop' : 'bg-ok'}`} />
-                <span className="text-text font-medium">[{ev.type.toUpperCase()}]</span>
-                <span className="text-text-dim">Оффер: <span className="text-text">{ev.offer}</span></span>
-                <span className="text-text-muted">|</span>
-                <span className="text-text-dim">Правило: <span className="text-text">{ev.rule}</span></span>
-                <span className="text-text-muted">|</span>
-                <span className="text-text-muted">Ad: {ev.adId}</span>
-              </div>
-
-              <div className="flex items-center gap-md">
-                <span className="text-text-muted">{ev.date} {ev.time}</span>
-                <span className={`rounded px-2xs py-[1px] text-[9px] font-semibold ${ev.status === 'SUCCESS' ? 'bg-ok/10 text-ok' : 'bg-info/10 text-info'}`}>
-                  {ev.status}
-                </span>
-              </div>
-            </div>
-          ))}
-
-          {filteredEvents.length === 0 && (
-            <div className="flex h-24 items-center justify-center text-text-muted font-mono text-2xs">
-              Нет событий для отображения
-            </div>
-          )}
+      {/* Состояния */}
+      {loading && (
+        <div className="flex h-48 items-center justify-center text-2xs text-muted">Загрузка…</div>
+      )}
+      {error && !loading && (
+        <div className="flex h-48 items-center justify-center text-2xs text-stop">{error}</div>
+      )}
+      {!loading && !error && filtered.length === 0 && (
+        <div className="flex h-48 items-center justify-center text-2xs text-muted">
+          Нет событий
         </div>
       )}
 
-      {/* AI разбор под лентой */}
-      {aiAnalysis && (
-        <div className="mt-md border-t border-border pt-md">
-          <span className="font-mono text-[10px] uppercase text-accent">✦ AI Сводка действий:</span>
-          <div
-            className="mt-xs text-2xs text-text-dim leading-relaxed font-sans"
-            dangerouslySetInnerHTML={{ __html: renderMarkdown(aiAnalysis) }}
-          />
+      {/* Список */}
+      {!loading && !error && filtered.length > 0 && (
+        <div className="max-h-[360px] space-y-xs overflow-y-auto pr-2xs">
+          {filtered.map((ev) => {
+            const style = stageStyle(ev.stage);
+            return (
+              <div
+                key={ev.id}
+                className="rounded border border-border/40 bg-elevated/40 px-sm py-xs transition hover:border-border hover:bg-elevated"
+              >
+                {/* Верхняя строка: маркер, бейдж stage, название правила */}
+                <div className="flex items-center gap-xs">
+                  <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${style.dot}`} />
+                  <span className={`rounded px-xs py-[1px] font-mono text-[9px] font-semibold tracking-wider ${style.chip}`}>
+                    {ev.stage}
+                  </span>
+                  <span className="truncate text-xs text-primary" title={ruleLabels(ev.matched_rule_codes)}>
+                    {ruleLabels(ev.matched_rule_codes)}
+                  </span>
+                </div>
+
+                {/* Нижняя строка: ad_name, fb_ad_id, время */}
+                <div className="mt-2xs flex flex-wrap items-center gap-xs pl-[18px] text-[11px] text-muted">
+                  {ev.ad_name && (
+                    <span className="truncate text-secondary" title={ev.ad_name}>
+                      {ev.ad_name}
+                    </span>
+                  )}
+                  {ev.ad_name && <span>·</span>}
+                  <span className="font-mono">ID {ev.fb_ad_id}</span>
+                  <span>·</span>
+                  <span className="font-mono">{formatTime(ev.created_at)}</span>
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
