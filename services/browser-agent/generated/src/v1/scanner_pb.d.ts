@@ -144,6 +144,23 @@ export class ScanComplete extends jspb.Message {
     setUnknownModalArtifactsList(value: Array<string>): ScanComplete;
     addUnknownModalArtifacts(value: string, index?: number): string;
 
+    hasPhaseTimings(): boolean;
+    clearPhaseTimings(): void;
+    getPhaseTimings(): PhaseTimings | undefined;
+    setPhaseTimings(value?: PhaseTimings): ScanComplete;
+    clearPartialRowIdsList(): void;
+    getPartialRowIdsList(): Array<string>;
+    setPartialRowIdsList(value: Array<string>): ScanComplete;
+    addPartialRowIds(value: string, index?: number): string;
+    clearWarningsList(): void;
+    getWarningsList(): Array<string>;
+    setWarningsList(value: Array<string>): ScanComplete;
+    addWarnings(value: string, index?: number): string;
+    getEmptyReason(): string;
+    setEmptyReason(value: string): ScanComplete;
+    getRowsWithAllMetricsEmpty(): number;
+    setRowsWithAllMetricsEmpty(value: number): ScanComplete;
+
     serializeBinary(): Uint8Array;
     toObject(includeInstance?: boolean): ScanComplete.AsObject;
     static toObject(includeInstance: boolean, msg: ScanComplete): ScanComplete.AsObject;
@@ -161,6 +178,43 @@ export namespace ScanComplete {
         durationSeconds: number,
         dismissedModalsList: Array<string>,
         unknownModalArtifactsList: Array<string>,
+        phaseTimings?: PhaseTimings.AsObject,
+        partialRowIdsList: Array<string>,
+        warningsList: Array<string>,
+        emptyReason: string,
+        rowsWithAllMetricsEmpty: number,
+    }
+}
+
+export class PhaseTimings extends jspb.Message { 
+    getRefreshMs(): number;
+    setRefreshMs(value: number): PhaseTimings;
+    getFirstRowMs(): number;
+    setFirstRowMs(value: number): PhaseTimings;
+    getScrollMs(): number;
+    setScrollMs(value: number): PhaseTimings;
+    getParseMs(): number;
+    setParseMs(value: number): PhaseTimings;
+    getTotalMs(): number;
+    setTotalMs(value: number): PhaseTimings;
+
+    serializeBinary(): Uint8Array;
+    toObject(includeInstance?: boolean): PhaseTimings.AsObject;
+    static toObject(includeInstance: boolean, msg: PhaseTimings): PhaseTimings.AsObject;
+    static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
+    static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
+    static serializeBinaryToWriter(message: PhaseTimings, writer: jspb.BinaryWriter): void;
+    static deserializeBinary(bytes: Uint8Array): PhaseTimings;
+    static deserializeBinaryFromReader(message: PhaseTimings, reader: jspb.BinaryReader): PhaseTimings;
+}
+
+export namespace PhaseTimings {
+    export type AsObject = {
+        refreshMs: number,
+        firstRowMs: number,
+        scrollMs: number,
+        parseMs: number,
+        totalMs: number,
     }
 }
 
@@ -1320,6 +1374,61 @@ export namespace ScannedAdRow {
         costPerRegistration: string,
         deposits: number,
         resolvedOfferCode: string,
+    }
+}
+
+export class HardReloadPageRequest extends jspb.Message { 
+    getSessionId(): string;
+    setSessionId(value: string): HardReloadPageRequest;
+
+    hasPageId(): boolean;
+    clearPageId(): void;
+    getPageId(): string | undefined;
+    setPageId(value: string): HardReloadPageRequest;
+    getBypassCache(): boolean;
+    setBypassCache(value: boolean): HardReloadPageRequest;
+
+    serializeBinary(): Uint8Array;
+    toObject(includeInstance?: boolean): HardReloadPageRequest.AsObject;
+    static toObject(includeInstance: boolean, msg: HardReloadPageRequest): HardReloadPageRequest.AsObject;
+    static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
+    static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
+    static serializeBinaryToWriter(message: HardReloadPageRequest, writer: jspb.BinaryWriter): void;
+    static deserializeBinary(bytes: Uint8Array): HardReloadPageRequest;
+    static deserializeBinaryFromReader(message: HardReloadPageRequest, reader: jspb.BinaryReader): HardReloadPageRequest;
+}
+
+export namespace HardReloadPageRequest {
+    export type AsObject = {
+        sessionId: string,
+        pageId?: string,
+        bypassCache: boolean,
+    }
+}
+
+export class HardReloadPageResponse extends jspb.Message { 
+    getSuccess(): boolean;
+    setSuccess(value: boolean): HardReloadPageResponse;
+    getErrorMessage(): string;
+    setErrorMessage(value: string): HardReloadPageResponse;
+    getReloadMs(): number;
+    setReloadMs(value: number): HardReloadPageResponse;
+
+    serializeBinary(): Uint8Array;
+    toObject(includeInstance?: boolean): HardReloadPageResponse.AsObject;
+    static toObject(includeInstance: boolean, msg: HardReloadPageResponse): HardReloadPageResponse.AsObject;
+    static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
+    static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
+    static serializeBinaryToWriter(message: HardReloadPageResponse, writer: jspb.BinaryWriter): void;
+    static deserializeBinary(bytes: Uint8Array): HardReloadPageResponse;
+    static deserializeBinaryFromReader(message: HardReloadPageResponse, reader: jspb.BinaryReader): HardReloadPageResponse;
+}
+
+export namespace HardReloadPageResponse {
+    export type AsObject = {
+        success: boolean,
+        errorMessage: string,
+        reloadMs: number,
     }
 }
 

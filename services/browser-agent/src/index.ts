@@ -28,6 +28,7 @@ import {
 } from './ads-columns.js';
 import { dismissKnownModals } from './modal-dismisser.js';
 import { createCreatorServiceHandlers } from './creator-service.js';
+import { createMetaApiServiceHandlers } from './meta-api/service.js';
 
 const PORT = process.env.GRPC_PORT ? parseInt(process.env.GRPC_PORT, 10) : 50051;
 const sessionManager = new SessionManager();
@@ -1378,10 +1379,12 @@ function main() {
   const browserSessionProto = loadProto('browser_session.proto') as any;
   const scannerProto = loadProto('scanner.proto') as any;
   const creatorProto = loadProto('creator.proto') as any;
+  const metaApiProto = loadProto('meta_api.proto') as any;
 
   const browserSessionService = browserSessionProto.fb_agent.browser_session.v1.BrowserSessionService;
   const scannerService = scannerProto.fb_agent.scanner.v1.ScannerService;
   const creatorService = creatorProto.fb_agent.creator.v1.CreatorService;
+  const metaApiService = metaApiProto.fb_agent.meta_api.v1.MetaApiService;
 
   server.addService(browserSessionService.service, {
     startBrowser,
@@ -1421,6 +1424,12 @@ function main() {
     startRecording: creatorHandlers.startRecording,
     stopRecording: creatorHandlers.stopRecording,
     getRecorderStatus: creatorHandlers.getRecorderStatus,
+  });
+
+  const metaApiHandlers = createMetaApiServiceHandlers(sessionManager);
+  server.addService(metaApiService.service, {
+    executeGraphCall: metaApiHandlers.executeGraphCall,
+    checkMetaApiHealth: metaApiHandlers.checkMetaApiHealth,
   });
 
   server.bindAsync(`0.0.0.0:${PORT}`, grpc.ServerCredentials.createInsecure(), (error, port) => {

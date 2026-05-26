@@ -114,6 +114,28 @@ function deserialize_fb_agent_scanner_v1_GetVisibleRowIdsResponse(buffer_arg) {
   return v1_scanner_pb.GetVisibleRowIdsResponse.deserializeBinary(new Uint8Array(buffer_arg));
 }
 
+function serialize_fb_agent_scanner_v1_HardReloadPageRequest(arg) {
+  if (!(arg instanceof v1_scanner_pb.HardReloadPageRequest)) {
+    throw new Error('Expected argument of type fb_agent.scanner.v1.HardReloadPageRequest');
+  }
+  return Buffer.from(arg.serializeBinary());
+}
+
+function deserialize_fb_agent_scanner_v1_HardReloadPageRequest(buffer_arg) {
+  return v1_scanner_pb.HardReloadPageRequest.deserializeBinary(new Uint8Array(buffer_arg));
+}
+
+function serialize_fb_agent_scanner_v1_HardReloadPageResponse(arg) {
+  if (!(arg instanceof v1_scanner_pb.HardReloadPageResponse)) {
+    throw new Error('Expected argument of type fb_agent.scanner.v1.HardReloadPageResponse');
+  }
+  return Buffer.from(arg.serializeBinary());
+}
+
+function deserialize_fb_agent_scanner_v1_HardReloadPageResponse(buffer_arg) {
+  return v1_scanner_pb.HardReloadPageResponse.deserializeBinary(new Uint8Array(buffer_arg));
+}
+
 function serialize_fb_agent_scanner_v1_HumanClickRequest(arg) {
   if (!(arg instanceof v1_scanner_pb.HumanClickRequest)) {
     throw new Error('Expected argument of type fb_agent.scanner.v1.HumanClickRequest');
@@ -618,6 +640,18 @@ applyColumnWidths: {
     requestDeserialize: deserialize_fb_agent_scanner_v1_ApplyColumnWidthsRequest,
     responseSerialize: serialize_fb_agent_scanner_v1_ApplyColumnWidthsResponse,
     responseDeserialize: deserialize_fb_agent_scanner_v1_ApplyColumnWidthsResponse,
+  },
+  // Жёсткая перезагрузка страницы с очисткой кеша (через CDP Network.clearBrowserCache).
+hardReloadPage: {
+    path: '/fb_agent.scanner.v1.ScannerService/HardReloadPage',
+    requestStream: false,
+    responseStream: false,
+    requestType: v1_scanner_pb.HardReloadPageRequest,
+    responseType: v1_scanner_pb.HardReloadPageResponse,
+    requestSerialize: serialize_fb_agent_scanner_v1_HardReloadPageRequest,
+    requestDeserialize: deserialize_fb_agent_scanner_v1_HardReloadPageRequest,
+    responseSerialize: serialize_fb_agent_scanner_v1_HardReloadPageResponse,
+    responseDeserialize: deserialize_fb_agent_scanner_v1_HardReloadPageResponse,
   },
 };
 

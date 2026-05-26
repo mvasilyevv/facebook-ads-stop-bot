@@ -1,0 +1,104 @@
+syntax = "proto3";
+
+package fb_agent.meta_api.v1;
+
+// MetaApiService — мост к Marketing API через активную Vision-сессию.
+//
+// Архитектурная заметка: вызовы Marketing API НЕ исполняются standalone из Python,
+// потому что EAAB-токены Ads Manager привязаны к browser session (machine_id, datr cookie,
+// fingerprint). Anti-fraud Meta отвергает любые server-to-server вызовы с этими токенами.
+// Поэтому весь Marketing API проходит ЧЕРЕЗ Playwright-страницу: browser-agent делает
+// page.evaluate(fetch(...)) — запрос идёт из того же session-context, что и DOM-парсинг.
+service MetaApiService {
+  // Универсальный wrapper. Исполняет произвольный Graph API endpoint
+  // изнутри активной браузерной сессии Ads Manager.
+  //
+  // Path формат: "/me", "/act_XXX/insights", "/{ad_id}", "/{campaign_id}/copies" и т.д.
+  // Параметры в query_params, тело в body_json.
+  // access_token подставляется автоматически из page source.
+  rpc ExecuteGraphCall(ExecuteGraphCallRequest) returns (ExecuteGraphCallResponse);
+
+  // Проверить готовность Marketing API канала: жива ли Vision-сессия,
+  // на правильной ли странице (Ads Manager), извлекается ли токен.
+  // Лёгкий запрос — используется в health_watchdog для мониторинга.
+  rpc CheckMetaApiHealth(CheckMetaApiHealthRequest) returns (CheckMetaApiHealthResponse);
+}
+
+message ExecuteGraphCallRequest {
+  // ID активной browser-сессии. Если пустой — используется preferred session.
+  string session_id = 1;
+
+  // HTTP метод: "GET", "POST", "DELETE". Регистронезависимо.
+  string method = 2;
+
+  // Endpoint path БЕЗ host и БЕЗ API version. Примеры: "/me", "/act_123/insights".
+  // Версия API подставляется browser-agent'ом (см. constant META_API_VERSION).
+  string endpoint = 3;
+
+  // Query-параметры (для GET) или form-параметры (для POST).
+  // Значения сериализуются как строки; arrays/objects надо передавать
+  // как JSON-строки на стороне вызывающего.
+  map<string, string> query_params = 4;
+
+  // JSON-тело запроса для POST/PUT (опционально).
+  // Если задано — устанавливается Content-Type: application/json.
+  string body_json = 5;
+
+  // Таймаут запроса в миллисекундах (по умолчанию 30_000 в browser-agent).
+  optional int32 timeout_ms = 6;
+}
+
+message ExecuteGraphCallResponse {
+  // HTTP статус код Meta API (200, 400, 403, и т.д.).
+  int32 status_code = 1;
+
+  // JSON-ответ Meta API целиком (как строка для сохранения структуры,
+  // включая вложенные объекты, массивы, decimal-числа).
+  string response_json = 2;
+
+  // Длительность запроса в миллисекундах (для аудита и rate-limit мониторинга).
+  int32 duration_ms = 3;
+
+  // Если ответ Meta содержит блок "error" — заполняется для удобства client'а.
+  optional GraphApiError error = 4;
+}
+
+message GraphApiError {
+  // Meta error code (1 = generic, 190 = token invalidated, 17 = rate limit, ...).
+  int32 code = 1;
+
+  // Meta error subcode (более специфичный, например 463 для checkpoint).
+  int32 subcode = 2;
+
+  // Тип ошибки: "OAuthException", "GraphMethodException", "FacebookApiException".
+  string type = 3;
+
+  // Текст ошибки от Meta.
+  string message = 4;
+
+  // fbtrace_id для дебага (можно искать в Meta для деталей).
+  string fbtrace_id = 5;
+}
+
+message CheckMetaApiHealthRequest {
+  // ID активной browser-сессии. Если пустой — используется preferred session.
+  string session_id = 1;
+}
+
+message CheckMetaApiHealthResponse {
+  // True если Vision-сессия активна И на странице есть access_token.
+  bool healthy = 1;
+
+  // Текущий URL страницы (чтобы понять, на Ads Manager ли мы).
+  string current_url = 2;
+
+  // True если в page source найден EAA-токен (Marketing API доступен).
+  bool token_present = 3;
+
+  // Длина найденного токена (для логирования; сам токен не передаём из соображений безопасности).
+  int32 token_length = 4;
+
+  // Детали при unhealthy: "session_not_found", "page_closed", "wrong_url",
+  // "token_not_found", "browser_disconnected".
+  string detail = 5;
+}

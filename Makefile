@@ -148,7 +148,8 @@ proto-compile: ## Скомпилировать proto файлы в Python и Nod
 		--pyi_out=$(GRPC_PY_OUT) \
 		$(PROTO_DIR)/browser_session.proto \
 		$(PROTO_DIR)/scanner.proto \
-		$(PROTO_DIR)/creator.proto
+		$(PROTO_DIR)/creator.proto \
+		$(PROTO_DIR)/meta_api.proto
 	# grpc_tools генерирует absolute import `from v1 import ...`, который ломает пакет clients.python_grpc.
 	$(PY) -c "from pathlib import Path; [path.write_text(path.read_text().replace('from v1 import ', 'from . import ')) for path in Path('$(GRPC_PY_OUT)/v1').glob('*_pb2_grpc.py')]"
 	@if [ -x "$(RUFF)" ]; then $(RUFF) check $(GRPC_PY_OUT)/v1 --fix; fi

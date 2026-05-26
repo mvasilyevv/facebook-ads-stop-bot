@@ -26,6 +26,7 @@ interface IScannerServiceService extends grpc.ServiceDefinition<grpc.UntypedServ
     validateColumns: IScannerServiceService_IValidateColumns;
     captureColumnWidths: IScannerServiceService_ICaptureColumnWidths;
     applyColumnWidths: IScannerServiceService_IApplyColumnWidths;
+    hardReloadPage: IScannerServiceService_IHardReloadPage;
 }
 
 interface IScannerServiceService_IRunScanCycle extends grpc.MethodDefinition<v1_scanner_pb.RunScanCycleRequest, v1_scanner_pb.ScanCycleEvent> {
@@ -190,6 +191,15 @@ interface IScannerServiceService_IApplyColumnWidths extends grpc.MethodDefinitio
     responseSerialize: grpc.serialize<v1_scanner_pb.ApplyColumnWidthsResponse>;
     responseDeserialize: grpc.deserialize<v1_scanner_pb.ApplyColumnWidthsResponse>;
 }
+interface IScannerServiceService_IHardReloadPage extends grpc.MethodDefinition<v1_scanner_pb.HardReloadPageRequest, v1_scanner_pb.HardReloadPageResponse> {
+    path: "/fb_agent.scanner.v1.ScannerService/HardReloadPage";
+    requestStream: false;
+    responseStream: false;
+    requestSerialize: grpc.serialize<v1_scanner_pb.HardReloadPageRequest>;
+    requestDeserialize: grpc.deserialize<v1_scanner_pb.HardReloadPageRequest>;
+    responseSerialize: grpc.serialize<v1_scanner_pb.HardReloadPageResponse>;
+    responseDeserialize: grpc.deserialize<v1_scanner_pb.HardReloadPageResponse>;
+}
 
 export const ScannerServiceService: IScannerServiceService;
 
@@ -212,6 +222,7 @@ export interface IScannerServiceServer {
     validateColumns: grpc.handleUnaryCall<v1_scanner_pb.ValidateColumnsRequest, v1_scanner_pb.ValidateColumnsResponse>;
     captureColumnWidths: grpc.handleUnaryCall<v1_scanner_pb.CaptureColumnWidthsRequest, v1_scanner_pb.CaptureColumnWidthsResponse>;
     applyColumnWidths: grpc.handleUnaryCall<v1_scanner_pb.ApplyColumnWidthsRequest, v1_scanner_pb.ApplyColumnWidthsResponse>;
+    hardReloadPage: grpc.handleUnaryCall<v1_scanner_pb.HardReloadPageRequest, v1_scanner_pb.HardReloadPageResponse>;
 }
 
 export interface IScannerServiceClient {
@@ -268,6 +279,9 @@ export interface IScannerServiceClient {
     applyColumnWidths(request: v1_scanner_pb.ApplyColumnWidthsRequest, callback: (error: grpc.ServiceError | null, response: v1_scanner_pb.ApplyColumnWidthsResponse) => void): grpc.ClientUnaryCall;
     applyColumnWidths(request: v1_scanner_pb.ApplyColumnWidthsRequest, metadata: grpc.Metadata, callback: (error: grpc.ServiceError | null, response: v1_scanner_pb.ApplyColumnWidthsResponse) => void): grpc.ClientUnaryCall;
     applyColumnWidths(request: v1_scanner_pb.ApplyColumnWidthsRequest, metadata: grpc.Metadata, options: Partial<grpc.CallOptions>, callback: (error: grpc.ServiceError | null, response: v1_scanner_pb.ApplyColumnWidthsResponse) => void): grpc.ClientUnaryCall;
+    hardReloadPage(request: v1_scanner_pb.HardReloadPageRequest, callback: (error: grpc.ServiceError | null, response: v1_scanner_pb.HardReloadPageResponse) => void): grpc.ClientUnaryCall;
+    hardReloadPage(request: v1_scanner_pb.HardReloadPageRequest, metadata: grpc.Metadata, callback: (error: grpc.ServiceError | null, response: v1_scanner_pb.HardReloadPageResponse) => void): grpc.ClientUnaryCall;
+    hardReloadPage(request: v1_scanner_pb.HardReloadPageRequest, metadata: grpc.Metadata, options: Partial<grpc.CallOptions>, callback: (error: grpc.ServiceError | null, response: v1_scanner_pb.HardReloadPageResponse) => void): grpc.ClientUnaryCall;
 }
 
 export class ScannerServiceClient extends grpc.Client implements IScannerServiceClient {
@@ -325,4 +339,7 @@ export class ScannerServiceClient extends grpc.Client implements IScannerService
     public applyColumnWidths(request: v1_scanner_pb.ApplyColumnWidthsRequest, callback: (error: grpc.ServiceError | null, response: v1_scanner_pb.ApplyColumnWidthsResponse) => void): grpc.ClientUnaryCall;
     public applyColumnWidths(request: v1_scanner_pb.ApplyColumnWidthsRequest, metadata: grpc.Metadata, callback: (error: grpc.ServiceError | null, response: v1_scanner_pb.ApplyColumnWidthsResponse) => void): grpc.ClientUnaryCall;
     public applyColumnWidths(request: v1_scanner_pb.ApplyColumnWidthsRequest, metadata: grpc.Metadata, options: Partial<grpc.CallOptions>, callback: (error: grpc.ServiceError | null, response: v1_scanner_pb.ApplyColumnWidthsResponse) => void): grpc.ClientUnaryCall;
+    public hardReloadPage(request: v1_scanner_pb.HardReloadPageRequest, callback: (error: grpc.ServiceError | null, response: v1_scanner_pb.HardReloadPageResponse) => void): grpc.ClientUnaryCall;
+    public hardReloadPage(request: v1_scanner_pb.HardReloadPageRequest, metadata: grpc.Metadata, callback: (error: grpc.ServiceError | null, response: v1_scanner_pb.HardReloadPageResponse) => void): grpc.ClientUnaryCall;
+    public hardReloadPage(request: v1_scanner_pb.HardReloadPageRequest, metadata: grpc.Metadata, options: Partial<grpc.CallOptions>, callback: (error: grpc.ServiceError | null, response: v1_scanner_pb.HardReloadPageResponse) => void): grpc.ClientUnaryCall;
 }

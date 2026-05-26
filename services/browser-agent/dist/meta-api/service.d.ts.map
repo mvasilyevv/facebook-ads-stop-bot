@@ -1,0 +1,1 @@
+{"version":3,"file":"service.d.ts","sourceRoot":"","sources":["../../src/meta-api/service.ts"],"names":[],"mappings":"AAIA,OAAO,EAAE,cAAc,EAA4B,MAAM,uBAAuB,CAAC;AAwBjF,wBAAgB,4BAA4B,CAAC,cAAc,EAAE,cAAc;6BAQ5B,GAAG,YAAY,GAAG,KAAG,OAAO,CAAC,IAAI,CAAC;+BA8ChC,GAAG,YAAY,GAAG,KAAG,OAAO,CAAC,IAAI,CAAC;EAgClF"}
