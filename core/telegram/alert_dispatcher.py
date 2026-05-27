@@ -96,17 +96,22 @@ async def dispatch_pending_alerts(
         else:
             incident_key = str(open_token)
 
-        # Idempotency check — есть ли уже ref?
-        async with engine.connect() as conn:
-            ref_exists = (
+        # Pre-claim: INSERT с sentinel message_id=0 ON CONFLICT DO NOTHING.
+        # Если RETURNING пустой — кто-то уже сделал claim → skip без send'а
+        # (защита от двойного TG-сообщения при параллельных dispatch'ах).
+        async with engine.begin() as conn:
+            claim_row = (
                 await conn.execute(
                     text(
                         """
-                        SELECT 1 FROM telegram_message_refs
-                        WHERE chat_id = :cid AND ad_id = :aid
-                          AND incident_key = :ik AND stream_kind = :sk
-                          AND deleted_at IS NULL
-                        LIMIT 1
+                        INSERT INTO telegram_message_refs
+                            (chat_id, ad_id, incident_key, stream_kind,
+                             message_id, thread_id)
+                        VALUES
+                            (:cid, :aid, :ik, :sk, 0, :tid)
+                        ON CONFLICT (chat_id, ad_id, incident_key, stream_kind)
+                        DO NOTHING
+                        RETURNING id
                         """
                     ),
                     {
@@ -114,13 +119,16 @@ async def dispatch_pending_alerts(
                         "aid": ad_id,
                         "ik": incident_key,
                         "sk": stage,
+                        "tid": thread_id_by_stage.get(str(stage)),
                     },
                 )
             ).first()
 
-        if ref_exists:
+        if claim_row is None:
             counters["skipped_duplicates"] += 1
             continue
+
+        claim_id = claim_row[0]
 
         # Render
         render_input = AlertRenderInput(
@@ -138,6 +146,8 @@ async def dispatch_pending_alerts(
         keyboard = render_inline_keyboard(render_input)
 
         # Send
+        send_failed = False
+        sent: dict | None = None
         try:
             sent = await client.send_message(
                 chat_id=str(chat_id),
@@ -149,45 +159,49 @@ async def dispatch_pending_alerts(
         except TelegramAPIError as exc:
             logger.warning("Не смог отправить alert %s: %s", event_id, exc)
             counters["errors"] += 1
-            continue
+            send_failed = True
         except Exception:
             logger.exception("send_message crashed for alert %s", event_id)
             counters["errors"] += 1
+            send_failed = True
+
+        if send_failed:
+            # Освобождаем claim, чтобы ретрай (или другой воркер) мог переслать
+            try:
+                async with engine.begin() as conn:
+                    await conn.execute(
+                        text("DELETE FROM telegram_message_refs WHERE id = :i"),
+                        {"i": claim_id},
+                    )
+            except Exception:
+                logger.exception("rollback telegram_message_refs claim failed")
             continue
 
         message_id = int((sent or {}).get("message_id", 0))
         if message_id <= 0:
-            # Telegram не вернул message_id — пропускаем сохранение ref, но не считаем ошибкой
+            # Telegram не вернул message_id — sentinel-row остаётся в БД для
+            # последующей дедупликации, но без реального message_id (== 0).
             counters["sent"] += 1
             continue
 
-        # INSERT message_ref для будущей дедупликации + редактирования
+        # UPDATE claim'а реальным message_id + sent_at
         try:
             async with engine.begin() as conn:
                 await conn.execute(
                     text(
                         """
-                        INSERT INTO telegram_message_refs
-                            (chat_id, ad_id, incident_key, stream_kind, message_id, thread_id)
-                        VALUES
-                            (:cid, :aid, :ik, :sk, :mid, :tid)
-                        ON CONFLICT (chat_id, ad_id, incident_key, stream_kind)
-                        DO UPDATE SET message_id = EXCLUDED.message_id,
-                                      last_edited_at = NOW(),
-                                      deleted_at = NULL
+                        UPDATE telegram_message_refs
+                        SET message_id = :mid,
+                            sent_at = NOW(),
+                            last_edited_at = NOW(),
+                            deleted_at = NULL
+                        WHERE id = :i
                         """
                     ),
-                    {
-                        "cid": int(chat_id),
-                        "aid": ad_id,
-                        "ik": incident_key,
-                        "sk": stage,
-                        "mid": message_id,
-                        "tid": thread_id_by_stage.get(str(stage)),
-                    },
+                    {"mid": message_id, "i": claim_id},
                 )
         except Exception:
-            logger.exception("insert telegram_message_refs failed")
+            logger.exception("update telegram_message_refs message_id failed")
 
         counters["sent"] += 1
 
