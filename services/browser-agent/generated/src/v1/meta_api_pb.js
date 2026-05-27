@@ -1427,7 +1427,9 @@ proto.fb_agent.meta_api.v1.UploadImageRequest.toObject = function(includeInstanc
     adAccountId: jspb.Message.getFieldWithDefault(msg, 2, ""),
     filename: jspb.Message.getFieldWithDefault(msg, 3, ""),
     contentType: jspb.Message.getFieldWithDefault(msg, 4, ""),
-    fileBytes: msg.getFileBytes_asB64()
+    fileBytes: msg.getFileBytes_asB64(),
+    imageUrl: jspb.Message.getFieldWithDefault(msg, 6, ""),
+    name: jspb.Message.getFieldWithDefault(msg, 7, "")
   };
 
   if (includeInstance) {
@@ -1483,6 +1485,14 @@ proto.fb_agent.meta_api.v1.UploadImageRequest.deserializeBinaryFromReader = func
     case 5:
       var value = /** @type {!Uint8Array} */ (reader.readBytes());
       msg.setFileBytes(value);
+      break;
+    case 6:
+      var value = /** @type {string} */ (reader.readString());
+      msg.setImageUrl(value);
+      break;
+    case 7:
+      var value = /** @type {string} */ (reader.readString());
+      msg.setName(value);
       break;
     default:
       reader.skipField();
@@ -1545,6 +1555,20 @@ proto.fb_agent.meta_api.v1.UploadImageRequest.serializeBinaryToWriter = function
   if (f.length > 0) {
     writer.writeBytes(
       5,
+      f
+    );
+  }
+  f = message.getImageUrl();
+  if (f.length > 0) {
+    writer.writeString(
+      6,
+      f
+    );
+  }
+  f = message.getName();
+  if (f.length > 0) {
+    writer.writeString(
+      7,
       f
     );
   }
@@ -1662,6 +1686,42 @@ proto.fb_agent.meta_api.v1.UploadImageRequest.prototype.getFileBytes_asU8 = func
  */
 proto.fb_agent.meta_api.v1.UploadImageRequest.prototype.setFileBytes = function(value) {
   return jspb.Message.setProto3BytesField(this, 5, value);
+};
+
+
+/**
+ * optional string image_url = 6;
+ * @return {string}
+ */
+proto.fb_agent.meta_api.v1.UploadImageRequest.prototype.getImageUrl = function() {
+  return /** @type {string} */ (jspb.Message.getFieldWithDefault(this, 6, ""));
+};
+
+
+/**
+ * @param {string} value
+ * @return {!proto.fb_agent.meta_api.v1.UploadImageRequest} returns this
+ */
+proto.fb_agent.meta_api.v1.UploadImageRequest.prototype.setImageUrl = function(value) {
+  return jspb.Message.setProto3StringField(this, 6, value);
+};
+
+
+/**
+ * optional string name = 7;
+ * @return {string}
+ */
+proto.fb_agent.meta_api.v1.UploadImageRequest.prototype.getName = function() {
+  return /** @type {string} */ (jspb.Message.getFieldWithDefault(this, 7, ""));
+};
+
+
+/**
+ * @param {string} value
+ * @return {!proto.fb_agent.meta_api.v1.UploadImageRequest} returns this
+ */
+proto.fb_agent.meta_api.v1.UploadImageRequest.prototype.setName = function(value) {
+  return jspb.Message.setProto3StringField(this, 7, value);
 };
 
 

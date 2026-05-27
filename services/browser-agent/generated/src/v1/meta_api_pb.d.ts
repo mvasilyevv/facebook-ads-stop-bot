@@ -175,6 +175,10 @@ export class UploadImageRequest extends jspb.Message {
     getFileBytes_asU8(): Uint8Array;
     getFileBytes_asB64(): string;
     setFileBytes(value: Uint8Array | string): UploadImageRequest;
+    getImageUrl(): string;
+    setImageUrl(value: string): UploadImageRequest;
+    getName(): string;
+    setName(value: string): UploadImageRequest;
 
     serializeBinary(): Uint8Array;
     toObject(includeInstance?: boolean): UploadImageRequest.AsObject;
@@ -193,6 +197,8 @@ export namespace UploadImageRequest {
         filename: string,
         contentType: string,
         fileBytes: Uint8Array | string,
+        imageUrl: string,
+        name: string,
     }
 }
 

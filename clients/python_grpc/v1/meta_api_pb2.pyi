@@ -108,17 +108,29 @@ class CheckMetaApiHealthResponse(_message.Message):
     ) -> None: ...
 
 class UploadImageRequest(_message.Message):
-    __slots__ = ("session_id", "ad_account_id", "filename", "content_type", "file_bytes")
+    __slots__ = (
+        "session_id",
+        "ad_account_id",
+        "filename",
+        "content_type",
+        "file_bytes",
+        "image_url",
+        "name",
+    )
     SESSION_ID_FIELD_NUMBER: _ClassVar[int]
     AD_ACCOUNT_ID_FIELD_NUMBER: _ClassVar[int]
     FILENAME_FIELD_NUMBER: _ClassVar[int]
     CONTENT_TYPE_FIELD_NUMBER: _ClassVar[int]
     FILE_BYTES_FIELD_NUMBER: _ClassVar[int]
+    IMAGE_URL_FIELD_NUMBER: _ClassVar[int]
+    NAME_FIELD_NUMBER: _ClassVar[int]
     session_id: str
     ad_account_id: str
     filename: str
     content_type: str
     file_bytes: bytes
+    image_url: str
+    name: str
     def __init__(
         self,
         session_id: _Optional[str] = ...,
@@ -126,6 +138,8 @@ class UploadImageRequest(_message.Message):
         filename: _Optional[str] = ...,
         content_type: _Optional[str] = ...,
         file_bytes: _Optional[bytes] = ...,
+        image_url: _Optional[str] = ...,
+        name: _Optional[str] = ...,
     ) -> None: ...
 
 class UploadImageResponse(_message.Message):

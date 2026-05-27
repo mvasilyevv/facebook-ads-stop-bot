@@ -132,6 +132,14 @@ message UploadImageRequest {
 
   // Бинарные данные файла целиком. Single-shot — ограничено max gRPC сообщением (~50MB).
   bytes file_bytes = 5;
+
+  // Альтернатива file_bytes: URL откуда Meta сама скачает картинку.
+  // Если задан — file_bytes игнорируется; multipart не отправляется.
+  // Должен быть HTTPS. Используется для источников в S3/CDN.
+  string image_url = 6;
+
+  // Имя картинки для Meta (при URL-загрузке). Если пустое — Meta назначает сама.
+  string name = 7;
 }
 
 message UploadImageResponse {
