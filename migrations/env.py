@@ -10,17 +10,9 @@ from alembic import context
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
-from core.db.base import Base
-from core.models import (  # noqa: F401 — нужен для metadata
-    AdSnapshot,
-    AlertEvent,
-    CampaignCreatorTask,
-    DisableTask,
-    ObserverSettings,
-    Offer,
-    OfferRuleConfig,
-    TelegramSettings,
-)
+# Импорт всего пакета core.models регистрирует все 35 ORM-моделей в Base.metadata.
+# Этого достаточно для Alembic autogenerate — не нужно явно перечислять классы.
+from core.models import Base  # noqa: F401
 
 config = context.config
 if config.config_file_name is not None:
