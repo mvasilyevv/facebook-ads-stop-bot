@@ -23,7 +23,7 @@ from apps.cleanup_worker.retention import (
 
 logger = logging.getLogger(__name__)
 
-# 7 партиционированных таблиц + столбец-партиция + ключ в retention_policy
+# 8 партиционированных таблиц + столбец-партиция + ключ в retention_policy
 _PARTITIONED: list[tuple[str, str, str]] = [
     ("ad_metrics", "cycle_ts", "ad_metrics"),
     ("alert_events", "created_at", "alert_events"),
@@ -32,6 +32,7 @@ _PARTITIONED: list[tuple[str, str, str]] = [
     ("meta_api_webhook_event", "received_at", "meta_api_webhook_event"),
     ("ad_library_snapshot", "scanned_at", "ad_library_snapshot"),
     ("tracker_postback", "received_at", "tracker_postback"),
+    ("adsetpro_postback_events", "received_at", "adsetpro_postback_events"),
 ]
 
 

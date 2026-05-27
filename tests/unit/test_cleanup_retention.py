@@ -64,7 +64,8 @@ def test_cutoff_datetime() -> None:
     assert cutoff == datetime(2026, 5, 12, 12, 0, 0, tzinfo=timezone.utc)
 
 
-# Дефолтная политика содержит все 17 ключей из спецификации DB_REDESIGN.md
+# Дефолтная политика содержит все 18 ключей из спецификации DB_REDESIGN.md
+# (+ adsetpro_postback_events на Волне 3 — META_INTEGRATION_PLAN.md §5).
 def test_default_policy_keys() -> None:
     policy = get_default_policy()
     expected_keys = {
@@ -78,6 +79,7 @@ def test_default_policy_keys() -> None:
         "meta_api_audit_log",
         "meta_api_webhook_event",
         "tracker_postback",
+        "adsetpro_postback_events",
         "task_queue_completed",
         "task_queue_failed",
         "enable_recommendations",

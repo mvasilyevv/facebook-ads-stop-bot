@@ -50,6 +50,7 @@ from core.models.observer import (
     ScanRun,
 )
 from core.models.settings import (
+    AdsetProCredentials,
     ObserverConfig,
     SystemConfig,
     TelegramConfig,
@@ -61,7 +62,11 @@ from core.models.telegram import (
     TelegramMessageRef,
     TelegramRecipient,
 )
-from core.models.trackers import TrackerAggregate, TrackerPostback
+from core.models.trackers import (
+    AdsetProPostbackEvent,
+    TrackerAggregate,
+    TrackerPostback,
+)
 
 __all__ = [
     # base
@@ -72,6 +77,7 @@ __all__ = [
     "Timestamp",
     "UUIDPrimaryKey",
     # settings
+    "AdsetProCredentials",
     "ObserverConfig",
     "SystemConfig",
     "TelegramConfig",
@@ -113,6 +119,7 @@ __all__ = [
     "MetaApiObservation",
     "MetaApiWebhookEvent",
     # trackers
+    "AdsetProPostbackEvent",
     "TrackerAggregate",
     "TrackerPostback",
 ]

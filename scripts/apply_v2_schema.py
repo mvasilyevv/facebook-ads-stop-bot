@@ -71,7 +71,7 @@ def _get_database_url() -> str:
     return db_url
 
 
-# 7 партиционированных таблиц + столбец-партиция
+# 8 партиционированных таблиц + столбец-партиция
 _PARTITIONED_TABLES: list[tuple[str, str]] = [
     ("ad_metrics", "cycle_ts"),
     ("alert_events", "created_at"),
@@ -80,6 +80,7 @@ _PARTITIONED_TABLES: list[tuple[str, str]] = [
     ("meta_api_webhook_event", "received_at"),
     ("ad_library_snapshot", "scanned_at"),
     ("tracker_postback", "received_at"),
+    ("adsetpro_postback_events", "received_at"),
 ]
 
 
@@ -164,6 +165,7 @@ async def _seed_retention_policy(engine) -> None:
         "meta_api_audit_log": "30 days",
         "meta_api_webhook_event": "90 days",
         "tracker_postback": "60 days",
+        "adsetpro_postback_events": "60 days",
         "task_queue_completed": "30 days",
         "task_queue_failed": "90 days",
         "enable_recommendations": "30 days",
