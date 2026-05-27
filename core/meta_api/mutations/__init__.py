@@ -6,7 +6,17 @@
 вызывает dispatch_mutation(client, payload), которая делегирует нужному handler.
 
 Подход: универсальный ExecuteGraphCall, никаких новых RPC в proto/v1/meta_api.proto.
-Все mutations — это POST к graph.facebook.com/v22.0/{object_id} с разными params.
+Все mutations — это POST/DELETE к graph.facebook.com/v22.0/{object_id} с разными params.
+
+Зарегистрированные kinds (должны совпадать с MUTATION_KINDS в schemas.py):
+- pause_ad, activate_ad
+- pause_campaign, activate_campaign
+- set_adset_budget
+- duplicate_campaign
+- bulk_status_change
+- create_campaign
+- custom_audience   (create/update/delete Custom Audiences)
+- set_ad_creative   (замена creative у существующего объявления)
 
 См. META_INTEGRATION_PLAN.md, Этап 5.
 """
@@ -21,9 +31,11 @@ from core.meta_api.mutations.activate_campaign import ActivateCampaignHandler
 from core.meta_api.mutations.base import MutationHandler
 from core.meta_api.mutations.bulk_status_change import BulkStatusChangeHandler
 from core.meta_api.mutations.create_campaign import CreateCampaignHandler
+from core.meta_api.mutations.custom_audience import CustomAudienceHandler
 from core.meta_api.mutations.duplicate_campaign import DuplicateCampaignHandler
 from core.meta_api.mutations.pause_ad import PauseAdHandler
 from core.meta_api.mutations.pause_campaign import PauseCampaignHandler
+from core.meta_api.mutations.set_ad_creative import SetAdCreativeHandler
 from core.meta_api.mutations.set_adset_budget import SetAdsetBudgetHandler
 from core.meta_api.schemas import MetaMutationPayload
 
@@ -38,6 +50,8 @@ MUTATION_HANDLERS: dict[str, MutationHandler] = {
     "duplicate_campaign": DuplicateCampaignHandler(),
     "bulk_status_change": BulkStatusChangeHandler(),
     "create_campaign": CreateCampaignHandler(),
+    "custom_audience": CustomAudienceHandler(),
+    "set_ad_creative": SetAdCreativeHandler(),
 }
 
 

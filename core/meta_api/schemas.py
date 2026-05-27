@@ -26,6 +26,8 @@ MUTATION_KINDS: frozenset[str] = frozenset(
         "duplicate_campaign",
         "bulk_status_change",
         "create_campaign",
+        "custom_audience",
+        "set_ad_creative",
     }
 )
 
