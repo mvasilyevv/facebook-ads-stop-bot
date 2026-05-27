@@ -100,6 +100,12 @@ class Settings(BaseSettings):
     # 20s — компромисс между UX и блокировкой алерта.
     ai_explain_timeout_seconds: float = 20.0
 
+    # --- AdSet.pro (внешний трекер постбэков, см. META_INTEGRATION_PLAN §4.4 / Этап 6) ---
+    adsetpro_mcp_key: str = ""
+    # TODO(stage-6): уточнить реальный base URL у AdSet.pro перед первым live-вызовом.
+    adsetpro_base_url: str = "https://api.adset.pro"
+    adsetpro_timeout_seconds: float = 15.0
+
     @model_validator(mode="after")
     def _warn_insecure_defaults(self) -> "Settings":
         """Предупреждаем о небезопасных настройках при старте."""
