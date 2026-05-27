@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""Telegram poller v2 — минимальный long-polling loop под новую схему БД.
+"""Telegram poller — минимальный long-polling loop под новую схему БД.
 
-Запускается через run_telegram_poller_v2.py. Перезагружает bot_token из БД
+Запускается через run_telegram_poller.py. Перезагружает bot_token из БД
 каждые 30 сек (на случай ротации). Каждые ~3 сек делает heartbeat в telegram_config.
 """
 

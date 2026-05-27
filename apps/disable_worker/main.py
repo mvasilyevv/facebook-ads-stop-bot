@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Disable worker v2 main loop."""
+"""Disable worker main loop."""
 
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ async def main_loop() -> None:
     db_url = _get_database_url()
     engine = create_async_engine(db_url, echo=False)
     try:
-        logger.info("disable_worker_v2 запущен")
+        logger.info("disable_worker запущен")
         await run_toggle_loop(
             engine,
             task_type="disable",
@@ -35,4 +35,4 @@ async def main_loop() -> None:
         )
     finally:
         await engine.dispose()
-        logger.info("disable_worker_v2 завершён")
+        logger.info("disable_worker завершён")

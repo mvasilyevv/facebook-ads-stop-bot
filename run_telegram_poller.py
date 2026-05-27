@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
-"""Entrypoint для telegram_poller v2."""
+"""Entrypoint для telegram_poller."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
 
-from apps.telegram_poller_v2.main import _get_database_url, main_loop
+from apps.telegram_poller.main import _get_database_url, main_loop
 
 if __name__ == "__main__":
     logging.basicConfig(

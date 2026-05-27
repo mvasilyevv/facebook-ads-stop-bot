@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
-"""Entrypoint для enable_worker v2."""
+"""Entrypoint для enable_worker."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
 
-from apps.enable_worker_v2.main import main_loop
+from apps.enable_worker.main import main_loop
 
 if __name__ == "__main__":
     logging.basicConfig(

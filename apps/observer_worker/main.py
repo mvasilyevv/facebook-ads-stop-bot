@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Observer worker v2 main loop.
+"""Observer worker main loop.
 
 Цикл:
 1. load_observer_config + check is_scanning_enabled
@@ -290,7 +290,7 @@ async def main_loop(
     tg_client_factory: Callable[[], Awaitable[object]] | None = None,
     should_continue: Callable[[], bool] = lambda: True,
 ) -> None:
-    """Бесконечный цикл observer v2.
+    """Бесконечный цикл observer.
 
     Args:
         gate_factory: создаёт ScannerGate (default: BrowserAgentClient wrapper).
@@ -329,7 +329,7 @@ async def main_loop(
     try:
         redis_client = await redis_factory()
         tg_client = await tg_client_factory()
-        logger.info("observer_worker_v2 запущен")
+        logger.info("observer_worker запущен")
 
         while should_continue() and not shutdown_event.is_set():
             if gate is None:
@@ -365,7 +365,7 @@ async def main_loop(
             except asyncio.TimeoutError:
                 pass
     finally:
-        logger.info("observer_worker_v2 завершён")
+        logger.info("observer_worker завершён")
         if redis_client is not None:
             try:
                 await redis_client.aclose()
