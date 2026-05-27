@@ -212,9 +212,15 @@ async def apply_fsm_transition(
     """UPSERT в ad_alert_state + INSERT в alert_events если был emit.
 
     Один atomic commit — FSM trans + event log не должны разойтись.
+
+    WHERE-guard в DO UPDATE: observer НЕ затирает терминальные состояния
+    (claimed / disabled). Эти состояния выставляет либо telegram_poller (юзер
+    кликнул «Отключить»), либо toggle_executor (после успешного disable). Их
+    обратный сброс в normal/warning_sent/stop_sent делается отдельными
+    функциями reset_alert_state_after_*_succeeded + observer-reopen логикой.
     """
     async with engine.begin() as conn:
-        # 1. upsert ad_alert_state
+        # 1. upsert ad_alert_state с защитой от регресса claimed/disabled
         await conn.execute(
             text(
                 """
@@ -237,6 +243,7 @@ async def apply_fsm_transition(
                         WHEN ad_alert_state.alert_state != EXCLUDED.alert_state
                         THEN NOW() ELSE ad_alert_state.last_transition_at
                     END
+                WHERE ad_alert_state.alert_state NOT IN ('claimed', 'disabled')
                 """
             ),
             {
