@@ -1,0 +1,16 @@
+# -*- coding: utf-8 -*-
+"""Entrypoint для telegram_poller v2."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+
+from apps.telegram_poller_v2.main import _get_database_url, main_loop
+
+if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(name)s %(levelname)s %(message)s",
+    )
+    asyncio.run(main_loop(_get_database_url()))
