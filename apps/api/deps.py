@@ -17,6 +17,7 @@ DI явно прописан здесь, чтобы:
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from typing import Annotated
 
 from fastapi import Depends, Request
 from redis.asyncio import Redis  # type: ignore[import-not-found]
@@ -44,6 +45,13 @@ async def get_redis(request: Request) -> Redis:
     if redis is None:
         raise RuntimeError("Redis не инициализирован в app.state (lifespan не отработал)")
     return redis
+
+
+# Annotated-алиасы для удобного использования в роутерах v1:
+#   async def my_handler(engine: DepEngine, redis: DepRedis, s: DepSettings): ...
+DepEngine = Annotated[AsyncEngine, Depends(get_engine)]
+DepRedis = Annotated[Redis, Depends(get_redis)]
+DepSettings = Annotated[Settings, Depends(get_settings)]
 
 
 async def get_adset_pro_client(
