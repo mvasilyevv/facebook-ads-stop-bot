@@ -520,6 +520,15 @@ def _evaluate_spend_range(
 
 
 def _is_registration_normal(row: ScannedAdRow, ctx: RuleContext) -> bool:
+    """True если цена регистрации не выходит за стоп-порог CPR.
+
+    КОНТРАКТ: ``ctx.cpr_stop_threshold`` — это ИТОГОВОЕ свёрнутое значение
+    (cpa_amount × cpr_percent_stop% × cpr_stop_percent_of_base%), уже учтены
+    все модификаторы из RuleContext.__post_init__. Здесь сравниваем напрямую,
+    без повторного умножения на проценты — иначе получится double-fold
+    (порог уехал бы в 0.8 от настоящего и нормальные регистрации
+    ложно «выходили» бы из normal-зоны).
+    """
     if row.registrations <= 0 or row.cost_per_registration is None:
         return False
     return _round_money(row.cost_per_registration) <= ctx.cpr_stop_threshold

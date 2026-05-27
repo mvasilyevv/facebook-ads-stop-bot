@@ -121,7 +121,11 @@ async def _count_active_offers(engine: AsyncEngine) -> int:
 
 
 async def _count_active_ads_normal(engine: AsyncEngine) -> int:
-    """Активные объявления (is_active=true) в состоянии 'normal'.
+    """Активные объявления (is_active=true) в состоянии 'normal', живые за 7 дней.
+
+    Фильтр по `last_seen_at` отсекает старые объявления, которых уже нет
+    в Ads Manager (observer перестал их видеть): без этого фильтра счётчик
+    рос бы вечно — `is_active=TRUE` отстаёт от реального отключения.
 
     Считаем по fb_ads, у которых либо нет записи в ad_alert_state, либо она
     'normal'. Это удобный косвенный показатель «живых» объявлений без open алертов.
@@ -135,6 +139,7 @@ async def _count_active_ads_normal(engine: AsyncEngine) -> int:
                     FROM fb_ads a
                     LEFT JOIN ad_alert_state s ON s.ad_id = a.id
                     WHERE a.is_active = TRUE
+                      AND a.last_seen_at >= NOW() - INTERVAL '7 days'
                       AND COALESCE(s.alert_state, 'normal') = 'normal'
                     """
                 )

@@ -2,7 +2,9 @@
 """Digest scheduler — раз в минуту проверяет окно отправки и шлёт daily digest.
 
 Контракт:
-- Окно: ``DIGEST_HOUR_UTC:DIGEST_MIN_UTC`` ± 5 минут вперёд (default 09:00 UTC).
+- Окно: ``DIGEST_HOUR_UTC:DIGEST_MIN_UTC`` и до конца суток UTC (default 09:00 UTC).
+  Catch-up: если scheduler упал в 09:02, а поднялся в 12:00 — digest всё равно
+  уйдёт (раз в день, Redis-ключ блокирует повтор). Лучше поздний digest чем никакой.
 - Защита от повторов: Redis ``digest:sent:YYYY-MM-DD`` TTL 26 часов.
 - Heartbeat: ``worker:heartbeat:digest_scheduler`` TTL 60s.
 - Получатели: все active recipient'ы из ``telegram_recipients`` (revoked_at IS NULL).
@@ -61,17 +63,24 @@ class DigestWindow:
 
 
 def is_in_send_window(now: datetime, window: DigestWindow) -> bool:
-    """True если now попадает в [HH:MM ; HH:MM + window_minutes).
+    """True если now попадает в [HH:MM ; конец суток UTC).
 
-    now должен быть timezone-aware UTC. Сравниваем минуты от начала суток —
-    это безопаснее, чем играться с replace(hour=, minute=) и пересечением суток.
+    Catch-up семантика: окно открыто от планового времени до конца суток.
+    Защита от повторов реализована Redis-ключом ``digest:sent:YYYY-MM-DD``,
+    не самим окном. Если scheduler упал в 09:02 — поднявшись в 12:00,
+    он всё равно отправит digest (ключа ещё нет). На следующие сутки
+    Redis-ключ изменится (новая дата) и окно снова откроется.
+
+    window.window_minutes сохранён в API только для обратной совместимости —
+    реальное поведение теперь catch-up до конца суток. Hard cut-off на 23:59 UTC.
     """
     if now.tzinfo is None:
         raise ValueError("now должен быть timezone-aware")
     now_utc = now.astimezone(timezone.utc)
     target_minutes = window.hour * 60 + window.minute
     current_minutes = now_utc.hour * 60 + now_utc.minute
-    return target_minutes <= current_minutes < target_minutes + max(1, window.window_minutes)
+    # 24*60 = 1440 — следующие сутки уже не «сегодняшний» digest.
+    return target_minutes <= current_minutes < 24 * 60
 
 
 def digest_sent_key(now: datetime) -> str:
