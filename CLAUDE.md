@@ -31,6 +31,10 @@ python run_enable_worker.py                                              # Enabl
 python run_telegram_poller.py                                            # Telegram poller (/spy, /start, /help, inline callbacks)
 python run_cleanup_worker.py                                             # Cleanup worker (retention + partitions)
 python run_reconciler_worker.py                                          # Reconciler (stuck task_queue → retrying)
+python run_meta_api_worker.py                                            # Marketing API mutations worker (Этап 5)
+python run_health_watchdog.py                                            # Health watchdog (мониторинг worker:heartbeat:*)
+python run_enable_recommendation_worker.py                               # Enable recommendation worker (recovered ads)
+python run_digest_scheduler.py                                           # Daily TG digest (09:00 UTC)
 python run_meta_api_worker.py                                            # Marketing API mutations worker (skeleton до Этапа 5)
 python run_health_watchdog.py                                            # Health watchdog (мониторинг worker:heartbeat:*)
 
@@ -57,9 +61,9 @@ python scripts/restore_secrets.py          # вернуть токены
 
 **FB Stop Bot** — мониторит Facebook Ads, оценивает стоп-правила, шлёт алерты в Telegram, автоматически отключает объявления, создаёт новые кампании. Real-time часть работает через anti-detect браузер (Vision + Playwright + Node.js gRPC). Marketing API добавляется для latency-tolerant операций (см. `META_INTEGRATION_PLAN.md`).
 
-### Восемь воркеров + Node.js gRPC
+### Десять Python воркеров + Node.js gRPC
 
-После v2-миграции (см. `DB_REDESIGN.md`) кодовая база сокращена. Удалены: legacy ORM, observer god-таблицы, FastAPI роутеры, creator workers, digest scheduler. Восстановим инкрементально по запросу.
+После v2-миграции (см. `DB_REDESIGN.md`) кодовая база сокращена. Удалены: legacy ORM, observer god-таблицы, FastAPI роутеры, creator workers. Восстановим инкрементально по запросу.
 
 **Python воркеры (текущие, все на v2 схеме):**
 
@@ -69,8 +73,10 @@ python scripts/restore_secrets.py          # вернуть токены
 4. **telegram_poller** (`apps/telegram_poller/`) — long-polling Telegram Bot API. Команды: `/start [code]` (consume invite), `/help`, `/spy <slot> <country>` (Ad Library pipeline). Inline-кнопки `dis:`, `snz:` под алертами → создают `task_queue` запись или ставят `ad_alert_state.snoozed_until`. Точка входа: `run_telegram_poller.py`.
 5. **cleanup_worker** (`apps/cleanup_worker/`) — раз в сутки в 04:00 UTC: DROP старых партиций, DELETE по retention из `system_config.retention_policy`, чистка orphan ad_library media файлов, CREATE next-month партиций. Точка входа: `run_cleanup_worker.py`.
 6. **reconciler_worker** (`apps/reconciler_worker/`) — каждые 30 сек: переводит `task_queue.status='running'` старше 30 минут → `retrying` (защита от крашнутых воркеров), отменяет `draft` старше 24 часов. Точка входа: `run_reconciler_worker.py`.
-7. **meta_api_worker** (`apps/meta_api_worker/`) — поллит `task_queue` где `task_type='meta_api_mutation'`. На Этапе 2 — скелет: claim → mark_failed("not implemented yet"). На Этапе 5 здесь будет реальная диспетчеризация mutations через `MetaApiClient` (gRPC к browser-agent). Heartbeat `worker:heartbeat:meta_api` в Redis. Reconcile stuck running/stale drafts с собственными таймаутами. Точка входа: `run_meta_api_worker.py`.
+7. **meta_api_worker** (`apps/meta_api_worker/`) — поллит `task_queue` где `task_type='meta_api_mutation'`. На Этапе 5 диспетчеризует mutations через `dispatch_mutation` → `core/meta_api/mutations/*` поверх универсального `ExecuteGraphCall`. Eager-init `AuditedMetaApiClient` в `main_loop`. Маршрутизация ошибок: `Permanent/TokenInvalid/NotFound/Permission/NotImplemented/ValueError → mark_failed`; `RateLimited/Temporary/SessionUnavailable → requeue` (exponential backoff). Heartbeat `worker:heartbeat:meta_api` TTL 60s. Точка входа: `run_meta_api_worker.py`.
 8. **health_watchdog** (`apps/health_watchdog/`) — раз в 60 сек проверяет `worker:heartbeat:*` в Redis. Если воркер из `EXPECTED_WORKERS` (env CSV) не дышит — алерт в TG через `core.telegram.client`. Дедуп через `health:alerted:{worker}` TTL 3600 (атомарный SET NX EX, не задвоит при параллельном запуске). Дополнительно проверяет `observer:runtime` freshness (>5 мин → отдельный алерт). Если `telegram_config` пуст — работает silent + дедуп всё равно ставится (защита от шквала при появлении токена). Точка входа: `run_health_watchdog.py`.
+9. **enable_recommendation_worker** (`apps/enable_recommendation_worker/`) — раз в 5 мин ищет ads в state `stop_sent`/`disabled` старше cooldown (без `ad_auto_enable_disabled`), проверяет метрики после disable через `core/enable_reco/analyzer.should_recommend` (spend, cost_per_lead, cost_per_registration, deposits) → INSERT в `enable_recommendations` + TG-алерт с inline `ereco:<fb_ad_id>` → ручное подтверждение пользователем создаёт `task_queue` enable. Дедуп Redis `enable_reco:last:{ad_id}` TTL 6h (SET NX). Точка входа: `run_enable_recommendation_worker.py`.
+10. **digest_scheduler** (`apps/digest_scheduler/`) — ежедневный TG-дайджест в 9:00 UTC через `core/telegram/digest_builder.py` (pure SQL-агрегации поверх `alert_events`, `task_queue`, `ad_metrics`, `offers`) + `digest_renderer.py` (HTML). Цикл `is_in_send_window` сверяет минуты от начала суток. Дедуп `digest:sent:YYYY-MM-DD` TTL 26ч в Redis. При `no_tg_config` флаг не ставится, при `no_recipients` — ставится. Точка входа: `run_digest_scheduler.py`.
 
 **Node.js gRPC сервис (`services/browser-agent/`):**
 
@@ -101,7 +107,9 @@ python scripts/restore_secrets.py          # вернуть токены
 - **tasks/toggle_executor.py** — общий движок для disable/enable воркеров: `execute_one_toggle_task` + `run_toggle_loop` (claim → toggle → mark, error recovery, gate reconnect).
 - **telegram/** — `client.py` (TG Bot API через httpx, не зависит от ORM), `service.py` (load_telegram_config, find_recipient, consume_invite), `bot_handler.py` (минимальный: /start /help /spy + callback'и под алертами), `renderer.py` (форматирование алертов с inline-кнопками `dis:`/`snz:`), `alert_dispatcher.py` (отправка алертов из alert_events с дедупом через telegram_message_refs), `messaging.py`.
 - **ad_library/** — Ad Library pipeline (см. `DB_REDESIGN.md` §6.7): `scanner.py` (gRPC к browser-agent), `classifier.py` (vertical + relevance к slot), `media.py` (downloader через httpx), `enricher.py` (hook/cta/tone heuristic), `tier_ranker.py` (S/A/B/C), `report.py` (markdown), `pipeline.py` (orchestrator), `spy_handler.py` (parse /spy args).
-- **meta_api/** — Python-обвязка над gRPC MetaApiService browser-agent: `client.py` (`MetaApiClient` + `AuditedMetaApiClient`), `schemas.py` (frozen `MetaApiAdRow`/`MetaInsightsRow`/`MetaMutationPayload`), `errors.py` (классификация Graph error codes → `TokenInvalidError`/`RateLimitedError`/`NotFoundError`/...), `adapters.py` (`MetaApiAdRow → ScannedAdRow`), `audit.py` (запись в `meta_api_audit_log`, partitioned), `queue.py` (outbox-обёртка для `task_type='meta_api_mutation'` + `default_idempotency_key`), `reconciler.py` (stuck running / stale drafts), `insights/fetcher.py` (`InsightsFetcher` с пагинацией). Marketing API не шлётся через httpx — только через page.evaluate(fetch) изнутри Vision-сессии. См. `META_INTEGRATION_PLAN.md` §3-4.
+- **meta_api/** — Python-обвязка над gRPC MetaApiService browser-agent: `client.py` (`MetaApiClient` + `AuditedMetaApiClient`), `schemas.py` (frozen `MetaApiAdRow`/`MetaInsightsRow`/`MetaMutationPayload`), `errors.py` (классификация Graph error codes → `TokenInvalidError`/`RateLimitedError`/`NotFoundError`/...), `adapters.py` (`MetaApiAdRow → ScannedAdRow`), `audit.py` (запись в `meta_api_audit_log`, partitioned), `queue.py` (outbox-обёртка для `task_type='meta_api_mutation'` + `default_idempotency_key`), `reconciler.py` (stuck running / stale drafts), `insights/fetcher.py` (`InsightsFetcher` с пагинацией), **`mutations/`** (Этап 5 — 8 handlers: `pause_ad`/`activate_ad`/`pause_campaign`/`activate_campaign`/`set_adset_budget`/`duplicate_campaign`/`bulk_status_change`/`create_campaign`) + `dispatch_mutation`. Все mutations через универсальный `ExecuteGraphCall`. Marketing API не шлётся через httpx — только через page.evaluate(fetch) изнутри Vision-сессии. См. `META_INTEGRATION_PLAN.md` §3-5.
+- **enable_reco/** — pure-функция `should_recommend` (FsmInput-подобный анализ метрик после disable) + `render_recommendation_alert` (HTML + inline `ereco:`). Используется `enable_recommendation_worker`.
+- **telegram/digest_builder.py + digest_renderer.py** — pure-агрегации `build_digest(engine, day_start_utc)` поверх partitioned-таблиц (обязательная фильтрация по партиционному ключу) и HTML-рендер для ежедневного дайджеста.
 - **campaign_recorder/** — запись пользовательских действий в браузере → JSON план (для creator workers, которые сейчас не активны).
 - **creator_bridge/** — мост между Python и TS-bundle на странице (через `add_init_script` + `window.fbAgentEmit`).
 - **creatives/** — `uniquify_creatives` (водяной знак), `folder_opener`.
@@ -128,9 +136,7 @@ python scripts/restore_secrets.py          # вернуть токены
 После v2-миграции удалены, но могут быть восстановлены инкрементально:
 - **API роутеры** (`apps/api/`) — 17 роутеров FastAPI. Понадобится для фронта.
 - **Creator workers** (`apps/creator_worker/`, `apps/creator_recorder/`) — автоматизация создания кампаний через Vision.
-- **Meta API mutations execution** — Этап 2 даёт только скелет worker'а и Python-обвязку (`core/meta_api/`: client, schemas, errors, adapters, audit, queue, reconciler, insights/fetcher). Реальные mutations (`pause_ad`, `set_adset_budget`, `create_campaign` через Batch API и т.д.) подключаются на Этапе 5 META_INTEGRATION_PLAN — нужны handlers в `core/meta_api/mutations/` и TS-сервис `services/browser-agent/src/meta-api/mutations.ts`.
-- **Enable recommendation worker** (`apps/enable_recommendation_worker/`) — анализ выключенных ads.
-- **TG digest scheduler** (`core/telegram/digest_*`) — ежедневный отчёт в 9:00.
+- **Meta API расширенные mutations** — Этап 5 дал 8 базовых handlers через `ExecuteGraphCall`. Не реализовано: полный `create_campaign` (campaign + adset + ad + creative в одной Batch-транзакции), `UploadImage`/`UploadVideo` (chunked upload — требует расширения proto потоковым RPC), Custom Audiences, `SetAdCreative` (замена creative у существующего ad), полный rename в `duplicate_campaign`.
 - **Backtest** (`scripts/backtest_rules.py`) — пройти историю и оценить false-stop'ы.
 
 ### Будущие модули (см. META_INTEGRATION_PLAN.md + DB_REDESIGN.md)
