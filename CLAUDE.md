@@ -129,7 +129,8 @@ python scripts/restore_secrets.py          # вернуть токены
 - **campaign_scripts/planner.py** — декларативный план для ручного создания кампании.
 - **campaign_creator/** — фабрика создания кампаний (Vision-based, не active в текущем сборке).
 - **ai_assistant/** — pure-Python ассистент: `chat.py`, `client.py`, `providers.py`, `prompts/`. Пакет `tools/` (registry + base + ops/meta/drafts/creative — 15 tools) подключён к Telegram через `core/telegram/ai_handlers.py` (`/ask` + draft callbacks `dr_ok`/`dr_cancel`). `ToolHandler.risk_level`: READ_ONLY (исполняется немедленно), DRAFT_REQUIRED (создаёт `task_queue` со `status='draft'` через `core.meta_api.queue.create_draft_task` → юзер подтверждает в TG), CREATIVE. Rate-limit per `client_key` через `tools/_ratelimit.py` (Redis `ai:ratelimit:tools:*` TTL 3600, fail-open). `MetaApiClient` пробрасывается через `ToolContext` — без него meta-tools падают с явной ошибкой.
-- **adset_pro/** — минимальный REST-клиент трекера AdSet.pro (Этап 6 подготовка): `AdsetProClient` (async httpx + Bearer + tenacity retry на 5xx/429/transport), schemas (`StatsQueryRequest/Response`, `ConversionRow.from_api_row` парсит `ext_sub6 → fb_ad_id`, `PostbackEvent` на будущее), errors (`AuthError`/`NotFoundError`/`RateLimitedError`/`TemporaryError`/`PermanentError` + `classify_http_error`). Ключ `ADSETPRO_MCP_KEY` в `.env`, `adsetpro_base_url`/`adsetpro_timeout_seconds` в `core/config.py`. Endpoint `POST /api/stats/query` и auth `Bearer` помечены `TODO(stage-6)` — нужно verify на живом API. Без postback FastAPI и БД-таблиц (отдельная волна).
+- **adset_pro/** — клиент AdSet.pro: оказался **MCP-сервером** (`platform-stats-mcp` v1.0.0), не REST API. Host `adset.pro` (не `api.adset.pro`), endpoint `POST /mcp` JSON-RPC 2.0 с Bearer-токеном из `ADSETPRO_MCP_KEY`. Доступно 10 MCP-tools: `query_stats`, `get_metadata`, `export_csv`, `list_campaigns`/`get_campaign`, `list_sources`/`list_offers`/`list_flows`/`list_cpas`, `resolve_ids`. Публичный контракт сохранён (`StatsQueryRequest/Response`), `call_mcp_tool(name, args)` — низкоуровневый канал под будущие AI-tools. Ingest postback'ов через `core/adset_pro/ingest.py` (двухступенчатый дедуп: pre-INSERT SELECT по 24h окну + `ON CONFLICT DO NOTHING` на UNIQUE).
+- **adset_pro/queries.py + ingest.py** — `load_external_deposits_batch(engine, fb_ad_ids, since)` для evaluator; `ingest_postback` для FastAPI router'а.
 - **alerts/** — Redis-очередь алертов + drain worker (опционально).
 - **browser/** — `lock.py` (file-lock эксклюзивности браузер-сессии), `circuit_breaker.py` (AsyncCircuitBreaker для gRPC).
 - **auth/** — TMA initData валидация (для будущего Mini App).
@@ -152,12 +153,34 @@ python scripts/restore_secrets.py          # вернуть токены
 - **Frontend** (`frontend/` 9 страниц + `frontend-mini/`) — отложен по решению пользователя. `apps/api/` минимум поднят (health + postback), при возврате к фронту — расширить роутерами под нужные страницы.
 - **`scripts/backtest_rules.py`** — для бэктеста по MEMORY 2026-06-08 (через ~2 недели накопления данных).
 - **Этап 4 Ad Library** — закрыт через browser-agent gRPC (по-запросу через `/spy <slot> <country>` в TG). Параллельный канал через свой Meta App с App Access Token решено НЕ делать — Meta требует Identity Confirmation (загрузка ID + selfie + 5-7 дней ожидания) даже для коммерческих запросов, при этом use case у пользователя on-demand, не cron. Если в будущем понадобится background-scrape конкурентов — пройти IC на https://www.facebook.com/id и положить `META_AD_LIBRARY_APP_ID`/`_APP_SECRET` в `.env`.
-- **Этап 6 AdSet.pro Волна 3** — клиент готов, postback receiver готов. Не реализовано: БД-таблицы `adsetpro_postback_events`/`adsetpro_credentials`, ingest в БД с дедупом по `click_id`, расширение `RuleContext.external_deposits` для evaluator.
+- **Этап 6 AdSet.pro Волна 3** — ✅ закрыто. Клиент переписан под MCP-протокол (AdSet.pro оказался MCP-сервером), `adsetpro_postback_events` + `adsetpro_credentials` партиционированные таблицы созданы и применены, ingest с двухступенчатым дедупом, `RuleContext.external_deposits` в evaluator (`load_external_deposits_batch` в pipeline). Осталось на потом: aggregator per (ad_id, country, day) в `tracker_aggregate`, outgoing postback, ротация ключа через `adsetpro_credentials` (сейчас читается из `.env`).
 - **Меta API мелочи** — Custom Audience с CSV upload пользователей (`POST /{audience_id}/users` со streaming), `UploadVideo` из URL.
 
 ### Известные технические долги
 
-- **`reset_after_disable_succeeded` нигде не вызывается** (`core/observer/state_machine.py`). После того как `toggle_executor` завершает disable task со `succeeded`, `ad_alert_state.alert_state` остаётся в `stop_sent`, а не переходит в `disabled`. Это разрыв контракта между FSM-комментарием («claimed → disabled») и реализацией. Кандидат на отдельный fix.
+- ~~`reset_after_disable_succeeded` нигде не вызывается~~ — ✅ исправлено в раунде 5 (`core/observer/writers.py` + `core/tasks/toggle_executor.py` вызывает после `mark_succeeded` в зависимости от `task_type`, идемпотентно через `WHERE alert_state IN (...)`).
+- **Pre-existing bug в `core/ai_assistant/tools/ops/get_recent_alerts.py:52`** — SQL ссылается на несуществующие в v2-схеме колонки: `ae.event_type`/`ae.rule_codes`/`a.name`. Правильно: `stage`/`matched_rule_codes`/`ad_name`. Tool падает при вызове через `/ask` или MCP. Найдено security audit и MCP spawn'ом.
+
+### MCP-сервер (apps/mcp_server/)
+
+Наш бэк доступен из Claude Desktop / Cursor / любого MCP-совместимого клиента через stdio-транспорт. См. `docs/MCP_SETUP.md` для настройки `claude_desktop_config.json`.
+
+Адаптирует 15 AI-tools (READ_ONLY ops/meta + DRAFT_REQUIRED drafts + CREATIVE) в формат `mcp.types.Tool`. DRAFT-tools получают префикс `[ТРЕБУЕТ ПОДТВЕРЖДЕНИЯ В TELEGRAM]` в описании — Claude видит и ведёт юзера через `/drafts` callback в TG.
+
+4 MCP Resources (Claude может промптиться на них без явного вызова tool): `fb-stop-bot://offers`, `fb-stop-bot://recent-alerts`, `fb-stop-bot://workers-health`, `fb-stop-bot://schema-overview` (динамический Markdown с описанием tools по risk-категориям).
+
+Транспорт **stdio**: stdout — JSON-RPC канал, любой `print()` ломает протокол. `run_mcp_server.py` жёстко выставляет `logging.basicConfig(stream=sys.stderr)`. Entry: `python run_mcp_server.py` или подключение через `claude_desktop_config.json` (Claude Desktop сам запустит процесс).
+
+HTTP/SSE транспорт для iPhone / удалённого доступа — отдельная история (нужен FastAPI router + OAuth/токен), пока только локальный stdio.
+
+### Известные критические баги (по security audit раунда 5 — ждут фикса перед прод-выкаткой)
+
+1. **`create_campaign` физически не работает** — `_batch_helpers.encode_batch_body` URL-кодирует JSONPath refs (`{result=campaign:$.id}` → `%7B...%7D`), Meta возвращает error 100 на adset/ad/creative. Unit-тесты проверяют JSON-сериализацию, не реальный API. Фикс: skip-encoding для `{result=...}` значений.
+2. **`mark_succeeded`/`mark_failed` без `WHERE status='running'`** — двойное выполнение задач при reconciler-race (35-минутный stuck → reconciler retry → второй worker → оба mark_succeeded → двойное переключение объявления).
+3. **Reconciler дважды bump'ит `attempt_count`** — дубль реализации `apps/reconciler_worker/worker.py:36` vs `core/tasks/queue.py:272`. После timeout `max_attempts=5` исчерпается за 2 попытки.
+4. **Postback secret сравнивается через `!=`** (`apps/api/routers/postback.py:78`) — timing attack на публичном endpoint'е. Фикс: `secrets.compare_digest`.
+5. **`apply_fsm_transition` без WHERE-guard** — concurrent observer + telegram_poller race затирает FSM-state (`claimed` теряется).
+6. **`approve_draft_task` не сверяет owner** — любой recipient может подтвердить чужой DRAFT через bruteforce task_id.
 - **Health watchdog: дедуп-ключ ставится даже при отсутствии TG-клиента.** При первом подключении токена «упущенные» алерты не доедут, пока не истечёт TTL 1h. Поведение проверяется `test_no_tg_client_does_not_crash` — нужно зафиксировать в runbook.
 - **Backtest** (`scripts/backtest_rules.py`) — пройти историю и оценить false-stop'ы.
 
