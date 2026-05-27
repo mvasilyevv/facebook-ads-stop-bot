@@ -13,6 +13,10 @@ from typing import Any, Protocol
 
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from core.observer.writers import (
+    reset_alert_state_after_disable_succeeded,
+    reset_alert_state_after_enable_succeeded,
+)
 from core.tasks import (
     Task,
     claim_next_task,
@@ -105,6 +109,24 @@ async def execute_one_toggle_task(
             "final_state": result.get("final_state"),
         },
     )
+
+    # FSM-синхронизация: финальное состояние ad_alert_state должно соответствовать
+    # реально применённому действию. Идемпотентно — если уже в нужном state, no-op.
+    try:
+        if task_type == "disable":
+            await reset_alert_state_after_disable_succeeded(engine, fb_ad_id=fb_ad_id)
+        else:
+            await reset_alert_state_after_enable_succeeded(engine, fb_ad_id=fb_ad_id)
+    except Exception as exc:
+        # FSM-sync не критичен для outbox-контракта (задача уже succeeded). Логируем
+        # и идём дальше — следующий observer-цикл всё равно увидит реальное состояние.
+        logger.warning(
+            "[%s] reset_alert_state_after_*_succeeded для fb_ad_id=%s упал: %s",
+            task_type,
+            fb_ad_id,
+            exc,
+        )
+
     logger.info(
         "[%s] task_id=%s ad=%s → success final_state=%s",
         task_type,
