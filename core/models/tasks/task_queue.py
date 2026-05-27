@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import (
+    BigInteger,
     CheckConstraint,
     DateTime,
     Index,
@@ -46,6 +47,8 @@ class TaskQueue(BigIntPrimaryKey, Timestamp, Base):
     next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     requested_by: Mapped[str] = mapped_column(String(64), nullable=False)
+    # TG chat_id инициатора (для owner ACL над DRAFT). NULL если задача создана через MCP/HTTP.
+    created_by_chat_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (
@@ -81,4 +84,10 @@ class TaskQueue(BigIntPrimaryKey, Timestamp, Base):
         ),
         Index("ix_task_queue_requested_by", "requested_by", "created_at"),
         Index("ix_task_queue_payload", "payload", postgresql_using="gin"),
+        Index(
+            "ix_task_queue_created_by_chat",
+            "created_by_chat_id",
+            "status",
+            postgresql_where=text("created_by_chat_id IS NOT NULL"),
+        ),
     )
