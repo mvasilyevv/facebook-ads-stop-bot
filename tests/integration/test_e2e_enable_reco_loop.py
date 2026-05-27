@@ -1,0 +1,270 @@
+# -*- coding: utf-8 -*-
+"""E2E cross-cutting сценарий: ad disabled → enable_reco → callback ereco → enable task.
+
+Сшивка четырёх компонентов:
+1. Фикстура создаёт ad в alert_state='stop_sent' + метрики «выправились»
+   (повторяет паттерн tests/integration/test_enable_reco_worker.py).
+2. `apps/enable_recommendation_worker.run_once` находит кандидата, шлёт TG-алерт
+   с inline-кнопкой `ereco:<fb_ad_id>`.
+3. `core/telegram/handlers/alerts.handle_enable_reco_callback` принимает клик
+   пользователя и создаёт task_queue запись task_type='enable'.
+4. `core/tasks/toggle_executor.execute_one_toggle_task` подхватывает её и
+   доводит до status='succeeded' с target_state=True.
+"""
+
+from __future__ import annotations
+
+import uuid
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
+from typing import Any
+
+import pytest
+import pytest_asyncio
+from sqlalchemy import text
+
+from apps.enable_recommendation_worker.main import run_once
+from core.tasks.toggle_executor import execute_one_toggle_task
+from core.telegram.client import TelegramBotClient
+from core.telegram.handlers.alerts import handle_enable_reco_callback
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+@pytest_asyncio.fixture
+async def clean_enable_reco_pipeline(pg_engine):
+    """Чистит все таблицы pipeline'а до/после теста."""
+
+    async def _truncate():
+        async with pg_engine.begin() as conn:
+            for t in (
+                "enable_recommendations",
+                "ad_auto_enable_disabled",
+                "task_queue",
+                "alert_events",
+                "ad_metrics",
+                "ad_alert_state",
+                "fb_ads",
+                "fb_adsets",
+                "fb_campaigns",
+                "offer_rules",
+                "offers",
+            ):
+                await conn.execute(text(f"DELETE FROM {t}"))
+
+    await _truncate()
+    yield
+    await _truncate()
+
+
+@pytest_asyncio.fixture
+async def stopped_ad_e2e(pg_engine, clean_enable_reco_pipeline) -> dict[str, Any]:
+    """Создаёт оффер + ad в stop_sent + recovered метрики.
+
+    Возвращает dict с ad_id, fb_ad_id для дальнейшего assert'а в тесте.
+    """
+    offer_id = uuid.uuid4()
+    campaign_id = uuid.uuid4()
+    adset_id = uuid.uuid4()
+    ad_id = uuid.uuid4()
+    suffix = uuid.uuid4().hex[:8]
+    fb_ad_id = f"230099{suffix[:6]}"
+
+    last_transition = _utcnow() - timedelta(hours=2)
+    cycle_recent = _utcnow() - timedelta(minutes=10)
+    cycle_older = _utcnow() - timedelta(minutes=30)
+
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO offers (id, code, name, is_active) VALUES (:i, :c, 'E2E offer', TRUE)"
+            ),
+            {"i": offer_id, "c": f"E2EREC_{suffix}"},
+        )
+        await conn.execute(
+            text("INSERT INTO offer_rules (offer_id, cpa_threshold) VALUES (:i, :cpa)"),
+            {"i": offer_id, "cpa": Decimal("10.00")},
+        )
+        await conn.execute(
+            text("INSERT INTO fb_campaigns (id, campaign_name, offer_id) VALUES (:i, :n, :o)"),
+            {"i": campaign_id, "n": f"CMP_E2E_{suffix}", "o": offer_id},
+        )
+        await conn.execute(
+            text("INSERT INTO fb_adsets (id, campaign_id, adset_name) VALUES (:i, :c, :n)"),
+            {"i": adset_id, "c": campaign_id, "n": f"ADSET_E2E_{suffix}"},
+        )
+        await conn.execute(
+            text("INSERT INTO fb_ads (id, adset_id, fb_ad_id, ad_name) VALUES (:i, :a, :f, :n)"),
+            {"i": ad_id, "a": adset_id, "f": fb_ad_id, "n": f"AD_E2E_{suffix}"},
+        )
+        await conn.execute(
+            text(
+                """
+                INSERT INTO ad_alert_state
+                    (ad_id, alert_state, current_stage, last_transition_at)
+                VALUES (:aid, 'stop_sent', 'stop', :ts)
+                """
+            ),
+            {"aid": ad_id, "ts": last_transition},
+        )
+        # 2 «выправленные» метрики после disable: spend низкий, cost_per_lead в норме
+        for ts, spend, cpl in (
+            (cycle_older, Decimal("1.0"), Decimal("4.0")),
+            (cycle_recent, Decimal("0.5"), Decimal("5.0")),
+        ):
+            await conn.execute(
+                text(
+                    """
+                    INSERT INTO ad_metrics
+                        (ad_id, cycle_ts, scan_id, spend, cost_per_lead, deposits)
+                    VALUES (:aid, :ts, NULL, :sp, :cpl, 0)
+                    """
+                ),
+                {"aid": ad_id, "ts": ts, "sp": spend, "cpl": cpl},
+            )
+
+    return {
+        "ad_id": ad_id,
+        "fb_ad_id": fb_ad_id,
+    }
+
+
+class _FakeTGClient:
+    """Минимальный TelegramBotClient: фиксирует answer_callback_query вызовы."""
+
+    def __init__(self) -> None:
+        self.acks: list[tuple[str, str]] = []
+
+    async def answer_callback_query(self, cq_id: str, text: str = "") -> None:
+        self.acks.append((cq_id, text))
+
+
+class _RecordingGate:
+    """Fake ToggleGate — фиксирует toggle_ad вызов и возвращает success."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    async def toggle_ad(self, fb_ad_id: str, target_state: bool = True) -> dict[str, Any]:
+        self.calls.append({"fb_ad_id": fb_ad_id, "target_state": target_state})
+        return {"success": True, "final_state": "true" if target_state else "false"}
+
+
+# E2E: stopped ad → run_once создаёт реко + TG-алерт → callback → enable task → toggle.
+@pytest.mark.asyncio
+async def test_full_cycle_reco_to_enable_task(
+    pg_engine,
+    stopped_ad_e2e,
+    fake_redis_client,
+    tg_respx,
+) -> None:
+    tg_client = TelegramBotClient("fake-token-e2e")
+
+    # Шаг 1: enable_recommendation_worker.run_once находит ad и шлёт алерт
+    counts = await run_once(
+        pg_engine,
+        redis_client=fake_redis_client,
+        tg_client=tg_client,
+        chat_id="9000",
+        thread_id=None,
+    )
+    assert counts["candidates"] == 1
+    assert counts["recommendations"] == 1
+    assert counts["alerts_sent"] == 1
+
+    # Шаг 2: проверяем что в TG ушла кнопка ereco:<fb_ad_id>
+    assert len(tg_respx.sent_messages) == 1
+    payload = tg_respx.sent_messages[0]
+    keyboard = payload.get("reply_markup", {}).get("inline_keyboard")
+    assert keyboard is not None
+    btn = keyboard[0][0]
+    expected_cb = f"ereco:{stopped_ad_e2e['fb_ad_id']}"
+    assert btn["callback_data"] == expected_cb
+
+    # Шаг 3: пользователь жмёт inline-кнопку → handle_enable_reco_callback
+    cb_tg = _FakeTGClient()
+    await handle_enable_reco_callback(
+        engine=pg_engine,
+        client=cb_tg,
+        cq_id="ereco-cb-1",
+        fb_ad_id=stopped_ad_e2e["fb_ad_id"],
+        username="reviewer",
+    )
+    assert any("принята" in t for _, t in cb_tg.acks)
+
+    # Шаг 4: в task_queue появилась enable task с нашим fb_ad_id
+    async with pg_engine.connect() as conn:
+        task_row = (
+            await conn.execute(
+                text(
+                    """
+                    SELECT id, task_type, status, payload, requested_by
+                    FROM task_queue WHERE task_type = 'enable'
+                    """
+                )
+            )
+        ).first()
+    assert task_row is not None
+    enable_task_id = int(task_row[0])
+    assert task_row[1] == "enable"
+    assert task_row[2] == "pending"
+    assert task_row[3]["fb_ad_id"] == stopped_ad_e2e["fb_ad_id"]
+    assert task_row[4] == "tg:reviewer"
+
+    # Шаг 5: enable_worker (через общий toggle_executor) исполняет
+    gate = _RecordingGate()
+    outcome = await execute_one_toggle_task(pg_engine, task_type="enable", gate=gate)
+    assert outcome == "succeeded"
+    assert len(gate.calls) == 1
+    assert gate.calls[0]["fb_ad_id"] == stopped_ad_e2e["fb_ad_id"]
+    # enable → target_state=True (включить)
+    assert gate.calls[0]["target_state"] is True
+
+    async with pg_engine.connect() as conn:
+        final = (
+            await conn.execute(
+                text("SELECT status, result FROM task_queue WHERE id = :i"),
+                {"i": enable_task_id},
+            )
+        ).first()
+    assert final[0] == "succeeded"
+    assert final[1]["final_state"] == "true"
+
+    await tg_client.close()
+
+
+# E2E: повторный клик ereco (двойной тап) → idempotency_key совпал → no-op в БД.
+@pytest.mark.asyncio
+async def test_double_ereco_callback_does_not_duplicate(
+    pg_engine,
+    stopped_ad_e2e,
+) -> None:
+    cb_tg = _FakeTGClient()
+    # Первый клик создаёт task
+    await handle_enable_reco_callback(
+        engine=pg_engine,
+        client=cb_tg,
+        cq_id="cb-1",
+        fb_ad_id=stopped_ad_e2e["fb_ad_id"],
+        username="reviewer",
+    )
+    # Второй клик от того же юзера — idem_key совпадает → no-op
+    await handle_enable_reco_callback(
+        engine=pg_engine,
+        client=cb_tg,
+        cq_id="cb-2",
+        fb_ad_id=stopped_ad_e2e["fb_ad_id"],
+        username="reviewer",
+    )
+
+    acks = [t for _, t in cb_tg.acks]
+    assert any("принята" in a for a in acks)
+    assert any("Уже в очереди" in a for a in acks)
+
+    async with pg_engine.connect() as conn:
+        n = (
+            await conn.execute(text("SELECT COUNT(*) FROM task_queue WHERE task_type = 'enable'"))
+        ).scalar()
+    assert n == 1

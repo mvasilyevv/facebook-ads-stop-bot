@@ -96,7 +96,11 @@ async def test_draft_approve_claim_execute_success(
     assert claim.task.id == task_id
 
     # Мокаем dispatch_mutation так, чтобы не дёргать gRPC к browser-agent.
-    fake_result = {"success": True, "graph_response": {"ok": True}, "modified_ids": [payload.target_id]}
+    fake_result = {
+        "success": True,
+        "graph_response": {"ok": True},
+        "modified_ids": [payload.target_id],
+    }
 
     async def _fake_dispatch(client, p):
         return fake_result
