@@ -243,6 +243,18 @@ async def handle_plan_run_callback(
     idem_key = f"plan_run:{plan_id}:{int(time.time() // 60)}"  # окно 60 сек
     requested_by = f"user:{user_id}"
 
+    # Audit-лог: кто и какой план запускает. ACL сейчас не ограничен (любой active
+    # recipient может запустить любой план — это намеренно мягкий уровень доступа),
+    # но событие обязательно остаётся в логах для разбора инцидентов.
+    chat_id_audit = (callback_query.get("message") or {}).get("chat", {}).get("id")
+    logger.info(
+        "plan_run callback: who_started_plan chat_id=%s user_id=%s plan_id=%s plan_name=%s",
+        chat_id_audit,
+        user_id,
+        plan_id,
+        plan.get("name"),
+    )
+
     try:
         task_id = await create_task(
             engine,
@@ -250,6 +262,7 @@ async def handle_plan_run_callback(
             idempotency_key=idem_key,
             payload={"plan_id": plan_id},
             requested_by=requested_by,
+            created_by_chat_id=int(chat_id_audit) if chat_id_audit is not None else None,
         )
     except Exception:
         logger.exception("plan_run create_task failed (plan_id=%s)", plan_id)
