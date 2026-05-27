@@ -62,6 +62,13 @@ filterwarnings = [
   'ignore:.*asyncio.get_event_loop_policy.*:DeprecationWarning:pytest_asyncio.plugin',
   'ignore:.*asyncio.set_event_loop_policy.*:DeprecationWarning:pytest_asyncio.plugin',
 ]
+markers = [
+  "live: hit a real external service (off by default; run with `pytest -m live`).",
+]
+# Live-тесты бьют по внешним сервисам — по умолчанию исключены, чтобы CI и
+# локальный `pytest` не делали реальных HTTP-запросов. Запуск отдельно:
+#   pytest -m live --override-ini="addopts="
+addopts = "-m 'not live'"
 
 [tool.ruff]
 line-length = 100

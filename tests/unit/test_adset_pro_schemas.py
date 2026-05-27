@@ -1,5 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Unit-тесты core.adset_pro.schemas — DTO roundtrip и парсинг raw-строк."""
+"""Unit-тесты core.adset_pro.schemas — DTO и парсинг raw-строк ответа AdSet.pro.
+
+Сериализация StatsQueryRequest перенесена в AdsetProClient._stats_args_from_request
+(MCP tool arguments) — соответствующие тесты в tests/unit/test_adset_pro_client.py.
+"""
 
 from __future__ import annotations
 
@@ -9,45 +13,10 @@ from decimal import Decimal
 import pytest
 
 from core.adset_pro.schemas import (
-    EXT_SUB_FIELD_FOR_AD_ID,
     ConversionRow,
     StatsQueryRequest,
     StatsQueryResponse,
 )
-
-
-# StatsQueryRequest должен корректно сериализоваться в payload без ad_id.
-def test_stats_query_request_minimal_payload() -> None:
-    req = StatsQueryRequest(since=date(2026, 5, 1), until=date(2026, 5, 10))
-    payload = req.to_payload()
-    assert payload == {"since": "2026-05-01", "until": "2026-05-10"}
-
-
-# Когда задан ad_id — он попадает в filters под ключом ext_sub6 (контракт).
-def test_stats_query_request_with_ad_id_filters_ext_sub6() -> None:
-    req = StatsQueryRequest(
-        since=date(2026, 5, 1),
-        until=date(2026, 5, 10),
-        ad_id="23000000111",
-    )
-    payload = req.to_payload()
-    assert payload["filters"] == {EXT_SUB_FIELD_FOR_AD_ID: "23000000111"}
-
-
-# group_by и extra_filters мерджатся в один payload корректно.
-def test_stats_query_request_extra_filters_and_group_by() -> None:
-    req = StatsQueryRequest(
-        since=date(2026, 5, 1),
-        until=date(2026, 5, 10),
-        ad_id="111",
-        group_by=("country", "ad_id"),
-        extra_filters={"event_type": "ftd"},
-    )
-    payload = req.to_payload()
-    assert payload["group_by"] == ["country", "ad_id"]
-    # ad_id перезаписывает ext_sub6, плюс добавляется event_type.
-    assert payload["filters"][EXT_SUB_FIELD_FOR_AD_ID] == "111"
-    assert payload["filters"]["event_type"] == "ftd"
 
 
 # Перевёрнутый интервал (since > until) — бросаем ValueError на этапе создания.

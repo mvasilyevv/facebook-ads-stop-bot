@@ -1,14 +1,16 @@
 # -*- coding: utf-8 -*-
-"""Frozen dataclasses для AdSet.pro REST API.
+"""Frozen dataclasses для AdSet.pro MCP-клиента + inbound postback.
 
 Контракты:
-- PostbackEvent     — один inbound postback от AdSet.pro (для будущего endpoint'а
-  на Этапе 6, см. META_INTEGRATION_PLAN.md §4.4 / §5 Волна 3).
-- StatsQueryRequest — параметры POST /api/stats/query.
-- StatsQueryResponse — обёртка над ответом со списком ConversionRow.
+- PostbackEvent     — один inbound postback от AdSet.pro (приходит на наш
+  FastAPI endpoint, см. apps/api/routers/postback.py).
+- StatsQueryRequest — высокоуровневая обёртка над MCP tool `query_stats`.
+  Внутри client.py since/until → from/to, ad_id → filter ext_sub6=eq.
+- StatsQueryResponse — рассыпает MCP `structuredContent.data[]` в ConversionRow.
 - ConversionRow     — нормализованная строка конверсии (ext_sub6 = fb_ad_id).
 
-Все dataclass frozen — DTO, не мутируются. См. META_INTEGRATION_PLAN.md §4.4.
+Все dataclass frozen — DTO, не мутируются. См. META_INTEGRATION_PLAN.md §4.4
++ live verify-комментарий в client.py.
 """
 
 from __future__ import annotations
@@ -25,10 +27,11 @@ EXT_SUB_FIELD_FOR_AD_ID: str = "ext_sub6"
 
 @dataclass(slots=True, frozen=True)
 class StatsQueryRequest:
-    """Параметры POST /api/stats/query (или эквивалентного endpoint'а AdSet.pro).
+    """Параметры запроса статистики (внутри клиента → MCP tool `query_stats`).
 
     Поля since/until — обязательные границы выборки. ad_id — опциональный фильтр
-    по конкретному объявлению (мэтчится по ext_sub6 в AdSet.pro).
+    по конкретному объявлению (мэтчится по ext_sub6 в AdSet.pro). Конвертация
+    в MCP arguments делается в AdsetProClient._stats_args_from_request.
     """
 
     since: date
@@ -40,25 +43,6 @@ class StatsQueryRequest:
     def __post_init__(self) -> None:
         if self.since > self.until:
             raise ValueError(f"StatsQueryRequest.since ({self.since}) > until ({self.until})")
-
-    def to_payload(self) -> dict[str, Any]:
-        """Сериализация в JSON-payload для POST.
-
-        Формат пока — best-effort: реальные имена полей AdSet.pro нужно уточнить
-        в момент первого live-теста (Этап 6).
-        """
-        payload: dict[str, Any] = {
-            "since": self.since.isoformat(),
-            "until": self.until.isoformat(),
-        }
-        if self.ad_id:
-            payload["filters"] = {EXT_SUB_FIELD_FOR_AD_ID: self.ad_id}
-        if self.group_by:
-            payload["group_by"] = list(self.group_by)
-        if self.extra_filters:
-            extra = payload.setdefault("filters", {})
-            extra.update(self.extra_filters)
-        return payload
 
 
 @dataclass(slots=True, frozen=True)

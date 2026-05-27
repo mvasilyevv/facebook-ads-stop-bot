@@ -100,10 +100,12 @@ class Settings(BaseSettings):
     # 20s — компромисс между UX и блокировкой алерта.
     ai_explain_timeout_seconds: float = 20.0
 
-    # --- AdSet.pro (внешний трекер постбэков, см. META_INTEGRATION_PLAN §4.4 / Этап 6) ---
+    # --- AdSet.pro (внешний MCP-сервер post-click статистики, см. META_INTEGRATION_PLAN §4.4 / Этап 6) ---
+    # Live verify (2026-05-27): AdSet.pro работает как MCP-сервер `platform-stats-mcp`
+    # на https://adset.pro/mcp (JSON-RPC 2.0 + Bearer). REST вида /api/stats/query
+    # не существует — host api.adset.pro вообще не резолвится.
     adsetpro_mcp_key: str = ""
-    # TODO(stage-6): уточнить реальный base URL у AdSet.pro перед первым live-вызовом.
-    adsetpro_base_url: str = "https://api.adset.pro"
+    adsetpro_base_url: str = "https://adset.pro"
     adsetpro_timeout_seconds: float = 15.0
     # Секрет для аутентификации входящего postback'а от AdSet.pro
     # (header X-Postback-Secret). Пустая строка → endpoint возвращает 503
