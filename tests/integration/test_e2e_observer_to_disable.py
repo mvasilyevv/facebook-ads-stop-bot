@@ -192,6 +192,16 @@ async def test_full_cycle_observer_to_disable_success(
     assert final_row[1]["final_state"] == "false"
     assert final_row[2] is not None
 
+    # Шаг 6: FSM-синхронизация — после успешного disable ad_alert_state должен
+    # перейти из stop_sent в disabled (исправление техдолга из CLAUDE.md).
+    async with pg_engine.connect() as conn:
+        fsm_after = (
+            await conn.execute(
+                text("SELECT alert_state FROM ad_alert_state LIMIT 1"),
+            )
+        ).first()
+    assert fsm_after[0] == "disabled"
+
 
 # E2E: повторный scan того же STOP-row → НЕ создаёт вторую disable task
 @pytest.mark.asyncio
