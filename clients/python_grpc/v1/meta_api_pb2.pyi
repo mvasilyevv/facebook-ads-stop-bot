@@ -106,3 +106,105 @@ class CheckMetaApiHealthResponse(_message.Message):
         token_length: _Optional[int] = ...,
         detail: _Optional[str] = ...,
     ) -> None: ...
+
+class UploadImageRequest(_message.Message):
+    __slots__ = ("session_id", "ad_account_id", "filename", "content_type", "file_bytes")
+    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
+    AD_ACCOUNT_ID_FIELD_NUMBER: _ClassVar[int]
+    FILENAME_FIELD_NUMBER: _ClassVar[int]
+    CONTENT_TYPE_FIELD_NUMBER: _ClassVar[int]
+    FILE_BYTES_FIELD_NUMBER: _ClassVar[int]
+    session_id: str
+    ad_account_id: str
+    filename: str
+    content_type: str
+    file_bytes: bytes
+    def __init__(
+        self,
+        session_id: _Optional[str] = ...,
+        ad_account_id: _Optional[str] = ...,
+        filename: _Optional[str] = ...,
+        content_type: _Optional[str] = ...,
+        file_bytes: _Optional[bytes] = ...,
+    ) -> None: ...
+
+class UploadImageResponse(_message.Message):
+    __slots__ = ("image_hash", "ok", "error", "url", "duration_ms")
+    IMAGE_HASH_FIELD_NUMBER: _ClassVar[int]
+    OK_FIELD_NUMBER: _ClassVar[int]
+    ERROR_FIELD_NUMBER: _ClassVar[int]
+    URL_FIELD_NUMBER: _ClassVar[int]
+    DURATION_MS_FIELD_NUMBER: _ClassVar[int]
+    image_hash: str
+    ok: bool
+    error: str
+    url: str
+    duration_ms: int
+    def __init__(
+        self,
+        image_hash: _Optional[str] = ...,
+        ok: bool = ...,
+        error: _Optional[str] = ...,
+        url: _Optional[str] = ...,
+        duration_ms: _Optional[int] = ...,
+    ) -> None: ...
+
+class UploadVideoChunk(_message.Message):
+    __slots__ = (
+        "session_id",
+        "ad_account_id",
+        "filename",
+        "file_size",
+        "chunk_bytes",
+        "chunk_index",
+        "is_last_chunk",
+        "is_init",
+    )
+    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
+    AD_ACCOUNT_ID_FIELD_NUMBER: _ClassVar[int]
+    FILENAME_FIELD_NUMBER: _ClassVar[int]
+    FILE_SIZE_FIELD_NUMBER: _ClassVar[int]
+    CHUNK_BYTES_FIELD_NUMBER: _ClassVar[int]
+    CHUNK_INDEX_FIELD_NUMBER: _ClassVar[int]
+    IS_LAST_CHUNK_FIELD_NUMBER: _ClassVar[int]
+    IS_INIT_FIELD_NUMBER: _ClassVar[int]
+    session_id: str
+    ad_account_id: str
+    filename: str
+    file_size: int
+    chunk_bytes: bytes
+    chunk_index: int
+    is_last_chunk: bool
+    is_init: bool
+    def __init__(
+        self,
+        session_id: _Optional[str] = ...,
+        ad_account_id: _Optional[str] = ...,
+        filename: _Optional[str] = ...,
+        file_size: _Optional[int] = ...,
+        chunk_bytes: _Optional[bytes] = ...,
+        chunk_index: _Optional[int] = ...,
+        is_last_chunk: bool = ...,
+        is_init: bool = ...,
+    ) -> None: ...
+
+class UploadVideoResponse(_message.Message):
+    __slots__ = ("video_id", "ok", "error", "duration_ms", "chunks_processed")
+    VIDEO_ID_FIELD_NUMBER: _ClassVar[int]
+    OK_FIELD_NUMBER: _ClassVar[int]
+    ERROR_FIELD_NUMBER: _ClassVar[int]
+    DURATION_MS_FIELD_NUMBER: _ClassVar[int]
+    CHUNKS_PROCESSED_FIELD_NUMBER: _ClassVar[int]
+    video_id: str
+    ok: bool
+    error: str
+    duration_ms: int
+    chunks_processed: int
+    def __init__(
+        self,
+        video_id: _Optional[str] = ...,
+        ok: bool = ...,
+        error: _Optional[str] = ...,
+        duration_ms: _Optional[int] = ...,
+        chunks_processed: _Optional[int] = ...,
+    ) -> None: ...

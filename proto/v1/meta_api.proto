@@ -22,6 +22,18 @@ service MetaApiService {
   // на правильной ли странице (Ads Manager), извлекается ли токен.
   // Лёгкий запрос — используется в health_watchdog для мониторинга.
   rpc CheckMetaApiHealth(CheckMetaApiHealthRequest) returns (CheckMetaApiHealthResponse);
+
+  // Загрузка картинки в /act_X/adimages — single-shot multipart upload.
+  // Возвращает image_hash, который потом используется в AdCreative.object_story_spec.
+  // Подходит для файлов до ~8MB. Графический контент должен быть JPEG/PNG/GIF.
+  rpc UploadImage(UploadImageRequest) returns (UploadImageResponse);
+
+  // Chunked загрузка видео через resumable upload протокол.
+  // Клиент шлёт первый чанк с filename+file_size (фаза start),
+  // последующие чанки только с bytes (фаза transfer), последний chunk
+  // помечается флагом is_last_chunk=true → browser-agent делает фазу finish.
+  // Возвращает video_id для AdCreative.object_story_spec.
+  rpc UploadVideo(stream UploadVideoChunk) returns (UploadVideoResponse);
 }
 
 message ExecuteGraphCallRequest {
@@ -101,4 +113,85 @@ message CheckMetaApiHealthResponse {
   // Детали при unhealthy: "session_not_found", "page_closed", "wrong_url",
   // "token_not_found", "browser_disconnected".
   string detail = 5;
+}
+
+// ======================== Media upload ========================
+
+message UploadImageRequest {
+  // ID активной browser-сессии. Если пустой — preferred session.
+  string session_id = 1;
+
+  // Ad account ID с префиксом "act_". Картинка цепляется к этому аккаунту.
+  string ad_account_id = 2;
+
+  // Имя файла (нужно для form-data поля filename и для определения расширения).
+  string filename = 3;
+
+  // MIME-тип (image/jpeg, image/png, image/gif). Используется в multipart.
+  string content_type = 4;
+
+  // Бинарные данные файла целиком. Single-shot — ограничено max gRPC сообщением (~50MB).
+  bytes file_bytes = 5;
+}
+
+message UploadImageResponse {
+  // Image hash возвращённый Meta — основной идентификатор для creative.
+  // Длинная hex-строка вроде "fae7...d92".
+  string image_hash = 1;
+
+  // True если загрузка успешна. False — смотреть error.
+  bool ok = 2;
+
+  // Текст ошибки если ok=false (Graph error, network, etc).
+  string error = 3;
+
+  // URL картинки в Meta CDN (опционально, иногда возвращается).
+  string url = 4;
+
+  // Длительность загрузки в миллисекундах.
+  int32 duration_ms = 5;
+}
+
+message UploadVideoChunk {
+  // ID активной browser-сессии. Заполняется ТОЛЬКО в первом чанке (init).
+  string session_id = 1;
+
+  // Ad account ID с префиксом "act_". ТОЛЬКО в первом чанке.
+  string ad_account_id = 2;
+
+  // Имя файла. ТОЛЬКО в первом чанке.
+  string filename = 3;
+
+  // Полный размер файла в байтах. ТОЛЬКО в первом чанке — нужен для фазы start.
+  int64 file_size = 4;
+
+  // Бинарные данные текущего чанка. Может быть пустым в первом init-чанке если is_init=true.
+  bytes chunk_bytes = 5;
+
+  // Порядковый номер чанка (0-based). Для логирования и диагностики.
+  int32 chunk_index = 6;
+
+  // True для последнего чанка — browser-agent после transfer делает фазу finish.
+  bool is_last_chunk = 7;
+
+  // True если это init-only chunk (только метаданные, без bytes).
+  // Полезно когда удобнее отделить init от первого transfer-чанка.
+  bool is_init = 8;
+}
+
+message UploadVideoResponse {
+  // Video ID возвращённый Meta после фазы finish.
+  string video_id = 1;
+
+  // True если загрузка успешна. False — смотреть error.
+  bool ok = 2;
+
+  // Текст ошибки если ok=false.
+  string error = 3;
+
+  // Полное время загрузки видео (start + все transfer + finish) в миллисекундах.
+  int32 duration_ms = 4;
+
+  // Сколько чанков было обработано — для логирования.
+  int32 chunks_processed = 5;
 }

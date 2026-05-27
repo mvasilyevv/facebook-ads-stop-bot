@@ -161,3 +161,144 @@ export namespace CheckMetaApiHealthResponse {
         detail: string,
     }
 }
+
+export class UploadImageRequest extends jspb.Message { 
+    getSessionId(): string;
+    setSessionId(value: string): UploadImageRequest;
+    getAdAccountId(): string;
+    setAdAccountId(value: string): UploadImageRequest;
+    getFilename(): string;
+    setFilename(value: string): UploadImageRequest;
+    getContentType(): string;
+    setContentType(value: string): UploadImageRequest;
+    getFileBytes(): Uint8Array | string;
+    getFileBytes_asU8(): Uint8Array;
+    getFileBytes_asB64(): string;
+    setFileBytes(value: Uint8Array | string): UploadImageRequest;
+
+    serializeBinary(): Uint8Array;
+    toObject(includeInstance?: boolean): UploadImageRequest.AsObject;
+    static toObject(includeInstance: boolean, msg: UploadImageRequest): UploadImageRequest.AsObject;
+    static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
+    static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
+    static serializeBinaryToWriter(message: UploadImageRequest, writer: jspb.BinaryWriter): void;
+    static deserializeBinary(bytes: Uint8Array): UploadImageRequest;
+    static deserializeBinaryFromReader(message: UploadImageRequest, reader: jspb.BinaryReader): UploadImageRequest;
+}
+
+export namespace UploadImageRequest {
+    export type AsObject = {
+        sessionId: string,
+        adAccountId: string,
+        filename: string,
+        contentType: string,
+        fileBytes: Uint8Array | string,
+    }
+}
+
+export class UploadImageResponse extends jspb.Message { 
+    getImageHash(): string;
+    setImageHash(value: string): UploadImageResponse;
+    getOk(): boolean;
+    setOk(value: boolean): UploadImageResponse;
+    getError(): string;
+    setError(value: string): UploadImageResponse;
+    getUrl(): string;
+    setUrl(value: string): UploadImageResponse;
+    getDurationMs(): number;
+    setDurationMs(value: number): UploadImageResponse;
+
+    serializeBinary(): Uint8Array;
+    toObject(includeInstance?: boolean): UploadImageResponse.AsObject;
+    static toObject(includeInstance: boolean, msg: UploadImageResponse): UploadImageResponse.AsObject;
+    static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
+    static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
+    static serializeBinaryToWriter(message: UploadImageResponse, writer: jspb.BinaryWriter): void;
+    static deserializeBinary(bytes: Uint8Array): UploadImageResponse;
+    static deserializeBinaryFromReader(message: UploadImageResponse, reader: jspb.BinaryReader): UploadImageResponse;
+}
+
+export namespace UploadImageResponse {
+    export type AsObject = {
+        imageHash: string,
+        ok: boolean,
+        error: string,
+        url: string,
+        durationMs: number,
+    }
+}
+
+export class UploadVideoChunk extends jspb.Message { 
+    getSessionId(): string;
+    setSessionId(value: string): UploadVideoChunk;
+    getAdAccountId(): string;
+    setAdAccountId(value: string): UploadVideoChunk;
+    getFilename(): string;
+    setFilename(value: string): UploadVideoChunk;
+    getFileSize(): number;
+    setFileSize(value: number): UploadVideoChunk;
+    getChunkBytes(): Uint8Array | string;
+    getChunkBytes_asU8(): Uint8Array;
+    getChunkBytes_asB64(): string;
+    setChunkBytes(value: Uint8Array | string): UploadVideoChunk;
+    getChunkIndex(): number;
+    setChunkIndex(value: number): UploadVideoChunk;
+    getIsLastChunk(): boolean;
+    setIsLastChunk(value: boolean): UploadVideoChunk;
+    getIsInit(): boolean;
+    setIsInit(value: boolean): UploadVideoChunk;
+
+    serializeBinary(): Uint8Array;
+    toObject(includeInstance?: boolean): UploadVideoChunk.AsObject;
+    static toObject(includeInstance: boolean, msg: UploadVideoChunk): UploadVideoChunk.AsObject;
+    static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
+    static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
+    static serializeBinaryToWriter(message: UploadVideoChunk, writer: jspb.BinaryWriter): void;
+    static deserializeBinary(bytes: Uint8Array): UploadVideoChunk;
+    static deserializeBinaryFromReader(message: UploadVideoChunk, reader: jspb.BinaryReader): UploadVideoChunk;
+}
+
+export namespace UploadVideoChunk {
+    export type AsObject = {
+        sessionId: string,
+        adAccountId: string,
+        filename: string,
+        fileSize: number,
+        chunkBytes: Uint8Array | string,
+        chunkIndex: number,
+        isLastChunk: boolean,
+        isInit: boolean,
+    }
+}
+
+export class UploadVideoResponse extends jspb.Message { 
+    getVideoId(): string;
+    setVideoId(value: string): UploadVideoResponse;
+    getOk(): boolean;
+    setOk(value: boolean): UploadVideoResponse;
+    getError(): string;
+    setError(value: string): UploadVideoResponse;
+    getDurationMs(): number;
+    setDurationMs(value: number): UploadVideoResponse;
+    getChunksProcessed(): number;
+    setChunksProcessed(value: number): UploadVideoResponse;
+
+    serializeBinary(): Uint8Array;
+    toObject(includeInstance?: boolean): UploadVideoResponse.AsObject;
+    static toObject(includeInstance: boolean, msg: UploadVideoResponse): UploadVideoResponse.AsObject;
+    static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
+    static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
+    static serializeBinaryToWriter(message: UploadVideoResponse, writer: jspb.BinaryWriter): void;
+    static deserializeBinary(bytes: Uint8Array): UploadVideoResponse;
+    static deserializeBinaryFromReader(message: UploadVideoResponse, reader: jspb.BinaryReader): UploadVideoResponse;
+}
+
+export namespace UploadVideoResponse {
+    export type AsObject = {
+        videoId: string,
+        ok: boolean,
+        error: string,
+        durationMs: number,
+        chunksProcessed: number,
+    }
+}

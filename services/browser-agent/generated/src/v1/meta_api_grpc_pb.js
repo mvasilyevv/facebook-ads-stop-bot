@@ -48,6 +48,50 @@ function deserialize_fb_agent_meta_api_v1_ExecuteGraphCallResponse(buffer_arg) {
   return v1_meta_api_pb.ExecuteGraphCallResponse.deserializeBinary(new Uint8Array(buffer_arg));
 }
 
+function serialize_fb_agent_meta_api_v1_UploadImageRequest(arg) {
+  if (!(arg instanceof v1_meta_api_pb.UploadImageRequest)) {
+    throw new Error('Expected argument of type fb_agent.meta_api.v1.UploadImageRequest');
+  }
+  return Buffer.from(arg.serializeBinary());
+}
+
+function deserialize_fb_agent_meta_api_v1_UploadImageRequest(buffer_arg) {
+  return v1_meta_api_pb.UploadImageRequest.deserializeBinary(new Uint8Array(buffer_arg));
+}
+
+function serialize_fb_agent_meta_api_v1_UploadImageResponse(arg) {
+  if (!(arg instanceof v1_meta_api_pb.UploadImageResponse)) {
+    throw new Error('Expected argument of type fb_agent.meta_api.v1.UploadImageResponse');
+  }
+  return Buffer.from(arg.serializeBinary());
+}
+
+function deserialize_fb_agent_meta_api_v1_UploadImageResponse(buffer_arg) {
+  return v1_meta_api_pb.UploadImageResponse.deserializeBinary(new Uint8Array(buffer_arg));
+}
+
+function serialize_fb_agent_meta_api_v1_UploadVideoChunk(arg) {
+  if (!(arg instanceof v1_meta_api_pb.UploadVideoChunk)) {
+    throw new Error('Expected argument of type fb_agent.meta_api.v1.UploadVideoChunk');
+  }
+  return Buffer.from(arg.serializeBinary());
+}
+
+function deserialize_fb_agent_meta_api_v1_UploadVideoChunk(buffer_arg) {
+  return v1_meta_api_pb.UploadVideoChunk.deserializeBinary(new Uint8Array(buffer_arg));
+}
+
+function serialize_fb_agent_meta_api_v1_UploadVideoResponse(arg) {
+  if (!(arg instanceof v1_meta_api_pb.UploadVideoResponse)) {
+    throw new Error('Expected argument of type fb_agent.meta_api.v1.UploadVideoResponse');
+  }
+  return Buffer.from(arg.serializeBinary());
+}
+
+function deserialize_fb_agent_meta_api_v1_UploadVideoResponse(buffer_arg) {
+  return v1_meta_api_pb.UploadVideoResponse.deserializeBinary(new Uint8Array(buffer_arg));
+}
+
 
 // MetaApiService — мост к Marketing API через активную Vision-сессию.
 //
@@ -87,6 +131,36 @@ checkMetaApiHealth: {
     requestDeserialize: deserialize_fb_agent_meta_api_v1_CheckMetaApiHealthRequest,
     responseSerialize: serialize_fb_agent_meta_api_v1_CheckMetaApiHealthResponse,
     responseDeserialize: deserialize_fb_agent_meta_api_v1_CheckMetaApiHealthResponse,
+  },
+  // Загрузка картинки в /act_X/adimages — single-shot multipart upload.
+// Возвращает image_hash, который потом используется в AdCreative.object_story_spec.
+// Подходит для файлов до ~8MB. Графический контент должен быть JPEG/PNG/GIF.
+uploadImage: {
+    path: '/fb_agent.meta_api.v1.MetaApiService/UploadImage',
+    requestStream: false,
+    responseStream: false,
+    requestType: v1_meta_api_pb.UploadImageRequest,
+    responseType: v1_meta_api_pb.UploadImageResponse,
+    requestSerialize: serialize_fb_agent_meta_api_v1_UploadImageRequest,
+    requestDeserialize: deserialize_fb_agent_meta_api_v1_UploadImageRequest,
+    responseSerialize: serialize_fb_agent_meta_api_v1_UploadImageResponse,
+    responseDeserialize: deserialize_fb_agent_meta_api_v1_UploadImageResponse,
+  },
+  // Chunked загрузка видео через resumable upload протокол.
+// Клиент шлёт первый чанк с filename+file_size (фаза start),
+// последующие чанки только с bytes (фаза transfer), последний chunk
+// помечается флагом is_last_chunk=true → browser-agent делает фазу finish.
+// Возвращает video_id для AdCreative.object_story_spec.
+uploadVideo: {
+    path: '/fb_agent.meta_api.v1.MetaApiService/UploadVideo',
+    requestStream: true,
+    responseStream: false,
+    requestType: v1_meta_api_pb.UploadVideoChunk,
+    responseType: v1_meta_api_pb.UploadVideoResponse,
+    requestSerialize: serialize_fb_agent_meta_api_v1_UploadVideoChunk,
+    requestDeserialize: deserialize_fb_agent_meta_api_v1_UploadVideoChunk,
+    responseSerialize: serialize_fb_agent_meta_api_v1_UploadVideoResponse,
+    responseDeserialize: deserialize_fb_agent_meta_api_v1_UploadVideoResponse,
   },
 };
 

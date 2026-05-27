@@ -54,6 +54,18 @@ class MetaApiServiceStub(object):
             response_deserializer=v1_dot_meta__api__pb2.CheckMetaApiHealthResponse.FromString,
             _registered_method=True,
         )
+        self.UploadImage = channel.unary_unary(
+            "/fb_agent.meta_api.v1.MetaApiService/UploadImage",
+            request_serializer=v1_dot_meta__api__pb2.UploadImageRequest.SerializeToString,
+            response_deserializer=v1_dot_meta__api__pb2.UploadImageResponse.FromString,
+            _registered_method=True,
+        )
+        self.UploadVideo = channel.stream_unary(
+            "/fb_agent.meta_api.v1.MetaApiService/UploadVideo",
+            request_serializer=v1_dot_meta__api__pb2.UploadVideoChunk.SerializeToString,
+            response_deserializer=v1_dot_meta__api__pb2.UploadVideoResponse.FromString,
+            _registered_method=True,
+        )
 
 
 class MetaApiServiceServicer(object):
@@ -87,6 +99,26 @@ class MetaApiServiceServicer(object):
         context.set_details("Method not implemented!")
         raise NotImplementedError("Method not implemented!")
 
+    def UploadImage(self, request, context):
+        """Загрузка картинки в /act_X/adimages — single-shot multipart upload.
+        Возвращает image_hash, который потом используется в AdCreative.object_story_spec.
+        Подходит для файлов до ~8MB. Графический контент должен быть JPEG/PNG/GIF.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details("Method not implemented!")
+        raise NotImplementedError("Method not implemented!")
+
+    def UploadVideo(self, request_iterator, context):
+        """Chunked загрузка видео через resumable upload протокол.
+        Клиент шлёт первый чанк с filename+file_size (фаза start),
+        последующие чанки только с bytes (фаза transfer), последний chunk
+        помечается флагом is_last_chunk=true → browser-agent делает фазу finish.
+        Возвращает video_id для AdCreative.object_story_spec.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details("Method not implemented!")
+        raise NotImplementedError("Method not implemented!")
+
 
 def add_MetaApiServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -99,6 +131,16 @@ def add_MetaApiServiceServicer_to_server(servicer, server):
             servicer.CheckMetaApiHealth,
             request_deserializer=v1_dot_meta__api__pb2.CheckMetaApiHealthRequest.FromString,
             response_serializer=v1_dot_meta__api__pb2.CheckMetaApiHealthResponse.SerializeToString,
+        ),
+        "UploadImage": grpc.unary_unary_rpc_method_handler(
+            servicer.UploadImage,
+            request_deserializer=v1_dot_meta__api__pb2.UploadImageRequest.FromString,
+            response_serializer=v1_dot_meta__api__pb2.UploadImageResponse.SerializeToString,
+        ),
+        "UploadVideo": grpc.stream_unary_rpc_method_handler(
+            servicer.UploadVideo,
+            request_deserializer=v1_dot_meta__api__pb2.UploadVideoChunk.FromString,
+            response_serializer=v1_dot_meta__api__pb2.UploadVideoResponse.SerializeToString,
         ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -170,6 +212,66 @@ class MetaApiService(object):
             "/fb_agent.meta_api.v1.MetaApiService/CheckMetaApiHealth",
             v1_dot_meta__api__pb2.CheckMetaApiHealthRequest.SerializeToString,
             v1_dot_meta__api__pb2.CheckMetaApiHealthResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True,
+        )
+
+    @staticmethod
+    def UploadImage(
+        request,
+        target,
+        options=(),
+        channel_credentials=None,
+        call_credentials=None,
+        insecure=False,
+        compression=None,
+        wait_for_ready=None,
+        timeout=None,
+        metadata=None,
+    ):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            "/fb_agent.meta_api.v1.MetaApiService/UploadImage",
+            v1_dot_meta__api__pb2.UploadImageRequest.SerializeToString,
+            v1_dot_meta__api__pb2.UploadImageResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True,
+        )
+
+    @staticmethod
+    def UploadVideo(
+        request_iterator,
+        target,
+        options=(),
+        channel_credentials=None,
+        call_credentials=None,
+        insecure=False,
+        compression=None,
+        wait_for_ready=None,
+        timeout=None,
+        metadata=None,
+    ):
+        return grpc.experimental.stream_unary(
+            request_iterator,
+            target,
+            "/fb_agent.meta_api.v1.MetaApiService/UploadVideo",
+            v1_dot_meta__api__pb2.UploadVideoChunk.SerializeToString,
+            v1_dot_meta__api__pb2.UploadVideoResponse.FromString,
             options,
             channel_credentials,
             insecure,
