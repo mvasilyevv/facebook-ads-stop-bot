@@ -3,6 +3,10 @@
 
 Запускается через run_telegram_poller.py. Перезагружает bot_token из БД
 каждые 30 сек (на случай ротации). Каждые ~3 сек делает heartbeat в telegram_config.
+
+MetaApiClient (если browser-agent доступен) поднимается один раз на процесс
+и пробрасывается в `/ask` — иначе meta READ_ONLY tools падают `ToolError`,
+LLM получает ошибку и формулирует ответ без них.
 """
 
 from __future__ import annotations
@@ -16,6 +20,7 @@ from pathlib import Path
 import httpx
 from sqlalchemy.ext.asyncio import create_async_engine
 
+from core.meta_api.client import MetaApiClient
 from core.telegram.bot_handler import handle_update
 from core.telegram.client import TelegramBotClient
 from core.telegram.service import (
@@ -72,6 +77,31 @@ def _get_database_url() -> str:
     return db_url
 
 
+async def _build_meta_api_client() -> MetaApiClient | None:
+    """Поднять MetaApiClient если browser-agent доступен.
+
+    При неудаче (ImportError / GRPC error) — None, чтобы /ask продолжал работать
+    с meta-tools, возвращающими ToolError «Marketing API недоступен».
+    """
+    grpc_host = os.environ.get("BROWSER_AGENT_GRPC_HOST", "localhost")
+    try:
+        grpc_port = int(os.environ.get("BROWSER_AGENT_GRPC_PORT", "50051"))
+    except ValueError:
+        grpc_port = 50051
+    try:
+        client = MetaApiClient(host=grpc_host, port=grpc_port)
+        await client.start()
+        logger.info(
+            "MetaApiClient поднят (%s:%d) — meta-tools в /ask активны", grpc_host, grpc_port
+        )
+        return client
+    except Exception as exc:
+        logger.warning(
+            "MetaApiClient не запустился (%s) — /ask продолжит работать без meta-tools", exc
+        )
+        return None
+
+
 async def main_loop(db_url: str) -> None:
     """Основной long-polling цикл."""
     engine = create_async_engine(db_url, echo=False)
@@ -90,6 +120,7 @@ async def main_loop(db_url: str) -> None:
     last_token_reload_at = 0.0
     last_heartbeat_at = 0.0
     client: TelegramBotClient | None = None
+    meta_api_client: MetaApiClient | None = None
 
     try:
         # Начальная загрузка config
@@ -105,6 +136,9 @@ async def main_loop(db_url: str) -> None:
         client = TelegramBotClient(bot_token=last_token, http_client=http_client)
         offset = cfg.poller_offset
         logger.info("Telegram poller v2 запущен (offset=%d)", offset)
+
+        # Один MetaApiClient на процесс. Если browser-agent оффлайн — продолжаем без него.
+        meta_api_client = await _build_meta_api_client()
 
         while not shutdown_event.is_set():
             now = loop.time()
@@ -152,7 +186,12 @@ async def main_loop(db_url: str) -> None:
                 if upd_id > offset:
                     offset = upd_id
                 try:
-                    await handle_update(engine=engine, client=client, update=update)
+                    await handle_update(
+                        engine=engine,
+                        client=client,
+                        update=update,
+                        meta_api_client=meta_api_client,
+                    )
                 except Exception:
                     logger.exception("handle_update crashed (update_id=%d)", upd_id)
 
@@ -163,6 +202,11 @@ async def main_loop(db_url: str) -> None:
                 logger.exception("save_poller_offset failed")
     finally:
         logger.info("Telegram poller v2 завершён")
+        if meta_api_client is not None:
+            try:
+                await meta_api_client.close()
+            except Exception:
+                logger.exception("MetaApiClient.close failed")
         try:
             await http_client.aclose()
         except Exception:
