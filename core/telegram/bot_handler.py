@@ -1,19 +1,15 @@
 # -*- coding: utf-8 -*-
 """Минимальный bot handler под v2 схему.
 
-Поддерживает только:
-- /start [code]   — приветствие + consume invite
-- /help           — список доступных команд
-- /spy <slot> <country>  — запуск Ad Library scan + ответ markdown'ом
+Поддерживает:
+- /start [code]   — приветствие + consume invite.
+- /help           — список доступных команд.
+- /spy <slot> <country>  — запуск Ad Library scan.
+- /ask <вопрос>   — AI-ассистент с tool-use (ChatSession).
+- Inline-callbacks: dis/snz (под алертами), dr_ok/dr_cancel (под AI draft-preview).
 
-Любая другая команда → ответ "Команда в процессе миграции под новую схему".
-
-Acceс контроль:
-- private chat: только активные recipient'ы.
-- группа: все участники могут писать /spy (privacy mode не блокирует).
-
-NB: TG /spy запускает run_pipeline в asyncio.Task — long-running операция (60-180 сек).
-Бот сразу отвечает «Сканирую…», по готовности — финальное сообщение.
+NB: /spy и /ask запускаются в asyncio.Task — long-running. Сразу отвечают
+«Думаю…», по готовности шлют финальное сообщение.
 """
 
 from __future__ import annotations
@@ -31,6 +27,7 @@ from core.ad_library.spy_handler import (
     format_short_summary,
     parse_spy_args,
 )
+from core.telegram.ai_handlers import handle_ask, handle_draft_callback
 from core.telegram.client import TelegramBotClient
 from core.telegram.service import (
     consume_invite_and_create_recipient,
@@ -163,11 +160,12 @@ async def _handle_help(
 ) -> None:
     txt = (
         "*Доступные команды:*\n\n"
-        "/spy `<слот> <country>` — поиск конкурентов в Ad Library\n"
+        "/spy `<слот> <country>` — поиск конкурентов в Ad Library.\n"
         "  Пример: `/spy chicken road 2 KE`\n\n"
-        "/help — эта справка\n\n"
-        "_Остальные команды (/ads, /offers, /rules, /scripts, /status, /digest, /ask) "
-        "в процессе миграции под новую схему БД._"
+        "/ask `<вопрос>` — AI-ассистент. Может читать статистику, искать объявления,\n"
+        "  собирать черновики мутаций (бюджет, клон, bulk pause).\n"
+        "  Черновики приходят отдельными сообщениями с ✅ / ❌.\n\n"
+        "/help — эта справка."
     )
     await _send(
         client,
@@ -327,8 +325,6 @@ async def _handle_callback_query(
         return
 
     action = parts[0]
-    fb_ad_id = parts[1]
-    token = parts[2] if len(parts) >= 3 else ""
 
     # Access control: только активный recipient может жать кнопки
     recipient = await find_recipient(engine, chat_id=chat_id, telegram_user_id=user_id)
@@ -339,6 +335,23 @@ async def _handle_callback_query(
             pass
         return
 
+    # Draft callbacks приходят как dr_ok:<task_id> / dr_cancel:<task_id>.
+    if action in ("dr_ok", "dr_cancel"):
+        message_id = (cq.get("message") or {}).get("message_id")
+        await handle_draft_callback(
+            engine=engine,
+            client=client,
+            cq_id=cq_id,
+            action=action,
+            task_id_raw=parts[1],
+            username=str(username),
+            chat_id=chat_id,
+            message_id=int(message_id) if message_id else None,
+        )
+        return
+
+    fb_ad_id = parts[1]
+    token = parts[2] if len(parts) >= 3 else ""
     requested_by = f"tg:{username}"
 
     if action == "dis":
@@ -490,6 +503,19 @@ async def handle_update(
         )
         return
 
+    if cmd == "ask":
+        await handle_ask(
+            engine=engine,
+            client=client,
+            chat_id=chat_id,
+            message_id=message_id,
+            thread_id=thread_id,
+            user_id=user_id,
+            username=username,
+            args_text=args_text,
+        )
+        return
+
     # Legacy команды — заглушка
     if cmd in {
         "ads",
@@ -498,7 +524,6 @@ async def handle_update(
         "scripts",
         "status",
         "digest",
-        "ask",
         "set",
         "app",
         "disabled",
