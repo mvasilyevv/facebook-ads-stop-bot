@@ -1,5 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Tool get_recent_alerts — последние алерты из alert_events (partitioned)."""
+"""Tool get_recent_alerts — последние алерты из alert_events (partitioned).
+
+Колонки v2-схемы: alert_events.stage (warning/stop), .matched_rule_codes (jsonb),
+.created_at; fb_ads.ad_name, .fb_ad_id.
+"""
 
 from __future__ import annotations
 
@@ -13,7 +17,7 @@ from core.ai_assistant.tools.base import RiskLevel, ToolContext, ToolError
 class GetRecentAlertsTool:
     """Сводка алертов из alert_events за последние N часов.
 
-    alert_events — partitioned by month, отдельных stage warning/stop по event_type.
+    alert_events — partitioned by month, stage = 'warning' | 'stop'.
     """
 
     name: ClassVar[str] = "get_recent_alerts"
@@ -21,8 +25,9 @@ class GetRecentAlertsTool:
     schema: ClassVar[dict[str, Any]] = {
         "name": "get_recent_alerts",
         "description": (
-            "Последние алерты системы (WARNING/STOP) с привязкой к ad_id и rule_codes. "
-            "Параметры: hours (по умолчанию 24), stage (warning/stop/null), limit (50)."
+            "Последние алерты системы (WARNING/STOP) с привязкой к ad_id "
+            "и matched_rule_codes. Параметры: hours (по умолчанию 24), "
+            "stage (warning/stop/null), limit (50)."
         ),
         "input_schema": {
             "type": "object",
@@ -49,14 +54,15 @@ class GetRecentAlertsTool:
             raise ToolError(f"stage должен быть 'warning' или 'stop', получено: {stage!r}")
 
         sql = (
-            "SELECT ae.event_type, ae.rule_codes, ae.created_at, a.fb_ad_id, a.name "
+            "SELECT ae.stage, ae.matched_rule_codes, ae.created_at, "
+            "       a.fb_ad_id, a.ad_name "
             "FROM alert_events ae "
             "JOIN fb_ads a ON a.id = ae.ad_id "
             "WHERE ae.created_at >= NOW() - make_interval(hours => :hrs) "
         )
         params: dict[str, Any] = {"hrs": hours, "lim": limit}
         if stage:
-            sql += "AND ae.event_type = :stg "
+            sql += "AND ae.stage = :stg "
             params["stg"] = stage
         sql += "ORDER BY ae.created_at DESC LIMIT :lim"
 
@@ -68,11 +74,11 @@ class GetRecentAlertsTool:
 
         lines = [f"Алертов за последние {hours}ч: {len(rows)}"]
         for row in rows:
-            event_type, rule_codes, created_at, fb_ad_id, ad_name = row
+            stage_val, rule_codes, created_at, fb_ad_id, ad_name = row
             codes_str = ", ".join(rule_codes or []) if isinstance(rule_codes, list) else "?"
             ts = created_at.strftime("%Y-%m-%d %H:%M") if created_at else "?"
             short_name = (ad_name or "")[:48]
             lines.append(
-                f"[{ts}] {event_type.upper()} ad={fb_ad_id} «{short_name}» rules=({codes_str})"
+                f"[{ts}] {str(stage_val).upper()} ad={fb_ad_id} «{short_name}» rules=({codes_str})"
             )
         return "\n".join(lines)
