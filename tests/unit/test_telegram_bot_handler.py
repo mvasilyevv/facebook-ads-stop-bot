@@ -63,7 +63,7 @@ async def test_unknown_command_for_recipient() -> None:
     client.send_message = AsyncMock()
 
     with patch(
-        "core.telegram.bot_handler.find_recipient",
+        "core.telegram.handlers.router.find_recipient",
         new=AsyncMock(return_value=Recipient(123, 555, "alice", "recipient")),
     ):
         update = {
@@ -92,7 +92,7 @@ async def test_legacy_command_stub() -> None:
     client.send_message = AsyncMock()
 
     with patch(
-        "core.telegram.bot_handler.find_recipient",
+        "core.telegram.handlers.router.find_recipient",
         new=AsyncMock(return_value=Recipient(123, 555, "alice", "owner")),
     ):
         update = {
@@ -120,7 +120,7 @@ async def test_help_for_recipient() -> None:
     client.send_message = AsyncMock()
 
     with patch(
-        "core.telegram.bot_handler.find_recipient",
+        "core.telegram.handlers.router.find_recipient",
         new=AsyncMock(return_value=Recipient(123, 555, "alice", "recipient")),
     ):
         update = {
@@ -149,7 +149,7 @@ async def test_spy_missing_args() -> None:
     client.send_message = AsyncMock()
 
     with patch(
-        "core.telegram.bot_handler.find_recipient",
+        "core.telegram.handlers.router.find_recipient",
         new=AsyncMock(return_value=Recipient(123, 555, "alice", "recipient")),
     ):
         update = {
@@ -185,15 +185,15 @@ async def test_spy_kicks_off_pipeline() -> None:
 
     with (
         patch(
-            "core.telegram.bot_handler.find_recipient",
+            "core.telegram.handlers.router.find_recipient",
             new=AsyncMock(return_value=Recipient(123, 555, "alice", "recipient")),
         ),
         patch(
-            "core.telegram.bot_handler.run_pipeline",
+            "core.telegram.handlers.spy.run_pipeline",
             new=AsyncMock(return_value=fake_pipeline_result),
         ),
         patch(
-            "core.telegram.bot_handler.format_short_summary",
+            "core.telegram.handlers.spy.format_short_summary",
             new=lambda res: "SUMMARY OK",
         ),
     ):
@@ -235,7 +235,7 @@ async def test_command_with_bot_username_suffix() -> None:
     client.send_message = AsyncMock()
 
     with patch(
-        "core.telegram.bot_handler.find_recipient",
+        "core.telegram.handlers.router.find_recipient",
         new=AsyncMock(return_value=Recipient(123, 555, "alice", "recipient")),
     ):
         update = {

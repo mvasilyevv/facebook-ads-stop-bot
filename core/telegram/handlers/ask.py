@@ -1,8 +1,12 @@
 # -*- coding: utf-8 -*-
-"""TG-обработчики AI-ассистента (команда /ask и draft callbacks).
+"""/ask — AI-ассистент + draft callbacks (dr_ok / dr_cancel).
 
-Вынесено из bot_handler.py, чтобы тот не превышал лимит 500 строк.
-Снаружи используется только handle_ask, handle_draft_callback и draft_inline_keyboard.
+Создаёт `ChatSession` с пробрасываемыми зависимостями (engine, meta_api_client),
+вызывает её в asyncio.Task — main loop poller'а остаётся отзывчивым. По готовности
+шлёт финальный ответ + отдельные сообщения-preview под каждый draft с inline-кнопками.
+
+meta_api_client опционален: если None или browser-agent оффлайн, meta-tools
+вернут читаемую ошибку через ToolError (см. core/meta_api/errors.py).
 """
 
 from __future__ import annotations
@@ -10,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -22,6 +26,10 @@ from core.ai_assistant.chat import (
 from core.ai_assistant.client import AIUnavailableError
 from core.meta_api.queue import approve_draft_task, cancel_task
 from core.telegram.client import TelegramBotClient
+from core.telegram.handlers._send import send_text
+
+if TYPE_CHECKING:  # pragma: no cover - только для аннотаций
+    from core.meta_api.client import MetaApiClient
 
 logger = logging.getLogger(__name__)
 
@@ -72,26 +80,6 @@ def extract_draft_task_ids(traces: list[Any]) -> list[tuple[int, str, str]]:
     return out
 
 
-async def _send_text(
-    client: TelegramBotClient,
-    *,
-    chat_id: int,
-    text: str,
-    message_thread_id: int | None = None,
-    parse_mode: str | None = "Markdown",
-) -> None:
-    """Тонкая обёртка без падений на сетевых ошибках TG."""
-    try:
-        await client.send_message(
-            chat_id=str(chat_id),
-            text=text,
-            message_thread_id=message_thread_id,
-            parse_mode=parse_mode,
-        )
-    except Exception:
-        logger.exception("send_message failed")
-
-
 async def _handle_ask_background(
     *,
     engine: AsyncEngine,
@@ -101,11 +89,12 @@ async def _handle_ask_background(
     question: str,
     user_id: int,
     username: str | None,
+    meta_api_client: MetaApiClient | None = None,
 ) -> None:
     """ChatSession.ask → финальный ответ + draft previews."""
     client_key = f"tg:{user_id}"
     requested_by = f"tg:{username or user_id}"
-    session = ChatSession(engine=engine)
+    session = ChatSession(engine=engine, meta_api_client=meta_api_client)
     try:
         response = await session.ask(
             [ChatMessage(role="user", content=question)],
@@ -113,16 +102,16 @@ async def _handle_ask_background(
             requested_by=requested_by,
         )
     except ChatRateLimitedError as exc:
-        await _send_text(client, chat_id=chat_id, text=f"⏱ {exc}", message_thread_id=thread_id)
+        await send_text(client, chat_id=chat_id, text=f"⏱ {exc}", message_thread_id=thread_id)
         return
     except AIUnavailableError as exc:
-        await _send_text(
+        await send_text(
             client, chat_id=chat_id, text=f"AI недоступен: {exc}", message_thread_id=thread_id
         )
         return
     except Exception:
         logger.exception("ChatSession.ask упал")
-        await _send_text(
+        await send_text(
             client,
             chat_id=chat_id,
             text="AI: внутренняя ошибка. Подробности в логах.",
@@ -131,7 +120,7 @@ async def _handle_ask_background(
         return
 
     answer = response.answer or "(пустой ответ)"
-    await _send_text(client, chat_id=chat_id, text=answer, message_thread_id=thread_id)
+    await send_text(client, chat_id=chat_id, text=answer, message_thread_id=thread_id)
 
     drafts = extract_draft_task_ids(response.tool_calls)
     for task_id, tool_name, result_text in drafts:
@@ -157,12 +146,13 @@ async def handle_ask(
     user_id: int,
     username: str | None,
     args_text: str,
+    meta_api_client: MetaApiClient | None = None,
 ) -> None:
-    """TG-команда /ask: усечённая обвязка, AI-вызов в Task."""
+    """TG-команда /ask: ack «Думаю…» и запуск AI в Task."""
     _ = message_id  # клиент не поддерживает reply_to — оставляем для документации
     question = (args_text or "").strip()
     if not question:
-        await _send_text(
+        await send_text(
             client,
             chat_id=chat_id,
             text=(
@@ -174,7 +164,7 @@ async def handle_ask(
         )
         return
 
-    await _send_text(
+    await send_text(
         client,
         chat_id=chat_id,
         text="🤖 Думаю…",
@@ -190,6 +180,7 @@ async def handle_ask(
             question=question,
             user_id=user_id,
             username=username,
+            meta_api_client=meta_api_client,
         )
     )
 
