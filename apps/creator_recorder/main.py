@@ -24,12 +24,14 @@ import signal
 from datetime import datetime, timezone
 from typing import Any
 
+import httpx
 import redis.asyncio as redis_asyncio
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from clients.python_grpc.client import BrowserAgentClient, BrowserAgentConfig
+from core.telegram.client import TelegramBotClient
 
 logger = logging.getLogger("creator_recorder")
 
@@ -96,10 +98,12 @@ async def handle_record_stop(
     client: BrowserAgentClient,
     engine: AsyncEngine,
     payload: dict[str, Any],
+    tg_client: TelegramBotClient | None = None,
 ) -> str | None:
     """Останавливает запись и сохраняет план в creator_plans.
 
     Возвращает UUID созданной записи или None.
+    После успешного INSERT — отправляет TG-confirmation если передан tg_client.
     """
     try:
         stopped, plan_json, recorded_steps = await client.stop_recording()
@@ -141,6 +145,20 @@ async def handle_record_stop(
             plan_id,
             recorded_steps,
         )
+        # TG-confirmation получателю (recipient_id из pubsub-payload)
+        recipient_id = str(payload.get("recipient_id") or "").strip()
+        if tg_client and recipient_id:
+            try:
+                await tg_client.send_message(
+                    chat_id=recipient_id,
+                    text=(
+                        f"✅ План *{name_hint}* сохранён (id=`{plan_id}`).\n"
+                        "Запусти его через /plans."
+                    ),
+                    parse_mode="Markdown",
+                )
+            except Exception:  # noqa: BLE001
+                logger.warning("recorder: не удалось отправить TG-confirmation", exc_info=True)
     return plan_id
 
 
@@ -206,6 +224,7 @@ async def _process_message(
     *,
     client: BrowserAgentClient,
     engine: AsyncEngine,
+    tg_client: TelegramBotClient | None = None,
 ) -> None:
     """Разобрать payload и вызвать соответствующий handler."""
     try:
@@ -220,7 +239,7 @@ async def _process_message(
         if channel == CHANNEL_RECORD_START:
             await handle_record_start(client, payload)
         elif channel == CHANNEL_RECORD_STOP:
-            await handle_record_stop(client, engine, payload)
+            await handle_record_stop(client, engine, payload, tg_client=tg_client)
         else:
             logger.debug("recorder: неизвестный канал %s", channel)
     except Exception:  # noqa: BLE001
@@ -234,6 +253,7 @@ async def pubsub_loop(
     stop: asyncio.Event,
     *,
     poll_timeout: float = 1.0,
+    tg_client: TelegramBotClient | None = None,
 ) -> None:
     """Подписка на каналы recorder + диспетчер. Завершается по stop event."""
     pubsub = redis_client.pubsub()
@@ -258,7 +278,13 @@ async def pubsub_loop(
             data = msg.get("data")
             if isinstance(data, bytes):
                 data = data.decode("utf-8", errors="replace")
-            await _process_message(channel or "", data, client=client, engine=engine)
+            await _process_message(
+                channel or "",
+                data,
+                client=client,
+                engine=engine,
+                tg_client=tg_client,
+            )
     finally:
         try:
             await pubsub.unsubscribe(*CHANNELS)
@@ -287,12 +313,31 @@ async def heartbeat_loop(redis_client: redis_asyncio.Redis, stop: asyncio.Event)
 # ====================== entrypoint ======================
 
 
+async def _build_tg_client(engine: AsyncEngine) -> TelegramBotClient | None:
+    """Построить TelegramBotClient из telegram_config в БД. None если не сконфигурирован."""
+    try:
+        from core.telegram.service import load_telegram_config
+
+        cfg = await load_telegram_config(engine)
+        if not cfg or not cfg.bot_token:
+            logger.warning("recorder: telegram_config пуст, TG-confirmation недоступен")
+            return None
+        http_client = httpx.AsyncClient(timeout=15.0)
+        return TelegramBotClient(bot_token=cfg.bot_token, http_client=http_client)
+    except Exception:  # noqa: BLE001
+        logger.warning("recorder: не удалось построить TelegramBotClient", exc_info=True)
+        return None
+
+
 async def main_loop(database_url: str | None = None) -> None:
     db_url = database_url or _get_database_url()
     engine = create_async_engine(db_url, echo=False)
     redis_client = redis_asyncio.from_url(_get_redis_url(), decode_responses=True)
     browser_client = _build_browser_client()
     await browser_client.start()
+
+    # TelegramBotClient для confirmation после INSERT
+    tg_client = await _build_tg_client(engine)
 
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -305,7 +350,7 @@ async def main_loop(database_url: str | None = None) -> None:
     logger.info("creator_recorder запущен")
     try:
         await asyncio.gather(
-            pubsub_loop(redis_client, engine, browser_client, stop),
+            pubsub_loop(redis_client, engine, browser_client, stop, tg_client=tg_client),
             heartbeat_loop(redis_client, stop),
         )
     finally:
@@ -313,6 +358,11 @@ async def main_loop(database_url: str | None = None) -> None:
             await browser_client.close()
         except Exception:  # noqa: BLE001
             logger.exception("browser_client.close() упал")
+        if tg_client is not None:
+            try:
+                await tg_client.close()
+            except Exception:  # noqa: BLE001
+                pass
         try:
             await redis_client.aclose()
         except Exception:  # noqa: BLE001
@@ -329,6 +379,7 @@ __all__ = [
     "CHANNELS",
     "handle_record_start",
     "handle_record_stop",
+    "_process_message",
     "pubsub_loop",
     "heartbeat_loop",
     "main_loop",

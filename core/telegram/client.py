@@ -275,6 +275,22 @@ class TelegramBotClient:
             payload["text"] = text
         await self._post_json("answerCallbackQuery", payload=payload)
 
+    async def edit_message_reply_markup(
+        self,
+        *,
+        chat_id: str,
+        message_id: int,
+        reply_markup: dict | None = None,
+    ) -> None:
+        """Заменяет inline-кнопки у существующего сообщения."""
+        payload: dict = {
+            "chat_id": chat_id,
+            "message_id": message_id,
+        }
+        if reply_markup is not None:
+            payload["reply_markup"] = reply_markup
+        await self._post_json("editMessageReplyMarkup", payload=payload)
+
     async def get_updates(self, *, offset: int | None, timeout_seconds: int = 25) -> list[dict]:
         """Long polling для получения обновлений."""
         payload: dict = {

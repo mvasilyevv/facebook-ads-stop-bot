@@ -21,6 +21,7 @@ import httpx
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from core.meta_api.client import MetaApiClient
+from core.pubsub import RedisPubSub
 from core.telegram.bot_handler import handle_update
 from core.telegram.client import TelegramBotClient
 from core.telegram.service import (
@@ -102,6 +103,19 @@ async def _build_meta_api_client() -> MetaApiClient | None:
         return None
 
 
+def _get_redis_url() -> str:
+    """Redis URL из env или config."""
+    redis_url = os.environ.get("REDIS_URL")
+    if redis_url:
+        return redis_url
+    try:
+        from core.config import get_settings
+
+        return get_settings().redis_url
+    except Exception:
+        return "redis://localhost:6380/0"
+
+
 async def main_loop(db_url: str) -> None:
     """Основной long-polling цикл."""
     engine = create_async_engine(db_url, echo=False)
@@ -121,6 +135,9 @@ async def main_loop(db_url: str) -> None:
     last_heartbeat_at = 0.0
     client: TelegramBotClient | None = None
     meta_api_client: MetaApiClient | None = None
+
+    # Redis pubsub клиент для creator-команд (/record_plan, /stop_record)
+    redis_pubsub = RedisPubSub(_get_redis_url())
 
     try:
         # Начальная загрузка config
@@ -191,6 +208,7 @@ async def main_loop(db_url: str) -> None:
                         client=client,
                         update=update,
                         meta_api_client=meta_api_client,
+                        redis=redis_pubsub,
                     )
                 except Exception:
                     logger.exception("handle_update crashed (update_id=%d)", upd_id)
@@ -207,6 +225,10 @@ async def main_loop(db_url: str) -> None:
                 await meta_api_client.close()
             except Exception:
                 logger.exception("MetaApiClient.close failed")
+        try:
+            await redis_pubsub.close()
+        except Exception:
+            pass
         try:
             await http_client.aclose()
         except Exception:

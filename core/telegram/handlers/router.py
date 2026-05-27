@@ -2,8 +2,9 @@
 """Центральный диспетчер Telegram update → доменный handler.
 
 Принимает `update` от long-polling, парсит команду / callback_query, делегирует
-обработку модулям `onboarding.py`, `spy.py`, `ask.py`, `alerts.py`. `meta_api_client`
-опционален: пробрасывается в `/ask` для работы Marketing API tools.
+обработку модулям `onboarding.py`, `spy.py`, `ask.py`, `alerts.py`, `creator.py`.
+`meta_api_client` опционален: пробрасывается в `/ask` для работы Marketing API tools.
+`redis` опционален: пробрасывается в creator-команды для pubsub publish.
 """
 
 from __future__ import annotations
@@ -22,12 +23,19 @@ from core.telegram.handlers.alerts import (
     handle_snz_callback,
 )
 from core.telegram.handlers.ask import handle_ask, handle_draft_callback
+from core.telegram.handlers.creator import (
+    handle_list_plans,
+    handle_plan_run_callback,
+    handle_record_plan,
+    handle_stop_record,
+)
 from core.telegram.handlers.onboarding import handle_help, handle_start
 from core.telegram.handlers.spy import handle_spy
 from core.telegram.service import find_recipient
 
 if TYPE_CHECKING:  # pragma: no cover
     from core.meta_api.client import MetaApiClient
+    from core.pubsub import RedisPubSub
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +69,7 @@ async def _dispatch_callback_query(
     """Обработка нажатия inline-кнопки (под алертами или AI draft).
 
     callback_data: '<action>:<arg1>[:<arg2>]'
-        action ∈ {'dis', 'snz', 'dr_ok', 'dr_cancel'}.
+        action ∈ {'dis', 'snz', 'dr_ok', 'dr_cancel', 'plan'}.
     """
     cq_id = str(cq.get("id", ""))
     data = str(cq.get("data") or "")
@@ -102,6 +110,15 @@ async def _dispatch_callback_query(
             username=str(username),
             chat_id=chat_id,
             message_id=int(message_id) if message_id else None,
+        )
+        return
+
+    # Creator plan run callback
+    if action == "plan":
+        await handle_plan_run_callback(
+            callback_query=cq,
+            engine=engine,
+            client=client,
         )
         return
 
@@ -150,6 +167,7 @@ async def handle_update(
     client: TelegramBotClient,
     update: dict[str, Any],
     meta_api_client: MetaApiClient | None = None,
+    redis: RedisPubSub | None = None,
 ) -> None:
     """Обработка одного update от Telegram."""
     # Inline-кнопки под алертами
@@ -250,6 +268,56 @@ async def handle_update(
             username=username,
             args_text=args_text,
             meta_api_client=meta_api_client,
+        )
+        return
+
+    if cmd == "record_plan":
+        if redis is None:
+            await send_text(
+                client,
+                chat_id=chat_id,
+                text="❌ Redis недоступен — команда не работает.",
+                reply_to_message_id=message_id,
+                message_thread_id=thread_id,
+            )
+            return
+        await handle_record_plan(
+            engine=engine,
+            client=client,
+            redis=redis,
+            chat_id=chat_id,
+            message_id=message_id,
+            thread_id=thread_id,
+            args_text=args_text,
+        )
+        return
+
+    if cmd == "stop_record":
+        if redis is None:
+            await send_text(
+                client,
+                chat_id=chat_id,
+                text="❌ Redis недоступен — команда не работает.",
+                reply_to_message_id=message_id,
+                message_thread_id=thread_id,
+            )
+            return
+        await handle_stop_record(
+            engine=engine,
+            client=client,
+            redis=redis,
+            chat_id=chat_id,
+            message_id=message_id,
+            thread_id=thread_id,
+        )
+        return
+
+    if cmd == "plans":
+        await handle_list_plans(
+            engine=engine,
+            client=client,
+            chat_id=chat_id,
+            thread_id=thread_id,
         )
         return
 
