@@ -55,9 +55,7 @@ async def test_dispatch_unknown_kind_raises_not_implemented(monkeypatch) -> None
     # добавляя в неё "fake_kind" (но в MUTATION_HANDLERS его нет).
     from core.meta_api import schemas as schemas_pkg
 
-    monkeypatch.setattr(
-        schemas_pkg, "MUTATION_KINDS", frozenset({*MUTATION_KINDS, "fake_kind"})
-    )
+    monkeypatch.setattr(schemas_pkg, "MUTATION_KINDS", frozenset({*MUTATION_KINDS, "fake_kind"}))
 
     client = AsyncMock()
     bad_payload = MetaMutationPayload.from_dict(

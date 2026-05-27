@@ -451,112 +451,12 @@ async def test_bulk_invalid_object_type_raises() -> None:
 
 
 # ====================== create_campaign ======================
+# Полные тесты для new Batch API реализации — см. test_meta_api_create_campaign_full.py
+# Здесь оставлены только smoke-тесты совместимости с реестром handlers.
 
 
-# Валидный payload → POST /{act_id}/campaigns с правильными полями.
+# create_campaign зарегистрирован и принимается dispatcher'ом.
 @pytest.mark.asyncio
-async def test_create_campaign_full_payload() -> None:
-    client = _make_client({"id": "23843005"})
-    payload = MetaMutationPayload(
-        mutation_kind="create_campaign",
-        target_id="new",
-        params={
-            "name": "DRC_CR2 | 26.05",
-            "objective": "OUTCOME_LEADS",
-            "status_after_create": "PAUSED",
-            "special_ad_categories": ["NONE"],
-            "daily_budget": 5000,
-        },
-        ad_account_id="act_123",
-    )
-
-    result = await CreateCampaignHandler().execute(client, payload)
-
-    kwargs = client.execute_graph_call.call_args.kwargs
-    assert kwargs["method"] == "POST"
-    assert kwargs["endpoint"] == "/act_123/campaigns"
-    qp = kwargs["query_params"]
-    assert qp["name"] == "DRC_CR2 | 26.05"
-    assert qp["objective"] == "OUTCOME_LEADS"
-    assert qp["status"] == "PAUSED"
-    assert json.loads(qp["special_ad_categories"]) == ["NONE"]
-    assert qp["daily_budget"] == "5000"
-    assert result["modified_ids"] == ["23843005"]
-
-
-# ad_account_id без префикса act_ — ValueError.
-@pytest.mark.asyncio
-async def test_create_campaign_rejects_missing_act_prefix() -> None:
-    client = _make_client()
-    payload = MetaMutationPayload(
-        mutation_kind="create_campaign",
-        target_id="new",
-        params={
-            "name": "Some",
-            "objective": "OUTCOME_LEADS",
-            "special_ad_categories": ["NONE"],
-        },
-        ad_account_id="123",
-    )
-
-    with pytest.raises(ValueError, match="act_"):
-        await CreateCampaignHandler().execute(client, payload)
-
-
-# Неизвестный objective → ValueError.
-@pytest.mark.asyncio
-async def test_create_campaign_rejects_unknown_objective() -> None:
-    client = _make_client()
-    payload = MetaMutationPayload(
-        mutation_kind="create_campaign",
-        target_id="new",
-        params={
-            "name": "Some",
-            "objective": "SOMETHING_ELSE",
-            "special_ad_categories": ["NONE"],
-        },
-        ad_account_id="act_123",
-    )
-
-    with pytest.raises(ValueError, match="objective"):
-        await CreateCampaignHandler().execute(client, payload)
-
-
-# Имя короче 3 символов — ValueError.
-@pytest.mark.asyncio
-async def test_create_campaign_rejects_too_short_name() -> None:
-    client = _make_client()
-    payload = MetaMutationPayload(
-        mutation_kind="create_campaign",
-        target_id="new",
-        params={
-            "name": "AB",
-            "objective": "OUTCOME_LEADS",
-            "special_ad_categories": ["NONE"],
-        },
-        ad_account_id="act_123",
-    )
-
-    with pytest.raises(ValueError, match="3 символа"):
-        await CreateCampaignHandler().execute(client, payload)
-
-
-# Оба daily+lifetime budget — ValueError.
-@pytest.mark.asyncio
-async def test_create_campaign_rejects_both_budgets() -> None:
-    client = _make_client()
-    payload = MetaMutationPayload(
-        mutation_kind="create_campaign",
-        target_id="new",
-        params={
-            "name": "Some Name",
-            "objective": "OUTCOME_LEADS",
-            "special_ad_categories": ["NONE"],
-            "daily_budget": 1000,
-            "lifetime_budget": 5000,
-        },
-        ad_account_id="act_123",
-    )
-
-    with pytest.raises(ValueError, match="не больше одного"):
-        await CreateCampaignHandler().execute(client, payload)
+async def test_create_campaign_handler_is_registered() -> None:
+    handler = CreateCampaignHandler()
+    assert handler.mutation_kind == "create_campaign"
