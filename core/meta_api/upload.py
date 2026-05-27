@@ -136,6 +136,73 @@ class MediaUploader:
         )
         return response.image_hash
 
+    async def upload_image_from_url(
+        self,
+        ad_account_id: str,
+        image_url: str,
+        name: str | None = None,
+    ) -> str:
+        """Загрузка картинки по URL — Meta сама скачает.
+
+        Возвращает image_hash из ответа Graph API.
+
+        Args:
+            ad_account_id: с префиксом "act_".
+            image_url: HTTPS-ссылка на картинку (только https).
+            name: имя картинки в Meta (опционально).
+
+        Raises:
+            ValueError: пустой URL или URL без https://.
+            SessionUnavailableError: browser-agent или Vision-сессия недоступны.
+            PermanentError: Meta вернул ошибку (токен, права и т.д.).
+        """
+        if self._client._stub is None:  # type: ignore[attr-defined]
+            raise RuntimeError("MetaApiClient не запущен: вызови await client.start()")
+        if not ad_account_id or not ad_account_id.startswith("act_"):
+            raise ValueError(
+                f"ad_account_id должен начинаться с 'act_', получено {ad_account_id!r}"
+            )
+        if not image_url:
+            raise ValueError("image_url не может быть пустым")
+        if not image_url.startswith("https://"):
+            raise ValueError(f"image_url должен начинаться с 'https://', получено {image_url!r}")
+
+        request = meta_api_pb2.UploadImageRequest(
+            session_id=self._client.session_id,
+            ad_account_id=ad_account_id,
+            image_url=image_url,
+            name=name or "",
+            # file_bytes/filename/content_type оставляем пустыми — URL-путь
+        )
+
+        try:
+            response = await self._client._stub.UploadImage(  # type: ignore[attr-defined]
+                request,
+                timeout=_UPLOAD_TIMEOUT_SECONDS,
+            )
+        except grpc.RpcError as exc:  # type: ignore[misc]
+            raise self._grpc_to_error(exc, endpoint=f"/{ad_account_id}/adimages") from exc
+
+        if not response.ok:
+            err_msg = response.error or "UploadImage (url): неизвестная ошибка"
+            if "TOKEN_NOT_FOUND" in err_msg or "PAGE_EVALUATE_ERROR" in err_msg:
+                raise SessionUnavailableError(err_msg, endpoint=f"/{ad_account_id}/adimages")
+            raise PermanentError(err_msg, endpoint=f"/{ad_account_id}/adimages")
+
+        if not response.image_hash:
+            raise PermanentError(
+                "UploadImage (url): image_hash пустой в успешном ответе",
+                endpoint=f"/{ad_account_id}/adimages",
+            )
+
+        logger.info(
+            "upload_image_from_url: hash=%s url=%s duration=%dмс",
+            response.image_hash[:16] + "...",
+            image_url[:60],
+            response.duration_ms,
+        )
+        return response.image_hash
+
     # ====================== Video ======================
 
     async def upload_video(
