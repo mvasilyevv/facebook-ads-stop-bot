@@ -245,17 +245,18 @@ async def test_duplicate_campaign_active_maps_to_inherited() -> None:
     assert qparams["deep_copy"] == "false"
 
 
-# new_name → второй POST с name=... на скопированном объекте.
+# new_name → один Batch-запрос с copy+rename entries, success=True, new_name в result.
 @pytest.mark.asyncio
 async def test_duplicate_campaign_with_new_name_does_rename() -> None:
-    # Первый ответ — copies; второй — rename success.
+    import json as _json
+
+    copied_id = "23843999"
+    batch_resp = [
+        {"code": 200, "body": _json.dumps({"copied_campaign_id": copied_id})},
+        {"code": 200, "body": _json.dumps({"success": True})},
+    ]
     client = AsyncMock()
-    client.execute_graph_call = AsyncMock(
-        side_effect=[
-            {"copied_campaign_id": "23843999"},  # copies
-            {"success": True},  # rename
-        ]
-    )
+    client.execute_graph_call = AsyncMock(return_value=batch_resp)
     payload = MetaMutationPayload(
         mutation_kind="duplicate_campaign",
         target_id="23843001",
@@ -264,25 +265,27 @@ async def test_duplicate_campaign_with_new_name_does_rename() -> None:
 
     result = await DuplicateCampaignHandler().execute(client, payload)
 
-    assert client.execute_graph_call.await_count == 2
-    second_call = client.execute_graph_call.call_args_list[1].kwargs
-    assert second_call["endpoint"] == "/23843999"
-    assert second_call["query_params"] == {"name": "Cloned R2"}
-    assert result["new_name"] == "Cloned R2"
+    # Один вызов (Batch API)
+    client.execute_graph_call.assert_awaited_once()
+    kwargs = client.execute_graph_call.call_args.kwargs
+    assert kwargs["endpoint"] == "/"
+    assert result["success"] is True
+    assert result.get("new_name") == "Cloned R2"
+    assert copied_id in result["modified_ids"]
 
 
-# Если rename упал — копия уже создана, success возвращается с warning.
+# Если rename упал — копия создана, success=False, last_error содержит «копия создана».
 @pytest.mark.asyncio
 async def test_duplicate_campaign_rename_failure_returns_warning() -> None:
-    from core.meta_api.errors import TemporaryError
+    import json as _json
 
+    copied_id = "23843999"
+    batch_resp = [
+        {"code": 200, "body": _json.dumps({"copied_campaign_id": copied_id})},
+        {"code": 400, "body": _json.dumps({"error": {"message": "rename failed", "code": 100}})},
+    ]
     client = AsyncMock()
-    client.execute_graph_call = AsyncMock(
-        side_effect=[
-            {"copied_campaign_id": "23843999"},  # copies success
-            TemporaryError("ahem", code=2),  # rename упал
-        ]
-    )
+    client.execute_graph_call = AsyncMock(return_value=batch_resp)
     payload = MetaMutationPayload(
         mutation_kind="duplicate_campaign",
         target_id="23843001",
@@ -291,8 +294,9 @@ async def test_duplicate_campaign_rename_failure_returns_warning() -> None:
 
     result = await DuplicateCampaignHandler().execute(client, payload)
 
-    assert result["success"] is True
-    assert "rename_warning" in result
+    assert result["success"] is False
+    assert "копия создана" in result["last_error"]
+    assert copied_id in result["modified_ids"]
 
 
 # Невалидный status_after_clone — ValueError.
