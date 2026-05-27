@@ -55,7 +55,7 @@ python scripts/restore_secrets.py          # вернуть токены
 
 **FB Stop Bot** — мониторит Facebook Ads, оценивает стоп-правила, шлёт алерты в Telegram, автоматически отключает объявления, создаёт новые кампании. Real-time часть работает через anti-detect браузер (Vision + Playwright + Node.js gRPC). Marketing API добавляется для latency-tolerant операций (см. `META_INTEGRATION_PLAN.md`).
 
-### Шесть воркеров + Node.js gRPC
+### Семь воркеров + Node.js gRPC
 
 После v2-миграции (см. `DB_REDESIGN.md`) кодовая база сокращена. Удалены: legacy ORM, observer god-таблицы, FastAPI роутеры, AI assistant tools, creator workers, meta_api worker, digest scheduler, health_watchdog. Восстановим инкрементально по запросу.
 
@@ -67,6 +67,7 @@ python scripts/restore_secrets.py          # вернуть токены
 4. **telegram_poller** (`apps/telegram_poller/`) — long-polling Telegram Bot API. Команды: `/start [code]` (consume invite), `/help`, `/spy <slot> <country>` (Ad Library pipeline). Inline-кнопки `dis:`, `snz:` под алертами → создают `task_queue` запись или ставят `ad_alert_state.snoozed_until`. Точка входа: `run_telegram_poller.py`.
 5. **cleanup_worker** (`apps/cleanup_worker/`) — раз в сутки в 04:00 UTC: DROP старых партиций, DELETE по retention из `system_config.retention_policy`, чистка orphan ad_library media файлов, CREATE next-month партиций. Точка входа: `run_cleanup_worker.py`.
 6. **reconciler_worker** (`apps/reconciler_worker/`) — каждые 30 сек: переводит `task_queue.status='running'` старше 30 минут → `retrying` (защита от крашнутых воркеров), отменяет `draft` старше 24 часов. Точка входа: `run_reconciler_worker.py`.
+7. **meta_api_worker** (`apps/meta_api_worker/`) — поллит `task_queue` где `task_type='meta_api_mutation'`. На Этапе 2 — скелет: claim → mark_failed("not implemented yet"). На Этапе 5 здесь будет реальная диспетчеризация mutations через `MetaApiClient` (gRPC к browser-agent). Heartbeat `worker:heartbeat:meta_api` в Redis. Reconcile stuck running/stale drafts с собственными таймаутами. Точка входа: `run_meta_api_worker.py`.
 
 **Node.js gRPC сервис (`services/browser-agent/`):**
 
@@ -97,6 +98,7 @@ python scripts/restore_secrets.py          # вернуть токены
 - **tasks/toggle_executor.py** — общий движок для disable/enable воркеров: `execute_one_toggle_task` + `run_toggle_loop` (claim → toggle → mark, error recovery, gate reconnect).
 - **telegram/** — `client.py` (TG Bot API через httpx, не зависит от ORM), `service.py` (load_telegram_config, find_recipient, consume_invite), `bot_handler.py` (минимальный: /start /help /spy + callback'и под алертами), `renderer.py` (форматирование алертов с inline-кнопками `dis:`/`snz:`), `alert_dispatcher.py` (отправка алертов из alert_events с дедупом через telegram_message_refs), `messaging.py`.
 - **ad_library/** — Ad Library pipeline (см. `DB_REDESIGN.md` §6.7): `scanner.py` (gRPC к browser-agent), `classifier.py` (vertical + relevance к slot), `media.py` (downloader через httpx), `enricher.py` (hook/cta/tone heuristic), `tier_ranker.py` (S/A/B/C), `report.py` (markdown), `pipeline.py` (orchestrator), `spy_handler.py` (parse /spy args).
+- **meta_api/** — Python-обвязка над gRPC MetaApiService browser-agent: `client.py` (`MetaApiClient` + `AuditedMetaApiClient`), `schemas.py` (frozen `MetaApiAdRow`/`MetaInsightsRow`/`MetaMutationPayload`), `errors.py` (классификация Graph error codes → `TokenInvalidError`/`RateLimitedError`/`NotFoundError`/...), `adapters.py` (`MetaApiAdRow → ScannedAdRow`), `audit.py` (запись в `meta_api_audit_log`, partitioned), `queue.py` (outbox-обёртка для `task_type='meta_api_mutation'` + `default_idempotency_key`), `reconciler.py` (stuck running / stale drafts), `insights/fetcher.py` (`InsightsFetcher` с пагинацией). Marketing API не шлётся через httpx — только через page.evaluate(fetch) изнутри Vision-сессии. См. `META_INTEGRATION_PLAN.md` §3-4.
 - **campaign_recorder/** — запись пользовательских действий в браузере → JSON план (для creator workers, которые сейчас не активны).
 - **creator_bridge/** — мост между Python и TS-bundle на странице (через `add_init_script` + `window.fbAgentEmit`).
 - **creatives/** — `uniquify_creatives` (водяной знак), `folder_opener`.
@@ -123,7 +125,7 @@ python scripts/restore_secrets.py          # вернуть токены
 - **API роутеры** (`apps/api/`) — 17 роутеров FastAPI. Понадобится для фронта.
 - **AI assistant tools** (`core/ai_assistant/tools/drafts/`, `tools/meta/`) — 8 tools для Marketing API drafts.
 - **Creator workers** (`apps/creator_worker/`, `apps/creator_recorder/`) — автоматизация создания кампаний через Vision.
-- **Meta API worker** (`apps/meta_api_worker/`) — execution Marketing API mutations (Этап 2-3 META_INTEGRATION_PLAN).
+- **Meta API mutations execution** — Этап 2 даёт только скелет worker'а и Python-обвязку (`core/meta_api/`: client, schemas, errors, adapters, audit, queue, reconciler, insights/fetcher). Реальные mutations (`pause_ad`, `set_adset_budget`, `create_campaign` через Batch API и т.д.) подключаются на Этапе 5 META_INTEGRATION_PLAN — нужны handlers в `core/meta_api/mutations/` и TS-сервис `services/browser-agent/src/meta-api/mutations.ts`.
 - **Health watchdog** (`apps/health_watchdog/`) — мониторинг heartbeats.
 - **Enable recommendation worker** (`apps/enable_recommendation_worker/`) — анализ выключенных ads.
 - **TG digest scheduler** (`core/telegram/digest_*`) — ежедневный отчёт в 9:00.
@@ -132,7 +134,7 @@ python scripts/restore_secrets.py          # вернуть токены
 ### Будущие модули (см. META_INTEGRATION_PLAN.md + DB_REDESIGN.md)
 
 В v2-схеме уже подготовлены таблицы (см. `core/models/`):
-- **meta_api/** — `meta_api_observation` (latency-tolerant snapshot), `meta_api_webhook_event` (partitioned), `meta_api_audit_log` (partitioned). Workers переписать под task_queue → meta_api_mutation.
+- **meta_api/** — `meta_api_observation` (latency-tolerant snapshot, UNIQUE по ad_id), `meta_api_webhook_event` (partitioned, задел — webhooks без Admin BM не работают), `meta_api_audit_log` (partitioned, retention 30 дней). Outbox-канал — `task_queue.task_type='meta_api_mutation'`, обслуживает meta_api_worker.
 - **trackers/** — `tracker_postback` (partitioned, AdsetPro schema), `tracker_aggregate` (per ad_id × country × day). Webhook handler + aggregator не написаны.
 - **ad_library_winner_archive** — топ S-tier ads hold forever (защита от cleanup).
 

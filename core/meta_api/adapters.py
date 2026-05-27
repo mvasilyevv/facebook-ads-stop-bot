@@ -1,0 +1,248 @@
+# -*- coding: utf-8 -*-
+"""Адаптеры: Marketing API JSON → MetaInsightsRow → MetaApiAdRow → ScannedAdRow.
+
+Цель: использовать существующий pipeline (process_scan_rows) и rule_evaluator
+без модификаций — Marketing API даёт собственный DTO, который через явный
+adapter превращается в общеизвестный ScannedAdRow.
+
+ScannedAdRow остаётся главным контрактом (см. § 3.4 плана).
+"""
+
+from __future__ import annotations
+
+import logging
+from datetime import date, datetime, timezone
+from decimal import Decimal, InvalidOperation
+from typing import Any
+
+from core.meta_api.schemas import MetaApiAdRow, MetaInsightsRow
+from core.scanner.models import ScannedAdRow
+
+logger = logging.getLogger(__name__)
+
+
+# ====================== низкоуровневые helpers ======================
+
+
+def _to_decimal(value: Any) -> Decimal | None:
+    """Безопасный парсинг Decimal из str/int/float. None если пусто."""
+    if value is None or value == "":
+        return None
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        logger.warning("Не удалось распарсить Decimal из %r", value)
+        return None
+
+
+def _to_int(value: Any, *, default: int = 0) -> int:
+    """Безопасный парсинг int. Дефолт при None или ошибке."""
+    if value is None or value == "":
+        return default
+    try:
+        return int(float(value))
+    except (ValueError, TypeError):
+        logger.warning("Не удалось распарсить int из %r", value)
+        return default
+
+
+def flatten_actions(actions_field: list[dict[str, Any]] | None) -> dict[str, int]:
+    """Сплющить Meta actions/cost_per_action_type в dict.
+
+    Вход: [{"action_type": "lead", "value": "5"}, ...]
+    Выход: {"lead": 5, ...}
+
+    Не падает на пустом списке и на отсутствующих value.
+    """
+    if not actions_field:
+        return {}
+    result: dict[str, int] = {}
+    for item in actions_field:
+        if not isinstance(item, dict):
+            continue
+        action_type = item.get("action_type")
+        if not action_type:
+            continue
+        result[str(action_type)] = _to_int(item.get("value"))
+    return result
+
+
+def _parse_iso_date(value: Any) -> date | None:
+    """Парс ISO-даты вида '2026-05-27'."""
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(str(value))
+    except (ValueError, TypeError):
+        return None
+
+
+# ====================== Insights row парсинг ======================
+
+
+def meta_insights_row_from_dict(
+    data: dict[str, Any],
+    *,
+    ad_account_id: str,
+) -> MetaInsightsRow:
+    """Распарсить один элемент из data[] ответа GET /act_X/insights.
+
+    Возвращает frozen MetaInsightsRow. raw сохраняет исходный JSON для аудита.
+    """
+    return MetaInsightsRow(
+        ad_id=str(data.get("ad_id") or ""),
+        campaign_id=str(data["campaign_id"]) if data.get("campaign_id") else None,
+        adset_id=str(data["adset_id"]) if data.get("adset_id") else None,
+        ad_account_id=ad_account_id,
+        spend=_to_decimal(data.get("spend")) or Decimal("0"),
+        impressions=_to_int(data.get("impressions")),
+        clicks=_to_int(data.get("clicks")),
+        reach=_to_int(data.get("reach")),
+        cpc=_to_decimal(data.get("cpc")),
+        ctr=_to_decimal(data.get("ctr")),
+        cpm=_to_decimal(data.get("cpm")),
+        frequency=_to_decimal(data.get("frequency")),
+        actions=flatten_actions(data.get("actions")),
+        date_start=_parse_iso_date(data.get("date_start")),
+        date_stop=_parse_iso_date(data.get("date_stop")),
+        raw=dict(data),
+    )
+
+
+# ====================== MetaApiAdRow конверсия ======================
+
+
+def merge_insights_and_ad(
+    *,
+    ad: dict[str, Any],
+    insights: MetaInsightsRow,
+    ad_account_id: str,
+) -> MetaApiAdRow:
+    """Склеить /ads (имена + статус) и /insights (метрики) в MetaApiAdRow.
+
+    `ad` — элемент data[] ответа GET /act_X/ads?fields=name,effective_status,campaign{name},adset{name}.
+    """
+    campaign = ad.get("campaign") or {}
+    adset = ad.get("adset") or {}
+    return MetaApiAdRow(
+        fb_ad_id=str(ad.get("id") or insights.ad_id),
+        fb_campaign_id=str(campaign.get("id")) if campaign.get("id") else insights.campaign_id,
+        fb_adset_id=str(adset.get("id")) if adset.get("id") else insights.adset_id,
+        ad_account_id=ad_account_id,
+        name=str(ad.get("name") or ""),
+        campaign_name=str(campaign.get("name") or ""),
+        adset_name=str(adset.get("name") or ""),
+        effective_status=str(ad.get("effective_status") or "UNKNOWN"),
+        configured_status=str(ad.get("status") or ad.get("effective_status") or "UNKNOWN"),
+        spend=insights.spend,
+        impressions=insights.impressions,
+        clicks=insights.clicks,
+        cpc=insights.cpc,
+        ctr=insights.ctr,
+        cpm=insights.cpm,
+        reach=insights.reach,
+        frequency=insights.frequency,
+        actions=insights.actions,
+        observed_at=datetime.now(timezone.utc),
+    )
+
+
+# ====================== MetaApiAdRow → ScannedAdRow ======================
+
+
+# Маппинг Meta effective_status → delivery_status, понятный observer FSM/rules.
+_DELIVERY_STATUS_MAP: dict[str, str] = {
+    "ACTIVE": "Active",
+    "PAUSED": "Paused",
+    "DELETED": "Deleted",
+    "ARCHIVED": "Archived",
+    "PENDING_REVIEW": "In Review",
+    "DISAPPROVED": "Disapproved",
+    "PENDING_BILLING_INFO": "Pending Billing",
+    "CAMPAIGN_PAUSED": "Campaign Paused",
+    "ADSET_PAUSED": "Adset Paused",
+    "WITH_ISSUES": "With Issues",
+}
+
+
+def meta_api_ad_row_to_scanned_row(
+    api_row: MetaApiAdRow,
+    *,
+    resolved_offer_code: str | None = None,
+) -> ScannedAdRow:
+    """Преобразовать API-снимок в ScannedAdRow для pipeline.
+
+    Метрики, которых нет в Marketing API (budget, outbound_ctr), оставляем "/None.
+    Actions раскладываем по типам.
+    """
+    actions = api_row.actions
+
+    leads = actions.get("lead", 0)
+    registrations = actions.get("complete_registration", 0)
+    deposits = actions.get("offsite_conversion.custom.deposit", 0) or actions.get("purchase", 0)
+    landing_page_views = actions.get("landing_page_view", 0)
+    outbound_clicks = actions.get("link_click", 0) or api_row.clicks
+
+    cost_per_lead = (api_row.spend / leads) if leads else None
+    cost_per_registration = (api_row.spend / registrations) if registrations else None
+    cost_per_landing_page_view = (
+        (api_row.spend / landing_page_views) if landing_page_views else None
+    )
+    cost_per_result = cost_per_lead or cost_per_landing_page_view
+
+    return ScannedAdRow(
+        fb_ad_id=api_row.fb_ad_id,
+        campaign_name=api_row.campaign_name,
+        adset_name=api_row.adset_name,
+        ad_name=api_row.name,
+        delivery_status=_DELIVERY_STATUS_MAP.get(
+            api_row.effective_status, api_row.effective_status
+        ),
+        spend=api_row.spend,
+        budget="",  # из insights не известен — нужен отдельный запрос /adsets
+        reach=api_row.reach,
+        impressions=api_row.impressions,
+        clicks=api_row.clicks,
+        cpc=api_row.cpc,
+        ctr=api_row.ctr,
+        outbound_clicks=outbound_clicks,
+        outbound_ctr=None,  # Marketing API не отдаёт этот ключ в формате нашего сканера
+        landing_page_views=landing_page_views,
+        cost_per_landing_page_view=cost_per_landing_page_view,
+        cost_per_result=cost_per_result,
+        cpm=api_row.cpm,
+        frequency=api_row.frequency,
+        leads=leads,
+        cost_per_lead=cost_per_lead,
+        registrations=registrations,
+        cost_per_registration=cost_per_registration,
+        deposits=deposits,
+        resolved_offer_code=resolved_offer_code,
+    )
+
+
+# ====================== meta_api_observation upsert ======================
+
+
+def meta_observation_payload(api_row: MetaApiAdRow) -> dict[str, Any]:
+    """Сформировать словарь для UPSERT в meta_api_observation.
+
+    api_metrics — JSON со spend/impressions/cpc/cpm и actions, как в observer.
+    """
+    return {
+        "last_api_observed_at": api_row.observed_at or datetime.now(timezone.utc),
+        "meta_ad_status": api_row.configured_status,
+        "effective_status": api_row.effective_status,
+        "account_id": api_row.ad_account_id,
+        "api_metrics": {
+            "spend": str(api_row.spend),
+            "impressions": api_row.impressions,
+            "clicks": api_row.clicks,
+            "reach": api_row.reach,
+            "cpc": str(api_row.cpc) if api_row.cpc is not None else None,
+            "ctr": str(api_row.ctr) if api_row.ctr is not None else None,
+            "cpm": str(api_row.cpm) if api_row.cpm is not None else None,
+            "frequency": str(api_row.frequency) if api_row.frequency is not None else None,
+            "actions": api_row.actions,
+        },
+    }
