@@ -35,16 +35,34 @@ sub-request возвращает свой `code` (HTTP status) и `body` (JSON).
 - Максимум 50 sub-requests за один вызов.
 - Каждый sub-request имеет таймаут как и обычный API call.
 - Failures отдельных sub-requests не валят весь batch.
+
+ВНИМАНИЕ — корреляция object_type ↔ object_ids НЕ проверяется!
+    object_type указывается caller'ом и попадает только в audit + extra поля,
+    но handler НЕ выполняет pre-flight `GET /<id>?fields=id` чтобы убедиться,
+    что id'шки реально принадлежат типу. Если caller передал
+    object_type='campaign' со списком ad-id, Meta попытается выключить
+    кампании по этим id (а это уже совершенно другие сущности) — последствия
+    необратимы.
+
+    Caller обязан гарантировать корреляцию. Для AI-tools (например,
+    request_bulk_pause) это значит сначала SELECT из локальной БД
+    (`fb_ads`/`fb_campaigns`) или явный list_ads/list_campaigns, и только
+    потом — bulk_status_change.
+
+    Полный pre-flight check через Graph API — отдельная фича.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, ClassVar
 
 from core.meta_api.client import MetaApiClient
 from core.meta_api.mutations.base import require_numeric_id, success_result
 from core.meta_api.schemas import MetaMutationPayload
+
+logger = logging.getLogger(__name__)
 
 _MAX_BATCH_SIZE = 50
 
@@ -69,6 +87,16 @@ class BulkStatusChangeHandler:
     ) -> dict[str, Any]:
         params = payload.params or {}
         object_ids, status, object_type = self._extract_params(params)
+
+        # Логируем явно — критично для аудита: видим связку type↔count↔status,
+        # помогает отследить ошибки caller'а (несовпадение type с id'шками).
+        logger.info(
+            "bulk_status_change: type=%s count=%d status=%s first_id=%s",
+            object_type,
+            len(object_ids),
+            status,
+            object_ids[0] if object_ids else "?",
+        )
 
         # Каждый sub-request: POST к {id} с status=PAUSED|ACTIVE.
         # relative_url требует form-encoded, поэтому status кладём как query.

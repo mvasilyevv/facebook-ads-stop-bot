@@ -32,6 +32,11 @@ from core.meta_api.client import MetaApiClient
 from core.meta_api.mutations.base import require_numeric_id, success_result
 from core.meta_api.schemas import MetaMutationPayload
 
+# Sane upper bounds — защита от hallucinated значений со стороны AI.
+# Юзер может расширить лимит, переопределив константу в форке — но не через payload.
+MAX_DAILY_BUDGET_CENTS = 100_000_00  # $100 000 / день
+MAX_LIFETIME_BUDGET_CENTS = 1_000_000_00  # $1 000 000 за весь период
+
 
 class SetAdsetBudgetHandler:
     mutation_kind: ClassVar[str] = "set_adset_budget"
@@ -55,11 +60,19 @@ class SetAdsetBudgetHandler:
 
         graph_params: dict[str, str] = {}
         if daily is not None:
-            cents = self._validate_cents(daily, field_name="daily_budget")
+            cents = self._validate_cents(
+                daily,
+                field_name="daily_budget",
+                max_cents=MAX_DAILY_BUDGET_CENTS,
+            )
             # Graph API требует значения как строки даже для числовых полей.
             graph_params["daily_budget"] = str(cents)
         else:
-            cents = self._validate_cents(lifetime, field_name="lifetime_budget")
+            cents = self._validate_cents(
+                lifetime,
+                field_name="lifetime_budget",
+                max_cents=MAX_LIFETIME_BUDGET_CENTS,
+            )
             graph_params["lifetime_budget"] = str(cents)
             if not end_time or not isinstance(end_time, str):
                 raise ValueError(
@@ -76,12 +89,17 @@ class SetAdsetBudgetHandler:
         return success_result(graph_response=graph_response, modified_ids=[adset_id])
 
     @staticmethod
-    def _validate_cents(value: Any, *, field_name: str) -> int:
-        """Бюджет — целое положительное число центов. Бросает ValueError на некорректные."""
+    def _validate_cents(value: Any, *, field_name: str, max_cents: int) -> int:
+        """Бюджет — целое положительное число центов с верхним порогом."""
         if isinstance(value, bool) or not isinstance(value, int):
             raise ValueError(
                 f"{field_name}: ожидается целое число центов (int), получено {value!r}"
             )
         if value <= 0:
             raise ValueError(f"{field_name}: должен быть > 0 центов, получено {value}")
+        if value > max_cents:
+            raise ValueError(
+                f"{field_name}: {value} центов превышает разумный лимит {max_cents} "
+                "(защита от случайных/AI-hallucinated значений)"
+            )
         return value
