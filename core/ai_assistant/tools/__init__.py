@@ -1,60 +1,100 @@
 # -*- coding: utf-8 -*-
-"""Публичный API пакета tools/.
+"""Публичный API пакета core.ai_assistant.tools.
 
-Обратная совместимость с импортами вида:
+Импорт пакета регистрирует все tool-классы в GLOBAL_REGISTRY (side-effect import
+modules ops/meta/drafts/creative).
 
-    from core.ai_assistant.tools import TOOL_SCHEMAS, execute_tool, ToolError
-    from core.ai_assistant.tools import ALLOWED_LOG_FILES, ALLOWED_SUPERVISOR_PROCESSES
+Основные сущности:
+- GLOBAL_REGISTRY (ToolRegistry) — реестр всех зарегистрированных tool'ов.
+- ToolHandler / ToolContext / RiskLevel / ToolError — контракт.
+- execute_tool(name, args, ctx) — точка вызова, используется chat.py.
+- check_rate_limit(ctx) — проверка ai:ratelimit:* в Redis перед раундом tool-use.
 """
 
 from __future__ import annotations
 
-from core.ai_assistant.tools import creative as _creative  # noqa: F401
-from core.ai_assistant.tools import drafts as _drafts  # noqa: F401
+import logging
+from typing import Any
 
-# Импорт meta регистрирует 5 READ_ONLY Meta Marketing API tools (side-effect import)
-from core.ai_assistant.tools import meta as _meta  # noqa: F401
+from core.ai_assistant.tools import creative as _creative  # noqa: F401, E402
+from core.ai_assistant.tools import drafts as _drafts  # noqa: F401, E402
+from core.ai_assistant.tools import meta as _meta  # noqa: F401, E402
 
-# Импорт ops регистрирует все 4 tools в GLOBAL_REGISTRY (side-effect import)
-from core.ai_assistant.tools import ops as _ops  # noqa: F401
-from core.ai_assistant.tools.base import RiskLevel, ToolError, ToolHandler
-from core.ai_assistant.tools.ops.supervisor_restart import ALLOWED_SUPERVISOR_PROCESSES
-from core.ai_assistant.tools.ops.tail_log import ALLOWED_LOG_FILES
+# Side-effect импорты — регистрируют tool-классы в GLOBAL_REGISTRY.
+# Порядок не важен, но удобно поддерживать категории читаемо.
+from core.ai_assistant.tools import ops as _ops  # noqa: F401, E402
+from core.ai_assistant.tools._ratelimit import (
+    RateLimitExceeded,
+    check_and_increment,
+)
+from core.ai_assistant.tools.base import (
+    RiskLevel,
+    ToolContext,
+    ToolError,
+    ToolHandler,
+)
 from core.ai_assistant.tools.registry import GLOBAL_REGISTRY, ToolRegistry
 
-# Список схем — совместим со старым TOOL_SCHEMAS из tools.py
-TOOL_SCHEMAS = GLOBAL_REGISTRY.schemas()
+logger = logging.getLogger(__name__)
 
 
-async def execute_tool(name: str, args: dict) -> str:
-    """Обратно-совместимый wrapper. chat.py использует эту функцию.
+async def execute_tool(
+    name: str,
+    args: dict[str, Any],
+    ctx: ToolContext,
+) -> str:
+    """Точка вызова — обёртка над GLOBAL_REGISTRY.execute с логированием.
 
-    Логирует вызов и результат так же как старый execute_tool.
+    Используется ChatSession для всех tool-use раундов.
     """
-    import logging
-
-    logger = logging.getLogger(__name__)
-    logger.info("AI tool invocation: %s args=%s", name, args)
+    logger.info(
+        "AI tool invocation: name=%s client_key=%s args=%s",
+        name,
+        ctx.client_key,
+        args,
+    )
     try:
-        result = await GLOBAL_REGISTRY.execute(name, args)
-        logger.info("AI tool %s OK", name)
+        result = await GLOBAL_REGISTRY.execute(name, args, ctx)
+        logger.info("AI tool %s OK (len=%d)", name, len(result))
         return result
     except ToolError:
         raise
     except Exception as exc:
-        logger.exception("AI tool %s ошибка", name)
+        logger.exception("AI tool %s упал", name)
         raise ToolError(str(exc)) from exc
 
 
+async def check_rate_limit(ctx: ToolContext, *, max_per_hour: int = 30) -> None:
+    """Проверить ai:ratelimit:* для client_key.
+
+    Бросает ToolError(RateLimitExceeded) если лимит превышен.
+    Fail-open если redis недоступен — внутри check_and_increment.
+    """
+    if ctx.redis_client is None:
+        return
+    try:
+        await check_and_increment(
+            ctx.redis_client,
+            client_key=ctx.client_key,
+            max_per_hour=max_per_hour,
+        )
+    except RateLimitExceeded as exc:
+        raise ToolError(str(exc)) from exc
+
+
+TOOL_SCHEMAS: list[dict[str, Any]] = GLOBAL_REGISTRY.schemas()
+"""Снимок схем на момент импорта. ChatSession читает GLOBAL_REGISTRY.schemas() на лету."""
+
+
 __all__ = [
+    "GLOBAL_REGISTRY",
+    "RateLimitExceeded",
+    "RiskLevel",
     "TOOL_SCHEMAS",
-    "execute_tool",
+    "ToolContext",
     "ToolError",
     "ToolHandler",
-    "RiskLevel",
     "ToolRegistry",
-    "GLOBAL_REGISTRY",
-    # Обратная совместимость с тестами
-    "ALLOWED_SUPERVISOR_PROCESSES",
-    "ALLOWED_LOG_FILES",
+    "check_rate_limit",
+    "execute_tool",
 ]

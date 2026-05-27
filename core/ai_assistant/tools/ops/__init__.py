@@ -1,24 +1,25 @@
 # -*- coding: utf-8 -*-
-"""Существующие операционные tools — миграция из старого tools.py.
+"""READ_ONLY операционные tools — БД + Redis.
 
-При импорте этого пакета все четыре tools регистрируются в GLOBAL_REGISTRY.
+Импорт пакета регистрирует все 4 tool'а в GLOBAL_REGISTRY (side-effect).
 """
 
-from core.ai_assistant.tools.ops.api_get import ApiGetTool
-from core.ai_assistant.tools.ops.set_scanning import SetScanningTool
-from core.ai_assistant.tools.ops.supervisor_restart import SupervisorRestartTool
-from core.ai_assistant.tools.ops.tail_log import TailLogTool
+from __future__ import annotations
+
+from core.ai_assistant.tools.ops.get_active_offers import GetActiveOffersTool
+from core.ai_assistant.tools.ops.get_disable_tasks_status import GetDisableTasksStatusTool
+from core.ai_assistant.tools.ops.get_recent_alerts import GetRecentAlertsTool
+from core.ai_assistant.tools.ops.get_worker_health import GetWorkerHealthTool
 from core.ai_assistant.tools.registry import GLOBAL_REGISTRY
 
-# Регистрируем экземпляры всех ops tools
-GLOBAL_REGISTRY.register(SupervisorRestartTool())
-GLOBAL_REGISTRY.register(TailLogTool())
-GLOBAL_REGISTRY.register(ApiGetTool())
-GLOBAL_REGISTRY.register(SetScanningTool())
+GLOBAL_REGISTRY.register(GetActiveOffersTool())
+GLOBAL_REGISTRY.register(GetRecentAlertsTool())
+GLOBAL_REGISTRY.register(GetDisableTasksStatusTool())
+GLOBAL_REGISTRY.register(GetWorkerHealthTool())
 
 __all__ = [
-    "SupervisorRestartTool",
-    "TailLogTool",
-    "ApiGetTool",
-    "SetScanningTool",
+    "GetActiveOffersTool",
+    "GetDisableTasksStatusTool",
+    "GetRecentAlertsTool",
+    "GetWorkerHealthTool",
 ]

@@ -1,56 +1,119 @@
 # -*- coding: utf-8 -*-
-"""Базовые типы для пакета tools/.
+"""Базовые типы пакета core.ai_assistant.tools.
 
-Определяет протокол ToolHandler, ToolError и RiskLevel.
-Не содержит бизнес-логики конкретных tools.
+Содержит:
+- RiskLevel — категория tool'а (READ_ONLY / DRAFT_REQUIRED / CREATIVE).
+- ToolError — контролируемая ошибка tool'а, отдаётся LLM как tool_result error.
+- ToolContext — DI-контейнер с зависимостями, передаётся в `run()`.
+- ToolHandler — Protocol для конкретных tool-классов.
+
+Бизнес-логика конкретных tools здесь не лежит.
 """
 
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+
+if TYPE_CHECKING:  # pragma: no cover - только для аннотаций
+    from sqlalchemy.ext.asyncio import AsyncEngine
+
+    from core.meta_api.client import MetaApiClient
 
 logger = logging.getLogger(__name__)
 
 
 class RiskLevel(str, Enum):
-    """Уровень риска tool'а — определяет, исполняется он сразу или требует подтверждения."""
+    """Категория tool'а — определяет правила исполнения."""
 
     READ_ONLY = "read_only"
-    """Безопасно, исполняется сразу."""
+    """Чтение, исполняется немедленно (БД / Redis / Meta API READ)."""
 
     DRAFT_REQUIRED = "draft_required"
-    """Создаёт *MutationTask со status=DRAFT, юзер подтверждает в TG."""
+    """Mutation: создаёт task_queue draft, юзер подтверждает в TG/TMA."""
 
     CREATIVE = "creative"
-    """LLM-генерация, не вызывает Meta API напрямую."""
+    """Генерация контента через LLM, без mutations."""
 
 
 class ToolError(Exception):
-    """Контролируемая ошибка tool'а — не падает в Anthropic SDK, отдаётся LLM как ошибка."""
+    """Контролируемая ошибка tool'а — LLM получит её как tool_result.is_error=true."""
+
+
+@dataclass(slots=True, frozen=True)
+class ToolContext:
+    """DI-контейнер для tool'ов.
+
+    Создаётся ChatSession и пробрасывается в каждый вызов `ToolHandler.run`.
+
+    Поля nullable, чтобы tool, которому нужен только client_key (например creative),
+    мог работать без engine/redis. Tools должны валидировать что нужное поле
+    задано — иначе бросать ToolError("требуется engine/redis/meta_api_client").
+    """
+
+    client_key: str
+    """Идентификатор клиента/инициатора (rate-limit ключ + audit)."""
+
+    engine: AsyncEngine | None = None
+    """SQLAlchemy AsyncEngine для READ_ONLY БД-запросов и draft INSERT."""
+
+    redis_client: Any | None = None
+    """redis.asyncio.Redis или совместимый — для rate-limit и worker heartbeats."""
+
+    meta_api_client: MetaApiClient | None = None
+    """Опциональный — нужен только meta/* tools."""
+
+    requested_by: str = ""
+    """Кто инициировал — для записи в task_queue.requested_by. Если пусто — берётся client_key."""
+
+    def require_engine(self) -> AsyncEngine:
+        """Вернуть engine или поднять ToolError."""
+        if self.engine is None:
+            raise ToolError("ToolContext.engine не задан — БД-операции недоступны")
+        return self.engine
+
+    def require_meta_api(self) -> MetaApiClient:
+        """Вернуть meta_api_client или поднять ToolError."""
+        if self.meta_api_client is None:
+            raise ToolError(
+                "ToolContext.meta_api_client не задан — Marketing API недоступен в этой сессии"
+            )
+        return self.meta_api_client
+
+    def require_redis(self) -> Any:
+        """Вернуть redis_client или поднять ToolError."""
+        if self.redis_client is None:
+            raise ToolError("ToolContext.redis_client не задан")
+        return self.redis_client
+
+    def effective_requested_by(self) -> str:
+        """requested_by если задан, иначе формирует `ai:{client_key}`."""
+        return self.requested_by or f"ai:{self.client_key}"
 
 
 @runtime_checkable
 class ToolHandler(Protocol):
-    """Протокол для tool-обработчика.
-
-    Каждый tool — объект с полями name, schema, risk_level и методом run().
-    """
+    """Протокол tool-обработчика. Реализующий класс — stateless, регистрируется один раз."""
 
     name: str
-    """Уникальное имя tool'а (используется в whitelist и JSON Schema)."""
+    """Уникальное имя tool'а — должно совпадать со `name` в JSON Schema."""
 
     schema: dict[str, Any]
-    """JSON Schema для tool'а (формат Anthropic tool-use)."""
+    """JSON Schema (формат Anthropic tool-use) — отдаётся LLM в tools=."""
 
     risk_level: RiskLevel
-    """Уровень риска."""
+    """Категория tool'а."""
 
-    async def run(self, args: dict[str, Any]) -> str:
+    async def run(self, ctx: ToolContext, args: dict[str, Any]) -> str:
         """Исполнить tool. Возвращает текстовый результат для LLM.
 
-        Для DRAFT_REQUIRED tools — возвращает task_id + summary, фактическое
-        исполнение происходит после подтверждения юзером.
+        Для DRAFT_REQUIRED tools возвращает task_id + preview; сам mutation
+        исполнит meta_api_worker после подтверждения юзером.
+
+        Должен поднимать ToolError на ожидаемых ошибках (валидация args,
+        недоступность зависимостей). Непредвиденные исключения — пусть падают,
+        registry их перехватит и завернёт в ToolError.
         """
         ...
