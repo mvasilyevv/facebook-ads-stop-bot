@@ -18,6 +18,7 @@ Endpoint:
 from __future__ import annotations
 
 import logging
+import secrets
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
@@ -74,7 +75,10 @@ async def receive_adsetpro_postback(
             detail="adsetpro postback endpoint is not configured",
         )
 
-    if x_postback_secret != expected_secret:
+    # secrets.compare_digest — constant-time сравнение, защищает от timing-attack
+    # на публичном endpoint'е. Требует одинаковый тип у обоих аргументов; None header
+    # подменяем пустой строкой, чтобы избежать TypeError.
+    if not secrets.compare_digest(x_postback_secret or "", expected_secret):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="invalid postback secret",
