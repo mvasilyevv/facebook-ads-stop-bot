@@ -114,6 +114,28 @@ class Settings(BaseSettings):
     # Origin основного фронта (например, http://localhost:5173). None → CORS не подключаем.
     frontend_origin: str | None = None
 
+    # --- Ad Library App Access Token (META_INTEGRATION_PLAN §4.3 / Этап 4) ---
+    # App ID + App Secret из своего Meta App (бесплатно, без App Review).
+    # Используется как параллельный канал к /spy через browser-agent: позволяет
+    # делать background-scrape конкурентов независимо от Vision-сессии.
+    # Требование Meta: App Access Token валиден всегда, но Ad Library API
+    # (endpoint /ads_archive) требует Identity Confirmation на стороне
+    # владельца App'а (см. https://www.facebook.com/id). Без неё запросы
+    # возвращают 2332004 "App role required" — даже на коммерческие ads.
+    meta_ad_library_app_id: str = ""
+    meta_ad_library_app_secret: str = ""
+
+    @property
+    def meta_ad_library_access_token(self) -> str:
+        """App Access Token формата '{app_id}|{app_secret}' — стандарт Meta.
+
+        Пустая строка если App ID или Secret не заданы — клиент должен
+        проверять и работать в degraded режиме (через browser-agent /spy).
+        """
+        if not self.meta_ad_library_app_id or not self.meta_ad_library_app_secret:
+            return ""
+        return f"{self.meta_ad_library_app_id}|{self.meta_ad_library_app_secret}"
+
     @model_validator(mode="after")
     def _warn_insecure_defaults(self) -> "Settings":
         """Предупреждаем о небезопасных настройках при старте."""
