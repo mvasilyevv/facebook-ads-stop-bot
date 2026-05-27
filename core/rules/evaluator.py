@@ -70,7 +70,7 @@ def determine_enable_recommendation_level(
 
 
 def _evaluate_funnel_ladder(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | None:
-    if _has_confirmed_deposit_signal(row):
+    if _has_confirmed_deposit_signal(row, ctx):
         return _evaluate_deposit_stage(row, ctx)
     if row.registrations >= 1:
         return _evaluate_registration_stage(row, ctx)
@@ -190,6 +190,8 @@ def _evaluate_registration_stage(row: ScannedAdRow, ctx: RuleContext) -> RuleHit
 
 
 def _evaluate_deposit_stage(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | None:
+    # Объединённый счётчик: Meta-видимые депы + внешние от AdSet.pro (закрытие gap).
+    total_deposits = row.deposits + ctx.external_deposits
     return _evaluate_spend_range(
         enabled=ctx.spend_with_dep_enabled,
         current_value=_ratio_percent(row.spend, ctx.cpa_amount),
@@ -199,8 +201,10 @@ def _evaluate_deposit_stage(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | No
         stop_percent_of_base=ctx.effective_cpr_stop_percent_of_base,
         code="spend_with_dep_range",
         title=rule_label("spend_with_dep_range"),
-        summary_suffix=f"депозитов {row.deposits}",
-        reason_suffix=f"Депозит уже есть, но расход растёт до {row.deposits} депозита(ов) слишком быстро.",
+        summary_suffix=f"депозитов {total_deposits}",
+        reason_suffix=(
+            f"Депозит уже есть, но расход растёт до {total_deposits} депозита(ов) слишком быстро."
+        ),
     )
 
 
@@ -529,9 +533,15 @@ def _has_enable_data_gap(row: ScannedAdRow) -> bool:
     return row.registrations > 0 and row.cost_per_registration is None
 
 
-def _has_confirmed_deposit_signal(row: ScannedAdRow) -> bool:
-    """Считаем депозит подтверждённым только после появления регистрации."""
-    return row.registrations >= 1 and row.deposits >= 1
+def _has_confirmed_deposit_signal(row: ScannedAdRow, ctx: RuleContext) -> bool:
+    """Считаем депозит подтверждённым в двух случаях:
+    1) Meta Ads Manager видит регистрацию + депозит (классический сигнал).
+    2) AdSet.pro трекер прислал depositное событие (external_deposits >= 1) — это
+       перекрывает gap, когда Meta не получает conversion event и недооценивает ад.
+    """
+    direct = row.registrations >= 1 and row.deposits >= 1
+    external = ctx.external_deposits >= 1
+    return direct or external
 
 
 def _has_safe_enable_recovery_signal(row: ScannedAdRow) -> bool:

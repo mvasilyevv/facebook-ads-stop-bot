@@ -15,6 +15,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from core.adset_pro.queries import load_external_deposits_batch
 from core.observer.queries import (
     OfferRules,
     load_active_offers,
@@ -51,17 +52,24 @@ class CycleResult:
     finished_at: datetime | None = None
 
 
-def build_rule_context(offer: OfferRules) -> RuleContext:
+def build_rule_context(
+    offer: OfferRules,
+    *,
+    external_deposits: int = 0,
+) -> RuleContext:
     """OfferRules → RuleContext с минимальным набором параметров.
 
     cpa_amount = cpa_threshold из offer_rules; если не задан — Decimal('100') как
     нейтральный default чтобы правила не падали по делению на ноль. Без adaptive.
+    external_deposits — из AdSet.pro трекера, защищают от STOP при наличии депозита,
+    которого Meta Ads Manager ещё не видит.
     """
     cpa = offer.cpa_threshold or Decimal("100")
     return RuleContext(
         cpa_amount=cpa,
         warning_percent_of_stop=Decimal("80"),
         stop_percent_of_base=Decimal("80"),
+        external_deposits=external_deposits,
     )
 
 
@@ -123,7 +131,10 @@ async def process_scan_rows(
     fb_ids = [r.fb_ad_id for r in rows if r.fb_ad_id]
     states = await load_alert_state_by_fb_ad_id(engine, fb_ad_ids=fb_ids)
 
-    # 3. Прогоняем каждую строку
+    # 3. Внешние депозиты от AdSet.pro batch'ом (закрывают gap attribution с Meta).
+    external_deposits = await load_external_deposits_batch(engine, fb_ad_ids=fb_ids)
+
+    # 4. Прогоняем каждую строку
     for row in rows:
         try:
             await _process_one_row(
@@ -131,6 +142,7 @@ async def process_scan_rows(
                 row=row,
                 offers=offers,
                 states=states,
+                external_deposits=external_deposits,
                 scan_id=scan_id,
                 cycle_ts=cycle_ts,
                 result=result,
@@ -151,6 +163,7 @@ async def _process_one_row(
     row: ScannedAdRow,
     offers: list[OfferRules],
     states: dict,
+    external_deposits: dict[str, int],
     scan_id: int | None,
     cycle_ts: datetime,
     result: CycleResult,
@@ -206,7 +219,8 @@ async def _process_one_row(
     await insert_metrics(engine, ad_id=ad_id, cycle_ts=cycle_ts, scan_id=scan_id, metrics=metrics)
 
     # --- Оценка правил (одна функция возвращает оба уровня severity) ---
-    ctx = build_rule_context(matched_offer)
+    ad_external_deposits = external_deposits.get(row.fb_ad_id, 0) if row.fb_ad_id else 0
+    ctx = build_rule_context(matched_offer, external_deposits=ad_external_deposits)
     evaluation = evaluate_stop_rules(row, ctx)
     stop_codes = tuple(evaluation.stop_rule_codes)
     warning_codes = tuple(evaluation.warning_rule_codes)
