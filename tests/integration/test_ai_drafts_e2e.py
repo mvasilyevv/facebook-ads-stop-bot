@@ -102,10 +102,22 @@ async def test_approve_draft_transitions_to_pending(
         ).scalar()
     assert task_id is not None
 
-    ok = await approve_draft_task(pg_engine, task_id=task_id, approved_by="tg:operator")
+    # DRAFT создан tool'ом без chat_id (через ctx без created_by_chat_id),
+    # поэтому approve через TG требует admin_override.
+    ok = await approve_draft_task(
+        pg_engine,
+        task_id=task_id,
+        approved_by="tg:operator",
+        admin_override=True,
+    )
     assert ok is True
 
-    again = await approve_draft_task(pg_engine, task_id=task_id, approved_by="tg:operator")
+    again = await approve_draft_task(
+        pg_engine,
+        task_id=task_id,
+        approved_by="tg:operator",
+        admin_override=True,
+    )
     assert again is False
 
     async with pg_engine.connect() as conn:

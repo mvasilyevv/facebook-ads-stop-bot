@@ -26,10 +26,10 @@ def test_is_in_send_window_inside() -> None:
     assert is_in_send_window(now, DigestWindow(hour=9, minute=0, window_minutes=5)) is True
 
 
-# Сразу после окна (HH:05 при ширине 5 мин) — уже не в окне
+# Сразу после планового времени — окно открыто (catch-up до конца суток)
 def test_is_in_send_window_just_after() -> None:
     now = datetime(2026, 5, 27, 9, 5, 0, tzinfo=timezone.utc)
-    assert is_in_send_window(now, DigestWindow(hour=9, minute=0, window_minutes=5)) is False
+    assert is_in_send_window(now, DigestWindow(hour=9, minute=0, window_minutes=5)) is True
 
 
 # Раньше окна — не в окне
@@ -38,11 +38,20 @@ def test_is_in_send_window_before() -> None:
     assert is_in_send_window(now, DigestWindow(hour=9, minute=0, window_minutes=5)) is False
 
 
-# Окно с минутами: 09:30 ± 2 мин — 09:31 в окне, 09:32 в окне, 09:33 нет
+# Сценарии catch-up: digest должен уйти от 09:00 до конца суток
+def test_is_in_send_window_catchup_until_midnight() -> None:
+    window = DigestWindow(hour=9, minute=0, window_minutes=5)
+    # scheduler упал в 09:02, поднялся в 12:00 — окно ещё открыто
+    assert is_in_send_window(datetime(2026, 5, 27, 12, 0, 0, tzinfo=timezone.utc), window) is True
+    # 23:59:59 UTC — последняя секунда «сегодня», окно ещё открыто
+    assert is_in_send_window(datetime(2026, 5, 27, 23, 59, 0, tzinfo=timezone.utc), window) is True
+
+
+# Окно с минутами: 09:30 — на 09:31 и после в окне (catch-up)
 def test_is_in_send_window_with_minutes() -> None:
     window = DigestWindow(hour=9, minute=30, window_minutes=2)
     assert is_in_send_window(datetime(2026, 5, 27, 9, 31, 0, tzinfo=timezone.utc), window) is True
-    assert is_in_send_window(datetime(2026, 5, 27, 9, 32, 0, tzinfo=timezone.utc), window) is False
+    assert is_in_send_window(datetime(2026, 5, 27, 9, 32, 0, tzinfo=timezone.utc), window) is True
 
 
 # Naive datetime запрещён — функция требует timezone-aware

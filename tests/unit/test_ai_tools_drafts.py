@@ -30,11 +30,19 @@ def _capture_create_draft_task(monkeypatch, module_path: str, *, task_id: int = 
     """Подменить create_draft_task в указанном модуле; вернуть холдер для проверки args."""
     captured: dict[str, object] = {}
 
-    async def _fake_create_draft_task(engine, *, payload, requested_by, max_attempts=3):
+    async def _fake_create_draft_task(
+        engine,
+        *,
+        payload,
+        requested_by,
+        max_attempts=3,
+        created_by_chat_id=None,
+    ):
         captured["engine"] = engine
         captured["payload"] = payload
         captured["requested_by"] = requested_by
         captured["max_attempts"] = max_attempts
+        captured["created_by_chat_id"] = created_by_chat_id
         return task_id
 
     monkeypatch.setattr(f"{module_path}.create_draft_task", _fake_create_draft_task)

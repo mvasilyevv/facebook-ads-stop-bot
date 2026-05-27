@@ -185,11 +185,11 @@ async def test_run_one_tick_skips_when_already_sent(
     assert len(captured[0].sent) == 1
 
 
-# 14:00 UTC — вне окна → ничего не делаем
+# 08:00 UTC — до планового времени → out_of_window (catch-up открывается с 09:00)
 @pytest.mark.asyncio
 async def test_run_one_tick_out_of_window(pg_engine, fake_redis_client, clean_loop_tables) -> None:
     await _seed_tg_config_and_recipient(pg_engine)
-    now = datetime(2026, 5, 27, 14, 0, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 5, 27, 8, 0, 0, tzinfo=timezone.utc)
     window = DigestWindow(hour=9, minute=0, window_minutes=5)
 
     captured: list[FakeTGClient] = []

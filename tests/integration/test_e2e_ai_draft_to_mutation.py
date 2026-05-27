@@ -57,12 +57,17 @@ class _FakeTGClient:
         self.edits.append({"chat_id": chat_id, "message_id": message_id, "text": text})
 
 
-def _ctx(engine: AsyncEngine) -> ToolContext:
-    """ToolContext с уникальным client_key — иначе rate-limit пересекает тесты."""
+def _ctx(engine: AsyncEngine, *, chat_id: int = 100500) -> ToolContext:
+    """ToolContext с уникальным client_key — иначе rate-limit пересекает тесты.
+
+    chat_id фиксируем тот же, что и в `handle_draft_callback` ниже, чтобы
+    owner ACL у approve_draft_task разрешил approve (created_by_chat_id == chat_id).
+    """
     return ToolContext(
         client_key=f"tg:{uuid.uuid4().hex[:8]}",
         engine=engine,
         requested_by="tg:e2e_user",
+        created_by_chat_id=chat_id,
     )
 
 
@@ -218,7 +223,8 @@ async def test_double_approve_callback_is_noop(
     clean_meta_pipeline,
 ) -> None:
     tool = RequestBulkPauseTool()
-    await tool.run(_ctx(pg_engine), {"ad_ids": ["88801"]})
+    # chat_id=1 совпадает с callback'ами ниже — нужно для owner ACL.
+    await tool.run(_ctx(pg_engine, chat_id=1), {"ad_ids": ["88801"]})
 
     async with pg_engine.connect() as conn:
         task_id = (

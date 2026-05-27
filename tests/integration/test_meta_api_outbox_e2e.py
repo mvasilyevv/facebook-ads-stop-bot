@@ -83,10 +83,13 @@ async def test_draft_approve_claim_execute_success(
     drafts = await list_drafts(pg_engine)
     assert any(d.id == task_id for d in drafts)
 
+    # DRAFT создан без chat_id (через create_draft_task напрямую) — приближаем
+    # MCP-сценарий, для approve нужен admin_override.
     approved = await approve_draft_task(
         pg_engine,
         task_id=task_id,
         approved_by="test_user",
+        admin_override=True,
     )
     assert approved is True
 
