@@ -39,6 +39,7 @@ exports.createMetaApiServiceHandlers = createMetaApiServiceHandlers;
 const grpc = __importStar(require("@grpc/grpc-js"));
 const session_manager_js_1 = require("../session-manager.js");
 const client_js_1 = require("./client.js");
+const upload_js_1 = require("./upload.js");
 function grpcCodeForError(err) {
     const message = String(err?.message || '').toLowerCase();
     return message.includes('not found') || message.includes('не найден')
@@ -132,9 +133,191 @@ function createMetaApiServiceHandlers(sessionManager) {
             });
         }
     }
+    async function uploadImageHandler(call, callback) {
+        try {
+            const req = call.request;
+            const session = resolveSession(req.session_id);
+            const page = getPage(session);
+            const fileBytes = req.file_bytes;
+            // proto-loader отдаёт bytes как Buffer; нормализуем.
+            const buf = Buffer.isBuffer(fileBytes)
+                ? fileBytes
+                : Buffer.from(fileBytes || []);
+            const result = await (0, upload_js_1.uploadImage)(page, {
+                adAccountId: String(req.ad_account_id || ''),
+                filename: String(req.filename || 'upload.jpg'),
+                contentType: String(req.content_type || 'image/jpeg'),
+                fileBytes: buf,
+            });
+            callback(null, {
+                image_hash: result.imageHash,
+                ok: result.ok,
+                error: result.error,
+                url: result.url,
+                duration_ms: result.durationMs,
+            });
+        }
+        catch (err) {
+            callback({
+                code: grpcCodeForError(err),
+                message: String(err?.message ?? err),
+            });
+        }
+    }
+    // Client streaming: клиент шлёт несколько UploadVideoChunk, сервер отвечает одним UploadVideoResponse.
+    // Поток: первый chunk с метаданными (filename + file_size + ad_account_id) → start;
+    // далее transfer для каждого chunk с bytes; последний chunk с is_last_chunk=true → finish.
+    function uploadVideoHandler(call, callback) {
+        const t0 = Date.now();
+        let videoSession = null;
+        let chunkIndex = 0;
+        let chunksProcessed = 0;
+        let resolvedSession = null;
+        let resolvedPage = null;
+        let isFinishing = false;
+        let respondedOnce = false;
+        // Все на await-приёме данных: каждый chunk обрабатывается последовательно через очередь.
+        const pendingQueue = [];
+        let processing = false;
+        let endReceived = false;
+        let isLastChunkPending = false;
+        function respondError(msg) {
+            if (respondedOnce)
+                return;
+            respondedOnce = true;
+            callback(null, {
+                video_id: videoSession?.id || '',
+                ok: false,
+                error: msg,
+                duration_ms: Date.now() - t0,
+                chunks_processed: chunksProcessed,
+            });
+        }
+        function respondSuccess(videoId) {
+            if (respondedOnce)
+                return;
+            respondedOnce = true;
+            callback(null, {
+                video_id: videoId,
+                ok: true,
+                error: '',
+                duration_ms: Date.now() - t0,
+                chunks_processed: chunksProcessed,
+            });
+        }
+        async function drainQueue() {
+            if (processing)
+                return;
+            processing = true;
+            try {
+                while (pendingQueue.length > 0) {
+                    const chunk = pendingQueue.shift();
+                    if (!videoSession) {
+                        respondError('Внутренняя ошибка: videoSession не инициализирован к началу transfer');
+                        return;
+                    }
+                    await videoSession.transfer(chunk);
+                    chunksProcessed += 1;
+                }
+                if (isLastChunkPending && videoSession && !isFinishing) {
+                    isFinishing = true;
+                    const videoId = await videoSession.finish();
+                    respondSuccess(videoId);
+                }
+                else if (endReceived && !respondedOnce && videoSession && !isFinishing) {
+                    // Клиент закрыл стрим без is_last_chunk — корректно делаем finish.
+                    isFinishing = true;
+                    const videoId = await videoSession.finish();
+                    respondSuccess(videoId);
+                }
+            }
+            catch (err) {
+                respondError(`UploadVideo: ${String(err?.message ?? err)}`);
+            }
+            finally {
+                processing = false;
+            }
+        }
+        call.on('data', async (chunk) => {
+            try {
+                chunkIndex += 1;
+                // Первый chunk должен принести метаданные (init).
+                if (videoSession === null) {
+                    const sessionId = String(chunk.session_id || '');
+                    const adAccountId = String(chunk.ad_account_id || '');
+                    const filename = String(chunk.filename || 'upload.mp4');
+                    const fileSize = Number(chunk.file_size || 0);
+                    if (!adAccountId) {
+                        respondError('Первый chunk должен содержать ad_account_id');
+                        return;
+                    }
+                    if (fileSize <= 0) {
+                        respondError('Первый chunk должен содержать file_size > 0');
+                        return;
+                    }
+                    resolvedSession = sessionId
+                        ? sessionManager.getSession(sessionId)
+                        : sessionManager.getPreferredSession();
+                    resolvedPage = getPage(resolvedSession);
+                    videoSession = new upload_js_1.VideoUploadSession(resolvedPage, {
+                        adAccountId,
+                        filename,
+                        fileSize,
+                    });
+                    await videoSession.start();
+                    // Если в первом chunk есть и bytes (не init-only) — обрабатываем как transfer.
+                    const initOnly = Boolean(chunk.is_init);
+                    const bytes = Buffer.isBuffer(chunk.chunk_bytes)
+                        ? chunk.chunk_bytes
+                        : Buffer.from(chunk.chunk_bytes || []);
+                    if (!initOnly && bytes.length > 0) {
+                        pendingQueue.push(bytes);
+                    }
+                    if (chunk.is_last_chunk) {
+                        isLastChunkPending = true;
+                    }
+                    await drainQueue();
+                    return;
+                }
+                // Последующие chunks — это transfer.
+                const bytes = Buffer.isBuffer(chunk.chunk_bytes)
+                    ? chunk.chunk_bytes
+                    : Buffer.from(chunk.chunk_bytes || []);
+                if (bytes.length > 0) {
+                    pendingQueue.push(bytes);
+                }
+                if (chunk.is_last_chunk) {
+                    isLastChunkPending = true;
+                }
+                await drainQueue();
+            }
+            catch (err) {
+                respondError(`UploadVideo: ${String(err?.message ?? err)}`);
+            }
+        });
+        call.on('end', async () => {
+            endReceived = true;
+            await drainQueue();
+            if (!respondedOnce) {
+                // Стрим закрыт, но finish не запущен — это значит что-то не так
+                // (например, ни одного chunk не пришло). Сигналим клиенту.
+                if (videoSession === null) {
+                    respondError('UploadVideo: стрим закрыт без единого chunk');
+                }
+            }
+        });
+        call.on('error', (err) => {
+            respondError(`UploadVideo: stream error ${String(err?.message ?? err)}`);
+        });
+        call.on('cancelled', () => {
+            respondError('UploadVideo: cancelled клиентом');
+        });
+    }
     return {
         executeGraphCall: executeGraphCallHandler,
         checkMetaApiHealth: checkMetaApiHealthHandler,
+        uploadImage: uploadImageHandler,
+        uploadVideo: uploadVideoHandler,
     };
 }
 //# sourceMappingURL=service.js.map

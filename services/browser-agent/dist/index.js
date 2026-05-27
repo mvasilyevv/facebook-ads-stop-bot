@@ -1360,6 +1360,8 @@ function main() {
     server.addService(metaApiService.service, {
         executeGraphCall: metaApiHandlers.executeGraphCall,
         checkMetaApiHealth: metaApiHandlers.checkMetaApiHealth,
+        uploadImage: metaApiHandlers.uploadImage,
+        uploadVideo: metaApiHandlers.uploadVideo,
     });
     const adLibraryHandlers = (0, service_js_2.createAdLibraryServiceHandlers)(sessionManager);
     server.addService(adLibraryService.service, {
