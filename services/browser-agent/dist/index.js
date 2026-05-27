@@ -49,6 +49,7 @@ const ads_columns_js_1 = require("./ads-columns.js");
 const modal_dismisser_js_1 = require("./modal-dismisser.js");
 const creator_service_js_1 = require("./creator-service.js");
 const service_js_1 = require("./meta-api/service.js");
+const service_js_2 = require("./ad-library/service.js");
 const PORT = process.env.GRPC_PORT ? parseInt(process.env.GRPC_PORT, 10) : 50051;
 const sessionManager = new session_manager_js_1.SessionManager();
 const SESSION_STATUS_HEARTBEAT_MS = 5_000;
@@ -1312,10 +1313,12 @@ function main() {
     const scannerProto = loadProto('scanner.proto');
     const creatorProto = loadProto('creator.proto');
     const metaApiProto = loadProto('meta_api.proto');
+    const adLibraryProto = loadProto('ad_library.proto');
     const browserSessionService = browserSessionProto.fb_agent.browser_session.v1.BrowserSessionService;
     const scannerService = scannerProto.fb_agent.scanner.v1.ScannerService;
     const creatorService = creatorProto.fb_agent.creator.v1.CreatorService;
     const metaApiService = metaApiProto.fb_agent.meta_api.v1.MetaApiService;
+    const adLibraryService = adLibraryProto.fb_agent.ad_library.v1.AdLibraryService;
     server.addService(browserSessionService.service, {
         startBrowser,
         disconnectBrowser,
@@ -1357,6 +1360,12 @@ function main() {
     server.addService(metaApiService.service, {
         executeGraphCall: metaApiHandlers.executeGraphCall,
         checkMetaApiHealth: metaApiHandlers.checkMetaApiHealth,
+    });
+    const adLibraryHandlers = (0, service_js_2.createAdLibraryServiceHandlers)(sessionManager);
+    server.addService(adLibraryService.service, {
+        searchAds: adLibraryHandlers.searchAds,
+        searchAdsBatch: adLibraryHandlers.searchAdsBatch,
+        checkAdLibraryHealth: adLibraryHandlers.checkAdLibraryHealth,
     });
     server.bindAsync(`0.0.0.0:${PORT}`, grpc.ServerCredentials.createInsecure(), (error, port) => {
         if (error) {
