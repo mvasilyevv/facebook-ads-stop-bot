@@ -81,12 +81,33 @@ def decide(inp: FsmInput) -> FsmTransition:
 
     Pure: одинаковый вход → одинаковый выход. Никакого I/O, можно тестировать
     в любом количестве сценариев.
+
+    Контракт open_state_token:
+    - normal → warning_sent / stop_sent — новый incident, генерируем uuid4().
+    - warning_sent → stop_sent — эскалация ТОГО ЖЕ incident'а: token сохраняется,
+      callback'и на старой WARNING-карточке (`dis:<fb>:<token>`) остаются валидными.
+    - повторы внутри одного состояния (stop_sent → stop_sent и пр.) — token сохраняется.
+    - восстановление в normal — token обнуляется (incident закрыт).
     """
     cur = inp.current_state
 
     # --- STOP всегда побеждает: если есть стоп-правила, мы эскалируем ---
     if _has_stops(inp):
-        if cur in ("normal", "warning_sent"):
+        if cur == "warning_sent":
+            # Эскалация того же incident'а: сохраняем существующий token,
+            # чтобы старые WARNING inline-кнопки остались валидны.
+            escalation_token = inp.current_open_token or uuid.uuid4()
+            return FsmTransition(
+                new_state="stop_sent",
+                new_stage="stop",
+                new_open_token=escalation_token,
+                emit_alert=True,
+                alert_stage="stop",
+                alert_rule_codes=inp.stop_rule_codes,
+                create_disable_task=True,
+                transition_reason="warning_sent → stop_sent (эскалация, token сохранён)",
+            )
+        if cur == "normal":
             return FsmTransition(
                 new_state="stop_sent",
                 new_stage="stop",
@@ -95,7 +116,7 @@ def decide(inp: FsmInput) -> FsmTransition:
                 alert_stage="stop",
                 alert_rule_codes=inp.stop_rule_codes,
                 create_disable_task=True,
-                transition_reason=f"{cur} → stop_sent (новые STOP-правила)",
+                transition_reason="normal → stop_sent (новый STOP-инцидент)",
             )
         if cur == "stop_sent":
             # Уже на STOP — не дублируем алерт, но обновим коды (могли поменяться)

@@ -47,7 +47,8 @@ def test_warning_sent_does_not_re_emit() -> None:
     assert t.new_open_token == tok
 
 
-# Сценарий: эскалация warning_sent → stop_sent при появлении STOP-правила
+# Сценарий: эскалация warning_sent → stop_sent сохраняет тот же open_token
+# (incident единый — старые WARNING-кнопки `dis:<fb>:<token>` остаются валидны)
 def test_warning_escalates_to_stop() -> None:
     tok = uuid.uuid4()
     t = decide(
@@ -63,8 +64,8 @@ def test_warning_escalates_to_stop() -> None:
     assert t.alert_stage == "stop"
     assert t.emit_alert is True
     assert t.create_disable_task is True
-    # Новый token, потому что эскалация = новый инцидент
-    assert t.new_open_token != tok
+    # Token сохраняется — эскалация = тот же incident
+    assert t.new_open_token == tok
 
 
 # Сценарий: fast-stop из normal сразу в stop_sent (без WARNING шага)
