@@ -15,6 +15,14 @@ Batch API в Marketing API позволяет одним HTTP-запросом �
     }
 
 Документация: https://developers.facebook.com/docs/graph-api/batch-requests
+
+ВАЖНО: значения form-encoded body НЕ url-encod'ятся целиком через quote_plus.
+Meta распознаёт JSONPath refs (`{result=name:$.path}`) в raw тексте body —
+если их закодировать в `%7Bresult%3D...%7D`, Meta не свяжет batch entries и
+вернёт error 100. Поэтому используется минимальный encoder: кодируются только
+form-разделители (`&`, `+`, пробел, `%`, `#`, CR/LF) и не-ASCII через UTF-8.
+Символы `{ } : $ . =` остаются как есть; парсер form-encoded body везде
+обрабатывает первый `=` как разделитель ключ/значение.
 """
 
 from __future__ import annotations
@@ -26,12 +34,44 @@ from urllib.parse import quote_plus
 # Максимум sub-requests за один Batch API вызов.
 MAX_BATCH_ENTRIES = 50
 
+# Байты, обязательно требующие percent-encoding внутри value form-encoded body.
+# Всё, что не входит сюда и не управляющий/не-ASCII символ — оставляем как есть,
+# чтобы JSONPath refs (`{result=name:$.id}`) дошли до Meta нетронутыми.
+_VALUE_ESCAPE_BYTES = frozenset(
+    {
+        0x26,  # &  — разделитель пар
+        0x2B,  # +  — кодировка пробела
+        0x25,  # %  — литерал процента (иначе url-decode сломается)
+        0x23,  # #  — фрагмент URL
+        0x0D,  # \r
+        0x0A,  # \n
+    }
+)
+
+
+def _encode_value(text: str) -> str:
+    """Минимальный form-encoder для value batch entry.body.
+
+    Сохраняет JSONPath refs `{result=name:$.id}` нетронутыми — кодируются
+    только form-разделители и не-ASCII (через UTF-8 bytes).
+    """
+    out: list[str] = []
+    for byte in text.encode("utf-8"):
+        if byte == 0x20:
+            out.append("+")
+        elif byte in _VALUE_ESCAPE_BYTES or byte < 0x20 or byte > 0x7E:
+            out.append(f"%{byte:02X}")
+        else:
+            out.append(chr(byte))
+    return "".join(out)
+
 
 def encode_batch_body(params: dict[str, Any]) -> str:
     """Закодировать params как form-encoded строку для batch entry.body.
 
     Значения-list/dict сериализуются в JSON, иначе передаются как строка.
-    Используем quote_plus чтобы экранировать спецсимволы.
+    Ключ кодируется стандартно через quote_plus, value — через минимальный
+    encoder (сохраняет JSONPath refs).
     """
     encoded_parts: list[str] = []
     for key, value in params.items():
@@ -43,7 +83,7 @@ def encode_batch_body(params: dict[str, Any]) -> str:
             value_str = "true" if value else "false"
         else:
             value_str = str(value)
-        encoded_parts.append(f"{quote_plus(key)}={quote_plus(value_str)}")
+        encoded_parts.append(f"{quote_plus(key)}={_encode_value(value_str)}")
     return "&".join(encoded_parts)
 
 
