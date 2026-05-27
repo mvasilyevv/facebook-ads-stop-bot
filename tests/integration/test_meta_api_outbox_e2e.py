@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
@@ -22,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from apps.meta_api_worker.main import process_one_task
 from core.meta_api.audit import record_audit_log
+from core.meta_api.errors import RateLimitedError, TokenInvalidError
 from core.meta_api.queue import (
     approve_draft_task,
     cancel_task,
@@ -63,11 +65,12 @@ def _unique_payload(kind: str = "pause_ad") -> MetaMutationPayload:
 # ====================== Lifecycle ======================
 
 
-# DRAFT → approve → PENDING → claim → execute(заглушка) → FAILED. Worker не должен зависнуть.
+# Полный жизненный цикл: DRAFT → approve → claim → execute (мок dispatch_mutation, успех) → SUCCEEDED.
 @pytest.mark.asyncio
-async def test_draft_approve_claim_execute_fails_as_not_implemented(
+async def test_draft_approve_claim_execute_success(
     pg_engine: AsyncEngine,
     clean_meta_tables,
+    monkeypatch,
 ):
     payload = _unique_payload("pause_ad")
     task_id = await create_draft_task(
@@ -91,11 +94,20 @@ async def test_draft_approve_claim_execute_fails_as_not_implemented(
     assert not claim.queue_empty
     assert claim.task is not None
     assert claim.task.id == task_id
-    assert claim.task.status == "running"
 
-    await process_one_task(pg_engine, claim.task)
+    # Мокаем dispatch_mutation так, чтобы не дёргать gRPC к browser-agent.
+    fake_result = {"success": True, "graph_response": {"ok": True}, "modified_ids": [payload.target_id]}
 
-    # На Этапе 2 mutations не реализованы → final FAILED (без retry).
+    async def _fake_dispatch(client, p):
+        return fake_result
+
+    import apps.meta_api_worker.main as worker_main
+
+    monkeypatch.setattr(worker_main, "dispatch_mutation", _fake_dispatch)
+
+    fake_client = AsyncMock()
+    await process_one_task(pg_engine, claim.task, client=fake_client)
+
     async with pg_engine.connect() as conn:
         row = (
             await conn.execute(
@@ -104,8 +116,92 @@ async def test_draft_approve_claim_execute_fails_as_not_implemented(
             )
         ).first()
     assert row is not None
-    assert row[0] == "failed"
-    assert "не реализована" in (row[1] or "")
+    assert row[0] == "succeeded"
+    assert row[1] is None
+
+
+# RateLimitedError из dispatch_mutation → status='retrying' (TemporaryError → requeue).
+@pytest.mark.asyncio
+async def test_rate_limited_error_requeues_task(
+    pg_engine: AsyncEngine,
+    clean_meta_tables,
+    monkeypatch,
+):
+    payload = _unique_payload("pause_ad")
+    task_id = await create_mutation_task(
+        pg_engine,
+        payload=payload,
+        requested_by="bot_auto",
+        status="pending",
+    )
+    assert task_id is not None
+
+    claim = await claim_pending_task(pg_engine)
+    assert claim.task is not None
+
+    async def _raise_rate_limited(client, p):
+        raise RateLimitedError("Throttled", code=17)
+
+    import apps.meta_api_worker.main as worker_main
+
+    monkeypatch.setattr(worker_main, "dispatch_mutation", _raise_rate_limited)
+
+    fake_client = AsyncMock()
+    await process_one_task(pg_engine, claim.task, client=fake_client)
+
+    async with pg_engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text("SELECT status, attempt_count, last_error FROM task_queue WHERE id = :i"),
+                {"i": task_id},
+            )
+        ).first()
+    assert row is not None
+    assert row[0] == "retrying"  # не failed!
+    assert row[1] == 1  # attempt_count инкрементнулся
+    assert "RateLimitedError" in (row[2] or "")
+
+
+# TokenInvalidError → status='failed' без retry (PermanentError).
+@pytest.mark.asyncio
+async def test_token_invalid_marks_failed_without_retry(
+    pg_engine: AsyncEngine,
+    clean_meta_tables,
+    monkeypatch,
+):
+    payload = _unique_payload("activate_ad")
+    task_id = await create_mutation_task(
+        pg_engine,
+        payload=payload,
+        requested_by="bot_auto",
+        status="pending",
+    )
+    assert task_id is not None
+
+    claim = await claim_pending_task(pg_engine)
+    assert claim.task is not None
+
+    async def _raise_token_invalid(client, p):
+        raise TokenInvalidError("Session expired", code=190)
+
+    import apps.meta_api_worker.main as worker_main
+
+    monkeypatch.setattr(worker_main, "dispatch_mutation", _raise_token_invalid)
+
+    fake_client = AsyncMock()
+    await process_one_task(pg_engine, claim.task, client=fake_client)
+
+    async with pg_engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text("SELECT status, attempt_count, last_error FROM task_queue WHERE id = :i"),
+                {"i": task_id},
+            )
+        ).first()
+    assert row is not None
+    assert row[0] == "failed"  # сразу final, без retry
+    assert row[1] == 0  # attempt_count не увеличился
+    assert "TokenInvalidError" in (row[2] or "")
 
 
 # Повторное create_mutation_task с тем же idempotency_key → None (UNIQUE conflict без ошибки).
