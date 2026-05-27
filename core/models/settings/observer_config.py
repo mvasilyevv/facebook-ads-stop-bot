@@ -50,3 +50,8 @@ class ObserverConfig(UUIDPrimaryKey, SingletonMixin, Timestamp, Base):
         nullable=False,
         server_default="true",
     )
+    auto_enable_recommendations: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        server_default="false",
+    )
