@@ -20,6 +20,7 @@ GRPC_NODE_DIR := services/browser-agent
 	docker-up docker-down db-wait apply-schema backup-secrets restore-secrets bootstrap \
 	observer telegram disable-worker enable-worker cleanup-worker reconciler-worker \
 	meta-api-worker health-watchdog enable-reco-worker digest-scheduler \
+	creator-worker creator-recorder api \
 	frontend frontend-build lint format test test-unit test-telegram test-integration verify \
 	start stop logs proto-compile proto-watch \
 	browser-agent browser-agent-dev browser-agent-build tma-dev tma-build
@@ -108,6 +109,15 @@ enable-reco-worker: check-env install-backend ## Запустить enable recom
 
 digest-scheduler: check-env install-backend ## Запустить ежедневный TG digest scheduler (9:00 UTC)
 	$(PY) run_digest_scheduler.py
+
+creator-worker: check-env install-backend ## Запустить creator worker (Vision-fallback для plan_run)
+	$(PY) run_creator_worker.py
+
+creator-recorder: check-env install-backend ## Запустить creator recorder (запись планов через CDP)
+	$(PY) run_creator_recorder.py
+
+api: check-env install-backend ## Запустить FastAPI на порту 8000 (health + AdSet.pro postback)
+	$(VENV_BIN)/uvicorn apps.api.main:app --host 0.0.0.0 --port 8000 --reload
 
 apply-schema: check-env install-backend ## Drop + apply v2 схемы БД (ОПАСНО, требует --confirm-drop)
 	$(PY) scripts/apply_v2_schema.py --confirm-drop
