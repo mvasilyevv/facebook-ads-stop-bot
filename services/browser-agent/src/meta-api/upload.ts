@@ -63,6 +63,8 @@ export async function uploadImage(
     contentType: string;
     fileBytes: Uint8Array | Buffer;
     timeoutMs?: number;
+    imageUrl?: string;  // НОВОЕ: загрузка по URL вместо multipart
+    name?: string;      // НОВОЕ: имя картинки при URL-загрузке
   },
 ): Promise<UploadImageResult> {
   const timeoutMs = params.timeoutMs ?? DEFAULT_UPLOAD_TIMEOUT_MS;
@@ -77,12 +79,24 @@ export async function uploadImage(
       durationMs: 0,
     };
   }
+
+  // Ветка URL-загрузки: Meta сама скачивает картинку, multipart не нужен.
+  if (params.imageUrl) {
+    return uploadImageFromUrl(page, {
+      adAccountId: params.adAccountId,
+      imageUrl: params.imageUrl,
+      name: params.name,
+      timeoutMs,
+    });
+  }
+
+  // Ветка multipart: проверяем наличие байтов.
   if (!params.fileBytes || params.fileBytes.length === 0) {
     return {
       ok: false,
       imageHash: '',
       url: '',
-      error: 'file_bytes пустой',
+      error: 'INVALID_ARGUMENT: image_url и file_bytes оба пусты — нужен один из двух',
       durationMs: 0,
     };
   }
@@ -155,6 +169,118 @@ export async function uploadImage(
         // Meta возвращает { images: { <filename>: { hash, url } } }.
         // Имя файла в ответе может отличаться от имени, что мы передали,
         // поэтому берём первое значение из images.
+        const images = parsed?.images;
+        if (!images || typeof images !== 'object') {
+          return { ok: false, hash: '', url: '', error: `Нет поля images в ответе: ${text.slice(0, 300)}` };
+        }
+        const keys = Object.keys(images);
+        if (keys.length === 0) {
+          return { ok: false, hash: '', url: '', error: 'images пустой' };
+        }
+        const first = images[keys[0]];
+        const hash = String(first?.hash ?? '');
+        const imgUrl = String(first?.url ?? '');
+        if (!hash) {
+          return { ok: false, hash: '', url: '', error: 'hash отсутствует в ответе' };
+        }
+        return { ok: true, hash, url: imgUrl, error: '' };
+      } catch (err: any) {
+        clearTimeout(timeoutId);
+        const msg = err?.name === 'AbortError'
+          ? `Timeout после ${args.timeoutMs}мс`
+          : String(err?.message ?? err);
+        return { ok: false, hash: '', url: '', error: msg };
+      }
+    }, evalArgs);
+
+    return {
+      ok: result.ok,
+      imageHash: result.hash,
+      url: result.url,
+      error: result.error,
+      durationMs: Date.now() - t0,
+    };
+  } catch (err: any) {
+    return {
+      ok: false,
+      imageHash: '',
+      url: '',
+      error: `PAGE_EVALUATE_ERROR: ${String(err?.message ?? err)}`,
+      durationMs: Date.now() - t0,
+    };
+  }
+}
+
+/**
+ * Внутренний helper: загрузить картинку по URL — Meta сама скачивает её.
+ * POST /act_X/adimages?url=...&name=...&access_token=...
+ * Ответ: { images: { <name>: { hash, url } } } — такой же как multipart.
+ */
+async function uploadImageFromUrl(
+  page: Page,
+  params: {
+    adAccountId: string;
+    imageUrl: string;
+    name?: string;
+    timeoutMs: number;
+  },
+): Promise<UploadImageResult> {
+  const t0 = Date.now();
+
+  const evalArgs = {
+    adAccountId: params.adAccountId,
+    imageUrl: params.imageUrl,
+    name: params.name || '',
+    timeoutMs: params.timeoutMs,
+    apiVersion: META_API_VERSION,
+  };
+
+  try {
+    const result = await page.evaluate(async (args) => {
+      const match = document.documentElement.innerHTML.match(/EAA[A-Za-z0-9_-]{100,}/);
+      if (!match) {
+        return { ok: false, hash: '', url: '', error: 'TOKEN_NOT_FOUND_IN_PAGE' };
+      }
+      const token = match[0];
+
+      // URL-загрузка: query params вместо multipart body.
+      const qp = new URLSearchParams();
+      qp.set('url', args.imageUrl);
+      qp.set('access_token', token);
+      if (args.name) qp.set('name', args.name);
+
+      const endpoint =
+        `https://graph.facebook.com/${args.apiVersion}/${args.adAccountId}/adimages?${qp.toString()}`;
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), args.timeoutMs);
+
+      try {
+        const response = await fetch(endpoint, {
+          method: 'POST',
+          credentials: 'include',
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+
+        const text = await response.text();
+        let parsed: any;
+        try {
+          parsed = JSON.parse(text);
+        } catch {
+          return { ok: false, hash: '', url: '', error: `Невалидный JSON: ${text.slice(0, 300)}` };
+        }
+
+        if (parsed?.error) {
+          const e = parsed.error;
+          return {
+            ok: false,
+            hash: '',
+            url: '',
+            error: `GRAPH_ERROR_${e.code ?? '?'}: ${e.message ?? 'unknown'}`,
+          };
+        }
+
         const images = parsed?.images;
         if (!images || typeof images !== 'object') {
           return { ok: false, hash: '', url: '', error: `Нет поля images в ответе: ${text.slice(0, 300)}` };

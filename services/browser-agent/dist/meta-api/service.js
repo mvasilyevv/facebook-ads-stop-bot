@@ -143,11 +143,26 @@ function createMetaApiServiceHandlers(sessionManager) {
             const buf = Buffer.isBuffer(fileBytes)
                 ? fileBytes
                 : Buffer.from(fileBytes || []);
+            const imageUrl = String(req.image_url || '');
+            const name = String(req.name || '');
+            // Если image_url пуст и file_bytes тоже — вернём ошибку без вызова uploadImage.
+            if (!imageUrl && buf.length === 0) {
+                callback(null, {
+                    image_hash: '',
+                    ok: false,
+                    error: 'INVALID_ARGUMENT: image_url и file_bytes оба пусты — нужен один из двух',
+                    url: '',
+                    duration_ms: 0,
+                });
+                return;
+            }
             const result = await (0, upload_js_1.uploadImage)(page, {
                 adAccountId: String(req.ad_account_id || ''),
                 filename: String(req.filename || 'upload.jpg'),
                 contentType: String(req.content_type || 'image/jpeg'),
                 fileBytes: buf,
+                imageUrl: imageUrl || undefined,
+                name: name || undefined,
             });
             callback(null, {
                 image_hash: result.imageHash,

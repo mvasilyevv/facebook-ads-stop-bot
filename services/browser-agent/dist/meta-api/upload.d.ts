@@ -42,6 +42,8 @@ export declare function uploadImage(page: Page, params: {
     contentType: string;
     fileBytes: Uint8Array | Buffer;
     timeoutMs?: number;
+    imageUrl?: string;
+    name?: string;
 }): Promise<UploadImageResult>;
 /**
  * Видео-upload-сессия: держит state между client streaming chunks.
