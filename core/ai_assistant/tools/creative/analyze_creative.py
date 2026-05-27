@@ -12,7 +12,7 @@ import re
 from typing import Any, ClassVar
 
 from core.ai_assistant.prompts import PromptNotFoundError, load_prompt
-from core.ai_assistant.tools.base import RiskLevel, ToolError
+from core.ai_assistant.tools.base import RiskLevel, ToolContext, ToolError
 
 logger = logging.getLogger(__name__)
 
@@ -47,11 +47,11 @@ class AnalyzeCreativeTool:
         },
     }
 
-    async def run(self, args: dict[str, Any]) -> str:
+    async def run(self, ctx: ToolContext, args: dict[str, Any]) -> str:
         """Анализирует текст рекламы через LLM и возвращает структурированный результат."""
         from core.ai_assistant.client import AIUnavailableError, get_ai_client
 
-        # Получаем AI-клиент, проверяем доступность
+        _ = ctx  # creative tool не использует ctx-зависимости
         ai = get_ai_client()
         if not ai.is_available:
             raise ToolError("AI не настроен — проверь ANTHROPIC_API_KEY / OPENAI_API_KEY в .env")
