@@ -105,6 +105,14 @@ class Settings(BaseSettings):
     # TODO(stage-6): уточнить реальный base URL у AdSet.pro перед первым live-вызовом.
     adsetpro_base_url: str = "https://api.adset.pro"
     adsetpro_timeout_seconds: float = 15.0
+    # Секрет для аутентификации входящего postback'а от AdSet.pro
+    # (header X-Postback-Secret). Пустая строка → endpoint возвращает 503
+    # «not configured», чтобы случайно не принимать неавторизованные постбэки.
+    adsetpro_postback_secret: str = ""
+
+    # --- Frontend (CORS) ---
+    # Origin основного фронта (например, http://localhost:5173). None → CORS не подключаем.
+    frontend_origin: str | None = None
 
     @model_validator(mode="after")
     def _warn_insecure_defaults(self) -> "Settings":
