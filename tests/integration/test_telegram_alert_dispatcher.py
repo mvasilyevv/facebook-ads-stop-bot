@@ -24,7 +24,10 @@ from core.telegram.client import TelegramBotClient
 
 @pytest_asyncio.fixture
 async def offer_and_ad(pg_engine):
-    """Создаёт всю иерархию + telegram_config с chat_id и threads."""
+    """Создаёт всю иерархию offer→campaign→adset→ad.
+
+    telegram_config seed'ится отдельной fixture `seeded_telegram_config`.
+    """
     offer_id = uuid.uuid4()
     campaign_id = uuid.uuid4()
     adset_id = uuid.uuid4()
@@ -52,21 +55,6 @@ async def offer_and_ad(pg_engine):
                 "f": f"23000{suffix}",
                 "n": f"AD_{suffix}",
             },
-        )
-        # telegram_config (если не существует — создаём)
-        await conn.execute(
-            text(
-                """
-                INSERT INTO telegram_config
-                    (singleton_key, bot_token_encrypted, chat_id,
-                     forum_warning_thread_id, forum_stop_thread_id)
-                VALUES ('default', 'fake_blob', -1001234567890, 11, 22)
-                ON CONFLICT (singleton_key) DO UPDATE
-                SET chat_id = -1001234567890,
-                    forum_warning_thread_id = 11,
-                    forum_stop_thread_id = 22
-                """
-            )
         )
 
     yield {
@@ -121,7 +109,9 @@ async def _insert_alert(
 
 # Сценарий: один WARNING → один sendMessage с правильным thread + кнопками
 @pytest.mark.asyncio
-async def test_dispatch_warning_sends_one_message(pg_engine, tg_respx, offer_and_ad) -> None:
+async def test_dispatch_warning_sends_one_message(
+    pg_engine, tg_respx, seeded_telegram_config, offer_and_ad
+) -> None:
     token = uuid.uuid4()
     await _insert_alert(
         pg_engine,
@@ -164,7 +154,9 @@ async def test_dispatch_warning_sends_one_message(pg_engine, tg_respx, offer_and
 
 # Сценарий: STOP → правильный thread_id (22 вместо 11)
 @pytest.mark.asyncio
-async def test_dispatch_stop_uses_stop_thread(pg_engine, tg_respx, offer_and_ad) -> None:
+async def test_dispatch_stop_uses_stop_thread(
+    pg_engine, tg_respx, seeded_telegram_config, offer_and_ad
+) -> None:
     await _insert_alert(
         pg_engine,
         ad_id=offer_and_ad["ad_id"],
@@ -186,7 +178,9 @@ async def test_dispatch_stop_uses_stop_thread(pg_engine, tg_respx, offer_and_ad)
 
 # Сценарий: повторный dispatch того же scan_id → 0 новых отправок (idempotent через ref)
 @pytest.mark.asyncio
-async def test_idempotent_skip_duplicates(pg_engine, tg_respx, offer_and_ad) -> None:
+async def test_idempotent_skip_duplicates(
+    pg_engine, tg_respx, seeded_telegram_config, offer_and_ad
+) -> None:
     token = uuid.uuid4()
     await _insert_alert(
         pg_engine,
@@ -223,7 +217,7 @@ async def test_empty_scan_no_messages(pg_engine, tg_respx, offer_and_ad) -> None
 
 # Сценарий: телеграм возвращает 400 (например plain HTTP error) → events помечаются errors
 @pytest.mark.asyncio
-async def test_telegram_api_error_counted(pg_engine, offer_and_ad) -> None:
+async def test_telegram_api_error_counted(pg_engine, seeded_telegram_config, offer_and_ad) -> None:
     import respx
     from httpx import Response
 

@@ -264,6 +264,44 @@ async def clean_ad_library_tables(pg_engine):
 
 
 @pytest_asyncio.fixture
+async def seeded_telegram_config(pg_engine):
+    """UPSERT telegram_config с токеном, зашифрованным ТЕКУЩИМ ENCRYPTION_KEY.
+
+    Нужно потому что в БД может лежать blob от старого ключа (рассинхрон при ротации),
+    из-за которого load_telegram_config вернёт None и dispatch скипнет отправку.
+    Cleanup — DELETE всей строки, чтобы не оставлять fake token между тестами.
+    """
+    from core.crypto import encrypt
+
+    enc = encrypt("TEST_BOT_TOKEN_FAKE")
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text(
+                """
+                INSERT INTO telegram_config
+                    (singleton_key, bot_token_encrypted, chat_id,
+                     forum_warning_thread_id, forum_stop_thread_id, poller_offset)
+                VALUES ('default', :tok, -1001234567890, 11, 22, 0)
+                ON CONFLICT (singleton_key) DO UPDATE
+                SET bot_token_encrypted = EXCLUDED.bot_token_encrypted,
+                    chat_id = EXCLUDED.chat_id,
+                    forum_warning_thread_id = EXCLUDED.forum_warning_thread_id,
+                    forum_stop_thread_id = EXCLUDED.forum_stop_thread_id,
+                    updated_at = NOW()
+                """
+            ),
+            {"tok": enc},
+        )
+    yield {
+        "chat_id": -1001234567890,
+        "forum_warning_thread_id": 11,
+        "forum_stop_thread_id": 22,
+    }
+    async with pg_engine.begin() as conn:
+        await conn.execute(text("DELETE FROM telegram_config WHERE singleton_key = 'default'"))
+
+
+@pytest_asyncio.fixture
 async def fb_ad_fixture(pg_engine):
     """Создаёт offer→campaign→adset→ad для тестов которым нужен реальный fb_ads.id.
 
