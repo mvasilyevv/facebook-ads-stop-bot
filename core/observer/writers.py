@@ -320,3 +320,68 @@ async def maybe_create_disable_task(
         requested_by="bot_auto_stop",
     )
     return task_id
+
+
+async def reset_alert_state_after_disable_succeeded(
+    engine: AsyncEngine,
+    *,
+    fb_ad_id: str,
+) -> bool:
+    """Перевести ad_alert_state в 'disabled' после успешного disable.
+
+    Идемпотентно: UPDATE срабатывает только если текущий state ∈
+    (warning_sent, stop_sent, claimed). Если уже 'disabled' — no-op.
+    Из 'normal' не возвращаем в 'disabled': observer мог сбросить state
+    после реактивации, и его решение приоритетнее лагающей disable-задачи.
+
+    Returns: True если строку обновили, False если no-op (или ad не найден).
+    """
+    async with engine.begin() as conn:
+        result = await conn.execute(
+            text(
+                """
+                UPDATE ad_alert_state
+                SET alert_state = 'disabled',
+                    last_transition_at = NOW(),
+                    updated_at = NOW()
+                WHERE ad_id = (SELECT id FROM fb_ads WHERE fb_ad_id = :fbid)
+                  AND alert_state IN ('warning_sent', 'stop_sent', 'claimed')
+                """
+            ),
+            {"fbid": fb_ad_id},
+        )
+        return bool(result.rowcount and result.rowcount > 0)
+
+
+async def reset_alert_state_after_enable_succeeded(
+    engine: AsyncEngine,
+    *,
+    fb_ad_id: str,
+) -> bool:
+    """Перевести ad_alert_state в 'normal' после успешного enable.
+
+    Сбрасывает FSM-контекст: open_state_token, current_stage, коды правил,
+    snoozed_until. Идемпотентно: UPDATE срабатывает только если state != 'normal'.
+
+    Returns: True если строку обновили, False если уже в 'normal' или ad не найден.
+    """
+    async with engine.begin() as conn:
+        result = await conn.execute(
+            text(
+                """
+                UPDATE ad_alert_state
+                SET alert_state = 'normal',
+                    current_stage = NULL,
+                    open_state_token = NULL,
+                    warning_rule_codes = '[]'::jsonb,
+                    stop_rule_codes = '[]'::jsonb,
+                    snoozed_until = NULL,
+                    last_transition_at = NOW(),
+                    updated_at = NOW()
+                WHERE ad_id = (SELECT id FROM fb_ads WHERE fb_ad_id = :fbid)
+                  AND alert_state <> 'normal'
+                """
+            ),
+            {"fbid": fb_ad_id},
+        )
+        return bool(result.rowcount and result.rowcount > 0)
