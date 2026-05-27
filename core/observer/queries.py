@@ -185,6 +185,12 @@ def match_offer_for_ad(
     Контракт (из CLAUDE.md):
     - Приоритет источника: ad_name выигрывает у campaign_name.
     - Из совпадающих кодов выигрывает самый длинный.
+    - При равной длине — алфавитно первый код (ASCENDING). Это технический
+      tie-breaker: даёт детерминированный результат для повторных запусков,
+      но НЕ гарантия что это семантически правильный оффер. Менеджер должен
+      использовать уникальные substring'и в названиях кампаний; равная длина
+      — это уже коллизия конфигурации, мы только не позволяем ей отдавать
+      разный результат от вызова к вызову.
     - Case-insensitive. Word-boundary исключает 'KE_CR2' внутри 'KEN_CR2_FOO'.
     """
     if not offers:
@@ -193,14 +199,21 @@ def match_offer_for_ad(
     def _best_match_in(text: str) -> OfferRules | None:
         text_lower = (text or "").casefold()
         best: OfferRules | None = None
-        best_len = 0
         for offer in offers:
             code_lower = offer.code.casefold()
             if not code_lower:
                 continue
-            if _offer_code_pattern(code_lower).search(text_lower) and len(offer.code) > best_len:
+            if not _offer_code_pattern(code_lower).search(text_lower):
+                continue
+            if best is None:
                 best = offer
-                best_len = len(offer.code)
+                continue
+            # Сначала длина: длиннее → специфичнее → выигрывает.
+            if len(offer.code) > len(best.code):
+                best = offer
+            elif len(offer.code) == len(best.code) and offer.code < best.code:
+                # При равной длине — алфавитно первый (стабильный tie-breaker).
+                best = offer
         return best
 
     matched = _best_match_in(ad_name)
