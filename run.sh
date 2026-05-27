@@ -153,7 +153,7 @@ cleanup_singleton_pid_file() {
 }
 
 cleanup_worker_singleton_pid_files() {
-    cleanup_singleton_pid_file "/tmp/fb_observer.pid" "run_observer.py"
+    cleanup_singleton_pid_file "/tmp/fb_observer.pid" "run_observer_worker.py"
     cleanup_singleton_pid_file "/tmp/fb_disable_worker.pid" "run_disable_worker.py"
     cleanup_singleton_pid_file "/tmp/fb_enable_worker.pid" "run_enable_worker.py"
 }
@@ -413,12 +413,12 @@ stop_all() {
 
     terminate_matching_processes "Browser Agent" "$SCRIPT_DIR/services/browser-agent/dist/index.js"
     terminate_matching_processes_in_dir "Browser Agent" "node dist/index.js" "$SCRIPT_DIR/services/browser-agent"
-    terminate_matching_processes "Observer Worker" "run_observer.py"
+    terminate_matching_processes "Observer Worker" "run_observer_worker.py"
     terminate_matching_processes "Disable Worker" "run_disable_worker.py"
     terminate_matching_processes "Enable Worker" "run_enable_worker.py"
     terminate_matching_processes "Enable Recommendation Worker" "run_enable_recommendation_worker.py"
     terminate_matching_processes "Enable Recommendation Worker" "apps.enable_recommendation_worker.main"
-    terminate_matching_processes "Telegram Poller" "apps.telegram_poller.main"
+    terminate_matching_processes "Telegram Poller" "run_telegram_poller.py"
     terminate_matching_processes "API" "uvicorn apps.api.main:app"
     terminate_matching_processes "Frontend" "$SCRIPT_DIR/frontend/node_modules/.bin/vite"
     terminate_matching_processes_in_dir "Frontend" "npm run dev|node .*vite" "$SCRIPT_DIR/frontend"
@@ -562,12 +562,12 @@ fi
 
 terminate_matching_processes "Browser Agent" "$SCRIPT_DIR/services/browser-agent/dist/index.js"
 terminate_matching_processes_in_dir "Browser Agent" "node dist/index.js" "$SCRIPT_DIR/services/browser-agent"
-terminate_matching_processes "Observer Worker" "run_observer.py"
+terminate_matching_processes "Observer Worker" "run_observer_worker.py"
 terminate_matching_processes "Disable Worker" "run_disable_worker.py"
 terminate_matching_processes "Enable Worker" "run_enable_worker.py"
 terminate_matching_processes "Enable Recommendation Worker" "run_enable_recommendation_worker.py"
 terminate_matching_processes "Enable Recommendation Worker" "apps.enable_recommendation_worker.main"
-terminate_matching_processes "Telegram Poller" "apps.telegram_poller.main"
+terminate_matching_processes "Telegram Poller" "run_telegram_poller.py"
 terminate_matching_processes "API" "uvicorn apps.api.main:app"
 terminate_matching_processes "Frontend" "$SCRIPT_DIR/frontend/node_modules/.bin/vite"
 terminate_matching_processes_in_dir "Frontend" "npm run dev|node .*vite" "$SCRIPT_DIR/frontend"
@@ -835,7 +835,7 @@ else
     # 6. Запуск Observer Worker
     # ==========================================
     echo -e "${BLUE}🔍 Запускаю Observer Worker...${NC}"
-    .venv/bin/python run_observer.py > "$LOG_DIR/observer.log" 2>&1 &
+    .venv/bin/python run_observer_worker.py > "$LOG_DIR/observer.log" 2>&1 &
     OBSERVER_PID=$!
     append_pid "$OBSERVER_PID" "observer"
     echo -e "${GREEN}  Observer PID: $OBSERVER_PID${NC}"
@@ -859,24 +859,25 @@ else
     echo -e "${GREEN}  Enable Worker PID: $ENABLE_PID${NC}"
 
     # ==========================================
-    # 9. Запуск Enable Recommendation Worker
+    # 9. Запуск Cleanup + Reconciler воркеров
     # ==========================================
-    if [ -f run_enable_recommendation_worker.py ]; then
-        echo -e "${BLUE}🟡 Запускаю Enable Recommendation Worker...${NC}"
-        .venv/bin/python run_enable_recommendation_worker.py > "$LOG_DIR/enable_recommendation_worker.log" 2>&1 &
-        ENABLE_RECO_PID=$!
-        append_pid "$ENABLE_RECO_PID" "enable_recommendation_worker"
-        echo -e "${GREEN}  Enable Recommendation Worker PID: $ENABLE_RECO_PID${NC}"
-    else
-        echo -e "${YELLOW}⚠️  run_enable_recommendation_worker.py не найден, пропускаю${NC}"
-        ENABLE_RECO_PID=""
-    fi
+    echo -e "${BLUE}🧹 Запускаю Cleanup Worker...${NC}"
+    .venv/bin/python run_cleanup_worker.py > "$LOG_DIR/cleanup_worker.log" 2>&1 &
+    CLEANUP_PID=$!
+    append_pid "$CLEANUP_PID" "cleanup_worker"
+    echo -e "${GREEN}  Cleanup Worker PID: $CLEANUP_PID${NC}"
+
+    echo -e "${BLUE}🔁 Запускаю Reconciler Worker...${NC}"
+    .venv/bin/python run_reconciler_worker.py > "$LOG_DIR/reconciler_worker.log" 2>&1 &
+    RECONCILER_PID=$!
+    append_pid "$RECONCILER_PID" "reconciler_worker"
+    echo -e "${GREEN}  Reconciler Worker PID: $RECONCILER_PID${NC}"
 
     # ==========================================
     # 10. Запуск Telegram Poller
     # ==========================================
     echo -e "${BLUE}🤖 Запускаю Telegram Poller...${NC}"
-    .venv/bin/python -m apps.telegram_poller.main > "$LOG_DIR/telegram.log" 2>&1 &
+    .venv/bin/python run_telegram_poller.py > "$LOG_DIR/telegram.log" 2>&1 &
     TG_PID=$!
     append_pid "$TG_PID" "telegram"
     echo -e "${GREEN}  Telegram PID: $TG_PID${NC}"

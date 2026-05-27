@@ -8,8 +8,6 @@ PY := $(VENV_BIN)/python
 PIP := $(PY) -m pip
 PYTEST := $(VENV_BIN)/pytest
 RUFF := $(VENV_BIN)/ruff
-UVICORN := $(VENV_BIN)/uvicorn
-ALEMBIC := $(PY) -m alembic
 FRONTEND_DIR := frontend
 
 .DEFAULT_GOAL := help
@@ -19,11 +17,11 @@ GRPC_PY_OUT := clients/python_grpc
 GRPC_NODE_DIR := services/browser-agent
 
 .PHONY: help check-env check-tools venv install-backend install-frontend install \
-	docker-up docker-down db-wait migrate bootstrap api observer telegram \
-	disable-worker enable-worker enable-recommendation-worker frontend frontend-build lint format test \
-	test-unit test-telegram verify start stop logs \
-	proto-compile proto-watch browser-agent browser-agent-dev browser-agent-build \
-	tma-dev tma-build
+	docker-up docker-down db-wait apply-schema backup-secrets restore-secrets bootstrap \
+	observer telegram disable-worker enable-worker cleanup-worker reconciler-worker \
+	frontend frontend-build lint format test test-unit test-telegram test-integration verify \
+	start stop logs proto-compile proto-watch \
+	browser-agent browser-agent-dev browser-agent-build tma-dev tma-build
 
 help: ## Показать доступные команды
 	@awk 'BEGIN {FS = ":.*## "}; /^[a-zA-Z0-9_.-]+:.*## / {printf "  %-20s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -78,19 +76,13 @@ db-wait: ## Дождаться готовности Postgres
 	echo "Postgres не стал готов за 30 секунд"; \
 	exit 1
 
-migrate: check-env install-backend ## Применить миграции Alembic
-	$(ALEMBIC) upgrade head
-
-bootstrap: check-env check-tools docker-up db-wait install migrate ## Полная подготовка проекта
-
-api: check-env install-backend ## Запустить FastAPI
-	$(UVICORN) apps.api.main:app --host 0.0.0.0 --port 8100 --reload
+bootstrap: check-env check-tools docker-up db-wait install apply-schema ## Полная подготовка проекта (drop+apply v2 схемы)
 
 observer: check-env install-backend ## Запустить observer worker
-	$(PY) run_observer.py
+	$(PY) run_observer_worker.py
 
 telegram: check-env install-backend ## Запустить Telegram poller
-	$(PY) -m apps.telegram_poller.main
+	$(PY) run_telegram_poller.py
 
 disable-worker: check-env install-backend ## Запустить disable worker
 	$(PY) run_disable_worker.py
@@ -98,19 +90,20 @@ disable-worker: check-env install-backend ## Запустить disable worker
 enable-worker: check-env install-backend ## Запустить enable worker
 	$(PY) run_enable_worker.py
 
-enable-recommendation-worker: check-env install-backend ## Запустить worker рекомендаций на включение
-	@if [ -f run_enable_recommendation_worker.py ]; then \
-		$(PY) run_enable_recommendation_worker.py; \
-	else \
-		echo "Файл run_enable_recommendation_worker.py не найден."; \
-		exit 1; \
-	fi
+cleanup-worker: check-env install-backend ## Запустить cleanup worker (retention + partitions)
+	$(PY) run_cleanup_worker.py
 
-frontend: ## Запустить frontend в dev-режиме
-	cd $(FRONTEND_DIR) && $(NPM) run dev
+reconciler-worker: check-env install-backend ## Запустить reconciler worker (stuck tasks)
+	$(PY) run_reconciler_worker.py
 
-frontend-build: install-frontend ## Собрать frontend
-	cd $(FRONTEND_DIR) && $(NPM) run build
+apply-schema: check-env install-backend ## Drop + apply v2 схемы БД (ОПАСНО, требует --confirm-drop)
+	$(PY) scripts/apply_v2_schema.py --confirm-drop
+
+backup-secrets: check-env install-backend ## Бэкап Vision/TG токенов
+	$(PY) scripts/backup_secrets.py
+
+restore-secrets: check-env install-backend ## Восстановить Vision/TG токены из последнего бэкапа
+	$(PY) scripts/restore_secrets.py
 
 lint: install-backend ## Проверить Python-код через Ruff
 	$(RUFF) check .
@@ -125,9 +118,12 @@ test-unit: install-backend ## Прогнать unit-тесты
 	$(PYTEST) tests/unit -q
 
 test-telegram: install-backend ## Прогнать Telegram-набор тестов
-	$(PYTEST) -q tests/unit/test_telegram_bot_handler.py tests/unit/test_telegram_renderer.py tests/unit/test_telegram_poller.py tests/unit/test_telegram_service.py tests/unit/test_disable_worker.py
+	$(PYTEST) -q tests/unit/test_telegram_bot_handler.py tests/unit/test_telegram_renderer.py tests/integration/test_telegram_send_via_respx.py tests/integration/test_telegram_alert_dispatcher.py tests/integration/test_telegram_poller_e2e.py
 
-verify: lint test-telegram frontend-build ## Выполнить основной проверочный прогон
+test-integration: install-backend ## Прогнать интеграционные тесты (требуется Postgres из docker-compose)
+	$(PYTEST) -q tests/integration --timeout=30
+
+verify: lint test-unit test-integration ## Выполнить основной проверочный прогон
 
 start: ## Поднять весь проект через run.sh
 	./run.sh
@@ -149,7 +145,8 @@ proto-compile: ## Скомпилировать proto файлы в Python и Nod
 		$(PROTO_DIR)/browser_session.proto \
 		$(PROTO_DIR)/scanner.proto \
 		$(PROTO_DIR)/creator.proto \
-		$(PROTO_DIR)/meta_api.proto
+		$(PROTO_DIR)/meta_api.proto \
+		$(PROTO_DIR)/ad_library.proto
 	# grpc_tools генерирует absolute import `from v1 import ...`, который ломает пакет clients.python_grpc.
 	$(PY) -c "from pathlib import Path; [path.write_text(path.read_text().replace('from v1 import ', 'from . import ')) for path in Path('$(GRPC_PY_OUT)/v1').glob('*_pb2_grpc.py')]"
 	@if [ -x "$(RUFF)" ]; then $(RUFF) check $(GRPC_PY_OUT)/v1 --fix; fi

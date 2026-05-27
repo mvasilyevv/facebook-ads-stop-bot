@@ -24,54 +24,49 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 # Ручной запуск сервисов (каждый в своём терминале)
 docker compose up -d                                                    # Postgres + Redis
-uvicorn apps.api.main:app --host 0.0.0.0 --port 8100 --reload          # API
-python run_observer.py                                                   # Observer worker
-python -m apps.telegram_poller.main                                      # Telegram poller
-python run_disable_worker.py                                             # Disable worker
-python run_enable_worker.py                                              # Enable worker
-python run_enable_recommendation_worker.py                               # Enable recommendation worker
-python run_creator_worker.py                                             # Campaign creator worker (Vision-based)
-python run_health_watchdog.py                                            # Health watchdog
 cd services/browser-agent && npm run start                               # Node.js gRPC browser-agent (port 50051)
-cd frontend && npm run dev                                               # React UI (Vite)
-cd frontend-mini && npm run dev                                          # Telegram Mini App
+python run_observer_worker.py                                            # Observer worker (scan + FSM + TG dispatch)
+python run_disable_worker.py                                             # Disable worker (poll task_queue)
+python run_enable_worker.py                                              # Enable worker
+python run_telegram_poller.py                                            # Telegram poller (/spy, /start, /help, inline callbacks)
+python run_cleanup_worker.py                                             # Cleanup worker (retention + partitions)
+python run_reconciler_worker.py                                          # Reconciler (stuck task_queue → retrying)
 
 # Через Makefile
-make bootstrap        # docker + зависимости + миграции
-make verify           # lint + Telegram smoke + frontend build
+make bootstrap        # docker + зависимости + apply-schema (drop+create v2)
+make verify           # lint + unit + integration тесты
 make test-unit        # только unit-тесты
-make test-telegram    # Telegram smoke-тесты
+make test-integration # integration с реальной БД из docker-compose
 
 # Тесты и линтинг
-pytest tests/ -x                          # полный набор
-pytest tests/unit/test_evaluator.py -x    # один файл
+pytest tests/ -x --timeout=30             # полный набор
+pytest tests/integration -q               # только интеграционные (нужна БД)
 ruff check .                              # линтер
 ruff format .                             # форматирование
-cd frontend && npm run test               # Vitest для frontend
 cd services/browser-agent && npm test     # тесты browser-agent (TypeScript)
 
-# Миграции БД
-alembic revision --autogenerate -m "description"
-alembic upgrade head
+# Схема БД (v2)
+python scripts/backup_secrets.py          # бэкап Vision/TG токенов (encrypted)
+python scripts/apply_v2_schema.py --confirm-drop  # DROP + CREATE с нуля
+python scripts/restore_secrets.py          # вернуть токены
 ```
 
 ## Architecture
 
 **FB Stop Bot** — мониторит Facebook Ads, оценивает стоп-правила, шлёт алерты в Telegram, автоматически отключает объявления, создаёт новые кампании. Real-time часть работает через anti-detect браузер (Vision + Playwright + Node.js gRPC). Marketing API добавляется для latency-tolerant операций (см. `META_INTEGRATION_PLAN.md`).
 
-### Девять воркеров + API + Node.js gRPC
+### Шесть воркеров + Node.js gRPC
 
-**Python воркеры:**
+После v2-миграции (см. `DB_REDESIGN.md`) кодовая база сокращена. Удалены: legacy ORM, observer god-таблицы, FastAPI роутеры, AI assistant tools, creator workers, meta_api worker, digest scheduler, health_watchdog. Восстановим инкрементально по запросу.
 
-1. **observer_worker** (`apps/observer_worker/`) — бесконечный цикл через gRPC к browser-agent: refresh таблицы → scroll → парсинг → оценка 6 стоп-правил → FSM-переход → snapshot upsert → Telegram-алерт. Проверяет `is_scanning_enabled` каждый цикл. Без активных офферов не сканирует. Перечитывает офферы каждые 10 циклов. 5 эскалаторов хрупкости (browser_recovery, self_healing, regression_guard, scan_guard, stale_data_handler). Точка входа: `run_observer.py`.
-2. **disable_worker** (`apps/disable_worker/`) — поллит `DisableTask` (SELECT FOR UPDATE SKIP LOCKED), выполняет Playwright-клик через gRPC к browser-agent, retry с exponential backoff (30s → 5min max). Точка входа: `run_disable_worker.py`.
-3. **enable_worker** (`apps/enable_worker/`) — аналогично disable, но для включения. После успешного `mark_succeeded` сбрасывает `alert_state` в NORMAL минуя state_machine. Точка входа: `run_enable_worker.py`.
-4. **enable_recommendation_worker** (`apps/enable_recommendation_worker/`) — анализирует выключенные объявления, генерирует `EnableRecommendationEvent` через `core/enable_recommendations/service.py`. Точка входа: `run_enable_recommendation_worker.py`.
-5. **creator_worker** (`apps/creator_worker/`) — поллит `PlanRun` (QUEUED) каждые 3 сек, открывает gRPC stream `CreatorService.RunPlan()`, аккумулирует `PlanEvent` в step_log, отправляет статус в Telegram при checkpoint. Точка входа: `run_creator_worker.py`.
-6. **creator_recorder** (`apps/creator_recorder/`) — управляет жизненным циклом записи действий пользователя в браузере через gRPC. CLI-команды: `start <plan_name>`, `stop`, `status`. Сохраняет в JSON.
-7. **telegram_poller** (`apps/telegram_poller/`) — long-polling Telegram Bot API. Команды: `/start`, `/status`, `/ads`, `/offers`, `/rules`, `/disabled`, `/settings`, `/help`, `/set`. Inline-кнопка «Отключить» создаёт `DisableTask`.
-8. **health_watchdog** (`apps/health_watchdog/`) — мониторинг здоровья всех воркеров и инфраструктуры. Точка входа: `run_health_watchdog.py`.
-9. **api** (`apps/api/`) — FastAPI на :8100, lifespan для async-сессий. 17 роутеров: настройки (GET/PUT + PATCH scanning toggle), CRUD офферов, правила, dashboard-статистика (3052 строки — кандидат на разнесение), snapshots, alerts, disable tasks, history, analytics, AI chat, naming tracker, TMA-роутер (отдельная аутентификация через Telegram initData), campaign recorder.
+**Python воркеры (текущие, все на v2 схеме):**
+
+1. **observer_worker** (`apps/observer_worker/`) — бесконечный цикл: gRPC `RunScanCycle` → `ScannedAdRow[]` → process_scan_rows (FSM в `ad_alert_state` + метрики в `ad_metrics` partitioned + outbox в `task_queue`) → dispatch alerts в TG (через `core.telegram.alert_dispatcher`). Heartbeat и runtime status — в Redis (`observer:runtime` с TTL 60s). Pubsub `fb_agent:scan:finished`. Точка входа: `run_observer_worker.py`.
+2. **disable_worker** (`apps/disable_worker/`) — поллит `task_queue` где `task_type='disable'` (FOR UPDATE SKIP LOCKED), вызывает gRPC `toggle_ad(target_state=False)`, retry с exponential backoff (30s → 5min cap, max 5 попыток). Точка входа: `run_disable_worker.py`.
+3. **enable_worker** (`apps/enable_worker/`) — аналогично disable, но `task_type='enable'` и `target_state=True`. Точка входа: `run_enable_worker.py`.
+4. **telegram_poller** (`apps/telegram_poller/`) — long-polling Telegram Bot API. Команды: `/start [code]` (consume invite), `/help`, `/spy <slot> <country>` (Ad Library pipeline). Inline-кнопки `dis:`, `snz:` под алертами → создают `task_queue` запись или ставят `ad_alert_state.snoozed_until`. Точка входа: `run_telegram_poller.py`.
+5. **cleanup_worker** (`apps/cleanup_worker/`) — раз в сутки в 04:00 UTC: DROP старых партиций, DELETE по retention из `system_config.retention_policy`, чистка orphan ad_library media файлов, CREATE next-month партиций. Точка входа: `run_cleanup_worker.py`.
+6. **reconciler_worker** (`apps/reconciler_worker/`) — каждые 30 сек: переводит `task_queue.status='running'` старше 30 минут → `retrying` (защита от крашнутых воркеров), отменяет `draft` старше 24 часов. Точка входа: `run_reconciler_worker.py`.
 
 **Node.js gRPC сервис (`services/browser-agent/`):**
 
@@ -83,39 +78,63 @@ alembic upgrade head
 
 ### Core (`core/`)
 
-- **domain.py** — три enum: `AlertStage` (WARNING/STOP), `AlertState` (NORMAL→WARNING_SENT→STOP_SENT→CLAIMED→DISABLED), `DisableTaskStatus`.
-- **models/** — 30 SQLAlchemy 2.x async ORM-моделей: ObserverSettings/VisionSettings/TelegramSettings (singleton через `singleton_key='default'`), Offer, OfferRuleConfig, OfferRuleStat, FbCampaign, FbAdset, FbAd (нормализованная иерархия), AdSnapshot (upsert), AlertEvent (append-only), AlertSnooze, ScanRun, AdMetricHistory, DisableTask, EnableTask, EnableRecommendationEvent, AdAutoEnableDisabled, CampaignCreatorTask, Plan, PlanRun, TelegramInvite/Recipient/MessageRef, AICache, WorkerHeartbeat, AdDepositCorrection, CabinetDayArchive. Mixins: UUIDPrimaryKey, Timestamp (UTC).
-- **observer/** — `service.py` (`evaluate_row`, `build_rule_context`, `build_metrics_json`), `state_machine.py` (FSM с UUID-токенами и идемпотентностью), `disable_reconciler.py` (создаёт DisableTask на STOP, отменяет «протухшие» auto-tasks), `snapshot_writer.py`, `db_queries.py` (1066 строк — repository + use-case в одном, кандидат на разнесение), 5 эскалаторов хрупкости.
-- **scanner/models.py** — frozen dataclass `ScannedAdRow` — главный контракт между сканером и evaluator'ом. Парсер DOM целиком в TypeScript (`services/browser-agent/src/parser.ts`).
-- **rules/evaluator.py** — 6 стоп-правил с двухуровневой WARNING (80% от порога) / STOP логикой, спецлогика fast-stop (spend > порог при 0 событиях → немедленный STOP), funnel-лесенка, frequency-anomaly. `RuleContext`, `RuleHit`, `RuleEvaluation`.
-- **task_queue/** — `PostgresTaskQueue` (захват через FOR UPDATE SKIP LOCKED) + `BaseTaskWorker` (общий шаблон retry + heartbeat + reconcile-hooks).
-- **disable_tasks.py / enable_tasks.py** — outbox-паттерн для отложенных действий.
-- **campaign_creator/** — фабрика создания кампаний (Vision-based): `CampaignSpec`, `PlanAction`, `PlanBuilder`, `STEP_REGISTRY` с 24 шагами (create_campaign, set_geo, upload_creatives, set_pixel_event, duplicate_adset, ...), `creo_scanner.py` (сканер папки креативов), `spec_builder.py`, `naming.py`.
-- **campaign_recorder/** — запись пользовательских действий в браузере → JSON план.
+- **domain.py** — enum'ы: `AlertStage` (warning/stop), `AlertState` (normal→warning_sent→stop_sent→claimed→disabled).
+- **models/** — 35 SQLAlchemy 2.x ORM-моделей, разнесены по доменам (см. `DB_REDESIGN.md`):
+  - `settings/` — observer_config, vision_config, telegram_config, system_config (singletons)
+  - `catalog/` — offers, offer_rules, offer_rule_stats, fb_campaigns, fb_adsets, fb_ads
+  - `observer/` — ad_alert_state (FSM), ad_metrics (partitioned), alert_events (partitioned), scan_runs (partitioned), cabinet_day_archives, ad_deposit_corrections, ad_auto_enable_disabled
+  - `tasks/` — task_queue (unified outbox), enable_recommendations
+  - `telegram/` — invites, recipients, message_refs
+  - `creator/` — creator_plans
+  - `ad_library/` — scan, ad, snapshot (partitioned), media, tier, report, winner_archive
+  - `meta_api/` — observation, webhook_event (partitioned), audit_log (partitioned)
+  - `trackers/` — postback (partitioned), aggregate
+  - Все mixins (UUIDPrimaryKey, BigIntPrimaryKey, Timestamp, CreatedAtOnly, SingletonMixin) в `core/models/base.py`.
+- **observer/** — `pipeline.py` (process_scan_rows: один scan-цикл), `queries.py` (load_active_offers, match_offer_for_ad с word-boundary regex, load_alert_state), `state_machine.py` (pure FSM: `decide(FsmInput) → FsmTransition`), `writers.py` (upsert catalog + insert_metrics + apply_fsm_transition + maybe_create_disable_task).
+- **scanner/models.py** — frozen dataclass `ScannedAdRow` — главный контракт между TS-сканером и Python-pipeline. Парсер DOM целиком в TypeScript (`services/browser-agent/src/parser.ts`) — это не меняется.
+- **rules/evaluator.py** — 6 стоп-правил с двухуровневой WARNING (80% от порога) / STOP логикой, спецлогика fast-stop, funnel-лесенка, frequency-anomaly. `evaluate_stop_rules(row, ctx) → RuleEvaluation` (warning_hits + stop_hits).
+- **tasks/queue.py** — unified API для `task_queue`: `create_task`, `claim_next_task` (FOR UPDATE SKIP LOCKED), `mark_succeeded`, `requeue_for_retry` (exponential backoff), `reconcile_stuck_running`, `cancel_stale_drafts`. Все 5 типов outbox (`disable`, `enable`, `plan_run`, `meta_api_mutation`, `ad_library_scan`) обслуживаются одной таблицей.
+- **tasks/toggle_executor.py** — общий движок для disable/enable воркеров: `execute_one_toggle_task` + `run_toggle_loop` (claim → toggle → mark, error recovery, gate reconnect).
+- **telegram/** — `client.py` (TG Bot API через httpx, не зависит от ORM), `service.py` (load_telegram_config, find_recipient, consume_invite), `bot_handler.py` (минимальный: /start /help /spy + callback'и под алертами), `renderer.py` (форматирование алертов с inline-кнопками `dis:`/`snz:`), `alert_dispatcher.py` (отправка алертов из alert_events с дедупом через telegram_message_refs), `messaging.py`.
+- **ad_library/** — Ad Library pipeline (см. `DB_REDESIGN.md` §6.7): `scanner.py` (gRPC к browser-agent), `classifier.py` (vertical + relevance к slot), `media.py` (downloader через httpx), `enricher.py` (hook/cta/tone heuristic), `tier_ranker.py` (S/A/B/C), `report.py` (markdown), `pipeline.py` (orchestrator), `spy_handler.py` (parse /spy args).
+- **campaign_recorder/** — запись пользовательских действий в браузере → JSON план (для creator workers, которые сейчас не активны).
 - **creator_bridge/** — мост между Python и TS-bundle на странице (через `add_init_script` + `window.fbAgentEmit`).
 - **creatives/** — `uniquify_creatives` (водяной знак), `folder_opener`.
 - **campaign_scripts/planner.py** — декларативный план для ручного создания кампании.
-- **enable_recommendations/service.py** — генерация рекомендаций на включение.
-- **ai_assistant/** — AI-помощник с tool-use. Anthropic primary (Claude Sonnet 4.6 через `api.claudehub.fun`) + OpenAI fallback (gpt-5.4-mini через `gateway.nekocode.app`). `client.py` управляет fallback, `providers.py` унифицирует формат (`AIResponse`), `tools.py` сейчас содержит 4 операционных tool'а (`supervisor_restart`, `tail_log`, `api_get`, `set_scanning`), `chat.py` — диалоговая сессия, `explain.py` — объяснение алертов с in-memory кэшем.
-- **ads/actions.py** — фасад высокоуровневых операций для UI: `get_ad_detail`, `disable_ad`, `snooze_ad`, `claim_ad`.
-- **telegram/** — `client.py` (Bot API), `renderer.py` (форматирование алертов с inline-кнопками), `bot_handler.py` (маршрутизация команд, пагинация, создание DisableTask), `digest_scheduler.py` (ежедневный дайджест), `delivery.py`.
-- **browser/** — `lock.py` (file-lock эксклюзивности браузер-сессии), `circuit_breaker.py` (AsyncCircuitBreaker для gRPC-вызовов). Реальный Vision-client живёт в Node.js.
-- **fake_deposits.py** — ручные корректировки депозитов через `AdDepositCorrection` (трекер партнёрки не подключен, используется руками).
-- **pubsub.py** — Redis pubsub для WebSocket в API.
-- **alerts/**, **auth/**, **db/** — соответствующие домены.
-- **config.py** — pydantic-settings из .env, синглтон `get_settings()`. API-ключ для аутентификации запросов.
-- **crypto.py** — Fernet-шифрование секретов (Vision token, Telegram bot token).
+- **campaign_creator/** — фабрика создания кампаний (Vision-based, не active в текущем сборке).
+- **ai_assistant/** — pure-Python ассистент: `chat.py`, `client.py`, `providers.py`, `prompts/`. Tools-пакет (drafts/meta) удалён при v2-миграции — восстановим инкрементально.
+- **alerts/** — Redis-очередь алертов + drain worker (опционально).
+- **browser/** — `lock.py` (file-lock эксклюзивности браузер-сессии), `circuit_breaker.py` (AsyncCircuitBreaker для gRPC).
+- **auth/** — TMA initData валидация (для будущего Mini App).
+- **db/** — get_engine + session_factory (используется опционально).
+- **config.py** — pydantic-settings из .env, синглтон `get_settings()`.
+- **crypto.py** — Fernet-шифрование (Vision token, Telegram bot token). `rotate_encryption_key` использует raw SQL по telegram_config/vision_config (не зависит от ORM).
+- **pubsub.py** — Redis pubsub (`fb_agent:scan:finished`, `fb_agent:alert:created`, `fb_agent:task:changed`).
 
-### Будущие модули (см. META_INTEGRATION_PLAN.md)
+### Redis (вместо БД-таблиц)
 
-После старта Этапа 1 интеграции Marketing API в `core/` появятся:
+- `worker:heartbeat:<name>` (TTL 60s) — пишут все воркеры
+- `observer:runtime` (TTL 60s) — JSON со статусом observer
+- `ai:cache:*` (TTL 300-900s) — кэш AI-ответов (когда восстановим AI assistant)
 
-- **meta_api/** — async-клиент Marketing API, mutations через outbox, webhooks, audit, rate-limiter. **Изолирован от observer/scanner.** Не пишет в `AdSnapshot` напрямую — отдельные поля `last_api_observed_at` и `meta_ad_status`.
-- **ad_library/** — scraper Meta Ad Library API + AI-парсинг чужих креативов в библиотеку паттернов.
-- **adset_pro/** (опционально) — интеграция с трекером adset.pro для post-click данных.
-- **ai_assistant/tools/** (пакет) — замена монолитного `tools.py`, ToolRegistry с risk_level (READ_ONLY / DRAFT_REQUIRED / CREATIVE).
+### Что временно отсутствует (восстановим по запросу)
 
-Новые воркеры: `apps/meta_api_worker/`, `apps/webhook_consumer/`, `apps/ad_library_scanner/`.
+После v2-миграции удалены, но могут быть восстановлены инкрементально:
+- **API роутеры** (`apps/api/`) — 17 роутеров FastAPI. Понадобится для фронта.
+- **AI assistant tools** (`core/ai_assistant/tools/drafts/`, `tools/meta/`) — 8 tools для Marketing API drafts.
+- **Creator workers** (`apps/creator_worker/`, `apps/creator_recorder/`) — автоматизация создания кампаний через Vision.
+- **Meta API worker** (`apps/meta_api_worker/`) — execution Marketing API mutations (Этап 2-3 META_INTEGRATION_PLAN).
+- **Health watchdog** (`apps/health_watchdog/`) — мониторинг heartbeats.
+- **Enable recommendation worker** (`apps/enable_recommendation_worker/`) — анализ выключенных ads.
+- **TG digest scheduler** (`core/telegram/digest_*`) — ежедневный отчёт в 9:00.
+- **Backtest** (`scripts/backtest_rules.py`) — пройти историю и оценить false-stop'ы.
+
+### Будущие модули (см. META_INTEGRATION_PLAN.md + DB_REDESIGN.md)
+
+В v2-схеме уже подготовлены таблицы (см. `core/models/`):
+- **meta_api/** — `meta_api_observation` (latency-tolerant snapshot), `meta_api_webhook_event` (partitioned), `meta_api_audit_log` (partitioned). Workers переписать под task_queue → meta_api_mutation.
+- **trackers/** — `tracker_postback` (partitioned, AdsetPro schema), `tracker_aggregate` (per ad_id × country × day). Webhook handler + aggregator не написаны.
+- **ad_library_winner_archive** — топ S-tier ads hold forever (защита от cleanup).
 
 ### Матчинг офферов
 

@@ -56,4 +56,9 @@ services/browser-agent/node_modules/
 
 # Секреты и конфиденциальные данные
 helm/fb-stop-bot/secrets.yaml
+data/secrets_backup_*.json
+
+# Локальные данные (медиа Ad Library, бэкапы)
+data/ad_library_media/
+data/cleanup_audit/
 
