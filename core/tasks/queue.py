@@ -180,10 +180,16 @@ async def mark_succeeded(
     *,
     task_id: int,
     result: dict[str, Any] | None = None,
-) -> None:
-    """Финальный статус: задача выполнена успешно."""
+) -> bool:
+    """Финальный статус: задача выполнена успешно.
+
+    Returns: True если status был 'running' и переведён в 'succeeded'.
+    False — update не применился (status уже не 'running'): обычно это race
+    с другим воркером, который уже закрыл задачу после reconciler-таймаута.
+    Caller обязан залогировать и пропустить любые побочные эффекты.
+    """
     async with engine.begin() as conn:
-        await conn.execute(
+        result_obj = await conn.execute(
             text(
                 """
                 UPDATE task_queue
@@ -192,11 +198,12 @@ async def mark_succeeded(
                     completed_at = NOW(),
                     last_error = NULL,
                     updated_at = NOW()
-                WHERE id = :id
+                WHERE id = :id AND status = 'running'
                 """
             ),
             {"id": int(task_id), "res": json.dumps(result or {})},
         )
+    return (result_obj.rowcount or 0) > 0
 
 
 async def mark_failed(
@@ -204,13 +211,17 @@ async def mark_failed(
     *,
     task_id: int,
     error: str,
-) -> None:
+) -> bool:
     """Финальный статус: задача провалена окончательно (исчерпан max_attempts).
 
     Если attempts < max_attempts — используй requeue_for_retry, не mark_failed.
+
+    Returns: True если status был 'running' и переведён в 'failed'.
+    False — update не применился (status уже не 'running'): race с воркером,
+    который успел закрыть задачу. Caller должен залогировать.
     """
     async with engine.begin() as conn:
-        await conn.execute(
+        result = await conn.execute(
             text(
                 """
                 UPDATE task_queue
@@ -218,11 +229,12 @@ async def mark_failed(
                     last_error = :err,
                     completed_at = NOW(),
                     updated_at = NOW()
-                WHERE id = :id
+                WHERE id = :id AND status = 'running'
                 """
             ),
             {"id": int(task_id), "err": error[:8000]},
         )
+    return (result.rowcount or 0) > 0
 
 
 async def requeue_for_retry(
@@ -235,16 +247,26 @@ async def requeue_for_retry(
 ) -> bool:
     """Решает: ещё retry или окончательный failed?
 
-    Returns: True если retry поставлен (status='retrying'), False если failed.
+    Returns: True если retry поставлен (status='retrying').
+    False — либо final failed (mark_failed), либо update не применился
+    из-за race с другим воркером, который уже завершил задачу.
+    Caller'у достаточно различать «retry vs не-retry», тонкая разница
+    «final fail vs noop» уже отражена в БД (status='succeeded' остался).
     """
     new_attempt = attempt_count + 1
     if new_attempt >= max_attempts:
-        await mark_failed(engine, task_id=task_id, error=error)
+        applied = await mark_failed(engine, task_id=task_id, error=error)
+        if not applied:
+            logger.warning(
+                "requeue_for_retry: task_id=%s mark_failed не применился "
+                "(status != running) — гонка с другим воркером, пропускаю",
+                task_id,
+            )
         return False
 
     next_at = _calc_next_retry(new_attempt)
     async with engine.begin() as conn:
-        await conn.execute(
+        result = await conn.execute(
             text(
                 """
                 UPDATE task_queue
@@ -253,7 +275,7 @@ async def requeue_for_retry(
                     next_retry_at = :nrr,
                     last_error = :err,
                     updated_at = NOW()
-                WHERE id = :id
+                WHERE id = :id AND status = 'running'
                 """
             ),
             {
@@ -263,7 +285,14 @@ async def requeue_for_retry(
                 "err": error[:8000],
             },
         )
-    return True
+        applied = (result.rowcount or 0) > 0
+    if not applied:
+        logger.warning(
+            "requeue_for_retry: task_id=%s переход в retrying не применился "
+            "(status != running) — гонка с другим воркером, пропускаю",
+            task_id,
+        )
+    return applied
 
 
 # ====================== reconcile (вызывается reconciler_worker'ом) ======================
@@ -276,7 +305,12 @@ async def reconcile_stuck_running(
 ) -> int:
     """Задачи зависшие в 'running' (worker крашнулся, не успел отметить) → retrying.
 
+    Делает один bump attempt_count (worker крашнулся ДО вызова requeue_for_retry,
+    так что инкремент попыток нужно сделать здесь — иначе бесконечный retry).
+
     Используется reconciler_worker'ом. Возвращает число восстановленных строк.
+    Не должно быть продублировано в reconciler_worker — иначе attempt_count
+    бампается дважды и max_attempts исчерпывается за вдвое меньше попыток.
     """
     async with engine.begin() as conn:
         result = await conn.execute(
@@ -284,6 +318,7 @@ async def reconcile_stuck_running(
                 """
                 UPDATE task_queue
                 SET status = 'retrying',
+                    attempt_count = attempt_count + 1,
                     next_retry_at = NOW(),
                     last_error = COALESCE(last_error, '') || ' [stuck timeout reconciled]',
                     updated_at = NOW()
