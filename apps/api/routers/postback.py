@@ -2,7 +2,7 @@
 """Inbound postback от AdSet.pro (см. META_INTEGRATION_PLAN.md §4.4 / Этап 6).
 
 Endpoint:
-- POST /api/v1/postback/adsetpro — принимает событие конверсии (FTD, hold, и т.п.)
+- POST /api/v1/postback/adsetpro — принимает событие конверсии (FTD, hold, ...).
 
 Аутентификация: header X-Postback-Secret.
 - Если settings.adsetpro_postback_secret пуст в env → 503 "not configured".
@@ -10,9 +10,9 @@ Endpoint:
   постбэки.
 - Если header не совпадает → 401.
 
-TODO(stage-6): после применения Волны 3 миграций (adsetpro_postback_events) —
-заменить логирование на INSERT в БД с дедупом по click_id (либо body hash,
-если click_id пустой). См. META_INTEGRATION_PLAN.md §5 Волна 3.
+После Волны 3 миграций (adsetpro_postback_events) endpoint INSERT'ит событие в БД
+через core.adset_pro.ingest.ingest_postback с дедупом по (click_id, event_type)
+внутри окна 24 часов.
 """
 
 from __future__ import annotations
@@ -24,9 +24,11 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncEngine
 
-from apps.api.deps import get_settings
+from apps.api.deps import get_engine, get_settings
 from core.adset_pro import PostbackEvent
+from core.adset_pro.ingest import ingest_postback
 from core.config import Settings
 
 logger = logging.getLogger(__name__)
@@ -37,9 +39,9 @@ router = APIRouter(prefix="/api/v1/postback", tags=["postback"])
 class AdsetProPostbackBody(BaseModel):
     """Pydantic-обёртка над PostbackEvent для FastAPI body validation.
 
-    PostbackEvent — frozen dataclass, FastAPI его не валидирует напрямую,
-    поэтому держим pydantic-модель отдельно. Все «лишние» поля попадут в raw
-    через model_dump(), чтобы ничего не потерять.
+    PostbackEvent — frozen dataclass, FastAPI его не валидирует напрямую, поэтому
+    держим pydantic-модель отдельно. Все «лишние» поля попадут в raw через
+    model_dump(), чтобы ничего не потерять.
     """
 
     click_id: str = Field(..., min_length=1)
@@ -60,12 +62,9 @@ async def receive_adsetpro_postback(
     body: AdsetProPostbackBody,
     x_postback_secret: str | None = Header(default=None, alias="X-Postback-Secret"),
     settings: Settings = Depends(get_settings),
+    engine: AsyncEngine = Depends(get_engine),
 ) -> dict[str, Any]:
-    """Принять postback. Возвращает 202 (логируется без записи в БД на этом этапе).
-
-    TODO(stage-6): записать событие в adsetpro_postback_events после применения
-    Волны 3 миграций. Идемпотентность — по click_id или по hash тела.
-    """
+    """Принять postback, записать в БД с дедупом. 202 ACCEPTED + меткой результата."""
     expected_secret = settings.adsetpro_postback_secret
     if not expected_secret:
         # Намеренно 503: пока секрет не задан, endpoint считается не настроенным —
@@ -81,7 +80,7 @@ async def receive_adsetpro_postback(
             detail="invalid postback secret",
         )
 
-    # Собираем PostbackEvent — это контракт core.adset_pro.schemas.
+    # Собираем PostbackEvent — контракт core.adset_pro.schemas.
     raw_payload = body.model_dump()
     event = PostbackEvent(
         click_id=body.click_id,
@@ -93,14 +92,23 @@ async def receive_adsetpro_postback(
         raw=raw_payload,
     )
 
-    # TODO(stage-6): INSERT в adsetpro_postback_events + дедуп по click_id.
+    result = await ingest_postback(engine, event, signature_valid=True)
+
     logger.info(
-        "adsetpro postback received: click_id=%s fb_ad_id=%s event_type=%s revenue=%s %s",
+        "adsetpro postback ingest: click_id=%s event_type=%s inserted=%s "
+        "is_duplicate=%s fb_ad_fk=%s event_id=%s",
         event.click_id,
-        event.fb_ad_id,
         event.event_type,
-        event.revenue,
-        event.currency,
+        result.inserted,
+        result.is_duplicate,
+        result.fb_ad_fk,
+        result.event_id,
     )
 
-    return {"received": True, "click_id": event.click_id}
+    return {
+        "received": True,
+        "click_id": event.click_id,
+        "inserted": result.inserted,
+        "is_duplicate": result.is_duplicate,
+        "event_id": result.event_id,
+    }

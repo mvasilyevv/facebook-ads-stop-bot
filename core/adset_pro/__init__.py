@@ -18,6 +18,7 @@ from core.adset_pro.errors import (
     RateLimitedError,
     TemporaryError,
 )
+from core.adset_pro.ingest import IngestResult, ingest_postback
 from core.adset_pro.schemas import (
     ConversionRow,
     PostbackEvent,
@@ -30,6 +31,7 @@ __all__ = [
     "AdsetProError",
     "AuthError",
     "ConversionRow",
+    "IngestResult",
     "NotFoundError",
     "PermanentError",
     "PostbackEvent",
@@ -37,4 +39,5 @@ __all__ = [
     "StatsQueryRequest",
     "StatsQueryResponse",
     "TemporaryError",
+    "ingest_postback",
 ]

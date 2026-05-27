@@ -4,14 +4,20 @@
 Тесты используют sync TestClient. Секрет переопределяется через
 `app.dependency_overrides[get_settings]` — это локально для каждого app
 и не трогает глобальный синглтон Settings.
+
+После Волны 3 endpoint делает реальный INSERT через ingest_postback. В sync-тестах
+заменяем core.adset_pro.ingest.ingest_postback на стаб, чтобы не зависеть от БД
+(integration с БД — отдельные тесты в test_adset_pro_ingest.py).
 """
 
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 
 from apps.api.deps import get_settings
 from apps.api.main import create_app
+from core.adset_pro.ingest import IngestResult
 from core.config import Settings
 
 _VALID_BODY = {
@@ -29,6 +35,26 @@ def _make_app_with_secret(secret: str) -> object:
     settings_override = Settings(adsetpro_postback_secret=secret)
     app.dependency_overrides[get_settings] = lambda: settings_override
     return app
+
+
+@pytest.fixture(autouse=True)
+def _stub_ingest(monkeypatch):
+    """Подменяем ingest_postback на стаб — sync TestClient не работает с реальным БД-engine.
+
+    Возвращаем фиктивный IngestResult с event_id=1, чтобы роутер вернул осмысленный
+    202-ответ. Реальный ingest проверяется в test_adset_pro_ingest.py.
+    """
+
+    async def _fake_ingest(_engine, _event, *, signature_valid=True):
+        return IngestResult(
+            inserted=True,
+            is_duplicate=False,
+            event_id=1,
+            fb_ad_fk=None,
+        )
+
+    monkeypatch.setattr("apps.api.routers.postback.ingest_postback", _fake_ingest)
+    yield
 
 
 # Если секрет в env пустой — endpoint считается не настроенным, возвращает 503.
