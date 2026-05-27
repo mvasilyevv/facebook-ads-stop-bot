@@ -30,6 +30,7 @@ from fastapi.responses import JSONResponse
 from redis.asyncio import from_url as redis_from_url  # type: ignore[import-not-found]
 
 from apps.api.metrics import REQUEST_DURATION, REQUESTS_TOTAL
+from apps.api.middleware.body_size import BodySizeLimitMiddleware
 from apps.api.middleware.request_id import RequestIdMiddleware
 from apps.api.routers import health as health_router
 from apps.api.routers import postback as postback_router
@@ -110,7 +111,14 @@ def create_app() -> FastAPI:
     )
 
     # CORS — только если фронт сконфигурирован (в проде/dev).
+    # Wildcard "*" + allow_credentials=True = мгновенный CSRF (см. security audit HIGH #12).
+    # Падаем на старте: лучше отказ деплоя, чем тихо открытый origin.
     if settings.frontend_origin:
+        if "*" in settings.frontend_origin:
+            raise RuntimeError(
+                "CORS wildcard with credentials=True is forbidden "
+                "(frontend_origin must be explicit, например http://localhost:5173)"
+            )
         app.add_middleware(
             CORSMiddleware,
             allow_origins=[settings.frontend_origin],
@@ -120,6 +128,7 @@ def create_app() -> FastAPI:
         )
 
     app.add_middleware(RequestIdMiddleware)
+    app.add_middleware(BodySizeLimitMiddleware)
 
     # Метрики — middleware ставится через декоратор, поэтому ниже add_middleware.
     @app.middleware("http")
