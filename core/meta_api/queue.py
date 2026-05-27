@@ -78,8 +78,13 @@ async def create_mutation_task(
     status: str = "pending",
     idempotency_key: str | None = None,
     max_attempts: int = 5,
+    created_by_chat_id: int | None = None,
 ) -> int | None:
-    """Создать meta_api_mutation задачу. None если дубликат по idempotency_key."""
+    """Создать meta_api_mutation задачу. None если дубликат по idempotency_key.
+
+    created_by_chat_id заполняется только для draft'ов, инициированных через TG
+    (см. approve_draft_task — проверяет совпадение). Для MCP/HTTP — None.
+    """
     if status not in ("draft", "pending"):
         raise ValueError(f"create_mutation_task: status='{status}' не поддерживается")
     key = idempotency_key or default_idempotency_key(payload, requested_by=requested_by)
@@ -91,6 +96,7 @@ async def create_mutation_task(
         requested_by=requested_by,
         status=status,
         max_attempts=max_attempts,
+        created_by_chat_id=created_by_chat_id,
     )
 
 
@@ -100,10 +106,13 @@ async def create_draft_task(
     payload: MetaMutationPayload,
     requested_by: str,
     max_attempts: int = 3,
+    created_by_chat_id: int | None = None,
 ) -> int | None:
     """Создать DRAFT-задачу (для AI tools).
 
     Каждый draft уникален: idempotency_key содержит timestamp salt.
+    created_by_chat_id — TG chat_id инициатора (для owner ACL). Если AI работает
+    через MCP — оставляем None, тогда approve через TG будет требовать админ-роль.
     """
     salt = datetime.now(timezone.utc).isoformat()
     key = default_idempotency_key(payload, requested_by=requested_by, salt=salt)
@@ -114,6 +123,7 @@ async def create_draft_task(
         status="draft",
         idempotency_key=key,
         max_attempts=max_attempts,
+        created_by_chat_id=created_by_chat_id,
     )
 
 
@@ -125,24 +135,115 @@ async def approve_draft_task(
     *,
     task_id: int,
     approved_by: str,
+    approver_chat_id: int | None = None,
+    admin_override: bool = False,
 ) -> bool:
-    """DRAFT → PENDING. Возвращает True если переход состоялся."""
-    async with engine.begin() as conn:
-        result = await conn.execute(
-            text(
-                """
-                UPDATE task_queue
-                SET status = 'pending',
-                    requested_by = :rb,
-                    updated_at = NOW()
-                WHERE id = :id
-                  AND task_type = :tt
-                  AND status = 'draft'
-                """
-            ),
-            {"id": int(task_id), "rb": approved_by[:64], "tt": _TASK_TYPE},
+    """DRAFT → PENDING с owner ACL. Возвращает True если переход состоялся.
+
+    Логика ACL:
+    - Если у задачи есть created_by_chat_id, approver_chat_id обязан совпасть.
+      Несовпадение → False (status остаётся 'draft'), warning в лог.
+    - Если created_by_chat_id IS NULL (draft создан через MCP/HTTP без TG):
+        * admin_override=True → разрешаем (caller подтвердил, что approver — owner).
+        * Иначе → False (нельзя approve безхозный draft из TG, нужен MCP-клиент).
+
+    approver_chat_id обязателен для approve через TG; в тестах допустим None
+    только вместе с admin_override=True.
+    """
+    if approver_chat_id is None and not admin_override:
+        logger.warning(
+            "approve_draft_task: попытка approve task_id=%s без chat_id и без admin_override",
+            task_id,
         )
-    return (result.rowcount or 0) > 0
+        return False
+
+    async with engine.begin() as conn:
+        if admin_override and approver_chat_id is None:
+            # MCP-draft (created_by_chat_id IS NULL) + админ — единственный путь.
+            result = await conn.execute(
+                text(
+                    """
+                    UPDATE task_queue
+                    SET status = 'pending',
+                        requested_by = :rb,
+                        updated_at = NOW()
+                    WHERE id = :id
+                      AND task_type = :tt
+                      AND status = 'draft'
+                      AND created_by_chat_id IS NULL
+                    """
+                ),
+                {"id": int(task_id), "rb": approved_by[:64], "tt": _TASK_TYPE},
+            )
+        elif admin_override:
+            # Админ может подтвердить любой draft (свой или чужой) — но строго админ.
+            result = await conn.execute(
+                text(
+                    """
+                    UPDATE task_queue
+                    SET status = 'pending',
+                        requested_by = :rb,
+                        updated_at = NOW()
+                    WHERE id = :id
+                      AND task_type = :tt
+                      AND status = 'draft'
+                    """
+                ),
+                {"id": int(task_id), "rb": approved_by[:64], "tt": _TASK_TYPE},
+            )
+        else:
+            # Обычный путь: совпадение chat_id обязательно.
+            result = await conn.execute(
+                text(
+                    """
+                    UPDATE task_queue
+                    SET status = 'pending',
+                        requested_by = :rb,
+                        updated_at = NOW()
+                    WHERE id = :id
+                      AND task_type = :tt
+                      AND status = 'draft'
+                      AND created_by_chat_id = :ccid
+                    """
+                ),
+                {
+                    "id": int(task_id),
+                    "rb": approved_by[:64],
+                    "tt": _TASK_TYPE,
+                    "ccid": int(approver_chat_id),
+                },
+            )
+
+    changed = (result.rowcount or 0) > 0
+    if not changed:
+        logger.warning(
+            "approve_draft_task: отказ — task_id=%s, approver_chat_id=%s, admin_override=%s "
+            "(чужой draft, уже не draft или missing created_by_chat_id)",
+            task_id,
+            approver_chat_id,
+            admin_override,
+        )
+    return changed
+
+
+async def is_admin_recipient(engine: AsyncEngine, *, chat_id: int) -> bool:
+    """Возвращает True если chat_id — активный recipient с role='owner'."""
+    async with engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text(
+                    """
+                    SELECT 1 FROM telegram_recipients
+                    WHERE chat_id = :cid
+                      AND role = 'owner'
+                      AND revoked_at IS NULL
+                    LIMIT 1
+                    """
+                ),
+                {"cid": int(chat_id)},
+            )
+        ).first()
+    return row is not None
 
 
 async def cancel_task(

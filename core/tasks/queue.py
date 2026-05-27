@@ -97,10 +97,13 @@ async def create_task(
     requested_by: str,
     status: str = "pending",
     max_attempts: int = 5,
+    created_by_chat_id: int | None = None,
 ) -> int | None:
     """INSERT new task. Idempotent: если idempotency_key уже есть — None.
 
     status='draft' для AI-предложений; 'pending' для немедленного исполнения.
+    created_by_chat_id — TG chat_id инициатора (нужен для owner ACL у DRAFT-задач).
+    Для задач, созданных через MCP/HTTP без TG-контекста, передаём None.
     """
     if task_type not in TASK_TYPES:
         raise ValueError(f"Unknown task_type: {task_type}")
@@ -113,9 +116,9 @@ async def create_task(
                 """
                 INSERT INTO task_queue
                     (task_type, status, idempotency_key, payload,
-                     attempt_count, max_attempts, requested_by)
+                     attempt_count, max_attempts, requested_by, created_by_chat_id)
                 VALUES
-                    (:tt, :st, :ik, CAST(:pl AS JSONB), 0, :ma, :rb)
+                    (:tt, :st, :ik, CAST(:pl AS JSONB), 0, :ma, :rb, :ccid)
                 ON CONFLICT (idempotency_key) DO NOTHING
                 RETURNING id
                 """
@@ -127,6 +130,7 @@ async def create_task(
                 "pl": json.dumps(payload),
                 "ma": int(max_attempts),
                 "rb": requested_by,
+                "ccid": int(created_by_chat_id) if created_by_chat_id is not None else None,
             },
         )
         row = result.first()

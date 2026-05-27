@@ -16,6 +16,7 @@ import logging
 import re
 from typing import TYPE_CHECKING, Any
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from core.ai_assistant.chat import (
@@ -24,7 +25,7 @@ from core.ai_assistant.chat import (
     ChatSession,
 )
 from core.ai_assistant.client import AIUnavailableError
-from core.meta_api.queue import approve_draft_task, cancel_task
+from core.meta_api.queue import approve_draft_task, cancel_task, is_admin_recipient
 from core.telegram.client import TelegramBotClient
 from core.telegram.handlers._send import send_text
 
@@ -100,6 +101,7 @@ async def _handle_ask_background(
             [ChatMessage(role="user", content=question)],
             client_key=client_key,
             requested_by=requested_by,
+            created_by_chat_id=chat_id,
         )
     except ChatRateLimitedError as exc:
         await send_text(client, chat_id=chat_id, text=f"⏱ {exc}", message_thread_id=thread_id)
@@ -212,9 +214,43 @@ async def handle_draft_callback(
     approver = f"tg:{username}" if username else f"tg:{chat_id}"
     try:
         if action == "dr_ok":
-            ok = await approve_draft_task(engine, task_id=task_id, approved_by=approver)
-            ack = "Подтверждено, попадает в очередь" if ok else "Уже не draft"
-            footer = "✅ Подтверждено" if ok else "ℹ️ Уже обработано"
+            # Owner ACL: пробуем сначала approve как owner (по совпадению chat_id).
+            # Если в БД не нашлось — отделяем «уже не draft» от «чужой» через SELECT
+            # status/created_by_chat_id, а админ-override применяем как fallback.
+            ok = await approve_draft_task(
+                engine,
+                task_id=task_id,
+                approved_by=approver,
+                approver_chat_id=chat_id,
+            )
+            if not ok:
+                row = await _fetch_task_acl_state(engine, task_id=task_id)
+                if row is None:
+                    ack = "Черновик не найден"
+                    footer = "ℹ️ Уже удалён"
+                elif row["status"] != "draft":
+                    ack = "Уже не draft"
+                    footer = "ℹ️ Уже обработано"
+                elif await is_admin_recipient(engine, chat_id=chat_id):
+                    ok = await approve_draft_task(
+                        engine,
+                        task_id=task_id,
+                        approved_by=approver,
+                        admin_override=True,
+                    )
+                    ack = "Подтверждено админом" if ok else "Уже не draft"
+                    footer = "✅ Подтверждено (admin)" if ok else "ℹ️ Уже обработано"
+                else:
+                    logger.warning(
+                        "draft approve отказан: task_id=%s, chat_id=%s — чужой draft",
+                        task_id,
+                        chat_id,
+                    )
+                    ack = "Этот черновик принадлежит другому пользователю"
+                    footer = "🔒 Чужой черновик"
+            else:
+                ack = "Подтверждено, попадает в очередь"
+                footer = "✅ Подтверждено"
         else:  # dr_cancel
             ok = await cancel_task(
                 engine,
@@ -245,6 +281,33 @@ async def handle_draft_callback(
             )
         except Exception:
             logger.debug("edit_message under draft callback failed (некритично)")
+
+
+async def _fetch_task_acl_state(
+    engine: AsyncEngine,
+    *,
+    task_id: int,
+) -> dict | None:
+    """SELECT (status, created_by_chat_id) у task_queue.id — для разбора отказа approve.
+
+    Возвращает None если запись не найдена.
+    """
+    async with engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text(
+                    """
+                    SELECT status, created_by_chat_id
+                    FROM task_queue
+                    WHERE id = :id AND task_type = 'meta_api_mutation'
+                    """
+                ),
+                {"id": int(task_id)},
+            )
+        ).first()
+    if row is None:
+        return None
+    return {"status": str(row[0]), "created_by_chat_id": row[1]}
 
 
 __all__ = [

@@ -68,6 +68,9 @@ class ToolContext:
     requested_by: str = ""
     """Кто инициировал — для записи в task_queue.requested_by. Если пусто — берётся client_key."""
 
+    created_by_chat_id: int | None = None
+    """TG chat_id инициатора (для owner ACL над DRAFT). None если вызвано через MCP/HTTP."""
+
     def require_engine(self) -> AsyncEngine:
         """Вернуть engine или поднять ToolError."""
         if self.engine is None:

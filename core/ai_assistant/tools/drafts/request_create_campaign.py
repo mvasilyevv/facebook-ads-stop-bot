@@ -134,6 +134,7 @@ class RequestCreateCampaignTool:
             engine,
             payload=payload,
             requested_by=ctx.effective_requested_by(),
+            created_by_chat_id=ctx.created_by_chat_id,
         )
         if task_id is None:
             raise ToolError("Не удалось создать DRAFT (коллизия idempotency_key?)")
