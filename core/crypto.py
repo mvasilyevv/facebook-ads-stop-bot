@@ -133,7 +133,9 @@ async def rotate_encryption_key(old_key: str, new_key: str) -> int:
     """Перешифровывает все зашифрованные поля в БД при смене ключа.
 
     Сохраняет старый ключ в .encryption_key.old перед ротацией.
-    Затронутые поля: TelegramSettings.bot_token_encrypted, VisionSettings.x_token_encrypted.
+    Затронутые поля: telegram_config.bot_token_encrypted, vision_config.x_token_encrypted.
+    Использует raw SQL через AsyncEngine — без ORM-моделей, чтобы не зависеть от
+    конкретной версии схемы.
 
     Args:
         old_key: текущий Fernet-ключ (base64).
@@ -159,49 +161,71 @@ async def rotate_encryption_key(old_key: str, new_key: str) -> int:
     except OSError as exc:
         logger.warning("Не удалось сохранить старый ключ в %s: %s", old_backup, exc)
 
-    from sqlalchemy import select
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import create_async_engine
 
-    from core.db import get_session_factory  # type: ignore[attr-defined]
-    from core.models import TelegramSettings, VisionSettings
+    from core.config import get_settings
+
+    db_url = get_settings().database_url
+    engine = create_async_engine(db_url, echo=False)
 
     fernet_old = Fernet(old_key.encode() if isinstance(old_key, str) else old_key)
     fernet_new = Fernet(new_key.encode() if isinstance(new_key, str) else new_key)
     rotated = 0
 
-    async with get_session_factory()() as session:
-        # Перешифровываем bot_token_encrypted в TelegramSettings
-        result = await session.execute(select(TelegramSettings))
-        for row in result.scalars().all():
-            if row.bot_token_encrypted:
+    try:
+        async with engine.begin() as conn:
+            # telegram_config.bot_token_encrypted
+            rows = (
+                await conn.execute(text("SELECT id, bot_token_encrypted FROM telegram_config"))
+            ).all()
+            for row_id, encrypted in rows:
+                if not encrypted:
+                    continue
                 try:
-                    plaintext = fernet_old.decrypt(row.bot_token_encrypted.encode()).decode()
-                    row.bot_token_encrypted = fernet_new.encrypt(plaintext.encode()).decode()
+                    plaintext = fernet_old.decrypt(encrypted.encode()).decode()
+                    new_blob = fernet_new.encrypt(plaintext.encode()).decode()
+                    await conn.execute(
+                        text(
+                            "UPDATE telegram_config SET bot_token_encrypted = :b, "
+                            "updated_at = NOW() WHERE id = :i"
+                        ),
+                        {"b": new_blob, "i": row_id},
+                    )
                     rotated += 1
-                    logger.info("TelegramSettings[%s]: bot_token_encrypted перешифрован", row.id)
+                    logger.info("telegram_config[%s]: bot_token_encrypted перешифрован", row_id)
                 except InvalidToken:
                     logger.error(
-                        "TelegramSettings[%s]: не удалось расшифровать bot_token_encrypted "
-                        "старым ключом — запись пропущена",
-                        row.id,
+                        "telegram_config[%s]: не расшифровать старым ключом — пропуск",
+                        row_id,
                     )
 
-        # Перешифровываем x_token_encrypted в VisionSettings
-        result = await session.execute(select(VisionSettings))
-        for row in result.scalars().all():
-            if row.x_token_encrypted:
+            # vision_config.x_token_encrypted
+            rows = (
+                await conn.execute(text("SELECT id, x_token_encrypted FROM vision_config"))
+            ).all()
+            for row_id, encrypted in rows:
+                if not encrypted:
+                    continue
                 try:
-                    plaintext = fernet_old.decrypt(row.x_token_encrypted.encode()).decode()
-                    row.x_token_encrypted = fernet_new.encrypt(plaintext.encode()).decode()
+                    plaintext = fernet_old.decrypt(encrypted.encode()).decode()
+                    new_blob = fernet_new.encrypt(plaintext.encode()).decode()
+                    await conn.execute(
+                        text(
+                            "UPDATE vision_config SET x_token_encrypted = :b, "
+                            "updated_at = NOW() WHERE id = :i"
+                        ),
+                        {"b": new_blob, "i": row_id},
+                    )
                     rotated += 1
-                    logger.info("VisionSettings[%s]: x_token_encrypted перешифрован", row.id)
+                    logger.info("vision_config[%s]: x_token_encrypted перешифрован", row_id)
                 except InvalidToken:
                     logger.error(
-                        "VisionSettings[%s]: не удалось расшифровать x_token_encrypted "
-                        "старым ключом — запись пропущена",
-                        row.id,
+                        "vision_config[%s]: не расшифровать старым ключом — пропуск",
+                        row_id,
                     )
-
-        await session.commit()
+    finally:
+        await engine.dispose()
 
     logger.info("Ротация ключа завершена: перешифровано %d записей", rotated)
     return rotated
