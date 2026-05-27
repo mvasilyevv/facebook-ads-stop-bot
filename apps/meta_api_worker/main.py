@@ -133,17 +133,29 @@ async def process_one_task(
         payload = MetaMutationPayload.from_dict(task.payload)
     except (KeyError, ValueError) as exc:
         logger.error("Невалидный payload в task id=%s: %s", task.id, exc)
-        await mark_task_failed(engine, task_id=task.id, error=f"invalid payload: {exc}")
+        applied = await mark_task_failed(engine, task_id=task.id, error=f"invalid payload: {exc}")
+        if not applied:
+            logger.warning(
+                "meta_api: task id=%s mark_failed (invalid payload) не применился "
+                "— гонка с другим воркером",
+                task.id,
+            )
         return
 
     if client is None:
         # Защитная ветка для случая когда клиент не подан (старые тесты).
         # В production main_loop всегда передаёт клиент.
-        await mark_task_failed(
+        applied = await mark_task_failed(
             engine,
             task_id=task.id,
             error="MetaApiClient не доступен в worker (Vision-сессия?)",
         )
+        if not applied:
+            logger.warning(
+                "meta_api: task id=%s mark_failed (no client) не применился "
+                "— гонка с другим воркером",
+                task.id,
+            )
         return
 
     logger.info(
@@ -155,21 +167,35 @@ async def process_one_task(
 
     try:
         result = await execute_mutation(payload, client=client)
-        await mark_task_succeeded(engine, task_id=task.id, result=result)
+        applied = await mark_task_succeeded(engine, task_id=task.id, result=result)
+        if not applied:
+            # Race: другой воркер уже закрыл задачу после reconciler-таймаута.
+            # Mutation в Meta мы уже исполнили — повторно не делаем (return).
+            logger.warning(
+                "meta_api: task id=%s mark_succeeded не применился "
+                "(status != running) — гонка с другим воркером, пропускаю",
+                task.id,
+            )
+            return
         logger.info("meta_api: task id=%s succeeded", task.id)
         return
     except _PERMANENT_EXCEPTIONS as exc:
-        await mark_task_failed(engine, task_id=task.id, error=repr(exc))
-        logger.warning("meta_api: task id=%s → permanent fail: %s", task.id, exc)
+        applied = await mark_task_failed(engine, task_id=task.id, error=repr(exc))
+        if not applied:
+            logger.warning(
+                "meta_api: task id=%s mark_failed не применился "
+                "(status != running) — гонка с другим воркером, пропускаю",
+                task.id,
+            )
+        else:
+            logger.warning("meta_api: task id=%s → permanent fail: %s", task.id, exc)
         return
     except _TEMPORARY_EXCEPTIONS as exc:
         retried = await requeue_task(engine, task=task, error=repr(exc))
         if retried:
             logger.warning("meta_api: task id=%s → retrying (temporary): %s", task.id, exc)
         else:
-            logger.error(
-                "meta_api: task id=%s → exhausted retries (temporary): %s", task.id, exc
-            )
+            logger.error("meta_api: task id=%s → exhausted retries (temporary): %s", task.id, exc)
         return
     except Exception as exc:  # noqa: BLE001 — защитная сетка на неклассифицированное
         retried = await requeue_task(engine, task=task, error=repr(exc))

@@ -188,8 +188,9 @@ async def mark_task_succeeded(
     *,
     task_id: int,
     result: dict[str, Any] | None = None,
-) -> None:
-    await mark_succeeded(engine, task_id=task_id, result=result)
+) -> bool:
+    """Прокси к core.tasks.queue.mark_succeeded. См. там про bool-семантику."""
+    return await mark_succeeded(engine, task_id=task_id, result=result)
 
 
 async def mark_task_failed(
@@ -197,8 +198,9 @@ async def mark_task_failed(
     *,
     task_id: int,
     error: str,
-) -> None:
-    await mark_failed(engine, task_id=task_id, error=error)
+) -> bool:
+    """Прокси к core.tasks.queue.mark_failed. См. там про bool-семантику."""
+    return await mark_failed(engine, task_id=task_id, error=error)
 
 
 async def requeue_task(

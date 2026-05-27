@@ -101,7 +101,7 @@ async def execute_one_toggle_task(
         )
         return "retrying" if ok else "failed"
 
-    await mark_succeeded(
+    applied = await mark_succeeded(
         engine,
         task_id=task.id,
         result={
@@ -109,6 +109,19 @@ async def execute_one_toggle_task(
             "final_state": result.get("final_state"),
         },
     )
+
+    if not applied:
+        # Race: другой воркер (после reconciler-таймаута) уже завершил задачу.
+        # Side-effect toggle_ad на browser-agent мы уже сделали (что не идеально),
+        # но FSM-sync пропускаем — победитель его сделал.
+        logger.warning(
+            "[%s] task_id=%s ad=%s: mark_succeeded не применился "
+            "(status != running) — гонка с другим воркером, пропускаю FSM-sync",
+            task_type,
+            task.id,
+            fb_ad_id,
+        )
+        return "succeeded"
 
     # FSM-синхронизация: финальное состояние ad_alert_state должно соответствовать
     # реально применённому действию. Идемпотентно — если уже в нужном state, no-op.

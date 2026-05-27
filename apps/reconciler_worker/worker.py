@@ -2,18 +2,29 @@
 """Логика одного прогона reconciler-воркера.
 
 Что делает:
-1. Переводит task_queue.status='running' AND updated_at < now() - 30min → retrying.
-2. Auto-cancel черновики старше 24h (это страховка от cleanup_worker — он работает раз в сутки).
+1. Переводит task_queue.status='running' AND updated_at < now() - 30min → retrying
+   (с инкрементом attempt_count: worker крашнулся ДО вызова requeue_for_retry,
+   так что инкремент попыток делается внутри reconcile_stuck_running канона).
+2. Auto-cancel черновики старше 24h (страховка от cleanup_worker — он раз в сутки).
+
+Реальная SQL-логика живёт в `core.tasks.queue` — здесь только параметры из env и
+orchestration. Раньше эти функции дублировались тут, в результате attempt_count
+бампался дважды (worker.py +1 и потом requeue_for_retry +1 после нового claim).
 """
 
 from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
+
+from core.tasks.queue import (
+    cancel_stale_drafts as _canonical_cancel_stale_drafts,
+)
+from core.tasks.queue import (
+    reconcile_stuck_running as _canonical_reconcile_stuck_running,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -21,52 +32,22 @@ _STUCK_TIMEOUT_MIN = int(os.environ.get("RECONCILER_STUCK_TIMEOUT_MIN", "30"))
 _DRAFT_TIMEOUT_HOURS = int(os.environ.get("RECONCILER_DRAFT_TIMEOUT_HOURS", "24"))
 
 
-async def reconcile_stuck_running(engine: AsyncEngine, *, now: datetime | None = None) -> int:
-    """Переводит зависшие 'running' в 'retrying'.
+async def reconcile_stuck_running(engine: AsyncEngine) -> int:
+    """Обёртка вокруг core.tasks.queue.reconcile_stuck_running с env-таймаутом.
 
-    Returns: количество задач переведено.
+    Returns: количество переведённых задач.
     """
-    now = now or datetime.now(timezone.utc)
-    cutoff = now - timedelta(minutes=_STUCK_TIMEOUT_MIN)
-    async with engine.begin() as conn:
-        result = await conn.execute(
-            text(
-                """
-                UPDATE task_queue
-                SET status = 'retrying',
-                    attempt_count = attempt_count + 1,
-                    last_error = COALESCE(last_error, '') || ' [reconciler: stuck timeout]',
-                    next_retry_at = :now,
-                    updated_at = :now
-                WHERE status = 'running'
-                  AND updated_at < :cutoff
-                """
-            ),
-            {"cutoff": cutoff, "now": now},
-        )
-        return result.rowcount or 0
+    stuck_after_seconds = _STUCK_TIMEOUT_MIN * 60
+    return await _canonical_reconcile_stuck_running(engine, stuck_after_seconds=stuck_after_seconds)
 
 
-async def cancel_old_drafts(engine: AsyncEngine, *, now: datetime | None = None) -> int:
-    """Помечает draft'ы старше 24h как cancelled (страховка от потери)."""
-    now = now or datetime.now(timezone.utc)
-    cutoff = now - timedelta(hours=_DRAFT_TIMEOUT_HOURS)
-    async with engine.begin() as conn:
-        result = await conn.execute(
-            text(
-                """
-                UPDATE task_queue
-                SET status = 'cancelled',
-                    last_error = 'auto-cancelled: draft timeout',
-                    completed_at = :now,
-                    updated_at = :now
-                WHERE status = 'draft'
-                  AND created_at < :cutoff
-                """
-            ),
-            {"cutoff": cutoff, "now": now},
-        )
-        return result.rowcount or 0
+async def cancel_old_drafts(engine: AsyncEngine) -> int:
+    """Обёртка вокруг core.tasks.queue.cancel_stale_drafts с env-таймаутом.
+
+    Returns: количество отменённых draft'ов.
+    """
+    older_than_seconds = _DRAFT_TIMEOUT_HOURS * 3600
+    return await _canonical_cancel_stale_drafts(engine, older_than_seconds=older_than_seconds)
 
 
 async def run_once(engine: AsyncEngine) -> dict[str, int]:
