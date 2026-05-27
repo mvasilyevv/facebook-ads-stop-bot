@@ -31,6 +31,8 @@ python run_enable_worker.py                                              # Enabl
 python run_telegram_poller.py                                            # Telegram poller (/spy, /start, /help, inline callbacks)
 python run_cleanup_worker.py                                             # Cleanup worker (retention + partitions)
 python run_reconciler_worker.py                                          # Reconciler (stuck task_queue → retrying)
+python run_meta_api_worker.py                                            # Marketing API mutations worker (skeleton до Этапа 5)
+python run_health_watchdog.py                                            # Health watchdog (мониторинг worker:heartbeat:*)
 
 # Через Makefile
 make bootstrap        # docker + зависимости + apply-schema (drop+create v2)
@@ -55,9 +57,9 @@ python scripts/restore_secrets.py          # вернуть токены
 
 **FB Stop Bot** — мониторит Facebook Ads, оценивает стоп-правила, шлёт алерты в Telegram, автоматически отключает объявления, создаёт новые кампании. Real-time часть работает через anti-detect браузер (Vision + Playwright + Node.js gRPC). Marketing API добавляется для latency-tolerant операций (см. `META_INTEGRATION_PLAN.md`).
 
-### Семь воркеров + Node.js gRPC
+### Восемь воркеров + Node.js gRPC
 
-После v2-миграции (см. `DB_REDESIGN.md`) кодовая база сокращена. Удалены: legacy ORM, observer god-таблицы, FastAPI роутеры, AI assistant tools, creator workers, meta_api worker, digest scheduler, health_watchdog. Восстановим инкрементально по запросу.
+После v2-миграции (см. `DB_REDESIGN.md`) кодовая база сокращена. Удалены: legacy ORM, observer god-таблицы, FastAPI роутеры, creator workers, digest scheduler. Восстановим инкрементально по запросу.
 
 **Python воркеры (текущие, все на v2 схеме):**
 
@@ -68,6 +70,7 @@ python scripts/restore_secrets.py          # вернуть токены
 5. **cleanup_worker** (`apps/cleanup_worker/`) — раз в сутки в 04:00 UTC: DROP старых партиций, DELETE по retention из `system_config.retention_policy`, чистка orphan ad_library media файлов, CREATE next-month партиций. Точка входа: `run_cleanup_worker.py`.
 6. **reconciler_worker** (`apps/reconciler_worker/`) — каждые 30 сек: переводит `task_queue.status='running'` старше 30 минут → `retrying` (защита от крашнутых воркеров), отменяет `draft` старше 24 часов. Точка входа: `run_reconciler_worker.py`.
 7. **meta_api_worker** (`apps/meta_api_worker/`) — поллит `task_queue` где `task_type='meta_api_mutation'`. На Этапе 2 — скелет: claim → mark_failed("not implemented yet"). На Этапе 5 здесь будет реальная диспетчеризация mutations через `MetaApiClient` (gRPC к browser-agent). Heartbeat `worker:heartbeat:meta_api` в Redis. Reconcile stuck running/stale drafts с собственными таймаутами. Точка входа: `run_meta_api_worker.py`.
+8. **health_watchdog** (`apps/health_watchdog/`) — раз в 60 сек проверяет `worker:heartbeat:*` в Redis. Если воркер из `EXPECTED_WORKERS` (env CSV) не дышит — алерт в TG через `core.telegram.client`. Дедуп через `health:alerted:{worker}` TTL 3600 (атомарный SET NX EX, не задвоит при параллельном запуске). Дополнительно проверяет `observer:runtime` freshness (>5 мин → отдельный алерт). Если `telegram_config` пуст — работает silent + дедуп всё равно ставится (защита от шквала при появлении токена). Точка входа: `run_health_watchdog.py`.
 
 **Node.js gRPC сервис (`services/browser-agent/`):**
 
@@ -104,7 +107,8 @@ python scripts/restore_secrets.py          # вернуть токены
 - **creatives/** — `uniquify_creatives` (водяной знак), `folder_opener`.
 - **campaign_scripts/planner.py** — декларативный план для ручного создания кампании.
 - **campaign_creator/** — фабрика создания кампаний (Vision-based, не active в текущем сборке).
-- **ai_assistant/** — pure-Python ассистент: `chat.py`, `client.py`, `providers.py`, `prompts/`. Tools-пакет (drafts/meta) удалён при v2-миграции — восстановим инкрементально.
+- **ai_assistant/** — pure-Python ассистент: `chat.py`, `client.py`, `providers.py`, `prompts/`. Пакет `tools/` (registry + base + ops/meta/drafts/creative — 15 tools) подключён к Telegram через `core/telegram/ai_handlers.py` (`/ask` + draft callbacks `dr_ok`/`dr_cancel`). `ToolHandler.risk_level`: READ_ONLY (исполняется немедленно), DRAFT_REQUIRED (создаёт `task_queue` со `status='draft'` через `core.meta_api.queue.create_draft_task` → юзер подтверждает в TG), CREATIVE. Rate-limit per `client_key` через `tools/_ratelimit.py` (Redis `ai:ratelimit:tools:*` TTL 3600, fail-open). `MetaApiClient` пробрасывается через `ToolContext` — без него meta-tools падают с явной ошибкой.
+- **adset_pro/** — минимальный REST-клиент трекера AdSet.pro (Этап 6 подготовка): `AdsetProClient` (async httpx + Bearer + tenacity retry на 5xx/429/transport), schemas (`StatsQueryRequest/Response`, `ConversionRow.from_api_row` парсит `ext_sub6 → fb_ad_id`, `PostbackEvent` на будущее), errors (`AuthError`/`NotFoundError`/`RateLimitedError`/`TemporaryError`/`PermanentError` + `classify_http_error`). Ключ `ADSETPRO_MCP_KEY` в `.env`, `adsetpro_base_url`/`adsetpro_timeout_seconds` в `core/config.py`. Endpoint `POST /api/stats/query` и auth `Bearer` помечены `TODO(stage-6)` — нужно verify на живом API. Без postback FastAPI и БД-таблиц (отдельная волна).
 - **alerts/** — Redis-очередь алертов + drain worker (опционально).
 - **browser/** — `lock.py` (file-lock эксклюзивности браузер-сессии), `circuit_breaker.py` (AsyncCircuitBreaker для gRPC).
 - **auth/** — TMA initData валидация (для будущего Mini App).
@@ -123,10 +127,8 @@ python scripts/restore_secrets.py          # вернуть токены
 
 После v2-миграции удалены, но могут быть восстановлены инкрементально:
 - **API роутеры** (`apps/api/`) — 17 роутеров FastAPI. Понадобится для фронта.
-- **AI assistant tools** (`core/ai_assistant/tools/drafts/`, `tools/meta/`) — 8 tools для Marketing API drafts.
 - **Creator workers** (`apps/creator_worker/`, `apps/creator_recorder/`) — автоматизация создания кампаний через Vision.
 - **Meta API mutations execution** — Этап 2 даёт только скелет worker'а и Python-обвязку (`core/meta_api/`: client, schemas, errors, adapters, audit, queue, reconciler, insights/fetcher). Реальные mutations (`pause_ad`, `set_adset_budget`, `create_campaign` через Batch API и т.д.) подключаются на Этапе 5 META_INTEGRATION_PLAN — нужны handlers в `core/meta_api/mutations/` и TS-сервис `services/browser-agent/src/meta-api/mutations.ts`.
-- **Health watchdog** (`apps/health_watchdog/`) — мониторинг heartbeats.
 - **Enable recommendation worker** (`apps/enable_recommendation_worker/`) — анализ выключенных ads.
 - **TG digest scheduler** (`core/telegram/digest_*`) — ежедневный отчёт в 9:00.
 - **Backtest** (`scripts/backtest_rules.py`) — пройти историю и оценить false-stop'ы.

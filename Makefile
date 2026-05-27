@@ -19,7 +19,7 @@ GRPC_NODE_DIR := services/browser-agent
 .PHONY: help check-env check-tools venv install-backend install-frontend install \
 	docker-up docker-down db-wait apply-schema backup-secrets restore-secrets bootstrap \
 	observer telegram disable-worker enable-worker cleanup-worker reconciler-worker \
-	meta-api-worker \
+	meta-api-worker health-watchdog \
 	frontend frontend-build lint format test test-unit test-telegram test-integration verify \
 	start stop logs proto-compile proto-watch \
 	browser-agent browser-agent-dev browser-agent-build tma-dev tma-build
@@ -99,6 +99,9 @@ reconciler-worker: check-env install-backend ## Запустить reconciler wo
 
 meta-api-worker: check-env install-backend ## Запустить meta_api worker (Marketing API mutations)
 	$(PY) run_meta_api_worker.py
+
+health-watchdog: check-env install-backend ## Запустить health watchdog (мониторинг heartbeat'ов воркеров)
+	$(PY) run_health_watchdog.py
 
 apply-schema: check-env install-backend ## Drop + apply v2 схемы БД (ОПАСНО, требует --confirm-drop)
 	$(PY) scripts/apply_v2_schema.py --confirm-drop
