@@ -1,324 +1,38 @@
 # -*- coding: utf-8 -*-
-"""Disable Worker: выполняет задачи на отключение объявлений через Playwright-клик."""
+"""Disable worker v2 main loop."""
 
 from __future__ import annotations
 
-import asyncio
 import logging
-from datetime import UTC, datetime, timedelta
 
-from core.observer.runtime_status import update_worker_heartbeat
-from core.worker_utils import calculate_retry_delay
+from sqlalchemy.ext.asyncio import create_async_engine
+
+from apps.telegram_poller.main import _get_database_url
+from core.tasks.toggle_executor import run_toggle_loop
 
 logger = logging.getLogger(__name__)
 
-DISABLE_BROWSER_TASK_TIMEOUT_SECONDS = 60
-DISABLE_BROWSER_BATCH_TIMEOUT_SECONDS = 120
 
-HEARTBEAT_INTERVAL_SECONDS = 30
+async def _make_browser_gate():
+    """Создаёт реальный BrowserAgentClient — отдельная функция для удобства моков в тестах."""
+    from clients.python_grpc.client import BrowserAgentClient
 
-
-async def _heartbeat_loop(status_ref: list[str], message_ref: list[str | None]) -> None:
-    """Фоновая задача: отправляет heartbeat disable worker каждые 30 секунд."""
-    while True:
-        await update_worker_heartbeat(
-            "disable",
-            status=status_ref[0],
-            message=message_ref[0],
-        )
-        await asyncio.sleep(HEARTBEAT_INTERVAL_SECONDS)
+    # Минимальный конструктор — настройки берутся из env через config внутри клиента
+    client = BrowserAgentClient()
+    await client.connect()
+    return client
 
 
-class BrowserOperationTimeoutError(RuntimeError):
-    """Браузерная операция disable worker превысила допустимый таймаут."""
-
-
-class BrowserOperationRuntimeError(RuntimeError):
-    """Браузерная операция disable worker завершилась ошибкой runtime."""
-
-
-def _build_browser_timeout_message(timeout_seconds: int, *, batch_size: int | None = None) -> str:
-    """Формирует текст ошибки таймаута браузерной операции."""
-    if batch_size and batch_size > 1:
-        return (
-            f"Браузерная операция для пачки из {batch_size} задач "
-            f"превысила таймаут {timeout_seconds} сек"
-        )
-    return f"Браузерная операция превысила таймаут {timeout_seconds} сек"
-
-
-def _build_browser_runtime_error_message(exc: Exception) -> str:
-    """Формирует текст ошибки браузерной операции для retry-задачи."""
-    detail = str(exc).strip()
-    if not detail:
-        return "Браузерная операция завершилась ошибкой"
-    return f"Браузерная операция завершилась ошибкой: {detail}"
-
-
-async def _process_disable_result(
-    *,
-    task,
-    success: bool,
-    message: str,
-    mark_succeeded,
-    mark_retrying,
-    mark_failed,
-    send_completion_callback,
-) -> None:
-    """Фиксирует итог обработки одной disable-задачи."""
-    if success:
-        await mark_succeeded(task.id)
-        logger.info(
-            "Отключение подтверждено для %s: %s",
-            task.fb_ad_id,
-            message,
-        )
-    else:
-        attempt = getattr(task, "attempt_count", 0)
-        max_att = getattr(task, "max_attempts", 10)
-        if attempt >= max_att and mark_failed:
-            await mark_failed(task.id, message)
-            logger.error(
-                "Задача %s для %s провалена: исчерпаны все %s попыток",
-                task.id,
-                task.fb_ad_id,
-                max_att,
-            )
-        else:
-            delay = calculate_retry_delay(attempt)
-            next_retry = datetime.now(tz=UTC) + timedelta(seconds=delay)
-            await mark_retrying(task.id, message, next_retry)
-            logger.warning(
-                "Не удалось отключить %s: %s. Повтор через %s сек",
-                task.fb_ad_id,
-                message,
-                delay,
-            )
-
-    if send_completion_callback:
-        await send_completion_callback(task, success, message)
-
-
-async def disable_worker_loop(
-    *,
-    poll_interval_seconds: int = 5,
-    claim_next_task,
-    execute_disable,
-    mark_succeeded,
-    mark_retrying,
-    mark_failed=None,
-    send_completion_callback=None,
-    claim_task_batch=None,
-    execute_disable_batch=None,
-    batch_size: int = 10,
-    telegram_bot_token: str = "",
-    telegram_chat_id: str = "",
-    shutdown_event=None,
-    status_ref: list[str] | None = None,
-    message_ref: list[str | None] | None = None,
-    **kwargs,
-) -> None:
-    """Бесконечный цикл обработки disable-задач из outbox.
-
-    Args:
-        poll_interval_seconds: интервал поллинга очереди
-        claim_next_task: async () -> task | None — берёт задачу
-        execute_disable: async (fb_ad_id) -> (success, message) — выполняет Playwright-клик
-        mark_succeeded: async (task_id) -> None
-        mark_retrying: async (task_id, error, next_retry_at) -> None
-        mark_failed: async (task_id, error) -> None — помечает задачу как окончательно проваленную
-        send_completion_callback: async (task, success, message) -> None
-        claim_task_batch: async (limit) -> list[task] — берёт пачку задач
-        execute_disable_batch: async (tasks) -> {task_id: (success, message)} — пакетный обход
-        telegram_bot_token: резервный токен Telegram для lifecycle-колбэка
-        telegram_chat_id: резервный chat_id Telegram для lifecycle-колбэка
-        status_ref: внешний контейнер статуса (если передан — внешний heartbeat уже запущен)
-        message_ref: внешний контейнер сообщения (если передан — внешний heartbeat уже запущен)
-    """
-    # Если внешний heartbeat уже запущен — используем переданные ссылки.
-    # Иначе создаём локальные и запускаем собственный heartbeat (обратная совместимость для тестов).
-    _owns_heartbeat = status_ref is None or message_ref is None
-    if status_ref is None:
-        status_ref = ["idle"]
-    if message_ref is None:
-        message_ref = [None]
-
-    heartbeat_task = (
-        asyncio.create_task(_heartbeat_loop(status_ref, message_ref)) if _owns_heartbeat else None
-    )
+async def main_loop() -> None:
+    db_url = _get_database_url()
+    engine = create_async_engine(db_url, echo=False)
     try:
-        while not (shutdown_event and shutdown_event.is_set()):
-            try:
-                if claim_task_batch and execute_disable_batch:
-                    tasks = await claim_task_batch(batch_size)
-                    if not tasks:
-                        status_ref[0] = "idle"
-                        message_ref[0] = None
-                        if shutdown_event:
-                            try:
-                                await asyncio.wait_for(
-                                    shutdown_event.wait(), timeout=poll_interval_seconds
-                                )
-                                break
-                            except asyncio.TimeoutError:
-                                pass
-                        else:
-                            await asyncio.sleep(poll_interval_seconds)
-                        continue
-
-                    status_ref[0] = "busy"
-                    message_ref[0] = f"Обрабатываю пачку из {len(tasks)} задач"
-                    logger.info("Disable worker: взял пачку из %s задач", len(tasks))
-                    try:
-                        batch_results = await asyncio.wait_for(
-                            execute_disable_batch(tasks),
-                            timeout=DISABLE_BROWSER_BATCH_TIMEOUT_SECONDS,
-                        )
-                    except asyncio.TimeoutError as exc:
-                        timeout_message = _build_browser_timeout_message(
-                            DISABLE_BROWSER_BATCH_TIMEOUT_SECONDS,
-                            batch_size=len(tasks),
-                        )
-                        logger.error(
-                            "Disable worker: пакетная обработка зависла дольше %s сек, переподключаю браузер",
-                            DISABLE_BROWSER_BATCH_TIMEOUT_SECONDS,
-                        )
-                        for task in tasks:
-                            await _process_disable_result(
-                                task=task,
-                                success=False,
-                                message=timeout_message,
-                                mark_succeeded=mark_succeeded,
-                                mark_retrying=mark_retrying,
-                                mark_failed=mark_failed,
-                                send_completion_callback=send_completion_callback,
-                            )
-                        raise BrowserOperationTimeoutError(timeout_message) from exc
-                    except Exception as exc:
-                        runtime_message = _build_browser_runtime_error_message(exc)
-                        logger.error(
-                            "Disable worker: пакетная обработка завершилась ошибкой, переподключаю браузер",
-                            exc_info=True,
-                        )
-                        for task in tasks:
-                            await _process_disable_result(
-                                task=task,
-                                success=False,
-                                message=runtime_message,
-                                mark_succeeded=mark_succeeded,
-                                mark_retrying=mark_retrying,
-                                mark_failed=mark_failed,
-                                send_completion_callback=send_completion_callback,
-                            )
-                        raise BrowserOperationRuntimeError(runtime_message) from exc
-
-                    for task in tasks:
-                        success, message = batch_results.get(
-                            task.id,
-                            (False, "Пакетная обработка не вернула результат по задаче"),
-                        )
-                        await _process_disable_result(
-                            task=task,
-                            success=success,
-                            message=message,
-                            mark_succeeded=mark_succeeded,
-                            mark_retrying=mark_retrying,
-                            mark_failed=mark_failed,
-                            send_completion_callback=send_completion_callback,
-                        )
-                    status_ref[0] = "idle"
-                    message_ref[0] = None
-                    continue
-
-                task = await claim_next_task()
-                if task is None:
-                    status_ref[0] = "idle"
-                    message_ref[0] = None
-                    if shutdown_event:
-                        try:
-                            await asyncio.wait_for(
-                                shutdown_event.wait(), timeout=poll_interval_seconds
-                            )
-                            break
-                        except asyncio.TimeoutError:
-                            pass
-                    else:
-                        await asyncio.sleep(poll_interval_seconds)
-                    continue
-
-                status_ref[0] = "busy"
-                message_ref[0] = f"Отключаю объявление {task.fb_ad_id}"
-                logger.info(
-                    "Disable worker: выполняю задачу %s для объявления %s",
-                    task.id,
-                    task.fb_ad_id,
-                )
-
-                try:
-                    success, message = await asyncio.wait_for(
-                        execute_disable(task.fb_ad_id),
-                        timeout=DISABLE_BROWSER_TASK_TIMEOUT_SECONDS,
-                    )
-                except asyncio.TimeoutError as exc:
-                    timeout_message = _build_browser_timeout_message(
-                        DISABLE_BROWSER_TASK_TIMEOUT_SECONDS,
-                    )
-                    logger.error(
-                        "Disable worker: задача %s для %s зависла дольше %s сек, переподключаю браузер",
-                        task.id,
-                        task.fb_ad_id,
-                        DISABLE_BROWSER_TASK_TIMEOUT_SECONDS,
-                    )
-                    await _process_disable_result(
-                        task=task,
-                        success=False,
-                        message=timeout_message,
-                        mark_succeeded=mark_succeeded,
-                        mark_retrying=mark_retrying,
-                        mark_failed=mark_failed,
-                        send_completion_callback=send_completion_callback,
-                    )
-                    raise BrowserOperationTimeoutError(timeout_message) from exc
-                except Exception as exc:
-                    runtime_message = _build_browser_runtime_error_message(exc)
-                    logger.error(
-                        "Disable worker: задача %s для %s завершилась ошибкой, переподключаю браузер",
-                        task.id,
-                        task.fb_ad_id,
-                        exc_info=True,
-                    )
-                    await _process_disable_result(
-                        task=task,
-                        success=False,
-                        message=runtime_message,
-                        mark_succeeded=mark_succeeded,
-                        mark_retrying=mark_retrying,
-                        mark_failed=mark_failed,
-                        send_completion_callback=send_completion_callback,
-                    )
-                    raise BrowserOperationRuntimeError(runtime_message) from exc
-
-                await _process_disable_result(
-                    task=task,
-                    success=success,
-                    message=message,
-                    mark_succeeded=mark_succeeded,
-                    mark_retrying=mark_retrying,
-                    mark_failed=mark_failed,
-                    send_completion_callback=send_completion_callback,
-                )
-                status_ref[0] = "idle"
-                message_ref[0] = None
-
-            except (BrowserOperationTimeoutError, BrowserOperationRuntimeError):
-                raise
-            except Exception:
-                logger.exception("Disable worker: ошибка в цикле")
-                await asyncio.sleep(poll_interval_seconds)
+        logger.info("disable_worker_v2 запущен")
+        await run_toggle_loop(
+            engine,
+            task_type="disable",
+            gate_factory=_make_browser_gate,
+        )
     finally:
-        if heartbeat_task is not None:
-            heartbeat_task.cancel()
-            try:
-                await heartbeat_task
-            except asyncio.CancelledError:
-                pass
+        await engine.dispose()
+        logger.info("disable_worker_v2 завершён")
