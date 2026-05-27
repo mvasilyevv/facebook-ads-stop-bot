@@ -1,0 +1,305 @@
+# -*- coding: utf-8 -*-
+"""Интеграционные тесты enable_recommendation_worker.run_once.
+
+Покрывают полный путь: SQL-запрос кандидатов → метрики → analyzer → INSERT
+в enable_recommendations + Redis dedup + TG-алерт через respx-mock.
+"""
+
+from __future__ import annotations
+
+import uuid
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
+
+import pytest
+import pytest_asyncio
+from sqlalchemy import text
+
+from apps.enable_recommendation_worker.main import (
+    fetch_candidates,
+    is_recently_recommended,
+    mark_recommended,
+    run_once,
+)
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+@pytest_asyncio.fixture
+async def clean_reco_tables(pg_engine):
+    """Чистит таблицы которые трогает worker."""
+
+    async def _truncate():
+        async with pg_engine.begin() as conn:
+            for t in (
+                "enable_recommendations",
+                "ad_auto_enable_disabled",
+                "task_queue",
+                "alert_events",
+                "ad_metrics",
+                "ad_alert_state",
+                "fb_ads",
+                "fb_adsets",
+                "fb_campaigns",
+                "offer_rules",
+                "offers",
+            ):
+                await conn.execute(text(f"DELETE FROM {t}"))
+
+    await _truncate()
+    yield
+    await _truncate()
+
+
+@pytest_asyncio.fixture
+async def stopped_ad(pg_engine, clean_reco_tables):
+    """Создаёт фикстуру: оффер CPA=10, ad в state='stop_sent' давно отключённое, метрики «выправились».
+
+    Возвращает dict с ad_id, fb_ad_id, last_transition_at.
+    """
+    offer_id = uuid.uuid4()
+    campaign_id = uuid.uuid4()
+    adset_id = uuid.uuid4()
+    ad_id = uuid.uuid4()
+    suffix = uuid.uuid4().hex[:8]
+    fb_ad_id = f"23001{suffix[:8]}"
+
+    last_transition = _utcnow() - timedelta(hours=2)  # отключено 2 часа назад
+    cycle_recent = _utcnow() - timedelta(minutes=10)
+    cycle_older = _utcnow() - timedelta(minutes=30)
+
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO offers (id, code, name, is_active) VALUES (:i, :c, 'TestOffer', TRUE)"
+            ),
+            {"i": offer_id, "c": f"ER_{suffix}"},
+        )
+        await conn.execute(
+            text("INSERT INTO offer_rules (offer_id, cpa_threshold) VALUES (:i, :cpa)"),
+            {"i": offer_id, "cpa": Decimal("10.00")},
+        )
+        await conn.execute(
+            text("INSERT INTO fb_campaigns (id, campaign_name, offer_id) VALUES (:i, :n, :o)"),
+            {"i": campaign_id, "n": f"CMP_{suffix}", "o": offer_id},
+        )
+        await conn.execute(
+            text("INSERT INTO fb_adsets (id, campaign_id, adset_name) VALUES (:i, :c, :n)"),
+            {"i": adset_id, "c": campaign_id, "n": f"ADSET_{suffix}"},
+        )
+        await conn.execute(
+            text("INSERT INTO fb_ads (id, adset_id, fb_ad_id, ad_name) VALUES (:i, :a, :f, :n)"),
+            {"i": ad_id, "a": adset_id, "f": fb_ad_id, "n": f"AD_{suffix}"},
+        )
+        await conn.execute(
+            text(
+                """
+                INSERT INTO ad_alert_state
+                    (ad_id, alert_state, current_stage, last_transition_at)
+                VALUES (:aid, 'stop_sent', 'stop', :ts)
+                """
+            ),
+            {"aid": ad_id, "ts": last_transition},
+        )
+        # «Выправленные» метрики после отключения: spend низкий, cost_per_lead ок
+        for ts, spend, cpl in (
+            (cycle_older, Decimal("1.0"), Decimal("4.0")),
+            (cycle_recent, Decimal("0.5"), Decimal("5.0")),
+        ):
+            await conn.execute(
+                text(
+                    """
+                    INSERT INTO ad_metrics
+                        (ad_id, cycle_ts, scan_id, spend, cost_per_lead, deposits)
+                    VALUES (:aid, :ts, NULL, :sp, :cpl, 0)
+                    """
+                ),
+                {"aid": ad_id, "ts": ts, "sp": spend, "cpl": cpl},
+            )
+
+    return {
+        "ad_id": ad_id,
+        "fb_ad_id": fb_ad_id,
+        "campaign_id": campaign_id,
+        "adset_id": adset_id,
+        "offer_id": offer_id,
+        "last_transition_at": last_transition,
+    }
+
+
+# Сценарий: stop_sent ад с «выправленными» метриками → создаётся enable_recommendation + TG-алерт
+@pytest.mark.asyncio
+async def test_creates_recommendation_for_recovered_ad(
+    pg_engine, stopped_ad, fake_redis_client, tg_respx
+):
+    from core.telegram.client import TelegramBotClient
+
+    tg_client = TelegramBotClient("fake-token")
+
+    counts = await run_once(
+        pg_engine,
+        redis_client=fake_redis_client,
+        tg_client=tg_client,
+        chat_id="123456",
+        thread_id=None,
+    )
+
+    assert counts["candidates"] == 1
+    assert counts["recommendations"] == 1
+    assert counts["alerts_sent"] == 1
+    assert counts["skipped_decision"] == 0
+
+    # Запись появилась в БД
+    async with pg_engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text(
+                    "SELECT ad_id, recommendation_level, idempotency_key "
+                    "FROM enable_recommendations LIMIT 1"
+                )
+            )
+        ).first()
+        assert row is not None
+        assert row[0] == stopped_ad["ad_id"]
+        assert row[1] in ("ok", "warning")
+        assert row[2].startswith("enable_reco:")
+
+    # TG-алерт отправлен с inline-кнопкой
+    assert len(tg_respx.sent_messages) == 1
+    payload = tg_respx.sent_messages[0]
+    assert payload["chat_id"] == "123456"
+    keyboard = payload.get("reply_markup", {}).get("inline_keyboard")
+    assert keyboard is not None
+    btn = keyboard[0][0]
+    assert btn["callback_data"] == f"ereco:{stopped_ad['fb_ad_id']}"
+
+    # Redis-дедуп ключ стоит
+    assert await fake_redis_client.get(f"enable_reco:last:{stopped_ad['ad_id']}") == "1"
+
+    await tg_client.close()
+
+
+# Сценарий: ad в ad_auto_enable_disabled → не попадает в кандидаты
+@pytest.mark.asyncio
+async def test_skips_when_auto_enable_blocked(pg_engine, stopped_ad):
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO ad_auto_enable_disabled (ad_id, cabinet_day_started_at, reason) "
+                "VALUES (:aid, :ts, 'user_opt_out')"
+            ),
+            {"aid": stopped_ad["ad_id"], "ts": _utcnow()},
+        )
+
+    cands = await fetch_candidates(pg_engine, limit=10)
+    assert cands == []
+
+
+# Сценарий: повторный run в течение 6 часов — не дублирует благодаря Redis dedup
+@pytest.mark.asyncio
+async def test_dedups_within_window(pg_engine, stopped_ad, fake_redis_client, tg_respx):
+    from core.telegram.client import TelegramBotClient
+
+    tg_client = TelegramBotClient("fake-token")
+
+    counts_1 = await run_once(
+        pg_engine,
+        redis_client=fake_redis_client,
+        tg_client=tg_client,
+        chat_id="555",
+        thread_id=None,
+    )
+    assert counts_1["recommendations"] == 1
+    assert counts_1["alerts_sent"] == 1
+
+    counts_2 = await run_once(
+        pg_engine,
+        redis_client=fake_redis_client,
+        tg_client=tg_client,
+        chat_id="555",
+        thread_id=None,
+    )
+    # Второй прогон — дедуп срабатывает: ни одной новой рекомендации, ни одного алёрта
+    assert counts_2["recommendations"] == 0
+    assert counts_2["alerts_sent"] == 0
+    assert counts_2["skipped_dedup"] == 1
+
+    # Всего одна запись в БД
+    async with pg_engine.connect() as conn:
+        n = (await conn.execute(text("SELECT COUNT(*) FROM enable_recommendations"))).scalar()
+    assert n == 1
+
+    # Один TG-вызов
+    assert len(tg_respx.sent_messages) == 1
+
+    await tg_client.close()
+
+
+# Сценарий: ад отключён давно, но метрик после disable нет → analyzer пропустит
+@pytest.mark.asyncio
+async def test_skips_when_no_metrics_after_disable(
+    pg_engine, stopped_ad, fake_redis_client, tg_respx
+):
+    # Удаляем все метрики у ad
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text("DELETE FROM ad_metrics WHERE ad_id = :aid"),
+            {"aid": stopped_ad["ad_id"]},
+        )
+
+    from core.telegram.client import TelegramBotClient
+
+    tg_client = TelegramBotClient("fake-token")
+    counts = await run_once(
+        pg_engine,
+        redis_client=fake_redis_client,
+        tg_client=tg_client,
+        chat_id="1",
+        thread_id=None,
+    )
+    assert counts["candidates"] == 1
+    assert counts["recommendations"] == 0
+    assert counts["skipped_decision"] == 1
+    assert len(tg_respx.sent_messages) == 0
+
+    await tg_client.close()
+
+
+# Сценарий: ад snoozed_until в будущем → analyzer пропустит
+@pytest.mark.asyncio
+async def test_skips_snoozed_ad(pg_engine, stopped_ad, fake_redis_client, tg_respx):
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE ad_alert_state SET snoozed_until = :until WHERE ad_id = :aid"),
+            {"until": _utcnow() + timedelta(hours=2), "aid": stopped_ad["ad_id"]},
+        )
+
+    from core.telegram.client import TelegramBotClient
+
+    tg_client = TelegramBotClient("fake-token")
+    counts = await run_once(
+        pg_engine,
+        redis_client=fake_redis_client,
+        tg_client=tg_client,
+        chat_id="1",
+        thread_id=None,
+    )
+    assert counts["candidates"] == 1
+    assert counts["skipped_decision"] == 1
+    assert counts["recommendations"] == 0
+    assert len(tg_respx.sent_messages) == 0
+
+    await tg_client.close()
+
+
+# Сценарий: проверяем хелперы Redis dedup напрямую
+@pytest.mark.asyncio
+async def test_redis_dedup_helpers(fake_redis_client):
+    ad_id = uuid.uuid4()
+    assert await is_recently_recommended(fake_redis_client, ad_id) is False
+    assert await mark_recommended(fake_redis_client, ad_id) is True
+    assert await is_recently_recommended(fake_redis_client, ad_id) is True
+    # Второй mark — NX не сработает
+    assert await mark_recommended(fake_redis_client, ad_id) is False
