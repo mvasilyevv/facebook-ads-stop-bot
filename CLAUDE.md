@@ -151,7 +151,7 @@ python scripts/restore_secrets.py          # вернуть токены
 - **Creator workers** (`apps/creator_worker/`, `apps/creator_recorder/`) — автоматизация создания кампаний через Vision.
 - **Frontend** (`frontend/` 9 страниц + `frontend-mini/`) — отложен по решению пользователя. `apps/api/` минимум поднят (health + postback), при возврате к фронту — расширить роутерами под нужные страницы.
 - **`scripts/backtest_rules.py`** — для бэктеста по MEMORY 2026-06-08 (через ~2 недели накопления данных).
-- **Этап 4 Ad Library через App Access Token** — `core/ad_library/` уже работает через browser-agent gRPC (для `/spy`). Параллельный канал через свой Meta App (App Access Token) для еженочного scraper'а конкурентов — требует создания Meta App (бесплатно, без App Review) с `META_AD_LIBRARY_APP_ID`/`_APP_SECRET` в `.env`.
+- **Этап 4 Ad Library** — закрыт через browser-agent gRPC (по-запросу через `/spy <slot> <country>` в TG). Параллельный канал через свой Meta App с App Access Token решено НЕ делать — Meta требует Identity Confirmation (загрузка ID + selfie + 5-7 дней ожидания) даже для коммерческих запросов, при этом use case у пользователя on-demand, не cron. Если в будущем понадобится background-scrape конкурентов — пройти IC на https://www.facebook.com/id и положить `META_AD_LIBRARY_APP_ID`/`_APP_SECRET` в `.env`.
 - **Этап 6 AdSet.pro Волна 3** — клиент готов, postback receiver готов. Не реализовано: БД-таблицы `adsetpro_postback_events`/`adsetpro_credentials`, ingest в БД с дедупом по `click_id`, расширение `RuleContext.external_deposits` для evaluator.
 - **Меta API мелочи** — Custom Audience с CSV upload пользователей (`POST /{audience_id}/users` со streaming), `UploadVideo` из URL.
 
