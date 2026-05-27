@@ -68,31 +68,28 @@ class ScannerGate(Protocol):
 
 
 async def _begin_scan_run(engine: AsyncEngine) -> int:
-    """INSERT в partitioned scan_runs → возвращаем монотонный id."""
+    """INSERT в partitioned scan_runs → возвращаем монотонный id.
+
+    Атомарный: scan_id = id за один INSERT через CTE с явным nextval.
+    Никакого последующего UPDATE — если процесс крашится до RETURNING, sequence
+    откатится вместе с транзакцией и осиротевшего scan_id не возникнет.
+    """
     started_at = datetime.now(timezone.utc)
     async with engine.begin() as conn:
-        # scan_id = id (BigSerial). Используем сам id как scan_id для простоты.
-        # Если позже потребуется отдельный counter — добавим Redis INCR.
         row = (
             await conn.execute(
                 text(
                     """
-                    INSERT INTO scan_runs (scan_id, started_at)
-                    VALUES (nextval('scan_runs_id_seq'), :sa)
+                    WITH next_id AS (SELECT nextval('scan_runs_id_seq') AS sid)
+                    INSERT INTO scan_runs (id, scan_id, started_at)
+                    SELECT sid, sid, :sa FROM next_id
                     RETURNING id
                     """
                 ),
                 {"sa": started_at},
             )
         ).first()
-        scan_id = int(row[0])
-
-        # scan_id и id должны совпадать — обновим scan_id чтобы он реально стал id'шником
-        await conn.execute(
-            text("UPDATE scan_runs SET scan_id = id WHERE id = :i AND started_at = :sa"),
-            {"i": scan_id, "sa": started_at},
-        )
-    return scan_id
+    return int(row[0])
 
 
 async def _finish_scan_run(
