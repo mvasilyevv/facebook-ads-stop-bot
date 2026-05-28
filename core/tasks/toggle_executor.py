@@ -7,6 +7,7 @@ toggle_ad с разным target_state. Отличия минимальные �
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from typing import Any, Protocol
@@ -158,17 +159,25 @@ async def run_toggle_loop(
     idle_sleep_seconds: float = 3.0,
     error_sleep_seconds: float = 10.0,
     should_continue: Callable[[], bool] = lambda: True,
+    stop_event: asyncio.Event | None = None,
 ) -> None:
     """Основной цикл disable/enable воркера.
 
     gate_factory создаёт BrowserAgentClient — один раз на запуск воркера.
     Если gate.toggle_ad крашится с фатальной ошибкой (например session_recovery
     исчерпан), цикл спит error_sleep_seconds и пытается пересоздать gate.
-    """
-    import asyncio
 
+    Args:
+        stop_event: если передан — цикл проверяет его после каждого батча и
+            завершается gracefully. Используется для привязки к Redis-сигналу
+            fb_agent:worker:restart:*.
+    """
     gate: ToggleGate | None = None
     while should_continue():
+        # Проверяем внешний stop_event перед каждой итерацией.
+        if stop_event is not None and stop_event.is_set():
+            logger.info("[%s] stop_event выставлен — завершаю loop", task_type)
+            break
         try:
             if gate is None:
                 gate = await gate_factory()

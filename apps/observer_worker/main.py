@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import random
 import signal
 import time
@@ -36,6 +37,11 @@ from core.observer.queries import load_observer_config
 from core.scanner.models import ScannedAdRow
 
 logger = logging.getLogger(__name__)
+
+# Управляющие каналы observer'а.
+CHANNEL_TRIGGER = "fb_agent:observer:trigger"  # форс-скан вне расписания
+CHANNEL_CABINET_DAY = "fb_agent:observer:cabinet_day"  # сигнал нового кабинетного дня
+CHANNEL_RESTART = "fb_agent:worker:restart:observer"  # graceful restart
 
 
 @dataclass
@@ -277,6 +283,17 @@ async def run_one_cycle(
     }
 
 
+# ====================== Shared state для pubsub-сигналов ======================
+
+
+@dataclass
+class _ObserverState:
+    """Разделяемое состояние между main_loop и pubsub-handler'ами."""
+
+    force_scan_pending: bool = False  # выставляется триггером fb_agent:observer:trigger
+    should_stop: bool = False  # выставляется сигналом restart
+
+
 # ====================== Main loop ======================
 
 
@@ -296,6 +313,8 @@ async def main_loop(
             Если None — алерты не отправляются (полезно в тестах).
         should_continue: для тестов — управляет выходом из цикла.
     """
+    from core.control.pubsub_listener import RedisPubSubListener
+
     db_url = _get_database_url()
     engine = create_async_engine(db_url, echo=False)
 
@@ -310,7 +329,7 @@ async def main_loop(
 
         tg_client_factory = _bound_tg_factory
 
-    # Graceful shutdown
+    # Graceful shutdown по SIGTERM/SIGINT.
     shutdown_event = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
@@ -319,16 +338,51 @@ async def main_loop(
         except (NotImplementedError, RuntimeError):
             pass
 
+    # Разделяемое состояние для pubsub-handler'ов.
+    state = _ObserverState()
+
     gate: ScannerGate | None = None
     redis_client = None
     tg_client = None
+    listener_task: asyncio.Task | None = None
+    listener: RedisPubSubListener | None = None
 
     try:
         redis_client = await redis_factory()
         tg_client = await tg_client_factory()
         logger.info("observer_worker запущен")
 
-        while should_continue() and not shutdown_event.is_set():
+        # Подписываемся на управляющие каналы если Redis доступен.
+        if redis_client is not None:
+            listener = RedisPubSubListener(
+                redis_client,
+                [CHANNEL_TRIGGER, CHANNEL_CABINET_DAY, CHANNEL_RESTART],
+            )
+
+            async def _on_trigger(_payload: dict) -> None:
+                """Форс-скан: выставляем флаг, цикл пропустит sleep."""
+                logger.info("observer: получен trigger scan-now")
+                state.force_scan_pending = True
+
+            async def _on_cabinet_day(_payload: dict) -> None:
+                """Сигнал нового кабинетного дня — TODO: реализовать архивирование."""
+                logger.info(
+                    "observer: получен сигнал cabinet_day "
+                    "(TODO: реализовать archive-логику при наличии cabinet_day метода)"
+                )
+
+            async def _on_restart(_payload: dict) -> None:
+                """Graceful restart: выставляем should_stop + shutdown_event."""
+                logger.info("observer: получен сигнал restart по каналу %s", CHANNEL_RESTART)
+                state.should_stop = True
+                shutdown_event.set()
+
+            listener.register(CHANNEL_TRIGGER, _on_trigger)
+            listener.register(CHANNEL_CABINET_DAY, _on_cabinet_day)
+            listener.register(CHANNEL_RESTART, _on_restart)
+            listener_task = asyncio.create_task(listener.run_forever())
+
+        while should_continue() and not shutdown_event.is_set() and not state.should_stop:
             if gate is None:
                 try:
                     gate = await gate_factory()
@@ -351,6 +405,12 @@ async def main_loop(
                 await asyncio.sleep(10.0)
                 continue
 
+            # Если выставлен форс-скан — немедленно делаем следующий цикл без sleep.
+            if state.force_scan_pending:
+                logger.info("observer: force_scan_pending — пропускаю sleep, запускаю сразу")
+                state.force_scan_pending = False
+                continue
+
             # Интервал до следующего цикла
             config = await load_observer_config(engine)
             interval = (config or {}).get("interval_seconds", 90)
@@ -361,8 +421,27 @@ async def main_loop(
                 await asyncio.wait_for(shutdown_event.wait(), timeout=sleep_for)
             except asyncio.TimeoutError:
                 pass
+
+            # Если trigger пришёл во время sleep — не ждём следующего цикла.
+            if state.force_scan_pending:
+                logger.info("observer: force_scan_pending (после sleep) — не ждём")
+                state.force_scan_pending = False
     finally:
         logger.info("observer_worker завершён")
+
+        # Останавливаем pubsub-listener.
+        if listener is not None:
+            try:
+                await listener.stop()
+            except Exception:
+                pass
+        if listener_task is not None:
+            listener_task.cancel()
+            try:
+                await listener_task
+            except asyncio.CancelledError:
+                pass
+
         if redis_client is not None:
             try:
                 await redis_client.aclose()
@@ -404,13 +483,15 @@ async def _default_gate_factory() -> ScannerGate:
 
 async def _default_redis_factory():
     """Прод-реализация: redis.asyncio.Redis к docker-compose:6380."""
-    import os
-
     try:
         import redis.asyncio as redis_async  # type: ignore
     except ImportError:
         logger.warning("redis package не установлен — heartbeat отключён")
         return None
+
+    redis_url = os.environ.get("REDIS_URL", "")
+    if redis_url:
+        return redis_async.from_url(redis_url, decode_responses=True)
 
     host = os.environ.get("REDIS_HOST", "127.0.0.1")
     port = int(os.environ.get("REDIS_PORT", "6380"))
