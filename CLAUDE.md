@@ -282,6 +282,8 @@ HTTP/SSE транспорт для iPhone / удалённого доступа 
 
 **Telegram Mini App (`frontend-mini/`):** React 19.0 + Vite 5.4 + JSX + react-router-dom v7 + vanilla CSS (без Tailwind). Большая часть UI-логики дублирована из основного фронта (форматтеры, STATE_LABELS, fetch — отдельно для каждой страницы). Тесты отсутствуют.
 
+**Новый фронт (`frontend-v2/`):** React 19 + Vite 6 + **TypeScript strict** + Tailwind 4 + TanStack Router (file-based) + TanStack Query 5 + Zustand 5 + Lucide + Radix Primitives. Dark-only, monochrome editorial style (см. `docs/frontend_v2_design.md`). 6 страниц (Dashboard, Ads, Offers, History, Settings, Drafts). Storybook 8 для component isolation. Desktop 1280+ only. Port 5174 (dev), proxy `/api` → `:8100`. Сейчас в репо — foundation (tokens, базовый UI, layout shell, placeholder-страницы, API-клиенты per-domain, WebSocket hook с polling fallback, 5 unit-тестов). Полная имплементация страниц — следующие раунды.
+
 Vite-порт динамический (run.sh читает из лога).
 
 ## Key design rules
