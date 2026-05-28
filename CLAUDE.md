@@ -218,6 +218,17 @@ python scripts/restore_secrets.py          # вернуть токены
 
 HTTP/SSE транспорт для iPhone / удалённого доступа — отдельная история (нужен FastAPI router + OAuth/токен), пока только локальный stdio.
 
+### Аудит code-quality + Round 10 cleanup — 2 money-bug'а + HIGH/MID закрыты
+
+`docs/backend_code_quality_audit.md` (231 строка): независимый review КАЧЕСТВА (не покрытия). Нашёл 2 тихих money-bug'а, прошедших сквозь 974 теста (тесты проверяли shape, не семантику). **Round 10 закрыл всё**, → 1028 passed.
+
+- **CRIT-1** — 8 аналитических endpoint'ов делали наивный `SUM()` по кумулятивным snapshot-метрикам `ad_metrics` → spend завышался 10-100×. Фикс: `core/dashboard/metric_aggregation.py` — `latest_per_ad_window_cte` (DISTINCT ON (bucket, ad_id) для суточных/chart) + `latest_per_ad_per_day_cte` (DISTINCT ON (ad_id, day) для многодневных, т.к. spend сбрасывается посуточно — cabinet day). Применён в history/performance/chart-data/offers. Семантические тесты (75 не 375, 80 не 165).
+- **CRIT-2** — `observer:runtime` контракт рассогласован: writer писал `worker_status∈{scanning,idle,paused}`, readers ждали `status∈{running,paused}` → `observer_status` всегда `unknown`. Фикс: `core/observer/runtime.py::read_observer_runtime` (единая точка чтения + нормализация scanning/idle→running), writer пишет оба поля, контрактный тест writer↔reader.
+- **HIGH** — `snapshot.py` LATERAL по alert_events → реальные `stop/warning_rule_codes` (были захардкожены `[]`); `validate-columns` проксирует реальный gRPC `ScannerService.ValidateColumns` (503 при недоступности, не фейк-true), save/apply-column-widths → честный 501; `/ai/analyze` rate-limit → Redis sliding-window + X-Forwarded-For (был process-local); `create_campaign` partial-fail → `CreateCampaignPartialError` с created_ids, worker `mark_failed` (не requeue — иначе дубли).
+- **MID** — `disable_tasks` retry/cancel проверяют `rowcount` → 409 при гонке; `MutationValidationError(ValueError)` вместо голого ValueError в `_PERMANENT_EXCEPTIONS`.
+
+Костяк (ACL, batch-encode, FSM-guards, partition-pruning, graceful shutdown) — признан качественным. Осталось как tech-debt (LOW): копипаста (JOIN ×7, task_serializer ×4), `history.py` 692 строки, `OfferOut` None-тип.
+
 ### Аудит раунда 8 — все CRIT/HIGH/MID закрыты в Round 9
 
 `docs/backend_test_audit_round_8.md` (647 строк): comprehensive аудит 936 тестов после Этапа 7. Найдено 5 CRIT + 6 HIGH + ряд MID/LOW. Verdict: один целевой раунд → prod-ready. **Round 9 закрыл всё**, 936 → 974 passed (+38 тестов, +2 skipped).
