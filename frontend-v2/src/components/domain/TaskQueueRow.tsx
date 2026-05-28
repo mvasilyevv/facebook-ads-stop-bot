@@ -17,9 +17,13 @@ function statusVariant(status: string): "warning" | "normal" | "success" | "stop
   switch (status) {
     case "RUNNING":
       return "warning";
+    // Бэкенд (status_mapper.to_frontend_task_status) присылает SUCCEEDED;
+    // DONE оставлен для обратной совместимости.
     case "DONE":
+    case "SUCCEEDED":
       return "success";
     case "FAILED":
+    case "CANCELLED":
       return "stop";
     case "RETRYING":
       return "warning";
@@ -28,8 +32,14 @@ function statusVariant(status: string): "warning" | "normal" | "success" | "stop
   }
 }
 
+/** Человекочитаемый лейбл статуса (бэкенд SUCCEEDED → "done" в духе мока). */
+function statusLabel(status: string): string {
+  if (status === "SUCCEEDED" || status === "DONE") return "done";
+  return status.toLowerCase();
+}
+
 export function TaskQueueRow({ task }: TaskQueueRowProps) {
-  const isDone = task.status === "DONE";
+  const isDone = task.status === "DONE" || task.status === "SUCCEEDED";
   const isEnable = task.task_type === "enable";
   return (
     <div
@@ -55,7 +65,7 @@ export function TaskQueueRow({ task }: TaskQueueRowProps) {
         {task.ad_name ?? task.fb_ad_id ?? "—"}
         <span className="text-bg-9 text-[11px] ml-2">· {formatRelativeTime(task.created_at)}</span>
       </div>
-      <Badge variant={statusVariant(task.status)}>{task.status.toLowerCase()}</Badge>
+      <Badge variant={statusVariant(task.status)}>{statusLabel(task.status)}</Badge>
       <span className="font-display text-[11px] text-bg-9 tracking-wider tabular-nums">
         <span className="text-bg-7">×</span>
         {task.attempt_count}/{task.max_attempts}
