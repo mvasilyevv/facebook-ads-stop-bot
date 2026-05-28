@@ -17,7 +17,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from core.meta_api.mutations.create_campaign import CreateCampaignHandler
+from core.meta_api.mutations.create_campaign import (
+    CreateCampaignHandler,
+    CreateCampaignPartialError,
+)
 from core.meta_api.schemas import MetaMutationPayload
 
 
@@ -338,7 +341,9 @@ async def test_create_campaign_adset_bid_amount_optional() -> None:
     assert adset_body["bid_amount"] == ["250"]
 
 
-# Если один из sub-results не успешен — handler бросает ValueError с деталями.
+# Частичный успех batch → CreateCampaignPartialError с созданными id и упавшими шагами.
+# Меняем именно на этот класс (не ValueError): partial-fail не должен retry'иться,
+# worker ловит его отдельным except → mark_failed + лог осиротевших объектов.
 @pytest.mark.asyncio
 async def test_create_campaign_raises_when_subrequest_fails() -> None:
     failure_response = [
@@ -355,8 +360,13 @@ async def test_create_campaign_raises_when_subrequest_fails() -> None:
         ad_account_id="act_999",
     )
 
-    with pytest.raises(ValueError, match="не полностью успешен"):
+    with pytest.raises(CreateCampaignPartialError, match="не полностью успешен") as exc_info:
         await CreateCampaignHandler().execute(client, payload)
+
+    # Осиротевший campaign (первый успешный шаг) должен попасть в created_ids,
+    # чтобы оператор мог удалить его вручную.
+    assert exc_info.value.created_ids
+    assert exc_info.value.failed_steps
 
 
 # Campaign CBO бюджет с daily_budget_cents — попадает как daily_budget в body.

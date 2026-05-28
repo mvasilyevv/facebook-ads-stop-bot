@@ -29,6 +29,7 @@ from __future__ import annotations
 from typing import Any, ClassVar
 
 from core.meta_api.client import MetaApiClient
+from core.meta_api.errors import MutationValidationError
 from core.meta_api.mutations.base import require_numeric_id, success_result
 from core.meta_api.schemas import MetaMutationPayload
 
@@ -54,7 +55,7 @@ class SetAdsetBudgetHandler:
         end_time = params.get("end_time")
 
         if (daily is None) == (lifetime is None):
-            raise ValueError(
+            raise MutationValidationError(
                 "set_adset_budget: укажи ровно одно из daily_budget или lifetime_budget"
             )
 
@@ -75,7 +76,7 @@ class SetAdsetBudgetHandler:
             )
             graph_params["lifetime_budget"] = str(cents)
             if not end_time or not isinstance(end_time, str):
-                raise ValueError(
+                raise MutationValidationError(
                     "set_adset_budget: для lifetime_budget обязательно поле end_time "
                     "в формате ISO8601 с timezone offset"
                 )
@@ -92,13 +93,13 @@ class SetAdsetBudgetHandler:
     def _validate_cents(value: Any, *, field_name: str, max_cents: int) -> int:
         """Бюджет — целое положительное число центов с верхним порогом."""
         if isinstance(value, bool) or not isinstance(value, int):
-            raise ValueError(
+            raise MutationValidationError(
                 f"{field_name}: ожидается целое число центов (int), получено {value!r}"
             )
         if value <= 0:
-            raise ValueError(f"{field_name}: должен быть > 0 центов, получено {value}")
+            raise MutationValidationError(f"{field_name}: должен быть > 0 центов, получено {value}")
         if value > max_cents:
-            raise ValueError(
+            raise MutationValidationError(
                 f"{field_name}: {value} центов превышает разумный лимит {max_cents} "
                 "(защита от случайных/AI-hallucinated значений)"
             )

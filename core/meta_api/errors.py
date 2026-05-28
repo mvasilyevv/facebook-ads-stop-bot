@@ -8,6 +8,21 @@
 from __future__ import annotations
 
 
+class MutationValidationError(ValueError):
+    """Ошибка валидации payload в mutation handler'е.
+
+    Используется когда handler осознанно отвергает payload из-за недопустимого
+    значения (неверный формат id, отсутствует обязательная секция, значение вне
+    допустимого диапазона и т.п.).
+
+    worker маршрутизирует MutationValidationError → mark_failed (permanent):
+    повторный retry с тем же payload смысла не имеет.
+
+    Голый ValueError (случайный, из-за бага в коде или неожиданного Graph-ответа)
+    НЕ является MutationValidationError и попадёт в transient/requeue ветку.
+    """
+
+
 class MetaApiError(RuntimeError):
     """Базовое исключение Marketing API."""
 

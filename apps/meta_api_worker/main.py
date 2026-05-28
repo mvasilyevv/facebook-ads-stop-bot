@@ -14,7 +14,9 @@ dispatch_mutation. До Этапа 5 здесь была заглушка с Not
 - PermanentError / TokenInvalidError / NotFoundError / PermissionError → mark_failed (retry бесполезен)
 - RateLimitedError / TemporaryError / SessionUnavailableError → requeue_for_retry
 - NotImplementedError (новый mutation_kind без handler) → mark_failed
-- ValueError (валидация payload в handler) → mark_failed
+- MutationValidationError (осознанная валидационная ошибка в handler'е) → mark_failed
+- CreateCampaignPartialError → mark_failed + лог осиротевших id (нужна ручная чистка)
+- голый ValueError (неожиданный, баг в коде) → requeue (защитный retry, логируется как аномалия)
 - любое другое Exception → requeue (защитный retry на transient)
 """
 
@@ -32,6 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from core.meta_api.audit import AuditedMetaApiClient
 from core.meta_api.client import MetaApiClient
 from core.meta_api.errors import (
+    MutationValidationError,
     NotFoundError,
     PermanentError,
     RateLimitedError,
@@ -43,6 +46,7 @@ from core.meta_api.errors import (
     PermissionError as MetaPermissionError,
 )
 from core.meta_api.mutations import dispatch_mutation
+from core.meta_api.mutations.create_campaign import CreateCampaignPartialError
 from core.meta_api.queue import (
     claim_pending_task,
     mark_task_failed,
@@ -101,13 +105,15 @@ async def execute_mutation(
 
 
 # Permanent ошибки → mark_failed (retry не имеет смысла).
+# MutationValidationError(ValueError) — осознанная ошибка валидации payload в handler'е.
+# Голый ValueError (случайный, из-за бага) — НЕ здесь, он попадёт в отдельную ветку.
 _PERMANENT_EXCEPTIONS: tuple[type[BaseException], ...] = (
     TokenInvalidError,
     NotFoundError,
     MetaPermissionError,
     PermanentError,
     NotImplementedError,
-    ValueError,
+    MutationValidationError,
 )
 
 # Temporary ошибки → requeue_for_retry.
@@ -179,6 +185,29 @@ async def process_one_task(
             return
         logger.info("meta_api: task id=%s succeeded", task.id)
         return
+    except CreateCampaignPartialError as exc:
+        # Batch API не атомарен: часть объектов уже создана в Meta.
+        # Логируем осиротевшие id — оператор должен удалить их вручную.
+        logger.error(
+            "meta_api: task id=%s create_campaign partial fail — "
+            "осиротевшие объекты в Meta, нужна ручная чистка! "
+            "created_ids=%s failed_steps=%s",
+            task.id,
+            exc.created_ids,
+            exc.failed_steps,
+        )
+        applied = await mark_task_failed(
+            engine,
+            task_id=task.id,
+            error=f"partial_fail: created_ids={exc.created_ids!r} failed={exc.failed_steps!r}",
+        )
+        if not applied:
+            logger.warning(
+                "meta_api: task id=%s mark_failed (partial) не применился "
+                "— гонка с другим воркером",
+                task.id,
+            )
+        return
     except _PERMANENT_EXCEPTIONS as exc:
         applied = await mark_task_failed(engine, task_id=task.id, error=repr(exc))
         if not applied:
@@ -196,6 +225,24 @@ async def process_one_task(
             logger.warning("meta_api: task id=%s → retrying (temporary): %s", task.id, exc)
         else:
             logger.error("meta_api: task id=%s → exhausted retries (temporary): %s", task.id, exc)
+        return
+    except ValueError as exc:
+        # Голый ValueError — скорее всего баг в коде или неожиданный Graph-ответ.
+        # Не mark_failed (без retry потеряем задачу навсегда), а requeue с аномалия-логом.
+        logger.error(
+            "meta_api: task id=%s неожиданный ValueError (возможно баг) — requeue: %s",
+            task.id,
+            exc,
+            exc_info=True,
+        )
+        retried = await requeue_task(engine, task=task, error=f"unexpected_value_error: {exc!r}")
+        if retried:
+            logger.warning("meta_api: task id=%s → retrying (unexpected ValueError)", task.id)
+        else:
+            logger.error(
+                "meta_api: task id=%s → final fail (unexpected ValueError, retries exhausted)",
+                task.id,
+            )
         return
     except Exception as exc:  # noqa: BLE001 — защитная сетка на неклассифицированное
         retried = await requeue_task(engine, task=task, error=repr(exc))

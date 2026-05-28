@@ -84,10 +84,6 @@ async def test_ai_analyze_happy(fake_redis_client, monkeypatch) -> None:
     from core.ai_assistant.chat import ChatResponse
 
     monkeypatch.setattr("core.ai_assistant.client._client_singleton", None)
-    monkeypatch.setattr(
-        "apps.api.routers.v1.ai_analyze._get_analyze_rate_limiter",
-        lambda: type("RL", (), {"hit": lambda self, k: True})(),
-    )
 
     mock_response = ChatResponse(answer="Анализ: всё хорошо, CTR в норме.", tool_calls=[])
 
@@ -184,10 +180,6 @@ async def test_ai_analyze_force_refresh(fake_redis_client, monkeypatch) -> None:
         return ChatResponse(answer="Свежий ответ после force_refresh", tool_calls=[])
 
     monkeypatch.setattr("core.ai_assistant.chat.ChatSession.ask", _fake_ask)
-    monkeypatch.setattr(
-        "apps.api.routers.v1.ai_analyze._get_analyze_rate_limiter",
-        lambda: type("RL", (), {"hit": lambda self, k: True})(),
-    )
 
     app = _make_app(redis=fake_redis_client, settings=_settings_with_anthropic())
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
@@ -222,26 +214,22 @@ async def test_ai_analyze_invalid_block_type(fake_redis_client) -> None:
 # ─────────────────────── Rate-limit ──────────────────────────────────────────
 
 
-# После 20 запросов → 429
+# Превышение Redis rate-limit → 429
 @pytest.mark.asyncio
 async def test_ai_analyze_rate_limit_exceeded(fake_redis_client, monkeypatch) -> None:
-    """21-й запрос в час → 429 rate-limit."""
+    """check_and_increment бросает RateLimitExceeded → endpoint отдаёт 429."""
     from core.ai_assistant.client import AIClient
+    from core.ai_assistant.tools._ratelimit import RateLimitExceeded
 
     fake_client = AIClient(primary=None, fallback=None)
     fake_client._primary = object()
     monkeypatch.setattr("core.ai_assistant.client._client_singleton", fake_client)
     monkeypatch.setattr("core.ai_assistant.chat.ChatSession.ask", AsyncMock())
 
-    # Создаём свежий rate-limiter с лимитом 1 для теста
-    from core.ai_assistant.chat import _RateLimiter
-
-    tiny_limiter = _RateLimiter(max_per_hour=1)
-    tiny_limiter.hit("127.0.0.1")  # исчерпываем лимит
-
+    # Redis-backed rate-limit исчерпан — мокаем check_and_increment на отказ.
     monkeypatch.setattr(
-        "apps.api.routers.v1.ai_analyze._get_analyze_rate_limiter",
-        lambda: tiny_limiter,
+        "apps.api.routers.v1.ai_analyze.check_and_increment",
+        AsyncMock(side_effect=RateLimitExceeded("лимит исчерпан")),
     )
 
     app = _make_app(redis=fake_redis_client, settings=_settings_with_anthropic())
@@ -268,10 +256,6 @@ async def test_ai_analyze_cache_key_format(fake_redis_client, monkeypatch) -> No
     monkeypatch.setattr(
         "core.ai_assistant.chat.ChatSession.ask",
         AsyncMock(return_value=ChatResponse(answer="ok", tool_calls=[])),
-    )
-    monkeypatch.setattr(
-        "apps.api.routers.v1.ai_analyze._get_analyze_rate_limiter",
-        lambda: type("RL", (), {"hit": lambda self, k: True})(),
     )
 
     app = _make_app(redis=fake_redis_client, settings=_settings_with_anthropic())
@@ -307,10 +291,6 @@ async def test_ai_analyze_provider_openai(fake_redis_client, monkeypatch) -> Non
     monkeypatch.setattr(
         "core.ai_assistant.chat.ChatSession.ask",
         AsyncMock(return_value=ChatResponse(answer="openai answer", tool_calls=[])),
-    )
-    monkeypatch.setattr(
-        "apps.api.routers.v1.ai_analyze._get_analyze_rate_limiter",
-        lambda: type("RL", (), {"hit": lambda self, k: True})(),
     )
 
     app = _make_app(redis=fake_redis_client, settings=settings)

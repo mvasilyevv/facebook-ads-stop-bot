@@ -6,6 +6,12 @@ batch=[entry1, entry2, ...]. Sub-requests ссылаются друг на др�
 JSONPath ({result=campaign:$.id}), Meta сама подставит реальные ID в момент
 исполнения сабжей.
 
+ВАЖНО: Batch API НЕ атомарен. Если часть sub-requests прошла успешно, а часть
+упала — в Meta остаются «осиротевшие» объекты (например, PAUSED-кампания без ad).
+При частичном успехе handler поднимает CreateCampaignPartialError с полем
+`created_ids` — dict с реально созданными id. Worker должен залогировать эти id
+и/или уведомить оператора. Ручная чистка через Business Manager или DELETE /v22.0/{id}.
+
 Иерархия Marketing API:
     Campaign (objective, status, special_ad_categories, [budget])
        └── AdSet (campaign_id, targeting, optimization_goal, billing_event, budget, schedule)
@@ -89,10 +95,42 @@ from core.meta_api.mutations._batch_helpers import (
     make_batch_entry,
     parse_batch_response,
 )
-from core.meta_api.mutations.base import success_result
+from core.meta_api.mutations.base import MutationValidationError, success_result
 from core.meta_api.schemas import MetaMutationPayload
 
 logger = logging.getLogger(__name__)
+
+
+class CreateCampaignPartialError(Exception):
+    """Batch API частично успешен: часть объектов создана, часть — нет.
+
+    Атрибут `created_ids` содержит dict с уже созданными id (не None).
+    Атрибут `failed_steps` содержит список шагов с кодом ошибки.
+    Оператор должен вручную удалить осиротевшие объекты через Business Manager
+    или через DELETE /v22.0/{id} через Marketing API.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        created_ids: dict[str, str],
+        failed_steps: list[dict[str, Any]],
+    ) -> None:
+        super().__init__(message)
+        # Реально созданные объекты (шаги где success=True с id)
+        self.created_ids = created_ids
+        # Упавшие шаги с кодом ошибки Graph API
+        self.failed_steps = failed_steps
+
+    def __repr__(self) -> str:
+        return (
+            f"CreateCampaignPartialError("
+            f"created_ids={self.created_ids!r}, "
+            f"failed_steps={self.failed_steps!r}, "
+            f"message={str(self)!r})"
+        )
+
 
 _VALID_OBJECTIVES = frozenset(
     {
@@ -191,19 +229,35 @@ class CreateCampaignHandler:
         # Извлекаем ID из каждого sub_result. Порядок entries фиксирован.
         ids = self._extract_ids(sub_results)
 
-        # Если хоть один sub-request не успешен — отдаём агрегированную ошибку.
+        # Если хоть один sub-request не успешен — Batch API не атомарен:
+        # часть объектов уже создана в Meta. Поднимаем структурированную ошибку
+        # с реально созданными id, чтобы оператор/worker мог их залогировать и
+        # вручную удалить осиротевшие объекты.
         if not all(r["success"] for r in sub_results):
-            failed = [
+            step_names = ("campaign", "adset", "creative", "ad")
+            failed_steps = [
                 {
-                    "step": ("campaign", "adset", "creative", "ad")[r["index"]],
+                    "step": step_names[r["index"]],
                     "code": r["code"],
                     "error": r.get("error"),
                 }
                 for r in sub_results
                 if not r["success"]
             ]
-            raise ValueError(
-                f"create_campaign: batch не полностью успешен: {failed} (ids_so_far={ids})"
+            # Только те id, что реально созданы (не None)
+            created_ids = {k: v for k, v in ids.items() if v is not None}
+            if created_ids:
+                logger.error(
+                    "create_campaign: partial fail — созданы осиротевшие объекты в Meta. "
+                    "created_ids=%s failed_steps=%s. "
+                    "Удалить вручную через Business Manager или DELETE /v22.0/{id}.",
+                    created_ids,
+                    failed_steps,
+                )
+            raise CreateCampaignPartialError(
+                f"create_campaign: batch не полностью успешен — {len(failed_steps)} шагов упали",
+                created_ids=created_ids,
+                failed_steps=failed_steps,
             )
 
         modified_ids = [v for v in ids.values() if v]
@@ -226,20 +280,23 @@ class CreateCampaignHandler:
     @staticmethod
     def _validate_ad_account(value: str | None) -> str:
         if not value or not isinstance(value, str):
-            raise ValueError("ad_account_id обязателен")
+            raise MutationValidationError("ad_account_id обязателен")
         cleaned = value.strip()
         if not cleaned.startswith("act_"):
-            raise ValueError(f"ad_account_id должен начинаться с 'act_', получено {cleaned!r}")
+            raise MutationValidationError(
+                f"ad_account_id должен начинаться с 'act_', получено {cleaned!r}"
+            )
         return cleaned
 
     @staticmethod
     def _validate_section(params: dict[str, Any], key: str) -> dict[str, Any]:
         section = params.get(key)
         if section is None:
-            raise ValueError(f"create_campaign: секция {key!r} обязательна в params")
+            raise MutationValidationError(f"create_campaign: секция {key!r} обязательна в params")
         if not isinstance(section, dict):
-            raise ValueError(
-                f"create_campaign: секция {key!r} должна быть dict, получено {type(section).__name__}"
+            raise MutationValidationError(
+                f"create_campaign: секция {key!r} должна быть dict, "
+                f"получено {type(section).__name__}"
             )
         return section
 
@@ -260,7 +317,7 @@ class CreateCampaignHandler:
         daily = spec.get("daily_budget_cents")
         lifetime = spec.get("lifetime_budget_cents")
         if daily is not None and lifetime is not None:
-            raise ValueError(
+            raise MutationValidationError(
                 "campaign: укажи не больше одного из daily_budget_cents/lifetime_budget_cents"
             )
         if daily is not None:
@@ -294,9 +351,11 @@ class CreateCampaignHandler:
         daily = spec.get("daily_budget_cents")
         lifetime = spec.get("lifetime_budget_cents")
         if daily is None and lifetime is None:
-            raise ValueError("adset: укажи daily_budget_cents или lifetime_budget_cents")
+            raise MutationValidationError(
+                "adset: укажи daily_budget_cents или lifetime_budget_cents"
+            )
         if daily is not None and lifetime is not None:
-            raise ValueError(
+            raise MutationValidationError(
                 "adset: укажи не больше одного из daily_budget_cents/lifetime_budget_cents"
             )
         if daily is not None:
@@ -316,13 +375,15 @@ class CreateCampaignHandler:
             value = spec.get(key)
             if value is not None:
                 if not isinstance(value, str):
-                    raise ValueError(f"adset.{key}: ожидается строка ISO-8601, получено {value!r}")
+                    raise MutationValidationError(
+                        f"adset.{key}: ожидается строка ISO-8601, получено {value!r}"
+                    )
                 body[key] = value
 
         promoted = spec.get("promoted_object")
         if promoted is not None:
             if not isinstance(promoted, dict):
-                raise ValueError(
+                raise MutationValidationError(
                     f"adset.promoted_object: ожидается dict, получено {type(promoted).__name__}"
                 )
             body["promoted_object"] = promoted
@@ -334,7 +395,9 @@ class CreateCampaignHandler:
         name = cls._validate_name(spec.get("name"), section="creative")
         object_story_spec = spec.get("object_story_spec")
         if not isinstance(object_story_spec, dict) or not object_story_spec:
-            raise ValueError("creative.object_story_spec: обязателен и должен быть непустым dict")
+            raise MutationValidationError(
+                "creative.object_story_spec: обязателен и должен быть непустым dict"
+            )
 
         body: dict[str, Any] = {
             "name": name,
@@ -347,13 +410,13 @@ class CreateCampaignHandler:
         image_hash = spec.get("image_hash")
         video_id = spec.get("video_id")
         if image_hash and video_id:
-            raise ValueError(
+            raise MutationValidationError(
                 "creative: image_hash и video_id mutually exclusive — задай одно из двух"
             )
         # Валидация: внутри object_story_spec должен быть хотя бы один источник
         # креатива (link_data / video_data / template_data). Иначе Meta вернёт ошибку.
         if not cls._has_creative_source(object_story_spec, image_hash, video_id):
-            raise ValueError(
+            raise MutationValidationError(
                 "creative: object_story_spec должен содержать link_data/video_data/template_data "
                 "ИЛИ передай top-level image_hash/video_id"
             )
@@ -362,11 +425,15 @@ class CreateCampaignHandler:
         # чтобы handler был backward-compatible с упрощённым форматом.
         if image_hash:
             if not isinstance(image_hash, str):
-                raise ValueError(f"creative.image_hash: ожидается str, получено {image_hash!r}")
+                raise MutationValidationError(
+                    f"creative.image_hash: ожидается str, получено {image_hash!r}"
+                )
             body["image_hash"] = image_hash
         if video_id:
             if not isinstance(video_id, str):
-                raise ValueError(f"creative.video_id: ожидается str, получено {video_id!r}")
+                raise MutationValidationError(
+                    f"creative.video_id: ожидается str, получено {video_id!r}"
+                )
             body["video_id"] = video_id
 
         return body
@@ -412,21 +479,23 @@ class CreateCampaignHandler:
     @staticmethod
     def _validate_name(value: Any, *, section: str) -> str:
         if not isinstance(value, str):
-            raise ValueError(f"{section}.name: ожидается строка, получено {value!r}")
+            raise MutationValidationError(f"{section}.name: ожидается строка, получено {value!r}")
         name = value.strip()
         if len(name) < 3:
-            raise ValueError(f"{section}.name: минимум 3 символа")
+            raise MutationValidationError(f"{section}.name: минимум 3 символа")
         if len(name) > 400:
-            raise ValueError(f"{section}.name: слишком длинное ({len(name)} > 400)")
+            raise MutationValidationError(f"{section}.name: слишком длинное ({len(name)} > 400)")
         return name
 
     @staticmethod
     def _validate_objective(value: Any) -> str:
         if not isinstance(value, str):
-            raise ValueError(f"campaign.objective: ожидается строка, получено {value!r}")
+            raise MutationValidationError(
+                f"campaign.objective: ожидается строка, получено {value!r}"
+            )
         normalized = value.strip().upper()
         if normalized not in _VALID_OBJECTIVES:
-            raise ValueError(
+            raise MutationValidationError(
                 f"campaign.objective: допустимо {sorted(_VALID_OBJECTIVES)}, получено {value!r}"
             )
         return normalized
@@ -434,27 +503,29 @@ class CreateCampaignHandler:
     @staticmethod
     def _validate_status(value: Any, *, section: str) -> str:
         if not isinstance(value, str):
-            raise ValueError(f"{section}.status: ожидается строка, получено {value!r}")
+            raise MutationValidationError(f"{section}.status: ожидается строка, получено {value!r}")
         normalized = value.strip().upper()
         if normalized not in ("PAUSED", "ACTIVE"):
-            raise ValueError(f"{section}.status: допустимо PAUSED или ACTIVE, получено {value!r}")
+            raise MutationValidationError(
+                f"{section}.status: допустимо PAUSED или ACTIVE, получено {value!r}"
+            )
         return normalized
 
     @staticmethod
     def _validate_special_categories(value: Any) -> list[str]:
         if not isinstance(value, list) or not value:
-            raise ValueError(
+            raise MutationValidationError(
                 "campaign.special_ad_categories: ожидается непустой список (минимум ['NONE'])"
             )
         normalized: list[str] = []
         for item in value:
             if not isinstance(item, str):
-                raise ValueError(
+                raise MutationValidationError(
                     f"campaign.special_ad_categories: элементы должны быть строками, получен {item!r}"
                 )
             up = item.strip().upper()
             if up not in _VALID_SPECIAL_CATEGORIES:
-                raise ValueError(
+                raise MutationValidationError(
                     f"campaign.special_ad_categories: недопустимое значение {item!r}, "
                     f"ожидается из {sorted(_VALID_SPECIAL_CATEGORIES)}"
                 )
@@ -464,18 +535,20 @@ class CreateCampaignHandler:
     @staticmethod
     def _validate_cents(value: Any, *, field_name: str) -> int:
         if isinstance(value, bool) or not isinstance(value, int):
-            raise ValueError(f"{field_name}: ожидается int центов, получено {value!r}")
+            raise MutationValidationError(f"{field_name}: ожидается int центов, получено {value!r}")
         if value <= 0:
-            raise ValueError(f"{field_name}: должен быть > 0, получено {value}")
+            raise MutationValidationError(f"{field_name}: должен быть > 0, получено {value}")
         return value
 
     @staticmethod
     def _validate_billing_event(value: Any) -> str:
         if not isinstance(value, str):
-            raise ValueError(f"adset.billing_event: ожидается строка, получено {value!r}")
+            raise MutationValidationError(
+                f"adset.billing_event: ожидается строка, получено {value!r}"
+            )
         normalized = value.strip().upper()
         if normalized not in _VALID_BILLING_EVENTS:
-            raise ValueError(
+            raise MutationValidationError(
                 f"adset.billing_event: допустимо {sorted(_VALID_BILLING_EVENTS)}, получено {value!r}"
             )
         return normalized
@@ -485,19 +558,21 @@ class CreateCampaignHandler:
         # Meta допускает много значений: LEAD_GENERATION, LINK_CLICKS, CONVERSIONS, etc.
         # Не пытаемся всё перечислить — просто требуем непустую строку в UPPER.
         if not isinstance(value, str):
-            raise ValueError(f"adset.optimization_goal: ожидается строка, получено {value!r}")
+            raise MutationValidationError(
+                f"adset.optimization_goal: ожидается строка, получено {value!r}"
+            )
         normalized = value.strip().upper()
         if not normalized:
-            raise ValueError("adset.optimization_goal: пустая строка")
+            raise MutationValidationError("adset.optimization_goal: пустая строка")
         return normalized
 
     @staticmethod
     def _validate_targeting(value: Any) -> dict[str, Any]:
         if not isinstance(value, dict) or not value:
-            raise ValueError("adset.targeting: обязателен и должен быть непустым dict")
+            raise MutationValidationError("adset.targeting: обязателен и должен быть непустым dict")
         # Минимальная проверка: должно быть хотя бы geo_locations.
         if not isinstance(value.get("geo_locations"), dict):
-            raise ValueError(
+            raise MutationValidationError(
                 "adset.targeting.geo_locations: обязательно (dict), минимум для запуска"
             )
         return value

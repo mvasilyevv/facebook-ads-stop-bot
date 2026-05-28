@@ -38,6 +38,7 @@ import logging
 from typing import Any, ClassVar
 
 from core.meta_api.client import MetaApiClient
+from core.meta_api.errors import MutationValidationError
 from core.meta_api.mutations._batch_helpers import (
     build_batch_payload,
     jsonpath_ref,
@@ -63,7 +64,7 @@ class DuplicateCampaignHandler:
 
         deep_copy = params.get("deep_copy", True)
         if not isinstance(deep_copy, bool):
-            raise ValueError(f"deep_copy: ожидается bool, получено {deep_copy!r}")
+            raise MutationValidationError(f"deep_copy: ожидается bool, получено {deep_copy!r}")
 
         status_after = self._resolve_status_option(params.get("status_after_clone", "PAUSED"))
         new_name = self._validate_new_name(params.get("new_name"))
@@ -207,25 +208,31 @@ class DuplicateCampaignHandler:
     def _resolve_status_option(value: Any) -> str:
         """status_after_clone (PAUSED|ACTIVE) → Graph status_option."""
         if not isinstance(value, str):
-            raise ValueError(f"status_after_clone: ожидается строка, получено {value!r}")
+            raise MutationValidationError(
+                f"status_after_clone: ожидается строка, получено {value!r}"
+            )
         normalized = value.strip().upper()
         if normalized == "PAUSED":
             return "PAUSED"
         if normalized == "ACTIVE":
             return "ACTIVE_TO_INHERITED"
-        raise ValueError(f"status_after_clone: допустимо PAUSED или ACTIVE, получено {value!r}")
+        raise MutationValidationError(
+            f"status_after_clone: допустимо PAUSED или ACTIVE, получено {value!r}"
+        )
 
     @staticmethod
     def _validate_new_name(value: Any) -> str | None:
         if value is None or value == "":
             return None
         if not isinstance(value, str):
-            raise ValueError(f"new_name: ожидается строка, получено {type(value).__name__}")
+            raise MutationValidationError(
+                f"new_name: ожидается строка, получено {type(value).__name__}"
+            )
         name = value.strip()
         if not name:
             return None
         if len(name) > 400:
-            raise ValueError(f"new_name: слишком длинное ({len(name)} > 400 символов)")
+            raise MutationValidationError(f"new_name: слишком длинное ({len(name)} > 400 символов)")
         return name
 
     @staticmethod

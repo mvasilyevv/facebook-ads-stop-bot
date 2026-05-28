@@ -59,6 +59,7 @@ import logging
 from typing import Any, ClassVar
 
 from core.meta_api.client import MetaApiClient
+from core.meta_api.errors import MutationValidationError
 from core.meta_api.mutations.base import require_numeric_id, success_result
 from core.meta_api.schemas import MetaMutationPayload
 
@@ -136,7 +137,7 @@ class BulkStatusChangeHandler:
         """Достать object_ids/status/object_type из payload.params.
 
         Поддерживает обе формы: полную (object_ids+status+object_type) и
-        сокращённую (ad_ids+action). Бросает ValueError на bad input.
+        сокращённую (ad_ids+action). Бросает MutationValidationError на bad input.
         """
         # Полная форма
         if "object_ids" in params or "status" in params:
@@ -144,32 +145,34 @@ class BulkStatusChangeHandler:
             status_raw = params.get("status")
             object_type = (params.get("object_type") or "ad").lower()
             if not isinstance(raw_ids, list) or not raw_ids:
-                raise ValueError("object_ids: ожидается непустой список ID")
+                raise MutationValidationError("object_ids: ожидается непустой список ID")
             if not isinstance(status_raw, str):
-                raise ValueError(f"status: ожидается строка, получено {status_raw!r}")
+                raise MutationValidationError(f"status: ожидается строка, получено {status_raw!r}")
             status = status_raw.strip().upper()
             if status not in ("PAUSED", "ACTIVE"):
-                raise ValueError(f"status: допустимо PAUSED или ACTIVE, получено {status_raw!r}")
+                raise MutationValidationError(
+                    f"status: допустимо PAUSED или ACTIVE, получено {status_raw!r}"
+                )
         # Сокращённая (от drafts)
         elif "ad_ids" in params or "action" in params:
             raw_ids = params.get("ad_ids") or []
             action = str(params.get("action") or "").lower().strip()
             if not isinstance(raw_ids, list) or not raw_ids:
-                raise ValueError("ad_ids: ожидается непустой список ID")
+                raise MutationValidationError("ad_ids: ожидается непустой список ID")
             if action not in _ACTION_TO_STATUS:
-                raise ValueError(
+                raise MutationValidationError(
                     f"action: допустимо pause/activate, получено {params.get('action')!r}"
                 )
             status = _ACTION_TO_STATUS[action]
             object_type = "ad"
         else:
-            raise ValueError(
+            raise MutationValidationError(
                 "bulk_status_change: params должен содержать "
                 "(object_ids+status+object_type) или (ad_ids+action)"
             )
 
         if object_type not in _ALLOWED_OBJECT_TYPES:
-            raise ValueError(
+            raise MutationValidationError(
                 f"object_type: допустимо {sorted(_ALLOWED_OBJECT_TYPES)}, получено {object_type!r}"
             )
 
@@ -180,7 +183,7 @@ class BulkStatusChangeHandler:
             object_ids.append(sid)
 
         if len(object_ids) > _MAX_BATCH_SIZE:
-            raise ValueError(
+            raise MutationValidationError(
                 f"bulk_status_change: слишком много объектов "
                 f"({len(object_ids)} > {_MAX_BATCH_SIZE})"
             )

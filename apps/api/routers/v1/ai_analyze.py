@@ -2,7 +2,11 @@
 """Роутер AI-анализа: POST /ai/analyze.
 
 Принимает block_type + scope_key, возвращает AI-анализ с Redis-кэшем TTL 600s.
-Rate-limit: 20 запросов/час per remote IP через in-memory _RateLimiter из ChatSession.
+Rate-limit: 20 запросов/час per remote IP.
+  - Счётчик хранится в Redis (ключ ai:ratelimit:analyze:{client_key}, TTL 3600s).
+  - За reverse-proxy используется первый IP из X-Forwarded-For.
+  - При сбое Redis — in-memory secondary cap (5 запросов / 60с) как защита от лавины.
+  - Логика rate-limit'а переиспользует core/ai_assistant/tools/_ratelimit.py.
 
 Prompt-templates построены как простые user-сообщения для каждого block_type,
 без доступа к tool-use (allow_tools=False) — endpoint аналитический, не мутирующий.
@@ -19,8 +23,9 @@ from fastapi.responses import JSONResponse
 
 from apps.api.deps import DepRedis, DepSettings
 from apps.api.routers.v1.schemas.ai import AIAnalyzeRequest, AIAnalyzeResponse
-from core.ai_assistant.chat import ChatMessage, ChatRateLimitedError, ChatSession, _RateLimiter
+from core.ai_assistant.chat import ChatMessage, ChatRateLimitedError, ChatSession
 from core.ai_assistant.client import AIUnavailableError, get_ai_client
+from core.ai_assistant.tools._ratelimit import RateLimitExceeded, check_and_increment
 
 logger = logging.getLogger(__name__)
 
@@ -29,17 +34,27 @@ router = APIRouter(tags=["ai"])
 # TTL кэша в секундах
 _CACHE_TTL = 600
 
-# Rate-limit для /ai/analyze: 20 запросов/час per IP
+# Rate-limit для /ai/analyze: 20 запросов/час per IP (Redis-backed)
 _ANALYZE_RATE_LIMIT = 20
 
-_analyze_rate_limiter: _RateLimiter | None = None
+# Namespace Redis-ключей: ai:ratelimit:analyze:{client_key}
+_RATE_LIMIT_NAMESPACE = "analyze"
 
 
-def _get_analyze_rate_limiter() -> _RateLimiter:
-    global _analyze_rate_limiter
-    if _analyze_rate_limiter is None:
-        _analyze_rate_limiter = _RateLimiter(max_per_hour=_ANALYZE_RATE_LIMIT)
-    return _analyze_rate_limiter
+def _extract_client_key(request: Request) -> str:
+    """Извлечь ключ клиента для rate-limit.
+
+    За reverse-proxy (k8s-ingress, nginx) используем первый IP из X-Forwarded-For.
+    Fallback — request.client.host. При полностью неизвестном IP — 'unknown'.
+    """
+    forwarded_for = request.headers.get("X-Forwarded-For", "")
+    if forwarded_for:
+        # X-Forwarded-For: <client>, <proxy1>, <proxy2>
+        # Берём самый левый (реальный клиент)
+        first_ip = forwarded_for.split(",")[0].strip()
+        if first_ip:
+            return first_ip
+    return (request.client.host if request.client else None) or "unknown"
 
 
 def _build_prompt(block_type: str, scope_key: str, client_data: dict | None) -> str:
@@ -100,10 +115,16 @@ async def ai_analyze(
             },
         )
 
-    # Rate-limit per remote IP
-    client_ip = request.client.host if request.client else "unknown"
-    limiter = _get_analyze_rate_limiter()
-    if not limiter.hit(client_ip):
+    # Rate-limit per remote IP через Redis sliding-window
+    client_key = _extract_client_key(request)
+    try:
+        await check_and_increment(
+            redis,
+            client_key=client_key,
+            max_per_hour=_ANALYZE_RATE_LIMIT,
+            namespace=_RATE_LIMIT_NAMESPACE,
+        )
+    except RateLimitExceeded:
         return JSONResponse(
             status_code=429,
             content={"detail": "Превышен лимит запросов: 20 в час для /ai/analyze"},
@@ -135,7 +156,7 @@ async def ai_analyze(
     try:
         response = await session.ask(
             history=[ChatMessage(role="user", content=prompt)],
-            client_key=f"analyze:{client_ip}",
+            client_key=f"analyze:{client_key}",
         )
     except ChatRateLimitedError as exc:
         return JSONResponse(

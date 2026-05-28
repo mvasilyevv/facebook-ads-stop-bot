@@ -20,6 +20,7 @@ from __future__ import annotations
 from typing import Any, ClassVar
 
 from core.meta_api.client import MetaApiClient
+from core.meta_api.errors import MutationValidationError
 from core.meta_api.mutations.base import require_numeric_id, success_result
 from core.meta_api.schemas import MetaMutationPayload
 
@@ -37,7 +38,7 @@ class SetAdCreativeHandler:
         params = payload.params or {}
         creative_id_raw = params.get("creative_id")
         if not creative_id_raw:
-            raise ValueError("set_ad_creative: params.creative_id обязателен")
+            raise MutationValidationError("set_ad_creative: params.creative_id обязателен")
 
         creative_id = require_numeric_id(str(creative_id_raw), "creative_id")
 

@@ -9,7 +9,10 @@ Handler знает один mutation_kind и валидирует свой на�
 - Все числовые значения для Graph API сериализуются как строки (требование Marketing API).
 - Доменные ошибки (TokenInvalid, RateLimited, NotFound, ...) пробрасываются как есть —
   worker маршрутизирует их в retry vs final fail (см. apps/meta_api_worker/main.py).
-- Валидация payload бросает ValueError; worker превращает её в final mark_failed.
+- Валидация payload бросает MutationValidationError (subclass ValueError);
+  worker маршрутизирует её в permanent mark_failed (retry бесполезен).
+  Голый ValueError НЕ должен появляться в handler'ах — он будет трактоваться как
+  unexpected баг и уйдёт в requeue.
 """
 
 from __future__ import annotations
@@ -17,6 +20,7 @@ from __future__ import annotations
 from typing import Any, Protocol, runtime_checkable
 
 from core.meta_api.client import MetaApiClient
+from core.meta_api.errors import MutationValidationError  # noqa: F401 — экспортируем для handlers
 from core.meta_api.schemas import MetaMutationPayload
 
 
@@ -26,7 +30,7 @@ class MutationHandler(Protocol):
 
     Реализация должна:
     1. Иметь class-level атрибут mutation_kind: str (ключ из MUTATION_KINDS).
-    2. В execute(...) — валидировать payload.params, бросать ValueError на bad input.
+    2. В execute(...) — валидировать payload.params, бросать MutationValidationError на bad input.
     3. Вызвать client.execute_graph_call(...) с правильным method/endpoint/params.
     4. Вернуть dict вида {"success": True, "graph_response": ..., "modified_ids": [...]}.
     5. Доменные ошибки Meta пробрасывать as-is (они доходят до worker'а).
@@ -50,19 +54,25 @@ def require_numeric_id(value: str, field_name: str) -> str:
     Marketing API ID — целые числа в виде строк (например, "23847238472384").
     """
     if not value or not isinstance(value, str):
-        raise ValueError(f"{field_name}: ожидается строка с числовым ID, получено {value!r}")
+        raise MutationValidationError(
+            f"{field_name}: ожидается строка с числовым ID, получено {value!r}"
+        )
     if not value.isdigit():
-        raise ValueError(f"{field_name}: ожидается только из цифр, получено {value!r}")
+        raise MutationValidationError(f"{field_name}: ожидается только из цифр, получено {value!r}")
     return value
 
 
 def require_status(value: Any, *, field_name: str = "status") -> str:
     """Нормализовать status к Graph API формату: PAUSED или ACTIVE."""
     if not isinstance(value, str):
-        raise ValueError(f"{field_name}: ожидается строка, получено {type(value).__name__}")
+        raise MutationValidationError(
+            f"{field_name}: ожидается строка, получено {type(value).__name__}"
+        )
     normalized = value.strip().upper()
     if normalized not in ("PAUSED", "ACTIVE"):
-        raise ValueError(f"{field_name}: допустимо PAUSED или ACTIVE, получено {value!r}")
+        raise MutationValidationError(
+            f"{field_name}: допустимо PAUSED или ACTIVE, получено {value!r}"
+        )
     return normalized
 
 

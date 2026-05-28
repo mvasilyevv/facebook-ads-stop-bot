@@ -61,6 +61,7 @@ import json
 from typing import Any, ClassVar
 
 from core.meta_api.client import MetaApiClient
+from core.meta_api.errors import MutationValidationError
 from core.meta_api.mutations.base import require_numeric_id, success_result
 from core.meta_api.schemas import MetaMutationPayload
 
@@ -83,7 +84,7 @@ class CustomAudienceHandler:
         action = params.get("action")
 
         if action not in _VALID_ACTIONS:
-            raise ValueError(
+            raise MutationValidationError(
                 f"custom_audience: action должен быть одним из {sorted(_VALID_ACTIONS)}, "
                 f"получено {action!r}"
             )
@@ -105,15 +106,17 @@ class CustomAudienceHandler:
     ) -> dict[str, Any]:
         ad_account_id = payload.ad_account_id
         if not ad_account_id or not isinstance(ad_account_id, str):
-            raise ValueError("custom_audience create: ad_account_id обязателен (например act_123)")
+            raise MutationValidationError(
+                "custom_audience create: ad_account_id обязателен (например act_123)"
+            )
 
         name = params.get("name")
         if not name or not isinstance(name, str):
-            raise ValueError("custom_audience create: params.name обязателен")
+            raise MutationValidationError("custom_audience create: params.name обязателен")
 
         subtype = params.get("subtype")
         if subtype not in _VALID_SUBTYPES:
-            raise ValueError(
+            raise MutationValidationError(
                 f"custom_audience create: subtype должен быть одним из "
                 f"{sorted(_VALID_SUBTYPES)}, получено {subtype!r}"
             )
@@ -162,7 +165,7 @@ class CustomAudienceHandler:
             body["description"] = params["description"]
 
         if not body:
-            raise ValueError(
+            raise MutationValidationError(
                 "custom_audience update: нужно хотя бы одно поле для обновления "
                 "(name или description)"
             )
@@ -207,26 +210,30 @@ class CustomAudienceHandler:
         """
         origin_audience_id = params.get("origin_audience_id")
         if not origin_audience_id:
-            raise ValueError("custom_audience LOOKALIKE: origin_audience_id обязателен")
+            raise MutationValidationError(
+                "custom_audience LOOKALIKE: origin_audience_id обязателен"
+            )
         require_numeric_id(str(origin_audience_id), "origin_audience_id")
 
         country = params.get("country")
         if not country or not isinstance(country, str):
-            raise ValueError("custom_audience LOOKALIKE: country обязателен (например US)")
+            raise MutationValidationError(
+                "custom_audience LOOKALIKE: country обязателен (например US)"
+            )
 
         ratio = params.get("ratio")
         if ratio is None:
-            raise ValueError(
+            raise MutationValidationError(
                 f"custom_audience LOOKALIKE: ratio обязателен ([{_RATIO_MIN}, {_RATIO_MAX}])"
             )
         try:
             ratio_float = float(ratio)
         except (TypeError, ValueError) as exc:
-            raise ValueError(
+            raise MutationValidationError(
                 f"custom_audience LOOKALIKE: ratio должен быть числом, получено {ratio!r}"
             ) from exc
         if not (_RATIO_MIN <= ratio_float <= _RATIO_MAX):
-            raise ValueError(
+            raise MutationValidationError(
                 f"custom_audience LOOKALIKE: ratio должен быть в диапазоне "
                 f"[{_RATIO_MIN}, {_RATIO_MAX}], получено {ratio_float}"
             )

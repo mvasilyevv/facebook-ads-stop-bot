@@ -275,7 +275,7 @@ async def retry_disable_task(
         )
 
     async with engine.begin() as conn:
-        await conn.execute(
+        result = await conn.execute(
             text(
                 """
                 UPDATE task_queue
@@ -286,6 +286,13 @@ async def retry_disable_task(
                 """
             ),
             {"tid": task_id, "allowed": list(_RETRYABLE_STATUSES)},
+        )
+
+    # rowcount=0 → статус изменился между SELECT и UPDATE (гонка с воркером)
+    if result.rowcount == 0:
+        raise HTTPException(
+            status_code=409,
+            detail="Состояние задачи изменилось — повторите запрос",
         )
 
     # Читаем обновлённую строку
@@ -347,7 +354,7 @@ async def cancel_disable_task(
         )
 
     async with engine.begin() as conn:
-        await conn.execute(
+        cancel_result = await conn.execute(
             text(
                 """
                 UPDATE task_queue
@@ -358,4 +365,11 @@ async def cancel_disable_task(
                 """
             ),
             {"tid": task_id},
+        )
+
+    # rowcount=0 → статус изменился между SELECT и UPDATE (гонка с воркером)
+    if cancel_result.rowcount == 0:
+        raise HTTPException(
+            status_code=409,
+            detail="Состояние задачи изменилось — повторите запрос",
         )
