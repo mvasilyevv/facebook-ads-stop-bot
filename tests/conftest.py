@@ -1,8 +1,6 @@
 # -*- coding: utf-8 -*-
 """Конфигурация тестов."""
 
-from unittest.mock import AsyncMock
-
 import pytest
 
 # Подменяем send_telegram_via_queue во всех местах импорта: тесты, мокающие
@@ -33,12 +31,5 @@ def _fast_test_env(monkeypatch, request):
             monkeypatch.setattr(target, _direct_send, raising=False)
         except (AttributeError, ImportError, ModuleNotFoundError):
             pass
-
-    # Глобально подменяем asyncio.sleep в health_watchdog: там ждёт 60 сек
-    # перед verify-после-restart, что зашкаливает любой тестовый timeout.
-    try:
-        monkeypatch.setattr("apps.health_watchdog.main.asyncio.sleep", AsyncMock(), raising=False)
-    except (AttributeError, ImportError, ModuleNotFoundError):
-        pass
 
     yield
