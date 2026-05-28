@@ -144,11 +144,15 @@ async def approve_draft_task(
     - Если у задачи есть created_by_chat_id, approver_chat_id обязан совпасть.
       Несовпадение → False (status остаётся 'draft'), warning в лог.
     - Если created_by_chat_id IS NULL (draft создан через MCP/HTTP без TG):
-        * admin_override=True → разрешаем (caller подтвердил, что approver — owner).
+        * admin_override=True + approver_chat_id=None → разрешаем MCP-draft.
         * Иначе → False (нельзя approve безхозный draft из TG, нужен MCP-клиент).
+    - admin_override=True + approver_chat_id=N → выполняется проверка
+      is_admin_recipient(chat_id=N) внутри функции. Если chat_id не owner-recipient
+      → PermissionError. Это защищает от callers, которые передают admin_override=True
+      без предварительной проверки роли approver'а.
 
     approver_chat_id обязателен для approve через TG; в тестах допустим None
-    только вместе с admin_override=True.
+    только вместе с admin_override=True (MCP-draft путь).
     """
     if approver_chat_id is None and not admin_override:
         logger.warning(
@@ -157,9 +161,19 @@ async def approve_draft_task(
         )
         return False
 
+    # Проверка: admin_override + approver_chat_id задан → верифицируем роль внутри.
+    # Защита от callers, которые выставляют admin_override=True без проверки is_admin.
+    if admin_override and approver_chat_id is not None:
+        if not await is_admin_recipient(engine, chat_id=approver_chat_id):
+            raise PermissionError(
+                f"approve_draft_task: admin_override требует role='owner', "
+                f"но approver_chat_id={approver_chat_id} не является активным owner"
+            )
+
     async with engine.begin() as conn:
         if admin_override and approver_chat_id is None:
-            # MCP-draft (created_by_chat_id IS NULL) + админ — единственный путь.
+            # MCP-draft (created_by_chat_id IS NULL) + admin_override без chat_id.
+            # Используется только MCP-клиентом, не через TG.
             result = await conn.execute(
                 text(
                     """
@@ -176,7 +190,7 @@ async def approve_draft_task(
                 {"id": int(task_id), "rb": approved_by[:64], "tt": _TASK_TYPE},
             )
         elif admin_override:
-            # Админ может подтвердить любой draft (свой или чужой) — но строго админ.
+            # Верифицированный admin (проверка выше) подтверждает любой draft.
             result = await conn.execute(
                 text(
                     """

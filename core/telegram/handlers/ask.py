@@ -232,10 +232,14 @@ async def handle_draft_callback(
                     ack = "Уже не draft"
                     footer = "ℹ️ Уже обработано"
                 elif await is_admin_recipient(engine, chat_id=chat_id):
+                    # Передаём approver_chat_id — approve_draft_task теперь
+                    # верифицирует is_admin внутри (двойная защита, но без повторного
+                    # SQL-запроса потому что check выше уже подтвердил роль).
                     ok = await approve_draft_task(
                         engine,
                         task_id=task_id,
                         approved_by=approver,
+                        approver_chat_id=chat_id,
                         admin_override=True,
                     )
                     ack = "Подтверждено админом" if ok else "Уже не draft"
