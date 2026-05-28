@@ -83,12 +83,22 @@ python scripts/restore_secrets.py          # вернуть токены
 11. **creator_worker** (`apps/creator_worker/`) — поллит `task_queue` где `task_type='plan_run'`, грузит план из `creator_plans` (только `is_archived=false`), стримит `CreatorService.RunPlan` через `BrowserAgentClient`, агрегирует 6 типов `PlanEvent` (started/finished/failed/skipped/checkpoint/complete) в `task_queue.result`. Маршрутизация: `ValueError/NotImplementedError/KeyError → mark_failed`; `BrowserUnavailable/Timeout/grpc.RpcError → requeue`. Heartbeat `worker:heartbeat:creator` TTL 60s. Vision-fallback для gambling-вертикалей (когда Meta зарезает креативы через API content review). Точка входа: `run_creator_worker.py`.
 12. **creator_recorder** (`apps/creator_recorder/`) — подписка на pubsub-каналы `fb_agent:creator:record_start`/`record_stop`. По event'у — `StartRecording`/`StopRecording` через `BrowserAgentClient`, парсит план и INSERT в `creator_plans` (с UTC-suffix retry при конфликте по `uq_creator_plans_name_active`). Heartbeat `worker:heartbeat:creator_recorder`. Точка входа: `run_creator_recorder.py`.
 
-**FastAPI (`apps/api/`):** минимальный набор endpoints через `create_app()` factory + lifespan:
-- `GET /healthz` — k8s liveness, всегда 200 без БД
-- `GET /readyz` — readiness с TTL-кэш 5с (`SELECT 1` + Redis `PING`), 200/503
-- `GET /metrics` — Prometheus exposition (`app_requests_total{path,method,status}`, `app_request_duration_seconds{path,method}`, лейбл `path` — route template, не raw URL)
+**FastAPI (`apps/api/`):** через `create_app()` factory + lifespan:
+- `GET /healthz` — k8s liveness, всегда 200 без БД.
+- `GET /readyz` — readiness с TTL-кэш 5с (`SELECT 1` + Redis `PING`), 200/503.
+- `GET /metrics` — Prometheus exposition (`app_requests_total{path,method,status}`, `app_request_duration_seconds{path,method}`, лейбл `path` — route template, не raw URL).
 - `POST /api/v1/postback/adsetpro` — приём postback'а от AdSet.pro (Этап 6). Auth через `secrets.compare_digest(x_postback_secret or "", ADSETPRO_POSTBACK_SECRET)` — timing-safe. Если секрет пуст → 503 (явный отказ).
-- `RequestIdMiddleware` echo'ит `X-Request-Id`. `BodySizeLimitMiddleware` — 64 KB hard cap по `Content-Length` → 413 (GET/HEAD/OPTIONS пропускаются). CORS — только если `frontend_origin` задан; при `"*"` в origin'е (включая комбинации типа `"https://app.com,*"`) `create_app()` падает `RuntimeError` на старте, чтобы не открыть wildcard с `credentials=True`. Exception handlers маппят `AdsetProError`/`MetaApiError` подтипы на 401/403/404/429/503/502.
+- **`apps/api/routers/v1/`** — пакет с auto-discovery. `register_all(app)` через `pkgutil.iter_modules` находит все модули с атрибутом `router: APIRouter` и подключает их с `prefix="/api"`. Новые роутеры просто кладутся в эту папку — без правок `main.py`. На Round 7.1 закрыты 21 endpoint в 4 модулях:
+  - `settings_observer.py` — `GET/PUT /settings/observer`, `PATCH /settings/observer/scanning`, `PATCH /settings/observer/auto-enable`, `POST /settings/observer/scan-now` (Redis publish в `fb_agent:observer:trigger`).
+  - `settings_telegram.py` — `GET /settings/telegram` с compute-полями (`is_authorized`, `poller_status`, `bot_username`, `auth_deep_link`) через `core/telegram/settings_compute.py` (Redis-cache TTL 1h для bot_username), `PUT /token`, `DELETE`, `GET/DELETE /recipients`, `POST /recipients/invite`.
+  - `settings_vision.py` — `GET/PUT /settings/vision`, `POST /vision/reconnect` (gRPC к BrowserSessionService), `GET /vision/profiles` (501 stub — пока нет в proto).
+  - `observer.py` — `GET /observer/status` (Redis `observer:runtime`), `GET /observer/scan-runs` (partitioned WHERE по started_at, фильтры `all/errors/slow/with_alerts`, limit cap 200), `POST /observer/start-new-cabinet-day`, `POST /observer/restart`, `POST /disable-worker/restart` (все publish в Redis-каналы).
+  - `health_details.py` — `GET /health/details` (SCAN MATCH `worker:heartbeat:*` → ONLINE/OFFLINE, overall HEALTHY/DEGRADED/CRITICAL).
+- **`apps/api/deps.py`** — `DepEngine`, `DepRedis`, `DepSettings` через `Annotated[..., Depends(...)]` для роутеров v1.
+- **`apps/api/utils/status_mapper.py`** — `to_frontend_task_status` / `from_frontend_task_status` (lowercase v2 ↔ uppercase frontend, `draft → PENDING`).
+- **`apps/api/utils/partition.py`** — `default_window(hours=168)` для partitioned-queries.
+- `RequestIdMiddleware` echo'ит `X-Request-Id`. `BodySizeLimitMiddleware` — 64 KB hard cap по `Content-Length` → 413 (GET/HEAD/OPTIONS пропускаются). CORS — только если `frontend_origin` задан; при `"*"` в origin'е (включая комбинации типа `"https://app.com,*"`) `create_app()` падает `RuntimeError` на старте. Exception handlers маппят `AdsetProError`/`MetaApiError` подтипы на 401/403/404/429/503/502.
+- **TODO subscriber'ы в worker'ах:** observer не подписан на `fb_agent:observer:trigger`/`cabinet_day`, не подписаны worker'ы на `fb_agent:worker:restart:*`. Endpoints publish'ат сигналы, до реализации subscriber'ов сигналы no-op. Отдельная стич-задача после Round 7.x.
 - Точка входа: `run_api.py` или `make api` (uvicorn на 8000).
 
 **Node.js gRPC сервис (`services/browser-agent/`):**
