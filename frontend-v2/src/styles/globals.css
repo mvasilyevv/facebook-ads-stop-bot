@@ -1,0 +1,75 @@
+/**
+ * Глобальные стили — точка входа CSS для приложения.
+ * Порядок импортов важен: токены → шрифты → Tailwind → reset.
+ */
+
+@import "./tokens.css";
+@import "./fonts.css";
+@import "tailwindcss";
+@import "./reset.css";
+
+/* ───────────── Editorial utilities — переиспользуются всеми страницами ───── */
+
+.eyebrow {
+  font-family: var(--font-display);
+  font-size: var(--text-micro);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-bg-8);
+}
+
+.eyebrow .eyebrow-num {
+  color: var(--color-bg-7);
+  margin-right: 8px;
+}
+
+.page-title {
+  font-family: var(--font-display);
+  font-size: var(--text-display);
+  font-weight: 500;
+  line-height: 0.95;
+  letter-spacing: -0.03em;
+  color: var(--color-bg-11);
+  margin: 0;
+}
+
+.section-title {
+  font-family: var(--font-display);
+  font-size: var(--text-title-2);
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  color: var(--color-bg-11);
+  margin: 0;
+}
+
+.display-number {
+  font-family: var(--font-display);
+  font-size: 100px;
+  line-height: 1;
+  letter-spacing: -0.04em;
+  color: var(--color-bg-3);
+  font-weight: 500;
+  user-select: none;
+  pointer-events: none;
+}
+
+/* Editorial pulse — дыхание worker-индикатора. */
+@keyframes pulse-dot {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(126, 180, 122, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(126, 180, 122, 0);
+  }
+}
+
+.pulse-dot {
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pulse-dot {
+    animation: none;
+  }
+}
