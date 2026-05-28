@@ -1,0 +1,63 @@
+/// <reference types="vitest/config" />
+import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
+import { TanStackRouterVite } from "@tanstack/router-plugin/vite";
+import path from "node:path";
+
+// Vite config для нового фронта.
+// - Порт 5174 (старый фронт 5173).
+// - Proxy /api → http://localhost:8100 (FastAPI backend).
+// - Tailwind 4 через @tailwindcss/vite — без отдельного PostCSS pipeline.
+// - TanStack Router plugin — file-based routing с автогенерацией routeTree.
+export default defineConfig({
+  plugins: [
+    TanStackRouterVite({
+      routesDirectory: "./src/routes",
+      generatedRouteTree: "./src/routeTree.gen.ts",
+      autoCodeSplitting: true,
+    }),
+    react(),
+    tailwindcss(),
+  ],
+  resolve: {
+    alias: {
+      "@": path.resolve(__dirname, "./src"),
+    },
+  },
+  server: {
+    port: 5174,
+    strictPort: false,
+    proxy: {
+      "/api": {
+        target: "http://localhost:8100",
+        changeOrigin: true,
+      },
+      "/ws": {
+        target: "ws://localhost:8100",
+        ws: true,
+        changeOrigin: true,
+      },
+    },
+  },
+  build: {
+    outDir: "dist",
+    sourcemap: true,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          react: ["react", "react-dom"],
+          router: ["@tanstack/react-router"],
+          query: ["@tanstack/react-query"],
+          charts: ["recharts"],
+        },
+      },
+    },
+  },
+  test: {
+    globals: true,
+    environment: "jsdom",
+    setupFiles: ["./src/tests/setup.ts"],
+    css: false,
+  },
+});
