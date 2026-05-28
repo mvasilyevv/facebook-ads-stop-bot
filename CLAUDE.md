@@ -102,6 +102,10 @@ python scripts/restore_secrets.py          # вернуть токены
     - `ads_timeline.py` — `GET /ads/{fb_ad_id}/timeline?from_iso&to_iso&include_metrics&include_alerts&include_tasks` (multi-source: AdMetrics + AlertEvent + TaskQueue payload JSONB-фильтр, partitioned WHERE).
     - `fake_deposits.py` — `GET /fake-deposits`, `PUT/DELETE /fake-deposits/{fb_ad_id}` (UPSERT через `AdDepositCorrection`).
     - `auto_enable.py` — `GET/POST/DELETE /dashboard/auto-enable-disabled/{fb_ad_id}` (флаг `AdAutoEnableDisabled` против auto-recommend recovery).
+  - **Round 7.4 — Tasks/outbox:**
+    - `disable_tasks.py` — `GET /dashboard/disable-tasks?status=PENDING,FAILED&fb_ad_id&limit&offset` (JOIN FbAd для ad_name, `?status=PENDING` разворачивается в `['draft','pending']` — draft скрыт от фронта), `POST` (create через `core.tasks.queue.create_task`), `POST /{id}/retry` (failed/cancelled → retrying, 409 если активная), `DELETE /{id}` (soft cancel).
+    - `enable_tasks.py` — `GET /dashboard/enable-tasks` (тот же shape, `task_type='enable'`).
+    - `enable_recommendations.py` — `GET /dashboard/enable-recommendations?status=PENDING|PROMOTED` (LEFT JOIN TaskQueue по `promoted_to_task_id`), `POST /{id}/enable` (atomic INSERT task_queue + UPDATE `promoted_to_task_id` в одной транзакции).
 - **`apps/api/deps.py`** — `DepEngine`, `DepRedis`, `DepSettings` через `Annotated[..., Depends(...)]` для роутеров v1.
 - **`apps/api/utils/status_mapper.py`** — `to_frontend_task_status` / `from_frontend_task_status` (lowercase v2 ↔ uppercase frontend, `draft → PENDING`).
 - **`apps/api/utils/partition.py`** — `default_window(hours=168)` для partitioned-queries.
@@ -189,6 +193,8 @@ python scripts/restore_secrets.py          # вернуть токены
   - `AdAlertState` нет отдельных `last_warning_at`/`last_stop_at` — восстанавливаются из `last_transition_at` + `current_stage` CASE (Round 7.3).
   - `AdDepositCorrection.corrected_deposits` ↔ frontend `fake_count` (router маппит).
   - `AdAutoEnableDisabled.created_at` ↔ frontend `disabled_at` (router маппит).
+  - `TaskQueue.next_retry_at` ↔ `next_attempt_at`, `last_error` ↔ `last_error_message`, `created_by_chat_id` ↔ `requested_by_chat_id` (Round 7.4 routers маппят).
+  - `EnableRecommendation`: только `ad_id` UUID (через JOIN с FbAd для `fb_ad_id`/`ad_name`), `snapshot_metrics` ↔ `metrics_payload`, `recommendation_level` дублируется как `reason` (Round 7.4).
 - **TODO subscriber'ы в worker'ах:** observer не подписан на `fb_agent:observer:trigger`/`cabinet_day`, не подписаны worker'ы на `fb_agent:worker:restart:*`. Endpoints publish'ат сигналы, до реализации subscriber'ов сигналы no-op.
 
 ### MCP-сервер (apps/mcp_server/)
