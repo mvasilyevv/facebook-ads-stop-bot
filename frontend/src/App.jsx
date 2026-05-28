@@ -8,7 +8,6 @@ const AdsPage = lazy(() => import('./pages/AdsPage.jsx'));
 const OffersPage = lazy(() => import('./pages/OffersPage.jsx'));
 const SettingsPage = lazy(() => import('./pages/SettingsPage.jsx'));
 const HistoryPage = lazy(() => import('./pages/HistoryPage.jsx'));
-const NamingTrackerPage = lazy(() => import('./pages/NamingTrackerPage.jsx'));
 const ScriptsPage = lazy(() => import('./pages/ScriptsPage.jsx'));
 const AnalyticsPage = lazy(() => import('./pages/AnalyticsPage.jsx'));
 import SystemStatusBar from './components/system/SystemStatusBar.jsx';
@@ -80,11 +79,6 @@ const NAV_ICONS = {
     <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
       <circle cx="10" cy="10" r="8" />
       <polyline points="10,5 10,10 13,12" />
-    </svg>
-  ),
-  naming: (
-    <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-      <text x="3" y="15" fontSize="14" fontWeight="bold" fill="currentColor" stroke="none">#</text>
     </svg>
   ),
   settings: (
@@ -179,8 +173,6 @@ export default function App() {
         return <AnalyticsPage />;
       case 'history':
         return <HistoryPage onNavigate={navigate} />;
-      case 'naming':
-        return <NamingTrackerPage />;
       case 'scripts':
         return <ScriptsPage />;
       case 'settings':

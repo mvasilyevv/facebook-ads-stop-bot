@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { fmt$ as _fmt$, fmtN as _fmtN, fmtRoas as _fmtRoas } from '../utils/formatters.js';
 import {
@@ -30,8 +30,6 @@ import { CampaignComparativeBars } from '../components/CampaignComparativeBars.j
 import { SpendAlertsChart } from '../components/SpendAlertsChart.jsx';
 import AIBriefingCard from '../components/ai/AIBriefingCard.jsx';
 import ObserverStatusTile from '../components/observer/ObserverStatusTile.jsx';
-
-const HealthMapPage = lazy(() => import('./HealthMapPage.jsx'));
 
 /* === Вспомогательные компоненты === */
 
@@ -270,7 +268,6 @@ export default function DashboardPage({ onNavigate }) {
   const [togglingAutoEnable, setTogglingAutoEnable] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [columnRechecking, setColumnRechecking] = useState(false);
-  const [healthMapOpen, setHealthMapOpen] = useState(false);
   const [analyticsOpen, setAnalyticsOpen] = useState(false);
   const [analyticsView, setAnalyticsView] = useState('cpr');
   const alertTrayRef = useRef(null);
@@ -787,20 +784,6 @@ export default function DashboardPage({ onNavigate }) {
 
       {/* Состояние системы — collapsible */}
       <div className="panel overflow-hidden">
-        <button
-          className="flex w-full items-center justify-between px-4 py-3 text-left"
-          onClick={() => setHealthMapOpen(v => !v)}
-        >
-          <span className="text-2xs font-bold uppercase tracking-widest text-muted">Состояние системы</span>
-          <span className="text-muted text-sm">{healthMapOpen ? '▲' : '▼'}</span>
-        </button>
-        {healthMapOpen && (
-          <div className="px-4 pb-4">
-            <Suspense fallback={<div className="h-32 animate-pulse bg-elevated rounded" />}>
-              <HealthMapPage embedded />
-            </Suspense>
-          </div>
-        )}
       </div>
 
     </div>
