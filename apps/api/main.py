@@ -34,6 +34,7 @@ from apps.api.middleware.body_size import BodySizeLimitMiddleware
 from apps.api.middleware.request_id import RequestIdMiddleware
 from apps.api.routers import health as health_router
 from apps.api.routers import postback as postback_router
+from apps.api.routers import ws as ws_router
 from apps.api.routers.v1 import register_all as register_v1_routers
 from core.adset_pro import (
     AdsetProError,
@@ -152,8 +153,10 @@ def create_app() -> FastAPI:
 
     # Routers.
     # health и postback — без префикса /api (используются k8s/Prometheus и внешними сервисами).
+    # ws — WebSocket без префикса /api (фронт коннектится на /ws/dashboard).
     app.include_router(health_router.router)
     app.include_router(postback_router.router)
+    app.include_router(ws_router.router)
 
     # Все роутеры из apps/api/routers/v1/ подключаются автоматически с префиксом /api.
     # Spawn B/C/D просто кладут файл с атрибутом `router: APIRouter` в эту папку.
