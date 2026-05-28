@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import { formatDateTimeRu } from './settingsUtils.js';
 
 function RecipientCard({ recipient, onDelete }) {
@@ -146,15 +145,7 @@ function DisconnectedTelegramPanel({ telegram, newToken, onNewTokenChange, onCon
   );
 }
 
-export function TelegramSettingsSection({ telegram, newToken, onNewTokenChange, authChecking, currentBotUsername, pollerStatusMeta, primaryRecipient, recipients, inviteCode, inviteDeepLink, pendingAuthCommand, pendingAuthDeepLink, isWaitingTelegramAuth, onConnectTelegram, onRevokeTelegram, onRefreshStatus, onDeleteRecipient, onCreateInvite, onClearInvite, onOpenTelegram, onCopyWithToast, onSaveWebAppUrl, saving }) {
-  const [webAppUrl, setWebAppUrl] = useState(telegram.web_app_url || '');
-
-  // Обновлять локальный стейт при загрузке данных
-  const currentWebAppUrl = telegram.web_app_url || '';
-  if (webAppUrl === '' && currentWebAppUrl !== '') {
-    setWebAppUrl(currentWebAppUrl);
-  }
-
+export function TelegramSettingsSection({ telegram, newToken, onNewTokenChange, authChecking, currentBotUsername, pollerStatusMeta, primaryRecipient, recipients, inviteCode, inviteDeepLink, pendingAuthCommand, pendingAuthDeepLink, isWaitingTelegramAuth, onConnectTelegram, onRevokeTelegram, onRefreshStatus, onDeleteRecipient, onCreateInvite, onClearInvite, onOpenTelegram, onCopyWithToast, saving }) {
   return (
     <section aria-label="Настройки Telegram" className="panel p-5 space-y-4">
       <h2 className="text-base font-semibold text-primary">Telegram — уведомления</h2>
@@ -166,29 +157,6 @@ export function TelegramSettingsSection({ telegram, newToken, onNewTokenChange, 
       ) : (
         <DisconnectedTelegramPanel telegram={telegram} newToken={newToken} onNewTokenChange={onNewTokenChange} onConnectTelegram={onConnectTelegram} pollerStatusMeta={pollerStatusMeta} />
       )}
-
-      <div className="border-t border-border pt-4 space-y-2">
-        <h4 className="text-2xs font-bold uppercase tracking-widest text-muted">Web App (Mini App)</h4>
-        <label className="block text-2xs font-semibold uppercase tracking-wider text-secondary" htmlFor="tg-webapp-url">
-          Web App URL
-        </label>
-        <input
-          id="tg-webapp-url"
-          className="w-full rounded bg-elevated border border-border px-3 py-2 text-sm text-primary focus:border-accent focus:ring-1 focus:ring-accent focus:outline-none"
-          type="url"
-          value={webAppUrl}
-          onChange={(e) => setWebAppUrl(e.target.value)}
-          placeholder="https://app.example.com/tma/"
-        />
-        <p className="text-2xs text-muted">HTTPS-URL Mini App. Пусто = использовать значение из .env.</p>
-        <button
-          className="btn-secondary text-2xs"
-          onClick={() => onSaveWebAppUrl(webAppUrl)}
-          disabled={saving === 'telegram-webapp'}
-        >
-          {saving === 'telegram-webapp' ? 'Сохранение...' : 'Сохранить'}
-        </button>
-      </div>
     </section>
   );
 }

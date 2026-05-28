@@ -11,7 +11,6 @@ import {
   revokeTelegram,
   saveBrowserColumnWidths,
   setTelegramToken,
-  setTelegramWebAppUrl,
   updateObserverSettings,
   updateVisionSettings,
   visionReconnect,
@@ -113,7 +112,6 @@ function mergeTelegramState(data) {
     last_poller_heartbeat_at: data.last_poller_heartbeat_at || null,
     auth_deep_link: data.auth_deep_link || '',
     activation_command: data.activation_command || '',
-    web_app_url: data.web_app_url || '',
     primary_recipient: data.primary_recipient || null,
     active_invite: data.active_invite || null,
   };
@@ -361,18 +359,6 @@ export function useSettingsData() {
     }
   }, []);
 
-  const saveWebAppUrl = useCallback(async (url) => {
-    setSaving('telegram-webapp');
-    try {
-      const result = await setTelegramWebAppUrl(url);
-      setTelegram((prev) => ({ ...prev, web_app_url: result.web_app_url ?? url }));
-      setToast({ message: 'Web App URL сохранён', type: 'success' });
-    } catch (err) {
-      setToast({ message: err.message || 'Ошибка', type: 'error' });
-    } finally {
-      setSaving('');
-    }
-  }, []);
 
   const checkAuthStatus = useCallback(
     async (silent = false) => {
@@ -608,7 +594,6 @@ export function useSettingsData() {
       createInvite,
       clearInvite,
       openTelegram: handleOpenTelegram,
-      saveWebAppUrl,
     },
     vision: {
       value: vision,
