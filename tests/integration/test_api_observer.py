@@ -8,7 +8,6 @@ POST /disable-worker/restart.
 
 from __future__ import annotations
 
-import json
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
@@ -48,13 +47,24 @@ async def test_observer_status_no_key(fake_redis_client) -> None:
     assert payload["interval_seconds"] is None
 
 
-# С ключом в Redis — возвращает распаршенный payload
+# С ключом в Redis — возвращает распаршенный payload (реальный контракт воркера)
 @pytest.mark.asyncio
 async def test_observer_status_with_key(fake_redis_client) -> None:
-    """Ключ observer:runtime присутствует → поля из него возвращаются."""
-    now_iso = datetime.now(UTC).isoformat()
-    data = {"status": "running", "last_scan_at": now_iso, "interval_seconds": 30}
-    await fake_redis_client.set("observer:runtime", json.dumps(data))
+    """Ключ observer:runtime записан воркером → status='running', extra-поля видны.
+
+    Используем _publish_runtime_status — реальный writer — чтобы гарантировать
+    что тест проверяет актуальный контракт, а не устаревший shape.
+    """
+
+    from apps.observer_worker.main import _publish_runtime_status
+
+    now = datetime.now(UTC)
+    await _publish_runtime_status(
+        fake_redis_client,
+        status="scanning",
+        active_phase="scan",
+        last_successful_scan_at=now,
+    )
 
     app = _make_app(redis=fake_redis_client)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
@@ -62,7 +72,9 @@ async def test_observer_status_with_key(fake_redis_client) -> None:
     assert resp.status_code == 200
     payload = resp.json()
     assert payload["status"] == "running"
-    assert payload["interval_seconds"] == 30
+    # active_phase пробрасывается в extra
+    assert payload["extra"].get("active_phase") == "scan"
+    # last_scan_at: поле пробрасывается из last_successful_scan_at
     assert payload["last_scan_at"] is not None
 
 
