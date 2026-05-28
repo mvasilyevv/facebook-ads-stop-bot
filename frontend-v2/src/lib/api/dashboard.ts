@@ -13,6 +13,7 @@ import type {
   Incident,
   SpendPoint,
   ChartBucket,
+  TaskQueueRow,
 } from "@/lib/types/api";
 
 const KEYS = {
@@ -24,6 +25,8 @@ const KEYS = {
   spendHistory: (params?: Record<string, unknown>) =>
     ["dashboard", "spend-history", params] as const,
   chartData: (params?: Record<string, unknown>) => ["dashboard", "chart-data", params] as const,
+  enableTasks: (params?: Record<string, unknown>) =>
+    ["dashboard", "enable-tasks", params] as const,
 };
 
 export function useDashboardStats() {
@@ -86,6 +89,19 @@ export function useChartData(params: { hours?: number; bucket?: "hour" | "day" }
   return useQuery({
     queryKey: KEYS.chartData(params),
     queryFn: () => apiClient.get<ChartBucket[]>("/dashboard/chart-data", params),
+  });
+}
+
+/**
+ * Enable-очередь для Dashboard. `recent_disable_tasks` в /batch отдаёт только
+ * disable-задачи, поэтому enable грузим отдельным read-only endpoint'ом.
+ * refetch 60s — синхронно с /batch.
+ */
+export function useEnableTasks(params: { limit?: number } = {}) {
+  return useQuery({
+    queryKey: KEYS.enableTasks(params),
+    queryFn: () => apiClient.get<TaskQueueRow[]>("/dashboard/enable-tasks", params),
+    refetchInterval: 60_000,
   });
 }
 
