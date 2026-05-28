@@ -63,6 +63,11 @@ class AdSnapshotOut(BaseModel):
     delivery_status: str | None = None
     meta_ad_status: str | None = None
 
+    # Активные правила для отрисовки на AdsPage; пока не вытаскиваются из
+    # последнего AlertEvent, оставлены как пустые массивы для совместимости.
+    stop_rule_codes: list[str] = Field(default_factory=list)
+    warning_rule_codes: list[str] = Field(default_factory=list)
+
     metrics: MetricsBlock | None = None
 
 

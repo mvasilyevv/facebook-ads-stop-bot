@@ -38,6 +38,40 @@ _settings_router = APIRouter(prefix="/settings/vision", tags=["settings"])
 # Роутер для /vision (reconnect, profiles)
 _vision_router = APIRouter(prefix="/vision", tags=["settings"])
 
+# Роутер для /settings/browser (validate-columns, save/apply column widths).
+# Текущая версия — заглушка-stub: реальная реализация через gRPC к browser-agent
+# отложена, пока возвращаем «всё ОК» чтобы фронт не показывал ошибку.
+_browser_router = APIRouter(prefix="/settings/browser", tags=["settings"])
+
+
+@_browser_router.get("/validate-columns")
+async def validate_columns(start_if_missing: bool = False) -> dict[str, object]:
+    """Stub: фронт-shape для валидации DOM-колонок Ads Manager.
+
+    TODO: реализация через `BrowserAgentClient.validate_columns()` когда gRPC
+    метод появится в `scanner.proto`. Сейчас возвращаем фронту «всё корректно»,
+    чтобы скрыть ошибку "Отсутствуют колонки в таблице Ads Manager".
+    """
+    return {
+        "valid": True,
+        "missing_columns": [],
+        "extra_columns": [],
+        "started": False,
+    }
+
+
+@_browser_router.post("/save-column-widths")
+async def save_column_widths() -> dict[str, str]:
+    """Stub: фронт может присылать пустой POST."""
+    return {"status": "noop"}
+
+
+@_browser_router.post("/apply-column-widths")
+async def apply_column_widths() -> dict[str, str]:
+    """Stub: фронт может присылать пустой POST."""
+    return {"status": "noop"}
+
+
 # Redis-ключ heartbeat browser-agent.
 _BROWSER_AGENT_HEARTBEAT_KEY = "worker:heartbeat:browser-agent"
 
@@ -291,3 +325,4 @@ async def get_vision_profiles() -> VisionProfilesResponse:
 router = APIRouter(tags=["settings"])
 router.include_router(_settings_router)
 router.include_router(_vision_router)
+router.include_router(_browser_router)

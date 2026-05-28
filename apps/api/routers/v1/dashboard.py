@@ -165,11 +165,14 @@ async def list_alert_events(
     (не `event_type` / `rule_codes`). triggered_by_rule_codes не существует
     в ORM — возвращаем None в ответе для совместимости с frontend shape.
     """
-    if stage is not None and stage not in _VALID_STAGES:
-        raise HTTPException(
-            status_code=422,
-            detail=f"stage должен быть один из: {sorted(_VALID_STAGES)}",
-        )
+    # Фронт исторически шлёт stage в UPPERCASE (WARNING/STOP), v2-схема хранит lowercase.
+    if stage is not None:
+        stage = stage.lower()
+        if stage not in _VALID_STAGES:
+            raise HTTPException(
+                status_code=422,
+                detail=f"stage должен быть один из: {sorted(_VALID_STAGES)}",
+            )
 
     # Временное окно — partition pruning.
     if from_iso or to_iso:
@@ -271,6 +274,8 @@ async def list_incidents(
 
     transitions_count считается batch'ем за один запрос — никаких N+1.
     """
+    # Фронт может прислать UPPERCASE — normalize в lowercase.
+    stage = stage.lower()
     if stage not in {"warning", "stop", "all"}:
         raise HTTPException(
             status_code=422,

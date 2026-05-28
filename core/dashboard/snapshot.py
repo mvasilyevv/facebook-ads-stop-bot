@@ -117,6 +117,10 @@ def _build_row_dict(row: Any) -> dict[str, Any]:
         # delivery_status в схеме ad_metrics отсутствует — null для frontend-shape.
         "delivery_status": None,
         "meta_ad_status": row.meta_ad_status,
+        # stop_rule_codes/warning_rule_codes пока не вытаскиваем из последнего
+        # AlertEvent — frontend ожидает массивы, отдаём пустые как контракт.
+        "stop_rule_codes": [],
+        "warning_rule_codes": [],
         "metrics": metrics,
     }
 
