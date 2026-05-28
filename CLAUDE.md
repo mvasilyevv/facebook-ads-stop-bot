@@ -88,12 +88,20 @@ python scripts/restore_secrets.py          # вернуть токены
 - `GET /readyz` — readiness с TTL-кэш 5с (`SELECT 1` + Redis `PING`), 200/503.
 - `GET /metrics` — Prometheus exposition (`app_requests_total{path,method,status}`, `app_request_duration_seconds{path,method}`, лейбл `path` — route template, не raw URL).
 - `POST /api/v1/postback/adsetpro` — приём postback'а от AdSet.pro (Этап 6). Auth через `secrets.compare_digest(x_postback_secret or "", ADSETPRO_POSTBACK_SECRET)` — timing-safe. Если секрет пуст → 503 (явный отказ).
-- **`apps/api/routers/v1/`** — пакет с auto-discovery. `register_all(app)` через `pkgutil.iter_modules` находит все модули с атрибутом `router: APIRouter` и подключает их с `prefix="/api"`. Новые роутеры просто кладутся в эту папку — без правок `main.py`. На Round 7.1 закрыты 21 endpoint в 4 модулях:
-  - `settings_observer.py` — `GET/PUT /settings/observer`, `PATCH /settings/observer/scanning`, `PATCH /settings/observer/auto-enable`, `POST /settings/observer/scan-now` (Redis publish в `fb_agent:observer:trigger`).
-  - `settings_telegram.py` — `GET /settings/telegram` с compute-полями (`is_authorized`, `poller_status`, `bot_username`, `auth_deep_link`) через `core/telegram/settings_compute.py` (Redis-cache TTL 1h для bot_username), `PUT /token`, `DELETE`, `GET/DELETE /recipients`, `POST /recipients/invite`.
-  - `settings_vision.py` — `GET/PUT /settings/vision`, `POST /vision/reconnect` (gRPC к BrowserSessionService), `GET /vision/profiles` (501 stub — пока нет в proto).
-  - `observer.py` — `GET /observer/status` (Redis `observer:runtime`), `GET /observer/scan-runs` (partitioned WHERE по started_at, фильтры `all/errors/slow/with_alerts`, limit cap 200), `POST /observer/start-new-cabinet-day`, `POST /observer/restart`, `POST /disable-worker/restart` (все publish в Redis-каналы).
-  - `health_details.py` — `GET /health/details` (SCAN MATCH `worker:heartbeat:*` → ONLINE/OFFLINE, overall HEALTHY/DEGRADED/CRITICAL).
+- **`apps/api/routers/v1/`** — пакет с auto-discovery. `register_all(app)` через `pkgutil.iter_modules` находит все модули с атрибутом `router: APIRouter` и подключает их с `prefix="/api"`. Новые роутеры просто кладутся в эту папку — без правок `main.py`. После Round 7.1-7.3 закрыты 39 endpoints в 11 модулях:
+  - **Round 7.1 — Settings + Observer + Health:**
+    - `settings_observer.py` — `GET/PUT /settings/observer`, `PATCH /settings/observer/scanning`, `PATCH /settings/observer/auto-enable`, `POST /settings/observer/scan-now` (Redis publish в `fb_agent:observer:trigger`).
+    - `settings_telegram.py` — `GET /settings/telegram` с compute-полями (`is_authorized`, `poller_status`, `bot_username`, `auth_deep_link`) через `core/telegram/settings_compute.py` (Redis-cache TTL 1h для bot_username), `PUT /token`, `DELETE`, `GET/DELETE /recipients`, `POST /recipients/invite`.
+    - `settings_vision.py` — `GET/PUT /settings/vision`, `POST /vision/reconnect` (gRPC к BrowserSessionService), `GET /vision/profiles` (501 stub — пока нет в proto).
+    - `observer.py` — `GET /observer/status` (Redis `observer:runtime`), `GET /observer/scan-runs` (partitioned WHERE по started_at, фильтры `all/errors/slow/with_alerts`, limit cap 200), `POST /observer/start-new-cabinet-day`, `POST /observer/restart`, `POST /disable-worker/restart` (все publish в Redis-каналы).
+    - `health_details.py` — `GET /health/details` (SCAN MATCH `worker:heartbeat:*` → ONLINE/OFFLINE, overall HEALTHY/DEGRADED/CRITICAL).
+  - **Round 7.2 — Offers:**
+    - `offers.py` — `GET /offers` (`?include_inactive=true`), `GET /offers/compare?days=N` (агрегация Offer+AdMetrics+AlertEvent через FK chain, partitioned WHERE), `POST/PUT/DELETE /offers/{id}` (soft delete `is_active=false`, code immutable), `GET/PUT /offers/{id}/rules`.
+  - **Round 7.3 — Ads/FSM core + Tasks helpers:**
+    - `dashboard.py` — `GET /dashboard/ads` (composite через `core.dashboard.build_ad_snapshot`, `X-Total-Count` header), `GET /dashboard/alerts` (partitioned AlertEvent default 24h, поля `stage`/`matched_rule_codes`/`ad_name` через JOIN), `GET /dashboard/incidents` (active warning_sent/stop_sent + `incident_duration_seconds`/`transitions_count` через batch-unnest без N+1).
+    - `ads_timeline.py` — `GET /ads/{fb_ad_id}/timeline?from_iso&to_iso&include_metrics&include_alerts&include_tasks` (multi-source: AdMetrics + AlertEvent + TaskQueue payload JSONB-фильтр, partitioned WHERE).
+    - `fake_deposits.py` — `GET /fake-deposits`, `PUT/DELETE /fake-deposits/{fb_ad_id}` (UPSERT через `AdDepositCorrection`).
+    - `auto_enable.py` — `GET/POST/DELETE /dashboard/auto-enable-disabled/{fb_ad_id}` (флаг `AdAutoEnableDisabled` против auto-recommend recovery).
 - **`apps/api/deps.py`** — `DepEngine`, `DepRedis`, `DepSettings` через `Annotated[..., Depends(...)]` для роутеров v1.
 - **`apps/api/utils/status_mapper.py`** — `to_frontend_task_status` / `from_frontend_task_status` (lowercase v2 ↔ uppercase frontend, `draft → PENDING`).
 - **`apps/api/utils/partition.py`** — `default_window(hours=168)` для partitioned-queries.
@@ -141,6 +149,7 @@ python scripts/restore_secrets.py          # вернуть токены
 - **ai_assistant/** — pure-Python ассистент: `chat.py`, `client.py`, `providers.py`, `prompts/`. Пакет `tools/` (registry + base + ops/meta/drafts/creative — 15 tools) подключён к Telegram через `core/telegram/ai_handlers.py` (`/ask` + draft callbacks `dr_ok`/`dr_cancel`). `ToolHandler.risk_level`: READ_ONLY (исполняется немедленно), DRAFT_REQUIRED (создаёт `task_queue` со `status='draft'` + `created_by_chat_id` через `core.meta_api.queue.create_draft_task` → юзер подтверждает в TG только если он же owner или recipient с `role='owner'`), CREATIVE. Rate-limit per `client_key` через `tools/_ratelimit.py` (Redis `ai:ratelimit:tools:*` TTL 3600 + in-memory secondary cap 5/60с при сбое Redis вместо fail-open). `MetaApiClient` пробрасывается через `ToolContext` — без него meta-tools падают с явной ошибкой. `drafts/request_bulk_pause` ищет по `offer_code` через Postgres regex `~*` с anchored word-boundary `(^|[^a-z0-9])CODE([^a-z0-9]|$)` — старая ILIKE-substring выборка (`%CR%` матчит `ACRO`) удалена.
 - **adset_pro/** — клиент AdSet.pro: оказался **MCP-сервером** (`platform-stats-mcp` v1.0.0), не REST API. Host `adset.pro` (не `api.adset.pro`), endpoint `POST /mcp` JSON-RPC 2.0 с Bearer-токеном из `ADSETPRO_MCP_KEY`. Доступно 10 MCP-tools: `query_stats`, `get_metadata`, `export_csv`, `list_campaigns`/`get_campaign`, `list_sources`/`list_offers`/`list_flows`/`list_cpas`, `resolve_ids`. Публичный контракт сохранён (`StatsQueryRequest/Response`), `call_mcp_tool(name, args)` — низкоуровневый канал под будущие AI-tools. Ingest postback'ов через `core/adset_pro/ingest.py` (двухступенчатый дедуп: pre-INSERT SELECT по 24h окну + `ON CONFLICT DO NOTHING` на UNIQUE).
 - **adset_pro/queries.py + ingest.py** — `load_external_deposits_batch(engine, fb_ad_ids, since)` для evaluator; `ingest_postback` для FastAPI router'а.
+- **dashboard/snapshot.py** — `build_ad_snapshot(engine, fb_ad_ids?, alert_states?, limit, offset, include_inactive)` + `build_incidents_snapshot(engine, stage?)`. Композитная view-функция: FbAd LEFT JOIN AdAlertState LEFT JOIN LATERAL (последняя AdMetrics за 7 дней) LEFT JOIN FbAdset/FbCampaign/Offer LEFT JOIN MetaApiObservation. Используется dashboard router'ами вместо устаревшей таблицы `ad_snapshots` (которой в v2 нет). LATERAL `cycle_ts >= NOW() - make_interval(days => :lookback)` для partition pruning. Декомпозиция incidents `transitions_count` через batch `unnest(:ids::uuid[], :starts::timestamptz[])` LEFT JOIN AlertEvent (один запрос вместо N+1).
 - **alerts/** — Redis-очередь алертов + drain worker (опционально).
 - **browser/** — `lock.py` (file-lock эксклюзивности браузер-сессии), `circuit_breaker.py` (AsyncCircuitBreaker для gRPC).
 - **auth/** — TMA initData валидация (для будущего Mini App).
@@ -172,6 +181,15 @@ python scripts/restore_secrets.py          # вернуть токены
 - ~~Pre-existing bug в `core/ai_assistant/tools/ops/get_recent_alerts.py`~~ — ✅ исправлено в раунде 6D (`ae.event_type → ae.stage`, `ae.rule_codes → ae.matched_rule_codes`, `a.name → a.ad_name`).
 - **Health watchdog: дедуп-ключ ставится даже при отсутствии TG-клиента.** При первом подключении токена «упущенные» алерты не доедут, пока не истечёт TTL 1h. Поведение проверяется `test_no_tg_client_does_not_crash` — нужно зафиксировать в runbook.
 - **Backtest** (`scripts/backtest_rules.py`) — пройти историю и оценить false-stop'ы (MEMORY 2026-06-08).
+- **Frontend ↔ v2 shape расхождения** (зафиксированы при восстановлении API Round 7.2-7.3, возвращаются `null` фронту до миграций):
+  - `Offer` нет полей `country_code`, `use_vision_creator`, `notes` (Round 7.2).
+  - `OfferRule` — 6 числовых полей (`spend_no_event_threshold`/`cpa_threshold`/`cpm_threshold`/`ctr_threshold`/`frequency_threshold`/`funnel_ratio_threshold`), не JSONB `cpc_thresholds`/`cpl_thresholds` которые ждёт OffersPage (Round 7.2).
+  - `AdMetrics` нет `delivery_status` (Round 7.3).
+  - `AlertEvent` нет `triggered_by_rule_codes` (Round 7.3; в v2 только `matched_rule_codes`).
+  - `AdAlertState` нет отдельных `last_warning_at`/`last_stop_at` — восстанавливаются из `last_transition_at` + `current_stage` CASE (Round 7.3).
+  - `AdDepositCorrection.corrected_deposits` ↔ frontend `fake_count` (router маппит).
+  - `AdAutoEnableDisabled.created_at` ↔ frontend `disabled_at` (router маппит).
+- **TODO subscriber'ы в worker'ах:** observer не подписан на `fb_agent:observer:trigger`/`cabinet_day`, не подписаны worker'ы на `fb_agent:worker:restart:*`. Endpoints publish'ат сигналы, до реализации subscriber'ов сигналы no-op.
 
 ### MCP-сервер (apps/mcp_server/)
 
