@@ -24,7 +24,7 @@ import uuid
 from decimal import ROUND_HALF_UP, Decimal
 
 from fastapi import APIRouter, HTTPException, Query
-from sqlalchemy import Integer, cast, func, select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 
 from apps.api.deps import DepEngine
@@ -37,12 +37,12 @@ from apps.api.routers.v1.schemas.offers import (
     OfferUpdateIn,
 )
 from apps.api.utils.partition import default_window
+from core.dashboard.metric_aggregation import latest_per_ad_per_day_cte
 from core.models.catalog.fb_ad import FbAd
 from core.models.catalog.fb_adset import FbAdset
 from core.models.catalog.fb_campaign import FbCampaign
 from core.models.catalog.offer import Offer
 from core.models.catalog.offer_rule import OfferRule
-from core.models.observer.ad_metrics import AdMetrics
 from core.models.observer.alert_event import AlertEvent
 
 logger = logging.getLogger(__name__)
@@ -98,40 +98,44 @@ async def compare_offers(
     Без этого фильтра запрос становится full-scan — не убирать.
     """
     # Вычисляем границы окна для партиционных таблиц
-    period_start, _ = default_window(hours=days * 24)
+    period_start, period_end = default_window(hours=days * 24)
 
     async with engine.connect() as conn:
-        # Метрики: SUM spend/leads/registrations/deposits + COUNT active ads
-        metrics_q = (
-            select(
-                FbCampaign.offer_id,
-                func.coalesce(func.sum(AdMetrics.spend), 0).label("spend"),
-                func.coalesce(func.sum(cast(AdMetrics.leads, Integer)), 0).label("leads"),
-                func.coalesce(func.sum(cast(AdMetrics.registrations, Integer)), 0).label(
-                    "registrations"
-                ),
-                func.coalesce(func.sum(cast(AdMetrics.deposits, Integer)), 0).label("deposits"),
-                func.count(
-                    func.distinct(
-                        # CASE WHEN вместо FILTER — asyncpg не поддерживает FILTER в COUNT(DISTINCT)
-                        text(
-                            "CASE WHEN fb_ads.last_seen_at >= NOW() - INTERVAL '7 days' "
-                            "THEN fb_ads.id END"
-                        )
-                    )
-                ).label("active_ads_count"),
-            )
-            .select_from(AdMetrics)
-            .join(FbAd, FbAd.id == AdMetrics.ad_id)
-            .join(FbAdset, FbAdset.id == FbAd.adset_id)
-            .join(FbCampaign, FbCampaign.id == FbAdset.campaign_id)
-            .where(
-                AdMetrics.cycle_ts >= period_start,  # партиционный фильтр — обязателен
-                FbCampaign.offer_id.isnot(None),
-            )
-            .group_by(FbCampaign.offer_id)
+        # CRIT-1: ad_metrics — кумулятивные snapshot'ы, spend сбрасывается посуточно
+        # (cabinet day reset). Наивный SUM по всем снимкам завышает spend в десятки
+        # раз. /offers/compare — многодневное окно (до 90д), поэтому берём ПОСЛЕДНИЙ
+        # snapshot на (ad × сутки) через DISTINCT ON (latest-per-ad-per-day), затем
+        # SUM по офферу — это корректно складывает дневные итоги через reset'ы.
+        # active_ads_count считаем по сырой ad_metrics (DISTINCT ad_id за окно, живые
+        # за 7д) — это count объявлений, а не агрегация кумулятива, дублей не даёт.
+        metrics_sql = text(
+            f"""
+            WITH {
+                latest_per_ad_per_day_cte(
+                    cte_alias="per_ad_day",
+                    columns=("spend", "leads", "registrations", "deposits"),
+                )
+            }
+            SELECT
+                fc.offer_id                              AS offer_id,
+                COALESCE(SUM(pad.spend), 0)              AS spend,
+                COALESCE(SUM(pad.leads), 0)::bigint      AS leads,
+                COALESCE(SUM(pad.registrations), 0)::bigint AS registrations,
+                COALESCE(SUM(pad.deposits), 0)::bigint   AS deposits,
+                COUNT(DISTINCT CASE
+                    WHEN fa.last_seen_at >= NOW() - INTERVAL '7 days' THEN fa.id
+                END)::bigint                             AS active_ads_count
+            FROM per_ad_day pad
+            JOIN fb_ads fa       ON fa.id = pad.ad_id
+            JOIN fb_adsets fas   ON fas.id = fa.adset_id
+            JOIN fb_campaigns fc ON fc.id = fas.campaign_id
+            WHERE fc.offer_id IS NOT NULL
+            GROUP BY fc.offer_id
+            """
         )
-        metrics_result = await conn.execute(metrics_q)
+        metrics_result = await conn.execute(
+            metrics_sql, {"from_dt": period_start, "to_dt": period_end}
+        )
         metrics_by_offer: dict[uuid.UUID, dict] = {
             row.offer_id: {
                 "spend": row.spend or Decimal("0"),

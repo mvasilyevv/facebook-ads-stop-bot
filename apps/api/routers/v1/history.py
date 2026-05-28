@@ -43,6 +43,7 @@ from apps.api.routers.v1.schemas.history import (
 )
 from apps.api.utils.partition import default_window
 from apps.api.utils.status_mapper import to_frontend_task_status
+from core.dashboard.metric_aggregation import latest_per_ad_per_day_cte
 
 logger = logging.getLogger(__name__)
 
@@ -124,9 +125,12 @@ async def get_history_summary(
     from_dt, to_dt = _parse_window(from_iso, to_iso)
 
     async with engine.connect() as conn:
-        # 1. Суммы метрик — партиционированная ad_metrics (cycle_ts)
+        # 1. Суммы метрик — партиционированная ad_metrics (cycle_ts).
+        # CRIT-1: кумулятивные snapshot'ы, spend сбрасывается посуточно. Окно
+        # многодневное (до 90д) → latest-per-ad-per-day, затем SUM (дневные итоги).
         metrics_sql = text(
-            """
+            f"""
+            WITH {latest_per_ad_per_day_cte(cte_alias="per_ad_day")}
             SELECT
                 COALESCE(SUM(spend), 0)         AS spend,
                 COALESCE(SUM(impressions), 0)   AS impressions,
@@ -134,8 +138,7 @@ async def get_history_summary(
                 COALESCE(SUM(leads), 0)         AS leads,
                 COALESCE(SUM(registrations), 0) AS registrations,
                 COALESCE(SUM(deposits), 0)      AS deposits
-            FROM ad_metrics
-            WHERE cycle_ts BETWEEN :from_dt AND :to_dt
+            FROM per_ad_day
             """
         )
         m_row = (await conn.execute(metrics_sql, {"from_dt": from_dt, "to_dt": to_dt})).one()
@@ -340,8 +343,27 @@ async def get_history_campaigns(
     """
     from_dt, to_dt = _parse_window(from_iso, to_iso)
 
+    # CRIT-1: ad_metrics кумулятивна, spend сбрасывается посуточно. Окно до 90д →
+    # per-ad-per-day latest, затем SUM до per-ad-итога в CTE per_ad. Внешний SUM
+    # по кампании складывает per-ad-итоги (каждый ad джойнится один раз).
     sql = text(
-        """
+        f"""
+        WITH {
+            latest_per_ad_per_day_cte(
+                cte_alias="per_ad_day",
+                columns=("spend", "leads", "registrations", "deposits"),
+            )
+        },
+        per_ad AS (
+            SELECT
+                ad_id,
+                SUM(spend)         AS spend,
+                SUM(leads)         AS leads,
+                SUM(registrations) AS registrations,
+                SUM(deposits)      AS deposits
+            FROM per_ad_day
+            GROUP BY ad_id
+        )
         SELECT
             c.id                        AS campaign_id,
             c.fb_campaign_id,
@@ -359,9 +381,7 @@ async def get_history_campaigns(
         JOIN fb_adsets s    ON s.campaign_id = c.id
         JOIN fb_ads a       ON a.adset_id = s.id
         LEFT JOIN offers o  ON o.id = c.offer_id
-        LEFT JOIN ad_metrics m
-            ON m.ad_id = a.id
-            AND m.cycle_ts BETWEEN :from_dt AND :to_dt
+        LEFT JOIN per_ad m  ON m.ad_id = a.id
         LEFT JOIN (
             SELECT ae.ad_id, COUNT(*) AS alerts_count
             FROM alert_events ae
@@ -506,8 +526,26 @@ async def get_history_offers(
     """
     from_dt, to_dt = _parse_window(from_iso, to_iso)
 
+    # CRIT-1: per-ad-per-day latest → per-ad SUM в CTE, чтобы spend не завышался
+    # кумулятивом и посуточным reset'ом. alert_events джойнится отдельно (count).
     sql = text(
-        """
+        f"""
+        WITH {
+            latest_per_ad_per_day_cte(
+                cte_alias="per_ad_day",
+                columns=("spend", "leads", "registrations", "deposits"),
+            )
+        },
+        per_ad AS (
+            SELECT
+                ad_id,
+                SUM(spend)         AS spend,
+                SUM(leads)         AS leads,
+                SUM(registrations) AS registrations,
+                SUM(deposits)      AS deposits
+            FROM per_ad_day
+            GROUP BY ad_id
+        )
         SELECT
             o.id            AS offer_id,
             o.code          AS offer_code,
@@ -524,9 +562,7 @@ async def get_history_offers(
         JOIN fb_campaigns c ON c.offer_id = o.id
         JOIN fb_adsets s    ON s.campaign_id = c.id
         JOIN fb_ads a       ON a.adset_id = s.id
-        LEFT JOIN ad_metrics m
-            ON m.ad_id = a.id
-            AND m.cycle_ts BETWEEN :from_dt AND :to_dt
+        LEFT JOIN per_ad m  ON m.ad_id = a.id
         LEFT JOIN alert_events ae
             ON ae.ad_id = a.id
             AND ae.created_at BETWEEN :from_dt AND :to_dt
@@ -599,8 +635,25 @@ async def get_history_ads(
     campaign_filter = "AND c.id = :campaign_uuid" if campaign_uuid else ""
     offer_filter = "AND o.id = :offer_uuid" if offer_uuid else ""
 
+    # CRIT-1: per-ad-per-day latest → per-ad SUM, иначе кумулятив + посуточный
+    # reset завышают spend. Внешний SUM по a.id берёт единственную per-ad строку.
     sql = text(
         f"""
+        WITH {
+            latest_per_ad_per_day_cte(
+                cte_alias="per_ad_day",
+                columns=("spend", "leads", "deposits"),
+            )
+        },
+        per_ad AS (
+            SELECT
+                ad_id,
+                SUM(spend)    AS spend,
+                SUM(leads)    AS leads,
+                SUM(deposits) AS deposits
+            FROM per_ad_day
+            GROUP BY ad_id
+        )
         SELECT
             a.fb_ad_id,
             a.id            AS internal_id,
@@ -619,9 +672,7 @@ async def get_history_ads(
         JOIN fb_adsets s    ON s.id = a.adset_id
         JOIN fb_campaigns c ON c.id = s.campaign_id
         LEFT JOIN offers o  ON o.id = c.offer_id
-        LEFT JOIN ad_metrics m
-            ON m.ad_id = a.id
-            AND m.cycle_ts BETWEEN :from_dt AND :to_dt
+        LEFT JOIN per_ad m  ON m.ad_id = a.id
         -- LATERAL: последний алерт в окне
         LEFT JOIN LATERAL (
             SELECT ae.created_at AS last_alert_at, ae.stage AS last_alert_stage

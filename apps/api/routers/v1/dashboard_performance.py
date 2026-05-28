@@ -60,27 +60,41 @@ async def _query_top_campaigns(
     Считает: spend / leads / deposits / cost_per_lead / active_ads_count.
     Сортировка — SUM(spend) DESC NULLS LAST.
     Partition pruning через WHERE m.cycle_ts.
+
+    CRIT-1: ad_metrics — кумулятивные snapshot'ы, spend сбрасывается посуточно.
+    Окно многодневное (до 30д) → берём ПОСЛЕДНИЙ snapshot на (ad × сутки) через
+    DISTINCT ON (latest-per-ad-per-day), затем SUM по кампании — корректное
+    сложение дневных итогов через cabinet day reset. Наивный SUM завышал spend.
     """
     sql = """
+        WITH per_ad_day AS (
+            SELECT DISTINCT ON (m.ad_id, date_trunc('day', m.cycle_ts))
+                m.ad_id,
+                m.spend,
+                m.leads,
+                m.deposits
+            FROM ad_metrics m
+            WHERE m.cycle_ts >= NOW() - make_interval(days => :days)
+            ORDER BY m.ad_id, date_trunc('day', m.cycle_ts), m.cycle_ts DESC
+        )
         SELECT
             fc.id                AS campaign_id,
             fc.fb_campaign_id    AS fb_campaign_id,
             fc.campaign_name     AS campaign_name,
-            SUM(m.spend)         AS spend,
-            SUM(m.leads)         AS leads,
-            SUM(m.deposits)      AS deposits,
+            SUM(pad.spend)       AS spend,
+            SUM(pad.leads)       AS leads,
+            SUM(pad.deposits)    AS deposits,
             CASE
-                WHEN SUM(m.leads) IS NULL OR SUM(m.leads) = 0 THEN NULL
-                ELSE SUM(m.spend) / SUM(m.leads)
+                WHEN SUM(pad.leads) IS NULL OR SUM(pad.leads) = 0 THEN NULL
+                ELSE SUM(pad.spend) / SUM(pad.leads)
             END                  AS cost_per_lead,
             COUNT(DISTINCT fa.id) AS active_ads_count
         FROM fb_campaigns fc
         JOIN fb_adsets fas ON fas.campaign_id = fc.id
         JOIN fb_ads fa     ON fa.adset_id = fas.id
-        JOIN ad_metrics m  ON m.ad_id = fa.id
-        WHERE m.cycle_ts >= NOW() - make_interval(days => :days)
+        JOIN per_ad_day pad ON pad.ad_id = fa.id
         GROUP BY fc.id, fc.fb_campaign_id, fc.campaign_name
-        ORDER BY SUM(m.spend) DESC NULLS LAST
+        ORDER BY SUM(pad.spend) DESC NULLS LAST
         LIMIT :lim
     """
     async with engine.connect() as conn:
@@ -111,21 +125,33 @@ async def _query_offer_leaderboard(
     объединяет результаты — оффер без алертов получит 0.
     """
     sql = """
-        WITH metrics_per_offer AS (
+        WITH per_ad_day AS (
+            -- CRIT-1: latest-per-ad-per-day по кумулятивной ad_metrics (spend
+            -- сбрасывается посуточно). SUM ниже складывает дневные итоги.
+            SELECT DISTINCT ON (m.ad_id, date_trunc('day', m.cycle_ts))
+                m.ad_id,
+                m.spend,
+                m.leads,
+                m.registrations,
+                m.deposits
+            FROM ad_metrics m
+            WHERE m.cycle_ts >= NOW() - make_interval(days => :days)
+            ORDER BY m.ad_id, date_trunc('day', m.cycle_ts), m.cycle_ts DESC
+        ),
+        metrics_per_offer AS (
             SELECT
                 o.id            AS offer_id,
                 o.code          AS offer_code,
                 o.name          AS offer_name,
-                SUM(m.spend)    AS spend,
-                SUM(m.leads)    AS leads,
-                SUM(m.registrations) AS registrations,
-                SUM(m.deposits)      AS deposits
+                SUM(pad.spend)    AS spend,
+                SUM(pad.leads)    AS leads,
+                SUM(pad.registrations) AS registrations,
+                SUM(pad.deposits)      AS deposits
             FROM offers o
             JOIN fb_campaigns fc ON fc.offer_id = o.id
             JOIN fb_adsets fas   ON fas.campaign_id = fc.id
             JOIN fb_ads fa       ON fa.adset_id = fas.id
-            JOIN ad_metrics m    ON m.ad_id = fa.id
-            WHERE m.cycle_ts >= NOW() - make_interval(days => :days)
+            JOIN per_ad_day pad  ON pad.ad_id = fa.id
             GROUP BY o.id, o.code, o.name
         ),
         alerts_per_offer AS (

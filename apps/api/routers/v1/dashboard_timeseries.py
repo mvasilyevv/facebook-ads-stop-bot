@@ -138,10 +138,28 @@ async def get_chart_data(
             detail=f"bucket должен быть одним из: {sorted(_VALID_BUCKETS)}",
         )
 
+    # CRIT-1: ad_metrics — кумулятивные snapshot'ы. Наивный SUM(spend) сложил бы
+    # все промежуточные снимки внутри бакета и завысил spend в десятки раз.
+    # Правильно: внутри бакета кумулятив монотонен → берём ПОСЛЕДНИЙ snapshot
+    # на (бакет × ad) через DISTINCT ON, и только потом SUM по бакету.
     # date_trunc принимает строку. Подставляем безопасно (bucket предвалидирован).
     sql = f"""
+        WITH per_bucket_ad AS (
+            SELECT DISTINCT ON (date_trunc('{bucket}', m.cycle_ts), m.ad_id)
+                date_trunc('{bucket}', m.cycle_ts) AS ts,
+                m.ad_id,
+                m.spend,
+                m.impressions,
+                m.clicks,
+                m.leads,
+                m.registrations,
+                m.deposits
+            FROM ad_metrics m
+            WHERE m.cycle_ts >= NOW() - make_interval(hours => :hours)
+            ORDER BY date_trunc('{bucket}', m.cycle_ts), m.ad_id, m.cycle_ts DESC
+        )
         SELECT
-            date_trunc('{bucket}', cycle_ts) AS ts,
+            ts,
             SUM(spend) AS spend,
             SUM(impressions) AS impressions,
             SUM(clicks) AS clicks,
@@ -149,8 +167,7 @@ async def get_chart_data(
             SUM(registrations) AS registrations,
             SUM(deposits) AS deposits,
             COUNT(DISTINCT ad_id) AS active_ads
-        FROM ad_metrics
-        WHERE cycle_ts >= NOW() - make_interval(hours => :hours)
+        FROM per_bucket_ad
         GROUP BY ts
         ORDER BY ts ASC
     """
