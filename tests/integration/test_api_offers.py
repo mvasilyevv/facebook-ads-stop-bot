@@ -126,10 +126,15 @@ async def test_list_offers_include_inactive(pg_engine, fake_redis_client, clean_
 # ─────────────────────── GET /offers/compare ───────────────────────
 
 
-# compare с реальными метриками должен вернуть правильные суммы и cost_per_*.
+# compare с кумулятивными метриками: берём ПОСЛЕДНИЙ snapshot за день, не сумму.
 @pytest.mark.asyncio
 async def test_compare_offers_with_metrics(pg_engine, fake_redis_client, clean_offers):
-    """Проверяем что суммы spend/leads/deps и cost_per_* считаются корректно."""
+    """CRIT-1: два snapshot'а одного ad в одни сутки — кумулятив, не два события.
+
+    ad_metrics пишет накопленное за сутки значение каждый scan-цикл. Два снимка
+    (1h: spend=300, 2h: spend=200) — это рост кумулятива, latest (300) и есть
+    дневной итог. Наивный SUM дал бы 500 (завышение). Проверяем что берётся 300.
+    """
     offer_id = uuid.uuid4()
     campaign_id = uuid.uuid4()
     adset_id = uuid.uuid4()
@@ -153,7 +158,8 @@ async def test_compare_offers_with_metrics(pg_engine, fake_redis_client, clean_o
             text("INSERT INTO fb_ads (id, adset_id, fb_ad_id, ad_name) VALUES (:i, :a, :f, :n)"),
             {"i": ad_id, "a": adset_id, "f": f"230{suffix}", "n": f"AD_{suffix}"},
         )
-        # Метрики внутри 7-дневного окна
+        # Два снимка одного ad в текущие сутки: кумулятив рос 200 → 300.
+        # Поздний снимок (1h назад) = дневной итог. Оба внутри 7-дневного окна.
         await conn.execute(
             text(
                 "INSERT INTO ad_metrics (id, ad_id, cycle_ts, spend, leads, registrations, deposits) "
@@ -178,15 +184,16 @@ async def test_compare_offers_with_metrics(pg_engine, fake_redis_client, clean_o
     row = next((r for r in rows if r["offer_code"] == f"COMP_{suffix}"), None)
     assert row is not None, "Оффер не найден в compare-ответе"
 
-    assert Decimal(row["spend"]) == Decimal("500.00")
-    assert row["leads"] == 15
-    assert row["registrations"] == 10
-    assert row["deposits"] == 5
-    # cost_per_lead = 500 / 15 = 33.33
-    assert Decimal(row["cost_per_lead"]) == Decimal("33.33")
-    # cost_per_registration = 500 / 10 = 50.00
+    # Latest snapshot за день, НЕ сумма обоих снимков (которая дала бы 500).
+    assert Decimal(row["spend"]) == Decimal("300.00")
+    assert row["leads"] == 10
+    assert row["registrations"] == 6
+    assert row["deposits"] == 3
+    # cost_per_lead = 300 / 10 = 30.00
+    assert Decimal(row["cost_per_lead"]) == Decimal("30.00")
+    # cost_per_registration = 300 / 6 = 50.00
     assert Decimal(row["cost_per_registration"]) == Decimal("50.00")
-    # cost_per_deposit = 500 / 5 = 100.00
+    # cost_per_deposit = 300 / 3 = 100.00
     assert Decimal(row["cost_per_deposit"]) == Decimal("100.00")
 
 
