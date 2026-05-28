@@ -31,6 +31,7 @@ from apps.api.routers.v1.schemas.observer import (
 from apps.api.utils.partition import default_window
 from core.models.observer.cabinet_day_archive import CabinetDayArchive
 from core.models.observer.scan_run import ScanRun
+from core.observer.runtime import read_observer_runtime
 
 logger = logging.getLogger(__name__)
 
@@ -39,8 +40,7 @@ router = APIRouter(tags=["observer"])
 # Максимально допустимый limit для scan-runs
 _MAX_SCAN_RUNS_LIMIT = 200
 
-# Redis-ключи
-_OBSERVER_RUNTIME_KEY = "observer:runtime"
+# Redis-каналы и ключи
 _RESTART_OBSERVER_CHANNEL = "fb_agent:worker:restart:observer"
 _RESTART_DISABLE_CHANNEL = "fb_agent:worker:restart:disable_worker"
 _CABINET_DAY_CHANNEL = "fb_agent:observer:cabinet_day"
@@ -55,39 +55,46 @@ async def get_observer_status(redis: DepRedis) -> ObserverStatusResponse:
 
     Если ключ отсутствует — возвращает {status: unknown, last_scan_at: null, ...}.
     Никогда не падает с 5xx.
+    Использует read_observer_runtime() — единственную точку чтения контракта.
     """
-    try:
-        raw = await redis.get(_OBSERVER_RUNTIME_KEY)
-    except Exception as exc:
-        logger.warning("Не удалось прочитать observer:runtime из Redis: %s", exc)
-        raw = None
+    runtime = await read_observer_runtime(redis)
 
-    if raw is None:
-        return ObserverStatusResponse()
-
-    try:
-        payload: dict[str, Any] = json.loads(raw)
-    except (json.JSONDecodeError, TypeError) as exc:
-        logger.warning("observer:runtime не валидный JSON: %s", exc)
-        return ObserverStatusResponse()
-
-    # Извлекаем известные поля, остальное кладём в extra
-    known = {"status", "last_scan_at", "interval_seconds"}
-    status = payload.get("status", "unknown")
-    last_scan_at_raw = payload.get("last_scan_at")
-    interval_seconds = payload.get("interval_seconds")
-
+    # last_scan_at берём из last_successful_scan_at (детальное поле воркера)
     last_scan_at: datetime | None = None
+    last_scan_at_raw = runtime.get("last_successful_scan_at")
     if last_scan_at_raw:
         try:
             last_scan_at = datetime.fromisoformat(last_scan_at_raw)
         except (ValueError, TypeError):
             pass
 
-    extra = {k: v for k, v in payload.items() if k not in known}
+    # interval_seconds не пишется в observer:runtime, берём из raw если есть
+    raw = runtime.get("raw", {})
+    interval_seconds = raw.get("interval_seconds")
+
+    # extra — всё из raw кроме полей с известным маппингом
+    known = {
+        "status",
+        "worker_status",
+        "active_phase",
+        "next_scan_at",
+        "last_successful_scan_at",
+        "updated_at",
+        "interval_seconds",
+    }
+    extra: dict[str, Any] = {k: v for k, v in raw.items() if k not in known}
+    # Кладём детальные поля воркера в extra для прозрачности
+    if runtime.get("active_phase") is not None:
+        extra["active_phase"] = runtime["active_phase"]
+    if runtime.get("next_scan_at") is not None:
+        extra["next_scan_at"] = runtime["next_scan_at"]
+    if runtime.get("updated_at") is not None:
+        extra["updated_at"] = runtime["updated_at"]
+    if raw.get("worker_status") is not None:
+        extra["worker_status"] = raw["worker_status"]
 
     return ObserverStatusResponse(
-        status=status,
+        status=runtime["status"],
         last_scan_at=last_scan_at,
         interval_seconds=interval_seconds,
         extra=extra,
@@ -257,7 +264,8 @@ async def _publish_restart_signal(redis: Redis, channel: str) -> RestartSignalRe
 async def restart_observer(redis: DepRedis) -> RestartSignalResponse:
     """Публикует сигнал рестарта observer-воркера в Redis.
 
-    Subscriber в worker'е НЕ реализован — TODO для отдельной задачи.
+    observer_worker подписан на канал fb_agent:worker:restart:observer
+    (main.py::_on_restart) и выполняет graceful stop по этому событию.
     Если Redis недоступен — 503.
     """
     return await _publish_restart_signal(redis, _RESTART_OBSERVER_CHANNEL)
@@ -267,7 +275,8 @@ async def restart_observer(redis: DepRedis) -> RestartSignalResponse:
 async def restart_disable_worker(redis: DepRedis) -> RestartSignalResponse:
     """Публикует сигнал рестарта disable-воркера в Redis.
 
-    Subscriber в worker'е НЕ реализован — TODO для отдельной задачи.
+    Subscriber в disable_worker'е пока не реализован — сигнал публикуется,
+    но воркер его не обрабатывает (TODO: добавить _on_restart в disable_worker/main.py).
     Если Redis недоступен — 503.
     """
     return await _publish_restart_signal(redis, _RESTART_DISABLE_CHANNEL)

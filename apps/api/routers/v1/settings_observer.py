@@ -135,7 +135,8 @@ async def patch_observer_auto_enable(
 async def post_scan_now(redis: DepRedis) -> ScanNowResponse:
     """Публикует Redis-событие fb_agent:observer:trigger для немедленного запуска scan.
 
-    Subscriber в observer_worker — отдельная задача (не реализован здесь).
+    observer_worker подписан на канал fb_agent:observer:trigger и немедленно
+    запускает scan-цикл по этому событию (main.py::_on_trigger).
     Если Redis недоступен — возвращает 503.
     """
     payload = f'{{"requested_by": "api", "ts": "{datetime.now(UTC).isoformat()}"}}'

@@ -146,11 +146,25 @@ async def _publish_runtime_status(
     next_scan_at: datetime | None = None,
     last_successful_scan_at: datetime | None = None,
 ) -> None:
-    """SET observer:runtime → JSON с TTL 60s. Frontend/health_watchdog читают этот ключ."""
+    """SET observer:runtime → JSON с TTL 60s. Frontend/health_watchdog читают этот ключ.
+
+    Контракт:
+        worker_status — детальный статус: "scanning" | "idle" | "dispatch" | "paused"
+        status        — нормализованный для читателей: "running" | "paused"
+            Маппинг: scanning/idle/dispatch → running, paused → paused
+
+    Читатели используют read_observer_runtime() из core/observer/runtime.py.
+    """
     if redis_client is None:
         return
+
+    # Нормализованный статус для читателей (scanning/idle/dispatch → running)
+    _RUNNING_DETAIL = {"scanning", "idle", "dispatch"}
+    normalized_status = "running" if status in _RUNNING_DETAIL else status
+
     payload = {
-        "worker_status": status,
+        "worker_status": status,  # детальный (для отладки/granularity)
+        "status": normalized_status,  # нормализованный (running|paused) для читателей
         "active_phase": active_phase,
         "next_scan_at": next_scan_at.isoformat() if next_scan_at else None,
         "last_successful_scan_at": (

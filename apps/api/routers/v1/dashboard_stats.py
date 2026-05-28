@@ -12,7 +12,6 @@ asyncio.gather для параллельных subqueries.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -28,6 +27,7 @@ from apps.api.routers.v1.schemas.dashboard_aggregates import (
 )
 from apps.api.utils.status_mapper import to_frontend_task_status
 from core.dashboard.snapshot import build_ad_snapshot, build_incidents_snapshot
+from core.observer.runtime import read_observer_runtime
 
 logger = logging.getLogger(__name__)
 
@@ -35,33 +35,16 @@ router = APIRouter(tags=["dashboard"])
 
 # Жёсткие лимиты для /batch (защита от bloating ответа).
 _MAX_BATCH_LIMIT = 100
-_OBSERVER_RUNTIME_KEY = "observer:runtime"
 
 
 async def _read_observer_status(redis: Any) -> str:
-    """Чтение observer:runtime из Redis для поля observer_status.
+    """Чтение нормализованного статуса observer из Redis.
 
-    При любой ошибке (нет ключа, Redis down, битый JSON) — возвращает 'unknown'.
-    Никогда не падает с 5xx.
+    Делегирует в read_observer_runtime() — единственную точку чтения observer:runtime.
+    При любой ошибке возвращает 'unknown'. Никогда не падает с 5xx.
     """
-    try:
-        raw = await redis.get(_OBSERVER_RUNTIME_KEY)
-    except Exception as exc:
-        logger.warning("Не удалось прочитать observer:runtime: %s", exc)
-        return "unknown"
-
-    if raw is None:
-        return "unknown"
-
-    try:
-        payload = json.loads(raw)
-    except (json.JSONDecodeError, TypeError):
-        return "unknown"
-
-    status = payload.get("status")
-    if status in {"running", "paused"}:
-        return status
-    return "unknown"
+    result = await read_observer_runtime(redis)
+    return result["status"]
 
 
 async def _query_ad_counts(engine: AsyncEngine) -> dict[str, int]:

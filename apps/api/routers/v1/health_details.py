@@ -18,13 +18,11 @@ from fastapi import APIRouter
 
 from apps.api.deps import DepRedis
 from apps.api.routers.v1.schemas.health import HealthDetailsResponse, WorkerStatus
+from core.observer.runtime import read_observer_runtime
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["health"])
-
-# Ключ статуса observer-воркера
-_OBSERVER_RUNTIME_KEY = "observer:runtime"
 
 # Список воркеров по умолчанию (если EXPECTED_WORKERS не задан в env)
 _DEFAULT_EXPECTED_WORKERS: list[str] = [
@@ -163,17 +161,9 @@ async def get_health_details(redis: DepRedis) -> HealthDetailsResponse:
             )
         )
 
-    # Читаем observer:runtime
-    observer_runtime: dict[str, Any] | None = None
-    try:
-        raw_runtime = await redis.get(_OBSERVER_RUNTIME_KEY)
-        if raw_runtime:
-            try:
-                observer_runtime = json.loads(raw_runtime)
-            except (json.JSONDecodeError, TypeError):
-                pass
-    except Exception as exc:
-        logger.warning("Не удалось прочитать observer:runtime: %s", exc)
+    # Читаем observer:runtime через единую точку — raw payload отдаём as-is клиенту
+    _runtime = await read_observer_runtime(redis)
+    observer_runtime: dict[str, Any] | None = _runtime["raw"] if _runtime["raw"] else None
 
     overall = _determine_overall(workers, expected_workers)
 
