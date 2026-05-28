@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -46,6 +47,13 @@ async def dispatch_pending_alerts(
         "stop": config.forum_stop_thread_id,
     }
 
+    # Partition pruning: ограничиваем диапазон created_at последним часом.
+    # alert_events партиционирована по RANGE(created_at) — без фильтра по
+    # partition-ключу планировщик выполняет full-scan всех партиций (~365).
+    # Scan-цикл всегда завершается в течение секунд/минут, поэтому 1 час —
+    # достаточное окно, которое гарантированно захватит текущую партицию.
+    since_dt = datetime.now(timezone.utc) - timedelta(hours=1)
+
     # Загружаем все события этого scan'а + связанные ad/campaign/adset/offer
     async with engine.connect() as conn:
         events = (
@@ -65,10 +73,11 @@ async def dispatch_pending_alerts(
                     JOIN fb_campaigns c ON c.id = ads.campaign_id
                     LEFT JOIN offers o ON o.id = c.offer_id
                     WHERE e.scan_id = :sid
+                      AND e.created_at >= :since
                     ORDER BY e.created_at
                     """
                 ),
-                {"sid": scan_id},
+                {"sid": scan_id, "since": since_dt},
             )
         ).all()
 
