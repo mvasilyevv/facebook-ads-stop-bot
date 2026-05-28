@@ -218,6 +218,22 @@ python scripts/restore_secrets.py          # вернуть токены
 
 HTTP/SSE транспорт для iPhone / удалённого доступа — отдельная история (нужен FastAPI router + OAuth/токен), пока только локальный stdio.
 
+### Аудит раунда 8 — все CRIT/HIGH/MID закрыты в Round 9
+
+`docs/backend_test_audit_round_8.md` (647 строк): comprehensive аудит 936 тестов после Этапа 7. Найдено 5 CRIT + 6 HIGH + ряд MID/LOW. Verdict: один целевой раунд → prod-ready. **Round 9 закрыл всё**, 936 → 974 passed (+38 тестов, +2 skipped).
+
+- **CRIT #1** — `alert_dispatcher.py` SELECT по `alert_events` без partition-key: Alembic 0004 добавил partial-index `(scan_id, created_at)`, код фильтрует `created_at >= :since`. 3 integration-теста.
+- **CRIT #2** — `approve_draft_task(admin_override=True)` без проверки что caller — admin: внутренний `is_admin_recipient` enforcement. 4 теста.
+- **CRIT #3** — `handle_draft_callback` E2E с чужого `chat_id`: 3 сценария (owner / foreign / admin override).
+- **HIGH #4-7** — snooze boundary edge cases (`snoozed_until == cycle_ts`, expire между scans, NULL, в прошлом): 6 unit + 2 integration теста.
+- **HIGH #5** — Hypothesis property-based для evaluator: нашёл реальный баг (`regs_no_dep_stop` срабатывал без spend) — исправлено в коде.
+- **HIGH #8** — concurrent `adset_pro` ingest dedup: 3 теста.
+- **HIGH #9** — `_calc_next_retry` backoff (exponential, cap): 8 unit-тестов.
+- **HIGH #10** — `is_admin_recipient` с `revoked_at`: 4 теста.
+- **HIGH #11** — sentinel `message_id=0` dedup в alert_dispatcher: 1 regression-тест.
+
+**Backend production-ready** (по состоянию на Round 9): 974 passed, ruff clean, все security/race/ACL gap'ы из независимого audit'а закрыты.
+
 ### Аудит раунда 6 — все CRIT/HIGH/MID закрыты
 
 Все 15 багов из security audit раунда 5 закрыты в раунде 6 (23 коммита, 683/683 теста passed):
