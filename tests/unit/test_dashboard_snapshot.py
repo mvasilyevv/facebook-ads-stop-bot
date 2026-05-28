@@ -12,7 +12,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from core.dashboard.snapshot import _build_metrics_dict, _build_row_dict, _build_sql
+from core.dashboard.snapshot import (
+    _build_metrics_dict,
+    _build_row_dict,
+    _build_sql,
+    _parse_rule_codes,
+)
 
 
 # Простой контейнер, имитирующий Row из SQLAlchemy (атрибутный доступ).
@@ -50,6 +55,9 @@ class _FakeRow:
     m_registrations: int | None = None
     m_cost_per_registration: Decimal | None = None
     m_deposits: int | None = None
+    # Поля LATERAL last_ev для rule_codes
+    last_ev_matched_rule_codes: list | None = None
+    last_ev_stage: str | None = None
 
 
 # Базовый маппинг ORM-полей → dict с правильными ключами и форматом.
@@ -149,3 +157,71 @@ def test_build_metrics_dict_direct() -> None:
     assert m["leads"] == 10
     assert m["cost_per_lead"] == "10.00"
     assert m["deposits"] == 2
+
+
+# last_ev_stage='stop' → stop_rule_codes заполнен, warning_rule_codes=[]
+def test_build_row_dict_stop_rule_codes() -> None:
+    """last_ev_stage=stop с кодами → stop_rule_codes в ответе, warning пустой."""
+    row = _FakeRow(
+        last_ev_stage="stop",
+        last_ev_matched_rule_codes=["CPL", "CPC"],
+    )
+    d = _build_row_dict(row)
+    assert d["stop_rule_codes"] == ["CPL", "CPC"]
+    assert d["warning_rule_codes"] == []
+
+
+# last_ev_stage='warning' → warning_rule_codes заполнен, stop_rule_codes=[]
+def test_build_row_dict_warning_rule_codes() -> None:
+    """last_ev_stage=warning с кодами → warning_rule_codes в ответе, stop пустой."""
+    row = _FakeRow(
+        last_ev_stage="warning",
+        last_ev_matched_rule_codes=["FREQ"],
+    )
+    d = _build_row_dict(row)
+    assert d["warning_rule_codes"] == ["FREQ"]
+    assert d["stop_rule_codes"] == []
+
+
+# Нет last_ev (LATERAL вернул NULL) → оба массива пустые, без исключения
+def test_build_row_dict_no_alert_event_empty_rule_codes() -> None:
+    """Отсутствие last_ev (NULL из LATERAL) → stop/warning_rule_codes=[], не падает."""
+    row = _FakeRow(last_ev_stage=None, last_ev_matched_rule_codes=None)
+    d = _build_row_dict(row)
+    assert d["stop_rule_codes"] == []
+    assert d["warning_rule_codes"] == []
+
+
+# _parse_rule_codes: list → list, None → [], json-строка → list
+def test_parse_rule_codes_variants() -> None:
+    """_parse_rule_codes корректно обрабатывает list, None и json-строку."""
+    # Обычный Python list (asyncpg JSONB → list)
+    assert _parse_rule_codes(["A", "B"]) == ["A", "B"]
+    # None → пустой список
+    assert _parse_rule_codes(None) == []
+    # JSON-строка (нестандартный codec)
+    assert _parse_rule_codes('["X","Y"]') == ["X", "Y"]
+    # Пустой массив
+    assert _parse_rule_codes([]) == []
+
+
+# SQL: LATERAL last_ev присутствует с partition-фильтром по created_at
+def test_build_sql_contains_last_ev_lateral() -> None:
+    """_build_sql включает LATERAL last_ev с обязательным фильтром partition-pruning."""
+    sql, params = _build_sql(
+        fb_ad_ids=None,
+        alert_states=None,
+        include_inactive=False,
+        incidents_only=False,
+        incident_stage=None,
+        limit=10,
+        offset=0,
+    )
+    # Проверяем наличие LATERAL для alert_events
+    assert "last_ev" in sql
+    assert "alert_events ae" in sql
+    # Partition-pruning фильтр по created_at
+    assert "ae.created_at >= NOW() - make_interval" in sql
+    # Поля last_ev в SELECT
+    assert "last_ev_matched_rule_codes" in sql
+    assert "last_ev_stage" in sql

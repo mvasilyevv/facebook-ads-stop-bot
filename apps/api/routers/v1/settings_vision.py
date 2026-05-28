@@ -39,37 +39,88 @@ _settings_router = APIRouter(prefix="/settings/vision", tags=["settings"])
 _vision_router = APIRouter(prefix="/vision", tags=["settings"])
 
 # Роутер для /settings/browser (validate-columns, save/apply column widths).
-# Текущая версия — заглушка-stub: реальная реализация через gRPC к browser-agent
-# отложена, пока возвращаем «всё ОК» чтобы фронт не показывал ошибку.
+# validate-columns: проксируем реальный gRPC ValidateColumns из ScannerService.
+# save/apply-column-widths: CaptureColumnWidths/ApplyColumnWidths есть в proto,
+# но Python-клиент их не реализует → 501 честно.
 _browser_router = APIRouter(prefix="/settings/browser", tags=["settings"])
 
 
 @_browser_router.get("/validate-columns")
-async def validate_columns(start_if_missing: bool = False) -> dict[str, object]:
-    """Stub: фронт-shape для валидации DOM-колонок Ads Manager.
+async def validate_columns(
+    settings: DepSettings,
+    start_if_missing: bool = False,
+) -> dict[str, object]:
+    """Валидация DOM-колонок Ads Manager через gRPC ScannerService.ValidateColumns.
 
-    TODO: реализация через `BrowserAgentClient.validate_columns()` когда gRPC
-    метод появится в `scanner.proto`. Сейчас возвращаем фронту «всё корректно»,
-    чтобы скрыть ошибку "Отсутствуют колонки в таблице Ads Manager".
+    Проксирует реальный вызов BrowserAgentClient.validate_columns() к browser-agent.
+    При недоступности gRPC (RpcError, circuit-breaker) → 503, чтобы фронт показал
+    ошибку «проверка недоступна», а не ложный зелёный «всё ок».
     """
+    import grpc
+
+    client = BrowserAgentClient(
+        BrowserAgentConfig(
+            vision_x_token=settings.vision_x_token,
+            vision_api_url=settings.vision_api_url,
+            vision_profile_id=settings.vision_profile_id,
+        )
+    )
+    try:
+        await client.start()
+        result = await client.validate_columns()
+    except grpc.RpcError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"gRPC browser-agent недоступен (validate-columns): {exc}",
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Ошибка валидации колонок: {exc}",
+        ) from exc
+    finally:
+        try:
+            await client.close()
+        except Exception:
+            pass
+
     return {
-        "valid": True,
-        "missing_columns": [],
-        "extra_columns": [],
+        "valid": result.get("valid", False),
+        "missing_columns": result.get("missing_columns", []),
+        "extra_columns": result.get("found_columns", []),
+        "error_message": result.get("error_message") or None,
         "started": False,
     }
 
 
 @_browser_router.post("/save-column-widths")
-async def save_column_widths() -> dict[str, str]:
-    """Stub: фронт может присылать пустой POST."""
-    return {"status": "noop"}
+async def save_column_widths() -> dict[str, object]:
+    """CaptureColumnWidths есть в scanner.proto, но Python-клиент его не реализует.
+
+    Возвращает 501 Not Implemented — честный сигнал фронту вместо молчаливого noop.
+    """
+    raise HTTPException(
+        status_code=501,
+        detail=(
+            "CaptureColumnWidths не реализован в Python gRPC-клиенте. "
+            "Добавить capture_column_widths() в BrowserAgentClient для полной поддержки."
+        ),
+    )
 
 
 @_browser_router.post("/apply-column-widths")
-async def apply_column_widths() -> dict[str, str]:
-    """Stub: фронт может присылать пустой POST."""
-    return {"status": "noop"}
+async def apply_column_widths() -> dict[str, object]:
+    """ApplyColumnWidths есть в scanner.proto, но Python-клиент его не реализует.
+
+    Возвращает 501 Not Implemented — честный сигнал фронту вместо молчаливого noop.
+    """
+    raise HTTPException(
+        status_code=501,
+        detail=(
+            "ApplyColumnWidths не реализован в Python gRPC-клиенте. "
+            "Добавить apply_column_widths() в BrowserAgentClient для полной поддержки."
+        ),
+    )
 
 
 # Redis-ключ heartbeat browser-agent.

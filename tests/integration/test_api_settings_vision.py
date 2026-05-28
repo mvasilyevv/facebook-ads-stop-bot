@@ -225,3 +225,114 @@ async def test_get_vision_profiles_returns_501(app_client) -> None:
     resp = await app_client.get("/api/vision/profiles")
     assert resp.status_code == 501
     assert "ListProfiles" in resp.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# GET /settings/browser/validate-columns
+# ---------------------------------------------------------------------------
+
+
+# validate-columns проксирует gRPC и возвращает реальный результат (mock client)
+@pytest.mark.asyncio
+async def test_validate_columns_proxies_grpc_success(app_client) -> None:
+    """validate-columns вызывает BrowserAgentClient.validate_columns(), не возвращает безусловный True."""
+    mock_client = AsyncMock()
+    mock_client.start = AsyncMock()
+    mock_client.close = AsyncMock()
+    # Мок возвращает реальный результат — колонки валидны
+    mock_client.validate_columns = AsyncMock(
+        return_value={
+            "valid": True,
+            "missing_columns": [],
+            "found_columns": ["spend", "impressions"],
+            "error_message": "",
+        }
+    )
+
+    with patch(
+        "apps.api.routers.v1.settings_vision.BrowserAgentClient",
+        return_value=mock_client,
+    ):
+        resp = await app_client.get("/api/settings/browser/validate-columns")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    # Ключевая проверка: valid берётся из gRPC, не из хардкода
+    assert data["valid"] is True
+    assert data["missing_columns"] == []
+    # Убеждаемся, что gRPC-метод был вызван
+    mock_client.validate_columns.assert_awaited_once()
+
+
+# validate-columns с missing_columns от gRPC → valid=False, список возвращается
+@pytest.mark.asyncio
+async def test_validate_columns_returns_missing_columns(app_client) -> None:
+    """validate-columns корректно передаёт missing_columns от gRPC (не маскирует проблему)."""
+    mock_client = AsyncMock()
+    mock_client.start = AsyncMock()
+    mock_client.close = AsyncMock()
+    mock_client.validate_columns = AsyncMock(
+        return_value={
+            "valid": False,
+            "missing_columns": ["delivery_status", "frequency"],
+            "found_columns": ["spend"],
+            "error_message": "Колонки не найдены в DOM",
+        }
+    )
+
+    with patch(
+        "apps.api.routers.v1.settings_vision.BrowserAgentClient",
+        return_value=mock_client,
+    ):
+        resp = await app_client.get("/api/settings/browser/validate-columns")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    # Результат от gRPC пробрасывается без подмены
+    assert data["valid"] is False
+    assert "delivery_status" in data["missing_columns"]
+    assert data["error_message"] is not None
+
+
+# validate-columns при gRPC ошибке → 503 (не 200 с фейковым valid=true)
+@pytest.mark.asyncio
+async def test_validate_columns_grpc_error_returns_503(app_client) -> None:
+    """При недоступности browser-agent → 503, НЕ фейк-true."""
+    import grpc
+
+    mock_client = AsyncMock()
+    mock_client.start = AsyncMock()
+    mock_client.close = AsyncMock()
+    mock_client.validate_columns = AsyncMock(side_effect=grpc.RpcError())
+
+    with patch(
+        "apps.api.routers.v1.settings_vision.BrowserAgentClient",
+        return_value=mock_client,
+    ):
+        resp = await app_client.get("/api/settings/browser/validate-columns")
+
+    # Должно быть 503, а не 200 с valid=True
+    assert resp.status_code == 503
+
+
+# ---------------------------------------------------------------------------
+# POST /settings/browser/save-column-widths и apply-column-widths → 501
+# ---------------------------------------------------------------------------
+
+
+# save-column-widths — честный 501 (CaptureColumnWidths не реализован в python client)
+@pytest.mark.asyncio
+async def test_save_column_widths_returns_501(app_client) -> None:
+    """save-column-widths возвращает 501, не молчаливый noop."""
+    resp = await app_client.post("/api/settings/browser/save-column-widths")
+    assert resp.status_code == 501
+    assert "CaptureColumnWidths" in resp.json()["detail"]
+
+
+# apply-column-widths — честный 501 (ApplyColumnWidths не реализован в python client)
+@pytest.mark.asyncio
+async def test_apply_column_widths_returns_501(app_client) -> None:
+    """apply-column-widths возвращает 501, не молчаливый noop."""
+    resp = await app_client.post("/api/settings/browser/apply-column-widths")
+    assert resp.status_code == 501
+    assert "ApplyColumnWidths" in resp.json()["detail"]

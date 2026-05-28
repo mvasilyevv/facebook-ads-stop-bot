@@ -93,9 +93,43 @@ def _build_metrics_dict(row: Any) -> dict[str, Any] | None:
     return out
 
 
+def _parse_rule_codes(raw: Any) -> list[str]:
+    """Парсит matched_rule_codes из LATERAL'а в list[str].
+
+    asyncpg возвращает JSONB-массивы как Python-list напрямую.
+    Защита: если вдруг строка (json-encoded) — парсим вручную.
+    """
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        return [str(c) for c in raw]
+    # Если asyncpg вернул строку (нестандартный codec) — пробуем JSON.
+    import json
+
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, list):
+            return [str(c) for c in parsed]
+    except (json.JSONDecodeError, TypeError):
+        pass
+    return []
+
+
 def _build_row_dict(row: Any) -> dict[str, Any]:
     """Преобразует одну строку SELECT'а в плоский dict для фронта."""
     metrics = _build_metrics_dict(row)
+
+    # Разбираем коды правил из последнего AlertEvent (LATERAL last_ev).
+    # last_ev_stage: 'stop' → stop_rule_codes, 'warning' → warning_rule_codes.
+    last_ev_stage: str | None = getattr(row, "last_ev_stage", None)
+    last_ev_codes = _parse_rule_codes(getattr(row, "last_ev_matched_rule_codes", None))
+    stop_rule_codes: list[str] = []
+    warning_rule_codes: list[str] = []
+    if last_ev_stage == "stop":
+        stop_rule_codes = last_ev_codes
+    elif last_ev_stage == "warning":
+        warning_rule_codes = last_ev_codes
+
     return {
         "fb_ad_id": row.fb_ad_id,
         "internal_id": str(row.internal_id),
@@ -117,10 +151,9 @@ def _build_row_dict(row: Any) -> dict[str, Any]:
         # delivery_status в схеме ad_metrics отсутствует — null для frontend-shape.
         "delivery_status": None,
         "meta_ad_status": row.meta_ad_status,
-        # stop_rule_codes/warning_rule_codes пока не вытаскиваем из последнего
-        # AlertEvent — frontend ожидает массивы, отдаём пустые как контракт.
-        "stop_rule_codes": [],
-        "warning_rule_codes": [],
+        # Коды сработавших правил из последнего AlertEvent.
+        "stop_rule_codes": stop_rule_codes,
+        "warning_rule_codes": warning_rule_codes,
         "metrics": metrics,
     }
 
@@ -212,7 +245,11 @@ def _build_sql(
         latest_m.cost_per_lead             AS m_cost_per_lead,
         latest_m.registrations             AS m_registrations,
         latest_m.cost_per_registration     AS m_cost_per_registration,
-        latest_m.deposits                  AS m_deposits
+        latest_m.deposits                  AS m_deposits,
+        -- LATERAL: последний AlertEvent за окно lookback_days — для rule_codes.
+        -- Partition pruning: фильтр по created_at обязателен.
+        last_ev.matched_rule_codes         AS last_ev_matched_rule_codes,
+        last_ev.stage                      AS last_ev_stage
     FROM fb_ads
     LEFT JOIN ad_alert_state s     ON s.ad_id = fb_ads.id
     LEFT JOIN fb_adsets            ON fb_ads.adset_id = fb_adsets.id
@@ -229,6 +266,14 @@ def _build_sql(
         ORDER BY cycle_ts DESC
         LIMIT 1
     ) latest_m ON true
+    LEFT JOIN LATERAL (
+        SELECT ae.matched_rule_codes, ae.stage
+        FROM alert_events ae
+        WHERE ae.ad_id = fb_ads.id
+          AND ae.created_at >= NOW() - make_interval(days => :lookback_days)
+        ORDER BY ae.created_at DESC
+        LIMIT 1
+    ) last_ev ON true
     WHERE {where_sql}
     ORDER BY fb_ads.last_seen_at DESC NULLS LAST, fb_ads.id ASC
     LIMIT :limit OFFSET :offset
