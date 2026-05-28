@@ -133,6 +133,82 @@ async def test_parallel_dispatch_sends_message_once(
     assert mid > 0
 
 
+# Сценарий: TG вернул message_id=0 → sentinel остаётся, повторный dispatch пропускается
+@pytest.mark.asyncio
+async def test_sentinel_message_id_zero_blocks_second_dispatch(
+    pg_engine,
+    alert_event_fixture,
+    seeded_telegram_config,
+) -> None:
+    """HIGH #10: если sendMessage успешен но message_id=0 — sentinel (message_id=0)
+    остаётся в telegram_message_refs. Повторный dispatch для того же события
+    натыкается на ON CONFLICT DO NOTHING → пропускает send (один send, не два).
+    """
+    import respx
+    from httpx import Response
+
+    scan_id = alert_event_fixture["scan_id"]
+
+    # Первый вызов: sendMessage возвращает message_id=0 (сервер не вернул реальный id)
+    with respx.mock(assert_all_called=False) as mock:
+        call_count = {"n": 0}
+
+        def _handler(request):
+            call_count["n"] += 1
+            return Response(
+                200,
+                json={
+                    "ok": True,
+                    "result": {
+                        "message_id": 0,  # sentinel — нет реального id
+                        "chat": {"id": -1001234567890, "type": "supergroup"},
+                        "date": 0,
+                        "text": "test",
+                    },
+                },
+            )
+
+        mock.post(url__regex=r"https://api\.telegram\.org/bot[^/]+/sendMessage").mock(
+            side_effect=_handler
+        )
+
+        async with httpx.AsyncClient() as http:
+            client = TelegramBotClient(bot_token="FAKE", http_client=http)
+            c1 = await dispatch_pending_alerts(pg_engine, client=client, scan_id=scan_id)
+
+    assert c1["sent"] == 1, "Первый dispatch должен посчитать sent=1 (send прошёл)"
+    assert call_count["n"] == 1, "sendMessage должен был вызван ровно один раз"
+
+    # Sentinel должен остаться в БД с message_id=0
+    async with pg_engine.connect() as conn:
+        ref_row = (
+            await conn.execute(text("SELECT message_id FROM telegram_message_refs LIMIT 1"))
+        ).first()
+    assert ref_row is not None, "Sentinel ref должен быть в БД"
+    assert ref_row[0] == 0, f"message_id должен остаться 0 (sentinel), но = {ref_row[0]}"
+
+    # Второй dispatch: ON CONFLICT DO NOTHING → пропустит INSERT, не пошлёт повторно
+    with respx.mock(assert_all_called=False) as mock2:
+        call_count2 = {"n": 0}
+
+        def _handler2(request):
+            call_count2["n"] += 1
+            return Response(200, json={"ok": True, "result": {"message_id": 9999}})
+
+        mock2.post(url__regex=r"https://api\.telegram\.org/bot[^/]+/sendMessage").mock(
+            side_effect=_handler2
+        )
+
+        async with httpx.AsyncClient() as http:
+            client = TelegramBotClient(bot_token="FAKE", http_client=http)
+            c2 = await dispatch_pending_alerts(pg_engine, client=client, scan_id=scan_id)
+
+    assert c2["skipped_duplicates"] == 1, (
+        "Второй dispatch должен пропустить событие через sentinel dedup"
+    )
+    assert call_count2["n"] == 0, "sendMessage не должен быть вызван повторно"
+
+
 # Сценарий: send упал → DELETE pre-claim записи, чтобы retry мог переслать
 @pytest.mark.asyncio
 async def test_failed_send_releases_claim(

@@ -90,28 +90,25 @@ def _make_row(
     )
 
 
-# Property 1: при spend=0 никаких алертов.
+# Property 1: при spend=0 и нулевых событиях — никаких алертов.
+# Примечание: regs_no_dep_stop и funnel_ladder срабатывают по количеству событий
+# (registrations/deposits), независимо от spend. Чтобы изолировать spend-зависимые
+# правила, используем leads=registrations=deposits=0.
 @given(
     cpa=_cpa,
     warn_pct=_warn_pct,
-    leads=_pos_int,
-    registrations=_pos_int,
-    deposits=_pos_int,
 )
 @settings(max_examples=100, suppress_health_check=[HealthCheck.too_slow])
-def test_zero_spend_never_triggers(
+def test_zero_spend_zero_events_never_triggers(
     cpa: Decimal,
     warn_pct: Decimal,
-    leads: int,
-    registrations: int,
-    deposits: int,
 ) -> None:
-    """При spend=0 ни одно правило не может сработать — нет данных для оценки."""
-    row = _make_row(spend=Decimal("0"), leads=leads, registrations=registrations, deposits=deposits)
+    """При spend=0 и нулевых событиях ни одно правило не может сработать."""
+    row = _make_row(spend=Decimal("0"), leads=0, registrations=0, deposits=0)
     ctx = _make_ctx(cpa=cpa, warn_pct=warn_pct)
     result = evaluate_stop_rules(row, ctx)
     assert result.stage is None, (
-        f"spend=0 не должен триггерить, но stage={result.stage}, "
+        f"spend=0 + нет событий не должен триггерить, но stage={result.stage}, "
         f"warning_hits={result.warning_hits}, stop_hits={result.stop_hits}"
     )
 
