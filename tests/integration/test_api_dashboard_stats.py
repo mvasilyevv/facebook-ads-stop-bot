@@ -208,12 +208,23 @@ async def test_stats_observer_status_from_redis(pg_engine, fake_redis_client, cl
     assert data["observer_status"] == "running"
 
 
-# Тест: pending_disable_tasks учитывает draft/pending/retrying.
+# Тест: pending_disable_tasks учитывает draft/pending/retrying (diff-подход).
 @pytest.mark.asyncio
 async def test_stats_pending_disable_tasks(pg_engine, fake_redis_client, clean_stats) -> None:
-    """task_queue в status draft/pending/retrying — все попадают в pending_disable_tasks."""
+    """draft/pending/retrying → +3 к baseline; succeeded → не меняет счётчик.
+
+    Diff-подход: snapshot ДО → засеять 3 pending + 1 succeeded → snapshot ПОСЛЕ.
+    Ожидаем рост ровно на 3 (не на 4). Isolates from other tests in suite.
+    """
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        baseline_resp = await ac.get("/api/dashboard/stats")
+    assert baseline_resp.status_code == 200
+    baseline_pending = baseline_resp.json()["pending_disable_tasks"]
+
     async with pg_engine.begin() as conn:
-        # 1 pending + 1 retrying + 1 draft + 1 succeeded (не должен попасть)
+        # 3 pending-статуса — все должны попасть в счётчик.
         for status in ("pending", "retrying", "draft"):
             await conn.execute(
                 text(
@@ -223,6 +234,7 @@ async def test_stats_pending_disable_tasks(pg_engine, fake_redis_client, clean_s
                 ),
                 {"st": status, "ik": f"stats_disable_{status}_{uuid.uuid4().hex[:6]}"},
             )
+        # succeeded НЕ должен попасть в pending_disable_tasks.
         await conn.execute(
             text(
                 "INSERT INTO task_queue (task_type, status, idempotency_key, "
@@ -232,26 +244,40 @@ async def test_stats_pending_disable_tasks(pg_engine, fake_redis_client, clean_s
             {"ik": f"stats_disable_ok_{uuid.uuid4().hex[:6]}"},
         )
 
-    app = _make_app(engine=pg_engine, redis=fake_redis_client)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.get("/api/dashboard/stats")
+        after_resp = await ac.get("/api/dashboard/stats")
 
-    assert resp.status_code == 200
-    data = resp.json()
-    # Точно 3: draft + pending + retrying попадают в pending, succeeded — нет.
-    # >= не ловит двойной счёт при JOIN fan-out по task_queue.
-    assert data["pending_disable_tasks"] == 3, (
-        f"Ожидалось 3 pending_disable_tasks, получено {data['pending_disable_tasks']} — "
-        "double-count или succeeded попал в счётчик"
+    assert after_resp.status_code == 200
+    after_pending = after_resp.json()["pending_disable_tasks"]
+
+    # Рост ровно на 3: draft+pending+retrying попали, succeeded — нет.
+    assert after_pending - baseline_pending == 3, (
+        f"Ожидался рост на 3 (draft+pending+retrying), "
+        f"получено +{after_pending - baseline_pending} "
+        f"(baseline={baseline_pending}, after={after_pending}) — "
+        "succeeded мог попасть в счётчик или double-count"
     )
 
 
-# Тест: failed_tasks_24h — только последние 24h.
+# Тест: failed_tasks_24h — только последние 24h (diff-подход для изоляции от других тестов).
 @pytest.mark.asyncio
 async def test_stats_failed_tasks_24h_window(pg_engine, fake_redis_client, clean_stats) -> None:
-    """Failed-задача старше 24h не должна попасть в failed_tasks_24h."""
+    """Failed-задача старше 24h не меняет счётчик; свежая — увеличивает ровно на 1.
+
+    Стратегия diff: /stats читается ДО засева, затем ПОСЛЕ двух вставок (fresh + old).
+    Свежая failed → счётчик вырос на +1. Старая (48h) → счётчик не вырос сверх +1.
+    Это изолирует от других тестов suite которые тоже оставляют failed tasks в БД.
+    """
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+
+    # Snapshot ДО засева — базовый уровень failed_tasks_24h в текущей БД.
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        baseline_resp = await ac.get("/api/dashboard/stats")
+    assert baseline_resp.status_code == 200
+    baseline_count = baseline_resp.json()["failed_tasks_24h"]
+
     async with pg_engine.begin() as conn:
-        # 1 failed сейчас (попадёт)
+        # 1 failed СЕЙЧАС — должен прибавить +1 к baseline.
         await conn.execute(
             text(
                 "INSERT INTO task_queue (task_type, status, idempotency_key, "
@@ -260,7 +286,7 @@ async def test_stats_failed_tasks_24h_window(pg_engine, fake_redis_client, clean
             ),
             {"ik": f"stats_failed_now_{uuid.uuid4().hex[:6]}"},
         )
-        # 1 failed 48h назад (НЕ попадёт)
+        # 1 failed 48h назад — НЕ должен прибавить к счётчику.
         await conn.execute(
             text(
                 "INSERT INTO task_queue (task_type, status, idempotency_key, "
@@ -271,17 +297,17 @@ async def test_stats_failed_tasks_24h_window(pg_engine, fake_redis_client, clean
             {"ik": f"stats_failed_old_{uuid.uuid4().hex[:6]}"},
         )
 
-    app = _make_app(engine=pg_engine, redis=fake_redis_client)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.get("/api/dashboard/stats")
+        after_resp = await ac.get("/api/dashboard/stats")
 
-    assert resp.status_code == 200
-    data = resp.json()
-    # Точно 1: только свежий failed попадает, старый (48h) не должен.
-    # >= 1 не ловит утечку старых строк через 24h-фильтр.
-    assert data["failed_tasks_24h"] == 1, (
-        f"Ожидалась 1 failed_task_24h (только свежая), получено {data['failed_tasks_24h']} — "
-        "фильтр 24h сломан или старая задача просочилась"
+    assert after_resp.status_code == 200
+    after_count = after_resp.json()["failed_tasks_24h"]
+
+    # Ровно +1: только свежая failed попала, старая (48h) исключена 24h-фильтром.
+    assert after_count - baseline_count == 1, (
+        f"Ожидался рост на ровно 1 (только свежая failed), "
+        f"получено +{after_count - baseline_count} (baseline={baseline_count}, after={after_count}) — "
+        "24h-фильтр сломан или старая задача просочилась"
     )
 
 
