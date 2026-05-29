@@ -2,7 +2,7 @@
 """Интеграционный: ingest_postback → adsetpro_postback_events с дедупом.
 
 Использует реальный Postgres (pg_engine fixture) — миграция Волны 3 должна быть
-применена (Alembic upgrade head либо apply_v2_schema).
+применена (Alembic upgrade head либо apply_schema).
 """
 
 from __future__ import annotations

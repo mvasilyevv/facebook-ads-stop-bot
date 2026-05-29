@@ -1,6 +1,6 @@
 /**
  * Button — primary/secondary/ghost/danger/link × xs/sm/md/lg.
- * См. docs/frontend_v2_design.md §2.1.
+ * См. docs/frontend_design.md §2.1.
  */
 
 import { forwardRef, type ButtonHTMLAttributes, type ReactNode } from "react";

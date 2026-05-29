@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "FB Stop Bot API",
-    "description": "Минимальный набор endpoints после v2-миграции.",
+    "description": "Минимальный набор endpoints после миграции.",
     "version": "0.1.0"
   },
   "paths": {

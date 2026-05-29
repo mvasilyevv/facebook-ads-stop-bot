@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Pydantic-схемы для роутера settings_telegram (v2-схема БД)."""
+"""Pydantic-схемы для роутера settings_telegram (схема БД)."""
 
 from __future__ import annotations
 

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Маппинг статусов TaskQueue между v2-БД (lowercase) и фронтом (UPPERCASE).
 
-В v2-схеме `task_queue.status` хранится в lowercase:
+В схеме `task_queue.status` хранится в lowercase:
     draft, pending, running, succeeded, failed, retrying, cancelled
 
 Фронт ожидает UPPERCASE-значения:

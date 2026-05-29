@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Tool get_recent_alerts — последние алерты из alert_events (partitioned).
 
-Колонки v2-схемы: alert_events.stage (warning/stop), .matched_rule_codes (jsonb),
+Колонки схемы: alert_events.stage (warning/stop), .matched_rule_codes (jsonb),
 .created_at; fb_ads.ad_name, .fb_ad_id.
 """
 

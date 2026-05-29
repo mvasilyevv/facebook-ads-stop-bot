@@ -5,7 +5,7 @@
 ad_metrics → upsert ad_alert_state → INSERT alert_events → create disable task.
 
 NB: метрики кладутся в партиционированную таблицу ad_metrics — партиция текущего
-месяца должна существовать (создаётся cleanup_worker'ом или apply_v2_schema).
+месяца должна существовать (создаётся cleanup_worker'ом или apply_schema).
 """
 
 from __future__ import annotations

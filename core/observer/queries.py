@@ -135,7 +135,7 @@ async def load_alert_state_by_fb_ad_id(
 async def load_observer_config(engine: AsyncEngine) -> dict[str, object] | None:
     """Singleton observer_config — интервал, флаги, install_cost.
 
-    Возвращает None если строки нет (что не должно случаться после apply_v2_schema).
+    Возвращает None если строки нет (что не должно случаться после apply_schema).
     """
     async with engine.connect() as conn:
         row = (

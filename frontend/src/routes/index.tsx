@@ -1,7 +1,7 @@
 /**
  * Dashboard (`/`) — overview-страница оператора.
  *
- * Блоки (по docs/frontend_v2_mockups/dashboard.html):
+ * Блоки (по docs/frontend_mockups/dashboard.html):
  *   1. PageHeader — observer_status + last_scan + WS-статус + "Scan now".
  *   2. KPI strip — 4 карточки (ads / warning / stop / incidents).
  *   3. Spend chart (Recharts area) + Active incidents — grid 1.6fr / 1fr.

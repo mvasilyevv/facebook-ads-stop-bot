@@ -13,7 +13,7 @@
 ВНИМАНИЕ: безвозвратно удаляет всю текущую БД. Запуск только после backup_secrets.py.
 
 Использование:
-    python scripts/apply_v2_schema.py [--confirm-drop]
+    python scripts/apply_schema.py [--confirm-drop]
 """
 
 from __future__ import annotations

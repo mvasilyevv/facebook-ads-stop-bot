@@ -2,7 +2,7 @@
 
 Новый production-grade фронт FB Stop Bot. Живёт **рядом** со старым `frontend/` — старый не трогается, миграция страница-за-страницей.
 
-Editorial-monochrome design, dark-only, desktop 1280+ minimum. Source of truth — `docs/frontend_v2_design.md`.
+Editorial-monochrome design, dark-only, desktop 1280+ minimum. Source of truth — `docs/frontend_design.md`.
 
 ## Стек
 
@@ -53,7 +53,7 @@ npm run typecheck
 ## Структура
 
 ```
-frontend-v2/
+frontend/
 ├── public/                       # статика (favicon)
 ├── src/
 │   ├── main.tsx                  # точка входа React
@@ -121,15 +121,15 @@ TypeScript-типы генерируются из OpenAPI-схемы FastAPI —
 make gen-api-types          # export + codegen за один шаг
 
 # Или по шагам:
-make export-openapi         # → frontend-v2/openapi.json
-cd frontend-v2 && npm run gen:api   # → src/lib/types/api-generated.ts
+make export-openapi         # → frontend/openapi.json
+cd frontend && npm run gen:api   # → src/lib/types/api-generated.ts
 ```
 
 ### Файлы
 
-- `frontend-v2/openapi.json` — экспортированная схема (в git, фронт работает офлайн).
-- `frontend-v2/src/lib/types/api-generated.ts` — автогенерированные типы (в git).
-- `frontend-v2/src/lib/types/api.ts` — ручные alias-типы для удобства; при расхождении `api-generated.ts` — победитель.
+- `frontend/openapi.json` — экспортированная схема (в git, фронт работает офлайн).
+- `frontend/src/lib/types/api-generated.ts` — автогенерированные типы (в git).
+- `frontend/src/lib/types/api.ts` — ручные alias-типы для удобства; при расхождении `api-generated.ts` — победитель.
 
 ### Endpoints без response_model (типов нет в generated)
 
@@ -146,7 +146,7 @@ cd frontend-v2 && npm run gen:api   # → src/lib/types/api-generated.ts
 1. В новых компонентах: `components["schemas"]["XxxOut"]` из `api-generated.ts` напрямую.
 2. Постепенно заменить ручные типы в `api.ts` на `export type X = components["schemas"]["XOut"]` алиасы.
 3. Удалить поля с `@deprecated` после обновления всех компонентов.
-4. CI: `make gen-api-types && git diff --exit-code frontend-v2/openapi.json frontend-v2/src/lib/types/api-generated.ts` — провалит PR если backend изменился, а codegen не перегнали.
+4. CI: `make gen-api-types && git diff --exit-code frontend/openapi.json frontend/src/lib/types/api-generated.ts` — провалит PR если backend изменился, а codegen не перегнали.
 
 ## Backend
 

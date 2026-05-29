@@ -1,5 +1,5 @@
 /**
- * Design tokens — соответствие docs/frontend_v2_design.md §1.1–§1.7.
+ * Design tokens — соответствие docs/frontend_design.md §1.1–§1.7.
  * Все значения — CSS custom properties в :root, плюс @theme-обёртка для
  * Tailwind 4 (utility-классы вида text-bg-11, bg-bg-1 и т.д.).
  *

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""FastAPI app для FB Stop Bot (минимальная версия после v2-миграции).
+"""FastAPI app для FB Stop Bot (минимальная версия после миграции).
 
 Что внутри:
 - lifespan: создаёт Redis-клиент и кладёт в app.state.redis (закрывает на shutdown).
@@ -107,7 +107,7 @@ def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(
         title="FB Stop Bot API",
-        description="Минимальный набор endpoints после v2-миграции.",
+        description="Минимальный набор endpoints после миграции.",
         version="0.1.0",
         lifespan=lifespan,
     )

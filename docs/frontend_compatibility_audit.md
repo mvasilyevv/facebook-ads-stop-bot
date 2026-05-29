@@ -8,7 +8,7 @@
 - Всего endpoints (uniq HTTP routes): **70**
 - **OK** (1-в-1 с v2-моделями, нужен только router-handler): **17**
 - **ADAPT** (схема v2 даёт данные, но нужны переименования полей, JOIN'ы, миграция семантики; некоторые endpoints — это compute-агрегации поверх partitioned-таблиц): **39**
-- **REMOVE** (фича удалена с v2-миграцией, либо больше не имеет под собой данных): **6**
+- **REMOVE** (фича удалена с миграцией, либо больше не имеет под собой данных): **6**
 - **NEW** (на фронте уже есть вызов, но логику нужно построить заново под v2 — например, batch-эндпоинт для DashboardPage, или AI-анализ): **8**
 
 Фронт ожидает префикс `/api`. Например, `getOffers()` бьёт в `GET /api/offers`. Бэкенд должен либо смонтировать routers с `prefix="/api"`, либо настроить proxy. В текущем `apps/api/main.py` routers подключены без префикса (`health` → `/healthz`, `postback` → `/api/v1/postback/adsetpro`), так что либо переделываем include_router, либо фронт нужно перенаправить через Vite proxy/nginx.
@@ -67,7 +67,7 @@
 | Endpoint | Status | Бэкенд | Заметки |
 |---|---|---|---|
 | `GET /offers` | OK | `Offer` | Простой SELECT WHERE `is_active=true`. |
-| `GET /offers/compare?days=N` | ADAPT | `Offer` + `AdMetrics` (partitioned) + `AlertEvent` | Compute-агрегация: за N дней — spend, deposits, alert counts per offer. Нужно JOIN через `fb_campaigns.offer_id → fb_adsets → fb_ads → ad_metrics`. Тяжёлый запрос, но v2-схема позволяет. |
+| `GET /offers/compare?days=N` | ADAPT | `Offer` + `AdMetrics` (partitioned) + `AlertEvent` | Compute-агрегация: за N дней — spend, deposits, alert counts per offer. Нужно JOIN через `fb_campaigns.offer_id → fb_adsets → fb_ads → ad_metrics`. Тяжёлый запрос, но схема позволяет. |
 | `POST /offers` | OK | `Offer` | Insert. |
 | `PUT /offers/{id}` | OK | `Offer` | Update. |
 | `DELETE /offers/{id}` | OK | `Offer` | Hard delete (Offer.is_active=false проще; сам Offer держит FK через ON DELETE SET NULL → fb_campaigns). |

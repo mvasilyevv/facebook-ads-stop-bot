@@ -164,7 +164,7 @@ Round 10 `test_metric_aggregation_semantics.py` покрыл `/history/ads` и `
 | `test_api_dashboard_spend_history.py::test_spend_partition_pruning` (line 154) | **ПРАВИЛЬНО.** Сеет in-window + out-of-window, ассертит `fid_old not in fb_ids`. Образец. |
 | `test_dashboard_snapshot_rule_codes.py::test_old_alert_event_outside_lookback_is_excluded` (line 204, Round 10) | **ПРАВИЛЬНО.** Event 8 дней назад → `stop_rule_codes == []`. Образец. |
 | `test_digest_builder.py` (×3, `t_old = now - 30h`) | **ПРАВИЛЬНО.** out-of-window snapshot/alert/task реально исключён из агрегата. |
-| `test_get_recent_alerts_v2_schema.py` (`t_old = 100h`) | **ПРАВИЛЬНО.** |
+| `test_get_recent_alerts_schema.py` (`t_old = 100h`) | **ПРАВИЛЬНО.** |
 
 Вывод: партиционная проверка «есть, но половина — обманки». Образцы существуют рядом — нужно перенести паттерн в chart-data и history-timing.
 

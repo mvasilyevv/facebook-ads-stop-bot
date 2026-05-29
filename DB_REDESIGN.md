@@ -1,4 +1,4 @@
-# DB Redesign Proposal v2.0 — Full Schema Specification
+# DB Redesign Proposal.0 — Full Schema Specification
 
 Документ на approve перед drop текущей схемы. После одобрения — становится source of truth для Alembic 0001 миграции, доменных модулей `core/models/` и cleanup-воркера.
 

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Регрессия pre-existing bug: get_recent_alerts SQL под v2-схему.
+"""Регрессия pre-existing bug: get_recent_alerts SQL под схему.
 
 До фикса: SQL ссылался на `ae.event_type`, `ae.rule_codes`, `a.name` —
 несуществующие колонки v2. Tool падал с UndefinedColumnError при любом вызове
@@ -65,7 +65,7 @@ async def alerts_world(pg_engine, fb_ad_fixture):
 
 # SQL не падает на v2-колонках (stage, matched_rule_codes, ad_name) — основной кейс.
 @pytest.mark.asyncio
-async def test_get_recent_alerts_v2_sql_no_error(pg_engine, alerts_world) -> None:
+async def test_get_recent_alerts_sql_no_error(pg_engine, alerts_world) -> None:
     tool = GetRecentAlertsTool()
     ctx = ToolContext(client_key="test-user", engine=pg_engine)
     result = await tool.run(ctx, {"hours": 24, "limit": 50})

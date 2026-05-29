@@ -245,7 +245,7 @@ export interface ObserverSettings {
   cabinet_url?: string | null;
   /** @deprecated поле отсутствует в backend v2 */
   country_code?: string | null;
-  /** @deprecated нет в v2-схеме */
+  /** @deprecated нет в схеме */
   auto_disable_enabled?: boolean;
   /** @deprecated используй auto_enable_recommendations */
   auto_enable_recommendations_enabled?: boolean;

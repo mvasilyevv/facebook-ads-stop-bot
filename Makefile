@@ -121,7 +121,7 @@ api: check-env install-backend ## Запустить FastAPI на порту 800
 	$(VENV_BIN)/uvicorn apps.api.main:app --host 0.0.0.0 --port 8000 --reload
 
 apply-schema: check-env install-backend ## Drop + apply v2 схемы БД (ОПАСНО, требует --confirm-drop)
-	$(PY) scripts/apply_v2_schema.py --confirm-drop
+	$(PY) scripts/apply_schema.py --confirm-drop
 
 backup-secrets: check-env install-backend ## Бэкап Vision/TG токенов
 	$(PY) scripts/backup_secrets.py

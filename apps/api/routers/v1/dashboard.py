@@ -166,7 +166,7 @@ async def list_alert_events(
     (не `event_type` / `rule_codes`). triggered_by_rule_codes не существует
     в ORM — возвращаем None в ответе для совместимости с frontend shape.
     """
-    # Фронт исторически шлёт stage в UPPERCASE (WARNING/STOP), v2-схема хранит lowercase.
+    # Фронт исторически шлёт stage в UPPERCASE (WARNING/STOP), схема хранит lowercase.
     if stage is not None:
         stage = stage.lower()
         if stage not in _VALID_STAGES:

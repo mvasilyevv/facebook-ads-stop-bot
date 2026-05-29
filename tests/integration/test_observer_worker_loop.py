@@ -103,7 +103,7 @@ async def offer_cr2(pg_engine, clean_obs_tables):
 async def ensure_observer_config_enabled(pg_engine):
     """Гарантирует что singleton observer_config есть и is_scanning_enabled=true."""
     async with pg_engine.begin() as conn:
-        # apply_v2_schema создал строку с дефолтами; проверим что есть и принудительно включим
+        # apply_schema создал строку с дефолтами; проверим что есть и принудительно включим
         await conn.execute(
             text(
                 """

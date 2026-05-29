@@ -121,10 +121,10 @@ cd services/browser-agent && npm install && npm run build && cd ../..
 ```bash
 docker compose up -d postgres redis
 make db-wait                # ждёт healthcheck Postgres
-python scripts/apply_v2_schema.py --confirm-drop
+python scripts/apply_schema.py --confirm-drop
 ```
 
-`apply_v2_schema.py` делает: `DROP SCHEMA public CASCADE` → `CREATE SCHEMA` →
+`apply_schema.py` делает: `DROP SCHEMA public CASCADE` → `CREATE SCHEMA` →
 `CREATE EXTENSION pgcrypto` → `Base.metadata.create_all()` (35 таблиц) →
 партиции на текущий и следующий месяц для 7 partitioned-таблиц →
 `system_config.retention_policy` со значениями по умолчанию.
@@ -134,7 +134,7 @@ python scripts/apply_v2_schema.py --confirm-drop
 
 ```bash
 python scripts/backup_secrets.py     # data/secrets_backup_YYYYMMDD_HHMMSS.json (chmod 600)
-python scripts/apply_v2_schema.py --confirm-drop
+python scripts/apply_schema.py --confirm-drop
 python scripts/restore_secrets.py    # берёт последний бэкап
 ```
 
@@ -260,7 +260,7 @@ supervisord ротирует с `stdout_logfile_maxbytes=10MB`, 3 бэкапа.
 - [ ] `POSTGRES_PASSWORD ≠ POSTGRES_DB` (иначе `core/config.py` пишет warning).
 - [ ] `TELEGRAM_BOT_TOKEN` — продакшен-бот, отличный от dev-бота.
 - [ ] `API_KEY` задан явно (не сгенерирован автоматически в `.env`).
-- [ ] Перед каждым `apply_v2_schema.py --confirm-drop` — запуск `backup_secrets.py`.
+- [ ] Перед каждым `apply_schema.py --confirm-drop` — запуск `backup_secrets.py`.
 - [ ] `SENTRY_DSN` и `SENTRY_ENVIRONMENT=production` заданы.
 - [ ] HTTPS reverse-proxy (nginx / Caddy / cloudflared tunnel) перед FastAPI
       на `/api/v1/postback/adsetpro` — AdSet.pro отправляет postback'и без TLS verify только на HTTPS endpoint.

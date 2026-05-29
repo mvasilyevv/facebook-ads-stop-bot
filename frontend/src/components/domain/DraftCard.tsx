@@ -1,6 +1,6 @@
 /**
  * DraftCard — карточка AI-mutation draft.
- * См. docs/frontend_v2_design.md §4.6.
+ * См. docs/frontend_design.md §4.6.
  *
  * Header: eyebrow (DRAFT · 12 min ago · meta_api / pause_ad) + meta (Requested by @user).
  * Body: summary (one bold sentence) + diff (key→value monospace) + AI reasoning.

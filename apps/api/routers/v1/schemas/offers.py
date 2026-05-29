@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Pydantic-схемы для роутера offers (CRUD + compare + rules).
 
-v2-схема БД: Offer содержит только code/name/vertical/is_active.
+схема БД: Offer содержит только code/name/vertical/is_active.
 Поля country_code, use_vision_creator, notes отсутствуют в ORM —
 возвращаются как null для совместимости с фронтовым shape.
 """

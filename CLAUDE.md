@@ -42,7 +42,7 @@ python run_meta_api_worker.py                                            # Marke
 python run_health_watchdog.py                                            # Health watchdog (мониторинг worker:heartbeat:*)
 
 # Через Makefile
-make bootstrap        # docker + зависимости + apply-schema (drop+create v2)
+make bootstrap        # docker + зависимости + apply-schema (drop+create)
 make verify           # lint + unit + integration тесты
 make test-unit        # только unit-тесты
 make test-integration # integration с реальной БД из docker-compose
@@ -54,9 +54,9 @@ ruff check .                              # линтер
 ruff format .                             # форматирование
 cd services/browser-agent && npm test     # тесты browser-agent (TypeScript)
 
-# Схема БД (v2)
+# Схема БД
 python scripts/backup_secrets.py          # бэкап Vision/TG токенов (encrypted)
-python scripts/apply_v2_schema.py --confirm-drop  # DROP + CREATE с нуля
+python scripts/apply_schema.py --confirm-drop  # DROP + CREATE с нуля
 python scripts/restore_secrets.py          # вернуть токены
 ```
 
@@ -66,9 +66,9 @@ python scripts/restore_secrets.py          # вернуть токены
 
 ### 12 Python воркеров + FastAPI + Node.js gRPC
 
-После v2-миграции (см. `DB_REDESIGN.md`) кодовая база сокращена и постепенно восстановлена. Сейчас активные сервисы покрывают почти весь функционал, кроме фронта (отложен).
+После миграции (см. `DB_REDESIGN.md`) кодовая база сокращена и постепенно восстановлена. Сейчас активные сервисы покрывают почти весь функционал, кроме фронта (отложен).
 
-**Python воркеры (текущие, все на v2 схеме):**
+**Python воркеры (текущие, все на схеме):**
 
 1. **observer_worker** (`apps/observer_worker/`) — бесконечный цикл: gRPC `RunScanCycle` → `ScannedAdRow[]` → process_scan_rows (FSM в `ad_alert_state` + метрики в `ad_metrics` partitioned + outbox в `task_queue`) → dispatch alerts в TG (через `core.telegram.alert_dispatcher`). Heartbeat и runtime status — в Redis (`observer:runtime` с TTL 60s). Pubsub `fb_agent:scan:finished`. Точка входа: `run_observer_worker.py`.
 2. **disable_worker** (`apps/disable_worker/`) — поллит `task_queue` где `task_type='disable'` (FOR UPDATE SKIP LOCKED), вызывает gRPC `toggle_ad(target_state=False)`, retry с exponential backoff (30s → 5min cap, max 5 попыток). Точка входа: `run_disable_worker.py`.
@@ -116,7 +116,7 @@ python scripts/restore_secrets.py          # вернуть токены
     - `tools.py` — `POST /tools/creative-uniquify` (multipart, list[CreativeInput] bytes → `core.creatives.service.uniquify_creatives(offer_name, copies, creatives, base_dir, now)` → output в `~/Documents/FB_Agent_Creo`), `POST /tools/creative-uniquify/open-folder` (валидация через `default_creatives_root()` — 403 если path вне корня), `GET /tools/campaign-create/folders` (`list_creative_folders()` возвращает `adset_count/creative_count/media_type` — НЕ `files_count/size_bytes`), `POST /tools/campaign-create/plan` (`inspect_creative_folder()` + `build_campaign_script_plan(folder, config)`). **dev-only** (warning-комментарии в docstrings, prod-блокировка через env не добавлена — оставлено как backlog).
     - `ai_analyze.py` — `POST /ai/analyze` с Redis-кэшем `ai:cache:analyze:{block_type}:{scope_key}` TTL 600s + отдельный rate-limiter 20/hour per remote IP (поверх `ChatSession`'овского 30/hour). 503 если AI-провайдеры не настроены. `force_refresh=true` обходит кэш.
 - **`apps/api/deps.py`** — `DepEngine`, `DepRedis`, `DepSettings` через `Annotated[..., Depends(...)]` для роутеров v1.
-- **`apps/api/utils/status_mapper.py`** — `to_frontend_task_status` / `from_frontend_task_status` (lowercase v2 ↔ uppercase frontend, `draft → PENDING`).
+- **`apps/api/utils/status_mapper.py`** — `to_frontend_task_status` / `from_frontend_task_status` (lowercase БД ↔ uppercase frontend, `draft → PENDING`).
 - **`apps/api/utils/partition.py`** — `default_window(hours=168)` для partitioned-queries.
 - `RequestIdMiddleware` echo'ит `X-Request-Id`. `BodySizeLimitMiddleware` — 64 KB hard cap по `Content-Length` → 413 (GET/HEAD/OPTIONS пропускаются). CORS — только если `frontend_origin` задан; при `"*"` в origin'е (включая комбинации типа `"https://app.com,*"`) `create_app()` падает `RuntimeError` на старте. Exception handlers маппят `AdsetProError`/`MetaApiError` подтипы на 401/403/404/429/503/502.
 - **TODO subscriber'ы в worker'ах:** observer не подписан на `fb_agent:observer:trigger`/`cabinet_day`, не подписаны worker'ы на `fb_agent:worker:restart:*`. Endpoints publish'ат сигналы, до реализации subscriber'ов сигналы no-op. Отдельная стич-задача после Round 7.x.
@@ -162,7 +162,7 @@ python scripts/restore_secrets.py          # вернуть токены
 - **ai_assistant/** — pure-Python ассистент: `chat.py`, `client.py`, `providers.py`, `prompts/`. Пакет `tools/` (registry + base + ops/meta/drafts/creative — 15 tools) подключён к Telegram через `core/telegram/ai_handlers.py` (`/ask` + draft callbacks `dr_ok`/`dr_cancel`). `ToolHandler.risk_level`: READ_ONLY (исполняется немедленно), DRAFT_REQUIRED (создаёт `task_queue` со `status='draft'` + `created_by_chat_id` через `core.meta_api.queue.create_draft_task` → юзер подтверждает в TG только если он же owner или recipient с `role='owner'`), CREATIVE. Rate-limit per `client_key` через `tools/_ratelimit.py` (Redis `ai:ratelimit:tools:*` TTL 3600 + in-memory secondary cap 5/60с при сбое Redis вместо fail-open). `MetaApiClient` пробрасывается через `ToolContext` — без него meta-tools падают с явной ошибкой. `drafts/request_bulk_pause` ищет по `offer_code` через Postgres regex `~*` с anchored word-boundary `(^|[^a-z0-9])CODE([^a-z0-9]|$)` — старая ILIKE-substring выборка (`%CR%` матчит `ACRO`) удалена.
 - **adset_pro/** — клиент AdSet.pro: оказался **MCP-сервером** (`platform-stats-mcp` v1.0.0), не REST API. Host `adset.pro` (не `api.adset.pro`), endpoint `POST /mcp` JSON-RPC 2.0 с Bearer-токеном из `ADSETPRO_MCP_KEY`. Доступно 10 MCP-tools: `query_stats`, `get_metadata`, `export_csv`, `list_campaigns`/`get_campaign`, `list_sources`/`list_offers`/`list_flows`/`list_cpas`, `resolve_ids`. Публичный контракт сохранён (`StatsQueryRequest/Response`), `call_mcp_tool(name, args)` — низкоуровневый канал под будущие AI-tools. Ingest postback'ов через `core/adset_pro/ingest.py` (двухступенчатый дедуп: pre-INSERT SELECT по 24h окну + `ON CONFLICT DO NOTHING` на UNIQUE).
 - **adset_pro/queries.py + ingest.py** — `load_external_deposits_batch(engine, fb_ad_ids, since)` для evaluator; `ingest_postback` для FastAPI router'а.
-- **dashboard/snapshot.py** — `build_ad_snapshot(engine, fb_ad_ids?, alert_states?, limit, offset, include_inactive)` + `build_incidents_snapshot(engine, stage?)`. Композитная view-функция: FbAd LEFT JOIN AdAlertState LEFT JOIN LATERAL (последняя AdMetrics за 7 дней) LEFT JOIN FbAdset/FbCampaign/Offer LEFT JOIN MetaApiObservation. Используется dashboard router'ами вместо устаревшей таблицы `ad_snapshots` (которой в v2 нет). LATERAL `cycle_ts >= NOW() - make_interval(days => :lookback)` для partition pruning. Декомпозиция incidents `transitions_count` через batch `unnest(:ids::uuid[], :starts::timestamptz[])` LEFT JOIN AlertEvent (один запрос вместо N+1).
+- **dashboard/snapshot.py** — `build_ad_snapshot(engine, fb_ad_ids?, alert_states?, limit, offset, include_inactive)` + `build_incidents_snapshot(engine, stage?)`. Композитная view-функция: FbAd LEFT JOIN AdAlertState LEFT JOIN LATERAL (последняя AdMetrics за 7 дней) LEFT JOIN FbAdset/FbCampaign/Offer LEFT JOIN MetaApiObservation. Используется dashboard router'ами вместо устаревшей таблицы `ad_snapshots` (которой в текущей схеме нет). LATERAL `cycle_ts >= NOW() - make_interval(days => :lookback)` для partition pruning. Декомпозиция incidents `transitions_count` через batch `unnest(:ids::uuid[], :starts::timestamptz[])` LEFT JOIN AlertEvent (один запрос вместо N+1).
 - **alerts/** — Redis-очередь алертов + drain worker (опционально).
 - **browser/** — `lock.py` (file-lock эксклюзивности браузер-сессии), `circuit_breaker.py` (AsyncCircuitBreaker для gRPC).
 - **auth/** — TMA initData валидация (для будущего Mini App).
@@ -179,7 +179,7 @@ python scripts/restore_secrets.py          # вернуть токены
 
 ### Что временно отсутствует (восстановим по запросу)
 
-После v2-миграции удалены, но могут быть восстановлены инкрементально:
+После миграции удалены, но могут быть восстановлены инкрементально:
 - **API роутеры** (`apps/api/`) — 17 роутеров FastAPI. Понадобится для фронта.
 - **Creator workers** (`apps/creator_worker/`, `apps/creator_recorder/`) — автоматизация создания кампаний через Vision.
 - **Frontend** (`frontend/` 9 страниц + `frontend-mini/`) — отложен по решению пользователя. `apps/api/` минимум поднят (health + postback), при возврате к фронту — расширить роутерами под нужные страницы.
@@ -194,11 +194,11 @@ python scripts/restore_secrets.py          # вернуть токены
 - ~~Pre-existing bug в `core/ai_assistant/tools/ops/get_recent_alerts.py`~~ — ✅ исправлено в раунде 6D (`ae.event_type → ae.stage`, `ae.rule_codes → ae.matched_rule_codes`, `a.name → a.ad_name`).
 - **Health watchdog: дедуп-ключ ставится даже при отсутствии TG-клиента.** При первом подключении токена «упущенные» алерты не доедут, пока не истечёт TTL 1h. Поведение проверяется `test_no_tg_client_does_not_crash` — нужно зафиксировать в runbook.
 - **Backtest** (`scripts/backtest_rules.py`) — пройти историю и оценить false-stop'ы (MEMORY 2026-06-08).
-- **Frontend ↔ v2 shape расхождения** (зафиксированы при восстановлении API Round 7.2-7.3, возвращаются `null` фронту до миграций):
+- **Frontend ↔ backend shape расхождения** (зафиксированы при восстановлении API Round 7.2-7.3, возвращаются `null` фронту до миграций):
   - `Offer` нет полей `country_code`, `use_vision_creator`, `notes` (Round 7.2).
   - `OfferRule` — 6 числовых полей (`spend_no_event_threshold`/`cpa_threshold`/`cpm_threshold`/`ctr_threshold`/`frequency_threshold`/`funnel_ratio_threshold`), не JSONB `cpc_thresholds`/`cpl_thresholds` которые ждёт OffersPage (Round 7.2).
   - `AdMetrics` нет `delivery_status` (Round 7.3).
-  - `AlertEvent` нет `triggered_by_rule_codes` (Round 7.3; в v2 только `matched_rule_codes`).
+  - `AlertEvent` нет `triggered_by_rule_codes` (Round 7.3; в схеме только `matched_rule_codes`).
   - `AdAlertState` нет отдельных `last_warning_at`/`last_stop_at` — восстанавливаются из `last_transition_at` + `current_stage` CASE (Round 7.3).
   - `AdDepositCorrection.corrected_deposits` ↔ frontend `fake_count` (router маппит).
   - `AdAutoEnableDisabled.created_at` ↔ frontend `disabled_at` (router маппит).
@@ -279,7 +279,7 @@ HTTP/SSE транспорт для iPhone / удалённого доступа 
 
 ### Будущие модули (см. META_INTEGRATION_PLAN.md + DB_REDESIGN.md)
 
-В v2-схеме уже подготовлены таблицы (см. `core/models/`):
+В схеме уже подготовлены таблицы (см. `core/models/`):
 - **meta_api/** — `meta_api_observation` (latency-tolerant snapshot, UNIQUE по ad_id), `meta_api_webhook_event` (partitioned, задел — webhooks без Admin BM не работают), `meta_api_audit_log` (partitioned, retention 30 дней). Outbox-канал — `task_queue.task_type='meta_api_mutation'`, обслуживает meta_api_worker.
 - **trackers/** — `tracker_postback` (partitioned, AdsetPro schema), `tracker_aggregate` (per ad_id × country × day). Webhook handler + aggregator не написаны.
 - **ad_library_winner_archive** — топ S-tier ads hold forever (защита от cleanup).
@@ -300,7 +300,7 @@ HTTP/SSE транспорт для iPhone / удалённого доступа 
 
 **Telegram Mini App (`frontend-mini/`):** React 19.0 + Vite 5.4 + JSX + react-router-dom v7 + vanilla CSS (без Tailwind). Большая часть UI-логики дублирована из основного фронта (форматтеры, STATE_LABELS, fetch — отдельно для каждой страницы). Тесты отсутствуют.
 
-**Новый фронт (`frontend-v2/`):** React 19 + Vite 6 + **TypeScript strict** + Tailwind 4 + TanStack Router (file-based) + TanStack Query 5 + Zustand 5 + Lucide + Radix Primitives. Dark-only, monochrome editorial style (см. `docs/frontend_v2_design.md`). 6 страниц (Dashboard, Ads, Offers, History, Settings, Drafts). Storybook 8 для component isolation. Desktop 1280+ only. Port 5174 (dev), proxy `/api` → `:8100`. Сейчас в репо — foundation (tokens, базовый UI, layout shell, placeholder-страницы, API-клиенты per-domain, WebSocket hook с polling fallback, 5 unit-тестов). Полная имплементация страниц — следующие раунды.
+**Новый фронт (`frontend/`):** React 19 + Vite 6 + **TypeScript strict** + Tailwind 4 + TanStack Router (file-based) + TanStack Query 5 + Zustand 5 + Lucide + Radix Primitives. Dark-only, monochrome editorial style (см. `docs/frontend_design.md`). 6 страниц (Dashboard, Ads, Offers, History, Settings, Drafts). Storybook 8 для component isolation. Desktop 1280+ only. Port 5174 (dev), proxy `/api` → `:8100`. Сейчас в репо — foundation (tokens, базовый UI, layout shell, placeholder-страницы, API-клиенты per-domain, WebSocket hook с polling fallback, 5 unit-тестов). Полная имплементация страниц — следующие раунды.
 
 Vite-порт динамический (run.sh читает из лога).
 

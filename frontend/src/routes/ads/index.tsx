@@ -1,7 +1,7 @@
 /**
  * Ads (`/ads`) — таблица объявлений с фильтрами, bulk-actions, drawer.
  *
- * Блоки (по docs/frontend_v2_mockups/ads.html):
+ * Блоки (по docs/frontend_mockups/ads.html):
  *   1. PageHeader — eyebrow 02, stats в subtitle, кнопки Export/Columns.
  *   2. FilterBar — поиск по имени, фильтр по alert_state (Pill-чипы),
  *      select по offer_code, include_inactive toggle.

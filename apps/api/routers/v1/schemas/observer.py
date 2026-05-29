@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Pydantic-схемы для роутера observer (v2-схема БД)."""
+"""Pydantic-схемы для роутера observer (схема БД)."""
 
 from __future__ import annotations
 

@@ -1,7 +1,7 @@
 /**
  * History (`/history`) — страница истории событий.
  *
- * Блоки (по docs/frontend_v2_design.md §4.4):
+ * Блоки (по docs/frontend_design.md §4.4):
  *   1. PageHeader — eyebrow 04/HISTORY, title "History.".
  *   2. PeriodSelector — пресеты 7/30/90 дней + custom from/to (≤90д).
  *   3. HistorySummarySection — KPI-strip + breakdown по stage + by_rule.

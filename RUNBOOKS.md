@@ -86,7 +86,7 @@ grep -E 'Traceback|ERROR|CRITICAL' .logs/<worker>.log | tail -20
 1. Если воркер в `BACKOFF`/`FATAL` — `supervisorctl restart <worker>`.
 2. Если воркер в `RUNNING`, но heartbeat не пишется — лог скажет почему (вероятно блок на gRPC или Redis). Проверить `nc -z localhost 50051` и `redis-cli -p 6380 ping`.
 3. Если `EXPECTED_WORKERS` в env не совпадает с реально нужным набором — поправить и рестартовать `health_watchdog` (`supervisorctl restart health_watchdog`). Алерт дедуплицируется на 1 час через `health:alerted:<worker>` в Redis.
-4. Если воркер постоянно падает — посмотреть `core/<домен>/` соответствующего воркера, проверить наличие нужных таблиц в БД (`apply_v2_schema.py` мог не пройти).
+4. Если воркер постоянно падает — посмотреть `core/<домен>/` соответствующего воркера, проверить наличие нужных таблиц в БД (`apply_schema.py` мог не пройти).
 
 ---
 
@@ -311,7 +311,7 @@ ORDER BY 3 DESC;
 2. Если бэкапа схемы нет, но есть `data/secrets_backup_*.json` от старой
    установки:
    ```bash
-   python scripts/apply_v2_schema.py --confirm-drop
+   python scripts/apply_schema.py --confirm-drop
    python scripts/restore_secrets.py <path/to/backup>
    ```
    Остальные настройки (offer, observer interval, install cost) задаются
@@ -327,18 +327,18 @@ ORDER BY 3 DESC;
 **Когда:** разработческий стенд, повреждённая схема, миграция на новую
 структуру.
 
-**Опасность:** `apply_v2_schema.py --confirm-drop` делает
+**Опасность:** `apply_schema.py --confirm-drop` делает
 `DROP SCHEMA public CASCADE` — необратимо удаляет все данные.
 
 ```bash
 python scripts/backup_secrets.py          # обязательно
 docker compose ps                          # убедиться что Postgres alive
-python scripts/apply_v2_schema.py --confirm-drop
+python scripts/apply_schema.py --confirm-drop
 python scripts/restore_secrets.py
 supervisorctl -c supervisord.conf restart all
 ```
 
-`apply_v2_schema.py` создаёт партиции только на текущий + следующий месяц.
+`apply_schema.py` создаёт партиции только на текущий + следующий месяц.
 Для следующих месяцев работает `cleanup_worker`.
 
 ---
