@@ -23,7 +23,8 @@ GRPC_NODE_DIR := services/browser-agent
 	creator-worker creator-recorder api \
 	frontend frontend-build lint format test test-unit test-telegram test-integration verify \
 	start stop logs proto-compile proto-watch \
-	browser-agent browser-agent-dev browser-agent-build tma-dev tma-build
+	browser-agent browser-agent-dev browser-agent-build tma-dev tma-build \
+	export-openapi gen-api-types
 
 help: ## Показать доступные команды
 	@awk 'BEGIN {FS = ":.*## "}; /^[a-zA-Z0-9_.-]+:.*## / {printf "  %-20s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -147,6 +148,12 @@ test-integration: install-backend ## Прогнать интеграционны
 	$(PYTEST) -q tests/integration --timeout=30
 
 verify: lint test-unit test-integration ## Выполнить основной проверочный прогон
+
+export-openapi: install-backend ## Экспортировать OpenAPI-схему из FastAPI в frontend-v2/openapi.json
+	$(PY) scripts/export_openapi.py
+
+gen-api-types: export-openapi ## Сгенерировать TypeScript-типы из OpenAPI в frontend-v2/src/lib/types/api-generated.ts
+	cd frontend-v2 && $(NPM) run gen:api
 
 start: ## Поднять весь проект через run.sh
 	./run.sh
