@@ -509,11 +509,20 @@ async def main_loop(
 
 async def _default_gate_factory() -> ScannerGate:
     """Прод-реализация: оборачивает BrowserAgentClient в ScannerGate-протокол."""
-    from clients.python_grpc.client import BrowserAgentClient
+    from clients.python_grpc.client import BrowserAgentClient, BrowserAgentConfig
     from clients.python_grpc.client import ScanResult as GrpcScanResult
+    from core.config import get_settings
 
-    client = BrowserAgentClient()
-    await client.connect()
+    s = get_settings()
+    client = BrowserAgentClient(
+        BrowserAgentConfig(
+            vision_x_token=s.vision_x_token,
+            vision_api_url=s.vision_api_url,
+            vision_profile_id=s.vision_profile_id,
+        )
+    )
+    await client.start()
+    # run_scan_cycle сам поднимет browser-сессию (ensure_browser_session внутри).
 
     class _BrowserAgentScannerGate:
         async def run_one_scan(self) -> ScanCycleOutput:

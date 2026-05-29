@@ -1,7 +1,7 @@
 # PROJECT STATUS — FB Stop Bot
 
 > Единый источник правды по состоянию проекта. Обновляется по итогам раундов.
-> Тесты backend: **1072 passed / 0 failed** · frontend: **77 passed** · ruff/typecheck/lint clean.
+> Тесты backend: **1076 passed / 0 failed** · frontend: **77 passed** · ruff/typecheck/lint clean.
 > Подробности — в `CLAUDE.md` (архитектура) + `META_INTEGRATION_PLAN.md` (план) + `docs/*audit*.md` (аудиты).
 
 ## TL;DR
@@ -9,7 +9,8 @@
 - **Backend — production-ready.** 12 воркеров + FastAPI (61 endpoint) + Node.js gRPC. Прошёл 5 аудитов (security ×2, test-coverage, code-quality, test-quality) + cleanup-раунды. Все CRIT/HIGH закрыты.
 - **Frontend — готов.** Новый `frontend/` (TS + Vite + Tailwind 4 + TanStack): 6 страниц, русский UI, проверены в браузере. Старый `frontend-legacy/` — архив.
 - **БД** переименована `fb_stop_bot_v2 → fb_stop_bot` (данные сохранены).
-- **Замерено вживую (2026-05-29):** Marketing API latency (BL-7) — insights 2–4с, list ~1с; подтвердило разделение latency-critical (Vision) / latency-tolerant (API). **Не проверено вживую:** полный observer-цикл на реальном Vision (disable/enable воркеры активны, observer не поднимали — высокая цена ошибки на чужих кабинетах).
+- **Проверено вживую (2026-05-29):** Marketing API latency (BL-7, insights 2–4с / list ~1с); observer scan-канал — DOM-парсинг + валидация колонок работают на живом Ads Manager (для полного скана нужен кастомный column-preset в кабинете). **Починены 2 латентных prod-бага:** gate-фабрики observer/disable/enable звали несуществующий API (`BrowserAgentClient()` без config + `.connect()`) → упали бы на первой задаче; +4 анти-регресс теста.
+- **Не доведено вживую:** полный observer-цикл с FSM/disable (нужен column-preset + согласие на действия на реальных кабинетах).
 
 ---
 
@@ -35,8 +36,8 @@
 ### Python-воркеры (12) — `apps/*`
 | Блок | Назначение | Состояние |
 |---|---|---|
-| observer_worker | scan → FSM → метрики → outbox → TG-алерты | ✅ (heartbeat пофикшен R11) |
-| disable_worker / enable_worker | toggle ad через gRPC, retry backoff | ✅ (heartbeat пофикшен R11) |
+| observer_worker | scan → FSM → метрики → outbox → TG-алерты | ✅ (heartbeat R11; gate-фабрика пофикшена 2026-05-29; scan-канал проверен live) |
+| disable_worker / enable_worker | toggle ad через gRPC, retry backoff | ✅ (heartbeat R11; gate-фабрика пофикшена 2026-05-29) |
 | telegram_poller | `/start /help /spy /ask` + inline-кнопки | ✅ |
 | meta_api_worker | Marketing API mutations (outbox) | ✅ |
 | reconciler_worker | stuck tasks → retrying, stale drafts cancel | ✅ |

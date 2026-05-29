@@ -21,11 +21,18 @@ CHANNEL_RESTART = "fb_agent:worker:restart:disable_worker"
 
 async def _make_browser_gate():
     """Создаёт реальный BrowserAgentClient — отдельная функция для удобства моков в тестах."""
-    from clients.python_grpc.client import BrowserAgentClient
+    from clients.python_grpc.client import BrowserAgentClient, BrowserAgentConfig
+    from core.config import get_settings
 
-    # Минимальный конструктор — настройки берутся из env через config внутри клиента
-    client = BrowserAgentClient()
-    await client.connect()
+    s = get_settings()
+    client = BrowserAgentClient(
+        BrowserAgentConfig(
+            vision_x_token=s.vision_x_token,
+            vision_api_url=s.vision_api_url,
+            vision_profile_id=s.vision_profile_id,
+        )
+    )
+    await client.start()
     return client
 
 
