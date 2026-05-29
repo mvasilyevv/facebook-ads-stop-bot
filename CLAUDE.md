@@ -218,6 +218,13 @@ python scripts/restore_secrets.py          # вернуть токены
 
 HTTP/SSE транспорт для iPhone / удалённого доступа — отдельная история (нужен FastAPI router + OAuth/токен), пока только локальный stdio.
 
+### Round 11 test-hardening + heartbeat code-fix — урок 2 CRIT обобщён
+
+`docs/test_quality_audit.md` (265 строк): почему 1028 тестов пропустили 2 CRIT. Корневая причина — тесты проверяли стороны изолированно на данных, не нагружающих границу бага (money: 1 цикл метрик → naive SUM == latest → невидим; observer: тест ассертил сломанное `unknown` как ожидаемое). **Round 11 закрыл всё**, → 1055 passed.
+
+- **РЕАЛЬНЫЙ баг health (не тестовый):** observer писал только `observer:runtime`, `toggle_executor` (disable/enable) не писал heartbeat вовсе, telegram_poller/cleanup/reconciler — тоже → из 7 `EXPECTED_WORKERS` мониторился только `meta_api`, остальные 6 давали ложные «мёртв». Фикс: фоновый heartbeat-таск во всех 6 воркерах под именами == EXPECTED (короткие: `observer`/`disable`/`enable`/`telegram_poller`/`cleanup`/`reconciler`), `toggle_executor` пишет `worker:heartbeat:{task_type}`. Контрактный тест `test_heartbeat_contract.py` (22 кейса, параметризованный анти-регресс имён writer↔reader).
+- **18 test-усилений** (money exact-value мультицикл против naive-SUM `== 300.50` не 676 / cabinet-reset `== 80` не 165; counts через diff-подход против double-count; партиционные проверяют исключение вне-окна по значению; pubsub publisher↔subscriber E2E с реальным `main_loop`). Все cleanup-фикстуры money переведены с глобального DELETE на prefix-scoped (стабильность при random-порядке).
+
 ### Аудит code-quality + Round 10 cleanup — 2 money-bug'а + HIGH/MID закрыты
 
 `docs/backend_code_quality_audit.md` (231 строка): независимый review КАЧЕСТВА (не покрытия). Нашёл 2 тихих money-bug'а, прошедших сквозь 974 теста (тесты проверяли shape, не семантику). **Round 10 закрыл всё**, → 1028 passed.
