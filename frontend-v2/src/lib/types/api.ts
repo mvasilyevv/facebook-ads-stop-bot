@@ -4,6 +4,11 @@
  *
  * Принцип: каждый endpoint возвращает либо одну Out-схему, либо list[Out].
  * Decimal-поля сериализуются как string (asyncpg + Pydantic).
+ *
+ * ВАЖНО: Сгенерированные типы из OpenAPI находятся в api-generated.ts.
+ * Этот файл — ручной, используется для удобства в компонентах.
+ * При расхождении api-generated.ts является источником истины.
+ * Регенерация: make export-openapi && npm run gen:api
  */
 
 // ─── Dashboard ──────────────────────────────────────────────────────────────
@@ -120,18 +125,22 @@ export interface OfferCompareRow {
   cost_per_deposit: string | null;
 }
 
+// DRIFT: threshold-поля — Decimal в БД, сериализуются как string, не number.
+// backend OfferRuleOut: все пороги имеют тип string | null (Pydantic Decimal → JSON string).
 export interface OfferRules {
-  offer_id: string;
-  spend_no_event_threshold: number | null;
-  cpa_threshold: number | null;
-  cpm_threshold: number | null;
-  ctr_threshold: number | null;
-  frequency_threshold: number | null;
-  funnel_ratio_threshold: number | null;
+  offer_id: string | null; // backend позволяет null
+  spend_no_event_threshold: string | null; // было number | null — Decimal сериализуется как string
+  cpa_threshold: string | null;
+  cpm_threshold: string | null;
+  ctr_threshold: string | null;
+  frequency_threshold: string | null;
+  funnel_ratio_threshold: string | null;
 }
 
 // ─── Tasks ──────────────────────────────────────────────────────────────────
 
+// DRIFT: created_at и updated_at в backend TaskQueueRowOut — required (string, не string | null).
+// requested_by в backend — required string (не nullable).
 export interface TaskQueueRow {
   id: string;
   fb_ad_id: string | null;
@@ -140,10 +149,10 @@ export interface TaskQueueRow {
   status: string;
   attempt_count: number;
   max_attempts: number;
-  requested_by: string | null;
+  requested_by: string; // было string | null — в backend required
   requested_by_chat_id: number | null;
-  created_at: string | null;
-  updated_at: string | null;
+  created_at: string; // было string | null — в backend required
+  updated_at: string; // было string | null — в backend required
   next_attempt_at: string | null;
   last_error_message: string | null;
 }
@@ -168,6 +177,7 @@ export interface EnableRecommendation {
 export interface HistorySummary {
   from_iso: string;
   to_iso: string;
+  // totals: структура соответствует HistoryTotals из OpenAPI-схемы
   totals: {
     spend: string;
     impressions: number;
@@ -175,7 +185,7 @@ export interface HistorySummary {
     leads: number;
     registrations: number;
     deposits: number;
-    active_ads_count: number;
+    active_ads_count: number; // присутствует в backend-схеме (HistoryTotals)
   };
   alerts: {
     warning_count: number;
@@ -215,21 +225,46 @@ export interface ChartBucket {
 
 // ─── Settings ───────────────────────────────────────────────────────────────
 
+// DRIFT: ручные поля (scan_interval_seconds, cabinet_url и др.) не совпадают с backend.
+// Backend (ObserverSettingsResponse) возвращает: is_scanning_enabled, default_interval_seconds,
+// auto_enable_recommendations, warning_percent_of_stop (null), cpc/cpl/cpr_warning_percent (null).
+// Используй api-generated.ts: components["schemas"]["ObserverSettingsResponse"]
 export interface ObserverSettings {
-  scan_interval_seconds: number;
-  cabinet_url: string | null;
-  country_code: string | null;
-  auto_disable_enabled: boolean;
-  auto_enable_recommendations_enabled: boolean;
-  is_scanning: boolean;
+  // Поля совместимые с backend ObserverSettingsResponse
+  is_scanning_enabled: boolean;
+  default_interval_seconds: number;
+  auto_enable_recommendations: boolean;
+  warning_percent_of_stop: null;
+  cpc_warning_percent: null;
+  cpl_warning_percent: null;
+  cpr_warning_percent: null;
+  // Устаревшие поля (убрать при миграции на api-generated.ts):
+  /** @deprecated используй is_scanning_enabled */
+  scan_interval_seconds?: number;
+  /** @deprecated поле отсутствует в backend v2 */
+  cabinet_url?: string | null;
+  /** @deprecated поле отсутствует в backend v2 */
+  country_code?: string | null;
+  /** @deprecated нет в v2-схеме */
+  auto_disable_enabled?: boolean;
+  /** @deprecated используй auto_enable_recommendations */
+  auto_enable_recommendations_enabled?: boolean;
+  /** @deprecated используй is_scanning_enabled */
+  is_scanning?: boolean;
 }
 
+// DRIFT: ручной тип имеет recipients_count, которого нет в backend TelegramSettingsResponse.
+// Backend добавляет: activation_command (string), chat_id (string | null).
+// recipients_count — отдельный endpoint GET /settings/telegram/recipients (TelegramRecipientsListResponse.total)
 export interface TelegramSettings {
   is_authorized: boolean;
   poller_status: string;
   bot_username: string | null;
   auth_deep_link: string | null;
-  recipients_count: number;
+  activation_command: string; // присутствует в backend (default: "/start auth")
+  chat_id: string | null; // присутствует в backend
+  /** @deprecated отсутствует в backend TelegramSettingsResponse, приходит из отдельного /recipients endpoint */
+  recipients_count?: number;
 }
 
 export interface TelegramRecipient {
@@ -241,25 +276,50 @@ export interface TelegramRecipient {
   revoked_at: string | null;
 }
 
+// DRIFT: ручной invite_code → backend возвращает code (не invite_code!)
+// backend TelegramInviteResponse: { code: string; expires_at: string }
 export interface TelegramInviteResponse {
-  invite_code: string;
-  expires_at: string | null;
+  code: string; // было invite_code — исправлено под backend-контракт
+  expires_at: string; // required в backend (не nullable)
 }
 
+// DRIFT: ручной тип полностью расходится с backend VisionSettingsResponse.
+// Backend возвращает: has_token (bool), profile_id, auto_restart_on_missing_cdp (bool),
+// runtime_status, runtime_status_message, cdp_ready (bool), cdp_port (int | null).
+// Поля vision_token и is_connected в backend ОТСУТСТВУЮТ.
 export interface VisionSettings {
-  vision_token: string | null;
+  has_token: boolean; // было vision_token: string | null — backend возвращает только флаг
   profile_id: string | null;
-  is_connected: boolean;
+  auto_restart_on_missing_cdp: boolean;
+  runtime_status: string | null;
+  runtime_status_message: string | null;
+  cdp_ready: boolean;
+  cdp_port: number | null;
+  /** @deprecated в backend нет — используй has_token */
+  vision_token?: string | null;
+  /** @deprecated в backend нет — используй cdp_ready || runtime_status */
+  is_connected?: boolean;
 }
 
 // ─── Observer / Health ──────────────────────────────────────────────────────
 
+// DRIFT: ручной тип имеет last_cycle_at, cycle_count_today, active_country, active_campaign —
+// backend ObserverStatusResponse возвращает: status, last_scan_at, interval_seconds, extra (dict).
+// Поля cycle_count_today / active_country / active_campaign в backend ОТСУТСТВУЮТ.
+// Данные о цикле находятся в extra{} или недоступны напрямую.
 export interface ObserverStatus {
-  status: "running" | "paused" | "unknown";
-  last_cycle_at: string | null;
-  cycle_count_today: number;
-  active_country: string | null;
-  active_campaign: string | null;
+  status: string; // "running" | "paused" | "unknown" — backend не enum
+  last_scan_at: string | null; // было last_cycle_at
+  interval_seconds: number | null;
+  extra: Record<string, unknown>;
+  /** @deprecated используй last_scan_at */
+  last_cycle_at?: string | null;
+  /** @deprecated поле отсутствует в backend — смотри extra */
+  cycle_count_today?: number;
+  /** @deprecated поле отсутствует в backend — смотри extra */
+  active_country?: string | null;
+  /** @deprecated поле отсутствует в backend — смотри extra */
+  active_campaign?: string | null;
 }
 
 export interface ScanRun {
@@ -273,15 +333,20 @@ export interface ScanRun {
   duration_ms: number | null;
 }
 
+// DRIFT: backend WorkerStatus дополнительно возвращает ttl_seconds и payload.
+// HealthDetailsResponse дополнительно содержит observer_runtime (dict | null).
 export interface HealthWorker {
   name: string;
   status: "ONLINE" | "OFFLINE";
   last_heartbeat_at: string | null;
+  ttl_seconds: number | null; // отсутствовало в ручном типе
+  payload: Record<string, unknown> | null; // отсутствовало в ручном типе
 }
 
 export interface HealthDetails {
   overall: "HEALTHY" | "DEGRADED" | "CRITICAL";
   workers: HealthWorker[];
+  observer_runtime: Record<string, unknown> | null; // отсутствовало в ручном типе
 }
 
 // ─── Generic helpers ────────────────────────────────────────────────────────

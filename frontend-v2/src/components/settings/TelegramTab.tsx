@@ -100,7 +100,7 @@ export function TelegramTab() {
   function handleGenerateInvite() {
     createInvite.mutate(undefined, {
       onSuccess: (data) => {
-        setInviteCode(data.invite_code);
+        setInviteCode(data.code); // backend возвращает code, не invite_code
         toast.success("Invite-код создан");
       },
       onError: (err) =>

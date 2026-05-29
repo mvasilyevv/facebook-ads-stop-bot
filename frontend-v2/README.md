@@ -106,6 +106,48 @@ frontend-v2/
 - **Density toggle** (`comfortable` 32px / `compact` 24px) — Zustand + CSS variable `--table-row-height`.
 - **Dark-only.** Light mode — отдельная итерация.
 
+## Контрактные типы (OpenAPI codegen)
+
+TypeScript-типы генерируются из OpenAPI-схемы FastAPI — это **источник истины**, а не ручной `api.ts`.
+
+### Почему ручные типы — риск
+
+При ручном написании типов (старый подход) дважды случались runtime-краши: тип фронта расходился с реальным ответом backend (например, `ObserverSettings.scan_interval_seconds` vs `is_scanning_enabled`, `TelegramInviteResponse.invite_code` vs `code`, пороги `number` vs `string`). TypeScript это не ловил, потому что типы совпадали внутри фронта.
+
+### Регенерация (после изменений в backend-схемах)
+
+```bash
+# Из корня проекта:
+make gen-api-types          # export + codegen за один шаг
+
+# Или по шагам:
+make export-openapi         # → frontend-v2/openapi.json
+cd frontend-v2 && npm run gen:api   # → src/lib/types/api-generated.ts
+```
+
+### Файлы
+
+- `frontend-v2/openapi.json` — экспортированная схема (в git, фронт работает офлайн).
+- `frontend-v2/src/lib/types/api-generated.ts` — автогенерированные типы (в git).
+- `frontend-v2/src/lib/types/api.ts` — ручные alias-типы для удобства; при расхождении `api-generated.ts` — победитель.
+
+### Endpoints без response_model (типов нет в generated)
+
+| Endpoint | Причина |
+|---|---|
+| `DELETE /api/dashboard/auto-enable-disabled/{fb_ad_id}` | 204 No Content |
+| `DELETE /api/dashboard/disable-tasks/{task_id}` | 204 No Content |
+| `DELETE /api/fake-deposits/{fb_ad_id}` | 204 No Content |
+| `DELETE /api/offers/{offer_id}` | 204 No Content |
+| `POST /api/v1/postback/adsetpro` | JSONResponse без response_model |
+
+### Plan миграции на generated типы
+
+1. В новых компонентах: `components["schemas"]["XxxOut"]` из `api-generated.ts` напрямую.
+2. Постепенно заменить ручные типы в `api.ts` на `export type X = components["schemas"]["XOut"]` алиасы.
+3. Удалить поля с `@deprecated` после обновления всех компонентов.
+4. CI: `make gen-api-types && git diff --exit-code frontend-v2/openapi.json frontend-v2/src/lib/types/api-generated.ts` — провалит PR если backend изменился, а codegen не перегнали.
+
 ## Backend
 
 Этот фронт интегрируется с 61 endpoint бэка (см. `apps/api/routers/v1/`). Префикс `/api`. Auth — `X-API-Key` header.

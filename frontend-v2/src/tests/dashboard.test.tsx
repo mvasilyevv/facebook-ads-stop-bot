@@ -80,7 +80,7 @@ describe("Dashboard · TaskQueueCard", () => {
       requested_by: "bot_auto_stop",
       requested_by_chat_id: null,
       created_at: "2026-05-28T14:30:00Z",
-      updated_at: null,
+      updated_at: "2026-05-28T14:30:00Z", // required в backend TaskQueueRowOut
       next_attempt_at: null,
       last_error_message: null,
     },
@@ -95,7 +95,7 @@ describe("Dashboard · TaskQueueCard", () => {
       requested_by: "bot_auto_stop",
       requested_by_chat_id: null,
       created_at: "2026-05-28T14:18:00Z",
-      updated_at: null,
+      updated_at: "2026-05-28T14:19:00Z", // required в backend TaskQueueRowOut
       next_attempt_at: null,
       last_error_message: null,
     },

@@ -73,11 +73,14 @@ function emptyForm(): RulesFormState {
   };
 }
 
-/** Пустая строка → null, иначе parseFloat. */
-export function parseRuleField(v: string): number | null {
+/**
+ * Пустая строка → null, иначе числовая строка (backend ожидает Decimal как string).
+ * OfferRules.threshold-поля имеют тип string | null (Pydantic Decimal → JSON string).
+ */
+export function parseRuleField(v: string): string | null {
   if (!v.trim()) return null;
   const n = Number.parseFloat(v);
-  return Number.isNaN(n) ? null : n;
+  return Number.isNaN(n) ? null : String(n);
 }
 
 interface RulesFormProps {
