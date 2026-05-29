@@ -100,8 +100,11 @@ observer (FSM/pipeline/writers/runtime), rules (6 стоп-правил), tasks 
 **Осталось:**
 - **BL-8 · P3 · AdSet.pro Волна 4** — tracker_aggregate per (ad,country,day) + outgoing postback + key rotation.
 - **BL-12-mig · P2 · shape-миграция БД** — добавить недостающие поля Offer/OfferRule/AdMetrics (если фронт начнёт требовать; пайплайн дрейфа уже есть).
-- **BL-13 · P3 · backtest** — `scripts/backtest_rules.py`, после накопления данных (MEMORY 2026-06-08).
-- **BL-14 · P3 · light mode + frontend-mini** — вторая тема + прокачка TMA.
+- **BL-15 · P3 · frontend-mini (TMA)** — прокачка Telegram Mini App (дублирует логику старого фронта, без тестов).
+
+**Не делаем (решение 2026-05-29):**
+- ~~BL-13 backtest~~ — пропускаем (пользователь калибрует пороги вручную/доверяет).
+- ~~BL-14 light mode~~ — пропускаем, фронт остаётся dark-only.
 
 ---
 
