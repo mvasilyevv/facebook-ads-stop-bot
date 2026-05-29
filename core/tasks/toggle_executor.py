@@ -27,6 +27,9 @@ from core.tasks import (
 
 logger = logging.getLogger(__name__)
 
+# TTL heartbeat-ключа (должен совпадать с ожиданием health_watchdog).
+_HEARTBEAT_TTL_SECONDS = 60
+
 
 class ToggleGate(Protocol):
     """Интерфейс gRPC-клиента к browser-agent (минимально нужный для воркеров).
@@ -151,6 +154,24 @@ async def execute_one_toggle_task(
     return "succeeded"
 
 
+async def _heartbeat_loop(redis_client: Any, worker_name: str, stop: asyncio.Event) -> None:
+    """Периодически пишет worker:heartbeat:<worker_name> с TTL 60s.
+
+    Фоновый таск — не блокирует основной цикл toggle.
+    """
+    key = f"worker:heartbeat:{worker_name}"
+    interval = _HEARTBEAT_TTL_SECONDS / 2
+    while not stop.is_set():
+        try:
+            await redis_client.set(key, "alive", ex=_HEARTBEAT_TTL_SECONDS)
+        except Exception:  # noqa: BLE001
+            logger.exception("[%s] heartbeat: ошибка записи в Redis", worker_name)
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=interval)
+        except asyncio.TimeoutError:
+            pass
+
+
 async def run_toggle_loop(
     engine: AsyncEngine,
     *,
@@ -160,6 +181,7 @@ async def run_toggle_loop(
     error_sleep_seconds: float = 10.0,
     should_continue: Callable[[], bool] = lambda: True,
     stop_event: asyncio.Event | None = None,
+    redis_client: Any = None,
 ) -> None:
     """Основной цикл disable/enable воркера.
 
@@ -171,25 +193,45 @@ async def run_toggle_loop(
         stop_event: если передан — цикл проверяет его после каждого батча и
             завершается gracefully. Используется для привязки к Redis-сигналу
             fb_agent:worker:restart:*.
+        redis_client: опциональный Redis-клиент для heartbeat. Имя heartbeat-ключа
+            берётся из task_type (disable → worker:heartbeat:disable).
+            Должно совпадать с EXPECTED_WORKERS в health_watchdog.
     """
+    # Запускаем heartbeat в фоне если передан Redis-клиент.
+    hb_stop = asyncio.Event()
+    hb_task: asyncio.Task | None = None
+    if redis_client is not None:
+        # task_type уже совпадает с именами в EXPECTED_WORKERS ("disable" / "enable")
+        hb_task = asyncio.create_task(_heartbeat_loop(redis_client, task_type, hb_stop))
+
     gate: ToggleGate | None = None
-    while should_continue():
-        # Проверяем внешний stop_event перед каждой итерацией.
-        if stop_event is not None and stop_event.is_set():
-            logger.info("[%s] stop_event выставлен — завершаю loop", task_type)
-            break
-        try:
-            if gate is None:
-                gate = await gate_factory()
+    try:
+        while should_continue():
+            # Проверяем внешний stop_event перед каждой итерацией.
+            if stop_event is not None and stop_event.is_set():
+                logger.info("[%s] stop_event выставлен — завершаю loop", task_type)
+                break
+            try:
+                if gate is None:
+                    gate = await gate_factory()
 
-            outcome = await execute_one_toggle_task(engine, task_type=task_type, gate=gate)
+                outcome = await execute_one_toggle_task(engine, task_type=task_type, gate=gate)
 
-            if outcome == "idle":
-                await asyncio.sleep(idle_sleep_seconds)
-        except asyncio.CancelledError:
-            break
-        except Exception:
-            logger.exception("[%s] loop iteration crashed — пересоздаю gate", task_type)
-            # пересоздадим клиент на следующей итерации
-            gate = None
-            await asyncio.sleep(error_sleep_seconds)
+                if outcome == "idle":
+                    await asyncio.sleep(idle_sleep_seconds)
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                logger.exception("[%s] loop iteration crashed — пересоздаю gate", task_type)
+                # пересоздадим клиент на следующей итерации
+                gate = None
+                await asyncio.sleep(error_sleep_seconds)
+    finally:
+        # Останавливаем heartbeat-таск при выходе из loop.
+        hb_stop.set()
+        if hb_task is not None:
+            hb_task.cancel()
+            try:
+                await hb_task
+            except asyncio.CancelledError:
+                pass

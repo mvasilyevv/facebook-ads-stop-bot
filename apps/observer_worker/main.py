@@ -38,6 +38,11 @@ from core.scanner.models import ScannedAdRow
 
 logger = logging.getLogger(__name__)
 
+# Heartbeat — имя ДОЛЖНО совпадать с EXPECTED_WORKERS в health_watchdog.
+WORKER_NAME = "observer"
+HEARTBEAT_KEY = f"worker:heartbeat:{WORKER_NAME}"
+HEARTBEAT_TTL_SECONDS = 60
+
 # Управляющие каналы observer'а.
 CHANNEL_TRIGGER = "fb_agent:observer:trigger"  # форс-скан вне расписания
 CHANNEL_CABINET_DAY = "fb_agent:observer:cabinet_day"  # сигнал нового кабинетного дня
@@ -202,6 +207,28 @@ async def _publish_scan_finished(
         logger.exception("redis PUBLISH fb_agent:scan:finished failed")
 
 
+# ====================== Heartbeat ======================
+
+
+async def heartbeat_loop(redis_client, stop: asyncio.Event) -> None:
+    """Периодически пишет worker:heartbeat:observer с TTL 60s.
+
+    Параллельный таск — не блокирует main-loop сканирования.
+    """
+    if redis_client is None:
+        return
+    interval = HEARTBEAT_TTL_SECONDS / 2
+    while not stop.is_set():
+        try:
+            await redis_client.set(HEARTBEAT_KEY, "alive", ex=HEARTBEAT_TTL_SECONDS)
+        except Exception:  # noqa: BLE001
+            logger.exception("observer heartbeat: ошибка записи в Redis")
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=interval)
+        except asyncio.TimeoutError:
+            pass
+
+
 # ====================== One cycle ======================
 
 
@@ -360,11 +387,16 @@ async def main_loop(
     tg_client = None
     listener_task: asyncio.Task | None = None
     listener: RedisPubSubListener | None = None
+    heartbeat_task: asyncio.Task | None = None
 
     try:
         redis_client = await redis_factory()
         tg_client = await tg_client_factory()
         logger.info("observer_worker запущен")
+
+        # Запускаем heartbeat-таск если Redis доступен.
+        if redis_client is not None:
+            heartbeat_task = asyncio.create_task(heartbeat_loop(redis_client, shutdown_event))
 
         # Подписываемся на управляющие каналы если Redis доступен.
         if redis_client is not None:
@@ -442,6 +474,14 @@ async def main_loop(
                 state.force_scan_pending = False
     finally:
         logger.info("observer_worker завершён")
+
+        # Останавливаем heartbeat-таск.
+        if heartbeat_task is not None:
+            heartbeat_task.cancel()
+            try:
+                await heartbeat_task
+            except asyncio.CancelledError:
+                pass
 
         # Останавливаем pubsub-listener.
         if listener is not None:

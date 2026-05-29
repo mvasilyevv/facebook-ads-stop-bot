@@ -18,6 +18,7 @@ import signal
 from pathlib import Path
 
 import httpx
+import redis.asyncio as redis_asyncio
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from core.meta_api.client import MetaApiClient
@@ -32,11 +33,32 @@ from core.telegram.service import (
 
 logger = logging.getLogger(__name__)
 
+# Heartbeat — имя ДОЛЖНО совпадать с EXPECTED_WORKERS в health_watchdog.
+WORKER_NAME = "telegram_poller"
+HEARTBEAT_KEY = f"worker:heartbeat:{WORKER_NAME}"
+HEARTBEAT_TTL_SECONDS = 60
 
 _HEARTBEAT_INTERVAL_SECONDS = 30
 _TOKEN_RELOAD_INTERVAL_SECONDS = 60
 _ERROR_RETRY_DELAY_SECONDS = 3
 _LONG_POLL_TIMEOUT_SECONDS = 25
+
+
+async def heartbeat_loop(redis_client, stop: asyncio.Event) -> None:
+    """Периодически пишет worker:heartbeat:telegram_poller с TTL 60s.
+
+    Параллельный таск — не блокирует long-polling цикл.
+    """
+    interval = HEARTBEAT_TTL_SECONDS / 2
+    while not stop.is_set():
+        try:
+            await redis_client.set(HEARTBEAT_KEY, "alive", ex=HEARTBEAT_TTL_SECONDS)
+        except Exception:  # noqa: BLE001
+            logger.exception("telegram_poller heartbeat: ошибка записи в Redis")
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=interval)
+        except asyncio.TimeoutError:
+            pass
 
 
 def _get_database_url() -> str:
@@ -139,6 +161,15 @@ async def main_loop(db_url: str) -> None:
     # Redis pubsub клиент для creator-команд (/record_plan, /stop_record)
     redis_pubsub = RedisPubSub(_get_redis_url())
 
+    # Отдельный redis-клиент для heartbeat SET (pubsub-клиент нельзя использовать для SET).
+    hb_redis: redis_asyncio.Redis | None = None
+    hb_task: asyncio.Task | None = None
+    try:
+        hb_redis = redis_asyncio.from_url(_get_redis_url(), decode_responses=True)
+        hb_task = asyncio.create_task(heartbeat_loop(hb_redis, shutdown_event))
+    except Exception:
+        logger.warning("telegram_poller: не удалось запустить heartbeat")
+
     try:
         # Начальная загрузка config
         cfg = await load_telegram_config(engine)
@@ -220,6 +251,19 @@ async def main_loop(db_url: str) -> None:
                 logger.exception("save_poller_offset failed")
     finally:
         logger.info("Telegram poller v2 завершён")
+        # Останавливаем heartbeat-таск.
+        shutdown_event.set()
+        if hb_task is not None:
+            hb_task.cancel()
+            try:
+                await hb_task
+            except asyncio.CancelledError:
+                pass
+        if hb_redis is not None:
+            try:
+                await hb_redis.aclose()
+            except Exception:
+                pass
         if meta_api_client is not None:
             try:
                 await meta_api_client.close()

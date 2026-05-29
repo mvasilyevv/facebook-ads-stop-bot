@@ -8,13 +8,40 @@ import logging
 import os
 import signal
 
+import redis.asyncio as redis_asyncio
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from apps.reconciler_worker.worker import run_once
 
 logger = logging.getLogger("reconciler_worker")
 
+# Heartbeat — имя ДОЛЖНО совпадать с EXPECTED_WORKERS в health_watchdog.
+WORKER_NAME = "reconciler"
+HEARTBEAT_KEY = f"worker:heartbeat:{WORKER_NAME}"
+HEARTBEAT_TTL_SECONDS = 60
+
 _INTERVAL_SEC = int(os.environ.get("RECONCILER_INTERVAL_SEC", "30"))
+
+
+def _get_redis_url() -> str:
+    return os.environ.get("REDIS_URL", "redis://localhost:6380/0")
+
+
+async def heartbeat_loop(redis_client, stop: asyncio.Event) -> None:
+    """Периодически пишет worker:heartbeat:reconciler с TTL 60s.
+
+    Параллельный таск — не блокирует основной цикл reconciliation.
+    """
+    interval = HEARTBEAT_TTL_SECONDS / 2
+    while not stop.is_set():
+        try:
+            await redis_client.set(HEARTBEAT_KEY, "alive", ex=HEARTBEAT_TTL_SECONDS)
+        except Exception:  # noqa: BLE001
+            logger.exception("reconciler heartbeat: ошибка записи в Redis")
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=interval)
+        except asyncio.TimeoutError:
+            pass
 
 
 async def main_loop(database_url: str) -> None:
@@ -32,6 +59,15 @@ async def main_loop(database_url: str) -> None:
         except (NotImplementedError, ValueError):
             pass
 
+    # Запускаем heartbeat параллельно с основным циклом.
+    hb_redis: redis_asyncio.Redis | None = None
+    hb_task: asyncio.Task | None = None
+    try:
+        hb_redis = redis_asyncio.from_url(_get_redis_url(), decode_responses=True)
+        hb_task = asyncio.create_task(heartbeat_loop(hb_redis, stop_event))
+    except Exception:
+        logger.warning("reconciler_worker: не удалось запустить heartbeat")
+
     try:
         while not stop_event.is_set():
             try:
@@ -44,6 +80,19 @@ async def main_loop(database_url: str) -> None:
             except asyncio.TimeoutError:
                 pass
     finally:
+        # Останавливаем heartbeat-таск.
+        stop_event.set()
+        if hb_task is not None:
+            hb_task.cancel()
+            try:
+                await hb_task
+            except asyncio.CancelledError:
+                pass
+        if hb_redis is not None:
+            try:
+                await hb_redis.aclose()
+            except Exception:
+                pass
         await engine.dispose()
         logger.info("reconciler_worker остановлен.")
 

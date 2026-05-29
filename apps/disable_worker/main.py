@@ -89,6 +89,7 @@ async def main_loop(
             gate_factory=_make_browser_gate,
             should_continue=should_continue,
             stop_event=stop_event,
+            redis_client=redis_client,  # для worker:heartbeat:disable
         )
     finally:
         # Останавливаем listener.
