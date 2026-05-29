@@ -9,7 +9,7 @@
 - **Backend — production-ready.** 12 воркеров + FastAPI (61 endpoint) + Node.js gRPC. Прошёл 5 аудитов (security ×2, test-coverage, code-quality, test-quality) + cleanup-раунды. Все CRIT/HIGH закрыты.
 - **Frontend — готов.** Новый `frontend/` (TS + Vite + Tailwind 4 + TanStack): 6 страниц, русский UI, проверены в браузере. Старый `frontend-legacy/` — архив.
 - **БД** переименована `fb_stop_bot_v2 → fb_stop_bot` (данные сохранены).
-- **Не проверено вживую:** Marketing API latency, воркеры на реальном Vision/Meta-аккаунте (нет live-доступа в сессиях).
+- **Замерено вживую (2026-05-29):** Marketing API latency (BL-7) — insights 2–4с, list ~1с; подтвердило разделение latency-critical (Vision) / latency-tolerant (API). **Не проверено вживую:** полный observer-цикл на реальном Vision (disable/enable воркеры активны, observer не поднимали — высокая цена ошибки на чужих кабинетах).
 
 ---
 
@@ -18,7 +18,7 @@
 | Этап | Что | Статус |
 |---|---|---|
 | 0 | Подготовка | ✅ |
-| 1 | PoC + MetaApiService (browser-agent gRPC) | ✅ (кроме live-замера latency — BL-7) |
+| 1 | PoC + MetaApiService (browser-agent gRPC) | ✅ latency замерена live 2026-05-29 (insights 2–4с / list ~1с) |
 | 2 | `core/meta_api/` Python-обвязка | ✅ |
 | 3 | AI-ассистент (15 tools, draft-first) | ✅ |
 | 4 | Ad Library | ✅ (on-demand `/spy`, App-канал отброшен — Meta требует Identity Confirmation) |
@@ -75,7 +75,6 @@ observer (FSM/pipeline/writers/runtime), rules (6 стоп-правил), tasks 
 
 | Проблема | Эффект | Задача |
 |---|---|---|
-| Marketing API latency не замерен | Неизвестна реальная задержка API | BL-7 (нужен live-аккаунт) |
 | creator_worker/recorder не активны | Авто-создание кампаний через Vision выкл | по запросу |
 | Frontend ↔ backend shape: ряд полей `null` | Offer.country_code, OfferRule JSONB и др. отдаются null | BL-12 (миграция, если фронт начнёт требовать) |
 
@@ -95,10 +94,9 @@ observer (FSM/pipeline/writers/runtime), rules (6 стоп-правил), tasks 
 
 > `BL-N · [приоритет] · scope`. P2=tech-debt, P3=отложено/ждёт внешнего.
 
-**Закрыто:** BL-1 (WS publish), BL-2..6 (frontend страницы), BL-9 (prod-блок dev-tools), BL-10+11 (вынос helpers + split history.py), BL-12 (OpenAPI codegen + дрейф-репорт). Rename (frontend-v2→frontend, БД v2→fb_stop_bot) — done.
+**Закрыто:** BL-1 (WS publish), BL-2..6 (frontend страницы), BL-7 (latency-замер live 2026-05-29 → §1.1 плана), BL-9 (prod-блок dev-tools), BL-10+11 (вынос helpers + split history.py), BL-12 (OpenAPI codegen + дрейф-репорт). Rename (frontend-v2→frontend, БД v2→fb_stop_bot) — done.
 
 **Осталось:**
-- **BL-7 · P3 · latency-замер Marketing API** — на активном кабинете (блок: live-аккаунт).
 - **BL-8 · P3 · AdSet.pro Волна 4** — tracker_aggregate per (ad,country,day) + outgoing postback + key rotation.
 - **BL-12-mig · P2 · shape-миграция БД** — добавить недостающие поля Offer/OfferRule/AdMetrics (если фронт начнёт требовать; пайплайн дрейфа уже есть).
 - **BL-13 · P3 · backtest** — `scripts/backtest_rules.py`, после накопления данных (MEMORY 2026-06-08).
