@@ -27,7 +27,7 @@ const TABS: { value: SettingsTab; label: string }[] = [
   { value: "observer", label: "Observer" },
   { value: "telegram", label: "Telegram" },
   { value: "vision", label: "Vision" },
-  { value: "health", label: "Health" },
+  { value: "health", label: "Здоровье" },
 ];
 
 function SettingsPage() {
@@ -37,10 +37,10 @@ function SettingsPage() {
     <>
       <PageHeader
         eyebrowNum="05"
-        eyebrow="SYSTEM"
-        title="Settings."
+        eyebrow="НАСТРОЙКИ"
+        title="Настройки."
         displayNumber="05"
-        subtitle="Observer · Telegram · Vision · Health"
+        subtitle="Observer · Telegram · Vision · Здоровье"
       />
 
       <Tabs

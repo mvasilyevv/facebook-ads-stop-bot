@@ -34,7 +34,7 @@ export const Route = createFileRoute("/drafts/")({
 
 /** Доступные типы мутаций для фильтра. */
 const TYPE_OPTIONS = [
-  { value: "", label: "All" },
+  { value: "", label: "Все" },
   { value: "disable", label: "pause_ad" },
   { value: "enable", label: "activate_ad" },
   { value: "meta_api_mutation", label: "meta_api" },
@@ -220,15 +220,15 @@ function DraftsPage() {
       <span className={cn("font-display", expiringCount > 0 ? "text-warning" : "text-accent")}>
         {pendingCount}
       </span>{" "}
-      pending
+      в очереди
       {expiringCount > 0 ? (
         <>
           <HeaderSep />
-          <span className="text-warning font-display">{expiringCount}</span> expiring within 1h
+          <span className="text-warning font-display">{expiringCount}</span> истекает в течение 1ч
         </>
       ) : null}
       <HeaderSep />
-      AI proposals require human approval — owner-only
+      Предложения ИИ требуют ручного подтверждения — только владелец
     </>
   );
 
@@ -237,8 +237,8 @@ function DraftsPage() {
     <>
       <PageHeader
         eyebrowNum="03"
-        eyebrow="HUMAN-IN-THE-LOOP · APPROVE · EXECUTE"
-        title="Drafts."
+        eyebrow="РУЧНОЙ КОНТРОЛЬ · ПОДТВЕРДИТЬ · ВЫПОЛНИТЬ"
+        title="Черновики."
         displayNumber="03"
         subtitle={subtitle}
       />
@@ -246,7 +246,7 @@ function DraftsPage() {
       {/* Фильтр по типу мутации */}
       <div className="flex items-center gap-2 py-2 pb-5 border-b border-bg-5 mb-8 flex-wrap">
         <span className="font-display text-[10px] uppercase tracking-widest text-bg-8 mr-2">
-          Type
+          Тип
         </span>
         {TYPE_OPTIONS.map((opt) => (
           <button
@@ -315,7 +315,7 @@ function DraftsPage() {
                   expiringSoon && "draft-expiring-soon",
                 )}
               >
-                {/* Лейбл "EXPIRING SOON" */}
+                {/* Лейбл "ИСТЕКАЕТ СКОРО" */}
                 {expiringSoon ? (
                   <div
                     aria-label="Истекает скоро"
@@ -326,7 +326,7 @@ function DraftsPage() {
                       "-translate-y-px",
                     )}
                   >
-                    EXPIRING SOON
+                    ИСТЕКАЕТ СКОРО
                   </div>
                 ) : null}
 
@@ -341,7 +341,7 @@ function DraftsPage() {
                   canApprove={!isBlocked}
                   approveDisabledReason={
                     isBlocked
-                      ? `Only the owner (@${draft.requested_by ?? "?"} · chat ${draft.requested_by_chat_id}) can approve this draft.`
+                      ? `Только владелец (@${draft.requested_by ?? "?"} · chat ${draft.requested_by_chat_id}) может подтвердить этот черновик.`
                       : undefined
                   }
                   onApprove={() => setConfirmApprove(draft)}
@@ -353,7 +353,7 @@ function DraftsPage() {
                 {isBlocked ? (
                   <div className="px-6 py-2 border-t border-bg-5 bg-bg-0 flex items-center gap-2 text-warning font-display text-[10.5px] tracking-wide">
                     <Lock size={12} aria-hidden="true" />
-                    Owner-only — created by @{draft.requested_by ?? "?"} · chat{" "}
+                    Только владелец — создано @{draft.requested_by ?? "?"} · chat{" "}
                     {draft.requested_by_chat_id}
                   </div>
                 ) : null}
