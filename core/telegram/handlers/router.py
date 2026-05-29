@@ -23,6 +23,7 @@ from core.telegram.handlers.alerts import (
     handle_snz_callback,
 )
 from core.telegram.handlers.ask import handle_ask, handle_draft_callback
+from core.telegram.handlers.bulk import handle_bulk_toggle
 from core.telegram.handlers.creator import (
     handle_list_plans,
     handle_plan_run_callback,
@@ -277,6 +278,19 @@ async def handle_update(
             username=username,
             args_text=args_text,
             meta_api_client=meta_api_client,
+        )
+        return
+
+    if cmd in ("pause", "resume"):
+        await handle_bulk_toggle(
+            engine=engine,
+            client=client,
+            chat_id=chat_id,
+            message_id=message_id,
+            thread_id=thread_id,
+            username=username,
+            command=cmd,
+            args_text=args_text,
         )
         return
 
