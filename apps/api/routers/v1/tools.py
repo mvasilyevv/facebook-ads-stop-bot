@@ -18,9 +18,10 @@ import logging
 import time
 from datetime import date
 
-from fastapi import APIRouter, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from fastapi.params import File, Form
 
+from apps.api.deps import DepSettings
 from apps.api.routers.v1.schemas.tools import (
     CampaignFolderItem,
     CampaignPlanRequest,
@@ -54,11 +55,25 @@ router = APIRouter(tags=["tools"])
 _MAX_TOTAL_BYTES = 200 * 1024 * 1024
 
 
+def require_dev_tools(settings: DepSettings) -> None:
+    """FastAPI-dependency: блокирует dev-only endpoints в продакшене.
+
+    Если DEV_TOOLS_ENABLED не выставлен в true — возвращает 403.
+    Используй как: Depends(require_dev_tools)
+    """
+    if not settings.dev_tools_enabled:
+        raise HTTPException(
+            status_code=403,
+            detail="dev-only endpoint, set DEV_TOOLS_ENABLED=true",
+        )
+
+
 @router.post("/tools/creative-uniquify", response_model=CreativeUniquifyResponse)
 async def creative_uniquify(
     offer_name: str = Form(...),
     copies: int = Form(...),
     files: list[UploadFile] = File(...),
+    _: None = Depends(require_dev_tools),
 ) -> CreativeUniquifyResponse:
     """Уникализирует загруженные изображения и сохраняет в FB_Agent_Creo.
 
@@ -112,7 +127,10 @@ async def creative_uniquify(
 
 
 @router.post("/tools/creative-uniquify/open-folder", status_code=200)
-async def open_creative_folder(body: OpenFolderRequest) -> dict:
+async def open_creative_folder(
+    body: OpenFolderRequest,
+    _: None = Depends(require_dev_tools),
+) -> dict:
     """Открывает папку с результатом уникализации в Finder (macOS) или xdg-open (Linux).
 
     ПРЕДУПРЕЖДЕНИЕ: dev-only endpoint. На удалённом/prod-сервере не имеет смысла,
@@ -133,7 +151,9 @@ async def open_creative_folder(body: OpenFolderRequest) -> dict:
 
 
 @router.get("/tools/campaign-create/folders", response_model=list[CampaignFolderItem])
-async def get_campaign_creative_folders() -> list[CampaignFolderItem]:
+async def get_campaign_creative_folders(
+    _: None = Depends(require_dev_tools),
+) -> list[CampaignFolderItem]:
     """Возвращает список папок с креативами из корня FB_Agent_Creo.
 
     Сканирует 1 уровень глубины. Возвращает пустой список если корня нет.
@@ -155,7 +175,10 @@ async def get_campaign_creative_folders() -> list[CampaignFolderItem]:
 
 
 @router.post("/tools/campaign-create/plan", response_model=CampaignScriptPlanOut)
-async def build_campaign_plan(body: CampaignPlanRequest) -> CampaignScriptPlanOut:
+async def build_campaign_plan(
+    body: CampaignPlanRequest,
+    _: None = Depends(require_dev_tools),
+) -> CampaignScriptPlanOut:
     """Строит план создания кампании из папки с креативами и настроек UI.
 
     Читает структуру папки, валидирует файлы, собирает имена кампании/групп/объявлений,

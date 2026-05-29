@@ -116,6 +116,12 @@ class Settings(BaseSettings):
     # Origin основного фронта (например, http://localhost:5173). None → CORS не подключаем.
     frontend_origin: str | None = None
 
+    # --- Dev Tools ---
+    # Включает /tools/* endpoints (работа с локальной ФС, открытие Finder).
+    # По умолчанию выключено — в проде эти операции бессмысленны и опасны.
+    # Для локальной разработки: DEV_TOOLS_ENABLED=true в .env
+    dev_tools_enabled: bool = False
+
     @model_validator(mode="after")
     def _warn_insecure_defaults(self) -> "Settings":
         """Предупреждаем о небезопасных настройках при старте."""

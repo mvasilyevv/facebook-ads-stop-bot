@@ -15,12 +15,19 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from apps.api.deps import get_settings
 from apps.api.main import create_app
+from core.config import Settings
 
 
 def _make_app():
-    """Собрать FastAPI для тестов (без подмены зависимостей БД/Redis)."""
-    return create_app()
+    """Собрать FastAPI для тестов с dev_tools_enabled=True."""
+    app = create_app()
+    # Включаем dev-tools — все тесты в этом файле проверяют саму логику endpoints,
+    # а не prod-блокировку (та проверяется в test_api_tools_prod_block.py)
+    dev_settings = Settings(dev_tools_enabled=True)
+    app.dependency_overrides[get_settings] = lambda: dev_settings
+    return app
 
 
 # ─────────────────── POST /tools/creative-uniquify ───────────────────────────
