@@ -54,6 +54,7 @@ export function Table<T>({
   const density = useUiStore((s) => s.density);
   const rowHeight = DENSITY_ROW_HEIGHT[density];
 
+  // eslint-disable-next-line react-hooks/incompatible-library -- TanStack Table v8 несовместим с React Compiler; идиоматичный паттерн, безопасен.
   const table = useReactTable({
     data,
     columns,

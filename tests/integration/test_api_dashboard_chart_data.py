@@ -99,16 +99,23 @@ async def _insert_metric(conn, ad_id, hours_ago: int, spend: Decimal = Decimal("
     )
 
 
-async def _insert_metric_minutes(conn, ad_id, minutes_ago: int, spend: Decimal):
-    """Вставляет snapshot с точностью до минут — для мультицикловых тестов
-    внутри одного date_trunc('hour') бакета."""
+async def _insert_metric_in_prev_hour(conn, ad_id, minute: int, spend: Decimal):
+    """Вставляет snapshot в ГАРАНТИРОВАННО один и тот же часовой бакет.
+
+    Якорим на середину прошлого полного часа: date_trunc('hour', NOW()) - 1 час + N минут.
+    Прошлый час всегда полностью в прошлом и внутри окна 24h, а 3 точки (N=10/20/30)
+    попадают в один date_trunc('hour') бакет независимо от того, в какую минуту
+    текущего часа запущен тест (раньше NOW()-5/10/15min пересекали границу часа →
+    flaky 80 вместо 50).
+    """
     await conn.execute(
         text(
             "INSERT INTO ad_metrics (id, ad_id, cycle_ts, spend, impressions, clicks, "
             "leads, registrations, deposits) VALUES (gen_random_uuid(), :a, "
-            "NOW() - make_interval(mins => :m), :s, 100, 5, 1, 1, 0)"
+            "date_trunc('hour', NOW()) - INTERVAL '1 hour' + make_interval(mins => :m), "
+            ":s, 100, 5, 1, 1, 0)"
         ),
-        {"a": ad_id, "m": minutes_ago, "s": spend},
+        {"a": ad_id, "m": minute, "s": spend},
     )
 
 
@@ -120,11 +127,11 @@ async def test_chart_bucket_hour(pg_engine, fake_redis_client, clean_chart) -> N
     """?bucket=hour — spend бакета = latest per-ad, не naive SUM кумулятивных циклов."""
     async with pg_engine.begin() as conn:
         ad_id = await _seed_ad(conn, "H1")
-        # 3 кумулятивных snapshot'а в текущем часу:
-        # 10 → 30 → 50 (latest=50, naive SUM=90)
-        await _insert_metric_minutes(conn, ad_id, minutes_ago=15, spend=Decimal("10.00"))
-        await _insert_metric_minutes(conn, ad_id, minutes_ago=10, spend=Decimal("30.00"))
-        await _insert_metric_minutes(conn, ad_id, minutes_ago=5, spend=Decimal("50.00"))
+        # 3 кумулятивных snapshot'а в ОДНОМ (прошлом) часовом бакете:
+        # минута 10 → 20 → 30 внутри прошлого часа; latest (минута 30) = 50, naive SUM = 90
+        await _insert_metric_in_prev_hour(conn, ad_id, minute=10, spend=Decimal("10.00"))
+        await _insert_metric_in_prev_hour(conn, ad_id, minute=20, spend=Decimal("30.00"))
+        await _insert_metric_in_prev_hour(conn, ad_id, minute=30, spend=Decimal("50.00"))
 
     app = _make_app(engine=pg_engine, redis=fake_redis_client)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
