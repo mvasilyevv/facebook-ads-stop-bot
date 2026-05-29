@@ -63,7 +63,7 @@ observer (FSM/pipeline/writers), rules (6 стоп-правил), tasks (unified
 | Что | Стек | Состояние |
 |---|---|---|
 | `frontend/` (старый) | React 19 + JSX + Tailwind 3 | ✅ 7 страниц работают со свежим API (smoke-тест прошёл) |
-| `frontend-v2/` (новый) | TS + Vite + Tailwind 4 + TanStack + Zustand | 🔄 foundation + **Dashboard/Ads/Offers/History/Settings готовы** (5/6); placeholder: Drafts |
+| `frontend-v2/` (новый) | TS + Vite + Tailwind 4 + TanStack + Zustand | ✅ **все 6 страниц готовы** (Dashboard/Ads/Offers/History/Settings/Drafts), проверены в браузере, 77 тестов |
 | `frontend-mini/` (TMA) | React + JSX | ⏸ не трогали, дублирует логику старого |
 
 Дизайн v2: editorial-monochrome (см. `docs/frontend_v2_design.md` + мокапы). Dark-only, desktop 1280+.
@@ -103,7 +103,7 @@ observer (FSM/pipeline/writers), rules (6 стоп-правил), tasks (unified
 - ~~**BL-3** frontend-v2 Offers~~ ✅ done (CRUD+rules, 9 тестов).
 - ~~**BL-4** frontend-v2 History~~ ✅ done (период+summary+timeline, 9 тестов).
 - ~~**BL-5** frontend-v2 Settings~~ ✅ done (4 tabs, 6 тестов).
-- **BL-6 · P1 · frontend-v2 Drafts** — подтверждение AI-mutations (ACL). Последняя страница. ~1.5ч.
+- ~~**BL-6** frontend-v2 Drafts~~ ✅ done (DraftCard + diff + ACL, 20 тестов). **frontend-v2 6/6 ✅**
 - **BL-7 · P3 · latency-замер Marketing API** — на активном кабинете (блок: live-аккаунт).
 - **BL-8 · P3 · AdSet.pro Волна 4** — tracker_aggregate per (ad,country,day) + outgoing postback + key rotation.
 - **BL-9 · P2 · prod-блок dev-tools** — env-флаг `DEV_TOOLS_ENABLED`, иначе 403 на `/tools/*`.
