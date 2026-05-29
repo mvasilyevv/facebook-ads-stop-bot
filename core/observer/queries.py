@@ -145,7 +145,8 @@ async def load_observer_config(engine: AsyncEngine) -> dict[str, object] | None:
                     SELECT
                         interval_seconds, jitter_seconds,
                         stale_data_threshold_seconds, install_cost_usd,
-                        agent_commission_percent, is_scanning_enabled
+                        agent_commission_percent, is_scanning_enabled,
+                        owner_campaign_tag
                     FROM observer_config WHERE singleton_key = 'default'
                     """
                 )
@@ -160,6 +161,7 @@ async def load_observer_config(engine: AsyncEngine) -> dict[str, object] | None:
         "install_cost_usd": row[3],
         "agent_commission_percent": row[4],
         "is_scanning_enabled": bool(row[5]),
+        "owner_campaign_tag": row[6],
     }
 
 
@@ -220,3 +222,31 @@ def match_offer_for_ad(
     if matched is not None:
         return matched
     return _best_match_in(campaign_name)
+
+
+@lru_cache(maxsize=256)
+def _owner_tag_pattern(tag_lower: str) -> re.Pattern[str]:
+    """Word-boundary regex для owner-тега (логика как у _offer_code_pattern)."""
+    return re.compile(r"(?<![a-z0-9])" + re.escape(tag_lower) + r"(?![a-z0-9])")
+
+
+def campaign_matches_owner(
+    *,
+    campaign_name: str,
+    ad_name: str,
+    owner_tag: str | None,
+) -> bool:
+    """True если кампания/объявление принадлежит владельцу (owner-scoping).
+
+    В общем рекламном кабинете отсекает чужие кампании. Тег ищется word-boundary
+    (как код оффера), case-insensitive, в campaign_name ИЛИ ad_name. Так 'MV'
+    матчит 'MV | GH | CR2', но НЕ 'MZ Artemteam' (граница слова) и НЕ внутри слова.
+    Пустой/None owner_tag → True (фильтр выключен, обрабатываются все кампании —
+    обратная совместимость для кабинетов с одним владельцем).
+    """
+    if not owner_tag or not owner_tag.strip():
+        return True
+    pat = _owner_tag_pattern(owner_tag.strip().casefold())
+    return bool(
+        pat.search((campaign_name or "").casefold()) or pat.search((ad_name or "").casefold())
+    )

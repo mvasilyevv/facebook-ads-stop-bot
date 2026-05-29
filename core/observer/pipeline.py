@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from core.adset_pro.queries import load_external_deposits_batch
 from core.observer.queries import (
     OfferRules,
+    campaign_matches_owner,
     load_active_offers,
     load_alert_state_by_fb_ad_id,
     match_offer_for_ad,
@@ -44,6 +45,7 @@ class CycleResult:
     rows_total: int = 0
     rows_with_offer: int = 0
     rows_without_offer: int = 0
+    rows_foreign: int = 0  # отброшено owner-фильтром (чужие кампании без owner-тега)
     alerts_warning: int = 0
     alerts_stop: int = 0
     disable_tasks_created: int = 0
@@ -103,6 +105,7 @@ async def process_scan_rows(
     rows: list[ScannedAdRow],
     scan_id: int | None = None,
     cycle_ts: datetime | None = None,
+    owner_tag: str | None = None,
 ) -> CycleResult:
     """Один scan-цикл. Идемпотентен по (ad_id, cycle_ts) и (idempotency_key).
 
@@ -111,6 +114,10 @@ async def process_scan_rows(
         scan_id: монотонный счётчик (для аналитики и связи с alert_events).
         cycle_ts: общий timestamp цикла — используется в ad_metrics + alert_events.
                    Дефолт — NOW.
+        owner_tag: owner-scoping. Если задан — строки кампаний без этого тега
+                   полностью игнорируются (не пишем метрики, не оцениваем правила,
+                   не дизейблим). NULL — фильтр выключен. Защита от работы с чужими
+                   кампаниями в общем рекламном кабинете.
 
     Returns:
         CycleResult с метриками цикла.
@@ -146,6 +153,7 @@ async def process_scan_rows(
                 scan_id=scan_id,
                 cycle_ts=cycle_ts,
                 result=result,
+                owner_tag=owner_tag,
             )
         except Exception:
             logger.exception(
@@ -167,8 +175,17 @@ async def _process_one_row(
     scan_id: int | None,
     cycle_ts: datetime,
     result: CycleResult,
+    owner_tag: str | None = None,
 ) -> None:
     """Обработка одной строки. Вынесено отдельно ради читаемости + try/except в caller'е."""
+
+    # --- Owner-scoping: чужие кампании (без owner-тега) полностью игнорируем ---
+    # Не пишем метрики, не оцениваем правила, не создаём disable — бот их "не видит".
+    if not campaign_matches_owner(
+        campaign_name=row.campaign_name, ad_name=row.ad_name, owner_tag=owner_tag
+    ):
+        result.rows_foreign += 1
+        return
 
     # --- Матчим оффер ---
     matched_offer = match_offer_for_ad(

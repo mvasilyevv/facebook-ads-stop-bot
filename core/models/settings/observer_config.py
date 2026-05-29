@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from sqlalchemy import Boolean, Integer, Numeric
+from sqlalchemy import Boolean, Integer, Numeric, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from core.models.base import Base, SingletonMixin, Timestamp, UUIDPrimaryKey
@@ -54,4 +54,12 @@ class ObserverConfig(UUIDPrimaryKey, SingletonMixin, Timestamp, Base):
         Boolean,
         nullable=False,
         server_default="false",
+    )
+    # Owner-scoping: тег владельца в названии кампании (например, "MV").
+    # Если задан — observer обрабатывает ТОЛЬКО кампании с этим тегом (word-boundary),
+    # остальные полностью игнорируются (защита от работы с чужими кампаниями в общем
+    # кабинете). NULL/пусто — фильтр выключен (обрабатываются все кампании).
+    owner_campaign_tag: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
     )

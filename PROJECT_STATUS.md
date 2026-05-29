@@ -1,7 +1,7 @@
 # PROJECT STATUS — FB Stop Bot
 
 > Единый источник правды по состоянию проекта. Обновляется по итогам раундов.
-> Тесты backend: **1076 passed / 0 failed** · frontend: **77 passed** · ruff/typecheck/lint clean.
+> Тесты backend: **1085 passed / 0 failed** · frontend: **77 passed** · ruff/typecheck/lint clean.
 > Подробности — в `CLAUDE.md` (архитектура) + `META_INTEGRATION_PLAN.md` (план) + `docs/*audit*.md` (аудиты).
 
 ## TL;DR
@@ -36,7 +36,7 @@
 ### Python-воркеры (12) — `apps/*`
 | Блок | Назначение | Состояние |
 |---|---|---|
-| observer_worker | scan → FSM → метрики → outbox → TG-алерты | ✅ (heartbeat R11; gate-фабрика пофикшена 2026-05-29; scan-канал проверен live) |
+| observer_worker | scan → FSM → метрики → outbox → TG-алерты | ✅ (heartbeat R11; gate-фабрика пофикшена; scan-канал live; **owner-scoping** по тегу кампаний) |
 | disable_worker / enable_worker | toggle ad через gRPC, retry backoff | ✅ (heartbeat R11; gate-фабрика пофикшена 2026-05-29) |
 | telegram_poller | `/start /help /spy /ask` + inline-кнопки | ✅ |
 | meta_api_worker | Marketing API mutations (outbox) | ✅ |

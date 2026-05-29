@@ -23,6 +23,8 @@ class ObserverSettingsResponse(BaseModel):
     is_scanning_enabled: bool
     default_interval_seconds: int
     auto_enable_recommendations: bool
+    # Owner-scoping: тег владельца кампаний (NULL — фильтр выключен).
+    owner_campaign_tag: str | None = None
 
     # Поля, перенесённые в OfferRule: возвращаем null для стабильного shape.
     warning_percent_of_stop: None = None
@@ -44,6 +46,12 @@ class ObserverSettingsPutRequest(BaseModel):
         description="Интервал сканирования (30–600 секунд)",
     )
     auto_enable_recommendations: bool
+    owner_campaign_tag: str | None = Field(
+        default=None,
+        max_length=64,
+        description="Тег владельца кампаний для owner-scoping (например, 'MV'). "
+        "Пусто/null — фильтр выключен, обрабатываются все кампании.",
+    )
 
 
 class ScanningToggleRequest(BaseModel):

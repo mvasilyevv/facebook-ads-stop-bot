@@ -424,3 +424,81 @@ async def test_snooze_expired_between_scans_emits_on_third(pg_engine, offer_kr2)
         f"После истечения snooze scan #4 должен создать alert_event, "
         f"но alert_events.scan_id=4: {n_events_after_scan4}"
     )
+
+
+# Owner-scoping: чужая кампания с кодом оффера CR2, но без тега MV, НЕ обрабатывается
+# (ключевая защита — owner-фильтр сильнее матчинга оффера, иначе бот тронул бы чужое)
+@pytest.mark.asyncio
+async def test_owner_scoping_filters_foreign_campaign(pg_engine, offer_kr2) -> None:
+    # Моя: тег MV + код CR2, метрики в норме (leads>=reg>=dep)
+    mine = _make_row(
+        fb_ad_id="111000",
+        campaign_name="MV | KE | CR2 | adset.pro | 22.05 | 1",
+        ad_name="KE_CR2_CR005",
+        spend=Decimal("3.0"),
+        leads=5,
+        registrations=2,
+        deposits=1,
+        cpc=Decimal("0.05"),
+    )
+    # Чужая: код CR2 ЕСТЬ (сматчился бы!), тега MV НЕТ, spend высокий без депозитов
+    # → без owner-фильтра она получила бы STOP + disable на ЧУЖОЙ ad
+    foreign = _make_row(
+        fb_ad_id="222000",
+        campaign_name="14.05 MZ Artemteam CR2 CBO 1-3-1",
+        ad_name="FW3-5",
+        spend=Decimal("50.0"),
+        deposits=0,
+        leads=0,
+        registrations=0,
+        cpc=Decimal("0.10"),
+    )
+
+    result = await process_scan_rows(pg_engine, rows=[mine, foreign], scan_id=1, owner_tag="MV")
+
+    assert result.rows_total == 2
+    assert result.rows_foreign == 1, "чужая кампания должна быть отброшена owner-фильтром"
+    assert result.rows_with_offer == 1, "только моя кампания доходит до матчинга оффера"
+
+    async with pg_engine.connect() as conn:
+        # В каталоге только моя — чужой fb_ad_id 222000 не записан
+        ads = [r[0] for r in (await conn.execute(text("SELECT fb_ad_id FROM fb_ads"))).all()]
+        assert ads == ["111000"]
+        # Чужая не создала disable несмотря на spend=50 без депозитов
+        n_tasks = (await conn.execute(text("SELECT COUNT(*) FROM task_queue"))).scalar()
+        assert n_tasks == 0
+        # Метрики только для моей (чужая полностью проигнорирована)
+        n_metrics = (await conn.execute(text("SELECT COUNT(*) FROM ad_metrics"))).scalar()
+        assert n_metrics == 1
+
+
+# Owner-scoping выключен (owner_tag=None) → обе кампании обрабатываются (обратная совместимость)
+@pytest.mark.asyncio
+async def test_owner_scoping_disabled_processes_all(pg_engine, offer_kr2) -> None:
+    mine = _make_row(
+        fb_ad_id="111001",
+        campaign_name="MV | KE | CR2",
+        ad_name="a1",
+        spend=Decimal("3.0"),
+        leads=5,
+        registrations=2,
+        deposits=1,
+    )
+    other = _make_row(
+        fb_ad_id="222001",
+        campaign_name="MZ Artemteam CR2",
+        ad_name="a2",
+        spend=Decimal("3.0"),
+        leads=5,
+        registrations=2,
+        deposits=1,
+    )
+
+    # owner_tag не задан → фильтр выключен
+    result = await process_scan_rows(pg_engine, rows=[mine, other], scan_id=1)
+
+    assert result.rows_foreign == 0
+    assert result.rows_with_offer == 2, "обе содержат код CR2 → обе сматчены без owner-фильтра"
+    async with pg_engine.connect() as conn:
+        n_ads = (await conn.execute(text("SELECT COUNT(*) FROM fb_ads"))).scalar()
+        assert n_ads == 2

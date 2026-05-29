@@ -268,7 +268,12 @@ async def run_one_cycle(
             error_msg = scan_out.empty_reason or "no rows"
         else:
             await _publish_runtime_status(redis_client, status="scanning", active_phase="parse")
-            cycle_result = await process_scan_rows(engine, rows=scan_out.rows, scan_id=scan_id)
+            cycle_result = await process_scan_rows(
+                engine,
+                rows=scan_out.rows,
+                scan_id=scan_id,
+                owner_tag=config.get("owner_campaign_tag"),
+            )
 
             # Доставка алертов в TG — если был хоть один emit
             if (

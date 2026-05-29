@@ -66,6 +66,7 @@ async def get_observer_settings(engine: DepEngine) -> ObserverSettingsResponse:
             is_scanning_enabled=cfg.is_scanning_enabled,
             default_interval_seconds=cfg.interval_seconds,
             auto_enable_recommendations=cfg.auto_enable_recommendations,
+            owner_campaign_tag=cfg.owner_campaign_tag,
         )
 
 
@@ -83,12 +84,14 @@ async def put_observer_settings(
         cfg.is_scanning_enabled = body.is_scanning_enabled
         cfg.interval_seconds = body.default_interval_seconds
         cfg.auto_enable_recommendations = body.auto_enable_recommendations
+        cfg.owner_campaign_tag = body.owner_campaign_tag
         # Считываем значения ДО commit — после commit SQLAlchemy помечает
         # атрибуты expired, и их чтение триггерит lazy-load вне greenlet.
         result = ObserverSettingsResponse(
             is_scanning_enabled=cfg.is_scanning_enabled,
             default_interval_seconds=cfg.interval_seconds,
             auto_enable_recommendations=cfg.auto_enable_recommendations,
+            owner_campaign_tag=cfg.owner_campaign_tag,
         )
         await session.commit()
         return result
@@ -108,6 +111,7 @@ async def patch_observer_scanning(
             is_scanning_enabled=cfg.is_scanning_enabled,
             default_interval_seconds=cfg.interval_seconds,
             auto_enable_recommendations=cfg.auto_enable_recommendations,
+            owner_campaign_tag=cfg.owner_campaign_tag,
         )
         await session.commit()
         return result
@@ -126,6 +130,7 @@ async def patch_observer_auto_enable(
             is_scanning_enabled=cfg.is_scanning_enabled,
             default_interval_seconds=cfg.interval_seconds,
             auto_enable_recommendations=cfg.auto_enable_recommendations,
+            owner_campaign_tag=cfg.owner_campaign_tag,
         )
         await session.commit()
         return result
