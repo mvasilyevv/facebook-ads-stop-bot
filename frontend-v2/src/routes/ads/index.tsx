@@ -494,7 +494,7 @@ function AdsPage() {
         onOpenChange={setConfirmBulkOpen}
         title={`Отключить ${selectedIds.size} объявлени${selectedIds.size === 1 ? "е" : "й"}?`}
         description="Задачи disable будут добавлены в очередь. Действие нельзя отменить автоматически."
-        confirmLabel="Disable"
+        confirmLabel="Отключить"
         onConfirm={handleBulkDisable}
       />
     </>

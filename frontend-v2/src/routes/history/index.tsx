@@ -123,7 +123,7 @@ function HistoryPage() {
       />
 
       {/* 4. Timeline + Events Tabs */}
-      <SectionTitle eyebrowNum="05" eyebrow="Stream" title="События" />
+      <SectionTitle eyebrowNum="05" eyebrow="ЛЕНТА" title="События" />
 
       <Tabs value={activeTab} onValueChange={setActiveTab} variant="underline" className="mb-6">
         <TabsList

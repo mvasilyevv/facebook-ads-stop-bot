@@ -89,11 +89,11 @@ export function HistorySummarySection({
               return (
                 <div key={stage} className="flex items-center gap-3">
                   <span
-                    className={`font-display text-[11px] uppercase tracking-wider w-14 ${
+                    className={`font-display text-[11px] uppercase tracking-wider w-24 ${
                       stage === "stop" ? "text-danger" : "text-warning"
                     }`}
                   >
-                    {stage}
+                    {stage === "stop" ? "Стоп" : "Предупреждение"}
                   </span>
                   {/* Прогресс-бар */}
                   <div className="flex-1 h-1 bg-bg-3">
