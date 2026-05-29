@@ -114,11 +114,10 @@ async def handle_help(
     """/help — список команд."""
     txt = (
         "*Доступные команды:*\n\n"
+        "/ask `<вопрос>` — AI-ассистент: статистика, поиск объявлений, черновики действий.\n\n"
+        "/tools — что умеет ассистент (полный список возможностей).\n\n"
         "/spy `<слот> <country>` — поиск конкурентов в Ad Library.\n"
         "  Пример: `/spy chicken road 2 KE`\n\n"
-        "/ask `<вопрос>` — AI-ассистент. Может читать статистику, искать объявления,\n"
-        "  собирать черновики мутаций (бюджет, клон, bulk pause).\n"
-        "  Черновики приходят отдельными сообщениями с ✅ / ❌.\n\n"
         "/help — эта справка."
     )
     await send_text(
@@ -130,4 +129,24 @@ async def handle_help(
     )
 
 
-__all__ = ["handle_help", "handle_start"]
+async def handle_tools(
+    *,
+    client: TelegramBotClient,
+    chat_id: int,
+    message_id: int,
+    thread_id: int | None,
+) -> None:
+    """/tools — каталог возможностей AI-ассистента (строится из реестра tools)."""
+    # Lazy-import: не тянем ai_assistant при импорте onboarding.
+    from core.ai_assistant.catalog import build_catalog_text
+
+    await send_text(
+        client,
+        chat_id=chat_id,
+        text=build_catalog_text(),
+        reply_to_message_id=message_id,
+        message_thread_id=thread_id,
+    )
+
+
+__all__ = ["handle_help", "handle_start", "handle_tools"]

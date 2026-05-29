@@ -29,7 +29,7 @@ from core.telegram.handlers.creator import (
     handle_record_plan,
     handle_stop_record,
 )
-from core.telegram.handlers.onboarding import handle_help, handle_start
+from core.telegram.handlers.onboarding import handle_help, handle_start, handle_tools
 from core.telegram.handlers.spy import handle_spy
 from core.telegram.service import find_recipient
 
@@ -237,6 +237,15 @@ async def handle_update(
 
     if cmd == "help":
         await handle_help(
+            client=client,
+            chat_id=chat_id,
+            message_id=message_id,
+            thread_id=thread_id,
+        )
+        return
+
+    if cmd == "tools":
+        await handle_tools(
             client=client,
             chat_id=chat_id,
             message_id=message_id,
