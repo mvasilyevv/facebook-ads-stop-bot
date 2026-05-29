@@ -146,7 +146,7 @@ async def load_observer_config(engine: AsyncEngine) -> dict[str, object] | None:
                         interval_seconds, jitter_seconds,
                         stale_data_threshold_seconds, install_cost_usd,
                         agent_commission_percent, is_scanning_enabled,
-                        owner_campaign_tag
+                        owner_campaign_tag, act_via_api
                     FROM observer_config WHERE singleton_key = 'default'
                     """
                 )
@@ -162,6 +162,7 @@ async def load_observer_config(engine: AsyncEngine) -> dict[str, object] | None:
         "agent_commission_percent": row[4],
         "is_scanning_enabled": bool(row[5]),
         "owner_campaign_tag": row[6],
+        "act_via_api": bool(row[7]),
     }
 
 

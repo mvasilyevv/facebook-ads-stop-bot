@@ -19,6 +19,49 @@ from core.telegram.client import TelegramBotClient
 logger = logging.getLogger(__name__)
 
 
+async def _act_via_api(engine: AsyncEngine) -> bool:
+    """Читает observer_config.act_via_api — канал исполнения toggle-действий.
+
+    True → ручные кнопки тоже идут через Marketing API (консистентно с авто-стопом).
+    False → старый DOM-путь (disable/enable worker). Ошибка чтения → False (безопасно).
+    """
+    from core.observer.queries import load_observer_config
+
+    try:
+        cfg = await load_observer_config(engine)
+        return bool((cfg or {}).get("act_via_api", False))
+    except Exception:
+        logger.warning("не смог прочитать act_via_api — fallback на DOM", exc_info=True)
+        return False
+
+
+async def _create_toggle_mutation(
+    engine: AsyncEngine,
+    *,
+    mutation_kind: str,
+    fb_ad_id: str,
+    idempotency_key: str,
+    requested_by: str,
+) -> int | None:
+    """Создать pending meta_api_mutation (pause_ad/activate_ad) для ручной кнопки."""
+    from core.meta_api.queue import create_mutation_task
+    from core.meta_api.schemas import MetaMutationPayload
+
+    payload = MetaMutationPayload(
+        mutation_kind=mutation_kind,
+        target_id=fb_ad_id,
+        params={},
+        ad_account_id=None,
+    )
+    return await create_mutation_task(
+        engine,
+        payload=payload,
+        requested_by=requested_by,
+        status="pending",
+        idempotency_key=idempotency_key,
+    )
+
+
 async def handle_dis_callback(
     *,
     engine: AsyncEngine,
@@ -28,23 +71,31 @@ async def handle_dis_callback(
     token: str,
     username: str,
 ) -> None:
-    """dis: создаёт `task_queue` запись на disable (или возвращает «уже в очереди»)."""
-    idem_key = f"manual:disable:{fb_ad_id}:{token or 'no-token'}"
+    """dis: создаёт задачу на отключение (DOM disable или API pause_ad по флагу)."""
     requested_by = f"tg:{username}"
     try:
-        task_id = await create_task(
-            engine,
-            task_type="disable",
-            idempotency_key=idem_key,
-            payload={
-                "fb_ad_id": fb_ad_id,
-                "open_state_token": token or None,
-            },
-            requested_by=requested_by,
-        )
+        if await _act_via_api(engine):
+            task_id = await _create_toggle_mutation(
+                engine,
+                mutation_kind="pause_ad",
+                fb_ad_id=fb_ad_id,
+                idempotency_key=f"manual:pause_ad:{fb_ad_id}:{token or 'no-token'}",
+                requested_by=requested_by,
+            )
+        else:
+            task_id = await create_task(
+                engine,
+                task_type="disable",
+                idempotency_key=f"manual:disable:{fb_ad_id}:{token or 'no-token'}",
+                payload={
+                    "fb_ad_id": fb_ad_id,
+                    "open_state_token": token or None,
+                },
+                requested_by=requested_by,
+            )
         ack = "Задача на отключение принята" if task_id else "Уже в очереди"
     except Exception:
-        logger.exception("create_task disable failed")
+        logger.exception("create disable task failed")
         ack = "Ошибка"
     try:
         await client.answer_callback_query(cq_id, text=ack)
@@ -60,20 +111,28 @@ async def handle_enable_reco_callback(
     fb_ad_id: str,
     username: str,
 ) -> None:
-    """ereco: создаёт `task_queue` запись на enable (рекомендация → ручное подтверждение)."""
-    idem_key = f"manual:enable:{fb_ad_id}:tg:{username}"
+    """ereco: создаёт задачу на enable (DOM enable или API activate_ad по флагу)."""
     requested_by = f"tg:{username}"
     try:
-        task_id = await create_task(
-            engine,
-            task_type="enable",
-            idempotency_key=idem_key,
-            payload={"fb_ad_id": fb_ad_id},
-            requested_by=requested_by,
-        )
+        if await _act_via_api(engine):
+            task_id = await _create_toggle_mutation(
+                engine,
+                mutation_kind="activate_ad",
+                fb_ad_id=fb_ad_id,
+                idempotency_key=f"manual:activate_ad:{fb_ad_id}:tg:{username}",
+                requested_by=requested_by,
+            )
+        else:
+            task_id = await create_task(
+                engine,
+                task_type="enable",
+                idempotency_key=f"manual:enable:{fb_ad_id}:tg:{username}",
+                payload={"fb_ad_id": fb_ad_id},
+                requested_by=requested_by,
+            )
         ack = "Задача на включение принята" if task_id else "Уже в очереди"
     except Exception:
-        logger.exception("create_task enable (ereco) failed")
+        logger.exception("create enable task (ereco) failed")
         ack = "Ошибка"
     try:
         await client.answer_callback_query(cq_id, text=ack)

@@ -309,15 +309,23 @@ async def maybe_create_disable_task(
     transition: FsmTransition,
     fb_ad_id: str,
     open_token: uuid.UUID | None,
+    act_via_api: bool = False,
 ) -> int | None:
-    """Если FSM решил создать disable-task — отправляем в task_queue.
+    """Если FSM решил создать stop-задачу — отправляем в task_queue (auto-stop).
 
-    idempotency_key = "auto:{fb_ad_id}:{open_token}" — гарантирует одну задачу
-    на инцидент (если open_token тот же).
+    Канал исполнения зависит от act_via_api (observer_config):
+    - False (дефолт): task_type='disable' → disable_worker → DOM-клик toggle_ad.
+    - True: task_type='meta_api_mutation' (pause_ad) → meta_api_worker → Marketing API
+      (точно по ad_id, не промахивается по кнопке). Detect остаётся через DOM.
+
+    idempotency_key привязан к open_token инцидента — гарантирует одну задачу на
+    инцидент (повторный STOP того же incident'а → UNIQUE conflict → no-op).
     """
     if not transition.create_disable_task:
         return None
     token = open_token or transition.new_open_token or uuid.uuid4()
+    if act_via_api:
+        return await _create_pause_mutation(engine, fb_ad_id=fb_ad_id, token=token)
     key = f"auto:disable:{fb_ad_id}:{token}"
     task_id = await create_task(
         engine,
@@ -327,6 +335,38 @@ async def maybe_create_disable_task(
         requested_by="bot_auto_stop",
     )
     return task_id
+
+
+async def _create_pause_mutation(
+    engine: AsyncEngine,
+    *,
+    fb_ad_id: str,
+    token: uuid.UUID,
+) -> int | None:
+    """Создать meta_api_mutation pause_ad для авто-стопа (act_via_api=True).
+
+    target_id = fb_ad_id (числовой Graph ID). idempotency_key привязан к token
+    инцидента — как и DOM-ветка. status='pending' (исполняется meta_api_worker'ом
+    сразу, без draft-подтверждения — это автоматический стоп бота).
+    """
+    # Lazy-import: meta_api тянется только когда флаг включён.
+    from core.meta_api.queue import create_mutation_task
+    from core.meta_api.schemas import MetaMutationPayload
+
+    payload = MetaMutationPayload(
+        mutation_kind="pause_ad",
+        target_id=fb_ad_id,
+        params={},
+        ad_account_id=None,
+    )
+    key = f"auto:pause_ad:{fb_ad_id}:{token}"
+    return await create_mutation_task(
+        engine,
+        payload=payload,
+        requested_by="bot_auto_stop",
+        status="pending",
+        idempotency_key=key,
+    )
 
 
 async def reset_alert_state_after_disable_succeeded(

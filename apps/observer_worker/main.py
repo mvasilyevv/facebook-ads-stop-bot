@@ -273,6 +273,7 @@ async def run_one_cycle(
                 rows=scan_out.rows,
                 scan_id=scan_id,
                 owner_tag=config.get("owner_campaign_tag"),
+                act_via_api=bool(config.get("act_via_api", False)),
             )
 
             # Доставка алертов в TG — если был хоть один emit

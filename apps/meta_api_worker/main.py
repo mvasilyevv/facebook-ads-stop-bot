@@ -47,6 +47,7 @@ from core.meta_api.errors import (
 from core.meta_api.errors import (
     PermissionError as MetaPermissionError,
 )
+from core.meta_api.fsm_sync import sync_fsm_after_mutation
 from core.meta_api.mutations import dispatch_mutation
 from core.meta_api.mutations.create_campaign import CreateCampaignPartialError
 from core.meta_api.queue import (
@@ -220,6 +221,10 @@ async def process_one_task(
             task_type=task.task_type,
             status="succeeded",
         )
+        # FSM-sync: привести ad_alert_state к результату mutation. Идемпотентно и
+        # best-effort (не роняет succeeded-контракт). Закрывает money-пробел —
+        # без этого FSM застревал в stop_sent при auto-stop через API.
+        await sync_fsm_after_mutation(engine, payload)
         return
     except CreateCampaignPartialError as exc:
         # Batch API не атомарен: часть объектов уже создана в Meta.

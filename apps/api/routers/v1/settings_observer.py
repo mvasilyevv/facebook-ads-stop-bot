@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.deps import DepEngine, DepRedis
 from apps.api.routers.v1.schemas.settings_observer import (
+    ActViaApiToggleRequest,
     AutoEnableToggleRequest,
     ObserverSettingsPutRequest,
     ObserverSettingsResponse,
@@ -67,6 +68,7 @@ async def get_observer_settings(engine: DepEngine) -> ObserverSettingsResponse:
             default_interval_seconds=cfg.interval_seconds,
             auto_enable_recommendations=cfg.auto_enable_recommendations,
             owner_campaign_tag=cfg.owner_campaign_tag,
+            act_via_api=cfg.act_via_api,
         )
 
 
@@ -85,6 +87,10 @@ async def put_observer_settings(
         cfg.interval_seconds = body.default_interval_seconds
         cfg.auto_enable_recommendations = body.auto_enable_recommendations
         cfg.owner_campaign_tag = body.owner_campaign_tag
+        # act_via_api — money-критичный флаг: трогаем только если клиент явно прислал
+        # значение (None = не менять, защита от сброса старыми клиентами без поля).
+        if body.act_via_api is not None:
+            cfg.act_via_api = body.act_via_api
         # Считываем значения ДО commit — после commit SQLAlchemy помечает
         # атрибуты expired, и их чтение триггерит lazy-load вне greenlet.
         result = ObserverSettingsResponse(
@@ -92,6 +98,7 @@ async def put_observer_settings(
             default_interval_seconds=cfg.interval_seconds,
             auto_enable_recommendations=cfg.auto_enable_recommendations,
             owner_campaign_tag=cfg.owner_campaign_tag,
+            act_via_api=cfg.act_via_api,
         )
         await session.commit()
         return result
@@ -112,6 +119,7 @@ async def patch_observer_scanning(
             default_interval_seconds=cfg.interval_seconds,
             auto_enable_recommendations=cfg.auto_enable_recommendations,
             owner_campaign_tag=cfg.owner_campaign_tag,
+            act_via_api=cfg.act_via_api,
         )
         await session.commit()
         return result
@@ -131,6 +139,32 @@ async def patch_observer_auto_enable(
             default_interval_seconds=cfg.interval_seconds,
             auto_enable_recommendations=cfg.auto_enable_recommendations,
             owner_campaign_tag=cfg.owner_campaign_tag,
+            act_via_api=cfg.act_via_api,
+        )
+        await session.commit()
+        return result
+
+
+@router.patch("/act-via-api", response_model=ObserverSettingsResponse)
+async def patch_observer_act_via_api(
+    body: ActViaApiToggleRequest,
+    engine: DepEngine,
+) -> ObserverSettingsResponse:
+    """Переключает только act_via_api — канал исполнения toggle-действий.
+
+    True → авто-стоп observer'а и ручные кнопки идут через Marketing API
+    (pause_ad/activate_ad). False → DOM-клик через browser-agent. Требует
+    запущенного meta_api_worker при True.
+    """
+    async with AsyncSession(engine) as session:
+        cfg = await _get_singleton(session)
+        cfg.act_via_api = body.enabled
+        result = ObserverSettingsResponse(
+            is_scanning_enabled=cfg.is_scanning_enabled,
+            default_interval_seconds=cfg.interval_seconds,
+            auto_enable_recommendations=cfg.auto_enable_recommendations,
+            owner_campaign_tag=cfg.owner_campaign_tag,
+            act_via_api=cfg.act_via_api,
         )
         await session.commit()
         return result
