@@ -63,7 +63,7 @@ observer (FSM/pipeline/writers), rules (6 стоп-правил), tasks (unified
 | Что | Стек | Состояние |
 |---|---|---|
 | `frontend/` (старый) | React 19 + JSX + Tailwind 3 | ✅ 7 страниц работают со свежим API (smoke-тест прошёл) |
-| `frontend-v2/` (новый) | TS + Vite + Tailwind 4 + TanStack + Zustand | 🔄 foundation + **Dashboard готов**; placeholder: Ads, Offers, History, Settings, Drafts |
+| `frontend-v2/` (новый) | TS + Vite + Tailwind 4 + TanStack + Zustand | 🔄 foundation + **Dashboard/Ads/Offers/History/Settings готовы** (5/6); placeholder: Drafts |
 | `frontend-mini/` (TMA) | React + JSX | ⏸ не трогали, дублирует логику старого |
 
 Дизайн v2: editorial-monochrome (см. `docs/frontend_v2_design.md` + мокапы). Dark-only, desktop 1280+.
@@ -98,12 +98,12 @@ observer (FSM/pipeline/writers), rules (6 стоп-правил), tasks (unified
 
 > Формат: `BL-N · [приоритет] · scope · оценка`. P1=функционально важно, P2=tech-debt, P3=отложено/ждёт внешнего.
 
-- **BL-1 · P1 · WS real-time** — воркеры publish в `fb_agent:alert:created` (alert_dispatcher), `task:changed` (tasks/queue), `health:updated` (watchdog). Без этого `/ws/dashboard` отдаёт только scan. ~40 мин.
-- **BL-2 · P1 · frontend-v2 Ads** — таблица FSM + drawer timeline + bulk actions. ~2ч (opus).
-- **BL-3 · P1 · frontend-v2 Offers** — CRUD + rules editor + compare. ~1.5ч.
-- **BL-4 · P1 · frontend-v2 History** — таймлайн + drill-down. ~1.5ч.
-- **BL-5 · P1 · frontend-v2 Settings** — observer/telegram/vision/restart. ~1.5ч.
-- **BL-6 · P1 · frontend-v2 Drafts** — подтверждение AI-mutations (ACL). ~1.5ч.
+- ~~**BL-1** WS real-time publish~~ ✅ done (caller-side, 9 тестов).
+- ~~**BL-2** frontend-v2 Ads~~ ✅ done (таблица+фильтры+bulk+drawer, 6 тестов).
+- ~~**BL-3** frontend-v2 Offers~~ ✅ done (CRUD+rules, 9 тестов).
+- ~~**BL-4** frontend-v2 History~~ ✅ done (период+summary+timeline, 9 тестов).
+- ~~**BL-5** frontend-v2 Settings~~ ✅ done (4 tabs, 6 тестов).
+- **BL-6 · P1 · frontend-v2 Drafts** — подтверждение AI-mutations (ACL). Последняя страница. ~1.5ч.
 - **BL-7 · P3 · latency-замер Marketing API** — на активном кабинете (блок: live-аккаунт).
 - **BL-8 · P3 · AdSet.pro Волна 4** — tracker_aggregate per (ad,country,day) + outgoing postback + key rotation.
 - **BL-9 · P2 · prod-блок dev-tools** — env-флаг `DEV_TOOLS_ENABLED`, иначе 403 на `/tools/*`.
