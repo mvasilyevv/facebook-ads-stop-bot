@@ -122,12 +122,17 @@ async def test_stats_empty_db(pg_engine, fake_redis_client, clean_stats) -> None
     assert data["active_incidents"] == 0
 
 
-# Тест: 5 ads с разными alert_state → счётчики совпадают.
+# Тест: 5 ads с разными alert_state → counts точно совпадают (нет double-count от JOIN).
 @pytest.mark.asyncio
 async def test_stats_counts_ads_by_state(pg_engine, fake_redis_client, clean_stats) -> None:
-    """5 объявлений в разных alert_state → правильные counts по полю."""
+    """Ровно 2 warning + 1 stop засеяно → ровно 2/1/3 в ответе.
+
+    Тест ловит double-count при JOIN fan-out: если LEFT JOIN на ad_metrics
+    или другую таблицу дублирует строки ad_alert_state, счётчики будут > наших N.
+    clean_stats гарантирует изоляцию (DELETE всех тест-строк до/после).
+    """
     async with pg_engine.begin() as conn:
-        await _seed_ad(conn, "N1")  # normal (no alert_state row)
+        await _seed_ad(conn, "N1")  # normal (нет строки в ad_alert_state)
         await _seed_ad(conn, "N2")  # normal
         await _seed_ad(conn, "W1", alert_state="warning_sent")
         await _seed_ad(conn, "W2", alert_state="warning_sent")
@@ -139,11 +144,18 @@ async def test_stats_counts_ads_by_state(pg_engine, fake_redis_client, clean_sta
 
     assert resp.status_code == 200
     data = resp.json()
-    # Наши 2 warning + 1 stop = 3 active_incidents (нет snooze)
-    assert data["ads_in_warning"] >= 2
-    assert data["ads_in_stop"] >= 1
-    # active_incidents покрывает warning_sent + stop_sent без snooze
-    assert data["active_incidents"] >= 3
+    # Точное равенство: double-count от JOIN fan-out сразу виден как > 2/1/3.
+    assert data["ads_in_warning"] == 2, (
+        f"Ожидалось 2 warning, получено {data['ads_in_warning']} — возможен double-count"
+    )
+    assert data["ads_in_stop"] == 1, (
+        f"Ожидалось 1 stop, получено {data['ads_in_stop']} — возможен double-count"
+    )
+    # active_incidents = warning_sent + stop_sent без snooze = 2 + 1 = 3
+    assert data["active_incidents"] == 3, (
+        f"Ожидалось 3 active_incidents, получено {data['active_incidents']} — "
+        "возможен double-count или snooze-фильтр сломан"
+    )
 
 
 # Тест: last_scan_at корректно подхватывается из самого свежего scan_run.
@@ -226,8 +238,12 @@ async def test_stats_pending_disable_tasks(pg_engine, fake_redis_client, clean_s
 
     assert resp.status_code == 200
     data = resp.json()
-    # Наши 3 (draft+pending+retrying)
-    assert data["pending_disable_tasks"] >= 3
+    # Точно 3: draft + pending + retrying попадают в pending, succeeded — нет.
+    # >= не ловит двойной счёт при JOIN fan-out по task_queue.
+    assert data["pending_disable_tasks"] == 3, (
+        f"Ожидалось 3 pending_disable_tasks, получено {data['pending_disable_tasks']} — "
+        "double-count или succeeded попал в счётчик"
+    )
 
 
 # Тест: failed_tasks_24h — только последние 24h.
@@ -261,8 +277,12 @@ async def test_stats_failed_tasks_24h_window(pg_engine, fake_redis_client, clean
 
     assert resp.status_code == 200
     data = resp.json()
-    # Должна быть хотя бы 1 (наша свежая)
-    assert data["failed_tasks_24h"] >= 1
+    # Точно 1: только свежий failed попадает, старый (48h) не должен.
+    # >= 1 не ловит утечку старых строк через 24h-фильтр.
+    assert data["failed_tasks_24h"] == 1, (
+        f"Ожидалась 1 failed_task_24h (только свежая), получено {data['failed_tasks_24h']} — "
+        "фильтр 24h сломан или старая задача просочилась"
+    )
 
 
 # Тест: scans_today учитывает только today (партиционный фильтр).
@@ -298,9 +318,15 @@ async def test_stats_scans_today_partition_filter(
 
     assert resp.status_code == 200
     data = resp.json()
-    # Наши 2 (сегодня), 1 с error.
-    assert data["scans_today"] >= 2
-    assert data["scans_today_with_errors"] >= 1
+    # Точно 2 сегодня и точно 1 с error.
+    # >= не ловит если вчерашний скан просочился (сломанный partition filter).
+    assert data["scans_today"] == 2, (
+        f"Ожидалось 2 scans_today, получено {data['scans_today']} — "
+        "вчерашний скан мог просочиться через сломанный partition filter"
+    )
+    assert data["scans_today_with_errors"] == 1, (
+        f"Ожидалась 1 scans_today_with_errors, получено {data['scans_today_with_errors']}"
+    )
 
 
 # Тест: производительность — ответ < 1s.
