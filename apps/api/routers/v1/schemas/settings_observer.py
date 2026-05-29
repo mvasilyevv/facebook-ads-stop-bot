@@ -48,9 +48,10 @@ class ObserverSettingsPutRequest(BaseModel):
     auto_enable_recommendations: bool
     owner_campaign_tag: str | None = Field(
         default=None,
-        max_length=64,
-        description="Тег владельца кампаний для owner-scoping (например, 'MV'). "
-        "Пусто/null — фильтр выключен, обрабатываются все кампании.",
+        max_length=255,
+        description="Теги владельца кампаний для owner-scoping. Один или несколько через "
+        "запятую (например, 'MV' или 'MV,ABC,XYZ') — кампания отслеживается при совпадении "
+        "с любым. Пусто/null — фильтр выключен, обрабатываются все кампании.",
     )
 
 

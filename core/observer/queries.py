@@ -230,6 +230,17 @@ def _owner_tag_pattern(tag_lower: str) -> re.Pattern[str]:
     return re.compile(r"(?<![a-z0-9])" + re.escape(tag_lower) + r"(?![a-z0-9])")
 
 
+def parse_owner_tags(raw: str | None) -> list[str]:
+    """Разбирает CSV-строку owner-тегов в список непустых тегов.
+
+    Разделители — запятая/точка-с-запятой. "MV,ABC" → ["MV", "ABC"].
+    Пустая строка/None → [] (фильтр выключен).
+    """
+    if not raw:
+        return []
+    return [t.strip() for t in raw.replace(";", ",").split(",") if t.strip()]
+
+
 def campaign_matches_owner(
     *,
     campaign_name: str,
@@ -238,15 +249,19 @@ def campaign_matches_owner(
 ) -> bool:
     """True если кампания/объявление принадлежит владельцу (owner-scoping).
 
-    В общем рекламном кабинете отсекает чужие кампании. Тег ищется word-boundary
-    (как код оффера), case-insensitive, в campaign_name ИЛИ ad_name. Так 'MV'
-    матчит 'MV | GH | CR2', но НЕ 'MZ Artemteam' (граница слова) и НЕ внутри слова.
-    Пустой/None owner_tag → True (фильтр выключен, обрабатываются все кампании —
-    обратная совместимость для кабинетов с одним владельцем).
+    В общем рекламном кабинете отсекает чужие кампании. Поддерживает НЕСКОЛЬКО тегов
+    через запятую ("MV,ABC") — совпадение с ЛЮБЫМ. Тег ищется word-boundary (как код
+    оффера), case-insensitive, в campaign_name ИЛИ ad_name. Так 'MV' матчит
+    'MV | GH | CR2', но НЕ 'MZ Artemteam' (граница слова) и НЕ внутри слова.
+    Пустой/None owner_tag → True (фильтр выключен, обрабатываются все кампании).
     """
-    if not owner_tag or not owner_tag.strip():
+    tags = parse_owner_tags(owner_tag)
+    if not tags:
         return True
-    pat = _owner_tag_pattern(owner_tag.strip().casefold())
-    return bool(
-        pat.search((campaign_name or "").casefold()) or pat.search((ad_name or "").casefold())
-    )
+    hay_campaign = (campaign_name or "").casefold()
+    hay_ad = (ad_name or "").casefold()
+    for tag in tags:
+        pat = _owner_tag_pattern(tag.casefold())
+        if pat.search(hay_campaign) or pat.search(hay_ad):
+            return True
+    return False
