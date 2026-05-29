@@ -149,11 +149,11 @@ test-integration: install-backend ## Прогнать интеграционны
 
 verify: lint test-unit test-integration ## Выполнить основной проверочный прогон
 
-export-openapi: install-backend ## Экспортировать OpenAPI-схему из FastAPI в frontend-v2/openapi.json
+export-openapi: install-backend ## Экспортировать OpenAPI-схему из FastAPI в frontend/openapi.json
 	$(PY) scripts/export_openapi.py
 
-gen-api-types: export-openapi ## Сгенерировать TypeScript-типы из OpenAPI в frontend-v2/src/lib/types/api-generated.ts
-	cd frontend-v2 && $(NPM) run gen:api
+gen-api-types: export-openapi ## Сгенерировать TypeScript-типы из OpenAPI в frontend/src/lib/types/api-generated.ts
+	cd frontend && $(NPM) run gen:api
 
 start: ## Поднять весь проект через run.sh
 	./run.sh

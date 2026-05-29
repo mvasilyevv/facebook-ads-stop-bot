@@ -45,6 +45,8 @@ npm-debug.log*
 # Зависимости и сборка фронтенда
 frontend/dist/
 frontend/node_modules/
+frontend-legacy/dist/
+frontend-legacy/node_modules/
 frontend-mini/dist/
 frontend-mini/node_modules/
 services/browser-agent/node_modules/

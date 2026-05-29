@@ -1611,7 +1611,7 @@
           "history"
         ],
         "summary": "Get History Summary",
-        "description": "Сводная агрегация за период: spend/метрики + алерты + задачи.\n\nПартиционированные таблицы фильтруются по partition-key.",
+        "description": "Сводная агрегация за период: spend/метрики + алерты + задачи.\n\nПартиционированные таблицы фильтруются по partition-key. 5 запросов на одном\nсоединении (см. core.dashboard.history_queries).",
         "operationId": "get_history_summary_api_history_summary_get",
         "parameters": [
           {

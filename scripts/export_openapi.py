@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Экспортирует OpenAPI-схему FastAPI-приложения в frontend-v2/openapi.json.
+"""Экспортирует OpenAPI-схему FastAPI-приложения в frontend/openapi.json.
 
 Использование:
     .venv/bin/python scripts/export_openapi.py
@@ -20,7 +20,7 @@ from pathlib import Path
 
 # Корень проекта — родитель scripts/
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-OUTPUT_PATH = PROJECT_ROOT / "frontend-v2" / "openapi.json"
+OUTPUT_PATH = PROJECT_ROOT / "frontend" / "openapi.json"
 
 # Добавляем корень в sys.path чтобы работал import apps.api.main
 if str(PROJECT_ROOT) not in sys.path:

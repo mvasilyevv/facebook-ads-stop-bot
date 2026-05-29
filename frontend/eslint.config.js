@@ -1,75 +1,38 @@
 import js from "@eslint/js";
-import reactPlugin from "eslint-plugin-react";
-import reactHooksPlugin from "eslint-plugin-react-hooks";
-import prettierConfig from "eslint-config-prettier";
+import globals from "globals";
+import reactHooks from "eslint-plugin-react-hooks";
+import tseslint from "typescript-eslint";
+import storybook from "eslint-plugin-storybook";
 
-export default [
-  js.configs.recommended,
+export default tseslint.config(
   {
-    files: ["src/**/*.{js,jsx}"],
-    plugins: {
-      react: reactPlugin,
-      "react-hooks": reactHooksPlugin,
-    },
+    ignores: [
+      "dist",
+      "storybook-static",
+      "node_modules",
+      "src/routeTree.gen.ts",
+      "**/*.d.ts",
+    ],
+  },
+  {
+    extends: [js.configs.recommended, ...tseslint.configs.recommended],
+    files: ["**/*.{ts,tsx}"],
     languageOptions: {
-      globals: {
-        window: "readonly",
-        document: "readonly",
-        console: "readonly",
-        setTimeout: "readonly",
-        clearTimeout: "readonly",
-        setInterval: "readonly",
-        clearInterval: "readonly",
-        fetch: "readonly",
-        Headers: "readonly",
-        global: "readonly",
-        navigator: "readonly",
-        localStorage: "readonly",
-        sessionStorage: "readonly",
-        URL: "readonly",
-        URLSearchParams: "readonly",
-        AbortController: "readonly",
-        requestAnimationFrame: "readonly",
-        cancelAnimationFrame: "readonly",
-        performance: "readonly",
-        confirm: "readonly",
-        alert: "readonly",
-        prompt: "readonly",
-        MutationObserver: "readonly",
-        ResizeObserver: "readonly",
-        IntersectionObserver: "readonly",
-        CustomEvent: "readonly",
-        Event: "readonly",
-        EventTarget: "readonly",
-      },
-      parserOptions: {
-        ecmaFeatures: { jsx: true },
-        ecmaVersion: 2022,
-        sourceType: "module",
-      },
+      ecmaVersion: 2022,
+      globals: { ...globals.browser, ...globals.node },
     },
-    settings: {
-      react: { version: "detect" },
+    plugins: {
+      "react-hooks": reactHooks,
     },
     rules: {
-      ...reactPlugin.configs.recommended.rules,
-      ...reactHooksPlugin.configs.recommended.rules,
-      "react/react-in-jsx-scope": "off", // React 17+ не требует импорта
-      "react/prop-types": "off", // JSX без TypeScript — prop-types не используем
-      // Правила React Compiler (интегрированы в v7) — предупреждения для существующего кода
-      "react/no-direct-mutation-state": "warn",
-      "no-unused-vars": ["warn", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],
-      "no-console": "warn",
-      "react-hooks/exhaustive-deps": "warn",
-      // Правила React Compiler/19 — существующий код использует эти паттерны, понижаем до warn
-      "react/jsx-no-constructed-context-values": "warn",
-      "react-hooks/set-state-in-effect": "warn",
-      "react-hooks/purity": "warn", // Date.now() и другие "нечистые" вызовы — допустимо
-      "no-empty": ["error", { "allowEmptyCatch": true }],
+      ...reactHooks.configs.recommended.rules,
+      "@typescript-eslint/no-explicit-any": "error",
+      "@typescript-eslint/no-unused-vars": [
+        "error",
+        { argsIgnorePattern: "^_", varsIgnorePattern: "^_" },
+      ],
+      "no-console": ["warn", { allow: ["warn", "error"] }],
     },
   },
-  prettierConfig,
-  {
-    ignores: ["dist/**", "node_modules/**"],
-  },
-];
+  ...storybook.configs["flat/recommended"],
+);
