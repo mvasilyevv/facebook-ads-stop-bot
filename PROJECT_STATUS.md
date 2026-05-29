@@ -1,7 +1,7 @@
 # PROJECT STATUS — FB Stop Bot
 
 > Единый источник правды по состоянию проекта. Обновляется по итогам раундов.
-> Тесты backend: **1161 passed / 0 failed** · frontend: **77 passed** · ruff/typecheck/lint clean.
+> Тесты backend: **1175 passed / 0 failed** · frontend: **77 passed** · ruff/typecheck/lint clean.
 > Подробности — в `CLAUDE.md` (архитектура) + `META_INTEGRATION_PLAN.md` (план) + `docs/*audit*.md` (аудиты).
 
 ## TL;DR
@@ -97,7 +97,7 @@ observer (FSM/pipeline/writers/runtime), rules (7 стоп-правил, frequen
 > `BL-N · [приоритет] · scope`. P2=tech-debt, P3=отложено/ждёт внешнего.
 
 **Закрыто:** BL-1 (WS publish), BL-2..6 (frontend страницы), BL-7 (latency-замер live), BL-9 (prod-блок dev-tools), BL-10+11 (helpers + split history.py), BL-12 (OpenAPI codegen). Rename (v2→fb_stop_bot) — done.
-**Сессия 2026-05-29 (запушено):** gate-фабрики fix; owner-scoping (#33-35, +мультитег); стоп-правила зафиксированы (`docs/stop_rules.md`); ADR канал observer (DOM); `/tools` каталог (#34); `/pause` `/resume` (#33); автостарт по расписанию `cabinet_scheduler` (#38); **live-валидация Marketing API mutations** (enable/disable 24/24); **#39 observer act через API** (флаг `observer_config.act_via_api`, миграции 0007+0008 — **дефолт TRUE**: API основной канал, DOM спящий резерв-фолбэк; авто-стоп и ручные кнопки идут через `meta_api_mutation pause_ad/activate_ad`; FSM-sync `ad_alert_state` в meta_api_worker; +29 тестов). **#37 frequency-anomaly** активирован (правило 7, opt-in per-offer через `offer.frequency_threshold`, фаза 1 — абсолютный порог; +10 тестов → 1161).
+**Сессия 2026-05-29 (запушено):** gate-фабрики fix; owner-scoping (#33-35, +мультитег); стоп-правила зафиксированы (`docs/stop_rules.md`); ADR канал observer (DOM); `/tools` каталог (#34); `/pause` `/resume` (#33); автостарт по расписанию `cabinet_scheduler` (#38); **live-валидация Marketing API mutations** (enable/disable 24/24); **#39 observer act через API** (флаг `observer_config.act_via_api`, миграции 0007+0008 — **дефолт TRUE**: API основной канал, DOM спящий резерв-фолбэк; авто-стоп и ручные кнопки идут через `meta_api_mutation pause_ad/activate_ad`; FSM-sync `ad_alert_state` в meta_api_worker; +29 тестов). **#37 frequency-anomaly** активирован (правило 7, opt-in per-offer через `offer.frequency_threshold`, фаза 1 — абсолютный порог) + **data-driven analyzer** (`core/rules/frequency_analyzer.py` — авто-расчёт порога из истории `ad_metrics` по деградации `cost_per_result`; `dry_run`-защита, пишет только в NULL — ручное не затирает; нужен накопленный `ad_metrics`); +24 теста → 1175.
 
 **Осталось:**
 - **BL-8 · P3 · AdSet.pro Волна 4** — tracker_aggregate per (ad,country,day) + outgoing postback + key rotation.
