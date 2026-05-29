@@ -70,7 +70,7 @@ docker-down: ## Остановить Docker-сервисы
 
 db-wait: ## Дождаться готовности Postgres
 	@for i in $$(seq 1 30); do \
-		if docker compose exec -T postgres pg_isready -U fb_stop_bot_v2 -d fb_stop_bot_v2 >/dev/null 2>&1; then \
+		if docker compose exec -T postgres pg_isready -U fb_stop_bot -d fb_stop_bot >/dev/null 2>&1; then \
 			echo "Postgres готов"; \
 			exit 0; \
 		fi; \

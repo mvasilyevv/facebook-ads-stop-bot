@@ -73,8 +73,8 @@ Rate-limit: **30 запросов в час** на client_key `mcp:claude-deskto
       "env": {
         "POSTGRES_HOST": "127.0.0.1",
         "POSTGRES_PORT": "5433",
-        "POSTGRES_DB": "fb_stop_bot_v2",
-        "POSTGRES_USER": "fb_stop_bot_v2",
+        "POSTGRES_DB": "fb_stop_bot",
+        "POSTGRES_USER": "fb_stop_bot",
         "POSTGRES_PASSWORD": "REPLACE_ME",
         "REDIS_URL": "redis://localhost:6380/0",
         "ENCRYPTION_KEY": "REPLACE_ME",

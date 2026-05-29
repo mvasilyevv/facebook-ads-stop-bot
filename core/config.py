@@ -36,9 +36,9 @@ class Settings(BaseSettings):
     # --- Postgres ---
     postgres_host: str = "localhost"
     postgres_port: int = 5433
-    postgres_db: str = "fb_stop_bot_v2"
-    postgres_user: str = "fb_stop_bot_v2"
-    postgres_password: str = "fb_stop_bot_v2"
+    postgres_db: str = "fb_stop_bot"
+    postgres_user: str = "fb_stop_bot"
+    postgres_password: str = "fb_stop_bot"
 
     # --- Telegram ---
     telegram_bot_token: str = ""

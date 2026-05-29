@@ -25,8 +25,8 @@ image:
 postgres:
   host: host.docker.internal
   port: 5433
-  database: fb_stop_bot_v2
-  user: fb_stop_bot_v2
+  database: fb_stop_bot
+  user: fb_stop_bot
 
 # Vision anti-detect браузер на хосте Windows
 vision:

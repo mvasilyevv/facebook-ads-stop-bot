@@ -93,9 +93,9 @@ docker compose ps
 
 Установи PostgreSQL 16 на Windows, создай базу данных:
 ```sql
-CREATE DATABASE fb_stop_bot_v2;
-CREATE USER fb_stop_bot_v2 WITH PASSWORD 'твой_пароль';
-GRANT ALL PRIVILEGES ON DATABASE fb_stop_bot_v2 TO fb_stop_bot_v2;
+CREATE DATABASE fb_stop_bot;
+CREATE USER fb_stop_bot WITH PASSWORD 'твой_пароль';
+GRANT ALL PRIVILEGES ON DATABASE fb_stop_bot TO fb_stop_bot;
 ```
 
 ---

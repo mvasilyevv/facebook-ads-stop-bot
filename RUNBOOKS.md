@@ -109,7 +109,7 @@ curl -sf "https://api.telegram.org/bot<TOKEN>/getMe"
 tail -50 .logs/telegram.log
 
 # Что в telegram_config
-docker compose exec -T postgres psql -U fb_stop_bot_v2 -d fb_stop_bot_v2 \
+docker compose exec -T postgres psql -U fb_stop_bot -d fb_stop_bot \
     -c "SELECT chat_id, forum_warning_thread_id, forum_stop_thread_id, web_app_url, updated_at FROM telegram_config;"
 ```
 
@@ -155,7 +155,7 @@ docker compose exec -T postgres psql -U fb_stop_bot_v2 -d fb_stop_bot_v2 \
 
 ```bash
 # Что в очереди
-docker compose exec -T postgres psql -U fb_stop_bot_v2 -d fb_stop_bot_v2 -c "
+docker compose exec -T postgres psql -U fb_stop_bot -d fb_stop_bot -c "
   SELECT task_type, status, attempts, last_error, fb_ad_id, created_at, next_attempt_at
   FROM task_queue
   WHERE task_type IN ('disable','enable')
@@ -190,7 +190,7 @@ tail -100 .logs/disable_worker.log | grep -E 'ERROR|toggle_ad|gRPC'
 **Диагностика:**
 
 ```bash
-docker compose exec -T postgres psql -U fb_stop_bot_v2 -d fb_stop_bot_v2 -c "
+docker compose exec -T postgres psql -U fb_stop_bot -d fb_stop_bot -c "
   SELECT parent.relname AS parent, child.relname AS partition
   FROM pg_inherits
   JOIN pg_class parent ON parent.oid = pg_inherits.inhparent
@@ -306,7 +306,7 @@ ORDER BY 3 DESC;
    docker volume rm fb_agent_pgdata
    docker compose up -d postgres
    make db-wait
-   docker compose exec -T postgres psql -U fb_stop_bot_v2 -d fb_stop_bot_v2 < backup.sql
+   docker compose exec -T postgres psql -U fb_stop_bot -d fb_stop_bot < backup.sql
    ```
 2. Если бэкапа схемы нет, но есть `data/secrets_backup_*.json` от старой
    установки:
@@ -398,17 +398,17 @@ tail -50 .logs/meta_api_worker.log
 curl -s http://localhost:8000/metrics | grep app_requests_total
 
 # Очередь задач
-docker compose exec -T postgres psql -U fb_stop_bot_v2 -d fb_stop_bot_v2 -c "
+docker compose exec -T postgres psql -U fb_stop_bot -d fb_stop_bot -c "
   SELECT task_type, status, count(*) FROM task_queue GROUP BY 1,2 ORDER BY 1,2;
 "
 
 # FSM ad_alert_state
-docker compose exec -T postgres psql -U fb_stop_bot_v2 -d fb_stop_bot_v2 -c "
+docker compose exec -T postgres psql -U fb_stop_bot -d fb_stop_bot -c "
   SELECT alert_state, count(*) FROM ad_alert_state GROUP BY 1;
 "
 
 # Recent alert events
-docker compose exec -T postgres psql -U fb_stop_bot_v2 -d fb_stop_bot_v2 -c "
+docker compose exec -T postgres psql -U fb_stop_bot -d fb_stop_bot -c "
   SELECT created_at, alert_stage, fb_ad_id, rules_triggered
   FROM alert_events
   WHERE created_at > now() - interval '1 hour'
