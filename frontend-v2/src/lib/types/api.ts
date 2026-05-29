@@ -164,14 +164,29 @@ export interface EnableRecommendation {
 
 // ─── History ────────────────────────────────────────────────────────────────
 
+// Структура соответствует реальному ответу /api/history/summary (вложенные блоки).
 export interface HistorySummary {
-  total_spend: string;
-  total_leads: number;
-  total_registrations: number;
-  total_deposits: number;
-  alerts_by_stage: Record<string, number>;
-  alerts_by_rule: Array<{ rule_code: string; count: number }>;
-  tasks_by_status: Record<string, number>;
+  from_iso: string;
+  to_iso: string;
+  totals: {
+    spend: string;
+    impressions: number;
+    clicks: number;
+    leads: number;
+    registrations: number;
+    deposits: number;
+    active_ads_count: number;
+  };
+  alerts: {
+    warning_count: number;
+    stop_count: number;
+    by_rule: Array<{ rule_code: string; count: number }>;
+  };
+  tasks: {
+    disable_completed: number;
+    disable_failed: number;
+    enable_completed: number;
+  };
 }
 
 // ─── Timeseries ─────────────────────────────────────────────────────────────

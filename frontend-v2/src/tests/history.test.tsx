@@ -11,18 +11,33 @@ import { HistoryTimeline } from "@/components/history/HistoryTimeline";
 import type { HistorySummary } from "@/lib/types/api";
 
 // Mock-данные summary: spend, leads, deposits, alerts по stage + by_rule.
+// Структура соответствует реальному ответу /api/history/summary (вложенные блоки).
 const SUMMARY: HistorySummary = {
-  total_spend: "12345.67",
-  total_leads: 423,
-  total_registrations: 210,
-  total_deposits: 87,
-  alerts_by_stage: { warning: 834, stop: 267 },
-  alerts_by_rule: [
-    { rule_code: "CPL_HIGH", count: 412 },
-    { rule_code: "SPEND_NO_EVENT", count: 234 },
-    { rule_code: "FREQ_HIGH", count: 188 },
-  ],
-  tasks_by_status: { PENDING: 5, SUCCEEDED: 40 },
+  from_iso: "2026-04-29T00:00:00Z",
+  to_iso: "2026-05-29T00:00:00Z",
+  totals: {
+    spend: "12345.67",
+    impressions: 1_000_000,
+    clicks: 5000,
+    leads: 423,
+    registrations: 210,
+    deposits: 87,
+    active_ads_count: 40,
+  },
+  alerts: {
+    warning_count: 834,
+    stop_count: 267,
+    by_rule: [
+      { rule_code: "CPL_HIGH", count: 412 },
+      { rule_code: "SPEND_NO_EVENT", count: 234 },
+      { rule_code: "FREQ_HIGH", count: 188 },
+    ],
+  },
+  tasks: {
+    disable_completed: 40,
+    disable_failed: 3,
+    enable_completed: 12,
+  },
 };
 
 describe("HistorySummarySection", () => {

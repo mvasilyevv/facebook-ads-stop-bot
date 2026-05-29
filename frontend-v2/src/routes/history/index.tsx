@@ -76,8 +76,8 @@ function HistoryPage() {
 
   // Подсчёт событий для subtitle
   const totalEvents =
-    (summaryQuery.data?.alerts_by_stage["warning"] ?? 0) +
-    (summaryQuery.data?.alerts_by_stage["stop"] ?? 0);
+    (summaryQuery.data?.alerts.warning_count ?? 0) +
+    (summaryQuery.data?.alerts.stop_count ?? 0);
 
   // Проверка на 422 (лимит 90 дней)
   const is422Error = (err: unknown): boolean => {

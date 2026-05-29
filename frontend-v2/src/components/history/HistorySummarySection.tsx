@@ -40,8 +40,9 @@ export function HistorySummarySection({
     return <SummarySkeleton />;
   }
 
-  const totalAlerts =
-    (summary?.alerts_by_stage["warning"] ?? 0) + (summary?.alerts_by_stage["stop"] ?? 0);
+  const warningCount = summary?.alerts.warning_count ?? 0;
+  const stopCount = summary?.alerts.stop_count ?? 0;
+  const totalAlerts = warningCount + stopCount;
 
   return (
     <div className="mb-10">
@@ -49,19 +50,19 @@ export function HistorySummarySection({
       <KPIStrip>
         <KPICard
           label="Total spend"
-          value={formatSpend(summary?.total_spend)}
+          value={formatSpend(summary?.totals.spend)}
           hint="за период"
           variant="muted"
         />
         <KPICard
           label="Leads"
-          value={formatInt(summary?.total_leads)}
+          value={formatInt(summary?.totals.leads)}
           hint="лиды"
           variant="success"
         />
         <KPICard
           label="Deposits"
-          value={formatInt(summary?.total_deposits)}
+          value={formatInt(summary?.totals.deposits)}
           hint="депозиты"
           variant="info"
         />
@@ -83,7 +84,7 @@ export function HistorySummarySection({
           </h3>
           <div className="space-y-3">
             {["warning", "stop"].map((stage) => {
-              const count = summary?.alerts_by_stage[stage] ?? 0;
+              const count = stage === "stop" ? stopCount : warningCount;
               const pct = totalAlerts > 0 ? Math.round((count / totalAlerts) * 100) : 0;
               return (
                 <div key={stage} className="flex items-center gap-3">
@@ -116,11 +117,11 @@ export function HistorySummarySection({
             <span className="text-bg-7 mr-1.5">03</span>
             Alerts · by rule
           </h3>
-          {!summary?.alerts_by_rule?.length ? (
+          {!summary?.alerts.by_rule?.length ? (
             <span className="font-display text-[12px] text-bg-9">Нет данных</span>
           ) : (
             <div className="space-y-2">
-              {summary.alerts_by_rule.slice(0, 8).map((r) => (
+              {summary.alerts.by_rule.slice(0, 8).map((r) => (
                 <div key={r.rule_code} className="flex items-center gap-3">
                   <RuleBadge code={r.rule_code} />
                   <span className="font-display text-[13px] tabular-nums text-bg-10 ml-auto">
