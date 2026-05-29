@@ -217,6 +217,20 @@ export interface TelegramSettings {
   recipients_count: number;
 }
 
+export interface TelegramRecipient {
+  id: string;
+  chat_id: number;
+  username: string | null;
+  role: string;
+  created_at: string | null;
+  revoked_at: string | null;
+}
+
+export interface TelegramInviteResponse {
+  invite_code: string;
+  expires_at: string | null;
+}
+
 export interface VisionSettings {
   vision_token: string | null;
   profile_id: string | null;

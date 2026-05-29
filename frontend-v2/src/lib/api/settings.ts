@@ -1,5 +1,6 @@
 /**
  * Hooks для /settings-страницы.
+ * Содержит как query-хуки, так и мутации для Observer / Telegram / Vision / Health.
  */
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -10,6 +11,8 @@ import type {
   ObserverStatus,
   ScanRun,
   TelegramSettings,
+  TelegramRecipient,
+  TelegramInviteResponse,
   VisionSettings,
 } from "@/lib/types/api";
 
@@ -81,6 +84,106 @@ export function useRestartObserver() {
   return useMutation({
     mutationFn: () => apiClient.post<void>("/observer/restart"),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["observer"] }),
+  });
+}
+
+/** POST /settings/observer/scan-now — запустить скан немедленно. */
+export function useTriggerScanNowSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => apiClient.post<void>("/settings/observer/scan-now"),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["observer"] }),
+  });
+}
+
+/** PATCH /settings/observer/scanning — переключить is_scanning. */
+export function useToggleScanning() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (enabled: boolean) =>
+      apiClient.patch<ObserverSettings>("/settings/observer/scanning", { enabled }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: KEYS.observer }),
+  });
+}
+
+/** PATCH /settings/observer/auto-enable — переключить auto_enable_recommendations. */
+export function useToggleAutoEnable() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (enabled: boolean) =>
+      apiClient.patch<ObserverSettings>("/settings/observer/auto-enable", { enabled }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: KEYS.observer }),
+  });
+}
+
+/** Получить список recipients Telegram. */
+export function useTelegramRecipients() {
+  return useQuery({
+    queryKey: [...KEYS.telegram, "recipients"] as const,
+    queryFn: () => apiClient.get<TelegramRecipient[]>("/settings/telegram/recipients"),
+  });
+}
+
+/** PUT /settings/telegram/token — установить токен бота. */
+export function useSetTelegramToken() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (token: string) =>
+      apiClient.put<void>("/settings/telegram/token", { token }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: KEYS.telegram }),
+  });
+}
+
+/** DELETE /settings/telegram/token — удалить токен бота. */
+export function useDeleteTelegramToken() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => apiClient.delete<void>("/settings/telegram/token"),
+    onSuccess: () => qc.invalidateQueries({ queryKey: KEYS.telegram }),
+  });
+}
+
+/** DELETE /settings/telegram/recipients/{id} — удалить получателя. */
+export function useDeleteTelegramRecipient() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => apiClient.delete<void>(`/settings/telegram/recipients/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: [...KEYS.telegram] }),
+  });
+}
+
+/** POST /settings/telegram/recipients/invite — сгенерировать инвайт-код. */
+export function useCreateTelegramInvite() {
+  return useMutation({
+    mutationFn: () => apiClient.post<TelegramInviteResponse>("/settings/telegram/recipients/invite"),
+  });
+}
+
+/** PUT /settings/vision — обновить Vision token/profile. */
+export function useUpdateVision() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: { vision_token?: string; profile_id?: string }) =>
+      apiClient.put<VisionSettings>("/settings/vision", data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: KEYS.vision }),
+  });
+}
+
+/** POST /vision/reconnect — переподключить Vision. */
+export function useVisionReconnect() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => apiClient.post<void>("/vision/reconnect"),
+    onSuccess: () => qc.invalidateQueries({ queryKey: KEYS.vision }),
+  });
+}
+
+/** POST /disable-worker/restart — перезапустить disable-worker. */
+export function useRestartDisableWorker() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => apiClient.post<void>("/disable-worker/restart"),
+    onSuccess: () => qc.invalidateQueries({ queryKey: KEYS.health }),
   });
 }
 
