@@ -30,6 +30,7 @@ from apps.api.routers.v1.schemas.tasks import (
     TaskQueueRowOut,
 )
 from apps.api.utils.status_mapper import to_frontend_task_status
+from apps.api.utils.task_serializer import task_row_to_out
 
 logger = logging.getLogger(__name__)
 
@@ -258,19 +259,6 @@ async def confirm_enable_recommendation(
     if row is None:
         raise HTTPException(status_code=500, detail="Задача создана, но не найдена при чтении")
 
-    result = {
-        "id": str(row.id),
-        "fb_ad_id": row.fb_ad_id,
-        "ad_name": ad_name,
-        "task_type": row.task_type,
-        "status": to_frontend_task_status(row.status),
-        "attempt_count": row.attempt_count,
-        "max_attempts": row.max_attempts,
-        "requested_by": row.requested_by,
-        "requested_by_chat_id": row.created_by_chat_id,
-        "created_at": row.created_at,
-        "updated_at": row.updated_at,
-        "next_attempt_at": row.next_retry_at,
-        "last_error_message": row.last_error,
-    }
+    result = task_row_to_out(row)
+    result["ad_name"] = ad_name  # ad_name из рекомендации (в SELECT он NULL)
     return result

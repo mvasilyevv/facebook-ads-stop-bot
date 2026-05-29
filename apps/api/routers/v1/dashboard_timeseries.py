@@ -21,6 +21,7 @@ from apps.api.routers.v1.schemas.dashboard_aggregates import (
     ChartBucketOut,
     SpendPointOut,
 )
+from apps.api.utils.serialize import decimal_str, int_or_none
 
 logger = logging.getLogger(__name__)
 
@@ -31,19 +32,6 @@ _SPEND_HISTORY_GLOBAL_LIMIT = 10000
 
 # Допустимые значения бакета для chart-data.
 _VALID_BUCKETS = {"hour", "day"}
-
-
-def _decimal_str(value: Any) -> str | None:
-    """Decimal → str без потери точности (None → None)."""
-    if value is None:
-        return None
-    return str(value)
-
-
-def _int_or_none(value: Any) -> int | None:
-    if value is None:
-        return None
-    return int(value)
 
 
 # ─────────────────────── GET /dashboard/spend-history ────────────────────────
@@ -102,12 +90,12 @@ async def get_spend_history(
         {
             "cycle_ts": r.cycle_ts,
             "fb_ad_id": r.fb_ad_id,
-            "spend": _decimal_str(r.spend),
-            "impressions": _int_or_none(r.impressions),
-            "clicks": _int_or_none(r.clicks),
-            "leads": _int_or_none(r.leads),
-            "registrations": _int_or_none(r.registrations),
-            "deposits": _int_or_none(r.deposits),
+            "spend": decimal_str(r.spend),
+            "impressions": int_or_none(r.impressions),
+            "clicks": int_or_none(r.clicks),
+            "leads": int_or_none(r.leads),
+            "registrations": int_or_none(r.registrations),
+            "deposits": int_or_none(r.deposits),
         }
         for r in rows
     ]
@@ -178,13 +166,13 @@ async def get_chart_data(
     return [
         {
             "ts": r.ts,
-            "spend": _decimal_str(r.spend),
-            "impressions": _int_or_none(r.impressions),
-            "clicks": _int_or_none(r.clicks),
-            "leads": _int_or_none(r.leads),
-            "registrations": _int_or_none(r.registrations),
-            "deposits": _int_or_none(r.deposits),
-            "active_ads": _int_or_none(r.active_ads),
+            "spend": decimal_str(r.spend),
+            "impressions": int_or_none(r.impressions),
+            "clicks": int_or_none(r.clicks),
+            "leads": int_or_none(r.leads),
+            "registrations": int_or_none(r.registrations),
+            "deposits": int_or_none(r.deposits),
+            "active_ads": int_or_none(r.active_ads),
         }
         for r in rows
     ]

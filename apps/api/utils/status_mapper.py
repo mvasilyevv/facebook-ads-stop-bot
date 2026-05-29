@@ -75,3 +75,34 @@ def from_frontend_task_status(frontend_status: str) -> str:
             f"Неизвестный frontend-статус задачи: {frontend_status!r}. "
             f"Допустимые значения: {list(_FRONTEND_TO_DB)}"
         ) from exc
+
+
+def expand_frontend_statuses_csv(csv: str | None) -> list[str] | None:
+    """Разворачивает CSV UPPERCASE-статусов фронта в список db-значений.
+
+    Используется фильтрами `?status=PENDING,FAILED` в disable/enable-tasks.
+    `PENDING` разворачивается в ``["draft", "pending"]`` — draft внутренний
+    статус, но фронту он виден как PENDING (см. _DB_TO_FRONTEND).
+
+    Args:
+        csv: CSV-строка UPPERCASE-статусов (например ``"PENDING,FAILED"``).
+            Пустая строка/None → None (фильтр не применяется).
+
+    Returns:
+        Список lowercase db-статусов либо None.
+
+    Raises:
+        ValueError: если встретился неизвестный frontend-статус.
+    """
+    if not csv:
+        return None
+
+    raw_statuses = [s.strip() for s in csv.split(",") if s.strip()]
+    db_statuses: list[str] = []
+    for s in raw_statuses:
+        if s.upper() == "PENDING":
+            # PENDING = draft + pending (draft — внутренний статус).
+            db_statuses.extend(["draft", "pending"])
+        else:
+            db_statuses.append(from_frontend_task_status(s.upper()))
+    return db_statuses

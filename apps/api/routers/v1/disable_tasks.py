@@ -18,7 +18,8 @@ from sqlalchemy import text
 
 from apps.api.deps import DepEngine
 from apps.api.routers.v1.schemas.tasks import DisableTaskCreateIn, TaskQueueRowOut
-from apps.api.utils.status_mapper import from_frontend_task_status, to_frontend_task_status
+from apps.api.utils.status_mapper import expand_frontend_statuses_csv
+from apps.api.utils.task_serializer import task_row_to_out
 from core.tasks.queue import create_task
 
 logger = logging.getLogger(__name__)
@@ -36,25 +37,6 @@ _TERMINAL_STATUSES = {"succeeded", "cancelled"}
 
 # Статусы которые нельзя retry (активные)
 _ACTIVE_STATUSES = {"running", "succeeded", "pending"}
-
-
-def _task_row_to_out(row) -> dict:
-    """Конвертирует строку БД в dict для TaskQueueRowOut."""
-    return {
-        "id": str(row.id),
-        "fb_ad_id": row.fb_ad_id,
-        "ad_name": row.ad_name,
-        "task_type": row.task_type,
-        "status": to_frontend_task_status(row.status),
-        "attempt_count": row.attempt_count,
-        "max_attempts": row.max_attempts,
-        "requested_by": row.requested_by,
-        "requested_by_chat_id": row.created_by_chat_id,
-        "created_at": row.created_at,
-        "updated_at": row.updated_at,
-        "next_attempt_at": row.next_retry_at,
-        "last_error_message": row.last_error,
-    }
 
 
 # ─────────────────────── GET /dashboard/disable-tasks ────────────────────────
@@ -82,19 +64,10 @@ async def list_disable_tasks(
     limit = min(limit, _MAX_LIMIT)
 
     # Разворачиваем CSV-статусы фронта → db-значения
-    db_statuses: list[str] | None = None
-    if status:
-        raw_statuses = [s.strip() for s in status.split(",") if s.strip()]
-        db_statuses = []
-        for s in raw_statuses:
-            if s.upper() == "PENDING":
-                # PENDING = draft + pending (draft — внутренний статус)
-                db_statuses.extend(["draft", "pending"])
-            else:
-                try:
-                    db_statuses.append(from_frontend_task_status(s.upper()))
-                except ValueError as exc:
-                    raise HTTPException(status_code=422, detail=str(exc)) from exc
+    try:
+        db_statuses = expand_frontend_statuses_csv(status)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     # Строим SQL динамически
     conditions = ["task_type = 'disable'"]
@@ -145,7 +118,7 @@ async def list_disable_tasks(
         total = (await conn.execute(text(count_sql), params)).scalar() or 0
 
     response.headers["X-Total-Count"] = str(total)
-    return [_task_row_to_out(r) for r in rows]
+    return [task_row_to_out(r) for r in rows]
 
 
 # ─────────────────────── POST /dashboard/disable-tasks ───────────────────────
@@ -225,7 +198,7 @@ async def create_disable_task(
     if row is None:
         raise HTTPException(status_code=500, detail="Задача создана, но не найдена при чтении")
 
-    result = _task_row_to_out(row)
+    result = task_row_to_out(row)
     result["ad_name"] = ad_name  # подставляем ad_name без лишнего JOIN
     return result
 
@@ -319,7 +292,7 @@ async def retry_disable_task(
     if updated is None:
         raise HTTPException(status_code=500, detail="Задача не найдена после обновления")
 
-    return _task_row_to_out(updated)
+    return task_row_to_out(updated)
 
 
 # ─────────────────── DELETE /dashboard/disable-tasks/{id} ────────────────────

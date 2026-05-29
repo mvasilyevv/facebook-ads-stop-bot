@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
 
 from fastapi import APIRouter, Query
 from sqlalchemy import text
@@ -34,22 +33,11 @@ from apps.api.routers.v1.schemas.dashboard_aggregates import (
     RuleViolationOut,
     TopCampaignOut,
 )
+from apps.api.utils.serialize import decimal_str, int_or_none
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["dashboard"])
-
-
-def _decimal_str(value: Any) -> str | None:
-    if value is None:
-        return None
-    return str(value)
-
-
-def _int_or_none(value: Any) -> int | None:
-    if value is None:
-        return None
-    return int(value)
 
 
 async def _query_top_campaigns(
@@ -105,10 +93,10 @@ async def _query_top_campaigns(
             campaign_id=str(r.campaign_id),
             fb_campaign_id=r.fb_campaign_id,
             campaign_name=r.campaign_name,
-            spend=_decimal_str(r.spend),
-            leads=_int_or_none(r.leads),
-            deposits=_int_or_none(r.deposits),
-            cost_per_lead=_decimal_str(r.cost_per_lead),
+            spend=decimal_str(r.spend),
+            leads=int_or_none(r.leads),
+            deposits=int_or_none(r.deposits),
+            cost_per_lead=decimal_str(r.cost_per_lead),
             active_ads_count=int(r.active_ads_count or 0),
         )
         for r in rows
@@ -188,10 +176,10 @@ async def _query_offer_leaderboard(
             offer_id=str(r.offer_id),
             offer_code=r.offer_code,
             offer_name=r.offer_name,
-            spend=_decimal_str(r.spend),
-            leads=_int_or_none(r.leads),
-            registrations=_int_or_none(r.registrations),
-            deposits=_int_or_none(r.deposits),
+            spend=decimal_str(r.spend),
+            leads=int_or_none(r.leads),
+            registrations=int_or_none(r.registrations),
+            deposits=int_or_none(r.deposits),
             alerts_count=int(r.alerts_count or 0),
         )
         for r in rows
