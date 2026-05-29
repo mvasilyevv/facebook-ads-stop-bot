@@ -28,27 +28,27 @@ interface NavGroup {
 const NAV: NavGroup[] = [
   {
     num: "01",
-    title: "Operate",
+    title: "Управление",
     items: [
-      { to: "/", label: "Dashboard", icon: Activity },
-      { to: "/ads", label: "Ads", icon: Layers },
-      { to: "/drafts", label: "Drafts", icon: FileEdit },
+      { to: "/", label: "Панель", icon: Activity },
+      { to: "/ads", label: "Объявления", icon: Layers },
+      { to: "/drafts", label: "Черновики", icon: FileEdit },
     ],
   },
   {
     num: "02",
-    title: "Catalog",
-    items: [{ to: "/offers", label: "Offers", icon: Tag }],
+    title: "Каталог",
+    items: [{ to: "/offers", label: "Офферы", icon: Tag }],
   },
   {
     num: "03",
-    title: "History",
-    items: [{ to: "/history", label: "History", icon: Clock }],
+    title: "История",
+    items: [{ to: "/history", label: "История", icon: Clock }],
   },
   {
     num: "04",
-    title: "System",
-    items: [{ to: "/settings", label: "Settings", icon: Settings }],
+    title: "Система",
+    items: [{ to: "/settings", label: "Настройки", icon: Settings }],
   },
 ];
 

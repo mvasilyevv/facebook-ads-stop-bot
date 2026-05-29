@@ -32,12 +32,12 @@ describe("Dashboard · KpiSection", () => {
   // Тест: при наличии stats показывает 4 KPI с правильными числами и лейблами.
   it("рендерит 4 KPI с числами из stats", () => {
     render(<KpiSection stats={STATS} isLoading={false} isError={false} />);
-    expect(screen.getByText("Ads monitored")).toBeInTheDocument();
+    expect(screen.getByText("Объявлений под наблюдением")).toBeInTheDocument();
     expect(screen.getByText("247")).toBeInTheDocument();
-    expect(screen.getByText("In warning")).toBeInTheDocument();
+    expect(screen.getByText("Предупреждений")).toBeInTheDocument();
     expect(screen.getByText("12")).toBeInTheDocument();
-    expect(screen.getByText("In stop")).toBeInTheDocument();
-    expect(screen.getByText("Active incidents")).toBeInTheDocument();
+    expect(screen.getByText("В стопе")).toBeInTheDocument();
+    expect(screen.getByText("Активные инциденты")).toBeInTheDocument();
     expect(screen.getByText("16")).toBeInTheDocument();
   });
 
@@ -60,7 +60,7 @@ describe("Dashboard · KpiSection", () => {
         onRetry={onRetry}
       />,
     );
-    const retry = screen.getByRole("button", { name: /retry/i });
+    const retry = screen.getByRole("button", { name: /повторить/i });
     expect(retry).toBeInTheDocument();
     retry.click();
     expect(onRetry).toHaveBeenCalledOnce();
@@ -109,7 +109,7 @@ describe("Dashboard · TaskQueueCard", () => {
     expect(screen.getByText("Disable queue")).toBeInTheDocument();
     expect(screen.getByText("UA17 | SP | MV | Krov | 24.03")).toBeInTheDocument();
     // RUNNING → pending=1; SUCCEEDED не считается pending.
-    expect(screen.getByText("1 pending")).toBeInTheDocument();
+    expect(screen.getByText("1 в очереди")).toBeInTheDocument();
     // Бэкенд SUCCEEDED отображается как "done" (status_mapper-совместимость).
     expect(screen.getByText("done")).toBeInTheDocument();
   });
@@ -133,7 +133,7 @@ describe("Dashboard · IncidentsCard", () => {
       />,
     );
     expect(screen.getByText("Всё чисто")).toBeInTheDocument();
-    expect(screen.getByText("0 open")).toBeInTheDocument();
+    expect(screen.getByText("0 открытых")).toBeInTheDocument();
   });
 
   // Тест: клик по строке инцидента зовёт onSelect с fb_ad_id.

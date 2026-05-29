@@ -10,23 +10,23 @@ import { Kbd } from "../ui/Kbd";
 import { Tooltip } from "../ui/Tooltip";
 
 const ROUTE_LABELS: Record<string, string> = {
-  "/": "Dashboard",
-  "/ads": "Ads",
-  "/offers": "Offers",
-  "/history": "History",
-  "/settings": "Settings",
-  "/drafts": "Drafts",
+  "/": "Панель",
+  "/ads": "Объявления",
+  "/offers": "Офферы",
+  "/history": "История",
+  "/settings": "Настройки",
+  "/drafts": "Черновики",
 };
 
 function getCrumbs(pathname: string): { section: string; current: string } {
   if (pathname === "/" || pathname === "") {
-    return { section: "Operate", current: "Dashboard" };
+    return { section: "Управление", current: "Панель" };
   }
-  if (pathname.startsWith("/ads")) return { section: "Operate", current: "Ads" };
-  if (pathname.startsWith("/drafts")) return { section: "Operate", current: "Drafts" };
-  if (pathname.startsWith("/offers")) return { section: "Catalog", current: "Offers" };
-  if (pathname.startsWith("/history")) return { section: "History", current: "History" };
-  if (pathname.startsWith("/settings")) return { section: "System", current: "Settings" };
+  if (pathname.startsWith("/ads")) return { section: "Управление", current: "Объявления" };
+  if (pathname.startsWith("/drafts")) return { section: "Управление", current: "Черновики" };
+  if (pathname.startsWith("/offers")) return { section: "Каталог", current: "Офферы" };
+  if (pathname.startsWith("/history")) return { section: "История", current: "История" };
+  if (pathname.startsWith("/settings")) return { section: "Система", current: "Настройки" };
   return { section: "App", current: ROUTE_LABELS[pathname] ?? "—" };
 }
 
@@ -77,11 +77,11 @@ export function TopBar() {
         disabled
       >
         <Search size={14} aria-hidden="true" />
-        <span>Search ads, offers, events</span>
+        <span>Поиск объявлений, офферов, событий</span>
         <Kbd className="ml-1">⌘K</Kbd>
       </button>
 
-      <Tooltip content={`Density: ${density}`}>
+      <Tooltip content={`Плотность: ${density}`}>
         <button
           type="button"
           aria-label="Переключить плотность таблиц"

@@ -149,7 +149,7 @@ export function TelegramTab() {
               <div className="space-y-3">
                 <div className="flex items-center gap-3">
                   <Badge variant={settings?.is_authorized ? "success" : "neutral"}>
-                    {settings?.is_authorized ? "authorized" : "not authorized"}
+                    {settings?.is_authorized ? "авторизован" : "не авторизован"}
                   </Badge>
                   <Badge variant="neutral" withDot={false}>
                     poller: {settings?.poller_status ?? "—"}
@@ -254,7 +254,7 @@ export function TelegramTab() {
                   aria-label="Скопировать invite code"
                   onClick={() => copyToClipboard(inviteCode, "Invite code скопирован")}
                 >
-                  Copy
+                  Скопировать
                 </Button>
               </div>
             ) : null}
@@ -306,7 +306,7 @@ export function TelegramTab() {
                 leftIcon={<Link2 size={13} aria-hidden="true" />}
                 onClick={() => copyToClipboard(settings.auth_deep_link!, "Deep-link скопирован")}
               >
-                Copy deep-link
+                Скопировать deep-link
               </Button>
             </section>
           ) : null}
@@ -348,7 +348,7 @@ function RecipientRow({
             {recipient.role}
           </Badge>
           {isRevoked && (
-            <Badge variant="disabled" size="sm">revoked</Badge>
+            <Badge variant="disabled" size="sm">отозван</Badge>
           )}
         </div>
         <div className="text-[11px] text-bg-9 mt-0.5">

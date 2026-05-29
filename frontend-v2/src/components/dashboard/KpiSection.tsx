@@ -53,27 +53,27 @@ export function KpiSection({ stats, isLoading, isError, error, onRetry }: KpiSec
       <KPIStrip>
         <KPICard
           variant="muted"
-          label="Ads monitored"
+          label="Объявлений под наблюдением"
           value={formatInt(stats.total_ads_monitored)}
-          hint="today scan"
+          hint="скан сегодня"
         />
         <KPICard
           variant="warning"
-          label="In warning"
+          label="Предупреждений"
           value={formatInt(stats.ads_in_warning)}
-          hint="now"
+          hint="сейчас"
         />
         <KPICard
           variant="danger"
-          label="In stop"
+          label="В стопе"
           value={formatInt(stats.ads_in_stop)}
-          hint="now"
+          hint="сейчас"
         />
         <KPICard
           variant={incidents > 0 ? "danger" : "info"}
-          label="Active incidents"
+          label="Активные инциденты"
           value={formatInt(incidents)}
-          hint="open now"
+          hint="открытых"
         />
       </KPIStrip>
     </div>

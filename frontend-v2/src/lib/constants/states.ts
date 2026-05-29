@@ -14,19 +14,19 @@ export const ALERT_STATES = [
 export type AlertState = (typeof ALERT_STATES)[number];
 
 export const ALERT_STATE_LABELS: Record<AlertState, string> = {
-  normal: "Normal",
-  warning_sent: "Warning",
-  stop_sent: "Stop",
-  claimed: "Claimed",
-  disabled: "Disabled",
+  normal: "Норма",
+  warning_sent: "Предупреждение",
+  stop_sent: "Стоп",
+  claimed: "В работе",
+  disabled: "Отключено",
 };
 
 export const ALERT_STAGES = ["warning", "stop"] as const;
 export type AlertStage = (typeof ALERT_STAGES)[number];
 
 export const ALERT_STAGE_LABELS: Record<AlertStage, string> = {
-  warning: "Warning",
-  stop: "Stop",
+  warning: "Предупреждение",
+  stop: "Стоп",
 };
 
 /**
@@ -46,12 +46,12 @@ export const TASK_STATUSES = [
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 
 export const TASK_STATUS_LABELS: Record<TaskStatus, string> = {
-  PENDING: "Pending",
-  RUNNING: "Running",
-  DONE: "Done",
-  FAILED: "Failed",
-  RETRYING: "Retrying",
-  CANCELLED: "Cancelled",
+  PENDING: "В очереди",
+  RUNNING: "Выполняется",
+  DONE: "Выполнено",
+  FAILED: "Ошибка",
+  RETRYING: "Повтор",
+  CANCELLED: "Отменено",
 };
 
 export const TASK_TYPES = [

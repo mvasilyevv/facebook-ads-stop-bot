@@ -155,7 +155,7 @@ export function HealthTab() {
               onClick={() => setConfirmTarget("observer")}
               loading={restartObserver.isPending}
             >
-              Restart Observer
+              Перезапустить Observer
             </Button>
             <Button
               variant="secondary"
@@ -165,7 +165,7 @@ export function HealthTab() {
               onClick={() => setConfirmTarget("disable_worker")}
               loading={restartDisable.isPending}
             >
-              Restart Disable Worker
+              Перезапустить Disable Worker
             </Button>
           </section>
 
@@ -176,27 +176,27 @@ export function HealthTab() {
             <ul className="text-[12px] text-bg-9 space-y-2">
               <li>
                 <Badge variant="success" size="sm">ONLINE</Badge>{" "}
-                — heartbeat получен &lt;60 сек назад.
+                — посл. сигнал &lt;60 сек назад.
               </li>
               <li>
                 <Badge variant="stop" size="sm">OFFLINE</Badge>{" "}
-                — heartbeat не получен &gt;60 сек.
+                — посл. сигнал &gt;60 сек назад.
               </li>
               <li>
                 <span className="font-display uppercase text-[10px] tracking-wider text-success">
-                  HEALTHY
+                  ИСПРАВНО
                 </span>{" "}
                 — все воркеры ONLINE.
               </li>
               <li>
                 <span className="font-display uppercase text-[10px] tracking-wider text-warning">
-                  DEGRADED
+                  ДЕГРАДАЦИЯ
                 </span>{" "}
                 — часть воркеров OFFLINE.
               </li>
               <li>
                 <span className="font-display uppercase text-[10px] tracking-wider text-danger">
-                  CRITICAL
+                  КРИТИЧНО
                 </span>{" "}
                 — большинство воркеров OFFLINE.
               </li>

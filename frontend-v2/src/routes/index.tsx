@@ -46,9 +46,9 @@ export const Route = createFileRoute("/")({
 });
 
 const OBSERVER_LABEL: Record<string, string> = {
-  running: "Observer online",
-  paused: "Observer paused",
-  unknown: "Observer unknown",
+  running: "Observer онлайн",
+  paused: "Observer на паузе",
+  unknown: "Observer недоступен",
 };
 
 function DashboardPage() {
@@ -74,7 +74,7 @@ function DashboardPage() {
 
   const handleScanNow = () => {
     scanNow.mutate(undefined, {
-      onSuccess: () => toast.success("Scan triggered", "Observer запустит цикл сканирования."),
+      onSuccess: () => toast.success("Сканирование запущено", "Observer запустит цикл сканирования."),
       onError: (err) =>
         toast.error("Не удалось запустить scan", err instanceof Error ? err.message : String(err)),
     });
@@ -84,8 +84,8 @@ function DashboardPage() {
     <>
       <PageHeader
         eyebrowNum="01"
-        eyebrow="OVERVIEW · OBSERVE · OPERATE"
-        title="Dashboard."
+        eyebrow="ОБЗОР · НАБЛЮДЕНИЕ · УПРАВЛЕНИЕ"
+        title="Панель."
         displayNumber="01"
         subtitle={<HeaderSubtitle stats={stats} socketStatus={socket.status} pollingFallback={socket.pollingFallback} />}
         action={
@@ -95,7 +95,7 @@ function DashboardPage() {
             loading={scanNow.isPending}
             onClick={handleScanNow}
           >
-            Scan now
+            Сканировать
           </Button>
         }
       />
@@ -133,8 +133,8 @@ function DashboardPage() {
       {/* 4. Recent events */}
       <SectionTitle
         eyebrowNum="04"
-        eyebrow="Stream"
-        title="Recent events"
+        eyebrow="Поток"
+        title="Последние события"
         action={
           <Button
             variant="ghost"
@@ -142,7 +142,7 @@ function DashboardPage() {
             rightIcon={<ChevronRight size={14} aria-hidden="true" />}
             onClick={() => navigate({ to: "/history" })}
           >
-            See all
+            Все
           </Button>
         }
       />
@@ -158,10 +158,10 @@ function DashboardPage() {
       <hr className="border-0 h-px bg-bg-5 my-10" />
 
       {/* 5. Task queues */}
-      <SectionTitle eyebrowNum="05" eyebrow="Outbox" title="Task queues" />
+      <SectionTitle eyebrowNum="05" eyebrow="Outbox" title="Очереди задач" />
       <div className="grid grid-cols-2 gap-6">
         <TaskQueueCard
-          title="Disable queue"
+          title="Очередь отключений"
           tasks={batch?.recent_disable_tasks ?? []}
           isLoading={batchQuery.isLoading}
           isError={batchQuery.isError}
@@ -169,7 +169,7 @@ function DashboardPage() {
           onRetry={() => batchQuery.refetch()}
         />
         <TaskQueueCard
-          title="Enable queue"
+          title="Очередь включений"
           tasks={enableQuery.data ?? []}
           isLoading={enableQuery.isLoading}
           isError={enableQuery.isError}
@@ -204,7 +204,7 @@ function HeaderSubtitle({
         {OBSERVER_LABEL[observerStatus] ?? OBSERVER_LABEL.unknown}
       </span>
       <HeaderSep />
-      <span>Last scan {stats ? formatRelativeTime(stats.last_scan_at) : "—"}</span>
+      <span>Посл. скан {stats ? formatRelativeTime(stats.last_scan_at) : "—"}</span>
       <HeaderSep />
       <span>WS: {socketStatus}</span>
       {pollingFallback ? (

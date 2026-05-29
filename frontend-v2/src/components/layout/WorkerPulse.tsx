@@ -31,7 +31,7 @@ export function WorkerPulse() {
   const total = data?.workers.length ?? 0;
   const online = data?.workers.filter((w) => w.status === "ONLINE").length ?? 0;
 
-  const label = data ? `${online}/${total} workers` : "workers";
+  const label = data ? `${online}/${total} воркеров` : "воркеры";
   const tooltipContent = data ? (
     <div className="space-y-1">
       {data.workers.map((w) => (

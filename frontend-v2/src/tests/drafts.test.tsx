@@ -148,8 +148,8 @@ describe("DraftCard", () => {
     );
     expect(screen.getByText("meta_api / pause_ad")).toBeInTheDocument();
     expect(screen.getByText("Pause ad CR2 | DRC")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /approve/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /cancel/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /подтвердить/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /отмена/i })).toBeInTheDocument();
   });
 
   // ACL-blocked: кнопка Approve задизейблена, title содержит подсказку
@@ -166,7 +166,7 @@ describe("DraftCard", () => {
         onCancel={vi.fn()}
       />,
     );
-    const approveBtn = screen.getByRole("button", { name: /approve/i });
+    const approveBtn = screen.getByRole("button", { name: /подтвердить/i });
     expect(approveBtn).toBeDisabled();
     expect(approveBtn.title).toContain("Only the owner can approve");
   });
@@ -184,7 +184,7 @@ describe("DraftCard", () => {
         onCancel={vi.fn()}
       />,
     );
-    fireEvent.click(screen.getByRole("button", { name: /approve/i }));
+    fireEvent.click(screen.getByRole("button", { name: /подтвердить/i }));
     expect(onApprove).toHaveBeenCalledOnce();
   });
 
@@ -272,7 +272,7 @@ describe("DraftsPage (presentation)", () => {
 
     render(<TestDraftsList drafts={[draft]} currentChatId={99999} />);
     // Approve кнопка должна быть задизейблена
-    const approveBtn = screen.getByRole("button", { name: /approve/i });
+    const approveBtn = screen.getByRole("button", { name: /подтвердить/i });
     expect(approveBtn).toBeDisabled();
   });
 
@@ -281,7 +281,7 @@ describe("DraftsPage (presentation)", () => {
     const draft = makeDraft({ requested_by_chat_id: 12345 });
 
     render(<TestDraftsList drafts={[draft]} currentChatId={12345} />);
-    const approveBtn = screen.getByRole("button", { name: /approve/i });
+    const approveBtn = screen.getByRole("button", { name: /подтвердить/i });
     expect(approveBtn).not.toBeDisabled();
   });
 

@@ -104,10 +104,10 @@ export function VisionTab() {
               <div className="space-y-3">
                 <div className="flex items-center gap-2">
                   <Badge variant={settings?.is_connected ? "success" : "neutral"}>
-                    {settings?.is_connected ? "connected" : "disconnected"}
+                    {settings?.is_connected ? "подключён" : "не подключён"}
                   </Badge>
                   <Badge variant={settings?.vision_token ? "neutral" : "warning"} size="sm">
-                    {settings?.vision_token ? "has token" : "no token"}
+                    {settings?.vision_token ? "токен есть" : "токен не задан"}
                   </Badge>
                 </div>
                 {settings?.profile_id ? (
@@ -208,7 +208,7 @@ export function VisionTab() {
               loading={reconnect.isPending}
               onClick={() => setReconnectOpen(true)}
             >
-              Reconnect Vision
+              Переподключить Vision
             </Button>
           </section>
 

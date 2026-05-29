@@ -39,14 +39,14 @@ export function IncidentsCard({
     <Card
       action={
         <span className="text-[11px] font-display text-bg-9 tracking-wider tabular-nums">
-          {isLoading ? "—" : `${incidents.length} open`}
+          {isLoading ? "—" : `${incidents.length} открытых`}
         </span>
       }
     >
       <div className="mb-5">
         <Eyebrow num="03">Live</Eyebrow>
         <h3 className="mt-1.5 font-display text-[13px] font-medium tracking-wider text-bg-11 m-0">
-          Active incidents
+          Активные инциденты
         </h3>
       </div>
 

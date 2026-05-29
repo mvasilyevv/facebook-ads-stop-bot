@@ -84,7 +84,7 @@ function AdDrawerPage() {
         <div className="flex items-start justify-between gap-4 px-8 py-6 border-b border-bg-5 shrink-0">
           <div className="flex-1 min-w-0">
             <div className="font-display text-[10px] tracking-[0.14em] uppercase text-bg-8 mb-2">
-              <span className="text-bg-7 mr-2">06</span>AD DETAIL · TIMELINE
+              <span className="text-bg-7 mr-2">06</span>ДЕТАЛИ ОБЪЯВЛЕНИЯ · ИСТОРИЯ
             </div>
             <h2 className="font-display text-[20px] font-medium tracking-tight text-bg-11 m-0 mb-1.5 leading-snug truncate">
               {cachedAd?.ad_name ?? fbAdId}
@@ -110,7 +110,7 @@ function AdDrawerPage() {
                 )}
                 {cachedAd.snoozed_until && (
                   <span className="inline-flex items-center px-2 py-0.5 bg-bg-3 border border-bg-6 text-bg-9 font-display text-[10.5px] tracking-wide">
-                    snoozed until {formatDateTime(cachedAd.snoozed_until)}
+                    отложено до {formatDateTime(cachedAd.snoozed_until)}
                   </span>
                 )}
               </div>
@@ -136,7 +136,7 @@ function AdDrawerPage() {
               Snapshot
               {cachedAd?.last_seen_at ? (
                 <span className="text-bg-7 ml-2 normal-case tracking-normal">
-                  · last scan {formatRelativeTime(cachedAd.last_seen_at)}
+                  · посл. скан {formatRelativeTime(cachedAd.last_seen_at)}
                 </span>
               ) : null}
             </h3>
@@ -184,7 +184,7 @@ function AdDrawerPage() {
           {/* Секция 2: Timeline алертов */}
           <section className="mb-8">
             <h3 className="font-display text-[10px] tracking-[0.14em] uppercase text-bg-8 mb-3">
-              <span className="text-bg-7 mr-2">02</span>Alerts · last 24h
+              <span className="text-bg-7 mr-2">02</span>Алерты · последние 24ч
             </h3>
 
             {timelineQuery.isLoading ? (
@@ -212,7 +212,7 @@ function AdDrawerPage() {
           {/* Секция 3: Задачи */}
           <section>
             <h3 className="font-display text-[10px] tracking-[0.14em] uppercase text-bg-8 mb-3">
-              <span className="text-bg-7 mr-2">03</span>Tasks
+              <span className="text-bg-7 mr-2">03</span>Задачи
             </h3>
 
             {timelineQuery.isLoading ? (
@@ -248,11 +248,11 @@ function AdDrawerPage() {
               );
             }}
           >
-            View in Ads Manager
+            Открыть в Ads Manager
           </Button>
           <div className="flex gap-2">
             <Button variant="secondary" size="sm">
-              Snooze 1h
+              Отложить на 1ч
             </Button>
             <Button
               variant="danger"
@@ -261,7 +261,7 @@ function AdDrawerPage() {
               onClick={handleDisable}
             >
               <X size={14} aria-hidden="true" />
-              Disable manually
+              Отключить вручную
             </Button>
           </div>
         </div>

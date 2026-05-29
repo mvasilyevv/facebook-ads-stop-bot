@@ -37,8 +37,8 @@ import type { ChartBucket } from "@/lib/types/api";
 type RangeKey = "today" | "7d";
 
 const RANGES: Record<RangeKey, { label: string; hours: number; bucket: "hour" | "day" }> = {
-  today: { label: "Today", hours: 24, bucket: "hour" },
-  "7d": { label: "7 days", hours: 168, bucket: "day" },
+  today: { label: "Сегодня", hours: 24, bucket: "hour" },
+  "7d": { label: "7 дней", hours: 168, bucket: "day" },
 };
 
 /** Точка для Recharts: spend как number (бэкенд отдаёт Decimal-строкой). */
@@ -91,9 +91,9 @@ export function SpendChartCard({
     >
       <div className="flex items-start justify-between mb-5">
         <div>
-          <Eyebrow num="02">Spend × {cfg.bucket === "hour" ? "Hour" : "Day"}</Eyebrow>
+          <Eyebrow num="02">Spend × {cfg.bucket === "hour" ? "Час" : "День"}</Eyebrow>
           <h3 className="mt-1.5 font-display text-[13px] font-medium tracking-wider text-bg-11 m-0">
-            Spend rate · {range === "today" ? "last 24h" : "last 7d"}
+            Spend rate · {range === "today" ? "последние 24ч" : "последние 7д"}
           </h3>
         </div>
       </div>
@@ -211,7 +211,7 @@ function ChartBody({
 function RangeTabs({ value, onChange }: { value: RangeKey; onChange: (r: RangeKey) => void }) {
   const keys = Object.keys(RANGES) as RangeKey[];
   return (
-    <div className="flex border border-bg-5 bg-bg-2" role="tablist" aria-label="Диапазон графика">
+    <div className="flex border border-bg-5 bg-bg-2" role="tablist" aria-label="Диапазон spend-графика">
       {keys.map((key) => (
         <button
           key={key}

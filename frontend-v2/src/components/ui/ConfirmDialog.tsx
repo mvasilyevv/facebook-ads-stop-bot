@@ -26,8 +26,8 @@ export function ConfirmDialog({
   title,
   description,
   confirmWord,
-  confirmLabel = "Confirm",
-  cancelLabel = "Cancel",
+  confirmLabel = "Подтвердить",
+  cancelLabel = "Отмена",
   onConfirm,
 }: ConfirmDialogProps) {
   const [typed, setTyped] = useState("");
@@ -60,7 +60,7 @@ export function ConfirmDialog({
       {confirmWord ? (
         <div className="mb-6">
           <Input
-            label={`Type ${confirmWord} to confirm`}
+            label={`Введите ${confirmWord} для подтверждения`}
             value={typed}
             onChange={(e) => setTyped(e.target.value)}
             placeholder={confirmWord}

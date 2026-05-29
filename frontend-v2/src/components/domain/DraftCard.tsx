@@ -66,7 +66,7 @@ export function DraftCard({
         </Eyebrow>
         {requestedBy ? (
           <div className="mt-2 text-[12px] text-bg-9">
-            Requested by{" "}
+            Запросил{" "}
             <span className="text-bg-11 font-display">@{requestedBy}</span>
           </div>
         ) : null}
@@ -110,7 +110,7 @@ export function DraftCard({
         {reason ? (
           <div className="mt-5 pt-4 border-t border-bg-5">
             <div className="text-[10px] text-bg-9 uppercase tracking-wider font-display mb-1.5">
-              Reasoning
+              Обоснование
             </div>
             <p className="text-[13px] text-bg-10 leading-relaxed m-0">{reason}</p>
           </div>
@@ -124,16 +124,16 @@ export function DraftCard({
         <div className="text-[12px] text-bg-9 font-display tracking-wider">
           {expiresAt ? (
             <>
-              Expires{" "}
+              Истекает{" "}
               <span className="text-bg-10">{formatRelativeTime(expiresAt)}</span>
             </>
           ) : (
-            "No expiration"
+            "Без срока действия"
           )}
         </div>
         <div className="flex items-center gap-2">
           <Button variant="ghost" size="sm" onClick={onCancel} disabled={busy}>
-            Cancel
+            Отмена
           </Button>
           <Button
             variant="primary"
@@ -143,7 +143,7 @@ export function DraftCard({
             loading={busy}
             title={!canApprove ? approveDisabledReason : undefined}
           >
-            Approve &amp; execute
+            Подтвердить &amp; выполнить
           </Button>
         </div>
       </footer>

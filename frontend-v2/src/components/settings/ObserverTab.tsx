@@ -35,7 +35,7 @@ import {
 const SCAN_COLUMNS: ColumnDef<ScanRun, unknown>[] = [
   {
     id: "started_at",
-    header: "Started",
+    header: "Начало",
     accessorKey: "started_at",
     cell: ({ getValue }) => (
       <span className="font-numeric text-[12px]">{formatDateTime(getValue() as string)}</span>
@@ -43,7 +43,7 @@ const SCAN_COLUMNS: ColumnDef<ScanRun, unknown>[] = [
   },
   {
     id: "outcome",
-    header: "Outcome",
+    header: "Результат",
     accessorKey: "outcome",
     cell: ({ getValue }) => {
       const v = getValue() as string;
@@ -53,7 +53,7 @@ const SCAN_COLUMNS: ColumnDef<ScanRun, unknown>[] = [
   },
   {
     id: "ads_seen",
-    header: "Ads",
+    header: "Объявлений",
     accessorKey: "ads_seen",
     cell: ({ getValue }) => (
       <span className="font-numeric text-[13px]">{getValue() as number}</span>
@@ -61,7 +61,7 @@ const SCAN_COLUMNS: ColumnDef<ScanRun, unknown>[] = [
   },
   {
     id: "alerts_created",
-    header: "Alerts",
+    header: "Алертов",
     accessorKey: "alerts_created",
     cell: ({ getValue }) => {
       const n = getValue() as number;
@@ -72,7 +72,7 @@ const SCAN_COLUMNS: ColumnDef<ScanRun, unknown>[] = [
   },
   {
     id: "errors_count",
-    header: "Errors",
+    header: "Ошибок",
     accessorKey: "errors_count",
     cell: ({ getValue }) => {
       const n = getValue() as number;
@@ -83,7 +83,7 @@ const SCAN_COLUMNS: ColumnDef<ScanRun, unknown>[] = [
   },
   {
     id: "duration_ms",
-    header: "Duration",
+    header: "Длительность",
     accessorKey: "duration_ms",
     cell: ({ getValue }) => {
       const ms = getValue() as number | null;
@@ -99,10 +99,10 @@ const SCAN_COLUMNS: ColumnDef<ScanRun, unknown>[] = [
 type ScanFilter = "all" | "errors" | "slow" | "with_alerts";
 
 const FILTER_OPTIONS: { value: ScanFilter; label: string }[] = [
-  { value: "all", label: "All" },
-  { value: "errors", label: "Errors only" },
-  { value: "slow", label: "Slow only" },
-  { value: "with_alerts", label: "With alerts" },
+  { value: "all", label: "Все" },
+  { value: "errors", label: "Только ошибки" },
+  { value: "slow", label: "Только медленные" },
+  { value: "with_alerts", label: "С алертами" },
 ];
 
 export function ObserverTab() {
@@ -174,9 +174,9 @@ export function ObserverTab() {
   /** Запустить скан немедленно. */
   function handleScanNow() {
     scanNow.mutate(undefined, {
-      onSuccess: () => toast.success("Scan triggered", "Observer запустит цикл сканирования."),
+      onSuccess: () => toast.success("Сканирование запущено", "Observer запустит цикл сканирования."),
       onError: (err) =>
-        toast.error("Не удалось запустить scan", err instanceof Error ? err.message : String(err)),
+        toast.error("Не удалось запустить скан", err instanceof Error ? err.message : String(err)),
     });
   }
 
@@ -417,7 +417,7 @@ export function ObserverTab() {
             loading={scanNow.isPending}
             onClick={handleScanNow}
           >
-            Scan now
+            Сканировать
           </Button>
           <Button
             variant="secondary"
@@ -426,7 +426,7 @@ export function ObserverTab() {
             leftIcon={<RefreshCcw size={13} aria-hidden="true" />}
             disabled
           >
-            Start new cabinet day
+            Новый день кабинета
           </Button>
         </section>
       </div>

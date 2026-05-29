@@ -187,12 +187,12 @@ describe("Settings · HealthTab", () => {
   it("кнопка Restart Observer открывает ConfirmDialog", async () => {
     withQuery(<HealthTab />);
 
-    const restartBtn = screen.getByRole("button", { name: /restart observer/i });
+    const restartBtn = screen.getByRole("button", { name: /перезапустить observer/i });
     fireEvent.click(restartBtn);
 
     await waitFor(() => {
-      // ConfirmDialog показывает label "Type RESTART to confirm".
-      expect(screen.getByText(/Type RESTART to confirm/i)).toBeInTheDocument();
+      // ConfirmDialog показывает label "Введите RESTART для подтверждения".
+      expect(screen.getByText(/Введите RESTART для подтверждения/i)).toBeInTheDocument();
     });
   });
 });

@@ -209,24 +209,24 @@ function AdsPage() {
       {/* 1. PageHeader */}
       <PageHeader
         eyebrowNum="02"
-        eyebrow="OPERATE · INSPECT · INTERVENE"
-        title="Ads."
+        eyebrow="ОПЕРИРОВАТЬ · ПРОВЕРЯТЬ · ВМЕШИВАТЬСЯ"
+        title="Объявления."
         displayNumber="02"
         subtitle={
           <>
-            <span className="text-bg-11 font-medium">{stats.total}</span> active
+            <span className="text-bg-11 font-medium">{stats.total}</span> активных
             <HeaderSep />
             <span className={cn("font-medium", stats.warning > 0 ? "text-warning" : "text-bg-11")}>
               {stats.warning}
             </span>{" "}
-            warning
+            предупреждений
             <HeaderSep />
             <span className={cn("font-medium", stats.stop > 0 ? "text-danger" : "text-bg-11")}>
               {stats.stop}
             </span>{" "}
-            stop
+            стоп
             <HeaderSep />
-            <span>showing {stats.showing} of {stats.total}</span>
+            <span>показано {stats.showing} из {stats.total}</span>
           </>
         }
         action={
@@ -236,14 +236,14 @@ function AdsPage() {
               size="md"
               leftIcon={<Download size={14} aria-hidden="true" />}
             >
-              Export
+              Экспорт
             </Button>
             <Button
               variant="secondary"
               size="md"
               leftIcon={<SlidersHorizontal size={14} aria-hidden="true" />}
             >
-              Columns
+              Колонки
             </Button>
           </div>
         }
@@ -256,7 +256,7 @@ function AdsPage() {
           <Search size={14} className="text-bg-9 shrink-0" aria-hidden="true" />
           <input
             type="text"
-            placeholder="Search ad name or id…"
+            placeholder="Поиск по имени или id…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="flex-1 bg-transparent border-0 outline-0 text-bg-11 text-[13px] font-body placeholder:text-bg-9"
@@ -336,7 +336,7 @@ function AdsPage() {
               : "bg-bg-2 border-bg-6 text-bg-9 hover:border-bg-7 hover:text-bg-11",
           )}
         >
-          +inactive
+          +неактивные
         </button>
       </div>
 
@@ -344,7 +344,7 @@ function AdsPage() {
       {hasActiveFilters && (
         <div className="flex items-center gap-2 mb-4 flex-wrap">
           <span className="font-display text-[10px] tracking-[0.12em] uppercase text-bg-8 mr-1">
-            Active
+            Активно
           </span>
           {[...selectedStates].map((state) => (
             <FilterChip
@@ -367,7 +367,7 @@ function AdsPage() {
             onClick={clearAllFilters}
             className="text-[11px] font-display text-bg-9 hover:text-bg-11 underline decoration-bg-7 underline-offset-3 transition-colors"
           >
-            clear all
+            Сбросить всё
           </button>
         </div>
       )}
@@ -394,15 +394,15 @@ function AdsPage() {
                     aria-label="Выбрать все"
                   />
                 </th>
-                <Th>Ad</Th>
+                <Th>Объявление</Th>
                 <Th>Offer</Th>
-                <Th>State</Th>
+                <Th>Статус</Th>
                 <Th align="right">Spend</Th>
                 <Th align="right">CPL</Th>
                 <Th align="right">CTR</Th>
-                <Th align="right">Freq</Th>
-                <Th align="right">Leads</Th>
-                <Th align="right">Last scan</Th>
+                <Th align="right">Частота</Th>
+                <Th align="right">Лиды</Th>
+                <Th align="right">Посл. скан</Th>
                 <th className="bg-bg-1 border-b border-bg-5 w-10" />
               </tr>
             </thead>
@@ -449,7 +449,7 @@ function AdsPage() {
       {!adsQuery.isLoading && !adsQuery.isError && (adsQuery.data?.length ?? 0) >= PAGE_SIZE && (
         <div className="flex items-center justify-between font-display text-[11.5px] text-bg-9 tracking-wide pb-4">
           <span>
-            Showing{" "}
+            Показано{" "}
             <span className="text-bg-11">{offset + 1}–{offset + filteredAds.length}</span>
           </span>
           <div className="flex gap-2">
@@ -462,7 +462,7 @@ function AdsPage() {
                 setSelectedIds(new Set());
               }}
             >
-              ← Prev
+              ← Назад
             </Button>
             <Button
               variant="secondary"
@@ -473,7 +473,7 @@ function AdsPage() {
                 setSelectedIds(new Set());
               }}
             >
-              Next →
+              Вперёд →
             </Button>
           </div>
         </div>
@@ -764,7 +764,7 @@ function BulkBar({
       )}
     >
       <span className="font-display text-[13px] text-bg-11">
-        <span className="text-accent font-semibold">{count}</span> selected
+        <span className="text-accent font-semibold">{count}</span> выбрано
       </span>
       <span aria-hidden="true" className="w-px h-5 bg-bg-6" />
       <Button
@@ -773,10 +773,10 @@ function BulkBar({
         leftIcon={<XCircle size={14} aria-hidden="true" />}
         onClick={onDisable}
       >
-        Disable
+        Отключить
       </Button>
       <Button variant="ghost" size="sm" onClick={onClear}>
-        Clear
+        Сбросить
       </Button>
     </div>
   );

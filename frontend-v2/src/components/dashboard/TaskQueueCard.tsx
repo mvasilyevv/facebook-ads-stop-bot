@@ -42,8 +42,8 @@ export function TaskQueueCard({
   const metaText = isLoading
     ? "—"
     : retrying > 0
-      ? `${pending} pending · ${retrying} retrying`
-      : `${pending} pending`;
+      ? `${pending} в очереди · ${retrying} повторяется`
+      : `${pending} в очереди`;
 
   return (
     <Card
