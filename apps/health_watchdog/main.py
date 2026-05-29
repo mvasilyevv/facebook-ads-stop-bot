@@ -19,11 +19,12 @@ import json
 import logging
 import os
 import signal
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 
 import redis.asyncio as redis_asyncio
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
+from core.pubsub import CHANNEL_HEALTH_UPDATED
 from core.telegram.client import TelegramAPIError, TelegramBotClient
 from core.telegram.service import load_telegram_config
 
@@ -253,6 +254,43 @@ async def check_observer_runtime(
     )
 
 
+async def _publish_health_updated(
+    redis_client: redis_asyncio.Redis,
+    *,
+    expected_workers: list[str],
+) -> None:
+    """Best-effort publish сводки здоровья воркеров в fb_agent:health:updated."""
+    offline: list[str] = []
+    for name in expected_workers:
+        hb_key = f"worker:heartbeat:{name}"
+        try:
+            val = await redis_client.get(hb_key)
+            if val is None:
+                offline.append(name)
+        except Exception:
+            offline.append(name)
+
+    if len(offline) == 0:
+        overall = "HEALTHY"
+    elif len(offline) < len(expected_workers):
+        overall = "DEGRADED"
+    else:
+        overall = "CRITICAL"
+
+    try:
+        payload = json.dumps(
+            {
+                "overall": overall,
+                "offline": offline,
+                "timestamp": datetime.now(UTC).isoformat(),
+            },
+            ensure_ascii=False,
+        )
+        await redis_client.publish(CHANNEL_HEALTH_UPDATED, payload)
+    except Exception:
+        logger.warning("health_watchdog: не удалось publish в %s", CHANNEL_HEALTH_UPDATED)
+
+
 async def run_one_check(
     redis_client: redis_asyncio.Redis,
     *,
@@ -261,7 +299,7 @@ async def run_one_check(
     chat_id: str | None,
     thread_id: int | None,
 ) -> None:
-    """Один прогон: heartbeat'ы + observer:runtime."""
+    """Один прогон: heartbeat'ы + observer:runtime + publish health:updated."""
     await check_worker_heartbeats(
         redis_client,
         expected_workers=expected_workers,
@@ -275,6 +313,8 @@ async def run_one_check(
         chat_id=chat_id,
         thread_id=thread_id,
     )
+    # Публикуем сводку health в Redis-канал (best-effort)
+    await _publish_health_updated(redis_client, expected_workers=expected_workers)
 
 
 # ====================== loops ======================

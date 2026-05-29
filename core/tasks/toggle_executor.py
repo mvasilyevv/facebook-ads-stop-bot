@@ -3,13 +3,18 @@
 
 Оба воркера полят task_queue по своему task_type и делают один и тот же gRPC-вызов
 toggle_ad с разным target_state. Отличия минимальные — выносим в одну функцию.
+
+После успешного завершения задачи (mark_succeeded) публикует событие
+в Redis-канал fb_agent:task:changed (best-effort, опциональный redis_client).
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 from typing import Any, Protocol
 
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -18,6 +23,7 @@ from core.observer.writers import (
     reset_alert_state_after_disable_succeeded,
     reset_alert_state_after_enable_succeeded,
 )
+from core.pubsub import CHANNEL_TASK_CHANGED
 from core.tasks import (
     Task,
     claim_next_task,
@@ -41,11 +47,38 @@ class ToggleGate(Protocol):
     async def toggle_ad(self, fb_ad_id: str, target_state: bool = True) -> dict[str, Any]: ...
 
 
+async def _publish_task_changed(
+    redis_client: Any,
+    *,
+    task_id: int,
+    task_type: str,
+    status: str,
+) -> None:
+    """Best-effort publish изменения статуса задачи в fb_agent:task:changed."""
+    if redis_client is None:
+        return
+    try:
+        payload = json.dumps(
+            {
+                "task_id": task_id,
+                "task_type": task_type,
+                "status": status,
+                "timestamp": datetime.now(UTC).isoformat(),
+            },
+            ensure_ascii=False,
+        )
+        await redis_client.publish(CHANNEL_TASK_CHANGED, payload)
+    except Exception:
+        # Publish не критичен — не роняем основной flow
+        logger.warning("toggle_executor: не удалось publish task:changed task_id=%s", task_id)
+
+
 async def execute_one_toggle_task(
     engine: AsyncEngine,
     *,
     task_type: str,  # 'disable' | 'enable'
     gate: ToggleGate,
+    redis_client: Any = None,
 ) -> str:
     """Атомарный шаг воркера: claim → toggle → mark.
 
@@ -126,6 +159,14 @@ async def execute_one_toggle_task(
             fb_ad_id,
         )
         return "succeeded"
+
+    # Publish изменения статуса в Redis-канал (best-effort)
+    await _publish_task_changed(
+        redis_client,
+        task_id=task.id,
+        task_type=task_type,
+        status="succeeded",
+    )
 
     # FSM-синхронизация: финальное состояние ad_alert_state должно соответствовать
     # реально применённому действию. Идемпотентно — если уже в нужном state, no-op.
@@ -215,7 +256,12 @@ async def run_toggle_loop(
                 if gate is None:
                     gate = await gate_factory()
 
-                outcome = await execute_one_toggle_task(engine, task_type=task_type, gate=gate)
+                outcome = await execute_one_toggle_task(
+                    engine,
+                    task_type=task_type,
+                    gate=gate,
+                    redis_client=redis_client,
+                )
 
                 if outcome == "idle":
                     await asyncio.sleep(idle_sleep_seconds)

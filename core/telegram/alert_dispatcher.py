@@ -4,16 +4,21 @@
 Идемпотентно через telegram_message_refs:
 - ключ дедупа = (chat_id, ad_id, incident_key=open_state_token, stream_kind=stage)
 - если ref уже есть — алерт пропускается (защита от двойной отправки)
+
+После успешной отправки публикует событие в Redis-канал fb_agent:alert:created
+(best-effort — ошибка publish не влияет на основной flow dispatch'а).
 """
 
 from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from core.pubsub import CHANNEL_ALERT_CREATED
 from core.telegram.client import TelegramAPIError, TelegramBotClient
 from core.telegram.renderer import (
     DEFAULT_PARSE_MODE,
@@ -26,11 +31,43 @@ from core.telegram.service import load_telegram_config
 logger = logging.getLogger(__name__)
 
 
+async def _publish_alert_created(
+    redis_client: Any,
+    *,
+    fb_ad_id: str,
+    stage: str,
+    matched_rule_codes: list,
+    alert_event_id: Any,
+) -> None:
+    """Best-effort publish в fb_agent:alert:created после успешной отправки алерта."""
+    if redis_client is None:
+        return
+    try:
+        import json
+        from datetime import UTC, datetime
+
+        payload = json.dumps(
+            {
+                "fb_ad_id": fb_ad_id,
+                "stage": stage,
+                "matched_rule_codes": list(matched_rule_codes or []),
+                "alert_event_id": str(alert_event_id),
+                "timestamp": datetime.now(UTC).isoformat(),
+            },
+            ensure_ascii=False,
+        )
+        await redis_client.publish(CHANNEL_ALERT_CREATED, payload)
+    except Exception:
+        # Publish не критичен — не роняем dispatch при сбое Redis
+        logger.warning("alert_dispatcher: не удалось publish в %s", CHANNEL_ALERT_CREATED)
+
+
 async def dispatch_pending_alerts(
     engine: AsyncEngine,
     *,
     client: TelegramBotClient,
     scan_id: int,
+    redis_client: Any = None,
 ) -> dict[str, int]:
     """Шлёт все alert_events созданные в этом scan'е, для которых нет message_ref.
 
@@ -191,6 +228,14 @@ async def dispatch_pending_alerts(
             # Telegram не вернул message_id — sentinel-row остаётся в БД для
             # последующей дедупликации, но без реального message_id (== 0).
             counters["sent"] += 1
+            # Publish best-effort даже без реального message_id — алерт был отправлен
+            await _publish_alert_created(
+                redis_client,
+                fb_ad_id=str(fb_ad_id),
+                stage=str(stage),
+                matched_rule_codes=list(matched_codes or []),
+                alert_event_id=event_id,
+            )
             continue
 
         # UPDATE claim'а реальным message_id + sent_at
@@ -211,6 +256,15 @@ async def dispatch_pending_alerts(
                 )
         except Exception:
             logger.exception("update telegram_message_refs message_id failed")
+
+        # Publish в Redis-канал после успешной отправки + обновления ref (best-effort)
+        await _publish_alert_created(
+            redis_client,
+            fb_ad_id=str(fb_ad_id),
+            stage=str(stage),
+            matched_rule_codes=list(matched_codes or []),
+            alert_event_id=event_id,
+        )
 
         counters["sent"] += 1
 

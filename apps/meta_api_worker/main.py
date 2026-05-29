@@ -23,9 +23,11 @@ dispatch_mutation. До Этапа 5 здесь была заглушка с Not
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import signal
+from datetime import UTC, datetime
 from typing import Any
 
 import redis.asyncio as redis_asyncio
@@ -55,6 +57,7 @@ from core.meta_api.queue import (
 )
 from core.meta_api.reconciler import reconcile_all
 from core.meta_api.schemas import MetaMutationPayload
+from core.pubsub import CHANNEL_TASK_CHANGED
 from core.tasks.queue import Task
 
 logger = logging.getLogger("meta_api_worker")
@@ -64,6 +67,31 @@ HEARTBEAT_KEY = f"worker:heartbeat:{WORKER_NAME}"
 HEARTBEAT_TTL_SECONDS = 60
 IDLE_SLEEP_SECONDS = 5
 RECONCILE_INTERVAL_SECONDS = 60
+
+
+async def _publish_task_changed(
+    redis_client: redis_asyncio.Redis | None,
+    *,
+    task_id: int,
+    task_type: str,
+    status: str,
+) -> None:
+    """Best-effort publish изменения статуса задачи в fb_agent:task:changed."""
+    if redis_client is None:
+        return
+    try:
+        payload = json.dumps(
+            {
+                "task_id": task_id,
+                "task_type": task_type,
+                "status": status,
+                "timestamp": datetime.now(UTC).isoformat(),
+            },
+            ensure_ascii=False,
+        )
+        await redis_client.publish(CHANNEL_TASK_CHANGED, payload)
+    except Exception:
+        logger.warning("meta_api_worker: не удалось publish task:changed task_id=%s", task_id)
 
 
 def _get_database_url() -> str:
@@ -129,6 +157,7 @@ async def process_one_task(
     task: Task,
     *,
     client: MetaApiClient | None = None,
+    redis_client: redis_asyncio.Redis | None = None,
 ) -> None:
     """Полный жизненный цикл одной задачи.
 
@@ -184,6 +213,13 @@ async def process_one_task(
             )
             return
         logger.info("meta_api: task id=%s succeeded", task.id)
+        # Publish изменения статуса в Redis-канал (best-effort)
+        await _publish_task_changed(
+            redis_client,
+            task_id=task.id,
+            task_type=task.task_type,
+            status="succeeded",
+        )
         return
     except CreateCampaignPartialError as exc:
         # Batch API не атомарен: часть объектов уже создана в Meta.
@@ -289,6 +325,7 @@ async def task_loop(
     stop: asyncio.Event,
     *,
     client: MetaApiClient,
+    redis_client: redis_asyncio.Redis | None = None,
 ) -> None:
     """Главный цикл claim → execute → mark."""
     while not stop.is_set():
@@ -309,7 +346,7 @@ async def task_loop(
                 pass
             continue
 
-        await process_one_task(engine, claim.task, client=client)
+        await process_one_task(engine, claim.task, client=client, redis_client=redis_client)
 
 
 # ====================== entrypoint ======================
@@ -336,7 +373,7 @@ async def main_loop(database_url: str | None = None) -> None:
     logger.info("meta_api_worker запущен (MetaApiClient ready)")
     try:
         await asyncio.gather(
-            task_loop(engine, stop, client=meta_client),
+            task_loop(engine, stop, client=meta_client, redis_client=redis_client),
             heartbeat_loop(redis_client, stop),
             reconcile_loop(engine, stop),
         )
