@@ -35,6 +35,7 @@ python run_meta_api_worker.py                                            # Marke
 python run_health_watchdog.py                                            # Health watchdog (мониторинг worker:heartbeat:*)
 python run_enable_recommendation_worker.py                               # Enable recommendation worker (recovered ads)
 python run_digest_scheduler.py                                           # Daily TG digest (09:00 UTC)
+python run_cabinet_scheduler.py                                          # Cabinet autostart scheduler (enable по дате + scan)
 python run_creator_worker.py                                             # Creator worker (Vision fallback для plan_run)
 python run_creator_recorder.py                                           # Creator recorder (запись планов через CDP)
 python run_api.py                                                        # FastAPI на 8000 (health + AdSet.pro postback)
@@ -64,7 +65,7 @@ python scripts/restore_secrets.py          # вернуть токены
 
 **FB Stop Bot** — мониторит Facebook Ads, оценивает стоп-правила, шлёт алерты в Telegram, автоматически отключает объявления, создаёт новые кампании. Real-time часть работает через anti-detect браузер (Vision + Playwright + Node.js gRPC). Marketing API добавляется для latency-tolerant операций (см. `META_INTEGRATION_PLAN.md`).
 
-### 12 Python воркеров + FastAPI + Node.js gRPC
+### 13 Python воркеров + FastAPI + Node.js gRPC
 
 После миграции (см. `DB_REDESIGN.md`) кодовая база сокращена и постепенно восстановлена. Сейчас активные сервисы покрывают почти весь функционал, кроме фронта (отложен).
 
@@ -82,6 +83,7 @@ python scripts/restore_secrets.py          # вернуть токены
 10. **digest_scheduler** (`apps/digest_scheduler/`) — ежедневный TG-дайджест в 9:00 UTC через `core/telegram/digest_builder.py` (pure SQL-агрегации поверх `alert_events`, `task_queue`, `ad_metrics`, `offers`; `_count_active_ads_normal` фильтрует по `last_seen_at >= NOW() - 7d`, иначе счётчик растёт вечно) + `digest_renderer.py` (HTML). `is_in_send_window`: окно от `target` до конца суток UTC (catch-up при downtime воркера в момент 9:00); Redis-ключ `digest:sent:YYYY-MM-DD` TTL 26ч блокирует повтор внутри суток. При `no_tg_config` флаг не ставится, при `no_recipients` — ставится. Точка входа: `run_digest_scheduler.py`.
 11. **creator_worker** (`apps/creator_worker/`) — поллит `task_queue` где `task_type='plan_run'`, грузит план из `creator_plans` (только `is_archived=false`), стримит `CreatorService.RunPlan` через `BrowserAgentClient`, агрегирует 6 типов `PlanEvent` (started/finished/failed/skipped/checkpoint/complete) в `task_queue.result`. Маршрутизация: `ValueError/NotImplementedError/KeyError → mark_failed`; `BrowserUnavailable/Timeout/grpc.RpcError → requeue`. Heartbeat `worker:heartbeat:creator` TTL 60s. Vision-fallback для gambling-вертикалей (когда Meta зарезает креативы через API content review). Точка входа: `run_creator_worker.py`.
 12. **creator_recorder** (`apps/creator_recorder/`) — подписка на pubsub-каналы `fb_agent:creator:record_start`/`record_stop`. По event'у — `StartRecording`/`StopRecording` через `BrowserAgentClient`, парсит план и INSERT в `creator_plans` (с UTC-suffix retry при конфликте по `uq_creator_plans_name_active`). Heartbeat `worker:heartbeat:creator_recorder`. Точка входа: `run_creator_recorder.py`.
+13. **cabinet_scheduler** (`apps/cabinet_scheduler/`) — **money-критичный** автостарт кабинета по расписанию. Раз в минуту проверяет окно (HH:MM UTC из `system_config` key=`cabinet_autostart`, catch-up до конца суток как digest). В окне: дедуп через Redis `cabinet:autostart:YYYY-MM-DD` TTL 26ч (`SET NX`) → owner-scoped резолв активных ad по ДАТЕ в названии кампании (`core/meta_api/bulk.py::resolve_owner_ad_ids_by_dates`, word-boundary `(^|[^0-9])DATE([^0-9]|$)` + `campaign_matches_owner`) → создаёт сразу `pending` `bulk_status_change activate` (idempotency_key=`autostart:{day}:{action}` — двойная защита от дубля) → publish `fb_agent:observer:trigger`. **Безопасность:** пустой список дат → ничего не включаем (НЕ весь кабинет). Конфиг меняется без рестарта через TG `/autostart` (`core/telegram/handlers/autostart.py`). Heartbeat `worker:heartbeat:cabinet_scheduler` TTL 60s. Точка входа: `run_cabinet_scheduler.py`.
 
 **FastAPI (`apps/api/`):** через `create_app()` factory + lifespan:
 - `GET /healthz` — k8s liveness, всегда 200 без БД.

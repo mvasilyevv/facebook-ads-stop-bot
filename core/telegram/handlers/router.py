@@ -23,6 +23,7 @@ from core.telegram.handlers.alerts import (
     handle_snz_callback,
 )
 from core.telegram.handlers.ask import handle_ask, handle_draft_callback
+from core.telegram.handlers.autostart import handle_autostart
 from core.telegram.handlers.bulk import handle_bulk_toggle
 from core.telegram.handlers.creator import (
     handle_list_plans,
@@ -290,6 +291,17 @@ async def handle_update(
             thread_id=thread_id,
             username=username,
             command=cmd,
+            args_text=args_text,
+        )
+        return
+
+    if cmd == "autostart":
+        await handle_autostart(
+            engine=engine,
+            client=client,
+            chat_id=chat_id,
+            message_id=message_id,
+            thread_id=thread_id,
             args_text=args_text,
         )
         return

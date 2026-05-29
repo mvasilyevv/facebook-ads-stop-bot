@@ -20,7 +20,7 @@ GRPC_NODE_DIR := services/browser-agent
 	docker-up docker-down db-wait apply-schema backup-secrets restore-secrets bootstrap \
 	observer telegram disable-worker enable-worker cleanup-worker reconciler-worker \
 	meta-api-worker health-watchdog enable-reco-worker digest-scheduler \
-	creator-worker creator-recorder api \
+	cabinet-scheduler creator-worker creator-recorder api \
 	frontend frontend-build lint format test test-unit test-telegram test-integration verify \
 	start stop logs proto-compile proto-watch \
 	browser-agent browser-agent-dev browser-agent-build tma-dev tma-build \
@@ -110,6 +110,9 @@ enable-reco-worker: check-env install-backend ## Запустить enable recom
 
 digest-scheduler: check-env install-backend ## Запустить ежедневный TG digest scheduler (9:00 UTC)
 	$(PY) run_digest_scheduler.py
+
+cabinet-scheduler: check-env install-backend ## Запустить автостарт кабинета по расписанию (enable по дате + scan)
+	$(PY) run_cabinet_scheduler.py
 
 creator-worker: check-env install-backend ## Запустить creator worker (Vision-fallback для plan_run)
 	$(PY) run_creator_worker.py
