@@ -68,9 +68,11 @@ class ObserverConfig(UUIDPrimaryKey, SingletonMixin, Timestamp, Base):
     # (browser-agent toggle_ad, latency-critical путь). TRUE — через Marketing API
     # (meta_api_mutation pause_ad/activate_ad): точно по ad_id, не промахивается по
     # кнопке/скроллу. Detect всегда через DOM (observer scan), меняется только act.
-    # Дефолт FALSE — безопасно (текущее поведение). Требует запущенного meta_api_worker.
+    # Дефолт TRUE — API основной канал (проверен live: 48 операций, 0 промахов).
+    # FALSE — спящий DOM-резерв (фолбэк при сбое Graph API на живой Vision-сессии).
+    # При TRUE требуется запущенный meta_api_worker.
     act_via_api: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,
-        server_default="false",
+        server_default="true",
     )

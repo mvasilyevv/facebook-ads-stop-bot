@@ -125,7 +125,8 @@ async def test_act_via_api_false_creates_disable(pg_engine, unique_fb_ad_id) -> 
     assert task["idempotency_key"].startswith("auto:disable:")
 
 
-# Дефолт (без act_via_api) = DOM-путь (обратная совместимость со старыми вызовами)
+# Код-дефолт ПАРАМЕТРА функции (без act_via_api) = DOM (безопасная сигнатура для
+# прямых вызовов/тестов). Продуктовый дефолт — в observer_config.act_via_api (TRUE).
 @pytest.mark.asyncio
 async def test_default_is_dom_disable(pg_engine, unique_fb_ad_id) -> None:
     fbid = unique_fb_ad_id

@@ -36,7 +36,7 @@
 ### Python-воркеры (13) — `apps/*`
 | Блок | Назначение | Состояние |
 |---|---|---|
-| observer_worker | scan → FSM → метрики → outbox → TG-алерты | ✅ (heartbeat R11; gate-фабрика пофикшена; scan-канал live; **owner-scoping** по тегу кампаний; **act_via_api** #39 — авто-стоп через DOM или Marketing API по флагу) |
+| observer_worker | scan → FSM → метрики → outbox → TG-алерты | ✅ (heartbeat R11; gate-фабрика пофикшена; scan-канал live; **owner-scoping** по тегу кампаний; **act_via_api** #39 — авто-стоп через Marketing API (дефолт), DOM-резерв по флагу) |
 | disable_worker / enable_worker | toggle ad через gRPC, retry backoff | ✅ (heartbeat R11; gate-фабрика пофикшена 2026-05-29) |
 | telegram_poller | `/start /help /spy /ask /tools /pause /resume /autostart` + inline | ✅ |
 | meta_api_worker | Marketing API mutations (outbox) | ✅ (#39 — FSM-sync `ad_alert_state` после pause_ad/activate_ad/bulk) |
@@ -97,7 +97,7 @@ observer (FSM/pipeline/writers/runtime), rules (6 стоп-правил), tasks 
 > `BL-N · [приоритет] · scope`. P2=tech-debt, P3=отложено/ждёт внешнего.
 
 **Закрыто:** BL-1 (WS publish), BL-2..6 (frontend страницы), BL-7 (latency-замер live), BL-9 (prod-блок dev-tools), BL-10+11 (helpers + split history.py), BL-12 (OpenAPI codegen). Rename (v2→fb_stop_bot) — done.
-**Сессия 2026-05-29 (запушено):** gate-фабрики fix; owner-scoping (#33-35, +мультитег); стоп-правила зафиксированы (`docs/stop_rules.md`); ADR канал observer (DOM); `/tools` каталог (#34); `/pause` `/resume` (#33); автостарт по расписанию `cabinet_scheduler` (#38); **live-валидация Marketing API mutations** (enable/disable 24/24); **#39 observer act через API** (флаг `observer_config.act_via_api` + миграция 0007; авто-стоп и ручные кнопки идут через `meta_api_mutation pause_ad/activate_ad`; FSM-sync `ad_alert_state` в meta_api_worker; +29 тестов → 1151).
+**Сессия 2026-05-29 (запушено):** gate-фабрики fix; owner-scoping (#33-35, +мультитег); стоп-правила зафиксированы (`docs/stop_rules.md`); ADR канал observer (DOM); `/tools` каталог (#34); `/pause` `/resume` (#33); автостарт по расписанию `cabinet_scheduler` (#38); **live-валидация Marketing API mutations** (enable/disable 24/24); **#39 observer act через API** (флаг `observer_config.act_via_api`, миграции 0007+0008 — **дефолт TRUE**: API основной канал, DOM спящий резерв-фолбэк; авто-стоп и ручные кнопки идут через `meta_api_mutation pause_ad/activate_ad`; FSM-sync `ad_alert_state` в meta_api_worker; +29 тестов → 1151).
 
 **Осталось:**
 - **BL-8 · P3 · AdSet.pro Волна 4** — tracker_aggregate per (ad,country,day) + outgoing postback + key rotation.
