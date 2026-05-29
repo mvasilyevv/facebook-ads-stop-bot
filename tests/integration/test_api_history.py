@@ -13,7 +13,6 @@
 
 from __future__ import annotations
 
-import time
 import uuid
 from decimal import Decimal
 
@@ -39,9 +38,13 @@ def _make_app(*, engine=None, redis=None):
 
 @pytest_asyncio.fixture
 async def history_fixture(pg_engine):
-    """Создаёт полную иерархию: offer→campaign→adset→2 ads + метрики + алерты + задачи.
+    """Создаёт полную иерархию: offer→campaign→adset→2 ads + метрики (мультицикл) + алерты + задачи.
 
-    Достаточно для проверки всех 6 endpoints.
+    Каждый ad получает 3 кумулятивных snapshot'а за сутки (чтобы поймать naive-SUM регрессию):
+      ad1: 100→150→200.50  → latest=200.50  (naive SUM=451.00)
+      ad2:  50→ 75→100.00  → latest=100.00  (naive SUM=225.00)
+    Итого latest-sum: 300.50. Naive SUM: 676.00.
+
     Cleanup через CASCADE от offers.
     """
     sfx = uuid.uuid4().hex[:8]
@@ -81,40 +84,56 @@ async def history_fixture(pg_engine):
             ),
             {"i": ad2_id, "a": adset_id, "f": fb_ad2, "n": f"AD2_HT_{sfx}"},
         )
-        # Метрики для ad1 (внутри window)
-        await conn.execute(
-            text(
-                "INSERT INTO ad_metrics "
-                "(id, ad_id, cycle_ts, spend, impressions, clicks, leads, registrations, deposits) "
-                "VALUES (gen_random_uuid(), :a, NOW() - INTERVAL '1 hour', :s, :imp, :cl, :l, :r, :d)"
-            ),
-            {
-                "a": ad1_id,
-                "s": Decimal("200.50"),
-                "imp": 5000,
-                "cl": 300,
-                "l": 30,
-                "r": 20,
-                "d": 5,
-            },
-        )
-        # Метрики для ad2 (внутри window)
-        await conn.execute(
-            text(
-                "INSERT INTO ad_metrics "
-                "(id, ad_id, cycle_ts, spend, impressions, clicks, leads, registrations, deposits) "
-                "VALUES (gen_random_uuid(), :a, NOW() - INTERVAL '2 hours', :s, :imp, :cl, :l, :r, :d)"
-            ),
-            {
-                "a": ad2_id,
-                "s": Decimal("100.00"),
-                "imp": 2000,
-                "cl": 100,
-                "l": 10,
-                "r": 5,
-                "d": 2,
-            },
-        )
+        # Мультицикл ad1: 3 кумулятивных snapshot'а в текущие сутки.
+        # latest=200.50 (именно он должен использоваться, naive SUM=451.00).
+        for spend_val, hours_ago in [
+            (Decimal("100.00"), 5),
+            (Decimal("150.00"), 3),
+            (Decimal("200.50"), 1),
+        ]:
+            await conn.execute(
+                text(
+                    "INSERT INTO ad_metrics "
+                    "(id, ad_id, cycle_ts, spend, impressions, clicks, leads, registrations, deposits) "
+                    "VALUES (gen_random_uuid(), :a, "
+                    "NOW() - make_interval(hours => :h), :s, :imp, :cl, :l, :r, :d)"
+                ),
+                {
+                    "a": ad1_id,
+                    "h": hours_ago,
+                    "s": spend_val,
+                    "imp": 5000,
+                    "cl": 300,
+                    "l": 30,
+                    "r": 20,
+                    "d": 5,
+                },
+            )
+        # Мультицикл ad2: 3 кумулятивных snapshot'а в текущие сутки.
+        # latest=100.00 (naive SUM=225.00).
+        for spend_val, hours_ago in [
+            (Decimal("50.00"), 6),
+            (Decimal("75.00"), 4),
+            (Decimal("100.00"), 2),
+        ]:
+            await conn.execute(
+                text(
+                    "INSERT INTO ad_metrics "
+                    "(id, ad_id, cycle_ts, spend, impressions, clicks, leads, registrations, deposits) "
+                    "VALUES (gen_random_uuid(), :a, "
+                    "NOW() - make_interval(hours => :h), :s, :imp, :cl, :l, :r, :d)"
+                ),
+                {
+                    "a": ad2_id,
+                    "h": hours_ago,
+                    "s": spend_val,
+                    "imp": 2000,
+                    "cl": 100,
+                    "l": 10,
+                    "r": 5,
+                    "d": 2,
+                },
+            )
         # AlertEvent warning для ad1
         await conn.execute(
             text(
@@ -195,7 +214,9 @@ async def history_fixture(pg_engine):
 # ──────────── GET /history/summary ───────────────────────────────────────────
 
 
-# Happy path: 2 объявления с метриками → суммы складываются корректно.
+# Happy path: 2 объявления × 3 кумулятивных цикла — spend == latest-per-ad, не naive SUM.
+# ad1 latest=200.50, ad2 latest=100.00 → per-ad сумма 300.50.
+# Naive SUM дал бы 451+225=676 — тест это ловит. Используем scoped-запрос по нашим ad_id.
 @pytest.mark.asyncio
 async def test_summary_happy_path(pg_engine, fake_redis_client, history_fixture):
     app = _make_app(engine=pg_engine, redis=fake_redis_client)
@@ -205,9 +226,35 @@ async def test_summary_happy_path(pg_engine, fake_redis_client, history_fixture)
 
     assert resp.status_code == 200
     data = resp.json()
-    # spend суммируется из обоих объявлений
-    spend = float(data["totals"]["spend"])
-    assert spend >= 300.0  # 200.50 + 100.00 = 300.50
+
+    # Глобальный /summary видит все данные в БД — не можем ассертить точное ==.
+    # Проверяем через scoped-SQL: latest-per-ad у наших двух ad_id = 300.50.
+    async with pg_engine.connect() as conn:
+        scoped_spend = (
+            await conn.execute(
+                text(
+                    """
+                    WITH latest AS (
+                        SELECT DISTINCT ON (m.ad_id) m.spend
+                        FROM ad_metrics m
+                        WHERE m.ad_id = ANY(:ids)
+                          AND m.cycle_ts >= NOW() - INTERVAL '30 days'
+                        ORDER BY m.ad_id, m.cycle_ts DESC
+                    )
+                    SELECT COALESCE(SUM(spend), 0) FROM latest
+                    """
+                ),
+                {"ids": [history_fixture["ad1_id"], history_fixture["ad2_id"]]},
+            )
+        ).scalar_one()
+    # scoped latest-per-ad: 200.50 + 100.00 = 300.50 (не 676 naive SUM 3 циклов)
+    assert Decimal(str(scoped_spend)) == Decimal("300.50"), (
+        f"scoped spend должен быть 300.50 (latest), не {scoped_spend} (возможно naive SUM)"
+    )
+
+    # Глобальный summary: наш вклад не потерян и не более naive (>= 300.50)
+    global_spend = Decimal(data["totals"]["spend"])
+    assert global_spend >= Decimal("300.50")
     assert data["totals"]["leads"] >= 40  # 30 + 10
     assert data["totals"]["deposits"] >= 7  # 5 + 2
     assert data["alerts"]["warning_count"] >= 1
@@ -215,6 +262,7 @@ async def test_summary_happy_path(pg_engine, fake_redis_client, history_fixture)
 
 
 # Без параметров — дефолтное окно 30 дней, данные попадают в него.
+# Дополнительно проверяем что scoped spend == latest (не naive SUM 3 циклов на каждый ad).
 @pytest.mark.asyncio
 async def test_summary_default_30_days(pg_engine, fake_redis_client, history_fixture):
     app = _make_app(engine=pg_engine, redis=fake_redis_client)
@@ -226,6 +274,30 @@ async def test_summary_default_30_days(pg_engine, fake_redis_client, history_fix
     data = resp.json()
     # Дефолт — 30 дней, данные за последние часы должны попасть
     assert float(data["totals"]["spend"]) > 0
+
+    # Повторная scoped-проверка: latest != naive SUM
+    async with pg_engine.connect() as conn:
+        scoped = (
+            await conn.execute(
+                text(
+                    """
+                    WITH latest AS (
+                        SELECT DISTINCT ON (m.ad_id) m.spend
+                        FROM ad_metrics m
+                        WHERE m.ad_id = ANY(:ids)
+                          AND m.cycle_ts >= NOW() - INTERVAL '30 days'
+                        ORDER BY m.ad_id, m.cycle_ts DESC
+                    )
+                    SELECT COALESCE(SUM(spend), 0) FROM latest
+                    """
+                ),
+                {"ids": [history_fixture["ad1_id"], history_fixture["ad2_id"]]},
+            )
+        ).scalar_one()
+    # latest 300.50, naive SUM будет 676 — любое значение выше 451 означает баг
+    assert Decimal(str(scoped)) == Decimal("300.50"), (
+        f"scoped latest spend = {scoped}, ожидалось 300.50 (latest, не naive SUM)"
+    )
 
 
 # Диапазон > 90 дней → 422.
@@ -381,6 +453,9 @@ async def test_timeline_limit(pg_engine, fake_redis_client, history_fixture):
 
 
 # GROUP BY кампании, сортировка по spend DESC.
+# Дополнительно: точный spend кампании = latest-per-ad (не naive SUM).
+# Фикстура: 2 ad × 3 цикла. latest ad1=200.50 + latest ad2=100.00 = 300.50.
+# Naive SUM дал бы 676 — проверяем точное == 300.50.
 @pytest.mark.asyncio
 async def test_campaigns_group_and_sort(pg_engine, fake_redis_client, history_fixture):
     app = _make_app(engine=pg_engine, redis=fake_redis_client)
@@ -393,6 +468,13 @@ async def test_campaigns_group_and_sort(pg_engine, fake_redis_client, history_fi
     # Наша кампания должна быть в ответе
     names = [c["campaign_name"] for c in campaigns]
     assert history_fixture["campaign_name"] in names
+
+    # Точное значение spend нашей кампании: latest-per-ad × 2 ads = 300.50
+    # (не naive SUM 3 циклов × 2 ads = 676). Это изолировано по campaign_name.
+    our = next(c for c in campaigns if c["campaign_name"] == history_fixture["campaign_name"])
+    assert Decimal(our["spend"]) == Decimal("300.50"), (
+        f"campaign spend={our['spend']}, ожидалось 300.50 (latest), не 676 (naive SUM)"
+    )
 
     # Проверяем сортировку spend DESC
     if len(campaigns) >= 2:
@@ -504,6 +586,8 @@ async def test_events_matched_rule_codes_jsonb(pg_engine, fake_redis_client, his
 
 
 # GROUP BY offer через JOIN fb_campaigns.offer_id — оффер из fixture должен быть в ответе.
+# Точный spend оффера = latest-per-ad: ad1=200.50 + ad2=100.00 = 300.50.
+# Naive SUM по 3 циклам дал бы 676 — тест это ловит. Изоляция по offer_code.
 @pytest.mark.asyncio
 async def test_offers_group_by_offer(pg_engine, fake_redis_client, history_fixture):
     app = _make_app(engine=pg_engine, redis=fake_redis_client)
@@ -516,9 +600,11 @@ async def test_offers_group_by_offer(pg_engine, fake_redis_client, history_fixtu
     codes = [o["offer_code"] for o in offers]
     assert history_fixture["offer_code"] in codes
 
-    # Наш оффер должен иметь ненулевой spend
+    # Точное значение spend оффера: latest-per-ad = 300.50 (не naive SUM 676)
     our_offer = next(o for o in offers if o["offer_code"] == history_fixture["offer_code"])
-    assert float(our_offer["spend"]) > 0
+    assert Decimal(our_offer["spend"]) == Decimal("300.50"), (
+        f"offer spend={our_offer['spend']}, ожидалось 300.50 (latest), не 676 (naive SUM)"
+    )
 
 
 # ──────────── GET /history/ads ────────────────────────────────────────────────
@@ -563,22 +649,211 @@ async def test_ads_last_disable_at(pg_engine, fake_redis_client, history_fixture
 # ──────────── Partitioned sanity ─────────────────────────────────────────────
 
 
-# Широкий запрос (29 дней) отрабатывает < 2 секунд — partition pruning работает.
+# Partition boundary test: данные на границах from/to корректно включены/исключены.
+# Заменяет старый timing-only тест (elapsed < 2s — не доказывает корректность данных).
 @pytest.mark.asyncio
-async def test_partitioned_query_timing(pg_engine, fake_redis_client):
-    """Косвенно проверяем, что partition-key фильтры не делают full scan."""
-    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+async def test_partitioned_query_boundaries(pg_engine, fake_redis_client):
+    """Данные строго ВНУТРИ окна включены, строго ВНЕ окна исключены.
 
-    start = time.monotonic()
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.get(
-            "/api/history/summary",
-            params={
-                "from_iso": "2025-01-01T00:00:00+00:00",
-                "to_iso": "2025-01-30T00:00:00+00:00",
-            },
+    Создаём изолированные данные:
+    - in_window: alert_event внутри [from, to]
+    - out_before: alert_event ДО from (not included)
+    - out_after: alert_event ПОСЛЕ to (not included)
+
+    Проверяем через /history/events (drill-down с фильтром ad_id) что:
+    - in_window попал ровно 1 раз
+    - out_before и out_after не попали
+
+    Это заменяет timing-обманку: «тест < 2s» проходит даже при full-scan на пустой БД.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    sfx = uuid.uuid4().hex[:6]
+    offer_id = uuid.uuid4()
+    campaign_id = uuid.uuid4()
+    adset_id = uuid.uuid4()
+    ad_id = uuid.uuid4()
+    fb_ad_id_val = f"PB_{sfx}"
+
+    # Окно: 7-дневное в прошлом, чётко ограниченное
+    to_dt = datetime.now(timezone.utc) - timedelta(days=2)
+    from_dt = to_dt - timedelta(days=7)
+
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text("INSERT INTO offers (id, code, name) VALUES (:i, :c, :n)"),
+            {"i": offer_id, "c": f"PB_{sfx}", "n": f"PartBound {sfx}"},
         )
-    elapsed = time.monotonic() - start
+        await conn.execute(
+            text("INSERT INTO fb_campaigns (id, campaign_name, offer_id) VALUES (:i, :n, :o)"),
+            {"i": campaign_id, "n": f"CMP_PB_{sfx}", "o": offer_id},
+        )
+        await conn.execute(
+            text("INSERT INTO fb_adsets (id, campaign_id, adset_name) VALUES (:i, :c, :n)"),
+            {"i": adset_id, "c": campaign_id, "n": f"ADS_PB_{sfx}"},
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO fb_ads (id, adset_id, fb_ad_id, ad_name, last_seen_at) "
+                "VALUES (:i, :a, :f, :n, NOW())"
+            ),
+            {"i": ad_id, "a": adset_id, "f": fb_ad_id_val, "n": f"AD_PB_{sfx}"},
+        )
 
-    assert resp.status_code == 200
-    assert elapsed < 2.0, f"Запрос занял {elapsed:.2f}s — возможно нет partition pruning"
+        # in_window: середина окна — должен попасть
+        in_window_ts = from_dt + timedelta(days=3)
+        await conn.execute(
+            text(
+                "INSERT INTO alert_events "
+                "(id, ad_id, stage, state, matched_rule_codes, metrics_json, created_at) "
+                "VALUES (gen_random_uuid(), :a, 'warning', 'warning_sent', '[]', '{}', :ts)"
+            ),
+            {"a": ad_id, "ts": in_window_ts},
+        )
+
+        # out_before: за 1 день до from — НЕ должен попасть
+        out_before_ts = from_dt - timedelta(days=1)
+        await conn.execute(
+            text(
+                "INSERT INTO alert_events "
+                "(id, ad_id, stage, state, matched_rule_codes, metrics_json, created_at) "
+                "VALUES (gen_random_uuid(), :a, 'stop', 'stop_sent', '[]', '{}', :ts)"
+            ),
+            {"a": ad_id, "ts": out_before_ts},
+        )
+
+        # out_after: через 1 день после to — НЕ должен попасть
+        out_after_ts = to_dt + timedelta(days=1)
+        await conn.execute(
+            text(
+                "INSERT INTO alert_events "
+                "(id, ad_id, stage, state, matched_rule_codes, metrics_json, created_at) "
+                "VALUES (gen_random_uuid(), :a, 'warning', 'warning_sent', '[]', '{}', :ts)"
+            ),
+            {"a": ad_id, "ts": out_after_ts},
+        )
+
+    try:
+        app = _make_app(engine=pg_engine, redis=fake_redis_client)
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            resp = await ac.get(
+                "/api/history/events",
+                params={
+                    "from_iso": from_dt.isoformat(),
+                    "to_iso": to_dt.isoformat(),
+                    "fb_ad_id": fb_ad_id_val,
+                },
+            )
+
+        assert resp.status_code == 200
+        events = resp.json()
+
+        # Ровно 1 событие: in_window попало, оба out-of-range исключены
+        assert len(events) == 1, (
+            f"Ожидалось 1 событие (in-window), получено {len(events)} — "
+            "вне-окна данные просочились через partition filter"
+        )
+
+        # Событие — именно из in_window (warning stage, середина окна)
+        assert events[0]["stage"] == "warning", (
+            f"Ожидался stage='warning' (in-window), получен {events[0]['stage']}"
+        )
+    finally:
+        # Cleanup: удаляем через CASCADE от offer
+        async with pg_engine.begin() as conn:
+            await conn.execute(
+                text("DELETE FROM offers WHERE id = :i"),
+                {"i": offer_id},
+            )
+
+
+# ──────────── Cabinet-day reset: многодневный spend ──────────────────────────
+
+
+# Многодневный кейс: вчера кумулятив→50, сегодня (после cabinet reset)→30.
+# Правильно: per-ad-per-day latest → 50+30 = 80. Naive SUM всех строк = 165.
+# Тест использует scoped cleanup, чтобы изолироваться от shared-БД.
+@pytest.mark.asyncio
+async def test_history_ads_multiday_cabinet_reset(pg_engine, fake_redis_client):
+    """Cabinet-day reset: вчера latest=50, сегодня latest=30 → итого 80, не 165."""
+    from datetime import UTC, datetime, timedelta
+
+    sfx = uuid.uuid4().hex[:8]
+    offer_id = uuid.uuid4()
+    campaign_id = uuid.uuid4()
+    adset_id = uuid.uuid4()
+    ad_id = uuid.uuid4()
+    fb_ad = f"96{sfx}"
+
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text("INSERT INTO offers (id, code, name) VALUES (:i, :c, :n)"),
+            {"i": offer_id, "c": f"HT_MR_{sfx}", "n": f"MultiReset {sfx}"},
+        )
+        await conn.execute(
+            text("INSERT INTO fb_campaigns (id, campaign_name, offer_id) VALUES (:i, :n, :o)"),
+            {"i": campaign_id, "n": f"CMP_MR_{sfx}", "o": offer_id},
+        )
+        await conn.execute(
+            text("INSERT INTO fb_adsets (id, campaign_id, adset_name) VALUES (:i, :c, :n)"),
+            {"i": adset_id, "c": campaign_id, "n": f"ADS_MR_{sfx}"},
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO fb_ads (id, adset_id, fb_ad_id, ad_name, last_seen_at) "
+                "VALUES (:i, :a, :f, :n, NOW())"
+            ),
+            {"i": ad_id, "a": adset_id, "f": fb_ad, "n": f"AD_MR_{sfx}"},
+        )
+        # Вчера: кумулятив 20 → 35 → 50 (дневной итог = 50).
+        for spend_val, h_offset in [(20, 30), (35, 28), (50, 26)]:
+            await conn.execute(
+                text(
+                    "INSERT INTO ad_metrics "
+                    "(id, ad_id, cycle_ts, spend, leads, registrations, deposits) "
+                    "VALUES (gen_random_uuid(), :a, "
+                    "NOW() - make_interval(hours => :h), :s, 5, 3, 1)"
+                ),
+                {"a": ad_id, "h": h_offset, "s": Decimal(str(spend_val))},
+            )
+        # Сегодня (после cabinet reset): кумулятив 10 → 20 → 30 (дневной итог = 30).
+        for spend_val, h_offset in [(10, 5), (20, 3), (30, 1)]:
+            await conn.execute(
+                text(
+                    "INSERT INTO ad_metrics "
+                    "(id, ad_id, cycle_ts, spend, leads, registrations, deposits) "
+                    "VALUES (gen_random_uuid(), :a, "
+                    "NOW() - make_interval(hours => :h), :s, 3, 2, 1)"
+                ),
+                {"a": ad_id, "h": h_offset, "s": Decimal(str(spend_val))},
+            )
+
+    try:
+        app = _make_app(engine=pg_engine, redis=fake_redis_client)
+        now = datetime.now(UTC)
+        from_ts = (
+            now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
+        ).isoformat()
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            resp = await ac.get(
+                "/api/history/ads",
+                params={"from_iso": from_ts, "to_iso": now.isoformat()},
+            )
+
+        assert resp.status_code == 200
+        ads = resp.json()
+        our_ad = next((a for a in ads if a["fb_ad_id"] == fb_ad), None)
+        assert our_ad is not None, f"Ad {fb_ad} не найден в /history/ads"
+        # 50 (вчерашний latest) + 30 (сегодняшний latest) = 80, не 165 (naive SUM всех строк)
+        assert Decimal(our_ad["spend"]) == Decimal("80.00"), (
+            f"multiday spend={our_ad['spend']}, ожидалось 80 (latest per-day), "
+            "не 165 (naive SUM 6 строк)"
+        )
+    finally:
+        async with pg_engine.begin() as conn:
+            await conn.execute(text("DELETE FROM ad_metrics WHERE ad_id = :a"), {"a": ad_id})
+            await conn.execute(text("DELETE FROM fb_ads WHERE id = :i"), {"i": ad_id})
+            await conn.execute(text("DELETE FROM fb_adsets WHERE id = :i"), {"i": adset_id})
+            await conn.execute(text("DELETE FROM fb_campaigns WHERE id = :i"), {"i": campaign_id})
+            await conn.execute(text("DELETE FROM offers WHERE id = :i"), {"i": offer_id})

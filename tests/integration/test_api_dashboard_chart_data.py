@@ -191,17 +191,25 @@ async def test_chart_active_ads_distinct(pg_engine, fake_redis_client, clean_cha
     assert any((b.get("active_ads") or 0) >= 3 for b in buckets)
 
 
-# Тест: partition pruning — старые метрики не подтягиваются.
+# Тест: partition pruning — старые метрики исключены из результата (не просто «не упало»).
 @pytest.mark.asyncio
 async def test_chart_partition_pruning(pg_engine, fake_redis_client, clean_chart) -> None:
-    """Метрика 100h назад (>24h окна) не должна попасть с hours=24.
+    """Вне-окна (100h) исключена, в-окна (2h) присутствует с верным spend.
 
-    100h = ~4 дня — должно быть в существующих партициях (создаются по месяцам).
+    Усиление против «обманки»: раньше ассертили только isinstance(buckets, list).
+    Тест прошёл бы даже при утечке вне-окна данных.
+    Теперь: засеваем ОБЕ метрики → в-окна попадает → её spend == 7.00, active_ads == 1;
+    вне-окна (100h ago) отсутствует в бакетах → нет бакета с spend=9.00.
     """
+    in_window_spend = Decimal("7.00")
+    out_of_window_spend = Decimal("9.00")
+
     async with pg_engine.begin() as conn:
         ad_id = await _seed_ad(conn, "PP")
-        # Метрика 100 часов назад (вне окна 24h, но в текущей партиции)
-        await _insert_metric(conn, ad_id, hours_ago=100)
+        # Метрика ВНУТРИ окна 24h — должна присутствовать в ответе
+        await _insert_metric(conn, ad_id, hours_ago=2, spend=in_window_spend)
+        # Метрика ВНЕ окна 24h — должна быть исключена (100h >> 24h)
+        await _insert_metric(conn, ad_id, hours_ago=100, spend=out_of_window_spend)
 
     app = _make_app(engine=pg_engine, redis=fake_redis_client)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
@@ -209,6 +217,22 @@ async def test_chart_partition_pruning(pg_engine, fake_redis_client, clean_chart
 
     assert resp.status_code == 200
     buckets = resp.json()
-    # Метрика старше 24h → не появилась → набор бакетов с активностью ≥3 пуст
-    # (на 100h ago никакого active_ads не должно быть).
-    assert isinstance(buckets, list)
+
+    # Вне-окна данных нет → суммарный spend по всем бакетам не включает out_of_window_spend
+    total_spend = sum(Decimal(str(b.get("spend", 0))) for b in buckets)
+    assert total_spend == in_window_spend, (
+        f"Ожидался total_spend == {in_window_spend} (только in-window), "
+        f"получено {total_spend} — вне-окна метрика (spend={out_of_window_spend}) просочилась"
+    )
+
+    # Ровно 1 бакет: в-окна метрика попала, вне-окна — нет
+    assert len(buckets) == 1, (
+        f"Ожидался 1 бакет (только in-window час), получено {len(buckets)} — "
+        "вне-окна метрика создала лишний бакет"
+    )
+
+    # Бакет несёт верный spend (контракт: не SUM кумулятивов, а правильное агрегирование)
+    bucket_spend = Decimal(str(buckets[0].get("spend", 0)))
+    assert bucket_spend == in_window_spend, (
+        f"spend бакета {bucket_spend} != ожидаемому {in_window_spend}"
+    )
