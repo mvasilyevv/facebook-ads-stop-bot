@@ -134,17 +134,17 @@ function OffersPage() {
       {/* 1. Заголовок страницы */}
       <PageHeader
         eyebrowNum="03"
-        eyebrow="OFFERS"
-        title="Offers."
+        eyebrow="ОФФЕРЫ"
+        title="Офферы."
         displayNumber="03"
         subtitle={
           offersQuery.data ? (
             <>
-              <span>{activeCount} active</span>
+              <span>{activeCount} активных</span>
               {inactiveCount > 0 ? (
                 <>
                   <HeaderSep />
-                  <span className="text-bg-8">{inactiveCount} inactive</span>
+                  <span className="text-bg-8">{inactiveCount} неактивных</span>
                 </>
               ) : null}
               {totalSpend != null ? (
@@ -166,7 +166,7 @@ function OffersPage() {
             leftIcon={<Plus size={14} aria-hidden="true" />}
             onClick={openCreate}
           >
-            New offer
+            Новый оффер
           </Button>
         }
       />
@@ -211,7 +211,7 @@ function OffersPage() {
               leftIcon={<Plus size={14} aria-hidden="true" />}
               onClick={openCreate}
             >
-              New offer
+              Новый оффер
             </Button>
           }
         />

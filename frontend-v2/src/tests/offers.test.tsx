@@ -108,7 +108,7 @@ describe("OfferCard", () => {
         onRules={vi.fn()}
       />,
     );
-    expect(screen.getByText("inactive")).toBeInTheDocument();
+    expect(screen.getByText("Неактивен")).toBeInTheDocument();
     // Код
     expect(screen.getByText("DRC_NUTRA")).toBeInTheDocument();
   });
@@ -171,7 +171,7 @@ describe("Offers · EmptyState", () => {
             leftIcon={<Plus size={14} aria-hidden="true" />}
             onClick={onCreate}
           >
-            New offer
+            Новый оффер
           </Button>
         }
       />,
@@ -180,7 +180,7 @@ describe("Offers · EmptyState", () => {
     expect(screen.getByText("Офферов нет")).toBeInTheDocument();
     expect(screen.getByText("Создайте первый оффер.")).toBeInTheDocument();
 
-    const btn = screen.getByRole("button", { name: /new offer/i });
+    const btn = screen.getByRole("button", { name: /новый оффер/i });
     expect(btn).toBeInTheDocument();
     fireEvent.click(btn);
     expect(onCreate).toHaveBeenCalledOnce();

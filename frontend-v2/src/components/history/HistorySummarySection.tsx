@@ -49,25 +49,25 @@ export function HistorySummarySection({
       {/* KPI strip: spend / leads / deposits / alerts */}
       <KPIStrip>
         <KPICard
-          label="Total spend"
+          label="Spend"
           value={formatSpend(summary?.totals.spend)}
           hint="за период"
           variant="muted"
         />
         <KPICard
-          label="Leads"
+          label="Лиды"
           value={formatInt(summary?.totals.leads)}
           hint="лиды"
           variant="success"
         />
         <KPICard
-          label="Deposits"
+          label="Депозиты"
           value={formatInt(summary?.totals.deposits)}
           hint="депозиты"
           variant="info"
         />
         <KPICard
-          label="Alerts"
+          label="Алерты"
           value={formatInt(totalAlerts)}
           hint="всего событий"
           variant="warning"
@@ -80,7 +80,7 @@ export function HistorySummarySection({
         <div className="border border-bg-5 bg-bg-1 p-5">
           <h3 className="font-display text-[10px] uppercase tracking-[0.14em] text-bg-8 mb-4">
             <span className="text-bg-7 mr-1.5">02</span>
-            Alerts · by stage
+            Алерты · по стадиям
           </h3>
           <div className="space-y-3">
             {["warning", "stop"].map((stage) => {
@@ -115,7 +115,7 @@ export function HistorySummarySection({
         <div className="border border-bg-5 bg-bg-1 p-5">
           <h3 className="font-display text-[10px] uppercase tracking-[0.14em] text-bg-8 mb-4">
             <span className="text-bg-7 mr-1.5">03</span>
-            Alerts · by rule
+            Алерты · по правилам
           </h3>
           {!summary?.alerts.by_rule?.length ? (
             <span className="font-display text-[12px] text-bg-9">Нет данных</span>

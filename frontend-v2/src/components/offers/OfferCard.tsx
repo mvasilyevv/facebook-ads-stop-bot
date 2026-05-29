@@ -66,7 +66,7 @@ export function OfferCard({ offer, metrics, onEdit, onDelete, onRules }: OfferCa
           ) : null}
           {!offer.is_active ? (
             <Badge variant="disabled" size="sm" withDot={false}>
-              inactive
+              Неактивен
             </Badge>
           ) : null}
         </div>
@@ -77,13 +77,13 @@ export function OfferCard({ offer, metrics, onEdit, onDelete, onRules }: OfferCa
       {metrics ? (
         <div className="grid grid-cols-4 gap-x-4 gap-y-3 border-t border-bg-5 pt-4">
           <MetricCell label="Spend" value={formatSpend(metrics.spend)} />
-          <MetricCell label="Leads" value={formatInt(metrics.leads)} />
-          <MetricCell label="Deposits" value={formatInt(metrics.deposits)} />
-          <MetricCell label="Alerts" value={formatInt(metrics.stop_alerts_count)} dimmed={metrics.stop_alerts_count === 0} />
+          <MetricCell label="Лиды" value={formatInt(metrics.leads)} />
+          <MetricCell label="Депозиты" value={formatInt(metrics.deposits)} />
+          <MetricCell label="Алерты" value={formatInt(metrics.stop_alerts_count)} dimmed={metrics.stop_alerts_count === 0} />
         </div>
       ) : (
         <div className="grid grid-cols-4 gap-x-4 gap-y-3 border-t border-bg-5 pt-4">
-          {["Spend", "Leads", "Deposits", "Alerts"].map((label) => (
+          {["Spend", "Лиды", "Депозиты", "Алерты"].map((label) => (
             <MetricCell key={label} label={label} value="—" />
           ))}
         </div>

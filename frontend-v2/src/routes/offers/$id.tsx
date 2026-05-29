@@ -37,10 +37,10 @@ function OfferRulesPage() {
     <>
       <PageHeader
         eyebrowNum="03"
-        eyebrow="CATALOG · OFFER"
-        title={offer ? `${offer.code} — Правила.` : `Offer ${id}.`}
+        eyebrow="КАТАЛОГ · ОФФЕР"
+        title={offer ? `${offer.code} — Правила.` : `Оффер ${id}.`}
         displayNumber=""
-        subtitle={offer?.name ?? "Rules editor"}
+        subtitle={offer?.name ?? "Редактор правил"}
         action={
           <Button
             variant="ghost"

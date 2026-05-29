@@ -90,7 +90,7 @@ describe("HistorySummarySection", () => {
     );
     expect(screen.getByRole("alert")).toBeInTheDocument();
     expect(screen.getByText(/Не удалось загрузить сводку/i)).toBeInTheDocument();
-    const btn = screen.getByRole("button", { name: /retry/i });
+    const btn = screen.getByRole("button", { name: /повторить/i });
     fireEvent.click(btn);
     expect(onRetry).toHaveBeenCalledTimes(1);
   });
@@ -203,7 +203,7 @@ describe("HistoryTimeline", () => {
       />,
     );
     expect(screen.getByRole("alert")).toBeInTheDocument();
-    const btn = screen.getByRole("button", { name: /retry/i });
+    const btn = screen.getByRole("button", { name: /повторить/i });
     fireEvent.click(btn);
     expect(onRetry).toHaveBeenCalledTimes(1);
   });
