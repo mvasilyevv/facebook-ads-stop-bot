@@ -63,7 +63,7 @@ observer (FSM/pipeline/writers), rules (6 стоп-правил), tasks (unified
 | Что | Стек | Состояние |
 |---|---|---|
 | `frontend/` (старый) | React 19 + JSX + Tailwind 3 | ✅ 7 страниц работают со свежим API (smoke-тест прошёл) |
-| `frontend-v2/` (новый) | TS + Vite + Tailwind 4 + TanStack + Zustand | ✅ **все 6 страниц готовы** (Dashboard/Ads/Offers/History/Settings/Drafts), проверены в браузере, 77 тестов |
+| `frontend-v2/` (новый) | TS + Vite + Tailwind 4 + TanStack + Zustand | ✅ **6 страниц готовы + русский UI** (Dashboard/Ads/Offers/History/Settings/Drafts), проверены в браузере, 77 тестов. Язык UI зафиксирован в design.md §0.5 (русский + ad-ops латиницей) |
 | `frontend-mini/` (TMA) | React + JSX | ⏸ не трогали, дублирует логику старого |
 
 Дизайн v2: editorial-monochrome (см. `docs/frontend_v2_design.md` + мокапы). Dark-only, desktop 1280+.
