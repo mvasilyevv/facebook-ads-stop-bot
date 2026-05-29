@@ -28,6 +28,7 @@ from apps.api.routers.v1.schemas.dashboard import (
     AlertEventOut,
     IncidentOut,
 )
+from apps.api.utils.alert_serializer import alert_event_row_to_out
 from apps.api.utils.partition import default_window
 from core.dashboard.snapshot import build_ad_snapshot, build_incidents_snapshot
 
@@ -234,25 +235,7 @@ async def list_alert_events(
         result = await conn.execute(text(sql), params)
         rows = result.all()
 
-    out: list[dict[str, Any]] = []
-    for r in rows:
-        matched = list(r.matched_rule_codes or [])
-        out.append(
-            {
-                "id": str(r.id),
-                "fb_ad_id": r.fb_ad_id,
-                "ad_name": r.ad_name,
-                "campaign_name": r.campaign_name,
-                "offer_code": r.offer_code,
-                "stage": r.stage,
-                "matched_rule_codes": matched,
-                # triggered_by_rule_codes отсутствует в ORM AlertEvent.
-                "triggered_by_rule_codes": None,
-                "created_at": r.created_at,
-                "alert_payload": r.metrics_json if r.metrics_json else None,
-            }
-        )
-    return out
+    return [alert_event_row_to_out(r) for r in rows]
 
 
 # ─────────────────────── GET /dashboard/incidents ────────────────────────────

@@ -25,7 +25,8 @@ from apps.api.routers.v1.schemas.dashboard_aggregates import (
     DashboardBatchOut,
     DashboardStatsOut,
 )
-from apps.api.utils.status_mapper import to_frontend_task_status
+from apps.api.utils.alert_serializer import alert_event_row_to_out
+from apps.api.utils.task_serializer import task_row_to_out
 from core.dashboard.snapshot import build_ad_snapshot, build_incidents_snapshot
 from core.observer.runtime import read_observer_runtime
 
@@ -229,24 +230,7 @@ async def _query_recent_disable_tasks(engine: AsyncEngine, limit: int) -> list[d
     """
     async with engine.connect() as conn:
         rows = (await conn.execute(text(sql), {"lim": limit})).fetchall()
-    return [
-        {
-            "id": str(r.id),
-            "fb_ad_id": r.fb_ad_id,
-            "ad_name": r.ad_name,
-            "task_type": r.task_type,
-            "status": to_frontend_task_status(r.status),
-            "attempt_count": r.attempt_count,
-            "max_attempts": r.max_attempts,
-            "requested_by": r.requested_by,
-            "requested_by_chat_id": r.created_by_chat_id,
-            "created_at": r.created_at.isoformat() if r.created_at else None,
-            "updated_at": r.updated_at.isoformat() if r.updated_at else None,
-            "next_attempt_at": r.next_retry_at.isoformat() if r.next_retry_at else None,
-            "last_error_message": r.last_error,
-        }
-        for r in rows
-    ]
+    return [task_row_to_out(r) for r in rows]
 
 
 async def _query_recent_alerts(engine: AsyncEngine, limit: int) -> list[dict[str, Any]]:
@@ -274,21 +258,7 @@ async def _query_recent_alerts(engine: AsyncEngine, limit: int) -> list[dict[str
     """
     async with engine.connect() as conn:
         rows = (await conn.execute(text(sql), {"from_dt": from_dt, "lim": limit})).fetchall()
-    return [
-        {
-            "id": str(r.id),
-            "fb_ad_id": r.fb_ad_id,
-            "ad_name": r.ad_name,
-            "campaign_name": r.campaign_name,
-            "offer_code": r.offer_code,
-            "stage": r.stage,
-            "matched_rule_codes": list(r.matched_rule_codes or []),
-            "triggered_by_rule_codes": None,
-            "created_at": r.created_at.isoformat() if r.created_at else None,
-            "alert_payload": r.metrics_json if r.metrics_json else None,
-        }
-        for r in rows
-    ]
+    return [alert_event_row_to_out(r) for r in rows]
 
 
 async def _query_enable_recommendations_pending(
