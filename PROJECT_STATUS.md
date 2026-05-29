@@ -115,6 +115,7 @@ observer (FSM/pipeline/writers/runtime), rules (6 стоп-правил), tasks 
 | `META_INTEGRATION_PLAN.md` | Master-план этапов 0-9 |
 | `CLAUDE.md` | Архитектура, design-rules, история раундов |
 | `DB_REDESIGN.md` | Схема БД |
+| `docs/stop_rules.md` | Стоп-правила: 6 правил + свёртка 80/80 + гео-CPA (KE_CR2 $8 / GH_CR2 $3) + owner-тег (подтверждено 2026-05-29) |
 | `docs/frontend_compatibility_audit.md` | 70 endpoints × backend-модели |
 | `docs/frontend_design.md` + `docs/frontend_mockups/` | Дизайн нового фронта |
 | `docs/backend_test_audit_round_8.md` | Аудит покрытия (Round 9 закрыл) |
