@@ -1,16 +1,16 @@
 # PROJECT STATUS — FB Stop Bot
 
 > Единый источник правды по состоянию проекта. Обновляется по итогам раундов.
-> Тесты backend: **1085 passed / 0 failed** · frontend: **77 passed** · ruff/typecheck/lint clean.
+> Тесты backend: **1122 passed / 0 failed** · frontend: **77 passed** · ruff/typecheck/lint clean.
 > Подробности — в `CLAUDE.md` (архитектура) + `META_INTEGRATION_PLAN.md` (план) + `docs/*audit*.md` (аудиты).
 
 ## TL;DR
 
-- **Backend — production-ready.** 12 воркеров + FastAPI (61 endpoint) + Node.js gRPC. Прошёл 5 аудитов (security ×2, test-coverage, code-quality, test-quality) + cleanup-раунды. Все CRIT/HIGH закрыты.
+- **Backend — production-ready.** 13 воркеров + FastAPI (61 endpoint) + Node.js gRPC. Прошёл 5 аудитов (security ×2, test-coverage, code-quality, test-quality) + cleanup-раунды. Все CRIT/HIGH закрыты.
 - **Frontend — готов.** Новый `frontend/` (TS + Vite + Tailwind 4 + TanStack): 6 страниц, русский UI, проверены в браузере. Старый `frontend-legacy/` — архив.
 - **БД** переименована `fb_stop_bot_v2 → fb_stop_bot` (данные сохранены).
-- **Проверено вживую (2026-05-29):** Marketing API latency (BL-7, insights 2–4с / list ~1с); observer scan-канал — DOM-парсинг + валидация колонок работают на живом Ads Manager (для полного скана нужен кастомный column-preset в кабинете). **Починены 2 латентных prod-бага:** gate-фабрики observer/disable/enable звали несуществующий API (`BrowserAgentClient()` без config + `.connect()`) → упали бы на первой задаче; +4 анти-регресс теста.
-- **Не доведено вживую:** полный observer-цикл с FSM/disable (нужен column-preset + согласие на действия на реальных кабинетах).
+- **Проверено вживую (2026-05-29):** Marketing API latency (BL-7, insights 2–4с / list ~1с); **Marketing API mutations enable/disable 24/24 объявлений** на живом кабинете (Этап 5 валидирован, act через API — 48 операций 0 промахов); observer DOM scan-канал (парсинг + валидация колонок). **Подтверждено владельцем:** стоп ad-level (кампания — отдельный рубильник владельца); стоп-правила (`docs/stop_rules.md`); CPA по гео (KE_CR2 $8 / GH_CR2 $3). **Починены 2 латентных prod-бага** gate-фабрик observer/disable/enable (+4 теста).
+- **Не доведено вживую:** полный observer-цикл с FSM/авто-disable (нужен column-preset + запущенный observer на реальном кабинете) — #36.
 
 ---
 
@@ -33,18 +33,19 @@
 
 ## 2. Функциональные блоки — что делает, работает ли
 
-### Python-воркеры (12) — `apps/*`
+### Python-воркеры (13) — `apps/*`
 | Блок | Назначение | Состояние |
 |---|---|---|
 | observer_worker | scan → FSM → метрики → outbox → TG-алерты | ✅ (heartbeat R11; gate-фабрика пофикшена; scan-канал live; **owner-scoping** по тегу кампаний) |
 | disable_worker / enable_worker | toggle ad через gRPC, retry backoff | ✅ (heartbeat R11; gate-фабрика пофикшена 2026-05-29) |
-| telegram_poller | `/start /help /spy /ask` + inline-кнопки | ✅ |
+| telegram_poller | `/start /help /spy /ask /tools /pause /resume /autostart` + inline | ✅ |
 | meta_api_worker | Marketing API mutations (outbox) | ✅ |
 | reconciler_worker | stuck tasks → retrying, stale drafts cancel | ✅ |
 | cleanup_worker | retention + партиции | ✅ |
 | health_watchdog | мониторинг `worker:heartbeat:*` | ✅ (R11 выровнял имена — было сломано) |
 | enable_recommendation_worker | рекомендации re-enable | ✅ |
 | digest_scheduler | ежедневный TG-дайджест 09:00 | ✅ |
+| cabinet_scheduler | автостарт по расписанию: enable owner-кампаний по дате + scan trigger (#38) | ✅ draft-free, owner-scoped, dedup |
 | creator_worker / creator_recorder | Vision-создание кампаний | ⚠️ код есть, не активны в сборке |
 
 ### Сервисы
@@ -95,12 +96,16 @@ observer (FSM/pipeline/writers/runtime), rules (6 стоп-правил), tasks 
 
 > `BL-N · [приоритет] · scope`. P2=tech-debt, P3=отложено/ждёт внешнего.
 
-**Закрыто:** BL-1 (WS publish), BL-2..6 (frontend страницы), BL-7 (latency-замер live 2026-05-29 → §1.1 плана), BL-9 (prod-блок dev-tools), BL-10+11 (вынос helpers + split history.py), BL-12 (OpenAPI codegen + дрейф-репорт). Rename (frontend-v2→frontend, БД v2→fb_stop_bot) — done.
+**Закрыто:** BL-1 (WS publish), BL-2..6 (frontend страницы), BL-7 (latency-замер live), BL-9 (prod-блок dev-tools), BL-10+11 (helpers + split history.py), BL-12 (OpenAPI codegen). Rename (v2→fb_stop_bot) — done.
+**Сессия 2026-05-29 (запушено):** gate-фабрики fix; owner-scoping (#33-35, +мультитег); стоп-правила зафиксированы (`docs/stop_rules.md`); ADR канал observer (DOM); `/tools` каталог (#34); `/pause` `/resume` (#33); автостарт по расписанию `cabinet_scheduler` (#38); **live-валидация Marketing API mutations** (enable/disable 24/24).
 
 **Осталось:**
 - **BL-8 · P3 · AdSet.pro Волна 4** — tracker_aggregate per (ad,country,day) + outgoing postback + key rotation.
 - **BL-12-mig · P2 · shape-миграция БД** — добавить недостающие поля Offer/OfferRule/AdMetrics (если фронт начнёт требовать; пайплайн дрейфа уже есть).
 - **BL-15 · P3 · frontend-mini (TMA)** — прокачка Telegram Mini App (дублирует логику старого фронта, без тестов).
+- **#39 · P2 · observer act через API** — перевести auto-stop с DOM-клика на Marketing API (pause_ad): надёжнее (точно по ad_id, не промахнётся по кнопке), live-тест показал 48 операций 0 промахов. Detect через DOM, act через API.
+- **#36 · P3 · live observer end-to-end** — полный цикл scan→FSM→авто-disable на живом профиле (нужен column-preset).
+- **#37 · P3 · frequency-anomaly** — активировать правило 7 (build_rule_context не шлёт frequency_current).
 
 **Не делаем (решение 2026-05-29):**
 - ~~BL-13 backtest~~ — пропускаем (пользователь калибрует пороги вручную/доверяет).
