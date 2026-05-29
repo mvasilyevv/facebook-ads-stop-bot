@@ -58,6 +58,9 @@ def build_rule_context(
     offer: OfferRules,
     *,
     external_deposits: int = 0,
+    frequency_current: Decimal | None = None,
+    impressions: int | None = None,
+    reach: int | None = None,
 ) -> RuleContext:
     """OfferRules → RuleContext с минимальным набором параметров.
 
@@ -65,13 +68,42 @@ def build_rule_context(
     нейтральный default чтобы правила не падали по делению на ноль. Без adaptive.
     external_deposits — из AdSet.pro трекера, защищают от STOP при наличии депозита,
     которого Meta Ads Manager ещё не видит.
+
+    frequency-anomaly (правило 7, #37) — opt-in per-offer через offer.frequency_threshold:
+    NULL/0 → правило выключено для этого оффера; задан → stop-порог = frequency_threshold,
+    warning — свёртка 80% (как у CPC/CPL/CPR). Фаза 1: только абсолютный порог, без
+    истории frequency_1h_ago (рост за час не считаем).
+
+    ВАЖНО (money): impressions/reach кладём в RuleContext ТОЛЬКО когда frequency-правило
+    включено. ctx.impressions используется ещё и guardrail-правилами (cpc/cpl/cpr при 0
+    событий) как sanity-минимум показов — передавать его всегда означало бы тихо изменить
+    поведение существующих правил (не входит в scope #37). Для офферов без frequency_threshold
+    impressions=None → guardrail работает ровно как раньше.
     """
     cpa = offer.cpa_threshold or Decimal("100")
+    warning_pct = Decimal("80")
+
+    freq_threshold = offer.frequency_threshold
+    freq_enabled = freq_threshold is not None and freq_threshold > 0
+    if freq_enabled:
+        freq_stop = Decimal(freq_threshold)
+        freq_warning = (freq_stop * warning_pct / Decimal("100")).quantize(Decimal("0.01"))
+    else:
+        # Дефолты RuleContext (не используются при enabled=False, заданы для валидности).
+        freq_stop = Decimal("3.5")
+        freq_warning = Decimal("2.5")
+
     return RuleContext(
         cpa_amount=cpa,
-        warning_percent_of_stop=Decimal("80"),
+        warning_percent_of_stop=warning_pct,
         stop_percent_of_base=Decimal("80"),
         external_deposits=external_deposits,
+        frequency_anomaly_enabled=freq_enabled,
+        frequency_current=frequency_current if freq_enabled else None,
+        frequency_stop_threshold=freq_stop,
+        frequency_warning_threshold=freq_warning,
+        impressions=impressions if freq_enabled else None,
+        reach=reach if freq_enabled else None,
     )
 
 
@@ -243,7 +275,13 @@ async def _process_one_row(
 
     # --- Оценка правил (одна функция возвращает оба уровня severity) ---
     ad_external_deposits = external_deposits.get(row.fb_ad_id, 0) if row.fb_ad_id else 0
-    ctx = build_rule_context(matched_offer, external_deposits=ad_external_deposits)
+    ctx = build_rule_context(
+        matched_offer,
+        external_deposits=ad_external_deposits,
+        frequency_current=row.frequency,
+        impressions=row.impressions,
+        reach=row.reach,
+    )
     evaluation = evaluate_stop_rules(row, ctx)
     stop_codes = tuple(evaluation.stop_rule_codes)
     warning_codes = tuple(evaluation.warning_rule_codes)

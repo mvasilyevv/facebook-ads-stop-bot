@@ -1,7 +1,7 @@
 # PROJECT STATUS — FB Stop Bot
 
 > Единый источник правды по состоянию проекта. Обновляется по итогам раундов.
-> Тесты backend: **1151 passed / 0 failed** · frontend: **77 passed** · ruff/typecheck/lint clean.
+> Тесты backend: **1161 passed / 0 failed** · frontend: **77 passed** · ruff/typecheck/lint clean.
 > Подробности — в `CLAUDE.md` (архитектура) + `META_INTEGRATION_PLAN.md` (план) + `docs/*audit*.md` (аудиты).
 
 ## TL;DR
@@ -57,7 +57,7 @@
 | MCP-сервер (`apps/mcp_server/`) | 15 tools + 4 resources для Claude Desktop | ✅ stdio |
 
 ### Core-модули (`core/`)
-observer (FSM/pipeline/writers/runtime), rules (6 стоп-правил), tasks (unified outbox), meta_api (client+10 mutations+upload), telegram, dashboard (snapshot+metric_aggregation), adset_pro (MCP-клиент), ai_assistant, enable_reco, control (pubsub_listener), crypto, pubsub — **все ✅**.
+observer (FSM/pipeline/writers/runtime), rules (7 стоп-правил, frequency-anomaly opt-in), tasks (unified outbox), meta_api (client+10 mutations+upload), telegram, dashboard (snapshot+metric_aggregation), adset_pro (MCP-клиент), ai_assistant, enable_reco, control (pubsub_listener), crypto, pubsub — **все ✅**.
 
 ---
 
@@ -97,14 +97,13 @@ observer (FSM/pipeline/writers/runtime), rules (6 стоп-правил), tasks 
 > `BL-N · [приоритет] · scope`. P2=tech-debt, P3=отложено/ждёт внешнего.
 
 **Закрыто:** BL-1 (WS publish), BL-2..6 (frontend страницы), BL-7 (latency-замер live), BL-9 (prod-блок dev-tools), BL-10+11 (helpers + split history.py), BL-12 (OpenAPI codegen). Rename (v2→fb_stop_bot) — done.
-**Сессия 2026-05-29 (запушено):** gate-фабрики fix; owner-scoping (#33-35, +мультитег); стоп-правила зафиксированы (`docs/stop_rules.md`); ADR канал observer (DOM); `/tools` каталог (#34); `/pause` `/resume` (#33); автостарт по расписанию `cabinet_scheduler` (#38); **live-валидация Marketing API mutations** (enable/disable 24/24); **#39 observer act через API** (флаг `observer_config.act_via_api`, миграции 0007+0008 — **дефолт TRUE**: API основной канал, DOM спящий резерв-фолбэк; авто-стоп и ручные кнопки идут через `meta_api_mutation pause_ad/activate_ad`; FSM-sync `ad_alert_state` в meta_api_worker; +29 тестов → 1151).
+**Сессия 2026-05-29 (запушено):** gate-фабрики fix; owner-scoping (#33-35, +мультитег); стоп-правила зафиксированы (`docs/stop_rules.md`); ADR канал observer (DOM); `/tools` каталог (#34); `/pause` `/resume` (#33); автостарт по расписанию `cabinet_scheduler` (#38); **live-валидация Marketing API mutations** (enable/disable 24/24); **#39 observer act через API** (флаг `observer_config.act_via_api`, миграции 0007+0008 — **дефолт TRUE**: API основной канал, DOM спящий резерв-фолбэк; авто-стоп и ручные кнопки идут через `meta_api_mutation pause_ad/activate_ad`; FSM-sync `ad_alert_state` в meta_api_worker; +29 тестов). **#37 frequency-anomaly** активирован (правило 7, opt-in per-offer через `offer.frequency_threshold`, фаза 1 — абсолютный порог; +10 тестов → 1161).
 
 **Осталось:**
 - **BL-8 · P3 · AdSet.pro Волна 4** — tracker_aggregate per (ad,country,day) + outgoing postback + key rotation.
 - **BL-12-mig · P2 · shape-миграция БД** — добавить недостающие поля Offer/OfferRule/AdMetrics (если фронт начнёт требовать; пайплайн дрейфа уже есть).
 - **BL-15 · P3 · frontend-mini (TMA)** — прокачка Telegram Mini App (дублирует логику старого фронта, без тестов).
 - **#36 · P3 · live observer end-to-end** — полный цикл scan→FSM→авто-disable на живом профиле (нужен column-preset). При `act_via_api=True` act идёт через Marketing API (#39).
-- **#37 · P3 · frequency-anomaly** — активировать правило 7 (build_rule_context не шлёт frequency_current).
 
 **Не делаем (решение 2026-05-29):**
 - ~~BL-13 backtest~~ — пропускаем (пользователь калибрует пороги вручную/доверяет).

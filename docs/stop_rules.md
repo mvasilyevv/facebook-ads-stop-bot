@@ -40,7 +40,7 @@ WARNING = STOP × 80%                (warning_percent_of_stop = 80)
 4. **regs_no_dep**: ≥5 регистраций и 0 депозитов → стоп (WARNING при 4 = ceil(5×0.8)).
 5. **spend_no_dep_range**: расход 50–70% CPA, депозитов 0, цена реги в норме → стоп (с ×80% эффективно **40–56%**).
 6. **spend_with_dep_range**: есть депозит, расход 70–90% CPA → стоп (эффективно **56–72%**).
-7. **frequency_anomaly** (задел): frequency > 3.5 → стоп, > 2.5 + рост → warning. **Сейчас не активно** — `build_rule_context` не передаёт `frequency_current` (нужна доработка, если потребуется).
+7. **frequency_anomaly** (выгорание аудитории, opt-in #37): частота показов на человека (`impressions/reach`) выше порога → стоп. **Активно**, если у оффера задан `frequency_threshold`: STOP при `frequency > frequency_threshold`, WARNING при `> 80%` порога (свёртка как у CPC/CPL/CPR). Фаза 1 — только абсолютный порог (рост за час `frequency_1h_ago` пока не считается). Sanity против ложных стопов на старте: пропускается при `frequency > 10` (выброс при малом reach), `impressions < 500` или `reach < 100`. NULL/0 порог → правило выключено для оффера.
 
 ## Ключевая семантика (подтверждено владельцем)
 
@@ -48,10 +48,12 @@ WARNING = STOP × 80%                (warning_percent_of_stop = 80)
   - кликов 0, но spend > порога → стоп;
   - 5 кликов, CPC в норме, но spend > цены 1 лида без лидов → стоп.
 - **Никакого ожидания объёма.** Правила срабатывают сразу при достижении порога — не ждём N кликов / лидов / рег. (Единственный sanity — `guardrail_min_impressions=10`: при <10 показов 1-2 показа не дают ложный guardrail; метрики при наличии события судятся всегда.)
+- **impressions/reach в контексте — только при включённом frequency-правиле.** `build_rule_context` пробрасывает `impressions`/`reach` в `RuleContext` лишь когда у оффера задан `frequency_threshold` (нужны для sanity-фильтра правила 7). Для офферов без порога они остаются `None` → guardrail-правила (CPC/CPL/CPR) работают как раньше, без sanity-минимума показов. Так активация правила 7 не меняет поведение существующих правил.
 - **WARNING → STOP** — двухуровнево: сначала предупреждение (алерт без отключения) на 80% стопа, затем STOP (алерт + disable-задача).
 
 ## Где настраивается
 
 - CPA — `offer_rules.cpa_threshold` (per-оффер).
 - Проценты/свёртка/диапазоны — дефолты `RuleContext` (глобальные, `core/rules/types.py`); `build_rule_context` пробрасывает только `cpa_amount` + свёртку 80/80. Per-offer override процентов сейчас не вынесен (все офферы делят дефолты, меняется только CPA).
+- Frequency-anomaly (правило 7) — `offer_rules.frequency_threshold` (per-оффер, opt-in): stop-порог частоты, WARNING — свёртка 80%. NULL/0 → правило выключено для оффера. Разумные значения для узких GEO: STOP ~3.5–4.0.
 - owner-тег — `observer_config.owner_campaign_tag` (API `PUT /settings/observer`).
