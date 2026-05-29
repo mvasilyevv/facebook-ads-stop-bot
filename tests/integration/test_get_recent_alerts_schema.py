@@ -2,7 +2,7 @@
 """Регрессия pre-existing bug: get_recent_alerts SQL под схему.
 
 До фикса: SQL ссылался на `ae.event_type`, `ae.rule_codes`, `a.name` —
-несуществующие колонки v2. Tool падал с UndefinedColumnError при любом вызове
+несуществующие колонки. Tool падал с UndefinedColumnError при любом вызове
 из /ask или MCP.
 
 После фикса: используем `ae.stage`, `ae.matched_rule_codes`, `a.ad_name`.
@@ -63,7 +63,7 @@ async def alerts_world(pg_engine, fb_ad_fixture):
         await conn.execute(text("DELETE FROM alert_events WHERE ad_id = :a"), {"a": ad_id})
 
 
-# SQL не падает на v2-колонках (stage, matched_rule_codes, ad_name) — основной кейс.
+# SQL не падает на колонках (stage, matched_rule_codes, ad_name) — основной кейс.
 @pytest.mark.asyncio
 async def test_get_recent_alerts_sql_no_error(pg_engine, alerts_world) -> None:
     tool = GetRecentAlertsTool()

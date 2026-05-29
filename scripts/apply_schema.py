@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Применить новую схему v2 к Postgres (полный wipe + create).
+"""Применить новую схему к Postgres (полный wipe + create).
 
 Алгоритм:
 1. Проверить что есть DATABASE_URL.
@@ -214,7 +214,7 @@ async def main(argv: list[str]) -> int:
         await engine.dispose()
 
     logger.info("=" * 60)
-    logger.info("Schema v2 applied successfully.")
+    logger.info("Schema applied successfully.")
     logger.info("Следующий шаг: python scripts/restore_secrets.py")
     logger.info("=" * 60)
     return 0

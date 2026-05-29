@@ -3,7 +3,7 @@
 Запуск:
     PYTHONPATH=. .venv/bin/python scripts/ad_library_poc.py
 
-Что изменилось vs v2:
+Что изменилось:
 - Multi-query поиск: для каждого GEO прогоняем 3-5 локализованных keyword'ов
 - Дедупликация по ad_archive_id между запросами одного GEO
 - Heuristic-классификатор отсеивает не-gambling выдачу (DramaBox, Lovely Books и т.п.)

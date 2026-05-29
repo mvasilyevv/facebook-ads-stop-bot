@@ -48,7 +48,7 @@ export const useUiStore = create<UiState>()(
       },
     }),
     {
-      name: "fb-v2-ui",
+      name: "fb-ui",
       storage: createJSONStorage(() => localStorage),
       onRehydrateStorage: () => (state) => {
         if (state) applyDensityCssVar(state.density);

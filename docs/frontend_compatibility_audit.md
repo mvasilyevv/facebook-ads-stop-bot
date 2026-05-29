@@ -1,15 +1,15 @@
-# Frontend v2 Compatibility Audit
+# Frontend Compatibility Audit
 
 Дата: 2026-05-27
-Источник: `frontend/src/api.js` (актуальный фронт) × `core/models/` v2 × `apps/api/` (минимум после миграции).
+Источник: `frontend/src/api.js` (актуальный фронт) × `core/models/` × `apps/api/` (минимум после миграции).
 
 ## Сводка
 
 - Всего endpoints (uniq HTTP routes): **70**
-- **OK** (1-в-1 с v2-моделями, нужен только router-handler): **17**
-- **ADAPT** (схема v2 даёт данные, но нужны переименования полей, JOIN'ы, миграция семантики; некоторые endpoints — это compute-агрегации поверх partitioned-таблиц): **39**
+- **OK** (1-в-1 с новыми моделями, нужен только router-handler): **17**
+- **ADAPT** (новая схема даёт данные, но нужны переименования полей, JOIN'ы, миграция семантики; некоторые endpoints — это compute-агрегации поверх partitioned-таблиц): **39**
 - **REMOVE** (фича удалена с миграцией, либо больше не имеет под собой данных): **6**
-- **NEW** (на фронте уже есть вызов, но логику нужно построить заново под v2 — например, batch-эндпоинт для DashboardPage, или AI-анализ): **8**
+- **NEW** (на фронте уже есть вызов, но логику нужно построить заново под новую схему — например, batch-эндпоинт для DashboardPage, или AI-анализ): **8**
 
 Фронт ожидает префикс `/api`. Например, `getOffers()` бьёт в `GET /api/offers`. Бэкенд должен либо смонтировать routers с `prefix="/api"`, либо настроить proxy. В текущем `apps/api/main.py` routers подключены без префикса (`health` → `/healthz`, `postback` → `/api/v1/postback/adsetpro`), так что либо переделываем include_router, либо фронт нужно перенаправить через Vite proxy/nginx.
 
@@ -30,36 +30,36 @@
 | `GET /settings/observer` | OK | `ObserverConfig` (`core/models/settings/observer_config.py`) | Singleton, поля 1-в-1. Нет `*_percent_of_stop` полей из DEFAULT_OBSERVER — это уже хранится в `system_config` или вычисляется. Нужно сверить, как именно фронт ожидает шаблон (см. `useSettingsData.js:28-39`). |
 | `PUT /settings/observer` | ADAPT | `ObserverConfig` | Все percent_of_stop/cpc/cpl/cpr WARNING-параметры из DEFAULT_OBSERVER в `observer_config` отсутствуют. Решение: либо мигрировать поля в `observer_config`, либо хранить в `system_config.feature_flags`. |
 | `PATCH /settings/observer/scanning` | OK | `ObserverConfig.is_scanning_enabled` | Прямой write. |
-| `POST /settings/observer/scan-now` | NEW | (Redis pubsub) | Триггерит observer-цикл вне расписания. В v2 нет канала — нужно опубликовать в Redis `fb_agent:observer:trigger` или поднять флаг в `observer:runtime`. |
-| `PATCH /settings/observer/auto-enable` | ADAPT | `ObserverConfig` или `system_config` | В v2 в `observer_config` нет колонки `auto_enable_recommendations`. Нужно либо добавить, либо переместить в `system_config.feature_flags`. |
-| `GET /settings/telegram` | ADAPT | `TelegramConfig` | Фронт ждёт поля `bot_username`, `web_app_url`, `is_authorized`, `auth_deep_link`, `activation_command`, `poller_status`. В v2-модели: `bot_token_encrypted`, `chat_id`, `forum_*_thread_id`, `poller_offset`, `poller_heartbeat_at`. Остальное нужно вычислять (`poller_status` ← `(now - poller_heartbeat_at) < 60s`; `bot_username` — getMe Telegram API, кэш в Redis). |
+| `POST /settings/observer/scan-now` | NEW | (Redis pubsub) | Триггерит observer-цикл вне расписания. В новой схеме нет канала — нужно опубликовать в Redis `fb_agent:observer:trigger` или поднять флаг в `observer:runtime`. |
+| `PATCH /settings/observer/auto-enable` | ADAPT | `ObserverConfig` или `system_config` | В новой схеме в `observer_config` нет колонки `auto_enable_recommendations`. Нужно либо добавить, либо переместить в `system_config.feature_flags`. |
+| `GET /settings/telegram` | ADAPT | `TelegramConfig` | Фронт ждёт поля `bot_username`, `web_app_url`, `is_authorized`, `auth_deep_link`, `activation_command`, `poller_status`. В новой модели: `bot_token_encrypted`, `chat_id`, `forum_*_thread_id`, `poller_offset`, `poller_heartbeat_at`. Остальное нужно вычислять (`poller_status` ← `(now - poller_heartbeat_at) < 60s`; `bot_username` — getMe Telegram API, кэш в Redis). |
 | `PUT /settings/telegram/token` | OK | `TelegramConfig.bot_token_encrypted` | Через `core.crypto.encrypt`. |
 | `DELETE /settings/telegram` | OK | `TelegramConfig` | DROP/null-токен. |
-| `PUT /settings/telegram/web-app-url` | REMOVE | — | В v2-модели `TelegramConfig` нет `web_app_url` колонки. Mini App (`frontend-mini/`) — отдельный планируемый продукт; URL гипотетически можно положить в `system_config.feature_flags.web_app_url`. Альтернативно — удалить вызов на фронте, если Mini App не будет подниматься скоро. |
+| `PUT /settings/telegram/web-app-url` | REMOVE | — | В новой модели `TelegramConfig` нет `web_app_url` колонки. Mini App (`frontend-mini/`) — отдельный планируемый продукт; URL гипотетически можно положить в `system_config.feature_flags.web_app_url`. Альтернативно — удалить вызов на фронте, если Mini App не будет подниматься скоро. |
 | `GET /settings/telegram/recipients` | OK | `TelegramRecipient` (`core/models/telegram/recipient.py`) | Берём `revoked_at IS NULL`. |
 | `DELETE /settings/telegram/recipients/{id}` | OK | `TelegramRecipient.revoked_at = now()` | Soft-delete. |
 | `POST /settings/telegram/recipients/invite` | OK | `TelegramInvite` | Insert row + return code. |
 | `GET /settings/vision` | ADAPT | `VisionConfig` (`core/models/settings/vision_config.py`) | Фронт ждёт `has_token`, `profile_id`, `auto_restart_on_missing_cdp`, `runtime_status`, `runtime_status_message`, `cdp_ready`, `cdp_port`. Из БД: `x_token_encrypted` (флаг has_token), `profile_id`, `column_widths_json`. Runtime-state живёт в Redis (`browser:runtime` или `worker:heartbeat:browser-agent`). |
 | `PUT /settings/vision` | ADAPT | `VisionConfig` | Только `x_token` / `profile_id`. `auto_restart_on_missing_cdp` — нужно добавить либо колонку, либо ключ в `system_config`. |
 | `POST /vision/reconnect` | NEW | gRPC к browser-agent | Триггерит `BrowserSessionService.Reconnect`. Можно дёргать через `clients/python_grpc/client.py`. |
-| `GET /vision/profiles` | NEW | gRPC к browser-agent | Список доступных Vision-профилей через `BrowserSessionService` (нет в v2-БД, читается из Vision API). |
+| `GET /vision/profiles` | NEW | gRPC к browser-agent | Список доступных Vision-профилей через `BrowserSessionService` (нет в новой БД, читается из Vision API). |
 
 ### Browser/Columns (3 endpoints)
 
 | Endpoint | Status | Бэкенд | Заметки |
 |---|---|---|---|
 | `GET /settings/browser/validate-columns` | NEW | gRPC к `ScannerService.ValidateColumns` | Логика валидации DOM-колонок Ads Manager, без БД. |
-| `POST /settings/browser/save-column-widths` | ADAPT | `VisionConfig.column_widths_json` | Сохраняет текущие ширины в JSONB. Логика чтения с gRPC браузера + write в v2. |
+| `POST /settings/browser/save-column-widths` | ADAPT | `VisionConfig.column_widths_json` | Сохраняет текущие ширины в JSONB. Логика чтения с gRPC браузера + write в новой схеме. |
 | `POST /settings/browser/apply-column-widths` | NEW | gRPC к browser-agent | Применяет сохранённые ширины (live action на странице). |
 
 ### Observer/Status (5 endpoints)
 
 | Endpoint | Status | Бэкенд | Заметки |
 |---|---|---|---|
-| `GET /observer/status` | NEW | Redis `observer:runtime` | В v2 status больше не лежит в БД, перенесён в Redis с TTL 60s (см. `CLAUDE.md` §observer_worker). Endpoint — это просто Redis GET + парсинг JSON. |
-| `POST /observer/restart` | NEW | (supervisord/Redis pubsub) | Триггерит рестарт observer-процесса. В v2 нет канала, нужно либо POST flag в `observer:runtime`, либо вернуть «kill+sleep» через subprocess (опасно). |
+| `GET /observer/status` | NEW | Redis `observer:runtime` | В новой схеме status больше не лежит в БД, перенесён в Redis с TTL 60s (см. `CLAUDE.md` §observer_worker). Endpoint — это просто Redis GET + парсинг JSON. |
+| `POST /observer/restart` | NEW | (supervisord/Redis pubsub) | Триггерит рестарт observer-процесса. В новой схеме нет канала, нужно либо POST flag в `observer:runtime`, либо вернуть «kill+sleep» через subprocess (опасно). |
 | `POST /disable-worker/restart` | NEW | (supervisord/Redis pubsub) | Аналогично. |
-| `POST /observer/start-new-cabinet-day` | ADAPT | `CabinetDayArchive` | Insert snapshot за прошлый день + reset `cabinet_day_started_at` в `ad_auto_enable_disabled`. v2 поддерживает (модель есть, см. `cabinet_day_archive.py`). |
+| `POST /observer/start-new-cabinet-day` | ADAPT | `CabinetDayArchive` | Insert snapshot за прошлый день + reset `cabinet_day_started_at` в `ad_auto_enable_disabled`. новая схема поддерживает (модель есть, см. `cabinet_day_archive.py`). |
 | `GET /observer/scan-runs?limit&filter` | ADAPT | `ScanRun` (partitioned) | Простой SELECT по `scan_runs`. Фильтры `errors`/`slow`/`with_alerts` → WHERE `outcome='error'` / `duration_ms > X` / `alerts_warning+alerts_stop > 0`. Обязательно при запросе указывать partition-key (`started_at >= ...`), иначе full scan по всем партициям. |
 
 ### Offers (8 endpoints)
@@ -81,8 +81,8 @@
 |---|---|---|---|
 | `GET /dashboard/stats` | NEW | aggregate query | Считается агрегацией: `total_ads_monitored` (COUNT FbAd WHERE is_active=true), `ads_in_stop`/`ads_in_warning` (COUNT AdAlertState GROUP BY alert_state), `last_scan_at` (MAX ScanRun.started_at), `observer_status` (Redis observer:runtime). Всё под рукой, но не один endpoint — это batch-агрегация. |
 | `GET /dashboard/batch` | NEW | aggregate query | Композитный endpoint для DashboardPage. Должен вернуть `stats + последние ads + recent alerts + tasks` одним запросом, чтобы фронт делал 1 fetch вместо 5. Нужно проектировать заново. |
-| `GET /dashboard/ads` | ADAPT | `FbAd` + `AdAlertState` + `AdMetrics` (last per ad) | На фронте называется `getAdSnapshots`, но в v2 нет таблицы `ad_snapshots`. Текущее состояние = JOIN(FbAd, AdAlertState, последняя AdMetrics по cycle_ts). Фронт ждёт `meta_ad_status` — это `MetaApiObservation.meta_ad_status` (LEFT JOIN). |
-| `GET /dashboard/alerts` | ADAPT | `AlertEvent` (partitioned) | Фронт ждёт поля `event_type`/`rule_codes`/`name` (см. `core/ai_assistant/tools/ops/get_recent_alerts.py:52`), v2 даёт `stage`/`matched_rule_codes`/`ad_name через JOIN`. Адаптировать SELECT с правильными именами + обязательный WHERE по `created_at` (partition-key). |
+| `GET /dashboard/ads` | ADAPT | `FbAd` + `AdAlertState` + `AdMetrics` (last per ad) | На фронте называется `getAdSnapshots`, но в новой схеме нет таблицы `ad_snapshots`. Текущее состояние = JOIN(FbAd, AdAlertState, последняя AdMetrics по cycle_ts). Фронт ждёт `meta_ad_status` — это `MetaApiObservation.meta_ad_status` (LEFT JOIN). |
+| `GET /dashboard/alerts` | ADAPT | `AlertEvent` (partitioned) | Фронт ждёт поля `event_type`/`rule_codes`/`name` (см. `core/ai_assistant/tools/ops/get_recent_alerts.py:52`), новая схема даёт `stage`/`matched_rule_codes`/`ad_name через JOIN`. Адаптировать SELECT с правильными именами + обязательный WHERE по `created_at` (partition-key). |
 | `GET /dashboard/incidents` | NEW | aggregate query | Не в API раньше, тогда это разница от `getAlertEvents`. Логику нужно проектировать: видимо, активные «инциденты» = AdAlertState WHERE `alert_state IN ('warning_sent','stop_sent')` + кол-во транзишинов. |
 | `GET /dashboard/disable-tasks` | ADAPT | `TaskQueue` WHERE `task_type='disable'` | Раньше — отдельная таблица `disable_tasks`. Теперь нужно SELECT FROM task_queue + payload->>'fb_ad_id'. Фронт ждёт поля `id`, `fb_ad_id`, `status` (PENDING/RUNNING/RETRYING/FAILED). Маппинг: `draft+pending+retrying → PENDING`, `running → RUNNING`, `failed → FAILED`. Использовать GIN-индекс по `payload`. |
 | `POST /dashboard/disable-tasks` | ADAPT | `TaskQueue` insert (task_type='disable') | Use `core.tasks.queue.create_task` + правильный `requested_by`. |
@@ -91,7 +91,7 @@
 | `GET /dashboard/enable-tasks` | ADAPT | `TaskQueue` WHERE `task_type='enable'` | Аналогично disable-tasks. |
 | `GET /dashboard/enable-recommendations` | OK | `EnableRecommendation` | SELECT с `LEFT JOIN task_queue ON promoted_to_task_id`. Поле `promoted_to_task_id IS NULL` = ещё не подтверждена. |
 | `POST /dashboard/enable-recommendations/{id}/enable` | ADAPT | `EnableRecommendation` + `TaskQueue insert` | Создаёт `task_queue` (task_type='enable'), затем UPDATE `enable_recommendations.promoted_to_task_id`. |
-| `GET /dashboard/spend-history` | ADAPT | `AdMetrics` (raw) | На фронте «сырые AdSnapshot за окно hours». В v2 это `AdMetrics` за период. Обязательно WHERE `cycle_ts >= now() - interval 'X hours'` для использования partition-pruning. |
+| `GET /dashboard/spend-history` | ADAPT | `AdMetrics` (raw) | На фронте «сырые AdSnapshot за окно hours». В новой схеме это `AdMetrics` за период. Обязательно WHERE `cycle_ts >= now() - interval 'X hours'` для использования partition-pruning. |
 | `GET /dashboard/chart-data` | ADAPT | `AdMetrics` (агрегации) | Бакетированный график. Tier 1: bucket via `date_trunc('hour', cycle_ts)` + SUM. Logic compute-side. |
 | `GET /dashboard/performance` | ADAPT | `AdMetrics` + `AlertEvent` | Тяжёлый агрегат: топ кампаний, оффер-leaderboard, rule-violations. Можно собирать из `AdMetrics` + `AlertEvent.matched_rule_codes`. |
 
@@ -99,7 +99,7 @@
 
 | Endpoint | Status | Бэкенд | Заметки |
 |---|---|---|---|
-| `GET /ads/{fb_ad_id}/timeline` | ADAPT | `FbAd` + `AdMetrics` + `AlertEvent` + `TaskQueue` | Timeline = метрики + события + действия. Все 3 источника живут в v2 (AdMetrics partitioned, AlertEvent partitioned, TaskQueue WHERE `payload->>'fb_ad_id' = :id`). Резолв `fb_ad_id → FbAd.id` через UNIQUE-индекс. |
+| `GET /ads/{fb_ad_id}/timeline` | ADAPT | `FbAd` + `AdMetrics` + `AlertEvent` + `TaskQueue` | Timeline = метрики + события + действия. Все 3 источника живут в новой схеме (AdMetrics partitioned, AlertEvent partitioned, TaskQueue WHERE `payload->>'fb_ad_id' = :id`). Резолв `fb_ad_id → FbAd.id` через UNIQUE-индекс. |
 | `GET /dashboard/auto-enable-disabled` | OK | `AdAutoEnableDisabled` | Список объявлений со снятым auto-enable. |
 | `POST /dashboard/auto-enable-disabled/{fb_ad_id}` | OK | `AdAutoEnableDisabled` insert | Установить флаг. |
 | `DELETE /dashboard/auto-enable-disabled/{fb_ad_id}` | OK | `AdAutoEnableDisabled` delete | Снять флаг. |
@@ -127,7 +127,7 @@
 
 | Endpoint | Status | Бэкенд | Заметки |
 |---|---|---|---|
-| `GET /naming-tracker/patterns` | REMOVE | — | В v2 нет модели `naming_pattern` / соответствующей таблицы. Не входит в Этап интеграции Meta API. Решение: либо удалить страницу `NamingTrackerPage` целиком, либо построить on-the-fly compute поверх `FbCampaign.campaign_name` (regex-парсинг частей нейминга), но это новая фича — пометить как NEW + дополнительный спринт. На данный момент safest: REMOVE из приоритетов. |
+| `GET /naming-tracker/patterns` | REMOVE | — | В новой схеме нет модели `naming_pattern` / соответствующей таблицы. Не входит в Этап интеграции Meta API. Решение: либо удалить страницу `NamingTrackerPage` целиком, либо построить on-the-fly compute поверх `FbCampaign.campaign_name` (regex-парсинг частей нейминга), но это новая фича — пометить как NEW + дополнительный спринт. На данный момент safest: REMOVE из приоритетов. |
 
 ### Tools / Scripts (4 endpoints)
 
@@ -145,11 +145,11 @@
 | `POST /campaign-recorder/start` | NEW | Redis pubsub `fb_agent:creator:record_start` | По CLAUDE.md `creator_recorder` слушает pubsub. Endpoint должен publish + вернуть session_id. |
 | `POST /campaign-recorder/stop/{sessionId}` | NEW | Redis pubsub `fb_agent:creator:record_stop` | Publish + ждать `creator_plans` insert (или polling status). |
 | `GET /campaign-recorder/status/{sessionId}?tail` | NEW | Redis (recorder runtime) | Полл состояния recorder через `worker:heartbeat:creator_recorder` + дополнительный канал/ключ. |
-| `POST /campaign-recorder/analyze` | REMOVE | — | Старая логика (Vision-анализ записи). В v2 нет соответствующего пути. Помечать как REMOVE до отдельного спринта по campaign_recorder. |
+| `POST /campaign-recorder/analyze` | REMOVE | — | Старая логика (Vision-анализ записи). В новой схеме нет соответствующего пути. Помечать как REMOVE до отдельного спринта по campaign_recorder. |
 | `POST /campaign-creator/start` | ADAPT | `TaskQueue insert (task_type='plan_run')` | Создаёт plan_run задачу. См. `core/tasks/queue.py:create_task`. |
 | `GET /campaign-creator/{taskId}/status` | ADAPT | `TaskQueue SELECT WHERE task_type='plan_run' AND id=:id` | Прочитать `status` + `result` (step_log в payload/result). |
 | `GET /campaign-creator/steps` | NEW | filesystem scan or hard-coded | Список доступных «steps» (см. `core/campaign_creator/steps/`). |
-| `POST /campaign-creator/{taskId}/run-step/{step}` | NEW | gRPC к browser-agent | Запуск отдельного шага плана. В v2 plan_run выполняется creator_worker'ом целиком — нужен новый канал. |
+| `POST /campaign-creator/{taskId}/run-step/{step}` | NEW | gRPC к browser-agent | Запуск отдельного шага плана. В новой схеме plan_run выполняется creator_worker'ом целиком — нужен новый канал. |
 | `POST /campaign-creator/{taskId}/run-from/{step}` | NEW | — | Аналогично. |
 | `POST /campaign-creator/{taskId}/resume` | ADAPT | `TaskQueue UPDATE` | Перевод status `failed → retrying` для plan_run. |
 | `POST /campaign-creator/{taskId}/cancel` | ADAPT | `TaskQueue.status='cancelled'` | Soft-cancel. |
@@ -211,8 +211,8 @@
 - Можно вообще отложить, не блокирует core-фукциональность
 
 ### Что удалить с фронта или пометить как DEPRECATED
-- `NamingTrackerPage` + `getNamingPatterns` — нет под собой данных в v2.
-- `setTelegramWebAppUrl` — нет колонки в v2-модели, Mini App отдельно.
+- `NamingTrackerPage` + `getNamingPatterns` — нет под собой данных в новой схеме.
+- `setTelegramWebAppUrl` — нет колонки в новой модели, Mini App отдельно.
 - `analyzeLastRecording` — устаревшая логика анализа записи.
 
 ---
@@ -230,7 +230,7 @@
 `AlertEvent`, `AdMetrics`, `ScanRun`, `meta_api_audit_log`, `tracker_postback` — все `PARTITION BY RANGE (created_at/cycle_ts/started_at/received_at)`. Любой SELECT без фильтра по partition-key → full scan по всем партициям → timeout. На фронте уже есть параметры `from/to/hours/days`, но нужно жёстко требовать их в эндпоинтах + ставить дефолтный лимит окна (например, max 30 дней).
 
 ### 3. Отсутствие `ad_snapshots` таблицы
-Фронт оперирует «snapshot ad» как единым объектом. В v2 это разнесено по:
+Фронт оперирует «snapshot ad» как единым объектом. В новой схеме это разнесено по:
 - `FbAd` — каталог (имя, fb_ad_id, активность).
 - `AdAlertState` — FSM-состояние.
 - `AdMetrics` (последняя по cycle_ts) — метрики.
@@ -238,9 +238,9 @@
 
 Нужно явно построить view-функцию `build_ad_snapshot(fb_ad_id)` в новом модуле `core/dashboard/`, чтобы не дублировать JOIN'ы в каждом router'е.
 
-### 4. Маппинг старых TaskStatus → v2 status
+### 4. Маппинг старых TaskStatus → новый status
 Фронт ждёт: `PENDING`, `RUNNING`, `RETRYING`, `FAILED`, `SUCCEEDED`, `CANCELLED`.
-В v2 `TaskQueue.status`: `draft`, `pending`, `running`, `succeeded`, `failed`, `retrying`, `cancelled`.
+В новой схеме `TaskQueue.status`: `draft`, `pending`, `running`, `succeeded`, `failed`, `retrying`, `cancelled`.
 
 Lowercase + новый `draft`. Решение: router-handler возвращает uppercase + либо скрывает `draft`, либо мапит → `PENDING`. Документировать в схеме.
 
@@ -253,10 +253,10 @@ Lowercase + новый `draft`. Решение: router-handler возвраща�
 Это compute-логика, не прямой read из БД. Нужно тщательно покрыть unit-тестами.
 
 ### 6. AI-эндпоинт `/ai/analyze` пока без БД-привязки
-`core/ai_assistant/` — pure-Python модуль, не имеет своих v2-таблиц (например, нет `ai_block_cache`). Кэш описан в CLAUDE.md как `ai:cache:*` Redis с TTL 300-900s. Нужно явно решить, где хранить «scope_key → результат». Скорее всего, Redis + опционально append в `system_config`/`alert_events` для аудит-лога.
+`core/ai_assistant/` — pure-Python модуль, не имеет своих таблиц (например, нет `ai_block_cache`). Кэш описан в CLAUDE.md как `ai:cache:*` Redis с TTL 300-900s. Нужно явно решить, где хранить «scope_key → результат». Скорее всего, Redis + опционально append в `system_config`/`alert_events` для аудит-лога.
 
 ### 7. `restart`-эндпоинты (`/observer/restart`, `/disable-worker/restart`) — нет безопасного канала
-В v2 воркеры не управляются через БД-сигналы (нет `worker_status` таблицы). Единственный путь:
+В новой схеме воркеры не управляются через БД-сигналы (нет `worker_status` таблицы). Единственный путь:
 - Redis pubsub (worker сам слушает и завершает loop).
 - supervisord-команда (хост-side).
 

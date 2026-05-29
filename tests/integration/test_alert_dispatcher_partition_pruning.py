@@ -173,7 +173,7 @@ async def test_dispatch_finds_recent_event_via_partition_filter(
     Если WHERE created_at >= NOW()-1h работает корректно — событие найдено.
     Если фильтр случайно обрезает текущий scan — sent=0, тест поймает регрессию.
     """
-    # Настраиваем telegram_config с зашифрованным токеном (формат v2)
+    # Настраиваем telegram_config с зашифрованным токеном (формат)
     from core.crypto import encrypt
 
     enc_token = encrypt("TEST_BOT_TOKEN_PRUNING")

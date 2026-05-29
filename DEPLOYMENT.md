@@ -38,7 +38,7 @@ cp .env.example .env
 #   POSTGRES_PASSWORD, ENCRYPTION_KEY, VISION_X_TOKEN, VISION_PROFILE_ID
 # Опционально: TELEGRAM_BOT_TOKEN (без него TG-бот работать не будет).
 
-make bootstrap    # docker compose up + venv + install + apply v2 schema
+make bootstrap    # docker compose up + venv + install + apply schema
 ./run.sh          # старт всех воркеров через supervisord (если установлен)
 ```
 

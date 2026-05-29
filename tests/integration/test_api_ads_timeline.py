@@ -232,7 +232,7 @@ async def test_timeline_alert_fields_correct(pg_engine, fake_redis_client, timel
     alerts = resp.json()["alerts"]
     assert len(alerts) >= 1
     alert = alerts[0]
-    # stage — актуальное поле в v2, не event_type
+    # stage — актуальное поле, не event_type
     assert "stage" in alert
     assert alert["stage"] == "warning"
     # matched_rule_codes — актуальное поле, не rule_codes

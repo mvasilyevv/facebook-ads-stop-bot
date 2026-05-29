@@ -146,7 +146,7 @@ async def rank_scan(
     async with engine.begin() as conn:
         for ad_archive_id, page_id, started, cs, _slot, _country in rows:
             page_history = page_counts.get(page_id, 1)
-            cluster_size = 1  # MVP: пока без media-clustering. Будет в enricher v2.
+            cluster_size = 1  # MVP: пока без media-clustering. Будет в следующей версии enricher.
             days = _days_running(started, now=now)
             tier, score, reason = compute_tier(
                 days_running=days,

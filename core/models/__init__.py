@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Доменно-разнесённые ORM-модели (v2).
+"""Доменно-разнесённые ORM-модели.
 
 35 таблиц в Postgres + 3 namespace в Redis (см. DB_REDESIGN.md).
 

@@ -30,7 +30,7 @@ class OfferOut(BaseModel):
     code: str
     name: str
     vertical: str | None = None
-    # Поля отсутствующие в v2 ORM — возвращаем null для стабильного shape фронта.
+    # Поля отсутствующие в ORM — возвращаем null для стабильного shape фронта.
     country_code: None = None
     is_active: bool
     created_at: str | None = None  # ISO-строка из ORM datetime
@@ -40,7 +40,7 @@ class OfferOut(BaseModel):
 
     @classmethod
     def from_orm_offer(cls, offer: object) -> "OfferOut":
-        """Маппит ORM-объект Offer в OfferOut с учётом v2-полей."""
+        """Маппит ORM-объект Offer в OfferOut с учётом доступных полей."""
         return cls(
             id=offer.id,  # type: ignore[attr-defined]
             code=offer.code,  # type: ignore[attr-defined]
@@ -58,7 +58,7 @@ class OfferCreateIn(BaseModel):
     code: str = Field(..., min_length=1, max_length=64, description="Уникальный код оффера")
     name: str = Field(..., min_length=1, max_length=128)
     vertical: str | None = Field(None, max_length=32)
-    # country_code и notes принимаем но игнорируем (нет в v2 ORM)
+    # country_code и notes принимаем но игнорируем (нет в ORM)
     country_code: str | None = None
     use_vision_creator: bool | None = None
     notes: str | None = None

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Async-обвязка для telegram_config / telegram_recipients / telegram_invites (v2).
+"""Async-обвязка для telegram_config / telegram_recipients / telegram_invites.
 
 Минимальный набор функций для poller'а и базовых handlers. Расширяется по мере
 миграции других telegram-фич.

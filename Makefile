@@ -79,7 +79,7 @@ db-wait: ## Дождаться готовности Postgres
 	echo "Postgres не стал готов за 30 секунд"; \
 	exit 1
 
-bootstrap: check-env check-tools docker-up db-wait install apply-schema ## Полная подготовка проекта (drop+apply v2 схемы)
+bootstrap: check-env check-tools docker-up db-wait install apply-schema ## Полная подготовка проекта (drop+apply схемы)
 
 observer: check-env install-backend ## Запустить observer worker
 	$(PY) run_observer_worker.py
@@ -120,7 +120,7 @@ creator-recorder: check-env install-backend ## Запустить creator record
 api: check-env install-backend ## Запустить FastAPI на порту 8000 (health + AdSet.pro postback)
 	$(VENV_BIN)/uvicorn apps.api.main:app --host 0.0.0.0 --port 8000 --reload
 
-apply-schema: check-env install-backend ## Drop + apply v2 схемы БД (ОПАСНО, требует --confirm-drop)
+apply-schema: check-env install-backend ## Drop + apply схемы БД (ОПАСНО, требует --confirm-drop)
 	$(PY) scripts/apply_schema.py --confirm-drop
 
 backup-secrets: check-env install-backend ## Бэкап Vision/TG токенов

@@ -1,4 +1,4 @@
-# FB Stop Bot — Frontend v2
+# FB Stop Bot — Frontend
 
 Новый production-grade фронт FB Stop Bot. Живёт **рядом** со старым `frontend/` — старый не трогается, миграция страница-за-страницей.
 

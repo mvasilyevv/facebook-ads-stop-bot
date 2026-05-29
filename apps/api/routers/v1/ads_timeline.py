@@ -121,7 +121,7 @@ async def get_ad_timeline(
                     id=r.id,
                     stage=r.stage,
                     matched_rule_codes=r.matched_rule_codes or [],
-                    # triggered_by_rule_codes = matched_rule_codes (одно поле в v2)
+                    # triggered_by_rule_codes = matched_rule_codes (одно поле в текущей схеме)
                     triggered_by_rule_codes=r.matched_rule_codes or [],
                     created_at=r.created_at,
                 )
@@ -158,7 +158,7 @@ async def get_ad_timeline(
         ad_name=ad_name,
         campaign_name=campaign_name,
         adset_name=adset_name,
-        offer_code=None,  # отсутствует в v2 ORM напрямую
+        offer_code=None,  # отсутствует в ORM напрямую
         from_iso=from_dt,
         to_iso=to_dt,
         metrics=metrics,

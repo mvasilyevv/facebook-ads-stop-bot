@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Unit-тесты pure FSM-логики observer_v2."""
+"""Unit-тесты pure FSM-логики observer."""
 
 from __future__ import annotations
 

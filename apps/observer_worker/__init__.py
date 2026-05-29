@@ -1,2 +1,2 @@
 # -*- coding: utf-8 -*-
-"""Observer worker v2 — main loop с gRPC к browser-agent."""
+"""Observer worker — main loop с gRPC к browser-agent."""

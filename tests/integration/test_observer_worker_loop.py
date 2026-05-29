@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Интеграционный тест observer_worker_v2 main loop через fake gate + fakeredis.
+"""Интеграционный тест observer_worker main loop через fake gate + fakeredis.
 
 Покрывает: begin/finish scan_run, run_one_cycle, paused/empty/error outcomes,
 Redis heartbeat и pubsub событие. Не требует ни browser-agent, ни Vision.

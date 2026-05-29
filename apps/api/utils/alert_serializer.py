@@ -7,7 +7,7 @@
 Строка должна содержать атрибуты: id, stage, matched_rule_codes, metrics_json,
 created_at, fb_ad_id, ad_name, campaign_name, offer_code.
 
-`triggered_by_rule_codes` всегда None — поля нет в ORM AlertEvent (v2 хранит
+`triggered_by_rule_codes` всегда None — поля нет в ORM AlertEvent (схема хранит
 только matched_rule_codes), отдаём None для совместимости с frontend-shape.
 
 datetime `created_at` возвращается объектом — FastAPI jsonable_encoder

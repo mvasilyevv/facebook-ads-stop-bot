@@ -9,7 +9,7 @@
   next_retry_at        → next_attempt_at
   last_error           → last_error_message
   created_by_chat_id   → requested_by_chat_id
-  status (lowercase v2)→ UPPERCASE через status_mapper.to_frontend_task_status
+  status (lowercase)→ UPPERCASE через status_mapper.to_frontend_task_status
 
 Строка должна содержать атрибуты: id, fb_ad_id, ad_name, task_type, status,
 attempt_count, max_attempts, requested_by, created_by_chat_id, created_at,

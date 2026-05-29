@@ -51,7 +51,7 @@ tolerant операций (создание кампаний, изменение
 ```bash
 cp .env.example .env             # заполнить POSTGRES_PASSWORD, ENCRYPTION_KEY,
                                   # VISION_X_TOKEN, VISION_PROFILE_ID, TELEGRAM_BOT_TOKEN
-make bootstrap                    # Docker + venv + установка зависимостей + apply v2 schema
+make bootstrap                    # Docker + venv + установка зависимостей + apply schema
 ./run.sh                          # старт всех воркеров через supervisord
 ./run.sh --down                   # остановка
 ./run.sh --logs                   # tail -20 каждого *.log
@@ -101,7 +101,7 @@ make docker-build | helm-install  # k8s deployment
 | [RUNBOOKS.md](RUNBOOKS.md) | Реакция на инциденты, восстановление |
 | [CLAUDE.md](CLAUDE.md) | Архитектура, воркеры, конвенции (источник правды) |
 | [META_INTEGRATION_PLAN.md](META_INTEGRATION_PLAN.md) | Marketing API интеграция, этапы |
-| [DB_REDESIGN.md](DB_REDESIGN.md) | v2 схема БД, партиционирование, retention |
+| [DB_REDESIGN.md](DB_REDESIGN.md) | Схема БД, партиционирование, retention |
 
 ---
 

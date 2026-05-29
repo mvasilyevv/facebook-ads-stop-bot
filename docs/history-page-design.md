@@ -288,7 +288,7 @@ CREATE INDEX ix_enable_task_ad_timeline
 - [ ] Backend: роутер /history (summary, timeline, campaigns, events)
 - [ ] Alembic миграция (offer_stats_json + индексы)
 
-### Откладывается на v2
+### Откладывается на потом
 
 - Drill-down объявления (отдельный экран)
 - Фильтр по кампании (каскадный селектор)

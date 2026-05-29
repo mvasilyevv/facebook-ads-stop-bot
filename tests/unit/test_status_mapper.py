@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Unit-тесты для apps/api/utils/status_mapper.py.
 
-Проверяем маппинг TaskQueue.status (lowercase из v2-БД) ↔ frontend (UPPERCASE).
+Проверяем маппинг TaskQueue.status (lowercase из БД) ↔ frontend (UPPERCASE).
 """
 
 from __future__ import annotations

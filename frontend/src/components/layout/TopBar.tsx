@@ -56,7 +56,6 @@ export function TopBar() {
         </div>
         <div className="font-display text-[13px] font-medium tracking-tight">
           FB Stop Bot
-          <span className="text-bg-9"> · v2</span>
         </div>
       </div>
 

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Интеграционные тесты disable/enable воркеров v2 через fake gate + real DB."""
+"""Интеграционные тесты disable/enable воркеров через fake gate + real DB."""
 
 from __future__ import annotations
 

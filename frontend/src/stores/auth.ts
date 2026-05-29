@@ -20,7 +20,7 @@ export const useAuthStore = create<AuthState>()(
       clear: () => set({ apiKey: null }),
     }),
     {
-      name: "fb-v2-auth",
+      name: "fb-auth",
       storage: createJSONStorage(() => localStorage),
     },
   ),

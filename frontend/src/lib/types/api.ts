@@ -241,9 +241,9 @@ export interface ObserverSettings {
   // Устаревшие поля (убрать при миграции на api-generated.ts):
   /** @deprecated используй is_scanning_enabled */
   scan_interval_seconds?: number;
-  /** @deprecated поле отсутствует в backend v2 */
+  /** @deprecated поле отсутствует в backend */
   cabinet_url?: string | null;
-  /** @deprecated поле отсутствует в backend v2 */
+  /** @deprecated поле отсутствует в backend */
   country_code?: string | null;
   /** @deprecated нет в схеме */
   auto_disable_enabled?: boolean;

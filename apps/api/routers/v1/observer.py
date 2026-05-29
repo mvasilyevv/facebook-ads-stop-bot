@@ -163,7 +163,7 @@ async def list_scan_runs(
             outcome=row.outcome,
             alerts_warning=row.alerts_warning,
             alerts_stop=row.alerts_stop,
-            # metrics_inserted отсутствует в v2 ScanRun — возвращаем None
+            # metrics_inserted отсутствует в ScanRun — возвращаем None
             metrics_inserted=None,
             error_message=row.error_message,
         )

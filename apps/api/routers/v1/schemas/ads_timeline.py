@@ -21,7 +21,7 @@ class MetricRow(BaseModel):
     clicks: int | None = None
     leads: int | None = None
     deposits: int | None = None
-    # delivery_status отсутствует в v2 ORM — возвращаем null для совместимости с фронтом
+    # delivery_status отсутствует в ORM — возвращаем null для совместимости с фронтом
     delivery_status: None = None
 
 
@@ -33,7 +33,7 @@ class AlertRow(BaseModel):
     id: uuid.UUID
     stage: str
     matched_rule_codes: list[str]
-    # triggered_by_rule_codes = matched_rule_codes (одно и то же в v2)
+    # triggered_by_rule_codes = matched_rule_codes (одно и то же в текущей схеме)
     triggered_by_rule_codes: list[str]
     created_at: datetime
 
@@ -63,7 +63,7 @@ class AdTimelineResponse(BaseModel):
     ad_name: str
     campaign_name: str | None = None
     adset_name: str | None = None
-    # offer_code: нет прямого поля в v2 ORM, будет null
+    # offer_code: нет прямого поля в ORM, будет null
     offer_code: str | None = None
     from_iso: datetime
     to_iso: datetime

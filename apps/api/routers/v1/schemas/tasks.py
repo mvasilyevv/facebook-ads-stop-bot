@@ -2,7 +2,7 @@
 """Pydantic-схемы для task-секций DashboardPage.
 
 Покрывает disable-tasks, enable-tasks и enable-recommendations endpoints.
-Статусы хранятся в UPPERCASE (frontend-контракт), маппинг → v2 через status_mapper.
+Статусы хранятся в UPPERCASE (frontend-контракт), маппинг → БД через status_mapper.
 
 Расхождения реальных полей TaskQueue от спека:
   - next_retry_at   (не next_attempt_at)

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Интеграционные тесты GET/POST/retry/cancel /api/dashboard/disable-tasks.
 
-Требуется реальный Postgres v2 из docker-compose. Каждый тест очищает
+Требуется реальный Postgres из docker-compose. Каждый тест очищает
 task_queue + fb_ads (через offers cascade) в teardown.
 """
 

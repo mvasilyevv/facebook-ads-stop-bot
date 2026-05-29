@@ -111,7 +111,7 @@ export function Sidebar() {
         <div className="mt-auto px-6 pt-4 border-t border-bg-5 font-display text-[11px] text-bg-9 tracking-tight">
           <div className="flex justify-between mb-1">
             <span>build</span>
-            <span className="text-bg-11">v2.0.0-dev</span>
+            <span className="text-bg-11">dev</span>
           </div>
           <div className="flex justify-between">
             <span>spec</span>

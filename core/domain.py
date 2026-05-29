@@ -81,7 +81,7 @@ class CampaignCreatorTaskStatus(StrEnum):
 
 
 class PlanRunStatus(StrEnum):
-    """Статус запуска плана creator-агента v2."""
+    """Статус запуска плана creator-агента."""
 
     QUEUED = "queued"
     RUNNING = "running"

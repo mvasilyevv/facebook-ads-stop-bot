@@ -183,7 +183,7 @@ async def main_loop(db_url: str) -> None:
         last_token = cfg.bot_token
         client = TelegramBotClient(bot_token=last_token, http_client=http_client)
         offset = cfg.poller_offset
-        logger.info("Telegram poller v2 запущен (offset=%d)", offset)
+        logger.info("Telegram poller запущен (offset=%d)", offset)
 
         # Один MetaApiClient на процесс. Если browser-agent оффлайн — продолжаем без него.
         meta_api_client = await _build_meta_api_client()
@@ -250,7 +250,7 @@ async def main_loop(db_url: str) -> None:
             except Exception:
                 logger.exception("save_poller_offset failed")
     finally:
-        logger.info("Telegram poller v2 завершён")
+        logger.info("Telegram poller завершён")
         # Останавливаем heartbeat-таск.
         shutdown_event.set()
         if hb_task is not None:

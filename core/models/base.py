@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Базовые классы и mixins для всех ORM-моделей новой схемы (v2).
+"""Базовые классы и mixins для всех ORM-моделей новой схемы.
 
 Принципы:
 - SQLAlchemy 2.x с Mapped/mapped_column.
@@ -34,7 +34,7 @@ _NAMING_CONVENTION = {
 
 
 class Base(DeclarativeBase):
-    """Базовый класс для всех моделей v2.
+    """Базовый класс для всех моделей.
 
     Использует MetaData с naming convention для consistency Alembic-миграций.
     """

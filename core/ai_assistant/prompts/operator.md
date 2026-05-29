@@ -4,7 +4,7 @@
 
 FB Stop Bot — система мониторинга Facebook Ads (Vision + Marketing API). Real-time часть (observer/disable/enable) работает через Playwright + DOM-парсинг. Marketing API подключается параллельно как latency-tolerant канал — все Graph API вызовы идут изнутри активной Vision-сессии через `page.evaluate(fetch)`.
 
-Архитектура (v2):
+Архитектура:
 - **7 воркеров**: observer, disable, enable, telegram_poller, cleanup, reconciler, meta_api.
 - **gRPC browser-agent** (port 50051) — Node.js, три service: BrowserSessionService, ScannerService, MetaApiService.
 - **Postgres** (port 5433) — task_queue (unified outbox), ad_alert_state (FSM), partitioned-таблицы для метрик/алертов/audit.

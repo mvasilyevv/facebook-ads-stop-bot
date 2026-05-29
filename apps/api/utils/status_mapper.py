@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Маппинг статусов TaskQueue между v2-БД (lowercase) и фронтом (UPPERCASE).
+"""Маппинг статусов TaskQueue между БД (lowercase) и фронтом (UPPERCASE).
 
 В схеме `task_queue.status` хранится в lowercase:
     draft, pending, running, succeeded, failed, retrying, cancelled
@@ -36,7 +36,7 @@ _FRONTEND_TO_DB: dict[str, str] = {
 
 
 def to_frontend_task_status(db_status: str) -> str:
-    """Конвертирует lowercase v2-статус в UPPERCASE для фронта.
+    """Конвертирует lowercase статус в UPPERCASE для фронта.
 
     Args:
         db_status: значение `task_queue.status` из БД (например, ``"draft"``).

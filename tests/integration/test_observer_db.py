@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Интеграционный e2e тест observer_v2 pipeline: ScannedAdRow → БД + task_queue.
+"""Интеграционный e2e тест observer pipeline: ScannedAdRow → БД + task_queue.
 
 Без gRPC к browser-agent — мы инжектим список ScannedAdRow напрямую.
 Это покрывает critical path: матчинг офферов, FSM, метрики, outbox.

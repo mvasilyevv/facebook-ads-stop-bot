@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Unified task_queue abstraction для всех outbox-воркеров v2.
+"""Unified task_queue abstraction для всех outbox-воркеров.
 
 Все типы (disable/enable/plan_run/meta_api_mutation/ad_library_scan) живут в одной
 таблице task_queue с дискриминатором task_type. Этот модуль — единственный путь

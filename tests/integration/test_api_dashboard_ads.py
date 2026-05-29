@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Интеграционные тесты GET /api/dashboard/ads.
 
-Требуется реальный Postgres v2 из docker-compose. Перед каждым тестом
+Требуется реальный Postgres из docker-compose. Перед каждым тестом
 очищаем тестовые offers/campaigns/ads/metrics — изолируем тесты друг от друга.
 """
 

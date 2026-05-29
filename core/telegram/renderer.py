@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Форматирование TG-сообщений для алертов observer_v2.
+"""Форматирование TG-сообщений для алертов observer.
 
 Pure-функции без I/O — принимают данные, возвращают (text, inline_keyboard).
 Использует HTML parse_mode (это default для TelegramBotClient).
@@ -140,7 +140,7 @@ def render_inline_keyboard(inp: AlertRenderInput) -> dict | None:
     return {"inline_keyboard": buttons}
 
 
-# Для совместимости с TelegramBotClient.send_message (parse_mode='Markdown' по умолчанию в v2)
+# Для совместимости с TelegramBotClient.send_message (parse_mode='Markdown' по умолчанию)
 # рекомендуется передавать parse_mode='HTML' в caller'е.
 DEFAULT_PARSE_MODE = "HTML"
 

@@ -1,4 +1,4 @@
-# FB Stop Bot — Frontend v2 Design Specification
+# FB Stop Bot — Frontend Design Specification
 
 > Internal operator tool. Editorial-monochrome direction. Dark mode primary.
 > Document v1.0 · 2026-05-28
@@ -1142,13 +1142,13 @@ const { data } = useQuery({
 
 Эти вопросы требуют решения пользователя/команды:
 
-1. **WS vs polling.** Сейчас старый фронт mix'ует WebSocket (на DashboardPage) и polling. В v2 идём в WS-only для real-time (alert feed, task queue, worker pulse), а статичные данные (offers, history) — polling. Подтверждение нужно: бэкенд готов к WS-only или нужно сохранить polling fallback?
+1. **WS vs polling.** Сейчас старый фронт mix'ует WebSocket (на DashboardPage) и polling. В новом фронте идём в WS-only для real-time (alert feed, task queue, worker pulse), а статичные данные (offers, history) — polling. Подтверждение нужно: бэкенд готов к WS-only или нужно сохранить polling fallback?
 
 2. **Дополнительный режим компактности.** Density toggle (comfortable / compact / dense) — predefined в spec. Но кто-то любит "Bloomberg-level density" с 24px row height. Делаем "dense" как опцию или ограничиваемся двумя уровнями?
 
 3. **TMA-инкорпорация.** `frontend-mini/` живёт в отдельном repo. Делать ли shared design tokens package (`@fb-stop-bot/design-tokens`) для синхронизации, или оставить duplication первое время?
 
-4. **AI Chat surface.** В brief'е есть AI analyze endpoint, но не упомянут отдельный AI Chat UI. Telegram уже даёт `/ask` интерфейс. Нужен ли web-chat (drawer или sidebar panel) в v2 или отложить?
+4. **AI Chat surface.** В brief'е есть AI analyze endpoint, но не упомянут отдельный AI Chat UI. Telegram уже даёт `/ask` интерфейс. Нужен ли web-chat (drawer или sidebar panel) в новом фронте или отложить?
 
 5. **Light mode timeline.** Прописать в roadmap (v2.1?) или забыть совсем (operator всегда сидит в тёмном)?
 

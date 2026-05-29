@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Unit-тесты для telegram_v2 bot_handler — без БД, через моки."""
+"""Unit-тесты для telegram bot_handler — без БД, через моки."""
 
 from __future__ import annotations
 

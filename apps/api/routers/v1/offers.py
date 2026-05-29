@@ -10,7 +10,7 @@ Endpoints (все с prefix /api, добавляемым auto-discovery):
     GET    /offers/{id}/rules        — правила оффера
     PUT    /offers/{id}/rules        — upsert правил оффера
 
-Важные компромиссы v2:
+Важные компромиссы:
     - Offer не содержит country_code / use_vision_creator / notes — возвращаются как null.
     - code при PUT-обновлении игнорируется (immutable, фронт не редактирует).
     - DELETE 404 для несуществующих и уже-inactive офферов (не идемпотентно).
