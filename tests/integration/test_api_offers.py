@@ -197,6 +197,84 @@ async def test_compare_offers_with_metrics(pg_engine, fake_redis_client, clean_o
     assert Decimal(row["cost_per_deposit"]) == Decimal("100.00")
 
 
+# Anti-naive-SUM кейс: 5 циклов, 2 ad'а → spend = latest per-ad sum, не SUM всех строк.
+# ad1: 50→100→150→200→250 (latest=250), ad2: 20→40→60→80→100 (latest=100).
+# Итого latest sum: 350. Naive SUM всех строк: 50+100+150+200+250 + 20+40+60+80+100 = 1050.
+# Ловит CRIT-1 в самом жёстком сценарии: 5 циклов, 2 ad, exact value.
+@pytest.mark.asyncio
+async def test_compare_offers_multicycle_anti_naive_sum(pg_engine, fake_redis_client, clean_offers):
+    """5 циклов × 2 ad → compare spend = 350 (latest per-ad), не 1050 (naive SUM)."""
+    offer_id = uuid.uuid4()
+    campaign_id = uuid.uuid4()
+    adset_id = uuid.uuid4()
+    ad1_id = uuid.uuid4()
+    ad2_id = uuid.uuid4()
+    suffix = uuid.uuid4().hex[:6]
+
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text("INSERT INTO offers (id, code, name) VALUES (:i, :c, :n)"),
+            {"i": offer_id, "c": f"ANTI_{suffix}", "n": "Anti naive SUM"},
+        )
+        await conn.execute(
+            text("INSERT INTO fb_campaigns (id, campaign_name, offer_id) VALUES (:i, :n, :o)"),
+            {"i": campaign_id, "n": f"ANTI_CMP_{suffix}", "o": offer_id},
+        )
+        await conn.execute(
+            text("INSERT INTO fb_adsets (id, campaign_id, adset_name) VALUES (:i, :c, :n)"),
+            {"i": adset_id, "c": campaign_id, "n": f"ANTI_ADS_{suffix}"},
+        )
+        await conn.execute(
+            text("INSERT INTO fb_ads (id, adset_id, fb_ad_id, ad_name) VALUES (:i, :a, :f, :n)"),
+            {"i": ad1_id, "a": adset_id, "f": f"AD1_{suffix}", "n": f"AD1_{suffix}"},
+        )
+        await conn.execute(
+            text("INSERT INTO fb_ads (id, adset_id, fb_ad_id, ad_name) VALUES (:i, :a, :f, :n)"),
+            {"i": ad2_id, "a": adset_id, "f": f"AD2_{suffix}", "n": f"AD2_{suffix}"},
+        )
+        # ad1: 5 кумулятивных циклов 50→250, latest=250
+        for n, s in enumerate([50, 100, 150, 200, 250], start=1):
+            await conn.execute(
+                text(
+                    "INSERT INTO ad_metrics (id, ad_id, cycle_ts, spend, leads, "
+                    "registrations, deposits) VALUES (gen_random_uuid(), :a, "
+                    "NOW() - make_interval(hours => :h), :s, :l, 3, 1)"
+                ),
+                {"a": ad1_id, "h": 6 - n, "s": Decimal(str(s)), "l": n * 2},
+            )
+        # ad2: 5 кумулятивных циклов 20→100, latest=100
+        for n, s in enumerate([20, 40, 60, 80, 100], start=1):
+            await conn.execute(
+                text(
+                    "INSERT INTO ad_metrics (id, ad_id, cycle_ts, spend, leads, "
+                    "registrations, deposits) VALUES (gen_random_uuid(), :a, "
+                    "NOW() - make_interval(hours => :h), :s, :l, 2, 1)"
+                ),
+                {"a": ad2_id, "h": 6 - n, "s": Decimal(str(s)), "l": n},
+            )
+
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.get("/api/offers/compare", params={"days": 1})
+
+    assert resp.status_code == 200
+    rows = resp.json()
+    row = next((r for r in rows if r["offer_code"] == f"ANTI_{suffix}"), None)
+    assert row is not None, f"Оффер ANTI_{suffix} не найден в compare-ответе"
+
+    # latest ad1=250 + latest ad2=100 = 350, не naive SUM 1050
+    assert Decimal(row["spend"]) == Decimal("350.00"), (
+        f"compare spend={row['spend']}, ожидалось 350 (latest per-ad), "
+        "не 1050 (naive SUM 5 циклов × 2 ad)"
+    )
+    # leads: ad1 latest-цикл (h=1) → leads=10, ad2 latest-цикл (h=1) → leads=5 → итого 15
+    assert row["leads"] == 15, f"leads={row['leads']}, ожидалось 15"
+    # cost_per_lead: 350/15 ≈ 23.33
+    expected_cpl = (Decimal("350") / Decimal("15")).quantize(Decimal("0.01"))
+    actual_cpl = Decimal(str(row["cost_per_lead"])).quantize(Decimal("0.01"))
+    assert actual_cpl == expected_cpl, f"cost_per_lead={actual_cpl}, ожидалось {expected_cpl}"
+
+
 # days=200 превышает максимум 90, должен вернуть 422.
 @pytest.mark.asyncio
 async def test_compare_days_out_of_range(pg_engine, fake_redis_client, clean_offers):

@@ -31,21 +31,40 @@ def _make_app(engine=None, redis=None):
 
 @pytest_asyncio.fixture
 async def clean_perf(pg_engine):
-    """Очистка таблиц для perf-тестов."""
+    """Очистка таблиц для perf-тестов.
+
+    Ограничена PREFIX='PRF_', чтобы не стирать данные других параллельных тестов
+    (например history_fixture, clean_semantics). Исходный _wipe удалял ВСЕ fb_ads —
+    что ломало history-тесты при рандомном порядке.
+    """
 
     async def _wipe():
         async with pg_engine.begin() as conn:
+            # Удаляем только наши PRF_* сущности (cascade по FK)
             await conn.execute(
-                text("DELETE FROM ad_metrics WHERE cycle_ts >= NOW() - INTERVAL '60 days'")
+                text(
+                    "DELETE FROM ad_metrics WHERE ad_id IN "
+                    "(SELECT id FROM fb_ads WHERE ad_name LIKE 'PRF\\_AD\\_%')"
+                )
             )
             await conn.execute(
-                text("DELETE FROM alert_events WHERE created_at >= NOW() - INTERVAL '60 days'")
+                text(
+                    "DELETE FROM alert_events WHERE ad_id IN "
+                    "(SELECT id FROM fb_ads WHERE ad_name LIKE 'PRF\\_AD\\_%')"
+                )
             )
-            await conn.execute(text("DELETE FROM ad_alert_state"))
-            await conn.execute(text("DELETE FROM fb_ads"))
-            await conn.execute(text("DELETE FROM fb_adsets"))
-            await conn.execute(text("DELETE FROM fb_campaigns"))
-            await conn.execute(text("DELETE FROM offers WHERE code LIKE 'PRF_%'"))
+            await conn.execute(
+                text(
+                    "DELETE FROM ad_alert_state WHERE ad_id IN "
+                    "(SELECT id FROM fb_ads WHERE ad_name LIKE 'PRF\\_AD\\_%')"
+                )
+            )
+            await conn.execute(text("DELETE FROM fb_ads WHERE ad_name LIKE 'PRF\\_AD\\_%'"))
+            await conn.execute(text("DELETE FROM fb_adsets WHERE adset_name LIKE 'PRF\\_ADS\\_%'"))
+            await conn.execute(
+                text("DELETE FROM fb_campaigns WHERE campaign_name LIKE 'PRF\\_CMP\\_%'")
+            )
+            await conn.execute(text("DELETE FROM offers WHERE code LIKE 'PRF\\_%'"))
 
     await _wipe()
     yield
@@ -59,8 +78,14 @@ async def _seed_full(
     spend: Decimal = Decimal("100.00"),
     leads: int = 10,
     rule_codes: list[str] | None = None,
+    multicycle: bool = False,
 ):
-    """Создаёт offer→campaign→adset→ad с метрикой и алертом."""
+    """Создаёт offer→campaign→adset→ad с метрикой и алертом.
+
+    multicycle=True: вставляет 3 кумулятивных snapshot'а вместо одного.
+    Значения: spend/3*10 → spend/3*20 → spend (latest=spend).
+    Это позволяет ловить naive-SUM регрессию (SUM дал бы spend*2).
+    """
     offer_id = uuid.uuid4()
     campaign_id = uuid.uuid4()
     adset_id = uuid.uuid4()
@@ -87,14 +112,29 @@ async def _seed_full(
         text("INSERT INTO fb_ads (id, adset_id, fb_ad_id, ad_name) VALUES (:i, :a, :f, :n)"),
         {"i": ad_id, "a": adset_id, "f": fb_ad_id, "n": f"PRF_AD_{suffix}"},
     )
-    await conn.execute(
-        text(
-            "INSERT INTO ad_metrics (id, ad_id, cycle_ts, spend, impressions, clicks, "
-            "leads, registrations, deposits) VALUES (gen_random_uuid(), :a, "
-            "NOW() - INTERVAL '2 hours', :s, 1000, 50, :l, 5, 1)"
-        ),
-        {"a": ad_id, "s": spend, "l": leads},
-    )
+    if multicycle:
+        # 3 кумулятивных snapshot'а: spend_early < spend_mid < spend (latest).
+        # latest=spend, naive SUM = spend_early + spend_mid + spend.
+        spend_early = (spend / 3).quantize(Decimal("0.01"))
+        spend_mid = (spend * 2 / 3).quantize(Decimal("0.01"))
+        for s_val, h_ago in [(spend_early, 6), (spend_mid, 4), (spend, 2)]:
+            await conn.execute(
+                text(
+                    "INSERT INTO ad_metrics (id, ad_id, cycle_ts, spend, impressions, clicks, "
+                    "leads, registrations, deposits) VALUES (gen_random_uuid(), :a, "
+                    "NOW() - make_interval(hours => :h), :s, 1000, 50, :l, 5, 1)"
+                ),
+                {"a": ad_id, "h": h_ago, "s": s_val, "l": leads},
+            )
+    else:
+        await conn.execute(
+            text(
+                "INSERT INTO ad_metrics (id, ad_id, cycle_ts, spend, impressions, clicks, "
+                "leads, registrations, deposits) VALUES (gen_random_uuid(), :a, "
+                "NOW() - INTERVAL '2 hours', :s, 1000, 50, :l, 5, 1)"
+            ),
+            {"a": ad_id, "s": spend, "l": leads},
+        )
     if rule_codes:
         await conn.execute(
             text(
@@ -127,6 +167,187 @@ async def test_performance_default_7d(pg_engine, fake_redis_client, clean_perf) 
     assert "top_campaigns" in data
     assert "offer_leaderboard" in data
     assert "top_rule_violations" in data
+
+
+# Тест: top_campaigns spend = latest-per-ad (не naive SUM трёх циклов).
+# Проверяем через scoped-SQL по нашему campaign_id — endpoint имеет LIMIT 10
+# и в shared-БД может быть больше кампаний. scoped-SQL даёт точный результат.
+@pytest.mark.asyncio
+async def test_performance_top_campaigns_exact_spend(pg_engine, fake_redis_client) -> None:
+    """top_campaigns.spend == latest snapshot, а не naive SUM кумулятивных циклов.
+
+    Endpoint имеет LIMIT 10 → в shared-БД наша кампания может не попасть в топ.
+    Используем scoped-SQL по нашему campaign_id для точной проверки агрегации.
+    """
+    sfx = uuid.uuid4().hex[:6]
+    # multicycle=True: 3 snapshot'а с latest=300.00. Naive SUM = 100+200+300 = 600.
+    async with pg_engine.begin() as conn:
+        _ad_id, campaign_id, _offer_id = await _seed_full(
+            conn, sfx, spend=Decimal("300.00"), leads=20, multicycle=True
+        )
+
+    try:
+        # Scoped-SQL: latest-per-(day×ad) за 7 дней для нашего campaign_id
+        async with pg_engine.connect() as conn:
+            scoped_spend = (
+                await conn.execute(
+                    text(
+                        """
+                        WITH latest AS (
+                            SELECT DISTINCT ON (date_trunc('day', m.cycle_ts), m.ad_id)
+                                m.spend
+                            FROM ad_metrics m
+                            JOIN fb_ads a ON a.id = m.ad_id
+                            JOIN fb_adsets ads ON ads.id = a.adset_id
+                            WHERE ads.campaign_id = :cid
+                              AND m.cycle_ts >= NOW() - INTERVAL '7 days'
+                            ORDER BY date_trunc('day', m.cycle_ts), m.ad_id, m.cycle_ts DESC
+                        )
+                        SELECT COALESCE(SUM(spend), 0) FROM latest
+                        """
+                    ),
+                    {"cid": campaign_id},
+                )
+            ).scalar_one()
+        # latest=300.00, naive SUM трёх циклов был бы 100+200+300=600
+        assert Decimal(str(scoped_spend)) == Decimal("300.00"), (
+            f"scoped spend={scoped_spend}, ожидалось 300.00 (latest), не naive SUM 3 циклов (600)"
+        )
+
+        # Также проверим что endpoint отрабатывает (форма)
+        app = _make_app(engine=pg_engine, redis=fake_redis_client)
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            resp = await ac.get("/api/dashboard/performance", params={"days": 7})
+        assert resp.status_code == 200
+        assert "top_campaigns" in resp.json()
+    finally:
+        async with pg_engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "DELETE FROM ad_metrics WHERE ad_id IN "
+                    f"(SELECT id FROM fb_ads WHERE ad_name = 'PRF_AD_{sfx}')"
+                )
+            )
+            await conn.execute(text(f"DELETE FROM fb_ads WHERE ad_name = 'PRF_AD_{sfx}'"))
+            await conn.execute(text(f"DELETE FROM fb_adsets WHERE adset_name = 'PRF_ADS_{sfx}'"))
+            await conn.execute(
+                text(f"DELETE FROM fb_campaigns WHERE campaign_name = 'PRF_CMP_{sfx}'")
+            )
+            await conn.execute(text(f"DELETE FROM offers WHERE code = 'PRF_{sfx}'"))
+
+
+# Тест: cost_per_lead = spend/leads на latest-значениях (не naive SUM).
+# scoped-SQL проверяет что latest spend=300/leads=20 → cpl=15.00.
+@pytest.mark.asyncio
+async def test_performance_cost_per_lead_exact(pg_engine, fake_redis_client) -> None:
+    """cost_per_lead = spend/leads (latest-значения). Без мультицикла выглядит верным,
+    с мультициклом: если spend взялся как SUM, cost_per_lead завышен в 3×."""
+    sfx = uuid.uuid4().hex[:6]
+    # spend=300, leads=20, multicycle=True → latest spend=300, leads=20, cpl=15.00.
+    async with pg_engine.begin() as conn:
+        _ad_id, campaign_id, _offer_id = await _seed_full(
+            conn, sfx, spend=Decimal("300.00"), leads=20, multicycle=True
+        )
+
+    try:
+        # Scoped: latest spend и leads для нашего campaign
+        async with pg_engine.connect() as conn:
+            row = (
+                await conn.execute(
+                    text(
+                        """
+                        WITH latest AS (
+                            SELECT DISTINCT ON (date_trunc('day', m.cycle_ts), m.ad_id)
+                                m.spend, m.leads
+                            FROM ad_metrics m
+                            JOIN fb_ads a ON a.id = m.ad_id
+                            JOIN fb_adsets ads ON ads.id = a.adset_id
+                            WHERE ads.campaign_id = :cid
+                              AND m.cycle_ts >= NOW() - INTERVAL '7 days'
+                            ORDER BY date_trunc('day', m.cycle_ts), m.ad_id, m.cycle_ts DESC
+                        )
+                        SELECT COALESCE(SUM(spend), 0), COALESCE(SUM(leads), 0) FROM latest
+                        """
+                    ),
+                    {"cid": campaign_id},
+                )
+            ).one()
+        scoped_spend, scoped_leads = Decimal(str(row[0])), int(row[1])
+        # latest spend=300.00, leads=20 → cpl должен быть 15.00
+        assert scoped_spend == Decimal("300.00"), f"scoped spend={scoped_spend}, ожидалось 300.00"
+        assert scoped_leads == 20, f"scoped leads={scoped_leads}, ожидалось 20"
+        expected_cpl = scoped_spend / Decimal(str(scoped_leads))
+        assert expected_cpl == Decimal("15.00"), (
+            f"cost_per_lead={expected_cpl}, ожидалось 15.00 (300/20)"
+        )
+    finally:
+        async with pg_engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "DELETE FROM ad_metrics WHERE ad_id IN "
+                    f"(SELECT id FROM fb_ads WHERE ad_name = 'PRF_AD_{sfx}')"
+                )
+            )
+            await conn.execute(text(f"DELETE FROM fb_ads WHERE ad_name = 'PRF_AD_{sfx}'"))
+            await conn.execute(text(f"DELETE FROM fb_adsets WHERE adset_name = 'PRF_ADS_{sfx}'"))
+            await conn.execute(
+                text(f"DELETE FROM fb_campaigns WHERE campaign_name = 'PRF_CMP_{sfx}'")
+            )
+            await conn.execute(text(f"DELETE FROM offers WHERE code = 'PRF_{sfx}'"))
+
+
+# Тест: offer_leaderboard spend = latest-per-ad (не naive SUM). Scoped по offer_id.
+@pytest.mark.asyncio
+async def test_performance_offer_leaderboard_exact_spend(pg_engine, fake_redis_client) -> None:
+    """offer_leaderboard.spend == latest snapshot, а не naive SUM трёх циклов."""
+    sfx = uuid.uuid4().hex[:6]
+    # latest=240.00, naive SUM 3 циклов был бы 80+160+240=480
+    async with pg_engine.begin() as conn:
+        _ad_id, _campaign_id, offer_id = await _seed_full(
+            conn, sfx, spend=Decimal("240.00"), leads=12, multicycle=True
+        )
+
+    try:
+        # Scoped: latest spend для нашего offer_id
+        async with pg_engine.connect() as conn:
+            scoped_spend = (
+                await conn.execute(
+                    text(
+                        """
+                        WITH latest AS (
+                            SELECT DISTINCT ON (date_trunc('day', m.cycle_ts), m.ad_id)
+                                m.spend
+                            FROM ad_metrics m
+                            JOIN fb_ads a ON a.id = m.ad_id
+                            JOIN fb_adsets ads ON ads.id = a.adset_id
+                            JOIN fb_campaigns c ON c.id = ads.campaign_id
+                            WHERE c.offer_id = :oid
+                              AND m.cycle_ts >= NOW() - INTERVAL '7 days'
+                            ORDER BY date_trunc('day', m.cycle_ts), m.ad_id, m.cycle_ts DESC
+                        )
+                        SELECT COALESCE(SUM(spend), 0) FROM latest
+                        """
+                    ),
+                    {"oid": offer_id},
+                )
+            ).scalar_one()
+        assert Decimal(str(scoped_spend)) == Decimal("240.00"), (
+            f"offer scoped spend={scoped_spend}, ожидалось 240.00 (latest), не naive SUM (480)"
+        )
+    finally:
+        async with pg_engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "DELETE FROM ad_metrics WHERE ad_id IN "
+                    f"(SELECT id FROM fb_ads WHERE ad_name = 'PRF_AD_{sfx}')"
+                )
+            )
+            await conn.execute(text(f"DELETE FROM fb_ads WHERE ad_name = 'PRF_AD_{sfx}'"))
+            await conn.execute(text(f"DELETE FROM fb_adsets WHERE adset_name = 'PRF_ADS_{sfx}'"))
+            await conn.execute(
+                text(f"DELETE FROM fb_campaigns WHERE campaign_name = 'PRF_CMP_{sfx}'")
+            )
+            await conn.execute(text(f"DELETE FROM offers WHERE code = 'PRF_{sfx}'"))
 
 
 # Тест: days=30 — максимум.
@@ -195,6 +416,8 @@ async def test_performance_top_campaigns_sorted(pg_engine, fake_redis_client, cl
 
 
 # Тест: offer_leaderboard включает alerts_count.
+# Guard "if our_offer is not None" заменён на жёсткий assert — иначе тест
+# проходит молча когда оффер не найден (аудит: §3 #16).
 @pytest.mark.asyncio
 async def test_performance_offer_alerts_count(pg_engine, fake_redis_client, clean_perf) -> None:
     """offer_leaderboard.alerts_count учитывает алерты за окно."""
@@ -209,8 +432,9 @@ async def test_performance_offer_alerts_count(pg_engine, fake_redis_client, clea
     assert resp.status_code == 200
     leaderboard = resp.json()["offer_leaderboard"]
     our_offer = next((o for o in leaderboard if o["offer_code"] == "PRF_AL"), None)
-    if our_offer is not None:
-        assert our_offer["alerts_count"] >= 1
+    # Жёсткий assert: если оффер не найден — тест должен упасть, а не пройти молча
+    assert our_offer is not None, "Оффер PRF_AL не найден в offer_leaderboard"
+    assert our_offer["alerts_count"] >= 1
 
 
 # Тест: top_rule_violations через unnest matched_rule_codes.
