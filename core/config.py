@@ -74,6 +74,9 @@ class Settings(BaseSettings):
     # --- Telegram Mini App ---
     tma_session_ttl_seconds: int = 3600
     web_app_url: str | None = None
+    # Секрет для подписи TMA-сессионных токенов (itsdangerous). Пусто → фолбэк на
+    # encryption_key. Должен быть стабильным между рестартами (иначе токены протухают).
+    tma_session_secret: str = ""
 
     # --- Telegram Daily Digest ---
     digest_enabled: bool = True

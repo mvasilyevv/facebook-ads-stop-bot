@@ -167,6 +167,42 @@ async def find_recipient(
     )
 
 
+async def find_recipient_by_telegram_user_id(
+    engine: AsyncEngine,
+    *,
+    telegram_user_id: int,
+) -> Recipient | None:
+    """Поиск активного recipient'а по telegram_user_id (без chat_id).
+
+    Для TMA-auth: initData содержит user.id, но не chat_id. Берём первого активного
+    (не revoked) recipient'а с этим user_id; при нескольких записях приоритет у
+    role='owner' (выше привилегия). None — пользователя нет в списке доступа.
+    """
+    async with engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text(
+                    """
+                    SELECT chat_id, telegram_user_id, username, role
+                    FROM telegram_recipients
+                    WHERE telegram_user_id = :uid AND revoked_at IS NULL
+                    ORDER BY (role = 'owner') DESC
+                    LIMIT 1
+                    """
+                ),
+                {"uid": int(telegram_user_id)},
+            )
+        ).first()
+    if not row:
+        return None
+    return Recipient(
+        chat_id=int(row[0]),
+        telegram_user_id=int(row[1]),
+        username=row[2],
+        role=str(row[3]),
+    )
+
+
 async def find_active_invite(engine: AsyncEngine, code: str) -> dict | None:
     """Поиск активного (не использованного и не отозванного) invite-кода."""
     if not code:
@@ -263,6 +299,7 @@ __all__ = [
     "consume_invite_and_create_recipient",
     "find_active_invite",
     "find_recipient",
+    "find_recipient_by_telegram_user_id",
     "is_now_aware",
     "load_poller_offset",
     "load_telegram_config",
