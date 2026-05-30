@@ -7,8 +7,10 @@
 Строка должна содержать атрибуты: id, stage, matched_rule_codes, metrics_json,
 created_at, fb_ad_id, ad_name, campaign_name, offer_code.
 
-`triggered_by_rule_codes` всегда None — поля нет в ORM AlertEvent (схема хранит
-только matched_rule_codes), отдаём None для совместимости с frontend-shape.
+`triggered_by_rule_codes` — alias matched_rule_codes (BL-12-mig): в текущей схеме
+это одно и то же множество сработавших правил, отдельного поля в ORM нет. Раньше
+отдавали None, что давало фронту пустоту вместо реальных кодов; теперь
+дублируем matched_rule_codes (так же делает ads_timeline).
 
 datetime `created_at` возвращается объектом — FastAPI jsonable_encoder
 сериализует его в ISO-8601 при отдаче (как для Pydantic-модели AlertEventOut,
@@ -22,6 +24,7 @@ from typing import Any
 
 def alert_event_row_to_out(row: Any) -> dict[str, Any]:
     """Конвертирует строку alert_events + JOIN'ы в dict для AlertEventOut."""
+    rule_codes = list(row.matched_rule_codes or [])
     return {
         "id": str(row.id),
         "fb_ad_id": row.fb_ad_id,
@@ -29,9 +32,9 @@ def alert_event_row_to_out(row: Any) -> dict[str, Any]:
         "campaign_name": row.campaign_name,
         "offer_code": row.offer_code,
         "stage": row.stage,
-        "matched_rule_codes": list(row.matched_rule_codes or []),
-        # triggered_by_rule_codes отсутствует в ORM AlertEvent.
-        "triggered_by_rule_codes": None,
+        "matched_rule_codes": rule_codes,
+        # triggered_by_rule_codes = matched_rule_codes (одно поле в текущей схеме).
+        "triggered_by_rule_codes": rule_codes,
         "created_at": row.created_at,
         "alert_payload": row.metrics_json if row.metrics_json else None,
     }

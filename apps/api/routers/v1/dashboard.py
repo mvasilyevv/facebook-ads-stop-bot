@@ -163,8 +163,8 @@ async def list_alert_events(
     Если from_iso > to_iso → 422.
 
     CRITICAL: имена полей AlertEvent — `stage` / `matched_rule_codes`
-    (не `event_type` / `rule_codes`). triggered_by_rule_codes не существует
-    в ORM — возвращаем None в ответе для совместимости с frontend shape.
+    (не `event_type` / `rule_codes`). triggered_by_rule_codes отдельного поля в
+    ORM не имеет — отдаём alias matched_rule_codes (см. alert_serializer).
     """
     # Фронт исторически шлёт stage в UPPERCASE (WARNING/STOP), схема хранит lowercase.
     if stage is not None:

@@ -40,6 +40,7 @@ class _FakeRow:
     last_stop_at: datetime | None = None
     is_active: bool = True
     last_seen_at: datetime | None = None
+    delivery_status: str | None = None
     meta_ad_status: str | None = None
     m_cycle_ts: datetime | None = None
     m_spend: Decimal | None = None
@@ -85,6 +86,16 @@ def test_build_row_dict_basic_mapping() -> None:
     # meta_ad_status и metrics — None по умолчанию
     assert d["meta_ad_status"] is None
     assert d["metrics"] is None
+    # delivery_status присутствует в ответе (None по умолчанию)
+    assert d["delivery_status"] is None
+
+
+# delivery_status из row (каталог fb_ads) пробрасывается в ответ (BL-12-mig).
+def test_build_row_dict_delivery_status_passthrough() -> None:
+    """row.delivery_status (из fb_ads) попадает в ответ как есть."""
+    row = _FakeRow(delivery_status="Active")
+    d = _build_row_dict(row)
+    assert d["delivery_status"] == "Active"
 
 
 # Отсутствие ad_metrics за окно → metrics=None (LATERAL вернул NULL'ы).
@@ -225,3 +236,25 @@ def test_build_sql_contains_last_ev_lateral() -> None:
     # Поля last_ev в SELECT
     assert "last_ev_matched_rule_codes" in sql
     assert "last_ev_stage" in sql
+
+
+# SQL: last_warning_at/last_stop_at из alert_events (FILTER), delivery_status из fb_ads
+def test_build_sql_last_warning_stop_from_events_and_delivery_status() -> None:
+    """BL-12-mig: SQL берёт last_warning/stop из ev_stages FILTER, delivery_status из fb_ads."""
+    sql, _ = _build_sql(
+        fb_ad_ids=None,
+        alert_states=None,
+        include_inactive=False,
+        incidents_only=False,
+        incident_stage=None,
+        limit=10,
+        offset=0,
+    )
+    # LATERAL ev_stages с FILTER-агрегацией по стадиям
+    assert "ev_stages" in sql
+    assert "FILTER (WHERE ae.stage = 'warning')" in sql
+    assert "FILTER (WHERE ae.stage = 'stop')" in sql
+    # last_warning_at/last_stop_at больше НЕ через CASE WHEN current_stage
+    assert "CASE WHEN s.current_stage = 'warning'" not in sql
+    # delivery_status читается из каталога fb_ads
+    assert "fb_ads.delivery_status" in sql

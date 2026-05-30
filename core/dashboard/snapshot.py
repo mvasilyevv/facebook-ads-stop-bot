@@ -13,8 +13,10 @@
 - ad_alert_state может отсутствовать у нового ad → `alert_state: "normal"`.
 - meta_api_observation LEFT JOIN — опциональный, NULL вернётся в meta_ad_status.
 - Decimal сериализуется как str (Pydantic v2 + JSON friendly формат).
-- delivery_status в схеме ad_metrics отсутствует — возвращаем None для
-  совместимости с frontend (там поле опциональное).
+- delivery_status берётся из каталога fb_ads (BL-12-mig): текущий статус доставки
+  объявления, обновляемый observer'ом на каждом скане.
+- last_warning_at / last_stop_at — реальные времена событий из alert_events
+  (LATERAL ev_stages), а не реконструкция из current_stage.
 """
 
 from __future__ import annotations
@@ -148,8 +150,9 @@ def _build_row_dict(row: Any) -> dict[str, Any]:
         "last_stop_at": _iso_or_none(row.last_stop_at),
         "is_active": bool(row.is_active),
         "last_seen_at": _iso_or_none(row.last_seen_at),
-        # delivery_status в схеме ad_metrics отсутствует — null для frontend-shape.
-        "delivery_status": None,
+        # Текущий статус доставки из каталога fb_ads (BL-12-mig). NULL если ad
+        # ещё не сканировался после добавления колонки.
+        "delivery_status": getattr(row, "delivery_status", None),
         "meta_ad_status": row.meta_ad_status,
         # Коды сработавших правил из последнего AlertEvent.
         "stop_rule_codes": stop_rule_codes,
@@ -221,15 +224,16 @@ def _build_sql(
         s.snoozed_until                    AS snoozed_until,
         s.open_state_token                 AS open_state_token,
         s.last_transition_at               AS last_transition_at,
-        -- last_warning_at / last_stop_at в ad_alert_state отсутствуют как
-        -- отдельные колонки; восстанавливаем из last_transition_at в зависимости
-        -- от current_stage. NULL если соответствующая стадия не активна.
-        CASE WHEN s.current_stage = 'warning' THEN s.last_transition_at END
-            AS last_warning_at,
-        CASE WHEN s.current_stage = 'stop'    THEN s.last_transition_at END
-            AS last_stop_at,
+        -- last_warning_at / last_stop_at — реальные времена последних warning/stop
+        -- событий из append-only alert_events (LATERAL ev_stages ниже), а НЕ
+        -- реконструкция из current_stage. Старый CASE показывал время только для
+        -- текущей стадии: ad warning→stop терял last_warning_at. Окно lookback_days
+        -- (partition pruning) ограничивает «как давно» — для активных инцидентов ок.
+        ev_stages.last_warning_at          AS last_warning_at,
+        ev_stages.last_stop_at             AS last_stop_at,
         fb_ads.is_active                   AS is_active,
         fb_ads.last_seen_at                AS last_seen_at,
+        fb_ads.delivery_status             AS delivery_status,
         mo.meta_ad_status                  AS meta_ad_status,
         -- LATERAL: последняя метрика за окно lookback_days
         latest_m.cycle_ts                  AS m_cycle_ts,
@@ -274,6 +278,17 @@ def _build_sql(
         ORDER BY ae.created_at DESC
         LIMIT 1
     ) last_ev ON true
+    -- Реальные времена последнего warning/stop за окно lookback_days. Один
+    -- проход по индексу (ad_id, created_at) с FILTER-агрегацией — дешевле двух
+    -- отдельных LATERAL'ов. Partition pruning: фильтр по created_at обязателен.
+    LEFT JOIN LATERAL (
+        SELECT
+            MAX(ae.created_at) FILTER (WHERE ae.stage = 'warning') AS last_warning_at,
+            MAX(ae.created_at) FILTER (WHERE ae.stage = 'stop')    AS last_stop_at
+        FROM alert_events ae
+        WHERE ae.ad_id = fb_ads.id
+          AND ae.created_at >= NOW() - make_interval(days => :lookback_days)
+    ) ev_stages ON true
     WHERE {where_sql}
     ORDER BY fb_ads.last_seen_at DESC NULLS LAST, fb_ads.id ASC
     LIMIT :limit OFFSET :offset

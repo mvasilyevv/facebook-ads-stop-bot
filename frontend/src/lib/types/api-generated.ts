@@ -225,8 +225,8 @@ export interface paths {
          *     Если from_iso > to_iso → 422.
          *
          *     CRITICAL: имена полей AlertEvent — `stage` / `matched_rule_codes`
-         *     (не `event_type` / `rule_codes`). triggered_by_rule_codes не существует
-         *     в ORM — возвращаем None в ответе для совместимости с frontend shape.
+         *     (не `event_type` / `rule_codes`). triggered_by_rule_codes отдельного поля в
+         *     ORM не имеет — отдаём alias matched_rule_codes (см. alert_serializer).
          */
         get: operations["list_alert_events_api_dashboard_alerts_get"];
         put?: never;
@@ -648,7 +648,8 @@ export interface paths {
          * Get History Summary
          * @description Сводная агрегация за период: spend/метрики + алерты + задачи.
          *
-         *     Партиционированные таблицы фильтруются по partition-key.
+         *     Партиционированные таблицы фильтруются по partition-key. 5 запросов на одном
+         *     соединении (см. core.dashboard.history_queries).
          */
         get: operations["get_history_summary_api_history_summary_get"];
         put?: never;
@@ -1077,6 +1078,30 @@ export interface paths {
          * @description Переключает только auto_enable_recommendations (требует миграции 0003).
          */
         patch: operations["patch_observer_auto_enable_api_settings_observer_auto_enable_patch"];
+        trace?: never;
+    };
+    "/api/settings/observer/act-via-api": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Patch Observer Act Via Api
+         * @description Переключает только act_via_api — канал исполнения toggle-действий.
+         *
+         *     True → авто-стоп observer'а и ручные кнопки идут через Marketing API
+         *     (pause_ad/activate_ad). False → DOM-клик через browser-agent. Требует
+         *     запущенного meta_api_worker при True.
+         */
+        patch: operations["patch_observer_act_via_api_api_settings_observer_act_via_api_patch"];
         trace?: never;
     };
     "/api/settings/observer/scan-now": {
@@ -1508,6 +1533,14 @@ export interface components {
             generated_at: string;
             /** Model */
             model: string;
+        };
+        /**
+         * ActViaApiToggleRequest
+         * @description Тело PATCH /settings/observer/act-via-api.
+         */
+        ActViaApiToggleRequest: {
+            /** Enabled */
+            enabled: boolean;
         };
         /**
          * AdSnapshotOut
@@ -2585,6 +2618,16 @@ export interface components {
             default_interval_seconds: number;
             /** Auto Enable Recommendations */
             auto_enable_recommendations: boolean;
+            /**
+             * Owner Campaign Tag
+             * @description Теги владельца кампаний для owner-scoping. Один или несколько через запятую (например, 'MV' или 'MV,ABC,XYZ') — кампания отслеживается при совпадении с любым. Пусто/null — фильтр выключен, обрабатываются все кампании.
+             */
+            owner_campaign_tag?: string | null;
+            /**
+             * Act Via Api
+             * @description Канал toggle-действий (disable/enable). False — DOM-клик browser-agent, True — Marketing API (pause_ad/activate_ad, точно по ad_id). null — не менять.
+             */
+            act_via_api?: boolean | null;
         };
         /**
          * ObserverSettingsResponse
@@ -2601,6 +2644,13 @@ export interface components {
             default_interval_seconds: number;
             /** Auto Enable Recommendations */
             auto_enable_recommendations: boolean;
+            /** Owner Campaign Tag */
+            owner_campaign_tag?: string | null;
+            /**
+             * Act Via Api
+             * @default false
+             */
+            act_via_api: boolean;
             /** Warning Percent Of Stop */
             warning_percent_of_stop?: null;
             /** Cpc Warning Percent */
@@ -4726,6 +4776,39 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["AutoEnableToggleRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ObserverSettingsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    patch_observer_act_via_api_api_settings_observer_act_via_api_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ActViaApiToggleRequest"];
             };
         };
         responses: {

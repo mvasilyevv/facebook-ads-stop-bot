@@ -528,7 +528,7 @@
           "dashboard"
         ],
         "summary": "List Alert Events",
-        "description": "Append-only лог FSM-событий с JOIN'ами по fb_ads/fb_campaigns/offers.\n\nПартиционный фильтр по alert_events.created_at — обязательный.\nЕсли from_iso/to_iso не переданы — дефолт last 24h.\nЕсли from_iso > to_iso → 422.\n\nCRITICAL: имена полей AlertEvent — `stage` / `matched_rule_codes`\n(не `event_type` / `rule_codes`). triggered_by_rule_codes не существует\nв ORM — возвращаем None в ответе для совместимости с frontend shape.",
+        "description": "Append-only лог FSM-событий с JOIN'ами по fb_ads/fb_campaigns/offers.\n\nПартиционный фильтр по alert_events.created_at — обязательный.\nЕсли from_iso/to_iso не переданы — дефолт last 24h.\nЕсли from_iso > to_iso → 422.\n\nCRITICAL: имена полей AlertEvent — `stage` / `matched_rule_codes`\n(не `event_type` / `rule_codes`). triggered_by_rule_codes отдельного поля в\nORM не имеет — отдаём alias matched_rule_codes (см. alert_serializer).",
         "operationId": "list_alert_events_api_dashboard_alerts_get",
         "parameters": [
           {
@@ -2828,6 +2828,48 @@
         }
       }
     },
+    "/api/settings/observer/act-via-api": {
+      "patch": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Patch Observer Act Via Api",
+        "description": "Переключает только act_via_api — канал исполнения toggle-действий.\n\nTrue → авто-стоп observer'а и ручные кнопки идут через Marketing API\n(pause_ad/activate_ad). False → DOM-клик через browser-agent. Требует\nзапущенного meta_api_worker при True.",
+        "operationId": "patch_observer_act_via_api_api_settings_observer_act_via_api_patch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActViaApiToggleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObserverSettingsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/settings/observer/scan-now": {
       "post": {
         "tags": [
@@ -3468,6 +3510,20 @@
         ],
         "title": "AIAnalyzeResponse",
         "description": "Ответ AI-анализа."
+      },
+      "ActViaApiToggleRequest": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          }
+        },
+        "type": "object",
+        "required": [
+          "enabled"
+        ],
+        "title": "ActViaApiToggleRequest",
+        "description": "Тело PATCH /settings/observer/act-via-api."
       },
       "AdSnapshotOut": {
         "properties": {
@@ -6163,6 +6219,18 @@
             ],
             "title": "Owner Campaign Tag",
             "description": "Теги владельца кампаний для owner-scoping. Один или несколько через запятую (например, 'MV' или 'MV,ABC,XYZ') — кампания отслеживается при совпадении с любым. Пусто/null — фильтр выключен, обрабатываются все кампании."
+          },
+          "act_via_api": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Act Via Api",
+            "description": "Канал toggle-действий (disable/enable). False — DOM-клик browser-agent, True — Marketing API (pause_ad/activate_ad, точно по ad_id). null — не менять."
           }
         },
         "type": "object",
@@ -6198,6 +6266,11 @@
               }
             ],
             "title": "Owner Campaign Tag"
+          },
+          "act_via_api": {
+            "type": "boolean",
+            "title": "Act Via Api",
+            "default": false
           },
           "warning_percent_of_stop": {
             "type": "null",

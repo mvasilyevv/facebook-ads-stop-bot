@@ -56,6 +56,12 @@ class FbAd(UUIDPrimaryKey, Timestamp, Base):
         String(64),
         nullable=True,
     )
+    # Текущий статус доставки (Active/Paused/In Review/Disapproved/...) — снимается
+    # на каждом скане из DOM или маппинга Meta effective_status, обновляется upsert'ом.
+    delivery_status: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+    )
     is_active: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,

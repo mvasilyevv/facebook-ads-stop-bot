@@ -92,8 +92,9 @@ class AlertEventOut(BaseModel):
 
     stage: str  # warning | stop
     matched_rule_codes: list[str] = Field(default_factory=list)
-    # triggered_by_rule_codes отсутствует в схеме AlertEvent (ORM hint).
-    # Возвращаем None для совместимости с frontend-контрактом.
+    # triggered_by_rule_codes — alias matched_rule_codes (BL-12-mig): отдельного
+    # поля в ORM нет, дублируем сработавшие правила. Тип nullable сохранён для
+    # обратной совместимости контракта.
     triggered_by_rule_codes: list[str] | None = None
 
     created_at: datetime

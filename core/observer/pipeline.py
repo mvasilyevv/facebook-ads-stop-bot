@@ -244,6 +244,7 @@ async def _process_one_row(
             fb_campaign_id=None,
             campaign_name=row.campaign_name,
             offer_id=None,
+            delivery_status=row.delivery_status,
         )
         if await insert_metrics(
             engine,
@@ -267,6 +268,7 @@ async def _process_one_row(
         fb_campaign_id=None,
         campaign_name=row.campaign_name,
         offer_id=matched_offer.offer_id,
+        delivery_status=row.delivery_status,
     )
 
     # --- Метрики (партиционированная таблица) ---

@@ -48,12 +48,19 @@ async def upsert_catalog_hierarchy(
     fb_campaign_id: str | None,
     campaign_name: str,
     offer_id: uuid.UUID | None,
+    delivery_status: str | None = None,
 ) -> uuid.UUID:
     """UPSERT offer → campaign → adset → ad, возвращает fb_ads.id (UUID).
 
     Все три уровня каталога обновляют last_seen_at — это позволяет отличить «живые»
     объявления от исторических.
+
+    delivery_status — текущий статус доставки ad'а из скана; пустую строку
+    нормализуем в NULL (фронту не нужен "" вместо реального статуса).
     """
+    # Пустой/пробельный статус → NULL: пишем только осмысленное значение.
+    delivery_status = delivery_status.strip() if delivery_status else None
+    delivery_status = delivery_status or None
     now = datetime.now(timezone.utc)
 
     async with engine.begin() as conn:
@@ -113,11 +120,13 @@ async def upsert_catalog_hierarchy(
             await conn.execute(
                 text(
                     """
-                    INSERT INTO fb_ads (adset_id, fb_ad_id, ad_name, last_seen_at)
-                    VALUES (:adsid, :fbid, :aname, :now)
+                    INSERT INTO fb_ads
+                        (adset_id, fb_ad_id, ad_name, delivery_status, last_seen_at)
+                    VALUES (:adsid, :fbid, :aname, :dstatus, :now)
                     ON CONFLICT (fb_ad_id) DO UPDATE
                     SET last_seen_at = :now,
                         ad_name = EXCLUDED.ad_name,
+                        delivery_status = EXCLUDED.delivery_status,
                         is_active = TRUE
                     RETURNING id
                     """
@@ -126,6 +135,7 @@ async def upsert_catalog_hierarchy(
                     "adsid": adset_id,
                     "fbid": fb_ad_id,
                     "aname": ad_name,
+                    "dstatus": delivery_status,
                     "now": now,
                 },
             )
