@@ -23,6 +23,7 @@ from core.ai_assistant.tools import meta as _meta  # noqa: F401, E402
 # Side-effect импорты — регистрируют tool-классы в GLOBAL_REGISTRY.
 # Порядок не важен, но удобно поддерживать категории читаемо.
 from core.ai_assistant.tools import ops as _ops  # noqa: F401, E402
+from core.ai_assistant.tools import trackers as _trackers  # noqa: F401, E402
 from core.ai_assistant.tools._ratelimit import (
     RateLimitExceeded,
     check_and_increment,

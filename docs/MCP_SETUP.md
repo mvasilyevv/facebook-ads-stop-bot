@@ -14,12 +14,15 @@
 
 После настройки в Claude Desktop появится:
 
-- 15 **tools**:
+- 16 **tools**:
   - `get_active_offers`, `get_recent_alerts`, `get_worker_health`,
     `get_disable_tasks_status` — read-only из БД/Redis
   - `find_ads`, `get_insights`, `get_account_health`, `get_offer_performance`,
     `get_competitor_patterns` — read-only Marketing API (через активную
     Vision-сессию)
+  - `get_tracker_stats` — read-only post-click статистика AdSet.pro (клики/
+    регистрации/депозиты FTD/доход/ROI; разрез по event_type или ext_sub1..6).
+    Независимо от Vision-сессии — работает, даже когда кабинет недоступен
   - `request_budget_change`, `request_bulk_pause`, `request_clone_campaign`,
     `request_create_campaign` — **DRAFT** мутации: tool создаёт запись в
     `task_queue` со `status=draft`, исполнение требует подтверждения inline-
@@ -93,8 +96,12 @@ Rate-limit: **30 запросов в час** на client_key `mcp:claude-deskto
 - `BROWSER_AGENT_GRPC_*` нужен только для Marketing API tools (find_ads,
   get_insights, request_*). Если browser-agent не запущен — meta-tools
   вернут ошибку, остальные продолжат работать.
-- `ANTHROPIC_API_KEY` для МСP-сервера НЕ нужен — общение с LLM ведёт Claude
-  Desktop, у которого свой ключ.
+- `ANTHROPIC_API_KEY` для диалога в Claude Desktop НЕ нужен — общение ведёт
+  сам Claude Desktop. НО **creative-tools** (`analyze_creative`,
+  `generate_ad_copy`) зовут наш LLM-клиент напрямую, поэтому им нужен
+  `ANTHROPIC_API_KEY` ИЛИ `OPENAI_API_KEY` (+ base_url) в `env`. Без них эти
+  два tool'а вернут «AI не настроен»; остальные 14 работают без ключа.
+- `ADSETPRO_MCP_KEY` нужен для `get_tracker_stats` (статистика AdSet.pro).
 
 ### ⚠️ Предупреждение про секреты
 
@@ -126,7 +133,7 @@ cd /Users/markvasilev/Desktop/FB_Agent
 Ожидаемое поведение: процесс **зависает**, в stderr печатается:
 
 ```
-... INFO MCP-сервер 'fb-stop-bot' запущен (tools=15, transport=stdio)
+... INFO MCP-сервер 'fb-stop-bot' запущен (tools=16, transport=stdio)
 ```
 
 Зависание — это правильно: сервер слушает stdin в ожидании JSON-RPC сообщений

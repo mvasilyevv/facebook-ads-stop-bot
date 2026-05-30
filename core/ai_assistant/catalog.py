@@ -33,6 +33,7 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "get_offer_performance": "сводка по офферу: spend, лиды, регистрации, депозиты",
     "get_account_health": "состояние рекламного кабинета",
     "get_competitor_patterns": "паттерны конкурентов из Ad Library",
+    "get_tracker_stats": "статистика AdSet.pro: клики, реги, депозиты, доход, ROI",
     # DRAFT_REQUIRED
     "request_budget_change": "изменить бюджет адсета",
     "request_bulk_pause": "массовая пауза объявлений по офферу",
