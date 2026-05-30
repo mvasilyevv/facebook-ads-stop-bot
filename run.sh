@@ -873,6 +873,12 @@ else
     append_pid "$RECONCILER_PID" "reconciler_worker"
     echo -e "${GREEN}  Reconciler Worker PID: $RECONCILER_PID${NC}"
 
+    echo -e "${BLUE}📊 Запускаю Tracker Aggregator Worker...${NC}"
+    .venv/bin/python run_tracker_aggregator_worker.py > "$LOG_DIR/tracker_aggregator_worker.log" 2>&1 &
+    TRACKER_AGG_PID=$!
+    append_pid "$TRACKER_AGG_PID" "tracker_aggregator_worker"
+    echo -e "${GREEN}  Tracker Aggregator Worker PID: $TRACKER_AGG_PID${NC}"
+
     # ==========================================
     # 10. Запуск Telegram Poller
     # ==========================================

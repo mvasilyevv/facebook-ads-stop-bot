@@ -24,6 +24,7 @@ from redis.asyncio import Redis  # type: ignore[import-not-found]
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from core.adset_pro import AdsetProClient
+from core.adset_pro.credentials import create_adsetpro_client
 from core.config import Settings
 from core.config import get_settings as _core_get_settings
 from core.db import get_engine as _core_get_engine
@@ -55,14 +56,14 @@ DepSettings = Annotated[Settings, Depends(get_settings)]
 
 
 async def get_adset_pro_client(
-    settings: Settings = Depends(get_settings),
+    engine: AsyncEngine = Depends(get_engine),
 ) -> AsyncIterator[AdsetProClient]:
-    """Async generator: создаёт `AdsetProClient`, отдаёт его, закрывает после."""
-    client = AdsetProClient(
-        api_key=settings.adsetpro_mcp_key,
-        base_url=settings.adsetpro_base_url,
-        timeout_seconds=settings.adsetpro_timeout_seconds,
-    )
+    """Async generator: создаёт `AdsetProClient`, отдаёт его, закрывает после.
+
+    Ключ резолвится из БД (adsetpro_credentials) с фолбэком на .env — ротация
+    без рестарта (см. core.adset_pro.credentials).
+    """
+    client = await create_adsetpro_client(engine)
     await client.start()
     try:
         yield client

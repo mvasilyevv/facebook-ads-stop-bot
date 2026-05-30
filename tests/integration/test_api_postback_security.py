@@ -53,7 +53,15 @@ def _stub_ingest(monkeypatch):
             fb_ad_fk=None,
         )
 
+    # resolve_adsetpro_postback_secret делает DB-чтение (adsetpro_credentials) — стабим
+    # на возврат fallback (== env), чтобы sync TestClient не трогал реальный БД-engine.
+    async def _fake_resolve_secret(_engine, *, fallback=None):
+        return fallback or ""
+
     monkeypatch.setattr("apps.api.routers.postback.ingest_postback", _fake_ingest)
+    monkeypatch.setattr(
+        "apps.api.routers.postback.resolve_adsetpro_postback_secret", _fake_resolve_secret
+    )
     yield
 
 

@@ -29,6 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from apps.api.deps import get_engine, get_settings
 from core.adset_pro import PostbackEvent
+from core.adset_pro.credentials import resolve_adsetpro_postback_secret
 from core.adset_pro.ingest import ingest_postback
 from core.config import Settings
 
@@ -66,7 +67,10 @@ async def receive_adsetpro_postback(
     engine: AsyncEngine = Depends(get_engine),
 ) -> dict[str, Any]:
     """Принять postback, записать в БД с дедупом. 202 ACCEPTED + меткой результата."""
-    expected_secret = settings.adsetpro_postback_secret
+    # Секрет: БД (adsetpro_credentials) → фолбэк .env. Ротация без рестарта.
+    expected_secret = await resolve_adsetpro_postback_secret(
+        engine, fallback=settings.adsetpro_postback_secret
+    )
     if not expected_secret:
         # Намеренно 503: пока секрет не задан, endpoint считается не настроенным —
         # принимать неавторизованные постбэки опаснее, чем вернуть «not configured».

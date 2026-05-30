@@ -112,6 +112,14 @@ class Settings(BaseSettings):
     # «not configured», чтобы случайно не принимать неавторизованные постбэки.
     adsetpro_postback_secret: str = ""
 
+    # --- Исходящий postback (форвард конверсий во внешнюю систему/трекер) ---
+    # URL-шаблон с макросами {click_id}/{event_type}/{goal}/{revenue}/{payout}/
+    # {currency}/{fb_ad_id}/{country}. Пустой → отправка отключена (см. tracker_outgoing_enabled).
+    tracker_outgoing_postback_url: str = ""
+    tracker_outgoing_enabled: bool = False
+    tracker_outgoing_method: str = "GET"
+    tracker_outgoing_timeout_seconds: float = 10.0
+
     # --- Frontend (CORS) ---
     # Origin основного фронта (например, http://localhost:5173). None → CORS не подключаем.
     frontend_origin: str | None = None
