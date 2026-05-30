@@ -24,7 +24,7 @@
 | 3 | AI-ассистент (15 tools, draft-first) | ✅ |
 | 4 | Ad Library | ✅ (on-demand `/spy`, App-канал отброшен — Meta требует Identity Confirmation) |
 | 5 | Mutations + API-creator (10 handlers) | ✅ |
-| 6 | AdSet.pro (оказался MCP-сервером) | ✅ (Волна 3 закрыта; aggregator/outgoing postback — BL-8) |
+| 6 | AdSet.pro (оказался MCP-сервером) | ✅ Волна 3+4 закрыты (BL-8: aggregator + outgoing postback + key rotation) |
 | 7 | Frontend | ✅ 6 страниц + русский UI |
 | 8 | Multi-account | ⏸ отложен (до 2-го кабинета) |
 | 9 | Технический долг | ✅ CRIT/HIGH (Round 10/11) + P2 (helpers/split/dev-tools/openapi) закрыты |
@@ -99,8 +99,9 @@ observer (FSM/pipeline/writers/runtime), rules (7 стоп-правил, frequen
 **Закрыто:** BL-1 (WS publish), BL-2..6 (frontend страницы), BL-7 (latency-замер live), BL-9 (prod-блок dev-tools), BL-10+11 (helpers + split history.py), BL-12 (OpenAPI codegen). Rename (v2→fb_stop_bot) — done.
 **Сессия 2026-05-29 (запушено):** gate-фабрики fix; owner-scoping (#33-35, +мультитег); стоп-правила зафиксированы (`docs/stop_rules.md`); ADR канал observer (DOM); `/tools` каталог (#34); `/pause` `/resume` (#33); автостарт по расписанию `cabinet_scheduler` (#38); **live-валидация Marketing API mutations** (enable/disable 24/24); **#39 observer act через API** (флаг `observer_config.act_via_api`, миграции 0007+0008 — **дефолт TRUE**: API основной канал, DOM спящий резерв-фолбэк; авто-стоп и ручные кнопки идут через `meta_api_mutation pause_ad/activate_ad`; FSM-sync `ad_alert_state` в meta_api_worker; +29 тестов). **#37 frequency-anomaly** активирован (правило 7, opt-in per-offer через `offer.frequency_threshold`, фаза 1 — абсолютный порог) + **data-driven analyzer** (`core/rules/frequency_analyzer.py` — авто-расчёт порога из истории `ad_metrics` по деградации `cost_per_result`; `dry_run`-защита, пишет только в NULL — ручное не затирает; нужен накопленный `ad_metrics`); +24 теста → 1175.
 
+**BL-8 · P3 · AdSet.pro Волна 4 — ✅ закрыто (2026-05-29):** tracker_aggregator_worker (#14) — idempotent absolute-recompute `tracker_aggregate` per (ad,country,day) из `adsetpro_postback_events`; `OutgoingPostbackSender` (httpx+tenacity retry, non-blocking dispatch); ротация ключей через `adsetpro_credentials` (БД-first + `.env`-фолбэк, Fernet/BYTEA, без рестарта; wired в `deps.py` + postback endpoint). Миграция не нужна (таблицы в 0001). +27 тестов → 1202. Tech-debt (LOW): outgoing не подключён к конкретному flow (нет URL-адресата), durable-outbox через `task_queue` — по запросу.
+
 **Осталось:**
-- **BL-8 · P3 · AdSet.pro Волна 4** — tracker_aggregate per (ad,country,day) + outgoing postback + key rotation.
 - **BL-12-mig · P2 · shape-миграция БД** — добавить недостающие поля Offer/OfferRule/AdMetrics (если фронт начнёт требовать; пайплайн дрейфа уже есть).
 - **BL-15 · P3 · frontend-mini (TMA)** — прокачка Telegram Mini App (дублирует логику старого фронта, без тестов).
 - **#36 · P3 · live observer end-to-end** — полный цикл scan→FSM→авто-disable на живом профиле (нужен column-preset). При `act_via_api=True` act идёт через Marketing API (#39).
