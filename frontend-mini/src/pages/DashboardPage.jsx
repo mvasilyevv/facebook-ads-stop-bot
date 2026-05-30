@@ -182,9 +182,9 @@ export default function DashboardPage() {
 
       {/* KPI-плитки — сетка 2х2 */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", marginBottom: "14px" }}>
-        <KPIPlate title="Активно" value={stats?.active_ads_count} status="info" />
+        <KPIPlate title="Активно" value={stats?.total_ads_monitored} status="info" />
         <KPIPlate title="Стоп-сигналы" value={stats?.ads_in_stop} status={(stats?.ads_in_stop ?? 0) > 0 ? "stop" : "default"} />
-        <KPIPlate title="Отключено сегодня" value={stats?.ads_disabled_today} status="ok" />
+        <KPIPlate title="Отключено" value={stats?.ads_in_disabled} status="ok" />
         <KPIPlate title="Предупреждения" value={stats?.ads_in_warning} status={(stats?.ads_in_warning ?? 0) > 0 ? "warn" : "default"} />
       </div>
 
@@ -194,15 +194,20 @@ export default function DashboardPage() {
         ) : (
           <div className="incident-list">
             {incidents.map((inc, index) => {
-              const variant = incidentVariant(inc.current_state);
-              const reason =
-                inc.reason_title ||
-                (inc.matched_rule_codes?.length ? inc.matched_rule_codes.join(", ") : null) ||
-                STATE_LABELS[inc.current_state] ||
-                inc.current_state;
+              // build_incidents_snapshot отдаёт alert_state (lowercase) +
+              // stop_rule_codes/warning_rule_codes — нормализуем под UI.
+              const stateUpper = (inc.alert_state || "normal").toUpperCase();
+              const variant = incidentVariant(stateUpper);
+              const codes = [
+                ...(inc.stop_rule_codes || []),
+                ...(inc.warning_rule_codes || []),
+              ];
+              const reason = codes.length
+                ? codes.join(", ")
+                : STATE_LABELS[stateUpper] || stateUpper;
               return (
                 <div
-                  key={inc.incident_key || inc.fb_ad_id}
+                  key={inc.fb_ad_id}
                   className={`incident-row incident-row-${variant}`}
                   style={{ 
                     animationDelay: `${index * 50}ms`,
@@ -224,12 +229,12 @@ export default function DashboardPage() {
                       <div className="hint incident-reason" style={{ marginTop: "2px" }}>{reason}</div>
                     </div>
                     <span className={`badge badge-${variant === "stop" ? "stop" : variant === "warning" ? "warning" : "normal"}`}>
-                      {STATE_LABELS[inc.current_state] ?? inc.current_state}
+                      {STATE_LABELS[stateUpper] ?? stateUpper}
                     </span>
                   </div>
 
                   {/* Кнопка быстрого отключения нативной конфирмацией */}
-                  {inc.current_state !== "DISABLED" && (
+                  {stateUpper !== "DISABLED" && (
                     <button
                       className="btn btn-danger btn-sm"
                       style={{ 

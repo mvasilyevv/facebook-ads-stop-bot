@@ -6,11 +6,18 @@ import ErrorBox from "../components/ErrorBox.jsx";
 import EmptyState from "../components/EmptyState.jsx";
 import { haptic } from "../theme.js";
 
+// Ключи — реальные mutation_kind из core/meta_api/schemas.py (MUTATION_KINDS).
 const KIND_LABELS = {
-  set_budget: "Бюджет",
-  clone_campaign: "Клон кампании",
-  bulk_pause: "Массовая пауза",
+  pause_ad: "Пауза объявления",
+  activate_ad: "Включить объявление",
+  pause_campaign: "Пауза кампании",
+  activate_campaign: "Включить кампанию",
+  set_adset_budget: "Бюджет адсета",
+  duplicate_campaign: "Клон кампании",
+  bulk_status_change: "Массовая смена статуса",
   create_campaign: "Новая кампания",
+  custom_audience: "Аудитория",
+  set_ad_creative: "Замена креатива",
 };
 
 function formatPayload(kind, payload) {

@@ -275,14 +275,18 @@ export default function AdDetailPage() {
           ))}
         </div>
 
-        <button
-          className="btn btn-secondary"
-          style={{ width: "100%", marginBottom: can_open_in_ads_manager ? 8 : 0 }}
-          disabled={busy}
-          onClick={handleClaim}
-        >
-          ✅ Снять алерт
-        </button>
+        {/* «Снять алерт» (claim) имеет смысл только для активного инцидента —
+            backend вернёт 409 для normal/disabled. Прячем кнопку вне алерта. */}
+        {["WARNING_SENT", "STOP_SENT", "CLAIMED"].includes(state) && (
+          <button
+            className="btn btn-secondary"
+            style={{ width: "100%", marginBottom: can_open_in_ads_manager ? 8 : 0 }}
+            disabled={busy}
+            onClick={handleClaim}
+          >
+            ✅ Снять алерт
+          </button>
+        )}
 
         {can_open_in_ads_manager && (
           <button

@@ -46,10 +46,12 @@ export default function HistoryPage() {
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
+    // Backend history.py ждёт from_iso/to_iso (ISO-8601). Расширяем «до» на конец
+    // суток, чтобы захватить события дня целиком. offer фильтруем на клиенте —
+    // history-агрегаты сервера принимают только offer_id (UUID), не offer_code.
     const params = new URLSearchParams({
-      date_from: dates.from,
-      date_to: dates.to,
-      ...(offerFilter ? { offer_code: offerFilter } : {}),
+      from_iso: `${dates.from}T00:00:00`,
+      to_iso: `${dates.to}T23:59:59`,
     }).toString();
 
     try {
@@ -66,11 +68,19 @@ export default function HistoryPage() {
     } finally {
       setLoading(false);
     }
-  }, [dates, offerFilter]);
+  }, [dates]);
 
   useEffect(() => {
     load();
   }, [load]);
+
+  // Фильтр по офферу — на клиенте (см. load): сужаем уже полученные агрегаты.
+  const visibleOffers = offerFilter
+    ? offersStats.filter((o) => o.offer_code === offerFilter)
+    : offersStats;
+  const visibleCampaigns = offerFilter
+    ? campaigns.filter((c) => c.offer_code === offerFilter)
+    : campaigns;
 
   return (
     <div>
@@ -119,40 +129,46 @@ export default function HistoryPage() {
 
       {loading && <Loader text="Загрузка истории..." />}
 
-      {/* KPI summary */}
-      {summary && !loading && (
-        <div className="hist-kpi">
-          <div className="hist-kpi-item">
-            <div className="hist-kpi-value">{fmt$(summary.total_spend)}</div>
-            <div className="hist-kpi-label">Расход</div>
+      {/* KPI summary — backend отдаёт агрегаты в summary.totals.* */}
+      {summary?.totals && !loading && (() => {
+        const t = summary.totals;
+        const spend = Number(t.spend ?? 0);
+        const avgCpc = t.clicks ? spend / t.clicks : null;
+        const avgCpr = t.registrations ? spend / t.registrations : null;
+        return (
+          <div className="hist-kpi">
+            <div className="hist-kpi-item">
+              <div className="hist-kpi-value">{fmt$(t.spend)}</div>
+              <div className="hist-kpi-label">Расход</div>
+            </div>
+            <div className="hist-kpi-item">
+              <div className="hist-kpi-value">{fmtN(t.leads)}</div>
+              <div className="hist-kpi-label">Лиды</div>
+            </div>
+            <div className="hist-kpi-item">
+              <div className="hist-kpi-value">{fmtN(t.registrations)}</div>
+              <div className="hist-kpi-label">Реги</div>
+            </div>
+            <div className="hist-kpi-item">
+              <div className="hist-kpi-value">{fmtN(t.deposits)}</div>
+              <div className="hist-kpi-label">Депозиты</div>
+            </div>
+            <div className="hist-kpi-item">
+              <div className="hist-kpi-value">{fmt$(avgCpc)}</div>
+              <div className="hist-kpi-label">Ср. CPC</div>
+            </div>
+            <div className="hist-kpi-item">
+              <div className="hist-kpi-value">{fmt$(avgCpr)}</div>
+              <div className="hist-kpi-label">Ср. CPR</div>
+            </div>
           </div>
-          <div className="hist-kpi-item">
-            <div className="hist-kpi-value">{fmtN(summary.total_leads)}</div>
-            <div className="hist-kpi-label">Лиды</div>
-          </div>
-          <div className="hist-kpi-item">
-            <div className="hist-kpi-value">{fmtN(summary.total_registrations)}</div>
-            <div className="hist-kpi-label">Реги</div>
-          </div>
-          <div className="hist-kpi-item">
-            <div className="hist-kpi-value">{fmtN(summary.total_deposits)}</div>
-            <div className="hist-kpi-label">Депозиты</div>
-          </div>
-          <div className="hist-kpi-item">
-            <div className="hist-kpi-value">{fmt$(summary.avg_cpc)}</div>
-            <div className="hist-kpi-label">Ср. CPC</div>
-          </div>
-          <div className="hist-kpi-item">
-            <div className="hist-kpi-value">{fmt$(summary.avg_cpr)}</div>
-            <div className="hist-kpi-label">Ср. CPR</div>
-          </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* По офферам */}
-      {offersStats.length > 0 && !loading && (
+      {visibleOffers.length > 0 && !loading && (
         <Card title="По офферам">
-          {offersStats.map((o, i) => (
+          {visibleOffers.map((o, i) => (
             <div key={o.offer_code ?? i} className="hist-row">
               <div className="hist-row-name">{o.offer_code ?? "—"}</div>
               <div className="hist-row-meta">
@@ -166,9 +182,9 @@ export default function HistoryPage() {
       )}
 
       {/* По кампаниям */}
-      {campaigns.length > 0 && !loading && (
-        <Card title={`Кампании (${campaigns.length})`}>
-          {campaigns.slice(0, 20).map((c, i) => (
+      {visibleCampaigns.length > 0 && !loading && (
+        <Card title={`Кампании (${visibleCampaigns.length})`}>
+          {visibleCampaigns.slice(0, 20).map((c, i) => (
             <div key={c.campaign_name ?? i} className="hist-row">
               <div
                 className="hist-row-name"
@@ -188,15 +204,15 @@ export default function HistoryPage() {
               </div>
             </div>
           ))}
-          {campaigns.length > 20 && (
+          {visibleCampaigns.length > 20 && (
             <p className="hint" style={{ marginTop: 8 }}>
-              +{campaigns.length - 20} кампаний
+              +{visibleCampaigns.length - 20} кампаний
             </p>
           )}
         </Card>
       )}
 
-      {!loading && !summary && campaigns.length === 0 && offersStats.length === 0 && (
+      {!loading && !summary && visibleCampaigns.length === 0 && visibleOffers.length === 0 && (
         <Card>
           <EmptyState icon="📅" title="Нет данных" subtitle="Нет данных за выбранный период" />
         </Card>

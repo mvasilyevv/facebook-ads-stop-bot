@@ -100,8 +100,8 @@ export default function AdsPage() {
   }, [load]);
 
   const filtered = ads.filter((ad) => {
-    // 1. Фильтр по статусу
-    if (stateFilter && (ad.alert_state || "NORMAL") !== stateFilter) {
+    // 1. Фильтр по статусу (backend отдаёт alert_state в lowercase → нормализуем)
+    if (stateFilter && (ad.alert_state || "normal").toUpperCase() !== stateFilter) {
       return false;
     }
     // 2. Фильтр по поисковой строке
@@ -172,7 +172,8 @@ export default function AdsPage() {
         </Card>
       ) : (
         filtered.map((ad) => {
-          const state = ad.alert_state || "NORMAL";
+          const state = (ad.alert_state || "normal").toUpperCase();
+          const m = ad.metrics || {};
           const rules = [
             ...(ad.stop_rule_codes || []).map((c) => ({ code: c, type: "stop" })),
             ...(ad.warning_rule_codes || []).map((c) => ({ code: c, type: "warn" })),
@@ -237,18 +238,19 @@ export default function AdsPage() {
                 </span>
               )}
 
+              {/* Метрики приходят вложенным объектом ad.metrics (snapshot) */}
               <div className="ad-metrics">
                 <div className="metric-chip">
                   <div className="label">Расход</div>
-                  <div className="value">{fmt$(ad.spend)}</div>
+                  <div className="value">{fmt$(m.spend)}</div>
                 </div>
                 <div className="metric-chip">
                   <div className="label">CPC</div>
-                  <div className="value">{fmt$(ad.cpc)}</div>
+                  <div className="value">{fmt$(m.cpc)}</div>
                 </div>
                 <div className="metric-chip">
                   <div className="label">Лиды</div>
-                  <div className="value">{fmtN(ad.leads)}</div>
+                  <div className="value">{fmtN(m.leads)}</div>
                 </div>
                 <div className="metric-chip">
                   <div className="label">Деп</div>
@@ -256,12 +258,12 @@ export default function AdsPage() {
                     className="value"
                     style={{
                       color:
-                        (ad.effective_deposits ?? ad.deposits) === 0 && Number(ad.spend) > 0
+                        Number(m.deposits) === 0 && Number(m.spend) > 0
                           ? "var(--color-danger)"
                           : "inherit",
                     }}
                   >
-                    {fmtN(ad.effective_deposits ?? ad.deposits)}
+                    {fmtN(m.deposits)}
                   </div>
                 </div>
               </div>
