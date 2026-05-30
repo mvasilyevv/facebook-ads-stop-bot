@@ -1,16 +1,28 @@
 # PROJECT STATUS — FB Stop Bot
 
 > Единый источник правды по состоянию проекта. Обновляется по итогам раундов.
-> Тесты backend: **1175 passed / 0 failed** · frontend: **77 passed** · ruff/typecheck/lint clean.
+> Тесты backend: **1214 passed / 0 failed** · frontend: **77 passed** · ruff/typecheck/lint clean.
 > Подробности — в `CLAUDE.md` (архитектура) + `META_INTEGRATION_PLAN.md` (план) + `docs/*audit*.md` (аудиты).
 
 ## TL;DR
 
-- **Backend — production-ready.** 13 воркеров + FastAPI (61 endpoint) + Node.js gRPC. Прошёл 5 аудитов (security ×2, test-coverage, code-quality, test-quality) + cleanup-раунды. Все CRIT/HIGH закрыты.
+- **Backend — production-ready.** 14 воркеров + FastAPI (61 endpoint) + Node.js gRPC. Прошёл 5 аудитов (security ×2, test-coverage, code-quality, test-quality) + cleanup-раунды. Все CRIT/HIGH закрыты.
 - **Frontend — готов.** Новый `frontend/` (TS + Vite + Tailwind 4 + TanStack): 6 страниц, русский UI, проверены в браузере. Старый `frontend-legacy/` — архив.
 - **БД** переименована `fb_stop_bot_v2 → fb_stop_bot` (данные сохранены).
 - **Проверено вживую (2026-05-29):** Marketing API latency (BL-7, insights 2–4с / list ~1с); **Marketing API mutations enable/disable 24/24 объявлений** на живом кабинете (Этап 5 валидирован, act через API — 48 операций 0 промахов); observer DOM scan-канал (парсинг + валидация колонок). **Подтверждено владельцем:** стоп ad-level (кампания — отдельный рубильник владельца); стоп-правила (`docs/stop_rules.md`); CPA по гео (KE_CR2 $8 / GH_CR2 $3). **Починены 2 латентных prod-бага** gate-фабрик observer/disable/enable (+4 теста).
 - **Не доведено вживую:** полный observer-цикл с FSM/авто-disable (нужен column-preset + запущенный observer на реальном кабинете) — #36.
+
+---
+
+## Проверено вживую vs тесты (срез 2026-05-29)
+
+> Легенда: ✅ проверено на реальном кабинете · 🧪 код+тесты зелёные, вживую НЕ проверено · 📦 сделано, не активно.
+
+- ✅ **Вживую на кабинете:** Marketing API mutations (enable/disable 24/24, 48 операций 0 промахов), DOM scan-канал (парсинг + валидация колонок), latency (BL-7: insights 2–4с / list ~1с), Node.js gRPC browser-agent. Подтверждено владельцем: стоп ad-level, стоп-правила (`docs/stop_rules.md`), гео-CPA (KE_CR2 $8 / GH_CR2 $3).
+- 🧪 **Только тесты (1214 passed), не на кабинете:** полный observer-цикл scan→FSM→авто-disable (#36); act через API в авто-режиме (#39, сами mutations — вживую); frequency-anomaly + data-driven analyzer (#37, `ad_metrics` пустая → реально не считал); автостарт по расписанию (#38); все воркеры e2e + heartbeat; FastAPI под нагрузкой; WebSocket push; MCP-сервер; AdSet.pro ingest/aggregator/outgoing (BL-8); shape-поля фронта (BL-12); фронт с реальным бэком.
+- 📦 **Сделано, не активно:** creator_worker/recorder (выкл в сборке); frontend-mini TMA (BL-15); frontend-legacy (архив).
+
+**Главный разблокиратор — #36 (observer вживую):** переводит бóльшую часть 🧪→✅ и накапливает `ad_metrics`, без которых не работают #37-analyzer и отложенный backtest. Требует поднятого Vision-профиля + column-preset + визуальной проверки владельцем.
 
 ---
 
