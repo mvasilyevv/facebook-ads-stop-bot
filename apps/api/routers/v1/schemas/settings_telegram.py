@@ -19,12 +19,22 @@ class TelegramSettingsResponse(BaseModel):
     auth_deep_link: str | None = None
     activation_command: str = "/start auth"
     chat_id: str | None = None
+    # Web App URL (Telegram Mini App). Хранится в system_config, фолбэк на .env.
+    web_app_url: str | None = None
 
 
 class TelegramTokenRequest(BaseModel):
     """Тело PUT /settings/telegram/token — новый токен бота в открытом виде."""
 
     bot_token: str = Field(..., min_length=1, description="Telegram Bot API токен")
+
+
+class TelegramWebAppUrlRequest(BaseModel):
+    """Тело PUT /settings/telegram/web-app-url — URL Mini App (пусто = очистить)."""
+
+    web_app_url: str | None = Field(
+        default=None, description="HTTPS-URL Mini App; пусто/None — использовать .env"
+    )
 
 
 class TelegramRecipientResponse(BaseModel):

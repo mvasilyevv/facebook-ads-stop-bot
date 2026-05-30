@@ -22,16 +22,18 @@ from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, HTTPException
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
-from apps.api.deps import DepEngine, DepRedis
+from apps.api.deps import DepEngine, DepRedis, DepSettings
 from apps.api.routers.v1.schemas.settings_telegram import (
     TelegramInviteResponse,
     TelegramRecipientResponse,
     TelegramRecipientsListResponse,
     TelegramSettingsResponse,
     TelegramTokenRequest,
+    TelegramWebAppUrlRequest,
 )
+from core.config import Settings
 from core.models.settings.telegram_config import TelegramConfig
 from core.models.telegram.invite import TelegramInvite
 from core.models.telegram.recipient import TelegramRecipient
@@ -42,6 +44,7 @@ from core.telegram.settings_compute import (
     compute_is_authorized,
     compute_poller_status,
 )
+from core.telegram.web_app_url import load_web_app_url, save_web_app_url
 
 logger = logging.getLogger(__name__)
 
@@ -86,10 +89,12 @@ async def _load_config(session: AsyncSession) -> TelegramConfig | None:
 async def _build_response(
     snap: _ConfigSnapshot | None,
     redis: object,
+    web_app_url: str | None = None,
 ) -> TelegramSettingsResponse:
     """Строит TelegramSettingsResponse из snapshot и Redis-клиента.
 
     Принимает скалярный snapshot — не зависит от session.
+    web_app_url — уже разрешённое значение (system_config или фолбэк .env).
     """
     is_authorized = compute_is_authorized(snap)
     poller_status = await compute_poller_status(snap)
@@ -109,7 +114,14 @@ async def _build_response(
         auth_deep_link=auth_deep_link,
         activation_command=activation_command,
         chat_id=chat_id_str,
+        web_app_url=web_app_url,
     )
+
+
+async def _resolve_web_app_url(engine: AsyncEngine, settings: Settings) -> str | None:
+    """web_app_url: system_config (приоритет) → config.web_app_url (.env) → None."""
+    stored = await load_web_app_url(engine)
+    return stored or settings.web_app_url
 
 
 # ---------------------------------------------------------------------------
@@ -118,15 +130,43 @@ async def _build_response(
 
 
 @router.get("", response_model=TelegramSettingsResponse)
-async def get_telegram_settings(engine: DepEngine, redis: DepRedis) -> TelegramSettingsResponse:
+async def get_telegram_settings(
+    engine: DepEngine, redis: DepRedis, settings: DepSettings
+) -> TelegramSettingsResponse:
     """Возвращает публичные поля TelegramConfig с compute-полями.
 
-    НЕ возвращает bot_token_encrypted.
+    НЕ возвращает bot_token_encrypted. web_app_url — из system_config или .env.
     """
     async with AsyncSession(engine) as session:
         config = await _load_config(session)
         snap = _snapshot(config)
-    return await _build_response(snap, redis)
+    web_app_url = await _resolve_web_app_url(engine, settings)
+    return await _build_response(snap, redis, web_app_url)
+
+
+@router.put("/web-app-url", response_model=TelegramSettingsResponse)
+async def put_telegram_web_app_url(
+    body: TelegramWebAppUrlRequest,
+    engine: DepEngine,
+    redis: DepRedis,
+    settings: DepSettings,
+) -> TelegramSettingsResponse:
+    """Сохраняет Web App URL Mini App в system_config (без рестарта).
+
+    Пустая строка/None — очистка (тогда GET вернёт фолбэк из .env).
+    Непустой URL обязан быть HTTPS (требование Telegram Mini Apps) → иначе 422.
+    """
+    cleaned = (body.web_app_url or "").strip()
+    if cleaned and not cleaned.lower().startswith("https://"):
+        raise HTTPException(status_code=422, detail="Web App URL должен начинаться с https://")
+
+    await save_web_app_url(engine, cleaned or None)
+
+    async with AsyncSession(engine) as session:
+        config = await _load_config(session)
+        snap = _snapshot(config)
+    web_app_url = await _resolve_web_app_url(engine, settings)
+    return await _build_response(snap, redis, web_app_url)
 
 
 @router.put("/token", response_model=TelegramSettingsResponse)
