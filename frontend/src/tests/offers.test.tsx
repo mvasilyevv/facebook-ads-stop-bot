@@ -86,8 +86,8 @@ describe("OfferCard", () => {
     expect(screen.getByText("CR2")).toBeInTheDocument();
     // Название
     expect(screen.getByText("Crypto Registration 2")).toBeInTheDocument();
-    // Вертикаль badge
-    expect(screen.getByText("crypto")).toBeInTheDocument();
+    // Вертикаль badge (человекочитаемый лейбл)
+    expect(screen.getByText("Crypto")).toBeInTheDocument();
     // Метрики: spend (форматированный)
     expect(screen.getByText("$1,234.56")).toBeInTheDocument();
     // Leads

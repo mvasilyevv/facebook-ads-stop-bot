@@ -6,6 +6,7 @@
 import { XCircle, Check, Play } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
 import { formatRelativeTime } from "@/lib/utils/format";
+import { TASK_STATUS_LABELS, taskTypeLabel } from "@/lib/constants/states";
 import { cn } from "@/lib/utils/cn";
 import type { TaskQueueRow as TaskQueueRowData } from "@/lib/types/api";
 
@@ -32,15 +33,16 @@ function statusVariant(status: string): "warning" | "normal" | "success" | "stop
   }
 }
 
-/** Человекочитаемый лейбл статуса (бэкенд SUCCEEDED → "done" в духе мока). */
+/** Человекочитаемый лейбл статуса через единый словарь. */
 function statusLabel(status: string): string {
-  if (status === "SUCCEEDED" || status === "DONE") return "done";
-  return status.toLowerCase();
+  const key = status === "SUCCEEDED" ? "DONE" : status;
+  return TASK_STATUS_LABELS[key as keyof typeof TASK_STATUS_LABELS] ?? status;
 }
 
 export function TaskQueueRow({ task }: TaskQueueRowProps) {
   const isDone = task.status === "DONE" || task.status === "SUCCEEDED";
   const isEnable = task.task_type === "enable";
+  const typeLabel = taskTypeLabel(task.task_type);
   return (
     <div
       className={cn(
@@ -49,7 +51,9 @@ export function TaskQueueRow({ task }: TaskQueueRowProps) {
       )}
     >
       <div
-        aria-hidden="true"
+        role="img"
+        aria-label={typeLabel}
+        title={typeLabel}
         className={cn(
           "size-6 border flex items-center justify-center",
           isDone
@@ -66,7 +70,10 @@ export function TaskQueueRow({ task }: TaskQueueRowProps) {
         <span className="text-bg-9 text-[11px] ml-2">· {formatRelativeTime(task.created_at)}</span>
       </div>
       <Badge variant={statusVariant(task.status)}>{statusLabel(task.status)}</Badge>
-      <span className="font-display text-[11px] text-bg-9 tracking-wider tabular-nums">
+      <span
+        className="font-display text-[11px] text-bg-9 tracking-wider tabular-nums"
+        title={`Попытка ${task.attempt_count} из ${task.max_attempts}`}
+      >
         <span className="text-bg-7">×</span>
         {task.attempt_count}/{task.max_attempts}
       </span>

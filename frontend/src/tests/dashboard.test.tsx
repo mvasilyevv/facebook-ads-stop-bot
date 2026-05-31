@@ -108,10 +108,10 @@ describe("Dashboard · TaskQueueCard", () => {
     );
     expect(screen.getByText("Disable queue")).toBeInTheDocument();
     expect(screen.getByText("UA17 | SP | MV | Krov | 24.03")).toBeInTheDocument();
-    // RUNNING → pending=1; SUCCEEDED не считается pending.
-    expect(screen.getByText("1 в очереди")).toBeInTheDocument();
-    // Бэкенд SUCCEEDED отображается как "done" (status_mapper-совместимость).
-    expect(screen.getByText("done")).toBeInTheDocument();
+    // RUNNING → выполняется=1; PENDING нет → "0 в очереди · 1 выполняется".
+    expect(screen.getByText("0 в очереди · 1 выполняется")).toBeInTheDocument();
+    // Бэкенд SUCCEEDED отображается как "Выполнено" (единый словарь статусов).
+    expect(screen.getByText("Выполнено")).toBeInTheDocument();
   });
 
   // Тест: пустой массив → EmptyState "Очередь пуста".
@@ -133,7 +133,7 @@ describe("Dashboard · IncidentsCard", () => {
       />,
     );
     expect(screen.getByText("Всё чисто")).toBeInTheDocument();
-    expect(screen.getByText("0 открытых")).toBeInTheDocument();
+    expect(screen.getByText("0 активных")).toBeInTheDocument();
   });
 
   // Тест: клик по строке инцидента зовёт onSelect с fb_ad_id.

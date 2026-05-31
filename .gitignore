@@ -67,6 +67,8 @@ data/cleanup_audit/
 
 # Куки/сессия разведочного браузера (расходный FB-аккаунт) — не коммитить
 data/recon_profile/
+data/recon_adlib_profile/
+data/recon_out/
 
 # Медиа конкурентов из Ad Library (референсы, не в репо)
 data/competitor_refs/

@@ -10,6 +10,7 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { RuleBadge } from "@/components/domain/RuleBadge";
 import { formatDateTime } from "@/lib/utils/format";
+import { ALERT_STAGE_LABELS } from "@/lib/constants/states";
 import { cn } from "@/lib/utils/cn";
 import { Filter, Clock } from "lucide-react";
 import type { AlertEvent } from "@/lib/types/api";
@@ -59,9 +60,12 @@ export function HistoryEventsTable({
     onCampaignFilter?.(v.trim() || null);
   };
 
+  // Фильтр по stage делает сервер (onStageFilter → рефетч). Локально — только по кампании.
   const filtered = (events ?? []).filter((ev) => {
-    if (stageFilter !== "all" && ev.stage !== stageFilter) return false;
-    if (campaignInput.trim() && !ev.campaign_name?.toLowerCase().includes(campaignInput.toLowerCase())) {
+    if (
+      campaignInput.trim() &&
+      !ev.campaign_name?.toLowerCase().includes(campaignInput.toLowerCase())
+    ) {
       return false;
     }
     return true;
@@ -86,7 +90,7 @@ export function HistoryEventsTable({
                   : "text-bg-9 hover:text-bg-11 hover:bg-bg-2",
               )}
             >
-              {s === "all" ? "Все" : s}
+              {s === "all" ? "Все" : ALERT_STAGE_LABELS[s]}
             </button>
           ))}
         </div>
@@ -144,7 +148,7 @@ export function HistoryEventsTable({
                   </td>
                   <td className="px-4 py-3">
                     <Badge variant={ev.stage === "stop" ? "stop" : "warning"} size="sm">
-                      {ev.stage}
+                      {ALERT_STAGE_LABELS[ev.stage === "stop" ? "stop" : "warning"]}
                     </Badge>
                   </td>
                   <td className="px-4 py-3 font-display text-[12px] text-bg-11 max-w-[220px] truncate">

@@ -69,18 +69,21 @@ export function TopBar() {
 
       <div className="flex-1" />
 
-      <button
-        type="button"
-        className="flex items-center gap-2.5 h-8 px-3 bg-bg-1 border border-bg-5 text-bg-9 hover:border-bg-7 hover:text-bg-10 transition-colors text-[13px]"
-        aria-label="Открыть поиск"
-        disabled
-      >
-        <Search size={14} aria-hidden="true" />
-        <span>Поиск объявлений, офферов, событий</span>
-        <Kbd className="ml-1">⌘K</Kbd>
-      </button>
+      {/* span-обёртка: tooltip у disabled-кнопки сам не показывается. */}
+      <span title="Глобальный поиск — в разработке" className="inline-flex">
+        <button
+          type="button"
+          className="flex items-center gap-2.5 h-8 px-3 bg-bg-1 border border-bg-5 text-bg-9 transition-colors text-[13px] cursor-not-allowed"
+          aria-label="Поиск — в разработке"
+          disabled
+        >
+          <Search size={14} aria-hidden="true" />
+          <span>Поиск объявлений, офферов, событий</span>
+          <Kbd className="ml-1">⌘K</Kbd>
+        </button>
+      </span>
 
-      <Tooltip content={`Плотность: ${density}`}>
+      <Tooltip content={`Плотность: ${density === "comfortable" ? "просторная" : "компактная"}`}>
         <button
           type="button"
           aria-label="Переключить плотность таблиц"
@@ -98,7 +101,8 @@ export function TopBar() {
       <WorkerPulse />
 
       <div
-        aria-label="Профиль пользователя"
+        aria-hidden="true"
+        title="Профиль"
         className="size-7 bg-bg-3 border border-bg-6 flex items-center justify-center font-display text-[11px] font-semibold text-bg-11"
       >
         MV

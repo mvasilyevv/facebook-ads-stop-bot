@@ -34,7 +34,8 @@ interface RequestOptions {
   headers?: Record<string, string>;
 }
 
-async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+/** Низкоуровневый fetch с auth/headers; бросает ApiError на !ok. Возвращает Response. */
+async function rawFetch(path: string, options: RequestOptions = {}): Promise<Response> {
   const { method = "GET", body, signal, headers: extraHeaders = {} } = options;
   const FormDataCtor = globalThis.FormData;
   const isFormData = typeof FormDataCtor !== "undefined" && body instanceof FormDataCtor;
@@ -60,16 +61,24 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   if (!resp.ok) {
     throw await buildApiError(resp);
   }
+  return resp;
+}
 
+/** Парсит тело ответа: 204 → null, json → объект, иначе текст. */
+async function parseBody<T>(resp: Response): Promise<T> {
   if (resp.status === 204) {
     return null as T;
   }
-
   const ct = resp.headers.get("content-type") || "";
   if (ct.includes("application/json")) {
     return (await resp.json()) as T;
   }
   return (await resp.text()) as unknown as T;
+}
+
+async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  const resp = await rawFetch(path, options);
+  return parseBody<T>(resp);
 }
 
 async function buildApiError(resp: Response): Promise<ApiError> {
@@ -127,6 +136,20 @@ export function buildQuery(params: QueryParams | undefined): string {
 export function apiGet<T>(path: string, params?: QueryParams, signal?: AbortSignal): Promise<T> {
   const full = `${path}${buildQuery(params)}`;
   return request<T>(full, { method: "GET", signal });
+}
+
+/** GET, возвращающий тело + общее число из заголовка X-Total-Count (для пагинации). */
+export async function apiGetWithCount<T>(
+  path: string,
+  params?: QueryParams,
+  signal?: AbortSignal,
+): Promise<{ data: T; total: number | null }> {
+  const full = `${path}${buildQuery(params)}`;
+  const resp = await rawFetch(full, { method: "GET", signal });
+  const header = resp.headers.get("X-Total-Count");
+  const total = header != null && header !== "" ? Number(header) : null;
+  const data = await parseBody<T>(resp);
+  return { data, total: Number.isNaN(total as number) ? null : total };
 }
 
 /** POST/PUT/PATCH/DELETE с JSON body. */

@@ -18,7 +18,7 @@
 
 import { useState, useMemo, useCallback, type ReactNode } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { Search, Download, SlidersHorizontal, X, XCircle, Layers } from "lucide-react";
+import { Search, Download, X, XCircle, Layers } from "lucide-react";
 
 import { PageHeader, HeaderSep } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/Button";
@@ -31,6 +31,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { toast } from "@/components/ui/Toast";
 import { useAds, useCreateDisableTask } from "@/lib/api/ads";
 import { formatSpend, formatRelativeTime } from "@/lib/utils/format";
+import { ALERT_STATE_LABELS } from "@/lib/constants/states";
 import { cn } from "@/lib/utils/cn";
 import type { AdSnapshot } from "@/lib/types/api";
 
@@ -38,27 +39,25 @@ export const Route = createFileRoute("/ads/")({
   component: AdsPage,
 });
 
-/** Лейблы FSM-состояний для Pill-чипов фильтра. */
+/** Лейблы FSM-состояний для Pill-чипов фильтра (человекочитаемые). */
 const STATE_OPTIONS: Array<{ value: string; label: string }> = [
-  { value: "normal", label: "normal" },
-  { value: "warning_sent", label: "warning" },
-  { value: "stop_sent", label: "stop" },
-  { value: "claimed", label: "claimed" },
-  { value: "disabled", label: "disabled" },
+  { value: "normal", label: ALERT_STATE_LABELS.normal },
+  { value: "warning_sent", label: ALERT_STATE_LABELS.warning_sent },
+  { value: "stop_sent", label: ALERT_STATE_LABELS.stop_sent },
+  { value: "claimed", label: ALERT_STATE_LABELS.claimed },
+  { value: "disabled", label: ALERT_STATE_LABELS.disabled },
 ];
 
 const PAGE_SIZE = 50;
 
-/** Короткая читаемая метка FSM-state для бейджа (mock-совместимость). */
-function stateLabel(state: string): string {
-  switch (state) {
-    case "warning_sent":
-      return "warn";
-    case "stop_sent":
-      return "stop";
-    default:
-      return state;
-  }
+/** Колонки, по которым доступна клиентская сортировка. */
+type SortKey = "spend" | "cpl" | "ctr" | "frequency" | "leads" | "last_seen";
+
+/** Число для сортировки: null/невалидное → -Infinity (уходит вниз при сортировке desc). */
+function sortNum(v: number | string | null | undefined): number {
+  if (v == null || v === "") return Number.NEGATIVE_INFINITY;
+  const n = typeof v === "string" ? Number.parseFloat(v) : v;
+  return Number.isNaN(n) ? Number.NEGATIVE_INFINITY : n;
 }
 
 function AdsPage() {
@@ -71,6 +70,7 @@ function AdsPage() {
   const [selectedOffer, setSelectedOffer] = useState<string>("");
   const [includeInactive, setIncludeInactive] = useState(false);
   const [offset, setOffset] = useState(0);
+  const [sort, setSort] = useState<{ key: SortKey; dir: "asc" | "desc" } | null>(null);
 
   // ─── Состояние выбора строк ──────────────────────────────────────────────
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -91,7 +91,7 @@ function AdsPage() {
 
   // ─── Фильтрация на клиенте ───────────────────────────────────────────────
   const filteredAds = useMemo(() => {
-    const raw = adsQuery.data ?? [];
+    const raw = adsQuery.data?.items ?? [];
     return raw.filter((ad) => {
       // Фильтр по множеству состояний (когда выбрано несколько — client-side)
       if (selectedStates.size > 1 && !selectedStates.has(ad.alert_state)) return false;
@@ -111,10 +111,42 @@ function AdsPage() {
     });
   }, [adsQuery.data, selectedStates, selectedOffer, search]);
 
+  // ─── Сортировка (клиентская, поверх отфильтрованной страницы) ────────────
+  const sortedAds = useMemo(() => {
+    if (!sort) return filteredAds;
+    const val = (ad: AdSnapshot): number => {
+      switch (sort.key) {
+        case "spend":
+          return sortNum(ad.metrics?.spend);
+        case "cpl":
+          return sortNum(ad.metrics?.cost_per_lead);
+        case "ctr":
+          return sortNum(ad.metrics?.ctr);
+        case "frequency":
+          return sortNum(ad.metrics?.frequency);
+        case "leads":
+          return sortNum(ad.metrics?.leads);
+        case "last_seen":
+          return ad.last_seen_at ? new Date(ad.last_seen_at).getTime() : Number.NEGATIVE_INFINITY;
+      }
+    };
+    const arr = [...filteredAds].sort((a, b) => val(a) - val(b));
+    return sort.dir === "desc" ? arr.reverse() : arr;
+  }, [filteredAds, sort]);
+
+  /** Клик по заголовку: desc → asc → сброс. */
+  const toggleSort = useCallback((key: SortKey) => {
+    setSort((prev) => {
+      if (prev?.key !== key) return { key, dir: "desc" };
+      if (prev.dir === "desc") return { key, dir: "asc" };
+      return null;
+    });
+  }, []);
+
   // ─── Уникальные offer_codes для Select ──────────────────────────────────
   const offerCodes = useMemo(() => {
     const codes = new Set<string>();
-    for (const ad of adsQuery.data ?? []) {
+    for (const ad of adsQuery.data?.items ?? []) {
       if (ad.offer_code) codes.add(ad.offer_code);
     }
     return [...codes].sort();
@@ -122,7 +154,7 @@ function AdsPage() {
 
   // ─── Aggregate stats для subtitle ────────────────────────────────────────
   const stats = useMemo(() => {
-    const all = adsQuery.data ?? [];
+    const all = adsQuery.data?.items ?? [];
     return {
       total: all.length,
       warning: all.filter((a) => a.alert_state === "warning_sent").length,
@@ -189,9 +221,56 @@ function AdsPage() {
     setSelectedStates(new Set());
     setSelectedOffer("");
     setIncludeInactive(false);
+    setOffset(0);
   }, []);
 
-  const hasActiveFilters = selectedStates.size > 0 || selectedOffer !== "" || search !== "";
+  /** Экспорт текущего (отфильтрованного) списка в CSV — выгрузка на клиенте. */
+  const handleExport = useCallback(() => {
+    if (filteredAds.length === 0) {
+      toast.warning("Нечего экспортировать", "Список пуст.");
+      return;
+    }
+    const header = [
+      "ad_name",
+      "fb_ad_id",
+      "offer_code",
+      "alert_state",
+      "spend",
+      "cpl",
+      "ctr",
+      "frequency",
+      "leads",
+      "last_seen_at",
+    ];
+    const lines = filteredAds.map((a) =>
+      [
+        a.ad_name,
+        a.fb_ad_id,
+        a.offer_code ?? "",
+        a.alert_state,
+        a.metrics?.spend ?? "",
+        a.metrics?.cost_per_lead ?? "",
+        a.metrics?.ctr ?? "",
+        a.metrics?.frequency ?? "",
+        a.metrics?.leads ?? "",
+        a.last_seen_at ?? "",
+      ]
+        .map(csvCell)
+        .join(","),
+    );
+    const csv = [header.join(","), ...lines].join("\n");
+    const blob = new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `ads_export_${new Date().toISOString().slice(0, 10)}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+    toast.success("Экспортировано", `${filteredAds.length} строк в CSV.`);
+  }, [filteredAds]);
+
+  const hasActiveFilters =
+    selectedStates.size > 0 || selectedOffer !== "" || search !== "" || includeInactive;
 
   // ─── Навигация к drawer ───────────────────────────────────────────────────
   const openDrawer = useCallback(
@@ -230,27 +309,20 @@ function AdsPage() {
           </>
         }
         action={
-          <div className="flex gap-2">
-            <Button
-              variant="secondary"
-              size="md"
-              leftIcon={<Download size={14} aria-hidden="true" />}
-            >
-              Экспорт
-            </Button>
-            <Button
-              variant="secondary"
-              size="md"
-              leftIcon={<SlidersHorizontal size={14} aria-hidden="true" />}
-            >
-              Колонки
-            </Button>
-          </div>
+          <Button
+            variant="secondary"
+            size="md"
+            leftIcon={<Download size={14} aria-hidden="true" />}
+            onClick={handleExport}
+            title="Скачать текущий список (с учётом фильтров) в CSV"
+          >
+            Экспорт CSV
+          </Button>
         }
       />
 
       {/* 2. FilterBar */}
-      <div className="flex items-center gap-2 p-3 bg-bg-1 border border-bg-5 mb-2">
+      <div className="flex flex-wrap items-center gap-2 p-3 bg-bg-1 border border-bg-5 mb-2">
         {/* Поиск */}
         <div className="flex-1 flex items-center gap-2 px-3 h-8 bg-bg-2 border border-bg-6 focus-within:border-accent focus-within:bg-bg-3 transition-colors">
           <Search size={14} className="text-bg-9 shrink-0" aria-hidden="true" />
@@ -325,9 +397,13 @@ function AdsPage() {
           </span>
         </div>
 
+        {/* Разделитель: отделяем тогл данных от фильтров по статусу. */}
+        <span aria-hidden="true" className="w-px h-6 bg-bg-6 self-center" />
+
         {/* Include inactive toggle */}
         <button
           type="button"
+          title="Показать также отключённые/неактивные объявления"
           onClick={() => setIncludeInactive((v) => !v)}
           className={cn(
             "h-8 px-3 font-display text-[11px] tracking-wider uppercase border transition-colors",
@@ -336,7 +412,7 @@ function AdsPage() {
               : "bg-bg-2 border-bg-6 text-bg-9 hover:border-bg-7 hover:text-bg-11",
           )}
         >
-          +неактивные
+          + неактивные
         </button>
       </div>
 
@@ -349,18 +425,16 @@ function AdsPage() {
           {[...selectedStates].map((state) => (
             <FilterChip
               key={state}
-              label={`state = ${state}`}
+              label={`Статус: ${ALERT_STATE_LABELS[state as keyof typeof ALERT_STATE_LABELS] ?? state}`}
               onRemove={() => removeStateFilter(state)}
             />
           ))}
           {selectedOffer && (
-            <FilterChip
-              label={`offer = ${selectedOffer}`}
-              onRemove={() => setSelectedOffer("")}
-            />
+            <FilterChip label={`Оффер: ${selectedOffer}`} onRemove={() => setSelectedOffer("")} />
           )}
-          {search && (
-            <FilterChip label={`search = ${search}`} onRemove={() => setSearch("")} />
+          {search && <FilterChip label={`Поиск: ${search}`} onRemove={() => setSearch("")} />}
+          {includeInactive && (
+            <FilterChip label="+ неактивные" onRemove={() => setIncludeInactive(false)} />
           )}
           <button
             type="button"
@@ -369,6 +443,14 @@ function AdsPage() {
           >
             Сбросить всё
           </button>
+        </div>
+      )}
+
+      {/* Предупреждение: мультивыбор статусов фильтруется на клиенте по текущей странице. */}
+      {selectedStates.size > 1 && (
+        <div className="flex items-center gap-2 mb-4 -mt-1 text-[11px] font-display text-warning">
+          Выбрано несколько статусов — фильтр применяется к загруженной странице ({filteredAds.length}{" "}
+          из {stats.total}). Для полного поиска оставьте один статус.
         </div>
       )}
 
@@ -395,14 +477,26 @@ function AdsPage() {
                   />
                 </th>
                 <Th>Объявление</Th>
-                <Th>Offer</Th>
+                <Th>Оффер</Th>
                 <Th>Статус</Th>
-                <Th align="right">Spend</Th>
-                <Th align="right">CPL</Th>
-                <Th align="right">CTR</Th>
-                <Th align="right">Частота</Th>
-                <Th align="right">Лиды</Th>
-                <Th align="right">Посл. скан</Th>
+                <SortableTh align="right" sortKey="spend" sort={sort} onSort={toggleSort} title="Расход за сутки">
+                  Spend
+                </SortableTh>
+                <SortableTh align="right" sortKey="cpl" sort={sort} onSort={toggleSort} title="Cost Per Lead — стоимость лида">
+                  CPL
+                </SortableTh>
+                <SortableTh align="right" sortKey="ctr" sort={sort} onSort={toggleSort} title="Click-Through Rate — кликабельность">
+                  CTR
+                </SortableTh>
+                <SortableTh align="right" sortKey="frequency" sort={sort} onSort={toggleSort} title="Frequency — показов на пользователя">
+                  Частота
+                </SortableTh>
+                <SortableTh align="right" sortKey="leads" sort={sort} onSort={toggleSort}>
+                  Лиды
+                </SortableTh>
+                <SortableTh align="right" sortKey="last_seen" sort={sort} onSort={toggleSort}>
+                  Посл. скан
+                </SortableTh>
                 <th className="bg-bg-1 border-b border-bg-5 w-10" />
               </tr>
             </thead>
@@ -411,7 +505,7 @@ function AdsPage() {
                 ? Array.from({ length: 8 }).map((_, i) => <SkeletonRow key={i} />)
                 : filteredAds.length === 0
                   ? null
-                  : filteredAds.map((ad) => (
+                  : sortedAds.map((ad) => (
                       <AdRow
                         key={ad.fb_ad_id}
                         ad={ad}
@@ -445,39 +539,56 @@ function AdsPage() {
         )}
       </div>
 
-      {/* Pagination */}
-      {!adsQuery.isLoading && !adsQuery.isError && (adsQuery.data?.length ?? 0) >= PAGE_SIZE && (
-        <div className="flex items-center justify-between font-display text-[11.5px] text-bg-9 tracking-wide pb-4">
-          <span>
-            Показано{" "}
-            <span className="text-bg-11">{offset + 1}–{offset + filteredAds.length}</span>
-          </span>
-          <div className="flex gap-2">
-            <Button
-              variant="secondary"
-              size="sm"
-              disabled={offset === 0}
-              onClick={() => {
-                setOffset(Math.max(0, offset - PAGE_SIZE));
-                setSelectedIds(new Set());
-              }}
-            >
-              ← Назад
-            </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              disabled={(adsQuery.data?.length ?? 0) < PAGE_SIZE}
-              onClick={() => {
-                setOffset(offset + PAGE_SIZE);
-                setSelectedIds(new Set());
-              }}
-            >
-              Вперёд →
-            </Button>
-          </div>
-        </div>
-      )}
+      {/* Pagination — серверная (offset/limit), общее число из X-Total-Count. */}
+      {!adsQuery.isLoading &&
+        !adsQuery.isError &&
+        (() => {
+          const total = adsQuery.data?.total ?? null;
+          const pageLen = adsQuery.data?.items.length ?? 0;
+          const multiPage = total != null ? total > PAGE_SIZE : pageLen >= PAGE_SIZE;
+          if (!multiPage) return null;
+          const hasNext = total != null ? offset + pageLen < total : pageLen >= PAGE_SIZE;
+          return (
+            <div className="flex items-center justify-between font-display text-[11.5px] text-bg-9 tracking-wide pb-4">
+              <span>
+                Показано{" "}
+                <span className="text-bg-11">
+                  {offset + 1}–{offset + pageLen}
+                </span>
+                {total != null ? (
+                  <>
+                    {" "}
+                    из <span className="text-bg-11">{total}</span>
+                  </>
+                ) : null}
+              </span>
+              <div className="flex gap-2">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={offset === 0}
+                  onClick={() => {
+                    setOffset(Math.max(0, offset - PAGE_SIZE));
+                    setSelectedIds(new Set());
+                  }}
+                >
+                  ← Назад
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={!hasNext}
+                  onClick={() => {
+                    setOffset(offset + PAGE_SIZE);
+                    setSelectedIds(new Set());
+                  }}
+                >
+                  Вперёд →
+                </Button>
+              </div>
+            </div>
+          );
+        })()}
 
       {/* 5. Bulk action bar */}
       {selectedIds.size > 0 && (
@@ -503,18 +614,72 @@ function AdsPage() {
 
 // ─── Subcomponents ───────────────────────────────────────────────────────────
 
-/** Заголовок колонки таблицы. */
-function Th({ children, align = "left" }: { children?: ReactNode; align?: "left" | "right" }) {
+/** Заголовок колонки таблицы. title — расшифровка аббревиатуры при наведении. */
+function Th({
+  children,
+  align = "left",
+  title,
+}: {
+  children?: ReactNode;
+  align?: "left" | "right";
+  title?: string;
+}) {
   return (
     <th
+      title={title}
       className={cn(
         "bg-bg-1 border-b border-bg-5 py-3 px-3.5",
         "font-display text-[10px] tracking-[0.12em] uppercase text-bg-8 font-medium",
         "sticky top-0",
         align === "right" ? "text-right" : "text-left",
+        title && "cursor-help",
       )}
     >
       {children}
+    </th>
+  );
+}
+
+/** Сортируемый заголовок колонки: клик переключает desc → asc → сброс. */
+function SortableTh({
+  children,
+  align = "left",
+  title,
+  sortKey,
+  sort,
+  onSort,
+}: {
+  children?: ReactNode;
+  align?: "left" | "right";
+  title?: string;
+  sortKey: SortKey;
+  sort: { key: SortKey; dir: "asc" | "desc" } | null;
+  onSort: (key: SortKey) => void;
+}) {
+  const active = sort?.key === sortKey;
+  return (
+    <th
+      title={title}
+      aria-sort={active ? (sort!.dir === "asc" ? "ascending" : "descending") : "none"}
+      className={cn(
+        "bg-bg-1 border-b border-bg-5 py-3 px-3.5 sticky top-0",
+        align === "right" ? "text-right" : "text-left",
+      )}
+    >
+      <button
+        type="button"
+        onClick={() => onSort(sortKey)}
+        className={cn(
+          "inline-flex items-center gap-1 font-display text-[10px] tracking-[0.12em] uppercase font-medium transition-colors",
+          align === "right" && "flex-row-reverse",
+          active ? "text-accent" : "text-bg-8 hover:text-bg-11",
+        )}
+      >
+        {children}
+        <span aria-hidden="true" className="text-[9px] leading-none">
+          {active ? (sort!.dir === "asc" ? "↑" : "↓") : "↕"}
+        </span>
+      </button>
     </th>
   );
 }
@@ -661,7 +826,7 @@ function AdRow({
       {/* State badge */}
       <td className="py-3 px-3.5" onClick={onOpen}>
         <Badge variant={alertStateToBadge(ad.alert_state)} size="md">
-          {stateLabel(ad.alert_state)}
+          {ALERT_STATE_LABELS[ad.alert_state as keyof typeof ALERT_STATE_LABELS] ?? ad.alert_state}
         </Badge>
       </td>
 
@@ -723,6 +888,12 @@ function AdRow({
       </td>
     </tr>
   );
+}
+
+/** Экранирование значения для CSV-ячейки. */
+function csvCell(v: unknown): string {
+  const s = v == null ? "" : String(v);
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
 /** Chip активного фильтра с кнопкой × */

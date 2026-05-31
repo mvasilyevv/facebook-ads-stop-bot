@@ -23,6 +23,8 @@ interface IncidentsCardProps {
   isError: boolean;
   error?: unknown;
   onRetry?: () => void;
+  /** Общее число активных инцидентов (может быть больше показанного среза). */
+  total?: number;
   /** Навигация по клику на строку. */
   onSelect: (fbAdId: string) => void;
 }
@@ -33,13 +35,18 @@ export function IncidentsCard({
   isError,
   error,
   onRetry,
+  total,
   onSelect,
 }: IncidentsCardProps) {
+  const countText =
+    total != null && total > incidents.length
+      ? `${incidents.length} из ${total}`
+      : `${incidents.length} активных`;
   return (
     <Card
       action={
         <span className="text-[11px] font-display text-bg-9 tracking-wider tabular-nums">
-          {isLoading ? "—" : `${incidents.length} открытых`}
+          {isLoading ? "—" : countText}
         </span>
       }
     >

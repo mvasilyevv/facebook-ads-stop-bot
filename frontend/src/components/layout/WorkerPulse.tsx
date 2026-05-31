@@ -3,6 +3,7 @@
  * Дышит (pulse-dot), цвет по health.
  */
 
+import { type CSSProperties } from "react";
 import { useHealthDetails } from "@/lib/api/settings";
 import { Tooltip } from "../ui/Tooltip";
 
@@ -13,6 +14,14 @@ const DOT_BG: Record<Variant, string> = {
   warning: "bg-warning",
   danger: "bg-danger",
   muted: "bg-bg-8",
+};
+
+// Цвет «дыхания» совпадает с цветом точки (раньше всегда был зелёным).
+const DOT_GLOW: Record<Variant, string> = {
+  success: "rgba(126, 180, 122, 0.4)",
+  warning: "rgba(212, 168, 88, 0.4)",
+  danger: "rgba(199, 98, 92, 0.4)",
+  muted: "rgba(124, 124, 134, 0.3)",
 };
 
 export function WorkerPulse() {
@@ -53,7 +62,11 @@ export function WorkerPulse() {
   return (
     <Tooltip content={tooltipContent} side="bottom">
       <div className="flex items-center gap-2 text-[12px] text-bg-10 font-display tracking-wider cursor-default">
-        <span aria-hidden="true" className={`size-2 rounded-full pulse-dot ${DOT_BG[variant]}`} />
+        <span
+          aria-hidden="true"
+          style={{ "--pulse-glow": DOT_GLOW[variant] } as CSSProperties}
+          className={`size-2 rounded-full pulse-dot ${DOT_BG[variant]}`}
+        />
         <span>{label}</span>
       </div>
     </Tooltip>

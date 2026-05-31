@@ -10,10 +10,21 @@ interface SwitchProps {
   /** aria-label — обязателен для доступности. */
   label: string;
   disabled?: boolean;
+  /** Видимая подпись слева от тогла. Если задана — Switch сам рисует строку с подписью. */
+  visualLabel?: string;
+  /** Описание-подсказка под видимой подписью (последствия переключения). */
+  description?: string;
 }
 
-export function Switch({ checked, onChange, label, disabled = false }: SwitchProps) {
-  return (
+export function Switch({
+  checked,
+  onChange,
+  label,
+  disabled = false,
+  visualLabel,
+  description,
+}: SwitchProps) {
+  const toggle = (
     <button
       type="button"
       role="switch"
@@ -35,5 +46,18 @@ export function Switch({ checked, onChange, label, disabled = false }: SwitchPro
         style={{ width: 16, height: 16, top: 3, left: checked ? 24 : 4 }}
       />
     </button>
+  );
+
+  // Без visualLabel — обратная совместимость: голый тогл (подпись рисует родитель).
+  if (!visualLabel) return toggle;
+
+  return (
+    <div className="flex items-start justify-between gap-3">
+      <div className="min-w-0">
+        <div className="text-[13px] text-bg-11 font-medium">{visualLabel}</div>
+        {description ? <div className="text-[11px] text-bg-9 mt-0.5">{description}</div> : null}
+      </div>
+      {toggle}
+    </div>
   );
 }

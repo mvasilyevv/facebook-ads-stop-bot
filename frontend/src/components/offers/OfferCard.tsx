@@ -7,6 +7,7 @@ import { Settings2, Trash2, Pencil } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
+import { verticalLabel } from "./OfferFormModal";
 import { formatSpend, formatInt } from "@/lib/utils/format";
 import type { Offer, OfferCompareRow } from "@/lib/types/api";
 
@@ -61,7 +62,7 @@ export function OfferCard({ offer, metrics, onEdit, onDelete, onRules }: OfferCa
           </span>
           {offer.vertical ? (
             <Badge variant="neutral" size="sm" withDot={false}>
-              {offer.vertical}
+              {verticalLabel(offer.vertical)}
             </Badge>
           ) : null}
           {!offer.is_active ? (
@@ -76,14 +77,19 @@ export function OfferCard({ offer, metrics, onEdit, onDelete, onRules }: OfferCa
       {/* Метрики за период */}
       {metrics ? (
         <div className="grid grid-cols-4 gap-x-4 gap-y-3 border-t border-bg-5 pt-4">
-          <MetricCell label="Spend" value={formatSpend(metrics.spend)} />
+          <MetricCell label="Расход" value={formatSpend(metrics.spend)} />
           <MetricCell label="Лиды" value={formatInt(metrics.leads)} />
           <MetricCell label="Депозиты" value={formatInt(metrics.deposits)} />
-          <MetricCell label="Алерты" value={formatInt(metrics.stop_alerts_count)} dimmed={metrics.stop_alerts_count === 0} />
+          <MetricCell
+            label="Стопы"
+            title="Стоп-алертов за период"
+            value={formatInt(metrics.stop_alerts_count)}
+            dimmed={metrics.stop_alerts_count === 0}
+          />
         </div>
       ) : (
         <div className="grid grid-cols-4 gap-x-4 gap-y-3 border-t border-bg-5 pt-4">
-          {["Spend", "Лиды", "Депозиты", "Алерты"].map((label) => (
+          {["Расход", "Лиды", "Депозиты", "Стопы"].map((label) => (
             <MetricCell key={label} label={label} value="—" />
           ))}
         </div>
@@ -96,15 +102,20 @@ export function OfferCard({ offer, metrics, onEdit, onDelete, onRules }: OfferCa
 function MetricCell({
   label,
   value,
+  title,
   dimmed = false,
 }: {
   label: string;
   value: string;
+  title?: string;
   dimmed?: boolean;
 }) {
   return (
     <div>
-      <div className="text-[10px] uppercase tracking-[0.1em] text-bg-8 font-display mb-0.5">
+      <div
+        title={title}
+        className="text-[10px] uppercase tracking-[0.1em] text-bg-8 font-display mb-0.5"
+      >
         {label}
       </div>
       <div

@@ -139,11 +139,11 @@ describe("Settings · HealthTab", () => {
     expect(offlineBadges.length).toBeGreaterThanOrEqual(1);
   });
 
-  // Тест: overall DEGRADED отображается как Badge — ищем в Badge span (содержит dot + текст).
+  // Тест: overall DEGRADED отображается как Badge с человекочитаемым лейблом «Деградация».
   it("показывает overall DEGRADED badge", () => {
     withQuery(<HealthTab />);
-    // Текст "DEGRADED" встречается в Badge + в легенде, оба допустимы.
-    const degraded = screen.getAllByText("DEGRADED");
+    // Badge переводит DEGRADED → «Деградация» (легенда использует «ДЕГРАДАЦИЯ» отдельным текстом).
+    const degraded = screen.getAllByText("Деградация");
     expect(degraded.length).toBeGreaterThanOrEqual(1);
     // Хотя бы один из элементов — Badge (имеет rounded-full класс через предка).
     const hasBadge = degraded.some((el) => el.closest(".rounded-full") !== null);

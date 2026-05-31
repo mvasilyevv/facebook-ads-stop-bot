@@ -2,17 +2,19 @@
  * /ads/$fbAdId — drawer-детальный вид объявления.
  *
  * Отображает:
- *   - Snapshot метрик (KV-сетка из 6 полей)
+ *   - Snapshot метрик (KV-сетка)
  *   - Лента алертов (AlertEventRow)
  *   - Лента задач (TaskQueueRow)
  *
  * Источники данных:
- *   - useAdTimeline(fb_ad_id) — метрики + alerts + tasks.
- *   - Данные snapshot берём из кэша useAds через queryClient.
+ *   - useAdTimeline(fb_ad_id) — шапка (имя/кампания/оффер) + метрики + alerts + tasks.
+ *   - Доп. snapshot-метрики (CPL/CTR/Частота) берём из кэша useAds, если есть.
+ *     При прямом заходе по URL (кэш пуст) шапку и базовые метрики даёт timeline.
  *
  * Открывается как overlay поверх /ads/ через Drawer-компонент.
  */
 
+import { useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { createFileRoute } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
@@ -23,10 +25,12 @@ import { Button } from "@/components/ui/Button";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { AlertEventRow } from "@/components/domain/AlertEventRow";
 import { TaskQueueRow } from "@/components/domain/TaskQueueRow";
-import { useAdTimeline, useCreateDisableTask } from "@/lib/api/ads";
-import { formatSpend, formatRelativeTime, formatDateTime } from "@/lib/utils/format";
+import { useAdTimeline, useCreateDisableTask, type AdTimeline } from "@/lib/api/ads";
+import { ALERT_STATE_LABELS } from "@/lib/constants/states";
+import { formatSpend, formatRelativeTime, formatDateTime, truncateAdId } from "@/lib/utils/format";
 import { toast } from "@/components/ui/Toast";
 import { cn } from "@/lib/utils/cn";
 import type { AdSnapshot } from "@/lib/types/api";
@@ -42,9 +46,19 @@ function AdDrawerPage() {
 
   const timelineQuery = useAdTimeline(fbAdId);
   const disableMutation = useCreateDisableTask();
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
-  // Берём snapshot из кэша ads, если он там есть — для шапки drawer'а
+  // Snapshot из кэша списка ads (полные метрики). При прямом URL — null.
   const cachedAd = findCachedAd(qc, fbAdId);
+  const tl = timelineQuery.data;
+
+  // Шапка: кэш → timeline → усечённый id.
+  const adName = cachedAd?.ad_name ?? tl?.ad_name ?? truncateAdId(fbAdId);
+  const campaignName = cachedAd?.campaign_name ?? tl?.campaign_name ?? null;
+  const adsetName = cachedAd?.adset_name ?? tl?.adset_name ?? null;
+  const offerCode = cachedAd?.offer_code ?? tl?.offer_code ?? null;
+
+  const snapshot = buildSnapshotFields(cachedAd, tl);
 
   const handleClose = () => {
     navigate({ to: "/ads" });
@@ -53,22 +67,21 @@ function AdDrawerPage() {
   const handleDisable = () => {
     disableMutation.mutate(fbAdId, {
       onSuccess: () =>
-        toast.success("Disable запущен", `Задача для ${fbAdId} добавлена в очередь.`),
+        toast.success("Отключение запущено", `Задача для «${adName}» добавлена в очередь.`),
       onError: (err) =>
         toast.error(
-          "Не удалось запустить disable",
+          "Не удалось запустить отключение",
           err instanceof Error ? err.message : String(err),
         ),
     });
   };
 
   return (
-    // Оверлей поверх страницы — имитируем drawer-overlay + panel
     <div
       className="fixed inset-0 z-[200]"
       role="dialog"
       aria-modal="true"
-      aria-label={`Детали объявления ${cachedAd?.ad_name ?? fbAdId}`}
+      aria-label={`Детали объявления ${adName}`}
     >
       {/* Backdrop */}
       <div
@@ -79,7 +92,6 @@ function AdDrawerPage() {
 
       {/* Panel */}
       <aside className="absolute right-0 top-0 bottom-0 w-[640px] bg-bg-1 border-l border-bg-5 flex flex-col shadow-[-8px_0_32px_rgba(0,0,0,0.4)]">
-
         {/* Header */}
         <div className="flex items-start justify-between gap-4 px-8 py-6 border-b border-bg-5 shrink-0">
           <div className="flex-1 min-w-0">
@@ -87,37 +99,36 @@ function AdDrawerPage() {
               <span className="text-bg-7 mr-2">06</span>ДЕТАЛИ ОБЪЯВЛЕНИЯ · ИСТОРИЯ
             </div>
             <h2 className="font-display text-[20px] font-medium tracking-tight text-bg-11 m-0 mb-1.5 leading-snug truncate">
-              {cachedAd?.ad_name ?? fbAdId}
+              {adName}
             </h2>
-            <div className="font-display text-[11px] text-bg-9 tracking-wide">
+            <div className="font-display text-[11px] text-bg-9 tracking-wide" title={fbAdId}>
               {fbAdId}
             </div>
-            {cachedAd?.campaign_name || cachedAd?.adset_name ? (
+            {campaignName || adsetName ? (
               <div className="font-display text-[11px] text-bg-9 tracking-wide mt-0.5 truncate">
-                {cachedAd?.campaign_name}
-                {cachedAd?.campaign_name && cachedAd?.adset_name ? (
-                  <span className="text-bg-7 mx-1.5">›</span>
-                ) : null}
-                {cachedAd?.adset_name}
+                {campaignName}
+                {campaignName && adsetName ? <span className="text-bg-7 mx-1.5">›</span> : null}
+                {adsetName}
               </div>
             ) : null}
-            {cachedAd && (
-              <div className="flex gap-2 mt-3 flex-wrap">
+            <div className="flex gap-2 mt-3 flex-wrap">
+              {cachedAd ? (
                 <Badge variant={alertStateToBadge(cachedAd.alert_state)}>
-                  {cachedAd.alert_state.replace("_sent", "")}
+                  {ALERT_STATE_LABELS[cachedAd.alert_state as keyof typeof ALERT_STATE_LABELS] ??
+                    cachedAd.alert_state}
                 </Badge>
-                {cachedAd.offer_code && (
-                  <span className="inline-flex items-center px-2 py-0.5 bg-bg-3 border border-bg-6 text-bg-10 font-display text-[10.5px] tracking-[0.04em] uppercase">
-                    {cachedAd.offer_code}
-                  </span>
-                )}
-                {cachedAd.snoozed_until && (
-                  <span className="inline-flex items-center px-2 py-0.5 bg-bg-3 border border-bg-6 text-bg-9 font-display text-[10.5px] tracking-wide">
-                    отложено до {formatDateTime(cachedAd.snoozed_until)}
-                  </span>
-                )}
-              </div>
-            )}
+              ) : null}
+              {offerCode ? (
+                <span className="inline-flex items-center px-2 py-0.5 bg-bg-3 border border-bg-6 text-bg-10 font-display text-[10.5px] tracking-[0.04em] uppercase">
+                  {offerCode}
+                </span>
+              ) : null}
+              {cachedAd?.snoozed_until ? (
+                <span className="inline-flex items-center px-2 py-0.5 bg-bg-3 border border-bg-6 text-bg-9 font-display text-[10.5px] tracking-wide">
+                  отложено до {formatDateTime(cachedAd.snoozed_until)} UTC
+                </span>
+              ) : null}
+            </div>
           </div>
           <button
             type="button"
@@ -131,7 +142,6 @@ function AdDrawerPage() {
 
         {/* Body — scrollable */}
         <div className="flex-1 overflow-y-auto px-8 py-6">
-
           {/* Секция 1: Snapshot метрик */}
           <section className="mb-8">
             <h3 className="font-display text-[10px] tracking-[0.14em] uppercase text-bg-8 mb-3">
@@ -144,42 +154,17 @@ function AdDrawerPage() {
               ) : null}
             </h3>
 
-            {cachedAd?.metrics ? (
+            {snapshot ? (
               <div className="grid grid-cols-2 gap-x-6 gap-y-3 py-4 border-t border-b border-bg-3">
-                <KvField label="Spend" value={formatSpend(cachedAd.metrics.spend)} />
-                <KvField label="CPL" value={formatSpend(cachedAd.metrics.cost_per_lead)} />
-                <KvField
-                  label="Leads"
-                  value={cachedAd.metrics.leads != null ? String(cachedAd.metrics.leads) : "—"}
-                />
-                <KvField
-                  label="Frequency"
-                  value={
-                    cachedAd.metrics.frequency != null
-                      ? parseFloat(String(cachedAd.metrics.frequency)).toFixed(1)
-                      : "—"
-                  }
-                />
-                <KvField
-                  label="CTR"
-                  value={
-                    cachedAd.metrics.ctr != null
-                      ? `${parseFloat(String(cachedAd.metrics.ctr)).toFixed(2)}%`
-                      : "—"
-                  }
-                />
-                <KvField
-                  label="Impressions"
-                  value={
-                    cachedAd.metrics.impressions != null
-                      ? cachedAd.metrics.impressions.toLocaleString("en-US")
-                      : "—"
-                  }
-                />
+                {snapshot.map((f) => (
+                  <KvField key={f.label} label={f.label} value={f.value} title={f.title} />
+                ))}
               </div>
+            ) : timelineQuery.isLoading ? (
+              <Skeleton height={120} className="w-full" />
             ) : (
               <div className="py-4 border-t border-b border-bg-3 text-bg-8 font-display text-[12px]">
-                Нет данных метрик
+                Нет данных метрик за период.
               </div>
             )}
           </section>
@@ -187,7 +172,7 @@ function AdDrawerPage() {
           {/* Секция 2: Timeline алертов */}
           <section className="mb-8">
             <h3 className="font-display text-[10px] tracking-[0.14em] uppercase text-bg-8 mb-3">
-              <span className="text-bg-7 mr-2">02</span>Алерты · последние 24ч
+              <span className="text-bg-7 mr-2">02</span>Алерты · период
             </h3>
 
             {timelineQuery.isLoading ? (
@@ -197,15 +182,12 @@ function AdDrawerPage() {
                 ))}
               </div>
             ) : timelineQuery.isError ? (
-              <ErrorState
-                error={timelineQuery.error}
-                onRetry={() => timelineQuery.refetch()}
-              />
-            ) : (timelineQuery.data?.alerts ?? []).length === 0 ? (
+              <ErrorState error={timelineQuery.error} onRetry={() => timelineQuery.refetch()} />
+            ) : (tl?.alerts ?? []).length === 0 ? (
               <EmptyState title="Нет алертов" className="py-6" />
             ) : (
               <div className="border-t border-bg-3">
-                {(timelineQuery.data?.alerts ?? []).map((event) => (
+                {(tl?.alerts ?? []).map((event) => (
                   <AlertEventRow key={event.id} event={event} />
                 ))}
               </div>
@@ -224,11 +206,13 @@ function AdDrawerPage() {
                   <Skeleton key={i} height={44} />
                 ))}
               </div>
-            ) : (timelineQuery.data?.tasks ?? []).length === 0 ? (
+            ) : timelineQuery.isError ? (
+              <ErrorState error={timelineQuery.error} onRetry={() => timelineQuery.refetch()} />
+            ) : (tl?.tasks ?? []).length === 0 ? (
               <EmptyState title="Нет задач" className="py-6" />
             ) : (
               <div>
-                {(timelineQuery.data?.tasks ?? []).map((task) => (
+                {(tl?.tasks ?? []).map((task) => (
                   <TaskQueueRow key={task.id} task={task} />
                 ))}
               </div>
@@ -238,31 +222,94 @@ function AdDrawerPage() {
 
         {/* Footer */}
         <div className="px-8 py-4 border-t border-bg-5 bg-bg-1 flex items-center justify-end gap-3 shrink-0">
-          <div className="flex gap-2">
-            <Button variant="secondary" size="sm">
-              Отложить на 1ч
-            </Button>
-            <Button
-              variant="danger"
-              size="sm"
-              loading={disableMutation.isPending}
-              onClick={handleDisable}
-            >
-              <X size={14} aria-hidden="true" />
-              Отключить вручную
-            </Button>
-          </div>
+          <Button
+            variant="danger"
+            size="sm"
+            loading={disableMutation.isPending}
+            onClick={() => setConfirmOpen(true)}
+          >
+            <X size={14} aria-hidden="true" />
+            Отключить вручную
+          </Button>
         </div>
       </aside>
+
+      <ConfirmDialog
+        open={confirmOpen}
+        onOpenChange={setConfirmOpen}
+        title="Отключить объявление?"
+        description={`«${adName}» будет отключено через очередь задач — открутка остановится. Отменить автоматически нельзя.`}
+        confirmLabel="Отключить"
+        onConfirm={handleDisable}
+      />
     </div>
   );
 }
 
+/** Поля snapshot-сетки: полные из кэша списка, иначе базовые из timeline. */
+function buildSnapshotFields(
+  cachedAd: AdSnapshot | null,
+  tl: AdTimeline | undefined,
+): Array<{ label: string; value: string; title?: string }> | null {
+  if (cachedAd?.metrics) {
+    const m = cachedAd.metrics;
+    return [
+      { label: "Траты", value: formatSpend(m.spend) },
+      { label: "CPL", value: formatSpend(m.cost_per_lead), title: "Стоимость лида" },
+      { label: "Лиды", value: m.leads != null ? String(m.leads) : "—" },
+      {
+        label: "Частота",
+        value: m.frequency != null ? parseFloat(String(m.frequency)).toFixed(1) : "—",
+        title: "Показов на уникального пользователя",
+      },
+      {
+        label: "CTR",
+        value: m.ctr != null ? `${parseFloat(String(m.ctr)).toFixed(2)}%` : "—",
+        title: "Кликабельность",
+      },
+      {
+        label: "Показы",
+        value: m.impressions != null ? m.impressions.toLocaleString("en-US") : "—",
+      },
+    ];
+  }
+  const last = tl?.metrics?.[tl.metrics.length - 1];
+  if (last) {
+    return [
+      { label: "Траты", value: formatSpend(last.spend) },
+      { label: "Лиды", value: last.leads != null ? String(last.leads) : "—" },
+      {
+        label: "Показы",
+        value: last.impressions != null ? last.impressions.toLocaleString("en-US") : "—",
+      },
+      { label: "Клики", value: last.clicks != null ? String(last.clicks) : "—" },
+      { label: "Депозиты", value: last.deposits != null ? String(last.deposits) : "—" },
+    ];
+  }
+  return null;
+}
+
 /** KV-поле в snapshot-сетке. */
-function KvField({ label, value, className }: { label: string; value: string; className?: string }) {
+function KvField({
+  label,
+  value,
+  title,
+  className,
+}: {
+  label: string;
+  value: string;
+  title?: string;
+  className?: string;
+}) {
   return (
     <div className={cn("flex flex-col gap-1", className)}>
-      <span className="font-display text-[10px] tracking-[0.1em] uppercase text-bg-8">
+      <span
+        title={title}
+        className={cn(
+          "font-display text-[10px] tracking-[0.1em] uppercase text-bg-8",
+          title && "cursor-help decoration-dotted underline underline-offset-2",
+        )}
+      >
         {label}
       </span>
       <span className="font-display text-[18px] font-medium tabular-nums text-bg-11 leading-tight">
@@ -274,13 +321,15 @@ function KvField({ label, value, className }: { label: string; value: string; cl
 
 /**
  * Ищет AdSnapshot в кэше TanStack Query.
- * Перебираем все кэши с ключом ["ads", ...] и ищем совпадение по fb_ad_id.
+ * useAds кэширует { items, total } под ключом ["ads", params]; перебираем все
+ * совпадения по префиксу ["ads"] и ищем нужный fb_ad_id в items.
  */
 function findCachedAd(qc: ReturnType<typeof useQueryClient>, fbAdId: string): AdSnapshot | null {
-  const cache = qc.getQueriesData<AdSnapshot[]>({ queryKey: ["ads"] });
+  const cache = qc.getQueriesData({ queryKey: ["ads"] });
   for (const [, data] of cache) {
-    if (!Array.isArray(data)) continue;
-    const found = data.find((a) => a.fb_ad_id === fbAdId);
+    const items = (data as { items?: AdSnapshot[] } | undefined)?.items;
+    if (!Array.isArray(items)) continue;
+    const found = items.find((a) => a.fb_ad_id === fbAdId);
     if (found) return found;
   }
   return null;

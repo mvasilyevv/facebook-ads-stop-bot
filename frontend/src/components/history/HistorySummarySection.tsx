@@ -49,7 +49,7 @@ export function HistorySummarySection({
       {/* KPI strip: spend / leads / deposits / alerts */}
       <KPIStrip>
         <KPICard
-          label="Spend"
+          label="Расход"
           value={formatSpend(summary?.totals.spend)}
           hint="за период"
           variant="muted"
@@ -129,6 +129,11 @@ export function HistorySummarySection({
                   </span>
                 </div>
               ))}
+              {summary.alerts.by_rule.length > 8 ? (
+                <div className="font-display text-[11px] text-bg-9 pt-1">
+                  + ещё {summary.alerts.by_rule.length - 8} правил
+                </div>
+              ) : null}
             </div>
           )}
         </div>

@@ -50,9 +50,8 @@ describe("format", () => {
   it("formatRelativeTime", () => {
     const past = new Date(Date.now() - 5 * 60 * 1000).toISOString();
     const out = formatRelativeTime(past);
-    // RelativeTimeFormat в стиле "narrow" даёт "5m ago" / "5 min. ago" / "5 мин. назад".
-    // Проверяем что в строке есть либо m, либо min.
-    expect(out).toMatch(/m/);
+    // Компактный русский формат возраста: "5 мин".
+    expect(out).toBe("5 мин");
     expect(formatRelativeTime(null)).toBe("—");
   });
 });

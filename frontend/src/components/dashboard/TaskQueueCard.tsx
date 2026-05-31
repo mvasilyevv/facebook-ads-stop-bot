@@ -14,7 +14,8 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { TaskQueueRow } from "@/components/domain/TaskQueueRow";
 import type { TaskQueueRow as TaskQueueRowData } from "@/lib/types/api";
 
-const PENDING_STATUSES = new Set(["PENDING", "RUNNING", "RETRYING"]);
+const WAITING_STATUSES = new Set(["PENDING"]);
+const RUNNING_STATUSES = new Set(["RUNNING"]);
 const RETRYING_STATUSES = new Set(["RETRYING"]);
 
 interface TaskQueueCardProps {
@@ -36,14 +37,19 @@ export function TaskQueueCard({
   onRetry,
   emptyLabel = "Очередь пуста",
 }: TaskQueueCardProps) {
-  const pending = tasks.filter((t) => PENDING_STATUSES.has(t.status)).length;
+  const waiting = tasks.filter((t) => WAITING_STATUSES.has(t.status)).length;
+  const running = tasks.filter((t) => RUNNING_STATUSES.has(t.status)).length;
   const retrying = tasks.filter((t) => RETRYING_STATUSES.has(t.status)).length;
 
   const metaText = isLoading
     ? "—"
-    : retrying > 0
-      ? `${pending} в очереди · ${retrying} повторяется`
-      : `${pending} в очереди`;
+    : [
+        `${waiting} в очереди`,
+        running > 0 ? `${running} выполняется` : null,
+        retrying > 0 ? `${retrying} повтор` : null,
+      ]
+        .filter(Boolean)
+        .join(" · ");
 
   return (
     <Card

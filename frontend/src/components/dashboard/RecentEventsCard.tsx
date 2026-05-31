@@ -43,9 +43,9 @@ export function RecentEventsCard({
       ) : isLoading ? (
         <div className="flex flex-col">
           {Array.from({ length: 6 }).map((_, i) => (
-            <div key={i} className="grid grid-cols-[80px_100px_1fr_auto_24px] gap-4 items-center py-3.5">
-              <Skeleton width={64} height={11} />
-              <Skeleton width={56} height={22} />
+            <div key={i} className="grid grid-cols-[64px_116px_1fr_auto_24px] gap-4 items-center py-3.5">
+              <Skeleton width={48} height={11} />
+              <Skeleton width={96} height={18} />
               <Skeleton height={13} className="w-full" />
               <Skeleton width={80} height={16} />
               <span />

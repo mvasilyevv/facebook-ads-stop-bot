@@ -108,6 +108,9 @@ export function ObserverTab() {
   // Локальное состояние для редактирования интервала.
   const [intervalDraft, setIntervalDraft] = useState<string>("");
   const [editingInterval, setEditingInterval] = useState(false);
+  // Локальное состояние для редактирования тега владельца.
+  const [ownerDraft, setOwnerDraft] = useState<string>("");
+  const [editingOwner, setEditingOwner] = useState(false);
 
   const settingsQuery = useObserverSettings();
   const statusQuery = useObserverStatus();
@@ -119,33 +122,66 @@ export function ObserverTab() {
   const settings = settingsQuery.data;
   const status = statusQuery.data;
 
-  /** Сохранить новый интервал скана. PUT требует все обязательные поля — шлём текущие + новый интервал. */
-  function handleSaveInterval() {
-    const n = parseInt(intervalDraft, 10);
-    if (Number.isNaN(n) || n < 5 || n > 3600) {
-      toast.error("Некорректный интервал", "Допустимо 5–3600 секунд.");
-      return;
-    }
+  /**
+   * Полный консистентный PUT. owner_campaign_tag отправляем ВСЕГДА текущий —
+   * бэк присваивает это поле безусловно (default=None), поэтому неполный PUT
+   * затирает owner-фильтр в NULL (money-баг: бот начнёт следить за чужими кампаниями).
+   */
+  function persistObserver(
+    overrides: Partial<{
+      is_scanning_enabled: boolean;
+      default_interval_seconds: number;
+      auto_enable_recommendations: boolean;
+      owner_campaign_tag: string | null;
+    }>,
+    onSuccess: () => void,
+  ) {
     updateObserver.mutate(
       {
         is_scanning_enabled: settings?.is_scanning_enabled ?? true,
-        default_interval_seconds: n,
+        default_interval_seconds: settings?.default_interval_seconds ?? 60,
         auto_enable_recommendations: settings?.auto_enable_recommendations ?? false,
+        owner_campaign_tag: settings?.owner_campaign_tag ?? null,
+        ...overrides,
       },
       {
-        onSuccess: () => {
-          setEditingInterval(false);
-          toast.success("Интервал сохранён");
-        },
+        onSuccess,
         onError: (err) =>
           toast.error("Ошибка", err instanceof Error ? err.message : String(err)),
       },
     );
   }
 
+  /** Сохранить новый интервал скана (валидация совпадает с бэком: 30–600 сек). */
+  function handleSaveInterval() {
+    const n = parseInt(intervalDraft, 10);
+    if (Number.isNaN(n) || n < 30 || n > 600) {
+      toast.error("Некорректный интервал", "Допустимо 30–600 секунд.");
+      return;
+    }
+    persistObserver({ default_interval_seconds: n }, () => {
+      setEditingInterval(false);
+      toast.success("Интервал сохранён");
+    });
+  }
+
   function handleStartEditInterval() {
     setIntervalDraft(String(settings?.default_interval_seconds ?? ""));
     setEditingInterval(true);
+  }
+
+  function handleStartEditOwner() {
+    setOwnerDraft(settings?.owner_campaign_tag ?? "");
+    setEditingOwner(true);
+  }
+
+  /** Сохранить тег владельца. Пусто → null (наблюдаем весь кабинет). */
+  function handleSaveOwner() {
+    const tag = ownerDraft.trim();
+    persistObserver({ owner_campaign_tag: tag || null }, () => {
+      setEditingOwner(false);
+      toast.success(tag ? "Тег владельца сохранён" : "Фильтр снят — наблюдаем весь кабинет");
+    });
   }
 
   /** Запустить скан немедленно. */
@@ -175,15 +211,22 @@ export function ObserverTab() {
           <h3 className="font-display text-[10px] uppercase tracking-widest text-bg-9 mb-4">
             Настройки сканирования
           </h3>
-          <p className="text-[11px] text-bg-9 mb-2">
-            Вкл/выкл сканера, авто-стоп через API и auto-enable — на странице «Панель».
+          <p className="text-[12px] text-bg-9 mb-2">
+            Вкл/выкл сканера, канал авто-стопа и авто-включение —{" "}
+            <a
+              href="/"
+              className="text-accent hover:text-accent-muted underline underline-offset-2"
+            >
+              на странице «Панель»
+            </a>
+            .
           </p>
 
           {/* Интервал скана. */}
           <div className="flex items-center justify-between py-3">
             <div>
               <div className="text-[13px] text-bg-11 font-medium">Интервал скана</div>
-              <div className="text-[11px] text-bg-9 mt-0.5">Секунды между сканами.</div>
+              <div className="text-[11px] text-bg-9 mt-0.5">Секунды между сканами (30–600).</div>
             </div>
             {settingsQuery.isLoading ? (
               <Skeleton width={100} height={28} />
@@ -197,20 +240,76 @@ export function ObserverTab() {
                   className="w-20"
                   aria-label="Интервал в секундах"
                 />
-                <Button size="sm" variant="primary" loading={updateObserver.isPending} onClick={handleSaveInterval}>
-                  OK
+                <Button
+                  size="sm"
+                  variant="primary"
+                  loading={updateObserver.isPending}
+                  onClick={handleSaveInterval}
+                >
+                  Сохранить
                 </Button>
-                <Button size="sm" variant="ghost" onClick={() => setEditingInterval(false)}>
-                  ×
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  aria-label="Отменить редактирование"
+                  onClick={() => setEditingInterval(false)}
+                >
+                  Отмена
                 </Button>
               </div>
             ) : (
               <button
                 type="button"
                 onClick={handleStartEditInterval}
-                className="font-numeric text-[14px] text-accent hover:text-accent-muted transition-colors"
+                title="Нажмите, чтобы изменить интервал"
+                className="font-numeric text-[14px] text-accent hover:text-accent-muted transition-colors underline decoration-dotted underline-offset-4"
               >
-                {settings?.default_interval_seconds ?? "—"}s
+                {settings?.default_interval_seconds ?? "—"} сек
+              </button>
+            )}
+          </div>
+
+          {/* Тег владельца — money-фильтр чужих кампаний (PUT пишет поле всегда). */}
+          <div className="flex items-start justify-between gap-3 py-3 border-t border-bg-3">
+            <div className="max-w-md">
+              <div className="text-[13px] text-bg-11 font-medium">Тег владельца</div>
+              <div className="text-[11px] text-bg-9 mt-0.5 leading-relaxed">
+                Бот следит только за кампаниями с этим тегом в названии (несколько — через запятую).
+                Пусто — весь кабинет, включая чужие кампании.
+              </div>
+            </div>
+            {settingsQuery.isLoading ? (
+              <Skeleton width={100} height={28} />
+            ) : editingOwner ? (
+              <div className="flex items-center gap-2 shrink-0">
+                <Input
+                  size="sm"
+                  value={ownerDraft}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) => setOwnerDraft(e.target.value)}
+                  className="w-40"
+                  placeholder="MV или MV,ABC"
+                  aria-label="Тег владельца"
+                />
+                <Button
+                  size="sm"
+                  variant="primary"
+                  loading={updateObserver.isPending}
+                  onClick={handleSaveOwner}
+                >
+                  Сохранить
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setEditingOwner(false)}>
+                  Отмена
+                </Button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={handleStartEditOwner}
+                title="Нажмите, чтобы изменить"
+                className="font-numeric text-[14px] text-accent hover:text-accent-muted transition-colors underline decoration-dotted underline-offset-4 shrink-0"
+              >
+                {settings?.owner_campaign_tag || "весь кабинет"}
               </button>
             )}
           </div>
@@ -330,6 +429,10 @@ export function ObserverTab() {
           >
             Новый день кабинета
           </Button>
+          <p className="text-[10px] text-bg-8 leading-relaxed">
+            Скоро — ручной запуск нового дня кабинета. Пока автостарт идёт по расписанию
+            (Telegram-команда <span className="font-numeric">/autostart</span>).
+          </p>
         </section>
       </div>
     </div>

@@ -20,7 +20,7 @@
  */
 
 import { useState, type ReactNode } from "react";
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 
 import { PageHeader, HeaderSep } from "@/components/layout/PageHeader";
 import { Tabs, TabsList, TabsContent } from "@/components/ui/Tabs";
@@ -49,6 +49,7 @@ function daysAgoIso(days: number): string {
 }
 
 function HistoryPage() {
+  const navigate = useNavigate();
   // Состояние периода (default: последние 30 дней)
   const [range, setRange] = useState<DateRange>({
     from_iso: daysAgoIso(30),
@@ -153,6 +154,10 @@ function HistoryPage() {
                 : timelineQuery.error
             }
             onRetry={() => timelineQuery.refetch()}
+            onAlertClick={(e) =>
+              e.fb_ad_id &&
+              navigate({ to: "/ads/$fbAdId", params: { fbAdId: e.fb_ad_id } })
+            }
           />
         </TabsContent>
 
@@ -190,10 +195,10 @@ function HeaderSubtitle({
   return (
     <>
       <span>
-        {from_iso} — {to_iso}
+        {from_iso} — {to_iso} <span className="text-bg-7">UTC</span>
       </span>
       <HeaderSep />
-      <span>{isLoading ? "Загрузка..." : `${formatInt(totalEvents)} событий`}</span>
+      <span>{isLoading ? "Загрузка..." : `${formatInt(totalEvents)} алертов`}</span>
     </>
   );
 }

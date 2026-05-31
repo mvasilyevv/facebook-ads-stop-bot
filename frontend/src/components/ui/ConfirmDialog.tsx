@@ -17,6 +17,8 @@ interface ConfirmDialogProps {
   confirmWord?: string;
   confirmLabel?: string;
   cancelLabel?: string;
+  /** Вариант кнопки подтверждения. danger — для деструктива (дефолт), primary — для обычного approve. */
+  confirmVariant?: "danger" | "primary";
   onConfirm: () => void | Promise<void>;
 }
 
@@ -28,6 +30,7 @@ export function ConfirmDialog({
   confirmWord,
   confirmLabel = "Подтвердить",
   cancelLabel = "Отмена",
+  confirmVariant = "danger",
   onConfirm,
 }: ConfirmDialogProps) {
   const [typed, setTyped] = useState("");
@@ -72,7 +75,7 @@ export function ConfirmDialog({
         <Button variant="ghost" onClick={() => onOpenChange(false)}>
           {cancelLabel}
         </Button>
-        <Button variant="danger" disabled={!ok} loading={busy} onClick={handleConfirm}>
+        <Button variant={confirmVariant} disabled={!ok} loading={busy} onClick={handleConfirm}>
           {confirmLabel}
         </Button>
       </div>

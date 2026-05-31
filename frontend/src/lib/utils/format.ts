@@ -64,27 +64,25 @@ export function truncateAdId(adId: string | null | undefined, headLen = 6, tailL
   return `${adId.slice(0, headLen)}...${adId.slice(-tailLen)}`;
 }
 
-const RTF = new Intl.RelativeTimeFormat("en", { numeric: "auto", style: "narrow" });
-
-/** Relative time: "4m ago", "2h ago", "3d ago". */
+/** Относительное время (возраст), компактно по-русски: "5 мин", "2 ч", "3 дн". */
 export function formatRelativeTime(iso: string | Date | null | undefined): string {
   if (!iso) return "—";
   const date = typeof iso === "string" ? new Date(iso) : iso;
   if (Number.isNaN(date.getTime())) return "—";
-  const diffSec = Math.round((date.getTime() - Date.now()) / 1000);
-  const abs = Math.abs(diffSec);
-  if (abs < 60) return RTF.format(diffSec, "second");
-  if (abs < 3600) return RTF.format(Math.round(diffSec / 60), "minute");
-  if (abs < 86400) return RTF.format(Math.round(diffSec / 3600), "hour");
-  return RTF.format(Math.round(diffSec / 86400), "day");
+  const abs = Math.abs(Math.round((Date.now() - date.getTime()) / 1000));
+  if (abs < 45) return "сейчас";
+  if (abs < 3600) return `${Math.round(abs / 60)} мин`;
+  if (abs < 86400) return `${Math.round(abs / 3600)} ч`;
+  if (abs < 2592000) return `${Math.round(abs / 86400)} дн`;
+  return formatDateTime(date);
 }
 
-/** Time-of-day: "14:32:18" (UTC). */
+/** Time-of-day в UTC: "14:32:18". Бэкенд хранит всё в UTC — показываем без локального сдвига. */
 export function formatTimeOfDay(iso: string | Date | null | undefined): string {
   if (!iso) return "—";
   const date = typeof iso === "string" ? new Date(iso) : iso;
   if (Number.isNaN(date.getTime())) return "—";
-  return date.toLocaleTimeString("en-GB", { hour12: false });
+  return date.toLocaleTimeString("en-GB", { hour12: false, timeZone: "UTC" });
 }
 
 /** Полная дата: "2026-05-28 14:32". */

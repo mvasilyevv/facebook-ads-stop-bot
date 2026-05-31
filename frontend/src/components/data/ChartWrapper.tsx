@@ -33,10 +33,16 @@ export function CustomTooltipContent({
   active,
   payload,
   label,
+  nameMap,
+  valueFormatter,
 }: {
   active?: boolean;
   payload?: Array<{ name?: string; value?: number | string; color?: string }>;
   label?: string;
+  /** Перевод имени серии: { spend: "Траты" }. */
+  nameMap?: Record<string, string>;
+  /** Форматтер значения (например деньги → $1,234.56). */
+  valueFormatter?: (value: number | string | undefined, name?: string) => string;
 }) {
   if (!active || !payload?.length) return null;
   return (
@@ -53,8 +59,10 @@ export function CustomTooltipContent({
             className="size-2 rounded-full inline-block"
             style={{ background: p.color }}
           />
-          <span className="text-bg-9 mr-2">{p.name}:</span>
-          <span className="font-medium">{p.value}</span>
+          <span className="text-bg-9 mr-2">{(p.name && nameMap?.[p.name]) ?? p.name}:</span>
+          <span className="font-medium">
+            {valueFormatter ? valueFormatter(p.value, p.name) : p.value}
+          </span>
         </div>
       ))}
     </div>

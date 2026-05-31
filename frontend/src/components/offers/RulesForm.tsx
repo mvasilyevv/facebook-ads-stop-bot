@@ -15,36 +15,40 @@ export const RULE_FIELDS: Array<{
   key: keyof Omit<OfferRules, "offer_id">;
   label: string;
   help: string;
+  /** Поля-доли (0–1): значение > 1 почти наверняка ошибка (проценты вместо доли). */
+  fraction?: boolean;
 }> = [
   {
     key: "spend_no_event_threshold",
-    label: "Spend без события ($)",
-    help: "Стоп при spend > порога без зарегистрированного события.",
+    label: "Расход без событий, $",
+    help: "Стоп, когда расход превысил порог, а событий (лидов) ещё нет.",
   },
   {
     key: "cpa_threshold",
-    label: "CPA порог ($)",
-    help: "Стоп при CPA > порога.",
+    label: "CPA, $",
+    help: "Стоп, когда стоимость целевого действия выше порога.",
   },
   {
     key: "cpm_threshold",
-    label: "CPM порог ($)",
-    help: "Стоп при CPM > порога.",
+    label: "CPM, $",
+    help: "Стоп, когда цена за 1000 показов выше порога.",
   },
   {
     key: "ctr_threshold",
-    label: "CTR порог (0-1)",
-    help: "Warning при CTR ниже порога (например 0.005).",
+    label: "CTR, доля 0–1",
+    help: "Warning при CTR ниже порога. Указывайте долей: 0.02 = 2%.",
+    fraction: true,
   },
   {
     key: "frequency_threshold",
-    label: "Frequency порог",
-    help: "Стоп при frequency > порога.",
+    label: "Частота показов",
+    help: "Стоп, когда среднее число показов на пользователя выше порога. Обычно 3–7.",
   },
   {
     key: "funnel_ratio_threshold",
-    label: "Funnel ratio порог",
-    help: "Стоп при регрессии воронки ниже порога.",
+    label: "Коэффициент воронки, доля 0–1",
+    help: "Стоп при просадке воронки ниже порога. Указывайте долей: 0.05 = 5%.",
+    fraction: true,
   },
 ];
 
@@ -103,10 +107,30 @@ export function RulesForm({
   const [form, setForm] = useState<RulesFormState>(
     () => (initialRules ? rulesFromData(initialRules) : emptyForm()),
   );
+  const [errors, setErrors] = useState<Partial<RulesFormState>>({});
 
   const upsert = useUpsertOfferRules();
 
+  /** Проверка значений: число, не отрицательное, для долей — не больше 1. */
+  function validate(): boolean {
+    const next: Partial<RulesFormState> = {};
+    for (const f of RULE_FIELDS) {
+      const v = form[f.key].trim();
+      if (!v) continue;
+      const n = Number.parseFloat(v);
+      if (Number.isNaN(n)) next[f.key] = "Введите число";
+      else if (n < 0) next[f.key] = "Не может быть отрицательным";
+      else if (f.fraction && n > 1) next[f.key] = "Доля от 0 до 1 (например 0.02 = 2%)";
+    }
+    setErrors(next);
+    return Object.keys(next).length === 0;
+  }
+
   function handleSave() {
+    if (!validate()) {
+      toast.error("Проверьте поля", "Некоторые пороги заданы некорректно.");
+      return;
+    }
     const data: Partial<OfferRules> = {
       spend_no_event_threshold: parseRuleField(form.spend_no_event_threshold),
       cpa_threshold: parseRuleField(form.cpa_threshold),
@@ -118,10 +142,8 @@ export function RulesForm({
     upsert.mutate(
       { id: offerId, data },
       {
-        onSuccess: () => {
-          toast.success("Правила сохранены", "Пороги оффера обновлены.");
-          onClose();
-        },
+        // Drawer не закрываем — пользователь может проверить результат и править дальше.
+        onSuccess: () => toast.success("Правила сохранены", "Пороги оффера обновлены."),
         onError: (err) =>
           toast.error("Ошибка сохранения", err instanceof Error ? err.message : String(err)),
       },
@@ -130,6 +152,10 @@ export function RulesForm({
 
   return (
     <div className="flex flex-col gap-4 h-full">
+      <p className="text-[12px] text-bg-9 leading-relaxed">
+        Пороги авто-отключения объявлений этого оффера. Пустое поле — правило выключено.
+      </p>
+
       {/* 6 числовых порогов */}
       <div className="flex-1 flex flex-col gap-4">
         {RULE_FIELDS.map((field) => (
@@ -141,11 +167,10 @@ export function RulesForm({
             step="any"
             label={field.label}
             helpText={field.help}
-            placeholder="—"
+            errorMessage={errors[field.key]}
+            placeholder="Не задано"
             value={form[field.key]}
-            onChange={(e) =>
-              setForm((p) => ({ ...p, [field.key]: e.target.value }))
-            }
+            onChange={(e) => setForm((p) => ({ ...p, [field.key]: e.target.value }))}
           />
         ))}
       </div>

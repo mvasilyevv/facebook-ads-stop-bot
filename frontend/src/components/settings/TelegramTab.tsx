@@ -8,7 +8,7 @@
  */
 
 import { useState, type ChangeEvent } from "react";
-import { Copy, Link2, Trash2, UserPlus } from "lucide-react";
+import { Copy, Eye, EyeOff, Link2, Trash2, UserPlus } from "lucide-react";
 
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -29,12 +29,31 @@ import {
   useCreateTelegramInvite,
 } from "@/lib/api/settings";
 
+/** Перевод статуса поллера. */
+const POLLER_LABELS: Record<string, string> = {
+  running: "работает",
+  stopped: "остановлен",
+  starting: "запускается",
+  error: "ошибка",
+};
+
+/** Перевод роли получателя. */
+const ROLE_LABELS: Record<string, string> = {
+  owner: "владелец",
+  viewer: "наблюдатель",
+  admin: "админ",
+};
+
 export function TelegramTab() {
   // Состояние формы токена (masked).
   const [tokenInput, setTokenInput] = useState("");
   const [showTokenForm, setShowTokenForm] = useState(false);
   // id получателя для удаления.
   const [deleteTarget, setDeleteTarget] = useState<TelegramRecipient | null>(null);
+  // Подтверждение удаления токена бота.
+  const [deleteTokenOpen, setDeleteTokenOpen] = useState(false);
+  // Показ токена в открытом виде при вводе.
+  const [showToken, setShowToken] = useState(false);
   // Сгенерированный invite code.
   const [inviteCode, setInviteCode] = useState<string | null>(null);
 
@@ -132,6 +151,18 @@ export function TelegramTab() {
         onConfirm={handleDeleteRecipient}
       />
 
+      {/* ConfirmDialog для удаления токена бота — без токена бот перестаёт работать. */}
+      <ConfirmDialog
+        open={deleteTokenOpen}
+        onOpenChange={setDeleteTokenOpen}
+        title="Удалить токен бота?"
+        description="Бот перестанет работать: алерты, команды и подтверждения через Telegram станут недоступны, пока не зададите токен снова."
+        confirmWord="DELETE"
+        confirmLabel="Удалить токен"
+        cancelLabel="Отмена"
+        onConfirm={handleDeleteToken}
+      />
+
       <div className="grid grid-cols-[1fr_320px] gap-8">
         {/* Левая колонка. */}
         <div className="space-y-6">
@@ -151,8 +182,11 @@ export function TelegramTab() {
                   <Badge variant={settings?.is_authorized ? "success" : "neutral"}>
                     {settings?.is_authorized ? "авторизован" : "не авторизован"}
                   </Badge>
-                  <Badge variant="neutral" withDot={false}>
-                    poller: {settings?.poller_status ?? "—"}
+                  <Badge variant="neutral" withDot={false} title="Статус Telegram-поллера">
+                    Поллер:{" "}
+                    {settings?.poller_status
+                      ? (POLLER_LABELS[settings.poller_status] ?? settings.poller_status)
+                      : "—"}
                   </Badge>
                 </div>
                 {settings?.bot_username ? (
@@ -184,7 +218,7 @@ export function TelegramTab() {
                     variant="danger"
                     size="sm"
                     loading={deleteToken.isPending}
-                    onClick={handleDeleteToken}
+                    onClick={() => setDeleteTokenOpen(true)}
                   >
                     Удалить токен
                   </Button>
@@ -195,13 +229,27 @@ export function TelegramTab() {
                 <Input
                   id="tg-token"
                   label="Bot Token"
-                  type="password"
+                  type={showToken ? "text" : "password"}
                   placeholder="1234567890:ABCDef..."
                   value={tokenInput}
                   onChange={(e: ChangeEvent<HTMLInputElement>) => setTokenInput(e.target.value)}
-                  helpText="Токен не логируется и не отображается."
+                  helpText="Токен не логируется и не отображается после сохранения."
                   className="max-w-sm"
                   autoComplete="off"
+                  rightIcon={
+                    <button
+                      type="button"
+                      aria-label={showToken ? "Скрыть токен" : "Показать токен"}
+                      onClick={() => setShowToken((p) => !p)}
+                      className="text-bg-9 hover:text-bg-11 transition-colors"
+                    >
+                      {showToken ? (
+                        <EyeOff size={14} aria-hidden="true" />
+                      ) : (
+                        <Eye size={14} aria-hidden="true" />
+                      )}
+                    </button>
+                  }
                 />
                 <Button
                   variant="primary"
@@ -345,7 +393,7 @@ function RecipientRow({
             {recipient.username ? `@${recipient.username}` : `chat:${recipient.chat_id}`}
           </span>
           <Badge variant={isRevoked ? "disabled" : "neutral"} size="sm" withDot={false}>
-            {recipient.role}
+            {ROLE_LABELS[recipient.role] ?? recipient.role}
           </Badge>
           {isRevoked && (
             <Badge variant="disabled" size="sm">отозван</Badge>

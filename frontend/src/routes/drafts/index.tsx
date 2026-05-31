@@ -1,20 +1,19 @@
 /**
- * Drafts (`/drafts`) — список AI-черновиков, ожидающих ручного подтверждения.
+ * Drafts (`/drafts`) — очередь действий, ожидающих ручного подтверждения.
  *
- * Блоки:
- *   1. PageHeader — eyebrow 03, счётчик pending + expiring.
- *   2. Фильтр по task_type — Pill-чипы.
- *   3. Список DraftCard — diff, AI-reasoning, кнопки Approve/Cancel + ACL.
- *   4. Состояния: loading (Skeleton), error (ErrorState+retry), empty.
+ * Два источника:
+ *   1. PENDING disable/enable задачи (task_queue) — через /dashboard/{disable,enable}-tasks.
+ *   2. DRAFT meta_api_mutation (AI-предложения через Marketing API) —
+ *      через admin-роутер /dashboard/draft-tasks.
  *
- * ACL: draft создан другим chat_id → Approve недоступен (ACL-blocked card).
- * Approve → useApproveDraft (retry endpoint) + ConfirmDialog + Toast.
- * Cancel → useCancelDraft (delete endpoint) + Toast.
+ * Десктоп — доверенная admin-зона (X-API-Key, без Telegram-личности): per-user ACL
+ * не применяется, его держит бэк. meta-черновики, созданные в Telegram, бэк вернёт
+ * как неподтверждаемые с десктопа (confirm → 409) — обрабатываем как ошибку с тостом.
  */
 
 import { useState, useMemo } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { FileEdit, Lock } from "lucide-react";
+import { FileEdit } from "lucide-react";
 
 import { PageHeader, HeaderSep } from "@/components/layout/PageHeader";
 import { DraftCard } from "@/components/domain/DraftCard";
@@ -24,7 +23,15 @@ import { Skeleton } from "@/components/ui/Skeleton";
 import { Pill } from "@/components/ui/Pill";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { toast } from "@/components/ui/Toast";
-import { useDrafts, useApproveDraft, useCancelDraft } from "@/lib/api/drafts";
+import {
+  useDrafts,
+  useApproveDraft,
+  useCancelDraft,
+  useMetaDrafts,
+  useConfirmMetaDraft,
+  useRejectMetaDraft,
+  type MetaDraft,
+} from "@/lib/api/drafts";
 import { cn } from "@/lib/utils/cn";
 import type { TaskQueueRow } from "@/lib/types/api";
 
@@ -37,8 +44,34 @@ const TYPE_OPTIONS = [
   { value: "", label: "Все" },
   { value: "disable", label: "Отключение" },
   { value: "enable", label: "Включение" },
-  { value: "meta_api_mutation", label: "Действие" },
+  { value: "meta_api_mutation", label: "Действие через API" },
 ];
+
+/** Человекочитаемые названия meta-мутаций. */
+const MUTATION_KIND_LABELS: Record<string, string> = {
+  pause_ad: "Пауза объявления",
+  activate_ad: "Включение объявления",
+  pause_campaign: "Пауза кампании",
+  activate_campaign: "Включение кампании",
+  set_adset_budget: "Изменение бюджета",
+  duplicate_campaign: "Дублирование кампании",
+  create_campaign: "Создание кампании",
+  bulk_status_change: "Массовое вкл/выкл",
+  custom_audience: "Custom Audience",
+  set_ad_creative: "Замена креатива",
+};
+
+function mutationKindLabel(kind: string): string {
+  return MUTATION_KIND_LABELS[kind] ?? kind;
+}
+
+/** Строка diff-таблицы карточки (совместима с DraftCard). */
+interface DiffRow {
+  key: string;
+  current?: string | null;
+  target?: string | null;
+  highlight?: boolean;
+}
 
 /** Генерирует читаемый заголовок карточки по task_type + payload. */
 function buildSummary(row: TaskQueueRow): string {
@@ -54,9 +87,9 @@ function buildSummary(row: TaskQueueRow): string {
   }
 }
 
-/** Строит diff-таблицу для карточки из TaskQueueRow. */
-function buildDiff(row: TaskQueueRow) {
-  const rows = [];
+/** Diff-таблица для disable/enable задачи. */
+function buildDiff(row: TaskQueueRow): DiffRow[] {
+  const rows: DiffRow[] = [];
 
   if (row.fb_ad_id) {
     rows.push({ key: "ID объявления", target: row.fb_ad_id });
@@ -67,27 +100,13 @@ function buildDiff(row: TaskQueueRow) {
 
   switch (row.task_type) {
     case "disable":
-      rows.push({
-        key: "Статус",
-        current: "ACTIVE",
-        target: "PAUSED",
-        highlight: true,
-      });
+      rows.push({ key: "Статус", current: "ACTIVE", target: "PAUSED", highlight: true });
       break;
     case "enable":
-      rows.push({
-        key: "Статус",
-        current: "PAUSED",
-        target: "ACTIVE",
-        highlight: true,
-      });
+      rows.push({ key: "Статус", current: "PAUSED", target: "ACTIVE", highlight: true });
       break;
     default:
-      rows.push({
-        key: "Действие",
-        target: row.task_type,
-        highlight: true,
-      });
+      rows.push({ key: "Действие", target: row.task_type, highlight: true });
   }
 
   if (row.attempt_count > 0) {
@@ -97,7 +116,28 @@ function buildDiff(row: TaskQueueRow) {
   return rows;
 }
 
-/** Вычисляет дату протухания черновика (24h от created_at). */
+/** Заголовок карточки meta-мутации. */
+function buildMetaSummary(m: MetaDraft): string {
+  const base = mutationKindLabel(m.mutation_kind);
+  return m.target_id ? `${base} · ${m.target_id}` : base;
+}
+
+/** Diff-таблица meta-мутации из payload-параметров. */
+function buildMetaDiff(m: MetaDraft): DiffRow[] {
+  const rows: DiffRow[] = [];
+  rows.push({ key: "Действие", target: mutationKindLabel(m.mutation_kind), highlight: true });
+  if (m.target_id) rows.push({ key: "Объект", target: m.target_id });
+  if (m.ad_account_id) rows.push({ key: "Кабинет", target: m.ad_account_id });
+  for (const [k, v] of Object.entries(m.payload ?? {})) {
+    rows.push({
+      key: k,
+      target: v != null && typeof v === "object" ? JSON.stringify(v) : String(v),
+    });
+  }
+  return rows;
+}
+
+/** Дата протухания черновика (24h от created_at). */
 function getExpiresAt(createdAt: string | null): string | null {
   if (!createdAt) return null;
   const d = new Date(createdAt);
@@ -113,7 +153,7 @@ function isExpiringSoon(createdAt: string | null): boolean {
   return expires.getTime() - Date.now() < 60 * 60 * 1000;
 }
 
-/** Метка типа мутации для заголовка карточки. */
+/** Метка типа мутации для заголовка карточки disable/enable. */
 function mutationLabel(task_type: string): string {
   switch (task_type) {
     case "disable":
@@ -127,67 +167,93 @@ function mutationLabel(task_type: string): string {
   }
 }
 
-// Текущий chat_id из localStorage (если хранится при авторизации).
-// Fallback — null (нет ACL-проверки, Approve доступен).
-function getCurrentChatId(): number | null {
-  try {
-    const raw = localStorage.getItem("chat_id");
-    return raw ? Number(raw) : null;
-  } catch {
-    return null;
-  }
+/** Нормализованная карточка из любого источника — единый вход в DraftCard. */
+interface DraftCardModel {
+  key: string;
+  filterType: string;
+  taskTypeLabel: string;
+  createdAt: string | null;
+  requestedBy: string | null;
+  summary: string;
+  diff: DiffRow[];
+  approve: () => Promise<void>;
+  cancel: () => Promise<void>;
 }
 
 function DraftsPage() {
-  // ─── Фильтр по типу ─────────────────────────────────────────────────────
   const [selectedType, setSelectedType] = useState("");
 
-  // ─── Состояние ConfirmDialog ─────────────────────────────────────────────
-  const [confirmApprove, setConfirmApprove] = useState<TaskQueueRow | null>(null);
-  const [confirmCancel, setConfirmCancel] = useState<TaskQueueRow | null>(null);
+  // Универсальные диалоги: хранят сводку + действие (источник-агностично).
+  const [confirmApprove, setConfirmApprove] = useState<{
+    summary: string;
+    run: () => Promise<void>;
+  } | null>(null);
+  const [confirmCancel, setConfirmCancel] = useState<{
+    summary: string;
+    run: () => Promise<void>;
+  } | null>(null);
 
-  // ─── API ─────────────────────────────────────────────────────────────────
-  const draftsQuery = useDrafts(selectedType || undefined);
+  const draftsQuery = useDrafts();
+  const metaQuery = useMetaDrafts();
   const approveMutation = useApproveDraft();
   const cancelMutation = useCancelDraft();
+  const confirmMeta = useConfirmMetaDraft();
+  const rejectMeta = useRejectMetaDraft();
 
-  const currentChatId = getCurrentChatId();
-
-  // ─── Подсчёт статистики ──────────────────────────────────────────────────
-  const { filteredDrafts, expiringCount } = useMemo(() => {
-    const all = draftsQuery.data ?? [];
-    const filtered = selectedType ? all.filter((d) => d.task_type === selectedType) : all;
-    const expiring = filtered.filter((d) => isExpiringSoon(d.created_at)).length;
-    return { filteredDrafts: filtered, expiringCount: expiring };
-  }, [draftsQuery.data, selectedType]);
-
-  // ─── Counts для Pill-фильтров ────────────────────────────────────────────
-  const typeCounts = useMemo(() => {
-    const all = draftsQuery.data ?? [];
-    const counts: Record<string, number> = { "": all.length };
-    for (const d of all) {
-      counts[d.task_type] = (counts[d.task_type] ?? 0) + 1;
+  // Нормализуем оба источника в единый список карточек.
+  const cards = useMemo<DraftCardModel[]>(() => {
+    const out: DraftCardModel[] = [];
+    for (const d of draftsQuery.data ?? []) {
+      out.push({
+        key: `task-${d.id}`,
+        filterType: d.task_type,
+        taskTypeLabel: mutationLabel(d.task_type),
+        createdAt: d.created_at,
+        requestedBy: d.requested_by,
+        summary: buildSummary(d),
+        diff: buildDiff(d),
+        approve: () =>
+          approveMutation.mutateAsync({ id: d.id, task_type: d.task_type }).then(() => undefined),
+        cancel: () =>
+          cancelMutation.mutateAsync({ id: d.id, task_type: d.task_type }).then(() => undefined),
+      });
     }
-    return counts;
-  }, [draftsQuery.data]);
+    for (const m of metaQuery.data ?? []) {
+      out.push({
+        key: `meta-${m.id}`,
+        filterType: "meta_api_mutation",
+        taskTypeLabel: mutationKindLabel(m.mutation_kind),
+        createdAt: m.created_at,
+        requestedBy: m.requested_by,
+        summary: buildMetaSummary(m),
+        diff: buildMetaDiff(m),
+        approve: () => confirmMeta.mutateAsync(m.id).then(() => undefined),
+        cancel: () => rejectMeta.mutateAsync(m.id).then(() => undefined),
+      });
+    }
+    // Новые сверху по дате создания.
+    out.sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""));
+    return out;
+  }, [draftsQuery.data, metaQuery.data, approveMutation, cancelMutation, confirmMeta, rejectMeta]);
 
-  // ─── Обработчики ─────────────────────────────────────────────────────────
+  const filteredCards = selectedType
+    ? cards.filter((c) => c.filterType === selectedType)
+    : cards;
+  const expiringCount = filteredCards.filter((c) => isExpiringSoon(c.createdAt)).length;
+
+  const typeCounts = useMemo(() => {
+    const counts: Record<string, number> = { "": cards.length };
+    for (const c of cards) counts[c.filterType] = (counts[c.filterType] ?? 0) + 1;
+    return counts;
+  }, [cards]);
+
   async function handleApprove() {
     if (!confirmApprove) return;
     try {
-      await approveMutation.mutateAsync({
-        id: confirmApprove.id,
-        task_type: confirmApprove.task_type,
-      });
-      toast.success(
-        "Черновик подтверждён",
-        `Задача ${confirmApprove.id.slice(0, 8)} передана в очередь на исполнение.`,
-      );
+      await confirmApprove.run();
+      toast.success("Подтверждено", "Задача передана в очередь на исполнение.");
     } catch (err) {
-      toast.error(
-        "Ошибка подтверждения",
-        err instanceof Error ? err.message : "Неизвестная ошибка",
-      );
+      toast.error("Ошибка подтверждения", err instanceof Error ? err.message : "Неизвестная ошибка");
       throw err;
     }
   }
@@ -195,32 +261,23 @@ function DraftsPage() {
   async function handleCancel() {
     if (!confirmCancel) return;
     try {
-      await cancelMutation.mutateAsync({
-        id: confirmCancel.id,
-        task_type: confirmCancel.task_type,
-      });
-      toast.success(
-        "Черновик отменён",
-        `Задача ${confirmCancel.id.slice(0, 8)} отменена.`,
-      );
+      await confirmCancel.run();
+      toast.success("Отменено", "Черновик отклонён.");
     } catch (err) {
-      toast.error(
-        "Ошибка отмены",
-        err instanceof Error ? err.message : "Неизвестная ошибка",
-      );
+      toast.error("Ошибка отмены", err instanceof Error ? err.message : "Неизвестная ошибка");
       throw err;
     }
   }
 
-  // ─── Subtitle header ─────────────────────────────────────────────────────
-  const pendingCount = draftsQuery.data?.length ?? 0;
+  const isLoading = draftsQuery.isLoading || metaQuery.isLoading;
+  const isError = draftsQuery.isError || metaQuery.isError;
 
-  const subtitle = draftsQuery.isLoading ? null : (
+  const subtitle = isLoading ? null : (
     <>
       <span className={cn("font-display", expiringCount > 0 ? "text-warning" : "text-accent")}>
-        {pendingCount}
+        {cards.length}
       </span>{" "}
-      в очереди
+      на подтверждение
       {expiringCount > 0 ? (
         <>
           <HeaderSep />
@@ -228,11 +285,10 @@ function DraftsPage() {
         </>
       ) : null}
       <HeaderSep />
-      Предложения ИИ требуют ручного подтверждения — только владелец
+      Требуют ручного подтверждения
     </>
   );
 
-  // ─── Рендер ──────────────────────────────────────────────────────────────
   return (
     <>
       <PageHeader
@@ -243,7 +299,7 @@ function DraftsPage() {
         subtitle={subtitle}
       />
 
-      {/* Фильтр по типу мутации */}
+      {/* Фильтр по типу */}
       <div className="flex items-center gap-2 py-2 pb-5 border-b border-bg-5 mb-8 flex-wrap">
         <span className="font-display text-[10px] uppercase tracking-widest text-bg-8 mr-2">
           Тип
@@ -259,17 +315,14 @@ function DraftsPage() {
             <Pill active={selectedType === opt.value}>
               {opt.label}
               {(typeCounts[opt.value] ?? 0) > 0 ? (
-                <span className="text-[10px] opacity-70 ml-0.5">
-                  {typeCounts[opt.value]}
-                </span>
+                <span className="text-[10px] opacity-70 ml-0.5">{typeCounts[opt.value]}</span>
               ) : null}
             </Pill>
           </button>
         ))}
       </div>
 
-      {/* Loading */}
-      {draftsQuery.isLoading ? (
+      {isLoading ? (
         <div className="flex flex-col gap-4">
           {[1, 2, 3].map((n) => (
             <div key={n} className="border border-bg-5 bg-bg-1 p-6">
@@ -280,50 +333,34 @@ function DraftsPage() {
             </div>
           ))}
         </div>
-      ) : draftsQuery.isError ? (
+      ) : isError ? (
         <ErrorState
           title="Не удалось загрузить черновики."
-          error={draftsQuery.error}
-          onRetry={() => draftsQuery.refetch()}
+          error={draftsQuery.error ?? metaQuery.error}
+          onRetry={() => {
+            draftsQuery.refetch();
+            metaQuery.refetch();
+          }}
         />
-      ) : filteredDrafts.length === 0 ? (
+      ) : filteredCards.length === 0 ? (
         <EmptyState
           icon={<FileEdit size={40} strokeWidth={1.25} aria-hidden="true" />}
           title="Нет черновиков на подтверждение"
-          description="ИИ сегодня молчит. Когда появится черновик — он будет здесь со всеми деталями и контролями."
+          description="Когда появится действие на подтверждение — оно будет здесь со всеми деталями."
         />
       ) : (
         <div className="flex flex-col gap-4">
-          {filteredDrafts.map((draft) => {
-            // ACL: draft доступен для Approve только если создан текущим chat_id
-            // или chat_id не известен (нет авторизации на фронте).
-            const isBlocked =
-              currentChatId !== null &&
-              draft.requested_by_chat_id !== null &&
-              draft.requested_by_chat_id !== currentChatId;
-
-            const expiringSoon = isExpiringSoon(draft.created_at);
-            const expiresAt = getExpiresAt(draft.created_at);
-
-            const approveBlocked = approveMutation.isPending || cancelMutation.isPending;
-
+          {filteredCards.map((card) => {
+            const expiringSoon = isExpiringSoon(card.createdAt);
             return (
-              <div
-                key={draft.id}
-                className={cn(
-                  "relative",
-                  expiringSoon && "draft-expiring-soon",
-                )}
-              >
-                {/* Лейбл "ИСТЕКАЕТ СКОРО" */}
+              <div key={card.key} className={cn("relative", expiringSoon && "border border-warning/40")}>
                 {expiringSoon ? (
                   <div
                     aria-label="Истекает скоро"
                     className={cn(
                       "absolute top-0 right-4 z-10",
                       "font-display text-[9px] tracking-widest uppercase font-semibold",
-                      "bg-warning text-bg-0 px-2 py-0.5",
-                      "-translate-y-px",
+                      "bg-warning text-bg-0 px-2 py-0.5 -translate-y-px",
                     )}
                   >
                     ИСТЕКАЕТ СКОРО
@@ -331,32 +368,16 @@ function DraftsPage() {
                 ) : null}
 
                 <DraftCard
-                  taskType={mutationLabel(draft.task_type)}
-                  createdAt={draft.created_at}
-                  requestedBy={draft.requested_by}
-                  summary={buildSummary(draft)}
-                  diff={buildDiff(draft)}
+                  taskType={card.taskTypeLabel}
+                  createdAt={card.createdAt}
+                  requestedBy={card.requestedBy}
+                  summary={card.summary}
+                  diff={card.diff}
                   reason={null}
-                  expiresAt={expiresAt}
-                  canApprove={!isBlocked}
-                  approveDisabledReason={
-                    isBlocked
-                      ? `Только владелец (@${draft.requested_by ?? "?"} · chat ${draft.requested_by_chat_id}) может подтвердить этот черновик.`
-                      : undefined
-                  }
-                  onApprove={() => setConfirmApprove(draft)}
-                  onCancel={() => setConfirmCancel(draft)}
-                  busy={approveBlocked && confirmApprove?.id === draft.id}
+                  expiresAt={getExpiresAt(card.createdAt)}
+                  onApprove={() => setConfirmApprove({ summary: card.summary, run: card.approve })}
+                  onCancel={() => setConfirmCancel({ summary: card.summary, run: card.cancel })}
                 />
-
-                {/* Блок ACL-note для заблокированных карточек */}
-                {isBlocked ? (
-                  <div className="px-6 py-2 border-t border-bg-5 bg-bg-0 flex items-center gap-2 text-warning font-display text-[10.5px] tracking-wide">
-                    <Lock size={12} aria-hidden="true" />
-                    Только владелец — создано @{draft.requested_by ?? "?"} · chat{" "}
-                    {draft.requested_by_chat_id}
-                  </div>
-                ) : null}
               </div>
             );
           })}
@@ -369,14 +390,15 @@ function DraftsPage() {
         onOpenChange={(open) => {
           if (!open) setConfirmApprove(null);
         }}
-        title="Подтвердить выполнение черновика?"
+        title="Подтвердить выполнение?"
         description={
           confirmApprove
-            ? `Задача ${confirmApprove.id.slice(0, 8)} будет передана воркеру на немедленное исполнение. Это необратимо.`
+            ? `${confirmApprove.summary}. Задача будет передана воркеру на немедленное исполнение — отменить нельзя.`
             : ""
         }
-        confirmLabel="Approve & execute"
+        confirmLabel="Подтвердить и выполнить"
         cancelLabel="Отмена"
+        confirmVariant="primary"
         onConfirm={handleApprove}
       />
 
@@ -386,13 +408,11 @@ function DraftsPage() {
         onOpenChange={(open) => {
           if (!open) setConfirmCancel(null);
         }}
-        title="Отменить черновик?"
+        title="Отклонить черновик?"
         description={
-          confirmCancel
-            ? `Задача ${confirmCancel.id.slice(0, 8)} будет отменена. Действие необратимо.`
-            : ""
+          confirmCancel ? `${confirmCancel.summary}. Черновик будет отменён.` : ""
         }
-        confirmLabel="Отменить задачу"
+        confirmLabel="Отклонить"
         cancelLabel="Назад"
         onConfirm={handleCancel}
       />
@@ -400,5 +420,5 @@ function DraftsPage() {
   );
 }
 
-/** Экспорт форматтера для тестов. */
+/** Экспорт форматтеров для тестов. */
 export { buildSummary, buildDiff, isExpiringSoon, mutationLabel };

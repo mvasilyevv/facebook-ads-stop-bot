@@ -44,7 +44,7 @@ export function OfferFormModal({ open, onOpenChange, editOffer }: OfferFormModal
 
 const CODE_RE = /^[A-Z0-9_-]+$/;
 
-const VERTICAL_OPTIONS = [
+export const VERTICAL_OPTIONS = [
   { value: "", label: "— Не задано —" },
   { value: "gambling", label: "Gambling" },
   { value: "nutra", label: "Nutra" },
@@ -53,6 +53,12 @@ const VERTICAL_OPTIONS = [
   { value: "dating", label: "Dating" },
   { value: "other", label: "Other" },
 ];
+
+/** Человекочитаемый лейбл вертикали (для карточек). */
+export function verticalLabel(v: string | null | undefined): string {
+  if (!v) return "";
+  return VERTICAL_OPTIONS.find((o) => o.value === v)?.label ?? v;
+}
 
 interface FormState {
   code: string;
@@ -147,7 +153,7 @@ function OfferForm({ editOffer, onClose }: OfferFormProps) {
       {/* Код оффера — иммутабелен при редактировании */}
       <Input
         id="offer-code"
-        label="Код оффера"
+        label="Код оффера *"
         placeholder="CR2, DRC_NUTRA, ..."
         value={form.code}
         onChange={(e) => handleCodeChange(e.target.value)}
@@ -163,7 +169,7 @@ function OfferForm({ editOffer, onClose }: OfferFormProps) {
       {/* Название */}
       <Input
         id="offer-name"
-        label="Название"
+        label="Название *"
         placeholder="Crypto registration, iGaming UA, ..."
         value={form.name}
         onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
@@ -180,15 +186,20 @@ function OfferForm({ editOffer, onClose }: OfferFormProps) {
 
       {/* Статус (только при редактировании) */}
       {isEdit ? (
-        <label className="flex items-center gap-3 cursor-pointer select-none">
-          <input
-            type="checkbox"
-            className="size-4 accent-accent"
-            checked={form.is_active}
-            onChange={(e) => setForm((p) => ({ ...p, is_active: e.target.checked }))}
-          />
-          <span className="text-[13px] text-bg-11">Активен</span>
-        </label>
+        <div>
+          <label className="flex items-center gap-3 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              className="size-4 accent-accent"
+              checked={form.is_active}
+              onChange={(e) => setForm((p) => ({ ...p, is_active: e.target.checked }))}
+            />
+            <span className="text-[13px] text-bg-11">Активен</span>
+          </label>
+          <p className="text-[11px] text-bg-9 mt-1.5 ml-7">
+            Снятие галочки переведёт оффер в неактивный — связанные объявления не затрагиваются.
+          </p>
+        </div>
       ) : null}
 
       {/* Кнопки */}

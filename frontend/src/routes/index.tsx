@@ -95,6 +95,7 @@ function DashboardPage() {
             leftIcon={<RefreshCcw size={14} aria-hidden="true" />}
             loading={scanNow.isPending}
             onClick={handleScanNow}
+            title="Запустить внеплановый цикл сканирования. Стоп-правила применятся сразу."
           >
             Сканировать
           </Button>
@@ -130,6 +131,7 @@ function DashboardPage() {
           isError={batchQuery.isError}
           error={batchQuery.error}
           onRetry={() => batchQuery.refetch()}
+          total={stats?.active_incidents}
           onSelect={goToAd}
         />
       </div>
@@ -198,6 +200,16 @@ function HeaderSubtitle({
   const observerStatus = stats?.observer_status ?? "unknown";
   const isOnline = observerStatus === "running";
 
+  // Два понятных состояния связи вместо четырёх пересекающихся.
+  const isLive = socketStatus === "connected";
+  const byTimer = socketStatus === "polling" || pollingFallback;
+  const connText = isLive ? "Live" : byTimer ? "по таймеру" : "подключение…";
+  const connTitle = isLive
+    ? "Данные приходят в реальном времени (WebSocket)."
+    : byTimer
+      ? "WebSocket недоступен — данные обновляются периодическими запросами."
+      : "Устанавливаем соединение…";
+
   return (
     <>
       <span>
@@ -210,13 +222,9 @@ function HeaderSubtitle({
       <HeaderSep />
       <span>Посл. скан {stats ? formatRelativeTime(stats.last_scan_at) : "—"}</span>
       <HeaderSep />
-      <span>Связь: {socketStatus === "connected" ? "онлайн" : socketStatus === "polling" ? "автообновление" : "подключение…"}</span>
-      {pollingFallback ? (
-        <>
-          <HeaderSep />
-          <span className="text-warning">резервное обновление</span>
-        </>
-      ) : null}
+      <span title={connTitle} className={!isLive && byTimer ? "text-warning" : undefined}>
+        Связь: {connText}
+      </span>
     </>
   );
 }

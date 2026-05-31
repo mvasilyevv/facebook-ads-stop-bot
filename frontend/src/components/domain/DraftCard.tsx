@@ -135,16 +135,18 @@ export function DraftCard({
           <Button variant="ghost" size="sm" onClick={onCancel} disabled={busy}>
             Отмена
           </Button>
-          <Button
-            variant="primary"
-            size="sm"
-            onClick={onApprove}
-            disabled={!canApprove}
-            loading={busy}
-            title={!canApprove ? approveDisabledReason : undefined}
-          >
-            Подтвердить &amp; выполнить
-          </Button>
+          {!canApprove ? (
+            // span-обёртка показывает tooltip — у disabled-кнопки hover не срабатывает.
+            <span title={approveDisabledReason} className="inline-flex cursor-not-allowed">
+              <Button variant="primary" size="sm" disabled title={approveDisabledReason}>
+                Подтвердить &amp; выполнить
+              </Button>
+            </span>
+          ) : (
+            <Button variant="primary" size="sm" onClick={onApprove} loading={busy}>
+              Подтвердить &amp; выполнить
+            </Button>
+          )}
         </div>
       </footer>
     </article>

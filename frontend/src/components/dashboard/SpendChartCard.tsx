@@ -91,9 +91,9 @@ export function SpendChartCard({
     >
       <div className="flex items-start justify-between mb-5">
         <div>
-          <Eyebrow num="02">Spend × {cfg.bucket === "hour" ? "Час" : "День"}</Eyebrow>
+          <Eyebrow num="02">Траты · {cfg.bucket === "hour" ? "час" : "сутки"}</Eyebrow>
           <h3 className="mt-1.5 font-display text-[13px] font-medium tracking-wider text-bg-11 m-0">
-            Spend rate · {range === "today" ? "последние 24ч" : "последние 7д"}
+            Расходы · {range === "today" ? "последние 24ч (UTC)" : "последние 7д (UTC)"}
           </h3>
         </div>
       </div>
@@ -108,10 +108,14 @@ export function SpendChartCard({
 
       {!isLoading && !isError && points.length > 0 ? (
         <div className="flex gap-6 pt-3 mt-3 border-t border-bg-5 font-display text-[11px] tracking-wider text-bg-10">
-          <ChartMetaItem label="total" value={formatSpend(summary.total)} />
-          <ChartMetaItem label="avg" value={formatSpend(summary.avg)} />
-          <ChartMetaItem label="peak" value={formatSpend(summary.peak)} />
-          <ChartMetaItem label="leads" value={formatInt(summary.leads)} />
+          <ChartMetaItem label="Итого" value={formatSpend(summary.total)} />
+          <ChartMetaItem
+            label="Среднее"
+            value={formatSpend(summary.avg)}
+            title={`Средние траты на ${cfg.bucket === "hour" ? "час" : "сутки"}`}
+          />
+          <ChartMetaItem label="Пик" value={formatSpend(summary.peak)} />
+          <ChartMetaItem label="Лиды" value={formatInt(summary.leads)} />
         </div>
       ) : null}
     </Card>
@@ -187,7 +191,14 @@ function ChartBody({
             tickFormatter={(v: number) => `$${formatInt(Math.round(v))}`}
           />
           <Tooltip
-            content={<CustomTooltipContent />}
+            content={
+              <CustomTooltipContent
+                nameMap={{ spend: "Траты", leads: "Лиды" }}
+                valueFormatter={(v, name) =>
+                  name === "leads" ? formatInt(Number(v)) : formatSpend(Number(v))
+                }
+              />
+            }
             cursor={{ stroke: CHART_COLORS.axis, strokeDasharray: "2 2" }}
           />
           <Area
@@ -233,9 +244,9 @@ function RangeTabs({ value, onChange }: { value: RangeKey; onChange: (r: RangeKe
   );
 }
 
-function ChartMetaItem({ label, value }: { label: string; value: string }) {
+function ChartMetaItem({ label, value, title }: { label: string; value: string; title?: string }) {
   return (
-    <span>
+    <span title={title}>
       <span className="text-bg-8 mr-1.5">{label}</span>
       <span className="text-bg-11 font-medium tabular-nums">{value}</span>
     </span>
@@ -256,7 +267,12 @@ function formatBucketLabel(iso: string, bucket: "hour" | "day"): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "—";
   if (bucket === "hour") {
-    return d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false });
+    return d.toLocaleTimeString("en-GB", {
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+      timeZone: "UTC",
+    });
   }
   // День: MM-DD (UTC, без локального сдвига).
   return d.toISOString().slice(5, 10);

@@ -38,7 +38,7 @@ function OfferRulesPage() {
       <PageHeader
         eyebrowNum="03"
         eyebrow="КАТАЛОГ · ОФФЕР"
-        title={offer ? `${offer.code} — Правила.` : `Оффер ${id}.`}
+        title={offer ? `${offer.code} — Правила` : offersQuery.isLoading ? "Загрузка…" : "Правила оффера"}
         displayNumber=""
         subtitle={offer?.name ?? "Редактор правил"}
         action={

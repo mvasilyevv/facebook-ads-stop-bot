@@ -74,6 +74,10 @@ export function PeriodSelector({ value, onChange, className }: PeriodSelectorPro
   };
 
   const applyCustom = () => {
+    if (!customFrom || !customTo) {
+      setCustomError("Укажите обе даты");
+      return;
+    }
     const days = diffDays(customFrom, customTo);
     if (days > 90) {
       setCustomError("Максимальный период — 90 дней");
@@ -105,6 +109,8 @@ export function PeriodSelector({ value, onChange, className }: PeriodSelectorPro
           <button
             key={p.key}
             type="button"
+            title={`Последние ${p.days} дней`}
+            aria-pressed={activePreset === p.key}
             onClick={() => applyPreset(p.days)}
             className={cn(
               "h-7 px-3 font-display text-[11px] uppercase tracking-wider transition-colors",
@@ -173,7 +179,7 @@ export function PeriodSelector({ value, onChange, className }: PeriodSelectorPro
       {/* Текущий диапазон */}
       {!showCustom && (
         <span className="font-display text-[11px] text-bg-9 tracking-tight">
-          {value.from_iso} — {value.to_iso}
+          {value.from_iso} — {value.to_iso} <span className="text-bg-7">UTC</span>
         </span>
       )}
     </div>

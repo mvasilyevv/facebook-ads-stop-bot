@@ -4,7 +4,7 @@
  */
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiClient } from "./client";
+import { apiClient, apiGetWithCount } from "./client";
 import type { AdSnapshot, AlertEvent, TaskQueueRow } from "@/lib/types/api";
 
 const KEYS = {
@@ -12,20 +12,45 @@ const KEYS = {
   timeline: (fb_ad_id: string) => ["ads", "timeline", fb_ad_id] as const,
 };
 
+/** Результат useAds: страница ads + общее число (из X-Total-Count) для пагинации. */
+export interface AdsResult {
+  items: AdSnapshot[];
+  total: number | null;
+}
+
 export function useAds(params: {
   alert_state?: string;
   include_inactive?: boolean;
   limit?: number;
   offset?: number;
 }) {
-  return useQuery({
+  return useQuery<AdsResult>({
     queryKey: KEYS.ads(params),
-    queryFn: () => apiClient.get<AdSnapshot[]>("/dashboard/ads", params),
+    queryFn: async () => {
+      const { data, total } = await apiGetWithCount<AdSnapshot[]>("/dashboard/ads", params);
+      return { items: data, total };
+    },
   });
 }
 
+export interface AdTimelineMetric {
+  cycle_ts: string;
+  spend: number | string | null;
+  impressions: number | null;
+  clicks: number | null;
+  leads: number | null;
+  deposits: number | null;
+}
+
 export interface AdTimeline {
-  metrics: Array<Record<string, unknown>>;
+  fb_ad_id: string;
+  ad_name: string;
+  campaign_name?: string | null;
+  adset_name?: string | null;
+  offer_code?: string | null;
+  from_iso: string;
+  to_iso: string;
+  metrics: AdTimelineMetric[];
   alerts: AlertEvent[];
   tasks: TaskQueueRow[];
 }

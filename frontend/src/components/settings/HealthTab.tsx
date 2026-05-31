@@ -14,7 +14,7 @@ import { Skeleton } from "@/components/ui/Skeleton";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { toast } from "@/components/ui/Toast";
-import { formatRelativeTime } from "@/lib/utils/format";
+import { formatRelativeTime, formatDateTime } from "@/lib/utils/format";
 import type { HealthWorker } from "@/lib/types/api";
 
 import {
@@ -22,6 +22,31 @@ import {
   useRestartObserver,
   useRestartDisableWorker,
 } from "@/lib/api/settings";
+
+/** Перевод overall-статуса. */
+const OVERALL_LABELS: Record<string, string> = {
+  HEALTHY: "Исправно",
+  DEGRADED: "Деградация",
+  CRITICAL: "Критично",
+};
+
+/** Человекочитаемые имена воркеров (ключ — системное имя heartbeat). */
+const WORKER_LABELS: Record<string, string> = {
+  observer: "Наблюдатель (скан + FSM)",
+  disable: "Отключение рекламы",
+  enable: "Включение рекламы",
+  telegram_poller: "Telegram-поллер",
+  cleanup: "Очистка данных",
+  reconciler: "Реконсайлер задач",
+  meta_api: "Marketing API",
+  creator: "Создание кампаний",
+  creator_recorder: "Запись планов",
+  cabinet_scheduler: "Автостарт кабинета",
+  tracker_aggregator: "Агрегатор трекера",
+  health_watchdog: "Монитор здоровья",
+  digest: "Дайджест",
+  enable_recommendation: "Реко включения",
+};
 
 type ConfirmTarget = "observer" | "disable_worker" | null;
 
@@ -115,7 +140,7 @@ export function HealthTab() {
                 <Skeleton width={80} height={18} />
               ) : health?.overall ? (
                 <Badge variant={overallVariant(health.overall)}>
-                  {health.overall}
+                  {OVERALL_LABELS[health.overall] ?? health.overall}
                 </Badge>
               ) : null}
             </div>
@@ -222,10 +247,17 @@ function WorkerRow({ worker }: { worker: HealthWorker }) {
             isOnline ? "bg-success" : "bg-danger",
           ].join(" ")}
         />
-        <span className="font-numeric text-[13px] text-bg-11">{worker.name}</span>
+        <span className="font-display text-[13px] text-bg-11" title={worker.name}>
+          {WORKER_LABELS[worker.name] ?? worker.name}
+        </span>
       </div>
       <div className="flex items-center gap-3">
-        <span className="text-[11px] text-bg-9">
+        <span
+          className="text-[11px] text-bg-9"
+          title={
+            worker.last_heartbeat_at ? `${formatDateTime(worker.last_heartbeat_at)} UTC` : undefined
+          }
+        >
           {worker.last_heartbeat_at
             ? formatRelativeTime(worker.last_heartbeat_at)
             : "никогда"}
