@@ -1,9 +1,9 @@
 /**
  * ObserverTab — вкладка настроек Observer:
- *   - Тоггл сканирования, интервал, auto_enable_recommendations.
- *   - Кнопка "Scan now".
- *   - Статус observer из Redis (running/paused/unknown).
- *   - Таблица последних scan-runs с filter-selector.
+ *   - Интервал сканирования.
+ *   - Таблица последних scan-runs с filter-selector + статус observer.
+ * Тумблеры (вкл/выкл, авто-стоп через API, auto-enable) вынесены на страницу «Панель»
+ * (карточка «Управление сканером»), чтобы не было дублей.
  */
 
 import { useState, type ChangeEvent } from "react";
@@ -26,8 +26,6 @@ import {
   useObserverStatus,
   useScanRuns,
   useUpdateObserver,
-  useToggleScanning,
-  useToggleAutoEnable,
   useTriggerScanNowSettings,
 } from "@/lib/api/settings";
 
@@ -116,37 +114,12 @@ export function ObserverTab() {
   const scanRunsQuery = useScanRuns(50, scanFilter);
 
   const updateObserver = useUpdateObserver();
-  const toggleScanning = useToggleScanning();
-  const toggleAutoEnable = useToggleAutoEnable();
   const scanNow = useTriggerScanNowSettings();
 
   const settings = settingsQuery.data;
   const status = statusQuery.data;
 
-  /** Обработчик тоггла is_scanning. */
-  function handleToggleScanning() {
-    if (!settings) return;
-    toggleScanning.mutate(!settings.is_scanning, {
-      onSuccess: () =>
-        toast.success(
-          settings.is_scanning ? "Сканирование приостановлено" : "Сканирование запущено",
-        ),
-      onError: (err) =>
-        toast.error("Ошибка", err instanceof Error ? err.message : String(err)),
-    });
-  }
-
-  /** Обработчик тоггла auto_enable_recommendations. */
-  function handleToggleAutoEnable() {
-    if (!settings) return;
-    toggleAutoEnable.mutate(!settings.auto_enable_recommendations_enabled, {
-      onSuccess: () => toast.success("Настройка сохранена"),
-      onError: (err) =>
-        toast.error("Ошибка", err instanceof Error ? err.message : String(err)),
-    });
-  }
-
-  /** Сохранить новый интервал скана. */
+  /** Сохранить новый интервал скана. PUT требует все обязательные поля — шлём текущие + новый интервал. */
   function handleSaveInterval() {
     const n = parseInt(intervalDraft, 10);
     if (Number.isNaN(n) || n < 5 || n > 3600) {
@@ -154,7 +127,11 @@ export function ObserverTab() {
       return;
     }
     updateObserver.mutate(
-      { scan_interval_seconds: n },
+      {
+        is_scanning_enabled: settings?.is_scanning_enabled ?? true,
+        default_interval_seconds: n,
+        auto_enable_recommendations: settings?.auto_enable_recommendations ?? false,
+      },
       {
         onSuccess: () => {
           setEditingInterval(false);
@@ -167,7 +144,7 @@ export function ObserverTab() {
   }
 
   function handleStartEditInterval() {
-    setIntervalDraft(String(settings?.scan_interval_seconds ?? ""));
+    setIntervalDraft(String(settings?.default_interval_seconds ?? ""));
     setEditingInterval(true);
   }
 
@@ -192,53 +169,18 @@ export function ObserverTab() {
 
   return (
     <div className="grid grid-cols-[1fr_320px] gap-8">
-      {/* Левая колонка: форма настроек. */}
+      {/* Левая колонка: интервал + таблица сканов. */}
       <div className="space-y-6">
         <section>
           <h3 className="font-display text-[10px] uppercase tracking-widest text-bg-9 mb-4">
             Настройки сканирования
           </h3>
-
-          {/* Toggle: сканирование включено/выключено. */}
-          <div className="flex items-center justify-between py-3 border-b border-bg-5">
-            <div>
-              <div className="text-[13px] text-bg-11 font-medium">Сканирование</div>
-              <div className="text-[11px] text-bg-9 mt-0.5">
-                Включить/выключить автоматический цикл сканирования.
-              </div>
-            </div>
-            {settingsQuery.isLoading ? (
-              <Skeleton width={48} height={24} />
-            ) : (
-              <button
-                type="button"
-                role="switch"
-                aria-checked={settings?.is_scanning ?? false}
-                aria-label="Сканирование"
-                onClick={handleToggleScanning}
-                disabled={toggleScanning.isPending}
-                className={[
-                  "relative inline-flex w-12 h-6 border transition-colors",
-                  "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
-                  settings?.is_scanning
-                    ? "bg-success border-[rgba(126,180,122,0.5)]"
-                    : "bg-bg-3 border-bg-6",
-                  "disabled:opacity-40 disabled:cursor-not-allowed",
-                ].join(" ")}
-              >
-                <span
-                  aria-hidden="true"
-                  className={[
-                    "absolute top-[3px] size-[18px] bg-bg-11 transition-transform",
-                    settings?.is_scanning ? "translate-x-[26px]" : "translate-x-[3px]",
-                  ].join(" ")}
-                />
-              </button>
-            )}
-          </div>
+          <p className="text-[11px] text-bg-9 mb-2">
+            Вкл/выкл сканера, авто-стоп через API и auto-enable — на странице «Панель».
+          </p>
 
           {/* Интервал скана. */}
-          <div className="flex items-center justify-between py-3 border-b border-bg-5">
+          <div className="flex items-center justify-between py-3">
             <div>
               <div className="text-[13px] text-bg-11 font-medium">Интервал скана</div>
               <div className="text-[11px] text-bg-9 mt-0.5">Секунды между сканами.</div>
@@ -268,47 +210,7 @@ export function ObserverTab() {
                 onClick={handleStartEditInterval}
                 className="font-numeric text-[14px] text-accent hover:text-accent-muted transition-colors"
               >
-                {settings?.scan_interval_seconds ?? "—"}s
-              </button>
-            )}
-          </div>
-
-          {/* Toggle: auto-enable recommendations. */}
-          <div className="flex items-center justify-between py-3">
-            <div>
-              <div className="text-[13px] text-bg-11 font-medium">Auto-enable recommendations</div>
-              <div className="text-[11px] text-bg-9 mt-0.5">
-                Автоматически предлагать включение восстановившихся объявлений.
-              </div>
-            </div>
-            {settingsQuery.isLoading ? (
-              <Skeleton width={48} height={24} />
-            ) : (
-              <button
-                type="button"
-                role="switch"
-                aria-checked={settings?.auto_enable_recommendations_enabled ?? false}
-                aria-label="Auto-enable recommendations"
-                onClick={handleToggleAutoEnable}
-                disabled={toggleAutoEnable.isPending}
-                className={[
-                  "relative inline-flex w-12 h-6 border transition-colors",
-                  "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
-                  settings?.auto_enable_recommendations_enabled
-                    ? "bg-success border-[rgba(126,180,122,0.5)]"
-                    : "bg-bg-3 border-bg-6",
-                  "disabled:opacity-40 disabled:cursor-not-allowed",
-                ].join(" ")}
-              >
-                <span
-                  aria-hidden="true"
-                  className={[
-                    "absolute top-[3px] size-[18px] bg-bg-11 transition-transform",
-                    settings?.auto_enable_recommendations_enabled
-                      ? "translate-x-[26px]"
-                      : "translate-x-[3px]",
-                  ].join(" ")}
-                />
+                {settings?.default_interval_seconds ?? "—"}s
               </button>
             )}
           </div>
@@ -331,7 +233,7 @@ export function ObserverTab() {
 
           {scanRunsQuery.isError ? (
             <ErrorState
-              title="Не удалось загрузить scan-runs."
+              title="Не удалось загрузить историю сканов."
               error={scanRunsQuery.error}
               onRetry={() => scanRunsQuery.refetch()}
             />

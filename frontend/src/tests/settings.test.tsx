@@ -16,6 +16,9 @@ const OBSERVER_SETTINGS: ObserverSettings = {
   is_scanning_enabled: true,
   default_interval_seconds: 60,
   auto_enable_recommendations: true,
+  act_via_api: true,
+  owner_campaign_tag: "MV",
+  campaign_ids: [],
   warning_percent_of_stop: null,
   cpc_warning_percent: null,
   cpl_warning_percent: null,
@@ -101,59 +104,20 @@ function withQuery(ui: React.ReactElement) {
 }
 
 describe("Settings · ObserverTab", () => {
-  // Тест: рендерит заголовок, toggle и scan-runs секцию.
-  it("рендерит секцию настроек сканирования", () => {
+  // Тест: рендерит интервал + заметку + scan-runs. Тумблеры переехали на Панель.
+  it("рендерит секцию настроек сканирования (без дублей тумблеров)", () => {
     withQuery(<ObserverTab />);
-    expect(screen.getByText("Сканирование")).toBeInTheDocument();
-    expect(screen.getByText("Auto-enable recommendations")).toBeInTheDocument();
+    expect(screen.getByText("Настройки сканирования")).toBeInTheDocument();
+    expect(screen.getByText("Интервал скана")).toBeInTheDocument();
     expect(screen.getByText("Последние сканы")).toBeInTheDocument();
+    // Тумблер сканирования переехал на Панель — в Настройках его нет (без дублей).
+    expect(screen.queryByRole("switch", { name: "Сканирование" })).not.toBeInTheDocument();
   });
 
   // Тест: статус observer отображается из useObserverStatus.
-  // Примечание: ObserverTab читает settings.scan_interval_seconds (устаревшее поле),
-  // новый мок передаёт default_interval_seconds — интервал отображается как "—s".
-  // При миграции компонента на новые поля тест обновить.
   it("показывает статус observer из мока (running)", () => {
     withQuery(<ObserverTab />);
-    // Badge со статусом "running" есть в документе.
     expect(screen.getByText("running")).toBeInTheDocument();
-  });
-
-  // Тест: клик на тоггл сканирования вызывает мутацию toggleScanning.
-  it("клик на toggle сканирования вызывает mutate", async () => {
-    // Перехватываем вызов мутации через отдельный шпион.
-    const mutateSpy = vi.fn();
-    vi.doMock("@/lib/api/settings", () => ({
-      useObserverSettings: () => ({
-        data: OBSERVER_SETTINGS,
-        isLoading: false,
-        isError: false,
-        refetch: vi.fn(),
-      }),
-      useObserverStatus: () => ({
-        data: OBSERVER_STATUS,
-        isLoading: false,
-        isError: false,
-        refetch: vi.fn(),
-      }),
-      useScanRuns: () => ({ data: [], isLoading: false, isError: false, refetch: vi.fn() }),
-      useUpdateObserver: () => ({ mutate: vi.fn(), isPending: false }),
-      useToggleScanning: () => ({ mutate: mutateSpy, isPending: false }),
-      useToggleAutoEnable: () => ({ mutate: vi.fn(), isPending: false }),
-      useTriggerScanNowSettings: () => ({ mutate: vi.fn(), isPending: false }),
-    }));
-
-    withQuery(<ObserverTab />);
-
-    // Нажимаем switch (role="switch").
-    const toggle = screen.getByRole("switch", { name: "Сканирование" });
-    expect(toggle).toBeInTheDocument();
-    fireEvent.click(toggle);
-
-    // vi.doMock применяется при следующем import — проверяем что switch найден.
-    await waitFor(() => {
-      expect(toggle).toBeInTheDocument();
-    });
   });
 });
 

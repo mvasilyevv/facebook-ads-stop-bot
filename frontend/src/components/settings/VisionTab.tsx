@@ -217,9 +217,8 @@ export function VisionTab() {
               Справка
             </h3>
             <ul className="text-[12px] text-bg-9 space-y-1.5 list-disc list-inside">
-              <li>Vision запускается на порту 3030.</li>
-              <li>X-Token и Profile ID — из настроек Vision.</li>
-              <li>Reconnect завершает текущую CDP-сессию.</li>
+              <li>Токен и профиль берутся из вашего Vision-аккаунта.</li>
+              <li>«Переподключить» перезапускает браузерную сессию.</li>
             </ul>
           </section>
         </div>

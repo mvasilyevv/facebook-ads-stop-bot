@@ -122,6 +122,7 @@ function TestAdRow({
       <td onClick={onOpen}>
         <span data-testid="ad-name">{ad.ad_name}</span>
         <span data-testid="ad-id">{ad.fb_ad_id}</span>
+        {ad.adset_name ? <span data-testid="ad-adset">{ad.adset_name}</span> : null}
       </td>
       <td>
         {ad.offer_code ? (
@@ -293,6 +294,20 @@ describe("AdsPage · таблица (presentation)", () => {
 
     expect(screen.getByText("UA17 | SP | MV | Krov | 24.03")).toBeInTheDocument();
     expect(screen.getByText("DRC | CR2 | MV | Tyver | 25.03")).toBeInTheDocument();
+  });
+
+  // Тест: adset_name выводится в строке, когда задан (раньше адсет нигде не показывался)
+  it("показывает adset_name в строке, если он есть", () => {
+    const ad = makeAd({ fb_ad_id: "555", adset_name: "DRC · adset 01" });
+    render(
+      <table>
+        <tbody>
+          <TestAdRow ad={ad} selected={false} onToggleSelect={() => {}} onOpen={() => {}} />
+        </tbody>
+      </table>,
+      { wrapper: Wrapper },
+    );
+    expect(screen.getByTestId("ad-adset").textContent).toBe("DRC · adset 01");
   });
 
   // Тест: loading показывает skeleton-строки (role=status), не данные

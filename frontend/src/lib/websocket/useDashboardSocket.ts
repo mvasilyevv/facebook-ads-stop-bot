@@ -1,7 +1,6 @@
 /**
  * useDashboardSocket — WebSocket hook с exponential backoff reconnect
- * и автоматическим polling fallback'ом, если WS-endpoint backend'ом
- * ещё не реализован.
+ * и автоматическим polling fallback'ом при недоступности WS-соединения.
  *
  * Контракт:
  *  - На mount подключается к WS_URL (по умолчанию /ws/dashboard).
@@ -12,7 +11,9 @@
  *    на TanStack Query refetchInterval.
  *  - На unmount — закрывает socket и чистит таймеры.
  *
- * Backend WS не обязан существовать — hook gracefully degradeт.
+ * Backend-эндпоинт /ws/dashboard реализован (apps/api/routers/ws.py) и
+ * форвардит 4 канала: scan_finished, alert_created, task_changed, health_updated.
+ * Polling fallback — на случай разрыва соединения, а не отсутствия backend'а.
  */
 
 import { useEffect, useRef, useState, useCallback } from "react";

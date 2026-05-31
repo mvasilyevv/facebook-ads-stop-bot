@@ -16,7 +16,7 @@
 import { useNavigate } from "@tanstack/react-router";
 import { createFileRoute } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { ExternalLink, X } from "lucide-react";
+import { X } from "lucide-react";
 
 import { Badge, alertStateToBadge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -91,13 +91,16 @@ function AdDrawerPage() {
             </h2>
             <div className="font-display text-[11px] text-bg-9 tracking-wide">
               {fbAdId}
-              {cachedAd?.campaign_name ? (
-                <>
-                  <span className="text-bg-7 mx-1.5">·</span>
-                  {cachedAd.campaign_name}
-                </>
-              ) : null}
             </div>
+            {cachedAd?.campaign_name || cachedAd?.adset_name ? (
+              <div className="font-display text-[11px] text-bg-9 tracking-wide mt-0.5 truncate">
+                {cachedAd?.campaign_name}
+                {cachedAd?.campaign_name && cachedAd?.adset_name ? (
+                  <span className="text-bg-7 mx-1.5">›</span>
+                ) : null}
+                {cachedAd?.adset_name}
+              </div>
+            ) : null}
             {cachedAd && (
               <div className="flex gap-2 mt-3 flex-wrap">
                 <Badge variant={alertStateToBadge(cachedAd.alert_state)}>
@@ -234,22 +237,7 @@ function AdDrawerPage() {
         </div>
 
         {/* Footer */}
-        <div className="px-8 py-4 border-t border-bg-5 bg-bg-1 flex items-center justify-between gap-3 shrink-0">
-          <Button
-            variant="ghost"
-            size="sm"
-            rightIcon={<ExternalLink size={12} aria-hidden="true" />}
-            onClick={() => {
-              // Ads Manager deep-link (может не работать без авторизации Meta)
-              window.open(
-                `https://www.facebook.com/adsmanager/manage/ads?act=&selected_ad_ids=${fbAdId}`,
-                "_blank",
-                "noopener,noreferrer",
-              );
-            }}
-          >
-            Открыть в Ads Manager
-          </Button>
+        <div className="px-8 py-4 border-t border-bg-5 bg-bg-1 flex items-center justify-end gap-3 shrink-0">
           <div className="flex gap-2">
             <Button variant="secondary" size="sm">
               Отложить на 1ч

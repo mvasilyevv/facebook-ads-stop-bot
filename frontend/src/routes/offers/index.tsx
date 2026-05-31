@@ -135,7 +135,7 @@ function OffersPage() {
       <PageHeader
         eyebrowNum="03"
         eyebrow="ОФФЕРЫ"
-        title="Офферы."
+        title="Офферы"
         displayNumber="03"
         subtitle={
           offersQuery.data ? (

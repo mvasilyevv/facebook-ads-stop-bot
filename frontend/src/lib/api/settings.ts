@@ -116,6 +116,16 @@ export function useToggleAutoEnable() {
   });
 }
 
+/** PATCH /settings/observer/act-via-api — канал авто-стопа (Marketing API vs DOM). Money-критично. */
+export function useToggleActViaApi() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (enabled: boolean) =>
+      apiClient.patch<ObserverSettings>("/settings/observer/act-via-api", { enabled }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: KEYS.observer }),
+  });
+}
+
 /** Получить список recipients Telegram. */
 export function useTelegramRecipients() {
   return useQuery({

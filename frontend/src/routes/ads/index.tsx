@@ -210,7 +210,7 @@ function AdsPage() {
       <PageHeader
         eyebrowNum="02"
         eyebrow="ОПЕРИРОВАТЬ · ПРОВЕРЯТЬ · ВМЕШИВАТЬСЯ"
-        title="Объявления."
+        title="Объявления"
         displayNumber="02"
         subtitle={
           <>
@@ -631,21 +631,19 @@ function AdRow({
 
       {/* Ad cell */}
       <td className="py-3 px-3.5 max-w-[320px]" onClick={onOpen}>
-        <div className="flex items-center gap-3">
-          {/* thumbnail-placeholder */}
-          <div
-            aria-hidden="true"
-            className="w-14 h-8 bg-bg-3 border border-bg-5 shrink-0 relative overflow-hidden"
-          />
-          <div className="min-w-0">
-            <div className="font-display text-[13px] text-bg-11 truncate tracking-tight">
-              {ad.ad_name}
-            </div>
-            <div className="font-display text-[10.5px] text-bg-9 tracking-wide mt-0.5">
-              {ad.fb_ad_id}
-              {ad.offer_code ? ` · ${ad.offer_code}` : ""}
-            </div>
+        <div className="min-w-0">
+          <div className="font-display text-[13px] text-bg-11 truncate tracking-tight">
+            {ad.ad_name}
           </div>
+          <div className="font-display text-[10.5px] text-bg-9 tracking-wide mt-0.5 truncate">
+            {ad.fb_ad_id}
+            {ad.offer_code ? ` · ${ad.offer_code}` : ""}
+          </div>
+          {ad.adset_name ? (
+            <div className="font-display text-[10.5px] text-bg-8 tracking-wide mt-0.5 truncate">
+              <span className="text-bg-7">адсет</span> {ad.adset_name}
+            </div>
+          ) : null}
         </div>
       </td>
 

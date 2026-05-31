@@ -55,20 +55,20 @@ describe("buildSummary", () => {
   it("disable включает ad_name", () => {
     const row = makeDraft({ task_type: "disable", ad_name: "CR2 | DRC" });
     expect(buildSummary(row)).toContain("CR2 | DRC");
-    expect(buildSummary(row)).toContain("Pause ad");
+    expect(buildSummary(row)).toContain("Отключить");
   });
 
   // Корректный заголовок для enable-задачи
   it("enable содержит Activate", () => {
     const row = makeDraft({ task_type: "enable" });
-    expect(buildSummary(row)).toContain("Activate ad");
+    expect(buildSummary(row)).toContain("Включить");
   });
 
   // meta_api_mutation получает fallback на id
   it("meta_api_mutation использует id как fallback", () => {
     const row = makeDraft({ task_type: "meta_api_mutation", ad_name: null, fb_ad_id: null });
     const s = buildSummary(row);
-    expect(s).toContain("Meta API mutation");
+    expect(s).toContain("Действие с API");
     expect(s).toContain(row.id.slice(0, 8));
   });
 });
@@ -78,7 +78,7 @@ describe("buildDiff", () => {
   it("disable-задача имеет highlighted строку effective_status", () => {
     const row = makeDraft({ task_type: "disable" });
     const diff = buildDiff(row);
-    const changed = diff.find((r) => r.key === "effective_status");
+    const changed = diff.find((r) => r.key === "Статус");
     expect(changed).toBeDefined();
     expect(changed?.highlight).toBe(true);
     expect(changed?.current).toBe("ACTIVE");
@@ -89,7 +89,7 @@ describe("buildDiff", () => {
   it("enable-задача показывает PAUSED → ACTIVE", () => {
     const row = makeDraft({ task_type: "enable" });
     const diff = buildDiff(row);
-    const changed = diff.find((r) => r.key === "effective_status");
+    const changed = diff.find((r) => r.key === "Статус");
     expect(changed?.current).toBe("PAUSED");
     expect(changed?.target).toBe("ACTIVE");
   });
@@ -117,11 +117,11 @@ describe("isExpiringSoon", () => {
 });
 
 describe("mutationLabel", () => {
-  it("disable → meta_api / pause_ad", () => {
-    expect(mutationLabel("disable")).toBe("meta_api / pause_ad");
+  it("disable → Отключить объявление", () => {
+    expect(mutationLabel("disable")).toBe("Отключить объявление");
   });
-  it("enable → meta_api / activate_ad", () => {
-    expect(mutationLabel("enable")).toBe("meta_api / activate_ad");
+  it("enable → Включить объявление", () => {
+    expect(mutationLabel("enable")).toBe("Включить объявление");
   });
   it("неизвестный тип остаётся как есть", () => {
     expect(mutationLabel("plan_run")).toBe("plan_run");
@@ -262,8 +262,8 @@ describe("DraftsPage (presentation)", () => {
 
     render(<TestDraftsList drafts={drafts} />);
     // Summaries рендерятся внутри карточки (font-display bold)
-    expect(screen.getByText(/Pause ad CR2 \| DRC \| MV \| 25\.03/)).toBeInTheDocument();
-    expect(screen.getByText(/Activate ad UA17 \| SP \| 24\.03/)).toBeInTheDocument();
+    expect(screen.getByText(/Отключить «CR2 \| DRC \| MV \| 25\.03»/)).toBeInTheDocument();
+    expect(screen.getByText(/Включить «UA17 \| SP \| 24\.03»/)).toBeInTheDocument();
   });
 
   // ACL-blocked: другой chat_id

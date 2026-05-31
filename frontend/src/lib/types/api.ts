@@ -234,6 +234,12 @@ export interface ObserverSettings {
   is_scanning_enabled: boolean;
   default_interval_seconds: number;
   auto_enable_recommendations: boolean;
+  // Канал авто-стопа: true — Marketing API (pause_ad, точно по ad_id), false — DOM-клик.
+  act_via_api: boolean;
+  // Owner-scoping: тег твоих кампаний в общем кабинете (NULL — фильтр выключен).
+  owner_campaign_tag: string | null;
+  // Allowlist кампаний для am-режима (#3).
+  campaign_ids: string[];
   warning_percent_of_stop: null;
   cpc_warning_percent: null;
   cpl_warning_percent: null;

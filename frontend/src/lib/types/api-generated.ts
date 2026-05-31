@@ -840,7 +840,9 @@ export interface paths {
          *     2. INSERT в cabinet_day_archives.
          *     3. Публикуем {event: new_cabinet_day, ...} в Redis канал fb_agent:observer:cabinet_day.
          *
-         *     Subscriber в worker'е НЕ реализован — отдельная задача.
+         *     observer_worker подписан на этот канал (main.py::_on_cabinet_day) и делает
+         *     форс-рескан нового дня. Архив (шаг 2) здесь — единственный источник истины:
+         *     observer его НЕ дублирует.
          */
         post: operations["start_new_cabinet_day_api_observer_start_new_cabinet_day_post"];
         delete?: never;
@@ -886,8 +888,8 @@ export interface paths {
          * Restart Disable Worker
          * @description Публикует сигнал рестарта disable-воркера в Redis.
          *
-         *     Subscriber в disable_worker'е пока не реализован — сигнал публикуется,
-         *     но воркер его не обрабатывает (TODO: добавить _on_restart в disable_worker/main.py).
+         *     disable_worker подписан на канал fb_agent:worker:restart:disable_worker
+         *     (main.py::_on_restart) и выполняет graceful stop по этому событию.
          *     Если Redis недоступен — 503.
          */
         post: operations["restart_disable_worker_api_disable_worker_restart_post"];
@@ -1104,6 +1106,29 @@ export interface paths {
         patch: operations["patch_observer_act_via_api_api_settings_observer_act_via_api_patch"];
         trace?: never;
     };
+    "/api/settings/observer/campaigns": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Patch Observer Campaigns
+         * @description Задаёт allowlist кампаний для am-режима (#3).
+         *
+         *     Фильтрует am_tabular по campaign.id IN [...]: в общем кабинете не тянем чужие ад'ы.
+         *     Пустой список — без фильтра по кампаниям (owner_campaign_tag всё равно отсекает чужое).
+         */
+        patch: operations["patch_observer_campaigns_api_settings_observer_campaigns_patch"];
+        trace?: never;
+    };
     "/api/settings/observer/scan-now": {
         parameters: {
             query?: never;
@@ -1139,7 +1164,7 @@ export interface paths {
          * Get Telegram Settings
          * @description Возвращает публичные поля TelegramConfig с compute-полями.
          *
-         *     НЕ возвращает bot_token_encrypted.
+         *     НЕ возвращает bot_token_encrypted. web_app_url — из system_config или .env.
          */
         get: operations["get_telegram_settings_api_settings_telegram_get"];
         put?: never;
@@ -1151,6 +1176,29 @@ export interface paths {
          *     Если строки нет — возвращает пустой ответ без ошибки.
          */
         delete: operations["delete_telegram_settings_api_settings_telegram_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/settings/telegram/web-app-url": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Put Telegram Web App Url
+         * @description Сохраняет Web App URL Mini App в system_config (без рестарта).
+         *
+         *     Пустая строка/None — очистка (тогда GET вернёт фолбэк из .env).
+         *     Непустой URL обязан быть HTTPS (требование Telegram Mini Apps) → иначе 422.
+         */
+        put: operations["put_telegram_web_app_url_api_settings_telegram_web_app_url_put"];
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -1297,55 +1345,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/vision/profiles": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Vision Profiles
-         * @description Возвращает список Vision-профилей через gRPC.
-         *
-         *     TODO: ListProfiles не определён в текущем proto (browser_session.proto).
-         *     Когда метод будет добавлен — реализовать получение списка профилей.
-         *     Сейчас всегда возвращает 501 NotImplemented.
-         */
-        get: operations["get_vision_profiles_api_vision_profiles_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/settings/browser/validate-columns": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Validate Columns
-         * @description Валидация DOM-колонок Ads Manager через gRPC ScannerService.ValidateColumns.
-         *
-         *     Проксирует реальный вызов BrowserAgentClient.validate_columns() к browser-agent.
-         *     При недоступности gRPC (RpcError, circuit-breaker) → 503, чтобы фронт показал
-         *     ошибку «проверка недоступна», а не ложный зелёный «всё ок».
-         */
-        get: operations["validate_columns_api_settings_browser_validate_columns_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/settings/browser/save-column-widths": {
+    "/api/tma/auth": {
         parameters: {
             query?: never;
             header?: never;
@@ -1355,19 +1355,60 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Save Column Widths
-         * @description CaptureColumnWidths есть в scanner.proto, но Python-клиент его не реализует.
+         * Tma Auth
+         * @description Валидирует initData и выдаёт сессионный токен + роль.
          *
-         *     Возвращает 501 Not Implemented — честный сигнал фронту вместо молчаливого noop.
+         *     503 — Telegram/secret не настроены; 401 — initData невалиден/истёк;
+         *     403 — пользователь не в списке доступа (нет активного recipient'а).
          */
-        post: operations["save_column_widths_api_settings_browser_save_column_widths_post"];
+        post: operations["tma_auth_api_tma_auth_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/settings/browser/apply-column-widths": {
+    "/api/tma/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Tma Me
+         * @description Проверка сессии: возвращает текущего пользователя (под Bearer-guard).
+         */
+        get: operations["tma_me_api_tma_me_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tma/ads/{fb_ad_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Tma Ad Detail
+         * @description Детальный снимок объявления (build_ad_snapshot + история алертов + account).
+         */
+        get: operations["tma_ad_detail_api_tma_ads__fb_ad_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tma/ads/{fb_ad_id}/disable": {
         parameters: {
             query?: never;
             header?: never;
@@ -1377,12 +1418,145 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Apply Column Widths
-         * @description ApplyColumnWidths есть в scanner.proto, но Python-клиент его не реализует.
+         * Tma Disable Ad
+         * @description Создаёт задачу на отключение объявления (money-действие).
          *
-         *     Возвращает 501 Not Implemented — честный сигнал фронту вместо молчаливого noop.
+         *     Канал (meta_api pause_ad / DOM disable) — по observer_config.act_via_api,
+         *     как ручная кнопка бота. requested_by = tma:<telegram_user_id>.
          */
-        post: operations["apply_column_widths_api_settings_browser_apply_column_widths_post"];
+        post: operations["tma_disable_ad_api_tma_ads__fb_ad_id__disable_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tma/ads/{fb_ad_id}/snooze": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Tma Snooze Ad
+         * @description Снуз: ad_alert_state.snoozed_until = now + minutes (как handle_snz_callback).
+         *
+         *     404 — объявления нет. 409 — у ad нет строки состояния (нечего снузить).
+         */
+        post: operations["tma_snooze_ad_api_tma_ads__fb_ad_id__snooze_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tma/ads/{fb_ad_id}/claim": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Tma Claim Ad
+         * @description Claim: взять активный алерт под контроль вручную → alert_state='claimed'.
+         *
+         *     Переход warning_sent/stop_sent → claimed (observer перестаёт ре-алертить,
+         *     защита WHERE NOT IN ('claimed','disabled') в apply_fsm_transition). Идемпотентно:
+         *     повторный claim уже-claimed → ok. 404 — ad нет; 409 — нет активного алерта.
+         */
+        post: operations["tma_claim_ad_api_tma_ads__fb_ad_id__claim_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tma/draft-tasks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Tma List Draft Tasks
+         * @description Список DRAFT meta-mutation задач. status != DRAFT → пустой список.
+         */
+        get: operations["tma_list_draft_tasks_api_tma_draft_tasks_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tma/draft-tasks/{task_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Tma Get Draft Task
+         * @description Детали одной DRAFT-задачи. 404 — нет или уже не draft.
+         */
+        get: operations["tma_get_draft_task_api_tma_draft_tasks__task_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tma/draft-tasks/{task_id}/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Tma Confirm Draft Task
+         * @description DRAFT → PENDING. ACL внутри approve_draft_task (owner-or-creator).
+         *
+         *     owner → admin_override (подтверждает любой draft, проверка is_admin внутри).
+         *     recipient → только свой draft (created_by_chat_id == chat_id). Money-критично.
+         */
+        post: operations["tma_confirm_draft_task_api_tma_draft_tasks__task_id__confirm_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tma/draft-tasks/{task_id}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Tma Reject Draft Task
+         * @description Отклонить (cancel) DRAFT. ACL: owner или создатель черновика.
+         *
+         *     recipient может отклонить только свой draft (created_by_chat_id == chat_id);
+         *     owner — любой. Симметрично confirm — чтобы recipient не отменял чужое.
+         */
+        post: operations["tma_reject_draft_task_api_tma_draft_tasks__task_id__reject_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1788,6 +1962,17 @@ export interface components {
             folder_path: string;
             /** Ads */
             ads: components["schemas"]["CampaignAdPlanOut"][];
+        };
+        /**
+         * CampaignAllowlistRequest
+         * @description Тело PATCH /settings/observer/campaigns — allowlist кампаний для am-режима (#3).
+         */
+        CampaignAllowlistRequest: {
+            /**
+             * Campaign Ids
+             * @description Список campaign.id для наблюдения. Пусто — без фильтра по кампаниям.
+             */
+            campaign_ids?: string[];
         };
         /**
          * CampaignFolderItem
@@ -2628,6 +2813,11 @@ export interface components {
              * @description Канал toggle-действий (disable/enable). False — DOM-клик browser-agent, True — Marketing API (pause_ad/activate_ad, точно по ad_id). null — не менять.
              */
             act_via_api?: boolean | null;
+            /**
+             * Campaign Ids
+             * @description Allowlist кампаний для am-режима (#3): фильтр am_tabular по campaign.id IN. null — не менять, [] — очистить (без фильтра по кампаниям).
+             */
+            campaign_ids?: string[] | null;
         };
         /**
          * ObserverSettingsResponse
@@ -2651,6 +2841,8 @@ export interface components {
              * @default false
              */
             act_via_api: boolean;
+            /** Campaign Ids */
+            campaign_ids?: string[];
             /** Warning Percent Of Stop */
             warning_percent_of_stop?: null;
             /** Cpc Warning Percent */
@@ -3110,6 +3302,8 @@ export interface components {
             activation_command: string;
             /** Chat Id */
             chat_id?: string | null;
+            /** Web App Url */
+            web_app_url?: string | null;
         };
         /**
          * TelegramTokenRequest
@@ -3121,6 +3315,203 @@ export interface components {
              * @description Telegram Bot API токен
              */
             bot_token: string;
+        };
+        /**
+         * TelegramWebAppUrlRequest
+         * @description Тело PUT /settings/telegram/web-app-url — URL Mini App (пусто = очистить).
+         */
+        TelegramWebAppUrlRequest: {
+            /**
+             * Web App Url
+             * @description HTTPS-URL Mini App; пусто/None — использовать .env
+             */
+            web_app_url?: string | null;
+        };
+        /**
+         * TmaAdDetailResponse
+         * @description Детальный снимок объявления для AdDetailPage.
+         */
+        TmaAdDetailResponse: {
+            /** Fb Ad Id */
+            fb_ad_id: string;
+            /** Ad Name */
+            ad_name?: string | null;
+            /** Campaign Name */
+            campaign_name?: string | null;
+            /** Adset Name */
+            adset_name?: string | null;
+            /** Offer Code */
+            offer_code?: string | null;
+            /** State */
+            state: string;
+            /** Snooze Until */
+            snooze_until?: string | null;
+            /** Account Id */
+            account_id?: string | null;
+            /**
+             * Can Open In Ads Manager
+             * @default false
+             */
+            can_open_in_ads_manager: boolean;
+            metrics: components["schemas"]["TmaAdMetrics"];
+            /** Recent Alerts */
+            recent_alerts?: components["schemas"]["TmaRecentAlert"][];
+        };
+        /**
+         * TmaAdMetrics
+         * @description Метрики для AdDetailPage (последняя строка ad_metrics). Decimal → str.
+         */
+        TmaAdMetrics: {
+            /** Spend */
+            spend?: string | null;
+            /** Leads */
+            leads?: number | null;
+            /** Deposits */
+            deposits?: number | null;
+            /** Cpc */
+            cpc?: string | null;
+            /** Ctr */
+            ctr?: string | null;
+            /** Registrations */
+            registrations?: number | null;
+            /** Cost Per Lead */
+            cost_per_lead?: string | null;
+        };
+        /**
+         * TmaAuthRequest
+         * @description Тело POST /tma/auth.
+         */
+        TmaAuthRequest: {
+            /**
+             * Init Data
+             * @description Telegram WebApp initData (raw query string)
+             */
+            init_data: string;
+        };
+        /**
+         * TmaAuthResponse
+         * @description Ответ авторизации: сессионный токен + роль recipient'а.
+         */
+        TmaAuthResponse: {
+            /** Token */
+            token: string;
+            /** Role */
+            role: string;
+        };
+        /**
+         * TmaClaimResponse
+         * @description Результат claim (взять под контроль вручную → alert_state='claimed').
+         */
+        TmaClaimResponse: {
+            /** Ok */
+            ok: boolean;
+            /** Alert State */
+            alert_state: string;
+        };
+        /**
+         * TmaDisableRequest
+         * @description Тело POST /tma/ads/{id}/disable.
+         */
+        TmaDisableRequest: {
+            /** Reason */
+            reason?: string | null;
+        };
+        /**
+         * TmaDisableResponse
+         * @description Результат постановки задачи на отключение.
+         */
+        TmaDisableResponse: {
+            /** Ok */
+            ok: boolean;
+            /** Task Id */
+            task_id?: number | null;
+            /** Channel */
+            channel: string;
+            /** Detail */
+            detail: string;
+        };
+        /**
+         * TmaDraftActionResponse
+         * @description Результат confirm/reject draft-задачи.
+         */
+        TmaDraftActionResponse: {
+            /** Ok */
+            ok: boolean;
+            /** Detail */
+            detail: string;
+        };
+        /**
+         * TmaDraftOut
+         * @description Снимок DRAFT meta-mutation задачи для DraftsPage.
+         */
+        TmaDraftOut: {
+            /** Id */
+            id: number;
+            /** Mutation Kind */
+            mutation_kind: string;
+            /** Target Id */
+            target_id?: string | null;
+            /** Ad Account Id */
+            ad_account_id?: string | null;
+            /** Payload */
+            payload?: {
+                [key: string]: unknown;
+            };
+            /** Requested By */
+            requested_by: string;
+            /** Created At */
+            created_at?: string | null;
+        };
+        /**
+         * TmaMeResponse
+         * @description Кто я — для проверки сессии фронтом (под guard).
+         */
+        TmaMeResponse: {
+            /** Telegram User Id */
+            telegram_user_id: number;
+            /** Role */
+            role: string;
+        };
+        /**
+         * TmaRecentAlert
+         * @description Одна запись истории алертов (alert_events) для AdDetailPage.
+         */
+        TmaRecentAlert: {
+            /** Stage */
+            stage: string;
+            /** Created At */
+            created_at?: string | null;
+            /** Reason Title */
+            reason_title?: string | null;
+        };
+        /**
+         * TmaRejectRequest
+         * @description Тело POST /tma/draft-tasks/{id}/reject.
+         */
+        TmaRejectRequest: {
+            /** Reason */
+            reason?: string | null;
+        };
+        /**
+         * TmaSnoozeRequest
+         * @description Тело POST /tma/ads/{id}/snooze.
+         */
+        TmaSnoozeRequest: {
+            /**
+             * Minutes
+             * @description Снуз в минутах (1..1440)
+             */
+            minutes: number;
+        };
+        /**
+         * TmaSnoozeResponse
+         * @description Результат снуза.
+         */
+        TmaSnoozeResponse: {
+            /** Ok */
+            ok: boolean;
+            /** Snoozed Until */
+            snoozed_until: string;
         };
         /**
          * TopCampaignOut
@@ -3159,31 +3550,6 @@ export interface components {
             input?: unknown;
             /** Context */
             ctx?: Record<string, never>;
-        };
-        /**
-         * VisionProfileItem
-         * @description Один профиль Vision из списка.
-         */
-        VisionProfileItem: {
-            /** Id */
-            id: string;
-            /** Name */
-            name: string;
-            /**
-             * Is Active
-             * @default false
-             */
-            is_active: boolean;
-        };
-        /**
-         * VisionProfilesResponse
-         * @description Ответ на GET /vision/profiles.
-         */
-        VisionProfilesResponse: {
-            /** Profiles */
-            profiles: components["schemas"]["VisionProfileItem"][];
-            /** Total */
-            total: number;
         };
         /**
          * VisionReconnectResponse
@@ -4832,6 +5198,39 @@ export interface operations {
             };
         };
     };
+    patch_observer_campaigns_api_settings_observer_campaigns_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CampaignAllowlistRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ObserverSettingsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     post_scan_now_api_settings_observer_scan_now_post: {
         parameters: {
             query?: never;
@@ -4888,6 +5287,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TelegramSettingsResponse"];
+                };
+            };
+        };
+    };
+    put_telegram_web_app_url_api_settings_telegram_web_app_url_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TelegramWebAppUrlRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TelegramSettingsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -5069,14 +5501,18 @@ export interface operations {
             };
         };
     };
-    get_vision_profiles_api_vision_profiles_get: {
+    tma_auth_api_tma_auth_post: {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TmaAuthRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -5084,31 +5520,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["VisionProfilesResponse"];
-                };
-            };
-        };
-    };
-    validate_columns_api_settings_browser_validate_columns_get: {
-        parameters: {
-            query?: {
-                start_if_missing?: boolean;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["TmaAuthResponse"];
                 };
             };
             /** @description Validation Error */
@@ -5122,7 +5534,7 @@ export interface operations {
             };
         };
     };
-    save_column_widths_api_settings_browser_save_column_widths_post: {
+    tma_me_api_tma_me_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -5137,16 +5549,152 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["TmaMeResponse"];
                 };
             };
         };
     };
-    apply_column_widths_api_settings_browser_apply_column_widths_post: {
+    tma_ad_detail_api_tma_ads__fb_ad_id__get: {
         parameters: {
             query?: never;
+            header?: never;
+            path: {
+                fb_ad_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TmaAdDetailResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    tma_disable_ad_api_tma_ads__fb_ad_id__disable_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                fb_ad_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TmaDisableRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TmaDisableResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    tma_snooze_ad_api_tma_ads__fb_ad_id__snooze_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                fb_ad_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TmaSnoozeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TmaSnoozeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    tma_claim_ad_api_tma_ads__fb_ad_id__claim_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                fb_ad_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TmaClaimResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    tma_list_draft_tasks_api_tma_draft_tasks_get: {
+        parameters: {
+            query?: {
+                /** @description Только DRAFT поддерживается */
+                status?: string;
+                /** @description Фильтр по mutation_kind */
+                kind?: string | null;
+                limit?: number;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -5159,9 +5707,113 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["TmaDraftOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    tma_get_draft_task_api_tma_draft_tasks__task_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TmaDraftOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    tma_confirm_draft_task_api_tma_draft_tasks__task_id__confirm_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TmaDraftActionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    tma_reject_draft_task_api_tma_draft_tasks__task_id__reject_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TmaRejectRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TmaDraftActionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

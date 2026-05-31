@@ -38,7 +38,7 @@ function SettingsPage() {
       <PageHeader
         eyebrowNum="05"
         eyebrow="НАСТРОЙКИ"
-        title="Настройки."
+        title="Настройки"
         displayNumber="05"
         subtitle="Observer · Telegram · Vision · Здоровье"
       />

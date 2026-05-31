@@ -92,7 +92,7 @@ function HistoryPage() {
       <PageHeader
         eyebrowNum="04"
         eyebrow="ИСТОРИЯ"
-        title="История."
+        title="История"
         displayNumber="04"
         subtitle={
           <HeaderSubtitle

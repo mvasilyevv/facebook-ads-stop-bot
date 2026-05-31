@@ -35,22 +35,22 @@ export const Route = createFileRoute("/drafts/")({
 /** Доступные типы мутаций для фильтра. */
 const TYPE_OPTIONS = [
   { value: "", label: "Все" },
-  { value: "disable", label: "pause_ad" },
-  { value: "enable", label: "activate_ad" },
-  { value: "meta_api_mutation", label: "meta_api" },
+  { value: "disable", label: "Отключение" },
+  { value: "enable", label: "Включение" },
+  { value: "meta_api_mutation", label: "Действие" },
 ];
 
 /** Генерирует читаемый заголовок карточки по task_type + payload. */
 function buildSummary(row: TaskQueueRow): string {
   switch (row.task_type) {
     case "disable":
-      return `Pause ad ${row.ad_name ?? row.fb_ad_id ?? row.id}`;
+      return `Отключить «${row.ad_name ?? row.fb_ad_id ?? row.id}»`;
     case "enable":
-      return `Activate ad ${row.ad_name ?? row.fb_ad_id ?? row.id}`;
+      return `Включить «${row.ad_name ?? row.fb_ad_id ?? row.id}»`;
     case "meta_api_mutation":
-      return `Meta API mutation · task ${row.id.slice(0, 8)}`;
+      return `Действие с API · задача ${row.id.slice(0, 8)}`;
     default:
-      return `${row.task_type} · task ${row.id.slice(0, 8)}`;
+      return `${row.task_type} · задача ${row.id.slice(0, 8)}`;
   }
 }
 
@@ -59,16 +59,16 @@ function buildDiff(row: TaskQueueRow) {
   const rows = [];
 
   if (row.fb_ad_id) {
-    rows.push({ key: "ad_id", target: row.fb_ad_id });
+    rows.push({ key: "ID объявления", target: row.fb_ad_id });
   }
   if (row.ad_name) {
-    rows.push({ key: "ad_name", target: row.ad_name });
+    rows.push({ key: "Название", target: row.ad_name });
   }
 
   switch (row.task_type) {
     case "disable":
       rows.push({
-        key: "effective_status",
+        key: "Статус",
         current: "ACTIVE",
         target: "PAUSED",
         highlight: true,
@@ -76,7 +76,7 @@ function buildDiff(row: TaskQueueRow) {
       break;
     case "enable":
       rows.push({
-        key: "effective_status",
+        key: "Статус",
         current: "PAUSED",
         target: "ACTIVE",
         highlight: true,
@@ -84,14 +84,14 @@ function buildDiff(row: TaskQueueRow) {
       break;
     default:
       rows.push({
-        key: "mutation",
+        key: "Действие",
         target: row.task_type,
         highlight: true,
       });
   }
 
   if (row.attempt_count > 0) {
-    rows.push({ key: "attempt_count", target: String(row.attempt_count) });
+    rows.push({ key: "Попыток", target: String(row.attempt_count) });
   }
 
   return rows;
@@ -117,11 +117,11 @@ function isExpiringSoon(createdAt: string | null): boolean {
 function mutationLabel(task_type: string): string {
   switch (task_type) {
     case "disable":
-      return "meta_api / pause_ad";
+      return "Отключить объявление";
     case "enable":
-      return "meta_api / activate_ad";
+      return "Включить объявление";
     case "meta_api_mutation":
-      return "meta_api / mutation";
+      return "Действие с API";
     default:
       return task_type;
   }
@@ -238,7 +238,7 @@ function DraftsPage() {
       <PageHeader
         eyebrowNum="03"
         eyebrow="РУЧНОЙ КОНТРОЛЬ · ПОДТВЕРДИТЬ · ВЫПОЛНИТЬ"
-        title="Черновики."
+        title="Черновики"
         displayNumber="03"
         subtitle={subtitle}
       />

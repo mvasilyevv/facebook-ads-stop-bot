@@ -40,6 +40,7 @@ import { SpendChartCard, type RangeKey } from "@/components/dashboard/SpendChart
 import { IncidentsCard } from "@/components/dashboard/IncidentsCard";
 import { RecentEventsCard } from "@/components/dashboard/RecentEventsCard";
 import { TaskQueueCard } from "@/components/dashboard/TaskQueueCard";
+import { ScannerControls } from "@/components/dashboard/ScannerControls";
 
 export const Route = createFileRoute("/")({
   component: DashboardPage,
@@ -85,7 +86,7 @@ function DashboardPage() {
       <PageHeader
         eyebrowNum="01"
         eyebrow="ОБЗОР · НАБЛЮДЕНИЕ · УПРАВЛЕНИЕ"
-        title="Панель."
+        title="Панель"
         displayNumber="01"
         subtitle={<HeaderSubtitle stats={stats} socketStatus={socket.status} pollingFallback={socket.pollingFallback} />}
         action={
@@ -99,6 +100,9 @@ function DashboardPage() {
           </Button>
         }
       />
+
+      {/* 1.5. Управление сканером — важные тумблеры */}
+      <ScannerControls />
 
       {/* 2. KPI strip */}
       <KpiSection
@@ -158,7 +162,7 @@ function DashboardPage() {
       <hr className="border-0 h-px bg-bg-5 my-10" />
 
       {/* 5. Task queues */}
-      <SectionTitle eyebrowNum="05" eyebrow="Outbox" title="Очереди задач" />
+      <SectionTitle eyebrowNum="05" eyebrow="Задачи" title="Очереди задач" />
       <div className="grid grid-cols-2 gap-6">
         <TaskQueueCard
           title="Очередь отключений"
@@ -206,11 +210,11 @@ function HeaderSubtitle({
       <HeaderSep />
       <span>Посл. скан {stats ? formatRelativeTime(stats.last_scan_at) : "—"}</span>
       <HeaderSep />
-      <span>WS: {socketStatus}</span>
+      <span>Связь: {socketStatus === "connected" ? "онлайн" : socketStatus === "polling" ? "автообновление" : "подключение…"}</span>
       {pollingFallback ? (
         <>
           <HeaderSep />
-          <span className="text-warning">polling fallback</span>
+          <span className="text-warning">резервное обновление</span>
         </>
       ) : null}
     </>
