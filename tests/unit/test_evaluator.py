@@ -330,7 +330,7 @@ def test_registration_stage_falls_back_to_spend_without_dep_warning():
     assert result.matched_rule_codes == ["spend_no_dep_range"]
 
 
-# Проверяем что после первого депозита остаётся только депозитная ступень.
+# После депозита остаётся только депозитная ступень; депозит теперь ТОЛЬКО из AdSet.pro.
 def test_deposit_stage_uses_only_spend_with_dep_rule():
     row = _make_row(
         spend=Decimal("4.00"),
@@ -340,13 +340,33 @@ def test_deposit_stage_uses_only_spend_with_dep_rule():
         cost_per_lead=Decimal("0.30"),
         registrations=5,
         cost_per_registration=Decimal("2.00"),
-        deposits=1,
+        deposits=0,  # Meta-депозитов нет — стадию даёт внешний трекер
     )
 
-    result = evaluate_stop_rules(row, _make_ctx())
+    # external_deposits>=1 (AdSet.pro) → deposit_stage
+    result = evaluate_stop_rules(row, _make_ctx(external_deposits=1))
 
     assert result.stage == AlertStage.STOP
     assert result.matched_rule_codes == ["spend_with_dep_range"]
+
+
+# Meta-депозиты (row.deposits) БЕЗ AdSet.pro НЕ переводят в deposit_stage — источник только трекер.
+def test_meta_deposits_alone_do_not_enter_deposit_stage():
+    row = _make_row(
+        spend=Decimal("4.00"),
+        clicks=20,
+        cpc=Decimal("0.05"),
+        leads=5,
+        cost_per_lead=Decimal("0.30"),
+        registrations=5,
+        cost_per_registration=Decimal("2.00"),
+        deposits=3,  # Meta видит «депозиты», но AdSet.pro молчит
+    )
+
+    result = evaluate_stop_rules(row, _make_ctx(external_deposits=0))
+
+    # не deposit_stage → spend_with_dep_range не среди матчей
+    assert "spend_with_dep_range" not in result.matched_rule_codes
 
 
 # Проверяем что депозит без регистрации не переводит объявление на deposit-stage.

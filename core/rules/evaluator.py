@@ -190,8 +190,8 @@ def _evaluate_registration_stage(row: ScannedAdRow, ctx: RuleContext) -> RuleHit
 
 
 def _evaluate_deposit_stage(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | None:
-    # Объединённый счётчик: Meta-видимые депы + внешние от AdSet.pro (закрытие gap).
-    total_deposits = row.deposits + ctx.external_deposits
+    # Депозиты только из AdSet.pro (источник истины); Meta row.deposits не учитываем.
+    total_deposits = ctx.external_deposits
     return _evaluate_spend_range(
         enabled=ctx.spend_with_dep_enabled,
         current_value=_ratio_percent(row.spend, ctx.cpa_amount),
@@ -425,7 +425,8 @@ def _evaluate_guardrail_only(
 
 
 def _evaluate_regs_without_deposits(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | None:
-    if not ctx.regs_no_dep_enabled or row.deposits != 0:
+    # Депозиты только из AdSet.pro: правило молчит, если внешний трекер видел депозит.
+    if not ctx.regs_no_dep_enabled or ctx.external_deposits != 0:
         return None
 
     stop_val = Decimal(ctx.regs_no_dep_stop_count)
@@ -543,14 +544,14 @@ def _has_enable_data_gap(row: ScannedAdRow) -> bool:
 
 
 def _has_confirmed_deposit_signal(row: ScannedAdRow, ctx: RuleContext) -> bool:
-    """Считаем депозит подтверждённым в двух случаях:
-    1) Meta Ads Manager видит регистрацию + депозит (классический сигнал).
-    2) AdSet.pro трекер прислал depositное событие (external_deposits >= 1) — это
-       перекрывает gap, когда Meta не получает conversion event и недооценивает ад.
+    """Депозит подтверждаем ТОЛЬКО по данным трекера AdSet.pro (external_deposits >= 1).
+
+    Источник истины по депозитам — один: AdSet.pro (решение пользователя). Meta-видимые
+    «депозиты» (row.deposits — из колонки «Результат» / pixel purchase) НЕ доверяем и в
+    решениях по депозитам не учитываем. Следствие: объявление входит в deposit_stage (и под
+    защиту от no-dep guardrail'ов) только когда AdSet.pro прислал depositное событие.
     """
-    direct = row.registrations >= 1 and row.deposits >= 1
-    external = ctx.external_deposits >= 1
-    return direct or external
+    return ctx.external_deposits >= 1
 
 
 def _has_safe_enable_recovery_signal(row: ScannedAdRow) -> bool:

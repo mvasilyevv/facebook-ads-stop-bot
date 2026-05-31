@@ -1,15 +1,18 @@
 # -*- coding: utf-8 -*-
-"""Бэкап критичных секретов из legacy-схемы перед DROP.
+"""Бэкап критичных секретов из текущей схемы (Vision/Telegram токены).
 
-Зачем: после wipe БД нужно восстановить Vision X-Token и Telegram bot token,
-не вводя их руками. Они зашифрованы Fernet с ключом из .env (ENCRYPTION_KEY) —
-ключ останется тот же, поэтому encrypted blob'ы можно вставить как есть в новые
-таблицы vision_config / telegram_config.
+Зачем: integration-тесты на shared БД и wipe могут затереть config-таблицы —
+после этого нужно восстановить Vision X-Token и Telegram bot token, не вводя их
+руками. Они зашифрованы Fernet с ключом из .env (ENCRYPTION_KEY) — ключ остаётся
+тот же, поэтому encrypted blob'ы можно вставить обратно как есть.
+
+ВАЖНО (урок): таблицы называются vision_config / telegram_config / observer_config
+(после DB-redesign), НЕ legacy *_settings — иначе бэкап молча пустой.
 
 Стратегия:
-1. Читаем сырые rows из vision_settings, telegram_settings, observer_settings.
+1. Читаем сырые rows из vision_config, telegram_config, observer_config.
 2. Сохраняем в data/secrets_backup_<timestamp>.json (НЕ в git!).
-3. restore_secrets.py (после apply миграции 0001) вставляет в новые таблицы.
+3. restore_secrets.py вставляет обратно (ON CONFLICT DO UPDATE).
 
 ENCRYPTION_KEY сам по себе НЕ бэкапится — он живёт в .env, его не трогаем.
 Если ключ потеряется — blob'ы станут бесполезны (но это уже забота .env-бэкапа).
@@ -109,15 +112,15 @@ async def main() -> int:
 
     backup: dict[str, Any] = {
         "backup_at": datetime.now(timezone.utc).isoformat(),
-        "source_schema_version": "legacy",
+        "source_schema_version": "current",
         "warning": "Содержит encrypted blob'ы. ENCRYPTION_KEY из .env обязателен для расшифровки.",
         "tables": {},
     }
 
     tables_to_backup = [
-        "vision_settings",
-        "telegram_settings",
-        "observer_settings",
+        "vision_config",
+        "telegram_config",
+        "observer_config",
     ]
 
     async with engine.connect() as conn:

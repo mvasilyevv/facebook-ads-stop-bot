@@ -5,5 +5,6 @@
   fb_agent:creator:record_start → StartRecording
   fb_agent:creator:record_stop  → StopRecording + INSERT в creator_plans (is_archived=false)
 
-Полная TG-команда /record_plan — отдельный TODO для следующего раунда.
+TG-команды старта/остановки записи (`/record_plan`, `/stop_record`, `/plans`)
+реализованы в `core/telegram/handlers/creator.py` и публикуют в эти же каналы.
 """

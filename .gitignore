@@ -64,3 +64,10 @@ data/secrets_backup_*.json
 data/ad_library_media/
 data/cleanup_audit/
 
+
+# Куки/сессия разведочного браузера (расходный FB-аккаунт) — не коммитить
+data/recon_profile/
+
+# Медиа конкурентов из Ad Library (референсы, не в репо)
+data/competitor_refs/
+.am_capture/

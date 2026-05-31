@@ -127,10 +127,9 @@ class RuleContext:
     guardrail_min_impressions: int = 10
 
     # Внешние депозиты — от трекера AdSet.pro (см. core.adset_pro.ingest).
-    # Закрывают gap attribution: Meta Ads Manager может не видеть депозит (если
-    # event не пришёл к Meta), но реальный FTD/baddep уже есть → нет смысла стопать.
-    # При external_deposits >= 1 объявление трактуется так же, как если бы
-    # row.deposits >= 1 — переходит в deposit_stage и не попадает под guardrail.
+    # ЕДИНСТВЕННЫЙ источник истины по депозитам для правил (решение пользователя):
+    # Meta-видимые row.deposits в deposit-логике НЕ учитываются. При external_deposits >= 1
+    # объявление переходит в deposit_stage и не попадает под no-dep guardrail.
     external_deposits: int = 0
 
     # Предвычисленные пороги (init=False — заполняются в __post_init__)

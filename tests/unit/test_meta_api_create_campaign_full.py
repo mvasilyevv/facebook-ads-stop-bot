@@ -268,12 +268,14 @@ async def test_create_campaign_rejects_unknown_objective() -> None:
         await CreateCampaignHandler().execute(client, payload)
 
 
-# AdSet без бюджета — ValueError.
+# AdSet без бюджета РАЗРЕШЁН при CBO (бюджет + bid_strategy на кампании).
 @pytest.mark.asyncio
-async def test_create_campaign_rejects_adset_without_budget() -> None:
-    client = _make_client()
+async def test_create_campaign_allows_adset_without_budget_cbo() -> None:
+    client = _make_client(_batch_success_response())
     params = _valid_params()
     del params["adset"]["daily_budget_cents"]
+    params["campaign"]["daily_budget_cents"] = 2099
+    params["campaign"]["bid_strategy"] = "LOWEST_COST_WITHOUT_CAP"
     payload = MetaMutationPayload(
         mutation_kind="create_campaign",
         target_id="new",
@@ -281,8 +283,46 @@ async def test_create_campaign_rejects_adset_without_budget() -> None:
         ad_account_id="act_999",
     )
 
-    with pytest.raises(ValueError, match="daily_budget_cents или lifetime_budget_cents"):
-        await CreateCampaignHandler().execute(client, payload)
+    result = await CreateCampaignHandler().execute(client, payload)
+    assert result["success"] is True
+    batch = json.loads(client.execute_graph_call.call_args.kwargs["query_params"]["batch"])
+    # бюджет и стратегия — на кампании (CBO), адсет идёт без бюджета
+    assert "daily_budget" in batch[0]["body"]
+    assert "bid_strategy" in batch[0]["body"]
+    assert "daily_budget" not in batch[1]["body"]
+    assert "lifetime_budget" not in batch[1]["body"]
+
+
+# Новые опциональные поля: url_tags, enhancements, destination_type, attribution_spec, start_time.
+@pytest.mark.asyncio
+async def test_create_campaign_includes_url_tags_enhancements_destination() -> None:
+    client = _make_client(_batch_success_response())
+    params = _valid_params()
+    del params["adset"]["daily_budget_cents"]
+    params["campaign"]["daily_budget_cents"] = 2099
+    params["campaign"]["bid_strategy"] = "LOWEST_COST_WITHOUT_CAP"
+    params["adset"]["destination_type"] = "WEBSITE"
+    params["adset"]["attribution_spec"] = [{"event_type": "CLICK_THROUGH", "window_days": 1}]
+    params["adset"]["start_time"] = "2026-05-31T00:00:00-0700"
+    params["creative"]["url_tags"] = "sub2=MV&sub3=KE_CR2_CR005"
+    params["creative"]["degrees_of_freedom_spec"] = {
+        "creative_features_spec": {"standard_enhancements": {"enroll_status": "OPT_IN"}}
+    }
+    payload = MetaMutationPayload(
+        mutation_kind="create_campaign",
+        target_id="new",
+        params=params,
+        ad_account_id="act_999",
+    )
+
+    result = await CreateCampaignHandler().execute(client, payload)
+    assert result["success"] is True
+    batch = json.loads(client.execute_graph_call.call_args.kwargs["query_params"]["batch"])
+    assert "destination_type" in batch[1]["body"]
+    assert "attribution_spec" in batch[1]["body"]
+    assert "start_time" in batch[1]["body"]
+    assert "url_tags" in batch[2]["body"]
+    assert "degrees_of_freedom_spec" in batch[2]["body"]
 
 
 # AdSet с двумя бюджетами одновременно — ValueError.

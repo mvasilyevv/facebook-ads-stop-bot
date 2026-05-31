@@ -1,17 +1,13 @@
 # -*- coding: utf-8 -*-
-"""Восстановление секретов в новую схему после wipe и apply 0001_initial.
+"""Восстановление секретов после wipe config-таблиц (напр. integration-тестами).
 
-Читает data/secrets_backup_<timestamp>.json и вставляет в новые таблицы:
-- vision_settings.x_token_encrypted → vision_config.x_token_encrypted
-- vision_settings.profile_id        → vision_config.profile_id
-- vision_settings.column_widths_json → vision_config.column_widths_json
-- telegram_settings.bot_token_encrypted → telegram_config.bot_token_encrypted
-- telegram_settings.chat_id              → telegram_config.chat_id
-- telegram_settings.forum_*_thread_id    → telegram_config.forum_*_thread_id
+Читает data/secrets_backup_<timestamp>.json и вставляет обратно (ON CONFLICT DO UPDATE):
+- vision_config.x_token_encrypted, profile_id
+- telegram_config.bot_token_encrypted, chat_id, forum_*_thread_id
 
-Остальные поля (observer_settings) НЕ переносим — там runtime-данные которые
-в новой схеме либо вынесены в Redis (worker_status, heartbeat), либо
-устанавливаются заново через UI (interval, install_cost).
+observer_config НЕ переносим — там не секреты (owner_tag, interval), а runtime
+вынесен в Redis. Бэкап старого формата (legacy *_settings ключи) тоже читается —
+см. fallback в main().
 
 Запуск (после apply миграции 0001):
     python scripts/restore_secrets.py [path_to_backup.json]
@@ -84,12 +80,11 @@ def _latest_backup() -> Path:
 
 async def _restore_vision(conn: Any, vision_rows: list[dict[str, Any]]) -> None:
     if not vision_rows:
-        logger.warning("Нет vision_settings в backup — skip")
+        logger.warning("Нет vision-данных в backup — skip")
         return
     row = vision_rows[0]
     x_token_encrypted = row.get("x_token_encrypted")
     profile_id = row.get("profile_id") or ""
-    column_widths_json = row.get("column_widths_json") or {}
 
     if not x_token_encrypted:
         logger.warning("vision_settings.x_token_encrypted пустой — пропуск")
@@ -99,20 +94,18 @@ async def _restore_vision(conn: Any, vision_rows: list[dict[str, Any]]) -> None:
         text(
             """
             INSERT INTO vision_config
-                (x_token_encrypted, profile_id, column_widths_json)
+                (x_token_encrypted, profile_id)
             VALUES
-                (:x_token, :profile_id, CAST(:cw AS JSONB))
+                (:x_token, :profile_id)
             ON CONFLICT (singleton_key) DO UPDATE
                 SET x_token_encrypted = EXCLUDED.x_token_encrypted,
                     profile_id = EXCLUDED.profile_id,
-                    column_widths_json = EXCLUDED.column_widths_json,
                     updated_at = NOW()
             """
         ),
         {
             "x_token": x_token_encrypted,
             "profile_id": profile_id,
-            "cw": json.dumps(column_widths_json),
         },
     )
     logger.info("vision_config: восстановлен (profile_id=%s)", profile_id)
@@ -120,7 +113,7 @@ async def _restore_vision(conn: Any, vision_rows: list[dict[str, Any]]) -> None:
 
 async def _restore_telegram(conn: Any, telegram_rows: list[dict[str, Any]]) -> None:
     if not telegram_rows:
-        logger.warning("Нет telegram_settings в backup — skip")
+        logger.warning("Нет telegram-данных в backup — skip")
         return
     row = telegram_rows[0]
     bot_token_encrypted = row.get("bot_token_encrypted")
@@ -185,8 +178,13 @@ async def main(backup_path_arg: str | None = None) -> int:
     engine = create_async_engine(db_url, echo=False)
 
     async with engine.begin() as conn:
-        await _restore_vision(conn, tables.get("vision_settings", []))
-        await _restore_telegram(conn, tables.get("telegram_settings", []))
+        # Текущие имена (*_config); fallback на legacy *_settings ради старых бэкапов.
+        await _restore_vision(
+            conn, tables.get("vision_config") or tables.get("vision_settings", [])
+        )
+        await _restore_telegram(
+            conn, tables.get("telegram_config") or tables.get("telegram_settings", [])
+        )
 
     await engine.dispose()
     logger.info("Restore completed. Vision + Telegram токены на месте.")

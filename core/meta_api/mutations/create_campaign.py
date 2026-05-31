@@ -329,6 +329,11 @@ class CreateCampaignHandler:
                 lifetime, field_name="campaign.lifetime_budget_cents"
             )
 
+        # bid_strategy нужен при CBO (бюджет на кампании), напр. LOWEST_COST_WITHOUT_CAP.
+        bid_strategy = spec.get("bid_strategy")
+        if bid_strategy is not None:
+            body["bid_strategy"] = str(bid_strategy)
+
         return body
 
     @classmethod
@@ -348,12 +353,9 @@ class CreateCampaignHandler:
             "status": status,
         }
 
+        # Бюджет на адсете опционален: при CBO (бюджет на кампании) адсет идёт БЕЗ бюджета.
         daily = spec.get("daily_budget_cents")
         lifetime = spec.get("lifetime_budget_cents")
-        if daily is None and lifetime is None:
-            raise MutationValidationError(
-                "adset: укажи daily_budget_cents или lifetime_budget_cents"
-            )
         if daily is not None and lifetime is not None:
             raise MutationValidationError(
                 "adset: укажи не больше одного из daily_budget_cents/lifetime_budget_cents"
@@ -387,6 +389,20 @@ class CreateCampaignHandler:
                     f"adset.promoted_object: ожидается dict, получено {type(promoted).__name__}"
                 )
             body["promoted_object"] = promoted
+
+        # destination_type (WEBSITE/APP/...) для conversion-кампаний на сайт.
+        destination_type = spec.get("destination_type")
+        if destination_type is not None:
+            body["destination_type"] = str(destination_type)
+
+        # attribution_spec — окно атрибуции, напр. [{"event_type":"CLICK_THROUGH","window_days":1}].
+        attribution_spec = spec.get("attribution_spec")
+        if attribution_spec is not None:
+            if not isinstance(attribution_spec, list):
+                raise MutationValidationError(
+                    f"adset.attribution_spec: ожидается list, получено {type(attribution_spec).__name__}"
+                )
+            body["attribution_spec"] = attribution_spec
 
         return body
 
@@ -435,6 +451,22 @@ class CreateCampaignHandler:
                     f"creative.video_id: ожидается str, получено {video_id!r}"
                 )
             body["video_id"] = video_id
+
+        # url_tags — query-параметры трекинга (поле «Параметры URL» в UI), напр.
+        # "sub2=MV&sub3={{ad.name}}&...". Кладутся ОТДЕЛЬНО от link, иначе поле пустое.
+        url_tags = spec.get("url_tags")
+        if url_tags is not None:
+            body["url_tags"] = str(url_tags)
+
+        # degrees_of_freedom_spec — Standard Enhancements («Оптимизация текста для человека»):
+        # {"creative_features_spec": {"standard_enhancements": {"enroll_status": "OPT_IN"}}}.
+        dof = spec.get("degrees_of_freedom_spec")
+        if dof is not None:
+            if not isinstance(dof, dict):
+                raise MutationValidationError(
+                    f"creative.degrees_of_freedom_spec: ожидается dict, получено {type(dof).__name__}"
+                )
+            body["degrees_of_freedom_spec"] = dof
 
         return body
 

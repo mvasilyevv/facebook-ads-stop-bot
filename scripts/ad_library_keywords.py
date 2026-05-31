@@ -29,6 +29,40 @@ UNIVERSAL_SLOT_BRANDS: list[str] = [
     "Lucky Jet",
 ]
 
+# ─── Вариации Chicken Road (наш слот) для поиска в Ad Library ──────────────
+# Льют под разными именами + маскировки под модерацию/Google Play.
+# Research 2026-05-30: оригинал InOut Games + клоны (Turbo Games "Chicken Route"
+# официально на MSport Kenya; Coin Machine Gaming "Clucking Cross"); live FB
+# (Moyo = "Chicken Cross 2 / Farm Road 2", Google Play games.joker.chicken.go).
+# Приоритет для KE — первые 5.
+CHICKEN_ROAD_VARIATIONS: list[str] = [
+    "Chicken Road",  # оригинал (InOut Games) — шире, чем "...2"
+    "Chicken Cross",  # маскировка (Moyo вживую)
+    "Farm Road",  # маскировка (Moyo вживую)
+    "Chicken Route",  # клон Turbo Games — официально на MSport Kenya
+    "Chicken Game",  # родовое название категории
+    "Clucking Cross",  # клон Coin Machine Gaming
+    "Chicken Crash",  # жанровое (Galaxsys)
+    "Chicken Run",
+    "Chicken Dash",
+    "Rooster Run",
+    "Cricket Road",  # сезонная адаптация (Cricket World Cup)
+]
+
+# ─── Смежные краш-игры — НЕ Chicken Road (для отсева из выдачи) ────────────
+CRASH_GAME_SIBLINGS: list[str] = [
+    "Aviator",
+    "JetX",
+    "Spaceman",
+    "Lucky Jet",
+    "Mines",
+    "Plinko",
+    "Balloon",
+    "Aviatrix",
+    "Crash X",
+    "Aero",
+]
+
 # ─── Keywords по GEO ──────────────────────────────────────────────────────
 GEO_KEYWORDS: dict[str, list[str]] = {
     # Кения — узкие gambling-специфичные фразы.
@@ -36,9 +70,24 @@ GEO_KEYWORDS: dict[str, list[str]] = {
     # фразы которые используют ТОЛЬКО casino/букмекеры в Кении.
     #
     # Источники: traffhub.media + adligator (Africa gambling), наш PoC v3 на KE.
+    # KE расширен по research 2026-05-30 (3 агента: методология + локаль).
+    # Принцип прежний: узкие фразы, которые в KE используют ТОЛЬКО casino/букмекеры.
+    # ВАЖНО: с 2025 в KE Gambling Control Act жёстко режет gambling-рекламу
+    # (~-95% спенда), прямых конкурентов в Ad Library мало — часть ушла в TG/серые.
     "KE": [
-        "M-Pesa bonus",  # M-Pesa = главная платёжка KE для casino/букмекеров
-        # Расширим до 3-5 после валидации одного запроса
+        # Платёжки — главный гео-маркер (почти всегда = casino/букмекер в KE)
+        "M-Pesa bonus",
+        "M-Pesa withdrawal",
+        "withdraw to M-Pesa",
+        "Airtel Money",
+        # Суахили / сленг
+        "Cheza",  # играй (mCHEZA, ChezaCash)
+        "Bonasi",  # бонус
+        "Omoka",  # разбогатеть (Odibets "OMOKA NA EURO")
+        "10 bob",  # минимальный вход (сленг KES)
+        # Локальные краш-бренды
+        "Aviator",  # доминирующий краш KE
+        "Pakakumi",  # локальный краш-аналог
     ],
     "GH": ["Aviator", "Plinko", "SportyBet", "Bet9ja", "BetWay"],
     "CD": ["Aviator", "Plinko", "Premier Bet", "1xBet", "casino en ligne"],
@@ -102,6 +151,14 @@ _BOOKIE_BRANDS = {
     "bantubet",
     "elephant bet",
     "placard",
+    # KE-специфичные (research 2026-05-30)
+    "chezacash",
+    "mcheza",
+    "crashkali",
+    "pakakumi",  # "Kenya's Favorite Crash Game"
+    "winpesa",
+    "betlion",
+    "betwinner",
     # Турция
     "mostbet",
     "pin-up",
@@ -173,11 +230,23 @@ _LOCAL_GAMBLING = {
     "puntata",
     "giri gratis",
     "bonus benvenuto",
-    # Swahili
+    # Swahili (расширено research 2026-05-30: реальные термины из KE-крео/сайтов)
     "bahati",
     "shinda",
     "bonasi",
     "mchezo",
+    "cheza",  # играй
+    "omoka",  # разбогатеть (Odibets "OMOKA NA EURO")
+    "kamari",  # азартная игра
+    "jaza",  # пополнить/залить ("jaza akaunti")
+    "ushindi",  # выигрыш
+    "malipo",  # выплата
+    "usikose",  # не пропусти
+    # Mobile money KE/Африка — gambling-маркер ТОЛЬКО в связке (один +3 < threshold 5,
+    # легитимную «send money» рекламу не зацепит; чинит false-negative на M-Pesa-угле)
+    "m-pesa",
+    "mpesa",
+    "airtel money",
 }
 
 _EN_GAMBLING_GENERIC = {

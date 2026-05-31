@@ -10,8 +10,9 @@ Pubsub-triggered воркер. Принимает события на запис
 - pubsub_loop: подписка на оба канала, диспетчер
 - graceful: SIGTERM/SIGINT → stop event → закрыть pubsub, gRPC, engine
 
-Полная TG-интеграция (/record_plan в bot_handler) — отдельный TODO.
-Текущий триггер pubsub достаточен для интеграционных тестов.
+TG-интеграция (/record_plan, /stop_record, /plans) реализована в
+`core/telegram/handlers/creator.py` и публикует в те же каналы record_start/stop.
+Pubsub остаётся транспортом: recorder-consumer поднимается отдельным процессом.
 """
 
 from __future__ import annotations
