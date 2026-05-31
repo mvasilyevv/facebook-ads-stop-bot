@@ -1,0 +1,138 @@
+# Creative Registry — схема и контракт
+
+Модульная база креативов: **хуки → креативы → результат**. Source of truth — YAML-файлы
+в этой папке (версионируются в git). Скрипт `scripts/creative_report.py` джойнит реестр
+с трекером (`adsetpro_postback_events`) и показывает, какие хуки/англы реально приносят
+депозиты.
+
+> Принцип: знание без цифр — мнение. Поэтому каждый креатив несёт `code`, который летит
+> в трекер (`sub3`), а угол адсета — `sub6`. Петля замыкается автоматически.
+
+## Структура файлов
+
+```
+docs/creatives/
+  _schema.md              # этот файл
+  hooks.yaml              # реестр хуков-атомов (переиспользуемые единицы)
+  geo/<GEO>/geo.yaml      # гео-уровень: рынок, находки, ссылки на geo-хуки
+  geo/<GEO>/slots/<SLOT>.yaml  # слот: идеи, референсы, креативы
+```
+
+Новый слот → новый `geo/<GEO>/slots/<SLOT>.yaml`. Новое гео → копируем папку `geo/<GEO>/`.
+
+## Сущности и поля
+
+### hook (в `hooks.yaml`, список под ключом `hooks`)
+Атом-хук. Переиспользуется по `id` из гео и слотов.
+
+| Поле | Тип | Описание |
+|------|-----|----------|
+| `id` | str | уникальный slug, напр. `ke_mpesa_payout` |
+| `level` | enum | `geo` (общий для гео) / `slot` (специфичен) / `visual` (исполнение в картинке) / `text` (формулировка в primary_text/sub6) |
+| `geo` | str? | код гео, если хук привязан (`KE`) |
+| `slot` | str? | код слота, если привязан (`CR2`) |
+| `text` | str | человекочитаемая суть хука |
+| `type` | str | `payment_trust` / `objection_kill` / `social_proof` / `urgency` / `localization` / `speed` / `format` |
+| `verdict` | enum | `winner` / `works` / `testing` / `weak` / `dead` / `unknown` |
+| `evidence` | str? | цифры/источник вердикта (без цифр — `unknown`) |
+
+### geo (в `geo/<GEO>/geo.yaml`)
+
+| Поле | Тип | Описание |
+|------|-----|----------|
+| `code` | str | `KE` |
+| `name` | str | `Kenya` |
+| `languages` | list | `[en, sw]` |
+| `geo_hooks` | list[str] | id хуков уровня `geo`, проверенных на рынке |
+| `market_findings` | list[finding] | рыночные инсайты (см. ниже) |
+| `production_profile` | dict | КАК генерить под гео (стиль/качество/тон) — см. ниже |
+
+### production_profile (внутри geo) — как генерить под гео
+Анализируется **один раз до генерации**, переиспользуется всеми слотами/батчами (чтобы не
+повторять анализ). Источник — web-research (мультиязычный, вкл. русский) + наблюдение
+конкурентов + наши метрики.
+
+| Поле | Тип | Описание |
+|------|-----|----------|
+| `tier` | int? | 1/2/3 — влияет на стиль (Tier-3 → народное > вылизанное) |
+| `visual_quality` | str | требуемое качество/стиль картинки |
+| `format_bias` | str | какой формат заходит (нативный пост / UGC / видео / баннер) |
+| `typage` | str | типаж людей и окружение |
+| `language_on_image` | str | язык текста на картинке |
+| `findings` | list[finding] | инсайты профиля (с источником: web/observation/metric) |
+
+### finding (внутри geo / slot)
+| Поле | Тип | Описание |
+|------|-----|----------|
+| `date` | str | `2026-05-30` |
+| `note` | str | суть находки |
+| `metric` | str? | цифры-подтверждение |
+| `verdict` | enum | как у hook |
+
+### slot (в `geo/<GEO>/slots/<SLOT>.yaml`)
+
+| Поле | Тип | Описание |
+|------|-----|----------|
+| `code` | str | `CR2` |
+| `geo` | str | `KE` |
+| `offer_code` | str | код оффера в БД (`KE_CR2`) — связь с `offers` |
+| `mechanic` | str | механика слота (crash-game) |
+| `ideas` | list[idea] | англы под слот |
+| `references` | list[reference] | свои + конкуренты |
+| `creatives` | list[creative] | готовые/в работе |
+| `findings` | list[finding] | находки уровня слота |
+
+### idea (внутри slot)
+| Поле | Тип | Описание |
+|------|-----|----------|
+| `id` | str | `cr2_proof_post` |
+| `desc` | str | описание угла |
+| `type` | str | `mechanic_show` / `social_proof` / ... |
+| `hooks` | list[str] | id хуков, которые реализует идея |
+
+### reference (внутри slot)
+| Поле | Тип | Описание |
+|------|-----|----------|
+| `id` | str | `ref_arcade_chicken` |
+| `source` | enum | `own` / `ad_library` |
+| `advertiser` | str? | для конкурентов |
+| `format` | enum | `static` / `video` / `ugc_text` |
+| `file` | str? | путь к локальному медиа (свои/скачанные) |
+| `why` | str | что цепляет / чему учимся |
+| `long_active_days` | int? | сколько живёт в Ad Library (= проверено временем) |
+
+### creative (внутри slot) — ключевая сущность петли
+| Поле | Тип | Описание |
+|------|-----|----------|
+| `code` | str | **`KE_CR2_CR005`** — летит в трекер как `sub3`, джойн-ключ |
+| `format` | enum | `static` / `video` |
+| `file` | str? | путь к готовому файлу/папке uniquify |
+| `visual_hooks` | list[str] | id хуков уровня `visual`, что в картинке |
+| `text_hook` | str? | id хука уровня `text` (если зашит в креатив) |
+| `angle` | str? | человекочитаемый угол = `sub6` адсета (для разреза) |
+| `inspired_by` | str? | id референса-вдохновения |
+| `status` | enum | `draft` / `ready` / `live` / `paused` / `archived` |
+| `verdict` | enum | как у hook |
+| `note` | str? | заметка (метрики/почему сдох) |
+
+## Как замыкается петля (`creative_report.py`)
+
+1. Читает реестр: все `creative.code` + их `visual_hooks`/`text_hook`/`angle`.
+2. Берёт `adsetpro_postback_events` (`raw_json->>'sub3'` = code, `raw_json->>'sub6'` = угол),
+   фильтр `event_type IN (ftd, redep, baddep)`, `is_duplicate = false`.
+3. **Нормализует двойной URL-энкодинг** sub-полей (`M-Pesa+angle` == `M-Pesa angle`).
+4. Агрегирует:
+   - **leaderboard креативов** — депозиты/revenue per `code`;
+   - **ranked хуки** — депозиты раскидываются по `visual_hooks`/`text_hook` каждого креатива;
+   - **ranked англы** — по `sub6`.
+5. Печатает отчёт (или `--write` обновляет `_report.md`).
+
+Пока постбэков нет — отчёт пустой, но реестр (хуки/идеи/референсы) уже полезен как библиотека.
+
+## Правила ведения
+
+- Вердикт `winner`/`works`/`dead` ставим **только с цифрами** в `evidence`/`metric`.
+  Без цифр — `unknown`/`testing`.
+- `code` креатива неизменен после залива (это джойн-ключ с трекером).
+- geo-хуки не дублируем в слотах — ссылаемся по `id`.
+- gambling-whitelist: формулировки про деньги/вывод/бонусы НЕ смягчаем (см. `creative_kb.md` §0).

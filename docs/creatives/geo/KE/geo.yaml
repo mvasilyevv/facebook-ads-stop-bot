@@ -1,0 +1,61 @@
+# Гео-уровень: Кения. geo_hooks — id из hooks.yaml, проверенные на рынке KE в целом
+# (переиспользуются всеми слотами гео). См. docs/creatives/_schema.md
+
+code: KE
+name: Kenya
+languages: [en, sw]   # английский (кенийский разговорный) + суахили-вставки
+
+# Хуки уровня гео — годятся под любой слот в KE
+geo_hooks:
+  - ke_mpesa_payout      # winner — деньги придут на M-Pesa
+  - ke_low_entry_153     # works  — старт 153 KES
+  - ke_swahili_touch     # works  — суахили + 🇰🇪
+  - ke_instant_cashout   # testing — вывод за минуты
+
+market_findings:
+  - date: 2026-05-30
+    note: "M-Pesa — ключевой триггер доверия на рынке. Сначала продаём «деньги реально приходят на твою M-Pesa», потом игру/выигрыш."
+    metric: "Из ~600 кликов KE_CR2 в мае депозиты дал ровно один угол — Payment Trust / M-Pesa."
+    verdict: winner
+
+  - date: 2026-05-30
+    note: "Исполнение важнее угла: нативный FB-пост бьёт фото-mockup и direct-баннер при том же оффере."
+    metric: "CR005 (native post) 2 FTD vs CR003 (phone mockup) 0 рег / 80 кликов; 4 баннера 224 клика / 0 рег."
+    verdict: works
+
+  - date: 2026-05-30
+    note: "Суахили-локализация в деле — подтверждено независимо конкурентами (Moyo «Cheza sasa», Mini Game Corner)."
+    verdict: works
+
+  - date: 2026-05-30
+    note: "Кросс-гео перенос механики реален: Arcade Chicken World крутит KE-версию (M-Pesa) и NG-версию одного концепта."
+    verdict: testing
+
+  - date: 2026-05-30
+    note: "Технический: двойной URL-энкодинг макросов в ext_sub6 — один угол приходит как «M-Pesa angle / M-Pesa+angle / m-pesa+angle». При чтении статистики суммировать (creative_report.py нормализует автоматически)."
+    verdict: works
+
+# Платёжный контекст рынка (для генерации креативов)
+payment:
+  primary: M-Pesa
+  min_deposit_local: "153 KES"
+  notes: "Mobile-first, M-Pesa доминирует. Низкий средний чек."
+
+# Производственный профиль: КАК генерить под это гео (стиль/качество/тон).
+# Анализируется ОДИН раз до генерации, переиспользуется всеми слотами. См. SOP.md R8.
+production_profile:
+  tier: 3
+  visual_quality: "народное / authentic — НЕ вылизанное. На Tier-3 идеально-глянцевая картинка читается как реклама и хуже конвертит."
+  format_bias: "нативный пост / UGC > студийный direct-баннер"
+  typage: "локальный (кенийцы), бытовое окружение (boda-boda, киоск M-Pesa, matatu)"
+  language_on_image: "english (кенийский разговорный) + суахили-вставки (Wueh, Ni safi)"
+  findings:
+    - date: 2026-05-30
+      note: "Народная подача (нативный пост-отзыв) бьёт вылизанный direct-баннер при одном оффере."
+      metric: "CR005 (native) 2 FTD vs 4 глянцевых баннера 224 клика / 0 рег."
+      source: observation
+      verdict: works
+    - date: TODO
+      note: "Отдельный web-research (мультиязычный, вкл. русский) по визуальным предпочтениям Tier-3 / KE — добрать до следующей генерации."
+      source: web
+      verdict: unknown
