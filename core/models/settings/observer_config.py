@@ -45,10 +45,13 @@ class ObserverConfig(UUIDPrimaryKey, SingletonMixin, Timestamp, Base):
         nullable=False,
         server_default="30.0",
     )
+    # Дефолт FALSE: чистая установка НЕ начинает наблюдение за кабинетом без явного
+    # включения (тумблер «Сканирование» на Панели). Защита от случайного скана чужого
+    # кабинета сразу после деплоя. Существующий singleton миграцией не трогается.
     is_scanning_enabled: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,
-        server_default="true",
+        server_default="false",
     )
     auto_enable_recommendations: Mapped[bool] = mapped_column(
         Boolean,
