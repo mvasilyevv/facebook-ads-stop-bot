@@ -1,0 +1,77 @@
+# Гео-уровень: Гана. market_profile — research под рынок GH (SOP R0.5), НЕ копия KE.
+# geo_hooks — id из hooks.yaml (переносы из KE = гипотезы testing, пока нет GH-FTD).
+# См. docs/creatives/_schema.md
+
+code: GH
+name: Ghana
+languages: [en, tw]   # офиц. English + Twi (Akan, lingua franca); Pidgin/Ga/Ewe/Hausa в миксе
+
+# ЧТО за рынок (research 2026-05-31, web). Обоснования — в market_findings.
+market_profile:
+  language_for_ads: >
+    English (ганский разговорный) + Pidgin-вставки (GhaPE, ~20% населения, активен в рекламе/
+    песнях/соцсетях у молодёжи) + Twi-вставки. Слова: Chale/Charley (дружище), Abeg (плиз),
+    Ɛyɛ (ок / я в порядке), Akwaaba (добро пожаловать), Medaase (спасибо), Wahala (проблема).
+    NB: Pidgin гендерно-окрашен — женщины реже используют публично (стигма); учитывать персонажа.
+  currency: "GHS / GH₵ (Ghana Cedi)"
+  min_deposit_local: "GH¢10 (по нашему хуку low-entry GH_CR2_CR006; уточнить под welcome-bonus оффера)"
+  payment_operators:
+    - "MTN MoMo — ДОМИНАНТ ~73–90% (19.3M юзеров, эффект lock-in). ЯДРО payment-trust (аналог M-Pesa на KE)."
+    - "Telecel Cash (бывш. Vodafone Cash) ~23% — сильна в городах (Accra, Kumasi)."
+    - "AirtelTigo Money (AT Money) ~3% — север, price-sensitive."
+    - "Масштаб: GH¢518B/мес транзакций (дек 2025), ~74M аккаунтов — mobile-money-first рынок."
+  celebrities:
+    - "Музыка: Black Sherif (#1 most-streamed 2024–2025, кумир молодёжи), King Promise (Artiste of Year TGMA 2025), Sarkodie (рэп Twi+English), Shatta Wale (король Google Trends), Stonebwoy (afrodancehall)."
+    - "Футбол (= нац. идентичность): Mohammed Kudus (Tottenham), Antoine Semenyo (Bournemouth), Iñaki Williams. Black Stars на ЧМ-2026 — хайп-якорь."
+    - "⚠️ Thomas Partey — НЕ использовать: rape charges в UK (токсичен для бренда)."
+  cultural_notes: >
+    Футбол = национальная идентичность и главная ставка (GPL: Hearts of Oak, Asante Kotoko;
+    EPL/UCL/AFCON). 70.68% молодёжи вовлечены в гэмблинг (4-е в Африке после KE/NG/ZA); драйвер —
+    молодёжная безработица (ставка как доп. доход) + MoMo + футбол. Aviator (crash-game, как CR2)
+    массово продвигают SportyBet/MSport. betPawa «Bet Small, Win BIG» — low-entry культурно заходит.
+
+# Хуки уровня гео — ПЕРЕНОС из KE как гипотезы (testing; GH-FTD нет, кроме слабого low-entry).
+geo_hooks:
+  - gh_momo_payout      # testing — деньги придут на твой MTN MoMo (аналог ke_mpesa_payout)
+  - gh_low_entry        # testing — старт от GH¢10 (1 FTD на GH_CR2_CR006, мало данных)
+  - gh_pidgin_touch     # testing — Pidgin/Twi-вставки + 🇬🇭
+
+market_findings:
+  - date: 2026-05-31
+    note: "MTN MoMo доминирует рынок. Payment-trust строить на MTN MoMo — прямой аналог M-Pesa-инсайта KE."
+    metric: "19.3M MoMo-юзеров MTN (~73–90% доли); GH¢518B/мес (дек 2025). Источник: web-research."
+    verdict: testing
+  - date: 2026-05-31
+    note: "Aviator (crash-game, как CR2) массово продвигается SportyBet/MSport. Для оффера-агрегатора Aviator — сильный кандидат (популярнее, больше простора для крео)."
+    metric: "SportyBet/MSport фичерят Aviator в casino; футбол + crash — топ-форматы. Источник: web."
+    verdict: testing
+  - date: 2026-05-31
+    note: "Футбол — нац. идентичность, ЧМ-2026 близко. Black Stars/Kudus/Semenyo — культурные якоря крео."
+    verdict: testing
+  - date: 2026-05-31
+    note: "Язык рекламы: English + Pidgin (Chale/Abeg) + Twi. Pidgin гендерно-окрашен — учитывать персонажа."
+    verdict: testing
+
+# Платёжный контекст рынка (для генерации креативов)
+payment:
+  primary: "MTN MoMo"
+  secondary: ["Telecel Cash", "AirtelTigo Money"]
+  min_deposit_local: "GH¢10 (уточнить под welcome-bonus)"
+  notes: "Mobile-money-first, MTN MoMo доминирует. Instant deposit/withdrawal — ядро trust."
+
+# КАК генерить под гео — добирается наблюдением GH-конкурентов (Ad Library) + web. SOP R8.
+production_profile:
+  tier: 3
+  visual_quality: "народное / authentic — НЕ вылизанное (Tier-3, как KE: глянец читается как реклама). Финализировать наблюдением GH-конкурентов."
+  format_bias: "гипотеза (перенос KE): нативный пост / UGC > direct-баннер. Проверить разведкой GH."
+  typage: "локальный (ганцы), бытовое окружение; футбольный контекст (Black Stars/ЧМ-2026) как якорь."
+  language_on_image: "English (ганский) + Pidgin/Twi-вставки (Chale, Ɛyɛ) + 🇬🇭"
+  findings:
+    - date: 2026-05-31
+      note: "Стартовые гипотезы перенесены из KE (близкий Tier-3 mobile-money рынок). Подтвердить GH-разведкой и GH-FTD."
+      source: web
+      verdict: unknown
+    - date: TODO
+      note: "Разведка Ad Library GH (CR2/Aviator/chicken road) → визуальные паттерны → финализировать production_profile."
+      source: observation
+      verdict: unknown

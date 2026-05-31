@@ -36,6 +36,31 @@ hooks:
     verdict: testing
     evidence: "Конкурент Arcade Chicken World строит текст на «instant M-PESA». У нас в проде через адсет 1.2/C6 — ждём FTD."
 
+  # ---------------- GEO-хуки GH (перенос из KE = гипотезы, GH-FTD пока нет) --
+  - id: gh_momo_payout
+    level: geo
+    geo: GH
+    text: "Деньги реально придут на твой MTN MoMo (гарантия выплаты на доминирующий кошелёк)"
+    type: payment_trust
+    verdict: testing
+    evidence: "Перенос ke_mpesa_payout: MTN MoMo доминирует GH (~73–90%, 19.3M юзеров). Гипотеза — нет GH-FTD."
+
+  - id: gh_low_entry
+    level: geo
+    geo: GH
+    text: "Старт от GH¢10 (низкий порог входа)"
+    type: objection_kill
+    verdict: testing
+    evidence: "GH_CR2_CR006: 1 FTD из 9 кликов (трекер 30d) — мало данных. betPawa «Bet Small Win BIG» подтверждает low-entry культурно."
+
+  - id: gh_pidgin_touch
+    level: geo
+    geo: GH
+    text: "Pidgin/Twi-вставки: Chale, Abeg, Ɛyɛ, Wahala + флаг 🇬🇭"
+    type: localization
+    verdict: testing
+    evidence: "GhaPE ~20% населения, активен в рекламе/соцсетях у молодёжи. Аналог ke_swahili_touch. NB: Pidgin гендерно-окрашен."
+
   # ---------------- TEXT-хуки (угол адсета = sub6, primary_text) -------------
   - id: txt_payment_trust
     level: text
