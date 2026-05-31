@@ -45,7 +45,7 @@ const WORKER_LABELS: Record<string, string> = {
   tracker_aggregator: "Агрегатор трекера",
   health_watchdog: "Монитор здоровья",
   digest: "Дайджест",
-  enable_recommendation: "Реко включения",
+  enable_reco: "Реко включения",
 };
 
 type ConfirmTarget = "observer" | "disable_worker" | null;
