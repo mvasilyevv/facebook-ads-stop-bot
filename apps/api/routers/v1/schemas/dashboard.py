@@ -63,8 +63,9 @@ class AdSnapshotOut(BaseModel):
     delivery_status: str | None = None
     meta_ad_status: str | None = None
 
-    # Активные правила для отрисовки на AdsPage; пока не вытаскиваются из
-    # последнего AlertEvent, оставлены как пустые массивы для совместимости.
+    # Коды сработавших правил из последнего AlertEvent (по стадии: stop/warning).
+    # Заполняются в core/dashboard/snapshot.py::_build_row_dict из LATERAL last_ev;
+    # default [] — если для ad'а ещё нет AlertEvent.
     stop_rule_codes: list[str] = Field(default_factory=list)
     warning_rule_codes: list[str] = Field(default_factory=list)
 

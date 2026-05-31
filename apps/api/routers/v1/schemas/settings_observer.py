@@ -27,6 +27,8 @@ class ObserverSettingsResponse(BaseModel):
     owner_campaign_tag: str | None = None
     # Канал toggle-действий: False — DOM-клик, True — Marketing API (pause_ad/activate_ad).
     act_via_api: bool = False
+    # Allowlist кампаний для am-режима (#3): фильтр am_tabular по campaign.id. Пусто — без фильтра.
+    campaign_ids: list[str] = Field(default_factory=list)
 
     # Поля, перенесённые в OfferRule: возвращаем null для стабильного shape.
     warning_percent_of_stop: None = None
@@ -62,6 +64,12 @@ class ObserverSettingsPutRequest(BaseModel):
         description="Канал toggle-действий (disable/enable). False — DOM-клик browser-agent, "
         "True — Marketing API (pause_ad/activate_ad, точно по ad_id). null — не менять.",
     )
+    # Allowlist кампаний для am-режима. None — НЕ трогаем; [] — очистить (без фильтра).
+    campaign_ids: list[str] | None = Field(
+        default=None,
+        description="Allowlist кампаний для am-режима (#3): фильтр am_tabular по campaign.id IN. "
+        "null — не менять, [] — очистить (без фильтра по кампаниям).",
+    )
 
 
 class ScanningToggleRequest(BaseModel):
@@ -80,6 +88,15 @@ class ActViaApiToggleRequest(BaseModel):
     """Тело PATCH /settings/observer/act-via-api."""
 
     enabled: bool
+
+
+class CampaignAllowlistRequest(BaseModel):
+    """Тело PATCH /settings/observer/campaigns — allowlist кампаний для am-режима (#3)."""
+
+    campaign_ids: list[str] = Field(
+        default_factory=list,
+        description="Список campaign.id для наблюдения. Пусто — без фильтра по кампаниям.",
+    )
 
 
 class ScanNowResponse(BaseModel):

@@ -5,9 +5,6 @@ Endpoints под /api (благодаря auto-discovery с prefix="/api"):
 - GET  /settings/vision   — VisionConfig + runtime-поля из Redis
 - PUT  /settings/vision   — обновить x_token / profile_id
 - POST /vision/reconnect  — gRPC ReconnectBrowser к browser-agent
-- GET  /vision/profiles   — список Vision-профилей (gRPC; 501 если нет метода)
-
-Примечание: ListProfiles не определён в текущем proto — возвращается 501.
 """
 
 from __future__ import annotations
@@ -22,7 +19,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.deps import DepEngine, DepRedis, DepSettings
 from apps.api.routers.v1.schemas.settings_vision import (
-    VisionProfilesResponse,
     VisionReconnectResponse,
     VisionSettingsResponse,
     VisionSettingsUpdateRequest,
@@ -35,92 +31,8 @@ logger = logging.getLogger(__name__)
 # Роутер для /settings/vision
 _settings_router = APIRouter(prefix="/settings/vision", tags=["settings"])
 
-# Роутер для /vision (reconnect, profiles)
+# Роутер для /vision (reconnect)
 _vision_router = APIRouter(prefix="/vision", tags=["settings"])
-
-# Роутер для /settings/browser (validate-columns, save/apply column widths).
-# validate-columns: проксируем реальный gRPC ValidateColumns из ScannerService.
-# save/apply-column-widths: CaptureColumnWidths/ApplyColumnWidths есть в proto,
-# но Python-клиент их не реализует → 501 честно.
-_browser_router = APIRouter(prefix="/settings/browser", tags=["settings"])
-
-
-@_browser_router.get("/validate-columns")
-async def validate_columns(
-    settings: DepSettings,
-    start_if_missing: bool = False,
-) -> dict[str, object]:
-    """Валидация DOM-колонок Ads Manager через gRPC ScannerService.ValidateColumns.
-
-    Проксирует реальный вызов BrowserAgentClient.validate_columns() к browser-agent.
-    При недоступности gRPC (RpcError, circuit-breaker) → 503, чтобы фронт показал
-    ошибку «проверка недоступна», а не ложный зелёный «всё ок».
-    """
-    import grpc
-
-    client = BrowserAgentClient(
-        BrowserAgentConfig(
-            vision_x_token=settings.vision_x_token,
-            vision_api_url=settings.vision_api_url,
-            vision_profile_id=settings.vision_profile_id,
-        )
-    )
-    try:
-        await client.start()
-        result = await client.validate_columns()
-    except grpc.RpcError as exc:
-        raise HTTPException(
-            status_code=503,
-            detail=f"gRPC browser-agent недоступен (validate-columns): {exc}",
-        ) from exc
-    except Exception as exc:
-        raise HTTPException(
-            status_code=503,
-            detail=f"Ошибка валидации колонок: {exc}",
-        ) from exc
-    finally:
-        try:
-            await client.close()
-        except Exception:
-            pass
-
-    return {
-        "valid": result.get("valid", False),
-        "missing_columns": result.get("missing_columns", []),
-        "extra_columns": result.get("found_columns", []),
-        "error_message": result.get("error_message") or None,
-        "started": False,
-    }
-
-
-@_browser_router.post("/save-column-widths")
-async def save_column_widths() -> dict[str, object]:
-    """CaptureColumnWidths есть в scanner.proto, но Python-клиент его не реализует.
-
-    Возвращает 501 Not Implemented — честный сигнал фронту вместо молчаливого noop.
-    """
-    raise HTTPException(
-        status_code=501,
-        detail=(
-            "CaptureColumnWidths не реализован в Python gRPC-клиенте. "
-            "Добавить capture_column_widths() в BrowserAgentClient для полной поддержки."
-        ),
-    )
-
-
-@_browser_router.post("/apply-column-widths")
-async def apply_column_widths() -> dict[str, object]:
-    """ApplyColumnWidths есть в scanner.proto, но Python-клиент его не реализует.
-
-    Возвращает 501 Not Implemented — честный сигнал фронту вместо молчаливого noop.
-    """
-    raise HTTPException(
-        status_code=501,
-        detail=(
-            "ApplyColumnWidths не реализован в Python gRPC-клиенте. "
-            "Добавить apply_column_widths() в BrowserAgentClient для полной поддержки."
-        ),
-    )
 
 
 # Redis-ключ heartbeat browser-agent.
@@ -138,6 +50,7 @@ class _VisionSnapshot:
 
     x_token_encrypted: str | None
     profile_id: str | None
+    auto_restart_on_missing_cdp: bool
 
 
 def _snapshot(config: VisionConfig | None) -> _VisionSnapshot | None:
@@ -147,6 +60,7 @@ def _snapshot(config: VisionConfig | None) -> _VisionSnapshot | None:
     return _VisionSnapshot(
         x_token_encrypted=config.x_token_encrypted,
         profile_id=config.profile_id,
+        auto_restart_on_missing_cdp=bool(config.auto_restart_on_missing_cdp),
     )
 
 
@@ -225,8 +139,7 @@ async def get_vision_settings(
     return VisionSettingsResponse(
         has_token=has_token,
         profile_id=profile_id,
-        # TODO: когда добавим колонку auto_restart_on_missing_cdp в vision_config — читать из БД.
-        auto_restart_on_missing_cdp=True,
+        auto_restart_on_missing_cdp=snap.auto_restart_on_missing_cdp if snap else True,
         runtime_status=runtime["runtime_status"],  # type: ignore[arg-type]
         runtime_status_message=runtime["runtime_status_message"],  # type: ignore[arg-type]
         cdp_ready=bool(runtime["cdp_ready"]),
@@ -240,10 +153,11 @@ async def put_vision_settings(
     engine: DepEngine,
     redis: DepRedis,
 ) -> VisionSettingsResponse:
-    """Обновляет x_token и/или profile_id в VisionConfig singleton.
+    """Обновляет x_token / profile_id / флаг self-heal в VisionConfig singleton.
 
     Если x_token передан — шифрует и сохраняет.
     Если profile_id передан — обновляет.
+    Если auto_restart_on_missing_cdp передан — выставляет флаг (None = не трогать).
     Если строки ещё нет — создаёт с server-defaults.
     """
     from core.crypto import encrypt
@@ -261,6 +175,8 @@ async def put_vision_settings(
             config.x_token_encrypted = encrypt(body.x_token) if body.x_token else ""
         if body.profile_id is not None:
             config.profile_id = body.profile_id
+        if body.auto_restart_on_missing_cdp is not None:
+            config.auto_restart_on_missing_cdp = body.auto_restart_on_missing_cdp
 
         await session.flush()
         await session.refresh(config)
@@ -277,7 +193,7 @@ async def put_vision_settings(
     return VisionSettingsResponse(
         has_token=has_token,
         profile_id=profile_id_val,
-        auto_restart_on_missing_cdp=True,
+        auto_restart_on_missing_cdp=snap.auto_restart_on_missing_cdp if snap else True,
         runtime_status=runtime["runtime_status"],  # type: ignore[arg-type]
         runtime_status_message=runtime["runtime_status_message"],  # type: ignore[arg-type]
         cdp_ready=bool(runtime["cdp_ready"]),
@@ -286,7 +202,7 @@ async def put_vision_settings(
 
 
 # ---------------------------------------------------------------------------
-# /vision/reconnect и /vision/profiles
+# /vision/reconnect
 # ---------------------------------------------------------------------------
 
 
@@ -351,29 +267,11 @@ async def post_vision_reconnect(
     return VisionReconnectResponse(status="reconnected")
 
 
-@_vision_router.get("/profiles", response_model=VisionProfilesResponse)
-async def get_vision_profiles() -> VisionProfilesResponse:
-    """Возвращает список Vision-профилей через gRPC.
-
-    TODO: ListProfiles не определён в текущем proto (browser_session.proto).
-    Когда метод будет добавлен — реализовать получение списка профилей.
-    Сейчас всегда возвращает 501 NotImplemented.
-    """
-    raise HTTPException(
-        status_code=501,
-        detail=(
-            "Метод ListProfiles не реализован в текущей версии proto browser-agent. "
-            "TODO: добавить ListProfiles в browser_session.proto и реализовать здесь."
-        ),
-    )
-
-
 # ---------------------------------------------------------------------------
 # Экспорт единого router
 # ---------------------------------------------------------------------------
 
-# auto-discovery ищет атрибут `router` в модуле — объединяем оба sub-router'а.
+# auto-discovery ищет атрибут `router` в модуле — объединяем sub-router'ы.
 router = APIRouter(tags=["settings"])
 router.include_router(_settings_router)
 router.include_router(_vision_router)
-router.include_router(_browser_router)

@@ -293,10 +293,21 @@ class BrowserAgentClient:
         do_refresh: bool = True,
         reset_scroll_first: bool = True,
         settle_delay_seconds: float = 3.0,
+        campaign_ids: list[str] | None = None,
+        owner_tag: str | None = None,
+        auto_recover_page: bool = True,
     ) -> AsyncIterator[ScanProgress | ScanResult]:
-        """Запустить полный цикл сканирования.
+        """Запустить полный цикл сканирования (am_tabular — единственный источник).
 
         Стримит ScanProgress для каждого прохода, в конце возвращает ScanResult.
+
+        campaign_ids: allowlist кампаний для am-режима (#3); None → без фильтра по кампаниям.
+        owner_tag: если campaign_ids пуст, am сам резолвит campaign.id по owner_tag (тянет
+            только свой скоуп, а не весь кабинет). None/"" → без резолва.
+        auto_recover_page: self-heal Layer 2 — если browser-agent не смог сам переоткрыть
+            primary-вкладку Ads Manager (браузер/CDP мертвы) и вернул «страница недоступна»,
+            один раз эскалируем reconnect_browser() и повторяем скан. Gated флагом
+            vision_config.auto_restart_on_missing_cdp (прокидывает observer).
         """
         # Проверяем circuit-breaker до начала стриминга (включая переход OPEN → HALF_OPEN)
         try:
@@ -306,6 +317,7 @@ class BrowserAgentClient:
 
         yielded_any = False
         recovered_missing_session = False
+        recovered_missing_page = False
 
         while True:
             await self.ensure_browser_session()
@@ -315,6 +327,8 @@ class BrowserAgentClient:
                 do_refresh=do_refresh,
                 reset_scroll_first=reset_scroll_first,
                 settle_delay_seconds=settle_delay_seconds,
+                campaign_ids=campaign_ids or [],
+                owner_tag=owner_tag or "",
             )
 
             stream = None
@@ -379,85 +393,35 @@ class BrowserAgentClient:
                     recovered_missing_session = True
                     await self._recover_missing_browser_session(exc, "сканирования")
                     continue
-                # Фиксируем транспортную ошибку в circuit-breaker (не сессионные сбои)
-                if not _is_missing_browser_session_error(exc):
+                # Primary-вкладка недоступна и Layer 1 (browser-agent) не справился —
+                # эскалируем reconnect один раз и повторяем скан (gated auto_recover_page).
+                if (
+                    auto_recover_page
+                    and not yielded_any
+                    and not recovered_missing_page
+                    and _is_missing_primary_page_error(exc)
+                ):
+                    recovered_missing_page = True
+                    logger.warning(
+                        "scan: primary-страница недоступна → reconnect browser + повтор скана"
+                    )
+                    try:
+                        await self.reconnect_browser()
+                    except Exception:
+                        logger.exception("scan: reconnect после page-unavailable не удался")
+                        await self._circuit_breaker.record_failure(exc)
+                        raise
+                    continue
+                # Фиксируем транспортную ошибку в circuit-breaker (не сессионные/page сбои:
+                # page-unavailable — это живой browser-agent без вкладки, не транспортный отказ).
+                if not _is_missing_browser_session_error(
+                    exc
+                ) and not _is_missing_primary_page_error(exc):
                     await self._circuit_breaker.record_failure(exc)
                 raise
             finally:
                 if stream is not None and not completed and hasattr(stream, "cancel"):
                     stream.cancel()
-
-    async def refresh_table(self) -> bool:
-        """Нажать кнопку «Refresh» в Ads Manager."""
-        resp = await self._call_with_session_recovery(
-            "обновления таблицы",
-            lambda: self._scanner_stub.RefreshTable(
-                scanner_pb2.RefreshTableRequest(session_id=self._session_id or "")
-            ),
-        )
-        return resp.refreshed
-
-    async def scroll_and_parse(
-        self,
-        scroll_amount: int = 320,
-        wait_for_stable: bool = True,
-    ) -> tuple[list, dict]:
-        """Прокрутить таблицу вниз и вернуть видимые строки с метриками скролла."""
-        resp = await self._call_with_session_recovery(
-            "скролла и парсинга таблицы",
-            lambda: self._scanner_stub.ScrollAndParse(
-                scanner_pb2.ScrollAndParseRequest(
-                    session_id=self._session_id or "",
-                    scroll_amount=scroll_amount,
-                    wait_for_stable=wait_for_stable,
-                    stable_timeout_seconds=2.0,
-                )
-            ),
-        )
-        return (
-            [_proto_to_row(row) for row in resp.new_rows],
-            {
-                "found": resp.scroll_metrics.found,
-                "scroll_top": resp.scroll_metrics.scroll_top,
-                "max_scroll_top": resp.scroll_metrics.max_scroll_top,
-                "at_bottom": resp.scroll_metrics.at_bottom,
-            },
-        )
-
-    async def get_scroll_metrics(self) -> dict:
-        """Получить метрики скролла таблицы."""
-        resp = await self._call_with_session_recovery(
-            "чтения метрик скролла",
-            lambda: self._scanner_stub.GetScrollMetrics(
-                scanner_pb2.GetScrollMetricsRequest(session_id=self._session_id or "")
-            ),
-        )
-        return {
-            "found": resp.metrics.found,
-            "scroll_top": resp.metrics.scroll_top,
-            "max_scroll_top": resp.metrics.max_scroll_top,
-            "at_bottom": resp.metrics.at_bottom,
-        }
-
-    async def reset_scroll(self) -> int:
-        """Сбросить скролл таблицы наверх."""
-        resp = await self._call_with_session_recovery(
-            "сброса скролла",
-            lambda: self._scanner_stub.ResetScroll(
-                scanner_pb2.ResetScrollRequest(session_id=self._session_id or "")
-            ),
-        )
-        return resp.containers_reset
-
-    async def get_visible_row_ids(self) -> list[str]:
-        """Получить ID видимых строк."""
-        resp = await self._call_with_session_recovery(
-            "чтения видимых строк",
-            lambda: self._scanner_stub.GetVisibleRowIds(
-                scanner_pb2.GetVisibleRowIdsRequest(session_id=self._session_id or "")
-            ),
-        )
-        return list(resp.row_ids)
 
     async def find_toggle_cell(
         self,
@@ -565,25 +529,6 @@ class BrowserAgentClient:
             "reads_matched": resp.reads_matched,
         }
 
-    async def validate_columns(self) -> dict:
-        """Проверить наличие всех необходимых колонок в таблице Ads Manager.
-
-        Returns:
-            dict с полями valid, missing_columns, found_columns, error_message.
-        """
-        resp = await self._call_with_session_recovery(
-            "валидации колонок",
-            lambda: self._scanner_stub.ValidateColumns(
-                scanner_pb2.ValidateColumnsRequest(session_id=self._session_id or "")
-            ),
-        )
-        return {
-            "valid": resp.valid,
-            "missing_columns": list(resp.missing_columns),
-            "found_columns": list(resp.found_columns),
-            "error_message": resp.error_message,
-        }
-
     async def start_recording(self, plan_name: str) -> tuple[bool, str]:
         """Запустить запись плана через recorder в браузере."""
         resp = await self._call_with_session_recovery(
@@ -678,22 +623,44 @@ class BrowserAgentClient:
 
 
 def _is_missing_browser_session_error(exc: Exception) -> bool:
-    """Проверяет, что browser-agent потерял локальную сессию после рестарта процесса."""
-    code = None
-    code_getter = getattr(exc, "code", None)
-    if callable(code_getter):
-        try:
-            code = code_getter()
-        except Exception:
-            code = None
+    """Проверяет, что browser-agent потерял локальную сессию после рестарта процесса.
 
-    if code != grpc.StatusCode.NOT_FOUND:
-        return False
+    Сессия теряется двумя путями (после рестарта browser_agent старый session_id протух):
+    1) stream error-event в RunScanCycle — browser-agent шлёт ScanError, клиент
+       превращает его в RuntimeError('Сессия <id> не найдена') БЕЗ gRPC-кода.
+       (Симметрично _is_missing_primary_page_error — оба распознаём по тексту.)
+    2) gRPC-статус NOT_FOUND на unary-вызовах — code() == NOT_FOUND.
 
+    Раньше требовался ТОЛЬКО код NOT_FOUND → путь (1) не распознавался, и observer
+    залипал на протухшей сессии после рестарта browser_agent (монитор стоял до ручного
+    рестарта observer). Теперь сначала маркеры текста, затем код как доп. триггер.
+    """
     message = _rpc_error_detail(exc).casefold()
     has_session_marker = "сесс" in message or "session" in message
     has_missing_marker = "не найден" in message or "not found" in message
-    return has_session_marker and has_missing_marker
+    if has_session_marker and has_missing_marker:
+        return True
+
+    # Фолбэк: gRPC-статус NOT_FOUND (unary) — даже если текст пустой.
+    code_getter = getattr(exc, "code", None)
+    if callable(code_getter):
+        try:
+            return code_getter() == grpc.StatusCode.NOT_FOUND
+        except Exception:
+            return False
+    return False
+
+
+def _is_missing_primary_page_error(exc: Exception) -> bool:
+    """Browser-agent сообщил, что primary-вкладка Ads Manager недоступна.
+
+    Это НЕ потеря gRPC-сессии (та — NOT_FOUND), а ошибка скан-стрима: browser-agent шлёт
+    ScanError(event.error) с текстом 'Основная страница браузера недоступна', клиент
+    превращает его в RuntimeError. Layer 1 (browser-agent) сам пытается переоткрыть вкладку;
+    если не смог (браузер/CDP мертвы) — ошибка долетает сюда и клиент эскалирует reconnect.
+    """
+    message = _rpc_error_detail(exc).casefold()
+    return "страница браузера недоступна" in message
 
 
 def _rpc_error_detail(exc: Exception) -> str:

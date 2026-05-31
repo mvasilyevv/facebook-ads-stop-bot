@@ -204,3 +204,31 @@ async def test_scan_now_returns_503_when_redis_unavailable():
 
     assert resp.status_code == 503
     assert "Redis" in resp.json()["detail"]
+
+
+# GET отдаёт пустой campaign_ids по умолчанию; scan_source выпилен (am_tabular — единственный).
+@pytest.mark.asyncio
+async def test_get_returns_campaign_ids_default(
+    pg_engine, fake_redis_client, clean_observer_config
+):
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.get("/api/settings/observer")
+    data = resp.json()
+    assert "scan_source" not in data  # поле выпилено вместе с DOM-сканером
+    assert data["campaign_ids"] == []
+
+
+# PATCH /campaigns задаёт allowlist кампаний для am-режима (#3).
+@pytest.mark.asyncio
+async def test_patch_campaigns_sets_allowlist(pg_engine, fake_redis_client, clean_observer_config):
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        r = await ac.patch(
+            "/api/settings/observer/campaigns",
+            json={"campaign_ids": ["120244801453970044", "120244530626090044"]},
+        )
+        assert r.status_code == 200
+        assert r.json()["campaign_ids"] == ["120244801453970044", "120244530626090044"]
+        g = await ac.get("/api/settings/observer")
+        assert len(g.json()["campaign_ids"]) == 2

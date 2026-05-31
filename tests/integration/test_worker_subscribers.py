@@ -9,8 +9,9 @@
   РЕАЛЬНЫЙ main_loop (с заглушкой gate/db), проверяем что воркер зарегистрировал
   правильные каналы. Это контракт «воркер связал канал↔handler» (не тавтология:
   если воркер перепутает каналы, spy поймает).
-- cabinet_day pubsub-плечо: честный skip+TODO, т.к. handler существует в коде
-  но не делает ничего (TODO: archive-логика). Тест зафиксирован через маркер.
+- cabinet_day pubsub-плечо: handler делает форс-рескан нового дня (тот же механизм,
+  что scan-now). Покрыто двумя тестами: регистрация канала (spy на register) и
+  полный E2E (реальный publish → наблюдаемый повторный scan-цикл через fake gate).
 """
 
 from __future__ import annotations
@@ -273,17 +274,15 @@ async def test_observer_registers_restart_channel(monkeypatch) -> None:
 # ====================== Тесты cabinet_day ======================
 
 
-# cabinet_day pubsub-плечо: handler зарегистрирован, но логика — TODO (архивирование).
+# cabinet_day pubsub-плечо: handler зарегистрирован (контракт publisher↔subscriber).
 @pytest.mark.asyncio
 @pytest.mark.timeout(8)
 async def test_observer_registers_cabinet_day_channel(monkeypatch) -> None:
     """Реальный main_loop observer регистрирует CHANNEL_CABINET_DAY → handler.
 
-    Контракт: воркер слушает cabinet_day. Реакция — TODO: archive-логика.
-    Сейчас handler только логирует (см. apps/observer_worker/main.py _on_cabinet_day).
-
-    Тест проверяет что канал зарегистрирован — если в будущем добавится archive-логика,
-    E2E-тест должен дополнить этот до полного контракта с реальным publish+effect.
+    Контракт: воркер слушает cabinet_day. Реакция handler'а — форс-рескан нового дня
+    (см. apps/observer_worker/main.py _on_cabinet_day). Полный E2E реакции — в
+    test_observer_cabinet_day_triggers_immediate_rescan ниже.
     """
     from apps.observer_worker.main import CHANNEL_CABINET_DAY, main_loop
 
@@ -346,9 +345,134 @@ async def test_observer_registers_cabinet_day_channel(monkeypatch) -> None:
         "Если канал удалён — удалить и этот тест."
     )
 
-    # TODO (cabinet_day E2E): когда archive-логика реализована (_on_cabinet_day перестанет
-    # быть no-op), добавить полный E2E тест: реальный publish → проверить что archiving
-    # выполнен (например запись в cabinet_day_archives). Текущий handler только логирует.
+
+# ====================== E2E: cabinet_day → немедленный рескан ======================
+
+
+async def _wait_until(pred, *, timeout_s: float, interval: float = 0.05) -> bool:
+    """Поллит pred() до True или истечения timeout_s. Возвращает финальное значение pred()."""
+    loop = asyncio.get_running_loop()
+    t0 = loop.time()
+    while loop.time() - t0 < timeout_s:
+        if pred():
+            return True
+        await asyncio.sleep(interval)
+    return pred()
+
+
+class _CountingGate:
+    """Fake ScannerGate: считает вызовы run_one_scan, возвращает пустой скан (rows=[])."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.owner_tags: list[str | None] = []
+
+    async def run_one_scan(self, campaign_ids=None, owner_tag=None, auto_recover_page=True):
+        from apps.observer_worker.main import ScanCycleOutput
+
+        self.calls += 1
+        self.owner_tags.append(owner_tag)
+        return ScanCycleOutput(rows=[], empty_reason="test: пустой скан")
+
+
+# E2E: реальный publish cabinet_day прерывает длинный sleep observer'а → повторный скан.
+@pytest.mark.asyncio
+@pytest.mark.timeout(20)
+async def test_observer_cabinet_day_triggers_immediate_rescan(pg_engine, monkeypatch) -> None:
+    """Реальный main_loop observer: publish cabinet_day → немедленный второй scan-цикл.
+
+    Не тавтология: interval=30s, поэтому штатный второй цикл за окно теста НЕ наступит —
+    рост gate.calls доказывает именно прерывание sleep сигналом cabinet_day. Если handler
+    снова станет no-op, gate.calls не вырастет и тест упадёт. Owner-scoping проверяется
+    заодно: owner_tag='MV' доходит до gate.run_one_scan (ничего чужого не сканируем).
+    """
+    from sqlalchemy import text
+
+    from apps.observer_worker.main import CHANNEL_CABINET_DAY, main_loop
+
+    # Большой interval — естественный второй цикл за время теста не наступит.
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text(
+                """
+                INSERT INTO observer_config
+                    (singleton_key, is_scanning_enabled, interval_seconds, jitter_seconds,
+                     owner_campaign_tag)
+                VALUES ('default', TRUE, 30, 0, 'MV')
+                ON CONFLICT (singleton_key) DO UPDATE
+                SET is_scanning_enabled = TRUE, interval_seconds = 30, jitter_seconds = 0,
+                    owner_campaign_tag = 'MV'
+                """
+            )
+        )
+        baseline = (
+            await conn.execute(text("SELECT COALESCE(MAX(scan_id), 0) FROM scan_runs"))
+        ).scalar()
+
+    # main_loop создаёт свой engine через _get_database_url — направляем на тестовую БД.
+    monkeypatch.setattr(
+        "apps.observer_worker.main._get_database_url",
+        lambda: pg_engine.url.render_as_string(hide_password=False),
+    )
+
+    redis_client = _make_fake_redis()
+    gate = _CountingGate()
+
+    async def _gate_factory():
+        return gate
+
+    async def _redis_factory():
+        return redis_client
+
+    async def _tg_factory():
+        return None
+
+    loop_task = asyncio.create_task(
+        main_loop(
+            gate_factory=_gate_factory,
+            redis_factory=_redis_factory,
+            tg_client_factory=_tg_factory,
+        )
+    )
+
+    try:
+        # Ждём первый штатный цикл.
+        assert await _wait_until(lambda: gate.calls >= 1, timeout_s=8.0), (
+            "observer не сделал первый scan-цикл"
+        )
+        first_calls = gate.calls
+
+        # Публикуем cabinet_day — должно прервать длинный sleep и запустить рескан.
+        await redis_client.publish(CHANNEL_CABINET_DAY, json.dumps({"event": "new_cabinet_day"}))
+
+        # Второй цикл должен наступить в окне, многократно меньшем interval(30s).
+        got_rescan = await _wait_until(lambda: gate.calls > first_calls, timeout_s=4.0)
+        assert got_rescan, (
+            f"cabinet_day не вызвал немедленный рескан: gate.calls={gate.calls} "
+            f"(было {first_calls}) — sleep не прерван"
+        )
+
+        # Owner-scoping: owner_tag='MV' дошёл до сканера на каждом цикле.
+        assert gate.owner_tags and all(t == "MV" for t in gate.owner_tags), (
+            f"owner_tag должен быть 'MV' на всех сканах, получено: {gate.owner_tags}"
+        )
+    finally:
+        loop_task.cancel()
+        try:
+            await loop_task
+        except (asyncio.CancelledError, Exception):
+            pass
+        await redis_client.aclose()
+        # Чистим scan_runs теста + возвращаем observer_config к дефолтам
+        # (owner_campaign_tag='MV', interval 90/15 — прод/фикстуры ждут эти значения).
+        async with pg_engine.begin() as conn:
+            await conn.execute(text("DELETE FROM scan_runs WHERE scan_id > :b"), {"b": baseline})
+            await conn.execute(
+                text(
+                    "UPDATE observer_config SET interval_seconds = 90, jitter_seconds = 15, "
+                    "owner_campaign_tag = 'MV' WHERE singleton_key = 'default'"
+                )
+            )
 
 
 # ====================== Тест: handler_exception не ломает loop ======================

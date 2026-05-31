@@ -185,7 +185,9 @@ async def start_new_cabinet_day(engine: DepEngine, redis: DepRedis) -> StartCabi
     2. INSERT в cabinet_day_archives.
     3. Публикуем {event: new_cabinet_day, ...} в Redis канал fb_agent:observer:cabinet_day.
 
-    Subscriber в worker'е НЕ реализован — отдельная задача.
+    observer_worker подписан на этот канал (main.py::_on_cabinet_day) и делает
+    форс-рескан нового дня. Архив (шаг 2) здесь — единственный источник истины:
+    observer его НЕ дублирует.
     """
     now = datetime.now(UTC)
     # Вчерашний день (UTC)
@@ -275,8 +277,8 @@ async def restart_observer(redis: DepRedis) -> RestartSignalResponse:
 async def restart_disable_worker(redis: DepRedis) -> RestartSignalResponse:
     """Публикует сигнал рестарта disable-воркера в Redis.
 
-    Subscriber в disable_worker'е пока не реализован — сигнал публикуется,
-    но воркер его не обрабатывает (TODO: добавить _on_restart в disable_worker/main.py).
+    disable_worker подписан на канал fb_agent:worker:restart:disable_worker
+    (main.py::_on_restart) и выполняет graceful stop по этому событию.
     Если Redis недоступен — 503.
     """
     return await _publish_restart_signal(redis, _RESTART_DISABLE_CHANNEL)

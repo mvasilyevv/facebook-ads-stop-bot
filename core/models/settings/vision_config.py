@@ -3,10 +3,7 @@
 
 from __future__ import annotations
 
-from typing import Any
-
-from sqlalchemy import String, text
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import Boolean, String, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from core.models.base import Base, SingletonMixin, Timestamp, UUIDPrimaryKey
@@ -16,7 +13,7 @@ class VisionConfig(UUIDPrimaryKey, SingletonMixin, Timestamp, Base):
     """Единственная строка с параметрами Vision-браузера.
 
     x_token_encrypted — Fernet-шифрование через core.crypto.
-    column_widths_json — кастомные ширины колонок Ads Manager.
+    auto_restart_on_missing_cdp — self-heal Vision-сессии при пропаже primary-вкладки/CDP.
     """
 
     __tablename__ = "vision_config"
@@ -29,8 +26,10 @@ class VisionConfig(UUIDPrimaryKey, SingletonMixin, Timestamp, Base):
         String(64),
         nullable=False,
     )
-    column_widths_json: Mapped[dict[str, Any]] = mapped_column(
-        JSONB,
+    # Дефолт TRUE: проверенное самовосстановление — поведение по умолчанию, флаг лишь
+    # даёт ручной kill-switch для observer-side эскалации reconnect/StartBrowser.
+    auto_restart_on_missing_cdp: Mapped[bool] = mapped_column(
+        Boolean,
         nullable=False,
-        server_default=text("'{}'::jsonb"),
+        server_default=text("true"),
     )

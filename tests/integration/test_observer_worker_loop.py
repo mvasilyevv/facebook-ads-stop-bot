@@ -16,6 +16,8 @@ from sqlalchemy import text
 
 from apps.observer_worker.main import (
     ScanCycleOutput,
+    _clear_degraded_dedup,
+    _maybe_alert_degraded,
     main_loop,
     run_one_cycle,
 )
@@ -51,9 +53,20 @@ class _FakeGate:
     def __init__(self, output: ScanCycleOutput | Exception):
         self._output = output
         self.calls = 0
+        self.last_campaign_ids: list[str] | None = None
+        self.last_owner_tag: str | None = None
+        self.last_auto_recover_page: bool | None = None
 
-    async def run_one_scan(self) -> ScanCycleOutput:
+    async def run_one_scan(
+        self,
+        campaign_ids: list[str] | None = None,
+        owner_tag: str | None = None,
+        auto_recover_page: bool = True,
+    ) -> ScanCycleOutput:
         self.calls += 1
+        self.last_campaign_ids = campaign_ids
+        self.last_owner_tag = owner_tag
+        self.last_auto_recover_page = auto_recover_page
         if isinstance(self._output, Exception):
             raise self._output
         return self._output
@@ -277,3 +290,135 @@ async def test_main_loop_runs_n_cycles_and_exits(
 
     # Должен был сделать минимум один scan (второй не успеет дойти до sleep'а)
     assert gate.calls >= 1
+
+
+# Сценарий: без vision_config флаг self-heal по дефолту True — прокидывается в gate.run_one_scan
+@pytest.mark.asyncio
+async def test_auto_recover_flag_defaults_true(
+    pg_engine, ensure_observer_config_enabled, offer_cr2, fake_redis_client
+) -> None:
+    async with pg_engine.begin() as conn:
+        await conn.execute(text("DELETE FROM vision_config"))
+
+    gate = _FakeGate(ScanCycleOutput(rows=[_row()]))
+    await run_one_cycle(pg_engine, gate=gate, redis_client=fake_redis_client)
+
+    assert gate.last_auto_recover_page is True
+
+
+# Сценарий: vision_config.auto_restart_on_missing_cdp=False прокидывается в gate как False
+@pytest.mark.asyncio
+async def test_auto_recover_flag_false_from_vision_config(
+    pg_engine, ensure_observer_config_enabled, offer_cr2, fake_redis_client
+) -> None:
+    async with pg_engine.begin() as conn:
+        await conn.execute(text("DELETE FROM vision_config"))
+        await conn.execute(
+            text(
+                "INSERT INTO vision_config "
+                "(singleton_key, x_token_encrypted, profile_id, auto_restart_on_missing_cdp) "
+                "VALUES ('default', '', '', FALSE)"
+            )
+        )
+
+    gate = _FakeGate(ScanCycleOutput(rows=[_row()]))
+    await run_one_cycle(pg_engine, gate=gate, redis_client=fake_redis_client)
+
+    assert gate.last_auto_recover_page is False
+
+    async with pg_engine.begin() as conn:
+        await conn.execute(text("DELETE FROM vision_config"))
+
+
+# Layer 3: _maybe_alert_degraded шлёт TG-алерт один раз, затем дедуп, после сброса — снова
+@pytest.mark.asyncio
+async def test_degraded_alert_dedup_and_clear(
+    pg_engine, fake_redis_client, seeded_telegram_config
+) -> None:
+    sent: list[dict] = []
+
+    class _StubTg:
+        async def send_message(self, **kwargs):
+            sent.append(kwargs)
+
+    tg = _StubTg()
+    await fake_redis_client.delete("observer:degraded:alerted")
+
+    # Первый вызов — отправка
+    ok1 = await _maybe_alert_degraded(
+        pg_engine, fake_redis_client, tg, consecutive_failures=3, last_error="page gone"
+    )
+    assert ok1 is True
+    assert len(sent) == 1
+    assert "Observer" in sent[0]["text"]
+    assert sent[0]["chat_id"] == str(seeded_telegram_config["chat_id"])
+
+    # Второй вызов — дедуп, без отправки
+    ok2 = await _maybe_alert_degraded(
+        pg_engine, fake_redis_client, tg, consecutive_failures=4, last_error="page gone"
+    )
+    assert ok2 is False
+    assert len(sent) == 1
+
+    # После сброса дедупа — снова отправка
+    await _clear_degraded_dedup(fake_redis_client)
+    ok3 = await _maybe_alert_degraded(
+        pg_engine, fake_redis_client, tg, consecutive_failures=5, last_error="page gone"
+    )
+    assert ok3 is True
+    assert len(sent) == 2
+
+    await fake_redis_client.delete("observer:degraded:alerted")
+
+
+# Layer 3: main_loop после N подряд error-циклов шлёт ровно один degraded-алерт (дальше дедуп)
+@pytest.mark.asyncio
+@pytest.mark.timeout(15)
+async def test_main_loop_degraded_alert_after_threshold(
+    pg_engine, ensure_observer_config_enabled, offer_cr2, fake_redis_client, seeded_telegram_config
+) -> None:
+    # interval=0 — мгновенные циклы, тест быстрый и не упирается в timeout
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "UPDATE observer_config SET interval_seconds = 0, jitter_seconds = 0 "
+                "WHERE singleton_key = 'default'"
+            )
+        )
+    await fake_redis_client.delete("observer:degraded:alerted")
+
+    # gate всегда падает → outcome=error каждый цикл, self-heal не помогает
+    gate = _FakeGate(RuntimeError("Основная страница браузера недоступна"))
+    sent: list[dict] = []
+
+    class _StubTg:
+        async def send_message(self, **kwargs):
+            sent.append(kwargs)
+
+    iters = {"n": 0}
+
+    def _should_continue() -> bool:
+        iters["n"] += 1
+        return iters["n"] <= 4  # 4 цикла: на 3-м алерт, 4-й — дедуп
+
+    async def _gate_factory():
+        return gate
+
+    async def _redis_factory():
+        return fake_redis_client
+
+    async def _tg_factory():
+        return _StubTg()
+
+    await main_loop(
+        gate_factory=_gate_factory,
+        redis_factory=_redis_factory,
+        tg_client_factory=_tg_factory,
+        should_continue=_should_continue,
+    )
+
+    # threshold=3 → ровно 1 алерт (дальше дедуп держит)
+    assert len(sent) == 1
+    assert "Observer" in sent[0]["text"]
+
+    await fake_redis_client.delete("observer:degraded:alerted")

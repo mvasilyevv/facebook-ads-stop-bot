@@ -456,7 +456,8 @@ case "${1:-}" in
     --restart)
         stop_all
         echo ""
-        exec "$0"
+        # Прокидываем оставшиеся флаги (напр. --no-tunnel) в свежий запуск.
+        exec "$0" "${@:2}"
         ;;
     --dev)
         export DEV_MODE=1

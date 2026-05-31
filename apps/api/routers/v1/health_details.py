@@ -25,19 +25,23 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["health"])
 
 # Список воркеров по умолчанию (если EXPECTED_WORKERS не задан в env)
+# Имена ДОЛЖНЫ совпадать с ключами worker:heartbeat:<name>, которые пишут воркеры
+# (короткие, как в health_watchdog и toggle_executor). Раньше были длинные
+# (disable_worker и т.п.) → живые воркеры показывались OFFLINE (5/12 баг).
 _DEFAULT_EXPECTED_WORKERS: list[str] = [
     "observer",
-    "disable_worker",
-    "enable_worker",
+    "disable",
+    "enable",
     "telegram_poller",
-    "meta_api_worker",
+    "meta_api",
     "health_watchdog",
-    "cleanup_worker",
-    "reconciler_worker",
-    "enable_recommendation_worker",
+    "cleanup",
+    "reconciler",
+    "enable_reco",
     "digest_scheduler",
-    "creator_worker",
+    "creator",
     "creator_recorder",
+    "cabinet_scheduler",
 ]
 
 

@@ -33,7 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from apps.telegram_poller.main import _get_database_url
 from core.observer.pipeline import CycleResult, process_scan_rows
-from core.observer.queries import load_observer_config
+from core.observer.queries import load_observer_config, load_vision_auto_restart_flag
 from core.scanner.models import ScannedAdRow
 
 logger = logging.getLogger(__name__)
@@ -47,6 +47,12 @@ HEARTBEAT_TTL_SECONDS = 60
 CHANNEL_TRIGGER = "fb_agent:observer:trigger"  # форс-скан вне расписания
 CHANNEL_CABINET_DAY = "fb_agent:observer:cabinet_day"  # сигнал нового кабинетного дня
 CHANNEL_RESTART = "fb_agent:worker:restart:observer"  # graceful restart
+
+# Layer 3 — алерт о «тихой» деградации: observer жив (heartbeat/runtime свежие), но сканы
+# стабильно падают и self-heal (Layer 1/2) не помог. Без него мониторинг был слеп ~104 минуты.
+DEGRADED_ALERT_THRESHOLD = int(os.environ.get("OBSERVER_DEGRADED_ALERT_THRESHOLD", "3"))
+DEGRADED_ALERT_TTL_SECONDS = int(os.environ.get("OBSERVER_DEGRADED_ALERT_TTL_SEC", "1800"))
+DEGRADED_ALERT_DEDUP_KEY = "observer:degraded:alerted"
 
 
 @dataclass
@@ -67,10 +73,18 @@ class ScannerGate(Protocol):
     Тест-реализация — заранее заготовленный список ScannedAdRow.
     """
 
-    async def run_one_scan(self) -> ScanCycleOutput:
-        """Делает один scan-цикл и возвращает все собранные строки + метаданные.
+    async def run_one_scan(
+        self,
+        campaign_ids: list[str] | None = None,
+        owner_tag: str | None = None,
+        auto_recover_page: bool = True,
+    ) -> ScanCycleOutput:
+        """Делает один scan-цикл (am_tabular) и возвращает строки + метаданные.
 
-        Если сканер вернул ошибку — поднимает исключение (loop сам решит retry).
+        campaign_ids — allowlist кампаний (#3). owner_tag — am-резолв campaign.id по тегу
+        (тянуть сразу свой скоуп, не весь кабинет). auto_recover_page — self-heal Layer 2:
+        при «страница недоступна» эскалировать reconnect (gated vision_config флагом).
+        Ошибка сканера → исключение (loop решит retry).
         """
         ...
 
@@ -251,6 +265,9 @@ async def run_one_cycle(
         await _publish_runtime_status(redis_client, status="paused")
         return {"outcome": "paused", "scan_id": None}
 
+    # Self-heal Layer 2 gate: разрешать ли клиенту эскалировать reconnect при пропаже вкладки.
+    auto_recover_page = await load_vision_auto_restart_flag(engine)
+
     scan_id = await _begin_scan_run(engine)
     started_monotonic = time.monotonic()
     await _publish_runtime_status(redis_client, status="scanning", active_phase="scan")
@@ -261,7 +278,11 @@ async def run_one_cycle(
     dispatched: dict | None = None
 
     try:
-        scan_out = await gate.run_one_scan()
+        scan_out = await gate.run_one_scan(
+            campaign_ids=list(config.get("campaign_ids") or []),
+            owner_tag=config.get("owner_campaign_tag"),
+            auto_recover_page=auto_recover_page,
+        )
 
         if not scan_out.rows:
             outcome = "empty"
@@ -339,6 +360,95 @@ class _ObserverState:
 
     force_scan_pending: bool = False  # выставляется триггером fb_agent:observer:trigger
     should_stop: bool = False  # выставляется сигналом restart
+    consecutive_scan_failures: int = 0  # подряд error-циклов (Layer 3 degraded-алерт)
+
+
+async def _maybe_alert_degraded(
+    engine: AsyncEngine,
+    redis_client,
+    tg_client,
+    *,
+    consecutive_failures: int,
+    last_error: str | None,
+) -> bool:
+    """Layer 3: deduped TG-алерт о «тихой» деградации observer'а.
+
+    Срабатывает, когда сканы стабильно падают и self-heal (Layer 1/2) не восстановил
+    primary-вкладку. Дедуп через Redis SET NX EX — повтор не чаще DEGRADED_ALERT_TTL.
+    Возвращает True, если алерт реально отправлен в TG.
+    """
+    if redis_client is None:
+        return False
+    # Дедуп ставим ПЕРВЫМ — чтобы не дёргать БД/TG на каждом падающем цикле.
+    try:
+        ok = await redis_client.set(
+            DEGRADED_ALERT_DEDUP_KEY, "1", ex=DEGRADED_ALERT_TTL_SECONDS, nx=True
+        )
+    except Exception:
+        logger.exception("observer degraded-alert: ошибка SET дедуп-ключа")
+        return False
+    if not ok:
+        return False
+
+    text_msg = (
+        f"🚨 Observer: {consecutive_failures} циклов подряд не удалось отсканировать кабинет, "
+        f"самовосстановление не помогло. Проверьте Vision-профиль/браузер "
+        f"(вкладку Ads Manager на :3030).\nПоследняя ошибка: {last_error or 'н/д'}"
+    )
+    logger.error("ALERT (observer degraded): %s", text_msg)
+    if tg_client is None:
+        # TG не настроен — алерт только в лог; дедуп уже стоит (как в health_watchdog).
+        return False
+
+    try:
+        from core.telegram.service import load_telegram_config
+
+        cfg = await load_telegram_config(engine)
+    except Exception:
+        logger.exception("observer degraded-alert: не удалось загрузить telegram_config")
+        return False
+    if cfg is None or cfg.chat_id is None:
+        return False
+    try:
+        await tg_client.send_message(
+            chat_id=str(cfg.chat_id),
+            text=text_msg,
+            message_thread_id=getattr(cfg, "forum_ops_thread_id", None),
+            parse_mode=None,
+        )
+        return True
+    except Exception:
+        logger.exception("observer degraded-alert: не удалось отправить TG")
+        return False
+
+
+async def _clear_degraded_dedup(redis_client) -> None:
+    """Сбрасывает дедуп degraded-алерта при восстановлении — следующая деградация алертит сразу."""
+    if redis_client is None:
+        return
+    try:
+        await redis_client.delete(DEGRADED_ALERT_DEDUP_KEY)
+    except Exception:
+        logger.exception("observer degraded-alert: ошибка DEL дедуп-ключа")
+
+
+async def _wait_interruptible(*events: asyncio.Event, seconds: float) -> None:
+    """Спит до ``seconds``, но просыпается раньше, если любой из ``events`` выставлен.
+
+    Нужен, чтобы scan-now (trigger) реально прерывал sleep между циклами, а не ждал
+    полного интервала. Не бросает по таймауту; корректно отменяет и дренирует waiter'ы.
+    """
+    waiters = [asyncio.ensure_future(e.wait()) for e in events]
+    try:
+        await asyncio.wait(waiters, timeout=seconds, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for w in waiters:
+            w.cancel()
+        for w in waiters:
+            try:
+                await w
+            except (asyncio.CancelledError, Exception):
+                pass
 
 
 # ====================== Main loop ======================
@@ -387,6 +497,8 @@ async def main_loop(
 
     # Разделяемое состояние для pubsub-handler'ов.
     state = _ObserverState()
+    # Событие пробуждения sleep'а по scan-now (отдельно от shutdown_event).
+    trigger_event = asyncio.Event()
 
     gate: ScannerGate | None = None
     redis_client = None
@@ -412,16 +524,28 @@ async def main_loop(
             )
 
             async def _on_trigger(_payload: dict) -> None:
-                """Форс-скан: выставляем флаг, цикл пропустит sleep."""
+                """Форс-скан: будим sleep (trigger_event) и выставляем флаг."""
                 logger.info("observer: получен trigger scan-now")
                 state.force_scan_pending = True
+                trigger_event.set()
 
             async def _on_cabinet_day(_payload: dict) -> None:
-                """Сигнал нового кабинетного дня — TODO: реализовать архивирование."""
-                logger.info(
-                    "observer: получен сигнал cabinet_day "
-                    "(TODO: реализовать archive-логику при наличии cabinet_day метода)"
-                )
+                """Новый кабинетный день → форс-рескан (тот же механизм, что scan-now).
+
+                Зачем рескан: единственный publisher cabinet_day — ручной эндпоинт
+                POST /observer/start-new-cabinet-day, который шлёт ТОЛЬКО cabinet_day
+                (не trigger). Без этой реакции ручной старт нового дня не вызывал
+                немедленный скан — observer ждал штатный интервал. Рескан сразу
+                подхватывает обнулённые суточные метрики.
+
+                Чего НЕ делаем: архив уже пишет сам эндпоинт-публишер (синхронно,
+                до publish) — дублировать нельзя. In-memory стейта на «день» у
+                observer'а нет (config грузится каждый цикл, FSM — в БД), сбрасывать
+                нечего. Owner-scoping сохраняется — рескан читает свой скоуп по тегу.
+                """
+                logger.info("observer: получен сигнал cabinet_day — форс-рескан нового дня")
+                state.force_scan_pending = True
+                trigger_event.set()
 
             async def _on_restart(_payload: dict) -> None:
                 """Graceful restart: выставляем should_stop + shutdown_event."""
@@ -457,10 +581,27 @@ async def main_loop(
                 await asyncio.sleep(10.0)
                 continue
 
+            # Layer 3: трекинг «тихой» деградации — N подряд error-циклов → degraded-алерт.
+            if summary.get("outcome") == "error":
+                state.consecutive_scan_failures += 1
+                if state.consecutive_scan_failures >= DEGRADED_ALERT_THRESHOLD:
+                    await _maybe_alert_degraded(
+                        engine,
+                        redis_client,
+                        tg_client,
+                        consecutive_failures=state.consecutive_scan_failures,
+                        last_error=summary.get("error"),
+                    )
+            elif state.consecutive_scan_failures:
+                # Скан восстановился — сброс счётчика и дедупа, чтобы новая деградация алертила сразу.
+                state.consecutive_scan_failures = 0
+                await _clear_degraded_dedup(redis_client)
+
             # Если выставлен форс-скан — немедленно делаем следующий цикл без sleep.
             if state.force_scan_pending:
                 logger.info("observer: force_scan_pending — пропускаю sleep, запускаю сразу")
                 state.force_scan_pending = False
+                trigger_event.clear()
                 continue
 
             # Интервал до следующего цикла
@@ -469,14 +610,13 @@ async def main_loop(
             jitter = (config or {}).get("jitter_seconds", 15)
             sleep_for = float(interval) + random.uniform(0, float(jitter))
 
-            try:
-                await asyncio.wait_for(shutdown_event.wait(), timeout=sleep_for)
-            except asyncio.TimeoutError:
-                pass
+            # Sleep, прерываемый shutdown'ом ИЛИ trigger'ом scan-now.
+            await _wait_interruptible(shutdown_event, trigger_event, seconds=sleep_for)
 
-            # Если trigger пришёл во время sleep — не ждём следующего цикла.
-            if state.force_scan_pending:
-                logger.info("observer: force_scan_pending (после sleep) — не ждём")
+            # Если trigger пришёл во время sleep — сбрасываем флаги, цикл идёт сразу.
+            if trigger_event.is_set() or state.force_scan_pending:
+                logger.info("observer: trigger во время sleep — запускаю скан немедленно")
+                trigger_event.clear()
                 state.force_scan_pending = False
     finally:
         logger.info("observer_worker завершён")
@@ -531,9 +671,18 @@ async def _default_gate_factory() -> ScannerGate:
     # run_scan_cycle сам поднимет browser-сессию (ensure_browser_session внутри).
 
     class _BrowserAgentScannerGate:
-        async def run_one_scan(self) -> ScanCycleOutput:
+        async def run_one_scan(
+            self,
+            campaign_ids: list[str] | None = None,
+            owner_tag: str | None = None,
+            auto_recover_page: bool = True,
+        ) -> ScanCycleOutput:
             final_result: GrpcScanResult | None = None
-            async for event in client.run_scan_cycle():
+            async for event in client.run_scan_cycle(
+                campaign_ids=campaign_ids or [],
+                owner_tag=owner_tag,
+                auto_recover_page=auto_recover_page,
+            ):
                 # ScanProgress нам пока не нужен — слушаем только финальный ScanResult
                 if isinstance(event, GrpcScanResult):
                     final_result = event

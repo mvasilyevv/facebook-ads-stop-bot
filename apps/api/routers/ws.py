@@ -44,8 +44,8 @@ logger = logging.getLogger(__name__)
 _HEARTBEAT_SECONDS: int = int(os.environ.get("WS_HEARTBEAT_SECONDS", "30"))
 
 # Маппинг Redis-канал → тип события в протоколе фронта.
-# ALL_DASHBOARD_CHANNELS включает fb_agent:health:updated — подписан «на вырост»
-# (воркеры пока не публикуют в него; тип «health_updated»).
+# ALL_DASHBOARD_CHANNELS включает fb_agent:health:updated — в него публикует
+# health_watchdog (apps/health_watchdog/main.py::_publish_health_updated; тип «health_updated»).
 _CHANNEL_TO_TYPE: dict[str, str] = {
     CHANNEL_SCAN_FINISHED: "scan_finished",
     CHANNEL_ALERT_CREATED: "alert_created",

@@ -22,6 +22,7 @@ from apps.api.deps import DepEngine, DepRedis
 from apps.api.routers.v1.schemas.settings_observer import (
     ActViaApiToggleRequest,
     AutoEnableToggleRequest,
+    CampaignAllowlistRequest,
     ObserverSettingsPutRequest,
     ObserverSettingsResponse,
     ScanningToggleRequest,
@@ -54,6 +55,18 @@ async def _get_singleton(session: AsyncSession) -> ObserverConfig:
     return row
 
 
+def _to_response(cfg: ObserverConfig) -> ObserverSettingsResponse:
+    """Снимок ObserverConfig в response-схему. Читать ДО commit (иначе expired-атрибуты)."""
+    return ObserverSettingsResponse(
+        is_scanning_enabled=cfg.is_scanning_enabled,
+        default_interval_seconds=cfg.interval_seconds,
+        auto_enable_recommendations=cfg.auto_enable_recommendations,
+        owner_campaign_tag=cfg.owner_campaign_tag,
+        act_via_api=cfg.act_via_api,
+        campaign_ids=list(cfg.campaign_ids or []),
+    )
+
+
 @router.get("", response_model=ObserverSettingsResponse)
 async def get_observer_settings(engine: DepEngine) -> ObserverSettingsResponse:
     """Возвращает текущий ObserverConfig singleton.
@@ -63,13 +76,7 @@ async def get_observer_settings(engine: DepEngine) -> ObserverSettingsResponse:
     """
     async with AsyncSession(engine) as session:
         cfg = await _get_singleton(session)
-        return ObserverSettingsResponse(
-            is_scanning_enabled=cfg.is_scanning_enabled,
-            default_interval_seconds=cfg.interval_seconds,
-            auto_enable_recommendations=cfg.auto_enable_recommendations,
-            owner_campaign_tag=cfg.owner_campaign_tag,
-            act_via_api=cfg.act_via_api,
-        )
+        return _to_response(cfg)
 
 
 @router.put("", response_model=ObserverSettingsResponse)
@@ -91,15 +98,12 @@ async def put_observer_settings(
         # значение (None = не менять, защита от сброса старыми клиентами без поля).
         if body.act_via_api is not None:
             cfg.act_via_api = body.act_via_api
+        # campaign_ids: None = не менять, [] = очистить.
+        if body.campaign_ids is not None:
+            cfg.campaign_ids = list(body.campaign_ids)
         # Считываем значения ДО commit — после commit SQLAlchemy помечает
         # атрибуты expired, и их чтение триггерит lazy-load вне greenlet.
-        result = ObserverSettingsResponse(
-            is_scanning_enabled=cfg.is_scanning_enabled,
-            default_interval_seconds=cfg.interval_seconds,
-            auto_enable_recommendations=cfg.auto_enable_recommendations,
-            owner_campaign_tag=cfg.owner_campaign_tag,
-            act_via_api=cfg.act_via_api,
-        )
+        result = _to_response(cfg)
         await session.commit()
         return result
 
@@ -114,13 +118,7 @@ async def patch_observer_scanning(
         cfg = await _get_singleton(session)
         cfg.is_scanning_enabled = body.enabled
         # Остальные поля не менялись — читаем из in-memory состояния до commit.
-        result = ObserverSettingsResponse(
-            is_scanning_enabled=cfg.is_scanning_enabled,
-            default_interval_seconds=cfg.interval_seconds,
-            auto_enable_recommendations=cfg.auto_enable_recommendations,
-            owner_campaign_tag=cfg.owner_campaign_tag,
-            act_via_api=cfg.act_via_api,
-        )
+        result = _to_response(cfg)
         await session.commit()
         return result
 
@@ -134,13 +132,7 @@ async def patch_observer_auto_enable(
     async with AsyncSession(engine) as session:
         cfg = await _get_singleton(session)
         cfg.auto_enable_recommendations = body.enabled
-        result = ObserverSettingsResponse(
-            is_scanning_enabled=cfg.is_scanning_enabled,
-            default_interval_seconds=cfg.interval_seconds,
-            auto_enable_recommendations=cfg.auto_enable_recommendations,
-            owner_campaign_tag=cfg.owner_campaign_tag,
-            act_via_api=cfg.act_via_api,
-        )
+        result = _to_response(cfg)
         await session.commit()
         return result
 
@@ -159,13 +151,25 @@ async def patch_observer_act_via_api(
     async with AsyncSession(engine) as session:
         cfg = await _get_singleton(session)
         cfg.act_via_api = body.enabled
-        result = ObserverSettingsResponse(
-            is_scanning_enabled=cfg.is_scanning_enabled,
-            default_interval_seconds=cfg.interval_seconds,
-            auto_enable_recommendations=cfg.auto_enable_recommendations,
-            owner_campaign_tag=cfg.owner_campaign_tag,
-            act_via_api=cfg.act_via_api,
-        )
+        result = _to_response(cfg)
+        await session.commit()
+        return result
+
+
+@router.patch("/campaigns", response_model=ObserverSettingsResponse)
+async def patch_observer_campaigns(
+    body: CampaignAllowlistRequest,
+    engine: DepEngine,
+) -> ObserverSettingsResponse:
+    """Задаёт allowlist кампаний для am-режима (#3).
+
+    Фильтрует am_tabular по campaign.id IN [...]: в общем кабинете не тянем чужие ад'ы.
+    Пустой список — без фильтра по кампаниям (owner_campaign_tag всё равно отсекает чужое).
+    """
+    async with AsyncSession(engine) as session:
+        cfg = await _get_singleton(session)
+        cfg.campaign_ids = list(body.campaign_ids)
+        result = _to_response(cfg)
         await session.commit()
         return result
 

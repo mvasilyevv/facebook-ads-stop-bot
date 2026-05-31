@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from sqlalchemy import Boolean, Integer, Numeric, String
+from sqlalchemy import ARRAY, Boolean, Integer, Numeric, String, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from core.models.base import Base, SingletonMixin, Timestamp, UUIDPrimaryKey
@@ -75,4 +75,12 @@ class ObserverConfig(UUIDPrimaryKey, SingletonMixin, Timestamp, Base):
         Boolean,
         nullable=False,
         server_default="true",
+    )
+    # Allowlist кампаний для am-режима (#3): фильтр am_tabular по campaign.id IN [...].
+    # Пусто — без фильтра по кампаниям (owner_campaign_tag всё равно отсекает чужое в пайплайне).
+    # Сужает выборку в общем кабинете, чтобы не тянуть чужие ад'ы.
+    campaign_ids: Mapped[list[str]] = mapped_column(
+        ARRAY(String),
+        nullable=False,
+        server_default=text("'{}'"),
     )

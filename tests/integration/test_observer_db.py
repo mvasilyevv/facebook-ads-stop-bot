@@ -110,15 +110,28 @@ def _make_row(
 # Сценарий: новое объявление с нормой → upsert в каталог + INSERT метрик + ad_alert_state='normal'
 @pytest.mark.asyncio
 async def test_new_ad_with_normal_metrics(pg_engine, offer_kr2) -> None:
-    # Полная воронка: leads >= registrations >= deposits — иначе сработает
-    # funnel-ladder STOP «больше депов чем регистраций»
+    # Полная воронка; депозиты теперь ТОЛЬКО из AdSet.pro → сидируем 2 ftd-события трекера,
+    # иначе regs_no_dep_stop сработает (5 регистраций без депа).
     row = _make_row(
         spend=Decimal("3.0"),
         leads=10,
         registrations=5,
-        deposits=2,
+        deposits=0,  # Meta-депозиты больше не источник
         cpc=Decimal("0.05"),
     )
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text(
+                """
+                INSERT INTO adsetpro_postback_events
+                    (received_at, click_id, fb_ad_id, event_type, revenue, currency,
+                     raw_json, signature_valid, is_duplicate)
+                VALUES (now(), :c1, :fb, 'ftd', 10, 'USD', '{}'::jsonb, true, false),
+                       (now(), :c2, :fb, 'ftd', 10, 'USD', '{}'::jsonb, true, false)
+                """
+            ),
+            {"fb": row.fb_ad_id, "c1": f"{row.fb_ad_id}-d1", "c2": f"{row.fb_ad_id}-d2"},
+        )
 
     result = await process_scan_rows(pg_engine, rows=[row], scan_id=1)
 

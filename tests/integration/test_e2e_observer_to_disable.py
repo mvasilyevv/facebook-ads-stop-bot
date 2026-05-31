@@ -282,7 +282,22 @@ async def test_recovery_after_stop_resets_fsm_no_new_alert(
     # Сначала STOP
     await process_scan_rows(pg_engine, rows=[stop_row], scan_id=20)
 
-    # Полная воронка с deposits — никаких stop/warning-правил не должно сработать
+    # Депозиты теперь ТОЛЬКО из AdSet.pro → сидируем 2 ftd-события трекера для этого ад'а.
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text(
+                """
+                INSERT INTO adsetpro_postback_events
+                    (received_at, click_id, fb_ad_id, event_type, revenue, currency,
+                     raw_json, signature_valid, is_duplicate)
+                VALUES (now(), :c1, :fb, 'ftd', 10, 'USD', '{}'::jsonb, true, false),
+                       (now(), :c2, :fb, 'ftd', 10, 'USD', '{}'::jsonb, true, false)
+                """
+            ),
+            {"fb": fb_ad_id, "c1": f"{fb_ad_id}-d1", "c2": f"{fb_ad_id}-d2"},
+        )
+
+    # Полная воронка + депозиты от AdSet.pro — никаких stop/warning-правил не должно сработать
     good_row = ScannedAdRow(
         fb_ad_id=fb_ad_id,
         campaign_name=stop_row.campaign_name,
@@ -292,7 +307,7 @@ async def test_recovery_after_stop_resets_fsm_no_new_alert(
         spend=Decimal("2.0"),
         leads=10,
         registrations=5,
-        deposits=2,
+        deposits=0,  # Meta-депозиты больше не источник — депозит приходит из трекера
         cpc=Decimal("0.05"),
         ctr=Decimal("3.0"),
     )

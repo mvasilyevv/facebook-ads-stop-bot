@@ -146,7 +146,8 @@ async def load_observer_config(engine: AsyncEngine) -> dict[str, object] | None:
                         interval_seconds, jitter_seconds,
                         stale_data_threshold_seconds, install_cost_usd,
                         agent_commission_percent, is_scanning_enabled,
-                        owner_campaign_tag, act_via_api
+                        owner_campaign_tag, act_via_api,
+                        campaign_ids
                     FROM observer_config WHERE singleton_key = 'default'
                     """
                 )
@@ -163,7 +164,32 @@ async def load_observer_config(engine: AsyncEngine) -> dict[str, object] | None:
         "is_scanning_enabled": bool(row[5]),
         "owner_campaign_tag": row[6],
         "act_via_api": bool(row[7]),
+        "campaign_ids": list(row[8]) if row[8] else [],
     }
+
+
+async def load_vision_auto_restart_flag(engine: AsyncEngine) -> bool:
+    """Читает vision_config.auto_restart_on_missing_cdp (self-heal Vision-сессии).
+
+    Дефолт TRUE — если строки/колонки нет (свежая БД до миграции) или ошибка чтения,
+    самовосстановление включено (проверенное поведение по умолчанию). Флаг — ручной
+    kill-switch для observer-side эскалации reconnect/StartBrowser при пропаже primary-вкладки.
+    """
+    try:
+        async with engine.connect() as conn:
+            row = (
+                await conn.execute(
+                    text(
+                        "SELECT auto_restart_on_missing_cdp "
+                        "FROM vision_config WHERE singleton_key = 'default'"
+                    )
+                )
+            ).first()
+    except Exception:
+        return True
+    if not row or row[0] is None:
+        return True
+    return bool(row[0])
 
 
 @lru_cache(maxsize=1024)

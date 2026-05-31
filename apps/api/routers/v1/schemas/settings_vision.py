@@ -13,7 +13,6 @@ class VisionSettingsResponse(BaseModel):
 
     has_token: bool = False
     profile_id: str | None = None
-    # TODO: когда добавим колонку auto_restart_on_missing_cdp в vision_config — читать из БД.
     auto_restart_on_missing_cdp: bool = True
     runtime_status: str | None = None
     runtime_status_message: str | None = None
@@ -22,28 +21,15 @@ class VisionSettingsResponse(BaseModel):
 
 
 class VisionSettingsUpdateRequest(BaseModel):
-    """Тело PUT /settings/vision — обновить x_token и/или profile_id."""
+    """Тело PUT /settings/vision — обновить x_token / profile_id / флаг self-heal."""
 
     x_token: str | None = None
     profile_id: str | None = None
+    # None = не трогать; bool = выставить флаг self-heal Vision-сессии.
+    auto_restart_on_missing_cdp: bool | None = None
 
 
 class VisionReconnectResponse(BaseModel):
     """Ответ на POST /vision/reconnect."""
 
     status: str = "reconnected"
-
-
-class VisionProfileItem(BaseModel):
-    """Один профиль Vision из списка."""
-
-    id: str
-    name: str
-    is_active: bool = False
-
-
-class VisionProfilesResponse(BaseModel):
-    """Ответ на GET /vision/profiles."""
-
-    profiles: list[VisionProfileItem]
-    total: int
