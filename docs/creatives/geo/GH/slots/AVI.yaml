@@ -1,0 +1,99 @@
+# Слот AVI (Aviator) в гео GH. Агрегатор-оффер; игра выбрана скорингом O0 (bonus заточен под Aviator).
+# code креатива == sub3 в трекере (джойн-ключ). Наследует geo_hooks из ../geo.yaml. См. _schema.md
+
+code: AVI
+geo: GH
+offer_code: GH_AVI          # связь с offers в БД (агрегатор; уточнить трекер-код, в KB упоминался «Casongo»)
+name: Aviator
+mechanic: "crash-game (самолёт взлетает, растущий множитель, кэшаут до вылета/краша)"
+
+# Оффер-уровень (агрегатор) — SOP O0
+offer_type: aggregator
+welcome_bonus: "Депозит 10 GHS → 20 free bets на Aviator"
+
+# ---------------- Идеи / углы под слот (гипотезы, до разведки) ----------------
+ideas:
+  - id: avi_freebets_lowentry
+    desc: "Low-entry + free value: депни 10 GHS → 20 бесплатных полётов в Aviator (бонус как есть)"
+    type: objection_kill
+    hooks: [gh_low_entry, gh_momo_payout]
+
+  - id: avi_momo_cashout
+    desc: "Payment-trust: выигрыш в Aviator выводится на MTN MoMo (аналог KE M-Pesa)"
+    type: payment_trust
+    hooks: [gh_momo_payout]
+
+  - id: avi_proof_post
+    desc: "Нативный пост-отзыв + пруф зачисления MoMo (формула чемпиона KE, перенос-гипотеза)"
+    type: social_proof
+    hooks: [gh_momo_payout, gh_pidgin_touch]
+
+  - id: avi_crash_adrenaline
+    desc: "Адреналин краш-механики: успей кэшаут до вылета самолёта, растущий множитель"
+    type: urgency
+    hooks: []
+
+  - id: avi_football_anchor
+    desc: "Футбол-якорь: выигрыш в контексте Black Stars / ЧМ-2026 (нац. идентичность)"
+    type: social_proof
+    hooks: [gh_pidgin_touch]
+
+# ---------------- Референсы (заполняется разведкой Ad Library) ----------------
+references:
+  - id: ref_betway_gh
+    source: ad_library
+    advertiser: "Betway Ghana"
+    format: static
+    long_active_days: 72
+    file: "reports/media/betway_ghs1m.png, reports/media/betway_freeflights.png"
+    why: "Долгожитель-бренд. «10 free spins, 10 free flights & 5 GHS free bet»; «fast cash-outs, live GPL action, mobile money all in one»; «GHS 1M max payout». Эталон: free-flights + MoMo + футбол (GPL) + cashout. Визуал — фирменный чёрно-зелёный глянец."
+
+  - id: ref_betano_gh
+    source: ad_library
+    advertiser: "Betano Ghana"
+    format: static
+    long_active_days: 68
+    file: "reports/media/betano_ghs2000.png"
+    why: "Долгожитель-бренд. Big match-bonus «Register & get up to GHS 2,000», casino-агрегатор. Студийный тёмный постер, красный самолёт + плашка WELCOME BONUS. Воронка direct betano.com.gh."
+
+  - id: ref_luckstrategy
+    source: ad_library
+    advertiser: "Luck&strategy"
+    format: static
+    long_active_days: 2
+    file: "reports/media/luckstrategy_scale.png"
+    why: "БЕНЧМАРК СКЕЙЛА (×20+ вариаций, как Plinko на KE). Формула: FOMO «friends withdrawing daily» + anti-poverty «working for pennies» + greed «millionaires in Ghana 🇬🇭» + «catch the multiplier» + 100% deposit bonus. Визуал — красный самолёт + кричащий оверлей, НЕ глянец (народно). Свежак 29 May."
+
+  - id: ref_bang0911
+    source: ad_library
+    advertiser: "Bang-0911 (Bangbet)"
+    format: video
+    long_active_days: 8
+    why: "LOW-ENTRY угол = наш бонус: «Aviator – GHS 10 → Mega Wins! Risk small, cash out big» #realmoney. Видео + app-прокладка PLAY.GOOGLE.COM. Постер не вытянулся (видео-only). Серый аффилиат нашего типа."
+
+  - id: ref_betboro
+    source: ad_library
+    advertiser: "BetBoro promoter"
+    format: video
+    long_active_days: 11
+    why: "Free-value стек: «FIRST 10 DEPOSITS: GHS600 + 210 free spins & Aviator Free Flights». Воронка betboro.com.gh. Видео-only. Подтверждает free-flights бонус-паттерн."
+
+  - id: ref_ghmjngh
+    source: ad_library
+    advertiser: "Ghmjngh"
+    format: video
+    long_active_days: 2
+    file: "reports/media/ghmjngh_adrenaline.png"
+    why: "Adrenaline-угол: «Fast rounds, instant action, catch the flight, feel the rush 18+». Воронка SPARKLE-STORE. Красный самолёт, видео-постер. Чистая краш-механика без trust."
+
+  - id: ref_crazyspinners
+    source: ad_library
+    advertiser: "Crazy Spinners Lounge"
+    format: static
+    long_active_days: 2
+    file: "reports/media/crazyspinners.png"
+    why: "Скейл ×5. «Legendary Aviator flight simulator now on your phone, cool bonuses daily». Casual app-постер, мягкая подача."
+
+
+# ---------------- Креативы (появятся после разведки + плана батча) ------------
+creatives: []
