@@ -418,6 +418,7 @@ stop_all() {
     terminate_matching_processes "Enable Worker" "run_enable_worker.py"
     terminate_matching_processes "Enable Recommendation Worker" "run_enable_recommendation_worker.py"
     terminate_matching_processes "Enable Recommendation Worker" "apps.enable_recommendation_worker.main"
+    terminate_matching_processes "Meta API Worker" "run_meta_api_worker.py"
     terminate_matching_processes "Telegram Poller" "run_telegram_poller.py"
     terminate_matching_processes "API" "uvicorn apps.api.main:app"
     terminate_matching_processes "Frontend" "$SCRIPT_DIR/frontend/node_modules/.bin/vite"
@@ -568,6 +569,7 @@ terminate_matching_processes "Disable Worker" "run_disable_worker.py"
 terminate_matching_processes "Enable Worker" "run_enable_worker.py"
 terminate_matching_processes "Enable Recommendation Worker" "run_enable_recommendation_worker.py"
 terminate_matching_processes "Enable Recommendation Worker" "apps.enable_recommendation_worker.main"
+terminate_matching_processes "Meta API Worker" "run_meta_api_worker.py"
 terminate_matching_processes "Telegram Poller" "run_telegram_poller.py"
 terminate_matching_processes "API" "uvicorn apps.api.main:app"
 terminate_matching_processes "Frontend" "$SCRIPT_DIR/frontend/node_modules/.bin/vite"
@@ -888,6 +890,19 @@ else
     TG_PID=$!
     append_pid "$TG_PID" "telegram"
     echo -e "${GREEN}  Telegram PID: $TG_PID${NC}"
+
+    # Meta API Worker — нужен для act_via_api=true (авто-стоп через Marketing API).
+    echo -e "${BLUE}🛰️  Запускаю Meta API Worker...${NC}"
+    .venv/bin/python run_meta_api_worker.py > "$LOG_DIR/meta_api_worker.log" 2>&1 &
+    META_API_PID=$!
+    append_pid "$META_API_PID" "meta_api_worker"
+    echo -e "${GREEN}  Meta API Worker PID: $META_API_PID${NC}"
+
+    echo -e "${BLUE}♻️  Запускаю Enable Recommendation Worker...${NC}"
+    .venv/bin/python run_enable_recommendation_worker.py > "$LOG_DIR/enable_recommendation_worker.log" 2>&1 &
+    ENABLE_RECO_PID=$!
+    append_pid "$ENABLE_RECO_PID" "enable_recommendation_worker"
+    echo -e "${GREEN}  Enable Recommendation Worker PID: $ENABLE_RECO_PID${NC}"
 fi
 
 # ==========================================
