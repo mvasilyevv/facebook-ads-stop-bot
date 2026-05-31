@@ -32,6 +32,12 @@ export function isAdsManagerUrl(url: string | null | undefined): boolean {
   return ADS_MANAGER_URL_MARKERS.some((marker) => normalized.includes(marker));
 }
 
+/** Достаёт numeric ad-account id из URL Ads Manager (?act=<num>). null, если не читается. */
+export function extractAdAccountId(url: string | null | undefined): string | null {
+  const m = String(url || '').match(/[?&]act=(\d+)/);
+  return m ? m[1] : null;
+}
+
 function isPageClosed(page: Page): boolean {
   return typeof page.isClosed === 'function' && page.isClosed();
 }
@@ -55,6 +61,18 @@ export function findPreferredPrimaryPage(browser: Browser | null): Page | null {
   }
 
   return fallbackPage;
+}
+
+/** Запоминает URL живой вкладки Ads Manager на сессии — чтобы переоткрыть её при self-heal. */
+export function rememberAdsManagerUrl(session: BrowserSession, page: Page | null | undefined): void {
+  try {
+    const url = page?.url?.();
+    if (url && isAdsManagerUrl(url)) {
+      session.lastAdsManagerUrl = url;
+    }
+  } catch {
+    // url() может бросить на закрытой/переходной странице — игнорируем.
+  }
 }
 
 /** Менеджер браузерных сессий: запуск, подключение, отключение, переподключение. */
@@ -334,6 +352,82 @@ export class SessionManager {
       throw new Error('Активная browser-agent сессия не найдена');
     }
     return session;
+  }
+
+  /**
+   * Гарантирует живую primary-вкладку Ads Manager для скан-цикла (self-heal Layer 1).
+   *
+   * Сценарии:
+   *  - Живая вкладка Ads Manager НАШЕГО кабинета открыта → используем её (и запоминаем URL).
+   *  - Открыта вкладка ДРУГОГО кабинета (act не совпал с ожидаемым) → не сканируем чужой act,
+   *    переоткрываем свой кабинет ниже. Защита от тихой слепоты MV при нескольких кабинетах.
+   *  - Вкладку закрыли, но CDP/браузер живы → переоткрываем НОВУЮ вкладку на последнем
+   *    known-good URL кабинета (или реконструированном из act_id). Чужие вкладки не трогаем.
+   *  - Браузер/CDP мертвы или URL кабинета неизвестен → бросаем
+   *    'Основная страница браузера недоступна' (эскалация на observer: reconnect/StartBrowser).
+   *
+   * В общем кабинете НЕ угадываем дефолтный act — иначе можно открыть чужой кабинет.
+   */
+  async ensureAdsManagerPage(
+    session: BrowserSession,
+    opts: { fallbackUrl?: string } = {},
+  ): Promise<Page> {
+    // Ожидаемый кабинет: последний known-good URL → реконструкция из act_id (передаёт caller).
+    const targetUrl = session.lastAdsManagerUrl || opts.fallbackUrl;
+    const expectedAct = extractAdAccountId(targetUrl);
+
+    // 1. Живая вкладка Ads Manager уже открыта? Решаем по совпадению act с ожидаемым кабинетом.
+    const preferred = findPreferredPrimaryPage(session.browser);
+    if (preferred && !isPageClosed(preferred) && isAdsManagerUrl(preferred.url())) {
+      const preferredAct = extractAdAccountId(preferred.url());
+      if (expectedAct && preferredAct !== null && preferredAct === expectedAct) {
+        // Ожидаемый кабинет известен и совпал — строгий путь.
+        session.primaryPage = preferred;
+        rememberAdsManagerUrl(session, preferred);
+        return preferred;
+      }
+      if (!expectedAct) {
+        // Самый первый цикл свежего browser-agent: act ещё не сниффился, эталона для сверки нет
+        // (trust-on-first-use). Принимаем открытую вкладку, но НЕ молча — логируем, чтобы случай
+        // был виден. Деньги защищены owner-scoping'ом (am_tabular фильтрует по owner_tag); со
+        // следующего цикла act известен из GraphContext → строгая сверка выше.
+        console.warn(
+          '[session-manager] первый цикл: ожидаемый act неизвестен, принимаю открытую вкладку '
+            + `${preferred.url()} (trust-on-first-use; далее — строгая сверка act)`,
+        );
+        session.primaryPage = preferred;
+        rememberAdsManagerUrl(session, preferred);
+        return preferred;
+      }
+      // expectedAct известен, но не совпал — другой кабинет; логируем и переоткрываем свой ниже.
+      console.warn(
+        `[session-manager] открытая вкладка — другой кабинет (act=${preferredAct} != ${expectedAct}), `
+          + 'переоткрываю свой',
+      );
+    }
+
+    // 2. Браузер/CDP живы? Если нет — восстановление не на этом уровне (нужен reconnect).
+    const browser = session.browser;
+    if (!browser || (typeof browser.isConnected === 'function' && !browser.isConnected())) {
+      throw new Error('Основная страница браузера недоступна');
+    }
+
+    // 3. Открываем свой кабинет по known-good/реконструированному URL.
+    const context = browser.contexts()[0];
+    if (!targetUrl || !context) {
+      throw new Error('Основная страница браузера недоступна');
+    }
+
+    // 4. Открываем НОВУЮ вкладку (чужие не трогаем) и переходим на кабинет.
+    console.warn(
+      `[session-manager] primary-вкладка Ads Manager недоступна — переоткрываю на ${targetUrl}`,
+    );
+    const page = await context.newPage();
+    await page.goto(targetUrl, { waitUntil: 'domcontentloaded' });
+    session.primaryPage = page;
+    session.status = 'connected';
+    rememberAdsManagerUrl(session, page);
+    return page;
   }
 
   listSessions(): Array<{ id: string; status: string; connectedAt: string }> {

@@ -375,4 +375,152 @@ function makeSession(overrides = {}) {
         playwright_1.chromium.connectOverCDP = originalConnectOverCDP;
     }
 });
+// rememberAdsManagerUrl: пишет на сессию только URL Ads Manager, чужие/прочие URL игнорирует.
+(0, node_test_1.default)('rememberAdsManagerUrl записывает только URL Ads Manager', () => {
+    const session = makeSession({ lastAdsManagerUrl: null });
+    (0, session_manager_js_1.rememberAdsManagerUrl)(session, { url: () => 'https://www.facebook.com/messages/' });
+    strict_1.default.equal(session.lastAdsManagerUrl, null);
+    (0, session_manager_js_1.rememberAdsManagerUrl)(session, { url: () => 'https://adsmanager.facebook.com/adsmanager/manage/ads?act=1' });
+    strict_1.default.equal(session.lastAdsManagerUrl, 'https://adsmanager.facebook.com/adsmanager/manage/ads?act=1');
+});
+// ensureAdsManagerPage: первый цикл (act ещё неизвестен, нет fallbackUrl) → trust-on-first-use:
+// принимаем открытую вкладку Ads Manager и запоминаем URL (далее act известен → строгая сверка).
+(0, node_test_1.default)('ensureAdsManagerPage возвращает живую вкладку Ads Manager и запоминает URL (TOFU)', async () => {
+    const manager = new session_manager_js_1.SessionManager();
+    const adsUrl = 'https://adsmanager.facebook.com/adsmanager/manage/ads?act=123';
+    const adsPage = { isClosed: () => false, url: () => adsUrl };
+    const browser = {
+        isConnected: () => true,
+        contexts: () => [{ pages: () => [adsPage] }],
+    };
+    const session = makeSession({ browser, primaryPage: null });
+    const page = await manager.ensureAdsManagerPage(session);
+    strict_1.default.equal(page, adsPage);
+    strict_1.default.equal(session.primaryPage, adsPage);
+    strict_1.default.equal(session.lastAdsManagerUrl, adsUrl);
+});
+// ensureAdsManagerPage: браузер/CDP мертвы → бросаем (восстановление эскалируется на observer).
+(0, node_test_1.default)('ensureAdsManagerPage бросает, если браузер отключён', async () => {
+    const manager = new session_manager_js_1.SessionManager();
+    const browser = { isConnected: () => false, contexts: () => [] };
+    const session = makeSession({ browser, primaryPage: null });
+    await strict_1.default.rejects(manager.ensureAdsManagerPage(session), /Основная страница браузера недоступна/);
+});
+// ensureAdsManagerPage: вкладку закрыли, браузер жив → переоткрываем НОВУЮ вкладку на known-good
+// URL кабинета; чужую вкладку не трогаем (её goto не зовём).
+(0, node_test_1.default)('ensureAdsManagerPage переоткрывает вкладку на known-good URL, чужие не трогает', async () => {
+    const manager = new session_manager_js_1.SessionManager();
+    let otherGotoCalls = 0;
+    const otherPage = {
+        isClosed: () => false,
+        url: () => 'https://www.facebook.com/messages/',
+        goto: async () => {
+            otherGotoCalls += 1;
+        },
+    };
+    const knownUrl = 'https://adsmanager.facebook.com/adsmanager/manage/ads?act=777';
+    let gotoUrl = null;
+    let newPageCalls = 0;
+    const newPage = {
+        isClosed: () => false,
+        url: () => knownUrl,
+        goto: async (u) => {
+            gotoUrl = u;
+        },
+    };
+    const context = {
+        pages: () => [otherPage],
+        newPage: async () => {
+            newPageCalls += 1;
+            return newPage;
+        },
+    };
+    const browser = { isConnected: () => true, contexts: () => [context] };
+    const session = makeSession({ browser, primaryPage: null, lastAdsManagerUrl: knownUrl });
+    const page = await manager.ensureAdsManagerPage(session);
+    strict_1.default.equal(newPageCalls, 1);
+    strict_1.default.equal(gotoUrl, knownUrl);
+    strict_1.default.equal(page, newPage);
+    strict_1.default.equal(session.primaryPage, newPage);
+    strict_1.default.equal(otherGotoCalls, 0); // чужую вкладку не трогали
+});
+// ensureAdsManagerPage: нет вкладки и нет known-good/fallback URL → бросаем
+// (в общем кабинете НЕ угадываем дефолтный act, иначе можно попасть в чужой кабинет).
+(0, node_test_1.default)('ensureAdsManagerPage бросает, если URL кабинета неизвестен', async () => {
+    const manager = new session_manager_js_1.SessionManager();
+    const context = {
+        pages: () => [],
+        newPage: async () => {
+            throw new Error('newPage не должен вызываться без известного URL');
+        },
+    };
+    const browser = { isConnected: () => true, contexts: () => [context] };
+    const session = makeSession({ browser, primaryPage: null, lastAdsManagerUrl: null });
+    await strict_1.default.rejects(manager.ensureAdsManagerPage(session), /Основная страница браузера недоступна/);
+});
+// ensureAdsManagerPage: known-good URL нет, но передан fallbackUrl (реконструированный из act_id) →
+// открываем новую вкладку на нём.
+(0, node_test_1.default)('ensureAdsManagerPage использует fallbackUrl, если known-good URL нет', async () => {
+    const manager = new session_manager_js_1.SessionManager();
+    const fallbackUrl = 'https://adsmanager.facebook.com/adsmanager/manage/ads?act=555';
+    let gotoUrl = null;
+    const newPage = {
+        isClosed: () => false,
+        url: () => fallbackUrl,
+        goto: async (u) => {
+            gotoUrl = u;
+        },
+    };
+    const context = { pages: () => [], newPage: async () => newPage };
+    const browser = { isConnected: () => true, contexts: () => [context] };
+    const session = makeSession({ browser, primaryPage: null, lastAdsManagerUrl: null });
+    const page = await manager.ensureAdsManagerPage(session, { fallbackUrl });
+    strict_1.default.equal(gotoUrl, fallbackUrl);
+    strict_1.default.equal(page, newPage);
+});
+// ensureAdsManagerPage: открыта вкладка ДРУГОГО кабинета (act≠ожидаемому) → не сканируем чужой,
+// переоткрываем СВОЙ кабинет. Защита от тихой слепоты MV при нескольких кабинетах владельца.
+(0, node_test_1.default)('ensureAdsManagerPage не подхватывает вкладку другого кабинета (act mismatch)', async () => {
+    const manager = new session_manager_js_1.SessionManager();
+    const foreignAds = {
+        isClosed: () => false,
+        url: () => 'https://adsmanager.facebook.com/adsmanager/manage/ads?act=999',
+    };
+    const ownUrl = 'https://adsmanager.facebook.com/adsmanager/manage/ads?act=111';
+    let gotoUrl = null;
+    const ownPage = {
+        isClosed: () => false,
+        url: () => ownUrl,
+        goto: async (u) => {
+            gotoUrl = u;
+        },
+    };
+    const context = { pages: () => [foreignAds], newPage: async () => ownPage };
+    const browser = { isConnected: () => true, contexts: () => [context] };
+    const session = makeSession({ browser, primaryPage: null, lastAdsManagerUrl: ownUrl });
+    const page = await manager.ensureAdsManagerPage(session);
+    strict_1.default.equal(gotoUrl, ownUrl); // переоткрыли СВОЙ кабинет, а не сканируем чужой act=999
+    strict_1.default.equal(page, ownPage);
+});
+// ensureAdsManagerPage: открыта вкладка ТОГО ЖE кабинета (act совпал) → используем её, не переоткрываем.
+(0, node_test_1.default)('ensureAdsManagerPage принимает вкладку того же кабинета (act match)', async () => {
+    const manager = new session_manager_js_1.SessionManager();
+    const liveUrl = 'https://adsmanager.facebook.com/adsmanager/manage/ads?act=111&business_id=5';
+    const sameAds = { isClosed: () => false, url: () => liveUrl };
+    const context = {
+        pages: () => [sameAds],
+        newPage: async () => {
+            throw new Error('переоткрывать не нужно — кабинет тот же');
+        },
+    };
+    const browser = { isConnected: () => true, contexts: () => [context] };
+    const session = makeSession({
+        browser,
+        primaryPage: null,
+        lastAdsManagerUrl: 'https://adsmanager.facebook.com/adsmanager/manage/ads?act=111',
+    });
+    const page = await manager.ensureAdsManagerPage(session);
+    strict_1.default.equal(page, sameAds);
+    strict_1.default.equal(session.lastAdsManagerUrl, liveUrl); // обновили на текущий URL той же вкладки
+});
 //# sourceMappingURL=session-manager.test.js.map

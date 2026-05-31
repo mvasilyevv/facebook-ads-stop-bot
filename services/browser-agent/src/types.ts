@@ -19,6 +19,9 @@ export interface BrowserSession {
   humanProfile: HumanProfile;
   connectedAt: Date;
   status: 'connected' | 'disconnected' | 'error';
+  /** Последний known-good URL вкладки Ads Manager кабинета — чтобы переоткрыть её,
+   *  если вкладку закрыли (self-heal). Заполняется при успешном доступе к primary-странице. */
+  lastAdsManagerUrl?: string | null;
 }
 
 export interface HumanProfile {

@@ -41,48 +41,6 @@ class ScannerServiceStub(object):
             response_deserializer=v1_dot_scanner__pb2.ScanCycleEvent.FromString,
             _registered_method=True,
         )
-        self.RefreshTable = channel.unary_unary(
-            "/fb_agent.scanner.v1.ScannerService/RefreshTable",
-            request_serializer=v1_dot_scanner__pb2.RefreshTableRequest.SerializeToString,
-            response_deserializer=v1_dot_scanner__pb2.RefreshTableResponse.FromString,
-            _registered_method=True,
-        )
-        self.ParseVisibleRows = channel.unary_unary(
-            "/fb_agent.scanner.v1.ScannerService/ParseVisibleRows",
-            request_serializer=v1_dot_scanner__pb2.ParseVisibleRowsRequest.SerializeToString,
-            response_deserializer=v1_dot_scanner__pb2.ParseVisibleRowsResponse.FromString,
-            _registered_method=True,
-        )
-        self.ScrollAndParse = channel.unary_unary(
-            "/fb_agent.scanner.v1.ScannerService/ScrollAndParse",
-            request_serializer=v1_dot_scanner__pb2.ScrollAndParseRequest.SerializeToString,
-            response_deserializer=v1_dot_scanner__pb2.ScrollAndParseResponse.FromString,
-            _registered_method=True,
-        )
-        self.WaitForDomStable = channel.unary_unary(
-            "/fb_agent.scanner.v1.ScannerService/WaitForDomStable",
-            request_serializer=v1_dot_scanner__pb2.WaitForDomStableRequest.SerializeToString,
-            response_deserializer=v1_dot_scanner__pb2.WaitForDomStableResponse.FromString,
-            _registered_method=True,
-        )
-        self.ResetScroll = channel.unary_unary(
-            "/fb_agent.scanner.v1.ScannerService/ResetScroll",
-            request_serializer=v1_dot_scanner__pb2.ResetScrollRequest.SerializeToString,
-            response_deserializer=v1_dot_scanner__pb2.ResetScrollResponse.FromString,
-            _registered_method=True,
-        )
-        self.GetScrollMetrics = channel.unary_unary(
-            "/fb_agent.scanner.v1.ScannerService/GetScrollMetrics",
-            request_serializer=v1_dot_scanner__pb2.GetScrollMetricsRequest.SerializeToString,
-            response_deserializer=v1_dot_scanner__pb2.GetScrollMetricsResponse.FromString,
-            _registered_method=True,
-        )
-        self.GetVisibleRowIds = channel.unary_unary(
-            "/fb_agent.scanner.v1.ScannerService/GetVisibleRowIds",
-            request_serializer=v1_dot_scanner__pb2.GetVisibleRowIdsRequest.SerializeToString,
-            response_deserializer=v1_dot_scanner__pb2.GetVisibleRowIdsResponse.FromString,
-            _registered_method=True,
-        )
         self.FindToggleCell = channel.unary_unary(
             "/fb_agent.scanner.v1.ScannerService/FindToggleCell",
             request_serializer=v1_dot_scanner__pb2.FindToggleCellRequest.SerializeToString,
@@ -125,24 +83,6 @@ class ScannerServiceStub(object):
             response_deserializer=v1_dot_scanner__pb2.WaitForToggleConfirmationResponse.FromString,
             _registered_method=True,
         )
-        self.ValidateColumns = channel.unary_unary(
-            "/fb_agent.scanner.v1.ScannerService/ValidateColumns",
-            request_serializer=v1_dot_scanner__pb2.ValidateColumnsRequest.SerializeToString,
-            response_deserializer=v1_dot_scanner__pb2.ValidateColumnsResponse.FromString,
-            _registered_method=True,
-        )
-        self.CaptureColumnWidths = channel.unary_unary(
-            "/fb_agent.scanner.v1.ScannerService/CaptureColumnWidths",
-            request_serializer=v1_dot_scanner__pb2.CaptureColumnWidthsRequest.SerializeToString,
-            response_deserializer=v1_dot_scanner__pb2.CaptureColumnWidthsResponse.FromString,
-            _registered_method=True,
-        )
-        self.ApplyColumnWidths = channel.unary_unary(
-            "/fb_agent.scanner.v1.ScannerService/ApplyColumnWidths",
-            request_serializer=v1_dot_scanner__pb2.ApplyColumnWidthsRequest.SerializeToString,
-            response_deserializer=v1_dot_scanner__pb2.ApplyColumnWidthsResponse.FromString,
-            _registered_method=True,
-        )
         self.HardReloadPage = channel.unary_unary(
             "/fb_agent.scanner.v1.ScannerService/HardReloadPage",
             request_serializer=v1_dot_scanner__pb2.HardReloadPageRequest.SerializeToString,
@@ -155,51 +95,9 @@ class ScannerServiceServicer(object):
     """Missing associated documentation comment in .proto file."""
 
     def RunScanCycle(self, request, context):
-        """Полный цикл сканирования: reset scroll → refresh → settle → scroll-and-parse.
-        Стримит частичные результаты (rows per pass).
+        """Полный цикл сканирования через am_tabular (graph-канал UI, active replication).
+        Стримит один ScanComplete (DOM-парсинг/скролл выпилены).
         """
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details("Method not implemented!")
-        raise NotImplementedError("Method not implemented!")
-
-    def RefreshTable(self, request, context):
-        """Обновить таблицу Ads Manager (клик по кнопке "Refresh")."""
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details("Method not implemented!")
-        raise NotImplementedError("Method not implemented!")
-
-    def ParseVisibleRows(self, request, context):
-        """Распарсить видимые строки из текущего viewport (без скролла)."""
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details("Method not implemented!")
-        raise NotImplementedError("Method not implemented!")
-
-    def ScrollAndParse(self, request, context):
-        """Скроллить таблицу вниз и распарсить новые строки."""
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details("Method not implemented!")
-        raise NotImplementedError("Method not implemented!")
-
-    def WaitForDomStable(self, request, context):
-        """Дождаться стабилизации DOM после скролла (количество строк перестаёт меняться)."""
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details("Method not implemented!")
-        raise NotImplementedError("Method not implemented!")
-
-    def ResetScroll(self, request, context):
-        """Сбросить позицию скролла таблицы наверх."""
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details("Method not implemented!")
-        raise NotImplementedError("Method not implemented!")
-
-    def GetScrollMetrics(self, request, context):
-        """Получить текущие метрики скролла (scrollTop, maxScrollTop, atBottom)."""
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details("Method not implemented!")
-        raise NotImplementedError("Method not implemented!")
-
-    def GetVisibleRowIds(self, request, context):
-        """Получить ID видимых строк в DOM."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details("Method not implemented!")
         raise NotImplementedError("Method not implemented!")
@@ -246,24 +144,6 @@ class ScannerServiceServicer(object):
         context.set_details("Method not implemented!")
         raise NotImplementedError("Method not implemented!")
 
-    def ValidateColumns(self, request, context):
-        """Проверить наличие всех необходимых колонок в таблице Ads Manager."""
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details("Method not implemented!")
-        raise NotImplementedError("Method not implemented!")
-
-    def CaptureColumnWidths(self, request, context):
-        """Снять текущую ручную ширину колонок Ads Manager."""
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details("Method not implemented!")
-        raise NotImplementedError("Method not implemented!")
-
-    def ApplyColumnWidths(self, request, context):
-        """Применить сохранённый пресет ширины колонок Ads Manager."""
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details("Method not implemented!")
-        raise NotImplementedError("Method not implemented!")
-
     def HardReloadPage(self, request, context):
         """Жёсткая перезагрузка страницы с очисткой кеша (через CDP Network.clearBrowserCache)."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
@@ -277,41 +157,6 @@ def add_ScannerServiceServicer_to_server(servicer, server):
             servicer.RunScanCycle,
             request_deserializer=v1_dot_scanner__pb2.RunScanCycleRequest.FromString,
             response_serializer=v1_dot_scanner__pb2.ScanCycleEvent.SerializeToString,
-        ),
-        "RefreshTable": grpc.unary_unary_rpc_method_handler(
-            servicer.RefreshTable,
-            request_deserializer=v1_dot_scanner__pb2.RefreshTableRequest.FromString,
-            response_serializer=v1_dot_scanner__pb2.RefreshTableResponse.SerializeToString,
-        ),
-        "ParseVisibleRows": grpc.unary_unary_rpc_method_handler(
-            servicer.ParseVisibleRows,
-            request_deserializer=v1_dot_scanner__pb2.ParseVisibleRowsRequest.FromString,
-            response_serializer=v1_dot_scanner__pb2.ParseVisibleRowsResponse.SerializeToString,
-        ),
-        "ScrollAndParse": grpc.unary_unary_rpc_method_handler(
-            servicer.ScrollAndParse,
-            request_deserializer=v1_dot_scanner__pb2.ScrollAndParseRequest.FromString,
-            response_serializer=v1_dot_scanner__pb2.ScrollAndParseResponse.SerializeToString,
-        ),
-        "WaitForDomStable": grpc.unary_unary_rpc_method_handler(
-            servicer.WaitForDomStable,
-            request_deserializer=v1_dot_scanner__pb2.WaitForDomStableRequest.FromString,
-            response_serializer=v1_dot_scanner__pb2.WaitForDomStableResponse.SerializeToString,
-        ),
-        "ResetScroll": grpc.unary_unary_rpc_method_handler(
-            servicer.ResetScroll,
-            request_deserializer=v1_dot_scanner__pb2.ResetScrollRequest.FromString,
-            response_serializer=v1_dot_scanner__pb2.ResetScrollResponse.SerializeToString,
-        ),
-        "GetScrollMetrics": grpc.unary_unary_rpc_method_handler(
-            servicer.GetScrollMetrics,
-            request_deserializer=v1_dot_scanner__pb2.GetScrollMetricsRequest.FromString,
-            response_serializer=v1_dot_scanner__pb2.GetScrollMetricsResponse.SerializeToString,
-        ),
-        "GetVisibleRowIds": grpc.unary_unary_rpc_method_handler(
-            servicer.GetVisibleRowIds,
-            request_deserializer=v1_dot_scanner__pb2.GetVisibleRowIdsRequest.FromString,
-            response_serializer=v1_dot_scanner__pb2.GetVisibleRowIdsResponse.SerializeToString,
         ),
         "FindToggleCell": grpc.unary_unary_rpc_method_handler(
             servicer.FindToggleCell,
@@ -347,21 +192,6 @@ def add_ScannerServiceServicer_to_server(servicer, server):
             servicer.WaitForToggleConfirmation,
             request_deserializer=v1_dot_scanner__pb2.WaitForToggleConfirmationRequest.FromString,
             response_serializer=v1_dot_scanner__pb2.WaitForToggleConfirmationResponse.SerializeToString,
-        ),
-        "ValidateColumns": grpc.unary_unary_rpc_method_handler(
-            servicer.ValidateColumns,
-            request_deserializer=v1_dot_scanner__pb2.ValidateColumnsRequest.FromString,
-            response_serializer=v1_dot_scanner__pb2.ValidateColumnsResponse.SerializeToString,
-        ),
-        "CaptureColumnWidths": grpc.unary_unary_rpc_method_handler(
-            servicer.CaptureColumnWidths,
-            request_deserializer=v1_dot_scanner__pb2.CaptureColumnWidthsRequest.FromString,
-            response_serializer=v1_dot_scanner__pb2.CaptureColumnWidthsResponse.SerializeToString,
-        ),
-        "ApplyColumnWidths": grpc.unary_unary_rpc_method_handler(
-            servicer.ApplyColumnWidths,
-            request_deserializer=v1_dot_scanner__pb2.ApplyColumnWidthsRequest.FromString,
-            response_serializer=v1_dot_scanner__pb2.ApplyColumnWidthsResponse.SerializeToString,
         ),
         "HardReloadPage": grpc.unary_unary_rpc_method_handler(
             servicer.HardReloadPage,
@@ -399,216 +229,6 @@ class ScannerService(object):
             "/fb_agent.scanner.v1.ScannerService/RunScanCycle",
             v1_dot_scanner__pb2.RunScanCycleRequest.SerializeToString,
             v1_dot_scanner__pb2.ScanCycleEvent.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True,
-        )
-
-    @staticmethod
-    def RefreshTable(
-        request,
-        target,
-        options=(),
-        channel_credentials=None,
-        call_credentials=None,
-        insecure=False,
-        compression=None,
-        wait_for_ready=None,
-        timeout=None,
-        metadata=None,
-    ):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            "/fb_agent.scanner.v1.ScannerService/RefreshTable",
-            v1_dot_scanner__pb2.RefreshTableRequest.SerializeToString,
-            v1_dot_scanner__pb2.RefreshTableResponse.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True,
-        )
-
-    @staticmethod
-    def ParseVisibleRows(
-        request,
-        target,
-        options=(),
-        channel_credentials=None,
-        call_credentials=None,
-        insecure=False,
-        compression=None,
-        wait_for_ready=None,
-        timeout=None,
-        metadata=None,
-    ):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            "/fb_agent.scanner.v1.ScannerService/ParseVisibleRows",
-            v1_dot_scanner__pb2.ParseVisibleRowsRequest.SerializeToString,
-            v1_dot_scanner__pb2.ParseVisibleRowsResponse.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True,
-        )
-
-    @staticmethod
-    def ScrollAndParse(
-        request,
-        target,
-        options=(),
-        channel_credentials=None,
-        call_credentials=None,
-        insecure=False,
-        compression=None,
-        wait_for_ready=None,
-        timeout=None,
-        metadata=None,
-    ):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            "/fb_agent.scanner.v1.ScannerService/ScrollAndParse",
-            v1_dot_scanner__pb2.ScrollAndParseRequest.SerializeToString,
-            v1_dot_scanner__pb2.ScrollAndParseResponse.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True,
-        )
-
-    @staticmethod
-    def WaitForDomStable(
-        request,
-        target,
-        options=(),
-        channel_credentials=None,
-        call_credentials=None,
-        insecure=False,
-        compression=None,
-        wait_for_ready=None,
-        timeout=None,
-        metadata=None,
-    ):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            "/fb_agent.scanner.v1.ScannerService/WaitForDomStable",
-            v1_dot_scanner__pb2.WaitForDomStableRequest.SerializeToString,
-            v1_dot_scanner__pb2.WaitForDomStableResponse.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True,
-        )
-
-    @staticmethod
-    def ResetScroll(
-        request,
-        target,
-        options=(),
-        channel_credentials=None,
-        call_credentials=None,
-        insecure=False,
-        compression=None,
-        wait_for_ready=None,
-        timeout=None,
-        metadata=None,
-    ):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            "/fb_agent.scanner.v1.ScannerService/ResetScroll",
-            v1_dot_scanner__pb2.ResetScrollRequest.SerializeToString,
-            v1_dot_scanner__pb2.ResetScrollResponse.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True,
-        )
-
-    @staticmethod
-    def GetScrollMetrics(
-        request,
-        target,
-        options=(),
-        channel_credentials=None,
-        call_credentials=None,
-        insecure=False,
-        compression=None,
-        wait_for_ready=None,
-        timeout=None,
-        metadata=None,
-    ):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            "/fb_agent.scanner.v1.ScannerService/GetScrollMetrics",
-            v1_dot_scanner__pb2.GetScrollMetricsRequest.SerializeToString,
-            v1_dot_scanner__pb2.GetScrollMetricsResponse.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True,
-        )
-
-    @staticmethod
-    def GetVisibleRowIds(
-        request,
-        target,
-        options=(),
-        channel_credentials=None,
-        call_credentials=None,
-        insecure=False,
-        compression=None,
-        wait_for_ready=None,
-        timeout=None,
-        metadata=None,
-    ):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            "/fb_agent.scanner.v1.ScannerService/GetVisibleRowIds",
-            v1_dot_scanner__pb2.GetVisibleRowIdsRequest.SerializeToString,
-            v1_dot_scanner__pb2.GetVisibleRowIdsResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -819,96 +439,6 @@ class ScannerService(object):
             "/fb_agent.scanner.v1.ScannerService/WaitForToggleConfirmation",
             v1_dot_scanner__pb2.WaitForToggleConfirmationRequest.SerializeToString,
             v1_dot_scanner__pb2.WaitForToggleConfirmationResponse.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True,
-        )
-
-    @staticmethod
-    def ValidateColumns(
-        request,
-        target,
-        options=(),
-        channel_credentials=None,
-        call_credentials=None,
-        insecure=False,
-        compression=None,
-        wait_for_ready=None,
-        timeout=None,
-        metadata=None,
-    ):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            "/fb_agent.scanner.v1.ScannerService/ValidateColumns",
-            v1_dot_scanner__pb2.ValidateColumnsRequest.SerializeToString,
-            v1_dot_scanner__pb2.ValidateColumnsResponse.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True,
-        )
-
-    @staticmethod
-    def CaptureColumnWidths(
-        request,
-        target,
-        options=(),
-        channel_credentials=None,
-        call_credentials=None,
-        insecure=False,
-        compression=None,
-        wait_for_ready=None,
-        timeout=None,
-        metadata=None,
-    ):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            "/fb_agent.scanner.v1.ScannerService/CaptureColumnWidths",
-            v1_dot_scanner__pb2.CaptureColumnWidthsRequest.SerializeToString,
-            v1_dot_scanner__pb2.CaptureColumnWidthsResponse.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True,
-        )
-
-    @staticmethod
-    def ApplyColumnWidths(
-        request,
-        target,
-        options=(),
-        channel_credentials=None,
-        call_credentials=None,
-        insecure=False,
-        compression=None,
-        wait_for_ready=None,
-        timeout=None,
-        metadata=None,
-    ):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            "/fb_agent.scanner.v1.ScannerService/ApplyColumnWidths",
-            v1_dot_scanner__pb2.ApplyColumnWidthsRequest.SerializeToString,
-            v1_dot_scanner__pb2.ApplyColumnWidthsResponse.FromString,
             options,
             channel_credentials,
             insecure,

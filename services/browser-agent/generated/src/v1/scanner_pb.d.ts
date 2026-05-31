@@ -22,6 +22,12 @@ export class RunScanCycleRequest extends jspb.Message {
     setResetScrollFirst(value: boolean): RunScanCycleRequest;
     getSettleDelaySeconds(): number;
     setSettleDelaySeconds(value: number): RunScanCycleRequest;
+    clearCampaignIdsList(): void;
+    getCampaignIdsList(): Array<string>;
+    setCampaignIdsList(value: Array<string>): RunScanCycleRequest;
+    addCampaignIds(value: string, index?: number): string;
+    getOwnerTag(): string;
+    setOwnerTag(value: string): RunScanCycleRequest;
 
     serializeBinary(): Uint8Array;
     toObject(includeInstance?: boolean): RunScanCycleRequest.AsObject;
@@ -41,6 +47,8 @@ export namespace RunScanCycleRequest {
         doRefresh: boolean,
         resetScrollFirst: boolean,
         settleDelaySeconds: number,
+        campaignIdsList: Array<string>,
+        ownerTag: string,
     }
 }
 
@@ -1057,231 +1065,6 @@ export namespace WaitForToggleConfirmationResponse {
         message: string,
         finalAriaChecked: string,
         readsMatched: number,
-    }
-}
-
-export class ValidateColumnsRequest extends jspb.Message { 
-    getSessionId(): string;
-    setSessionId(value: string): ValidateColumnsRequest;
-
-    hasPageId(): boolean;
-    clearPageId(): void;
-    getPageId(): string | undefined;
-    setPageId(value: string): ValidateColumnsRequest;
-
-    serializeBinary(): Uint8Array;
-    toObject(includeInstance?: boolean): ValidateColumnsRequest.AsObject;
-    static toObject(includeInstance: boolean, msg: ValidateColumnsRequest): ValidateColumnsRequest.AsObject;
-    static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
-    static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
-    static serializeBinaryToWriter(message: ValidateColumnsRequest, writer: jspb.BinaryWriter): void;
-    static deserializeBinary(bytes: Uint8Array): ValidateColumnsRequest;
-    static deserializeBinaryFromReader(message: ValidateColumnsRequest, reader: jspb.BinaryReader): ValidateColumnsRequest;
-}
-
-export namespace ValidateColumnsRequest {
-    export type AsObject = {
-        sessionId: string,
-        pageId?: string,
-    }
-}
-
-export class ValidateColumnsResponse extends jspb.Message { 
-    getValid(): boolean;
-    setValid(value: boolean): ValidateColumnsResponse;
-    clearMissingColumnsList(): void;
-    getMissingColumnsList(): Array<string>;
-    setMissingColumnsList(value: Array<string>): ValidateColumnsResponse;
-    addMissingColumns(value: string, index?: number): string;
-    clearFoundColumnsList(): void;
-    getFoundColumnsList(): Array<string>;
-    setFoundColumnsList(value: Array<string>): ValidateColumnsResponse;
-    addFoundColumns(value: string, index?: number): string;
-    getErrorMessage(): string;
-    setErrorMessage(value: string): ValidateColumnsResponse;
-
-    serializeBinary(): Uint8Array;
-    toObject(includeInstance?: boolean): ValidateColumnsResponse.AsObject;
-    static toObject(includeInstance: boolean, msg: ValidateColumnsResponse): ValidateColumnsResponse.AsObject;
-    static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
-    static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
-    static serializeBinaryToWriter(message: ValidateColumnsResponse, writer: jspb.BinaryWriter): void;
-    static deserializeBinary(bytes: Uint8Array): ValidateColumnsResponse;
-    static deserializeBinaryFromReader(message: ValidateColumnsResponse, reader: jspb.BinaryReader): ValidateColumnsResponse;
-}
-
-export namespace ValidateColumnsResponse {
-    export type AsObject = {
-        valid: boolean,
-        missingColumnsList: Array<string>,
-        foundColumnsList: Array<string>,
-        errorMessage: string,
-    }
-}
-
-export class ColumnWidth extends jspb.Message { 
-    getKey(): string;
-    setKey(value: string): ColumnWidth;
-    getTitle(): string;
-    setTitle(value: string): ColumnWidth;
-    getSurfaceKey(): string;
-    setSurfaceKey(value: string): ColumnWidth;
-    getWidthPx(): number;
-    setWidthPx(value: number): ColumnWidth;
-    clearTextNeedlesList(): void;
-    getTextNeedlesList(): Array<string>;
-    setTextNeedlesList(value: Array<string>): ColumnWidth;
-    addTextNeedles(value: string, index?: number): string;
-
-    serializeBinary(): Uint8Array;
-    toObject(includeInstance?: boolean): ColumnWidth.AsObject;
-    static toObject(includeInstance: boolean, msg: ColumnWidth): ColumnWidth.AsObject;
-    static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
-    static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
-    static serializeBinaryToWriter(message: ColumnWidth, writer: jspb.BinaryWriter): void;
-    static deserializeBinary(bytes: Uint8Array): ColumnWidth;
-    static deserializeBinaryFromReader(message: ColumnWidth, reader: jspb.BinaryReader): ColumnWidth;
-}
-
-export namespace ColumnWidth {
-    export type AsObject = {
-        key: string,
-        title: string,
-        surfaceKey: string,
-        widthPx: number,
-        textNeedlesList: Array<string>,
-    }
-}
-
-export class CaptureColumnWidthsRequest extends jspb.Message { 
-    getSessionId(): string;
-    setSessionId(value: string): CaptureColumnWidthsRequest;
-
-    hasPageId(): boolean;
-    clearPageId(): void;
-    getPageId(): string | undefined;
-    setPageId(value: string): CaptureColumnWidthsRequest;
-
-    serializeBinary(): Uint8Array;
-    toObject(includeInstance?: boolean): CaptureColumnWidthsRequest.AsObject;
-    static toObject(includeInstance: boolean, msg: CaptureColumnWidthsRequest): CaptureColumnWidthsRequest.AsObject;
-    static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
-    static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
-    static serializeBinaryToWriter(message: CaptureColumnWidthsRequest, writer: jspb.BinaryWriter): void;
-    static deserializeBinary(bytes: Uint8Array): CaptureColumnWidthsRequest;
-    static deserializeBinaryFromReader(message: CaptureColumnWidthsRequest, reader: jspb.BinaryReader): CaptureColumnWidthsRequest;
-}
-
-export namespace CaptureColumnWidthsRequest {
-    export type AsObject = {
-        sessionId: string,
-        pageId?: string,
-    }
-}
-
-export class CaptureColumnWidthsResponse extends jspb.Message { 
-    getCaptured(): boolean;
-    setCaptured(value: boolean): CaptureColumnWidthsResponse;
-    clearColumnWidthsList(): void;
-    getColumnWidthsList(): Array<ColumnWidth>;
-    setColumnWidthsList(value: Array<ColumnWidth>): CaptureColumnWidthsResponse;
-    addColumnWidths(value?: ColumnWidth, index?: number): ColumnWidth;
-    clearMatchedColumnsList(): void;
-    getMatchedColumnsList(): Array<string>;
-    setMatchedColumnsList(value: Array<string>): CaptureColumnWidthsResponse;
-    addMatchedColumns(value: string, index?: number): string;
-    getErrorMessage(): string;
-    setErrorMessage(value: string): CaptureColumnWidthsResponse;
-    getTotalWidthPx(): number;
-    setTotalWidthPx(value: number): CaptureColumnWidthsResponse;
-
-    serializeBinary(): Uint8Array;
-    toObject(includeInstance?: boolean): CaptureColumnWidthsResponse.AsObject;
-    static toObject(includeInstance: boolean, msg: CaptureColumnWidthsResponse): CaptureColumnWidthsResponse.AsObject;
-    static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
-    static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
-    static serializeBinaryToWriter(message: CaptureColumnWidthsResponse, writer: jspb.BinaryWriter): void;
-    static deserializeBinary(bytes: Uint8Array): CaptureColumnWidthsResponse;
-    static deserializeBinaryFromReader(message: CaptureColumnWidthsResponse, reader: jspb.BinaryReader): CaptureColumnWidthsResponse;
-}
-
-export namespace CaptureColumnWidthsResponse {
-    export type AsObject = {
-        captured: boolean,
-        columnWidthsList: Array<ColumnWidth.AsObject>,
-        matchedColumnsList: Array<string>,
-        errorMessage: string,
-        totalWidthPx: number,
-    }
-}
-
-export class ApplyColumnWidthsRequest extends jspb.Message { 
-    getSessionId(): string;
-    setSessionId(value: string): ApplyColumnWidthsRequest;
-
-    hasPageId(): boolean;
-    clearPageId(): void;
-    getPageId(): string | undefined;
-    setPageId(value: string): ApplyColumnWidthsRequest;
-    clearColumnWidthsList(): void;
-    getColumnWidthsList(): Array<ColumnWidth>;
-    setColumnWidthsList(value: Array<ColumnWidth>): ApplyColumnWidthsRequest;
-    addColumnWidths(value?: ColumnWidth, index?: number): ColumnWidth;
-
-    serializeBinary(): Uint8Array;
-    toObject(includeInstance?: boolean): ApplyColumnWidthsRequest.AsObject;
-    static toObject(includeInstance: boolean, msg: ApplyColumnWidthsRequest): ApplyColumnWidthsRequest.AsObject;
-    static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
-    static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
-    static serializeBinaryToWriter(message: ApplyColumnWidthsRequest, writer: jspb.BinaryWriter): void;
-    static deserializeBinary(bytes: Uint8Array): ApplyColumnWidthsRequest;
-    static deserializeBinaryFromReader(message: ApplyColumnWidthsRequest, reader: jspb.BinaryReader): ApplyColumnWidthsRequest;
-}
-
-export namespace ApplyColumnWidthsRequest {
-    export type AsObject = {
-        sessionId: string,
-        pageId?: string,
-        columnWidthsList: Array<ColumnWidth.AsObject>,
-    }
-}
-
-export class ApplyColumnWidthsResponse extends jspb.Message { 
-    getApplied(): boolean;
-    setApplied(value: boolean): ApplyColumnWidthsResponse;
-    clearMatchedColumnsList(): void;
-    getMatchedColumnsList(): Array<string>;
-    setMatchedColumnsList(value: Array<string>): ApplyColumnWidthsResponse;
-    addMatchedColumns(value: string, index?: number): string;
-    clearMissingColumnsList(): void;
-    getMissingColumnsList(): Array<string>;
-    setMissingColumnsList(value: Array<string>): ApplyColumnWidthsResponse;
-    addMissingColumns(value: string, index?: number): string;
-    getErrorMessage(): string;
-    setErrorMessage(value: string): ApplyColumnWidthsResponse;
-    getAdjustedCells(): number;
-    setAdjustedCells(value: number): ApplyColumnWidthsResponse;
-    getTotalWidthPx(): number;
-    setTotalWidthPx(value: number): ApplyColumnWidthsResponse;
-
-    serializeBinary(): Uint8Array;
-    toObject(includeInstance?: boolean): ApplyColumnWidthsResponse.AsObject;
-    static toObject(includeInstance: boolean, msg: ApplyColumnWidthsResponse): ApplyColumnWidthsResponse.AsObject;
-    static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
-    static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
-    static serializeBinaryToWriter(message: ApplyColumnWidthsResponse, writer: jspb.BinaryWriter): void;
-    static deserializeBinary(bytes: Uint8Array): ApplyColumnWidthsResponse;
-    static deserializeBinaryFromReader(message: ApplyColumnWidthsResponse, reader: jspb.BinaryReader): ApplyColumnWidthsResponse;
-}
-
-export namespace ApplyColumnWidthsResponse {
-    export type AsObject = {
-        applied: boolean,
-        matchedColumnsList: Array<string>,
-        missingColumnsList: Array<string>,
-        errorMessage: string,
-        adjustedCells: number,
-        totalWidthPx: number,
     }
 }
 
