@@ -103,3 +103,12 @@ class ScanNowResponse(BaseModel):
     """Ответ на POST /settings/observer/scan-now."""
 
     status: str
+
+
+class CampaignOption(BaseModel):
+    """Кампания для выбора в allowlist сканирования (#3)."""
+
+    # Meta campaign.id (fb_campaign_id) — с ним сверяется am-фильтр.
+    id: str
+    name: str
+    selected: bool

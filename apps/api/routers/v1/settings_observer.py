@@ -15,7 +15,7 @@ import logging
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.deps import DepEngine, DepRedis
@@ -23,12 +23,14 @@ from apps.api.routers.v1.schemas.settings_observer import (
     ActViaApiToggleRequest,
     AutoEnableToggleRequest,
     CampaignAllowlistRequest,
+    CampaignOption,
     ObserverSettingsPutRequest,
     ObserverSettingsResponse,
     ScanningToggleRequest,
     ScanNowResponse,
 )
 from core.models.settings.observer_config import ObserverConfig
+from core.observer.queries import campaign_matches_owner
 
 logger = logging.getLogger(__name__)
 
@@ -172,6 +174,40 @@ async def patch_observer_campaigns(
         result = _to_response(cfg)
         await session.commit()
         return result
+
+
+@router.get("/campaigns", response_model=list[CampaignOption])
+async def list_observer_campaigns(engine: DepEngine) -> list[CampaignOption]:
+    """Список кампаний (накопленных observer'ом) для выбора allowlist (#3).
+
+    Фильтр по owner_campaign_tag (word-boundary, через campaign_matches_owner).
+    selected — входит ли кампания в текущий allowlist (cfg.campaign_ids).
+    Кампании без Meta fb_campaign_id пропускаются — их нельзя заскоупить по campaign.id.
+    """
+    async with AsyncSession(engine) as session:
+        cfg = await _get_singleton(session)
+        allowlist = set(cfg.campaign_ids or [])
+        owner_tag = cfg.owner_campaign_tag
+        rows = (
+            await session.execute(
+                text(
+                    """
+                    SELECT fb_campaign_id, campaign_name
+                    FROM fb_campaigns
+                    WHERE fb_campaign_id IS NOT NULL AND is_active = true
+                    ORDER BY last_seen_at DESC NULLS LAST
+                    LIMIT 500
+                    """
+                )
+            )
+        ).all()
+
+    out: list[CampaignOption] = []
+    for cid, name in rows:
+        if not campaign_matches_owner(campaign_name=name or "", ad_name="", owner_tag=owner_tag):
+            continue
+        out.append(CampaignOption(id=str(cid), name=name or "", selected=str(cid) in allowlist))
+    return out
 
 
 @router.post("/scan-now", response_model=ScanNowResponse)

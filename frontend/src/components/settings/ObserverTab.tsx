@@ -27,6 +27,9 @@ import {
   useScanRuns,
   useUpdateObserver,
   useTriggerScanNowSettings,
+  useObserverCampaigns,
+  useSetObserverCampaigns,
+  type CampaignOption,
 } from "@/lib/api/settings";
 
 // Колонки таблицы scan-runs.
@@ -103,6 +106,64 @@ const FILTER_OPTIONS: { value: ScanFilter; label: string }[] = [
   { value: "with_alerts", label: "С алертами" },
 ];
 
+/** Чекбокс-выбор кампаний для allowlist. Lazy-init из selected; key пересоздаёт при смене данных. */
+function CampaignSelector({
+  campaigns,
+  saving,
+  onSave,
+}: {
+  campaigns: CampaignOption[];
+  saving: boolean;
+  onSave: (ids: string[]) => void;
+}) {
+  const [selected, setSelected] = useState<Set<string>>(
+    () => new Set(campaigns.filter((c) => c.selected).map((c) => c.id)),
+  );
+
+  function toggle(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  return (
+    <div>
+      <div className="flex flex-col gap-0.5 max-h-64 overflow-y-auto border border-bg-5 bg-bg-1 p-1.5">
+        {campaigns.map((c) => (
+          <label
+            key={c.id}
+            className="flex items-center gap-2.5 px-2 py-1.5 hover:bg-bg-2 cursor-pointer transition-colors"
+          >
+            <input
+              type="checkbox"
+              className="size-4 accent-accent shrink-0"
+              checked={selected.has(c.id)}
+              onChange={() => toggle(c.id)}
+            />
+            <span className="text-[12.5px] text-bg-11 truncate">{c.name}</span>
+          </label>
+        ))}
+      </div>
+      <div className="flex items-center gap-2 mt-3">
+        <Button size="sm" variant="primary" loading={saving} onClick={() => onSave([...selected])}>
+          Сохранить выбор
+        </Button>
+        {selected.size > 0 ? (
+          <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>
+            Снять всё
+          </Button>
+        ) : null}
+        <span className="text-[11px] text-bg-9 ml-auto">
+          {selected.size > 0 ? `${selected.size} выбрано` : "сканируем все по тегу"}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 export function ObserverTab() {
   const [scanFilter, setScanFilter] = useState<ScanFilter>("all");
   // Локальное состояние для редактирования интервала.
@@ -118,6 +179,8 @@ export function ObserverTab() {
 
   const updateObserver = useUpdateObserver();
   const scanNow = useTriggerScanNowSettings();
+  const campaignsQuery = useObserverCampaigns();
+  const setCampaigns = useSetObserverCampaigns();
 
   const settings = settingsQuery.data;
   const status = statusQuery.data;
@@ -313,6 +376,43 @@ export function ObserverTab() {
               </button>
             )}
           </div>
+        </section>
+
+        {/* Кампании для сканирования (allowlist #3). */}
+        <section>
+          <h3 className="font-display text-[10px] uppercase tracking-widest text-bg-9 mb-2">
+            Кампании для сканирования
+          </h3>
+          <p className="text-[11px] text-bg-9 mb-3 leading-relaxed">
+            Отметьте конкретные кампании, чтобы сканировать только их. Пусто — сканируем все
+            кампании по тегу владельца.
+          </p>
+          {campaignsQuery.isLoading ? (
+            <Skeleton height={120} />
+          ) : campaignsQuery.isError ? (
+            <ErrorState
+              title="Не удалось загрузить кампании."
+              error={campaignsQuery.error}
+              onRetry={() => campaignsQuery.refetch()}
+            />
+          ) : (campaignsQuery.data?.length ?? 0) === 0 ? (
+            <p className="text-[12px] text-bg-9">Кампаний пока нет — появятся после первого скана.</p>
+          ) : (
+            <CampaignSelector
+              key={campaignsQuery.data!.map((c) => `${c.id}:${c.selected}`).join("|")}
+              campaigns={campaignsQuery.data!}
+              saving={setCampaigns.isPending}
+              onSave={(ids) =>
+                setCampaigns.mutate(ids, {
+                  onSuccess: () =>
+                    toast.success(
+                      ids.length ? `Выбрано кампаний: ${ids.length}` : "Сканируем все по тегу",
+                    ),
+                  onError: (e) => toast.error("Ошибка", e instanceof Error ? e.message : String(e)),
+                })
+              }
+            />
+          )}
         </section>
 
         {/* Таблица scan-runs. */}

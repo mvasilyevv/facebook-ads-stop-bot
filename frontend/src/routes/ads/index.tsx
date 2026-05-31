@@ -287,10 +287,10 @@ function AdsPage() {
     <>
       {/* 1. PageHeader */}
       <PageHeader
-        eyebrowNum="02"
+        eyebrowNum="01"
         eyebrow="ОПЕРИРОВАТЬ · ПРОВЕРЯТЬ · ВМЕШИВАТЬСЯ"
         title="Объявления"
-        displayNumber="02"
+        displayNumber="01"
         subtitle={
           <>
             <span className="text-bg-11 font-medium">{stats.total}</span> активных

@@ -35,7 +35,7 @@ function ControlRow({ label, desc, checked, loading, pending, onChange }: Contro
     <div className="flex items-start justify-between gap-3">
       <div>
         <div className="text-[13px] text-bg-11 font-medium">{label}</div>
-        <div className="text-[11px] text-bg-9 mt-0.5">{desc}</div>
+        <div className="text-[11.5px] text-bg-10 mt-0.5 leading-snug">{desc}</div>
       </div>
       {loading ? (
         <Skeleton width={44} height={24} />
@@ -115,7 +115,7 @@ export function ScannerControls() {
         />
         <ControlRow
           label="Авто-включение"
-          desc="Предлагать включить восстановившиеся объявления."
+          desc="Присылать в Telegram совет снова включить объявление, если после стопа его метрики восстановились."
           checked={s?.auto_enable_recommendations ?? false}
           loading={loading}
           pending={toggleAutoEnable.isPending}
