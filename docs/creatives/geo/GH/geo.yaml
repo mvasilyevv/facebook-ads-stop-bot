@@ -29,6 +29,11 @@ market_profile:
     EPL/UCL/AFCON). 70.68% молодёжи вовлечены в гэмблинг (4-е в Африке после KE/NG/ZA); драйвер —
     молодёжная безработица (ставка как доп. доход) + MoMo + футбол. Aviator (crash-game, как CR2)
     массово продвигают SportyBet/MSport. betPawa «Bet Small, Win BIG» — low-entry культурно заходит.
+  devices: >
+    Смартфоны (usage 2025): Samsung 26.4%, Tecno 17.7%, Apple 17.4%, Infinix 10.5%, itel 5.2%.
+    Транссион (Tecno+Infinix+itel) ~33% — народный сегмент, аппараты <$200. Android ~80%+.
+    ⚠️ ДЛЯ КРЕАТИВОВ: телефон на UGC-скрине = Android-стиль статусбар (Samsung/Tecno),
+    НЕ iPhone. iOS-рамка на Tier-3-нативке читается фальшиво (iPhone = премиум-меньшинство 17%).
 
 # Хуки уровня гео — ПЕРЕНОС из KE как гипотезы (testing; GH-FTD нет, кроме слабого low-entry).
 geo_hooks:
@@ -66,11 +71,17 @@ production_profile:
   format_bias: "гипотеза (перенос KE): нативный пост / UGC > direct-баннер. Проверить разведкой GH."
   typage: "локальный (ганцы), бытовое окружение; футбольный контекст (Black Stars/ЧМ-2026) как якорь."
   language_on_image: "English (ганский) + Pidgin/Twi-вставки (Chale, Ɛyɛ) + 🇬🇭"
+  device_ui: "Телефон в кадре = Android (Samsung/Tecno-стиль статусбар). НЕ iPhone — iOS-рамка на Tier-3 фальшива (web-research 2026-06-01)."
   findings:
     - date: 2026-05-31
       note: "Стартовые гипотезы перенесены из KE (близкий Tier-3 mobile-money рынок). Подтвердить GH-разведкой и GH-FTD."
       source: web
       verdict: unknown
+    - date: 2026-06-01
+      note: "Телефон на UGC-скрине = Android, не iPhone. Гана: Android ~80%+, Транссион (Tecno/Infinix/itel) ~33%, аппараты <$200. iPhone 17% = премиум-меньшинство, iOS-UI ломает достоверность."
+      metric: "Samsung 26.4% / Tecno 17.7% / Apple 17.4% / Infinix 10.5% / itel 5.2% (usage 2025, Statcounter/IntelPoint)."
+      source: web
+      verdict: works
     - date: TODO
       note: "Разведка Ad Library GH (CR2/Aviator/chicken road) → визуальные паттерны → финализировать production_profile."
       source: observation

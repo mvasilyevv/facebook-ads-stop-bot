@@ -14,6 +14,7 @@
 | Путь | Назначение |
 |---|---|
 | `SOP.md` | процесс залива A→Z (cold/warm, чемпион/челленджеры, гейты) |
+| `PROMPTING.md` | best-practice промт-инжиниринга для генерации (Sora/GPT Image): анатомия, текст, UGC-реализм |
 | `_schema.md` | контракт полей реестра |
 | `hooks.yaml` | хуки-атомы (geo/slot/visual/text) с вердиктами |
 | `geo/<GEO>/geo.yaml` | рынок гео, geo-хуки, **production_profile** (как генерить под гео) |
