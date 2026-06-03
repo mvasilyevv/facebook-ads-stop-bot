@@ -214,3 +214,35 @@ def test_render_escapes_html_in_ad_name() -> None:
     assert "<script>" not in text
     assert "&lt;script&gt;" in text
     assert "X&lt;Y&gt;" in text
+
+
+# Регресс (баг дайджеста 06-02): непустой Топ-5 из НУЛЕВЫХ строк не должен прятать
+# «тихий» блок. Раньше has_activity включал `or top_ads_by_spend`, и непустой список
+# нулей ложно давал has_activity=True. Теперь активность — только алерты и реальный spend.
+def test_render_zero_spend_top_ads_still_idle() -> None:
+    payload = DigestPayload(
+        window_start_utc=_ts(2026, 5, 26, 9),
+        window_end_utc=_ts(2026, 5, 27, 9),
+        alerts_warning_count=0,
+        alerts_stop_count=0,
+        top_ads_by_spend=[
+            TopAdRow(
+                ad_id=uuid.uuid4(),
+                fb_ad_id="2300000000099",
+                ad_name="zero spend ad",
+                offer_code="KE_CR2",
+                spend_usd=Decimal("0"),
+                clicks=0,
+                leads=0,
+                cpc=None,
+                cost_per_lead=None,
+            )
+        ],
+        disable_tasks_succeeded=0,
+        disable_tasks_failed=0,
+        active_offers_count=0,
+        active_ads_count=60,
+        total_spend_24h_usd=Decimal("0"),
+    )
+    text = render_digest(payload)
+    assert "За окно не было активности" in text

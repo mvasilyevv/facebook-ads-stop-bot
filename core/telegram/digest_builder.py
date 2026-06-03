@@ -193,7 +193,7 @@ async def _top_ads_and_total_spend(
                     JOIN fb_adsets ads  ON ads.id = a.adset_id
                     JOIN fb_campaigns c ON c.id = ads.campaign_id
                     LEFT JOIN offers o  ON o.id = c.offer_id
-                    WHERE lm.spend IS NOT NULL
+                    WHERE lm.spend > 0
                     ORDER BY lm.spend DESC NULLS LAST
                     LIMIT :limit
                     """

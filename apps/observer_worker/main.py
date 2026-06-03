@@ -43,6 +43,14 @@ WORKER_NAME = "observer"
 HEARTBEAT_KEY = f"worker:heartbeat:{WORKER_NAME}"
 HEARTBEAT_TTL_SECONDS = 60
 
+# TTL ключа observer:runtime. Должен быть с запасом больше интервала скана+jitter,
+# иначе ключ протухает между записями: на паузе цикл пишет runtime раз в interval+jitter
+# (дефолт 90-105с), и при TTL 60с возникала «дыра» — health_watchdog ложно слал
+# «observer:runtime устарел (missing)» каждый час. Держим TTL > watchdog
+# OBSERVER_STALE_AFTER_SECONDS (300с), чтобы при реальном зависании срабатывал точный
+# staleness-детект по updated_at, а не «missing».
+RUNTIME_TTL_SECONDS = int(os.environ.get("OBSERVER_RUNTIME_TTL_SEC", "360"))
+
 # Управляющие каналы observer'а.
 CHANNEL_TRIGGER = "fb_agent:observer:trigger"  # форс-скан вне расписания
 CHANNEL_CABINET_DAY = "fb_agent:observer:cabinet_day"  # сигнал нового кабинетного дня
@@ -165,7 +173,7 @@ async def _publish_runtime_status(
     next_scan_at: datetime | None = None,
     last_successful_scan_at: datetime | None = None,
 ) -> None:
-    """SET observer:runtime → JSON с TTL 60s. Frontend/health_watchdog читают этот ключ.
+    """SET observer:runtime → JSON с TTL RUNTIME_TTL_SECONDS. Frontend/health_watchdog читают ключ.
 
     Контракт:
         worker_status — детальный статус: "scanning" | "idle" | "dispatch" | "paused"
@@ -192,7 +200,7 @@ async def _publish_runtime_status(
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     try:
-        await redis_client.set("observer:runtime", json.dumps(payload), ex=60)
+        await redis_client.set("observer:runtime", json.dumps(payload), ex=RUNTIME_TTL_SECONDS)
     except Exception:
         logger.exception("redis SET observer:runtime failed")
 

@@ -273,3 +273,58 @@ async def test_build_digest_empty(pg_engine, clean_digest_tables) -> None:
 async def test_build_digest_rejects_naive_datetime(pg_engine, clean_digest_tables) -> None:
     with pytest.raises(ValueError):
         await build_digest(pg_engine, day_start_utc=datetime(2026, 5, 27, 9, 0, 0))
+
+
+# Регресс (баг дайджеста 06-02): ad со spend=0 НЕ попадает в Топ-5.
+# Раньше фильтр был `WHERE spend IS NOT NULL` — ноль не NULL и протекал мусорными
+# строками («— · $0.00 · CPC — · CPL —»). Теперь `WHERE spend > 0`: один ad с реальным
+# spend, другой с нулём → в топе только первый.
+@pytest.mark.asyncio
+async def test_build_digest_top_excludes_zero_spend(pg_engine, two_ads_world) -> None:
+    now = _now()
+    ad_a = two_ads_world["ad_a"]
+    ad_b = two_ads_world["ad_b"]
+
+    async with pg_engine.begin() as conn:
+        for ad_id, spend in ((ad_a, Decimal("75.00")), (ad_b, Decimal("0.00"))):
+            await conn.execute(
+                text(
+                    """
+                    INSERT INTO ad_metrics (ad_id, cycle_ts, spend, clicks, leads, cpc, cost_per_lead)
+                    VALUES (:a, :t, :s, 0, 0, NULL, NULL)
+                    """
+                ),
+                {"a": ad_id, "t": now - timedelta(hours=1), "s": spend},
+            )
+
+    payload = await build_digest(pg_engine, day_start_utc=now)
+    # В топе только ad_a (spend>0); ad_b с нулём отфильтрован.
+    assert len(payload.top_ads_by_spend) == 1
+    assert payload.top_ads_by_spend[0].ad_id == ad_a
+    # total_spend — сумма ВСЕХ snapshot'ов (нули не влияют): 75 + 0 = 75.
+    assert payload.total_spend_24h_usd == Decimal("75.00")
+
+
+# Регресс: все ad с нулевым spend → Топ-5 пуст (как пустой день), total=0.
+# Renderer на таком payload покажет «(нет данных за окно)» + «За окно не было активности».
+@pytest.mark.asyncio
+async def test_build_digest_top_empty_when_all_zero_spend(pg_engine, two_ads_world) -> None:
+    now = _now()
+    ad_a = two_ads_world["ad_a"]
+    ad_b = two_ads_world["ad_b"]
+
+    async with pg_engine.begin() as conn:
+        for ad_id in (ad_a, ad_b):
+            await conn.execute(
+                text(
+                    """
+                    INSERT INTO ad_metrics (ad_id, cycle_ts, spend, clicks, leads, cpc, cost_per_lead)
+                    VALUES (:a, :t, 0, 0, 0, NULL, NULL)
+                    """
+                ),
+                {"a": ad_id, "t": now - timedelta(hours=1)},
+            )
+
+    payload = await build_digest(pg_engine, day_start_utc=now)
+    assert payload.top_ads_by_spend == []
+    assert payload.total_spend_24h_usd == Decimal("0")
