@@ -71,7 +71,6 @@ export function OfferCard({ offer, metrics, onEdit, onDelete, onRules }: OfferCa
             </Badge>
           ) : null}
         </div>
-        <div className="text-[13px] text-bg-10 truncate">{offer.name}</div>
       </div>
 
       {/* Метрики за период */}
