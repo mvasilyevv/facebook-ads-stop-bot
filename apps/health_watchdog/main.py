@@ -37,7 +37,12 @@ HEARTBEAT_TTL_SECONDS = 60
 CHECK_INTERVAL_SECONDS = int(os.environ.get("HEALTH_WATCHDOG_INTERVAL_SEC", "60"))
 ALERT_DEDUP_TTL_SECONDS = int(os.environ.get("HEALTH_WATCHDOG_ALERT_TTL_SEC", "3600"))
 OBSERVER_STALE_AFTER_SECONDS = int(os.environ.get("HEALTH_WATCHDOG_OBSERVER_STALE_SEC", "300"))
-DEFAULT_EXPECTED_WORKERS = "observer,disable,enable,telegram_poller,cleanup,reconciler,meta_api"
+# Синхронизировано с воркерами, которые поднимает run.sh (+ meta_api для act_via_api).
+# enable_reco — реальное heartbeat-имя enable_recommendation_worker (не enable_recommendation).
+DEFAULT_EXPECTED_WORKERS = (
+    "observer,disable,enable,telegram_poller,cleanup,reconciler,"
+    "meta_api,tracker_aggregator,enable_reco"
+)
 
 OBSERVER_RUNTIME_KEY = "observer:runtime"
 ALERT_DEDUP_PREFIX = "health:alerted:"

@@ -196,14 +196,24 @@ async def mark_recommended(redis_client, ad_id: uuid.UUID) -> bool:
         return False
 
 
-async def heartbeat(redis_client) -> None:
-    """Пинг в Redis — health_watchdog следит за этим ключом."""
+async def heartbeat_loop(redis_client, stop: asyncio.Event) -> None:
+    """Фоновый heartbeat: пишет worker:heartbeat:enable_reco каждые TTL/2.
+
+    Отдельный таск, НЕ завязан на основной цикл (раз в INTERVAL_SECONDS=300с): при TTL 60с
+    ключ протухал между прогонами, и health_watchdog слал ложные «enable_reco не дышит».
+    """
     if redis_client is None:
         return
-    try:
-        await redis_client.set(HEARTBEAT_KEY, "alive", ex=HEARTBEAT_TTL_SECONDS)
-    except Exception:  # noqa: BLE001
-        logger.exception("heartbeat write упал")
+    interval = HEARTBEAT_TTL_SECONDS / 2
+    while not stop.is_set():
+        try:
+            await redis_client.set(HEARTBEAT_KEY, "alive", ex=HEARTBEAT_TTL_SECONDS)
+        except Exception:  # noqa: BLE001
+            logger.exception("enable_reco heartbeat: ошибка записи в Redis")
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=interval)
+        except asyncio.TimeoutError:
+            pass
 
 
 # ====================== Persist ======================
@@ -422,6 +432,10 @@ async def main_loop(
         except (NotImplementedError, RuntimeError):
             pass
 
+    # Фоновый heartbeat — независим от основного цикла (раз в 300с), чтобы ключ
+    # worker:heartbeat:enable_reco (TTL 60с) не протухал между прогонами.
+    hb_task = asyncio.create_task(heartbeat_loop(redis_client, stop_event))
+
     logger.info(
         "enable_recommendation_worker запущен (interval=%ss, cooldown=%ss)",
         INTERVAL_SECONDS,
@@ -430,7 +444,6 @@ async def main_loop(
 
     try:
         while should_continue() and not stop_event.is_set():
-            await heartbeat(redis_client)
             try:
                 summary = await run_once(
                     engine,
@@ -451,6 +464,11 @@ async def main_loop(
                 pass
     finally:
         logger.info("enable_recommendation_worker остановлен")
+        hb_task.cancel()
+        try:
+            await hb_task
+        except asyncio.CancelledError:
+            pass
         if redis_client is not None:
             try:
                 await redis_client.aclose()

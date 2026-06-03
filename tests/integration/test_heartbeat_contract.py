@@ -73,6 +73,8 @@ _EXPECTED_WORKERS = [
     "cleanup",
     "reconciler",
     "meta_api",
+    "tracker_aggregator",
+    "enable_reco",
 ]
 
 
@@ -228,6 +230,46 @@ async def test_reconciler_writes_heartbeat(fake_redis) -> None:
     assert value is not None, "reconciler_worker не записал heartbeat-ключ"
     assert WORKER_NAME in _EXPECTED_WORKERS
     assert HEARTBEAT_KEY == f"worker:heartbeat:{WORKER_NAME}"
+
+
+# ====================== tracker_aggregator heartbeat ======================
+
+
+@pytest.mark.asyncio
+async def test_tracker_aggregator_writes_heartbeat(fake_redis) -> None:
+    """tracker_aggregator_worker пишет worker:heartbeat:tracker_aggregator."""
+    from apps.tracker_aggregator_worker.main import HEARTBEAT_KEY, WORKER_NAME, heartbeat_loop
+
+    await _run_one_heartbeat_cycle(heartbeat_loop, fake_redis)
+
+    value = await fake_redis.get(HEARTBEAT_KEY)
+    assert value is not None, "tracker_aggregator не записал heartbeat-ключ"
+    assert WORKER_NAME in _EXPECTED_WORKERS
+    assert HEARTBEAT_KEY == f"worker:heartbeat:{WORKER_NAME}"
+
+
+# ====================== enable_reco heartbeat (имя != enable_recommendation) ======================
+
+
+def test_enable_reco_name_is_canonical() -> None:
+    """enable_recommendation_worker пишет heartbeat под именем 'enable_reco' — это имя в EXPECTED."""
+    from apps.enable_recommendation_worker.main import HEARTBEAT_KEY, WORKER_NAME
+
+    assert WORKER_NAME == "enable_reco"
+    assert HEARTBEAT_KEY == "worker:heartbeat:enable_reco"
+    assert WORKER_NAME in _EXPECTED_WORKERS
+
+
+# enable_reco пишет heartbeat через ФОНОВЫЙ loop (раньше — в основном цикле раз в 300с при
+# TTL 60с, ключ протухал → watchdog ложно алертил). Теперь не протухает между прогонами.
+@pytest.mark.asyncio
+async def test_enable_reco_writes_heartbeat(fake_redis) -> None:
+    """enable_reco пишет worker:heartbeat:enable_reco через фоновый heartbeat_loop."""
+    from apps.enable_recommendation_worker.main import HEARTBEAT_KEY, heartbeat_loop
+
+    await _run_one_heartbeat_cycle(heartbeat_loop, fake_redis)
+
+    assert await fake_redis.get(HEARTBEAT_KEY) is not None, "enable_reco не записал heartbeat"
 
 
 # ====================== watchdog не алертит когда ключ есть ======================
