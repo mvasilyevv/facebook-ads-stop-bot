@@ -7,7 +7,7 @@
 
 Цепочка за 0013_vision_auto_restart.
 
-Revision ID: 0014_observer_scanning_default_off
+Revision ID: 0014_scanning_default_off
 Revises: 0013_vision_auto_restart
 Create Date: 2026-05-31
 """
@@ -18,7 +18,7 @@ from typing import Sequence
 
 from alembic import op
 
-revision: str = "0014_observer_scanning_default_off"
+revision: str = "0014_scanning_default_off"
 down_revision: str | None = "0013_vision_auto_restart"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
