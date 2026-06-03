@@ -238,7 +238,7 @@ async def create_offer(
             Offer.__table__.insert()
             .values(
                 code=body.code,
-                name=body.name,
+                name=body.code,  # name = code: поле «Название» убрано из UI
                 vertical=body.vertical,
                 is_active=True,
             )
@@ -290,8 +290,7 @@ async def update_offer(
     404 если оффер не найден.
     """
     updates: dict = {}
-    if body.name is not None:
-        updates["name"] = body.name
+    # name не обновляется — всегда равно коду (поле убрано из UI).
     if body.vertical is not None:
         updates["vertical"] = body.vertical
     if body.is_active is not None:

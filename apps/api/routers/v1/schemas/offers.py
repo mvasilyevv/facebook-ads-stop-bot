@@ -56,7 +56,9 @@ class OfferCreateIn(BaseModel):
     """Тело POST /offers."""
 
     code: str = Field(..., min_length=1, max_length=64, description="Уникальный код оффера")
-    name: str = Field(..., min_length=1, max_length=128)
+    # name убрано из формы — оффер именуется кодом (name = code в endpoint).
+    # Принимаем опционально для обратной совместимости, но значение игнорируем.
+    name: str | None = None
     vertical: str | None = Field(None, max_length=32)
     # country_code и notes принимаем но игнорируем (нет в ORM)
     country_code: str | None = None
@@ -83,7 +85,8 @@ class OfferUpdateIn(BaseModel):
 
     # Принимаем code, но не применяем его — задокументировано в docstring.
     code: str | None = None
-    name: str | None = Field(None, min_length=1, max_length=128)
+    # name не редактируется — всегда равно коду; поле принимается, но игнорируется.
+    name: str | None = None
     vertical: str | None = Field(None, max_length=32)
     is_active: bool | None = None
     country_code: str | None = None

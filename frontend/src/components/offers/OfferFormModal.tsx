@@ -62,16 +62,14 @@ export function verticalLabel(v: string | null | undefined): string {
 
 interface FormState {
   code: string;
-  name: string;
   vertical: string;
   is_active: boolean;
 }
 
 function initForm(offer: Offer | null): FormState {
-  if (!offer) return { code: "", name: "", vertical: "", is_active: true };
+  if (!offer) return { code: "", vertical: "", is_active: true };
   return {
     code: offer.code,
-    name: offer.name,
     vertical: offer.vertical ?? "",
     is_active: offer.is_active,
   };
@@ -103,7 +101,6 @@ function OfferForm({ editOffer, onClose }: OfferFormProps) {
 
   function isValid(): boolean {
     if (!form.code || !CODE_RE.test(form.code)) return false;
-    if (!form.name.trim()) return false;
     return true;
   }
 
@@ -115,7 +112,6 @@ function OfferForm({ editOffer, onClose }: OfferFormProps) {
         {
           id: editOffer.id,
           data: {
-            name: form.name.trim(),
             vertical: form.vertical || null,
             is_active: form.is_active,
           },
@@ -133,7 +129,6 @@ function OfferForm({ editOffer, onClose }: OfferFormProps) {
       createOffer.mutate(
         {
           code: form.code,
-          name: form.name.trim(),
           vertical: form.vertical || null,
         },
         {
@@ -164,15 +159,6 @@ function OfferForm({ editOffer, onClose }: OfferFormProps) {
             ? "Только буквы A-Z, цифры, _ и -. Нельзя изменить после создания."
             : undefined
         }
-      />
-
-      {/* Название */}
-      <Input
-        id="offer-name"
-        label="Название *"
-        placeholder="Crypto registration, iGaming UA, ..."
-        value={form.name}
-        onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
       />
 
       {/* Вертикаль */}

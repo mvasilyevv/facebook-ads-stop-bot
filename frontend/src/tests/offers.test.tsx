@@ -67,8 +67,8 @@ const METRICS: OfferCompareRow = {
 // ─── OfferCard ────────────────────────────────────────────────────────────────
 
 describe("OfferCard", () => {
-  // Тест: карточка активного оффера показывает код, название и метрики.
-  it("рендерит код, название и метрики активного оффера", () => {
+  // Тест: карточка активного оффера показывает код и метрики (name убрано — дублировало code).
+  it("рендерит код и метрики активного оффера", () => {
     const onEdit = vi.fn();
     const onDelete = vi.fn();
     const onRules = vi.fn();
@@ -85,8 +85,6 @@ describe("OfferCard", () => {
 
     // Код оффера
     expect(screen.getByText("CR2")).toBeInTheDocument();
-    // Название
-    expect(screen.getByText("Crypto Registration 2")).toBeInTheDocument();
     // Вертикаль badge (человекочитаемый лейбл)
     expect(screen.getByText("Crypto")).toBeInTheDocument();
     // Метрики: spend (форматированный)
@@ -279,17 +277,14 @@ describe("OfferFormModal · валидация", () => {
     expect(createBtn).toBeDisabled();
   });
 
-  // Тест: кнопка включается после ввода валидного кода и имени.
-  it("кнопка включается при валидном коде и имени", () => {
+  // Тест: кнопка включается после ввода валидного кода (name убрано из формы).
+  it("кнопка включается при валидном коде", () => {
     render(
       <OfferFormModal open={true} onOpenChange={vi.fn()} editOffer={null} />,
     );
 
     const codeInput = screen.getByRole("textbox", { name: /код оффера/i });
-    const nameInput = screen.getByRole("textbox", { name: /название/i });
-
     fireEvent.change(codeInput, { target: { value: "CR3" } });
-    fireEvent.change(nameInput, { target: { value: "New Offer" } });
 
     const createBtn = screen.getByRole("button", { name: /создать/i });
     expect(createBtn).not.toBeDisabled();
