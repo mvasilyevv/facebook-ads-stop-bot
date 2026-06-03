@@ -81,7 +81,10 @@ def build_rule_context(
     impressions=None → guardrail работает ровно как раньше.
     """
     cpa = offer.cpa_threshold or Decimal("100")
-    warning_pct = Decimal("80")
+    # Чувствительность per-offer: при каком % правила срабатывает стоп/ворнинг.
+    # Дефолт 80/80 (как было захардкожено) при отсутствии offer_rules-строки.
+    warning_pct = offer.warning_percent_of_stop or Decimal("80")
+    stop_pct = offer.stop_percent_of_rule or Decimal("80")
 
     freq_threshold = offer.frequency_threshold
     freq_enabled = freq_threshold is not None and freq_threshold > 0
@@ -96,7 +99,7 @@ def build_rule_context(
     return RuleContext(
         cpa_amount=cpa,
         warning_percent_of_stop=warning_pct,
-        stop_percent_of_base=Decimal("80"),
+        stop_percent_of_base=stop_pct,
         external_deposits=external_deposits,
         frequency_anomaly_enabled=freq_enabled,
         frequency_current=frequency_current if freq_enabled else None,

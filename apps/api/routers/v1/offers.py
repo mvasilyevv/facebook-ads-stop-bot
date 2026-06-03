@@ -409,6 +409,8 @@ async def get_offer_rules(
         ctr_threshold=row["ctr_threshold"],
         frequency_threshold=row["frequency_threshold"],
         funnel_ratio_threshold=row["funnel_ratio_threshold"],
+        stop_percent_of_rule=row["stop_percent_of_rule"],
+        warning_percent_of_stop=row["warning_percent_of_stop"],
     )
 
 
@@ -443,6 +445,8 @@ async def upsert_offer_rules(
             "ctr_threshold": body.ctr_threshold,
             "frequency_threshold": body.frequency_threshold,
             "funnel_ratio_threshold": body.funnel_ratio_threshold,
+            "stop_percent_of_rule": body.stop_percent_of_rule,
+            "warning_percent_of_stop": body.warning_percent_of_stop,
         }
 
         # Upsert через INSERT ... ON CONFLICT (offer_id) DO UPDATE
@@ -458,6 +462,8 @@ async def upsert_offer_rules(
                 "ctr_threshold": stmt.excluded.ctr_threshold,
                 "frequency_threshold": stmt.excluded.frequency_threshold,
                 "funnel_ratio_threshold": stmt.excluded.funnel_ratio_threshold,
+                "stop_percent_of_rule": stmt.excluded.stop_percent_of_rule,
+                "warning_percent_of_stop": stmt.excluded.warning_percent_of_stop,
                 "updated_at": func.now(),
             },
         ).returning(
@@ -468,6 +474,8 @@ async def upsert_offer_rules(
             OfferRule.__table__.c.ctr_threshold,
             OfferRule.__table__.c.frequency_threshold,
             OfferRule.__table__.c.funnel_ratio_threshold,
+            OfferRule.__table__.c.stop_percent_of_rule,
+            OfferRule.__table__.c.warning_percent_of_stop,
         )
 
         result = await conn.execute(stmt)
@@ -481,4 +489,6 @@ async def upsert_offer_rules(
         ctr_threshold=row["ctr_threshold"],
         frequency_threshold=row["frequency_threshold"],
         funnel_ratio_threshold=row["funnel_ratio_threshold"],
+        stop_percent_of_rule=row["stop_percent_of_rule"],
+        warning_percent_of_stop=row["warning_percent_of_stop"],
     )

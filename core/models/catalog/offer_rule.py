@@ -52,6 +52,20 @@ class OfferRule(UUIDPrimaryKey, Timestamp, Base):
         Numeric(5, 2),
         nullable=True,
     )
+    # Чувствительность (per-offer): регулирует НЕ сами правила, а при каком % они
+    # срабатывают. stop_percent_of_rule — стоп = N% от базового правила (CPC-база
+    # 2%×CPA и т.д.); warning_percent_of_stop — ворнинг = M% от стопа. Дефолт 80/80
+    # (ровно как было захардкожено в build_rule_context). Диапазон 1–100 (валидация в API).
+    stop_percent_of_rule: Mapped[Decimal] = mapped_column(
+        Numeric(5, 2),
+        nullable=False,
+        server_default="80",
+    )
+    warning_percent_of_stop: Mapped[Decimal] = mapped_column(
+        Numeric(5, 2),
+        nullable=False,
+        server_default="80",
+    )
 
     offer: Mapped["Offer"] = relationship(  # noqa: F821
         "Offer",

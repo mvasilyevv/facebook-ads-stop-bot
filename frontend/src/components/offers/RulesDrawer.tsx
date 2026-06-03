@@ -22,7 +22,7 @@ interface RulesDrawerProps {
   offer: Offer | null;
 }
 
-const FIELD_COUNT = 6;
+const FIELD_COUNT = 8;
 
 export function RulesDrawer({ open, onOpenChange, offer }: RulesDrawerProps) {
   const rulesQuery = useOfferRules(open ? (offer?.id ?? null) : null);

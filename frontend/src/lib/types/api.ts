@@ -135,6 +135,10 @@ export interface OfferRules {
   ctr_threshold: string | null;
   frequency_threshold: string | null;
   funnel_ratio_threshold: string | null;
+  /** Стоп срабатывает при N% от базового правила. Диапазон 1–100, дефолт 80. */
+  stop_percent_of_rule: string | null;
+  /** Ворнинг срабатывает при M% от стопа. Диапазон 1–100, дефолт 80. */
+  warning_percent_of_stop: string | null;
 }
 
 // ─── Tasks ──────────────────────────────────────────────────────────────────
