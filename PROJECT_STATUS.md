@@ -132,8 +132,6 @@ observer (FSM/pipeline/writers/runtime), rules (7 стоп-правил, frequen
 | `CLAUDE.md` | Архитектура, design-rules, история раундов |
 | `DB_REDESIGN.md` | Схема БД |
 | `docs/stop_rules.md` | Стоп-правила: 6 правил + свёртка 80/80 + гео-CPA (KE_CR2 $8 / GH_CR2 $3) + owner-тег (подтверждено 2026-05-29) |
-| `docs/frontend_compatibility_audit.md` | 70 endpoints × backend-модели |
 | `docs/frontend_design.md` + `docs/frontend_mockups/` | Дизайн нового фронта |
-| `docs/backend_test_audit_round_8.md` | Аудит покрытия (Round 9 закрыл) |
-| `docs/backend_code_quality_audit.md` | Аудит качества (Round 10 закрыл) |
-| `docs/test_quality_audit.md` | Почему пропустили CRIT (Round 11 закрыл) |
+| `docs/archive/*audit*.md` | Завершённые аудиты (Round 9/10/11 закрыли) — архив |
+| `docs/playbooks/` | Операционные playbooks (залив/креативы/PWA/инциденты) |

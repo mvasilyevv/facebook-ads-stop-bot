@@ -41,7 +41,7 @@ tolerant операций (создание кампаний, изменение
                                   35 таблиц, 7 partitioned
 ```
 
-12 Python воркеров + FastAPI + Node.js gRPC + 2 фронта. Полный список —
+14 Python воркеров + FastAPI + Node.js gRPC + 2 фронта. Полный список —
 в [CLAUDE.md](CLAUDE.md) § Architecture.
 
 ---
@@ -98,7 +98,8 @@ make docker-build | helm-install  # k8s deployment
 | Документ | Назначение |
 |----------|-----------|
 | [DEPLOYMENT.md](DEPLOYMENT.md) | Развёртывание с нуля + production checklist |
-| [RUNBOOKS.md](RUNBOOKS.md) | Реакция на инциденты, восстановление |
+| [docs/playbooks/RUNBOOKS.md](docs/playbooks/RUNBOOKS.md) | Реакция на инциденты, восстановление |
+| [docs/playbooks/](docs/playbooks/) | Операционные playbooks: залив, креативы, PWA, рынок гео |
 | [CLAUDE.md](CLAUDE.md) | Архитектура, воркеры, конвенции (источник правды) |
 | [META_INTEGRATION_PLAN.md](META_INTEGRATION_PLAN.md) | Marketing API интеграция, этапы |
 | [DB_REDESIGN.md](DB_REDESIGN.md) | Схема БД, партиционирование, retention |

@@ -1,6 +1,6 @@
-# DB Redesign Proposal.0 — Full Schema Specification
+# DB Schema Reference — Full Schema Specification
 
-Документ на approve перед drop текущей схемы. После одобрения — становится source of truth для Alembic 0001 миграции, доменных модулей `core/models/` и cleanup-воркера.
+Source of truth по схеме БД (применена через Alembic 0001 миграцию): доменные модули `core/models/`, cleanup-воркер, retention/cleanup policy.
 
 **Объём:** 35 таблиц в Postgres + 3 namespace в Redis. Все имеют явный retention/cleanup policy.
 
