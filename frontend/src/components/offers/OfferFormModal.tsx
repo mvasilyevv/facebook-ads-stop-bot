@@ -104,6 +104,10 @@ function OfferForm({ editOffer, onClose }: OfferFormProps) {
 
   function isValid(): boolean {
     if (!form.code || !CODE_RE.test(form.code)) return false;
+    // В edit-режиме не даём сохранять, пока не подгрузился текущий CPA: иначе saveCpa
+    // отправил бы cpa_threshold=null и обнулил бы CPA → build_rule_context взял бы
+    // fallback $100, пороги автостопа стали бы в разы мягче (money-риск, нашёл review).
+    if (isEdit && !cpaInitialized) return false;
     // Если CPA задан — должен быть валидным числом >= 0.
     if (form.cpa.trim()) {
       const n = Number.parseFloat(form.cpa.trim());
