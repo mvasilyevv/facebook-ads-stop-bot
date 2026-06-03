@@ -84,10 +84,8 @@ function DashboardPage() {
   return (
     <>
       <PageHeader
-        eyebrowNum="01"
         eyebrow="ОБЗОР · НАБЛЮДЕНИЕ · УПРАВЛЕНИЕ"
         title="Панель"
-        displayNumber="01"
         subtitle={<HeaderSubtitle stats={stats} socketStatus={socket.status} pollingFallback={socket.pollingFallback} />}
         action={
           <Button

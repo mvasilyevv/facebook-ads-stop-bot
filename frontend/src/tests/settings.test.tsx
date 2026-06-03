@@ -81,6 +81,16 @@ vi.mock("@/lib/api/settings", () => ({
     mutate: vi.fn(),
     isPending: false,
   }),
+  useObserverCampaigns: () => ({
+    data: [],
+    isLoading: false,
+    isError: false,
+    refetch: vi.fn(),
+  }),
+  useSetObserverCampaigns: () => ({
+    mutate: vi.fn(),
+    isPending: false,
+  }),
   useHealthDetails: () => ({
     data: HEALTH_DETAILS,
     isLoading: false,

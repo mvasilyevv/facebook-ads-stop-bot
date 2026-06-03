@@ -59,11 +59,7 @@ export function TopBar() {
         </div>
       </div>
 
-      <nav aria-label="Хлебные крошки" className="text-[12px] text-bg-9 font-display tracking-wider">
-        <span>{crumbs.section}</span>
-        <span aria-hidden="true" className="text-bg-7 mx-2">
-          /
-        </span>
+      <nav aria-label="Текущий раздел" className="text-[12px] text-bg-9 font-display tracking-wider">
         <span className="text-bg-11">{crumbs.current}</span>
       </nav>
 

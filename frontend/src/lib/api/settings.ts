@@ -130,7 +130,13 @@ export function useToggleActViaApi() {
 export function useTelegramRecipients() {
   return useQuery({
     queryKey: [...KEYS.telegram, "recipients"] as const,
-    queryFn: () => apiClient.get<TelegramRecipient[]>("/settings/telegram/recipients"),
+    // Бэк отдаёт { recipients: [...], total }, а не голый массив — разворачиваем.
+    queryFn: async () => {
+      const r = await apiClient.get<{ recipients: TelegramRecipient[]; total: number }>(
+        "/settings/telegram/recipients",
+      );
+      return r.recipients ?? [];
+    },
   });
 }
 
@@ -194,6 +200,36 @@ export function useRestartDisableWorker() {
   return useMutation({
     mutationFn: () => apiClient.post<void>("/disable-worker/restart"),
     onSuccess: () => qc.invalidateQueries({ queryKey: KEYS.health }),
+  });
+}
+
+// ─── allowlist кампаний для сканирования (#3) ────────────────────────────────
+
+/** Кампания для выбора в allowlist. id — Meta campaign.id. */
+export interface CampaignOption {
+  id: string;
+  name: string;
+  selected: boolean;
+}
+
+/** GET /settings/observer/campaigns — кампании (по owner-тегу) для выбора. */
+export function useObserverCampaigns() {
+  return useQuery({
+    queryKey: ["observer", "campaigns"] as const,
+    queryFn: () => apiClient.get<CampaignOption[]>("/settings/observer/campaigns"),
+  });
+}
+
+/** PATCH /settings/observer/campaigns — сохранить allowlist (пусто = все по тегу). */
+export function useSetObserverCampaigns() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (campaign_ids: string[]) =>
+      apiClient.patch<ObserverSettings>("/settings/observer/campaigns", { campaign_ids }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: KEYS.observer });
+      qc.invalidateQueries({ queryKey: ["observer", "campaigns"] });
+    },
   });
 }
 

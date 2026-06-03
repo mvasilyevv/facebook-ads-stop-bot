@@ -292,10 +292,10 @@ function DraftsPage() {
   return (
     <>
       <PageHeader
-        eyebrowNum="03"
+        eyebrowNum="02"
         eyebrow="РУЧНОЙ КОНТРОЛЬ · ПОДТВЕРДИТЬ · ВЫПОЛНИТЬ"
         title="Черновики"
-        displayNumber="03"
+        displayNumber="02"
         subtitle={subtitle}
       />
 

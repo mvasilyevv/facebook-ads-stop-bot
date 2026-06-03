@@ -1,10 +1,6 @@
 /**
  * Sidebar — 240px expanded / 64px collapsed.
- * Состав по группам:
- *   01 OPERATE: Dashboard / Ads / Drafts
- *   02 CATALOG: Offers
- *   03 HISTORY: History
- *   04 SYSTEM: Settings
+ * Плоский список пунктов со сквозной нумерацией; Панель (главная) — без номера.
  * State в Zustand + localStorage.
  */
 
@@ -18,39 +14,17 @@ interface NavItem {
   to: string;
   label: string;
   icon: LucideIcon;
+  /** Номер пункта; Панель — без номера (главная). */
+  num?: string;
 }
 
-interface NavGroup {
-  num: string;
-  title: string;
-  items: NavItem[];
-}
-
-const NAV: NavGroup[] = [
-  {
-    num: "01",
-    title: "Управление",
-    items: [
-      { to: "/", label: "Панель", icon: Activity },
-      { to: "/ads", label: "Объявления", icon: Layers },
-      { to: "/drafts", label: "Черновики", icon: FileEdit },
-    ],
-  },
-  {
-    num: "02",
-    title: "Каталог",
-    items: [{ to: "/offers", label: "Офферы", icon: Tag }],
-  },
-  {
-    num: "03",
-    title: "История",
-    items: [{ to: "/history", label: "История", icon: Clock }],
-  },
-  {
-    num: "04",
-    title: "Система",
-    items: [{ to: "/settings", label: "Настройки", icon: Settings }],
-  },
+const NAV: NavItem[] = [
+  { to: "/", label: "Панель", icon: Activity },
+  { to: "/ads", label: "Объявления", icon: Layers, num: "01" },
+  { to: "/drafts", label: "Черновики", icon: FileEdit, num: "02" },
+  { to: "/offers", label: "Офферы", icon: Tag, num: "03" },
+  { to: "/history", label: "История", icon: Clock, num: "04" },
+  { to: "/settings", label: "Настройки", icon: Settings, num: "05" },
 ];
 
 export function Sidebar() {
@@ -63,73 +37,55 @@ export function Sidebar() {
       className={cn(
         "row-span-1 col-start-1 col-end-2",
         "border-r border-bg-5 bg-bg-0",
-        "py-6 flex flex-col gap-6",
+        "py-6 flex flex-col gap-0.5",
         "transition-[width]",
         collapsed ? "w-[64px]" : "w-[240px]",
       )}
     >
-      {NAV.map((group) => (
-        <div key={group.num} className="flex flex-col">
-          {!collapsed ? (
-            <div className="font-display text-[10px] tracking-[0.12em] uppercase text-bg-8 px-6 pb-2">
-              <span className="text-bg-7 mr-2">{group.num}</span>
-              {group.title}
-            </div>
-          ) : null}
-          {group.items.map((item) => {
-            const isActive = location.pathname === item.to ||
-              (item.to !== "/" && location.pathname.startsWith(item.to));
-            const linkEl = (
-              <Link
-                to={item.to}
-                aria-label={item.label}
-                aria-current={isActive ? "page" : undefined}
-                className={cn(
-                  "relative flex items-center gap-2.5",
-                  "h-[34px] px-6 transition-colors",
-                  "text-[13.5px] no-underline",
-                  isActive
-                    ? "text-accent bg-bg-1"
-                    : "text-bg-10 hover:bg-bg-2 hover:text-bg-11",
-                  collapsed && "px-0 justify-center",
-                )}
-              >
-                {isActive ? (
-                  <span
-                    aria-hidden="true"
-                    className="absolute left-0 top-1.5 bottom-1.5 w-[3px] bg-accent"
-                  />
-                ) : null}
-                <item.icon size={15} className={cn(isActive ? "opacity-100" : "opacity-70")} />
-                {!collapsed ? <span>{item.label}</span> : null}
-              </Link>
-            );
-            // В свёрнутом состоянии показываем подпись через tooltip — иконки иначе безымянны.
-            return collapsed ? (
-              <Tooltip key={item.to} content={item.label} side="right">
-                {linkEl}
-              </Tooltip>
-            ) : (
-              <span key={item.to} className="contents">
-                {linkEl}
+      {NAV.map((item) => {
+        const isActive =
+          location.pathname === item.to ||
+          (item.to !== "/" && location.pathname.startsWith(item.to));
+        const linkEl = (
+          <Link
+            to={item.to}
+            aria-label={item.label}
+            aria-current={isActive ? "page" : undefined}
+            className={cn(
+              "relative flex items-center gap-2.5",
+              "h-[36px] px-6 transition-colors",
+              "text-[13.5px] no-underline",
+              isActive ? "text-accent bg-bg-1" : "text-bg-10 hover:bg-bg-2 hover:text-bg-11",
+              collapsed && "px-0 justify-center",
+            )}
+          >
+            {isActive ? (
+              <span
+                aria-hidden="true"
+                className="absolute left-0 top-1.5 bottom-1.5 w-[3px] bg-accent"
+              />
+            ) : null}
+            <item.icon size={15} className={cn(isActive ? "opacity-100" : "opacity-70")} />
+            {!collapsed ? (
+              <span className="flex items-baseline gap-2.5 min-w-0">
+                <span className="font-display text-[10px] tracking-wider text-bg-7 w-4 shrink-0">
+                  {item.num ?? ""}
+                </span>
+                <span className="truncate">{item.label}</span>
               </span>
-            );
-          })}
-        </div>
-      ))}
-
-      {!collapsed ? (
-        <div className="mt-auto px-6 pt-4 border-t border-bg-5 font-display text-[11px] text-bg-9 tracking-tight">
-          <div className="flex justify-between mb-1">
-            <span>build</span>
-            <span className="text-bg-11">{import.meta.env.MODE}</span>
-          </div>
-          <div className="flex justify-between">
-            <span>spec</span>
-            <span className="text-bg-11">v1.0</span>
-          </div>
-        </div>
-      ) : null}
+            ) : null}
+          </Link>
+        );
+        return collapsed ? (
+          <Tooltip key={item.to} content={item.label} side="right">
+            {linkEl}
+          </Tooltip>
+        ) : (
+          <span key={item.to} className="contents">
+            {linkEl}
+          </span>
+        );
+      })}
     </aside>
   );
 }
