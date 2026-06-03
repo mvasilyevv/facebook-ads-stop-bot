@@ -162,3 +162,41 @@ class OfferRuleUpsertIn(BaseModel):
     # Чувствительность 1–100% (всегда задано, дефолт 80). НЕ nullable — колонки NOT NULL.
     stop_percent_of_rule: Decimal = Field(Decimal("80"), ge=1, le=100)
     warning_percent_of_stop: Decimal = Field(Decimal("80"), ge=1, le=100)
+
+
+# ─────────────────────── Rule preview (live-расчёт стоимостей) ───────────────────────
+
+
+class RuleThresholdPreview(BaseModel):
+    """Один порог-правило: при какой $-стоимости сработают стоп и ворнинг."""
+
+    rule: str
+    label: str
+    base: Decimal  # база (фикс. правило), $
+    stop: Decimal  # стоп, $
+    warning: Decimal  # ворнинг, $
+
+
+class SpendRangePreview(BaseModel):
+    """Диапазон расхода (% от CPA → $)."""
+
+    rule: str
+    label: str
+    stop_from: Decimal
+    stop_to: Decimal
+    warning_from: Decimal
+
+
+class RulePreviewOut(BaseModel):
+    """Превью порогов автостопа для CPA + чувствительности.
+
+    Считается через RuleContext — ТОТ ЖЕ расчёт, что применяет автостоп: цифры в UI
+    совпадают с реальными порогами, по которым observer отключает объявления.
+    """
+
+    cpa: Decimal
+    stop_percent_of_rule: Decimal
+    warning_percent_of_stop: Decimal
+    cost_rules: list[RuleThresholdPreview]
+    spend_ranges: list[SpendRangePreview]
+    regs_no_dep_stop_count: int

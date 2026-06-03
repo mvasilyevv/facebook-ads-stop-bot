@@ -359,6 +359,33 @@ export interface HealthDetails {
   observer_runtime: Record<string, unknown> | null; // отсутствовало в ручном типе
 }
 
+// ─── Rule Preview ────────────────────────────────────────────────────────────
+
+export interface RulePreviewCostRule {
+  rule: string;
+  label: string;
+  base: number;
+  stop: number;
+  warning: number;
+}
+
+export interface RulePreviewSpendRange {
+  rule: string;
+  label: string;
+  stop_from: number;
+  stop_to: number;
+  warning_from: number;
+}
+
+export interface RulePreviewOut {
+  cpa: number;
+  stop_percent_of_rule: number;
+  warning_percent_of_stop: number;
+  cost_rules: RulePreviewCostRule[];
+  spend_ranges: RulePreviewSpendRange[];
+  regs_no_dep_stop_count: number;
+}
+
 // ─── Generic helpers ────────────────────────────────────────────────────────
 
 /**

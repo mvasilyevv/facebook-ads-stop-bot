@@ -3,11 +3,10 @@
  * Показывает метрики за N дней из useOffersCompare.
  */
 
-import { Settings2, Trash2, Pencil } from "lucide-react";
+import { Settings2, Trash2, Pencil, SlidersHorizontal } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
-import { verticalLabel } from "./OfferFormModal";
 import { formatSpend, formatInt } from "@/lib/utils/format";
 import type { Offer, OfferCompareRow } from "@/lib/types/api";
 
@@ -18,15 +17,25 @@ interface OfferCardProps {
   onEdit: (offer: Offer) => void;
   onDelete: (offer: Offer) => void;
   onRules: (offer: Offer) => void;
+  onSensitivity?: (offer: Offer) => void;
 }
 
-export function OfferCard({ offer, metrics, onEdit, onDelete, onRules }: OfferCardProps) {
+export function OfferCard({ offer, metrics, onEdit, onDelete, onRules, onSensitivity }: OfferCardProps) {
   return (
     <Card
       padded
       className="flex flex-col gap-5"
       action={
         <div className="flex items-center gap-1.5">
+          <Button
+            variant="ghost"
+            size="xs"
+            aria-label="Чувствительность"
+            onClick={() => onSensitivity?.(offer)}
+            title="Чувствительность правил"
+          >
+            <SlidersHorizontal size={13} aria-hidden="true" />
+          </Button>
           <Button
             variant="ghost"
             size="xs"
@@ -60,11 +69,6 @@ export function OfferCard({ offer, metrics, onEdit, onDelete, onRules }: OfferCa
           <span className="font-display font-semibold text-[15px] text-bg-11 tracking-tight">
             {offer.code}
           </span>
-          {offer.vertical ? (
-            <Badge variant="neutral" size="sm" withDot={false}>
-              {verticalLabel(offer.vertical)}
-            </Badge>
-          ) : null}
           {!offer.is_active ? (
             <Badge variant="disabled" size="sm" withDot={false}>
               Неактивен

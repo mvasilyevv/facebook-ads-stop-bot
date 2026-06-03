@@ -4,7 +4,7 @@
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiClient } from "./client";
-import type { Offer, OfferCompareRow, OfferRules } from "@/lib/types/api";
+import type { Offer, OfferCompareRow, OfferRules, RulePreviewOut } from "@/lib/types/api";
 
 const KEYS = {
   list: (include_inactive?: boolean) => ["offers", "list", include_inactive] as const,
@@ -37,7 +37,7 @@ export function useOfferRules(id: string | null) {
 export function useCreateOffer() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (data: { code: string; name: string; vertical?: string | null }) =>
+    mutationFn: (data: { code: string }) =>
       apiClient.post<Offer>("/offers", data),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["offers"] }),
   });
@@ -67,6 +67,28 @@ export function useUpsertOfferRules() {
       apiClient.put<OfferRules>(`/offers/${id}/rules`, data),
     onSuccess: (_, vars) =>
       qc.invalidateQueries({ queryKey: KEYS.rules(vars.id) }),
+  });
+}
+
+/**
+ * Preview расчёт стоп/ворнинг порогов при заданных процентах.
+ * Enabled только при cpa !== null.
+ */
+export function useRulePreview(
+  cpa: number | null,
+  stop: number,
+  warning: number,
+) {
+  return useQuery({
+    queryKey: ["offers", "rules", "preview", cpa, stop, warning] as const,
+    queryFn: () =>
+      apiClient.get<RulePreviewOut>("/offers/rules/preview", {
+        cpa,
+        stop_percent_of_rule: stop,
+        warning_percent_of_stop: warning,
+      }),
+    enabled: cpa !== null && cpa > 0,
+    staleTime: 30_000,
   });
 }
 

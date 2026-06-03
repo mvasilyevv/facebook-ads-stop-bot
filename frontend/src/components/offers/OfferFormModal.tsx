@@ -4,15 +4,23 @@
  *
  * Паттерн сброса: key={editOffer?.id ?? "new"} на внутреннем компоненте,
  * чтобы React пересоздавал форму при смене оффера — без setState в useEffect.
+ *
+ * CPA: при создании — POST /offers → PUT /offers/{id}/rules.
+ *       при редактировании — PUT rules вместе с остальными порогами.
  */
 
 import { useState } from "react";
 import { Modal } from "@/components/ui/Modal";
 import { Input } from "@/components/ui/Input";
-import { Select } from "@/components/ui/Select";
 import { Button } from "@/components/ui/Button";
 import { toast } from "@/components/ui/Toast";
-import { useCreateOffer, useUpdateOffer } from "@/lib/api/offers";
+import {
+  useCreateOffer,
+  useUpdateOffer,
+  useOfferRules,
+  useUpsertOfferRules,
+} from "@/lib/api/offers";
+import { parseRuleField } from "./RulesForm";
 import type { Offer } from "@/lib/types/api";
 
 interface OfferFormModalProps {
@@ -44,34 +52,18 @@ export function OfferFormModal({ open, onOpenChange, editOffer }: OfferFormModal
 
 const CODE_RE = /^[A-Z0-9_-]+$/;
 
-export const VERTICAL_OPTIONS = [
-  { value: "", label: "— Не задано —" },
-  { value: "gambling", label: "Gambling" },
-  { value: "nutra", label: "Nutra" },
-  { value: "finance", label: "Finance" },
-  { value: "crypto", label: "Crypto" },
-  { value: "dating", label: "Dating" },
-  { value: "other", label: "Other" },
-];
-
-/** Человекочитаемый лейбл вертикали (для карточек). */
-export function verticalLabel(v: string | null | undefined): string {
-  if (!v) return "";
-  return VERTICAL_OPTIONS.find((o) => o.value === v)?.label ?? v;
-}
-
 interface FormState {
   code: string;
-  vertical: string;
   is_active: boolean;
+  cpa: string; // CPA, $ (строка, пусто = null)
 }
 
 function initForm(offer: Offer | null): FormState {
-  if (!offer) return { code: "", vertical: "", is_active: true };
+  if (!offer) return { code: "", is_active: true, cpa: "" };
   return {
     code: offer.code,
-    vertical: offer.vertical ?? "",
     is_active: offer.is_active,
+    cpa: "", // заполняется в OfferForm через useOfferRules
   };
 }
 
@@ -83,11 +75,22 @@ interface OfferFormProps {
 function OfferForm({ editOffer, onClose }: OfferFormProps) {
   const isEdit = !!editOffer;
   const [form, setForm] = useState<FormState>(() => initForm(editOffer));
+  const [cpaInitialized, setCpaInitialized] = useState(false);
   const [codeError, setCodeError] = useState<string | undefined>();
 
   const createOffer = useCreateOffer();
   const updateOffer = useUpdateOffer();
-  const busy = createOffer.isPending || updateOffer.isPending;
+  const upsertRules = useUpsertOfferRules();
+
+  // При редактировании — загружаем правила для получения текущего CPA.
+  const rulesQuery = useOfferRules(isEdit ? editOffer.id : null);
+  if (isEdit && rulesQuery.data && !cpaInitialized) {
+    const cpa = rulesQuery.data.cpa_threshold ?? "";
+    setForm((p) => ({ ...p, cpa }));
+    setCpaInitialized(true);
+  }
+
+  const busy = createOffer.isPending || updateOffer.isPending || upsertRules.isPending;
 
   function handleCodeChange(value: string) {
     const upper = value.toUpperCase();
@@ -101,7 +104,18 @@ function OfferForm({ editOffer, onClose }: OfferFormProps) {
 
   function isValid(): boolean {
     if (!form.code || !CODE_RE.test(form.code)) return false;
+    // Если CPA задан — должен быть валидным числом >= 0.
+    if (form.cpa.trim()) {
+      const n = Number.parseFloat(form.cpa.trim());
+      if (Number.isNaN(n) || n < 0) return false;
+    }
     return true;
+  }
+
+  function saveCpa(offerId: string) {
+    const cpaValue = parseRuleField(form.cpa);
+    // Partial: шлём ТОЛЬКО CPA — частота и чувствительность не трогаем (backend partial-upsert).
+    return upsertRules.mutateAsync({ id: offerId, data: { cpa_threshold: cpaValue } });
   }
 
   function handleSubmit() {
@@ -112,12 +126,18 @@ function OfferForm({ editOffer, onClose }: OfferFormProps) {
         {
           id: editOffer.id,
           data: {
-            vertical: form.vertical || null,
             is_active: form.is_active,
           },
         },
         {
-          onSuccess: () => {
+          onSuccess: async () => {
+            // Сохраняем CPA отдельным PUT rules.
+            try {
+              await saveCpa(editOffer.id);
+            } catch {
+              toast.error("Ошибка сохранения CPA", "Оффер обновлён, но CPA не сохранён.");
+              return;
+            }
             toast.success("Оффер обновлён", `${form.code} — изменения сохранены.`);
             onClose();
           },
@@ -129,10 +149,19 @@ function OfferForm({ editOffer, onClose }: OfferFormProps) {
       createOffer.mutate(
         {
           code: form.code,
-          vertical: form.vertical || null,
         },
         {
-          onSuccess: () => {
+          onSuccess: async (newOffer) => {
+            // Если CPA задан — PUT rules после создания оффера.
+            if (form.cpa.trim()) {
+              try {
+                await saveCpa(newOffer.id);
+              } catch {
+                toast.error("Оффер создан, но CPA не сохранён", "Задайте CPA в настройках правил.");
+                onClose();
+                return;
+              }
+            }
             toast.success("Оффер создан", `${form.code} добавлен в каталог.`);
             onClose();
           },
@@ -161,13 +190,17 @@ function OfferForm({ editOffer, onClose }: OfferFormProps) {
         }
       />
 
-      {/* Вертикаль */}
-      <Select
-        id="offer-vertical"
-        label="Вертикаль"
-        options={VERTICAL_OPTIONS}
-        value={form.vertical}
-        onChange={(e) => setForm((p) => ({ ...p, vertical: e.target.value }))}
+      {/* CPA, $ */}
+      <Input
+        id="offer-cpa"
+        type="number"
+        min={0}
+        step="any"
+        label="CPA, $"
+        placeholder="Не задано"
+        value={form.cpa}
+        onChange={(e) => setForm((p) => ({ ...p, cpa: e.target.value }))}
+        helpText="Стоп при превышении стоимости целевого действия. Пустое поле — правило выключено."
       />
 
       {/* Статус (только при редактировании) */}
