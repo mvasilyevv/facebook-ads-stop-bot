@@ -12,7 +12,7 @@ import { useUpsertOfferRules } from "@/lib/api/offers";
 import type { OfferRules } from "@/lib/types/api";
 
 export const RULE_FIELDS: Array<{
-  key: keyof Omit<OfferRules, "offer_id">;
+  key: keyof Omit<OfferRules, "offer_id" | "stop_percent_of_rule" | "warning_percent_of_stop">;
   label: string;
   help: string;
   /** Поля-доли (0–1): значение > 1 почти наверняка ошибка (проценты вместо доли). */
@@ -63,6 +63,8 @@ export function rulesFromData(rules: OfferRules): RulesFormState {
     ctr_threshold: rules.ctr_threshold?.toString() ?? "",
     frequency_threshold: rules.frequency_threshold?.toString() ?? "",
     funnel_ratio_threshold: rules.funnel_ratio_threshold?.toString() ?? "",
+    stop_percent_of_rule: rules.stop_percent_of_rule?.toString() ?? "80",
+    warning_percent_of_stop: rules.warning_percent_of_stop?.toString() ?? "80",
   };
 }
 
@@ -74,6 +76,8 @@ function emptyForm(): RulesFormState {
     ctr_threshold: "",
     frequency_threshold: "",
     funnel_ratio_threshold: "",
+    stop_percent_of_rule: "80",
+    warning_percent_of_stop: "80",
   };
 }
 
@@ -122,6 +126,13 @@ export function RulesForm({
       else if (n < 0) next[f.key] = "Не может быть отрицательным";
       else if (f.fraction && n > 1) next[f.key] = "Доля от 0 до 1 (например 0.02 = 2%)";
     }
+    // Валидация полей чувствительности (1–100).
+    for (const key of ["stop_percent_of_rule", "warning_percent_of_stop"] as const) {
+      const v = form[key].trim();
+      const n = Number.parseFloat(v || "80");
+      if (Number.isNaN(n) || !Number.isFinite(n)) next[key] = "Введите число";
+      else if (n < 1 || n > 100) next[key] = "Значение от 1 до 100";
+    }
     setErrors(next);
     return Object.keys(next).length === 0;
   }
@@ -131,6 +142,11 @@ export function RulesForm({
       toast.error("Проверьте поля", "Некоторые пороги заданы некорректно.");
       return;
     }
+    // Для percent-полей: пустая строка → дефолт 80, не null.
+    const parsePctField = (v: string): string => {
+      const n = Number.parseFloat(v.trim());
+      return String(Number.isNaN(n) ? 80 : n);
+    };
     const data: Partial<OfferRules> = {
       spend_no_event_threshold: parseRuleField(form.spend_no_event_threshold),
       cpa_threshold: parseRuleField(form.cpa_threshold),
@@ -138,6 +154,8 @@ export function RulesForm({
       ctr_threshold: parseRuleField(form.ctr_threshold),
       frequency_threshold: parseRuleField(form.frequency_threshold),
       funnel_ratio_threshold: parseRuleField(form.funnel_ratio_threshold),
+      stop_percent_of_rule: parsePctField(form.stop_percent_of_rule),
+      warning_percent_of_stop: parsePctField(form.warning_percent_of_stop),
     };
     upsert.mutate(
       { id: offerId, data },
@@ -173,6 +191,46 @@ export function RulesForm({
             onChange={(e) => setForm((p) => ({ ...p, [field.key]: e.target.value }))}
           />
         ))}
+      </div>
+
+      {/* Секция чувствительности */}
+      <div className="flex flex-col gap-3 rounded-md border border-bg-5 px-4 pt-3 pb-4">
+        <p className="text-[11px] font-medium uppercase tracking-wide text-bg-8">
+          Чувствительность
+        </p>
+        <div className="flex flex-col gap-4">
+          <Input
+            id="rule-stop_percent_of_rule"
+            type="number"
+            min={1}
+            max={100}
+            step={1}
+            label="Стоп — % от правила"
+            helpText="При каком % от базового правила срабатывает стоп. По умолчанию 80."
+            errorMessage={errors.stop_percent_of_rule}
+            placeholder="80"
+            value={form.stop_percent_of_rule}
+            onChange={(e) => setForm((p) => ({ ...p, stop_percent_of_rule: e.target.value }))}
+          />
+          <Input
+            id="rule-warning_percent_of_stop"
+            type="number"
+            min={1}
+            max={100}
+            step={1}
+            label="Ворнинг — % от стопа"
+            helpText="При каком % от стоп-порога срабатывает предупреждение. По умолчанию 80."
+            errorMessage={errors.warning_percent_of_stop}
+            placeholder="80"
+            value={form.warning_percent_of_stop}
+            onChange={(e) => setForm((p) => ({ ...p, warning_percent_of_stop: e.target.value }))}
+          />
+        </div>
+        <p className="text-[11px] text-bg-7 leading-relaxed">
+          Базовые проценты правил (2/10/20% от CPA) фиксированы. Здесь — при каком % они
+          срабатывают: стоп = N% от правила, ворнинг = M% от стопа. Пример: CPC-правило $0.06 →
+          стоп $0.05 (83%) → ворнинг $0.04 (80%).
+        </p>
       </div>
 
       {/* Кнопки */}

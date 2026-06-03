@@ -6,10 +6,11 @@ import { render, screen, fireEvent } from "@testing-library/react";
 
 import { OfferCard } from "@/components/offers/OfferCard";
 import { OfferFormModal } from "@/components/offers/OfferFormModal";
+import { RulesForm } from "@/components/offers/RulesForm";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Button } from "@/components/ui/Button";
 import { Tag, Plus } from "lucide-react";
-import type { Offer, OfferCompareRow } from "@/lib/types/api";
+import type { Offer, OfferCompareRow, OfferRules } from "@/lib/types/api";
 
 // Mock хуков — OfferFormModal использует useCreateOffer/useUpdateOffer.
 vi.mock("@/lib/api/offers", () => ({
@@ -184,6 +185,84 @@ describe("Offers · EmptyState", () => {
     expect(btn).toBeInTheDocument();
     fireEvent.click(btn);
     expect(onCreate).toHaveBeenCalledOnce();
+  });
+});
+
+// ─── RulesForm — секция чувствительности ─────────────────────────────────────
+
+const OFFER_RULES: OfferRules = {
+  offer_id: "offer-1",
+  spend_no_event_threshold: "50",
+  cpa_threshold: "10",
+  cpm_threshold: "5",
+  ctr_threshold: "0.02",
+  frequency_threshold: "4",
+  funnel_ratio_threshold: "0.05",
+  stop_percent_of_rule: "80",
+  warning_percent_of_stop: "80",
+};
+
+describe("RulesForm · чувствительность", () => {
+  // Тест: секция «Чувствительность» рендерится с двумя полями и пояснением.
+  it("рендерит секцию чувствительности с полями и пояснением", () => {
+    render(
+      <RulesForm
+        offerId="offer-1"
+        initialRules={OFFER_RULES}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Чувствительность")).toBeInTheDocument();
+    expect(screen.getByLabelText(/стоп — % от правила/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/ворнинг — % от стопа/i)).toBeInTheDocument();
+    // Пояснение содержит ключевое слово.
+    expect(screen.getByText(/базовые проценты правил/i)).toBeInTheDocument();
+  });
+
+  // Тест: поля инициализируются значениями из initialRules.
+  it("поля заполнены значениями из initialRules", () => {
+    render(
+      <RulesForm
+        offerId="offer-1"
+        initialRules={OFFER_RULES}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const stopInput = screen.getByLabelText(/стоп — % от правила/i) as HTMLInputElement;
+    const warnInput = screen.getByLabelText(/ворнинг — % от стопа/i) as HTMLInputElement;
+
+    expect(stopInput.value).toBe("80");
+    expect(warnInput.value).toBe("80");
+  });
+
+  // Тест: при отсутствии initialRules дефолты 80/80.
+  it("устанавливает дефолт 80/80 при отсутствии initialRules", () => {
+    render(
+      <RulesForm offerId="offer-1" onClose={vi.fn()} />,
+    );
+
+    const stopInput = screen.getByLabelText(/стоп — % от правила/i) as HTMLInputElement;
+    const warnInput = screen.getByLabelText(/ворнинг — % от стопа/i) as HTMLInputElement;
+
+    expect(stopInput.value).toBe("80");
+    expect(warnInput.value).toBe("80");
+  });
+
+  // Тест: ввод значения > 100 показывает ошибку валидации при сохранении.
+  it("показывает ошибку при значении > 100", () => {
+    render(
+      <RulesForm offerId="offer-1" onClose={vi.fn()} />,
+    );
+
+    const stopInput = screen.getByLabelText(/стоп — % от правила/i);
+    fireEvent.change(stopInput, { target: { value: "150" } });
+
+    const saveBtn = screen.getByRole("button", { name: /сохранить/i });
+    fireEvent.click(saveBtn);
+
+    expect(screen.getByText("Значение от 1 до 100")).toBeInTheDocument();
   });
 });
 

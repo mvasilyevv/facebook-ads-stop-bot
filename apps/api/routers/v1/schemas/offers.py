@@ -138,6 +138,10 @@ class OfferRuleOut(BaseModel):
     ctr_threshold: Decimal | None = None
     frequency_threshold: Decimal | None = None
     funnel_ratio_threshold: Decimal | None = None
+    # Чувствительность (per-offer, дефолт 80/80). stop_percent_of_rule — стоп = N% от
+    # базового правила (CPC-база 2%×CPA и т.д.); warning_percent_of_stop — ворнинг = M% от стопа.
+    stop_percent_of_rule: Decimal = Decimal("80")
+    warning_percent_of_stop: Decimal = Decimal("80")
 
 
 class OfferRuleUpsertIn(BaseModel):
@@ -152,3 +156,6 @@ class OfferRuleUpsertIn(BaseModel):
     ctr_threshold: Decimal | None = Field(None, ge=0, le=100)
     frequency_threshold: Decimal | None = Field(None, ge=0)
     funnel_ratio_threshold: Decimal | None = Field(None, ge=0, le=100)
+    # Чувствительность 1–100% (всегда задано, дефолт 80). НЕ nullable — колонки NOT NULL.
+    stop_percent_of_rule: Decimal = Field(Decimal("80"), ge=1, le=100)
+    warning_percent_of_stop: Decimal = Field(Decimal("80"), ge=1, le=100)

@@ -31,6 +31,9 @@ class OfferRules:
     ctr_threshold: Decimal | None
     frequency_threshold: Decimal | None
     funnel_ratio_threshold: Decimal | None
+    # Чувствительность per-offer (NULL если у оффера ещё нет offer_rules → дефолт 80 в pipeline).
+    stop_percent_of_rule: Decimal | None = None
+    warning_percent_of_stop: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -63,7 +66,9 @@ async def load_active_offers(engine: AsyncEngine) -> list[OfferRules]:
                         r.cpm_threshold,
                         r.ctr_threshold,
                         r.frequency_threshold,
-                        r.funnel_ratio_threshold
+                        r.funnel_ratio_threshold,
+                        r.stop_percent_of_rule,
+                        r.warning_percent_of_stop
                     FROM offers o
                     LEFT JOIN offer_rules r ON r.offer_id = o.id
                     WHERE o.is_active = TRUE
@@ -83,6 +88,8 @@ async def load_active_offers(engine: AsyncEngine) -> list[OfferRules]:
             ctr_threshold=row[6],
             frequency_threshold=row[7],
             funnel_ratio_threshold=row[8],
+            stop_percent_of_rule=row[9],
+            warning_percent_of_stop=row[10],
         )
         for row in rows
     ]

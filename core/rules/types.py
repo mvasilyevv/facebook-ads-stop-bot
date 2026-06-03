@@ -8,6 +8,19 @@ from decimal import ROUND_HALF_UP, Decimal
 
 from core.domain import AlertStage
 
+# ── Базовые проценты стоп-правил (ФИКСИРОВАНЫ, НЕ настраиваются через UI/конфиг) ──
+# Это сами правила: какая граница (в % от CPA или штуках) считается стопом для каждой
+# ступени воронки. Меняются ТОЛЬКО правкой кода. Пользователь регулирует не их, а
+# чувствительность (stop_percent_of_base / warning_percent_of_stop) per-offer.
+CPC_PERCENT_OF_CPA = Decimal("2")  # клик: стоп-база = 2% от CPA
+CPL_PERCENT_OF_CPA = Decimal("10")  # лид: 10% от CPA
+CPR_PERCENT_OF_CPA = Decimal("20")  # рега: 20% от CPA
+REGS_NO_DEP_STOP_COUNT = 5  # 5 регистраций без депозитов → стоп
+SPEND_NO_DEP_FROM_PERCENT = Decimal("50")  # расход без депа: диапазон 50%…
+SPEND_NO_DEP_TO_PERCENT = Decimal("70")  # …70% от CPA
+SPEND_WITH_DEP_FROM_PERCENT = Decimal("70")  # расход с депом: 70%…
+SPEND_WITH_DEP_TO_PERCENT = Decimal("90")  # …90% от CPA
+
 
 @dataclass(slots=True, frozen=True)
 class RuleHit:
@@ -77,31 +90,31 @@ class RuleContext:
     use_adaptive_cpa: bool = False
     adaptive_cpa: Decimal | None = None
 
-    # Правило 1: CPC
+    # Правило 1: CPC — базовый процент ФИКСИРОВАН (init=False: нельзя передать в конструктор).
     cpc_enabled: bool = True
-    cpc_percent_stop: Decimal = Decimal("2")
+    cpc_percent_stop: Decimal = field(init=False, default=CPC_PERCENT_OF_CPA)
 
     # Правило 2: CPL
     cpl_enabled: bool = True
-    cpl_percent_stop: Decimal = Decimal("10")
+    cpl_percent_stop: Decimal = field(init=False, default=CPL_PERCENT_OF_CPA)
 
     # Правило 3: CPR
     cpr_enabled: bool = True
-    cpr_percent_stop: Decimal = Decimal("20")
+    cpr_percent_stop: Decimal = field(init=False, default=CPR_PERCENT_OF_CPA)
 
     # Правило 4: N рег без депов
     regs_no_dep_enabled: bool = True
-    regs_no_dep_stop_count: int = 5
+    regs_no_dep_stop_count: int = field(init=False, default=REGS_NO_DEP_STOP_COUNT)
 
     # Правило 5: Расход без депа
     spend_no_dep_enabled: bool = True
-    spend_no_dep_from_percent: Decimal = Decimal("50")
-    spend_no_dep_to_percent: Decimal = Decimal("70")
+    spend_no_dep_from_percent: Decimal = field(init=False, default=SPEND_NO_DEP_FROM_PERCENT)
+    spend_no_dep_to_percent: Decimal = field(init=False, default=SPEND_NO_DEP_TO_PERCENT)
 
     # Правило 6: Расход с депом
     spend_with_dep_enabled: bool = True
-    spend_with_dep_from_percent: Decimal = Decimal("70")
-    spend_with_dep_to_percent: Decimal = Decimal("90")
+    spend_with_dep_from_percent: Decimal = field(init=False, default=SPEND_WITH_DEP_FROM_PERCENT)
+    spend_with_dep_to_percent: Decimal = field(init=False, default=SPEND_WITH_DEP_TO_PERCENT)
 
     # Правило 7: frequency-anomaly (выгорание аудитории)
     frequency_anomaly_enabled: bool = True
