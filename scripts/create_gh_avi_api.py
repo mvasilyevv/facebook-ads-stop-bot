@@ -41,6 +41,7 @@ from core.meta_api.mutations._batch_helpers import (
 # ====================== Параметры GH_AVI ======================
 
 ACT = "act_26943307705301002"
+ACT_NUM = ACT.removeprefix("act_")  # числовой id кабинета (sub4 трекинга — БЕЗ act_)
 PIXEL_ID = "1282495953856981"
 CAMPAIGN_NAME = "MV | GH | AVI | adset.pro | 04.06"  # дата = следующий день
 LANDING = "https://space2go.forum/track/6a1f37ebf10ec2c6fce437c6/ads"
@@ -95,7 +96,7 @@ def url_tags(a: int) -> str:
     return (
         "sub2=MV"
         f"&sub3={format_code(a)}"
-        f"&sub4={ACT}"
+        f"&sub4={ACT_NUM}"
         "&sub5={{campaign.name}}"
         "&sub6={{adset.name}}"
         "&sub7={{ad.name}}"

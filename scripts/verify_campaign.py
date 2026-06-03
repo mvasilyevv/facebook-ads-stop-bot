@@ -50,11 +50,11 @@ async def main(campaign_id: str) -> int:
             method="GET",
             endpoint=f"/{campaign_id}/ads",
             query_params={
-                "fields": "name,creative{object_story_spec{page_id},degrees_of_freedom_spec}",
+                "fields": "name,creative{object_story_spec{page_id},degrees_of_freedom_spec,url_tags}",
                 "limit": "20",
             },
         )
-        print("\n— ОБЪЯВЛЕНИЯ (страница / оптимизация текста) —")
+        print("\n— ОБЪЯВЛЕНИЯ (страница / оптимизация текста / url_tags) —")
         for ad in sorted(ads.get("data") or [], key=lambda x: x.get("name", "")):
             cr = ad.get("creative") or {}
             pid = (cr.get("object_story_spec") or {}).get("page_id")
@@ -65,6 +65,7 @@ async def main(campaign_id: str) -> int:
                 .get("enroll_status")
             )
             print(f"  {ad.get('name')}: page_id={pid} text_optimizations={topt}")
+            print(f"     url_tags: {cr.get('url_tags')}")
         return 0
     finally:
         await client.close()

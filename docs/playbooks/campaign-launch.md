@@ -77,7 +77,11 @@ Advantage+ audience + `[GEO, AQ]` + home/recent + age 18-65. Сверяться 
 
 ## Трекинг (url_tags объявления)
 `sub2=MV&sub3={format_code}&sub4={cabinet_id}&sub5={{campaign.name}}&sub6={{adset.name}}&sub7={{ad.name}}`.
-sub3 = код креатива (`GH_AVI_CR001`), sub6 = имя адсета. `{{...}}` — FB-макросы, оставлять как есть.
+sub3 = код креатива (`GH_AVI_CR001`), **sub4 = ЧИСЛОВОЙ id кабинета БЕЗ префикса `act_`**
+(`ACT.removeprefix("act_")`), sub6 = имя адсета. `{{...}}` — FB-макросы, оставлять как есть.
+⚠️ `url_tags` у созданного креатива **immutable** (`POST /{creative_id} url_tags` → `Invalid parameter`) —
+поправить можно только пересозданием креатива (проще — перезалить кампанию исправленным скриптом).
+Проверять по факту: `verify_campaign.py` печатает `url_tags` каждого объявления.
 
 ## Метод 2 — Vision-автопилот (fallback / когда нужен UI-сабмит)
 Шаблон: `scripts/run_creator_gh_avi.py` (`--print` / `--run`). Кликает Ads Manager как человек.
