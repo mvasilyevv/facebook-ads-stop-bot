@@ -210,3 +210,33 @@ async def test_endpoint_dashboard_stats_observer_not_unknown(pg_engine, fake_red
         f"observer_status='{data.get('observer_status')}' вместо 'running'. "
         f"Путь dashboard_stats→_read_observer_status не использует контракт."
     )
+
+
+# ─────────────────── TTL: ключ переживает интервал скана + staleness watchdog ────────────
+
+
+# Регресс (спам watchdog): TTL ключа observer:runtime должен быть больше watchdog-порога
+# staleness, иначе на паузе ключ исчезает между записями (раз в interval+jitter=90-105с)
+# раньше, чем срабатывает staleness-детект — и watchdog слал ложное «устарел (missing)»
+# каждый час. Контракт двух констант, ловит понижение TTL обратно к 60.
+def test_runtime_ttl_exceeds_watchdog_stale_threshold() -> None:
+    from apps.health_watchdog.main import OBSERVER_STALE_AFTER_SECONDS
+    from apps.observer_worker.main import RUNTIME_TTL_SECONDS
+
+    assert RUNTIME_TTL_SECONDS > OBSERVER_STALE_AFTER_SECONDS, (
+        f"TTL observer:runtime ({RUNTIME_TTL_SECONDS}с) должен быть больше порога staleness "
+        f"watchdog'а ({OBSERVER_STALE_AFTER_SECONDS}с), иначе ключ протухает раньше детекта "
+        f"и watchdog шлёт ложный 'missing'."
+    )
+
+
+# Писатель ставит реальный TTL (не вечный ключ), и он с запасом покрывает дефолтный sleep
+# 90-105с между записями на паузе.
+@pytest.mark.asyncio
+async def test_runtime_writer_sets_ttl(fake_redis_client) -> None:
+    from apps.observer_worker.main import RUNTIME_TTL_SECONDS
+
+    await _publish_runtime_status(fake_redis_client, status="paused")
+    ttl = await fake_redis_client.ttl("observer:runtime")
+    assert 0 < ttl <= RUNTIME_TTL_SECONDS
+    assert ttl > 105, "TTL должен с запасом покрывать дефолтный интервал записи на паузе (90-105с)"

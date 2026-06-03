@@ -98,11 +98,11 @@ def render_digest(payload: DigestPayload) -> str:
     lines.append(f"<i>окно 24ч до {payload.window_end_utc.strftime('%Y-%m-%d %H:%M UTC')}</i>")
     lines.append("")
 
+    # Топ-5 НЕ входит в условие активности: при нулевом spend список может быть
+    # непустым (ad_metrics со spend=0), и «непустой список нулей» ложно выставлял
+    # has_activity=True, пряча тихий блок. Активность определяется алертами и реальным spend.
     has_activity = (
-        payload.alerts_warning_count
-        or payload.alerts_stop_count
-        or payload.top_ads_by_spend
-        or payload.total_spend_24h_usd > 0
+        payload.alerts_warning_count or payload.alerts_stop_count or payload.total_spend_24h_usd > 0
     )
 
     # Алерты
