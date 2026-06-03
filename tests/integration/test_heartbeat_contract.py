@@ -260,6 +260,18 @@ def test_enable_reco_name_is_canonical() -> None:
     assert WORKER_NAME in _EXPECTED_WORKERS
 
 
+# enable_reco пишет heartbeat через ФОНОВЫЙ loop (раньше — в основном цикле раз в 300с при
+# TTL 60с, ключ протухал → watchdog ложно алертил). Теперь не протухает между прогонами.
+@pytest.mark.asyncio
+async def test_enable_reco_writes_heartbeat(fake_redis) -> None:
+    """enable_reco пишет worker:heartbeat:enable_reco через фоновый heartbeat_loop."""
+    from apps.enable_recommendation_worker.main import HEARTBEAT_KEY, heartbeat_loop
+
+    await _run_one_heartbeat_cycle(heartbeat_loop, fake_redis)
+
+    assert await fake_redis.get(HEARTBEAT_KEY) is not None, "enable_reco не записал heartbeat"
+
+
 # ====================== watchdog не алертит когда ключ есть ======================
 
 
