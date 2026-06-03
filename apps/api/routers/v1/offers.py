@@ -35,6 +35,9 @@ from apps.api.routers.v1.schemas.offers import (
     OfferRuleOut,
     OfferRuleUpsertIn,
     OfferUpdateIn,
+    RulePreviewOut,
+    RuleThresholdPreview,
+    SpendRangePreview,
 )
 from apps.api.utils.partition import default_window
 from core.dashboard.metric_aggregation import latest_per_ad_per_day_cte
@@ -436,35 +439,21 @@ async def upsert_offer_rules(
         if offer_check.first() is None:
             raise HTTPException(status_code=404, detail="Оффер не найден")
 
-        values = {
-            "offer_id": offer_id,
-            "spend_no_event_threshold": body.spend_no_event_threshold,
-            "cpa_threshold": body.cpa_threshold,
-            "cpm_threshold": body.cpm_threshold,
-            "ctr_threshold": body.ctr_threshold,
-            "frequency_threshold": body.frequency_threshold,
-            "funnel_ratio_threshold": body.funnel_ratio_threshold,
-            "stop_percent_of_rule": body.stop_percent_of_rule,
-            "warning_percent_of_stop": body.warning_percent_of_stop,
-        }
+        # Partial upsert: обновляем ТОЛЬКО переданные поля. Три формы (CPA в форме оффера /
+        # частота / чувствительность-слайдеры) пишут в одну строку offer_rules — полный
+        # upsert затирал бы чужие значения (напр. сохранение частоты обнуляло бы CPA →
+        # сломанный автостоп). exclude_unset гарантирует, что форма меняет только своё.
+        provided = body.model_dump(exclude_unset=True)
 
         # Upsert через INSERT ... ON CONFLICT (offer_id) DO UPDATE
         from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-        stmt = pg_insert(OfferRule.__table__).values(**values)
+        stmt = pg_insert(OfferRule.__table__).values(offer_id=offer_id, **provided)
+        conflict_set = {key: getattr(stmt.excluded, key) for key in provided}
+        conflict_set["updated_at"] = func.now()
         stmt = stmt.on_conflict_do_update(
             constraint="uq_offer_rules_offer_id",
-            set_={
-                "spend_no_event_threshold": stmt.excluded.spend_no_event_threshold,
-                "cpa_threshold": stmt.excluded.cpa_threshold,
-                "cpm_threshold": stmt.excluded.cpm_threshold,
-                "ctr_threshold": stmt.excluded.ctr_threshold,
-                "frequency_threshold": stmt.excluded.frequency_threshold,
-                "funnel_ratio_threshold": stmt.excluded.funnel_ratio_threshold,
-                "stop_percent_of_rule": stmt.excluded.stop_percent_of_rule,
-                "warning_percent_of_stop": stmt.excluded.warning_percent_of_stop,
-                "updated_at": func.now(),
-            },
+            set_=conflict_set,
         ).returning(
             OfferRule.__table__.c.offer_id,
             OfferRule.__table__.c.spend_no_event_threshold,
@@ -490,4 +479,95 @@ async def upsert_offer_rules(
         funnel_ratio_threshold=row["funnel_ratio_threshold"],
         stop_percent_of_rule=row["stop_percent_of_rule"],
         warning_percent_of_stop=row["warning_percent_of_stop"],
+    )
+
+
+# ─────────────────────── GET /offers/rules/preview ───────────────────────
+
+
+@router.get("/offers/rules/preview", response_model=RulePreviewOut)
+async def preview_rule_thresholds(
+    cpa: Decimal = Query(..., gt=0, description="CPA ($) для расчёта порогов"),
+    stop_percent_of_rule: Decimal = Query(Decimal("80"), ge=1, le=100),
+    warning_percent_of_stop: Decimal = Query(Decimal("80"), ge=1, le=100),
+) -> RulePreviewOut:
+    """При какой $-стоимости сработают правила и ворнинги для CPA + чувствительности.
+
+    Использует RuleContext — единый расчёт с автостопом: значения в превью ТОЧНО совпадают
+    с реальными порогами, по которым observer отключает объявления. Базовые проценты
+    (CPC 2% / CPL 10% / CPR 20% / spend 50-70%/70-90%) фиксированы.
+    """
+    from core.rules.types import (
+        REGS_NO_DEP_STOP_COUNT,
+        SPEND_NO_DEP_FROM_PERCENT,
+        SPEND_NO_DEP_TO_PERCENT,
+        SPEND_WITH_DEP_FROM_PERCENT,
+        SPEND_WITH_DEP_TO_PERCENT,
+        RuleContext,
+    )
+
+    ctx = RuleContext(
+        cpa_amount=cpa,
+        warning_percent_of_stop=warning_percent_of_stop,
+        stop_percent_of_base=stop_percent_of_rule,
+    )
+    cost_rules = [
+        RuleThresholdPreview(
+            rule="cpc_stop",
+            label="Цена клика",
+            base=ctx.cpc_base_stop_threshold,
+            stop=ctx.cpc_stop_threshold,
+            warning=ctx.cpc_warning_threshold,
+        ),
+        RuleThresholdPreview(
+            rule="cpl_stop",
+            label="Цена лида",
+            base=ctx.cpl_base_stop_threshold,
+            stop=ctx.cpl_stop_threshold,
+            warning=ctx.cpl_warning_threshold,
+        ),
+        RuleThresholdPreview(
+            rule="cpr_stop",
+            label="Цена реги",
+            base=ctx.cpr_base_stop_threshold,
+            stop=ctx.cpr_stop_threshold,
+            warning=ctx.cpr_warning_threshold,
+        ),
+    ]
+    q = Decimal("0.01")
+
+    def _spend(from_pct: Decimal, to_pct: Decimal, rule: str, label: str) -> SpendRangePreview:
+        # Та же цепочка, что в evaluator: effective% = base% × stop%/100; $ = CPA × effective%/100.
+        eff_from = from_pct * stop_percent_of_rule / Decimal("100")
+        eff_to = to_pct * stop_percent_of_rule / Decimal("100")
+        warn_from = eff_from * warning_percent_of_stop / Decimal("100")
+        return SpendRangePreview(
+            rule=rule,
+            label=label,
+            stop_from=(cpa * eff_from / Decimal("100")).quantize(q, ROUND_HALF_UP),
+            stop_to=(cpa * eff_to / Decimal("100")).quantize(q, ROUND_HALF_UP),
+            warning_from=(cpa * warn_from / Decimal("100")).quantize(q, ROUND_HALF_UP),
+        )
+
+    spend_ranges = [
+        _spend(
+            SPEND_NO_DEP_FROM_PERCENT,
+            SPEND_NO_DEP_TO_PERCENT,
+            "spend_no_dep_range",
+            "Расход без депов",
+        ),
+        _spend(
+            SPEND_WITH_DEP_FROM_PERCENT,
+            SPEND_WITH_DEP_TO_PERCENT,
+            "spend_with_dep_range",
+            "Расход с депом",
+        ),
+    ]
+    return RulePreviewOut(
+        cpa=cpa,
+        stop_percent_of_rule=stop_percent_of_rule,
+        warning_percent_of_stop=warning_percent_of_stop,
+        cost_rules=cost_rules,
+        spend_ranges=spend_ranges,
+        regs_no_dep_stop_count=REGS_NO_DEP_STOP_COUNT,
     )

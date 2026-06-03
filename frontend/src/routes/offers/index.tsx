@@ -34,6 +34,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { OfferCard } from "@/components/offers/OfferCard";
 import { OfferFormModal } from "@/components/offers/OfferFormModal";
 import { RulesDrawer } from "@/components/offers/RulesDrawer";
+import { SensitivityDrawer } from "@/components/offers/SensitivityDrawer";
 
 import { useOffers, useOffersCompare, useDeleteOffer } from "@/lib/api/offers";
 import { toast } from "@/components/ui/Toast";
@@ -59,6 +60,8 @@ function OffersPage() {
   const [editOffer, setEditOffer] = useState<Offer | null>(null);
   const [rulesOffer, setRulesOffer] = useState<Offer | null>(null);
   const [rulesOpen, setRulesOpen] = useState(false);
+  const [sensitivityOffer, setSensitivityOffer] = useState<Offer | null>(null);
+  const [sensitivityOpen, setSensitivityOpen] = useState(false);
   const [deleteOffer, setDeleteOffer] = useState<Offer | null>(null);
 
   const offersQuery = useOffers(includeInactive);
@@ -109,6 +112,11 @@ function OffersPage() {
   function openRules(offer: Offer) {
     setRulesOffer(offer);
     setRulesOpen(true);
+  }
+
+  function openSensitivity(offer: Offer) {
+    setSensitivityOffer(offer);
+    setSensitivityOpen(true);
   }
 
   function handleDelete() {
@@ -225,6 +233,7 @@ function OffersPage() {
               onEdit={openEdit}
               onDelete={(o) => setDeleteOffer(o)}
               onRules={openRules}
+              onSensitivity={openSensitivity}
             />
           ))}
         </div>
@@ -242,6 +251,13 @@ function OffersPage() {
         open={rulesOpen}
         onOpenChange={setRulesOpen}
         offer={rulesOffer}
+      />
+
+      {/* 6b. Sensitivity Drawer */}
+      <SensitivityDrawer
+        open={sensitivityOpen}
+        onOpenChange={setSensitivityOpen}
+        offer={sensitivityOffer}
       />
 
       {/* 7. ConfirmDialog удаления */}

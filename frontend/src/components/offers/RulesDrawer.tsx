@@ -32,7 +32,7 @@ export function RulesDrawer({ open, onOpenChange, offer }: RulesDrawerProps) {
       open={open}
       onOpenChange={onOpenChange}
       title={offer ? `Правила — ${offer.code}` : "Правила оффера"}
-      description={offer?.vertical ?? undefined}
+      description={undefined}
       width={480}
     >
       {rulesQuery.isLoading ? (
