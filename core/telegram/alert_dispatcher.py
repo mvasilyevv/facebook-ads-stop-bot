@@ -62,6 +62,59 @@ async def _publish_alert_created(
         logger.warning("alert_dispatcher: не удалось publish в %s", CHANNEL_ALERT_CREATED)
 
 
+async def _send_alert_with_fallback(
+    client: TelegramBotClient,
+    *,
+    chat_id: str,
+    text_msg: str,
+    keyboard: dict | None,
+    thread_id: int | None,
+    event_id: Any,
+) -> dict | None:
+    """Шлёт алерт в форум-топик thread_id; при проблеме с топиком — fallback в General.
+
+    Форум-топики убраны редизайном, но forum_*_thread_id остались в конфиге. Если топик
+    удалён/закрыт — НЕ теряем алерт (особенно warning — ранний сигнал), а пересылаем в
+    общий чат без thread_id. Возвращает ответ Telegram (dict) или None при неудаче.
+    """
+    try:
+        return await client.send_message(
+            chat_id=chat_id,
+            text=text_msg,
+            parse_mode=DEFAULT_PARSE_MODE,
+            message_thread_id=thread_id,
+            reply_markup=keyboard,
+        )
+    except TelegramAPIError as exc:
+        desc = (exc.description or "").lower()
+        thread_problem = thread_id is not None and (
+            "thread" in desc or "topic" in desc or "chat not found" in desc
+        )
+        if not thread_problem:
+            logger.warning("Не смог отправить alert %s: %s", event_id, exc)
+            return None
+        logger.warning(
+            "alert %s: топик %s недоступен (%s) — пересылаю в General",
+            event_id,
+            thread_id,
+            exc,
+        )
+        try:
+            return await client.send_message(
+                chat_id=chat_id,
+                text=text_msg,
+                parse_mode=DEFAULT_PARSE_MODE,
+                message_thread_id=None,
+                reply_markup=keyboard,
+            )
+        except Exception as exc2:  # noqa: BLE001
+            logger.warning("Не смог отправить alert %s даже в General: %s", event_id, exc2)
+            return None
+    except Exception:
+        logger.exception("send_message crashed for alert %s", event_id)
+        return None
+
+
 async def dispatch_pending_alerts(
     engine: AsyncEngine,
     *,
@@ -191,25 +244,19 @@ async def dispatch_pending_alerts(
         text_msg = render_alert_text(render_input)
         keyboard = render_inline_keyboard(render_input)
 
-        # Send
-        send_failed = False
-        sent: dict | None = None
-        try:
-            sent = await client.send_message(
-                chat_id=str(chat_id),
-                text=text_msg,
-                parse_mode=DEFAULT_PARSE_MODE,
-                message_thread_id=thread_id_by_stage.get(str(stage)),
-                reply_markup=keyboard,
-            )
-        except TelegramAPIError as exc:
-            logger.warning("Не смог отправить alert %s: %s", event_id, exc)
+        # Send — с fallback в General при недоступном топике (не теряем алерт).
+        thread_id = thread_id_by_stage.get(str(stage))
+        sent = await _send_alert_with_fallback(
+            client,
+            chat_id=str(chat_id),
+            text_msg=text_msg,
+            keyboard=keyboard,
+            thread_id=thread_id,
+            event_id=event_id,
+        )
+        send_failed = sent is None
+        if send_failed:
             counters["errors"] += 1
-            send_failed = True
-        except Exception:
-            logger.exception("send_message crashed for alert %s", event_id)
-            counters["errors"] += 1
-            send_failed = True
 
         if send_failed:
             # Освобождаем claim, чтобы ретрай (или другой воркер) мог переслать
