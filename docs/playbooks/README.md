@@ -14,27 +14,36 @@ AdSet.pro». Знание живёт в ОДНОМ месте, накаплив�
 3. **Каждый playbook ведёт статус:** `✅ работает` / `⚠️ грабли` / `🔧 сломано`. Нашли/починили/
    споткнулись — обновили (с апрувом). Так знание не протухает.
 4. **Цифры > мнения.** Вердикты по креативам/кампаниям — с FTD.
+5. **Каждый handoff и финал проходят qa-гейт** (`review-gates.md`): ✅/❌ с пунктами, доработка,
+   3 итерации → эскалация. Командная работа — по `team-protocol.md`. Гейт qa — ДО байера, не вместо.
 
 ## Карта: агент → playbook
 | Агент | Роль | Источник правды |
 |---|---|---|
-| `syntx` | генерация креативов | `creative-gen.md` (+ `market-profile/<GEO>.md`) |
+| `syntx` | генерация статика-креативов | `creative-gen.md` (+ `market-profile/<GEO>.md`) |
+| `video` | видео-креативы: разведка → ffmpeg-анализ → I2V | `video-gen.md` (+ отчёты `docs/creatives/geo/<GEO>/reports/`) |
 | `adsetpro` | PWA + трекер-кампания | `pwa-tracker.md` |
 | `fb` | залив FB-кампании, observer, Meta API | `campaign-launch.md` |
-| координатор | оркестрация пайплайна креатив→PWA→залив | этот README + все playbooks |
+| `qa` | ревью-гейты A/B/C, приёмка, возврат на доработку | `review-gates.md` |
+| координатор (lead) | оркестрация пайплайна креатив→PWA→залив, команда | этот README + `team-protocol.md` + все playbooks |
 
 ## Playbooks
 - `creative-gen.md` — syntx: Sora, обязательный референс, критический отсмотр, uniquify,
   **gambling-freedom** (соглашение с Meta → без самоограничений).
+- `video-gen.md` — video: модели syntx (I2V-first, Kling Keyframes), видео-разведка Ad Library,
+  ffmpeg-раскадровка, паттерны (геймплей/split-UGC), QA-чеклист видео.
 - `pwa-tracker.md` — adsetpro: PWA (evergreen, без бонуса), трекер (копия CR2 → чистка ротации),
   MCP-статистика.
 - `campaign-launch.md` — fb: методы залива (Vision-автопилот / Graph API), стандартные правила
   (Purchase всегда, дата+1, ABO/CBO — выбор, Антарктида), подъём стека, грабли.
 - `offer-profiling.md` — тип оффера (агрегатор/слот), welcome-bonus, скоринг игры.
 - `market-profile/<GEO>.md` — рынок гео (язык, валюта, кошельки, лица, табу).
+- `team-protocol.md` — команда (agent teams): роли, общий тасклист, SendMessage, ревью-цикл, эскалации.
+- `review-gates.md` — qa: Gate A (статика) / AV (видео) / B (PWA+трекер) / C (кампания), формат вердикта, лимит итераций.
 
 ## Запуск сессии
-- **Креатив/залив:** вызови нужного агента (`syntx` / `adsetpro` / `fb`) — он сам прочитает свой playbook. Или вручную: этот README → нужный playbook → `market-profile/<GEO>` → `offer-profiling`. Методология цикла — `docs/creatives/SOP.md`; находки/винеры — `docs/creative_kb.md`.
+- **Пайплайн целиком (новый оффер/гео):** team-режим по `team-protocol.md` — lead раскладывает задачи с зависимостями, спавнит teammates (`syntx`/`adsetpro`/`fb`/`qa`), каждый handoff через qa-гейт.
+- **Креатив/залив (разовое):** вызови нужного агента (`syntx` / `video` / `adsetpro` / `fb`) — он сам прочитает свой playbook. Или вручную: этот README → нужный playbook → `market-profile/<GEO>` → `offer-profiling`. Методология цикла — `docs/creatives/SOP.md`; находки/винеры — `docs/creative_kb.md`.
 - **Стек для залива:** `./run.sh --no-tunnel` (детали — `campaign-launch.md` § подъём стека).
 - **git:** коммитим сами, когда работа дошла до логической точки (фиксы, новые инструменты, обновления доки) — **без ожидания явной просьбы**. НЕ коммитим секреты (`.env`, `*.key`, токены, `data/`, конфиги с ключами). Push и необратимое в проде (залив/unpause/массовые операции, ввод кредов) — подтверждать заранее.
 

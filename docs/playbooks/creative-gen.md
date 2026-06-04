@@ -107,6 +107,7 @@
 - Проверка: `sysctl vm.swapusage` (used→0). `--disable-gpu` НЕ ставить (бесполезен/вреден для canvas-SPA). Правки конфига — после рестарта Claude Code.
 
 ## Связанное
+- Видео-креативы (I2V поверх статики, видео-разведка, ffmpeg-анализ) — `video-gen.md`: статик-винеры отсюда — вход для Kling Keyframes.
 - Методология полного цикла (фазы 0-4) — `docs/creatives/SOP.md`.
 - Рынок гео (язык/деньги/лица/табу) — `market-profile/<GEO>.md`.
 - Тип оффера + welcome-bonus + скоринг игры — `offer-profiling.md`.
