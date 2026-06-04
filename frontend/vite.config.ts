@@ -40,6 +40,23 @@ export default defineConfig({
       },
     },
   },
+  // preview НЕ наследует server.proxy — дублируем для prod-режима (./run.sh без --dev,
+  // фронт сервится через `vite preview`). Тот же таргет API/WS, что и в dev.
+  preview: {
+    port: 5174,
+    strictPort: false,
+    proxy: {
+      "/api": {
+        target: "http://localhost:8100",
+        changeOrigin: true,
+      },
+      "/ws": {
+        target: "ws://localhost:8100",
+        ws: true,
+        changeOrigin: true,
+      },
+    },
+  },
   build: {
     outDir: "dist",
     sourcemap: true,
