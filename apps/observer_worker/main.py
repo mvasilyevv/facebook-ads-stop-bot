@@ -8,7 +8,9 @@
 4. process_scan_rows(...) → метрики/FSM/outbox
 5. UPDATE scan_runs финальным результатом
 6. Redis heartbeat
-7. Sleep interval_seconds + jitter
+7. Sleep на адаптивный интервал (база = interval_seconds = CALM, режим зависит от
+   угрозы цикла: stop→CRITICAL ×0.2, warning→ELEVATED ×0.5, офферные ads→CALM ×1.0,
+   пусто→IDLE ×1.5) + jitter ±10%. См. core/observer/adaptive_interval.py.
 
 Gate инжектируется (паттерн как у toggle_workers): в проде это BrowserAgentClient,
 в тестах — fake который возвращает заранее подготовленные ScannedAdRow.
@@ -25,13 +27,19 @@ import signal
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Protocol
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from apps.telegram_poller.main import _get_database_url
+from core.observer.adaptive_interval import (
+    JITTER_FRACTION,
+    clamp_interval,
+    compute_adaptive_interval,
+    resolve_scan_mode,
+)
 from core.observer.pipeline import CycleResult, process_scan_rows
 from core.observer.queries import load_observer_config, load_vision_auto_restart_flag
 from core.scanner.models import ScannedAdRow
@@ -50,6 +58,14 @@ HEARTBEAT_TTL_SECONDS = 60
 # OBSERVER_STALE_AFTER_SECONDS (300с), чтобы при реальном зависании срабатывал точный
 # staleness-детект по updated_at, а не «missing».
 RUNTIME_TTL_SECONDS = int(os.environ.get("OBSERVER_RUNTIME_TTL_SEC", "360"))
+
+# Период освежения observer:runtime во время sleep между сканами. Адаптивный интервал
+# (см. core/observer/adaptive_interval.py) в IDLE-режиме при высоком базовом интервале
+# может превышать и TTL ключа (360с), и watchdog-порог staleness (300с) — тогда вернулся
+# бы ложный «observer:runtime stale/missing»-алерт (тот, что чинили в PR #17). Поэтому
+# длинный sleep бьём на чанки ≤ этого значения и между ними переписываем runtime со
+# свежим updated_at. Держим заметно < 300с, чтобы updated_at всегда был «молодым».
+RUNTIME_REFRESH_SECONDS = 120
 
 # Управляющие каналы observer'а.
 CHANNEL_TRIGGER = "fb_agent:observer:trigger"  # форс-скан вне расписания
@@ -352,6 +368,7 @@ async def run_one_cycle(
         "scan_id": scan_id,
         "duration_ms": duration_ms,
         "rows_total": cycle_result.rows_total if cycle_result else 0,
+        "rows_with_offer": cycle_result.rows_with_offer if cycle_result else 0,
         "alerts_warning": cycle_result.alerts_warning if cycle_result else 0,
         "alerts_stop": cycle_result.alerts_stop if cycle_result else 0,
         "tg_dispatched": dispatched,
@@ -457,6 +474,36 @@ async def _wait_interruptible(*events: asyncio.Event, seconds: float) -> None:
                 await w
             except (asyncio.CancelledError, Exception):
                 pass
+
+
+async def _sleep_with_runtime_refresh(
+    redis_client,
+    *events: asyncio.Event,
+    seconds: float,
+    status: str = "idle",
+    next_scan_at: datetime | None = None,
+) -> None:
+    """Спит до ``seconds`` (прерываясь на любой из ``events``), освежая observer:runtime.
+
+    Длинный sleep бьётся на чанки ≤ RUNTIME_REFRESH_SECONDS; после каждого чанка, если
+    ни один event не выставлен и сон не закончился, переписываем observer:runtime со
+    свежим updated_at. Так health_watchdog не считает observer «протухшим» (TTL/stale)
+    даже на длинных интервалах. Прерываемость scan-now/shutdown сохраняется.
+
+    ``status`` сохраняет фактическое состояние между сканами ("paused" на паузе, иначе
+    "idle"), чтобы освежение не затирало paused-статус ложным running.
+    """
+    remaining = float(seconds)
+    while remaining > 0:
+        chunk = min(remaining, float(RUNTIME_REFRESH_SECONDS))
+        await _wait_interruptible(*events, seconds=chunk)
+        if any(e.is_set() for e in events):
+            return
+        remaining -= chunk
+        if remaining > 0:
+            await _publish_runtime_status(
+                redis_client, status=status, next_scan_at=next_scan_at
+            )
 
 
 # ====================== Main loop ======================
@@ -612,14 +659,36 @@ async def main_loop(
                 trigger_event.clear()
                 continue
 
-            # Интервал до следующего цикла
+            # Адаптивный интервал: база (UI-слайдер interval_seconds) = CALM-режим,
+            # частота скана зависит от угрозы в этом цикле (у порога — чаще).
             config = await load_observer_config(engine)
-            interval = (config or {}).get("interval_seconds", 90)
-            jitter = (config or {}).get("jitter_seconds", 15)
-            sleep_for = float(interval) + random.uniform(0, float(jitter))
+            base_interval = float((config or {}).get("interval_seconds", 90))
+            scan_mode = resolve_scan_mode(summary)
+            interval = compute_adaptive_interval(base_interval, scan_mode)
+            # Jitter ±10% от рассчитанного интервала (anti-detect), с тем же clamp по нижней границе.
+            jitter_offset = interval * JITTER_FRACTION
+            sleep_for = clamp_interval(interval + random.uniform(-jitter_offset, jitter_offset))
+            logger.info(
+                "observer: режим=%s интервал=%.0fс (база=%.0f, со сдвигом=%.0f)",
+                scan_mode,
+                interval,
+                base_interval,
+                sleep_for,
+            )
 
-            # Sleep, прерываемый shutdown'ом ИЛИ trigger'ом scan-now.
-            await _wait_interruptible(shutdown_event, trigger_event, seconds=sleep_for)
+            # Sleep, прерываемый shutdown'ом ИЛИ trigger'ом scan-now. На длинных
+            # интервалах освежаем observer:runtime, чтобы watchdog не считал нас протухшими.
+            # На паузе сохраняем статус "paused" (не затираем ложным "idle").
+            next_scan_at = datetime.now(timezone.utc) + timedelta(seconds=sleep_for)
+            runtime_status = "paused" if summary.get("outcome") == "paused" else "idle"
+            await _sleep_with_runtime_refresh(
+                redis_client,
+                shutdown_event,
+                trigger_event,
+                seconds=sleep_for,
+                status=runtime_status,
+                next_scan_at=next_scan_at,
+            )
 
             # Если trigger пришёл во время sleep — сбрасываем флаги, цикл идёт сразу.
             if trigger_event.is_set() or state.force_scan_pending:
