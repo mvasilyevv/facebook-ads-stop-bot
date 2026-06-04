@@ -564,12 +564,14 @@ async def main_loop(
 
     try:
         redis_client = await redis_factory()
-        tg_client = await tg_client_factory()
-        logger.info("observer_worker запущен")
 
-        # Запускаем heartbeat-таск если Redis доступен.
+        # Heartbeat стартуем СРАЗУ после Redis — до загрузки TG-конфига из БД и gate,
+        # чтобы health_watchdog не считал observer мёртвым во время инициализации.
         if redis_client is not None:
             heartbeat_task = asyncio.create_task(heartbeat_loop(redis_client, shutdown_event))
+
+        tg_client = await tg_client_factory()
+        logger.info("observer_worker запущен")
 
         # Подписываемся на управляющие каналы если Redis доступен.
         if redis_client is not None:

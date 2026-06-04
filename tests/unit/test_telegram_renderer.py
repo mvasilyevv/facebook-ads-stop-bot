@@ -20,7 +20,7 @@ def _input(stage="warning", **overrides) -> AlertRenderInput:
         adset_name="EQ_KE",
         offer_code="KE_CR2",
         stage=stage,
-        matched_rule_codes=["spend_no_dep_stop"],
+        matched_rule_codes=["spend_no_dep_range"],
         metrics={
             "spend": Decimal("12.50"),
             "cpc": Decimal("0.234"),
@@ -38,26 +38,47 @@ def _input(stage="warning", **overrides) -> AlertRenderInput:
     return AlertRenderInput(**defaults)
 
 
-# Сценарий: WARNING рендер содержит правильный prefix и все метрики
+# Сценарий: WARNING рендер содержит русский prefix, человекочитаемое правило и метрики
 def test_render_warning_contains_all_fields() -> None:
     inp = _input(stage="warning")
     text = render_alert_text(inp)
 
-    assert "WARNING" in text
+    assert "ПРЕДУПРЕЖДЕНИЕ" in text
     assert "⚠️" in text
     assert "Aviator001" in text
     assert "KE_CR2" in text
-    assert "spend_no_dep_stop" in text
-    assert "12.50" in text  # spend
-    assert "0.234" in text  # cpc
+    # Правило рендерится человекочитаемо, не сырым кодом.
+    assert "Расход без депозитов" in text
+    assert "spend_no_dep_range" not in text
+    assert "12.50" in text  # spend ($12.50)
+    assert "0.234" in text  # cpc ($0.234)
     assert "230011223344" in text
 
 
-# Сценарий: STOP рендер с правильным эмодзи
+# Сценарий: STOP рендер с правильным эмодзи и русским заголовком
 def test_render_stop_uses_red_emoji() -> None:
     text = render_alert_text(_input(stage="stop"))
     assert "🛑" in text
-    assert "STOP" in text
+    assert "СТОП" in text
+    assert "Причина остановки" in text
+
+
+# Сценарий: метрики рендерятся русскими лейблами с $ для денежных
+def test_render_russian_metric_labels() -> None:
+    text = render_alert_text(_input(stage="stop"))
+    assert "Расход: <b>$12.50</b>" in text
+    assert "Цена клика: $0.234" in text
+    assert "Клики:" in text
+    assert "Депозиты:" in text
+    # Английских сырых ключей быть не должно.
+    assert "spend:" not in text
+    assert "clicks:" not in text
+
+
+# Сценарий: код правила без человекочитаемого названия — fallback на сам код (не падает)
+def test_render_unknown_rule_code_fallback() -> None:
+    text = render_alert_text(_input(matched_rule_codes=["some_future_rule"]))
+    assert "some_future_rule" in text
 
 
 # Сценарий: HTML-escape опасных символов — нельзя сломать parse через ad_name
@@ -124,4 +145,4 @@ def test_render_without_rule_codes() -> None:
 # Сценарий: без offer_code — секция оффера не печатается
 def test_render_without_offer_code() -> None:
     text = render_alert_text(_input(offer_code=None))
-    assert "Offer:" not in text
+    assert "Оффер:" not in text

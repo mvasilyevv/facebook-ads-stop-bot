@@ -37,6 +37,10 @@ HEARTBEAT_TTL_SECONDS = 60
 CHECK_INTERVAL_SECONDS = int(os.environ.get("HEALTH_WATCHDOG_INTERVAL_SEC", "60"))
 ALERT_DEDUP_TTL_SECONDS = int(os.environ.get("HEALTH_WATCHDOG_ALERT_TTL_SEC", "3600"))
 OBSERVER_STALE_AFTER_SECONDS = int(os.environ.get("HEALTH_WATCHDOG_OBSERVER_STALE_SEC", "300"))
+# Grace-период перед ПЕРВОЙ проверкой: при совместном старте (supervisord/run.sh)
+# воркеры ещё инициализируются (Redis/БД/browser-agent) и не успели записать первый
+# heartbeat. Без задержки watchdog слал ложный «воркер не дышит» сразу при старте.
+STARTUP_GRACE_SECONDS = int(os.environ.get("HEALTH_WATCHDOG_STARTUP_GRACE_SEC", "90"))
 # Синхронизировано с воркерами, которые поднимает run.sh (+ meta_api для act_via_api).
 # enable_reco — реальное heartbeat-имя enable_recommendation_worker (не enable_recommendation).
 DEFAULT_EXPECTED_WORKERS = (
@@ -348,7 +352,17 @@ async def check_loop(
     thread_id: int | None,
     stop: asyncio.Event,
 ) -> None:
-    """Главный цикл проверок раз в CHECK_INTERVAL_SECONDS."""
+    """Главный цикл проверок раз в CHECK_INTERVAL_SECONDS.
+
+    Перед ПЕРВОЙ проверкой выжидает STARTUP_GRACE_SECONDS — даёт воркерам стартовать
+    и записать первый heartbeat (иначе ложный «не дышит» при совместном старте).
+    """
+    # Grace при старте, прерываемый shutdown'ом.
+    try:
+        await asyncio.wait_for(stop.wait(), timeout=STARTUP_GRACE_SECONDS)
+    except asyncio.TimeoutError:
+        pass
+
     while not stop.is_set():
         try:
             await run_one_check(
