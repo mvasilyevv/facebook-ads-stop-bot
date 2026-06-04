@@ -33,3 +33,16 @@ class VisionReconnectResponse(BaseModel):
     """Ответ на POST /vision/reconnect."""
 
     status: str = "reconnected"
+
+
+class VisionEnsureCdpResponse(BaseModel):
+    """Ответ на POST /vision/ensure-cdp (bootstrap при старте run.sh).
+
+    Контракт под run.sh: ok|status|action|message. Эндпоинт никогда не падает 5xx —
+    при недоступности browser-agent возвращает ok=false с пояснением.
+    """
+
+    ok: bool = True
+    status: str = "UNKNOWN"  # READY | RECONNECTED | UNAVAILABLE
+    action: str = "none"  # none | reconnect
+    message: str = ""
