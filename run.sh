@@ -679,11 +679,11 @@ API_PID=$!
 append_pid "$API_PID" "api"
 echo -e "${GREEN}  API PID: $API_PID${NC}"
 
-# Ждём готовности API через /health
+# Ждём готовности API через /healthz (k8s liveness; /health не существует — был баг)
 echo -e "${BLUE}⏳ Жду готовности API...${NC}"
 for i in $(seq 1 20); do
-    if curl -sf "http://localhost:$API_PORT/health" >/dev/null 2>&1; then
-        echo -e "${GREEN}✅ API отвечает на /health${NC}"
+    if curl -sf "http://localhost:$API_PORT/healthz" >/dev/null 2>&1; then
+        echo -e "${GREEN}✅ API отвечает на /healthz${NC}"
         break
     fi
     if ! is_process_active "$API_PID"; then
@@ -692,51 +692,14 @@ for i in $(seq 1 20); do
         exit 1
     fi
     if [ "$i" -eq 20 ]; then
-        echo -e "${YELLOW}⚠️  API не ответил на /health за 20с, продолжаю запуск${NC}"
+        echo -e "${YELLOW}⚠️  API не ответил на /healthz за 20с, продолжаю запуск${NC}"
     fi
     sleep 1
 done
 
-echo -e "${BLUE}🧭 Проверяю CDP-порт Vision...${NC}"
-VISION_BOOTSTRAP_BODY="$(mktemp)"
-VISION_BOOTSTRAP_STATUS="$(
-    if [ -n "${API_KEY:-}" ]; then
-        curl -sS -m 90 -w "%{http_code}" -o "$VISION_BOOTSTRAP_BODY" \
-            -X POST -H "X-API-Key: $API_KEY" \
-            "http://localhost:$API_PORT/api/vision/ensure-cdp" || true
-    else
-        curl -sS -m 90 -w "%{http_code}" -o "$VISION_BOOTSTRAP_BODY" \
-            -X POST "http://localhost:$API_PORT/api/vision/ensure-cdp" || true
-    fi
-)"
-if [ "$VISION_BOOTSTRAP_STATUS" = "200" ]; then
-    VISION_BOOTSTRAP_SUMMARY="$(
-        .venv/bin/python - "$VISION_BOOTSTRAP_BODY" <<'PY'
-import json
-import sys
-
-path = sys.argv[1]
-with open(path, encoding="utf-8") as fh:
-    data = json.load(fh)
-
-prefix = "ok" if data.get("ok", True) else "warn"
-status = data.get("status") or "UNKNOWN"
-action = data.get("action") or "none"
-message = data.get("message") or "Без сообщения"
-print(f"{prefix}|{status}|{action}|{message}")
-PY
-    )"
-    IFS='|' read -r VISION_BOOTSTRAP_OK VISION_BOOTSTRAP_STATE VISION_BOOTSTRAP_ACTION VISION_BOOTSTRAP_MESSAGE <<< "$VISION_BOOTSTRAP_SUMMARY"
-    if [ "$VISION_BOOTSTRAP_OK" = "ok" ]; then
-        echo -e "${GREEN}✅ Vision CDP: $VISION_BOOTSTRAP_STATE ($VISION_BOOTSTRAP_ACTION) — $VISION_BOOTSTRAP_MESSAGE${NC}"
-    else
-        echo -e "${YELLOW}⚠️  Vision CDP: $VISION_BOOTSTRAP_STATE ($VISION_BOOTSTRAP_ACTION) — $VISION_BOOTSTRAP_MESSAGE${NC}"
-    fi
-else
-    echo -e "${YELLOW}⚠️  Не удалось проверить CDP-порт Vision при старте (HTTP ${VISION_BOOTSTRAP_STATUS:-нет ответа})${NC}"
-    tail -5 "$VISION_BOOTSTRAP_BODY" 2>/dev/null || true
-fi
-rm -f "$VISION_BOOTSTRAP_BODY"
+# CDP-порт Vision проверяется ПОЗЖЕ — через verify_vision_cdp после старта
+# browser-agent (ensure-cdp ходит к нему по gRPC; до старта agent'а проверка
+# была бессмысленна и роняла ложный warning).
 
 # ==========================================
 # 5. Сборка и запуск Browser Agent (Node.js gRPC сервис)
@@ -1044,9 +1007,9 @@ MINI_WEB_APP_URL=""
 auto_register_web_app_url() {
     local url="$1"
     if [[ -z "$url" ]]; then return; fi
-    echo "[run.sh] Жду готовности API на http://localhost:${API_PORT}/health ..."
+    echo "[run.sh] Жду готовности API на http://localhost:${API_PORT}/healthz ..."
     for i in {1..30}; do
-        if curl -s -f -m 1 "http://localhost:${API_PORT}/health" >/dev/null 2>&1; then break; fi
+        if curl -s -f -m 1 "http://localhost:${API_PORT}/healthz" >/dev/null 2>&1; then break; fi
         sleep 1
     done
     local headers=(-H "Content-Type: application/json")
@@ -1058,6 +1021,49 @@ auto_register_web_app_url() {
     else
         echo -e "${YELLOW}⚠️  Не удалось прописать web_app_url через API. Введите его вручную в Settings.${NC}"
     fi
+}
+
+# Проверка/поднятие CDP-порта Vision через API (ensure-cdp ходит к browser-agent
+# по gRPC, поэтому вызывается ПОСЛЕ его старта). Эндпоинт graceful: всегда 200 с
+# {ok,status,action,message}, не роняет запуск.
+verify_vision_cdp() {
+    echo -e "${BLUE}🧭 Проверяю CDP-порт Vision...${NC}"
+    local body status
+    body="$(mktemp)"
+    if [ -n "${API_KEY:-}" ]; then
+        status="$(curl -sS -m 90 -w "%{http_code}" -o "$body" -X POST \
+            -H "X-API-Key: $API_KEY" \
+            "http://localhost:$API_PORT/api/vision/ensure-cdp" || true)"
+    else
+        status="$(curl -sS -m 90 -w "%{http_code}" -o "$body" -X POST \
+            "http://localhost:$API_PORT/api/vision/ensure-cdp" || true)"
+    fi
+    if [ "$status" = "200" ]; then
+        local summary ok state action message
+        summary="$(.venv/bin/python - "$body" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as fh:
+    data = json.load(fh)
+prefix = "ok" if data.get("ok", True) else "warn"
+status = data.get("status") or "UNKNOWN"
+action = data.get("action") or "none"
+message = data.get("message") or "Без сообщения"
+print(f"{prefix}|{status}|{action}|{message}")
+PY
+)"
+        IFS='|' read -r ok state action message <<< "$summary"
+        if [ "$ok" = "ok" ]; then
+            echo -e "${GREEN}✅ Vision CDP: $state ($action) — $message${NC}"
+        else
+            echo -e "${YELLOW}⚠️  Vision CDP: $state ($action) — $message${NC}"
+        fi
+    else
+        echo -e "${YELLOW}⚠️  Не удалось проверить CDP-порт Vision (HTTP ${status:-нет ответа})${NC}"
+        tail -5 "$body" 2>/dev/null || true
+    fi
+    rm -f "$body"
 }
 
 if [ "$ENABLE_TUNNEL" -eq 1 ]; then
@@ -1075,6 +1081,9 @@ if [ "$ENABLE_TUNNEL" -eq 1 ]; then
         echo -e "${YELLOW}⚠️  cloudflared не найден, туннели не будут подняты${NC}"
     fi
 fi
+# CDP Vision проверяем здесь — browser-agent уже поднят (ensure-cdp ходит к нему по gRPC).
+verify_vision_cdp
+
 sleep 2
 BOOT_OK=1
 check_process_started "$API_PID" "API" "$LOG_DIR/api.log" || BOOT_OK=0

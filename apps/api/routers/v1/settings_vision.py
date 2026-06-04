@@ -15,10 +15,11 @@ from dataclasses import dataclass
 
 from fastapi import APIRouter, HTTPException
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from apps.api.deps import DepEngine, DepRedis, DepSettings
 from apps.api.routers.v1.schemas.settings_vision import (
+    VisionEnsureCdpResponse,
     VisionReconnectResponse,
     VisionSettingsResponse,
     VisionSettingsUpdateRequest,
@@ -206,28 +207,21 @@ async def put_vision_settings(
 # ---------------------------------------------------------------------------
 
 
-@_vision_router.post("/reconnect", response_model=VisionReconnectResponse)
-async def post_vision_reconnect(
-    engine: DepEngine,
-    settings: DepSettings,
-) -> VisionReconnectResponse:
-    """Триггерит gRPC ReconnectBrowser к browser-agent.
+async def _reconnect_browser(engine: AsyncEngine, settings: object) -> None:
+    """Общая логика gRPC ReconnectBrowser. Бросает grpc.RpcError/Exception при сбое.
 
-    Читает x_token и profile_id из БД (или fallback в Settings).
-    Возвращает 503 при недоступности gRPC.
+    Переиспользуется /vision/reconnect и /vision/ensure-cdp. Читает x_token/profile_id
+    из БД (fallback в Settings).
     """
-    import grpc
-
     from core.crypto import decrypt
 
-    # Читаем токен и профиль из БД.
     async with AsyncSession(engine) as session:
         config = await _load_config(session)
         snap = _snapshot(config)
 
-    x_token = settings.vision_x_token
-    profile_id = settings.vision_profile_id
-    api_url = settings.vision_api_url
+    x_token = settings.vision_x_token  # type: ignore[attr-defined]
+    profile_id = settings.vision_profile_id  # type: ignore[attr-defined]
+    api_url = settings.vision_api_url  # type: ignore[attr-defined]
 
     if snap:
         if snap.x_token_encrypted:
@@ -248,6 +242,27 @@ async def post_vision_reconnect(
     try:
         await client.start()
         await client.reconnect_browser()
+    finally:
+        try:
+            await client.close()
+        except Exception:
+            pass
+
+
+@_vision_router.post("/reconnect", response_model=VisionReconnectResponse)
+async def post_vision_reconnect(
+    engine: DepEngine,
+    settings: DepSettings,
+) -> VisionReconnectResponse:
+    """Триггерит gRPC ReconnectBrowser к browser-agent.
+
+    Читает x_token и profile_id из БД (или fallback в Settings).
+    Возвращает 503 при недоступности gRPC.
+    """
+    import grpc
+
+    try:
+        await _reconnect_browser(engine, settings)
     except grpc.RpcError as exc:
         raise HTTPException(
             status_code=503,
@@ -258,13 +273,50 @@ async def post_vision_reconnect(
             status_code=503,
             detail=f"Ошибка переподключения к browser-agent: {exc}",
         ) from exc
-    finally:
-        try:
-            await client.close()
-        except Exception:
-            pass
 
     return VisionReconnectResponse(status="reconnected")
+
+
+@_vision_router.post("/ensure-cdp", response_model=VisionEnsureCdpResponse)
+async def post_vision_ensure_cdp(
+    engine: DepEngine,
+    redis: DepRedis,
+    settings: DepSettings,
+) -> VisionEnsureCdpResponse:
+    """Bootstrap CDP при старте (run.sh): проверяет cdp_ready, при необходимости reconnect.
+
+    Никогда не падает 5xx — всегда {ok,status,action,message}. Если CDP уже готов —
+    action=none. Если нет — пытается reconnect; при недоступности browser-agent
+    возвращает ok=false (run.sh покажет мягкий warning, а не ошибку 404/503).
+    """
+    runtime = await _read_runtime_from_redis(redis)
+    if runtime.get("cdp_ready"):
+        return VisionEnsureCdpResponse(
+            ok=True,
+            status="READY",
+            action="none",
+            message=f"CDP готов (порт {runtime.get('cdp_port')})",
+        )
+
+    try:
+        await _reconnect_browser(engine, settings)
+    except Exception as exc:
+        logger.warning("ensure-cdp: reconnect не удался: %s", exc)
+        return VisionEnsureCdpResponse(
+            ok=False,
+            status="UNAVAILABLE",
+            action="reconnect",
+            message=f"Не удалось поднять CDP: {exc}",
+        )
+
+    runtime = await _read_runtime_from_redis(redis)
+    port = runtime.get("cdp_port")
+    return VisionEnsureCdpResponse(
+        ok=True,
+        status="RECONNECTED",
+        action="reconnect",
+        message=f"CDP переподключён (порт {port})" if port else "Reconnect выполнен",
+    )
 
 
 # ---------------------------------------------------------------------------
