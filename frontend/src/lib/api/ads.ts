@@ -30,6 +30,10 @@ export function useAds(params: {
       const { data, total } = await apiGetWithCount<AdSnapshot[]>("/dashboard/ads", params);
       return { items: data, total };
     },
+    // Автообновление как на дашборде: список ads сам подтягивает свежие статусы/метрики
+    // (например авто-стоп объявления), чтобы снимок не «залипал» без ручного рефреша.
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: true,
   });
 }
 
