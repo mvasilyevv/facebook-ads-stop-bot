@@ -921,12 +921,33 @@ if [ -d frontend ]; then
     fi
 
     FRONTEND_URL="http://localhost:$FRONTEND_PORT"
-    # Прокидываем API_KEY из .env в Vite
-    (
-        cd "$SCRIPT_DIR/frontend"
-        VITE_API_KEY="${API_KEY:-}" npm run dev -- --host "$FRONTEND_HOST" --port "$FRONTEND_PORT" --strictPort
-    ) > "$LOG_DIR/frontend.log" 2>&1 &
-    FRONTEND_PID=$!
+    if [ "$DEV_MODE" -eq 1 ]; then
+        # Dev-режим (--dev): Vite с HMR. Медленнее загрузка/отклик (ESM-водопад,
+        # React dev + StrictMode double-render), но горячая перезагрузка для правок фронта.
+        echo -e "${BLUE}  Frontend: dev-режим (HMR)${NC}"
+        (
+            cd "$SCRIPT_DIR/frontend"
+            VITE_API_KEY="${API_KEY:-}" npm run dev -- --host "$FRONTEND_HOST" --port "$FRONTEND_PORT" --strictPort
+        ) > "$LOG_DIR/frontend.log" 2>&1 &
+        FRONTEND_PID=$!
+    else
+        # Прод-режим (по умолчанию): минифицированный build + vite preview. В разы быстрее
+        # dev (нет ESM-водопада, React production, без double-render). Для правок фронта
+        # с HMR — ./run.sh --dev. Сборку делаем синхронно, чтобы поймать ошибки до preview.
+        echo -e "${BLUE}  Frontend: собираю prod build...${NC}"
+        if ! (cd "$SCRIPT_DIR/frontend" && VITE_API_KEY="${API_KEY:-}" npm run build) \
+            > "$LOG_DIR/frontend_build.log" 2>&1; then
+            echo -e "${RED}❌ Сборка фронта упала${NC}"
+            tail -20 "$LOG_DIR/frontend_build.log" || true
+            exit 1
+        fi
+        echo -e "${BLUE}  Frontend: prod build готов, запускаю vite preview${NC}"
+        (
+            cd "$SCRIPT_DIR/frontend"
+            VITE_API_KEY="${API_KEY:-}" npm run preview -- --host "$FRONTEND_HOST" --port "$FRONTEND_PORT" --strictPort
+        ) > "$LOG_DIR/frontend.log" 2>&1 &
+        FRONTEND_PID=$!
+    fi
     append_pid "$FRONTEND_PID" "frontend"
     echo -e "${GREEN}  Frontend PID: $FRONTEND_PID${NC}"
 
