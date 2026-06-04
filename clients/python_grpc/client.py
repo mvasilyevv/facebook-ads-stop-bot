@@ -690,6 +690,7 @@ def _proto_to_row(proto) -> object:
 
     return ScannedAdRow(
         fb_ad_id=proto.fb_ad_id,
+        campaign_id=proto.campaign_id,
         campaign_name=proto.campaign_name,
         adset_name=proto.adset_name,
         ad_name=proto.ad_name,

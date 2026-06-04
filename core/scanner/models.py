@@ -18,6 +18,8 @@ class ScannedAdRow:
     delivery_status: str
     spend: Decimal
     budget: str = ""
+    # Meta campaign.id (из am_tabular). Пусто, если скан не дал id (старый путь/DOM).
+    campaign_id: str = ""
     reach: int = 0
     impressions: int = 0
     clicks: int = 0

@@ -34,6 +34,7 @@ export interface AmAdMeta {
   adName?: string;
   adsetName?: string;
   campaignName?: string;
+  campaignId?: string;
   effectiveStatus?: string;
   budget?: string;
 }
@@ -80,6 +81,7 @@ export function buildScannedRow(am: AmRow, meta: AmAdMeta = {}): ScannedAdRow {
   const a = am.atomic;
   return {
     fb_ad_id: am.adId,
+    campaign_id: meta.campaignId ?? '',
     campaign_name: meta.campaignName ?? '',
     adset_name: meta.adsetName ?? '',
     ad_name: meta.adName ?? '',

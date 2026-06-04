@@ -646,6 +646,7 @@ async function restoreToggleVisibility(page: any, fbAdId: string, maxPasses: num
 function toProtoRow(row: any): any {
   return {
     fb_ad_id: row.fb_ad_id,
+    campaign_id: row.campaign_id,
     campaign_name: row.campaign_name,
     adset_name: row.adset_name,
     ad_name: row.ad_name,

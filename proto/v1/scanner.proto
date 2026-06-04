@@ -326,6 +326,7 @@ message ScannedAdRow {
   string cost_per_registration = 23;
   int32 deposits = 24;
   string resolved_offer_code = 25;
+  string campaign_id = 26;
 }
 
 // --- HardReloadPage ---
