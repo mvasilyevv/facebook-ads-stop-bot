@@ -19,6 +19,8 @@ class ObserverStatusResponse(BaseModel):
 
     status: str = "unknown"
     last_scan_at: datetime | None = None
+    last_scan_outcome: str | None = None
+    scans_today: int = 0
     interval_seconds: int | None = None
     extra: dict[str, Any] = Field(default_factory=dict)
 

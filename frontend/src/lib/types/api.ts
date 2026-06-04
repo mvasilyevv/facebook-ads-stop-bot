@@ -313,34 +313,29 @@ export interface VisionSettings {
 
 // ─── Observer / Health ──────────────────────────────────────────────────────
 
-// DRIFT: ручной тип имеет last_cycle_at, cycle_count_today, active_country, active_campaign —
-// backend ObserverStatusResponse возвращает: status, last_scan_at, interval_seconds, extra (dict).
-// Поля cycle_count_today / active_country / active_campaign в backend ОТСУТСТВУЮТ.
-// Данные о цикле находятся в extra{} или недоступны напрямую.
+// Соответствует backend ObserverStatusResponse (apps/api/routers/v1/schemas/observer.py).
 export interface ObserverStatus {
   status: string; // "running" | "paused" | "unknown" — backend не enum
-  last_scan_at: string | null; // было last_cycle_at
+  last_scan_at: string | null;
+  last_scan_outcome: string | null;
+  scans_today: number;
   interval_seconds: number | null;
   extra: Record<string, unknown>;
-  /** @deprecated используй last_scan_at */
-  last_cycle_at?: string | null;
-  /** @deprecated поле отсутствует в backend — смотри extra */
-  cycle_count_today?: number;
-  /** @deprecated поле отсутствует в backend — смотри extra */
-  active_country?: string | null;
-  /** @deprecated поле отсутствует в backend — смотри extra */
-  active_campaign?: string | null;
 }
 
+// Соответствует backend ScanRunRow. ВНИМАНИЕ: id/scan_id — числа; алерты разнесены на
+// warning/stop (не единое alerts_created); поля ads_seen/errors_count в backend ОТСУТСТВУЮТ.
 export interface ScanRun {
-  id: string;
+  id: number;
+  scan_id: number;
   started_at: string;
   finished_at: string | null;
-  outcome: string;
-  ads_seen: number;
-  alerts_created: number;
-  errors_count: number;
   duration_ms: number | null;
+  outcome: string | null;
+  alerts_warning: number | null;
+  alerts_stop: number | null;
+  metrics_inserted: number | null;
+  error_message: string | null;
 }
 
 // DRIFT: backend WorkerStatus дополнительно возвращает ttl_seconds и payload.

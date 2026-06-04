@@ -44,7 +44,15 @@ export function useObserverStatus() {
 export function useScanRuns(limit = 50, filter: "all" | "errors" | "slow" | "with_alerts" = "all") {
   return useQuery({
     queryKey: KEYS.scanRuns(limit, filter),
-    queryFn: () => apiClient.get<ScanRun[]>("/observer/scan-runs", { limit, filter }),
+    // Бэк отдаёт { runs: [...], total }, а не голый массив — разворачиваем (как recipients).
+    queryFn: async () => {
+      const r = await apiClient.get<{ runs: ScanRun[]; total: number }>("/observer/scan-runs", {
+        limit,
+        filter,
+      });
+      return r.runs ?? [];
+    },
+    refetchInterval: 15_000,
   });
 }
 

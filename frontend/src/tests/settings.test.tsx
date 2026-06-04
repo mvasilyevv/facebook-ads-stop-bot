@@ -29,8 +29,10 @@ const OBSERVER_SETTINGS: ObserverSettings = {
 const OBSERVER_STATUS: ObserverStatus = {
   status: "running",
   last_scan_at: "2026-05-28T14:32:00Z",
+  last_scan_outcome: "success",
+  scans_today: 847,
   interval_seconds: 60,
-  extra: { cycle_count_today: 847, active_country: "PT" },
+  extra: {},
 };
 
 // Мок-данные для Health — структура соответствует backend HealthDetailsResponse + WorkerStatus.
@@ -124,10 +126,12 @@ describe("Settings · ObserverTab", () => {
     expect(screen.queryByRole("switch", { name: "Сканирование" })).not.toBeInTheDocument();
   });
 
-  // Тест: статус observer отображается из useObserverStatus.
-  it("показывает статус observer из мока (running)", () => {
+  // Тест: статус observer отображается из useObserverStatus (локализованный лейбл + scans_today).
+  it("показывает статус observer из мока (работает) и кол-во сканов сегодня", () => {
     withQuery(<ObserverTab />);
-    expect(screen.getByText("running")).toBeInTheDocument();
+    expect(screen.getByText("работает")).toBeInTheDocument();
+    // Сканов сегодня берётся из scans_today (раньше был баг — читалось cycle_count_today).
+    expect(screen.getByText("847")).toBeInTheDocument();
   });
 });
 
