@@ -49,13 +49,26 @@ async def _read_observer_status(redis: Any) -> str:
 
 
 async def _query_ad_counts(engine: AsyncEngine) -> dict[str, int]:
-    """COUNT FbAd is_active + counts по alert_state из ad_alert_state.
+    """Counts по объявлениям в ТЕКУЩЕМ скопе наблюдения + разбивка по alert_state.
 
+    «Под наблюдением» = is_active И виден в последнем завершённом скане (last_seen_at
+    не старше его started_at). Так счётчик отражает реально сканируемые объявления
+    (с учётом allowlist кампаний / owner-тега), а не весь накопленный каталог: при
+    сужении скопа «замороженные» объявления старых сканов сразу выпадают, а не висят
+    в плашке сутками. CTE scope: граница — последний завершённый success/empty скан;
+    если сканов ещё не было — фолбэк на NOW()-24h (не ломаем пустую систему).
     Один запрос — оптимально по числу round-trip'ов.
     """
     sql = """
+        WITH scope AS (
+            SELECT COALESCE(
+                (SELECT MAX(started_at) FROM scan_runs
+                   WHERE outcome IN ('success', 'empty') AND finished_at IS NOT NULL),
+                NOW() - INTERVAL '24 hours'
+            ) AS since
+        )
         SELECT
-            (SELECT COUNT(*) FROM fb_ads WHERE is_active = true) AS total_active,
+            COUNT(*) AS total_active,
             COUNT(*) FILTER (WHERE s.alert_state = 'normal' OR s.alert_state IS NULL)
                 AS in_normal,
             COUNT(*) FILTER (WHERE s.alert_state = 'warning_sent') AS in_warning,
@@ -67,8 +80,10 @@ async def _query_ad_counts(engine: AsyncEngine) -> dict[str, int]:
                 AND (s.snoozed_until IS NULL OR s.snoozed_until < NOW())
             ) AS active_incidents
         FROM fb_ads
+        CROSS JOIN scope
         LEFT JOIN ad_alert_state s ON s.ad_id = fb_ads.id
         WHERE fb_ads.is_active = true
+          AND fb_ads.last_seen_at >= scope.since
     """
     async with engine.connect() as conn:
         result = await conn.execute(text(sql))

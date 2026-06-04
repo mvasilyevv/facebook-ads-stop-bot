@@ -55,7 +55,7 @@ export function KpiSection({ stats, isLoading, isError, error, onRetry }: KpiSec
           variant="muted"
           label="Объявлений под наблюдением"
           value={formatInt(stats.total_ads_monitored)}
-          hint="за 24ч"
+          hint="в текущем скане"
         />
         <KPICard
           variant="warning"
