@@ -50,12 +50,13 @@ _CABINET_DAY_CHANNEL = "fb_agent:observer:cabinet_day"
 
 
 @router.get("/observer/status", response_model=ObserverStatusResponse)
-async def get_observer_status(redis: DepRedis) -> ObserverStatusResponse:
+async def get_observer_status(redis: DepRedis, engine: DepEngine) -> ObserverStatusResponse:
     """Возвращает статус observer-воркера из Redis ключа observer:runtime.
 
     Если ключ отсутствует — возвращает {status: unknown, last_scan_at: null, ...}.
     Никогда не падает с 5xx.
     Использует read_observer_runtime() — единственную точку чтения контракта.
+    Дополнительно из scan_runs считает scans_today и outcome последнего скана.
     """
     runtime = await read_observer_runtime(redis)
 
@@ -93,9 +94,33 @@ async def get_observer_status(redis: DepRedis) -> ObserverStatusResponse:
     if raw.get("worker_status") is not None:
         extra["worker_status"] = raw["worker_status"]
 
+    # Кол-во сканов за сегодня (UTC) + outcome последнего — из scan_runs.
+    # WHERE по started_at даёт partition pruning. Не роняем эндпоинт при сбое БД.
+    scans_today = 0
+    last_scan_outcome: str | None = None
+    try:
+        today_start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+        async with engine.connect() as conn:
+            scans_today = int(
+                await conn.scalar(
+                    select(func.count(ScanRun.id)).where(ScanRun.started_at >= today_start)
+                )
+                or 0
+            )
+            last_scan_outcome = await conn.scalar(
+                select(ScanRun.outcome)
+                .where(ScanRun.started_at >= today_start)
+                .order_by(ScanRun.started_at.desc())
+                .limit(1)
+            )
+    except Exception:
+        logger.exception("get_observer_status: не смог посчитать scans_today")
+
     return ObserverStatusResponse(
         status=runtime["status"],
         last_scan_at=last_scan_at,
+        last_scan_outcome=last_scan_outcome,
+        scans_today=scans_today,
         interval_seconds=interval_seconds,
         extra=extra,
     )

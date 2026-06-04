@@ -19,6 +19,7 @@ import { Select } from "@/components/ui/Select";
 import { Table } from "@/components/data/Table";
 import { toast } from "@/components/ui/Toast";
 import { formatRelativeTime, formatDateTime, formatDuration } from "@/lib/utils/format";
+import { cn } from "@/lib/utils/cn";
 import type { ScanRun } from "@/lib/types/api";
 
 import {
@@ -32,7 +33,28 @@ import {
   type CampaignOption,
 } from "@/lib/api/settings";
 
-// Колонки таблицы scan-runs.
+// Локализация статуса observer (backend: running | paused | unknown).
+const STATUS_LABEL: Record<string, string> = {
+  running: "работает",
+  paused: "на паузе",
+  unknown: "неизвестно",
+};
+
+// Локализация и цвет outcome скана (backend: success | empty | error | paused).
+const OUTCOME_LABEL: Record<string, string> = {
+  success: "успех",
+  empty: "пусто",
+  error: "ошибка",
+  paused: "пауза",
+};
+const OUTCOME_VARIANT: Record<string, "success" | "stop" | "warning" | "neutral"> = {
+  success: "success",
+  empty: "neutral",
+  error: "stop",
+  paused: "warning",
+};
+
+// Колонки таблицы scan-runs (поля backend ScanRunRow).
 const SCAN_COLUMNS: ColumnDef<ScanRun, unknown>[] = [
   {
     id: "started_at",
@@ -46,39 +68,29 @@ const SCAN_COLUMNS: ColumnDef<ScanRun, unknown>[] = [
     id: "outcome",
     header: "Результат",
     accessorKey: "outcome",
-    cell: ({ getValue }) => {
-      const v = getValue() as string;
-      const variant = v === "ok" ? "success" : v === "error" ? "stop" : "neutral";
-      return <Badge variant={variant} size="sm">{v}</Badge>;
-    },
-  },
-  {
-    id: "ads_seen",
-    header: "Объявлений",
-    accessorKey: "ads_seen",
-    cell: ({ getValue }) => (
-      <span className="font-numeric text-[13px]">{getValue() as number}</span>
-    ),
-  },
-  {
-    id: "alerts_created",
-    header: "Алертов",
-    accessorKey: "alerts_created",
-    cell: ({ getValue }) => {
-      const n = getValue() as number;
+    cell: ({ row }) => {
+      const v = (row.original.outcome ?? "") as string;
+      const variant = OUTCOME_VARIANT[v] ?? "neutral";
+      const label = OUTCOME_LABEL[v] ?? (v || "—");
       return (
-        <span className={`font-numeric text-[13px] ${n > 0 ? "text-warning" : ""}`}>{n}</span>
+        <Badge variant={variant} size="sm" title={row.original.error_message ?? undefined}>
+          {label}
+        </Badge>
       );
     },
   },
   {
-    id: "errors_count",
-    header: "Ошибок",
-    accessorKey: "errors_count",
-    cell: ({ getValue }) => {
-      const n = getValue() as number;
+    id: "alerts",
+    header: "Алерты",
+    cell: ({ row }) => {
+      const w = row.original.alerts_warning ?? 0;
+      const s = row.original.alerts_stop ?? 0;
+      if (w + s === 0) return <span className="text-bg-8 text-[13px]">—</span>;
       return (
-        <span className={`font-numeric text-[13px] ${n > 0 ? "text-danger" : ""}`}>{n}</span>
+        <span className="font-numeric text-[13px] flex items-center gap-2">
+          {w > 0 ? <span className="text-warning">{w} warn</span> : null}
+          {s > 0 ? <span className="text-danger">{s} stop</span> : null}
+        </span>
       );
     },
   },
@@ -106,7 +118,37 @@ const FILTER_OPTIONS: { value: ScanFilter; label: string }[] = [
   { value: "with_alerts", label: "С алертами" },
 ];
 
-/** Чекбокс-выбор кампаний для allowlist. Lazy-init из selected; key пересоздаёт при смене данных. */
+/** Стилизованный чекбокс в духе дизайн-системы (визуал как в таблице Ads). */
+function Check({ checked }: { checked: boolean }) {
+  return (
+    <span
+      aria-hidden="true"
+      className={cn(
+        "size-4 border inline-flex items-center justify-center transition-colors shrink-0",
+        checked
+          ? "bg-accent border-accent text-bg-0"
+          : "bg-bg-2 border-bg-7 group-hover:border-bg-9",
+      )}
+    >
+      {checked ? (
+        <svg
+          viewBox="0 0 12 12"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          width={11}
+          height={11}
+        >
+          <polyline points="2 6 5 9 10 3" />
+        </svg>
+      ) : null}
+    </span>
+  );
+}
+
+/** Выбор кампаний для allowlist. Lazy-init из selected; key пересоздаёт при смене данных. */
 function CampaignSelector({
   campaigns,
   saving,
@@ -129,35 +171,62 @@ function CampaignSelector({
     });
   }
 
+  const allSelected = campaigns.length > 0 && selected.size === campaigns.length;
+
+  function toggleAll() {
+    setSelected(allSelected ? new Set() : new Set(campaigns.map((c) => c.id)));
+  }
+
   return (
-    <div>
-      <div className="flex flex-col gap-0.5 max-h-64 overflow-y-auto border border-bg-5 bg-bg-1 p-1.5">
-        {campaigns.map((c) => (
-          <label
-            key={c.id}
-            className="flex items-center gap-2.5 px-2 py-1.5 hover:bg-bg-2 cursor-pointer transition-colors"
-          >
-            <input
-              type="checkbox"
-              className="size-4 accent-accent shrink-0"
-              checked={selected.has(c.id)}
-              onChange={() => toggle(c.id)}
-            />
-            <span className="text-[12.5px] text-bg-11 truncate">{c.name}</span>
-          </label>
-        ))}
+    <div className="border border-bg-5 bg-bg-1">
+      {/* Шапка: выбрать все + счётчик. */}
+      <div className="flex items-center justify-between px-3 py-2 border-b border-bg-4">
+        <button
+          type="button"
+          onClick={toggleAll}
+          className="text-[11px] text-bg-9 hover:text-bg-11 transition-colors"
+        >
+          {allSelected ? "Снять все" : "Выбрать все"}
+        </button>
+        <span className="text-[11px] font-numeric text-bg-9">
+          {selected.size > 0
+            ? `${selected.size} из ${campaigns.length}`
+            : `все по тегу · ${campaigns.length}`}
+        </span>
       </div>
-      <div className="flex items-center gap-2 mt-3">
+
+      {/* Список кампаний. */}
+      <div className="flex flex-col max-h-72 overflow-y-auto divide-y divide-bg-3">
+        {campaigns.map((c) => {
+          const isOn = selected.has(c.id);
+          return (
+            <button
+              key={c.id}
+              type="button"
+              onClick={() => toggle(c.id)}
+              aria-pressed={isOn}
+              className={cn(
+                "group flex items-center gap-3 px-3 py-2.5 text-left transition-colors",
+                isOn ? "bg-bg-2" : "hover:bg-bg-2",
+              )}
+            >
+              <Check checked={isOn} />
+              <div className="min-w-0 flex-1">
+                <div className="text-[12.5px] text-bg-11 truncate">{c.name}</div>
+                <div className="text-[10.5px] font-numeric text-bg-7 truncate">{c.id}</div>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Футер: сохранить выбор. */}
+      <div className="flex items-center gap-2 px-3 py-2.5 border-t border-bg-4">
         <Button size="sm" variant="primary" loading={saving} onClick={() => onSave([...selected])}>
           Сохранить выбор
         </Button>
-        {selected.size > 0 ? (
-          <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>
-            Снять всё
-          </Button>
-        ) : null}
         <span className="text-[11px] text-bg-9 ml-auto">
-          {selected.size > 0 ? `${selected.size} выбрано` : "сканируем все по тегу"}
+          {selected.size > 0 ? `сканируем ${selected.size}` : "сканируем все по тегу"}
         </span>
       </div>
     </div>
@@ -442,7 +511,7 @@ export function ObserverTab() {
               columns={SCAN_COLUMNS}
               virtualized={false}
               loading={scanRunsQuery.isLoading}
-              getRowKey={(row) => row.id}
+              getRowKey={(row) => String(row.id)}
               emptyState={
                 <span className="text-bg-9 text-[13px]">
                   Нет данных для выбранного фильтра.
@@ -483,24 +552,21 @@ export function ObserverTab() {
                         : "neutral"
                   }
                 >
-                  {status?.status ?? "unknown"}
+                  {STATUS_LABEL[status?.status ?? "unknown"] ?? status?.status ?? "неизвестно"}
                 </Badge>
               </div>
               <div className="text-[12px] text-bg-9">
                 Последний скан:{" "}
                 <span className="text-bg-11 font-numeric">
-                  {formatRelativeTime(status?.last_cycle_at)}
+                  {formatRelativeTime(status?.last_scan_at)}
                 </span>
+                {status?.last_scan_outcome ? (
+                  <span className="text-bg-8"> · {OUTCOME_LABEL[status.last_scan_outcome] ?? status.last_scan_outcome}</span>
+                ) : null}
               </div>
-              {status?.active_country ? (
-                <div className="text-[12px] text-bg-9">
-                  Страна:{" "}
-                  <span className="text-bg-11 font-numeric">{status.active_country}</span>
-                </div>
-              ) : null}
               <div className="text-[12px] text-bg-9">
                 Сканов сегодня:{" "}
-                <span className="text-bg-11 font-numeric">{status?.cycle_count_today ?? "—"}</span>
+                <span className="text-bg-11 font-numeric">{status?.scans_today ?? "—"}</span>
               </div>
             </div>
           )}
