@@ -7,6 +7,7 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { OfferCard } from "@/components/offers/OfferCard";
 import { OfferFormModal } from "@/components/offers/OfferFormModal";
 import { RulesForm } from "@/components/offers/RulesForm";
+import { fmt } from "@/components/offers/SensitivityDrawer";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Button } from "@/components/ui/Button";
 import { Tag, Plus } from "lucide-react";
@@ -268,5 +269,16 @@ describe("OfferFormModal · валидация", () => {
 
     const codeInput = screen.getByRole("textbox", { name: /код оффера/i });
     expect(codeInput).toBeDisabled();
+  });
+});
+
+// ─── SensitivityDrawer · fmt (регресс toFixed) ───────────────────────────────
+
+describe("SensitivityDrawer · fmt", () => {
+  // Регресс: preview-API отдаёт Decimal как строку — fmt не должен падать на v.toFixed.
+  it("форматирует строковый Decimal и число, мусор → «—»", () => {
+    expect(fmt("0.06")).toBe("$0.06");
+    expect(fmt(0.5)).toBe("$0.50");
+    expect(fmt("abc")).toBe("—");
   });
 });

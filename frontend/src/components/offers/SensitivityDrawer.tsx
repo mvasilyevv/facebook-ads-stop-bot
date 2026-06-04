@@ -222,8 +222,10 @@ interface PreviewTableProps {
   data: RulePreviewOut;
 }
 
-function fmt(v: number): string {
-  return `$${v.toFixed(2)}`;
+export function fmt(v: string | number): string {
+  // preview-API отдаёт Decimal как строку ("0.06") — коэрсим в число перед toFixed.
+  const n = Number(v);
+  return Number.isFinite(n) ? `$${n.toFixed(2)}` : "—";
 }
 
 function PreviewTable({ data }: PreviewTableProps) {
