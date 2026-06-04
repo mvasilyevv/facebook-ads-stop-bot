@@ -326,6 +326,7 @@ export async function runAmScanWithContext(
     adMeta.set(ad.id, {
       adName: ad.name,
       effectiveStatus: ad.effectiveStatus,
+      campaignId: ad.campaignId,
       campaignName: ad.campaignId ? campName.get(ad.campaignId) : undefined,
       adsetName: ad.adsetId ? adsetName.get(ad.adsetId) : undefined,
     });

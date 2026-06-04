@@ -47,6 +47,7 @@ export interface ScrollMetrics {
 
 export interface ScannedAdRow {
   fb_ad_id: string;
+  campaign_id: string;
   campaign_name: string;
   adset_name: string;
   ad_name: string;
