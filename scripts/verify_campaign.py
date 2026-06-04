@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import sys
 
@@ -25,26 +26,33 @@ async def main(campaign_id: str) -> int:
         camp = await client.execute_graph_call(
             method="GET",
             endpoint=f"/{campaign_id}",
-            query_params={"fields": "name,objective,status,buying_type"},
+            query_params={"fields": "name,objective,status,buying_type,daily_budget,bid_strategy"},
         )
-        print(f"КАМПАНИЯ: {camp.get('name')}  [{camp.get('objective')}] {camp.get('status')}")
+        print(
+            f"КАМПАНИЯ: {camp.get('name')}  [{camp.get('objective')}] {camp.get('status')} "
+            f"· CBO budget={camp.get('daily_budget')} bid={camp.get('bid_strategy')}"
+        )
 
         adsets = await client.execute_graph_call(
             method="GET",
             endpoint=f"/{campaign_id}/adsets",
             query_params={
                 "fields": "name,start_time,status,daily_budget,bid_strategy,"
-                "targeting,optimization_goal",
+                "targeting,optimization_goal,attribution_spec",
                 "limit": "20",
             },
         )
-        print("\n— АДСЕТЫ (start_time / бюджет / гео) —")
+        print("\n— АДСЕТЫ (start_time / бюджет / гео / атрибуция) —")
         for a in sorted(adsets.get("data") or [], key=lambda x: x.get("name", "")):
-            geo = (a.get("targeting") or {}).get("geo_locations", {}).get("countries")
+            tgt = a.get("targeting") or {}
+            geo = tgt.get("geo_locations", {}).get("countries")
+            age = f"{tgt.get('age_min')}-{tgt.get('age_max')}"
+            attr = json.dumps(a.get("attribution_spec"), ensure_ascii=False)
             print(
-                f"  {a.get('name')}: start={a.get('start_time')} budget={a.get('daily_budget')} "
-                f"bid={a.get('bid_strategy')} geo={geo} status={a.get('status')}"
+                f"  [{a.get('name')}]: start={a.get('start_time')} budget={a.get('daily_budget')} "
+                f"bid={a.get('bid_strategy')} geo={geo} age={age} status={a.get('status')}"
             )
+            print(f"     attribution={attr}")
 
         ads = await client.execute_graph_call(
             method="GET",

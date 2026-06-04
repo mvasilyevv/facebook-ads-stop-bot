@@ -1,16 +1,16 @@
 # -*- coding: utf-8 -*-
-"""Перезалив GH/Aviator — CBO 1-3-5 (по эталону соседа Olstep). Две кампании A/B.
+"""Перезалив GH/Aviator — CBO 1-3-5, адсет = ТЕКСТОВЫЙ ПОДХОД. Две кампании A/B.
 
-Структура на КАЖДУЮ кампанию: 1 CBO-кампания × 3 адсета-дубля × 5 объявлений = 15 ads.
-  - CBO: daily_budget на КАМПАНИИ ($8.99), bid_strategy LOWEST_COST_WITHOUT_CAP на кампании;
-  - 3 адсета-дубля (имена «1»/«2»/«3» — БЕЗ спецсимволов, фикс sub6-URL-encode);
-  - 5 креативов (по 1 на визуал набора), переиспользуются в 3 адсетах → 15 ads;
-  - эталон Olstep: age 22-65, Advantage+ audience + individual_setting{age,gender},
-    attribution CLICK 7d + VIEW 1d + EVV 1d, AQ+GH home/recent, promoted PURCHASE+smart_pse false,
-    destination не задаём (UNDEFINED), text_optimizations OPT_OUT.
+Структура на КАЖДУЮ кампанию: 1 CBO-кампания × 3 адсета × 5 объявлений = 15 ads.
+  - 3 адсета = 3 ТЕКСТОВЫХ подхода (hook / clickbait / headline) — имя адсета = подход (чистый sub6);
+  - 5 визуалов дублируются в каждом адсете → 15 креативов = 5 визуалов × 3 текста;
+  - в статистике: sub3 = визуал (что за картинка), sub6 = подход (какой текст) → видно лучший визуал И лучший текст;
+  - CBO $8.99 на кампании, bid LOWEST_COST_WITHOUT_CAP; эталон Olstep: age 22-65, Advantage+ audience +
+    individual_setting{age,gender}, attribution CLICK 1d (требование байера), AQ+GH home/recent,
+    promoted PURCHASE+smart_pse false, destination не задаём, text_optimizations OPT_OUT.
 
-Наборы (2 кампании = разные наборы креативов):
-  A = UGC/эмоция (A1..A5), B = геймплей/динамика (B1..B5).
+Тексты — результат роя-исследования (4 разведлинзы → синтез → 6 adversarial-скептиков), recon 2026-06-04.
+Наборы: A = угол «Close Your Debts» (debt/эмоция), B = «Peanuts to Profit» (greed/динамика).
 
     python scripts/create_gh_avi_v2.py A          # spec-print набора A
     python scripts/create_gh_avi_v2.py A --go      # боевое создание кампании A (PAUSED)
@@ -43,51 +43,94 @@ START_TIME = "2026-06-05T00:00:00-07:00"  # следующие сутки 00:00 
 
 DAILY_BUDGET_CENTS = 899  # $8.99 CBO на кампанию
 BID_STRATEGY = "LOWEST_COST_WITHOUT_CAP"
-AGE_MIN, AGE_MAX = 22, 65  # как эталон Olstep (не 18)
+AGE_MIN, AGE_MAX = 22, 65
 COUNTRIES = ["GH", "AQ"]
 CTA_TYPE = "PLAY_GAME"
 TEXT_OPT_ENROLL = "OPT_OUT"
-N_ADSETS = 3
-N_CREATIVES = 5
+N_VISUALS = 5
 
 ATTRIBUTION = [
-    {"event_type": "CLICK_THROUGH", "window_days": 7},
-    {"event_type": "VIEW_THROUGH", "window_days": 1},
-    {"event_type": "ENGAGED_VIDEO_VIEW", "window_days": 1},
+    {"event_type": "CLICK_THROUGH", "window_days": 1},  # атрибуция 1 день (требование байера)
 ]
 
-# ====================== Конфиг наборов ======================
+# ====================== Тексты (рой-исследование, 3 подхода × 2 угла) ======================
+# label = имя адсета (чистый sub6, латиница без спецсимволов)
+
+TEXTS_A = [
+    {
+        "label": "hook",
+        "primary": (
+            "3 months rent. Nothing in my account. Saw Aviator on a friend's phone — "
+            "deposited GHS 10 for 20 free bets. Cashed out GHS 3,200 straight to MTN MoMo. "
+            "Paid everything the next morning."
+        ),
+        "headline": "GHS 3,200 hit my MoMo at 11:17 PM",
+        "description": "Deposit GHS 10 → get 20 free Aviator bets. Withdraw to MTN MoMo, no bank needed.",
+    },
+    {
+        "label": "clickbait",
+        "primary": (
+            "\U0001f4b8 My guy just withdrew GHS 1,480 from Aviator — paid his rent TONIGHT on MTN MoMo \U0001f1ec\U0001f1ed\n"
+            "Deposit GHS 10, get 20 FREE bets. Cash out straight to MoMo, no wahala. ✈️\U0001f525\n"
+            "How long will you keep watching others win?"
+        ),
+        "headline": "GHS 1,480 rent money — Aviator, MTN MoMo, same night",
+        "description": "GHS 10 deposit unlocks 20 Aviator free bets. Withdraw to MoMo instantly.",
+    },
+    {
+        "label": "headline",
+        "primary": (
+            "Your friends are cashing out on Aviator. You're still waiting. "
+            "GHS 10 gets you 20 free bets — withdraws straight to MTN MoMo."
+        ),
+        "headline": "GHS 2,400 to MoMo. In one session.",
+        "description": "Deposit GHS 10, get 20 free Aviator bets. Cash out to MTN MoMo instantly.",
+    },
+]
+
+TEXTS_B = [
+    {
+        "label": "hook",
+        "primary": (
+            "GHS 10 in. Hit 12x. GHS 3,800 straight to MTN MoMo — before the next round started.\n\n"
+            "Your friends are cashing out daily. Don't watch. \U0001f4b8\n\n"
+            "Deposit GHS 10 → get 20 FREE Aviator bets. Risk small, stack fast."
+        ),
+        "headline": "GHS 10 in → GHS 3,800 on MTN MoMo",
+        "description": "Deposit GHS 10, unlock 20 free Aviator bets. Cash out to MTN MoMo instantly.",
+    },
+    {
+        "label": "clickbait",
+        "primary": (
+            "✈️ GHS 10 → GHS 6,000. While you're reading this, someone in Ghana just cashed out. \U0001f1ec\U0001f1ed\n"
+            "Your friends are already playing Aviator — and they're not telling you why their MoMo keeps topping up.\n"
+            "Deposit GHS 10. Get 20 FREE bets. Cash out straight to MoMo. ⚡"
+        ),
+        "headline": "GHS 10 in. GHS 6,000 on MoMo. Real.",
+        "description": "20 free Aviator bets on your first GHS 10 deposit. MoMo cashout, instant, no bank needed.",
+    },
+    {
+        "label": "headline",
+        "primary": "GHS 10 deposit → 20 free Aviator bets. Cash out straight to MTN MoMo.",
+        "headline": "GHS 10 in. Real wins out.",
+        "description": "Deposit GHS 10, get 20 free bets on Aviator. Withdraw to MTN MoMo instantly.",
+    },
+]
 
 SETS: dict[str, dict] = {
     "A": {
         "campaign_name": "MV | GH | AVI | UGC | adset.pro | 05.06",
         "creo_dir": os.path.expanduser("~/Documents/FB_Agent_Creo/GH_AVI_batch02/A"),
         "files": ["A1.jpeg", "A2.jpeg", "A3.jpeg", "A4.jpeg", "A5.jpeg"],
-        "code_prefix": "GH_AVI_A",  # sub3 = GH_AVI_A1..A5
-        # Угол A «Close Your Debts» — копия Luck&strategy UGC-образца (recon 2026-06-04)
-        "primary_text": (
-            "Tired of the month finishing before your money? \U0001f4b8\n"
-            "Deposit just GHS 10, play Aviator, cash out to MTN MoMo.\n"
-            "Get 20 FREE BETS when you deposit — real wins, real cashout.\n"
-            "Start today. Close your debts."
-        ),
-        "headline": "Deposit GHS 10 → 20 Free Bets on Aviator",
-        "description": "Cash out straight to MTN MoMo. Fast payouts, no wahala.",
+        "code_prefix": "GH_AVI_A",  # sub3 = GH_AVI_A1..A5 (визуал)
+        "texts": TEXTS_A,
     },
     "B": {
         "campaign_name": "MV | GH | AVI | GAME | adset.pro | 05.06",
         "creo_dir": os.path.expanduser("~/Documents/FB_Agent_Creo/GH_AVI_batch02/B"),
         "files": ["B1.jpeg", "B2.jpeg", "B3.jpeg", "B4.jpeg", "B5.jpeg"],
         "code_prefix": "GH_AVI_B",
-        # Угол B «Peanuts to Profit» — копия Luck&strategy дизайн-образца (recon 2026-06-04)
-        "primary_text": (
-            "From GHS 10 to GHS 4,850 — that's Aviator. ✈️\U0001f4b0\n"
-            "New players: deposit GHS 10, get 20 FREE BETS instantly.\n"
-            "Catch the multiplier before it flies away.\n"
-            "Cash out to MTN MoMo anytime. Join now — don't miss your flight!"
-        ),
-        "headline": "Start With GHS 10. Cash Out Big.",
-        "description": "20 Free Bets on first deposit. MTN MoMo payouts. Play Aviator now.",
+        "texts": TEXTS_B,
     },
 }
 
@@ -96,14 +139,15 @@ def creo_files(cfg: dict) -> list[str]:
     return [os.path.join(cfg["creo_dir"], f) for f in cfg["files"]]
 
 
-def format_code(cfg: dict, j: int) -> str:
-    return f"{cfg['code_prefix']}{j + 1}"  # GH_AVI_A1..A5
+def visual_code(cfg: dict, v: int) -> str:
+    return f"{cfg['code_prefix']}{v + 1}"  # GH_AVI_A1..A5 — sub3 (визуал)
 
 
-def url_tags(cfg: dict, j: int) -> str:
+def url_tags(cfg: dict, v: int) -> str:
+    # sub3 = визуал (картинка), sub6 = {{adset.name}} = текстовый подход (hook/clickbait/headline)
     return (
         "sub2=MV"
-        f"&sub3={format_code(cfg, j)}"
+        f"&sub3={visual_code(cfg, v)}"
         f"&sub4={ACT_NUM}"
         "&sub5={{campaign.name}}"
         "&sub6={{adset.name}}"
@@ -115,7 +159,6 @@ def url_tags(cfg: dict, j: int) -> str:
 
 
 def campaign_body(cfg: dict) -> dict:
-    # CBO: бюджет И стратегия на КАМПАНИИ (Meta это разрешает при наличии бюджета).
     return {
         "name": cfg["campaign_name"],
         "objective": "OUTCOME_SALES",
@@ -126,10 +169,10 @@ def campaign_body(cfg: dict) -> dict:
     }
 
 
-def adset_body(campaign_id: str, i: int) -> dict:
-    # CBO-адсет: без бюджета и без bid_strategy (наследует с кампании). Имя без «|».
+def adset_body(campaign_id: str, label: str) -> dict:
+    # CBO-адсет: без бюджета/стратегии (наследует с кампании). Имя = текстовый подход (чистый sub6).
     return {
-        "name": str(i + 1),  # «1»/«2»/«3» — чистый sub6
+        "name": label,
         "campaign_id": campaign_id,
         "billing_event": "IMPRESSIONS",
         "optimization_goal": "OFFSITE_CONVERSIONS",
@@ -153,30 +196,30 @@ def adset_body(campaign_id: str, i: int) -> dict:
     }
 
 
-def creative_body(cfg: dict, j: int, image_hash: str) -> dict:
+def creative_body(cfg: dict, v: int, text: dict, image_hash: str) -> dict:
     return {
-        "name": format_code(cfg, j),
+        "name": f"{visual_code(cfg, v)}_{text['label']}",
         "object_story_spec": {
             "page_id": PAGE_ID,
             "link_data": {
-                "message": cfg["primary_text"],
+                "message": text["primary"],
                 "link": LANDING,
                 "image_hash": image_hash,
-                "name": cfg["headline"],
-                "description": cfg["description"],
+                "name": text["headline"],
+                "description": text["description"],
                 "call_to_action": {"type": CTA_TYPE, "value": {"link": LANDING}},
             },
         },
-        "url_tags": url_tags(cfg, j),
+        "url_tags": url_tags(cfg, v),
         "degrees_of_freedom_spec": {
             "creative_features_spec": {"text_optimizations": {"enroll_status": TEXT_OPT_ENROLL}}
         },
     }
 
 
-def ad_body(cfg: dict, adset_id: str, creative_id: str, i: int, j: int) -> dict:
+def ad_body(cfg: dict, v: int, text: dict, adset_id: str, creative_id: str) -> dict:
     return {
-        "name": f"{format_code(cfg, j)}_as{i + 1}",
+        "name": f"{visual_code(cfg, v)}_{text['label']}",
         "adset_id": adset_id,
         "creative": {"creative_id": creative_id},
         "status": "PAUSED",
@@ -222,44 +265,48 @@ async def run_chunked(client: MetaApiClient, entries: list[dict], label: str, ch
 
 async def main(set_key: str, go: bool) -> int:
     cfg = SETS[set_key]
+    texts = cfg["texts"]
     paths = creo_files(cfg)
     missing = [p for p in paths if not os.path.exists(p)]  # noqa: ASYNC240
     if missing:
-        print(f"НЕТ файлов набора {set_key} (ждём syntx):", *missing, sep="\n  ")
+        print(f"НЕТ файлов набора {set_key}:", *missing, sep="\n  ")
         return 2
 
     client = MetaApiClient(host=os.environ.get("BROWSER_AGENT_HOST", "localhost"), port=50051)
     await client.start()
     try:
-        print(f"\nНАБОР {set_key}: {cfg['campaign_name']}  (CBO 1-3-5)")
+        print(f"\nНАБОР {set_key}: {cfg['campaign_name']}  (CBO 1-3-5, адсет=текст)")
         print(
             f"  {ACT} · page {PAGE_ID} · пиксель {PIXEL_ID}·PURCHASE · гео {COUNTRIES} · age {AGE_MIN}-{AGE_MAX}"
         )
         print(
-            f"  CBO ${DAILY_BUDGET_CENTS / 100:.2f}/день · {BID_STRATEGY} · Advantage+ · attribution 7d/1d/EVV"
+            f"  CBO ${DAILY_BUDGET_CENTS / 100:.2f}/день · {BID_STRATEGY} · Advantage+ · attr CLICK 1d · старт {START_TIME}"
         )
         print(
-            f"  старт {START_TIME} · 3 адсета × 5 ads = 15 · опт.текста {TEXT_OPT_ENROLL} · PAUSED"
+            f"  3 адсета (текст-подходы): {', '.join(t['label'] for t in texts)} · 5 визуалов × 3 = 15 ads · PAUSED"
         )
-        print(f"  креативы: {', '.join(cfg['files'])}")
-        print(f"  текст: «{cfg['headline']}»")
+        for t in texts:
+            print(f"    [{t['label']}] HL: «{t['headline']}»")
 
         if not go:
             print("\n[spec-print] боевого создания НЕ делаю (нет --go).")
             return 0
 
-        # 1) кампания (CBO) — отдельный 1-entry batch
+        # 1) кампания (CBO)
         print("\n1) Кампания (CBO)…")
-        subs_c = await run_batch(
-            client,
-            [
-                make_batch_entry(
-                    method="POST", relative_url=f"{ACT}/campaigns", body_params=campaign_body(cfg)
-                )
-            ],
-            "campaign",
-        )
-        campaign_id = ids_from(subs_c)[0]
+        campaign_id = ids_from(
+            await run_batch(
+                client,
+                [
+                    make_batch_entry(
+                        method="POST",
+                        relative_url=f"{ACT}/campaigns",
+                        body_params=campaign_body(cfg),
+                    )
+                ],
+                "campaign",
+            )
+        )[0]
         if not campaign_id:
             print("❌ кампания не создана.")
             return 4
@@ -280,8 +327,8 @@ async def main(set_key: str, go: bool) -> int:
             hashes.append(h)
             print(f"  {os.path.basename(p)} → {h[:18]}…")
 
-        # 3) 3 адсета-дубля (CBO)
-        print("\n3) 3 адсета (CBO-дубли)…")
+        # 3) 3 адсета (по текстовому подходу)
+        print("\n3) 3 адсета (текст-подходы)…")
         adset_ids = ids_from(
             await run_batch(
                 client,
@@ -289,9 +336,9 @@ async def main(set_key: str, go: bool) -> int:
                     make_batch_entry(
                         method="POST",
                         relative_url=f"{ACT}/adsets",
-                        body_params=adset_body(campaign_id, i),
+                        body_params=adset_body(campaign_id, t["label"]),
                     )
-                    for i in range(N_ADSETS)
+                    for t in texts
                 ],
                 "adsets",
             )
@@ -299,40 +346,36 @@ async def main(set_key: str, go: bool) -> int:
         if not all(adset_ids):
             print(f"❌ адсеты неполные: {adset_ids}. Кампания {campaign_id} создана — чистить.")
             return 5
-        print(f"  adset_ids={adset_ids}")
+        adset_by_label = {t["label"]: adset_ids[i] for i, t in enumerate(texts)}
+        print(f"  адсеты: {adset_by_label}")
 
-        # 4) 5 креативов
-        print("\n4) 5 креативов…")
-        creative_ids = ids_from(
-            await run_batch(
-                client,
-                [
-                    make_batch_entry(
-                        method="POST",
-                        relative_url=f"{ACT}/adcreatives",
-                        body_params=creative_body(cfg, j, hashes[j]),
-                    )
-                    for j in range(N_CREATIVES)
-                ],
-                "creatives",
+        # 4) 15 креативов (5 визуалов × 3 текста)
+        print("\n4) 15 креативов (5 визуалов × 3 текста)…")
+        order: list[tuple[int, dict]] = [(v, t) for t in texts for v in range(N_VISUALS)]
+        entries_cr = [
+            make_batch_entry(
+                method="POST",
+                relative_url=f"{ACT}/adcreatives",
+                body_params=creative_body(cfg, v, t, hashes[v]),
             )
-        )
+            for (v, t) in order
+        ]
+        creative_ids = await run_chunked(client, entries_cr, "creatives", chunk=8)
         if not all(creative_ids):
             print(f"❌ креативы неполные: {creative_ids}. Чистить кампанию {campaign_id}.")
             return 6
 
-        # 5) 15 ads (3 адсета × 5 креативов)
-        print("\n5) 15 объявлений (3×5)…")
+        # 5) 15 ads (креатив → его адсет по тексту)
+        print("\n5) 15 объявлений…")
         entries_ads = [
             make_batch_entry(
                 method="POST",
                 relative_url=f"{ACT}/ads",
-                body_params=ad_body(cfg, adset_ids[i], creative_ids[j], i, j),
+                body_params=ad_body(cfg, v, t, adset_by_label[t["label"]], creative_ids[k]),
             )
-            for i in range(N_ADSETS)
-            for j in range(N_CREATIVES)
+            for k, (v, t) in enumerate(order)
         ]
-        ad_ids = await run_chunked(client, entries_ads, "ads", chunk=10)
+        ad_ids = await run_chunked(client, entries_ads, "ads", chunk=8)
         ok_ads = sum(1 for x in ad_ids if x)
 
         print("\n" + "=" * 60)
