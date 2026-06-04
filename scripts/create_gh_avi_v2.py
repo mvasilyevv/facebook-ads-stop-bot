@@ -60,21 +60,21 @@ TEXTS_A = [
     {
         "label": "hook",
         "primary": (
-            "3 months rent. Nothing in my account. Saw Aviator on a friend's phone — "
-            "deposited GHS 10 for 20 free bets. Cashed out GHS 3,200 straight to MTN MoMo. "
+            "3 months rent. Nothing in my account. A friend showed me Aviator — "
+            "I deposited GHS 10 for 20 free bets. Cashed out straight to MTN MoMo. "
             "Paid everything the next morning."
         ),
-        "headline": "GHS 3,200 hit my MoMo at 11:17 PM",
+        "headline": "Paid my rent with a GHS 10 Aviator bet",
         "description": "Deposit GHS 10 → get 20 free Aviator bets. Withdraw to MTN MoMo, no bank needed.",
     },
     {
         "label": "clickbait",
         "primary": (
-            "\U0001f4b8 My guy just withdrew GHS 1,480 from Aviator — paid his rent TONIGHT on MTN MoMo \U0001f1ec\U0001f1ed\n"
+            "\U0001f4b8 My guy just cashed out from Aviator — paid his rent TONIGHT on MTN MoMo \U0001f1ec\U0001f1ed\n"
             "Deposit GHS 10, get 20 FREE bets. Cash out straight to MoMo, no wahala. ✈️\U0001f525\n"
             "How long will you keep watching others win?"
         ),
-        "headline": "GHS 1,480 rent money — Aviator, MTN MoMo, same night",
+        "headline": "Rent money from Aviator — MTN MoMo, same night",
         "description": "GHS 10 deposit unlocks 20 Aviator free bets. Withdraw to MoMo instantly.",
     },
     {
@@ -83,7 +83,7 @@ TEXTS_A = [
             "Your friends are cashing out on Aviator. You're still waiting. "
             "GHS 10 gets you 20 free bets — withdraws straight to MTN MoMo."
         ),
-        "headline": "GHS 2,400 to MoMo. In one session.",
+        "headline": "Cash out to MoMo in one session",
         "description": "Deposit GHS 10, get 20 free Aviator bets. Cash out to MTN MoMo instantly.",
     },
 ]
@@ -92,21 +92,21 @@ TEXTS_B = [
     {
         "label": "hook",
         "primary": (
-            "GHS 10 in. Hit 12x. GHS 3,800 straight to MTN MoMo — before the next round started.\n\n"
+            "GHS 10 in. Caught the multiplier. Cashed out straight to MTN MoMo — before the next round started.\n\n"
             "Your friends are cashing out daily. Don't watch. \U0001f4b8\n\n"
             "Deposit GHS 10 → get 20 FREE Aviator bets. Risk small, stack fast."
         ),
-        "headline": "GHS 10 in → GHS 3,800 on MTN MoMo",
+        "headline": "GHS 10 in → cashed out on MTN MoMo",
         "description": "Deposit GHS 10, unlock 20 free Aviator bets. Cash out to MTN MoMo instantly.",
     },
     {
         "label": "clickbait",
         "primary": (
-            "✈️ GHS 10 → GHS 6,000. While you're reading this, someone in Ghana just cashed out. \U0001f1ec\U0001f1ed\n"
+            "✈️ GHS 10 in. While you're reading this, someone in Ghana just cashed out big. \U0001f1ec\U0001f1ed\n"
             "Your friends are already playing Aviator — and they're not telling you why their MoMo keeps topping up.\n"
             "Deposit GHS 10. Get 20 FREE bets. Cash out straight to MoMo. ⚡"
         ),
-        "headline": "GHS 10 in. GHS 6,000 on MoMo. Real.",
+        "headline": "GHS 10 in. Real wins to your MoMo.",
         "description": "20 free Aviator bets on your first GHS 10 deposit. MoMo cashout, instant, no bank needed.",
     },
     {
