@@ -225,6 +225,10 @@ export function useObserverCampaigns() {
   return useQuery({
     queryKey: ["observer", "campaigns"] as const,
     queryFn: () => apiClient.get<CampaignOption[]>("/settings/observer/campaigns"),
+    // Список наполняется observer'ом при сканах — автоподтягиваем новые кампании,
+    // чтобы он не залипал без ручного рефреша (кампании меняются редко → 60с).
+    refetchInterval: 60_000,
+    refetchOnWindowFocus: true,
   });
 }
 
