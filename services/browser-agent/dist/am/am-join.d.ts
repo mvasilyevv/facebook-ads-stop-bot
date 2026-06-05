@@ -4,6 +4,7 @@ export interface AmAdMeta {
     adName?: string;
     adsetName?: string;
     campaignName?: string;
+    campaignId?: string;
     effectiveStatus?: string;
     budget?: string;
 }

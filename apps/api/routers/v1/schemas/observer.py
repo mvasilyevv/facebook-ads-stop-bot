@@ -57,7 +57,7 @@ class StartCabinetDayResponse(BaseModel):
 
 
 class RestartSignalResponse(BaseModel):
-    """Ответ на POST /observer/restart или /disable-worker/restart."""
+    """Ответ на POST /observer/restart."""
 
     status: str
     channel: str

@@ -56,8 +56,6 @@ from core.meta_api.queue import (
     list_drafts,
 )
 from core.meta_api.schemas import MetaMutationPayload
-from core.observer.queries import load_observer_config
-from core.tasks.queue import create_task
 from core.telegram.service import find_recipient_by_telegram_user_id, load_telegram_config
 
 logger = logging.getLogger(__name__)
@@ -314,50 +312,25 @@ async def _create_disable_action(
 ) -> tuple[int | None, str]:
     """Зеркало core.telegram.handlers.alerts.handle_dis_callback.
 
-    Канал выбирается по observer_config.act_via_api: True → meta_api pause_ad
-    (точно по ad_id), False → DOM disable через disable_worker. Ошибка чтения → DOM.
+    Канал — только Marketing API (pause_ad, точно по ad_id). DOM-disable удалён.
     idempotency_key: при активном инциденте дедупим по token (двойной тап безопасен),
     без инцидента — uuid4 (ручное отключение можно повторять).
     """
-    try:
-        cfg = await load_observer_config(engine)
-        act_via_api = bool((cfg or {}).get("act_via_api", False))
-    except Exception:
-        logger.warning(
-            "tma disable: не смог прочитать act_via_api — fallback на DOM", exc_info=True
-        )
-        act_via_api = False
-
     suffix = token or uuid.uuid4().hex
-    if act_via_api:
-        payload = MetaMutationPayload(
-            mutation_kind="pause_ad",
-            target_id=fb_ad_id,
-            params={},
-            ad_account_id=None,
-        )
-        task_id = await create_mutation_task(
-            engine,
-            payload=payload,
-            requested_by=requested_by,
-            status="pending",
-            idempotency_key=f"tma:pause_ad:{fb_ad_id}:{suffix}",
-        )
-        return task_id, "meta_api"
-
-    task_id = await create_task(
-        engine,
-        task_type="disable",
-        idempotency_key=f"tma:disable:{fb_ad_id}:{suffix}",
-        payload={
-            "fb_ad_id": fb_ad_id,
-            "open_state_token": token,
-            "reason": reason,
-            "source": "tma",
-        },
-        requested_by=requested_by,
+    payload = MetaMutationPayload(
+        mutation_kind="pause_ad",
+        target_id=fb_ad_id,
+        params={},
+        ad_account_id=None,
     )
-    return task_id, "dom"
+    task_id = await create_mutation_task(
+        engine,
+        payload=payload,
+        requested_by=requested_by,
+        status="pending",
+        idempotency_key=f"tma:pause_ad:{fb_ad_id}:{suffix}",
+    )
+    return task_id, "meta_api"
 
 
 @router.post("/ads/{fb_ad_id}/disable", response_model=TmaDisableResponse)
@@ -369,7 +342,7 @@ async def tma_disable_ad(
 ) -> TmaDisableResponse:
     """Создаёт задачу на отключение объявления (money-действие).
 
-    Канал (meta_api pause_ad / DOM disable) — по observer_config.act_via_api,
+    Канал — только Marketing API (meta_api pause_ad, точно по ad_id),
     как ручная кнопка бота. requested_by = tma:<telegram_user_id>.
     """
     exists, token = await _resolve_ad_token(engine, fb_ad_id)

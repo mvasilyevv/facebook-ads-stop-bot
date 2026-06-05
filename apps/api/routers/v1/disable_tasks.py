@@ -20,7 +20,8 @@ from apps.api.deps import DepEngine
 from apps.api.routers.v1.schemas.tasks import DisableTaskCreateIn, TaskQueueRowOut
 from apps.api.utils.status_mapper import expand_frontend_statuses_csv
 from apps.api.utils.task_serializer import task_row_to_out
-from core.tasks.queue import create_task
+from core.meta_api.queue import create_mutation_task
+from core.meta_api.schemas import MetaMutationPayload
 
 logger = logging.getLogger(__name__)
 
@@ -149,26 +150,23 @@ async def create_disable_task(
             detail=f"Объявление fb_ad_id={body.fb_ad_id!r} не найдено в fb_ads",
         )
 
-    ad_internal_id = str(ad_row.id)
     ad_name = ad_row.ad_name
 
-    payload = {
-        "fb_ad_id": body.fb_ad_id,
-        "ad_id": ad_internal_id,
-        "reason": body.reason,
-        "source": "frontend",
-    }
+    # Ручное отключение — через Marketing API (pause_ad), как авто-стоп и кнопки.
+    # DOM-канал (task_type='disable') удалён.
+    ikey = f"manual:pause_ad:{body.fb_ad_id}:{uuid.uuid4().hex}"
 
-    # Уникальный idempotency_key per-request (ручные задачи не требуют дедупа)
-    ikey = f"disable:{body.fb_ad_id}:manual:{uuid.uuid4().hex}"
-
-    task_id = await create_task(
+    task_id = await create_mutation_task(
         engine,
-        task_type="disable",
-        idempotency_key=ikey,
-        payload=payload,
+        payload=MetaMutationPayload(
+            mutation_kind="pause_ad",
+            target_id=body.fb_ad_id,
+            params={},
+            ad_account_id=None,
+        ),
         requested_by=body.requested_by,
         status="pending",
+        idempotency_key=ikey,
         created_by_chat_id=body.requested_by_chat_id,
     )
 

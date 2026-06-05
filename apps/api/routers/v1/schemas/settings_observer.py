@@ -25,8 +25,6 @@ class ObserverSettingsResponse(BaseModel):
     auto_enable_recommendations: bool
     # Owner-scoping: тег владельца кампаний (NULL — фильтр выключен).
     owner_campaign_tag: str | None = None
-    # Канал toggle-действий: False — DOM-клик, True — Marketing API (pause_ad/activate_ad).
-    act_via_api: bool = False
     # Allowlist кампаний для am-режима (#3): фильтр am_tabular по campaign.id. Пусто — без фильтра.
     campaign_ids: list[str] = Field(default_factory=list)
 
@@ -57,13 +55,6 @@ class ObserverSettingsPutRequest(BaseModel):
         "запятую (например, 'MV' или 'MV,ABC,XYZ') — кампания отслеживается при совпадении "
         "с любым. Пусто/null — фильтр выключен, обрабатываются все кампании.",
     )
-    # Money-критичный флаг: None — НЕ трогаем (защита от сброса старыми клиентами,
-    # которые не шлют поле). bool — явно выставить канал toggle-действий.
-    act_via_api: bool | None = Field(
-        default=None,
-        description="Канал toggle-действий (disable/enable). False — DOM-клик browser-agent, "
-        "True — Marketing API (pause_ad/activate_ad, точно по ad_id). null — не менять.",
-    )
     # Allowlist кампаний для am-режима. None — НЕ трогаем; [] — очистить (без фильтра).
     campaign_ids: list[str] | None = Field(
         default=None,
@@ -80,12 +71,6 @@ class ScanningToggleRequest(BaseModel):
 
 class AutoEnableToggleRequest(BaseModel):
     """Тело PATCH /settings/observer/auto-enable."""
-
-    enabled: bool
-
-
-class ActViaApiToggleRequest(BaseModel):
-    """Тело PATCH /settings/observer/act-via-api."""
 
     enabled: bool
 

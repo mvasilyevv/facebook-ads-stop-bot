@@ -27,10 +27,6 @@ from core.browser.circuit_breaker import AsyncCircuitBreaker, CircuitOpenError
 
 logger = logging.getLogger(__name__)
 _RPC_BROWSER_CONTROL_TIMEOUT_SECONDS = 30.0
-_RPC_TOGGLE_FIND_TIMEOUT_SECONDS = 45.0
-_RPC_TOGGLE_READ_TIMEOUT_SECONDS = 12.0
-_RPC_TOGGLE_CLICK_TIMEOUT_SECONDS = 15.0
-_RPC_TOGGLE_CONFIRM_EXTRA_TIMEOUT_SECONDS = 15.0
 _T = TypeVar("_T")
 
 
@@ -445,112 +441,6 @@ class BrowserAgentClient:
             finally:
                 if stream is not None and not completed and hasattr(stream, "cancel"):
                     stream.cancel()
-
-    async def find_toggle_cell(
-        self,
-        fb_ad_id: str,
-        reset_to_top: bool = True,
-        max_scroll_passes: int | None = None,
-    ) -> dict:
-        """Найти toggle-ячейку для объявления."""
-        resp = await self._call_with_session_recovery(
-            "поиска toggle",
-            lambda: self._scanner_stub.FindToggleCell(
-                scanner_pb2.FindToggleCellRequest(
-                    session_id=self._session_id or "",
-                    fb_ad_id=fb_ad_id,
-                    reset_to_top=reset_to_top,
-                    max_scroll_passes=max_scroll_passes or 0,
-                ),
-                timeout=_RPC_TOGGLE_FIND_TIMEOUT_SECONDS,
-            ),
-        )
-        return {
-            "found": resp.found,
-            "cell_x": resp.cell_x,
-            "cell_y": resp.cell_y,
-            "aria_checked": resp.aria_checked,
-        }
-
-    async def read_toggle_state(self, fb_ad_id: str) -> str:
-        """Прочитать aria-checked toggle."""
-        resp = await self._call_with_session_recovery(
-            "чтения toggle",
-            lambda: self._scanner_stub.ReadToggleState(
-                scanner_pb2.ReadToggleStateRequest(
-                    session_id=self._session_id or "",
-                    fb_ad_id=fb_ad_id,
-                ),
-                timeout=_RPC_TOGGLE_READ_TIMEOUT_SECONDS,
-            ),
-        )
-        return resp.aria_checked
-
-    async def toggle_ad(self, fb_ad_id: str, target_state: bool = True) -> dict:
-        """Переключить on/off switch объявления.
-
-        Args:
-            fb_ad_id: ID объявления.
-            target_state: True = включить (ON), False = отключить (OFF).
-        """
-        resp = await self._call_with_session_recovery(
-            "клика по toggle",
-            lambda: self._scanner_stub.ToggleAd(
-                scanner_pb2.ToggleAdRequest(
-                    session_id=self._session_id or "",
-                    fb_ad_id=fb_ad_id,
-                    target_state=target_state,
-                ),
-                timeout=_RPC_TOGGLE_CLICK_TIMEOUT_SECONDS,
-            ),
-        )
-        return {
-            "success": resp.success,
-            "final_state": resp.final_state,
-        }
-
-    async def wait_for_toggle_confirmation(
-        self,
-        fb_ad_id: str,
-        expected_checked: str = "false",
-        required_reads: int = 2,
-        poll_delays_seconds: list[float] | None = None,
-        max_scroll_passes_restore: int = 30,
-    ) -> dict:
-        """Ждать подтверждения toggle через повторные чтения aria-checked.
-
-        Args:
-            fb_ad_id: ID объявления.
-            expected_checked: "true" для enable, "false" для disable.
-            required_reads: Сколько раз подряд нужно прочитать expected_checked.
-            poll_delays_seconds: Задержки между попытками (секунды).
-            max_scroll_passes_restore: Макс. проходов скролла для restore visibility.
-
-        Returns:
-            dict с полями success, message, final_aria_checked, reads_matched.
-        """
-        delays = poll_delays_seconds or [0.0, 3.0, 3.0, 3.0, 3.0, 4.0, 4.0, 5.0, 5.0]
-        rpc_timeout = sum(delays) + _RPC_TOGGLE_CONFIRM_EXTRA_TIMEOUT_SECONDS
-        resp = await self._call_with_session_recovery(
-            "подтверждения toggle",
-            lambda: self._scanner_stub.WaitForToggleConfirmation(
-                scanner_pb2.WaitForToggleConfirmationRequest(
-                    session_id=self._session_id or "",
-                    fb_ad_id=fb_ad_id,
-                    expected_checked=expected_checked,
-                    required_reads=required_reads,
-                    poll_delays_seconds=delays,
-                    max_scroll_passes_restore=max_scroll_passes_restore,
-                ),
-                timeout=rpc_timeout,
-            ),
-        )
-        return {
-            "success": resp.success,
-            "message": resp.message,
-            "final_aria_checked": resp.final_aria_checked,
-            "reads_matched": resp.reads_matched,
-        }
 
     async def start_recording(self, plan_name: str) -> tuple[bool, str]:
         """Запустить запись плана через recorder в браузере."""

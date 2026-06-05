@@ -6,7 +6,6 @@ Endpoints:
     GET  /observer/scan-runs             — история сканов из scan_runs (partitioned)
     POST /observer/start-new-cabinet-day — архив за вчера + pubsub
     POST /observer/restart               — сигнал рестарта observer-воркеру
-    POST /disable-worker/restart         — сигнал рестарта disable-воркеру
 """
 
 from __future__ import annotations
@@ -42,7 +41,6 @@ _MAX_SCAN_RUNS_LIMIT = 200
 
 # Redis-каналы и ключи
 _RESTART_OBSERVER_CHANNEL = "fb_agent:worker:restart:observer"
-_RESTART_DISABLE_CHANNEL = "fb_agent:worker:restart:disable_worker"
 _CABINET_DAY_CHANNEL = "fb_agent:observer:cabinet_day"
 
 
@@ -296,14 +294,3 @@ async def restart_observer(redis: DepRedis) -> RestartSignalResponse:
     Если Redis недоступен — 503.
     """
     return await _publish_restart_signal(redis, _RESTART_OBSERVER_CHANNEL)
-
-
-@router.post("/disable-worker/restart", response_model=RestartSignalResponse)
-async def restart_disable_worker(redis: DepRedis) -> RestartSignalResponse:
-    """Публикует сигнал рестарта disable-воркера в Redis.
-
-    disable_worker подписан на канал fb_agent:worker:restart:disable_worker
-    (main.py::_on_restart) и выполняет graceful stop по этому событию.
-    Если Redis недоступен — 503.
-    """
-    return await _publish_restart_signal(redis, _RESTART_DISABLE_CHANNEL)

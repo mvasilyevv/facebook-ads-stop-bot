@@ -16,10 +16,10 @@ from core.ai_assistant.tools.base import RiskLevel, ToolContext
 logger = logging.getLogger(__name__)
 
 # Список ожидаемых воркеров — для отображения "не работает" если ключа нет в Redis.
+# disable/enable удалены: отключение/включение рекламы теперь через Marketing API
+# (meta_api), отдельных DOM-toggle воркеров больше нет.
 _EXPECTED_WORKERS: tuple[str, ...] = (
     "observer",
-    "disable",
-    "enable",
     "telegram_poller",
     "cleanup",
     "reconciler",

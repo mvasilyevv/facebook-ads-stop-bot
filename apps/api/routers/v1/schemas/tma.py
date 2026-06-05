@@ -60,7 +60,7 @@ class TmaDisableResponse(BaseModel):
 
     ok: bool
     task_id: int | None = None
-    channel: str  # 'meta_api' | 'dom' — канал исполнения (по observer_config.act_via_api)
+    channel: str  # всегда 'meta_api' — единственный канал исполнения (Marketing API pause_ad)
     detail: str
 
 

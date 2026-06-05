@@ -26,12 +26,10 @@ router = APIRouter(tags=["health"])
 
 # Список воркеров по умолчанию (если EXPECTED_WORKERS не задан в env)
 # Имена ДОЛЖНЫ совпадать с ключами worker:heartbeat:<name>, которые пишут воркеры
-# (короткие, как в health_watchdog и toggle_executor). Раньше были длинные
-# (disable_worker и т.п.) → живые воркеры показывались OFFLINE (5/12 баг).
+# (короткие). disable/enable удалены: отключение/включение рекламы идёт через
+# Marketing API (meta_api), отдельных DOM-toggle воркеров больше нет.
 _DEFAULT_EXPECTED_WORKERS: list[str] = [
     "observer",
-    "disable",
-    "enable",
     "telegram_poller",
     "meta_api",
     "health_watchdog",

@@ -5,23 +5,24 @@ import grpc
 
 from . import scanner_pb2 as v1_dot_scanner__pb2
 
-GRPC_GENERATED_VERSION = '1.80.0'
+GRPC_GENERATED_VERSION = "1.80.0"
 GRPC_VERSION = grpc.__version__
 _version_not_supported = False
 
 try:
     from grpc._utilities import first_version_is_lower
+
     _version_not_supported = first_version_is_lower(GRPC_VERSION, GRPC_GENERATED_VERSION)
 except ImportError:
     _version_not_supported = True
 
 if _version_not_supported:
     raise RuntimeError(
-        f'The grpc package installed is at version {GRPC_VERSION},'
-        + ' but the generated code in v1/scanner_pb2_grpc.py depends on'
-        + f' grpcio>={GRPC_GENERATED_VERSION}.'
-        + f' Please upgrade your grpc module to grpcio>={GRPC_GENERATED_VERSION}'
-        + f' or downgrade your generated code using grpcio-tools<={GRPC_VERSION}.'
+        f"The grpc package installed is at version {GRPC_VERSION},"
+        + " but the generated code in v1/scanner_pb2_grpc.py depends on"
+        + f" grpcio>={GRPC_GENERATED_VERSION}."
+        + f" Please upgrade your grpc module to grpcio>={GRPC_GENERATED_VERSION}"
+        + f" or downgrade your generated code using grpcio-tools<={GRPC_VERSION}."
     )
 
 
@@ -35,55 +36,23 @@ class ScannerServiceStub(object):
             channel: A grpc.Channel.
         """
         self.RunScanCycle = channel.unary_stream(
-                '/fb_agent.scanner.v1.ScannerService/RunScanCycle',
-                request_serializer=v1_dot_scanner__pb2.RunScanCycleRequest.SerializeToString,
-                response_deserializer=v1_dot_scanner__pb2.ScanCycleEvent.FromString,
-                _registered_method=True)
-        self.FindToggleCell = channel.unary_unary(
-                '/fb_agent.scanner.v1.ScannerService/FindToggleCell',
-                request_serializer=v1_dot_scanner__pb2.FindToggleCellRequest.SerializeToString,
-                response_deserializer=v1_dot_scanner__pb2.FindToggleCellResponse.FromString,
-                _registered_method=True)
-        self.ReadToggleState = channel.unary_unary(
-                '/fb_agent.scanner.v1.ScannerService/ReadToggleState',
-                request_serializer=v1_dot_scanner__pb2.ReadToggleStateRequest.SerializeToString,
-                response_deserializer=v1_dot_scanner__pb2.ReadToggleStateResponse.FromString,
-                _registered_method=True)
-        self.ToggleAd = channel.unary_unary(
-                '/fb_agent.scanner.v1.ScannerService/ToggleAd',
-                request_serializer=v1_dot_scanner__pb2.ToggleAdRequest.SerializeToString,
-                response_deserializer=v1_dot_scanner__pb2.ToggleAdResponse.FromString,
-                _registered_method=True)
-        self.HumanMove = channel.unary_unary(
-                '/fb_agent.scanner.v1.ScannerService/HumanMove',
-                request_serializer=v1_dot_scanner__pb2.HumanMoveRequest.SerializeToString,
-                response_deserializer=v1_dot_scanner__pb2.HumanMoveResponse.FromString,
-                _registered_method=True)
-        self.HumanClick = channel.unary_unary(
-                '/fb_agent.scanner.v1.ScannerService/HumanClick',
-                request_serializer=v1_dot_scanner__pb2.HumanClickRequest.SerializeToString,
-                response_deserializer=v1_dot_scanner__pb2.HumanClickResponse.FromString,
-                _registered_method=True)
-        self.HumanWheelScroll = channel.unary_unary(
-                '/fb_agent.scanner.v1.ScannerService/HumanWheelScroll',
-                request_serializer=v1_dot_scanner__pb2.HumanWheelScrollRequest.SerializeToString,
-                response_deserializer=v1_dot_scanner__pb2.HumanWheelScrollResponse.FromString,
-                _registered_method=True)
-        self.WaitForToggleConfirmation = channel.unary_unary(
-                '/fb_agent.scanner.v1.ScannerService/WaitForToggleConfirmation',
-                request_serializer=v1_dot_scanner__pb2.WaitForToggleConfirmationRequest.SerializeToString,
-                response_deserializer=v1_dot_scanner__pb2.WaitForToggleConfirmationResponse.FromString,
-                _registered_method=True)
+            "/fb_agent.scanner.v1.ScannerService/RunScanCycle",
+            request_serializer=v1_dot_scanner__pb2.RunScanCycleRequest.SerializeToString,
+            response_deserializer=v1_dot_scanner__pb2.ScanCycleEvent.FromString,
+            _registered_method=True,
+        )
         self.HardReloadPage = channel.unary_unary(
-                '/fb_agent.scanner.v1.ScannerService/HardReloadPage',
-                request_serializer=v1_dot_scanner__pb2.HardReloadPageRequest.SerializeToString,
-                response_deserializer=v1_dot_scanner__pb2.HardReloadPageResponse.FromString,
-                _registered_method=True)
+            "/fb_agent.scanner.v1.ScannerService/HardReloadPage",
+            request_serializer=v1_dot_scanner__pb2.HardReloadPageRequest.SerializeToString,
+            response_deserializer=v1_dot_scanner__pb2.HardReloadPageResponse.FromString,
+            _registered_method=True,
+        )
         self.ListCampaigns = channel.unary_unary(
-                '/fb_agent.scanner.v1.ScannerService/ListCampaigns',
-                request_serializer=v1_dot_scanner__pb2.ListCampaignsRequest.SerializeToString,
-                response_deserializer=v1_dot_scanner__pb2.ListCampaignsResponse.FromString,
-                _registered_method=True)
+            "/fb_agent.scanner.v1.ScannerService/ListCampaigns",
+            request_serializer=v1_dot_scanner__pb2.ListCampaignsRequest.SerializeToString,
+            response_deserializer=v1_dot_scanner__pb2.ListCampaignsResponse.FromString,
+            _registered_method=True,
+        )
 
 
 class ScannerServiceServicer(object):
@@ -94,64 +63,14 @@ class ScannerServiceServicer(object):
         Стримит один ScanComplete (DOM-парсинг/скролл выпилены).
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def FindToggleCell(self, request, context):
-        """Найти toggle-ячейку для конкретного объявления (скроллит таблицу).
-        """
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def ReadToggleState(self, request, context):
-        """Прочитать aria-checked состояние toggle-ячейки.
-        """
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def ToggleAd(self, request, context):
-        """Переключить on/off switch объявления.
-        """
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def HumanMove(self, request, context):
-        """Human-like движение мыши к координатам.
-        """
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def HumanClick(self, request, context):
-        """Human-like клик по координатам.
-        """
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def HumanWheelScroll(self, request, context):
-        """Human-like скролл колесом.
-        """
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def WaitForToggleConfirmation(self, request, context):
-        """Ждать подтверждения toggle через повторные чтения aria-checked.
-        """
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
+        context.set_details("Method not implemented!")
+        raise NotImplementedError("Method not implemented!")
 
     def HardReloadPage(self, request, context):
-        """Жёсткая перезагрузка страницы с очисткой кеша (через CDP Network.clearBrowserCache).
-        """
+        """Жёсткая перезагрузка страницы с очисткой кеша (через CDP Network.clearBrowserCache)."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
+        context.set_details("Method not implemented!")
+        raise NotImplementedError("Method not implemented!")
 
     def ListCampaigns(self, request, context):
         """Live-список кампаний по owner_tag (через Graph campaigns edge, МИМО allowlist).
@@ -159,88 +78,56 @@ class ScannerServiceServicer(object):
         новые, которые ещё не сканировались (allowlist их не пропускал бы в обычный скан).
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
+        context.set_details("Method not implemented!")
+        raise NotImplementedError("Method not implemented!")
 
 
 def add_ScannerServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
-            'RunScanCycle': grpc.unary_stream_rpc_method_handler(
-                    servicer.RunScanCycle,
-                    request_deserializer=v1_dot_scanner__pb2.RunScanCycleRequest.FromString,
-                    response_serializer=v1_dot_scanner__pb2.ScanCycleEvent.SerializeToString,
-            ),
-            'FindToggleCell': grpc.unary_unary_rpc_method_handler(
-                    servicer.FindToggleCell,
-                    request_deserializer=v1_dot_scanner__pb2.FindToggleCellRequest.FromString,
-                    response_serializer=v1_dot_scanner__pb2.FindToggleCellResponse.SerializeToString,
-            ),
-            'ReadToggleState': grpc.unary_unary_rpc_method_handler(
-                    servicer.ReadToggleState,
-                    request_deserializer=v1_dot_scanner__pb2.ReadToggleStateRequest.FromString,
-                    response_serializer=v1_dot_scanner__pb2.ReadToggleStateResponse.SerializeToString,
-            ),
-            'ToggleAd': grpc.unary_unary_rpc_method_handler(
-                    servicer.ToggleAd,
-                    request_deserializer=v1_dot_scanner__pb2.ToggleAdRequest.FromString,
-                    response_serializer=v1_dot_scanner__pb2.ToggleAdResponse.SerializeToString,
-            ),
-            'HumanMove': grpc.unary_unary_rpc_method_handler(
-                    servicer.HumanMove,
-                    request_deserializer=v1_dot_scanner__pb2.HumanMoveRequest.FromString,
-                    response_serializer=v1_dot_scanner__pb2.HumanMoveResponse.SerializeToString,
-            ),
-            'HumanClick': grpc.unary_unary_rpc_method_handler(
-                    servicer.HumanClick,
-                    request_deserializer=v1_dot_scanner__pb2.HumanClickRequest.FromString,
-                    response_serializer=v1_dot_scanner__pb2.HumanClickResponse.SerializeToString,
-            ),
-            'HumanWheelScroll': grpc.unary_unary_rpc_method_handler(
-                    servicer.HumanWheelScroll,
-                    request_deserializer=v1_dot_scanner__pb2.HumanWheelScrollRequest.FromString,
-                    response_serializer=v1_dot_scanner__pb2.HumanWheelScrollResponse.SerializeToString,
-            ),
-            'WaitForToggleConfirmation': grpc.unary_unary_rpc_method_handler(
-                    servicer.WaitForToggleConfirmation,
-                    request_deserializer=v1_dot_scanner__pb2.WaitForToggleConfirmationRequest.FromString,
-                    response_serializer=v1_dot_scanner__pb2.WaitForToggleConfirmationResponse.SerializeToString,
-            ),
-            'HardReloadPage': grpc.unary_unary_rpc_method_handler(
-                    servicer.HardReloadPage,
-                    request_deserializer=v1_dot_scanner__pb2.HardReloadPageRequest.FromString,
-                    response_serializer=v1_dot_scanner__pb2.HardReloadPageResponse.SerializeToString,
-            ),
-            'ListCampaigns': grpc.unary_unary_rpc_method_handler(
-                    servicer.ListCampaigns,
-                    request_deserializer=v1_dot_scanner__pb2.ListCampaignsRequest.FromString,
-                    response_serializer=v1_dot_scanner__pb2.ListCampaignsResponse.SerializeToString,
-            ),
+        "RunScanCycle": grpc.unary_stream_rpc_method_handler(
+            servicer.RunScanCycle,
+            request_deserializer=v1_dot_scanner__pb2.RunScanCycleRequest.FromString,
+            response_serializer=v1_dot_scanner__pb2.ScanCycleEvent.SerializeToString,
+        ),
+        "HardReloadPage": grpc.unary_unary_rpc_method_handler(
+            servicer.HardReloadPage,
+            request_deserializer=v1_dot_scanner__pb2.HardReloadPageRequest.FromString,
+            response_serializer=v1_dot_scanner__pb2.HardReloadPageResponse.SerializeToString,
+        ),
+        "ListCampaigns": grpc.unary_unary_rpc_method_handler(
+            servicer.ListCampaigns,
+            request_deserializer=v1_dot_scanner__pb2.ListCampaignsRequest.FromString,
+            response_serializer=v1_dot_scanner__pb2.ListCampaignsResponse.SerializeToString,
+        ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
-            'fb_agent.scanner.v1.ScannerService', rpc_method_handlers)
+        "fb_agent.scanner.v1.ScannerService", rpc_method_handlers
+    )
     server.add_generic_rpc_handlers((generic_handler,))
-    server.add_registered_method_handlers('fb_agent.scanner.v1.ScannerService', rpc_method_handlers)
+    server.add_registered_method_handlers("fb_agent.scanner.v1.ScannerService", rpc_method_handlers)
 
 
- # This class is part of an EXPERIMENTAL API.
+# This class is part of an EXPERIMENTAL API.
 class ScannerService(object):
     """Missing associated documentation comment in .proto file."""
 
     @staticmethod
-    def RunScanCycle(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
+    def RunScanCycle(
+        request,
+        target,
+        options=(),
+        channel_credentials=None,
+        call_credentials=None,
+        insecure=False,
+        compression=None,
+        wait_for_ready=None,
+        timeout=None,
+        metadata=None,
+    ):
         return grpc.experimental.unary_stream(
             request,
             target,
-            '/fb_agent.scanner.v1.ScannerService/RunScanCycle',
+            "/fb_agent.scanner.v1.ScannerService/RunScanCycle",
             v1_dot_scanner__pb2.RunScanCycleRequest.SerializeToString,
             v1_dot_scanner__pb2.ScanCycleEvent.FromString,
             options,
@@ -251,212 +138,26 @@ class ScannerService(object):
             wait_for_ready,
             timeout,
             metadata,
-            _registered_method=True)
+            _registered_method=True,
+        )
 
     @staticmethod
-    def FindToggleCell(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
+    def HardReloadPage(
+        request,
+        target,
+        options=(),
+        channel_credentials=None,
+        call_credentials=None,
+        insecure=False,
+        compression=None,
+        wait_for_ready=None,
+        timeout=None,
+        metadata=None,
+    ):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/fb_agent.scanner.v1.ScannerService/FindToggleCell',
-            v1_dot_scanner__pb2.FindToggleCellRequest.SerializeToString,
-            v1_dot_scanner__pb2.FindToggleCellResponse.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
-    @staticmethod
-    def ReadToggleState(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            '/fb_agent.scanner.v1.ScannerService/ReadToggleState',
-            v1_dot_scanner__pb2.ReadToggleStateRequest.SerializeToString,
-            v1_dot_scanner__pb2.ReadToggleStateResponse.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
-    @staticmethod
-    def ToggleAd(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            '/fb_agent.scanner.v1.ScannerService/ToggleAd',
-            v1_dot_scanner__pb2.ToggleAdRequest.SerializeToString,
-            v1_dot_scanner__pb2.ToggleAdResponse.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
-    @staticmethod
-    def HumanMove(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            '/fb_agent.scanner.v1.ScannerService/HumanMove',
-            v1_dot_scanner__pb2.HumanMoveRequest.SerializeToString,
-            v1_dot_scanner__pb2.HumanMoveResponse.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
-    @staticmethod
-    def HumanClick(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            '/fb_agent.scanner.v1.ScannerService/HumanClick',
-            v1_dot_scanner__pb2.HumanClickRequest.SerializeToString,
-            v1_dot_scanner__pb2.HumanClickResponse.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
-    @staticmethod
-    def HumanWheelScroll(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            '/fb_agent.scanner.v1.ScannerService/HumanWheelScroll',
-            v1_dot_scanner__pb2.HumanWheelScrollRequest.SerializeToString,
-            v1_dot_scanner__pb2.HumanWheelScrollResponse.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
-    @staticmethod
-    def WaitForToggleConfirmation(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            '/fb_agent.scanner.v1.ScannerService/WaitForToggleConfirmation',
-            v1_dot_scanner__pb2.WaitForToggleConfirmationRequest.SerializeToString,
-            v1_dot_scanner__pb2.WaitForToggleConfirmationResponse.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
-    @staticmethod
-    def HardReloadPage(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            '/fb_agent.scanner.v1.ScannerService/HardReloadPage',
+            "/fb_agent.scanner.v1.ScannerService/HardReloadPage",
             v1_dot_scanner__pb2.HardReloadPageRequest.SerializeToString,
             v1_dot_scanner__pb2.HardReloadPageResponse.FromString,
             options,
@@ -467,23 +168,26 @@ class ScannerService(object):
             wait_for_ready,
             timeout,
             metadata,
-            _registered_method=True)
+            _registered_method=True,
+        )
 
     @staticmethod
-    def ListCampaigns(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
+    def ListCampaigns(
+        request,
+        target,
+        options=(),
+        channel_credentials=None,
+        call_credentials=None,
+        insecure=False,
+        compression=None,
+        wait_for_ready=None,
+        timeout=None,
+        metadata=None,
+    ):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/fb_agent.scanner.v1.ScannerService/ListCampaigns',
+            "/fb_agent.scanner.v1.ScannerService/ListCampaigns",
             v1_dot_scanner__pb2.ListCampaignsRequest.SerializeToString,
             v1_dot_scanner__pb2.ListCampaignsResponse.FromString,
             options,
@@ -494,4 +198,5 @@ class ScannerService(object):
             wait_for_ready,
             timeout,
             metadata,
-            _registered_method=True)
+            _registered_method=True,
+        )

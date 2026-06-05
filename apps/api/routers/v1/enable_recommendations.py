@@ -185,14 +185,23 @@ async def confirm_enable_recommendation(
         ad_id = str(rec_row.ad_id)
         ad_name = rec_row.ad_name
 
+        # Включение — через Marketing API (activate_ad), как кнопка ereco: в TG.
+        # Форма payload = MetaMutationPayload (mutation_kind/target_id/params/ad_account_id).
+        # from_dict берёт только эти поля; метаданные рекомендации кладём в params
+        # для трейсинга (activate_ad-хендлеру нужен лишь target_id). Канал disable/enable
+        # воркеров удалён — задачу исполняет meta_api_worker.
         payload = {
-            "fb_ad_id": fb_ad_id,
-            "ad_id": ad_id,
-            "source": "recommendation",
-            "recommendation_id": str(rec_id),
+            "mutation_kind": "activate_ad",
+            "target_id": fb_ad_id,
+            "params": {
+                "source": "recommendation",
+                "recommendation_id": str(rec_id),
+                "ad_id": ad_id,
+            },
+            "ad_account_id": None,
         }
 
-        ikey = f"enable:{fb_ad_id}:reco:{rec_id}:{uuid.uuid4().hex}"
+        ikey = f"reco:activate_ad:{fb_ad_id}:{rec_id}:{uuid.uuid4().hex}"
 
         import json as _json
 
@@ -204,7 +213,7 @@ async def confirm_enable_recommendation(
                     (task_type, status, idempotency_key, payload,
                      attempt_count, max_attempts, requested_by, created_by_chat_id)
                 VALUES
-                    ('enable', 'pending', :ik, CAST(:pl AS JSONB), 0, 5, :rb, :ccid)
+                    ('meta_api_mutation', 'pending', :ik, CAST(:pl AS JSONB), 0, 5, :rb, :ccid)
                 ON CONFLICT (idempotency_key) DO NOTHING
                 RETURNING id
                 """
@@ -244,7 +253,7 @@ async def confirm_enable_recommendation(
                 text(
                     """
                     SELECT id, task_type, status,
-                           payload->>'fb_ad_id' AS fb_ad_id,
+                           payload->>'target_id' AS fb_ad_id,
                            NULL::text AS ad_name,
                            attempt_count, max_attempts, requested_by,
                            created_by_chat_id, created_at, updated_at,

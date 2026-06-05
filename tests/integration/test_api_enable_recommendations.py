@@ -249,12 +249,13 @@ async def test_list_enable_recommendations_promoted_task_status(
 
 
 # ─── Тест 5 ──────────────────────────────────────────────────────────────────
-# Проверяем создание enable-задачи через POST /enable
+# Проверяем создание activate_ad mutation-задачи через POST /enable
+# (DOM enable-воркер удалён — включение идёт через Marketing API / meta_api_worker).
 @pytest.mark.asyncio
 async def test_confirm_enable_recommendation_happy(
     pg_engine, fake_redis_client, clean_reco
 ) -> None:
-    """POST /enable happy path → 201, task создан, promoted_to_task_id выставлен."""
+    """POST /enable happy path → 201, meta_api_mutation activate_ad создан, promoted выставлен."""
     suffix = uuid.uuid4().hex[:5]
 
     async with pg_engine.begin() as conn:
@@ -270,9 +271,20 @@ async def test_confirm_enable_recommendation_happy(
 
     assert resp.status_code == 201
     data = resp.json()
-    assert data["task_type"] == "enable"
+    assert data["task_type"] == "meta_api_mutation"
     assert data["status"] == "PENDING"
     task_id = int(data["id"])
+
+    # Созданная задача — activate_ad по нужному объявлению (target_id), pending.
+    async with pg_engine.connect() as conn:
+        payload_row = (
+            await conn.execute(
+                text("SELECT payload FROM task_queue WHERE id = :tid"),
+                {"tid": int(data["id"])},
+            )
+        ).first()
+    assert payload_row[0]["mutation_kind"] == "activate_ad"
+    assert payload_row[0]["target_id"] == fb_ad_id
 
     # Проверяем что promoted_to_task_id выставлен в БД
     async with pg_engine.connect() as conn:

@@ -65,10 +65,9 @@ async def _run_one_heartbeat_cycle(heartbeat_fn, redis_client) -> None:
 # ====================== канонический набор имён EXPECTED ======================
 # Это единственный источник истины — копируется из health_watchdog.DEFAULT_EXPECTED_WORKERS.
 # При изменении EXPECTED_WORKERS в watchdog — обновлять здесь тоже.
+# disable/enable удалены: DOM-toggle воркеры выпилены, авто-стоп только через meta_api_worker.
 _EXPECTED_WORKERS = [
     "observer",
-    "disable",
-    "enable",
     "telegram_poller",
     "cleanup",
     "reconciler",
@@ -135,53 +134,6 @@ async def test_observer_heartbeat_key_in_expected(fake_redis) -> None:
     assert WORKER_NAME in _EXPECTED_WORKERS, (
         f"observer WORKER_NAME={WORKER_NAME!r} не входит в EXPECTED_WORKERS"
     )
-
-
-# ====================== disable/enable heartbeat через toggle_executor ======================
-
-
-async def _run_toggle_heartbeat_one_cycle(task_type: str, redis_client) -> None:
-    """Запускает _heartbeat_loop из toggle_executor один раз и гарантирует запись."""
-    from core.tasks.toggle_executor import _heartbeat_loop
-
-    stop = asyncio.Event()
-    task = asyncio.create_task(_heartbeat_loop(redis_client, task_type, stop))
-    for _ in range(5):
-        await asyncio.sleep(0)
-    stop.set()
-    task.cancel()
-    try:
-        await task
-    except asyncio.CancelledError:
-        pass
-
-
-@pytest.mark.asyncio
-async def test_disable_writes_heartbeat(fake_redis) -> None:
-    """run_toggle_loop с task_type='disable' пишет worker:heartbeat:disable."""
-    await _run_toggle_heartbeat_one_cycle("disable", fake_redis)
-
-    value = await fake_redis.get("worker:heartbeat:disable")
-    assert value is not None, "disable worker не записал heartbeat-ключ"
-
-
-@pytest.mark.asyncio
-async def test_enable_writes_heartbeat(fake_redis) -> None:
-    """run_toggle_loop с task_type='enable' пишет worker:heartbeat:enable."""
-    await _run_toggle_heartbeat_one_cycle("enable", fake_redis)
-
-    value = await fake_redis.get("worker:heartbeat:enable")
-    assert value is not None, "enable worker не записал heartbeat-ключ"
-
-
-@pytest.mark.asyncio
-async def test_toggle_heartbeat_key_matches_task_type(fake_redis) -> None:
-    """Ключ heartbeat в toggle_executor = worker:heartbeat:<task_type> — имя из EXPECTED."""
-    for task_type in ("disable", "enable"):
-        await _run_toggle_heartbeat_one_cycle(task_type, fake_redis)
-        value = await fake_redis.get(f"worker:heartbeat:{task_type}")
-        assert value is not None, f"toggle heartbeat не записан для task_type={task_type!r}"
-        assert task_type in _EXPECTED_WORKERS
 
 
 # ====================== telegram_poller heartbeat ======================

@@ -7,9 +7,9 @@
 2. `apps/enable_recommendation_worker.run_once` находит кандидата, шлёт TG-алерт
    с inline-кнопкой `ereco:<fb_ad_id>`.
 3. `core/telegram/handlers/alerts.handle_enable_reco_callback` принимает клик
-   пользователя и создаёт task_queue запись task_type='enable'.
-4. `core/tasks/toggle_executor.execute_one_toggle_task` подхватывает её и
-   доводит до status='succeeded' с target_state=True.
+   пользователя и создаёт task_queue запись task_type='meta_api_mutation' (activate_ad).
+4. `apps/meta_api_worker.process_one_task` подхватывает её через claim_pending_task
+   и доводит до status='succeeded', FSM → 'normal'.
 """
 
 from __future__ import annotations
@@ -18,13 +18,16 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
 from sqlalchemy import text
 
+import apps.meta_api_worker.main as worker_main
 from apps.enable_recommendation_worker.main import run_once
-from core.tasks.toggle_executor import execute_one_toggle_task
+from apps.meta_api_worker.main import process_one_task
+from core.meta_api.queue import claim_pending_task
 from core.telegram.client import TelegramBotClient
 from core.telegram.handlers.alerts import handle_enable_reco_callback
 
@@ -141,24 +144,14 @@ class _FakeTGClient:
         self.acks.append((cq_id, text))
 
 
-class _RecordingGate:
-    """Fake ToggleGate — фиксирует toggle_ad вызов и возвращает success."""
-
-    def __init__(self) -> None:
-        self.calls: list[dict[str, Any]] = []
-
-    async def toggle_ad(self, fb_ad_id: str, target_state: bool = True) -> dict[str, Any]:
-        self.calls.append({"fb_ad_id": fb_ad_id, "target_state": target_state})
-        return {"success": True, "final_state": "true" if target_state else "false"}
-
-
-# E2E: stopped ad → run_once создаёт реко + TG-алерт → callback → enable task → toggle.
+# E2E: stopped ad → run_once создаёт реко + TG-алерт → callback → activate_ad mutation → FSM normal.
 @pytest.mark.asyncio
 async def test_full_cycle_reco_to_enable_task(
     pg_engine,
     stopped_ad_e2e,
     fake_redis_client,
     tg_respx,
+    monkeypatch,
 ) -> None:
     tg_client = TelegramBotClient("fake-token-e2e")
 
@@ -194,33 +187,40 @@ async def test_full_cycle_reco_to_enable_task(
     )
     assert any("принята" in t for _, t in cb_tg.acks)
 
-    # Шаг 4: в task_queue появилась enable task с нашим fb_ad_id
+    # Шаг 4: в task_queue появилась activate_ad mutation задача
     async with pg_engine.connect() as conn:
         task_row = (
             await conn.execute(
                 text(
                     """
                     SELECT id, task_type, status, payload, requested_by
-                    FROM task_queue WHERE task_type = 'enable'
+                    FROM task_queue
+                    WHERE task_type = 'meta_api_mutation'
+                      AND payload->>'mutation_kind' = 'activate_ad'
                     """
                 )
             )
         ).first()
     assert task_row is not None
     enable_task_id = int(task_row[0])
-    assert task_row[1] == "enable"
+    assert task_row[1] == "meta_api_mutation"
     assert task_row[2] == "pending"
-    assert task_row[3]["fb_ad_id"] == stopped_ad_e2e["fb_ad_id"]
+    assert task_row[3]["target_id"] == stopped_ad_e2e["fb_ad_id"]
     assert task_row[4] == "tg:reviewer"
 
-    # Шаг 5: enable_worker (через общий toggle_executor) исполняет
-    gate = _RecordingGate()
-    outcome = await execute_one_toggle_task(pg_engine, task_type="enable", gate=gate)
-    assert outcome == "succeeded"
-    assert len(gate.calls) == 1
-    assert gate.calls[0]["fb_ad_id"] == stopped_ad_e2e["fb_ad_id"]
-    # enable → target_state=True (включить)
-    assert gate.calls[0]["target_state"] is True
+    # Шаг 5: meta_api_worker исполняет activate_ad через fake dispatch
+    async def _fake_dispatch(client, p):
+        return {"success": True, "graph_response": {"ok": True}, "modified_ids": [p.target_id]}
+
+    monkeypatch.setattr(worker_main, "dispatch_mutation", _fake_dispatch)
+
+    claim = await claim_pending_task(pg_engine)
+    assert not claim.queue_empty
+    assert claim.task is not None
+    assert claim.task.id == enable_task_id
+
+    fake_client = AsyncMock()
+    await process_one_task(pg_engine, claim.task, client=fake_client)
 
     async with pg_engine.connect() as conn:
         final = (
@@ -230,7 +230,14 @@ async def test_full_cycle_reco_to_enable_task(
             )
         ).first()
     assert final[0] == "succeeded"
-    assert final[1]["final_state"] == "true"
+    assert final[1]["success"] is True
+
+    # Шаг 6: FSM-sync после activate_ad → ad_alert_state переходит в 'normal'
+    async with pg_engine.connect() as conn:
+        fsm_state = (
+            await conn.execute(text("SELECT alert_state FROM ad_alert_state LIMIT 1"))
+        ).scalar()
+    assert fsm_state == "normal"
 
     await tg_client.close()
 
@@ -242,7 +249,7 @@ async def test_double_ereco_callback_does_not_duplicate(
     stopped_ad_e2e,
 ) -> None:
     cb_tg = _FakeTGClient()
-    # Первый клик создаёт task
+    # Первый клик создаёт activate_ad task
     await handle_enable_reco_callback(
         engine=pg_engine,
         client=cb_tg,
@@ -265,6 +272,12 @@ async def test_double_ereco_callback_does_not_duplicate(
 
     async with pg_engine.connect() as conn:
         n = (
-            await conn.execute(text("SELECT COUNT(*) FROM task_queue WHERE task_type = 'enable'"))
+            await conn.execute(
+                text(
+                    "SELECT COUNT(*) FROM task_queue "
+                    "WHERE task_type = 'meta_api_mutation' "
+                    "AND payload->>'mutation_kind' = 'activate_ad'"
+                )
+            )
         ).scalar()
     assert n == 1

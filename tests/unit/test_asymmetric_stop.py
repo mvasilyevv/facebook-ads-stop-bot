@@ -18,7 +18,6 @@ import pytest
 import apps.cabinet_scheduler.main as cab
 import apps.enable_recommendation_worker.main as ereco
 import apps.meta_api_worker.main as meta
-import core.tasks.toggle_executor as toggle
 from core.meta_api.schemas import MetaMutationPayload
 from core.observer.queries import load_scanning_enabled
 
@@ -160,51 +159,6 @@ async def test_cabinet_tick_enabled_proceeds(monkeypatch) -> None:
     summary = await cab.run_one_tick(engine=object(), redis_client=redis, now=now)
 
     assert summary["outcome"] == "disabled"
-
-
-# ====================== toggle_executor (disable/enable) ======================
-
-
-# enable на паузе → 'idle' БЕЗ claim: задача остаётся в очереди, попытки не тратятся
-@pytest.mark.asyncio
-async def test_toggle_enable_paused_returns_idle_without_claim(monkeypatch) -> None:
-    monkeypatch.setattr(toggle, "load_scanning_enabled", AsyncMock(return_value=False))
-    spy_claim = AsyncMock()
-    monkeypatch.setattr(toggle, "claim_next_task", spy_claim)
-    gate = AsyncMock()
-
-    out = await toggle.execute_one_toggle_task(object(), task_type="enable", gate=gate)
-
-    assert out == "idle"
-    spy_claim.assert_not_awaited()
-    gate.toggle_ad.assert_not_awaited()
-
-
-# disable на паузе ВСЁ РАВНО исполняется — доходит до claim (выключение снижает риск)
-@pytest.mark.asyncio
-async def test_toggle_disable_paused_still_claims(monkeypatch) -> None:
-    monkeypatch.setattr(toggle, "load_scanning_enabled", AsyncMock(return_value=False))
-    spy_claim = AsyncMock(return_value=SimpleNamespace(queue_empty=True, task=None))
-    monkeypatch.setattr(toggle, "claim_next_task", spy_claim)
-    gate = AsyncMock()
-
-    out = await toggle.execute_one_toggle_task(object(), task_type="disable", gate=gate)
-
-    assert out == "idle"  # очередь пуста, но claim был вызван
-    spy_claim.assert_awaited_once()
-
-
-# enable при включённом сканировании — доходит до claim (гейт не ломает обычный путь)
-@pytest.mark.asyncio
-async def test_toggle_enable_enabled_claims(monkeypatch) -> None:
-    monkeypatch.setattr(toggle, "load_scanning_enabled", AsyncMock(return_value=True))
-    spy_claim = AsyncMock(return_value=SimpleNamespace(queue_empty=True, task=None))
-    monkeypatch.setattr(toggle, "claim_next_task", spy_claim)
-
-    out = await toggle.execute_one_toggle_task(object(), task_type="enable", gate=AsyncMock())
-
-    assert out == "idle"
-    spy_claim.assert_awaited_once()
 
 
 # ====================== meta_api_worker (process_one_task) ======================

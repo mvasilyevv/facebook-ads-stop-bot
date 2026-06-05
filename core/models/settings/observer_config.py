@@ -67,18 +67,6 @@ class ObserverConfig(UUIDPrimaryKey, SingletonMixin, Timestamp, Base):
         String(255),
         nullable=True,
     )
-    # Канал исполнения toggle-действий (disable/enable). FALSE — через DOM-клик
-    # (browser-agent toggle_ad, latency-critical путь). TRUE — через Marketing API
-    # (meta_api_mutation pause_ad/activate_ad): точно по ad_id, не промахивается по
-    # кнопке/скроллу. Detect всегда через DOM (observer scan), меняется только act.
-    # Дефолт TRUE — API основной канал (проверен live: 48 операций, 0 промахов).
-    # FALSE — спящий DOM-резерв (фолбэк при сбое Graph API на живой Vision-сессии).
-    # При TRUE требуется запущенный meta_api_worker.
-    act_via_api: Mapped[bool] = mapped_column(
-        Boolean,
-        nullable=False,
-        server_default="true",
-    )
     # Allowlist кампаний для am-режима (#3): фильтр am_tabular по campaign.id IN [...].
     # Пусто — без фильтра по кампаниям (owner_campaign_tag всё равно отсекает чужое в пайплайне).
     # Сужает выборку в общем кабинете, чтобы не тянуть чужие ад'ы.
