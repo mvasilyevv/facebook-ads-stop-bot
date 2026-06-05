@@ -1041,10 +1041,26 @@ start_tunnel() {
     echo "$found"
 }
 
+detect_tailscale_funnel_url() {
+    # Возвращает стабильный https://<host>.<tailnet>.ts.net, если Tailscale Funnel
+    # настроен на указанный порт (иначе пусто). Funnel живёт в tailscaled и переживает
+    # перезапуски run.sh — настраивается разово ./scripts/setup_tailscale_funnel.sh.
+    local port="$1"
+    command -v tailscale >/dev/null 2>&1 || return 0
+    tailscale status >/dev/null 2>&1 || return 0
+    tailscale funnel status 2>/dev/null | grep -q "${port}" || return 0
+    local dns
+    dns="$(tailscale status --json 2>/dev/null \
+        | python3 -c "import sys,json;print((json.load(sys.stdin).get('Self',{}).get('DNSName','') or '').rstrip('.'))" \
+        2>/dev/null || true)"
+    [[ -n "$dns" ]] && printf 'https://%s' "$dns"
+}
+
 API_TUNNEL_URL=""
 WEB_TUNNEL_URL=""
 MINI_TUNNEL_URL=""
 MINI_WEB_APP_URL=""
+TS_FUNNEL_MINI_URL=""
 
 auto_register_web_app_url() {
     local url="$1"
@@ -1108,17 +1124,30 @@ PY
     rm -f "$body"
 }
 
+# Mini App: приоритет стабильному Tailscale Funnel (постоянный URL, переживает
+# перезапуски). Настраивается разово ./scripts/setup_tailscale_funnel.sh. Если funnel
+# активен на $MINI_PORT — регистрируем его (даже без cloudflared) и НЕ поднимаем quick.
+TS_FUNNEL_MINI_URL="$(detect_tailscale_funnel_url "$MINI_PORT")"
+if [[ -n "$TS_FUNNEL_MINI_URL" ]]; then
+    MINI_WEB_APP_URL="${TS_FUNNEL_MINI_URL%/}/tma/"
+    echo -e "${GREEN}🔗 Mini App: стабильный Tailscale Funnel → ${MINI_WEB_APP_URL}${NC}"
+    auto_register_web_app_url "$MINI_WEB_APP_URL"
+fi
+
 if [ "$ENABLE_TUNNEL" -eq 1 ]; then
     if command -v cloudflared >/dev/null 2>&1; then
         echo -e "${BLUE}🚇 Поднимаю cloudflared туннели...${NC}"
         API_TUNNEL_URL="$(start_tunnel "api" "$API_PORT")"
         WEB_TUNNEL_URL="$(start_tunnel "web" "$FRONTEND_PORT")"
-        MINI_TUNNEL_URL="$(start_tunnel "mini" "$MINI_PORT")"
-        echo -e "${GREEN}✅ Туннели запущены${NC}"
-        if [[ -n "$MINI_TUNNEL_URL" ]]; then
-            MINI_WEB_APP_URL="${MINI_TUNNEL_URL%/}/tma/"
-            auto_register_web_app_url "$MINI_WEB_APP_URL"
+        # mini quick — только если стабильный Tailscale Funnel НЕ настроен.
+        if [[ -z "$TS_FUNNEL_MINI_URL" ]]; then
+            MINI_TUNNEL_URL="$(start_tunnel "mini" "$MINI_PORT")"
+            if [[ -n "$MINI_TUNNEL_URL" ]]; then
+                MINI_WEB_APP_URL="${MINI_TUNNEL_URL%/}/tma/"
+                auto_register_web_app_url "$MINI_WEB_APP_URL"
+            fi
         fi
+        echo -e "${GREEN}✅ Туннели запущены${NC}"
     else
         echo -e "${YELLOW}⚠️  cloudflared не найден, туннели не будут подняты${NC}"
     fi
