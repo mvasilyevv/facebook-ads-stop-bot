@@ -19,6 +19,7 @@ import { createAdLibraryServiceHandlers } from './ad-library/service.js';
 import {
   acquireGraphContext,
   invalidateGraphContext,
+  listOwnerCampaigns,
   reconstructAdsManagerUrl,
   runAmScanWithContext,
 } from './am/am-fetch.js';
@@ -716,6 +717,21 @@ async function hardReloadPageHandler(call: any, callback: any) {
   }
 }
 
+async function listCampaignsHandler(call: any, callback: any) {
+  try {
+    const session = sessionManager.getSession(call.request.session_id);
+    if (!session) {
+      callback({ code: grpc.status.NOT_FOUND, message: 'session not found' });
+      return;
+    }
+    const page = getPage(session, call.request.page_id);
+    const campaigns = await listOwnerCampaigns(page, call.request.owner_tag ?? '');
+    callback(null, { campaigns });
+  } catch (err: any) {
+    callback({ code: grpcCodeForError(err), message: String(err?.message ?? err) });
+  }
+}
+
 // --- Запуск сервера ---
 
 function main() {
@@ -754,6 +770,7 @@ function main() {
     humanWheelScroll: humanWheelScrollHandler,
     waitForToggleConfirmation: waitForToggleConfirmation,
     hardReloadPage: hardReloadPageHandler,
+    listCampaigns: listCampaignsHandler,
   });
 
   const creatorHandlers = createCreatorServiceHandlers(sessionManager);

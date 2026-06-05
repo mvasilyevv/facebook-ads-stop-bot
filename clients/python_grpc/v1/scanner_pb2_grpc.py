@@ -79,6 +79,11 @@ class ScannerServiceStub(object):
                 request_serializer=v1_dot_scanner__pb2.HardReloadPageRequest.SerializeToString,
                 response_deserializer=v1_dot_scanner__pb2.HardReloadPageResponse.FromString,
                 _registered_method=True)
+        self.ListCampaigns = channel.unary_unary(
+                '/fb_agent.scanner.v1.ScannerService/ListCampaigns',
+                request_serializer=v1_dot_scanner__pb2.ListCampaignsRequest.SerializeToString,
+                response_deserializer=v1_dot_scanner__pb2.ListCampaignsResponse.FromString,
+                _registered_method=True)
 
 
 class ScannerServiceServicer(object):
@@ -148,6 +153,15 @@ class ScannerServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def ListCampaigns(self, request, context):
+        """Live-список кампаний по owner_tag (через Graph campaigns edge, МИМО allowlist).
+        Для UI «Кампании для сканирования»: показывает ВСЕ кампании владельца, включая
+        новые, которые ещё не сканировались (allowlist их не пропускал бы в обычный скан).
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_ScannerServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -195,6 +209,11 @@ def add_ScannerServiceServicer_to_server(servicer, server):
                     servicer.HardReloadPage,
                     request_deserializer=v1_dot_scanner__pb2.HardReloadPageRequest.FromString,
                     response_serializer=v1_dot_scanner__pb2.HardReloadPageResponse.SerializeToString,
+            ),
+            'ListCampaigns': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListCampaigns,
+                    request_deserializer=v1_dot_scanner__pb2.ListCampaignsRequest.FromString,
+                    response_serializer=v1_dot_scanner__pb2.ListCampaignsResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -440,6 +459,33 @@ class ScannerService(object):
             '/fb_agent.scanner.v1.ScannerService/HardReloadPage',
             v1_dot_scanner__pb2.HardReloadPageRequest.SerializeToString,
             v1_dot_scanner__pb2.HardReloadPageResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ListCampaigns(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/fb_agent.scanner.v1.ScannerService/ListCampaigns',
+            v1_dot_scanner__pb2.ListCampaignsRequest.SerializeToString,
+            v1_dot_scanner__pb2.ListCampaignsResponse.FromString,
             options,
             channel_credentials,
             insecure,

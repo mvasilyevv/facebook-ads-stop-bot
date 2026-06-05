@@ -30,6 +30,29 @@ service ScannerService {
 
   // Жёсткая перезагрузка страницы с очисткой кеша (через CDP Network.clearBrowserCache).
   rpc HardReloadPage(HardReloadPageRequest) returns (HardReloadPageResponse);
+
+  // Live-список кампаний по owner_tag (через Graph campaigns edge, МИМО allowlist).
+  // Для UI «Кампании для сканирования»: показывает ВСЕ кампании владельца, включая
+  // новые, которые ещё не сканировались (allowlist их не пропускал бы в обычный скан).
+  rpc ListCampaigns(ListCampaignsRequest) returns (ListCampaignsResponse);
+}
+
+// --- ListCampaigns ---
+
+message ListCampaignsRequest {
+  string session_id = 1;
+  optional string page_id = 2;
+  // Фильтр по owner-тегу (campaignMatchesOwner). Пусто → все кампании кабинета.
+  string owner_tag = 3;
+}
+
+message CampaignInfo {
+  string id = 1;
+  string name = 2;
+}
+
+message ListCampaignsResponse {
+  repeated CampaignInfo campaigns = 1;
 }
 
 // --- RunScanCycle: streaming RPC ---

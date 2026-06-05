@@ -18,7 +18,7 @@ from fastapi import APIRouter, HTTPException
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from apps.api.deps import DepEngine, DepRedis
+from apps.api.deps import DepEngine, DepRedis, DepSettings
 from apps.api.routers.v1.schemas.settings_observer import (
     ActViaApiToggleRequest,
     AutoEnableToggleRequest,
@@ -208,6 +208,92 @@ async def list_observer_campaigns(engine: DepEngine) -> list[CampaignOption]:
             continue
         out.append(CampaignOption(id=str(cid), name=name or "", selected=str(cid) in allowlist))
     return out
+
+
+@router.post("/campaigns/refresh", response_model=list[CampaignOption])
+async def refresh_observer_campaigns(
+    engine: DepEngine, settings: DepSettings
+) -> list[CampaignOption]:
+    """Live-обновление списка кампаний через browser-agent (Graph API, МИМО allowlist).
+
+    Решает «замкнутый круг»: обычный скан с allowlist не подхватывает новые кампании,
+    поэтому их нельзя выбрать. Здесь резолвим ВСЕ кампании владельца по owner_tag живьём,
+    апсертим в fb_campaigns (чтобы GET /campaigns их видел) и возвращаем обновлённый список.
+    503 при недоступности browser-agent.
+    """
+    import grpc
+
+    from clients.python_grpc.client import BrowserAgentClient, BrowserAgentConfig
+    from core.crypto import decrypt
+    from core.models.settings.vision_config import VisionConfig
+
+    async with AsyncSession(engine) as session:
+        cfg = await _get_singleton(session)
+        owner_tag = cfg.owner_campaign_tag
+        allowlist = set(cfg.campaign_ids or [])
+        vc = await session.scalar(
+            select(VisionConfig).where(VisionConfig.singleton_key == "default")
+        )
+        x_token = settings.vision_x_token
+        profile_id = settings.vision_profile_id
+        if vc:
+            if vc.x_token_encrypted:
+                try:
+                    x_token = decrypt(vc.x_token_encrypted)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("refresh_campaigns: decrypt vision token failed: %s", exc)
+            if vc.profile_id:
+                profile_id = vc.profile_id
+
+    client = BrowserAgentClient(
+        BrowserAgentConfig(
+            vision_x_token=x_token,
+            vision_api_url=settings.vision_api_url,
+            vision_profile_id=profile_id,
+        )
+    )
+    try:
+        await client.start()
+        campaigns = await client.list_campaigns(owner_tag=owner_tag or "")
+    except grpc.RpcError as exc:
+        raise HTTPException(status_code=503, detail=f"browser-agent недоступен: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Ошибка резолва кампаний: {exc}") from exc
+    finally:
+        try:
+            await client.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+    # Апсерт в каталог (ON CONFLICT по campaign_name, как в writers) — чтобы GET /campaigns видел новые.
+    now = datetime.now(UTC)
+    if campaigns:
+        async with AsyncSession(engine) as session:
+            for c in campaigns:
+                await session.execute(
+                    text(
+                        """
+                        INSERT INTO fb_campaigns (fb_campaign_id, campaign_name, last_seen_at)
+                        VALUES (:cid, :name, :now)
+                        ON CONFLICT (campaign_name) DO UPDATE
+                        SET last_seen_at = :now,
+                            fb_campaign_id =
+                                COALESCE(EXCLUDED.fb_campaign_id, fb_campaigns.fb_campaign_id),
+                            is_active = TRUE
+                        """
+                    ),
+                    {"cid": c["id"], "name": c["name"], "now": now},
+                )
+            await session.commit()
+
+    result: list[CampaignOption] = []
+    for c in campaigns:
+        if not campaign_matches_owner(campaign_name=c["name"], ad_name="", owner_tag=owner_tag):
+            continue
+        result.append(
+            CampaignOption(id=c["id"], name=c["name"], selected=c["id"] in allowlist)
+        )
+    return result
 
 
 @router.post("/scan-now", response_model=ScanNowResponse)

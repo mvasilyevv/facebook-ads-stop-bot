@@ -30,6 +30,7 @@ import {
   useTriggerScanNowSettings,
   useObserverCampaigns,
   useSetObserverCampaigns,
+  useRefreshCampaigns,
   type CampaignOption,
 } from "@/lib/api/settings";
 
@@ -250,6 +251,17 @@ export function ObserverTab() {
   const scanNow = useTriggerScanNowSettings();
   const campaignsQuery = useObserverCampaigns();
   const setCampaigns = useSetObserverCampaigns();
+  const refreshCampaigns = useRefreshCampaigns();
+
+  /** Live-резолв всех кампаний по owner-тегу (подтягивает новые из кабинета). */
+  function handleRefreshCampaigns() {
+    refreshCampaigns.mutate(undefined, {
+      onSuccess: (list) =>
+        toast.success("Список обновлён", `Найдено кампаний: ${list?.length ?? 0}`),
+      onError: (e) =>
+        toast.error("Не удалось обновить", e instanceof Error ? e.message : String(e)),
+    });
+  }
 
   const settings = settingsQuery.data;
   const status = statusQuery.data;
@@ -449,12 +461,24 @@ export function ObserverTab() {
 
         {/* Кампании для сканирования (allowlist #3). */}
         <section>
-          <h3 className="font-display text-[10px] uppercase tracking-widest text-bg-9 mb-2">
-            Кампании для сканирования
-          </h3>
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="font-display text-[10px] uppercase tracking-widest text-bg-9">
+              Кампании для сканирования
+            </h3>
+            <Button
+              size="sm"
+              variant="ghost"
+              leftIcon={<RefreshCcw size={12} aria-hidden="true" />}
+              loading={refreshCampaigns.isPending}
+              onClick={handleRefreshCampaigns}
+            >
+              Обновить список
+            </Button>
+          </div>
           <p className="text-[11px] text-bg-9 mb-3 leading-relaxed">
             Отметьте конкретные кампании, чтобы сканировать только их. Пусто — сканируем все
-            кампании по тегу владельца.
+            кампании по тегу владельца. «Обновить список» подтянет новые кампании прямо из
+            кабинета (даже те, что ещё не сканировались).
           </p>
           {campaignsQuery.isLoading ? (
             <Skeleton height={120} />
@@ -465,7 +489,9 @@ export function ObserverTab() {
               onRetry={() => campaignsQuery.refetch()}
             />
           ) : (campaignsQuery.data?.length ?? 0) === 0 ? (
-            <p className="text-[12px] text-bg-9">Кампаний пока нет — появятся после первого скана.</p>
+            <p className="text-[12px] text-bg-9">
+              Кампаний пока нет — нажмите «Обновить список», чтобы подтянуть их из кабинета.
+            </p>
           ) : (
             <CampaignSelector
               key={campaignsQuery.data!.map((c) => `${c.id}:${c.selected}`).join("|")}

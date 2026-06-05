@@ -6,6 +6,30 @@ from typing import ClassVar as _ClassVar, Optional as _Optional, Union as _Union
 
 DESCRIPTOR: _descriptor.FileDescriptor
 
+class ListCampaignsRequest(_message.Message):
+    __slots__ = ("session_id", "page_id", "owner_tag")
+    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
+    PAGE_ID_FIELD_NUMBER: _ClassVar[int]
+    OWNER_TAG_FIELD_NUMBER: _ClassVar[int]
+    session_id: str
+    page_id: str
+    owner_tag: str
+    def __init__(self, session_id: _Optional[str] = ..., page_id: _Optional[str] = ..., owner_tag: _Optional[str] = ...) -> None: ...
+
+class CampaignInfo(_message.Message):
+    __slots__ = ("id", "name")
+    ID_FIELD_NUMBER: _ClassVar[int]
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    id: str
+    name: str
+    def __init__(self, id: _Optional[str] = ..., name: _Optional[str] = ...) -> None: ...
+
+class ListCampaignsResponse(_message.Message):
+    __slots__ = ("campaigns",)
+    CAMPAIGNS_FIELD_NUMBER: _ClassVar[int]
+    campaigns: _containers.RepeatedCompositeFieldContainer[CampaignInfo]
+    def __init__(self, campaigns: _Optional[_Iterable[_Union[CampaignInfo, _Mapping]]] = ...) -> None: ...
+
 class RunScanCycleRequest(_message.Message):
     __slots__ = ("session_id", "page_id", "max_scroll_passes", "do_refresh", "reset_scroll_first", "settle_delay_seconds", "campaign_ids", "owner_tag")
     SESSION_ID_FIELD_NUMBER: _ClassVar[int]
