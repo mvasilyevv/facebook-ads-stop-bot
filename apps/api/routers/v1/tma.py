@@ -342,7 +342,7 @@ async def tma_disable_ad(
 ) -> TmaDisableResponse:
     """Создаёт задачу на отключение объявления (money-действие).
 
-    Канал (meta_api pause_ad / DOM disable) — по observer_config.act_via_api,
+    Канал — только Marketing API (meta_api pause_ad, точно по ad_id),
     как ручная кнопка бота. requested_by = tma:<telegram_user_id>.
     """
     exists, token = await _resolve_ad_token(engine, fb_ad_id)

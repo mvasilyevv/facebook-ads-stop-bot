@@ -18,8 +18,6 @@ from apps.api.main import create_app
 
 _DEFAULT_WORKERS = [
     "observer",
-    "disable_worker",
-    "enable_worker",
     "telegram_poller",
     "meta_api_worker",
     "health_watchdog",
@@ -50,7 +48,7 @@ async def _set_heartbeat(redis, worker_name: str, ttl: int = 60) -> None:
 # Все воркеры ONLINE → overall = HEALTHY
 @pytest.mark.asyncio
 async def test_health_details_all_online(fake_redis_client, monkeypatch) -> None:
-    """Все 12 ожидаемых воркеров ONLINE → overall=HEALTHY."""
+    """Все 10 ожидаемых воркеров ONLINE → overall=HEALTHY."""
     monkeypatch.setenv("EXPECTED_WORKERS", ",".join(_DEFAULT_WORKERS))
     for w in _DEFAULT_WORKERS:
         await _set_heartbeat(fake_redis_client, w)
@@ -93,9 +91,9 @@ async def test_health_details_one_offline_degraded(fake_redis_client, monkeypatc
 @pytest.mark.asyncio
 async def test_health_details_observer_offline_critical(fake_redis_client, monkeypatch) -> None:
     """observer OFFLINE → overall=CRITICAL независимо от остальных."""
-    monkeypatch.setenv("EXPECTED_WORKERS", "observer,disable_worker")
-    # Только disable_worker ONLINE, observer — нет
-    await _set_heartbeat(fake_redis_client, "disable_worker")
+    monkeypatch.setenv("EXPECTED_WORKERS", "observer,meta_api")
+    # Только meta_api ONLINE, observer — нет
+    await _set_heartbeat(fake_redis_client, "meta_api")
 
     app = _make_app(redis=fake_redis_client)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:

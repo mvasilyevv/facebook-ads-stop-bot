@@ -38,6 +38,10 @@ export interface AmScanResult {
         ownerResolved: boolean;
     };
 }
+export declare function listOwnerCampaigns(page: Page, ownerTag: string, sessionId: string): Promise<Array<{
+    id: string;
+    name: string;
+}>>;
 export declare function runAmScan(page: Page, config: AmScanConfig): Promise<AmScanResult>;
 export declare function runAmScanWithContext(page: Page, ctx: GraphContext, config: AmScanConfig): Promise<AmScanResult>;
 //# sourceMappingURL=am-fetch.d.ts.map

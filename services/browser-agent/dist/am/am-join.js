@@ -69,6 +69,7 @@ function buildScannedRow(am, meta = {}) {
     const a = am.atomic;
     return {
         fb_ad_id: am.adId,
+        campaign_id: meta.campaignId ?? '',
         campaign_name: meta.campaignName ?? '',
         adset_name: meta.adsetName ?? '',
         ad_name: meta.adName ?? '',

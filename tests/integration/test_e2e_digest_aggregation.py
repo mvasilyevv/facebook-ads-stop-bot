@@ -3,13 +3,14 @@
 
 Сшивка двух подсистем:
 1. `core/observer/pipeline.process_scan_rows` создаёт реальные alert_events,
-   ad_metrics и task_queue.disable записи (полная воронка observer'а).
+   ad_metrics и task_queue.meta_api_mutation pause_ad записи (полная воронка observer'а).
 2. `core/telegram/digest_builder.build_digest` агрегирует partitioned-таблицы
    по окну за «вчера» и возвращает структуру для TG-рендерера.
 
 Цель — убедиться что счётчики дайджеста совпадают с тем, что реально
-произвёл observer + toggle_executor: ни одной фантомной записи, ни одного
-пропущенного событий.
+произвёл observer + meta_api_worker: ни одной фантомной записи, ни одного
+пропущенного события. _count_disable_tasks считает task_type='meta_api_mutation'
+с mutation_kind='pause_ad' (новый канал) и legacy task_type='disable'.
 """
 
 from __future__ import annotations
@@ -17,14 +18,17 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
 from sqlalchemy import text
 
+import apps.meta_api_worker.main as worker_main
+from apps.meta_api_worker.main import process_one_task
+from core.meta_api.queue import claim_pending_task
 from core.observer.pipeline import process_scan_rows
 from core.scanner.models import ScannedAdRow
-from core.tasks.toggle_executor import execute_one_toggle_task
 from core.telegram.digest_builder import build_digest
 
 
@@ -54,13 +58,6 @@ async def clean_digest_e2e(pg_engine):
     await _truncate()
     yield
     await _truncate()
-
-
-class _RecordingGate:
-    """Fake gate: всегда успех (для emit succeeded disable_tasks)."""
-
-    async def toggle_ad(self, fb_ad_id: str, target_state: bool = True) -> dict:
-        return {"success": True, "final_state": "false"}
 
 
 async def _seed_offer(pg_engine, *, code: str, cpa: Decimal) -> uuid.UUID:
@@ -94,12 +91,13 @@ def _row(*, code: str, fb_ad_id: str, spend: Decimal, deposits: int) -> ScannedA
     )
 
 
-# E2E: 1 scan создаёт alert_events + ad_metrics, потом toggle делает disable
-# succeeded → digest за окно «теперь+1h» возвращает корректные счётчики.
+# E2E: 1 scan создаёт alert_events + ad_metrics + pause_ad mutation task,
+# потом process_one_task доводит её до succeeded → digest считает disable_tasks_succeeded.
 @pytest.mark.asyncio
 async def test_digest_aggregates_observer_pipeline_output(
     pg_engine,
     clean_digest_e2e,
+    monkeypatch,
 ) -> None:
     # 2 разных оффера, 2 ad'а:
     # - ad_stop: STOP-инцидент (spend=25, deposits=0 → fast-stop)
@@ -114,16 +112,23 @@ async def test_digest_aggregates_observer_pipeline_output(
     ok_row = _row(code="DGST_O", fb_ad_id=fb_ok, spend=Decimal("2"), deposits=2)
 
     # Шаг 1: один scan-цикл → один stop_event + два snapshot'а метрик +
-    # одна disable-задача (pending) в outbox.
+    # одна pause_ad mutation задача (pending) в outbox.
     result = await process_scan_rows(pg_engine, rows=[stop_row, ok_row], scan_id=100)
     assert result.alerts_stop == 1
     assert result.disable_tasks_created == 1
 
-    # Шаг 2: toggle_executor доводит disable до succeeded → попадёт в счётчик
-    # disable_tasks_succeeded в digest.
-    gate = _RecordingGate()
-    outcome = await execute_one_toggle_task(pg_engine, task_type="disable", gate=gate)
-    assert outcome == "succeeded"
+    # Шаг 2: meta_api_worker доводит pause_ad mutation до succeeded →
+    # попадёт в счётчик disable_tasks_succeeded в digest.
+    async def _fake_dispatch(client, p):
+        return {"success": True, "graph_response": {"ok": True}}
+
+    monkeypatch.setattr(worker_main, "dispatch_mutation", _fake_dispatch)
+
+    claim = await claim_pending_task(pg_engine)
+    assert not claim.queue_empty
+    assert claim.task is not None
+
+    await process_one_task(pg_engine, claim.task, client=AsyncMock())
 
     # Шаг 3: дайджест за окно «сейчас+1ч» (window=24h backwards) — должен поймать всё.
     digest = await build_digest(
@@ -136,12 +141,12 @@ async def test_digest_aggregates_observer_pipeline_output(
     # Счётчики событий — ровно те что мы реально создали observer'ом
     assert digest.alerts_stop_count == 1
     assert digest.alerts_warning_count == 0
-    # Disable выполнен через toggle → попал в succeeded
+    # pause_ad выполнен через meta_api_worker → попал в succeeded
     assert digest.disable_tasks_succeeded == 1
     assert digest.disable_tasks_failed == 0
     # Оба оффера активны
     assert digest.active_offers_count == 2
-    # active_ads_normal — только ad_ok в normal (ad_stop в stop_sent)
+    # active_ads_normal — только ad_ok в normal (ad_stop в disabled после FSM-sync)
     assert digest.active_ads_count == 1
 
     # Топ-N: оба ad'а с spend > 0, отсортированы desc

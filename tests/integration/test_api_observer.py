@@ -2,8 +2,10 @@
 """Интеграционные тесты: роутер /observer (v1).
 
 Тестирует GET /observer/status, GET /observer/scan-runs,
-POST /observer/start-new-cabinet-day, POST /observer/restart,
-POST /disable-worker/restart.
+POST /observer/start-new-cabinet-day, POST /observer/restart.
+
+Эндпоинт POST /disable-worker/restart удалён: DOM-toggle канал больше не используется,
+отключение рекламы происходит только через Marketing API (meta_api_worker).
 """
 
 from __future__ import annotations
@@ -215,19 +217,6 @@ async def test_observer_restart_publishes_to_channel(fake_redis_client) -> None:
 
     await pubsub.unsubscribe("fb_agent:worker:restart:observer")
     await pubsub.aclose()
-
-
-# disable-worker/restart публикует в свой канал
-@pytest.mark.asyncio
-async def test_disable_worker_restart_publishes_to_correct_channel(fake_redis_client) -> None:
-    """POST /disable-worker/restart → channel = fb_agent:worker:restart:disable_worker."""
-    app = _make_app(redis=fake_redis_client)
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.post("/api/disable-worker/restart")
-
-    assert resp.status_code == 200
-    payload = resp.json()
-    assert "disable_worker" in payload["channel"]
 
 
 # Restart без Redis → 503

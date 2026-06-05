@@ -87,7 +87,12 @@ async def _count_disable_tasks(
     window_start: datetime,
     window_end: datetime,
 ) -> tuple[int, int]:
-    """Считает выполненные disable_tasks за окно.
+    """Считает завершённые задачи отключения рекламы за окно.
+
+    Отключение идёт через Marketing API: task_type='meta_api_mutation' с
+    mutation_kind='pause_ad' (авто-стоп observer'а и ручные кнопки). Старый
+    task_type='disable' (DOM-канал удалён) учитываем тоже — на случай
+    долёживающих задач в окне перехода.
 
     Фильтр по completed_at — таски берутся только те, что фактически
     завершились в окне (а не были созданы в нём).
@@ -101,7 +106,13 @@ async def _count_disable_tasks(
                         COUNT(*) FILTER (WHERE status = 'succeeded') AS ok,
                         COUNT(*) FILTER (WHERE status = 'failed')    AS fail
                     FROM task_queue
-                    WHERE task_type = 'disable'
+                    WHERE (
+                            task_type = 'disable'
+                            OR (
+                                task_type = 'meta_api_mutation'
+                                AND payload->>'mutation_kind' = 'pause_ad'
+                            )
+                          )
                       AND completed_at IS NOT NULL
                       AND completed_at >= :start
                       AND completed_at <  :end

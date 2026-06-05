@@ -7,6 +7,7 @@ exports.extractGraphContext = extractGraphContext;
 exports.invalidateGraphContext = invalidateGraphContext;
 exports.reconstructAdsManagerUrl = reconstructAdsManagerUrl;
 exports.acquireGraphContext = acquireGraphContext;
+exports.listOwnerCampaigns = listOwnerCampaigns;
 exports.runAmScan = runAmScan;
 exports.runAmScanWithContext = runAmScanWithContext;
 const am_parser_js_1 = require("./am-parser.js");
@@ -190,6 +191,20 @@ async function fetchAllEdge(page, ctx, origin, edge, fields, filtering) {
     }
     return { items: out };
 }
+// Live-список кампаний владельца (id+name) по owner_tag — ТОЛЬКО campaigns edge, без
+// метрик/ад'ов и БЕЗ allowlist-фильтра. Для UI «Кампании для сканирования»: показывает
+// все кампании владельца, включая новые (которые обычный скан с allowlist не подхватывал).
+async function listOwnerCampaigns(page, ownerTag, sessionId) {
+    // acquireGraphContext: cache-hit по sessionId (токен из последнего скана observer'а),
+    // при miss — сам сделает reload для сниффа. Это надёжнее extractGraphContext, который
+    // на статичной странице падал «нет запросов к adsmanager-graph».
+    const { ctx } = await acquireGraphContext(page, sessionId);
+    const campRes = await fetchAllEdge(page, ctx, GRAPH_REST_ORIGIN, 'campaigns', ['id', 'name'], []);
+    const items = ownerTag
+        ? campRes.items.filter((c) => (0, am_owner_js_1.campaignMatchesOwner)(c.name ?? '', ownerTag))
+        : campRes.items;
+    return items.map((c) => ({ id: c.id, name: c.name ?? '' }));
+}
 // Полный am-скан с самостоятельным извлечением токена (для standalone-вызовов/тестов).
 async function runAmScan(page, config) {
     const ctx = await extractGraphContext(page);
@@ -235,6 +250,7 @@ async function runAmScanWithContext(page, ctx, config) {
         adMeta.set(ad.id, {
             adName: ad.name,
             effectiveStatus: ad.effectiveStatus,
+            campaignId: ad.campaignId,
             campaignName: ad.campaignId ? campName.get(ad.campaignId) : undefined,
             adsetName: ad.adsetId ? adsetName.get(ad.adsetId) : undefined,
         });

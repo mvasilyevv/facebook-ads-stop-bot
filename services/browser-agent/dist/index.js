@@ -40,9 +40,6 @@ const protoLoader = __importStar(require("@grpc/proto-loader"));
 const path = __importStar(require("path"));
 const session_manager_js_1 = require("./session-manager.js");
 const hard_reload_js_1 = require("./hard-reload.js");
-const ads_table_js_1 = require("./ads-table.js");
-const humanizer_js_1 = require("./humanizer.js");
-const toggle_utils_js_1 = require("./toggle-utils.js");
 const creator_service_js_1 = require("./creator-service.js");
 const service_js_1 = require("./meta-api/service.js");
 const service_js_2 = require("./ad-library/service.js");
@@ -88,61 +85,6 @@ function getSessionForOptionalId(sessionId) {
     return normalizedSessionId
         ? sessionManager.getSession(normalizedSessionId)
         : sessionManager.getPreferredSession();
-}
-async function confirmMetaDialogIfPresent(page, targetState) {
-    const confirmWords = targetState
-        ? ['подтвердить', 'ok', 'да', 'продолжить', 'включить', 'confirm', 'yes', 'publish', 'опубликовать']
-        : ['подтвердить', 'ok', 'да', 'продолжить', 'отключить', 'confirm', 'yes', 'pause', 'приостановить', 'publish', 'опубликовать'];
-    try {
-        const buttons = await page.$$('[role="dialog"] button, [role="dialog"] [role="button"], '
-            + '[role="alertdialog"] button, [role="alertdialog"] [role="button"]');
-        for (const button of buttons) {
-            const text = String((await button.innerText()) || '').toLowerCase().trim();
-            if (!text || !confirmWords.some((word) => text.includes(word))) {
-                continue;
-            }
-            await (0, humanizer_js_1.humanClick)(page, button, { doubleCheckPause: false });
-            await sleep(700);
-            return true;
-        }
-    }
-    catch {
-        // Ошибка чтения диалога не должна обрывать основной клик по toggle.
-    }
-    return false;
-}
-async function readToggleStateFromHandle(toggle) {
-    const ariaChecked = await toggle.getAttribute('aria-checked');
-    if (ariaChecked !== null) {
-        return ariaChecked || 'null';
-    }
-    try {
-        const inputChecked = await toggle.evaluate((node) => {
-            if (node instanceof HTMLInputElement && node.type === 'checkbox') {
-                return node.checked ? 'true' : 'false';
-            }
-            return null;
-        });
-        if (inputChecked) {
-            return inputChecked;
-        }
-    }
-    catch {
-        // Если handle устарел, внешний retry заново найдёт toggle.
-    }
-    return 'unknown';
-}
-async function clickToggleAttempt(page, toggle, attempt) {
-    if (attempt === 1) {
-        await (0, humanizer_js_1.humanClick)(page, toggle);
-        return;
-    }
-    if (attempt === 2) {
-        await (0, humanizer_js_1.humanClick)(page, toggle, { doubleCheckPause: false });
-        return;
-    }
-    await toggle.focus().catch(() => undefined);
-    await (0, humanizer_js_1.humanPressKey)(page, 'Space');
 }
 // --- Обработчики BrowserSessionService ---
 async function startBrowser(call, callback) {
@@ -397,234 +339,11 @@ async function runScanCycle(call) {
         endIfActive();
     }
 }
-async function findToggleCell(call, callback) {
-    try {
-        const session = sessionManager.getSession(call.request.session_id);
-        const page = getPage(session, call.request.page_id);
-        const cell = await (0, ads_table_js_1.findToggleCellWithTableScan)(page, call.request.fb_ad_id, {
-            resetToTop: call.request.reset_to_top,
-            maxScrollPasses: call.request.max_scroll_passes > 0 ? call.request.max_scroll_passes : undefined,
-        });
-        if (cell) {
-            const box = await cell.boundingBox();
-            const toggle = await (0, toggle_utils_js_1.resolveToggleHandleFromCell)(cell);
-            const ariaChecked = toggle ? await readToggleStateFromHandle(toggle) : 'no_toggle';
-            callback(null, {
-                found: true,
-                cell_x: box?.x ?? 0,
-                cell_y: box?.y ?? 0,
-                aria_checked: ariaChecked,
-            });
-        }
-        else {
-            callback(null, { found: false, cell_x: 0, cell_y: 0, aria_checked: '' });
-        }
-    }
-    catch (err) {
-        const code = grpcCodeForError(err);
-        callback({ code, message: err.message });
-    }
-}
-async function readToggleState(call, callback) {
-    try {
-        const session = sessionManager.getSession(call.request.session_id);
-        const page = getPage(session, call.request.page_id);
-        const fbAdId = call.request.fb_ad_id;
-        const ariaChecked = await (0, ads_table_js_1.readToggleAriaChecked)(page, fbAdId);
-        callback(null, {
-            found: ariaChecked !== 'not_found',
-            aria_checked: ariaChecked,
-        });
-    }
-    catch (err) {
-        const code = grpcCodeForError(err);
-        callback({ code, message: err.message });
-    }
-}
-async function toggleAd(call, callback) {
-    try {
-        const session = sessionManager.getSession(call.request.session_id);
-        const page = getPage(session, call.request.page_id);
-        const fbAdId = call.request.fb_ad_id;
-        const cell = await (0, ads_table_js_1.findToggleCellWithTableScan)(page, fbAdId, { resetToTop: false });
-        if (!cell) {
-            callback(null, { success: false, final_state: 'not_found' });
-            return;
-        }
-        const toggle = await (0, toggle_utils_js_1.resolveToggleHandleFromCell)(cell);
-        if (!toggle) {
-            callback(null, { success: false, final_state: 'no_toggle' });
-            return;
-        }
-        const targetChecked = call.request.target_state ? 'true' : 'false';
-        const initialChecked = await readToggleStateFromHandle(toggle);
-        if (initialChecked === targetChecked) {
-            callback(null, { success: true, final_state: initialChecked });
-            return;
-        }
-        let finalState = initialChecked;
-        let currentToggle = toggle;
-        for (let attempt = 1; attempt <= 3; attempt++) {
-            if (attempt > 1) {
-                const freshCell = await (0, ads_table_js_1.findToggleCellWithTableScan)(page, fbAdId, {
-                    resetToTop: false,
-                    maxScrollPasses: 4,
-                });
-                if (!freshCell) {
-                    finalState = 'not_found';
-                    continue;
-                }
-                const freshToggle = await (0, toggle_utils_js_1.resolveToggleHandleFromCell)(freshCell);
-                if (!freshToggle) {
-                    finalState = 'no_toggle';
-                    continue;
-                }
-                currentToggle = freshToggle;
-            }
-            const beforeClick = await readToggleStateFromHandle(currentToggle);
-            if (beforeClick === targetChecked) {
-                callback(null, { success: true, final_state: beforeClick });
-                return;
-            }
-            try {
-                await clickToggleAttempt(page, currentToggle, attempt);
-            }
-            catch (clickErr) {
-                finalState = `ошибка_клика: ${clickErr.message || clickErr}`;
-                continue;
-            }
-            await sleep(700);
-            await confirmMetaDialogIfPresent(page, Boolean(call.request.target_state));
-            await sleep(900);
-            // Читаем состояние после клика через тот же поиск строки, что и для toggle.
-            finalState = await (0, ads_table_js_1.readToggleAriaChecked)(page, fbAdId);
-            if (finalState === targetChecked) {
-                callback(null, { success: true, final_state: finalState });
-                return;
-            }
-        }
-        callback(null, { success: false, final_state: finalState || 'не_подтверждено' });
-    }
-    catch (err) {
-        const code = grpcCodeForError(err);
-        callback({ code, message: err.message });
-    }
-}
-async function humanMoveHandler(call, callback) {
-    try {
-        const session = sessionManager.getSession(call.request.session_id);
-        const page = getPage(session, call.request.page_id);
-        await (0, humanizer_js_1.humanMove)(page, call.request.target_x, call.request.target_y, {
-            profile: call.request.profile ? mapProtoProfile(call.request.profile) : undefined,
-        });
-        callback(null, {});
-    }
-    catch (err) {
-        const code = grpcCodeForError(err);
-        callback({ code, message: err.message });
-    }
-}
-async function humanClickHandler(call, callback) {
-    try {
-        const session = sessionManager.getSession(call.request.session_id);
-        const page = getPage(session, call.request.page_id);
-        const profile = call.request.profile ? mapProtoProfile(call.request.profile) : undefined;
-        await (0, humanizer_js_1.humanMove)(page, call.request.x, call.request.y, { profile });
-        await sleep(rand(80, 250));
-        await page.mouse.down();
-        await sleep(rand(60, 180));
-        await page.mouse.up();
-        await sleep(rand(80, 240));
-        callback(null, {});
-    }
-    catch (err) {
-        const code = grpcCodeForError(err);
-        callback({ code, message: err.message });
-    }
-}
-async function humanWheelScrollHandler(call, callback) {
-    try {
-        const session = sessionManager.getSession(call.request.session_id);
-        const page = getPage(session, call.request.page_id);
-        const anchor = call.request.anchor_x !== undefined && call.request.anchor_y !== undefined
-            ? [call.request.anchor_x, call.request.anchor_y]
-            : undefined;
-        const [finalX, finalY] = await (0, humanizer_js_1.humanWheelScroll)(page, call.request.delta_y, {
-            anchor,
-            profile: call.request.profile ? mapProtoProfile(call.request.profile) : undefined,
-        });
-        callback(null, { final_x: finalX, final_y: finalY });
-    }
-    catch (err) {
-        const code = grpcCodeForError(err);
-        callback({ code, message: err.message });
-    }
-}
-async function waitForToggleConfirmation(call, callback) {
-    try {
-        const session = sessionManager.getSession(call.request.session_id);
-        const page = getPage(session, call.request.page_id);
-        const fbAdId = call.request.fb_ad_id;
-        const expectedChecked = call.request.expected_checked;
-        const requiredReads = call.request.required_reads || 2;
-        const pollDelays = call.request.poll_delays_seconds || [0, 3, 3, 3, 3, 4, 4, 5, 5];
-        const maxScrollPasses = call.request.max_scroll_passes_restore || 10;
-        let readsMatched = 0;
-        let lastAriaChecked = '';
-        for (let i = 0; i < pollDelays.length; i++) {
-            await sleep(pollDelays[i] * 1000);
-            // Читаем aria-checked с учётом новой DOM-структуры Ads Manager.
-            const ariaChecked = await (0, ads_table_js_1.readToggleAriaChecked)(page, fbAdId);
-            lastAriaChecked = ariaChecked;
-            if (ariaChecked === expectedChecked) {
-                readsMatched++;
-                if (readsMatched >= requiredReads) {
-                    callback(null, {
-                        success: true,
-                        message: `Переключатель подтверждён: ${expectedChecked}`,
-                        final_aria_checked: ariaChecked,
-                        reads_matched: readsMatched,
-                    });
-                    return;
-                }
-            }
-            else if (ariaChecked === 'not_found' || ariaChecked === 'no_toggle') {
-                // Пробуем вернуть переключатель в видимую часть таблицы скроллом.
-                readsMatched = 0;
-                await restoreToggleVisibility(page, fbAdId, maxScrollPasses);
-            }
-            else {
-                readsMatched = 0;
-            }
-        }
-        callback(null, {
-            success: false,
-            message: `Переключатель не подтверждён после ${pollDelays.length} попыток. Последнее состояние: ${lastAriaChecked}`,
-            final_aria_checked: lastAriaChecked,
-            reads_matched: readsMatched,
-        });
-    }
-    catch (err) {
-        const code = grpcCodeForError(err);
-        callback({ code, message: err.message });
-    }
-}
-async function restoreToggleVisibility(page, fbAdId, maxPasses) {
-    for (let i = 0; i < maxPasses; i++) {
-        const el = await (0, ads_table_js_1.findToggleCellWithTableScan)(page, fbAdId, {
-            resetToTop: false,
-            maxScrollPasses: 1,
-        });
-        if (el)
-            return;
-        await (0, ads_table_js_1.scrollAdsTableDown)(page);
-        await sleep(300);
-    }
-}
 // --- Вспомогательные функции ---
 function toProtoRow(row) {
     return {
         fb_ad_id: row.fb_ad_id,
+        campaign_id: row.campaign_id,
         campaign_name: row.campaign_name,
         adset_name: row.adset_name,
         ad_name: row.ad_name,
@@ -651,24 +370,8 @@ function toProtoRow(row) {
         resolved_offer_code: row.resolved_offer_code ?? '',
     };
 }
-function mapProtoProfile(proto) {
-    return {
-        speedFactor: proto.speed_factor,
-        jitterFactor: proto.jitter_factor,
-        pauseFactor: proto.pause_factor,
-        overshootChance: proto.overshoot_chance,
-        idleChance: proto.idle_chance,
-        idleDurationMin: proto.idle_duration_min,
-        idleDurationMax: proto.idle_duration_max,
-        bezierStepsMin: proto.bezier_steps_min,
-        bezierStepsMax: proto.bezier_steps_max,
-    };
-}
 function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
-}
-function rand(min, max) {
-    return Math.random() * (max - min) + min;
 }
 async function hardReloadPageHandler(call, callback) {
     try {
@@ -685,6 +388,19 @@ async function hardReloadPageHandler(call, callback) {
             error_message: result.errorMessage ?? '',
             reload_ms: result.reloadMs,
         });
+    }
+    catch (err) {
+        callback({ code: grpcCodeForError(err), message: String(err?.message ?? err) });
+    }
+}
+async function listCampaignsHandler(call, callback) {
+    try {
+        // Берём активную ads-сессию observer'а (с кешированным graph-токеном), а не создаём
+        // новую — у свежей сессии нет истории запросов и токен не извлекался.
+        const session = sessionManager.getPreferredSession();
+        const page = getPage(session);
+        const campaigns = await (0, am_fetch_js_1.listOwnerCampaigns)(page, call.request.owner_tag ?? '', session.id);
+        callback(null, { campaigns });
     }
     catch (err) {
         callback({ code: grpcCodeForError(err), message: String(err?.message ?? err) });
@@ -715,14 +431,8 @@ function main() {
     });
     server.addService(scannerService.service, {
         runScanCycle,
-        findToggleCell,
-        readToggleState,
-        toggleAd,
-        humanMove: humanMoveHandler,
-        humanClick: humanClickHandler,
-        humanWheelScroll: humanWheelScrollHandler,
-        waitForToggleConfirmation: waitForToggleConfirmation,
         hardReloadPage: hardReloadPageHandler,
+        listCampaigns: listCampaignsHandler,
     });
     const creatorHandlers = (0, creator_service_js_1.createCreatorServiceHandlers)(sessionManager);
     server.addService(creatorService.service, {

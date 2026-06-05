@@ -3,8 +3,9 @@
 
 Покрывают: вердикт check_mutation_ownership/check_ad_ownership по уровням целей,
 bulk-семантику, NULL owner_tag (фильтр выключен), custom_audience/create_campaign,
-а также маршрутизацию в meta_api_worker и toggle_executor (строгая fail-policy:
-чужое → fail; своё-но-не-в-каталоге → выключающее requeue / включающее fail).
+а также маршрутизацию в meta_api_worker (строгая fail-policy: чужое → fail;
+своё-но-не-в-каталоге → выключающее requeue / включающее fail). Единственный канал
+act — Marketing API (DOM-toggle и toggle_executor удалены).
 Все тесты без БД — резолверы и БД-операции замоканы (monkeypatch).
 """
 

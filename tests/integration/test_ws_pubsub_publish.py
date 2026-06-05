@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """Тесты publish в Redis pubsub-каналы из воркеров FB Stop Bot.
 
-Покрывает три новых publish-точки:
-1. alert_dispatcher → fb_agent:alert:created  (после отправки алерта в TG)
-2. toggle_executor  → fb_agent:task:changed   (после mark_succeeded disable/enable)
-3. health_watchdog  → fb_agent:health:updated (после цикла проверки heartbeat'ов)
+Покрывает три publish-точки:
+1. alert_dispatcher  → fb_agent:alert:created  (после отправки алерта в TG)
+2. meta_api_worker   → fb_agent:task:changed   (после mark_succeeded pause_ad и др.)
+3. health_watchdog   → fb_agent:health:updated (после цикла проверки heartbeat'ов)
 
 Все тесты используют fakeredis — реальный Redis не нужен.
 Тест E2E: publish в канал → WS-хендлер форвардит клиенту.
@@ -233,48 +233,71 @@ async def test_alert_dispatcher_no_publish_on_dedup_skip(
     assert msg is None, "при ddup-skip publish не должен происходить"
 
 
-# ====================== тест 2: toggle_executor публикует в fb_agent:task:changed ======================
+# ====================== тест 2: meta_api_worker публикует в fb_agent:task:changed ======================
 
 
-# mark_succeeded в toggle_executor → publish task:changed со статусом succeeded
+# process_one_task (pause_ad) → mark_succeeded → publish task:changed со статусом succeeded
 @pytest.mark.asyncio
-async def test_toggle_executor_publishes_task_changed_on_success(
+async def test_meta_api_worker_publishes_task_changed_on_success(
     pg_engine,
     fake_redis,
+    monkeypatch,
 ) -> None:
-    """Проверяем: execute_one_toggle_task публикует task:changed при успешном disable."""
-    from core.tasks import create_task
-    from core.tasks.toggle_executor import execute_one_toggle_task
+    """Проверяем: process_one_task публикует task:changed при успешном pause_ad."""
+    from unittest.mock import AsyncMock
 
-    # Создаём тестовую задачу в task_queue
-    fb_ad_id = f"23000{uuid.uuid4().hex[:8]}"
-    task_id = await create_task(
+    from apps.meta_api_worker.main import process_one_task
+    from core.meta_api.queue import claim_pending_task, create_mutation_task
+    from core.meta_api.schemas import MetaMutationPayload
+
+    # Создаём meta_api_mutation задачу со статусом pending
+    fb_ad_id = uuid.uuid4().hex
+    payload = MetaMutationPayload(
+        mutation_kind="pause_ad",
+        target_id=fb_ad_id,
+        params={"reason": "pubsub test"},
+        ad_account_id="act_42",
+    )
+    task_id = await create_mutation_task(
         pg_engine,
-        task_type="disable",
-        idempotency_key=f"pubsub-test-{fb_ad_id}",
-        payload={"fb_ad_id": fb_ad_id},
+        payload=payload,
         requested_by="test",
-        max_attempts=3,
+        status="pending",
     )
     assert task_id is not None
 
-    # Подписываемся на канал
+    # Подписываемся на канал до прогона задачи
     pubsub = fake_redis.pubsub()
     await pubsub.subscribe("fb_agent:task:changed")
     await pubsub.get_message(ignore_subscribe_messages=True, timeout=0.1)
 
-    # Фейковый gate: всегда возвращает success=True
-    class FakeGate:
-        async def toggle_ad(self, fb_ad_id: str, target_state: bool = True) -> dict:
-            return {"success": True, "final_state": target_state}
+    # Мокаем dispatch_mutation → успешный результат без реального gRPC
+    fake_result = {"success": True, "modified_ids": [fb_ad_id]}
 
-    outcome = await execute_one_toggle_task(
-        pg_engine,
-        task_type="disable",
-        gate=FakeGate(),
-        redis_client=fake_redis,
+    async def _fake_dispatch(client, p):
+        return fake_result
+
+    import apps.meta_api_worker.main as worker_main
+
+    monkeypatch.setattr(worker_main, "dispatch_mutation", _fake_dispatch)
+    # Отключаем owner-scoping и scanning-gate чтобы не требовать БД-настроек
+    monkeypatch.setattr(worker_main, "load_scanning_enabled", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        worker_main,
+        "check_mutation_ownership",
+        AsyncMock(return_value=type("R", (), {"allowed": True})()),
     )
-    assert outcome == "succeeded"
+    monkeypatch.setattr(worker_main, "load_owner_tag", AsyncMock(return_value=None))
+    # FSM-sync — best-effort, мокаем чтобы не тянуть FSM
+    monkeypatch.setattr(worker_main, "sync_fsm_after_mutation", AsyncMock())
+
+    claim = await claim_pending_task(pg_engine)
+    assert not claim.queue_empty, "задача должна быть в очереди"
+    assert claim.task is not None
+    assert claim.task.id == task_id
+
+    fake_client = AsyncMock()
+    await process_one_task(pg_engine, claim.task, client=fake_client, redis_client=fake_redis)
 
     # Ожидаем сообщение в канале
     received = None
@@ -295,42 +318,74 @@ async def test_toggle_executor_publishes_task_changed_on_success(
     assert received is not None, "ожидали сообщение в fb_agent:task:changed"
     data = json.loads(received["data"])
     assert data["task_id"] == task_id
-    assert data["task_type"] == "disable"
+    assert data["task_type"] == "meta_api_mutation"
     assert data["status"] == "succeeded"
     assert "timestamp" in data
 
 
-# Без redis_client (None) execute_one_toggle_task не падает
+# Без redis_client (None) process_one_task не падает (best-effort publish)
 @pytest.mark.asyncio
-async def test_toggle_executor_no_redis_does_not_crash(pg_engine) -> None:
-    """Воркер не падает если redis_client не передан (best-effort publish)."""
-    from core.tasks import create_task
-    from core.tasks.toggle_executor import execute_one_toggle_task
+async def test_meta_api_worker_no_redis_does_not_crash(
+    pg_engine,
+    monkeypatch,
+) -> None:
+    """Воркер не падает если redis_client=None (best-effort publish)."""
+    from unittest.mock import AsyncMock
 
-    fb_ad_id = f"23000{uuid.uuid4().hex[:8]}"
-    task_id = await create_task(
+    from apps.meta_api_worker.main import process_one_task
+    from core.meta_api.queue import claim_pending_task, create_mutation_task
+    from core.meta_api.schemas import MetaMutationPayload
+
+    fb_ad_id = uuid.uuid4().hex
+    payload = MetaMutationPayload(
+        mutation_kind="pause_ad",
+        target_id=fb_ad_id,
+        params={"reason": "no-redis test"},
+        ad_account_id="act_42",
+    )
+    task_id = await create_mutation_task(
         pg_engine,
-        task_type="enable",
-        idempotency_key=f"pubsub-nored-{fb_ad_id}",
-        payload={"fb_ad_id": fb_ad_id},
+        payload=payload,
         requested_by="test",
-        max_attempts=3,
+        status="pending",
     )
     assert task_id is not None
 
-    class FakeGate:
-        async def toggle_ad(self, fb_ad_id: str, target_state: bool = True) -> dict:
-            return {"success": True, "final_state": target_state}
+    fake_result = {"success": True, "modified_ids": [fb_ad_id]}
 
-    # redis_client=None — не передаём
-    outcome = await execute_one_toggle_task(
-        pg_engine,
-        task_type="enable",
-        gate=FakeGate(),
-        redis_client=None,
+    async def _fake_dispatch(client, p):
+        return fake_result
+
+    import apps.meta_api_worker.main as worker_main
+
+    monkeypatch.setattr(worker_main, "dispatch_mutation", _fake_dispatch)
+    monkeypatch.setattr(worker_main, "load_scanning_enabled", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        worker_main,
+        "check_mutation_ownership",
+        AsyncMock(return_value=type("R", (), {"allowed": True})()),
     )
-    # Воркер отработал нормально несмотря на отсутствие Redis
-    assert outcome == "succeeded"
+    monkeypatch.setattr(worker_main, "load_owner_tag", AsyncMock(return_value=None))
+    monkeypatch.setattr(worker_main, "sync_fsm_after_mutation", AsyncMock())
+
+    claim = await claim_pending_task(pg_engine)
+    assert not claim.queue_empty
+    assert claim.task is not None
+
+    fake_client = AsyncMock()
+    # redis_client=None — publish пропускается без исключения
+    await process_one_task(pg_engine, claim.task, client=fake_client, redis_client=None)
+
+    # Воркер отработал — задача succeeded
+    async with pg_engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text("SELECT status FROM task_queue WHERE id = :i"),
+                {"i": task_id},
+            )
+        ).first()
+    assert row is not None
+    assert row[0] == "succeeded"
 
     # Cleanup
     async with pg_engine.begin() as conn:

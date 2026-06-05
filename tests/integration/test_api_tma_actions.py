@@ -1,9 +1,12 @@
 # -*- coding: utf-8 -*-
 """Integration: TMA money-действия (BL-15 Этап 2) + web_app_url (Этап 1).
 
-Money/security: disable отключает реальное объявление, draft-confirm запускает
-Marketing API mutation. Поэтому проверяем guard (401 без токена), фактическое
-создание нужной записи и ACL подтверждения чужого черновика.
+Money/security: disable отключает реальное объявление через Marketing API (pause_ad),
+draft-confirm запускает Marketing API mutation. Поэтому проверяем guard (401 без токена),
+фактическое создание нужной записи и ACL подтверждения чужого черновика.
+
+DOM-toggle канал удалён (#fix/remove-dom-toggle). disable ВСЕГДА создаёт
+meta_api_mutation pause_ad, ответ channel == 'meta_api'.
 
 Требует Postgres (pg_engine). Cleanup id-scoped (БД общая): fb_ads CASCADE'ит
 ad_metrics/ad_alert_state/alert_events, дальше adsets→campaigns→offers вручную
@@ -21,7 +24,6 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 
-import apps.api.routers.v1.tma as tma_mod
 from apps.api.deps import get_engine
 from apps.api.main import create_app
 from core.auth.tma import issue_session_token
@@ -41,15 +43,6 @@ def _token_for(uid: int) -> str:
     s = get_settings()
     secret = s.tma_session_secret or s.encryption_key
     return issue_session_token(str(uid), s.tma_session_ttl_seconds, secret)
-
-
-def _fake_observer_cfg(*, act_via_api: bool):
-    """Async-заглушка load_observer_config — управляем каналом disable без мутации БД."""
-
-    async def _inner(_engine):
-        return {"act_via_api": act_via_api}
-
-    return _inner
 
 
 @pytest_asyncio.fixture
@@ -274,14 +267,13 @@ async def test_ad_detail_404(pg_engine, tma_factory):
 # ─────────────────────────── POST disable ────────────────────────────────────
 
 
-# act_via_api=True → создаётся meta_api_mutation pause_ad (точно по ad_id)
+# disable всегда создаёт meta_api_mutation pause_ad, channel == 'meta_api'
 @pytest.mark.asyncio
-async def test_disable_via_meta_api(pg_engine, tma_factory, monkeypatch):
+async def test_disable_creates_meta_api_mutation(pg_engine, tma_factory):
     uid = 7200003
     await tma_factory.make_recipient(uid)
     fb = f"tmaDisApi_{uuid.uuid4().hex[:8]}"
     await tma_factory.make_ad(fb, alert_state="stop_sent")
-    monkeypatch.setattr(tma_mod, "load_observer_config", _fake_observer_cfg(act_via_api=True))
 
     app = _make_app(pg_engine)
     headers = {"Authorization": f"Bearer {tma_factory.token_for(uid)}"}
@@ -290,7 +282,9 @@ async def test_disable_via_meta_api(pg_engine, tma_factory, monkeypatch):
             f"/api/tma/ads/{fb}/disable", json={"reason": "дорого"}, headers=headers
         )
     assert resp.status_code == 200, resp.text
-    assert resp.json()["channel"] == "meta_api"
+    body = resp.json()
+    assert body["channel"] == "meta_api"
+    assert body.get("task_id") is not None  # id задачи всегда присвоен
 
     # В task_queue появилась meta_api_mutation pause_ad с target_id == fb_ad_id
     async with pg_engine.connect() as conn:
@@ -298,7 +292,8 @@ async def test_disable_via_meta_api(pg_engine, tma_factory, monkeypatch):
             await conn.execute(
                 text(
                     """
-                    SELECT task_type, status, requested_by, payload->>'mutation_kind' AS kind,
+                    SELECT task_type, status, requested_by,
+                           payload->>'mutation_kind' AS kind,
                            payload->>'target_id' AS target
                     FROM task_queue
                     WHERE task_type = 'meta_api_mutation' AND payload->>'target_id' = :fb
@@ -316,46 +311,51 @@ async def test_disable_via_meta_api(pg_engine, tma_factory, monkeypatch):
     async with pg_engine.begin() as conn:
         await conn.execute(
             text(
-                "DELETE FROM task_queue WHERE task_type='meta_api_mutation' AND payload->>'target_id'=:fb"
+                "DELETE FROM task_queue"
+                " WHERE task_type='meta_api_mutation' AND payload->>'target_id'=:fb"
             ),
             {"fb": fb},
         )
 
 
-# act_via_api=False → создаётся task_type='disable' (DOM-путь)
+# повторный disable с тем же token идемпотентен — задача не дублируется
 @pytest.mark.asyncio
-async def test_disable_via_dom(pg_engine, tma_factory, monkeypatch):
+async def test_disable_idempotent_by_token(pg_engine, tma_factory):
     uid = 7200004
     await tma_factory.make_recipient(uid)
-    fb = f"tmaDisDom_{uuid.uuid4().hex[:8]}"
+    fb = f"tmaDisIdem_{uuid.uuid4().hex[:8]}"
     await tma_factory.make_ad(fb, alert_state="stop_sent")
-    monkeypatch.setattr(tma_mod, "load_observer_config", _fake_observer_cfg(act_via_api=False))
+    token = str(uuid.uuid4())
 
     app = _make_app(pg_engine)
     headers = {"Authorization": f"Bearer {tma_factory.token_for(uid)}"}
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as ac:
-        resp = await ac.post(f"/api/tma/ads/{fb}/disable", json={}, headers=headers)
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["channel"] == "dom"
+        r1 = await ac.post(f"/api/tma/ads/{fb}/disable", json={"token": token}, headers=headers)
+        r2 = await ac.post(f"/api/tma/ads/{fb}/disable", json={"token": token}, headers=headers)
+    assert r1.status_code == 200, r1.text
+    assert r2.status_code == 200, r2.text
+    # оба запроса вернули одинаковый task_id
+    assert r1.json()["task_id"] == r2.json()["task_id"]
 
+    # В task_queue ровно одна задача с этим target_id
     async with pg_engine.connect() as conn:
-        row = (
+        count = (
             await conn.execute(
                 text(
-                    """
-                    SELECT status, requested_by FROM task_queue
-                    WHERE task_type = 'disable' AND payload->>'fb_ad_id' = :fb
-                    ORDER BY created_at DESC LIMIT 1
-                    """
+                    "SELECT COUNT(*) FROM task_queue"
+                    " WHERE task_type='meta_api_mutation' AND payload->>'target_id'=:fb"
                 ),
                 {"fb": fb},
             )
-        ).first()
-    assert row is not None
-    assert row.requested_by == f"tma:{uid}"
+        ).scalar()
+    assert count == 1
+    # cleanup задачи
     async with pg_engine.begin() as conn:
         await conn.execute(
-            text("DELETE FROM task_queue WHERE task_type='disable' AND payload->>'fb_ad_id'=:fb"),
+            text(
+                "DELETE FROM task_queue"
+                " WHERE task_type='meta_api_mutation' AND payload->>'target_id'=:fb"
+            ),
             {"fb": fb},
         )
 

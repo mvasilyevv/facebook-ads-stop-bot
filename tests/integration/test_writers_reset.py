@@ -2,8 +2,10 @@
 """Интеграционные тесты persist-функций FSM-reset из core/observer/writers.py.
 
 `reset_alert_state_after_disable_succeeded` / `reset_alert_state_after_enable_succeeded`
-вызываются из toggle_executor после mark_succeeded. Тестируем что UPDATE действительно
-переводит state в нужное значение, идемпотентен и защищён от misuse.
+вызываются из core.meta_api.fsm_sync.sync_fsm_after_mutation после успешного
+mark_task_succeeded (DOM-toggle канал удалён, toggle_executor больше не существует).
+Тестируем что UPDATE действительно переводит state в нужное значение,
+идемпотентен и защищён от misuse.
 """
 
 from __future__ import annotations

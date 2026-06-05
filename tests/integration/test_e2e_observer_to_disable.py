@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
-"""E2E cross-cutting сценарий: observer pipeline → outbox → disable worker.
+"""E2E cross-cutting сценарий: observer pipeline → outbox → meta_api_worker.
 
 Сшивка двух доменов: `core/observer/pipeline.py` создаёт alert_state=stop_sent
-и пишет outbox-запись (task_type='disable'). После этого
-`core/tasks/toggle_executor.execute_one_toggle_task` подхватывает её через
-claim_next_task и доводит до task_queue.status='succeeded'.
+и пишет outbox-запись (task_type='meta_api_mutation', mutation_kind='pause_ad').
+После этого `apps/meta_api_worker.process_one_task` подхватывает её через
+claim_pending_task и доводит до task_queue.status='succeeded'.
 
 Покрывает:
 1. Полный жизненный цикл одного STOP-инцидента.
@@ -19,14 +19,17 @@ from __future__ import annotations
 import uuid
 from decimal import Decimal
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
 from sqlalchemy import text
 
+import apps.meta_api_worker.main as worker_main
+from apps.meta_api_worker.main import process_one_task
+from core.meta_api.queue import claim_pending_task
 from core.observer.pipeline import process_scan_rows
 from core.scanner.models import ScannedAdRow
-from core.tasks.toggle_executor import execute_one_toggle_task
 
 
 @pytest_asyncio.fixture
@@ -73,28 +76,6 @@ async def offer_e2e(pg_engine, clean_e2e_tables):
     return {"offer_id": offer_id, "code": code}
 
 
-class _RecordingGate:
-    """Fake ToggleGate — записывает все вызовы + программируемый ответ.
-
-    Симулирует gRPC-клиента к browser-agent: на проде делает реальный клик
-    в Ads Manager, в тестах — просто пишет вызов в self.calls.
-    """
-
-    def __init__(self, *, succeed: bool = True, raise_exc: Exception | None = None) -> None:
-        self.calls: list[dict[str, Any]] = []
-        self._succeed = succeed
-        self._raise_exc = raise_exc
-
-    async def toggle_ad(self, fb_ad_id: str, target_state: bool = True) -> dict[str, Any]:
-        self.calls.append({"fb_ad_id": fb_ad_id, "target_state": target_state})
-        if self._raise_exc is not None:
-            raise self._raise_exc
-        return {
-            "success": self._succeed,
-            "final_state": "true" if target_state else "false",
-        }
-
-
 def _stop_row(*, code: str, fb_ad_id: str) -> ScannedAdRow:
     """ScannedAdRow с метриками которые FSM должен оценить как STOP.
 
@@ -123,11 +104,12 @@ def _stop_row(*, code: str, fb_ad_id: str) -> ScannedAdRow:
     )
 
 
-# E2E: scan → FSM stop_sent → outbox disable → toggle gate → task_queue.succeeded
+# E2E: scan → FSM stop_sent → outbox pause_ad mutation → process_one_task → task_queue.succeeded → FSM disabled
 @pytest.mark.asyncio
 async def test_full_cycle_observer_to_disable_success(
     pg_engine,
     offer_e2e,
+    monkeypatch,
 ) -> None:
     fb_ad_id = f"230011{uuid.uuid4().hex[:6]}"
     row = _stop_row(code=offer_e2e["code"], fb_ad_id=fb_ad_id)
@@ -139,7 +121,7 @@ async def test_full_cycle_observer_to_disable_success(
     assert result.alerts_stop >= 1
     assert result.disable_tasks_created == 1
 
-    # Шаг 2: проверяем что в БД действительно создан outbox-task на disable
+    # Шаг 2: проверяем что в БД создана meta_api_mutation pause_ad задача
     async with pg_engine.connect() as conn:
         state_row = (
             await conn.execute(
@@ -153,7 +135,7 @@ async def test_full_cycle_observer_to_disable_success(
             await conn.execute(
                 text(
                     "SELECT id, task_type, status, payload, requested_by "
-                    "FROM task_queue WHERE task_type = 'disable' LIMIT 1"
+                    "FROM task_queue WHERE task_type = 'meta_api_mutation' LIMIT 1"
                 )
             )
         ).first()
@@ -165,22 +147,33 @@ async def test_full_cycle_observer_to_disable_success(
 
     assert task_row is not None
     initial_task_id = task_row[0]
-    assert task_row[1] == "disable"
+    assert task_row[1] == "meta_api_mutation"
     assert task_row[2] == "pending"
-    assert task_row[3]["fb_ad_id"] == fb_ad_id
+    assert task_row[3]["target_id"] == fb_ad_id
+    assert task_row[3]["mutation_kind"] == "pause_ad"
     assert task_row[4] == "bot_auto_stop"
 
-    # Шаг 3: toggle worker подхватывает задачу
-    gate = _RecordingGate(succeed=True)
-    outcome = await execute_one_toggle_task(pg_engine, task_type="disable", gate=gate)
-    assert outcome == "succeeded"
+    # Шаг 3: meta_api_worker забирает задачу и исполняет через fake dispatch_mutation
+    fake_result: dict[str, Any] = {
+        "success": True,
+        "graph_response": {"ok": True},
+        "modified_ids": [fb_ad_id],
+    }
 
-    # Шаг 4: gate реально был вызван с target_state=False для нашего ad
-    assert len(gate.calls) == 1
-    assert gate.calls[0]["fb_ad_id"] == fb_ad_id
-    assert gate.calls[0]["target_state"] is False
+    async def _fake_dispatch(client, payload):
+        return fake_result
 
-    # Шаг 5: task_queue запись финализирована
+    monkeypatch.setattr(worker_main, "dispatch_mutation", _fake_dispatch)
+
+    claim = await claim_pending_task(pg_engine)
+    assert not claim.queue_empty
+    assert claim.task is not None
+    assert claim.task.id == initial_task_id
+
+    fake_client = AsyncMock()
+    await process_one_task(pg_engine, claim.task, client=fake_client)
+
+    # Шаг 4: task_queue запись финализирована
     async with pg_engine.connect() as conn:
         final_row = (
             await conn.execute(
@@ -189,11 +182,10 @@ async def test_full_cycle_observer_to_disable_success(
             )
         ).first()
     assert final_row[0] == "succeeded"
-    assert final_row[1]["final_state"] == "false"
+    assert final_row[1]["success"] is True
     assert final_row[2] is not None
 
-    # Шаг 6: FSM-синхронизация — после успешного disable ad_alert_state должен
-    # перейти из stop_sent в disabled (исправление техдолга из CLAUDE.md).
+    # Шаг 5: FSM-синхронизация — после успешного pause_ad ad_alert_state → 'disabled'
     async with pg_engine.connect() as conn:
         fsm_after = (
             await conn.execute(
@@ -203,7 +195,7 @@ async def test_full_cycle_observer_to_disable_success(
     assert fsm_after[0] == "disabled"
 
 
-# E2E: повторный scan того же STOP-row → НЕ создаёт вторую disable task
+# E2E: повторный scan того же STOP-row → НЕ создаёт вторую meta_api_mutation задачу
 @pytest.mark.asyncio
 async def test_idempotency_repeated_scan_does_not_duplicate_disable(
     pg_engine,
@@ -212,7 +204,7 @@ async def test_idempotency_repeated_scan_does_not_duplicate_disable(
     fb_ad_id = f"230012{uuid.uuid4().hex[:6]}"
     row = _stop_row(code=offer_e2e["code"], fb_ad_id=fb_ad_id)
 
-    # Первый scan-цикл — создаёт STOP + disable task
+    # Первый scan-цикл — создаёт STOP + pause_ad mutation task
     await process_scan_rows(pg_engine, rows=[row], scan_id=1)
     # Второй scan-цикл с теми же данными — FSM stop_sent → stop_sent без emit
     await process_scan_rows(pg_engine, rows=[row], scan_id=2)
@@ -221,12 +213,18 @@ async def test_idempotency_repeated_scan_does_not_duplicate_disable(
 
     async with pg_engine.connect() as conn:
         n_tasks = (
-            await conn.execute(text("SELECT COUNT(*) FROM task_queue WHERE task_type = 'disable'"))
+            await conn.execute(
+                text(
+                    "SELECT COUNT(*) FROM task_queue "
+                    "WHERE task_type = 'meta_api_mutation' "
+                    "AND payload->>'mutation_kind' = 'pause_ad'"
+                )
+            )
         ).scalar()
         n_alerts = (await conn.execute(text("SELECT COUNT(*) FROM alert_events"))).scalar()
         n_metrics = (await conn.execute(text("SELECT COUNT(*) FROM ad_metrics"))).scalar()
 
-    # idempotency_key = "auto:disable:{fb_ad_id}:{open_state_token}" — один открытый
+    # idempotency_key = "auto:pause_ad:{fb_ad_id}:{open_state_token}" — один открытый
     # инцидент = одна задача, сколько бы раз scan не прошёл
     assert n_tasks == 1
     # alert_events создаётся только при emit_alert=True; для stop_sent → stop_sent
@@ -236,23 +234,29 @@ async def test_idempotency_repeated_scan_does_not_duplicate_disable(
     assert n_metrics == 3
 
 
-# E2E: после disable исполнения повторный scan с теми же данными не создаст
-# новый disable task (open_state_token не сменился, alert_state stop_sent остаётся).
+# E2E: после pause_ad succeeded повторный scan не создаёт новую задачу на тот же инцидент
 @pytest.mark.asyncio
 async def test_after_disable_succeeds_no_new_task_on_same_incident(
     pg_engine,
     offer_e2e,
+    monkeypatch,
 ) -> None:
     fb_ad_id = f"230013{uuid.uuid4().hex[:6]}"
     row = _stop_row(code=offer_e2e["code"], fb_ad_id=fb_ad_id)
 
-    # Полный цикл: scan → outbox → toggle succeeded
+    # Полный цикл: scan → outbox → meta_api_worker succeeded
     await process_scan_rows(pg_engine, rows=[row], scan_id=10)
-    gate = _RecordingGate(succeed=True)
-    outcome = await execute_one_toggle_task(pg_engine, task_type="disable", gate=gate)
-    assert outcome == "succeeded"
 
-    # Повторный scan с теми же STOP-метриками: FSM stop_sent → stop_sent без emit,
+    async def _fake_dispatch(client, payload):
+        return {"success": True, "graph_response": {"ok": True}}
+
+    monkeypatch.setattr(worker_main, "dispatch_mutation", _fake_dispatch)
+
+    claim = await claim_pending_task(pg_engine)
+    assert claim.task is not None
+    await process_one_task(pg_engine, claim.task, client=AsyncMock())
+
+    # Повторный scan: FSM stop_sent → stop_sent без emit,
     # open_state_token тот же → idempotency_key совпадёт → ON CONFLICT DO NOTHING.
     await process_scan_rows(pg_engine, rows=[row], scan_id=11)
 
@@ -261,7 +265,11 @@ async def test_after_disable_succeeds_no_new_task_on_same_incident(
             r[0]
             for r in (
                 await conn.execute(
-                    text("SELECT status FROM task_queue WHERE task_type = 'disable'")
+                    text(
+                        "SELECT status FROM task_queue "
+                        "WHERE task_type = 'meta_api_mutation' "
+                        "AND payload->>'mutation_kind' = 'pause_ad'"
+                    )
                 )
             ).all()
         ]
@@ -270,7 +278,7 @@ async def test_after_disable_succeeds_no_new_task_on_same_incident(
 
 
 # E2E: восстановление метрик после STOP → FSM stop_sent → normal (без emit),
-# но disable task всё ещё succeeded (исполнена).
+# но pause_ad task всё ещё succeeded (исполнена).
 @pytest.mark.asyncio
 async def test_recovery_after_stop_resets_fsm_no_new_alert(
     pg_engine,

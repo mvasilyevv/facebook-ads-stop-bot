@@ -187,11 +187,14 @@ function amBody(rows) {
         adName: 'KE_CR2_a8',
         adsetName: 'adset-1',
         campaignName: 'CR2 | KE | MV | 30.05',
+        campaignId: '120203451234560078',
         effectiveStatus: 'ACTIVE',
         budget: '$5',
     });
     strict_1.default.equal(row.fb_ad_id, '120244531696570044');
     strict_1.default.equal(row.campaign_name, 'CR2 | KE | MV | 30.05');
+    // campaign_id прокидывается в каталог (allowlist «Кампании для сканирования»).
+    strict_1.default.equal(row.campaign_id, '120203451234560078');
     strict_1.default.equal(row.delivery_status, 'ACTIVE');
     strict_1.default.equal(row.spend, '0.01');
     strict_1.default.equal(row.impressions, 8);

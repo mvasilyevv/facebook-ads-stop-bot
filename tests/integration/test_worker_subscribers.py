@@ -2,9 +2,6 @@
 """Интеграционные тесты: worker'ы реагируют на Redis pubsub-сигналы.
 
 Стратегия контракта (не тавтология):
-- Для disable_worker: запускаем РЕАЛЬНЫЙ main_loop с fakeredis + stop_event,
-  публикуем CHANNEL_RESTART → проверяем что stop_event.is_set().
-  Это E2E: реальный код воркера регистрирует реальный handler, реальный publish.
 - Для observer: используем spy на RedisPubSubListener.register, запускаем
   РЕАЛЬНЫЙ main_loop (с заглушкой gate/db), проверяем что воркер зарегистрировал
   правильные каналы. Это контракт «воркер связал канал↔handler» (не тавтология:
@@ -12,6 +9,10 @@
 - cabinet_day pubsub-плечо: handler делает форс-рескан нового дня (тот же механизм,
   что scan-now). Покрыто двумя тестами: регистрация канала (spy на register) и
   полный E2E (реальный publish → наблюдаемый повторный scan-цикл через fake gate).
+
+Тесты disable_worker/enable_worker удалены: DOM-toggle канал упразднён,
+apps.disable_worker и apps.enable_worker больше не существуют. Отключение рекламы
+выполняется исключительно через Marketing API (meta_api_worker).
 """
 
 from __future__ import annotations
@@ -30,72 +31,6 @@ def _make_fake_redis():
     import fakeredis.aioredis  # type: ignore
 
     return fakeredis.aioredis.FakeRedis(decode_responses=True)
-
-
-# ====================== Тесты disable worker (E2E) ======================
-
-
-# disable_worker: реальный main_loop — CHANNEL_RESTART доставляет stop через E2E.
-@pytest.mark.asyncio
-@pytest.mark.timeout(5)
-async def test_disable_worker_restart_contract_e2e(monkeypatch) -> None:
-    """Реальный main_loop disable_worker: publish CHANNEL_RESTART → stop_event.set().
-
-    Это E2E контракт: реальный код воркера (apps/disable_worker/main.py) регистрирует
-    реальный _on_restart handler, реальный fakeredis доставляет сообщение.
-    В отличие от старого теста — мы НЕ определяем handler локально.
-    Проверяем поведение РЕАЛЬНОГО handler'а воркера.
-    """
-    from apps.disable_worker.main import CHANNEL_RESTART, main_loop
-
-    redis_client = _make_fake_redis()
-    stop_event = asyncio.Event()
-
-    # Монкипатч _get_database_url чтобы воркер не пытался подключиться к прод-БД.
-    # toggle_loop сразу выходит т.к. stop_event будет установлен до получения task'а.
-    monkeypatch.setattr(
-        "apps.telegram_poller.main._get_database_url",
-        lambda: "postgresql+asyncpg://user:pass@127.0.0.1:9999/nonexistent",
-    )
-
-    async def _fake_redis_factory():
-        return redis_client
-
-    # Запускаем реальный main_loop в фоне.
-    # toggle_loop упадёт при попытке подключиться к БД — это ок, нам важен listener.
-    loop_task = asyncio.create_task(
-        main_loop(
-            redis_factory=_fake_redis_factory,
-            stop_event=stop_event,
-        )
-    )
-
-    # Даём listener'у время подписаться (он инициализируется в main_loop).
-    await asyncio.sleep(0.3)
-
-    # Публикуем CHANNEL_RESTART от имени publisher'а (API endpoint).
-    await redis_client.publish(CHANNEL_RESTART, json.dumps({"reason": "api_request"}))
-
-    # Ждём stop_event от РЕАЛЬНОГО handler'а воркера.
-    try:
-        await asyncio.wait_for(stop_event.wait(), timeout=2.0)
-    except asyncio.TimeoutError:
-        pytest.fail(
-            "stop_event не выставлен за 2 сек — "
-            "CHANNEL_RESTART не зарегистрирован или handler не ставит stop_event"
-        )
-
-    # Ожидаем завершения main_loop (он выйдет после stop или DB-ошибки).
-    loop_task.cancel()
-    try:
-        await loop_task
-    except (asyncio.CancelledError, Exception):
-        pass
-    finally:
-        await redis_client.aclose()
-
-    # Реальный handler воркера выставил stop_event при получении CHANNEL_RESTART.
-    assert stop_event.is_set(), "stop_event должен быть set после restart-сигнала"
 
 
 # ====================== Тесты observer worker (spy на register) ======================

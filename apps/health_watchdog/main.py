@@ -41,7 +41,8 @@ OBSERVER_STALE_AFTER_SECONDS = int(os.environ.get("HEALTH_WATCHDOG_OBSERVER_STAL
 # воркеры ещё инициализируются (Redis/БД/browser-agent) и не успели записать первый
 # heartbeat. Без задержки watchdog слал ложный «воркер не дышит» сразу при старте.
 STARTUP_GRACE_SECONDS = int(os.environ.get("HEALTH_WATCHDOG_STARTUP_GRACE_SEC", "90"))
-# Синхронизировано с воркерами, которые поднимает run.sh (+ meta_api для act_via_api).
+# Синхронизировано с воркерами, которые поднимает run.sh. meta_api — единственный канал
+# отключения/включения рекламы (pause_ad/activate_ad), поэтому обязателен в мониторинге.
 # enable_reco — реальное heartbeat-имя enable_recommendation_worker (не enable_recommendation).
 DEFAULT_EXPECTED_WORKERS = (
     "observer,telegram_poller,cleanup,reconciler,meta_api,tracker_aggregator,enable_reco"

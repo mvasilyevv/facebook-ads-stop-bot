@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
-"""Integration: observer race condition против telegram_poller / toggle_executor.
+"""Integration: observer race condition против telegram_poller / meta_api fsm_sync.
 
-Сценарий: пользователь успел кликнуть «Отключить» (state=claimed) или disable уже
-прошёл (state=disabled), но observer в параллельном цикле всё ещё видит ад в STOP-rules
+Сценарий: пользователь успел кликнуть «Отключить» (state=claimed) или
+meta_api_worker выполнил pause_ad и sync_fsm_after_mutation установил state=disabled,
+но observer в параллельном цикле всё ещё видит объявление в STOP-правилах
 и пытается записать stop_sent. Без WHERE-guard в apply_fsm_transition это
-затрёт terminal-состояние и работа disable_worker/enable_worker пойдёт ра спарой.
+затрёт терминальное состояние и reset_alert_state_after_disable_succeeded
+из core.meta_api.fsm_sync сработает некорректно.
 """
 
 from __future__ import annotations
@@ -103,7 +105,8 @@ async def test_observer_does_not_overwrite_claimed(pg_engine, offer_with_cpa) ->
         )
 
     # 3) следующий observer-scan видит ту же STOP-картинку и пробует переписать —
-    #    с WHERE-guard это no-op, state остаётся claimed
+    #    WHERE-guard в apply_fsm_transition: NOT IN ('claimed','disabled') → no-op,
+    #    state остаётся claimed (meta_api fsm_sync уже отработал)
     await process_scan_rows(pg_engine, rows=[row], scan_id=2)
 
     async with pg_engine.connect() as conn:
@@ -142,7 +145,7 @@ async def test_observer_does_not_overwrite_disabled(pg_engine, offer_with_cpa) -
             {"fbid": fb_ad_id},
         )
 
-    # observer видит всё ещё STOP — но затереть disabled нельзя
+    # observer видит всё ещё STOP — затереть disabled нельзя (терминальное состояние)
     await process_scan_rows(pg_engine, rows=[row], scan_id=11)
 
     async with pg_engine.connect() as conn:

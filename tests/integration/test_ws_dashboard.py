@@ -11,9 +11,10 @@
 - Для cleanup-теста: после disconnect задачи должны быть отменены;
   проверяем что приложение не крашит и не печатает непойманных исключений.
 
-TODO: когда disable_worker/enable_worker/telegram_poller начнут публиковать
+TODO: когда meta_api_worker/telegram_poller начнут публиковать
 в fb_agent:alert:created и fb_agent:task:changed — тесты №2 и №3 станут
 «настоящими» e2e; сейчас они проверяют сквозной маршрут через фиктивную публикацию.
+(disable_worker/enable_worker удалены — отключение рекламы через Marketing API.)
 """
 
 from __future__ import annotations
