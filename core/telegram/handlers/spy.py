@@ -49,7 +49,8 @@ async def _run_spy_pipeline_background(
         )
         return
 
-    summary = format_short_summary(pipeline_result)
+    # TG legacy Markdown: жирный — одинарные *, не ** (иначе видны буквально).
+    summary = format_short_summary(pipeline_result).replace("**", "*")
     await send_text(
         client,
         chat_id=chat_id,
@@ -63,10 +64,11 @@ async def _run_spy_pipeline_background(
         # TG limit 4096 — обрезаем если нужно
         if len(md) > 3800:
             md = md[:3800] + "\n\n_(отчёт обрезан, полный — в БД)_"
+        # TG legacy Markdown: ** → * (БД-версия markdown_report остаётся стандартной).
         await send_text(
             client,
             chat_id=chat_id,
-            text=md,
+            text=md.replace("**", "*"),
             message_thread_id=thread_id,
         )
 

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Unit-тесты core.telegram.renderer — pure-функции форматирования."""
+"""Unit-тесты core.telegram.renderer — минимал-формат алертов (pure-функции)."""
 
 from __future__ import annotations
 
@@ -38,76 +38,132 @@ def _input(stage="warning", **overrides) -> AlertRenderInput:
     return AlertRenderInput(**defaults)
 
 
-# Сценарий: WARNING рендер содержит русский prefix, человекочитаемое правило и метрики
-def test_render_warning_contains_all_fields() -> None:
-    inp = _input(stage="warning")
-    text = render_alert_text(inp)
+# WARNING: заголовок с оффером, причина читаемо, расход с $; без техн. ID и дубля ad_name
+def test_render_warning_minimal() -> None:
+    text = render_alert_text(_input(stage="warning"))
 
     assert "ПРЕДУПРЕЖДЕНИЕ" in text
     assert "⚠️" in text
-    assert "Aviator001" in text
-    assert "KE_CR2" in text
-    # Правило рендерится человекочитаемо, не сырым кодом.
-    assert "Расход без депозитов" in text
+    assert "KE_CR2" in text  # оффер в заголовке
+    assert "Расход без депозитов" in text  # причина человекочитаемо
     assert "spend_no_dep_range" not in text
-    assert "12.50" in text  # spend ($12.50)
-    assert "0.234" in text  # cpc ($0.234)
-    assert "230011223344" in text
+    assert "$12.50" in text  # расход с $
+    # Техническая ID-строка убрана из минимал-формата
+    assert "ID:" not in text
+    assert "230011223344" not in text
 
 
-# Сценарий: STOP рендер с правильным эмодзи и русским заголовком
-def test_render_stop_uses_red_emoji() -> None:
+# STOP: красный эмодзи + слово СТОП в заголовке
+def test_render_stop_head() -> None:
     text = render_alert_text(_input(stage="stop"))
     assert "🛑" in text
     assert "СТОП" in text
-    assert "Причина остановки" in text
 
 
-# Сценарий: метрики рендерятся русскими лейблами с $ для денежных
-def test_render_russian_metric_labels() -> None:
+# Метрики одной строкой: расход с $, деп/рег/клики; без сырых англ. ключей
+def test_render_metrics_line() -> None:
     text = render_alert_text(_input(stage="stop"))
-    assert "Расход: <b>$12.50</b>" in text
-    assert "Цена клика: $0.234" in text
-    assert "Клики:" in text
-    assert "Депозиты:" in text
-    # Английских сырых ключей быть не должно.
+    assert "$12.50" in text
+    assert "деп 0" in text
+    assert "рег 2" in text
+    assert "клики 50" in text
     assert "spend:" not in text
     assert "clicks:" not in text
 
 
-# Сценарий: код правила без человекочитаемого названия — fallback на сам код (не падает)
+# Причина с порогом из _hits: 'CPL $9.56 (стоп $3.00)' (точный свёрнутый порог)
+def test_render_hit_with_threshold() -> None:
+    inp = _input(
+        stage="stop",
+        matched_rule_codes=["cpl_stop"],
+        metrics={
+            "spend": Decimal("47.80"),
+            "deposits": 0,
+            "registrations": 5,
+            "clicks": 42,
+            "_hits": [{"code": "cpl_stop", "stage": "stop", "value": "9.56", "threshold": "3.00"}],
+        },
+    )
+    text = render_alert_text(inp)
+    assert "CPL $9.56 (стоп $3.00)" in text
+
+
+# _hits показываются только для своего stage (warning-hit не лезет в stop-алерт)
+def test_render_hits_filtered_by_stage() -> None:
+    inp = _input(
+        stage="stop",
+        matched_rule_codes=["cpr_stop"],
+        metrics={
+            "spend": Decimal("30.00"),
+            "deposits": 0,
+            "registrations": 3,
+            "clicks": 20,
+            "_hits": [
+                {"code": "cpr_stop", "stage": "stop", "value": "6.00", "threshold": "5.00"},
+                {"code": "cpc_stop", "stage": "warning", "value": "0.50", "threshold": "0.40"},
+            ],
+        },
+    )
+    text = render_alert_text(inp)
+    assert "CPR $6.00 (стоп $5.00)" in text
+    assert "CPC" not in text  # warning-hit отфильтрован
+
+
+# Процентное правило (spend/CPA) форматируется как % из _hits
+def test_render_hit_percent_unit() -> None:
+    inp = _input(
+        stage="stop",
+        matched_rule_codes=["spend_no_dep_range"],
+        metrics={
+            "spend": Decimal("40.00"),
+            "deposits": 0,
+            "registrations": 0,
+            "clicks": 30,
+            "_hits": [
+                {"code": "spend_no_dep_range", "stage": "stop", "value": "56", "threshold": "40"}
+            ],
+        },
+    )
+    text = render_alert_text(inp)
+    assert "Расход/CPA 56% (стоп 40%)" in text
+
+
+# Неизвестный код правила (без _hits) — fallback на сам код, не падает
 def test_render_unknown_rule_code_fallback() -> None:
     text = render_alert_text(_input(matched_rule_codes=["some_future_rule"]))
     assert "some_future_rule" in text
 
 
-# Сценарий: HTML-escape опасных символов — нельзя сломать parse через ad_name
-def test_html_escape_in_ad_name() -> None:
-    inp = _input(ad_name='Aviator<script>alert("xss")</script>')
+# HTML-escape опасных символов (через ad_name в заголовке при отсутствии оффера)
+def test_html_escape_in_title() -> None:
+    inp = _input(offer_code=None, ad_name='Aviator<script>alert("xss")</script>')
     text = render_alert_text(inp)
-    # Символы экранированы
     assert "<script>" not in text
     assert "&lt;script&gt;" in text
 
 
-# Сценарий: NULL метрики выводятся как '—', не падают
+# NULL метрики выводятся как '—', не падают
 def test_handles_none_metrics() -> None:
     inp = _input(
-        metrics={
-            "spend": None,
-            "cpc": None,
-            "ctr": None,
-            "cpm": None,
-            "clicks": None,
-            "leads": None,
-            "deposits": None,
-        },
+        metrics={"spend": None, "deposits": None, "registrations": None, "clicks": None},
     )
     text = render_alert_text(inp)
     assert "—" in text
 
 
-# Сценарий: keyboard для WARNING содержит две кнопки — Отключить и Снуз
+# Без rule_codes и без _hits — рендерим без падения (fallback-фраза)
+def test_render_without_rule_codes() -> None:
+    text = render_alert_text(_input(matched_rule_codes=[]))
+    assert "сработало стоп-правило" in text
+
+
+# Без offer_code — в заголовок попадает ad_name
+def test_render_without_offer_code() -> None:
+    text = render_alert_text(_input(offer_code=None))
+    assert "Aviator001" in text
+
+
+# keyboard для WARNING — две кнопки (Отключить + Снуз)
 def test_keyboard_has_disable_and_snooze_buttons() -> None:
     kb = render_inline_keyboard(_input(stage="warning"))
     assert kb is not None
@@ -118,7 +174,7 @@ def test_keyboard_has_disable_and_snooze_buttons() -> None:
     assert "snz" in actions
 
 
-# Сценарий: callback_data строго < 64 байт (Telegram limit)
+# callback_data строго <= 64 байт (Telegram limit)
 def test_callback_data_fits_telegram_limit() -> None:
     kb = render_inline_keyboard(_input(fb_ad_id="999999999999999"))
     for row in kb["inline_keyboard"]:
@@ -126,7 +182,7 @@ def test_callback_data_fits_telegram_limit() -> None:
             assert len(btn["callback_data"].encode("utf-8")) <= 64, btn
 
 
-# Сценарий: callback_data содержит fb_ad_id (caller должен его извлечь)
+# callback_data содержит fb_ad_id (caller извлекает)
 def test_callback_data_encodes_fb_ad_id() -> None:
     kb = render_inline_keyboard(_input(fb_ad_id="42424242"))
     dis_btn = next(
@@ -134,15 +190,3 @@ def test_callback_data_encodes_fb_ad_id() -> None:
     )
     parts = dis_btn["callback_data"].split(":")
     assert parts[1] == "42424242"
-
-
-# Сценарий: пустой список rule_codes — рендерим без падения
-def test_render_without_rule_codes() -> None:
-    text = render_alert_text(_input(matched_rule_codes=[]))
-    assert "нет деталей" in text
-
-
-# Сценарий: без offer_code — секция оффера не печатается
-def test_render_without_offer_code() -> None:
-    text = render_alert_text(_input(offer_code=None))
-    assert "Оффер:" not in text

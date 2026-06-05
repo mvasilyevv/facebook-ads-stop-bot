@@ -124,6 +124,44 @@ async def _resolve_web_app_url(engine: AsyncEngine, settings: Settings) -> str |
     return stored or settings.web_app_url
 
 
+async def _sync_bot_menu_button(engine: AsyncEngine, web_app_url: str) -> bool:
+    """Ставит Telegram Menu Button бота на актуальный web_app_url (best-effort).
+
+    cloudflared quick-tunnel меняет URL при каждом запуске, а Menu Button в Telegram
+    сам не обновляется → кнопка mini-app остаётся на мёртвом старом туннеле. Поэтому
+    при сохранении свежего URL (auto-register в run.sh дёргает этот endpoint каждый
+    запуск) сразу прописываем кнопку боту через setChatMenuButton.
+
+    Best-effort: отсутствие токена/ошибка Telegram НЕ валит сохранение URL.
+    Возвращает True, если кнопка обновлена.
+    """
+    from core.telegram.client import TelegramBotClient
+    from core.telegram.service import load_telegram_config
+
+    try:
+        cfg = await load_telegram_config(engine)
+    except Exception:
+        logger.warning("menu button: не удалось прочитать telegram_config", exc_info=True)
+        return False
+    if cfg is None or not cfg.bot_token:
+        logger.info("menu button: бот не настроен — пропускаю установку")
+        return False
+
+    client = TelegramBotClient(bot_token=cfg.bot_token)
+    try:
+        await client.set_chat_menu_button(web_app_url=web_app_url)
+        logger.info("menu button обновлён на %s", web_app_url)
+        return True
+    except Exception:
+        logger.warning("menu button: не удалось установить (url=%s)", web_app_url, exc_info=True)
+        return False
+    finally:
+        try:
+            await client.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -161,6 +199,12 @@ async def put_telegram_web_app_url(
         raise HTTPException(status_code=422, detail="Web App URL должен начинаться с https://")
 
     await save_web_app_url(engine, cleaned or None)
+
+    # Свежий URL → сразу прописываем Menu Button боту. Quick-tunnel меняется при
+    # каждом запуске; без этого кнопка в Telegram остаётся на мёртвом старом туннеле
+    # (set_chat_menu_button больше нигде не вызывается). Best-effort.
+    if cleaned:
+        await _sync_bot_menu_button(engine, cleaned)
 
     async with AsyncSession(engine) as session:
         config = await _load_config(session)

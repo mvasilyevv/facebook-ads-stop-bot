@@ -125,11 +125,11 @@ async def _handle_ask_background(
     await send_text(client, chat_id=chat_id, text=answer, message_thread_id=thread_id)
 
     drafts = extract_draft_task_ids(response.tool_calls)
-    for task_id, tool_name, result_text in drafts:
+    for task_id, _tool_name, result_text in drafts:
         try:
             await client.send_message(
                 chat_id=str(chat_id),
-                text=f"📝 Черновик #{task_id} ({tool_name}):\n{result_text}",
+                text=f"📝 Черновик #{task_id}\n{result_text}",
                 message_thread_id=thread_id,
                 reply_markup=draft_inline_keyboard(task_id),
                 parse_mode=None,
