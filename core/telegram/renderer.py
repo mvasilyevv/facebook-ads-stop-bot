@@ -1,8 +1,12 @@
 # -*- coding: utf-8 -*-
-"""Форматирование TG-сообщений для алертов observer.
+"""Форматирование TG-сообщений для алертов observer (минимал-стиль).
 
 Pure-функции без I/O — принимают данные, возвращают (text, inline_keyboard).
-Использует HTML parse_mode (это default для TelegramBotClient).
+HTML parse_mode (default для TelegramBotClient передаётся явно в dispatcher).
+
+Минимал-формат: заголовок (stage · оффер), кампания, причина(ы) с фактическим
+значением и порогом, одна строка ключевых метрик. Без дубля ad_name/adset и без
+технического ID-хвоста.
 """
 
 from __future__ import annotations
@@ -28,41 +32,57 @@ class AlertRenderInput:
     open_state_token: str | None  # для callback кнопок
 
 
-# Эмодзи маркеры — быстрый визуальный сигнал severity (русские).
-_STAGE_PREFIX = {
-    "warning": "⚠️ <b>ПРЕДУПРЕЖДЕНИЕ</b>",
-    "stop": "🛑 <b>СТОП</b>",
+# Заголовок по stage.
+_STAGE_HEAD = {
+    "warning": "⚠️ ПРЕДУПРЕЖДЕНИЕ",
+    "stop": "🛑 СТОП",
 }
 
-# Человекочитаемые названия правил (коды из core/rules/evaluator.py).
+# code правила → (короткая подпись, единица значения/порога).
+_RULE_SHORT: dict[str, tuple[str, str]] = {
+    "cpc_stop": ("CPC", "money"),
+    "cpl_stop": ("CPL", "money"),
+    "cpr_stop": ("CPR", "money"),
+    "spend_no_dep_range": ("Расход/CPA", "percent"),
+    "spend_with_dep_range": ("Расход/CPA", "percent"),
+    "frequency_anomaly": ("Частота", "ratio"),
+    "regs_no_dep_stop": ("Рег без деп", "count"),
+}
+
+# Fallback-подписи (когда нет _hits с числами — старые события).
 _RULE_LABELS = {
-    "cpc_stop": "Цена за клик (CPC) превысила порог",
-    "cpl_stop": "Цена за лид (CPL) превысила порог",
-    "cpr_stop": "Цена за регистрацию (CPR) превысила порог",
-    "spend_no_dep_range": "Расход без депозитов достиг стоп-диапазона",
-    "spend_with_dep_range": "Расход при наличии депозита превысил порог",
-    "frequency_anomaly": "Частота показов превысила порог (выгорание аудитории)",
-    "regs_no_dep_stop": "Есть регистрации, но нет депозитов",
+    "cpc_stop": "CPC превысил порог",
+    "cpl_stop": "CPL превысил порог",
+    "cpr_stop": "CPR превысил порог",
+    "spend_no_dep_range": "Расход без депозитов в стоп-зоне",
+    "spend_with_dep_range": "Расход при депозите превысил порог",
+    "frequency_anomaly": "Частота показов: выгорание аудитории",
+    "regs_no_dep_stop": "Регистрации есть, депозитов нет",
 }
 
 
-def _rule_label(code: str) -> str:
-    """Человекочитаемое название правила по коду (fallback — сам код)."""
-    return _RULE_LABELS.get(code, code)
+def _escape(s: str) -> str:
+    """HTML escape для безопасной вставки в TG-сообщение."""
+    return html.escape(s or "", quote=False)
+
+
+def _to_decimal(v: Any) -> Decimal | None:
+    if v is None:
+        return None
+    try:
+        return v if isinstance(v, Decimal) else Decimal(str(v))
+    except (ValueError, ArithmeticError):
+        return None
+
+
+def _fmt_money(v: Any) -> str:
+    d = _to_decimal(v)
+    return f"${d:.2f}" if d is not None else "—"
 
 
 def _fmt_decimal(v: Any, precision: int = 2) -> str:
-    """Decimal/float/None → '12.34' или '—'."""
-    if v is None:
-        return "—"
-    try:
-        d = v if isinstance(v, Decimal) else Decimal(str(v))
-        # quantize чтобы не выводить .000000000001 шум
-        if precision == 0:
-            return f"{int(d):,}".replace(",", " ")
-        return f"{d:.{precision}f}"
-    except (ValueError, ArithmeticError):
-        return str(v)
+    d = _to_decimal(v)
+    return f"{d:.{precision}f}" if d is not None else "—"
 
 
 def _fmt_int(v: Any) -> str:
@@ -74,64 +94,70 @@ def _fmt_int(v: Any) -> str:
         return str(v)
 
 
-def _fmt_money(v: Any, precision: int = 2) -> str:
-    """Денежная метрика → '$0.10' или '—'."""
-    s = _fmt_decimal(v, precision)
-    return s if s == "—" else f"${s}"
+def _fmt_unit(v: Any, unit: str) -> str:
+    """Значение/порог в нужной единице: money/percent/ratio/count."""
+    d = _to_decimal(v)
+    if d is None:
+        return "—"
+    if unit == "money":
+        return f"${d:.2f}"
+    if unit == "percent":
+        return f"{d:.0f}%"
+    if unit == "ratio":
+        return f"{d:.2f}"
+    if unit == "count":
+        return f"{int(d)}"
+    return f"{d}"
 
 
-def _escape(s: str) -> str:
-    """HTML escape для безопасной вставки в TG-сообщение."""
-    return html.escape(s or "", quote=False)
+def _format_hit(hit: dict[str, Any]) -> str:
+    """Одно сработавшее правило → 'CPL $9.56 (стоп $3.00)'."""
+    code = str(hit.get("code") or "")
+    short, unit = _RULE_SHORT.get(code, (code or "правило", "raw"))
+    value = _fmt_unit(hit.get("value"), unit)
+    threshold = _fmt_unit(hit.get("threshold"), unit)
+    return f"{short} {value} (стоп {threshold})"
+
+
+def _reason_lines(inp: AlertRenderInput) -> list[str]:
+    """Строки причины: из _hits с числами; fallback — текстовые подписи по кодам."""
+    hits = [
+        h
+        for h in (inp.metrics.get("_hits") or [])
+        if isinstance(h, dict) and str(h.get("stage")) == inp.stage
+    ]
+    if hits:
+        return [_escape(_format_hit(h)) for h in hits]
+    if inp.matched_rule_codes:
+        return [_escape(_RULE_LABELS.get(c, c)) for c in inp.matched_rule_codes]
+    return ["сработало стоп-правило"]
+
+
+def _metrics_line(m: dict[str, Any]) -> str:
+    """Ключевые метрики одной строкой: расход · деп · рег · клики · CTR."""
+    parts = [
+        _fmt_money(m.get("spend")),
+        f"деп {_fmt_int(m.get('deposits'))}",
+        f"рег {_fmt_int(m.get('registrations'))}",
+        f"клики {_fmt_int(m.get('clicks'))}",
+    ]
+    if m.get("ctr") is not None:
+        parts.append(f"CTR {_fmt_decimal(m.get('ctr'), 2)}%")
+    return " · ".join(parts)
 
 
 def render_alert_text(inp: AlertRenderInput) -> str:
-    """Полный текст TG-сообщения для ПРЕДУПРЕЖДЕНИЯ/СТОП (человекочитаемый, русский)."""
-    prefix = _STAGE_PREFIX.get(inp.stage, "ℹ️")
+    """Минимал-текст TG-сообщения для ПРЕДУПРЕЖДЕНИЯ/СТОП (русский, HTML)."""
+    head = _STAGE_HEAD.get(inp.stage, "ℹ️ АЛЕРТ")
+    title = inp.offer_code or inp.ad_name or "без названия"
 
-    lines = [
-        f"{prefix}",
-        f"<b>{_escape(inp.ad_name or 'без названия')}</b>",
-    ]
+    lines = [f"<b>{_escape(head)} · {_escape(title)}</b>"]
     if inp.campaign_name:
-        lines.append(f"Кампания: <i>{_escape(inp.campaign_name)}</i>")
-    if inp.adset_name:
-        lines.append(f"Адсет: <i>{_escape(inp.adset_name)}</i>")
-    if inp.offer_code:
-        lines.append(f"Оффер: <code>{_escape(inp.offer_code)}</code>")
+        lines.append(f"<i>{_escape(inp.campaign_name)}</i>")
 
     lines.append("")
-    reason_header = "Причина остановки:" if inp.stage == "stop" else "Причина предупреждения:"
-    lines.append(f"<b>{reason_header}</b>")
-    if inp.matched_rule_codes:
-        for code in inp.matched_rule_codes:
-            lines.append(f"  • {_escape(_rule_label(code))}")
-    else:
-        lines.append("  (нет деталей)")
-
-    lines.append("")
-    lines.append("<b>Метрики:</b>")
-    m = inp.metrics
-    lines.append(f"  Расход: <b>{_fmt_money(m.get('spend'))}</b>")
-    lines.append(
-        f"  Цена клика: {_fmt_money(m.get('cpc'), 3)} · "
-        f"CTR: {_fmt_decimal(m.get('ctr'), 2)}% · "
-        f"CPM: {_fmt_money(m.get('cpm'))}"
-    )
-    lines.append(
-        f"  Клики: {_fmt_int(m.get('clicks'))} · "
-        f"Просмотры лендинга: {_fmt_int(m.get('landing_page_views'))} · "
-        f"Лиды: {_fmt_int(m.get('leads'))}"
-    )
-    lines.append(
-        f"  Регистрации: {_fmt_int(m.get('registrations'))} · "
-        f"Депозиты: <b>{_fmt_int(m.get('deposits'))}</b>"
-    )
-    if m.get("frequency") is not None:
-        lines.append(f"  Частота показов: {_fmt_decimal(m.get('frequency'), 2)}")
-
-    lines.append("")
-    lines.append(f"<code>ID: {_escape(inp.fb_ad_id)}</code>")
+    lines.extend(_reason_lines(inp))
+    lines.append(_metrics_line(inp.metrics))
 
     return "\n".join(lines)
 
@@ -142,9 +168,8 @@ def render_inline_keyboard(inp: AlertRenderInput) -> dict | None:
     Callback data format: `<action>:<fb_ad_id>:<token>` где action одно из:
     - 'dis'   — отключить
     - 'snz'   — snooze на 2 часа
-    - 'clm'   — claim (взять под контроль вручную)
 
-    Telegram limit на callback_data = 64 bytes. Используем сокращения.
+    Telegram limit на callback_data = 64 bytes. Используем сокращения (token[:8]).
     """
     token_short = (inp.open_state_token or "")[:8]
     buttons: list[list[dict]] = []
@@ -167,8 +192,7 @@ def render_inline_keyboard(inp: AlertRenderInput) -> dict | None:
     return {"inline_keyboard": buttons}
 
 
-# Для совместимости с TelegramBotClient.send_message (parse_mode='Markdown' по умолчанию)
-# рекомендуется передавать parse_mode='HTML' в caller'е.
+# Caller (alert_dispatcher) передаёт parse_mode='HTML' явно.
 DEFAULT_PARSE_MODE = "HTML"
 
 

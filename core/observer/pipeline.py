@@ -31,7 +31,7 @@ from core.observer.writers import (
     upsert_catalog_hierarchy,
 )
 from core.rules.evaluator import evaluate_stop_rules
-from core.rules.types import RuleContext
+from core.rules.types import RuleContext, RuleEvaluation
 from core.scanner.models import ScannedAdRow
 
 logger = logging.getLogger(__name__)
@@ -132,6 +132,27 @@ def _row_to_metrics_dict(row: ScannedAdRow) -> dict[str, Any]:
         "landing_page_views": row.landing_page_views,
         "cost_per_landing_page_view": row.cost_per_landing_page_view,
     }
+
+
+def _hits_payload(evaluation: RuleEvaluation) -> list[dict[str, str]]:
+    """Сериализует сработавшие правила (value/threshold) для alert_events.metrics_json.
+
+    Renderer берёт отсюда точные СВЁРНУТЫЕ пороги (cpa × проценты), которые нельзя
+    восстановить из offer_rules. Кладётся ключом '_hits' в metrics_snapshot ТОЛЬКО для
+    alert-события — в ad_metrics не попадает (insert_metrics отрабатывает до обогащения).
+    """
+    out: list[dict[str, str]] = []
+    for hit in (*evaluation.stop_hits, *evaluation.warning_hits):
+        stage = hit.stage.value if hasattr(hit.stage, "value") else str(hit.stage)
+        out.append(
+            {
+                "code": hit.code,
+                "stage": stage,
+                "value": str(hit.value),
+                "threshold": str(hit.threshold),
+            }
+        )
+    return out
 
 
 async def process_scan_rows(
@@ -308,11 +329,16 @@ async def _process_one_row(
         transition = _suppress_emit(transition, reason="snoozed")
 
     # --- Persist FSM + event ---
+    # Детали сработавших правил (value/threshold) → в alert_events.metrics_json,
+    # чтобы renderer показал «CPL $9.56 (стоп $3.00)» без реконструкции свёрнутых
+    # порогов. В ad_metrics не попадает — insert_metrics уже выполнен выше.
+    hits_payload = _hits_payload(evaluation)
+    metrics_for_event = {**metrics, "_hits": hits_payload} if hits_payload else metrics
     await apply_fsm_transition(
         engine,
         ad_id=ad_id,
         transition=transition,
-        metrics_snapshot=metrics,
+        metrics_snapshot=metrics_for_event,
         scan_id=scan_id,
     )
 
