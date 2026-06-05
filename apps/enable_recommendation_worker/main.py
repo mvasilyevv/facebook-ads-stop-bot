@@ -39,6 +39,7 @@ from core.enable_reco.analyzer import (
     RecommendationDecision,
     should_recommend,
 )
+from core.observer.queries import load_scanning_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -317,6 +318,18 @@ async def run_once(
     """
     now = now or datetime.now(timezone.utc)
     thresholds = thresholds or AnalyzerThresholds()
+
+    # Асимметричный стоп: на паузе сканирования рекомендации включения бессмысленны
+    # (детекта нет, включать незащищённое объявление не нужно). Пропускаем цикл.
+    if not await load_scanning_enabled(engine):
+        return {
+            "candidates": 0,
+            "skipped_dedup": 0,
+            "skipped_decision": 0,
+            "recommendations": 0,
+            "alerts_sent": 0,
+            "skipped_paused": 1,
+        }
 
     candidates = await fetch_candidates(engine, limit=MAX_CANDIDATES_PER_CYCLE)
     counts = {

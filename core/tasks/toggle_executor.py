@@ -19,6 +19,7 @@ from typing import Any, Protocol
 
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from core.observer.queries import load_scanning_enabled
 from core.observer.writers import (
     reset_alert_state_after_disable_succeeded,
     reset_alert_state_after_enable_succeeded,
@@ -95,6 +96,13 @@ async def execute_one_toggle_task(
         raise ValueError(f"toggle worker handles only disable/enable, got {task_type!r}")
 
     target_state = task_type == "enable"  # enable=True → ON, disable=False → OFF
+
+    # Асимметричный стоп: на паузе сканирования НЕ включаем объявления (enable),
+    # но выключающие действия (disable) разрешены — они снижают риск открута.
+    # Задачу НЕ клеймим (return до claim_next_task) — она остаётся в очереди и
+    # исполнится после снятия паузы, не теряя попыток и не фейлясь.
+    if task_type == "enable" and not await load_scanning_enabled(engine):
+        return "idle"
 
     claim = await claim_next_task(engine, task_type=task_type)
     if claim.queue_empty or claim.task is None:
