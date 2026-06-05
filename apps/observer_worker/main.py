@@ -318,7 +318,6 @@ async def run_one_cycle(
                 rows=scan_out.rows,
                 scan_id=scan_id,
                 owner_tag=config.get("owner_campaign_tag"),
-                act_via_api=bool(config.get("act_via_api", False)),
             )
 
             # Доставка алертов в TG — если был хоть один emit
@@ -501,9 +500,7 @@ async def _sleep_with_runtime_refresh(
             return
         remaining -= chunk
         if remaining > 0:
-            await _publish_runtime_status(
-                redis_client, status=status, next_scan_at=next_scan_at
-            )
+            await _publish_runtime_status(redis_client, status=status, next_scan_at=next_scan_at)
 
 
 # ====================== Main loop ======================

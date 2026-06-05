@@ -807,8 +807,6 @@ if [ "$USE_SUPERVISOR" -eq 1 ]; then
 
     # Заглушки PID для проверки boot ниже — используем supervisorctl
     OBSERVER_PID=""
-    DISABLE_PID=""
-    ENABLE_PID=""
     ENABLE_RECO_PID=""
     TG_PID=""
 else
@@ -824,26 +822,10 @@ else
     append_pid "$OBSERVER_PID" "observer"
     echo -e "${GREEN}  Observer PID: $OBSERVER_PID${NC}"
 
-    # ==========================================
-    # 7. Запуск Disable Worker
-    # ==========================================
-    echo -e "${BLUE}🔴 Запускаю Disable Worker...${NC}"
-    .venv/bin/python run_disable_worker.py > "$LOG_DIR/disable_worker.log" 2>&1 &
-    DISABLE_PID=$!
-    append_pid "$DISABLE_PID" "disable_worker"
-    echo -e "${GREEN}  Disable Worker PID: $DISABLE_PID${NC}"
+    # disable/enable воркеры удалены — отключение через Marketing API (meta_api_worker).
 
     # ==========================================
-    # 8. Запуск Enable Worker
-    # ==========================================
-    echo -e "${BLUE}🟢 Запускаю Enable Worker...${NC}"
-    .venv/bin/python run_enable_worker.py > "$LOG_DIR/enable_worker.log" 2>&1 &
-    ENABLE_PID=$!
-    append_pid "$ENABLE_PID" "enable_worker"
-    echo -e "${GREEN}  Enable Worker PID: $ENABLE_PID${NC}"
-
-    # ==========================================
-    # 9. Запуск Cleanup + Reconciler воркеров
+    # 7. Запуск Cleanup + Reconciler воркеров
     # ==========================================
     echo -e "${BLUE}🧹 Запускаю Cleanup Worker...${NC}"
     .venv/bin/python run_cleanup_worker.py > "$LOG_DIR/cleanup_worker.log" 2>&1 &
@@ -1163,8 +1145,6 @@ if [ -n "${BROWSER_AGENT_PID:-}" ]; then
 fi
 if [ "$USE_SUPERVISOR" -eq 0 ]; then
     check_process_started "$OBSERVER_PID" "Observer Worker" "$LOG_DIR/observer.log" || BOOT_OK=0
-    check_process_started "$DISABLE_PID" "Disable Worker" "$LOG_DIR/disable_worker.log" || BOOT_OK=0
-    check_process_started "$ENABLE_PID" "Enable Worker" "$LOG_DIR/enable_worker.log" || BOOT_OK=0
     if [ -n "${ENABLE_RECO_PID:-}" ]; then
         check_process_started "$ENABLE_RECO_PID" "Enable Recommendation Worker" "$LOG_DIR/enable_recommendation_worker.log" || BOOT_OK=0
     fi

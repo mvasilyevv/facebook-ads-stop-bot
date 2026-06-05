@@ -162,7 +162,6 @@ async def process_scan_rows(
     scan_id: int | None = None,
     cycle_ts: datetime | None = None,
     owner_tag: str | None = None,
-    act_via_api: bool = False,
 ) -> CycleResult:
     """Один scan-цикл. Идемпотентен по (ad_id, cycle_ts) и (idempotency_key).
 
@@ -175,9 +174,6 @@ async def process_scan_rows(
                    полностью игнорируются (не пишем метрики, не оцениваем правила,
                    не дизейблим). NULL — фильтр выключен. Защита от работы с чужими
                    кампаниями в общем рекламном кабинете.
-        act_via_api: канал авто-стопа. False — disable-task (DOM-клик), True —
-                   meta_api_mutation pause_ad (Marketing API). Detect через DOM
-                   в обоих случаях, меняется только исполнение действия.
 
     Returns:
         CycleResult с метриками цикла.
@@ -214,7 +210,6 @@ async def process_scan_rows(
                 cycle_ts=cycle_ts,
                 result=result,
                 owner_tag=owner_tag,
-                act_via_api=act_via_api,
             )
         except Exception:
             logger.exception(
@@ -237,7 +232,6 @@ async def _process_one_row(
     cycle_ts: datetime,
     result: CycleResult,
     owner_tag: str | None = None,
-    act_via_api: bool = False,
 ) -> None:
     """Обработка одной строки. Вынесено отдельно ради читаемости + try/except в caller'е."""
 
@@ -354,7 +348,6 @@ async def _process_one_row(
         transition=transition,
         fb_ad_id=row.fb_ad_id,
         open_token=transition.new_open_token,
-        act_via_api=act_via_api,
     )
     if task_id is not None:
         result.disable_tasks_created += 1

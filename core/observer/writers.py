@@ -22,7 +22,6 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from core.observer.state_machine import FsmTransition
-from core.tasks import create_task
 
 logger = logging.getLogger(__name__)
 
@@ -319,14 +318,12 @@ async def maybe_create_disable_task(
     transition: FsmTransition,
     fb_ad_id: str,
     open_token: uuid.UUID | None,
-    act_via_api: bool = False,
 ) -> int | None:
-    """Если FSM решил создать stop-задачу — отправляем в task_queue (auto-stop).
+    """Если FSM решил создать stop-задачу — auto-stop через Marketing API (pause_ad).
 
-    Канал исполнения зависит от act_via_api (observer_config):
-    - False (дефолт): task_type='disable' → disable_worker → DOM-клик toggle_ad.
-    - True: task_type='meta_api_mutation' (pause_ad) → meta_api_worker → Marketing API
-      (точно по ad_id, не промахивается по кнопке). Detect остаётся через DOM.
+    Канал исполнения — только Marketing API: task_type='meta_api_mutation' (pause_ad)
+    → meta_api_worker → точно по ad_id. Detect остаётся через am_tabular (graph-канал);
+    DOM-канал отключения (toggle-клик) удалён.
 
     idempotency_key привязан к open_token инцидента — гарантирует одну задачу на
     инцидент (повторный STOP того же incident'а → UNIQUE conflict → no-op).
@@ -334,17 +331,7 @@ async def maybe_create_disable_task(
     if not transition.create_disable_task:
         return None
     token = open_token or transition.new_open_token or uuid.uuid4()
-    if act_via_api:
-        return await _create_pause_mutation(engine, fb_ad_id=fb_ad_id, token=token)
-    key = f"auto:disable:{fb_ad_id}:{token}"
-    task_id = await create_task(
-        engine,
-        task_type="disable",
-        idempotency_key=key,
-        payload={"fb_ad_id": fb_ad_id, "open_state_token": str(token)},
-        requested_by="bot_auto_stop",
-    )
-    return task_id
+    return await _create_pause_mutation(engine, fb_ad_id=fb_ad_id, token=token)
 
 
 async def _create_pause_mutation(
@@ -353,13 +340,12 @@ async def _create_pause_mutation(
     fb_ad_id: str,
     token: uuid.UUID,
 ) -> int | None:
-    """Создать meta_api_mutation pause_ad для авто-стопа (act_via_api=True).
+    """Создать meta_api_mutation pause_ad для авто-стопа.
 
     target_id = fb_ad_id (числовой Graph ID). idempotency_key привязан к token
-    инцидента — как и DOM-ветка. status='pending' (исполняется meta_api_worker'ом
-    сразу, без draft-подтверждения — это автоматический стоп бота).
+    инцидента. status='pending' (исполняется meta_api_worker'ом сразу, без
+    draft-подтверждения — это автоматический стоп бота).
     """
-    # Lazy-import: meta_api тянется только когда флаг включён.
     from core.meta_api.queue import create_mutation_task
     from core.meta_api.schemas import MetaMutationPayload
 

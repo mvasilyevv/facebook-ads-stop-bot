@@ -44,8 +44,7 @@ STARTUP_GRACE_SECONDS = int(os.environ.get("HEALTH_WATCHDOG_STARTUP_GRACE_SEC", 
 # Синхронизировано с воркерами, которые поднимает run.sh (+ meta_api для act_via_api).
 # enable_reco — реальное heartbeat-имя enable_recommendation_worker (не enable_recommendation).
 DEFAULT_EXPECTED_WORKERS = (
-    "observer,disable,enable,telegram_poller,cleanup,reconciler,"
-    "meta_api,tracker_aggregator,enable_reco"
+    "observer,telegram_poller,cleanup,reconciler,meta_api,tracker_aggregator,enable_reco"
 )
 
 OBSERVER_RUNTIME_KEY = "observer:runtime"
