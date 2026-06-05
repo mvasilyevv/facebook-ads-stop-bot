@@ -1,0 +1,649 @@
+- generic [ref=e1]:
+  - generic [ref=e28]:
+    - generic [ref=e29]:
+      - generic [ref=e30]:
+        - generic [ref=e34]:
+          - generic [ref=e35]: Пересобирайте сцену вокруг героя в
+          - link "Beeble SwitchX в SYNTX.AI" [ref=e36] [cursor=pointer]:
+            - /url: https://syntx.ai/video/beeble
+        - button [ref=e37] [cursor=pointer]:
+          - img [ref=e39]
+      - generic [ref=e41]:
+        - button [ref=e45] [cursor=pointer]:
+          - button [ref=e46]:
+            - img [ref=e47]
+          - img [ref=e49]
+        - generic [ref=e53]:
+          - link "GPT Агенты" [ref=e54] [cursor=pointer]:
+            - /url: /ru/agent
+          - link "Текст" [ref=e55] [cursor=pointer]:
+            - /url: /ru/text
+          - link "Дизайн" [ref=e56] [cursor=pointer]:
+            - /url: /ru/image
+          - link "Видео" [ref=e57] [cursor=pointer]:
+            - /url: /ru/video
+          - link "Аудио" [ref=e58] [cursor=pointer]:
+            - /url: /ru/audio
+          - link "Тул-кит" [ref=e59] [cursor=pointer]:
+            - /url: /ru/tool
+        - generic [ref=e60]:
+          - button [ref=e62] [cursor=pointer]:
+            - img [ref=e63]
+          - button [ref=e67] [cursor=pointer]:
+            - button [ref=e68]:
+              - img [ref=e69]
+          - link "2 170,6" [ref=e584] [cursor=pointer]:
+            - /url: /ru/user/tokens
+            - generic [ref=e585]:
+              - generic [ref=e586]: 2 170,6
+              - img [ref=e587]
+          - button [ref=e80] [cursor=pointer]:
+            - img [ref=e84]
+    - generic [ref=e86]:
+      - generic [ref=e88]:
+        - generic [ref=e89]:
+          - button [ref=e90] [cursor=pointer]:
+            - img [ref=e92]
+          - generic [ref=e95]:
+            - generic [ref=e96]:
+              - button [ref=e98] [cursor=pointer]:
+                - img [ref=e100]
+              - button [ref=e102] [cursor=pointer]:
+                - img [ref=e104]
+            - generic [ref=e106]:
+              - button "Чаты" [ref=e107]
+              - button "Проекты" [ref=e108] [cursor=pointer]
+            - generic [ref=e113]:
+              - button "Ранее" [ref=e114] [cursor=pointer]:
+                - generic [ref=e115]: Ранее
+                - img [ref=e116]
+              - button "Image Analysis Request" [ref=e119] [cursor=pointer]:
+                - generic [ref=e121]: Image Analysis Request
+                - button [ref=e123]:
+                  - img [ref=e124]
+              - button "Image Analysis Assistance" [ref=e127] [cursor=pointer]:
+                - generic [ref=e129]: Image Analysis Assistance
+                - button [ref=e131]:
+                  - img [ref=e132]
+              - button "Image Analysis Request" [ref=e135] [cursor=pointer]:
+                - generic [ref=e137]: Image Analysis Request
+                - button [ref=e139]:
+                  - img [ref=e140]
+        - button [ref=e142] [cursor=pointer]:
+          - img [ref=e144]
+        - button [ref=e146] [cursor=pointer]:
+          - img [ref=e148]
+      - generic [ref=e154]:
+        - generic [ref=e156]:
+          - img [ref=e160] [cursor=pointer]
+          - generic [ref=e162]:
+            - generic:
+              - img "@image1"
+              - generic [ref=e163]: "@image1"
+            - text: "Vertical 9:16 candid phone-shot video, handheld with slight natural shake, shot on a mid-range Android phone, NOT studio quality. Animate the provided image (it is already a vertical 9:16 frame; the soft blurred areas at the very top and bottom are background extension of the same stadium crowd, keep them as soft out-of-focus background). SCENE: a young Ghanaian man in a yellow-red-green Black Stars football jersey in a lively stadium crowd. He is already smiling with his right fist raised. Over the clip he looks down at his phone in his left hand, his eyes widen with joy, he pumps his raised fist once and laughs and shouts with pure happiness; people around him keep celebrating in soft focus. KEEP THESE GRAPHIC ELEMENTS FIXED AND PIXEL-STABLE the entire clip (do not redraw, do not let letters morph): the MTN MoMo notification card in the upper-right area, a yellow rounded card reading exactly \"MTN MoMo - You received GHS 260.00 from Aviator\" with a small red Aviator plane logo; keep every letter and digit identical and legible. BURNED-IN TEXT OVERLAYS (static, fixed position, crisp legible sans-serif, render exactly letter-for-letter, no gibberish): top caption in bold white with a thin black outline reading \"I deposit just GHS 10\"; bottom banner strip with dark semi-transparent background and bold yellow text reading \"GHS 10 = 20 FREE BETS on Aviator\". CAMERA: single conti"
+          - generic [ref=e164]:
+            - generic [ref=e165]:
+              - button [ref=e166] [cursor=pointer]:
+                - img [ref=e168]
+              - button [ref=e170] [cursor=pointer]:
+                - img [ref=e172]
+            - generic [ref=e174]: 04.06.2026 22:48
+        - generic [ref=e177]:
+          - generic [ref=e179]:
+            - generic [ref=e180]: Your browser does not support the video tag.
+            - generic [ref=e181] [cursor=pointer]:
+              - img [ref=e182]
+              - img [ref=e185]
+          - generic [ref=e187]:
+            - img [ref=e189]
+            - button [ref=e191] [cursor=pointer]:
+              - img [ref=e193]
+            - button [ref=e195] [cursor=pointer]:
+              - img [ref=e197]
+            - button [ref=e199] [cursor=pointer]:
+              - img [ref=e201]
+            - button [ref=e204] [cursor=pointer]:
+              - img [ref=e206]
+          - paragraph [ref=e208]: 04.06.2026 22:51
+        - generic [ref=e210]:
+          - img [ref=e214] [cursor=pointer]
+          - generic [ref=e215]:
+            - paragraph [ref=e218]: "Vertical 9:16 screen recording of the Aviator crash game mobile app, dark UI. Animate the provided image exactly: keep the same layout, same colors and the same numbers, do not redraw the interface. Raw phone screen capture look, NOT a glossy ad.SCENE: the small red plane keeps flying up along the rising red curve while the big white center multiplier ticks smoothly upward starting from \"8.7x\". After about 2 seconds a thumb tap hits the green \"CASH OUT GHS 210\" button; the button flashes a brighter green and briefly shows a \"CASHED OUT\" confirmation, locking in the win. The yellow \"Cash out to MoMo\" badge with the MTN MoMo logo in the top right gently pulses once. The plane keeps flying after the cash out.KEEP FIXED AND PIXEL-STABLE, do not distort or morph any letters or digits: the red \"Aviator\" logo top-left, the \"Cash out to MoMo\" badge with MTN MoMo logo top-right, the amount \"GHS 210\" on the button, and the bottom strip \"Deposit GHS 10 - 20 Free Bets\". Every digit and letter stays identical and legible.MOTION: only the plane, the red curve, the multiplier digits, the button state change and the badge pulse animate. No camera movement, no zoom, static phone-screen framing.TEXT RULES: render all numbers and labels exactly as in the source image, digits crisp and legible, no gibberish, correctly spelled, no extra random text, no watermarks, no brand logos other than \"Aviator\" and the MTN MoMo badge already present.AUDIO: a soft UI tap and a short positive chime on cash out, faint ambient, no music, no voice-over."
+            - button "Показать больше" [ref=e219] [cursor=pointer]:
+              - generic [ref=e220]: Показать больше
+          - generic [ref=e221]:
+            - generic [ref=e222]:
+              - button [ref=e223] [cursor=pointer]:
+                - img [ref=e225]
+              - button [ref=e227] [cursor=pointer]:
+                - img [ref=e229]
+            - generic [ref=e231]: 04.06.2026 23:48
+        - generic [ref=e234]:
+          - generic [ref=e236]:
+            - generic [ref=e237]: Your browser does not support the video tag.
+            - generic [ref=e238] [cursor=pointer]:
+              - img [ref=e239]
+              - img [ref=e242]
+          - generic [ref=e244]:
+            - img [ref=e246]
+            - button [ref=e248] [cursor=pointer]:
+              - img [ref=e250]
+            - button [ref=e252] [cursor=pointer]:
+              - img [ref=e254]
+            - button [ref=e256] [cursor=pointer]:
+              - img [ref=e258]
+            - button [ref=e261] [cursor=pointer]:
+              - img [ref=e263]
+          - paragraph [ref=e265]: 04.06.2026 23:51
+        - generic [ref=e522]:
+          - img [ref=e526] [cursor=pointer]
+          - generic [ref=e527]:
+            - paragraph [ref=e530]: "Vertical 9:16 screen recording of the Aviator crash game mobile app, dark UI. Animate the provided image exactly: keep the same layout, same colors, same text and same numbers, do not redraw the interface. Raw phone screen capture look, NOT a glossy ad.SCENE: the red plane flies smoothly up-right along the rising red curve. The big white center multiplier ticks UP only, slowly and monotonically, from \"8.7x\" to about \"9.4x\" - it must NEVER decrease and never jump around. After about 3 seconds a thumb tap hits the green \"CASH OUT GHS 210\" button; the button turns brighter green and its label changes to \"CASHED OUT\" for the rest of the clip, locking in the win. The yellow \"Cash out to MoMo\" badge with the MTN MoMo logo in the top-right gently pulses once at the cash-out. The plane keeps gliding upward afterwards.KEEP PIXEL-STABLE, do not distort, morph, flicker or re-spell any letters or digits: the red \"Aviator\" logo top-left; the yellow \"Cash out to MoMo\" badge with MTN MoMo logo top-right; the amount \"GHS 210\" on the button; the bottom strip text must read exactly \"Deposit GHS 10 - 20 Free Bets\" with the word \"Bets\" spelled correctly. Every digit and letter stays identical and legible the whole clip.MOTION: only the plane, the red curve, a gentle slow upward tick of the multiplier, the button state change and the badge pulse animate. No camera movement, no zoom, static phone-screen framing.TEXT RULES: render every label exactly as in the source image, especially \"20 Free Bets\" - never \"Tits\" or any other misspelling. Multiplier only increases. Digits crisp, no gibberish, no watermarks, no logos other than \"Aviator\" and the MTN MoMo badge.AUDIO: a soft UI tap and a short positive chime on cash out, faint ambient, no music, no voice-over."
+            - button "Показать больше" [ref=e531] [cursor=pointer]:
+              - generic [ref=e532]: Показать больше
+          - generic [ref=e533]:
+            - generic [ref=e534]:
+              - button [ref=e535] [cursor=pointer]:
+                - img [ref=e537]
+              - button [ref=e539] [cursor=pointer]:
+                - img [ref=e541]
+            - generic [ref=e543]: 05.06.2026 08:09
+        - generic [ref=e546]:
+          - generic [ref=e559]:
+            - generic [ref=e560]: Your browser does not support the video tag.
+            - generic [ref=e561] [cursor=pointer]:
+              - img [ref=e562]
+              - img [ref=e565]
+          - generic [ref=e551]:
+            - img [ref=e553]
+            - button [ref=e566] [cursor=pointer]:
+              - img [ref=e568]
+            - button [ref=e570] [cursor=pointer]:
+              - img [ref=e572]
+            - button [ref=e574] [cursor=pointer]:
+              - img [ref=e576]
+            - button [ref=e579] [cursor=pointer]:
+              - img [ref=e581]
+          - paragraph [ref=e583]: 05.06.2026 08:13
+        - generic [ref=e590]:
+          - img [ref=e594] [cursor=pointer]
+          - paragraph [ref=e598]: "Vertical 9:16 mobile screen recording of the Aviator crash game, dark UI, raw phone screen-capture look, NOT a glossy ad. Animate the provided first frame: keep the same layout, same colors, same dark background. This is a MOTION job - the text overlays will be added later in post, so do not worry about rendering perfect small text. MOTION (8 seconds, high adrenaline): the red plane ROCKETS upward along a steepening red curve toward the top-right corner, gaining speed. The big white center multiplier climbs FAST and strictly ONLY upward - monotonically increasing the entire time, from roughly \"8x\" up through \"11x\", \"14x\" - it must NEVER decrease, never reset, never jump back down. Around 5-6 seconds, at the peak, a thumb-tap ripple hits the green button: it flashes brighter green and changes from \"CASH OUT\" to \"CASHED OUT\". Immediately after, the red plane shoots off the top edge of the screen and flies away leaving a thin smoke trail - the classic Aviator fly-away moment, but the player cashed out just in time. KEEP STEADY: the \"Aviator\" logo top-left and the round badge top-right. IMPORTANT COMPOSITION: keep the BOTTOM ~14% of the frame a CLEAN, FLAT, DARK horizontal bar with NO text and NO UI elements on it - just empty dark space (a promo caption will be composited there in post). Do not draw any \"Deposit\" strip or any text along the bottom edge. Static phone framing, no camera moves, no zoom, no watermarks."
+          - generic [ref=e599]:
+            - generic [ref=e600]:
+              - button [ref=e601] [cursor=pointer]:
+                - img [ref=e603]
+              - button [ref=e605] [cursor=pointer]:
+                - img [ref=e607]
+            - generic [ref=e609]: 05.06.2026 08:27
+        - generic [ref=e612]:
+          - generic [ref=e625]:
+            - generic [ref=e626]: Your browser does not support the video tag.
+            - generic [ref=e627] [cursor=pointer]:
+              - img [ref=e628]
+              - img [ref=e631]
+          - generic [ref=e617]:
+            - img [ref=e619]
+            - button [ref=e632] [cursor=pointer]:
+              - img [ref=e634]
+            - button [ref=e636] [cursor=pointer]:
+              - img [ref=e638]
+            - button [ref=e640] [cursor=pointer]:
+              - img [ref=e642]
+            - button [ref=e645] [cursor=pointer]:
+              - img [ref=e647]
+          - paragraph [ref=e649]: 05.06.2026 08:31
+      - generic [ref=e266]:
+        - generic [ref=e268]:
+          - generic [ref=e269] [cursor=pointer]:
+            - text: Выбор модели
+            - img [ref=e270]
+          - generic [ref=e273] [cursor=pointer]:
+            - generic:
+              - combobox [ref=e275]
+              - generic [ref=e277]:
+                - img [ref=e278]
+                - generic [ref=e280]: Google Veo
+            - img [ref=e283]
+          - generic [ref=e656] [cursor=pointer]:
+            - generic:
+              - combobox [ref=e658]
+              - generic [ref=e659]: Veo Omni Flash
+            - img [ref=e662]
+          - generic [ref=e664]:
+            - generic [ref=e665]: Режим
+            - generic [ref=e666]:
+              - generic [ref=e668] [cursor=pointer]:
+                - generic:
+                  - combobox "Режим" [ref=e670]
+                  - generic [ref=e671]: References to Video
+                - img [ref=e674]
+              - generic [ref=e676]: В этом режиме должно быть от 1 до 7 изображений или 1 видео и от 1 до 5 изображений
+        - generic [ref=e678]:
+          - generic [ref=e679]:
+            - generic [ref=e680] [cursor=pointer]:
+              - img [ref=e683]
+              - paragraph [ref=e685]: Формат
+              - img [ref=e687]
+            - generic [ref=e690]:
+              - button "Сбросить" [ref=e692] [cursor=pointer]:
+                - generic [ref=e693]:
+                  - text: Сбросить
+                  - img [ref=e694]
+              - generic [ref=e697]:
+                - generic [ref=e698]: Соотношение сторон
+                - generic [ref=e701] [cursor=pointer]:
+                  - generic:
+                    - combobox "Соотношение сторон" [ref=e703]
+                    - generic [ref=e708]: 9:16
+                  - img [ref=e711]
+          - generic [ref=e713]:
+            - generic [ref=e714] [cursor=pointer]:
+              - img [ref=e716]
+              - paragraph [ref=e718]: Качество
+              - img [ref=e720]
+            - generic [ref=e723]:
+              - button "Сбросить" [ref=e725] [cursor=pointer]:
+                - generic [ref=e726]:
+                  - text: Сбросить
+                  - img [ref=e727]
+              - generic [ref=e730]:
+                - generic [ref=e731]: Улучшить качество
+                - generic [ref=e734] [cursor=pointer]:
+                  - generic:
+                    - combobox "Улучшить качество" [ref=e736]
+                    - generic [ref=e737]: 720p
+                  - img [ref=e740]
+        - generic [ref=e742]:
+          - button "Сбросить все" [ref=e743] [cursor=pointer]:
+            - generic [ref=e744]:
+              - img [ref=e745]
+              - text: Сбросить все
+          - button "Скрыть все" [ref=e747] [cursor=pointer]:
+            - generic [ref=e748]:
+              - img [ref=e749]
+              - text: Скрыть все
+      - generic [ref=e757]:
+        - generic [ref=e758]:
+          - button [ref=e760] [cursor=pointer]:
+            - img [ref=e762]
+          - generic [ref=e766]:
+            - text: Напишите ваш промпт...
+            - textbox [ref=e767]
+        - img [ref=e769]
+        - generic [ref=e771]:
+          - generic [ref=e773]: 0 / 50000
+          - generic [ref=e774]:
+            - generic [ref=e775]:
+              - button [ref=e779] [cursor=pointer]:
+                - img [ref=e780]
+              - generic [ref=e783] [cursor=pointer]:
+                - generic [ref=e785]:
+                  - generic [ref=e787]: 9:16
+                  - generic:
+                    - combobox [ref=e791]
+                    - generic: 9:16
+                - generic [ref=e793]:
+                  - generic [ref=e795]: 720p
+                  - generic:
+                    - combobox [ref=e797]
+                    - generic: 720p
+            - generic [ref=e798]:
+              - button [ref=e800] [cursor=pointer]:
+                - img [ref=e802]
+              - generic [ref=e804]:
+                - generic [ref=e805]: "28"
+                - img [ref=e806]
+              - button [disabled] [ref=e808]:
+                - img [ref=e810]
+  - generic:
+    - generic:
+      - generic:
+        - button:
+          - img
+      - generic:
+        - button "Подтвердить":
+          - generic:
+            - text: Подтвердить
+            - img
+  - dialog "Добавить файлы" [ref=e815]:
+    - generic [active] [ref=e816]:
+      - banner [ref=e817]:
+        - heading "Добавить файлы" [level=2] [ref=e818]
+        - button "Close this dialog" [ref=e819] [cursor=pointer]:
+          - img [ref=e821]
+      - generic [ref=e824]:
+        - generic [ref=e825]:
+          - paragraph [ref=e826]: Загрузите файлы или перетащите их сюда
+          - button "Загрузить файл" [ref=e827] [cursor=pointer]:
+            - generic [ref=e828]:
+              - img [ref=e829]
+              - text: Загрузить файл
+        - generic [ref=e831]:
+          - button "Сгенерированные" [ref=e832] [cursor=pointer]
+          - button "Загруженные" [ref=e833] [cursor=pointer]
+        - generic [ref=e834]:
+          - button "Все" [ref=e835] [cursor=pointer]:
+            - img [ref=e836]
+            - text: Все
+          - button "Изображения 0/7" [ref=e838] [cursor=pointer]:
+            - img [ref=e839]
+            - text: Изображения
+            - generic [ref=e841]: 0/7
+          - button "Видео 0/1" [ref=e842] [cursor=pointer]:
+            - img [ref=e843]
+            - text: Видео
+            - generic [ref=e845]: 0/1
+        - generic [ref=e847]:
+          - generic [ref=e848] [cursor=pointer]:
+            - generic:
+              - img
+            - button [ref=e849]:
+              - img [ref=e851]
+            - button [ref=e853]:
+              - img [ref=e855]
+            - img [ref=e857]
+            - generic: 00:08
+            - button [ref=e858]:
+              - img [ref=e860]
+          - generic [ref=e862] [cursor=pointer]:
+            - generic:
+              - img
+            - button [ref=e863]:
+              - img [ref=e865]
+            - button [ref=e867]:
+              - img [ref=e869]
+            - img [ref=e871]
+            - generic: 00:08
+            - button [ref=e872]:
+              - img [ref=e874]
+          - generic [ref=e876] [cursor=pointer]:
+            - generic:
+              - img
+            - button [ref=e877]:
+              - img [ref=e879]
+            - button [ref=e881]:
+              - img [ref=e883]
+            - img [ref=e885]
+            - generic: 00:08
+            - button [ref=e886]:
+              - img [ref=e888]
+          - generic [ref=e890] [cursor=pointer]:
+            - generic:
+              - img
+            - button [ref=e891]:
+              - img [ref=e893]
+            - button [ref=e895]:
+              - img [ref=e897]
+            - img [ref=e899]
+            - generic: 00:08
+            - button [ref=e900]:
+              - img [ref=e902]
+          - generic [ref=e904] [cursor=pointer]:
+            - generic:
+              - img
+            - button [ref=e905]:
+              - img [ref=e907]
+            - button [ref=e909]:
+              - img [ref=e911]
+            - img [ref=e913]
+            - generic: 00:10
+            - button [ref=e914]:
+              - img [ref=e916]
+          - generic [ref=e918] [cursor=pointer]:
+            - generic:
+              - img
+            - button [ref=e919]:
+              - img [ref=e921]
+            - button [ref=e923]:
+              - img [ref=e925]
+            - img [ref=e927]
+            - button [ref=e928]:
+              - img [ref=e930]
+          - generic [ref=e932] [cursor=pointer]:
+            - generic:
+              - img
+            - button [ref=e933]:
+              - img [ref=e935]
+            - button [ref=e937]:
+              - img [ref=e939]
+            - img [ref=e941]
+            - button [ref=e942]:
+              - img [ref=e944]
+          - generic [ref=e946] [cursor=pointer]:
+            - generic:
+              - img
+            - button [ref=e947]:
+              - img [ref=e949]
+            - button [ref=e951]:
+              - img [ref=e953]
+            - img [ref=e955]
+            - button [ref=e956]:
+              - img [ref=e958]
+          - generic [ref=e960] [cursor=pointer]:
+            - generic:
+              - img
+            - button [ref=e961]:
+              - img [ref=e963]
+            - button [ref=e965]:
+              - img [ref=e967]
+            - img [ref=e969]
+            - button [ref=e970]:
+              - img [ref=e972]
+          - generic [ref=e974] [cursor=pointer]:
+            - generic:
+              - img
+            - button [ref=e975]:
+              - img [ref=e977]
+            - button [ref=e979]:
+              - img [ref=e981]
+            - img [ref=e983]
+            - button [ref=e984]:
+              - img [ref=e986]
+          - generic [ref=e988] [cursor=pointer]:
+            - generic:
+              - img
+            - button [ref=e989]:
+              - img [ref=e991]
+            - button [ref=e993]:
+              - img [ref=e995]
+            - img [ref=e997]
+            - button [ref=e998]:
+              - img [ref=e1000]
+          - generic [ref=e1002] [cursor=pointer]:
+            - generic:
+              - img
+            - button [ref=e1003]:
+              - img [ref=e1005]
+            - button [ref=e1007]:
+              - img [ref=e1009]
+            - img [ref=e1011]
+            - button [ref=e1012]:
+              - img [ref=e1014]
+          - generic [ref=e1016] [cursor=pointer]:
+            - generic:
+              - img
+            - button [ref=e1017]:
+              - img [ref=e1019]
+            - button [ref=e1021]:
+              - img [ref=e1023]
+            - img [ref=e1025]
+            - button [ref=e1026]:
+              - img [ref=e1028]
+          - generic [ref=e1030] [cursor=pointer]:
+            - generic:
+              - img
+            - button [ref=e1031]:
+              - img [ref=e1033]
+            - button [ref=e1035]:
+              - img [ref=e1037]
+            - img [ref=e1039]
+            - button [ref=e1040]:
+              - img [ref=e1042]
+          - generic [ref=e1044] [cursor=pointer]:
+            - generic:
+              - img
+            - button [ref=e1045]:
+              - img [ref=e1047]
+            - button [ref=e1049]:
+              - img [ref=e1051]
+            - img [ref=e1053]
+            - button [ref=e1054]:
+              - img [ref=e1056]
+          - generic [ref=e1058] [cursor=pointer]:
+            - generic:
+              - img
+            - button [ref=e1059]:
+              - img [ref=e1061]
+            - button [ref=e1063]:
+              - img [ref=e1065]
+            - img [ref=e1067]
+            - button [ref=e1068]:
+              - img [ref=e1070]
+          - generic [ref=e1072] [cursor=pointer]:
+            - generic:
+              - img
+            - button [ref=e1073]:
+              - img [ref=e1075]
+            - button [ref=e1077]:
+              - img [ref=e1079]
+            - img [ref=e1081]
+            - button [ref=e1082]:
+              - img [ref=e1084]
+          - generic [ref=e1086] [cursor=pointer]:
+            - generic:
+              - img
+            - button [ref=e1087]:
+              - img [ref=e1089]
+            - button [ref=e1091]:
+              - img [ref=e1093]
+            - img [ref=e1095]
+            - button [ref=e1096]:
+              - img [ref=e1098]
+          - generic [ref=e1100] [cursor=pointer]:
+            - generic:
+              - img
+            - button [ref=e1101]:
+              - img [ref=e1103]
+            - button [ref=e1105]:
+              - img [ref=e1107]
+            - img [ref=e1109]
+            - button [ref=e1110]:
+              - img [ref=e1112]
+          - generic [ref=e1114] [cursor=pointer]:
+            - generic:
+              - img
+            - button [ref=e1115]:
+              - img [ref=e1117]
+            - button [ref=e1119]:
+              - img [ref=e1121]
+            - img [ref=e1123]
+            - button [ref=e1124]:
+              - img [ref=e1126]
+          - generic [ref=e1128] [cursor=pointer]:
+            - generic:
+              - img
+            - button [ref=e1129]:
+              - img [ref=e1131]
+            - button [ref=e1133]:
+              - img [ref=e1135]
+            - img [ref=e1137]
+            - button [ref=e1138]:
+              - img [ref=e1140]
+          - generic [ref=e1142] [cursor=pointer]:
+            - generic:
+              - img
+            - button [ref=e1143]:
+              - img [ref=e1145]
+            - button [ref=e1147]:
+              - img [ref=e1149]
+            - img [ref=e1151]
+            - button [ref=e1152]:
+              - img [ref=e1154]
+          - generic [ref=e1156] [cursor=pointer]:
+            - generic:
+              - img
+            - button [ref=e1157]:
+              - img [ref=e1159]
+            - button [ref=e1161]:
+              - img [ref=e1163]
+            - img [ref=e1165]
+            - button [ref=e1166]:
+              - img [ref=e1168]
+          - generic [ref=e1170] [cursor=pointer]:
+            - generic:
+              - img
+            - button [ref=e1171]:
+              - img [ref=e1173]
+            - button [ref=e1175]:
+              - img [ref=e1177]
+            - img [ref=e1179]
+            - button [ref=e1180]:
+              - img [ref=e1182]
+          - generic [ref=e1184] [cursor=pointer]:
+            - generic:
+              - img
+            - button [ref=e1185]:
+              - img [ref=e1187]
+            - button [ref=e1189]:
+              - img [ref=e1191]
+            - img [ref=e1193]
+            - button [ref=e1194]:
+              - img [ref=e1196]
+          - generic [ref=e1198] [cursor=pointer]:
+            - generic:
+              - img
+            - button [ref=e1199]:
+              - img [ref=e1201]
+            - button [ref=e1203]:
+              - img [ref=e1205]
+            - img [ref=e1207]
+            - button [ref=e1208]:
+              - img [ref=e1210]
+          - generic [ref=e1212] [cursor=pointer]:
+            - generic:
+              - img
+            - button [ref=e1213]:
+              - img [ref=e1215]
+            - button [ref=e1217]:
+              - img [ref=e1219]
+            - img [ref=e1221]
+            - button [ref=e1222]:
+              - img [ref=e1224]
+          - generic [ref=e1226] [cursor=pointer]:
+            - generic:
+              - img
+            - button [ref=e1227]:
+              - img [ref=e1229]
+            - button [ref=e1231]:
+              - img [ref=e1233]
+            - img [ref=e1235]
+            - button [ref=e1236]:
+              - img [ref=e1238]
+          - generic [ref=e1240] [cursor=pointer]:
+            - generic:
+              - img
+            - button [ref=e1241]:
+              - img [ref=e1243]
+            - button [ref=e1245]:
+              - img [ref=e1247]
+            - img [ref=e1249]
+            - button [ref=e1250]:
+              - img [ref=e1252]
+          - generic [ref=e1254] [cursor=pointer]:
+            - generic:
+              - img
+            - button [ref=e1255]:
+              - img [ref=e1257]
+            - button [ref=e1259]:
+              - img [ref=e1261]
+            - img [ref=e1263]
+            - button [ref=e1264]:
+              - img [ref=e1266]
+      - contentinfo [ref=e1268]:
+        - generic [ref=e1269]:
+          - button "Отменить" [ref=e1270] [cursor=pointer]:
+            - generic [ref=e1271]: Отменить
+          - button "Добавить" [disabled] [ref=e1272]:
+            - generic [ref=e1273]:
+              - text: Добавить
+              - img [ref=e1274]
