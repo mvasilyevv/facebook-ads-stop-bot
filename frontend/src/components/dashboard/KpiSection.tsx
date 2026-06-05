@@ -70,6 +70,12 @@ export function KpiSection({ stats, isLoading, isError, error, onRetry }: KpiSec
           hint="сейчас"
         />
         <KPICard
+          variant="muted"
+          label="Отключено"
+          value={formatInt(stats.ads_in_disabled)}
+          hint="выключены автостопом"
+        />
+        <KPICard
           variant={incidents > 0 ? "danger" : "info"}
           label="Активные инциденты"
           value={formatInt(incidents)}

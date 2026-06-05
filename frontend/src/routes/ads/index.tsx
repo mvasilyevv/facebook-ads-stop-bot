@@ -30,6 +30,7 @@ import { Skeleton } from "@/components/ui/Skeleton";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { toast } from "@/components/ui/Toast";
 import { useAds, useCreateDisableTask } from "@/lib/api/ads";
+import { useRealtimeInvalidation } from "@/lib/websocket/useRealtimeInvalidation";
 import { formatSpend, formatRelativeTime } from "@/lib/utils/format";
 import { ALERT_STATE_LABELS } from "@/lib/constants/states";
 import { cn } from "@/lib/utils/cn";
@@ -62,6 +63,9 @@ function sortNum(v: number | string | null | undefined): number {
 
 function AdsPage() {
   const navigate = useNavigate();
+
+  // Live-обновление: после скана/алерта WS инвалидирует список — без ручного рефреша.
+  useRealtimeInvalidation();
 
   // ─── Состояние фильтров ──────────────────────────────────────────────────
   const [search, setSearch] = useState("");
