@@ -260,8 +260,12 @@ export interface AmScanResult {
 export async function listOwnerCampaigns(
   page: Page,
   ownerTag: string,
+  sessionId: string,
 ): Promise<Array<{ id: string; name: string }>> {
-  const ctx = await extractGraphContext(page);
+  // acquireGraphContext: cache-hit по sessionId (токен из последнего скана observer'а),
+  // при miss — сам сделает reload для сниффа. Это надёжнее extractGraphContext, который
+  // на статичной странице падал «нет запросов к adsmanager-graph».
+  const { ctx } = await acquireGraphContext(page, sessionId);
   const campRes = await fetchAllEdge(page, ctx, GRAPH_REST_ORIGIN, 'campaigns', ['id', 'name'], []);
   const items = ownerTag
     ? campRes.items.filter((c) => campaignMatchesOwner(c.name ?? '', ownerTag))

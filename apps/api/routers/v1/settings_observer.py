@@ -254,6 +254,8 @@ async def refresh_observer_campaigns(
     )
     try:
         await client.start()
+        # НЕ создаём новую сессию: browser-agent сам возьмёт активную ads-сессию observer'а
+        # (getPreferredSession) с кешированным graph-токеном — иначе токен не извлекался.
         campaigns = await client.list_campaigns(owner_tag=owner_tag or "")
     except grpc.RpcError as exc:
         raise HTTPException(status_code=503, detail=f"browser-agent недоступен: {exc}") from exc

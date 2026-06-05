@@ -719,13 +719,11 @@ async function hardReloadPageHandler(call: any, callback: any) {
 
 async function listCampaignsHandler(call: any, callback: any) {
   try {
-    const session = sessionManager.getSession(call.request.session_id);
-    if (!session) {
-      callback({ code: grpc.status.NOT_FOUND, message: 'session not found' });
-      return;
-    }
-    const page = getPage(session, call.request.page_id);
-    const campaigns = await listOwnerCampaigns(page, call.request.owner_tag ?? '');
+    // Берём активную ads-сессию observer'а (с кешированным graph-токеном), а не создаём
+    // новую — у свежей сессии нет истории запросов и токен не извлекался.
+    const session = sessionManager.getPreferredSession();
+    const page = getPage(session);
+    const campaigns = await listOwnerCampaigns(page, call.request.owner_tag ?? '', session.id);
     callback(null, { campaigns });
   } catch (err: any) {
     callback({ code: grpcCodeForError(err), message: String(err?.message ?? err) });

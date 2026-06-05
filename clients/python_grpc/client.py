@@ -276,14 +276,15 @@ class BrowserAgentClient:
     async def list_campaigns(self, *, owner_tag: str = "") -> list[dict[str, str]]:
         """Live-список кампаний по owner_tag (через Graph campaigns edge, мимо allowlist).
 
-        Возвращает [{"id": ..., "name": ...}, ...]. При ошибке/отсутствии сессии —
-        пустой список (не бросает): вызывающий покажет «не удалось обновить».
+        Возвращает [{"id": ..., "name": ...}, ...]. При ошибке — пустой список (не
+        бросает). session_id не требуется: browser-agent сам берёт активную ads-сессию
+        observer'а (getPreferredSession) с кешированным graph-токеном.
         """
-        if not self._scanner_stub or not self._session_id:
-            logger.warning("list_campaigns: нет активной сессии browser-agent")
+        if not self._scanner_stub:
+            logger.warning("list_campaigns: нет gRPC-канала browser-agent")
             return []
         req = scanner_pb2.ListCampaignsRequest(
-            session_id=self._session_id,
+            session_id=self._session_id or "",
             owner_tag=owner_tag or "",
         )
         try:
