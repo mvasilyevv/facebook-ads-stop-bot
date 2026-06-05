@@ -50,6 +50,7 @@ from core.meta_api.errors import (
 from core.meta_api.fsm_sync import sync_fsm_after_mutation
 from core.meta_api.mutations import dispatch_mutation
 from core.meta_api.mutations.create_campaign import CreateCampaignPartialError
+from core.meta_api.ownership import check_mutation_ownership, load_owner_tag
 from core.meta_api.queue import (
     claim_pending_task,
     mark_task_failed,
@@ -244,6 +245,48 @@ async def process_one_task(
                 "meta_api: task id=%s (%s) отменена — пауза дольше лимита попыток",
                 task.id,
                 payload.mutation_kind,
+            )
+        return
+
+    # Owner-scoping на исполнении: last-line-of-defense против действий с ЧУЖИМИ
+    # объявлениями в шаренном кабинете. Резолвим target → campaign_name из каталога
+    # и сверяем owner_tag. Строгая политика: чужое не трогаем (permanent fail); своё,
+    # но ещё не в каталоге (скан отстал) — ВЫКЛЮЧАЮЩИЕ в requeue (скан догонит),
+    # ВКЛЮЧАЮЩИЕ в fail. owner_tag пуст → гейт пропускает всё (фильтр выключен).
+    owner_tag = await load_owner_tag(engine)
+    ownership = await check_mutation_ownership(engine, payload, owner_tag=owner_tag)
+    if not ownership.allowed:
+        if ownership.not_found and not _is_activating_mutation(payload):
+            retried = await requeue_task(
+                engine, task=task, error=f"owner_scoping_not_found: {ownership.reason}"
+            )
+            if retried:
+                logger.info(
+                    "meta_api: task id=%s отложена — цель не в каталоге, скан догонит (%s)",
+                    task.id,
+                    ownership.reason,
+                )
+            else:
+                logger.warning(
+                    "meta_api: task id=%s owner_scoping not_found — исчерпаны попытки: %s",
+                    task.id,
+                    ownership.reason,
+                )
+            return
+        applied = await mark_task_failed(
+            engine, task_id=task.id, error=f"owner_scoping_reject: {ownership.reason}"
+        )
+        if applied:
+            logger.warning(
+                "meta_api: task id=%s ОТКЛОНЕНА owner-scoping (чужое/неизвестное): %s foreign=%s",
+                task.id,
+                ownership.reason,
+                ownership.foreign_ids,
+            )
+        else:
+            logger.warning(
+                "meta_api: task id=%s owner_scoping mark_failed не применился — гонка",
+                task.id,
             )
         return
 
