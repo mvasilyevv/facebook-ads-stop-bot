@@ -31,7 +31,7 @@ function setup() {
 }
 
 function invalidatedKeys(spy: ReturnType<typeof setup>): string[] {
-  return spy.mock.calls.map((c) => (c[0] as { queryKey: string[] }).queryKey[0]);
+  return spy.mock.calls.map((c) => String((c[0] as { queryKey: unknown[] }).queryKey[0]));
 }
 
 describe("useRealtimeInvalidation", () => {
