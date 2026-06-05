@@ -1,0 +1,259 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e28]:
+    - generic [ref=e29]:
+      - generic [ref=e30]:
+        - generic [ref=e441]:
+          - generic [ref=e442]: Создавайте цельные видео из текста и фото в
+          - link "Gemini Omni Flash в SYNTX.AI" [ref=e443] [cursor=pointer]:
+            - /url: https://syntx.ai/video/veo3
+        - button [ref=e37] [cursor=pointer]:
+          - img [ref=e39]
+      - generic [ref=e41]:
+        - button [ref=e45] [cursor=pointer]:
+          - button [ref=e46]:
+            - img [ref=e47]
+          - img [ref=e49]
+        - generic [ref=e53]:
+          - link "GPT Агенты" [ref=e54] [cursor=pointer]:
+            - /url: /ru/agent
+          - link "Текст" [ref=e55] [cursor=pointer]:
+            - /url: /ru/text
+          - link "Дизайн" [ref=e56] [cursor=pointer]:
+            - /url: /ru/image
+          - link "Видео" [ref=e57] [cursor=pointer]:
+            - /url: /ru/video
+          - link "Аудио" [ref=e58] [cursor=pointer]:
+            - /url: /ru/audio
+          - link "Тул-кит" [ref=e59] [cursor=pointer]:
+            - /url: /ru/tool
+        - generic [ref=e60]:
+          - button [ref=e62] [cursor=pointer]:
+            - img [ref=e63]
+          - button [ref=e67] [cursor=pointer]:
+            - button [ref=e68]:
+              - img [ref=e69]
+          - link "2 388,4" [ref=e74] [cursor=pointer]:
+            - /url: /ru/user/tokens
+            - generic [ref=e75]:
+              - generic [ref=e76]: 2 388,4
+              - img [ref=e77]
+          - button [ref=e80] [cursor=pointer]:
+            - img [ref=e84]
+    - generic [ref=e86]:
+      - generic [ref=e88]:
+        - generic [ref=e89]:
+          - button [ref=e90] [cursor=pointer]:
+            - img [ref=e92]
+          - generic [ref=e95]:
+            - generic [ref=e445]:
+              - textbox "Поиск..." [ref=e446]
+              - button [ref=e448] [cursor=pointer]:
+                - img [ref=e450]
+            - generic [ref=e106]:
+              - button "Чаты" [ref=e107]
+              - button "Проекты" [ref=e108] [cursor=pointer]
+            - generic [ref=e113]:
+              - button "Сегодня" [ref=e114] [cursor=pointer]:
+                - generic [ref=e115]: Сегодня
+                - img [ref=e116]
+              - button "Image Analysis Request" [ref=e119] [cursor=pointer]:
+                - generic [ref=e121]: Image Analysis Request
+                - button [ref=e123]:
+                  - img [ref=e124]
+              - button "Image Analysis Assistance" [ref=e127] [cursor=pointer]:
+                - generic [ref=e129]: Image Analysis Assistance
+                - button [ref=e131]:
+                  - img [ref=e132]
+              - button "Image Analysis Request" [ref=e135] [cursor=pointer]:
+                - generic [ref=e137]: Image Analysis Request
+                - button [ref=e139]:
+                  - img [ref=e140]
+        - button [ref=e142] [cursor=pointer]:
+          - img [ref=e144]
+        - button [ref=e146] [cursor=pointer]:
+          - img [ref=e148]
+      - generic [ref=e153]:
+        - generic [ref=e154]:
+          - generic [ref=e156]:
+            - img [ref=e160] [cursor=pointer]
+            - generic [ref=e162]:
+              - generic:
+                - img "@image1"
+                - generic [ref=e163]: "@image1"
+              - text: "Vertical 9:16 candid phone-shot video, handheld with slight natural shake, shot on a mid-range Android phone, NOT studio quality. Animate the provided image (it is already a vertical 9:16 frame; the soft blurred areas at the very top and bottom are background extension of the same stadium crowd, keep them as soft out-of-focus background). SCENE: a young Ghanaian man in a yellow-red-green Black Stars football jersey in a lively stadium crowd. He is already smiling with his right fist raised. Over the clip he looks down at his phone in his left hand, his eyes widen with joy, he pumps his raised fist once and laughs and shouts with pure happiness; people around him keep celebrating in soft focus. KEEP THESE GRAPHIC ELEMENTS FIXED AND PIXEL-STABLE the entire clip (do not redraw, do not let letters morph): the MTN MoMo notification card in the upper-right area, a yellow rounded card reading exactly \"MTN MoMo - You received GHS 260.00 from Aviator\" with a small red Aviator plane logo; keep every letter and digit identical and legible. BURNED-IN TEXT OVERLAYS (static, fixed position, crisp legible sans-serif, render exactly letter-for-letter, no gibberish): top caption in bold white with a thin black outline reading \"I deposit just GHS 10\"; bottom banner strip with dark semi-transparent background and bold yellow text reading \"GHS 10 = 20 FREE BETS on Aviator\". CAMERA: single conti"
+            - generic [ref=e164]:
+              - generic [ref=e165]:
+                - button [ref=e166] [cursor=pointer]:
+                  - img [ref=e168]
+                - button [ref=e170] [cursor=pointer]:
+                  - img [ref=e172]
+              - generic [ref=e174]: 04.06.2026 22:48
+          - generic [ref=e177]:
+            - generic [ref=e179]:
+              - generic [ref=e180]: Your browser does not support the video tag.
+              - generic [ref=e181] [cursor=pointer]:
+                - img [ref=e182]
+                - img [ref=e185]
+            - generic [ref=e187]:
+              - img [ref=e189]
+              - button [ref=e191] [cursor=pointer]:
+                - img [ref=e193]
+              - button [ref=e195] [cursor=pointer]:
+                - img [ref=e197]
+              - button [ref=e199] [cursor=pointer]:
+                - img [ref=e201]
+              - button [ref=e204] [cursor=pointer]:
+                - img [ref=e206]
+            - paragraph [ref=e208]: 04.06.2026 22:51
+        - button [ref=e931] [cursor=pointer]:
+          - img [ref=e933]
+      - generic [ref=e209]:
+        - generic [ref=e211]:
+          - generic [ref=e212] [cursor=pointer]:
+            - text: Выбор модели
+            - img [ref=e213]
+          - generic [ref=e216] [cursor=pointer]:
+            - generic:
+              - combobox [ref=e218]
+              - generic [ref=e220]:
+                - img [ref=e221]
+                - generic [ref=e223]: Seedance
+            - img [ref=e226]
+          - generic [ref=e231] [cursor=pointer]:
+            - generic:
+              - combobox [ref=e233]
+              - generic [ref=e234]: "2.0"
+            - img [ref=e237]
+          - alert [ref=e239]:
+            - paragraph [ref=e241]: "Рекомендуемая длина промпта: до 1000 слов. Если запрос слишком длинный, Seedance 2.0 может снизить точность и пропустить часть деталей."
+        - generic [ref=e245]:
+          - generic [ref=e246]:
+            - generic [ref=e247] [cursor=pointer]:
+              - img [ref=e250]
+              - paragraph [ref=e252]: Качество
+              - img [ref=e254]
+            - generic [ref=e257]:
+              - button "Сбросить" [ref=e259] [cursor=pointer]:
+                - generic [ref=e260]:
+                  - text: Сбросить
+                  - img [ref=e261]
+              - generic [ref=e263]:
+                - generic [ref=e264]:
+                  - generic [ref=e265]: Разрешение
+                  - generic [ref=e268] [cursor=pointer]:
+                    - generic:
+                      - combobox "Разрешение" [ref=e270]
+                      - generic [ref=e271]: 720p
+                    - img [ref=e274]
+                - generic [ref=e276]:
+                  - generic [ref=e277]: Режим
+                  - generic [ref=e280] [cursor=pointer]:
+                    - generic:
+                      - combobox "Режим" [ref=e282]
+                      - generic [ref=e283]: Pro
+                    - img [ref=e286]
+          - generic [ref=e288]:
+            - generic [ref=e289] [cursor=pointer]:
+              - img [ref=e292]
+              - paragraph [ref=e294]: Формат
+              - img [ref=e296]
+            - generic [ref=e299]:
+              - button "Сбросить" [ref=e301] [cursor=pointer]:
+                - generic [ref=e302]:
+                  - text: Сбросить
+                  - img [ref=e303]
+              - generic [ref=e306]:
+                - generic [ref=e307]: Соотношение сторон
+                - generic [ref=e310] [cursor=pointer]:
+                  - generic:
+                    - combobox "Соотношение сторон" [ref=e312]
+                    - generic [ref=e317]: 9:16
+                  - img [ref=e320]
+          - generic [ref=e322]:
+            - generic [ref=e323] [cursor=pointer]:
+              - img [ref=e326]
+              - paragraph [ref=e328]: Параметры генерации
+              - img [ref=e330]
+            - generic [ref=e333]:
+              - button "Сбросить" [ref=e335] [cursor=pointer]:
+                - generic [ref=e336]:
+                  - text: Сбросить
+                  - img [ref=e337]
+              - generic [ref=e339]:
+                - generic [ref=e340]:
+                  - generic [ref=e342]:
+                    - generic [ref=e343]: Длительность
+                    - textbox [ref=e346]: "8"
+                  - slider "Длительность 8" [ref=e351] [cursor=pointer]
+                - generic [ref=e353]:
+                  - generic [ref=e355]: Аудио
+                  - generic [ref=e357]:
+                    - switch "Аудио" [checked]
+        - generic [ref=e361]:
+          - button "Сбросить все" [ref=e362] [cursor=pointer]:
+            - generic [ref=e363]:
+              - img [ref=e364]
+              - text: Сбросить все
+          - button "Скрыть все" [ref=e366] [cursor=pointer]:
+            - generic [ref=e367]:
+              - img [ref=e368]
+              - text: Скрыть все
+      - generic [ref=e378]:
+        - generic [ref=e941]:
+          - img "Preview" [ref=e943]
+          - img [ref=e945]
+          - button [ref=e947] [cursor=pointer]:
+            - img [ref=e948]
+        - generic [ref=e379]:
+          - button [ref=e381] [cursor=pointer]:
+            - img [ref=e452]
+          - generic [ref=e387]:
+            - text: Напишите ваш промпт...
+            - textbox [ref=e388]:
+              - generic:
+                - generic:
+                  - generic:
+                    - generic:
+                      - img
+                  - generic [ref=e950]: "@image1"
+        - img [ref=e390]
+        - generic [ref=e392]:
+          - generic [ref=e394]: 7 / 35000
+          - generic [ref=e395]:
+            - generic [ref=e396]:
+              - button [ref=e953] [cursor=pointer]:
+                - img [ref=e954]
+              - generic [ref=e404] [cursor=pointer]:
+                - generic [ref=e406]:
+                  - generic [ref=e408]: 9:16
+                  - generic:
+                    - combobox [ref=e412]
+                    - generic: 9:16
+                - generic [ref=e414]:
+                  - generic [ref=e416]: 720p
+                  - generic:
+                    - combobox [ref=e418]
+                    - generic: 720p
+                - generic [ref=e420]:
+                  - generic [ref=e422]: 8с
+                  - generic:
+                    - combobox [ref=e424]
+                    - generic: 8 секунд
+            - generic [ref=e425]:
+              - button [ref=e427] [cursor=pointer]:
+                - img [ref=e429]
+              - generic [ref=e431]:
+                - generic [ref=e432]: 72,6
+                - img [ref=e433]
+              - button [ref=e435] [cursor=pointer]:
+                - img [ref=e437]
+  - generic:
+    - generic:
+      - generic:
+        - button:
+          - img
+      - generic:
+        - button "Подтвердить":
+          - generic:
+            - text: Подтвердить
+            - img

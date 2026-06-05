@@ -21,8 +21,13 @@ __pycache__/
 *.sln
 *.swp
 
-# Вспомогательные папки ИИ и агентов
-.claude/
+# Вспомогательные папки ИИ и агентов.
+# .claude/agents/ (определения субагентов) и .claude/skills/ (симлинки на
+# .agents/skills/) ВЕРСИОНИРУЕМ — это проектные инструкции. Локальное
+# (settings.local.json, plans/, worktrees/) остаётся в игноре.
+.claude/*
+!.claude/agents/
+!.claude/skills/
 .claude-flow/
 .omc/
 .mcp.json
@@ -79,6 +84,5 @@ data/competitor_refs/
 /*.jpg
 /*.jpeg
 
-# Локальные MCP-конфиги браузера (recon/syntx tooling) + snap-дампы
+# Локальные MCP-конфиги браузера (recon/syntx tooling)
 data/*mcp*.json
-data/_syntx_snap*.md
