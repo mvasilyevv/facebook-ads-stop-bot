@@ -95,5 +95,54 @@ references:
     why: "Скейл ×5. «Legendary Aviator flight simulator now on your phone, cool bonuses daily». Casual app-постер, мягкая подача."
 
 
-# ---------------- Креативы (появятся после разведки + плана батча) ------------
-creatives: []
+# ---------------- Креативы (батч #01, Sora + reference) ------------
+creatives:
+  - code: GH_AVI_CR001
+    format: static
+    file: "data/syntx_out/GH_AVI_batch01/CR001_sora_gen1.jpg"
+    visual_hooks: [gh_momo_payout, gh_low_entry, gh_pidgin_touch]
+    angle: "1 | Proof Post / MoMo payout"
+    inspired_by: ref_KE_CR005
+    status: ready
+    verdict: testing
+    note: "Sora + ref KE_CR005 (формула чемпиона). Локализован GH: MTN MoMo, GHS 240, Pidgin, Aviator, бонус 20 free bets, не-iPhone. Формат живого FB-поста."
+
+  - code: GH_AVI_CR002
+    format: static
+    file: "data/syntx_out/GH_AVI_batch01/CR002_v2.jpg"
+    visual_hooks: [gh_low_entry, gh_momo_payout, avi_freebets]
+    angle: "2 | Before/After MoMo + Free Bets"
+    inspired_by: ref_GH_CR005
+    status: ready
+    verdict: testing
+    note: "Sora + ref GH_CR005, v2 (фикс). BEFORE GHS 0.27 «Empty wallet» (читаемое меню) → AFTER GHS 64.80 from Aviator. MTN+Telecel, бонус."
+
+  - code: GH_AVI_CR003
+    format: static
+    file: "data/syntx_out/GH_AVI_batch01/CR003_v2.jpg"
+    visual_hooks: [avi_fomo_greed, gh_pidgin_touch]
+    angle: "3 | FOMO / Friends Winning"
+    inspired_by: ref_luckstrategy
+    status: ready
+    verdict: testing
+    note: "Sora, v2 (фикс). WhatsApp-чат «The Boys 🇬🇭» (свежий угол). CTA вынесен в отдельный баннер (не в инпуте), forwarded MoMo GHS 180, имена Ibrahim/Nana."
+
+  - code: GH_AVI_CR004
+    format: static
+    file: "data/syntx_out/GH_AVI_batch01/CR004_v2b.jpg"
+    visual_hooks: [avi_crash_adrenaline]
+    angle: "4 | Adrenaline / Cash Out"
+    inspired_by: ref_ghmjngh
+    status: ready
+    verdict: testing
+    note: "Sora + ref ghmjngh, v2b (переделан концепт). Рука с Android-телефоном + экран Aviator 8.7x/CASH OUT GHS 210 + размытая Accra, текст-оверлей СВЕРХУ (не на экране). Убран 'селфи с баннером' v1."
+
+  - code: GH_AVI_CR005
+    format: static
+    file: "data/syntx_out/GH_AVI_batch01/CR005_v3a.jpg"
+    visual_hooks: [gh_pidgin_touch, avi_football_anchor]
+    angle: "5 | Football / Black Stars Hype"
+    inspired_by: ref_KE_CR005
+    status: ready
+    verdict: testing
+    note: "Sora + ref KE_CR005, v3a (переделан). Фанат Black Stars, кулак-радость (анатомия ОК, без сломанной руки v2), MoMo-карточка отдельным блоком (не в руке) 'received GHS 260 from Aviator'. Футбол=нац.якорь."
