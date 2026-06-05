@@ -7,10 +7,12 @@ import asyncio
 import logging
 
 from apps.creator_recorder.main import main_loop
+from core.worker_lock import acquire_singleton_lock
 
 if __name__ == "__main__":
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
+    acquire_singleton_lock("creator_recorder")
     asyncio.run(main_loop())
