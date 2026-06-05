@@ -46,20 +46,36 @@ class GetDisableTasksStatusTool:
         if task_type not in ("disable", "enable", "both"):
             raise ToolError(f"task_type должен быть disable/enable/both, получено: {task_type!r}")
 
+        # Отключение/включение рекламы идёт через Marketing API: meta_api_mutation
+        # pause_ad (=disable) / activate_ad (=enable). Старый task_type='disable'/'enable'
+        # (DOM-канал удалён) учитываем тоже — на случай долёживающих задач.
         params: dict[str, Any] = {"hrs": hours}
-        if task_type == "both":
-            tt_filter = "task_type IN ('disable', 'enable')"
+        disable_cond = (
+            "(task_type = 'disable' OR "
+            "(task_type = 'meta_api_mutation' AND payload->>'mutation_kind' = 'pause_ad'))"
+        )
+        enable_cond = (
+            "(task_type = 'enable' OR "
+            "(task_type = 'meta_api_mutation' AND payload->>'mutation_kind' = 'activate_ad'))"
+        )
+        if task_type == "disable":
+            tt_filter = disable_cond
+        elif task_type == "enable":
+            tt_filter = enable_cond
         else:
-            tt_filter = "task_type = :tt"
-            params["tt"] = task_type
+            tt_filter = f"({disable_cond} OR {enable_cond})"
 
+        # Нормализуем разнородные task_type в логическое действие disable/enable.
+        action_case = (
+            f"CASE WHEN {disable_cond} THEN 'disable' WHEN {enable_cond} THEN 'enable' END"
+        )
         sql = (
-            "SELECT task_type, status, COUNT(*) AS cnt "
+            f"SELECT {action_case} AS action, status, COUNT(*) AS cnt "
             "FROM task_queue "
             f"WHERE {tt_filter} "
             "  AND created_at >= NOW() - make_interval(hours => :hrs) "
-            "GROUP BY task_type, status "
-            "ORDER BY task_type, status"
+            "GROUP BY action, status "
+            "ORDER BY action, status"
         )
         async with engine.connect() as conn:
             rows = (await conn.execute(text(sql), params)).all()
