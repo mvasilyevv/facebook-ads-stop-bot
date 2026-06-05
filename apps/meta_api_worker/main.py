@@ -58,6 +58,7 @@ from core.meta_api.queue import (
 )
 from core.meta_api.reconciler import reconcile_all
 from core.meta_api.schemas import MetaMutationPayload
+from core.observer.queries import load_scanning_enabled
 from core.pubsub import CHANNEL_TASK_CHANGED
 from core.tasks.queue import Task
 
@@ -152,6 +153,32 @@ _TEMPORARY_EXCEPTIONS: tuple[type[BaseException], ...] = (
     TemporaryError,
 )
 
+# ====================== асимметричный стоп ======================
+
+# mutation_kind, которые ВЫКЛЮЧАЮТ открут (снижают трату) — разрешены даже на паузе.
+_DEACTIVATING_KINDS = frozenset({"pause_ad", "pause_campaign"})
+# action для bulk_status_change, которые считаются выключающими.
+_BULK_PAUSE_ACTIONS = frozenset({"pause", "paused", "disable", "disabled"})
+
+
+def _is_activating_mutation(payload: MetaMutationPayload) -> bool:
+    """True если mutation ВКЛЮЧАЕТ/тратит (на паузе сканирования откладывается).
+
+    Асимметричный стоп пропускает только ВЫКЛЮЧАЮЩИЕ действия (они снижают риск
+    открута), всё остальное на паузе блокирует. Выключающие: pause_ad/pause_campaign
+    и bulk_status_change с action pause/paused. Всё прочее (activate_*, bulk activate,
+    create_campaign, duplicate_campaign, set_adset_budget, set_ad_creative,
+    custom_audience) — «не выключающее» → True → откладываем (money-safe: на стопе
+    кабинет не трогаем сверх выключения).
+    """
+    kind = payload.mutation_kind
+    if kind in _DEACTIVATING_KINDS:
+        return False
+    if kind == "bulk_status_change":
+        action = str((getattr(payload, "params", None) or {}).get("action", "")).strip().lower()
+        return action not in _BULK_PAUSE_ACTIONS
+    return True
+
 
 async def process_one_task(
     engine: AsyncEngine,
@@ -191,6 +218,32 @@ async def process_one_task(
                 "meta_api: task id=%s mark_failed (no client) не применился "
                 "— гонка с другим воркером",
                 task.id,
+            )
+        return
+
+    # Асимметричный стоп: на паузе сканирования откладываем АКТИВИРУЮЩИЕ mutations
+    # (activate/bulk activate/create/duplicate/budget/...), пропуская только
+    # ВЫКЛЮЧАЮЩИЕ (pause_*, bulk pause) — они снижают риск открута. Отложенная
+    # задача уходит в retry и исполнится после снятия паузы; если пауза длится
+    # дольше лимита попыток — зафейлится (autostart, инициированный до паузы,
+    # осознанно отменяется пользовательским стопом).
+    if _is_activating_mutation(payload) and not await load_scanning_enabled(engine):
+        retried = await requeue_task(
+            engine,
+            task=task,
+            error="scanning_paused: активирующая mutation отложена до снятия паузы",
+        )
+        if retried:
+            logger.info(
+                "meta_api: task id=%s (%s) отложена — сканирование на паузе (асимметричный стоп)",
+                task.id,
+                payload.mutation_kind,
+            )
+        else:
+            logger.warning(
+                "meta_api: task id=%s (%s) отменена — пауза дольше лимита попыток",
+                task.id,
+                payload.mutation_kind,
             )
         return
 

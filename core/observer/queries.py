@@ -175,6 +175,34 @@ async def load_observer_config(engine: AsyncEngine) -> dict[str, object] | None:
     }
 
 
+async def load_scanning_enabled(engine: AsyncEngine) -> bool:
+    """Единая точка чтения «глобального стопа» observer_config.is_scanning_enabled.
+
+    Лёгкий одиночный SELECT — для воркеров, которые должны замирать на паузе
+    сканирования (асимметричный стоп: пауза глушит ВКЛЮЧАЮЩИЕ/тратящие действия —
+    autostart-activate, enable, enable-рекомендации, активирующие mutations; но
+    РАЗРЕШАЕТ выключающие — auto-stop/ручной pause, они снижают риск открута).
+
+    Нет строки observer_config → True (дефолт системы: автоматика включена до
+    явного выключения; реальная строка появляется при первом обращении к настройкам).
+    Ошибку соединения НЕ глушит — пробрасывает наверх. Все caller'ы крутятся в цикле
+    с try/except, который трактует исключение как «пропустить тик» — то есть при
+    недоступной БД money-критичные воркеры (cabinet_scheduler) ничего не включают.
+    """
+    async with engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text(
+                    "SELECT is_scanning_enabled FROM observer_config "
+                    "WHERE singleton_key = 'default'"
+                )
+            )
+        ).first()
+    if row is None:
+        return True
+    return bool(row[0])
+
+
 async def load_vision_auto_restart_flag(engine: AsyncEngine) -> bool:
     """Читает vision_config.auto_restart_on_missing_cdp (self-heal Vision-сессии).
 

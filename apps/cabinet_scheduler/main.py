@@ -36,7 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from core.meta_api.bulk import resolve_owner_ad_ids_by_dates
 from core.meta_api.queue import create_mutation_task
 from core.meta_api.schemas import MetaMutationPayload
-from core.observer.queries import load_observer_config
+from core.observer.queries import load_observer_config, load_scanning_enabled
 from core.scheduler.cabinet_autostart import (
     AUTOSTART_DONE_TTL_SECONDS,
     autostart_done_key,
@@ -71,10 +71,14 @@ async def run_one_tick(
 ) -> dict[str, Any]:
     """Один проход автостарта. Возвращает summary dict с ключом 'outcome'.
 
-    outcome ∈ {'disabled', 'not_in_window', 'already_done', 'no_dates',
-    'no_owner_ads', 'started'}.
+    outcome ∈ {'scanning_paused', 'disabled', 'not_in_window', 'already_done',
+    'no_dates', 'no_owner_ads', 'started'}.
 
     Шаги:
+    0. Глобальный стоп: is_scanning_enabled=false → 'scanning_paused' (асимметричный
+       стоп — на паузе НИЧЕГО не включаем). Проверяем ПЕРВЫМ и ДО дедуп-ключа: ключ
+       не ставится, поэтому после снятия паузы в том же окне (catch-up до конца суток)
+       автостарт доработает. Был на паузе всё окно → день пропущен, без сюрпризов.
     1. Читаем конфиг. Выключен → 'disabled'.
     2. Не в окне → 'not_in_window'.
     3. Redis SET NX дедуп-ключ. Уже стоит → 'already_done'.
@@ -84,6 +88,11 @@ async def run_one_tick(
     7. Триггерим observer scan (publish).
     8. summary.
     """
+    # Шаг 0 — money-критичный гейт: на паузе сканирования НЕ включаем объявления
+    # и НЕ триггерим скан. Без этого автостарт жёг бы бюджет при «выключенном» боте.
+    if not await load_scanning_enabled(engine):
+        return {"outcome": "scanning_paused"}
+
     config = await read_autostart_config(engine)
     if not config.get("enabled"):
         return {"outcome": "disabled"}
@@ -209,7 +218,7 @@ async def tick_loop(
             now = datetime.now(timezone.utc)
             summary = await run_one_tick(engine=engine, redis_client=redis_client, now=now)
             outcome = summary.get("outcome")
-            if outcome not in ("disabled", "not_in_window", "already_done"):
+            if outcome not in ("scanning_paused", "disabled", "not_in_window", "already_done"):
                 logger.info("cabinet_autostart tick: %s", summary)
         except Exception:
             logger.exception("Ошибка в cabinet_autostart tick")

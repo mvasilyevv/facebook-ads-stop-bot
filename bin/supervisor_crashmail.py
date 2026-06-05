@@ -29,7 +29,7 @@ _WATCHED_EVENTS = {
 
 
 def _is_scanning_enabled_sync() -> bool:
-    """Синхронно читает ObserverSettings.is_scanning_enabled из БД.
+    """Синхронно читает observer_config.is_scanning_enabled из БД.
 
     Запускает короткий asyncio.run с asyncpg, чтобы не тянуть psycopg2.
     При любой ошибке возвращает True (failsafe — лучше отправить, чем замолчать).
@@ -52,7 +52,7 @@ def _is_scanning_enabled_sync() -> bool:
             )
             try:
                 row = await conn.fetchrow(
-                    "SELECT is_scanning_enabled FROM observer_settings "
+                    "SELECT is_scanning_enabled FROM observer_config "
                     "WHERE singleton_key = 'default' LIMIT 1"
                 )
                 if row is None:
