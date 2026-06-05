@@ -131,6 +131,10 @@ class Recipient:
     username: str | None
     role: str  # owner / recipient
 
+    def is_owner(self) -> bool:
+        """True если роль владельца — гейт для money-действий (ACL)."""
+        return self.role == "owner"
+
 
 async def find_recipient(
     engine: AsyncEngine,

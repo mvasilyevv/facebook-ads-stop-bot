@@ -426,6 +426,15 @@ stop_all() {
     terminate_matching_processes_in_dir "Frontend" "npm run dev|node .*vite" "$SCRIPT_DIR/frontend"
     terminate_matching_processes_in_dir "Mini-app" "npm run dev|node .*vite" "$SCRIPT_DIR/frontend-mini"
     terminate_matching_processes "Cloudflared" "cloudflared tunnel --url"
+    # Воркеры, ранее пропущенные в stop_all (их гасил только supervisord shutdown —
+    # при его зависании оставались жить, в т.ч. money-критичный cabinet_scheduler).
+    terminate_matching_processes "Health Watchdog" "run_health_watchdog.py"
+    terminate_matching_processes "Creator Worker" "run_creator_worker.py"
+    terminate_matching_processes "Creator Recorder" "run_creator_recorder.py"
+    terminate_matching_processes "Digest Scheduler" "run_digest_scheduler.py"
+    terminate_matching_processes "Cabinet Scheduler" "run_cabinet_scheduler.py"
+    terminate_matching_processes "Reconciler Worker" "run_reconciler_worker.py"
+    terminate_matching_processes "Cleanup Worker" "run_cleanup_worker.py"
     cleanup_worker_singleton_pid_files
 
     echo -e "${YELLOW}⏹ Останавливаю Docker контейнеры...${NC}"
@@ -577,6 +586,13 @@ terminate_matching_processes "API" "uvicorn apps.api.main:app"
 terminate_matching_processes "Frontend" "$SCRIPT_DIR/frontend/node_modules/.bin/vite"
 terminate_matching_processes_in_dir "Frontend" "npm run dev|node .*vite" "$SCRIPT_DIR/frontend"
 terminate_matching_processes_in_dir "Mini-app" "npm run dev|node .*vite" "$SCRIPT_DIR/frontend-mini"
+terminate_matching_processes "Health Watchdog" "run_health_watchdog.py"
+terminate_matching_processes "Creator Worker" "run_creator_worker.py"
+terminate_matching_processes "Creator Recorder" "run_creator_recorder.py"
+terminate_matching_processes "Digest Scheduler" "run_digest_scheduler.py"
+terminate_matching_processes "Cabinet Scheduler" "run_cabinet_scheduler.py"
+terminate_matching_processes "Reconciler Worker" "run_reconciler_worker.py"
+terminate_matching_processes "Cleanup Worker" "run_cleanup_worker.py"
 cleanup_worker_singleton_pid_files
 
 ensure_port_free "$API_PORT" "API"
@@ -868,6 +884,32 @@ else
     ENABLE_RECO_PID=$!
     append_pid "$ENABLE_RECO_PID" "enable_recommendation_worker"
     echo -e "${GREEN}  Enable Recommendation Worker PID: $ENABLE_RECO_PID${NC}"
+
+    # Воркеры, ранее запускавшиеся ТОЛЬКО под supervisord. Без них foreground-набор
+    # был неполным: cabinet_scheduler (автостарт) и health_watchdog (мониторинг) молча
+    # не работали. Запускаем все — но БЕЗ autorestart (его даёт только supervisord).
+    echo -e "${YELLOW}⚠️  Foreground без autorestart: при падении воркер не перезапустится.${NC}"
+    echo -e "${YELLOW}   Для прода поставь supervisord: pip install supervisor${NC}"
+
+    echo -e "${BLUE}📅 Запускаю Cabinet Scheduler (money-критичный автостарт)...${NC}"
+    .venv/bin/python run_cabinet_scheduler.py > "$LOG_DIR/cabinet_scheduler.log" 2>&1 &
+    append_pid "$!" "cabinet_scheduler"
+
+    echo -e "${BLUE}🩺 Запускаю Health Watchdog...${NC}"
+    .venv/bin/python run_health_watchdog.py > "$LOG_DIR/health_watchdog.log" 2>&1 &
+    append_pid "$!" "health_watchdog"
+
+    echo -e "${BLUE}📨 Запускаю Digest Scheduler...${NC}"
+    .venv/bin/python run_digest_scheduler.py > "$LOG_DIR/digest_scheduler.log" 2>&1 &
+    append_pid "$!" "digest_scheduler"
+
+    echo -e "${BLUE}🎬 Запускаю Creator Worker...${NC}"
+    .venv/bin/python run_creator_worker.py > "$LOG_DIR/creator_worker.log" 2>&1 &
+    append_pid "$!" "creator_worker"
+
+    echo -e "${BLUE}⏺  Запускаю Creator Recorder...${NC}"
+    .venv/bin/python run_creator_recorder.py > "$LOG_DIR/creator_recorder.log" 2>&1 &
+    append_pid "$!" "creator_recorder"
 fi
 
 # ==========================================

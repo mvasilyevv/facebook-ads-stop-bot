@@ -57,6 +57,12 @@ _LEGACY_COMMANDS: frozenset[str] = frozenset(
     }
 )
 
+# Owner-ACL: money-действия, доступные только role='owner'.
+# Callback-кнопки под алертами/планами (трогают кабинет или боевой браузер).
+_OWNER_ONLY_CALLBACKS: frozenset[str] = frozenset({"dis", "ereco", "plan"})
+# Команды (autostart с аргументами проверяется отдельно — write-путь).
+_OWNER_ONLY_COMMANDS: frozenset[str] = frozenset({"pause", "resume", "record_plan", "stop_record"})
+
 
 def _is_private(chat_type: str | None) -> bool:
     return (chat_type or "") == "private"
@@ -96,6 +102,19 @@ async def _dispatch_callback_query(
     if not recipient:
         try:
             await client.answer_callback_query(cq_id, text="Доступа нет")
+        except Exception:
+            pass
+        return
+
+    # Owner-ACL: money-кнопки (отключение/включение/запуск плана в боевом браузере)
+    # доступны только role='owner'. snz (snooze) — не money, доступен любому активному.
+    # dr_ok/dr_cancel — approve проверяет owner внутри handle_draft_callback.
+    if action in _OWNER_ONLY_CALLBACKS and not recipient.is_owner():
+        logger.warning(
+            "ACL отказ (callback): action=%s chat_id=%s role=%s", action, chat_id, recipient.role
+        )
+        try:
+            await client.answer_callback_query(cq_id, text="⛔ Только владелец кабинета")
         except Exception:
             pass
         return
@@ -234,6 +253,25 @@ async def handle_update(
             chat_id=chat_id,
             text="Доступа нет. Используй `/start <код>` для подключения.",
             reply_to_message_id=message_id,
+        )
+        return
+
+    # Owner-ACL: money-команды (трогают кабинет / боевой браузер) — только role='owner'.
+    # autostart с аргументами = запись расписания (money); без аргументов = чтение (любому).
+    needs_owner = cmd in _OWNER_ONLY_COMMANDS or (cmd == "autostart" and bool(args_text.strip()))
+    if needs_owner and not (recipient and recipient.is_owner()):
+        logger.warning(
+            "ACL отказ (команда): cmd=%s chat_id=%s role=%s",
+            cmd,
+            chat_id,
+            getattr(recipient, "role", None),
+        )
+        await send_text(
+            client,
+            chat_id=chat_id,
+            text="⛔ Только владелец кабинета может выполнить это действие.",
+            reply_to_message_id=message_id,
+            message_thread_id=thread_id,
         )
         return
 

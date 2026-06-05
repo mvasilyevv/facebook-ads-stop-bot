@@ -262,6 +262,9 @@ async def test_meta_bulk_activate_paused_requeued(monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_meta_pause_paused_executes(monkeypatch) -> None:
     monkeypatch.setattr(meta, "load_scanning_enabled", AsyncMock(return_value=False))
+    # owner-гейт идёт ПОСЛЕ асимметричного стопа: pause проходит паузу и доходит до
+    # owner-проверки — пустой owner_tag пропускает (фильтр выключен).
+    monkeypatch.setattr(meta, "load_owner_tag", AsyncMock(return_value=None))
     spy_requeue = AsyncMock()
     spy_exec = AsyncMock(return_value={"success": True})
     monkeypatch.setattr(meta, "requeue_task", spy_requeue)

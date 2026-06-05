@@ -19,6 +19,7 @@ from typing import Any, Protocol
 
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from core.meta_api.ownership import check_ad_ownership, load_owner_tag
 from core.observer.queries import load_scanning_enabled
 from core.observer.writers import (
     reset_alert_state_after_disable_succeeded,
@@ -28,6 +29,7 @@ from core.pubsub import CHANNEL_TASK_CHANGED
 from core.tasks import (
     Task,
     claim_next_task,
+    mark_failed,
     mark_succeeded,
     requeue_for_retry,
 )
@@ -119,6 +121,42 @@ async def execute_one_toggle_task(
             max_attempts=task.max_attempts,
         )
         return "failed" if task.attempt_count + 1 >= task.max_attempts else "retrying"
+
+    # Owner-scoping на исполнении: не трогаем чужие объявления в шаренном кабинете.
+    # Строгая политика: чужое (found, не owner) → permanent fail; своё, но ещё не в
+    # каталоге (скан отстал) → disable в requeue (выключение подождёт каталог),
+    # enable → fail (включающее не ждёт). owner_tag пуст → гейт пропускает всё.
+    owner_tag = await load_owner_tag(engine)
+    ownership = await check_ad_ownership(engine, fb_ad_id, owner_tag=owner_tag)
+    if not ownership.allowed:
+        if ownership.not_found and task_type == "disable":
+            ok = await requeue_for_retry(
+                engine,
+                task_id=task.id,
+                error=f"owner_scoping_not_found: {ownership.reason}",
+                attempt_count=task.attempt_count,
+                max_attempts=task.max_attempts,
+            )
+            logger.info(
+                "[%s] task_id=%s ad=%s owner_scoping not_found → %s",
+                task_type,
+                task.id,
+                fb_ad_id,
+                "retry" if ok else "failed",
+            )
+            return "retrying" if ok else "failed"
+        # Чужое объявление ИЛИ enable+not_found → окончательный отказ (не трогаем).
+        await mark_failed(
+            engine, task_id=task.id, error=f"owner_scoping_reject: {ownership.reason}"
+        )
+        logger.warning(
+            "[%s] task_id=%s ad=%s ОТКЛОНЕНА owner-scoping: %s",
+            task_type,
+            task.id,
+            fb_ad_id,
+            ownership.reason,
+        )
+        return "failed"
 
     try:
         result = await gate.toggle_ad(fb_ad_id, target_state=target_state)

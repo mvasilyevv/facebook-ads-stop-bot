@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from core.telegram.handlers import router as router_mod
+from core.telegram.service import Recipient
 
 
 def _make_client() -> MagicMock:
@@ -43,8 +44,8 @@ async def test_router_passes_redis_and_args_to_record_plan(monkeypatch) -> None:
     async def _fake_record_plan(**kwargs: Any) -> None:
         captured.update(kwargs)
 
-    async def _fake_find_recipient(_engine: Any, **_kw: Any) -> dict[str, Any]:
-        return {"id": "rec-1", "role": "owner"}
+    async def _fake_find_recipient(_engine: Any, **_kw: Any) -> Recipient:
+        return Recipient(chat_id=555, telegram_user_id=999, username="mark", role="owner")
 
     monkeypatch.setattr(router_mod, "handle_record_plan", _fake_record_plan)
     monkeypatch.setattr(router_mod, "find_recipient", _fake_find_recipient)
@@ -69,8 +70,8 @@ async def test_router_record_plan_without_redis_warns(monkeypatch) -> None:
     async def _fake_record_plan(**_kw: Any) -> None:
         called["n"] += 1
 
-    async def _fake_find_recipient(_engine: Any, **_kw: Any) -> dict[str, Any]:
-        return {"id": "rec-1", "role": "owner"}
+    async def _fake_find_recipient(_engine: Any, **_kw: Any) -> Recipient:
+        return Recipient(chat_id=555, telegram_user_id=999, username="mark", role="owner")
 
     monkeypatch.setattr(router_mod, "handle_record_plan", _fake_record_plan)
     monkeypatch.setattr(router_mod, "find_recipient", _fake_find_recipient)
