@@ -245,4 +245,20 @@ export function useSetObserverCampaigns() {
   });
 }
 
+/**
+ * POST /settings/observer/campaigns/refresh — live-резолв всех кампаний по owner-тегу
+ * через browser-agent (мимо allowlist). Подхватывает новые кампании, которых ещё нет в
+ * каталоге. После успеха инвалидирует список.
+ */
+export function useRefreshCampaigns() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      apiClient.post<CampaignOption[]>("/settings/observer/campaigns/refresh"),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["observer", "campaigns"] });
+    },
+  });
+}
+
 export const settingsKeys = KEYS;

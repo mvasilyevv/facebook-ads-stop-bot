@@ -12,7 +12,7 @@ import {
   type LightMeta,
 } from './am-parser.js';
 import { buildScannedRows, type AmAdMeta } from './am-join.js';
-import { resolveOwnerCampaignIds } from './am-owner.js';
+import { campaignMatchesOwner, resolveOwnerCampaignIds } from './am-owner.js';
 import {
   AM_COLUMN_FIELDS,
   AM_ACTION_TYPES,
@@ -252,6 +252,21 @@ export interface AmScanResult {
     scopeCampaignCount: number;
     ownerResolved: boolean;
   };
+}
+
+// Live-список кампаний владельца (id+name) по owner_tag — ТОЛЬКО campaigns edge, без
+// метрик/ад'ов и БЕЗ allowlist-фильтра. Для UI «Кампании для сканирования»: показывает
+// все кампании владельца, включая новые (которые обычный скан с allowlist не подхватывал).
+export async function listOwnerCampaigns(
+  page: Page,
+  ownerTag: string,
+): Promise<Array<{ id: string; name: string }>> {
+  const ctx = await extractGraphContext(page);
+  const campRes = await fetchAllEdge(page, ctx, GRAPH_REST_ORIGIN, 'campaigns', ['id', 'name'], []);
+  const items = ownerTag
+    ? campRes.items.filter((c) => campaignMatchesOwner(c.name ?? '', ownerTag))
+    : campRes.items;
+  return items.map((c) => ({ id: c.id, name: c.name ?? '' }));
 }
 
 // Полный am-скан с самостоятельным извлечением токена (для standalone-вызовов/тестов).

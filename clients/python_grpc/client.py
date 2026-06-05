@@ -273,6 +273,28 @@ class BrowserAgentClient:
         logger.info("hard_reload: success за %d мс", resp.reload_ms)
         return True
 
+    async def list_campaigns(self, *, owner_tag: str = "") -> list[dict[str, str]]:
+        """Live-список кампаний по owner_tag (через Graph campaigns edge, мимо allowlist).
+
+        Возвращает [{"id": ..., "name": ...}, ...]. При ошибке/отсутствии сессии —
+        пустой список (не бросает): вызывающий покажет «не удалось обновить».
+        """
+        if not self._scanner_stub or not self._session_id:
+            logger.warning("list_campaigns: нет активной сессии browser-agent")
+            return []
+        req = scanner_pb2.ListCampaignsRequest(
+            session_id=self._session_id,
+            owner_tag=owner_tag or "",
+        )
+        try:
+            resp = await self._scanner_stub.ListCampaigns(
+                req, timeout=_RPC_BROWSER_CONTROL_TIMEOUT_SECONDS * 2
+            )
+        except grpc.RpcError as exc:
+            logger.warning("list_campaigns: gRPC error: %s", exc)
+            return []
+        return [{"id": c.id, "name": c.name} for c in resp.campaigns]
+
     async def navigate(self, url: str, wait_until: str = "domcontentloaded") -> None:
         """Перейти на URL."""
         await self._call_with_session_recovery(

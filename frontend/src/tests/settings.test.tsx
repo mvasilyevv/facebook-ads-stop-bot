@@ -93,6 +93,10 @@ vi.mock("@/lib/api/settings", () => ({
     mutate: vi.fn(),
     isPending: false,
   }),
+  useRefreshCampaigns: () => ({
+    mutate: vi.fn(),
+    isPending: false,
+  }),
   useHealthDetails: () => ({
     data: HEALTH_DETAILS,
     isLoading: false,
