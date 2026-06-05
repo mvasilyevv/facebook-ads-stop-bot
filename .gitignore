@@ -73,3 +73,12 @@ data/recon_out/
 # Медиа конкурентов из Ad Library (референсы, не в репо)
 data/competitor_refs/
 .am_capture/
+
+# Скриншоты-черновики сессий (syntx/recon/veo) — только корень репо
+/*.png
+/*.jpg
+/*.jpeg
+
+# Локальные MCP-конфиги браузера (recon/syntx tooling) + snap-дампы
+data/*mcp*.json
+data/_syntx_snap*.md
