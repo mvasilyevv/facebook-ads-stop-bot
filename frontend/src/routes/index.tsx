@@ -25,7 +25,7 @@ import { RefreshCcw, ChevronRight } from "lucide-react";
 import { PageHeader, HeaderSep } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/Button";
 import { toast } from "@/components/ui/Toast";
-import { useDashboardSocket } from "@/lib/websocket/useDashboardSocket";
+import { useRealtimeInvalidation } from "@/lib/websocket/useRealtimeInvalidation";
 import {
   useDashboardStats,
   useDashboardBatch,
@@ -56,7 +56,7 @@ function DashboardPage() {
   const navigate = useNavigate();
   const [range, setRange] = useState<RangeKey>("today");
 
-  const socket = useDashboardSocket();
+  const socket = useRealtimeInvalidation();
   const statsQuery = useDashboardStats();
   const batchQuery = useDashboardBatch();
   const enableQuery = useEnableTasks({ limit: 10 });
