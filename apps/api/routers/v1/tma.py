@@ -466,21 +466,28 @@ async def tma_claim_ad(
 # ===========================================================================
 
 
-def _draft_to_out(draft: object) -> TmaDraftOut:
-    """DraftView (core.meta_api.queue) → TmaDraftOut."""
+def _draft_to_out(draft: object, *, current_state: dict | None = None) -> TmaDraftOut:
+    """DraftView (core.meta_api.queue) → TmaDraftOut.
+
+    current_state заполняется только в detail-endpoint'е (резолв на одну задачу).
+    В list — None (дорого делать JOIN для N строк).
+    expires_at вычисляется автоматически из created_at + DRAFT_TTL_SECONDS.
+    """
     payload = draft.payload  # type: ignore[attr-defined]
-    return TmaDraftOut(
+    created_at_iso: str | None = (
+        draft.created_at.isoformat()  # type: ignore[attr-defined]
+        if getattr(draft, "created_at", None)
+        else None
+    )
+    return TmaDraftOut.from_created_at(
         id=draft.id,  # type: ignore[attr-defined]
         mutation_kind=payload.mutation_kind,
         target_id=payload.target_id,
         ad_account_id=payload.ad_account_id,
         payload=dict(payload.params or {}),
         requested_by=draft.requested_by,  # type: ignore[attr-defined]
-        created_at=(
-            draft.created_at.isoformat()  # type: ignore[attr-defined]
-            if getattr(draft, "created_at", None)
-            else None
-        ),
+        created_at_iso=created_at_iso,
+        current_state=current_state,
     )
 
 
@@ -535,25 +542,138 @@ async def _load_draft_row(engine: AsyncEngine, task_id: int) -> dict | None:
     }
 
 
+async def _resolve_current_state(
+    engine: AsyncEngine,
+    payload: MetaMutationPayload,
+) -> dict | None:
+    """Резолвит текущее состояние объекта(ов) мутации для diff «было→станет».
+
+    Поддерживаемые mutation_kind:
+    - pause_ad / activate_ad → alert_state + delivery_status по fb_ad_id (target_id).
+    - set_adset_budget → daily_budget_cents / lifetime_budget_cents из fb_adsets.
+      ВАЖНО: в текущей схеме FbAdset не хранит budget — поле отсутствует в ORM.
+      Возвращаем {"note": "budget not stored in catalog — check Meta API directly"}.
+    - bulk_status_change → агрегат по alert_state для N объектов из payload.ids.
+    - Остальные → None (не поддерживается / слишком дорого).
+    """
+    kind = payload.mutation_kind
+
+    if kind in ("pause_ad", "activate_ad"):
+        fb_ad_id = payload.target_id
+        if not fb_ad_id:
+            return None
+        async with engine.connect() as conn:
+            row = (
+                await conn.execute(
+                    text(
+                        """
+                        SELECT s.alert_state, fa.delivery_status
+                        FROM fb_ads fa
+                        LEFT JOIN ad_alert_state s ON s.ad_id = fa.id
+                        WHERE fa.fb_ad_id = :fid
+                        LIMIT 1
+                        """
+                    ),
+                    {"fid": fb_ad_id},
+                )
+            ).first()
+        if row is None:
+            return None
+        return {
+            "alert_state": row.alert_state or "normal",
+            "delivery_status": row.delivery_status,
+        }
+
+    if kind == "set_adset_budget":
+        # FbAdset не хранит budget в локальной схеме (только в Meta).
+        # Возвращаем note вместо null, чтобы UI мог показать подсказку.
+        fb_adset_id = payload.target_id
+        if not fb_adset_id:
+            return None
+        async with engine.connect() as conn:
+            row = (
+                await conn.execute(
+                    text(
+                        """
+                        SELECT adset_name, fb_adset_id
+                        FROM fb_adsets
+                        WHERE fb_adset_id = :fid
+                        LIMIT 1
+                        """
+                    ),
+                    {"fid": fb_adset_id},
+                )
+            ).first()
+        if row is None:
+            # adset нет в каталоге — текущее состояние неизвестно, UI покажет «—».
+            return None
+        return {
+            "adset_name": row.adset_name,
+            "note": "budget_cents not stored locally — check Meta API",
+        }
+
+    if kind == "bulk_status_change":
+        params = payload.params or {}
+        ids: list[str] = params.get("ids") or []
+        if not ids:
+            return None
+        # Считаем агрегат по alert_state для списка объектов.
+        # Поддерживаем только объявления (object_type='ad').
+        async with engine.connect() as conn:
+            rows = (
+                await conn.execute(
+                    text(
+                        """
+                        SELECT COALESCE(s.alert_state, 'normal') AS st, COUNT(*) AS cnt
+                        FROM fb_ads fa
+                        LEFT JOIN ad_alert_state s ON s.ad_id = fa.id
+                        WHERE fa.fb_ad_id = ANY(:ids)
+                        GROUP BY st
+                        """
+                    ),
+                    {"ids": list(ids)},
+                )
+            ).all()
+        if not rows:
+            return None
+        return {
+            "object_count": len(ids),
+            "by_state": {r.st: int(r.cnt) for r in rows},
+        }
+
+    # Остальные mutation_kind (pause_campaign, activate_campaign, create_campaign,
+    # duplicate_campaign, set_ad_creative, custom_audience) — не поддерживаются:
+    # либо дорого, либо нет локального аналога в БД. Возвращаем null.
+    return None
+
+
 @router.get("/draft-tasks/{task_id}", response_model=TmaDraftOut)
 async def tma_get_draft_task(
     task_id: int,
     principal: DepTmaPrincipal,
     engine: DepEngine,
 ) -> TmaDraftOut:
-    """Детали одной DRAFT-задачи. 404 — нет или уже не draft."""
+    """Детали одной DRAFT-задачи. 404 — нет или уже не draft.
+
+    В отличие от list, здесь заполняется:
+    - expires_at: дедлайн подтверждения (created_at + 24h).
+    - current_state: текущее состояние объекта мутации (для показа diff было→станет).
+    """
     info = await _load_draft_row(engine, task_id)
     if info is None:
         raise HTTPException(status_code=404, detail="Черновик не найден")
     payload: MetaMutationPayload = info["payload"]
-    return TmaDraftOut(
+    current_state = await _resolve_current_state(engine, payload)
+    created_at_iso = info["created_at"].isoformat() if info["created_at"] else None
+    return TmaDraftOut.from_created_at(
         id=info["id"],
         mutation_kind=payload.mutation_kind,
         target_id=payload.target_id,
         ad_account_id=payload.ad_account_id,
         payload=dict(payload.params or {}),
         requested_by=info["requested_by"],
-        created_at=info["created_at"].isoformat() if info["created_at"] else None,
+        created_at_iso=created_at_iso,
+        current_state=current_state,
     )
 
 

@@ -1,15 +1,19 @@
 # -*- coding: utf-8 -*-
 """Роутер Tools: уникализация креативов, открытие папки, campaign-create.
 
-ВАЖНО: все endpoints этого роутера — dev-only утилиты.
-Они работают с локальной файловой системой и имеют смысл только при запуске
-сервера на той же машине, где находятся файлы.
+Разделение dev-only vs prod-safe:
+- creative-uniquify и open-folder — DEV-ONLY (работают с FS, открывают Finder).
+  Нет смысла на удалённом/prod-сервере → закрыты require_dev_tools (DEV_TOOLS_ENABLED).
+- campaign-create/folders и campaign-create/plan — PROD-SAFE: читают структуру
+  папки с креативами на той же машине, что и сервер. Mini App Scripts-экрана
+  использует эти ручки в проде (сервер и файлы на одной машине по дизайну проекта).
+  Валидация путей через default_creatives_root() сохранена — защита от path traversal.
 
 Endpoints:
-    POST /tools/creative-uniquify          — уникализация загруженных изображений
-    POST /tools/creative-uniquify/open-folder — открыть папку результата в Finder/Explorer
-    GET  /tools/campaign-create/folders    — список папок с креативами
-    POST /tools/campaign-create/plan       — построить план создания кампании
+    POST /tools/creative-uniquify          — уникализация (DEV-ONLY)
+    POST /tools/creative-uniquify/open-folder — открыть Finder (DEV-ONLY)
+    GET  /tools/campaign-create/folders    — список папок (prod-safe)
+    POST /tools/campaign-create/plan       — план кампании (prod-safe)
 """
 
 from __future__ import annotations
@@ -151,12 +155,12 @@ async def open_creative_folder(
 
 
 @router.get("/tools/campaign-create/folders", response_model=list[CampaignFolderItem])
-async def get_campaign_creative_folders(
-    _: None = Depends(require_dev_tools),
-) -> list[CampaignFolderItem]:
+async def get_campaign_creative_folders() -> list[CampaignFolderItem]:
     """Возвращает список папок с креативами из корня FB_Agent_Creo.
 
+    Prod-safe: читает структуру FS без открытия GUI или записи файлов.
     Сканирует 1 уровень глубины. Возвращает пустой список если корня нет.
+    Используется Mini App Scripts-экраном.
     """
     summaries = await list_creative_folders(limit=100)
     return [
@@ -177,7 +181,6 @@ async def get_campaign_creative_folders(
 @router.post("/tools/campaign-create/plan", response_model=CampaignScriptPlanOut)
 async def build_campaign_plan(
     body: CampaignPlanRequest,
-    _: None = Depends(require_dev_tools),
 ) -> CampaignScriptPlanOut:
     """Строит план создания кампании из папки с креативами и настроек UI.
 

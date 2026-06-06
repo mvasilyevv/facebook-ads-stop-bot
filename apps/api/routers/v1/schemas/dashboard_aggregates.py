@@ -44,6 +44,10 @@ class DashboardBatchOut(BaseModel):
 
     Контракт: даже если одна из секций упала, остальные возвращаются (см.
     partial-failure поведение в роутере). Списки могут быть пустыми.
+
+    Секции:
+    - recent_disable_tasks: задачи отключения (meta_api_mutation pause_ad / legacy disable)
+    - recent_enable_tasks: задачи включения (meta_api_mutation activate_ad / legacy enable)
     """
 
     model_config = ConfigDict(from_attributes=False)
@@ -52,6 +56,7 @@ class DashboardBatchOut(BaseModel):
     recent_incidents: list[dict[str, Any]] = Field(default_factory=list)
     recent_alerts: list[dict[str, Any]] = Field(default_factory=list)
     recent_disable_tasks: list[dict[str, Any]] = Field(default_factory=list)
+    recent_enable_tasks: list[dict[str, Any]] = Field(default_factory=list)
     enable_recommendations_pending: list[dict[str, Any]] = Field(default_factory=list)
 
 

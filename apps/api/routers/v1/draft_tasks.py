@@ -46,15 +46,17 @@ async def list_draft_tasks(
     for d in drafts:
         if kind and d.payload.mutation_kind != kind:
             continue
+        # expires_at вычисляется из created_at + DRAFT_TTL_SECONDS.
+        # current_state = None в list-endpoint'е (дорого делать JOIN для N строк).
         out.append(
-            TmaDraftOut(
+            TmaDraftOut.from_created_at(
                 id=d.id,
                 mutation_kind=d.payload.mutation_kind,
                 target_id=d.payload.target_id,
                 ad_account_id=d.payload.ad_account_id,
                 payload=dict(d.payload.params or {}),
                 requested_by=d.requested_by,
-                created_at=d.created_at.isoformat() if d.created_at else None,
+                created_at_iso=d.created_at.isoformat() if d.created_at else None,
             )
         )
     return out

@@ -30,14 +30,21 @@ from apps.api.routers.v1.schemas.dashboard import (
 )
 from apps.api.utils.alert_serializer import alert_event_row_to_out
 from apps.api.utils.partition import default_window
-from core.dashboard.snapshot import build_ad_snapshot, build_incidents_snapshot
+from core.dashboard.snapshot import (
+    build_ad_snapshot,
+    build_ad_snapshot_with_cursor,
+    build_incidents_snapshot,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["dashboard"])
 
-# Жёсткие лимиты для всех dashboard endpoint'ов
+# Лимиты для dashboard endpoint'ов.
+# _MAX_LIMIT — для offset-пагинации и alert/incident endpoint'ов.
+# _MAX_CURSOR_LIMIT — поднят для cursor/keyset режима (виртуализация 1000+ строк).
 _MAX_LIMIT = 500
+_MAX_CURSOR_LIMIT = 2000
 _DEFAULT_ADS_LIMIT = 200
 _DEFAULT_ALERTS_LIMIT = 100
 _DEFAULT_INCIDENTS_LIMIT = 100
@@ -68,16 +75,32 @@ async def list_ad_snapshots(
     ),
     fb_ad_ids: str | None = Query(default=None, description="CSV Meta-ID объявлений"),
     include_inactive: bool = Query(default=False),
-    limit: int = Query(default=_DEFAULT_ADS_LIMIT, ge=1, le=_MAX_LIMIT),
+    limit: int = Query(default=_DEFAULT_ADS_LIMIT, ge=1, le=_MAX_CURSOR_LIMIT),
     offset: int = Query(default=0, ge=0),
+    cursor: str | None = Query(
+        default=None,
+        description=(
+            "Keyset-cursor для виртуализации 1000+ строк. "
+            "Если задан — offset игнорируется. "
+            "Получается из заголовка X-Next-Cursor предыдущего ответа."
+        ),
+    ),
 ) -> list[dict[str, Any]]:
     """Список ad'ов с alert_state, последней метрикой и offer.
+
+    Два режима пагинации (обратно совместимы):
+    1. Offset-пагинация (без cursor): работает как раньше.
+       Лимит поднят с 500 до 2000 для совместимости с виртуальными таблицами.
+    2. Cursor/keyset-пагинация (cursor задан): стабильный обход без дублей.
+       cursor = X-Next-Cursor из предыдущего ответа (base64 ключа сортировки).
+       offset игнорируется. Нет дублей при добавлении новых строк во время листания.
 
     Партиционный фильтр по ad_metrics.cycle_ts применяется внутри LATERAL'а
     (последние 7 дней). Если за окно нет метрик — metrics=None.
 
-    X-Total-Count в headers — реальный COUNT с теми же фильтрами без LIMIT,
-    для пагинации фронта.
+    Headers ответа:
+    - X-Total-Count — реальный COUNT с теми же фильтрами (для пагинатора).
+    - X-Next-Cursor — cursor следующей страницы (None/отсутствует если последняя).
     """
     alert_states = _parse_csv(alert_state)
     if alert_states:
@@ -90,16 +113,31 @@ async def list_ad_snapshots(
 
     fb_ad_ids_list = _parse_csv(fb_ad_ids)
 
-    snapshots = await build_ad_snapshot(
-        engine,
-        fb_ad_ids=fb_ad_ids_list,
-        alert_states=alert_states,
-        limit=limit,
-        offset=offset,
-        include_inactive=include_inactive,
-    )
+    if cursor is not None:
+        # Cursor-режим: keyset-пагинация, offset игнорируется.
+        snapshots, next_cursor = await build_ad_snapshot_with_cursor(
+            engine,
+            fb_ad_ids=fb_ad_ids_list,
+            alert_states=alert_states,
+            limit=limit,
+            cursor=cursor,
+            include_inactive=include_inactive,
+        )
+        if next_cursor:
+            response.headers["X-Next-Cursor"] = next_cursor
+    else:
+        # Offset-режим: обратная совместимость.
+        snapshots = await build_ad_snapshot(
+            engine,
+            fb_ad_ids=fb_ad_ids_list,
+            alert_states=alert_states,
+            limit=limit,
+            offset=offset,
+            include_inactive=include_inactive,
+        )
 
     # X-Total-Count — отдельный COUNT с теми же фильтрами, без LIMIT/OFFSET.
+    # Возвращается в обоих режимах.
     total = await _count_ads(
         engine,
         fb_ad_ids=fb_ad_ids_list,

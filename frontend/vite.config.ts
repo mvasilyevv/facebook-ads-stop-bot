@@ -23,7 +23,13 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
+      "@fb/shared": path.resolve(__dirname, "../packages/shared/src"),
     },
+  },
+  // Workspace-пакет @fb/shared потребляется как исходники (.ts) — не пре-бандлить,
+  // чтобы HMR работал через границу пакета.
+  optimizeDeps: {
+    exclude: ["@fb/shared"],
   },
   server: {
     port: 5174,

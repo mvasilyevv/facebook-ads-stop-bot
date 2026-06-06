@@ -33,6 +33,10 @@ TASK_STATUSES = frozenset(
 _RETRY_BASE_SECONDS = 30
 _RETRY_MAX_SECONDS = 300
 
+# Время жизни DRAFT-задачи до автоматической отмены reconciler'ом.
+# Переиспользуется в схемах API для вычисления expires_at = created_at + TTL.
+DRAFT_TTL_SECONDS: int = 24 * 3600
+
 
 @dataclass
 class Task:

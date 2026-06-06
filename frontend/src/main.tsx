@@ -1,36 +1,19 @@
-/**
- * Точка входа React-приложения.
- * Инициализирует QueryClient, Router, Toast viewport.
- */
-
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider, createRouter } from "@tanstack/react-router";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+
+import "@fontsource/jetbrains-mono/400.css";
+import "@fontsource/jetbrains-mono/500.css";
+import "@fontsource/jetbrains-mono/600.css";
+import "@fontsource/inter-tight/400.css";
+import "@fontsource/inter-tight/500.css";
+import "@fontsource/inter-tight/600.css";
+import "./styles/app.css";
 
 import { routeTree } from "./routeTree.gen";
-import "./styles/globals.css";
 
-// QueryClient — глобальный, переиспользуется во всём приложении.
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      retry: 1,
-      refetchOnWindowFocus: false,
-      staleTime: 30_000,
-    },
-  },
-});
-
-// Router — TanStack file-based.
-const router = createRouter({
-  routeTree,
-  defaultPreload: "intent",
-  defaultPreloadStaleTime: 0,
-  context: {
-    queryClient,
-  },
-});
+const router = createRouter({ routeTree, defaultPreload: "intent" });
 
 declare module "@tanstack/react-router" {
   interface Register {
@@ -38,12 +21,14 @@ declare module "@tanstack/react-router" {
   }
 }
 
-const rootElement = document.getElementById("root");
-if (!rootElement) {
-  throw new Error("Root container #root не найден в index.html");
-}
+const queryClient = new QueryClient({
+  defaultOptions: { queries: { staleTime: 10_000, refetchOnWindowFocus: false } },
+});
 
-createRoot(rootElement).render(
+const rootEl = document.getElementById("root");
+if (!rootEl) throw new Error("#root не найден");
+
+createRoot(rootEl).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
       <RouterProvider router={router} />

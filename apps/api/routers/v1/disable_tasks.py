@@ -4,6 +4,7 @@
 Endpoints (с prefix /api от auto-discovery):
     GET    /dashboard/disable-tasks            — список задач на отключение
     POST   /dashboard/disable-tasks            — создать задачу вручную
+    POST   /dashboard/disable-tasks/bulk       — массовое отключение (money)
     POST   /dashboard/disable-tasks/{id}/retry — повторить failed/cancelled задачу
     DELETE /dashboard/disable-tasks/{id}       — отменить pending/retrying задачу
 """
@@ -17,11 +18,18 @@ from fastapi import APIRouter, HTTPException, Query, Response
 from sqlalchemy import text
 
 from apps.api.deps import DepEngine
-from apps.api.routers.v1.schemas.tasks import DisableTaskCreateIn, TaskQueueRowOut
+from apps.api.routers.v1.schemas.tasks import (
+    BULK_DISABLE_MAX_IDS,
+    BulkDisableIn,
+    BulkDisableResultOut,
+    DisableTaskCreateIn,
+    TaskQueueRowOut,
+)
 from apps.api.utils.status_mapper import expand_frontend_statuses_csv
 from apps.api.utils.task_serializer import task_row_to_out
 from core.meta_api.queue import create_mutation_task
 from core.meta_api.schemas import MetaMutationPayload
+from core.tasks.bulk_disable import process_bulk_disable
 from core.tasks.channel import disable_channel_sql, is_disable_row, target_id_sql
 
 logger = logging.getLogger(__name__)
@@ -184,7 +192,7 @@ async def create_disable_task(
                 text(
                     """
                     SELECT id, task_type, status,
-                           payload->>'fb_ad_id' AS fb_ad_id,
+                           COALESCE(payload->>'target_id', payload->>'fb_ad_id') AS fb_ad_id,
                            NULL::text AS ad_name,
                            attempt_count, max_attempts, requested_by,
                            created_by_chat_id, created_at, updated_at,
@@ -202,6 +210,48 @@ async def create_disable_task(
     result = task_row_to_out(row)
     result["ad_name"] = ad_name  # подставляем ad_name без лишнего JOIN
     return result
+
+
+# ─────────────────── POST /dashboard/disable-tasks/bulk ──────────────────────
+
+
+@router.post("/dashboard/disable-tasks/bulk", response_model=BulkDisableResultOut)
+async def bulk_create_disable_tasks(
+    body: BulkDisableIn,
+    engine: DepEngine,
+) -> dict:
+    """Массовое отключение объявлений (money-критично).
+
+    На каждый fb_ad_id — отдельный create_mutation_task pause_ad в собственной
+    транзакции (idempotent через per-ad ключ manual:pause_ad:{id}:{token}).
+    Частичный откат невозможен: падение на одном ad не теряет уже созданные задачи.
+
+    Ответ partial-failure (HTTP 200):
+      created — задачи, созданные этим запросом;
+      skipped — дубли (ключ уже был): повтор того же idempotency_token или race;
+      failed  — ad не найден в fb_ads / неожиданная ошибка.
+
+    422 — только на валидации входа (пустой/слишком большой batch). Логика в
+    core.tasks.bulk_disable.process_bulk_disable (тестируется изолированно).
+    """
+    # Cap размера batch (валидация входа → 422). Пустой список отсекает min_length=1.
+    if len(body.fb_ad_ids) > BULK_DISABLE_MAX_IDS:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Слишком большой batch: {len(body.fb_ad_ids)} > {BULK_DISABLE_MAX_IDS}. "
+                f"Разбейте на части (тот же idempotency_token безопасен — дублей не будет)."
+            ),
+        )
+
+    outcome = await process_bulk_disable(
+        engine,
+        fb_ad_ids=body.fb_ad_ids,
+        idempotency_token=body.idempotency_token,
+        requested_by=body.requested_by,
+        requested_by_chat_id=body.requested_by_chat_id,
+    )
+    return outcome.as_dict()
 
 
 # ──────────────── POST /dashboard/disable-tasks/{id}/retry ───────────────────

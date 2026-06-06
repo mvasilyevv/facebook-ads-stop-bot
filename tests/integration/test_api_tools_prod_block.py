@@ -1,8 +1,12 @@
 # -*- coding: utf-8 -*-
-"""Интеграционные тесты: prod-блокировка /tools/* endpoints.
+"""Интеграционные тесты: prod-блокировка dev-only /tools/* endpoints.
 
-Проверяет, что при dev_tools_enabled=False все 4 dev-only endpoints
+Проверяет, что при dev_tools_enabled=False creative-uniquify и open-folder
 возвращают 403, а при dev_tools_enabled=True — доступны (не 403).
+
+ВАЖНО: campaign-create/folders и /plan НЕ проверяются здесь — они вынесены
+из-под dev-guard (prod-safe для Mini App Scripts, см. ручку 6). Их тесты —
+в test_api_ручка6_tools.py.
 """
 
 from __future__ import annotations
@@ -58,34 +62,8 @@ async def test_open_folder_blocked_in_prod() -> None:
     assert "DEV_TOOLS_ENABLED" in resp.json()["detail"]
 
 
-# GET /tools/campaign-create/folders без флага → 403
-@pytest.mark.asyncio
-async def test_campaign_folders_blocked_in_prod() -> None:
-    """campaign-create/folders недоступен в проде: 403 без DEV_TOOLS_ENABLED."""
-    app = _make_app(dev_tools_enabled=False)
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.get("/api/tools/campaign-create/folders")
-    assert resp.status_code == 403
-    assert "DEV_TOOLS_ENABLED" in resp.json()["detail"]
-
-
-# POST /tools/campaign-create/plan без флага → 403
-@pytest.mark.asyncio
-async def test_campaign_plan_blocked_in_prod() -> None:
-    """campaign-create/plan недоступен в проде: 403 без DEV_TOOLS_ENABLED."""
-    app = _make_app(dev_tools_enabled=False)
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.post(
-            "/api/tools/campaign-create/plan",
-            json={
-                "offer_code": "DRC_CR2",
-                "offer_country_name": "Congo",
-                "cabinet_id": "act_123",
-                "folder_name": "DRC_CR2_2025",
-            },
-        )
-    assert resp.status_code == 403
-    assert "DEV_TOOLS_ENABLED" in resp.json()["detail"]
+# campaign-create/folders и /plan вынесены из dev-guard (prod-safe) — см. ручку 6.
+# Их тесты в test_api_ручка6_tools.py.
 
 
 # ──────────────────────── Доступность при dev_tools_enabled=True ─────────────

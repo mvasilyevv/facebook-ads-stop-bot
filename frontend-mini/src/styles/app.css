@@ -1,0 +1,22 @@
+@import "tailwindcss";
+/* Единый источник токенов (@fb/shared) — тот же канон, что веб. */
+@import "../../../packages/shared/src/tokens/tokens.css";
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-bg-0);
+  color: var(--color-bg-11);
+  font-family: var(--font-body);
+  font-size: var(--text-body);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  /* safe-area Telegram (детали — Phase 4B на контейнерах/tab-bar) */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+}
