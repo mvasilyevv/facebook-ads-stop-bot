@@ -95,14 +95,17 @@ def test_stop_recovers_to_normal() -> None:
     assert t.create_disable_task is False
 
 
-# Сценарий: STOP всё ещё активен → не дублируем алерт, обновляем коды
-def test_stop_sent_still_stop_no_re_emit() -> None:
+# Сценарий: STOP всё ещё активен → алерт не дублируем, но включаем recovery pause-задачи (C1).
+# create_disable_task=True позволяет пересоздать задачу, если она не была создана
+# (снуз подавил на исходном переходе, либо краш между FSM-коммитом и outbox);
+# idempotency_key по open_token защищает от дублей (повтор → UNIQUE conflict → no-op).
+def test_stop_sent_still_stop_recovery_disable_task() -> None:
     tok = uuid.uuid4()
     t = decide(_input("stop_sent", stop=("cpc_stop",), stage="stop", token=tok))
     assert t.new_state == "stop_sent"
-    assert t.emit_alert is False
-    assert t.create_disable_task is False  # уже отправили на старом emit
-    assert t.new_open_token == tok
+    assert t.emit_alert is False  # повторный STOP-алерт не шлём
+    assert t.create_disable_task is True  # recovery: гарантируем наличие pause-задачи
+    assert t.new_open_token == tok  # token инцидента сохранён → idempotency работает
 
 
 # Сценарий: claimed/disabled — STOP игнорируется (уже в очереди или выключено)

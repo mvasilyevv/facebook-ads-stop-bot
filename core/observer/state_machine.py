@@ -119,13 +119,21 @@ def decide(inp: FsmInput) -> FsmTransition:
                 transition_reason="normal → stop_sent (новый STOP-инцидент)",
             )
         if cur == "stop_sent":
-            # Уже на STOP — не дублируем алерт, но обновим коды (могли поменяться)
+            # Уже на STOP — алерт не дублируем, НО включаем recovery pause-задачи.
+            # Если задача не была создана (снуз подавил create_disable_task на исходном
+            # переходе, либо краш между коммитом FSM 'stop_sent' и созданием outbox) —
+            # создаём её на следующем скане. idempotency_key привязан к open_token
+            # инцидента → если задача уже есть/исполнена, повтор даёт UNIQUE conflict
+            # → no-op (одна задача на инцидент). Закрывает money-залип в stop_sent.
+            # Во время активного снуза _suppress_emit обнулит create_disable_task
+            # (юзер просил не трогать); после истечения снуза recovery сработает.
             return FsmTransition(
                 new_state="stop_sent",
                 new_stage="stop",
                 new_open_token=inp.current_open_token,
                 emit_alert=False,
-                transition_reason="stop_sent → stop_sent (STOP всё ещё активен)",
+                create_disable_task=True,
+                transition_reason="stop_sent → stop_sent (STOP активен, recovery pause-задачи)",
             )
         if cur in ("claimed", "disabled"):
             # Уже в процессе обработки или выключено — ничего не делаем
