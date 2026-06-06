@@ -6,7 +6,8 @@ dispatch_mutation. До Этапа 5 здесь была заглушка с Not
 
 Состояние процесса:
 - heartbeat: Redis worker:heartbeat:meta_api TTL 60s
-- reconcile: stuck running + stale drafts (своих task_type)
+- reconcile: делегирован каноническому reconciler_worker (общий по task_type, с bump
+  attempt_count) — локальный reconcile-loop убран, чтобы не было двух reconciler'ов
 - idle: spinning poll с asyncio.sleep
 - graceful: SIGTERM/SIGINT → завершить текущий цикл и закрыть ресурсы
 
@@ -18,6 +19,9 @@ dispatch_mutation. До Этапа 5 здесь была заглушка с Not
 - CreateCampaignPartialError → mark_failed + лог осиротевших id (нужна ручная чистка)
 - голый ValueError (неожиданный, баг в коде) → requeue (защитный retry, логируется как аномалия)
 - любое другое Exception → requeue (защитный retry на transient)
+- ИСКЛЮЧЕНИЕ для необратимых kinds (create_campaign/duplicate_campaign): transient/
+  ValueError/Exception → mark_failed (НЕ requeue), т.к. ответ мог потеряться после
+  коммита Meta и retry создал бы дубль кампании. См. _IRREVERSIBLE_KINDS.
 """
 
 from __future__ import annotations
@@ -57,7 +61,6 @@ from core.meta_api.queue import (
     mark_task_succeeded,
     requeue_task,
 )
-from core.meta_api.reconciler import reconcile_all
 from core.meta_api.schemas import MetaMutationPayload
 from core.observer.queries import load_scanning_enabled
 from core.pubsub import CHANNEL_TASK_CHANGED
@@ -69,7 +72,6 @@ WORKER_NAME = "meta_api"
 HEARTBEAT_KEY = f"worker:heartbeat:{WORKER_NAME}"
 HEARTBEAT_TTL_SECONDS = 60
 IDLE_SLEEP_SECONDS = 5
-RECONCILE_INTERVAL_SECONDS = 60
 
 
 async def _publish_task_changed(
@@ -153,6 +155,48 @@ _TEMPORARY_EXCEPTIONS: tuple[type[BaseException], ...] = (
     SessionUnavailableError,
     TemporaryError,
 )
+
+# Необратимые mutations: создают новые объекты в Meta (кампании/копии). Если ответ
+# потерян УЖЕ ПОСЛЕ коммита на стороне Meta (gRPC DEADLINE/UNAVAILABLE, битый JSON,
+# ValueError на постобработке успешного ответа), повторный вызов = ДУБЛЬ кампании +
+# двойной открут бюджета. idempotency_key (на enqueue) от retry той же строки не
+# защищает. Поэтому transient/неожиданные ошибки для них НЕ ретраим, а уводим в
+# mark_failed с явным сигналом «проверь Meta вручную».
+_IRREVERSIBLE_KINDS: frozenset[str] = frozenset({"create_campaign", "duplicate_campaign"})
+
+
+async def _fail_irreversible(
+    engine: AsyncEngine,
+    task: Task,
+    payload: MetaMutationPayload,
+    exc: BaseException,
+    *,
+    reason: str,
+) -> None:
+    """Завершить необратимую mutation как failed (без retry) при transient-ошибке.
+
+    Money-safety: ответ Meta мог потеряться после коммита → повторный вызов создал бы
+    дубль кампании. Помечаем failed с явным error — задача видна в дашборде, оператор
+    проверяет Meta вручную.
+    """
+    logger.error(
+        "meta_api: task id=%s kind=%s — необратимая mutation, ошибка (%s) возможно ПОСЛЕ "
+        "коммита Meta. НЕ ретраим (риск дубля кампании). ПРОВЕРЬ Meta вручную! err=%r",
+        task.id,
+        payload.mutation_kind,
+        reason,
+        exc,
+    )
+    applied = await mark_task_failed(
+        engine,
+        task_id=task.id,
+        error=f"irreversible_no_retry ({reason}): проверь Meta вручную — возможен дубль: {exc!r}",
+    )
+    if not applied:
+        logger.warning(
+            "meta_api: task id=%s mark_failed (irreversible) не применился — гонка", task.id
+        )
+
 
 # ====================== асимметричный стоп ======================
 
@@ -357,6 +401,10 @@ async def process_one_task(
             logger.warning("meta_api: task id=%s → permanent fail: %s", task.id, exc)
         return
     except _TEMPORARY_EXCEPTIONS as exc:
+        # Необратимые kinds не ретраим: transient мог прилететь после коммита Meta → дубль.
+        if payload.mutation_kind in _IRREVERSIBLE_KINDS:
+            await _fail_irreversible(engine, task, payload, exc, reason="temporary")
+            return
         retried = await requeue_task(engine, task=task, error=repr(exc))
         if retried:
             logger.warning("meta_api: task id=%s → retrying (temporary): %s", task.id, exc)
@@ -364,6 +412,11 @@ async def process_one_task(
             logger.error("meta_api: task id=%s → exhausted retries (temporary): %s", task.id, exc)
         return
     except ValueError as exc:
+        # Необратимые kinds: ValueError мог прийти на постобработке УЖЕ успешного ответа
+        # (парсинг id/batch-тела) → retry создал бы дубль. Уводим в failed.
+        if payload.mutation_kind in _IRREVERSIBLE_KINDS:
+            await _fail_irreversible(engine, task, payload, exc, reason="value_error_postprocess")
+            return
         # Голый ValueError — скорее всего баг в коде или неожиданный Graph-ответ.
         # Не mark_failed (без retry потеряем задачу навсегда), а requeue с аномалия-логом.
         logger.error(
@@ -382,6 +435,10 @@ async def process_one_task(
             )
         return
     except Exception as exc:  # noqa: BLE001 — защитная сетка на неклассифицированное
+        # Необратимые kinds: неклассифицированная ошибка после возможного коммита → не ретраим.
+        if payload.mutation_kind in _IRREVERSIBLE_KINDS:
+            await _fail_irreversible(engine, task, payload, exc, reason="unknown")
+            return
         retried = await requeue_task(engine, task=task, error=repr(exc))
         if retried:
             logger.warning("meta_api: task id=%s → retrying (unknown): %s", task.id, exc)
@@ -402,21 +459,6 @@ async def heartbeat_loop(redis_client: redis_asyncio.Redis, stop: asyncio.Event)
             logger.exception("heartbeat: ошибка записи в Redis")
         try:
             await asyncio.wait_for(stop.wait(), timeout=interval)
-        except asyncio.TimeoutError:
-            pass
-
-
-async def reconcile_loop(engine: AsyncEngine, stop: asyncio.Event) -> None:
-    """Reconcile stuck/stale tasks раз в RECONCILE_INTERVAL_SECONDS."""
-    while not stop.is_set():
-        try:
-            stats = await reconcile_all(engine)
-            if stats.get("stuck_running") or stats.get("stale_drafts"):
-                logger.info("reconcile: %s", stats)
-        except Exception:  # noqa: BLE001
-            logger.exception("reconcile loop: error")
-        try:
-            await asyncio.wait_for(stop.wait(), timeout=RECONCILE_INTERVAL_SECONDS)
         except asyncio.TimeoutError:
             pass
 
@@ -476,7 +518,6 @@ async def main_loop(database_url: str | None = None) -> None:
         await asyncio.gather(
             task_loop(engine, stop, client=meta_client, redis_client=redis_client),
             heartbeat_loop(redis_client, stop),
-            reconcile_loop(engine, stop),
         )
     finally:
         try:

@@ -439,6 +439,59 @@ async def test_snooze_expired_between_scans_emits_on_third(pg_engine, offer_kr2)
     )
 
 
+# C1/M3: после истечения snooze залипший stop_sent создаёт pause-задачу (money-recovery).
+# Проверяем task_queue НАПРЯМУЮ (а не только alert_events) и без ручного сброса alert_state —
+# именно эту money-границу старый снуз-тест маскировал.
+@pytest.mark.asyncio
+async def test_snooze_stop_recovery_creates_pause_task(pg_engine, offer_kr2) -> None:
+    """Снуз → залипание в stop_sent под снузом (pause-задача подавлена) → снуз истёк →
+    следующий скан создаёт meta_api_mutation pause_ad. Закрывает C1: без recovery ад
+    навсегда залипал в stop_sent без авто-отключения и продолжал жечь бюджет."""
+    row = _make_row(spend=Decimal("20.0"), deposits=0, leads=0, registrations=0)
+
+    # Scan #1 → ад уходит в stop_sent (трата без событий).
+    ts1 = datetime(2026, 5, 28, 12, 0, 0, tzinfo=UTC)
+    await process_scan_rows(pg_engine, rows=[row], scan_id=1, cycle_ts=ts1)
+
+    # Снуз активен до ts1+2мин + эмулируем «pause-задача не создавалась» (снуз/краш-сценарий):
+    snooze_exp = ts1 + timedelta(minutes=2)
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE ad_alert_state SET snoozed_until = :su WHERE alert_state = 'stop_sent'"),
+            {"su": snooze_exp},
+        )
+        await conn.execute(text("DELETE FROM task_queue WHERE task_type = 'meta_api_mutation'"))
+
+    # Scan #2 под активным снузом: pause-задача НЕ создаётся (suppress).
+    ts2 = ts1 + timedelta(minutes=1)
+    await process_scan_rows(pg_engine, rows=[row], scan_id=2, cycle_ts=ts2)
+    async with pg_engine.connect() as conn:
+        n_under_snooze = (
+            await conn.execute(
+                text("SELECT COUNT(*) FROM task_queue WHERE payload->>'mutation_kind' = 'pause_ad'")
+            )
+        ).scalar()
+    assert n_under_snooze == 0, "под активным снузом pause-задача должна быть подавлена"
+
+    # Scan #3 после истечения снуза: recovery создаёт ровно одну pause_ad.
+    ts3 = ts1 + timedelta(minutes=3)
+    await process_scan_rows(pg_engine, rows=[row], scan_id=3, cycle_ts=ts3)
+    async with pg_engine.connect() as conn:
+        recovered = (
+            await conn.execute(
+                text(
+                    "SELECT payload->>'mutation_kind' AS kind, payload->>'target_id' AS target "
+                    "FROM task_queue WHERE payload->>'mutation_kind' = 'pause_ad'"
+                )
+            )
+        ).fetchall()
+    assert len(recovered) == 1, (
+        f"recovery создаёт ровно одну pause-задачу, получено {len(recovered)}"
+    )
+    assert recovered[0].kind == "pause_ad"
+    assert recovered[0].target == "230011223344"
+
+
 # Owner-scoping: чужая кампания с кодом оффера CR2, но без тега MV, НЕ обрабатывается
 # (ключевая защита — owner-фильтр сильнее матчинга оффера, иначе бот тронул бы чужое)
 @pytest.mark.asyncio
