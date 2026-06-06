@@ -115,6 +115,28 @@ def test_click_stage_guardrail_without_clicks_triggers_stop():
     assert result.matched_rule_codes == ["cpc_stop"]
 
 
+# M1: guardrail подавляется при impressions < sanity-минимума (нерепрезентативная статистика).
+# build_rule_context теперь заполняет ctx.impressions ВСЕГДА (а не только при frequency),
+# поэтому guardrail консистентно не стопает на малых показах для любого оффера.
+def test_guardrail_suppressed_below_min_impressions():
+    row = _make_row(spend=Decimal("0.12"), clicks=0, cpc=None)
+
+    result = evaluate_stop_rules(row, _make_ctx(impressions=5))
+
+    assert "cpc_stop" not in result.matched_rule_codes
+    assert "cpl_stop" not in result.matched_rule_codes
+
+
+# M1: при достаточных показах guardrail работает как прежде (sanity-минимум пройден).
+def test_guardrail_fires_above_min_impressions():
+    row = _make_row(spend=Decimal("0.12"), clicks=0, cpc=None)
+
+    result = evaluate_stop_rules(row, _make_ctx(impressions=500))
+
+    assert result.stage == AlertStage.STOP
+    assert result.matched_rule_codes == ["cpc_stop"]
+
+
 # Проверяем что после кликов, но без лидов, расход может эскалировать в следующий порог лида.
 def test_click_stage_escalates_to_lead_guardrail():
     row = _make_row(

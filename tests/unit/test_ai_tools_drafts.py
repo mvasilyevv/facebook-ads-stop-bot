@@ -85,6 +85,28 @@ async def test_budget_change_daily_ok(monkeypatch) -> None:
     assert captured["requested_by"] == "tg:bob"
 
 
+# M12: created_by_chat_id из ToolContext пробрасывается в create_draft_task (owner-ACL семя).
+# Регрессия проброса → draft безхозный (NULL) → требует admin-override, тихая деградация ACL.
+@pytest.mark.asyncio
+async def test_draft_propagates_created_by_chat_id(monkeypatch) -> None:
+    captured = _capture_create_draft_task(
+        monkeypatch, "core.ai_assistant.tools.drafts.request_budget_change"
+    )
+    ctx = ToolContext(
+        client_key="user-1",
+        engine=MagicMock(name="engine"),
+        requested_by="tg:bob",
+        created_by_chat_id=987654,
+    )
+
+    await RequestBudgetChangeTool().run(
+        ctx,
+        {"adset_id": "1234567", "ad_account_id": "act_777", "daily_budget_usd": 10},
+    )
+
+    assert captured["created_by_chat_id"] == 987654
+
+
 # lifetime_budget_usd работает альтернативно daily; params содержит lifetime_budget в центах.
 @pytest.mark.asyncio
 async def test_budget_change_lifetime_ok(monkeypatch) -> None:

@@ -60,8 +60,9 @@ def _row(
 # ====================== build_rule_context: проводка opt-in ======================
 
 
-# Оффер без frequency_threshold → правило выключено, impressions/reach НЕ протекают
-# в ctx (guardrail-поведение существующих правил не меняется).
+# Оффер без frequency_threshold → frequency-правило выключено. M1: impressions/reach
+# теперь заполняются ВСЕГДА (нужны guardrail'у как sanity-минимум показов), но
+# frequency_anomaly остаётся off и frequency_current не протекает.
 def test_context_no_threshold_disables_rule() -> None:
     ctx = build_rule_context(
         _offer(frequency_threshold=None),
@@ -71,8 +72,8 @@ def test_context_no_threshold_disables_rule() -> None:
     )
     assert ctx.frequency_anomaly_enabled is False
     assert ctx.frequency_current is None
-    assert ctx.impressions is None
-    assert ctx.reach is None
+    assert ctx.impressions == 2000
+    assert ctx.reach == 400
 
 
 # Оффер с порогом → enabled, stop=порог, warning=свёртка 80%, данные проброшены.

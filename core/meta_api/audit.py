@@ -186,15 +186,32 @@ class AuditedMetaApiClient(MetaApiClient):
 
         duration_ms = int((time.monotonic() - start) * 1000)
         # Response payload не пишем целиком (insights могут быть огромны) — только summary.
-        response_summary = {
-            "data_items": len(response.get("data") or []) if isinstance(response, dict) else 0,
-            "has_paging": isinstance(response, dict) and "paging" in response,
-        }
+        # M5: для Batch API (response — список sub-results {code,body}) агрегируем коды:
+        # частично/полностью провальный батч раньше логировался как success-200, скрывая
+        # осиротевшие объекты. Теперь http_status=200 только если ВСЕ sub-requests ОК,
+        # иначе 207 (Multi-Status) + разбивка ok/failed.
+        if isinstance(response, list):
+            codes = [int(r.get("code", 0)) for r in response if isinstance(r, dict)]
+            ok = sum(1 for c in codes if 200 <= c < 300)
+            failed = len(codes) - ok
+            http_status = 200 if codes and failed == 0 else 207
+            response_summary = {
+                "batch": True,
+                "sub_total": len(codes),
+                "sub_ok": ok,
+                "sub_failed": failed,
+            }
+        else:
+            http_status = 200
+            response_summary = {
+                "data_items": len(response.get("data") or []) if isinstance(response, dict) else 0,
+                "has_paging": isinstance(response, dict) and "paging" in response,
+            }
         await record_audit_log(
             self._engine,
             endpoint=endpoint,
             http_method=method,
-            http_status=200,
+            http_status=http_status,
             initiated_by=self._initiated_by,
             ad_account_id=ad_account_id,
             request_payload=request_payload,

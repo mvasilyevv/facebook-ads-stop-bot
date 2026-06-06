@@ -17,6 +17,7 @@ UPDATE promoted_to_task_id в одной транзакции.
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 
@@ -203,8 +204,6 @@ async def confirm_enable_recommendation(
 
         ikey = f"reco:activate_ad:{fb_ad_id}:{rec_id}:{uuid.uuid4().hex}"
 
-        import json as _json
-
         # INSERT напрямую внутри транзакции (не через create_task чтобы держать один conn)
         insert_result = await conn.execute(
             text(
@@ -220,7 +219,7 @@ async def confirm_enable_recommendation(
             ),
             {
                 "ik": ikey,
-                "pl": _json.dumps(payload),
+                "pl": json.dumps(payload),
                 "rb": body.requested_by,
                 "ccid": body.requested_by_chat_id,
             },

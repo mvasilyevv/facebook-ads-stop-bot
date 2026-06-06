@@ -74,11 +74,12 @@ def build_rule_context(
     warning — свёртка 80% (как у CPC/CPL/CPR). Фаза 1: только абсолютный порог, без
     истории frequency_1h_ago (рост за час не считаем).
 
-    ВАЖНО (money): impressions/reach кладём в RuleContext ТОЛЬКО когда frequency-правило
-    включено. ctx.impressions используется ещё и guardrail-правилами (cpc/cpl/cpr при 0
-    событий) как sanity-минимум показов — передавать его всегда означало бы тихо изменить
-    поведение существующих правил (не входит в scope #37). Для офферов без frequency_threshold
-    impressions=None → guardrail работает ровно как раньше.
+    impressions/reach (M1): кладём в RuleContext ВСЕГДА. Они нужны frequency-правилу И
+    guardrail'у (cpc/cpl/cpr при 0 событий) как sanity-минимум показов — не стопать на
+    статистически нерепрезентативных (<min_impressions) показах. Раньше передавались
+    только при freq_enabled, из-за чего включение frequency на оффере незаметно меняло
+    поведение guardrail (непоследовательность). Практически безопасно: при малых показах
+    спенд обычно ниже guardrail-порога, так что стоп-решения не меняются.
     """
     cpa = offer.cpa_threshold or Decimal("100")
     # Чувствительность per-offer: при каком % правила срабатывает стоп/ворнинг.
@@ -105,8 +106,8 @@ def build_rule_context(
         frequency_current=frequency_current if freq_enabled else None,
         frequency_stop_threshold=freq_stop,
         frequency_warning_threshold=freq_warning,
-        impressions=impressions if freq_enabled else None,
-        reach=reach if freq_enabled else None,
+        impressions=impressions,
+        reach=reach,
     )
 
 
