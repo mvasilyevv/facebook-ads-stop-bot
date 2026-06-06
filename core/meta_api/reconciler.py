@@ -1,12 +1,15 @@
 # -*- coding: utf-8 -*-
-"""Reconciler для meta_api_mutation задач.
+"""Reconciler-утилиты для meta_api_mutation задач (в проде НЕ запускаются).
 
-Общий reconciler_worker уже работает по всем task_type (см. CLAUDE.md):
-- RUNNING > 30 мин → RETRYING
-- DRAFT > 24 ч → CANCELLED
+Канонический reconciler_worker (core.tasks.queue.reconcile_stuck_running) уже
+покрывает ВСЕ task_type, включая meta_api_mutation, и инкрементит attempt_count.
+meta_api_worker свой reconcile-loop больше НЕ запускает — убран, чтобы не было двух
+конкурирующих reconciler'ов (money-fix: meta-local не бампал attempt_count, из-за чего
+зависшая необратимая mutation могла ретраиться сверх лимита → дубль кампании).
 
-Эти функции — тонкие фильтрованные обёртки на случай, если мы захотим
-запускать отдельно (например, более агрессивный таймаут для meta_api).
+⚠️ reconcile_stuck_meta_running НЕ бампает attempt_count — использовать только
+осознанно (ручной прогон с более агрессивным таймаутом). Для штатного reconcile
+полагайся на канонический reconciler_worker.
 """
 
 from __future__ import annotations
