@@ -38,6 +38,32 @@ def test_parse_expected_workers_empty() -> None:
     assert parse_expected_workers("   ") == []
 
 
+# H4: money-критичные воркеры обязаны быть в дефолтном списке мониторинга
+def test_default_expected_workers_covers_money_critical() -> None:
+    from apps.health_watchdog.main import DEFAULT_EXPECTED_WORKERS
+
+    workers = parse_expected_workers(DEFAULT_EXPECTED_WORKERS)
+    for name in ("meta_api", "cabinet_scheduler", "tracker_aggregator", "observer"):
+        assert name in workers, f"{name} должен мониториться (money-критичный)"
+    # disable/enable удалены (DOM-канал) — их не должно быть в дефолте
+    assert "disable" not in workers
+    assert "enable" not in workers
+
+
+# H4: дефолт watchdog согласован с health_details (UI и алертинг видят один набор;
+# health_watchdog мониторит всё, КРОМЕ себя — если он сам мёртв, алертить некому)
+def test_default_expected_workers_synced_with_health_details() -> None:
+    from apps.api.routers.v1.health_details import _DEFAULT_EXPECTED_WORKERS
+    from apps.health_watchdog.main import DEFAULT_EXPECTED_WORKERS
+
+    watchdog = set(parse_expected_workers(DEFAULT_EXPECTED_WORKERS))
+    details = set(_DEFAULT_EXPECTED_WORKERS)
+    # health_details дополнительно содержит только health_watchdog (для UI-статуса)
+    assert details - watchdog == {"health_watchdog"}, (
+        f"рассинхрон watchdog↔health_details: {details ^ watchdog}"
+    )
+
+
 # Нет ключа observer:runtime → stale=True с reason="missing"
 def test_check_observer_runtime_freshness_missing() -> None:
     now = datetime(2026, 5, 27, 12, 0, 0, tzinfo=timezone.utc)

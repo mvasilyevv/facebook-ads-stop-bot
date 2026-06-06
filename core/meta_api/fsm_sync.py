@@ -34,6 +34,25 @@ _BULK_ACTION_ENABLE = frozenset({"activate", "active"})
 _BULK_STATUS_DISABLE = frozenset({"PAUSED"})
 _BULK_STATUS_ENABLE = frozenset({"ACTIVE"})
 
+# Выключающие действия bulk (обе формы) — для асимметричного стоп-гейта meta_api_worker.
+_DEACTIVATING_BULK_ACTIONS = frozenset({"pause", "paused", "disable", "disabled"})
+
+
+def is_deactivating_bulk(params: dict) -> bool:
+    """True если bulk_status_change ВЫКЛЮЧАЕТ открут (pause) — в любой из форм.
+
+    Используется асимметричным стоп-гейтом: выключающий bulk разрешён даже на паузе
+    сканирования. Покрывает сокращённую (action=pause) и полную (status=PAUSED) формы —
+    единый контракт с _resolve_bulk_ad_toggle. Раньше гейт смотрел только `action`,
+    из-за чего полная форма {object_ids, status:PAUSED} ошибочно считалась активирующей
+    и откладывалась на паузе (хотя это именно выключение, его надо пропускать).
+    """
+    action = str(params.get("action") or "").lower().strip()
+    if action:
+        return action in _DEACTIVATING_BULK_ACTIONS
+    status = str(params.get("status") or "").upper().strip()
+    return status in _BULK_STATUS_DISABLE
+
 
 async def sync_fsm_after_mutation(
     engine: AsyncEngine,
@@ -106,4 +125,4 @@ def _resolve_bulk_ad_toggle(params: dict) -> tuple[list[str], bool]:
     return [], False
 
 
-__all__ = ["sync_fsm_after_mutation"]
+__all__ = ["is_deactivating_bulk", "sync_fsm_after_mutation"]

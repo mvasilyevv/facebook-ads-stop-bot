@@ -36,6 +36,7 @@ _DEFAULT_EXPECTED_WORKERS: list[str] = [
     "cleanup",
     "reconciler",
     "enable_reco",
+    "tracker_aggregator",
     "digest_scheduler",
     "creator",
     "creator_recorder",

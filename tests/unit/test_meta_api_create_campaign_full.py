@@ -342,6 +342,39 @@ async def test_create_campaign_rejects_adset_both_budgets() -> None:
         await CreateCampaignHandler().execute(client, payload)
 
 
+# H2: adset daily_budget сверх лимита ($100k) → reject (защита от выгорания бюджета).
+@pytest.mark.asyncio
+async def test_create_campaign_rejects_adset_budget_over_cap() -> None:
+    client = _make_client()
+    params = _valid_params()
+    params["adset"]["daily_budget_cents"] = 100_000_00 + 1  # $100 000 + 1 цент
+    payload = MetaMutationPayload(
+        mutation_kind="create_campaign",
+        target_id="new",
+        params=params,
+        ad_account_id="act_999",
+    )
+    with pytest.raises(ValueError, match="превышает лимит"):
+        await CreateCampaignHandler().execute(client, payload)
+
+
+# H2: campaign CBO lifetime_budget сверх лимита ($1M) → reject.
+@pytest.mark.asyncio
+async def test_create_campaign_rejects_campaign_lifetime_over_cap() -> None:
+    client = _make_client()
+    params = _valid_params()
+    del params["adset"]["daily_budget_cents"]
+    params["campaign"]["lifetime_budget_cents"] = 1_000_000_00 + 1  # $1 000 000 + 1 цент
+    payload = MetaMutationPayload(
+        mutation_kind="create_campaign",
+        target_id="new",
+        params=params,
+        ad_account_id="act_999",
+    )
+    with pytest.raises(ValueError, match="превышает лимит"):
+        await CreateCampaignHandler().execute(client, payload)
+
+
 # Targeting без geo_locations — ValueError (Meta откажется создать adset).
 @pytest.mark.asyncio
 async def test_create_campaign_rejects_targeting_without_geo() -> None:

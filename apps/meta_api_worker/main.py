@@ -51,7 +51,7 @@ from core.meta_api.errors import (
 from core.meta_api.errors import (
     PermissionError as MetaPermissionError,
 )
-from core.meta_api.fsm_sync import sync_fsm_after_mutation
+from core.meta_api.fsm_sync import is_deactivating_bulk, sync_fsm_after_mutation
 from core.meta_api.mutations import dispatch_mutation
 from core.meta_api.mutations.create_campaign import CreateCampaignPartialError
 from core.meta_api.ownership import check_mutation_ownership, load_owner_tag
@@ -202,8 +202,6 @@ async def _fail_irreversible(
 
 # mutation_kind, которые ВЫКЛЮЧАЮТ открут (снижают трату) — разрешены даже на паузе.
 _DEACTIVATING_KINDS = frozenset({"pause_ad", "pause_campaign"})
-# action для bulk_status_change, которые считаются выключающими.
-_BULK_PAUSE_ACTIONS = frozenset({"pause", "paused", "disable", "disabled"})
 
 
 def _is_activating_mutation(payload: MetaMutationPayload) -> bool:
@@ -220,8 +218,9 @@ def _is_activating_mutation(payload: MetaMutationPayload) -> bool:
     if kind in _DEACTIVATING_KINDS:
         return False
     if kind == "bulk_status_change":
-        action = str((getattr(payload, "params", None) or {}).get("action", "")).strip().lower()
-        return action not in _BULK_PAUSE_ACTIONS
+        # Обе формы bulk: сокращённая (action=pause) и полная (status=PAUSED).
+        # Выключающий bulk разрешён даже на паузе → не активирующий.
+        return not is_deactivating_bulk(getattr(payload, "params", None) or {})
     return True
 
 

@@ -213,6 +213,16 @@ async def fetch_campaigns(
                 SUM(deposits)      AS deposits
             FROM per_ad_day
             GROUP BY ad_id
+        ),
+        campaign_alerts AS (
+            -- Алерты агрегируем ОТДЕЛЬНО per-campaign: прямой JOIN alert_events к строкам
+            -- с метриками умножал бы их (ad×alert) и дробил SUM(spend) кампании (H3).
+            SELECT s2.campaign_id, COUNT(*) AS alerts_count
+            FROM alert_events ae
+            JOIN fb_ads a2    ON a2.id = ae.ad_id
+            JOIN fb_adsets s2 ON s2.id = a2.adset_id
+            WHERE ae.created_at BETWEEN :from_dt AND :to_dt
+            GROUP BY s2.campaign_id
         )
         SELECT
             c.id                        AS campaign_id,
@@ -232,12 +242,7 @@ async def fetch_campaigns(
         JOIN fb_ads a       ON a.adset_id = s.id
         LEFT JOIN offers o  ON o.id = c.offer_id
         LEFT JOIN per_ad m  ON m.ad_id = a.id
-        LEFT JOIN (
-            SELECT ae.ad_id, COUNT(*) AS alerts_count
-            FROM alert_events ae
-            WHERE ae.created_at BETWEEN :from_dt AND :to_dt
-            GROUP BY ae.ad_id
-        ) al ON al.ad_id = a.id
+        LEFT JOIN campaign_alerts al ON al.campaign_id = c.id
         GROUP BY c.id, c.fb_campaign_id, c.campaign_name, o.code, al.alerts_count
         ORDER BY spend DESC
         LIMIT :limit
@@ -317,7 +322,8 @@ async def fetch_offers(
     """GROUP BY Offer через JOIN fb_campaigns.offer_id.
 
     CRIT-1: per-ad-per-day latest → per-ad SUM в CTE, чтобы spend не завышался
-    кумулятивом и посуточным reset'ом. alert_events джойнится отдельно (count).
+    кумулятивом и посуточным reset'ом. Алерты — отдельная per-offer CTE (прямой JOIN
+    alert_events двоил бы SUM(spend) при нескольких алертах на ad — H3 fan-out).
     """
     sql = text(
         f"""
@@ -336,6 +342,18 @@ async def fetch_offers(
                 SUM(deposits)      AS deposits
             FROM per_ad_day
             GROUP BY ad_id
+        ),
+        offer_alerts AS (
+            -- Алерты per-offer отдельно: прямой JOIN alert_events двоил бы SUM(spend)
+            -- оффера при нескольких алертах на ad (тот же класс fan-out, что H3 в campaigns).
+            SELECT c2.offer_id, COUNT(*) AS alerts_count
+            FROM alert_events ae
+            JOIN fb_ads a2       ON a2.id = ae.ad_id
+            JOIN fb_adsets s2    ON s2.id = a2.adset_id
+            JOIN fb_campaigns c2 ON c2.id = s2.campaign_id
+            WHERE ae.created_at BETWEEN :from_dt AND :to_dt
+              AND c2.offer_id IS NOT NULL
+            GROUP BY c2.offer_id
         )
         SELECT
             o.id            AS offer_id,
@@ -345,7 +363,7 @@ async def fetch_offers(
             COALESCE(SUM(m.leads), 0)::int      AS leads,
             COALESCE(SUM(m.registrations), 0)::int AS registrations,
             COALESCE(SUM(m.deposits), 0)::int   AS deposits,
-            COALESCE(COUNT(DISTINCT ae.id), 0)::int AS alerts_count,
+            COALESCE(oa.alerts_count, 0)::int   AS alerts_count,
             COUNT(DISTINCT a.id) FILTER (
                 WHERE a.last_seen_at >= NOW() - INTERVAL '7 days'
             )::int                              AS active_ads_count
@@ -354,10 +372,8 @@ async def fetch_offers(
         JOIN fb_adsets s    ON s.campaign_id = c.id
         JOIN fb_ads a       ON a.adset_id = s.id
         LEFT JOIN per_ad m  ON m.ad_id = a.id
-        LEFT JOIN alert_events ae
-            ON ae.ad_id = a.id
-            AND ae.created_at BETWEEN :from_dt AND :to_dt
-        GROUP BY o.id, o.code, o.name
+        LEFT JOIN offer_alerts oa ON oa.offer_id = o.id
+        GROUP BY o.id, o.code, o.name, oa.alerts_count
         ORDER BY spend DESC
         LIMIT :limit
         """

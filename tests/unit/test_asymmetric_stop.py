@@ -124,6 +124,27 @@ def test_is_activating_create_campaign_true() -> None:
     assert meta._is_activating_mutation(p) is True
 
 
+# bulk ПОЛНАЯ форма {object_ids, status:PAUSED} — выключающая (M7-фикс: раньше гейт
+# смотрел только action → полная форма PAUSED ошибочно считалась активирующей)
+def test_is_activating_bulk_full_form_paused_false() -> None:
+    p = MetaMutationPayload(
+        mutation_kind="bulk_status_change",
+        target_id="123",
+        params={"object_ids": ["1", "2"], "status": "PAUSED", "object_type": "ad"},
+    )
+    assert meta._is_activating_mutation(p) is False
+
+
+# bulk ПОЛНАЯ форма status:ACTIVE — включающая (на паузе откладывается)
+def test_is_activating_bulk_full_form_active_true() -> None:
+    p = MetaMutationPayload(
+        mutation_kind="bulk_status_change",
+        target_id="123",
+        params={"object_ids": ["1", "2"], "status": "ACTIVE", "object_type": "ad"},
+    )
+    assert meta._is_activating_mutation(p) is True
+
+
 # ====================== cabinet_scheduler ======================
 
 

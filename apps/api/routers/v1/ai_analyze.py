@@ -41,19 +41,21 @@ _ANALYZE_RATE_LIMIT = 20
 _RATE_LIMIT_NAMESPACE = "analyze"
 
 
-def _extract_client_key(request: Request) -> str:
+def _extract_client_key(request: Request, *, trust_proxy: bool = False) -> str:
     """Извлечь ключ клиента для rate-limit.
 
-    За reverse-proxy (k8s-ingress, nginx) используем первый IP из X-Forwarded-For.
-    Fallback — request.client.host. При полностью неизвестном IP — 'unknown'.
+    trust_proxy=True (settings.trust_proxy_headers — API за доверенным reverse-proxy):
+    берём первый IP из X-Forwarded-For. Иначе (дефолт) — request.client.host (реальный
+    TCP-peer). H7a: XFF подделывается любым клиентом, доверие ему без проверки прокси =
+    обход IP-rate-limit от имени чужого IP → бесконтрольный расход AI-бюджета.
     """
-    forwarded_for = request.headers.get("X-Forwarded-For", "")
-    if forwarded_for:
-        # X-Forwarded-For: <client>, <proxy1>, <proxy2>
-        # Берём самый левый (реальный клиент)
-        first_ip = forwarded_for.split(",")[0].strip()
-        if first_ip:
-            return first_ip
+    if trust_proxy:
+        forwarded_for = request.headers.get("X-Forwarded-For", "")
+        if forwarded_for:
+            # X-Forwarded-For: <client>, <proxy1>, <proxy2> — берём самый левый.
+            first_ip = forwarded_for.split(",")[0].strip()
+            if first_ip:
+                return first_ip
     return (request.client.host if request.client else None) or "unknown"
 
 
@@ -115,8 +117,9 @@ async def ai_analyze(
             },
         )
 
-    # Rate-limit per remote IP через Redis sliding-window
-    client_key = _extract_client_key(request)
+    # Rate-limit per remote IP через Redis sliding-window. XFF учитывается только за
+    # доверенным прокси (settings.trust_proxy_headers), иначе реальный TCP-peer (H7a).
+    client_key = _extract_client_key(request, trust_proxy=settings.trust_proxy_headers)
     try:
         await check_and_increment(
             redis,
