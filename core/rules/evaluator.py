@@ -406,7 +406,7 @@ def _evaluate_guardrail_only(
             ),
         )
 
-    if current_spend > warning_threshold:
+    if current_spend >= warning_threshold:
         return RuleHit(
             code=code,
             title=title,
