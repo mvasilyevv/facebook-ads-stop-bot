@@ -5,15 +5,7 @@ import Loader from "../components/Loader.jsx";
 import ErrorBox from "../components/ErrorBox.jsx";
 import Card from "../components/Card.jsx";
 import { haptic } from "../theme.js";
-
-const STATE_LABELS = {
-  NORMAL: "Норма",
-  WARNING_SENT: "Предупреждение",
-  STOP_SENT: "Стоп",
-  CLAIMED: "Ожидает OFF",
-  DISABLED: "Отключено",
-  ARCHIVED: "Архив",
-};
+import { STATE_LABELS } from "../utils/constants.js";
 
 function stateBadgeClass(state) {
   if (state === "STOP_SENT" || state === "CLAIMED") return "badge badge-stop";

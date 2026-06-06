@@ -8,13 +8,7 @@ import { haptic } from "../theme.js";
 import KPIPlate from "../components/kpi/KPIPlate.jsx";
 import AIBriefingCard from "../components/ai/AIBriefingCard.jsx";
 import { useNetworkStatus } from "../App.jsx";
-
-
-const STATE_LABELS = {
-  STOP_SENT: "Стоп",
-  WARNING_SENT: "Предупреждение",
-  CLAIMED: "Ожидает OFF",
-};
+import { STATE_LABELS } from "../utils/constants.js";
 
 function incidentVariant(state) {
   if (state === "STOP_SENT" || state === "CLAIMED") return "stop";

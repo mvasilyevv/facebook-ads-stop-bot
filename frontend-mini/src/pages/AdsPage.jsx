@@ -7,15 +7,7 @@ import EmptyState from "../components/EmptyState.jsx";
 import Card from "../components/Card.jsx";
 import { haptic } from "../theme.js";
 import { useNetworkStatus } from "../App.jsx";
-
-const STATE_LABELS = {
-  NORMAL: "Норма",
-  WARNING_SENT: "Предупреждение",
-  STOP_SENT: "Стоп",
-  CLAIMED: "Ожидает OFF",
-  DISABLED: "Отключено",
-  ARCHIVED: "Архив",
-};
+import { STATE_LABELS } from "../utils/constants.js";
 
 function fmt$(v) {
   if (v == null || v === "") return "—";

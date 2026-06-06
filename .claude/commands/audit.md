@@ -8,7 +8,7 @@ argument-hint: "[scope: all | backend | frontend | <путь/glob>]  (по ум�
 Scope из аргумента: `$ARGUMENTS` (пусто → `all`).
 
 ## Контекст проекта (читай перед стартом)
-- `CLAUDE.md` — архитектура: 14 Python-воркеров + FastAPI + core + Node.js gRPC browser-agent + 3 фронта (`frontend/` TS, `frontend-mini/`, `frontend-legacy/`).
+- `CLAUDE.md` — архитектура: Python-воркеры + FastAPI + core + Node.js gRPC browser-agent + 2 фронта (`frontend/` TS, `frontend-mini/`).
 - **Это деньги.** Бот тратит рекламный бюджет и отключает рекламу. Тихий баг = слитый бюджет или незаглушенный убыточный ад. Money-находки — приоритет №1.
 - История аудитов проекта (CRIT-баги, прошедшие сквозь 1000+ тестов): naive `SUM()` по кумулятивным snapshot-метрикам; рассогласование контракта writer↔reader; orphan-таски в outbox. Тесты ловили *shape*, не *семантику*. Ищи такой же класс.
 
@@ -20,7 +20,7 @@ Scope из аргумента: `$ARGUMENTS` (пусто → `all`).
 5. **FSM-инварианты** — однонаправленность переходов, сохранение `open_token` при эскалации, terminal-state guard.
 6. **Async/IO** — блокирующие вызовы в async-коде, незакрытые соединения/сессии, N+1, отсутствие таймаутов на httpx/grpc.
 7. **Тех-долг** — файлы >500 строк (правило проекта для нового кода), god-components (`AdsPage`, `ScriptsPage`, `dashboard.py`, `history.py`), копипаста, мёртвый код.
-8. **Frontend** — TS strict нарушения/`any`, дубли логики между `frontend/`↔`frontend-mini/`↔`frontend-legacy/`, shape-расхождения с бэком, god-components, отсутствие тестов (особенно `frontend-mini/`), доступность/перфоманс рендера.
+8. **Frontend** — TS strict нарушения/`any`, дубли логики между `frontend/`↔`frontend-mini/`, shape-расхождения с бэком, god-components, отсутствие тестов (особенно `frontend-mini/`), доступность/перфоманс рендера.
 9. **Тесты** — проверяют *семантику* (точные значения денег на мультицикле), а не *shape*; покрыты ли money-границы и партиционные исключения; анти-регресс контрактов writer↔reader.
 
 ## Процедура
@@ -40,7 +40,7 @@ Scope из аргумента: `$ARGUMENTS` (пусто → `all`).
 - **B4** `apps/api` (FastAPI routers v1) — endpoints, SQL, partition-pruning, валидация, security, partial-failure → **sonnet**
 - **B5** `core/models` + `migrations` + `core/dashboard` + `core/adset_pro` — схема, индексы, партиции, агрегации спенда, дедуп ingest → **opus** (money-агрегации)
 - **F1** `frontend/` (новый TS strict) — React 19, TanStack, типы, god-components → **sonnet**
-- **F2** `frontend-mini/` + `frontend-legacy/` — дубли логики, тех-долг, отсутствие тестов → **sonnet**
+- **F2** `frontend-mini/` — дубли логики, тех-долг, отсутствие тестов → **sonnet**
 - **X** `tests/` + cross-cutting (`core/crypto.py`, `core/config.py`, `core/ai_assistant`, `services/browser-agent/src`) — shape-vs-semantics, security, gRPC TS → **opus** (security) / **sonnet**
 
 Каждому агенту дай ЭТОТ промпт-контракт:
