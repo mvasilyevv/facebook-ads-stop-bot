@@ -54,6 +54,14 @@ ruff check .                              # линтер
 ruff format .                             # форматирование
 cd services/browser-agent && npm test     # тесты browser-agent (TypeScript)
 
+# Frontend (монорепо pnpm)
+pnpm install                              # установка всех зависимостей из корня (НЕ npm)
+pnpm gen:api                             # генерация types из openapi.json → packages/shared/src/api/generated.ts
+pnpm --filter fb-stop-bot-frontend dev   # web dev-сервер (порт 5174)
+pnpm --filter fb-agent-mini dev          # mini dev-сервер (порт 5175)
+pnpm -r build                            # сборка всех пакетов
+pnpm -r test                             # тесты всех пакетов
+
 # Схема БД
 python scripts/backup_secrets.py          # бэкап Vision/TG токенов (encrypted)
 python scripts/apply_schema.py --confirm-drop  # DROP + CREATE с нуля
@@ -66,7 +74,7 @@ python scripts/restore_secrets.py          # вернуть токены
 
 ### 12 Python воркеров + FastAPI + Node.js gRPC
 
-После миграции (см. `DB_REDESIGN.md`) кодовая база сокращена и постепенно восстановлена. Сейчас активные сервисы покрывают почти весь функционал, кроме фронта (отложен).
+После миграции (см. `DB_REDESIGN.md`) кодовая база сокращена и постепенно восстановлена. Сейчас активные сервисы покрывают весь функционал.
 
 **Python воркеры (текущие, все на схеме):**
 
@@ -182,7 +190,6 @@ python scripts/restore_secrets.py          # вернуть токены
 После миграции удалены, но могут быть восстановлены инкрементально:
 - **API роутеры** (`apps/api/`) — 17 роутеров FastAPI. Понадобится для фронта.
 - **Creator workers** (`apps/creator_worker/`, `apps/creator_recorder/`) — автоматизация создания кампаний через Vision.
-- **Frontend** (`frontend/` 9 страниц + `frontend-mini/`) — отложен по решению пользователя. `apps/api/` минимум поднят (health + postback), при возврате к фронту — расширить роутерами под нужные страницы.
 - **`scripts/backtest_rules.py`** — для бэктеста по MEMORY 2026-06-08 (через ~2 недели накопления данных).
 - **Этап 4 Ad Library** — закрыт через browser-agent gRPC (по-запросу через `/spy <slot> <country>` в TG). Параллельный канал через свой Meta App с App Access Token решено НЕ делать — Meta требует Identity Confirmation (загрузка ID + selfie + 5-7 дней ожидания) даже для коммерческих запросов, при этом use case у пользователя on-demand, не cron. Если в будущем понадобится background-scrape конкурентов — пройти IC на https://www.facebook.com/id и положить `META_AD_LIBRARY_APP_ID`/`_APP_SECRET` в `.env`.
 - **Этап 6 AdSet.pro Волна 3+4** — ✅ закрыто. Клиент переписан под MCP-протокол (AdSet.pro оказался MCP-сервером), `adsetpro_postback_events` + `adsetpro_credentials` партиционированные таблицы созданы и применены, ingest с двухступенчатым дедупом, `RuleContext.external_deposits` в evaluator (`load_external_deposits_batch` в pipeline). **Волна 4 (#BL-8):** aggregator per (ad_id, country, day) в `tracker_aggregate` (tracker_aggregator_worker, idempotent absolute-recompute), outgoing postback (`OutgoingPostbackSender`), ротация ключей через `adsetpro_credentials` (БД-first + `.env`-фолбэк, без рестарта). Миграция не понадобилась — таблицы уже были в 0001. Остаточный tech-debt (LOW): outgoing postback не подключён к конкретному flow (нет адресата-URL в проде), durable-outbox через `task_queue` — по запросу.
@@ -296,15 +303,13 @@ HTTP/SSE транспорт для iPhone / удалённого доступа 
 
 ### Frontend
 
-**Основной (`frontend/`):** React 19.2 + Vite 6.4 + JSX (без TypeScript). Tailwind 3.4 + design tokens (`src/styles/tokens.css`). TanStack Query v5 (только на DashboardPage, остальное на `useAsyncPolling + useEffect`). Recharts 3.8. Vitest 4.1 + Testing Library. Кастомный routing через `useState` в App.jsx (без react-router).
+Монорепо на **pnpm workspaces** (`pnpm install` из корня). Пакеты: `packages/*`, `frontend`, `frontend-mini`. Установка зависимостей только через `pnpm`, не npm.
 
-9 страниц: DashboardPage (зрелая, эталон TanStack Query + WS + optimistic updates, 809 строк), AdsPage (1446 строк — god-component, кандидат на разнесение), OffersPage (452), AnalyticsPage (тонкая обёртка над 6 компонентами), HistoryPage, NamingTrackerPage, ScriptsPage (1456 строк — god-component), SettingsPage, HealthMapPage.
+**Shared пакет (`packages/shared`, алиас `@fb/shared`):** TypeScript-пакет с общим кодом для обоих фронтов. Содержит: типы API (генерируются `pnpm gen:api` из `frontend/openapi.json` → `packages/shared/src/api/generated.ts`), FSM-константы и лейблы (lowercase canon + `normalizeAlertState`), форматтеры (Intl/UTC), доменные хелперы (`buildDraftDiff`/`draftExpiresAt`/`badge`), дизайн-токены (`tokens.ts` + `tokens.css` — единый источник для обоих фронтов).
 
-**Telegram Mini App (`frontend-mini/`):** React 19.0 + Vite 5.4 + JSX + react-router-dom v7 + vanilla CSS (без Tailwind). Большая часть UI-логики дублирована из основного фронта (форматтеры, STATE_LABELS, fetch — отдельно для каждой страницы). Тесты отсутствуют.
+**Web (`frontend/`, пакет `fb-stop-bot-frontend`):** React 19 + Vite 6 + **TypeScript strict** + Tailwind 4 (`@theme`) + TanStack Router (file-based) + TanStack Query 5 + Zustand 5 + Lucide + Radix Primitives. Dark-only, monochrome editorial style (см. `docs/frontend_design.md`). Desktop 1280+. **6 страниц:** Dashboard, Ads (+ drawer деталей), Drafts, Offers, History, Settings (табы Observer/Telegram/Vision/Workers/AI/Health). Виртуализованная таблица (`@tanstack/react-virtual`). WS live-invalidation (backoff + polling). Storybook 8. ~331 vitest-тест. Порт dev/preview **5174**, proxy `/api` → `:8100`.
 
-**Новый фронт (`frontend/`):** React 19 + Vite 6 + **TypeScript strict** + Tailwind 4 + TanStack Router (file-based) + TanStack Query 5 + Zustand 5 + Lucide + Radix Primitives. Dark-only, monochrome editorial style (см. `docs/frontend_design.md`). 6 страниц (Dashboard, Ads, Offers, History, Settings, Drafts). Storybook 8 для component isolation. Desktop 1280+ only. Port 5174 (dev), proxy `/api` → `:8100`. Сейчас в репо — foundation (tokens, базовый UI, layout shell, placeholder-страницы, API-клиенты per-domain, WebSocket hook с polling fallback, 5 unit-тестов). Полная имплементация страниц — следующие раунды.
-
-Vite-порт динамический (run.sh читает из лога).
+**Telegram Mini App (`frontend-mini/`, пакет `fb-agent-mini`):** React 19 + Vite 6 + **TypeScript** + Tailwind 4 + TanStack Router/Query. Мобильная адаптация (нижний tab-bar, safe-area, тач ≥44px). **9 экранов:** Dashboard, Ads, Ad Detail, Drafts, Health, History, Offers, Scripts, Settings. TMA auth (initData → Bearer). ~89 vitest-тестов. Порт dev **5175**, base `/tma/`. Форматтеры и FSM-константы берутся из `@fb/shared` (дублирование устранено).
 
 ## Key design rules
 

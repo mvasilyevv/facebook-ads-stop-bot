@@ -378,21 +378,36 @@ install_node_dependencies_if_needed() {
     local service_dir="$1"
     local log_file="$2"
 
-    if [ -d "$service_dir/node_modules" ]; then
+    # Для browser-agent — локальная установка через npm (не входит в pnpm-workspace)
+    if [[ "$service_dir" == *"browser-agent"* ]]; then
+        if [ -d "$service_dir/node_modules" ]; then
+            return 0
+        fi
+        if ! command -v npm >/dev/null 2>&1; then
+            echo -e "${RED}❌ npm не установлен, не могу установить зависимости для $service_dir${NC}"
+            return 1
+        fi
+        echo -e "${BLUE}📦 Устанавливаю Node.js зависимости: $service_dir${NC}"
+        if [ -f "$service_dir/package-lock.json" ]; then
+            (cd "$service_dir" && npm ci --silent) > "$log_file" 2>&1
+        else
+            (cd "$service_dir" && npm install --silent) > "$log_file" 2>&1
+        fi
+        return $?
+    fi
+
+    # Для фронтендов — pnpm workspace: устанавливаем из корня монорепо
+    if [ -d "$SCRIPT_DIR/node_modules" ]; then
         return 0
     fi
 
-    if ! command -v npm >/dev/null 2>&1; then
-        echo -e "${RED}❌ npm не установлен, не могу установить зависимости для $service_dir${NC}"
+    if ! command -v pnpm >/dev/null 2>&1; then
+        echo -e "${RED}❌ pnpm не установлен. Установи: npm install -g pnpm${NC}"
         return 1
     fi
 
-    echo -e "${BLUE}📦 Устанавливаю Node.js зависимости: $service_dir${NC}"
-    if [ -f "$service_dir/package-lock.json" ]; then
-        (cd "$service_dir" && npm ci --silent) > "$log_file" 2>&1
-    else
-        (cd "$service_dir" && npm install --silent) > "$log_file" 2>&1
-    fi
+    echo -e "${BLUE}📦 Устанавливаю Node.js зависимости (pnpm workspaces)${NC}"
+    (cd "$SCRIPT_DIR" && pnpm install --frozen-lockfile --silent) > "$log_file" 2>&1
 }
 
 # ==========================================
@@ -423,8 +438,8 @@ stop_all() {
     terminate_matching_processes "Telegram Poller" "run_telegram_poller.py"
     terminate_matching_processes "API" "uvicorn apps.api.main:app"
     terminate_matching_processes "Frontend" "$SCRIPT_DIR/frontend/node_modules/.bin/vite"
-    terminate_matching_processes_in_dir "Frontend" "npm run dev|node .*vite" "$SCRIPT_DIR/frontend"
-    terminate_matching_processes_in_dir "Mini-app" "npm run dev|node .*vite" "$SCRIPT_DIR/frontend-mini"
+    terminate_matching_processes_in_dir "Frontend" "pnpm.*fb-stop-bot-frontend|node .*vite" "$SCRIPT_DIR/frontend"
+    terminate_matching_processes_in_dir "Mini-app" "pnpm.*fb-agent-mini|node .*vite" "$SCRIPT_DIR/frontend-mini"
     terminate_matching_processes "Cloudflared" "cloudflared tunnel --url"
     # Воркеры, ранее пропущенные в stop_all (их гасил только supervisord shutdown —
     # при его зависании оставались жить, в т.ч. money-критичный cabinet_scheduler).
@@ -533,8 +548,8 @@ API_PORT="${API_PORT:-8100}"
 POSTGRES_PORT="${POSTGRES_PORT:-5433}"
 GRPC_PORT="${GRPC_PORT:-50051}"
 FRONTEND_HOST="${FRONTEND_HOST:-127.0.0.1}"
-FRONTEND_PORT="${FRONTEND_PORT:-5173}"
-MINI_PORT="${MINI_PORT:-5174}"
+FRONTEND_PORT="${FRONTEND_PORT:-5174}"
+MINI_PORT="${MINI_PORT:-5175}"
 export GRPC_PORT
 
 USE_SUPERVISOR=0
@@ -584,8 +599,8 @@ terminate_matching_processes "Tracker Aggregator Worker" "run_tracker_aggregator
 terminate_matching_processes "Telegram Poller" "run_telegram_poller.py"
 terminate_matching_processes "API" "uvicorn apps.api.main:app"
 terminate_matching_processes "Frontend" "$SCRIPT_DIR/frontend/node_modules/.bin/vite"
-terminate_matching_processes_in_dir "Frontend" "npm run dev|node .*vite" "$SCRIPT_DIR/frontend"
-terminate_matching_processes_in_dir "Mini-app" "npm run dev|node .*vite" "$SCRIPT_DIR/frontend-mini"
+terminate_matching_processes_in_dir "Frontend" "pnpm.*fb-stop-bot-frontend|node .*vite" "$SCRIPT_DIR/frontend"
+terminate_matching_processes_in_dir "Mini-app" "pnpm.*fb-agent-mini|node .*vite" "$SCRIPT_DIR/frontend-mini"
 terminate_matching_processes "Health Watchdog" "run_health_watchdog.py"
 terminate_matching_processes "Creator Worker" "run_creator_worker.py"
 terminate_matching_processes "Creator Recorder" "run_creator_recorder.py"
@@ -900,7 +915,7 @@ fi
 if [ -d frontend ]; then
     echo -e "${BLUE}🎨 Запускаю Frontend (Vite, порт $FRONTEND_PORT)...${NC}"
     terminate_matching_processes "Frontend" "$SCRIPT_DIR/frontend/node_modules/.bin/vite"
-    terminate_matching_processes_in_dir "Frontend" "npm run dev|node .*vite" "$SCRIPT_DIR/frontend"
+    terminate_matching_processes_in_dir "Frontend" "pnpm.*fb-stop-bot-frontend|node .*vite" "$SCRIPT_DIR/frontend"
 
     if ! install_node_dependencies_if_needed "$SCRIPT_DIR/frontend" "$LOG_DIR/frontend_npm_install.log"; then
         tail -20 "$LOG_DIR/frontend_npm_install.log" || true
@@ -913,8 +928,8 @@ if [ -d frontend ]; then
         # React dev + StrictMode double-render), но горячая перезагрузка для правок фронта.
         echo -e "${BLUE}  Frontend: dev-режим (HMR)${NC}"
         (
-            cd "$SCRIPT_DIR/frontend"
-            VITE_API_KEY="${API_KEY:-}" npm run dev -- --host "$FRONTEND_HOST" --port "$FRONTEND_PORT" --strictPort
+            cd "$SCRIPT_DIR"
+            VITE_API_KEY="${API_KEY:-}" pnpm --filter fb-stop-bot-frontend dev -- --host "$FRONTEND_HOST" --port "$FRONTEND_PORT" --strictPort
         ) > "$LOG_DIR/frontend.log" 2>&1 &
         FRONTEND_PID=$!
     else
@@ -922,7 +937,7 @@ if [ -d frontend ]; then
         # dev (нет ESM-водопада, React production, без double-render). Для правок фронта
         # с HMR — ./run.sh --dev. Сборку делаем синхронно, чтобы поймать ошибки до preview.
         echo -e "${BLUE}  Frontend: собираю prod build...${NC}"
-        if ! (cd "$SCRIPT_DIR/frontend" && VITE_API_KEY="${API_KEY:-}" npm run build) \
+        if ! (cd "$SCRIPT_DIR" && VITE_API_KEY="${API_KEY:-}" pnpm --filter fb-stop-bot-frontend build) \
             > "$LOG_DIR/frontend_build.log" 2>&1; then
             echo -e "${RED}❌ Сборка фронта упала${NC}"
             tail -20 "$LOG_DIR/frontend_build.log" || true
@@ -930,8 +945,8 @@ if [ -d frontend ]; then
         fi
         echo -e "${BLUE}  Frontend: prod build готов, запускаю vite preview${NC}"
         (
-            cd "$SCRIPT_DIR/frontend"
-            VITE_API_KEY="${API_KEY:-}" npm run preview -- --host "$FRONTEND_HOST" --port "$FRONTEND_PORT" --strictPort
+            cd "$SCRIPT_DIR"
+            VITE_API_KEY="${API_KEY:-}" pnpm --filter fb-stop-bot-frontend preview -- --host "$FRONTEND_HOST" --port "$FRONTEND_PORT" --strictPort
         ) > "$LOG_DIR/frontend.log" 2>&1 &
         FRONTEND_PID=$!
     fi
@@ -963,7 +978,7 @@ fi
 # ==========================================
 if [ -d frontend-mini ]; then
     echo -e "${BLUE}📱 Запускаю Mini-app (Vite, порт $MINI_PORT)...${NC}"
-    terminate_matching_processes_in_dir "Mini-app" "npm run dev|node .*vite" "$SCRIPT_DIR/frontend-mini"
+    terminate_matching_processes_in_dir "Mini-app" "pnpm.*fb-agent-mini|node .*vite" "$SCRIPT_DIR/frontend-mini"
 
     if ! install_node_dependencies_if_needed "$SCRIPT_DIR/frontend-mini" "$LOG_DIR/frontend_mini_npm_install.log"; then
         tail -20 "$LOG_DIR/frontend_mini_npm_install.log" || true
@@ -971,8 +986,8 @@ if [ -d frontend-mini ]; then
     fi
 
     (
-        cd "$SCRIPT_DIR/frontend-mini"
-        VITE_API_KEY="${API_KEY:-}" npm run dev -- --host "$FRONTEND_HOST" --port "$MINI_PORT" --strictPort
+        cd "$SCRIPT_DIR"
+        VITE_API_KEY="${API_KEY:-}" pnpm --filter fb-agent-mini dev -- --host "$FRONTEND_HOST" --port "$MINI_PORT" --strictPort
     ) > "$LOG_DIR/frontend_mini.log" 2>&1 &
     MINI_PID=$!
     append_pid "$MINI_PID" "frontend_mini"
