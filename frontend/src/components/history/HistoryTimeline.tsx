@@ -58,12 +58,15 @@ function groupByDate(
 
 function toTimelineItem(
   item: HistoryTimelineItem,
+  index: number,
   onAlertClick?: (item: HistoryTimelineItem) => void,
 ): TimelineItem {
   const type = toTimelineType(item);
   const isClickable = item.event_type === "alert" && !!onAlertClick;
   return {
-    id: `${item.ts}_${item.fb_ad_id ?? item.event_type}`,
+    // index делает ключ уникальным: два события одного ad в одну секунду (warning+stop)
+    // иначе дают одинаковый id → React duplicate-key.
+    id: `${item.ts}_${item.fb_ad_id ?? item.event_type}_${index}`,
     ts: item.ts,
     type,
     title: toTitle(item),
@@ -154,7 +157,7 @@ function GroupedTimeline({
     <div className="space-y-6">
       {days.map((day) => {
         const dayItems = grouped.get(day) ?? [];
-        const timelineItems = dayItems.map((item) => toTimelineItem(item, onAlertClick));
+        const timelineItems = dayItems.map((item, i) => toTimelineItem(item, i, onAlertClick));
 
         // Читаемая дата дня
         const dayLabel = formatDateTime(`${day}T00:00:00Z`).slice(0, 10);
