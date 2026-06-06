@@ -11,6 +11,10 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, ClassVar
 
 from core.ai_assistant.tools.base import RiskLevel, ToolContext, ToolError
+from core.meta_api.mutations.set_adset_budget import (
+    MAX_DAILY_BUDGET_CENTS,
+    MAX_LIFETIME_BUDGET_CENTS,
+)
 from core.meta_api.queue import create_draft_task
 from core.meta_api.schemas import MetaMutationPayload
 
@@ -105,13 +109,27 @@ class RequestCreateCampaignTool:
                 daily = Decimal(str(daily_raw))
                 if daily <= 0:
                     raise ToolError("daily_budget_usd должен быть > 0")
-                params["daily_budget"] = int(daily * 100)
+                daily_cents = int(daily * 100)
+                # H2: enforce верхний cap в run() (не только schema-подсказка), чтобы
+                # hallucinated/ошибочное значение не дошло до создания кампании.
+                if daily_cents > MAX_DAILY_BUDGET_CENTS:
+                    raise ToolError(
+                        f"daily_budget_usd ${daily} превышает лимит "
+                        f"${MAX_DAILY_BUDGET_CENTS // 100} (защита от выгорания бюджета)"
+                    )
+                params["daily_budget"] = daily_cents
                 budget_summary = f"daily=${daily:.2f}"
             else:
                 lifetime = Decimal(str(lifetime_raw))
                 if lifetime <= 0:
                     raise ToolError("lifetime_budget_usd должен быть > 0")
-                params["lifetime_budget"] = int(lifetime * 100)
+                lifetime_cents = int(lifetime * 100)
+                if lifetime_cents > MAX_LIFETIME_BUDGET_CENTS:
+                    raise ToolError(
+                        f"lifetime_budget_usd ${lifetime} превышает лимит "
+                        f"${MAX_LIFETIME_BUDGET_CENTS // 100} (защита от выгорания бюджета)"
+                    )
+                params["lifetime_budget"] = lifetime_cents
                 budget_summary = f"lifetime=${lifetime:.2f}"
         except (InvalidOperation, ValueError) as exc:
             raise ToolError(f"Неверный формат бюджета: {exc}") from exc

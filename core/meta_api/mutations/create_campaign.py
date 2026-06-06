@@ -96,6 +96,10 @@ from core.meta_api.mutations._batch_helpers import (
     parse_batch_response,
 )
 from core.meta_api.mutations.base import MutationValidationError, success_result
+from core.meta_api.mutations.set_adset_budget import (
+    MAX_DAILY_BUDGET_CENTS,
+    MAX_LIFETIME_BUDGET_CENTS,
+)
 from core.meta_api.schemas import MetaMutationPayload
 
 logger = logging.getLogger(__name__)
@@ -322,11 +326,13 @@ class CreateCampaignHandler:
             )
         if daily is not None:
             body["daily_budget"] = cls._validate_cents(
-                daily, field_name="campaign.daily_budget_cents"
+                daily, field_name="campaign.daily_budget_cents", max_cents=MAX_DAILY_BUDGET_CENTS
             )
         elif lifetime is not None:
             body["lifetime_budget"] = cls._validate_cents(
-                lifetime, field_name="campaign.lifetime_budget_cents"
+                lifetime,
+                field_name="campaign.lifetime_budget_cents",
+                max_cents=MAX_LIFETIME_BUDGET_CENTS,
             )
 
         # bid_strategy нужен при CBO (бюджет на кампании), напр. LOWEST_COST_WITHOUT_CAP.
@@ -361,10 +367,14 @@ class CreateCampaignHandler:
                 "adset: укажи не больше одного из daily_budget_cents/lifetime_budget_cents"
             )
         if daily is not None:
-            body["daily_budget"] = cls._validate_cents(daily, field_name="adset.daily_budget_cents")
+            body["daily_budget"] = cls._validate_cents(
+                daily, field_name="adset.daily_budget_cents", max_cents=MAX_DAILY_BUDGET_CENTS
+            )
         if lifetime is not None:
             body["lifetime_budget"] = cls._validate_cents(
-                lifetime, field_name="adset.lifetime_budget_cents"
+                lifetime,
+                field_name="adset.lifetime_budget_cents",
+                max_cents=MAX_LIFETIME_BUDGET_CENTS,
             )
 
         bid_amount = spec.get("bid_amount_cents")
@@ -565,11 +575,19 @@ class CreateCampaignHandler:
         return normalized
 
     @staticmethod
-    def _validate_cents(value: Any, *, field_name: str) -> int:
+    def _validate_cents(value: Any, *, field_name: str, max_cents: int | None = None) -> int:
         if isinstance(value, bool) or not isinstance(value, int):
             raise MutationValidationError(f"{field_name}: ожидается int центов, получено {value!r}")
         if value <= 0:
             raise MutationValidationError(f"{field_name}: должен быть > 0, получено {value}")
+        if max_cents is not None and value > max_cents:
+            # H2: защита от выгорания бюджета через hallucinated/ошибочное значение AI или
+            # прямой MCP-вызов. Тот же cap, что и set_adset_budget — раньше create_campaign
+            # принимал любой бюджет, и тот же money-risk проходил мимо порога другим путём.
+            raise MutationValidationError(
+                f"{field_name}: {value} центов превышает лимит {max_cents} "
+                f"(${max_cents // 100}) — защита от выгорания бюджета"
+            )
         return value
 
     @staticmethod
