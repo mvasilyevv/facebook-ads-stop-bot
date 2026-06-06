@@ -124,16 +124,6 @@ export function useToggleAutoEnable() {
   });
 }
 
-/** PATCH /settings/observer/act-via-api — канал авто-стопа (Marketing API vs DOM). Money-критично. */
-export function useToggleActViaApi() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (enabled: boolean) =>
-      apiClient.patch<ObserverSettings>("/settings/observer/act-via-api", { enabled }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: KEYS.observer }),
-  });
-}
-
 /** Получить список recipients Telegram. */
 export function useTelegramRecipients() {
   return useQuery({
@@ -199,15 +189,6 @@ export function useVisionReconnect() {
   return useMutation({
     mutationFn: () => apiClient.post<void>("/vision/reconnect"),
     onSuccess: () => qc.invalidateQueries({ queryKey: KEYS.vision }),
-  });
-}
-
-/** POST /disable-worker/restart — перезапустить disable-worker. */
-export function useRestartDisableWorker() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: () => apiClient.post<void>("/disable-worker/restart"),
-    onSuccess: () => qc.invalidateQueries({ queryKey: KEYS.health }),
   });
 }
 

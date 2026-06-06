@@ -19,6 +19,7 @@ from apps.api.deps import DepEngine
 from apps.api.routers.v1.schemas.tasks import EnableTaskRowOut
 from apps.api.utils.status_mapper import expand_frontend_statuses_csv
 from apps.api.utils.task_serializer import task_row_to_out
+from core.tasks.channel import enable_channel_sql, target_id_sql
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +58,10 @@ async def list_enable_tasks(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    conditions = ["tq.task_type = 'enable'"]
+    # Канал включения после удаления DOM — meta_api_mutation activate_ad
+    # (+ legacy enable). fb_ad_id лежит в payload->>'target_id'.
+    target_expr = target_id_sql("tq")
+    conditions = [enable_channel_sql("tq")]
     params: dict = {"limit": limit, "offset": offset}
 
     if db_statuses:
@@ -67,7 +71,7 @@ async def list_enable_tasks(
             params[f"st{i}"] = st
 
     if fb_ad_id:
-        conditions.append("tq.payload->>'fb_ad_id' = :fb_ad_id")
+        conditions.append(f"{target_expr} = :fb_ad_id")
         params["fb_ad_id"] = fb_ad_id
 
     where_clause = " AND ".join(conditions)
@@ -77,7 +81,7 @@ async def list_enable_tasks(
             tq.id,
             tq.task_type,
             tq.status,
-            tq.payload->>'fb_ad_id' AS fb_ad_id,
+            {target_expr} AS fb_ad_id,
             fa.ad_name,
             tq.attempt_count,
             tq.max_attempts,
@@ -88,7 +92,7 @@ async def list_enable_tasks(
             tq.next_retry_at,
             tq.last_error
         FROM task_queue tq
-        LEFT JOIN fb_ads fa ON fa.fb_ad_id = tq.payload->>'fb_ad_id'
+        LEFT JOIN fb_ads fa ON fa.fb_ad_id = {target_expr}
         WHERE {where_clause}
         ORDER BY tq.created_at DESC
         LIMIT :limit OFFSET :offset

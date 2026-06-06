@@ -2,7 +2,7 @@
  * HealthTab — вкладка мониторинга воркеров:
  *   - Список воркеров с ONLINE/OFFLINE badge и временем последнего heartbeat.
  *   - Overall-статус HEALTHY / DEGRADED / CRITICAL.
- *   - Restart observer и disable-worker через ConfirmDialog.
+ *   - Restart observer через ConfirmDialog.
  */
 
 import { useState } from "react";
@@ -17,11 +17,7 @@ import { toast } from "@/components/ui/Toast";
 import { formatRelativeTime, formatDateTime } from "@/lib/utils/format";
 import type { HealthWorker } from "@/lib/types/api";
 
-import {
-  useHealthDetails,
-  useRestartObserver,
-  useRestartDisableWorker,
-} from "@/lib/api/settings";
+import { useHealthDetails, useRestartObserver } from "@/lib/api/settings";
 
 /** Перевод overall-статуса. */
 const OVERALL_LABELS: Record<string, string> = {
@@ -33,8 +29,6 @@ const OVERALL_LABELS: Record<string, string> = {
 /** Человекочитаемые имена воркеров (ключ — системное имя heartbeat). */
 const WORKER_LABELS: Record<string, string> = {
   observer: "Наблюдатель (скан + FSM)",
-  disable: "Отключение рекламы",
-  enable: "Включение рекламы",
   telegram_poller: "Telegram-поллер",
   cleanup: "Очистка данных",
   reconciler: "Реконсайлер задач",
@@ -48,14 +42,13 @@ const WORKER_LABELS: Record<string, string> = {
   enable_reco: "Реко включения",
 };
 
-type ConfirmTarget = "observer" | "disable_worker" | null;
+type ConfirmTarget = "observer" | null;
 
 export function HealthTab() {
   const [confirmTarget, setConfirmTarget] = useState<ConfirmTarget>(null);
 
   const healthQuery = useHealthDetails();
   const restartObserver = useRestartObserver();
-  const restartDisable = useRestartDisableWorker();
 
   const health = healthQuery.data;
 
@@ -66,35 +59,20 @@ export function HealthTab() {
     return "stop";
   }
 
-  /** Запустить действие перезапуска по цели. */
+  /** Перезапуск observer (единственное действие после удаления disable-воркера). */
   async function handleConfirmRestart() {
-    if (confirmTarget === "observer") {
-      await new Promise<void>((resolve, reject) => {
-        restartObserver.mutate(undefined, {
-          onSuccess: () => {
-            toast.success("Observer перезапускается");
-            resolve();
-          },
-          onError: (err) => {
-            toast.error("Ошибка", err instanceof Error ? err.message : String(err));
-            reject(err);
-          },
-        });
+    await new Promise<void>((resolve, reject) => {
+      restartObserver.mutate(undefined, {
+        onSuccess: () => {
+          toast.success("Observer перезапускается");
+          resolve();
+        },
+        onError: (err) => {
+          toast.error("Ошибка", err instanceof Error ? err.message : String(err));
+          reject(err);
+        },
       });
-    } else if (confirmTarget === "disable_worker") {
-      await new Promise<void>((resolve, reject) => {
-        restartDisable.mutate(undefined, {
-          onSuccess: () => {
-            toast.success("Disable worker перезапускается");
-            resolve();
-          },
-          onError: (err) => {
-            toast.error("Ошибка", err instanceof Error ? err.message : String(err));
-            reject(err);
-          },
-        });
-      });
-    }
+    });
   }
 
   if (healthQuery.isError) {
@@ -112,16 +90,8 @@ export function HealthTab() {
       <ConfirmDialog
         open={!!confirmTarget}
         onOpenChange={(o) => { if (!o) setConfirmTarget(null); }}
-        title={
-          confirmTarget === "observer"
-            ? "Перезапустить Observer?"
-            : "Перезапустить Disable Worker?"
-        }
-        description={
-          confirmTarget === "observer"
-            ? "Observer завершит текущий цикл и перезапустится. Сканирование прервётся на ~10–30 секунд."
-            : "Disable worker перестанет обрабатывать задачи на время рестарта (~5–10 секунд)."
-        }
+        title="Перезапустить Observer?"
+        description="Observer завершит текущий цикл и перезапустится. Сканирование прервётся на ~10–30 секунд."
         confirmWord="RESTART"
         confirmLabel="Перезапустить"
         cancelLabel="Отмена"
@@ -181,16 +151,6 @@ export function HealthTab() {
               loading={restartObserver.isPending}
             >
               Перезапустить Observer
-            </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              fullWidth
-              leftIcon={<RefreshCcw size={13} aria-hidden="true" />}
-              onClick={() => setConfirmTarget("disable_worker")}
-              loading={restartDisable.isPending}
-            >
-              Перезапустить Disable Worker
             </Button>
           </section>
 

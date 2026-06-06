@@ -22,6 +22,7 @@ from apps.api.utils.status_mapper import expand_frontend_statuses_csv
 from apps.api.utils.task_serializer import task_row_to_out
 from core.meta_api.queue import create_mutation_task
 from core.meta_api.schemas import MetaMutationPayload
+from core.tasks.channel import disable_channel_sql, is_disable_row, target_id_sql
 
 logger = logging.getLogger(__name__)
 
@@ -70,18 +71,20 @@ async def list_disable_tasks(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    # Строим SQL динамически
-    conditions = ["task_type = 'disable'"]
+    # Строим SQL динамически. Канал отключения после удаления DOM — meta_api_mutation
+    # pause_ad (+ legacy disable для долёживающих записей). fb_ad_id лежит в target_id.
+    target_expr = target_id_sql("tq")
+    conditions = [disable_channel_sql("tq")]
     params: dict = {"limit": limit, "offset": offset}
 
     if db_statuses:
         placeholders = ", ".join(f":st{i}" for i in range(len(db_statuses)))
-        conditions.append(f"status IN ({placeholders})")
+        conditions.append(f"tq.status IN ({placeholders})")
         for i, st in enumerate(db_statuses):
             params[f"st{i}"] = st
 
     if fb_ad_id:
-        conditions.append("payload->>'fb_ad_id' = :fb_ad_id")
+        conditions.append(f"{target_expr} = :fb_ad_id")
         params["fb_ad_id"] = fb_ad_id
 
     where_clause = " AND ".join(conditions)
@@ -92,7 +95,7 @@ async def list_disable_tasks(
             tq.id,
             tq.task_type,
             tq.status,
-            tq.payload->>'fb_ad_id' AS fb_ad_id,
+            {target_expr} AS fb_ad_id,
             fa.ad_name,
             tq.attempt_count,
             tq.max_attempts,
@@ -103,7 +106,7 @@ async def list_disable_tasks(
             tq.next_retry_at,
             tq.last_error
         FROM task_queue tq
-        LEFT JOIN fb_ads fa ON fa.fb_ad_id = tq.payload->>'fb_ad_id'
+        LEFT JOIN fb_ads fa ON fa.fb_ad_id = {target_expr}
         WHERE {where_clause}
         ORDER BY tq.created_at DESC
         LIMIT :limit OFFSET :offset
@@ -220,7 +223,9 @@ async def retry_disable_task(
             await conn.execute(
                 text(
                     """
-                    SELECT id, task_type, status FROM task_queue
+                    SELECT id, task_type, status,
+                           payload->>'mutation_kind' AS mutation_kind
+                    FROM task_queue
                     WHERE id = :tid LIMIT 1
                     """
                 ),
@@ -228,7 +233,7 @@ async def retry_disable_task(
             )
         ).first()
 
-    if row is None or row.task_type != "disable":
+    if row is None or not is_disable_row(row.task_type, row.mutation_kind):
         raise HTTPException(status_code=404, detail=f"disable-задача id={task_id} не найдена")
 
     current_status = row.status
@@ -273,13 +278,14 @@ async def retry_disable_task(
                 text(
                     """
                     SELECT tq.id, tq.task_type, tq.status,
-                           tq.payload->>'fb_ad_id' AS fb_ad_id,
+                           COALESCE(tq.payload->>'target_id', tq.payload->>'fb_ad_id') AS fb_ad_id,
                            fa.ad_name,
                            tq.attempt_count, tq.max_attempts, tq.requested_by,
                            tq.created_by_chat_id, tq.created_at, tq.updated_at,
                            tq.next_retry_at, tq.last_error
                     FROM task_queue tq
-                    LEFT JOIN fb_ads fa ON fa.fb_ad_id = tq.payload->>'fb_ad_id'
+                    LEFT JOIN fb_ads fa
+                        ON fa.fb_ad_id = COALESCE(tq.payload->>'target_id', tq.payload->>'fb_ad_id')
                     WHERE tq.id = :tid
                     """
                 ),
@@ -310,12 +316,15 @@ async def cancel_disable_task(
     async with engine.connect() as conn:
         row = (
             await conn.execute(
-                text("SELECT id, task_type, status FROM task_queue WHERE id = :tid LIMIT 1"),
+                text(
+                    "SELECT id, task_type, status, payload->>'mutation_kind' AS mutation_kind "
+                    "FROM task_queue WHERE id = :tid LIMIT 1"
+                ),
                 {"tid": task_id},
             )
         ).first()
 
-    if row is None or row.task_type != "disable":
+    if row is None or not is_disable_row(row.task_type, row.mutation_kind):
         raise HTTPException(status_code=404, detail=f"disable-задача id={task_id} не найдена")
 
     if row.status in _TERMINAL_STATUSES:

@@ -27,6 +27,7 @@ from sqlalchemy import Row, text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from core.dashboard.metric_aggregation import latest_per_ad_per_day_cte
+from core.tasks.channel import disable_channel_sql, enable_channel_sql, target_id_sql
 
 # ─────────────────────── Summary (5 запросов на одном conn) ───────────────────
 
@@ -103,15 +104,20 @@ async def fetch_rules_breakdown(
 async def fetch_tasks_summary(
     conn: AsyncConnection, from_dt: datetime, to_dt: datetime
 ) -> Row[Any]:
-    """Задачи (disable/enable) — task_queue по updated_at (не партиционирована)."""
+    """Задачи (disable/enable) — task_queue по updated_at (не партиционирована).
+
+    Канал после удаления DOM — meta_api_mutation pause_ad/activate_ad (+ legacy).
+    """
+    disable_pred = disable_channel_sql("task_queue")
+    enable_pred = enable_channel_sql("task_queue")
     tasks_sql = text(
-        """
+        f"""
         SELECT
-            COUNT(*) FILTER (WHERE task_type = 'disable' AND status = 'succeeded') AS disable_completed,
-            COUNT(*) FILTER (WHERE task_type = 'disable' AND status = 'failed')    AS disable_failed,
-            COUNT(*) FILTER (WHERE task_type = 'enable'  AND status = 'succeeded') AS enable_completed
+            COUNT(*) FILTER (WHERE {disable_pred} AND status = 'succeeded') AS disable_completed,
+            COUNT(*) FILTER (WHERE {disable_pred} AND status = 'failed')    AS disable_failed,
+            COUNT(*) FILTER (WHERE {enable_pred}  AND status = 'succeeded') AS enable_completed
         FROM task_queue
-        WHERE task_type IN ('disable', 'enable')
+        WHERE ({disable_pred} OR {enable_pred})
           AND updated_at BETWEEN :from_dt AND :to_dt
         """
     )
@@ -128,8 +134,10 @@ async def fetch_timeline(
 
     UNION ALL с JOIN FbAd→FbAdset→FbCampaign для имён. Сорт по ts DESC.
     """
+    target_expr = target_id_sql("tq")
+    toggle_pred = f"({disable_channel_sql('tq')} OR {enable_channel_sql('tq')})"
     sql = text(
-        """
+        f"""
         SELECT
             'alert'         AS event_type,
             ae.created_at   AS ts,
@@ -151,7 +159,7 @@ async def fetch_timeline(
         SELECT
             'task'              AS event_type,
             tq.updated_at       AS ts,
-            tq.payload->>'fb_ad_id'  AS fb_ad_id,
+            {target_expr}       AS fb_ad_id,
             a.ad_name,
             c.campaign_name,
             NULL                AS stage,
@@ -159,10 +167,10 @@ async def fetch_timeline(
             tq.task_type,
             tq.status           AS task_status
         FROM task_queue tq
-        LEFT JOIN fb_ads a    ON a.fb_ad_id = tq.payload->>'fb_ad_id'
+        LEFT JOIN fb_ads a    ON a.fb_ad_id = {target_expr}
         LEFT JOIN fb_adsets s ON s.id = a.adset_id
         LEFT JOIN fb_campaigns c ON c.id = s.campaign_id
-        WHERE tq.task_type IN ('disable', 'enable')
+        WHERE {toggle_pred}
           AND tq.status IN ('succeeded', 'failed', 'cancelled')
           AND tq.updated_at BETWEEN :from_dt AND :to_dt
 
@@ -432,9 +440,9 @@ async def fetch_ads(
         LEFT JOIN LATERAL (
             SELECT tq.updated_at AS last_disable_at
             FROM task_queue tq
-            WHERE tq.task_type = 'disable'
+            WHERE {disable_channel_sql("tq")}
               AND tq.status = 'succeeded'
-              AND tq.payload->>'fb_ad_id' = a.fb_ad_id
+              AND {target_id_sql("tq")} = a.fb_ad_id
               AND tq.updated_at BETWEEN :from_dt AND :to_dt
             ORDER BY tq.updated_at DESC
             LIMIT 1

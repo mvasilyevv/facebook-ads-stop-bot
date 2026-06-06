@@ -8,8 +8,6 @@ import { haptic } from "../theme.js";
 const WORKER_LABELS = {
   observer: "Observer",
   telegram_poller: "Telegram Poller",
-  disable_worker: "Disable Worker",
-  enable_worker: "Enable Worker",
   meta_api_worker: "Meta API Worker",
   enable_recommendation_worker: "Enable Recommendation",
   health_watchdog: "Health Watchdog",
