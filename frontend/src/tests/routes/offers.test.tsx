@@ -278,6 +278,8 @@ function makeRules(overrides: Partial<OfferRules> = {}): OfferRules {
     ctr_threshold: "1.5",
     frequency_threshold: null,
     funnel_ratio_threshold: "0.3",
+    stop_percent_of_rule: "100",
+    warning_percent_of_stop: "80",
     ...overrides,
   };
 }

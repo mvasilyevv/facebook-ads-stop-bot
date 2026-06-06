@@ -64,6 +64,8 @@ const MOCK_RULES: OfferRules = {
   ctr_threshold: null,
   frequency_threshold: "3.0",
   funnel_ratio_threshold: null,
+  stop_percent_of_rule: "100.00",
+  warning_percent_of_stop: "80.00",
 };
 
 const mockUseOffers = vi.fn();

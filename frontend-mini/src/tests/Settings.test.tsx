@@ -29,7 +29,6 @@ const MOCK_OBSERVER: ObserverConfig = {
   auto_enable_recommendations: false,
   default_interval_seconds: 60,
   owner_campaign_tag: null,
-  act_via_api: true,
 };
 
 const MOCK_TELEGRAM: TelegramSettings = {

@@ -30,7 +30,6 @@ export const ObserverTab: FC = () => {
         is_scanning_enabled: data.is_scanning_enabled,
         auto_enable_recommendations: data.auto_enable_recommendations,
         owner_campaign_tag: data.owner_campaign_tag ?? "",
-        act_via_api: data.act_via_api,
       });
     }
   }, [data]);
@@ -106,15 +105,6 @@ export const ObserverTab: FC = () => {
             />
           </div>
 
-          <div className="border-t border-bg-4 pt-4">
-            <Switch
-              checked={form.act_via_api ?? false}
-              onChange={() => handleToggle("act_via_api", !form.act_via_api)}
-              label="Отключение через API"
-              visualLabel="Отключение через Marketing API"
-              description="Использовать Meta Marketing API для отключения (рекомендуется)."
-            />
-          </div>
         </div>
       </Card>
 

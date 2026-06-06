@@ -84,6 +84,58 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/dashboard/ads/{fb_ad_id}/snooze": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Snooze Ad
+         * @description Снуз одного объявления: ad_alert_state.snoozed_until = now + minutes.
+         *
+         *     404 — объявления нет в fb_ads. 409 — у ad нет строки состояния (нечего снузить).
+         *     Зеркало core.telegram.handlers.alerts.handle_snz_callback / tma_snooze_ad.
+         */
+        post: operations["snooze_ad_api_dashboard_ads__fb_ad_id__snooze_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/dashboard/ads/bulk-snooze": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Bulk Snooze Ads
+         * @description Массовый снуз с partial-failure (HTTP 200).
+         *
+         *     Один общий snoozed_until для всего batch. snoozed — fb_ad_id успешно снузленных;
+         *     failed — ad не найден (no_ad) или нет строки состояния (no_alert_state).
+         *
+         *     Реализация одним UPDATE через unnest+CTE: множественный UPDATE атомарен в одной
+         *     транзакции, классификация неуспешных — отдельным LEFT JOIN-проходом по тому же
+         *     списку (без N round-trip'ов на ad).
+         *
+         *     422 — только на валидации входа (пустой список / превышение cap).
+         */
+        post: operations["bulk_snooze_ads_api_dashboard_ads_bulk_snooze_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/ads/{fb_ad_id}/timeline": {
         parameters: {
             query?: never;
@@ -194,11 +246,19 @@ export interface paths {
          * List Ad Snapshots
          * @description Список ad'ов с alert_state, последней метрикой и offer.
          *
+         *     Два режима пагинации (обратно совместимы):
+         *     1. Offset-пагинация (без cursor): работает как раньше.
+         *        Лимит поднят с 500 до 2000 для совместимости с виртуальными таблицами.
+         *     2. Cursor/keyset-пагинация (cursor задан): стабильный обход без дублей.
+         *        cursor = X-Next-Cursor из предыдущего ответа (base64 ключа сортировки).
+         *        offset игнорируется. Нет дублей при добавлении новых строк во время листания.
+         *
          *     Партиционный фильтр по ad_metrics.cycle_ts применяется внутри LATERAL'а
          *     (последние 7 дней). Если за окно нет метрик — metrics=None.
          *
-         *     X-Total-Count в headers — реальный COUNT с теми же фильтрами без LIMIT,
-         *     для пагинации фронта.
+         *     Headers ответа:
+         *     - X-Total-Count — реальный COUNT с теми же фильтрами (для пагинатора).
+         *     - X-Next-Cursor — cursor следующей страницы (None/отсутствует если последняя).
          */
         get: operations["list_ad_snapshots_api_dashboard_ads_get"];
         put?: never;
@@ -332,13 +392,16 @@ export interface paths {
         /**
          * Get Dashboard Batch
          * @description Композит stats + recent_incidents + recent_alerts + recent_disable_tasks
-         *     + enable_recommendations_pending.
+         *     + recent_enable_tasks + enable_recommendations_pending.
          *
-         *     Снижает количество fetch'ей на DashboardPage с 5 до 1.
+         *     Снижает количество fetch'ей на DashboardPage с 6 до 1.
          *     Поведение при partial failure: если один из подзапросов падает —
          *     возвращаем для него default (пустой массив или нулевой stats).
          *     Остальные секции возвращаются. Это согласовано с UX: фронт не отображает
          *     ошибку всему экрану, если упала одна секция.
+         *
+         *     recent_enable_tasks — задачи включения объявлений (activate_ad), аналог
+         *     recent_disable_tasks. Управляется отдельным параметром enable_limit.
          */
         get: operations["get_dashboard_batch_api_dashboard_batch_get"];
         put?: never;
@@ -434,6 +497,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/dashboard/disable-tasks/bulk": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Bulk Create Disable Tasks
+         * @description Массовое отключение объявлений (money-критично).
+         *
+         *     На каждый fb_ad_id — отдельный create_mutation_task pause_ad в собственной
+         *     транзакции (idempotent через per-ad ключ manual:pause_ad:{id}:{token}).
+         *     Частичный откат невозможен: падение на одном ad не теряет уже созданные задачи.
+         *
+         *     Ответ partial-failure (HTTP 200):
+         *       created — задачи, созданные этим запросом;
+         *       skipped — дубли (ключ уже был): повтор того же idempotency_token или race;
+         *       failed  — ad не найден в fb_ads / неожиданная ошибка.
+         *
+         *     422 — только на валидации входа (пустой/слишком большой batch). Логика в
+         *     core.tasks.bulk_disable.process_bulk_disable (тестируется изолированно).
+         */
+        post: operations["bulk_create_disable_tasks_api_dashboard_disable_tasks_bulk_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/dashboard/disable-tasks/{task_id}/retry": {
         parameters: {
             query?: never;
@@ -477,6 +572,70 @@ export interface paths {
          *     409 если задача уже в терминальном статусе (succeeded/cancelled).
          */
         delete: operations["cancel_disable_task_api_dashboard_disable_tasks__task_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/dashboard/draft-tasks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Draft Tasks
+         * @description Список DRAFT meta-mutation задач (status='draft', task_type='meta_api_mutation').
+         */
+        get: operations["list_draft_tasks_api_dashboard_draft_tasks_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/dashboard/draft-tasks/{task_id}/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Confirm Draft Task
+         * @description DRAFT → PENDING.
+         *
+         *     Admin-зона подтверждает только безхозные черновики (created_by_chat_id IS NULL,
+         *     созданные через MCP/HTTP). Черновики от конкретного TG-пользователя — 409
+         *     (их подтверждают в Telegram). Money-критично: ACL внутри approve_draft_task.
+         */
+        post: operations["confirm_draft_task_api_dashboard_draft_tasks__task_id__confirm_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/dashboard/draft-tasks/{task_id}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reject Draft Task
+         * @description Отклонить (cancel) DRAFT-задачу.
+         */
+        post: operations["reject_draft_task_api_dashboard_draft_tasks__task_id__reject_post"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -788,6 +947,7 @@ export interface paths {
          *     Если ключ отсутствует — возвращает {status: unknown, last_scan_at: null, ...}.
          *     Никогда не падает с 5xx.
          *     Использует read_observer_runtime() — единственную точку чтения контракта.
+         *     Дополнительно из scan_runs считает scans_today и outcome последнего скана.
          */
         get: operations["get_observer_status_api_observer_status_get"];
         put?: never;
@@ -869,30 +1029,6 @@ export interface paths {
          *     Если Redis недоступен — 503.
          */
         post: operations["restart_observer_api_observer_restart_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/disable-worker/restart": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Restart Disable Worker
-         * @description Публикует сигнал рестарта disable-воркера в Redis.
-         *
-         *     disable_worker подписан на канал fb_agent:worker:restart:disable_worker
-         *     (main.py::_on_restart) и выполняет graceful stop по этому событию.
-         *     Если Redis недоступен — 503.
-         */
-        post: operations["restart_disable_worker_api_disable_worker_restart_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1013,6 +1149,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/offers/rules/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Preview Rule Thresholds
+         * @description При какой $-стоимости сработают правила и ворнинги для CPA + чувствительности.
+         *
+         *     Использует RuleContext — единый расчёт с автостопом: значения в превью ТОЧНО совпадают
+         *     с реальными порогами, по которым observer отключает объявления. Базовые проценты
+         *     (CPC 2% / CPL 10% / CPR 20% / spend 50-70%/70-90%) фиксированы.
+         */
+        get: operations["preview_rule_thresholds_api_offers_rules_preview_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/settings/observer": {
         parameters: {
             query?: never;
@@ -1082,30 +1242,6 @@ export interface paths {
         patch: operations["patch_observer_auto_enable_api_settings_observer_auto_enable_patch"];
         trace?: never;
     };
-    "/api/settings/observer/act-via-api": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        /**
-         * Patch Observer Act Via Api
-         * @description Переключает только act_via_api — канал исполнения toggle-действий.
-         *
-         *     True → авто-стоп observer'а и ручные кнопки идут через Marketing API
-         *     (pause_ad/activate_ad). False → DOM-клик через browser-agent. Требует
-         *     запущенного meta_api_worker при True.
-         */
-        patch: operations["patch_observer_act_via_api_api_settings_observer_act_via_api_patch"];
-        trace?: never;
-    };
     "/api/settings/observer/campaigns": {
         parameters: {
             query?: never;
@@ -1113,7 +1249,15 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * List Observer Campaigns
+         * @description Список кампаний (накопленных observer'ом) для выбора allowlist (#3).
+         *
+         *     Фильтр по owner_campaign_tag (word-boundary, через campaign_matches_owner).
+         *     selected — входит ли кампания в текущий allowlist (cfg.campaign_ids).
+         *     Кампании без Meta fb_campaign_id пропускаются — их нельзя заскоупить по campaign.id.
+         */
+        get: operations["list_observer_campaigns_api_settings_observer_campaigns_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1127,6 +1271,31 @@ export interface paths {
          *     Пустой список — без фильтра по кампаниям (owner_campaign_tag всё равно отсекает чужое).
          */
         patch: operations["patch_observer_campaigns_api_settings_observer_campaigns_patch"];
+        trace?: never;
+    };
+    "/api/settings/observer/campaigns/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Refresh Observer Campaigns
+         * @description Live-обновление списка кампаний через browser-agent (Graph API, МИМО allowlist).
+         *
+         *     Решает «замкнутый круг»: обычный скан с allowlist не подхватывает новые кампании,
+         *     поэтому их нельзя выбрать. Здесь резолвим ВСЕ кампании владельца по owner_tag живьём,
+         *     апсертим в fb_campaigns (чтобы GET /campaigns их видел) и возвращаем обновлённый список.
+         *     503 при недоступности browser-agent.
+         */
+        post: operations["refresh_observer_campaigns_api_settings_observer_campaigns_refresh_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/settings/observer/scan-now": {
@@ -1308,10 +1477,11 @@ export interface paths {
         get: operations["get_vision_settings_api_settings_vision_get"];
         /**
          * Put Vision Settings
-         * @description Обновляет x_token и/или profile_id в VisionConfig singleton.
+         * @description Обновляет x_token / profile_id / флаг self-heal в VisionConfig singleton.
          *
          *     Если x_token передан — шифрует и сохраняет.
          *     Если profile_id передан — обновляет.
+         *     Если auto_restart_on_missing_cdp передан — выставляет флаг (None = не трогать).
          *     Если строки ещё нет — создаёт с server-defaults.
          */
         put: operations["put_vision_settings_api_settings_vision_put"];
@@ -1339,6 +1509,30 @@ export interface paths {
          *     Возвращает 503 при недоступности gRPC.
          */
         post: operations["post_vision_reconnect_api_vision_reconnect_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/vision/ensure-cdp": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Vision Ensure Cdp
+         * @description Bootstrap CDP при старте (run.sh): проверяет cdp_ready, при необходимости reconnect.
+         *
+         *     Никогда не падает 5xx — всегда {ok,status,action,message}. Если CDP уже готов —
+         *     action=none. Если нет — пытается reconnect; при недоступности browser-agent
+         *     возвращает ok=false (run.sh покажет мягкий warning, а не ошибку 404/503).
+         */
+        post: operations["post_vision_ensure_cdp_api_vision_ensure_cdp_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1421,7 +1615,7 @@ export interface paths {
          * Tma Disable Ad
          * @description Создаёт задачу на отключение объявления (money-действие).
          *
-         *     Канал (meta_api pause_ad / DOM disable) — по observer_config.act_via_api,
+         *     Канал — только Marketing API (meta_api pause_ad, точно по ad_id),
          *     как ручная кнопка бота. requested_by = tma:<telegram_user_id>.
          */
         post: operations["tma_disable_ad_api_tma_ads__fb_ad_id__disable_post"];
@@ -1507,6 +1701,10 @@ export interface paths {
         /**
          * Tma Get Draft Task
          * @description Детали одной DRAFT-задачи. 404 — нет или уже не draft.
+         *
+         *     В отличие от list, здесь заполняется:
+         *     - expires_at: дедлайн подтверждения (created_at + 24h).
+         *     - current_state: текущее состояние объекта мутации (для показа diff было→станет).
          */
         get: operations["tma_get_draft_task_api_tma_draft_tasks__task_id__get"];
         put?: never;
@@ -1622,7 +1820,9 @@ export interface paths {
          * Get Campaign Creative Folders
          * @description Возвращает список папок с креативами из корня FB_Agent_Creo.
          *
+         *     Prod-safe: читает структуру FS без открытия GUI или записи файлов.
          *     Сканирует 1 уровень глубины. Возвращает пустой список если корня нет.
+         *     Используется Mini App Scripts-экраном.
          */
         get: operations["get_campaign_creative_folders_api_tools_campaign_create_folders_get"];
         put?: never;
@@ -1707,14 +1907,6 @@ export interface components {
             generated_at: string;
             /** Model */
             model: string;
-        };
-        /**
-         * ActViaApiToggleRequest
-         * @description Тело PATCH /settings/observer/act-via-api.
-         */
-        ActViaApiToggleRequest: {
-            /** Enabled */
-            enabled: boolean;
         };
         /**
          * AdSnapshotOut
@@ -1934,6 +2126,114 @@ export interface components {
             files: string[];
         };
         /**
+         * BulkDisableFailed
+         * @description Объявление, для которого задачу создать не удалось.
+         */
+        BulkDisableFailed: {
+            /** Fb Ad Id */
+            fb_ad_id: string;
+            /** Reason */
+            reason: string;
+        };
+        /**
+         * BulkDisableIn
+         * @description Тело POST /dashboard/disable-tasks/bulk (массовое отключение).
+         */
+        BulkDisableIn: {
+            /**
+             * Fb Ad Ids
+             * @description Список Meta numeric ad ID (1..50)
+             */
+            fb_ad_ids: string[];
+            /**
+             * Reason
+             * @description Причина отключения
+             * @default manual bulk disable
+             */
+            reason: string;
+            /**
+             * Idempotency Token
+             * @description Client-side токен против двойного submit (общий для всего batch)
+             */
+            idempotency_token: string;
+            /**
+             * Requested By
+             * @description Инициатор (провенанс)
+             * @default api_user
+             */
+            requested_by: string;
+            /**
+             * Requested By Chat Id
+             * @description TG chat_id инициатора
+             */
+            requested_by_chat_id?: number | null;
+        };
+        /**
+         * BulkDisableResultOut
+         * @description Partial-failure ответ bulk-отключения. HTTP 200 даже при частичном успехе.
+         */
+        BulkDisableResultOut: {
+            /** Created */
+            created?: components["schemas"]["TaskQueueRowOut"][];
+            /** Skipped */
+            skipped?: components["schemas"]["BulkDisableSkipped"][];
+            /** Failed */
+            failed?: components["schemas"]["BulkDisableFailed"][];
+        };
+        /**
+         * BulkDisableSkipped
+         * @description Объявление, для которого задача уже существовала (дубль idempotency_key).
+         */
+        BulkDisableSkipped: {
+            /** Fb Ad Id */
+            fb_ad_id: string;
+            /** Task Id */
+            task_id?: string | null;
+            /**
+             * Reason
+             * @default duplicate
+             */
+            reason: string;
+        };
+        /**
+         * BulkSnoozeFailed
+         * @description Объявление, которое не удалось снузить (нет ad или нет состояния алерта).
+         */
+        BulkSnoozeFailed: {
+            /** Fb Ad Id */
+            fb_ad_id: string;
+            /** Reason */
+            reason: string;
+        };
+        /**
+         * BulkSnoozeIn
+         * @description Тело POST /dashboard/ads/bulk-snooze.
+         */
+        BulkSnoozeIn: {
+            /**
+             * Fb Ad Ids
+             * @description Список Meta numeric ad ID (1..50)
+             */
+            fb_ad_ids: string[];
+            /**
+             * Minutes
+             * @description Снуз в минутах (1..1440)
+             */
+            minutes: number;
+        };
+        /**
+         * BulkSnoozeResultOut
+         * @description Partial-failure ответ bulk-снуза. HTTP 200 даже при частичном успехе.
+         */
+        BulkSnoozeResultOut: {
+            /** Snoozed Until */
+            snoozed_until: string;
+            /** Snoozed */
+            snoozed?: string[];
+            /** Failed */
+            failed?: components["schemas"]["BulkSnoozeFailed"][];
+        };
+        /**
          * CampaignAdPlanOut
          * @description План одного объявления.
          */
@@ -2042,6 +2342,18 @@ export interface components {
             title: string;
             /** Items */
             items: components["schemas"]["CampaignManualGuideItemOut"][];
+        };
+        /**
+         * CampaignOption
+         * @description Кампания для выбора в allowlist сканирования (#3).
+         */
+        CampaignOption: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Selected */
+            selected: boolean;
         };
         /**
          * CampaignPlanRequest
@@ -2166,6 +2478,10 @@ export interface components {
          *
          *     Контракт: даже если одна из секций упала, остальные возвращаются (см.
          *     partial-failure поведение в роутере). Списки могут быть пустыми.
+         *
+         *     Секции:
+         *     - recent_disable_tasks: задачи отключения (meta_api_mutation pause_ad / legacy disable)
+         *     - recent_enable_tasks: задачи включения (meta_api_mutation activate_ad / legacy enable)
          */
         DashboardBatchOut: {
             stats: components["schemas"]["DashboardStatsOut"];
@@ -2179,6 +2495,10 @@ export interface components {
             }[];
             /** Recent Disable Tasks */
             recent_disable_tasks?: {
+                [key: string]: unknown;
+            }[];
+            /** Recent Enable Tasks */
+            recent_enable_tasks?: {
                 [key: string]: unknown;
             }[];
             /** Enable Recommendations Pending */
@@ -2809,11 +3129,6 @@ export interface components {
              */
             owner_campaign_tag?: string | null;
             /**
-             * Act Via Api
-             * @description Канал toggle-действий (disable/enable). False — DOM-клик browser-agent, True — Marketing API (pause_ad/activate_ad, точно по ad_id). null — не менять.
-             */
-            act_via_api?: boolean | null;
-            /**
              * Campaign Ids
              * @description Allowlist кампаний для am-режима (#3): фильтр am_tabular по campaign.id IN. null — не менять, [] — очистить (без фильтра по кампаниям).
              */
@@ -2836,11 +3151,6 @@ export interface components {
             auto_enable_recommendations: boolean;
             /** Owner Campaign Tag */
             owner_campaign_tag?: string | null;
-            /**
-             * Act Via Api
-             * @default false
-             */
-            act_via_api: boolean;
             /** Campaign Ids */
             campaign_ids?: string[];
             /** Warning Percent Of Stop */
@@ -2866,6 +3176,13 @@ export interface components {
             status: string;
             /** Last Scan At */
             last_scan_at?: string | null;
+            /** Last Scan Outcome */
+            last_scan_outcome?: string | null;
+            /**
+             * Scans Today
+             * @default 0
+             */
+            scans_today: number;
             /** Interval Seconds */
             interval_seconds?: number | null;
             /** Extra */
@@ -2919,7 +3236,7 @@ export interface components {
              */
             code: string;
             /** Name */
-            name: string;
+            name?: string | null;
             /** Vertical */
             vertical?: string | null;
             /** Country Code */
@@ -3006,6 +3323,16 @@ export interface components {
             frequency_threshold?: string | null;
             /** Funnel Ratio Threshold */
             funnel_ratio_threshold?: string | null;
+            /**
+             * Stop Percent Of Rule
+             * @default 80
+             */
+            stop_percent_of_rule: string;
+            /**
+             * Warning Percent Of Stop
+             * @default 80
+             */
+            warning_percent_of_stop: string;
         };
         /**
          * OfferRuleUpsertIn
@@ -3026,6 +3353,16 @@ export interface components {
             frequency_threshold?: number | string | null;
             /** Funnel Ratio Threshold */
             funnel_ratio_threshold?: number | string | null;
+            /**
+             * Stop Percent Of Rule
+             * @default 80
+             */
+            stop_percent_of_rule: number | string;
+            /**
+             * Warning Percent Of Stop
+             * @default 80
+             */
+            warning_percent_of_stop: number | string;
         };
         /**
          * OfferUpdateIn
@@ -3060,13 +3397,50 @@ export interface components {
         };
         /**
          * RestartSignalResponse
-         * @description Ответ на POST /observer/restart или /disable-worker/restart.
+         * @description Ответ на POST /observer/restart.
          */
         RestartSignalResponse: {
             /** Status */
             status: string;
             /** Channel */
             channel: string;
+        };
+        /**
+         * RulePreviewOut
+         * @description Превью порогов автостопа для CPA + чувствительности.
+         *
+         *     Считается через RuleContext — ТОТ ЖЕ расчёт, что применяет автостоп: цифры в UI
+         *     совпадают с реальными порогами, по которым observer отключает объявления.
+         */
+        RulePreviewOut: {
+            /** Cpa */
+            cpa: string;
+            /** Stop Percent Of Rule */
+            stop_percent_of_rule: string;
+            /** Warning Percent Of Stop */
+            warning_percent_of_stop: string;
+            /** Cost Rules */
+            cost_rules: components["schemas"]["RuleThresholdPreview"][];
+            /** Spend Ranges */
+            spend_ranges: components["schemas"]["SpendRangePreview"][];
+            /** Regs No Dep Stop Count */
+            regs_no_dep_stop_count: number;
+        };
+        /**
+         * RuleThresholdPreview
+         * @description Один порог-правило: при какой $-стоимости сработают стоп и ворнинг.
+         */
+        RuleThresholdPreview: {
+            /** Rule */
+            rule: string;
+            /** Label */
+            label: string;
+            /** Base */
+            base: string;
+            /** Stop */
+            stop: string;
+            /** Warning */
+            warning: string;
         };
         /**
          * RuleViolationOut
@@ -3136,6 +3510,29 @@ export interface components {
             enabled: boolean;
         };
         /**
+         * SnoozeIn
+         * @description Тело POST /dashboard/ads/{fb_ad_id}/snooze.
+         */
+        SnoozeIn: {
+            /**
+             * Minutes
+             * @description Снуз в минутах (1..1440)
+             */
+            minutes: number;
+        };
+        /**
+         * SnoozeResultOut
+         * @description Результат одиночного снуза.
+         */
+        SnoozeResultOut: {
+            /** Ok */
+            ok: boolean;
+            /** Fb Ad Id */
+            fb_ad_id: string;
+            /** Snoozed Until */
+            snoozed_until: string;
+        };
+        /**
          * SpendPointOut
          * @description Одна точка ad_metrics для /api/dashboard/spend-history (не бакетированная).
          */
@@ -3159,6 +3556,22 @@ export interface components {
             registrations?: number | null;
             /** Deposits */
             deposits?: number | null;
+        };
+        /**
+         * SpendRangePreview
+         * @description Диапазон расхода (% от CPA → $).
+         */
+        SpendRangePreview: {
+            /** Rule */
+            rule: string;
+            /** Label */
+            label: string;
+            /** Stop From */
+            stop_from: string;
+            /** Stop To */
+            stop_to: string;
+            /** Warning From */
+            warning_from: string;
         };
         /**
          * StartCabinetDayResponse
@@ -3443,6 +3856,14 @@ export interface components {
         /**
          * TmaDraftOut
          * @description Снимок DRAFT meta-mutation задачи для DraftsPage.
+         *
+         *     expires_at: время автоматической отмены (created_at + DRAFT_TTL_SECONDS).
+         *     current_state: текущее состояние объекта мутации (заполняется в detail-endpoint'е).
+         *         - pause_ad / activate_ad: {"alert_state": str, "delivery_status": str | None}
+         *         - set_adset_budget: {"daily_budget_cents": int | None, "lifetime_budget_cents": int | None}
+         *         - bulk_status_change: {"by_state": {"<state>": count}} — агрегат по N объектам
+         *         - Остальные mutation_kind → null (не поддерживаются / слишком дорого).
+         *     В list-endpoint'е current_state = None (дорого резолвить N строк).
          */
         TmaDraftOut: {
             /** Id */
@@ -3461,6 +3882,12 @@ export interface components {
             requested_by: string;
             /** Created At */
             created_at?: string | null;
+            /** Expires At */
+            expires_at?: string | null;
+            /** Current State */
+            current_state?: {
+                [key: string]: unknown;
+            } | null;
         };
         /**
          * TmaMeResponse
@@ -3552,6 +3979,35 @@ export interface components {
             ctx?: Record<string, never>;
         };
         /**
+         * VisionEnsureCdpResponse
+         * @description Ответ на POST /vision/ensure-cdp (bootstrap при старте run.sh).
+         *
+         *     Контракт под run.sh: ok|status|action|message. Эндпоинт никогда не падает 5xx —
+         *     при недоступности browser-agent возвращает ok=false с пояснением.
+         */
+        VisionEnsureCdpResponse: {
+            /**
+             * Ok
+             * @default true
+             */
+            ok: boolean;
+            /**
+             * Status
+             * @default UNKNOWN
+             */
+            status: string;
+            /**
+             * Action
+             * @default none
+             */
+            action: string;
+            /**
+             * Message
+             * @default
+             */
+            message: string;
+        };
+        /**
          * VisionReconnectResponse
          * @description Ответ на POST /vision/reconnect.
          */
@@ -3593,13 +4049,15 @@ export interface components {
         };
         /**
          * VisionSettingsUpdateRequest
-         * @description Тело PUT /settings/vision — обновить x_token и/или profile_id.
+         * @description Тело PUT /settings/vision — обновить x_token / profile_id / флаг self-heal.
          */
         VisionSettingsUpdateRequest: {
             /** X Token */
             x_token?: string | null;
             /** Profile Id */
             profile_id?: string | null;
+            /** Auto Restart On Missing Cdp */
+            auto_restart_on_missing_cdp?: boolean | null;
         };
         /**
          * WorkerStatus
@@ -3719,6 +4177,74 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    snooze_ad_api_dashboard_ads__fb_ad_id__snooze_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                fb_ad_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SnoozeIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SnoozeResultOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    bulk_snooze_ads_api_dashboard_ads_bulk_snooze_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BulkSnoozeIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkSnoozeResultOut"];
                 };
             };
             /** @description Validation Error */
@@ -3901,6 +4427,8 @@ export interface operations {
                 include_inactive?: boolean;
                 limit?: number;
                 offset?: number;
+                /** @description Keyset-cursor для виртуализации 1000+ строк. Если задан — offset игнорируется. Получается из заголовка X-Next-Cursor предыдущего ответа. */
+                cursor?: string | null;
             };
             header?: never;
             path?: never;
@@ -4061,6 +4589,7 @@ export interface operations {
                 incidents_limit?: number;
                 alerts_limit?: number;
                 disable_limit?: number;
+                enable_limit?: number;
             };
             header?: never;
             path?: never;
@@ -4225,6 +4754,39 @@ export interface operations {
             };
         };
     };
+    bulk_create_disable_tasks_api_dashboard_disable_tasks_bulk_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BulkDisableIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkDisableResultOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     retry_disable_task_api_dashboard_disable_tasks__task_id__retry_post: {
         parameters: {
             query?: never;
@@ -4273,6 +4835,105 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_draft_tasks_api_dashboard_draft_tasks_get: {
+        parameters: {
+            query?: {
+                /** @description Фильтр по mutation_kind */
+                kind?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TmaDraftOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    confirm_draft_task_api_dashboard_draft_tasks__task_id__confirm_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TmaDraftActionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reject_draft_task_api_dashboard_draft_tasks__task_id__reject_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TmaRejectRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TmaDraftActionResponse"];
+                };
             };
             /** @description Validation Error */
             422: {
@@ -4800,26 +5461,6 @@ export interface operations {
             };
         };
     };
-    restart_disable_worker_api_disable_worker_restart_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RestartSignalResponse"];
-                };
-            };
-        };
-    };
     list_offers_api_offers_get: {
         parameters: {
             query?: {
@@ -5046,6 +5687,40 @@ export interface operations {
             };
         };
     };
+    preview_rule_thresholds_api_offers_rules_preview_get: {
+        parameters: {
+            query: {
+                /** @description CPA ($) для расчёта порогов */
+                cpa: number | string;
+                stop_percent_of_rule?: number | string;
+                warning_percent_of_stop?: number | string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RulePreviewOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_observer_settings_api_settings_observer_get: {
         parameters: {
             query?: never;
@@ -5165,18 +5840,14 @@ export interface operations {
             };
         };
     };
-    patch_observer_act_via_api_api_settings_observer_act_via_api_patch: {
+    list_observer_campaigns_api_settings_observer_campaigns_get: {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ActViaApiToggleRequest"];
-            };
-        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {
@@ -5184,16 +5855,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ObserverSettingsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["CampaignOption"][];
                 };
             };
         };
@@ -5227,6 +5889,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    refresh_observer_campaigns_api_settings_observer_campaigns_refresh_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CampaignOption"][];
                 };
             };
         };
@@ -5497,6 +6179,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["VisionReconnectResponse"];
+                };
+            };
+        };
+    };
+    post_vision_ensure_cdp_api_vision_ensure_cdp_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VisionEnsureCdpResponse"];
                 };
             };
         };
