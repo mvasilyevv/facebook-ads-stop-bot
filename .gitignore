@@ -22,12 +22,14 @@ __pycache__/
 *.swp
 
 # Вспомогательные папки ИИ и агентов.
-# .claude/agents/ (определения субагентов) и .claude/skills/ (симлинки на
-# .agents/skills/) ВЕРСИОНИРУЕМ — это проектные инструкции. Локальное
-# (settings.local.json, plans/, worktrees/) остаётся в игноре.
+# .claude/agents/ (определения субагентов), .claude/skills/ (симлинки на
+# .agents/skills/) и .claude/commands/ (slash-команды) ВЕРСИОНИРУЕМ — это
+# проектные инструкции. Локальное (settings.local.json, plans/, worktrees/)
+# остаётся в игноре.
 .claude/*
 !.claude/agents/
 !.claude/skills/
+!.claude/commands/
 .claude-flow/
 .omc/
 .mcp.json
