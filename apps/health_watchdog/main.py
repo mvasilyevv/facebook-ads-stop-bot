@@ -41,11 +41,15 @@ OBSERVER_STALE_AFTER_SECONDS = int(os.environ.get("HEALTH_WATCHDOG_OBSERVER_STAL
 # воркеры ещё инициализируются (Redis/БД/browser-agent) и не успели записать первый
 # heartbeat. Без задержки watchdog слал ложный «воркер не дышит» сразу при старте.
 STARTUP_GRACE_SECONDS = int(os.environ.get("HEALTH_WATCHDOG_STARTUP_GRACE_SEC", "90"))
-# Синхронизировано с воркерами, которые поднимает run.sh. meta_api — единственный канал
-# отключения/включения рекламы (pause_ad/activate_ad), поэтому обязателен в мониторинге.
-# enable_reco — реальное heartbeat-имя enable_recommendation_worker (не enable_recommendation).
+# Синхронизировано с воркерами run.sh (= health_details._DEFAULT_EXPECTED_WORKERS).
+# Money-критичные обязаны мониториться: meta_api (канал отключения/включения pause_ad/
+# activate_ad), cabinet_scheduler (автостарт кабинета по расписанию), tracker_aggregator
+# (агрегатор депозитов) — их зависание (heartbeat-stall при живом процессе) не должно
+# пройти без TG-алерта (H4). enable_reco — реальное heartbeat-имя enable_recommendation_worker.
+# health_watchdog себя НЕ мониторит: если он сам мёртв — алертить некому.
 DEFAULT_EXPECTED_WORKERS = (
-    "observer,telegram_poller,cleanup,reconciler,meta_api,tracker_aggregator,enable_reco"
+    "observer,telegram_poller,cleanup,reconciler,meta_api,tracker_aggregator,"
+    "enable_reco,cabinet_scheduler,digest_scheduler,creator,creator_recorder"
 )
 
 OBSERVER_RUNTIME_KEY = "observer:runtime"

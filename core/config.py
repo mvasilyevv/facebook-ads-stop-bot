@@ -133,6 +133,13 @@ class Settings(BaseSettings):
     # Для локальной разработки: DEV_TOOLS_ENABLED=true в .env
     dev_tools_enabled: bool = False
 
+    # --- Reverse-proxy ---
+    # Доверять заголовку X-Forwarded-For для определения client IP (rate-limit и т.п.).
+    # ВКЛЮЧАТЬ ТОЛЬКО если API стоит за доверенным reverse-proxy (k8s-ingress/nginx),
+    # который сам выставляет XFF. По умолчанию False: XFF подделывается любым клиентом,
+    # и доверие ему без прокси = обход IP-rate-limit (H7a) → используем реальный TCP-peer.
+    trust_proxy_headers: bool = False
+
     @model_validator(mode="after")
     def _warn_insecure_defaults(self) -> "Settings":
         """Предупреждаем о небезопасных настройках при старте."""
