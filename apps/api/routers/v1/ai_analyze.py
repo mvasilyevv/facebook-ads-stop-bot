@@ -107,18 +107,8 @@ async def ai_analyze(
     Rate-limit: 20 запросов/час per remote IP. Превышение → 429.
     Если AI-провайдеры не настроены → 503.
     """
-    # Проверяем доступность AI до лимитов
-    ai = get_ai_client(settings)
-    if not ai.is_available:
-        return JSONResponse(
-            status_code=503,
-            content={
-                "detail": "AI-провайдеры не настроены — задай ANTHROPIC_API_KEY или OPENAI_API_KEY"
-            },
-        )
-
-    # Rate-limit per remote IP через Redis sliding-window. XFF учитывается только за
-    # доверенным прокси (settings.trust_proxy_headers), иначе реальный TCP-peer (H7a).
+    # M9: rate-limit ПЕРВЫМ (до проверки провайдера), иначе незалимиченный enumeration
+    # доступности AI. XFF учитывается только за доверенным прокси (H7a), иначе TCP-peer.
     client_key = _extract_client_key(request, trust_proxy=settings.trust_proxy_headers)
     try:
         await check_and_increment(
@@ -131,6 +121,16 @@ async def ai_analyze(
         return JSONResponse(
             status_code=429,
             content={"detail": "Превышен лимит запросов: 20 в час для /ai/analyze"},
+        )
+
+    # Доступность AI — после лимита.
+    ai = get_ai_client(settings)
+    if not ai.is_available:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": "AI-провайдеры не настроены — задай ANTHROPIC_API_KEY или OPENAI_API_KEY"
+            },
         )
 
     cache_key = f"ai:cache:analyze:{body.block_type}:{body.scope_key}"

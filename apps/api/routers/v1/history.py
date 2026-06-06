@@ -20,6 +20,7 @@ Endpoints (prefix /api от auto-discovery):
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -185,14 +186,12 @@ async def get_history_timeline(
 
     rows = await hq.fetch_timeline(engine, from_dt, to_dt, limit)
 
-    import json as _json
-
     result: list[HistoryTimelineItem] = []
     for r in rows:
         rule_codes: list[str] | None = None
         if r.rule_codes_raw:
             try:
-                rule_codes = _json.loads(r.rule_codes_raw)
+                rule_codes = json.loads(r.rule_codes_raw)
             except Exception:
                 rule_codes = []
 

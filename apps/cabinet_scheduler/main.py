@@ -102,21 +102,23 @@ async def run_one_tick(
     if not is_in_autostart_window(now, hour_utc, minute_utc):
         return {"outcome": "not_in_window"}
 
-    # Дедуп: атомарный SET NX. Только первый тик в окне проходит дальше.
+    # Дедуп. M8: маркер ставим ПОСЛЕ успешного действия (а не до), иначе транзиентная
+    # ошибка resolve/create «съедала» весь день (ключ выставлен, повтора нет до завтра).
+    # От гонки двух тиков деньги защищены idempotency_key самой задачи (один task на день).
     done_key = autostart_done_key(now)
     try:
-        acquired = await redis_client.set(done_key, "1", ex=AUTOSTART_DONE_TTL_SECONDS, nx=True)
+        already_done = await redis_client.get(done_key)
     except Exception:
-        logger.exception("cabinet_autostart: ошибка SET %s в Redis — пропускаю прогон", done_key)
+        logger.exception("cabinet_autostart: ошибка GET %s в Redis — пропускаю прогон", done_key)
         return {"outcome": "already_done"}
-    if not acquired:
+    if already_done:
         return {"outcome": "already_done"}
 
     day = now.astimezone(timezone.utc).strftime("%Y-%m-%d")
     dates = list(config.get("dates") or [])
     if not dates:
-        # Дедуп уже выставлен — повторно за день не дёргаем. Это норма:
-        # фича включена, но дат не задано → нечего включать.
+        # Дат нет → нечего включать. Ставим маркер, чтобы не дёргать каждый тик окна.
+        await _set_autostart_done(redis_client, done_key)
         logger.info("cabinet_autostart: фича включена, но список дат пуст — пропускаю день %s", day)
         return {"outcome": "no_dates", "day": day}
 
@@ -165,6 +167,10 @@ async def run_one_tick(
     # мог измениться, скан подтянет актуальное состояние.
     await _trigger_observer_scan(redis_client)
 
+    # M8: маркер «выполнено» — только теперь, когда задача создана и скан запущен.
+    # Транзиент выше → маркер не выставлен → следующий тик окна повторит.
+    await _set_autostart_done(redis_client, done_key)
+
     if not ad_ids:
         return {"outcome": "no_owner_ads", "day": day, "total": total}
 
@@ -176,6 +182,14 @@ async def run_one_tick(
         "total": total,
         "scan_triggered": True,
     }
+
+
+async def _set_autostart_done(redis_client: redis_asyncio.Redis, done_key: str) -> None:
+    """Выставить дедуп-маркер автостарта (после успешного прогона). Best-effort."""
+    try:
+        await redis_client.set(done_key, "1", ex=AUTOSTART_DONE_TTL_SECONDS)
+    except Exception:
+        logger.exception("cabinet_autostart: не удалось выставить маркер %s", done_key)
 
 
 async def _trigger_observer_scan(redis_client: redis_asyncio.Redis) -> None:
