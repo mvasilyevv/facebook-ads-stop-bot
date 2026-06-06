@@ -482,6 +482,42 @@ async def test_campaigns_group_and_sort(pg_engine, fake_redis_client, history_fi
         assert spends == sorted(spends, reverse=True)
 
 
+# H3: несколько alert_events на одном ad НЕ задваивают spend кампании (fan-out fix).
+# Старый код (per-ad alerts JOIN + GROUP BY alerts_count) дробил кампанию на строки по
+# числу алертов и дробил/завышал spend. Фикстура даёт ad1/ad2 по 1 алерту — баг не виден;
+# здесь добавляем ad1 ещё 2 алерта и проверяем, что spend остаётся 300.50, а кампания одна.
+@pytest.mark.asyncio
+async def test_campaigns_spend_not_inflated_by_multiple_alerts(
+    pg_engine, fake_redis_client, history_fixture
+):
+    async with pg_engine.begin() as conn:
+        for i in range(2):
+            await conn.execute(
+                text(
+                    "INSERT INTO alert_events "
+                    "(ad_id, stage, state, matched_rule_codes, metrics_json) "
+                    "VALUES (:a, 'warning', 'warning_sent', CAST(:mc AS JSONB), CAST(:mj AS JSONB))"
+                ),
+                {"a": history_fixture["ad1_id"], "mc": '["CPC"]', "mj": f'{{"n": {i}}}'},
+            )
+
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.get("/api/history/campaigns")
+
+    assert resp.status_code == 200
+    campaigns = resp.json()
+    our = [c for c in campaigns if c["campaign_name"] == history_fixture["campaign_name"]]
+    # Кампания одной строкой (не размножена fan-out'ом по alerts_count)
+    assert len(our) == 1, f"кампания размножена fan-out'ом: {len(our)} строк"
+    # spend не задвоен: latest-per-ad = 300.50 несмотря на 3 алерта у ad1
+    assert Decimal(our[0]["spend"]) == Decimal("300.50"), (
+        f"spend={our[0]['spend']} задвоен fan-out'ом, ожидалось 300.50"
+    )
+    # alerts_count кампании = 3 (ad1: 1 из фикстуры + 2) + 1 (ad2 stop) = 4
+    assert our[0]["alerts_count"] == 4
+
+
 # active_ads_count считает только last_seen_at >= now - 7d.
 @pytest.mark.asyncio
 async def test_campaigns_active_ads_last_seen_filter(pg_engine, fake_redis_client, history_fixture):
