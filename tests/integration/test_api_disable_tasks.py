@@ -35,10 +35,13 @@ async def clean_tasks(pg_engine):
 
     async def _cleanup():
         async with pg_engine.begin() as conn:
-            # Удаляем все disable-задачи с тестовыми ключами (DTST-суффикс)
+            # Удаляем тестовые задачи: legacy disable (DTST-ключ) + новые
+            # meta_api_mutation pause_ad (target_id=99DTST..., manual/auto-ключ).
             await conn.execute(
                 text(
-                    "DELETE FROM task_queue WHERE task_type = 'disable' AND idempotency_key LIKE '%DTST%'"
+                    "DELETE FROM task_queue WHERE idempotency_key LIKE '%DTST%' "
+                    "OR payload->>'target_id' LIKE '99DTST%' "
+                    "OR payload->>'fb_ad_id' LIKE '99DTST%'"
                 )
             )
             await conn.execute(text("DELETE FROM fb_ads WHERE fb_ad_id LIKE '99DTST%'"))
@@ -196,7 +199,7 @@ async def test_list_disable_tasks_filter_by_fb_ad_id(
 # Проверяем успешное создание задачи через POST
 @pytest.mark.asyncio
 async def test_create_disable_task_happy(pg_engine, fake_redis_client, clean_tasks) -> None:
-    """POST happy path → 201, задача в БД с task_type='disable'."""
+    """POST happy path → 201, задача создаётся через Marketing API (meta_api_mutation pause_ad)."""
     suffix = uuid.uuid4().hex[:6]
     async with pg_engine.begin() as conn:
         fb_ad_id = await _seed_ad(conn, suffix)
@@ -210,21 +213,27 @@ async def test_create_disable_task_happy(pg_engine, fake_redis_client, clean_tas
 
     assert resp.status_code == 201
     data = resp.json()
-    assert data["task_type"] == "disable"
+    # После удаления DOM-канала POST создаёт meta_api_mutation pause_ad (не legacy 'disable').
+    assert data["task_type"] == "meta_api_mutation"
     assert data["fb_ad_id"] == fb_ad_id
     assert data["status"] == "PENDING"
     assert data["requested_by"] == "tester"
 
-    # Проверяем что задача реально есть в БД
+    # Проверяем что задача реально есть в БД как pause_ad с target_id=fb_ad_id
     async with pg_engine.connect() as conn:
         row = (
             await conn.execute(
-                text("SELECT task_type, status FROM task_queue WHERE id = :tid"),
+                text(
+                    "SELECT task_type, status, payload->>'mutation_kind' AS kind, "
+                    "payload->>'target_id' AS target FROM task_queue WHERE id = :tid"
+                ),
                 {"tid": int(data["id"])},
             )
         ).first()
     assert row is not None
-    assert row.task_type == "disable"
+    assert row.task_type == "meta_api_mutation"
+    assert row.kind == "pause_ad"
+    assert row.target == fb_ad_id
     assert row.status == "pending"
 
 
@@ -326,3 +335,44 @@ async def test_cancel_disable_task_succeeded_conflict(
         resp = await ac.delete(f"/api/dashboard/disable-tasks/{task_id}")
 
     assert resp.status_code == 409
+
+
+# ─── Тест 11 ─────────────────────────────────────────────────────────────────
+# G0-регресс: meta_api_mutation pause_ad виден в GET disable-tasks после удаления DOM-канала
+@pytest.mark.asyncio
+async def test_list_includes_meta_api_pause_ad(pg_engine, fake_redis_client, clean_tasks) -> None:
+    """Задача meta_api_mutation+pause_ad попадает в GET disable-tasks, fb_ad_id берётся из target_id.
+
+    Регресс DOM-removal: GET фильтровал task_type='disable', а auto-stop/manual создают
+    meta_api_mutation pause_ad → задача была невидима. Здесь проверяем, что теперь видна.
+    """
+    suffix = uuid.uuid4().hex[:6]
+    async with pg_engine.begin() as conn:
+        fb_ad_id = await _seed_ad(conn, suffix)
+        # Прямой INSERT meta_api_mutation pause_ad (как создаёт auto-stop / ручная кнопка).
+        await conn.execute(
+            text(
+                """
+                INSERT INTO task_queue
+                    (task_type, status, idempotency_key, payload,
+                     attempt_count, max_attempts, requested_by)
+                VALUES
+                    ('meta_api_mutation', 'pending', :ik, CAST(:pl AS JSONB), 0, 5, 'bot_auto_stop')
+                """
+            ),
+            {
+                "ik": f"auto:pause_ad:{fb_ad_id}:DTST{suffix}",
+                "pl": f'{{"mutation_kind": "pause_ad", "target_id": "{fb_ad_id}", "params": {{}}}}',
+            },
+        )
+
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.get(f"/api/dashboard/disable-tasks?fb_ad_id={fb_ad_id}")
+
+    assert resp.status_code == 200
+    items = resp.json()
+    assert len(items) == 1
+    assert items[0]["task_type"] == "meta_api_mutation"
+    # fb_ad_id резолвится из payload->>'target_id' через COALESCE.
+    assert items[0]["fb_ad_id"] == fb_ad_id

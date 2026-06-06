@@ -16,7 +16,6 @@ const OBSERVER_SETTINGS: ObserverSettings = {
   is_scanning_enabled: true,
   default_interval_seconds: 60,
   auto_enable_recommendations: true,
-  act_via_api: true,
   owner_campaign_tag: "MV",
   campaign_ids: [],
   warning_percent_of_stop: null,
@@ -104,10 +103,6 @@ vi.mock("@/lib/api/settings", () => ({
     refetch: vi.fn(),
   }),
   useRestartObserver: () => ({
-    mutate: vi.fn(),
-    isPending: false,
-  }),
-  useRestartDisableWorker: () => ({
     mutate: vi.fn(),
     isPending: false,
   }),

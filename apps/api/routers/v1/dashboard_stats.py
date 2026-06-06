@@ -29,6 +29,7 @@ from apps.api.utils.alert_serializer import alert_event_row_to_out
 from apps.api.utils.task_serializer import task_row_to_out
 from core.dashboard.snapshot import build_ad_snapshot, build_incidents_snapshot
 from core.observer.runtime import read_observer_runtime
+from core.tasks.channel import disable_channel_sql, enable_channel_sql, target_id_sql
 
 logger = logging.getLogger(__name__)
 
@@ -136,18 +137,22 @@ async def _query_scan_counts(engine: AsyncEngine) -> dict[str, Any]:
 async def _query_task_counts(engine: AsyncEngine) -> dict[str, int]:
     """Counts по task_queue: pending disable/enable + failed за 24h."""
     day_ago = datetime.now(UTC) - timedelta(hours=24)
-    sql = """
+    # Отключение/включение после удаления DOM — meta_api_mutation pause_ad/activate_ad
+    # (+ legacy disable/enable). Иначе счётчики всегда 0.
+    disable_pred = disable_channel_sql("task_queue")
+    enable_pred = enable_channel_sql("task_queue")
+    sql = f"""
         SELECT
             COUNT(*) FILTER (
-                WHERE task_type = 'disable'
+                WHERE {disable_pred}
                 AND status IN ('draft', 'pending', 'retrying')
             ) AS pending_disable,
             COUNT(*) FILTER (
-                WHERE task_type = 'enable'
+                WHERE {enable_pred}
                 AND status IN ('draft', 'pending', 'retrying')
             ) AS pending_enable,
             COUNT(*) FILTER (
-                WHERE task_type IN ('disable', 'enable')
+                WHERE ({disable_pred} OR {enable_pred})
                 AND status = 'failed'
                 AND updated_at >= :day_ago
             ) AS failed_24h
@@ -222,12 +227,13 @@ async def _safe_call(coro, default):
 
 async def _query_recent_disable_tasks(engine: AsyncEngine, limit: int) -> list[dict[str, Any]]:
     """Последние disable-задачи (top N) с JOIN'ом по fb_ads для ad_name."""
-    sql = """
+    target_expr = target_id_sql("tq")
+    sql = f"""
         SELECT
             tq.id,
             tq.task_type,
             tq.status,
-            tq.payload->>'fb_ad_id' AS fb_ad_id,
+            {target_expr} AS fb_ad_id,
             fa.ad_name,
             tq.attempt_count,
             tq.max_attempts,
@@ -238,8 +244,8 @@ async def _query_recent_disable_tasks(engine: AsyncEngine, limit: int) -> list[d
             tq.next_retry_at,
             tq.last_error
         FROM task_queue tq
-        LEFT JOIN fb_ads fa ON fa.fb_ad_id = tq.payload->>'fb_ad_id'
-        WHERE tq.task_type = 'disable'
+        LEFT JOIN fb_ads fa ON fa.fb_ad_id = {target_expr}
+        WHERE {disable_channel_sql("tq")}
         ORDER BY tq.created_at DESC
         LIMIT :lim
     """

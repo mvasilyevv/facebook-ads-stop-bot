@@ -4,18 +4,11 @@
  * (предлагать включить восстановившиеся). + индикатор: чьи кампании наблюдаем.
  */
 
-import { useState } from "react";
 import { Switch } from "@/components/ui/Switch";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { Badge } from "@/components/ui/Badge";
-import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { toast } from "@/components/ui/Toast";
-import {
-  useObserverSettings,
-  useToggleScanning,
-  useToggleAutoEnable,
-  useToggleActViaApi,
-} from "@/lib/api/settings";
+import { useObserverSettings, useToggleScanning, useToggleAutoEnable } from "@/lib/api/settings";
 
 function errMsg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -53,24 +46,6 @@ export function ScannerControls() {
 
   const toggleScanning = useToggleScanning();
   const toggleAutoEnable = useToggleAutoEnable();
-  const toggleActViaApi = useToggleActViaApi();
-
-  // Канал авто-стопа — money-критичный, переключаем только через подтверждение.
-  const actViaApi = s?.act_via_api ?? true;
-  const [pendingActViaApi, setPendingActViaApi] = useState<boolean | null>(null);
-
-  function confirmActViaApi() {
-    if (pendingActViaApi === null) return;
-    toggleActViaApi.mutate(pendingActViaApi, {
-      onSuccess: () =>
-        toast.success(
-          pendingActViaApi ? "Канал: Marketing API" : "Канал: клик в браузере",
-          "Канал авто-стопа изменён.",
-        ),
-      onError: (e) => toast.error("Ошибка", errMsg(e)),
-    });
-    setPendingActViaApi(null);
-  }
 
   return (
     <section className="border border-bg-5 bg-bg-1 p-5 mb-10">
@@ -128,50 +103,6 @@ export function ScannerControls() {
           }}
         />
       </div>
-
-      {/* Канал авто-стопа — money-критичный тогл с подтверждением. */}
-      <div className="mt-6 pt-5 border-t border-bg-5 flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <span className="text-[13px] text-bg-11 font-medium">Канал авто-стопа</span>
-            {!loading && (
-              <Badge variant={actViaApi ? "info" : "neutral"} size="sm" withDot={false}>
-                {actViaApi ? "Marketing API" : "Клик в браузере"}
-              </Badge>
-            )}
-          </div>
-          <div className="text-[11px] text-bg-9 mt-0.5 max-w-md">
-            Как отключать рекламу при стоп-правиле: через Marketing API (точно по ad_id, основной)
-            или кликом в браузере (DOM, резерв).
-          </div>
-        </div>
-        {loading ? (
-          <Skeleton width={44} height={24} />
-        ) : (
-          <Switch
-            checked={actViaApi}
-            onChange={() => setPendingActViaApi(!actViaApi)}
-            disabled={toggleActViaApi.isPending}
-            label="Канал авто-стопа"
-          />
-        )}
-      </div>
-
-      <ConfirmDialog
-        open={pendingActViaApi !== null}
-        onOpenChange={(o) => {
-          if (!o) setPendingActViaApi(null);
-        }}
-        title="Сменить канал авто-стопа?"
-        description={
-          pendingActViaApi
-            ? "Отключение рекламы пойдёт через Marketing API — точно по ad_id, без промахов по кнопке."
-            : "Отключение рекламы пойдёт через клик в браузере (DOM) — резервный канал."
-        }
-        confirmLabel="Сменить"
-        confirmVariant="primary"
-        onConfirm={confirmActViaApi}
-      />
     </section>
   );
 }
