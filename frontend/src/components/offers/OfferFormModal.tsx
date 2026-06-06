@@ -9,7 +9,7 @@
  *       при редактировании — PUT rules вместе с остальными порогами.
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Modal } from "@/components/ui/Modal";
 import { Input } from "@/components/ui/Input";
 import { Button } from "@/components/ui/Button";
@@ -83,12 +83,16 @@ function OfferForm({ editOffer, onClose }: OfferFormProps) {
   const upsertRules = useUpsertOfferRules();
 
   // При редактировании — загружаем правила для получения текущего CPA.
+  // H7d: инициализация CPA в useEffect (не в теле компонента) — setState в render
+  // вызывал лишний рендер и StrictMode-петлю.
   const rulesQuery = useOfferRules(isEdit ? editOffer.id : null);
-  if (isEdit && rulesQuery.data && !cpaInitialized) {
-    const cpa = rulesQuery.data.cpa_threshold ?? "";
-    setForm((p) => ({ ...p, cpa }));
-    setCpaInitialized(true);
-  }
+  const rulesData = rulesQuery.data;
+  useEffect(() => {
+    if (isEdit && rulesData && !cpaInitialized) {
+      setForm((p) => ({ ...p, cpa: rulesData.cpa_threshold ?? "" }));
+      setCpaInitialized(true);
+    }
+  }, [isEdit, rulesData, cpaInitialized]);
 
   const busy = createOffer.isPending || updateOffer.isPending || upsertRules.isPending;
 
