@@ -174,6 +174,22 @@ def test_postback_accepts_body_at_limit() -> None:
     assert resp.status_code == 202
 
 
+# H7b: /api/tools/* освобождён от 64KB-лимита (large multipart с изображениями).
+# Большой body НЕ отбивается 413 — доходит до handler'а (dev-tools выключены → 403/иное,
+# но точно не 413, иначе картинки в creative-uniquify никогда не загрузить).
+def test_tools_path_exempt_from_body_limit() -> None:
+    app = _make_app_with_secret("real-secret")
+    client = TestClient(app)
+    big = b"x" * (100 * 1024)
+    assert len(big) > MAX_REQUEST_BODY_BYTES, "санити: body действительно > лимита"
+    resp = client.post(
+        "/api/tools/creative-uniquify",
+        content=big,
+        headers={"Content-Type": "application/octet-stream"},
+    )
+    assert resp.status_code != 413, "tools-path должен быть исключён из 64KB-лимита"
+
+
 # Пустой body → 422 от Pydantic (валидация, ранее существовавшее поведение).
 def test_postback_empty_body_returns_422() -> None:
     app = _make_app_with_secret("real-secret")
