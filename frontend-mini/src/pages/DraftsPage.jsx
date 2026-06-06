@@ -23,58 +23,51 @@ const KIND_LABELS = {
 function formatPayload(kind, payload) {
   // Краткое описание payload — для пользователя, без технических полей
   if (!payload) return null;
-  if (kind === "set_budget") {
-    const cents = payload.daily_budget_cents ?? payload.lifetime_budget_cents ?? 0;
-    const type = payload.daily_budget_cents ? "дневной" : "lifetime";
+  // Бюджет приходит в ЦЕНТАХ (params.daily_budget / lifetime_budget — int).
+  if (kind === "set_adset_budget") {
+    const cents = payload.daily_budget ?? payload.lifetime_budget ?? 0;
+    const type = payload.daily_budget != null ? "дневной" : "lifetime";
     return (
       <>
-        <div>
-          <b>Тип:</b> {payload.entity_type ?? "adset"}, {type} бюджет
-        </div>
-        <div>
-          <b>Новый бюджет:</b> ${(cents / 100).toFixed(2)}
-        </div>
+        <div><b>Тип:</b> {type} бюджет</div>
+        <div><b>Новый бюджет:</b> ${(Number(cents) / 100).toFixed(2)}</div>
+        {payload.end_time && <div><b>До:</b> {payload.end_time}</div>}
         {payload.reason && <div><b>Причина:</b> {payload.reason}</div>}
       </>
     );
   }
-  if (kind === "clone_campaign") {
+  if (kind === "duplicate_campaign") {
     return (
       <>
-        <div><b>Исходник:</b> {payload.source_campaign_id}</div>
         <div><b>Глубина:</b> {payload.deep_copy ? "deep (кампания + адсеты + объявления)" : "shallow"}</div>
-        {payload.target_name && <div><b>Имя клона:</b> {payload.target_name}</div>}
+        {payload.new_name && <div><b>Имя клона:</b> {payload.new_name}</div>}
+        {payload.status_after_clone && <div><b>Статус после:</b> {payload.status_after_clone}</div>}
         {payload.reason && <div><b>Причина:</b> {payload.reason}</div>}
       </>
     );
   }
-  if (kind === "bulk_pause") {
-    const ids = payload.ad_ids || [];
+  if (kind === "bulk_status_change") {
+    // Поддерживаем обе формы payload: {ad_ids, action} и {object_ids, status}.
+    const ids = payload.ad_ids || payload.object_ids || [];
+    const action = payload.action || payload.status || "";
     const preview = ids.slice(0, 5).join(", ");
     return (
       <>
-        <div><b>Объявлений к паузе:</b> {ids.length}</div>
+        <div><b>Действие:</b> {action}</div>
+        <div><b>Объектов:</b> {ids.length}</div>
         {preview && <div className="hint" style={{ fontSize: 12 }}>{preview}{ids.length > 5 ? `, +${ids.length - 5}` : ""}</div>}
-        {payload.filter && (
-          <div className="hint" style={{ fontSize: 12 }}>
-            Фильтр: {JSON.stringify(payload.filter)}
-          </div>
-        )}
         {payload.reason && <div><b>Причина:</b> {payload.reason}</div>}
       </>
     );
   }
   if (kind === "create_campaign") {
+    // Бюджет в params.daily_budget / lifetime_budget — ЦЕНТЫ (int).
+    const cents = payload.daily_budget ?? payload.lifetime_budget ?? 0;
     return (
       <>
-        <div><b>Оффер:</b> {payload.offer_code}</div>
-        {payload.countries?.length > 0 && (
-          <div><b>Гео:</b> {payload.countries.join(", ")}</div>
-        )}
-        {payload.daily_budget_usd && (
-          <div><b>Бюджет:</b> ${payload.daily_budget_usd.toFixed(2)}/день</div>
-        )}
-        <div><b>Цель:</b> {payload.objective ?? "OUTCOME_LEADS"}</div>
+        {payload.name && <div><b>Имя:</b> {payload.name}</div>}
+        {payload.objective && <div><b>Цель:</b> {payload.objective}</div>}
+        {Number(cents) > 0 && <div><b>Бюджет:</b> ${(Number(cents) / 100).toFixed(2)}</div>}
         {payload.reason && <div><b>Причина:</b> {payload.reason}</div>}
       </>
     );

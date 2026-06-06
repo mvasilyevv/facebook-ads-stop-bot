@@ -1,14 +1,14 @@
 /**
- * Drafts (`/drafts`) — очередь действий, ожидающих ручного подтверждения.
+ * Drafts (`/drafts`) — DRAFT meta_api_mutation (AI-предложения действий через Marketing
+ * API), ожидающие ручного подтверждения (DRAFT → PENDING). Источник — admin-роутер
+ * /dashboard/draft-tasks.
  *
- * Два источника:
- *   1. PENDING disable/enable задачи (task_queue) — через /dashboard/{disable,enable}-tasks.
- *   2. DRAFT meta_api_mutation (AI-предложения через Marketing API) —
- *      через admin-роутер /dashboard/draft-tasks.
+ * disable/enable сюда НЕ попадают: auto-stop/manual создают их сразу pending (без
+ * draft-фазы), и approve-пути для них нет (только retry failed/cancelled → раньше давал
+ * 409). Их статус виден на Dashboard/Ads.
  *
- * Десктоп — доверенная admin-зона (X-API-Key, без Telegram-личности): per-user ACL
- * не применяется, его держит бэк. meta-черновики, созданные в Telegram, бэк вернёт
- * как неподтверждаемые с десктопа (confirm → 409) — обрабатываем как ошибку с тостом.
+ * Десктоп — доверенная admin-зона (X-API-Key). meta-черновики из Telegram бэк вернёт
+ * неподтверждаемыми с десктопа (confirm → 409) — обрабатываем тостом ошибки.
  */
 
 import { useState, useMemo } from "react";
@@ -24,16 +24,12 @@ import { Pill } from "@/components/ui/Pill";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { toast } from "@/components/ui/Toast";
 import {
-  useDrafts,
-  useApproveDraft,
-  useCancelDraft,
   useMetaDrafts,
   useConfirmMetaDraft,
   useRejectMetaDraft,
   type MetaDraft,
 } from "@/lib/api/drafts";
 import { cn } from "@/lib/utils/cn";
-import type { TaskQueueRow } from "@/lib/types/api";
 
 export const Route = createFileRoute("/drafts/")({
   component: DraftsPage,
@@ -42,8 +38,6 @@ export const Route = createFileRoute("/drafts/")({
 /** Доступные типы мутаций для фильтра. */
 const TYPE_OPTIONS = [
   { value: "", label: "Все" },
-  { value: "disable", label: "Отключение" },
-  { value: "enable", label: "Включение" },
   { value: "meta_api_mutation", label: "Действие через API" },
 ];
 
@@ -73,49 +67,6 @@ interface DiffRow {
   highlight?: boolean;
 }
 
-/** Генерирует читаемый заголовок карточки по task_type + payload. */
-function buildSummary(row: TaskQueueRow): string {
-  switch (row.task_type) {
-    case "disable":
-      return `Отключить «${row.ad_name ?? row.fb_ad_id ?? row.id}»`;
-    case "enable":
-      return `Включить «${row.ad_name ?? row.fb_ad_id ?? row.id}»`;
-    case "meta_api_mutation":
-      return `Действие с API · задача ${row.id.slice(0, 8)}`;
-    default:
-      return `${row.task_type} · задача ${row.id.slice(0, 8)}`;
-  }
-}
-
-/** Diff-таблица для disable/enable задачи. */
-function buildDiff(row: TaskQueueRow): DiffRow[] {
-  const rows: DiffRow[] = [];
-
-  if (row.fb_ad_id) {
-    rows.push({ key: "ID объявления", target: row.fb_ad_id });
-  }
-  if (row.ad_name) {
-    rows.push({ key: "Название", target: row.ad_name });
-  }
-
-  switch (row.task_type) {
-    case "disable":
-      rows.push({ key: "Статус", current: "ACTIVE", target: "PAUSED", highlight: true });
-      break;
-    case "enable":
-      rows.push({ key: "Статус", current: "PAUSED", target: "ACTIVE", highlight: true });
-      break;
-    default:
-      rows.push({ key: "Действие", target: row.task_type, highlight: true });
-  }
-
-  if (row.attempt_count > 0) {
-    rows.push({ key: "Попыток", target: String(row.attempt_count) });
-  }
-
-  return rows;
-}
-
 /** Заголовок карточки meta-мутации. */
 function buildMetaSummary(m: MetaDraft): string {
   const base = mutationKindLabel(m.mutation_kind);
@@ -137,11 +88,11 @@ function buildMetaDiff(m: MetaDraft): DiffRow[] {
   return rows;
 }
 
-/** Дата протухания черновика (24h от created_at). */
+/** Дата протухания черновика (24h от created_at). UTC — бэк хранит created_at в UTC. */
 function getExpiresAt(createdAt: string | null): string | null {
   if (!createdAt) return null;
   const d = new Date(createdAt);
-  d.setHours(d.getHours() + 24);
+  d.setUTCHours(d.getUTCHours() + 24);
   return d.toISOString();
 }
 
@@ -149,22 +100,8 @@ function getExpiresAt(createdAt: string | null): string | null {
 function isExpiringSoon(createdAt: string | null): boolean {
   if (!createdAt) return false;
   const expires = new Date(createdAt);
-  expires.setHours(expires.getHours() + 24);
+  expires.setUTCHours(expires.getUTCHours() + 24);
   return expires.getTime() - Date.now() < 60 * 60 * 1000;
-}
-
-/** Метка типа мутации для заголовка карточки disable/enable. */
-function mutationLabel(task_type: string): string {
-  switch (task_type) {
-    case "disable":
-      return "Отключить объявление";
-    case "enable":
-      return "Включить объявление";
-    case "meta_api_mutation":
-      return "Действие с API";
-    default:
-      return task_type;
-  }
 }
 
 /** Нормализованная карточка из любого источника — единый вход в DraftCard. */
@@ -193,31 +130,13 @@ function DraftsPage() {
     run: () => Promise<void>;
   } | null>(null);
 
-  const draftsQuery = useDrafts();
   const metaQuery = useMetaDrafts();
-  const approveMutation = useApproveDraft();
-  const cancelMutation = useCancelDraft();
   const confirmMeta = useConfirmMetaDraft();
   const rejectMeta = useRejectMetaDraft();
 
-  // Нормализуем оба источника в единый список карточек.
+  // Нормализуем meta-черновики в список карточек.
   const cards = useMemo<DraftCardModel[]>(() => {
     const out: DraftCardModel[] = [];
-    for (const d of draftsQuery.data ?? []) {
-      out.push({
-        key: `task-${d.id}`,
-        filterType: d.task_type,
-        taskTypeLabel: mutationLabel(d.task_type),
-        createdAt: d.created_at,
-        requestedBy: d.requested_by,
-        summary: buildSummary(d),
-        diff: buildDiff(d),
-        approve: () =>
-          approveMutation.mutateAsync({ id: d.id, task_type: d.task_type }).then(() => undefined),
-        cancel: () =>
-          cancelMutation.mutateAsync({ id: d.id, task_type: d.task_type }).then(() => undefined),
-      });
-    }
     for (const m of metaQuery.data ?? []) {
       out.push({
         key: `meta-${m.id}`,
@@ -234,7 +153,7 @@ function DraftsPage() {
     // Новые сверху по дате создания.
     out.sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""));
     return out;
-  }, [draftsQuery.data, metaQuery.data, approveMutation, cancelMutation, confirmMeta, rejectMeta]);
+  }, [metaQuery.data, confirmMeta, rejectMeta]);
 
   const filteredCards = selectedType
     ? cards.filter((c) => c.filterType === selectedType)
@@ -269,8 +188,8 @@ function DraftsPage() {
     }
   }
 
-  const isLoading = draftsQuery.isLoading || metaQuery.isLoading;
-  const isError = draftsQuery.isError || metaQuery.isError;
+  const isLoading = metaQuery.isLoading;
+  const isError = metaQuery.isError;
 
   const subtitle = isLoading ? null : (
     <>
@@ -336,9 +255,8 @@ function DraftsPage() {
       ) : isError ? (
         <ErrorState
           title="Не удалось загрузить черновики."
-          error={draftsQuery.error ?? metaQuery.error}
+          error={metaQuery.error}
           onRetry={() => {
-            draftsQuery.refetch();
             metaQuery.refetch();
           }}
         />
@@ -421,4 +339,4 @@ function DraftsPage() {
 }
 
 /** Экспорт форматтеров для тестов. */
-export { buildSummary, buildDiff, isExpiringSoon, mutationLabel };
+export { isExpiringSoon };
