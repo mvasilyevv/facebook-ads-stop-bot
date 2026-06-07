@@ -55,7 +55,6 @@ function HistoryPage() {
         eyebrowNum="03"
         eyebrow="HISTORY · АРХИВ"
         title="История"
-        displayNumber="03"
         subtitle={`${period.from_iso.slice(0, 10)} — ${period.to_iso.slice(0, 10)}`}
         action={
           <Button

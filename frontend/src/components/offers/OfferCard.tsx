@@ -67,8 +67,8 @@ export function OfferCard({
       {/* ── Header: код + badge ── */}
       <header className="px-5 pt-5 pb-4">
         <div className="flex items-start justify-between gap-3 mb-2">
-          {/* Код оффера — акцент mono */}
-          <span className="font-display text-[13px] tracking-[0.06em] text-accent font-medium">
+          {/* Код оффера — mono, канон 15px weight 600 */}
+          <span className="font-display text-[15px] tracking-[0.04em] text-bg-11 font-semibold">
             {offer.code}
           </span>
           <Badge

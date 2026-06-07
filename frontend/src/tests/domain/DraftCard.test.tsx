@@ -6,7 +6,7 @@ import { render, screen } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { describe, it, expect, vi } from "vitest";
 import { DraftCard } from "@/components/domain/drafts/DraftCard";
-import { mutationKindVerb } from "@fb/shared";
+import { mutationKindLabel } from "@fb/shared";
 import type { DraftOut } from "@fb/shared";
 
 // Базовый черновик (не истекающий — created_at только что)
@@ -30,32 +30,32 @@ function makeSoonDraft(): DraftOut {
 
 describe("DraftCard", () => {
   // Проверяем наличие verb из MUTATION_KIND_VERBS
-  it("показывает verb из MUTATION_KIND_VERBS для pause_ad", () => {
+  it("показывает описание действия (label) для pause_ad", () => {
     render(<DraftCard draft={makeDraft({ mutation_kind: "pause_ad" })} />);
-    const verb = mutationKindVerb("pause_ad");
-    expect(screen.getByText(verb, { exact: false })).toBeInTheDocument();
+    const label = mutationKindLabel("pause_ad");
+    expect(screen.getByText(label, { exact: false })).toBeInTheDocument();
   });
 
-  it("показывает verb ИЗМЕНИТЬ БЮДЖЕТ для set_adset_budget", () => {
+  it("показывает описание действия для set_adset_budget", () => {
     render(
       <DraftCard
         draft={makeDraft({ mutation_kind: "set_adset_budget", payload: { budget_cents: 35000, budget_type: "daily" } })}
       />,
     );
-    const verb = mutationKindVerb("set_adset_budget");
-    expect(screen.getByText(verb, { exact: false })).toBeInTheDocument();
+    const label = mutationKindLabel("set_adset_budget");
+    expect(screen.getByText(label, { exact: false })).toBeInTheDocument();
   });
 
   // expiring-soon ribbon "EXPIRING SOON" появляется при просроченном черновике
-  it("ribbon EXPIRING SOON появляется при isExpiringSoon=true", () => {
+  it("ribbon СКОРО ИСТЕКАЕТ появляется при isExpiringSoon=true", () => {
     render(<DraftCard draft={makeSoonDraft()} />);
-    expect(screen.getByText("EXPIRING SOON")).toBeInTheDocument();
+    expect(screen.getByText("СКОРО ИСТЕКАЕТ")).toBeInTheDocument();
   });
 
   // Обычный черновик — ribbon НЕ показывается
   it("ribbon отсутствует при нормальном сроке", () => {
     render(<DraftCard draft={makeDraft()} />);
-    expect(screen.queryByText("EXPIRING SOON")).not.toBeInTheDocument();
+    expect(screen.queryByText("СКОРО ИСТЕКАЕТ")).not.toBeInTheDocument();
   });
 
   // canApprove=false → кнопка Approve задизейблена
@@ -67,7 +67,7 @@ describe("DraftCard", () => {
         approveBlockedReason="Owner-only — created by @anna_buyer"
       />,
     );
-    const approveBtn = screen.getByRole("button", { name: /approve & execute/i });
+    const approveBtn = screen.getByRole("button", { name: /одобрить и выполнить/i });
     expect(approveBtn).toBeDisabled();
   });
 
@@ -75,7 +75,7 @@ describe("DraftCard", () => {
   it("кнопка Approve активна при canApprove=true", () => {
     const onApprove = vi.fn();
     render(<DraftCard draft={makeDraft()} canApprove onApprove={onApprove} />);
-    const approveBtn = screen.getByRole("button", { name: /approve & execute/i });
+    const approveBtn = screen.getByRole("button", { name: /одобрить и выполнить/i });
     expect(approveBtn).not.toBeDisabled();
   });
 
@@ -83,7 +83,7 @@ describe("DraftCard", () => {
   it("клик Approve вызывает onApprove", async () => {
     const onApprove = vi.fn();
     render(<DraftCard draft={makeDraft()} canApprove onApprove={onApprove} />);
-    await userEvent.click(screen.getByRole("button", { name: /approve & execute/i }));
+    await userEvent.click(screen.getByRole("button", { name: /одобрить и выполнить/i }));
     expect(onApprove).toHaveBeenCalledTimes(1);
   });
 
@@ -91,7 +91,7 @@ describe("DraftCard", () => {
   it("клик Cancel вызывает onCancel", async () => {
     const onCancel = vi.fn();
     render(<DraftCard draft={makeDraft()} canApprove onCancel={onCancel} />);
-    await userEvent.click(screen.getByRole("button", { name: /cancel/i }));
+    await userEvent.click(screen.getByRole("button", { name: /отклонить/i }));
     expect(onCancel).toHaveBeenCalledTimes(1);
   });
 
@@ -112,13 +112,13 @@ describe("DraftCard", () => {
   // batch-warning при batchCallCount > 1
   it("показывает batch-warning callout при batchCallCount=4", () => {
     render(<DraftCard draft={makeDraft()} batchCallCount={4} />);
-    expect(screen.getByText(/Batch operation · 4 graph calls/i)).toBeInTheDocument();
+    expect(screen.getByText(/Пакетная операция · 4 graph-вызовов/i)).toBeInTheDocument();
   });
 
   // batch-warning НЕ показывается при batchCallCount=1
   it("НЕ показывает batch-warning при batchCallCount=1", () => {
     render(<DraftCard draft={makeDraft()} batchCallCount={1} />);
-    expect(screen.queryByText(/batch operation/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/пакетная операция/i)).not.toBeInTheDocument();
   });
 
   // requested_by отображается

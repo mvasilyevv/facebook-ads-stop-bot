@@ -81,7 +81,7 @@ export const VisionTab: FC = () => {
   return (
     <div className="space-y-5 max-w-xl">
       {/* Статус */}
-      <Card eyebrow="Vision Status" padded>
+      <Card eyebrow="VISION · СТАТУС" padded>
         <div className="space-y-3">
           <div className="flex items-center justify-between">
             <span className="text-[13px] text-bg-10">Токен</span>
@@ -117,7 +117,7 @@ export const VisionTab: FC = () => {
             onClick={() => void handleReconnect()}
             loading={reconnectMut.isPending}
           >
-            Reconnect Vision
+            Переподключить Vision
           </Button>
         </div>
       </Card>

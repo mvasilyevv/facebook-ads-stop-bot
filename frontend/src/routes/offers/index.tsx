@@ -355,7 +355,6 @@ function OffersHeader({
       eyebrowNum="02"
       eyebrow="CATALOG · ОФФЕРЫ"
       title="Офферы"
-      displayNumber="02"
       action={action}
       subtitle={
         count !== null ? (

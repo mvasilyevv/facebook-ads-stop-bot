@@ -218,7 +218,7 @@ function DraftsPage() {
             ? `Мутация «${mutationKindLabel(pendingApprove.mutation_kind)}» будет передана в очередь исполнения через Marketing API. Действие необратимо.`
             : ""
         }
-        confirmLabel="Approve & execute"
+        confirmLabel="Одобрить и выполнить"
         confirmVariant="primary"
         onConfirm={async () => {
           if (!pendingApprove) return;
@@ -255,7 +255,6 @@ function DraftsHeader({ count }: { count: number | null }) {
       eyebrowNum="04"
       eyebrow="OPERATE · ОДОБРЕНИЕ"
       title="Черновики"
-      displayNumber="04"
       subtitle={
         count !== null ? (
           <>

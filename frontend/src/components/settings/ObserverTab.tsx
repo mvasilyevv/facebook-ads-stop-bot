@@ -296,7 +296,7 @@ export const ObserverTab: FC = () => {
               loading={scanMut.isPending}
               style={{ justifyContent: "flex-start" }}
             >
-              Scan Now
+              Сканировать сейчас
             </Button>
 
             <Button

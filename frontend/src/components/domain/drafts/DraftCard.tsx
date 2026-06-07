@@ -20,7 +20,7 @@ import {
   draftExpiresAt,
   isExpiringSoon,
   isDraftExpired,
-  mutationKindVerb,
+  mutationKindLabel,
   isBulkMutation,
 } from "@fb/shared";
 import type { DraftOut } from "@fb/shared";
@@ -107,8 +107,8 @@ export function DraftCard({
   const expired = isDraftExpired(expiresAt, now);
   const isBlocked = !canApprove;
 
-  // Тип мутации → verb и определяем формат body
-  const verb = mutationKindVerb(draft.mutation_kind);
+  // Тип мутации → полное русское описание и формат body
+  const label = mutationKindLabel(draft.mutation_kind);
   const isBulk = isBulkMutation(draft.mutation_kind);
   const isCreateCampaign = draft.mutation_kind === "create_campaign";
   const usePreview = isBulk || isCreateCampaign;
@@ -152,7 +152,7 @@ export function DraftCard({
             "z-10",
           )}
         >
-          EXPIRING SOON
+          СКОРО ИСТЕКАЕТ
         </div>
       )}
 
@@ -164,26 +164,25 @@ export function DraftCard({
             <Badge variant="draft" size="sm">draft</Badge>
             <span className="text-bg-10">{formatRelativeTime(draft.created_at)}</span>
             <span className="text-bg-6">·</span>
-            <span className="text-accent">meta_api / {draft.mutation_kind}</span>
+            <span className="text-accent-muted">meta_api / {draft.mutation_kind}</span>
           </div>
 
-          {/* Заголовок: verb акцент + описание цели */}
+          {/* Заголовок: полное русское описание действия */}
           <h3 className="font-display text-[20px] font-medium tracking-[-0.01em] text-bg-11 m-0 leading-[1.2]">
-            Will{" "}
-            <span className="text-accent">{verb}</span>
+            {label}
             {/* Для bulk — добавляем счётчик объектов */}
             {isBulk && payload["object_ids"] != null && (
               <> · <span className="text-accent">
                 {Array.isArray(payload["object_ids"])
                   ? payload["object_ids"].length
                   : "N"}
-              </span> objects</>
+              </span> объектов</>
             )}
           </h3>
 
-          {/* Requested by */}
+          {/* Запросил */}
           <div className="mt-1.5 font-display text-[11px] text-bg-9 tracking-[0.02em]">
-            Requested by{" "}
+            Запросил{" "}
             <span className="text-bg-10">@{draft.requested_by}</span>
           </div>
         </div>
@@ -240,9 +239,9 @@ export function DraftCard({
                 aria-hidden="true"
               />
               <div className="font-display text-[11px] text-warning leading-[1.5] tracking-[0.02em]">
-                Batch operation · {batchCallCount} graph calls
+                Пакетная операция · {batchCallCount} graph-вызовов
                 <br />
-                If any sub-step fails, the entire batch is rolled back.
+                При сбое любого шага весь батч откатывается.
               </div>
             </div>
           )}
@@ -267,7 +266,7 @@ export function DraftCard({
             "Черновик истёк"
           ) : (
             <>
-              Expires in{" "}
+              Истекает через{" "}
               <span className={expiring ? "text-warning font-medium" : "text-bg-10"}>
                 {formatTimeLeft(expiresAt, now)}
               </span>
@@ -291,7 +290,7 @@ export function DraftCard({
             onClick={onCancel}
             disabled={busy || expired}
           >
-            {isBlocked ? "Cancel as admin" : "Cancel"}
+            {isBlocked ? "Отклонить как админ" : "Отклонить"}
           </Button>
 
           {/* Approve — disabled при blocked или expired */}
@@ -306,7 +305,7 @@ export function DraftCard({
                 disabled
                 leftIcon={<Check size={14} aria-hidden="true" />}
               >
-                Approve &amp; execute
+                Одобрить и выполнить
               </Button>
             </span>
           ) : (
@@ -318,7 +317,7 @@ export function DraftCard({
               disabled={busy}
               leftIcon={!busy ? <Check size={14} aria-hidden="true" /> : undefined}
             >
-              Approve &amp; execute
+              Одобрить и выполнить
             </Button>
           )}
         </div>

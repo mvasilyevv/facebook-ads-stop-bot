@@ -37,7 +37,6 @@ function SettingsPage() {
         eyebrowNum="05"
         eyebrow="SYSTEM · КОНФИГУРАЦИЯ"
         title="Настройки"
-        displayNumber="05"
       />
 
       <Tabs value={tab} onValueChange={setTab}>

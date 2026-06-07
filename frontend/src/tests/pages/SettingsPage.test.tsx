@@ -227,10 +227,10 @@ describe("ObserverTab", () => {
     expect(input).toHaveValue("MV");
   });
 
-  // Кнопка Scan Now присутствует
-  it("кнопка Scan Now присутствует", () => {
+  // Кнопка «Сканировать сейчас» присутствует
+  it("кнопка «Сканировать сейчас» присутствует", () => {
     render(wrap(<ObserverTab />));
-    expect(screen.getByText("Scan Now")).toBeInTheDocument();
+    expect(screen.getByText("Сканировать сейчас")).toBeInTheDocument();
   });
 });
 

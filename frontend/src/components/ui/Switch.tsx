@@ -1,7 +1,7 @@
 /**
  * Switch — toggle (role="switch").
- * Геометрия inline-стилями — детерминировано.
- * Цвета: checked=success, unchecked=bg-3.
+ * Геометрия inline-стилями — детерминировано (канон templates.jsx Field-switch).
+ * Цвета: checked=accent (warm off-white), unchecked=bg-5. Ползунок: checked=bg-0, off=bg-9.
  */
 
 interface SwitchProps {
@@ -32,21 +32,31 @@ export function Switch({
       aria-label={label}
       onClick={onChange}
       disabled={disabled}
-      style={{ width: 44, height: 24, flexShrink: 0 }}
+      style={{
+        width: 38,
+        height: 22,
+        flexShrink: 0,
+        borderRadius: 999,
+        background: checked ? "var(--accent)" : "var(--bg-5)",
+      }}
       className={[
-        "relative inline-block border align-middle transition-colors duration-[120ms] shrink-0",
+        "relative inline-block align-middle transition-colors duration-[120ms] shrink-0",
         "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
-        checked
-          ? "bg-success border-[rgba(126,180,122,0.5)]"
-          : "bg-bg-3 border-bg-6",
         "disabled:opacity-40 disabled:cursor-not-allowed",
       ].join(" ")}
     >
       {/* Ползунок */}
       <span
         aria-hidden="true"
-        className="absolute bg-bg-11 transition-all duration-[120ms]"
-        style={{ width: 16, height: 16, top: 3, left: checked ? 24 : 4 }}
+        className="absolute transition-all duration-[120ms]"
+        style={{
+          width: 18,
+          height: 18,
+          top: 2,
+          left: checked ? 18 : 2,
+          borderRadius: 999,
+          background: checked ? "var(--bg-0)" : "var(--bg-9)",
+        }}
       />
     </button>
   );

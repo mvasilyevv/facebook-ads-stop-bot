@@ -1,18 +1,20 @@
 /**
- * PageHeader — стандартный header страницы.
+ * PageHeader — стандартный header страницы (канон design_handoff/templates.jsx).
  *
- * Структура (из handoff-макета):
- *   [Eyebrow "01 OPERATE"]
- *   [page-title 56px trailing "."]      [action-slot]
- *   [subtitle — live-dot · separators]
- *   [displayNumber — 100px ghost absolute right]
+ * Структура (PageHead из templates.jsx — единый для всех страниц):
+ *   [Eyebrow "0N / РАЗДЕЛ"]
+ *   [h1 — mono 30px, weight 500, ls -0.02em, БЕЗ точки]   [action-slot]
+ *   [subtitle — 13px, separators]
+ *
+ * Без ghost-числа и trailing-точки — это рудимент старого макета,
+ * канон их запрещает (см. README design_handoff).
  *
  * SectionTitleRow — eyebrow + 22px title + right action.
  * HeaderSep — разделитель · в subtitle.
  */
 
 import { type ReactNode } from "react";
-import { Eyebrow } from "./Eyebrow";
+import { Eyebrow } from "@/components/data/Eyebrow";
 
 // ─── PageHeader ───────────────────────────────────────────────────────────────
 
@@ -20,53 +22,35 @@ interface PageHeaderProps {
   eyebrowNum?: string;
   eyebrow: string;
   title: string;
-  /** Точка ставится автоматически — не добавляй в title. */
-  trailingDot?: boolean;
   subtitle?: ReactNode;
   action?: ReactNode;
-  /** Большое ghost-число absolute-positioned справа (100px). */
-  displayNumber?: string;
 }
 
 export function PageHeader({
   eyebrowNum,
   eyebrow,
   title,
-  trailingDot = true,
   subtitle,
   action,
-  displayNumber,
 }: PageHeaderProps) {
   return (
-    <header className="relative mb-10">
-      {/* Ghost display number */}
-      {displayNumber ? (
-        <div
-          aria-hidden="true"
-          className="absolute right-0 top-5 font-display text-[100px] font-medium leading-none text-bg-2 select-none pointer-events-none"
-        >
-          {displayNumber}
-        </div>
-      ) : null}
-
+    <header className="mb-8">
       <Eyebrow num={eyebrowNum}>{eyebrow}</Eyebrow>
 
-      {/* Title row */}
-      <div className="flex items-end justify-between gap-8 mb-2 mt-3">
-        <h1 className="font-display text-[56px] font-medium leading-[0.95] tracking-[-0.03em] text-bg-11 m-0">
+      {/* Title row — канон: 30px mono, weight 500, без точки */}
+      <div className="flex items-end justify-between gap-8 mb-1.5 mt-2">
+        <h1
+          className="font-display font-medium leading-[1.05] text-bg-11 m-0"
+          style={{ fontSize: 30, letterSpacing: "-0.02em" }}
+        >
           {title}
-          {trailingDot && (
-            <span aria-hidden="true" className="text-bg-7">
-              .
-            </span>
-          )}
         </h1>
         {action ? <div className="relative z-[1] shrink-0">{action}</div> : null}
       </div>
 
       {/* Subtitle */}
       {subtitle ? (
-        <div className="text-[13px] text-bg-10 font-display tracking-tight">{subtitle}</div>
+        <div className="text-[13px] text-bg-9 font-display tracking-tight">{subtitle}</div>
       ) : null}
     </header>
   );
@@ -111,7 +95,7 @@ export function SectionTitleRow({
   return (
     <div className={className}>
       <Eyebrow num={eyebrowNum}>{eyebrow}</Eyebrow>
-      <div className="flex items-center justify-between gap-4">
+      <div className="flex items-center justify-between gap-4 mt-2">
         <h2 className="font-display text-[22px] font-medium leading-[1.15] tracking-[-0.02em] text-bg-11 m-0">
           {title}
         </h2>

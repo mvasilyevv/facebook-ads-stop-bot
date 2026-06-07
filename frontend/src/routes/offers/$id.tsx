@@ -68,8 +68,7 @@ function OfferRulesPage() {
       <PageHeader
         eyebrowNum="02"
         eyebrow={offer ? `CATALOG · ${offer.code} · ПРАВИЛА` : "CATALOG · ПРАВИЛА"}
-        title={offer ? `${offer.code} Rules` : "Правила оффера"}
-        trailingDot
+        title={offer ? offer.code : "Правила оффера"}
       />
 
       {/* ── Content ── */}

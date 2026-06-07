@@ -185,17 +185,17 @@ describe("DraftsPage", () => {
 
     const items = screen.getAllByRole("listitem");
     // Первый элемент должен содержать ribbon "EXPIRING SOON"
-    expect(within(items[0]!).getByText("EXPIRING SOON")).toBeInTheDocument();
+    expect(within(items[0]!).getByText("СКОРО ИСТЕКАЕТ")).toBeInTheDocument();
   });
 
   // Approve flow: кнопка Approve открывает ConfirmDialog
-  it("кнопка Approve & execute открывает ConfirmDialog подтверждения", async () => {
+  it("кнопка «Одобрить и выполнить» открывает ConfirmDialog подтверждения", async () => {
     const draft = makeDraft({ id: 42, mutation_kind: "pause_ad" });
     mockUseMetaDrafts.mockReturnValue({ data: [draft], isLoading: false, isError: false });
     renderDrafts();
 
     // Нажимаем Approve & execute
-    await userEvent.click(screen.getByRole("button", { name: /approve & execute/i }));
+    await userEvent.click(screen.getByRole("button", { name: /одобрить и выполнить/i }));
 
     // ConfirmDialog открылся — есть заголовок "Подтвердить и выполнить?"
     expect(screen.getByText(/подтвердить и выполнить/i)).toBeInTheDocument();
@@ -207,22 +207,22 @@ describe("DraftsPage", () => {
     mockUseMetaDrafts.mockReturnValue({ data: [draft], isLoading: false, isError: false });
     renderDrafts();
 
-    await userEvent.click(screen.getByRole("button", { name: /approve & execute/i }));
+    await userEvent.click(screen.getByRole("button", { name: /одобрить и выполнить/i }));
 
     // Нажимаем кнопку "Approve & execute" в диалоге
-    const confirmBtn = screen.getByRole("button", { name: /^approve & execute$/i });
+    const confirmBtn = screen.getByRole("button", { name: /^одобрить и выполнить$/i });
     await userEvent.click(confirmBtn);
 
     expect(mockConfirmMutateAsync).toHaveBeenCalledWith("42");
   });
 
   // Cancel flow: кнопка Cancel открывает ConfirmDialog
-  it("кнопка Cancel открывает ConfirmDialog отмены", async () => {
+  it("кнопка «Отклонить» открывает ConfirmDialog отмены", async () => {
     const draft = makeDraft({ id: 55, mutation_kind: "pause_ad" });
     mockUseMetaDrafts.mockReturnValue({ data: [draft], isLoading: false, isError: false });
     renderDrafts();
 
-    await userEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^отклонить$/i }));
 
     // ConfirmDialog открылся — есть заголовок (h2) и кнопка подтверждения (h2 role=heading)
     expect(screen.getByRole("heading", { name: /отменить черновик/i })).toBeInTheDocument();
@@ -234,7 +234,7 @@ describe("DraftsPage", () => {
     mockUseMetaDrafts.mockReturnValue({ data: [draft], isLoading: false, isError: false });
     renderDrafts();
 
-    await userEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^отклонить$/i }));
 
     // В диалоге нажимаем "Отменить черновик"
     const confirmBtn = screen.getByRole("button", { name: /^отменить черновик$/i });

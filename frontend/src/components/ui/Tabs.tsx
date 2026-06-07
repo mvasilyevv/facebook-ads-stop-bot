@@ -55,7 +55,7 @@ export function TabsList({
       className={cn(
         "inline-flex items-center",
         variant === "underline"
-          ? "gap-6 border-b border-bg-5 w-full"
+          ? "gap-1 border-b border-bg-6 w-full"
           : "gap-1 bg-bg-2 border border-bg-5 p-1",
         className,
       )}
@@ -71,9 +71,9 @@ export function TabsList({
             "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
             variant === "underline"
               ? [
-                  "text-[13px] uppercase tracking-wider pb-3 -mb-px border-b-2 border-transparent",
+                  "text-[13px] px-4 py-2.5 -mb-px border-b-2 border-transparent font-normal",
                   "text-bg-9 hover:text-bg-11",
-                  "data-[state=active]:border-accent data-[state=active]:text-bg-11",
+                  "data-[state=active]:border-accent data-[state=active]:text-bg-11 data-[state=active]:font-semibold",
                 ]
               : [
                   "h-7 px-3 text-[11.5px] uppercase tracking-wider",
