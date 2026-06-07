@@ -89,3 +89,13 @@ data/competitor_refs/
 
 # Локальные MCP-конфиги браузера (recon/syntx tooling)
 data/*mcp*.json
+
+# Creative/video/KB стек — генерируемые артефакты (код фичи в репо, выводы — нет)
+data/kb_build/
+data/syntx_out/
+data/_kb_manifest.json
+data/_syntx_snap*.md
+docs/creatives/**/reports/
+
+# Билд-кэш TypeScript
+*.tsbuildinfo

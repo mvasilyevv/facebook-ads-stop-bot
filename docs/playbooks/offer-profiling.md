@@ -16,5 +16,13 @@
 
 > Пример GH_AVI: агрегатор, бонус «депозит 10 GHS → 20 free bets» заточен под **Aviator** → рекомендация Aviator (bonus-fit + массовость на GH). CR2 отклонён — бонус не на него.
 
+## Research нового гео/оффера (deep-research)
+Для НОВОГО гео или оффера с малыми данными в реестре — прогнать скилл `deep-research`
+(рыночные факты, НЕ gambling-копи → Claude проходит): платёжные рельсы (MoMo/M-Pesa/PIX),
+мин.деп и средний чек, популярные игры, локальные регуляторы/культура, что крутят конкуренты.
+Выход → `geo.yaml` (`market_profile` / `production_profile`, поля по `_schema.md`) + KB-ноутбук
+гео (подхватит `make kb-sync`). Автоматизирует ручной web-research SOP §R0.5/R8. Острую
+gambling-копию через Claude НЕ генерим (см. `creative-analytics.md §3`) — только факты/структуру.
+
 ## Связанное
 - Рынок гео — `market-profile/<GEO>.md`. Генерация — `creative-gen.md`. Полный цикл — `SOP.md`.

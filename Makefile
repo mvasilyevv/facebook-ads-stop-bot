@@ -205,6 +205,37 @@ tma-dev: ## Запустить Telegram Mini App в dev-режиме (порт 5
 tma-build: ## Собрать Telegram Mini App
 	cd frontend-mini && $(NPM) ci && $(NPM) run build
 
+# ─── Knowledge Base (NotebookLM) ───────────────────────────────────────────────
+
+NOTEBOOKLM ?= $(HOME)/.local/bin/notebooklm
+
+.PHONY: kb-doctor kb-sync kb-sync-dry
+
+kb-doctor: ## Проверить notebooklm CLI (auth/health)
+	$(NOTEBOOKLM) doctor
+
+kb-sync-dry: install-backend ## Показать план синка docs → NotebookLM без заливки
+	$(PY) scripts/kb_sync.py --dry-run
+
+kb-sync: install-backend ## Синхронизировать docs/ → NotebookLM (идемпотентно, per-geo)
+	$(PY) scripts/kb_sync.py --notebook-mode per-geo
+
+# ─── Remotion (видео-постпродакшн) ─────────────────────────────────────────────
+
+REMOTION_DIR := remotion
+NODE22_BIN ?= /usr/local/opt/node@22/bin
+
+.PHONY: remotion-install remotion-studio video-batch
+
+remotion-install: ## Установить Remotion-зависимости (Node 22)
+	cd $(REMOTION_DIR) && PATH="$(NODE22_BIN):$$PATH" npm ci
+
+remotion-studio: ## Открыть Remotion Studio (превью шаблона)
+	cd $(REMOTION_DIR) && PATH="$(NODE22_BIN):$$PATH" npm run studio
+
+video-batch: install-backend ## Рендер видео-батча из реестра + uniquify (нужны GEO=, SLOT=, BG=)
+	$(PY) scripts/video_batch.py --geo $(GEO) --slot $(SLOT) --bg $(BG)
+
 # ─── Kubernetes ──────────────────────────────────────────────────────────────
 
 DOCKER_REGISTRY ?= localhost
