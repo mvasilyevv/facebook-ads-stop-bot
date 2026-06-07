@@ -15,7 +15,9 @@ export default defineConfig({
     TanStackRouterVite({
       routesDirectory: "./src/routes",
       generatedRouteTree: "./src/routeTree.gen.ts",
-      autoCodeSplitting: true,
+      // Code-splitting только для прод-сборки. В vitest он требует lazyRouteComponent,
+      // который юнит-тесты не мокают → route-компоненты тестируются напрямую.
+      autoCodeSplitting: !process.env.VITEST,
     }),
     react(),
     tailwindcss(),

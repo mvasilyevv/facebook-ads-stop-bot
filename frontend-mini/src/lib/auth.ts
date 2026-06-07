@@ -44,7 +44,9 @@ function safeGet(key: string): string | null {
 function safeRemove(key: string): void {
   try {
     localStorage.removeItem(key);
-  } catch {}
+  } catch {
+    /* best-effort: storage недоступен (приватный режим) */
+  }
   sessionStorage.removeItem(key);
 }
 

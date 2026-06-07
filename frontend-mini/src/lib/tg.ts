@@ -99,13 +99,17 @@ export const haptic = {
   notify(type: "success" | "error" | "warning" = "success"): void {
     try {
       getTg()?.HapticFeedback.notificationOccurred(type);
-    } catch {}
+    } catch {
+      /* best-effort: HapticFeedback недоступен вне Telegram */
+    }
   },
   /** Лёгкий клик при переключении фильтра / чипа. */
   selection(): void {
     try {
       getTg()?.HapticFeedback.selectionChanged();
-    } catch {}
+    } catch {
+      /* best-effort: HapticFeedback недоступен вне Telegram */
+    }
   },
 } as const;
 

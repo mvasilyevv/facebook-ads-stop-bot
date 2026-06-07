@@ -17,8 +17,7 @@ import { ErrorState } from "@/components/ui/ErrorState";
 import { Skeleton } from "@/components/ui/Skeleton";
 import type { OfferRules } from "@fb/shared";
 
-// eslint-disable-next-line react-refresh/only-export-components
-export const Route = createFileRoute("/offers/$id" as "/")({
+export const Route = createFileRoute("/offers/$id")({
   component: OfferRulesPage,
 });
 

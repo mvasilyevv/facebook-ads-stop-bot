@@ -65,8 +65,8 @@ const mockTimeline = [
 ];
 
 // Мок-функции с возможностью контроля из тестов
-let mockSummaryData: typeof mockSummary | undefined = mockSummary;
-let mockTimelineData: typeof mockTimeline | undefined = mockTimeline;
+const mockSummaryData: typeof mockSummary | undefined = mockSummary;
+const mockTimelineData: typeof mockTimeline | undefined = mockTimeline;
 
 vi.mock("@/lib/api/history", () => ({
   useHistorySummary: (_params: unknown) => ({

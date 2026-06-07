@@ -36,8 +36,7 @@ import {
 } from "@fb/shared";
 import type { DraftOut, MutationKind } from "@fb/shared";
 
-// eslint-disable-next-line react-refresh/only-export-components
-export const Route = createFileRoute("/drafts/" as "/")({
+export const Route = createFileRoute("/drafts/")({
   component: DraftsPage,
 });
 

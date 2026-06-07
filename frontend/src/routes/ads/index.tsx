@@ -84,7 +84,8 @@ function AdsPage() {
     offset,
   });
 
-  const rows: AdSnapshot[] = data?.data ?? [];
+  // useMemo — стабильная ссылка для deps зависимых useMemo (виртуализация/колонки).
+  const rows = useMemo<AdSnapshot[]>(() => data?.data ?? [], [data]);
   const total = data?.total ?? 0;
 
   // ── Мутации ───────────────────────────────────────────────────────────────

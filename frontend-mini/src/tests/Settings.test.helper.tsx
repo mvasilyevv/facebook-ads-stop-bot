@@ -19,7 +19,7 @@ function ObserverSection() {
   if (isError) return <Card eyebrow="Observer" title="Сканирование"><ErrorState message="Ошибка" onRetry={() => void refetch()} /></Card>;
 
   const cfg = data as ObserverConfig | undefined;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
 
   async function handleToggle() {
     if (!cfg) return;

@@ -34,8 +34,7 @@ import { Skeleton } from "@/components/ui/Skeleton";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import type { Offer } from "@fb/shared";
 
-// eslint-disable-next-line react-refresh/only-export-components
-export const Route = createFileRoute("/offers/" as "/")({
+export const Route = createFileRoute("/offers/")({
   component: OffersPage,
 });
 
