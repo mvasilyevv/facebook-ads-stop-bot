@@ -1,121 +1,269 @@
 /**
- * Helper для теста SettingsPage — обёртка с QueryClient.
+ * Helper для теста SettingsPage — дублирует логику компонента с QueryClient.
+ * Обновлён под канон: РАЗДЕЛЫ + OBSERVER + TELEGRAM + VISION.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { useState, useEffect } from "react";
+import { ChevronRight, Heart, FileCode, FileText, RefreshCw } from "lucide-react";
+import type { ObserverConfig, TelegramSettings } from "@fb/shared";
 import { MiniHeader } from "@/components/layout/MiniHeader";
-import { Card, Switch, Button, Badge, Skeleton, ErrorState } from "@/components/ui";
+import { Eyebrow } from "@/components/data";
+import { Badge, Button, Skeleton, ErrorState, Switch, Input } from "@/components/ui";
 import {
-  useObserverSettings, useToggleScanning, useTelegramSettings, useVisionSettings,
+  useObserverSettings,
+  useToggleScanning,
+  useTriggerScan,
+  useTelegramSettings,
+  useVisionSettings,
 } from "@/lib/api";
 import { haptic } from "@/lib/tg";
 import { useNavigate } from "@tanstack/react-router";
-import type { ObserverConfig, TelegramSettings } from "@fb/shared";
+import { cn } from "@/lib/cn";
+
+// ─── Field-строка ────────────────────────────────────────────────────────
+
+function FieldRow({
+  label,
+  hint,
+  children,
+  noBorder = false,
+}: {
+  label: string;
+  hint?: string;
+  children: React.ReactNode;
+  noBorder?: boolean;
+}) {
+  return (
+    <div
+      className={cn(
+        "flex items-center justify-between gap-3 min-h-[44px] py-2.5",
+        !noBorder && "border-b border-bg-5",
+      )}
+    >
+      <div className="min-w-0">
+        <p className="text-[13px] text-bg-11 leading-tight">{label}</p>
+        {hint && <p className="text-[11px] text-bg-8 mt-0.5 leading-tight">{hint}</p>}
+      </div>
+      <div className="shrink-0">{children}</div>
+    </div>
+  );
+}
+
+// ─── Секция ────────────────────────────────────────────────────────────────
+
+function Section({
+  eyebrow,
+  num,
+  children,
+}: {
+  eyebrow: string;
+  num?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section>
+      <Eyebrow num={num} className="mb-2.5 flex">
+        {eyebrow}
+      </Eyebrow>
+      <div className="border border-bg-5 bg-bg-1 px-4">{children}</div>
+    </section>
+  );
+}
+
+// ─── ObserverSection ──────────────────────────────────────────────────────
 
 function ObserverSection() {
   const { data, isLoading, isError, refetch } = useObserverSettings();
   const toggleScanning = useToggleScanning();
+  const triggerScan = useTriggerScan();
+  const [ownerTag, setOwnerTag] = useState<string>("");
 
-  if (isLoading) return <Card eyebrow="Observer" title="Сканирование"><Skeleton className="h-11" /></Card>;
-  if (isError) return <Card eyebrow="Observer" title="Сканирование"><ErrorState message="Ошибка" onRetry={() => void refetch()} /></Card>;
+  useEffect(() => {
+    if (data) setOwnerTag((data as ObserverConfig).owner_campaign_tag ?? "");
+  }, [data]);
 
-  const cfg = data as ObserverConfig | undefined;
-   
+  if (isLoading)
+    return (
+      <Section eyebrow="OBSERVER">
+        <Skeleton className="h-11 w-full" />
+      </Section>
+    );
+  if (isError)
+    return (
+      <Section eyebrow="OBSERVER">
+        <ErrorState message="Ошибка" onRetry={() => void refetch()} />
+      </Section>
+    );
 
-  async function handleToggle() {
-    if (!cfg) return;
-    haptic.impact("medium");
-    await toggleScanning.mutateAsync({ enabled: !cfg.is_scanning_enabled });
-  }
+  const cfg = data as ObserverConfig;
 
   return (
-    <Card eyebrow="Observer" title="Сканирование">
-      <div className="flex flex-col divide-y divide-[var(--color-bg-4)]">
-        <div className="flex items-center justify-between min-h-[44px] gap-3">
-          <div>
-            <p className="text-[13px]">Мониторинг включён</p>
-            <p className="text-[11px] text-[var(--color-bg-8)]">Бот сканирует объявления</p>
-          </div>
-          <Switch
-            checked={cfg?.is_scanning_enabled ?? false}
-            onChange={() => void handleToggle()}
-            disabled={toggleScanning.isPending}
-          />
-        </div>
-        <div className="flex items-center justify-between min-h-[44px] gap-3">
-          <p className="text-[13px]">Авто-включение</p>
-          <Badge variant={cfg?.auto_enable_recommendations ? "normal" : "neutral"}>
-            {cfg?.auto_enable_recommendations ? "Вкл" : "Выкл"}
-          </Badge>
-        </div>
+    <Section eyebrow="OBSERVER">
+      <FieldRow label="Сканирование" hint="Observer периодически сканирует объявления">
+        <Switch
+          checked={cfg.is_scanning_enabled}
+          onChange={() => {
+            haptic.impact("medium");
+            void toggleScanning.mutateAsync({ enabled: !cfg.is_scanning_enabled });
+          }}
+          disabled={toggleScanning.isPending}
+        />
+      </FieldRow>
+      <FieldRow label="Owner Campaign Tag" noBorder>
+        <Input
+          aria-label="Owner Campaign Tag"
+          placeholder="MV,ABC"
+          value={ownerTag}
+          onChange={(e) => setOwnerTag(e.target.value)}
+          className="w-[120px]"
+        />
+      </FieldRow>
+      <div className="py-3">
+        <Button
+          variant="secondary"
+          fullWidth
+          onClick={() => void triggerScan.mutateAsync()}
+          disabled={triggerScan.isPending}
+          aria-label="Сканировать сейчас"
+        >
+          <RefreshCw size={15} strokeWidth={1.6} className="shrink-0" />
+          Сканировать сейчас
+        </Button>
       </div>
-    </Card>
+    </Section>
   );
 }
+
+// ─── TelegramSection ──────────────────────────────────────────────────────
 
 function TelegramSection() {
   const { data, isLoading, isError, refetch } = useTelegramSettings();
-  if (isLoading) return <Card eyebrow="Telegram" title="Telegram Bot"><Skeleton className="h-24" /></Card>;
-  if (isError) return <Card eyebrow="Telegram" title="Telegram Bot"><ErrorState message="Ошибка" onRetry={() => void refetch()} /></Card>;
+  if (isLoading)
+    return (
+      <Section eyebrow="TELEGRAM">
+        <Skeleton className="h-11 w-full" />
+      </Section>
+    );
+  if (isError)
+    return (
+      <Section eyebrow="TELEGRAM">
+        <ErrorState message="Ошибка" onRetry={() => void refetch()} />
+      </Section>
+    );
+
   const tg = data as TelegramSettings | undefined;
+  const pollerVariant = tg?.poller_status === "ONLINE" ? "running" : "neutral";
+
   return (
-    <Card eyebrow="Telegram" title="Telegram Bot">
-      <div className="flex flex-col gap-3">
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-[13px]">Статус</span>
-          <Badge variant={tg?.is_authorized ? "normal" : "neutral"}>{tg?.is_authorized ? "Активен" : "Не настроен"}</Badge>
-        </div>
-        {tg?.bot_username && (
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-[13px]">Бот</span>
-            <span className="text-[12px] font-mono">@{tg.bot_username}</span>
-          </div>
-        )}
-        {tg?.poller_status && (
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-[13px]">Poller</span>
-            <Badge variant={tg.poller_status === "ONLINE" ? "running" : "neutral"}>{tg.poller_status}</Badge>
-          </div>
-        )}
-      </div>
-    </Card>
+    <Section eyebrow="TELEGRAM">
+      <FieldRow label="Авторизация">
+        <Badge variant={tg?.is_authorized ? "done" : "neutral"}>
+          {tg?.is_authorized ? "Активен" : "Не настроен"}
+        </Badge>
+      </FieldRow>
+      {tg?.bot_username ? (
+        <FieldRow label="Бот">
+          <span className="font-mono text-[12px] text-bg-10">@{tg.bot_username}</span>
+        </FieldRow>
+      ) : null}
+      <FieldRow label="Poller" noBorder>
+        <Badge variant={tg?.poller_status ? pollerVariant : "neutral"}>
+          {tg?.poller_status ?? "—"}
+        </Badge>
+      </FieldRow>
+    </Section>
   );
 }
+
+// ─── VisionSection ────────────────────────────────────────────────────────
 
 function VisionSection() {
   const { data, isLoading, isError, refetch } = useVisionSettings();
-  if (isLoading) return <Card eyebrow="Vision" title="Браузер"><Skeleton className="h-16" /></Card>;
-  if (isError) return <Card eyebrow="Vision" title="Браузер"><ErrorState message="Ошибка" onRetry={() => void refetch()} /></Card>;
+  if (isLoading)
+    return (
+      <Section eyebrow="VISION">
+        <Skeleton className="h-11 w-full" />
+      </Section>
+    );
+  if (isError)
+    return (
+      <Section eyebrow="VISION">
+        <ErrorState message="Ошибка" onRetry={() => void refetch()} />
+      </Section>
+    );
+
   type VData = { profile_id?: string | null; cdp_ready?: boolean; has_token?: boolean };
   const v = data as VData | undefined;
+  const statusVariant = v?.cdp_ready ? "running" : "neutral";
+
   return (
-    <Card eyebrow="Vision" title="Anti-detect браузер">
-      <div className="flex flex-col gap-3">
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-[13px]">Статус</span>
-          <Badge variant={v?.cdp_ready ? "running" : "neutral"}>{v?.cdp_ready ? "CDP готов" : "Не готов"}</Badge>
-        </div>
-        {v?.profile_id && <p className="text-[12px] font-mono">{v.profile_id}</p>}
-      </div>
-    </Card>
+    <Section eyebrow="VISION">
+      <FieldRow label="Статус CDP">
+        <Badge variant={statusVariant}>{v?.cdp_ready ? "CDP готов" : "Не готов"}</Badge>
+      </FieldRow>
+      <FieldRow label="Profile ID" noBorder>
+        <span className="font-mono text-[12px] text-bg-9">{v?.profile_id ?? "—"}</span>
+      </FieldRow>
+    </Section>
   );
 }
 
+// ─── TestSettingsPage ─────────────────────────────────────────────────────
+
 function TestSettingsPage() {
   const navigate = useNavigate();
+
+  const navTo = (to: string) => {
+    void navigate({ to: to as "/" });
+  };
+
   return (
-    <div>
-      <MiniHeader eyebrow="Конфигурация" title="Настройки" />
-      <div className="p-4 flex flex-col gap-4">
+    <div className="flex flex-col min-h-full pb-20">
+      <MiniHeader
+        eyebrowNum="05"
+        eyebrow="SYSTEM · КОНФИГУРАЦИЯ"
+        title="Настройки"
+      />
+      <div className="flex flex-col gap-5 p-4">
+        {/* РАЗДЕЛЫ */}
+        <section>
+          <Eyebrow num="05" className="mb-2.5 flex">
+            РАЗДЕЛЫ
+          </Eyebrow>
+          <div className="border border-bg-5 bg-bg-1 px-4">
+            <button
+              type="button"
+              onClick={() => navTo("/health")}
+              className="w-full flex items-center gap-3 min-h-[44px] py-2.5 text-left border-b border-bg-5"
+            >
+              <Heart size={16} strokeWidth={1.5} className="text-bg-9 shrink-0" />
+              <span className="flex-1 text-[14px] text-bg-11">Здоровье воркеров</span>
+              <ChevronRight size={16} strokeWidth={1.5} className="text-bg-7 shrink-0" />
+            </button>
+            <button
+              type="button"
+              onClick={() => navTo("/scripts")}
+              className="w-full flex items-center gap-3 min-h-[44px] py-2.5 text-left border-b border-bg-5"
+            >
+              <FileCode size={16} strokeWidth={1.5} className="text-bg-9 shrink-0" />
+              <span className="flex-1 text-[14px] text-bg-11">Скрипты кампаний</span>
+              <ChevronRight size={16} strokeWidth={1.5} className="text-bg-7 shrink-0" />
+            </button>
+            <button
+              type="button"
+              onClick={() => navTo("/offers")}
+              className="w-full flex items-center gap-3 min-h-[44px] py-2.5 text-left"
+            >
+              <FileText size={16} strokeWidth={1.5} className="text-bg-9 shrink-0" />
+              <span className="flex-1 text-[14px] text-bg-11">Офферы</span>
+              <ChevronRight size={16} strokeWidth={1.5} className="text-bg-7 shrink-0" />
+            </button>
+          </div>
+        </section>
+
         <ObserverSection />
         <TelegramSection />
         <VisionSection />
-        <Card eyebrow="Разделы" title="Навигация" padding="sm">
-          <div className="flex flex-col gap-2 mt-2">
-            <Button variant="secondary" fullWidth onClick={() => void navigate({ to: "/health" })}>Здоровье воркеров</Button>
-            <Button variant="secondary" fullWidth onClick={() => void navigate({ to: "/scripts" })}>Создание кампании</Button>
-            <Button variant="secondary" fullWidth onClick={() => void navigate({ to: "/drafts" })}>Черновики задач</Button>
-          </div>
-        </Card>
       </div>
     </div>
   );

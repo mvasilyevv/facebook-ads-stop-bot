@@ -1,5 +1,6 @@
 /**
  * Тест OffersPage: CRUD офферов и редактор 6 порогов.
+ * Адаптирован под новый дизайн-канон — Badge теперь "active"/"inactive".
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
@@ -123,19 +124,22 @@ describe("OffersPage", () => {
     expect(screen.getByText("NG_CR2")).toBeInTheDocument();
   });
 
-  // Неактивный оффер имеет другой badge
-  it("неактивный оффер отображается с бейджем 'Выкл'", () => {
+  // Активный оффер имеет badge "active", неактивный — "inactive"
+  it("активный оффер имеет badge 'active', неактивный — 'inactive'", () => {
     render(<OffersTestWrapper />);
-    expect(screen.getByText("Выкл")).toBeInTheDocument();
+    // Одна карточка с "active" (GH_AVI активен)
+    expect(screen.getAllByText(/^active$/i).length).toBeGreaterThanOrEqual(1);
+    // Одна карточка с "inactive" (NG_CR2 неактивен)
+    expect(screen.getAllByText(/^inactive$/i).length).toBeGreaterThanOrEqual(1);
   });
 
   // Клик по офферу открывает bottom sheet с деталями
   it("клик по офферу открывает sheet с деталями", () => {
     render(<OffersTestWrapper />);
-    fireEvent.click(screen.getByText("GH_AVI"));
-    // Sheet показывает код
-    expect(screen.getAllByText("GH_AVI").length).toBeGreaterThan(1);
-    // Кнопки действий
+    // Кликаем по кнопке карточки с aria-label "Оффер GH_AVI"
+    const card = screen.getByRole("button", { name: /Оффер GH_AVI/i });
+    fireEvent.click(card);
+    // В sheet появляются кнопки действий
     expect(screen.getByText("Редактировать")).toBeInTheDocument();
     expect(screen.getByText("Пороги")).toBeInTheDocument();
     expect(screen.getByText("Удалить")).toBeInTheDocument();
@@ -144,7 +148,8 @@ describe("OffersPage", () => {
   // Кнопка "Пороги" показывает 6 полей порогов
   it("клик по 'Пороги' показывает редактор 6 порогов", () => {
     render(<OffersTestWrapper />);
-    fireEvent.click(screen.getByText("GH_AVI"));
+    const card = screen.getByRole("button", { name: /Оффер GH_AVI/i });
+    fireEvent.click(card);
     fireEvent.click(screen.getByText("Пороги"));
     expect(screen.getByLabelText(/Spend без события/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/CPA порог/i)).toBeInTheDocument();
@@ -155,9 +160,10 @@ describe("OffersPage", () => {
   });
 
   // Кнопка "+ Новый" открывает форму создания
-  it("кнопка '+ Новый' открывает форму создания", () => {
+  it("кнопка 'Новый' открывает форму создания", () => {
     render(<OffersTestWrapper />);
-    fireEvent.click(screen.getByText("+ Новый"));
+    // Кнопка содержит текст "Новый" (с иконкой Plus)
+    fireEvent.click(screen.getByRole("button", { name: /Новый/i }));
     expect(screen.getByText("Создать оффер")).toBeInTheDocument();
   });
 
@@ -167,7 +173,7 @@ describe("OffersPage", () => {
     mockUseCreateOffer.mockReturnValue({ mutateAsync, isPending: false });
 
     render(<OffersTestWrapper />);
-    fireEvent.click(screen.getByText("+ Новый"));
+    fireEvent.click(screen.getByRole("button", { name: /Новый/i }));
 
     const codeInput = screen.getByLabelText(/Код оффера/i);
     fireEvent.change(codeInput, { target: { value: "DRC_NEW" } });
@@ -188,7 +194,8 @@ describe("OffersPage", () => {
     mockUseDeleteOffer.mockReturnValue({ mutateAsync, isPending: false });
 
     render(<OffersTestWrapper />);
-    fireEvent.click(screen.getByText("GH_AVI"));
+    const card = screen.getByRole("button", { name: /Оффер GH_AVI/i });
+    fireEvent.click(card);
     fireEvent.click(screen.getByText("Удалить"));
 
     await waitFor(() => {
@@ -199,8 +206,38 @@ describe("OffersPage", () => {
 
   // При загрузке показываются скелетоны
   it("при загрузке показывает skeleton", () => {
-    mockUseOffers.mockReturnValue({ data: undefined, isLoading: true, isError: false, refetch: vi.fn() });
+    mockUseOffers.mockReturnValue({
+      data: undefined,
+      isLoading: true,
+      isError: false,
+      refetch: vi.fn(),
+    });
     render(<OffersTestWrapper />);
     expect(screen.queryByText("GH_AVI")).not.toBeInTheDocument();
+  });
+
+  // При пустом списке показывается EmptyState
+  it("при пустом списке показывает EmptyState", () => {
+    mockUseOffers.mockReturnValue({
+      data: [],
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    });
+    render(<OffersTestWrapper />);
+    expect(screen.getByText(/Офферов нет/i)).toBeInTheDocument();
+  });
+
+  // Кнопка "Редактировать" в detail-sheet переходит к форме редактирования
+  it("кнопка 'Редактировать' в sheet переходит к форме редактирования", () => {
+    render(<OffersTestWrapper />);
+    const card = screen.getByRole("button", { name: /Оффер GH_AVI/i });
+    fireEvent.click(card);
+    fireEvent.click(screen.getByText("Редактировать"));
+    // Поле код должно быть disabled при редактировании
+    const codeInput = screen.getByLabelText(/Код оффера/i);
+    expect(codeInput).toBeDisabled();
+    // Кнопка «Сохранить» появляется
+    expect(screen.getByText("Сохранить")).toBeInTheDocument();
   });
 });

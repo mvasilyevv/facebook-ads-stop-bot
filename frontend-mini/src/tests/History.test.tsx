@@ -1,5 +1,5 @@
 /**
- * Тест HistoryPage: переключение периода меняет days в хуке.
+ * Тест HistoryPage: переключение периода, KPI-данные, stage-счётчики, правила, loading-state.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
@@ -114,16 +114,46 @@ describe("HistoryPage", () => {
     expect(mockUseHistorySummary).toHaveBeenCalledWith(90);
   });
 
-  // Количество алертов отображается
+  // Warning-счётчик отображается в блоке ПО STAGE
   it("показывает количество warning-алертов", () => {
     render(<HistoryTestWrapper />);
+    // «Warning-алертов» лейбл + «5» значение в MetaRow
+    expect(screen.getByText("Warning-алертов")).toBeInTheDocument();
     expect(screen.getByText("5")).toBeInTheDocument();
   });
 
-  // Правило из by_rule отображается
-  it("показывает spend_no_event из топа нарушений", () => {
+  // Stop-счётчик отображается (значение "2" может встречаться несколько раз — проверяем лейбл)
+  it("показывает количество stop-алертов", () => {
     render(<HistoryTestWrapper />);
+    expect(screen.getByText("Stop-алертов")).toBeInTheDocument();
+    // «2» встречается в stop_count, disable_completed и cpa_threshold — используем getAllByText
+    expect(screen.getAllByText("2").length).toBeGreaterThanOrEqual(1);
+  });
+
+  // Задачи disable/enable отображаются
+  it("показывает счётчики задач disable/enable", () => {
+    render(<HistoryTestWrapper />);
+    expect(screen.getByText("Disable завершено")).toBeInTheDocument();
+    expect(screen.getByText("Enable завершено")).toBeInTheDocument();
+  });
+
+  // Правило из by_rule отображается через ruleCodeLabel
+  it("показывает spend_no_event из топа нарушений как короткий лейбл или код", () => {
+    render(<HistoryTestWrapper />);
+    // ruleCodeLabel("spend_no_event", true) — нет в RULE_CODE_LABELS_SHORT → fallback = сам код
     expect(screen.getByText("spend_no_event")).toBeInTheDocument();
+  });
+
+  // KPI лиды отображается
+  it("показывает кол-во лидов", () => {
+    render(<HistoryTestWrapper />);
+    expect(screen.getByText("120")).toBeInTheDocument();
+  });
+
+  // KPI депозиты отображается
+  it("показывает кол-во депозитов", () => {
+    render(<HistoryTestWrapper />);
+    expect(screen.getByText("30")).toBeInTheDocument();
   });
 
   // При loading показывает скелетоны, а не KPI
@@ -136,5 +166,24 @@ describe("HistoryPage", () => {
     });
     render(<HistoryTestWrapper />);
     expect(screen.queryByText("$1,250.50")).not.toBeInTheDocument();
+  });
+
+  // При пустых данных показывает хотя бы один EmptyState "Событий нет"
+  it("при отсутствии данных показывает EmptyState", () => {
+    mockUseHistorySummary.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    });
+    render(<HistoryTestWrapper />);
+    // "Событий нет" может появляться несколько раз (summary + offers + campaigns)
+    expect(screen.getAllByText("Событий нет").length).toBeGreaterThanOrEqual(1);
+  });
+
+  // Заголовок страницы
+  it("показывает заголовок История", () => {
+    render(<HistoryTestWrapper />);
+    expect(screen.getByText("История")).toBeInTheDocument();
   });
 });

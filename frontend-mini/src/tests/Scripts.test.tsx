@@ -19,7 +19,12 @@ vi.mock("@/lib/tg", () => ({
 
 // Мок MiniHeader
 vi.mock("@/components/layout/MiniHeader", () => ({
-  MiniHeader: ({ title }: { title: string }) => <header>{title}</header>,
+  MiniHeader: ({ eyebrow, title }: { eyebrow?: string; title: string }) => (
+    <header>
+      {eyebrow ? <span>{eyebrow}</span> : null}
+      <span>{title}</span>
+    </header>
+  ),
 }));
 
 const MOCK_FOLDERS: ScriptFolder[] = [

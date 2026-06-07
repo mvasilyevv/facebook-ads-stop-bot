@@ -1,29 +1,34 @@
 /**
  * Helper для теста HistoryPage — экспортирует компонент без createFileRoute-обёртки.
+ * Повторяет структуру routes/history/index.tsx: pill-периоды + KPI-сетка + stage + правила.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MiniHeader } from "@/components/layout/MiniHeader";
-import { KpiPlate, Card, Skeleton, ErrorState, EmptyState, Tabs } from "@/components/ui";
+import { KpiPlate, Skeleton, EmptyState } from "@/components/ui";
+import type { KpiVariant } from "@/components/ui";
 import { useHistorySummary, useHistoryOffers, useHistoryCampaigns } from "@/lib/api";
-import { formatSpend, formatInt } from "@fb/shared";
+import { formatSpend, formatInt, ruleCodeLabel } from "@fb/shared";
+import type { HistorySummary, HistoryCampaign, HistoryOffer } from "@fb/shared";
 import { useState } from "react";
-import type { HistorySummary } from "@fb/shared";
+import { cn } from "@/lib/cn";
 
-const PERIOD_TABS = [
-  { key: "7", label: "7 дней" },
-  { key: "30", label: "30 дней" },
-  { key: "90", label: "90 дней" },
+const PERIODS: { days: number; label: string }[] = [
+  { days: 7,  label: "7 дней" },
+  { days: 30, label: "30 дней" },
+  { days: 90, label: "90 дней" },
 ];
 
-const SECTION_TABS = [
-  { key: "summary", label: "Сводка" },
-  { key: "offers", label: "Офферы" },
-  { key: "campaigns", label: "Кампании" },
-];
+function MetaRow({ label, value }: { label: string; value: string | number }) {
+  return (
+    <div className="flex items-center justify-between px-3 py-2 gap-2">
+      <span className="text-[13px]">{label}</span>
+      <span className="tabular-nums text-[15px]">{value}</span>
+    </div>
+  );
+}
 
 function TestHistoryPage() {
   const [days, setDays] = useState(7);
-  const [section, setSection] = useState("summary");
 
   const summary = useHistorySummary(days);
   const offersHistory = useHistoryOffers(days);
@@ -31,64 +36,113 @@ function TestHistoryPage() {
 
   const s = summary.data as HistorySummary | undefined;
 
+  const kpiItems: { eyebrow: string; label: string; value: string | number; variant: KpiVariant }[] = s
+    ? [
+        { eyebrow: "СПЕНД",       label: "потрачено",     value: formatSpend(s.totals.spend),       variant: "default" },
+        { eyebrow: "ПОКАЗЫ",      label: "impressions",   value: formatInt(s.totals.impressions),   variant: "default" },
+        { eyebrow: "КЛИКИ",       label: "переходов",     value: formatInt(s.totals.clicks),        variant: "info" },
+        { eyebrow: "ЛИДЫ",        label: "всего",         value: formatInt(s.totals.leads),         variant: "ok" },
+        { eyebrow: "РЕГИСТРАЦИИ", label: "всего",         value: formatInt(s.totals.registrations), variant: "info" },
+        { eyebrow: "ДЕПОЗИТЫ",    label: "всего",         value: formatInt(s.totals.deposits),      variant: "ok" },
+      ]
+    : [];
+
   return (
     <div>
-      <MiniHeader eyebrow="Аналитика" title="История" />
-      <Tabs items={PERIOD_TABS} active={String(days)} onChange={(key) => setDays(Number(key))} />
-      <Tabs items={SECTION_TABS} active={section} onChange={setSection} />
+      <MiniHeader eyebrowNum="03" eyebrow="HISTORY · АРХИВ" title="История" />
 
-      <div className="p-4 flex flex-col gap-4">
-        {section === "summary" && (
-          <>
-            {summary.isLoading && (
-              <div className="grid grid-cols-2 gap-2">
-                {Array.from({ length: 6 }, (_, i) => <Skeleton key={i} className="h-20" />)}
-              </div>
+      {/* pill-переключатель периода */}
+      <div className="flex gap-2 px-4 py-3">
+        {PERIODS.map((p) => (
+          <button
+            key={p.days}
+            type="button"
+            onClick={() => setDays(p.days)}
+            className={cn(
+              "min-h-[36px] px-4 text-[12px] border",
+              p.days === days ? "bg-accent text-bg-0 border-accent" : "text-bg-9 border-bg-5",
             )}
-            {summary.isError && (
-              <ErrorState message="Не удалось загрузить историю" onRetry={() => void summary.refetch()} />
-            )}
-            {!summary.isLoading && !summary.isError && s && (
-              <>
-                <div className="grid grid-cols-2 gap-2">
-                  <KpiPlate eyebrow="Спенд" label="Всего потрачено" value={formatSpend(s.totals.spend)} />
-                  <KpiPlate eyebrow="Лиды" label="Всего лидов" value={formatInt(s.totals.leads)} variant="ok" />
-                  <KpiPlate eyebrow="Предупреждения" label="Warning-алертов" value={s.alerts.warning_count} variant="warn" />
-                  <KpiPlate eyebrow="Стопы" label="Stop-алертов" value={s.alerts.stop_count} variant="stop" />
-                </div>
-                {s.alerts.by_rule && s.alerts.by_rule.length > 0 && (
-                  <Card eyebrow="Правила" title="Топ нарушений">
-                    {s.alerts.by_rule.map((r) => (
-                      <div key={r.rule_code} className="flex justify-between py-2">
-                        <span>{r.rule_code}</span>
-                        <span>{r.count}</span>
-                      </div>
-                    ))}
-                  </Card>
-                )}
-              </>
-            )}
-            {!summary.isLoading && !summary.isError && !s && (
-              <EmptyState title="Нет данных" description={`История за ${days} дней пуста`} />
-            )}
-          </>
-        )}
-        {section === "offers" && (
-          <div>
-            {offersHistory.isLoading && <Skeleton className="h-16" />}
-            {!offersHistory.isLoading && (offersHistory.data ?? []).length === 0 && (
-              <EmptyState title="Нет данных по офферам" />
-            )}
+          >
+            {p.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="p-4 flex flex-col gap-5">
+
+        {/* KPI-сетка */}
+        {summary.isLoading && (
+          <div className="grid grid-cols-2 gap-px">
+            {Array.from({ length: 6 }, (_, i) => <Skeleton key={i} className="h-20" />)}
           </div>
         )}
-        {section === "campaigns" && (
-          <div>
-            {campaignsHistory.isLoading && <Skeleton className="h-16" />}
-            {!campaignsHistory.isLoading && (campaignsHistory.data ?? []).length === 0 && (
-              <EmptyState title="Нет данных по кампаниям" />
-            )}
+        {!summary.isLoading && !summary.isError && s && (
+          <div className="grid grid-cols-2 gap-px bg-bg-5">
+            {kpiItems.map((item) => (
+              <KpiPlate
+                key={item.eyebrow}
+                eyebrow={item.eyebrow}
+                label={item.label}
+                value={item.value}
+                variant={item.variant}
+              />
+            ))}
           </div>
         )}
+        {!summary.isLoading && !summary.isError && !s && (
+          <EmptyState title="Событий нет" description={`За ${days} дней активности не зафиксировано`} />
+        )}
+
+        {/* ПО STAGE */}
+        {s && (
+          <section>
+            <div className="divide-y">
+              <MetaRow label="Warning-алертов" value={s.alerts.warning_count} />
+              <MetaRow label="Stop-алертов"    value={s.alerts.stop_count} />
+              <MetaRow label="Disable завершено" value={s.tasks.disable_completed} />
+              <MetaRow label="Disable ошибок"    value={s.tasks.disable_failed} />
+              <MetaRow label="Enable завершено"  value={s.tasks.enable_completed} />
+            </div>
+          </section>
+        )}
+
+        {/* ПО ПРАВИЛУ */}
+        {s && s.alerts.by_rule.length > 0 && (
+          <section>
+            <div className="divide-y">
+              {s.alerts.by_rule.map((r) => (
+                <MetaRow key={r.rule_code} label={ruleCodeLabel(r.rule_code, true)} value={r.count} />
+              ))}
+            </div>
+          </section>
+        )}
+
+        {/* Офферы */}
+        {offersHistory.isLoading && <Skeleton className="h-16" />}
+        {!offersHistory.isLoading && (offersHistory.data ?? []).length === 0 && (
+          <EmptyState title="Событий нет" description={`За ${days} дней данных нет`} />
+        )}
+        {!offersHistory.isLoading &&
+          (offersHistory.data ?? []).map((o: HistoryOffer) => (
+            <div key={o.offer_id} className="flex justify-between">
+              <span>{o.offer_code}</span>
+              <span>{formatSpend(o.spend)}</span>
+            </div>
+          ))}
+
+        {/* Кампании */}
+        {campaignsHistory.isLoading && <Skeleton className="h-16" />}
+        {!campaignsHistory.isLoading && (campaignsHistory.data ?? []).length === 0 && (
+          <EmptyState title="Событий нет" description={`За ${days} дней данных нет`} />
+        )}
+        {!campaignsHistory.isLoading &&
+          (campaignsHistory.data ?? []).map((c: HistoryCampaign) => (
+            <div key={c.campaign_id} className="flex justify-between">
+              <span>{c.campaign_name ?? c.campaign_id}</span>
+              <span>{formatSpend(c.spend)}</span>
+            </div>
+          ))}
+
       </div>
     </div>
   );

@@ -1,267 +1,357 @@
 /**
- * HistoryPage — история заливов за период.
- * Переключатель 7/30/90 дней, KPI-плитки, таблицы по офферам и кампаниям.
+ * HistoryPage — история/архив за выбранный период.
+ * Шапка MiniHeader → pill-переключатель периода → KPI-сетка (summary) →
+ * блок ПО STAGE → блок ПО ПРАВИЛУ → секции кампаний / офферов.
  */
 import { useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { MiniHeader } from "@/components/layout/MiniHeader";
-import {
-  KpiPlate,
-  Card,
-  Skeleton,
-  ErrorState,
-  EmptyState,
-  Tabs,
-} from "@/components/ui";
+import { Eyebrow } from "@/components/data/Eyebrow";
+import { KpiPlate, Skeleton, EmptyState } from "@/components/ui";
+import type { KpiVariant } from "@/components/ui";
 import {
   useHistorySummary,
   useHistoryOffers,
   useHistoryCampaigns,
 } from "@/lib/api";
-import { formatSpend, formatInt } from "@fb/shared";
+import { formatSpend, formatInt, ruleCodeLabel } from "@fb/shared";
+import type { HistoryCampaign, HistoryOffer } from "@fb/shared";
+import { haptic } from "@/lib/tg";
+import { cn } from "@/lib/cn";
 
 export const Route = createFileRoute("/history/")({
   component: HistoryPage,
 });
 
-const PERIOD_TABS = [
-  { key: "7", label: "7 дней" },
-  { key: "30", label: "30 дней" },
-  { key: "90", label: "90 дней" },
+// ─── Периоды ─────────────────────────────────────────────────────────────────
+
+const PERIODS: { days: number; label: string }[] = [
+  { days: 7,  label: "7д" },
+  { days: 30, label: "30д" },
+  { days: 90, label: "90д" },
 ];
 
-const SECTION_TABS = [
-  { key: "summary", label: "Сводка" },
-  { key: "offers", label: "Офферы" },
-  { key: "campaigns", label: "Кампании" },
-];
+// ─── Утилиты ────────────────────────────────────────────────────────────────
+
+/** Секция-обёртка с eyebrow и gap-px-сеткой детей. */
+function Section({
+  num,
+  title,
+  children,
+}: {
+  num?: string;
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section>
+      <Eyebrow num={num} className="mb-2.5 flex">
+        {title}
+      </Eyebrow>
+      {children}
+    </section>
+  );
+}
+
+/** Строка в блоке «по правилу» / «по stage». */
+function MetaRow({
+  label,
+  value,
+  color,
+}: {
+  label: string;
+  value: string | number;
+  color?: string;
+}) {
+  return (
+    <div className="flex items-center justify-between px-3.5 py-2.5 min-h-[44px] gap-2">
+      <span className="text-[13px] font-display text-bg-10 truncate">{label}</span>
+      <span
+        className="font-display tabular-nums text-[15px] text-bg-11 shrink-0"
+        style={color ? { color } : undefined}
+      >
+        {value}
+      </span>
+    </div>
+  );
+}
+
+// ─── Pill-переключатель периода ───────────────────────────────────────────────
+
+function PeriodPills({
+  days,
+  onChange,
+}: {
+  days: number;
+  onChange: (d: number) => void;
+}) {
+  return (
+    <div className="flex items-center gap-2 px-4 py-3 border-b border-bg-5">
+      {PERIODS.map((p) => {
+        const active = p.days === days;
+        return (
+          <button
+            key={p.days}
+            type="button"
+            onClick={() => {
+              haptic.selection();
+              onChange(p.days);
+            }}
+            className={cn(
+              "min-h-[36px] px-4 text-[12px] font-display font-semibold uppercase tracking-[0.08em] border transition-colors",
+              active
+                ? "bg-accent text-bg-0 border-accent"
+                : "bg-bg-1 text-bg-9 border-bg-5 hover:text-bg-11",
+            )}
+          >
+            {p.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── KPI-сетка summary ────────────────────────────────────────────────────────
+
+interface SummaryKpiProps {
+  spend: string;
+  impressions: number;
+  clicks: number;
+  leads: number;
+  registrations: number;
+  deposits: number;
+}
+
+function SummaryKpiGrid(props: SummaryKpiProps) {
+  const items: { eyebrow: string; label: string; value: string | number; variant: KpiVariant }[] = [
+    { eyebrow: "СПЕНД",        label: "потрачено",     value: formatSpend(props.spend),       variant: "default" },
+    { eyebrow: "ПОКАЗЫ",       label: "impressions",   value: formatInt(props.impressions),   variant: "default" },
+    { eyebrow: "КЛИКИ",        label: "переходов",     value: formatInt(props.clicks),        variant: "info" },
+    { eyebrow: "ЛИДЫ",         label: "всего",         value: formatInt(props.leads),         variant: "ok" },
+    { eyebrow: "РЕГИСТРАЦИИ",  label: "всего",         value: formatInt(props.registrations), variant: "info" },
+    { eyebrow: "ДЕПОЗИТЫ",     label: "всего",         value: formatInt(props.deposits),      variant: "ok" },
+  ];
+
+  return (
+    <div className="grid grid-cols-2 gap-px bg-bg-5">
+      {items.map((item) => (
+        <KpiPlate
+          key={item.eyebrow}
+          eyebrow={item.eyebrow}
+          label={item.label}
+          value={item.value}
+          variant={item.variant}
+        />
+      ))}
+    </div>
+  );
+}
+
+// ─── Строка кампании ──────────────────────────────────────────────────────────
+
+function CampaignRow({ c }: { c: HistoryCampaign }) {
+  return (
+    <div className="flex items-start justify-between px-3.5 py-3 min-h-[44px] gap-2 border-b border-bg-5 last:border-0">
+      <div className="flex-1 min-w-0">
+        <p className="font-display text-[13px] text-bg-11 truncate leading-snug">
+          {c.campaign_name ?? c.campaign_id}
+        </p>
+        <div className="flex items-center gap-2 mt-0.5">
+          {c.offer_code != null && (
+            <span className="font-display text-[11px] text-bg-9 tabular-nums">{c.offer_code}</span>
+          )}
+          <span className="font-display text-[11px] text-bg-8 tabular-nums">
+            {formatInt(c.leads)} л · {formatInt(c.registrations)} р · {formatInt(c.deposits)} д
+          </span>
+        </div>
+      </div>
+      <div className="shrink-0 text-right">
+        <p className="font-display tabular-nums text-[15px] text-bg-11 leading-snug">
+          {formatSpend(c.spend)}
+        </p>
+        {c.cost_per_lead != null && (
+          <p className="font-display tabular-nums text-[11px] text-bg-8">
+            CPL {formatSpend(c.cost_per_lead)}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Строка оффера ────────────────────────────────────────────────────────────
+
+function OfferRow({ o }: { o: HistoryOffer }) {
+  return (
+    <div className="flex items-start justify-between px-3.5 py-3 min-h-[44px] gap-2 border-b border-bg-5 last:border-0">
+      <div className="flex-1 min-w-0">
+        <p className="font-display text-[13px] text-bg-11 tabular-nums leading-snug">{o.offer_code}</p>
+        <p className="text-[11px] text-bg-9 mt-0.5 truncate">{o.offer_name}</p>
+        <span className="font-display text-[11px] text-bg-8 tabular-nums">
+          {formatInt(o.leads)} л · {formatInt(o.registrations)} р · {formatInt(o.deposits)} д
+        </span>
+      </div>
+      <div className="shrink-0 text-right">
+        <p className="font-display tabular-nums text-[15px] text-bg-11 leading-snug">
+          {formatSpend(o.spend)}
+        </p>
+        {o.cost_per_lead != null && (
+          <p className="font-display tabular-nums text-[11px] text-bg-8">
+            CPL {formatSpend(o.cost_per_lead)}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Скелетон-строки ─────────────────────────────────────────────────────────
+
+function RowSkeletons({ count = 3 }: { count?: number }) {
+  return (
+    <div className="flex flex-col gap-px bg-bg-5">
+      {Array.from({ length: count }, (_, i) => (
+        <div key={i} className="bg-bg-1 px-3.5 py-3 flex justify-between gap-2">
+          <div className="flex-1 space-y-1.5">
+            <Skeleton className="h-4 w-3/4" />
+            <Skeleton className="h-3 w-1/2" />
+          </div>
+          <Skeleton className="h-5 w-16 shrink-0" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─── Главный компонент ────────────────────────────────────────────────────────
 
 function HistoryPage() {
   const [days, setDays] = useState(7);
-  const [section, setSection] = useState("summary");
 
   const summary = useHistorySummary(days);
   const offersHistory = useHistoryOffers(days);
   const campaignsHistory = useHistoryCampaigns(days);
 
-  const isLoading = summary.isLoading;
-  const isError = summary.isError;
-
   const s = summary.data;
-
-  function handlePeriodChange(key: string) {
-    setDays(Number(key));
-  }
 
   return (
     <div className="flex flex-col min-h-full pb-20">
-      <MiniHeader eyebrow="Аналитика" title="История" />
+      {/* ── шапка ── */}
+      <MiniHeader eyebrowNum="03" eyebrow="HISTORY · АРХИВ" title="История" />
 
-      {/* Переключатель периода */}
-      <Tabs
-        items={PERIOD_TABS}
-        active={String(days)}
-        onChange={handlePeriodChange}
-        className="bg-[var(--color-bg-0)]"
-      />
+      {/* ── переключатель периода ── */}
+      <PeriodPills days={days} onChange={setDays} />
 
-      {/* Переключатель секции */}
-      <Tabs
-        items={SECTION_TABS}
-        active={section}
-        onChange={setSection}
-        className="bg-[var(--color-bg-0)]"
-      />
+      <div className="flex flex-col gap-5 p-4">
 
-      <div className="p-4 flex flex-col gap-4">
-        {/* Секция: Сводка */}
-        {section === "summary" && (
-          <>
-            {isLoading && (
-              <div className="grid grid-cols-2 gap-2">
-                {Array.from({ length: 6 }, (_, i) => (
-                  <Skeleton key={i} className="h-20" />
-                ))}
-              </div>
-            )}
-            {isError && (
-              <ErrorState
-                message="Не удалось загрузить историю"
-                onRetry={() => void summary.refetch()}
-              />
-            )}
-            {!isLoading && !isError && s && (
-              <>
-                <div className="grid grid-cols-2 gap-2">
-                  <KpiPlate
-                    eyebrow="Спенд"
-                    label="Всего потрачено"
-                    value={formatSpend(s.totals.spend)}
-                    variant="default"
-                  />
-                  <KpiPlate
-                    eyebrow="Лиды"
-                    label="Всего лидов"
-                    value={formatInt(s.totals.leads)}
-                    variant="ok"
-                  />
-                  <KpiPlate
-                    eyebrow="Регистрации"
-                    label="Всего регистраций"
-                    value={formatInt(s.totals.registrations)}
-                    variant="info"
-                  />
-                  <KpiPlate
-                    eyebrow="Депозиты"
-                    label="Всего депозитов"
-                    value={formatInt(s.totals.deposits)}
-                    variant="ok"
-                  />
-                  <KpiPlate
-                    eyebrow="Предупреждения"
-                    label="Warning-алертов"
-                    value={s.alerts.warning_count}
-                    variant="warn"
-                  />
-                  <KpiPlate
-                    eyebrow="Стопы"
-                    label="Stop-алертов"
-                    value={s.alerts.stop_count}
-                    variant="stop"
-                  />
+        {/* ── KPI-сводка ── */}
+        <Section num="01" title="ВСЕГО ЗА ПЕРИОД">
+          {summary.isLoading ? (
+            <div className="grid grid-cols-2 gap-px bg-bg-5">
+              {Array.from({ length: 6 }, (_, i) => (
+                <div key={i} className="bg-bg-1 p-3 space-y-2">
+                  <Skeleton className="h-3 w-14" />
+                  <Skeleton className="h-7 w-20" />
+                  <Skeleton className="h-3 w-10" />
                 </div>
-
-                {/* Топ правил */}
-                {s.alerts.by_rule && s.alerts.by_rule.length > 0 && (
-                  <Card eyebrow="Правила" title="Топ нарушений">
-                    <div className="flex flex-col divide-y divide-[var(--color-bg-4)]">
-                      {s.alerts.by_rule.map((r) => (
-                        <div
-                          key={r.rule_code}
-                          className="flex items-center justify-between py-2 gap-2"
-                        >
-                          <span className="text-[12px] font-mono text-[var(--color-bg-9)] truncate">
-                            {r.rule_code}
-                          </span>
-                          <span className="text-[13px] font-semibold text-[var(--color-bg-11)] tabular-nums shrink-0">
-                            {r.count}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </Card>
-                )}
-              </>
-            )}
-            {!isLoading && !isError && !s && (
-              <EmptyState
-                title="Нет данных"
-                description={`История за ${days} дней пуста`}
-              />
-            )}
-          </>
-        )}
-
-        {/* Секция: Офферы */}
-        {section === "offers" && (
-          <>
-            {offersHistory.isLoading && (
-              <div className="flex flex-col gap-2">
-                {Array.from({ length: 4 }, (_, i) => <Skeleton key={i} className="h-16" />)}
-              </div>
-            )}
-            {offersHistory.isError && (
-              <ErrorState
-                message="Не удалось загрузить офферы"
-                onRetry={() => void offersHistory.refetch()}
-              />
-            )}
-            {!offersHistory.isLoading &&
-              !offersHistory.isError &&
-              (offersHistory.data ?? []).length === 0 && (
-                <EmptyState
-                  title="Нет данных по офферам"
-                  description={`За ${days} дней активности не зафиксировано`}
-                />
-              )}
-            {!offersHistory.isLoading &&
-              !offersHistory.isError &&
-              (offersHistory.data ?? []).map((o) => (
-                <Card key={o.offer_id} padding="sm">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex-1 min-w-0">
-                      <p className="text-[13px] font-semibold text-[var(--color-bg-11)] font-mono">
-                        {o.offer_code}
-                      </p>
-                      <p className="text-[11px] text-[var(--color-bg-9)] mt-0.5">
-                        {o.offer_name}
-                      </p>
-                    </div>
-                    <div className="text-right shrink-0">
-                      <p className="text-[14px] font-semibold text-[var(--color-bg-11)] tabular-nums font-display">
-                        {formatSpend(o.spend)}
-                      </p>
-                      <p className="text-[11px] text-[var(--color-bg-8)]">
-                        {formatInt(o.leads)} л
-                        {o.deposits != null && ` · ${formatInt(o.deposits)} д`}
-                      </p>
-                    </div>
-                  </div>
-                </Card>
               ))}
-          </>
+            </div>
+          ) : summary.isError ? (
+            <EmptyState title="Ошибка загрузки" description="Повторите позже" />
+          ) : s ? (
+            <SummaryKpiGrid
+              spend={s.totals.spend}
+              impressions={s.totals.impressions}
+              clicks={s.totals.clicks}
+              leads={s.totals.leads}
+              registrations={s.totals.registrations}
+              deposits={s.totals.deposits}
+            />
+          ) : (
+            <EmptyState
+              title="Событий нет"
+              description={`За ${days} дней активности не зафиксировано`}
+            />
+          )}
+        </Section>
+
+        {/* ── ПО STAGE ── */}
+        {s && (
+          <Section num="02" title="ПО STAGE">
+            <div className="border border-bg-5 bg-bg-1 divide-y divide-bg-5">
+              <MetaRow
+                label="Warning-алертов"
+                value={s.alerts.warning_count}
+                color={s.alerts.warning_count > 0 ? "var(--warning)" : undefined}
+              />
+              <MetaRow
+                label="Stop-алертов"
+                value={s.alerts.stop_count}
+                color={s.alerts.stop_count > 0 ? "var(--danger)" : undefined}
+              />
+              <MetaRow label="Disable завершено" value={s.tasks.disable_completed} />
+              <MetaRow label="Disable ошибок"    value={s.tasks.disable_failed} />
+              <MetaRow label="Enable завершено"  value={s.tasks.enable_completed} />
+            </div>
+          </Section>
         )}
 
-        {/* Секция: Кампании */}
-        {section === "campaigns" && (
-          <>
-            {campaignsHistory.isLoading && (
-              <div className="flex flex-col gap-2">
-                {Array.from({ length: 4 }, (_, i) => <Skeleton key={i} className="h-16" />)}
-              </div>
-            )}
-            {campaignsHistory.isError && (
-              <ErrorState
-                message="Не удалось загрузить кампании"
-                onRetry={() => void campaignsHistory.refetch()}
-              />
-            )}
-            {!campaignsHistory.isLoading &&
-              !campaignsHistory.isError &&
-              (campaignsHistory.data ?? []).length === 0 && (
-                <EmptyState
-                  title="Нет данных по кампаниям"
-                  description={`За ${days} дней активности не зафиксировано`}
+        {/* ── ПО ПРАВИЛУ ── */}
+        {s && s.alerts.by_rule.length > 0 && (
+          <Section title="ПО ПРАВИЛУ">
+            <div className="border border-bg-5 bg-bg-1 divide-y divide-bg-5">
+              {s.alerts.by_rule.map((r) => (
+                <MetaRow
+                  key={r.rule_code}
+                  label={ruleCodeLabel(r.rule_code, true)}
+                  value={r.count}
                 />
-              )}
-            {!campaignsHistory.isLoading &&
-              !campaignsHistory.isError &&
-              (campaignsHistory.data ?? []).map((c) => (
-                <Card key={c.campaign_id} padding="sm">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex-1 min-w-0">
-                      <p className="text-[12px] font-semibold text-[var(--color-bg-11)] truncate">
-                        {c.campaign_name ?? c.campaign_id}
-                      </p>
-                      {c.offer_code && (
-                        <p className="text-[11px] text-[var(--color-bg-9)] font-mono mt-0.5">
-                          {c.offer_code}
-                        </p>
-                      )}
-                    </div>
-                    <div className="text-right shrink-0">
-                      <p className="text-[14px] font-semibold text-[var(--color-bg-11)] tabular-nums font-display">
-                        {formatSpend(c.spend)}
-                      </p>
-                      <p className="text-[11px] text-[var(--color-bg-8)]">
-                        {formatInt(c.leads)} л
-                      </p>
-                    </div>
-                  </div>
-                </Card>
               ))}
-          </>
+            </div>
+          </Section>
         )}
+
+        {/* ── Офферы ── */}
+        <Section num="03" title="ПО ОФФЕРУ">
+          {offersHistory.isLoading ? (
+            <RowSkeletons count={3} />
+          ) : offersHistory.isError ? (
+            <EmptyState title="Ошибка загрузки" description="Повторите позже" />
+          ) : (offersHistory.data ?? []).length === 0 ? (
+            <EmptyState
+              title="Событий нет"
+              description={`За ${days} дней данных нет`}
+            />
+          ) : (
+            <div className="border border-bg-5 bg-bg-1">
+              {(offersHistory.data ?? []).map((o) => (
+                <OfferRow key={o.offer_id} o={o} />
+              ))}
+            </div>
+          )}
+        </Section>
+
+        {/* ── Кампании ── */}
+        <Section num="04" title="ПО КАМПАНИИ">
+          {campaignsHistory.isLoading ? (
+            <RowSkeletons count={3} />
+          ) : campaignsHistory.isError ? (
+            <EmptyState title="Ошибка загрузки" description="Повторите позже" />
+          ) : (campaignsHistory.data ?? []).length === 0 ? (
+            <EmptyState
+              title="Событий нет"
+              description={`За ${days} дней данных нет`}
+            />
+          ) : (
+            <div className="border border-bg-5 bg-bg-1">
+              {(campaignsHistory.data ?? []).map((c) => (
+                <CampaignRow key={c.campaign_id} c={c} />
+              ))}
+            </div>
+          )}
+        </Section>
+
       </div>
     </div>
   );

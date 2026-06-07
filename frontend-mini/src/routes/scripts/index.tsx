@@ -1,22 +1,29 @@
 /**
  * ScriptsPage — выбор папки с креативами, генерация плана кампании.
- * Использует /api/tools/campaign-create/folders (prod-safe).
+ * Вторичный экран («Ещё»). Канон: Dashboard эталон (MiniHeader, Eyebrow,
+ * bg-bg-1 border-bg-5, Skeleton, EmptyState, bottom-sheet Sheet).
  */
 import { useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
+import { Copy, AlertTriangle } from "lucide-react";
 import { MiniHeader } from "@/components/layout/MiniHeader";
+import { Eyebrow } from "@/components/data";
 import {
-  Card,
   Button,
   Badge,
+  Input,
+  Sheet,
   Skeleton,
   EmptyState,
-  ErrorState,
-  Sheet,
-  Input,
 } from "@/components/ui";
-import { useScriptFolders, useScriptPlan, type ScriptFolder, type ScriptPlan } from "@/lib/api";
+import {
+  useScriptFolders,
+  useScriptPlan,
+  type ScriptFolder,
+  type ScriptPlan,
+} from "@/lib/api";
 import { haptic } from "@/lib/tg";
+import { cn } from "@/lib/cn";
 
 export const Route = createFileRoute("/scripts/")({
   component: ScriptsPage,
@@ -37,6 +44,7 @@ function PlanForm({ folder, onResult, onClose }: PlanFormProps) {
   const [countryName, setCountryName] = useState("");
   const [cabinetId, setCabinetId] = useState("");
   const [sub2, setSub2] = useState("MV");
+  const [genDate, setGenDate] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   async function handleBuild(e: React.FormEvent) {
@@ -56,6 +64,7 @@ function PlanForm({ folder, onResult, onClose }: PlanFormProps) {
         cabinet_id: cabinetId.trim(),
         sub2: sub2.trim() || "MV",
         folder_name: folder.name,
+        generation_date: genDate.trim() || null,
       });
       haptic.notify("success");
       onResult(plan);
@@ -66,16 +75,13 @@ function PlanForm({ folder, onResult, onClose }: PlanFormProps) {
   }
 
   return (
-    <form onSubmit={(e) => void handleBuild(e)} className="flex flex-col gap-4 pb-4">
-      <div className="bg-[var(--color-bg-2)] border border-[var(--color-bg-5)] p-3">
-        <p className="text-[11px] uppercase tracking-[0.07em] text-[var(--color-bg-9)] font-mono">
-          Папка
-        </p>
-        <p className="text-[14px] font-semibold font-mono text-[var(--color-bg-11)] mt-1">
-          {folder.name}
-        </p>
-        <p className="text-[12px] text-[var(--color-bg-8)] mt-0.5">
-          {folder.adset_count} адсетов · {folder.creative_count} креативов · {folder.media_type}
+    <form onSubmit={(e) => void handleBuild(e)} className="flex flex-col gap-4 px-4 pb-6">
+      {/* Выбранная папка */}
+      <div className="border border-bg-5 bg-bg-1 p-3">
+        <Eyebrow>ПАПКА</Eyebrow>
+        <p className="font-display text-[14px] text-bg-11 mt-1 truncate">{folder.name}</p>
+        <p className="font-display tabular-nums text-[12px] text-bg-9 mt-0.5">
+          {folder.adset_count} адс · {folder.creative_count} крео · {folder.media_type}
         </p>
       </div>
 
@@ -98,14 +104,22 @@ function PlanForm({ folder, onResult, onClose }: PlanFormProps) {
         onChange={(e) => setCabinetId(e.target.value)}
       />
       <Input
-        label="Sub2 (опционально)"
+        label="sub2 (опционально)"
         placeholder="MV"
         value={sub2}
         onChange={(e) => setSub2(e.target.value)}
       />
-      {error && (
-        <p className="text-[12px] text-[var(--color-danger)]">{error}</p>
+      <Input
+        label="Дата генерации (опционально)"
+        placeholder="2026-06-08"
+        value={genDate}
+        onChange={(e) => setGenDate(e.target.value)}
+      />
+
+      {error !== null && (
+        <p className="text-[12px] text-danger">{error}</p>
       )}
+
       <Button type="submit" loading={buildPlan.isPending} fullWidth>
         Построить план
       </Button>
@@ -119,93 +133,85 @@ function PlanForm({ folder, onResult, onClose }: PlanFormProps) {
 // ─── Результат плана ──────────────────────────────────────────────────────
 
 function PlanResult({ plan }: { plan: ScriptPlan }) {
-  async function copyToClipboard(text: string) {
+  const [copied, setCopied] = useState<string | null>(null);
+
+  async function copyValue(text: string) {
     try {
       await navigator.clipboard.writeText(text);
+      setCopied(text);
       haptic.notify("success");
+      setTimeout(() => setCopied(null), 2000);
     } catch {
       haptic.notify("error");
     }
   }
 
   return (
-    <div className="flex flex-col gap-4 pb-4">
-      {/* Заголовок */}
-      <div>
-        <p className="text-[11px] uppercase tracking-[0.07em] text-[var(--color-bg-9)] font-mono mb-1">
-          Имя кампании
-        </p>
-        <button
-          type="button"
-          onClick={() => void copyToClipboard(plan.campaign_name)}
-          className="text-[14px] font-mono text-[var(--color-accent)] text-left break-all active:opacity-70"
-        >
-          {plan.campaign_name}
-        </button>
-      </div>
-
-      {/* Мета */}
-      <div className="grid grid-cols-3 gap-2">
-        <div className="bg-[var(--color-bg-2)] border border-[var(--color-bg-5)] p-2 text-center">
-          <p className="text-[18px] font-semibold font-display text-[var(--color-bg-11)] tabular-nums">
-            {plan.adset_count}
-          </p>
-          <p className="text-[10px] text-[var(--color-bg-8)] uppercase tracking-wide">Адсетов</p>
-        </div>
-        <div className="bg-[var(--color-bg-2)] border border-[var(--color-bg-5)] p-2 text-center">
-          <p className="text-[18px] font-semibold font-display text-[var(--color-bg-11)] tabular-nums">
-            {plan.ad_count}
-          </p>
-          <p className="text-[10px] text-[var(--color-bg-8)] uppercase tracking-wide">Объявлений</p>
-        </div>
-        <div className="bg-[var(--color-bg-2)] border border-[var(--color-bg-5)] p-2 text-center">
-          <p className="text-[12px] font-mono font-semibold text-[var(--color-bg-11)]">
-            {plan.media_type}
-          </p>
-          <p className="text-[10px] text-[var(--color-bg-8)] uppercase tracking-wide">Медиа</p>
-        </div>
-      </div>
-
+    <div className="flex flex-col gap-4 px-4 pb-6">
       {/* Ручной гайд */}
       {plan.manual_guide.map((section) => (
-        <Card key={section.title} eyebrow="Ручной гайд" title={section.title} padding="sm">
-          <div className="flex flex-col gap-2 mt-2">
+        <section key={section.title}>
+          <div className="flex items-center gap-2 mb-2">
+            <Eyebrow>{section.title.toUpperCase()}</Eyebrow>
+          </div>
+          <div className="border border-bg-5 bg-bg-1 divide-y divide-bg-5">
             {section.items.map((item) => (
-              <div key={item.label} className="flex items-start gap-2">
-                <span className="text-[11px] text-[var(--color-bg-8)] uppercase tracking-wide w-24 shrink-0 pt-0.5">
-                  {item.label}
-                </span>
-                {item.copyable ? (
-                  <button
-                    type="button"
-                    onClick={() => void copyToClipboard(item.value)}
-                    className="text-[12px] font-mono text-[var(--color-accent)] text-left break-all active:opacity-70 flex-1"
+              <div
+                key={item.label}
+                className="flex items-start justify-between gap-3 px-3 py-2.5 min-h-[44px]"
+              >
+                <div className="flex-1 min-w-0">
+                  <p className="text-[10px] uppercase tracking-[0.08em] text-bg-8 mb-0.5">
+                    {item.label}
+                  </p>
+                  <p
+                    className={cn(
+                      "font-display tabular-nums text-[13px] break-all",
+                      item.copyable ? "text-accent" : "text-bg-11",
+                    )}
                   >
                     {item.value}
+                  </p>
+                </div>
+                {item.copyable && (
+                  <button
+                    type="button"
+                    aria-label={`Скопировать ${item.label}`}
+                    onClick={() => void copyValue(item.value)}
+                    className={cn(
+                      "shrink-0 inline-flex items-center justify-center w-8 h-8 mt-0.5 border",
+                      copied === item.value
+                        ? "border-success text-success bg-success-bg"
+                        : "border-bg-5 text-bg-9 active:bg-bg-2",
+                    )}
+                  >
+                    <Copy size={14} strokeWidth={1.8} />
                   </button>
-                ) : (
-                  <span className="text-[12px] font-mono text-[var(--color-bg-11)] break-all flex-1">
-                    {item.value}
-                  </span>
                 )}
               </div>
             ))}
           </div>
-        </Card>
+        </section>
       ))}
 
       {/* Safety notes */}
       {plan.safety_notes.length > 0 && (
-        <Card eyebrow="Важно" padding="sm">
-          <ul className="flex flex-col gap-1">
+        <section>
+          <Eyebrow className="mb-2">ВАЖНО</Eyebrow>
+          <div className="border border-warning bg-warning-bg p-3 flex flex-col gap-2">
             {plan.safety_notes.map((note, i) => (
-              <li key={i} className="text-[12px] text-[var(--color-warning)] flex gap-2">
-                <span aria-hidden>⚠</span>
-                <span>{note}</span>
-              </li>
+              <div key={i} className="flex items-start gap-2">
+                <AlertTriangle
+                  size={13}
+                  strokeWidth={1.8}
+                  className="text-warning shrink-0 mt-0.5"
+                  aria-hidden
+                />
+                <span className="text-[12px] text-warning leading-snug">{note}</span>
+              </div>
             ))}
-          </ul>
-        </Card>
+          </div>
+        </section>
       )}
     </div>
   );
@@ -234,103 +240,121 @@ function ScriptsPage() {
     setPlan(p);
   }
 
+  const folderList = folders ?? [];
+
   return (
     <div className="flex flex-col min-h-full pb-20">
+      {/* Шапка */}
       <MiniHeader
-        eyebrow="Автоматизация"
-        title="Создание кампании"
+        eyebrow="ИНСТРУМЕНТЫ · СКРИПТЫ"
+        title="Скрипты"
         right={
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => void refetch()}
+          <button
+            type="button"
+            aria-label="Обновить список"
+            onClick={() => { haptic.selection(); void refetch(); }}
             disabled={isLoading}
+            className="inline-flex items-center justify-center w-11 h-11 text-bg-9 active:text-bg-11 disabled:opacity-40"
           >
-            ↺
-          </Button>
+            <span className="font-display text-[16px]">↺</span>
+          </button>
         }
       />
 
-      <div className="p-4 flex flex-col gap-3">
-        <p className="text-[12px] text-[var(--color-bg-9)]">
-          Выберите папку с креативами для построения плана создания кампании.
-        </p>
+      <div className="flex flex-col gap-3 p-4">
+        <Eyebrow num="01">ПАПКИ С КРЕАТИВАМИ</Eyebrow>
 
+        {/* Loading */}
         {isLoading && (
-          <>
-            {Array.from({ length: 3 }, (_, i) => <Skeleton key={i} className="h-16" />)}
-          </>
+          <div className="flex flex-col gap-3 mt-1">
+            {Array.from({ length: 3 }, (_, i) => (
+              <Skeleton key={i} className="h-[72px]" />
+            ))}
+          </div>
         )}
-        {isError && (
-          <ErrorState
-            message="Не удалось загрузить папки"
-            onRetry={() => void refetch()}
+
+        {/* Ошибка */}
+        {isError && !isLoading && (
+          <EmptyState
+            title="Не удалось загрузить папки"
+            description="Проверьте соединение и повторите"
           />
         )}
-        {!isLoading && !isError && (folders ?? []).length === 0 && (
+
+        {/* Пусто */}
+        {!isLoading && !isError && folderList.length === 0 && (
           <EmptyState
             title="Папок с креативами нет"
             description="Скопируйте папку с креативами в ~/Documents/FB_Agent_Creo"
           />
         )}
-        {!isLoading &&
-          !isError &&
-          (folders ?? []).map((folder) => (
-            <Card
-              key={folder.path}
-              padding="sm"
-              onClick={() => openFolder(folder)}
-              className="cursor-pointer active:opacity-70"
-            >
-              <div className="flex items-start justify-between gap-2">
+
+        {/* Список папок */}
+        {!isLoading && !isError && folderList.length > 0 && (
+          <div className="flex flex-col gap-0 border border-bg-5 divide-y divide-bg-5">
+            {folderList.map((folder) => (
+              <button
+                key={folder.path}
+                type="button"
+                className="w-full text-left bg-bg-1 px-3.5 py-3 min-h-[44px] flex items-start justify-between gap-3 active:bg-bg-2"
+                onClick={() => openFolder(folder)}
+              >
                 <div className="flex-1 min-w-0">
-                  <p className="text-[13px] font-semibold font-mono text-[var(--color-bg-11)] truncate">
+                  <p className="font-display text-[13px] text-bg-11 truncate leading-snug">
                     {folder.name}
                   </p>
-                  <p className="text-[11px] text-[var(--color-bg-8)] mt-0.5">
+                  <p className="font-display tabular-nums text-[11px] text-bg-9 mt-0.5">
                     {folder.adset_count} адс · {folder.creative_count} крео · {folder.media_type}
                   </p>
-                </div>
-                <div className="flex flex-col items-end gap-1 shrink-0">
-                  {!folder.is_valid && (
-                    <Badge variant="failed">Ошибка</Badge>
-                  )}
-                  {folder.is_valid && (
-                    <Badge variant="normal">Готова</Badge>
+                  {!folder.is_valid && folder.validation_error !== "" && (
+                    <p className="text-[11px] text-danger mt-1 leading-snug">
+                      {folder.validation_error}
+                    </p>
                   )}
                 </div>
-              </div>
-              {!folder.is_valid && folder.validation_error && (
-                <p className="text-[11px] text-[var(--color-danger)] mt-2">
-                  {folder.validation_error}
-                </p>
-              )}
-            </Card>
-          ))}
+                <div className="shrink-0 mt-0.5">
+                  {folder.is_valid ? (
+                    <Badge variant="done">готова</Badge>
+                  ) : (
+                    <Badge variant="failed">ошибка</Badge>
+                  )}
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
-      {/* Bottom sheet: форма / результат плана */}
+      {/* Bottom-sheet: форма или результат плана */}
       <Sheet
         open={sheetOpen}
         onClose={handleClose}
-        eyebrow={plan ? "Готов" : "Параметры"}
-        title={plan ? plan.campaign_name : `Папка: ${selected?.name ?? ""}`}
-        className="max-h-[90vh] overflow-y-auto"
+        eyebrow={plan !== null ? "РЕЗУЛЬТАТ" : "ПАРАМЕТРЫ"}
+        title={
+          plan !== null
+            ? plan.campaign_name
+            : selected !== null
+              ? selected.name
+              : ""
+        }
+        className="max-h-[92vh] overflow-y-auto"
       >
-        {selected && !plan && (
+        {selected !== null && plan === null && (
           <PlanForm
             folder={selected}
             onResult={handlePlanResult}
             onClose={handleClose}
           />
         )}
-        {plan && <PlanResult plan={plan} />}
-        {plan && (
-          <div className="mt-2 mb-4">
-            <Button variant="secondary" fullWidth onClick={() => setPlan(null)}>
-              Изменить параметры
-            </Button>
-          </div>
+        {plan !== null && (
+          <>
+            <PlanResult plan={plan} />
+            <div className="px-4 pb-6">
+              <Button variant="secondary" fullWidth onClick={() => setPlan(null)}>
+                Изменить параметры
+              </Button>
+            </div>
+          </>
         )}
       </Sheet>
     </div>

@@ -43,12 +43,14 @@ const MOCK_TELEGRAM: TelegramSettings = {
 
 const mockUseObserverSettings = vi.fn();
 const mockUseToggleScanning = vi.fn();
+const mockUseTriggerScan = vi.fn();
 const mockUseTelegramSettings = vi.fn();
 const mockUseVisionSettings = vi.fn();
 
 vi.mock("@/lib/api", () => ({
   useObserverSettings: () => mockUseObserverSettings(),
   useToggleScanning: () => mockUseToggleScanning(),
+  useTriggerScan: () => mockUseTriggerScan(),
   useTelegramSettings: () => mockUseTelegramSettings(),
   useVisionSettings: () => mockUseVisionSettings(),
 }));
@@ -67,6 +69,7 @@ describe("SettingsPage", () => {
       refetch: vi.fn(),
     });
     mockUseToggleScanning.mockReturnValue({ mutateAsync, isPending: false });
+    mockUseTriggerScan.mockReturnValue({ mutateAsync: vi.fn().mockResolvedValue({}), isPending: false });
     mockUseTelegramSettings.mockReturnValue({
       data: MOCK_TELEGRAM,
       isLoading: false,
@@ -84,7 +87,7 @@ describe("SettingsPage", () => {
   // Observer-секция показывает toggle
   it("показывает секцию Observer с переключателем", () => {
     render(<SettingsTestWrapper />);
-    expect(screen.getByText("Мониторинг включён")).toBeInTheDocument();
+    expect(screen.getByText("Сканирование")).toBeInTheDocument();
   });
 
   // Toggle в позиции "включён" при is_scanning_enabled=true
@@ -116,12 +119,12 @@ describe("SettingsPage", () => {
     expect(screen.getByText("profile-123")).toBeInTheDocument();
   });
 
-  // Ссылки навигации есть
-  it("показывает кнопки навигации на /health, /scripts, /drafts", () => {
+  // Ссылки навигации к вторичным экранам («Ещё»)
+  it("показывает кнопки навигации на /health, /scripts, /offers", () => {
     render(<SettingsTestWrapper />);
     expect(screen.getByText("Здоровье воркеров")).toBeInTheDocument();
-    expect(screen.getByText("Создание кампании")).toBeInTheDocument();
-    expect(screen.getByText("Черновики задач")).toBeInTheDocument();
+    expect(screen.getByText("Скрипты кампаний")).toBeInTheDocument();
+    expect(screen.getByText("Офферы")).toBeInTheDocument();
   });
 
   // При toggle=false начальный state
