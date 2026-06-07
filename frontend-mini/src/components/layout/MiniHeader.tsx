@@ -1,41 +1,43 @@
 /**
- * MiniHeader — компактная шапка страницы.
- * Eyebrow (маленькая метка) + title + опциональный правый слот.
- * Прилипает к верху контента (не fixed — TabBar уже fixed снизу).
+ * MiniHeader — шапка экрана канона.
+ * Eyebrow (num + текст) + h1 mono 26px weight 500 letter-spacing -0.02em.
+ * Без точки и ghost-числа (канон). Правый слот — счётчик/действие.
  */
 import type { ReactNode } from "react";
 import { cn } from "@/lib/cn";
+import { Eyebrow } from "@/components/data/Eyebrow";
 
 interface MiniHeaderProps {
+  /** Номер-маркер eyebrow (например "04"). */
+  eyebrowNum?: string;
+  /** Текст eyebrow (например "УПРАВЛЕНИЕ"). */
   eyebrow?: string;
   title: string;
-  /** Правый слот: badge, кнопка обновления и т.п. */
+  /** Правый слот: счётчик, кнопка действия. */
   right?: ReactNode;
   className?: string;
 }
 
-export function MiniHeader({ eyebrow, title, right, className }: MiniHeaderProps) {
+export function MiniHeader({ eyebrowNum, eyebrow, title, right, className }: MiniHeaderProps) {
   return (
     <header
       className={cn(
-        "flex items-end justify-between gap-3",
-        "px-4 pt-3 pb-3",
-        "border-b border-[var(--color-bg-5)]",
-        "bg-[var(--color-bg-0)]",
+        "px-4 pt-2 pb-3 border-b border-bg-5 bg-bg-0",
         className,
       )}
     >
-      <div>
-        {eyebrow && (
-          <p className="text-[10px] uppercase tracking-[0.08em] text-[var(--color-bg-9)] font-mono mb-1 leading-none">
-            {eyebrow}
-          </p>
-        )}
-        <h1 className="text-[18px] font-display font-semibold text-[var(--color-bg-11)] leading-tight">
-          {title}
-        </h1>
+      <div className="flex items-end justify-between gap-3">
+        <div className="min-w-0">
+          {eyebrow ? <Eyebrow num={eyebrowNum}>{eyebrow}</Eyebrow> : null}
+          <h1
+            className="font-display font-medium text-bg-11 m-0 mt-1 leading-[1.05]"
+            style={{ fontSize: 26, letterSpacing: "-0.02em" }}
+          >
+            {title}
+          </h1>
+        </div>
+        {right ? <div className="shrink-0">{right}</div> : null}
       </div>
-      {right && <div className="shrink-0">{right}</div>}
     </header>
   );
 }

@@ -1,19 +1,26 @@
 /**
- * KpiPlate — большая числовая плитка для KPI-сетки.
- * Число: JetBrains Mono, крупный размер. Label: Inter Tight, caption.
- * Вариант: default | ok | warn | stop | info.
+ * KpiPlate — числовая плитка KPI.
+ * Число: JetBrains Mono 28px weight 500 tabular-nums (+ count-up для чисел).
+ * Eyebrow 10px tracking 0.12em. Вариант красит число по семантике.
  */
 import { cn } from "@/lib/cn";
+import { useCountUp } from "@/lib/hooks/useCountUp";
 
 export type KpiVariant = "default" | "ok" | "warn" | "stop" | "info";
 
 const VARIANT_NUM_COLOR: Record<KpiVariant, string> = {
-  default: "text-[var(--color-bg-11)]",
-  ok:      "text-[var(--color-success)]",
-  warn:    "text-[var(--color-warning)]",
-  stop:    "text-[var(--color-danger)]",
-  info:    "text-[var(--color-info)]",
+  default: "text-bg-11",
+  ok:      "text-success",
+  warn:    "text-warning",
+  stop:    "text-danger",
+  info:    "text-info",
 };
+
+/** Внутренний счётчик с count-up для числовых значений. */
+function KpiNumber({ value }: { value: number }) {
+  const animated = useCountUp(value);
+  return <>{animated.toLocaleString("en-US")}</>;
+}
 
 interface KpiPlateProps {
   /** Маленький eyebrow над числом. */
@@ -27,30 +34,30 @@ interface KpiPlateProps {
 }
 
 export function KpiPlate({ eyebrow, label, value, variant = "default", className }: KpiPlateProps) {
-  const displayValue = value == null ? "—" : String(value);
+  const isNum = typeof value === "number" && Number.isFinite(value);
 
   return (
     <div
       className={cn(
-        "bg-[var(--color-bg-1)] border border-[var(--color-bg-5)] p-3",
+        "bg-bg-1 border border-bg-5 p-3",
         "flex flex-col gap-1",
         className,
       )}
     >
       {eyebrow && (
-        <p className="text-[10px] uppercase tracking-[0.08em] text-[var(--color-bg-9)] font-mono leading-none">
+        <p className="font-display text-[10px] uppercase tracking-[0.12em] text-bg-9 leading-none">
           {eyebrow}
         </p>
       )}
       <p
         className={cn(
-          "text-[28px] font-display font-semibold leading-none tabular-nums",
+          "text-[28px] font-display font-medium leading-none tabular-nums",
           VARIANT_NUM_COLOR[variant],
         )}
       >
-        {displayValue}
+        {isNum ? <KpiNumber value={value} /> : value == null ? "—" : String(value)}
       </p>
-      <p className="text-[12px] text-[var(--color-bg-9)] font-body leading-none">{label}</p>
+      <p className="text-[12px] text-bg-9 leading-none">{label}</p>
     </div>
   );
 }
