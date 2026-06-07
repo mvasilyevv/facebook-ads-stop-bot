@@ -81,7 +81,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   return parseBody<T>(resp);
 }
 
-async function buildApiError(resp: Response): Promise<ApiError> {
+export async function buildApiError(resp: Response): Promise<ApiError> {
   let detail: unknown = null;
   let message = `Ошибка API ${resp.status}: ${resp.statusText || "неизвестная ошибка"}`;
 

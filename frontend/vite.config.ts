@@ -15,7 +15,9 @@ export default defineConfig({
     TanStackRouterVite({
       routesDirectory: "./src/routes",
       generatedRouteTree: "./src/routeTree.gen.ts",
-      autoCodeSplitting: true,
+      // Code-splitting только для прод-сборки. В vitest он требует lazyRouteComponent,
+      // который юнит-тесты не мокают → route-компоненты тестируются напрямую.
+      autoCodeSplitting: !process.env.VITEST,
     }),
     react(),
     tailwindcss(),
@@ -23,7 +25,13 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
+      "@fb/shared": path.resolve(__dirname, "../packages/shared/src"),
     },
+  },
+  // Workspace-пакет @fb/shared потребляется как исходники (.ts) — не пре-бандлить,
+  // чтобы HMR работал через границу пакета.
+  optimizeDeps: {
+    exclude: ["@fb/shared"],
   },
   server: {
     port: 5174,

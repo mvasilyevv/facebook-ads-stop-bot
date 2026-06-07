@@ -138,6 +138,101 @@
         }
       }
     },
+    "/api/dashboard/ads/{fb_ad_id}/snooze": {
+      "post": {
+        "tags": [
+          "dashboard"
+        ],
+        "summary": "Snooze Ad",
+        "description": "Снуз одного объявления: ad_alert_state.snoozed_until = now + minutes.\n\n404 — объявления нет в fb_ads. 409 — у ad нет строки состояния (нечего снузить).\nЗеркало core.telegram.handlers.alerts.handle_snz_callback / tma_snooze_ad.",
+        "operationId": "snooze_ad_api_dashboard_ads__fb_ad_id__snooze_post",
+        "parameters": [
+          {
+            "name": "fb_ad_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Fb Ad Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SnoozeIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SnoozeResultOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/dashboard/ads/bulk-snooze": {
+      "post": {
+        "tags": [
+          "dashboard"
+        ],
+        "summary": "Bulk Snooze Ads",
+        "description": "Массовый снуз с partial-failure (HTTP 200).\n\nОдин общий snoozed_until для всего batch. snoozed — fb_ad_id успешно снузленных;\nfailed — ad не найден (no_ad) или нет строки состояния (no_alert_state).\n\nРеализация одним UPDATE через unnest+CTE: множественный UPDATE атомарен в одной\nтранзакции, классификация неуспешных — отдельным LEFT JOIN-проходом по тому же\nсписку (без N round-trip'ов на ad).\n\n422 — только на валидации входа (пустой список / превышение cap).",
+        "operationId": "bulk_snooze_ads_api_dashboard_ads_bulk_snooze_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkSnoozeIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkSnoozeResultOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/ads/{fb_ad_id}/timeline": {
       "get": {
         "tags": [
@@ -421,7 +516,7 @@
           "dashboard"
         ],
         "summary": "List Ad Snapshots",
-        "description": "Список ad'ов с alert_state, последней метрикой и offer.\n\nПартиционный фильтр по ad_metrics.cycle_ts применяется внутри LATERAL'а\n(последние 7 дней). Если за окно нет метрик — metrics=None.\n\nX-Total-Count в headers — реальный COUNT с теми же фильтрами без LIMIT,\nдля пагинации фронта.",
+        "description": "Список ad'ов с alert_state, последней метрикой и offer.\n\nДва режима пагинации (обратно совместимы):\n1. Offset-пагинация (без cursor): работает как раньше.\n   Лимит поднят с 500 до 2000 для совместимости с виртуальными таблицами.\n2. Cursor/keyset-пагинация (cursor задан): стабильный обход без дублей.\n   cursor = X-Next-Cursor из предыдущего ответа (base64 ключа сортировки).\n   offset игнорируется. Нет дублей при добавлении новых строк во время листания.\n\nПартиционный фильтр по ad_metrics.cycle_ts применяется внутри LATERAL'а\n(последние 7 дней). Если за окно нет метрик — metrics=None.\n\nHeaders ответа:\n- X-Total-Count — реальный COUNT с теми же фильтрами (для пагинатора).\n- X-Next-Cursor — cursor следующей страницы (None/отсутствует если последняя).",
         "operationId": "list_ad_snapshots_api_dashboard_ads_get",
         "parameters": [
           {
@@ -476,7 +571,7 @@
             "required": false,
             "schema": {
               "type": "integer",
-              "maximum": 500,
+              "maximum": 2000,
               "minimum": 1,
               "default": 200,
               "title": "Limit"
@@ -492,6 +587,24 @@
               "default": 0,
               "title": "Offset"
             }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Keyset-cursor для виртуализации 1000+ строк. Если задан — offset игнорируется. Получается из заголовка X-Next-Cursor предыдущего ответа.",
+              "title": "Cursor"
+            },
+            "description": "Keyset-cursor для виртуализации 1000+ строк. Если задан — offset игнорируется. Получается из заголовка X-Next-Cursor предыдущего ответа."
           }
         ],
         "responses": {
@@ -818,7 +931,7 @@
           "dashboard"
         ],
         "summary": "Get Dashboard Batch",
-        "description": "Композит stats + recent_incidents + recent_alerts + recent_disable_tasks\n+ enable_recommendations_pending.\n\nСнижает количество fetch'ей на DashboardPage с 5 до 1.\nПоведение при partial failure: если один из подзапросов падает —\nвозвращаем для него default (пустой массив или нулевой stats).\nОстальные секции возвращаются. Это согласовано с UX: фронт не отображает\nошибку всему экрану, если упала одна секция.",
+        "description": "Композит stats + recent_incidents + recent_alerts + recent_disable_tasks\n+ recent_enable_tasks + enable_recommendations_pending.\n\nСнижает количество fetch'ей на DashboardPage с 6 до 1.\nПоведение при partial failure: если один из подзапросов падает —\nвозвращаем для него default (пустой массив или нулевой stats).\nОстальные секции возвращаются. Это согласовано с UX: фронт не отображает\nошибку всему экрану, если упала одна секция.\n\nrecent_enable_tasks — задачи включения объявлений (activate_ad), аналог\nrecent_disable_tasks. Управляется отдельным параметром enable_limit.",
         "operationId": "get_dashboard_batch_api_dashboard_batch_get",
         "parameters": [
           {
@@ -855,6 +968,18 @@
               "minimum": 1,
               "default": 10,
               "title": "Disable Limit"
+            }
+          },
+          {
+            "name": "enable_limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 10,
+              "title": "Enable Limit"
             }
           }
         ],
@@ -1153,6 +1278,48 @@
         }
       }
     },
+    "/api/dashboard/disable-tasks/bulk": {
+      "post": {
+        "tags": [
+          "dashboard"
+        ],
+        "summary": "Bulk Create Disable Tasks",
+        "description": "Массовое отключение объявлений (money-критично).\n\nНа каждый fb_ad_id — отдельный create_mutation_task pause_ad в собственной\nтранзакции (idempotent через per-ad ключ manual:pause_ad:{id}:{token}).\nЧастичный откат невозможен: падение на одном ad не теряет уже созданные задачи.\n\nОтвет partial-failure (HTTP 200):\n  created — задачи, созданные этим запросом;\n  skipped — дубли (ключ уже был): повтор того же idempotency_token или race;\n  failed  — ad не найден в fb_ads / неожиданная ошибка.\n\n422 — только на валидации входа (пустой/слишком большой batch). Логика в\ncore.tasks.bulk_disable.process_bulk_disable (тестируется изолированно).",
+        "operationId": "bulk_create_disable_tasks_api_dashboard_disable_tasks_bulk_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkDisableIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkDisableResultOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/dashboard/disable-tasks/{task_id}/retry": {
       "post": {
         "tags": [
@@ -1218,6 +1385,170 @@
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/dashboard/draft-tasks": {
+      "get": {
+        "tags": [
+          "drafts"
+        ],
+        "summary": "List Draft Tasks",
+        "description": "Список DRAFT meta-mutation задач (status='draft', task_type='meta_api_mutation').",
+        "operationId": "list_draft_tasks_api_dashboard_draft_tasks_get",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Фильтр по mutation_kind",
+              "title": "Kind"
+            },
+            "description": "Фильтр по mutation_kind"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TmaDraftOut"
+                  },
+                  "title": "Response List Draft Tasks Api Dashboard Draft Tasks Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/dashboard/draft-tasks/{task_id}/confirm": {
+      "post": {
+        "tags": [
+          "drafts"
+        ],
+        "summary": "Confirm Draft Task",
+        "description": "DRAFT → PENDING.\n\nAdmin-зона подтверждает только безхозные черновики (created_by_chat_id IS NULL,\nсозданные через MCP/HTTP). Черновики от конкретного TG-пользователя — 409\n(их подтверждают в Telegram). Money-критично: ACL внутри approve_draft_task.",
+        "operationId": "confirm_draft_task_api_dashboard_draft_tasks__task_id__confirm_post",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Task Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TmaDraftActionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/dashboard/draft-tasks/{task_id}/reject": {
+      "post": {
+        "tags": [
+          "drafts"
+        ],
+        "summary": "Reject Draft Task",
+        "description": "Отклонить (cancel) DRAFT-задачу.",
+        "operationId": "reject_draft_task_api_dashboard_draft_tasks__task_id__reject_post",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Task Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TmaRejectRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TmaDraftActionResponse"
+                }
+              }
+            }
           },
           "422": {
             "description": "Validation Error",
@@ -2181,7 +2512,7 @@
           "observer"
         ],
         "summary": "Get Observer Status",
-        "description": "Возвращает статус observer-воркера из Redis ключа observer:runtime.\n\nЕсли ключ отсутствует — возвращает {status: unknown, last_scan_at: null, ...}.\nНикогда не падает с 5xx.\nИспользует read_observer_runtime() — единственную точку чтения контракта.",
+        "description": "Возвращает статус observer-воркера из Redis ключа observer:runtime.\n\nЕсли ключ отсутствует — возвращает {status: unknown, last_scan_at: null, ...}.\nНикогда не падает с 5xx.\nИспользует read_observer_runtime() — единственную точку чтения контракта.\nДополнительно из scan_runs считает scans_today и outcome последнего скана.",
         "operationId": "get_observer_status_api_observer_status_get",
         "responses": {
           "200": {
@@ -2321,28 +2652,6 @@
         "summary": "Restart Observer",
         "description": "Публикует сигнал рестарта observer-воркера в Redis.\n\nobserver_worker подписан на канал fb_agent:worker:restart:observer\n(main.py::_on_restart) и выполняет graceful stop по этому событию.\nЕсли Redis недоступен — 503.",
         "operationId": "restart_observer_api_observer_restart_post",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RestartSignalResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/disable-worker/restart": {
-      "post": {
-        "tags": [
-          "observer"
-        ],
-        "summary": "Restart Disable Worker",
-        "description": "Публикует сигнал рестарта disable-воркера в Redis.\n\ndisable_worker подписан на канал fb_agent:worker:restart:disable_worker\n(main.py::_on_restart) и выполняет graceful stop по этому событию.\nЕсли Redis недоступен — 503.",
-        "operationId": "restart_disable_worker_api_disable_worker_restart_post",
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -2682,6 +2991,100 @@
         }
       }
     },
+    "/api/offers/rules/preview": {
+      "get": {
+        "tags": [
+          "offers"
+        ],
+        "summary": "Preview Rule Thresholds",
+        "description": "При какой $-стоимости сработают правила и ворнинги для CPA + чувствительности.\n\nИспользует RuleContext — единый расчёт с автостопом: значения в превью ТОЧНО совпадают\nс реальными порогами, по которым observer отключает объявления. Базовые проценты\n(CPC 2% / CPL 10% / CPR 20% / spend 50-70%/70-90%) фиксированы.",
+        "operationId": "preview_rule_thresholds_api_offers_rules_preview_get",
+        "parameters": [
+          {
+            "name": "cpa",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "exclusiveMinimum": 0.0
+                },
+                {
+                  "type": "string",
+                  "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+                }
+              ],
+              "description": "CPA ($) для расчёта порогов",
+              "title": "Cpa"
+            },
+            "description": "CPA ($) для расчёта порогов"
+          },
+          {
+            "name": "stop_percent_of_rule",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "maximum": 100.0,
+                  "minimum": 1.0
+                },
+                {
+                  "type": "string",
+                  "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+                }
+              ],
+              "default": "80",
+              "title": "Stop Percent Of Rule"
+            }
+          },
+          {
+            "name": "warning_percent_of_stop",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "maximum": 100.0,
+                  "minimum": 1.0
+                },
+                {
+                  "type": "string",
+                  "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+                }
+              ],
+              "default": "80",
+              "title": "Warning Percent Of Stop"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RulePreviewOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/settings/observer": {
       "get": {
         "tags": [
@@ -2828,49 +3231,31 @@
         }
       }
     },
-    "/api/settings/observer/act-via-api": {
-      "patch": {
+    "/api/settings/observer/campaigns": {
+      "get": {
         "tags": [
           "settings"
         ],
-        "summary": "Patch Observer Act Via Api",
-        "description": "Переключает только act_via_api — канал исполнения toggle-действий.\n\nTrue → авто-стоп observer'а и ручные кнопки идут через Marketing API\n(pause_ad/activate_ad). False → DOM-клик через browser-agent. Требует\nзапущенного meta_api_worker при True.",
-        "operationId": "patch_observer_act_via_api_api_settings_observer_act_via_api_patch",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ActViaApiToggleRequest"
-              }
-            }
-          },
-          "required": true
-        },
+        "summary": "List Observer Campaigns",
+        "description": "Список кампаний (накопленных observer'ом) для выбора allowlist (#3).\n\nФильтр по owner_campaign_tag (word-boundary, через campaign_matches_owner).\nselected — входит ли кампания в текущий allowlist (cfg.campaign_ids).\nКампании без Meta fb_campaign_id пропускаются — их нельзя заскоупить по campaign.id.",
+        "operationId": "list_observer_campaigns_api_settings_observer_campaigns_get",
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ObserverSettingsResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "items": {
+                    "$ref": "#/components/schemas/CampaignOption"
+                  },
+                  "type": "array",
+                  "title": "Response List Observer Campaigns Api Settings Observer Campaigns Get"
                 }
               }
             }
           }
         }
-      }
-    },
-    "/api/settings/observer/campaigns": {
+      },
       "patch": {
         "tags": [
           "settings"
@@ -2905,6 +3290,32 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/settings/observer/campaigns/refresh": {
+      "post": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Refresh Observer Campaigns",
+        "description": "Live-обновление списка кампаний через browser-agent (Graph API, МИМО allowlist).\n\nРешает «замкнутый круг»: обычный скан с allowlist не подхватывает новые кампании,\nпоэтому их нельзя выбрать. Здесь резолвим ВСЕ кампании владельца по owner_tag живьём,\nапсертим в fb_campaigns (чтобы GET /campaigns их видел) и возвращаем обновлённый список.\n503 при недоступности browser-agent.",
+        "operationId": "refresh_observer_campaigns_api_settings_observer_campaigns_refresh_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/CampaignOption"
+                  },
+                  "type": "array",
+                  "title": "Response Refresh Observer Campaigns Api Settings Observer Campaigns Refresh Post"
                 }
               }
             }
@@ -3175,7 +3586,7 @@
           "settings"
         ],
         "summary": "Put Vision Settings",
-        "description": "Обновляет x_token и/или profile_id в VisionConfig singleton.\n\nЕсли x_token передан — шифрует и сохраняет.\nЕсли profile_id передан — обновляет.\nЕсли строки ещё нет — создаёт с server-defaults.",
+        "description": "Обновляет x_token / profile_id / флаг self-heal в VisionConfig singleton.\n\nЕсли x_token передан — шифрует и сохраняет.\nЕсли profile_id передан — обновляет.\nЕсли auto_restart_on_missing_cdp передан — выставляет флаг (None = не трогать).\nЕсли строки ещё нет — создаёт с server-defaults.",
         "operationId": "put_vision_settings_api_settings_vision_put",
         "requestBody": {
           "content": {
@@ -3227,6 +3638,29 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/VisionReconnectResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/vision/ensure-cdp": {
+      "post": {
+        "tags": [
+          "settings",
+          "settings"
+        ],
+        "summary": "Post Vision Ensure Cdp",
+        "description": "Bootstrap CDP при старте (run.sh): проверяет cdp_ready, при необходимости reconnect.\n\nНикогда не падает 5xx — всегда {ok,status,action,message}. Если CDP уже готов —\naction=none. Если нет — пытается reconnect; при недоступности browser-agent\nвозвращает ok=false (run.sh покажет мягкий warning, а не ошибку 404/503).",
+        "operationId": "post_vision_ensure_cdp_api_vision_ensure_cdp_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisionEnsureCdpResponse"
                 }
               }
             }
@@ -3347,7 +3781,7 @@
           "tma"
         ],
         "summary": "Tma Disable Ad",
-        "description": "Создаёт задачу на отключение объявления (money-действие).\n\nКанал (meta_api pause_ad / DOM disable) — по observer_config.act_via_api,\nкак ручная кнопка бота. requested_by = tma:<telegram_user_id>.",
+        "description": "Создаёт задачу на отключение объявления (money-действие).\n\nКанал — только Marketing API (meta_api pause_ad, точно по ad_id),\nкак ручная кнопка бота. requested_by = tma:<telegram_user_id>.",
         "operationId": "tma_disable_ad_api_tma_ads__fb_ad_id__disable_post",
         "parameters": [
           {
@@ -3576,7 +4010,7 @@
           "tma"
         ],
         "summary": "Tma Get Draft Task",
-        "description": "Детали одной DRAFT-задачи. 404 — нет или уже не draft.",
+        "description": "Детали одной DRAFT-задачи. 404 — нет или уже не draft.\n\nВ отличие от list, здесь заполняется:\n- expires_at: дедлайн подтверждения (created_at + 24h).\n- current_state: текущее состояние объекта мутации (для показа diff было→станет).",
         "operationId": "tma_get_draft_task_api_tma_draft_tasks__task_id__get",
         "parameters": [
           {
@@ -3801,7 +4235,7 @@
           "tools"
         ],
         "summary": "Get Campaign Creative Folders",
-        "description": "Возвращает список папок с креативами из корня FB_Agent_Creo.\n\nСканирует 1 уровень глубины. Возвращает пустой список если корня нет.",
+        "description": "Возвращает список папок с креативами из корня FB_Agent_Creo.\n\nProd-safe: читает структуру FS без открытия GUI или записи файлов.\nСканирует 1 уровень глубины. Возвращает пустой список если корня нет.\nИспользуется Mini App Scripts-экраном.",
         "operationId": "get_campaign_creative_folders_api_tools_campaign_create_folders_get",
         "responses": {
           "200": {
@@ -3949,20 +4383,6 @@
         ],
         "title": "AIAnalyzeResponse",
         "description": "Ответ AI-анализа."
-      },
-      "ActViaApiToggleRequest": {
-        "properties": {
-          "enabled": {
-            "type": "boolean",
-            "title": "Enabled"
-          }
-        },
-        "type": "object",
-        "required": [
-          "enabled"
-        ],
-        "title": "ActViaApiToggleRequest",
-        "description": "Тело PATCH /settings/observer/act-via-api."
       },
       "AdSnapshotOut": {
         "properties": {
@@ -4541,6 +4961,208 @@
         ],
         "title": "Body_creative_uniquify_api_tools_creative_uniquify_post"
       },
+      "BulkDisableFailed": {
+        "properties": {
+          "fb_ad_id": {
+            "type": "string",
+            "title": "Fb Ad Id"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "fb_ad_id",
+          "reason"
+        ],
+        "title": "BulkDisableFailed",
+        "description": "Объявление, для которого задачу создать не удалось."
+      },
+      "BulkDisableIn": {
+        "properties": {
+          "fb_ad_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Fb Ad Ids",
+            "description": "Список Meta numeric ad ID (1..50)"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason",
+            "description": "Причина отключения",
+            "default": "manual bulk disable"
+          },
+          "idempotency_token": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Idempotency Token",
+            "description": "Client-side токен против двойного submit (общий для всего batch)"
+          },
+          "requested_by": {
+            "type": "string",
+            "title": "Requested By",
+            "description": "Инициатор (провенанс)",
+            "default": "api_user"
+          },
+          "requested_by_chat_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requested By Chat Id",
+            "description": "TG chat_id инициатора"
+          }
+        },
+        "type": "object",
+        "required": [
+          "fb_ad_ids",
+          "idempotency_token"
+        ],
+        "title": "BulkDisableIn",
+        "description": "Тело POST /dashboard/disable-tasks/bulk (массовое отключение)."
+      },
+      "BulkDisableResultOut": {
+        "properties": {
+          "created": {
+            "items": {
+              "$ref": "#/components/schemas/TaskQueueRowOut"
+            },
+            "type": "array",
+            "title": "Created"
+          },
+          "skipped": {
+            "items": {
+              "$ref": "#/components/schemas/BulkDisableSkipped"
+            },
+            "type": "array",
+            "title": "Skipped"
+          },
+          "failed": {
+            "items": {
+              "$ref": "#/components/schemas/BulkDisableFailed"
+            },
+            "type": "array",
+            "title": "Failed"
+          }
+        },
+        "type": "object",
+        "title": "BulkDisableResultOut",
+        "description": "Partial-failure ответ bulk-отключения. HTTP 200 даже при частичном успехе."
+      },
+      "BulkDisableSkipped": {
+        "properties": {
+          "fb_ad_id": {
+            "type": "string",
+            "title": "Fb Ad Id"
+          },
+          "task_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Id"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason",
+            "default": "duplicate"
+          }
+        },
+        "type": "object",
+        "required": [
+          "fb_ad_id"
+        ],
+        "title": "BulkDisableSkipped",
+        "description": "Объявление, для которого задача уже существовала (дубль idempotency_key)."
+      },
+      "BulkSnoozeFailed": {
+        "properties": {
+          "fb_ad_id": {
+            "type": "string",
+            "title": "Fb Ad Id"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "fb_ad_id",
+          "reason"
+        ],
+        "title": "BulkSnoozeFailed",
+        "description": "Объявление, которое не удалось снузить (нет ad или нет состояния алерта)."
+      },
+      "BulkSnoozeIn": {
+        "properties": {
+          "fb_ad_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Fb Ad Ids",
+            "description": "Список Meta numeric ad ID (1..50)"
+          },
+          "minutes": {
+            "type": "integer",
+            "maximum": 1440.0,
+            "minimum": 1.0,
+            "title": "Minutes",
+            "description": "Снуз в минутах (1..1440)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "fb_ad_ids",
+          "minutes"
+        ],
+        "title": "BulkSnoozeIn",
+        "description": "Тело POST /dashboard/ads/bulk-snooze."
+      },
+      "BulkSnoozeResultOut": {
+        "properties": {
+          "snoozed_until": {
+            "type": "string",
+            "title": "Snoozed Until"
+          },
+          "snoozed": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Snoozed"
+          },
+          "failed": {
+            "items": {
+              "$ref": "#/components/schemas/BulkSnoozeFailed"
+            },
+            "type": "array",
+            "title": "Failed"
+          }
+        },
+        "type": "object",
+        "required": [
+          "snoozed_until"
+        ],
+        "title": "BulkSnoozeResultOut",
+        "description": "Partial-failure ответ bulk-снуза. HTTP 200 даже при частичном успехе."
+      },
       "CampaignAdPlanOut": {
         "properties": {
           "name": {
@@ -4756,6 +5378,30 @@
         ],
         "title": "CampaignManualGuideSectionOut",
         "description": "Секция ручного помощника."
+      },
+      "CampaignOption": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "selected": {
+            "type": "boolean",
+            "title": "Selected"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "selected"
+        ],
+        "title": "CampaignOption",
+        "description": "Кампания для выбора в allowlist сканирования (#3)."
       },
       "CampaignPlanRequest": {
         "properties": {
@@ -5060,6 +5706,14 @@
             "type": "array",
             "title": "Recent Disable Tasks"
           },
+          "recent_enable_tasks": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Recent Enable Tasks"
+          },
           "enable_recommendations_pending": {
             "items": {
               "additionalProperties": true,
@@ -5074,7 +5728,7 @@
           "stats"
         ],
         "title": "DashboardBatchOut",
-        "description": "Композитный ответ /api/dashboard/batch — снижает количество fetch'ей на фронте.\n\nКонтракт: даже если одна из секций упала, остальные возвращаются (см.\npartial-failure поведение в роутере). Списки могут быть пустыми."
+        "description": "Композитный ответ /api/dashboard/batch — снижает количество fetch'ей на фронте.\n\nКонтракт: даже если одна из секций упала, остальные возвращаются (см.\npartial-failure поведение в роутере). Списки могут быть пустыми.\n\nСекции:\n- recent_disable_tasks: задачи отключения (meta_api_mutation pause_ad / legacy disable)\n- recent_enable_tasks: задачи включения (meta_api_mutation activate_ad / legacy enable)"
       },
       "DashboardPerformanceOut": {
         "properties": {
@@ -6674,18 +7328,6 @@
             "title": "Owner Campaign Tag",
             "description": "Теги владельца кампаний для owner-scoping. Один или несколько через запятую (например, 'MV' или 'MV,ABC,XYZ') — кампания отслеживается при совпадении с любым. Пусто/null — фильтр выключен, обрабатываются все кампании."
           },
-          "act_via_api": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Act Via Api",
-            "description": "Канал toggle-действий (disable/enable). False — DOM-клик browser-agent, True — Marketing API (pause_ad/activate_ad, точно по ad_id). null — не менять."
-          },
           "campaign_ids": {
             "anyOf": [
               {
@@ -6735,11 +7377,6 @@
               }
             ],
             "title": "Owner Campaign Tag"
-          },
-          "act_via_api": {
-            "type": "boolean",
-            "title": "Act Via Api",
-            "default": false
           },
           "campaign_ids": {
             "items": {
@@ -6792,6 +7429,22 @@
               }
             ],
             "title": "Last Scan At"
+          },
+          "last_scan_outcome": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Scan Outcome"
+          },
+          "scans_today": {
+            "type": "integer",
+            "title": "Scans Today",
+            "default": 0
           },
           "interval_seconds": {
             "anyOf": [
@@ -6924,9 +7577,14 @@
             "description": "Уникальный код оффера"
           },
           "name": {
-            "type": "string",
-            "maxLength": 128,
-            "minLength": 1,
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Name"
           },
           "vertical": {
@@ -6977,8 +7635,7 @@
         },
         "type": "object",
         "required": [
-          "code",
-          "name"
+          "code"
         ],
         "title": "OfferCreateIn",
         "description": "Тело POST /offers."
@@ -7216,6 +7873,18 @@
               }
             ],
             "title": "Funnel Ratio Threshold"
+          },
+          "stop_percent_of_rule": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Stop Percent Of Rule",
+            "default": "80"
+          },
+          "warning_percent_of_stop": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Warning Percent Of Stop",
+            "default": "80"
           }
         },
         "type": "object",
@@ -7321,6 +7990,36 @@
               }
             ],
             "title": "Funnel Ratio Threshold"
+          },
+          "stop_percent_of_rule": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 100.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              }
+            ],
+            "title": "Stop Percent Of Rule",
+            "default": "80"
+          },
+          "warning_percent_of_stop": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 100.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$"
+              }
+            ],
+            "title": "Warning Percent Of Stop",
+            "default": "80"
           }
         },
         "type": "object",
@@ -7343,9 +8042,7 @@
           "name": {
             "anyOf": [
               {
-                "type": "string",
-                "maxLength": 128,
-                "minLength": 1
+                "type": "string"
               },
               {
                 "type": "null"
@@ -7445,7 +8142,92 @@
           "channel"
         ],
         "title": "RestartSignalResponse",
-        "description": "Ответ на POST /observer/restart или /disable-worker/restart."
+        "description": "Ответ на POST /observer/restart."
+      },
+      "RulePreviewOut": {
+        "properties": {
+          "cpa": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Cpa"
+          },
+          "stop_percent_of_rule": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Stop Percent Of Rule"
+          },
+          "warning_percent_of_stop": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Warning Percent Of Stop"
+          },
+          "cost_rules": {
+            "items": {
+              "$ref": "#/components/schemas/RuleThresholdPreview"
+            },
+            "type": "array",
+            "title": "Cost Rules"
+          },
+          "spend_ranges": {
+            "items": {
+              "$ref": "#/components/schemas/SpendRangePreview"
+            },
+            "type": "array",
+            "title": "Spend Ranges"
+          },
+          "regs_no_dep_stop_count": {
+            "type": "integer",
+            "title": "Regs No Dep Stop Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "cpa",
+          "stop_percent_of_rule",
+          "warning_percent_of_stop",
+          "cost_rules",
+          "spend_ranges",
+          "regs_no_dep_stop_count"
+        ],
+        "title": "RulePreviewOut",
+        "description": "Превью порогов автостопа для CPA + чувствительности.\n\nСчитается через RuleContext — ТОТ ЖЕ расчёт, что применяет автостоп: цифры в UI\nсовпадают с реальными порогами, по которым observer отключает объявления."
+      },
+      "RuleThresholdPreview": {
+        "properties": {
+          "rule": {
+            "type": "string",
+            "title": "Rule"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "base": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Base"
+          },
+          "stop": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Stop"
+          },
+          "warning": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Warning"
+          }
+        },
+        "type": "object",
+        "required": [
+          "rule",
+          "label",
+          "base",
+          "stop",
+          "warning"
+        ],
+        "title": "RuleThresholdPreview",
+        "description": "Один порог-правило: при какой $-стоимости сработают стоп и ворнинг."
       },
       "RuleViolationOut": {
         "properties": {
@@ -7624,6 +8406,47 @@
         "title": "ScanningToggleRequest",
         "description": "Тело PATCH /settings/observer/scanning."
       },
+      "SnoozeIn": {
+        "properties": {
+          "minutes": {
+            "type": "integer",
+            "maximum": 1440.0,
+            "minimum": 1.0,
+            "title": "Minutes",
+            "description": "Снуз в минутах (1..1440)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "minutes"
+        ],
+        "title": "SnoozeIn",
+        "description": "Тело POST /dashboard/ads/{fb_ad_id}/snooze."
+      },
+      "SnoozeResultOut": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "title": "Ok"
+          },
+          "fb_ad_id": {
+            "type": "string",
+            "title": "Fb Ad Id"
+          },
+          "snoozed_until": {
+            "type": "string",
+            "title": "Snoozed Until"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ok",
+          "fb_ad_id",
+          "snoozed_until"
+        ],
+        "title": "SnoozeResultOut",
+        "description": "Результат одиночного снуза."
+      },
       "SpendPointOut": {
         "properties": {
           "cycle_ts": {
@@ -7715,6 +8538,43 @@
         ],
         "title": "SpendPointOut",
         "description": "Одна точка ad_metrics для /api/dashboard/spend-history (не бакетированная)."
+      },
+      "SpendRangePreview": {
+        "properties": {
+          "rule": {
+            "type": "string",
+            "title": "Rule"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "stop_from": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Stop From"
+          },
+          "stop_to": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Stop To"
+          },
+          "warning_from": {
+            "type": "string",
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Warning From"
+          }
+        },
+        "type": "object",
+        "required": [
+          "rule",
+          "label",
+          "stop_from",
+          "stop_to",
+          "warning_from"
+        ],
+        "title": "SpendRangePreview",
+        "description": "Диапазон расхода (% от CPA → $)."
       },
       "StartCabinetDayResponse": {
         "properties": {
@@ -8445,6 +9305,29 @@
               }
             ],
             "title": "Created At"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "current_state": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current State"
           }
         },
         "type": "object",
@@ -8454,7 +9337,7 @@
           "requested_by"
         ],
         "title": "TmaDraftOut",
-        "description": "Снимок DRAFT meta-mutation задачи для DraftsPage."
+        "description": "Снимок DRAFT meta-mutation задачи для DraftsPage.\n\nexpires_at: время автоматической отмены (created_at + DRAFT_TTL_SECONDS).\ncurrent_state: текущее состояние объекта мутации (заполняется в detail-endpoint'е).\n    - pause_ad / activate_ad: {\"alert_state\": str, \"delivery_status\": str | None}\n    - set_adset_budget: {\"daily_budget_cents\": int | None, \"lifetime_budget_cents\": int | None}\n    - bulk_status_change: {\"by_state\": {\"<state>\": count}} — агрегат по N объектам\n    - Остальные mutation_kind → null (не поддерживаются / слишком дорого).\nВ list-endpoint'е current_state = None (дорого резолвить N строк)."
       },
       "TmaMeResponse": {
         "properties": {
@@ -8684,6 +9567,33 @@
         ],
         "title": "ValidationError"
       },
+      "VisionEnsureCdpResponse": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "title": "Ok",
+            "default": true
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "default": "UNKNOWN"
+          },
+          "action": {
+            "type": "string",
+            "title": "Action",
+            "default": "none"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "title": "VisionEnsureCdpResponse",
+        "description": "Ответ на POST /vision/ensure-cdp (bootstrap при старте run.sh).\n\nКонтракт под run.sh: ok|status|action|message. Эндпоинт никогда не падает 5xx —\nпри недоступности browser-agent возвращает ok=false с пояснением."
+      },
       "VisionReconnectResponse": {
         "properties": {
           "status": {
@@ -8785,11 +9695,22 @@
               }
             ],
             "title": "Profile Id"
+          },
+          "auto_restart_on_missing_cdp": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auto Restart On Missing Cdp"
           }
         },
         "type": "object",
         "title": "VisionSettingsUpdateRequest",
-        "description": "Тело PUT /settings/vision — обновить x_token и/или profile_id."
+        "description": "Тело PUT /settings/vision — обновить x_token / profile_id / флаг self-heal."
       },
       "WorkerStatus": {
         "properties": {

@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react";
-import { Button } from "@/components/ui/Button";
 import { Plus, Trash2 } from "lucide-react";
+import { Button } from "../src/components/ui/Button";
 
 const meta: Meta<typeof Button> = {
   title: "UI/Button",
@@ -9,64 +9,72 @@ const meta: Meta<typeof Button> = {
   argTypes: {
     variant: {
       control: "select",
-      options: ["primary", "secondary", "ghost", "danger", "link"],
+      options: ["primary", "secondary", "danger", "ghost", "ghost-danger", "link"],
     },
-    size: { control: "select", options: ["xs", "sm", "md", "lg"] },
+    size: { control: "select", options: ["xs", "sm", "md", "lg", "icon"] },
   },
 };
-export default meta;
 
+export default meta;
 type Story = StoryObj<typeof Button>;
 
 export const Primary: Story = {
-  args: { variant: "primary", size: "md", children: "Scan now" },
+  args: { variant: "primary", children: "Создать кампанию" },
 };
 
 export const Secondary: Story = {
-  args: { variant: "secondary", size: "md", children: "Settings" },
-};
-
-export const Ghost: Story = {
-  args: { variant: "ghost", size: "md", children: "View all" },
+  args: { variant: "secondary", children: "Отмена" },
 };
 
 export const Danger: Story = {
-  args: {
-    variant: "danger",
-    size: "md",
-    children: "Disable ad",
-    leftIcon: <Trash2 size={14} />,
-  },
+  args: { variant: "danger", children: "Удалить" },
 };
 
-export const WithIcon: Story = {
-  args: {
-    variant: "primary",
-    size: "md",
-    children: "New offer",
-    leftIcon: <Plus size={14} />,
-  },
+export const Ghost: Story = {
+  args: { variant: "ghost", children: "Подробнее" },
+};
+
+export const GhostDanger: Story = {
+  args: { variant: "ghost-danger", children: "Отключить" },
+};
+
+export const WithLeftIcon: Story = {
+  args: { variant: "primary", leftIcon: <Plus size={14} />, children: "Добавить" },
+};
+
+export const WithRightIcon: Story = {
+  args: { variant: "secondary", rightIcon: <Trash2 size={14} />, children: "Удалить" },
 };
 
 export const Loading: Story = {
-  args: { variant: "primary", size: "md", children: "Saving...", loading: true },
+  args: { variant: "primary", loading: true, children: "Сохраняем..." },
+};
+
+export const Disabled: Story = {
+  args: { variant: "primary", disabled: true, children: "Недоступно" },
+};
+
+export const IconOnly: Story = {
+  args: { variant: "ghost", size: "icon", "aria-label": "Добавить", children: <Plus size={14} /> },
 };
 
 export const Sizes: Story = {
   render: () => (
     <div className="flex items-center gap-3">
-      <Button variant="secondary" size="xs">
-        xs
-      </Button>
-      <Button variant="secondary" size="sm">
-        sm
-      </Button>
-      <Button variant="secondary" size="md">
-        md
-      </Button>
-      <Button variant="secondary" size="lg">
-        lg
-      </Button>
+      <Button variant="secondary" size="xs">XS</Button>
+      <Button variant="secondary" size="sm">SM</Button>
+      <Button variant="secondary" size="md">MD</Button>
+      <Button variant="secondary" size="lg">LG</Button>
+    </div>
+  ),
+};
+
+export const AllVariants: Story = {
+  render: () => (
+    <div className="flex flex-wrap gap-3">
+      {(["primary", "secondary", "danger", "ghost", "ghost-danger"] as const).map((v) => (
+        <Button key={v} variant={v}>{v}</Button>
+      ))}
     </div>
   ),
 };

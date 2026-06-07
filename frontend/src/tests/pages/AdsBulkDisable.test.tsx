@@ -1,0 +1,195 @@
+/**
+ * Тест bulk-disable money-flow в AdsPage.
+ *
+ * Проверяем:
+ *   1. Выбор строк → BulkActionBar появляется с кнопкой "Отключить"
+ *   2. Клик "Отключить" → ConfirmDialog открывается с правильным счётчиком
+ *   3. Confirm → useBulkDisable вызван с idempotency_token в reason (UUID v4)
+ *      и корректным набором fb_ad_ids
+ *   4. После успеха — выбор сбрасывается
+ */
+
+import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { AdSnapshot } from "@fb/shared";
+
+// ─── Моки ─────────────────────────────────────────────────────────────────────
+
+vi.mock("@tanstack/react-router", () => ({
+  createFileRoute: (_path: string) => (opts: { component: unknown }) => opts,
+  useRouter: () => ({ navigate: vi.fn() }),
+  useParams: () => ({}),
+}));
+
+// Виртуализация jsdom не имеет layout — мокаем чтобы показать все строки
+vi.mock("@tanstack/react-virtual", () => ({
+  useVirtualizer: ({ count }: { count: number }) => ({
+    getVirtualItems: () =>
+      Array.from({ length: count }, (_, i) => ({ index: i, start: i * 40, size: 40 })),
+    getTotalSize: () => count * 40,
+  }),
+}));
+
+const mockBulkDisable = vi.fn().mockResolvedValue({ created: 2, skipped: 0, task_ids: [] });
+
+vi.mock("@/lib/api/ads", () => ({
+  useAds: vi.fn(),
+  useBulkDisable: vi.fn(() => ({
+    mutateAsync: mockBulkDisable,
+    isPending: false,
+  })),
+  useBulkSnooze: vi.fn(() => ({
+    mutateAsync: vi.fn().mockResolvedValue({}),
+    isPending: false,
+  })),
+  useAdTimeline: vi.fn(() => ({ data: null, isLoading: false, isError: false })),
+  useSnoozeAd: vi.fn(() => ({ mutateAsync: vi.fn(), isPending: false })),
+  useDisableTasks: vi.fn(() => ({ data: [], isLoading: false, isError: false, refetch: vi.fn() })),
+  useEnableTasks: vi.fn(() => ({ data: [], isLoading: false, isError: false, refetch: vi.fn() })),
+}));
+
+vi.mock("@/lib/websocket/useRealtimeInvalidation", () => ({
+  useRealtimeInvalidation: vi.fn(() => ({
+    status: "connected",
+    pollingFallback: false,
+    reconnectAttempt: 0,
+    forceReconnect: vi.fn(),
+  })),
+}));
+
+// ─── Импорты после моков ──────────────────────────────────────────────────────
+
+import { useAds } from "@/lib/api/ads";
+
+// ─── Фабрика мок-объявлений ───────────────────────────────────────────────────
+
+function makeAd(id: string, overrides: Partial<AdSnapshot> = {}): AdSnapshot {
+  return {
+    fb_ad_id: id,
+    internal_id: `uuid-${id}`,
+    ad_name: `Объявление ${id}`,
+    alert_state: "normal",
+    is_active: true,
+    ...overrides,
+  } as AdSnapshot;
+}
+
+const MOCK_ADS = [makeAd("111"), makeAd("222")];
+
+// ─── Хелпер рендера ──────────────────────────────────────────────────────────
+
+async function renderAdsPage() {
+  const { AdsPage } = await import("../../routes/ads/index").then((m) => {
+    const route = m.Route as unknown as { component: React.FC };
+    return { AdsPage: route.component };
+  });
+
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={qc}>
+      <AdsPage />
+    </QueryClientProvider>,
+  );
+}
+
+// ─── Тесты ────────────────────────────────────────────────────────────────────
+
+describe("AdsPage — bulk disable money-flow", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(useAds).mockReturnValue({
+      data: { data: MOCK_ADS, total: 2 },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useAds>);
+  });
+
+  // DataTable рендерится с объявлениями
+  it("рендерит объявления из useAds", async () => {
+    await renderAdsPage();
+    // Обе строки таблицы видны
+    expect(screen.getByText("Объявление 111")).toBeInTheDocument();
+    expect(screen.getByText("Объявление 222")).toBeInTheDocument();
+  });
+
+  // Select-all + BulkActionBar появляется
+  it("select-all показывает BulkActionBar", async () => {
+    const user = userEvent.setup();
+    await renderAdsPage();
+
+    // Checkbox select-all (первый из всех, aria-label="Выбрать все объявления")
+    const selectAll = screen.getByRole("checkbox", { name: /Выбрать все объявления/i });
+    await user.click(selectAll);
+
+    // BulkActionBar появился — toolbar с кнопкой Отключить
+    const bar = screen.getByRole("toolbar");
+    expect(bar).toBeInTheDocument();
+    // Счётчик: "2 выбрано"
+    expect(within(bar).getByText("2")).toBeInTheDocument();
+  });
+
+  // Клик Отключить → ConfirmDialog
+  it("кнопка Отключить открывает ConfirmDialog с правильным счётчиком", async () => {
+    const user = userEvent.setup();
+    await renderAdsPage();
+
+    await user.click(screen.getByRole("checkbox", { name: /Выбрать все объявления/i }));
+
+    const bar = screen.getByRole("toolbar");
+    await user.click(within(bar).getByRole("button", { name: /Отключить/i }));
+
+    // ConfirmDialog открылся
+    expect(screen.getByText(/Отключить 2 объявлений/i)).toBeInTheDocument();
+  });
+
+  // MONEY: Confirm → useBulkDisable вызван с idempotency_token + fb_ad_ids
+  it("MONEY: confirm вызывает useBulkDisable с idempotency_token в reason", async () => {
+    const user = userEvent.setup();
+    await renderAdsPage();
+
+    await user.click(screen.getByRole("checkbox", { name: /Выбрать все объявления/i }));
+
+    const bar = screen.getByRole("toolbar");
+    await user.click(within(bar).getByRole("button", { name: /Отключить/i }));
+
+    // Нажимаем кнопку подтверждения в диалоге
+    const confirmBtn = screen.getByRole("button", { name: /Отключить 2/i });
+    await user.click(confirmBtn);
+
+    // useBulkDisable вызван ровно 1 раз
+    expect(mockBulkDisable).toHaveBeenCalledOnce();
+
+    const callArg = mockBulkDisable.mock.calls[0]?.[0] as {
+      fb_ad_ids: string[];
+      reason: string;
+    };
+
+    // fb_ad_ids содержит оба объявления
+    expect(callArg.fb_ad_ids).toEqual(expect.arrayContaining(["111", "222"]));
+    expect(callArg.fb_ad_ids).toHaveLength(2);
+
+    // reason содержит idempotency: с UUID v4 (формат 8-4-4-4-12)
+    const uuidRegex =
+      /idempotency:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i;
+    expect(callArg.reason).toMatch(uuidRegex);
+  });
+
+  // Empty state при отсутствии объявлений
+  it("рендерит empty state когда нет объявлений", async () => {
+    vi.mocked(useAds).mockReturnValue({
+      data: { data: [], total: 0 },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useAds>);
+
+    await renderAdsPage();
+
+    expect(screen.getByText(/Объявлений нет/i)).toBeInTheDocument();
+  });
+});

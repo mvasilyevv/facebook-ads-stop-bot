@@ -1,55 +1,57 @@
 /**
- * Hooks для /drafts-страницы.
+ * API-хуки для Drafts-страницы (мета-мутации, ожидающие подтверждения).
  *
- * «Черновики» = DRAFT meta_api_mutation (AI-предложения действий через Marketing API),
- * требующие ручного подтверждения (DRAFT → PENDING через /dashboard/draft-tasks/{id}/confirm).
- * disable/enable не имеют draft-фазы (auto-stop/manual создают pending сразу) и здесь НЕ
- * показываются — их статус виден на Dashboard/Ads. Раньше страница тянула их pending через
- * /retry → 409 (retry только для failed/cancelled); этот мёртвый источник убран.
+ * Эндпоинты:
+ *   GET  /api/dashboard/draft-tasks               → DraftOut[]  (список черновиков)
+ *   POST /api/dashboard/draft-tasks/{id}/confirm  → DraftActionResponse
+ *   POST /api/dashboard/draft-tasks/{id}/reject   → DraftActionResponse
  */
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { apiClient } from "./client";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { apiGet, apiSend } from "./client";
+import type { DraftOut } from "@fb/shared";
 
-// ─── meta_api_mutation черновики (status='draft', через admin-роутер) ────────
-
-/** DRAFT meta-mutation задача (AI-предложение действия через Marketing API). */
-export interface MetaDraft {
-  id: number;
-  mutation_kind: string;
-  target_id: string | null;
-  ad_account_id: string | null;
-  payload: Record<string, unknown>;
-  requested_by: string;
-  created_at: string | null;
+interface DraftActionResponse {
+  ok: boolean;
+  task_id: string;
+  status: string;
 }
 
-/** GET /dashboard/draft-tasks — реальные DRAFT meta_api_mutation. */
+// ─── Список черновиков ────────────────────────────────────────────────────────
+
 export function useMetaDrafts() {
-  return useQuery({
-    queryKey: ["drafts", "meta"] as const,
-    queryFn: () => apiClient.get<MetaDraft[]>("/dashboard/draft-tasks", { limit: 100 }),
+  return useQuery<DraftOut[]>({
+    queryKey: ["drafts"],
+    queryFn: ({ signal }) => apiGet<DraftOut[]>("/dashboard/draft-tasks", undefined, signal),
+    staleTime: 10_000,
     refetchInterval: 30_000,
   });
 }
 
-/** POST /dashboard/draft-tasks/{id}/confirm — DRAFT → PENDING (admin-зона). */
-export function useConfirmMetaDraft() {
+// ─── Подтвердить черновик ─────────────────────────────────────────────────────
+
+export function useConfirmDraft() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id: number) => apiClient.post<unknown>(`/dashboard/draft-tasks/${id}/confirm`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["drafts"] }),
+    mutationFn: (taskId: string) =>
+      apiSend<DraftActionResponse>("POST", `/dashboard/draft-tasks/${taskId}/confirm`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["drafts"] });
+      qc.invalidateQueries({ queryKey: ["tasks"] });
+      qc.invalidateQueries({ queryKey: ["dashboard"] });
+    },
   });
 }
 
-/** POST /dashboard/draft-tasks/{id}/reject — DRAFT → CANCELLED. */
-export function useRejectMetaDraft() {
+// ─── Отклонить черновик ───────────────────────────────────────────────────────
+
+export function useRejectDraft() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id: number) =>
-      apiClient.post<unknown>(`/dashboard/draft-tasks/${id}/reject`, {
-        reason: "rejected via dashboard",
-      }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["drafts"] }),
+    mutationFn: (taskId: string) =>
+      apiSend<DraftActionResponse>("POST", `/dashboard/draft-tasks/${taskId}/reject`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["drafts"] });
+    },
   });
 }

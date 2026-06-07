@@ -1,20 +1,25 @@
 /**
- * Input — text/number/password/search × sm/md/lg.
+ * Input + SearchInput — текстовые поля с иконками и лейблами.
+ * Спека: bg-2, border-6, accent-outline при focus.
+ * SearchInput — shortcut с leading Search icon и trailing Kbd.
  */
-
 import { forwardRef, type InputHTMLAttributes, type ReactNode } from "react";
 import { cva, type VariantProps } from "class-variance-authority";
-import { cn } from "@/lib/utils/cn";
+import { Search } from "lucide-react";
+import { cn } from "./cn";
+import { Kbd } from "./Kbd";
 
 const inputStyles = cva(
   [
     "w-full bg-bg-2 border border-bg-6 text-bg-11",
     "placeholder:text-bg-9",
-    "transition-colors",
+    "transition-colors duration-[120ms]",
+    // focus-within outline ставится на обёртку; здесь убираем дефолтный outline
     "focus:bg-bg-3 focus:border-accent focus:outline-none",
-    "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
     "disabled:opacity-40 disabled:cursor-not-allowed",
     "font-body",
+    // focus-visible — для пользователей клавиатуры (outline на самом input)
+    "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
   ],
   {
     variants: {
@@ -22,10 +27,6 @@ const inputStyles = cva(
         sm: "h-7 px-2.5 text-[12.5px]",
         md: "h-8 px-3 text-[13.5px]",
         lg: "h-10 px-4 text-[14px]",
-      },
-      hasLeftIcon: {
-        true: "",
-        false: "",
       },
       hasError: {
         true: "border-danger focus:border-danger",
@@ -67,8 +68,8 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
   },
   ref,
 ) {
-  const errorId = errorMessage ? `${id}-error` : undefined;
-  const helpId = helpText ? `${id}-help` : undefined;
+  const errorId = errorMessage && id ? `${id}-error` : undefined;
+  const helpId = helpText && id ? `${id}-help` : undefined;
 
   return (
     <div className="flex flex-col gap-1.5">
@@ -84,7 +85,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
         {leftIcon ? (
           <span
             aria-hidden="true"
-            className="absolute left-2.5 top-1/2 -translate-y-1/2 text-bg-9"
+            className="absolute left-2.5 top-1/2 -translate-y-1/2 text-bg-9 pointer-events-none"
           >
             {leftIcon}
           </span>
@@ -106,7 +107,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
         {rightIcon ? (
           <span
             aria-hidden="true"
-            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-bg-9"
+            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-bg-9 pointer-events-none"
           >
             {rightIcon}
           </span>
@@ -125,3 +126,26 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
     </div>
   );
 });
+
+// ─── SearchInput ───────────────────────────────────────────────────────────────
+
+interface SearchInputProps extends Omit<InputProps, "leftIcon" | "rightIcon" | "type"> {
+  /** Горячая клавиша, которая отображается справа (напр. "/"). */
+  shortcutKey?: string;
+}
+
+/** Поле поиска с иконкой Search и опциональной Kbd-подсказкой справа. */
+export const SearchInput = forwardRef<HTMLInputElement, SearchInputProps>(
+  function SearchInput({ shortcutKey, size = "md", ...rest }, ref) {
+    return (
+      <Input
+        ref={ref}
+        type="search"
+        size={size}
+        leftIcon={<Search size={14} />}
+        rightIcon={shortcutKey ? <Kbd>{shortcutKey}</Kbd> : undefined}
+        {...rest}
+      />
+    );
+  },
+);

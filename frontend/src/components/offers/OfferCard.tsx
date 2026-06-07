@@ -1,131 +1,178 @@
 /**
- * OfferCard — карточка оффера в grid-листинге.
- * Показывает метрики за N дней из useOffersCompare.
+ * OfferCard — карточка оффера в сетке Offers.
+ *
+ * Показывает: код, название, вертикаль, статус (active/inactive),
+ * метрики из OfferCompareRow (spend, leads, deposits, cost_per_lead, active_ads_count).
+ * Actions: Редактировать правила, Редактировать оффер, Удалить.
  */
 
-import { Settings2, Trash2, Pencil, SlidersHorizontal } from "lucide-react";
-import { Button } from "@/components/ui/Button";
+import { Settings, Pencil, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
-import { Card } from "@/components/ui/Card";
-import { formatSpend, formatInt } from "@/lib/utils/format";
-import type { Offer, OfferCompareRow } from "@/lib/types/api";
+import { Button } from "@/components/ui/Button";
+import { cn } from "@/lib/utils/cn";
+import type { Offer } from "@fb/shared";
+import type { components } from "@fb/shared/api/generated";
+
+type OfferCompareRow = components["schemas"]["OfferCompareRow"];
 
 interface OfferCardProps {
   offer: Offer;
-  /** Метрики из compare-endpoint за N дней (может отсутствовать). */
-  metrics?: OfferCompareRow;
-  onEdit: (offer: Offer) => void;
+  /** Метрики за выбранный период (может отсутствовать при загрузке). */
+  metrics?: OfferCompareRow | null;
+  onEditOffer: (offer: Offer) => void;
+  onEditRules: (offer: Offer) => void;
   onDelete: (offer: Offer) => void;
-  onRules: (offer: Offer) => void;
-  onSensitivity?: (offer: Offer) => void;
 }
 
-export function OfferCard({ offer, metrics, onEdit, onDelete, onRules, onSensitivity }: OfferCardProps) {
+// ─── Вспомогательные функции ──────────────────────────────────────────────────
+
+/** Форматирует spend (строка вида "12345.67" → "$12 345.67"). */
+function fmtSpend(val: string | null | undefined): string {
+  if (!val) return "—";
+  const n = parseFloat(val);
+  if (isNaN(n)) return "—";
+  return `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+/** Форматирует cost_per_lead. */
+function fmtCpl(val: string | null | undefined): string {
+  if (!val) return "—";
+  const n = parseFloat(val);
+  if (isNaN(n)) return "—";
+  return `$${n.toFixed(2)}`;
+}
+
+// ─── Компонент ────────────────────────────────────────────────────────────────
+
+export function OfferCard({
+  offer,
+  metrics,
+  onEditOffer,
+  onEditRules,
+  onDelete,
+}: OfferCardProps) {
+  const isActive = offer.is_active;
+
   return (
-    <Card
-      padded
-      className="flex flex-col gap-5"
-      action={
-        <div className="flex items-center gap-1.5">
-          <Button
-            variant="ghost"
-            size="xs"
-            aria-label="Чувствительность"
-            onClick={() => onSensitivity?.(offer)}
-            title="Чувствительность правил"
-          >
-            <SlidersHorizontal size={13} aria-hidden="true" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="xs"
-            aria-label="Правила"
-            onClick={() => onRules(offer)}
-          >
-            <Settings2 size={13} aria-hidden="true" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="xs"
-            aria-label="Редактировать"
-            onClick={() => onEdit(offer)}
-          >
-            <Pencil size={13} aria-hidden="true" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="xs"
-            aria-label="Удалить"
-            onClick={() => onDelete(offer)}
-          >
-            <Trash2 size={13} className="text-danger" aria-hidden="true" />
-          </Button>
-        </div>
-      }
+    <article
+      className={cn(
+        "border bg-bg-1 flex flex-col transition-colors duration-[200ms]",
+        isActive
+          ? "border-bg-5 hover:border-bg-6"
+          : "border-bg-4 opacity-60 hover:opacity-80",
+      )}
+      data-offer-id={offer.id}
+      data-active={isActive}
     >
-      {/* Заголовок оффера */}
-      <div>
-        <div className="flex items-center gap-2 mb-1">
-          <span className="font-display font-semibold text-[15px] text-bg-11 tracking-tight">
+      {/* ── Header ── */}
+      <header className="px-5 pt-5 pb-4 border-b border-bg-3">
+        <div className="flex items-start justify-between gap-3 mb-2">
+          {/* Код оффера — акцент mono */}
+          <span className="font-display text-[13px] tracking-[0.06em] text-accent font-medium">
             {offer.code}
           </span>
-          {!offer.is_active ? (
-            <Badge variant="disabled" size="sm" withDot={false}>
-              Неактивен
-            </Badge>
-          ) : null}
+          <Badge
+            variant={isActive ? "success" : "disabled"}
+            size="sm"
+            withDot
+          >
+            {isActive ? "active" : "inactive"}
+          </Badge>
+        </div>
+
+        {/* Вертикаль */}
+        {offer.vertical ? (
+          <div className="font-display text-[10px] tracking-[0.12em] uppercase text-bg-8 mt-1">
+            {offer.vertical}
+          </div>
+        ) : null}
+      </header>
+
+      {/* ── Метрики ── */}
+      <div className="px-5 py-4 flex-1">
+        <div className="grid grid-cols-2 gap-x-4 gap-y-3">
+          <MetricCell label="Spend" value={fmtSpend(metrics?.spend)} />
+          <MetricCell label="CPL" value={fmtCpl(metrics?.cost_per_lead)} />
+          <MetricCell label="Leads" value={metrics?.leads != null ? String(metrics.leads) : "—"} />
+          <MetricCell
+            label="Deposits"
+            value={metrics?.deposits != null ? String(metrics.deposits) : "—"}
+          />
+          <MetricCell
+            label="Active ads"
+            value={
+              metrics?.active_ads_count != null ? String(metrics.active_ads_count) : "—"
+            }
+          />
+          <MetricCell
+            label="Stop alerts"
+            value={
+              metrics?.stop_alerts_count != null
+                ? String(metrics.stop_alerts_count)
+                : "—"
+            }
+            danger={
+              metrics?.stop_alerts_count != null && metrics.stop_alerts_count > 0
+            }
+          />
         </div>
       </div>
 
-      {/* Метрики за период */}
-      {metrics ? (
-        <div className="grid grid-cols-4 gap-x-4 gap-y-3 border-t border-bg-5 pt-4">
-          <MetricCell label="Расход" value={formatSpend(metrics.spend)} />
-          <MetricCell label="Лиды" value={formatInt(metrics.leads)} />
-          <MetricCell label="Депозиты" value={formatInt(metrics.deposits)} />
-          <MetricCell
-            label="Стопы"
-            title="Стоп-алертов за период"
-            value={formatInt(metrics.stop_alerts_count)}
-            dimmed={metrics.stop_alerts_count === 0}
-          />
-        </div>
-      ) : (
-        <div className="grid grid-cols-4 gap-x-4 gap-y-3 border-t border-bg-5 pt-4">
-          {["Расход", "Лиды", "Депозиты", "Стопы"].map((label) => (
-            <MetricCell key={label} label={label} value="—" />
-          ))}
-        </div>
-      )}
-    </Card>
+      {/* ── Footer actions ── */}
+      <footer className="px-5 py-3 border-t border-bg-3 bg-bg-0 flex items-center gap-2 justify-end">
+        <Button
+          variant="ghost"
+          size="sm"
+          leftIcon={<Settings size={13} />}
+          onClick={() => onEditRules(offer)}
+          aria-label={`Правила оффера ${offer.code}`}
+        >
+          Правила
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          leftIcon={<Pencil size={13} />}
+          onClick={() => onEditOffer(offer)}
+          aria-label={`Редактировать оффер ${offer.code}`}
+        >
+          Изменить
+        </Button>
+        <Button
+          variant="ghost-danger"
+          size="sm"
+          leftIcon={<Trash2 size={13} />}
+          onClick={() => onDelete(offer)}
+          aria-label={`Удалить оффер ${offer.code}`}
+        >
+          Удалить
+        </Button>
+      </footer>
+    </article>
   );
 }
 
-/** Ячейка метрики в карточке — лейбл + значение. */
+// ─── Вспомогательный компонент метрики ───────────────────────────────────────
+
 function MetricCell({
   label,
   value,
-  title,
-  dimmed = false,
+  danger,
 }: {
   label: string;
   value: string;
-  title?: string;
-  dimmed?: boolean;
+  danger?: boolean;
 }) {
   return (
     <div>
-      <div
-        title={title}
-        className="text-[10px] uppercase tracking-[0.1em] text-bg-8 font-display mb-0.5"
-      >
+      <div className="font-display text-[9.5px] tracking-[0.12em] uppercase text-bg-8 mb-0.5">
         {label}
       </div>
       <div
-        className={[
-          "font-numeric text-[13px] tabular-nums",
-          dimmed ? "text-bg-8" : "text-bg-11",
-        ].join(" ")}
+        className={cn(
+          "font-display text-[14px] font-medium tabular-nums",
+          danger ? "text-danger" : "text-bg-11",
+        )}
       >
         {value}
       </div>

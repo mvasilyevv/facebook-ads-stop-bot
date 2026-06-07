@@ -254,6 +254,39 @@ async def _query_recent_disable_tasks(engine: AsyncEngine, limit: int) -> list[d
     return [task_row_to_out(r) for r in rows]
 
 
+async def _query_recent_enable_tasks(engine: AsyncEngine, limit: int) -> list[dict[str, Any]]:
+    """Последние enable-задачи (top N) с JOIN'ом по fb_ads для ad_name.
+
+    Аналог _query_recent_disable_tasks для канала включения объявлений
+    (meta_api_mutation activate_ad + legacy enable task_type).
+    """
+    target_expr = target_id_sql("tq")
+    sql = f"""
+        SELECT
+            tq.id,
+            tq.task_type,
+            tq.status,
+            {target_expr} AS fb_ad_id,
+            fa.ad_name,
+            tq.attempt_count,
+            tq.max_attempts,
+            tq.requested_by,
+            tq.created_by_chat_id,
+            tq.created_at,
+            tq.updated_at,
+            tq.next_retry_at,
+            tq.last_error
+        FROM task_queue tq
+        LEFT JOIN fb_ads fa ON fa.fb_ad_id = {target_expr}
+        WHERE {enable_channel_sql("tq")}
+        ORDER BY tq.created_at DESC
+        LIMIT :lim
+    """
+    async with engine.connect() as conn:
+        rows = (await conn.execute(text(sql), {"lim": limit})).fetchall()
+    return [task_row_to_out(r) for r in rows]
+
+
 async def _query_recent_alerts(engine: AsyncEngine, limit: int) -> list[dict[str, Any]]:
     """Последние alert_events за окно 24h. Partition pruning по created_at."""
     from_dt = datetime.now(UTC) - timedelta(hours=24)
@@ -334,23 +367,28 @@ async def get_dashboard_batch(
     incidents_limit: int = Query(default=10, ge=1, le=_MAX_BATCH_LIMIT),
     alerts_limit: int = Query(default=20, ge=1, le=_MAX_BATCH_LIMIT),
     disable_limit: int = Query(default=10, ge=1, le=_MAX_BATCH_LIMIT),
+    enable_limit: int = Query(default=10, ge=1, le=_MAX_BATCH_LIMIT),
 ) -> DashboardBatchOut:
     """Композит stats + recent_incidents + recent_alerts + recent_disable_tasks
-    + enable_recommendations_pending.
+    + recent_enable_tasks + enable_recommendations_pending.
 
-    Снижает количество fetch'ей на DashboardPage с 5 до 1.
+    Снижает количество fetch'ей на DashboardPage с 6 до 1.
     Поведение при partial failure: если один из подзапросов падает —
     возвращаем для него default (пустой массив или нулевой stats).
     Остальные секции возвращаются. Это согласовано с UX: фронт не отображает
     ошибку всему экрану, если упала одна секция.
+
+    recent_enable_tasks — задачи включения объявлений (activate_ad), аналог
+    recent_disable_tasks. Управляется отдельным параметром enable_limit.
     """
     # Параллельные подзапросы. Stats — fail-all через _build_stats внутри.
     # Списки — safe (fail-section, fallback пустой).
-    stats, incidents, alerts, disable_tasks, recos = await asyncio.gather(
+    stats, incidents, alerts, disable_tasks, enable_tasks, recos = await asyncio.gather(
         _safe_call(_build_stats(engine, redis), DashboardStatsOut()),
         _safe_call(build_incidents_snapshot(engine, stage="all", limit=incidents_limit), []),
         _safe_call(_query_recent_alerts(engine, alerts_limit), []),
         _safe_call(_query_recent_disable_tasks(engine, disable_limit), []),
+        _safe_call(_query_recent_enable_tasks(engine, enable_limit), []),
         _safe_call(_query_enable_recommendations_pending(engine, 5), []),
     )
 
@@ -359,6 +397,7 @@ async def get_dashboard_batch(
         recent_incidents=incidents,
         recent_alerts=alerts,
         recent_disable_tasks=disable_tasks,
+        recent_enable_tasks=enable_tasks,
         enable_recommendations_pending=recos,
     )
 

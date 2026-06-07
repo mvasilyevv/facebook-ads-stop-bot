@@ -7,9 +7,29 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from pydantic import BaseModel, Field
+
+from core.tasks.queue import DRAFT_TTL_SECONDS
+
+
+def _draft_expires_at(created_at_iso: str | None) -> str | None:
+    """Вычисляет expires_at = created_at + DRAFT_TTL_SECONDS (ISO-строка).
+
+    Использует константу DRAFT_TTL_SECONDS из core.tasks.queue — единственный
+    источник правды о времени жизни draft (24ч, см. cancel_stale_drafts).
+    """
+    if not created_at_iso:
+        return None
+    try:
+        dt = datetime.fromisoformat(created_at_iso)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return (dt + timedelta(seconds=DRAFT_TTL_SECONDS)).isoformat()
+    except (ValueError, TypeError):
+        return None
 
 
 class TmaAdMetrics(BaseModel):
@@ -85,7 +105,16 @@ class TmaClaimResponse(BaseModel):
 
 
 class TmaDraftOut(BaseModel):
-    """Снимок DRAFT meta-mutation задачи для DraftsPage."""
+    """Снимок DRAFT meta-mutation задачи для DraftsPage.
+
+    expires_at: время автоматической отмены (created_at + DRAFT_TTL_SECONDS).
+    current_state: текущее состояние объекта мутации (заполняется в detail-endpoint'е).
+        - pause_ad / activate_ad: {"alert_state": str, "delivery_status": str | None}
+        - set_adset_budget: {"daily_budget_cents": int | None, "lifetime_budget_cents": int | None}
+        - bulk_status_change: {"by_state": {"<state>": count}} — агрегат по N объектам
+        - Остальные mutation_kind → null (не поддерживаются / слишком дорого).
+    В list-endpoint'е current_state = None (дорого резолвить N строк).
+    """
 
     id: int
     mutation_kind: str
@@ -95,6 +124,17 @@ class TmaDraftOut(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
     requested_by: str
     created_at: str | None = None
+    expires_at: str | None = None
+    current_state: dict[str, Any] | None = None
+
+    @classmethod
+    def from_created_at(cls, *, created_at_iso: str | None, **kwargs) -> "TmaDraftOut":
+        """Конструктор с автовычислением expires_at из created_at."""
+        return cls(
+            created_at=created_at_iso,
+            expires_at=_draft_expires_at(created_at_iso),
+            **kwargs,
+        )
 
 
 class TmaDraftActionResponse(BaseModel):

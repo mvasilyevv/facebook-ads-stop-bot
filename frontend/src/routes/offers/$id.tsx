@@ -1,84 +1,99 @@
 /**
- * /offers/$id — standalone страница правил конкретного оффера.
- * Использует RulesForm (общий компонент) без дублирования логики.
+ * Offers/$id — standalone редактор правил для конкретного оффера.
+ *
+ * Маршрут: /offers/$id
+ * Показывает: PageHeader с кодом оффера + RulesForm (6 порогов).
+ * При успехе — навигация обратно на /offers.
  */
 
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { ArrowLeft } from "lucide-react";
+import { ChevronLeft } from "lucide-react";
 
+import { useOffers, useOfferRules, useUpdateOfferRules } from "@/lib/api/offers";
+import { RulesForm } from "@/components/offers/RulesForm";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/Button";
-import { Skeleton } from "@/components/ui/Skeleton";
 import { ErrorState } from "@/components/ui/ErrorState";
-
-import { RulesForm, RULE_FIELDS } from "@/components/offers/RulesForm";
-import { useOfferRules, useOffers } from "@/lib/api/offers";
-import type { Offer } from "@/lib/types/api";
+import { Skeleton } from "@/components/ui/Skeleton";
+import type { OfferRules } from "@fb/shared";
 
 export const Route = createFileRoute("/offers/$id")({
   component: OfferRulesPage,
 });
 
 function OfferRulesPage() {
-  const { id } = Route.useParams();
+  const params = Route.useParams() as unknown as { id: string };
+  const id = params.id;
   const navigate = useNavigate();
 
-  // Ищем оффер в кешированном списке (include_inactive=true).
-  const offersQuery = useOffers(true);
-  const offer: Offer | undefined = offersQuery.data?.find((o) => o.id === id);
+  // Загружаем список офферов для отображения кода (title)
+  const { data: offers } = useOffers();
+  const offer = offers?.find((o) => o.id === id);
 
-  const rulesQuery = useOfferRules(id);
+  const {
+    data: rules,
+    isLoading: rulesLoading,
+    isError: rulesError,
+    error,
+    refetch,
+  } = useOfferRules(id);
 
-  function handleClose() {
-    navigate({ to: "/offers" });
+  const updateMutation = useUpdateOfferRules(id);
+
+  async function handleSave(values: Partial<OfferRules>) {
+    await updateMutation.mutateAsync(values);
+    void navigate({ to: "/" });
+  }
+
+  function handleBack() {
+    void navigate({ to: "/" });
   }
 
   return (
-    <>
+    <div className="max-w-[640px]">
+      {/* ── Back link ── */}
+      <div className="mb-6">
+        <Button
+          variant="ghost"
+          size="sm"
+          leftIcon={<ChevronLeft size={14} />}
+          onClick={handleBack}
+          aria-label="Назад к офферам"
+        >
+          Все офферы
+        </Button>
+      </div>
+
+      {/* ── Header ── */}
       <PageHeader
-        eyebrowNum="03"
-        eyebrow="КАТАЛОГ · ОФФЕР"
-        title={offer ? `${offer.code} — Правила` : offersQuery.isLoading ? "Загрузка…" : "Правила оффера"}
-        displayNumber=""
-        subtitle={offer?.name ?? "Редактор правил"}
-        action={
-          <Button
-            variant="ghost"
-            leftIcon={<ArrowLeft size={14} aria-hidden="true" />}
-            onClick={handleClose}
-          >
-            К офферам
-          </Button>
-        }
+        eyebrowNum="02"
+        eyebrow={offer ? `CATALOG · ${offer.code} · ПРАВИЛА` : "CATALOG · ПРАВИЛА"}
+        title={offer ? `${offer.code} Rules` : "Правила оффера"}
+        trailingDot
       />
 
-      <div className="max-w-[600px]">
-        {rulesQuery.isLoading ? (
-          /* Skeleton пока загружаются правила */
-          <div className="flex flex-col gap-5">
-            {RULE_FIELDS.map((f) => (
-              <div key={f.key} className="flex flex-col gap-1.5">
-                <Skeleton height={11} width={140} />
-                <Skeleton height={32} />
-              </div>
-            ))}
-          </div>
-        ) : rulesQuery.isError ? (
-          <ErrorState
-            error={rulesQuery.error}
-            onRetry={() => rulesQuery.refetch()}
-          />
-        ) : (
-          /* key по id сбрасывает форму при смене URL */
-          <RulesForm
-            key={id}
-            offerId={id}
-            initialRules={rulesQuery.data}
-            onClose={handleClose}
-            saveLabel="Сохранить правила"
-          />
-        )}
-      </div>
-    </>
+      {/* ── Content ── */}
+      {rulesLoading && (
+        <div className="flex flex-col gap-4">
+          {[1, 2, 3, 4, 5, 6].map((i) => (
+            <Skeleton key={i} height={54} />
+          ))}
+        </div>
+      )}
+
+      {rulesError && (
+        <ErrorState error={error} onRetry={() => void refetch()} />
+      )}
+
+      {!rulesLoading && !rulesError && (
+        <RulesForm
+          rules={rules}
+          loading={rulesLoading}
+          saving={updateMutation.isPending}
+          onSave={handleSave}
+          onCancel={handleBack}
+        />
+      )}
+    </div>
   );
 }

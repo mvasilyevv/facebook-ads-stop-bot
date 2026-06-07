@@ -1,300 +1,209 @@
 /**
- * Drafts (`/drafts`) — DRAFT meta_api_mutation (AI-предложения действий через Marketing
- * API), ожидающие ручного подтверждения (DRAFT → PENDING). Источник — admin-роутер
- * /dashboard/draft-tasks.
+ * Drafts — страница черновиков AI-мутаций (ожидающих подтверждения).
  *
- * disable/enable сюда НЕ попадают: auto-stop/manual создают их сразу pending (без
- * draft-фазы), и approve-пути для них нет (только retry failed/cancelled → раньше давал
- * 409). Их статус виден на Dashboard/Ads.
+ * Макет (docs/frontend_mockups/drafts.html):
+ *   PageHeader eyebrow "03" / "РУЧНОЙ КОНТРОЛЬ · ПОДТВЕРДИТЬ · ВЫПОЛНИТЬ"
+ *   Filter-pills по mutation_kind + sort expiring-first
+ *   Список DraftCard (approve/cancel через ConfirmDialog)
  *
- * Десктоп — доверенная admin-зона (X-API-Key). meta-черновики из Telegram бэк вернёт
- * неподтверждаемыми с десктопа (confirm → 409) — обрабатываем тостом ошибки.
+ * Решение current_state для DiffTable:
+ *   TmaDraftOut из списка не содержит current_state — detail-эндпоинт
+ *   (GET /drafts/{id}) также не добавляет его (по спеке только у TMA есть контекст).
+ *   Передаём currentState=null → DiffTable показывает "—" в колонке Current.
+ *   Это валидный fallback: пользователь видит target-значение и описание мутации.
+ *   При наличии target_id можно в будущем подтянуть AdSnapshot,
+ *   но для MVP достаточно — DiffTable это явно обрабатывает.
  */
 
-import { useState, useMemo } from "react";
+import { useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { FileEdit } from "lucide-react";
 
+import { useMetaDrafts, useConfirmDraft, useRejectDraft } from "@/lib/api/drafts";
+import { DraftCard } from "@/components/domain/drafts/DraftCard";
 import { PageHeader, HeaderSep } from "@/components/layout/PageHeader";
-import { DraftCard } from "@/components/domain/DraftCard";
+import { FilterPill } from "@/components/ui/Pill";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { Skeleton } from "@/components/ui/Skeleton";
-import { Pill } from "@/components/ui/Pill";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { toast } from "@/components/ui/Toast";
 import {
-  useMetaDrafts,
-  useConfirmMetaDraft,
-  useRejectMetaDraft,
-  type MetaDraft,
-} from "@/lib/api/drafts";
-import { cn } from "@/lib/utils/cn";
+  MUTATION_KINDS,
+  mutationKindLabel,
+  draftExpiresAt,
+  isExpiringSoon,
+  isDraftExpired,
+} from "@fb/shared";
+import type { DraftOut, MutationKind } from "@fb/shared";
 
 export const Route = createFileRoute("/drafts/")({
   component: DraftsPage,
 });
 
-/** Доступные типы мутаций для фильтра. */
-const TYPE_OPTIONS = [
-  { value: "", label: "Все" },
-  { value: "meta_api_mutation", label: "Действие через API" },
-];
+// ─── Типы ────────────────────────────────────────────────────────────────────
 
-/** Человекочитаемые названия meta-мутаций. */
-const MUTATION_KIND_LABELS: Record<string, string> = {
-  pause_ad: "Пауза объявления",
-  activate_ad: "Включение объявления",
-  pause_campaign: "Пауза кампании",
-  activate_campaign: "Включение кампании",
-  set_adset_budget: "Изменение бюджета",
-  duplicate_campaign: "Дублирование кампании",
-  create_campaign: "Создание кампании",
-  bulk_status_change: "Массовое вкл/выкл",
-  custom_audience: "Custom Audience",
-  set_ad_creative: "Замена креатива",
-};
+type FilterKind = "all" | MutationKind;
 
-function mutationKindLabel(kind: string): string {
-  return MUTATION_KIND_LABELS[kind] ?? kind;
+// ─── Хелперы ─────────────────────────────────────────────────────────────────
+
+/** Сортировка: истекающие — вверх, потом по created_at desc. */
+function sortDrafts(drafts: DraftOut[]): DraftOut[] {
+  const now = Date.now();
+  return [...drafts].sort((a, b) => {
+    const aExp = draftExpiresAt(a.created_at);
+    const bExp = draftExpiresAt(b.created_at);
+    const aSoon = isExpiringSoon(aExp, now) && !isDraftExpired(aExp, now);
+    const bSoon = isExpiringSoon(bExp, now) && !isDraftExpired(bExp, now);
+
+    // Истекающие — первыми
+    if (aSoon && !bSoon) return -1;
+    if (!aSoon && bSoon) return 1;
+
+    // Среди однородных — по убыванию created_at (новые ближе к концу срока)
+    const aTs = a.created_at ? new Date(a.created_at).getTime() : 0;
+    const bTs = b.created_at ? new Date(b.created_at).getTime() : 0;
+    return bTs - aTs;
+  });
 }
 
-/** Строка diff-таблицы карточки (совместима с DraftCard). */
-interface DiffRow {
-  key: string;
-  current?: string | null;
-  target?: string | null;
-  highlight?: boolean;
+/** Определяет batchCallCount по mutation_kind (create_campaign = 4 batch calls). */
+function getBatchCallCount(kind: string): number | null {
+  if (kind === "create_campaign") return 4;
+  if (kind === "bulk_status_change") return 3;
+  return null;
 }
 
-/** Заголовок карточки meta-мутации. */
-function buildMetaSummary(m: MetaDraft): string {
-  const base = mutationKindLabel(m.mutation_kind);
-  return m.target_id ? `${base} · ${m.target_id}` : base;
-}
-
-/** Diff-таблица meta-мутации из payload-параметров. */
-function buildMetaDiff(m: MetaDraft): DiffRow[] {
-  const rows: DiffRow[] = [];
-  rows.push({ key: "Действие", target: mutationKindLabel(m.mutation_kind), highlight: true });
-  if (m.target_id) rows.push({ key: "Объект", target: m.target_id });
-  if (m.ad_account_id) rows.push({ key: "Кабинет", target: m.ad_account_id });
-  for (const [k, v] of Object.entries(m.payload ?? {})) {
-    rows.push({
-      key: k,
-      target: v != null && typeof v === "object" ? JSON.stringify(v) : String(v),
-    });
-  }
-  return rows;
-}
-
-/** Дата протухания черновика (24h от created_at). UTC — бэк хранит created_at в UTC. */
-function getExpiresAt(createdAt: string | null): string | null {
-  if (!createdAt) return null;
-  const d = new Date(createdAt);
-  d.setUTCHours(d.getUTCHours() + 24);
-  return d.toISOString();
-}
-
-/** true, если черновик истекает в течение 1 часа. */
-function isExpiringSoon(createdAt: string | null): boolean {
-  if (!createdAt) return false;
-  const expires = new Date(createdAt);
-  expires.setUTCHours(expires.getUTCHours() + 24);
-  return expires.getTime() - Date.now() < 60 * 60 * 1000;
-}
-
-/** Нормализованная карточка из любого источника — единый вход в DraftCard. */
-interface DraftCardModel {
-  key: string;
-  filterType: string;
-  taskTypeLabel: string;
-  createdAt: string | null;
-  requestedBy: string | null;
-  summary: string;
-  diff: DiffRow[];
-  approve: () => Promise<void>;
-  cancel: () => Promise<void>;
-}
+// ─── Основной компонент ───────────────────────────────────────────────────────
 
 function DraftsPage() {
-  const [selectedType, setSelectedType] = useState("");
+  const { data: drafts, isLoading, isError, error, refetch } = useMetaDrafts();
+  const confirmMutation = useConfirmDraft();
+  const rejectMutation = useRejectDraft();
 
-  // Универсальные диалоги: хранят сводку + действие (источник-агностично).
-  const [confirmApprove, setConfirmApprove] = useState<{
-    summary: string;
-    run: () => Promise<void>;
-  } | null>(null);
-  const [confirmCancel, setConfirmCancel] = useState<{
-    summary: string;
-    run: () => Promise<void>;
-  } | null>(null);
+  // Фильтр по mutation_kind
+  const [filter, setFilter] = useState<FilterKind>("all");
+  // Черновик, для которого открыт ConfirmDialog (approve или cancel)
+  const [pendingApprove, setPendingApprove] = useState<DraftOut | null>(null);
+  const [pendingCancel, setPendingCancel] = useState<DraftOut | null>(null);
 
-  const metaQuery = useMetaDrafts();
-  const confirmMeta = useConfirmMetaDraft();
-  const rejectMeta = useRejectMetaDraft();
-
-  // Нормализуем meta-черновики в список карточек.
-  const cards = useMemo<DraftCardModel[]>(() => {
-    const out: DraftCardModel[] = [];
-    for (const m of metaQuery.data ?? []) {
-      out.push({
-        key: `meta-${m.id}`,
-        filterType: "meta_api_mutation",
-        taskTypeLabel: mutationKindLabel(m.mutation_kind),
-        createdAt: m.created_at,
-        requestedBy: m.requested_by,
-        summary: buildMetaSummary(m),
-        diff: buildMetaDiff(m),
-        approve: () => confirmMeta.mutateAsync(m.id).then(() => undefined),
-        cancel: () => rejectMeta.mutateAsync(m.id).then(() => undefined),
-      });
-    }
-    // Новые сверху по дате создания.
-    out.sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""));
-    return out;
-  }, [metaQuery.data, confirmMeta, rejectMeta]);
-
-  const filteredCards = selectedType
-    ? cards.filter((c) => c.filterType === selectedType)
-    : cards;
-  const expiringCount = filteredCards.filter((c) => isExpiringSoon(c.createdAt)).length;
-
-  const typeCounts = useMemo(() => {
-    const counts: Record<string, number> = { "": cards.length };
-    for (const c of cards) counts[c.filterType] = (counts[c.filterType] ?? 0) + 1;
-    return counts;
-  }, [cards]);
-
-  async function handleApprove() {
-    if (!confirmApprove) return;
-    try {
-      await confirmApprove.run();
-      toast.success("Подтверждено", "Задача передана в очередь на исполнение.");
-    } catch (err) {
-      toast.error("Ошибка подтверждения", err instanceof Error ? err.message : "Неизвестная ошибка");
-      throw err;
-    }
+  // ── Skeleton ──
+  if (isLoading) {
+    return (
+      <div className="space-y-6">
+        <DraftsHeader count={null} />
+        <div className="flex gap-2 pb-5 border-b border-bg-5 mb-8">
+          {["all", "pause_ad", "bulk_status_change"].map((k) => (
+            <Skeleton key={k} height={28} width={80} />
+          ))}
+        </div>
+        {[1, 2].map((i) => (
+          <Skeleton key={i} variant="block" height={220} />
+        ))}
+      </div>
+    );
   }
 
-  async function handleCancel() {
-    if (!confirmCancel) return;
-    try {
-      await confirmCancel.run();
-      toast.success("Отменено", "Черновик отклонён.");
-    } catch (err) {
-      toast.error("Ошибка отмены", err instanceof Error ? err.message : "Неизвестная ошибка");
-      throw err;
-    }
+  // ── Error ──
+  if (isError) {
+    return (
+      <div className="space-y-6">
+        <DraftsHeader count={null} />
+        <ErrorState error={error} onRetry={() => void refetch()} />
+      </div>
+    );
   }
 
-  const isLoading = metaQuery.isLoading;
-  const isError = metaQuery.isError;
+  const allDrafts = drafts ?? [];
 
-  const subtitle = isLoading ? null : (
-    <>
-      <span className={cn("font-display", expiringCount > 0 ? "text-warning" : "text-accent")}>
-        {cards.length}
-      </span>{" "}
-      на подтверждение
-      {expiringCount > 0 ? (
-        <>
-          <HeaderSep />
-          <span className="text-warning font-display">{expiringCount}</span> истекает в течение 1ч
-        </>
-      ) : null}
-      <HeaderSep />
-      Требуют ручного подтверждения
-    </>
-  );
+  // Фильтруем по mutation_kind
+  const filtered =
+    filter === "all" ? allDrafts : allDrafts.filter((d) => d.mutation_kind === filter);
+
+  // Сортируем: expiring-first
+  const sorted = sortDrafts(filtered);
+
+  // Считаем для pills
+  const countByKind = new Map<string, number>();
+  for (const d of allDrafts) {
+    countByKind.set(d.mutation_kind, (countByKind.get(d.mutation_kind) ?? 0) + 1);
+  }
+
+  // Уникальные kinds, которые реально есть в данных
+  const presentKinds = MUTATION_KINDS.filter((k) => (countByKind.get(k) ?? 0) > 0);
 
   return (
     <>
-      <PageHeader
-        eyebrowNum="02"
-        eyebrow="РУЧНОЙ КОНТРОЛЬ · ПОДТВЕРДИТЬ · ВЫПОЛНИТЬ"
-        title="Черновики"
-        displayNumber="02"
-        subtitle={subtitle}
-      />
+      <DraftsHeader count={allDrafts.length} />
 
-      {/* Фильтр по типу */}
-      <div className="flex items-center gap-2 py-2 pb-5 border-b border-bg-5 mb-8 flex-wrap">
-        <span className="font-display text-[10px] uppercase tracking-widest text-bg-8 mr-2">
+      {/* ── Filter pills ── */}
+      <div
+        role="toolbar"
+        aria-label="Фильтр по типу мутации"
+        className="flex items-center gap-2 pb-5 border-b border-bg-5 mb-8 flex-wrap"
+      >
+        <span className="font-display text-[10px] tracking-[0.12em] uppercase text-bg-8 mr-2">
           Тип
         </span>
-        {TYPE_OPTIONS.map((opt) => (
-          <button
-            key={opt.value}
-            type="button"
-            onClick={() => setSelectedType(opt.value)}
-            className="p-0 border-0 bg-transparent focus:outline-none"
-            aria-label={`Фильтр: ${opt.label}`}
+        <FilterPill active={filter === "all"} onClick={() => setFilter("all")}>
+          Все
+          <span className="text-[10px] opacity-70 ml-0.5">{allDrafts.length}</span>
+        </FilterPill>
+        {presentKinds.map((kind) => (
+          <FilterPill
+            key={kind}
+            active={filter === kind}
+            onClick={() => setFilter(filter === kind ? "all" : kind)}
           >
-            <Pill active={selectedType === opt.value}>
-              {opt.label}
-              {(typeCounts[opt.value] ?? 0) > 0 ? (
-                <span className="text-[10px] opacity-70 ml-0.5">{typeCounts[opt.value]}</span>
-              ) : null}
-            </Pill>
-          </button>
+            {mutationKindLabel(kind)}
+            <span className="text-[10px] opacity-70 ml-0.5">{countByKind.get(kind)}</span>
+          </FilterPill>
         ))}
       </div>
 
-      {isLoading ? (
-        <div className="flex flex-col gap-4">
-          {[1, 2, 3].map((n) => (
-            <div key={n} className="border border-bg-5 bg-bg-1 p-6">
-              <Skeleton height={12} width="30%" className="mb-3" />
-              <Skeleton height={20} width="55%" className="mb-4" />
-              <Skeleton height={12} width="40%" className="mb-6" />
-              <Skeleton height={80} />
-            </div>
-          ))}
-        </div>
-      ) : isError ? (
-        <ErrorState
-          title="Не удалось загрузить черновики."
-          error={metaQuery.error}
-          onRetry={() => {
-            metaQuery.refetch();
-          }}
-        />
-      ) : filteredCards.length === 0 ? (
+      {/* ── Empty state ── */}
+      {sorted.length === 0 && (
         <EmptyState
-          icon={<FileEdit size={40} strokeWidth={1.25} aria-hidden="true" />}
-          title="Нет черновиков на подтверждение"
-          description="Когда появится действие на подтверждение — оно будет здесь со всеми деталями."
+          icon={<FileEdit size={32} />}
+          title="Черновиков нет"
+          description={
+            filter === "all"
+              ? "AI ничего не предлагает — все операции выполнены или ожидание команды."
+              : `Нет черновиков типа «${mutationKindLabel(filter)}».`
+          }
         />
-      ) : (
-        <div className="flex flex-col gap-4">
-          {filteredCards.map((card) => {
-            const expiringSoon = isExpiringSoon(card.createdAt);
-            return (
-              <div key={card.key} className={cn("relative", expiringSoon && "border border-warning/40")}>
-                {expiringSoon ? (
-                  <div
-                    aria-label="Истекает скоро"
-                    className={cn(
-                      "absolute top-0 right-4 z-10",
-                      "font-display text-[9px] tracking-widest uppercase font-semibold",
-                      "bg-warning text-bg-0 px-2 py-0.5 -translate-y-px",
-                    )}
-                  >
-                    ИСТЕКАЕТ СКОРО
-                  </div>
-                ) : null}
+      )}
 
+      {/* ── Список DraftCard ── */}
+      {sorted.length > 0 && (
+        <div className="flex flex-col gap-4" role="list" aria-label="Список черновиков">
+          {sorted.map((draft) => {
+            const reason =
+              typeof draft.payload?.["reason"] === "string"
+                ? (draft.payload["reason"] as string)
+                : null;
+            const reasonSource =
+              typeof draft.payload?.["model"] === "string"
+                ? (draft.payload["model"] as string)
+                : null;
+            const batchCallCount = getBatchCallCount(draft.mutation_kind);
+
+            return (
+              <div key={draft.id} role="listitem">
                 <DraftCard
-                  taskType={card.taskTypeLabel}
-                  createdAt={card.createdAt}
-                  requestedBy={card.requestedBy}
-                  summary={card.summary}
-                  diff={card.diff}
-                  reason={null}
-                  expiresAt={getExpiresAt(card.createdAt)}
-                  onApprove={() => setConfirmApprove({ summary: card.summary, run: card.approve })}
-                  onCancel={() => setConfirmCancel({ summary: card.summary, run: card.cancel })}
+                  draft={draft}
+                  // currentState=null → DiffTable показывает "—" в Current (валидный fallback)
+                  currentState={null}
+                  reason={reason}
+                  reasonSource={reasonSource}
+                  batchCallCount={batchCallCount}
+                  busy={
+                    (confirmMutation.isPending &&
+                      confirmMutation.variables === String(draft.id)) ||
+                    (rejectMutation.isPending &&
+                      rejectMutation.variables === String(draft.id))
+                  }
+                  onApprove={() => setPendingApprove(draft)}
+                  onCancel={() => setPendingCancel(draft)}
                 />
               </div>
             );
@@ -302,41 +211,63 @@ function DraftsPage() {
         </div>
       )}
 
-      {/* ConfirmDialog — Approve */}
+      {/* ── ConfirmDialog: Approve ── */}
       <ConfirmDialog
-        open={confirmApprove !== null}
-        onOpenChange={(open) => {
-          if (!open) setConfirmApprove(null);
-        }}
-        title="Подтвердить выполнение?"
+        open={pendingApprove !== null}
+        onOpenChange={(open) => { if (!open) setPendingApprove(null); }}
+        title="Подтвердить и выполнить?"
         description={
-          confirmApprove
-            ? `${confirmApprove.summary}. Задача будет передана воркеру на немедленное исполнение — отменить нельзя.`
+          pendingApprove
+            ? `Мутация «${mutationKindLabel(pendingApprove.mutation_kind)}» будет передана в очередь исполнения через Marketing API. Действие необратимо.`
             : ""
         }
-        confirmLabel="Подтвердить и выполнить"
-        cancelLabel="Отмена"
+        confirmLabel="Approve & execute"
         confirmVariant="primary"
-        onConfirm={handleApprove}
+        onConfirm={async () => {
+          if (!pendingApprove) return;
+          await confirmMutation.mutateAsync(String(pendingApprove.id));
+        }}
       />
 
-      {/* ConfirmDialog — Cancel */}
+      {/* ── ConfirmDialog: Cancel ── */}
       <ConfirmDialog
-        open={confirmCancel !== null}
-        onOpenChange={(open) => {
-          if (!open) setConfirmCancel(null);
-        }}
-        title="Отклонить черновик?"
+        open={pendingCancel !== null}
+        onOpenChange={(open) => { if (!open) setPendingCancel(null); }}
+        title="Отменить черновик?"
         description={
-          confirmCancel ? `${confirmCancel.summary}. Черновик будет отменён.` : ""
+          pendingCancel
+            ? `Черновик «${mutationKindLabel(pendingCancel.mutation_kind)}» будет удалён. Это действие необратимо.`
+            : ""
         }
-        confirmLabel="Отклонить"
-        cancelLabel="Назад"
-        onConfirm={handleCancel}
+        confirmLabel="Отменить черновик"
+        confirmVariant="danger"
+        onConfirm={async () => {
+          if (!pendingCancel) return;
+          await rejectMutation.mutateAsync(String(pendingCancel.id));
+        }}
       />
     </>
   );
 }
 
-/** Экспорт форматтеров для тестов. */
-export { isExpiringSoon };
+// ─── PageHeader ────────────────────────────────────────────────────────────────
+
+function DraftsHeader({ count }: { count: number | null }) {
+  return (
+    <PageHeader
+      eyebrowNum="03"
+      eyebrow="РУЧНОЙ КОНТРОЛЬ · ПОДТВЕРДИТЬ · ВЫПОЛНИТЬ"
+      title="Drafts"
+      displayNumber="03"
+      subtitle={
+        count !== null ? (
+          <>
+            <span className="text-bg-11 font-medium">{count}</span>
+            <HeaderSep />
+            ожидают подтверждения
+          </>
+        ) : undefined
+      }
+    />
+  );
+}

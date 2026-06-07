@@ -1,64 +1,73 @@
 /**
- * RulesDrawer — правый drawer для редактирования 6 порогов оффера.
- * Поля: spend_no_event_threshold / cpa_threshold / cpm_threshold /
- *       ctr_threshold / frequency_threshold / funnel_ratio_threshold.
- * Все числовые, nullable. Пустая строка → null при сохранении.
+ * RulesDrawer — right-side Drawer с RulesForm для редактирования порогов оффера.
  *
- * Паттерн загрузки данных: форма инициализируется через useState lazy initializer
- * из rulesQuery.data, без setState в useEffect — нет cascade re-renders.
- * Сброс при смене оффера через key={offer?.id}.
+ * Используется на /offers: открывается по кнопке «Правила» в OfferCard.
+ * Состояние загрузки и сохранения — через useOfferRules / useUpdateOfferRules.
  */
 
 import { Drawer } from "@/components/ui/Drawer";
-import { Skeleton } from "@/components/ui/Skeleton";
 import { ErrorState } from "@/components/ui/ErrorState";
-import { useOfferRules } from "@/lib/api/offers";
-import type { Offer } from "@/lib/types/api";
+import { Skeleton } from "@/components/ui/Skeleton";
+import { useOfferRules, useUpdateOfferRules } from "@/lib/api/offers";
 import { RulesForm } from "./RulesForm";
+import type { Offer, OfferRules } from "@fb/shared";
 
 interface RulesDrawerProps {
+  offer: Offer | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  offer: Offer | null;
 }
 
-const FIELD_COUNT = 8;
+export function RulesDrawer({ offer, open, onOpenChange }: RulesDrawerProps) {
+  const offerId = offer?.id ?? "";
 
-export function RulesDrawer({ open, onOpenChange, offer }: RulesDrawerProps) {
-  const rulesQuery = useOfferRules(open ? (offer?.id ?? null) : null);
+  const {
+    data: rules,
+    isLoading,
+    isError,
+    error,
+    refetch,
+  } = useOfferRules(offerId);
+
+  const updateMutation = useUpdateOfferRules(offerId);
+
+  async function handleSave(values: Partial<OfferRules>) {
+    await updateMutation.mutateAsync(values);
+    onOpenChange(false);
+  }
 
   return (
     <Drawer
       open={open}
       onOpenChange={onOpenChange}
-      title={offer ? `Правила — ${offer.code}` : "Правила оффера"}
-      description={undefined}
+      eyebrow={offer ? `ПРАВИЛА · ${offer.code}` : "ПРАВИЛА"}
+      title={offer ? `Пороги для ${offer.code}` : "Правила оффера"}
+      description="Observer применяет правила на каждом скане."
       width={480}
     >
-      {rulesQuery.isLoading ? (
-        /* Skeleton-загрузка */
-        <div className="flex flex-col gap-5">
-          {Array.from({ length: FIELD_COUNT }).map((_, i) => (
-            <div key={i} className="flex flex-col gap-1.5">
-              <Skeleton height={11} width={140} />
-              <Skeleton height={32} />
-            </div>
-          ))}
-        </div>
-      ) : rulesQuery.isError ? (
-        <ErrorState
-          error={rulesQuery.error}
-          onRetry={() => rulesQuery.refetch()}
-        />
-      ) : (
-        /* key по offer.id сбрасывает форму при смене оффера */
-        <RulesForm
-          key={offer?.id ?? "no-offer"}
-          offerId={offer?.id ?? ""}
-          initialRules={rulesQuery.data}
-          onClose={() => onOpenChange(false)}
-        />
-      )}
+      <div className="px-8 py-6 overflow-y-auto flex-1">
+        {isLoading && (
+          <div className="flex flex-col gap-4">
+            {[1, 2, 3, 4, 5, 6].map((i) => (
+              <Skeleton key={i} height={54} />
+            ))}
+          </div>
+        )}
+
+        {isError && (
+          <ErrorState error={error} onRetry={() => void refetch()} />
+        )}
+
+        {!isLoading && !isError && (
+          <RulesForm
+            rules={rules}
+            loading={isLoading}
+            saving={updateMutation.isPending}
+            onSave={handleSave}
+            onCancel={() => onOpenChange(false)}
+          />
+        )}
+      </div>
     </Drawer>
   );
 }

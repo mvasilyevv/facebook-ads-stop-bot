@@ -58,6 +58,62 @@ class DisableTaskCreateIn(BaseModel):
     reason: str = Field(default="manual disable", description="Причина отключения")
 
 
+# ─────────────────────── bulk disable (money) ────────────────────────────────
+
+# Cap размера batch. 50 — компромисс: bulk action-bar Ads оперирует видимой
+# страницей объявлений (обычно 20-50 строк), а каждый ad_id порождает отдельную
+# транзакцию INSERT в task_queue. Больший batch удлинял бы HTTP-запрос и держал
+# пул соединений; при реальной необходимости >50 фронт шлёт несколько запросов
+# с тем же idempotency_token (дубли не создадутся — UNIQUE per-ad ключ).
+BULK_DISABLE_MAX_IDS = 50
+
+
+class BulkDisableIn(BaseModel):
+    """Тело POST /dashboard/disable-tasks/bulk (массовое отключение)."""
+
+    model_config = ConfigDict(from_attributes=False)
+
+    fb_ad_ids: list[str] = Field(
+        ...,
+        min_length=1,
+        description="Список Meta numeric ad ID (1..50)",
+    )
+    reason: str = Field(default="manual bulk disable", description="Причина отключения")
+    idempotency_token: str = Field(
+        ...,
+        min_length=1,
+        max_length=64,
+        description="Client-side токен против двойного submit (общий для всего batch)",
+    )
+    requested_by: str = Field(default="api_user", description="Инициатор (провенанс)")
+    requested_by_chat_id: int | None = Field(default=None, description="TG chat_id инициатора")
+
+
+class BulkDisableSkipped(BaseModel):
+    """Объявление, для которого задача уже существовала (дубль idempotency_key)."""
+
+    fb_ad_id: str
+    task_id: str | None = None  # id уже существующей задачи, если удалось определить
+    reason: str = "duplicate"
+
+
+class BulkDisableFailed(BaseModel):
+    """Объявление, для которого задачу создать не удалось."""
+
+    fb_ad_id: str
+    reason: str
+
+
+class BulkDisableResultOut(BaseModel):
+    """Partial-failure ответ bulk-отключения. HTTP 200 даже при частичном успехе."""
+
+    model_config = ConfigDict(from_attributes=False)
+
+    created: list[TaskQueueRowOut] = Field(default_factory=list)
+    skipped: list[BulkDisableSkipped] = Field(default_factory=list)
+    failed: list[BulkDisableFailed] = Field(default_factory=list)
+
+
 class EnableTaskRowOut(TaskQueueRowOut):
     """Строка enable-задачи. Идентична disable, только task_type='enable'."""
 

@@ -1,95 +1,122 @@
 /**
- * Hooks для /offers-страницы.
+ * API-хуки для Offers-страницы.
+ *
+ * Эндпоинты:
+ *   GET  /api/offers                      → Offer[]
+ *   GET  /api/offers/compare?days=N       → OfferCompareRow[]
+ *   POST /api/offers                      → Offer
+ *   PUT  /api/offers/{id}                 → Offer
+ *   DELETE /api/offers/{id}               → 204
+ *   GET  /api/offers/{id}/rules           → OfferRules
+ *   PUT  /api/offers/{id}/rules           → OfferRules
+ *   GET  /api/offers/rules/preview        → RulePreviewOut
  */
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiClient } from "./client";
-import type { Offer, OfferCompareRow, OfferRules, RulePreviewOut } from "@/lib/types/api";
+import { apiGet, apiSend } from "./client";
+import type { Offer, OfferRules } from "@fb/shared";
+import type { components } from "@fb/shared/api/generated";
 
-const KEYS = {
-  list: (include_inactive?: boolean) => ["offers", "list", include_inactive] as const,
-  compare: (days: number) => ["offers", "compare", days] as const,
-  rules: (id: string) => ["offers", id, "rules"] as const,
-};
+type OfferCompareRow = components["schemas"]["OfferCompareRow"];
+// RulePreviewOut — генерируется из OpenAPI; если тип не экспортирован, используем unknown.
+type RulePreviewOut = Record<string, unknown>;
 
-export function useOffers(include_inactive = false) {
-  return useQuery({
-    queryKey: KEYS.list(include_inactive),
-    queryFn: () => apiClient.get<Offer[]>("/offers", { include_inactive }),
+// ─── Список офферов ───────────────────────────────────────────────────────────
+
+export function useOffers(includeInactive?: boolean) {
+  return useQuery<Offer[]>({
+    queryKey: ["offers", { includeInactive }],
+    queryFn: ({ signal }) =>
+      apiGet<Offer[]>("/offers", includeInactive ? { include_inactive: true } : undefined, signal),
+    staleTime: 30_000,
   });
 }
 
-export function useOffersCompare(days = 7) {
-  return useQuery({
-    queryKey: KEYS.compare(days),
-    queryFn: () => apiClient.get<OfferCompareRow[]>("/offers/compare", { days }),
+// ─── Сравнение офферов ────────────────────────────────────────────────────────
+
+export function useOffersCompare(days?: number) {
+  return useQuery<OfferCompareRow[]>({
+    queryKey: ["offers", "compare", days],
+    queryFn: ({ signal }) =>
+      apiGet<OfferCompareRow[]>("/offers/compare", days ? { days } : undefined, signal),
+    staleTime: 60_000,
   });
 }
 
-export function useOfferRules(id: string | null) {
-  return useQuery({
-    queryKey: KEYS.rules(id ?? ""),
-    queryFn: () => apiClient.get<OfferRules>(`/offers/${id}/rules`),
-    enabled: !!id,
-  });
+// ─── Создание оффера ──────────────────────────────────────────────────────────
+
+interface OfferCreateIn {
+  code: string;
+  name: string;
+  vertical?: string;
+  is_active?: boolean;
 }
 
 export function useCreateOffer() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (data: { code: string }) =>
-      apiClient.post<Offer>("/offers", data),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["offers"] }),
+    mutationFn: (data: OfferCreateIn) => apiSend<Offer>("POST", "/offers", data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["offers"] });
+    },
   });
 }
 
-export function useUpdateOffer() {
+// ─── Обновление оффера ────────────────────────────────────────────────────────
+
+export function useUpdateOffer(offerId: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, data }: { id: string; data: Partial<Offer> }) =>
-      apiClient.put<Offer>(`/offers/${id}`, data),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["offers"] }),
+    mutationFn: (data: Partial<OfferCreateIn>) =>
+      apiSend<Offer>("PUT", `/offers/${offerId}`, data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["offers"] });
+    },
   });
 }
+
+// ─── Удаление оффера (soft) ───────────────────────────────────────────────────
 
 export function useDeleteOffer() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id: string) => apiClient.delete<void>(`/offers/${id}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["offers"] }),
+    mutationFn: (offerId: string) => apiSend<null>("DELETE", `/offers/${offerId}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["offers"] });
+    },
   });
 }
 
-export function useUpsertOfferRules() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({ id, data }: { id: string; data: Partial<OfferRules> }) =>
-      apiClient.put<OfferRules>(`/offers/${id}/rules`, data),
-    onSuccess: (_, vars) =>
-      qc.invalidateQueries({ queryKey: KEYS.rules(vars.id) }),
-  });
-}
+// ─── Правила оффера ───────────────────────────────────────────────────────────
 
-/**
- * Preview расчёт стоп/ворнинг порогов при заданных процентах.
- * Enabled только при cpa !== null.
- */
-export function useRulePreview(
-  cpa: number | null,
-  stop: number,
-  warning: number,
-) {
-  return useQuery({
-    queryKey: ["offers", "rules", "preview", cpa, stop, warning] as const,
-    queryFn: () =>
-      apiClient.get<RulePreviewOut>("/offers/rules/preview", {
-        cpa,
-        stop_percent_of_rule: stop,
-        warning_percent_of_stop: warning,
-      }),
-    enabled: cpa !== null && cpa > 0,
+export function useOfferRules(offerId: string) {
+  return useQuery<OfferRules>({
+    queryKey: ["offers", offerId, "rules"],
+    queryFn: ({ signal }) => apiGet<OfferRules>(`/offers/${offerId}/rules`, undefined, signal),
+    enabled: !!offerId,
     staleTime: 30_000,
   });
 }
 
-export const offersKeys = KEYS;
+export function useUpdateOfferRules(offerId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: Partial<OfferRules>) =>
+      apiSend<OfferRules>("PUT", `/offers/${offerId}/rules`, data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["offers", offerId, "rules"] });
+    },
+  });
+}
+
+// ─── Preview правил ───────────────────────────────────────────────────────────
+
+export function useRulesPreview(params?: { offer_id?: string }) {
+  return useQuery<RulePreviewOut>({
+    queryKey: ["offers", "rules", "preview", params],
+    queryFn: ({ signal }) =>
+      apiGet<RulePreviewOut>("/offers/rules/preview", params as Record<string, string | number | boolean | null | undefined>, signal),
+    staleTime: 60_000,
+    enabled: !!params?.offer_id,
+  });
+}

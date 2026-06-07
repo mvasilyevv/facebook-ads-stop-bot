@@ -1,8 +1,10 @@
-# FB Stop Bot — Frontend
+# FB Stop Bot — Frontend (web)
 
-Новый production-grade фронт FB Stop Bot. Живёт **рядом** со старым `frontend/` — старый не трогается, миграция страница-за-страницей.
+Production-grade web-интерфейс FB Stop Bot.
 
 Editorial-monochrome design, dark-only, desktop 1280+ minimum. Source of truth — `docs/frontend_design.md`.
+
+Часть монорепо на **pnpm workspaces**. Установка зависимостей — `pnpm install` из корня репозитория.
 
 ## Стек
 
@@ -22,32 +24,36 @@ Editorial-monochrome design, dark-only, desktop 1280+ minimum. Source of truth �
 ## Команды
 
 ```bash
-# Установка зависимостей
-npm install
+# Установка зависимостей (из корня монорепо)
+pnpm install
 
 # Dev-сервер на порту 5174, proxy /api -> http://localhost:8100
-npm run dev
+pnpm --filter fb-stop-bot-frontend dev
+# или из корня: pnpm dev:web
 
 # Production build (tsc -b + vite build)
-npm run build
+pnpm --filter fb-stop-bot-frontend build
 
 # Превью production build
-npm run preview
+pnpm --filter fb-stop-bot-frontend preview
+
+# Генерация TypeScript-типов из OpenAPI (из корня)
+pnpm gen:api
 
 # Storybook на порту 6006
-npm run storybook
-npm run build-storybook
+pnpm --filter fb-stop-bot-frontend storybook
+pnpm --filter fb-stop-bot-frontend build-storybook
 
 # Тесты
-npm test                # один прогон
-npm run test:watch      # watch mode
-npm run test:ui         # UI
+pnpm --filter fb-stop-bot-frontend test        # один прогон
+pnpm --filter fb-stop-bot-frontend test:watch  # watch mode
+pnpm --filter fb-stop-bot-frontend test:ui     # UI
 
 # Линт / форматирование
-npm run lint
-npm run lint:fix
-npm run format
-npm run typecheck
+pnpm --filter fb-stop-bot-frontend lint
+pnpm --filter fb-stop-bot-frontend lint:fix
+pnpm --filter fb-stop-bot-frontend format
+pnpm --filter fb-stop-bot-frontend typecheck
 ```
 
 ## Структура
@@ -122,7 +128,7 @@ make gen-api-types          # export + codegen за один шаг
 
 # Или по шагам:
 make export-openapi         # → frontend/openapi.json
-cd frontend && npm run gen:api   # → src/lib/types/api-generated.ts
+pnpm gen:api                # → packages/shared/src/api/generated.ts
 ```
 
 ### Файлы
@@ -156,19 +162,8 @@ Vite proxy уже настроен: запросы к `/api` идут на `http
 
 WebSocket-хук `useDashboardSocket` подключается к `/ws/dashboard`, при 3 неудачных reconnect'ах автоматически отдаёт стейт `pollingFallback=true` — TanStack Query берёт на себя refetch. То есть бэкенду НЕ обязательно реализовывать WS на этом этапе.
 
-## Что готово сейчас
+## Реализованные страницы
 
-Foundation (Round 8.0):
+6 полных страниц: Dashboard, Ads (+ drawer деталей), Drafts, Offers, History, Settings (табы Observer/Telegram/Vision/Workers/AI/Health).
 
-- Design tokens + шрифты.
-- Базовый UI-набор (Button, Input, Card, Badge, Pill, Tabs, Modal, Drawer, Tooltip, Toast, Skeleton, EmptyState, ErrorState, Select, Kbd, ConfirmDialog).
-- Table компонент с TanStack Table + Virtual.
-- Layout shell (Sidebar + TopBar + WorkerPulse).
-- 6 placeholder-страниц (Dashboard, Ads, Offers, History, Settings, Drafts).
-- TanStack Query клиенты per-domain.
-- WebSocket hook с reconnect + polling fallback.
-- Zustand stores: ui (sidebar, density) и auth (apiKey).
-- Storybook setup + 4 stories.
-- Vitest setup + 5 unit-тестов.
-
-Полная имплементация страниц — отдельные раунды (Round 8.1+).
+~331 vitest-тест. Storybook 8. Виртуализованная таблица (@tanstack/react-virtual). WS live-invalidation с backoff + polling fallback.

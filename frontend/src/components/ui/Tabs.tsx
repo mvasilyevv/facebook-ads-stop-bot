@@ -1,28 +1,34 @@
 /**
- * Tabs — две variants: underline (page-internal) и pill (filter switching).
- * Поверх Radix Tabs.
+ * Tabs — underline (page-level) и segmented/pill (filter).
+ * Поверх Radix Tabs. Keyboard-navigation встроен в Radix.
  */
-
 import * as RadixTabs from "@radix-ui/react-tabs";
 import { type ReactNode } from "react";
-import { cn } from "@/lib/utils/cn";
+import { cn } from "./cn";
 
-interface TabsProps {
-  value: string;
-  onValueChange: (value: string) => void;
-  variant?: "underline" | "pill";
-  className?: string;
-  children: ReactNode;
-}
-
-interface TabItem {
+export interface TabItem {
   value: string;
   label: ReactNode;
+  /** Счётчик, отображается рядом с лейблом. */
   count?: number;
   disabled?: boolean;
 }
 
-export function Tabs({ value, onValueChange, variant = "underline", className, children }: TabsProps) {
+interface TabsProps {
+  value: string;
+  onValueChange: (value: string) => void;
+  variant?: "underline" | "segmented";
+  className?: string;
+  children: ReactNode;
+}
+
+export function Tabs({
+  value,
+  onValueChange,
+  variant = "underline",
+  className,
+  children,
+}: TabsProps) {
   return (
     <RadixTabs.Root
       value={value}
@@ -41,7 +47,7 @@ export function TabsList({
   className,
 }: {
   items: TabItem[];
-  variant?: "underline" | "pill";
+  variant?: "underline" | "segmented";
   className?: string;
 }) {
   return (
@@ -49,7 +55,7 @@ export function TabsList({
       className={cn(
         "inline-flex items-center",
         variant === "underline"
-          ? "gap-6 border-b border-bg-5"
+          ? "gap-6 border-b border-bg-5 w-full"
           : "gap-1 bg-bg-2 border border-bg-5 p-1",
         className,
       )}
@@ -60,7 +66,9 @@ export function TabsList({
           value={it.value}
           disabled={it.disabled}
           className={cn(
-            "inline-flex items-center gap-2 font-display transition-colors disabled:opacity-40",
+            "inline-flex items-center gap-2 font-display transition-colors duration-[120ms]",
+            "disabled:opacity-40 disabled:cursor-not-allowed",
+            "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
             variant === "underline"
               ? [
                   "text-[13px] uppercase tracking-wider pb-3 -mb-px border-b-2 border-transparent",
@@ -76,12 +84,7 @@ export function TabsList({
         >
           {it.label}
           {it.count != null ? (
-            <span
-              className={cn(
-                "text-[10px] font-display tabular-nums",
-                "border border-bg-6 px-1 leading-tight",
-              )}
-            >
+            <span className="text-[10px] font-display tabular-nums border border-bg-6 px-1 leading-tight">
               {it.count}
             </span>
           ) : null}
@@ -91,4 +94,5 @@ export function TabsList({
   );
 }
 
+/** Контент таба. Обёртка над Radix TabsContent. */
 export const TabsContent = RadixTabs.Content;

@@ -1,69 +1,69 @@
 /**
- * Settings (`/settings`) — конфигурация системы, 4 вкладки:
- *   1. Observer — сканирование, интервал, auto-enable, scan-runs.
- *   2. Telegram — бот, токен, recipients, invite, deep-link.
- *   3. Vision — anti-detect браузер, токен, profile, reconnect.
- *   4. Health — статусы воркеров, restart actions.
+ * Settings-страница.
+ * Tabs: Observer / Telegram / Vision / Workers / AI / Health.
+ * Каждый таб — отдельный компонент в components/settings/.
  */
 
 import { useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-
 import { PageHeader } from "@/components/layout/PageHeader";
-import { Tabs, TabsList, TabsContent } from "@/components/ui/Tabs";
-
+import { Tabs, TabsList, TabsContent, type TabItem } from "@/components/ui/Tabs";
 import { ObserverTab } from "@/components/settings/ObserverTab";
 import { TelegramTab } from "@/components/settings/TelegramTab";
 import { VisionTab } from "@/components/settings/VisionTab";
+import { WorkersTab } from "@/components/settings/WorkersTab";
+import { AITab } from "@/components/settings/AITab";
 import { HealthTab } from "@/components/settings/HealthTab";
 
 export const Route = createFileRoute("/settings/")({
   component: SettingsPage,
 });
 
-type SettingsTab = "observer" | "telegram" | "vision" | "health";
-
-const TABS: { value: SettingsTab; label: string }[] = [
+const TAB_ITEMS: TabItem[] = [
   { value: "observer", label: "Observer" },
   { value: "telegram", label: "Telegram" },
   { value: "vision", label: "Vision" },
-  { value: "health", label: "Здоровье" },
+  { value: "workers", label: "Workers" },
+  { value: "ai", label: "AI" },
+  { value: "health", label: "Health" },
 ];
 
 function SettingsPage() {
-  const [activeTab, setActiveTab] = useState<SettingsTab>("observer");
+  const [tab, setTab] = useState("observer");
 
   return (
     <>
       <PageHeader
-        eyebrowNum="05"
-        eyebrow="НАСТРОЙКИ"
-        title="Настройки"
-        displayNumber="05"
-        subtitle="Observer · Telegram · Vision · Здоровье"
+        eyebrowNum="06"
+        eyebrow="SETTINGS"
+        title="Settings"
+        displayNumber="06"
       />
 
-      <Tabs
-        value={activeTab}
-        onValueChange={(v) => setActiveTab(v as SettingsTab)}
-        variant="underline"
-        className="mb-8"
-      >
-        <TabsList items={TABS} variant="underline" className="w-full" />
+      <Tabs value={tab} onValueChange={setTab}>
+        <TabsList items={TAB_ITEMS} className="mb-8" />
 
-        <TabsContent value="observer" className="pt-8">
+        <TabsContent value="observer">
           <ObserverTab />
         </TabsContent>
 
-        <TabsContent value="telegram" className="pt-8">
+        <TabsContent value="telegram">
           <TelegramTab />
         </TabsContent>
 
-        <TabsContent value="vision" className="pt-8">
+        <TabsContent value="vision">
           <VisionTab />
         </TabsContent>
 
-        <TabsContent value="health" className="pt-8">
+        <TabsContent value="workers">
+          <WorkersTab />
+        </TabsContent>
+
+        <TabsContent value="ai">
+          <AITab />
+        </TabsContent>
+
+        <TabsContent value="health">
           <HealthTab />
         </TabsContent>
       </Tabs>

@@ -34,6 +34,9 @@ export function useRealtimeInvalidation(): DashboardSocketState {
           qc.invalidateQueries({ queryKey: ["dashboard"] });
           qc.invalidateQueries({ queryKey: ["tasks"] });
           break;
+        case "health_updated":
+          qc.invalidateQueries({ queryKey: ["health"] });
+          break;
         default:
           break;
       }

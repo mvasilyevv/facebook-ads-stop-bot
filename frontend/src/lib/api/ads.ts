@@ -1,77 +1,141 @@
 /**
- * Hooks для /ads-страницы.
- * Используются: AdsPage, AdDrawer, BulkActionBar.
+ * API-хуки для Ads-страницы.
+ *
+ * Эндпоинты:
+ *   GET  /api/dashboard/ads                         → AdSnapshot[] + X-Total-Count
+ *   GET  /api/ads/{fb_ad_id}/timeline               → AdTimeline
+ *   POST /api/dashboard/disable-tasks               → TaskQueueRow
+ *   POST /api/dashboard/disable-tasks/bulk          → BulkDisableResult
+ *   POST /api/dashboard/ads/{fb_ad_id}/snooze       → SnoozeResult
+ *   POST /api/dashboard/ads/bulk-snooze             → BulkSnoozeResult
+ *   GET  /api/dashboard/disable-tasks               → TaskQueueRow[]
+ *   GET  /api/dashboard/enable-tasks                → EnableTaskRow[]
  */
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiClient, apiGetWithCount } from "./client";
-import type { AdSnapshot, AlertEvent, TaskQueueRow } from "@/lib/types/api";
+import { apiGet, apiGetWithCount, apiSend } from "./client";
+import type { AdSnapshot, AdTimeline, TaskQueueRow } from "@fb/shared";
+import type { components } from "@fb/shared/api/generated";
 
-const KEYS = {
-  ads: (params?: Record<string, unknown>) => ["ads", params] as const,
-  timeline: (fb_ad_id: string) => ["ads", "timeline", fb_ad_id] as const,
-};
+type EnableTaskRow = components["schemas"]["EnableTaskRowOut"];
 
-/** Результат useAds: страница ads + общее число (из X-Total-Count) для пагинации. */
-export interface AdsResult {
-  items: AdSnapshot[];
-  total: number | null;
-}
+// ─── Ads list (общий для Dashboard + AdsPage) ─────────────────────────────────
 
-export function useAds(params: {
-  alert_state?: string;
-  include_inactive?: boolean;
+interface AdsParams {
+  alert_states?: string;
   limit?: number;
   offset?: number;
-}) {
-  return useQuery<AdsResult>({
-    queryKey: KEYS.ads(params),
-    queryFn: async () => {
-      const { data, total } = await apiGetWithCount<AdSnapshot[]>("/dashboard/ads", params);
-      return { items: data, total };
-    },
-    // Автообновление как на дашборде: список ads сам подтягивает свежие статусы/метрики
-    // (например авто-стоп объявления), чтобы снимок не «залипал» без ручного рефреша.
-    refetchInterval: 30_000,
-    refetchOnWindowFocus: true,
+  include_inactive?: boolean;
+}
+
+export function useAds(params?: AdsParams) {
+  return useQuery<{ data: AdSnapshot[]; total: number | null }>({
+    queryKey: ["ads", params],
+    queryFn: ({ signal }) =>
+      apiGetWithCount<AdSnapshot[]>("/dashboard/ads", params as Record<string, string | number | boolean | null | undefined>, signal),
+    staleTime: 10_000,
   });
 }
 
-export interface AdTimelineMetric {
-  cycle_ts: string;
-  spend: number | string | null;
-  impressions: number | null;
-  clicks: number | null;
-  leads: number | null;
-  deposits: number | null;
+// ─── Ad timeline ──────────────────────────────────────────────────────────────
+
+interface TimelineParams {
+  from_iso?: string;
+  to_iso?: string;
+  include_metrics?: boolean;
+  include_alerts?: boolean;
+  include_tasks?: boolean;
 }
 
-export interface AdTimeline {
-  fb_ad_id: string;
-  ad_name: string;
-  campaign_name?: string | null;
-  adset_name?: string | null;
-  offer_code?: string | null;
-  from_iso: string;
-  to_iso: string;
-  metrics: AdTimelineMetric[];
-  alerts: AlertEvent[];
-  tasks: TaskQueueRow[];
-}
-
-export function useAdTimeline(fb_ad_id: string | null) {
-  return useQuery({
-    queryKey: KEYS.timeline(fb_ad_id ?? ""),
-    queryFn: () => apiClient.get<AdTimeline>(`/ads/${fb_ad_id}/timeline`),
-    enabled: !!fb_ad_id,
+export function useAdTimeline(fbAdId: string, params?: TimelineParams) {
+  return useQuery<AdTimeline>({
+    queryKey: ["ads", fbAdId, "timeline", params],
+    queryFn: ({ signal }) =>
+      apiGet<AdTimeline>(`/ads/${fbAdId}/timeline`, params as Record<string, string | number | boolean | null | undefined>, signal),
+    enabled: !!fbAdId,
+    staleTime: 15_000,
   });
 }
 
-export function useCreateDisableTask() {
+// ─── Disable tasks ────────────────────────────────────────────────────────────
+
+interface DisableTasksParams {
+  status?: string;
+  fb_ad_id?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export function useDisableTasks(params?: DisableTasksParams) {
+  return useQuery<TaskQueueRow[]>({
+    queryKey: ["tasks", "disable", params],
+    queryFn: ({ signal }) =>
+      apiGet<TaskQueueRow[]>("/dashboard/disable-tasks", params as Record<string, string | number | boolean | null | undefined>, signal),
+    staleTime: 10_000,
+  });
+}
+
+// ─── Enable tasks ─────────────────────────────────────────────────────────────
+
+interface EnableTasksParams {
+  status?: string;
+  fb_ad_id?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export function useEnableTasks(params?: EnableTasksParams) {
+  return useQuery<EnableTaskRow[]>({
+    queryKey: ["tasks", "enable", params],
+    queryFn: ({ signal }) =>
+      apiGet<EnableTaskRow[]>("/dashboard/enable-tasks", params as Record<string, string | number | boolean | null | undefined>, signal),
+    staleTime: 10_000,
+  });
+}
+
+// ─── Bulk disable ─────────────────────────────────────────────────────────────
+
+interface BulkDisableIn {
+  fb_ad_ids: string[];
+  reason?: string;
+}
+
+interface BulkDisableResult {
+  created: number;
+  skipped: number;
+  task_ids: string[];
+}
+
+export function useBulkDisable() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (fb_ad_id: string) =>
-      apiClient.post<TaskQueueRow>("/dashboard/disable-tasks", { fb_ad_id }),
+    mutationFn: (body: BulkDisableIn) =>
+      apiSend<BulkDisableResult>("POST", "/dashboard/disable-tasks/bulk", body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["tasks", "disable"] });
+      qc.invalidateQueries({ queryKey: ["dashboard"] });
+      qc.invalidateQueries({ queryKey: ["ads"] });
+    },
+  });
+}
+
+// ─── Snooze одного объявления ─────────────────────────────────────────────────
+
+interface SnoozeIn {
+  minutes: number;
+}
+
+interface SnoozeResult {
+  ok: boolean;
+  fb_ad_id: string;
+  snoozed_until: string;
+}
+
+export function useSnoozeAd(fbAdId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: SnoozeIn) =>
+      apiSend<SnoozeResult>("POST", `/dashboard/ads/${fbAdId}/snooze`, body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["ads"] });
       qc.invalidateQueries({ queryKey: ["dashboard"] });
@@ -79,4 +143,33 @@ export function useCreateDisableTask() {
   });
 }
 
-export const adsKeys = KEYS;
+// ─── Bulk snooze ──────────────────────────────────────────────────────────────
+
+interface BulkSnoozeIn {
+  fb_ad_ids: string[];
+  minutes: number;
+}
+
+interface BulkSnoozeItemResult {
+  fb_ad_id: string;
+  ok: boolean;
+  error?: string;
+}
+
+interface BulkSnoozeResult {
+  results: BulkSnoozeItemResult[];
+  succeeded: number;
+  failed: number;
+}
+
+export function useBulkSnooze() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: BulkSnoozeIn) =>
+      apiSend<BulkSnoozeResult>("POST", "/dashboard/ads/bulk-snooze", body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["ads"] });
+      qc.invalidateQueries({ queryKey: ["dashboard"] });
+    },
+  });
+}

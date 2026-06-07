@@ -1,10 +1,10 @@
 /**
- * ConfirmDialog — destructive action с typed confirmation.
- * Confirm активен только когда input === target.
+ * ConfirmDialog — деструктивное действие с typed-confirmation или обычный approve.
+ * Confirm-кнопка активна только если typed === confirmWord.
+ * Variants: danger (default, красная) / primary (одобрение).
  */
-
 import { useState } from "react";
-import { Modal } from "./Modal";
+import { Modal, ModalFooter } from "./Modal";
 import { Button } from "./Button";
 import { Input } from "./Input";
 
@@ -13,11 +13,11 @@ interface ConfirmDialogProps {
   onOpenChange: (open: boolean) => void;
   title: string;
   description: string;
-  /** Строка, которую юзер должен напечатать чтобы активировать confirm. */
+  /** Строка, которую юзер должен напечатать для активации confirm. */
   confirmWord?: string;
   confirmLabel?: string;
   cancelLabel?: string;
-  /** Вариант кнопки подтверждения. danger — для деструктива (дефолт), primary — для обычного approve. */
+  /** danger — для деструктива, primary — для обычного approve. */
   confirmVariant?: "danger" | "primary";
   onConfirm: () => void | Promise<void>;
 }
@@ -37,13 +37,17 @@ export function ConfirmDialog({
   const [busy, setBusy] = useState(false);
   const ok = confirmWord ? typed === confirmWord : true;
 
+  function handleClose(next: boolean) {
+    if (!next) setTyped("");
+    onOpenChange(next);
+  }
+
   async function handleConfirm() {
-    if (!ok) return;
+    if (!ok || busy) return;
     setBusy(true);
     try {
       await onConfirm();
-      onOpenChange(false);
-      setTyped("");
+      handleClose(false);
     } finally {
       setBusy(false);
     }
@@ -52,10 +56,7 @@ export function ConfirmDialog({
   return (
     <Modal
       open={open}
-      onOpenChange={(o) => {
-        onOpenChange(o);
-        if (!o) setTyped("");
-      }}
+      onOpenChange={handleClose}
       title={title}
       description={description}
       size="sm"
@@ -63,22 +64,31 @@ export function ConfirmDialog({
       {confirmWord ? (
         <div className="mb-6">
           <Input
-            label={`Введите ${confirmWord} для подтверждения`}
+            label={`Введите "${confirmWord}" для подтверждения`}
             value={typed}
             onChange={(e) => setTyped(e.target.value)}
             placeholder={confirmWord}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && ok) void handleConfirm();
+            }}
+            // autoFocus через data-attribute чтобы не ломать a11y
             autoFocus
           />
         </div>
       ) : null}
-      <div className="flex justify-end gap-2">
-        <Button variant="ghost" onClick={() => onOpenChange(false)}>
+      <ModalFooter>
+        <Button variant="ghost" onClick={() => handleClose(false)}>
           {cancelLabel}
         </Button>
-        <Button variant={confirmVariant} disabled={!ok} loading={busy} onClick={handleConfirm}>
+        <Button
+          variant={confirmVariant}
+          disabled={!ok}
+          loading={busy}
+          onClick={() => void handleConfirm()}
+        >
           {confirmLabel}
         </Button>
-      </div>
+      </ModalFooter>
     </Modal>
   );
 }

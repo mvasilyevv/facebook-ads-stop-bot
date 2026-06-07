@@ -1,119 +1,144 @@
 /**
- * TanStack Query wrappers для dashboard endpoint'ов.
- * Соответствие apps/api/routers/v1/dashboard*.py.
+ * API-хуки для Dashboard.
+ *
+ * Эндпоинты:
+ *   GET /api/dashboard/batch           → DashboardBatch (stats + incidents + alerts + tasks)
+ *   GET /api/dashboard/stats           → DashboardStats
+ *   GET /api/dashboard/ads             → AdSnapshot[] + X-Total-Count
+ *   GET /api/dashboard/alerts          → AlertEvent[]
+ *   GET /api/dashboard/incidents       → Incident[]
+ *   GET /api/dashboard/spend-history   → SpendPoint[]
+ *   GET /api/dashboard/chart-data      → ChartBucket[]
+ *   GET /api/dashboard/performance     → DashboardPerformance
  */
 
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiClient } from "./client";
+import { useQuery } from "@tanstack/react-query";
+import { apiGet, apiGetWithCount } from "./client";
 import type {
-  DashboardStats,
-  DashboardBatch,
   AdSnapshot,
   AlertEvent,
+  ChartBucket,
+  DashboardBatch,
+  DashboardPerformance,
+  DashboardStats,
   Incident,
   SpendPoint,
-  ChartBucket,
-  TaskQueueRow,
-} from "@/lib/types/api";
+} from "@fb/shared";
 
-const KEYS = {
-  stats: ["dashboard", "stats"] as const,
-  batch: ["dashboard", "batch"] as const,
-  ads: (params?: Record<string, unknown>) => ["dashboard", "ads", params] as const,
-  alerts: (params?: Record<string, unknown>) => ["dashboard", "alerts", params] as const,
-  incidents: (stage?: string) => ["dashboard", "incidents", stage] as const,
-  spendHistory: (params?: Record<string, unknown>) =>
-    ["dashboard", "spend-history", params] as const,
-  chartData: (params?: Record<string, unknown>) => ["dashboard", "chart-data", params] as const,
-  enableTasks: (params?: Record<string, unknown>) =>
-    ["dashboard", "enable-tasks", params] as const,
-};
+// ─── Batch (главный агрегат для DashboardPage) ────────────────────────────────
 
-export function useDashboardStats() {
-  return useQuery({
-    queryKey: KEYS.stats,
-    queryFn: () => apiClient.get<DashboardStats>("/dashboard/stats"),
+export function useDashboardBatch() {
+  return useQuery<DashboardBatch>({
+    queryKey: ["dashboard", "batch"],
+    queryFn: ({ signal }) => apiGet<DashboardBatch>("/dashboard/batch", undefined, signal),
+    staleTime: 10_000,
     refetchInterval: 30_000,
   });
 }
 
-export function useDashboardBatch() {
-  return useQuery({
-    queryKey: KEYS.batch,
-    queryFn: () => apiClient.get<DashboardBatch>("/dashboard/batch"),
-    refetchInterval: 60_000,
+// ─── Stats (скалярные KPI) ────────────────────────────────────────────────────
+
+export function useDashboardStats() {
+  return useQuery<DashboardStats>({
+    queryKey: ["dashboard", "stats"],
+    queryFn: ({ signal }) => apiGet<DashboardStats>("/dashboard/stats", undefined, signal),
+    staleTime: 10_000,
+    refetchInterval: 30_000,
   });
 }
 
-export function useAdSnapshots(params: {
-  alert_state?: string;
-  fb_ad_ids?: string;
-  include_inactive?: boolean;
+// ─── Объявления ──────────────────────────────────────────────────────────────
+
+interface AdsParams {
+  alert_states?: string;
   limit?: number;
   offset?: number;
-}) {
-  return useQuery({
-    queryKey: KEYS.ads(params),
-    queryFn: () => apiClient.get<AdSnapshot[]>("/dashboard/ads", params),
+  include_inactive?: boolean;
+}
+
+export function useDashboardAds(params?: AdsParams) {
+  return useQuery<{ data: AdSnapshot[]; total: number | null }>({
+    queryKey: ["dashboard", "ads", params],
+    queryFn: ({ signal }) =>
+      apiGetWithCount<AdSnapshot[]>("/dashboard/ads", params as Record<string, string | number | boolean | null | undefined>, signal),
+    staleTime: 10_000,
   });
 }
 
-export function useAlertEvents(params: {
-  stage?: string;
-  fb_ad_id?: string;
-  from_iso?: string;
-  to_iso?: string;
+// ─── Алерты ──────────────────────────────────────────────────────────────────
+
+interface AlertsParams {
+  hours?: number;
   limit?: number;
-}) {
-  return useQuery({
-    queryKey: KEYS.alerts(params),
-    queryFn: () => apiClient.get<AlertEvent[]>("/dashboard/alerts", params),
+}
+
+export function useDashboardAlerts(params?: AlertsParams) {
+  return useQuery<AlertEvent[]>({
+    queryKey: ["dashboard", "alerts", params],
+    queryFn: ({ signal }) =>
+      apiGet<AlertEvent[]>("/dashboard/alerts", params as Record<string, string | number | boolean | null | undefined>, signal),
+    staleTime: 10_000,
   });
 }
 
-export function useIncidents(stage: "warning" | "stop" | "all" = "all", limit = 100) {
-  return useQuery({
-    queryKey: KEYS.incidents(stage),
-    queryFn: () => apiClient.get<Incident[]>("/dashboard/incidents", { stage, limit }),
+// ─── Инциденты ────────────────────────────────────────────────────────────────
+
+export function useDashboardIncidents() {
+  return useQuery<Incident[]>({
+    queryKey: ["dashboard", "incidents"],
+    queryFn: ({ signal }) => apiGet<Incident[]>("/dashboard/incidents", undefined, signal),
+    staleTime: 10_000,
+    refetchInterval: 30_000,
   });
 }
 
-export function useSpendHistory(params: { hours?: number; fb_ad_id?: string }) {
-  return useQuery({
-    queryKey: KEYS.spendHistory(params),
-    queryFn: () => apiClient.get<SpendPoint[]>("/dashboard/spend-history", params),
+// ─── Chart data ───────────────────────────────────────────────────────────────
+
+interface ChartParams {
+  hours?: number;
+  bucket?: "hour" | "day";
+}
+
+export function useChartData(params?: ChartParams) {
+  return useQuery<ChartBucket[]>({
+    queryKey: ["dashboard", "chart-data", params],
+    queryFn: ({ signal }) =>
+      apiGet<ChartBucket[]>("/dashboard/chart-data", params as Record<string, string | number | boolean | null | undefined>, signal),
+    staleTime: 30_000,
   });
 }
 
-export function useChartData(params: { hours?: number; bucket?: "hour" | "day" }) {
-  return useQuery({
-    queryKey: KEYS.chartData(params),
-    queryFn: () => apiClient.get<ChartBucket[]>("/dashboard/chart-data", params),
+// ─── Spend history ────────────────────────────────────────────────────────────
+
+interface SpendHistoryParams {
+  hours?: number;
+  fb_ad_id?: string;
+}
+
+export function useSpendHistory(params?: SpendHistoryParams) {
+  return useQuery<SpendPoint[]>({
+    queryKey: ["dashboard", "spend-history", params],
+    queryFn: ({ signal }) =>
+      apiGet<SpendPoint[]>("/dashboard/spend-history", params as Record<string, string | number | boolean | null | undefined>, signal),
+    staleTime: 30_000,
+    enabled: !!params?.fb_ad_id || params?.hours !== undefined,
   });
 }
 
-/**
- * Enable-очередь для Dashboard. `recent_disable_tasks` в /batch отдаёт только
- * disable-задачи, поэтому enable грузим отдельным read-only endpoint'ом.
- * refetch 60s — синхронно с /batch.
- */
-export function useEnableTasks(params: { limit?: number } = {}) {
-  return useQuery({
-    queryKey: KEYS.enableTasks(params),
-    queryFn: () => apiClient.get<TaskQueueRow[]>("/dashboard/enable-tasks", params),
-    refetchInterval: 60_000,
-  });
+// ─── Performance ──────────────────────────────────────────────────────────────
+
+interface PerformanceParams {
+  days?: number;
+  limit_campaigns?: number;
+  limit_offers?: number;
+  limit_rules?: number;
 }
 
-export function useTriggerScanNow() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: () => apiClient.post<void>("/settings/observer/scan-now"),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: KEYS.stats });
-      qc.invalidateQueries({ queryKey: KEYS.batch });
-    },
+export function useDashboardPerformance(params?: PerformanceParams) {
+  return useQuery<DashboardPerformance>({
+    queryKey: ["dashboard", "performance", params],
+    queryFn: ({ signal }) =>
+      apiGet<DashboardPerformance>("/dashboard/performance", params as Record<string, string | number | boolean | null | undefined>, signal),
+    staleTime: 60_000,
   });
 }
-
-export const dashboardKeys = KEYS;

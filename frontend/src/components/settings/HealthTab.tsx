@@ -1,231 +1,156 @@
 /**
- * HealthTab — вкладка мониторинга воркеров:
- *   - Список воркеров с ONLINE/OFFLINE badge и временем последнего heartbeat.
- *   - Overall-статус HEALTHY / DEGRADED / CRITICAL.
- *   - Restart observer через ConfirmDialog.
+ * HealthTab — статус воркеров из Redis heartbeat.
+ * Список воркеров (ONLINE/OFFLINE) + общий вердикт HEALTHY/DEGRADED/CRITICAL.
+ * Автообновление каждые 30 секунд.
  */
 
-import { useState } from "react";
-import { RefreshCcw } from "lucide-react";
-
+import { type FC } from "react";
+import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { ErrorState } from "@/components/ui/ErrorState";
-import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { toast } from "@/components/ui/Toast";
-import { formatRelativeTime, formatDateTime } from "@/lib/utils/format";
-import type { HealthWorker } from "@/lib/types/api";
+import { useHealthDetails } from "@/lib/api/settings";
+import { formatRelativeTime } from "@fb/shared";
+import { RefreshCw } from "lucide-react";
 
-import { useHealthDetails, useRestartObserver } from "@/lib/api/settings";
+/** Цвет вердикта → Badge variant. */
+function verdictVariant(v: string): "success" | "warning" | "stop" {
+  if (v === "HEALTHY") return "success";
+  if (v === "DEGRADED") return "warning";
+  return "stop";
+}
 
-/** Перевод overall-статуса. */
-const OVERALL_LABELS: Record<string, string> = {
-  HEALTHY: "Исправно",
-  DEGRADED: "Деградация",
-  CRITICAL: "Критично",
-};
+/** Читаемое имя воркера. */
+function workerLabel(name: string): string {
+  const labels: Record<string, string> = {
+    observer: "Observer",
+    meta_api: "Meta API Worker",
+    telegram_poller: "Telegram Poller",
+    cleanup: "Cleanup Worker",
+    reconciler: "Reconciler",
+    enable: "Enable Worker",
+    disable: "Disable Worker",
+    creator: "Creator Worker",
+    creator_recorder: "Creator Recorder",
+    cabinet_scheduler: "Cabinet Scheduler",
+    digest_scheduler: "Digest Scheduler",
+    tracker_aggregator: "Tracker Aggregator",
+    health_watchdog: "Health Watchdog",
+    enable_recommendation: "Enable Recommendation",
+  };
+  return labels[name] ?? name;
+}
 
-/** Человекочитаемые имена воркеров (ключ — системное имя heartbeat). */
-const WORKER_LABELS: Record<string, string> = {
-  observer: "Наблюдатель (скан + FSM)",
-  telegram_poller: "Telegram-поллер",
-  cleanup: "Очистка данных",
-  reconciler: "Реконсайлер задач",
-  meta_api: "Marketing API",
-  creator: "Создание кампаний",
-  creator_recorder: "Запись планов",
-  cabinet_scheduler: "Автостарт кабинета",
-  tracker_aggregator: "Агрегатор трекера",
-  health_watchdog: "Монитор здоровья",
-  digest: "Дайджест",
-  enable_reco: "Реко включения",
-};
+export const HealthTab: FC = () => {
+  const { data, isLoading, error, refetch, isFetching } = useHealthDetails();
 
-type ConfirmTarget = "observer" | null;
-
-export function HealthTab() {
-  const [confirmTarget, setConfirmTarget] = useState<ConfirmTarget>(null);
-
-  const healthQuery = useHealthDetails();
-  const restartObserver = useRestartObserver();
-
-  const health = healthQuery.data;
-
-  /** Цвет/вариант для overall. */
-  function overallVariant(overall: string): "success" | "warning" | "stop" {
-    if (overall === "HEALTHY") return "success";
-    if (overall === "DEGRADED") return "warning";
-    return "stop";
-  }
-
-  /** Перезапуск observer (единственное действие после удаления disable-воркера). */
-  async function handleConfirmRestart() {
-    await new Promise<void>((resolve, reject) => {
-      restartObserver.mutate(undefined, {
-        onSuccess: () => {
-          toast.success("Observer перезапускается");
-          resolve();
-        },
-        onError: (err) => {
-          toast.error("Ошибка", err instanceof Error ? err.message : String(err));
-          reject(err);
-        },
-      });
-    });
-  }
-
-  if (healthQuery.isError) {
+  if (isLoading) {
     return (
-      <ErrorState
-        title="Не удалось загрузить статус воркеров."
-        error={healthQuery.error}
-        onRetry={() => healthQuery.refetch()}
-      />
+      <div className="space-y-3 max-w-xl">
+        {Array.from({ length: 6 }).map((_, i) => (
+          <Skeleton key={i} className="h-10 w-full" />
+        ))}
+      </div>
     );
   }
 
+  if (error) {
+    return <ErrorState error={error} onRetry={() => void refetch()} />;
+  }
+
+  const verdict = data?.overall ?? "CRITICAL";
+  const workers = data?.workers ?? [];
+
+  const onlineCount = workers.filter((w) => w.status === "ONLINE").length;
+  const offlineCount = workers.filter((w) => w.status === "OFFLINE").length;
+
   return (
-    <>
-      <ConfirmDialog
-        open={!!confirmTarget}
-        onOpenChange={(o) => { if (!o) setConfirmTarget(null); }}
-        title="Перезапустить Observer?"
-        description="Observer завершит текущий цикл и перезапустится. Сканирование прервётся на ~10–30 секунд."
-        confirmWord="RESTART"
-        confirmLabel="Перезапустить"
-        cancelLabel="Отмена"
-        onConfirm={handleConfirmRestart}
-      />
-
-      <div className="grid grid-cols-[1fr_320px] gap-8">
-        {/* Левая колонка: список воркеров. */}
-        <div className="space-y-6">
-          <section>
-            <div className="flex items-center gap-3 mb-4">
-              <h3 className="font-display text-[10px] uppercase tracking-widest text-bg-9">
-                Воркеры
-              </h3>
-              {healthQuery.isLoading ? (
-                <Skeleton width={80} height={18} />
-              ) : health?.overall ? (
-                <Badge variant={overallVariant(health.overall)}>
-                  {OVERALL_LABELS[health.overall] ?? health.overall}
-                </Badge>
-              ) : null}
-            </div>
-
-            {healthQuery.isLoading ? (
-              <div className="space-y-2">
-                {Array.from({ length: 7 }).map((_, i) => (
-                  <Skeleton key={i} height={44} />
-                ))}
-              </div>
-            ) : (
-              <div className="border border-bg-5 divide-y divide-bg-5">
-                {health?.workers.map((w) => (
-                  <WorkerRow key={w.name} worker={w} />
-                ))}
-                {(health?.workers.length ?? 0) === 0 && (
-                  <div className="px-4 py-6 text-[13px] text-bg-9">
-                    Нет данных о воркерах.
-                  </div>
-                )}
-              </div>
-            )}
-          </section>
-        </div>
-
-        {/* Правая колонка: действия + легенда. */}
-        <div className="space-y-6">
-          <section className="border border-bg-5 bg-bg-1 p-5 space-y-3">
-            <h3 className="font-display text-[10px] uppercase tracking-widest text-bg-9 mb-3">
-              Действия
-            </h3>
-            <Button
-              variant="secondary"
-              size="sm"
-              fullWidth
-              leftIcon={<RefreshCcw size={13} aria-hidden="true" />}
-              onClick={() => setConfirmTarget("observer")}
-              loading={restartObserver.isPending}
+    <div className="space-y-5 max-w-xl">
+      {/* Общий вердикт */}
+      <Card eyebrow="Состояние системы" padded>
+        <div className="flex items-center justify-between">
+          <div>
+            <Badge
+              variant={verdictVariant(verdict)}
+              size="md"
+              className="text-[12px]"
             >
-              Перезапустить Observer
-            </Button>
-          </section>
+              {verdict}
+            </Badge>
+            <div className="mt-2 text-[11px] text-bg-9 font-display">
+              {onlineCount} из {workers.length} воркеров в сети
+              {offlineCount > 0 && (
+                <span className="text-danger ml-2">· {offlineCount} недоступны</span>
+              )}
+            </div>
+          </div>
 
-          <section className="border border-bg-5 bg-bg-1 p-5">
-            <h3 className="font-display text-[10px] uppercase tracking-widest text-bg-9 mb-3">
-              Легенда
-            </h3>
-            <ul className="text-[12px] text-bg-9 space-y-2">
-              <li>
-                <Badge variant="success" size="sm">ONLINE</Badge>{" "}
-                — посл. сигнал &lt;60 сек назад.
-              </li>
-              <li>
-                <Badge variant="stop" size="sm">OFFLINE</Badge>{" "}
-                — посл. сигнал &gt;60 сек назад.
-              </li>
-              <li>
-                <span className="font-display uppercase text-[10px] tracking-wider text-success">
-                  ИСПРАВНО
-                </span>{" "}
-                — все воркеры ONLINE.
-              </li>
-              <li>
-                <span className="font-display uppercase text-[10px] tracking-wider text-warning">
-                  ДЕГРАДАЦИЯ
-                </span>{" "}
-                — часть воркеров OFFLINE.
-              </li>
-              <li>
-                <span className="font-display uppercase text-[10px] tracking-wider text-danger">
-                  КРИТИЧНО
-                </span>{" "}
-                — большинство воркеров OFFLINE.
-              </li>
-            </ul>
-          </section>
+          <Button
+            size="icon"
+            variant="ghost"
+            onClick={() => void refetch()}
+            aria-label="Обновить статус"
+            disabled={isFetching}
+          >
+            <RefreshCw
+              size={14}
+              aria-hidden="true"
+              className={isFetching ? "animate-spin" : ""}
+            />
+          </Button>
         </div>
-      </div>
-    </>
-  );
-}
+      </Card>
 
-/** Строка воркера с badge ONLINE/OFFLINE и временем last heartbeat. */
-function WorkerRow({ worker }: { worker: HealthWorker }) {
-  const isOnline = worker.status === "ONLINE";
+      {/* Список воркеров */}
+      <Card eyebrow="Воркеры" padded={false}>
+        <div role="list" aria-label="Список воркеров">
+          {workers.length === 0 ? (
+            <div className="p-6 text-[13px] text-bg-9 font-display text-center">
+              Данных о воркерах нет
+            </div>
+          ) : (
+            workers.map((w, idx) => (
+              <div
+                key={w.name}
+                role="listitem"
+                className={`flex items-center justify-between px-6 py-4 ${
+                  idx < workers.length - 1 ? "border-b border-bg-4" : ""
+                }`}
+              >
+                {/* Имя воркера */}
+                <div>
+                  <div className="font-display text-[13px] text-bg-11">
+                    {workerLabel(w.name)}
+                  </div>
+                  <div className="font-display text-[10px] text-bg-7 mt-0.5 tabular-nums">
+                    {w.name}
+                  </div>
+                  {w.last_heartbeat_at && (
+                    <div className="font-display text-[10px] text-bg-8 mt-0.5">
+                      Последний heartbeat: {formatRelativeTime(w.last_heartbeat_at)}
+                    </div>
+                  )}
+                </div>
 
-  return (
-    <div className="flex items-center justify-between px-4 py-3 hover:bg-bg-2 transition-colors">
-      <div className="flex items-center gap-3">
-        <span
-          aria-hidden="true"
-          className={[
-            "size-1.5 rounded-full",
-            isOnline ? "bg-success" : "bg-danger",
-          ].join(" ")}
-        />
-        <span className="font-display text-[13px] text-bg-11" title={worker.name}>
-          {WORKER_LABELS[worker.name] ?? worker.name}
-        </span>
-      </div>
-      <div className="flex items-center gap-3">
-        <span
-          className="text-[11px] text-bg-9"
-          title={
-            worker.last_heartbeat_at ? `${formatDateTime(worker.last_heartbeat_at)} UTC` : undefined
-          }
-        >
-          {worker.last_heartbeat_at
-            ? formatRelativeTime(worker.last_heartbeat_at)
-            : "никогда"}
-        </span>
-        <Badge variant={isOnline ? "success" : "stop"} size="sm">
-          {worker.status}
-        </Badge>
+                {/* Статус */}
+                <Badge
+                  variant={w.status === "ONLINE" ? "success" : "neutral"}
+                  size="sm"
+                  aria-label={`Воркер ${workerLabel(w.name)}: ${w.status}`}
+                >
+                  {w.status}
+                </Badge>
+              </div>
+            ))
+          )}
+        </div>
+      </Card>
+
+      {/* Автообновление */}
+      <div className="text-[11px] text-bg-7 font-display">
+        Обновляется автоматически каждые 30 секунд.
       </div>
     </div>
   );
-}
+};

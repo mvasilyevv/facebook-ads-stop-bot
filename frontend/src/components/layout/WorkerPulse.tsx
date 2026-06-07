@@ -1,11 +1,13 @@
 /**
  * WorkerPulse — health-индикатор для TopBar / Sidebar.
- * Дышит (pulse-dot), цвет по health.
+ * Пульсирующая точка + "N/M воркеров", цвет по overall health.
+ * Данные из GET /health/details (TanStack Query).
+ *
+ * Переиспользуемый компонент: встречается в TopBar и может быть в Sidebar footer.
  */
 
 import { type CSSProperties } from "react";
 import { useHealthDetails } from "@/lib/api/settings";
-import { Tooltip } from "../ui/Tooltip";
 
 type Variant = "success" | "warning" | "danger" | "muted";
 
@@ -16,7 +18,6 @@ const DOT_BG: Record<Variant, string> = {
   muted: "bg-bg-8",
 };
 
-// Цвет «дыхания» совпадает с цветом точки (раньше всегда был зелёным).
 const DOT_GLOW: Record<Variant, string> = {
   success: "rgba(126, 180, 122, 0.4)",
   warning: "rgba(212, 168, 88, 0.4)",
@@ -39,36 +40,31 @@ export function WorkerPulse() {
 
   const total = data?.workers.length ?? 0;
   const online = data?.workers.filter((w) => w.status === "ONLINE").length ?? 0;
-
   const label = data ? `${online}/${total} воркеров` : "воркеры";
-  const tooltipContent = data ? (
-    <div className="space-y-1">
-      {data.workers.map((w) => (
-        <div key={w.name} className="flex items-center gap-2">
-          <span
-            aria-hidden="true"
-            className={`size-1.5 rounded-full inline-block ${
-              w.status === "ONLINE" ? "bg-success" : "bg-danger"
-            }`}
-          />
-          <span className="text-[11px]">{w.name}</span>
-        </div>
-      ))}
-    </div>
-  ) : (
-    <span>Здоровье воркеров недоступно</span>
-  );
 
   return (
-    <Tooltip content={tooltipContent} side="bottom">
-      <div className="flex items-center gap-2 text-[12px] text-bg-10 font-display tracking-wider cursor-default">
-        <span
-          aria-hidden="true"
-          style={{ "--pulse-glow": DOT_GLOW[variant] } as CSSProperties}
-          className={`size-2 rounded-full pulse-dot ${DOT_BG[variant]}`}
-        />
-        <span>{label}</span>
-      </div>
-    </Tooltip>
+    <div
+      className="flex items-center gap-2 text-[12px] text-bg-10 font-display tracking-[.02em] cursor-default"
+      title={
+        data
+          ? data.workers
+              .map((w) => `${w.status === "ONLINE" ? "●" : "○"} ${w.name}`)
+              .join("\n")
+          : "Здоровье воркеров недоступно"
+      }
+      aria-label={`Воркеры: ${label}`}
+    >
+      <span
+        aria-hidden="true"
+        style={
+          {
+            "--pulse-glow": DOT_GLOW[variant],
+            "--pulse-color": DOT_GLOW[variant],
+          } as CSSProperties
+        }
+        className={`size-2 rounded-full ${DOT_BG[variant]} pulse-dot`}
+      />
+      <span>{label}</span>
+    </div>
   );
 }

@@ -21,7 +21,11 @@
 
 from __future__ import annotations
 
+import base64
+import json
 import logging
+import uuid
+from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
@@ -296,6 +300,157 @@ def _build_sql(
     return sql, params
 
 
+def encode_cursor(last_seen_at: datetime | None, internal_id: uuid.UUID | None) -> str | None:
+    """Кодирует (last_seen_at, id) в base64-строку для keyset-пагинации.
+
+    Ключ сортировки в _build_sql: ORDER BY fb_ads.last_seen_at DESC NULLS LAST, fb_ads.id ASC.
+    Cursor стабилен: вставка новых строк не сдвигает страницы при листании вниз.
+    """
+    if last_seen_at is None or internal_id is None:
+        return None
+    data = {
+        "lsa": last_seen_at.isoformat()
+        if hasattr(last_seen_at, "isoformat")
+        else str(last_seen_at),
+        "id": str(internal_id),
+    }
+    return base64.urlsafe_b64encode(json.dumps(data).encode()).decode()
+
+
+def decode_cursor(cursor: str) -> tuple[datetime | None, uuid.UUID | None]:
+    """Декодирует cursor обратно в (last_seen_at, id). None при любой ошибке."""
+    try:
+        data = json.loads(base64.urlsafe_b64decode(cursor.encode()))
+        lsa = datetime.fromisoformat(data["lsa"])
+        uid = uuid.UUID(data["id"])
+        return lsa, uid
+    except (KeyError, ValueError, TypeError):
+        return None, None
+
+
+def _build_sql_cursor(
+    *,
+    fb_ad_ids: list[str] | None,
+    alert_states: list[str] | None,
+    include_inactive: bool,
+    limit: int,
+    cursor_last_seen_at: datetime | None,
+    cursor_id: uuid.UUID | None,
+) -> tuple[str, dict[str, Any]]:
+    """SQL с keyset-пагинацией по (last_seen_at DESC NULLS LAST, id ASC).
+
+    При наличии cursor добавляет WHERE-условие вида:
+        (last_seen_at < :c_lsa) OR (last_seen_at = :c_lsa AND id > :c_id)
+    для строк «после» курсора (т.е. следующей страницы).
+
+    Partition pruning в LATERAL по cycle_ts сохраняется (тот же :lookback_days).
+    """
+    _MAX_LIMIT_CURSOR = 2000  # выше лимит для виртуализации 1000+ строк
+    where_clauses: list[str] = []
+    params: dict[str, Any] = {
+        "limit": min(limit, _MAX_LIMIT_CURSOR),
+        "lookback_days": _METRICS_LOOKBACK_DAYS,
+    }
+
+    if not include_inactive:
+        where_clauses.append("fb_ads.is_active = true")
+
+    if fb_ad_ids:
+        where_clauses.append("fb_ads.fb_ad_id = ANY(:fb_ad_ids)")
+        params["fb_ad_ids"] = list(fb_ad_ids)
+
+    if alert_states:
+        where_clauses.append("COALESCE(s.alert_state, 'normal') = ANY(:alert_states)")
+        params["alert_states"] = list(alert_states)
+
+    if cursor_last_seen_at is not None and cursor_id is not None:
+        # Keyset: строки «после» курсора по (last_seen_at DESC, id ASC).
+        # NULL last_seen_at сортируется последним (NULLS LAST).
+        where_clauses.append(
+            "(fb_ads.last_seen_at < :c_lsa "
+            " OR (fb_ads.last_seen_at = :c_lsa AND fb_ads.id > :c_id) "
+            " OR fb_ads.last_seen_at IS NULL)"
+        )
+        params["c_lsa"] = cursor_last_seen_at
+        params["c_id"] = cursor_id
+
+    where_sql = " AND ".join(where_clauses) if where_clauses else "TRUE"
+
+    # SQL идентичен _build_sql, но без OFFSET и с расширенным лимитом.
+    sql = f"""
+    SELECT
+        fb_ads.fb_ad_id                    AS fb_ad_id,
+        fb_ads.id                          AS internal_id,
+        fb_ads.ad_name                     AS ad_name,
+        fb_campaigns.campaign_name         AS campaign_name,
+        fb_adsets.adset_name               AS adset_name,
+        offers.code                        AS offer_code,
+        offers.id                          AS offer_id,
+        s.alert_state                      AS alert_state,
+        s.snoozed_until                    AS snoozed_until,
+        s.open_state_token                 AS open_state_token,
+        s.last_transition_at               AS last_transition_at,
+        ev_stages.last_warning_at          AS last_warning_at,
+        ev_stages.last_stop_at             AS last_stop_at,
+        fb_ads.is_active                   AS is_active,
+        fb_ads.last_seen_at                AS last_seen_at,
+        fb_ads.delivery_status             AS delivery_status,
+        mo.meta_ad_status                  AS meta_ad_status,
+        latest_m.cycle_ts                  AS m_cycle_ts,
+        latest_m.spend                     AS m_spend,
+        latest_m.impressions               AS m_impressions,
+        latest_m.clicks                    AS m_clicks,
+        latest_m.ctr                       AS m_ctr,
+        latest_m.cpc                       AS m_cpc,
+        latest_m.cpm                       AS m_cpm,
+        latest_m.reach                     AS m_reach,
+        latest_m.frequency                 AS m_frequency,
+        latest_m.leads                     AS m_leads,
+        latest_m.cost_per_lead             AS m_cost_per_lead,
+        latest_m.registrations             AS m_registrations,
+        latest_m.cost_per_registration     AS m_cost_per_registration,
+        latest_m.deposits                  AS m_deposits,
+        last_ev.matched_rule_codes         AS last_ev_matched_rule_codes,
+        last_ev.stage                      AS last_ev_stage
+    FROM fb_ads
+    LEFT JOIN ad_alert_state s     ON s.ad_id = fb_ads.id
+    LEFT JOIN fb_adsets            ON fb_ads.adset_id = fb_adsets.id
+    LEFT JOIN fb_campaigns         ON fb_adsets.campaign_id = fb_campaigns.id
+    LEFT JOIN offers               ON fb_campaigns.offer_id = offers.id
+    LEFT JOIN meta_api_observation mo ON mo.ad_id = fb_ads.id
+    LEFT JOIN LATERAL (
+        SELECT cycle_ts, spend, impressions, clicks, ctr, cpc, cpm, reach,
+               frequency, leads, cost_per_lead, registrations,
+               cost_per_registration, deposits
+        FROM ad_metrics
+        WHERE ad_metrics.ad_id = fb_ads.id
+          AND ad_metrics.cycle_ts >= NOW() - make_interval(days => :lookback_days)
+        ORDER BY cycle_ts DESC
+        LIMIT 1
+    ) latest_m ON true
+    LEFT JOIN LATERAL (
+        SELECT ae.matched_rule_codes, ae.stage
+        FROM alert_events ae
+        WHERE ae.ad_id = fb_ads.id
+          AND ae.created_at >= NOW() - make_interval(days => :lookback_days)
+        ORDER BY ae.created_at DESC
+        LIMIT 1
+    ) last_ev ON true
+    LEFT JOIN LATERAL (
+        SELECT
+            MAX(ae.created_at) FILTER (WHERE ae.stage = 'warning') AS last_warning_at,
+            MAX(ae.created_at) FILTER (WHERE ae.stage = 'stop')    AS last_stop_at
+        FROM alert_events ae
+        WHERE ae.ad_id = fb_ads.id
+          AND ae.created_at >= NOW() - make_interval(days => :lookback_days)
+    ) ev_stages ON true
+    WHERE {where_sql}
+    ORDER BY fb_ads.last_seen_at DESC NULLS LAST, fb_ads.id ASC
+    LIMIT :limit
+    """
+    return sql, params
+
+
 async def build_ad_snapshot(
     engine: AsyncEngine,
     *,
@@ -342,6 +497,60 @@ async def build_ad_snapshot(
         rows = result.all()
 
     return [_build_row_dict(r) for r in rows]
+
+
+async def build_ad_snapshot_with_cursor(
+    engine: AsyncEngine,
+    *,
+    fb_ad_ids: list[str] | None = None,
+    alert_states: list[str] | None = None,
+    limit: int = 200,
+    cursor: str | None = None,
+    include_inactive: bool = False,
+) -> tuple[list[dict[str, Any]], str | None]:
+    """Keyset/cursor-пагинация для виртуализации 1000+ строк.
+
+    Cursor = base64(last_seen_at + id) последней строки предыдущей страницы.
+    Возвращает (rows, next_cursor). next_cursor = None если это последняя страница.
+
+    Обратная совместимость: если cursor=None — ведёт себя как первая страница
+    (аналог offset=0). Лимит поднят до 2000 (configure через limit-параметр).
+
+    Partition-pruning в LATERAL по cycle_ts сохранён (lookback_days).
+    Нет дублей на границах: keyset по (last_seen_at DESC NULLS LAST, id ASC) стабилен
+    при добавлении новых строк во время листания.
+    """
+    cursor_lsa: datetime | None = None
+    cursor_uid: uuid.UUID | None = None
+    if cursor:
+        cursor_lsa, cursor_uid = decode_cursor(cursor)
+
+    sql, params = _build_sql_cursor(
+        fb_ad_ids=fb_ad_ids,
+        alert_states=alert_states,
+        include_inactive=include_inactive,
+        limit=limit,
+        cursor_last_seen_at=cursor_lsa,
+        cursor_id=cursor_uid,
+    )
+
+    async with engine.connect() as conn:
+        result = await conn.execute(text(sql), params)
+        rows = result.all()
+
+    items = [_build_row_dict(r) for r in rows]
+
+    # next_cursor — из последней строки результата, только если вернулось limit строк
+    # (признак: возможно есть следующая страница).
+    next_cursor: str | None = None
+    if len(rows) == params["limit"]:
+        last = rows[-1]
+        next_cursor = encode_cursor(
+            getattr(last, "last_seen_at", None),
+            getattr(last, "internal_id", None),
+        )
+
+    return items, next_cursor
 
 
 async def build_incidents_snapshot(

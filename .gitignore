@@ -49,11 +49,14 @@ playwright-report/
 test-results/
 npm-debug.log*
 
-# Зависимости и сборка фронтенда
+# Зависимости и сборка фронтенда (pnpm monorepo)
+node_modules/
+**/node_modules/
 frontend/dist/
-frontend/node_modules/
 frontend-mini/dist/
-frontend-mini/node_modules/
+packages/*/dist/
+**/.tanstack/
+frontend/storybook-static/
 services/browser-agent/node_modules/
 
 # Локальные базы данных

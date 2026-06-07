@@ -118,7 +118,7 @@ export function useDashboardSocket(options: DashboardSocketOptions = {}): Dashbo
 
     ws.addEventListener("message", (event) => {
       try {
-        const parsed = JSON.parse(event.data);
+        const parsed = JSON.parse(event.data as string);
         onMessageRef.current?.(parsed);
       } catch {
         onMessageRef.current?.(event.data);
@@ -157,9 +157,6 @@ export function useDashboardSocket(options: DashboardSocketOptions = {}): Dashbo
         clearReconnectTimer();
       };
     }
-    // setState() внутри connect — намеренная синхронизация с WebSocket lifecycle,
-    // а не каскадный setState (см. handleFailure / open / etc).
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     connect();
     return () => {
       clearReconnectTimer();
@@ -173,8 +170,6 @@ export function useDashboardSocket(options: DashboardSocketOptions = {}): Dashbo
   // При отключении hook'а сбрасываем статус в idle.
   useEffect(() => {
     if (!enabled && status !== "idle") {
-      // Намеренный синк ref-based prop'а disabled в state status.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setStatus("idle");
     }
   }, [enabled, status]);

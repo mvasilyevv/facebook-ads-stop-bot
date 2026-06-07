@@ -1,417 +1,151 @@
 /**
- * TelegramTab — вкладка настроек Telegram:
- *   - Статус авторизации, bot_username, poller_status.
- *   - Установка токена (masked input).
- *   - Список recipients с кнопкой удаления (ConfirmDialog).
- *   - Генерация invite-кода.
- *   - Auth deep-link (copy).
+ * TelegramTab — настройки Telegram-бота:
+ * токен, статус авторизации, deep-link, web-app-url.
  */
 
-import { useState, type ChangeEvent } from "react";
-import { Copy, Eye, EyeOff, Link2, Trash2, UserPlus } from "lucide-react";
-
-import { Badge } from "@/components/ui/Badge";
+import { useState, type FC } from "react";
+import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
+import { Badge } from "@/components/ui/Badge";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { ErrorState } from "@/components/ui/ErrorState";
-import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { toast } from "@/components/ui/Toast";
-import { formatRelativeTime } from "@/lib/utils/format";
-import type { TelegramRecipient } from "@/lib/types/api";
-
 import {
   useTelegramSettings,
-  useTelegramRecipients,
-  useSetTelegramToken,
+  useUpdateTelegramToken,
   useDeleteTelegramToken,
-  useDeleteTelegramRecipient,
-  useCreateTelegramInvite,
 } from "@/lib/api/settings";
+import { CheckCircle2, XCircle } from "lucide-react";
 
-/** Перевод статуса поллера. */
-const POLLER_LABELS: Record<string, string> = {
-  running: "работает",
-  stopped: "остановлен",
-  starting: "запускается",
-  error: "ошибка",
-};
+export const TelegramTab: FC = () => {
+  const { data, isLoading, error, refetch } = useTelegramSettings();
+  const tokenMut = useUpdateTelegramToken();
+  const deleteMut = useDeleteTelegramToken();
 
-/** Перевод роли получателя. */
-const ROLE_LABELS: Record<string, string> = {
-  owner: "владелец",
-  viewer: "наблюдатель",
-  admin: "админ",
-};
+  const [newToken, setNewToken] = useState("");
 
-export function TelegramTab() {
-  // Состояние формы токена (masked).
-  const [tokenInput, setTokenInput] = useState("");
-  const [showTokenForm, setShowTokenForm] = useState(false);
-  // id получателя для удаления.
-  const [deleteTarget, setDeleteTarget] = useState<TelegramRecipient | null>(null);
-  // Подтверждение удаления токена бота.
-  const [deleteTokenOpen, setDeleteTokenOpen] = useState(false);
-  // Показ токена в открытом виде при вводе.
-  const [showToken, setShowToken] = useState(false);
-  // Сгенерированный invite code.
-  const [inviteCode, setInviteCode] = useState<string | null>(null);
-
-  const settingsQuery = useTelegramSettings();
-  const recipientsQuery = useTelegramRecipients();
-
-  const setToken = useSetTelegramToken();
-  const deleteToken = useDeleteTelegramToken();
-  const deleteRecipient = useDeleteTelegramRecipient();
-  const createInvite = useCreateTelegramInvite();
-
-  const settings = settingsQuery.data;
-
-  /** Скопировать текст в буфер обмена. */
-  async function copyToClipboard(text: string, label = "Скопировано") {
-    try {
-      await navigator.clipboard.writeText(text);
-      toast.success(label);
-    } catch {
-      toast.error("Не удалось скопировать");
-    }
-  }
-
-  function handleSetToken() {
-    if (!tokenInput.trim()) {
-      toast.error("Введите токен");
-      return;
-    }
-    // Не логируем токен — только индикатор.
-    setToken.mutate(tokenInput.trim(), {
-      onSuccess: () => {
-        toast.success("Токен сохранён");
-        setTokenInput("");
-        setShowTokenForm(false);
-      },
-      onError: (err) =>
-        toast.error("Ошибка сохранения токена", err instanceof Error ? err.message : String(err)),
-    });
-  }
-
-  function handleDeleteToken() {
-    deleteToken.mutate(undefined, {
-      onSuccess: () => toast.success("Токен удалён"),
-      onError: (err) =>
-        toast.error("Ошибка", err instanceof Error ? err.message : String(err)),
-    });
-  }
-
-  function handleDeleteRecipient() {
-    if (!deleteTarget) return;
-    deleteRecipient.mutate(deleteTarget.id, {
-      onSuccess: () => {
-        toast.success("Получатель удалён");
-        setDeleteTarget(null);
-      },
-      onError: (err) => {
-        toast.error("Ошибка", err instanceof Error ? err.message : String(err));
-        setDeleteTarget(null);
-      },
-    });
-  }
-
-  function handleGenerateInvite() {
-    createInvite.mutate(undefined, {
-      onSuccess: (data) => {
-        setInviteCode(data.code); // backend возвращает code, не invite_code
-        toast.success("Invite-код создан");
-      },
-      onError: (err) =>
-        toast.error("Ошибка", err instanceof Error ? err.message : String(err)),
-    });
-  }
-
-  if (settingsQuery.isError) {
+  if (isLoading) {
     return (
-      <ErrorState
-        title="Не удалось загрузить настройки Telegram."
-        error={settingsQuery.error}
-        onRetry={() => settingsQuery.refetch()}
-      />
+      <div className="space-y-3 max-w-xl">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <Skeleton key={i} className="h-10 w-full" />
+        ))}
+      </div>
     );
   }
 
+  if (error) {
+    return <ErrorState error={error} onRetry={() => void refetch()} />;
+  }
+
+  const handleSaveToken = async () => {
+    if (!newToken.trim()) return;
+    try {
+      await tokenMut.mutateAsync(newToken.trim());
+      setNewToken("");
+      toast.success("Токен сохранён");
+    } catch (e) {
+      toast.error("Ошибка сохранения токена", e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const handleDeleteToken = async () => {
+    try {
+      await deleteMut.mutateAsync();
+      toast.success("Токен удалён");
+    } catch (e) {
+      toast.error("Ошибка удаления токена", e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const isAuthorized = data?.is_authorized ?? false;
+  const pollerOnline = data?.poller_status === "ONLINE";
+
   return (
-    <>
-      {/* ConfirmDialog для удаления получателя. */}
-      <ConfirmDialog
-        open={!!deleteTarget}
-        onOpenChange={(o) => { if (!o) setDeleteTarget(null); }}
-        title="Удалить получателя?"
-        description={`Пользователь ${deleteTarget?.username ?? deleteTarget?.chat_id} потеряет доступ к алертам.`}
-        confirmWord="DELETE"
-        confirmLabel="Удалить"
-        cancelLabel="Отмена"
-        onConfirm={handleDeleteRecipient}
-      />
-
-      {/* ConfirmDialog для удаления токена бота — без токена бот перестаёт работать. */}
-      <ConfirmDialog
-        open={deleteTokenOpen}
-        onOpenChange={setDeleteTokenOpen}
-        title="Удалить токен бота?"
-        description="Бот перестанет работать: алерты, команды и подтверждения через Telegram станут недоступны, пока не зададите токен снова."
-        confirmWord="DELETE"
-        confirmLabel="Удалить токен"
-        cancelLabel="Отмена"
-        onConfirm={handleDeleteToken}
-      />
-
-      <div className="grid grid-cols-[1fr_320px] gap-8">
-        {/* Левая колонка. */}
-        <div className="space-y-6">
-          {/* Блок: статус авторизации. */}
-          <section className="border border-bg-5 bg-bg-1 p-5">
-            <h3 className="font-display text-[10px] uppercase tracking-widest text-bg-9 mb-4">
-              Статус бота
-            </h3>
-            {settingsQuery.isLoading ? (
-              <div className="space-y-3">
-                <Skeleton height={18} />
-                <Skeleton height={14} width="60%" />
-              </div>
+    <div className="space-y-5 max-w-xl">
+      {/* Статус */}
+      <Card eyebrow="Статус бота" padded>
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-[13px] text-bg-10">Авторизация</span>
+            {isAuthorized ? (
+              <Badge variant="success" size="sm">
+                <CheckCircle2 size={10} aria-hidden="true" />
+                Авторизован
+              </Badge>
             ) : (
-              <div className="space-y-3">
-                <div className="flex items-center gap-3">
-                  <Badge variant={settings?.is_authorized ? "success" : "neutral"}>
-                    {settings?.is_authorized ? "авторизован" : "не авторизован"}
-                  </Badge>
-                  <Badge variant="neutral" withDot={false} title="Статус Telegram-поллера">
-                    Поллер:{" "}
-                    {settings?.poller_status
-                      ? (POLLER_LABELS[settings.poller_status] ?? settings.poller_status)
-                      : "—"}
-                  </Badge>
-                </div>
-                {settings?.bot_username ? (
-                  <div className="text-[12px] text-bg-9">
-                    Бот:{" "}
-                    <span className="text-bg-11 font-numeric">@{settings.bot_username}</span>
-                  </div>
-                ) : null}
-              </div>
+              <Badge variant="neutral" size="sm">
+                <XCircle size={10} aria-hidden="true" />
+                Не авторизован
+              </Badge>
             )}
-          </section>
+          </div>
 
-          {/* Блок: токен. */}
-          <section>
-            <h3 className="font-display text-[10px] uppercase tracking-widest text-bg-9 mb-4">
-              Токен бота
-            </h3>
-            {!showTokenForm ? (
-              <div className="flex gap-2">
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => setShowTokenForm(true)}
-                >
-                  {settings?.is_authorized ? "Заменить токен" : "Установить токен"}
-                </Button>
-                {settings?.is_authorized ? (
-                  <Button
-                    variant="danger"
-                    size="sm"
-                    loading={deleteToken.isPending}
-                    onClick={() => setDeleteTokenOpen(true)}
-                  >
-                    Удалить токен
-                  </Button>
-                ) : null}
-              </div>
-            ) : (
-              <div className="flex items-end gap-2">
-                <Input
-                  id="tg-token"
-                  label="Bot Token"
-                  type={showToken ? "text" : "password"}
-                  placeholder="1234567890:ABCDef..."
-                  value={tokenInput}
-                  onChange={(e: ChangeEvent<HTMLInputElement>) => setTokenInput(e.target.value)}
-                  helpText="Токен не логируется и не отображается после сохранения."
-                  className="max-w-sm"
-                  autoComplete="off"
-                  rightIcon={
-                    <button
-                      type="button"
-                      aria-label={showToken ? "Скрыть токен" : "Показать токен"}
-                      onClick={() => setShowToken((p) => !p)}
-                      className="text-bg-9 hover:text-bg-11 transition-colors"
-                    >
-                      {showToken ? (
-                        <EyeOff size={14} aria-hidden="true" />
-                      ) : (
-                        <Eye size={14} aria-hidden="true" />
-                      )}
-                    </button>
-                  }
-                />
-                <Button
-                  variant="primary"
-                  size="sm"
-                  loading={setToken.isPending}
-                  onClick={handleSetToken}
-                >
-                  Сохранить
-                </Button>
-                <Button variant="ghost" size="sm" onClick={() => { setShowTokenForm(false); setTokenInput(""); }}>
-                  Отмена
-                </Button>
-              </div>
-            )}
-          </section>
+          <div className="flex items-center justify-between">
+            <span className="text-[13px] text-bg-10">Poller</span>
+            <Badge variant={pollerOnline ? "success" : "neutral"} size="sm">
+              {data?.poller_status ?? "OFFLINE"}
+            </Badge>
+          </div>
 
-          {/* Блок: список recipients. */}
-          <section>
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="font-display text-[10px] uppercase tracking-widest text-bg-9">
-                Получатели алертов
-              </h3>
-              <Button
-                variant="secondary"
-                size="sm"
-                leftIcon={<UserPlus size={13} aria-hidden="true" />}
-                loading={createInvite.isPending}
-                onClick={handleGenerateInvite}
-              >
-                Пригласить
-              </Button>
+          {data?.bot_username && (
+            <div className="flex items-center justify-between">
+              <span className="text-[13px] text-bg-10">Бот</span>
+              <span className="font-display text-[12px] text-bg-9">
+                @{data.bot_username}
+              </span>
             </div>
-
-            {/* Invite code отображается после генерации. */}
-            {inviteCode ? (
-              <div className="mb-4 border border-bg-5 bg-bg-1 p-4 flex items-center justify-between gap-4">
-                <div>
-                  <div className="text-[10px] font-display uppercase tracking-widest text-bg-9 mb-1">
-                    Invite code
-                  </div>
-                  <div className="font-numeric text-[14px] text-accent">{inviteCode}</div>
-                  <div className="text-[11px] text-bg-9 mt-1">
-                    Перешлите пользователю или скопируйте ссылку.
-                  </div>
-                </div>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  leftIcon={<Copy size={13} aria-hidden="true" />}
-                  aria-label="Скопировать invite code"
-                  onClick={() => copyToClipboard(inviteCode, "Invite code скопирован")}
-                >
-                  Скопировать
-                </Button>
-              </div>
-            ) : null}
-
-            {recipientsQuery.isError ? (
-              <ErrorState
-                title="Не удалось загрузить получателей."
-                error={recipientsQuery.error}
-                onRetry={() => recipientsQuery.refetch()}
-              />
-            ) : recipientsQuery.isLoading ? (
-              <div className="space-y-2">
-                {[0, 1, 2].map((i) => (
-                  <Skeleton key={i} height={40} />
-                ))}
-              </div>
-            ) : recipientsQuery.data?.length === 0 ? (
-              <p className="text-[13px] text-bg-9 py-4">
-                Получателей нет. Пригласите первого пользователя.
-              </p>
-            ) : (
-              <div className="border border-bg-5 divide-y divide-bg-5">
-                {recipientsQuery.data?.map((r) => (
-                  <RecipientRow
-                    key={r.id}
-                    recipient={r}
-                    onDelete={() => setDeleteTarget(r)}
-                  />
-                ))}
-              </div>
-            )}
-          </section>
-        </div>
-
-        {/* Правая колонка: auth deep-link. */}
-        <div className="space-y-6">
-          {settings?.auth_deep_link ? (
-            <section className="border border-bg-5 bg-bg-1 p-5">
-              <h3 className="font-display text-[10px] uppercase tracking-widest text-bg-9 mb-4">
-                Auth deep-link
-              </h3>
-              <p className="text-[12px] text-bg-9 mb-3">
-                Ссылка для авторизации бота через Telegram.
-              </p>
-              <Button
-                variant="secondary"
-                size="sm"
-                fullWidth
-                leftIcon={<Link2 size={13} aria-hidden="true" />}
-                onClick={() => copyToClipboard(settings.auth_deep_link!, "Deep-link скопирован")}
-              >
-                Скопировать deep-link
-              </Button>
-            </section>
-          ) : null}
-
-          <section className="border border-bg-5 bg-bg-1 p-5">
-            <h3 className="font-display text-[10px] uppercase tracking-widest text-bg-9 mb-3">
-              Как подключить
-            </h3>
-            <ol className="text-[12px] text-bg-9 space-y-2 list-decimal list-inside">
-              <li>Создайте бота через @BotFather, скопируйте токен.</li>
-              <li>Вставьте токен в поле выше.</li>
-              <li>Нажмите «Пригласить» и отправьте код через /start в боте.</li>
-            </ol>
-          </section>
-        </div>
-      </div>
-    </>
-  );
-}
-
-/** Строка одного Telegram-получателя. */
-function RecipientRow({
-  recipient,
-  onDelete,
-}: {
-  recipient: TelegramRecipient;
-  onDelete: () => void;
-}) {
-  const isRevoked = !!recipient.revoked_at;
-
-  return (
-    <div className="flex items-center justify-between px-4 py-3 hover:bg-bg-2 transition-colors">
-      <div>
-        <div className="flex items-center gap-2">
-          <span className="text-[13px] text-bg-11 font-medium">
-            {recipient.username ? `@${recipient.username}` : `chat:${recipient.chat_id}`}
-          </span>
-          <Badge variant={isRevoked ? "disabled" : "neutral"} size="sm" withDot={false}>
-            {ROLE_LABELS[recipient.role] ?? recipient.role}
-          </Badge>
-          {isRevoked && (
-            <Badge variant="disabled" size="sm">отозван</Badge>
           )}
         </div>
-        <div className="text-[11px] text-bg-9 mt-0.5">
-          Добавлен {formatRelativeTime(recipient.created_at)}
+
+        {/* Deep link */}
+        {data?.auth_deep_link && (
+          <div className="mt-4 pt-4 border-t border-bg-4">
+            <div className="text-[11px] text-bg-8 uppercase tracking-wider mb-2">
+              Ссылка авторизации
+            </div>
+            <div className="font-display text-[12px] text-accent break-all">
+              {data.auth_deep_link}
+            </div>
+            <div className="text-[11px] text-bg-9 mt-1">
+              Команда: <code className="text-accent">{data.activation_command}</code>
+            </div>
+          </div>
+        )}
+      </Card>
+
+      {/* Токен */}
+      <Card eyebrow="Токен бота" padded>
+        <Input
+          id="tg-token"
+          label="Bot Token"
+          placeholder="1234567890:ABC..."
+          type="password"
+          value={newToken}
+          onChange={(e) => setNewToken(e.target.value)}
+          helpText="Telegram Bot API токен от @BotFather. Хранится зашифрованным."
+        />
+        <div className="mt-4 flex gap-3">
+          <Button
+            variant="primary"
+            onClick={() => void handleSaveToken()}
+            loading={tokenMut.isPending}
+            disabled={!newToken.trim()}
+          >
+            Сохранить токен
+          </Button>
+          {isAuthorized && (
+            <Button
+              variant="danger"
+              onClick={() => void handleDeleteToken()}
+              loading={deleteMut.isPending}
+            >
+              Удалить токен
+            </Button>
+          )}
         </div>
-      </div>
-      <Button
-        variant="ghost"
-        size="sm"
-        aria-label={`Удалить ${recipient.username ?? recipient.chat_id}`}
-        onClick={onDelete}
-        className="text-danger hover:bg-danger-bg"
-      >
-        <Trash2 size={14} aria-hidden="true" />
-      </Button>
+      </Card>
     </div>
   );
-}
+};

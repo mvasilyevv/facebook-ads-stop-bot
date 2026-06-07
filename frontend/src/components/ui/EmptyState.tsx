@@ -1,10 +1,9 @@
 /**
- * EmptyState — editorial-empty: thin icon + текст + optional CTA.
- * Без иллюстраций.
+ * EmptyState — editorial-empty: тонкая иконка + текст + optional CTA.
+ * Без иллюстраций. Всегда центрированный.
  */
-
 import { type ReactNode } from "react";
-import { cn } from "@/lib/utils/cn";
+import { cn } from "./cn";
 
 interface EmptyStateProps {
   icon?: ReactNode;
@@ -14,7 +13,13 @@ interface EmptyStateProps {
   className?: string;
 }
 
-export function EmptyState({ icon, title, description, action, className }: EmptyStateProps) {
+export function EmptyState({
+  icon,
+  title,
+  description,
+  action,
+  className,
+}: EmptyStateProps) {
   return (
     <div
       className={cn(

@@ -1,203 +1,188 @@
 /**
- * HistoryTimeline — лента событий (alert + task) в хронологическом порядке DESC.
- * Группировка по дням. Фильтр по типу события.
+ * HistoryTimeline — таймлайн объединённой ленты alert+task за период.
+ * Группирует события по датам (day-separator), использует Timeline из @/components/data/timeline.
+ * Клик по строке alert открывает drill-down drawer (onEventClick).
  */
 
-import { useState } from "react";
-import { AlertEventRow } from "@/components/domain/AlertEventRow";
-import { TaskQueueRow } from "@/components/domain/TaskQueueRow";
+import { useMemo, type FC } from "react";
+import { Calendar } from "lucide-react";
+import { Timeline, type TimelineItem } from "@/components/data/timeline/Timeline";
 import { Skeleton } from "@/components/ui/Skeleton";
-import { EmptyState } from "@/components/ui/EmptyState";
 import { ErrorState } from "@/components/ui/ErrorState";
-import { cn } from "@/lib/utils/cn";
-import { Clock } from "lucide-react";
-import type { AlertEvent, TaskQueueRow as TaskQueueRowData } from "@/lib/types/api";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { formatDateTime } from "@fb/shared";
+import type { HistoryTimelineItem } from "@fb/shared";
 
-// Объединённый тип события (discriminated union по наличию stage).
-type TimelineEvent = AlertEvent | TaskQueueRowData;
+// ─── Маппинг event_type → TimelineItemType ────────────────────────────────────
 
-/** Тип-guard: AlertEvent имеет поле stage. */
-function isAlertEvent(e: TimelineEvent): e is AlertEvent {
-  return "stage" in e;
+function toTimelineType(item: HistoryTimelineItem): TimelineItem["type"] {
+  if (item.event_type === "alert") {
+    if (item.stage === "stop") return "stop";
+    if (item.stage === "warning") return "warning";
+    return "default";
+  }
+  if (item.event_type === "task") return "task";
+  return "default";
 }
 
-/** Получить ISO-дату из события. */
-function getEventDate(e: TimelineEvent): string {
-  const iso = isAlertEvent(e) ? e.created_at : (e.created_at ?? "");
-  return iso ? iso.slice(0, 10) : "unknown";
+/** Заголовок события для таймлайна. */
+function toTitle(item: HistoryTimelineItem): string {
+  if (item.event_type === "alert") {
+    const stage = item.stage === "stop" ? "STOP" : item.stage === "warning" ? "WARNING" : "ALERT";
+    return `${stage} · ${item.ad_name ?? item.fb_ad_id ?? "—"}`;
+  }
+  if (item.event_type === "task") {
+    const type = item.task_type?.replace("_", " ").toUpperCase() ?? "TASK";
+    const status = item.task_status ? ` · ${item.task_status}` : "";
+    const name = item.ad_name ?? item.fb_ad_id;
+    return `${type}${status}${name ? ` · ${name}` : ""}`;
+  }
+  return item.event_type;
 }
 
-/** Форматирует дату в заголовок группы: "MAY 28" / "TODAY" / "YESTERDAY". */
-function formatGroupLabel(dateIso: string): string {
-  const today = new Date().toISOString().slice(0, 10);
-  const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
-  if (dateIso === today) return "СЕГОДНЯ";
-  if (dateIso === yesterday) return "ВЧЕРА";
-  const d = new Date(dateIso);
-  return d
-    .toLocaleDateString("ru-RU", { day: "2-digit", month: "short", year: "numeric" })
-    .toUpperCase();
+/** Сгруппировать события по дате UTC (YYYY-MM-DD). */
+function groupByDate(
+  items: HistoryTimelineItem[],
+): Map<string, HistoryTimelineItem[]> {
+  const map = new Map<string, HistoryTimelineItem[]>();
+  for (const item of items) {
+    const day = item.ts.slice(0, 10);
+    const arr = map.get(day) ?? [];
+    arr.push(item);
+    map.set(day, arr);
+  }
+  return map;
 }
 
-type FilterType = "all" | "alert" | "task";
+// ─── Конвертация в TimelineItem ───────────────────────────────────────────────
+
+function toTimelineItem(
+  item: HistoryTimelineItem,
+  index: number,
+  onAlertClick?: (item: HistoryTimelineItem) => void,
+): TimelineItem {
+  const type = toTimelineType(item);
+  const isClickable = item.event_type === "alert" && !!onAlertClick;
+  return {
+    // index делает ключ уникальным: два события одного ad в одну секунду (warning+stop)
+    // иначе дают одинаковый id → React duplicate-key.
+    id: `${item.ts}_${item.fb_ad_id ?? item.event_type}_${index}`,
+    ts: item.ts,
+    type,
+    title: toTitle(item),
+    ruleCodes: item.rule_codes ?? undefined,
+    meta: isClickable ? (
+      <button
+        type="button"
+        onClick={() => onAlertClick?.(item)}
+        className="text-[10.5px] text-accent hover:underline font-display underline-offset-2"
+        aria-label={`Подробнее о событии ${toTitle(item)}`}
+      >
+        подробнее →
+      </button>
+    ) : item.campaign_name ? (
+      <span>{item.campaign_name}</span>
+    ) : undefined,
+  };
+}
+
+// ─── Компонент ────────────────────────────────────────────────────────────────
 
 interface HistoryTimelineProps {
-  events: TimelineEvent[] | undefined;
+  items: HistoryTimelineItem[] | undefined;
   isLoading: boolean;
-  isError: boolean;
-  error?: unknown;
+  error: unknown;
   onRetry?: () => void;
-  /** Клик по alert-событию. */
-  onAlertClick?: (event: AlertEvent) => void;
+  onAlertClick?: (item: HistoryTimelineItem) => void;
 }
 
-export function HistoryTimeline({
-  events,
+export const HistoryTimeline: FC<HistoryTimelineProps> = ({
+  items,
   isLoading,
-  isError,
   error,
   onRetry,
   onAlertClick,
-}: HistoryTimelineProps) {
-  const [filter, setFilter] = useState<FilterType>("all");
-
-  if (isError) {
+}) => {
+  if (isLoading) {
     return (
-      <ErrorState
-        title="Не удалось загрузить ленту событий."
-        error={error}
-        onRetry={onRetry}
+      <div className="space-y-4">
+        {Array.from({ length: 6 }).map((_, i) => (
+          <Skeleton key={i} className="h-12 w-full" />
+        ))}
+      </div>
+    );
+  }
+
+  if (error) {
+    return <ErrorState error={error} onRetry={onRetry} />;
+  }
+
+  if (!items || items.length === 0) {
+    return (
+      <EmptyState
+        icon={<Calendar size={28} />}
+        title="Событий нет"
+        description="За выбранный период алертов и задач не найдено."
       />
     );
   }
 
-  if (isLoading) {
-    return <TimelineSkeleton />;
-  }
+  return <GroupedTimeline items={items} onAlertClick={onAlertClick} />;
+};
 
-  // Фильтрация
-  const filtered = (events ?? []).filter((e) => {
-    if (filter === "alert") return isAlertEvent(e);
-    if (filter === "task") return !isAlertEvent(e);
-    return true;
-  });
+// ─── GroupedTimeline — с day-separator'ами ────────────────────────────────────
 
-  // Группировка по дате
-  const groups = new Map<string, TimelineEvent[]>();
-  for (const e of filtered) {
-    const d = getEventDate(e);
-    if (!groups.has(d)) groups.set(d, []);
-    groups.get(d)!.push(e);
-  }
-
-  return (
-    <div>
-      {/* Фильтр-таблы */}
-      <FilterBar active={filter} onChange={setFilter} total={(events ?? []).length} filtered={filtered.length} />
-
-      {filtered.length === 0 ? (
-        <EmptyState
-          icon={<Clock size={40} strokeWidth={1.25} aria-hidden="true" />}
-          title="Событий за период нет."
-          description="Попробуйте расширить диапазон дат или изменить фильтр типа."
-          className="py-16"
-        />
-      ) : (
-        <div className="space-y-8">
-          {Array.from(groups.entries()).map(([date, groupEvents]) => (
-            <section key={date} aria-label={`События ${date}`}>
-              {/* Day-separator в стиле design spec */}
-              <div className="flex items-center gap-4 mb-4">
-                <span className="font-display text-[10px] uppercase tracking-[0.14em] text-bg-8 whitespace-nowrap">
-                  {formatGroupLabel(date)}
-                </span>
-                <div className="flex-1 h-px bg-bg-5" aria-hidden="true" />
-              </div>
-
-              <div className="border border-bg-5 bg-bg-1">
-                {groupEvents.map((e, idx) => (
-                  <div key={isAlertEvent(e) ? e.id : (e as TaskQueueRowData).id} className={cn(idx > 0 && "")}>
-                    {isAlertEvent(e) ? (
-                      <div className="px-4">
-                        <AlertEventRow
-                          event={e}
-                          onClick={onAlertClick ? () => onAlertClick(e) : undefined}
-                        />
-                      </div>
-                    ) : (
-                      <div className="px-4 py-1">
-                        <TaskQueueRow task={e as TaskQueueRowData} />
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </section>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/** Фильтр-бар типа событий. */
-function FilterBar({
-  active,
-  onChange,
-  total,
-  filtered,
+function GroupedTimeline({
+  items,
+  onAlertClick,
 }: {
-  active: FilterType;
-  onChange: (v: FilterType) => void;
-  total: number;
-  filtered: number;
+  items: HistoryTimelineItem[];
+  onAlertClick?: (item: HistoryTimelineItem) => void;
 }) {
-  const items: Array<{ key: FilterType; label: string }> = [
-    { key: "all", label: "Все" },
-    { key: "alert", label: "Алерты" },
-    { key: "task", label: "Задачи" },
-  ];
+  const grouped = useMemo(() => {
+    // Сортировка DESC
+    const sorted = [...items].sort(
+      (a, b) => new Date(b.ts).getTime() - new Date(a.ts).getTime(),
+    );
+    return groupByDate(sorted);
+  }, [items]);
 
-  return (
-    <div className="flex items-center justify-between mb-5">
-      <div className="flex items-center gap-1 border border-bg-5 p-0.5">
-        {items.map((it) => (
-          <button
-            key={it.key}
-            type="button"
-            onClick={() => onChange(it.key)}
-            className={cn(
-              "h-7 px-3 font-display text-[11px] uppercase tracking-wider transition-colors",
-              active === it.key
-                ? "bg-bg-4 text-accent"
-                : "text-bg-9 hover:text-bg-11 hover:bg-bg-2",
-            )}
-          >
-            {it.label}
-          </button>
-        ))}
-      </div>
-      <span className="font-display text-[11px] text-bg-9 tracking-tight tabular-nums">
-        {filtered !== total ? `${filtered} из ${total}` : `${total} событий`}
-      </span>
-    </div>
+  // Дни в порядке убывания
+  const days = useMemo(
+    () => [...grouped.keys()].sort((a, b) => b.localeCompare(a)),
+    [grouped],
   );
-}
 
-/** Skeleton для ленты. */
-function TimelineSkeleton() {
   return (
     <div className="space-y-6">
-      {[0, 1, 2].map((g) => (
-        <div key={g}>
-          <Skeleton height={10} width="15%" className="mb-4" />
-          <div className="border border-bg-5 bg-bg-1 p-4 space-y-3">
-            {[0, 1, 2, 3].map((i) => (
-              <Skeleton key={i} height={40} />
-            ))}
+      {days.map((day) => {
+        const dayItems = grouped.get(day) ?? [];
+        const timelineItems = dayItems.map((item, i) => toTimelineItem(item, i, onAlertClick));
+
+        // Читаемая дата дня
+        const dayLabel = formatDateTime(`${day}T00:00:00Z`).slice(0, 10);
+
+        return (
+          <div key={day}>
+            {/* Day separator */}
+            <div className="flex items-center gap-3 mb-3">
+              <span className="font-display text-[10px] uppercase tracking-[0.1em] text-bg-8">
+                {dayLabel}
+              </span>
+              <div className="flex-1 h-px bg-bg-4" aria-hidden="true" />
+              <span className="font-display text-[10px] text-bg-7 tabular-nums">
+                {dayItems.length}
+              </span>
+            </div>
+
+            {/* События дня */}
+            <Timeline
+              items={timelineItems}
+              emptyMessage="Нет событий за день"
+            />
           </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

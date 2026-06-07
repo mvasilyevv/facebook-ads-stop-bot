@@ -1,13 +1,20 @@
 /**
- * Toast — поверх Radix Toast.
- * Position bottom-right, stack 12px gap, max 4 visible.
+ * Toast — Radix Toast + Zustand-стор для программного вызова.
+ * Position: bottom-right, max 4 тоста, gap 12px.
+ * error: duration 0 (нет автозакрытия), warning: 8s, остальные 4s.
+ *
+ * Использование:
+ *   import { toast } from "@/components/ui/Toast";
+ *   toast.success("Сохранено");
+ *   toast.error("Ошибка", err.message);
+ *
+ * В layout-shell рендерить <ToastViewport /> один раз.
  */
-
 import * as RadixToast from "@radix-ui/react-toast";
 import { CheckCircle2, AlertCircle, Info, AlertTriangle, X } from "lucide-react";
 import { create } from "zustand";
 import { type ReactNode, useEffect } from "react";
-import { cn } from "@/lib/utils/cn";
+import { cn } from "./cn";
 
 export type ToastVariant = "success" | "error" | "info" | "warning";
 
@@ -16,6 +23,7 @@ interface ToastItem {
   title: ReactNode;
   description?: ReactNode;
   variant: ToastVariant;
+  /** 0 = не закрывается автоматически. */
   duration: number;
 }
 
@@ -27,14 +35,14 @@ interface ToastStore {
 
 const useToastStore = create<ToastStore>((set) => ({
   toasts: [],
-  add: (toast) => {
+  add: (t) => {
     const id = `t_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    set((s) => ({ toasts: [...s.toasts, { ...toast, id }] }));
+    set((s) => ({ toasts: [...s.toasts, { ...t, id }] }));
   },
   remove: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
 }));
 
-/** Программный API для эмита toasts. */
+/** Программный API тостов. */
 export const toast = {
   success: (title: ReactNode, description?: ReactNode) =>
     useToastStore.getState().add({ title, description, variant: "success", duration: 4000 }),
@@ -53,13 +61,14 @@ const ICONS: Record<ToastVariant, ReactNode> = {
   warning: <AlertTriangle size={16} className="text-warning" aria-hidden="true" />,
 };
 
-const VARIANT_CLASS: Record<ToastVariant, string> = {
+const VARIANT_BORDER: Record<ToastVariant, string> = {
   success: "border-[rgba(126,180,122,0.3)]",
   error: "border-[rgba(199,98,92,0.3)]",
   info: "border-[rgba(122,160,180,0.3)]",
   warning: "border-[rgba(212,168,88,0.3)]",
 };
 
+/** Рендерит стек тостов. Положить один раз в layout. */
 export function ToastViewport() {
   const toasts = useToastStore((s) => s.toasts);
   const remove = useToastStore((s) => s.remove);
@@ -77,8 +86,8 @@ export function ToastViewport() {
 function ToastItemView({ item, onClose }: { item: ToastItem; onClose: () => void }) {
   useEffect(() => {
     if (item.duration <= 0) return;
-    const t = window.setTimeout(onClose, item.duration);
-    return () => window.clearTimeout(t);
+    const id = window.setTimeout(onClose, item.duration);
+    return () => window.clearTimeout(id);
   }, [item.duration, onClose]);
 
   return (
@@ -88,10 +97,12 @@ function ToastItemView({ item, onClose }: { item: ToastItem; onClose: () => void
       role={item.variant === "error" ? "alert" : "status"}
       className={cn(
         "bg-bg-2 border p-4 flex items-start gap-3",
-        VARIANT_CLASS[item.variant],
+        "data-[state=open]:animate-in data-[state=open]:slide-in-from-right-4 data-[state=open]:fade-in-0",
+        "data-[state=closed]:animate-out data-[state=closed]:slide-out-to-right-4 data-[state=closed]:fade-out-0",
+        VARIANT_BORDER[item.variant],
       )}
     >
-      <span className="mt-0.5">{ICONS[item.variant]}</span>
+      <span className="mt-0.5 shrink-0">{ICONS[item.variant]}</span>
       <div className="flex-1 min-w-0">
         <RadixToast.Title className="text-[13px] text-bg-11 font-medium font-body">
           {item.title}
@@ -104,7 +115,7 @@ function ToastItemView({ item, onClose }: { item: ToastItem; onClose: () => void
       </div>
       <RadixToast.Close
         aria-label="Закрыть"
-        className="text-bg-9 hover:text-bg-11 transition-colors"
+        className="text-bg-9 hover:text-bg-11 transition-colors shrink-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
       >
         <X size={14} aria-hidden="true" />
       </RadixToast.Close>

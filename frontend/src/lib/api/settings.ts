@@ -1,245 +1,146 @@
 /**
- * Hooks для /settings-страницы.
- * Содержит как query-хуки, так и мутации для Observer / Telegram / Vision / Health.
+ * API-хуки для настроек: observer, telegram, vision, health.
+ *
+ * Эндпоинты:
+ *   GET  /api/settings/observer          → ObserverConfig
+ *   PUT  /api/settings/observer          → ObserverConfig
+ *   POST /api/settings/observer/scan-now → ScanNowResponse
+ *   GET  /api/health/details             → HealthDetails
+ *   GET  /api/observer/status            → ObserverStatus
+ *   GET  /api/settings/telegram          → TelegramSettings
+ *   PUT  /api/settings/telegram/token    → TelegramSettings
+ *   GET  /api/settings/vision            → VisionSettingsResponse
+ *   PUT  /api/settings/vision            → VisionSettingsResponse
+ *   POST /api/settings/vision/reconnect  → { ok: boolean }
  */
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiClient } from "./client";
-import type {
-  HealthDetails,
-  ObserverSettings,
-  ObserverStatus,
-  ScanRun,
-  TelegramSettings,
-  TelegramRecipient,
-  TelegramInviteResponse,
-  VisionSettings,
-} from "@/lib/types/api";
+import { apiGet, apiSend } from "./client";
+import type { HealthDetails, ObserverConfig, ObserverStatus, TelegramSettings } from "@fb/shared";
 
-const KEYS = {
-  observer: ["settings", "observer"] as const,
-  observerStatus: ["observer", "status"] as const,
-  scanRuns: (limit?: number, filter?: string) =>
-    ["observer", "scan-runs", limit, filter] as const,
-  telegram: ["settings", "telegram"] as const,
-  vision: ["settings", "vision"] as const,
-  health: ["health", "details"] as const,
-};
-
-export function useObserverSettings() {
-  return useQuery({
-    queryKey: KEYS.observer,
-    queryFn: () => apiClient.get<ObserverSettings>("/settings/observer"),
-  });
+/** Ответ настроек Vision — не вынесен в @fb/shared, описываем здесь. */
+export interface VisionSettingsResponse {
+  has_token: boolean;
+  profile_id?: string | null;
+  auto_restart_on_missing_cdp: boolean;
+  runtime_status?: string | null;
+  runtime_status_message?: string | null;
+  cdp_ready: boolean;
+  cdp_port?: number | null;
 }
 
-export function useObserverStatus() {
-  return useQuery({
-    queryKey: KEYS.observerStatus,
-    queryFn: () => apiClient.get<ObserverStatus>("/observer/status"),
-    refetchInterval: 15_000,
-  });
-}
-
-export function useScanRuns(limit = 50, filter: "all" | "errors" | "slow" | "with_alerts" = "all") {
-  return useQuery({
-    queryKey: KEYS.scanRuns(limit, filter),
-    // Бэк отдаёт { runs: [...], total }, а не голый массив — разворачиваем (как recipients).
-    queryFn: async () => {
-      const r = await apiClient.get<{ runs: ScanRun[]; total: number }>("/observer/scan-runs", {
-        limit,
-        filter,
-      });
-      return r.runs ?? [];
-    },
-    refetchInterval: 15_000,
-  });
-}
-
-export function useUpdateObserver() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (data: Partial<ObserverSettings>) =>
-      apiClient.put<ObserverSettings>("/settings/observer", data),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["settings", "observer"] }),
-  });
-}
-
-export function useTelegramSettings() {
-  return useQuery({
-    queryKey: KEYS.telegram,
-    queryFn: () => apiClient.get<TelegramSettings>("/settings/telegram"),
-  });
-}
-
-export function useVisionSettings() {
-  return useQuery({
-    queryKey: KEYS.vision,
-    queryFn: () => apiClient.get<VisionSettings>("/settings/vision"),
-  });
-}
+// ─── Health ──────────────────────────────────────────────────────────────────
 
 export function useHealthDetails() {
-  return useQuery({
-    queryKey: KEYS.health,
-    queryFn: () => apiClient.get<HealthDetails>("/health/details"),
+  return useQuery<HealthDetails>({
+    queryKey: ["health", "details"],
+    queryFn: ({ signal }) => apiGet<HealthDetails>("/health/details", undefined, signal),
+    staleTime: 15_000,
     refetchInterval: 30_000,
   });
 }
 
-export function useRestartObserver() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: () => apiClient.post<void>("/observer/restart"),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["observer"] }),
+// ─── Observer status ──────────────────────────────────────────────────────────
+
+export function useObserverStatus() {
+  return useQuery<ObserverStatus>({
+    queryKey: ["observer", "status"],
+    queryFn: ({ signal }) => apiGet<ObserverStatus>("/observer/status", undefined, signal),
+    staleTime: 10_000,
+    refetchInterval: 20_000,
   });
 }
 
-/** POST /settings/observer/scan-now — запустить скан немедленно. */
-export function useTriggerScanNowSettings() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: () => apiClient.post<void>("/settings/observer/scan-now"),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["observer"] }),
+// ─── Observer settings ────────────────────────────────────────────────────────
+
+export function useObserverSettings() {
+  return useQuery<ObserverConfig>({
+    queryKey: ["settings", "observer"],
+    queryFn: ({ signal }) => apiGet<ObserverConfig>("/settings/observer", undefined, signal),
+    staleTime: 60_000,
   });
 }
 
-/** PATCH /settings/observer/scanning — переключить is_scanning. */
-export function useToggleScanning() {
+export function useUpdateObserverSettings() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (enabled: boolean) =>
-      apiClient.patch<ObserverSettings>("/settings/observer/scanning", { enabled }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: KEYS.observer }),
-  });
-}
-
-/** PATCH /settings/observer/auto-enable — переключить auto_enable_recommendations. */
-export function useToggleAutoEnable() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (enabled: boolean) =>
-      apiClient.patch<ObserverSettings>("/settings/observer/auto-enable", { enabled }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: KEYS.observer }),
-  });
-}
-
-/** Получить список recipients Telegram. */
-export function useTelegramRecipients() {
-  return useQuery({
-    queryKey: [...KEYS.telegram, "recipients"] as const,
-    // Бэк отдаёт { recipients: [...], total }, а не голый массив — разворачиваем.
-    queryFn: async () => {
-      const r = await apiClient.get<{ recipients: TelegramRecipient[]; total: number }>(
-        "/settings/telegram/recipients",
-      );
-      return r.recipients ?? [];
+    mutationFn: (data: Partial<ObserverConfig>) =>
+      apiSend<ObserverConfig>("PUT", "/settings/observer", data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["settings", "observer"] });
     },
   });
 }
 
-/** PUT /settings/telegram/token — установить токен бота. */
-export function useSetTelegramToken() {
+export function useScanNow() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (token: string) =>
-      apiClient.put<void>("/settings/telegram/token", { token }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: KEYS.telegram }),
+    mutationFn: () => apiSend<{ ok: boolean }>("POST", "/settings/observer/scan-now"),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["observer"] });
+    },
   });
 }
 
-/** DELETE /settings/telegram/token — удалить токен бота. */
+// ─── Telegram settings ────────────────────────────────────────────────────────
+
+export function useTelegramSettings() {
+  return useQuery<TelegramSettings>({
+    queryKey: ["settings", "telegram"],
+    queryFn: ({ signal }) => apiGet<TelegramSettings>("/settings/telegram", undefined, signal),
+    staleTime: 30_000,
+  });
+}
+
+export function useUpdateTelegramToken() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (bot_token: string) =>
+      apiSend<TelegramSettings>("PUT", "/settings/telegram/token", { bot_token }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["settings", "telegram"] });
+    },
+  });
+}
+
 export function useDeleteTelegramToken() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: () => apiClient.delete<void>("/settings/telegram/token"),
-    onSuccess: () => qc.invalidateQueries({ queryKey: KEYS.telegram }),
-  });
-}
-
-/** DELETE /settings/telegram/recipients/{id} — удалить получателя. */
-export function useDeleteTelegramRecipient() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (id: string) => apiClient.delete<void>(`/settings/telegram/recipients/${id}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: [...KEYS.telegram] }),
-  });
-}
-
-/** POST /settings/telegram/recipients/invite — сгенерировать инвайт-код. */
-export function useCreateTelegramInvite() {
-  return useMutation({
-    mutationFn: () => apiClient.post<TelegramInviteResponse>("/settings/telegram/recipients/invite"),
-  });
-}
-
-/** PUT /settings/vision — обновить Vision token/profile. */
-export function useUpdateVision() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (data: { vision_token?: string; profile_id?: string }) =>
-      apiClient.put<VisionSettings>("/settings/vision", data),
-    onSuccess: () => qc.invalidateQueries({ queryKey: KEYS.vision }),
-  });
-}
-
-/** POST /vision/reconnect — переподключить Vision. */
-export function useVisionReconnect() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: () => apiClient.post<void>("/vision/reconnect"),
-    onSuccess: () => qc.invalidateQueries({ queryKey: KEYS.vision }),
-  });
-}
-
-// ─── allowlist кампаний для сканирования (#3) ────────────────────────────────
-
-/** Кампания для выбора в allowlist. id — Meta campaign.id. */
-export interface CampaignOption {
-  id: string;
-  name: string;
-  selected: boolean;
-}
-
-/** GET /settings/observer/campaigns — кампании (по owner-тегу) для выбора. */
-export function useObserverCampaigns() {
-  return useQuery({
-    queryKey: ["observer", "campaigns"] as const,
-    queryFn: () => apiClient.get<CampaignOption[]>("/settings/observer/campaigns"),
-    // Список наполняется observer'ом при сканах — автоподтягиваем новые кампании,
-    // чтобы он не залипал без ручного рефреша (кампании меняются редко → 60с).
-    refetchInterval: 60_000,
-    refetchOnWindowFocus: true,
-  });
-}
-
-/** PATCH /settings/observer/campaigns — сохранить allowlist (пусто = все по тегу). */
-export function useSetObserverCampaigns() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (campaign_ids: string[]) =>
-      apiClient.patch<ObserverSettings>("/settings/observer/campaigns", { campaign_ids }),
+    mutationFn: () => apiSend<TelegramSettings>("DELETE", "/settings/telegram/token"),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: KEYS.observer });
-      qc.invalidateQueries({ queryKey: ["observer", "campaigns"] });
+      qc.invalidateQueries({ queryKey: ["settings", "telegram"] });
     },
   });
 }
 
-/**
- * POST /settings/observer/campaigns/refresh — live-резолв всех кампаний по owner-тегу
- * через browser-agent (мимо allowlist). Подхватывает новые кампании, которых ещё нет в
- * каталоге. После успеха инвалидирует список.
- */
-export function useRefreshCampaigns() {
+// ─── Vision settings ──────────────────────────────────────────────────────────
+
+export function useVisionSettings() {
+  return useQuery<VisionSettingsResponse>({
+    queryKey: ["settings", "vision"],
+    queryFn: ({ signal }) =>
+      apiGet<VisionSettingsResponse>("/settings/vision", undefined, signal),
+    staleTime: 20_000,
+  });
+}
+
+export function useUpdateVisionSettings() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: () =>
-      apiClient.post<CampaignOption[]>("/settings/observer/campaigns/refresh"),
+    mutationFn: (data: { x_token?: string; profile_id?: string }) =>
+      apiSend<VisionSettingsResponse>("PUT", "/settings/vision", data),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["observer", "campaigns"] });
+      qc.invalidateQueries({ queryKey: ["settings", "vision"] });
     },
   });
 }
 
-export const settingsKeys = KEYS;
+export function useReconnectVision() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => apiSend<{ ok: boolean }>("POST", "/settings/vision/reconnect"),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["settings", "vision"] });
+    },
+  });
+}

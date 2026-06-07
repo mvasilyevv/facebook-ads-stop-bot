@@ -1,265 +1,212 @@
 /**
- * Dashboard (`/`) — overview-страница оператора.
+ * Dashboard — главная страница обзора кабинета.
  *
- * Блоки (по docs/frontend_mockups/dashboard.html):
- *   1. PageHeader — observer_status + last_scan + WS-статус + "Scan now".
- *   2. KPI strip — 4 карточки (ads / warning / stop / incidents).
- *   3. Spend chart (Recharts area) + Active incidents — grid 1.6fr / 1fr.
- *   4. Recent events — лента alert_events.
- *   5. Task queues — Disable + Enable (grid 1/1).
+ * Структура (по макету dashboard.html):
+ *   PageHeader: eyebrow / title / subtitle (live observer status) / action "Scan now"
+ *   KpiStrip: 4 карточки Active/Warning/Stop/Disabled
+ *   Grid 2 колонки: SpendChart + ActiveIncidents
+ *   RecentEvents: лента алертов
+ *   2× TaskQueueCard: disable-queue + enable-queue
  *
- * Источники данных:
- *   - useDashboardStats() — KPI + header (refetch 30s).
- *   - useDashboardBatch() — incidents + alerts + disable tasks (refetch 60s,
- *     partial-failure: упавшая секция приходит пустым массивом, страница не падает).
- *   - useChartData({ hours, bucket }) — бакеты графика (range-driven).
- *   - useEnableTasks() — enable-очередь (batch отдаёт только disable).
- *   - useTriggerScanNow() — кнопка "Scan now" + Toast.
- *   - useDashboardSocket() — WS-статус для header'а.
+ * Данные: useDashboardBatch (главный агрегат), useDisableTasks, useEnableTasks.
+ * Live-обновления: useRealtimeInvalidation (WS invalidation).
  */
 
-import { useState, type ReactNode } from "react";
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { RefreshCcw, ChevronRight } from "lucide-react";
+import { createFileRoute, useRouter } from "@tanstack/react-router";
+import { RefreshCw } from "lucide-react";
+import { useMemo } from "react";
 
-import { PageHeader, HeaderSep } from "@/components/layout/PageHeader";
+import { PageHeader, HeaderSep, LiveDot } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/Button";
-import { toast } from "@/components/ui/Toast";
-import { useRealtimeInvalidation } from "@/lib/websocket/useRealtimeInvalidation";
-import {
-  useDashboardStats,
-  useDashboardBatch,
-  useChartData,
-  useEnableTasks,
-  useTriggerScanNow,
-} from "@/lib/api/dashboard";
-import { formatRelativeTime } from "@/lib/utils/format";
+import { ErrorState } from "@/components/ui/ErrorState";
 
-import { KpiSection } from "@/components/dashboard/KpiSection";
-import { SpendChartCard, type RangeKey } from "@/components/dashboard/SpendChartCard";
-import { IncidentsCard } from "@/components/dashboard/IncidentsCard";
-import { RecentEventsCard } from "@/components/dashboard/RecentEventsCard";
-import { TaskQueueCard } from "@/components/dashboard/TaskQueueCard";
-import { ScannerControls } from "@/components/dashboard/ScannerControls";
+import { KpiStrip, KpiStripSkeleton } from "@/components/dashboard/KpiStrip";
+import { SpendChart } from "@/components/dashboard/SpendChart";
+import { ActiveIncidents } from "@/components/dashboard/ActiveIncidents";
+import { RecentEvents } from "@/components/dashboard/RecentEvents";
+import { TaskQueueCard } from "@/components/domain/feed/TaskQueueCard";
+
+import { useDashboardBatch } from "@/lib/api/dashboard";
+import { useDisableTasks, useEnableTasks } from "@/lib/api/ads";
+import { useRealtimeInvalidation } from "@/lib/websocket/useRealtimeInvalidation";
+import { apiSend } from "@/lib/api/client";
+
+import type { Incident, AlertEvent, TaskQueueRow } from "@fb/shared";
+import { formatRelativeTime } from "@fb/shared";
+
+// ─── Route ────────────────────────────────────────────────────────────────────
 
 export const Route = createFileRoute("/")({
   component: DashboardPage,
 });
 
-const OBSERVER_LABEL: Record<string, string> = {
-  running: "Observer онлайн",
-  paused: "Observer на паузе",
-  unknown: "Observer недоступен",
-};
+// ─── Компонент ────────────────────────────────────────────────────────────────
 
 function DashboardPage() {
-  const navigate = useNavigate();
-  const [range, setRange] = useState<RangeKey>("today");
+  const router = useRouter();
 
-  const socket = useRealtimeInvalidation();
-  const statsQuery = useDashboardStats();
-  const batchQuery = useDashboardBatch();
-  const enableQuery = useEnableTasks({ limit: 10 });
-  const scanNow = useTriggerScanNow();
+  // WS-invalidation — живые обновления после сканов
+  const { status: wsStatus } = useRealtimeInvalidation();
 
-  const chartCfg = range === "today" ? { hours: 24, bucket: "hour" as const } : { hours: 168, bucket: "day" as const };
-  const chartQuery = useChartData(chartCfg);
+  // Главный агрегат
+  const {
+    data: batch,
+    isLoading,
+    isError,
+    error,
+    refetch,
+  } = useDashboardBatch();
 
-  const stats = statsQuery.data;
-  const batch = batchQuery.data;
+  // Очереди задач (отдельные запросы для актуальности)
+  const disableTasksQ = useDisableTasks({ status: "PENDING,RUNNING,RETRYING", limit: 20 });
+  const enableTasksQ = useEnableTasks({ status: "PENDING,RUNNING,RETRYING", limit: 20 });
 
-  // Навигация к ad'у по клику в incidents / events.
-  const goToAd = (fbAdId: string) => {
-    navigate({ to: "/ads/$fbAdId", params: { fbAdId } });
-  };
+  // Нормализуем incidents/alerts из batch (API отдаёт unknown[])
+  const incidents = useMemo<Incident[]>(
+    () => (batch?.recent_incidents as Incident[] | undefined) ?? [],
+    [batch],
+  );
+  const events = useMemo<AlertEvent[]>(
+    () => (batch?.recent_alerts as AlertEvent[] | undefined) ?? [],
+    [batch],
+  );
 
-  const handleScanNow = () => {
-    scanNow.mutate(undefined, {
-      onSuccess: () => toast.success("Сканирование запущено", "Observer запустит цикл сканирования."),
-      onError: (err) =>
-        toast.error("Не удалось запустить scan", err instanceof Error ? err.message : String(err)),
-    });
-  };
+  // Scan now — публикует redis-триггер через API
+  async function handleScanNow() {
+    try {
+      await apiSend("POST", "/settings/observer/scan-now");
+    } catch {
+      // Игнорируем ошибку — observer сам среагирует
+    }
+  }
+
+  // Subtitle — live observer status
+  const stats = batch?.stats;
+  const observerRunning = stats?.observer_status === "running";
+  const subtitle = (
+    <>
+      {observerRunning ? <LiveDot /> : null}
+      <span>{observerRunning ? "Observer online" : "Observer offline"}</span>
+      {stats?.last_scan_at && (
+        <>
+          <HeaderSep />
+          <span>Скан {formatRelativeTime(stats.last_scan_at)} назад</span>
+        </>
+      )}
+      {stats?.scans_today != null && (
+        <>
+          <HeaderSep />
+          <span>{stats.scans_today} сканов сегодня</span>
+        </>
+      )}
+      {wsStatus === "connected" ? (
+        <>
+          <HeaderSep />
+          <span className="text-success">live</span>
+        </>
+      ) : wsStatus === "polling" ? (
+        <>
+          <HeaderSep />
+          <span className="text-warning">polling</span>
+        </>
+      ) : null}
+    </>
+  );
+
+  // Фатальная ошибка загрузки batch
+  if (isError && !batch) {
+    return (
+      <div className="px-8 py-8">
+        <PageHeader
+          eyebrowNum="01"
+          eyebrow="OVERVIEW · OBSERVE · OPERATE"
+          title="Dashboard"
+          subtitle={subtitle}
+        />
+        <ErrorState
+          title="Не удалось загрузить данные Dashboard."
+          error={error}
+          onRetry={() => void refetch()}
+        />
+      </div>
+    );
+  }
 
   return (
-    <>
+    <div className="px-8 py-8 pb-16" aria-label="Dashboard">
+      {/* ── PageHeader ──────────────────────────────────────────────────────── */}
       <PageHeader
-        eyebrow="ОБЗОР · НАБЛЮДЕНИЕ · УПРАВЛЕНИЕ"
-        title="Панель"
-        subtitle={<HeaderSubtitle stats={stats} socketStatus={socket.status} pollingFallback={socket.pollingFallback} />}
+        eyebrowNum="01"
+        eyebrow="OVERVIEW · OBSERVE · OPERATE"
+        title="Dashboard"
+        displayNumber="01"
+        subtitle={subtitle}
         action={
           <Button
-            variant="primary"
-            leftIcon={<RefreshCcw size={14} aria-hidden="true" />}
-            loading={scanNow.isPending}
-            onClick={handleScanNow}
-            title="Запустить внеплановый цикл сканирования. Стоп-правила применятся сразу."
+            variant="secondary"
+            size="md"
+            leftIcon={<RefreshCw size={14} aria-hidden="true" />}
+            onClick={() => void handleScanNow()}
           >
-            Сканировать
+            Scan now
           </Button>
         }
       />
 
-      {/* 1.5. Управление сканером — важные тумблеры */}
-      <ScannerControls />
+      {/* ── KPI Strip ───────────────────────────────────────────────────────── */}
+      {isLoading || !stats ? (
+        <KpiStripSkeleton />
+      ) : (
+        <KpiStrip stats={stats} />
+      )}
 
-      {/* 2. KPI strip */}
-      <KpiSection
-        stats={stats}
-        isLoading={statsQuery.isLoading}
-        isError={statsQuery.isError}
-        error={statsQuery.error}
-        onRetry={() => statsQuery.refetch()}
-      />
-
-      {/* 3. Chart (1.6fr) + Incidents (1fr) */}
-      <div className="grid grid-cols-[1.6fr_1fr] gap-6 mb-10">
-        <SpendChartCard
-          range={range}
-          onRangeChange={setRange}
-          buckets={chartQuery.data}
-          isLoading={chartQuery.isLoading}
-          isError={chartQuery.isError}
-          error={chartQuery.error}
-          onRetry={() => chartQuery.refetch()}
-        />
-        <IncidentsCard
-          incidents={batch?.recent_incidents ?? []}
-          isLoading={batchQuery.isLoading}
-          isError={batchQuery.isError}
-          error={batchQuery.error}
-          onRetry={() => batchQuery.refetch()}
-          total={stats?.active_incidents}
-          onSelect={goToAd}
+      {/* ── Основная сетка: Graph + Incidents ──────────────────────────────── */}
+      <div className="grid grid-cols-2 gap-6 mt-8">
+        <SpendChart />
+        <ActiveIncidents
+          incidents={incidents}
+          isLoading={isLoading}
+          isError={isError}
+          error={error}
+          onRetry={() => void refetch()}
+          onIncidentClick={(fbAdId) =>
+            void router.navigate({ to: "/ads/$fbAdId", params: { fbAdId } })
+          }
         />
       </div>
 
-      {/* 4. Recent events */}
-      <SectionTitle
-        eyebrowNum="04"
-        eyebrow="Поток"
-        title="Последние события"
-        action={
-          <Button
-            variant="ghost"
-            size="sm"
-            rightIcon={<ChevronRight size={14} aria-hidden="true" />}
-            onClick={() => navigate({ to: "/history" })}
-          >
-            Все
-          </Button>
-        }
-      />
-      <RecentEventsCard
-        events={batch?.recent_alerts ?? []}
-        isLoading={batchQuery.isLoading}
-        isError={batchQuery.isError}
-        error={batchQuery.error}
-        onRetry={() => batchQuery.refetch()}
-        onSelect={goToAd}
-      />
-
-      <hr className="border-0 h-px bg-bg-5 my-10" />
-
-      {/* 5. Task queues */}
-      <SectionTitle eyebrowNum="05" eyebrow="Задачи" title="Очереди задач" />
-      <div className="grid grid-cols-2 gap-6">
-        <TaskQueueCard
-          title="Очередь отключений"
-          tasks={batch?.recent_disable_tasks ?? []}
-          isLoading={batchQuery.isLoading}
-          isError={batchQuery.isError}
-          error={batchQuery.error}
-          onRetry={() => batchQuery.refetch()}
-        />
-        <TaskQueueCard
-          title="Очередь включений"
-          tasks={enableQuery.data ?? []}
-          isLoading={enableQuery.isLoading}
-          isError={enableQuery.isError}
-          error={enableQuery.error}
-          onRetry={() => enableQuery.refetch()}
+      {/* ── Recent Events ───────────────────────────────────────────────────── */}
+      <div className="mt-8">
+        <RecentEvents
+          events={events}
+          isLoading={isLoading}
+          isError={isError}
+          error={error}
+          onRetry={() => void refetch()}
         />
       </div>
-    </>
-  );
-}
 
-/** Подзаголовок header'а: статус observer + last scan + WS-индикатор. */
-function HeaderSubtitle({
-  stats,
-  socketStatus,
-  pollingFallback,
-}: {
-  stats: ReturnType<typeof useDashboardStats>["data"];
-  socketStatus: string;
-  pollingFallback: boolean;
-}) {
-  const observerStatus = stats?.observer_status ?? "unknown";
-  const isOnline = observerStatus === "running";
-
-  // Два понятных состояния связи вместо четырёх пересекающихся.
-  const isLive = socketStatus === "connected";
-  const byTimer = socketStatus === "polling" || pollingFallback;
-  const connText = isLive ? "Live" : byTimer ? "по таймеру" : "подключение…";
-  const connTitle = isLive
-    ? "Данные приходят в реальном времени (WebSocket)."
-    : byTimer
-      ? "WebSocket недоступен — данные обновляются периодическими запросами."
-      : "Устанавливаем соединение…";
-
-  return (
-    <>
-      <span>
-        <span
-          aria-hidden="true"
-          className={cnDot(isOnline)}
+      {/* ── Task Queues ─────────────────────────────────────────────────────── */}
+      <div className="grid grid-cols-2 gap-6 mt-8">
+        <TaskQueueCard
+          title="Disable queue"
+          tasks={(disableTasksQ.data as TaskQueueRow[] | undefined) ?? []}
+          isLoading={disableTasksQ.isLoading}
+          isError={disableTasksQ.isError}
+          error={disableTasksQ.error}
+          onRetry={() => void disableTasksQ.refetch()}
+          emptyLabel="Нет активных задач отключения"
         />
-        {OBSERVER_LABEL[observerStatus] ?? OBSERVER_LABEL.unknown}
-      </span>
-      <HeaderSep />
-      <span>Посл. скан {stats ? formatRelativeTime(stats.last_scan_at) : "—"}</span>
-      <HeaderSep />
-      <span title={connTitle} className={!isLive && byTimer ? "text-warning" : undefined}>
-        Связь: {connText}
-      </span>
-    </>
-  );
-}
-
-/** Точка-индикатор статуса observer (живой пульс только когда online). */
-function cnDot(isOnline: boolean): string {
-  return [
-    "inline-block size-1.5 rounded-full mr-1.5 align-middle",
-    isOnline ? "bg-success pulse-dot" : "bg-bg-7",
-  ].join(" ");
-}
-
-/**
- * SectionTitle — заголовок секции (eyebrow inline + title + optional action).
- * Повторяет .section-title-row из мока.
- */
-function SectionTitle({
-  eyebrowNum,
-  eyebrow,
-  title,
-  action,
-}: {
-  eyebrowNum: string;
-  eyebrow: string;
-  title: string;
-  action?: ReactNode;
-}) {
-  return (
-    <div className="flex items-baseline justify-between mb-5">
-      <h2 className="section-title">
-        <span className="font-display text-[10px] uppercase tracking-[0.14em] text-bg-8 mr-3.5">
-          <span className="text-bg-7 mr-1.5">{eyebrowNum}</span>
-          {eyebrow}
-        </span>
-        {title}
-      </h2>
-      {action ? <div>{action}</div> : null}
+        <TaskQueueCard
+          title="Enable queue"
+          tasks={(enableTasksQ.data as TaskQueueRow[] | undefined) ?? []}
+          isLoading={enableTasksQ.isLoading}
+          isError={enableTasksQ.isError}
+          error={enableTasksQ.error}
+          onRetry={() => void enableTasksQ.refetch()}
+          emptyLabel="Нет активных задач включения"
+        />
+      </div>
     </div>
   );
 }

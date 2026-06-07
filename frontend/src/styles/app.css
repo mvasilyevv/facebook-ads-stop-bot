@@ -1,0 +1,41 @@
+@import "tailwindcss";
+/* Единый источник токенов (@fb/shared). Относительный путь — надёжный резолв в CSS-пайплайне. */
+@import "../../../packages/shared/src/tokens/tokens.css";
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-bg-0);
+  color: var(--color-bg-11);
+  font-family: var(--font-body);
+  font-size: var(--text-body);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  font-feature-settings: "ss01", "cv11";
+}
+
+/* Grain overlay — editorial atmosphere (opacity 0.02) */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9999;
+  opacity: 0.02;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3' /%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' /%3E%3C/svg%3E");
+}
+
+/* WorkerPulse анимация */
+@keyframes pulse-dot {
+  0%, 100% { box-shadow: 0 0 0 0 var(--pulse-glow, rgba(126, 180, 122, 0.4)); }
+  50%       { box-shadow: 0 0 0 6px rgba(0, 0, 0, 0); }
+}
+
+.pulse-dot {
+  animation: pulse-dot 2s ease-in-out infinite;
+}

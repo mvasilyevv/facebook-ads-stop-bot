@@ -1,228 +1,157 @@
 /**
- * VisionTab — вкладка настроек Vision anti-detect браузера:
- *   - Статус подключения.
- *   - Обновление токена (masked) и profile_id.
- *   - Кнопка reconnect (ConfirmDialog).
+ * VisionTab — настройки Vision anti-detect браузера:
+ * x_token (скрытый), profile_id, статус CDP, кнопка Reconnect.
  */
 
-import { useState, type ChangeEvent } from "react";
-import { RefreshCcw, Eye, EyeOff } from "lucide-react";
-
-import { Badge } from "@/components/ui/Badge";
+import { useState, useEffect, type FC } from "react";
+import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
+import { Badge } from "@/components/ui/Badge";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { ErrorState } from "@/components/ui/ErrorState";
-import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { toast } from "@/components/ui/Toast";
-
 import {
   useVisionSettings,
-  useUpdateVision,
-  useVisionReconnect,
+  useUpdateVisionSettings,
+  useReconnectVision,
 } from "@/lib/api/settings";
 
-export function VisionTab() {
-  const [tokenInput, setTokenInput] = useState("");
-  const [profileInput, setProfileInput] = useState("");
-  const [showToken, setShowToken] = useState(false);
-  const [showForm, setShowForm] = useState(false);
-  const [reconnectOpen, setReconnectOpen] = useState(false);
+export const VisionTab: FC = () => {
+  const { data, isLoading, error, refetch } = useVisionSettings();
+  const updateMut = useUpdateVisionSettings();
+  const reconnectMut = useReconnectVision();
 
-  const settingsQuery = useVisionSettings();
-  const updateVision = useUpdateVision();
-  const reconnect = useVisionReconnect();
+  const [xToken, setXToken] = useState("");
+  const [profileId, setProfileId] = useState("");
 
-  const settings = settingsQuery.data;
-
-  function handleSave() {
-    const payload: { vision_token?: string; profile_id?: string } = {};
-    if (tokenInput.trim()) payload.vision_token = tokenInput.trim();
-    if (profileInput.trim()) payload.profile_id = profileInput.trim();
-
-    if (Object.keys(payload).length === 0) {
-      toast.error("Введите хотя бы одно поле");
-      return;
+  useEffect(() => {
+    if (data) {
+      setProfileId(data.profile_id ?? "");
     }
+  }, [data]);
 
-    updateVision.mutate(payload, {
-      onSuccess: () => {
-        toast.success("Vision настройки сохранены");
-        setShowForm(false);
-        setTokenInput("");
-        setProfileInput("");
-      },
-      onError: (err) =>
-        toast.error("Ошибка сохранения", err instanceof Error ? err.message : String(err)),
-    });
-  }
-
-  function handleReconnect() {
-    reconnect.mutate(undefined, {
-      onSuccess: () => toast.success("Vision переподключён"),
-      onError: (err) =>
-        toast.error("Ошибка reconnect", err instanceof Error ? err.message : String(err)),
-    });
-  }
-
-  if (settingsQuery.isError) {
+  if (isLoading) {
     return (
-      <ErrorState
-        title="Не удалось загрузить настройки Vision."
-        error={settingsQuery.error}
-        onRetry={() => settingsQuery.refetch()}
-      />
+      <div className="space-y-3 max-w-xl">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <Skeleton key={i} className="h-10 w-full" />
+        ))}
+      </div>
     );
   }
 
+  if (error) {
+    return <ErrorState error={error} onRetry={() => void refetch()} />;
+  }
+
+  const handleSave = async () => {
+    const patch: { x_token?: string; profile_id?: string } = {};
+    if (xToken.trim()) patch.x_token = xToken.trim();
+    if (profileId.trim()) patch.profile_id = profileId.trim();
+    if (!patch.x_token && !patch.profile_id) {
+      toast.warning("Нечего сохранять");
+      return;
+    }
+    try {
+      await updateMut.mutateAsync(patch);
+      setXToken("");
+      toast.success("Vision-настройки сохранены");
+    } catch (e) {
+      toast.error("Ошибка сохранения", e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const handleReconnect = async () => {
+    try {
+      await reconnectMut.mutateAsync();
+      toast.success("Команда Reconnect отправлена");
+    } catch (e) {
+      toast.error("Ошибка Reconnect", e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const cdpStatus = data?.cdp_ready
+    ? "READY"
+    : data?.runtime_status ?? "OFFLINE";
+  const cdpVariant = data?.cdp_ready
+    ? ("success" as const)
+    : ("neutral" as const);
+
   return (
-    <>
-      <ConfirmDialog
-        open={reconnectOpen}
-        onOpenChange={setReconnectOpen}
-        title="Переподключить Vision?"
-        description="Текущая сессия браузера будет закрыта и запущена заново."
-        confirmWord="RECONNECT"
-        confirmLabel="Переподключить"
-        cancelLabel="Отмена"
-        onConfirm={handleReconnect}
-      />
-
-      <div className="grid grid-cols-[1fr_320px] gap-8">
-        {/* Левая колонка: форма настроек. */}
-        <div className="space-y-6">
-          <section className="border border-bg-5 bg-bg-1 p-5">
-            <h3 className="font-display text-[10px] uppercase tracking-widest text-bg-9 mb-4">
-              Статус Vision
-            </h3>
-            {settingsQuery.isLoading ? (
-              <div className="space-y-3">
-                <Skeleton height={18} />
-                <Skeleton height={14} width="60%" />
-              </div>
-            ) : (
-              <div className="space-y-3">
-                <div className="flex items-center gap-2">
-                  <Badge variant={settings?.is_connected ? "success" : "neutral"}>
-                    {settings?.is_connected ? "подключён" : "не подключён"}
-                  </Badge>
-                  <Badge variant={settings?.vision_token ? "neutral" : "warning"} size="sm">
-                    {settings?.vision_token ? "токен есть" : "токен не задан"}
-                  </Badge>
-                </div>
-                {settings?.profile_id ? (
-                  <div className="text-[12px] text-bg-9">
-                    Profile ID:{" "}
-                    <span className="font-numeric text-bg-11">{settings.profile_id}</span>
-                  </div>
-                ) : (
-                  <div className="text-[12px] text-bg-9">Profile ID: —</div>
-                )}
-              </div>
-            )}
-          </section>
-
-          {/* Форма обновления токена/profile. */}
-          <section>
-            <h3 className="font-display text-[10px] uppercase tracking-widest text-bg-9 mb-4">
-              Настройка подключения
-            </h3>
-            {!showForm ? (
-              <Button variant="secondary" size="sm" onClick={() => setShowForm(true)}>
-                {settings?.vision_token ? "Обновить токен / profile" : "Настроить Vision"}
-              </Button>
-            ) : (
-              <div className="space-y-4 max-w-sm">
-                <div className="relative">
-                  <Input
-                    id="vision-token"
-                    label="Vision X-Token"
-                    type={showToken ? "text" : "password"}
-                    placeholder="Введите токен Vision..."
-                    value={tokenInput}
-                    onChange={(e: ChangeEvent<HTMLInputElement>) => setTokenInput(e.target.value)}
-                    helpText="Токен не отображается после сохранения."
-                    autoComplete="off"
-                    rightIcon={
-                      <button
-                        type="button"
-                        aria-label={showToken ? "Скрыть токен" : "Показать токен"}
-                        onClick={() => setShowToken((p) => !p)}
-                        className="text-bg-9 hover:text-bg-11 transition-colors"
-                      >
-                        {showToken ? (
-                          <EyeOff size={14} aria-hidden="true" />
-                        ) : (
-                          <Eye size={14} aria-hidden="true" />
-                        )}
-                      </button>
-                    }
-                  />
-                </div>
-                <Input
-                  id="vision-profile"
-                  label="Profile ID"
-                  type="text"
-                  placeholder="Например: abc123def456"
-                  value={profileInput}
-                  onChange={(e: ChangeEvent<HTMLInputElement>) => setProfileInput(e.target.value)}
-                  helpText="UUID или slug профиля Vision."
-                />
-                <div className="flex gap-2">
-                  <Button
-                    variant="primary"
-                    size="sm"
-                    loading={updateVision.isPending}
-                    onClick={handleSave}
-                  >
-                    Сохранить
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => {
-                      setShowForm(false);
-                      setTokenInput("");
-                      setProfileInput("");
-                    }}
-                  >
-                    Отмена
-                  </Button>
-                </div>
-              </div>
-            )}
-          </section>
+    <div className="space-y-5 max-w-xl">
+      {/* Статус */}
+      <Card eyebrow="Vision Status" padded>
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-[13px] text-bg-10">Токен</span>
+            <Badge variant={data?.has_token ? "success" : "neutral"} size="sm">
+              {data?.has_token ? "Задан" : "Не задан"}
+            </Badge>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-[13px] text-bg-10">CDP</span>
+            <Badge variant={cdpVariant} size="sm">
+              {cdpStatus}
+            </Badge>
+          </div>
+          {data?.cdp_port && (
+            <div className="flex items-center justify-between">
+              <span className="text-[13px] text-bg-10">CDP Port</span>
+              <span className="font-display text-[12px] text-bg-9 tabular-nums">
+                {data.cdp_port}
+              </span>
+            </div>
+          )}
+          {data?.runtime_status_message && (
+            <div className="text-[11px] text-bg-8 mt-1">
+              {data.runtime_status_message}
+            </div>
+          )}
         </div>
 
-        {/* Правая колонка: действия. */}
+        {/* Reconnect */}
+        <div className="mt-4 pt-4 border-t border-bg-4">
+          <Button
+            variant="secondary"
+            onClick={() => void handleReconnect()}
+            loading={reconnectMut.isPending}
+          >
+            Reconnect Vision
+          </Button>
+        </div>
+      </Card>
+
+      {/* Токен + Profile ID */}
+      <Card eyebrow="Конфигурация" padded>
         <div className="space-y-4">
-          <section className="border border-bg-5 bg-bg-1 p-5 space-y-3">
-            <h3 className="font-display text-[10px] uppercase tracking-widest text-bg-9 mb-3">
-              Действия
-            </h3>
-            <Button
-              variant="secondary"
-              size="sm"
-              fullWidth
-              leftIcon={<RefreshCcw size={13} aria-hidden="true" />}
-              loading={reconnect.isPending}
-              onClick={() => setReconnectOpen(true)}
-            >
-              Переподключить Vision
-            </Button>
-          </section>
-
-          <section className="border border-bg-5 bg-bg-1 p-5">
-            <h3 className="font-display text-[10px] uppercase tracking-widest text-bg-9 mb-3">
-              Справка
-            </h3>
-            <ul className="text-[12px] text-bg-9 space-y-1.5 list-disc list-inside">
-              <li>Токен и профиль берутся из вашего Vision-аккаунта.</li>
-              <li>«Переподключить» перезапускает браузерную сессию.</li>
-            </ul>
-          </section>
+          <Input
+            id="vision-token"
+            label="X-Token"
+            type="password"
+            placeholder="Новый токен Vision (оставьте пустым чтобы не менять)"
+            value={xToken}
+            onChange={(e) => setXToken(e.target.value)}
+            helpText="Токен хранится зашифрованным через Fernet."
+          />
+          <Input
+            id="vision-profile"
+            label="Profile ID"
+            placeholder="Идентификатор профиля Vision"
+            value={profileId}
+            onChange={(e) => setProfileId(e.target.value)}
+          />
         </div>
-      </div>
-    </>
+        <div className="mt-4">
+          <Button
+            variant="primary"
+            onClick={() => void handleSave()}
+            loading={updateMut.isPending}
+          >
+            Сохранить
+          </Button>
+        </div>
+      </Card>
+    </div>
   );
-}
+};

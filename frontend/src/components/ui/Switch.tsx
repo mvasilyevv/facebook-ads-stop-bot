@@ -1,18 +1,18 @@
 /**
- * Switch — переиспользуемый toggle (role="switch").
- * Геометрия задаётся инлайн-стилями (не arbitrary Tailwind-классами) — детерминированно,
- * не зависит от spacing-шкалы конфигурации. Цвета — через дизайн-токены.
+ * Switch — toggle (role="switch").
+ * Геометрия inline-стилями — детерминировано.
+ * Цвета: checked=success, unchecked=bg-3.
  */
 
 interface SwitchProps {
   checked: boolean;
   onChange: () => void;
-  /** aria-label — обязателен для доступности. */
+  /** aria-label обязателен для доступности. */
   label: string;
   disabled?: boolean;
-  /** Видимая подпись слева от тогла. Если задана — Switch сам рисует строку с подписью. */
+  /** Видимая подпись слева от тогла. */
   visualLabel?: string;
-  /** Описание-подсказка под видимой подписью (последствия переключения). */
+  /** Описание под visualLabel. */
   description?: string;
 }
 
@@ -32,30 +32,35 @@ export function Switch({
       aria-label={label}
       onClick={onChange}
       disabled={disabled}
-      style={{ width: 44, height: 24 }}
+      style={{ width: 44, height: 24, flexShrink: 0 }}
       className={[
-        "relative inline-block border align-middle transition-colors shrink-0",
+        "relative inline-block border align-middle transition-colors duration-[120ms] shrink-0",
         "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
-        checked ? "bg-success border-[rgba(126,180,122,0.5)]" : "bg-bg-3 border-bg-6",
+        checked
+          ? "bg-success border-[rgba(126,180,122,0.5)]"
+          : "bg-bg-3 border-bg-6",
         "disabled:opacity-40 disabled:cursor-not-allowed",
       ].join(" ")}
     >
+      {/* Ползунок */}
       <span
         aria-hidden="true"
-        className="absolute bg-bg-11 transition-all"
+        className="absolute bg-bg-11 transition-all duration-[120ms]"
         style={{ width: 16, height: 16, top: 3, left: checked ? 24 : 4 }}
       />
     </button>
   );
 
-  // Без visualLabel — обратная совместимость: голый тогл (подпись рисует родитель).
+  // Без visualLabel — голый тогл
   if (!visualLabel) return toggle;
 
   return (
     <div className="flex items-start justify-between gap-3">
       <div className="min-w-0">
         <div className="text-[13px] text-bg-11 font-medium">{visualLabel}</div>
-        {description ? <div className="text-[11px] text-bg-9 mt-0.5">{description}</div> : null}
+        {description ? (
+          <div className="text-[11px] text-bg-9 mt-0.5">{description}</div>
+        ) : null}
       </div>
       {toggle}
     </div>

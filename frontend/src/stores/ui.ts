@@ -7,7 +7,6 @@ import { persist, createJSONStorage } from "zustand/middleware";
  * Что хранится:
  * - sidebarCollapsed — режим сайдбара (icon-only 64px vs default 240px).
  * - density — высота строк таблиц ("comfortable" 32px | "compact" 24px).
- * - lastVisitedRoute — для редиректов после login (опционально).
  *
  * Что НЕ хранится: server data (TanStack Query), form state (react-hook-form),
  * URL state (filters/sort — TanStack Router search params).
