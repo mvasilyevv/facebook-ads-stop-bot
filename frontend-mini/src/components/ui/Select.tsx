@@ -2,7 +2,7 @@
  * Select — нативный select для мобильного UI-kit.
  * Тач-цель ≥ 44px. Острые углы. Соответствует дизайну Input.
  */
-import type { SelectHTMLAttributes } from "react";
+import { useId, type SelectHTMLAttributes } from "react";
 import { cn } from "@/lib/cn";
 
 interface SelectOption {
@@ -17,7 +17,8 @@ interface SelectProps extends SelectHTMLAttributes<HTMLSelectElement> {
 }
 
 export function Select({ label, options, errorMessage, id, className, ...rest }: SelectProps) {
-  const selectId = id ?? `select-${Math.random().toString(36).slice(2)}`;
+  const generatedId = useId();
+  const selectId = id ?? generatedId;
   return (
     <div className="flex flex-col gap-1">
       {label && (

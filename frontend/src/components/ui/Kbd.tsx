@@ -3,7 +3,7 @@
  * Спека: bg-3, border-6, font-display 11px, height 20px.
  */
 import { type HTMLAttributes } from "react";
-import { cn } from "./cn";
+import { cn } from "@/lib/utils/cn";
 
 export function Kbd({ className, children, ...rest }: HTMLAttributes<HTMLElement>) {
   return (

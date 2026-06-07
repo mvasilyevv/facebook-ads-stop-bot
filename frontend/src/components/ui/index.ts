@@ -3,7 +3,7 @@
  * Импортируй: import { Button, Badge, Drawer } from "@/components/ui";
  */
 
-export { cn } from "./cn";
+export { cn } from "@/lib/utils/cn";
 
 export { Button } from "./Button";
 export type { ButtonProps } from "./Button";

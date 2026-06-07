@@ -5,7 +5,7 @@
  */
 import { type HTMLAttributes } from "react";
 import { Check, Minus } from "lucide-react";
-import { cn } from "./cn";
+import { cn } from "@/lib/utils/cn";
 
 export type CheckboxState = boolean | "indeterminate";
 

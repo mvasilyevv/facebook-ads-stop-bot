@@ -4,7 +4,7 @@
  * Кастомный Popover-combobox — отдельный компонент.
  */
 import { forwardRef, type SelectHTMLAttributes } from "react";
-import { cn } from "./cn";
+import { cn } from "@/lib/utils/cn";
 import { ChevronDown } from "lucide-react";
 
 export interface SelectOption {

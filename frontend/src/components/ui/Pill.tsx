@@ -5,7 +5,7 @@
  */
 import { type ButtonHTMLAttributes, type HTMLAttributes, type ReactNode } from "react";
 import { X } from "lucide-react";
-import { cn } from "./cn";
+import { cn } from "@/lib/utils/cn";
 
 // ─── FilterPill ────────────────────────────────────────────────────────────────
 

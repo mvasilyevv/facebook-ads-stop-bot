@@ -6,7 +6,7 @@
 import { forwardRef, type InputHTMLAttributes, type ReactNode } from "react";
 import { cva, type VariantProps } from "class-variance-authority";
 import { Search } from "lucide-react";
-import { cn } from "./cn";
+import { cn } from "@/lib/utils/cn";
 import { Kbd } from "./Kbd";
 
 const inputStyles = cva(

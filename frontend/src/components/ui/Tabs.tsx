@@ -4,7 +4,7 @@
  */
 import * as RadixTabs from "@radix-ui/react-tabs";
 import { type ReactNode } from "react";
-import { cn } from "./cn";
+import { cn } from "@/lib/utils/cn";
 
 export interface TabItem {
   value: string;
