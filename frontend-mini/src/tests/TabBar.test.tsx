@@ -27,21 +27,21 @@ vi.mock("@/lib/tg", () => ({
 import { TabBar } from "@/components/layout/TabBar";
 
 describe("TabBar", () => {
-  // Рендерит все 5 вкладок
+  // Рендерит все 5 вкладок канона: Панель/Объявления/Черновики/История/Ещё
   it("рендерит 5 основных вкладок", () => {
     render(<TabBar />);
-    expect(screen.getByLabelText("Дашборд")).toBeInTheDocument();
-    expect(screen.getByLabelText("Объявл.")).toBeInTheDocument();
-    expect(screen.getByLabelText("Офферы")).toBeInTheDocument();
+    expect(screen.getByLabelText("Панель")).toBeInTheDocument();
+    expect(screen.getByLabelText("Объявления")).toBeInTheDocument();
+    expect(screen.getByLabelText("Черновики")).toBeInTheDocument();
     expect(screen.getByLabelText("История")).toBeInTheDocument();
     expect(screen.getByLabelText("Ещё")).toBeInTheDocument();
   });
 
   // Активная вкладка имеет aria-current="page"
-  it("Дашборд активен при pathname '/'", () => {
+  it("Панель активна при pathname '/'", () => {
     mockLocation.pathname = "/";
     render(<TabBar />);
-    const btn = screen.getByLabelText("Дашборд");
+    const btn = screen.getByLabelText("Панель");
     expect(btn).toHaveAttribute("aria-current", "page");
   });
 
@@ -49,7 +49,7 @@ describe("TabBar", () => {
   it("Объявления неактивны при pathname '/'", () => {
     mockLocation.pathname = "/";
     render(<TabBar />);
-    const btn = screen.getByLabelText("Объявл.");
+    const btn = screen.getByLabelText("Объявления");
     expect(btn).not.toHaveAttribute("aria-current");
   });
 
@@ -58,8 +58,17 @@ describe("TabBar", () => {
     mockLocation.pathname = "/";
     mockNavigate.mockClear();
     render(<TabBar />);
-    await userEvent.click(screen.getByLabelText("Объявл."));
+    await userEvent.click(screen.getByLabelText("Объявления"));
     expect(mockNavigate).toHaveBeenCalledWith({ to: "/ads" });
+  });
+
+  // Черновики — основной таб, навигирует на /drafts
+  it("клик по Черновикам навигирует на /drafts", async () => {
+    mockLocation.pathname = "/";
+    mockNavigate.mockClear();
+    render(<TabBar />);
+    await userEvent.click(screen.getByLabelText("Черновики"));
+    expect(mockNavigate).toHaveBeenCalledWith({ to: "/drafts" });
   });
 
   // Скрывается на /ads/:fbAdId (detail)

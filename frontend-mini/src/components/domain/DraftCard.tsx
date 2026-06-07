@@ -1,132 +1,167 @@
 /**
- * DraftCard — карточка черновика для DraftsPage.
- * Компактный: тип-бейдж, verb, diff-таблица, таймер, Confirm/Reject.
- * Локальный компонент (не трогает ui/).
+ * DraftCard — карточка черновика мутации Meta API под канон mini-dashboard.
+ *
+ * Канон: острые углы, mono числа/коды, var(--bg-N)/text-bg-N,
+ * Eyebrow, ribbon «СКОРО ИСТЕКАЕТ», touch ≥44px.
+ *
+ * Props: onConfirm/onReject — внешние хендлеры, busy — spinner.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { AlertTriangle, Clock } from "lucide-react";
 import type { DraftOut } from "@fb/shared";
 import {
-  MUTATION_KIND_VERBS,
-  MUTATION_KIND_LABELS,
   buildDraftDiff,
   draftExpiresAt,
   isExpiringSoon,
   isDraftExpired,
-  formatDateTime,
+  isBulkMutation,
+  mutationKindLabel,
   formatRelativeTime,
 } from "@fb/shared";
-import { Badge, Button, Card } from "@/components/ui";
+import { Badge } from "@/components/ui/Badge";
+import { Button } from "@/components/ui/Button";
+import { Eyebrow } from "@/components/data/Eyebrow";
 import { haptic, tgConfirm } from "@/lib/tg";
 import { cn } from "@/lib/cn";
 
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+/** Форматирует оставшееся время до истечения: "47 мин" / "23ч 47м". */
+function formatTimeLeft(expiresAt: Date, now: number): string {
+  const ms = expiresAt.getTime() - now;
+  if (ms <= 0) return "истёк";
+  const totalSec = Math.ceil(ms / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.ceil((totalSec % 3600) / 60);
+  if (h === 0) return `${m} мин`;
+  return `${h}ч ${m}м`;
+}
+
+// ─── Props ────────────────────────────────────────────────────────────────────
+
 interface DraftCardProps {
   draft: DraftOut;
-  /** currentState для buildDraftDiff — может прийти из useTmaDraftDetail */
+  /** Текущее состояние объекта для diff-таблицы. */
   currentState?: Record<string, unknown> | null;
   onConfirm: (id: number) => Promise<void>;
   onReject: (id: number) => Promise<void>;
+  busy?: boolean;
 }
 
-export function DraftCard({ draft, currentState, onConfirm, onReject }: DraftCardProps) {
-  const [busy, setBusy] = useState(false);
-  const [localError, setLocalError] = useState<string | null>(null);
+// ─── Компонент ────────────────────────────────────────────────────────────────
+
+export function DraftCard({ draft, currentState, onConfirm, onReject, busy = false }: DraftCardProps) {
+  // Реактивный таймер — обновляем каждую минуту
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(id);
+  }, []);
 
   const expiresAt = draftExpiresAt(draft.created_at);
-  const expiring = isExpiringSoon(expiresAt);
-  const expired = isDraftExpired(expiresAt);
+  const expiring = isExpiringSoon(expiresAt, now);
+  const expired = isDraftExpired(expiresAt, now);
+  const isBulk = isBulkMutation(draft.mutation_kind);
 
-  // Строки diff через shared buildDraftDiff
+  // Полное русское описание мутации
+  const label = mutationKindLabel(draft.mutation_kind);
+
+  // Строки diff
   const diffRows = buildDraftDiff(
     draft.mutation_kind,
     (draft.payload ?? {}) as Record<string, unknown>,
     currentState ?? null,
   );
 
-  const verb = MUTATION_KIND_VERBS[draft.mutation_kind as keyof typeof MUTATION_KIND_VERBS]
-    ?? draft.mutation_kind.toUpperCase();
-  const label = MUTATION_KIND_LABELS[draft.mutation_kind as keyof typeof MUTATION_KIND_LABELS]
-    ?? draft.mutation_kind;
-
-  async function handleConfirm() {
-    const confirmed = await tgConfirm(`Подтвердить «${label}»?`);
-    if (!confirmed) return;
-    setBusy(true);
-    setLocalError(null);
-    haptic.impact("medium");
-    try {
-      await onConfirm(draft.id);
-      haptic.notify("success");
-    } catch (err) {
-      haptic.notify("error");
-      setLocalError((err as Error).message ?? "Ошибка");
-      setBusy(false);
-    }
-  }
-
-  async function handleReject() {
-    const confirmed = await tgConfirm("Отменить этот черновик?");
-    if (!confirmed) return;
-    setBusy(true);
-    setLocalError(null);
-    haptic.impact("light");
-    try {
-      await onReject(draft.id);
-      haptic.notify("success");
-    } catch (err) {
-      haptic.notify("error");
-      setLocalError((err as Error).message ?? "Ошибка");
-      setBusy(false);
-    }
-  }
+  // Число объектов батча
+  const payload = (draft.payload ?? {}) as Record<string, unknown>;
+  const batchCount = isBulk && Array.isArray(payload["object_ids"])
+    ? (payload["object_ids"] as unknown[]).length
+    : null;
 
   return (
-    <Card className="mb-3">
-      {/* Шапка: verb-бейдж + дата */}
-      <div className="flex items-start justify-between gap-2 mb-2">
-        <div className="flex flex-wrap items-center gap-2">
-          <Badge variant={expired ? "cancelled" : expiring ? "warning" : "pending"}>
-            {verb}
-          </Badge>
-          {draft.target_id && (
-            <span className="font-mono text-[10px] text-[var(--color-bg-9)]">
-              {draft.target_id}
-            </span>
+    <article
+      className={cn(
+        "border bg-bg-1 relative",
+        expired
+          ? "border-bg-5 opacity-60"
+          : expiring
+            ? "border-[rgba(212,168,88,0.35)]"
+            : "border-bg-5",
+      )}
+      data-testid="draft-card"
+    >
+      {/* ── Ribbon СКОРО ИСТЕКАЕТ ── */}
+      {expiring && !expired && (
+        <div
+          aria-label="Истекает скоро"
+          data-testid="expiring-ribbon"
+          className={cn(
+            "absolute top-0 right-4",
+            "bg-warning text-bg-0",
+            "font-display font-semibold text-[9px] tracking-[0.14em] uppercase",
+            "px-2 py-[3px]",
+            "z-10",
           )}
+        >
+          СКОРО ИСТЕКАЕТ
         </div>
-        <p className="text-[11px] text-[var(--color-bg-9)] font-mono shrink-0">
-          {formatRelativeTime(draft.created_at)}
+      )}
+
+      {/* ── Header ── */}
+      <header className="px-4 pt-4 pb-3 border-b border-bg-5">
+        {/* Meta-line: eyebrow + возраст */}
+        <div className="flex items-center justify-between gap-2 mb-1.5">
+          <Eyebrow>ЧЕРНОВИК</Eyebrow>
+          <span className="font-display tabular-nums text-[10px] text-bg-8">
+            {formatRelativeTime(draft.created_at)}
+          </span>
+        </div>
+
+        {/* Заголовок: полное описание мутации */}
+        <h3 className="font-display text-[17px] font-medium tracking-[-0.01em] text-bg-11 m-0 leading-[1.2]">
+          {label}
+          {/* Батч: N объектов */}
+          {isBulk && batchCount != null && (
+            <>
+              {" · "}
+              <span className="text-accent font-display tabular-nums">{batchCount}</span>
+              {" объектов"}
+            </>
+          )}
+        </h3>
+
+        {/* Запросил */}
+        <p className="mt-1 font-display text-[11px] text-bg-9">
+          Запросил{" "}
+          <span className="text-bg-10 font-medium">@{draft.requested_by}</span>
         </p>
-      </div>
+      </header>
 
-      {/* Описание */}
-      <p className="text-[13px] text-[var(--color-bg-11)] mb-3 leading-snug">{label}</p>
-
-      {/* Diff-таблица */}
+      {/* ── Diff-таблица ── */}
       {diffRows.length > 0 && (
-        <div className="mb-3 border border-[var(--color-bg-5)]">
+        <div className="border-b border-bg-5">
           {diffRows.map((row, i) => (
             <div
               key={i}
               className={cn(
-                "grid grid-cols-3 gap-2 px-3 py-2 text-[12px]",
-                i > 0 && "border-t border-[var(--color-bg-5)]",
+                "grid grid-cols-3 gap-2 px-4 py-2.5 text-[12px]",
+                i > 0 && "border-t border-bg-5",
               )}
             >
-              <span className="text-[var(--color-bg-9)] font-mono col-span-1 truncate">
-                {row.field}
-              </span>
+              <span className="font-display text-bg-8 truncate">{row.field}</span>
               <span
                 className={cn(
-                  "font-mono col-span-1 truncate text-right",
-                  row.changed ? "text-[var(--color-bg-8)] line-through" : "text-[var(--color-bg-10)]",
+                  "font-display tabular-nums truncate text-right",
+                  row.changed ? "text-bg-7 line-through" : "text-bg-10",
                 )}
               >
                 {row.current}
               </span>
               <span
                 className={cn(
-                  "font-mono col-span-1 truncate text-right",
-                  row.changed ? "text-[var(--color-accent)]" : "text-[var(--color-bg-10)]",
+                  "font-display tabular-nums truncate text-right",
+                  row.changed ? "text-accent" : "text-bg-10",
                 )}
               >
                 {row.target}
@@ -136,59 +171,85 @@ export function DraftCard({ draft, currentState, onConfirm, onReject }: DraftCar
         </div>
       )}
 
-      {/* Таймер истечения */}
-      <div className="flex items-center gap-2 mb-3">
-        <p
-          className={cn(
-            "text-[11px] font-mono",
-            expired
-              ? "text-[var(--color-danger)]"
-              : expiring
-              ? "text-[var(--color-warning)]"
-              : "text-[var(--color-bg-9)]",
-          )}
-        >
-          {expired
-            ? "Истёк"
-            : expiring
-            ? `Истекает: ${formatDateTime(expiresAt.toISOString())}`
-            : `До: ${formatDateTime(expiresAt.toISOString())}`}
-        </p>
-      </div>
-
-      {/* Ошибка */}
-      {localError && (
-        <p className="text-[12px] text-[var(--color-danger)] mb-2">{localError}</p>
-      )}
-
-      {/* Кнопки */}
-      {!expired && (
-        <div className="flex gap-2">
-          <Button
-            variant="primary"
-            size="md"
-            fullWidth
-            loading={busy}
-            onClick={handleConfirm}
-          >
-            Подтвердить
-          </Button>
-          <Button
-            variant="secondary"
-            size="md"
-            fullWidth
-            disabled={busy}
-            onClick={handleReject}
-          >
-            Отменить
-          </Button>
+      {/* ── Callout «Пакетная операция» ── */}
+      {isBulk && batchCount != null && batchCount > 0 && (
+        <div className="border-b border-bg-5 px-4 py-3 flex items-start gap-2">
+          <AlertTriangle size={13} className="text-warning shrink-0 mt-[2px]" aria-hidden />
+          <p className="font-display text-[11px] text-warning leading-[1.5]">
+            Пакетная операция · {batchCount} graph-вызовов
+          </p>
         </div>
       )}
-      {expired && (
-        <Button variant="ghost" size="sm" disabled>
-          Истёк — больше недоступен
-        </Button>
-      )}
-    </Card>
+
+      {/* ── Footer: таймер + кнопки ── */}
+      <footer className="px-4 py-3 flex items-center justify-between gap-3 bg-bg-0">
+        {/* Таймер */}
+        <div
+          className={cn(
+            "flex items-center gap-1.5 font-display text-[11px]",
+            expired ? "text-danger" : expiring ? "text-warning" : "text-bg-9",
+          )}
+        >
+          <Clock size={11} aria-hidden />
+          {expired ? (
+            <span>Черновик истёк</span>
+          ) : expiring ? (
+            <span>
+              СКОРО ИСТЕКАЕТ ·{" "}
+              <span className="font-medium tabular-nums">{formatTimeLeft(expiresAt, now)}</span>
+            </span>
+          ) : (
+            <span>
+              Истекает через{" "}
+              <span className="text-bg-10 tabular-nums">{formatTimeLeft(expiresAt, now)}</span>
+            </span>
+          )}
+        </div>
+
+        {/* Кнопки */}
+        {!expired && (
+          <div className="flex gap-2 shrink-0">
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={busy}
+              onClick={() => {
+                void (async () => {
+                  const ok = await tgConfirm("Отклонить этот черновик?");
+                  if (!ok) return;
+                  haptic.impact("light");
+                  await onReject(draft.id);
+                })();
+              }}
+              aria-label="Отклонить черновик"
+              className="min-h-[44px] px-3"
+            >
+              Отклонить
+            </Button>
+            <Button
+              variant="primary"
+              size="sm"
+              loading={busy}
+              disabled={busy}
+              onClick={() => {
+                void (async () => {
+                  const ok = await tgConfirm(`Одобрить «${label}»?`);
+                  if (!ok) return;
+                  haptic.impact("medium");
+                  await onConfirm(draft.id);
+                })();
+              }}
+              aria-label="Одобрить и выполнить"
+              className="min-h-[44px] px-3"
+            >
+              Одобрить и выполнить
+            </Button>
+          </div>
+        )}
+        {expired && (
+          <Badge variant="cancelled" size="sm">истёк</Badge>
+        )}
+      </footer>
+    </article>
   );
 }

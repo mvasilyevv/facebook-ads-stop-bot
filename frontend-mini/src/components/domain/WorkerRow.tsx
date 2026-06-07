@@ -1,11 +1,12 @@
 /**
  * WorkerRow — строка воркера на Health-экране.
- * Dot ONLINE/OFFLINE + имя + TTL.
- * Локальный компонент.
+ * PulseDot (ONLINE=success, OFFLINE=danger) + имя mono + relative time + Badge ONLINE/OFFLINE.
+ * borderBottom border-bg-5, min-h 44px. Имена воркеров — технические, не переводятся.
  */
 import type { HealthDetails } from "@fb/shared";
 import { formatRelativeTime } from "@fb/shared";
-import { cn } from "@/lib/cn";
+import { PulseDot } from "@/components/data";
+import { Badge } from "@/components/ui";
 
 export type WorkerStatus = HealthDetails["workers"][number];
 
@@ -30,40 +31,42 @@ interface WorkerRowProps {
 
 export function WorkerRow({ worker }: WorkerRowProps) {
   const online = worker.status === "ONLINE";
+
+  const heartbeatInfo = online
+    ? worker.ttl_seconds != null
+      ? `TTL ${worker.ttl_seconds}s`
+      : "онлайн"
+    : worker.last_heartbeat_at
+      ? `${formatRelativeTime(worker.last_heartbeat_at)} назад`
+      : "нет данных";
+
   return (
-    <div className="flex items-center gap-3 py-3 border-b border-[var(--color-bg-5)] last:border-0">
-      {/* Heartbeat dot */}
-      <span
-        className={cn(
-          "shrink-0 w-2 h-2 rounded-full",
-          online ? "bg-[var(--color-success)]" : "bg-[var(--color-danger)]",
-        )}
+    <div className="flex items-center gap-3 px-0 py-2.5 min-h-[44px] border-b border-bg-5 last:border-0">
+      {/* Пульс-точка */}
+      <PulseDot
+        size={8}
+        color={online ? "var(--success)" : "var(--danger)"}
         aria-label={online ? "онлайн" : "офлайн"}
       />
 
-      {/* Имя + TTL */}
+      {/* Имя + подзаголовок */}
       <div className="flex-1 min-w-0">
-        <p className="text-[14px] font-medium text-[var(--color-bg-11)] leading-tight">
+        <p className="font-display text-[13px] text-bg-11 leading-tight truncate">
           {WORKER_LABELS[worker.name] ?? worker.name}
         </p>
-        <p className="text-[11px] text-[var(--color-bg-9)] font-mono">
-          {online
-            ? `heartbeat ${worker.ttl_seconds != null ? `${worker.ttl_seconds}s TTL` : ""}`
-            : worker.last_heartbeat_at
-            ? `послед. ${formatRelativeTime(worker.last_heartbeat_at)}`
-            : "нет данных"}
+        <p className="font-display tabular-nums text-[11px] text-bg-9 mt-0.5">
+          {heartbeatInfo}
         </p>
       </div>
 
-      {/* Статус */}
-      <span
-        className={cn(
-          "text-[11px] font-mono font-semibold",
-          online ? "text-[var(--color-success)]" : "text-[var(--color-danger)]",
-        )}
+      {/* Статус-бейдж */}
+      <Badge
+        variant={online ? "done" : "failed"}
+        size="sm"
+        withDot
       >
         {online ? "ONLINE" : "OFFLINE"}
-      </span>
+      </Badge>
     </div>
   );
 }

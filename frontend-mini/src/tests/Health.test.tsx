@@ -1,5 +1,6 @@
 /**
- * Тесты HealthPage: verdict-расчёт, ONLINE/OFFLINE статусы воркеров.
+ * Тесты HealthPage: verdict-баннер (HEALTHY/DEGRADED/CRITICAL), ONLINE/OFFLINE,
+ * имена воркеров, кнопка Обновить, loading/error/empty-state.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
@@ -17,7 +18,7 @@ vi.mock("@tanstack/react-router", () => ({
   useLocation: () => ({ pathname: "/health/" }),
 }));
 
-// ─── Моки TG ────────────────────────────────────────────────────────────────
+// ─── Моки TG ─────────────────────────────────────────────────────────────────
 
 vi.mock("@/lib/tg", () => ({
   haptic: { impact: vi.fn(), notify: vi.fn(), selection: vi.fn() },
@@ -30,7 +31,7 @@ vi.mock("@/lib/tg", () => ({
   getInitData: () => "",
 }));
 
-// ─── Фикстуры ────────────────────────────────────────────────────────────────
+// ─── Фикстуры ─────────────────────────────────────────────────────────────────
 
 const WORKER_OBSERVER: WorkerStatus = {
   name: "observer",
@@ -67,11 +68,12 @@ const CRITICAL_DATA: HealthDetails = {
   observer_runtime: null,
 };
 
-// ─── Моки API ────────────────────────────────────────────────────────────────
+// ─── Моки API ─────────────────────────────────────────────────────────────────
 
 let mockHealthData: HealthDetails | null = null;
 let mockIsLoading = false;
 let mockIsError = false;
+const mockRefetch = vi.fn();
 
 vi.mock("@/lib/api", () => ({
   useHealthDetails: () => ({
@@ -79,39 +81,57 @@ vi.mock("@/lib/api", () => ({
     isLoading: mockIsLoading,
     isError: mockIsError,
     error: mockIsError ? new Error("Ошибка здоровья") : null,
-    refetch: vi.fn(),
+    refetch: mockRefetch,
   }),
 }));
 
-// ─── Компонент под тест ───────────────────────────────────────────────────────
-
-const VERDICT_LABELS: Record<string, string> = {
-  HEALTHY: "Всё в норме",
-  DEGRADED: "Деградация",
-  CRITICAL: "Критично",
-};
+// ─── Вспомогательный компонент для тестирования страницы ─────────────────────
 
 function TestHealthPage() {
-  const { data, isLoading, isError, error } = useHealthDetails();
+  const { data, isLoading, isError, error, refetch } = useHealthDetails();
   const overall = data?.overall ?? null;
   const workers: WorkerStatus[] = Array.isArray(data?.workers) ? data.workers : [];
   const onlineCount = workers.filter((w) => w.status === "ONLINE").length;
   const offlineCount = workers.length - onlineCount;
 
   if (isLoading) return <div data-testid="loading">Загрузка...</div>;
-  if (isError) return <div data-testid="error">{(error as Error)?.message}</div>;
+  if (isError)
+    return (
+      <div data-testid="error">
+        {(error as Error)?.message ?? "Ошибка"}
+        <button type="button" onClick={() => void refetch()}>
+          Обновить
+        </button>
+      </div>
+    );
   if (!data) return <div data-testid="empty">Нет данных</div>;
 
   return (
     <div>
+      {/* Вердикт-баннер */}
       {overall && (
-        <p data-testid="overall-verdict">{VERDICT_LABELS[overall] ?? overall}</p>
+        <div data-testid="verdict-banner">
+          <span data-testid="overall-verdict">{overall}</span>
+          <span data-testid="online-summary">
+            {onlineCount}/{workers.length} ONLINE
+          </span>
+        </div>
       )}
-      <p data-testid="online-count">{onlineCount} online</p>
-      <p data-testid="offline-count">{offlineCount} offline</p>
+      {/* Счётчики для тестов */}
+      <span data-testid="online-count">{onlineCount} online</span>
+      <span data-testid="offline-count">{offlineCount} offline</span>
+      {/* Список воркеров */}
       {workers.map((w) => (
         <WorkerRow key={w.name} worker={w} />
       ))}
+      {/* Кнопка обновить */}
+      <button
+        type="button"
+        aria-label="Обновить статус"
+        onClick={() => void refetch()}
+      >
+        Обновить статус
+      </button>
     </div>
   );
 }
@@ -134,49 +154,62 @@ describe("HealthPage", () => {
     mockHealthData = HEALTHY_DATA;
     mockIsLoading = false;
     mockIsError = false;
+    mockRefetch.mockClear();
   });
 
-  // HEALTHY: вердикт + все ONLINE
-  it("показывает HEALTHY вердикт при всех ONLINE воркерах", () => {
+  // HEALTHY: вердикт-баннер + счётчик ONLINE
+  it("отображает вердикт HEALTHY и счётчик 1/1 ONLINE", () => {
     render(<Wrapper />);
-    expect(screen.getByTestId("overall-verdict")).toHaveTextContent("Всё в норме");
+    expect(screen.getByTestId("overall-verdict")).toHaveTextContent("HEALTHY");
+    expect(screen.getByTestId("online-summary")).toHaveTextContent("1/1 ONLINE");
     expect(screen.getByTestId("online-count")).toHaveTextContent("1 online");
     expect(screen.getByTestId("offline-count")).toHaveTextContent("0 offline");
   });
 
   // DEGRADED: вердикт + смешанные статусы
-  it("показывает DEGRADED вердикт при наличии OFFLINE воркеров", () => {
+  it("отображает вердикт DEGRADED при наличии OFFLINE воркеров", () => {
     mockHealthData = DEGRADED_DATA;
     render(<Wrapper />);
-    expect(screen.getByTestId("overall-verdict")).toHaveTextContent("Деградация");
+    expect(screen.getByTestId("overall-verdict")).toHaveTextContent("DEGRADED");
+    expect(screen.getByTestId("online-count")).toHaveTextContent("1 online");
     expect(screen.getByTestId("offline-count")).toHaveTextContent("1 offline");
   });
 
-  // CRITICAL: вердикт
-  it("показывает CRITICAL вердикт", () => {
+  // CRITICAL: вердикт + все OFFLINE
+  it("отображает вердикт CRITICAL при всех OFFLINE воркерах", () => {
     mockHealthData = CRITICAL_DATA;
     render(<Wrapper />);
-    expect(screen.getByTestId("overall-verdict")).toHaveTextContent("Критично");
+    expect(screen.getByTestId("overall-verdict")).toHaveTextContent("CRITICAL");
+    expect(screen.getByTestId("online-summary")).toHaveTextContent("0/2 ONLINE");
     expect(screen.getByTestId("offline-count")).toHaveTextContent("2 offline");
   });
 
-  // WorkerRow ONLINE: имя + статус
-  it("WorkerRow рендерит ONLINE статус для observer", () => {
+  // WorkerRow ONLINE: имя воркера + статус ONLINE
+  it("WorkerRow отображает имя observer и бейдж ONLINE", () => {
     render(<Wrapper />);
     expect(screen.getByText("Observer")).toBeInTheDocument();
     expect(screen.getByText("ONLINE")).toBeInTheDocument();
   });
 
-  // WorkerRow OFFLINE: статус
-  it("WorkerRow рендерит OFFLINE статус для meta_api воркера", () => {
+  // WorkerRow OFFLINE: имя воркера + статус OFFLINE
+  it("WorkerRow отображает имя Meta API Worker и бейдж OFFLINE", () => {
     mockHealthData = DEGRADED_DATA;
     render(<Wrapper />);
     expect(screen.getByText("Meta API Worker")).toBeInTheDocument();
     expect(screen.getByText("OFFLINE")).toBeInTheDocument();
   });
 
+  // Кнопка «Обновить статус»
+  it("кнопка Обновить статус вызывает refetch", async () => {
+    const { getByRole } = render(<Wrapper />);
+    const btn = getByRole("button", { name: "Обновить статус" });
+    expect(btn).toBeInTheDocument();
+    btn.click();
+    expect(mockRefetch).toHaveBeenCalledTimes(1);
+  });
+
   // Загрузка
-  it("рендерит загрузку при isLoading", () => {
+  it("отображает состояние загрузки при isLoading=true", () => {
     mockIsLoading = true;
     mockHealthData = null;
     render(<Wrapper />);
@@ -184,10 +217,60 @@ describe("HealthPage", () => {
   });
 
   // Ошибка
-  it("рендерит ошибку при isError", () => {
+  it("отображает ошибку при isError=true", () => {
     mockIsError = true;
     mockHealthData = null;
     render(<Wrapper />);
-    expect(screen.getByTestId("error")).toBeInTheDocument();
+    expect(screen.getByTestId("error")).toHaveTextContent("Ошибка здоровья");
+  });
+
+  // Пустые данные
+  it("отображает пустое состояние при data=null", () => {
+    mockHealthData = null;
+    render(<Wrapper />);
+    expect(screen.getByTestId("empty")).toBeInTheDocument();
+  });
+});
+
+// ─── Изолированные тесты WorkerRow ───────────────────────────────────────────
+
+describe("WorkerRow", () => {
+  // ONLINE воркер: имя + TTL
+  it("рендерит ONLINE-воркер с TTL", () => {
+    render(
+      <QueryClientProvider client={makeQC()}>
+        <WorkerRow worker={WORKER_OBSERVER} />
+      </QueryClientProvider>,
+    );
+    expect(screen.getByText("Observer")).toBeInTheDocument();
+    expect(screen.getByText("ONLINE")).toBeInTheDocument();
+    expect(screen.getByText(/TTL 45s/)).toBeInTheDocument();
+  });
+
+  // OFFLINE воркер: имя + статус
+  it("рендерит OFFLINE-воркер meta_api", () => {
+    render(
+      <QueryClientProvider client={makeQC()}>
+        <WorkerRow worker={WORKER_META_OFFLINE} />
+      </QueryClientProvider>,
+    );
+    expect(screen.getByText("Meta API Worker")).toBeInTheDocument();
+    expect(screen.getByText("OFFLINE")).toBeInTheDocument();
+  });
+
+  // Неизвестный воркер: технический идентификатор без перевода
+  it("рендерит неизвестный воркер по техническому имени", () => {
+    const unknownWorker: WorkerStatus = {
+      name: "custom_worker_xyz",
+      status: "ONLINE",
+      last_heartbeat_at: null,
+      ttl_seconds: null,
+    };
+    render(
+      <QueryClientProvider client={makeQC()}>
+        <WorkerRow worker={unknownWorker} />
+      </QueryClientProvider>,
+    );
+    expect(screen.getByText("custom_worker_xyz")).toBeInTheDocument();
   });
 });

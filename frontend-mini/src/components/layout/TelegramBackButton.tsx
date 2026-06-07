@@ -7,10 +7,13 @@ import { useEffect } from "react";
 import { useLocation, useRouter } from "@tanstack/react-router";
 import { registerBackButton, hideBackButton } from "@/lib/tg";
 
-/** Пути, на которых показываем BackButton. */
+/**
+ * Пути, на которых показываем BackButton — detail + вторичные экраны «Ещё».
+ * Черновики теперь основной таб (back не нужен).
+ */
 const BACK_BUTTON_PATTERNS: RegExp[] = [
   /^\/ads\/.+$/,
-  /^\/drafts\//,
+  /^\/offers$/,
   /^\/health$/,
   /^\/scripts$/,
 ];
