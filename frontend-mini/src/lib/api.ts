@@ -178,6 +178,31 @@ export function useDashboardAds(alertState = "", _search = "") {
   });
 }
 
+/** Точка ряда spend × час (GET /dashboard/chart-data). */
+export interface ChartDataPoint {
+  bucket: string;
+  spend: number | string | null;
+  ad_count?: number | null;
+}
+
+/**
+ * Ряд spend по часам для SpendChart (number[]). Пустой ряд → график покажет
+ * заглушку (без фейка). bucket=hour за последние `hours` часов.
+ */
+export function useSpendSeries(hours = 24) {
+  return useQuery({
+    queryKey: ["dashboard", "chart-data", hours] as const,
+    queryFn: async () => {
+      const data = await fetchJson<ChartDataPoint[] | { items: ChartDataPoint[] }>(
+        `/dashboard/chart-data?hours=${hours}&bucket=hour`,
+      );
+      const arr = Array.isArray(data) ? data : (data as { items: ChartDataPoint[] }).items ?? [];
+      return arr.map((p) => Number(p.spend) || 0);
+    },
+    refetchInterval: 60_000,
+  });
+}
+
 // ─── TMA-действия ────────────────────────────────────────────────────────
 
 /** Детальный снимок объявления (TMA endpoint, Bearer-guard). */
