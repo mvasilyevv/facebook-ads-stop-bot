@@ -5,7 +5,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useState, useEffect } from "react";
 import { ChevronRight, Heart, FileCode, FileText, RefreshCw } from "lucide-react";
-import type { ObserverConfig } from "@fb/shared";
 import {
   useObserverSettings,
   useToggleScanning,
@@ -141,7 +140,7 @@ function ObserverSection({ showToast }: { showToast: (t: string, ok?: boolean) =
     );
   }
 
-  if (isError) {
+  if (isError || !data) {
     return (
       <Section eyebrow="OBSERVER" num="06">
         <ErrorState message="Не удалось загрузить настройки" onRetry={() => void refetch()} />
@@ -149,7 +148,7 @@ function ObserverSection({ showToast }: { showToast: (t: string, ok?: boolean) =
     );
   }
 
-  const cfg = data as ObserverConfig;
+  const cfg = data;
 
   const handleToggle = async () => {
     haptic.impact("medium");
