@@ -82,6 +82,20 @@ export function useScanNow() {
   });
 }
 
+/** Переключение only is_scanning_enabled (PATCH /settings/observer/scanning). */
+export function useToggleScanning() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (enabled: boolean) =>
+      apiSend<ObserverConfig>("PATCH", "/settings/observer/scanning", { enabled }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["settings", "observer"] });
+      qc.invalidateQueries({ queryKey: ["observer"] });
+      qc.invalidateQueries({ queryKey: ["dashboard"] });
+    },
+  });
+}
+
 // ─── Telegram settings ────────────────────────────────────────────────────────
 
 export function useTelegramSettings() {

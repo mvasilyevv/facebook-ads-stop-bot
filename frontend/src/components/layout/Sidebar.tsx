@@ -1,19 +1,41 @@
 /**
- * Sidebar — 240px expanded / 64px collapsed.
- * Группы с numbered eyebrow: "01 Operate" / "02 Catalog" / "03 History" / "04 System".
- * Активный nav-link: accent-цвет + 3px accent-бар слева.
- * State (collapsed) в Zustand.
+ * Sidebar — full-height боковая навигация (канон design_handoff/web-dashboard.jsx).
+ *
+ * Структура:
+ *   - Brand-хедер (56px): 26×26 accent-квадрат «FB» + «STOP BOT / operator».
+ *   - Nav-группы с numbered eyebrow (01 OPERATE / 02 CATALOG / 03 HISTORY / 04 SYSTEM).
+ *     Item: 36px, icon + label + опциональный count-badge. Active = bg-2 fill +
+ *     accent text + 3px accent left-bar.
+ *   - Footer: ТОЛЬКО collapse-toggle (worker-статус живёт в TopBar, не дублируем).
+ *
+ * Count-badges (реальные данные):
+ *   - Объявления: ads_in_warning + ads_in_stop (активные инциденты, из stats).
+ *   - Черновики: число pending-черновиков (useMetaDrafts).
+ * 240px expanded / 64px collapsed (state в Zustand).
  */
 
 import { Link, useRouterState } from "@tanstack/react-router";
-import { Activity, Layers, FileEdit, Tag, Clock, Settings, type LucideIcon } from "lucide-react";
+import {
+  LayoutDashboard,
+  Layers,
+  FileText,
+  Tag,
+  Clock,
+  Settings,
+  PanelLeft,
+  type LucideIcon,
+} from "lucide-react";
 import { useUiStore } from "@/stores/ui";
+import { useDashboardStats } from "@/lib/api/dashboard";
+import { useMetaDrafts } from "@/lib/api/drafts";
 import { cn } from "@/lib/utils/cn";
 
 interface NavItem {
   to: string;
   label: string;
   icon: LucideIcon;
+  /** Ключ для подстановки count-badge. */
+  badgeKey?: "ads" | "drafts";
 }
 
 interface NavGroup {
@@ -25,105 +47,149 @@ interface NavGroup {
 const NAV_GROUPS: NavGroup[] = [
   {
     eyebrowNum: "01",
-    eyebrow: "Operate",
+    eyebrow: "OPERATE",
     items: [
-      { to: "/", label: "Панель", icon: Activity },
-      { to: "/ads", label: "Объявления", icon: Layers },
-      { to: "/drafts", label: "Черновики", icon: FileEdit },
+      { to: "/", label: "Панель", icon: LayoutDashboard },
+      { to: "/ads", label: "Объявления", icon: Layers, badgeKey: "ads" },
+      { to: "/drafts", label: "Черновики", icon: FileText, badgeKey: "drafts" },
     ],
   },
   {
     eyebrowNum: "02",
-    eyebrow: "Catalog",
+    eyebrow: "CATALOG",
     items: [{ to: "/offers", label: "Офферы", icon: Tag }],
   },
   {
     eyebrowNum: "03",
-    eyebrow: "History",
+    eyebrow: "HISTORY",
     items: [{ to: "/history", label: "История", icon: Clock }],
   },
   {
     eyebrowNum: "04",
-    eyebrow: "System",
+    eyebrow: "SYSTEM",
     items: [{ to: "/settings", label: "Настройки", icon: Settings }],
   },
 ];
 
 export function Sidebar() {
   const collapsed = useUiStore((s) => s.sidebarCollapsed);
+  const toggleSidebar = useUiStore((s) => s.toggleSidebar);
   const { location } = useRouterState();
+
+  // Реальные count-badges (кэшируются, разделяются с Dashboard).
+  const { data: stats } = useDashboardStats();
+  const { data: drafts } = useMetaDrafts();
+  const adsBadge = stats ? (stats.ads_in_warning ?? 0) + (stats.ads_in_stop ?? 0) : 0;
+  const draftsBadge = drafts?.length ?? 0;
+  const badgeFor = (key?: "ads" | "drafts"): number =>
+    key === "ads" ? adsBadge : key === "drafts" ? draftsBadge : 0;
 
   return (
     <aside
       data-collapsed={collapsed || undefined}
       className={cn(
-        "row-span-1 col-start-1 col-end-2 row-start-2 row-end-3",
-        "border-r border-bg-5 bg-bg-0",
-        "py-6 flex flex-col gap-6 overflow-hidden",
+        "col-start-1 col-end-2 row-start-1 row-end-3",
+        "flex flex-col overflow-hidden border-r border-bg-5 bg-bg-0",
       )}
     >
-      {NAV_GROUPS.map((group) => (
-        <div key={group.eyebrowNum} className="flex flex-col">
-          {/* Eyebrow группы — скрыт в collapsed-режиме */}
-          {!collapsed && (
-            <div className="font-display text-[10px] tracking-[.12em] uppercase text-bg-8 px-6 pb-2">
-              <span className="text-bg-7 mr-2">{group.eyebrowNum}</span>
-              {group.eyebrow}
+      {/* Brand-хедер (56px, совпадает с высотой TopBar) */}
+      <div
+        className={cn(
+          "flex h-14 shrink-0 items-center gap-2.5 border-b border-bg-5",
+          collapsed ? "justify-center px-0" : "px-5",
+        )}
+      >
+        <div
+          aria-hidden="true"
+          className="flex size-[26px] shrink-0 items-center justify-center bg-accent"
+        >
+          <span className="font-display text-[14px] font-bold text-bg-0">FB</span>
+        </div>
+        {!collapsed && (
+          <div className="min-w-0">
+            <div className="font-display text-[13px] font-semibold leading-[1.1] text-bg-11">
+              STOP BOT
             </div>
-          )}
-          {group.items.map((item) => {
-            const isActive =
-              location.pathname === item.to ||
-              (item.to !== "/" && location.pathname.startsWith(item.to));
-
-            return (
-              <Link
-                key={item.to}
-                to={item.to}
-                aria-label={item.label}
-                aria-current={isActive ? "page" : undefined}
-                title={collapsed ? item.label : undefined}
-                className={cn(
-                  "relative flex items-center gap-2.5",
-                  "h-[34px] transition-colors no-underline",
-                  "text-[13.5px]",
-                  collapsed ? "px-0 justify-center" : "px-6",
-                  isActive
-                    ? "text-accent bg-bg-1"
-                    : "text-bg-10 hover:bg-bg-2 hover:text-bg-11",
-                )}
-              >
-                {isActive && (
-                  <span
-                    aria-hidden="true"
-                    className="absolute left-0 top-1.5 bottom-1.5 w-[3px] bg-accent"
-                  />
-                )}
-                <item.icon
-                  size={15}
-                  aria-hidden="true"
-                  className={cn(isActive ? "opacity-100" : "opacity-70")}
-                />
-                {!collapsed && <span className="truncate">{item.label}</span>}
-              </Link>
-            );
-          })}
-        </div>
-      ))}
-
-      {/* Footer — версия и uptime (collapsed скрывает) */}
-      {!collapsed && (
-        <div className="mt-auto px-6 pt-4 border-t border-bg-5 font-display text-[11px] text-bg-9 tracking-[.02em]">
-          <div className="flex justify-between mb-1">
-            <span>build</span>
-            <span className="text-bg-11">main</span>
+            <div className="text-[10px] tracking-[0.04em] text-bg-9">operator</div>
           </div>
-          <div className="flex justify-between">
-            <span>version</span>
-            <span className="text-bg-11">0.1.0</span>
+        )}
+      </div>
+
+      {/* Nav */}
+      <nav className="flex-1 overflow-y-auto py-3">
+        {NAV_GROUPS.map((group) => (
+          <div key={group.eyebrowNum} className="mb-3.5">
+            {!collapsed ? (
+              <div className="mb-2 px-5 font-display text-[9px] font-semibold uppercase tracking-[0.12em] text-bg-9">
+                <span className="mr-1.5 text-accent-muted">{group.eyebrowNum}</span>
+                {group.eyebrow}
+              </div>
+            ) : (
+              <div className="mx-4 mb-2 h-px bg-bg-5" aria-hidden="true" />
+            )}
+            {group.items.map((item) => {
+              const isActive =
+                location.pathname === item.to ||
+                (item.to !== "/" && location.pathname.startsWith(item.to));
+              const badge = badgeFor(item.badgeKey);
+
+              return (
+                <Link
+                  key={item.to}
+                  to={item.to}
+                  aria-label={item.label}
+                  aria-current={isActive ? "page" : undefined}
+                  title={collapsed ? item.label : undefined}
+                  className={cn(
+                    "relative flex h-9 w-full items-center gap-[11px] no-underline transition-colors",
+                    "text-[13px]",
+                    collapsed ? "justify-center px-0" : "px-5",
+                    isActive
+                      ? "bg-bg-2 text-accent"
+                      : "text-bg-10 hover:bg-bg-1 hover:text-bg-11",
+                  )}
+                >
+                  {isActive && (
+                    <span
+                      aria-hidden="true"
+                      className="absolute left-0 top-2 bottom-2 w-[3px] bg-accent"
+                    />
+                  )}
+                  <item.icon size={18} strokeWidth={1.6} aria-hidden="true" />
+                  {!collapsed && <span className="flex-1 text-left">{item.label}</span>}
+                  {!collapsed && item.badgeKey && badge > 0 && (
+                    <span
+                      className={cn(
+                        "font-display text-[11px] tabular-nums",
+                        isActive ? "text-accent" : "text-bg-9",
+                      )}
+                    >
+                      {badge}
+                    </span>
+                  )}
+                </Link>
+              );
+            })}
           </div>
-        </div>
-      )}
+        ))}
+      </nav>
+
+      {/* Footer — только collapse-toggle */}
+      <div
+        className={cn(
+          "flex items-center border-t border-bg-5 py-3",
+          collapsed ? "justify-center px-0" : "justify-end px-4",
+        )}
+      >
+        <button
+          type="button"
+          onClick={toggleSidebar}
+          aria-label={collapsed ? "Развернуть меню" : "Свернуть меню"}
+          className="inline-flex size-7 items-center justify-center text-bg-9 transition-colors hover:bg-bg-2 hover:text-bg-11 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+        >
+          <PanelLeft size={16} aria-hidden="true" />
+        </button>
+      </div>
     </aside>
   );
 }

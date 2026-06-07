@@ -1,107 +1,94 @@
 /**
- * TopBar — 56px.
- * Слева: sidebar-toggle + brand-mark (24px accent box "FB") + "FB Stop Bot".
- * Центр: breadcrumb (mono dim → текущий раздел).
- * Справа: SearchTrigger (disabled stub) + WorkerPulse + avatar 28px.
+ * TopBar — 56px, только над контентом (канон design_handoff/web-dashboard.jsx).
  *
- * Дизайн-канон (dashboard.html):
- * - topbar__brand width 216px, gap 10px
- * - brand-mark 24x24 bg-accent text-bg-0 font-display 600 13px
- * - breadcrumb 12px font-display tracking .02em, current text-bg-11
- * - search-trigger: h-32px px-12px bg-bg-1 border-bg-5, gap 10px, 13px
- * - kbd: font-display 11px bg-bg-3 border-bg-6 py-0.5 px-1.5
- * - user-avatar: 28px bg-bg-3 border-bg-6 font-display 11px 600
+ * Слева: mono-breadcrumb «FB Stop Bot / <раздел>».
+ * Справа: search-кнопка с ⌘K → командная палитра, worker-chip (N/M, жёлтый при
+ * down), разделитель, bell, MV avatar.
+ *
+ * Brand-блок и collapse-toggle переехали в Sidebar (не дублируем здесь).
  */
 
 import { useRouterState } from "@tanstack/react-router";
-import { Search, PanelLeft } from "lucide-react";
+import { Search, Bell } from "lucide-react";
 import { WorkerPulse } from "./WorkerPulse";
-import { useUiStore } from "@/stores/ui";
 import { useCommandPalette } from "@/stores/commandPalette";
 
-const ROUTE_CRUMBS: Record<string, { section: string; current: string }> = {
-  "/": { section: "Управление", current: "Панель" },
-  "/ads": { section: "Управление", current: "Объявления" },
-  "/drafts": { section: "Управление", current: "Черновики" },
-  "/offers": { section: "Каталог", current: "Офферы" },
-  "/history": { section: "История", current: "История" },
-  "/settings": { section: "Система", current: "Настройки" },
+// pathname → лейбл текущего раздела для breadcrumb (канон: FB Stop Bot / <раздел>).
+const ROUTE_CRUMB: Record<string, string> = {
+  "/": "Панель",
+  "/ads": "Объявления",
+  "/drafts": "Черновики",
+  "/offers": "Офферы",
+  "/history": "История",
+  "/settings": "Настройки",
 };
 
-function getCrumbs(pathname: string): { section: string; current: string } {
-  if (pathname === "/" || pathname === "") return ROUTE_CRUMBS["/"]!;
-  for (const [prefix, crumb] of Object.entries(ROUTE_CRUMBS)) {
-    if (prefix !== "/" && pathname.startsWith(prefix)) return crumb!;
+function getCrumb(pathname: string): string {
+  if (pathname === "/" || pathname === "") return ROUTE_CRUMB["/"]!;
+  for (const [prefix, label] of Object.entries(ROUTE_CRUMB)) {
+    if (prefix !== "/" && pathname.startsWith(prefix)) return label;
   }
-  return { section: "App", current: "—" };
+  return "—";
 }
 
 export function TopBar() {
   const { location } = useRouterState();
-  const crumbs = getCrumbs(location.pathname);
-  const toggleSidebar = useUiStore((s) => s.toggleSidebar);
+  const crumb = getCrumb(location.pathname);
   const openPalette = useCommandPalette((s) => s.toggle);
 
   return (
-    <header className="col-start-1 col-end-3 row-start-1 row-end-2 border-b border-bg-5 bg-bg-0 flex items-center gap-6 pl-6 pr-8 z-[10]">
-      {/* Brand + toggle */}
-      <div className="flex items-center gap-2.5 w-[216px] shrink-0">
-        <button
-          type="button"
-          aria-label="Свернуть/развернуть боковую панель"
-          onClick={toggleSidebar}
-          className="size-7 inline-flex items-center justify-center text-bg-9 hover:text-bg-11 transition-colors"
-        >
-          <PanelLeft size={15} aria-hidden="true" />
-        </button>
-        <div
-          aria-hidden="true"
-          className="size-6 bg-accent text-bg-0 font-display font-semibold text-[13px] flex items-center justify-center tracking-tight shrink-0"
-        >
-          FB
-        </div>
-        <div className="font-display text-[13px] font-medium tracking-tight">
-          FB Stop Bot
-        </div>
-      </div>
-
+    <header className="col-start-2 col-end-3 row-start-1 row-end-2 z-[20] flex h-14 items-center justify-between border-b border-bg-5 bg-bg-0 px-8">
       {/* Breadcrumb */}
       <nav
         aria-label="Текущий раздел"
-        className="text-[12px] text-bg-9 font-display tracking-[.02em]"
+        className="flex items-center gap-2 whitespace-nowrap font-display text-[13px] text-bg-9"
       >
-        <span aria-hidden="true" className="text-bg-7 mr-2">{crumbs.section}</span>
-        <span aria-hidden="true" className="text-bg-7 mr-2">/</span>
-        <span className="text-bg-11">{crumbs.current}</span>
+        <span aria-hidden="true">FB Stop Bot</span>
+        <span aria-hidden="true" className="text-bg-7">
+          /
+        </span>
+        <span className="text-bg-11">{crumb}</span>
       </nav>
 
-      <div className="flex-1" />
+      {/* Right cluster */}
+      <div className="flex items-center gap-4">
+        {/* Search → командная палитра (⌘K) */}
+        <button
+          type="button"
+          onClick={openPalette}
+          className="flex items-center gap-2 border border-bg-6 bg-bg-2 px-3 py-1.5 font-body text-[13px] text-bg-9 transition-colors hover:border-bg-7 hover:text-bg-10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+          aria-label="Открыть поиск (⌘K)"
+          title="Поиск объявлений, офферов, разделов (⌘K)"
+        >
+          <Search size={14} aria-hidden="true" />
+          <span>Поиск</span>
+          <kbd className="ml-1.5 rounded-[2px] border border-bg-6 px-1 font-display text-[11px] text-bg-8">
+            ⌘K
+          </kbd>
+        </button>
 
-      {/* Search trigger → командная палитра (⌘K) */}
-      <button
-        type="button"
-        onClick={openPalette}
-        className="flex items-center gap-2.5 h-8 px-3 bg-bg-1 border border-bg-5 text-bg-9 text-[13px] cursor-pointer font-body transition-colors hover:border-bg-7 hover:text-bg-10"
-        aria-label="Открыть поиск (⌘K)"
-        title="Поиск объявлений, офферов, разделов (⌘K)"
-      >
-        <Search size={14} aria-hidden="true" />
-        <span>Поиск объявлений, офферов, событий</span>
-        <kbd className="font-display text-[11px] bg-bg-3 border border-bg-6 px-[5px] py-px text-bg-10 ml-1">
-          ⌘K
-        </kbd>
-      </button>
+        {/* Worker health chip */}
+        <WorkerPulse />
 
-      {/* Worker health pulse */}
-      <WorkerPulse />
+        <div className="h-[22px] w-px bg-bg-5" aria-hidden="true" />
 
-      {/* User avatar 28px */}
-      <div
-        aria-hidden="true"
-        className="size-7 bg-bg-3 border border-bg-6 flex items-center justify-center font-display text-[11px] font-semibold text-bg-11"
-        title="Профиль"
-      >
-        MV
+        {/* Bell */}
+        <button
+          type="button"
+          aria-label="Уведомления"
+          className="inline-flex size-8 items-center justify-center text-bg-10 transition-colors hover:bg-bg-2 hover:text-bg-11 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+        >
+          <Bell size={17} aria-hidden="true" />
+        </button>
+
+        {/* MV avatar */}
+        <div
+          aria-hidden="true"
+          className="flex size-[30px] items-center justify-center rounded-full border border-bg-6 bg-bg-2 font-display text-[12px] text-bg-11"
+          title="Профиль"
+        >
+          MV
+        </div>
       </div>
     </header>
   );

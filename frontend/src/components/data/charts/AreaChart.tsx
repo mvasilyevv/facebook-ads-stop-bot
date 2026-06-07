@@ -1,16 +1,13 @@
 /**
  * AreaChart — area-линейный Recharts с editorial-монохромным стилем.
  *
- * Решение Recharts (не SVG вручную):
- *   - ResponsiveContainer хорошо работает в обёртке ChartWrapper (div с фиксированной px-высотой).
- *   - Recharts AreaChart даёт полный контроль: defs/linearGradient, CartesianGrid, оси, Tooltip,
- *     кастомный CustomDot для peak-аннотации.
- *   - Единственный кастомный SVG-элемент — peak-аннотация (dashed line + label) через
- *     ReferenceLine + кастомный label, что recharts поддерживает напрямую.
- *   - Чистый SVG вместо Recharts не оправдан: теряем responsive, анимации (isAnimationActive),
- *     tooltip, accessibility (aria), cursor. Recharts + кастомизация через props даёт 95% макета.
- *
  * Макет-эталон: docs/frontend_mockups/dashboard.html (svg#area gradient + grid pattern + annotation).
+ *
+ * Ключевые требования из mockup:
+ *   - Grid-pattern фон 48×56px, stroke #1C1C21 (bg-3) — обе оси
+ *   - XAxis с подписями 00:00/06:00/12:00/18:00/NOW, mono 9px, цвет #5C5C66 (bg-8)
+ *   - PEAK-аннотация: dashed вертикаль к точке пика + текст "PEAK $N/h" (mono 10px, bg-10)
+ *   - Area gradient: accent #F5F1E8, opacity 0.18→0, line stroke 1.5px
  */
 
 import { useMemo, useId } from "react";
@@ -22,26 +19,28 @@ import {
   Tooltip,
   XAxis,
   YAxis,
-  ReferenceLine,
+  ReferenceDot,
 } from "recharts";
 import { ChartWrapper } from "./ChartWrapper";
 import { formatSpend, formatInt } from "@fb/shared";
 
-// ─── Цвета (берём из ChartWrapper для единообразия) ──────────────────────────
+// ─── Цвета ────────────────────────────────────────────────────────────────────
+
 const COLORS = {
-  primary: "#F5F1E8",    // accent — warm off-white
-  grid: "#1C1C21",       // bg-3
-  axisText: "#5C5C66",   // bg-8
-  axisLine: "#2C2C33",   // bg-5
-  cursor: "#4A4A52",     // bg-7
+  primary:  "#F5F1E8",    // accent
+  grid:     "#1C1C21",    // bg-3
+  axisText: "#5C5C66",    // bg-8
+  axisLine: "#2C2C33",    // bg-5
+  cursor:   "#4A4A52",    // bg-7
+  peak:     "#A8A8B0",    // bg-10 — текст аннотации пика
 } as const;
 
 // ─── Типы ─────────────────────────────────────────────────────────────────────
 
 export interface AreaDataPoint {
-  /** ISO-метка (ключ оси X — показывается как label). */
+  /** ISO-метка (ключ оси X). */
   ts: string;
-  /** Форматированный лейбл для оси X (например "14:00" или "05-21"). */
+  /** Форматированный лейбл для оси X (например "14:00"). */
   label: string;
   /** Основная метрика — spend ($). */
   spend: number;
@@ -99,42 +98,76 @@ function AreaTooltip({ active, payload, label }: AreaTooltipProps) {
   );
 }
 
-// ─── Аннотация пика ────────────────────────────────────────────────────────────
+// ─── Кастомный лейбл для аннотации пика ──────────────────────────────────────
 
 interface PeakLabelProps {
   viewBox?: { x?: number; y?: number; width?: number; height?: number };
   value: number;
 }
 
-/** SVG-лейбл для ReferenceLine пика: dashed line + "PEAK $N" текст. */
+/**
+ * SVG-лейбл для ReferenceDot пика:
+ * dot + dashed line вверх + "PEAK $N/h" текст над линией.
+ */
 function PeakLabel({ viewBox, value }: PeakLabelProps) {
   const x = viewBox?.x ?? 0;
   const y = viewBox?.y ?? 0;
+
   return (
     <g>
-      {/* Пунктирная вертикаль */}
+      {/* Точка пика */}
+      <circle cx={x} cy={y} r={3} fill={COLORS.primary} />
+      <circle cx={x} cy={y} r={6} fill="none" stroke={COLORS.primary} strokeOpacity={0.3} />
+      {/* Пунктирная вертикаль вверх от точки */}
       <line
         x1={x}
-        y1={y}
+        y1={y - 8}
         x2={x}
-        y2={y - 20}
+        y2={y - 28}
         stroke={COLORS.cursor}
         strokeWidth={1}
         strokeDasharray="2 2"
       />
-      {/* Лейбл */}
+      {/* Текст аннотации над линией */}
       <text
         x={x}
-        y={y - 24}
+        y={y - 32}
         textAnchor="middle"
         fontFamily="JetBrains Mono, monospace"
-        fontSize={9}
-        fill="#A8A8B0"
+        fontSize={10}
+        fill={COLORS.peak}
         letterSpacing="0.05em"
       >
-        {`PEAK ${formatSpend(value)}`}
+        {`PEAK ${formatSpend(value)}/h`}
       </text>
     </g>
+  );
+}
+
+// ─── Кастомный X-тик ─────────────────────────────────────────────────────────
+
+interface XTickProps {
+  x?: number;
+  y?: number;
+  payload?: { value?: string };
+}
+
+function XTick({ x = 0, y = 0, payload }: XTickProps) {
+  const val = payload?.value ?? "";
+  if (!val) return null;
+  const isNow = val === "NOW";
+  return (
+    <text
+      x={x}
+      y={y + 6}
+      textAnchor={isNow ? "end" : "middle"}
+      fontFamily="JetBrains Mono, monospace"
+      fontSize={9}
+      fill={COLORS.axisText}
+      letterSpacing="0.04em"
+    >
+      {val}
+    </text>
   );
 }
 
@@ -153,7 +186,6 @@ export function AreaChart({
   // Точка пика для аннотации
   const peakPoint = useMemo<AreaDataPoint | null>(() => {
     if (!showPeak || data.length === 0) return null;
-    // data[0] проверен выше через length === 0, но TS нужна явная проверка
     const first = data[0];
     if (!first) return null;
     return data.reduce<AreaDataPoint>(
@@ -162,43 +194,70 @@ export function AreaChart({
     );
   }, [data, showPeak]);
 
+  // Тики оси X: 5 равномерных точек — первая, 25%, 50%, 75%, последняя (→ "NOW")
+  const xTicks = useMemo<string[]>(() => {
+    if (data.length === 0) return [];
+    const n = data.length;
+    const indices = [0, Math.floor(n * 0.25), Math.floor(n * 0.5), Math.floor(n * 0.75), n - 1];
+    const unique = [...new Set(indices)];
+    return unique.map((idx, pos) => {
+      const label = data[idx]?.label ?? "";
+      // Последнюю точку помечаем "NOW"
+      return pos === unique.length - 1 ? "NOW" : label;
+    });
+  }, [data]);
+
+  // Маппинг label → display (заменяем последний тик на "NOW")
+  const lastLabel = data.length > 0 ? (data[data.length - 1]?.label ?? "") : "";
+  const tickFormatter = (val: string) => {
+    if (val === lastLabel && xTicks.includes("NOW")) return "NOW";
+    return val;
+  };
+
+  // recharts ticks берём из данных — заменяем последний на lastLabel (recharts по dataKey)
+  const axisTicks = useMemo<string[]>(() => {
+    if (data.length === 0) return [];
+    const n = data.length;
+    const indices = [0, Math.floor(n * 0.25), Math.floor(n * 0.5), Math.floor(n * 0.75), n - 1];
+    const unique = [...new Set(indices)];
+    return unique.map((idx) => data[idx]?.label ?? "");
+  }, [data]);
+
   const defaultYFormatter = (v: number) => `$${formatInt(Math.round(v))}`;
   const yFmt = yTickFormatter ?? defaultYFormatter;
 
   return (
     <ChartWrapper height={height}>
       <ResponsiveContainer width="100%" height="100%">
-        <RechartsAreaChart data={data} margin={{ top: 28, right: 8, bottom: 0, left: 0 }}>
+        <RechartsAreaChart data={data} margin={{ top: 44, right: 8, bottom: 20, left: 0 }}>
           <defs>
-            {/* Акцентный градиент: opacity 0.18 → 0 (точно по mockup) */}
+            {/* Акцентный градиент 0.18→0 (точно по mockup) */}
             <linearGradient id={safeGradId} x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stopColor={COLORS.primary} stopOpacity={0.18} />
               <stop offset="100%" stopColor={COLORS.primary} stopOpacity={0} />
             </linearGradient>
           </defs>
 
-          {/* Сетка только горизонтальные линии (bg-3 — темно-серая) */}
+          {/* Editorial-сетка — обе оси, сплошные линии bg-3 (имитация pattern из mockup) */}
           <CartesianGrid
             stroke={COLORS.grid}
-            vertical={false}
+            strokeWidth={1}
+            vertical={true}
+            horizontal={true}
           />
 
-          {/* X-ось: tabular-nums mono, 9px, без tick-линий */}
+          {/* X-ось: 5 меток, mono 9px, bg-8 */}
           <XAxis
             dataKey="label"
-            tick={{
-              fill: COLORS.axisText,
-              fontSize: 9,
-              fontFamily: "JetBrains Mono, monospace",
-              letterSpacing: "0.04em",
-            }}
+            tick={(props) => <XTick {...(props as XTickProps)} />}
             axisLine={{ stroke: COLORS.axisLine }}
             tickLine={false}
-            minTickGap={40}
-            interval="preserveStartEnd"
+            ticks={axisTicks}
+            tickFormatter={tickFormatter}
+            interval={0}
           />
 
-          {/* Y-ось: tabular-nums mono, 10px, без axisLine */}
+          {/* Y-ось */}
           <YAxis
             tick={{
               fill: COLORS.axisText,
@@ -217,7 +276,7 @@ export function AreaChart({
             cursor={{ stroke: COLORS.cursor, strokeDasharray: "2 2" }}
           />
 
-          {/* Area серия */}
+          {/* Area серия — accent */}
           <Area
             type="monotone"
             dataKey="spend"
@@ -230,7 +289,7 @@ export function AreaChart({
             isAnimationActive={false}
           />
 
-          {/* Вторичная серия (leads) — скрыта визуально, нужна для tooltip */}
+          {/* Leads — скрытая серия для tooltip */}
           <Area
             type="monotone"
             dataKey="leads"
@@ -242,14 +301,15 @@ export function AreaChart({
             isAnimationActive={false}
           />
 
-          {/* Аннотация пика */}
+          {/* Аннотация пика: dot + dashed line + label */}
           {peakPoint ? (
-            <ReferenceLine
+            <ReferenceDot
               x={peakPoint.label}
+              y={peakPoint.spend}
+              r={0}
+              fill="transparent"
               stroke="transparent"
-              label={
-                <PeakLabel value={peakPoint.spend} />
-              }
+              label={<PeakLabel value={peakPoint.spend} />}
             />
           ) : null}
         </RechartsAreaChart>
@@ -257,3 +317,5 @@ export function AreaChart({
     </ChartWrapper>
   );
 }
+
+

@@ -1,6 +1,7 @@
 /**
- * Тесты Dashboard страницы.
- * Моки: useDashboardBatch, useDisableTasks, useEnableTasks, useRealtimeInvalidation.
+ * Тесты Dashboard страницы (канон design_handoff).
+ * Моки: useDashboardBatch, useChartData, useDisableTasks, useEnableTasks,
+ *       useObserverSettings, useToggleScanning, useRealtimeInvalidation, apiSend.
  */
 
 import { render, screen } from "@testing-library/react";
@@ -25,11 +26,15 @@ vi.mock("@/lib/api/dashboard", () => ({
 vi.mock("@/lib/api/ads", () => ({
   useDisableTasks: vi.fn(() => ({ data: [], isLoading: false, isError: false, refetch: vi.fn() })),
   useEnableTasks: vi.fn(() => ({ data: [], isLoading: false, isError: false, refetch: vi.fn() })),
-  useAds: vi.fn(() => ({ data: { data: [], total: 0 }, isLoading: false, isError: false, refetch: vi.fn() })),
-  useBulkDisable: vi.fn(() => ({ mutateAsync: vi.fn(), isPending: false })),
-  useBulkSnooze: vi.fn(() => ({ mutateAsync: vi.fn(), isPending: false })),
-  useAdTimeline: vi.fn(() => ({ data: null, isLoading: false, isError: false })),
-  useSnoozeAd: vi.fn(() => ({ mutateAsync: vi.fn(), isPending: false })),
+}));
+
+vi.mock("@/lib/api/settings", () => ({
+  useObserverSettings: vi.fn(() => ({
+    data: { is_scanning_enabled: true, default_interval_seconds: 30 },
+    isLoading: false,
+    isError: false,
+  })),
+  useToggleScanning: vi.fn(() => ({ mutate: vi.fn(), isPending: false })),
 }));
 
 vi.mock("@/lib/websocket/useRealtimeInvalidation", () => ({
@@ -48,6 +53,7 @@ vi.mock("@/lib/api/client", () => ({
 // ─── Импорты после моков ──────────────────────────────────────────────────────
 
 import { useDashboardBatch } from "@/lib/api/dashboard";
+import { useObserverSettings } from "@/lib/api/settings";
 import type { DashboardBatch } from "@fb/shared";
 
 // ─── Фабрика мок-данных ───────────────────────────────────────────────────────
@@ -89,9 +95,7 @@ function createQueryClient() {
 
 /** Рендерит DashboardPage напрямую (без Router, через мок). */
 async function renderDashboard() {
-  // Импорт после установки моков
   const { DashboardPage } = await import("../../routes/index").then((m) => {
-    // TanStack Router createFileRoute возвращает { component } — берём компонент
     const route = m.Route as unknown as { component: React.FC };
     return { DashboardPage: route.component };
   });
@@ -111,7 +115,22 @@ describe("DashboardPage", () => {
     vi.clearAllMocks();
   });
 
-  // Скелетон при загрузке
+  // Заголовок страницы — «Панель» (русский, без точки), а не «Dashboard».
+  it("рендерит h1 «Панель»", async () => {
+    vi.mocked(useDashboardBatch).mockReturnValue({
+      data: makeBatch(),
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useDashboardBatch>);
+
+    await renderDashboard();
+    const h1 = screen.getByRole("heading", { level: 1 });
+    expect(h1).toHaveTextContent("Панель");
+  });
+
+  // Скелетон KPI при загрузке (нет stats).
   it("рендерит skeleton при isLoading=true", async () => {
     vi.mocked(useDashboardBatch).mockReturnValue({
       data: undefined,
@@ -122,13 +141,12 @@ describe("DashboardPage", () => {
     } as unknown as ReturnType<typeof useDashboardBatch>);
 
     const { container } = await renderDashboard();
-    // Skeleton-заглушки (role=status aria-label=Загрузка) должны быть видны
     const skeletons = container.querySelectorAll('[role="status"]');
     expect(skeletons.length).toBeGreaterThan(0);
   });
 
-  // KPI рендерятся при наличии данных
-  it("рендерит KPI из stats при наличии данных", async () => {
+  // KPI-ячейки + hero-число (под контролем = 80+5+2+1 = 88) рендерятся.
+  it("рендерит KPI и hero из stats", async () => {
     vi.mocked(useDashboardBatch).mockReturnValue({
       data: makeBatch(),
       isLoading: false,
@@ -139,19 +157,20 @@ describe("DashboardPage", () => {
 
     await renderDashboard();
 
-    // 4 KPI-карточки по aria-label группы
+    // 4 KPI-ячейки по aria-label списка
     const kpiGroup = screen.getByRole("list", { name: "Ключевые показатели" });
     expect(kpiGroup).toBeInTheDocument();
-    // Проверяем значение "Активны" = 80
-    expect(screen.getByText("80")).toBeInTheDocument();
-    // Observer status
-    expect(screen.getByText(/Observer online/i)).toBeInTheDocument();
+    // Eyebrow'ы KPI
+    expect(screen.getByText("ACTIVE")).toBeInTheDocument();
+    expect(screen.getByText("DISABLED")).toBeInTheDocument();
+    // hero-подпись
+    expect(screen.getByText(/объявлений под контролем/i)).toBeInTheDocument();
   });
 
-  // Empty state инцидентов
-  it("рендерит empty state когда инцидентов нет", async () => {
+  // Калм-empty live-tail: когда алертов нет — редакционная заглушка.
+  it("рендерит калм-empty live-tail когда алертов нет", async () => {
     vi.mocked(useDashboardBatch).mockReturnValue({
-      data: makeBatch({ recent_incidents: [] }),
+      data: makeBatch({ recent_alerts: [] }),
       isLoading: false,
       isError: false,
       error: null,
@@ -159,13 +178,30 @@ describe("DashboardPage", () => {
     } as unknown as ReturnType<typeof useDashboardBatch>);
 
     await renderDashboard();
-
-    // Empty state текст из ActiveIncidents (оба компонента используют одну строку)
-    const emptyEls = screen.getAllByText(/Алертов за 24ч нет/i);
-    expect(emptyEls.length).toBeGreaterThan(0);
+    expect(screen.getByText(/Алертов за 24ч нет/i)).toBeInTheDocument();
   });
 
-  // Ошибка загрузки
+  // Paused: observer выключен → eyebrow «ПАУЗА» + warning-баннер.
+  it("показывает paused-состояние когда observer выключен", async () => {
+    vi.mocked(useDashboardBatch).mockReturnValue({
+      data: makeBatch(),
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useDashboardBatch>);
+    vi.mocked(useObserverSettings).mockReturnValue({
+      data: { is_scanning_enabled: false, default_interval_seconds: 30 },
+      isLoading: false,
+      isError: false,
+    } as unknown as ReturnType<typeof useObserverSettings>);
+
+    await renderDashboard();
+    expect(screen.getByText(/ПАУЗА/)).toBeInTheDocument();
+    expect(screen.getByText(/Observer выключен/i)).toBeInTheDocument();
+  });
+
+  // Ошибка загрузки batch → ErrorState.
   it("рендерит ErrorState при isError=true", async () => {
     vi.mocked(useDashboardBatch).mockReturnValue({
       data: undefined,

@@ -1,111 +1,215 @@
 /**
- * SpendChart — ChartCard с AreaChart трат за выбранный диапазон.
- * Range-табы: 6h / 24h / 48h / 7d.
- * Источник: useChartData (бакетированные данные).
+ * SpendChart — мягкий area-график «spend × час» (24 точки) для hero-строки.
+ *
+ * Канон design_handoff/components.jsx (SpendChart): чистый SVG, БЕЗ жёсткой
+ * Bloomberg-сетки — только тонкие пунктирные горизонтальные направляющие +
+ * сплошная базовая линия. Линия «рисуется» на mount (stroke-dashoffset),
+ * на последней точке — пульсирующий «now»-дот, по hover — тултип.
+ *
+ * Данные — реальный ряд spend по часам (number[]), из useChartData.
+ * Пустой/короткий ряд → плоская заглушка (без фейка).
  */
 
-import { useState, useMemo } from "react";
-import { ChartCard, RangeTabs } from "@/components/data/charts/ChartCard";
-import { AreaChart, type AreaDataPoint } from "@/components/data/charts/AreaChart";
-import { Skeleton } from "@/components/ui/Skeleton";
-import { EmptyState } from "@/components/ui/EmptyState";
-import { ErrorState } from "@/components/ui/ErrorState";
-import { useChartData } from "@/lib/api/dashboard";
-import { formatSpend, formatInt } from "@fb/shared";
-import type { ChartBucket } from "@fb/shared";
+import { useEffect, useId, useRef, useState } from "react";
+import { PulseDot } from "@/components/data/PulseDot";
+import { formatSpend } from "@fb/shared";
 
-// ─── Варианты диапазонов ──────────────────────────────────────────────────────
-
-const RANGE_TABS = [
-  { value: "6", label: "6ч" },
-  { value: "24", label: "24ч" },
-  { value: "48", label: "48ч" },
-  { value: "168", label: "7д" },
-];
-
-// ─── Конвертация ChartBucket → AreaDataPoint ──────────────────────────────────
-
-function bucketToPoint(b: ChartBucket): AreaDataPoint {
-  const d = new Date(b.ts);
-  const label = d.toLocaleTimeString("ru", {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  });
-  return {
-    ts: b.ts,
-    label,
-    spend: Number(b.spend ?? 0),
-    leads: b.leads ?? 0,
-  };
+interface SpendChartProps {
+  /** Ряд значений spend по часам (например, 24 точки). */
+  data: number[];
+  /** Высота области графика в px. */
+  height?: number;
+  /** Показывать пульсирующий «now»-дот на последней точке. */
+  live?: boolean;
+  /** Включить draw-on анимацию линии. */
+  animate?: boolean;
 }
 
-// ─── Компонент ────────────────────────────────────────────────────────────────
+function prefersReducedMotion(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  );
+}
 
-export function SpendChart() {
-  const [range, setRange] = useState("24");
-  const hours = Number(range);
-  const bucket = hours <= 48 ? "hour" : "day";
+export function SpendChart({ data, height = 170, live = true, animate = true }: SpendChartProps) {
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const lineRef = useRef<SVGPolylineElement>(null);
+  const [w, setW] = useState(560);
+  const [hover, setHover] = useState<number | null>(null);
+  const gid = useId().replace(/:/g, "");
 
-  const { data, isLoading, isError, error, refetch } = useChartData({ hours, bucket });
+  // Резайз-обсервер ширины контейнера (guard для jsdom без ResizeObserver).
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return undefined;
+    const ro = new ResizeObserver((entries) => {
+      const cr = entries[0]?.contentRect;
+      if (cr && cr.width > 0) setW(cr.width);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
-  // Агрегируем мета-показатели
-  const meta = useMemo(() => {
-    if (!data || data.length === 0) return null;
-    const totalSpend = data.reduce((s, b) => s + Number(b.spend ?? 0), 0);
-    const avgAds = Math.round(
-      data.reduce((s, b) => s + (b.active_ads ?? 0), 0) / data.length,
+  // Draw-on анимация линии.
+  useEffect(() => {
+    const el = lineRef.current;
+    if (!animate || !el || typeof el.getTotalLength !== "function") return;
+    if (prefersReducedMotion()) return;
+    if (data.length < 2) return;
+    const len = el.getTotalLength();
+    el.style.transition = "none";
+    el.style.strokeDasharray = String(len);
+    el.style.strokeDashoffset = String(len);
+    // форсим reflow, чтобы перезапустить transition
+    void el.getBoundingClientRect();
+    requestAnimationFrame(() => {
+      el.style.transition = "stroke-dashoffset 900ms var(--ease-out)";
+      el.style.strokeDashoffset = "0";
+    });
+  }, [animate, w, data]);
+
+  const H = height;
+  const padB = 22;
+  const padT = 10;
+  const innerH = H - padB - padT;
+  const n = data.length;
+
+  // Пустой ряд — плоская заглушка.
+  if (n < 2) {
+    return (
+      <div ref={wrapRef} className="relative w-full" style={{ height: H }}>
+        <div className="flex h-full items-center justify-center text-[12px] text-bg-8">
+          Нет данных о тратах за период
+        </div>
+      </div>
     );
-    const peakSpend = Math.max(...data.map((b) => Number(b.spend ?? 0)));
-    return { totalSpend, avgAds, peakSpend };
-  }, [data]);
+  }
 
-  const points = useMemo<AreaDataPoint[]>(() => {
-    if (!data) return [];
-    return data.map(bucketToPoint);
-  }, [data]);
+  const max = Math.max(...data) * 1.1 || 1;
+  const x = (i: number) => (i / (n - 1)) * w;
+  const y = (v: number) => padT + innerH - (v / max) * innerH;
+  const linePts = data.map((v, i) => `${x(i)},${y(v)}`).join(" ");
+  const areaPath =
+    `M${x(0)},${y(data[0]!)} ` +
+    data.map((v, i) => `L${x(i)},${y(v)}`).join(" ") +
+    ` L${x(n - 1)},${H - padB} L${x(0)},${H - padB} Z`;
+
+  const onMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    const rect = wrapRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const px = e.clientX - rect.left;
+    const i = Math.max(0, Math.min(n - 1, Math.round((px / rect.width) * (n - 1))));
+    setHover(i);
+  };
 
   return (
-    <ChartCard
-      eyebrow="02 SPEND × HOUR"
-      title={`Spend rate · last ${hours}ч`}
-      rangeControl={
-        <RangeTabs
-          items={RANGE_TABS}
-          value={range}
-          onChange={setRange}
-          aria-label="Диапазон графика трат"
-        />
-      }
-      metaItems={
-        meta
-          ? [
-              { label: "Итого", value: formatSpend(meta.totalSpend) },
-              { label: "Пик", value: formatSpend(meta.peakSpend) },
-              { label: "Avg объявлений", value: formatInt(meta.avgAds) },
-            ]
-          : []
-      }
+    <div
+      ref={wrapRef}
+      className="relative w-full"
+      onMouseMove={onMove}
+      onMouseLeave={() => setHover(null)}
     >
-      {isError ? (
-        <ErrorState
-          title="Не удалось загрузить данные графика."
-          error={error}
-          onRetry={() => void refetch()}
+      <svg width="100%" height={H} className="block overflow-visible">
+        <defs>
+          <linearGradient id={`fill${gid}`} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="var(--accent)" stopOpacity={0.18} />
+            <stop offset="100%" stopColor="var(--accent)" stopOpacity={0} />
+          </linearGradient>
+        </defs>
+
+        {/* Мягкие горизонтальные направляющие (пунктир) + сплошная база — НЕ сетка */}
+        {[0.25, 0.5, 0.75, 1].map((g, i) => (
+          <line
+            key={g}
+            x1={0}
+            x2={w}
+            y1={padT + innerH * g}
+            y2={padT + innerH * g}
+            stroke="var(--bg-5)"
+            strokeWidth={1}
+            strokeDasharray={i === 3 ? "0" : "2 4"}
+            opacity={i === 3 ? 1 : 0.6}
+          />
+        ))}
+
+        <path d={areaPath} fill={`url(#fill${gid})`} />
+        <polyline
+          ref={lineRef}
+          points={linePts}
+          fill="none"
+          stroke="var(--accent)"
+          strokeWidth={1.5}
+          strokeLinejoin="round"
         />
-      ) : isLoading ? (
-        // Skeleton-заглушка нужной высоты
-        <div role="status" aria-label="Загрузка графика">
-          <Skeleton height={280} className="w-full" />
-        </div>
-      ) : points.length === 0 ? (
-        <EmptyState
-          title="Данных нет"
-          description="Нет данных о тратах за выбранный период."
+
+        {/* Подписи часов по нижней оси */}
+        {[0, 6, 12, 18, n - 1].map((i) => (
+          <text
+            key={i}
+            x={x(i)}
+            y={H - 6}
+            fontSize={10}
+            fontFamily="var(--font-num)"
+            fill="var(--bg-8)"
+            textAnchor={i === 0 ? "start" : i === n - 1 ? "end" : "middle"}
+          >
+            {String(i % 24).padStart(2, "0")}:00
+          </text>
+        ))}
+
+        {/* Hover-курсор */}
+        {hover != null && (
+          <g>
+            <line
+              x1={x(hover)}
+              x2={x(hover)}
+              y1={padT}
+              y2={H - padB}
+              stroke="var(--bg-7)"
+              strokeWidth={1}
+            />
+            <circle
+              cx={x(hover)}
+              cy={y(data[hover]!)}
+              r={3.5}
+              fill="var(--bg-0)"
+              stroke="var(--accent)"
+              strokeWidth={1.5}
+            />
+          </g>
+        )}
+      </svg>
+
+      {/* Пульсирующий «now»-дот на последней точке */}
+      {live && (
+        <PulseDot
+          size={8}
+          color="var(--accent)"
+          style={{
+            position: "absolute",
+            pointerEvents: "none",
+            right: -1,
+            top: y(data[n - 1]!) - 4,
+          }}
         />
-      ) : (
-        <AreaChart data={points} height={280} />
       )}
-    </ChartCard>
+
+      {/* Тултип */}
+      {hover != null && (
+        <div
+          className="pointer-events-none absolute top-0 border border-bg-6 bg-bg-3 px-2 py-1.5"
+          style={{ left: Math.min(Math.max(x(hover) - 50, 0), w - 100), minWidth: 92 }}
+        >
+          <div className="font-display text-[9px] font-semibold uppercase tracking-[0.12em] text-bg-9">
+            {String(hover % 24).padStart(2, "0")}:00 · SPEND
+          </div>
+          <div className="mt-0.5 font-display text-[14px] tabular-nums text-bg-11">
+            {formatSpend(data[hover])}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }

@@ -177,3 +177,93 @@
   --text-micro: 10px;
   --text-micro--line-height: 1.3;
 }
+
+/* ─── Алиасы канона design_handoff (raw-имена → значения) ──────────────────────
+ * Позволяют портировать прототипы design_files/*.jsx почти дословно:
+ * inline var(--bg-9), var(--accent), var(--s-4), var(--r-0) работают как есть.
+ */
+:root {
+  --bg-0: var(--color-bg-0);
+  --bg-1: var(--color-bg-1);
+  --bg-2: var(--color-bg-2);
+  --bg-3: var(--color-bg-3);
+  --bg-4: var(--color-bg-4);
+  --bg-5: var(--color-bg-5);
+  --bg-6: var(--color-bg-6);
+  --bg-7: var(--color-bg-7);
+  --bg-8: var(--color-bg-8);
+  --bg-9: var(--color-bg-9);
+  --bg-10: var(--color-bg-10);
+  --bg-11: var(--color-bg-11);
+
+  --accent: var(--color-accent);
+  --accent-muted: var(--color-accent-muted);
+  --accent-bg: var(--color-accent-bg);
+
+  --success: var(--color-success);
+  --success-bg: var(--color-success-bg);
+  --warning: var(--color-warning);
+  --warning-bg: var(--color-warning-bg);
+  --danger: var(--color-danger);
+  --danger-bg: var(--color-danger-bg);
+  --info: var(--color-info);
+  --info-bg: var(--color-info-bg);
+
+  --font-num: "JetBrains Mono", ui-monospace, monospace;
+
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 20px;
+  --s-6: 24px;
+  --s-8: 32px;
+  --s-10: 40px;
+  --s-12: 56px;
+
+  --r-0: 0px;
+  --r-1: 2px;
+  --r-2: 4px;
+  --r-full: 9999px;
+
+  /* Размеры нового дизайна (hero/h1/kpi) */
+  --text-hero: 88px;
+  --text-hero-mini: 64px;
+  --text-h1: 30px;
+  --text-kpi: 34px;
+
+  /* Density (таблица Ads) */
+  --row-h: 36px;
+  --row-fs: 13px;
+  --row-px: 14px;
+}
+
+[data-density="comfortable"] { --row-h: 44px; --row-fs: 13px; --row-px: 16px; }
+[data-density="compact"]     { --row-h: 34px; --row-fs: 13px; --row-px: 12px; }
+[data-density="dense"]       { --row-h: 28px; --row-fs: 12px; --row-px: 10px; }
+
+/* ─── Keyframes (анимации нового дизайна: count-up, health-bar, live-tail,
+ *     scan-spin, worker-pulse, drawer/sheet) ───────────────────────────────── */
+@keyframes fbFade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes fbSlideIn { from { transform: translateX(24px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+@keyframes fbRise { from { transform: translateY(8px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+@keyframes fbMarquee { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+@keyframes fbSlideDown { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes fbFlash { 0% { background: var(--accent-bg); } 100% { background: transparent; } }
+@keyframes fbBarSweep { 0% { transform: translateX(-100%); } 100% { transform: translateX(0); } }
+@keyframes fbSpin { to { transform: rotate(360deg); } }
+@keyframes fbSheetUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+@keyframes fbPulse {
+  0% { box-shadow: 0 0 0 0 currentColor; opacity: 1; }
+  70% { box-shadow: 0 0 0 5px transparent; opacity: 0.7; }
+  100% { box-shadow: 0 0 0 0 transparent; opacity: 1; }
+}
+.feed-row-new { animation: fbSlideDown 0.4s var(--ease-out), fbFlash 1.8s var(--ease-out); }
+.wp-dot { animation: fbPulse 2.4s var(--ease-out) infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

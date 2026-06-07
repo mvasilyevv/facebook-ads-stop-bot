@@ -1,0 +1,243 @@
+/* ============================================================================
+   FB Stop Bot — Unified design tokens (web + Telegram Mini App)
+   Editorial monochrome · dark · warm off-white accent · radius 0 · no shadows
+   Source of truth: frontend_design.md v1.0
+   ========================================================================== */
+
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter+Tight:wght@400;500;600&display=swap');
+
+:root {
+  /* Surfaces — graphite scale */
+  --bg-0:  #0A0A0B;  /* page */
+  --bg-1:  #101012;  /* card */
+  --bg-2:  #16161A;  /* nested card / table row */
+  --bg-3:  #1C1C21;  /* hover */
+  --bg-4:  #232329;  /* active / pressed */
+  --bg-5:  #2C2C33;  /* border subtle */
+  --bg-6:  #38383F;  /* border default */
+  --bg-7:  #4A4A52;  /* border strong */
+  --bg-8:  #5C5C66;  /* disabled text */
+  --bg-9:  #7C7C86;  /* placeholder text */
+  --bg-10: #A8A8B0;  /* secondary text */
+  --bg-11: #E4E4E7;  /* primary text */
+
+  /* Accent — warm off-white (overridable by Tweaks) */
+  --accent:        #F5F1E8;
+  --accent-muted:  #BDB8AB;
+  --accent-bg:     #2A2823;
+
+  /* Semantic — muted, derived */
+  --success:    #7EB47A;  --success-bg: #1A2218;
+  --warning:    #D4A858;  --warning-bg: #261F12;
+  --danger:     #C7625C;  --danger-bg:  #261513;
+  --info:       #7AA0B4;  --info-bg:    #131C22;
+
+  /* FSM-state colors (bound to alert_state enum) */
+  --fsm-normal:   var(--bg-9);
+  --fsm-warning:  var(--warning);
+  --fsm-stop:     var(--danger);
+  --fsm-claimed:  var(--info);
+  --fsm-disabled: var(--bg-8);
+
+  /* Type */
+  --font-display: 'JetBrains Mono', 'SF Mono', ui-monospace, monospace;
+  --font-body:    'Inter Tight', 'SF Pro Text', system-ui, sans-serif;
+  --font-num:     'JetBrains Mono', ui-monospace, monospace;
+
+  /* Spacing — 4px baseline */
+  --s-1: 4px;  --s-2: 8px;  --s-3: 12px; --s-4: 16px; --s-5: 20px;
+  --s-6: 24px; --s-8: 32px; --s-10: 40px; --s-12: 56px;
+
+  /* Radius */
+  --r-0: 0px; --r-1: 2px; --r-2: 4px; --r-full: 9999px;
+
+  /* Motion */
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --dur-fast: 120ms; --dur-base: 200ms; --dur-slow: 400ms;
+
+  /* Density (table/row) — overridden per [data-density] */
+  --row-h: 36px;
+  --row-fs: 13px;
+  --row-px: 14px;
+}
+
+[data-density="comfortable"] { --row-h: 44px; --row-fs: 13px; --row-px: 16px; }
+[data-density="compact"]     { --row-h: 34px; --row-fs: 13px; --row-px: 12px; }
+[data-density="dense"]       { --row-h: 28px; --row-fs: 12px; --row-px: 10px; }
+
+/* FSM color treatments (Tweak) */
+[data-fsm="muted"]  { /* canon — uses defaults above */ }
+[data-fsm="vivid"] {
+  --warning: #E8B43C; --danger: #E5645C; --info: #6FB0CC; --success: #6FC46A;
+}
+[data-fsm="mono"] {
+  --fsm-warning: var(--bg-11); --fsm-stop: var(--accent);
+  --fsm-claimed: var(--bg-10); --fsm-normal: var(--bg-8);
+}
+
+/* ── Reset / base ─────────────────────────────────────────────────────────── */
+* { box-sizing: border-box; }
+::selection { background: var(--accent); color: var(--bg-0); }
+
+.fb-scope {
+  font-family: var(--font-body);
+  color: var(--bg-11);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+.fb-scope :focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.tnum { font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
+.mono { font-family: var(--font-num); }
+
+/* ── Eyebrow ──────────────────────────────────────────────────────────────── */
+.eyebrow {
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--bg-9);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  white-space: nowrap;
+}
+.eyebrow .num { color: var(--accent-muted); }
+
+/* ── Buttons ──────────────────────────────────────────────────────────────── */
+.btn {
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: var(--r-0);
+  border: 1px solid transparent;
+  height: 32px;
+  padding: 0 var(--s-3);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--dur-fast) var(--ease-out),
+              border-color var(--dur-fast) var(--ease-out),
+              color var(--dur-fast) var(--ease-out);
+  background: transparent;
+  color: var(--bg-11);
+}
+.btn-primary { background: var(--accent); color: var(--bg-0); font-weight: 600; }
+.btn-primary:hover { background: var(--accent-muted); }
+.btn-secondary { background: var(--bg-2); border-color: var(--bg-6); color: var(--bg-11); }
+.btn-secondary:hover { background: var(--bg-3); border-color: var(--bg-7); }
+.btn-ghost { color: var(--bg-10); }
+.btn-ghost:hover { background: var(--bg-2); color: var(--bg-11); }
+.btn-danger { background: var(--danger-bg); color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, transparent); }
+.btn-danger:hover { background: color-mix(in srgb, var(--danger) 22%, var(--danger-bg)); }
+.btn-sm { height: 28px; font-size: 12px; padding: 0 var(--s-2); }
+.btn-icon { width: 32px; padding: 0; justify-content: center; }
+
+/* ── Cards ────────────────────────────────────────────────────────────────── */
+.card {
+  background: var(--bg-1);
+  border: 1px solid var(--bg-5);
+  border-radius: var(--r-0);
+}
+.card-hd {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--s-4) var(--s-5);
+  border-bottom: 1px solid var(--bg-5);
+}
+
+/* ── FSM / severity badges ────────────────────────────────────────────────── */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 10px 0 8px;
+  border-radius: var(--r-full);
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+.badge .dot { width: 7px; height: 7px; border-radius: var(--r-full); flex: none; }
+.badge.sm { height: 18px; font-size: 11px; padding: 0 8px 0 6px; }
+
+.badge-normal   { color: var(--bg-10); background: var(--bg-2); border-color: var(--bg-6); }
+.badge-normal .dot   { background: var(--fsm-normal); }
+.badge-warning  { color: var(--warning); background: var(--warning-bg); border-color: color-mix(in srgb, var(--warning) 30%, transparent); }
+.badge-warning .dot  { background: var(--fsm-warning); }
+.badge-stop     { color: var(--danger); background: var(--danger-bg); border-color: color-mix(in srgb, var(--danger) 32%, transparent); }
+.badge-stop .dot     { background: var(--fsm-stop); }
+.badge-claimed  { color: var(--info); background: var(--info-bg); border-color: color-mix(in srgb, var(--info) 30%, transparent); }
+.badge-claimed .dot  { background: var(--fsm-claimed); }
+.badge-disabled { color: var(--bg-8); background: var(--bg-2); border-color: var(--bg-5); }
+.badge-disabled .dot { background: var(--fsm-disabled); }
+
+/* code/offer chip */
+.codechip {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: var(--r-0);
+  font-family: var(--font-num);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--bg-10);
+  background: var(--bg-2);
+  border: 1px solid var(--bg-6);
+}
+
+/* rule-code pill */
+.rulepill {
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+  height: 18px;
+  padding: 0 7px;
+  border-radius: var(--r-full);
+  font-family: var(--font-num);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  color: var(--accent-muted);
+  background: var(--accent-bg);
+}
+
+/* ── Scrollbars (scoped) ──────────────────────────────────────────────────── */
+.fb-scope ::-webkit-scrollbar { width: 10px; height: 10px; }
+.fb-scope ::-webkit-scrollbar-track { background: transparent; }
+.fb-scope ::-webkit-scrollbar-thumb { background: var(--bg-5); border: 3px solid transparent; background-clip: content-box; border-radius: var(--r-full); }
+.fb-scope ::-webkit-scrollbar-thumb:hover { background: var(--bg-7); border: 3px solid transparent; background-clip: content-box; }
+
+/* ── Keyframes ────────────────────────────────────────────────────────────── */
+@keyframes fbFade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes fbSlideIn { from { transform: translateX(24px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+@keyframes fbRise { from { transform: translateY(8px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+@keyframes fbMarquee { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+@keyframes fbSlideDown { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes fbFlash { 0% { background: var(--accent-bg); } 100% { background: transparent; } }
+@keyframes fbBarSweep { 0% { transform: translateX(-100%); } 100% { transform: translateX(0); } }
+@keyframes fbSpin { to { transform: rotate(360deg); } }
+@keyframes fbSheetUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+.feed-row-new { animation: fbSlideDown 0.4s var(--ease-out), fbFlash 1.8s var(--ease-out); }
+@keyframes fbPulse {
+  0% { box-shadow: 0 0 0 0 currentColor; opacity: 1; }
+  70% { box-shadow: 0 0 0 5px transparent; opacity: 0.7; }
+  100% { box-shadow: 0 0 0 0 transparent; opacity: 1; }
+}
+.wp-dot { animation: fbPulse 2.4s var(--ease-out) infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+  .fb-marquee { animation: none !important; }
+}
