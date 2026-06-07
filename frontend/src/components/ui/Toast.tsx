@@ -14,7 +14,7 @@ import * as RadixToast from "@radix-ui/react-toast";
 import { CheckCircle2, AlertCircle, Info, AlertTriangle, X } from "lucide-react";
 import { create } from "zustand";
 import { type ReactNode, useEffect } from "react";
-import { cn } from "./cn";
+import { cn } from "@/lib/utils/cn";
 
 export type ToastVariant = "success" | "error" | "info" | "warning";
 

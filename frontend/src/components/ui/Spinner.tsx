@@ -7,7 +7,7 @@
  * prefers-reduced-motion: анимация убирается через CSS-токен --dur-base=0ms.
  */
 import { type HTMLAttributes } from "react";
-import { cn } from "./cn";
+import { cn } from "@/lib/utils/cn";
 
 // ─── Spinner ───────────────────────────────────────────────────────────────────
 

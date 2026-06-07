@@ -5,7 +5,7 @@
  */
 import { forwardRef, type ButtonHTMLAttributes, type ReactNode } from "react";
 import { cva, type VariantProps } from "class-variance-authority";
-import { cn } from "./cn";
+import { cn } from "@/lib/utils/cn";
 
 const buttonStyles = cva(
   [

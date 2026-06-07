@@ -17,6 +17,7 @@ import { useRouterState } from "@tanstack/react-router";
 import { Search, PanelLeft } from "lucide-react";
 import { WorkerPulse } from "./WorkerPulse";
 import { useUiStore } from "@/stores/ui";
+import { useCommandPalette } from "@/stores/commandPalette";
 
 const ROUTE_CRUMBS: Record<string, { section: string; current: string }> = {
   "/": { section: "Управление", current: "Панель" },
@@ -39,6 +40,7 @@ export function TopBar() {
   const { location } = useRouterState();
   const crumbs = getCrumbs(location.pathname);
   const toggleSidebar = useUiStore((s) => s.toggleSidebar);
+  const openPalette = useCommandPalette((s) => s.toggle);
 
   return (
     <header className="col-start-1 col-end-3 row-start-1 row-end-2 border-b border-bg-5 bg-bg-0 flex items-center gap-6 pl-6 pr-8 z-[10]">
@@ -75,13 +77,13 @@ export function TopBar() {
 
       <div className="flex-1" />
 
-      {/* Search trigger (disabled stub — Phase 4) */}
+      {/* Search trigger → командная палитра (⌘K) */}
       <button
         type="button"
-        className="flex items-center gap-2.5 h-8 px-3 bg-bg-1 border border-bg-5 text-bg-9 text-[13px] cursor-not-allowed font-body"
-        aria-label="Поиск — в разработке"
-        title="Глобальный поиск — в разработке"
-        disabled
+        onClick={openPalette}
+        className="flex items-center gap-2.5 h-8 px-3 bg-bg-1 border border-bg-5 text-bg-9 text-[13px] cursor-pointer font-body transition-colors hover:border-bg-7 hover:text-bg-10"
+        aria-label="Открыть поиск (⌘K)"
+        title="Поиск объявлений, офферов, разделов (⌘K)"
       >
         <Search size={14} aria-hidden="true" />
         <span>Поиск объявлений, офферов, событий</span>

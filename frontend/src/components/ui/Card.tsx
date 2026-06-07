@@ -3,7 +3,7 @@
  * bg-1 + border-bg-5, radius-0 (sharp).
  */
 import { type HTMLAttributes, type ReactNode } from "react";
-import { cn } from "./cn";
+import { cn } from "@/lib/utils/cn";
 
 interface CardProps extends Omit<HTMLAttributes<HTMLDivElement>, "title"> {
   /** Маленький uppercase-лейбл (например "01 / OVERVIEW"). */

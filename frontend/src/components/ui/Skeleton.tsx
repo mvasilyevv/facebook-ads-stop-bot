@@ -3,7 +3,7 @@
  * Три шейпа: line (текст), block (прямоугольник), row (полная строка таблицы).
  */
 import { type HTMLAttributes } from "react";
-import { cn } from "./cn";
+import { cn } from "@/lib/utils/cn";
 
 interface SkeletonProps extends HTMLAttributes<HTMLDivElement> {
   /** Высота в пикселях. Default 14 (строка текста). */

@@ -8,6 +8,7 @@
 import { type ReactNode } from "react";
 import { Sidebar } from "./Sidebar";
 import { TopBar } from "./TopBar";
+import { CommandPalette } from "./CommandPalette";
 import { useUiStore } from "@/stores/ui";
 import { cn } from "@/lib/utils/cn";
 
@@ -35,6 +36,8 @@ export function Shell({ children }: ShellProps) {
       <main className="col-start-2 col-end-3 row-start-2 row-end-3 px-10 py-8 overflow-x-hidden min-w-0">
         {children}
       </main>
+      {/* Командная палитра (⌘K) — всегда смонтирована для глобального хоткея */}
+      <CommandPalette />
     </div>
   );
 }

@@ -3,7 +3,7 @@
  * Тач-цель ≥ 44px (min-h-[44px]). Острые углы (radius 0).
  * Поддерживает label, errorMessage, disabled.
  */
-import type { InputHTMLAttributes } from "react";
+import { useId, type InputHTMLAttributes } from "react";
 import { cn } from "@/lib/cn";
 
 interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
@@ -12,7 +12,8 @@ interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
 }
 
 export function Input({ label, errorMessage, id, className, ...rest }: InputProps) {
-  const inputId = id ?? `input-${Math.random().toString(36).slice(2)}`;
+  const generatedId = useId();
+  const inputId = id ?? generatedId;
   return (
     <div className="flex flex-col gap-1">
       {label && (

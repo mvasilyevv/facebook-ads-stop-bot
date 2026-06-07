@@ -7,7 +7,7 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { X } from "lucide-react";
 import { type ReactNode } from "react";
-import { cn } from "./cn";
+import { cn } from "@/lib/utils/cn";
 
 interface ModalProps {
   open: boolean;

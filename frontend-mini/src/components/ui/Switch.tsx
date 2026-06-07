@@ -2,7 +2,7 @@
  * Switch — нативный toggle-переключатель (on/off).
  * Тач-цель: label ≥ 44px через padding. Без JS-анимации — CSS transition.
  */
-import type { ChangeEventHandler } from "react";
+import { useId, type ChangeEventHandler } from "react";
 import { cn } from "@/lib/cn";
 
 interface SwitchProps {
@@ -14,7 +14,8 @@ interface SwitchProps {
 }
 
 export function Switch({ checked, onChange, label, disabled, id }: SwitchProps) {
-  const inputId = id ?? `switch-${Math.random().toString(36).slice(2)}`;
+  const generatedId = useId();
+  const inputId = id ?? generatedId;
   return (
     <label
       htmlFor={inputId}

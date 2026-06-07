@@ -4,7 +4,7 @@
  */
 import * as RadixTooltip from "@radix-ui/react-tooltip";
 import { type ReactNode } from "react";
-import { cn } from "./cn";
+import { cn } from "@/lib/utils/cn";
 
 interface TooltipProps {
   content: ReactNode;

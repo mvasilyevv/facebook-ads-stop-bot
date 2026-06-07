@@ -4,7 +4,7 @@
  */
 import { AlertOctagon } from "lucide-react";
 import { type ReactNode } from "react";
-import { cn } from "./cn";
+import { cn } from "@/lib/utils/cn";
 import { Button } from "./Button";
 
 interface ErrorStateProps {
