@@ -42,7 +42,8 @@ const mockSummary = {
 const mockTimeline = [
   {
     event_type: "alert",
-    ts: "2026-06-06T14:32:00Z",
+    // Дата не сегодня и не вчера — day-separator покажет ISO "2026-06-06"
+    ts: "2026-05-15T14:32:00Z",
     fb_ad_id: "ad_123",
     ad_name: "Test Ad",
     campaign_name: "Test Campaign",
@@ -53,7 +54,7 @@ const mockTimeline = [
   },
   {
     event_type: "task",
-    ts: "2026-06-06T14:35:00Z",
+    ts: "2026-05-15T14:35:00Z",
     fb_ad_id: "ad_123",
     ad_name: "Test Ad",
     campaign_name: null,
@@ -291,8 +292,8 @@ describe("HistoryTimeline", () => {
         />,
       ),
     );
-    // Дата 2026-06-06
-    expect(screen.getByText("2026-06-06")).toBeInTheDocument();
+    // Дата 2026-05-15 — не сегодня и не вчера, day-separator показывает ISO-дату
+    expect(screen.getByText("2026-05-15")).toBeInTheDocument();
   });
 });
 

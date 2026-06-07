@@ -1,38 +1,47 @@
 /**
- * Ads — страница списка объявлений с фильтрами и bulk-действиями.
+ * Ads — рабочая лошадка оператора (канон design_handoff/ads-web.jsx).
  *
- * Архитектура:
- *   AdsFilterBar (controlled, state живёт здесь)
- *   DataTable (buildAdsColumns, виртуализация 600px, useAds cursor-пагинация)
- *   BulkActionBar (sticky bottom, при выборе > 0)
- *   Pagination
+ * Раскладка (flex-колонка, заполняет высоту → таблица скроллится внутри):
+ *   page-header: eyebrow «04 / УПРАВЛЕНИЕ · ОБЪЯВЛЕНИЯ» + h1 «Объявления»
+ *               + 3 count-badge (Норма/Предупреждение/Стоп totals).
+ *   FilterBar (search / state-pills / offer-dropdown / count / chips).
+ *   AdsTable (виртуальная, fill height, internal scroll).
+ *   keyboard-legend (J/K · X · D · Enter · /).
+ *   [BulkActionBar — floating, при ≥1 выбранной].
+ *   [ConfirmDialog DISABLE — confirm-with-typing].
+ *   [AdDrawer — drawer деталей поверх таблицы (локальный стейт, scrim показывает
+ *    таблицу под собой — как в эталоне). Deep-link /ads/$fbAdId — отдельный route.]
  *
  * MONEY-FLOW bulk-disable:
- *   1. Пользователь выбирает строки → BulkActionBar.onDisable
- *   2. ConfirmDialog "Отключить N объявлений?" (danger)
- *   3. onConfirm → useBulkDisable({ fb_ad_ids, reason, idempotency_token: crypto.randomUUID() })
- *   4. optimistic: selectedIds.clear, invalidate ["ads"], ["tasks", "disable"]
- *   5. WS task_changed → дополнительная инвалидация через useRealtimeInvalidation
+ *   1. Выбор строк → BulkActionBar.Disable → ConfirmDialog (confirmWord="DISABLE").
+ *   2. onConfirm → useBulkDisable({ fb_ad_ids, reason c idempotency_token=randomUUID }).
+ *   3. Успех → очистка выбора, инвалидация ["ads"]/["tasks","disable"]/["dashboard"].
  *
- * Клик строки → navigate("/ads/:fbAdId") → Drawer деталей.
+ * Keyboard: «/» фокус поиска · J/K|↑/↓ курсор · X выбор курсора · Enter drawer ·
+ *           D disable выбранных · Esc закрыть/сбросить/blur.
  */
 
-import { createFileRoute, useRouter } from "@tanstack/react-router";
-import { useMemo, useState, useCallback } from "react";
-import type { SortingState } from "@tanstack/react-table";
+import { createFileRoute } from "@tanstack/react-router";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { PageHeader } from "@/components/layout/PageHeader";
-import { AdsFilterBar, type AdsFilterState } from "@/components/domain/ads/AdsFilterBar";
-import { BulkActionBar } from "@/components/domain/ads/BulkActionBar";
-import { buildAdsColumns } from "@/components/domain/ads/adsColumnDefs";
-import { DataTable } from "@/components/data/table/DataTable";
-import { Pagination } from "@/components/data/table/Pagination";
-import { EmptyState } from "@/components/ui/EmptyState";
-import { ErrorState } from "@/components/ui/ErrorState";
+import { Eyebrow } from "@/components/data/Eyebrow";
+import { Badge } from "@/components/ui/Badge";
+import { Kbd } from "@/components/ui/Kbd";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { ErrorState } from "@/components/ui/ErrorState";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { Skeleton } from "@/components/ui/Skeleton";
+import { toast } from "@/components/ui/Toast";
+
+import { FilterBar, type AdsFilterState } from "@/components/domain/ads/FilterBar";
+import { AdsTable } from "@/components/domain/ads/AdsTable";
+import { BulkActionBar } from "@/components/domain/ads/BulkActionBar";
+import { AdDrawer } from "@/components/domain/ads/AdDrawer";
 
 import { useAds, useBulkDisable, useBulkSnooze } from "@/lib/api/ads";
+import { useDashboardStats } from "@/lib/api/dashboard";
 import { useRealtimeInvalidation } from "@/lib/websocket/useRealtimeInvalidation";
+import { useUiStore, DENSITY_ROW_HEIGHT } from "@/stores/ui";
 
 import type { AdSnapshot, AlertState } from "@fb/shared";
 
@@ -42,297 +51,355 @@ export const Route = createFileRoute("/ads/")({
   component: AdsPage,
 });
 
-// ─── Константы ────────────────────────────────────────────────────────────────
-
-const PAGE_SIZE = 50;
-const TABLE_HEIGHT = 600;
+// Тянем большой батч строк (cursor-пагинация для 1000+: один крупный запрос,
+// клиентская фильтрация/сортировка поверх — как в эталоне).
+const FETCH_LIMIT = 1000;
 
 // ─── Компонент ────────────────────────────────────────────────────────────────
 
 function AdsPage() {
-  const router = useRouter();
   useRealtimeInvalidation();
 
-  // ── Фильтры (controlled) ──────────────────────────────────────────────────
-  const [filterState, setFilterState] = useState<AdsFilterState>({
+  // ── Фильтры ────────────────────────────────────────────────────────────────
+  const [filters, setFilters] = useState<AdsFilterState>({
     search: "",
     selectedStates: new Set<AlertState>(),
-    selectedOffer: "",
-    selectedCountry: "",
+    selectedOffers: new Set<string>(),
   });
 
-  // ── Пагинация ─────────────────────────────────────────────────────────────
-  const [page, setPage] = useState(0);
-  const offset = page * PAGE_SIZE;
-
-  // ── Сортировка ────────────────────────────────────────────────────────────
-  const [sorting, setSorting] = useState<SortingState>([]);
-
-  // ── Bulk selection ────────────────────────────────────────────────────────
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  // ── Выбор / курсор / drawer ──────────────────────────────────────────────
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [cursor, setCursor] = useState(-1);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  // Drawer — локальный стейт (scrim показывает таблицу под собой, как в эталоне).
+  const [drawerAd, setDrawerAd] = useState<AdSnapshot | null>(null);
 
-  // ── Данные ────────────────────────────────────────────────────────────────
+  const searchRef = useRef<HTMLInputElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  // ── Плотность строк ────────────────────────────────────────────────────────
+  const density = useUiStore((s) => s.density);
+  const rowHeight = DENSITY_ROW_HEIGHT[density];
+
+  // ── Данные ──────────────────────────────────────────────────────────────────
+  // state-фильтр уходит на сервер; search/offer — клиентские (как в эталоне).
   const alertStatesParam =
-    filterState.selectedStates.size > 0
-      ? [...filterState.selectedStates].join(",")
-      : undefined;
+    filters.selectedStates.size > 0 ? [...filters.selectedStates].join(",") : undefined;
 
   const { data, isLoading, isError, error, refetch } = useAds({
     alert_states: alertStatesParam,
-    limit: PAGE_SIZE,
-    offset,
+    limit: FETCH_LIMIT,
+    offset: 0,
   });
 
-  // useMemo — стабильная ссылка для deps зависимых useMemo (виртуализация/колонки).
-  const rows = useMemo<AdSnapshot[]>(() => data?.data ?? [], [data]);
-  const total = data?.total ?? 0;
+  const statsQ = useDashboardStats();
 
-  // ── Мутации ───────────────────────────────────────────────────────────────
+  const allRows = useMemo<AdSnapshot[]>(() => data?.data ?? [], [data]);
+
+  // Offer-опции из загруженных данных.
+  const offerOptions = useMemo(() => {
+    const set = new Set<string>();
+    allRows.forEach((r) => r.offer_code && set.add(r.offer_code));
+    return [...set].sort();
+  }, [allRows]);
+
+  // ── Клиентская фильтрация + сортировка по spend desc ────────────────────
+  const rows = useMemo<AdSnapshot[]>(() => {
+    const q = filters.search.trim().toLowerCase();
+    const offers = filters.selectedOffers;
+    const out = allRows.filter((r) => {
+      if (q) {
+        const hit =
+          r.ad_name.toLowerCase().includes(q) ||
+          r.fb_ad_id.includes(q) ||
+          (r.offer_code?.toLowerCase().includes(q) ?? false);
+        if (!hit) return false;
+      }
+      if (offers.size > 0 && !(r.offer_code && offers.has(r.offer_code))) return false;
+      return true;
+    });
+    // Сортировка по spend desc (как в эталоне).
+    out.sort((a, b) => {
+      const sa = Number.parseFloat(a.metrics?.spend ?? "0") || 0;
+      const sb = Number.parseFloat(b.metrics?.spend ?? "0") || 0;
+      return sb - sa;
+    });
+    return out;
+  }, [allRows, filters.search, filters.selectedOffers]);
+
+  // Курсор не должен выходить за пределы после фильтрации.
+  useEffect(() => {
+    setCursor((c) => (c >= rows.length ? rows.length - 1 : c));
+  }, [rows.length]);
+
+  // ── Мутации ──────────────────────────────────────────────────────────────
   const bulkDisable = useBulkDisable();
   const bulkSnooze = useBulkSnooze();
 
-  // ── Фильтрация на клиенте (search — клиентская, остальное серверное) ──────
-  const filteredRows = useMemo<AdSnapshot[]>(() => {
-    if (!filterState.search) return rows;
-    const q = filterState.search.toLowerCase();
-    return rows.filter(
-      (r) =>
-        r.ad_name.toLowerCase().includes(q) ||
-        r.fb_ad_id.includes(q) ||
-        (r.offer_code?.toLowerCase().includes(q) ?? false),
-    );
-  }, [rows, filterState.search]);
-
-  // ── Callbacks фильтров ────────────────────────────────────────────────────
-  const handleStateToggle = useCallback((state: AlertState) => {
-    setFilterState((prev) => {
-      const next = new Set(prev.selectedStates);
-      if (next.has(state)) {
-        next.delete(state);
-      } else {
-        next.add(state);
-      }
-      return { ...prev, selectedStates: next };
+  // ── Колбэки фильтров ───────────────────────────────────────────────────────
+  const toggleState = useCallback((s: AlertState) => {
+    setFilters((p) => {
+      const next = new Set(p.selectedStates);
+      if (next.has(s)) { next.delete(s); } else { next.add(s); }
+      return { ...p, selectedStates: next };
     });
-    setPage(0);
   }, []);
 
-  const handleClearAll = useCallback(() => {
-    setFilterState({
+  const toggleOffer = useCallback((o: string) => {
+    setFilters((p) => {
+      const next = new Set(p.selectedOffers);
+      if (next.has(o)) { next.delete(o); } else { next.add(o); }
+      return { ...p, selectedOffers: next };
+    });
+  }, []);
+
+  const clearAll = useCallback(() => {
+    setFilters({
       search: "",
       selectedStates: new Set(),
-      selectedOffer: "",
-      selectedCountry: "",
-    });
-    setPage(0);
-  }, []);
-
-  // ── Bulk selection helpers ────────────────────────────────────────────────
-  const allPageSelected =
-    filteredRows.length > 0 &&
-    filteredRows.every((r) => selectedIds.has(r.fb_ad_id));
-  const someSelected = selectedIds.size > 0;
-  const indeterminate = someSelected && !allPageSelected;
-
-  const handleSelectAll = useCallback(() => {
-    if (allPageSelected) {
-      setSelectedIds(new Set());
-    } else {
-      setSelectedIds(new Set(filteredRows.map((r) => r.fb_ad_id)));
-    }
-  }, [allPageSelected, filteredRows]);
-
-  const handleRowSelect = useCallback((fbAdId: string) => {
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(fbAdId)) {
-        next.delete(fbAdId);
-      } else {
-        next.add(fbAdId);
-      }
-      return next;
+      selectedOffers: new Set(),
     });
   }, []);
 
-  // ── Навигация в drawer ────────────────────────────────────────────────────
-  const handleRowOpen = useCallback(
-    (fbAdId: string) => {
-      void router.navigate({ to: "/ads/$fbAdId", params: { fbAdId } });
-    },
-    [router],
-  );
-
-  // ── Column defs ───────────────────────────────────────────────────────────
-  const columns = useMemo(
-    () =>
-      buildAdsColumns({
-        allSelected: allPageSelected,
-        indeterminate,
-        onSelectAll: handleSelectAll,
-        isRowSelected: (id) => selectedIds.has(id),
-        onRowSelect: handleRowSelect,
-        onRowOpen: handleRowOpen,
-      }),
-    [allPageSelected, indeterminate, handleSelectAll, selectedIds, handleRowSelect, handleRowOpen],
-  );
-
-  // ── Row variant (highlight по alert_state) ────────────────────────────────
-  const getRowVariant = useCallback(
-    (row: AdSnapshot) => {
-      if (selectedIds.has(row.fb_ad_id)) return "selected" as const;
-      if (row.alert_state === "stop_sent") return "stop" as const;
-      if (row.alert_state === "warning_sent") return "warning" as const;
-      return "normal" as const;
-    },
-    [selectedIds],
-  );
-
-  // ── MONEY: bulk disable flow ──────────────────────────────────────────────
-  async function handleBulkDisableConfirm() {
-    const ids = [...selectedIds];
-    if (ids.length === 0) return;
-    // idempotency_token = crypto.randomUUID() — защита от двойного сабмита
-    const idempotencyToken = crypto.randomUUID();
-    await bulkDisable.mutateAsync({
-      fb_ad_ids: ids,
-      reason: `bulk-disable via dashboard idempotency:${idempotencyToken}`,
+  // ── Выбор ──────────────────────────────────────────────────────────────────
+  const toggleSelect = useCallback((id: string) => {
+    setSelected((p) => {
+      const n = new Set(p);
+      if (n.has(id)) { n.delete(id); } else { n.add(id); }
+      return n;
     });
-    // Сброс выбора после успеха
-    setSelectedIds(new Set());
-  }
+  }, []);
 
-  // ── Bulk snooze ───────────────────────────────────────────────────────────
-  function handleBulkSnooze(minutes: number) {
-    const ids = [...selectedIds];
-    if (ids.length === 0) return;
-    void bulkSnooze.mutateAsync({ fb_ad_ids: ids, minutes });
-    setSelectedIds(new Set());
-  }
+  const clearSelection = useCallback(() => setSelected(new Set()), []);
 
-  // Offer/country options из данных на странице
-  const offerOptions = useMemo(() => {
-    const codes = new Set<string>();
-    rows.forEach((r) => {
-      if (r.offer_code) codes.add(r.offer_code);
+  const selectAll = useCallback(() => {
+    setSelected((prev) => {
+      // Если уже все выбраны — снимаем; иначе выбираем все.
+      if (prev.size === rows.length && rows.length > 0) return new Set();
+      return new Set(rows.map((r) => r.fb_ad_id));
     });
-    return [...codes].map((c) => ({ value: c, label: c }));
   }, [rows]);
 
-  const countryOptions: { value: string; label: string }[] = [];
+  // ── Открыть drawer ───────────────────────────────────────────────────────
+  const openDrawer = useCallback((ad: AdSnapshot) => setDrawerAd(ad), []);
+
+  // ── MONEY: bulk disable ────────────────────────────────────────────────────
+  async function handleDisableConfirm() {
+    const ids = [...selected];
+    if (ids.length === 0) return;
+    // idempotency_token = crypto.randomUUID() — защита от двойного сабмита.
+    const token = crypto.randomUUID();
+    const res = await bulkDisable.mutateAsync({
+      fb_ad_ids: ids,
+      reason: `bulk-disable via dashboard idempotency:${token}`,
+    });
+    clearSelection();
+    toast.success(`Создано ${res?.created ?? ids.length} disable-задач`);
+  }
+
+  // ── Snooze выбранных ────────────────────────────────────────────────────
+  function handleBulkSnooze(minutes: number) {
+    const ids = [...selected];
+    if (ids.length === 0) return;
+    void bulkSnooze.mutateAsync({ fb_ad_ids: ids, minutes });
+    clearSelection();
+    toast.success(`Snooze ${ids.length} объявлений на ${minutes}м`);
+  }
+
+  // ── Keyboard nav ───────────────────────────────────────────────────────────
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const target = e.target as HTMLElement;
+      // В инпуте — только Esc (blur), остальное не перехватываем.
+      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") {
+        if (e.key === "Escape") (target as HTMLInputElement).blur();
+        return;
+      }
+      if (e.key === "/") {
+        e.preventDefault();
+        searchRef.current?.focus();
+      } else if (e.key === "j" || e.key === "ArrowDown") {
+        e.preventDefault();
+        setCursor((c) => Math.min(rows.length - 1, c + 1));
+      } else if (e.key === "k" || e.key === "ArrowUp") {
+        e.preventDefault();
+        setCursor((c) => Math.max(0, c - 1));
+      } else if (e.key === "x" && cursor >= 0 && rows[cursor]) {
+        e.preventDefault();
+        toggleSelect(rows[cursor]!.fb_ad_id);
+      } else if (e.key === "Enter" && cursor >= 0 && rows[cursor]) {
+        e.preventDefault();
+        openDrawer(rows[cursor]!);
+      } else if (e.key === "d" && selected.size > 0) {
+        e.preventDefault();
+        setConfirmOpen(true);
+      } else if (e.key === "Escape") {
+        // Приоритет: drawer (закроется сам через Radix) → иначе сброс выбора.
+        if (!drawerAd && selected.size > 0) clearSelection();
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [rows, cursor, selected.size, drawerAd, toggleSelect, openDrawer, clearSelection]);
+
+  // Скроллим курсор во вью при навигации J/K.
+  useEffect(() => {
+    if (cursor < 0 || !scrollRef.current) return;
+    const el = scrollRef.current;
+    const top = cursor * rowHeight;
+    const bottom = top + rowHeight;
+    if (top < el.scrollTop) el.scrollTop = top;
+    else if (bottom > el.scrollTop + el.clientHeight) el.scrollTop = bottom - el.clientHeight;
+  }, [cursor, rowHeight]);
+
+  // ── Totals для count-badge (по всему кабинету, из stats) ────────────────
+  const stats = statsQ.data;
 
   return (
-    <div className="px-8 py-8 pb-24" aria-label="Объявления">
-      {/* ── PageHeader ──────────────────────────────────────────────────────── */}
-      <PageHeader
-        eyebrowNum="02"
-        eyebrow="ADS · MONITOR · ACT"
-        title="Ads"
-        displayNumber="02"
-        subtitle={
-          total > 0 ? (
-            <span>
-              {total} объявлений
-              {selectedIds.size > 0 && (
-                <span className="text-accent ml-2">· {selectedIds.size} выбрано</span>
-              )}
-            </span>
-          ) : null
-        }
-      />
+    <div className="flex flex-col h-full min-h-0" aria-label="Объявления">
+      {/* ── Page header ───────────────────────────────────────────────────── */}
+      <div className="flex items-start justify-between mb-5 shrink-0">
+        <div>
+          <Eyebrow num="04">УПРАВЛЕНИЕ · ОБЪЯВЛЕНИЯ</Eyebrow>
+          <h1
+            className="font-display text-[30px] font-medium text-bg-11 mt-2"
+            style={{ letterSpacing: "-0.02em" }}
+          >
+            Объявления
+          </h1>
+        </div>
+        <div className="flex gap-2.5 pt-1">
+          <CountBadge variant="normal" value={stats?.ads_in_normal} />
+          <CountBadge variant="warning" value={stats?.ads_in_warning} />
+          <CountBadge variant="stop" value={stats?.ads_in_stop} />
+        </div>
+      </div>
 
-      {/* ── Filter bar ──────────────────────────────────────────────────────── */}
-      <div className="mb-4">
-        <AdsFilterBar
-          filterState={filterState}
+      {/* ── Filter bar ────────────────────────────────────────────────────── */}
+      <div className="mb-3 shrink-0">
+        <FilterBar
+          filterState={filters}
           offerOptions={offerOptions}
-          countryOptions={countryOptions}
-          onSearchChange={(v) => {
-            setFilterState((p) => ({ ...p, search: v }));
-            setPage(0);
-          }}
-          onStateToggle={handleStateToggle}
-          onOfferChange={(v) => {
-            setFilterState((p) => ({ ...p, selectedOffer: v }));
-            setPage(0);
-          }}
-          onCountryChange={(v) => {
-            setFilterState((p) => ({ ...p, selectedCountry: v }));
-            setPage(0);
-          }}
-          onClearAll={handleClearAll}
+          count={rows.length}
+          searchRef={searchRef}
+          onSearchChange={(v) => setFilters((p) => ({ ...p, search: v }))}
+          onStateToggle={toggleState}
+          onOfferToggle={toggleOffer}
+          onClearAll={clearAll}
         />
       </div>
 
-      {/* ── Error state ─────────────────────────────────────────────────────── */}
+      {/* ── Таблица ───────────────────────────────────────────────────────── */}
       {isError ? (
         <ErrorState
           title="Не удалось загрузить объявления."
           error={error}
           onRetry={() => void refetch()}
         />
+      ) : isLoading ? (
+        <TableSkeleton rowHeight={rowHeight} />
+      ) : rows.length === 0 ? (
+        <div className="flex-1 border border-bg-6 flex items-center justify-center">
+          <EmptyState title="Объявлений нет" description="Попробуйте сбросить фильтры." />
+        </div>
       ) : (
-        <>
-          {/* ── DataTable с виртуализацией ────────────────────────────────── */}
-          <DataTable
-            data={filteredRows}
-            columns={columns}
-            sorting={sorting}
-            onSortingChange={setSorting}
-            getRowId={(row) => row.fb_ad_id}
-            getRowVariant={getRowVariant}
-            onRowClick={(row) => handleRowOpen(row.fb_ad_id)}
-            containerHeight={TABLE_HEIGHT}
-            loading={isLoading}
-            skeletonRows={12}
-            label="Список объявлений"
-            emptyState={
-              <EmptyState
-                title="Объявлений нет"
-                description="Попробуйте сбросить фильтры."
-              />
-            }
-          />
-
-          {/* ── Pagination ────────────────────────────────────────────────── */}
-          {total > PAGE_SIZE && (
-            <div className="mt-3">
-              <Pagination
-                offset={offset}
-                pageSize={filteredRows.length}
-                total={total}
-                onPrev={() => setPage((p) => Math.max(0, p - 1))}
-                onNext={() => setPage((p) => p + 1)}
-              />
-            </div>
-          )}
-        </>
-      )}
-
-      {/* ── BulkActionBar — sticky, только при выбранных строках ────────────── */}
-      {someSelected && (
-        <BulkActionBar
-          count={selectedIds.size}
-          isPending={bulkDisable.isPending || bulkSnooze.isPending}
-          onDisable={() => setConfirmOpen(true)}
-          onSnooze={handleBulkSnooze}
-          onMarkClaimed={() => {
-            // Будущее: mark claimed через API
-          }}
-          onClear={() => setSelectedIds(new Set())}
+        <AdsTable
+          rows={rows}
+          selected={selected}
+          cursor={cursor}
+          rowHeight={rowHeight}
+          scrollRef={scrollRef}
+          onToggleSelect={toggleSelect}
+          onOpen={openDrawer}
+          onSelectAll={selectAll}
         />
       )}
 
-      {/* ── MONEY: ConfirmDialog для bulk disable ────────────────────────────── */}
+      {/* ── Keyboard legend ───────────────────────────────────────────────── */}
+      <div className="mt-2.5 flex gap-3.5 shrink-0 text-[11px] text-bg-8 font-display">
+        <Legend k="J/K" label="навигация" />
+        <Legend k="X" label="выбор" />
+        <Legend k="D" label="disable" />
+        <Legend k="Enter" label="детали" />
+        <Legend k="/" label="поиск" />
+      </div>
+
+      {/* ── Bulk action bar ───────────────────────────────────────────────── */}
+      {selected.size > 0 && (
+        <BulkActionBar
+          count={selected.size}
+          isPending={bulkDisable.isPending || bulkSnooze.isPending}
+          onDisable={() => setConfirmOpen(true)}
+          onSnooze={handleBulkSnooze}
+          onClear={clearSelection}
+        />
+      )}
+
+      {/* ── MONEY: confirm-with-typing DISABLE ────────────────────────────── */}
       <ConfirmDialog
         open={confirmOpen}
         onOpenChange={setConfirmOpen}
-        title={`Отключить ${selectedIds.size} объявлений?`}
-        description={`Будет создано ${selectedIds.size} задач отключения через Marketing API. Действие необратимо без ручного включения.`}
-        confirmLabel={`Отключить ${selectedIds.size}`}
+        title={`Отключить ${selected.size} объявлений?`}
+        description={`Будет создано ${selected.size} disable-задач в outbox. Действие необратимо без ручного включения.`}
+        confirmWord="DISABLE"
+        confirmLabel={`Отключить ${selected.size}`}
         confirmVariant="danger"
-        onConfirm={handleBulkDisableConfirm}
+        onConfirm={handleDisableConfirm}
       />
+
+      {/* ── Drawer деталей (поверх таблицы) ────────────────────────────────── */}
+      {drawerAd && <AdDrawer ad={drawerAd} onClose={() => setDrawerAd(null)} />}
+    </div>
+  );
+}
+
+// ─── Count-badge в шапке ────────────────────────────────────────────────────
+
+function CountBadge({
+  variant,
+  value,
+}: {
+  variant: "normal" | "warning" | "stop";
+  value: number | undefined;
+}) {
+  return (
+    <Badge variant={variant} size="md">
+      {value != null ? value.toLocaleString("en-US") : "—"}
+    </Badge>
+  );
+}
+
+// ─── Keyboard-legend item ───────────────────────────────────────────────────
+
+function Legend({ k, label }: { k: string; label: string }) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <Kbd className="h-[18px] min-w-[18px] px-1 text-bg-9">{k}</Kbd>
+      <span>{label}</span>
+    </span>
+  );
+}
+
+// ─── Skeleton таблицы ────────────────────────────────────────────────────────
+
+function TableSkeleton({ rowHeight }: { rowHeight: number }) {
+  return (
+    <div className="flex-1 border border-bg-6 min-h-0 overflow-hidden" aria-label="Загрузка">
+      <div className="h-8 bg-bg-2 border-b border-bg-6" />
+      <div className="flex flex-col">
+        {Array.from({ length: 14 }).map((_, i) => (
+          <div
+            key={i}
+            className="flex items-center gap-3 px-3 border-b border-bg-5"
+            style={{ height: rowHeight }}
+          >
+            <Skeleton width={15} height={15} />
+            <Skeleton width={40} height={24} />
+            <Skeleton height={13} className="flex-1 max-w-[280px]" />
+            <Skeleton width={60} height={18} className="ml-auto" />
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

@@ -17,7 +17,7 @@ interface DrawerProps {
   description?: ReactNode;
   /** Eyebrow-строка над title (например "06 · AD DETAIL"). */
   eyebrow?: ReactNode;
-  width?: 480 | 640;
+  width?: 480 | 560 | 640;
   /** Слот для footer с кнопками действий. */
   footer?: ReactNode;
   children: ReactNode;
@@ -36,8 +36,8 @@ export function Drawer({
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
-        {/* Overlay — blur(2px) как в макете */}
-        <Dialog.Overlay className="fixed inset-0 bg-[rgba(10,10,11,0.65)] backdrop-blur-[2px] z-[50] data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=closed]:animate-out data-[state=closed]:fade-out-0" />
+        {/* Overlay — scrim без blur (канон: depth через 1px border, не тени/blur) */}
+        <Dialog.Overlay className="fixed inset-0 bg-[rgba(10,10,11,0.66)] z-[50] data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=closed]:animate-out data-[state=closed]:fade-out-0" />
         <Dialog.Content
           style={{ width: `${width}px` }}
           className={cn(

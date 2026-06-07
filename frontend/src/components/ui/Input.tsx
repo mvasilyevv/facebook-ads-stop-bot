@@ -3,7 +3,7 @@
  * Спека: bg-2, border-6, accent-outline при focus.
  * SearchInput — shortcut с leading Search icon и trailing Kbd.
  */
-import { forwardRef, type InputHTMLAttributes, type ReactNode } from "react";
+import { forwardRef, useId, type InputHTMLAttributes, type ReactNode } from "react";
 import { cva, type VariantProps } from "class-variance-authority";
 import { Search } from "lucide-react";
 import { cn } from "@/lib/utils/cn";
@@ -62,14 +62,17 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
     helpText,
     size = "md",
     className,
-    id,
+    id: idProp,
     type = "text",
     ...rest
   },
   ref,
 ) {
-  const errorId = errorMessage && id ? `${id}-error` : undefined;
-  const helpId = helpText && id ? `${id}-help` : undefined;
+  // Auto-generated id — гарантирует привязку label→input даже без явного id.
+  const generatedId = useId();
+  const id = idProp ?? generatedId;
+  const errorId = errorMessage ? `${id}-error` : undefined;
+  const helpId = helpText ? `${id}-help` : undefined;
 
   return (
     <div className="flex flex-col gap-1.5">

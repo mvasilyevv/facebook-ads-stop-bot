@@ -64,8 +64,8 @@ export function OfferCard({
       data-offer-id={offer.id}
       data-active={isActive}
     >
-      {/* ── Header ── */}
-      <header className="px-5 pt-5 pb-4 border-b border-bg-3">
+      {/* ── Header: код + badge ── */}
+      <header className="px-5 pt-5 pb-4">
         <div className="flex items-start justify-between gap-3 mb-2">
           {/* Код оффера — акцент mono */}
           <span className="font-display text-[13px] tracking-[0.06em] text-accent font-medium">
@@ -88,44 +88,48 @@ export function OfferCard({
         ) : null}
       </header>
 
-      {/* ── Метрики ── */}
-      <div className="px-5 py-4 flex-1">
-        <div className="grid grid-cols-2 gap-x-4 gap-y-3">
-          <MetricCell label="Spend" value={fmtSpend(metrics?.spend)} />
-          <MetricCell label="CPL" value={fmtCpl(metrics?.cost_per_lead)} />
-          <MetricCell label="Leads" value={metrics?.leads != null ? String(metrics.leads) : "—"} />
-          <MetricCell
-            label="Deposits"
-            value={metrics?.deposits != null ? String(metrics.deposits) : "—"}
-          />
-          <MetricCell
-            label="Active ads"
-            value={
-              metrics?.active_ads_count != null ? String(metrics.active_ads_count) : "—"
-            }
-          />
-          <MetricCell
-            label="Stop alerts"
-            value={
-              metrics?.stop_alerts_count != null
-                ? String(metrics.stop_alerts_count)
-                : "—"
-            }
-            danger={
-              metrics?.stop_alerts_count != null && metrics.stop_alerts_count > 0
-            }
-          />
-        </div>
+      {/* ── Метрики: 4 строки key-value (Spend / Leads / CPL / Alerts) ── */}
+      <div
+        className="flex-1"
+        style={{ borderTop: "1px solid var(--bg-5)", padding: "var(--s-4) var(--s-5)", display: "flex", flexDirection: "column", gap: 10 }}
+      >
+        {(
+          [
+            ["Spend", fmtSpend(metrics?.spend), false],
+            ["Leads", metrics?.leads != null ? String(metrics.leads) : "—", false],
+            ["CPL", fmtCpl(metrics?.cost_per_lead), false],
+            [
+              "Alerts",
+              metrics?.stop_alerts_count != null ? String(metrics.stop_alerts_count) : "—",
+              metrics?.stop_alerts_count != null && metrics.stop_alerts_count > 0,
+            ],
+          ] as [string, string, boolean][]
+        ).map(([k, v, warn]) => (
+          <div key={k} style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+            <span className="text-[12px] text-bg-9">{k}</span>
+            <span
+              className={cn(
+                "font-display text-[14px] tabular-nums",
+                warn ? "text-warning" : "text-bg-11",
+              )}
+            >
+              {v}
+            </span>
+          </div>
+        ))}
       </div>
 
-      {/* ── Footer actions ── */}
-      <footer className="px-5 py-3 border-t border-bg-3 bg-bg-0 flex items-center gap-2 justify-end">
+      {/* ── Footer actions: Правила + Изменить + Удалить ── */}
+      <footer
+        style={{ borderTop: "1px solid var(--bg-5)", padding: "var(--s-3) var(--s-4)", display: "flex", gap: "var(--s-2)" }}
+      >
         <Button
-          variant="ghost"
+          variant="secondary"
           size="sm"
           leftIcon={<Settings size={13} />}
           onClick={() => onEditRules(offer)}
           aria-label={`Правила оффера ${offer.code}`}
+          style={{ flex: 1 }}
         >
           Правила
         </Button>
@@ -135,6 +139,7 @@ export function OfferCard({
           leftIcon={<Pencil size={13} />}
           onClick={() => onEditOffer(offer)}
           aria-label={`Редактировать оффер ${offer.code}`}
+          style={{ flex: 1 }}
         >
           Изменить
         </Button>
@@ -144,6 +149,7 @@ export function OfferCard({
           leftIcon={<Trash2 size={13} />}
           onClick={() => onDelete(offer)}
           aria-label={`Удалить оффер ${offer.code}`}
+          style={{ flex: 1 }}
         >
           Удалить
         </Button>
@@ -152,30 +158,3 @@ export function OfferCard({
   );
 }
 
-// ─── Вспомогательный компонент метрики ───────────────────────────────────────
-
-function MetricCell({
-  label,
-  value,
-  danger,
-}: {
-  label: string;
-  value: string;
-  danger?: boolean;
-}) {
-  return (
-    <div>
-      <div className="font-display text-[9.5px] tracking-[0.12em] uppercase text-bg-8 mb-0.5">
-        {label}
-      </div>
-      <div
-        className={cn(
-          "font-display text-[14px] font-medium tabular-nums",
-          danger ? "text-danger" : "text-bg-11",
-        )}
-      >
-        {value}
-      </div>
-    </div>
-  );
-}

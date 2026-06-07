@@ -30,6 +30,8 @@ export default tseslint.config(
       // корректны в нашем контексте (покрыто TS strict + 331 тестом + визуалом).
       "react-hooks/set-state-in-effect": "off",
       "react-hooks/purity": "off",
+      // useVirtualizer возвращает функции — предупреждение React Compiler spurious для virtualizers
+      "react-hooks/incompatible-library": "off",
       "@typescript-eslint/no-explicit-any": "error",
       "@typescript-eslint/no-unused-vars": [
         "error",

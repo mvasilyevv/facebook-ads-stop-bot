@@ -1,241 +1,175 @@
 /**
- * Тесты AdDetailDrawer (/ads/$fbAdId).
+ * Тесты deep-link drawer /ads/$fbAdId (канон ads-web.jsx AdDrawer).
  *
- * Проверяем:
- *   - Drawer открывается (виден header с eyebrow)
- *   - Esc вызывает navigate назад
- *   - Кнопка close вызывает navigate назад
- *   - KVGrid рендерится с метриками при наличии данных
- *   - Skeleton при загрузке
- *   - ConfirmDialog отключения открывается
+ * Route грузит snapshot (находит ad в /dashboard/ads по id) + timeline-fallback
+ * и рендерит общий AdDrawer. Проверяем:
+ *   - header: eyebrow «… / ОБЪЯВЛЕНИЕ», ad_name, offer-chip;
+ *   - metrics-snapshot grid (spend/CPL/leads из snapshot.metrics);
+ *   - triggered-rule banner;
+ *   - Esc / close → navigate назад к /ads;
+ *   - footer Disable → ConfirmDialog (confirm-with-typing, placeholder DISABLE);
+ *   - footer Snooze 1ч → useSnoozeAd(minutes=60);
+ *   - skeleton при загрузке (ad=null).
  */
 
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { AdSnapshot } from "@fb/shared";
 
 // ─── Моки ─────────────────────────────────────────────────────────────────────
 
 const mockNavigate = vi.fn();
+const FB_AD_ID = "120211984573_8761";
 
 vi.mock("@tanstack/react-router", () => ({
   createFileRoute: (_path: string) => (opts: { component: unknown }) => opts,
   useRouter: () => ({ navigate: mockNavigate }),
-  useParams: () => ({ fbAdId: "120211984573_8761" }),
+  useParams: () => ({ fbAdId: FB_AD_ID }),
 }));
+
+const mockSnooze = vi.fn().mockResolvedValue({});
 
 vi.mock("@/lib/api/ads", () => ({
-  useAdTimeline: vi.fn(),
-  useSnoozeAd: vi.fn(() => ({ mutateAsync: vi.fn().mockResolvedValue({}), isPending: false })),
+  useAds: vi.fn(),
+  useAdTimeline: vi.fn(() => ({ data: undefined, isLoading: false, isError: false })),
+  useSnoozeAd: vi.fn(() => ({ mutateAsync: mockSnooze, isPending: false })),
   useBulkDisable: vi.fn(() => ({ mutateAsync: vi.fn().mockResolvedValue({}), isPending: false })),
-  useAds: vi.fn(() => ({ data: { data: [], total: 0 }, isLoading: false, isError: false, refetch: vi.fn() })),
-  useDisableTasks: vi.fn(() => ({ data: [], isLoading: false, isError: false, refetch: vi.fn() })),
-  useEnableTasks: vi.fn(() => ({ data: [], isLoading: false, isError: false, refetch: vi.fn() })),
-  useBulkSnooze: vi.fn(() => ({ mutateAsync: vi.fn(), isPending: false })),
-}));
-
-vi.mock("@/lib/api/dashboard", () => ({
-  useSpendHistory: vi.fn(() => ({ data: [] })),
-  useDashboardBatch: vi.fn(() => ({ data: null, isLoading: false, isError: false, refetch: vi.fn() })),
-  useChartData: vi.fn(() => ({ data: [], isLoading: false, isError: false, refetch: vi.fn() })),
 }));
 
 vi.mock("@/lib/websocket/useRealtimeInvalidation", () => ({
-  useRealtimeInvalidation: vi.fn(() => ({
-    status: "connected",
-    pollingFallback: false,
-    reconnectAttempt: 0,
-    forceReconnect: vi.fn(),
-  })),
+  useRealtimeInvalidation: vi.fn(() => ({ status: "connected" })),
 }));
 
-// ─── Импорты ─────────────────────────────────────────────────────────────────
+// ─── Импорты после моков ──────────────────────────────────────────────────────
 
-import { useAdTimeline } from "@/lib/api/ads";
-import type { AdTimeline } from "@fb/shared";
-import type { components } from "@fb/shared/api/generated";
+import { useAds, useAdTimeline } from "@/lib/api/ads";
 
-// ─── Фабрика мок-timeline ────────────────────────────────────────────────────
+// ─── Фабрика snapshot ──────────────────────────────────────────────────────────
 
-function makeTimeline(overrides: Partial<AdTimeline> = {}): AdTimeline {
+function makeSnapshot(overrides: Partial<AdSnapshot> = {}): AdSnapshot {
   return {
-    fb_ad_id: "120211984573_8761",
+    fb_ad_id: FB_AD_ID,
     internal_id: "a1b2c3d4-0000-0000-0000-000000000001",
     ad_name: "UA17 | SP | MV | Krov | 24.03",
     offer_code: "CR2",
-    from_iso: new Date(Date.now() - 86400000).toISOString(),
-    to_iso: new Date().toISOString(),
-    metrics: [
-      {
-        cycle_ts: new Date().toISOString(),
-        spend: "891.23",
-        cost_per_lead: "42.10",
-        leads: 21,
-        deposits: 3,
-        ctr: "1.25",
-        frequency: "4.8",
-      } as components["schemas"]["MetricRow"],
-    ],
-    alerts: [
-      {
-        id: "alert-1",
-        stage: "stop",
-        matched_rule_codes: ["cpl_stop"],
-        triggered_by_rule_codes: ["cpl_stop"],
-        created_at: new Date().toISOString(),
-      },
-    ],
-    tasks: [],
+    alert_state: "stop_sent",
+    is_active: true,
+    last_seen_at: new Date().toISOString(),
+    stop_rule_codes: ["cpl_stop"],
+    warning_rule_codes: [],
+    metrics: {
+      cycle_ts: new Date().toISOString(),
+      spend: "891.23",
+      cost_per_lead: "42.10",
+      cpm: "12.4",
+      ctr: "1.25",
+      frequency: "4.8",
+      leads: 21,
+      deposits: 3,
+    },
     ...overrides,
-  };
+  } as AdSnapshot;
 }
 
 // ─── Хелпер рендера ──────────────────────────────────────────────────────────
 
 async function renderDrawer() {
-  const { AdDetailDrawer } = await import("../../routes/ads/$fbAdId").then((m) => {
-    const route = m.Route as unknown as { component: React.FC };
-    return { AdDetailDrawer: route.component };
-  });
-
+  const { Route } = await import("../../routes/ads/$fbAdId");
+  const Comp = (Route as unknown as { component: React.FC }).component;
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
-      <AdDetailDrawer />
+      <Comp />
     </QueryClientProvider>,
   );
 }
 
+/** Мок useAds, возвращающий один snapshot (found-snapshot путь). */
+function mockAdsWith(ad: AdSnapshot | null, isLoading = false) {
+  vi.mocked(useAds).mockReturnValue({
+    data: { data: ad ? [ad] : [], total: ad ? 1 : 0 },
+    isLoading,
+    isError: false,
+    error: null,
+    refetch: vi.fn(),
+  } as unknown as ReturnType<typeof useAds>);
+}
+
 // ─── Тесты ────────────────────────────────────────────────────────────────────
 
-describe("AdDetailDrawer", () => {
+describe("AdDrawer (deep-link /ads/$fbAdId)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockNavigate.mockClear();
-  });
-
-  // Drawer открыт — eyebrow видно
-  it("отрисовывает eyebrow '06 · AD DETAIL'", async () => {
-    vi.mocked(useAdTimeline).mockReturnValue({
-      data: makeTimeline(),
-      isLoading: false,
-      isError: false,
-      error: null,
-      refetch: vi.fn(),
-    } as unknown as ReturnType<typeof useAdTimeline>);
-
-    await renderDrawer();
-    expect(screen.getByText("06 · AD DETAIL")).toBeInTheDocument();
-  });
-
-  // Skeleton при загрузке
-  it("рендерит skeleton при isLoading=true", async () => {
+    mockAdsWith(makeSnapshot());
     vi.mocked(useAdTimeline).mockReturnValue({
       data: undefined,
-      isLoading: true,
-      isError: false,
-      error: null,
-      refetch: vi.fn(),
-    } as unknown as ReturnType<typeof useAdTimeline>);
-
-    await renderDrawer();
-    // DrawerSkeleton рендерит role=status — Radix Drawer может использовать portal
-    // поэтому ищем через screen (document-level)
-    const loadingEl = screen.queryByLabelText("Загрузка данных объявления");
-    expect(loadingEl).toBeInTheDocument();
-  });
-
-  // Кнопка close → navigate назад
-  it("кнопка Закрыть вызывает navigate к /ads/", async () => {
-    const user = userEvent.setup();
-    vi.mocked(useAdTimeline).mockReturnValue({
-      data: makeTimeline(),
       isLoading: false,
       isError: false,
-      error: null,
-      refetch: vi.fn(),
     } as unknown as ReturnType<typeof useAdTimeline>);
+  });
 
+  // Header: eyebrow ОБЪЯВЛЕНИЕ + ad_name + offer-chip + ad_id.
+  it("отрисовывает header (eyebrow ОБЪЯВЛЕНИЕ, ad_name, offer)", async () => {
+    await renderDrawer();
+    expect(screen.getByText("ОБЪЯВЛЕНИЕ")).toBeInTheDocument();
+    expect(screen.getByText("UA17 | SP | MV | Krov | 24.03")).toBeInTheDocument();
+    expect(screen.getAllByText("CR2").length).toBeGreaterThan(0);
+    expect(screen.getByText(FB_AD_ID)).toBeInTheDocument();
+  });
+
+  // Метрики-снимок: spend (money1 — один знак) + лейблы.
+  it("отрисовывает metrics-snapshot grid с данными", async () => {
+    await renderDrawer();
+    expect(screen.getByText("spend")).toBeInTheDocument();
+    expect(screen.getByText("CPL")).toBeInTheDocument();
+    expect(screen.getByText("leads")).toBeInTheDocument();
+    expect(screen.getByText("$891.2")).toBeInTheDocument();
+  });
+
+  // Triggered-rule banner.
+  it("показывает triggered-rule banner", async () => {
+    await renderDrawer();
+    expect(screen.getByText(/сработали:/i)).toBeInTheDocument();
+  });
+
+  // Skeleton при ad=null + загрузке.
+  it("рендерит skeleton при загрузке (ad ещё не готов)", async () => {
+    mockAdsWith(null, true);
+    await renderDrawer();
+    expect(screen.getByLabelText("Загрузка данных объявления")).toBeInTheDocument();
+  });
+
+  // Close → navigate назад.
+  it("кнопка Закрыть вызывает navigate к /ads", async () => {
+    const user = userEvent.setup();
     await renderDrawer();
     await user.click(screen.getByRole("button", { name: "Закрыть" }));
     expect(mockNavigate).toHaveBeenCalledWith({ to: "/ads" });
   });
 
-  // Esc → navigate назад
-  it("Esc вызывает navigate к /ads/", async () => {
+  // Esc → navigate назад.
+  it("Esc вызывает navigate к /ads", async () => {
     const user = userEvent.setup();
-    vi.mocked(useAdTimeline).mockReturnValue({
-      data: makeTimeline(),
-      isLoading: false,
-      isError: false,
-      error: null,
-      refetch: vi.fn(),
-    } as unknown as ReturnType<typeof useAdTimeline>);
-
     await renderDrawer();
     await user.keyboard("{Escape}");
     expect(mockNavigate).toHaveBeenCalledWith({ to: "/ads" });
   });
 
-  // KVGrid видна с данными метрик
-  it("отрисовывает KVGrid с метриками при наличии данных", async () => {
-    vi.mocked(useAdTimeline).mockReturnValue({
-      data: makeTimeline(),
-      isLoading: false,
-      isError: false,
-      error: null,
-      refetch: vi.fn(),
-    } as unknown as ReturnType<typeof useAdTimeline>);
-
-    await renderDrawer();
-
-    // KVGrid отображает Spend / CPL / Leads
-    expect(screen.getByText("Spend")).toBeInTheDocument();
-    expect(screen.getByText("CPL")).toBeInTheDocument();
-    expect(screen.getByText("Leads")).toBeInTheDocument();
-    // Значение из мок-данных: spend 891.23
-    expect(screen.getByText("$891.23")).toBeInTheDocument();
-  });
-
-  // Кнопка Отключить → ConfirmDialog
-  it("кнопка Отключить открывает ConfirmDialog", async () => {
+  // MONEY: footer Disable → ConfirmDialog (confirm-with-typing).
+  it("кнопка Disable открывает ConfirmDialog (confirm-with-typing)", async () => {
     const user = userEvent.setup();
-    vi.mocked(useAdTimeline).mockReturnValue({
-      data: makeTimeline(),
-      isLoading: false,
-      isError: false,
-      error: null,
-      refetch: vi.fn(),
-    } as unknown as ReturnType<typeof useAdTimeline>);
-
     await renderDrawer();
 
-    // Кнопка Отключить в footer
-    const disableBtn = screen.getByRole("button", { name: /Отключить объявление вручную/i });
-    await user.click(disableBtn);
-
-    // ConfirmDialog появился
+    await user.click(screen.getByRole("button", { name: /Отключить объявление/i }));
     expect(screen.getByText(/Отключить объявление\?/i)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("DISABLE")).toBeInTheDocument();
   });
 
-  // Кнопка Снуз 1ч → useSnoozeAd
-  it("Снуз 1ч вызывает useSnoozeAd с minutes=60", async () => {
-    const mockSnooze = vi.fn().mockResolvedValue({});
-    const { useSnoozeAd } = await import("@/lib/api/ads");
-    vi.mocked(useSnoozeAd).mockReturnValue({
-      mutateAsync: mockSnooze,
-      isPending: false,
-    } as unknown as ReturnType<typeof useSnoozeAd>);
-
-    vi.mocked(useAdTimeline).mockReturnValue({
-      data: makeTimeline(),
-      isLoading: false,
-      isError: false,
-      error: null,
-      refetch: vi.fn(),
-    } as unknown as ReturnType<typeof useAdTimeline>);
-
+  // Footer Snooze 1ч → useSnoozeAd(60).
+  it("Snooze 1ч вызывает useSnoozeAd с minutes=60", async () => {
     const user = userEvent.setup();
     await renderDrawer();
 

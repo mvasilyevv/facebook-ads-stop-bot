@@ -34,10 +34,10 @@ function SettingsPage() {
   return (
     <>
       <PageHeader
-        eyebrowNum="06"
-        eyebrow="SETTINGS"
-        title="Settings"
-        displayNumber="06"
+        eyebrowNum="05"
+        eyebrow="SYSTEM · КОНФИГУРАЦИЯ"
+        title="Настройки"
+        displayNumber="05"
       />
 
       <Tabs value={tab} onValueChange={setTab}>

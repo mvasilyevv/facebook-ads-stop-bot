@@ -6,12 +6,14 @@
 
 import { useState, useCallback } from "react";
 import { createFileRoute } from "@tanstack/react-router";
+import { ExternalLink } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { PeriodSelector, type Period } from "@/components/history/PeriodSelector";
 import { HistorySummarySection } from "@/components/history/HistorySummarySection";
 import { HistoryTimeline } from "@/components/history/HistoryTimeline";
 import { HistoryEventsDrawer } from "@/components/history/HistoryEventsDrawer";
 import { useHistorySummary, useHistoryTimeline } from "@/lib/api/history";
+import { Button } from "@/components/ui/Button";
 import type { HistoryTimelineItem } from "@fb/shared";
 
 export const Route = createFileRoute("/history/")({
@@ -50,20 +52,29 @@ function HistoryPage() {
   return (
     <>
       <PageHeader
-        eyebrowNum="05"
-        eyebrow="HISTORY"
-        title="History"
-        displayNumber="05"
+        eyebrowNum="03"
+        eyebrow="HISTORY · АРХИВ"
+        title="История"
+        displayNumber="03"
         subtitle={`${period.from_iso.slice(0, 10)} — ${period.to_iso.slice(0, 10)}`}
+        action={
+          <Button
+            variant="secondary"
+            size="sm"
+            leftIcon={<ExternalLink size={14} />}
+          >
+            Export CSV
+          </Button>
+        }
       />
 
-      {/* Period selector */}
-      <div className="mb-8">
+      {/* Toolbar: period selector + фильтры */}
+      <div className="flex items-center gap-2 mb-6 flex-wrap">
         <PeriodSelector value={period} onChange={setPeriod} />
       </div>
 
-      {/* Основная сетка: summary слева, timeline справа */}
-      <div className="grid gap-8" style={{ gridTemplateColumns: "280px 1fr" }}>
+      {/* Основная сетка 40% / 60% */}
+      <div className="grid gap-6" style={{ gridTemplateColumns: "40% 60%" }}>
         {/* Левая колонка: сводка */}
         <div>
           <HistorySummarySection

@@ -12,7 +12,7 @@
 
 import { useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { Tag, Plus } from "lucide-react";
+import { Tag, Plus, ChevronDown } from "lucide-react";
 
 import {
   useOffers,
@@ -26,8 +26,7 @@ import { OfferFormModal } from "@/components/offers/OfferFormModal";
 import { RulesDrawer } from "@/components/offers/RulesDrawer";
 import { PageHeader, HeaderSep } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/Button";
-import { Select } from "@/components/ui/Select";
-import { Switch } from "@/components/ui/Switch";
+import { FilterPill } from "@/components/ui/Pill";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { Skeleton } from "@/components/ui/Skeleton";
@@ -38,19 +37,21 @@ export const Route = createFileRoute("/offers/")({
   component: OffersPage,
 });
 
-// ─── Period options ───────────────────────────────────────────────────────────
+// ─── Tab фильтр ───────────────────────────────────────────────────────────────
 
-const PERIOD_OPTIONS = [
-  { value: "7", label: "7 дней" },
-  { value: "14", label: "14 дней" },
-  { value: "30", label: "30 дней" },
-];
+type OfferTab = "all" | "active" | "inactive";
+
+const TAB_LABELS: Record<OfferTab, string> = {
+  all: "Все",
+  active: "Активные",
+  inactive: "Неактивные",
+};
 
 // ─── Компонент ────────────────────────────────────────────────────────────────
 
 function OffersPage() {
-  const [days, setDays] = useState(7);
-  const [includeInactive, setIncludeInactive] = useState(false);
+  const [tab, setTab] = useState<OfferTab>("all");
+  const days = 7; // метрики всегда за 7 дней
 
   // CRUD state
   const [createOpen, setCreateOpen] = useState(false);
@@ -59,8 +60,8 @@ function OffersPage() {
   const [rulesOpen, setRulesOpen] = useState(false);
   const [deleteOffer, setDeleteOffer] = useState<Offer | null>(null);
 
-  // API
-  const { data: offers, isLoading, isError, error, refetch } = useOffers(includeInactive);
+  // API — всегда includeInactive=true, фильтруем локально по tab
+  const { data: offers, isLoading, isError, error, refetch } = useOffers(true);
   const { data: compareRows } = useOffersCompare(days);
 
   // Мутации — один экземпляр на страницу
@@ -105,6 +106,13 @@ function OffersPage() {
 
   const allOffers = offers ?? [];
 
+  // Фильтрация по tab
+  const filteredOffers = allOffers.filter((o) => {
+    if (tab === "active") return o.is_active;
+    if (tab === "inactive") return !o.is_active;
+    return true;
+  });
+
   // Строим карту metrics по offer_id для быстрого доступа
   const metricsMap = new Map(compareRows?.map((r) => [r.offer_id, r]) ?? []);
 
@@ -120,61 +128,64 @@ function OffersPage() {
             leftIcon={<Plus size={14} />}
             onClick={() => setCreateOpen(true)}
           >
-            Создать оффер
+            Новый оффер
           </Button>
         }
       />
 
-      {/* ── Toolbar ── */}
-      <div className="flex items-center gap-4 mb-8 pb-5 border-b border-bg-5">
-        <Select
-          aria-label="Период метрик"
-          options={PERIOD_OPTIONS}
-          value={String(days)}
-          onChange={(e) => setDays(Number(e.target.value))}
-          size="sm"
-        />
-        <Switch
-          checked={includeInactive}
-          onChange={() => setIncludeInactive((v) => !v)}
-          label="Показать неактивные офферы"
-          visualLabel="Неактивные"
-        />
-        <div className="ml-auto font-display text-[11px] text-bg-9 tracking-[0.02em]">
-          Метрики за {days} дн.
-          <HeaderSep />
-          <span className="text-bg-11">{allOffers.length}</span> офферов
+      {/* ── Toolbar: tab pills + sort ── */}
+      <div className="flex items-center justify-between mb-5">
+        <div className="flex items-center gap-2">
+          {(Object.keys(TAB_LABELS) as OfferTab[]).map((t) => (
+            <FilterPill key={t} active={tab === t} onClick={() => setTab(t)}>
+              {TAB_LABELS[t]}
+            </FilterPill>
+          ))}
         </div>
+        <button
+          className="font-display text-[12px] text-bg-10 flex items-center gap-1.5 px-3 py-1.5 border border-bg-5 hover:border-bg-6 transition-colors"
+          type="button"
+          aria-label="Сортировка"
+        >
+          Сортировка: spend
+          <ChevronDown size={12} aria-hidden="true" />
+        </button>
       </div>
 
       {/* ── Empty state ── */}
-      {allOffers.length === 0 && (
+      {filteredOffers.length === 0 && (
         <EmptyState
           icon={<Tag size={32} />}
           title="Офферов нет"
-          description="Создайте первый оффер — он будет матчиться с кампаниями по коду в названии."
+          description={
+            tab === "all"
+              ? "Создайте первый оффер — он будет матчиться с кампаниями по коду в названии."
+              : `Нет ${tab === "active" ? "активных" : "неактивных"} офферов.`
+          }
           action={
-            <Button
-              variant="primary"
-              size="sm"
-              leftIcon={<Plus size={14} />}
-              onClick={() => setCreateOpen(true)}
-            >
-              Создать оффер
-            </Button>
+            tab === "all" ? (
+              <Button
+                variant="primary"
+                size="sm"
+                leftIcon={<Plus size={14} />}
+                onClick={() => setCreateOpen(true)}
+              >
+                Новый оффер
+              </Button>
+            ) : undefined
           }
         />
       )}
 
-      {/* ── Сетка офферов ── */}
-      {allOffers.length > 0 && (
+      {/* ── Сетка офферов: 3 колонки фиксированные ── */}
+      {filteredOffers.length > 0 && (
         <div
           className="grid gap-4"
-          style={{ gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))" }}
+          style={{ gridTemplateColumns: "repeat(3, 1fr)" }}
           role="list"
           aria-label="Офферы"
         >
-          {allOffers.map((offer) => (
+          {filteredOffers.map((offer) => (
             <div key={offer.id} role="listitem">
               <OfferCard
                 offer={offer}
@@ -343,7 +354,7 @@ function OffersHeader({
     <PageHeader
       eyebrowNum="02"
       eyebrow="CATALOG · ОФФЕРЫ"
-      title="Offers"
+      title="Офферы"
       displayNumber="02"
       action={action}
       subtitle={

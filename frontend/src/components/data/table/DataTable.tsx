@@ -108,7 +108,6 @@ export function DataTable<T>({
   const rowHeight = DENSITY_ROW_HEIGHT[density];
 
   // ─── TanStack Table ──────────────────────────────────────────────────────
-  // eslint-disable-next-line react-hooks/incompatible-library -- TanStack Table v8 несовместим с React Compiler
   const table = useReactTable<T>({
     data,
     columns,

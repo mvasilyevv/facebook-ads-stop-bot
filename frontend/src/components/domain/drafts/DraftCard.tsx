@@ -29,7 +29,6 @@ import { Button } from "@/components/ui/Button";
 import { formatRelativeTime } from "@fb/shared";
 import { cn } from "@/lib/utils/cn";
 import { DiffTable } from "./DiffTable";
-import { ReasonBlock } from "./ReasonBlock";
 import {
   PreviewBlock,
   buildCreateCampaignPreview,
@@ -196,33 +195,35 @@ export function DraftCard({
         </div>
       </header>
 
-      {/* ── Body ── */}
-      <div
-        className={cn(
-          "px-6 py-5",
-          // 2-колоночная сетка: diff/preview слева, reason справа
-          usePreview
-            ? "grid gap-6"
-            : "grid gap-8",
+      {/* ── Diff section ── */}
+      <div className="px-3 py-2 border-b border-bg-5">
+        {usePreview && previewProps ? (
+          <PreviewBlock {...previewProps} />
+        ) : (
+          <DiffTable rows={diffRows} />
         )}
-        style={{
-          gridTemplateColumns: usePreview ? "1.4fr 1fr" : "1fr 1fr",
-        }}
-      >
-        {/* Левая колонка: DiffTable или PreviewBlock */}
-        <div className="min-w-0">
-          {usePreview && previewProps ? (
-            <PreviewBlock {...previewProps} />
-          ) : (
-            <DiffTable rows={diffRows} />
-          )}
-        </div>
+      </div>
 
-        {/* Правая колонка: ReasonBlock + batch-warning */}
-        <div className="flex flex-col gap-4 min-w-0">
-          {reason ? (
-            <ReasonBlock text={reason} source={reasonSource} />
-          ) : null}
+      {/* ── AI rationale block ── */}
+      {(reason || (batchCallCount != null && batchCallCount > 1)) && (
+        <div className="px-5 py-4 border-b border-bg-5">
+          {reason && (
+            <>
+              <span
+                className="font-display text-[10px] tracking-[0.12em] uppercase text-bg-9 mb-1.5 inline-block"
+              >
+                AI · ОБОСНОВАНИЕ
+              </span>
+              <div className="text-[13px] text-bg-10 leading-[1.5]">
+                {reason}
+              </div>
+              {reasonSource && (
+                <div className="mt-1 font-display text-[10px] text-bg-7 tracking-[0.04em]">
+                  {reasonSource}
+                </div>
+              )}
+            </>
+          )}
 
           {/* Batch-warning callout */}
           {batchCallCount != null && batchCallCount > 1 && (
@@ -230,6 +231,7 @@ export function DraftCard({
               className={cn(
                 "bg-warning-bg border border-[rgba(212,168,88,0.3)]",
                 "px-[14px] py-3 flex items-start gap-2.5",
+                reason ? "mt-3" : "",
               )}
             >
               <AlertTriangle
@@ -245,7 +247,7 @@ export function DraftCard({
             </div>
           )}
         </div>
-      </div>
+      )}
 
       {/* ── Footer ── */}
       <footer className="flex items-center justify-between gap-4 px-6 py-4 border-t border-bg-3 bg-bg-0">

@@ -1,12 +1,13 @@
 /**
- * Тест bulk-disable money-flow в AdsPage.
+ * Тест bulk-disable money-flow в AdsPage (канон ads-web.jsx).
  *
  * Проверяем:
- *   1. Выбор строк → BulkActionBar появляется с кнопкой "Отключить"
- *   2. Клик "Отключить" → ConfirmDialog открывается с правильным счётчиком
- *   3. Confirm → useBulkDisable вызван с idempotency_token в reason (UUID v4)
- *      и корректным набором fb_ad_ids
- *   4. После успеха — выбор сбрасывается
+ *   1. Рендер строк из useAds (виртуализация замокана — показывает все).
+ *   2. Выбор строк (per-row checkbox) → BulkActionBar (toolbar) с «N выбрано».
+ *   3. Клик Disable → ConfirmDialog с confirm-with-typing (требует ввод DISABLE).
+ *   4. MONEY: ввод DISABLE + confirm → useBulkDisable вызван с idempotency_token
+ *      (UUID v4) в reason и корректным набором fb_ad_ids.
+ *   5. Empty state при отсутствии объявлений.
  */
 
 import { render, screen, within } from "@testing-library/react";
@@ -23,7 +24,7 @@ vi.mock("@tanstack/react-router", () => ({
   useParams: () => ({}),
 }));
 
-// Виртуализация jsdom не имеет layout — мокаем чтобы показать все строки
+// Виртуализация jsdom не имеет layout — мокаем чтобы показать все строки.
 vi.mock("@tanstack/react-virtual", () => ({
   useVirtualizer: ({ count }: { count: number }) => ({
     getVirtualItems: () =>
@@ -48,6 +49,10 @@ vi.mock("@/lib/api/ads", () => ({
   useSnoozeAd: vi.fn(() => ({ mutateAsync: vi.fn(), isPending: false })),
   useDisableTasks: vi.fn(() => ({ data: [], isLoading: false, isError: false, refetch: vi.fn() })),
   useEnableTasks: vi.fn(() => ({ data: [], isLoading: false, isError: false, refetch: vi.fn() })),
+}));
+
+vi.mock("@/lib/api/dashboard", () => ({
+  useDashboardStats: vi.fn(() => ({ data: undefined, isLoading: false, isError: false })),
 }));
 
 vi.mock("@/lib/websocket/useRealtimeInvalidation", () => ({
@@ -94,6 +99,14 @@ async function renderAdsPage() {
   );
 }
 
+/** Выбирает все мок-строки кликом по их per-row checkbox. */
+async function selectAllRows(user: ReturnType<typeof userEvent.setup>) {
+  for (const ad of MOCK_ADS) {
+    const cb = screen.getByRole("checkbox", { name: `Выбрать ${ad.ad_name}` });
+    await user.click(cb);
+  }
+}
+
 // ─── Тесты ────────────────────────────────────────────────────────────────────
 
 describe("AdsPage — bulk disable money-flow", () => {
@@ -108,59 +121,64 @@ describe("AdsPage — bulk disable money-flow", () => {
     } as unknown as ReturnType<typeof useAds>);
   });
 
-  // DataTable рендерится с объявлениями
+  // Таблица рендерит объявления из useAds.
   it("рендерит объявления из useAds", async () => {
     await renderAdsPage();
-    // Обе строки таблицы видны
     expect(screen.getByText("Объявление 111")).toBeInTheDocument();
     expect(screen.getByText("Объявление 222")).toBeInTheDocument();
   });
 
-  // Select-all + BulkActionBar появляется
-  it("select-all показывает BulkActionBar", async () => {
+  // Выбор строк → BulkActionBar появляется.
+  it("выбор строк показывает BulkActionBar", async () => {
     const user = userEvent.setup();
     await renderAdsPage();
 
-    // Checkbox select-all (первый из всех, aria-label="Выбрать все объявления")
-    const selectAll = screen.getByRole("checkbox", { name: /Выбрать все объявления/i });
-    await user.click(selectAll);
+    await selectAllRows(user);
 
-    // BulkActionBar появился — toolbar с кнопкой Отключить
     const bar = screen.getByRole("toolbar");
     expect(bar).toBeInTheDocument();
-    // Счётчик: "2 выбрано"
+    // Счётчик: «2 выбрано».
     expect(within(bar).getByText("2")).toBeInTheDocument();
   });
 
-  // Клик Отключить → ConfirmDialog
-  it("кнопка Отключить открывает ConfirmDialog с правильным счётчиком", async () => {
+  // Клик Disable → ConfirmDialog с правильным счётчиком + поле ввода.
+  it("кнопка Disable открывает ConfirmDialog с confirm-with-typing", async () => {
     const user = userEvent.setup();
     await renderAdsPage();
 
-    await user.click(screen.getByRole("checkbox", { name: /Выбрать все объявления/i }));
+    await selectAllRows(user);
 
     const bar = screen.getByRole("toolbar");
-    await user.click(within(bar).getByRole("button", { name: /Отключить/i }));
+    await user.click(within(bar).getByRole("button", { name: /Отключить 2 объявлений/i }));
 
-    // ConfirmDialog открылся
-    expect(screen.getByText(/Отключить 2 объявлений/i)).toBeInTheDocument();
+    // ConfirmDialog открылся (заголовок).
+    expect(screen.getByText(/Отключить 2 объявлений\?/i)).toBeInTheDocument();
+    // Поле ввода DISABLE присутствует (по placeholder).
+    expect(screen.getByPlaceholderText("DISABLE")).toBeInTheDocument();
   });
 
-  // MONEY: Confirm → useBulkDisable вызван с idempotency_token + fb_ad_ids
-  it("MONEY: confirm вызывает useBulkDisable с idempotency_token в reason", async () => {
+  // MONEY: ввод DISABLE + confirm → useBulkDisable c idempotency_token.
+  it("MONEY: ввод DISABLE + confirm вызывает useBulkDisable с idempotency_token", async () => {
     const user = userEvent.setup();
     await renderAdsPage();
 
-    await user.click(screen.getByRole("checkbox", { name: /Выбрать все объявления/i }));
+    await selectAllRows(user);
 
     const bar = screen.getByRole("toolbar");
-    await user.click(within(bar).getByRole("button", { name: /Отключить/i }));
+    await user.click(within(bar).getByRole("button", { name: /Отключить 2 объявлений/i }));
 
-    // Нажимаем кнопку подтверждения в диалоге
-    const confirmBtn = screen.getByRole("button", { name: /Отключить 2/i });
+    // До ввода DISABLE кнопка подтверждения disabled — мутация не должна вызваться.
+    const confirmBtn = screen.getByRole("button", { name: /^Отключить 2$/i });
+    expect(confirmBtn).toBeDisabled();
+
+    // Печатаем DISABLE → кнопка активируется.
+    const input = screen.getByPlaceholderText("DISABLE");
+    await user.type(input, "DISABLE");
+    expect(confirmBtn).toBeEnabled();
+
     await user.click(confirmBtn);
 
-    // useBulkDisable вызван ровно 1 раз
+    // useBulkDisable вызван ровно один раз.
     expect(mockBulkDisable).toHaveBeenCalledOnce();
 
     const callArg = mockBulkDisable.mock.calls[0]?.[0] as {
@@ -168,17 +186,17 @@ describe("AdsPage — bulk disable money-flow", () => {
       reason: string;
     };
 
-    // fb_ad_ids содержит оба объявления
+    // fb_ad_ids содержит оба объявления.
     expect(callArg.fb_ad_ids).toEqual(expect.arrayContaining(["111", "222"]));
     expect(callArg.fb_ad_ids).toHaveLength(2);
 
-    // reason содержит idempotency: с UUID v4 (формат 8-4-4-4-12)
+    // reason содержит idempotency: с UUID v4 (формат 8-4-4-4-12).
     const uuidRegex =
       /idempotency:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i;
     expect(callArg.reason).toMatch(uuidRegex);
   });
 
-  // Empty state при отсутствии объявлений
+  // Empty state при отсутствии объявлений.
   it("рендерит empty state когда нет объявлений", async () => {
     vi.mocked(useAds).mockReturnValue({
       data: { data: [], total: 0 },

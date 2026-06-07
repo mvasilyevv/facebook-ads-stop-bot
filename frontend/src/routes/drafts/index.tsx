@@ -139,11 +139,8 @@ function DraftsPage() {
       <div
         role="toolbar"
         aria-label="Фильтр по типу мутации"
-        className="flex items-center gap-2 pb-5 border-b border-bg-5 mb-8 flex-wrap"
+        className="flex items-center gap-2 mb-6 flex-wrap"
       >
-        <span className="font-display text-[10px] tracking-[0.12em] uppercase text-bg-8 mr-2">
-          Тип
-        </span>
         <FilterPill active={filter === "all"} onClick={() => setFilter("all")}>
           Все
           <span className="text-[10px] opacity-70 ml-0.5">{allDrafts.length}</span>
@@ -173,9 +170,9 @@ function DraftsPage() {
         />
       )}
 
-      {/* ── Список DraftCard ── */}
+      {/* ── Список DraftCard — max-width 760px стопкой ── */}
       {sorted.length > 0 && (
-        <div className="flex flex-col gap-4" role="list" aria-label="Список черновиков">
+        <div className="flex flex-col gap-4 max-w-[760px]" role="list" aria-label="Список черновиков">
           {sorted.map((draft) => {
             const reason =
               typeof draft.payload?.["reason"] === "string"
@@ -255,10 +252,10 @@ function DraftsPage() {
 function DraftsHeader({ count }: { count: number | null }) {
   return (
     <PageHeader
-      eyebrowNum="03"
-      eyebrow="РУЧНОЙ КОНТРОЛЬ · ПОДТВЕРДИТЬ · ВЫПОЛНИТЬ"
-      title="Drafts"
-      displayNumber="03"
+      eyebrowNum="04"
+      eyebrow="OPERATE · ОДОБРЕНИЕ"
+      title="Черновики"
+      displayNumber="04"
       subtitle={
         count !== null ? (
           <>
