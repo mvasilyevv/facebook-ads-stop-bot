@@ -82,6 +82,33 @@ export function useScanNow() {
   });
 }
 
+/** Рестарт observer-воркера (POST /observer/restart — pubsub-сигнал graceful stop). */
+export function useRestartObserver() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      apiSend<{ status: string; channel: string }>("POST", "/observer/restart"),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["observer"] });
+    },
+  });
+}
+
+/** Начать новый день кабинета (POST /observer/start-new-cabinet-day — архив вчера + форс-скан). */
+export function useStartNewCabinetDay() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      apiSend<{ status: string; archived_date: string }>(
+        "POST",
+        "/observer/start-new-cabinet-day",
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["observer"] });
+    },
+  });
+}
+
 /** Переключение only is_scanning_enabled (PATCH /settings/observer/scanning). */
 export function useToggleScanning() {
   const qc = useQueryClient();

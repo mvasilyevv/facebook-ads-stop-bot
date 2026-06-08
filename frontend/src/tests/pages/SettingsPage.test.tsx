@@ -44,6 +44,14 @@ vi.mock("@/lib/api/settings", () => ({
     mutateAsync: mockScanNow,
     isPending: false,
   }),
+  useRestartObserver: () => ({
+    mutateAsync: vi.fn().mockResolvedValue({ status: "ok", channel: "restart" }),
+    isPending: false,
+  }),
+  useStartNewCabinetDay: () => ({
+    mutateAsync: vi.fn().mockResolvedValue({ status: "ok", archived_date: "2026-06-08" }),
+    isPending: false,
+  }),
   useTelegramSettings: () => ({
     data: {
       is_authorized: true,

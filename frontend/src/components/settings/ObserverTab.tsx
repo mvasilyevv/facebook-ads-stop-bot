@@ -26,6 +26,8 @@ import {
   useUpdateObserverSettings,
   useScanNow,
   useObserverStatus,
+  useRestartObserver,
+  useStartNewCabinetDay,
 } from "@/lib/api/settings";
 import type { ObserverConfig } from "@fb/shared";
 
@@ -66,6 +68,8 @@ export const ObserverTab: FC = () => {
   const { data, isLoading, error, refetch } = useObserverSettings();
   const updateMut = useUpdateObserverSettings();
   const scanMut = useScanNow();
+  const restartMut = useRestartObserver();
+  const cabinetDayMut = useStartNewCabinetDay();
   const statusQ = useObserverStatus();
 
   // Локальное состояние формы
@@ -119,6 +123,24 @@ export const ObserverTab: FC = () => {
       toast.success("Сканирование запущено");
     } catch (e) {
       toast.error("Ошибка запуска скана", e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const handleRestart = async () => {
+    try {
+      await restartMut.mutateAsync();
+      toast.success("Сигнал перезапуска observer отправлен");
+    } catch (e) {
+      toast.error("Ошибка перезапуска", e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const handleNewCabinetDay = async () => {
+    try {
+      const res = await cabinetDayMut.mutateAsync();
+      toast.success(`Новый день кабинета: архив за ${res.archived_date}`);
+    } catch (e) {
+      toast.error("Ошибка старта нового дня", e instanceof Error ? e.message : String(e));
     }
   };
 
@@ -284,6 +306,8 @@ export const ObserverTab: FC = () => {
             <Button
               variant="secondary"
               leftIcon={<RefreshCw size={14} />}
+              onClick={() => void handleRestart()}
+              loading={restartMut.isPending}
               style={{ justifyContent: "flex-start" }}
             >
               Перезапустить observer
@@ -302,6 +326,8 @@ export const ObserverTab: FC = () => {
             <Button
               variant="secondary"
               leftIcon={<Clock size={14} />}
+              onClick={() => void handleNewCabinetDay()}
+              loading={cabinetDayMut.isPending}
               style={{ justifyContent: "flex-start" }}
             >
               Начать новый день кабинета
