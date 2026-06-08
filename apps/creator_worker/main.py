@@ -37,6 +37,7 @@ from clients.python_grpc.client import (
     BrowserAgentConfig,
     BrowserUnavailableError,
 )
+from core.db import WORKER_ENGINE_KWARGS
 from core.tasks.queue import (
     Task,
     claim_next_task,
@@ -384,7 +385,7 @@ async def task_loop(
 
 async def main_loop(database_url: str | None = None) -> None:
     db_url = database_url or _get_database_url()
-    engine = create_async_engine(db_url, echo=False)
+    engine = create_async_engine(db_url, **WORKER_ENGINE_KWARGS)
     redis_client = redis_asyncio.from_url(_get_redis_url(), decode_responses=True)
 
     browser_client = _build_browser_client()

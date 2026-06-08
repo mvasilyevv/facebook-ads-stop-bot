@@ -21,6 +21,7 @@ import httpx
 import redis.asyncio as redis_asyncio
 from sqlalchemy.ext.asyncio import create_async_engine
 
+from core.db import WORKER_ENGINE_KWARGS
 from core.meta_api.client import MetaApiClient
 from core.pubsub import RedisPubSub
 from core.telegram.bot_handler import handle_update
@@ -140,7 +141,7 @@ def _get_redis_url() -> str:
 
 async def main_loop(db_url: str) -> None:
     """Основной long-polling цикл."""
-    engine = create_async_engine(db_url, echo=False)
+    engine = create_async_engine(db_url, **WORKER_ENGINE_KWARGS)
 
     # Graceful shutdown
     shutdown_event = asyncio.Event()

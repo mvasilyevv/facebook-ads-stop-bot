@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Any
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from core.ai_assistant.tools.base import ToolContext
+from core.db import WORKER_ENGINE_KWARGS
 
 if TYPE_CHECKING:  # pragma: no cover - только аннотации
     from core.meta_api.client import MetaApiClient
@@ -119,7 +120,7 @@ class MCPContextManager:
         db_url = self.database_url or _resolve_database_url()
         redis_url = self.redis_url or _resolve_redis_url()
 
-        self.engine = create_async_engine(db_url, echo=False)
+        self.engine = create_async_engine(db_url, **WORKER_ENGINE_KWARGS)
         logger.info("MCP context: AsyncEngine инициализирован (%s)", _safe_dsn(db_url))
 
         try:

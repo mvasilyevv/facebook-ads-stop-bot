@@ -14,6 +14,7 @@ import redis.asyncio as redis_asyncio
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from apps.cleanup_worker.worker import run_once
+from core.db import WORKER_ENGINE_KWARGS
 
 logger = logging.getLogger("cleanup_worker")
 
@@ -60,7 +61,7 @@ def _seconds_until_next_run(now: datetime) -> float:
 
 
 async def main_loop(database_url: str) -> None:
-    engine = create_async_engine(database_url, echo=False)
+    engine = create_async_engine(database_url, **WORKER_ENGINE_KWARGS)
     stop_event = asyncio.Event()
 
     def _handle_sigterm() -> None:

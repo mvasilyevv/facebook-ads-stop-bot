@@ -33,6 +33,7 @@ from typing import Any
 import redis.asyncio as redis_asyncio
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
+from core.db import WORKER_ENGINE_KWARGS
 from core.meta_api.bulk import resolve_owner_ad_ids_by_dates
 from core.meta_api.queue import create_mutation_task
 from core.meta_api.schemas import MetaMutationPayload
@@ -257,7 +258,7 @@ def _get_redis_url() -> str:
 
 async def main_loop(database_url: str | None = None) -> None:
     db_url = database_url or _get_database_url()
-    engine = create_async_engine(db_url, echo=False)
+    engine = create_async_engine(db_url, **WORKER_ENGINE_KWARGS)
     redis_client = redis_asyncio.from_url(_get_redis_url(), decode_responses=True)
 
     stop = asyncio.Event()

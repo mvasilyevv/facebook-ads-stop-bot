@@ -31,6 +31,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
+from core.db import WORKER_ENGINE_KWARGS
 from core.enable_reco.alert import EnableRecoRenderInput, render_enable_reco_alert
 from core.enable_reco.analyzer import (
     AnalyzerThresholds,
@@ -503,7 +504,7 @@ async def main_loop(
 async def _default_engine_factory() -> AsyncEngine:
     from core.config import get_settings
 
-    return create_async_engine(get_settings().database_url, echo=False)
+    return create_async_engine(get_settings().database_url, **WORKER_ENGINE_KWARGS)
 
 
 async def _default_redis_factory():

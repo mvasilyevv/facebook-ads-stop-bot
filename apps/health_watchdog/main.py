@@ -25,6 +25,7 @@ from datetime import UTC, datetime, timezone
 import redis.asyncio as redis_asyncio
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
+from core.db import WORKER_ENGINE_KWARGS
 from core.pubsub import CHANNEL_HEALTH_UPDATED
 from core.telegram.client import TelegramAPIError, TelegramBotClient
 from core.telegram.service import load_telegram_config
@@ -419,7 +420,7 @@ async def _load_tg(
 
 async def main_loop(database_url: str | None = None) -> None:
     db_url = database_url or _get_database_url()
-    engine = create_async_engine(db_url, echo=False)
+    engine = create_async_engine(db_url, **WORKER_ENGINE_KWARGS)
     redis_client = redis_asyncio.from_url(_get_redis_url(), decode_responses=True)
 
     expected_workers = parse_expected_workers(

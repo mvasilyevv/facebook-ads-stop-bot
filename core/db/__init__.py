@@ -3,12 +3,36 @@
 
 from __future__ import annotations
 
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
 from core.config import get_settings
 
 _engine = None
 _session_factory: async_sessionmaker[AsyncSession] | None = None
+
+# Консервативный пул для ВОРКЕР-процессов (H-10/A2). Каждый воркер — отдельный
+# процесс с одним async-циклом (+ heartbeat), нужно 1-2 коннекта. Дефолт SQLAlchemy
+# (pool_size 5 + max_overflow 10 = 15/движок) × ~14 процессов ≈ 210 против Postgres
+# max_connections=100 → «too many clients» при рестартах/нагрузке. 2+2=4/процесс ×
+# ~14 ≈ 56 + API(30, get_engine) + запас. pool_pre_ping/recycle — против протухших
+# коннектов (воркеры живут сутками). API остаётся на get_engine (свой больший пул).
+WORKER_ENGINE_KWARGS: dict = {
+    "echo": False,
+    "pool_size": 2,
+    "max_overflow": 2,
+    "pool_pre_ping": True,
+    "pool_recycle": 1800,
+}
+
+
+def make_worker_engine(url: str) -> AsyncEngine:
+    """Async-движок воркера с консервативным пулом (см. WORKER_ENGINE_KWARGS)."""
+    return create_async_engine(url, **WORKER_ENGINE_KWARGS)
 
 
 def get_engine():

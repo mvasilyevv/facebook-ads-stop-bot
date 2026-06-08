@@ -34,6 +34,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from apps.telegram_poller.main import _get_database_url
+from core.db import WORKER_ENGINE_KWARGS
 from core.observer.adaptive_interval import (
     JITTER_FRACTION,
     clamp_interval,
@@ -528,7 +529,7 @@ async def main_loop(
     from core.control.pubsub_listener import RedisPubSubListener
 
     db_url = _get_database_url()
-    engine = create_async_engine(db_url, echo=False)
+    engine = create_async_engine(db_url, **WORKER_ENGINE_KWARGS)
 
     if gate_factory is None:
         gate_factory = _default_gate_factory

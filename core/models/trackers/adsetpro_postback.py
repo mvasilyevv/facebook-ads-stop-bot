@@ -114,6 +114,16 @@ class AdsetProPostbackEvent(Base):
             "received_at",
             postgresql_where=text("fb_ad_fk IS NOT NULL"),
         ),
+        # Hot-path (H-11/BA-11): load_external_deposits_batch фильтрует по СЫРОМУ
+        # fb_ad_id (VARCHAR) + received_at на КАЖДОМ скане. Без этого индекса —
+        # seq-scan партиции. Partial (fb_ad_id IS NOT NULL): запрос `fb_ad_id = ANY`
+        # не матчит NULL, индекс компактнее.
+        Index(
+            "ix_adsetpro_postback_fb_ad_id",
+            "fb_ad_id",
+            "received_at",
+            postgresql_where=text("fb_ad_id IS NOT NULL"),
+        ),
         Index("ix_adsetpro_postback_click", "click_id", "event_type"),
         {"postgresql_partition_by": "RANGE (received_at)"},
     )

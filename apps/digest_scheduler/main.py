@@ -25,6 +25,7 @@ import redis.asyncio as redis_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
+from core.db import WORKER_ENGINE_KWARGS
 from core.telegram.client import TelegramAPIError, TelegramBotClient
 from core.telegram.digest_builder import build_digest
 from core.telegram.digest_renderer import render_digest
@@ -293,7 +294,7 @@ async def main_loop(
     tg_client_factory=_default_tg_factory,
 ) -> None:
     db_url = database_url or _get_database_url()
-    engine = create_async_engine(db_url, echo=False)
+    engine = create_async_engine(db_url, **WORKER_ENGINE_KWARGS)
     redis_client = redis_asyncio.from_url(_get_redis_url(), decode_responses=True)
 
     window = DigestWindow(

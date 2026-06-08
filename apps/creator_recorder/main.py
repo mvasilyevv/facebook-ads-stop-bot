@@ -32,6 +32,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from clients.python_grpc.client import BrowserAgentClient, BrowserAgentConfig
+from core.db import WORKER_ENGINE_KWARGS
 from core.telegram import format as fmt
 from core.telegram.client import TelegramBotClient
 
@@ -333,7 +334,7 @@ async def _build_tg_client(engine: AsyncEngine) -> TelegramBotClient | None:
 
 async def main_loop(database_url: str | None = None) -> None:
     db_url = database_url or _get_database_url()
-    engine = create_async_engine(db_url, echo=False)
+    engine = create_async_engine(db_url, **WORKER_ENGINE_KWARGS)
     redis_client = redis_asyncio.from_url(_get_redis_url(), decode_responses=True)
     browser_client = _build_browser_client()
     await browser_client.start()

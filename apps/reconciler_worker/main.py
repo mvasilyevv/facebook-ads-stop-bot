@@ -12,6 +12,7 @@ import redis.asyncio as redis_asyncio
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from apps.reconciler_worker.worker import run_once
+from core.db import WORKER_ENGINE_KWARGS
 
 logger = logging.getLogger("reconciler_worker")
 
@@ -45,7 +46,7 @@ async def heartbeat_loop(redis_client, stop: asyncio.Event) -> None:
 
 
 async def main_loop(database_url: str) -> None:
-    engine = create_async_engine(database_url, echo=False)
+    engine = create_async_engine(database_url, **WORKER_ENGINE_KWARGS)
     stop_event = asyncio.Event()
 
     def _handle_sigterm() -> None:
