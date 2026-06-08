@@ -40,6 +40,7 @@ const grpc = __importStar(require("@grpc/grpc-js"));
 const session_manager_js_1 = require("../session-manager.js");
 const client_js_1 = require("./client.js");
 const upload_js_1 = require("./upload.js");
+const page_lock_js_1 = require("../page-lock.js");
 function grpcCodeForError(err) {
     const message = String(err?.message || '').toLowerCase();
     return message.includes('not found') || message.includes('не найден')
@@ -84,7 +85,10 @@ function createMetaApiServiceHandlers(sessionManager) {
                 bodyJson: req.body_json && req.body_json.length > 0 ? req.body_json : undefined,
                 timeoutMs: req.timeout_ms && req.timeout_ms > 0 ? req.timeout_ms : undefined,
             };
-            const result = await (0, client_js_1.executeGraphCall)(page, params);
+            // H-7 (BA-4): per-session лок — mutation page.evaluate(fetch) не должен
+            // пересекаться со scan page.reload (acquireGraphContext) на общей primaryPage,
+            // иначе reload рвёт in-flight fetch → «Execution context was destroyed».
+            const result = await (0, page_lock_js_1.withPageLock)(session.id, () => (0, client_js_1.executeGraphCall)(page, params));
             callback(null, {
                 status_code: result.statusCode,
                 response_json: result.responseJson,

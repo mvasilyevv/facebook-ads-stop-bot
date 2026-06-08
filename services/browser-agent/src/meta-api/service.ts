@@ -6,6 +6,7 @@ import { SessionManager, findPreferredPrimaryPage } from '../session-manager.js'
 import type { BrowserSession } from '../types.js';
 import { executeGraphCall, checkMetaApiHealth, type GraphApiCallParams } from './client.js';
 import { uploadImage, VideoUploadSession } from './upload.js';
+import { withPageLock } from '../page-lock.js';
 
 function grpcCodeForError(err: any): number {
   const message = String(err?.message || '').toLowerCase();
@@ -57,7 +58,10 @@ export function createMetaApiServiceHandlers(sessionManager: SessionManager) {
         timeoutMs: req.timeout_ms && req.timeout_ms > 0 ? req.timeout_ms : undefined,
       };
 
-      const result = await executeGraphCall(page, params);
+      // H-7 (BA-4): per-session лок — mutation page.evaluate(fetch) не должен
+      // пересекаться со scan page.reload (acquireGraphContext) на общей primaryPage,
+      // иначе reload рвёт in-flight fetch → «Execution context was destroyed».
+      const result = await withPageLock(session.id, () => executeGraphCall(page, params));
 
       callback(null, {
         status_code: result.statusCode,

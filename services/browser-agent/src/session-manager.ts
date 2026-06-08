@@ -260,6 +260,9 @@ export class SessionManager {
     visionProfileId?: string;
   }): Promise<BrowserSession> {
     const session = this.getSession(sessionId);
+    // Старый CDP-клиент — отвяжем его ПОСЛЕ успешного нового подключения (H-6/BA-2),
+    // чтобы не копить ws-соединения и listeners под recovery-нагрузкой.
+    const oldBrowser = session.browser;
 
     const visionXToken = options?.visionXToken ?? session.visionXToken;
     const visionApiUrl = options?.visionApiUrl ?? session.visionApiUrl;
@@ -326,6 +329,18 @@ export class SessionManager {
     session.visionApiUrl = visionApiUrl;
     session.visionProfileId = visionProfileId;
     session.visionFolderId = resolvedFolderId;
+
+    // H-6 (BA-2): отвязываем старый CDP-клиент. browser.close() звать НЕЛЬЗЯ — для
+    // connectOverCDP он закрыл бы удалённый Vision-профиль, к которому мы только что
+    // переподключились. Снимаем наши listeners и роняем ссылку → GC соберёт старый
+    // Browser вместе с его ws-транспортом, не накапливая соединения при recovery.
+    if (oldBrowser && oldBrowser !== browser) {
+      try {
+        oldBrowser.removeAllListeners();
+      } catch {
+        // best-effort: старый клиент мог уже умереть (из-за чего и реконнектимся).
+      }
+    }
 
     return session;
   }

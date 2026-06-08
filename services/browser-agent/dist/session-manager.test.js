@@ -173,6 +173,63 @@ function makeSession(overrides = {}) {
         playwright_1.chromium.connectOverCDP = originalConnectOverCDP;
     }
 });
+// H-6 (BA-2): reconnectBrowser отвязывает СТАРЫЙ CDP-клиент (removeAllListeners),
+// но НЕ закрывает его — browser.close() для connectOverCDP убил бы удалённый
+// Vision-профиль, к которому мы только что переподключились. Защита от утечки
+// ws-соединений/listeners при recovery-штормах.
+(0, node_test_1.default)('reconnectBrowser detaches old CDP client without closing it (H-6)', async () => {
+    const manager = new session_manager_js_1.SessionManager();
+    const adsPage = { url: () => 'https://www.facebook.com/adsmanager/manage/campaigns' };
+    const mkBrowser = (tag) => ({
+        contexts: () => [{ addInitScript: async () => { }, pages: () => [adsPage] }],
+        removeAllListeners: () => {
+            tag.removeAll += 1;
+        },
+        close: async () => {
+            tag.close += 1;
+        },
+    });
+    const oldTag = { removeAll: 0, close: 0 };
+    const newTag = { removeAll: 0, close: 0 };
+    const oldBrowser = mkBrowser(oldTag);
+    const newBrowser = mkBrowser(newTag);
+    const originalResolveFolderId = vision_client_js_1.VisionClient.prototype.resolveFolderId;
+    const originalGetProfile = vision_client_js_1.VisionClient.prototype.getProfile;
+    const originalWaitUntilCdpReady = vision_client_js_1.VisionClient.prototype.waitUntilCdpReady;
+    const originalConnectOverCDP = playwright_1.chromium.connectOverCDP;
+    let connectCalls = 0;
+    vision_client_js_1.VisionClient.prototype.resolveFolderId = async function resolveFolderId() {
+        return 'folder-1';
+    };
+    vision_client_js_1.VisionClient.prototype.getProfile = async function getProfile() {
+        return { folder_id: 'folder-1', profile_id: 'profile-1', port: 7001 };
+    };
+    vision_client_js_1.VisionClient.prototype.waitUntilCdpReady = async function waitUntilCdpReady() {
+        return true;
+    };
+    playwright_1.chromium.connectOverCDP = async () => {
+        connectCalls += 1;
+        return (connectCalls === 1 ? oldBrowser : newBrowser);
+    };
+    try {
+        const session = await manager.startBrowser({
+            visionXToken: 'token',
+            visionApiUrl: 'http://127.0.0.1:3030',
+            visionProfileId: 'profile-1',
+        });
+        strict_1.default.equal(session.browser, oldBrowser, 'startBrowser подключил старый browser');
+        await manager.reconnectBrowser(session.id);
+        strict_1.default.equal(session.browser, newBrowser, 'после reconnect — новый browser');
+        strict_1.default.equal(oldTag.removeAll, 1, 'старый browser отвязан (removeAllListeners вызван)');
+        strict_1.default.equal(oldTag.close, 0, 'старый browser НЕ закрыт (close убил бы Vision-профиль)');
+    }
+    finally {
+        vision_client_js_1.VisionClient.prototype.resolveFolderId = originalResolveFolderId;
+        vision_client_js_1.VisionClient.prototype.getProfile = originalGetProfile;
+        vision_client_js_1.VisionClient.prototype.waitUntilCdpReady = originalWaitUntilCdpReady;
+        playwright_1.chromium.connectOverCDP = originalConnectOverCDP;
+    }
+});
 // Проверяем, что профиль без CDP-порта не перезапускается, если recovery явно выключен.
 (0, node_test_1.default)('startBrowser does not restart missing cdp profile when auto recovery is disabled', async () => {
     const manager = new session_manager_js_1.SessionManager();

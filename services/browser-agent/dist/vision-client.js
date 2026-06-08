@@ -1,21 +1,46 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.VisionClient = void 0;
+// Таймаут по умолчанию на любой HTTP-вызов к Vision API. Без него зависший (но
+// живой) Vision-процесс держал бы сокет открытым → StartBrowser/Reconnect/Stop
+// висели бы ВЕЧНО, а поллящие циклы (waitUntilProfileHasPort/...) никогда не
+// проверили бы собственный deadline (поток стоит на await fetch). См. аудит BA-1.
+const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
+// Проба CDP /json/version — короче основного таймаута, т.к. вызывается в поллящем
+// цикле: один зависший probe не должен съедать весь deadline ожидания CDP.
+const CDP_PROBE_TIMEOUT_MS = 5_000;
 /** HTTP-клиент для локального антидетект-браузера Vision на localhost:3030. */
 class VisionClient {
     baseUrl;
     xToken;
-    constructor(xToken, baseUrl = 'http://127.0.0.1:3030') {
+    requestTimeoutMs;
+    constructor(xToken, baseUrl = 'http://127.0.0.1:3030', options) {
         if (!xToken)
             throw new Error('Не задан VISION_X_TOKEN');
         this.xToken = xToken;
         this.baseUrl = baseUrl.replace(/\/$/, '');
+        this.requestTimeoutMs = options?.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    }
+    /** fetch с жёстким таймаутом через AbortController. Аборт → понятная ошибка. */
+    async fetchWithTimeout(url, init, timeoutMs) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+            return await fetch(url, { ...init, signal: controller.signal });
+        }
+        catch (err) {
+            if (controller.signal.aborted) {
+                throw new Error(`Vision API ${url} не ответил за ${timeoutMs}ms (timeout)`);
+            }
+            throw err;
+        }
+        finally {
+            clearTimeout(timer);
+        }
     }
     async request(path) {
         const url = `${this.baseUrl}${path}`;
-        const res = await fetch(url, {
-            headers: { 'X-Token': this.xToken },
-        });
+        const res = await this.fetchWithTimeout(url, { headers: { 'X-Token': this.xToken } }, this.requestTimeoutMs);
         if (!res.ok) {
             throw new Error(`API Vision вернул ошибку ${res.status}: ${await res.text()}`);
         }
@@ -58,7 +83,7 @@ class VisionClient {
         const versionUrl = `${this.cdpUrl(port)}/json/version`;
         while (Date.now() < deadline) {
             try {
-                const res = await fetch(versionUrl);
+                const res = await this.fetchWithTimeout(versionUrl, {}, CDP_PROBE_TIMEOUT_MS);
                 if (res.ok) {
                     const data = await res.json();
                     if (typeof data.webSocketDebuggerUrl === 'string' && data.webSocketDebuggerUrl.length > 0) {

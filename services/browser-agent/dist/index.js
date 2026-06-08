@@ -45,6 +45,7 @@ const service_js_1 = require("./meta-api/service.js");
 const service_js_2 = require("./ad-library/service.js");
 const am_fetch_js_1 = require("./am/am-fetch.js");
 const am_config_js_1 = require("./am/am-config.js");
+const page_lock_js_1 = require("./page-lock.js");
 const PORT = process.env.GRPC_PORT ? parseInt(process.env.GRPC_PORT, 10) : 50051;
 const sessionManager = new session_manager_js_1.SessionManager();
 const SESSION_STATUS_HEARTBEAT_MS = 5_000;
@@ -272,14 +273,23 @@ async function runScanCycle(call) {
         const amStart = Date.now();
         const campaignIds = Array.isArray(req.campaign_ids) ? req.campaign_ids : [];
         const amConfig = (0, am_config_js_1.defaultAmConfig)(campaignIds, req.owner_tag || '');
-        let acquired = await (0, am_fetch_js_1.acquireGraphContext)(page, req.session_id);
-        let result = await (0, am_fetch_js_1.runAmScanWithContext)(page, acquired.ctx, amConfig);
-        if (result.diagnostics.authExpired) {
-            console.warn('[scan][am] access_token протух (190) → re-sniff + retry');
-            (0, am_fetch_js_1.invalidateGraphContext)(req.session_id);
-            acquired = await (0, am_fetch_js_1.acquireGraphContext)(page, req.session_id, { forceRefresh: true });
-            result = await (0, am_fetch_js_1.runAmScanWithContext)(page, acquired.ctx, amConfig);
-        }
+        // H-7 (BA-4): весь цикл работы со страницей (reload для сниффа токена +
+        // page.evaluate(fetch) метрик) под per-session локом — чтобы Marketing API
+        // mutation (executeGraphCall) не выполнила page.evaluate(fetch) во время
+        // нашего reload и наоборот. Иначе «Execution context was destroyed».
+        const scan = await (0, page_lock_js_1.withPageLock)(req.session_id, async () => {
+            let acquired = await (0, am_fetch_js_1.acquireGraphContext)(page, req.session_id);
+            let result = await (0, am_fetch_js_1.runAmScanWithContext)(page, acquired.ctx, amConfig);
+            if (result.diagnostics.authExpired) {
+                console.warn('[scan][am] access_token протух (190) → re-sniff + retry');
+                (0, am_fetch_js_1.invalidateGraphContext)(req.session_id);
+                acquired = await (0, am_fetch_js_1.acquireGraphContext)(page, req.session_id, { forceRefresh: true });
+                result = await (0, am_fetch_js_1.runAmScanWithContext)(page, acquired.ctx, amConfig);
+            }
+            return { acquired, result };
+        });
+        const acquired = scan.acquired;
+        const result = scan.result;
         const d = result.diagnostics;
         console.log(`[scan][am] sniffed=${acquired.sniffed} scope=${d.scopeCampaignCount}` +
             `${d.ownerResolved ? '(owner)' : ''} ads_metrics=${d.adCountMetrics} ` +
@@ -399,7 +409,9 @@ async function listCampaignsHandler(call, callback) {
         // новую — у свежей сессии нет истории запросов и токен не извлекался.
         const session = sessionManager.getPreferredSession();
         const page = getPage(session);
-        const campaigns = await (0, am_fetch_js_1.listOwnerCampaigns)(page, call.request.owner_tag ?? '', session.id);
+        // H-7 (BA-4): listOwnerCampaigns внутри может сделать reload (acquireGraphContext
+        // cache-miss) — под тем же per-session локом, что и мутации/скан.
+        const campaigns = await (0, page_lock_js_1.withPageLock)(session.id, () => (0, am_fetch_js_1.listOwnerCampaigns)(page, call.request.owner_tag ?? '', session.id));
         callback(null, { campaigns });
     }
     catch (err) {

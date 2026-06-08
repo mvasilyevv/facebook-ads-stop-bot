@@ -17,6 +17,7 @@ import {
   runAmScanWithContext,
 } from './am/am-fetch.js';
 import { defaultAmConfig } from './am/am-config.js';
+import { withPageLock } from './page-lock.js';
 
 const PORT = process.env.GRPC_PORT ? parseInt(process.env.GRPC_PORT, 10) : 50051;
 const sessionManager = new SessionManager();
@@ -264,14 +265,23 @@ async function runScanCycle(call: any) {
     const amStart = Date.now();
       const campaignIds: string[] = Array.isArray(req.campaign_ids) ? req.campaign_ids : [];
       const amConfig = defaultAmConfig(campaignIds, req.owner_tag || '');
-      let acquired = await acquireGraphContext(page, req.session_id);
-      let result = await runAmScanWithContext(page, acquired.ctx, amConfig);
-      if (result.diagnostics.authExpired) {
-        console.warn('[scan][am] access_token протух (190) → re-sniff + retry');
-        invalidateGraphContext(req.session_id);
-        acquired = await acquireGraphContext(page, req.session_id, { forceRefresh: true });
-        result = await runAmScanWithContext(page, acquired.ctx, amConfig);
-      }
+      // H-7 (BA-4): весь цикл работы со страницей (reload для сниффа токена +
+      // page.evaluate(fetch) метрик) под per-session локом — чтобы Marketing API
+      // mutation (executeGraphCall) не выполнила page.evaluate(fetch) во время
+      // нашего reload и наоборот. Иначе «Execution context was destroyed».
+      const scan = await withPageLock(req.session_id, async () => {
+        let acquired = await acquireGraphContext(page, req.session_id);
+        let result = await runAmScanWithContext(page, acquired.ctx, amConfig);
+        if (result.diagnostics.authExpired) {
+          console.warn('[scan][am] access_token протух (190) → re-sniff + retry');
+          invalidateGraphContext(req.session_id);
+          acquired = await acquireGraphContext(page, req.session_id, { forceRefresh: true });
+          result = await runAmScanWithContext(page, acquired.ctx, amConfig);
+        }
+        return { acquired, result };
+      });
+      const acquired = scan.acquired;
+      const result = scan.result;
       const d = result.diagnostics;
       console.log(
         `[scan][am] sniffed=${acquired.sniffed} scope=${d.scopeCampaignCount}` +
@@ -393,7 +403,11 @@ async function listCampaignsHandler(call: any, callback: any) {
     // новую — у свежей сессии нет истории запросов и токен не извлекался.
     const session = sessionManager.getPreferredSession();
     const page = getPage(session);
-    const campaigns = await listOwnerCampaigns(page, call.request.owner_tag ?? '', session.id);
+    // H-7 (BA-4): listOwnerCampaigns внутри может сделать reload (acquireGraphContext
+    // cache-miss) — под тем же per-session локом, что и мутации/скан.
+    const campaigns = await withPageLock(session.id, () =>
+      listOwnerCampaigns(page, call.request.owner_tag ?? '', session.id),
+    );
     callback(null, { campaigns });
   } catch (err: any) {
     callback({ code: grpcCodeForError(err), message: String(err?.message ?? err) });

@@ -3,7 +3,12 @@ import type { VisionProfile } from './types.js';
 export declare class VisionClient {
     private readonly baseUrl;
     private readonly xToken;
-    constructor(xToken: string, baseUrl?: string);
+    private readonly requestTimeoutMs;
+    constructor(xToken: string, baseUrl?: string, options?: {
+        requestTimeoutMs?: number;
+    });
+    /** fetch с жёстким таймаутом через AbortController. Аборт → понятная ошибка. */
+    private fetchWithTimeout;
     private request;
     listProfiles(): Promise<VisionProfile[]>;
     getProfile(profileId: string): Promise<VisionProfile | null>;
