@@ -101,3 +101,35 @@ def test_normalize_cleans_dates_and_types() -> None:
 def test_normalize_bad_dates_type() -> None:
     cfg = _normalize_config({"enabled": True, "dates": "22.05"})
     assert cfg["dates"] == []
+
+
+# ====================== N6: ошибка Redis GET не пропускает день молча ==========
+
+
+class _RaisingRedis:
+    """fake Redis: .get падает (имитация недоступного Redis в окне автостарта)."""
+
+    async def get(self, *_a, **_k):
+        raise RuntimeError("redis down")
+
+
+# N6: ошибка Redis GET дедуп-ключа → outcome 'redis_error' (retryable), НЕ 'already_done'.
+# Иначе money-критичный автостарт молча пропускался бы на весь день при сбое Redis.
+@pytest.mark.asyncio
+async def test_redis_get_error_is_retryable_not_already_done(monkeypatch) -> None:
+    from unittest.mock import AsyncMock
+
+    import apps.cabinet_scheduler.main as m
+
+    monkeypatch.setattr(m, "load_scanning_enabled", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        m,
+        "read_autostart_config",
+        AsyncMock(return_value={"enabled": True, "hour_utc": 6, "minute_utc": 0}),
+    )
+    now = datetime(2026, 5, 29, 9, 0, 0, tzinfo=timezone.utc)  # 09:00 UTC — в окне (после 6:00)
+
+    summary = await m.run_one_tick(engine=object(), redis_client=_RaisingRedis(), now=now)
+
+    # КЛЮЧЕВОЕ: НЕ 'already_done' (день не помечается выполненным) → след. тик повторит.
+    assert summary["outcome"] == "redis_error"

@@ -110,8 +110,15 @@ async def run_one_tick(
     try:
         already_done = await redis_client.get(done_key)
     except Exception:
-        logger.exception("cabinet_autostart: ошибка GET %s в Redis — пропускаю прогон", done_key)
-        return {"outcome": "already_done"}
+        # N6: НЕ трактуем ошибку Redis как 'already_done' — иначе money-критичный
+        # автостарт МОЛЧА пропускается на весь день при недоступном Redis. Возвращаем
+        # retryable-исход: done-маркер НЕ ставим → следующий тик повторит, и при
+        # восстановлении Redis в окне (catch-up до конца суток) автостарт сработает.
+        # Двойного запуска нет — idempotency_key bulk-задачи (один task на день).
+        logger.exception(
+            "cabinet_autostart: ошибка GET %s в Redis — повтор на следующем тике", done_key
+        )
+        return {"outcome": "redis_error"}
     if already_done:
         return {"outcome": "already_done"}
 
