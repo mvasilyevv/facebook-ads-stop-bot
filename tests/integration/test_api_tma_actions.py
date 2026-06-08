@@ -534,9 +534,9 @@ async def test_draft_confirm_owner(pg_engine, tma_factory):
     assert row.status == "pending"
 
 
-# Recipient подтверждает СВОЙ draft → 200
+# H-2: recipient НЕ может подтвердить даже СВОЙ money-черновик → 403, статус остаётся draft
 @pytest.mark.asyncio
-async def test_draft_confirm_own(pg_engine, tma_factory):
+async def test_draft_confirm_own_recipient_forbidden(pg_engine, tma_factory):
     uid = 7200014
     chat = await tma_factory.make_recipient(uid, role="recipient")
     tid = await tma_factory.make_draft(created_by_chat_id=chat)
@@ -544,7 +544,13 @@ async def test_draft_confirm_own(pg_engine, tma_factory):
     headers = {"Authorization": f"Bearer {tma_factory.token_for(uid)}"}
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as ac:
         resp = await ac.post(f"/api/tma/draft-tasks/{tid}/confirm", json={}, headers=headers)
-    assert resp.status_code == 200, resp.text
+    # Money-исполнение только owner: recipient (даже автор черновика) получает отказ
+    assert resp.status_code == 403, resp.text
+    async with pg_engine.connect() as conn:
+        row = (
+            await conn.execute(text("SELECT status FROM task_queue WHERE id = :id"), {"id": tid})
+        ).first()
+    assert row.status == "draft"  # черновик НЕ ушёл в pending
 
 
 # КРИТИЧНО: recipient подтверждает ЧУЖОЙ draft → 403, статус остаётся draft

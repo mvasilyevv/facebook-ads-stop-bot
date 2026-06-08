@@ -19,8 +19,12 @@ import os
 
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from core.meta_api.schemas import IRREVERSIBLE_MUTATION_KINDS
 from core.tasks.queue import (
     cancel_stale_drafts as _canonical_cancel_stale_drafts,
+)
+from core.tasks.queue import (
+    fail_stuck_irreversible as _canonical_fail_stuck_irreversible,
 )
 from core.tasks.queue import (
     reconcile_stuck_running as _canonical_reconcile_stuck_running,
@@ -32,13 +36,34 @@ _STUCK_TIMEOUT_MIN = int(os.environ.get("RECONCILER_STUCK_TIMEOUT_MIN", "30"))
 _DRAFT_TIMEOUT_HOURS = int(os.environ.get("RECONCILER_DRAFT_TIMEOUT_HOURS", "24"))
 
 
+async def fail_irreversible_stuck(engine: AsyncEngine) -> int:
+    """Зависшие НЕОБРАТИМЫЕ meta-мутации (create/duplicate) → failed (НЕ retry).
+
+    Money-safety: см. core.tasks.queue.fail_stuck_irreversible. Вызывать ДО
+    reconcile_stuck_running. Returns: число помеченных failed.
+    """
+    stuck_after_seconds = _STUCK_TIMEOUT_MIN * 60
+    return await _canonical_fail_stuck_irreversible(
+        engine,
+        mutation_kinds=IRREVERSIBLE_MUTATION_KINDS,
+        stuck_after_seconds=stuck_after_seconds,
+    )
+
+
 async def reconcile_stuck_running(engine: AsyncEngine) -> int:
     """Обёртка вокруг core.tasks.queue.reconcile_stuck_running с env-таймаутом.
+
+    Необратимые meta-мутации ИСКЛЮЧАЮТСЯ из requeue (их уводит в failed
+    fail_irreversible_stuck) — иначе retry создал бы дубль кампании.
 
     Returns: количество переведённых задач.
     """
     stuck_after_seconds = _STUCK_TIMEOUT_MIN * 60
-    return await _canonical_reconcile_stuck_running(engine, stuck_after_seconds=stuck_after_seconds)
+    return await _canonical_reconcile_stuck_running(
+        engine,
+        stuck_after_seconds=stuck_after_seconds,
+        exclude_kinds=IRREVERSIBLE_MUTATION_KINDS,
+    )
 
 
 async def cancel_old_drafts(engine: AsyncEngine) -> int:
@@ -50,9 +75,51 @@ async def cancel_old_drafts(engine: AsyncEngine) -> int:
     return await _canonical_cancel_stale_drafts(engine, older_than_seconds=older_than_seconds)
 
 
+def render_irreversible_alert(count: int) -> str:
+    """HTML-текст алерта о зависших необратимых мутациях (pure, для тестов)."""
+    return (
+        f"🛑 <b>Reconciler</b>\n"
+        f"Зависших необратимых мутаций (create/duplicate): <b>{count}</b> — "
+        f"помечены failed без retry.\n"
+        f"Воркер мог упасть ПОСЛЕ коммита в Meta — <b>проверь кабинет вручную</b> "
+        f"на дубли кампаний."
+    )
+
+
+async def _maybe_alert_irreversible(engine: AsyncEngine, count: int) -> None:
+    """Best-effort TG-алерт о failed необратимых (в ops-топик). Не роняет reconcile."""
+    if count <= 0:
+        return
+    try:
+        from core.telegram.client import TelegramBotClient
+        from core.telegram.service import load_telegram_config
+
+        cfg = await load_telegram_config(engine)
+        if cfg is None or not cfg.bot_token or cfg.chat_id is None:
+            return  # TG не настроен — failed-задачи всё равно видны в дашборде/логах
+        client = TelegramBotClient(cfg.bot_token)
+        await client.send_message(
+            chat_id=str(cfg.chat_id),
+            text=render_irreversible_alert(count),
+            message_thread_id=cfg.forum_ops_thread_id,
+            parse_mode="HTML",
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("reconciler: не удалось отправить алерт о необратимых мутациях")
+
+
 async def run_once(engine: AsyncEngine) -> dict[str, int]:
     """Один прогон reconciler. Возвращает counters."""
     counts: dict[str, int] = {}
+
+    # ВАЖЕН ПОРЯДОК: сначала уводим необратимые стак-мутации в failed, потом requeue
+    # остального (reconcile их и так исключает — двойная защита от дубля кампании).
+    try:
+        counts["irreversible_failed"] = await fail_irreversible_stuck(engine)
+    except Exception as exc:
+        logger.exception("fail_irreversible_stuck failed: %s", exc)
+        counts["irreversible_failed"] = -1
+
     try:
         counts["stuck_to_retrying"] = await reconcile_stuck_running(engine)
     except Exception as exc:
@@ -64,6 +131,9 @@ async def run_once(engine: AsyncEngine) -> dict[str, int]:
     except Exception as exc:
         logger.exception("cancel_old_drafts failed: %s", exc)
         counts["drafts_cancelled"] = -1
+
+    if counts.get("irreversible_failed", 0) > 0:
+        await _maybe_alert_irreversible(engine, counts["irreversible_failed"])
 
     if any(v > 0 for v in counts.values()):
         logger.info("reconciler counts: %s", counts)

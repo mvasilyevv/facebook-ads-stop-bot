@@ -30,6 +30,7 @@ from fastapi.responses import JSONResponse
 from redis.asyncio import from_url as redis_from_url  # type: ignore[import-not-found]
 
 from apps.api.metrics import REQUEST_DURATION, REQUESTS_TOTAL
+from apps.api.middleware.api_key_auth import ApiKeyAuthMiddleware
 from apps.api.middleware.body_size import BodySizeLimitMiddleware
 from apps.api.middleware.request_id import RequestIdMiddleware
 from apps.api.routers import health as health_router
@@ -131,6 +132,8 @@ def create_app() -> FastAPI:
 
     app.add_middleware(RequestIdMiddleware)
     app.add_middleware(BodySizeLimitMiddleware)
+    # H-3: X-API-Key на write-эндпоинтах (secure-by-default; см. ApiKeyAuthMiddleware).
+    app.add_middleware(ApiKeyAuthMiddleware)
 
     # Метрики — middleware ставится через декоратор, поэтому ниже add_middleware.
     @app.middleware("http")

@@ -71,6 +71,7 @@ supervisorctl -c supervisord.conf status     # все программы в RUNN
 | Переменная | Назначение |
 |------------|------------|
 | `API_KEY` | Если пуст — сгенерируется автоматически и дописывается в `.env`. В проде задавайте явно. |
+| `REQUIRE_API_KEY` | Secure-by-default `true`: write-эндпоинты (POST/PUT/PATCH/DELETE) требуют заголовок `X-API-Key` == `API_KEY`. Публичные/иначе-защищённые пути (`/healthz`,`/readyz`,`/metrics`, `/api/v1/postback/*` — свой секрет, `/api/tma/*` — Bearer) и все GET — исключены. Фронт через `run.sh` шлёт ключ автоматически (`VITE_API_KEY`). `false` — только если API закрыт в доверенной сети/на localhost. |
 | `SENTRY_DSN` / `SENTRY_ENVIRONMENT` | Трейсинг ошибок. |
 | `ADSETPRO_MCP_KEY`, `ADSETPRO_POSTBACK_SECRET` | Интеграция с трекером AdSet.pro (Этап 6). Без `ADSETPRO_POSTBACK_SECRET` endpoint `/api/v1/postback/adsetpro` возвращает 503. |
 | `EXPECTED_WORKERS` | CSV имён воркеров, которые мониторит `health_watchdog`. Дефолт: `observer,disable,enable,telegram_poller,cleanup,reconciler,meta_api`. |

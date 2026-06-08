@@ -61,7 +61,7 @@ from core.meta_api.queue import (
     mark_task_succeeded,
     requeue_task,
 )
-from core.meta_api.schemas import MetaMutationPayload
+from core.meta_api.schemas import IRREVERSIBLE_MUTATION_KINDS, MetaMutationPayload
 from core.observer.queries import load_scanning_enabled
 from core.pubsub import CHANNEL_TASK_CHANGED
 from core.tasks.queue import Task
@@ -162,7 +162,9 @@ _TEMPORARY_EXCEPTIONS: tuple[type[BaseException], ...] = (
 # двойной открут бюджета. idempotency_key (на enqueue) от retry той же строки не
 # защищает. Поэтому transient/неожиданные ошибки для них НЕ ретраим, а уводим в
 # mark_failed с явным сигналом «проверь Meta вручную».
-_IRREVERSIBLE_KINDS: frozenset[str] = frozenset({"create_campaign", "duplicate_campaign"})
+# Единый источник правды — core.meta_api.schemas.IRREVERSIBLE_MUTATION_KINDS (его же
+# использует reconciler-крэш-путь). Локальный алиас — для краткости в этом модуле.
+_IRREVERSIBLE_KINDS: frozenset[str] = IRREVERSIBLE_MUTATION_KINDS
 
 
 async def _fail_irreversible(

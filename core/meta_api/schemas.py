@@ -31,6 +31,19 @@ MUTATION_KINDS: frozenset[str] = frozenset(
     }
 )
 
+# Необратимые mutations: создают НОВЫЕ объекты в Meta (кампания/копия). Если ответ
+# потерян ПОСЛЕ коммита на стороне Meta, повторный вызов = ДУБЛЬ кампании + двойной
+# открут бюджета. idempotency_key (на enqueue) от retry той же строки НЕ защищает.
+# Эти kinds нельзя ретраить: и в meta_api_worker (transient/неожиданная ошибка →
+# mark_failed), и в reconciler-крэш-пути (зависшая 'running' → failed, НЕ retrying).
+# Единый источник правды — здесь; импортируется воркером и reconciler'ом.
+IRREVERSIBLE_MUTATION_KINDS: frozenset[str] = frozenset(
+    {
+        "create_campaign",
+        "duplicate_campaign",
+    }
+)
+
 
 @dataclass(slots=True, frozen=True)
 class MetaInsightsRequest:

@@ -52,6 +52,13 @@ class Settings(BaseSettings):
     api_host: str = "0.0.0.0"
     api_port: int = 8100
     api_key: str = ""
+    # Enforce X-API-Key на write-эндпоинтах (POST/PUT/PATCH/DELETE). Secure-by-default:
+    # API биндится на 0.0.0.0 + Ingress, поэтому money-управление (выкл авто-стопа,
+    # рестарт observer, подтверждение черновиков) закрыто ключом. run.sh прокидывает
+    # API_KEY → VITE_API_KEY → фронт шлёт X-API-Key. Публичные/иначе-защищённые пути
+    # (health/metrics, /api/v1/postback — свой секрет, /api/tma — Bearer) исключены.
+    # Тесты выключают флаг через autouse-фикстуру в tests/conftest.py.
+    require_api_key: bool = True
     app_timezone: str = "Europe/Kaliningrad"
 
     # --- Observer ---

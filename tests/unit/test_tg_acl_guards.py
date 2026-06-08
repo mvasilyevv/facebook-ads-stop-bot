@@ -104,6 +104,40 @@ async def test_snz_viewer_allowed(monkeypatch) -> None:
     spy.assert_awaited_once()
 
 
+# dr_ok: подтверждение AI money-черновика от владельца → хендлер вызывается (H-2)
+@pytest.mark.asyncio
+async def test_dr_ok_owner_allowed(monkeypatch) -> None:
+    monkeypatch.setattr(router, "find_recipient", AsyncMock(return_value=_owner()))
+    spy = AsyncMock()
+    monkeypatch.setattr(router, "handle_draft_callback", spy)
+    client = AsyncMock()
+    await router._dispatch_callback_query(engine=object(), client=client, cq=_cq("dr_ok:55"))
+    spy.assert_awaited_once()
+
+
+# dr_ok: от recipient → ОТКАЗ (money-исполнение только owner). H-2 — ключевой кейс.
+@pytest.mark.asyncio
+async def test_dr_ok_viewer_denied(monkeypatch) -> None:
+    monkeypatch.setattr(router, "find_recipient", AsyncMock(return_value=_viewer()))
+    spy = AsyncMock()
+    monkeypatch.setattr(router, "handle_draft_callback", spy)
+    client = AsyncMock()
+    await router._dispatch_callback_query(engine=object(), client=client, cq=_cq("dr_ok:55"))
+    spy.assert_not_awaited()
+    client.answer_callback_query.assert_awaited()
+
+
+# dr_cancel: отмена черновика от recipient → РАЗРЕШЕНО (не money, снимает действие)
+@pytest.mark.asyncio
+async def test_dr_cancel_viewer_allowed(monkeypatch) -> None:
+    monkeypatch.setattr(router, "find_recipient", AsyncMock(return_value=_viewer()))
+    spy = AsyncMock()
+    monkeypatch.setattr(router, "handle_draft_callback", spy)
+    client = AsyncMock()
+    await router._dispatch_callback_query(engine=object(), client=client, cq=_cq("dr_cancel:55"))
+    spy.assert_awaited_once()
+
+
 # ====================== команды ======================
 
 

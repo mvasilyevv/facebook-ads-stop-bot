@@ -140,6 +140,12 @@ async def approve_draft_task(
 ) -> bool:
     """DRAFT → PENDING с owner ACL. Возвращает True если переход состоялся.
 
+    ⚠️ MONEY-SAFETY (H-2): сам по себе chat_id-match путь (created_by_chat_id ==
+    approver_chat_id) НЕ проверяет role='owner'. Поэтому ИСПОЛНЕНИЕ money-черновика
+    owner-гейтится на ПЕРИМЕТРЕ вызывающих: TG-роутер (dr_ok ∈ _OWNER_ONLY_CALLBACKS)
+    и TMA-эндпоинт (principal.is_owner). Новые callers ОБЯЗАНЫ owner-гейтить approve,
+    иначе не-owner сможет само-подтвердить созданный им же money-черновик.
+
     Логика ACL:
     - Если у задачи есть created_by_chat_id, approver_chat_id обязан совпасть.
       Несовпадение → False (status остаётся 'draft'), warning в лог.

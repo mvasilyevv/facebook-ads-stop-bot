@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 logger = logging.getLogger(__name__)
@@ -306,36 +306,104 @@ async def requeue_for_retry(
 # ====================== reconcile (вызывается reconciler_worker'ом) ======================
 
 
+async def fail_stuck_irreversible(
+    engine: AsyncEngine,
+    *,
+    mutation_kinds: frozenset[str] | set[str] | tuple[str, ...],
+    task_type: str = "meta_api_mutation",
+    stuck_after_seconds: int = 1800,
+) -> int:
+    """Зависшие в 'running' НЕОБРАТИМЫЕ mutations → 'failed' (НЕ retry). Money-safety.
+
+    Крэш-путь: worker создал кампанию в Meta (create_campaign/duplicate_campaign),
+    но умер (SIGKILL/OOM/деплой) ДО mark_succeeded → задача застряла в 'running'.
+    Слепой reconcile перевёл бы её в 'retrying' → повторное создание = ДУБЛЬ
+    кампании + двойной открут бюджета. Для необратимых kinds это недопустимо:
+    помечаем 'failed' с явным error — оператор проверяет Meta вручную.
+
+    Вызывать ПЕРЕД reconcile_stuck_running (тот же набор передать в exclude_kinds —
+    двойная защита: даже при гонке между двумя стейтментами requeue их не тронет).
+    Возвращает число помеченных failed (>0 → caller шлёт алерт).
+    """
+    kinds = [k for k in mutation_kinds if k]
+    if not kinds:
+        return 0
+    stmt = text(
+        """
+        UPDATE task_queue
+        SET status = 'failed',
+            completed_at = NOW(),
+            last_error = COALESCE(last_error, '')
+                || ' [stuck irreversible mutation: возможен коммит в Meta до краша '
+                || 'воркера — НЕ ретраим (риск дубля кампании), проверь Meta вручную]',
+            updated_at = NOW()
+        WHERE task_type = :tt
+          AND status = 'running'
+          AND updated_at < NOW() - make_interval(secs => :sec)
+          AND payload->>'mutation_kind' IN :kinds
+        """
+    ).bindparams(bindparam("kinds", expanding=True))
+    async with engine.begin() as conn:
+        result = await conn.execute(
+            stmt,
+            {"tt": task_type, "sec": int(stuck_after_seconds), "kinds": kinds},
+        )
+        n = int(result.rowcount or 0)
+    if n:
+        logger.error(
+            "reconcile: %d зависших НЕОБРАТИМЫХ mutation(s) (%s) → failed без retry "
+            "(возможен дубль кампании в Meta — нужна ручная проверка)",
+            n,
+            ", ".join(sorted(kinds)),
+        )
+    return n
+
+
 async def reconcile_stuck_running(
     engine: AsyncEngine,
     *,
     stuck_after_seconds: int = 1800,
+    exclude_kinds: frozenset[str] | set[str] | tuple[str, ...] | None = None,
 ) -> int:
     """Задачи зависшие в 'running' (worker крашнулся, не успел отметить) → retrying.
 
     Делает один bump attempt_count (worker крашнулся ДО вызова requeue_for_retry,
     так что инкремент попыток нужно сделать здесь — иначе бесконечный retry).
 
+    exclude_kinds — meta_api_mutation mutation_kind, которые НЕЛЬЗЯ ретраить
+    (необратимые create_campaign/duplicate_campaign): они ИСКЛЮЧАЮТСЯ из requeue,
+    т.к. их обрабатывает fail_stuck_irreversible (money-safety: retry = дубль).
+
     Используется reconciler_worker'ом. Возвращает число восстановленных строк.
     Не должно быть продублировано в reconciler_worker — иначе attempt_count
     бампается дважды и max_attempts исчерпывается за вдвое меньше попыток.
     """
-    async with engine.begin() as conn:
-        result = await conn.execute(
-            text(
-                """
-                UPDATE task_queue
-                SET status = 'retrying',
-                    attempt_count = attempt_count + 1,
-                    next_retry_at = NOW(),
-                    last_error = COALESCE(last_error, '') || ' [stuck timeout reconciled]',
-                    updated_at = NOW()
-                WHERE status = 'running'
-                  AND updated_at < NOW() - make_interval(secs => :sec)
-                """
-            ),
-            {"sec": int(stuck_after_seconds)},
+    exclude = [k for k in (exclude_kinds or ()) if k]
+    params: dict[str, Any] = {"sec": int(stuck_after_seconds)}
+    guard = ""
+    if exclude:
+        # Не ретраим необратимые meta-мутации (их уводит в failed fail_stuck_irreversible).
+        guard = (
+            "\n  AND NOT (task_type = 'meta_api_mutation' "
+            "AND payload->>'mutation_kind' IN :exclude_kinds)"
         )
+        params["exclude_kinds"] = exclude
+    stmt = text(
+        """
+        UPDATE task_queue
+        SET status = 'retrying',
+            attempt_count = attempt_count + 1,
+            next_retry_at = NOW(),
+            last_error = COALESCE(last_error, '') || ' [stuck timeout reconciled]',
+            updated_at = NOW()
+        WHERE status = 'running'
+          AND updated_at < NOW() - make_interval(secs => :sec)"""
+        + guard
+    )
+    if exclude:
+        stmt = stmt.bindparams(bindparam("exclude_kinds", expanding=True))
+    async with engine.begin() as conn:
+        result = await conn.execute(stmt, params)
         return int(result.rowcount or 0)
 
 

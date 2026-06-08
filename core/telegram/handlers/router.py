@@ -61,7 +61,11 @@ _LEGACY_COMMANDS: frozenset[str] = frozenset(
 
 # Owner-ACL: money-действия, доступные только role='owner'.
 # Callback-кнопки под алертами/планами (трогают кабинет или боевой браузер).
-_OWNER_ONLY_CALLBACKS: frozenset[str] = frozenset({"dis", "ereco", "plan"})
+# dr_ok (подтверждение AI money-черновика: budget/clone/create/bulk-pause) — тоже
+# owner-only (H-2): не-owner может СОЗДАТЬ черновик через /ask, но ИСПОЛНИТЬ его
+# (approve → pending → meta_api_worker тратит деньги) вправе только владелец кабинета.
+# dr_cancel НЕ здесь — отмена черновика безопасна (снимает pending-действие).
+_OWNER_ONLY_CALLBACKS: frozenset[str] = frozenset({"dis", "ereco", "plan", "dr_ok"})
 # Команды (autostart с аргументами проверяется отдельно — write-путь).
 _OWNER_ONLY_COMMANDS: frozenset[str] = frozenset(
     {"pause", "resume", "record_plan", "stop_record", "setup_topics"}
@@ -110,9 +114,9 @@ async def _dispatch_callback_query(
             pass
         return
 
-    # Owner-ACL: money-кнопки (отключение/включение/запуск плана в боевом браузере)
-    # доступны только role='owner'. snz (snooze) — не money, доступен любому активному.
-    # dr_ok/dr_cancel — approve проверяет owner внутри handle_draft_callback.
+    # Owner-ACL: money-кнопки (отключение/включение/запуск плана, подтверждение
+    # money-черновика dr_ok) доступны только role='owner'. snz (snooze) и dr_cancel
+    # (отмена черновика) — не money, доступны любому активному recipient.
     if action in _OWNER_ONLY_CALLBACKS and not recipient.is_owner():
         logger.warning(
             "ACL отказ (callback): action=%s chat_id=%s role=%s", action, chat_id, recipient.role

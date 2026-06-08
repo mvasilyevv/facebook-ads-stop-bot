@@ -683,11 +683,17 @@ async def tma_confirm_draft_task(
     principal: DepTmaPrincipal,
     engine: DepEngine,
 ) -> TmaDraftActionResponse:
-    """DRAFT → PENDING. ACL внутри approve_draft_task (owner-or-creator).
+    """DRAFT → PENDING. Money-критично: подтверждать вправе только owner (H-2).
 
-    owner → admin_override (подтверждает любой draft, проверка is_admin внутри).
-    recipient → только свой draft (created_by_chat_id == chat_id). Money-критично.
+    recipient может СОЗДАТЬ money-черновик (budget/clone/create/bulk-pause) через AI,
+    но ИСПОЛНИТЬ его (approve → pending → meta_api_worker тратит деньги) вправе только
+    владелец кабинета. owner → admin_override (подтверждает любой draft).
     """
+    if not principal.is_owner:
+        raise HTTPException(
+            status_code=403,
+            detail="Подтверждать money-черновики может только владелец кабинета",
+        )
     try:
         ok = await approve_draft_task(
             engine,
