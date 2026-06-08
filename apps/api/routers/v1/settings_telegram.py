@@ -353,3 +353,33 @@ async def post_telegram_invite(engine: DepEngine) -> TelegramInviteResponse:
         await session.commit()
 
     return result
+
+
+@router.post("/setup-topics")
+async def post_setup_topics(engine: DepEngine) -> dict:
+    """Создаёт статические топики супергруппы и сохраняет их thread_id. Идемпотентно.
+
+    Требует: бот — админ супергруппы с правом can_manage_topics, в группе включены
+    «Темы». 400, если не настроен токен/chat_id. Возвращает отчёт по топикам.
+    """
+    from core.telegram.client import TelegramBotClient
+    from core.telegram.service import load_telegram_config
+    from core.telegram.topics import PgTopicStore, provision_static_topics
+
+    cfg = await load_telegram_config(engine)
+    if cfg is None or not cfg.bot_token:
+        raise HTTPException(status_code=400, detail="Telegram-бот не настроен (нет токена)")
+    if cfg.chat_id is None:
+        raise HTTPException(status_code=400, detail="Не задан chat_id супергруппы")
+
+    client = TelegramBotClient(bot_token=cfg.bot_token)
+    try:
+        report = await provision_static_topics(
+            PgTopicStore(engine), client, chat_id=cfg.chat_id
+        )
+    finally:
+        try:
+            await client.close()
+        except Exception:  # noqa: BLE001
+            pass
+    return {"topics": report}

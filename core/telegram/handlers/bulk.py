@@ -17,6 +17,7 @@ from core.meta_api.bulk import MAX_BULK, resolve_owner_ad_ids
 from core.meta_api.queue import create_draft_task
 from core.meta_api.schemas import MetaMutationPayload
 from core.observer.queries import load_observer_config
+from core.telegram import format as fmt
 from core.telegram.client import TelegramBotClient
 from core.telegram.handlers._send import send_text
 
@@ -52,8 +53,9 @@ async def handle_bulk_toggle(
             client,
             chat_id=chat_id,
             text=(
-                f"Использование: `/{command} <offer>`\n"
-                f"Пример: `/{command} GH_CR2` — {label.lower()} всех объявлений оффера."
+                f"Использование: {fmt.code(f'/{command} <offer>')}\n"
+                f"Пример: {fmt.code(f'/{command} GH_CR2')} — "
+                f"{fmt.esc(label.lower())} всех объявлений оффера."
             ),
             reply_to_message_id=message_id,
             message_thread_id=thread_id,
@@ -70,8 +72,8 @@ async def handle_bulk_toggle(
             client,
             chat_id=chat_id,
             text=(
-                f"По офферу `{offer}` активных объявлений в твоих кампаниях не нашлось.\n"
-                "(owner-scoping: проверяются только кампании с твоим тегом)"
+                f"По офферу {fmt.code(offer)} активных объявлений в твоих кампаниях "
+                "не нашлось.\n(owner-scoping: проверяются только кампании с твоим тегом)"
             ),
             reply_to_message_id=message_id,
             message_thread_id=thread_id,
@@ -114,14 +116,14 @@ async def handle_bulk_toggle(
     await client.send_message(
         chat_id=str(chat_id),
         text=(
-            f"📝 Черновик #{task_id}: {label}\n"
-            f"Оффер `{offer}` → {len(ad_ids)} объявлений.{truncated}\n"
-            f"IDs: {preview}\n\n"
-            f"Подтверди ✅ / ❌."
+            f"📝 {fmt.b(f'Черновик #{task_id}')} · {fmt.esc(label)}\n"
+            f"Оффер {fmt.code(offer)} → {fmt.b(len(ad_ids))} объявлений.{fmt.esc(truncated)}\n"
+            f"{fmt.code(preview)}\n\n"
+            "Подтверди ✅ / ❌."
         ),
         message_thread_id=thread_id,
         reply_markup=draft_inline_keyboard(task_id),
-        parse_mode=None,
+        parse_mode="HTML",
     )
 
 

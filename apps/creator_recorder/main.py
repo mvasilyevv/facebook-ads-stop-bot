@@ -32,6 +32,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from clients.python_grpc.client import BrowserAgentClient, BrowserAgentConfig
+from core.telegram import format as fmt
 from core.telegram.client import TelegramBotClient
 
 logger = logging.getLogger("creator_recorder")
@@ -153,10 +154,10 @@ async def handle_record_stop(
                 await tg_client.send_message(
                     chat_id=recipient_id,
                     text=(
-                        f"✅ План *{name_hint}* сохранён (id=`{plan_id}`).\n"
+                        f"✅ План {fmt.b(name_hint)} сохранён ({fmt.code(f'id={plan_id}')}).\n"
                         "Запусти его через /plans."
                     ),
-                    parse_mode="Markdown",
+                    parse_mode="HTML",
                 )
             except Exception:  # noqa: BLE001
                 logger.warning("recorder: не удалось отправить TG-confirmation", exc_info=True)

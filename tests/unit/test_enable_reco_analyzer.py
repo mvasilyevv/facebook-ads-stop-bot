@@ -234,7 +234,7 @@ def test_render_includes_inline_button_with_correct_callback() -> None:
     text, markup = render_enable_reco_alert(inp)
     assert "Можно включать" in text
     assert "spend ок" in text
-    assert "fb_ad_id: 2300555" in text
+    assert "id 2300555" in text  # ID объявления в подвале карточки
     assert markup is not None
     btn = markup["inline_keyboard"][0][0]
     assert btn["callback_data"] == "ereco:2300555"
@@ -256,3 +256,22 @@ def test_render_warning_level_prefix() -> None:
     )
     text, _ = render_enable_reco_alert(inp)
     assert "Возможно стоит включить" in text
+
+
+# HTML-спецсимволы в названии/кампании экранируются — не ломаем parse_mode=HTML
+def test_render_escapes_html() -> None:
+    decision = RecommendationDecision(
+        recommend=True, level="ok", reasons=("<b>boom</b>",), snapshot={}
+    )
+    inp = EnableRecoRenderInput(
+        fb_ad_id="1",
+        ad_name="<script>x</script>",
+        campaign_name="Camp<>",
+        adset_name="A&B",
+        offer_code=None,
+        decision=decision,
+    )
+    text, _ = render_enable_reco_alert(inp)
+    assert "<script>" not in text
+    assert "&lt;script&gt;" in text  # ad_name попал в заголовок и экранирован
+    assert "&amp;" in text  # adset 'A&B' в блок-цитате

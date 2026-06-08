@@ -44,6 +44,10 @@ class TelegramConfig(UUIDPrimaryKey, SingletonMixin, Timestamp, Base):
         Integer,
         nullable=True,
     )
+    forum_digest_thread_id: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
     poller_offset: Mapped[int] = mapped_column(
         BigInteger,
         nullable=False,

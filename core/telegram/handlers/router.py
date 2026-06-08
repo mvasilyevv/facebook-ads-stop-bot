@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from core.telegram import format as fmt
 from core.telegram.client import TelegramBotClient
 from core.telegram.handlers._send import send_text
 from core.telegram.handlers.alerts import (
@@ -33,6 +34,7 @@ from core.telegram.handlers.creator import (
 )
 from core.telegram.handlers.onboarding import handle_help, handle_start, handle_tools
 from core.telegram.handlers.spy import handle_spy
+from core.telegram.handlers.topics import handle_setup_topics, handle_topics
 from core.telegram.service import find_recipient
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -61,7 +63,9 @@ _LEGACY_COMMANDS: frozenset[str] = frozenset(
 # Callback-кнопки под алертами/планами (трогают кабинет или боевой браузер).
 _OWNER_ONLY_CALLBACKS: frozenset[str] = frozenset({"dis", "ereco", "plan"})
 # Команды (autostart с аргументами проверяется отдельно — write-путь).
-_OWNER_ONLY_COMMANDS: frozenset[str] = frozenset({"pause", "resume", "record_plan", "stop_record"})
+_OWNER_ONLY_COMMANDS: frozenset[str] = frozenset(
+    {"pause", "resume", "record_plan", "stop_record", "setup_topics"}
+)
 
 
 def _is_private(chat_type: str | None) -> bool:
@@ -251,7 +255,7 @@ async def handle_update(
         await send_text(
             client,
             chat_id=chat_id,
-            text="Доступа нет. Используй `/start <код>` для подключения.",
+            text=f"Доступа нет. Используй {fmt.code('/start <код>')} для подключения.",
             reply_to_message_id=message_id,
         )
         return
@@ -394,12 +398,36 @@ async def handle_update(
         )
         return
 
+    if cmd == "setup_topics":
+        await handle_setup_topics(
+            engine=engine,
+            client=client,
+            chat_id=chat_id,
+            message_id=message_id,
+            thread_id=thread_id,
+            args_text=args_text,
+        )
+        return
+
+    if cmd == "topics":
+        await handle_topics(
+            engine=engine,
+            client=client,
+            chat_id=chat_id,
+            message_id=message_id,
+            thread_id=thread_id,
+        )
+        return
+
     # Legacy команды — заглушка
     if cmd in _LEGACY_COMMANDS:
         await send_text(
             client,
             chat_id=chat_id,
-            text=f"`/{cmd}` в процессе миграции под новую схему БД. Пока доступны: /spy, /help.",
+            text=(
+                f"{fmt.code('/' + cmd)} в процессе миграции под новую схему БД. "
+                "Пока доступны: /spy, /help."
+            ),
             reply_to_message_id=message_id,
             message_thread_id=thread_id,
         )
@@ -409,7 +437,7 @@ async def handle_update(
     await send_text(
         client,
         chat_id=chat_id,
-        text=f"Неизвестная команда `/{cmd}`. /help — список доступных.",
+        text=f"Неизвестная команда {fmt.code('/' + cmd)}. /help — список доступных.",
         reply_to_message_id=message_id,
         message_thread_id=thread_id,
     )

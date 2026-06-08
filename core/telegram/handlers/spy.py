@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from core.ad_library.pipeline import run_pipeline
 from core.ad_library.spy_handler import format_short_summary, parse_spy_args
+from core.telegram import format as fmt
 from core.telegram.client import TelegramBotClient
 from core.telegram.handlers._send import send_text
 
@@ -44,18 +45,23 @@ async def _run_spy_pipeline_background(
         await send_text(
             client,
             chat_id=chat_id,
-            text=f"❌ Сканирование `{slot}` / `{country}` упало: `{exc}`",
+            text=(
+                f"❌ Сканирование {fmt.code(slot)} / {fmt.code(country)} "
+                f"упало: {fmt.code(str(exc))}"
+            ),
             message_thread_id=thread_id,
         )
         return
 
-    # TG legacy Markdown: жирный — одинарные *, не ** (иначе видны буквально).
+    # summary/отчёт генерируются в Markdown — шлём их явно как Markdown
+    # (жирный — одинарные *, не ** иначе видны буквально).
     summary = format_short_summary(pipeline_result).replace("**", "*")
     await send_text(
         client,
         chat_id=chat_id,
         text=summary,
         message_thread_id=thread_id,
+        parse_mode="Markdown",
     )
 
     # Полный markdown-отчёт — отдельным сообщением (если есть)
@@ -70,6 +76,7 @@ async def _run_spy_pipeline_background(
             chat_id=chat_id,
             text=md.replace("**", "*"),
             message_thread_id=thread_id,
+            parse_mode="Markdown",
         )
 
 
@@ -92,9 +99,9 @@ async def handle_spy(
             client,
             chat_id=chat_id,
             text=(
-                f"⚠️ {parsed}\n\n"
-                "Использование: `/spy <слот> <ISO-2 country>`\n"
-                "Пример: `/spy chicken road 2 KE`"
+                f"⚠️ {fmt.esc(parsed)}\n\n"
+                f"Использование: {fmt.code('/spy <слот> <ISO-2 country>')}\n"
+                f"Пример: {fmt.code('/spy chicken road 2 KE')}"
             ),
             reply_to_message_id=message_id,
             message_thread_id=thread_id,
@@ -110,11 +117,11 @@ async def handle_spy(
     progress = await client.send_message(
         chat_id=str(chat_id),
         text=(
-            f"🔍 Сканирую Ad Library: `{parsed_slot}` / `{parsed_country}`…\n"
+            f"🔍 Сканирую Ad Library: {fmt.code(parsed_slot)} / {fmt.code(parsed_country)}…\n"
             "Это займёт 60–180 сек, дождись финального отчёта."
         ),
         message_thread_id=thread_id,
-        parse_mode="Markdown",
+        parse_mode="HTML",
     )
     progress_message_id = (progress or {}).get("message_id", 0) if isinstance(progress, dict) else 0
 

@@ -131,6 +131,7 @@ async def _restore_telegram(conn: Any, telegram_rows: list[dict[str, Any]]) -> N
     forum_stop_thread_id = _int_or_none(row.get("forum_stop_thread_id"))
     forum_enable_thread_id = _int_or_none(row.get("forum_enable_thread_id"))
     forum_ops_thread_id = _int_or_none(row.get("forum_ops_thread_id"))
+    forum_digest_thread_id = _int_or_none(row.get("forum_digest_thread_id"))
 
     if not bot_token_encrypted:
         logger.warning("telegram_settings.bot_token_encrypted пустой — пропуск")
@@ -142,9 +143,10 @@ async def _restore_telegram(conn: Any, telegram_rows: list[dict[str, Any]]) -> N
             INSERT INTO telegram_config
                 (bot_token_encrypted, chat_id,
                  forum_warning_thread_id, forum_stop_thread_id,
-                 forum_enable_thread_id, forum_ops_thread_id)
+                 forum_enable_thread_id, forum_ops_thread_id,
+                 forum_digest_thread_id)
             VALUES
-                (:tok, :cid, :fw, :fs, :fe, :fo)
+                (:tok, :cid, :fw, :fs, :fe, :fo, :fd)
             ON CONFLICT (singleton_key) DO UPDATE
                 SET bot_token_encrypted = EXCLUDED.bot_token_encrypted,
                     chat_id = EXCLUDED.chat_id,
@@ -152,6 +154,7 @@ async def _restore_telegram(conn: Any, telegram_rows: list[dict[str, Any]]) -> N
                     forum_stop_thread_id = EXCLUDED.forum_stop_thread_id,
                     forum_enable_thread_id = EXCLUDED.forum_enable_thread_id,
                     forum_ops_thread_id = EXCLUDED.forum_ops_thread_id,
+                    forum_digest_thread_id = EXCLUDED.forum_digest_thread_id,
                     updated_at = NOW()
             """
         ),
@@ -162,6 +165,7 @@ async def _restore_telegram(conn: Any, telegram_rows: list[dict[str, Any]]) -> N
             "fs": forum_stop_thread_id,
             "fe": forum_enable_thread_id,
             "fo": forum_ops_thread_id,
+            "fd": forum_digest_thread_id,
         },
     )
     logger.info("telegram_config: восстановлен (chat_id=%s)", chat_id)

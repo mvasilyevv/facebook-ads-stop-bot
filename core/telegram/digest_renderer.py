@@ -1,69 +1,29 @@
 # -*- coding: utf-8 -*-
-"""Рендер daily digest в HTML-строку для Telegram (parse_mode=HTML).
+"""Рендер daily digest в HTML-строку для Telegram — стиль «чистая карточка».
 
-Pure-функция без I/O — принимает `DigestPayload`, возвращает строку.
+Pure-функция без I/O — принимает `DigestPayload`, возвращает строку (parse_mode=HTML).
+
+Лейаут:
+  📊 Дайджест · 2026-05-26               ← заголовок + дата окна
+  окно 24ч до 2026-05-27 09:00 UTC
+  <пусто>
+  🔔 Алерты      ⚠️ 12 · 🛑 3            ← компактные сводки одной строкой
+  🔧 Отключения  ✅ 4 · ❌ 1
+  📈 Итого       спенд $1 234.50 · офферов 7 · ads 42
+  <пусто>
+  🏆 Топ-5 по spend                       ← выровненная моноширинная таблица
+  <pre># Оффер Spend CPC CPL Объявление</pre>
+
+Числа, выравнивание и экранирование — через core.telegram.format.
 """
 
 from __future__ import annotations
 
-import html
-from decimal import Decimal
-from typing import Any
-
+from core.telegram import format as fmt
 from core.telegram.digest_builder import DigestPayload, TopAdRow
 
-
-def _escape(s: str | None) -> str:
-    """HTML-escape для безопасной вставки строк."""
-    return html.escape(s or "", quote=False)
-
-
-def _fmt_money(value: Decimal | None) -> str:
-    """Форматирует Decimal как сумму в USD: 1234.5 → '$1 234.50'."""
-    if value is None:
-        return "—"
-    try:
-        d = value if isinstance(value, Decimal) else Decimal(str(value))
-    except (ArithmeticError, ValueError):
-        return "—"
-    # Округляем до 2 знаков, разделитель тысяч — неразрывный пробел.
-    quantized = d.quantize(Decimal("0.01"))
-    int_part, _, frac_part = f"{quantized:.2f}".partition(".")
-    sign = ""
-    if int_part.startswith("-"):
-        sign = "-"
-        int_part = int_part[1:]
-    rev = int_part[::-1]
-    chunks = [rev[i : i + 3] for i in range(0, len(rev), 3)]
-    grouped = " ".join(chunks)[::-1]
-    return f"{sign}${grouped}.{frac_part}"
-
-
-def _fmt_decimal(value: Decimal | None, precision: int = 3) -> str:
-    """Decimal/None → '0.123' либо '—'."""
-    if value is None:
-        return "—"
-    try:
-        d = value if isinstance(value, Decimal) else Decimal(str(value))
-    except (ArithmeticError, ValueError):
-        return "—"
-    return f"{d:.{precision}f}"
-
-
-def _fmt_int(value: Any) -> str:
-    """int/None → '1 234' с неразрывным пробелом, '—' для None."""
-    if value is None:
-        return "—"
-    try:
-        n = int(value)
-    except (TypeError, ValueError):
-        return str(value)
-    if n == 0:
-        return "0"
-    rev = str(abs(n))[::-1]
-    chunks = [rev[i : i + 3] for i in range(0, len(rev), 3)]
-    grouped = " ".join(chunks)[::-1]
-    return ("-" if n < 0 else "") + grouped
+# Максимальная длина названия объявления в таблице (моноширинный столбец).
+_AD_NAME_MAX = 24
 
 
 def _fmt_date_utc(payload: DigestPayload) -> str:
@@ -71,72 +31,70 @@ def _fmt_date_utc(payload: DigestPayload) -> str:
     return payload.window_start_utc.strftime("%Y-%m-%d")
 
 
-def _render_top_ad_line(idx: int, row: TopAdRow) -> str:
-    """Одна строка из топа: <code>OFFER</code> · spend · CPC · CPL · название."""
-    offer = f"<code>{_escape(row.offer_code)}</code>" if row.offer_code else "—"
-    name = _escape(row.ad_name) or "(без названия)"
-    if len(name) > 60:
-        name = name[:57] + "..."
-    return (
-        f"  {idx}. {offer} · "
-        f"spend <b>{_fmt_money(row.spend_usd)}</b> · "
-        f"CPC {_fmt_decimal(row.cpc, 3)} · "
-        f"CPL {_fmt_decimal(row.cost_per_lead, 2)} · "
-        f"<i>{name}</i>"
+def _top_table(rows: list[TopAdRow]) -> str:
+    """Топ-объявления по spend → выровненная таблица в <pre>."""
+    table_rows: list[list[str]] = []
+    for idx, row in enumerate(rows, 1):
+        table_rows.append(
+            [
+                str(idx),
+                row.offer_code or "—",
+                fmt.money(row.spend_usd),
+                fmt.dec(row.cpc, 3),
+                fmt.dec(row.cost_per_lead, 2),
+                fmt.truncate(row.ad_name or "(без названия)", _AD_NAME_MAX),
+            ]
+        )
+    return fmt.table(
+        ["#", "Оффер", "Spend", "CPC", "CPL", "Объявление"],
+        table_rows,
+        aligns=["l", "l", "r", "r", "r", "l"],
     )
 
 
 def render_digest(payload: DigestPayload) -> str:
     """Полный HTML-текст digest для отправки в Telegram.
 
-    Лейаут: заголовок → алерты → топ-5 spend → disable-метрики → итоги.
-    Если за окно вообще не было spend и алертов — отдельный «тихий» блок.
+    Лейаут: заголовок → сводки (алерты/отключения/итоги) → топ-5 spend.
+    Если за окно не было spend и алертов — добавляем «тихий» блок внизу.
     """
-    lines: list[str] = []
+    lines: list[str] = [
+        f"📊 {fmt.b('Дайджест')} · {fmt.b(_fmt_date_utc(payload))}",
+        fmt.i(f"окно 24ч до {payload.window_end_utc.strftime('%Y-%m-%d %H:%M UTC')}"),
+        "",
+    ]
 
-    lines.append(f"📊 <b>Daily digest — {_fmt_date_utc(payload)}</b>")
-    lines.append(f"<i>окно 24ч до {payload.window_end_utc.strftime('%Y-%m-%d %H:%M UTC')}</i>")
-    lines.append("")
-
-    # Топ-5 НЕ входит в условие активности: при нулевом spend список может быть
-    # непустым (ad_metrics со spend=0), и «непустой список нулей» ложно выставлял
-    # has_activity=True, пряча тихий блок. Активность определяется алертами и реальным spend.
-    has_activity = (
+    # Активность считаем по алертам и реальному spend; непустой топ из нулей —
+    # НЕ активность (урок бага дайджеста 06-02), иначе «тихий» блок прячется.
+    has_activity = bool(
         payload.alerts_warning_count or payload.alerts_stop_count or payload.total_spend_24h_usd > 0
     )
 
-    # Алерты
-    lines.append("🔔 <b>Алерты:</b>")
+    # Сводки — по одной строке, метка жирным.
     lines.append(
-        f"  ⚠️ WARNING: <b>{_fmt_int(payload.alerts_warning_count)}</b>"
-        f"  ·  🛑 STOP: <b>{_fmt_int(payload.alerts_stop_count)}</b>"
+        f"🔔 {fmt.b('Алерты')}   "
+        f"⚠️ {fmt.b(fmt.num(payload.alerts_warning_count))} · "
+        f"🛑 {fmt.b(fmt.num(payload.alerts_stop_count))}"
+    )
+    lines.append(
+        f"🔧 {fmt.b('Отключения')}   "
+        f"✅ {fmt.b(fmt.num(payload.disable_tasks_succeeded))} · "
+        f"❌ {fmt.b(fmt.num(payload.disable_tasks_failed))}"
+    )
+    lines.append(
+        f"📈 {fmt.b('Итого')}   "
+        f"спенд {fmt.b(fmt.money(payload.total_spend_24h_usd))} · "
+        f"офферов {fmt.b(fmt.num(payload.active_offers_count))} · "
+        f"ads {fmt.b(fmt.num(payload.active_ads_count))}"
     )
     lines.append("")
 
-    # Топ-5 spend
-    lines.append("🏆 <b>Топ-5 по spend:</b>")
+    # Топ-5 spend.
+    lines.append(f"🏆 {fmt.b('Топ-5 по spend')}")
     if payload.top_ads_by_spend:
-        for idx, row in enumerate(payload.top_ads_by_spend, 1):
-            lines.append(_render_top_ad_line(idx, row))
+        lines.append(_top_table(payload.top_ads_by_spend))
     else:
-        lines.append("  (нет данных за окно)")
-    lines.append("")
-
-    # Disable tasks
-    lines.append("🔧 <b>Отключения:</b>")
-    lines.append(
-        f"  ✅ успешно: <b>{_fmt_int(payload.disable_tasks_succeeded)}</b>"
-        f"  ·  ❌ с ошибкой: <b>{_fmt_int(payload.disable_tasks_failed)}</b>"
-    )
-    lines.append("")
-
-    # Итоги
-    lines.append("📈 <b>Итого:</b>")
-    lines.append(f"  spend 24ч: <b>{_fmt_money(payload.total_spend_24h_usd)}</b>")
-    lines.append(
-        f"  активных офферов: <b>{_fmt_int(payload.active_offers_count)}</b>"
-        f"  ·  активных ads (normal): <b>{_fmt_int(payload.active_ads_count)}</b>"
-    )
+        lines.append("(нет данных за окно)")
 
     if not has_activity:
         lines.append("")

@@ -15,6 +15,7 @@ Graceful shutdown по SIGTERM/SIGINT.
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 import logging
 import os
@@ -144,7 +145,7 @@ async def _send_alert(
             chat_id=chat_id,
             text=text,
             message_thread_id=thread_id,
-            parse_mode=None,
+            parse_mode="HTML",
         )
     except TelegramAPIError as exc:
         logger.error("не удалось отправить TG-алерт: %s", exc)
@@ -218,8 +219,9 @@ async def check_worker_heartbeats(
             continue
 
         text = (
-            f"🚨 Health Watchdog: воркер '{name}' не дышит "
-            f"более {HEARTBEAT_TTL_SECONDS // 60} мин (heartbeat истёк)"
+            f"🚨 <b>Health Watchdog</b>\n"
+            f"Воркер <b>{html.escape(name)}</b> не дышит более "
+            f"{HEARTBEAT_TTL_SECONDS // 60} мин — heartbeat истёк."
         )
         sent = await _maybe_alert_with_dedup(
             redis_client,
@@ -256,7 +258,7 @@ async def check_observer_runtime(
     if not is_stale:
         return False
 
-    text = f"🚨 Health Watchdog: observer:runtime устарел ({reason})"
+    text = f"🚨 <b>Health Watchdog</b>\nobserver:runtime устарел: {html.escape(reason)}."
     return await _maybe_alert_with_dedup(
         redis_client,
         dedup_key=dedup_key,

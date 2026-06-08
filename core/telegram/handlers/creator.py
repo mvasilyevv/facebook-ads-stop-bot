@@ -18,6 +18,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from core.tasks.queue import create_task
+from core.telegram import format as fmt
 from core.telegram.client import TelegramBotClient
 from core.telegram.handlers._send import send_text
 
@@ -73,8 +74,8 @@ async def handle_record_plan(
             chat_id=chat_id,
             text=(
                 "⚠️ Укажи название плана.\n"
-                "Использование: `/record_plan <название>`\n"
-                "Пример: `/record_plan Кампания Бразилия июль`"
+                f"Использование: {fmt.code('/record_plan <название>')}\n"
+                f"Пример: {fmt.code('/record_plan Кампания Бразилия июль')}"
             ),
             reply_to_message_id=message_id,
             message_thread_id=thread_id,
@@ -94,9 +95,9 @@ async def handle_record_plan(
         client=client,
         chat_id=chat_id,
         text=(
-            f"✅ Запись начата: *{plan_name}*\n\n"
+            f"✅ Запись начата: {fmt.b(plan_name)}\n\n"
             "Открой Ads Manager и выполни нужные шаги.\n"
-            "Когда закончишь — нажми `/stop_record`."
+            f"Когда закончишь — нажми {fmt.code('/stop_record')}."
         ),
         reply_to_message_id=message_id,
         message_thread_id=thread_id,
@@ -127,7 +128,7 @@ async def handle_stop_record(
         text=(
             "⏳ Запись останавливается…\n"
             "План будет сохранён в базе. Получишь уведомление когда готово.\n"
-            "После этого запусти план через `/plans`."
+            f"После этого запусти план через {fmt.code('/plans')}."
         ),
         reply_to_message_id=message_id,
         message_thread_id=thread_id,
@@ -152,26 +153,26 @@ async def handle_list_plans(
         await send_text(
             client=client,
             chat_id=chat_id,
-            text=("Нет активных планов.\n\nЗапиши новый: `/record_plan <название>`"),
+            text=f"Нет активных планов.\n\nЗапиши новый: {fmt.code('/record_plan <название>')}",
             message_thread_id=thread_id,
         )
         return
 
     # Собираем текст и inline-кнопки
-    lines: list[str] = ["*Активные планы:*\n"]
+    lines: list[str] = [f"🎬 {fmt.b('Активные планы')}", ""]
     keyboard_rows: list[list[dict[str, str]]] = []
 
     for i, plan in enumerate(plans, start=1):
         plan_id = str(plan["id"])
         name = str(plan["name"])
         created_at = str(plan["created_at"])[:16].replace("T", " ")  # YYYY-MM-DD HH:MM
-        lines.append(f"{i}. *{name}* — `{created_at}`")
+        lines.append(f"{i}. {fmt.b(name)} — {fmt.code(created_at)}")
         keyboard_rows.append([{"text": f"▶ {name}", "callback_data": f"plan:{plan_id}"}])
 
     text_body = "\n".join(lines)
     # Обрезаем если TG-лимит
     if len(text_body) > 3800:
-        text_body = text_body[:3800] + "\n_(список обрезан)_"
+        text_body = text_body[:3800] + "\n" + fmt.i("(список обрезан)")
 
     reply_markup = {"inline_keyboard": keyboard_rows}
 
@@ -180,7 +181,7 @@ async def handle_list_plans(
             chat_id=str(chat_id),
             text=text_body,
             message_thread_id=thread_id,
-            parse_mode="Markdown",
+            parse_mode="HTML",
             reply_markup=reply_markup,
         )
     except Exception:

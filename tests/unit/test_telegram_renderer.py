@@ -60,18 +60,18 @@ def test_render_stop_head() -> None:
     assert "СТОП" in text
 
 
-# Метрики одной строкой: расход с $, деп/рег/клики; без сырых англ. ключей
+# Метрики в выровненном блоке: расход с $, подписи Деп/Рег/Клики; без сырых англ. ключей
 def test_render_metrics_line() -> None:
     text = render_alert_text(_input(stage="stop"))
-    assert "$12.50" in text
-    assert "деп 0" in text
-    assert "рег 2" in text
-    assert "клики 50" in text
+    assert "$12.50" in text  # расход
+    assert "Деп" in text and "Рег" in text and "Клики" in text
+    assert "50" in text  # клики
+    # Сырые англоязычные ключи не протекают в карточку
     assert "spend:" not in text
     assert "clicks:" not in text
 
 
-# Причина с порогом из _hits: 'CPL $9.56 (стоп $3.00)' (точный свёрнутый порог)
+# Причина с порогом из _hits: 'CPL $9.56 ▸ порог $3.00 (×3.2)' — значение жирным, кратность
 def test_render_hit_with_threshold() -> None:
     inp = _input(
         stage="stop",
@@ -85,7 +85,10 @@ def test_render_hit_with_threshold() -> None:
         },
     )
     text = render_alert_text(inp)
-    assert "CPL $9.56 (стоп $3.00)" in text
+    assert "CPL" in text
+    assert "<b>$9.56</b>" in text  # факт выделен жирным
+    assert "порог $3.00" in text
+    assert "×3.2" in text  # кратность превышения (9.56 / 3.00)
 
 
 # _hits показываются только для своего stage (warning-hit не лезет в stop-алерт)
@@ -105,8 +108,8 @@ def test_render_hits_filtered_by_stage() -> None:
         },
     )
     text = render_alert_text(inp)
-    assert "CPR $6.00 (стоп $5.00)" in text
-    assert "CPC" not in text  # warning-hit отфильтрован
+    assert "CPR" in text and "<b>$6.00</b>" in text and "порог $5.00" in text
+    assert "CPC" not in text  # warning-hit отфильтрован (и нет cpc-метрики в гриде)
 
 
 # Процентное правило (spend/CPA) форматируется как % из _hits
@@ -125,7 +128,10 @@ def test_render_hit_percent_unit() -> None:
         },
     )
     text = render_alert_text(inp)
-    assert "Расход/CPA 56% (стоп 40%)" in text
+    assert "Расход/CPA" in text
+    assert "<b>56%</b>" in text
+    assert "порог 40%" in text
+    assert "×1.4" in text  # 56 / 40
 
 
 # Неизвестный код правила (без _hits) — fallback на сам код, не падает
@@ -161,6 +167,27 @@ def test_render_without_rule_codes() -> None:
 def test_render_without_offer_code() -> None:
     text = render_alert_text(_input(offer_code=None))
     assert "Aviator001" in text
+
+
+# Контекст содержит и кампанию, и адсет (дизамбигуация дублирующихся имён объявлений)
+def test_render_includes_campaign_and_adset() -> None:
+    text = render_alert_text(_input(campaign_name="CR2 | KE | MV", adset_name="EQ_KE broad"))
+    assert "CR2 | KE | MV" in text  # кампания
+    assert "EQ_KE broad" in text  # адсет
+    assert "адсет" in text  # явная метка адсета
+
+
+# Адсет с HTML-спецсимволами экранируется (не ломает parse_mode=HTML)
+def test_render_escapes_adset_name() -> None:
+    text = render_alert_text(_input(adset_name="A&B <broad>"))
+    assert "A&amp;B &lt;broad&gt;" in text
+    assert "<broad>" not in text
+
+
+# Адсет показывается даже без названия кампании (без маркера вложенности)
+def test_render_adset_without_campaign() -> None:
+    text = render_alert_text(_input(campaign_name="", adset_name="EQ_KE broad"))
+    assert "адсет: EQ_KE broad" in text
 
 
 # keyboard для WARNING — две кнопки (Отключить + Снуз)

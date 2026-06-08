@@ -116,7 +116,7 @@ async def test_scan_emits_alert_dispatcher_delivers_once(
     sent = tg_respx.sent_messages[0]
     assert sent["chat_id"] == "-1001234567890"
     assert sent.get("message_thread_id") == 22  # forum_stop_thread_id из fixture
-    assert "STOP" in sent["text"]
+    assert "СТОП" in sent["text"]
     keyboard = sent["reply_markup"]["inline_keyboard"][0]
     assert any(b["callback_data"].startswith("dis:") for b in keyboard)
 

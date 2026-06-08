@@ -36,7 +36,7 @@ def _payload_empty() -> DigestPayload:
 # Заголовок и дата окна формируются из window_start_utc
 def test_render_contains_header_and_date() -> None:
     text = render_digest(_payload_empty())
-    assert "Daily digest" in text
+    assert "Дайджест" in text
     assert "2026-05-26" in text
     assert "2026-05-27 09:00 UTC" in text
 
@@ -45,17 +45,17 @@ def test_render_contains_header_and_date() -> None:
 def test_render_empty_day_shows_idle_notice() -> None:
     text = render_digest(_payload_empty())
     assert "За окно не было активности" in text
-    assert "WARNING" in text and "STOP" in text  # счётчики всё равно показываем
+    assert "⚠️" in text and "🛑" in text  # счётчики алертов всё равно показываем
 
 
 # Нулевые счётчики форматируются как «0», а не «—»
 def test_render_zero_counters_show_zero() -> None:
     text = render_digest(_payload_empty())
-    # WARNING: 0 и STOP: 0 — оба нуля
-    assert "WARNING: <b>0</b>" in text
-    assert "STOP: <b>0</b>" in text
-    assert "успешно: <b>0</b>" in text
-    assert "с ошибкой: <b>0</b>" in text
+    # Алерты ⚠️ 0 · 🛑 0 и отключения ✅ 0 · ❌ 0 — все нули
+    assert "⚠️ <b>0</b>" in text
+    assert "🛑 <b>0</b>" in text
+    assert "✅ <b>0</b>" in text
+    assert "❌ <b>0</b>" in text
 
 
 # Обычный день: топ-5 объявлений отрисованы строкой каждое
@@ -99,22 +99,22 @@ def test_render_full_day_top_ads_listed() -> None:
     text = render_digest(payload)
 
     # Алерты
-    assert "WARNING: <b>12</b>" in text
-    assert "STOP: <b>3</b>" in text
-    # Топ
+    assert "⚠️ <b>12</b>" in text
+    assert "🛑 <b>3</b>" in text
+    # Топ-таблица: офферы, spend и метрики (CPC/CPL — отдельные колонки)
     assert "DRC_CR2" in text
     assert "KE_CR2" in text
     assert "$142.55" in text
     assert "$98.10" in text
-    assert "CPC 0.679" in text
-    assert "CPL 7.92" in text
+    assert "0.679" in text  # CPC в колонке
+    assert "7.92" in text  # CPL в колонке
     # Отключения
-    assert "успешно: <b>4</b>" in text
-    assert "с ошибкой: <b>1</b>" in text
+    assert "✅ <b>4</b>" in text
+    assert "❌ <b>1</b>" in text
     # Итоги
     assert "$1 234.50" in text
-    assert "активных офферов: <b>7</b>" in text
-    assert "активных ads (normal): <b>42</b>" in text
+    assert "офферов <b>7</b>" in text
+    assert "ads <b>42</b>" in text
     # «Тихий день» не должен появиться, активность есть
     assert "За окно не было активности" not in text
 
@@ -181,7 +181,7 @@ def test_render_no_offer_code() -> None:
     )
     text = render_digest(payload)
     assert "bare ad" in text
-    assert "CPL —" in text  # cost_per_lead=None → «—»
+    assert "—" in text  # cost_per_lead=None → «—» в колонке CPL
 
 
 # HTML-теги в названии объявления экранируются — не ломаем parse_mode=HTML

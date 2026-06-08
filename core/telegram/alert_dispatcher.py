@@ -132,6 +132,8 @@ async def dispatch_pending_alerts(
         return {"sent": 0, "skipped_duplicates": 0, "errors": 0, "skipped_no_chat": 1}
 
     chat_id = config.chat_id
+    # Маршрутизация по топикам супергруппы — по стадии алерта (топики создаёт
+    # /setup_topics; пока thread_id NULL — уходит в General).
     thread_id_by_stage = {
         "warning": config.forum_warning_thread_id,
         "stop": config.forum_stop_thread_id,

@@ -22,9 +22,14 @@ async def send_text(
     text: str,
     reply_to_message_id: int | None = None,
     message_thread_id: int | None = None,
-    parse_mode: str | None = "Markdown",
+    parse_mode: str | None = "HTML",
 ) -> None:
-    """Отправить текст в чат. Не падает на сетевых ошибках."""
+    """Отправить текст в чат. Не падает на сетевых ошибках.
+
+    Дефолт parse_mode=HTML — единый стиль «чистая карточка» для всех сообщений.
+    Для генерируемого markdown-контента (AI-ответ, отчёт /spy, каталог /tools)
+    передавай parse_mode='Markdown' явно на месте вызова.
+    """
     _ = reply_to_message_id  # клиент не поддерживает — оставлено для документации
     try:
         await client.send_message(

@@ -11,6 +11,7 @@ import logging
 
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from core.telegram import format as fmt
 from core.telegram.client import TelegramBotClient
 from core.telegram.handlers._send import send_text
 from core.telegram.service import (
@@ -49,7 +50,7 @@ async def handle_start(
                 chat_id=chat_id,
                 text=(
                     "Привет! Для подключения нужен код-приглашение.\n\n"
-                    "Спроси у владельца бота и пришли так: `/start <код>`."
+                    f"Спроси у владельца бота и пришли так: {fmt.code('/start <код>')}."
                 ),
                 reply_to_message_id=message_id,
             )
@@ -78,7 +79,8 @@ async def handle_start(
             client,
             chat_id=chat_id,
             text=(
-                f"Подключено как @{username or display_name or user_id}. Доступные команды: /help."
+                f"Подключено как @{fmt.esc(username or display_name or user_id)}. "
+                "Доступные команды: /help."
             ),
             reply_to_message_id=message_id,
         )
@@ -111,23 +113,39 @@ async def handle_help(
     message_id: int,
     thread_id: int | None,
 ) -> None:
-    """/help — список команд."""
-    txt = (
-        "*Доступные команды:*\n\n"
-        "/ask `<вопрос>` — AI-ассистент: статистика, поиск объявлений, черновики действий.\n\n"
-        "/tools — что умеет ассистент (полный список возможностей).\n\n"
-        "/pause `<offer>` — массовая ПАУЗА всех объявлений оффера (твои кампании).\n"
-        "/resume `<offer>` — массовое ВКЛЮЧЕНИЕ. Пример: `/pause GH_CR2`\n"
-        "  Приходит черновик с ✅ / ❌.\n\n"
-        "/autostart — автостарт кабинета по расписанию (вкл объявлений по дате + скан).\n"
-        "  Пример: `/autostart 06:00 22.05` — каждый день в 06:00 UTC.\n\n"
-        "/spy `<слот> <country>` — поиск конкурентов в Ad Library.\n"
-        "  Пример: `/spy chicken road 2 KE`\n\n"
-        "/record_plan `<название>` — начать запись плана создания кампании "
-        "(пишет в боевом браузере).\n"
-        "/stop_record — остановить запись и сохранить план.\n"
-        "/plans — список планов с кнопкой «Запустить».\n\n"
-        "/help — эта справка."
+    """/help — список команд (HTML, стиль «чистая карточка»)."""
+    txt = "\n".join(
+        [
+            f"📖 {fmt.b('Команды бота')}",
+            "",
+            fmt.b("🤖 AI-ассистент"),
+            f"{fmt.code('/ask <вопрос>')} — статистика, поиск объявлений, черновики действий.",
+            f"{fmt.code('/tools')} — что умеет ассистент.",
+            "",
+            fmt.b("⏯ Массовые действия"),
+            f"{fmt.code('/pause <offer>')} — пауза всех объявлений оффера.",
+            f"{fmt.code('/resume <offer>')} — включение. Приходит черновик с ✅ / ❌.",
+            f"Пример: {fmt.code('/pause GH_CR2')}",
+            "",
+            fmt.b("🗓 Кабинет"),
+            f"{fmt.code('/autostart')} — автостарт по расписанию (вкл по дате + скан).",
+            f"Пример: {fmt.code('/autostart 06:00 22.05')} — ежедневно в 06:00 UTC.",
+            "",
+            fmt.b("🔍 Разведка"),
+            f"{fmt.code('/spy <слот> <country>')} — конкуренты в Ad Library.",
+            f"Пример: {fmt.code('/spy chicken road 2 KE')}",
+            "",
+            fmt.b("🎬 Планы кампаний"),
+            f"{fmt.code('/record_plan <название>')} — начать запись (боевой браузер).",
+            f"{fmt.code('/stop_record')} — остановить и сохранить.",
+            f"{fmt.code('/plans')} — список с кнопкой «Запустить».",
+            "",
+            fmt.b("🧩 Топики супергруппы"),
+            f"{fmt.code('/setup_topics')} — создать топики и развести сообщения.",
+            f"{fmt.code('/topics')} — текущая раскладка.",
+            "",
+            f"{fmt.code('/help')} — эта справка.",
+        ]
     )
     await send_text(
         client,
@@ -149,12 +167,14 @@ async def handle_tools(
     # Lazy-import: не тянем ai_assistant при импорте onboarding.
     from core.ai_assistant.catalog import build_catalog_text
 
+    # Каталог генерируется в Markdown (*заголовки*, `примеры`) — шлём как Markdown.
     await send_text(
         client,
         chat_id=chat_id,
         text=build_catalog_text(),
         reply_to_message_id=message_id,
         message_thread_id=thread_id,
+        parse_mode="Markdown",
     )
 
 

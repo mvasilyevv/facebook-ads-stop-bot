@@ -43,6 +43,7 @@ from core.observer.adaptive_interval import (
 from core.observer.pipeline import CycleResult, process_scan_rows
 from core.observer.queries import load_observer_config, load_vision_auto_restart_flag
 from core.scanner.models import ScannedAdRow
+from core.telegram import format as fmt
 
 logger = logging.getLogger(__name__)
 
@@ -415,9 +416,11 @@ async def _maybe_alert_degraded(
         return False
 
     text_msg = (
-        f"🚨 Observer: {consecutive_failures} циклов подряд не удалось отсканировать кабинет, "
-        f"самовосстановление не помогло. Проверьте Vision-профиль/браузер "
-        f"(вкладку Ads Manager на :3030).\nПоследняя ошибка: {last_error or 'н/д'}"
+        f"🚨 {fmt.b('Observer — деградация')}\n"
+        f"{consecutive_failures} циклов подряд не удалось отсканировать кабинет, "
+        "самовосстановление не помогло.\n"
+        "Проверь Vision-профиль/браузер (вкладку Ads Manager на :3030).\n"
+        f"Последняя ошибка: {fmt.code(str(last_error or 'н/д'))}"
     )
     logger.error("ALERT (observer degraded): %s", text_msg)
     if tg_client is None:
@@ -438,7 +441,7 @@ async def _maybe_alert_degraded(
             chat_id=str(cfg.chat_id),
             text=text_msg,
             message_thread_id=getattr(cfg, "forum_ops_thread_id", None),
-            parse_mode=None,
+            parse_mode="HTML",
         )
         return True
     except Exception:

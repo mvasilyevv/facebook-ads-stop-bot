@@ -19,6 +19,7 @@ import re
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from core.scheduler.cabinet_autostart import read_autostart_config, write_autostart_config
+from core.telegram import format as fmt
 from core.telegram.client import TelegramBotClient
 from core.telegram.handlers._send import send_text
 
@@ -36,22 +37,25 @@ def _format_config(config: dict) -> str:
     dates = config.get("dates") or []
     dates_str = ", ".join(dates) if dates else "— (не заданы)"
     return (
-        f"*Автостарт кабинета*: {state}\n"
-        f"Время: `{hour:02d}:{minute:02d}` UTC (ежедневно)\n"
-        f"Даты кампаний: {dates_str}\n\n"
+        f"🗓 {fmt.b('Автостарт кабинета')}: {state}\n"
+        f"Время: {fmt.code(f'{hour:02d}:{minute:02d}')} UTC (ежедневно)\n"
+        f"Даты кампаний: {fmt.esc(dates_str)}\n\n"
         "Что делает: в указанное время включает объявления твоих кампаний с "
         "этими датами в названии и запускает скан."
     )
 
 
-_USAGE = (
-    "*Использование /autostart:*\n"
-    "`/autostart` — показать настройки.\n"
-    "`/autostart on` — включить.\n"
-    "`/autostart off` — выключить.\n"
-    "`/autostart HH:MM 22.05,25.05` — время (UTC) + даты кампаний.\n\n"
-    "Пример: `/autostart 06:00 22.05` — каждый день в 06:00 UTC включать "
-    "объявления кампаний с «22.05» в названии."
+_USAGE = "\n".join(
+    [
+        fmt.b("Использование /autostart"),
+        f"{fmt.code('/autostart')} — показать настройки.",
+        f"{fmt.code('/autostart on')} — включить.",
+        f"{fmt.code('/autostart off')} — выключить.",
+        f"{fmt.code('/autostart HH:MM 22.05,25.05')} — время (UTC) + даты кампаний.",
+        "",
+        f"Пример: {fmt.code('/autostart 06:00 22.05')} — каждый день в 06:00 UTC "
+        "включать объявления кампаний с «22.05» в названии.",
+    ]
 )
 
 

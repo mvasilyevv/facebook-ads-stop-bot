@@ -194,6 +194,19 @@ async def run_one_tick(
             text_html=text_html,
             recipients=recipients,
         )
+        # Дополнительно — в топик дайджеста супергруппы (если настроен). Ошибка
+        # отправки в группу не должна ронять рассылку по личкам.
+        digest_thread = getattr(cfg, "forum_digest_thread_id", None)
+        if cfg.chat_id is not None and digest_thread is not None:
+            try:
+                await tg_client.send_message(
+                    chat_id=str(cfg.chat_id),
+                    text=text_html,
+                    message_thread_id=digest_thread,
+                    parse_mode="HTML",
+                )
+            except Exception:
+                logger.warning("Не смог отправить digest в топик супергруппы", exc_info=True)
     finally:
         try:
             await tg_client.close()

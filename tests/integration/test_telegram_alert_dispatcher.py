@@ -134,7 +134,7 @@ async def test_dispatch_warning_sends_one_message(
     sent = tg_respx.sent_messages[0]
     assert sent["chat_id"] == "-1001234567890"
     assert sent.get("message_thread_id") == 11  # warning thread
-    assert "WARNING" in sent["text"]
+    assert "ПРЕДУПРЕЖДЕНИЕ" in sent["text"]
     assert sent.get("parse_mode") == "HTML"
     # Кнопки
     assert "reply_markup" in sent
@@ -173,7 +173,7 @@ async def test_dispatch_stop_uses_stop_thread(
 
     sent = tg_respx.sent_messages[0]
     assert sent.get("message_thread_id") == 22  # stop thread
-    assert "STOP" in sent["text"]
+    assert "СТОП" in sent["text"]
 
 
 # Сценарий: повторный dispatch того же scan_id → 0 новых отправок (idempotent через ref)

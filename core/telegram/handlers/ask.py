@@ -26,6 +26,7 @@ from core.ai_assistant.chat import (
 )
 from core.ai_assistant.client import AIUnavailableError
 from core.meta_api.queue import approve_draft_task, cancel_task, is_admin_recipient
+from core.telegram import format as fmt
 from core.telegram.client import TelegramBotClient
 from core.telegram.handlers._send import send_text
 
@@ -104,11 +105,16 @@ async def _handle_ask_background(
             created_by_chat_id=chat_id,
         )
     except ChatRateLimitedError as exc:
-        await send_text(client, chat_id=chat_id, text=f"⏱ {exc}", message_thread_id=thread_id)
+        await send_text(
+            client, chat_id=chat_id, text=f"⏱ {fmt.esc(exc)}", message_thread_id=thread_id
+        )
         return
     except AIUnavailableError as exc:
         await send_text(
-            client, chat_id=chat_id, text=f"AI недоступен: {exc}", message_thread_id=thread_id
+            client,
+            chat_id=chat_id,
+            text=f"AI недоступен: {fmt.esc(exc)}",
+            message_thread_id=thread_id,
         )
         return
     except Exception:
@@ -121,18 +127,21 @@ async def _handle_ask_background(
         )
         return
 
+    # Ответ AI — свободный markdown-текст от модели, шлём его как Markdown.
     answer = response.answer or "(пустой ответ)"
-    await send_text(client, chat_id=chat_id, text=answer, message_thread_id=thread_id)
+    await send_text(
+        client, chat_id=chat_id, text=answer, message_thread_id=thread_id, parse_mode="Markdown"
+    )
 
     drafts = extract_draft_task_ids(response.tool_calls)
     for task_id, _tool_name, result_text in drafts:
         try:
             await client.send_message(
                 chat_id=str(chat_id),
-                text=f"📝 Черновик #{task_id}\n{result_text}",
+                text=f"📝 {fmt.b(f'Черновик #{task_id}')}\n{fmt.esc(result_text)}",
                 message_thread_id=thread_id,
                 reply_markup=draft_inline_keyboard(task_id),
-                parse_mode=None,
+                parse_mode="HTML",
             )
         except Exception:
             logger.exception("send draft preview failed for task_id=%s", task_id)
@@ -158,9 +167,9 @@ async def handle_ask(
             client,
             chat_id=chat_id,
             text=(
-                "Использование: `/ask <вопрос>`\n"
-                "Пример: `/ask какие воркеры живы` "
-                "или `/ask покажи статистику по DRC_CR2 за last_7d`."
+                f"Использование: {fmt.code('/ask <вопрос>')}\n"
+                f"Пример: {fmt.code('/ask какие воркеры живы')} "
+                f"или {fmt.code('/ask покажи статистику по DRC_CR2 за last_7d')}."
             ),
             message_thread_id=thread_id,
         )
@@ -281,7 +290,7 @@ async def handle_draft_callback(
             await client.edit_message(
                 chat_id=str(chat_id),
                 message_id=int(message_id),
-                text=f"Черновик #{task_id}: {footer}",
+                text=f"📝 {fmt.b(f'Черновик #{task_id}')}: {footer}",
             )
         except Exception:
             logger.debug("edit_message under draft callback failed (некритично)")

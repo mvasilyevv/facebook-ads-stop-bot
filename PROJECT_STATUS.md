@@ -50,7 +50,7 @@
 |---|---|---|
 | observer_worker | scan → FSM → метрики → outbox → TG-алерты | ✅ (heartbeat R11; gate-фабрика пофикшена; scan-канал live; **owner-scoping** по тегу кампаний; **act_via_api** #39 — авто-стоп через Marketing API (дефолт), DOM-резерв по флагу) |
 | disable_worker / enable_worker | toggle ad через gRPC, retry backoff | ✅ (heartbeat R11; gate-фабрика пофикшена 2026-05-29) |
-| telegram_poller | `/start /help /spy /ask /tools /pause /resume /autostart` + inline | ✅ |
+| telegram_poller | `/start /help /spy /ask /tools /pause /resume /autostart /setup_topics /topics` + inline | ✅ |
 | meta_api_worker | Marketing API mutations (outbox) | ✅ (#39 — FSM-sync `ad_alert_state` после pause_ad/activate_ad/bulk) |
 | reconciler_worker | stuck tasks → retrying, stale drafts cancel | ✅ |
 | cleanup_worker | retention + партиции | ✅ |
