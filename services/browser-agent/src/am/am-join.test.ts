@@ -104,6 +104,37 @@ describe('buildScannedRow money-маппинг (H-8)', () => {
   });
 });
 
+describe('LPV omni/non-omni (BA-6)', () => {
+  it('omni_landing_page_view предпочитается (count+cost из omni)', () => {
+    const row = buildScannedRow(
+      amRow({
+        actions: { omni_landing_page_view: '30', landing_page_view: '12' },
+        costPerAction: { omni_landing_page_view: '0.40', landing_page_view: '1.00' },
+      }),
+    );
+    // omni выигрывает, без суммирования (не 42)
+    assert.equal(row.landing_page_views, 30);
+    assert.equal(row.cost_per_landing_page_view, '0.40');
+  });
+
+  it('fallback на non-omni landing_page_view, если omni нет', () => {
+    const row = buildScannedRow(
+      amRow({
+        actions: { landing_page_view: '12' },
+        costPerAction: { landing_page_view: '1.00' },
+      }),
+    );
+    assert.equal(row.landing_page_views, 12);
+    assert.equal(row.cost_per_landing_page_view, '1.00');
+  });
+
+  it('нет ни omni, ни non-omni → 0/null', () => {
+    const row = buildScannedRow(amRow({ actions: {}, costPerAction: {} }));
+    assert.equal(row.landing_page_views, 0);
+    assert.equal(row.cost_per_landing_page_view, null);
+  });
+});
+
 describe('mapEffectiveStatus (H-8)', () => {
   it('известные статусы → канон', () => {
     assert.equal(mapEffectiveStatus('ACTIVE'), 'ACTIVE');

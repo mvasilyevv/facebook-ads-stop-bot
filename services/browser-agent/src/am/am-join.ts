@@ -75,10 +75,20 @@ export function mapEffectiveStatus(status: string | undefined): string {
 const LEAD_TYPE = 'lead';
 const REGISTRATION_TYPE = 'omni_complete_registration';
 const LPV_TYPE = 'landing_page_view';
+const OMNI_LPV_TYPE = 'omni_landing_page_view';
+
+// LPV: Meta всё чаще отдаёт unified/omni-метрики. Фильтр (AM_ACTION_TYPES) запрашивает
+// ОБЕ формы; предпочитаем omni, fallback на non-omni — иначе при LPV под
+// omni_landing_page_view поле было бы 0 (BA-6). Count и cost берём из ОДНОГО ключа,
+// чтобы не рассинхронить (не суммируем — иначе двойной счёт).
+function lpvKey(actions: Record<string, string>): string {
+  return actions[OMNI_LPV_TYPE] !== undefined ? OMNI_LPV_TYPE : LPV_TYPE;
+}
 
 // Одна merged-строка am_tabular + meta -> ScannedAdRow.
 export function buildScannedRow(am: AmRow, meta: AmAdMeta = {}): ScannedAdRow {
   const a = am.atomic;
+  const lpvK = lpvKey(am.actions); // omni LPV предпочтительнее non-omni (BA-6)
   return {
     fb_ad_id: am.adId,
     campaign_id: meta.campaignId ?? '',
@@ -95,8 +105,8 @@ export function buildScannedRow(am: AmRow, meta: AmAdMeta = {}): ScannedAdRow {
     ctr: amNum(a['ctr']),
     outbound_clicks: amInt(am.outboundClicks),
     outbound_ctr: amNum(am.outboundCtr),
-    landing_page_views: amInt(am.actions[LPV_TYPE]),
-    cost_per_landing_page_view: amNum(am.costPerAction[LPV_TYPE]),
+    landing_page_views: amInt(am.actions[lpvK]),
+    cost_per_landing_page_view: amNum(am.costPerAction[lpvK]),
     cost_per_result: amNum(am.costPerResult),
     cpm: amNum(a['cpm']),
     frequency: amNum(a['frequency']),
