@@ -63,9 +63,11 @@ async def _run_one_heartbeat_cycle(heartbeat_fn, redis_client) -> None:
 
 
 # ====================== канонический набор имён EXPECTED ======================
-# Это единственный источник истины — копируется из health_watchdog.DEFAULT_EXPECTED_WORKERS.
-# При изменении EXPECTED_WORKERS в watchdog — обновлять здесь тоже.
-# disable/enable удалены: DOM-toggle воркеры выпилены, авто-стоп только через meta_api_worker.
+# Зеркало health_watchdog.DEFAULT_EXPECTED_WORKERS (11 воркеров). При изменении
+# EXPECTED_WORKERS в watchdog — обновлять здесь (test_expected_workers_match_watchdog_default
+# это проверяет). disable/enable удалены (DOM-toggle выпилен). H-13: список был устаревшим
+# (7), watchdog мониторит 11 (+cabinet_scheduler/digest_scheduler/creator/creator_recorder) —
+# их зависание money-критично/важно, должно ловиться. Имена сверены с WORKER_NAME воркеров.
 _EXPECTED_WORKERS = [
     "observer",
     "telegram_poller",
@@ -74,6 +76,10 @@ _EXPECTED_WORKERS = [
     "meta_api",
     "tracker_aggregator",
     "enable_reco",
+    "cabinet_scheduler",
+    "digest_scheduler",
+    "creator",
+    "creator_recorder",
 ]
 
 
