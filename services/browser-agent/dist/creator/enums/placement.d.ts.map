@@ -1,1 +1,0 @@
-{"version":3,"file":"placement.d.ts","sourceRoot":"","sources":["../../../src/creator/enums/placement.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,QAAQ,EAAE,MAAM,YAAY,CAAC;AAE3C,eAAO,MAAM,SAAS;;;CAGZ,CAAC;AACX,MAAM,MAAM,SAAS,GAAG,CAAC,OAAO,SAAS,CAAC,CAAC,MAAM,OAAO,SAAS,CAAC,CAAC;AAEnE,eAAO,MAAM,eAAe,EAAE,QAAQ,CAAC,SAAS,CAM/C,CAAC"}

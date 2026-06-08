@@ -55,6 +55,9 @@ node_modules/
 frontend/dist/
 frontend-mini/dist/
 packages/*/dist/
+# Артефакт TS-сборки browser-agent: пересобирается npm run build (run.sh:746 + оба
+# Dockerfile перед `node dist/index.js`). НЕ трекаем — иначе drift src≠артефакт (BA-5).
+services/browser-agent/dist/
 **/.tanstack/
 frontend/storybook-static/
 services/browser-agent/node_modules/

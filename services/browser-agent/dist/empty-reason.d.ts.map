@@ -1,1 +1,0 @@
-{"version":3,"file":"empty-reason.d.ts","sourceRoot":"","sources":["../src/empty-reason.ts"],"names":[],"mappings":"AAGA,MAAM,MAAM,WAAW,GAAG,iBAAiB,GAAG,qBAAqB,GAAG,eAAe,CAAC;AAEtF,MAAM,WAAW,gBAAgB;IAC/B,cAAc,EAAE,OAAO,CAAC;IACxB,cAAc,EAAE,OAAO,CAAC;IACxB,QAAQ,EAAE,MAAM,CAAC;CAClB;AAED,wBAAgB,iBAAiB,CAAC,KAAK,EAAE,gBAAgB,GAAG,WAAW,GAAG,IAAI,CAW7E"}
