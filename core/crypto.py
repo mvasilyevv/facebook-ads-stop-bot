@@ -133,7 +133,8 @@ async def rotate_encryption_key(old_key: str, new_key: str) -> int:
     """Перешифровывает все зашифрованные поля в БД при смене ключа.
 
     Сохраняет старый ключ в .encryption_key.old перед ротацией.
-    Затронутые поля: telegram_config.bot_token_encrypted, vision_config.x_token_encrypted.
+    Затронутые поля: telegram_config.bot_token_encrypted, vision_config.x_token_encrypted,
+    adsetpro_credentials.api_key_encrypted/postback_secret_encrypted (BYTEA — N4).
     Использует raw SQL через AsyncEngine — без ORM-моделей, чтобы не зависеть от
     конкретной версии схемы.
 
@@ -223,6 +224,53 @@ async def rotate_encryption_key(old_key: str, new_key: str) -> int:
                     logger.error(
                         "vision_config[%s]: не расшифровать старым ключом — пропуск",
                         row_id,
+                    )
+
+            # adsetpro_credentials.api_key_encrypted/postback_secret_encrypted (N4).
+            # BYTEA (не TEXT): хранит Fernet-токен как utf-8 байты (core/adset_pro/
+            # credentials.py). Без этого блока после ротации ключа AdSet.pro-credentials
+            # не расшифровывались бы → депозиты не доезжают → лишние авто-стопы.
+            rows = (
+                await conn.execute(
+                    text(
+                        "SELECT id, api_key_encrypted, postback_secret_encrypted "
+                        "FROM adsetpro_credentials"
+                    )
+                )
+            ).all()
+            for row_id, api_enc, secret_enc in rows:
+                updates: dict[str, bytes] = {}
+                for col, enc in (
+                    ("api_key_encrypted", api_enc),
+                    ("postback_secret_encrypted", secret_enc),
+                ):
+                    if not enc:
+                        continue
+                    try:
+                        # BYTEA → utf-8 строка Fernet-токена → decrypt старым → encrypt новым.
+                        token = bytes(enc).decode("utf-8")
+                        plaintext = fernet_old.decrypt(token.encode())
+                        updates[col] = fernet_new.encrypt(plaintext)
+                    except InvalidToken:
+                        logger.error(
+                            "adsetpro_credentials[%s].%s: не расшифровать старым ключом — пропуск",
+                            row_id,
+                            col,
+                        )
+                if updates:
+                    set_sql = ", ".join(f"{c} = :{c}" for c in updates)
+                    await conn.execute(
+                        text(
+                            f"UPDATE adsetpro_credentials SET {set_sql}, updated_at = NOW() "
+                            "WHERE id = :i"
+                        ),
+                        {**updates, "i": row_id},
+                    )
+                    rotated += len(updates)
+                    logger.info(
+                        "adsetpro_credentials[%s]: перешифровано %d поле(й)",
+                        row_id,
+                        len(updates),
                     )
     finally:
         await engine.dispose()

@@ -66,3 +66,27 @@ def test_verify_key_wrong_plaintext_raises() -> None:
     token = Fernet(key.encode()).encrypt(b"not_the_expected_plaintext").decode()
     with pytest.raises(RuntimeError, match="plaintext"):
         crypto.verify_encryption_key(key, token)
+
+
+# N4: BYTEA-перешифровка adsetpro credentials при ротации ключа — round-trip без БД.
+# Воспроизводит ровно операции блока adsetpro_credentials в rotate_encryption_key:
+# BYTEA(utf-8 токен) → decode → decrypt старым → encrypt новым → читается новым ключом.
+def test_adsetpro_bytea_reencrypt_roundtrip() -> None:
+    from cryptography.fernet import InvalidToken
+
+    fernet_old = Fernet(Fernet.generate_key())
+    fernet_new = Fernet(Fernet.generate_key())
+    api_key = "secret-mcp-key-123"
+
+    # Как credentials.py хранит в BYTEA: encrypt(api_key).encode("utf-8") == fernet.encrypt(bytes).
+    stored: bytes = fernet_old.encrypt(api_key.encode())
+
+    # Логика rotate-блока:
+    token = bytes(stored).decode("utf-8")
+    plaintext = fernet_old.decrypt(token.encode())
+    new_blob = fernet_new.encrypt(plaintext)
+
+    # Новым ключом расшифровывается обратно в api_key; старым — InvalidToken.
+    assert fernet_new.decrypt(new_blob).decode() == api_key
+    with pytest.raises(InvalidToken):
+        fernet_old.decrypt(new_blob)
