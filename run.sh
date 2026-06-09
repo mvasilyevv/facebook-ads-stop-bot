@@ -203,6 +203,27 @@ wait_for_postgres_ready() {
     return 1
 }
 
+wait_for_redis_ready() {
+    local timeout_seconds="${1:-30}"
+    local elapsed=0
+
+    # Воркеры (observer money-критичен: observer:runtime + scan-trigger через pubsub)
+    # стартуют сразу после API — без этого ожидания они ловят Redis ConnectionError,
+    # пока контейнер инициализируется. Симметрично wait_for_postgres_ready.
+    while [ "$elapsed" -lt "$timeout_seconds" ]; do
+        if [ "$(docker compose exec -T redis redis-cli ping 2>/dev/null | tr -d '[:space:]')" = "PONG" ]; then
+            return 0
+        fi
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+
+    echo -e "${RED}❌ Redis не ответил PONG за ${timeout_seconds} секунд${NC}"
+    docker compose ps redis || true
+    docker compose logs --tail=30 redis || true
+    return 1
+}
+
 check_process_started() {
     local pid="$1"
     local name="$2"
@@ -624,7 +645,7 @@ mkdir -p "$LOG_DIR"
 # ==========================================
 # 1. Docker — Postgres
 # ==========================================
-echo -e "${BLUE}🐳 Запускаю Docker контейнеры (Postgres)...${NC}"
+echo -e "${BLUE}🐳 Запускаю Docker контейнеры (Postgres + Redis)...${NC}"
 if ! docker compose up -d; then
     echo -e "${RED}❌ Docker Compose не смог запустить контейнеры${NC}"
     exit 1
@@ -634,6 +655,14 @@ fi
 echo -e "${BLUE}⏳ Жду готовности Postgres...${NC}"
 if wait_for_postgres_ready 45; then
     echo -e "${GREEN}✅ Postgres готов${NC}"
+else
+    exit 1
+fi
+
+# Ждём готовности Redis (воркеры стартуют сразу после API и зависят от него)
+echo -e "${BLUE}⏳ Жду готовности Redis...${NC}"
+if wait_for_redis_ready 30; then
+    echo -e "${GREEN}✅ Redis готов${NC}"
 else
     exit 1
 fi
