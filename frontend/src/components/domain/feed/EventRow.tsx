@@ -41,7 +41,8 @@ export function EventRow({ event, onClick }: EventRowProps) {
         "py-3.5 px-4 -mx-4",
         "border-b border-bg-3 last:border-b-0",
         "transition-colors duration-[120ms] hover:bg-bg-2",
-        "focus-visible:bg-bg-2 focus-visible:outline-none",
+        // F3 (WCAG 2.4.7): НЕ глушим outline — оставляем видимый фокус-индикатор.
+        "focus-visible:bg-bg-2",
         // Accent chevron при hover через group
         "group",
       )}

@@ -51,7 +51,8 @@ export function IncidentRow({ incident, onClick }: IncidentRowProps) {
         "w-full flex items-center gap-3 py-3.5 px-2 -mx-2",
         "border-b border-bg-3 last:border-b-0 text-left",
         "transition-colors duration-[120ms] hover:bg-bg-2",
-        "focus-visible:bg-bg-2 focus-visible:outline-none",
+        // F3 (WCAG 2.4.7): НЕ глушим outline — оставляем видимый фокус-индикатор.
+        "focus-visible:bg-bg-2",
       )}
     >
       {/* Stage badge */}

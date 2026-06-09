@@ -60,7 +60,7 @@ function FeedRow({
     <button
       type="button"
       onClick={onRow ? () => onRow(event) : undefined}
-      className={`grid w-full items-center gap-3 border-b border-bg-5 px-4 text-left last:border-b-0 transition-colors hover:bg-bg-2 focus-visible:bg-bg-2 focus-visible:outline-none ${
+      className={`grid w-full items-center gap-3 border-b border-bg-5 px-4 text-left last:border-b-0 transition-colors hover:bg-bg-2 focus-visible:bg-bg-2 ${
         fresh ? "feed-row-new" : ""
       }`}
       style={{ gridTemplateColumns: "auto auto 1fr auto auto", height: "var(--row-h)" }}

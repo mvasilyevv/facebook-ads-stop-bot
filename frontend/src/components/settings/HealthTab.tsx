@@ -37,7 +37,10 @@ function workerLabel(name: string): string {
     digest_scheduler: "Digest Scheduler",
     tracker_aggregator: "Tracker Aggregator",
     health_watchdog: "Health Watchdog",
-    enable_recommendation: "Enable Recommendation",
+    // Ключ — РЕАЛЬНОЕ heartbeat-имя воркера (enable_recommendation_worker пишет
+    // worker:heartbeat:enable_reco). Раньше был 'enable_recommendation' → не матчился,
+    // юзер видел сырое 'enable_reco' (F2).
+    enable_reco: "Enable Recommendation",
   };
   return labels[name] ?? name;
 }

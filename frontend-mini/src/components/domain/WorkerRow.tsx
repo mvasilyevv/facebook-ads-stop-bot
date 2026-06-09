@@ -14,7 +14,8 @@ const WORKER_LABELS: Record<string, string> = {
   observer: "Observer",
   telegram_poller: "Telegram Poller",
   meta_api: "Meta API Worker",
-  enable_recommendation_worker: "Enable Recommendation",
+  // Реальное heartbeat-имя — enable_reco (не enable_recommendation_worker) (F2).
+  enable_reco: "Enable Recommendation",
   health_watchdog: "Health Watchdog",
   cleanup: "Cleanup Worker",
   reconciler: "Reconciler",
