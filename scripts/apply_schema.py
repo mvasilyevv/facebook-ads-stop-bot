@@ -192,7 +192,55 @@ async def _seed_retention_policy(engine) -> None:
     logger.info("system_config.retention_policy записан.")
 
 
+async def _schema_state(engine) -> tuple[bool, bool]:
+    """Возвращает (есть ли alembic_version, есть ли fb_ads) тем же DATABASE_URL, что alembic."""
+    async with engine.connect() as conn:
+        has_alembic = (
+            await conn.scalar(text("SELECT to_regclass('public.alembic_version')"))
+        ) is not None
+        has_fb_ads = (await conn.scalar(text("SELECT to_regclass('public.fb_ads')"))) is not None
+    return has_alembic, has_fb_ads
+
+
+async def init_if_empty() -> int:
+    """Idempotent-bootstrap для run.sh: развернуть схему ТОЛЬКО если БД пустая, без DROP.
+
+    Печатает в stdout маркер BOOTSTRAP_RESULT=<created|exists_no_alembic|exists_with_alembic>,
+    по которому run.sh решает: stamp head (схема создана create_all, alembic_version нет)
+    или upgrade head (развёрнутая БД с историей миграций). Базовые 37 таблиц создаёт
+    Base.metadata.create_all — миграции лишь инкрементальный DDL поверх, поэтому на свежей
+    БД схема сразу в head-состоянии и нужен stamp, а не upgrade.
+    """
+    db_url = _get_database_url()
+    logger.info("DATABASE_URL: %s", db_url.split("@")[-1])
+    engine = create_async_engine(db_url, echo=False)
+    try:
+        has_alembic, has_fb_ads = await _schema_state(engine)
+        if not has_fb_ads:
+            logger.info("БД пустая — разворачиваю схему (create_all + партиции, без DROP)...")
+            # pgcrypto — паритет с --confirm-drop путём; на чистом кластере его ещё нет.
+            async with engine.begin() as conn:
+                await conn.execute(text("CREATE EXTENSION IF NOT EXISTS pgcrypto"))
+            await _create_all_tables(engine)
+            await _create_first_partitions(engine)
+            await _seed_retention_policy(engine)
+            print("BOOTSTRAP_RESULT=created")
+        elif not has_alembic:
+            logger.info("Схема развёрнута, alembic_version отсутствует — потребуется stamp.")
+            print("BOOTSTRAP_RESULT=exists_no_alembic")
+        else:
+            logger.info("Схема и alembic_version на месте — штатный upgrade.")
+            print("BOOTSTRAP_RESULT=exists_with_alembic")
+    finally:
+        await engine.dispose()
+    return 0
+
+
 async def main(argv: list[str]) -> int:
+    # Безопасный idempotent-режим для run.sh: без DROP, разворачивает только пустую БД.
+    if "--init-if-empty" in argv:
+        return await init_if_empty()
+
     if "--confirm-drop" not in argv:
         logger.error(
             "Для безопасности требуется флаг --confirm-drop. "

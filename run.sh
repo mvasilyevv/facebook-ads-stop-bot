@@ -669,27 +669,40 @@ fi
 # 3. Миграции БД
 # ==========================================
 echo -e "${BLUE}🗄️ Применяю миграции БД...${NC}"
-if .venv/bin/python -m alembic upgrade head 2>&1; then
-    :
-elif find migrations/versions -maxdepth 1 -name '*.py' ! -name '__init__.py' | grep -q .; then
-    echo -e "${RED}❌ Alembic завершился с ошибкой. Автосоздание таблиц отключено, чтобы не рассинхронизировать схему с миграциями.${NC}"
+# Шаг 1: на пустой БД развернуть схему (create_all + партиции, idempotent, без DROP).
+# Базовые 37 таблиц создают НЕ миграции, а Base.metadata.create_all — миграции лишь
+# инкрементальный DDL поверх. На развёрнутой БД вызов безвреден (только SELECT-детект).
+BOOTSTRAP_OUT="$(.venv/bin/python scripts/apply_schema.py --init-if-empty 2>&1)" || {
+    echo -e "${RED}❌ Не удалось инициализировать схему БД${NC}"
+    printf '%s\n' "$BOOTSTRAP_OUT"
     exit 1
-else
-    echo -e "${YELLOW}⚠️  Файлы миграций не найдены, пробую аварийное создание таблиц напрямую${NC}"
-    .venv/bin/python -c "
-import asyncio
-from core.db import get_engine
-from core.db.base import Base
-from core.models import *  # noqa: F401,F403
-async def init():
-    engine = get_engine()
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    await engine.dispose()
-    print('Таблицы созданы')
-asyncio.run(init())
-"
-fi
+}
+printf '%s\n' "$BOOTSTRAP_OUT"
+BOOTSTRAP_RESULT="$(printf '%s\n' "$BOOTSTRAP_OUT" | sed -n 's/.*BOOTSTRAP_RESULT=\([a-z_]*\).*/\1/p' | tail -1)"
+
+# Шаг 2: привести alembic_version к head.
+#   created / exists_no_alembic → схема уже в head-состоянии (create_all), но без
+#     alembic_version → stamp (upgrade здесь упал бы на ADD COLUMN существующих колонок).
+#   exists_with_alembic → штатный путь: накатить недостающие миграции.
+case "$BOOTSTRAP_RESULT" in
+    created|exists_no_alembic)
+        echo -e "${BLUE}   Помечаю миграции применёнными (alembic stamp head)...${NC}"
+        if ! .venv/bin/python -m alembic stamp head 2>&1; then
+            echo -e "${RED}❌ alembic stamp head завершился с ошибкой${NC}"
+            exit 1
+        fi
+        ;;
+    exists_with_alembic)
+        if ! .venv/bin/python -m alembic upgrade head 2>&1; then
+            echo -e "${RED}❌ Alembic завершился с ошибкой. Схема не приведена к head.${NC}"
+            exit 1
+        fi
+        ;;
+    *)
+        echo -e "${RED}❌ Не удалось определить состояние схемы БД (BOOTSTRAP_RESULT='${BOOTSTRAP_RESULT}')${NC}"
+        exit 1
+        ;;
+esac
 
 # ==========================================
 # 4. Запуск API
