@@ -2,11 +2,14 @@
 """Telegram poller — минимальный long-polling loop под новую схему БД.
 
 Запускается через run_telegram_poller.py. Перезагружает bot_token из БД
-каждые 30 сек (на случай ротации). Каждые ~3 сек делает heartbeat в telegram_config.
+периодически — ротация в UI подхватывается горячо. Если токена нет (свежая БД
+или он удалён) — poller НЕ падает, а уходит в idle-режим: продолжает heartbeat
+и ждёт, пока токен введут через Settings (UI), затем сам начинает polling.
+Это позволяет поднять API+UI без введённого токена (онбординг чистой инсталляции).
 
-MetaApiClient (если browser-agent доступен) поднимается один раз на процесс
-и пробрасывается в `/ask` — иначе meta READ_ONLY tools падают `ToolError`,
-LLM получает ошибку и формулирует ответ без них.
+MetaApiClient (если browser-agent доступен) поднимается лениво при первом
+появлении токена и пробрасывается в `/ask` — иначе meta READ_ONLY tools падают
+`ToolError`, LLM получает ошибку и формулирует ответ без них.
 """
 
 from __future__ import annotations
@@ -43,6 +46,8 @@ _HEARTBEAT_INTERVAL_SECONDS = 30
 _TOKEN_RELOAD_INTERVAL_SECONDS = 60
 _ERROR_RETRY_DELAY_SECONDS = 3
 _LONG_POLL_TIMEOUT_SECONDS = 25
+# Как часто в idle-режиме (нет токена) перечитывать config в ожидании ввода через UI.
+_IDLE_RELOAD_INTERVAL_SECONDS = 10
 
 
 async def heartbeat_loop(redis_client, stop: asyncio.Event) -> None:
@@ -171,46 +176,72 @@ async def main_loop(db_url: str) -> None:
     except Exception:
         logger.warning("telegram_poller: не удалось запустить heartbeat")
 
+    # offset инициализируется из БД один раз — при первом появлении токена.
+    offset: int = 0
+    offset_loaded = False
+    idle_logged = False
+
     try:
-        # Начальная загрузка config
-        cfg = await load_telegram_config(engine)
-        if not cfg:
-            logger.error(
-                "telegram_config пустой или токен не расшифровывается. "
-                "Восстанови через scripts/restore_secrets.py или UI."
-            )
-            return
-
-        last_token = cfg.bot_token
-        client = TelegramBotClient(bot_token=last_token, http_client=http_client)
-        offset = cfg.poller_offset
-        logger.info("Telegram poller запущен (offset=%d)", offset)
-
-        # Один MetaApiClient на процесс. Если browser-agent оффлайн — продолжаем без него.
-        meta_api_client = await _build_meta_api_client()
-
         while not shutdown_event.is_set():
             now = loop.time()
 
-            # Перезагрузка токена раз в N секунд (на случай ротации в UI)
-            if now - last_token_reload_at > _TOKEN_RELOAD_INTERVAL_SECONDS:
+            # Перечитываем config (источник bot_token). В idle (нет токена) — каждую
+            # итерацию (быстрый подхват ввода через UI); при активном client — раз в N сек.
+            if client is None or now - last_token_reload_at > _TOKEN_RELOAD_INTERVAL_SECONDS:
                 try:
                     cfg = await load_telegram_config(engine)
-                    if cfg and cfg.bot_token and cfg.bot_token != last_token:
-                        logger.info("Bot token изменился — пересоздаю client")
-                        last_token = cfg.bot_token
-                        client = TelegramBotClient(bot_token=last_token, http_client=http_client)
                 except Exception:
                     logger.exception("Не смог перечитать telegram_config")
+                    cfg = None
+
+                if cfg and cfg.bot_token:
+                    if cfg.bot_token != last_token:
+                        if client is None:
+                            logger.info("Telegram poller: токен получен — polling активен")
+                        else:
+                            logger.info("Bot token изменился — пересоздаю client")
+                        last_token = cfg.bot_token
+                        client = TelegramBotClient(bot_token=last_token, http_client=http_client)
+                        idle_logged = False
+                    # offset берём из БД только при самом первом подъёме client.
+                    if not offset_loaded:
+                        offset = cfg.poller_offset
+                        offset_loaded = True
+                        logger.info("Telegram poller запущен (offset=%d)", offset)
+                    # MetaApiClient поднимаем лениво при первом наличии токена.
+                    if meta_api_client is None:
+                        meta_api_client = await _build_meta_api_client()
+                else:
+                    # Токена нет (свежая БД / удалён в UI / не расшифровывается) — idle.
+                    if client is not None or not idle_logged:
+                        logger.warning(
+                            "telegram_config пуст или токен не расшифровывается — "
+                            "poller в режиме ожидания, введи токен в Settings (UI). "
+                            "Heartbeat продолжается, запуск не падает."
+                        )
+                        idle_logged = True
+                    client = None
+                    last_token = ""
                 last_token_reload_at = now
 
-            # Heartbeat
+            # Heartbeat в БД (poller_status в UI) — best-effort, в т.ч. в idle.
+            # Основной heartbeat для health_watchdog идёт отдельным Redis-таском.
             if now - last_heartbeat_at > _HEARTBEAT_INTERVAL_SECONDS:
                 try:
                     await touch_poller_heartbeat(engine)
                 except Exception:
                     logger.exception("touch_poller_heartbeat failed")
                 last_heartbeat_at = now
+
+            # Нет токена → ждём (прерываемо shutdown'ом) и пробуем снова. НЕ выходим.
+            if client is None:
+                try:
+                    await asyncio.wait_for(
+                        shutdown_event.wait(), timeout=_IDLE_RELOAD_INTERVAL_SECONDS
+                    )
+                except asyncio.TimeoutError:
+                    pass
+                continue
 
             # Long poll
             try:
