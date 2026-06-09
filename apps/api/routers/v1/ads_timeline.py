@@ -131,9 +131,18 @@ async def get_ad_timeline(
         # 4. Задачи из task_queue (GIN-индекс по payload)
         tasks: list[TaskRow] = []
         if include_tasks:
+            # A3: авто-стоп через Marketing API кладёт ad в payload->>'target_id'
+            # (meta_api_mutation pause_ad/activate_ad), а legacy disable/enable — в
+            # payload->>'fb_ad_id'. Матчим ОБА, иначе timeline не показывал авто-стопы.
+            # Для campaign/adset-мутаций target_id ≠ этому ad_id → ложных совпадений нет.
             tasks_stmt = (
                 select(TaskQueue)
-                .where(text("payload->>'fb_ad_id' = :fb_ad_id").bindparams(fb_ad_id=fb_ad_id))
+                .where(
+                    text(
+                        "(payload->>'fb_ad_id' = :fb_ad_id "
+                        "OR payload->>'target_id' = :fb_ad_id)"
+                    ).bindparams(fb_ad_id=fb_ad_id)
+                )
                 .where(TaskQueue.created_at >= from_dt)
                 .where(TaskQueue.created_at <= to_dt)
                 .order_by(TaskQueue.created_at.asc())
