@@ -389,7 +389,7 @@ In `design_files/`:
 - `ios-frame.jsx`, `tweaks-panel.jsx` — **scaffolding only**, do not port.
 
 **Reference:**
-- `frontend_design_spec.md` — the original full design specification (v1.0). This README
+- `../frontend_design.md` — the full design specification (v1.0). This README
   supersedes it where they differ, but the spec has additional per-page detail (e.g. the
   6-threshold offer rule editor, the full FSM, worker/health specifics).
 

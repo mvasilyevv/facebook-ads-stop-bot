@@ -14,7 +14,7 @@
 
 После настройки в Claude Desktop появится:
 
-- 16 **tools**:
+- 15 **tools**:
   - `get_active_offers`, `get_recent_alerts`, `get_worker_health`,
     `get_disable_tasks_status` — read-only из БД/Redis
   - `find_ads`, `get_insights`, `get_account_health`, `get_offer_performance`,

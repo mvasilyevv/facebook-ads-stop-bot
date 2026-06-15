@@ -2,7 +2,7 @@
 
 Бот для real-time мониторинга и автоматической остановки объявлений Facebook
 Ads по стоп-правилам. Подключается к Ads Manager через anti-detect браузер
-(Vision + Playwright + Node.js gRPC), оценивает 6 стоп-правил, шлёт алерты
+(Vision + Playwright + Node.js gRPC), оценивает 7 стоп-правил, шлёт алерты
 в Telegram, отключает объявления и подключает Marketing API для latency-
 tolerant операций (создание кампаний, изменение бюджетов).
 
@@ -11,8 +11,8 @@ tolerant операций (создание кампаний, изменение
 ## Возможности
 
 - **Real-time мониторинг** Ads Manager через Vision-сессию (интервал по умолчанию 90 с).
-- **6 стоп-правил** с двухуровневой WARNING (80% от порога) и STOP логикой:
-  CPC / CPL / CPR / реги без депов / расход без депа / расход с депом.
+- **7 стоп-правил** с двухуровневой WARNING (80% от порога) и STOP логикой:
+  CPC / CPL / CPR / реги без депов / расход без депа / расход с депом / frequency-anomaly (opt-in).
 - **Telegram-бот**: алерты с inline-кнопками `Отключить` / `Отложить`, команды `/start`, `/help`, `/spy <slot> <country>` (Ad Library).
 - **Автоматическое отключение** через очередь `task_queue` (outbox-pattern) с retry exponential backoff.
 - **Marketing API** через Vision-сессию (`page.evaluate(fetch)`) для mutations: pause/activate/duplicate campaign, set budget, bulk operations, create campaign.
@@ -41,7 +41,7 @@ tolerant операций (создание кампаний, изменение
                                   35 таблиц, 7 partitioned
 ```
 
-14 Python воркеров + FastAPI + Node.js gRPC + 2 фронта. Полный список —
+12 Python воркеров + FastAPI + Node.js gRPC + 2 фронта. Полный список —
 в [CLAUDE.md](CLAUDE.md) § Architecture.
 
 ---

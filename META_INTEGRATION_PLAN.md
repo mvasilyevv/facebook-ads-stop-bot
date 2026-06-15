@@ -4,7 +4,7 @@
 > **Версия:** 4 (полностью переработана после реального эксперимента и deep-research архитектуры Dolphin/FBTool)
 > **Статус:** master source of truth
 > **Что заменяет:** все предыдущие версии плана + удалённые `META_MCP_INTEGRATION_BRIEF.md` и `META_MCP_RESEARCH.md`
-> **Референсы:** `research_artifacts/agent1-5_*.md` + сессия с deep-research extraction практик
+> **Референсы:** deep-research extraction практик (ресёрч-выхлоп архивирован)
 
 ---
 
@@ -722,7 +722,6 @@ Webhook consumer **не нужен** — webhooks недоступны.
 
 ## Приложение: связанные документы
 
-- `research_artifacts/agent1-5_*.md` — глубокий ресёрч (частично устарел, но как референс)
 - `CLAUDE.md` — общие правила и состояние кодовой базы
 - Ключевые источники по архитектуре session-tunneled requests:
   - [gist dvygolov createautorules.js](https://gist.github.com/dvygolov/c2077f391bd15ba2f75d7496afb47a67) — реальный код вызова Marketing API из browser context

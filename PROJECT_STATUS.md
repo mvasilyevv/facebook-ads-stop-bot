@@ -6,7 +6,7 @@
 
 ## TL;DR
 
-- **Backend — production-ready.** 14 воркеров + FastAPI (61 endpoint) + Node.js gRPC. Прошёл 5 аудитов (security ×2, test-coverage, code-quality, test-quality) + cleanup-раунды. Все CRIT/HIGH закрыты.
+- **Backend — production-ready.** 12 воркеров + FastAPI (61 endpoint) + Node.js gRPC. Прошёл 5 аудитов (security ×2, test-coverage, code-quality, test-quality) + cleanup-раунды. Все CRIT/HIGH закрыты.
 - **Frontend — готов.** Новый `frontend/` (TS + Vite + Tailwind 4 + TanStack): 6 страниц, русский UI, проверены в браузере. Старый `frontend-legacy/` удалён (мёртвый код).
 - **БД** переименована `fb_stop_bot_v2 → fb_stop_bot` (данные сохранены).
 - **Проверено вживую (2026-05-29):** Marketing API latency (BL-7, insights 2–4с / list ~1с); **Marketing API mutations enable/disable 24/24 объявлений** на живом кабинете (Этап 5 валидирован, act через API — 48 операций 0 промахов); observer DOM scan-канал (парсинг + валидация колонок). **Подтверждено владельцем:** стоп ad-level (кампания — отдельный рубильник владельца); стоп-правила (`docs/stop_rules.md`); CPA по гео (KE_CR2 $8 / GH_CR2 $3). **Починены 2 латентных prod-бага** gate-фабрик observer/disable/enable (+4 теста).
@@ -45,11 +45,11 @@
 
 ## 2. Функциональные блоки — что делает, работает ли
 
-### Python-воркеры (13) — `apps/*`
+### Python-воркеры (12 активных) — `apps/*`
 | Блок | Назначение | Состояние |
 |---|---|---|
 | observer_worker | scan → FSM → метрики → outbox → TG-алерты | ✅ (heartbeat R11; gate-фабрика пофикшена; scan-канал live; **owner-scoping** по тегу кампаний; **act_via_api** #39 — авто-стоп через Marketing API (дефолт), DOM-резерв по флагу) |
-| disable_worker / enable_worker | toggle ad через gRPC, retry backoff | ✅ (heartbeat R11; gate-фабрика пофикшена 2026-05-29) |
+| ~~disable_worker / enable_worker~~ | DOM-toggle канал **удалён** — отключение/включение идёт через `meta_api_worker` (Marketing API `pause_ad`/`activate_ad`, точно по ad_id) | удалён |
 | telegram_poller | `/start /help /spy /ask /tools /pause /resume /autostart /setup_topics /topics` + inline | ✅ |
 | meta_api_worker | Marketing API mutations (outbox) | ✅ (#39 — FSM-sync `ad_alert_state` после pause_ad/activate_ad/bulk) |
 | reconciler_worker | stuck tasks → retrying, stale drafts cancel | ✅ |
@@ -130,7 +130,6 @@ observer (FSM/pipeline/writers/runtime), rules (7 стоп-правил, frequen
 | `META_INTEGRATION_PLAN.md` | Master-план этапов 0-9 |
 | `CLAUDE.md` | Архитектура, design-rules, история раундов |
 | `DB_REDESIGN.md` | Схема БД |
-| `docs/stop_rules.md` | Стоп-правила: 6 правил + свёртка 80/80 + гео-CPA (KE_CR2 $8 / GH_CR2 $3) + owner-тег (подтверждено 2026-05-29) |
+| `docs/stop_rules.md` | Стоп-правила: 7 правил (вкл. frequency-anomaly opt-in) + свёртка 80/80 + гео-CPA (KE_CR2 $8 / GH_CR2 $3) + owner-тег (подтверждено 2026-05-29) |
 | `docs/frontend_design.md` + `docs/frontend_mockups/` | Дизайн нового фронта |
-| `docs/archive/*audit*.md` | Завершённые аудиты (Round 9/10/11 закрыли) — архив |
 | `docs/playbooks/` | Операционные playbooks (залив/креативы/PWA/инциденты) |
