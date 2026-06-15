@@ -1,12 +1,16 @@
 # PWA GH/Chicken Road — контент-пакет (PWA-1)
 
 **Оффер:** GH_CR · **Игра:** Chicken Road · **Гео:** Ghana
-**Формат:** Google Play-листинг PWA (стиль InOut Games / чистый evergreen)
-**Стиль:** InOut-вайб — лаконично, без эмодзи-перегруза, упор на MoMo-trust и speed
-**Сборка:** контент готов → байер вбивает в PWA-билдер AdSet.pro. Ассеты (иконка / feature / скриншоты) — генерит syntx отдельно (см. план ассетов ниже).
+**Архетип:** **InOut Games** — чистый/структурный листинг, инди-вайб, без эмодзи-перегруза, упор на MoMo-trust и конкретные кэшауты.
+**Образец (копируем подход):** реальный листинг InOut Games «Chicken Road» — `~/Downloads/scan_GH_Android (1)/` (текст + скриншоты + аватары).
+**Сборка:** контент готов → байер вбивает в PWA-билдер AdSet.pro. Картинки — гибрид (реальные ассеты InOut + докрутка), см. §6.
 
-> **PWA = EVERGREEN, БЕЗ БОНУСА.** Суммы/welcome bonus/free spins зашивать НЕЛЬЗЯ.
-> Бонус живёт только в FB-креативах. PWA — про игру + MoMo-trust.
+> **PWA = EVERGREEN, БЕЗ БОНУСА** (правило подтверждено 15.06).
+> В **описании и What's New** НЕ зашивать welcome bonus / free spins / deposit bonus.
+> Суммы **выигрышей в отзывах** (депозит→кэшаут) — это соц-пруф, не бонус → оставляем (как в образце).
+> Бонус живёт только в FB-креативах.
+
+> **Сплит-тест:** PWA-1 (этот, архетип InOut — чистый) против [PWA-2](CR2_pwa01.md) (архетип 1xBet — брендовый хайп). Тестируем ПОДАЧУ, не цвет.
 
 ---
 
@@ -18,21 +22,21 @@
 | **Разработчик** | `InOut Games` |
 | **Категория** | Gambling |
 | **Рейтинг** | `4.9 ★` |
-| **Отзывов** | `900` |
+| **Отзивов** | `1K` |
 | **Installs** | `100K+` |
 | **Size** | `12 MB` |
 | **Age** | `18+` |
 | **Ads** | No ads, no in-app purchases |
 
-*Пропорция: ~900 отзывов / 100K installs ≈ 0.9% — правдоподобно (канон ~0.1–1%).*
+*Метаданные = как у образца InOut (No ads / 100K+ / 12 MB / 4.9) — копируем рабочее.*
 
 ---
 
-## 2. What's New (3 пункта)
+## 2. What's New (3 пункта — деловой тон, без бонуса)
 
-- Smoother gameplay engine — no lag even on 2G networks across Ghana.
-- Faster cash out to MTN MoMo and Telecel Cash — money arrives instantly.
-- Minor bug fixes and performance improvements.
+- Enhanced multiplier engine — bigger runs and bigger GHS cashouts.
+- Smoother transactions — faster MoMo deposits and instant withdrawals.
+- Bug fixes and a speed boost — no lag on any Ghanaian network.
 
 ---
 
@@ -48,70 +52,72 @@
 
 > Place your bet, watch the multiplier climb, and cash out to your MTN MoMo before the chicken crashes. Ghana's most trusted crash game.
 
-**Full (evergreen):**
+**Full (evergreen, структура образца InOut — без бонуса):**
 
-> Chicken Road is Ghana's #1 crash game for players who like to take a calculated risk and grow their GHS fast.
+> Chicken Road is not just another game — it's Ghana's #1 destination for players who know how to take a calculated risk and turn their GHS into real cash. Whether you're relaxing after a long day or chasing a quick thrill on your break, Chicken Road lets you multiply your money in seconds.
 >
-> How it works is simple. You place your bet, the chicken starts running across the grills, and the multiplier keeps climbing — 2x, 5x, 20x and beyond. Cash out before the chicken crashes and the winnings are yours. Hold on too long and you lose the round. When to pull out is your call.
+> How it works: the thrill of the chase
+> Place your bet, watch the chicken run across the grills, and see the multiplier climb — 1.5x, 5x, 20x or higher. But here's the catch: you have to hit CASH OUT before the chicken crashes. Got the nerves of steel to hold for the big payout, or will you play it safe? The strategy is 100% in your hands.
 >
-> Why players in Ghana keep coming back to Chicken Road:
+> Why Ghanaian players choose Chicken Road:
+> 1) Turn small bets into big wins — you don't need a huge bankroll. Start with as little as 5 or 10 GHS and watch it climb. One good run is all it takes.
+> 2) Lightning-fast payouts — withdraw straight to your MTN MoMo, Telecel Cash or AirtelTigo wallet. No delays, no excuses.
+> 3) Built for Ghana — smooth on any local network, from Accra to Tamale. No freezing, no lag, just clean action.
+> 4) Play anytime, anywhere — quick rounds that fit your day, right from your phone.
+> 5) Trusted and secure — thousands of Ghanaians cash out here every day. Real payouts, every time.
 >
-> 1) You can start small. No big bankroll needed, the minimum stake is low enough for anyone to try a few rounds.
-> 2) Payouts go straight to your MTN MoMo, Telecel Cash or AirtelTigo wallet, usually within a minute.
-> 3) It runs smooth on Ghanaian networks, even when your signal is not the best.
-> 4) Thousands of players from Accra to Kumasi cash out here every day.
->
-> Download it, play a few rounds, and see if you can cash out before the crash.
+> The clock is ticking and the multiplier is rising. Don't just hear about other people cashing out — be the one doing it. Download Chicken Road, place your bet, and see what you're made of. Are you cashing out or crashing out?
 
 ---
 
-## 5. Отзывы (15 шт. — спокойный InOut-стиль, MoMo-trust, ганские имена)
+## 5. Отзывы (15 шт. — архетип InOut: суммы депозит→выигрыш, ответ дева почти на каждый)
 
-> Стиль: НЕ глянцевый. Микс длин (от одной фразы до 3–4 предложений), часть с мягкой
-> критикой («…but…»), Pidgin/эмодзи дозированно, реалистичные мелочи (lowercase-начала, опечатки).
-> Даты вразброс — Play сортирует по релевантности, не по дате. Откалибровано по живым Google Play
-> отзывам ганско-нигерийской денежной аудитории (Opay/PalmPay/Moniepoint/Kuda).
-> Ответы разработчика — **НЕ на каждый** (3 из 15): только на критику/нейтрал, коротко и по делу.
-> Сплошные ответы = синтетика.
+> Стиль образца InOut: ганские имена, конкретные суммы «вложил X → снял Y», деловой-бодрый тон,
+> эмодзи умеренно, **ответ InOut Games почти на каждый отзыв** (короткий, по имени) — это рабочий
+> паттерн гемблинг-PWA (не «синтетика»: реальный образец отвечает на все). 2×4★ для правдоподобных 4.9.
 
 | # | Ник | ★ | Дата | Текст отзыва | Ответ InOut Games |
 |---|---|---|---|---|---|
-| 1 | Kwame Mensah | ★★★★★ | May 12, 2026 | Cash out enters my MTN MoMo sharp sharp, no delay. Been my main game for months now. | — |
-| 2 | Daniel Boadu | ★★★★ | Apr 3, 2026 | Payouts are real but my first withdrawal took like 3 minutes, not instant the way they say. After that it was fast though. Just be patient. | First withdrawal runs a quick verification, Daniel — after that it lands instantly. Glad you stuck with it. |
-| 3 | Kojo A. | ★★★★★ | May 28, 2026 | Correct game 👍 | — |
-| 4 | Ama Boateng | ★★★★★ | Feb 19, 2026 | I started with 5 cedis just to test am. Cashed out to MoMo twice that week. No wahala. | — |
-| 5 | Yaw Darko | ★★★★★ | Jun 7, 2026 | The multiplier climbing while you decide when to pull out, my heart no fit take am sometimes 😅 But time it right and the feeling is mad. Runs smooth on my network. | — |
-| 6 | Nana Kweku | ★★★★★ | Jan 14, 2026 | I dey play from Kumasi. Money enters my wallet same time, no story. This one pay for real. | — |
-| 7 | Gifty Mensah | ★★★★ | Mar 29, 2026 | Sometimes the chicken crashes early and you lose, that na the risk. But it's fair, I cashed out more than I lost this month. Wish the minimum stake was lower sef. | Honest review, Gifty — appreciate it. Cash out early and steady, it adds up. |
-| 8 | Kofi Appiah | ★★★★★ | May 22, 2026 | Was sceptical, my brother showed me his MoMo receipt so I downloaded same day. Play small small and don't be greedy. | — |
-| 9 | Abena Adu | ★★★★★ | Dec 11, 2025 | Simple to understand, no ads disturbing you. Telecel Cash confirmed in about a minute. | — |
-| 10 | Emmanuel Tetteh | ★★★★★ | Jun 2, 2026 | no stress. deposit easy, cash out instant. MTN MoMo works every time for me. | — |
-| 11 | Adwoa | ★★★★★ | Apr 26, 2026 | clean app, tried 3 crash games and this one is the most stable on slow data. just play and cash out. | — |
-| 12 | Prince Asare | ★★★★★ | May 31, 2026 | Hit 18x this morning and cashed out before it crashed 🔥 nerves of steel honestly. fun one. | — |
-| 13 | Selorm Agbeko | ★★★★★ | Mar 17, 2026 | Ewe boy from Ho 😄 game runs fine on MTN data, payout no wahala. Recommended. | — |
-| 14 | Akosua Owusu | ★★★★★ | May 8, 2026 | Withdrawal to AirtelTigo was instant the times I tried. I play after work to cool down small. | — |
-| 15 | Mensah K. | ★★★★★ | Jun 21, 2026 | this game na correct one, cash out dey fast. my only advice, set a limit for yourself and stop when you reach am. | Wise words. Play responsibly — set your limit and enjoy. |
+| 1 | Kwame Mensah | ★★★★★ | Jun 10, 2026 | Chicken Road is a real money-maker. Deposited 50 GHS and cashed out 800 GHS straight to my MTN MoMo in seconds 💸 | That's what we love to see, Kwame! 🚀 Keep cashing out. |
+| 2 | Kojo Osei | ★★★★★ | Jun 9, 2026 | Best crash game I've played in Ghana. Smooth, and the payouts are 100% real. | Thank you, Kojo! Reliable payouts are our priority. |
+| 3 | Kofi Appiah | ★★★★★ | Jun 8, 2026 | Turned my last 20 GHS into 350 GHS today. Telecel Cash withdrawal was instant 🔥 | Incredible run, Kofi! Small start, big cashout. |
+| 4 | Kwaku Owusu | ★★★★★ | Jun 7, 2026 | Was doubting at first but this game paid for my weekend. 1,200 GHS dropped into my AirtelTigo. | We always pay our winners, Kwaku! Enjoy. |
+| 5 | Yaw Boateng | ★★★★★ | Jun 6, 2026 | The multipliers are crazy. Hit a 20x run and made serious cash today 🤯 | Boom! 20x is a fantastic run, Yaw. |
+| 6 | Ama Boaten | ★★★★★ | Jun 5, 2026 | cashed out 3 times today, MTN MoMo each time, no wahala. simple to use. | Love the consistency, Ama! 🙌 |
+| 7 | Kwabena Frimpong | ★★★★ | Jun 4, 2026 | Good game and payouts are real. Just learn to cash out early and don't get greedy waiting for 50x. | Wise advice, Kwabena! Discipline wins. |
+| 8 | Akosua Owusu | ★★★★★ | Jun 3, 2026 | deposited 30 GHS, walked away with 410 GHS. instant Telecel. honestly impressed. | Fantastic, Akosua! That's the Chicken Road way. |
+| 9 | Emmanuel Tetteh | ★★★★★ | Jun 2, 2026 | No stress. Deposit is easy and cash out is instant. MTN MoMo works every time. | Reliability is everything, Emmanuel! 🙏 |
+| 10 | Adwoa Sarpong | ★★★★★ | Jun 1, 2026 | clean app, no ads. won 600 GHS last night and cashed straight to MoMo. | Clean and fast by design! Thanks, Adwoa. |
+| 11 | Prince Asare | ★★★★★ | May 31, 2026 | Hit 18x this morning before it crashed. MoMo credited in under a minute 🔥 | 18x, nerves of steel, Prince! 🐔 |
+| 12 | Nana Kweku | ★★★★★ | May 29, 2026 | I dey play from Kumasi, money enters same time. This one pay for real. | Kumasi cashing out! Thank you, Nana. |
+| 13 | Gifty Mensah | ★★★★ | May 27, 2026 | Genuine game. Sometimes you lose a round, that na the risk, but I'm up overall this week. | Honest and fair, Gifty! Cash out steady. |
+| 14 | Daniel Boadu | ★★★★★ | May 24, 2026 | Fast app, no lag on MTN data. Cashed out twice today. Correct game 👍 | — |
+| 15 | Samuel Adom | ★★★★★ | May 20, 2026 | Started with 40 GHS, cashed out 520 to MTN MoMo. Didn't expect it to actually pay. | It pays, Samuel! Welcome aboard 🚀 |
 
 ---
 
-## 6. Ассеты — план для syntx (генерировать отдельно)
+## 6. Картинки — гибрид (реальные ассеты InOut + докрутка)
 
-| Ассет | Формат | Описание |
+Архетип InOut = **тёмный геймплейный UI + чистая иконка**. Источник — реальные ассеты `~/Downloads/scan_GH_Android (1)/`.
+
+| Ассет | Формат | Источник / действие |
 |---|---|---|
-| ICON | 1:1 | Chicken на тёмном фоне, динамичная поза (бег), огненные грили по краям — без текста |
-| FEATURE | 3:2 | «CHICKEN ROAD» + «Cash Out to MTN MoMo» + курица + множитель x — без бонуса |
-| SCREEN1 | 2:3 | Геймплей: курица бежит по грилям, множитель растёт (напр. 4.2x), кнопка CASH OUT |
-| SCREEN2 | 2:3 | MoMo-вывод: «Withdrawal successful» + MTN MoMo плашка + «GHS received» |
-| SCREEN3 | 2:3 | Lobby/история: таблица последних раундов с множителями, баланс GHS |
+| ICON | 1:1 500×500 | Реальная иконка `6a283a2829a7f32ed48f30f1.jpg` (курица + CHICKEN ROAD, монеты, чёрный фон) → уникализировать (лёгкая правка фона/кадра). |
+| FEATURE | 3:2 750×500 | Лого-кадр `0x720_1.png` (CHICKEN ROAD + курица + огонь) → добавить «Cash Out to MTN MoMo», подогнать кроп. |
+| SCREEN1 | 2:3 500×888 | Реальный геймплей `0x720.png` (тёмный UI, мультипликаторы в яйцах, CASH OUT) → переиспользовать, чистка/уникализация. |
+| SCREEN2 | 2:3 500×888 | `0x720_2.png` (WIN-попап +GHS) ИЛИ docгенерить экран вывода «Withdrawal Successful + MTN MoMo». |
+| SCREEN3 | 2:3 500×888 | Догенерить историю раундов (тёмный UI, WIN/CRASHED) в стиле SCREEN1 — реального скрина истории в папке нет. |
 
-Стиль: Android/Tier-3, full-bleed тёмный экран, единая цветовая схема (тёмная/авто), БЕЗ бонуса/сумм депозита.
+> Уже сгенерены ранее (тёмный архетип, валидны как fallback/вариант): `data/syntx_out/GH_CR_pwa/CR_*_final.jpg`.
+> Приоритет — **реальные ассеты InOut** (копируем рабочее), генерация только где реального нет.
 
 ---
 
 ## 7. Служебные заметки
 
-- PWA-1 = чистый/спокойный стиль (InOut-вайб). Противопоставление PWA-2 (CR2) — по: тону (без эмодзи-перегруза vs с эмодзи), длине описания (компактное vs развёрнутое), цветовой схеме (авто/тёмная vs зелёная), авто-редиректу (Нет — сохраняет пуш-подписку).
+- **Архетип InOut (чистый/структурный)** — противопоставление [PWA-2 CR2](CR2_pwa01.md) (1xBet — брендовый эмодзи-хайп). Тестируем подачу одной механики.
+- Текст и отзывы построены по реальному образцу InOut (`scan_GH_Android (1)/text.txt`): структура «5 причин», суммы депозит→выигрыш, ответ дева почти на каждый отзыв.
+- **Без бонуса** в описании/What's New (правило 15.06). Суммы выигрышей в отзывах — соц-пруф, оставлены.
 - Трекинг-URL/домен: НЕ вписан (определяет байер при сборке в AdSet.pro).
-- Отзывов 15 шт. (13×5★ + 2×4★ → 4.9). 4★ несут мягкую критику (задержка первого вывода, низкий минимум) — снимает «синтетику» и работает как trust. Ответы дева только на 3 (критика/нейтрал), остальные пустые.
-- **Калибровка реализма** по живым Google Play отзывам WAF-финтеха (Opay/PalmPay/Moniepoint/Kuda): в реале dev почти не отвечает, даты вразброс, доминирует «похвала + but + просьба». Полный реалистичный негатив (1–2★ «холдят деньги») для продающего PWA НЕ добавляем — отпугнёт; ограничились мягким хвостом 4★.
+- Отзывов 15 шт. (13×5★ + 2×4★ → 4.9), ответ дева на 14/15.
 - После ✅ qa → трекинг-ссылку передать агенту `fb`.

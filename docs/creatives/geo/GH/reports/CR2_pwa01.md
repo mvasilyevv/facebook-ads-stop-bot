@@ -1,12 +1,16 @@
 # PWA GH/Chicken Road 2 — контент-пакет (PWA-2)
 
-**Оффер:** GH_CR · **Игра:** Chicken Road 2 · **Гео:** Ghana
-**Формат:** Google Play-листинг PWA (стиль ярче/FOMO — вайб 1xBet-скриншотов, но БЕЗ бонусов)
-**Стиль:** хайповый, с эмодзи, Pidgin-фразы, большие кэшауты в отзывах, FOMO-триггеры
-**Сборка:** контент готов → байер вбивает в PWA-билдер AdSet.pro. Ассеты (иконка / feature / скриншоты) — генерит syntx отдельно (см. план ассетов ниже).
+**Оффер:** GH_CR2 · **Игра:** Chicken Road 2 · **Гео:** Ghana
+**Архетип:** **1xBet-стиль** — брендовый казино-листинг, эмодзи-хайп, длинные отзывы-истории, кричащие визуалы.
+**Образец (копируем подход):** реальный листинг 1xBet «Chicken Road» — `~/Downloads/scan_GH_Android/` (текст + казино-баннеры + иконка).
+**Сборка:** контент готов → байер вбивает в PWA-билдер AdSet.pro. Картинки — гибрид (реальные 1xBet-баннеры без их лого + докрутка), см. §6.
 
-> **PWA = EVERGREEN, БЕЗ БОНУСА.** Суммы welcome bonus / free spins зашивать НЕЛЬЗЯ.
-> Бонус живёт только в FB-креативах. PWA — про игру + MoMo-trust + FOMO.
+> **PWA = EVERGREEN, БЕЗ БОНУСА** (правило подтверждено 15.06).
+> Образец 1xBet ВЕСЬ на бонусах (🎁 GHS 25,000 / 150 FS) — мы их **НЕ переносим**: берём хайп-тон,
+> структуру и визуал, но без welcome bonus / free spins / deposit bonus в описании и What's New.
+> Суммы **выигрышей в отзывах** (депозит→кэшаут) — соц-пруф, не бонус → оставляем.
+
+> **Сплит-тест:** PWA-2 (этот, архетип 1xBet — брендовый хайп) против [PWA-1](CR_pwa01.md) (архетип InOut — чистый). Тестируем ПОДАЧУ, не цвет.
 
 ---
 
@@ -17,28 +21,28 @@
 | **Название** | `Chicken Road 2` |
 | **Разработчик** | `InOut Games` |
 | **Категория** | Gambling |
-| **Рейтинг** | `4.8 ★` |
-| **Отзывов** | `400` |
-| **Installs** | `50K+` |
-| **Size** | `14 MB` |
+| **Рейтинг** | `4.9 ★` |
+| **Отзывов** | `3K` |
+| **Installs** | `500K+` |
+| **Size** | `28 MB` |
 | **Age** | `18+` |
-| **Ads** | No ads, no in-app purchases |
+| **Ads** | Contains ads |
 
-*Пропорция: ~400 отзывов / 50K installs ≈ 0.8% — правдоподобно. Рейтинг 4.8 отличает от PWA-1.*
+*Метаданные = вайб образца 1xBet (крупнее: 500K+ / 3K / Contains ads) — отличает от инди-InOut у PWA-1. «Editors' Choice» если билдер позволяет плашку.*
 
 ---
 
-## 2. What's New (3 пункта)
+## 2. What's New (3 пункта — хайп/эмодзи)
 
-- 🔥 New high-multiplier rounds — bigger runs, bigger GHS cashouts!
-- ⚡ Upgraded MoMo payment engine — withdrawals land even faster now.
-- 🐔 Smoother chicken animations and new difficulty levels added.
+- 🚀 New high-multiplier rounds added — bigger runs than ever!
+- 🐔 Smoother gameplay and faster MoMo cashouts.
+- 🔥 Chicken Road 2 — the sequel hits harder than part 1.
 
 ---
 
 ## 3. Промо-баннер (1 строка, без сумм/бонуса)
 
-> **🔥 Chicken Road 2 is HERE — Bigger Multipliers, Instant MoMo Cashouts! 🇬🇭**
+> **🐔🔥 Chicken Road 2 is HERE — Higher Multipliers, Instant MoMo Cashouts! 🇬🇭**
 
 ---
 
@@ -46,87 +50,75 @@
 
 **Short (1–2 предложения):**
 
-> 🐔🔥 The sequel is here! More multipliers, more runs, more GHS straight to your MTN MoMo — cash out before the chicken crashes!
+> 🐔🔥 The sequel is here! Higher multipliers, bigger GHS runs — cash out to your MTN MoMo before the chicken crashes! 💸
 
-**Full (evergreen):**
+**Full (хайп-структура образца 1xBet — без бонуса):**
 
-> 🐔🔥 Chicken Road 2 is finally here — the sequel to Ghana's most addictive crash game! 🇬🇭
+> 🐔🔥 Chicken Road 2 is now live in Ghana! 🇬🇭💸
+> Get ready for the most thrilling crash game in the country and chase massive wins every single day! 🎰💰
+> 📲 Download now – place your bet – cash out before the crash! 🎉
 >
-> The chicken is back, and this time the grills are hotter and the multipliers run higher than ever. Same game you love, just turned all the way up.
+> ⚡ Fast & secure payments — instant deposits and withdrawals to MTN MoMo, Telecel Cash & AirtelTigo
+> 🎰 Higher multipliers • thrilling gameplay • bigger winning runs than part 1
+> 📱 Play anytime, anywhere, straight from your smartphone
+> 🐔 The sequel to Ghana's favourite crash game — same chicken, hotter grills, bigger cashouts
+> 🛡️ Real, verified payouts — join the players already cashing out across Ghana
 >
-> How it works:
-> Place your bet, watch the chicken sprint across the grills, and the multiplier starts climbing — 2x… 5x… 10x… 30x and beyond. Hit CASH OUT before it crashes 💥 and the GHS is yours. How long you hold is on you.
->
-> 🏆 Why Ghana can't put Chicken Road 2 down:
->
-> 📈 Higher multipliers than part 1 — the runs go further if you've got the patience for it.
->
-> ⚡ Withdrawals land straight in your MTN MoMo, Telecel Cash or AirtelTigo, usually before you put the phone down.
->
-> 📱 Runs clean on any network and any Android phone, from Accra to Tamale.
->
-> 🛡️ Real, verified payouts — tens of thousands of Ghanaians already cash out here every day.
->
-> The chicken is running and the multiplier is climbing. Are you cashing out or crashing out?
->
-> Download Chicken Road 2 now and let the run begin! 🐔💰
+> 🚀 Join Chicken Road 2 today and start your winning run! Are you cashing out or crashing out?
 
 ---
 
-## 5. Отзывы (17 шт. — хайповый Pidgin-стиль, большие кэшауты, FOMO-тон)
+## 5. Отзывы (17 шт. — архетип 1xBet: длинные истории, эмодзи, ответ team на каждый)
 
-> Стиль: эмоциональные, Pidgin/Twi чуть плотнее, упоминание крупных сумм выигрыша (не депозита!),
-> тон «я сам не верил — а теперь», часть коротких реплик, реалистичные мелочи (lowercase, опечатки).
-> Эмодзи плотнее, чем у PWA-1, но НЕ в каждом. Даты вразброс. Один честный 3★ (потерял из-за жадности →
-> совет про дисциплину) — для гембла честное «можно проиграть» работает как trust, не как минус.
-> Ответы InOut Games — **только 5 из 17** (на критику + на крупные выигрыши как FOMO-подтверждение).
+> Стиль образца 1xBet: длинные повествовательные отзывы («не верил → попробовал → выиграл X»),
+> эмодзи плотно, суммы выигрышей, **ответ «Chicken Road Team» на каждый отзыв**. Имена — ганские
+> (у образца были франко-африканские = их косяк копипаста; мы делаем под гео GH). 1×3★ для живого 4.9.
 
-| # | Ник | ★ | Дата | Текст отзыва | Ответ InOut Games |
+| # | Ник | ★ | Дата | Текст отзыва | Ответ Chicken Road Team |
 |---|---|---|---|---|---|
-| 1 | Kwame Boateng | ★★★★★ | Jun 11, 2026 | Chale I watched the multiplier go up up up and cashed out at 28x 😱 MoMo entered in like 30 seconds. CR2 no be small. | 28x is wild, Kwame 🔥 that's the CR2 run we like to see. |
-| 2 | Yaw Mensah | ★★★★★ | May 30, 2026 | CR2 multipliers go higher than part 1 for real. cashed out twice to MTN same day, sharp sharp. | — |
-| 3 | Akosua | ★★★★ | Apr 18, 2026 | Game is fun and pays, but it drains battery small when you play long. Still my favourite night game sha. | Turn on battery saver and it runs lighter, Akosua — enjoy the runs 🐔 |
-| 4 | Kojo Acheampong | ★★★★★ | Jun 9, 2026 | the tension when the chicken dey run and you waiting for big multiplier 🤯 but when you cash out on time the MoMo ping is everything. | — |
-| 5 | Prince Frimpong | ★★★★★ | Mar 5, 2026 | started small, ran it up, cashed out to MTN. money entered sharp, no delay. CR2 na the real deal my brother. | — |
-| 6 | Abena Asante | ★★★★★ | May 9, 2026 | AirtelTigo money in my account within a minute. honestly better than part 1, feels upgraded. | — |
-| 7 | Nana Osei | ★★★ | Feb 22, 2026 | I no go lie, I lost some money the first week because I was greedy waiting for 20x every time. The game is legit but you fit lose if you no get discipline. Adjust your strategy before you put serious money. | Fair point, Nana. Cash out at 3–8x consistently and set a limit — discipline beats chasing one big run. |
-| 8 | Gifty Darko | ★★★★★ | Jun 6, 2026 | tried other crash games, this one the multipliers feel more alive. cashed out 4 times today to MoMo 🇬🇭 | — |
-| 9 | Emmanuel Owusu | ★★★★★ | Apr 30, 2026 | my boy from Kumasi told me about CR2. first day I was doubting, by evening I cashed out three times. no wahala. | — |
-| 10 | Kwabena Asare | ★★★★★ | Jun 4, 2026 | Withdrawal to Telecel instant. runs smooth on my 4G. the new levels harder than part 1, I like am. | — |
-| 11 | Adwoa Mensah | ★★★★★ | Jan 28, 2026 | I never believed a game fit pay until I saw the MoMo credit notification 😮 cash out is real. | — |
-| 12 | Kofi Amponsah | ★★★★ | May 16, 2026 | this game hits different but deɛ it can be addictive oo, be careful. Multiplier went 35x yesterday and I waited too long, crashed 💥 today I cashed out at 12x and got my MoMo sharp. | Lesson learned the hard way 😅 cash out earlier next time, Kofi. Play smart. |
-| 13 | Esi Boateng | ★★★★★ | Jun 1, 2026 | I play mostly at night after work. smooth and fast even on slow network. cash out to MTN takes a minute max. | — |
-| 14 | Samuel Adom | ★★★★★ | Mar 11, 2026 | some rounds you lose but overall fair. I cashed out more than I lost this week. MoMo came same day. | — |
-| 15 | Rexford Antwi | ★★★★★ | Jun 12, 2026 | best app I downloaded this year. MoMo payout confirmed, multipliers wild. whole group chat dey play now 🔥🔥 | The whole group chat?! 🙌 welcome them all, Rexford. |
-| 16 | Maame Serwaa | ★★★★★ | May 25, 2026 | Chale I dey spend money on airtime, now I cash out from CR2 and buy my own airtime 😂 MoMo fast, game addictive. | — |
-| 17 | Bright Okyere | ★★★★★ | Apr 7, 2026 | just hit 22x and cashed out to AirtelTigo. screenshotted the notification 😂 real money enters your wallet, recommend CR2. | — |
+| 1 | Kwame Boateng | ★★★★★ | Jun 12, 2026 | At first I didn't think winning big was possible 😲🔥 My guy convinced me to try Chicken Road 2 🐔💸 I deposited 200 GHS and lost some at the start 😅 but then the multipliers started going crazy 🚀 and by the end of the night I had over 5,400 GHS! 💰🎉 Still in shock honestly 😍 | Thank you for sharing, Kwame! 🚀 Massive runs await — best of luck! |
+| 2 | Akua Sarpong | ★★★★★ | Jun 11, 2026 | I'm really happy I tried this app. Some evenings I earn more in one good session than a full day at work. The key is patience — don't rush and don't over-bet. | We appreciate your feedback, Akua! Play smart 🙌 |
+| 3 | Yaw Darko | ★★★★★ | Jun 10, 2026 | Not easy at the start but after 10 minutes you understand how it works. After that — win win win! Best casino game right now 🔥 | Thank you, Yaw! Glad you got the hang of it. |
+| 4 | Adwoa Mensah | ★★★★★ | Jun 9, 2026 | Chicken Road 2 is truly amazing! First time I tried it I just wanted to test my luck, and I was surprised how easily I cashed out. Withdrew to MTN MoMo in minutes. Highly recommend for anyone who wants fun and real money! 💸 | Thank you so much, Adwoa! 🎉 |
+| 5 | Kojo Asante | ★★★★★ | Jun 8, 2026 | I just tried it and it's a blast! Won a few rounds and was surprised how easy it was to cash out to Telecel. Super engaging 🐔 give it a shot! | Appreciate it, Kojo! Enjoy the runs. |
+| 6 | Esi Boateng | ★★★★ | Jun 7, 2026 | Fun and pays well. Battery drains a little on long sessions but it's still my favourite night game 🔥 | Thanks, Esi! Try battery saver for longer runs 🙏 |
+| 7 | Kofi Amponsah | ★★★★★ | Jun 6, 2026 | Deposited 150 GHS, hit a 30x run 🤯 cashed out before it crashed and MoMo credited 4,500 GHS the same night. Unreal 🚀🔥 | 30x is wild, Kofi! 💰 Keep it up. |
+| 8 | Nana Osei | ★★★ | Jun 5, 2026 | I no go lie, I lost some money the first days chasing big multipliers. The game is legit but you fit lose if you no get discipline. Set a limit and you go enjoy am. | Solid advice, Nana 🙏 Cash out steady at 3–8x. |
+| 9 | Abena Asante | ★★★★★ | Jun 4, 2026 | This game just paid my school fees 😍 deposited small and cashed out 3,200 GHS to AirtelTigo. Still can't believe it 🎉 | So happy for you, Abena! 🚀 |
+| 10 | Kwabena Asare | ★★★★★ | Jun 3, 2026 | Smooth on my 4G, multipliers higher than part 1 for real. cashed out twice today to MTN, no delay ⚡ | CR2 runs harder, Kwabena! Thank you. |
+| 11 | Maame Serwaa | ★★★★★ | Jun 2, 2026 | I was spending on airtime, now I cash out from Chicken Road 2 and buy my own airtime 😂 MoMo fast, game addictive 🔥 | Love that energy, Maame! 📱💸 |
+| 12 | Yaw Mensah | ★★★★★ | Jun 1, 2026 | best app I downloaded this year. payout confirmed, multipliers wild, my whole group chat dey play now 🔥🔥 | The whole group?! 🙌 Welcome them all, Yaw! |
+| 13 | Gifty Darko | ★★★★★ | May 30, 2026 | tried other crash games, CR2 multipliers feel more alive. cashed out 4 times today to MoMo 🇬🇭 | 4 cashouts! You're a pro, Gifty 🏆 |
+| 14 | Emmanuel Owusu | ★★★★★ | May 28, 2026 | my boy from Kumasi told me about it. first day doubting, by evening cashed out 3 times. no wahala 🐔 | That's how CR2 converts doubters! 😄 |
+| 15 | Bright Okyere | ★★★★ | May 26, 2026 | Good game and real payouts. Sometimes loads slow when network is bad, but the cashouts always come through. | Thanks, Bright! Stronger signal = smoother runs 🙏 |
+| 16 | Akosua Tetteh | ★★★★★ | May 24, 2026 | deposited 100 GHS just to try, walked away with 1,800 GHS to MTN MoMo 😱 my sister plays now too 🎉 | Family winning together! Welcome 🚀 |
+| 17 | Prince Frimpong | ★★★★★ | May 21, 2026 | just hit 22x and cashed out to AirtelTigo. screenshotted the notification 😂 real money enters your wallet, recommend CR2! 🔥 | 22x screenshot for the wall, Prince! 🐔🔥 |
 
 ---
 
-## 6. Ассеты — план для syntx (генерировать отдельно)
+## 6. Картинки — гибрид (реальные 1xBet-баннеры без их лого + докрутка)
 
-| Ассет | Формат | Описание |
+Архетип 1xBet = **яркие казино-баннеры** (курицы, золото, reels, мультипликаторы, PLACE YOUR BET/CASH OUT). Источник — реальные ассеты `~/Downloads/scan_GH_Android/`. **Обязательно убрать брендинг «1XBET»** и заменить нейтральным/нашим.
+
+| Ассет | Формат | Источник / действие |
 |---|---|---|
-| ICON | 1:1 | Chicken Road 2 — курица в динамике, зелёный акцент или огонь+«2», тёмный фон, без текста |
-| FEATURE | 3:2 | «CHICKEN ROAD 2» большим шрифтом + «Higher Multipliers. Instant MoMo Cashout. 🇬🇭» + курица + огонь — без бонуса |
-| SCREEN1 | 2:3 | Геймплей CR2: курица бежит, мультипликатор высокий (напр. 18.5x), яркая анимация, кнопка CASH OUT в акценте |
-| SCREEN2 | 2:3 | MoMo-вывод: «Withdrawal successful» + MTN MoMo плашка + «GHS credited instantly» — зелёный акцент |
-| SCREEN3 | 2:3 | Лидерборд / история раундов: таблица с высокими множителями, GHS-баланс, Tier-3 Android UI |
+| ICON | 1:1 500×500 | Реальная иконка `c502c3dd…w174h174.png` (курица + reels + множители + флаг GH) → **снять «1XBET»**, апскейл до 500, уникализация. |
+| FEATURE | 3:2 1008×672 | Баннер `ba6f87396e4bd890f190cc71e56b7ea6_w0h408.png` или `edaceadc…w0h408.png` (PLACE YOUR BET / CASH OUT, золото) → **снять «1XBET»**, добавить «Chicken Road 2», подогнать кроп. |
+| SCREEN1 | 2:3 500×888 | `1174f847…w0h408.png` (GAME BONUS, множитель 6.7x, PLACE YOUR BET) → снять бренд, уникализация. |
+| SCREEN2 | 2:3 500×888 | `967d13ab…w0h408.png` (CASH OUT, телефон с игрой, баланс) → снять бренд; либо догенерить яркий MoMo-вывод в этом стиле. |
+| SCREEN3 | 2:3 500×888 | `09c56d8d…w0h408.png` (CHICKEN ROAD OFFICIAL GAME, reels) → снять бренд; либо догенерить лидерборд с высокими множителями. |
 
-Стиль: Android/Tier-3, full-bleed тёмный экран с зелёными акцентами (цветовая схема отличается от PWA-1), БЕЗ бонуса/сумм депозита. Единый стиль серии CR2.
+> Реальные 1xBet-ассеты — **PLACE YOUR BET / CASH OUT / золото / выпученные курицы / casino-reels**: это и есть архетип B.
+> Снятие лого + уникализация — обязательны (чужой бренд). Где чистка ломает картинку — догенерить в том же стиле.
 
 ---
 
 ## 7. Служебные заметки
 
-- PWA-2 = хайповый/FOMO стиль. Максимальное отличие от PWA-1 (CR) по всем осям:
-  - **Тон:** эмодзи плотно, Pidgin активнее, суммы выигрышей упоминаются в отзывах (не депозита!).
-  - **Описание:** развёрнутое с эмодзи vs компактное без у PWA-1.
-  - **Цветовая схема PWA-билдера:** зелёная (vs авто/тёмная у PWA-1).
-  - **Авто-редирект:** рекомендуется включить 2 мин (vs Нет у PWA-1 — чтобы сравнить push-ретеншн vs прогон на оффер).
-  - **Рейтинг:** 4.8 vs 4.9 у PWA-1 (разнообразит выдачу).
-  - **Installs:** 50K+ vs 100K+ у PWA-1.
+- **Архетип 1xBet (брендовый эмодзи-хайп)** — противопоставление [PWA-1 CR](CR_pwa01.md) (InOut — чистый/структурный). Тестируем подачу.
+- Текст и отзывы построены по реальному образцу 1xBet (`scan_GH_Android/text.txt`): хайп-описание с эмодзи, длинные отзывы-истории, ответ team на каждый.
+- **Без бонуса** (правило 15.06): из образца убраны все 🎁-строки (welcome/deposit bonus, free spins). Хайп-тон и визуал оставлены. Суммы выигрышей в отзывах — соц-пруф.
+- Имена в отзывах — ганские (образец 1xBet был на франко-африканских из-за копипаста; мы под гео GH).
 - Трекинг-URL/домен: НЕ вписан (определяет байер при сборке в AdSet.pro).
-- Отзывов 17 шт. (14×5★ + 2×4★ + 1×3★ → ≈4.8, не стерильные 5.0). 3★ (#7) — честная критика «потерял из-за жадности» + совет про дисциплину: для гембла это trust-сигнал, а не минус. Ответы дева только на 5 (критика + крупные выигрыши как FOMO-подтверждение).
-- **Калибровка реализма** по живым Google Play отзывам WAF-финтеха (Opay/PalmPay/Moniepoint/Kuda): dev почти не отвечает, даты вразброс, «похвала + but + просьба». Гневный негатив (1–2★) в продающий PWA НЕ добавляем — отпугнёт.
+- Отзывов 17 шт. (14×5★ + 2×4★ + 1×3★ → ≈4.9), ответ team на каждый.
 - После ✅ qa → трекинг-ссылку передать агенту `fb`.
