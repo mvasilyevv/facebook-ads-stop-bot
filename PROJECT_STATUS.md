@@ -38,7 +38,7 @@
 | 5 | Mutations + API-creator (10 handlers) | ✅ |
 | 6 | AdSet.pro (оказался MCP-сервером) | ✅ Волна 3+4 закрыты (BL-8: aggregator + outgoing postback + key rotation) |
 | 7 | Frontend | ✅ 6 страниц + русский UI |
-| 8 | Multi-account | ⏸ отложен (до 2-го кабинета) |
+| 8 | Multi-account | ✅ реализован + проверен (unit 22 / integration 11, миграции 0019/0020 чисто, фикс adoption-guard); активация — при подключении 2-го кабинета |
 | 9 | Технический долг | ✅ CRIT/HIGH (Round 10/11) + P2 (helpers/split/dev-tools/openapi) закрыты |
 
 ---

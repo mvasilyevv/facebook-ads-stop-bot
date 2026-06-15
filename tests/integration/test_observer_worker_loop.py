@@ -266,8 +266,18 @@ async def test_redis_heartbeat_and_pubsub(
 @pytest.mark.asyncio
 @pytest.mark.timeout(15)
 async def test_main_loop_runs_n_cycles_and_exits(
-    pg_engine, ensure_observer_config_enabled, offer_cr2, fake_redis_client
+    pg_engine, ensure_observer_config_enabled, offer_cr2, fake_redis_client, monkeypatch
 ) -> None:
+    # Sleep между циклами мокаем no-op: clamp_interval поднимает любой base-интервал
+    # до MIN_INTERVAL_SECONDS=10 (anti-detect), иначе тест ждёт реальные ~10с/цикл и
+    # упирается в timeout. Проверяем логику циклов, не длительность sleep.
+    import apps.observer_worker.main as obs_main
+
+    async def _no_sleep(*a, **k):
+        return None
+
+    monkeypatch.setattr(obs_main, "_sleep_with_runtime_refresh", _no_sleep)
+
     iterations = {"n": 0}
 
     def _should_continue() -> bool:
@@ -379,16 +389,21 @@ async def test_degraded_alert_dedup_and_clear(
 @pytest.mark.asyncio
 @pytest.mark.timeout(15)
 async def test_main_loop_degraded_alert_after_threshold(
-    pg_engine, ensure_observer_config_enabled, offer_cr2, fake_redis_client, seeded_telegram_config
+    pg_engine,
+    ensure_observer_config_enabled,
+    offer_cr2,
+    fake_redis_client,
+    seeded_telegram_config,
+    monkeypatch,
 ) -> None:
-    # interval=0 — мгновенные циклы, тест быстрый и не упирается в timeout
-    async with pg_engine.begin() as conn:
-        await conn.execute(
-            text(
-                "UPDATE observer_config SET interval_seconds = 0, jitter_seconds = 0 "
-                "WHERE singleton_key = 'default'"
-            )
-        )
+    # Sleep между циклами мокаем no-op: clamp_interval поднимает base до
+    # MIN_INTERVAL_SECONDS=10 (interval=0 не помогает — clamp всё равно 10с), иначе timeout.
+    import apps.observer_worker.main as obs_main
+
+    async def _no_sleep(*a, **k):
+        return None
+
+    monkeypatch.setattr(obs_main, "_sleep_with_runtime_refresh", _no_sleep)
     await fake_redis_client.delete("observer:degraded:alerted")
 
     # gate всегда падает → outcome=error каждый цикл, self-heal не помогает
