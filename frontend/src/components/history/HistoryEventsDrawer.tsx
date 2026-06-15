@@ -48,7 +48,9 @@ export const HistoryEventsDrawer: FC<HistoryEventsDrawerProps> = ({
     stage: stage || undefined,
   };
 
-  const { data: events, isLoading, error, refetch } = useHistoryEvents(
+  // isFetching при keepPreviousData: прежний список виден, но приглушён —
+  // мягкий индикатор смены периода/фильтра вместо скелетон-моргания.
+  const { data: events, isLoading, isFetching, error, refetch } = useHistoryEvents(
     open ? params : undefined,
   );
 
@@ -99,7 +101,16 @@ export const HistoryEventsDrawer: FC<HistoryEventsDrawerProps> = ({
           description="По выбранным фильтрам и периоду событий нет."
         />
       ) : (
-        <div className="space-y-1" role="list" aria-label="Список событий">
+        <div
+          className={
+            isFetching
+              ? "space-y-1 opacity-60 transition-opacity duration-200"
+              : "space-y-1 transition-opacity duration-200"
+          }
+          role="list"
+          aria-label="Список событий"
+          aria-busy={isFetching}
+        >
           {events.map((ev) => (
             <div
               key={ev.id}

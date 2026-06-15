@@ -695,6 +695,44 @@ else
 fi
 
 # ==========================================
+# 2b. Свежесть gRPC-стабов (proto/v1 → clients/python_grpc/v1)
+# ==========================================
+# Python-стабы лежат в репо и НЕ регенерируются pip'ом. Если proto менялся
+# (напр. ad_account_id в RunScanCycleRequest, мульти-кабинет), устаревшие стабы
+# роняют observer/meta_api_worker с ValueError на первом же запросе. Детект по
+# хэшу proto-файлов — тот же паттерн, что DEPS_HASH выше. Команды зеркалят
+# `make proto-compile` (python-часть; TS грузит proto динамически, ему не нужно).
+PROTO_HASH_FILE="$LOG_DIR/.proto_hash"
+CURRENT_PROTO_HASH="$(cat proto/v1/*.proto | md5 -q 2>/dev/null || cat proto/v1/*.proto | md5sum | cut -d' ' -f1)"
+CACHED_PROTO_HASH=""
+[ -f "$PROTO_HASH_FILE" ] && CACHED_PROTO_HASH="$(cat "$PROTO_HASH_FILE")"
+
+if [ "$CURRENT_PROTO_HASH" != "$CACHED_PROTO_HASH" ]; then
+    echo -e "${BLUE}🧬 Proto изменился — регенерирую Python gRPC-стабы...${NC}"
+    PROTO_GEN_LOG="$LOG_DIR/proto_compile.log"
+    if ! .venv/bin/python -m grpc_tools.protoc \
+        -Iproto \
+        --python_out=clients/python_grpc \
+        --grpc_python_out=clients/python_grpc \
+        --pyi_out=clients/python_grpc \
+        proto/v1/browser_session.proto \
+        proto/v1/scanner.proto \
+        proto/v1/creator.proto \
+        proto/v1/meta_api.proto \
+        proto/v1/ad_library.proto > "$PROTO_GEN_LOG" 2>&1; then
+        echo -e "${RED}❌ Регенерация gRPC-стабов упала (см. $PROTO_GEN_LOG)${NC}"
+        tail -10 "$PROTO_GEN_LOG" || true
+        exit 1
+    fi
+    # grpc_tools генерирует absolute import `from v1 import ...` — чиним на относительный.
+    .venv/bin/python -c "from pathlib import Path; [p.write_text(p.read_text().replace('from v1 import ', 'from . import ')) for p in Path('clients/python_grpc/v1').glob('*_pb2_grpc.py')]"
+    echo "$CURRENT_PROTO_HASH" > "$PROTO_HASH_FILE"
+    echo -e "${GREEN}✅ gRPC-стабы перегенерированы${NC}"
+else
+    echo -e "${GREEN}🧬 gRPC-стабы актуальны (proto не менялся)${NC}"
+fi
+
+# ==========================================
 # 3. Миграции БД
 # ==========================================
 echo -e "${BLUE}🗄️ Применяю миграции БД...${NC}"

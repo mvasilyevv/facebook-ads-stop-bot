@@ -35,6 +35,7 @@ class PauseCampaignHandler:
     ) -> dict[str, Any]:
         campaign_id = require_numeric_id(payload.target_id, "target_id (campaign_id)")
         graph_response = await client.execute_graph_call(
+            ad_account_id=payload.ad_account_id,
             method="POST",
             endpoint=f"/{campaign_id}",
             query_params={"status": "PAUSED"},

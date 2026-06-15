@@ -46,6 +46,7 @@ class SetAdCreativeHandler:
         body: dict[str, Any] = {"creative": {"creative_id": creative_id}}
 
         graph_response = await client.execute_graph_call(
+            ad_account_id=payload.ad_account_id,
             method="POST",
             endpoint=f"/{ad_id}",
             body_json=body,

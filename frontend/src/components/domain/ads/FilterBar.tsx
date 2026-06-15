@@ -15,13 +15,13 @@
 
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { Search, Filter, ChevronDown, Check, X } from "lucide-react";
-import { ALERT_STATE_LABELS, type AlertState } from "@fb/shared";
+import { ALERT_STATE_LABELS, alertStateCssVar, type AlertState } from "@fb/shared";
 import { Kbd } from "@/components/ui/Kbd";
 import { cn } from "@/lib/utils/cn";
 
 // ─── Публичный API ───────────────────────────────────────────────────────────
 
-/** Состояние фильтров Ads (offer — множественный выбор, как в эталоне). */
+/** Состояние фильтров Ads (offer/кабинет — множественный выбор). */
 export interface AdsFilterState {
   /** Строка поиска (имя / ad_id / offer). */
   search: string;
@@ -29,6 +29,8 @@ export interface AdsFilterState {
   selectedStates: Set<AlertState>;
   /** Множество выбранных offer-кодов. Пустое = все. */
   selectedOffers: Set<string>;
+  /** Мульти-кабинет: множество выбранных ID кабинетов. Пустое = все. */
+  selectedAccounts: Set<string>;
 }
 
 /** Порядок и лейблы state-pills (канон). */
@@ -40,19 +42,15 @@ const STATE_PILLS: Array<{ value: AlertState; label: string }> = [
   { value: "disabled", label: ALERT_STATE_LABELS.disabled },
 ];
 
-/** alert_state → css-переменная цвета FSM-точки. */
-const STATE_DOT: Record<AlertState, string> = {
-  normal: "var(--fsm-normal)",
-  warning_sent: "var(--fsm-warning)",
-  stop_sent: "var(--fsm-stop)",
-  claimed: "var(--fsm-claimed)",
-  disabled: "var(--fsm-disabled)",
-};
+// Цвет FSM-точки — канонический маппинг state→токен из @fb/shared
+// (локальная таблица удалена при дедупе: см. alertStateCssVar).
 
 export interface FilterBarProps {
   filterState: AdsFilterState;
   /** Доступные offer-коды для dropdown. */
   offerOptions: string[];
+  /** Мульти-кабинет: доступные ID кабинетов для dropdown (из загруженных строк). */
+  accountOptions: string[];
   /** Кол-во строк после фильтрации (для «N объявлений»). */
   count: number;
   /** ref на search-input (для хоткея «/»). */
@@ -61,6 +59,7 @@ export interface FilterBarProps {
   onSearchChange: (v: string) => void;
   onStateToggle: (state: AlertState) => void;
   onOfferToggle: (offer: string) => void;
+  onAccountToggle: (accountId: string) => void;
   onClearAll: () => void;
 
   className?: string;
@@ -71,16 +70,19 @@ export interface FilterBarProps {
 export function FilterBar({
   filterState,
   offerOptions,
+  accountOptions,
   count,
   searchRef,
   onSearchChange,
   onStateToggle,
   onOfferToggle,
+  onAccountToggle,
   onClearAll,
   className,
 }: FilterBarProps) {
-  const { search, selectedStates, selectedOffers } = filterState;
-  const hasChips = selectedStates.size > 0 || selectedOffers.size > 0;
+  const { search, selectedStates, selectedOffers, selectedAccounts } = filterState;
+  const hasChips =
+    selectedStates.size > 0 || selectedOffers.size > 0 || selectedAccounts.size > 0;
 
   return (
     <div className={cn("flex flex-col gap-3", className)}>
@@ -135,7 +137,7 @@ export function FilterBar({
                 <span
                   aria-hidden="true"
                   className="size-[7px] rounded-full"
-                  style={{ background: STATE_DOT[s.value] }}
+                  style={{ background: alertStateCssVar(s.value) }}
                 />
                 {s.label}
               </button>
@@ -144,11 +146,26 @@ export function FilterBar({
         </div>
 
         {/* Offer dropdown */}
-        <OfferDropdown
+        <CheckDropdown
+          label="offer"
+          ariaLabel="Фильтр по офферу"
+          emptyText="Нет офферов"
           options={offerOptions}
           selected={selectedOffers}
           onToggle={onOfferToggle}
         />
+
+        {/* Cabinet dropdown (мульти-кабинет) — показываем только когда кабинетов >1 */}
+        {accountOptions.length > 1 && (
+          <CheckDropdown
+            label="кабинет"
+            ariaLabel="Фильтр по кабинету"
+            emptyText="Нет кабинетов"
+            options={accountOptions}
+            selected={selectedAccounts}
+            onToggle={onAccountToggle}
+          />
+        )}
 
         <div className="flex-1" />
 
@@ -171,6 +188,11 @@ export function FilterBar({
               offer = {o}
             </FilterChip>
           ))}
+          {[...selectedAccounts].map((a) => (
+            <FilterChip key={`ac-${a}`} onRemove={() => onAccountToggle(a)}>
+              кабинет = {a}
+            </FilterChip>
+          ))}
           <button
             type="button"
             onClick={onClearAll}
@@ -189,16 +211,23 @@ export function FilterBar({
   );
 }
 
-// ─── Offer dropdown (checkbox-list) ────────────────────────────────────────
+// ─── Checkbox-dropdown (offer / кабинет — общий компонент) ──────────────────
 
-function OfferDropdown({
+function CheckDropdown({
+  label,
+  ariaLabel,
+  emptyText,
   options,
   selected,
   onToggle,
 }: {
+  /** Текст кнопки-триггера (нижний регистр, как в каноне: «offer», «кабинет»). */
+  label: string;
+  ariaLabel: string;
+  emptyText: string;
   options: string[];
   selected: Set<string>;
-  onToggle: (offer: string) => void;
+  onToggle: (value: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -227,7 +256,7 @@ function OfferDropdown({
         onClick={() => setOpen((o) => !o)}
         aria-haspopup="listbox"
         aria-expanded={open}
-        aria-label="Фильтр по офферу"
+        aria-label={ariaLabel}
         className={cn(
           "inline-flex items-center gap-1.5 h-8 px-3",
           "bg-bg-2 border border-bg-6 text-bg-10",
@@ -238,7 +267,8 @@ function OfferDropdown({
         )}
       >
         <Filter size={13} aria-hidden="true" />
-        offer{selected.size ? ` · ${selected.size}` : ""}
+        {label}
+        {selected.size ? ` · ${selected.size}` : ""}
         <ChevronDown
           size={12}
           aria-hidden="true"
@@ -249,14 +279,14 @@ function OfferDropdown({
       {open && (
         <div
           role="listbox"
-          aria-label="Офферы"
+          aria-label={ariaLabel}
           className={cn(
             "absolute top-[calc(100%+6px)] left-0 z-30 min-w-[160px] max-h-[280px] overflow-y-auto",
             "bg-bg-3 border border-bg-6 p-1.5 flex flex-col gap-0.5",
           )}
         >
           {options.length === 0 ? (
-            <span className="px-2 py-1.5 font-display text-[12px] text-bg-8">Нет офферов</span>
+            <span className="px-2 py-1.5 font-display text-[12px] text-bg-8">{emptyText}</span>
           ) : (
             options.map((o) => {
               const on = selected.has(o);

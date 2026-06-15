@@ -74,20 +74,31 @@ export async function extractGraphContext(page: Page, timeoutMs = 15000): Promis
   });
 }
 
-// Кэш GraphContext по session_id: токен валиден всю сессию → сниффим ОДИН раз.
+// Кэш GraphContext: токен валиден всю сессию → сниффим ОДИН раз (на кабинет).
 // am_tabular — живой REST, данные всегда актуальны; reload нужен только чтобы спровоцировать
 // запрос для снятия токена. С кэшем стационарный скан = только наши fetch'и, без reload.
+// Мульти-кабинет: ключ = session_id (legacy, без кабинета) либо `${session_id}:act_<id>` —
+// иначе вкладки разных кабинетов перезатирали бы друг другу контекст (MULTI_CABINET_PLAN.md).
 const _graphContextCache = new Map<string, GraphContext>();
 
-export function invalidateGraphContext(sessionId: string): void {
-  _graphContextCache.delete(sessionId);
+// Ключ кэша GraphContext: с actId — per-кабинет, без — legacy per-session.
+function graphContextKey(sessionId: string, actId?: string): string {
+  return actId ? `${sessionId}:act_${actId}` : sessionId;
 }
 
-// Реконструировать URL кабинета Ads Manager из закэшированного GraphContext (act_id).
-// Нужно для self-heal: переоткрыть закрытую вкладку, даже если последний URL не запомнен.
-// null, если контекст ещё не сниффился (нет act_id) — тогда переоткрытие на этом уровне невозможно.
-export function reconstructAdsManagerUrl(sessionId: string): string | null {
-  const ctx = _graphContextCache.get(sessionId);
+export function invalidateGraphContext(sessionId: string, actId?: string): void {
+  _graphContextCache.delete(graphContextKey(sessionId, actId));
+}
+
+// Реконструировать URL кабинета Ads Manager.
+// С actId — детерминированно (кабинет известен из конфига, кэш не нужен).
+// Без actId — legacy self-heal: из закэшированного GraphContext; null, если контекст
+// ещё не сниффился — тогда переоткрытие на этом уровне невозможно.
+export function reconstructAdsManagerUrl(sessionId: string, actId?: string): string | null {
+  if (actId) {
+    return `https://adsmanager.facebook.com/adsmanager/manage/ads?act=${actId}`;
+  }
+  const ctx = _graphContextCache.get(graphContextKey(sessionId));
   if (!ctx) return null;
   const actNum = ctx.actId.replace(/^act_/, '');
   if (!actNum) return null;
@@ -96,13 +107,16 @@ export function reconstructAdsManagerUrl(sessionId: string): string | null {
 
 // Вернуть GraphContext из кэша; при cache-miss/forceRefresh — сниффить (reload триггерит запрос,
 // т.к. уже загруженная страница пассивно ничего не шлёт). sniffed=true → был reload.
+// expectedActId — sanity-check мульти-кабинета: act из сниффа обязан совпасть с запрошенным
+// кабинетом, иначе сканировали бы чужой кабинет под видом своего (money-критично).
 export async function acquireGraphContext(
   page: Page,
   sessionId: string,
-  opts: { forceRefresh?: boolean } = {},
+  opts: { forceRefresh?: boolean; expectedActId?: string } = {},
 ): Promise<{ ctx: GraphContext; sniffed: boolean }> {
+  const key = graphContextKey(sessionId, opts.expectedActId);
   if (!opts.forceRefresh) {
-    const cached = _graphContextCache.get(sessionId);
+    const cached = _graphContextCache.get(key);
     if (cached) return { ctx: cached, sniffed: false };
   }
   const ctxPromise = extractGraphContext(page, 20000);
@@ -112,7 +126,13 @@ export async function acquireGraphContext(
     /* ignore — listener всё равно может поймать запрос */
   }
   const ctx = await ctxPromise;
-  _graphContextCache.set(sessionId, ctx);
+  if (opts.expectedActId && ctx.actId !== `act_${opts.expectedActId}`) {
+    throw new Error(
+      `am: вкладка открыта не на том кабинете (ожидался act_${opts.expectedActId}, ` +
+        `снифф дал ${ctx.actId}) — скан кабинета прерван`,
+    );
+  }
+  _graphContextCache.set(key, ctx);
   return { ctx, sniffed: true };
 }
 

@@ -51,6 +51,7 @@ _YAML_SUFFIXES = {".yaml", ".yml"}
 METHODOLOGY_FILES = [
     "docs/creative_kb.md",
     "docs/creatives/SOP.md",
+    "docs/creatives/PROMPTING.md",
     "docs/creatives/_schema.md",
     "docs/creatives/README.md",
     "docs/creatives/hooks.yaml",

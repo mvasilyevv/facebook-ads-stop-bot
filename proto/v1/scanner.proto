@@ -55,6 +55,10 @@ message RunScanCycleRequest {
   // Owner-tag для am-режима: если campaign_ids пуст, am сам резолвит campaign.id по имени
   // (campaignMatchesOwner) → тянет сразу только свой скоуп, а не весь кабинет. Пусто → все.
   string owner_tag = 9;
+  // Мульти-кабинет (MULTI_CABINET_PLAN.md): числовой ID кабинета (без префикса act_),
+  // который нужно сканировать. browser-agent находит/открывает вкладку этого кабинета
+  // и сверяет act из GraphContext. Пусто → старое поведение (текущая primary-вкладка).
+  string ad_account_id = 10;
 }
 
 message ScanCycleEvent {

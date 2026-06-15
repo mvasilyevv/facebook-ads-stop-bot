@@ -39,6 +39,9 @@ class ScanRun(Base):
     alerts_stop: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Мульти-кабинет: какой кабинет сканировался (числовой ID без act_).
+    # NULL — скан до мульти-кабинетности или fallback-скан текущей вкладки.
+    ad_account_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
     __table_args__ = (
         PrimaryKeyConstraint("id", "started_at", name="pk_scan_runs"),

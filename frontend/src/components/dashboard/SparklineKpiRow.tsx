@@ -37,15 +37,41 @@ interface KpiCellData {
   spark: number[];
 }
 
-function KpiCell({ d, last }: { d: KpiCellData; last: boolean }) {
+function KpiCell({
+  d,
+  last,
+  onClick,
+}: {
+  d: KpiCellData;
+  last: boolean;
+  /** Клик по ячейке → переход в Ads с фильтром по состоянию (если задан). */
+  onClick?: () => void;
+}) {
   const value = useCountUp(d.value);
   const color = TONE_COLOR[d.tone];
 
   return (
     <div
+      role={onClick ? "button" : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      aria-label={onClick ? `${d.label}: открыть в списке объявлений` : undefined}
+      onClick={onClick}
+      onKeyDown={
+        onClick
+          ? (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onClick();
+              }
+            }
+          : undefined
+      }
       className={cn(
         "flex flex-col gap-3 p-5",
         !last && "border-r border-bg-5",
+        onClick &&
+          "cursor-pointer transition-colors duration-[120ms] hover:bg-bg-1 " +
+            "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent",
       )}
     >
       <div className="flex items-center justify-between">
@@ -69,13 +95,23 @@ function KpiCell({ d, last }: { d: KpiCellData; last: boolean }) {
   );
 }
 
+/** key ячейки → alert_state для deep-link /ads?state=… */
+export const KPI_CELL_STATE: Record<string, string> = {
+  active: "normal",
+  warning: "warning_sent",
+  stop: "stop_sent",
+  disabled: "disabled",
+};
+
 interface SparklineKpiRowProps {
   stats: DashboardStats;
   /** Реальный ряд spend по часам — прокси-история для ячейки ACTIVE. */
   spendSpark?: number[];
+  /** Клик по ячейке (key: active|warning|stop|disabled) → фильтр в Ads. */
+  onCellClick?: (key: string) => void;
 }
 
-export function SparklineKpiRow({ stats, spendSpark = [] }: SparklineKpiRowProps) {
+export function SparklineKpiRow({ stats, spendSpark = [], onCellClick }: SparklineKpiRowProps) {
   const cells: KpiCellData[] = [
     {
       key: "active",
@@ -122,7 +158,12 @@ export function SparklineKpiRow({ stats, spendSpark = [] }: SparklineKpiRowProps
       aria-label="Ключевые показатели"
     >
       {cells.map((d, i) => (
-        <KpiCell key={d.key} d={d} last={i === cells.length - 1} />
+        <KpiCell
+          key={d.key}
+          d={d}
+          last={i === cells.length - 1}
+          onClick={onCellClick ? () => onCellClick(d.key) : undefined}
+        />
       ))}
     </div>
   );

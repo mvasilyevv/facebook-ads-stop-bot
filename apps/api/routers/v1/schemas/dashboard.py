@@ -48,6 +48,8 @@ class AdSnapshotOut(BaseModel):
     ad_name: str
     campaign_name: str | None = None
     adset_name: str | None = None
+    # Мульти-кабинет: кабинет объявления из каталога кампании (NULL — legacy-записи).
+    ad_account_id: str | None = None
     offer_code: str | None = None
     offer_id: str | None = None
 
@@ -89,6 +91,8 @@ class AlertEventOut(BaseModel):
     fb_ad_id: str | None = None
     ad_name: str | None = None
     campaign_name: str | None = None
+    # Мульти-кабинет: кабинет объявления (NULL — legacy-записи каталога).
+    ad_account_id: str | None = None
     offer_code: str | None = None
 
     stage: str  # warning | stop

@@ -48,6 +48,7 @@ async def upsert_catalog_hierarchy(
     campaign_name: str,
     offer_id: uuid.UUID | None,
     delivery_status: str | None = None,
+    ad_account_id: str | None = None,
 ) -> uuid.UUID:
     """UPSERT offer → campaign → adset → ad, возвращает fb_ads.id (UUID).
 
@@ -56,37 +57,116 @@ async def upsert_catalog_hierarchy(
 
     delivery_status — текущий статус доставки ad'а из скана; пустую строку
     нормализуем в NULL (фронту не нужен "" вместо реального статуса).
+
+    ad_account_id — кабинет, из которого пришла строка скана (мульти-кабинет).
+    None — не трогаем существующее значение (COALESCE), чтобы fallback-сканы
+    без кабинета не затирали уже известную привязку.
     """
     # Пустой/пробельный статус → NULL: пишем только осмысленное значение.
     delivery_status = delivery_status.strip() if delivery_status else None
     delivery_status = delivery_status or None
+    # Пустой кабинет → NULL (не затираем существующий COALESCE'ом ниже).
+    ad_account_id = (ad_account_id or "").strip() or None
     now = datetime.now(timezone.utc)
 
     async with engine.begin() as conn:
-        # campaign
-        cmp_row = (
+        # --- campaign: идентичность = fb_campaign_id (HIGH-3, миграция 0020) ---
+        # Одноимённые кампании РАЗНЫХ кабинетов — разные строки; upsert по имени
+        # сливал их в одну (ads обоих кабинетов цеплялись к ней, ad_account_id прыгал).
+        params = {
+            "fbcid": fb_campaign_id,
+            "cname": campaign_name,
+            "oid": offer_id,
+            "now": now,
+            "acct": ad_account_id,
+        }
+        if fb_campaign_id:
+            # Adoption: legacy-строка с тем же именем без Graph ID (старые DOM-сканы)
+            # получает ID, чтобы ON CONFLICT ниже попал в неё, а не создал дубль.
+            # Guard NOT EXISTS — не красть ID у строки, когда он уже занят другой кампанией.
             await conn.execute(
                 text(
                     """
-                    INSERT INTO fb_campaigns
-                        (fb_campaign_id, campaign_name, offer_id, last_seen_at)
-                    VALUES (:fbcid, :cname, :oid, :now)
-                    ON CONFLICT (campaign_name) DO UPDATE
-                    SET last_seen_at = :now,
-                        fb_campaign_id = COALESCE(EXCLUDED.fb_campaign_id, fb_campaigns.fb_campaign_id),
-                        offer_id = COALESCE(EXCLUDED.offer_id, fb_campaigns.offer_id),
-                        is_active = TRUE
-                    RETURNING id
+                    UPDATE fb_campaigns SET fb_campaign_id = :fbcid
+                    WHERE campaign_name = :cname
+                      AND fb_campaign_id IS NULL
+                      AND NOT EXISTS (
+                          SELECT 1 FROM fb_campaigns WHERE fb_campaign_id = :fbcid
+                      )
                     """
                 ),
-                {
-                    "fbcid": fb_campaign_id,
-                    "cname": campaign_name,
-                    "oid": offer_id,
-                    "now": now,
-                },
+                params,
             )
-        ).first()
+            cmp_row = (
+                await conn.execute(
+                    text(
+                        """
+                        INSERT INTO fb_campaigns
+                            (fb_campaign_id, campaign_name, offer_id, last_seen_at, ad_account_id)
+                        VALUES (:fbcid, :cname, :oid, :now, :acct)
+                        ON CONFLICT (fb_campaign_id) WHERE fb_campaign_id IS NOT NULL
+                        DO UPDATE
+                        SET last_seen_at = :now,
+                            campaign_name = EXCLUDED.campaign_name,
+                            offer_id = COALESCE(EXCLUDED.offer_id, fb_campaigns.offer_id),
+                            ad_account_id =
+                                COALESCE(EXCLUDED.ad_account_id, fb_campaigns.ad_account_id),
+                            is_active = TRUE
+                        RETURNING id
+                        """
+                    ),
+                    params,
+                )
+            ).first()
+        else:
+            # Fallback без Graph ID (исторический путь): матчим по имени, предпочитая
+            # свой кабинет. Только observer пишет каталог (последовательно) — race
+            # SELECT→INSERT здесь не возникает.
+            # Adoption-guard: матчим ТОЛЬКО свободные legacy-строки (fb_campaign_id IS
+            # NULL) — безымянный скан не должен красть/сливаться с уже идентифицированной
+            # кампанией (иначе одноимённые кампании разных кабинетов путаются).
+            cmp_row = (
+                await conn.execute(
+                    text(
+                        """
+                        SELECT id FROM fb_campaigns
+                        WHERE campaign_name = :cname
+                          AND fb_campaign_id IS NULL
+                        ORDER BY (ad_account_id IS NOT DISTINCT FROM :acct) DESC, created_at
+                        LIMIT 1
+                        """
+                    ),
+                    params,
+                )
+            ).first()
+            if cmp_row is not None:
+                await conn.execute(
+                    text(
+                        """
+                        UPDATE fb_campaigns
+                        SET last_seen_at = :now,
+                            offer_id = COALESCE(:oid, offer_id),
+                            ad_account_id = COALESCE(:acct, ad_account_id),
+                            is_active = TRUE
+                        WHERE id = :cid
+                        """
+                    ),
+                    {**params, "cid": cmp_row[0]},
+                )
+            else:
+                cmp_row = (
+                    await conn.execute(
+                        text(
+                            """
+                            INSERT INTO fb_campaigns
+                                (fb_campaign_id, campaign_name, offer_id, last_seen_at, ad_account_id)
+                            VALUES (NULL, :cname, :oid, :now, :acct)
+                            RETURNING id
+                            """
+                        ),
+                        params,
+                    )
+                ).first()
         campaign_id = cmp_row[0]
 
         # adset
@@ -318,6 +398,7 @@ async def maybe_create_disable_task(
     transition: FsmTransition,
     fb_ad_id: str,
     open_token: uuid.UUID | None,
+    ad_account_id: str | None = None,
 ) -> int | None:
     """Если FSM решил создать stop-задачу — auto-stop через Marketing API (pause_ad).
 
@@ -327,11 +408,16 @@ async def maybe_create_disable_task(
 
     idempotency_key привязан к open_token инцидента — гарантирует одну задачу на
     инцидент (повторный STOP того же incident'а → UNIQUE conflict → no-op).
+
+    ad_account_id — мульти-кабинет: кабинет текущего скана; mutation исполнится
+    из вкладки этого кабинета. None — legacy primary-вкладка.
     """
     if not transition.create_disable_task:
         return None
     token = open_token or transition.new_open_token or uuid.uuid4()
-    return await _create_pause_mutation(engine, fb_ad_id=fb_ad_id, token=token)
+    return await _create_pause_mutation(
+        engine, fb_ad_id=fb_ad_id, token=token, ad_account_id=ad_account_id
+    )
 
 
 async def _create_pause_mutation(
@@ -339,6 +425,7 @@ async def _create_pause_mutation(
     *,
     fb_ad_id: str,
     token: uuid.UUID,
+    ad_account_id: str | None = None,
 ) -> int | None:
     """Создать meta_api_mutation pause_ad для авто-стопа.
 
@@ -353,7 +440,7 @@ async def _create_pause_mutation(
         mutation_kind="pause_ad",
         target_id=fb_ad_id,
         params={},
-        ad_account_id=None,
+        ad_account_id=ad_account_id,
     )
     key = f"auto:pause_ad:{fb_ad_id}:{token}"
     return await create_mutation_task(

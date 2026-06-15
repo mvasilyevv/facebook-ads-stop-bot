@@ -8,7 +8,7 @@
  *   ROAS в схеме НЕТ → всегда null (рендерим «—», не фейк).
  */
 
-import type { AdSnapshot } from "@fb/shared";
+import { deriveGeoFromNames, type AdSnapshot } from "@fb/shared";
 
 // ─── Числовой парс ────────────────────────────────────────────────────────────
 
@@ -17,6 +17,34 @@ export function num(v: string | number | null | undefined): number | null {
   if (v == null || v === "") return null;
   const n = typeof v === "string" ? Number.parseFloat(v) : v;
   return Number.isNaN(n) ? null : n;
+}
+
+// ─── Мульти-кабинет ──────────────────────────────────────────────────────────
+
+/**
+ * Кабинет объявления (числовой ID без act_). Поле приходит с бэка с миграции
+ * 0019; в generated-типах появляется после `pnpm gen:api` — до этого мягкий каст.
+ */
+export function adAccountId(ad: AdSnapshot): string | null {
+  return (ad as AdSnapshot & { ad_account_id?: string | null }).ad_account_id ?? null;
+}
+
+/**
+ * Короткий вид ID кабинета для узких колонок: «…1234» (последние 4 цифры).
+ * Арбитражники различают кабинеты по хвосту; полный ID — в title/tooltip.
+ */
+export function shortAccountId(id: string): string {
+  return id.length > 6 ? `…${id.slice(-4)}` : id;
+}
+
+/**
+ * Deep-link на объявление в Ads Manager (кабинет + selected_ad_ids).
+ * null — кабинет неизвестен (legacy-записи каталога) → ссылку не показываем.
+ */
+export function adsManagerAdUrl(ad: AdSnapshot): string | null {
+  const acc = adAccountId(ad);
+  if (!acc) return null;
+  return `https://adsmanager.facebook.com/adsmanager/manage/ads?act=${acc}&selected_ad_ids=${ad.fb_ad_id}`;
 }
 
 // ─── Метрики строки таблицы ─────────────────────────────────────────────────
@@ -73,35 +101,11 @@ export function money1(v: number | null | undefined): string {
 
 // ─── Гео из имени объявления ───────────────────────────────────────────────
 
-// ISO-2 коды, реально встречающиеся в трафике (расширяемо). Регистр верхний.
-const KNOWN_GEOS = new Set([
-  "PT", "BR", "UA", "DE", "IT", "ES", "FR", "NL", "PL", "GB", "GH", "NG",
-  "US", "CA", "AU", "MX", "AR", "CL", "CO", "PE", "RO", "CZ", "GR", "TR",
-  "IN", "ID", "PH", "TH", "VN", "ZA", "KE", "EG", "MA", "SA", "AE", "KZ",
-]);
-
 /**
- * Извлекает 2-буквенное гео из имени объявления/кампании.
- * Стратегия: ищем токен (split по разделителям), который является известным
- * ISO-2 кодом ИЛИ начинается с пары заглавных, совпадающей с известным гео
- * (напр. «GH12» → GH). Фолбэк — первые 2 буквы первого токена в upper.
- * Гео-плейсхолдер для thumb; настоящие креативы заменят его позже.
+ * Гео-плейсхолдер для thumb. Реализация сведена в @fb/shared (deriveGeoFromNames) —
+ * единый алгоритм с mini (дедуп, аудит 2026-06-09). Обёртка сохраняет прежнюю
+ * сигнатуру по AdSnapshot для всех call-sites web.
  */
 export function deriveGeo(ad: Pick<AdSnapshot, "ad_name" | "campaign_name">): string {
-  const source = `${ad.campaign_name ?? ""} ${ad.ad_name ?? ""}`;
-  const tokens = source.split(/[\s|/_\-.,]+/).filter(Boolean);
-  for (const t of tokens) {
-    const up = t.toUpperCase();
-    if (KNOWN_GEOS.has(up)) return up;
-    const head = up.slice(0, 2);
-    // «GH12», «UA7» — гео-код с приклеенным числом.
-    if (/^[A-Z]{2}\d/.test(up) && KNOWN_GEOS.has(head)) return head;
-  }
-  // Фолбэк: первые две буквы первого алфавитного токена.
-  const firstWord = tokens.find((t) => /[a-zA-Z]/.test(t));
-  if (firstWord) {
-    const letters = firstWord.replace(/[^a-zA-Z]/g, "").slice(0, 2).toUpperCase();
-    if (letters.length === 2) return letters;
-  }
-  return "—";
+  return deriveGeoFromNames(ad.campaign_name, ad.ad_name);
 }

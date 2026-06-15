@@ -15,16 +15,28 @@ from core.ai_assistant.tools.base import RiskLevel, ToolContext
 
 logger = logging.getLogger(__name__)
 
-# Список ожидаемых воркеров — для отображения "не работает" если ключа нет в Redis.
-# disable/enable удалены: отключение/включение рекламы теперь через Marketing API
-# (meta_api), отдельных DOM-toggle воркеров больше нет.
-_EXPECTED_WORKERS: tuple[str, ...] = (
+# Канонический список ожидаемых воркеров — зеркало
+# apps/health_watchdog/main.py::DEFAULT_EXPECTED_WORKERS (11 воркеров).
+# Синхронизация защищена контрактным тестом (test_heartbeat_contract.py).
+# Раньше здесь было только 5 имён → tool «не видел» money-критичные
+# cabinet_scheduler/tracker_aggregator и врал про здоровье системы.
+# Публичное имя: переиспользуется MCP-ресурсом workers-health (apps/mcp_server).
+EXPECTED_WORKERS: tuple[str, ...] = (
     "observer",
     "telegram_poller",
     "cleanup",
     "reconciler",
     "meta_api",
+    "tracker_aggregator",
+    "enable_reco",
+    "cabinet_scheduler",
+    "digest_scheduler",
+    "creator",
+    "creator_recorder",
 )
+
+# Обратная совместимость для старых импортов.
+_EXPECTED_WORKERS = EXPECTED_WORKERS
 
 
 class GetWorkerHealthTool:
@@ -35,8 +47,11 @@ class GetWorkerHealthTool:
     schema: ClassVar[dict[str, Any]] = {
         "name": "get_worker_health",
         "description": (
-            "Статус всех воркеров: читает worker:heartbeat:* из Redis (TTL 60s). "
-            "Воркер без ключа = не пишет heartbeat (упал или не запущен)."
+            "Статус всех 11 воркеров системы: читает worker:heartbeat:* из Redis (TTL 60s). "
+            "Воркер без ключа = не пишет heartbeat (упал или не запущен). "
+            "Money-критичные: observer (скан и авто-стоп), meta_api (исполнение pause/enable), "
+            "cabinet_scheduler (автостарт кабинета по расписанию). Если они мертвы — "
+            "сообщи пользователю это В ПЕРВУЮ очередь."
         ),
         "input_schema": {"type": "object", "properties": {}},
     }

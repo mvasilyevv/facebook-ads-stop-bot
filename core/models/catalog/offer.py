@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from sqlalchemy import Boolean, Index, String, text
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from core.models.base import Base, Timestamp, UUIDPrimaryKey
@@ -42,6 +43,14 @@ class Offer(UUIDPrimaryKey, Timestamp, Base):
         Boolean,
         nullable=False,
         server_default=text("true"),
+    )
+    # Мульти-кабинет (MULTI_CABINET_PLAN.md): рекламные кабинеты, в которых живёт оффер
+    # (числовые ID без префикса act_). Scan set observer'а = union по активным офферам.
+    # Пустой список — оффер не участвует в скане (warning в TG); валидация min 1 — на API.
+    ad_account_ids: Mapped[list[str]] = mapped_column(
+        ARRAY(String),
+        nullable=False,
+        server_default=text("'{}'"),
     )
 
     rules: Mapped[list["OfferRule"]] = relationship(  # noqa: F821

@@ -55,9 +55,11 @@ class GetRecentAlertsTool:
 
         sql = (
             "SELECT ae.stage, ae.matched_rule_codes, ae.created_at, "
-            "       a.fb_ad_id, a.ad_name "
+            "       a.fb_ad_id, a.ad_name, c.ad_account_id "
             "FROM alert_events ae "
             "JOIN fb_ads a ON a.id = ae.ad_id "
+            "LEFT JOIN fb_adsets s ON s.id = a.adset_id "
+            "LEFT JOIN fb_campaigns c ON c.id = s.campaign_id "
             "WHERE ae.created_at >= NOW() - make_interval(hours => :hrs) "
         )
         params: dict[str, Any] = {"hrs": hours, "lim": limit}
@@ -74,11 +76,14 @@ class GetRecentAlertsTool:
 
         lines = [f"Алертов за последние {hours}ч: {len(rows)}"]
         for row in rows:
-            stage_val, rule_codes, created_at, fb_ad_id, ad_name = row
+            stage_val, rule_codes, created_at, fb_ad_id, ad_name, ad_account_id = row
             codes_str = ", ".join(rule_codes or []) if isinstance(rule_codes, list) else "?"
             ts = created_at.strftime("%Y-%m-%d %H:%M") if created_at else "?"
             short_name = (ad_name or "")[:48]
+            # Мульти-кабинет: показываем кабинет (если каталог уже знает привязку).
+            cab_part = f" cab={ad_account_id}" if ad_account_id else ""
             lines.append(
-                f"[{ts}] {str(stage_val).upper()} ad={fb_ad_id} «{short_name}» rules=({codes_str})"
+                f"[{ts}] {str(stage_val).upper()} ad={fb_ad_id}{cab_part} "
+                f"«{short_name}» rules=({codes_str})"
             )
         return "\n".join(lines)

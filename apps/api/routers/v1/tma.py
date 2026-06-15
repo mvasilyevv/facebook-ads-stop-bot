@@ -317,11 +317,15 @@ async def _create_disable_action(
     без инцидента — uuid4 (ручное отключение можно повторять).
     """
     suffix = token or uuid.uuid4().hex
+    # Мульти-кабинет: кабинет объявления из каталога (None → legacy primary-вкладка).
+    from core.observer.accounts import load_ad_account_id_for_fb_ad
+
+    ad_account_id = await load_ad_account_id_for_fb_ad(engine, fb_ad_id)
     payload = MetaMutationPayload(
         mutation_kind="pause_ad",
         target_id=fb_ad_id,
         params={},
-        ad_account_id=None,
+        ad_account_id=ad_account_id,
     )
     task_id = await create_mutation_task(
         engine,

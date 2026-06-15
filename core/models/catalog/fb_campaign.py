@@ -6,7 +6,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, UniqueConstraint, text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -17,13 +17,16 @@ class FbCampaign(UUIDPrimaryKey, Timestamp, Base):
     """Кампания Facebook.
 
     offer_id — nullable, ON DELETE SET NULL: если оффер удалён, кампания остаётся unmatched.
-    fb_campaign_id — Meta numeric ID, уникален только среди NOT NULL (partial UNIQUE).
-    UNIQUE(campaign_name) — для upsert в observer/snapshot_writer.
+    fb_campaign_id — Meta numeric ID, уникален только среди NOT NULL (partial UNIQUE) —
+    ЭТО идентичность кампании для upsert'а (writers.upsert_catalog_hierarchy).
+    campaign_name НЕ уникально с 0020: одноимённые кампании разных кабинетов сосуществуют.
     """
 
     __tablename__ = "fb_campaigns"
     __table_args__ = (
-        UniqueConstraint("campaign_name", name="uq_fb_campaigns_campaign_name"),
+        # Идентичность кампании = fb_campaign_id (partial unique ниже). Имя НЕ уникально:
+        # одноимённые кампании разных кабинетов — разные строки (миграция 0020, HIGH-3).
+        Index("ix_fb_campaigns_campaign_name", "campaign_name"),
         Index(
             "ix_fb_campaigns_fb_id_unique",
             "fb_campaign_id",
@@ -40,9 +43,20 @@ class FbCampaign(UUIDPrimaryKey, Timestamp, Base):
             "id",
             postgresql_where=text("is_active = true"),
         ),
+        Index(
+            "ix_fb_campaigns_ad_account",
+            "ad_account_id",
+            postgresql_where=text("ad_account_id IS NOT NULL"),
+        ),
     )
 
     fb_campaign_id: Mapped[str | None] = mapped_column(
+        String(32),
+        nullable=True,
+    )
+    # Мульти-кабинет: числовой ID кабинета (без префикса act_), из которого кампания
+    # просканирована. NULL — историческая запись до мульти-кабинетности.
+    ad_account_id: Mapped[str | None] = mapped_column(
         String(32),
         nullable=True,
     )

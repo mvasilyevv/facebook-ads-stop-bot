@@ -117,6 +117,36 @@ def test_expected_workers_match_watchdog_default() -> None:
     )
 
 
+def test_ai_tool_worker_list_matches_watchdog() -> None:
+    """AI-tool get_worker_health видит ТОТ ЖЕ набор воркеров, что watchdog.
+
+    Регресс MCP-аудита 2026-06-10: tool знал только 5 воркеров из 11 —
+    «здоровье системы» в Claude Desktop умалчивало про мёртвый cabinet_scheduler.
+    """
+    from apps.health_watchdog.main import DEFAULT_EXPECTED_WORKERS, parse_expected_workers
+    from core.ai_assistant.tools.ops.get_worker_health import EXPECTED_WORKERS
+
+    watchdog_names = set(parse_expected_workers(DEFAULT_EXPECTED_WORKERS))
+    assert set(EXPECTED_WORKERS) == watchdog_names, (
+        f"get_worker_health: {sorted(EXPECTED_WORKERS)} != watchdog {sorted(watchdog_names)}"
+    )
+
+
+def test_mcp_resource_worker_list_matches_watchdog() -> None:
+    """MCP-ресурс workers-health использует канонический список (импорт из tool'а).
+
+    Регресс: локальная копия в resources.py содержала фантомные disable/enable
+    и не знала про cabinet_scheduler/tracker_aggregator.
+    """
+    from apps.health_watchdog.main import DEFAULT_EXPECTED_WORKERS, parse_expected_workers
+    from apps.mcp_server.resources import _EXPECTED_WORKERS as mcp_workers
+
+    watchdog_names = set(parse_expected_workers(DEFAULT_EXPECTED_WORKERS))
+    assert set(mcp_workers) == watchdog_names, (
+        f"mcp resources: {sorted(mcp_workers)} != watchdog {sorted(watchdog_names)}"
+    )
+
+
 # ====================== observer heartbeat ======================
 
 

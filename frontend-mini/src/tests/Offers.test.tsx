@@ -167,7 +167,7 @@ describe("OffersPage", () => {
     expect(screen.getByText("Создать оффер")).toBeInTheDocument();
   });
 
-  // Создание оффера вызывает mutateAsync с правильными данными
+  // Создание оффера вызывает mutateAsync с правильными данными (мульти-кабинет: + кабинеты)
   it("создание оффера вызывает useCreateOffer.mutateAsync", async () => {
     const mutateAsync = vi.fn().mockResolvedValue({});
     mockUseCreateOffer.mockReturnValue({ mutateAsync, isPending: false });
@@ -178,13 +178,33 @@ describe("OffersPage", () => {
     const codeInput = screen.getByLabelText(/Код оффера/i);
     fireEvent.change(codeInput, { target: { value: "DRC_NEW" } });
 
+    // Мульти-кабинет: без ID кабинета сабмит блокируется валидацией
+    const accountsInput = screen.getByLabelText(/Рекламные кабинеты/i);
+    fireEvent.change(accountsInput, { target: { value: "act_111, 222" } });
+
     fireEvent.click(screen.getByText("Создать оффер"));
 
     await waitFor(() => {
       expect(mutateAsync).toHaveBeenCalledWith(
-        expect.objectContaining({ code: "DRC_NEW" }),
+        expect.objectContaining({ code: "DRC_NEW", ad_account_ids: ["111", "222"] }),
       );
     });
+  });
+
+  // Мульти-кабинет: пустое поле кабинетов блокирует сабмит
+  it("создание без кабинетов блокируется валидацией", async () => {
+    const mutateAsync = vi.fn().mockResolvedValue({});
+    mockUseCreateOffer.mockReturnValue({ mutateAsync, isPending: false });
+
+    render(<OffersTestWrapper />);
+    fireEvent.click(screen.getByRole("button", { name: /Новый/i }));
+    fireEvent.change(screen.getByLabelText(/Код оффера/i), { target: { value: "DRC_NEW" } });
+    fireEvent.click(screen.getByText("Создать оффер"));
+
+    await waitFor(() => {
+      expect(screen.getByText(/минимум один ID кабинета/i)).toBeInTheDocument();
+    });
+    expect(mutateAsync).not.toHaveBeenCalled();
   });
 
   // Удаление требует tgConfirm и вызывает deleteOffer

@@ -141,6 +141,7 @@ class MetaApiClient:
         query_params: dict[str, str] | None = None,
         body_json: str | dict[str, Any] | None = None,
         timeout_ms: int | None = None,
+        ad_account_id: str | None = None,
     ) -> dict[str, Any]:
         """Универсальный Graph API call через активную Vision-сессию.
 
@@ -154,6 +155,8 @@ class MetaApiClient:
             query_params: query string / form params
             body_json: тело POST (dict сериализуется в JSON-строку)
             timeout_ms: таймаут одного вызова на стороне browser-agent
+            ad_account_id: мульти-кабинет — fetch исполняется из вкладки этого кабинета
+                (числовой ID без act_). None/"" → primary-вкладка (legacy).
         """
         if self._stub is None:
             raise RuntimeError("MetaApiClient не запущен: вызови await start()")
@@ -169,6 +172,7 @@ class MetaApiClient:
             "endpoint": endpoint,
             "query_params": params_map,
             "body_json": body_str,
+            "ad_account_id": (ad_account_id or "").removeprefix("act_"),
         }
         if timeout_ms is not None:
             req_kwargs["timeout_ms"] = int(timeout_ms)

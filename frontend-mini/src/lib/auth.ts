@@ -72,13 +72,27 @@ export function logout(): void {
  * Аутентификация на бэке через initData.
  * Бросает Error при 4xx / 5xx — вызывающий должен обработать.
  */
+/** Таймаут логина: висящий бэк не должен держать TMA на сплеше бесконечно. */
+const LOGIN_TIMEOUT_MS = 15_000;
+
 export async function loginToBackend(): Promise<AuthResponse> {
   const initData = getInitData();
-  const resp = await fetch(`${API_BASE}/tma/auth`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ init_data: initData }),
-  });
+  let resp: Response;
+  try {
+    resp = await fetch(`${API_BASE}/tma/auth`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ init_data: initData }),
+      // AbortSignal.timeout: при недоступном бэке падаем с понятной ошибкой,
+      // AuthGuard покажет её вместо вечного сплеша.
+      signal: AbortSignal.timeout(LOGIN_TIMEOUT_MS),
+    });
+  } catch (e) {
+    if ((e as Error).name === "TimeoutError" || (e as Error).name === "AbortError") {
+      throw new Error("Сервер не отвечает — попробуйте открыть приложение позже");
+    }
+    throw e;
+  }
 
   if (!resp.ok) {
     const err = await resp.json().catch(() => ({ detail: `Ошибка ${resp.status}` }));

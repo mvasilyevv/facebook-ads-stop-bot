@@ -97,11 +97,33 @@ interface OfferFormProps {
   onClose: () => void;
 }
 
+/** Разбор ввода кабинетов: запятые/пробелы, срез act_, дедуп. null — есть мусор. */
+function parseAccountIds(raw: string): string[] | null {
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  for (const part of raw.split(/[\s,;]+/)) {
+    const token = part.trim();
+    if (!token) continue;
+    const normalized = token.replace(/^act_/i, "");
+    if (!/^\d+$/.test(normalized)) return null;
+    if (!seen.has(normalized)) {
+      seen.add(normalized);
+      ids.push(normalized);
+    }
+  }
+  return ids;
+}
+
 function OfferForm({ offer, onClose }: OfferFormProps) {
   const isEdit = !!offer;
+  // ad_account_ids появляется в generated-типах после pnpm gen:api — до этого читаем мягко.
+  const offerAccounts =
+    (offer as (Offer & { ad_account_ids?: string[] }) | null)?.ad_account_ids ?? [];
   const [code, setCode] = useState(offer?.code ?? "");
   const [name, setName] = useState(offer?.name ?? "");
   const [vertical, setVertical] = useState(offer?.vertical ?? "");
+  const [accountsRaw, setAccountsRaw] = useState(offerAccounts.join(", "));
+  const [accountsError, setAccountsError] = useState<string | null>(null);
   const [isActive, setIsActive] = useState(offer?.is_active ?? true);
   const [error, setError] = useState<string | null>(null);
   const switchId = useId();
@@ -113,10 +135,22 @@ function OfferForm({ offer, onClose }: OfferFormProps) {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    setAccountsError(null);
     haptic.impact("medium");
 
     if (!code.trim()) {
       setError("Код оффера обязателен");
+      return;
+    }
+
+    // Мульти-кабинет: минимум один числовой ID — без него оффер не сканируется.
+    const accountIds = parseAccountIds(accountsRaw);
+    if (accountIds === null) {
+      setAccountsError("Только числовые ID кабинетов (через запятую)");
+      return;
+    }
+    if (accountIds.length === 0) {
+      setAccountsError("Укажи минимум один ID кабинета");
       return;
     }
 
@@ -126,6 +160,7 @@ function OfferForm({ offer, onClose }: OfferFormProps) {
           name: name.trim() || null,
           vertical: vertical || null,
           is_active: isActive,
+          ad_account_ids: accountIds,
         };
         await update.mutateAsync({ id: offer.id, payload });
       } else {
@@ -134,6 +169,7 @@ function OfferForm({ offer, onClose }: OfferFormProps) {
           code: trimmedCode,
           name: name.trim() || trimmedCode,
           vertical: vertical || null,
+          ad_account_ids: accountIds,
         };
         await create.mutateAsync(payload);
       }
@@ -163,6 +199,19 @@ function OfferForm({ offer, onClose }: OfferFormProps) {
         placeholder={code || "GH Aviator"}
         value={name}
         onChange={(e) => setName(e.target.value)}
+      />
+
+      {/* Кабинеты (мульти-кабинет): числовые ID через запятую, минимум 1 */}
+      <Input
+        label="Рекламные кабинеты"
+        placeholder="1234567890, 9876543210"
+        value={accountsRaw}
+        onChange={(e) => {
+          setAccountsRaw(e.target.value);
+          if (accountsError) setAccountsError(null);
+        }}
+        errorMessage={accountsError ?? undefined}
+        inputMode="numeric"
       />
 
       {/* Вертикаль */}
@@ -276,6 +325,8 @@ interface OfferCardProps {
 function OfferCard({ offer, onClick }: OfferCardProps) {
   const isActive = offer.is_active;
   const vertical = offer.vertical;
+  // Мульти-кабинет: до pnpm gen:api поле читаем мягким кастом.
+  const accounts = (offer as Offer & { ad_account_ids?: string[] }).ad_account_ids ?? [];
 
   return (
     <button
@@ -307,6 +358,17 @@ function OfferCard({ offer, onClick }: OfferCardProps) {
         </div>
         {offer.name && offer.name !== offer.code ? (
           <p className="text-[12px] text-bg-9 mt-0.5 truncate">{offer.name}</p>
+        ) : null}
+        {/* Мульти-кабинет: кабинеты оффера; пусто = warning (оффер вне скана) */}
+        {isActive && accounts.length === 0 ? (
+          <p className="text-[11px] text-warning mt-0.5">кабинеты не заданы — не сканируется</p>
+        ) : accounts.length > 0 ? (
+          <p
+            className="font-display tabular-nums text-[11px] text-bg-8 mt-0.5 truncate"
+            title={accounts.join(", ")}
+          >
+            каб: {accounts.map((a) => (a.length > 8 ? `…${a.slice(-6)}` : a)).join(" · ")}
+          </p>
         ) : null}
       </div>
 

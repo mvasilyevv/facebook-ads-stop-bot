@@ -44,6 +44,25 @@ export function normalizeAlertState(raw: string | null | undefined): AlertState 
   return "normal";
 }
 
+/**
+ * alert_state → CSS-переменная FSM-цвета из tokens.css.
+ * ВАЖНО: токены называются --fsm-warning / --fsm-stop (по СТАДИИ, не state) —
+ * прямая подстановка state в имя (`--fsm-warning_sent`) даёт несуществующий
+ * токен и невидимую точку (реальный баг mini, найден при дедупе 2026-06-09).
+ */
+const ALERT_STATE_FSM_VAR: Record<AlertState, string> = {
+  normal: "--fsm-normal",
+  warning_sent: "--fsm-warning",
+  stop_sent: "--fsm-stop",
+  claimed: "--fsm-claimed",
+  disabled: "--fsm-disabled",
+};
+
+/** CSS-значение цвета состояния: `var(--fsm-…)`. Любой вход нормализуется. */
+export function alertStateCssVar(raw: string | null | undefined): string {
+  return `var(${ALERT_STATE_FSM_VAR[normalizeAlertState(raw)]})`;
+}
+
 // ─── Alert Stage ─────────────────────────────────────────────────────────────
 
 export const ALERT_STAGES = ["warning", "stop"] as const;

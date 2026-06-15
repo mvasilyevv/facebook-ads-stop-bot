@@ -43,7 +43,7 @@ class GetActiveOffersTool:
         limit = max(1, min(limit, 200))
 
         params: dict[str, Any] = {"lim": limit}
-        sql = "SELECT code, name, vertical FROM offers WHERE is_active = true "
+        sql = "SELECT code, name, vertical, ad_account_ids FROM offers WHERE is_active = true "
         if vertical:
             sql += "AND LOWER(vertical) = :vert "
             params["vert"] = vertical
@@ -57,6 +57,13 @@ class GetActiveOffersTool:
 
         lines = [f"Активные офферы ({len(rows)}):"]
         for row in rows:
-            code, name_, vert = row
-            lines.append(f"- {code} — {name_} [{vert or 'без вертикали'}]")
+            code, name_, vert, accounts = row
+            accounts = list(accounts or [])
+            # Мульти-кабинет: оффер без кабинетов НЕ сканируется — явный маркер для LLM.
+            acc_part = (
+                f"кабинеты: {', '.join(accounts)}"
+                if accounts
+                else "⚠️ кабинеты не заданы — НЕ сканируется"
+            )
+            lines.append(f"- {code} — {name_} [{vert or 'без вертикали'}] · {acc_part}")
         return "\n".join(lines)

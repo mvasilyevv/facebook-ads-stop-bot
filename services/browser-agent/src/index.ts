@@ -250,13 +250,17 @@ async function runScanCycle(call: any) {
 
   try {
     const session = sessionManager.getSession(req.session_id);
+    // Мульти-кабинет: числовой ID кабинета из запроса (пусто → legacy одно-кабинетный путь).
+    const actId: string | undefined =
+      String(req.ad_account_id || '').replace(/^act_/, '').trim() || undefined;
     // Self-heal Layer 1: если primary-вкладку Ads Manager закрыли, но браузер жив —
     // переоткрываем её на known-good/реконструированном URL кабинета (чужие вкладки не трогаем).
     // Если браузер/CDP мертвы — бросит 'Основная страница браузера недоступна' → эскалация
     // на observer (reconnect/StartBrowser, Layer 2).
-    const fallbackUrl = reconstructAdsManagerUrl(req.session_id);
+    const fallbackUrl = reconstructAdsManagerUrl(req.session_id, actId);
     const page = await sessionManager.ensureAdsManagerPage(session, {
       fallbackUrl: fallbackUrl ?? undefined,
+      actId,
     });
     // --- am_tabular режим (active replication): метрики из graph-канала UI, без DOM/скролла. ---
     // am_tabular — живой REST → данные ВСЕГДА актуальны, reload для данных НЕ нужен. Токен сниффим
@@ -270,12 +274,15 @@ async function runScanCycle(call: any) {
       // mutation (executeGraphCall) не выполнила page.evaluate(fetch) во время
       // нашего reload и наоборот. Иначе «Execution context was destroyed».
       const scan = await withPageLock(req.session_id, async () => {
-        let acquired = await acquireGraphContext(page, req.session_id);
+        let acquired = await acquireGraphContext(page, req.session_id, { expectedActId: actId });
         let result = await runAmScanWithContext(page, acquired.ctx, amConfig);
         if (result.diagnostics.authExpired) {
           console.warn('[scan][am] access_token протух (190) → re-sniff + retry');
-          invalidateGraphContext(req.session_id);
-          acquired = await acquireGraphContext(page, req.session_id, { forceRefresh: true });
+          invalidateGraphContext(req.session_id, actId);
+          acquired = await acquireGraphContext(page, req.session_id, {
+            forceRefresh: true,
+            expectedActId: actId,
+          });
           result = await runAmScanWithContext(page, acquired.ctx, amConfig);
         }
         return { acquired, result };

@@ -56,17 +56,21 @@ class _FakeGate:
         self.last_campaign_ids: list[str] | None = None
         self.last_owner_tag: str | None = None
         self.last_auto_recover_page: bool | None = None
+        # Мульти-кабинет: какие кабинеты запрашивались (None — legacy-скан).
+        self.account_ids: list[str | None] = []
 
     async def run_one_scan(
         self,
         campaign_ids: list[str] | None = None,
         owner_tag: str | None = None,
         auto_recover_page: bool = True,
+        ad_account_id: str | None = None,
     ) -> ScanCycleOutput:
         self.calls += 1
         self.last_campaign_ids = campaign_ids
         self.last_owner_tag = owner_tag
         self.last_auto_recover_page = auto_recover_page
+        self.account_ids.append(ad_account_id)
         if isinstance(self._output, Exception):
             raise self._output
         return self._output
@@ -422,3 +426,126 @@ async def test_main_loop_degraded_alert_after_threshold(
     assert "Observer" in sent[0]["text"]
 
     await fake_redis_client.delete("observer:degraded:alerted")
+
+
+# ====================== Мульти-кабинет (MULTI_CABINET_PLAN.md M3) ======================
+
+
+class _MultiAccountGate:
+    """Fake ScannerGate: по ScanCycleOutput/Exception на каждый кабинет (по порядку вызовов)."""
+
+    def __init__(self, outputs: dict[str | None, ScanCycleOutput | Exception]):
+        self._outputs = outputs
+        self.account_ids: list[str | None] = []
+
+    async def run_one_scan(
+        self,
+        campaign_ids: list[str] | None = None,
+        owner_tag: str | None = None,
+        auto_recover_page: bool = True,
+        ad_account_id: str | None = None,
+    ) -> ScanCycleOutput:
+        self.account_ids.append(ad_account_id)
+        out = self._outputs[ad_account_id]
+        if isinstance(out, Exception):
+            raise out
+        return out
+
+
+# Сценарий: два кабинета из union офферов сканируются последовательно, каждый со своим
+# scan_run (ad_account_id записан), счётчики суммируются в общем summary.
+@pytest.mark.asyncio
+async def test_multi_cabinet_sequential_scan(
+    pg_engine, ensure_observer_config_enabled, offer_cr2, fake_redis_client, monkeypatch
+) -> None:
+    # Пауза между кабинетами не нужна в тесте — ускоряем.
+    import apps.observer_worker.main as obs_main
+
+    monkeypatch.setattr(obs_main, "ACCOUNT_SCAN_PAUSE_SECONDS", 0.0)
+
+    # Привязываем кабинеты к офферам: CR2 → 111; второй оффер → 222 + 111 (дедуп union).
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE offers SET ad_account_ids = ARRAY['111'] WHERE code = 'CR2'")
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO offers (id, code, name, is_active, ad_account_ids) "
+                "VALUES (:i, 'CR9', 'CR9', TRUE, ARRAY['222', '111'])"
+            ),
+            {"i": uuid.uuid4()},
+        )
+
+    gate = _MultiAccountGate(
+        {
+            "111": ScanCycleOutput(rows=[_row()], total_passes=1),
+            "222": ScanCycleOutput(rows=[], empty_reason="no_active_ads"),
+        }
+    )
+
+    summary = await run_one_cycle(pg_engine, gate=gate, redis_client=fake_redis_client)
+
+    # Кабинеты обойдены последовательно в отсортированном порядке, без дублей.
+    assert gate.account_ids == ["111", "222"]
+    # Хотя бы один кабинет success → весь цикл success; счётчики просуммированы.
+    assert summary["outcome"] == "success"
+    assert summary["rows_total"] == 1
+    assert [a["ad_account_id"] for a in summary["accounts"]] == ["111", "222"]
+
+    async with pg_engine.connect() as conn:
+        rows = (
+            await conn.execute(
+                text(
+                    "SELECT ad_account_id, outcome FROM scan_runs "
+                    "WHERE ad_account_id IS NOT NULL ORDER BY id DESC LIMIT 2"
+                )
+            )
+        ).fetchall()
+    # Оба scan_run записаны со своим кабинетом.
+    assert {r[0] for r in rows} == {"111", "222"}
+
+
+# Сценарий: ошибка скана первого кабинета НЕ прерывает скан второго;
+# outcome цикла success (один кабинет отработал), error зафиксирован per-account.
+@pytest.mark.asyncio
+async def test_multi_cabinet_error_does_not_break_others(
+    pg_engine, ensure_observer_config_enabled, offer_cr2, fake_redis_client, monkeypatch
+) -> None:
+    import apps.observer_worker.main as obs_main
+
+    monkeypatch.setattr(obs_main, "ACCOUNT_SCAN_PAUSE_SECONDS", 0.0)
+
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE offers SET ad_account_ids = ARRAY['111', '222'] WHERE code = 'CR2'")
+        )
+
+    gate = _MultiAccountGate(
+        {
+            "111": RuntimeError("test: кабинет 111 упал"),
+            "222": ScanCycleOutput(rows=[_row()], total_passes=1),
+        }
+    )
+
+    summary = await run_one_cycle(pg_engine, gate=gate, redis_client=fake_redis_client)
+
+    # Оба кабинета были запрошены, несмотря на ошибку первого.
+    assert gate.account_ids == ["111", "222"]
+    assert summary["outcome"] == "success"
+    outcomes = {a["ad_account_id"]: a["outcome"] for a in summary["accounts"]}
+    assert outcomes == {"111": "error", "222": "success"}
+
+
+# Сценарий: офферы без кабинетов → legacy-скан текущей вкладки (ad_account_id=None).
+@pytest.mark.asyncio
+async def test_multi_cabinet_fallback_to_legacy(
+    pg_engine, ensure_observer_config_enabled, offer_cr2, fake_redis_client
+) -> None:
+    gate = _FakeGate(ScanCycleOutput(rows=[_row()], total_passes=1))
+
+    summary = await run_one_cycle(pg_engine, gate=gate, redis_client=fake_redis_client)
+
+    # Один вызов без кабинета — поведение до мульти-кабинетности.
+    assert gate.calls == 1
+    assert gate.account_ids == [None]
+    assert summary["outcome"] == "success"

@@ -18,7 +18,7 @@
 
 import { useRef, type RefObject } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { MoreHorizontal, Check } from "lucide-react";
+import { Check, ExternalLink } from "lucide-react";
 
 import {
   ALERT_STATE_LABELS,
@@ -32,17 +32,21 @@ import { cn } from "@/lib/utils/cn";
 
 import { RulePill } from "./RulePill";
 import {
+  adAccountId,
+  adsManagerAdUrl,
   readAdMetrics,
   deriveGeo,
   money1,
   isCplBad,
   isFreqBad,
   isRoasBad,
+  shortAccountId,
 } from "./adHelpers";
 
 // Сетка колонок — единый источник для header и строк.
+// CAB (56px, мульти-кабинет) — между OFFER и STATE: хвост ID кабинета, full — в title.
 const COLS =
-  "40px minmax(0,1fr) 64px 130px 96px 74px 62px 62px 62px 66px 40px";
+  "40px minmax(0,1fr) 64px 56px 130px 96px 74px 62px 62px 62px 66px 40px";
 
 // Правые числовые колонки (для header-лейблов).
 const NUM_HEADERS = ["SPEND", "CPL", "FREQ", "CPM", "CTR", "ROAS"];
@@ -93,7 +97,12 @@ export function AdsTable({
   const totalHeight = virtualizer.getTotalSize();
 
   return (
-    <div className="flex flex-col min-h-0 flex-1 border border-bg-6">
+    <div
+      className="flex flex-col min-h-0 flex-1 border border-bg-6"
+      role="table"
+      aria-label="Объявления"
+      aria-rowcount={rows.length}
+    >
       {/* ── Header row ──────────────────────────────────────────────────── */}
       <div
         className="grid items-center h-8 bg-bg-2 border-b border-bg-6 shrink-0"
@@ -125,10 +134,21 @@ export function AdsTable({
         </span>
         <span className={cn(COL_HEAD, "pl-1")}>AD</span>
         <span className={COL_HEAD}>OFFER</span>
+        <span className={COL_HEAD}>CAB</span>
         <span className={COL_HEAD}>STATE</span>
         {NUM_HEADERS.map((h) => (
           <span key={h} className={cn(COL_HEAD, "text-right pr-2")}>
-            {h}
+            {h === "SPEND" ? (
+              // Таблица всегда отсортирована по spend desc — показываем это явно.
+              <span title="Сортировка: spend по убыванию">
+                {h}
+                <span aria-hidden="true" className="ml-0.5 text-bg-8">
+                  ↓
+                </span>
+              </span>
+            ) : (
+              h
+            )}
           </span>
         ))}
         <span />
@@ -180,6 +200,7 @@ function AdRow({ ad, selected, cursor, top, height, onToggleSelect, onOpen }: Ad
   const state = normalizeAlertState(ad.alert_state);
   const firstRule = (ad.stop_rule_codes?.[0] ?? ad.warning_rule_codes?.[0]) || null;
   const geo = deriveGeo(ad);
+  const amUrl = adsManagerAdUrl(ad);
 
   return (
     <div
@@ -246,6 +267,9 @@ function AdRow({ ad, selected, cursor, top, height, onToggleSelect, onOpen }: Ad
         )}
       </span>
 
+      {/* CAB: хвост ID кабинета (мульти-кабинет), полный — в title */}
+      <CabCell id={adAccountId(ad)} />
+
       {/* STATE badge */}
       <span className="self-center pl-0.5">
         <Badge variant={alertStateToBadgeVariant(state)} size="sm">
@@ -261,15 +285,41 @@ function AdRow({ ad, selected, cursor, top, height, onToggleSelect, onOpen }: Ad
       <NumCell value={m.ctr != null ? `${m.ctr.toFixed(1)}%` : "—"} muted />
       <NumCell value={m.roas != null ? `${m.roas.toFixed(1)}×` : "—"} danger={isRoasBad(m.roas)} />
 
-      {/* ⋯ */}
+      {/* Открыть в Ads Manager (deep-link по кабинету; нет кабинета — пусто) */}
       <span
-        className="flex items-center justify-center text-bg-8"
+        className="flex items-center justify-center"
         onClick={(e) => e.stopPropagation()}
-        aria-hidden="true"
       >
-        <MoreHorizontal size={16} />
+        {amUrl ? (
+          <a
+            href={amUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label={`Открыть ${ad.ad_name} в Ads Manager`}
+            title="Открыть в Ads Manager"
+            className="inline-flex items-center justify-center size-6 text-bg-8 hover:text-bg-11 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+          >
+            <ExternalLink size={14} aria-hidden="true" />
+          </a>
+        ) : null}
       </span>
     </div>
+  );
+}
+
+// ─── Ячейка кабинета (мульти-кабинет) ───────────────────────────────────────
+
+function CabCell({ id }: { id: string | null }) {
+  if (!id) {
+    return <span className="font-display text-[10px] text-bg-8 self-center">—</span>;
+  }
+  return (
+    <span
+      className="font-display tabular-nums text-[11px] text-bg-9 self-center truncate pr-1"
+      title={`Кабинет ${id}`}
+    >
+      {shortAccountId(id)}
+    </span>
   );
 }
 

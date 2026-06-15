@@ -236,6 +236,12 @@ describe("OfferFormModal — создание", () => {
     await userEvent.clear(screen.getByLabelText(/код оффера/i));
     await userEvent.type(screen.getByLabelText(/код оффера/i), "gh_avi");
 
+    // Вводим кабинеты (мульти-кабинет: act_-префикс срезается, дубли схлопываются)
+    await userEvent.type(
+      screen.getByLabelText(/рекламные кабинеты/i),
+      "act_111, 222 111",
+    );
+
     // Нажимаем создать
     await userEvent.click(screen.getByRole("button", { name: /создать оффер/i }));
 
@@ -243,6 +249,7 @@ describe("OfferFormModal — создание", () => {
       expect.objectContaining({
         code: "GH_AVI", // toUpperCase
         is_active: true,
+        ad_account_ids: ["111", "222"],
       }),
     );
   });
@@ -262,6 +269,45 @@ describe("OfferFormModal — создание", () => {
 
     expect(screen.getByRole("alert")).toBeInTheDocument();
     expect(screen.getByText(/обязателен/i)).toBeInTheDocument();
+  });
+
+  // Мульти-кабинет: без ID кабинета сабмит блокируется с ошибкой (min 1 обязателен).
+  it("показывает ошибку, если кабинеты не указаны", async () => {
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    render(
+      <OfferFormModal
+        open
+        onOpenChange={() => {}}
+        offer={null}
+        onSave={onSave}
+      />,
+    );
+
+    await userEvent.type(screen.getByLabelText(/код оффера/i), "CR2");
+    await userEvent.click(screen.getByRole("button", { name: /создать оффер/i }));
+
+    expect(onSave).not.toHaveBeenCalled();
+    expect(screen.getByText(/минимум один id кабинета/i)).toBeInTheDocument();
+  });
+
+  // Мульти-кабинет: мусорный ввод (не числа) — ошибка с перечислением плохих токенов.
+  it("показывает ошибку при нечисловом ID кабинета", async () => {
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    render(
+      <OfferFormModal
+        open
+        onOpenChange={() => {}}
+        offer={null}
+        onSave={onSave}
+      />,
+    );
+
+    await userEvent.type(screen.getByLabelText(/код оффера/i), "CR2");
+    await userEvent.type(screen.getByLabelText(/рекламные кабинеты/i), "abc123x");
+    await userEvent.click(screen.getByRole("button", { name: /создать оффер/i }));
+
+    expect(onSave).not.toHaveBeenCalled();
+    expect(screen.getByText(/не похоже на id кабинета/i)).toBeInTheDocument();
   });
 });
 

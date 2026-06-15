@@ -61,11 +61,32 @@ const THRESHOLD_FIELDS: ThresholdField[] = [
 
 // ─── Форма создания/редактирования ───────────────────────────────────────────
 
+// Зеркало parseAccountIds из routes/offers/index.tsx (мульти-кабинет).
+function parseAccountIds(raw: string): string[] | null {
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  for (const part of raw.split(/[\s,;]+/)) {
+    const token = part.trim();
+    if (!token) continue;
+    const normalized = token.replace(/^act_/i, "");
+    if (!/^\d+$/.test(normalized)) return null;
+    if (!seen.has(normalized)) {
+      seen.add(normalized);
+      ids.push(normalized);
+    }
+  }
+  return ids;
+}
+
 function OfferForm({ offer, onClose }: { offer: Offer | null; onClose: () => void }) {
   const isEdit = !!offer;
+  const offerAccounts =
+    (offer as (Offer & { ad_account_ids?: string[] }) | null)?.ad_account_ids ?? [];
   const [code, setCode] = useState(offer?.code ?? "");
   const [name, setName] = useState(offer?.name ?? "");
   const [vertical, setVertical] = useState(offer?.vertical ?? "");
+  const [accountsRaw, setAccountsRaw] = useState(offerAccounts.join(", "));
+  const [accountsError, setAccountsError] = useState<string | null>(null);
   const [isActive, setIsActive] = useState(offer?.is_active ?? true);
   const [error, setError] = useState<string | null>(null);
   const switchId = useId();
@@ -76,13 +97,19 @@ function OfferForm({ offer, onClose }: { offer: Offer | null; onClose: () => voi
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    setAccountsError(null);
     if (!code.trim()) { setError("Код оффера обязателен"); return; }
+    // Мульти-кабинет: минимум один числовой ID кабинета.
+    const accountIds = parseAccountIds(accountsRaw);
+    if (accountIds === null) { setAccountsError("Только числовые ID кабинетов (через запятую)"); return; }
+    if (accountIds.length === 0) { setAccountsError("Укажи минимум один ID кабинета"); return; }
     try {
       if (isEdit && offer) {
         const payload: OfferUpdatePayload = {
           name: name.trim() || null,
           vertical: vertical || null,
           is_active: isActive,
+          ad_account_ids: accountIds,
         };
         await update.mutateAsync({ id: offer.id, payload });
       } else {
@@ -91,6 +118,7 @@ function OfferForm({ offer, onClose }: { offer: Offer | null; onClose: () => voi
           code: trimmedCode,
           name: name.trim() || trimmedCode,
           vertical: vertical || null,
+          ad_account_ids: accountIds,
         };
         await create.mutateAsync(payload);
       }
@@ -113,6 +141,16 @@ function OfferForm({ offer, onClose }: { offer: Offer | null; onClose: () => voi
         placeholder={code || "GH Aviator"}
         value={name}
         onChange={(e) => setName(e.target.value)}
+      />
+      <Input
+        label="Рекламные кабинеты"
+        placeholder="1234567890, 9876543210"
+        value={accountsRaw}
+        onChange={(e) => {
+          setAccountsRaw(e.target.value);
+          if (accountsError) setAccountsError(null);
+        }}
+        errorMessage={accountsError ?? undefined}
       />
       <Select
         label="Вертикаль"

@@ -6,14 +6,12 @@
 
 import { useState, useCallback } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { ExternalLink } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { PeriodSelector, type Period } from "@/components/history/PeriodSelector";
 import { HistorySummarySection } from "@/components/history/HistorySummarySection";
 import { HistoryTimeline } from "@/components/history/HistoryTimeline";
 import { HistoryEventsDrawer } from "@/components/history/HistoryEventsDrawer";
 import { useHistorySummary, useHistoryTimeline } from "@/lib/api/history";
-import { Button } from "@/components/ui/Button";
 import type { HistoryTimelineItem } from "@fb/shared";
 
 export const Route = createFileRoute("/history/")({
@@ -51,20 +49,13 @@ function HistoryPage() {
 
   return (
     <>
+      {/* Export CSV удалён (аудит 2026-06-09): кнопка была нефункциональной заглушкой.
+          Вернуть вместе с реальным API-эндпоинтом экспорта, если понадобится. */}
       <PageHeader
         eyebrowNum="03"
         eyebrow="HISTORY · АРХИВ"
         title="История"
         subtitle={`${period.from_iso.slice(0, 10)} — ${period.to_iso.slice(0, 10)}`}
-        action={
-          <Button
-            variant="secondary"
-            size="sm"
-            leftIcon={<ExternalLink size={14} />}
-          >
-            Export CSV
-          </Button>
-        }
       />
 
       {/* Toolbar: period selector + фильтры */}

@@ -38,6 +38,29 @@ export function extractAdAccountId(url: string | null | undefined): string | nul
   return m ? m[1] : null;
 }
 
+/** URL Ads Manager для конкретного кабинета (мульти-кабинет, act без префикса act_). */
+export function adsManagerUrlForAct(actId: string): string {
+  return `https://adsmanager.facebook.com/adsmanager/manage/ads?act=${actId}`;
+}
+
+/** Найти среди ВСЕХ открытых вкладок живую вкладку Ads Manager нужного кабинета. */
+export function findAdsManagerPageByAct(browser: Browser | null, actId: string): Page | null {
+  if (!browser) {
+    return null;
+  }
+  for (const context of browser.contexts()) {
+    for (const page of context.pages()) {
+      if (typeof page.isClosed === 'function' && page.isClosed()) {
+        continue;
+      }
+      if (isAdsManagerUrl(page.url()) && extractAdAccountId(page.url()) === actId) {
+        return page;
+      }
+    }
+  }
+  return null;
+}
+
 function isPageClosed(page: Page): boolean {
   return typeof page.isClosed === 'function' && page.isClosed();
 }
@@ -385,8 +408,34 @@ export class SessionManager {
    */
   async ensureAdsManagerPage(
     session: BrowserSession,
-    opts: { fallbackUrl?: string } = {},
+    opts: { fallbackUrl?: string; actId?: string } = {},
   ): Promise<Page> {
+    // --- Мульти-кабинет: явный actId — детерминированный путь без угадываний. ---
+    // Ищем вкладку нужного кабинета среди ВСЕХ открытых; нет — открываем новую.
+    // session.primaryPage/lastAdsManagerUrl НЕ трогаем: одно-кабинетный legacy-путь
+    // и мутации без ad_account_id продолжают работать как раньше.
+    if (opts.actId) {
+      const existing = findAdsManagerPageByAct(session.browser, opts.actId);
+      if (existing) {
+        // «Человеческий» паттерн: активируем вкладку перед работой (best-effort).
+        await existing.bringToFront().catch(() => {});
+        return existing;
+      }
+      const browserForAct = session.browser;
+      const alive =
+        browserForAct &&
+        (typeof browserForAct.isConnected !== 'function' || browserForAct.isConnected());
+      const ctxForAct = alive ? browserForAct.contexts()[0] : undefined;
+      if (!ctxForAct) {
+        throw new Error('Основная страница браузера недоступна');
+      }
+      const url = adsManagerUrlForAct(opts.actId);
+      console.warn(`[session-manager] вкладка кабинета act=${opts.actId} не найдена — открываю ${url}`);
+      const newPage = await ctxForAct.newPage();
+      await newPage.goto(url, { waitUntil: 'domcontentloaded' });
+      return newPage;
+    }
+
     // Ожидаемый кабинет: последний known-good URL → реконструкция из act_id (передаёт caller).
     const targetUrl = session.lastAdsManagerUrl || opts.fallbackUrl;
     const expectedAct = extractAdAccountId(targetUrl);

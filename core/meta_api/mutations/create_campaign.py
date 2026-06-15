@@ -223,6 +223,7 @@ class CreateCampaignHandler:
         batch_json = build_batch_payload(entries)
 
         graph_response = await client.execute_graph_call(
+            ad_account_id=payload.ad_account_id,
             method="POST",
             endpoint="/",
             query_params={"batch": batch_json},

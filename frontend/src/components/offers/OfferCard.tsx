@@ -42,6 +42,36 @@ function fmtCpl(val: string | null | undefined): string {
   return `$${n.toFixed(2)}`;
 }
 
+// ─── Кабинеты оффера (мульти-кабинет) ────────────────────────────────────────
+
+/** Чипы кабинетов; пустой список — warning: оффер выпадает из скана. */
+function OfferAccounts({ offer }: { offer: Offer }) {
+  // Поле появляется в generated-типах после pnpm gen:api — до этого мягкий каст.
+  const accounts =
+    (offer as Offer & { ad_account_ids?: string[] }).ad_account_ids ?? [];
+
+  if (accounts.length === 0) {
+    return (
+      <div className="font-display text-[10px] tracking-[0.04em] text-warning mt-2">
+        кабинеты не заданы — оффер не сканируется
+      </div>
+    );
+  }
+  return (
+    <div className="flex flex-wrap gap-1 mt-2" aria-label="Кабинеты оффера">
+      {accounts.map((a) => (
+        <span
+          key={a}
+          className="inline-block px-1.5 py-px bg-bg-2 border border-bg-6 text-bg-9 font-display text-[10px] tabular-nums"
+          title={`Кабинет ${a}`}
+        >
+          {a.length > 8 ? `…${a.slice(-6)}` : a}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 // ─── Компонент ────────────────────────────────────────────────────────────────
 
 export function OfferCard({
@@ -86,6 +116,9 @@ export function OfferCard({
             {offer.vertical}
           </div>
         ) : null}
+
+        {/* Мульти-кабинет: кабинеты оффера (warning, если не заполнены — оффер вне скана) */}
+        <OfferAccounts offer={offer} />
       </header>
 
       {/* ── Метрики: 4 строки key-value (Spend / Leads / CPL / Alerts) ── */}

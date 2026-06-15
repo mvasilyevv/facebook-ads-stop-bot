@@ -142,6 +142,8 @@ def _build_row_dict(row: Any) -> dict[str, Any]:
         "ad_name": row.ad_name,
         "campaign_name": row.campaign_name,
         "adset_name": row.adset_name,
+        # Мульти-кабинет: кабинет объявления из каталога кампании (NULL — legacy).
+        "ad_account_id": getattr(row, "ad_account_id", None),
         "offer_code": row.offer_code,
         "offer_id": str(row.offer_id) if row.offer_id is not None else None,
         # ad_alert_state может отсутствовать — coalesce в SQL даёт 'normal'
@@ -221,6 +223,7 @@ def _build_sql(
         fb_ads.id                          AS internal_id,
         fb_ads.ad_name                     AS ad_name,
         fb_campaigns.campaign_name         AS campaign_name,
+        fb_campaigns.ad_account_id         AS ad_account_id,
         fb_adsets.adset_name               AS adset_name,
         offers.code                        AS offer_code,
         offers.id                          AS offer_id,
@@ -383,6 +386,7 @@ def _build_sql_cursor(
         fb_ads.id                          AS internal_id,
         fb_ads.ad_name                     AS ad_name,
         fb_campaigns.campaign_name         AS campaign_name,
+        fb_campaigns.ad_account_id         AS ad_account_id,
         fb_adsets.adset_name               AS adset_name,
         offers.code                        AS offer_code,
         offers.id                          AS offer_id,

@@ -28,9 +28,10 @@ import { ErrorState } from "@/components/ui/ErrorState";
 import { BlueprintBg } from "@/components/dashboard/BlueprintBg";
 import { Hero } from "@/components/dashboard/Hero";
 import { SpendChart } from "@/components/dashboard/SpendChart";
-import { ScanCluster } from "@/components/dashboard/ScanCluster";
+import { ScanCluster, type ScanProgress } from "@/components/dashboard/ScanCluster";
 import { PausedBanner } from "@/components/dashboard/PausedBanner";
 import {
+  KPI_CELL_STATE,
   SparklineKpiRow,
   SparklineKpiRowSkeleton,
 } from "@/components/dashboard/SparklineKpiRow";
@@ -39,7 +40,11 @@ import { TaskQueues } from "@/components/dashboard/TaskQueues";
 
 import { useDashboardBatch, useChartData } from "@/lib/api/dashboard";
 import { useDisableTasks, useEnableTasks } from "@/lib/api/ads";
-import { useObserverSettings, useToggleScanning } from "@/lib/api/settings";
+import {
+  useObserverSettings,
+  useObserverStatus,
+  useToggleScanning,
+} from "@/lib/api/settings";
 import { useRealtimeInvalidation } from "@/lib/websocket/useRealtimeInvalidation";
 import { apiSend } from "@/lib/api/client";
 
@@ -58,7 +63,8 @@ function DashboardPage() {
   const router = useRouter();
 
   // WS live-invalidation — данные обновляются сразу после сканов.
-  useRealtimeInvalidation();
+  // pollingFallback=true — WS недоступен, обновление по таймеру (показываем в live-tail).
+  const { pollingFallback } = useRealtimeInvalidation();
 
   // Главный агрегат + spend-ряд + очереди + observer-настройки.
   const { data: batch, isLoading, isError, error, refetch } = useDashboardBatch();
@@ -66,9 +72,23 @@ function DashboardPage() {
   const disableTasksQ = useDisableTasks({ status: "PENDING,RUNNING,RETRYING", limit: 20 });
   const enableTasksQ = useEnableTasks({ status: "PENDING,RUNNING,RETRYING", limit: 20 });
   const observerQ = useObserverSettings();
+  const observerStatusQ = useObserverStatus();
   const toggleScanning = useToggleScanning();
 
   const stats = batch?.stats;
+
+  // Мульти-кабинет: прогресс цикла из observer:runtime (поля проброшены через extra).
+  const scanProgress = useMemo<ScanProgress | null>(() => {
+    const extra = (observerStatusQ.data?.extra ?? {}) as Record<string, unknown>;
+    const total = typeof extra.accounts_total === "number" ? extra.accounts_total : null;
+    if (!total || total < 1) return null;
+    return {
+      total,
+      done: typeof extra.accounts_done === "number" ? extra.accounts_done : null,
+      current:
+        typeof extra.current_account_id === "string" ? extra.current_account_id : null,
+    };
+  }, [observerStatusQ.data]);
 
   // observer вкл/выкл: настройка is_scanning_enabled — основной источник;
   // фолбэк на observer_status из stats. По умолчанию (загрузка) считаем ВКЛ,
@@ -148,6 +168,7 @@ function DashboardPage() {
           scanOn={scanOn}
           lastScanAt={stats?.last_scan_at ?? null}
           intervalSeconds={intervalSeconds}
+          scanProgress={scanProgress}
           onScan={handleScanNow}
           onEnable={handleEnable}
         />
@@ -178,7 +199,17 @@ function DashboardPage() {
           {isLoading || !stats ? (
             <SparklineKpiRowSkeleton />
           ) : (
-            <SparklineKpiRow stats={stats} spendSpark={spendSeries} />
+            <SparklineKpiRow
+              stats={stats}
+              spendSpark={spendSeries}
+              onCellClick={(key) => {
+                // Клик по KPI → Ads с фильтром по соответствующему состоянию.
+                const state = KPI_CELL_STATE[key];
+                if (state) {
+                  void router.navigate({ to: "/ads", search: { state } });
+                }
+              }}
+            />
           )}
         </div>
 
@@ -192,12 +223,20 @@ function DashboardPage() {
                 color={
                   !scanOn
                     ? "var(--warning)"
-                    : events.length > 0
-                      ? "var(--success)"
-                      : "var(--bg-7)"
+                    : pollingFallback
+                      ? "var(--warning)"
+                      : events.length > 0
+                        ? "var(--success)"
+                        : "var(--bg-7)"
                 }
               />
-              {!scanOn ? "на паузе" : events.length > 0 ? "поток активен" : "тихо"}
+              {!scanOn
+                ? "на паузе"
+                : pollingFallback
+                  ? "polling-режим (WS недоступен)"
+                  : events.length > 0
+                    ? "поток активен"
+                    : "тихо"}
             </span>
           </div>
           <Card padded={false}>
@@ -239,6 +278,7 @@ interface PageHeaderBlockProps {
   scanOn: boolean;
   lastScanAt: string | null;
   intervalSeconds: number;
+  scanProgress?: ScanProgress | null;
   onScan: () => void;
   onEnable: () => void;
 }
@@ -247,6 +287,7 @@ function PageHeaderBlock({
   scanOn,
   lastScanAt,
   intervalSeconds,
+  scanProgress,
   onScan,
   onEnable,
 }: PageHeaderBlockProps) {
@@ -265,6 +306,7 @@ function PageHeaderBlock({
         scanOn={scanOn}
         lastScanAt={lastScanAt}
         intervalSeconds={intervalSeconds}
+        scanProgress={scanProgress}
         onScan={onScan}
         onEnable={onEnable}
       />

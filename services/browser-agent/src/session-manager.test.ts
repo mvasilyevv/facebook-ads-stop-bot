@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
 import {
+  adsManagerUrlForAct,
+  findAdsManagerPageByAct,
   findPreferredPrimaryPage,
   isAdsManagerUrl,
   rememberAdsManagerUrl,
@@ -656,4 +658,42 @@ test('ensureAdsManagerPage принимает вкладку того же ка�
 
   assert.equal(page, sameAds as any);
   assert.equal(session.lastAdsManagerUrl, liveUrl); // обновили на текущий URL той же вкладки
+});
+
+// ====================== Мульти-кабинет (MULTI_CABINET_PLAN.md M2) ======================
+
+// URL кабинета строится детерминированно из числового act.
+test('adsManagerUrlForAct строит URL кабинета', () => {
+  assert.equal(
+    adsManagerUrlForAct('123456'),
+    'https://adsmanager.facebook.com/adsmanager/manage/ads?act=123456',
+  );
+});
+
+// Поиск вкладки нужного кабинета среди нескольких открытых (включая чужой act).
+test('findAdsManagerPageByAct находит вкладку своего кабинета', () => {
+  const cab1 = {
+    isClosed: () => false,
+    url: () => 'https://adsmanager.facebook.com/adsmanager/manage/ads?act=111',
+  };
+  const cab2 = {
+    isClosed: () => false,
+    url: () => 'https://adsmanager.facebook.com/adsmanager/manage/ads?act=222&nav_source=mcm',
+  };
+  const browser = { contexts: () => [{ pages: () => [cab1, cab2] }] };
+
+  assert.equal(findAdsManagerPageByAct(browser as any, '222'), cab2);
+  assert.equal(findAdsManagerPageByAct(browser as any, '111'), cab1);
+});
+
+// Чужой/несуществующий кабинет и закрытые вкладки → null (вкладку откроет ensureAdsManagerPage).
+test('findAdsManagerPageByAct: нет вкладки → null, закрытая не считается', () => {
+  const closedCab = {
+    isClosed: () => true,
+    url: () => 'https://adsmanager.facebook.com/adsmanager/manage/ads?act=333',
+  };
+  const browser = { contexts: () => [{ pages: () => [closedCab] }] };
+
+  assert.equal(findAdsManagerPageByAct(browser as any, '333'), null);
+  assert.equal(findAdsManagerPageByAct(null, '333'), null);
 });

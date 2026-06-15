@@ -40,7 +40,9 @@ export function createMetaApiServiceHandlers(sessionManager: SessionManager) {
     try {
       const req = call.request;
       const session = resolveSession(req.session_id);
-      const page = getPage(session);
+      // Мульти-кабинет: с ad_account_id fetch уходит из вкладки СВОЕГО кабинета
+      // («человеческий» паттерн). Пусто → legacy primary-вкладка (токен общий).
+      const actId: string = String(req.ad_account_id || '').replace(/^act_/, '').trim();
 
       // Конвертация proto map<string, string> в plain object для page.evaluate.
       const queryParams: Record<string, string> = {};
@@ -59,9 +61,15 @@ export function createMetaApiServiceHandlers(sessionManager: SessionManager) {
       };
 
       // H-7 (BA-4): per-session лок — mutation page.evaluate(fetch) не должен
-      // пересекаться со scan page.reload (acquireGraphContext) на общей primaryPage,
+      // пересекаться со scan page.reload (acquireGraphContext) на общей странице,
       // иначе reload рвёт in-flight fetch → «Execution context was destroyed».
-      const result = await withPageLock(session.id, () => executeGraphCall(page, params));
+      // Резолв вкладки кабинета (может открыть новую) — тоже под локом.
+      const result = await withPageLock(session.id, async () => {
+        const page = actId
+          ? await sessionManager.ensureAdsManagerPage(session, { actId })
+          : getPage(session);
+        return executeGraphCall(page, params);
+      });
 
       callback(null, {
         status_code: result.statusCode,

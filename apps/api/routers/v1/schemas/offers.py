@@ -17,6 +17,28 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 # Паттерн для валидации кода оффера: 1-64 символа, A-Z 0-9 _ - .
 _CODE_RE = re.compile(r"^[A-Z0-9_\-\.]{1,64}$")
 
+# Числовой ID рекламного кабинета (без префикса act_), 1-32 цифры.
+_ACCOUNT_ID_RE = re.compile(r"^\d{1,32}$")
+
+
+def _normalize_account_ids(values: list[str]) -> list[str]:
+    """Нормализация списка кабинетов: трим, срез act_, дедуп с сохранением порядка.
+
+    Бросает ValueError при нечисловом ID — защита от опечаток в money-настройке.
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    for raw in values:
+        s = str(raw).strip()
+        if s.lower().startswith("act_"):
+            s = s[4:]
+        if not _ACCOUNT_ID_RE.match(s):
+            raise ValueError(f"ad_account_ids: {raw!r} — ожидается числовой ID кабинета")
+        if s not in seen:
+            seen.add(s)
+            out.append(s)
+    return out
+
 
 # ─────────────────────── Offer ───────────────────────
 
@@ -33,6 +55,8 @@ class OfferOut(BaseModel):
     # Поля отсутствующие в ORM — возвращаем null для стабильного shape фронта.
     country_code: None = None
     is_active: bool
+    # Мульти-кабинет: кабинеты оффера (числовые ID без act_). Scan set = union по активным.
+    ad_account_ids: list[str] = Field(default_factory=list)
     created_at: str | None = None  # ISO-строка из ORM datetime
     updated_at: str | None = None
     use_vision_creator: None = None
@@ -47,6 +71,7 @@ class OfferOut(BaseModel):
             name=offer.name,  # type: ignore[attr-defined]
             vertical=offer.vertical,  # type: ignore[attr-defined]
             is_active=offer.is_active,  # type: ignore[attr-defined]
+            ad_account_ids=list(getattr(offer, "ad_account_ids", None) or []),
             created_at=offer.created_at.isoformat() if offer.created_at else None,  # type: ignore[attr-defined]
             updated_at=offer.updated_at.isoformat() if offer.updated_at else None,  # type: ignore[attr-defined]
         )
@@ -60,6 +85,8 @@ class OfferCreateIn(BaseModel):
     # Принимаем опционально для обратной совместимости, но значение игнорируем.
     name: str | None = None
     vertical: str | None = Field(None, max_length=32)
+    # Мульти-кабинет: кабинеты оффера, минимум 1 (без них оффер выпадает из скана).
+    ad_account_ids: list[str] = Field(..., min_length=1)
     # country_code и notes принимаем но игнорируем (нет в ORM)
     country_code: str | None = None
     use_vision_creator: bool | None = None
@@ -75,6 +102,15 @@ class OfferCreateIn(BaseModel):
             )
         return v
 
+    @field_validator("ad_account_ids")
+    @classmethod
+    def validate_account_ids(cls, v: list[str]) -> list[str]:
+        """Кабинеты: числовые ID, дедуп, минимум 1 после нормализации."""
+        normalized = _normalize_account_ids(v)
+        if not normalized:
+            raise ValueError("ad_account_ids: нужен минимум один кабинет")
+        return normalized
+
 
 class OfferUpdateIn(BaseModel):
     """Тело PUT /offers/{id}.
@@ -89,9 +125,22 @@ class OfferUpdateIn(BaseModel):
     name: str | None = None
     vertical: str | None = Field(None, max_length=32)
     is_active: bool | None = None
+    # Мульти-кабинет: None — не трогать; список — заменить (минимум 1 после нормализации).
+    ad_account_ids: list[str] | None = None
     country_code: str | None = None
     use_vision_creator: bool | None = None
     notes: str | None = None
+
+    @field_validator("ad_account_ids")
+    @classmethod
+    def validate_account_ids(cls, v: list[str] | None) -> list[str] | None:
+        """None — поле не меняется; список — нормализация + минимум 1 кабинет."""
+        if v is None:
+            return None
+        normalized = _normalize_account_ids(v)
+        if not normalized:
+            raise ValueError("ad_account_ids: нужен минимум один кабинет")
+        return normalized
 
 
 # ─────────────────────── OfferCompare ───────────────────────

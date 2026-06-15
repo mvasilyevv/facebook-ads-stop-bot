@@ -40,6 +40,9 @@ class ScanRunRow(BaseModel):
     alerts_stop: int | None = None
     metrics_inserted: int | None = None
     error_message: str | None = None
+    # Мульти-кабинет: какой кабинет сканировался (числовой ID без act_).
+    # None — legacy-скан текущей вкладки или запись до миграции 0019.
+    ad_account_id: str | None = None
 
 
 class ScanRunsResponse(BaseModel):

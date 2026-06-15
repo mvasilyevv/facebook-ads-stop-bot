@@ -429,6 +429,7 @@ async def fetch_ads(
             a.id            AS internal_id,
             a.ad_name,
             c.campaign_name,
+            c.ad_account_id,
             o.code          AS offer_code,
             a.is_active,
             COALESCE(SUM(m.spend), 0)           AS spend,
@@ -475,7 +476,7 @@ async def fetch_ads(
           {offer_filter}
         GROUP BY
             a.id, a.fb_ad_id, a.ad_name, a.is_active,
-            c.campaign_name, o.code,
+            c.campaign_name, c.ad_account_id, o.code,
             la.last_alert_at, la.last_alert_stage,
             ld.last_disable_at,
             alc.alerts_count

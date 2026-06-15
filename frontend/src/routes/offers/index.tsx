@@ -31,6 +31,7 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { toast } from "@/components/ui/Toast";
 import type { Offer } from "@fb/shared";
 
 export const Route = createFileRoute("/offers/")({
@@ -210,8 +211,12 @@ function OffersPage() {
             name: values.code, // бэк: name=code
             vertical: values.vertical || undefined,
             is_active: values.is_active,
+            ad_account_ids: values.ad_account_ids, // мульти-кабинет: min 1
           });
           setCreateOpen(false);
+          toast.success(
+            `Оффер ${values.code} создан · кабинеты: ${values.ad_account_ids.join(", ")}`,
+          );
         }}
       />
 
@@ -274,6 +279,7 @@ function EditOfferModal({ offer, onClose }: { offer: Offer; onClose: () => void 
         await updateMutation.mutateAsync({
           vertical: values.vertical || undefined,
           is_active: values.is_active,
+          ad_account_ids: values.ad_account_ids, // мульти-кабинет: замена списка
         });
         onClose();
       }}

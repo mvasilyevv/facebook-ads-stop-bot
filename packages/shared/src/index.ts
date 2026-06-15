@@ -24,3 +24,4 @@ export * from "./format/id";
 export * from "./domain/badge";
 export * from "./domain/diff";
 export * from "./domain/expiry";
+export * from "./domain/geo";

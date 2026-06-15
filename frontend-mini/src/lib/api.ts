@@ -388,6 +388,8 @@ export interface OfferCreatePayload {
   code: string;
   name: string;
   vertical?: string | null;
+  /** Мульти-кабинет: кабинеты оффера (числовые ID без act_), минимум 1 — бэк отдаёт 422 без них. */
+  ad_account_ids: string[];
 }
 
 /** Тип для обновления оффера. */
@@ -395,6 +397,8 @@ export interface OfferUpdatePayload {
   name?: string | null;
   vertical?: string | null;
   is_active?: boolean | null;
+  /** Мульти-кабинет: undefined — не трогать, список — заменить (минимум 1). */
+  ad_account_ids?: string[];
 }
 
 export const QK_EXT = {

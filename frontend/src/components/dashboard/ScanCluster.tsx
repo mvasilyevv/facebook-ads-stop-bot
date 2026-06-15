@@ -16,6 +16,16 @@ import { CountdownRing, PausedRing } from "@/components/data/CountdownRing";
 import { Button } from "@/components/ui/Button";
 import { useScanCountdown } from "@/lib/hooks/useScanCountdown";
 
+/** Мульти-кабинет: прогресс обхода кабинетов в текущем цикле (observer:runtime). */
+export interface ScanProgress {
+  /** Кабинет, сканируемый прямо сейчас (числовой ID без act_). */
+  current?: string | null;
+  /** Сколько кабинетов уже отсканировано в этом цикле. */
+  done?: number | null;
+  /** Всего кабинетов в scan set. */
+  total?: number | null;
+}
+
 interface ScanClusterProps {
   /** Включён ли observer. */
   scanOn: boolean;
@@ -23,6 +33,8 @@ interface ScanClusterProps {
   lastScanAt?: string | null;
   /** Интервал авто-скана в секундах. */
   intervalSeconds?: number;
+  /** Мульти-кабинет: прогресс цикла (показывается только при total > 1). */
+  scanProgress?: ScanProgress | null;
   /** Реальный запуск скана (POST scan-now). */
   onScan: () => void;
   /** Включить observer (paused → on). */
@@ -33,6 +45,7 @@ export function ScanCluster({
   scanOn,
   lastScanAt,
   intervalSeconds = 30,
+  scanProgress,
   onScan,
   onEnable,
 }: ScanClusterProps) {
@@ -94,9 +107,23 @@ export function ScanCluster({
           ПОСЛЕДНИЙ СКАН
         </div>
         <div className="whitespace-nowrap font-display text-[13px] tabular-nums text-bg-10">
-          {scanning ? "сканирую…" : `${age}с назад`}
+          {scanning ? formatScanningLabel(scanProgress) : `${age}с назад`}
         </div>
       </div>
+      {/* Мульти-кабинет: текущий кабинет цикла (только когда кабинетов > 1) */}
+      {scanning && (scanProgress?.total ?? 0) > 1 && scanProgress?.current ? (
+        <div className="leading-[1.3]">
+          <div className="font-display text-[9px] font-semibold uppercase tracking-[0.12em] text-bg-9">
+            КАБИНЕТ
+          </div>
+          <div
+            className="whitespace-nowrap font-display text-[13px] tabular-nums text-bg-10"
+            title={`Кабинет ${scanProgress.current}`}
+          >
+            …{scanProgress.current.slice(-4)}
+          </div>
+        </div>
+      ) : null}
       <Button
         variant="primary"
         size="md"
@@ -118,4 +145,15 @@ export function ScanCluster({
       </Button>
     </div>
   );
+}
+
+/** «сканирую…» или «кабинет 2/3» — когда в цикле несколько кабинетов. */
+function formatScanningLabel(p: ScanProgress | null | undefined): string {
+  const total = p?.total ?? 0;
+  if (total > 1) {
+    // accounts_done = сколько уже завершено → текущий = done + 1 (cap по total).
+    const current = Math.min((p?.done ?? 0) + 1, total);
+    return `кабинет ${current}/${total}`;
+  }
+  return "сканирую…";
 }

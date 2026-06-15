@@ -7,6 +7,8 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useState, useMemo } from "react";
 import { Search, ChevronRight } from "lucide-react";
 import {
+  alertStateCssVar,
+  deriveGeoFromNames,
   formatSpend,
   normalizeAlertState,
   ALERT_STATE_LABELS,
@@ -33,11 +35,9 @@ const STATE_FILTERS: { id: string; label: string }[] = [
   { id: "disabled",     label: "Откл."    },
 ];
 
-/** Цвет точки в чипе и строке по состоянию */
-function fsmColor(state: string): string {
-  const s = normalizeAlertState(state);
-  return `var(--fsm-${s})`;
-}
+// fsmColor удалён: подстановка state в имя токена давала несуществующий
+// var(--fsm-warning_sent) → невидимая точка для warning/stop (баг).
+// Канонический маппинг state→токен — alertStateCssVar из @fb/shared.
 
 // ─── Строка объявления ────────────────────────────────────────────────────────
 
@@ -49,13 +49,13 @@ interface AdRowProps {
 function AdRow({ ad, onClick }: AdRowProps) {
   const state = normalizeAlertState(ad.alert_state);
   const stateLabel = ALERT_STATE_LABELS[state];
-  const stateColor = fsmColor(state);
+  const stateColor = alertStateCssVar(state);
 
   // Имя объявления (fallback → fb_ad_id)
   const name = ad.ad_name ?? ad.fb_ad_id;
 
-  // Гео: пытаемся вытащить двухбуквенный код из имени кампании или adset
-  const geoCode = extractGeo(ad.campaign_name ?? ad.adset_name ?? "");
+  // Гео из имени кампании/adset — единый алгоритм с web (@fb/shared).
+  const geoCode = deriveGeoFromNames(ad.campaign_name, ad.adset_name);
 
   // Spend и CPL из metrics
   const spend  = ad.metrics?.spend  != null ? parseFloat(String(ad.metrics.spend))         : null;
@@ -159,16 +159,8 @@ function AdRow({ ad, onClick }: AdRowProps) {
   );
 }
 
-// ─── Вспомогательная функция: извлечь гео-код ─────────────────────────────────
-
-/**
- * Ищет двухбуквенный ISO-2 код страны в строке (заглавные буквы, отдельное слово).
- * Пример: "CR2 | GH | MV" → "GH".
- */
-function extractGeo(str: string): string {
-  const match = str.match(/(?:^|\s|\|)([A-Z]{2})(?:\s|\||$)/);
-  return match?.[1] ?? "";
-}
+// extractGeo удалён — заменён на deriveGeoFromNames из @fb/shared (единый
+// алгоритм с web: KNOWN_GEOS + токенизация; старый regex не находил «CR2_GH»).
 
 // ─── Skeleton-строка ──────────────────────────────────────────────────────────
 

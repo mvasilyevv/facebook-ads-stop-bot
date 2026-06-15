@@ -83,6 +83,7 @@ class SetAdsetBudgetHandler:
             graph_params["end_time"] = end_time
 
         graph_response = await client.execute_graph_call(
+            ad_account_id=payload.ad_account_id,
             method="POST",
             endpoint=f"/{adset_id}",
             query_params=graph_params,

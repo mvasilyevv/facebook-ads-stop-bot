@@ -315,6 +315,7 @@ class BrowserAgentClient:
         campaign_ids: list[str] | None = None,
         owner_tag: str | None = None,
         auto_recover_page: bool = True,
+        ad_account_id: str | None = None,
     ) -> AsyncIterator[ScanProgress | ScanResult]:
         """Запустить полный цикл сканирования (am_tabular — единственный источник).
 
@@ -327,6 +328,9 @@ class BrowserAgentClient:
             primary-вкладку Ads Manager (браузер/CDP мертвы) и вернул «страница недоступна»,
             один раз эскалируем reconnect_browser() и повторяем скан. Gated флагом
             vision_config.auto_restart_on_missing_cdp (прокидывает observer).
+        ad_account_id: мульти-кабинет — числовой ID кабинета (без act_), который сканируем;
+            browser-agent найдёт/откроет вкладку этого кабинета и сверит act из сниффа.
+            None/"" → legacy одно-кабинетный путь (текущая primary-вкладка).
         """
         # Проверяем circuit-breaker до начала стриминга (включая переход OPEN → HALF_OPEN)
         try:
@@ -348,6 +352,7 @@ class BrowserAgentClient:
                 settle_delay_seconds=settle_delay_seconds,
                 campaign_ids=campaign_ids or [],
                 owner_tag=owner_tag or "",
+                ad_account_id=ad_account_id or "",
             )
 
             stream = None

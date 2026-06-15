@@ -138,8 +138,10 @@ async def test_read_resource_workers_health_alive_vs_missing(
     payload = json.loads(contents[0].text)
     statuses = {item["worker"]: item["status"] for item in payload["items"]}
     assert statuses.get("observer") == "alive"
-    # disable не писал → missing.
-    assert statuses.get("disable") == "missing"
+    # cabinet_scheduler (money-критичный, из канонического списка) не писал → missing.
+    assert statuses.get("cabinet_scheduler") == "missing"
+    # Фантомные disable/enable удалены из системы — их НЕТ в отчёте вовсе.
+    assert "disable" not in statuses and "enable" not in statuses
 
 
 # read_resource schema-overview — Markdown содержит хоть один реально зарегистрированный tool.

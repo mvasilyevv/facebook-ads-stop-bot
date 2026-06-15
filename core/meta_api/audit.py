@@ -143,9 +143,11 @@ class AuditedMetaApiClient(MetaApiClient):
         query_params: dict[str, str] | None = None,
         body_json: str | dict[str, Any] | None = None,
         timeout_ms: int | None = None,
+        ad_account_id: str | None = None,
     ) -> dict[str, Any]:
         start = time.monotonic()
-        ad_account_id = extract_ad_account_id_from_endpoint(endpoint)
+        # Кабинет для аудита: явный (мульти-кабинет, роутинг вкладки) → из endpoint'а.
+        audit_account_id = ad_account_id or extract_ad_account_id_from_endpoint(endpoint)
         request_payload: dict[str, Any] = {
             "method": method.upper(),
             "endpoint": endpoint,
@@ -160,6 +162,7 @@ class AuditedMetaApiClient(MetaApiClient):
                 query_params=query_params,
                 body_json=body_json,
                 timeout_ms=timeout_ms,
+                ad_account_id=ad_account_id,
             )
         except MetaApiError as exc:
             duration_ms = int((time.monotonic() - start) * 1000)
@@ -169,7 +172,7 @@ class AuditedMetaApiClient(MetaApiClient):
                 http_method=method,
                 http_status=exc.code or 0,
                 initiated_by=self._initiated_by,
-                ad_account_id=ad_account_id,
+                ad_account_id=audit_account_id,
                 request_payload=request_payload,
                 response_payload={
                     "error": {
@@ -213,7 +216,7 @@ class AuditedMetaApiClient(MetaApiClient):
             http_method=method,
             http_status=http_status,
             initiated_by=self._initiated_by,
-            ad_account_id=ad_account_id,
+            ad_account_id=audit_account_id,
             request_payload=request_payload,
             response_payload=response_summary,
             duration_ms=duration_ms,

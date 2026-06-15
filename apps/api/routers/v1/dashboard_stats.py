@@ -300,6 +300,7 @@ async def _query_recent_alerts(engine: AsyncEngine, limit: int) -> list[dict[str
             fb_ads.fb_ad_id    AS fb_ad_id,
             fb_ads.ad_name     AS ad_name,
             fb_campaigns.campaign_name AS campaign_name,
+            fb_campaigns.ad_account_id AS ad_account_id,
             offers.code        AS offer_code
         FROM alert_events ae
         LEFT JOIN fb_ads      ON fb_ads.id = ae.ad_id

@@ -160,6 +160,15 @@ export const ObserverTab: FC = () => {
       })()
     : "—";
 
+  // Мульти-кабинет: прогресс обхода кабинетов из observer:runtime (через extra).
+  const statusExtra = (observerStatus?.extra ?? {}) as Record<string, unknown>;
+  const accountsTotal =
+    typeof statusExtra.accounts_total === "number" ? statusExtra.accounts_total : null;
+  const accountsDone =
+    typeof statusExtra.accounts_done === "number" ? statusExtra.accounts_done : null;
+  const currentAccount =
+    typeof statusExtra.current_account_id === "string" ? statusExtra.current_account_id : null;
+
   return (
     <div style={{ display: "grid", gridTemplateColumns: "60% 40%", gap: "var(--s-8)" }}>
       {/* ── Левая колонка: форма Field-паттерн ── */}
@@ -288,6 +297,29 @@ export const ObserverTab: FC = () => {
               {lastScan}
             </span>
           </div>
+
+          {/* Мульти-кабинет: прогресс обхода (только когда кабинетов > 1) */}
+          {accountsTotal != null && accountsTotal > 1 && (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                marginTop: 10,
+              }}
+            >
+              <span className="text-[13px]" style={{ color: "var(--bg-10)" }}>Кабинеты</span>
+              <span
+                className="font-display tabular-nums text-[13px]"
+                style={{ color: "var(--bg-11)" }}
+                title={currentAccount ? `Сканируется кабинет ${currentAccount}` : undefined}
+              >
+                {currentAccount
+                  ? `${Math.min((accountsDone ?? 0) + 1, accountsTotal)}/${accountsTotal} · …${currentAccount.slice(-4)}`
+                  : `${accountsTotal} в скане`}
+              </span>
+            </div>
+          )}
         </div>
 
         {/* Карточка: Действия */}

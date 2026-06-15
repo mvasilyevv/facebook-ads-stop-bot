@@ -136,6 +136,7 @@ class CustomAudienceHandler:
             body["description"] = description
 
         graph_response = await client.execute_graph_call(
+            ad_account_id=payload.ad_account_id,
             method="POST",
             endpoint=f"/{ad_account_id}/customaudiences",
             body_json=body,
@@ -171,6 +172,7 @@ class CustomAudienceHandler:
             )
 
         graph_response = await client.execute_graph_call(
+            ad_account_id=payload.ad_account_id,
             method="POST",
             endpoint=f"/{audience_id}",
             body_json=body,
@@ -191,6 +193,7 @@ class CustomAudienceHandler:
         audience_id = require_numeric_id(payload.target_id, "target_id (audience_id)")
 
         graph_response = await client.execute_graph_call(
+            ad_account_id=payload.ad_account_id,
             method="DELETE",
             endpoint=f"/{audience_id}",
         )

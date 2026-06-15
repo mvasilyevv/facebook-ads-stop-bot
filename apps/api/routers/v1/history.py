@@ -404,6 +404,7 @@ async def get_history_ads(
             internal_id=str(r.internal_id),
             ad_name=r.ad_name,
             campaign_name=r.campaign_name,
+            ad_account_id=r.ad_account_id,
             offer_code=r.offer_code,
             is_active=r.is_active,
             spend=_fmt_decimal(r.spend),

@@ -15,26 +15,33 @@ function Wrapper({
   onSearchChange = vi.fn(),
   onStateToggle = vi.fn(),
   onOfferToggle = vi.fn(),
+  onAccountToggle = vi.fn(),
   onClearAll = vi.fn(),
   initial,
+  accountOptions = [],
 }: {
   onSearchChange?: (v: string) => void;
   onStateToggle?: (s: AlertState) => void;
   onOfferToggle?: (o: string) => void;
+  onAccountToggle?: (a: string) => void;
   onClearAll?: () => void;
   initial?: Partial<AdsFilterState>;
+  /** Мульти-кабинет: ≤1 — dropdown кабинета скрыт. */
+  accountOptions?: string[];
 }) {
   const searchRef = useRef<HTMLInputElement>(null);
   const [state, setState] = useState<AdsFilterState>({
     search: initial?.search ?? "",
     selectedStates: initial?.selectedStates ?? new Set(),
     selectedOffers: initial?.selectedOffers ?? new Set(),
+    selectedAccounts: initial?.selectedAccounts ?? new Set(),
   });
 
   return (
     <FilterBar
       filterState={state}
       offerOptions={["CR2", "DRC"]}
+      accountOptions={accountOptions}
       count={42}
       searchRef={searchRef}
       onSearchChange={(v) => {
@@ -59,8 +66,22 @@ function Wrapper({
         });
         onOfferToggle(o);
       }}
+      onAccountToggle={(a) => {
+        setState((s) => {
+          const next = new Set(s.selectedAccounts);
+          if (next.has(a)) next.delete(a);
+          else next.add(a);
+          return { ...s, selectedAccounts: next };
+        });
+        onAccountToggle(a);
+      }}
       onClearAll={() => {
-        setState({ search: "", selectedStates: new Set(), selectedOffers: new Set() });
+        setState({
+          search: "",
+          selectedStates: new Set(),
+          selectedOffers: new Set(),
+          selectedAccounts: new Set(),
+        });
         onClearAll();
       }}
     />
@@ -142,5 +163,24 @@ describe("FilterBar", () => {
     render(<Wrapper />);
     expect(screen.queryByText(/state =/)).not.toBeInTheDocument();
     expect(screen.queryByText(/offer =/)).not.toBeInTheDocument();
+  });
+
+  // Мульти-кабинет: dropdown скрыт при ≤1 кабинете (нечего фильтровать).
+  it("dropdown кабинета скрыт при одном кабинете", () => {
+    render(<Wrapper accountOptions={["111"]} />);
+    expect(screen.queryByLabelText("Фильтр по кабинету")).not.toBeInTheDocument();
+  });
+
+  // Мульти-кабинет: при нескольких кабинетах — dropdown работает, выбор даёт chip.
+  it("dropdown кабинета: выбор эмитит onAccountToggle и показывает chip", async () => {
+    const user = userEvent.setup();
+    const onAccountToggle = vi.fn();
+    render(<Wrapper accountOptions={["111", "222"]} onAccountToggle={onAccountToggle} />);
+
+    await user.click(screen.getByLabelText("Фильтр по кабинету"));
+    await user.click(screen.getByText("222"));
+
+    expect(onAccountToggle).toHaveBeenCalledWith("222");
+    expect(screen.getByText(/кабинет = 222/)).toBeInTheDocument();
   });
 });

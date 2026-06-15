@@ -30,6 +30,9 @@ def alert_event_row_to_out(row: Any) -> dict[str, Any]:
         "fb_ad_id": row.fb_ad_id,
         "ad_name": row.ad_name,
         "campaign_name": row.campaign_name,
+        # Мульти-кабинет: кабинет из каталога кампании; getattr — не все запросы
+        # уже добавили колонку в SELECT (тогда None, аддитивно-безопасно).
+        "ad_account_id": getattr(row, "ad_account_id", None),
         "offer_code": row.offer_code,
         "stage": row.stage,
         "matched_rule_codes": rule_codes,

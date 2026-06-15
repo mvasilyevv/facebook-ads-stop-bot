@@ -45,12 +45,34 @@ logger = logging.getLogger(__name__)
 _RATE_LIMIT_PER_HOUR = _DEFAULT_MAX_PER_HOUR
 
 
+# Системный промпт MCP-сервера: клиент (Claude Desktop/Cursor) передаёт его модели
+# при initialize — в отличие от resource, который модель может и не прочитать.
+# Краткая версия schema-overview: контекст + money-правила. Полная инструкция —
+# ресурс fb-stop-bot://schema-overview.
+_SERVER_INSTRUCTIONS = (
+    "FB Stop Bot — мониторинг и авто-стоп убыточной рекламы Facebook Ads. "
+    "Здесь реальные деньги: не выдумывай данные, при сомнении читай ресурсы "
+    "(fb-stop-bot://offers, recent-alerts, workers-health, schema-overview — "
+    "в последнем полная инструкция).\n\n"
+    "Правила:\n"
+    "1. DRAFT-tools (request_*) НЕ исполняют изменения — создают черновик, который "
+    "пользователь подтверждает в Telegram. Вызывай их ТОЛЬКО по явной просьбе "
+    "изменить рекламу; после вызова скажи «черновик создан, подтверди в Telegram».\n"
+    "2. «Что отключить?» = read-only анализ (get_recent_alerts, get_offer_performance, "
+    "get_tracker_stats) + рекомендация, БЕЗ создания draft.\n"
+    "3. Мульти-кабинет: офферы привязаны к ad_account_ids; активный оффер без "
+    "кабинетов не сканируется — подсвечивай это как проблему.\n"
+    "4. Расхождение метрик Meta (spend) и трекера AdSet.pro (депозиты/ROI) — "
+    "нормальный attribution gap, упоминай его в сравнениях."
+)
+
+
 def build_server(ctx_mgr: MCPContextManager) -> Server:
     """Собрать MCP Server и зарегистрировать хендлеры поверх ctx_mgr.
 
     Вынесено отдельной функцией — удобно дёргать из тестов без stdio.
     """
-    app: Server = Server("fb-stop-bot")
+    app: Server = Server("fb-stop-bot", instructions=_SERVER_INSTRUCTIONS)
 
     @app.list_tools()
     async def list_tools() -> list[types.Tool]:

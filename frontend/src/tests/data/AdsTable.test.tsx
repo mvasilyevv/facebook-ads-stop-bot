@@ -120,4 +120,30 @@ describe("AdsTable", () => {
       "true",
     );
   });
+
+  // Мульти-кабинет: колонка CAB показывает хвост ID, полный — в title.
+  it("колонка CAB показывает хвост ID кабинета", () => {
+    const ad = makeAd("1", { ad_account_id: "1234567890" } as Partial<AdSnapshot>);
+    render(<AdsTable {...baseProps} rows={[ad]} />);
+    expect(screen.getByText("CAB")).toBeInTheDocument();
+    expect(screen.getByTitle("Кабинет 1234567890")).toHaveTextContent("…7890");
+  });
+
+  // Мульти-кабинет: ссылка «Открыть в Ads Manager» с deep-link по кабинету и ad_id.
+  it("рендерит ссылку в Ads Manager при известном кабинете", () => {
+    const ad = makeAd("1", { ad_account_id: "555" } as Partial<AdSnapshot>);
+    render(<AdsTable {...baseProps} rows={[ad]} />);
+    const link = screen.getByRole("link", { name: /Открыть .* в Ads Manager/ });
+    expect(link).toHaveAttribute(
+      "href",
+      "https://adsmanager.facebook.com/adsmanager/manage/ads?act=555&selected_ad_ids=1",
+    );
+    expect(link).toHaveAttribute("target", "_blank");
+  });
+
+  // Без кабинета ссылки нет (мёртвую иконку не рисуем).
+  it("без кабинета ссылка в Ads Manager не рендерится", () => {
+    render(<AdsTable {...baseProps} rows={[makeAd("1")]} />);
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+  });
 });

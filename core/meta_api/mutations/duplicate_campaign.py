@@ -76,12 +76,14 @@ class DuplicateCampaignHandler:
                 deep_copy=deep_copy,
                 status_after=status_after,
                 new_name=new_name,
+                ad_account_id=payload.ad_account_id,
             )
         return await self._execute_simple(
             client=client,
             src_campaign_id=src_campaign_id,
             deep_copy=deep_copy,
             status_after=status_after,
+            ad_account_id=payload.ad_account_id,
         )
 
     async def _execute_simple(
@@ -91,9 +93,11 @@ class DuplicateCampaignHandler:
         src_campaign_id: str,
         deep_copy: bool,
         status_after: str,
+        ad_account_id: str | None = None,
     ) -> dict[str, Any]:
         """Обычный /copies без batch — используется когда new_name не задан."""
         copies_response = await client.execute_graph_call(
+            ad_account_id=ad_account_id,
             method="POST",
             endpoint=f"/{src_campaign_id}/copies",
             query_params={
@@ -116,6 +120,7 @@ class DuplicateCampaignHandler:
         deep_copy: bool,
         status_after: str,
         new_name: str,
+        ad_account_id: str | None = None,
     ) -> dict[str, Any]:
         """Batch API: copy + rename за один HTTP-запрос.
 
@@ -141,6 +146,7 @@ class DuplicateCampaignHandler:
 
         batch_json = build_batch_payload([copy_entry, rename_entry])
         batch_response = await client.execute_graph_call(
+            ad_account_id=ad_account_id,
             method="POST",
             endpoint="/",
             query_params={"batch": batch_json},

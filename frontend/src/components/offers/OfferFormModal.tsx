@@ -37,6 +37,29 @@ interface OfferFormValues {
   code: string;
   vertical: string;
   is_active: boolean;
+  /** Мульти-кабинет: числовые ID кабинетов (без act_), минимум 1. */
+  ad_account_ids: string[];
+}
+
+/** Разбор ввода кабинетов: запятые/пробелы/переносы, срез act_, дедуп. */
+function parseAccountIds(raw: string): { ids: string[]; invalid: string[] } {
+  const ids: string[] = [];
+  const invalid: string[] = [];
+  const seen = new Set<string>();
+  for (const part of raw.split(/[\s,;]+/)) {
+    const token = part.trim();
+    if (!token) continue;
+    const normalized = token.replace(/^act_/i, "");
+    if (!/^\d+$/.test(normalized)) {
+      invalid.push(token);
+      continue;
+    }
+    if (!seen.has(normalized)) {
+      seen.add(normalized);
+      ids.push(normalized);
+    }
+  }
+  return { ids, invalid };
 }
 
 interface OfferFormModalProps {
@@ -52,13 +75,20 @@ interface OfferFormModalProps {
 
 export function OfferFormModal({ open, onOpenChange, offer, onSave }: OfferFormModalProps) {
   const isEdit = !!offer;
+  // ad_account_ids появляется в generated-типах после pnpm gen:api — до этого читаем мягко.
+  const offerAccounts =
+    (offer as (Offer & { ad_account_ids?: string[] }) | null | undefined)?.ad_account_ids ?? [];
 
   const [values, setValues] = useState<OfferFormValues>({
     code: "",
     vertical: "",
     is_active: true,
+    ad_account_ids: [],
   });
+  // Сырой ввод кабинетов (текст до парсинга) — парсим на submit и on-blur.
+  const [accountsRaw, setAccountsRaw] = useState("");
   const [codeError, setCodeError] = useState<string | undefined>();
+  const [accountsError, setAccountsError] = useState<string | undefined>();
   const [busy, setBusy] = useState(false);
 
   // Синхронизируем состояние при открытии/смене оффера
@@ -68,9 +98,14 @@ export function OfferFormModal({ open, onOpenChange, offer, onSave }: OfferFormM
         code: offer?.code ?? "",
         vertical: offer?.vertical ?? "",
         is_active: offer?.is_active ?? true,
+        ad_account_ids: offerAccounts,
       });
+      setAccountsRaw(offerAccounts.join(", "));
       setCodeError(undefined);
+      setAccountsError(undefined);
     }
+    // offerAccounts — производное от offer, отдельная зависимость не нужна.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, offer]);
 
   function handleClose(next: boolean) {
@@ -94,11 +129,23 @@ export function OfferFormModal({ open, onOpenChange, offer, onSave }: OfferFormM
       }
     }
 
+    // Валидация кабинетов: минимум 1, только числовые ID (мульти-кабинет).
+    const { ids, invalid } = parseAccountIds(accountsRaw);
+    if (invalid.length > 0) {
+      setAccountsError(`Не похоже на ID кабинета: ${invalid.join(", ")}`);
+      return;
+    }
+    if (ids.length === 0) {
+      setAccountsError("Укажи минимум один ID кабинета — без него оффер не сканируется");
+      return;
+    }
+
     setBusy(true);
     try {
       await onSave({
         ...values,
         code: values.code.trim().toUpperCase(),
+        ad_account_ids: ids,
       });
       handleClose(false);
     } finally {
@@ -146,6 +193,22 @@ export function OfferFormModal({ open, onOpenChange, offer, onSave }: OfferFormM
               </div>
             </div>
           )}
+
+          {/* Кабинеты (мульти-кабинет): числовые ID через запятую/пробел, минимум 1 */}
+          <Input
+            id="offer-accounts"
+            label="Рекламные кабинеты"
+            placeholder="1234567890, 9876543210"
+            value={accountsRaw}
+            onChange={(e) => {
+              setAccountsRaw(e.target.value);
+              if (accountsError) setAccountsError(undefined);
+            }}
+            errorMessage={accountsError}
+            autoComplete="off"
+            spellCheck={false}
+            helpText="ID кабинетов, где крутится оффер (без act_). Сканируются только кабинеты, указанные хотя бы у одного активного оффера."
+          />
 
           {/* Вертикаль */}
           <Select

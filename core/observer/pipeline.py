@@ -163,6 +163,7 @@ async def process_scan_rows(
     scan_id: int | None = None,
     cycle_ts: datetime | None = None,
     owner_tag: str | None = None,
+    ad_account_id: str | None = None,
 ) -> CycleResult:
     """Один scan-цикл. Идемпотентен по (ad_id, cycle_ts) и (idempotency_key).
 
@@ -175,6 +176,9 @@ async def process_scan_rows(
                    полностью игнорируются (не пишем метрики, не оцениваем правила,
                    не дизейблим). NULL — фильтр выключен. Защита от работы с чужими
                    кампаниями в общем рекламном кабинете.
+        ad_account_id: кабинет, из которого пришли строки (мульти-кабинет);
+                   пишется в fb_campaigns.ad_account_id. None — fallback-скан без
+                   привязки (существующие значения в каталоге не затираются).
 
     Returns:
         CycleResult с метриками цикла.
@@ -211,6 +215,7 @@ async def process_scan_rows(
                 cycle_ts=cycle_ts,
                 result=result,
                 owner_tag=owner_tag,
+                ad_account_id=ad_account_id,
             )
         except Exception:
             logger.exception(
@@ -233,6 +238,7 @@ async def _process_one_row(
     cycle_ts: datetime,
     result: CycleResult,
     owner_tag: str | None = None,
+    ad_account_id: str | None = None,
 ) -> None:
     """Обработка одной строки. Вынесено отдельно ради читаемости + try/except в caller'е."""
 
@@ -264,6 +270,7 @@ async def _process_one_row(
             campaign_name=row.campaign_name,
             offer_id=None,
             delivery_status=row.delivery_status,
+            ad_account_id=ad_account_id,
         )
         if await insert_metrics(
             engine,
@@ -288,6 +295,7 @@ async def _process_one_row(
         campaign_name=row.campaign_name,
         offer_id=matched_offer.offer_id,
         delivery_status=row.delivery_status,
+        ad_account_id=ad_account_id,
     )
 
     # --- Метрики (партиционированная таблица) ---
@@ -349,6 +357,7 @@ async def _process_one_row(
         transition=transition,
         fb_ad_id=row.fb_ad_id,
         open_token=transition.new_open_token,
+        ad_account_id=ad_account_id,
     )
     if task_id is not None:
         result.disable_tasks_created += 1

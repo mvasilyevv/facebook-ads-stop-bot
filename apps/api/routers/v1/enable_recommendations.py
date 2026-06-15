@@ -191,6 +191,10 @@ async def confirm_enable_recommendation(
         # from_dict берёт только эти поля; метаданные рекомендации кладём в params
         # для трейсинга (activate_ad-хендлеру нужен лишь target_id). Канал disable/enable
         # воркеров удалён — задачу исполняет meta_api_worker.
+        # Мульти-кабинет: кабинет объявления из каталога (None → legacy primary-вкладка).
+        from core.observer.accounts import load_ad_account_id_for_fb_ad
+
+        ad_account_id = await load_ad_account_id_for_fb_ad(engine, fb_ad_id)
         payload = {
             "mutation_kind": "activate_ad",
             "target_id": fb_ad_id,
@@ -199,7 +203,7 @@ async def confirm_enable_recommendation(
                 "recommendation_id": str(rec_id),
                 "ad_id": ad_id,
             },
-            "ad_account_id": None,
+            "ad_account_id": ad_account_id,
         }
 
         ikey = f"reco:activate_ad:{fb_ad_id}:{rec_id}:{uuid.uuid4().hex}"

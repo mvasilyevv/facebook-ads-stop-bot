@@ -35,6 +35,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from apps.telegram_poller.main import _get_database_url
 from core.db import WORKER_ENGINE_KWARGS
+from core.observer.accounts import list_offers_without_accounts, resolve_scan_account_ids
 from core.observer.adaptive_interval import (
     JITTER_FRACTION,
     clamp_interval,
@@ -104,13 +105,15 @@ class ScannerGate(Protocol):
         campaign_ids: list[str] | None = None,
         owner_tag: str | None = None,
         auto_recover_page: bool = True,
+        ad_account_id: str | None = None,
     ) -> ScanCycleOutput:
         """Делает один scan-цикл (am_tabular) и возвращает строки + метаданные.
 
         campaign_ids — allowlist кампаний (#3). owner_tag — am-резолв campaign.id по тегу
         (тянуть сразу свой скоуп, не весь кабинет). auto_recover_page — self-heal Layer 2:
         при «страница недоступна» эскалировать reconnect (gated vision_config флагом).
-        Ошибка сканера → исключение (loop решит retry).
+        ad_account_id — мульти-кабинет: какой кабинет сканировать (None → legacy
+        текущая вкладка). Ошибка сканера → исключение (loop решит retry).
         """
         ...
 
@@ -118,12 +121,14 @@ class ScannerGate(Protocol):
 # ====================== Scan_runs writers ======================
 
 
-async def _begin_scan_run(engine: AsyncEngine) -> int:
+async def _begin_scan_run(engine: AsyncEngine, *, ad_account_id: str | None = None) -> int:
     """INSERT в partitioned scan_runs → возвращаем монотонный id.
 
     Атомарный: scan_id = id за один INSERT через CTE с явным nextval.
     Никакого последующего UPDATE — если процесс крашится до RETURNING, sequence
     откатится вместе с транзакцией и осиротевшего scan_id не возникнет.
+
+    ad_account_id — мульти-кабинет: какой кабинет сканировался (NULL — legacy-скан).
     """
     started_at = datetime.now(timezone.utc)
     async with engine.begin() as conn:
@@ -132,12 +137,12 @@ async def _begin_scan_run(engine: AsyncEngine) -> int:
                 text(
                     """
                     WITH next_id AS (SELECT nextval('scan_runs_id_seq') AS sid)
-                    INSERT INTO scan_runs (id, scan_id, started_at)
-                    SELECT sid, sid, :sa FROM next_id
+                    INSERT INTO scan_runs (id, scan_id, started_at, ad_account_id)
+                    SELECT sid, sid, :sa, :acct FROM next_id
                     RETURNING id
                     """
                 ),
-                {"sa": started_at},
+                {"sa": started_at, "acct": ad_account_id},
             )
         ).first()
     return int(row[0])
@@ -190,6 +195,9 @@ async def _publish_runtime_status(
     active_phase: str | None = None,
     next_scan_at: datetime | None = None,
     last_successful_scan_at: datetime | None = None,
+    current_account_id: str | None = None,
+    accounts_done: int | None = None,
+    accounts_total: int | None = None,
 ) -> None:
     """SET observer:runtime → JSON с TTL RUNTIME_TTL_SECONDS. Frontend/health_watchdog читают ключ.
 
@@ -197,6 +205,10 @@ async def _publish_runtime_status(
         worker_status — детальный статус: "scanning" | "idle" | "dispatch" | "paused"
         status        — нормализованный для читателей: "running" | "paused"
             Маппинг: scanning/idle/dispatch → running, paused → paused
+
+    Мульти-кабинет (аддитивные поля, читатели старого формата не ломаются):
+        current_account_id — кабинет, сканируемый прямо сейчас (None вне скана/legacy)
+        accounts_done / accounts_total — прогресс обхода кабинетов в цикле
 
     Читатели используют read_observer_runtime() из core/observer/runtime.py.
     """
@@ -215,6 +227,9 @@ async def _publish_runtime_status(
         "last_successful_scan_at": (
             last_successful_scan_at.isoformat() if last_successful_scan_at else None
         ),
+        "current_account_id": current_account_id,
+        "accounts_done": accounts_done,
+        "accounts_total": accounts_total,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     try:
@@ -272,54 +287,71 @@ async def heartbeat_loop(redis_client, stop: asyncio.Event) -> None:
 # ====================== One cycle ======================
 
 
-async def run_one_cycle(
+async def _run_account_scan(
     engine: AsyncEngine,
     *,
     gate: ScannerGate,
+    config: dict,
+    auto_recover_page: bool,
     redis_client=None,
     tg_client=None,
+    ad_account_id: str | None = None,
+    accounts_done: int | None = None,
+    accounts_total: int | None = None,
 ) -> dict:
-    """Один полный цикл observer'а. Возвращает summary для логов/тестов.
+    """Скан ОДНОГО кабинета (или legacy-скан текущей вкладки при ad_account_id=None).
 
-    Не бросает исключения наверх — все ошибки логирует и записывает в scan_runs.outcome.
-
-    Если tg_client передан — после process_scan_rows зовём dispatch_pending_alerts(scan_id):
-    события записанные в этом scan'е улетают в TG чат с inline-кнопками.
+    Свой scan_run, свой process_scan_rows, свой TG-dispatch. Не бросает исключения
+    наверх — ошибки пишутся в scan_runs.outcome (цикл по кабинетам продолжается).
     """
-    config = await load_observer_config(engine)
-    if config is None or not config["is_scanning_enabled"]:
-        await _publish_runtime_status(redis_client, status="paused")
-        return {"outcome": "paused", "scan_id": None}
-
-    # Self-heal Layer 2 gate: разрешать ли клиенту эскалировать reconnect при пропаже вкладки.
-    auto_recover_page = await load_vision_auto_restart_flag(engine)
-
-    scan_id = await _begin_scan_run(engine)
+    scan_id = await _begin_scan_run(engine, ad_account_id=ad_account_id)
     started_monotonic = time.monotonic()
-    await _publish_runtime_status(redis_client, status="scanning", active_phase="scan")
+    await _publish_runtime_status(
+        redis_client,
+        status="scanning",
+        active_phase="scan",
+        current_account_id=ad_account_id,
+        accounts_done=accounts_done,
+        accounts_total=accounts_total,
+    )
 
     cycle_result: CycleResult | None = None
     outcome = "success"
     error_msg: str | None = None
     dispatched: dict | None = None
 
+    # Allowlist кампаний (observer_config.campaign_ids) — ГЛОБАЛЬНЫЙ и набран из одного
+    # кабинета. campaign.id уникальны per кабинет → в чужом кабинете фильтр отсёк бы ВСЁ
+    # (скан пуст → бот слеп по кабинету, FSM не реагирует). Поэтому в мульти-каб режиме
+    # allowlist игнорируется; скоупинг остаётся через owner_tag (am-резолв per кабинет).
+    campaign_ids = [] if ad_account_id else list(config.get("campaign_ids") or [])
+
     try:
         scan_out = await gate.run_one_scan(
-            campaign_ids=list(config.get("campaign_ids") or []),
+            campaign_ids=campaign_ids,
             owner_tag=config.get("owner_campaign_tag"),
             auto_recover_page=auto_recover_page,
+            ad_account_id=ad_account_id,
         )
 
         if not scan_out.rows:
             outcome = "empty"
             error_msg = scan_out.empty_reason or "no rows"
         else:
-            await _publish_runtime_status(redis_client, status="scanning", active_phase="parse")
+            await _publish_runtime_status(
+                redis_client,
+                status="scanning",
+                active_phase="parse",
+                current_account_id=ad_account_id,
+                accounts_done=accounts_done,
+                accounts_total=accounts_total,
+            )
             cycle_result = await process_scan_rows(
                 engine,
                 rows=scan_out.rows,
                 scan_id=scan_id,
                 owner_tag=config.get("owner_campaign_tag"),
+                ad_account_id=ad_account_id,
             )
 
             # Доставка алертов в TG — если был хоть один emit
@@ -331,7 +363,12 @@ async def run_one_cycle(
                 from core.telegram.alert_dispatcher import dispatch_pending_alerts
 
                 await _publish_runtime_status(
-                    redis_client, status="scanning", active_phase="dispatch"
+                    redis_client,
+                    status="scanning",
+                    active_phase="dispatch",
+                    current_account_id=ad_account_id,
+                    accounts_done=accounts_done,
+                    accounts_total=accounts_total,
                 )
                 try:
                     dispatched = await dispatch_pending_alerts(
@@ -341,7 +378,7 @@ async def run_one_cycle(
                     logger.exception("alert dispatch failed — продолжаю")
                     dispatched = {"sent": 0, "errors": 1}
     except Exception as exc:
-        logger.exception("scan cycle crashed: %s", exc)
+        logger.exception("scan cycle crashed (кабинет=%s): %s", ad_account_id or "-", exc)
         outcome = "error"
         error_msg = f"{type(exc).__name__}: {exc}"
 
@@ -358,15 +395,11 @@ async def run_one_cycle(
     await _publish_scan_finished(
         redis_client, scan_id=scan_id, outcome=outcome, cycle_result=cycle_result
     )
-    await _publish_runtime_status(
-        redis_client,
-        status="idle",
-        last_successful_scan_at=datetime.now(timezone.utc) if outcome == "success" else None,
-    )
 
     return {
         "outcome": outcome,
         "scan_id": scan_id,
+        "ad_account_id": ad_account_id,
         "duration_ms": duration_ms,
         "rows_total": cycle_result.rows_total if cycle_result else 0,
         "rows_with_offer": cycle_result.rows_with_offer if cycle_result else 0,
@@ -375,6 +408,145 @@ async def run_one_cycle(
         "tg_dispatched": dispatched,
         "error": error_msg,
     }
+
+
+# Пауза между кабинетами внутри одного цикла (анти-«дёрганье» вкладок очередью).
+ACCOUNT_SCAN_PAUSE_SECONDS = 3.0
+
+
+def _aggregate_cycle_summary(per_account: list[dict]) -> dict:
+    """Свод цикла из per-account summary (для логов и адаптивного интервала).
+
+    Семантика outcome (важно для Layer 3 degraded-трекинга и resolve_scan_mode):
+      - "error"   — ТОЛЬКО если упали ВСЕ кабинеты (полный провал цикла);
+      - "success" — хотя бы один кабинет отсканирован успешно;
+      - "empty"   — остальное (все empty или смесь empty+error).
+    Счётчики суммируются → worst-case агрегация для адаптивного интервала:
+    stop-хит в любом кабинете даёт CRITICAL всему циклу.
+    """
+    outcomes = [s["outcome"] for s in per_account]
+    if all(o == "error" for o in outcomes):
+        outcome = "error"
+    elif any(o == "success" for o in outcomes):
+        outcome = "success"
+    else:
+        outcome = "empty"
+    # error — только от реально упавших кабинетов: empty_reason ("no_active_ads")
+    # НЕ ошибка и не должен светиться в summary success-цикла.
+    first_error = next(
+        (s["error"] for s in per_account if s["outcome"] == "error" and s.get("error")), None
+    )
+    return {
+        "outcome": outcome,
+        # Для совместимости с потребителями старого summary — последний scan_id.
+        "scan_id": per_account[-1]["scan_id"] if per_account else None,
+        "duration_ms": sum(s.get("duration_ms", 0) for s in per_account),
+        "rows_total": sum(s.get("rows_total", 0) for s in per_account),
+        "rows_with_offer": sum(s.get("rows_with_offer", 0) for s in per_account),
+        "alerts_warning": sum(s.get("alerts_warning", 0) for s in per_account),
+        "alerts_stop": sum(s.get("alerts_stop", 0) for s in per_account),
+        "tg_dispatched": next(
+            (s["tg_dispatched"] for s in per_account if s.get("tg_dispatched")), None
+        ),
+        "error": first_error,
+        "accounts": [
+            {"ad_account_id": s.get("ad_account_id"), "outcome": s["outcome"]}
+            for s in per_account
+        ],
+    }
+
+
+async def run_one_cycle(
+    engine: AsyncEngine,
+    *,
+    gate: ScannerGate,
+    redis_client=None,
+    tg_client=None,
+) -> dict:
+    """Один полный цикл observer'а. Возвращает summary для логов/тестов.
+
+    Мульти-кабинет (MULTI_CABINET_PLAN.md §M3): scan set = union offers.ad_account_ids
+    активных офферов; кабинеты обходятся ПОСЛЕДОВАТЕЛЬНО, каждый со своим scan_run.
+    Ошибка одного кабинета НЕ прерывает остальные. Пустой scan set → legacy-скан
+    текущей вкладки (поведение до мульти-кабинетности).
+
+    Не бросает исключения наверх — все ошибки логирует и записывает в scan_runs.outcome.
+
+    Если tg_client передан — после process_scan_rows зовём dispatch_pending_alerts(scan_id):
+    события записанные в этом scan'е улетают в TG чат с inline-кнопками.
+    """
+    config = await load_observer_config(engine)
+    if config is None or not config["is_scanning_enabled"]:
+        await _publish_runtime_status(redis_client, status="paused")
+        return {"outcome": "paused", "scan_id": None}
+
+    # Self-heal Layer 2 gate: разрешать ли клиенту эскалировать reconnect при пропаже вкладки.
+    auto_recover_page = await load_vision_auto_restart_flag(engine)
+
+    # Scan set кабинетов из активных офферов. Пустой → legacy одно-кабинетный скан.
+    accounts = await resolve_scan_account_ids(engine)
+    if not accounts:
+        summary = await _run_account_scan(
+            engine,
+            gate=gate,
+            config=config,
+            auto_recover_page=auto_recover_page,
+            redis_client=redis_client,
+            tg_client=tg_client,
+            ad_account_id=None,
+        )
+        await _publish_runtime_status(
+            redis_client,
+            status="idle",
+            last_successful_scan_at=(
+                datetime.now(timezone.utc) if summary["outcome"] == "success" else None
+            ),
+        )
+        return summary
+
+    # Warning о выпавших из скана офферах (активны, но без кабинетов) — раз в цикл в лог.
+    orphan_offers = await list_offers_without_accounts(engine)
+    if orphan_offers:
+        logger.warning(
+            "observer: офферы без ad_account_ids не сканируются: %s",
+            ", ".join(orphan_offers),
+        )
+
+    # Глобальный allowlist кампаний несовместим с мульти-кабом (см. _run_account_scan).
+    if config.get("campaign_ids"):
+        logger.warning(
+            "observer: мульти-каб режим — allowlist campaign_ids (%d шт.) игнорируется, "
+            "скоупинг только через owner_tag",
+            len(config.get("campaign_ids") or []),
+        )
+
+    per_account: list[dict] = []
+    for idx, account_id in enumerate(accounts):
+        if idx > 0:
+            # Короткая пауза между кабинетами — «человеческий» темп переключения вкладок.
+            await asyncio.sleep(ACCOUNT_SCAN_PAUSE_SECONDS)
+        summary = await _run_account_scan(
+            engine,
+            gate=gate,
+            config=config,
+            auto_recover_page=auto_recover_page,
+            redis_client=redis_client,
+            tg_client=tg_client,
+            ad_account_id=account_id,
+            accounts_done=idx,
+            accounts_total=len(accounts),
+        )
+        per_account.append(summary)
+
+    aggregated = _aggregate_cycle_summary(per_account)
+    await _publish_runtime_status(
+        redis_client,
+        status="idle",
+        last_successful_scan_at=(
+            datetime.now(timezone.utc) if aggregated["outcome"] == "success" else None
+        ),
+    )
+    return aggregated
 
 
 # ====================== Shared state для pubsub-сигналов ======================
@@ -756,12 +928,14 @@ async def _default_gate_factory() -> ScannerGate:
             campaign_ids: list[str] | None = None,
             owner_tag: str | None = None,
             auto_recover_page: bool = True,
+            ad_account_id: str | None = None,
         ) -> ScanCycleOutput:
             final_result: GrpcScanResult | None = None
             async for event in client.run_scan_cycle(
                 campaign_ids=campaign_ids or [],
                 owner_tag=owner_tag,
                 auto_recover_page=auto_recover_page,
+                ad_account_id=ad_account_id,
             ):
                 # ScanProgress нам пока не нужен — слушаем только финальный ScanResult
                 if isinstance(event, GrpcScanResult):

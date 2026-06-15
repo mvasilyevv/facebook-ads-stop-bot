@@ -242,7 +242,8 @@ async def refresh_observer_campaigns(
         except Exception:  # noqa: BLE001
             pass
 
-    # Апсерт в каталог (ON CONFLICT по campaign_name, как в writers) — чтобы GET /campaigns видел новые.
+    # Апсерт в каталог по fb_campaign_id (идентичность кампании, 0020/HIGH-3) —
+    # чтобы GET /campaigns видел новые. У campaigns-edge ID есть всегда.
     now = datetime.now(UTC)
     if campaigns:
         async with AsyncSession(engine) as session:
@@ -252,10 +253,10 @@ async def refresh_observer_campaigns(
                         """
                         INSERT INTO fb_campaigns (fb_campaign_id, campaign_name, last_seen_at)
                         VALUES (:cid, :name, :now)
-                        ON CONFLICT (campaign_name) DO UPDATE
+                        ON CONFLICT (fb_campaign_id) WHERE fb_campaign_id IS NOT NULL
+                        DO UPDATE
                         SET last_seen_at = :now,
-                            fb_campaign_id =
-                                COALESCE(EXCLUDED.fb_campaign_id, fb_campaigns.fb_campaign_id),
+                            campaign_name = EXCLUDED.campaign_name,
                             is_active = TRUE
                         """
                     ),

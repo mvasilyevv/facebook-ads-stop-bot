@@ -302,7 +302,9 @@ class _CountingGate:
         self.calls = 0
         self.owner_tags: list[str | None] = []
 
-    async def run_one_scan(self, campaign_ids=None, owner_tag=None, auto_recover_page=True):
+    async def run_one_scan(
+        self, campaign_ids=None, owner_tag=None, auto_recover_page=True, ad_account_id=None
+    ):
         from apps.observer_worker.main import ScanCycleOutput
 
         self.calls += 1

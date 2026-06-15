@@ -228,11 +228,20 @@ function AdDetailPage() {
           {ad_name ?? fbAdId}
         </h1>
 
-        {/* FSM-бейдж + код оффера */}
+        {/* FSM-бейдж + код оффера + кабинет (мульти-кабинет) */}
         <div className="flex items-center gap-2 flex-wrap">
           <AlertStateBadge state={state} withDot />
           {offer_code && (
             <Pill variant="accent">{offer_code}</Pill>
+          )}
+          {data.account_id && (
+            <span
+              className="font-display tabular-nums text-bg-9 border border-bg-5 px-1.5"
+              style={{ fontSize: 10, lineHeight: "18px" }}
+              title={`Кабинет ${data.account_id}`}
+            >
+              act {data.account_id}
+            </span>
           )}
           {/* fb_ad_id как мелкая метка */}
           <span

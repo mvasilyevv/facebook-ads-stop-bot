@@ -19,7 +19,7 @@
  */
 
 import { useMemo, useState } from "react";
-import { Ban, Clock } from "lucide-react";
+import { Ban, Clock, ExternalLink } from "lucide-react";
 
 import {
   ALERT_STATE_LABELS,
@@ -42,6 +42,8 @@ import { cn } from "@/lib/utils/cn";
 
 import { useAdTimeline, useSnoozeAd, useBulkDisable } from "@/lib/api/ads";
 import {
+  adAccountId,
+  adsManagerAdUrl,
   readAdMetrics,
   deriveGeo,
   money1,
@@ -205,6 +207,20 @@ export function AdDrawer({ ad, onClose, isLoading = false, fbAdId }: AdDrawerPro
               <span className="inline-block px-1.5 py-px bg-bg-3 border border-bg-6 text-bg-10 font-display text-[10px] tracking-[0.04em] uppercase">
                 {ad.offer_code}
               </span>
+            ) : null}
+            {adAccountId(ad) ? (
+              // Мульти-кабинет: кабинет объявления + deep-link в Ads Manager.
+              <a
+                href={adsManagerAdUrl(ad) ?? undefined}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 px-1.5 py-px bg-bg-2 border border-bg-6 text-bg-9 font-display text-[10px] tabular-nums tracking-[0.04em] hover:text-bg-11 hover:border-bg-7 transition-colors"
+                title="Открыть в Ads Manager"
+                aria-label={`Открыть в Ads Manager, кабинет ${adAccountId(ad)}`}
+              >
+                act {adAccountId(ad)}
+                <ExternalLink size={10} aria-hidden="true" />
+              </a>
             ) : null}
             <span className="font-display text-[11px] text-bg-8">{resolvedId}</span>
           </span>

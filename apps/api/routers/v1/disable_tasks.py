@@ -167,13 +167,18 @@ async def create_disable_task(
     # DOM-канал (task_type='disable') удалён.
     ikey = f"manual:pause_ad:{body.fb_ad_id}:{uuid.uuid4().hex}"
 
+    # Мульти-кабинет: кабинет объявления из каталога (None → legacy primary-вкладка).
+    from core.observer.accounts import load_ad_account_id_for_fb_ad
+
+    ad_account_id = await load_ad_account_id_for_fb_ad(engine, body.fb_ad_id)
+
     task_id = await create_mutation_task(
         engine,
         payload=MetaMutationPayload(
             mutation_kind="pause_ad",
             target_id=body.fb_ad_id,
             params={},
-            ad_account_id=None,
+            ad_account_id=ad_account_id,
         ),
         requested_by=body.requested_by,
         status="pending",

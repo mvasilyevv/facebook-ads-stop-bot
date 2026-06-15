@@ -10,7 +10,7 @@
  *   GET /api/history/ads        → HistoryAd[]
  */
 
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { apiGet } from "./client";
 import type {
   HistoryAd,
@@ -78,6 +78,9 @@ export function useHistoryEvents(params?: EventsParams) {
     queryFn: ({ signal }) =>
       apiGet<HistoryEvent[]>("/history/events", params as Record<string, string | number | boolean | null | undefined>, signal),
     staleTime: 30_000,
+    // Смена периода/фильтра держит прежний список (приглушённый в drawer'е)
+    // вместо «моргания» скелетоном — плавнее для drill-down сценария.
+    placeholderData: keepPreviousData,
   });
 }
 

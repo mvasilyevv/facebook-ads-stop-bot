@@ -50,6 +50,8 @@ interface OfferCreateIn {
   name: string;
   vertical?: string;
   is_active?: boolean;
+  /** Мульти-кабинет: кабинеты оффера (числовые ID без act_), минимум 1. */
+  ad_account_ids: string[];
 }
 
 export function useCreateOffer() {

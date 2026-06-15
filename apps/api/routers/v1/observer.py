@@ -189,6 +189,7 @@ async def list_scan_runs(
             # metrics_inserted отсутствует в ScanRun — возвращаем None
             metrics_inserted=None,
             error_message=row.error_message,
+            ad_account_id=row.ad_account_id,
         )
         for row in rows
     ]

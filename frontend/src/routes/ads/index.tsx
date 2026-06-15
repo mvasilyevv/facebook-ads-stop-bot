@@ -21,13 +21,14 @@
  *           D disable выбранных · Esc закрыть/сбросить/blur.
  */
 
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Eyebrow } from "@/components/data/Eyebrow";
 import { Badge } from "@/components/ui/Badge";
 import { Kbd } from "@/components/ui/Kbd";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { DensityToggle } from "@/components/ui/DensityToggle";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton } from "@/components/ui/Skeleton";
@@ -43,13 +44,32 @@ import { useDashboardStats } from "@/lib/api/dashboard";
 import { useRealtimeInvalidation } from "@/lib/websocket/useRealtimeInvalidation";
 import { useUiStore, DENSITY_ROW_HEIGHT } from "@/stores/ui";
 
-import type { AdSnapshot, AlertState } from "@fb/shared";
+import { ALERT_STATE_LABELS, type AdSnapshot, type AlertState } from "@fb/shared";
+import { adAccountId } from "@/components/domain/ads/adHelpers";
 
 // ─── Route ────────────────────────────────────────────────────────────────────
 
+/** Deep-link фильтра состояния: /ads?state=warning_sent,stop_sent (клик по KPI). */
+interface AdsSearch {
+  state?: string;
+}
+
 export const Route = createFileRoute("/ads/")({
   component: AdsPage,
+  validateSearch: (search: Record<string, unknown>): AdsSearch => ({
+    state: typeof search.state === "string" && search.state ? search.state : undefined,
+  }),
 });
+
+/** Парсит ?state=a,b в Set валидных alert_state (мусорные токены отбрасываются). */
+function parseStateParam(raw: string | undefined): Set<AlertState> {
+  const out = new Set<AlertState>();
+  for (const tok of (raw ?? "").split(",")) {
+    const t = tok.trim();
+    if (t && t in ALERT_STATE_LABELS) out.add(t as AlertState);
+  }
+  return out;
+}
 
 // Тянем большой батч строк (cursor-пагинация для 1000+: один крупный запрос,
 // клиентская фильтрация/сортировка поверх — как в эталоне).
@@ -59,13 +79,27 @@ const FETCH_LIMIT = 1000;
 
 function AdsPage() {
   useRealtimeInvalidation();
+  const navigate = useNavigate({ from: "/ads/" });
+  const { state: stateParam } = Route.useSearch();
 
-  // ── Фильтры ────────────────────────────────────────────────────────────────
-  const [filters, setFilters] = useState<AdsFilterState>({
+  // ── Фильтры (state-фильтр инициализируется из ?state= — deep-link с Dashboard) ──
+  const [filters, setFilters] = useState<AdsFilterState>(() => ({
     search: "",
-    selectedStates: new Set<AlertState>(),
+    selectedStates: parseStateParam(stateParam),
     selectedOffers: new Set<string>(),
-  });
+    selectedAccounts: new Set<string>(),
+  }));
+
+  // URL ↔ state-фильтр: тоггл пиллов обновляет ?state= (replace, без истории) —
+  // текущий вид всегда можно шарить ссылкой.
+  useEffect(() => {
+    const next = [...filters.selectedStates].sort().join(",") || undefined;
+    if (next !== (stateParam || undefined)) {
+      void navigate({ search: { state: next }, replace: true });
+    }
+    // navigate стабилен; stateParam в deps вызвал бы цикл при внешней навигации.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filters.selectedStates]);
 
   // ── Выбор / курсор / drawer ──────────────────────────────────────────────
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -103,10 +137,21 @@ function AdsPage() {
     return [...set].sort();
   }, [allRows]);
 
+  // Кабинеты из загруженных данных (мульти-кабинет; ≤1 — dropdown скрыт в FilterBar).
+  const accountOptions = useMemo(() => {
+    const set = new Set<string>();
+    allRows.forEach((r) => {
+      const acc = adAccountId(r);
+      if (acc) set.add(acc);
+    });
+    return [...set].sort();
+  }, [allRows]);
+
   // ── Клиентская фильтрация + сортировка по spend desc ────────────────────
   const rows = useMemo<AdSnapshot[]>(() => {
     const q = filters.search.trim().toLowerCase();
     const offers = filters.selectedOffers;
+    const accounts = filters.selectedAccounts;
     const out = allRows.filter((r) => {
       if (q) {
         const hit =
@@ -116,6 +161,10 @@ function AdsPage() {
         if (!hit) return false;
       }
       if (offers.size > 0 && !(r.offer_code && offers.has(r.offer_code))) return false;
+      if (accounts.size > 0) {
+        const acc = adAccountId(r);
+        if (!(acc && accounts.has(acc))) return false;
+      }
       return true;
     });
     // Сортировка по spend desc (как в эталоне).
@@ -125,7 +174,7 @@ function AdsPage() {
       return sb - sa;
     });
     return out;
-  }, [allRows, filters.search, filters.selectedOffers]);
+  }, [allRows, filters.search, filters.selectedOffers, filters.selectedAccounts]);
 
   // Курсор не должен выходить за пределы после фильтрации.
   useEffect(() => {
@@ -153,11 +202,20 @@ function AdsPage() {
     });
   }, []);
 
+  const toggleAccount = useCallback((a: string) => {
+    setFilters((p) => {
+      const next = new Set(p.selectedAccounts);
+      if (next.has(a)) { next.delete(a); } else { next.add(a); }
+      return { ...p, selectedAccounts: next };
+    });
+  }, []);
+
   const clearAll = useCallback(() => {
     setFilters({
       search: "",
       selectedStates: new Set(),
       selectedOffers: new Set(),
+      selectedAccounts: new Set(),
     });
   }, []);
 
@@ -280,11 +338,13 @@ function AdsPage() {
         <FilterBar
           filterState={filters}
           offerOptions={offerOptions}
+          accountOptions={accountOptions}
           count={rows.length}
           searchRef={searchRef}
           onSearchChange={(v) => setFilters((p) => ({ ...p, search: v }))}
           onStateToggle={toggleState}
           onOfferToggle={toggleOffer}
+          onAccountToggle={toggleAccount}
           onClearAll={clearAll}
         />
       </div>
@@ -315,13 +375,16 @@ function AdsPage() {
         />
       )}
 
-      {/* ── Keyboard legend ───────────────────────────────────────────────── */}
-      <div className="mt-2.5 flex gap-3.5 shrink-0 text-[11px] text-bg-8 font-display">
+      {/* ── Keyboard legend + density ─────────────────────────────────────── */}
+      <div className="mt-2.5 flex items-center gap-3.5 shrink-0 text-[11px] text-bg-8 font-display">
         <Legend k="J/K" label="навигация" />
         <Legend k="X" label="выбор" />
         <Legend k="D" label="disable" />
         <Legend k="Enter" label="детали" />
         <Legend k="/" label="поиск" />
+        <div className="flex-1" />
+        {/* Плотность строк (persist в localStorage через ui-store) */}
+        <DensityToggle />
       </div>
 
       {/* ── Bulk action bar ───────────────────────────────────────────────── */}

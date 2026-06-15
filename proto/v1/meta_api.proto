@@ -58,6 +58,11 @@ message ExecuteGraphCallRequest {
 
   // Таймаут запроса в миллисекундах (по умолчанию 30_000 в browser-agent).
   optional int32 timeout_ms = 6;
+
+  // Мульти-кабинет: числовой ID кабинета (без act_) — fetch исполняется из вкладки
+  // этого кабинета («человеческий» паттерн). Пусто → текущая primary-вкладка
+  // (backward-compat; токен EAAB общий для всех кабинетов юзера).
+  string ad_account_id = 7;
 }
 
 message ExecuteGraphCallResponse {

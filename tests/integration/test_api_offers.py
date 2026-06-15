@@ -287,11 +287,16 @@ async def test_compare_days_out_of_range(pg_engine, fake_redis_client, clean_off
 # ─────────────────────── POST /offers ───────────────────────
 
 
-# Успешное создание оффера: 201, запись появляется в БД.
+# Успешное создание оффера: 201, запись появляется в БД (мульти-кабинет: min 1 кабинет).
 @pytest.mark.asyncio
 async def test_create_offer_happy_path(pg_engine, fake_redis_client, clean_offers):
     app = _make_app(engine=pg_engine, redis=fake_redis_client)
-    body = {"code": "TST_NEW", "name": "Test New", "vertical": "casino"}
+    body = {
+        "code": "TST_NEW",
+        "name": "Test New",
+        "vertical": "casino",
+        "ad_account_ids": ["111222333"],
+    }
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         resp = await ac.post("/api/offers", json=body)
 
@@ -302,6 +307,7 @@ async def test_create_offer_happy_path(pg_engine, fake_redis_client, clean_offer
     assert data["vertical"] == "casino"
     assert data["is_active"] is True
     assert data["id"] is not None
+    assert data["ad_account_ids"] == ["111222333"]
 
     # Проверяем в БД
     async with pg_engine.connect() as conn:
@@ -317,9 +323,44 @@ async def test_create_offer_duplicate_code_returns_409(pg_engine, fake_redis_cli
 
     app = _make_app(engine=pg_engine, redis=fake_redis_client)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.post("/api/offers", json={"code": "DUP_CODE", "name": "Duplicate"})
+        resp = await ac.post(
+            "/api/offers",
+            json={"code": "DUP_CODE", "name": "Duplicate", "ad_account_ids": ["111"]},
+        )
 
     assert resp.status_code == 409
+
+
+# Мульти-кабинет: создание БЕЗ кабинетов → 422 (минимум 1 обязателен).
+@pytest.mark.asyncio
+async def test_create_offer_without_accounts_returns_422(
+    pg_engine, fake_redis_client, clean_offers
+):
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        no_field = await ac.post("/api/offers", json={"code": "TST_NOACC"})
+        empty_list = await ac.post(
+            "/api/offers", json={"code": "TST_NOACC", "ad_account_ids": []}
+        )
+    assert no_field.status_code == 422
+    assert empty_list.status_code == 422
+
+
+# Мульти-кабинет: act_-префикс срезается, дубли схлопываются, нечисловой ID → 422.
+@pytest.mark.asyncio
+async def test_create_offer_normalizes_account_ids(pg_engine, fake_redis_client, clean_offers):
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        ok = await ac.post(
+            "/api/offers",
+            json={"code": "TST_NORM", "ad_account_ids": ["act_555", "555", " 777 "]},
+        )
+        bad = await ac.post(
+            "/api/offers", json={"code": "TST_BAD", "ad_account_ids": ["not-a-number"]}
+        )
+    assert ok.status_code == 201
+    assert ok.json()["ad_account_ids"] == ["555", "777"]
+    assert bad.status_code == 422
 
 
 # Невалидный code (строчные буквы) должен возвращать 422.

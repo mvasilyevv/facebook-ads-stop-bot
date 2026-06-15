@@ -162,6 +162,8 @@ class HistoryAdOut(BaseModel):
     internal_id: str  # UUID → str
     ad_name: str
     campaign_name: str
+    # Мульти-кабинет: кабинет объявления (NULL — legacy-записи каталога).
+    ad_account_id: str | None = None
     offer_code: str | None = None
     is_active: bool
     spend: str

@@ -29,12 +29,16 @@ async def _create_toggle_mutation(
     """Создать pending meta_api_mutation (pause_ad/activate_ad) для ручной кнопки."""
     from core.meta_api.queue import create_mutation_task
     from core.meta_api.schemas import MetaMutationPayload
+    from core.observer.accounts import load_ad_account_id_for_fb_ad
 
+    # Мульти-кабинет: кабинет из каталога (записан observer'ом при скане) —
+    # mutation уйдёт из вкладки своего кабинета. None → legacy primary-вкладка.
+    ad_account_id = await load_ad_account_id_for_fb_ad(engine, fb_ad_id)
     payload = MetaMutationPayload(
         mutation_kind=mutation_kind,
         target_id=fb_ad_id,
         params={},
-        ad_account_id=None,
+        ad_account_id=ad_account_id,
     )
     return await create_mutation_task(
         engine,
