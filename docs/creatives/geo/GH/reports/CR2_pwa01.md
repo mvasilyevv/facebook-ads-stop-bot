@@ -61,7 +61,7 @@
 > ⚡ Fast & secure payments — instant deposits and withdrawals to MTN MoMo, Telecel Cash & AirtelTigo
 > 🎰 Higher multipliers • thrilling gameplay • bigger winning runs than part 1
 > 📱 Play anytime, anywhere, straight from your smartphone
-> 🐔 The sequel to Ghana's favourite crash game — same chicken, hotter grills, bigger cashouts
+> 🐔 The sequel — now the chicken crosses the busy road, dodging traffic lane by lane for bigger cashouts
 > 🛡️ Real, verified payouts — join the players already cashing out across Ghana
 >
 > 🚀 Join Chicken Road 2 today and start your winning run! Are you cashing out or crashing out?
@@ -96,20 +96,25 @@
 
 ---
 
-## 6. Картинки — гибрид (реальные 1xBet-баннеры без их лого + докрутка)
+## 6. Картинки — Crossy-road (визуал части 2: дорога + машины)
 
-Архетип 1xBet = **яркие казино-баннеры** (курицы, золото, reels, мультипликаторы, PLACE YOUR BET/CASH OUT). Источник — реальные ассеты `~/Downloads/scan_GH_Android/`. **Обязательно убрать брендинг «1XBET»** и заменить нейтральным/нашим.
+CR2 ≠ люки части 1. Механика **Crossy-road**: курица переходит многополосную дорогу с траффиком,
+множитель растёт за каждую перейденную полосу, краш = сбивает машина. Реального скрина CR2 в материалах
+нет (все папки = часть 1), интернет-поиск по нише не даёт → **референс персонажа** берём из реальных
+ассетов (та же курица InOut), **сцену** (дорога/полосы/машины/множители) генерим. Тон яркий (хайп-архетип).
 
-| Ассет | Формат | Источник / действие |
+Референс курицы (скрепка): `~/Downloads/scan_GH_Android (1)/6a283a…jpg` (чистая курица) + `0x720.png` (в движении).
+
+| Ассет | Формат | Концепт (Crossy-road) |
 |---|---|---|
-| ICON | 1:1 500×500 | Реальная иконка `c502c3dd…w174h174.png` (курица + reels + множители + флаг GH) → **снять «1XBET»**, апскейл до 500, уникализация. |
-| FEATURE | 3:2 1008×672 | Баннер `ba6f87396e4bd890f190cc71e56b7ea6_w0h408.png` или `edaceadc…w0h408.png` (PLACE YOUR BET / CASH OUT, золото) → **снять «1XBET»**, добавить «Chicken Road 2», подогнать кроп. |
-| SCREEN1 | 2:3 500×888 | `1174f847…w0h408.png` (GAME BONUS, множитель 6.7x, PLACE YOUR BET) → снять бренд, уникализация. |
-| SCREEN2 | 2:3 500×888 | `967d13ab…w0h408.png` (CASH OUT, телефон с игрой, баланс) → снять бренд; либо догенерить яркий MoMo-вывод в этом стиле. |
-| SCREEN3 | 2:3 500×888 | `09c56d8d…w0h408.png` (CHICKEN ROAD OFFICIAL GAME, reels) → снять бренд; либо догенерить лидерборд с высокими множителями. |
+| ICON | 1:1 500×500 | Курица на дороге/зебре, акцент «2», машины по краям, яркий фон. |
+| FEATURE | 3:2 1008×672 | «CHICKEN ROAD 2» + курица на дороге + машины + множитель + «Cross the Road, Cash Out». |
+| SCREEN1 | 2:3 500×888 | Геймплей: курица на многополосной дороге, машины в полосах, множители на полосах (x1.4 / x2.0 / x3.5…), кнопка CASH OUT, баланс GHS, тёмно-яркий UI. |
+| SCREEN2 | 2:3 500×888 | MoMo-вывод «Withdrawal Successful» + MTN MoMo + GHS (брендинг CR2). |
+| SCREEN3 | 2:3 500×888 | История раундов / лидерборд с множителями + баланс GHS. |
 
-> Реальные 1xBet-ассеты — **PLACE YOUR BET / CASH OUT / золото / выпученные курицы / casino-reels**: это и есть архетип B.
-> Снятие лого + уникализация — обязательны (чужой бренд). Где чистка ломает картинку — догенерить в том же стиле.
+> Без бонуса, без чужого бренда. Курица узнаваемая (как часть 1), сцена — дорога с траффиком.
+> Отличие от PWA-1: PWA-1 = люки/грили (часть 1), PWA-2 = дорога/машины (Crossy-road).
 
 ---
 
