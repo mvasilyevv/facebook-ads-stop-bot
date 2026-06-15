@@ -50,55 +50,56 @@
 
 **Full (evergreen):**
 
-> 🐔🔥 Chicken Road 2 — the next level of Ghana's most addictive crash game is finally here! 🇬🇭💸
+> 🐔🔥 Chicken Road 2 is finally here — the sequel to Ghana's most addictive crash game! 🇬🇭
 >
-> The chicken is back — and this time the grills are hotter, the multipliers go higher, and the cashouts hit your MoMo faster than ever.
+> The chicken is back, and this time the grills are hotter and the multipliers run higher than ever. Same game you love, just turned all the way up.
 >
 > How it works:
-> Place your bet → watch the chicken sprint across the sizzling grills → the multiplier climbs 2x… 5x… 10x… 30x and beyond → hit CASH OUT before the crash 💥
+> Place your bet, watch the chicken sprint across the grills, and the multiplier starts climbing — 2x… 5x… 10x… 30x and beyond. Hit CASH OUT before it crashes 💥 and the GHS is yours. How long you hold is on you.
 >
-> The strategy is yours. The timing is yours. The GHS is yours.
+> 🏆 Why Ghana can't put Chicken Road 2 down:
 >
-> 🏆 Why Ghana is addicted to Chicken Road 2:
+> 📈 Higher multipliers than part 1 — the runs go further if you've got the patience for it.
 >
-> 📈 Higher multipliers — Chicken Road 2 takes the runs further. More patience = more GHS.
+> ⚡ Withdrawals land straight in your MTN MoMo, Telecel Cash or AirtelTigo, usually before you put the phone down.
 >
-> ⚡ Instant withdrawals — MTN MoMo, Telecel Cash, AirtelTigo. Your winnings arrive before you put the phone down.
+> 📱 Runs clean on any network and any Android phone, from Accra to Tamale.
 >
-> 📱 Optimised for Ghana — plays clean on any network, any Android phone, anywhere in the country.
+> 🛡️ Real, verified payouts — tens of thousands of Ghanaians already cash out here every day.
 >
-> 🛡️ Trusted, verified, real payouts — join tens of thousands of Ghanaians already cashing out daily.
+> The chicken is running and the multiplier is climbing. Are you cashing out or crashing out?
 >
-> 🚀 The chicken is running. The multiplier is climbing. Are you cashing out or crashing out?
->
-> Download Chicken Road 2 now — and let the run begin! 🐔💰
+> Download Chicken Road 2 now and let the run begin! 🐔💰
 
 ---
 
 ## 5. Отзывы (17 шт. — хайповый Pidgin-стиль, большие кэшауты, FOMO-тон)
 
 > Стиль: эмоциональные, Pidgin/Twi чуть плотнее, упоминание крупных сумм выигрыша (не депозита!),
-> тон «я сам не верил — а теперь», часть коротких «хайп» реплик. Ответы InOut Games короткие-хайповые.
+> тон «я сам не верил — а теперь», часть коротких реплик, реалистичные мелочи (lowercase, опечатки).
+> Эмодзи плотнее, чем у PWA-1, но НЕ в каждом. Даты вразброс. Один честный 3★ (потерял из-за жадности →
+> совет про дисциплину) — для гембла честное «можно проиграть» работает как trust, не как минус.
+> Ответы InOut Games — **только 5 из 17** (на критику + на крупные выигрыши как FOMO-подтверждение).
 
 | # | Ник | ★ | Дата | Текст отзыва | Ответ InOut Games |
 |---|---|---|---|---|---|
-| 1 | Kwame Boateng | ★★★★★ | June 11, 2026 | Chale! I was watching the multiplier go up up up and I cashed out at 28x 😱 MoMo enter my wallet in 30 seconds. This game is no joke. | 28x?! That is what we are talking about, Kwame! 🔥 Keep running! |
-| 2 | Yaw Mensah | ★★★★★ | June 10, 2026 | 🐔🔥 Chicken Road 2 is on a different level chale. The multipliers go higher than part 1. Cashed out twice to MTN MoMo same day. Sharp sharp! | That is the upgrade you deserve, Yaw! CR2 runs harder. 🚀 |
-| 3 | Akosua Tetteh | ★★★★★ | June 10, 2026 | My sister laughed when I showed her this app. Now she plays every night 😂 Both of us cashed out to Telecel Cash this week. Real money no cap. | Love that family energy! Welcome, Akosua and sis! 🇬🇭 |
-| 4 | Kojo Acheampong | ★★★★★ | June 9, 2026 | I no go lie — the tension when the chicken is running and you're waiting for big multiplier is CRAZY 🤯 But when you cash out on time… chale the MoMo ping is everything. | That ping is the sweetest sound, Kojo! 🎶💸 |
-| 5 | Abena Asante | ★★★★★ | June 9, 2026 | Fast withdrawal, no stress. AirtelTigo money in my account within a minute. Better than part 1 honestly. The game is upgraded for real. | CR2 was built to be better, Abena! Glad you feel it. ⚡ |
-| 6 | Prince Frimpong | ★★★★★ | June 8, 2026 | 🔥🔥 Started with small deposit, ran it up. Cash out to MTN MoMo — money entered sharp. No delay at all. Chicken Road 2 is the real deal my brother. | Small start, big cashout — that is the Chicken Road way! 🐔 |
-| 7 | Nana Osei | ★★★★ | June 7, 2026 | Honestly I lost a few rounds at first because I got greedy waiting for 20x. But once I learned to cash out at 5-8x consistently, I've been winning every session. Legit game. | Patience is the key, Nana! Consistent wins beat one big gamble. 💪 |
-| 8 | Gifty Darko | ★★★★★ | June 6, 2026 | I've tried other crash games in Ghana. This one is different — the multipliers feel more alive. Cashed out 4 times today to MoMo. Ɛyɛ! 🇬🇭 | 4 cashouts in one day! You are a pro, Gifty. 🏆 |
-| 9 | Emmanuel Owusu | ★★★★★ | June 5, 2026 | My boy from Kumasi told me about CR2. First day I was doubting. By evening I had cashed out to MoMo three times. No wahala at all. | That is how Chicken Road converts doubters, Emmanuel! 😄 |
-| 10 | Kwabena Asare | ★★★★★ | June 4, 2026 | Withdrawal to Telecel Cash — instant! App runs smooth on my 4G. The new levels in CR2 are more exciting than the first. Love it 🙌 | CR2 goes harder on every level, Kwabena! Keep cashing out. |
-| 11 | Adwoa Mensah | ★★★★★ | June 3, 2026 | I never thought a mobile game could actually pay until I saw the MoMo credit notification 😮 Cash out is real. MoMo does not lie. Downloaded for a friend too. | Nothing like that first MoMo notification, Adwoa! Welcome aboard 🚀 |
-| 12 | Kofi Amponsah | ★★★★★ | June 2, 2026 | 🐔💥 Bro this game hits different. Multiplier went 35x yesterday and I waited too long — crashed! But lesson learned chale. Today I cashed out at 12x and got my MoMo in seconds. | Ouch on the 35x crash — but you bounced back! That is a champion mindset, Kofi. 🏆 |
-| 13 | Esi Boateng | ★★★★★ | June 1, 2026 | I play mostly at night after work. The game is smooth and fast even on slow network. Cash out to MTN MoMo takes 1 minute max. Very happy with this one. | Night shift cashouts hit different, Esi! 😄 We're here 24/7. |
-| 14 | Samuel Adom | ★★★★ | May 30, 2026 | Some rounds you lose but overall the game is fair. I cashed out more than I lost this week. MoMo payment came through same day. Good one. | Balance and patience win in the long run, Samuel. Keep it up! |
-| 15 | Rexford Antwi | ★★★★★ | May 28, 2026 | This is the best app I have downloaded in 2026. MoMo payout confirmed, multipliers are wild. My whole group chat is playing now 🔥🔥🔥 | The whole group chat?! You're an ambassador, Rexford! 🙌🇬🇭 |
-| 16 | Maame Serwaa | ★★★★★ | May 25, 2026 | Chale I was spending money on airtime — now I cash out from Chicken Road 2 and buy my own airtime 😂 MoMo is fast, game is addictive. No regrets. | We love that energy, Maame! CR2 paying for the airtime now 📱💸 |
-| 17 | Bright Okyere | ★★★★★ | May 21, 2026 | Just hit 22x and cashed out to AirtelTigo. Screenshotted the notification chale 😂 This app is legit, real money enters your wallet. Highly recommend Chicken Road 2. | 22x screenshot belongs on the wall, Bright! You earned it. 🐔🔥 |
+| 1 | Kwame Boateng | ★★★★★ | Jun 11, 2026 | Chale I watched the multiplier go up up up and cashed out at 28x 😱 MoMo entered in like 30 seconds. CR2 no be small. | 28x is wild, Kwame 🔥 that's the CR2 run we like to see. |
+| 2 | Yaw Mensah | ★★★★★ | May 30, 2026 | CR2 multipliers go higher than part 1 for real. cashed out twice to MTN same day, sharp sharp. | — |
+| 3 | Akosua | ★★★★ | Apr 18, 2026 | Game is fun and pays, but it drains battery small when you play long. Still my favourite night game sha. | Turn on battery saver and it runs lighter, Akosua — enjoy the runs 🐔 |
+| 4 | Kojo Acheampong | ★★★★★ | Jun 9, 2026 | the tension when the chicken dey run and you waiting for big multiplier 🤯 but when you cash out on time the MoMo ping is everything. | — |
+| 5 | Prince Frimpong | ★★★★★ | Mar 5, 2026 | started small, ran it up, cashed out to MTN. money entered sharp, no delay. CR2 na the real deal my brother. | — |
+| 6 | Abena Asante | ★★★★★ | May 9, 2026 | AirtelTigo money in my account within a minute. honestly better than part 1, feels upgraded. | — |
+| 7 | Nana Osei | ★★★ | Feb 22, 2026 | I no go lie, I lost some money the first week because I was greedy waiting for 20x every time. The game is legit but you fit lose if you no get discipline. Adjust your strategy before you put serious money. | Fair point, Nana. Cash out at 3–8x consistently and set a limit — discipline beats chasing one big run. |
+| 8 | Gifty Darko | ★★★★★ | Jun 6, 2026 | tried other crash games, this one the multipliers feel more alive. cashed out 4 times today to MoMo 🇬🇭 | — |
+| 9 | Emmanuel Owusu | ★★★★★ | Apr 30, 2026 | my boy from Kumasi told me about CR2. first day I was doubting, by evening I cashed out three times. no wahala. | — |
+| 10 | Kwabena Asare | ★★★★★ | Jun 4, 2026 | Withdrawal to Telecel instant. runs smooth on my 4G. the new levels harder than part 1, I like am. | — |
+| 11 | Adwoa Mensah | ★★★★★ | Jan 28, 2026 | I never believed a game fit pay until I saw the MoMo credit notification 😮 cash out is real. | — |
+| 12 | Kofi Amponsah | ★★★★ | May 16, 2026 | this game hits different but deɛ it can be addictive oo, be careful. Multiplier went 35x yesterday and I waited too long, crashed 💥 today I cashed out at 12x and got my MoMo sharp. | Lesson learned the hard way 😅 cash out earlier next time, Kofi. Play smart. |
+| 13 | Esi Boateng | ★★★★★ | Jun 1, 2026 | I play mostly at night after work. smooth and fast even on slow network. cash out to MTN takes a minute max. | — |
+| 14 | Samuel Adom | ★★★★★ | Mar 11, 2026 | some rounds you lose but overall fair. I cashed out more than I lost this week. MoMo came same day. | — |
+| 15 | Rexford Antwi | ★★★★★ | Jun 12, 2026 | best app I downloaded this year. MoMo payout confirmed, multipliers wild. whole group chat dey play now 🔥🔥 | The whole group chat?! 🙌 welcome them all, Rexford. |
+| 16 | Maame Serwaa | ★★★★★ | May 25, 2026 | Chale I dey spend money on airtime, now I cash out from CR2 and buy my own airtime 😂 MoMo fast, game addictive. | — |
+| 17 | Bright Okyere | ★★★★★ | Apr 7, 2026 | just hit 22x and cashed out to AirtelTigo. screenshotted the notification 😂 real money enters your wallet, recommend CR2. | — |
 
 ---
 
@@ -126,5 +127,6 @@
   - **Рейтинг:** 4.8 vs 4.9 у PWA-1 (разнообразит выдачу).
   - **Installs:** 50K+ vs 100K+ у PWA-1.
 - Трекинг-URL/домен: НЕ вписан (определяет байер при сборке в AdSet.pro).
-- Отзывов 17 шт. — видимая карточная панель. Можно добавить 1 нейтральный 3-звёздочный для правдоподобности рейтинга 4.8 (не 5.0).
+- Отзывов 17 шт. (14×5★ + 2×4★ + 1×3★ → ≈4.8, не стерильные 5.0). 3★ (#7) — честная критика «потерял из-за жадности» + совет про дисциплину: для гембла это trust-сигнал, а не минус. Ответы дева только на 5 (критика + крупные выигрыши как FOMO-подтверждение).
+- **Калибровка реализма** по живым Google Play отзывам WAF-финтеха (Opay/PalmPay/Moniepoint/Kuda): dev почти не отвечает, даты вразброс, «похвала + but + просьба». Гневный негатив (1–2★) в продающий PWA НЕ добавляем — отпугнёт.
 - После ✅ qa → трекинг-ссылку передать агенту `fb`.

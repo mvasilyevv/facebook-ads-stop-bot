@@ -50,46 +50,47 @@
 
 **Full (evergreen):**
 
-> Chicken Road is Ghana's #1 destination for people who know how to take calculated risks and multiply their GHS in seconds.
+> Chicken Road is Ghana's #1 crash game for players who like to take a calculated risk and grow their GHS fast.
 >
-> How it works: place your bet, watch the chicken run across a trail of sizzling grills, and see the multiplier climb — 2x, 5x, 20x or higher. The key is simple: cash out before the chicken crashes. Strategy is 100% in your hands.
+> How it works is simple. You place your bet, the chicken starts running across the grills, and the multiplier keeps climbing — 2x, 5x, 20x and beyond. Cash out before the chicken crashes and the winnings are yours. Hold on too long and you lose the round. When to pull out is your call.
 >
-> Why Ghanaians choose Chicken Road:
+> Why players in Ghana keep coming back to Chicken Road:
 >
-> Start small — you don't need a big bankroll. The minimum stake is low enough for anyone to start.
+> 1) You can start small. No big bankroll needed, the minimum stake is low enough for anyone to try a few rounds.
+> 2) Payouts go straight to your MTN MoMo, Telecel Cash or AirtelTigo wallet, usually within a minute.
+> 3) It runs smooth on Ghanaian networks, even when your signal is not the best.
+> 4) Thousands of players from Accra to Kumasi cash out here every day.
 >
-> Instant payouts — withdraw your winnings straight to MTN MoMo, Telecel Cash or AirtelTigo. No delays, no excuses.
->
-> Built for Ghana — smooth on any Ghanaian mobile network. No freezing, no lag, just fast action.
->
-> Trusted by players across Accra, Kumasi and beyond — thousands cash out every day.
->
-> Download now and see if you cash out or crash out.
+> Download it, play a few rounds, and see if you can cash out before the crash.
 
 ---
 
 ## 5. Отзывы (15 шт. — спокойный InOut-стиль, MoMo-trust, ганские имена)
 
-> Стиль: короткие/средние, без лишних эмодзи, деловой тон, вкрапления Pidgin умеренно.
-> Ответы разработчика: InOut Games, короткие и бодрые.
+> Стиль: НЕ глянцевый. Микс длин (от одной фразы до 3–4 предложений), часть с мягкой
+> критикой («…but…»), Pidgin/эмодзи дозированно, реалистичные мелочи (lowercase-начала, опечатки).
+> Даты вразброс — Play сортирует по релевантности, не по дате. Откалибровано по живым Google Play
+> отзывам ганско-нигерийской денежной аудитории (Opay/PalmPay/Moniepoint/Kuda).
+> Ответы разработчика — **НЕ на каждый** (3 из 15): только на критику/нейтрал, коротко и по делу.
+> Сплошные ответы = синтетика.
 
 | # | Ник | ★ | Дата | Текст отзыва | Ответ InOut Games |
 |---|---|---|---|---|---|
-| 1 | Kwame Mensah | ★★★★★ | June 10, 2026 | Cash out enter my MTN MoMo sharp sharp. No delay at all. Best crash game in GH. | That is what we love to hear, Kwame! Keep winning. |
-| 2 | Kojo Asante | ★★★★★ | June 9, 2026 | Been playing for two weeks. Payouts are real and fast. Telecel Cash in seconds. | Thank you, Kojo! Instant payouts are our priority. |
-| 3 | Ama Boateng | ★★★★★ | June 8, 2026 | Chale I started with small money and cashed out twice today. MTN MoMo working fine. No wahala. | Great run, Ama! Small start, big wins — that is Chicken Road. |
-| 4 | Yaw Darko | ★★★★★ | June 7, 2026 | Smooth gameplay even on my network. Hit 12x multiplier and cashed out to MoMo. Recommended. | 12x is a solid run, Yaw. Enjoy the payout! |
-| 5 | Kofi Appiah | ★★★★★ | June 6, 2026 | I was sceptical at first but my boy showed me the MoMo receipt. Now I play every day. | Welcome to the game, Kofi! Your wins are waiting. |
-| 6 | Akosua Owusu | ★★★★★ | June 5, 2026 | Withdrawal to AirtelTigo was instant. App is clean and simple to understand. Love it. | Thank you, Akosua! Simple and fast — that is by design. |
-| 7 | Kwabena Frimpong | ★★★★ | June 4, 2026 | Ɛyɛ. The multipliers can go crazy high. Just do not get greedy and cash out on time. Good game. | Wise words, Kwabena! Discipline wins every time. |
-| 8 | Abena Adu | ★★★★★ | June 3, 2026 | My brother told me about this game. Tried it and cashed out 3 times this week. MoMo is fast. | Love hearing that word spreads, Abena! Keep it up. |
-| 9 | Emmanuel Tetteh | ★★★★★ | June 2, 2026 | No stress. Deposit is easy, cash out is instant. MTN MoMo works every time. | Thank you, Emmanuel! Reliability is everything here. |
-| 10 | Adwoa Sarpong | ★★★★★ | June 1, 2026 | Clean app, no ads, no nonsense. Just play and cash out. Telecel Cash confirmed in 1 minute. | Exactly how it should be. Thanks, Adwoa! |
-| 11 | Prince Asare | ★★★★★ | May 31, 2026 | Hit 18x this morning. Cashed out to MoMo before it crashed. This game tests your nerves chale. | 18x is fantastic, Prince! Nerves of steel, big reward. |
-| 12 | Gifty Mensah | ★★★★ | May 29, 2026 | Good game. Sometimes the chicken crashes early but that is the risk. Payouts are genuine. | Fair and honest feedback, Gifty. The risk is the thrill! |
-| 13 | Nana Kweku | ★★★★★ | May 27, 2026 | I dey play from Kumasi. MoMo payment enter my wallet same time. No lie this app pay. | Kumasi players cash out too! Thank you, Nana. |
-| 14 | Esther Amponsah | ★★★★★ | May 24, 2026 | Easy to learn. I showed my sister and now we both play. Cash out is real no fake. | Love it when families play together! Welcome, Esther and sis. |
-| 15 | Daniel Boadu | ★★★★★ | May 20, 2026 | Fast app. No lag on MTN data. Cashed out twice today to my MoMo wallet. Correct game bro. | Correct! Fast network, fast payouts. Thanks, Daniel. |
+| 1 | Kwame Mensah | ★★★★★ | May 12, 2026 | Cash out enters my MTN MoMo sharp sharp, no delay. Been my main game for months now. | — |
+| 2 | Daniel Boadu | ★★★★ | Apr 3, 2026 | Payouts are real but my first withdrawal took like 3 minutes, not instant the way they say. After that it was fast though. Just be patient. | First withdrawal runs a quick verification, Daniel — after that it lands instantly. Glad you stuck with it. |
+| 3 | Kojo A. | ★★★★★ | May 28, 2026 | Correct game 👍 | — |
+| 4 | Ama Boateng | ★★★★★ | Feb 19, 2026 | I started with 5 cedis just to test am. Cashed out to MoMo twice that week. No wahala. | — |
+| 5 | Yaw Darko | ★★★★★ | Jun 7, 2026 | The multiplier climbing while you decide when to pull out, my heart no fit take am sometimes 😅 But time it right and the feeling is mad. Runs smooth on my network. | — |
+| 6 | Nana Kweku | ★★★★★ | Jan 14, 2026 | I dey play from Kumasi. Money enters my wallet same time, no story. This one pay for real. | — |
+| 7 | Gifty Mensah | ★★★★ | Mar 29, 2026 | Sometimes the chicken crashes early and you lose, that na the risk. But it's fair, I cashed out more than I lost this month. Wish the minimum stake was lower sef. | Honest review, Gifty — appreciate it. Cash out early and steady, it adds up. |
+| 8 | Kofi Appiah | ★★★★★ | May 22, 2026 | Was sceptical, my brother showed me his MoMo receipt so I downloaded same day. Play small small and don't be greedy. | — |
+| 9 | Abena Adu | ★★★★★ | Dec 11, 2025 | Simple to understand, no ads disturbing you. Telecel Cash confirmed in about a minute. | — |
+| 10 | Emmanuel Tetteh | ★★★★★ | Jun 2, 2026 | no stress. deposit easy, cash out instant. MTN MoMo works every time for me. | — |
+| 11 | Adwoa | ★★★★★ | Apr 26, 2026 | clean app, tried 3 crash games and this one is the most stable on slow data. just play and cash out. | — |
+| 12 | Prince Asare | ★★★★★ | May 31, 2026 | Hit 18x this morning and cashed out before it crashed 🔥 nerves of steel honestly. fun one. | — |
+| 13 | Selorm Agbeko | ★★★★★ | Mar 17, 2026 | Ewe boy from Ho 😄 game runs fine on MTN data, payout no wahala. Recommended. | — |
+| 14 | Akosua Owusu | ★★★★★ | May 8, 2026 | Withdrawal to AirtelTigo was instant the times I tried. I play after work to cool down small. | — |
+| 15 | Mensah K. | ★★★★★ | Jun 21, 2026 | this game na correct one, cash out dey fast. my only advice, set a limit for yourself and stop when you reach am. | Wise words. Play responsibly — set your limit and enjoy. |
 
 ---
 
@@ -111,5 +112,6 @@
 
 - PWA-1 = чистый/спокойный стиль (InOut-вайб). Противопоставление PWA-2 (CR2) — по: тону (без эмодзи-перегруза vs с эмодзи), длине описания (компактное vs развёрнутое), цветовой схеме (авто/тёмная vs зелёная), авто-редиректу (Нет — сохраняет пуш-подписку).
 - Трекинг-URL/домен: НЕ вписан (определяет байер при сборке в AdSet.pro).
-- Отзывов 15 шт. — видимая карточная панель листинга. Можно расширить до 18 при необходимости CSV-загрузки.
+- Отзывов 15 шт. (13×5★ + 2×4★ → 4.9). 4★ несут мягкую критику (задержка первого вывода, низкий минимум) — снимает «синтетику» и работает как trust. Ответы дева только на 3 (критика/нейтрал), остальные пустые.
+- **Калибровка реализма** по живым Google Play отзывам WAF-финтеха (Opay/PalmPay/Moniepoint/Kuda): в реале dev почти не отвечает, даты вразброс, доминирует «похвала + but + просьба». Полный реалистичный негатив (1–2★ «холдят деньги») для продающего PWA НЕ добавляем — отпугнёт; ограничились мягким хвостом 4★.
 - После ✅ qa → трекинг-ссылку передать агенту `fb`.

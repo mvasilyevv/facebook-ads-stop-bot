@@ -31,21 +31,18 @@ Place your bet, watch the multiplier climb, and cash out to your MTN MoMo before
 
 ## Описание (Full) — в поле полного описания
 ```
-Chicken Road is Ghana's #1 destination for people who know how to take calculated risks and multiply their GHS in seconds.
+Chicken Road is Ghana's #1 crash game for players who like to take a calculated risk and grow their GHS fast.
 
-How it works: place your bet, watch the chicken run across a trail of sizzling grills, and see the multiplier climb — 2x, 5x, 20x or higher. The key is simple: cash out before the chicken crashes. Strategy is 100% in your hands.
+How it works is simple. You place your bet, the chicken starts running across the grills, and the multiplier keeps climbing — 2x, 5x, 20x and beyond. Cash out before the chicken crashes and the winnings are yours. Hold on too long and you lose the round. When to pull out is your call.
 
-Why Ghanaians choose Chicken Road:
+Why players in Ghana keep coming back to Chicken Road:
 
-Start small — you don't need a big bankroll. The minimum stake is low enough for anyone to start.
+1) You can start small. No big bankroll needed, the minimum stake is low enough for anyone to try a few rounds.
+2) Payouts go straight to your MTN MoMo, Telecel Cash or AirtelTigo wallet, usually within a minute.
+3) It runs smooth on Ghanaian networks, even when your signal is not the best.
+4) Thousands of players from Accra to Kumasi cash out here every day.
 
-Instant payouts — withdraw your winnings straight to MTN MoMo, Telecel Cash or AirtelTigo. No delays, no excuses.
-
-Built for Ghana — smooth on any Ghanaian mobile network. No freezing, no lag, just fast action.
-
-Trusted by players across Accra, Kumasi and beyond — thousands cash out every day.
-
-Download now and see if you cash out or crash out.
+Download it, play a few rounds, and see if you can cash out before the crash.
 ```
 
 ## What's New — в поле «Что нового»
@@ -73,7 +70,8 @@ Ghana's #1 Crash Game — Cash Out to MTN MoMo Instantly!
 ## Шаг «Комментарии» — отзывы
 - **Импорт CSV:** `data/syntx_out/GH_CR_pwa/CR_reviews.csv` — **15 шт.** (формат `Name,Stars,Date,Review,Developer Reply`).
 - Полный текст для ручного ввода — `CR_pwa01.md` §5.
-- Рейтинг-микс: 13×5★ + 2×4★ (даёт правдоподобные 4.9).
+- Рейтинг-микс: 13×5★ + 2×4★ (даёт правдоподобные 4.9). 4★ — с мягкой критикой.
+- **Ответы дева — только на 3 из 15** (на критику/нейтрал). НЕ ставить ответ на каждый — сплошные ответы палят синтетику.
 
 ---
 
@@ -101,28 +99,26 @@ Ghana's #1 Crash Game — Cash Out to MTN MoMo Instantly!
 
 ## Описание (Full)
 ```
-🐔🔥 Chicken Road 2 — the next level of Ghana's most addictive crash game is finally here! 🇬🇭💸
+🐔🔥 Chicken Road 2 is finally here — the sequel to Ghana's most addictive crash game! 🇬🇭
 
-The chicken is back — and this time the grills are hotter, the multipliers go higher, and the cashouts hit your MoMo faster than ever.
+The chicken is back, and this time the grills are hotter and the multipliers run higher than ever. Same game you love, just turned all the way up.
 
 How it works:
-Place your bet → watch the chicken sprint across the sizzling grills → the multiplier climbs 2x… 5x… 10x… 30x and beyond → hit CASH OUT before the crash 💥
+Place your bet, watch the chicken sprint across the grills, and the multiplier starts climbing — 2x… 5x… 10x… 30x and beyond. Hit CASH OUT before it crashes 💥 and the GHS is yours. How long you hold is on you.
 
-The strategy is yours. The timing is yours. The GHS is yours.
+🏆 Why Ghana can't put Chicken Road 2 down:
 
-🏆 Why Ghana is addicted to Chicken Road 2:
+📈 Higher multipliers than part 1 — the runs go further if you've got the patience for it.
 
-📈 Higher multipliers — Chicken Road 2 takes the runs further. More patience = more GHS.
+⚡ Withdrawals land straight in your MTN MoMo, Telecel Cash or AirtelTigo, usually before you put the phone down.
 
-⚡ Instant withdrawals — MTN MoMo, Telecel Cash, AirtelTigo. Your winnings arrive before you put the phone down.
+📱 Runs clean on any network and any Android phone, from Accra to Tamale.
 
-📱 Optimised for Ghana — plays clean on any network, any Android phone, anywhere in the country.
+🛡️ Real, verified payouts — tens of thousands of Ghanaians already cash out here every day.
 
-🛡️ Trusted, verified, real payouts — join tens of thousands of Ghanaians already cashing out daily.
+The chicken is running and the multiplier is climbing. Are you cashing out or crashing out?
 
-🚀 The chicken is running. The multiplier is climbing. Are you cashing out or crashing out?
-
-Download Chicken Road 2 now — and let the run begin! 🐔💰
+Download Chicken Road 2 now and let the run begin! 🐔💰
 ```
 
 ## What's New
@@ -150,7 +146,8 @@ Download Chicken Road 2 now — and let the run begin! 🐔💰
 ## Шаг «Комментарии» — отзывы
 - **Импорт CSV:** `data/syntx_out/GH_CR2_pwa/CR2_reviews.csv` — **17 шт.** (формат `Name,Stars,Date,Review,Developer Reply`).
 - Полный текст для ручного ввода — `CR2_pwa01.md` §5.
-- Рейтинг-микс: 15×5★ + 2×4★ (даёт правдоподобные 4.8).
+- Рейтинг-микс: 14×5★ + 2×4★ + 1×3★ (даёт правдоподобные ≈4.8, не стерильные 5.0). 3★ — честная критика «потерял из-за жадности» + совет про дисциплину (trust-сигнал для гембла).
+- **Ответы дева — только на 5 из 17** (на критику + на крупные выигрыши как FOMO-подтверждение). НЕ на каждый.
 
 ---
 
