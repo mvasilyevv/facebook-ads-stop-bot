@@ -5,9 +5,12 @@ code: KE
 name: Kenya
 languages: [en, sw]   # английский (кенийский разговорный) + суахили-вставки
 
-# Хуки уровня гео — ОБНУЛЕНО 2026-06-09 (чистый старт). Наполняется заново из hooks.yaml
-# по данным (SOP §R6). Прошлые KE-винеры (ke_mpesa_payout и др.) — в _archive/, история — creative_kb.md.
-geo_hooks: []
+# Хуки уровня гео — годятся под любой слот в KE
+geo_hooks:
+  - ke_mpesa_payout      # winner — деньги придут на M-Pesa
+  - ke_low_entry_153     # works  — старт 153 KES
+  - ke_swahili_touch     # works  — суахили + 🇰🇪
+  - ke_instant_cashout   # testing — вывод за минуты
 
 market_findings:
   - date: 2026-05-30

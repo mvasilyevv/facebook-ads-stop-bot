@@ -1,0 +1,130 @@
+# Слот AVI (Aviator) в гео GH. ⛔ ЗАМОРОЖЕН 2026-06-09 — Aviator на GH не пошёл (0 FTD,
+# слабые крео), локомотив агрегатора сменён на Chicken Road → см. slots/CR2.yaml.
+# Сохранён как ИСТОРИЯ/анти-пример: references = реальная разведка GH (данные), creatives =
+# реально залитые и провалившиеся (анти-примеры). code креатива == sub3. См. _schema.md
+
+status: frozen   # dead на GH; не реанимировать без новых данных
+code: AVI
+geo: GH
+offer_code: GH_AVI          # связь с offers в БД (агрегатор)
+name: Aviator
+mechanic: "crash-game (самолёт взлетает, растущий множитель, кэшаут до вылета/краша)"
+
+# Оффер-уровень (агрегатор) — SOP O0
+offer_type: aggregator
+welcome_bonus: "Депозит 10 GHS → 20 free bets на Aviator"
+
+# ---------------- Идеи / углы ----------------
+# Спекулятивные ideas (перенос из KE: gh_momo_payout/gh_pidgin_touch/«формула чемпиона KE»)
+# УДАЛЕНЫ 2026-06-09 (SOP R6 — не выдумываем/не переносим). Слот мёртв; новых ideas не заводим.
+# Что реально пробовали и провалилось — в creatives ниже + creative_kb.md §5 (анти-паттерны).
+ideas: []
+
+# ---------------- Референсы (реальная разведка Ad Library GH — ДАННЫЕ, оставлены как история) --
+references:
+  - id: ref_betway_gh
+    source: ad_library
+    advertiser: "Betway Ghana"
+    format: static
+    long_active_days: 72
+    file: "reports/media/betway_ghs1m.png, reports/media/betway_freeflights.png"
+    why: "Долгожитель-бренд. «10 free spins, 10 free flights & 5 GHS free bet»; «fast cash-outs, live GPL action, mobile money all in one»; «GHS 1M max payout». Эталон: free-flights + MoMo + футбол (GPL) + cashout. Визуал — фирменный чёрно-зелёный глянец."
+
+  - id: ref_betano_gh
+    source: ad_library
+    advertiser: "Betano Ghana"
+    format: static
+    long_active_days: 68
+    file: "reports/media/betano_ghs2000.png"
+    why: "Долгожитель-бренд. Big match-bonus «Register & get up to GHS 2,000», casino-агрегатор. Студийный тёмный постер, красный самолёт + плашка WELCOME BONUS. Воронка direct betano.com.gh."
+
+  - id: ref_luckstrategy
+    source: ad_library
+    advertiser: "Luck&strategy"
+    format: static
+    long_active_days: 2
+    file: "reports/media/luckstrategy_scale.png"
+    why: "БЕНЧМАРК СКЕЙЛА (×20+ вариаций, как Plinko на KE). Формула: FOMO «friends withdrawing daily» + anti-poverty «working for pennies» + greed «millionaires in Ghana 🇬🇭» + «catch the multiplier» + 100% deposit bonus. Визуал — красный самолёт + кричащий оверлей, НЕ глянец (народно). Свежак 29 May."
+
+  - id: ref_bang0911
+    source: ad_library
+    advertiser: "Bang-0911 (Bangbet)"
+    format: video
+    long_active_days: 8
+    why: "LOW-ENTRY угол = наш бонус: «Aviator – GHS 10 → Mega Wins! Risk small, cash out big» #realmoney. Видео + app-прокладка PLAY.GOOGLE.COM. Постер не вытянулся (видео-only). Серый аффилиат нашего типа."
+
+  - id: ref_betboro
+    source: ad_library
+    advertiser: "BetBoro promoter"
+    format: video
+    long_active_days: 11
+    why: "Free-value стек: «FIRST 10 DEPOSITS: GHS600 + 210 free spins & Aviator Free Flights». Воронка betboro.com.gh. Видео-only. Подтверждает free-flights бонус-паттерн."
+
+  - id: ref_ghmjngh
+    source: ad_library
+    advertiser: "Ghmjngh"
+    format: video
+    long_active_days: 2
+    file: "reports/media/ghmjngh_adrenaline.png"
+    why: "Adrenaline-угол: «Fast rounds, instant action, catch the flight, feel the rush 18+». Воронка SPARKLE-STORE. Красный самолёт, видео-постер. Чистая краш-механика без trust."
+
+  - id: ref_crazyspinners
+    source: ad_library
+    advertiser: "Crazy Spinners Lounge"
+    format: static
+    long_active_days: 2
+    file: "reports/media/crazyspinners.png"
+    why: "Скейл ×5. «Legendary Aviator flight simulator now on your phone, cool bonuses daily». Casual app-постер, мягкая подача."
+
+
+# ---------------- Креативы (батч #01, Sora + reference) ------------
+creatives:
+  - code: GH_AVI_CR001
+    format: static
+    file: "data/syntx_out/GH_AVI_batch01/CR001_sora_gen1.jpg"
+    visual_hooks: [gh_momo_payout, gh_low_entry, gh_pidgin_touch]
+    angle: "1 | Proof Post / MoMo payout"
+    inspired_by: ref_KE_CR005
+    status: ready
+    verdict: testing
+    note: "Sora + ref KE_CR005 (формула чемпиона). Локализован GH: MTN MoMo, GHS 240, Pidgin, Aviator, бонус 20 free bets, не-iPhone. Формат живого FB-поста."
+
+  - code: GH_AVI_CR002
+    format: static
+    file: "data/syntx_out/GH_AVI_batch01/CR002_v2.jpg"
+    visual_hooks: [gh_low_entry, gh_momo_payout, avi_freebets]
+    angle: "2 | Before/After MoMo + Free Bets"
+    inspired_by: ref_GH_CR005
+    status: ready
+    verdict: testing
+    note: "Sora + ref GH_CR005, v2 (фикс). BEFORE GHS 0.27 «Empty wallet» (читаемое меню) → AFTER GHS 64.80 from Aviator. MTN+Telecel, бонус."
+
+  - code: GH_AVI_CR003
+    format: static
+    file: "data/syntx_out/GH_AVI_batch01/CR003_v2.jpg"
+    visual_hooks: [avi_fomo_greed, gh_pidgin_touch]
+    angle: "3 | FOMO / Friends Winning"
+    inspired_by: ref_luckstrategy
+    status: ready
+    verdict: testing
+    note: "Sora, v2 (фикс). WhatsApp-чат «The Boys 🇬🇭» (свежий угол). CTA вынесен в отдельный баннер (не в инпуте), forwarded MoMo GHS 180, имена Ibrahim/Nana."
+
+  - code: GH_AVI_CR004
+    format: static
+    file: "data/syntx_out/GH_AVI_batch01/CR004_v2b.jpg"
+    visual_hooks: [avi_crash_adrenaline]
+    angle: "4 | Adrenaline / Cash Out"
+    inspired_by: ref_ghmjngh
+    status: ready
+    verdict: testing
+    note: "Sora + ref ghmjngh, v2b (переделан концепт). Рука с Android-телефоном + экран Aviator 8.7x/CASH OUT GHS 210 + размытая Accra, текст-оверлей СВЕРХУ (не на экране). Убран 'селфи с баннером' v1."
+
+  - code: GH_AVI_CR005
+    format: static
+    file: "data/syntx_out/GH_AVI_batch01/CR005_v3a.jpg"
+    visual_hooks: [gh_pidgin_touch, avi_football_anchor]
+    angle: "5 | Football / Black Stars Hype"
+    inspired_by: ref_KE_CR005
+    status: ready
+    verdict: testing
+    note: "Sora + ref KE_CR005, v3a (переделан). Фанат Black Stars, кулак-радость (анатомия ОК, без сломанной руки v2), MoMo-карточка отдельным блоком (не в руке) 'received GHS 260 from Aviator'. Футбол=нац.якорь."

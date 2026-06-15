@@ -57,7 +57,7 @@ docs/creatives/
 | `language_for_ads` | str | язык рекламы: офиц. + разговорный/локальные вставки |
 | `currency` | str | код/символ валюты (`GHS` / `GH₵`) |
 | `min_deposit_local` | str? | мин. депозит оффера в локальной валюте |
-| `payment_operators` | list | мобильные кошельки рынка; главный = ядро payment-trust (аналог M-Pesa) |
+| `payment_operators` | list | мобильные кошельки рынка (research-факт); payment-trust хук — только если подтвердит разведка/FTD гео, не по аналогии |
 | `celebrities` | list | узнаваемые лица (футбол/музыка/кино) — типажи/референсы для креатива |
 | `cultural_notes` | str | религия, отношение к деньгам/удаче, локальные триггеры/табу |
 | `findings` | list[finding] | инсайты рынка с источником (web) |

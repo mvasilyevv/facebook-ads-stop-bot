@@ -1,0 +1,172 @@
+# Реестр хуков-атомов. Переиспользуются по id из geo.yaml и слотов.
+# level: geo | slot | visual | text. Вердикт — только с цифрами (иначе testing/unknown).
+# См. docs/creatives/_schema.md
+
+hooks:
+  # ---------------- GEO-хуки KE (общие для всех слотов в гео) ----------------
+  - id: ke_mpesa_payout
+    level: geo
+    geo: KE
+    text: "Деньги реально придут на твою M-Pesa (гарантия выплаты, не «пруф»)"
+    type: payment_trust
+    verdict: winner
+    evidence: "KE_CR2_CR005: 2 FTD из 30 кликов (трекер 30d). Единственный конвертящий угол на KE из ~600 кликов мая."
+
+  - id: ke_low_entry_153
+    level: geo
+    geo: KE
+    text: "Старт от 153 KES (= мин. деп оффера), не нужен большой депозит"
+    type: objection_kill
+    verdict: works
+    evidence: "GH-аналог (GH¢10 start) дал FTD; на KE усиливает M-Pesa-угол. Как самостоятельный баннер — не конвертит (нужен формат поста)."
+
+  - id: ke_swahili_touch
+    level: geo
+    geo: KE
+    text: "Суахили-вставки: Wueh, Ni safi/noma, Hapana, Cheza, pesa, bob + флаг 🇰🇪"
+    type: localization
+    verdict: works
+    evidence: "Подтверждено конкурентами (Moyo «Cheza sasa», Mini Game Corner mix). Присутствует в CR005-чемпионе."
+
+  - id: ke_instant_cashout
+    level: geo
+    geo: KE
+    text: "Вывод на M-Pesa за минуты (скорость как trust-аргумент)"
+    type: speed
+    verdict: testing
+    evidence: "Конкурент Arcade Chicken World строит текст на «instant M-PESA». У нас в проде через адсет 1.2/C6 — ждём FTD."
+
+  # ---------------- GEO-хуки GH — ТОЛЬКО из ганских данных (НЕ перенос из KE; SOP R6) --
+  # Реестр пуст до разведки топ-креативов GH и FTD. Перенесённые из KE гипотезы
+  # (gh_momo_payout / gh_pidgin_touch) удалены 2026-06-09 как спекулятивные: 0 ганских данных.
+  # Факт «MTN MoMo доминирует» живёт в geo/GH/geo.yaml → market_profile (research), а не как хук.
+  # Единственный реальный ганский сигнал на сегодня:
+  - id: gh_low_entry
+    level: geo
+    geo: GH
+    text: "Старт от GH¢10 (низкий порог входа)"
+    type: objection_kill
+    verdict: weak
+    evidence: "GH_CR2_CR006: 1 FTD из 9 кликов (трекер 30d) — слабый сигнал, НЕ основание для правила; подтвердить разведкой топ-креативов GH / FTD."
+
+  # ---------------- TEXT-хуки (угол адсета = sub6, primary_text) -------------
+  - id: txt_payment_trust
+    level: text
+    geo: KE
+    slot: CR2
+    text: "Payment Trust — «deposit and cash out straight to M-Pesa»"
+    type: payment_trust
+    verdict: winner
+    evidence: "sub6 `1 | Payment Trust / M-Pesa` — единственный угол с FTD на KE."
+
+  - id: txt_speed_cashout
+    level: text
+    geo: KE
+    slot: CR2
+    text: "Speed — «withdraw to M-Pesa in minutes»"
+    type: speed
+    verdict: testing
+
+  - id: txt_low_entry
+    level: text
+    geo: KE
+    slot: CR2
+    text: "Low Entry — «start with just 153 KES»"
+    type: objection_kill
+    verdict: testing
+
+  - id: txt_anti_objection
+    level: text
+    geo: KE
+    slot: CR2
+    text: "Anti-objection — «нужны большие деньги? Hapana, старт 153 KES»"
+    type: objection_kill
+    verdict: testing
+
+  - id: txt_adrenaline_fomo
+    level: text
+    geo: KE
+    slot: CR2
+    text: "Adrenaline/FOMO — «Kenya's fastest game, fast rounds, risky jumps» (угол Chicken Dash)"
+    type: urgency
+    verdict: testing
+
+  - id: txt_scale_1m
+    level: text
+    geo: KE
+    slot: CR2
+    text: "Scale — «over a million players already» (угол Moyo «1M+»)"
+    type: social_proof
+    verdict: testing
+
+  - id: txt_withdrawal_proof
+    level: text
+    geo: KE
+    slot: CR2
+    text: "Withdrawal Proof — доказывать факт вывода ДО клика"
+    type: payment_trust
+    verdict: weak
+    evidence: "sub6 `Withdrawal Proof / M-Pesa Trust`: 70 кликов, 0 рег. Тянет клики, не конвертит — работает обещание выплаты, а не «пруф»."
+
+  - id: txt_city_fomo
+    level: text
+    geo: KE
+    slot: CR2
+    text: "City FOMO — «все в Найроби уже играют» без платёжки"
+    type: social_proof
+    verdict: dead
+    evidence: "sub6 `Social Proof / City FOMO`: 59 кликов, 0 рег. Чистый FOMO без trust-якоря не конвертит на холодную KE."
+
+  # ---------------- VISUAL-хуки (исполнение в картинке) ---------------------
+  - id: vis_native_fb_post
+    level: visual
+    geo: KE
+    slot: CR2
+    text: "Нативный FB-пост-отзыв на весь кадр (как реальный пост в ленте)"
+    type: format
+    verdict: winner
+    evidence: "CR005 (native post) = 2 FTD; CR003 (тот же отзыв как фото телефона) = 0 рег при 80 кликах. Исполнение решает."
+
+  - id: vis_mpesa_green_proof
+    level: visual
+    geo: KE
+    slot: CR2
+    text: "Крупная зелёная плашка ✅ «M-PESA Payment received KES …»"
+    type: payment_trust
+    verdict: winner
+    evidence: "Ядро формулы CR005-чемпиона. Выделенный пруф зачисления крупным планом."
+
+  - id: vis_skepticism_overcome
+    level: visual
+    geo: KE
+    slot: CR2
+    text: "Скепсис-преодоление в тексте поста («I thought this was fake… M-Pesa confirmed»)"
+    type: format
+    verdict: works
+    evidence: "Часть CR005-формулы; конкурент Mini Game Corner на том же сторителлинге от 1-го лица."
+
+  - id: vis_live_comments
+    level: visual
+    geo: KE
+    slot: CR2
+    text: "2-3 живых коммента-соцпруф под постом («Withdrew mine in 2 min»)"
+    type: social_proof
+    verdict: works
+
+  - id: vis_phone_mockup
+    level: visual
+    geo: KE
+    slot: CR2
+    text: "Отзыв снят как фото телефона в руке (мелко, блики, пруф не выделен)"
+    type: format
+    verdict: dead
+    evidence: "CR003: 80 кликов, 0 рег. Mockup-телефон проигрывает нативному посту."
+
+  - id: vis_direct_banner
+    level: visual
+    geo: KE
+    slot: CR2
+    text: "Продающий direct-баннер («START 153 KES / PLAY NOW»)"
+    type: format
+    verdict: dead
+    evidence: "CR001/002/004/006: 224 клика суммарно, 0 рег. Клик ≠ намерение; нужен соц-пруф-формат."
