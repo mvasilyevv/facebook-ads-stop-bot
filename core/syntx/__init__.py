@@ -8,6 +8,12 @@ reference-syntx-api-direct.
 
 from __future__ import annotations
 
+from core.syntx.analysis import (
+    DEFAULT_ANALYSIS_POOL,
+    AnalysisResult,
+    build_analysis_prompt,
+    parse_analysis_json,
+)
 from core.syntx.auth import decode_token_exp, resolve_syntx_token, token_days_left
 from core.syntx.catalog import ModelCatalog
 from core.syntx.client import SyntxClient
@@ -38,6 +44,10 @@ from core.syntx.models import (
 __all__ = [
     "SyntxClient",
     "ModelCatalog",
+    "AnalysisResult",
+    "build_analysis_prompt",
+    "parse_analysis_json",
+    "DEFAULT_ANALYSIS_POOL",
     "GenRequest",
     "GenResult",
     "ModelInfo",

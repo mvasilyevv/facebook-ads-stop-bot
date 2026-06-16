@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import mimetypes
+from collections.abc import Sequence
 from pathlib import Path
 from types import TracebackType
 from typing import Any
@@ -34,6 +35,11 @@ from tenacity import (
     wait_exponential,
 )
 
+from core.syntx.analysis import (
+    DEFAULT_ANALYSIS_POOL,
+    AnalysisResult,
+    parse_analysis_json,
+)
 from core.syntx.auth import resolve_syntx_token, token_days_left
 from core.syntx.catalog import ModelCatalog
 from core.syntx.errors import (
@@ -319,6 +325,102 @@ class SyntxClient:
             "video-генерация заложена, но выключена: включить после живого теста "
             "(см. docstring generate_video — контракт и гемблинг-роутинг готовы)"
         )
+
+    # ====================== analysis (text-vision, только анализ) ======================
+
+    async def analyze_image(
+        self,
+        image: str,
+        prompt: str,
+        *,
+        ai_name: str = "chatgpt",
+        model_type: str = "gpt-5.5",
+    ) -> str:
+        """Прогнать картинку+промпт через одну text-vision модель → текст ответа.
+
+        Контракт (снят 16.06): create_chat(scope='text') → POST messages с objects
+        [{text},{image}] → poll /inprogress → ответ ассистента (author_id == -1).
+        Генерацию/правку НЕ вызывает — чистый анализ.
+        """
+        ref_urls = await self._resolve_ref_urls((image,))
+        image_url = ref_urls[0] if ref_urls else None
+        chat_uuid = await self.create_chat(scope="text")
+        await self._post_text_message(chat_uuid, prompt, image_url, ai_name, model_type)
+        await self._poll_until_done(chat_uuid)
+        return await self._fetch_assistant_reply(chat_uuid)
+
+    async def analyze_ensemble(
+        self,
+        image: str,
+        prompt: str,
+        *,
+        models: Sequence[tuple[str, str, str]] | None = None,
+    ) -> list[AnalysisResult]:
+        """Параллельно прогнать картинку через пул моделей разных лабораторий.
+
+        models — (ai_name, model_type, label); по умолчанию DEFAULT_ANALYSIS_POOL.
+        Картинка грузится ОДИН раз, image_url переиспользуется всеми. Падение одной
+        модели не валит остальные (ошибка кладётся в AnalysisResult.error).
+        """
+        pool = list(models) if models is not None else list(DEFAULT_ANALYSIS_POOL)
+        ref_urls = await self._resolve_ref_urls((image,))
+        image_url = ref_urls[0] if ref_urls else None
+
+        async def _one(ai_name: str, model_type: str, label: str) -> AnalysisResult:
+            try:
+                chat_uuid = await self.create_chat(scope="text")
+                await self._post_text_message(chat_uuid, prompt, image_url, ai_name, model_type)
+                await self._poll_until_done(chat_uuid)
+                raw = await self._fetch_assistant_reply(chat_uuid)
+                return AnalysisResult(
+                    label, ai_name, model_type, raw=raw, parsed=parse_analysis_json(raw)
+                )
+            except SyntxError as exc:
+                return AnalysisResult(label, ai_name, model_type, error=str(exc))
+
+        return list(await asyncio.gather(*(_one(a, m, lbl) for a, m, lbl in pool)))
+
+    async def _post_text_message(
+        self,
+        chat_uuid: str,
+        prompt: str,
+        image_url: str | None,
+        ai_name: str,
+        model_type: str,
+    ) -> None:
+        objects: list[dict[str, Any]] = [
+            {
+                "object_type": "text",
+                "object_url": None,
+                "object_text": prompt,
+                "model_type": model_type,
+            }
+        ]
+        if image_url:
+            objects.append(
+                {
+                    "object_type": "image",
+                    "object_url": image_url,
+                    "object_text": "ref",
+                    "model_type": model_type,
+                }
+            )
+        await self._post(
+            f"/chats/{chat_uuid}/messages", params={"ai_name": ai_name}, json={"objects": objects}
+        )
+
+    async def _fetch_assistant_reply(self, chat_uuid: str) -> str:
+        """Последний текстовый ответ ассистента (author_id == -1)."""
+        data = await self._get(f"/chats/{chat_uuid}/messages", params={"page_size": 20})
+        messages = (data or {}).get("messages", []) if isinstance(data, dict) else []
+        reply = ""
+        for m in messages:
+            if not isinstance(m, dict) or m.get("author_id") != -1:
+                continue
+            for obj in m.get("message_object", []):
+                if isinstance(obj, dict) and obj.get("object_type") == "text":
+                    reply = obj.get("object_text") or reply
+        return reply
 
     # ====================== low-level steps ======================
 
