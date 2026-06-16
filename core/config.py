@@ -133,6 +133,9 @@ class Settings(BaseSettings):
     # Дефолтные модели (ai_name / model_type). Видео — на будущее (выключено).
     syntx_default_image_ai: str = "sora-images"
     syntx_default_image_model: str = "gpt-image-2"
+    # Правка картинок (Тир 1): Nano Banana = faithful instruction-edit (не flux-kontext).
+    syntx_default_edit_ai: str = "banana"
+    syntx_default_edit_model: str = "banana3"
     syntx_default_video_ai: str = "kling"
     syntx_default_video_model: str = "kling_image2video"
 

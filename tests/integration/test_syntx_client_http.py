@@ -166,6 +166,56 @@ async def test_generate_image_timeout() -> None:
             )
 
 
+# edit_image: роутится в banana (faithful), исходник идёт через settings.image_url,
+# нет quality/details_quality (иначе чёрный кадр).
+@respx.mock
+@pytest.mark.asyncio
+async def test_edit_image_routes_to_banana(tmp_path: Path) -> None:
+    src = tmp_path / "src.jpg"
+    src.write_bytes(b"\xff\xd8\xff\xe0jpg")
+
+    respx.get(f"{_V1}/user/balance").mock(return_value=Response(200, json={"balance": 50.0}))
+    respx.post(f"{_V1}/chats/upload-files").mock(
+        return_value=Response(
+            200, json={"files": [{"filename": "src.jpg", "url": f"{_BASE}/r2/uploaded/src.jpg"}]}
+        )
+    )
+    respx.post(f"{_V1}/chats").mock(return_value=Response(201, json={"uuid": _UUID}))
+    gen_route = respx.post(f"{_V1}/design/generate").mock(
+        return_value=Response(200, json={"id": 9})
+    )
+    respx.get(f"{_V1}/chats/{_UUID}/inprogress").mock(return_value=Response(200, json=[]))
+    respx.get(f"{_V1}/chats/{_UUID}/messages").mock(
+        return_value=Response(
+            200,
+            json={
+                "messages": [
+                    {
+                        "message_object": [
+                            {"object_type": "image", "object_url": f"{_BASE}/r2/generated/e.png"}
+                        ]
+                    }
+                ]
+            },
+        )
+    )
+
+    async with _client() as cl:
+        res = await cl.edit_image(str(src), "replace GHANA with KENYA")
+
+    assert res.image_urls == (f"{_BASE}/r2/generated/e.png",)
+    # генерация ушла в banana и с исходником в settings.image_url
+    req = gen_route.calls.last.request
+    assert "ai_name=banana" in str(req.url)
+    import json as _json
+
+    body = _json.loads(req.content)
+    assert body["settings"]["model_type"] == "banana3"
+    assert body["settings"]["image_url"] == [f"{_BASE}/r2/uploaded/src.jpg"]
+    assert "quality" not in body["settings"]
+    assert "details_quality" not in body["settings"]
+
+
 # 401 на каталоге → SyntxAuthError (токен протух).
 @respx.mock
 @pytest.mark.asyncio

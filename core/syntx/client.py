@@ -63,6 +63,16 @@ _DEFAULT_POLL_TIMEOUT = 300.0
 # Меньше этого числа дней до exp — предупреждаем в лог (токен пора обновить).
 _TOKEN_WARN_DAYS = 3.0
 
+# Поля settings, которые КОНКРЕТНАЯ модель реально принимает. Лишние ключи
+# (напр. quality/details_quality у banana или flux) → чёрный кадр (проверено 16.06).
+_IMAGE_SETTINGS_FIELDS: dict[str, tuple[str, ...]] = {
+    "sora-images": ("n", "aspect_ratio", "quality", "details_quality"),
+    "banana": ("aspect_ratio", "image_size"),
+    "seedream": ("aspect_ratio",),
+    "flux": ("aspect_ratio",),
+}
+_DEFAULT_IMAGE_SETTINGS_FIELDS: tuple[str, ...] = ("aspect_ratio",)
+
 
 class SyntxClient:
     """Async-клиент syntx.ai. Image-генерация рабочая, video — заложена.
@@ -193,8 +203,10 @@ class SyntxClient:
 
         balance_before = await self._safe_balance()
         ref_urls = await self._resolve_ref_urls(req.image_refs)
+        mask_resolved = await self._resolve_ref_urls((req.mask_ref,)) if req.mask_ref else []
+        mask_url = mask_resolved[0] if mask_resolved else None
         chat_uuid = await self.create_chat(scope=SCOPE_IMAGE)
-        settings = self._build_image_settings(req, ref_urls)
+        settings = self._build_image_settings(req, ref_urls, mask_url)
         message_id = await self._submit(req.ai_name, chat_uuid, req.prompt, settings)
         await self._poll_until_done(chat_uuid)
         urls = await self._fetch_results(chat_uuid)
@@ -223,6 +235,63 @@ class SyntxClient:
         if req.scope == SCOPE_VIDEO:
             return await self.generate_video(req, download_to=download_to)
         raise NotImplementedError(f"scope {req.scope!r} пока не поддержан клиентом")
+
+    # ====================== editing (Тир 1) ======================
+
+    async def edit_image(
+        self,
+        image: str,
+        instruction: str,
+        *,
+        mask: str | None = None,
+        ai_name: str | None = None,
+        model_type: str | None = None,
+        image_size: str | None = "2K",
+        aspect_ratio: str | None = None,
+        download_to: Path | None = None,
+        extra: dict[str, Any] | None = None,
+    ) -> GenResult:
+        """Точечная правка картинки (instruction-edit).
+
+        Дефолт — **Nano Banana (banana3)**: faithful-правка — меняет описанное,
+        остальное сохраняет пиксельно (проверено 16.06: «GHANA→KENYA», курица/лого/
+        монеты/фон не тронуты). flux-kontext на этом провайдере НЕ faithful (чёрный
+        кадр с image_url либо переосмысливает через `<<<url>>>`) — не дефолт.
+
+        `image` — локальный путь или r2-url исходника. `mask` — опц. маска для inpaint
+        (экспериментально). `aspect_ratio=None` → сохранить пропорции исходника.
+        Banana обычно отдаёт увеличенный кадр — при необходимости докропить
+        `core.imaging` под точный формат.
+        """
+        settings = _safe_settings()
+        ai = ai_name or getattr(settings, "syntx_default_edit_ai", "banana")
+        model = model_type or getattr(settings, "syntx_default_edit_model", "banana3")
+        req = GenRequest(
+            scope=SCOPE_IMAGE,
+            ai_name=ai,
+            model_type=model,
+            prompt=instruction,
+            image_refs=(image,),
+            mask_ref=mask,
+            aspect_ratio=aspect_ratio,
+            quality=None,
+            details_quality=None,
+            image_size=image_size,
+            extra=extra or {},
+        )
+        return await self.generate_image(req, download_to=download_to)
+
+    async def upscale_image(self, image: str, *, model_type: str = "clarity") -> GenResult:
+        """АПСКЕЙЛ — ЗАЛОЖЕН, пока выключен.
+
+        clarity/magnific — scope `tool_image_upscaler`, идут НЕ через /design/generate
+        (наш вызов вернул пустой результат — 16.06). Нужен отдельный endpoint/параметры
+        (снять с UI). До этого финальный апскейл — внешними средствами / по запросу.
+        """
+        raise NotImplementedError(
+            "upscale (clarity/magnific) не подключён: tool_image_upscaler идёт "
+            "другим каналом, не /design/generate — снять контракт с UI и дописать"
+        )
 
     # ====================== generation: video (заложено) ======================
 
@@ -324,17 +393,32 @@ class SyntxClient:
     # ====================== pure helpers (тестируемые) ======================
 
     @staticmethod
-    def _build_image_settings(req: GenRequest, ref_urls: list[str]) -> dict[str, Any]:
-        """settings для image-генерации (image_url — singular у фото-моделей)."""
-        settings: dict[str, Any] = {
+    def _build_image_settings(
+        req: GenRequest, ref_urls: list[str], mask_url: str | None = None
+    ) -> dict[str, Any]:
+        """settings для image-генерации/правки — ПЕР-МОДЕЛЬНО.
+
+        Шлём только поля, которые принимает данная модель (_IMAGE_SETTINGS_FIELDS):
+        лишние ключи (quality/details_quality у banana/flux) → чёрный кадр.
+        image_url — список (контракт upload→r2). mask_url — для inpaint.
+        """
+        settings: dict[str, Any] = {"model_type": req.model_type}
+        fields = _IMAGE_SETTINGS_FIELDS.get(req.ai_name, _DEFAULT_IMAGE_SETTINGS_FIELDS)
+        values = {
             "n": req.n,
-            "model_type": req.model_type,
             "aspect_ratio": req.aspect_ratio,
             "quality": req.quality,
             "details_quality": req.details_quality,
+            "image_size": req.image_size,
         }
+        for f in fields:
+            v = values.get(f)
+            if v is not None:
+                settings[f] = v
         if ref_urls:
             settings["image_url"] = list(ref_urls)
+        if mask_url:
+            settings["mask_url"] = mask_url
         settings.update(req.extra)
         return settings
 

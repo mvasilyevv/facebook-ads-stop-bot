@@ -95,3 +95,44 @@ async def test_generate_video_not_implemented() -> None:
     cl = SyntxClient(token="ey.fake.tok")
     with pytest.raises(NotImplementedError):
         await cl.generate_video(req)
+
+
+# banana НЕ принимает quality/details_quality (иначе чёрный кадр) — только image_size.
+def test_build_image_settings_banana_profile() -> None:
+    req = GenRequest(
+        scope=SCOPE_IMAGE,
+        ai_name="banana",
+        model_type="banana3",
+        prompt="edit",
+        quality="1K",
+        details_quality="high",
+        image_size="2K",
+        aspect_ratio=None,
+    )
+    s = SyntxClient._build_image_settings(req, ["https://r2/u/a.jpg"])
+    assert s["model_type"] == "banana3"
+    assert s["image_size"] == "2K"
+    assert s["image_url"] == ["https://r2/u/a.jpg"]
+    assert "quality" not in s
+    assert "details_quality" not in s
+    assert "aspect_ratio" not in s  # None → пропущено
+
+
+# Неизвестная/seedream модель → дефолтный профиль (только aspect_ratio).
+def test_build_image_settings_default_profile() -> None:
+    req = GenRequest(
+        scope=SCOPE_IMAGE,
+        ai_name="seedream",
+        model_type="seedream-5",
+        prompt="x",
+        aspect_ratio="1:1",
+    )
+    s = SyntxClient._build_image_settings(req, [])
+    assert s == {"model_type": "seedream-5", "aspect_ratio": "1:1"}
+
+
+# mask_url прокидывается в settings (inpaint).
+def test_build_image_settings_mask() -> None:
+    req = GenRequest(scope=SCOPE_IMAGE, ai_name="banana", model_type="banana3", prompt="x")
+    s = SyntxClient._build_image_settings(req, ["https://r2/u/a.jpg"], "https://r2/u/mask.png")
+    assert s["mask_url"] == "https://r2/u/mask.png"

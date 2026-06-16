@@ -134,9 +134,13 @@ class GenRequest:
     model_type: str
     prompt: str
     image_refs: tuple[str, ...] = ()
-    aspect_ratio: str = "16:9"
-    quality: str = "1K"
-    details_quality: str = "medium"
+    # маска для inpaint (локальный путь/url); None = правка без маски (instruction-edit)
+    mask_ref: str | None = None
+    # aspect_ratio=None → не навязывать (edit сохраняет исходные пропорции)
+    aspect_ratio: str | None = "16:9"
+    quality: str | None = "1K"  # только sora-images
+    details_quality: str | None = "medium"  # только sora-images
+    image_size: str | None = None  # только banana (напр. "2K")
     n: int = 1
     # --- video (заложено на будущее, сейчас не используется image-путём) ---
     video_duration: int | None = None

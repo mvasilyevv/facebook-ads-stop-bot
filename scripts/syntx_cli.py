@@ -134,6 +134,39 @@ async def _cmd_image(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _cmd_edit(args: argparse.Namespace) -> int:
+    out_base = _expand(args.out)
+    saved: list[Path] = []
+    async with SyntxClient(token=args.token) as cl:
+        for v in range(args.variants):
+            target = (
+                out_base
+                if args.variants == 1
+                else out_base.with_name(f"{out_base.stem}_v{v + 1}{out_base.suffix}")
+            )
+            res = await cl.edit_image(
+                args.image,
+                args.prompt,
+                mask=args.mask,
+                ai_name=args.ai,
+                model_type=args.model,
+                image_size=args.image_size,
+                download_to=target,
+            )
+            for p in res.local_paths:
+                if args.crop:
+                    _crop(p, args.crop)
+                saved.append(p)
+                print(f"[ok] {p}  (~{res.tokens_spent} токенов)")
+    if not saved:
+        print("Ничего не сгенерировано", file=sys.stderr)
+        return 1
+    print("\nГотово:")
+    for p in saved:
+        print(" ", p)
+    return 0
+
+
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     ap = argparse.ArgumentParser(description="syntx.ai CLI (прямой API)")
@@ -167,12 +200,24 @@ def main() -> int:
         "--crop", default=None, help="центр-кроп под WxH (sips, macOS), напр. 1024x500"
     )
 
+    p_edit = sub.add_parser("edit")
+    p_edit.add_argument("--image", required=True, help="исходник (путь или r2-url)")
+    p_edit.add_argument("--prompt", required=True, help="инструкция правки")
+    p_edit.add_argument("--mask", default=None, help="маска для inpaint (экспериментально)")
+    p_edit.add_argument("--ai", default=None, help="по умолч. banana (faithful edit)")
+    p_edit.add_argument("--model", default=None, help="по умолч. banana3")
+    p_edit.add_argument("--image-size", dest="image_size", default="2K")
+    p_edit.add_argument("--variants", type=int, default=1)
+    p_edit.add_argument("--out", required=True)
+    p_edit.add_argument("--crop", default=None, help="центр-кроп под WxH (sips), напр. 1024x500")
+
     args = ap.parse_args()
     handlers = {
         "balance": _cmd_balance,
         "models": _cmd_models,
         "cost": _cmd_cost,
         "image": _cmd_image,
+        "edit": _cmd_edit,
     }
     try:
         return asyncio.run(handlers[args.cmd](args))
