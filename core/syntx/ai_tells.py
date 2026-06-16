@@ -76,7 +76,9 @@ class AiTellReport:
         )
 
 
-_EMOJI = re.compile("[\U0001f000-\U0001faff\U00002600-\U000027bf\U0001f1e6-\U0001f1ff←-⇿⌀-⏿]")
+# Основные эмодзи-планы + флаги + ⭐/✅/❤. НЕ берём диапазон 2600-27BF целиком —
+# туда попадают markdown-звёзды рейтинга ★ (U+2605), это давало ложные срабатывания.
+_EMOJI = re.compile("[\U0001f000-\U0001faff\U0001f1e6-\U0001f1ff⭐✅❌❤]")
 
 
 def detect_ai_tells(text: str) -> AiTellReport:

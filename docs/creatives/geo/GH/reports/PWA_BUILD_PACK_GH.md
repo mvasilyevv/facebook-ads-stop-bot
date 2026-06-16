@@ -33,21 +33,21 @@
 Place your bet, watch the multiplier climb, and cash out to your MTN MoMo before the chicken crashes. Ghana's most trusted crash game.
 ```
 
-## Описание (Full)
+## Описание (Full)  — де-ИИзировано (em-dash 3.19→0/100w, штампы сняты; хуки конкурента оставлены)
 ```
-Chicken Road is not just another game — it's Ghana's #1 destination for players who know how to take a calculated risk and turn their GHS into real cash. Whether you're relaxing after a long day or chasing a quick thrill on your break, Chicken Road lets you multiply your money in seconds.
+Chicken Road is Ghana's #1 crash game for players who know how to take a calculated risk and turn their GHS into real cash. Whether you're relaxing after a long day or chasing a quick thrill on your break, Chicken Road lets you grow your money fast.
 
-How it works: the thrill of the chase
-Place your bet, watch the chicken run across the grills, and see the multiplier climb — 1.5x, 5x, 20x or higher. But here's the catch: you have to hit CASH OUT before the chicken crashes. Got the nerves of steel to hold for the big payout, or will you play it safe? The strategy is 100% in your hands.
+How it works
+Place your bet, watch the chicken run across the grills, and see the multiplier climb: 1.5x, 5x, 20x or higher. But here's the catch. You have to hit CASH OUT before the chicken crashes. Hold for the big payout, or play it safe? The call is yours.
 
 Why Ghanaian players choose Chicken Road:
-1) Turn small bets into big wins — you don't need a huge bankroll. Start with as little as 5 or 10 GHS and watch it climb. One good run is all it takes.
-2) Lightning-fast payouts — withdraw straight to your MTN MoMo, Telecel Cash or AirtelTigo wallet. No delays, no excuses.
-3) Built for Ghana — smooth on any local network, from Accra to Tamale. No freezing, no lag, just clean action.
-4) Play anytime, anywhere — quick rounds that fit your day, right from your phone.
-5) Trusted and secure — thousands of Ghanaians cash out here every day. Real payouts, every time.
+1) Small bets, big wins. You don't need a huge bankroll. Start with 5 or 10 GHS and watch it climb. One good run is all it takes.
+2) Fast payouts. Withdraw straight to your MTN MoMo, Telecel Cash or AirtelTigo wallet. No delays, no excuses.
+3) Built for Ghana. Smooth on any local network, from Accra to Tamale. No freezing, no lag.
+4) Play anytime. Quick rounds that fit your day, right from your phone.
+5) Trusted and secure. Thousands of Ghanaians cash out here every day. Real payouts, every time.
 
-The clock is ticking and the multiplier is rising. Don't just hear about other people cashing out — be the one doing it. Download Chicken Road, place your bet, and see what you're made of. Are you cashing out or crashing out?
+The multiplier is rising. Don't just watch other people cash out, do it yourself. Download Chicken Road, place your bet, and play. Are you cashing out or crashing out?
 ```
 
 ## What's New
@@ -62,16 +62,18 @@ Bug fixes and a speed boost — no lag on any Ghanaian network.
 Ghana's #1 Crash Game — Cash Out to MTN MoMo Instantly!
 ```
 
-## Фото → поле билдера  (гибрид: реальные InOut-ассеты + докрутка; см. `CR_pwa01.md` §6)
-Источник реальных: `~/Downloads/scan_GH_Android (1)/`. Тёмный геймплейный UI + чистая иконка.
+## Фото → поле билдера  (реальные InOut-ассеты + feature на GPT Image 2; см. `CR_pwa01.md` §6)
+Источник реальных: `~/Downloads/scan_GH_Android (1)/`. Вывод: `data/syntx_out/GH_CR_pwa/`. Все ✅.
 
-| Поле билдера | Источник |
-|---|---|
-| Иконка (App icon) | реальная `6a283a…jpg` → уникализировать, 500×500 |
-| Feature graphic | `0x720_1.png` (лого+курица+огонь) → + «Cash Out to MTN MoMo», 750×500 |
-| Скриншот 1 | реальный геймплей `0x720.png` → 500×888 |
-| Скриншот 2 | `0x720_2.png` (WIN +GHS) или экран вывода MTN MoMo |
-| Скриншот 3 | догенерить историю раундов (тёмный UI) |
+| Поле билдера | Источник | Файл |
+|---|---|---|
+| Иконка (App icon) | реальная `6a283a…jpg` → edit_image (banana): checkerboard-фон → solid black, остальное не тронуто | `CR_ICON_final.jpg` |
+| Feature graphic | GPT Image 2 (референс = иконка): курица+лого + «GHANA #1 CRASH GAME / CASH OUT TO MTN MOMO» + x20, без бонуса, 1024×500 | `CR_FEATURE_final.jpg` |
+| Скриншот 1 | реальный геймплей `0x720.png` (люки/множители/CASH OUT 1119 GHS) → 500×871 | `CR_SCREEN1_gameplay_reuse.jpg` |
+| Скриншот 2 | реальный WIN-попап `0x720_2.png` (x55.97 +1119.4 GHS) → 500×871 | `CR_SCREEN2_win_reuse.jpg` |
+| Скриншот 3 | реальный hero `0x720_1.png` (CHICKEN ROAD + огонь) → 500×869 | `CR_logo_banner_reuse.jpg` |
+
+> Порядок: геймплей → win → hero. Выдуманные экраны (вывод MoMo / лидерборд) НЕ делаем — у InOut таких нет.
 
 ## Шаг «Комментарии» — отзывы
 - Полный текст — `CR_pwa01.md` §5 (**15 шт.**). Формат `Name,Stars,Date,Review,Developer Reply`.
@@ -128,16 +130,18 @@ Get ready for the most thrilling crash game in the country and chase massive win
 🐔🔥 Chicken Road 2 is HERE — Higher Multipliers, Instant MoMo Cashouts! 🇬🇭
 ```
 
-## Фото → поле билдера  (гибрид: реальные 1xBet-баннеры БЕЗ их лого + докрутка; см. `CR2_pwa01.md` §6)
-Источник реальных: `~/Downloads/scan_GH_Android/`. Яркие казино-баннеры. **Обязательно снять «1XBET».**
+## Фото → поле билдера  (реальные 1xBet-баннеры БЕЗ их лого; см. `CR2_pwa01.md` §6)
+Источник реальных: `~/Downloads/scan_GH_Android/`. Яркие казино-баннеры. **Обязательно снять «1XBET» + апскейл** (превью мелкие). Композицию сохранять, не догенеривать выдуманное.
 
 | Поле билдера | Источник |
 |---|---|
-| Иконка (App icon) | `c502c3dd…w174h174.png` → снять 1XBET, апскейл 500×500 |
-| Feature graphic | `ba6f…w0h408.png` / `edaceadc…w0h408.png` → снять 1XBET + «Chicken Road 2», 1008×672 |
-| Скриншот 1 | `1174f847…w0h408.png` (GAME BONUS / 6.7x) → снять бренд |
-| Скриншот 2 | `967d13ab…w0h408.png` (CASH OUT / телефон) → снять бренд или догенерить MoMo-вывод |
-| Скриншот 3 | `09c56d8d…w0h408.png` (reels) → снять бренд или догенерить лидерборд |
+| Иконка (App icon) | `c502c3dd…w174h174.png` (курица+множители+флаг) → снять 1XBET + апскейл 500×500 |
+| Feature graphic | `ba6f…w0h408.png` (816×408 горизонт: OFFICIAL GAME + PLACE YOUR BET/CASH OUT) → снять 1XBET + апскейл 1008×672 |
+| Скриншот 1 | `edaceadc…w0h408.png` (золотые яйца 20.5x/10.2x, флаг) → снять 1XBET + апскейл 500×888 |
+| Скриншот 2 | `967d13ab…w0h408.png` (CASH OUT / телефон / курицы) → снять 1XBET + апскейл 500×888 |
+| Скриншот 3 | `09c56d8d…w0h408.png` (reels / OFFICIAL GAME) → снять 1XBET + апскейл 500×888 |
+
+> `1174f847` (GAME BONUS) НЕ берём — правило без бонуса.
 
 ## Шаг «Комментарии» — отзывы
 - Полный текст — `CR2_pwa01.md` §5 (**17 шт.**). Формат `Name,Stars,Date,Review,Developer Reply`.
