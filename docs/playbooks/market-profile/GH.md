@@ -37,8 +37,10 @@
 ## Хуки (GH/Aviator)
 `gh_low_entry` (старт 10 GHS, подтверждён Bang) · `gh_momo_payout` (выигрыш на MoMo + визуальный пруф зачисления) · `gh_pidgin_touch` (Pidgin/Twi) · `avi_freebets` (бонус free bets) · `avi_fomo_greed` (FOMO/greed — переиспользован конкурентами, берём как челленджер).
 
-## Отзывы-шаблон для PWA (локальные, MoMo-trust, Pidgin)
-Имена ганские, упор на MoMo-вывод, вкрапления Pidgin. Примеры:
-> «Chale I no believe at first 😅 Cash out enter my MoMo straight. Withdrawal was sharp sharp! Ɛyɛ 🇬🇭»
-> «I dey win small small every day. Payout to MTN MoMo is fast pass all. This one na correct app 👌»
-> «Fair game, fast cash out. Cashed out to Telecel Cash with no wahala.»
+## Отзывы PWA — ГЕО-специфика (язык/имена/платёжки)
+> Универсальный **процесс** отзывов (выборочный дев-ответ, лайки по конверсии, работа с возражениями, де-ИИзация, ratio-калибровка) — общий для ВСЕХ заливов/гео, живёт в `pwa-tracker.md`. Здесь — только гео-специфика.
+
+Имена ганские, упор на MoMo-вывод (MTN MoMo / Telecel / AirtelTigo). **Язык — чистый английский** (реальный InOut пишет на нём; согласовано со строкой «Язык: English» выше). Pidgin/Twi (Chale / sharp sharp / no wahala) — **максимум 1 фраза-специя в тесте**, НЕ основной язык. Примеры (чистый EN):
+> «Deposited 50 GHS and cashed out 800 to my MTN MoMo the same evening. This game actually pays.»
+> «Won small but the withdrawal to Telecel was quick and clean. No complaints.»
+> «Crossed far enough to hit 12x before I cashed out. Credited to MoMo in a minute or two.»
