@@ -103,8 +103,8 @@
 
 | Поле билдера | Формат | Источник / действие | Файл |
 |---|---|---|---|
-| ICON | 1:1 500×500 | реальная `6a283a….jpg` → edit_image (banana): checkerboard-фон → solid black (читался как «битый PNG»), курица/лого/монеты не тронуты | ✅ `CR_ICON_final.jpg` (исходник `CR_ICON_reuse.jpg` сохранён) |
-| FEATURE | 16:9 1024×500 | GPT Image 2 (референс = иконка): курица+лого+монеты слева, хук «GHANA #1 CRASH GAME» / «CASH OUT TO MTN MOMO» справа, бейдж x20, **без бонуса** | ✅ `CR_FEATURE_final.jpg` (+ широкая `CR_FEATURE_16x9.jpg` 1280×720) |
+| ICON | 1:1 500×500 | реальная `6a283a….jpg` → edit_image (banana): checkerboard-фон → solid black (читался как «битый PNG»), курица/лого/монеты не тронуты | ✅ `CR_ICON_final.jpg` |
+| FEATURE | 16:9 1024×500 | GPT Image 2 (референс = иконка): курица+лого+монеты слева, хук «GHANA #1 CRASH GAME» / «CASH OUT TO MTN MOMO» справа, бейдж x20, **без бонуса** | ✅ `CR_FEATURE_final.jpg` |
 | SCREEN 1 | 2:3 500×871 | реальный геймплей `0x720.png` (множители 55/94/172x, люки, CASH OUT 1119 GHS, ставки) → ресайз | ✅ `CR_SCREEN1_gameplay_reuse.jpg` |
 | SCREEN 2 | 2:3 500×871 | реальный WIN-попап `0x720_2.png` (x55.97 +1119.4 GHS) → ресайз | ✅ `CR_SCREEN2_win_reuse.jpg` |
 | SCREEN 3 | 2:3 500×869 | реальный hero `0x720_1.png` (CHICKEN ROAD + курица + огонь) → ресайз | ✅ `CR_logo_banner_reuse.jpg` |
