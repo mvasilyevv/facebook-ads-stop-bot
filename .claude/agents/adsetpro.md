@@ -14,8 +14,10 @@ model: sonnet
 
 ## Правила
 - **Читай playbook перед действием.**
-- **Канал сборки (снято 16.06): создание = UI.** MCP AdSet.pro объявляет create-тулзы и скоупы `entities:create:*`, НО на ключ они **не выдаются** — аккаунту доступны только read-скоупы (`stats:*`, `entities:read`, `pushes:read`, `knowledge:read`). create_* → `401 invalid_token / missing required scope`. Реверс не поможет — скоупы энфорсит сервер. Поэтому **PWA/кампании собираем в UI** (Claude-in-Chrome). MCP-ключ = только статистика/чтение.
-- **`core.adset_pro.builder.AdsetProBuilder`** — обёртка над create-тулзами (confirm-first), **готова, но заблокирована скоупами**: заработает, если появится ключ с `entities:create:*` (план/роль/OAuth) — тогда это один swap `ADSETPRO_MCP_KEY` в `.env`.
+- **Каналы (снято 16.06): два разных API.**
+  - **MCP `/mcp`** (ключ `mcp_…`) = статистика/чтение. create-тулзы есть, но скоупы `entities:create:*` на ключ не выдаются → 401. `AdsetProBuilder` (MCP) заблокирован скоупами.
+  - **HTTP REST API `adset.pro/api`** (токен `pat_…`) = **создаёт И заполняет PWA.** Проверено: `POST /api/pwa` (201), `PATCH /api/pwa/{id} {"app":{…}}` (200, текст/рейтинг/отзывы). Swagger `/api/docs/swagger.json` (документирует только stats; pwa-эндпоинты недокументированы, но рабочие). Загрузка картинок (icon/poster/screenshots) — эндпоинт TODO. PAT в `.env`/коммиты НЕ писать.
+- Ротация/сплит-тест/антибот-фильтры кампании — пока только UI (Claude-in-Chrome). Контент PWA можно лить через HTTP PATCH.
 - Нашёл новый паттерн PWA/ротации → **ПРЕДЛОЖИ правку playbook, но НЕ редактируй без апрува байера.**
 - Трекинг-ссылку на выходе отдаёшь агенту `fb`. Операционные решения — твои.
 
