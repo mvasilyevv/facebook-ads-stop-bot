@@ -68,7 +68,7 @@ Ghana's #1 Crash Game — Cash Out to MTN MoMo Instantly!
 | Поле билдера | Источник | Файл |
 |---|---|---|
 | Иконка (App icon) | реальная `6a283a…jpg` → edit_image (banana): checkerboard-фон → solid black, остальное не тронуто | `CR_ICON_final.jpg` |
-| Feature graphic | GPT Image 2 (референс = иконка): курица+лого + «GHANA #1 CRASH GAME / CASH OUT TO MTN MOMO» + x20, без бонуса, 1024×500 | `CR_FEATURE_final.jpg` |
+| Постер (Feature) | GPT Image 2 (референс = иконка): курица+лого + «GHANA #1 CRASH GAME / CASH OUT TO MTN MOMO» + x20, без бонуса. **16:9 1024×576** (слот постера AdSet.pro = 16:9, иначе режет бока) | `CR_FEATURE_final.jpg` |
 | Скриншот 1 | реальный геймплей `0x720.png` (люки/множители/CASH OUT 1119 GHS) → 500×871 | `CR_SCREEN1_gameplay_reuse.jpg` |
 | Скриншот 2 | реальный WIN-попап `0x720_2.png` (x55.97 +1119.4 GHS) → 500×871 | `CR_SCREEN2_win_reuse.jpg` |
 | Скриншот 3 | реальный hero `0x720_1.png` (CHICKEN ROAD + огонь) → 500×869 | `CR_logo_banner_reuse.jpg` |
