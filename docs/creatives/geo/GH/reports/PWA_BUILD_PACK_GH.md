@@ -3,11 +3,12 @@
 > Готово к вбиванию в **AdSet.pro → PWA-билдер** (3 шага: Тип PWA / Приложение / Комментарии).
 > **EVERGREEN — без бонусов/сумм/free spins** в описании и What's New (бонус живёт только в FB-креативах).
 > Суммы выигрышей в отзывах (депозит→кэшаут) — соц-пруф, оставлены.
-> Полные тексты, отзывы и план картинок — `CR_pwa01.md` (архетип InOut) / `CR2_pwa01.md` (архетип 1xBet).
+> Полные тексты, отзывы и план картинок — `CR_pwa01.md` (CR1, тёмный InOut) / `CR2_pwa01.md` (CR2, яркий InOut-хайп).
 > Трекинг-URL/домен и пиксель GH-NEW — байер вписывает при сборке (не здесь).
 
-> **Суть сплит-теста:** две PWA = два РАЗНЫХ реально работающих архетипа (скопированы с конкурентов),
-> а не одна в двух цветах. PWA-1 — чистый инди-InOut. PWA-2 — брендовый казино-хайп 1xBet.
+> **Суть сплит-теста:** две PWA = два РАЗНЫХ реально работающих листинга (скопированы с конкурентов),
+> а не одна в двух цветах. Оба = реальный InOut: PWA-1 — тёмный чистый CR1, PWA-2 — яркий хайп CR2
+> (другая игра + визуал + тон/частота ответов дева).
 
 ---
 
@@ -91,7 +92,7 @@ Ghana's #1 Crash Game — Cash Out to MTN MoMo Instantly!
 
 ---
 
-# ▌PWA-2 — Chicken Road 2  (архетип 1xBet: брендовый эмодзи-хайп, казино-баннеры)
+# ▌PWA-2 — Chicken Road 2  (архетип реальный InOut CR2: яркий casino-хайп, чистый текст)
 
 ## Шаг «Приложение» — поля
 
@@ -101,72 +102,83 @@ Ghana's #1 Crash Game — Cash Out to MTN MoMo Instantly!
 | Разработчик (Developer) | `InOut Games` |
 | Категория | `Gambling` |
 | Оценка (Rating) | `4.9` |
-| Кол-во оценок | `3K` |
-| Кол-во загрузок | `500K+` |
-| Размер (Size) | `28 MB` |
+| Кол-во оценок | `341` (ratio ≈0.27% от 125K; реальный скан 8K — завышено) |
+| Кол-во загрузок | `125K+` |
+| Размер (Size) | `24 MB` |
 | Возраст (Age) | `18+` |
-| Ads / покупки | `Contains ads` |
+| Ads / покупки | `In-app purchases` |
+| Бейдж | `Editor's Choice` (если билдер даёт плашку) |
 | Авто-редирект | `2 мин` (тест push-ретеншн vs прогон) |
+
+## Детали приложения — НЕ оставлять дефолты
+| Поле | Значение |
+|---|---|
+| Категория (Play) | `Casino` |
+| Версия | `4.75` (реальный скан: «upd 4.75b») |
+| Дата обновления | `13.06.2026` (≈дата новейшего отзыва Jun 14; НЕ день старта) |
+| Email поддержки | `support@inoutgames.com` |
+| Адрес разработчика | `InOut Games Ltd, Level 3, Spinola Park, Mrieħel, Malta` (тот же паблишер, что PWA-1) |
 
 ## Описание (Short)
 ```
-🐔🔥 The sequel is here! Higher multipliers, bigger GHS runs — cash out to your MTN MoMo before the chicken crashes! 💸
+Cross the busy road, dodge the traffic, and cash out to your MTN MoMo before the chicken gets caught. Ghana's high-stakes crossing game.
 ```
 
-## Описание (Full)
+## Описание (Full) — тема реального скана «Cross. Risk. Win Big!», evergreen, де-ИИзировано (AI-tells 0/100)
 ```
-🐔🔥 Chicken Road 2 is now live in Ghana! 🇬🇭💸
-Get ready for the most thrilling crash game in the country and chase massive wins every single day! 🎰💰
-📲 Download now – place your bet – cash out before the crash! 🎉
+Chicken Road 2 - Cross. Risk. Win Big!
 
-⚡ Fast & secure payments — instant deposits and withdrawals to MTN MoMo, Telecel Cash & AirtelTigo
-🎰 Higher multipliers • thrilling gameplay • bigger winning runs than part 1
-📱 Play anytime, anywhere, straight from your smartphone
-🐔 The sequel to Ghana's favourite crash game — same chicken, hotter grills, bigger cashouts
-🛡️ Real, verified payouts — join the players already cashing out across Ghana
+Send your chicken across the busy road and your multiplier climbs with every lane it clears. The longer it survives, the more your GHS grows. Push too far and one wrong step takes the lot, so the smart play is knowing when to cash out.
 
-🚀 Join Chicken Road 2 today and start your winning run! Are you cashing out or crashing out?
+How it works
+Place your bet and send the chicken across. Every lane it clears lifts the multiplier: 2x, 5x, 15x and beyond. Cash out before it gets caught and the winnings are yours. Hold for the big one or bank a safe run, your call.
+
+Why players in Ghana keep coming back
+Start small and climb fast: drop 5 or 10 GHS, clear a few lanes and watch it grow. Withdraw straight to MTN MoMo, Telecel Cash or AirtelTigo, quick and clean with no stories. It runs smooth on any network from Accra to Tamale and works even on small data, so a quick run fits any break in your day. Thousands of players across Ghana cross and cash out here every day.
+
+The traffic is waiting and the multiplier is climbing. Send the chicken, clear the lanes, and cash out. How far will you push it?
 ```
 
 ## What's New
 ```
-🚀 New high-multiplier rounds added — bigger runs than ever!
-🐔 Smoother gameplay and faster MoMo cashouts.
-🔥 Chicken Road 2 — the sequel hits harder than part 1.
+New high-stakes lanes added, push further for bigger multipliers.
+Faster MoMo deposits and quicker cashouts.
+Smoother crossing, now lighter on data and small networks.
 ```
 
 ## Промо-баннер
 ```
-🐔🔥 Chicken Road 2 is HERE — Higher Multipliers, Instant MoMo Cashouts! 🇬🇭
+Cross. Risk. Win Big. Cash Out to MTN MoMo.
 ```
 
-## Фото → поле билдера  (реальные 1xBet-баннеры БЕЗ их лого; см. `CR2_pwa01.md` §6)
-Источник реальных: `~/Downloads/scan_GH_Android/`. Яркие казино-баннеры. **Обязательно снять «1XBET» + апскейл** (превью мелкие). Композицию сохранять, не догенеривать выдуманное.
+## Фото → поле билдера  (реальная иконка + одно hero-арт под нарезку; см. `CR2_pwa01.md` §7)
+Источник: `~/Downloads/scan_GH_Android/` (реальный InOut CR2). Вывод: `data/syntx_out/GH_CR2_pwa/`. Все ✅.
+**Подход:** одно широкое hero (GPT Image 2, референс = реальная иконка) → FEATURE 16:9 + нарезка на 3 среза 9:16 = панорама в карусели (как в образце: свайп 1→2→3 = одна сцена).
 
-| Поле билдера | Источник |
-|---|---|
-| Иконка (App icon) | `c502c3dd…w174h174.png` (курица+множители+флаг) → снять 1XBET + апскейл 500×500 |
-| Feature graphic | `ba6f…w0h408.png` (816×408 горизонт: OFFICIAL GAME + PLACE YOUR BET/CASH OUT) → снять 1XBET + апскейл 1008×672 |
-| Скриншот 1 | `edaceadc…w0h408.png` (золотые яйца 20.5x/10.2x, флаг) → снять 1XBET + апскейл 500×888 |
-| Скриншот 2 | `967d13ab…w0h408.png` (CASH OUT / телефон / курицы) → снять 1XBET + апскейл 500×888 |
-| Скриншот 3 | `09c56d8d…w0h408.png` (reels / OFFICIAL GAME) → снять 1XBET + апскейл 500×888 |
+| Поле билдера | Источник | Файл |
+|---|---|---|
+| Иконка (App icon) | реальная `public.avif` (курица в кепке + машина + лого «CHICKEN ROAD 2») → 500×500 | `CR2_ICON_final.jpg` |
+| Постер (Feature) | полный hero: курица через дорогу, бейджи 6x/20x, BIG WIN, монеты, лого. **16:9 1024×576** | `CR2_FEATURE_final.jpg` |
+| Скриншот 1 | левый срез hero: «6X» + красная машина на дороге + монеты | `CR2_SCREEN1_final.jpg` |
+| Скриншот 2 | центр hero: курица + логотип «CHICKEN ROAD» | `CR2_SCREEN2_final.jpg` |
+| Скриншот 3 | правый срез hero: «20X» + «BIG WIN» + монеты | `CR2_SCREEN3_final.jpg` |
 
-> `1174f847` (GAME BONUS) НЕ берём — правило без бонуса.
+> Порядок свайпа: 6X/машина → курица/лого → 20X/BIG WIN (= одна сцена). EVERGREEN: множители/«BIG WIN» — игровая подача, без бонуса/сумм-подарков. Чужих лого нет.
 
 ## Шаг «Комментарии» — отзывы
-- Полный текст — `CR2_pwa01.md` §5 (**17 шт.**). Формат `Name,Stars,Date,Review,Developer Reply`.
-- Рейтинг-микс: 14×5★ + 2×4★ + 1×3★ (→ ≈4.9). Длинные истории + суммы выигрышей, **ответ team на каждый**.
+- Полный текст — `CR2_pwa01.md` §6 (**16 шт.**). CSV: `data/syntx_out/GH_CR2_pwa/CR2_reviews_GH-EN.csv` (формат AdSet.pro).
+- Рейтинг-микс: 11×5★ + 2×4★ + 2×2★ + 1×1★; **ответ дева на 9/16** (все 3 негатива + 6 позитивов); headline 4.9 / 341. Прогнано через панель syntx (2 прохода).
 
 ---
 
-## Различия PWA-1 vs PWA-2 (два архетипа — зачем)
-| Ось | PWA-1 (Chicken Road / InOut) | PWA-2 (Chicken Road 2 / 1xBet-стиль) |
+## Различия PWA-1 vs PWA-2 (две реальные игры InOut — зачем)
+| Ось | PWA-1 (Chicken Road / InOut) | PWA-2 (Chicken Road 2 / InOut CR2) |
 |---|---|---|
-| Архетип-образец | инди InOut Games | брендовый 1xBet |
-| Тон текста | структурный, без эмодзи, «5 причин» | эмодзи в каждой строке, хайп |
-| Отзывы | суммы депозит→выигрыш, деловой | длинные истории, эмодзи, ответ team на каждый |
-| Картинки | тёмный геймплейный UI | яркие казино-баннеры (PLACE YOUR BET / CASH OUT) |
-| Мета | No ads, 100K+, 12 MB | Contains ads, 500K+, 28 MB |
+| Образец | реальный InOut CR1 (тёмный/чистый) | реальный InOut CR2 (яркий casino-хайп) |
+| Тон текста | структурный, «5 причин», без эмодзи | чистый «Cross. Risk. Win Big», без эмодзи |
+| Отзывы | суммы депозит→выигрыш, тёплый дев-ответ почти на каждый | разброс/половина без сумм, сдержанный дев-ответ выборочно (9/16) |
+| Картинки | тёмный реальный геймплейный UI | яркое hero-арт, нарезанное на панораму (3 среза) |
+| Мета | No ads, 100K+, 12 MB | In-app purchases, 125K+, 24 MB |
 | Авто-редирект | Нет | 2 мин |
 
-> Сплит-тест: два реально работающих подхода целиком (текст+картинки) → видно, какой архетип лучше конвертит install→FTD. Бонусов нет ни в одном (правило evergreen); вся разница — в ПОДАЧЕ.
+> Сплит-тест: два реально работающих листинга целиком (текст+картинки) → видно, какой лучше конвертит install→FTD. Бонусов нет ни в одном (правило evergreen); разница — в ИГРЕ + ПОДАЧЕ.
