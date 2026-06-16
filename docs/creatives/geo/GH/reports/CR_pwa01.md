@@ -70,30 +70,35 @@
 
 ---
 
-## 5. Отзывы (15 шт. — архетип InOut: суммы депозит→выигрыш, ответ дева почти на каждый)
+## 5. Отзывы (16 шт. — с РАБОТОЙ С ВОЗРАЖЕНИЯМИ: негативы + закрытие + нудж на депозит)
 
-> Стиль образца InOut: ганские имена (микс муж/жен), конкретные суммы «вложил X → снял Y», деловой
-> тон, **ответ InOut Games почти на каждый отзыв** (короткий, по имени) — рабочий паттерн гемблинг-PWA.
-> **Де-ИИзировано (16.06):** эмодзи срезаны до пары на весь блок (было 18/100w — синтетик-сигнал),
-> убраны клише `money-maker`/`100% real`, разная длина/тон, лёгкий Pidgin. 2×4★ для правдоподобных 4.9.
+> Правило (pwa-tracker.md §96): отзывы должны **закрывать возражения**, не быть сплошь 5★ (палится).
+> **Доработано 16.06 (панель Grok-4.3 + ревью):** добавлены **3 негатива (1-2★)** с реальными жалобами
+> и **объекшн-хэндлингом** — (а) дев-ответ defuse'ит («сбой 8.06 устранён, перезапросите вывод»),
+> (б) дев на «не выигрываю с 10 GHS» нуджит **больший депозит** («попробуй 40-50, кэшаут с 3-5x»),
+> (в) пир-отзыв (Akua) реframe'ит возражение и пушит депозит («с 10 не идёт — закинул 60, снял 480»).
+> Лайки у негативов/пира выше (их апвоутят). Распределение видимых: 11×5 + 2×4 + 2×2 + 1×1.
+> Агрегат остаётся 4.9 (254 — это headline-счётчик, видимые 16 = «most relevant» сэмпл, как в Google Play).
+> Имена микс муж/жен, лёгкий Pidgin, де-ИИзировано. ⚠️ Перед заливкой — вычитать вручную (тон/гео).
 
 | # | Ник | ★ | Дата | Текст отзыва | Ответ InOut Games |
 |---|---|---|---|---|---|
 | 1 | Kwame Mensah | ★★★★★ | Jun 10, 2026 | Deposited 50 GHS and cashed out 800 to my MTN MoMo the same evening. This game actually pays. | Glad the cashout was smooth, Kwame. |
-| 2 | Kojo Osei | ★★★★★ | Jun 9, 2026 | Best crash game I've played in Ghana. Smooth and the withdrawals come through. | Appreciate it, Kojo. Reliable payouts are the priority. |
-| 3 | Kofi Appiah | ★★★★★ | Jun 8, 2026 | Turned my last 20 GHS into 350 today. Telecel Cash withdrawal was quick. | Nice run, Kofi. Small start, solid cashout. |
-| 4 | Kwaku Owusu | ★★★★★ | Jun 7, 2026 | Was doubting at first but this paid for my weekend. 1,200 GHS into my AirtelTigo. | We always pay our winners, Kwaku. Enjoy. |
-| 5 | Yaw Boateng | ★★★★★ | Jun 6, 2026 | The multipliers get crazy. Held a 20x run and made good cash today 🔥 | Boom, 20x is a great run, Yaw. |
-| 6 | Ama Boaten | ★★★★★ | Jun 5, 2026 | Cashed out three times today, MTN MoMo each time, no wahala. Easy to use. | Love the consistency, Ama. |
-| 7 | Kwabena Frimpong | ★★★★ | Jun 4, 2026 | Good game and the payouts come. Just learn to cash out early and don't get greedy waiting for 50x. | Wise advice, Kwabena. Discipline wins. |
-| 8 | Akosua Owusu | ★★★★★ | Jun 3, 2026 | Deposited 30 GHS, walked away with 410. Telecel was instant. Honestly impressed. | Fantastic, Akosua. |
-| 9 | Emmanuel Tetteh | ★★★★★ | Jun 2, 2026 | No stress. Deposit is easy and cash out is quick. MTN MoMo works every time for me. | Reliability is everything, Emmanuel. |
-| 10 | Adwoa Sarpong | ★★★★★ | Jun 1, 2026 | Clean app, no ads. Won 600 GHS last night and cashed straight to MoMo. | Clean and fast by design. Thanks, Adwoa. |
-| 11 | Prince Asare | ★★★★★ | May 31, 2026 | Hit 18x this morning before it crashed. MoMo credited in under a minute. | 18x, steady hands, Prince. |
-| 12 | Nana Kweku | ★★★★★ | May 29, 2026 | I dey play from Kumasi, money enters same time. This one pay. | Kumasi cashing out. Thank you, Nana. |
-| 13 | Gifty Mensah | ★★★★ | May 27, 2026 | Genuine game. Sometimes you lose a round, that na the risk, but I'm up this week. | Honest and fair, Gifty. Cash out steady. |
-| 14 | Daniel Boadu | ★★★★★ | May 24, 2026 | Fast app, no lag on MTN data. Cashed out twice today. | — |
-| 15 | Comfort Asante | ★★★★★ | May 20, 2026 | Started with 40 GHS, cashed out 520 to MTN MoMo. Didn't expect it to actually pay 💸 | It pays, Comfort. Welcome aboard. |
+| 2 | Yaw Darko | ★★ | Jun 9, 2026 | Colourful and fun, but I put 10 GHS and lost it fast. No win for me. | Crash eats small stakes quick, Yaw — try 40-50 GHS and cash out around 3-5x, payouts run smoother after the last update. |
+| 3 | Kojo Osei | ★★★★★ | Jun 8, 2026 | Best crash game I've played in Ghana. Smooth and the withdrawals come through. | Appreciate it, Kojo. Reliable payouts are the priority. |
+| 4 | Akua Sarpong | ★★★★★ | Jun 8, 2026 | Saw people say you can't win with 10 GHS. I put 60 instead, caught 8x and cashed 480 to MTN. Small money just won't pay here. | — |
+| 5 | Emmanuel Tetteh | ★ | Jun 7, 2026 | Won 180 GHS but the withdrawal didn't move for two days. App is fine but my money was stuck. | That was a payment glitch on Jun 8, fixed the same day — please retry your withdrawal now, it'll hit your wallet in minutes. |
+| 6 | Kofi Appiah | ★★★★★ | Jun 6, 2026 | Turned my last 20 GHS into 350 today. Telecel Cash withdrawal was quick. | Nice run, Kofi. Small start, solid cashout. |
+| 7 | Ama Boaten | ★★★★★ | Jun 5, 2026 | Cashed out three times today, MTN MoMo each time, no wahala. Easy to use. | Love the consistency, Ama. |
+| 8 | Daniel Boadu | ★★ | Jun 4, 2026 | Graphics are sweet but the cash out button froze after two wins. Annoying. | That button issue was sorted on Jun 10 — log in and try again, cashouts are moving fine now. |
+| 9 | Akosua Owusu | ★★★★★ | Jun 3, 2026 | Deposited 30 GHS, walked away with 410. Telecel was instant. Honestly impressed. | Fantastic, Akosua. |
+| 10 | Kwabena Frimpong | ★★★★ | Jun 2, 2026 | Good game and the payouts come. Just learn to cash out early and don't chase 50x. | Wise advice, Kwabena. Discipline wins. |
+| 11 | Kwaku Owusu | ★★★★★ | Jun 1, 2026 | Was doubting at first but this paid for my weekend. 1,200 GHS into my AirtelTigo. | We always pay our winners, Kwaku. Enjoy. |
+| 12 | Adwoa Sarpong | ★★★★★ | May 31, 2026 | Clean app, no ads. Won 600 GHS last night and cashed straight to MoMo. | Clean and fast by design. Thanks, Adwoa. |
+| 13 | Prince Asare | ★★★★★ | May 29, 2026 | Hit 18x this morning before it crashed. MoMo credited in under a minute. | 18x, steady hands, Prince. |
+| 14 | Nana Kweku | ★★★★★ | May 27, 2026 | I dey play from Kumasi, money enters same time. This one pay. | Kumasi cashing out. Thank you, Nana. |
+| 15 | Gifty Mensah | ★★★★ | May 24, 2026 | Genuine game. Sometimes you lose a round, that na the risk, but I'm up this week. | Honest and fair, Gifty. Cash out steady. |
+| 16 | Comfort Asante | ★★★★★ | May 20, 2026 | Started with 40 GHS, cashed out 520 to MTN MoMo. Didn't expect it to actually pay. | It pays, Comfort. Welcome aboard. |
 
 ---
 
@@ -119,5 +124,5 @@
 - Текст и отзывы построены по реальному образцу InOut (`scan_GH_Android (1)/text.txt`): структура «5 причин», суммы депозит→выигрыш, ответ дева почти на каждый отзыв.
 - **Без бонуса** в описании/What's New (правило 15.06). Суммы выигрышей в отзывах — соц-пруф, оставлены.
 - Трекинг-URL/домен: НЕ вписан (определяет байер при сборке в AdSet.pro).
-- Отзывов 15 шт. (13×5★ + 2×4★ → 4.9), ответ дева на 14/15.
+- Отзывов 16 шт. с работой с возражениями (11×5 + 2×4 + 2×2 + 1×1): 3 негатива + объекшн-хэндлинг + пир-нудж на депозит (см. §5). Агрегат-счётчик 254 / 4.9. CSV: `data/syntx_out/GH_CR_pwa/CR_reviews_GH-EN.csv`.
 - После ✅ qa → трекинг-ссылку передать агенту `fb`.
