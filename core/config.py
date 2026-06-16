@@ -122,6 +122,20 @@ class Settings(BaseSettings):
     # «not configured», чтобы случайно не принимать неавторизованные постбэки.
     adsetpro_postback_secret: str = ""
 
+    # --- syntx.ai (прямой API генерации креативов, см. core/syntx/) ---
+    # JWT из localStorage.auth_token залогиненного syntx (recon_profile), живёт 30 дней.
+    # Пусто → клиент возьмёт env SYNTX_AUTH_TOKEN или строку в .env (см. core/syntx/auth.py).
+    syntx_auth_token: str = ""
+    syntx_base_url: str = "https://api.syntx.ai"
+    syntx_timeout_seconds: float = 60.0
+    syntx_poll_interval_seconds: float = 3.0
+    syntx_poll_timeout_seconds: float = 300.0
+    # Дефолтные модели (ai_name / model_type). Видео — на будущее (выключено).
+    syntx_default_image_ai: str = "sora-images"
+    syntx_default_image_model: str = "gpt-image-2"
+    syntx_default_video_ai: str = "kling"
+    syntx_default_video_model: str = "kling_image2video"
+
     # --- Исходящий postback (форвард конверсий во внешнюю систему/трекер) ---
     # URL-шаблон с макросами {click_id}/{event_type}/{goal}/{revenue}/{payout}/
     # {currency}/{fb_ad_id}/{country}. Пустой → отправка отключена (см. tracker_outgoing_enabled).

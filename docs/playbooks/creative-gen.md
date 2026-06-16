@@ -42,8 +42,9 @@
   суммами → берём это, а не «уникальный» Pidgin со скромными цифрами (урок GH_AVI 2026-06).
 
 ## Доступ
-- Генерация — **Playwright MCP на профиле `recon_profile`** (залогинен в syntx). НЕ боевой Vision/Chrome. Headless сразу, про логин не переспрашивать.
-- syntx.ai → раздел **Дизайн** → модель **Sora / GPT Image** (выбор обоснован опытом байера; не Banana).
+- **Генерация (быстрый канал, дефолт): прямой API syntx через `core.syntx` / `python scripts/syntx_cli.py image …`** — без UI (upload→chat→generate→poll→download = 4 вызова, можно параллелить, расход токенов логируется). Токен — env `SYNTX_AUTH_TOKEN`/`.env`, живёт 30 дней. Контракт и подкоманды — `core/syntx/` + память `reference-syntx-api-direct`.
+- **Фолбэк / ручные режимы:** Playwright MCP на профиле `recon_profile` (залогинен в syntx). НЕ боевой Vision/Chrome. Headless сразу, про логин не переспрашивать.
+- Модель по умолчанию — **Sora / GPT Image (`gpt-image-2`)**, выбор байера (не Banana). Для текста на картинке давать референс-иконку — текст тогда не «плывёт».
 - Разведка Ad Library конкурентов — тот же изолированный профиль (`recon_adlib_profile`), боевой кабинет не трогаем.
 
 ## Research-скиллы (усиление разведки и текстов)
