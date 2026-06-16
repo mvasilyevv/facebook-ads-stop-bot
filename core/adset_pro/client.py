@@ -36,6 +36,7 @@ from tenacity import (
 
 from core.adset_pro.errors import (
     AdsetProError,
+    AuthError,
     TemporaryError,
     classify_http_error,
 )
@@ -198,6 +199,7 @@ class AdsetProClient:
             params={"name": tool_name, "arguments": arguments or {}},
         )
         result = await self._post_rpc(rpc_body, tool_name=tool_name)
+        self._raise_if_tool_error(result, tool_name=tool_name)
         return self._extract_tool_result(result, tool_name=tool_name)
 
     # ====================== internals ======================
@@ -300,6 +302,29 @@ class AdsetProClient:
             )
 
         return data
+
+    @staticmethod
+    def _raise_if_tool_error(rpc_response: dict[str, Any], *, tool_name: str) -> None:
+        """MCP tool-level ошибка (result.isError=true) → исключение.
+
+        Без этого write-фейлы (напр. create_* с read-only ключом: «not authenticated
+        or missing required scope») тихо терялись как {} и выглядели успехом.
+        """
+        result = rpc_response.get("result")
+        if not isinstance(result, dict) or not result.get("isError"):
+            return
+        msg = ""
+        for item in result.get("content") or []:
+            if isinstance(item, dict) and item.get("type") == "text" and item.get("text"):
+                msg = str(item["text"])
+                break
+        msg = msg or f"MCP tool {tool_name} вернул isError"
+        low = msg.lower()
+        if any(
+            k in low for k in ("scope", "authenticat", "permission", "not allowed", "forbidden")
+        ):
+            raise AuthError(msg, endpoint=_MCP_PATH)
+        raise AdsetProError(msg, endpoint=_MCP_PATH)
 
     @staticmethod
     def _extract_tool_result(

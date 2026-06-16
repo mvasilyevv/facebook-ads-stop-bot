@@ -13,6 +13,7 @@ import pytest
 
 from core.adset_pro.client import AdsetProClient, _build_headers
 from core.adset_pro.errors import (
+    AdsetProError,
     AuthError,
     NotFoundError,
     PermanentError,
@@ -160,3 +161,40 @@ def test_extract_tool_result_text_json_array_wrapped() -> None:
 def test_extract_tool_result_empty_payload() -> None:
     assert AdsetProClient._extract_tool_result({}, tool_name="x") == {}
     assert AdsetProClient._extract_tool_result({"result": {}}, tool_name="x") == {}
+
+
+# isError + текст про scope/auth → AuthError (write-фейл read-only ключа не теряется).
+def test_raise_if_tool_error_scope_is_auth() -> None:
+    resp = {
+        "result": {
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Error: MCP API key not authenticated or missing required scope",
+                }
+            ],
+            "isError": True,
+        }
+    }
+    with pytest.raises(AuthError):
+        AdsetProClient._raise_if_tool_error(resp, tool_name="create_pwa")
+
+
+# isError с прочим текстом → общий AdsetProError.
+def test_raise_if_tool_error_generic() -> None:
+    resp = {
+        "result": {
+            "content": [{"type": "text", "text": "Validation failed: name required"}],
+            "isError": True,
+        }
+    }
+    with pytest.raises(AdsetProError):
+        AdsetProClient._raise_if_tool_error(resp, tool_name="create_offer")
+
+
+# Нет isError → не бросает (обычный успех).
+def test_raise_if_tool_error_ok() -> None:
+    AdsetProClient._raise_if_tool_error(
+        {"result": {"structuredContent": {"id": "x"}}}, tool_name="x"
+    )
+    AdsetProClient._raise_if_tool_error({}, tool_name="x")
