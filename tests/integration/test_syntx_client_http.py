@@ -81,6 +81,9 @@ async def test_generate_image_full_flow(tmp_path: Path) -> None:
         )
     )
     respx.get(f"{_BASE}/r2/generated/out.jpg").mock(return_value=Response(200, content=b"PNGDATA"))
+    del_route = respx.delete(f"{_V1}/chats/{_UUID}").mock(
+        return_value=Response(200, json={"success": True})
+    )
 
     out = tmp_path / "result.jpg"
     from core.syntx import GenRequest
@@ -104,6 +107,8 @@ async def test_generate_image_full_flow(tmp_path: Path) -> None:
     assert out.read_bytes() == b"PNGDATA"
     # расход = баланс_до - баланс_после = 100 - 72
     assert res.tokens_spent == pytest.approx(28.0)
+    # cleanup удалил чат после скачивания (не засоряем UI)
+    assert del_route.called
 
 
 # Нет /generated/ + маркер модерации в messages → SyntxModerationError (гемблинг-кейс).
@@ -214,6 +219,58 @@ async def test_edit_image_routes_to_banana(tmp_path: Path) -> None:
     assert body["settings"]["image_url"] == [f"{_BASE}/r2/uploaded/src.jpg"]
     assert "quality" not in body["settings"]
     assert "details_quality" not in body["settings"]
+
+
+# analyze_ensemble: text-чат с картинкой → парсинг JSON-вердикта + cleanup чата.
+@respx.mock
+@pytest.mark.asyncio
+async def test_analyze_ensemble_parses_and_cleans(tmp_path: Path) -> None:
+    src = tmp_path / "creo.jpg"
+    src.write_bytes(b"\xff\xd8\xff\xe0jpg")
+
+    respx.post(f"{_V1}/chats/upload-files").mock(
+        return_value=Response(
+            200, json={"files": [{"filename": "creo.jpg", "url": f"{_BASE}/r2/uploaded/creo.jpg"}]}
+        )
+    )
+    respx.post(f"{_V1}/chats").mock(return_value=Response(201, json={"uuid": _UUID}))
+    msg_route = respx.post(f"{_V1}/chats/{_UUID}/messages").mock(
+        return_value=Response(200, json={"id": 1})
+    )
+    respx.get(f"{_V1}/chats/{_UUID}/inprogress").mock(return_value=Response(200, json=[]))
+    respx.get(f"{_V1}/chats/{_UUID}/messages").mock(
+        return_value=Response(
+            200,
+            json={
+                "messages": [
+                    {
+                        "author_id": 1,
+                        "message_object": [{"object_type": "text", "object_text": "q"}],
+                    },
+                    {
+                        "author_id": -1,
+                        "message_object": [
+                            {"object_type": "text", "object_text": '{"verdict":"keep","score":9}'}
+                        ],
+                    },
+                ]
+            },
+        )
+    )
+    del_route = respx.delete(f"{_V1}/chats/{_UUID}").mock(
+        return_value=Response(200, json={"success": True})
+    )
+
+    async with _client() as cl:
+        results = await cl.analyze_ensemble(
+            str(src), "rate this", models=[("chatgpt", "gpt-5.5", "GPT")]
+        )
+
+    assert len(results) == 1
+    assert results[0].verdict == "keep" and results[0].score == 9
+    # запрос ушёл в нужную модель + чат подчищен
+    assert "ai_name=chatgpt" in str(msg_route.calls.last.request.url)
+    assert del_route.called
 
 
 # 401 на каталоге → SyntxAuthError (токен протух).

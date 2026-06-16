@@ -198,11 +198,14 @@ class SyntxClient:
         req: GenRequest,
         *,
         download_to: Path | None = None,
+        cleanup: bool = True,
     ) -> GenResult:
         """Полный цикл image-генерации: upload → chat → generate → poll → fetch.
 
         Расход токенов логируется как дельта баланса до/после. download_to: если
-        задан — скачать результат(ы) (при нескольких — суффиксы _1/_2).
+        задан — скачать результат(ы) (при нескольких — суффиксы _1/_2). cleanup=True
+        удаляет чат после скачивания (не засоряем UI; файл уже локально). Если
+        download_to не задан — чат НЕ удаляем (иначе пропадёт доступ к r2-url).
         """
         if req.scope != SCOPE_IMAGE:
             raise ValueError(f"generate_image: ожидался scope={SCOPE_IMAGE}, дан {req.scope!r}")
@@ -224,6 +227,8 @@ class SyntxClient:
 
         local_paths = await self._download_all(urls, download_to) if download_to else ()
         tokens_spent = await self._log_spend(balance_before, req)
+        if cleanup and local_paths:
+            await self.delete_chat(chat_uuid)
         return GenResult(
             chat_uuid=chat_uuid,
             ai_name=req.ai_name,
@@ -255,6 +260,7 @@ class SyntxClient:
         image_size: str | None = "2K",
         aspect_ratio: str | None = None,
         download_to: Path | None = None,
+        cleanup: bool = True,
         extra: dict[str, Any] | None = None,
     ) -> GenResult:
         """Точечная правка картинки (instruction-edit).
@@ -285,7 +291,7 @@ class SyntxClient:
             image_size=image_size,
             extra=extra or {},
         )
-        return await self.generate_image(req, download_to=download_to)
+        return await self.generate_image(req, download_to=download_to, cleanup=cleanup)
 
     async def upscale_image(self, image: str, *, model_type: str = "clarity") -> GenResult:
         """АПСКЕЙЛ — ЗАЛОЖЕН, пока выключен.
@@ -335,19 +341,25 @@ class SyntxClient:
         *,
         ai_name: str = "chatgpt",
         model_type: str = "gpt-5.5",
+        cleanup: bool = True,
     ) -> str:
         """Прогнать картинку+промпт через одну text-vision модель → текст ответа.
 
         Контракт (снят 16.06): create_chat(scope='text') → POST messages с objects
         [{text},{image}] → poll /inprogress → ответ ассистента (author_id == -1).
-        Генерацию/правку НЕ вызывает — чистый анализ.
+        Генерацию/правку НЕ вызывает — чистый анализ. cleanup=True удаляет чат после
+        ответа (не засоряем UI; результат уже у нас в тексте).
         """
         ref_urls = await self._resolve_ref_urls((image,))
         image_url = ref_urls[0] if ref_urls else None
         chat_uuid = await self.create_chat(scope="text")
-        await self._post_text_message(chat_uuid, prompt, image_url, ai_name, model_type)
-        await self._poll_until_done(chat_uuid)
-        return await self._fetch_assistant_reply(chat_uuid)
+        try:
+            await self._post_text_message(chat_uuid, prompt, image_url, ai_name, model_type)
+            await self._poll_until_done(chat_uuid)
+            return await self._fetch_assistant_reply(chat_uuid)
+        finally:
+            if cleanup:
+                await self.delete_chat(chat_uuid)
 
     async def analyze_ensemble(
         self,
@@ -355,18 +367,24 @@ class SyntxClient:
         prompt: str,
         *,
         models: Sequence[tuple[str, str, str]] | None = None,
+        cleanup: bool = True,
     ) -> list[AnalysisResult]:
         """Параллельно прогнать картинку через пул моделей разных лабораторий.
 
         models — (ai_name, model_type, label); по умолчанию DEFAULT_ANALYSIS_POOL.
         Картинка грузится ОДИН раз, image_url переиспользуется всеми. Падение одной
         модели не валит остальные (ошибка кладётся в AnalysisResult.error).
+
+        Каждая модель — в СВОЁМ изолированном чате (иначе модель видела бы ответы
+        соседей в истории → потеря независимости вердиктов, ради которой всё и
+        затевалось). cleanup=True удаляет эти чаты после прогона → ноль мусора в UI.
         """
         pool = list(models) if models is not None else list(DEFAULT_ANALYSIS_POOL)
         ref_urls = await self._resolve_ref_urls((image,))
         image_url = ref_urls[0] if ref_urls else None
 
         async def _one(ai_name: str, model_type: str, label: str) -> AnalysisResult:
+            chat_uuid: str | None = None
             try:
                 chat_uuid = await self.create_chat(scope="text")
                 await self._post_text_message(chat_uuid, prompt, image_url, ai_name, model_type)
@@ -377,8 +395,19 @@ class SyntxClient:
                 )
             except SyntxError as exc:
                 return AnalysisResult(label, ai_name, model_type, error=str(exc))
+            finally:
+                if cleanup and chat_uuid:
+                    await self.delete_chat(chat_uuid)
 
         return list(await asyncio.gather(*(_one(a, m, lbl) for a, m, lbl in pool)))
+
+    async def delete_chat(self, chat_uuid: str) -> bool:
+        """Удалить чат (убрать мусор из UI). Best-effort — не бросает исключение."""
+        try:
+            await self._request("DELETE", f"/chats/{chat_uuid}", retry=False)
+            return True
+        except SyntxError:
+            return False
 
     async def _post_text_message(
         self,
