@@ -8,6 +8,7 @@ reference-syntx-api-direct.
 
 from __future__ import annotations
 
+from core.syntx.ai_tells import AiTellReport, TellHit, detect_ai_tells
 from core.syntx.analysis import (
     DEFAULT_ANALYSIS_POOL,
     AnalysisResult,
@@ -49,6 +50,9 @@ __all__ = [
     "build_analysis_prompt",
     "build_text_analysis_prompt",
     "parse_analysis_json",
+    "detect_ai_tells",
+    "AiTellReport",
+    "TellHit",
     "DEFAULT_ANALYSIS_POOL",
     "GenRequest",
     "GenResult",

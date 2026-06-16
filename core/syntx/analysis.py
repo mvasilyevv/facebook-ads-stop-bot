@@ -105,6 +105,11 @@ Evaluate the {kind} on: hook strength for cold {geo} traffic, clarity, believabi
 as AUTHENTIC and varied vs obviously AI-generated/too uniform, with realistic deposit→cashout amounts \
 and {geo}-appropriate names.
 
+DE-AI (important): flag generic LLM-writing tells — "not just X, it's Y", "whether you're…", rhetorical \
+"Are you X or Y?", "the thrill of", "nerves of steel", "say goodbye to", em-dash overuse, perfectly \
+parallel Title-Cased listicles, uniform review length/grammar. Copy must read HUMAN/native, not \
+machine-generated. Treat heavy AI-tell density as a high-severity issue.
+
 Respond with STRICT minified JSON ONLY — no markdown, no fences, no prose:
 {{"verdict":"keep|minor_fix|rewrite","score":<integer 1-10>,"strengths":["..."],\
 "issues":[{{"severity":"high|med|low","what":"...","where":"..."}}],\
