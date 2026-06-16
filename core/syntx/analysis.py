@@ -20,11 +20,14 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-# Пул по умолчанию: сильнейшая vision-модель на лабораторию (актуально 16.06,
-# резолвить «новейшую» можно через SyntxClient.list_models). Anthropic не зовём —
-# это та же лаба, что и оркестратор-агент (дублёр).
+# Пул по умолчанию: ОДНА сильнейшая vision-модель на ЛАБОРАТОРИЮ. Diversity даёт
+# число лабораторий, не число моделей: два OpenAI (5.5 + 5.4-pro) скоррелированы
+# (~80% находок совпадают, 5.4-pro ⊃ 5.5) — берём только 5.4-pro. Vision есть лишь
+# у 4 лаб: OpenAI / Google / xAI / Anthropic (deepseek/perplexity/qwen картинку НЕ
+# видят). Anthropic не зовём — это лаба самого агента-оркестратора (он 4-й голос).
+# Grok оставляем как единственный голос xAI (его «мягкость» = floor-сигнал go/no-go).
 DEFAULT_ANALYSIS_POOL: tuple[tuple[str, str, str], ...] = (
-    ("chatgpt", "gpt-5.5", "GPT-5.5"),
+    ("chatgpt", "gpt-5.4-pro", "GPT-5.4-Pro"),
     ("gemini", "gemini-3.1-pro-preview", "Gemini-3.1-Pro"),
     ("grok", "grok-4.3", "Grok-4.3"),
 )
