@@ -10,6 +10,7 @@
 """
 
 from core.adset_pro.aggregator import AggregationResult, aggregate_postback_events
+from core.adset_pro.builder import AdsetProBuilder, BuildPlan
 from core.adset_pro.client import AdsetProClient
 from core.adset_pro.credentials import (
     AdsetProCredentials,
@@ -42,8 +43,10 @@ from core.adset_pro.schemas import (
 )
 
 __all__ = [
+    "AdsetProBuilder",
     "AdsetProClient",
     "AdsetProCredentials",
+    "BuildPlan",
     "AdsetProError",
     "AggregationResult",
     "AuthError",
