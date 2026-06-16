@@ -14,7 +14,8 @@ model: sonnet
 
 ## Правила
 - **Читай playbook перед действием.**
-- **Канал сборки (гибрид, снято 16.06):** MCP AdSet.pro теперь имеет **create-тулзы** → `core.adset_pro.builder.AdsetProBuilder` ставит **скелет** (campaign/pwa shell + offer/flow/pixel) программно, **confirm-first** (дефолт `confirm=False` → BuildPlan, ничего не создаёт; `confirm=True` → реально). **Ротация/сплит-тест/антибот-фильтры + контент PWA (иконка/скрины/текст/отзывы) в API НЕ выведены → добиваются в UI** (Claude-in-Chrome). MCP также = статистика. Полный автозалив роутинга — только реверсом web-API (по запросу).
+- **Канал сборки (снято 16.06): создание = UI.** MCP AdSet.pro объявляет create-тулзы и скоупы `entities:create:*`, НО на ключ они **не выдаются** — аккаунту доступны только read-скоупы (`stats:*`, `entities:read`, `pushes:read`, `knowledge:read`). create_* → `401 invalid_token / missing required scope`. Реверс не поможет — скоупы энфорсит сервер. Поэтому **PWA/кампании собираем в UI** (Claude-in-Chrome). MCP-ключ = только статистика/чтение.
+- **`core.adset_pro.builder.AdsetProBuilder`** — обёртка над create-тулзами (confirm-first), **готова, но заблокирована скоупами**: заработает, если появится ключ с `entities:create:*` (план/роль/OAuth) — тогда это один swap `ADSETPRO_MCP_KEY` в `.env`.
 - Нашёл новый паттерн PWA/ротации → **ПРЕДЛОЖИ правку playbook, но НЕ редактируй без апрува байера.**
 - Трекинг-ссылку на выходе отдаёшь агенту `fb`. Операционные решения — твои.
 
