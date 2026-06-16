@@ -336,21 +336,21 @@ class SyntxClient:
 
     async def analyze_image(
         self,
-        image: str,
+        image: str | None,
         prompt: str,
         *,
         ai_name: str = "chatgpt",
         model_type: str = "gpt-5.5",
         cleanup: bool = True,
     ) -> str:
-        """Прогнать картинку+промпт через одну text-vision модель → текст ответа.
+        """Прогнать промпт (+опц. картинку) через одну text-vision модель → ответ.
 
         Контракт (снят 16.06): create_chat(scope='text') → POST messages с objects
         [{text},{image}] → poll /inprogress → ответ ассистента (author_id == -1).
-        Генерацию/правку НЕ вызывает — чистый анализ. cleanup=True удаляет чат после
-        ответа (не засоряем UI; результат уже у нас в тексте).
+        image=None → чистый текстовый анализ (листинг/отзывы). cleanup=True удаляет
+        чат после ответа (не засоряем UI; результат уже у нас в тексте).
         """
-        ref_urls = await self._resolve_ref_urls((image,))
+        ref_urls = await self._resolve_ref_urls((image,) if image else ())
         image_url = ref_urls[0] if ref_urls else None
         chat_uuid = await self.create_chat(scope="text")
         try:
@@ -363,7 +363,7 @@ class SyntxClient:
 
     async def analyze_ensemble(
         self,
-        image: str,
+        image: str | None,
         prompt: str,
         *,
         models: Sequence[tuple[str, str, str]] | None = None,
@@ -380,7 +380,7 @@ class SyntxClient:
         затевалось). cleanup=True удаляет эти чаты после прогона → ноль мусора в UI.
         """
         pool = list(models) if models is not None else list(DEFAULT_ANALYSIS_POOL)
-        ref_urls = await self._resolve_ref_urls((image,))
+        ref_urls = await self._resolve_ref_urls((image,) if image else ())
         image_url = ref_urls[0] if ref_urls else None
 
         async def _one(ai_name: str, model_type: str, label: str) -> AnalysisResult:

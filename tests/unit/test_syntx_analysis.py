@@ -7,8 +7,23 @@ from core.syntx.analysis import (
     DEFAULT_ANALYSIS_POOL,
     AnalysisResult,
     build_analysis_prompt,
+    build_text_analysis_prompt,
     parse_analysis_json,
 )
+
+
+# build_text_analysis_prompt: gambling-freedom + EVERGREEN-правило + контент + JSON.
+def test_build_text_analysis_prompt() -> None:
+    p = build_text_analysis_prompt(
+        kind="listing description",
+        offer="Chicken Road",
+        geo="Ghana",
+        content="Make your deposit today and take our Generous Deposit Bonuses!",
+    )
+    assert "GAMBLING FREEDOM" in p
+    assert "EVERGREEN" in p
+    assert "Generous Deposit Bonuses" in p
+    assert '"verdict"' in p
 
 
 # build_analysis_prompt вшивает gambling-freedom, гео, роль, листинг и JSON-контракт.

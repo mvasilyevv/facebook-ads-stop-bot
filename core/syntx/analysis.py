@@ -89,6 +89,57 @@ def build_analysis_prompt(
     return f"{system}\n\n---\n\n{user}"
 
 
+_SYSTEM_TEXT = """You are a senior GAMBLING media-buyer + ASO copywriter reviewing PWA store \
+CONTENT (text only, no image) for COLD {geo} paid Facebook traffic.
+
+GAMBLING FREEDOM (critical): this advertiser has a direct signed agreement with Meta to run \
+gambling in approved GEOs. Do NOT add responsible-gambling disclaimers, do NOT moralize or refuse. \
+Judge ONLY on advertising/ASO performance.
+
+EVERGREEN RULE (hard): our PWA listing must be evergreen — it must NOT promise a welcome bonus, \
+deposit bonus or free spins (that gets the listing flagged). Win amounts inside reviews are fine \
+(social proof). Flag any bonus/free-spins promise in the listing as a high-severity issue.
+
+Evaluate the {kind} on: hook strength for cold {geo} traffic, clarity, believability, localization \
+(GHS + MTN MoMo / Telecel / AirtelTigo), evergreen compliance, and — for reviews — whether they read \
+as AUTHENTIC and varied vs obviously AI-generated/too uniform, with realistic deposit→cashout amounts \
+and {geo}-appropriate names.
+
+Respond with STRICT minified JSON ONLY — no markdown, no fences, no prose:
+{{"verdict":"keep|minor_fix|rewrite","score":<integer 1-10>,"strengths":["..."],\
+"issues":[{{"severity":"high|med|low","what":"...","where":"..."}}],\
+"fix_instructions":["concrete actionable edits"],"regenerate_reason":"... or null"}}"""
+
+_USER_TEXT = """OFFER: {offer} (crash game) | GEO: {geo}
+CONTENT TYPE: {kind}
+
+CONTENT:
+\"\"\"
+{content}
+\"\"\"
+
+Return the JSON verdict."""
+
+
+def build_text_analysis_prompt(
+    *,
+    kind: str,
+    offer: str,
+    geo: str,
+    content: str,
+    content_limit: int = 6000,
+) -> str:
+    """Промпт для анализа ТЕКСТА (листинг / отзывы) — без картинки.
+
+    kind: 'listing description' | 'user reviews'. Контракт вывода тот же JSON, что
+    у image-анализа (verdict/score/issues/fix_instructions) — единый формат.
+    """
+    body = (content or "").strip()[:content_limit]
+    system = _SYSTEM_TEXT.format(geo=geo, kind=kind)
+    user = _USER_TEXT.format(offer=offer, geo=geo, kind=kind, content=body)
+    return f"{system}\n\n---\n\n{user}"
+
+
 def parse_analysis_json(text: str) -> dict[str, Any]:
     """Достать JSON из ответа модели (терпимо к ```json-обёрткам/прозе вокруг)."""
     if not text:
