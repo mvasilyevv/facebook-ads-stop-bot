@@ -13,7 +13,8 @@ model: sonnet
 ПЕРЕД сборкой прочитай **`docs/playbooks/pwa-tracker.md`** (PWA evergreen без бонуса, трекер = копия CR2 → чистка ротации, MCP-статистика, грабли). Также: `docs/playbooks/market-profile/<GEO>.md` (отзывы/контент гео), `docs/playbooks/README.md`.
 
 ## Правила
-- **Читай playbook перед действием.** UI AdSet.pro — через Claude-in-Chrome MCP; MCP-сервер AdSet.pro = только статистика (создание — UI).
+- **Читай playbook перед действием.**
+- **Канал сборки (гибрид, снято 16.06):** MCP AdSet.pro теперь имеет **create-тулзы** → `core.adset_pro.builder.AdsetProBuilder` ставит **скелет** (campaign/pwa shell + offer/flow/pixel) программно, **confirm-first** (дефолт `confirm=False` → BuildPlan, ничего не создаёт; `confirm=True` → реально). **Ротация/сплит-тест/антибот-фильтры + контент PWA (иконка/скрины/текст/отзывы) в API НЕ выведены → добиваются в UI** (Claude-in-Chrome). MCP также = статистика. Полный автозалив роутинга — только реверсом web-API (по запросу).
 - Нашёл новый паттерн PWA/ротации → **ПРЕДЛОЖИ правку playbook, но НЕ редактируй без апрува байера.**
 - Трекинг-ссылку на выходе отдаёшь агенту `fb`. Операционные решения — твои.
 
