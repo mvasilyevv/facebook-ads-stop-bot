@@ -28,6 +28,16 @@
 | Ads / покупки | `No ads, no in-app purchases` |
 | Авто-редирект | `Нет` (сохраняем push-подписку) |
 
+## Детали приложения (шаг «Приложение» → блок «Детали») — НЕ оставлять дефолты
+| Поле | Значение |
+|---|---|
+| Категория (Play) | `Casino` |
+| Версия | `2.4.1` |
+| Дата обновления | `16.06.2026` (свежая, не дефолтная) |
+| Email поддержки | `support@inoutgames.com` (не дефолт `support@app.com`) |
+| Адрес разработчика | `InOut Games Ltd, Level 3, Spinola Park, Mrieħel, Malta` (не дефолт «Jan van Wijckstraat 175») |
+> Email/адрес — правдоподобные плейсхолдеры под архетип InOut/Malta-iGaming. Реальные контакты байер впишет, если есть. На созданную через API PWA уже залиты.
+
 ## Описание (Short)
 ```
 Place your bet, watch the multiplier climb, and cash out to your MTN MoMo before the chicken crashes. Ghana's most trusted crash game.
