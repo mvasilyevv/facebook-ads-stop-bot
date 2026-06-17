@@ -1,0 +1,71 @@
+# Залив GH_CR (Chicken Road, Гана) на 18.06 — статика + видео.
+# Запуск:  python scripts/fb_launch.py --config scripts/launch_configs/GH_CR_18_06.yaml [--go] [--only static|video]
+# Этот конфиг воспроизводит уже залитые кампании (если перезапустить --go — создаст дубли,
+# сначала снести существующие через --cleanup).
+
+account:
+  act_id: "26943307705301002"
+  page_id: "103053722121477"      # Game star
+  pixel_id: "1573011031117084"
+  tz_offset: "-07:00"             # America/Hermosillo
+
+offer_code: GH_CR
+byer_tag: MV
+
+objective: OUTCOME_SALES
+optimization_goal: OFFSITE_CONVERSIONS
+custom_event_type: PURCHASE
+special_ad_categories: ["NONE"]
+
+destination_link: "https://blitz-star88.shop/89WdjWMWkXMX"
+cta: PLAY_GAME
+text_optimizations: OPT_OUT
+start_date: "2026-06-18"          # дата = следующий день; имя кампании → 18.06
+
+ad_text:
+  mode: none                      # объявления без текста
+
+budget:
+  level: campaign                 # CBO — бюджет на кампании
+  daily_cents: 300                # $3.00/день
+  bid_strategy: LOWEST_COST_WITHOUT_CAP
+
+targeting:
+  countries: ["GH"]               # +AQ добавится автоматически
+  age_min: 18
+  age_max: 65
+  advantage_audience: true
+
+attribution:
+  click_through_days: 1           # 1d click + 1d view
+  view_through_days: 1
+
+creo_root: "~/Documents/FB_Agent_Creo/CR_GH_18.06"
+
+# Коды креативов: явный маппинг base-суффикса файла → SOP-код (sub3 трекинга).
+creative_codes:
+  mode: map
+  map:
+    static_4962618: GH_CR_CR001   # ₵1 to play, плачущая
+    static_5641224: GH_CR_CR002   # Welcome Bonus 500 GHS
+    static_5645672: GH_CR_CR003   # президент Махама
+    static_3565993: GH_CR_CR004   # Bonus 500 GHS + 250 FS
+    static_5265270: GH_CR_CR005   # First Deposit 200%
+    video_4944482: GH_CR_CR006
+    video_4961411: GH_CR_CR007
+    video_6209901: GH_CR_CR008
+    video_7488587: GH_CR_CR009
+
+campaigns:
+  - key: static
+    name: "{byer} | {offer} | static | adset.pro | {date}"
+    kind: image
+    adsets:
+      - { name: "{byer} | {offer} | static | s1 | {date}", dir: "campaign_1_static/adset_1", glob: "static_*_v1.jpg" }
+      - { name: "{byer} | {offer} | static | s2 | {date}", dir: "campaign_1_static/adset_2", glob: "static_*_v2.jpg" }
+  - key: video
+    name: "{byer} | {offer} | video | adset.pro | {date}"
+    kind: video
+    adsets:
+      - { name: "{byer} | {offer} | video | s1 | {date}", dir: "campaign_2_video/adset_1", glob: "video_*_v1.mp4" }
+      - { name: "{byer} | {offer} | video | s2 | {date}", dir: "campaign_2_video/adset_2", glob: "video_*_v2.mp4" }
