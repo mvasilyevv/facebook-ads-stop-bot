@@ -11,7 +11,7 @@
  * onScan — реальный POST scan-now; onEnable — включение observer.
  */
 
-import { RefreshCw, Play } from "lucide-react";
+import { RefreshCw, Play, Power } from "lucide-react";
 import { CountdownRing, PausedRing } from "@/components/data/CountdownRing";
 import { Button } from "@/components/ui/Button";
 import { useScanCountdown } from "@/lib/hooks/useScanCountdown";
@@ -39,6 +39,8 @@ interface ScanClusterProps {
   onScan: () => void;
   /** Включить observer (paused → on). */
   onEnable?: () => void;
+  /** Выключить observer (on → paused). */
+  onDisable?: () => void;
 }
 
 export function ScanCluster({
@@ -48,6 +50,7 @@ export function ScanCluster({
   scanProgress,
   onScan,
   onEnable,
+  onDisable,
 }: ScanClusterProps) {
   const { scanning, age, next, interval, doScan } = useScanCountdown({
     lastScanAt,
@@ -124,10 +127,20 @@ export function ScanCluster({
           </div>
         </div>
       ) : null}
+      {onDisable && (
+        <Button
+          variant="secondary"
+          size="md"
+          className="ml-1"
+          leftIcon={<Power size={14} aria-hidden="true" />}
+          onClick={onDisable}
+        >
+          Выключить
+        </Button>
+      )}
       <Button
         variant="primary"
         size="md"
-        className="ml-1"
         disabled={scanning}
         leftIcon={
           <RefreshCw

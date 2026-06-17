@@ -35,6 +35,7 @@ vi.mock("@/lib/api/settings", () => ({
     isError: false,
   })),
   useToggleScanning: vi.fn(() => ({ mutate: vi.fn(), isPending: false })),
+  useObserverStatus: vi.fn(() => ({ data: undefined, isLoading: false, isError: false })),
 }));
 
 vi.mock("@/lib/websocket/useRealtimeInvalidation", () => ({

@@ -137,6 +137,11 @@ function DashboardPage() {
     toggleScanning.mutate(true);
   }
 
+  // выключить observer (on → paused).
+  function handleDisable() {
+    toggleScanning.mutate(false);
+  }
+
   // Фатальная ошибка batch — показываем header + ErrorState.
   if (isError && !batch) {
     return (
@@ -147,6 +152,7 @@ function DashboardPage() {
           intervalSeconds={intervalSeconds}
           onScan={handleScanNow}
           onEnable={handleEnable}
+          onDisable={handleDisable}
         />
         <ErrorState
           title="Не удалось загрузить данные Dashboard."
@@ -171,6 +177,7 @@ function DashboardPage() {
           scanProgress={scanProgress}
           onScan={handleScanNow}
           onEnable={handleEnable}
+          onDisable={handleDisable}
         />
 
         {/* ── paused banner ───────────────────────────────────────────────── */}
@@ -281,6 +288,7 @@ interface PageHeaderBlockProps {
   scanProgress?: ScanProgress | null;
   onScan: () => void;
   onEnable: () => void;
+  onDisable: () => void;
 }
 
 function PageHeaderBlock({
@@ -290,6 +298,7 @@ function PageHeaderBlock({
   scanProgress,
   onScan,
   onEnable,
+  onDisable,
 }: PageHeaderBlockProps) {
   return (
     <div className="mb-6 flex flex-wrap items-start justify-between gap-6">
@@ -309,6 +318,7 @@ function PageHeaderBlock({
         scanProgress={scanProgress}
         onScan={onScan}
         onEnable={onEnable}
+        onDisable={onDisable}
       />
     </div>
   );
