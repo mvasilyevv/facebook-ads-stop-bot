@@ -320,11 +320,13 @@ async def _run_account_scan(
     error_msg: str | None = None
     dispatched: dict | None = None
 
-    # Allowlist кампаний (observer_config.campaign_ids) — ГЛОБАЛЬНЫЙ и набран из одного
-    # кабинета. campaign.id уникальны per кабинет → в чужом кабинете фильтр отсёк бы ВСЁ
-    # (скан пуст → бот слеп по кабинету, FSM не реагирует). Поэтому в мульти-каб режиме
-    # allowlist игнорируется; скоупинг остаётся через owner_tag (am-резолв per кабинет).
-    campaign_ids = [] if ad_account_id else list(config.get("campaign_ids") or [])
+    # Allowlist кампаний (observer_config.campaign_ids) — ГЛОБАЛЬНЫЙ. campaign.id уникальны
+    # per кабинет → при НЕСКОЛЬКИХ кабинетах в чужом фильтр отсёк бы ВСЁ (скан пуст →
+    # слепота, FSM не реагирует). Поэтому allowlist применяем, когда в scan set ОДИН кабинет
+    # (его кампании = allowlist, фильтр безопасен) ИЛИ legacy-режим (ad_account_id=None);
+    # при мульти-кабе (>1 кабинета) — игнор, скоупинг через owner_tag.
+    single_cabinet = (accounts_total or 1) <= 1
+    campaign_ids = list(config.get("campaign_ids") or []) if single_cabinet else []
 
     try:
         scan_out = await gate.run_one_scan(
@@ -450,8 +452,7 @@ def _aggregate_cycle_summary(per_account: list[dict]) -> dict:
         ),
         "error": first_error,
         "accounts": [
-            {"ad_account_id": s.get("ad_account_id"), "outcome": s["outcome"]}
-            for s in per_account
+            {"ad_account_id": s.get("ad_account_id"), "outcome": s["outcome"]} for s in per_account
         ],
     }
 
@@ -512,10 +513,11 @@ async def run_one_cycle(
             ", ".join(orphan_offers),
         )
 
-    # Глобальный allowlist кампаний несовместим с мульти-кабом (см. _run_account_scan).
-    if config.get("campaign_ids"):
+    # Глобальный allowlist несовместим с мульти-кабом (>1 кабинета): см. _run_account_scan.
+    # При одном кабинете в scan set allowlist применяется (фильтр по campaign.id безопасен).
+    if config.get("campaign_ids") and len(accounts) > 1:
         logger.warning(
-            "observer: мульти-каб режим — allowlist campaign_ids (%d шт.) игнорируется, "
+            "observer: мульти-каб (>1 кабинета) — allowlist campaign_ids (%d шт.) игнорируется, "
             "скоупинг только через owner_tag",
             len(config.get("campaign_ids") or []),
         )
