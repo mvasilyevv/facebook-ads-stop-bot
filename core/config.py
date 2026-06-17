@@ -17,17 +17,21 @@ logger = logging.getLogger(__name__)
 _ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
 
 
-def _generate_and_persist_api_key() -> str:
-    """Генерирует API-ключ и дописывает его в .env."""
-    key = secrets.token_urlsafe(32)
-    try:
-        # Дописываем в конец .env (создаём файл если нет)
-        with _ENV_FILE.open("a", encoding="utf-8") as f:
-            f.write(f"\nAPI_KEY={key}\n")
-        logger.info("API_KEY сгенерирован и сохранён в %s", _ENV_FILE)
-    except OSError:
-        logger.warning("Не удалось записать API_KEY в .env — ключ действует только до перезапуска")
-    return key
+def _generate_ephemeral_api_key() -> str:
+    """Генерирует временный API-ключ in-memory (НЕ пишет в .env).
+
+    Раньше дописывал ключ в .env через open("a") — при изначально пустом API_KEY
+    КАЖДЫЙ старт процесса (API + 12 воркеров + скрипты + тесты) добавлял новую строку
+    → .env разрастался дублями (наблюдался кейс 131× API_KEY), а «последний» ключ
+    менялся при каждом рестарте, ломая X-API-Key фронта (401 на мутациях). Теперь ключ
+    эфемерный: для СТАБИЛЬНОГО ключа задать API_KEY в .env явно; для локалки —
+    REQUIRE_API_KEY=false.
+    """
+    logger.warning(
+        "API_KEY не задан в .env — сгенерирован ВРЕМЕННЫЙ ключ (меняется при рестарте). "
+        "Задай API_KEY в .env для стабильности или REQUIRE_API_KEY=false для локальной разработки."
+    )
+    return secrets.token_urlsafe(32)
 
 
 class Settings(BaseSettings):
@@ -177,7 +181,7 @@ class Settings(BaseSettings):
         if not self.telegram_bot_token:
             logger.warning("TELEGRAM_BOT_TOKEN не задан — Telegram-бот не будет работать")
         if not self.api_key:
-            self.api_key = _generate_and_persist_api_key()
+            self.api_key = _generate_ephemeral_api_key()
         return self
 
     @property
