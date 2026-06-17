@@ -14,6 +14,7 @@ import { type ReactNode } from "react";
 import { Sidebar } from "./Sidebar";
 import { TopBar } from "./TopBar";
 import { CommandPalette } from "./CommandPalette";
+import { ToastViewport } from "@/components/ui/Toast";
 import { useUiStore } from "@/stores/ui";
 import { cn } from "@/lib/utils/cn";
 
@@ -41,6 +42,8 @@ export function Shell({ children }: ShellProps) {
       </main>
       {/* Командная палитра (⌘K) — всегда смонтирована для глобального хоткея */}
       <CommandPalette />
+      {/* Toast-фидбек: единственный viewport на всё приложение (toast.success/error) */}
+      <ToastViewport />
     </div>
   );
 }

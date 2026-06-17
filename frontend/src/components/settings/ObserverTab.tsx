@@ -445,7 +445,7 @@ const CampaignAllowlist: FC = () => {
   };
 
   return (
-    <div style={{ marginTop: "var(--s-7)" }}>
+    <div style={{ marginTop: "var(--s-8)" }}>
       <div
         style={{
           display: "flex",
