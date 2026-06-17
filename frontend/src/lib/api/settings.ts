@@ -123,6 +123,62 @@ export function useToggleScanning() {
   });
 }
 
+/** Переключение only auto_enable_recommendations (PATCH /settings/observer/auto-enable). */
+export function useToggleAutoEnable() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (enabled: boolean) =>
+      apiSend<ObserverConfig>("PATCH", "/settings/observer/auto-enable", { enabled }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["settings", "observer"] });
+    },
+  });
+}
+
+// ─── Отслеживаемые кампании (allowlist) ─────────────────────────────────────────
+
+/** Кампания-кандидат для allowlist: id (fb_campaign_id), имя, выбрана ли сейчас. */
+export interface CampaignOption {
+  id: string;
+  name: string;
+  selected: boolean;
+}
+
+/** Список накопленных observer'ом кампаний по owner_tag (GET /settings/observer/campaigns). */
+export function useObserverCampaigns() {
+  return useQuery<CampaignOption[]>({
+    queryKey: ["settings", "observer", "campaigns"],
+    queryFn: ({ signal }) =>
+      apiGet<CampaignOption[]>("/settings/observer/campaigns", undefined, signal),
+    staleTime: 30_000,
+  });
+}
+
+/** Live-резолв всех кампаний владельца через browser-agent (POST /campaigns/refresh). */
+export function useRefreshObserverCampaigns() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      apiSend<CampaignOption[]>("POST", "/settings/observer/campaigns/refresh"),
+    onSuccess: (data) => {
+      qc.setQueryData(["settings", "observer", "campaigns"], data);
+    },
+  });
+}
+
+/** Сохранить allowlist отслеживаемых кампаний (PATCH /settings/observer/campaigns). */
+export function useSetCampaignAllowlist() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (campaign_ids: string[]) =>
+      apiSend<ObserverConfig>("PATCH", "/settings/observer/campaigns", { campaign_ids }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["settings", "observer"] });
+      qc.invalidateQueries({ queryKey: ["settings", "observer", "campaigns"] });
+    },
+  });
+}
+
 // ─── Telegram settings ────────────────────────────────────────────────────────
 
 export function useTelegramSettings() {

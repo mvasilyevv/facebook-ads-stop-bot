@@ -28,6 +28,8 @@ const mockObserverData = {
 
 const mockUpdateObserver = vi.fn().mockResolvedValue(mockObserverData);
 const mockScanNow = vi.fn().mockResolvedValue({ ok: true });
+const mockToggleScanning = vi.fn().mockResolvedValue(mockObserverData);
+const mockToggleAutoEnable = vi.fn().mockResolvedValue(mockObserverData);
 
 vi.mock("@/lib/api/settings", () => ({
   useObserverSettings: () => ({
@@ -38,6 +40,23 @@ vi.mock("@/lib/api/settings", () => ({
   }),
   useUpdateObserverSettings: () => ({
     mutateAsync: mockUpdateObserver,
+    isPending: false,
+  }),
+  useToggleScanning: () => ({
+    mutateAsync: mockToggleScanning,
+    isPending: false,
+  }),
+  useToggleAutoEnable: () => ({
+    mutateAsync: mockToggleAutoEnable,
+    isPending: false,
+  }),
+  useObserverCampaigns: () => ({ data: [], isLoading: false }),
+  useRefreshObserverCampaigns: () => ({
+    mutateAsync: vi.fn().mockResolvedValue([]),
+    isPending: false,
+  }),
+  useSetCampaignAllowlist: () => ({
+    mutateAsync: vi.fn().mockResolvedValue(mockObserverData),
     isPending: false,
   }),
   useScanNow: () => ({
@@ -220,12 +239,12 @@ describe("ObserverTab", () => {
     ).toHaveAttribute("aria-checked", "true");
   });
 
-  // Клик на switch вызывает updateMut
-  it("клик toggle вызывает updateObserver с новым значением", async () => {
+  // Клик на switch вызывает точечный PATCH useToggleScanning (не partial PUT — фикс бага 422)
+  it("клик toggle вызывает useToggleScanning с новым значением", async () => {
     const user = userEvent.setup();
     render(wrap(<ObserverTab />));
     await user.click(screen.getByRole("switch", { name: "Включить сканирование" }));
-    expect(mockUpdateObserver).toHaveBeenCalledWith({ is_scanning_enabled: false });
+    expect(mockToggleScanning).toHaveBeenCalledWith(false);
   });
 
   // Отображает owner tag

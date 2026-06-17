@@ -9,7 +9,7 @@
  * Presentational: все колбэки приходят снаружи.
  */
 
-import { Ban, Clock, CheckSquare, X } from "lucide-react";
+import { Ban, Clock, CheckSquare, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 
 export interface BulkActionBarProps {
@@ -23,6 +23,8 @@ export interface BulkActionBarProps {
   onSnooze: (minutes: number) => void;
   /** Отметить «в работе» (claimed). */
   onMarkClaimed?: () => void;
+  /** Hard-delete выбранных из каталога (необратимо). */
+  onDelete?: () => void;
   onClear: () => void;
 }
 
@@ -32,6 +34,7 @@ export function BulkActionBar({
   onDisable,
   onSnooze,
   onMarkClaimed,
+  onDelete,
   onClear,
 }: BulkActionBarProps) {
   return (
@@ -85,6 +88,20 @@ export function BulkActionBar({
           aria-label={`Отметить ${count} объявлений в работе`}
         >
           В работе
+        </Button>
+      )}
+
+      {/* Hard-delete из каталога — открывает confirm-with-typing на странице */}
+      {onDelete && (
+        <Button
+          variant="ghost-danger"
+          size="sm"
+          leftIcon={<Trash2 size={14} aria-hidden="true" />}
+          onClick={onDelete}
+          disabled={isPending}
+          aria-label={`Удалить ${count} объявлений из базы`}
+        >
+          Удалить из базы
         </Button>
       )}
 

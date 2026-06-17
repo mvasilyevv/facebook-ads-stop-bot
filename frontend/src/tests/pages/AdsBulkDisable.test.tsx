@@ -19,9 +19,15 @@ import type { AdSnapshot } from "@fb/shared";
 // ─── Моки ─────────────────────────────────────────────────────────────────────
 
 vi.mock("@tanstack/react-router", () => ({
-  createFileRoute: (_path: string) => (opts: { component: unknown }) => opts,
+  // Route.useSearch() читается компонентом — возвращаем пустой search (без deep-link).
+  createFileRoute: (_path: string) => (opts: { component: unknown }) => ({
+    ...opts,
+    useSearch: () => ({}),
+  }),
+  useNavigate: () => vi.fn(),
   useRouter: () => ({ navigate: vi.fn() }),
   useParams: () => ({}),
+  useSearch: () => ({}),
 }));
 
 // Виртуализация jsdom не имеет layout — мокаем чтобы показать все строки.
@@ -43,6 +49,10 @@ vi.mock("@/lib/api/ads", () => ({
   })),
   useBulkSnooze: vi.fn(() => ({
     mutateAsync: vi.fn().mockResolvedValue({}),
+    isPending: false,
+  })),
+  useDeleteAds: vi.fn(() => ({
+    mutateAsync: vi.fn().mockResolvedValue({ deleted: [], count: 0 }),
     isPending: false,
   })),
   useAdTimeline: vi.fn(() => ({ data: null, isLoading: false, isError: false })),

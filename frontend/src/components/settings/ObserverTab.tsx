@@ -24,10 +24,15 @@ import { toast } from "@/components/ui/Toast";
 import {
   useObserverSettings,
   useUpdateObserverSettings,
+  useToggleScanning,
+  useToggleAutoEnable,
   useScanNow,
   useObserverStatus,
   useRestartObserver,
   useStartNewCabinetDay,
+  useObserverCampaigns,
+  useRefreshObserverCampaigns,
+  useSetCampaignAllowlist,
 } from "@/lib/api/settings";
 import type { ObserverConfig } from "@fb/shared";
 
@@ -67,6 +72,8 @@ function Field({ label, hint, children }: FieldProps) {
 export const ObserverTab: FC = () => {
   const { data, isLoading, error, refetch } = useObserverSettings();
   const updateMut = useUpdateObserverSettings();
+  const toggleScanningMut = useToggleScanning();
+  const toggleAutoEnableMut = useToggleAutoEnable();
   const scanMut = useScanNow();
   const restartMut = useRestartObserver();
   const cabinetDayMut = useStartNewCabinetDay();
@@ -81,6 +88,7 @@ export const ObserverTab: FC = () => {
         is_scanning_enabled: data.is_scanning_enabled,
         auto_enable_recommendations: data.auto_enable_recommendations,
         owner_campaign_tag: data.owner_campaign_tag ?? "",
+        default_interval_seconds: data.default_interval_seconds,
       });
     }
   }, [data]);
@@ -108,13 +116,34 @@ export const ObserverTab: FC = () => {
     }
   };
 
-  const handleToggle = (field: keyof ObserverConfig, value: boolean) => {
+  // Тоглы — через точечные PATCH (scanning/auto-enable), НЕ partial PUT:
+  // PUT требует все обязательные поля → partial body падал 422 и не сохранялся.
+  const handleToggle = async (
+    field: "is_scanning_enabled" | "auto_enable_recommendations",
+    value: boolean,
+  ) => {
     setForm((f) => ({ ...f, [field]: value }));
-    void save({ [field]: value });
+    try {
+      if (field === "is_scanning_enabled") {
+        await toggleScanningMut.mutateAsync(value);
+      } else {
+        await toggleAutoEnableMut.mutateAsync(value);
+      }
+      toast.success("Настройки сохранены");
+    } catch (e) {
+      setForm((f) => ({ ...f, [field]: !value })); // откат при ошибке сервера
+      toast.error("Ошибка сохранения", e instanceof Error ? e.message : String(e));
+    }
   };
 
+  // owner_tag — PUT с ПОЛНЫМ body (все обязательные поля), иначе 422.
   const handleSave = () => {
-    void save({ owner_campaign_tag: form.owner_campaign_tag || null });
+    void save({
+      is_scanning_enabled: form.is_scanning_enabled ?? false,
+      auto_enable_recommendations: form.auto_enable_recommendations ?? false,
+      default_interval_seconds: form.default_interval_seconds ?? 30,
+      owner_campaign_tag: form.owner_campaign_tag || null,
+    });
   };
 
   const handleScanNow = async () => {
@@ -234,6 +263,9 @@ export const ObserverTab: FC = () => {
             Сохранить изменения
           </Button>
         </div>
+
+        {/* Отслеживаемые кампании (allowlist) */}
+        <CampaignAllowlist />
       </div>
 
       {/* ── Правая колонка: статус + действия ── */}
@@ -366,6 +398,132 @@ export const ObserverTab: FC = () => {
             </Button>
           </div>
         </div>
+      </div>
+    </div>
+  );
+};
+
+// ─── Отслеживаемые кампании (allowlist по owner_campaign_tag) ───────────────────
+
+const CampaignAllowlist: FC = () => {
+  const { data: campaigns, isLoading } = useObserverCampaigns();
+  const refreshMut = useRefreshObserverCampaigns();
+  const saveMut = useSetCampaignAllowlist();
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+
+  // selected синхронизируется с серверным allowlist (поле selected у кампании).
+  useEffect(() => {
+    if (campaigns) {
+      setSelected(new Set(campaigns.filter((c) => c.selected).map((c) => c.id)));
+    }
+  }, [campaigns]);
+
+  const toggle = (id: string) =>
+    setSelected((s) => {
+      const n = new Set(s);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
+      return n;
+    });
+
+  const handleRefresh = async () => {
+    try {
+      await refreshMut.mutateAsync();
+      toast.success("Список кампаний обновлён");
+    } catch (e) {
+      toast.error("Не удалось обновить список", e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const handleSaveAllowlist = async () => {
+    try {
+      await saveMut.mutateAsync([...selected]);
+      toast.success("Выбор кампаний сохранён");
+    } catch (e) {
+      toast.error("Ошибка сохранения выбора", e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  return (
+    <div style={{ marginTop: "var(--s-7)" }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          marginBottom: 8,
+        }}
+      >
+        <div className="font-display text-[10px] tracking-[0.12em] uppercase text-bg-8">
+          ОТСЛЕЖИВАЕМЫЕ КАМПАНИИ
+        </div>
+        <Button
+          variant="secondary"
+          size="sm"
+          leftIcon={<RefreshCw size={13} />}
+          onClick={() => void handleRefresh()}
+          loading={refreshMut.isPending}
+        >
+          Обновить список
+        </Button>
+      </div>
+      <div className="text-[11px] mb-3" style={{ color: "var(--bg-8)" }}>
+        Пусто (ничего не выбрано) — сканируются все кампании по Owner Tag. Выбор сужает скан до
+        отмеченных. «Обновить список» тянет кампании из кабинета живьём через browser-agent.
+      </div>
+
+      {isLoading ? (
+        <Skeleton className="h-24 w-full" />
+      ) : !campaigns || campaigns.length === 0 ? (
+        <div
+          className="text-[12px] border border-bg-5"
+          style={{ color: "var(--bg-8)", padding: "var(--s-4)" }}
+        >
+          Кампаний нет. Нажми «Обновить список» — резолвим из кабинета по Owner Tag.
+        </div>
+      ) : (
+        <div
+          className="border border-bg-5"
+          style={{ maxHeight: 260, overflowY: "auto" }}
+        >
+          {campaigns.map((c) => (
+            <label
+              key={c.id}
+              className="text-[13px]"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                padding: "8px 12px",
+                borderBottom: "1px solid var(--bg-4)",
+                cursor: "pointer",
+                color: "var(--bg-10)",
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={selected.has(c.id)}
+                onChange={() => toggle(c.id)}
+                aria-label={`Отслеживать ${c.name}`}
+              />
+              <span style={{ flex: 1 }}>{c.name || c.id}</span>
+              <span className="font-display tabular-nums text-[11px]" style={{ color: "var(--bg-7)" }}>
+                …{c.id.slice(-4)}
+              </span>
+            </label>
+          ))}
+        </div>
+      )}
+
+      <div style={{ marginTop: "var(--s-4)" }}>
+        <Button
+          variant="primary"
+          onClick={() => void handleSaveAllowlist()}
+          loading={saveMut.isPending}
+          disabled={!campaigns || campaigns.length === 0}
+        >
+          Сохранить выбор ({selected.size})
+        </Button>
       </div>
     </div>
   );

@@ -39,7 +39,7 @@ import { AdsTable } from "@/components/domain/ads/AdsTable";
 import { BulkActionBar } from "@/components/domain/ads/BulkActionBar";
 import { AdDrawer } from "@/components/domain/ads/AdDrawer";
 
-import { useAds, useBulkDisable, useBulkSnooze } from "@/lib/api/ads";
+import { useAds, useBulkDisable, useBulkSnooze, useDeleteAds } from "@/lib/api/ads";
 import { useDashboardStats } from "@/lib/api/dashboard";
 import { useRealtimeInvalidation } from "@/lib/websocket/useRealtimeInvalidation";
 import { useUiStore, DENSITY_ROW_HEIGHT } from "@/stores/ui";
@@ -105,6 +105,7 @@ function AdsPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [cursor, setCursor] = useState(-1);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   // Drawer — локальный стейт (scrim показывает таблицу под собой, как в эталоне).
   const [drawerAd, setDrawerAd] = useState<AdSnapshot | null>(null);
 
@@ -184,6 +185,7 @@ function AdsPage() {
   // ── Мутации ──────────────────────────────────────────────────────────────
   const bulkDisable = useBulkDisable();
   const bulkSnooze = useBulkSnooze();
+  const deleteAds = useDeleteAds();
 
   // ── Колбэки фильтров ───────────────────────────────────────────────────────
   const toggleState = useCallback((s: AlertState) => {
@@ -253,6 +255,15 @@ function AdsPage() {
     });
     clearSelection();
     toast.success(`Создано ${res?.created ?? ids.length} disable-задач`);
+  }
+
+  // ── Hard-delete выбранных из каталога (необратимо) ──────────────────────────
+  async function handleDeleteConfirm() {
+    const ids = [...selected];
+    if (ids.length === 0) return;
+    const res = await deleteAds.mutateAsync(ids);
+    clearSelection();
+    toast.success(`Удалено ${res?.count ?? ids.length} объявлений из базы`);
   }
 
   // ── Snooze выбранных ────────────────────────────────────────────────────
@@ -391,9 +402,10 @@ function AdsPage() {
       {selected.size > 0 && (
         <BulkActionBar
           count={selected.size}
-          isPending={bulkDisable.isPending || bulkSnooze.isPending}
+          isPending={bulkDisable.isPending || bulkSnooze.isPending || deleteAds.isPending}
           onDisable={() => setConfirmOpen(true)}
           onSnooze={handleBulkSnooze}
+          onDelete={() => setConfirmDeleteOpen(true)}
           onClear={clearSelection}
         />
       )}
@@ -408,6 +420,18 @@ function AdsPage() {
         confirmLabel={`Отключить ${selected.size}`}
         confirmVariant="danger"
         onConfirm={handleDisableConfirm}
+      />
+
+      {/* ── confirm-with-typing DELETE (hard-delete из каталога) ──────────── */}
+      <ConfirmDialog
+        open={confirmDeleteOpen}
+        onOpenChange={setConfirmDeleteOpen}
+        title={`Удалить ${selected.size} объявлений из базы?`}
+        description={`Безвозвратное удаление из каталога вместе со всеми метриками, алертами и историей (каскад). Восстановить нельзя — объявления вернутся только при следующем скане, если ещё существуют в кабинете.`}
+        confirmWord="DELETE"
+        confirmLabel={`Удалить ${selected.size}`}
+        confirmVariant="danger"
+        onConfirm={handleDeleteConfirm}
       />
 
       {/* ── Drawer деталей (поверх таблицы) ────────────────────────────────── */}

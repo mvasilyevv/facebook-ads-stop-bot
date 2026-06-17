@@ -119,6 +119,26 @@ export function useBulkDisable() {
   });
 }
 
+// ─── Hard-delete объявлений из каталога (необратимо) ──────────────────────────
+
+export interface BulkDeleteAdsResult {
+  deleted: string[];
+  count: number;
+}
+
+/** Hard-delete выбранных объявлений из fb_ads (POST /dashboard/ads/bulk-delete). */
+export function useDeleteAds() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (fb_ad_ids: string[]) =>
+      apiSend<BulkDeleteAdsResult>("POST", "/dashboard/ads/bulk-delete", { fb_ad_ids }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["ads"] });
+      qc.invalidateQueries({ queryKey: ["dashboard"] });
+    },
+  });
+}
+
 // ─── Snooze одного объявления ─────────────────────────────────────────────────
 
 interface SnoozeIn {
