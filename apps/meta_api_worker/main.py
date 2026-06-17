@@ -365,8 +365,9 @@ async def process_one_task(
         )
         # FSM-sync: привести ad_alert_state к результату mutation. Идемпотентно и
         # best-effort (не роняет succeeded-контракт). Закрывает money-пробел —
-        # без этого FSM застревал в stop_sent при auto-stop через API.
-        await sync_fsm_after_mutation(engine, payload)
+        # без этого FSM застревал в stop_sent при auto-stop через API. result прокидываем
+        # для bulk (H2): метим FSM только по реально применённым id (modified_ids).
+        await sync_fsm_after_mutation(engine, payload, result)
         return
     except CreateCampaignPartialError as exc:
         # Batch API не атомарен: часть объектов уже создана в Meta.

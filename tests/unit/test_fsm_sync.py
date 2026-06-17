@@ -182,3 +182,51 @@ async def test_sync_swallows_reset_error(monkeypatch) -> None:
 
     # Не должно бросить наружу.
     await sync_fsm_after_mutation(object(), _payload("pause_ad"))
+
+
+# H2: bulk с частичным результатом → reset ТОЛЬКО по применённым (result['modified_ids']),
+# а не по всему входному списку. Иначе непримененные ads получают ложный normal/disabled
+# → рассинхрон FSM с Meta → observer слепнет (пережог).
+@pytest.mark.asyncio
+async def test_sync_bulk_partial_marks_only_applied(monkeypatch) -> None:
+    disable_mock = AsyncMock(return_value=True)
+    enable_mock = AsyncMock(return_value=True)
+    monkeypatch.setattr(
+        "core.meta_api.fsm_sync.reset_alert_state_after_disable_succeeded", disable_mock
+    )
+    monkeypatch.setattr(
+        "core.meta_api.fsm_sync.reset_alert_state_after_enable_succeeded", enable_mock
+    )
+
+    await sync_fsm_after_mutation(
+        object(),
+        _payload(
+            "bulk_status_change",
+            params={"ad_ids": ["1", "2", "3"], "action": "activate"},
+        ),
+        result={"modified_ids": ["1", "3"]},  # "2" не применился (частичный провал)
+    )
+
+    called_ids = {c.kwargs["fb_ad_id"] for c in enable_mock.await_args_list}
+    assert called_ids == {"1", "3"}  # "2" НЕ помечен
+    assert enable_mock.await_count == 2
+    disable_mock.assert_not_awaited()
+
+
+# H2: result без modified_ids (обратная совместимость) → метим все ad_ids (как раньше).
+@pytest.mark.asyncio
+async def test_sync_bulk_no_result_marks_all(monkeypatch) -> None:
+    enable_mock = AsyncMock(return_value=True)
+    monkeypatch.setattr(
+        "core.meta_api.fsm_sync.reset_alert_state_after_disable_succeeded", AsyncMock()
+    )
+    monkeypatch.setattr(
+        "core.meta_api.fsm_sync.reset_alert_state_after_enable_succeeded", enable_mock
+    )
+
+    await sync_fsm_after_mutation(
+        object(),
+        _payload("bulk_status_change", params={"ad_ids": ["1", "2"], "action": "activate"}),
+    )
+
+    assert enable_mock.await_count == 2  # без result — все

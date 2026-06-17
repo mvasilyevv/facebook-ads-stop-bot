@@ -57,11 +57,16 @@ def is_deactivating_bulk(params: dict) -> bool:
 async def sync_fsm_after_mutation(
     engine: AsyncEngine,
     payload: MetaMutationPayload,
+    result: dict | None = None,
 ) -> None:
     """Привести ad_alert_state к результату успешной mutation. Best-effort.
 
     Вызывается meta_api_worker'ом ТОЛЬКО после mark_task_succeeded(applied=True).
     Для mutation_kind, не меняющих статус объявления — no-op.
+
+    result — dict от execute_mutation (с modified_ids). Для bulk используется, чтобы
+    метить FSM ТОЛЬКО по реально применённым id (H2): частичный провал bulk иначе дал бы
+    ложный disabled/normal по всему входному списку → рассинхрон с Meta → observer слепнет.
     """
     kind = payload.mutation_kind
     try:
@@ -70,7 +75,7 @@ async def sync_fsm_after_mutation(
         elif kind == "activate_ad":
             await reset_alert_state_after_enable_succeeded(engine, fb_ad_id=payload.target_id)
         elif kind == "bulk_status_change":
-            await _sync_bulk(engine, payload.params or {})
+            await _sync_bulk(engine, payload.params or {}, result)
         # campaign/adset/budget/create/audience/creative — ad_alert_state не трогают
     except Exception:
         logger.warning(
@@ -81,11 +86,21 @@ async def sync_fsm_after_mutation(
         )
 
 
-async def _sync_bulk(engine: AsyncEngine, params: dict) -> None:
-    """FSM-sync для bulk_status_change. Только ad-level toggle трогает ad_alert_state."""
+async def _sync_bulk(engine: AsyncEngine, params: dict, result: dict | None = None) -> None:
+    """FSM-sync для bulk_status_change. Только ad-level toggle трогает ad_alert_state.
+
+    H2: метим FSM только по РЕАЛЬНО применённым id (result['modified_ids']), а не по всему
+    входному списку. Частичный провал bulk (часть ads не применилась) иначе пометил бы
+    их ложным disabled/normal → расхождение FSM с Meta → observer слепнет → пережог.
+    """
     ad_ids, is_enable = _resolve_bulk_ad_toggle(params)
     if not ad_ids:
         return
+    if isinstance(result, dict) and result.get("modified_ids") is not None:
+        applied = {str(x).strip() for x in result["modified_ids"]}
+        ad_ids = [a for a in ad_ids if a in applied]
+        if not ad_ids:
+            return
     reset = (
         reset_alert_state_after_enable_succeeded
         if is_enable
