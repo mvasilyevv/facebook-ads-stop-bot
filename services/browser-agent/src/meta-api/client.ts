@@ -71,6 +71,19 @@ export async function executeGraphCall(
     apiVersion,
   };
 
+  // H4: на свежеоткрытой вкладке кабинета (ensureAdsManagerPage) EAA-токен ещё не
+  // в DOM — ждём его появления ПЕРЕД fetch, иначе page.evaluate вернёт code=-1
+  // TokenNotFound и мутация (pause/activate) фейлится с первой попытки. Если не
+  // дождались за 10с — продолжаем: евал вернёт -1 → SessionUnavailableError → requeue.
+  try {
+    await page.waitForFunction(
+      () => /EAA[A-Za-z0-9_-]{100,}/.test(document.documentElement.innerHTML),
+      { timeout: 10_000 },
+    );
+  } catch {
+    // токен не появился — не блокируем, ниже евал отдаст -1 (Temporary → retry)
+  }
+
   const t0 = Date.now();
   try {
     const result = await page.evaluate(async (args) => {

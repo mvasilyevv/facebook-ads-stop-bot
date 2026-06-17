@@ -96,6 +96,10 @@ class SessionUnavailableError(TemporaryError):
 
 # Маппинг Graph code → класс исключения. Default — PermanentError.
 _CODE_MAP: dict[int, type[MetaApiError]] = {
+    # -1 = client.ts TokenNotFound: EAA-токен ещё не в DOM (свежеоткрытая вкладка кабинета).
+    # Это ВРЕМЕННО (вкладка прогреется) → Temporary/requeue, а не mark_failed (H4): иначе
+    # autostart bulk-activate и ручной pause в мульти-кабе фейлились перманентно с 1-й попытки.
+    -1: SessionUnavailableError,
     1: PermanentError,
     2: TemporaryError,
     4: RateLimitedError,
