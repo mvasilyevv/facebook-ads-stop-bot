@@ -328,6 +328,13 @@ async def apply_fsm_transition(
                     warning_rule_codes = EXCLUDED.warning_rule_codes,
                     stop_rule_codes = EXCLUDED.stop_rule_codes,
                     last_scan_id = EXCLUDED.last_scan_id,
+                    -- H1: incident закрыт (→normal) → сбрасываем snooze. Иначе устаревший
+                    -- snoozed_until от закрытого инцидента подавил бы НОВЫЙ STOP (money-дыра:
+                    -- убыточный ад крутится без стопа до истечения старого снуза, ~2ч).
+                    snoozed_until = CASE
+                        WHEN EXCLUDED.alert_state = 'normal' THEN NULL
+                        ELSE ad_alert_state.snoozed_until
+                    END,
                     last_transition_at = CASE
                         WHEN ad_alert_state.alert_state != EXCLUDED.alert_state
                         THEN NOW() ELSE ad_alert_state.last_transition_at
@@ -369,6 +376,52 @@ async def apply_fsm_transition(
                     "scan_id": scan_id,
                 },
             )
+
+
+# Кулдаун reopen: ад считаем «реально реактивированным» только если он в disabled
+# дольше этого порога. Meta обновляет effective_status после pause с лагом (минуты) —
+# свежевыключенный ад ещё показывает delivery=ACTIVE. Без кулдауна reopen ошибочно
+# отменял бы только что сделанный auto-stop (регресс test_does_not_overwrite_disabled).
+REACTIVATION_COOLDOWN_MINUTES = 15
+
+
+async def reopen_reactivated_alert_state(
+    engine: AsyncEngine,
+    *,
+    ad_id: uuid.UUID,
+    cooldown_minutes: int = REACTIVATION_COOLDOWN_MINUTES,
+) -> bool:
+    """Сброс disabled→normal для РЕАЛЬНО реактивированного ада (H3, observer-driven reopen).
+
+    apply_fsm_transition защищает `disabled` WHERE-guard'ом (observer не затирает
+    терминальные). Но если ад снова ACTIVE в кабинете (реактивирован вручную в Ads
+    Manager или autostart bulk-activate — МИМО enable-пути), FSM застревает в disabled
+    и повторный STOP не сработает (убыточный ад крутится). Это явный reopen: возвращаем
+    в normal + обнуляем snooze/token/stage, чтобы следующий decide() стартовал чистый
+    инцидент.
+
+    Time-guard: трогаем только ады, бывшие в disabled дольше cooldown_minutes — иначе
+    отменили бы свежий auto-stop из-за лага Meta effective_status. Идемпотентно:
+    rowcount=0 если ад не в disabled или выключен недавно.
+    """
+    async with engine.begin() as conn:
+        res = await conn.execute(
+            text(
+                """
+                UPDATE ad_alert_state
+                SET alert_state = 'normal',
+                    current_stage = NULL,
+                    open_state_token = NULL,
+                    snoozed_until = NULL,
+                    last_transition_at = NOW()
+                WHERE ad_id = :aid
+                  AND alert_state = 'disabled'
+                  AND last_transition_at < NOW() - make_interval(mins => :cd)
+                """
+            ),
+            {"aid": ad_id, "cd": cooldown_minutes},
+        )
+        return (res.rowcount or 0) > 0
 
 
 def _warnings_from(transition: FsmTransition) -> tuple[str, ...]:

@@ -202,6 +202,20 @@ def decide(inp: FsmInput) -> FsmTransition:
     )
 
 
+def should_reopen_disabled(current_state: AlertState, delivery_status: str | None) -> bool:
+    """True если ад в `disabled`, но снова ACTIVE в кабинете → нужен reopen в `normal`.
+
+    Реактивация ВНЕ бота (вручную в Ads Manager или autostart bulk-activate) не проходит
+    через enable-путь (reset_after_enable_succeeded), поэтому FSM остаётся `disabled` —
+    и decide() для disabled+STOP ничего не делает. Убыточный реактивированный ад крутится
+    без стопа (H3). Обнаружив ACTIVE delivery у disabled-ада, observer сбрасывает FSM в
+    normal, и повторный STOP срабатывает заново.
+    """
+    if current_state != "disabled":
+        return False
+    return (delivery_status or "").strip().upper() == "ACTIVE"
+
+
 def reset_after_disable_succeeded(current_state: AlertState) -> AlertState:
     """Вызывается из disable_worker'а после успешного клика.
 
@@ -226,4 +240,5 @@ __all__ = [
     "decide",
     "reset_after_disable_succeeded",
     "reset_after_enable_succeeded",
+    "should_reopen_disabled",
 ]

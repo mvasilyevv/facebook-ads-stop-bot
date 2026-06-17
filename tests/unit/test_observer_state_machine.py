@@ -12,6 +12,7 @@ from core.observer.state_machine import (
     decide,
     reset_after_disable_succeeded,
     reset_after_enable_succeeded,
+    should_reopen_disabled,
 )
 
 
@@ -155,3 +156,25 @@ def test_decide_is_pure_for_no_emit_cases() -> None:
     t1 = decide(inp)
     t2 = decide(inp)
     assert t1 == t2  # одинаковый результат, никакого скрытого state
+
+
+# H3: should_reopen_disabled — реактивированный disabled-ад снова ACTIVE в кабинете.
+@pytest.mark.parametrize(
+    "state,delivery,expected",
+    [
+        ("disabled", "ACTIVE", True),  # am-канал
+        ("disabled", "Active", True),  # meta-канал (case-insensitive)
+        ("disabled", " active ", True),  # с пробелами
+        ("disabled", "PAUSED", False),
+        ("disabled", "UNKNOWN", False),
+        ("disabled", None, False),
+        ("disabled", "", False),
+        ("normal", "ACTIVE", False),  # не disabled — reopen не нужен
+        ("stop_sent", "ACTIVE", False),
+        ("claimed", "ACTIVE", False),
+        ("warning_sent", "ACTIVE", False),
+    ],
+)
+def test_should_reopen_disabled(state, delivery, expected):
+    """reopen-кандидат только для disabled с ACTIVE delivery (любой регистр)."""
+    assert should_reopen_disabled(state, delivery) is expected

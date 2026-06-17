@@ -23,11 +23,12 @@ from core.observer.queries import (
     load_alert_state_by_fb_ad_id,
     match_offer_for_ad,
 )
-from core.observer.state_machine import FsmInput, decide
+from core.observer.state_machine import FsmInput, decide, should_reopen_disabled
 from core.observer.writers import (
     apply_fsm_transition,
     insert_metrics,
     maybe_create_disable_task,
+    reopen_reactivated_alert_state,
     upsert_catalog_hierarchy,
 )
 from core.rules.evaluator import evaluate_stop_rules
@@ -317,6 +318,17 @@ async def _process_one_row(
 
     # --- FSM ---
     current = states.get(row.fb_ad_id)
+    # H3: реактивированный disabled-ад (снова ACTIVE в кабинете — мимо enable-пути) →
+    # reopen в normal, иначе FSM застрянет в disabled и повторный STOP не сработает.
+    if current and should_reopen_disabled(current.alert_state, row.delivery_status):
+        # reopen срабатывает только если ад в disabled дольше кулдауна (защита от лага
+        # Meta effective_status на свежем disable). True → реально сброшен в normal.
+        if await reopen_reactivated_alert_state(engine, ad_id=ad_id):
+            logger.info(
+                "observer: reopen disabled→normal (реактивирован ACTIVE) fb_ad_id=%s",
+                row.fb_ad_id,
+            )
+            current = None  # для FsmInput трактуем как normal — стартует свежий инцидент
     fsm_input = FsmInput(
         current_state=current.alert_state if current else "normal",
         current_stage=current.current_stage if current else None,
