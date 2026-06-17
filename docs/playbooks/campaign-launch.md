@@ -3,8 +3,13 @@
 > Источник правды агента `fb`. Читать ПЕРЕД заливом. Правки — только с апрува байера.
 
 ## Статус
-- ✅ **работает:** Graph API Batch — проверено боевым заливом GH_AVI 1×5×1 (`scripts/create_gh_avi_api.py`):
-  кампания + 5 адсетов + 5 креативов + 5 ads, PAUSED. page_id/картинки/start_time/опт.текста — всё через API.
+- ✅ **ОСНОВНОЙ МЕТОД — универсальный движок `scripts/fb_launch.py --config <YAML>`** (проверен
+  боевым заливом GH_CR 17.06: 2 кампании CBO × 2 адсета, статика 5+5 + видео 4+4 = 18 ads, PAUSED).
+  Один движок на все заливы; конкретика (кабинет/пиксель/гео/бюджет/структура/креативы) — в
+  YAML-конфиге (`scripts/launch_configs/<name>.yaml`, pydantic-валидация). Картинки И видео,
+  CBO/ABO, без текста / с текстом — всё через конфиг. См. «Метод 1» ниже. НЕ плодить скрипт-на-залив.
+- ✅ **работает:** Graph API Batch — проверено боевым заливом GH_AVI 1×5×1 (`scripts/create_gh_avi_api.py`,
+  legacy-референс low-level): кампания + 5 адсетов + 5 креативов + 5 ads, PAUSED.
 - ✅ **DELETE через API работает** (чистка осиротевших). `#10 Permission Denied` бывает транзиентно
   сразу после создания объекта — повторить через паузу.
 - ⚠️ **грабли:** Vision-автопилот зависит от селекторов Ads Manager (дрейфуют). Batch НЕ атомарен
@@ -50,10 +55,47 @@
   Отдельный залив после данных.
 - Антипаттерн: 5×3 (несколько ads в адсете) при ABO — показы/обучение делятся, атрибуция по вариантам грязнится.
 
-## Метод 1 — Graph API Batch (основной)
-Шаблон: `scripts/create_gh_avi_api.py` (режимы: без флага = spec-print; `--go` = боевое). Без UI-селекторов.
-- Канал: `MetaApiClient.execute_graph_call` (gRPC → browser-agent → `page.evaluate(fetch)` изнутри Vision-сессии;
-  НЕ httpx — токен session-bound, META_PLAN §1).
+## Метод 1 — Универсальный движок `fb_launch.py` (основной)
+
+**Агент: используй ЭТОТ метод. На новый залив НЕ пишешь новый скрипт — создаёшь YAML-конфиг и
+запускаешь движок.** Движок `scripts/fb_launch.py` уже содержит весь костяк (порядок создания,
+upload, retry, partial-fail cleanup, url_tags по SOP, +AQ, thumbnail+wait для видео).
+
+```bash
+python scripts/fb_launch.py --config scripts/launch_configs/<name>.yaml            # spec-print (dry, валидация+файлы)
+python scripts/fb_launch.py --config scripts/launch_configs/<name>.yaml --go        # боевое создание PAUSED
+python scripts/fb_launch.py --config scripts/launch_configs/<name>.yaml --go --only static   # одна кампания
+python scripts/fb_launch.py --config scripts/launch_configs/<name>.yaml --cleanup <id> [<id>...]  # снести осиротевшее
+```
+
+**Как завести новый залив:** скопируй `scripts/launch_configs/GH_CR_18_06.yaml` (рабочий эталон),
+поменяй под оффер/кабинет. Поля конфига (pydantic-валидация — ошибка ловится ДО выхода в кабинет):
+- `account`: `act_id`, `page_id` (выбор байера), `pixel_id`, `tz_offset` (TZ кабинета, для start_time).
+- `offer_code` (код оффера, в имя слитно для матчинга observer'ом), `byer_tag` (=MV, в sub2).
+- `budget`: `level` = `campaign` (CBO) / `adset` (ABO); `daily_cents`; `bid_strategy`
+  (`LOWEST_COST_WITHOUT_CAP` / `COST_CAP` / `LOWEST_COST_WITH_BID_CAP` + `bid_amount_cents`).
+- `targeting`: `countries` (AQ добавляется сам), `age_min/max`, `advantage_audience`.
+- `attribution`: `click_through_days` / `view_through_days` (дефолт 7-1-1 по ментору; менять по байеру).
+- `destination_link` (трекинг-ссылка из AdSet.pro → в `link`), `cta`, `ad_text.mode` (`none` / `full`),
+  `text_optimizations` (`OPT_OUT` для гемблы).
+- `start_date` (YYYY-MM-DD = **следующий день**; из неё имя `{date}`=DD.MM и `start_time`).
+- `creo_root` + `creative_codes` (`filename` / `map` / `auto` → код в `sub3`) + `campaigns`→`adsets`
+  (имена с плейсхолдерами `{byer}`/`{offer}`/`{date}`, `dir`, `glob`).
+- Проверка результата: `python scripts/fb_verify.py <campaign_id>` (структура + медиа + url_tags).
+
+**Подготовка сессии перед `--go` (боевые грабли 17.06):**
+- Поднять Vision-сессию: `python scripts/start_vision_session.py` (после рестарта browser-agent
+  сессия сама НЕ поднимается → `check_health` = False; движок при `--go` требует живую сессию).
+- Если правил `services/browser-agent/src/**` — пересобрать dist И **перезапустить процесс**
+  browser-agent (старый код висит в памяти; см. memory «browser_agent restart after build»).
+- Видео-upload рушится навигацией Vision (`Execution context was destroyed`) — движок ретраит
+  с паузой; prelanding-ссылку проверять штатным `Navigate`, НЕ новой CDP-вкладкой (Vision её
+  закрывает → stall watchdog'а).
+
+### Под капотом (low-level, legacy-референс `scripts/create_gh_avi_api.py`)
+- Канал: прямой gRPC stub `ExecuteGraphCall` БЕЗ поля `ad_account_id` (proto отстал от `client.py` —
+  хелперы и `delete_objects.py`/`verify_campaign.py` падают `ValueError`; движок ходит через stub,
+  primary-вкладка Vision = нужный кабинет). НЕ httpx — токен session-bound, META_PLAN §1.
 - **page_id:** задаётся константой по выбору байера (НЕ авто-первая). Подтвердить имя: `GET /{page_id}?fields=name`.
 - **Картинки:** `MediaUploader.upload_image(act, bytes) → image_hash`. Хэши переиспользуемы между перезаливами
   (одинаковый файл → одинаковый хэш, повторно грузить не обязательно).
@@ -102,12 +144,16 @@ sub3 = код креатива (`GH_AVI_CR001`), **sub4 = ЧИСЛОВОЙ id к
 - 🔧 Селекторы дрейфуют (`set_budget` сломан). Использовать только если API-путь недоступен.
 
 ## Инструменты (scripts/)
-- `create_gh_avi_api.py` — залив (spec-print / `--go`).
+- **`fb_launch.py --config <YAML> [--go] [--only K] [--cleanup id...]`** — ОСНОВНОЙ движок залива.
+- **`fb_verify.py <campaign_id>`** — проверка структуры/медиа/url_tags (в обход proto-бага). Гонять ПЕРЕД unpause.
+- `launch_configs/*.yaml` — конфиги заливов; эталон `GH_CR_18_06.yaml`.
+- `start_vision_session.py` — поднять Vision-сессию (нужно перед `--go` после рестарта browser-agent).
 - `inspect_setup.py` — таймзона кабинета + все страницы + creative-поля (выбор страницы, проверка enhancements).
 - `inspect_abo.py [OBJECTIVE]` — разбор ABO-кампаний кабинета (эталон полей).
 - `check_campaigns.py "<needle>"` — дубль/осиротевшие перед заливом.
-- `verify_campaign.py <id>` — постфактум: start_time/страница/опт.текста/структура. Гонять ПЕРЕД unpause.
-- `delete_objects.py <id...>` — чистка (campaign/adset/ad).
+- `create_gh_avi_api.py` — legacy low-level референс (хардкод, не для новых заливов).
+- ⚠️ `verify_campaign.py` / `delete_objects.py` — падают `ValueError` на proto-баге `ad_account_id`;
+  использовать `fb_verify.py` и `fb_launch.py --cleanup` (оба через прямой stub).
 
 ## Подъём стека (нужен — Vision-сессия)
 - `./run.sh --no-tunnel` (фон). Docker (PG :5433, Redis :6380) + browser-agent gRPC :50051 + воркеры + Vision.
