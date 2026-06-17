@@ -247,14 +247,14 @@ function AdsPage() {
   async function handleDisableConfirm() {
     const ids = [...selected];
     if (ids.length === 0) return;
-    // idempotency_token = crypto.randomUUID() — защита от двойного сабмита.
-    const token = crypto.randomUUID();
+    // idempotency_token = crypto.randomUUID() — отдельное поле, защита от двойного сабмита.
     const res = await bulkDisable.mutateAsync({
       fb_ad_ids: ids,
-      reason: `bulk-disable via dashboard idempotency:${token}`,
+      idempotency_token: crypto.randomUUID(),
+      reason: "bulk-disable via dashboard",
     });
     clearSelection();
-    toast.success(`Создано ${res?.created ?? ids.length} disable-задач`);
+    toast.success(`Создано ${res?.created?.length ?? ids.length} disable-задач`);
   }
 
   // ── Hard-delete выбранных из каталога (необратимо) ──────────────────────────

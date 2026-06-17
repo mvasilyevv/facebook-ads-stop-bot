@@ -6,7 +6,7 @@
  *   2. Выбор строк (per-row checkbox) → BulkActionBar (toolbar) с «N выбрано».
  *   3. Клик Disable → ConfirmDialog с confirm-with-typing (требует ввод DISABLE).
  *   4. MONEY: ввод DISABLE + confirm → useBulkDisable вызван с idempotency_token
- *      (UUID v4) в reason и корректным набором fb_ad_ids.
+ *      (UUID v4) в ОТДЕЛЬНОМ поле (не в reason) и корректным набором fb_ad_ids.
  *   5. Empty state при отсутствии объявлений.
  */
 
@@ -39,7 +39,10 @@ vi.mock("@tanstack/react-virtual", () => ({
   }),
 }));
 
-const mockBulkDisable = vi.fn().mockResolvedValue({ created: 2, skipped: 0, task_ids: [] });
+// Реалистичный shape ответа BulkDisableResultOut: created/skipped/failed — массивы объектов.
+const mockBulkDisable = vi
+  .fn()
+  .mockResolvedValue({ created: [{ id: "1" }, { id: "2" }], skipped: [], failed: [] });
 
 vi.mock("@/lib/api/ads", () => ({
   useAds: vi.fn(),
@@ -167,8 +170,8 @@ describe("AdsPage — bulk disable money-flow", () => {
     expect(screen.getByPlaceholderText("DISABLE")).toBeInTheDocument();
   });
 
-  // MONEY: ввод DISABLE + confirm → useBulkDisable c idempotency_token.
-  it("MONEY: ввод DISABLE + confirm вызывает useBulkDisable с idempotency_token", async () => {
+  // MONEY: ввод DISABLE + confirm → useBulkDisable c idempotency_token отдельным полем.
+  it("MONEY: ввод DISABLE + confirm вызывает useBulkDisable с idempotency_token отдельным полем", async () => {
     const user = userEvent.setup();
     await renderAdsPage();
 
@@ -193,6 +196,7 @@ describe("AdsPage — bulk disable money-flow", () => {
 
     const callArg = mockBulkDisable.mock.calls[0]?.[0] as {
       fb_ad_ids: string[];
+      idempotency_token: string;
       reason: string;
     };
 
@@ -200,10 +204,13 @@ describe("AdsPage — bulk disable money-flow", () => {
     expect(callArg.fb_ad_ids).toEqual(expect.arrayContaining(["111", "222"]));
     expect(callArg.fb_ad_ids).toHaveLength(2);
 
-    // reason содержит idempotency: с UUID v4 (формат 8-4-4-4-12).
+    // MONEY: idempotency_token передан ОТДЕЛЬНЫМ полем (backend требует min_length=1),
+    // это UUID v4 (формат 8-4-4-4-12). Раньше UUID прятался в reason → backend 422.
     const uuidRegex =
-      /idempotency:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i;
-    expect(callArg.reason).toMatch(uuidRegex);
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    expect(callArg.idempotency_token).toMatch(uuidRegex);
+    // reason больше НЕ содержит idempotency: — токен ушёл в своё поле.
+    expect(callArg.reason).not.toMatch(/idempotency:/);
   });
 
   // Empty state при отсутствии объявлений.

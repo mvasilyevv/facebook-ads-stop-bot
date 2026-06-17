@@ -18,6 +18,8 @@ import type { AdSnapshot, AdTimeline, TaskQueueRow } from "@fb/shared";
 import type { components } from "@fb/shared/api/generated";
 
 type EnableTaskRow = components["schemas"]["EnableTaskRowOut"];
+type BulkDisableResult = components["schemas"]["BulkDisableResultOut"];
+type BulkSnoozeResult = components["schemas"]["BulkSnoozeResultOut"];
 
 // ─── Ads list (общий для Dashboard + AdsPage) ─────────────────────────────────
 
@@ -97,13 +99,9 @@ export function useEnableTasks(params?: EnableTasksParams) {
 
 interface BulkDisableIn {
   fb_ad_ids: string[];
+  /** Client-side токен против двойного submit (общий для всего batch). Обязателен (min_length=1). */
+  idempotency_token: string;
   reason?: string;
-}
-
-interface BulkDisableResult {
-  created: number;
-  skipped: number;
-  task_ids: string[];
 }
 
 export function useBulkDisable() {
@@ -168,18 +166,6 @@ export function useSnoozeAd(fbAdId: string) {
 interface BulkSnoozeIn {
   fb_ad_ids: string[];
   minutes: number;
-}
-
-interface BulkSnoozeItemResult {
-  fb_ad_id: string;
-  ok: boolean;
-  error?: string;
-}
-
-interface BulkSnoozeResult {
-  results: BulkSnoozeItemResult[];
-  succeeded: number;
-  failed: number;
 }
 
 export function useBulkSnooze() {

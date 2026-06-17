@@ -128,12 +128,13 @@ export function AdDrawer({ ad, onClose, isLoading = false, fbAdId }: AdDrawerPro
     toast.success("Snooze на 1 час");
   }
 
-  // MONEY: disable одного — idempotency_token=randomUUID.
+  // MONEY: disable одного — idempotency_token=randomUUID (отдельное поле).
   async function handleDisableConfirm() {
     if (!resolvedId) return;
     await bulkDisable.mutateAsync({
       fb_ad_ids: [resolvedId],
-      reason: `manual disable via drawer idempotency:${crypto.randomUUID()}`,
+      idempotency_token: crypto.randomUUID(),
+      reason: "manual disable via drawer",
     });
     toast.success("Создана disable-задача");
     onClose();
