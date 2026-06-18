@@ -5,7 +5,6 @@
  *   GET /api/dashboard/batch           → DashboardBatch (stats + incidents + alerts + tasks)
  *   GET /api/dashboard/stats           → DashboardStats
  *   GET /api/dashboard/ads             → AdSnapshot[] + X-Total-Count
- *   GET /api/dashboard/alerts          → AlertEvent[]
  *   GET /api/dashboard/incidents       → Incident[]
  *   GET /api/dashboard/spend-history   → SpendPoint[]
  *   GET /api/dashboard/chart-data      → ChartBucket[]
@@ -16,7 +15,6 @@ import { useQuery } from "@tanstack/react-query";
 import { apiGet, apiGetWithCount } from "./client";
 import type {
   AdSnapshot,
-  AlertEvent,
   ChartBucket,
   DashboardBatch,
   DashboardPerformance,
@@ -62,22 +60,6 @@ export function useDashboardAds(params?: AdsParams) {
     queryKey: ["dashboard", "ads", params],
     queryFn: ({ signal }) =>
       apiGetWithCount<AdSnapshot[]>("/dashboard/ads", params as Record<string, string | number | boolean | null | undefined>, signal),
-    staleTime: 10_000,
-  });
-}
-
-// ─── Алерты ──────────────────────────────────────────────────────────────────
-
-interface AlertsParams {
-  hours?: number;
-  limit?: number;
-}
-
-export function useDashboardAlerts(params?: AlertsParams) {
-  return useQuery<AlertEvent[]>({
-    queryKey: ["dashboard", "alerts", params],
-    queryFn: ({ signal }) =>
-      apiGet<AlertEvent[]>("/dashboard/alerts", params as Record<string, string | number | boolean | null | undefined>, signal),
     staleTime: 10_000,
   });
 }

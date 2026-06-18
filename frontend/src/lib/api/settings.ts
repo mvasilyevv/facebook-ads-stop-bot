@@ -223,7 +223,9 @@ export function useDeleteTelegramToken() {
   return useMutation({
     // settings-вкладки показывают свою ошибку (try/catch+toast) → глушим глобальный onError.
     meta: { suppressGlobalError: true },
-    mutationFn: () => apiSend<TelegramSettings>("DELETE", "/settings/telegram/token"),
+    // L3: бэк-маршрут — DELETE /settings/telegram (очистка token+chat_id).
+    // /settings/telegram/token не существует (был 405).
+    mutationFn: () => apiSend<TelegramSettings>("DELETE", "/settings/telegram"),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["settings", "telegram"] });
     },

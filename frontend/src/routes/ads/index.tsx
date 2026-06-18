@@ -267,12 +267,25 @@ function AdsPage() {
   }
 
   // ── Snooze выбранных ────────────────────────────────────────────────────
-  function handleBulkSnooze(minutes: number) {
+  async function handleBulkSnooze(minutes: number) {
     const ids = [...selected];
     if (ids.length === 0) return;
-    void bulkSnooze.mutateAsync({ fb_ad_ids: ids, minutes });
-    clearSelection();
-    toast.success(`Snooze ${ids.length} объявлений на ${minutes}м`);
+    // L12/L13: ждём результат и показываем фактический (snoozed/failed), а не
+    // оптимистичный счёт. Раньше success показывался даже при провале, а partial-
+    // failure тихо проглатывался. Ошибку покажет глобальный MutationCache.onError.
+    try {
+      const res = await bulkSnooze.mutateAsync({ fb_ad_ids: ids, minutes });
+      clearSelection();
+      const failed = res?.failed?.length ?? 0;
+      const ok = res?.snoozed?.length ?? ids.length;
+      if (failed > 0) {
+        toast.warning(`Snooze: ${ok} ok, ${failed} не удалось`, "Часть объявлений не снузнулась");
+      } else {
+        toast.success(`Snooze ${ok} объявлений на ${minutes}м`);
+      }
+    } catch {
+      /* глобальный onError покажет ошибку */
+    }
   }
 
   // ── Keyboard nav ───────────────────────────────────────────────────────────

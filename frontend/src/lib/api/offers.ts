@@ -9,7 +9,6 @@
  *   DELETE /api/offers/{id}               → 204
  *   GET  /api/offers/{id}/rules           → OfferRules
  *   PUT  /api/offers/{id}/rules           → OfferRules
- *   GET  /api/offers/rules/preview        → RulePreviewOut
  */
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -18,8 +17,6 @@ import type { Offer, OfferRules } from "@fb/shared";
 import type { components } from "@fb/shared/api/generated";
 
 type OfferCompareRow = components["schemas"]["OfferCompareRow"];
-// RulePreviewOut — генерируется из OpenAPI; если тип не экспортирован, используем unknown.
-type RulePreviewOut = Record<string, unknown>;
 
 // ─── Список офферов ───────────────────────────────────────────────────────────
 
@@ -111,14 +108,3 @@ export function useUpdateOfferRules(offerId: string) {
   });
 }
 
-// ─── Preview правил ───────────────────────────────────────────────────────────
-
-export function useRulesPreview(params?: { offer_id?: string }) {
-  return useQuery<RulePreviewOut>({
-    queryKey: ["offers", "rules", "preview", params],
-    queryFn: ({ signal }) =>
-      apiGet<RulePreviewOut>("/offers/rules/preview", params as Record<string, string | number | boolean | null | undefined>, signal),
-    staleTime: 60_000,
-    enabled: !!params?.offer_id,
-  });
-}

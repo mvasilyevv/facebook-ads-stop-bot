@@ -122,10 +122,16 @@ export function AdDrawer({ ad, onClose, isLoading = false, fbAdId }: AdDrawerPro
     return out;
   }, [timeline]);
 
-  function handleSnooze() {
+  async function handleSnooze() {
     if (!resolvedId) return;
-    void snooze.mutateAsync({ minutes: 60 });
-    toast.success("Snooze на 1 час");
+    // L13: ждём результат — success только при фактическом успехе (был optimistic
+    // toast при fire-and-forget). Ошибку покажет глобальный MutationCache.onError.
+    try {
+      await snooze.mutateAsync({ minutes: 60 });
+      toast.success("Snooze на 1 час");
+    } catch {
+      /* глобальный onError покажет ошибку */
+    }
   }
 
   // MONEY: disable одного — idempotency_token=randomUUID (отдельное поле).
