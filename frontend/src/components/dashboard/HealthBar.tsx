@@ -39,16 +39,16 @@ export function HealthBar({ normal, warning, stop, disabled = 0 }: HealthBarProp
   }, []);
 
   const segs: Seg[] = [
-    { key: "Норма", n: normal, color: "var(--bg-7)" },
+    { key: "Норма", n: normal, color: "var(--success)" },
     { key: "Предупреждение", n: warning, color: "var(--warning)" },
     { key: "Стоп", n: stop, color: "var(--danger)" },
-    { key: "Отключено", n: disabled, color: "var(--bg-5)" },
+    { key: "Отключено", n: disabled, color: "var(--bg-7)" },
   ];
 
   return (
     <div>
       <div
-        className="flex h-2 overflow-hidden border border-bg-6 bg-bg-2"
+        className="flex h-2 overflow-hidden rounded-[var(--radius-full)] bg-bg-2"
         role="img"
         aria-label={`Норма ${normal}, Предупреждение ${warning}, Стоп ${stop}, Отключено ${disabled}`}
       >

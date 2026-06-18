@@ -1,6 +1,6 @@
 /**
  * Card — контейнер с eyebrow/title/action/meta.
- * bg-1 + border-bg-5, radius-0 (sharp).
+ * Направление A+C: bg-1 + hairline-граница + мягкий радиус (radius-3).
  */
 import { type HTMLAttributes, type ReactNode } from "react";
 import { cn } from "@/lib/utils/cn";
@@ -33,7 +33,7 @@ export function Card({
   return (
     <div
       className={cn(
-        "border border-bg-5",
+        "border border-[var(--hairline)] rounded-[var(--radius-3)]",
         nested ? "bg-bg-2" : "bg-bg-1",
         padded ? "p-6" : "p-0",
         className,

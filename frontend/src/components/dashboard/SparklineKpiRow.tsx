@@ -68,7 +68,7 @@ function KpiCell({
       }
       className={cn(
         "flex flex-col gap-3 p-5",
-        !last && "border-r border-bg-5",
+        !last && "border-r border-[var(--hairline)]",
         onClick &&
           "cursor-pointer transition-colors duration-[120ms] hover:bg-bg-1 " +
             "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent",
@@ -153,7 +153,7 @@ export function SparklineKpiRow({ stats, spendSpark = [], onCellClick }: Sparkli
 
   return (
     <div
-      className="grid grid-cols-4 border border-bg-5"
+      className="grid grid-cols-4 border border-[var(--hairline)] rounded-[var(--radius-3)] overflow-hidden"
       role="list"
       aria-label="Ключевые показатели"
     >
@@ -174,12 +174,12 @@ export function SparklineKpiRow({ stats, spendSpark = [], onCellClick }: Sparkli
 export function SparklineKpiRowSkeleton() {
   return (
     <div
-      className="grid grid-cols-4 border border-bg-5"
+      className="grid grid-cols-4 border border-[var(--hairline)] rounded-[var(--radius-3)] overflow-hidden"
       role="status"
       aria-label="Загрузка KPI"
     >
       {Array.from({ length: 4 }).map((_, i) => (
-        <div key={i} className={cn("flex flex-col gap-3 p-5", i < 3 && "border-r border-bg-5")}>
+        <div key={i} className={cn("flex flex-col gap-3 p-5", i < 3 && "border-r border-[var(--hairline)]")}>
           <Skeleton height={10} width="55%" />
           <div className="flex items-end justify-between gap-2">
             <Skeleton height={34} width="40%" />
