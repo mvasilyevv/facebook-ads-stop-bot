@@ -57,17 +57,42 @@ describe("AdsTable", () => {
     expect(screen.getByText("CR2 | DRC | MV | GH | 2")).toBeInTheDocument();
   });
 
-  // Родитель: кампания · адсет под названием — различает дубли по адсету.
-  it("показывает кампанию и адсет под названием", () => {
+  // Родитель: контекст кампании + хвост адсета («отец») — различает дубли по адсету.
+  it("показывает контекст кампании и хвост адсета под названием", () => {
     render(
       <AdsTable
         {...baseProps}
-        rows={[makeAd("1", { campaign_name: "GH_CR | 18.06", adset_name: "adset-ios" })]}
+        rows={[
+          makeAd("1", {
+            offer_code: "DRC",
+            campaign_name: "GH_CR | 18.06",
+            adset_name: "adset-ios",
+          }),
+        ]}
       />,
     );
-    expect(
-      screen.getByText((_, el) => el?.textContent === "GH_CR | 18.06 · adset-ios"),
-    ).toBeInTheDocument();
+    // Контекст кампании (через « · ») и различающий хвост адсета — отдельными сегментами.
+    expect(screen.getByText("GH_CR · 18.06")).toBeInTheDocument();
+    expect(screen.getByText("adset-ios")).toBeInTheDocument();
+  });
+
+  // Общий префикс campaign∩adset (owner/тип) сворачивается: у адсета только хвост.
+  it("сворачивает общий префикс кампании и адсета", () => {
+    render(
+      <AdsTable
+        {...baseProps}
+        rows={[
+          makeAd("1", {
+            offer_code: "GH_CR",
+            campaign_name: "MV | GH_CR | static | adset.pro | 18.06",
+            adset_name: "MV | GH_CR | static | s1",
+          }),
+        ]}
+      />,
+    );
+    // offer_code (GH_CR) выкинут; общий префикс MV·static — у адсета остаётся «s1».
+    expect(screen.getByText("MV · static · adset.pro · 18.06")).toBeInTheDocument();
+    expect(screen.getByText("s1")).toBeInTheDocument();
   });
 
   // ROAS всегда «—» (нет в API).
@@ -142,21 +167,10 @@ describe("AdsTable", () => {
     expect(screen.getByTitle("Кабинет 1234567890")).toHaveTextContent("…7890");
   });
 
-  // Мульти-кабинет: ссылка «Открыть в Ads Manager» с deep-link по кабинету и ad_id.
-  it("рендерит ссылку в Ads Manager при известном кабинете", () => {
+  // Кнопка «Открыть в Ads Manager» удалена — ссылок в строке нет.
+  it("ссылок в строке нет (кнопка Ads Manager убрана)", () => {
     const ad = makeAd("1", { ad_account_id: "555" } as Partial<AdSnapshot>);
     render(<AdsTable {...baseProps} rows={[ad]} />);
-    const link = screen.getByRole("link", { name: /Открыть .* в Ads Manager/ });
-    expect(link).toHaveAttribute(
-      "href",
-      "https://adsmanager.facebook.com/adsmanager/manage/ads?act=555&selected_ad_ids=1",
-    );
-    expect(link).toHaveAttribute("target", "_blank");
-  });
-
-  // Без кабинета ссылки нет (мёртвую иконку не рисуем).
-  it("без кабинета ссылка в Ads Manager не рендерится", () => {
-    render(<AdsTable {...baseProps} rows={[makeAd("1")]} />);
     expect(screen.queryByRole("link")).not.toBeInTheDocument();
   });
 });

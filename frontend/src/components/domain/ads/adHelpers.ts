@@ -37,14 +37,54 @@ export function shortAccountId(id: string): string {
   return id.length > 6 ? `…${id.slice(-4)}` : id;
 }
 
+// ─── Родитель объявления (кампания → адсет) ─────────────────────────────────
+
+/** Имя в кабинете — пайп-делимитед: «MV | GH_CR | static | adset.pro | 18.06». */
+function splitName(name: string | null | undefined): string[] {
+  return (name ?? "")
+    .split("|")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/** Читаемый «родитель»: контекст кампании + различающий хвост адсета. */
+export interface ParentTrail {
+  /** Сегменты кампании (очищены от offer_code), через « · ». Контекст, приглушён. */
+  context: string;
+  /** Уникальный хвост адсета после общего с кампанией префикса — различитель дублей. */
+  adset: string;
+  /** Полное «кампания · адсет» для tooltip. */
+  full: string;
+}
+
 /**
- * Deep-link на объявление в Ads Manager (кабинет + selected_ad_ids).
- * null — кабинет неизвестен (legacy-записи каталога) → ссылку не показываем.
+ * Сворачивает шумные пайп-имена в читаемую пару. Глушит offer_code (он есть в
+ * колонке OFFER) и общий префикс campaign∩adset (повтор owner/типа): контекст
+ * кампании показываем целиком, у адсета — только хвост, отличающий его от кампании
+ * (и от соседних дублей с тем же ad_name).
  */
-export function adsManagerAdUrl(ad: AdSnapshot): string | null {
-  const acc = adAccountId(ad);
-  if (!acc) return null;
-  return `https://adsmanager.facebook.com/adsmanager/manage/ads?act=${acc}&selected_ad_ids=${ad.fb_ad_id}`;
+export function parentTrail(ad: AdSnapshot): ParentTrail {
+  const offer = (ad.offer_code ?? "").trim().toLowerCase();
+  const keep = (s: string) => s.toLowerCase() !== offer;
+  const camp = splitName(ad.campaign_name).filter(keep);
+  const adset = splitName(ad.adset_name).filter(keep);
+
+  let prefix = 0;
+  while (prefix < camp.length && prefix < adset.length) {
+    if (camp[prefix]!.toLowerCase() !== adset[prefix]!.toLowerCase()) break;
+    prefix++;
+  }
+
+  // Хвост адсета: после общего префикса + без сегментов, уже показанных в кампании
+  // (напр. дата 18.06 повторяется в обоих именах) — остаётся только различитель.
+  const campSet = new Set(camp.map((s) => s.toLowerCase()));
+  const adsetTail = adset.slice(prefix).filter((s) => !campSet.has(s.toLowerCase()));
+
+  return {
+    context: camp.join(" · "),
+    adset: adsetTail.join(" · "),
+    full: `${ad.campaign_name ?? "—"} · ${ad.adset_name ?? "—"}`,
+  };
 }
 
 // ─── Метрики строки таблицы ─────────────────────────────────────────────────

@@ -4,8 +4,8 @@
  * Особенности:
  *   - @tanstack/react-virtual: в DOM только видимое окно строк (+overscan).
  *   - Сетка колонок строго по эталону:
- *       [checkbox 40][AD 1fr][OFFER 64][STATE 130][SPEND 96][CPL 74]
- *       [FREQ 62][CPM 62][CTR 62][ROAS 66][⋯ 40].
+ *       [checkbox 40][AD 1fr][OFFER 64][CAB 56][STATE 130][SPEND 96][CPL 74]
+ *       [FREQ 62][CPM 62][CTR 62][ROAS 66].
  *   - Высота строки density-driven через var(--row-h) (44/34/28).
  *   - Header-row: bg-2, 32px, eyebrow-лейблы колонок.
  *   - Строка: checkbox + geo-thumb + ad-name (mono, truncate) + первый rule-pill
@@ -18,7 +18,7 @@
 
 import { useRef, type RefObject } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { Check, ExternalLink } from "lucide-react";
+import { Check } from "lucide-react";
 
 import {
   ALERT_STATE_LABELS,
@@ -33,7 +33,7 @@ import { cn } from "@/lib/utils/cn";
 import { RulePill } from "./RulePill";
 import {
   adAccountId,
-  adsManagerAdUrl,
+  parentTrail,
   readAdMetrics,
   deriveGeo,
   money1,
@@ -46,7 +46,7 @@ import {
 // Сетка колонок — единый источник для header и строк.
 // CAB (56px, мульти-кабинет) — между OFFER и STATE: хвост ID кабинета, full — в title.
 const COLS =
-  "40px minmax(0,1fr) 64px 56px 130px 96px 74px 62px 62px 62px 66px 40px";
+  "40px minmax(0,1fr) 64px 56px 130px 96px 74px 62px 62px 62px 66px";
 
 // Правые числовые колонки (для header-лейблов).
 const NUM_HEADERS = ["SPEND", "CPL", "FREQ", "CPM", "CTR", "ROAS"];
@@ -151,7 +151,6 @@ export function AdsTable({
             )}
           </span>
         ))}
-        <span />
       </div>
 
       {/* ── Virtualized body ────────────────────────────────────────────── */}
@@ -200,7 +199,7 @@ function AdRow({ ad, selected, cursor, top, height, onToggleSelect, onOpen }: Ad
   const state = normalizeAlertState(ad.alert_state);
   const firstRule = (ad.stop_rule_codes?.[0] ?? ad.warning_rule_codes?.[0]) || null;
   const geo = deriveGeo(ad);
-  const amUrl = adsManagerAdUrl(ad);
+  const parent = parentTrail(ad);
 
   return (
     <div
@@ -257,12 +256,23 @@ function AdRow({ ad, selected, cursor, top, height, onToggleSelect, onOpen }: Ad
               </span>
             ) : null}
           </div>
-          {/* Родитель: кампания · адсет («отец») — различает дубли по адсету */}
+          {/* Родитель: контекст кампании › хвост адсета («отец») — различает дубли */}
           <span
-            className="text-[10px] text-bg-9 truncate leading-tight"
-            title={`${ad.campaign_name ?? "—"} · ${ad.adset_name ?? "—"}`}
+            className="flex items-baseline gap-1.5 text-[10px] leading-tight min-w-0"
+            title={parent.full}
           >
-            {ad.campaign_name ?? "—"} · {ad.adset_name ?? "—"}
+            {parent.context ? (
+              <span className="text-bg-9 truncate">{parent.context}</span>
+            ) : null}
+            {parent.adset ? (
+              <>
+                <span aria-hidden="true" className="shrink-0 text-bg-7">
+                  ›
+                </span>
+                <span className="shrink-0 text-bg-10">{parent.adset}</span>
+              </>
+            ) : null}
+            {!parent.context && !parent.adset ? <span className="text-bg-9">—</span> : null}
           </span>
         </div>
       </div>
@@ -295,25 +305,6 @@ function AdRow({ ad, selected, cursor, top, height, onToggleSelect, onOpen }: Ad
       <NumCell value={m.cpm != null ? money1(m.cpm) : "—"} muted />
       <NumCell value={m.ctr != null ? `${m.ctr.toFixed(1)}%` : "—"} muted />
       <NumCell value={m.roas != null ? `${m.roas.toFixed(1)}×` : "—"} danger={isRoasBad(m.roas)} />
-
-      {/* Открыть в Ads Manager (deep-link по кабинету; нет кабинета — пусто) */}
-      <span
-        className="flex items-center justify-center"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {amUrl ? (
-          <a
-            href={amUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            aria-label={`Открыть ${ad.ad_name} в Ads Manager`}
-            title="Открыть в Ads Manager"
-            className="inline-flex items-center justify-center size-6 text-bg-8 hover:text-bg-11 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
-          >
-            <ExternalLink size={14} aria-hidden="true" />
-          </a>
-        ) : null}
-      </span>
     </div>
   );
 }
