@@ -1,9 +1,13 @@
 /**
- * HealthBar — сегментированный 8px-бар долей портфеля Норма/Предупреждение/Стоп.
+ * HealthBar — сегментированный 8px-бар долей портфеля Норма/Предупреждение/Стоп/Отключено.
  *
  * Портировано из design_handoff/dashboard-shared.jsx (HealthBar). Ширина каждого
  * сегмента анимируется от 0 на mount (800ms ease-out). Под баром — легенда с
  * абсолютными счётчиками. При полностью пустом портфеле бар нейтрально-пустой.
+ *
+ * «Отключено» — часть портфеля под контролем бота (он их и выключил), просто не
+ * крутятся сейчас. Включены в бар, чтобы доли суммировались с hero-числом (всего
+ * под контролем), а не терялись.
  */
 
 import { useEffect, useState } from "react";
@@ -15,6 +19,8 @@ interface HealthBarProps {
   warning: number;
   /** Кол-во в Стопе. */
   stop: number;
+  /** Кол-во отключённых (под контролем, но не крутятся). */
+  disabled?: number;
 }
 
 interface Seg {
@@ -23,8 +29,8 @@ interface Seg {
   color: string;
 }
 
-export function HealthBar({ normal, warning, stop }: HealthBarProps) {
-  const total = normal + warning + stop;
+export function HealthBar({ normal, warning, stop, disabled = 0 }: HealthBarProps) {
+  const total = normal + warning + stop + disabled;
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
@@ -36,6 +42,7 @@ export function HealthBar({ normal, warning, stop }: HealthBarProps) {
     { key: "Норма", n: normal, color: "var(--bg-7)" },
     { key: "Предупреждение", n: warning, color: "var(--warning)" },
     { key: "Стоп", n: stop, color: "var(--danger)" },
+    { key: "Отключено", n: disabled, color: "var(--bg-5)" },
   ];
 
   return (
@@ -43,7 +50,7 @@ export function HealthBar({ normal, warning, stop }: HealthBarProps) {
       <div
         className="flex h-2 overflow-hidden border border-bg-6 bg-bg-2"
         role="img"
-        aria-label={`Норма ${normal}, Предупреждение ${warning}, Стоп ${stop}`}
+        aria-label={`Норма ${normal}, Предупреждение ${warning}, Стоп ${stop}, Отключено ${disabled}`}
       >
         {segs.map((s) => (
           <div

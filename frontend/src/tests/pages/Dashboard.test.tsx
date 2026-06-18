@@ -146,7 +146,8 @@ describe("DashboardPage", () => {
     expect(skeletons.length).toBeGreaterThan(0);
   });
 
-  // KPI-ячейки + hero-число (под контролем = 80+5+2+1 = 88) рендерятся.
+  // KPI-ячейки + hero рендерятся. Hero-число = total_ads_monitored=100 (ВСЁ под
+  // контролем, включая отключённые), а HealthBar показывает долю «Отключено».
   it("рендерит KPI и hero из stats", async () => {
     vi.mocked(useDashboardBatch).mockReturnValue({
       data: makeBatch(),
@@ -166,6 +167,10 @@ describe("DashboardPage", () => {
     expect(screen.getByText("DISABLED")).toBeInTheDocument();
     // hero-подпись
     expect(screen.getByText(/объявлений под контролем/i)).toBeInTheDocument();
+    // HealthBar теперь несёт сегмент «Отключено» — disabled (12) не выпадает из портфеля.
+    expect(
+      screen.getByRole("img", { name: /Отключено 12/i }),
+    ).toBeInTheDocument();
   });
 
   // Калм-empty live-tail: когда алертов нет — редакционная заглушка.

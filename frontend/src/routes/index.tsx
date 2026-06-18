@@ -104,12 +104,17 @@ function DashboardPage() {
     return typeof v === "string" ? v : null;
   }, [observerStatusQ.data]);
 
-  // Hero-число = под контролем (normal + warning + stop + claimed).
+  // Hero-число = ВСЕ объявления под контролем бота, включая отключённые (он их и
+  // выключил — они под контролем, просто не крутятся). Берём total_ads_monitored
+  // (как мини-апп), а не normal+warning+stop+claimed — иначе 14 disabled молча
+  // выпадали и под «контролем» висело 4 вместо 18. disabled показываем в HealthBar.
   const normal = stats?.ads_in_normal ?? 0;
   const warning = stats?.ads_in_warning ?? 0;
   const stop = stats?.ads_in_stop ?? 0;
   const claimed = stats?.ads_in_claimed ?? 0;
-  const totalControlled = normal + warning + stop + claimed;
+  const disabled = stats?.ads_in_disabled ?? 0;
+  const totalControlled =
+    stats?.total_ads_monitored ?? normal + warning + stop + claimed + disabled;
 
   // Spend-ряд по часам (реальные данные) для графика и ACTIVE-sparkline.
   const spendSeries = useMemo<number[]>(
@@ -195,7 +200,13 @@ function DashboardPage() {
 
         {/* ── hero + chart ────────────────────────────────────────────────── */}
         <div className="mb-6 grid grid-cols-[1fr_1.1fr] items-center gap-8 border-b border-bg-5 pb-6">
-          <Hero total={totalControlled} normal={normal} warning={warning} stop={stop} />
+          <Hero
+            total={totalControlled}
+            normal={normal}
+            warning={warning}
+            stop={stop}
+            disabled={disabled}
+          />
           <Card padded className="p-5">
             <div className="mb-3 flex items-baseline justify-between">
               <Eyebrow>SPEND × ЧАС · 24Ч</Eyebrow>

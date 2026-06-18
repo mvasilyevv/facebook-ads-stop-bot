@@ -5,8 +5,10 @@
  *   - pulsing status-dot + eyebrow «СИСТЕМА В НОРМЕ» (success) / «ТРЕБУЕТ ВНИМАНИЯ» (warning)
  *   - ГИГАНТСКОЕ число 88px (count-up 0→target) = объявлений под контролем
  *   - caption «объявлений под контролем» сбоку
- *   - HealthBar (доли Норма/Предупреждение/Стоп)
+ *   - HealthBar (доли Норма/Предупреждение/Стоп/Отключено)
  *
+ * `total` = ВСЕ объявления под контролем бота, включая отключённые (он их и выключил).
+ * Совпадает с total_ads_monitored и с мини-аппом — disabled не выкидываем из счёта.
  * `needsAttention` = есть warning/stop. Управляет цветом статус-дота и eyebrow.
  */
 
@@ -15,14 +17,16 @@ import { HealthBar } from "./HealthBar";
 import { useCountUp } from "@/lib/hooks/useCountUp";
 
 interface HeroProps {
-  /** Всего под контролем (normal + warning + stop + claimed). */
+  /** Всего под контролем (включая отключённые) = total_ads_monitored. */
   total: number;
   normal: number;
   warning: number;
   stop: number;
+  /** Отключённые (под контролем, но не крутятся) — для HealthBar. */
+  disabled?: number;
 }
 
-export function Hero({ total, normal, warning, stop }: HeroProps) {
+export function Hero({ total, normal, warning, stop, disabled = 0 }: HeroProps) {
   const needsAttention = warning > 0 || stop > 0;
   const accentColor = needsAttention ? "var(--warning)" : "var(--success)";
   const value = useCountUp(total);
@@ -54,7 +58,7 @@ export function Hero({ total, normal, warning, stop }: HeroProps) {
       </div>
 
       {/* Health-bar */}
-      <HealthBar normal={normal} warning={warning} stop={stop} />
+      <HealthBar normal={normal} warning={warning} stop={stop} disabled={disabled} />
     </div>
   );
 }
