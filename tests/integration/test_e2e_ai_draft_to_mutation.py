@@ -3,7 +3,7 @@
 
 Сшивка трёх доменов:
 1. `core/ai_assistant/tools/drafts/*` создаёт DRAFT в task_queue.
-2. `core/telegram/handlers/ask.handle_draft_callback` подтверждает (DRAFT → PENDING).
+2. `core/telegram/handlers/draft_confirm.handle_draft_callback` подтверждает (DRAFT → PENDING).
 3. `apps/meta_api_worker.process_one_task` забирает PENDING, мокаем
    `dispatch_mutation` → status='succeeded'.
 
@@ -26,7 +26,7 @@ from apps.meta_api_worker.main import process_one_task
 from core.ai_assistant.tools.base import ToolContext
 from core.ai_assistant.tools.drafts.request_bulk_pause import RequestBulkPauseTool
 from core.meta_api.queue import claim_pending_task
-from core.telegram.handlers.ask import handle_draft_callback
+from core.telegram.handlers.draft_confirm import handle_draft_callback
 
 
 @pytest_asyncio.fixture

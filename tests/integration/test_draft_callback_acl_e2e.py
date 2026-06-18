@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from core.ai_assistant.tools.base import ToolContext
 from core.ai_assistant.tools.drafts.request_bulk_pause import RequestBulkPauseTool
-from core.telegram.handlers.ask import handle_draft_callback
+from core.telegram.handlers.draft_confirm import handle_draft_callback
 
 
 @pytest_asyncio.fixture

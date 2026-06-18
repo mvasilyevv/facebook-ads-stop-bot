@@ -118,10 +118,6 @@ async def handle_help(
         [
             f"📖 {fmt.b('Команды бота')}",
             "",
-            fmt.b("🤖 AI-ассистент"),
-            f"{fmt.code('/ask <вопрос>')} — статистика, поиск объявлений, черновики действий.",
-            f"{fmt.code('/tools')} — что умеет ассистент.",
-            "",
             fmt.b("⏯ Массовые действия"),
             f"{fmt.code('/pause <offer>')} — пауза всех объявлений оффера.",
             f"{fmt.code('/resume <offer>')} — включение. Приходит черновик с ✅ / ❌.",
@@ -156,26 +152,4 @@ async def handle_help(
     )
 
 
-async def handle_tools(
-    *,
-    client: TelegramBotClient,
-    chat_id: int,
-    message_id: int,
-    thread_id: int | None,
-) -> None:
-    """/tools — каталог возможностей AI-ассистента (строится из реестра tools)."""
-    # Lazy-import: не тянем ai_assistant при импорте onboarding.
-    from core.ai_assistant.catalog import build_catalog_text
-
-    # Каталог генерируется в Markdown (*заголовки*, `примеры`) — шлём как Markdown.
-    await send_text(
-        client,
-        chat_id=chat_id,
-        text=build_catalog_text(),
-        reply_to_message_id=message_id,
-        message_thread_id=thread_id,
-        parse_mode="Markdown",
-    )
-
-
-__all__ = ["handle_help", "handle_start", "handle_tools"]
+__all__ = ["handle_help", "handle_start"]

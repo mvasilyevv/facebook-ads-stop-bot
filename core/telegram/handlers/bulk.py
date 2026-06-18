@@ -3,7 +3,7 @@
 
 Резолвит активные объявления СВОИХ кампаний по offer-коду, создаёт DRAFT
 bulk_status_change (Marketing API) и присылает превью с ✅ / ❌. Реальное
-исполнение — meta_api_worker после подтверждения (тот же путь, что AI-черновики).
+исполнение — meta_api_worker после подтверждения (dr_ok → draft_confirm.py).
 Ad-level: выключаются/включаются объявления, кампания/адсет не трогаются.
 """
 
@@ -106,8 +106,8 @@ async def handle_bulk_toggle(
         )
         return
 
-    # Превью с кнопками ✅ / ❌ — тот же draft-callback (dr_ok/dr_cancel).
-    from core.telegram.handlers.ask import draft_inline_keyboard
+    # Превью с кнопками ✅ / ❌ — draft-callback (dr_ok/dr_cancel).
+    from core.telegram.handlers.draft_confirm import draft_inline_keyboard
 
     preview = ", ".join(ad_ids[:5]) + (" …" if len(ad_ids) > 5 else "")
     truncated = (

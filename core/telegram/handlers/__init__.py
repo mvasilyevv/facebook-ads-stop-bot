@@ -4,7 +4,7 @@
 router — handle_update диспатчит обновления по доменам:
 - onboarding: /start, /help
 - spy: /spy (Ad Library pipeline)
-- ask: /ask (AI assistant) + draft callbacks (dr_ok / dr_cancel)
+- bulk: /pause /resume + draft_confirm: dr_ok / dr_cancel
 - alerts: callbacks под алертами (dis / snz)
 """
 

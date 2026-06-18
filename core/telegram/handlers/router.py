@@ -2,9 +2,10 @@
 """Центральный диспетчер Telegram update → доменный handler.
 
 Принимает `update` от long-polling, парсит команду / callback_query, делегирует
-обработку модулям `onboarding.py`, `spy.py`, `ask.py`, `alerts.py`, `creator.py`.
-`meta_api_client` опционален: пробрасывается в `/ask` для работы Marketing API tools.
+обработку модулям `onboarding.py`, `spy.py`, `bulk.py`, `alerts.py`, `creator.py`.
 `redis` опционален: пробрасывается в creator-команды для pubsub publish.
+AI-ассистент (/ask) убран; draft-кнопки dr_ok/dr_cancel обслуживают ручные
+операторские команды /pause /resume (см. draft_confirm.py).
 """
 
 from __future__ import annotations
@@ -23,7 +24,6 @@ from core.telegram.handlers.alerts import (
     handle_enable_reco_callback,
     handle_snz_callback,
 )
-from core.telegram.handlers.ask import handle_ask, handle_draft_callback
 from core.telegram.handlers.autostart import handle_autostart
 from core.telegram.handlers.bulk import handle_bulk_toggle
 from core.telegram.handlers.creator import (
@@ -32,13 +32,13 @@ from core.telegram.handlers.creator import (
     handle_record_plan,
     handle_stop_record,
 )
-from core.telegram.handlers.onboarding import handle_help, handle_start, handle_tools
+from core.telegram.handlers.draft_confirm import handle_draft_callback
+from core.telegram.handlers.onboarding import handle_help, handle_start
 from core.telegram.handlers.spy import handle_spy
 from core.telegram.handlers.topics import handle_setup_topics, handle_topics
 from core.telegram.service import find_recipient
 
 if TYPE_CHECKING:  # pragma: no cover
-    from core.meta_api.client import MetaApiClient
     from core.pubsub import RedisPubSub
 
 logger = logging.getLogger(__name__)
@@ -61,9 +61,9 @@ _LEGACY_COMMANDS: frozenset[str] = frozenset(
 
 # Owner-ACL: money-действия, доступные только role='owner'.
 # Callback-кнопки под алертами/планами (трогают кабинет или боевой браузер).
-# dr_ok (подтверждение AI money-черновика: budget/clone/create/bulk-pause) — тоже
-# owner-only (H-2): не-owner может СОЗДАТЬ черновик через /ask, но ИСПОЛНИТЬ его
-# (approve → pending → meta_api_worker тратит деньги) вправе только владелец кабинета.
+# dr_ok (подтверждение money-черновика /pause /resume) — тоже owner-only (H-2):
+# не-owner может СОЗДАТЬ черновик, но ИСПОЛНИТЬ его (approve → pending →
+# meta_api_worker тратит деньги) вправе только владелец кабинета.
 # dr_cancel НЕ здесь — отмена черновика безопасна (снимает pending-действие).
 _OWNER_ONLY_CALLBACKS: frozenset[str] = frozenset({"dis", "ereco", "plan", "dr_ok"})
 # Команды (autostart с аргументами проверяется отдельно — write-путь).
@@ -82,7 +82,7 @@ async def _dispatch_callback_query(
     client: TelegramBotClient,
     cq: dict[str, Any],
 ) -> None:
-    """Обработка нажатия inline-кнопки (под алертами или AI draft).
+    """Обработка нажатия inline-кнопки (под алертами или draft-превью /pause).
 
     callback_data: '<action>:<arg1>[:<arg2>]'
         action ∈ {'dis', 'snz', 'dr_ok', 'dr_cancel', 'plan'}.
@@ -127,7 +127,7 @@ async def _dispatch_callback_query(
             pass
         return
 
-    # AI draft callbacks
+    # Draft-подтверждение (под /pause /resume превью)
     if action in ("dr_ok", "dr_cancel"):
         message_id = (cq.get("message") or {}).get("message_id")
         await handle_draft_callback(
@@ -195,7 +195,6 @@ async def handle_update(
     engine: AsyncEngine,
     client: TelegramBotClient,
     update: dict[str, Any],
-    meta_api_client: MetaApiClient | None = None,
     redis: RedisPubSub | None = None,
 ) -> None:
     """Обработка одного update от Telegram."""
@@ -292,15 +291,6 @@ async def handle_update(
         )
         return
 
-    if cmd == "tools":
-        await handle_tools(
-            client=client,
-            chat_id=chat_id,
-            message_id=message_id,
-            thread_id=thread_id,
-        )
-        return
-
     if cmd == "spy":
         await handle_spy(
             engine=engine,
@@ -311,20 +301,6 @@ async def handle_update(
             user_id=user_id,
             username=username,
             args_text=args_text,
-        )
-        return
-
-    if cmd == "ask":
-        await handle_ask(
-            engine=engine,
-            client=client,
-            chat_id=chat_id,
-            message_id=message_id,
-            thread_id=thread_id,
-            user_id=user_id,
-            username=username,
-            args_text=args_text,
-            meta_api_client=meta_api_client,
         )
         return
 

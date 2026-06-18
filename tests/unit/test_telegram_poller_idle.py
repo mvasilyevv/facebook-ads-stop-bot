@@ -62,7 +62,6 @@ def _build_patches(state: dict, calls: dict, created: list) -> tuple[ExitStack, 
     es.enter_context(patch(p + "create_async_engine", return_value=engine))
     es.enter_context(patch(p + "load_telegram_config", fake_load))
     es.enter_context(patch(p + "TelegramBotClient", fake_client_ctor))
-    es.enter_context(patch(p + "_build_meta_api_client", AsyncMock(return_value=None)))
     es.enter_context(patch(p + "RedisPubSub", return_value=fake_pubsub))
     es.enter_context(patch(p + "redis_asyncio", fake_redis_mod))
     es.enter_context(patch(p + "touch_poller_heartbeat", touch_hb))

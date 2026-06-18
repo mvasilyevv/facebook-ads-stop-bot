@@ -6,10 +6,6 @@
 или он удалён) — poller НЕ падает, а уходит в idle-режим: продолжает heartbeat
 и ждёт, пока токен введут через Settings (UI), затем сам начинает polling.
 Это позволяет поднять API+UI без введённого токена (онбординг чистой инсталляции).
-
-MetaApiClient (если browser-agent доступен) поднимается лениво при первом
-появлении токена и пробрасывается в `/ask` — иначе meta READ_ONLY tools падают
-`ToolError`, LLM получает ошибку и формулирует ответ без них.
 """
 
 from __future__ import annotations
@@ -25,7 +21,6 @@ import redis.asyncio as redis_asyncio
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from core.db import WORKER_ENGINE_KWARGS
-from core.meta_api.client import MetaApiClient
 from core.pubsub import RedisPubSub
 from core.telegram.bot_handler import handle_update
 from core.telegram.client import TelegramBotClient
@@ -106,31 +101,6 @@ def _get_database_url() -> str:
     return db_url
 
 
-async def _build_meta_api_client() -> MetaApiClient | None:
-    """Поднять MetaApiClient если browser-agent доступен.
-
-    При неудаче (ImportError / GRPC error) — None, чтобы /ask продолжал работать
-    с meta-tools, возвращающими ToolError «Marketing API недоступен».
-    """
-    grpc_host = os.environ.get("BROWSER_AGENT_GRPC_HOST", "localhost")
-    try:
-        grpc_port = int(os.environ.get("BROWSER_AGENT_GRPC_PORT", "50051"))
-    except ValueError:
-        grpc_port = 50051
-    try:
-        client = MetaApiClient(host=grpc_host, port=grpc_port)
-        await client.start()
-        logger.info(
-            "MetaApiClient поднят (%s:%d) — meta-tools в /ask активны", grpc_host, grpc_port
-        )
-        return client
-    except Exception as exc:
-        logger.warning(
-            "MetaApiClient не запустился (%s) — /ask продолжит работать без meta-tools", exc
-        )
-        return None
-
-
 def _get_redis_url() -> str:
     """Redis URL из env или config."""
     redis_url = os.environ.get("REDIS_URL")
@@ -162,7 +132,6 @@ async def main_loop(db_url: str) -> None:
     last_token_reload_at = 0.0
     last_heartbeat_at = 0.0
     client: TelegramBotClient | None = None
-    meta_api_client: MetaApiClient | None = None
 
     # Redis pubsub клиент для creator-команд (/record_plan, /stop_record)
     redis_pubsub = RedisPubSub(_get_redis_url())
@@ -208,9 +177,6 @@ async def main_loop(db_url: str) -> None:
                         offset = cfg.poller_offset
                         offset_loaded = True
                         logger.info("Telegram poller запущен (offset=%d)", offset)
-                    # MetaApiClient поднимаем лениво при первом наличии токена.
-                    if meta_api_client is None:
-                        meta_api_client = await _build_meta_api_client()
                 else:
                     # Токена нет (свежая БД / удалён в UI / не расшифровывается) — idle.
                     if client is not None or not idle_logged:
@@ -270,7 +236,6 @@ async def main_loop(db_url: str) -> None:
                         engine=engine,
                         client=client,
                         update=update,
-                        meta_api_client=meta_api_client,
                         redis=redis_pubsub,
                     )
                 except Exception:
@@ -296,11 +261,6 @@ async def main_loop(db_url: str) -> None:
                 await hb_redis.aclose()
             except Exception:
                 pass
-        if meta_api_client is not None:
-            try:
-                await meta_api_client.close()
-            except Exception:
-                logger.exception("MetaApiClient.close failed")
         try:
             await redis_pubsub.close()
         except Exception:

@@ -37,6 +37,7 @@ from core.ai_assistant.tools import (
     execute_tool,
 )
 from core.ai_assistant.tools._ratelimit import _DEFAULT_MAX_PER_HOUR
+from core.ai_assistant.tools.base import RiskLevel
 
 logger = logging.getLogger(__name__)
 
@@ -55,9 +56,8 @@ _SERVER_INSTRUCTIONS = (
     "(fb-stop-bot://offers, recent-alerts, workers-health, schema-overview — "
     "в последнем полная инструкция).\n\n"
     "Правила:\n"
-    "1. DRAFT-tools (request_*) НЕ исполняют изменения — создают черновик, который "
-    "пользователь подтверждает в Telegram. Вызывай их ТОЛЬКО по явной просьбе "
-    "изменить рекламу; после вызова скажи «черновик создан, подтверди в Telegram».\n"
+    "1. MCP только read-only: write-мутации (пауза/бюджет/клон/создание кампании) "
+    "отключены. Давай анализ и рекомендации, изменения рекламы пользователь делает сам.\n"
     "2. «Что отключить?» = read-only анализ (get_recent_alerts, get_offer_performance, "
     "get_tracker_stats) + рекомендация, БЕЗ создания draft.\n"
     "3. Мульти-кабинет: офферы привязаны к ad_account_ids; активный оффер без "
@@ -78,13 +78,28 @@ def build_server(ctx_mgr: MCPContextManager) -> Server:
     async def list_tools() -> list[types.Tool]:
         # Снимаем актуальное состояние GLOBAL_REGISTRY на каждом list_tools —
         # tools регистрируются на импорте, но тесты могут добавлять/убирать.
+        # DRAFT_REQUIRED (write-мутации) НЕ экспонируются: подтверждение AI-черновиков
+        # убрано, MCP остаётся read-only.
         handlers = [GLOBAL_REGISTRY.get(name) for name in GLOBAL_REGISTRY.list_names()]
-        return [adapt_to_mcp_tool(h) for h in handlers if h is not None]
+        return [
+            adapt_to_mcp_tool(h)
+            for h in handlers
+            if h is not None and h.risk_level != RiskLevel.DRAFT_REQUIRED
+        ]
 
     @app.call_tool()
     async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextContent]:
-        if GLOBAL_REGISTRY.get(name) is None:
+        handler = GLOBAL_REGISTRY.get(name)
+        if handler is None:
             return [types.TextContent(type="text", text=f"Неизвестный tool: '{name}'")]
+        # Draft-инструменты отключены в MCP (write-мутации недоступны без TG-подтверждения).
+        if handler.risk_level == RiskLevel.DRAFT_REQUIRED:
+            return [
+                types.TextContent(
+                    type="text",
+                    text=f"Draft-инструмент '{name}' отключён: write-мутации через MCP недоступны.",
+                )
+            ]
 
         tool_ctx = ctx_mgr.build_tool_context()
 

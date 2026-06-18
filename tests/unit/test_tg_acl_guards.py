@@ -104,7 +104,7 @@ async def test_snz_viewer_allowed(monkeypatch) -> None:
     spy.assert_awaited_once()
 
 
-# dr_ok: подтверждение AI money-черновика от владельца → хендлер вызывается (H-2)
+# dr_ok: подтверждение money-черновика (/pause) от владельца → хендлер вызывается (H-2)
 @pytest.mark.asyncio
 async def test_dr_ok_owner_allowed(monkeypatch) -> None:
     monkeypatch.setattr(router, "find_recipient", AsyncMock(return_value=_owner()))
