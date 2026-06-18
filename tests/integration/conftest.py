@@ -27,40 +27,169 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 
-def _db_url() -> str | None:
-    """Resolve DB URL: TEST_DATABASE_URL → DATABASE_URL → POSTGRES_*."""
-    url = os.environ.get("TEST_DATABASE_URL") or os.environ.get("DATABASE_URL")
-    if not url:
-        env_vars: dict[str, str] = {}
-        env_file = Path(__file__).resolve().parent.parent.parent / ".env"
-        if env_file.exists():
-            for line in env_file.read_text(encoding="utf-8").splitlines():
-                line = line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                k, v = line.split("=", 1)
-                env_vars[k.strip()] = v.strip().strip('"').strip("'")
-        host = env_vars.get("POSTGRES_HOST", "127.0.0.1")
-        port = env_vars.get("POSTGRES_PORT", "5432")
-        db_name = env_vars.get("POSTGRES_DB")
-        user = env_vars.get("POSTGRES_USER")
-        password = env_vars.get("POSTGRES_PASSWORD", "")
-        if not (db_name and user):
-            return None
-        from urllib.parse import quote_plus
+def _env_pg() -> dict[str, str]:
+    """POSTGRES_* из .env (+ override из окружения). Кластер один, БД выбираем сами."""
+    env_vars: dict[str, str] = {}
+    env_file = Path(__file__).resolve().parent.parent.parent / ".env"
+    if env_file.exists():
+        for line in env_file.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            env_vars[k.strip()] = v.strip().strip('"').strip("'")
+    return {
+        "host": os.environ.get("POSTGRES_HOST", env_vars.get("POSTGRES_HOST", "127.0.0.1")),
+        "port": os.environ.get("POSTGRES_PORT", env_vars.get("POSTGRES_PORT", "5432")),
+        "db": os.environ.get("POSTGRES_DB", env_vars.get("POSTGRES_DB", "")),
+        "user": os.environ.get("POSTGRES_USER", env_vars.get("POSTGRES_USER", "")),
+        "password": os.environ.get("POSTGRES_PASSWORD", env_vars.get("POSTGRES_PASSWORD", "")),
+    }
 
-        url = f"postgresql+asyncpg://{user}:{quote_plus(password)}@{host}:{port}/{db_name}"
+
+def _prod_db_name() -> str | None:
+    """Боевое имя БД (POSTGRES_DB) — для guard против прогона тестов по проду."""
+    return _env_pg()["db"] or None
+
+
+def _db_name_from_url(url: str) -> str:
+    return url.rsplit("/", 1)[-1].split("?", 1)[0]
+
+
+def _db_url() -> str | None:
+    """URL ИЗОЛИРОВАННОЙ тестовой БД. НИКОГДА не боевая POSTGRES_DB.
+
+    Приоритет:
+      1. TEST_DATABASE_URL — явный выбор оператора (на свой риск).
+      2. Авто: <POSTGRES_DB>_test на тех же кредах/кластере.
+
+    DATABASE_URL (прод-переменная воркеров) сознательно НЕ используется — был инцидент,
+    когда integration-фикстуры через фолбэк на боевую БД снесли offers/offer_rules.
+    Тестовая БД создаётся автоматически фикстурой _ensure_test_db (CREATE DATABASE + схема).
+    """
+    from urllib.parse import quote_plus
+
+    explicit = os.environ.get("TEST_DATABASE_URL")
+    if explicit:
+        url = explicit
+    else:
+        pg = _env_pg()
+        if not (pg["db"] and pg["user"]):
+            return None
+        test_db = f"{pg['db']}_test"
+        url = (
+            f"postgresql+asyncpg://{pg['user']}:{quote_plus(pg['password'])}"
+            f"@{pg['host']}:{pg['port']}/{test_db}"
+        )
     if url.startswith("postgresql://"):
         url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
     return url
 
 
-@pytest_asyncio.fixture
-async def pg_engine() -> AsyncEngine:
-    """Async engine к Postgres из docker-compose. Skip если БД недоступна."""
+def _assert_not_prod(url: str) -> None:
+    """Жёсткий стоп, если тесты нацелены на боевую БД (защита от повтора инцидента)."""
+    prod = _prod_db_name()
+    db = _db_name_from_url(url)
+    if prod and db == prod and os.environ.get("ALLOW_PROD_DB_TESTS") != "1":
+        pytest.fail(
+            f"Integration-тесты нацелены на БОЕВУЮ БД '{db}'. Так нельзя — фикстуры чистят "
+            f"каталог. Не задавай TEST_DATABASE_URL на прод; авто-режим использует "
+            f"'{db}_test'. Если осознанно — ALLOW_PROD_DB_TESTS=1.",
+            pytrace=False,
+        )
+
+
+async def _create_test_partitions(eng: AsyncEngine) -> None:
+    """Месячные партиции на диапазон now-3..now+3 — тесты используют относительные даты
+    (вчера/прошлый месяц/будущее), а apply_schema._create_first_partitions кроет лишь
+    текущий+следующий месяц → CheckViolation на «no partition for row»."""
+    from datetime import datetime, timezone
+
+    from scripts.apply_schema import _PARTITIONED_TABLES, _month_bounds
+
+    now = datetime.now(timezone.utc)
+    sy, sm = now.year, now.month - 3
+    while sm < 1:
+        sm += 12
+        sy -= 1
+    months: list[tuple[int, int]] = []
+    y, m = sy, sm
+    for _ in range(7):  # now-3 .. now+3
+        months.append((y, m))
+        m += 1
+        if m > 12:
+            m = 1
+            y += 1
+
+    async with eng.begin() as conn:
+        for table, _col in _PARTITIONED_TABLES:
+            for yy, mm in months:
+                fr, to = _month_bounds(yy, mm)
+                part = f"{table}_{yy:04d}_{mm:02d}"
+                await conn.execute(
+                    text(
+                        f"CREATE TABLE IF NOT EXISTS {part} PARTITION OF {table} "
+                        f"FOR VALUES FROM ('{fr}') TO ('{to}')"
+                    )
+                )
+
+
+async def _ensure_test_db_and_schema(url: str) -> None:
+    """Создаёт тестовую БД на том же кластере (если нет) + разворачивает схему с партициями."""
+    db_name = _db_name_from_url(url)
+    # maintenance-подключение к служебной БД 'postgres' для CREATE DATABASE.
+    maint_url = url.rsplit("/", 1)[0] + "/postgres"
+    maint = create_async_engine(maint_url, isolation_level="AUTOCOMMIT")
+    try:
+        async with maint.connect() as conn:
+            exists = await conn.scalar(
+                text("SELECT 1 FROM pg_database WHERE datname = :n"), {"n": db_name}
+            )
+            if not exists:
+                await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
+    finally:
+        await maint.dispose()
+
+    # Схема: create_all + партиции на диапазон + seed (переиспользуем scripts/apply_schema).
+    eng = create_async_engine(url)
+    try:
+        async with eng.connect() as conn:
+            has_schema = await conn.scalar(text("SELECT to_regclass('public.offers')"))
+        if not has_schema:
+            from scripts.apply_schema import _create_all_tables, _seed_retention_policy
+
+            async with eng.begin() as conn:
+                await conn.execute(text("CREATE EXTENSION IF NOT EXISTS pgcrypto"))
+            await _create_all_tables(eng)
+            await _create_test_partitions(eng)
+            await _seed_retention_policy(eng)
+    finally:
+        await eng.dispose()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _ensure_test_db():
+    """Session-setup: поднимает изолированную тестовую БД + схему ОДИН раз перед DB-тестами."""
+    import asyncio
+
     url = _db_url()
     if not url:
-        pytest.skip("Нет POSTGRES_DB / DATABASE_URL — пропускаю DB-тест")
+        return  # нет кредов — DB-тесты заскипаются в pg_engine
+    _assert_not_prod(url)
+    try:
+        asyncio.run(_ensure_test_db_and_schema(url))
+    except Exception as exc:  # noqa: BLE001
+        # Не валим всю сессию (мог быть недоступен кластер) — pg_engine честно заскипает.
+        print(f"[conftest] не удалось поднять тестовую БД: {exc}")
+
+
+@pytest_asyncio.fixture
+async def pg_engine() -> AsyncEngine:
+    """Async engine к ИЗОЛИРОВАННОЙ тестовой БД (<POSTGRES_DB>_test). Skip если недоступна."""
+    url = _db_url()
+    if not url:
+        pytest.skip("Нет POSTGRES_DB / TEST_DATABASE_URL — пропускаю DB-тест")
+    _assert_not_prod(url)  # двойная защита: не боевая БД
     engine = create_async_engine(url, echo=False)
     # Sanity check: можем подключиться?
     try:
