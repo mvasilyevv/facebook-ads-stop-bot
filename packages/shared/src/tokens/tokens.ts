@@ -23,25 +23,30 @@ export const colors = {
   bg10: "#a8a8b0",
   bg11: "#e4e4e7",
 
-  // Accent — warm off-white
+  // Accent — warm off-white (общий emphasis)
   accent: "#f5f1e8",
   accentMuted: "#bdb8ab",
   accentBg: "#2a2823",
 
-  // Semantic — muted, derived
-  success: "#7eb47a",
-  successBg: "#1a2218",
-  warning: "#d4a858",
-  warningBg: "#261f12",
-  danger: "#c7625c",
-  dangerBg: "#261513",
-  info: "#7aa0b4",
-  infoBg: "#131c22",
+  // Active — тёплый амбер (пульс/активная строка, вариант A)
+  active: "#e8b339",
+  activeBg: "#2a2412",
+
+  // Semantic — яркое кодирование статусов (вариант C)
+  success: "#34d399",
+  successBg: "#10241c",
+  warning: "#fbbf24",
+  warningBg: "#2a2008",
+  danger: "#f87171",
+  dangerBg: "#2a1414",
+  info: "#60a5fa",
+  infoBg: "#0f1f33",
 } as const;
 
-/** FSM-state цвета, привязанные к alert_state (lowercase canon). */
+/** FSM-state цвета, привязанные к alert_state (lowercase canon).
+ * Норма — зелёный, Отключено — нейтральный серый (resolved, не алярм). */
 export const fsmColors = {
-  normal: colors.bg9,
+  normal: colors.success,
   warning: colors.warning,
   stop: colors.danger,
   claimed: colors.info,
@@ -80,12 +85,13 @@ export const space = {
   12: 56,
 } as const;
 
-/** Radius — острые углы (§1.4). */
+/** Radius — мягкие углы (направление A+C). */
 export const radius = {
   0: 0,
-  1: 2,
-  2: 4,
-  3: 6,
+  1: 6,
+  2: 10,
+  3: 14,
+  4: 18,
   full: 9999,
 } as const;
 

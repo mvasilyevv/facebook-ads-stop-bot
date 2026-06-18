@@ -1,9 +1,10 @@
 /**
- * RulePill / RulePills — мелкие код-пиллы сработавших стоп-правил.
+ * RulePill / RulePills — мелкие тег-пиллы сработавших стоп-правил.
  *
- * Канон design_handoff (ads-web.jsx .rulepill + components.jsx RulePills):
- * bg-3, border-6, 10.5px mono, tracking. Лейбл — короткий код через
- * ruleCodeLabel(code, true), title — полный человекочитаемый.
+ * Направление A+C: мягкий лёгкий тег (hairline-граница, скруглён, приглушённый
+ * фон), `min-width` выравнивает короткие лейблы (клик/лид/рега) в одну ширину —
+ * фикс «рваных» чипов. Лейбл — короткий через ruleCodeLabel(code, true),
+ * title — полный человекочитаемый.
  */
 
 import { ruleCodeLabel } from "@fb/shared";
@@ -19,8 +20,9 @@ export function RulePill({ code, className }: RulePillProps) {
   return (
     <span
       className={cn(
-        "inline-block bg-bg-3 border border-bg-6",
-        "px-1.5 py-0.5 font-display text-[10.5px] tracking-[0.04em] text-bg-10",
+        "inline-flex items-center justify-center min-w-[92px]",
+        "bg-bg-2 border border-[var(--hairline)] rounded-[var(--radius-1)]",
+        "px-2 py-0.5 font-display text-[10.5px] tracking-[0.02em] text-bg-10",
         "whitespace-nowrap",
         className,
       )}

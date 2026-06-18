@@ -1,9 +1,10 @@
 /**
  * Design tokens — ЕДИНЫЙ ИСТОЧНИК CSS для веба и mini app.
  * TS-зеркало — ./tokens.ts. Инвариант-тест (Phase 1A) сверяет значения.
- * Соответствие docs/frontend_design.md §1.1–§1.8 и handoff-макетам.
  *
- * Dark-only. Острые углы (radius 0). Accent — warm off-white.
+ * Направление 2026-06 «A+C» (см. сессию редизайна): тёмная airy-база (вариант A,
+ * Linear-dark) + цветовое кодирование статусов (вариант C). Мягкие радиусы вместо
+ * острых углов, яркая семантика (зелёный/красный/амбер) + тёплый амбер «активного».
  * Импортируется обоими фронтами: `import "@fb/shared/tokens.css"`.
  */
 
@@ -22,23 +23,30 @@
   --color-bg-10: #a8a8b0; /* secondary text */
   --color-bg-11: #e4e4e7; /* primary text */
 
-  /* ─── Accent — warm off-white ─────────────────────────────────────────── */
+  /* ─── Accent — warm off-white (общий emphasis) ────────────────────────── */
   --color-accent: #f5f1e8;
   --color-accent-muted: #bdb8ab;
   --color-accent-bg: #2a2823;
 
-  /* ─── Semantic — muted, derived ───────────────────────────────────────── */
-  --color-success: #7eb47a;
-  --color-success-bg: #1a2218;
-  --color-warning: #d4a858;
-  --color-warning-bg: #261f12;
-  --color-danger: #c7625c;
-  --color-danger-bg: #261513;
-  --color-info: #7aa0b4;
-  --color-info-bg: #131c22;
+  /* ─── Active — тёплый амбер (пульс/активная строка, вариант A) ─────────── */
+  --color-active: #e8b339;
+  --color-active-bg: #2a2412;
 
-  /* ─── FSM-state colors (bound to alert_state enum, lowercase canon) ────── */
-  --fsm-normal: var(--color-bg-9);
+  /* ─── Semantic — яркое кодирование статусов (вариант C) ────────────────── */
+  --color-success: #34d399;
+  --color-success-bg: #10241c;
+  --color-warning: #fbbf24;
+  --color-warning-bg: #2a2008;
+  --color-danger: #f87171;
+  --color-danger-bg: #2a1414;
+  --color-info: #60a5fa;
+  --color-info-bg: #0f1f33;
+
+  /* ─── FSM-state colors (bound to alert_state enum, lowercase canon) ──────
+   * Норма — зелёный (живёт штатно), Предупреждение — амбер, Стоп — красный,
+   * В работе — синий. Отключено — нейтральный серый (спокойное resolved-состояние,
+   * НЕ красный: это не алярм, бот сам выключил). */
+  --fsm-normal: var(--color-success);
   --fsm-warning: var(--color-warning);
   --fsm-stop: var(--color-danger);
   --fsm-claimed: var(--color-info);
@@ -71,11 +79,12 @@
   --space-10: 40px;
   --space-12: 56px;
 
-  /* ─── Radius — острые углы (§1.4) ─────────────────────────────────────── */
+  /* ─── Radius — мягкие углы (направление A+C) ──────────────────────────── */
   --radius-0: 0px;
-  --radius-1: 2px;
-  --radius-2: 4px;
-  --radius-3: 6px;
+  --radius-1: 6px;
+  --radius-2: 10px;
+  --radius-3: 14px;
+  --radius-4: 18px;
   --radius-full: 9999px;
 
   /* ─── Motion — easings + durations (§1.7) ─────────────────────────────── */
@@ -136,16 +145,19 @@
   --color-accent-muted: #bdb8ab;
   --color-accent-bg: #2a2823;
 
-  --color-success: #7eb47a;
-  --color-success-bg: #1a2218;
-  --color-warning: #d4a858;
-  --color-warning-bg: #261f12;
-  --color-danger: #c7625c;
-  --color-danger-bg: #261513;
-  --color-info: #7aa0b4;
-  --color-info-bg: #131c22;
+  --color-active: #e8b339;
+  --color-active-bg: #2a2412;
 
-  --color-fsm-normal: var(--color-bg-9);
+  --color-success: #34d399;
+  --color-success-bg: #10241c;
+  --color-warning: #fbbf24;
+  --color-warning-bg: #2a2008;
+  --color-danger: #f87171;
+  --color-danger-bg: #2a1414;
+  --color-info: #60a5fa;
+  --color-info-bg: #0f1f33;
+
+  --color-fsm-normal: var(--color-success);
   --color-fsm-warning: var(--color-warning);
   --color-fsm-stop: var(--color-danger);
   --color-fsm-claimed: var(--color-info);
@@ -156,9 +168,10 @@
   --font-numeric: "JetBrains Mono", tabular-nums, monospace;
 
   --radius-0: 0px;
-  --radius-1: 2px;
-  --radius-2: 4px;
-  --radius-3: 6px;
+  --radius-1: 6px;
+  --radius-2: 10px;
+  --radius-3: 14px;
+  --radius-4: 18px;
 
   --text-display: 56px;
   --text-display--line-height: 0.95;
@@ -200,6 +213,9 @@
   --accent-muted: var(--color-accent-muted);
   --accent-bg: var(--color-accent-bg);
 
+  --active: var(--color-active);
+  --active-bg: var(--color-active-bg);
+
   --success: var(--color-success);
   --success-bg: var(--color-success-bg);
   --warning: var(--color-warning);
@@ -208,6 +224,10 @@
   --danger-bg: var(--color-danger-bg);
   --info: var(--color-info);
   --info-bg: var(--color-info-bg);
+
+  /* hairline-граница (airy-вид направления A) */
+  --hairline: rgba(255, 255, 255, 0.07);
+  --hairline-strong: rgba(255, 255, 255, 0.1);
 
   --font-num: "JetBrains Mono", ui-monospace, monospace;
 
@@ -222,8 +242,10 @@
   --s-12: 56px;
 
   --r-0: 0px;
-  --r-1: 2px;
-  --r-2: 4px;
+  --r-1: 6px;
+  --r-2: 10px;
+  --r-3: 14px;
+  --r-4: 18px;
   --r-full: 9999px;
 
   /* Размеры нового дизайна (hero/h1/kpi) */

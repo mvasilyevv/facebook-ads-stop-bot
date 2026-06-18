@@ -59,6 +59,8 @@ const COLOR_MAPPING: Array<[keyof typeof colors, string]> = [
   ["accent", "--color-accent"],
   ["accentMuted", "--color-accent-muted"],
   ["accentBg", "--color-accent-bg"],
+  ["active", "--color-active"],
+  ["activeBg", "--color-active-bg"],
   ["success", "--color-success"],
   ["successBg", "--color-success-bg"],
   ["warning", "--color-warning"],
@@ -88,8 +90,8 @@ describe("Token invariant: tokens.ts ↔ tokens.css (colors)", () => {
 
 describe("Token invariant: fsmColors ссылаются на корректные palette-значения", () => {
   // FSM-цвета — это ссылки на palette, проверяем что значения существуют в colors
-  it("fsmColors.normal === colors.bg9", () => {
-    expect(fsmColors.normal.toLowerCase()).toBe(colors.bg9.toLowerCase());
+  it("fsmColors.normal === colors.success", () => {
+    expect(fsmColors.normal.toLowerCase()).toBe(colors.success.toLowerCase());
   });
   it("fsmColors.warning === colors.warning", () => {
     expect(fsmColors.warning.toLowerCase()).toBe(colors.warning.toLowerCase());
