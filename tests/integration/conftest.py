@@ -185,6 +185,27 @@ async def _ensure_test_db_and_schema(url: str) -> None:
         await eng.dispose()
 
 
+@pytest.fixture(autouse=True)
+def _redirect_worker_db_to_test(monkeypatch):
+    """Воркеры (observer main_loop, telegram_poller) создают СВОЙ engine из
+    _get_database_url() — по умолчанию БОЕВАЯ БД, в обход изолированного pg_engine.
+
+    Тесты, запускающие main_loop с FakeGate, иначе пишут синтетику (Av01/23A001,
+    'CR2 | KE | MV | promo') прямо в ПРОД — был инцидент. Перенаправляем
+    _get_database_url во всех воркер-модулях на изолированную тестовую БД.
+    """
+    url = _db_url()
+    if not url:
+        return
+    for mod_name in ("apps.telegram_poller.main", "apps.observer_worker.main"):
+        try:
+            mod = __import__(mod_name, fromlist=["_get_database_url"])
+        except Exception:  # noqa: BLE001
+            continue
+        if hasattr(mod, "_get_database_url"):
+            monkeypatch.setattr(mod, "_get_database_url", lambda: url, raising=False)
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _ensure_test_db():
     """Session-setup: поднимает изолированную тестовую БД + схему ОДИН раз перед DB-тестами."""

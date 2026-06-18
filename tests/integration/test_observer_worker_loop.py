@@ -404,12 +404,8 @@ async def test_main_loop_degraded_alert_after_threshold(
         return None
 
     monkeypatch.setattr(obs_main, "_sleep_with_runtime_refresh", _no_sleep)
-    # main_loop создаёт свой engine из _get_database_url() (по умолчанию БОЕВАЯ БД).
-    # В изоляции направляем его на ту же ТЕСТОВУЮ БД, куда тест засеял telegram_config,
-    # иначе _maybe_alert_degraded читает chat_id из боевой БД и degraded-алерт не уходит.
-    from tests.integration.conftest import _db_url as _test_db_url
-
-    monkeypatch.setattr(obs_main, "_get_database_url", lambda: _test_db_url())
+    # _get_database_url воркеров перенаправлен на тестовую БД autouse-фикстурой
+    # _redirect_worker_db_to_test (conftest) — main_loop пишет в fb_stop_bot_test, не в прод.
     await fake_redis_client.delete("observer:degraded:alerted")
 
     # gate всегда падает → outcome=error каждый цикл, self-heal не помогает
