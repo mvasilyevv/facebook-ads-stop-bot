@@ -417,8 +417,9 @@ export class SessionManager {
     if (opts.actId) {
       const existing = findAdsManagerPageByAct(session.browser, opts.actId);
       if (existing) {
-        // «Человеческий» паттерн: активируем вкладку перед работой (best-effort).
-        await existing.bringToFront().catch(() => {});
+        // НЕ активируем вкладку: скан идёт через am_tabular (page.evaluate(fetch) по
+        // graph-каналу), DOM не трогается, фокус вкладки не нужен. bringToFront() здесь
+        // только воровал фокус у пользователя на каждом цикле (Vision выскакивал на экран).
         return existing;
       }
       const browserForAct = session.browser;

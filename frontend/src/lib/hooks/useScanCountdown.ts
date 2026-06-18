@@ -1,19 +1,25 @@
 /**
  * useScanCountdown — состояние scan-кластера на Dashboard (countdown + age + scanning).
  *
- * Портировано из design_handoff/dashboard-shared.jsx (useScan), адаптировано под
- * реальные данные: возраст последнего скана считается от `lastScanAt` (ISO из API),
- * а не от mock-счётчика. Обратный отсчёт идёт к следующему авто-скану (interval).
+ * Два режима отсчёта:
+ *   1. РЕАЛЬНЫЙ (предпочтительный): задан `nextScanAt` — ISO-метка следующего скана из
+ *      observer:runtime.next_scan_at. Отсчёт идёт к ней от абсолютного времени, поэтому
+ *      отражает АДАПТИВНЫЙ интервал бэка (CRITICAL 18с / ELEVATED 45с / CALM 90с / IDLE 135с)
+ *      и jitter — ровно то, что воркер реально запланировал. Сервер сам водит скан, поэтому
+ *      авто-триггер на нуле выключен (UI только показывает время, не инициирует скан).
+ *   2. MOCK (фолбэк): `nextScanAt` нет — крутим локальный отсчёт от статичного `intervalSeconds`
+ *      (interval − age % interval), как раньше. Используется, пока бэк не отдал next_scan_at.
  *
  * Контракт:
  *   - `age` — секунды с последнего скана (из lastScanAt; при scanning → "сканирую").
- *   - `next` — секунды до следующего авто-скана (interval - age, clamp 0..interval).
+ *   - `next` — секунды до следующего скана (реальные или mock).
+ *   - `interval` — знаменатель кольца (полный интервал текущего цикла для пропорции дуги).
  *   - `scanning` — идёт ли скан прямо сейчас (на время вызова onScan).
  *   - `doScan()` — ручной запуск: ставит scanning, дёргает onScan, держит ~1.4s.
- *   - на `next===0` (enabled) — авто-запуск doScan (как в прототипе).
+ *   - в MOCK-режиме на `next===0` (enabled) — авто-запуск doScan (как в прототипе).
  *
- * Возраст обновляется раз в секунду; пересчитывается от lastScanAt, поэтому
- * переживает рефетчи и не «убегает» при обновлении данных с сервера.
+ * Возраст и отсчёт обновляются раз в секунду; реальный `next` пересчитывается от абсолютной
+ * метки nextScanAt, поэтому переживает рефетчи и не «убегает» при обновлении данных с сервера.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -24,11 +30,13 @@ const SCANNING_HOLD_MS = 1400;
 interface UseScanCountdownArgs {
   /** ISO-метка последнего скана (из stats.last_scan_at). */
   lastScanAt?: string | null;
-  /** Интервал авто-скана в секундах (из observer-настроек, дефолт 30). */
+  /** Интервал авто-скана в секундах (из observer-настроек, дефолт 30) — для MOCK-режима и max кольца. */
   intervalSeconds?: number;
+  /** ISO-метка следующего скана (observer:runtime.next_scan_at). Задано → РЕАЛЬНЫЙ режим. */
+  nextScanAt?: string | null;
   /** Включён ли observer. При false отсчёт заморожен. */
   enabled?: boolean;
-  /** Реальный запуск скана (POST scan-now). Вызывается при ручном и авто-триггере. */
+  /** Реальный запуск скана (POST scan-now). Вызывается при ручном и (в MOCK) авто-триггере. */
   onScan?: () => void;
 }
 
@@ -36,9 +44,9 @@ interface ScanCountdownState {
   scanning: boolean;
   /** Возраст последнего скана в секундах (для "Nс назад"). */
   age: number;
-  /** Секунды до следующего авто-скана. */
+  /** Секунды до следующего скана. */
   next: number;
-  /** Интервал авто-скана (эхо аргумента, для max в ring). */
+  /** Знаменатель кольца (полный интервал текущего цикла). */
   interval: number;
   /** Ручной запуск скана. */
   doScan: () => void;
@@ -51,26 +59,49 @@ function ageFromIso(iso: string | null | undefined): number {
   return Math.max(0, Math.round((Date.now() - t) / 1000));
 }
 
+/** Секунды до будущей ISO-метки (clamp ≥0). null — если метки нет/не распарсилась. */
+function secondsUntilIso(iso: string | null | undefined): number | null {
+  if (!iso) return null;
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return null;
+  return Math.max(0, Math.round((t - Date.now()) / 1000));
+}
+
 export function useScanCountdown({
   lastScanAt,
   intervalSeconds = 30,
+  nextScanAt,
   enabled = true,
   onScan,
 }: UseScanCountdownArgs): ScanCountdownState {
-  const interval = Math.max(1, intervalSeconds);
+  const baseInterval = Math.max(1, intervalSeconds);
   const [scanning, setScanning] = useState(false);
   const [age, setAge] = useState(() => ageFromIso(lastScanAt));
+  // Реальный отсчёт: тикает раз в секунду от абсолютной nextScanAt.
+  const [realNext, setRealNext] = useState<number | null>(() => secondsUntilIso(nextScanAt));
   // ref на scanning для tick-замыкания без пересоздания интервала
   const scanningRef = useRef(false);
   // ручной «локальный» момент скана: когда нет свежего lastScanAt от API,
   // считаем возраст от него, чтобы UI отозвался мгновенно.
   const localScanAtRef = useRef<number | null>(null);
+  // Полный интервал текущего реального цикла (знаменатель кольца). Фиксируется при смене
+  // nextScanAt — это свежее «полное» время до скана сразу после планирования воркером.
+  const [cycleMax, setCycleMax] = useState<number>(baseInterval);
 
   // Реакция на обновление lastScanAt с сервера — сбрасываем локальный override.
   useEffect(() => {
     localScanAtRef.current = null;
     setAge(ageFromIso(lastScanAt));
   }, [lastScanAt]);
+
+  // Реакция на новую метку nextScanAt: фиксируем полный интервал цикла + ресинк отсчёта.
+  useEffect(() => {
+    const secs = secondsUntilIso(nextScanAt);
+    setRealNext(secs);
+    if (secs !== null && secs > 0) {
+      setCycleMax(secs);
+    }
+  }, [nextScanAt]);
 
   const doScan = useCallback(() => {
     if (scanningRef.current) return;
@@ -85,7 +116,7 @@ export function useScanCountdown({
     }, SCANNING_HOLD_MS);
   }, [onScan]);
 
-  // Тикалка возраста раз в секунду.
+  // Тикалка раз в секунду: возраст + реальный отсчёт (от абсолютной метки → без дрейфа).
   useEffect(() => {
     const iv = window.setInterval(() => {
       if (scanningRef.current) return;
@@ -95,18 +126,31 @@ export function useScanCountdown({
       } else {
         setAge(ageFromIso(lastScanAt));
       }
+      setRealNext(secondsUntilIso(nextScanAt));
     }, 1000);
     return () => window.clearInterval(iv);
-  }, [lastScanAt]);
+  }, [lastScanAt, nextScanAt]);
 
-  const next = enabled ? Math.max(0, interval - (age % interval)) : interval;
+  const realMode = realNext !== null;
 
-  // Авто-запуск при достижении нуля (как в прототипе).
+  // next: реальный отсчёт (адаптивный) либо MOCK (interval − age % interval).
+  const next = !enabled
+    ? realMode
+      ? cycleMax
+      : baseInterval
+    : realMode
+      ? realNext
+      : Math.max(0, baseInterval - (age % baseInterval));
+
+  // Знаменатель кольца: полный интервал реального цикла (≥ next, чтобы дуга не переполнялась).
+  const interval = realMode ? Math.max(cycleMax, next, 1) : baseInterval;
+
+  // Авто-запуск при достижении нуля — ТОЛЬКО в MOCK-режиме (в реальном скан водит сервер).
   useEffect(() => {
-    if (enabled && next === 0 && !scanningRef.current) {
+    if (!realMode && enabled && next === 0 && !scanningRef.current) {
       doScan();
     }
-  }, [next, enabled, doScan]);
+  }, [realMode, next, enabled, doScan]);
 
   return { scanning, age, next, interval, doScan };
 }

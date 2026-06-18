@@ -31,6 +31,8 @@ interface ScanClusterProps {
   scanOn: boolean;
   /** ISO последнего скана (stats.last_scan_at). */
   lastScanAt?: string | null;
+  /** ISO следующего скана (observer:runtime.next_scan_at) — реальный адаптивный отсчёт. */
+  nextScanAt?: string | null;
   /** Интервал авто-скана в секундах. */
   intervalSeconds?: number;
   /** Мульти-кабинет: прогресс цикла (показывается только при total > 1). */
@@ -46,6 +48,7 @@ interface ScanClusterProps {
 export function ScanCluster({
   scanOn,
   lastScanAt,
+  nextScanAt,
   intervalSeconds = 30,
   scanProgress,
   onScan,
@@ -54,6 +57,7 @@ export function ScanCluster({
 }: ScanClusterProps) {
   const { scanning, age, next, interval, doScan } = useScanCountdown({
     lastScanAt,
+    nextScanAt,
     intervalSeconds,
     enabled: scanOn,
     onScan,

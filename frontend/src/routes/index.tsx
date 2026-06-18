@@ -97,6 +97,11 @@ function DashboardPage() {
     observerQ.data?.is_scanning_enabled ??
     (stats ? stats.observer_status === "running" : true);
   const intervalSeconds = observerQ.data?.default_interval_seconds ?? 30;
+  // Реальное время следующего скана (адаптивный интервал + jitter) из observer:runtime.
+  const nextScanAt = useMemo<string | null>(() => {
+    const v = (observerStatusQ.data?.extra ?? {})["next_scan_at"];
+    return typeof v === "string" ? v : null;
+  }, [observerStatusQ.data]);
 
   // Hero-число = под контролем (normal + warning + stop + claimed).
   const normal = stats?.ads_in_normal ?? 0;
@@ -173,6 +178,7 @@ function DashboardPage() {
         <PageHeaderBlock
           scanOn={scanOn}
           lastScanAt={stats?.last_scan_at ?? null}
+          nextScanAt={nextScanAt}
           intervalSeconds={intervalSeconds}
           scanProgress={scanProgress}
           onScan={handleScanNow}
@@ -284,6 +290,7 @@ function DashboardPage() {
 interface PageHeaderBlockProps {
   scanOn: boolean;
   lastScanAt: string | null;
+  nextScanAt?: string | null;
   intervalSeconds: number;
   scanProgress?: ScanProgress | null;
   onScan: () => void;
@@ -294,6 +301,7 @@ interface PageHeaderBlockProps {
 function PageHeaderBlock({
   scanOn,
   lastScanAt,
+  nextScanAt,
   intervalSeconds,
   scanProgress,
   onScan,
@@ -314,6 +322,7 @@ function PageHeaderBlock({
       <ScanCluster
         scanOn={scanOn}
         lastScanAt={lastScanAt}
+        nextScanAt={nextScanAt}
         intervalSeconds={intervalSeconds}
         scanProgress={scanProgress}
         onScan={onScan}
