@@ -10,8 +10,8 @@ import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { ErrorState } from "@/components/ui/ErrorState";
-import { useHealthDetails } from "@/lib/api/settings";
-import { formatRelativeTime } from "@fb/shared";
+import { useHealthDetails, useObserverStatus } from "@/lib/api/settings";
+import { formatRelativeTime, formatDuration } from "@fb/shared";
 import { RefreshCw } from "lucide-react";
 
 /** Цвет вердикта → Badge variant. */
@@ -47,6 +47,8 @@ function workerLabel(name: string): string {
 
 export const HealthTab: FC = () => {
   const { data, isLoading, error, refetch, isFetching } = useHealthDetails();
+  const observerQ = useObserverStatus();
+  const obs = observerQ.data;
 
   if (isLoading) {
     return (
@@ -102,6 +104,43 @@ export const HealthTab: FC = () => {
               className={isFetching ? "animate-spin" : ""}
             />
           </Button>
+        </div>
+      </Card>
+
+      {/* Observer Runtime (раньше был отдельный таб Workers — слит сюда) */}
+      <Card eyebrow="Observer Runtime" padded>
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-[13px] text-bg-10">Статус</span>
+            <Badge
+              variant={
+                obs?.status === "running"
+                  ? "success"
+                  : obs?.status === "paused"
+                    ? "warning"
+                    : "neutral"
+              }
+              size="sm"
+            >
+              {obs?.status ?? "unknown"}
+            </Badge>
+          </div>
+          {obs?.last_scan_at && (
+            <div className="flex items-center justify-between">
+              <span className="text-[13px] text-bg-10">Последний скан</span>
+              <span className="font-display text-[12px] text-bg-9">
+                {formatRelativeTime(obs.last_scan_at)}
+              </span>
+            </div>
+          )}
+          {obs?.interval_seconds && (
+            <div className="flex items-center justify-between">
+              <span className="text-[13px] text-bg-10">Интервал</span>
+              <span className="font-display text-[12px] text-bg-9 tabular-nums">
+                {formatDuration(obs.interval_seconds)}
+              </span>
+            </div>
+          )}
         </div>
       </Card>
 

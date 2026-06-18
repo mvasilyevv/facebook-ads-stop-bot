@@ -1,6 +1,6 @@
 /**
  * Тесты Settings-страницы:
- * - Tabs переключение (Observer / Telegram / Vision / Workers / AI / Health)
+ * - Tabs переключение (Observer / Telegram / Vision / Health)
  * - ObserverTab: toggle scanning
  * - HealthTab: вердикт HEALTHY/DEGRADED/CRITICAL по данным
  */
@@ -146,7 +146,6 @@ import { Tabs, TabsList, TabsContent, type TabItem } from "@/components/ui/Tabs"
 import { ObserverTab } from "@/components/settings/ObserverTab";
 import { TelegramTab } from "@/components/settings/TelegramTab";
 import { HealthTab } from "@/components/settings/HealthTab";
-import { WorkersTab } from "@/components/settings/WorkersTab";
 
 // ─── Хелперы ──────────────────────────────────────────────────────────────────
 
@@ -164,7 +163,6 @@ const TABS: TabItem[] = [
   { value: "observer", label: "Observer" },
   { value: "telegram", label: "Telegram" },
   { value: "health", label: "Health" },
-  { value: "workers", label: "Workers" },
 ];
 
 /** Settings-страница для тестирования переключения табов. */
@@ -181,9 +179,6 @@ function TestSettingsPage() {
       </TabsContent>
       <TabsContent value="health">
         <HealthTab />
-      </TabsContent>
-      <TabsContent value="workers">
-        <WorkersTab />
       </TabsContent>
     </Tabs>
   );
@@ -247,18 +242,8 @@ describe("ObserverTab", () => {
     expect(mockToggleScanning).toHaveBeenCalledWith(false);
   });
 
-  // Отображает owner tag
-  it("отображает owner tag из данных", () => {
-    render(wrap(<ObserverTab />));
-    const input = screen.getByLabelText("Owner Campaign Tag");
-    expect(input).toHaveValue("MV");
-  });
-
-  // Кнопка «Сканировать сейчас» присутствует
-  it("кнопка «Сканировать сейчас» присутствует", () => {
-    render(wrap(<ObserverTab />));
-    expect(screen.getByText("Сканировать сейчас")).toBeInTheDocument();
-  });
+  // owner tag и «Сканировать сейчас» вынесены: owner tag → страница «Кампании»,
+  // scan-now → главная Панель. В ObserverTab их больше нет.
 });
 
 // ─── HealthTab — вердикт HEALTHY/DEGRADED/CRITICAL ───────────────────────────

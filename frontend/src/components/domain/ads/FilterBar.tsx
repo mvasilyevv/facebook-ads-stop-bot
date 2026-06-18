@@ -336,7 +336,7 @@ function CheckDropdown({
           role="listbox"
           aria-label={ariaLabel}
           className={cn(
-            "absolute top-[calc(100%+6px)] left-0 z-30 min-w-[160px] max-h-[280px] overflow-y-auto",
+            "absolute top-[calc(100%+6px)] left-0 z-30 min-w-[260px] max-w-[440px] max-h-[280px] overflow-y-auto",
             "bg-bg-3 border border-[var(--hairline)] rounded-[var(--radius-2)] p-1.5 flex flex-col gap-0.5",
           )}
         >
@@ -352,8 +352,9 @@ function CheckDropdown({
                   role="option"
                   aria-selected={on}
                   onClick={() => onToggle(o)}
+                  title={o}
                   className={cn(
-                    "flex items-center gap-2 px-2 py-1.5 text-left rounded-[var(--radius-1)]",
+                    "flex items-center gap-2 px-2 py-1.5 text-left rounded-[var(--radius-1)] min-w-0",
                     "text-bg-11 text-[13px] transition-colors",
                     on ? "bg-bg-4" : "hover:bg-bg-4/60",
                   )}
@@ -361,13 +362,13 @@ function CheckDropdown({
                   <span
                     aria-hidden="true"
                     className={cn(
-                      "size-[14px] inline-flex items-center justify-center border rounded-[var(--radius-1)]",
+                      "size-[14px] shrink-0 inline-flex items-center justify-center border rounded-[var(--radius-1)]",
                       on ? "border-accent bg-accent" : "border-bg-7",
                     )}
                   >
                     {on ? <Check size={11} strokeWidth={3} className="text-bg-0" /> : null}
                   </span>
-                  <span className="font-display">{o}</span>
+                  <span className="font-display truncate">{o}</span>
                 </button>
               );
             })

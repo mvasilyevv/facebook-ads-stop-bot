@@ -10,7 +10,7 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
-import { Search, LayoutDashboard, Table, FileText, Package, Clock, Settings } from "lucide-react";
+import { Search, LayoutDashboard, Table, Radar, Package, Clock, Settings } from "lucide-react";
 
 import { useCommandPalette } from "@/stores/commandPalette";
 import { useOffers } from "@/lib/api/offers";
@@ -30,7 +30,7 @@ interface CommandItem {
 const PAGES = [
   { to: "/", label: "Панель", kw: "dashboard панель главная обзор", icon: <LayoutDashboard size={15} /> },
   { to: "/ads", label: "Объявления", kw: "ads объявления реклама", icon: <Table size={15} /> },
-  { to: "/drafts", label: "Черновики", kw: "drafts черновики мутации", icon: <FileText size={15} /> },
+  { to: "/campaigns", label: "Кампании", kw: "campaigns кампании скоуп owner tag отслеживаемые", icon: <Radar size={15} /> },
   { to: "/offers", label: "Офферы", kw: "offers офферы", icon: <Package size={15} /> },
   { to: "/history", label: "История", kw: "history история события", icon: <Clock size={15} /> },
   { to: "/settings", label: "Настройки", kw: "settings настройки конфиг", icon: <Settings size={15} /> },

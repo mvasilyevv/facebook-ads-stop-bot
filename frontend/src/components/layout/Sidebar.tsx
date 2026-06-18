@@ -18,7 +18,7 @@ import { Link, useRouterState } from "@tanstack/react-router";
 import {
   LayoutDashboard,
   Layers,
-  FileText,
+  Radar,
   Tag,
   Clock,
   Settings,
@@ -27,7 +27,6 @@ import {
 } from "lucide-react";
 import { useUiStore } from "@/stores/ui";
 import { useDashboardStats } from "@/lib/api/dashboard";
-import { useMetaDrafts } from "@/lib/api/drafts";
 import { cn } from "@/lib/utils/cn";
 
 interface NavItem {
@@ -35,7 +34,7 @@ interface NavItem {
   label: string;
   icon: LucideIcon;
   /** Ключ для подстановки count-badge. */
-  badgeKey?: "ads" | "drafts";
+  badgeKey?: "ads";
 }
 
 interface NavGroup {
@@ -51,7 +50,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: "/", label: "Панель", icon: LayoutDashboard },
       { to: "/ads", label: "Объявления", icon: Layers, badgeKey: "ads" },
-      { to: "/drafts", label: "Черновики", icon: FileText, badgeKey: "drafts" },
+      { to: "/campaigns", label: "Кампании", icon: Radar },
     ],
   },
   {
@@ -78,11 +77,8 @@ export function Sidebar() {
 
   // Реальные count-badges (кэшируются, разделяются с Dashboard).
   const { data: stats } = useDashboardStats();
-  const { data: drafts } = useMetaDrafts();
   const adsBadge = stats ? (stats.ads_in_warning ?? 0) + (stats.ads_in_stop ?? 0) : 0;
-  const draftsBadge = drafts?.length ?? 0;
-  const badgeFor = (key?: "ads" | "drafts"): number =>
-    key === "ads" ? adsBadge : key === "drafts" ? draftsBadge : 0;
+  const badgeFor = (key?: "ads"): number => (key === "ads" ? adsBadge : 0);
 
   return (
     <aside
