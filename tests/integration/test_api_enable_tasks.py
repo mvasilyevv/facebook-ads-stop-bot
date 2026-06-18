@@ -114,7 +114,11 @@ async def test_enable_tasks_only_enable_type(
 
     assert resp.status_code == 200
     items = resp.json()
-    assert all(item["task_type"] == "enable" for item in items)
+    # enable-endpoint возвращает только enable-канал: legacy task_type='enable' +
+    # meta_api_mutation activate_ad. disable/pause-задачи исключены SQL-фильтром
+    # (enable_channel_sql). Наша enable-задача присутствует, disable — нет.
+    assert all(it["task_type"] in ("enable", "meta_api_mutation") for it in items)
+    assert any(it["task_type"] == "enable" for it in items)
 
 
 # ─── Тест 2 ──────────────────────────────────────────────────────────────────

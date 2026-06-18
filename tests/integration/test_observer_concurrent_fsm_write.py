@@ -77,6 +77,7 @@ def _stop_row(*, code: str, fb_ad_id: str) -> ScannedAdRow:
         deposits=0,
         cpc=Decimal("0.10"),
         ctr=Decimal("2.5"),
+        impressions=5,  # >= guardrail_min_impressions=3 (иначе guardrail-стоп подавлен)
     )
 
 
@@ -174,12 +175,13 @@ async def test_observer_can_still_escalate_warning_to_stop(pg_engine, offer_with
         adset_name="ADS_CC",
         ad_name="AD_cc",
         delivery_status="ACTIVE",
-        spend=Decimal("9.0"),  # 90% от CPA=10 → WARNING без STOP
+        spend=Decimal("9.0"),  # 90% от CPA=10 → WARNING без STOP (нужны impressions >= 3)
         leads=0,
         registrations=0,
         deposits=0,
         cpc=Decimal("0.10"),
         ctr=Decimal("2.5"),
+        impressions=5,  # >= guardrail_min_impressions=3
     )
     await process_scan_rows(pg_engine, rows=[warn_row], scan_id=20)
 
@@ -227,6 +229,7 @@ async def test_warning_to_stop_persists_same_open_token(pg_engine, offer_with_cp
         deposits=3,
         cpc=Decimal("0.05"),
         ctr=Decimal("3.0"),
+        impressions=50,  # здоровые метрики → normal (deposit_stage, расход в норме)
     )
     await process_scan_rows(pg_engine, rows=[normal_row], scan_id=30)
 

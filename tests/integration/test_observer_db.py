@@ -213,19 +213,21 @@ async def test_spend_no_deposit_triggers_stop_and_disable_task(pg_engine, offer_
             assert evt[2] == 42
             assert isinstance(evt[3], list) and len(evt[3]) > 0
 
-            # И обязательно disable task в очереди с правильным fb_ad_id
+            # И обязательно meta_api_mutation pause_ad task (авто-стоп теперь через
+            # Marketing API, DOM disable_worker удалён) с правильным target_id.
             task = (
                 await conn.execute(
                     text(
                         "SELECT task_type, status, payload, requested_by "
-                        "FROM task_queue WHERE task_type = 'disable' LIMIT 1"
+                        "FROM task_queue WHERE task_type = 'meta_api_mutation' LIMIT 1"
                     )
                 )
             ).first()
             assert task is not None
-            assert task[0] == "disable"
+            assert task[0] == "meta_api_mutation"
             assert task[1] == "pending"
-            assert task[2]["fb_ad_id"] == row.fb_ad_id
+            assert task[2]["mutation_kind"] == "pause_ad"
+            assert task[2]["target_id"] == row.fb_ad_id
             assert task[3] == "bot_auto_stop"
 
 

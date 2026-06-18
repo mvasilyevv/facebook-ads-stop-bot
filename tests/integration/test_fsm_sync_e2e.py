@@ -119,7 +119,15 @@ async def _run_one(pg_engine, payload: MetaMutationPayload, *, idem: str, monkey
     assert claim.task is not None
 
     async def _fake_dispatch(client, p):
-        return {"success": True, "graph_response": {"ok": True}, "modified_ids": [p.target_id]}
+        # H2: для bulk_status_change modified_ids = реальные ad_ids из params (а не
+        # синтетический target_id типа "autostart:1"), иначе _sync_bulk отфильтрует всё.
+        if p.mutation_kind == "bulk_status_change":
+            params = p.params or {}
+            ad_ids = params.get("ad_ids") or params.get("object_ids") or []
+            modified_ids = [str(x).strip() for x in ad_ids if str(x).strip()]
+        else:
+            modified_ids = [p.target_id]
+        return {"success": True, "graph_response": {"ok": True}, "modified_ids": modified_ids}
 
     import apps.meta_api_worker.main as worker_main
 

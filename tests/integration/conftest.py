@@ -99,6 +99,23 @@ def _assert_not_prod(url: str) -> None:
         )
 
 
+async def _ensure_migration_indices(eng: AsyncEngine) -> None:
+    """Индексы, добавленные ТОЛЬКО миграциями (не в ORM __table_args__).
+
+    Base.metadata.create_all создаёт индексы из ORM-моделей, но не из чистых
+    миграций. На проде они накатываются alembic upgrade head; в тестовой БД
+    (create_all) воссоздаём вручную.
+    """
+    async with eng.begin() as conn:
+        # Миграция 0004: (scan_id, created_at) для partition pruning в dispatch_pending_alerts.
+        await conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_alert_events_scan_id_created "
+                "ON alert_events (scan_id, created_at)"
+            )
+        )
+
+
 async def _create_test_partitions(eng: AsyncEngine) -> None:
     """Месячные партиции на диапазон now-3..now+3 — тесты используют относительные даты
     (вчера/прошлый месяц/будущее), а apply_schema._create_first_partitions кроет лишь
@@ -162,6 +179,7 @@ async def _ensure_test_db_and_schema(url: str) -> None:
                 await conn.execute(text("CREATE EXTENSION IF NOT EXISTS pgcrypto"))
             await _create_all_tables(eng)
             await _create_test_partitions(eng)
+            await _ensure_migration_indices(eng)
             await _seed_retention_policy(eng)
     finally:
         await eng.dispose()

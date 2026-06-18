@@ -76,14 +76,19 @@ def _row(fb_ad_id: str, campaign: str, ad_name: str = "AD") -> ScannedAdRow:
 
 
 async def _set_owner_tag(pg_engine, tag: str | None) -> None:
-    """Кладёт owner_campaign_tag в observer_config."""
+    """Кладёт owner_campaign_tag в observer_config + включает сканирование.
+
+    is_scanning_enabled server_default=FALSE (scanning OFF by default), а autostart-тик
+    при выключенном сканировании сразу возвращает 'scanning_paused'. Явно включаем.
+    """
     async with pg_engine.begin() as conn:
         await conn.execute(
             text(
                 """
-                INSERT INTO observer_config (singleton_key, owner_campaign_tag)
-                VALUES ('default', :tag)
-                ON CONFLICT (singleton_key) DO UPDATE SET owner_campaign_tag = :tag
+                INSERT INTO observer_config (singleton_key, owner_campaign_tag, is_scanning_enabled)
+                VALUES ('default', :tag, TRUE)
+                ON CONFLICT (singleton_key)
+                DO UPDATE SET owner_campaign_tag = :tag, is_scanning_enabled = TRUE
                 """
             ),
             {"tag": tag},

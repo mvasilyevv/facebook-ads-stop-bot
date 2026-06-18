@@ -327,13 +327,25 @@ async def _create_disable_action(
         params={},
         ad_account_id=ad_account_id,
     )
+    idempotency_key = f"tma:pause_ad:{fb_ad_id}:{suffix}"
     task_id = await create_mutation_task(
         engine,
         payload=payload,
         requested_by=requested_by,
         status="pending",
-        idempotency_key=f"tma:pause_ad:{fb_ad_id}:{suffix}",
+        idempotency_key=idempotency_key,
     )
+    if task_id is None:
+        # Дубль по idempotency_key (двойной тап с тем же token) — ON CONFLICT DO NOTHING
+        # вернул None. Достаём id уже существующей задачи, чтобы ответ был идемпотентным.
+        async with engine.connect() as conn:
+            row = (
+                await conn.execute(
+                    text("SELECT id FROM task_queue WHERE idempotency_key = :k"),
+                    {"k": idempotency_key},
+                )
+            ).first()
+        task_id = int(row[0]) if row else None
     return task_id, "meta_api"
 
 
@@ -349,16 +361,19 @@ async def tma_disable_ad(
     Канал — только Marketing API (meta_api pause_ad, точно по ad_id),
     как ручная кнопка бота. requested_by = tma:<telegram_user_id>.
     """
-    exists, token = await _resolve_ad_token(engine, fb_ad_id)
+    exists, db_token = await _resolve_ad_token(engine, fb_ad_id)
     if not exists:
         raise HTTPException(status_code=404, detail="Объявление не найдено")
 
     requested_by = f"tma:{principal.telegram_user_id}"
+    # Idempotency: клиентский body.token приоритетнее open_state_token объявления —
+    # повторный тап с тем же token не плодит вторую disable-задачу.
+    idem_token = body.token or db_token
     try:
         task_id, channel = await _create_disable_action(
             engine,
             fb_ad_id=fb_ad_id,
-            token=token,
+            token=idem_token,
             requested_by=requested_by,
             reason=body.reason,
         )

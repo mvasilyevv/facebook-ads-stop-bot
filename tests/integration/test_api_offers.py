@@ -55,7 +55,7 @@ async def _seed_offers(conn, offers: list[dict]) -> list[uuid.UUID]:
             ),
             {
                 "code": o["code"],
-                "name": o.get("name", o["code"] + " name"),
+                "name": o.get("name", o["code"]),
                 "vertical": o.get("vertical"),
                 "is_active": o.get("is_active", True),
             },
@@ -303,7 +303,7 @@ async def test_create_offer_happy_path(pg_engine, fake_redis_client, clean_offer
     assert resp.status_code == 201
     data = resp.json()
     assert data["code"] == "TST_NEW"
-    assert data["name"] == "Test New"
+    assert data["name"] == "TST_NEW"  # бэк пишет name=code (поле «Название» убрано)
     assert data["vertical"] == "casino"
     assert data["is_active"] is True
     assert data["id"] is not None
@@ -339,9 +339,7 @@ async def test_create_offer_without_accounts_returns_422(
     app = _make_app(engine=pg_engine, redis=fake_redis_client)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         no_field = await ac.post("/api/offers", json={"code": "TST_NOACC"})
-        empty_list = await ac.post(
-            "/api/offers", json={"code": "TST_NOACC", "ad_account_ids": []}
-        )
+        empty_list = await ac.post("/api/offers", json={"code": "TST_NOACC", "ad_account_ids": []})
     assert no_field.status_code == 422
     assert empty_list.status_code == 422
 
@@ -393,7 +391,7 @@ async def test_update_offer_happy_path(pg_engine, fake_redis_client, clean_offer
 
     assert resp.status_code == 200
     data = resp.json()
-    assert data["name"] == "Updated Name"
+    assert data["name"] == "UPD_TST"  # PUT не обновляет name — всегда = code
     assert data["vertical"] == "betting"
     assert data["code"] == "UPD_TST"  # code не изменился
 
@@ -427,7 +425,7 @@ async def test_update_offer_code_is_ignored(pg_engine, fake_redis_client, clean_
     data = resp.json()
     # code должен остаться прежним
     assert data["code"] == "ORIG_CODE"
-    assert data["name"] == "Name changed"
+    assert data["name"] == "ORIG_CODE"  # PUT не обновляет name — всегда = code
 
 
 # ─────────────────────── DELETE /offers/{id} ───────────────────────

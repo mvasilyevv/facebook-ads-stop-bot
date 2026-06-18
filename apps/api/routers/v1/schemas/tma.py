@@ -73,6 +73,9 @@ class TmaDisableRequest(BaseModel):
     """Тело POST /tma/ads/{id}/disable."""
 
     reason: str | None = None
+    # Idempotency-токен от клиента: двойной тап с тем же token → одна задача
+    # (приоритетнее open_state_token объявления). Пусто → дедуп по инциденту/uuid4.
+    token: str | None = None
 
 
 class TmaDisableResponse(BaseModel):

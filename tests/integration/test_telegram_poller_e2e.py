@@ -71,7 +71,7 @@ async def test_help_command_e2e(pg_engine, tg_respx, authorized_recipient) -> No
     sent = tg_respx.sent_messages[0]
     assert sent["chat_id"] == str(authorized_recipient["chat_id"])
     assert "/spy" in sent["text"]
-    assert sent.get("parse_mode") == "Markdown"
+    assert sent.get("parse_mode") == "HTML"
 
 
 # Сценарий: /start с неактивным кодом → дружелюбный отказ (не крашится)

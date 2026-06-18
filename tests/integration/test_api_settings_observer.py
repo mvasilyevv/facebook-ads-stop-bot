@@ -44,7 +44,7 @@ async def clean_observer_config(pg_engine):
         await conn.execute(text("DELETE FROM observer_config"))
 
 
-# GET возвращает дефолтный singleton (is_scanning_enabled=true).
+# GET возвращает дефолтный singleton (is_scanning_enabled=false — scanning OFF by default).
 @pytest.mark.asyncio
 async def test_get_observer_settings_returns_defaults(
     pg_engine, fake_redis_client, clean_observer_config
@@ -54,7 +54,7 @@ async def test_get_observer_settings_returns_defaults(
         resp = await ac.get("/api/settings/observer")
     assert resp.status_code == 200
     data = resp.json()
-    assert data["is_scanning_enabled"] is True
+    assert data["is_scanning_enabled"] is False
     assert isinstance(data["default_interval_seconds"], int)
     assert data["auto_enable_recommendations"] is False
     # Поля перенесены в OfferRule — возвращаем null для стабильного shape.
@@ -121,9 +121,9 @@ async def test_patch_scanning_changes_only_scanning_flag(
 ):
     app = _make_app(engine=pg_engine, redis=fake_redis_client)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        # Сначала убеждаемся что scanning включён.
+        # Сначала убеждаемся что scanning по умолчанию выключен (scanning OFF by default).
         get_before = await ac.get("/api/settings/observer")
-        assert get_before.json()["is_scanning_enabled"] is True
+        assert get_before.json()["is_scanning_enabled"] is False
 
         # Отключаем.
         patch_resp = await ac.patch("/api/settings/observer/scanning", json={"enabled": False})

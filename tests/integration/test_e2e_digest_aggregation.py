@@ -88,6 +88,7 @@ def _row(*, code: str, fb_ad_id: str, spend: Decimal, deposits: int) -> ScannedA
         deposits=deposits,
         cpc=Decimal("0.10"),
         ctr=Decimal("2.0"),
+        impressions=10,  # >= guardrail_min_impressions=3 (иначе guardrail-стоп подавлен)
     )
 
 

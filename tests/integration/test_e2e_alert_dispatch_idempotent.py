@@ -84,6 +84,7 @@ def _stop_row(*, code: str, fb_ad_id: str) -> ScannedAdRow:
         deposits=0,
         cpc=Decimal("0.10"),
         ctr=Decimal("2.5"),
+        impressions=3,  # >= guardrail_min_impressions=3 (иначе guardrail-стоп подавлен)
     )
 
 
