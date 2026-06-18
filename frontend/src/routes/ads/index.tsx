@@ -88,6 +88,8 @@ function AdsPage() {
     selectedStates: parseStateParam(stateParam),
     selectedOffers: new Set<string>(),
     selectedAccounts: new Set<string>(),
+    selectedCampaigns: new Set<string>(),
+    selectedAdsets: new Set<string>(),
   }));
 
   // URL ↔ state-фильтр: тоггл пиллов обновляет ?state= (replace, без истории) —
@@ -113,8 +115,10 @@ function AdsPage() {
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // ── Плотность строк ────────────────────────────────────────────────────────
+  // +14px на вторую строку ячейки (кампания · адсет) под названием — родитель
+  // объявления нужен, чтобы различать дубли (два CR004 в разных адсетах).
   const density = useUiStore((s) => s.density);
-  const rowHeight = DENSITY_ROW_HEIGHT[density];
+  const rowHeight = DENSITY_ROW_HEIGHT[density] + 14;
 
   // ── Данные ──────────────────────────────────────────────────────────────────
   // state-фильтр уходит на сервер; search/offer — клиентские (как в эталоне).
@@ -148,11 +152,26 @@ function AdsPage() {
     return [...set].sort();
   }, [allRows]);
 
+  // Кампании и адсеты («отец») из загруженных строк — для dropdown-фильтров.
+  const campaignOptions = useMemo(() => {
+    const set = new Set<string>();
+    allRows.forEach((r) => r.campaign_name && set.add(r.campaign_name));
+    return [...set].sort();
+  }, [allRows]);
+
+  const adsetOptions = useMemo(() => {
+    const set = new Set<string>();
+    allRows.forEach((r) => r.adset_name && set.add(r.adset_name));
+    return [...set].sort();
+  }, [allRows]);
+
   // ── Клиентская фильтрация + сортировка по spend desc ────────────────────
   const rows = useMemo<AdSnapshot[]>(() => {
     const q = filters.search.trim().toLowerCase();
     const offers = filters.selectedOffers;
     const accounts = filters.selectedAccounts;
+    const campaigns = filters.selectedCampaigns;
+    const adsets = filters.selectedAdsets;
     const out = allRows.filter((r) => {
       if (q) {
         const hit =
@@ -166,6 +185,8 @@ function AdsPage() {
         const acc = adAccountId(r);
         if (!(acc && accounts.has(acc))) return false;
       }
+      if (campaigns.size > 0 && !(r.campaign_name && campaigns.has(r.campaign_name))) return false;
+      if (adsets.size > 0 && !(r.adset_name && adsets.has(r.adset_name))) return false;
       return true;
     });
     // Сортировка по spend desc (как в эталоне).
@@ -175,7 +196,14 @@ function AdsPage() {
       return sb - sa;
     });
     return out;
-  }, [allRows, filters.search, filters.selectedOffers, filters.selectedAccounts]);
+  }, [
+    allRows,
+    filters.search,
+    filters.selectedOffers,
+    filters.selectedAccounts,
+    filters.selectedCampaigns,
+    filters.selectedAdsets,
+  ]);
 
   // Курсор не должен выходить за пределы после фильтрации.
   useEffect(() => {
@@ -212,12 +240,30 @@ function AdsPage() {
     });
   }, []);
 
+  const toggleCampaign = useCallback((c: string) => {
+    setFilters((p) => {
+      const next = new Set(p.selectedCampaigns);
+      if (next.has(c)) { next.delete(c); } else { next.add(c); }
+      return { ...p, selectedCampaigns: next };
+    });
+  }, []);
+
+  const toggleAdset = useCallback((a: string) => {
+    setFilters((p) => {
+      const next = new Set(p.selectedAdsets);
+      if (next.has(a)) { next.delete(a); } else { next.add(a); }
+      return { ...p, selectedAdsets: next };
+    });
+  }, []);
+
   const clearAll = useCallback(() => {
     setFilters({
       search: "",
       selectedStates: new Set(),
       selectedOffers: new Set(),
       selectedAccounts: new Set(),
+      selectedCampaigns: new Set(),
+      selectedAdsets: new Set(),
     });
   }, []);
 
@@ -363,12 +409,16 @@ function AdsPage() {
           filterState={filters}
           offerOptions={offerOptions}
           accountOptions={accountOptions}
+          campaignOptions={campaignOptions}
+          adsetOptions={adsetOptions}
           count={rows.length}
           searchRef={searchRef}
           onSearchChange={(v) => setFilters((p) => ({ ...p, search: v }))}
           onStateToggle={toggleState}
           onOfferToggle={toggleOffer}
           onAccountToggle={toggleAccount}
+          onCampaignToggle={toggleCampaign}
+          onAdsetToggle={toggleAdset}
           onClearAll={clearAll}
         />
       </div>

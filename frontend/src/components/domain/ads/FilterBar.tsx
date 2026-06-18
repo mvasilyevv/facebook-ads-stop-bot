@@ -31,6 +31,10 @@ export interface AdsFilterState {
   selectedOffers: Set<string>;
   /** Мульти-кабинет: множество выбранных ID кабинетов. Пустое = все. */
   selectedAccounts: Set<string>;
+  /** Множество выбранных кампаний (campaign_name). Пустое = все. */
+  selectedCampaigns: Set<string>;
+  /** Множество выбранных адсетов («отец», adset_name). Пустое = все. */
+  selectedAdsets: Set<string>;
 }
 
 /** Порядок и лейблы state-pills (канон). */
@@ -51,6 +55,10 @@ export interface FilterBarProps {
   offerOptions: string[];
   /** Мульти-кабинет: доступные ID кабинетов для dropdown (из загруженных строк). */
   accountOptions: string[];
+  /** Доступные кампании (campaign_name) для dropdown. */
+  campaignOptions: string[];
+  /** Доступные адсеты (adset_name, «отец») для dropdown. */
+  adsetOptions: string[];
   /** Кол-во строк после фильтрации (для «N объявлений»). */
   count: number;
   /** ref на search-input (для хоткея «/»). */
@@ -60,6 +68,8 @@ export interface FilterBarProps {
   onStateToggle: (state: AlertState) => void;
   onOfferToggle: (offer: string) => void;
   onAccountToggle: (accountId: string) => void;
+  onCampaignToggle: (campaign: string) => void;
+  onAdsetToggle: (adset: string) => void;
   onClearAll: () => void;
 
   className?: string;
@@ -71,18 +81,33 @@ export function FilterBar({
   filterState,
   offerOptions,
   accountOptions,
+  campaignOptions,
+  adsetOptions,
   count,
   searchRef,
   onSearchChange,
   onStateToggle,
   onOfferToggle,
   onAccountToggle,
+  onCampaignToggle,
+  onAdsetToggle,
   onClearAll,
   className,
 }: FilterBarProps) {
-  const { search, selectedStates, selectedOffers, selectedAccounts } = filterState;
+  const {
+    search,
+    selectedStates,
+    selectedOffers,
+    selectedAccounts,
+    selectedCampaigns,
+    selectedAdsets,
+  } = filterState;
   const hasChips =
-    selectedStates.size > 0 || selectedOffers.size > 0 || selectedAccounts.size > 0;
+    selectedStates.size > 0 ||
+    selectedOffers.size > 0 ||
+    selectedAccounts.size > 0 ||
+    selectedCampaigns.size > 0 ||
+    selectedAdsets.size > 0;
 
   return (
     <div className={cn("flex flex-col gap-3", className)}>
@@ -155,6 +180,26 @@ export function FilterBar({
           onToggle={onOfferToggle}
         />
 
+        {/* Campaign dropdown */}
+        <CheckDropdown
+          label="кампания"
+          ariaLabel="Фильтр по кампании"
+          emptyText="Нет кампаний"
+          options={campaignOptions}
+          selected={selectedCampaigns}
+          onToggle={onCampaignToggle}
+        />
+
+        {/* Adset dropdown («отец» — прямой родитель объявления) */}
+        <CheckDropdown
+          label="адсет"
+          ariaLabel="Фильтр по адсету"
+          emptyText="Нет адсетов"
+          options={adsetOptions}
+          selected={selectedAdsets}
+          onToggle={onAdsetToggle}
+        />
+
         {/* Cabinet dropdown (мульти-кабинет) — показываем только когда кабинетов >1 */}
         {accountOptions.length > 1 && (
           <CheckDropdown
@@ -191,6 +236,16 @@ export function FilterBar({
           {[...selectedAccounts].map((a) => (
             <FilterChip key={`ac-${a}`} onRemove={() => onAccountToggle(a)}>
               кабинет = {a}
+            </FilterChip>
+          ))}
+          {[...selectedCampaigns].map((c) => (
+            <FilterChip key={`cm-${c}`} onRemove={() => onCampaignToggle(c)}>
+              кампания = {c}
+            </FilterChip>
+          ))}
+          {[...selectedAdsets].map((a) => (
+            <FilterChip key={`as-${a}`} onRemove={() => onAdsetToggle(a)}>
+              адсет = {a}
             </FilterChip>
           ))}
           <button

@@ -16,18 +16,26 @@ function Wrapper({
   onStateToggle = vi.fn(),
   onOfferToggle = vi.fn(),
   onAccountToggle = vi.fn(),
+  onCampaignToggle = vi.fn(),
+  onAdsetToggle = vi.fn(),
   onClearAll = vi.fn(),
   initial,
   accountOptions = [],
+  campaignOptions = ["GH_CR | A", "GH_CR | B"],
+  adsetOptions = ["adset-android", "adset-ios"],
 }: {
   onSearchChange?: (v: string) => void;
   onStateToggle?: (s: AlertState) => void;
   onOfferToggle?: (o: string) => void;
   onAccountToggle?: (a: string) => void;
+  onCampaignToggle?: (c: string) => void;
+  onAdsetToggle?: (a: string) => void;
   onClearAll?: () => void;
   initial?: Partial<AdsFilterState>;
   /** Мульти-кабинет: ≤1 — dropdown кабинета скрыт. */
   accountOptions?: string[];
+  campaignOptions?: string[];
+  adsetOptions?: string[];
 }) {
   const searchRef = useRef<HTMLInputElement>(null);
   const [state, setState] = useState<AdsFilterState>({
@@ -35,6 +43,8 @@ function Wrapper({
     selectedStates: initial?.selectedStates ?? new Set(),
     selectedOffers: initial?.selectedOffers ?? new Set(),
     selectedAccounts: initial?.selectedAccounts ?? new Set(),
+    selectedCampaigns: initial?.selectedCampaigns ?? new Set(),
+    selectedAdsets: initial?.selectedAdsets ?? new Set(),
   });
 
   return (
@@ -42,6 +52,8 @@ function Wrapper({
       filterState={state}
       offerOptions={["CR2", "DRC"]}
       accountOptions={accountOptions}
+      campaignOptions={campaignOptions}
+      adsetOptions={adsetOptions}
       count={42}
       searchRef={searchRef}
       onSearchChange={(v) => {
@@ -75,12 +87,32 @@ function Wrapper({
         });
         onAccountToggle(a);
       }}
+      onCampaignToggle={(c) => {
+        setState((s) => {
+          const next = new Set(s.selectedCampaigns);
+          if (next.has(c)) next.delete(c);
+          else next.add(c);
+          return { ...s, selectedCampaigns: next };
+        });
+        onCampaignToggle(c);
+      }}
+      onAdsetToggle={(a) => {
+        setState((s) => {
+          const next = new Set(s.selectedAdsets);
+          if (next.has(a)) next.delete(a);
+          else next.add(a);
+          return { ...s, selectedAdsets: next };
+        });
+        onAdsetToggle(a);
+      }}
       onClearAll={() => {
         setState({
           search: "",
           selectedStates: new Set(),
           selectedOffers: new Set(),
           selectedAccounts: new Set(),
+          selectedCampaigns: new Set(),
+          selectedAdsets: new Set(),
         });
         onClearAll();
       }}
@@ -182,5 +214,31 @@ describe("FilterBar", () => {
 
     expect(onAccountToggle).toHaveBeenCalledWith("222");
     expect(screen.getByText(/кабинет = 222/)).toBeInTheDocument();
+  });
+
+  // Фильтр по кампании: выбор эмитит onCampaignToggle и показывает chip.
+  it("dropdown кампании: выбор эмитит onCampaignToggle и показывает chip", async () => {
+    const user = userEvent.setup();
+    const onCampaignToggle = vi.fn();
+    render(<Wrapper onCampaignToggle={onCampaignToggle} />);
+
+    await user.click(screen.getByLabelText("Фильтр по кампании"));
+    await user.click(screen.getByRole("option", { name: "GH_CR | B" }));
+
+    expect(onCampaignToggle).toHaveBeenCalledWith("GH_CR | B");
+    expect(screen.getByText(/кампания = GH_CR \| B/)).toBeInTheDocument();
+  });
+
+  // Фильтр по адсету («отец»): выбор эмитит onAdsetToggle и показывает chip.
+  it("dropdown адсета: выбор эмитит onAdsetToggle и показывает chip", async () => {
+    const user = userEvent.setup();
+    const onAdsetToggle = vi.fn();
+    render(<Wrapper onAdsetToggle={onAdsetToggle} />);
+
+    await user.click(screen.getByLabelText("Фильтр по адсету"));
+    await user.click(screen.getByRole("option", { name: "adset-ios" }));
+
+    expect(onAdsetToggle).toHaveBeenCalledWith("adset-ios");
+    expect(screen.getByText(/адсет = adset-ios/)).toBeInTheDocument();
   });
 });

@@ -282,6 +282,17 @@ export function AdDrawer({ ad, onClose, isLoading = false, fbAdId }: AdDrawerPro
             </div>
           )}
 
+          {/* Иерархия: кампания / адсет («отец») — различает дубли по адсету */}
+          {(ad.campaign_name || ad.adset_name) && (
+            <section>
+              <Eyebrow className="mb-3">ИЕРАРХИЯ</Eyebrow>
+              <div className="border border-bg-5">
+                <HierRow label="Кампания" value={ad.campaign_name} />
+                <HierRow label="Адсет" value={ad.adset_name} border />
+              </div>
+            </section>
+          )}
+
           {/* Метрики-снимок */}
           <section>
             <Eyebrow className="mb-3">МЕТРИКИ · СНИМОК</Eyebrow>
@@ -375,6 +386,33 @@ export function AdDrawer({ ad, onClose, isLoading = false, fbAdId }: AdDrawerPro
 }
 
 // ─── Sub-компоненты ───────────────────────────────────────────────────────────
+
+/** Строка иерархии (Кампания / Адсет) в drawer. */
+function HierRow({
+  label,
+  value,
+  border,
+}: {
+  label: string;
+  value?: string | null;
+  border?: boolean;
+}) {
+  return (
+    <div
+      className={cn(
+        "flex items-center justify-between gap-3 px-3 py-2",
+        border && "border-t border-bg-5",
+      )}
+    >
+      <span className="font-display text-[10px] uppercase tracking-[0.1em] text-bg-9 shrink-0">
+        {label}
+      </span>
+      <span className="text-[13px] text-bg-11 truncate text-right" title={value ?? undefined}>
+        {value || "—"}
+      </span>
+    </div>
+  );
+}
 
 function DrawerEyebrow({ geo }: { geo: string }) {
   return (

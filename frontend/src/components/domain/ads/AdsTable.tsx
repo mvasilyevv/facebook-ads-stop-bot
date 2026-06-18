@@ -239,21 +239,32 @@ function AdRow({ ad, selected, cursor, top, height, onToggleSelect, onOpen }: Ad
         </span>
       </span>
 
-      {/* AD: thumb + name + первый rule-pill */}
+      {/* AD: thumb + (name + первый rule-pill) / родитель (кампания · адсет) */}
       <div className="flex items-center gap-2 min-w-0 pl-1">
         <GeoThumb geo={geo} dimmed={state === "disabled"} />
-        <span
-          className="font-display text-bg-11 truncate"
-          style={{ fontSize: "var(--row-fs)" }}
-          title={ad.ad_name}
-        >
-          {ad.ad_name}
-        </span>
-        {firstRule ? (
-          <span className="shrink-0">
-            <RulePill code={firstRule} />
+        <div className="min-w-0 flex flex-col">
+          <div className="flex items-center gap-2 min-w-0">
+            <span
+              className="font-display text-bg-11 truncate"
+              style={{ fontSize: "var(--row-fs)" }}
+              title={ad.ad_name}
+            >
+              {ad.ad_name}
+            </span>
+            {firstRule ? (
+              <span className="shrink-0">
+                <RulePill code={firstRule} />
+              </span>
+            ) : null}
+          </div>
+          {/* Родитель: кампания · адсет («отец») — различает дубли по адсету */}
+          <span
+            className="text-[10px] text-bg-9 truncate leading-tight"
+            title={`${ad.campaign_name ?? "—"} · ${ad.adset_name ?? "—"}`}
+          >
+            {ad.campaign_name ?? "—"} · {ad.adset_name ?? "—"}
           </span>
-        ) : null}
+        </div>
       </div>
 
       {/* OFFER chip */}

@@ -53,6 +53,8 @@ function makeSnapshot(overrides: Partial<AdSnapshot> = {}): AdSnapshot {
     fb_ad_id: FB_AD_ID,
     internal_id: "a1b2c3d4-0000-0000-0000-000000000001",
     ad_name: "UA17 | SP | MV | Krov | 24.03",
+    campaign_name: "GH_CR | 18.06",
+    adset_name: "adset-android",
     offer_code: "CR2",
     alert_state: "stop_sent",
     is_active: true,
@@ -118,6 +120,14 @@ describe("AdDrawer (deep-link /ads/$fbAdId)", () => {
     expect(screen.getByText("UA17 | SP | MV | Krov | 24.03")).toBeInTheDocument();
     expect(screen.getAllByText("CR2").length).toBeGreaterThan(0);
     expect(screen.getByText(FB_AD_ID)).toBeInTheDocument();
+  });
+
+  // Иерархия: Кампания/Адсет («отец») — различает дубли по адсету.
+  it("показывает иерархию (Кампания/Адсет)", async () => {
+    await renderDrawer();
+    expect(screen.getByText("ИЕРАРХИЯ")).toBeInTheDocument();
+    expect(screen.getByText("GH_CR | 18.06")).toBeInTheDocument();
+    expect(screen.getByText("adset-android")).toBeInTheDocument();
   });
 
   // Метрики-снимок: spend (money1 — один знак) + лейблы.

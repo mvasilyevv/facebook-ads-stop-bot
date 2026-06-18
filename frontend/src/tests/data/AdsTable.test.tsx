@@ -57,6 +57,19 @@ describe("AdsTable", () => {
     expect(screen.getByText("CR2 | DRC | MV | GH | 2")).toBeInTheDocument();
   });
 
+  // Родитель: кампания · адсет под названием — различает дубли по адсету.
+  it("показывает кампанию и адсет под названием", () => {
+    render(
+      <AdsTable
+        {...baseProps}
+        rows={[makeAd("1", { campaign_name: "GH_CR | 18.06", adset_name: "adset-ios" })]}
+      />,
+    );
+    expect(
+      screen.getByText((_, el) => el?.textContent === "GH_CR | 18.06 · adset-ios"),
+    ).toBeInTheDocument();
+  });
+
   // ROAS всегда «—» (нет в API).
   it("ROAS показывает «—» (нет в API-схеме)", () => {
     render(
