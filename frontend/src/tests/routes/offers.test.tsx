@@ -4,15 +4,15 @@
  * Что проверяем:
  *   - OfferCard: рендер кода, статуса, метрик
  *   - Offers grid: список карточек, EmptyState, кнопка создания
- *   - OfferFormModal: создание (поля code/vertical/is_active)
- *   - RulesForm: 6 полей порогов, onSave вызывается с правильными данными
+ *   - OfferFormModal: создание (code/кабинеты/CPA + ползунки чувствительности)
+ *   - OfferRulesFields: CPA + stop%/warning% передаются в onSave
  *   - Delete: ConfirmDialog с confirmWord
  */
 
 import { render, screen } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { describe, it, expect, vi } from "vitest";
-import type { Offer, OfferRules } from "@fb/shared";
+import type { Offer } from "@fb/shared";
 
 // ─── OfferCard тесты ──────────────────────────────────────────────────────────
 
@@ -309,111 +309,28 @@ describe("OfferFormModal — создание", () => {
     expect(onSave).not.toHaveBeenCalled();
     expect(screen.getByText(/не похоже на id кабинета/i)).toBeInTheDocument();
   });
-});
 
-// ─── RulesForm тесты ──────────────────────────────────────────────────────────
-
-import { RulesForm } from "@/components/offers/RulesForm";
-
-function makeRules(overrides: Partial<OfferRules> = {}): OfferRules {
-  return {
-    offer_id: "offer-uuid-1",
-    spend_no_event_threshold: "50",
-    cpa_threshold: "25",
-    cpm_threshold: "10",
-    ctr_threshold: "1.5",
-    frequency_threshold: null,
-    funnel_ratio_threshold: "0.3",
-    stop_percent_of_rule: "100",
-    warning_percent_of_stop: "80",
-    ...overrides,
-  };
-}
-
-describe("RulesForm", () => {
-  // 6 полей порогов
-  it("рендерит 6 полей правил", () => {
-    render(
-      <RulesForm rules={makeRules()} onSave={async () => {}} />,
-    );
-    // Проверяем наличие key-лейблов
-    expect(screen.getByLabelText(/spend без события/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/cpa порог/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/cpm порог/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/ctr порог/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/frequency порог/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/funnel ratio/i)).toBeInTheDocument();
-  });
-
-  // Значения из rules отображаются в инпутах
-  it("заполняет поля значениями из rules", () => {
-    render(
-      <RulesForm rules={makeRules({ cpa_threshold: "35" })} onSave={async () => {}} />,
-    );
-    const cpaInput = screen.getByLabelText(/cpa порог/i) as HTMLInputElement;
-    expect(cpaInput.value).toBe("35");
-  });
-
-  // null threshold → пустое поле
-  it("null threshold → пустое поле инпута", () => {
-    render(
-      <RulesForm
-        rules={makeRules({ frequency_threshold: null })}
-        onSave={async () => {}}
-      />,
-    );
-    const freqInput = screen.getByLabelText(/frequency порог/i) as HTMLInputElement;
-    expect(freqInput.value).toBe("");
-  });
-
-  // onSave вызывается с правильными данными
-  it("onSave вызывается с корректными данными (непустое=строка, пустое=null)", async () => {
+  // Money-настройки: CPA + дефолтные проценты чувствительности (80/80) уходят в onSave.
+  it("передаёт CPA + дефолтные проценты чувствительности в onSave", async () => {
     const onSave = vi.fn().mockResolvedValue(undefined);
-    render(
-      <RulesForm
-        rules={makeRules({ spend_no_event_threshold: "50", frequency_threshold: null })}
-        onSave={onSave}
-      />,
-    );
+    render(<OfferFormModal open onOpenChange={() => {}} offer={null} onSave={onSave} />);
 
-    // Меняем cpa на 30
-    await userEvent.clear(screen.getByLabelText(/cpa порог/i));
-    await userEvent.type(screen.getByLabelText(/cpa порог/i), "30");
-
-    await userEvent.click(screen.getByRole("button", { name: /сохранить правила/i }));
+    await userEvent.type(screen.getByLabelText(/код оффера/i), "CR2");
+    await userEvent.type(screen.getByLabelText(/рекламные кабинеты/i), "111");
+    await userEvent.type(screen.getByLabelText(/cpa ставка/i), "10");
+    await userEvent.click(screen.getByRole("button", { name: /создать оффер/i }));
 
     expect(onSave).toHaveBeenCalledWith(
       expect.objectContaining({
-        cpa_threshold: "30",
-        frequency_threshold: null, // пустое → null
-        spend_no_event_threshold: "50",
+        code: "CR2",
+        ad_account_ids: ["111"],
+        rules: expect.objectContaining({
+          cpa: "10",
+          stop_percent_of_rule: 80,
+          warning_percent_of_stop: 80,
+        }),
       }),
     );
-  });
-
-  // Пустое поле → null в payload
-  it("очистка поля → передаёт null в onSave", async () => {
-    const onSave = vi.fn().mockResolvedValue(undefined);
-    render(
-      <RulesForm rules={makeRules({ cpm_threshold: "10" })} onSave={onSave} />,
-    );
-
-    await userEvent.clear(screen.getByLabelText(/cpm порог/i));
-    await userEvent.click(screen.getByRole("button", { name: /сохранить правила/i }));
-
-    expect(onSave).toHaveBeenCalledWith(
-      expect.objectContaining({ cpm_threshold: null }),
-    );
-  });
-
-  // onCancel вызывается
-  it("кнопка Отмена вызывает onCancel", async () => {
-    const onCancel = vi.fn();
-    render(
-      <RulesForm rules={makeRules()} onSave={async () => {}} onCancel={onCancel} />,
-    );
-    await userEvent.click(screen.getByRole("button", { name: /отмена/i }));
-    expect(onCancel).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -431,6 +348,9 @@ vi.mock("@/lib/api/offers", () => ({
   useDeleteOffer: vi.fn(() => ({ mutateAsync: mockDeleteMutateAsync, isPending: false })),
   useOfferRules: vi.fn(() => ({ data: null, isLoading: true, isError: false })),
   useUpdateOfferRules: vi.fn(() => ({ mutateAsync: vi.fn(), isPending: false })),
+  useSaveOfferRules: vi.fn(() => ({ mutateAsync: vi.fn(), isPending: false })),
+  // OfferRulesFields внутри формы дёргает preview — мок без сетевого запроса.
+  useRulesPreview: vi.fn(() => ({ data: undefined, isLoading: false, isFetching: false })),
 }));
 
 describe("OfferDeleteManager", () => {

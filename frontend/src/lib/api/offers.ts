@@ -17,6 +17,7 @@ import type { Offer, OfferRules } from "@fb/shared";
 import type { components } from "@fb/shared/api/generated";
 
 type OfferCompareRow = components["schemas"]["OfferCompareRow"];
+type RulePreviewOut = components["schemas"]["RulePreviewOut"];
 
 // ─── Список офферов ───────────────────────────────────────────────────────────
 
@@ -105,6 +106,56 @@ export function useUpdateOfferRules(offerId: string) {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["offers", offerId, "rules"] });
     },
+  });
+}
+
+/**
+ * useSaveOfferRules — PUT правил для ПРОИЗВОЛЬНОГО offerId (id в payload мутации).
+ * Нужен для flow создания: id появляется только после POST /offers, поэтому
+ * useUpdateOfferRules(id) с id-в-конструкторе там не годится.
+ */
+export function useSaveOfferRules() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ offerId, data }: { offerId: string; data: Partial<OfferRules> }) =>
+      apiSend<OfferRules>("PUT", `/offers/${offerId}/rules`, data),
+    onSuccess: (_res, vars) => {
+      qc.invalidateQueries({ queryKey: ["offers", vars.offerId, "rules"] });
+      qc.invalidateQueries({ queryKey: ["offers"] });
+    },
+  });
+}
+
+// ─── Live-разбивка порогов (авторасчёт от CPA + чувствительности) ───────────────
+
+/**
+ * GET /offers/rules/preview — рассчитывает $-пороги (CPC/CPL/CPR + spend-диапазоны)
+ * из CPA и процентов чувствительности. Тот же RuleContext, что и у observer'а, —
+ * значения в preview ТОЧНО совпадают с реальными стоп-порогами.
+ * enabled только при cpa > 0; placeholderData держит прошлый результат, чтобы
+ * таблица не мигала при движении ползунка.
+ */
+export function useRulesPreview(params: {
+  cpa: number | null;
+  stop_percent_of_rule: number;
+  warning_percent_of_stop: number;
+}) {
+  const enabled = params.cpa != null && params.cpa > 0;
+  return useQuery<RulePreviewOut>({
+    queryKey: ["offers", "rules", "preview", params],
+    queryFn: ({ signal }) =>
+      apiGet<RulePreviewOut>(
+        "/offers/rules/preview",
+        {
+          cpa: params.cpa as number,
+          stop_percent_of_rule: params.stop_percent_of_rule,
+          warning_percent_of_stop: params.warning_percent_of_stop,
+        },
+        signal,
+      ),
+    enabled,
+    staleTime: 60_000,
+    placeholderData: (prev) => prev,
   });
 }
 

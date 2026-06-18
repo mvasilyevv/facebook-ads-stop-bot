@@ -1,21 +1,28 @@
 /**
- * Offers/$id — standalone редактор правил для конкретного оффера.
+ * Offers/$id — standalone редактор стоп-правил для конкретного оффера.
  *
  * Маршрут: /offers/$id
- * Показывает: PageHeader с кодом оффера + RulesForm (6 порогов).
+ * Показывает: PageHeader с кодом оффера + ядро money-настроек (CPA + ползунки + live-разбивка).
  * При успехе — навигация обратно на /offers.
  */
 
+import { useEffect, useState } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { ChevronLeft } from "lucide-react";
 
 import { useOffers, useOfferRules, useUpdateOfferRules } from "@/lib/api/offers";
-import { RulesForm } from "@/components/offers/RulesForm";
+import {
+  OfferRulesFields,
+  DEFAULT_OFFER_RULES_VALUES,
+  rulesValuesToPayload,
+  rulesValuesFromOut,
+  type OfferRulesValues,
+} from "@/components/offers/OfferRulesFields";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/Button";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { Skeleton } from "@/components/ui/Skeleton";
-import type { OfferRules } from "@fb/shared";
+import { toast } from "@/components/ui/Toast";
 
 export const Route = createFileRoute("/offers/$id")({
   component: OfferRulesPage,
@@ -26,7 +33,6 @@ function OfferRulesPage() {
   const id = params.id;
   const navigate = useNavigate();
 
-  // Загружаем список офферов для отображения кода (title)
   const { data: offers } = useOffers();
   const offer = offers?.find((o) => o.id === id);
 
@@ -40,8 +46,14 @@ function OfferRulesPage() {
 
   const updateMutation = useUpdateOfferRules(id);
 
-  async function handleSave(values: Partial<OfferRules>) {
-    await updateMutation.mutateAsync(values);
+  const [values, setValues] = useState<OfferRulesValues>(DEFAULT_OFFER_RULES_VALUES);
+  useEffect(() => {
+    setValues(rulesValuesFromOut(rules));
+  }, [rules]);
+
+  async function handleSave() {
+    await updateMutation.mutateAsync(rulesValuesToPayload(values));
+    toast.success("Правила сохранены");
     void navigate({ to: "/" });
   }
 
@@ -74,24 +86,35 @@ function OfferRulesPage() {
       {/* ── Content ── */}
       {rulesLoading && (
         <div className="flex flex-col gap-4">
-          {[1, 2, 3, 4, 5, 6].map((i) => (
+          {[1, 2, 3].map((i) => (
             <Skeleton key={i} height={54} />
           ))}
         </div>
       )}
 
-      {rulesError && (
-        <ErrorState error={error} onRetry={() => void refetch()} />
-      )}
+      {rulesError && <ErrorState error={error} onRetry={() => void refetch()} />}
 
       {!rulesLoading && !rulesError && (
-        <RulesForm
-          rules={rules}
-          loading={rulesLoading}
-          saving={updateMutation.isPending}
-          onSave={handleSave}
-          onCancel={handleBack}
-        />
+        <>
+          <OfferRulesFields
+            values={values}
+            onChange={(patch) => setValues((v) => ({ ...v, ...patch }))}
+            disabled={updateMutation.isPending}
+          />
+          <div className="flex items-center gap-2 justify-end mt-6">
+            <Button type="button" variant="ghost" onClick={handleBack} disabled={updateMutation.isPending}>
+              Отмена
+            </Button>
+            <Button
+              type="button"
+              variant="primary"
+              loading={updateMutation.isPending}
+              onClick={() => void handleSave()}
+            >
+              Сохранить правила
+            </Button>
+          </div>
+        </>
       )}
     </div>
   );

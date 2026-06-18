@@ -10,7 +10,7 @@
  *   ConfirmDialog (delete)
  */
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { Tag, Plus, ChevronDown } from "lucide-react";
 
@@ -20,9 +20,12 @@ import {
   useCreateOffer,
   useUpdateOffer,
   useDeleteOffer,
+  useOfferRules,
+  useSaveOfferRules,
 } from "@/lib/api/offers";
 import { OfferCard } from "@/components/offers/OfferCard";
 import { OfferFormModal } from "@/components/offers/OfferFormModal";
+import { rulesValuesToPayload, rulesValuesFromOut } from "@/components/offers/OfferRulesFields";
 import { RulesDrawer } from "@/components/offers/RulesDrawer";
 import { PageHeader, HeaderSep } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/Button";
@@ -67,6 +70,7 @@ function OffersPage() {
 
   // Мутации — один экземпляр на страницу
   const createMutation = useCreateOffer();
+  const saveRules = useSaveOfferRules();
 
   function handleOpenRules(offer: Offer) {
     setRulesOffer(offer);
@@ -206,12 +210,16 @@ function OffersPage() {
         onOpenChange={setCreateOpen}
         offer={null}
         onSave={async (values) => {
-          await createMutation.mutateAsync({
+          // 1) Создаём оффер → получаем id. 2) Пишем стоп-правила (CPA + чувствительность).
+          const created = await createMutation.mutateAsync({
             code: values.code,
             name: values.code, // бэк: name=code
-            vertical: values.vertical || undefined,
             is_active: values.is_active,
             ad_account_ids: values.ad_account_ids, // мульти-кабинет: min 1
+          });
+          await saveRules.mutateAsync({
+            offerId: created.id,
+            data: rulesValuesToPayload(values.rules),
           });
           setCreateOpen(false);
           toast.success(
@@ -269,17 +277,26 @@ function OffersPage() {
  */
 function EditOfferModal({ offer, onClose }: { offer: Offer; onClose: () => void }) {
   const updateMutation = useUpdateOffer(offer.id);
+  const saveRules = useSaveOfferRules();
+  const { data: rules } = useOfferRules(offer.id);
+  // Мемо по ссылке rules (react-query кэш стабилен) — иначе initialRules-объект
+  // пересоздавался бы каждый рендер и сбрасывал ввод формы.
+  const initialRules = useMemo(() => rulesValuesFromOut(rules), [rules]);
 
   return (
     <OfferFormModal
       open
       onOpenChange={(open) => { if (!open) onClose(); }}
       offer={offer}
+      initialRules={initialRules}
       onSave={async (values) => {
         await updateMutation.mutateAsync({
-          vertical: values.vertical || undefined,
           is_active: values.is_active,
           ad_account_ids: values.ad_account_ids, // мульти-кабинет: замена списка
+        });
+        await saveRules.mutateAsync({
+          offerId: offer.id,
+          data: rulesValuesToPayload(values.rules),
         });
         onClose();
       }}

@@ -1,44 +1,38 @@
 /**
- * OfferFormModal — модал создания/редактирования оффера.
+ * OfferFormModal — модал создания/редактирования оффера + money-настроек.
  *
- * Поля (по спеке бэка offers.py:244, code immutable при редактировании):
- *   - code (string, только при создании)
- *   - vertical (string, опционально)
+ * Поля:
+ *   - code (string, только при создании; name=code на бэке)
+ *   - ad_account_ids (мульти-кабинет, минимум 1)
  *   - is_active (boolean)
+ *   - rules: CPA + ползунки stop%/warning% + live-разбивка (OfferRulesFields)
  *
- * Поле «Название» (name) отсутствует в UI — бэк принимает name=code.
- * CLAUDE.md: «name=code, поле «Название» убрано из UI»
+ * vertical убран из UI (на матчинг/правила не влияет; колонка в БД остаётся nullable).
+ * Сохранение правил — отдельным PUT /offers/{id}/rules, проводку делает родитель
+ * (routes/offers): create → id → rules, либо update → rules.
  */
 
 import { useEffect, useState } from "react";
 import { Modal, ModalFooter } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
-import { Select } from "@/components/ui/Select";
 import { Switch } from "@/components/ui/Switch";
+import {
+  OfferRulesFields,
+  DEFAULT_OFFER_RULES_VALUES,
+  type OfferRulesValues,
+} from "./OfferRulesFields";
 import type { Offer } from "@fb/shared";
-
-// ─── Вертикали (предустановленные варианты) ───────────────────────────────────
-
-const VERTICAL_OPTIONS = [
-  { value: "", label: "— не указана —" },
-  { value: "gambling", label: "Gambling" },
-  { value: "betting", label: "Betting" },
-  { value: "nutra", label: "Nutra" },
-  { value: "crypto", label: "Crypto" },
-  { value: "dating", label: "Dating" },
-  { value: "finance", label: "Finance" },
-  { value: "other", label: "Other" },
-];
 
 // ─── Типы ────────────────────────────────────────────────────────────────────
 
-interface OfferFormValues {
+export interface OfferFormValues {
   code: string;
-  vertical: string;
   is_active: boolean;
   /** Мульти-кабинет: числовые ID кабинетов (без act_), минимум 1. */
   ad_account_ids: string[];
+  /** Money-настройки: CPA + чувствительность стоп/warning. */
+  rules: OfferRulesValues;
 }
 
 /** Разбор ввода кабинетов: запятые/пробелы/переносы, срез act_, дедуп. */
@@ -67,46 +61,48 @@ interface OfferFormModalProps {
   onOpenChange: (open: boolean) => void;
   /** Если задан — режим редактирования. Иначе — создание. */
   offer?: Offer | null;
-  /** Обработчик сохранения. Получает заполненные поля формы. */
+  /** Текущие правила оффера (для режима редактирования). */
+  initialRules?: Partial<OfferRulesValues>;
+  /** Обработчик сохранения. Получает поля формы + правила. */
   onSave: (values: OfferFormValues) => Promise<void>;
 }
 
 // ─── Компонент ────────────────────────────────────────────────────────────────
 
-export function OfferFormModal({ open, onOpenChange, offer, onSave }: OfferFormModalProps) {
+export function OfferFormModal({
+  open,
+  onOpenChange,
+  offer,
+  initialRules,
+  onSave,
+}: OfferFormModalProps) {
   const isEdit = !!offer;
   // ad_account_ids появляется в generated-типах после pnpm gen:api — до этого читаем мягко.
   const offerAccounts =
     (offer as (Offer & { ad_account_ids?: string[] }) | null | undefined)?.ad_account_ids ?? [];
 
-  const [values, setValues] = useState<OfferFormValues>({
-    code: "",
-    vertical: "",
-    is_active: true,
-    ad_account_ids: [],
-  });
-  // Сырой ввод кабинетов (текст до парсинга) — парсим на submit и on-blur.
+  const [code, setCode] = useState("");
+  const [isActive, setIsActive] = useState(true);
+  const [rules, setRules] = useState<OfferRulesValues>(DEFAULT_OFFER_RULES_VALUES);
+  // Сырой ввод кабинетов (текст до парсинга) — парсим на submit.
   const [accountsRaw, setAccountsRaw] = useState("");
   const [codeError, setCodeError] = useState<string | undefined>();
   const [accountsError, setAccountsError] = useState<string | undefined>();
   const [busy, setBusy] = useState(false);
 
-  // Синхронизируем состояние при открытии/смене оффера
+  // Синхронизируем состояние при открытии/смене оффера/правил.
   useEffect(() => {
     if (open) {
-      setValues({
-        code: offer?.code ?? "",
-        vertical: offer?.vertical ?? "",
-        is_active: offer?.is_active ?? true,
-        ad_account_ids: offerAccounts,
-      });
+      setCode(offer?.code ?? "");
+      setIsActive(offer?.is_active ?? true);
+      setRules({ ...DEFAULT_OFFER_RULES_VALUES, ...initialRules });
       setAccountsRaw(offerAccounts.join(", "));
       setCodeError(undefined);
       setAccountsError(undefined);
     }
-    // offerAccounts — производное от offer, отдельная зависимость не нужна.
+    // offerAccounts/initialRules — производные от offer; отдельные зависимости не нужны.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, offer]);
+  }, [open, offer, initialRules]);
 
   function handleClose(next: boolean) {
     if (busy) return;
@@ -116,14 +112,14 @@ export function OfferFormModal({ open, onOpenChange, offer, onSave }: OfferFormM
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
 
-    // Валидация кода
+    // Валидация кода (только при создании).
     if (!isEdit) {
-      const code = values.code.trim();
-      if (!code) {
+      const trimmed = code.trim();
+      if (!trimmed) {
         setCodeError("Код оффера обязателен");
         return;
       }
-      if (!/^[A-Z0-9_]+$/i.test(code)) {
+      if (!/^[A-Z0-9_]+$/i.test(trimmed)) {
         setCodeError("Только латиница, цифры и _ (напр. CR2, GH_AVI)");
         return;
       }
@@ -143,9 +139,10 @@ export function OfferFormModal({ open, onOpenChange, offer, onSave }: OfferFormM
     setBusy(true);
     try {
       await onSave({
-        ...values,
-        code: values.code.trim().toUpperCase(),
+        code: code.trim().toUpperCase(),
+        is_active: isActive,
         ad_account_ids: ids,
+        rules,
       });
       handleClose(false);
     } finally {
@@ -158,8 +155,10 @@ export function OfferFormModal({ open, onOpenChange, offer, onSave }: OfferFormM
       open={open}
       onOpenChange={handleClose}
       title={isEdit ? `Оффер ${offer!.code}` : "Новый оффер"}
-      description={isEdit ? "Изменить вертикаль и статус." : "Добавить оффер для матчинга кампаний."}
-      size="sm"
+      description={
+        isEdit ? "Кабинеты, статус и стоп-правила." : "Добавить оффер для матчинга кампаний."
+      }
+      size="md"
     >
       <form onSubmit={(e) => void handleSubmit(e)} noValidate>
         <div className="flex flex-col gap-4 mb-6">
@@ -169,9 +168,9 @@ export function OfferFormModal({ open, onOpenChange, offer, onSave }: OfferFormM
               id="offer-code"
               label="Код оффера"
               placeholder="CR2"
-              value={values.code}
+              value={code}
               onChange={(e) => {
-                setValues((v) => ({ ...v, code: e.target.value }));
+                setCode(e.target.value);
                 if (codeError) setCodeError(undefined);
               }}
               errorMessage={codeError}
@@ -180,7 +179,6 @@ export function OfferFormModal({ open, onOpenChange, offer, onSave }: OfferFormM
               spellCheck={false}
             />
           ) : (
-            /* В режиме редактирования — readonly code badge */
             <div>
               <div className="font-display text-[11px] tracking-wider uppercase text-bg-9 mb-1.5">
                 Код оффера
@@ -210,19 +208,22 @@ export function OfferFormModal({ open, onOpenChange, offer, onSave }: OfferFormM
             helpText="ID кабинетов, где крутится оффер (без act_). Сканируются только кабинеты, указанные хотя бы у одного активного оффера."
           />
 
-          {/* Вертикаль */}
-          <Select
-            id="offer-vertical"
-            label="Вертикаль"
-            options={VERTICAL_OPTIONS}
-            value={values.vertical}
-            onChange={(e) => setValues((v) => ({ ...v, vertical: e.target.value }))}
-          />
+          {/* ── Money-настройки: CPA + чувствительность + live-разбивка ── */}
+          <div className="pt-2 border-t border-bg-5">
+            <div className="font-display text-[10px] tracking-[0.12em] uppercase text-bg-8 mb-3">
+              СТОП-ПРАВИЛА
+            </div>
+            <OfferRulesFields
+              values={rules}
+              onChange={(patch) => setRules((r) => ({ ...r, ...patch }))}
+              disabled={busy}
+            />
+          </div>
 
           {/* Статус */}
           <Switch
-            checked={values.is_active}
-            onChange={() => setValues((v) => ({ ...v, is_active: !v.is_active }))}
+            checked={isActive}
+            onChange={() => setIsActive((v) => !v)}
             label="Активный оффер"
             visualLabel="Статус"
             description="Неактивные офферы не матчатся с кампаниями и скрыты из дашборда."
