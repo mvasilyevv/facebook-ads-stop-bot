@@ -7,7 +7,8 @@
 
 import { useState, useEffect, type FC } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { RefreshCw } from "lucide-react";
+import { RefreshCw, Check } from "lucide-react";
+import { cn } from "@/lib/utils/cn";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Card } from "@/components/ui/Card";
 import { TagListInput } from "@/components/ui/TagListInput";
@@ -101,6 +102,41 @@ const OwnerTagCard: FC = () => {
 
 // ─── Отслеживаемые кампании (allowlist) ───────────────────────────────────────
 
+/** Визуальный чекбокс-индикатор (кликабелен сам ряд, своей кнопки нет). */
+const CheckBox: FC<{ state: boolean | "mixed" }> = ({ state }) => (
+  <span
+    aria-hidden="true"
+    className={cn(
+      "inline-flex items-center justify-center shrink-0 size-4 rounded-[var(--radius-1)]",
+      "border-[1.5px] transition-colors duration-[120ms]",
+      state === false ? "bg-bg-2 border-bg-7" : "bg-accent border-accent text-bg-0",
+    )}
+  >
+    {state === true && <Check size={11} strokeWidth={3} />}
+    {state === "mixed" && <span className="block w-2 h-[2px] rounded-full bg-bg-0" />}
+  </span>
+);
+
+/** Имя кампании сегментами по «|»: owner-тег приглушён, разделители тонкие. */
+const CampaignName: FC<{ name: string }> = ({ name }) => {
+  const parts = name.split(/\s*\|\s*/).filter(Boolean);
+  if (parts.length <= 1) return <span className="text-bg-11">{name || "—"}</span>;
+  return (
+    <span className="inline-flex flex-wrap items-baseline gap-x-1 gap-y-0.5 leading-tight">
+      {parts.map((p, i) => (
+        <span key={`${i}-${p}`} className="inline-flex items-baseline">
+          {i > 0 && (
+            <span aria-hidden="true" className="text-bg-7 mr-1">
+              /
+            </span>
+          )}
+          <span className={i === 0 ? "text-bg-9" : "text-bg-11"}>{p}</span>
+        </span>
+      ))}
+    </span>
+  );
+};
+
 const CampaignAllowlist: FC = () => {
   const { data: campaigns, isLoading } = useObserverCampaigns();
   const refreshMut = useRefreshObserverCampaigns();
@@ -121,6 +157,13 @@ const CampaignAllowlist: FC = () => {
       return n;
     });
 
+  const allIds = campaigns?.map((c) => c.id) ?? [];
+  const allSelected = allIds.length > 0 && allIds.every((id) => selected.has(id));
+  const someSelected = allIds.some((id) => selected.has(id));
+  const headerState: boolean | "mixed" = allSelected ? true : someSelected ? "mixed" : false;
+
+  const toggleAll = () => setSelected(() => (allSelected ? new Set() : new Set(allIds)));
+
   const handleRefresh = async () => {
     try {
       await refreshMut.mutateAsync();
@@ -138,6 +181,8 @@ const CampaignAllowlist: FC = () => {
       toast.error("Ошибка сохранения выбора", e instanceof Error ? e.message : String(e));
     }
   };
+
+  const hasCampaigns = !!campaigns && campaigns.length > 0;
 
   return (
     <Card padded>
@@ -162,7 +207,7 @@ const CampaignAllowlist: FC = () => {
 
       {isLoading ? (
         <Skeleton className="h-24 w-full" />
-      ) : !campaigns || campaigns.length === 0 ? (
+      ) : !hasCampaigns ? (
         <div
           className="text-[12px] text-bg-8 border border-[var(--hairline)] rounded-[var(--radius-2)]"
           style={{ padding: "var(--s-4)" }}
@@ -170,35 +215,55 @@ const CampaignAllowlist: FC = () => {
           Кампаний нет. Нажми «Обновить список» — резолвим из кабинета по Owner Tag.
         </div>
       ) : (
-        <div
-          className="border border-[var(--hairline)] rounded-[var(--radius-2)] overflow-hidden"
-          style={{ maxHeight: 320, overflowY: "auto" }}
-        >
-          {campaigns.map((c) => (
-            <label
-              key={c.id}
-              className="text-[13px] text-bg-10"
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 10,
-                padding: "8px 12px",
-                borderBottom: "1px solid var(--hairline)",
-                cursor: "pointer",
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={selected.has(c.id)}
-                onChange={() => toggle(c.id)}
-                aria-label={`Отслеживать ${c.name}`}
-              />
-              <span style={{ flex: 1 }}>{c.name || c.id}</span>
-              <span className="font-display tabular-nums text-[11px] text-bg-7">
-                …{c.id.slice(-4)}
-              </span>
-            </label>
-          ))}
+        <div className="border border-[var(--hairline)] rounded-[var(--radius-2)] overflow-hidden">
+          {/* Шапка: выбрать/снять все (tri-state) */}
+          <button
+            type="button"
+            role="checkbox"
+            aria-checked={headerState === "mixed" ? "mixed" : headerState}
+            onClick={toggleAll}
+            className={cn(
+              "w-full flex items-center gap-2.5 px-3 py-2 text-left",
+              "bg-bg-1 border-b border-[var(--hairline)] cursor-pointer",
+              "hover:bg-bg-2 transition-colors",
+            )}
+          >
+            <CheckBox state={headerState} />
+            <span className="font-display text-[10.5px] tracking-wider uppercase text-bg-9">
+              {allSelected ? "Снять все" : "Выбрать все"}
+            </span>
+            <span className="ml-auto font-display tabular-nums text-[11px] text-bg-7">
+              {selected.size} / {allIds.length}
+            </span>
+          </button>
+
+          {/* Ряды кампаний */}
+          <div style={{ maxHeight: 360, overflowY: "auto" }}>
+            {campaigns!.map((c) => {
+              const isSel = selected.has(c.id);
+              return (
+                <button
+                  key={c.id}
+                  type="button"
+                  role="checkbox"
+                  aria-checked={isSel}
+                  aria-label={c.name || c.id}
+                  onClick={() => toggle(c.id)}
+                  className={cn(
+                    "w-full flex items-center gap-2.5 px-3 py-2.5 text-left text-[13px]",
+                    "border-b border-l-2 border-b-[var(--hairline)] last:border-b-0 cursor-pointer",
+                    "transition-colors",
+                    isSel
+                      ? "bg-accent-bg border-l-accent"
+                      : "border-l-transparent hover:bg-bg-2",
+                  )}
+                >
+                  <CheckBox state={isSel} />
+                  <CampaignName name={c.name || c.id} />
+                </button>
+              );
+            })}
+          </div>
         </div>
       )}
 
@@ -207,7 +272,7 @@ const CampaignAllowlist: FC = () => {
           variant="primary"
           onClick={() => void handleSaveAllowlist()}
           loading={saveMut.isPending}
-          disabled={!campaigns || campaigns.length === 0}
+          disabled={!hasCampaigns}
         >
           Сохранить выбор ({selected.size})
         </Button>
