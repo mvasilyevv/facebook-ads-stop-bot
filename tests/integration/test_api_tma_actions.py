@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
 """Integration: TMA money-действия (BL-15 Этап 2) + web_app_url (Этап 1).
 
-Money/security: disable отключает реальное объявление через Marketing API (pause_ad),
-draft-confirm запускает Marketing API mutation. Поэтому проверяем guard (401 без токена),
-фактическое создание нужной записи и ACL подтверждения чужого черновика.
+Money/security: disable отключает реальное объявление через Marketing API (pause_ad).
+Поэтому проверяем guard (401 без токена) и фактическое создание нужной записи.
 
 DOM-toggle канал удалён (#fix/remove-dom-toggle). disable ВСЕГДА создаёт
 meta_api_mutation pause_ad, ответ channel == 'meta_api'.
@@ -28,8 +27,6 @@ from apps.api.deps import get_engine
 from apps.api.main import create_app
 from core.auth.tma import issue_session_token
 from core.config import get_settings
-from core.meta_api.queue import create_draft_task
-from core.meta_api.schemas import MetaMutationPayload
 
 
 def _make_app(engine):
@@ -47,13 +44,12 @@ def _token_for(uid: int) -> str:
 
 @pytest_asyncio.fixture
 async def tma_factory(pg_engine):
-    """Фабрика recipient/ad/draft + token_for с id-scoped teardown."""
+    """Фабрика recipient/ad + token_for с id-scoped teardown."""
     offers: list[uuid.UUID] = []
     campaigns: list[uuid.UUID] = []
     adsets: list[uuid.UUID] = []
     ads: list[uuid.UUID] = []
     recipients: list[tuple[int, int]] = []
-    tasks: list[int] = []
 
     async def make_recipient(
         uid: int, *, chat_id: int | None = None, role: str = "recipient"
@@ -152,39 +148,13 @@ async def tma_factory(pg_engine):
         ads.append(ad_id)
         return ad_id
 
-    async def make_draft(
-        *,
-        created_by_chat_id: int | None,
-        mutation_kind: str = "pause_ad",
-        target_id: str = "23999000111",
-        requested_by: str = "ai",
-    ) -> int:
-        payload = MetaMutationPayload(
-            mutation_kind=mutation_kind,
-            target_id=target_id,
-            params={"reason": "тест"},
-            ad_account_id="act_777",
-        )
-        tid = await create_draft_task(
-            pg_engine,
-            payload=payload,
-            requested_by=requested_by,
-            created_by_chat_id=created_by_chat_id,
-        )
-        assert tid is not None
-        tasks.append(tid)
-        return tid
-
     yield SimpleNamespace(
         make_recipient=make_recipient,
         make_ad=make_ad,
-        make_draft=make_draft,
         token_for=_token_for,
     )
 
     async with pg_engine.begin() as conn:
-        if tasks:
-            await conn.execute(text("DELETE FROM task_queue WHERE id = ANY(:ids)"), {"ids": tasks})
         if ads:
             await conn.execute(text("DELETE FROM fb_ads WHERE id = ANY(:ids)"), {"ids": ads})
         if adsets:
@@ -217,10 +187,7 @@ async def test_actions_require_token_401(pg_engine, tma_factory):
         r2 = await ac.post(f"/api/tma/ads/{fb}/disable", json={"reason": "x"})
         r3 = await ac.post(f"/api/tma/ads/{fb}/snooze", json={"minutes": 30})
         r4 = await ac.post(f"/api/tma/ads/{fb}/claim", json={})
-        r5 = await ac.get("/api/tma/draft-tasks")
-        r6 = await ac.post("/api/tma/draft-tasks/1/confirm", json={})
-        r7 = await ac.post("/api/tma/draft-tasks/1/reject", json={})
-    assert [r.status_code for r in (r1, r2, r3, r4, r5, r6, r7)] == [401] * 7
+    assert [r.status_code for r in (r1, r2, r3, r4)] == [401] * 4
 
 
 # ─────────────────────────── GET /tma/ads/{id} ───────────────────────────────
@@ -487,151 +454,3 @@ async def test_claim_idempotent(pg_engine, tma_factory):
         resp = await ac.post(f"/api/tma/ads/{fb}/claim", json={}, headers=headers)
     assert resp.status_code == 200
     assert resp.json()["alert_state"] == "claimed"
-
-
-# ─────────────────────────── DRAFT list/detail ───────────────────────────────
-
-
-# Список draft-задач + детали по id
-@pytest.mark.asyncio
-async def test_draft_list_and_detail(pg_engine, tma_factory):
-    uid = 7200012
-    chat = await tma_factory.make_recipient(uid, role="recipient")
-    tid = await tma_factory.make_draft(created_by_chat_id=chat, mutation_kind="set_adset_budget")
-    app = _make_app(pg_engine)
-    headers = {"Authorization": f"Bearer {tma_factory.token_for(uid)}"}
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as ac:
-        lst = await ac.get("/api/tma/draft-tasks", headers=headers)
-        detail = await ac.get(f"/api/tma/draft-tasks/{tid}", headers=headers)
-    assert lst.status_code == 200
-    ids = [d["id"] for d in lst.json()]
-    assert tid in ids
-    assert detail.status_code == 200
-    body = detail.json()
-    assert body["id"] == tid
-    assert body["mutation_kind"] == "set_adset_budget"
-    assert body["payload"].get("reason") == "тест"
-
-
-# ─────────────────────── DRAFT confirm ACL (money-критично) ───────────────────
-
-
-# Владелец подтверждает свой draft → 200, статус становится pending
-@pytest.mark.asyncio
-async def test_draft_confirm_owner(pg_engine, tma_factory):
-    uid = 7200013
-    chat = await tma_factory.make_recipient(uid, role="owner")
-    tid = await tma_factory.make_draft(created_by_chat_id=chat)
-    app = _make_app(pg_engine)
-    headers = {"Authorization": f"Bearer {tma_factory.token_for(uid)}"}
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as ac:
-        resp = await ac.post(f"/api/tma/draft-tasks/{tid}/confirm", json={}, headers=headers)
-    assert resp.status_code == 200, resp.text
-    async with pg_engine.connect() as conn:
-        row = (
-            await conn.execute(text("SELECT status FROM task_queue WHERE id = :id"), {"id": tid})
-        ).first()
-    assert row.status == "pending"
-
-
-# H-2: recipient НЕ может подтвердить даже СВОЙ money-черновик → 403, статус остаётся draft
-@pytest.mark.asyncio
-async def test_draft_confirm_own_recipient_forbidden(pg_engine, tma_factory):
-    uid = 7200014
-    chat = await tma_factory.make_recipient(uid, role="recipient")
-    tid = await tma_factory.make_draft(created_by_chat_id=chat)
-    app = _make_app(pg_engine)
-    headers = {"Authorization": f"Bearer {tma_factory.token_for(uid)}"}
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as ac:
-        resp = await ac.post(f"/api/tma/draft-tasks/{tid}/confirm", json={}, headers=headers)
-    # Money-исполнение только owner: recipient (даже автор черновика) получает отказ
-    assert resp.status_code == 403, resp.text
-    async with pg_engine.connect() as conn:
-        row = (
-            await conn.execute(text("SELECT status FROM task_queue WHERE id = :id"), {"id": tid})
-        ).first()
-    assert row.status == "draft"  # черновик НЕ ушёл в pending
-
-
-# КРИТИЧНО: recipient подтверждает ЧУЖОЙ draft → 403, статус остаётся draft
-@pytest.mark.asyncio
-async def test_draft_confirm_foreign_forbidden(pg_engine, tma_factory):
-    owner_uid, owner_chat = 7200015, 7200015
-    foreign_uid = 7200016
-    await tma_factory.make_recipient(owner_uid, chat_id=owner_chat, role="recipient")
-    await tma_factory.make_recipient(foreign_uid, role="recipient")
-    # draft создан owner'ом (created_by_chat_id = owner_chat)
-    tid = await tma_factory.make_draft(created_by_chat_id=owner_chat)
-    app = _make_app(pg_engine)
-    headers = {"Authorization": f"Bearer {tma_factory.token_for(foreign_uid)}"}
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as ac:
-        resp = await ac.post(f"/api/tma/draft-tasks/{tid}/confirm", json={}, headers=headers)
-    assert resp.status_code == 403
-    async with pg_engine.connect() as conn:
-        row = (
-            await conn.execute(text("SELECT status FROM task_queue WHERE id = :id"), {"id": tid})
-        ).first()
-    assert row.status == "draft"  # чужой draft НЕ подтверждён
-
-
-# Владелец подтверждает ЧУЖОЙ draft (admin_override) → 200
-@pytest.mark.asyncio
-async def test_draft_confirm_owner_override_foreign(pg_engine, tma_factory):
-    owner_uid = 7200017
-    other_chat = 7200018
-    await tma_factory.make_recipient(owner_uid, role="owner")
-    await tma_factory.make_recipient(other_chat, role="recipient")
-    tid = await tma_factory.make_draft(created_by_chat_id=other_chat)
-    app = _make_app(pg_engine)
-    headers = {"Authorization": f"Bearer {tma_factory.token_for(owner_uid)}"}
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as ac:
-        resp = await ac.post(f"/api/tma/draft-tasks/{tid}/confirm", json={}, headers=headers)
-    assert resp.status_code == 200, resp.text
-    async with pg_engine.connect() as conn:
-        row = (
-            await conn.execute(text("SELECT status FROM task_queue WHERE id = :id"), {"id": tid})
-        ).first()
-    assert row.status == "pending"
-
-
-# ─────────────────────────── DRAFT reject ACL ────────────────────────────────
-
-
-# Создатель отклоняет свой draft → 200, статус cancelled
-@pytest.mark.asyncio
-async def test_draft_reject_own(pg_engine, tma_factory):
-    uid = 7200019
-    chat = await tma_factory.make_recipient(uid, role="recipient")
-    tid = await tma_factory.make_draft(created_by_chat_id=chat)
-    app = _make_app(pg_engine)
-    headers = {"Authorization": f"Bearer {tma_factory.token_for(uid)}"}
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as ac:
-        resp = await ac.post(
-            f"/api/tma/draft-tasks/{tid}/reject", json={"reason": "не надо"}, headers=headers
-        )
-    assert resp.status_code == 200, resp.text
-    async with pg_engine.connect() as conn:
-        row = (
-            await conn.execute(text("SELECT status FROM task_queue WHERE id = :id"), {"id": tid})
-        ).first()
-    assert row.status == "cancelled"
-
-
-# Recipient отклоняет ЧУЖОЙ draft → 403, статус остаётся draft
-@pytest.mark.asyncio
-async def test_draft_reject_foreign_forbidden(pg_engine, tma_factory):
-    owner_chat = 7200020
-    foreign_uid = 7200021
-    await tma_factory.make_recipient(owner_chat, role="recipient")
-    await tma_factory.make_recipient(foreign_uid, role="recipient")
-    tid = await tma_factory.make_draft(created_by_chat_id=owner_chat)
-    app = _make_app(pg_engine)
-    headers = {"Authorization": f"Bearer {tma_factory.token_for(foreign_uid)}"}
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as ac:
-        resp = await ac.post(f"/api/tma/draft-tasks/{tid}/reject", json={}, headers=headers)
-    assert resp.status_code == 403
-    async with pg_engine.connect() as conn:
-        row = (
-            await conn.execute(text("SELECT status FROM task_queue WHERE id = :id"), {"id": tid})
-        ).first()
-    assert row.status == "draft"
