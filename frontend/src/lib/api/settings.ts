@@ -64,6 +64,8 @@ export function useObserverSettings() {
 export function useUpdateObserverSettings() {
   const qc = useQueryClient();
   return useMutation({
+    // settings-вкладки показывают свою ошибку (try/catch+toast) → глушим глобальный onError.
+    meta: { suppressGlobalError: true },
     mutationFn: (data: Partial<ObserverConfig>) =>
       apiSend<ObserverConfig>("PUT", "/settings/observer", data),
     onSuccess: () => {
@@ -75,6 +77,8 @@ export function useUpdateObserverSettings() {
 export function useScanNow() {
   const qc = useQueryClient();
   return useMutation({
+    // settings-вкладки показывают свою ошибку (try/catch+toast) → глушим глобальный onError.
+    meta: { suppressGlobalError: true },
     mutationFn: () => apiSend<{ ok: boolean }>("POST", "/settings/observer/scan-now"),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["observer"] });
@@ -86,6 +90,8 @@ export function useScanNow() {
 export function useRestartObserver() {
   const qc = useQueryClient();
   return useMutation({
+    // settings-вкладки показывают свою ошибку (try/catch+toast) → глушим глобальный onError.
+    meta: { suppressGlobalError: true },
     mutationFn: () =>
       apiSend<{ status: string; channel: string }>("POST", "/observer/restart"),
     onSuccess: () => {
@@ -98,6 +104,8 @@ export function useRestartObserver() {
 export function useStartNewCabinetDay() {
   const qc = useQueryClient();
   return useMutation({
+    // settings-вкладки показывают свою ошибку (try/catch+toast) → глушим глобальный onError.
+    meta: { suppressGlobalError: true },
     mutationFn: () =>
       apiSend<{ status: string; archived_date: string }>(
         "POST",
@@ -113,6 +121,8 @@ export function useStartNewCabinetDay() {
 export function useToggleScanning() {
   const qc = useQueryClient();
   return useMutation({
+    // settings-вкладки показывают свою ошибку (try/catch+toast) → глушим глобальный onError.
+    meta: { suppressGlobalError: true },
     mutationFn: (enabled: boolean) =>
       apiSend<ObserverConfig>("PATCH", "/settings/observer/scanning", { enabled }),
     onSuccess: () => {
@@ -127,6 +137,8 @@ export function useToggleScanning() {
 export function useToggleAutoEnable() {
   const qc = useQueryClient();
   return useMutation({
+    // settings-вкладки показывают свою ошибку (try/catch+toast) → глушим глобальный onError.
+    meta: { suppressGlobalError: true },
     mutationFn: (enabled: boolean) =>
       apiSend<ObserverConfig>("PATCH", "/settings/observer/auto-enable", { enabled }),
     onSuccess: () => {
@@ -158,6 +170,8 @@ export function useObserverCampaigns() {
 export function useRefreshObserverCampaigns() {
   const qc = useQueryClient();
   return useMutation({
+    // settings-вкладки показывают свою ошибку (try/catch+toast) → глушим глобальный onError.
+    meta: { suppressGlobalError: true },
     mutationFn: () =>
       apiSend<CampaignOption[]>("POST", "/settings/observer/campaigns/refresh"),
     onSuccess: (data) => {
@@ -170,6 +184,8 @@ export function useRefreshObserverCampaigns() {
 export function useSetCampaignAllowlist() {
   const qc = useQueryClient();
   return useMutation({
+    // settings-вкладки показывают свою ошибку (try/catch+toast) → глушим глобальный onError.
+    meta: { suppressGlobalError: true },
     mutationFn: (campaign_ids: string[]) =>
       apiSend<ObserverConfig>("PATCH", "/settings/observer/campaigns", { campaign_ids }),
     onSuccess: () => {
@@ -192,6 +208,8 @@ export function useTelegramSettings() {
 export function useUpdateTelegramToken() {
   const qc = useQueryClient();
   return useMutation({
+    // settings-вкладки показывают свою ошибку (try/catch+toast) → глушим глобальный onError.
+    meta: { suppressGlobalError: true },
     mutationFn: (bot_token: string) =>
       apiSend<TelegramSettings>("PUT", "/settings/telegram/token", { bot_token }),
     onSuccess: () => {
@@ -203,6 +221,8 @@ export function useUpdateTelegramToken() {
 export function useDeleteTelegramToken() {
   const qc = useQueryClient();
   return useMutation({
+    // settings-вкладки показывают свою ошибку (try/catch+toast) → глушим глобальный onError.
+    meta: { suppressGlobalError: true },
     mutationFn: () => apiSend<TelegramSettings>("DELETE", "/settings/telegram/token"),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["settings", "telegram"] });
@@ -224,6 +244,8 @@ export function useVisionSettings() {
 export function useUpdateVisionSettings() {
   const qc = useQueryClient();
   return useMutation({
+    // settings-вкладки показывают свою ошибку (try/catch+toast) → глушим глобальный onError.
+    meta: { suppressGlobalError: true },
     mutationFn: (data: { x_token?: string; profile_id?: string }) =>
       apiSend<VisionSettingsResponse>("PUT", "/settings/vision", data),
     onSuccess: () => {
@@ -235,6 +257,8 @@ export function useUpdateVisionSettings() {
 export function useReconnectVision() {
   const qc = useQueryClient();
   return useMutation({
+    // settings-вкладки показывают свою ошибку (try/catch+toast) → глушим глобальный onError.
+    meta: { suppressGlobalError: true },
     mutationFn: () => apiSend<{ ok: boolean }>("POST", "/settings/vision/reconnect"),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["settings", "vision"] });

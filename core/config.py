@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import logging
-import secrets
 from pathlib import Path
 from urllib.parse import quote_plus
 
@@ -15,23 +14,6 @@ logger = logging.getLogger(__name__)
 
 # Путь к .env — корень проекта (рядом с run.sh)
 _ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
-
-
-def _generate_ephemeral_api_key() -> str:
-    """Генерирует временный API-ключ in-memory (НЕ пишет в .env).
-
-    Раньше дописывал ключ в .env через open("a") — при изначально пустом API_KEY
-    КАЖДЫЙ старт процесса (API + 12 воркеров + скрипты + тесты) добавлял новую строку
-    → .env разрастался дублями (наблюдался кейс 131× API_KEY), а «последний» ключ
-    менялся при каждом рестарте, ломая X-API-Key фронта (401 на мутациях). Теперь ключ
-    эфемерный: для СТАБИЛЬНОГО ключа задать API_KEY в .env явно; для локалки —
-    REQUIRE_API_KEY=false.
-    """
-    logger.warning(
-        "API_KEY не задан в .env — сгенерирован ВРЕМЕННЫЙ ключ (меняется при рестарте). "
-        "Задай API_KEY в .env для стабильности или REQUIRE_API_KEY=false для локальной разработки."
-    )
-    return secrets.token_urlsafe(32)
 
 
 class Settings(BaseSettings):
@@ -180,8 +162,16 @@ class Settings(BaseSettings):
             logger.warning("ENCRYPTION_KEY не задан — шифрование токенов в БД не будет работать")
         if not self.telegram_bot_token:
             logger.warning("TELEGRAM_BOT_TOKEN не задан — Telegram-бот не будет работать")
-        if not self.api_key:
-            self.api_key = _generate_ephemeral_api_key()
+        if not self.api_key and self.require_api_key:
+            # L6: НЕ генерим эфемерный ключ. Раньше пустой API_KEY → ротирующийся ключ
+            # in-memory (свой на каждый из 12 процессов) → X-API-Key фронта ловил 401, а
+            # честная ветка 503 в ApiKeyAuthMiddleware была мёртвой. Теперь оставляем ключ
+            # пустым → middleware вернёт диагностируемый 503 «API_KEY не сконфигурирован».
+            logger.error(
+                "API_KEY не задан, но REQUIRE_API_KEY=true — write-эндпоинты вернут 503. "
+                "Задай стабильный API_KEY в .env (и проброс в VITE_API_KEY) или "
+                "REQUIRE_API_KEY=false для локальной разработки."
+            )
         return self
 
     @property

@@ -9,12 +9,15 @@
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiGet, apiSend } from "./client";
+import { toast } from "@/components/ui/Toast";
 import type { DraftOut } from "@fb/shared";
 
+// M3/L5: реальный shape бэка — TmaDraftActionResponse { ok, detail }. Старый тип
+// { ok, task_id, status } не совпадал, а отсутствие toast делало подтверждение
+// money-мутации немым (403/409 проглатывались).
 interface DraftActionResponse {
   ok: boolean;
-  task_id: string;
-  status: string;
+  detail: string;
 }
 
 // ─── Список черновиков ────────────────────────────────────────────────────────
@@ -35,11 +38,13 @@ export function useConfirmDraft() {
   return useMutation({
     mutationFn: (taskId: string) =>
       apiSend<DraftActionResponse>("POST", `/dashboard/draft-tasks/${taskId}/confirm`),
-    onSuccess: () => {
+    onSuccess: (res) => {
+      toast.success("Черновик подтверждён", res?.detail);
       qc.invalidateQueries({ queryKey: ["drafts"] });
       qc.invalidateQueries({ queryKey: ["tasks"] });
       qc.invalidateQueries({ queryKey: ["dashboard"] });
     },
+    // ошибку (403/409) показывает глобальный MutationCache.onError
   });
 }
 
@@ -50,7 +55,8 @@ export function useRejectDraft() {
   return useMutation({
     mutationFn: (taskId: string) =>
       apiSend<DraftActionResponse>("POST", `/dashboard/draft-tasks/${taskId}/reject`),
-    onSuccess: () => {
+    onSuccess: (res) => {
+      toast.success("Черновик отклонён", res?.detail);
       qc.invalidateQueries({ queryKey: ["drafts"] });
     },
   });

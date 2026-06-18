@@ -47,7 +47,11 @@ export function ConfirmDialog({
     setBusy(true);
     try {
       await onConfirm();
-      handleClose(false);
+      handleClose(false); // закрываем ТОЛЬКО при успехе
+    } catch {
+      // L1: ошибку покажет глобальный MutationCache.onError (toast). Диалог НЕ закрываем —
+      // оператор видит, что money-действие не выполнилось, и может повторить. Глотаем тут,
+      // чтобы rejection не всплыл как unhandled из `void handleConfirm()`.
     } finally {
       setBusy(false);
     }
