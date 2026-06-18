@@ -27,14 +27,14 @@ vi.mock("@/lib/tg", () => ({
 import { TabBar } from "@/components/layout/TabBar";
 
 describe("TabBar", () => {
-  // Рендерит все 5 вкладок канона: Панель/Объявления/Черновики/История/Ещё
-  it("рендерит 5 основных вкладок", () => {
+  // Рендерит все 4 вкладки канона: Панель/Объявления/История/Ещё (Черновики убраны)
+  it("рендерит 4 основные вкладки", () => {
     render(<TabBar />);
     expect(screen.getByLabelText("Панель")).toBeInTheDocument();
     expect(screen.getByLabelText("Объявления")).toBeInTheDocument();
-    expect(screen.getByLabelText("Черновики")).toBeInTheDocument();
     expect(screen.getByLabelText("История")).toBeInTheDocument();
     expect(screen.getByLabelText("Ещё")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Черновики")).not.toBeInTheDocument();
   });
 
   // Активная вкладка имеет aria-current="page"
@@ -62,13 +62,13 @@ describe("TabBar", () => {
     expect(mockNavigate).toHaveBeenCalledWith({ to: "/ads" });
   });
 
-  // Черновики — основной таб, навигирует на /drafts
-  it("клик по Черновикам навигирует на /drafts", async () => {
+  // История — основной таб, навигирует на /history
+  it("клик по Истории навигирует на /history", async () => {
     mockLocation.pathname = "/";
     mockNavigate.mockClear();
     render(<TabBar />);
-    await userEvent.click(screen.getByLabelText("Черновики"));
-    expect(mockNavigate).toHaveBeenCalledWith({ to: "/drafts" });
+    await userEvent.click(screen.getByLabelText("История"));
+    expect(mockNavigate).toHaveBeenCalledWith({ to: "/history" });
   });
 
   // Скрывается на /ads/:fbAdId (detail)

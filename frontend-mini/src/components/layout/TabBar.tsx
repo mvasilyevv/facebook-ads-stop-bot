@@ -1,6 +1,6 @@
 /**
- * TabBar — нижний tab-bar канона (5 вкладок).
- * Панель / Объявления / Черновики / История / Ещё.
+ * TabBar — нижний tab-bar канона (4 вкладки).
+ * Панель / Объявления / История / Ещё.
  * Иконка 21px + лейбл 10px, активная — accent + weight 600. safe-area снизу.
  * «Ещё» (Settings) активна также на /offers, /health, /scripts.
  */
@@ -8,7 +8,6 @@ import { useRouter, useLocation } from "@tanstack/react-router";
 import {
   LayoutGrid,
   Megaphone,
-  FileStack,
   History as HistoryIcon,
   MoreHorizontal,
   type LucideIcon,
@@ -27,7 +26,6 @@ interface TabConfig {
 const MAIN_TABS: TabConfig[] = [
   { to: "/", label: "Панель", Icon: LayoutGrid },
   { to: "/ads", label: "Объявления", Icon: Megaphone },
-  { to: "/drafts", label: "Черновики", Icon: FileStack },
   { to: "/history", label: "История", Icon: HistoryIcon },
   { to: "/settings", label: "Ещё", Icon: MoreHorizontal, extra: ["/offers", "/health", "/scripts"] },
 ];
@@ -66,7 +64,7 @@ export function TabBar() {
         "pb-[env(safe-area-inset-bottom)]",
       )}
     >
-      <div className="grid grid-cols-5">
+      <div className="grid grid-cols-4">
         {MAIN_TABS.map((tab) => {
           const active = isTabActive(tab, pathname);
           const Icon = tab.Icon;

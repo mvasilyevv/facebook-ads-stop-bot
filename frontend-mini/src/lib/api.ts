@@ -11,7 +11,6 @@ import type {
   AdSnapshot,
   DashboardBatch,
   DashboardStats,
-  DraftOut,
   HealthDetails,
   HistorySummary,
   ObserverConfig,
@@ -116,11 +115,6 @@ export interface TmaClaimResponse {
   alert_state: string;
 }
 
-export interface TmaDraftActionResponse {
-  ok: boolean;
-  detail: string;
-}
-
 export interface ObserverScanNowResponse {
   ok: boolean;
 }
@@ -133,8 +127,6 @@ export const QK = {
   dashboardAds: (filter?: string, search?: string) =>
     ["dashboard", "ads", filter, search] as const,
   tmaAd: (fbAdId: string) => ["tma", "ad", fbAdId] as const,
-  tmaDrafts: ["tma", "drafts"] as const,
-  tmaDraft: (id: number) => ["tma", "draft", id] as const,
   offers: ["offers"] as const,
   healthDetails: ["health", "details"] as const,
   historySummary: (days: number) => ["history", "summary", days] as const,
@@ -257,56 +249,6 @@ export function useTmaClaim() {
     onSuccess: (_data, { fbAdId }) => {
       void qc.invalidateQueries({ queryKey: QK.tmaAd(fbAdId) });
       void qc.invalidateQueries({ queryKey: QK.dashboardBatch });
-    },
-  });
-}
-
-// ─── Черновики ────────────────────────────────────────────────────────────
-
-/** Список DRAFT-задач. */
-export function useTmaDrafts() {
-  return useQuery({
-    queryKey: QK.tmaDrafts,
-    queryFn: () => fetchJson<DraftOut[]>("/tma/draft-tasks?status=DRAFT&limit=50"),
-    refetchInterval: 20_000,
-  });
-}
-
-/** Детали одного черновика. */
-export function useTmaDraftDetail(taskId: number, enabled = true) {
-  return useQuery({
-    queryKey: QK.tmaDraft(taskId),
-    queryFn: () => fetchJson<DraftOut>(`/tma/draft-tasks/${taskId}`),
-    enabled: enabled && taskId > 0,
-  });
-}
-
-/** Подтвердить черновик. */
-export function useTmaConfirmDraft() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({ taskId }: { taskId: number }) =>
-      fetchJson<TmaDraftActionResponse>(`/tma/draft-tasks/${taskId}/confirm`, {
-        method: "POST",
-        body: "{}",
-      }),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: QK.tmaDrafts });
-    },
-  });
-}
-
-/** Отклонить черновик. */
-export function useTmaRejectDraft() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({ taskId, reason }: { taskId: number; reason?: string }) =>
-      fetchJson<TmaDraftActionResponse>(`/tma/draft-tasks/${taskId}/reject`, {
-        method: "POST",
-        body: JSON.stringify({ reason: reason ?? null }),
-      }),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: QK.tmaDrafts });
     },
   });
 }
