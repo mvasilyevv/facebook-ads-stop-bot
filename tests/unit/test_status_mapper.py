@@ -8,7 +8,11 @@ from __future__ import annotations
 
 import pytest
 
-from apps.api.utils.status_mapper import from_frontend_task_status, to_frontend_task_status
+from apps.api.utils.status_mapper import (
+    from_frontend_task_status,
+    to_frontend_task_status,
+    to_frontend_task_status_safe,
+)
 
 
 # draft считается черновиком и маппится в PENDING — фронт не знает о draft-состоянии.
@@ -86,3 +90,19 @@ def test_cancelled_frontend_maps_to_cancelled_db() -> None:
 def test_unknown_frontend_status_raises_value_error() -> None:
     with pytest.raises(ValueError, match="Неизвестный frontend-статус"):
         from_frontend_task_status("INVALID_STATUS")
+
+
+# L9: safe-вариант для известного статуса работает как обычный маппинг.
+def test_safe_known_status_maps_normally() -> None:
+    assert to_frontend_task_status_safe("draft") == "PENDING"
+    assert to_frontend_task_status_safe("succeeded") == "SUCCEEDED"
+
+
+# L9: safe-вариант для неизвестного статуса НЕ падает — отдаёт .upper() (read-путь 500-safe).
+def test_safe_unknown_status_falls_back_to_upper() -> None:
+    assert to_frontend_task_status_safe("some_future_status") == "SOME_FUTURE_STATUS"
+
+
+# L9: safe-вариант на пустой строке не падает.
+def test_safe_empty_status_returns_empty() -> None:
+    assert to_frontend_task_status_safe("") == ""

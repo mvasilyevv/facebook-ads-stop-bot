@@ -56,6 +56,25 @@ def to_frontend_task_status(db_status: str) -> str:
         ) from exc
 
 
+def to_frontend_task_status_safe(db_status: str) -> str:
+    """Как :func:`to_frontend_task_status`, но без падения на неизвестном статусе.
+
+    L9: для read-путей (timeline, сериализаторы списков задач) появление нового/
+    нестандартного статуса в БД НЕ должно ронять весь ответ 500. Неизвестное
+    значение отдаём как ``.upper()`` (best-effort fallback) вместо ValueError.
+
+    Args:
+        db_status: значение `task_queue.status` из БД.
+
+    Returns:
+        UPPERCASE-статус (известный — из маппинга, иначе ``db_status.upper()``).
+    """
+    try:
+        return to_frontend_task_status(db_status)
+    except ValueError:
+        return (db_status or "").upper()
+
+
 def from_frontend_task_status(frontend_status: str) -> str:
     """Конвертирует UPPERCASE frontend-статус в lowercase для БД.
 

@@ -76,7 +76,12 @@ async def _query_top_campaigns(
                 WHEN SUM(pad.leads) IS NULL OR SUM(pad.leads) = 0 THEN NULL
                 ELSE SUM(pad.spend) / SUM(pad.leads)
             END                  AS cost_per_lead,
-            COUNT(DISTINCT fa.id) AS active_ads_count
+            -- L8: «активные» = is_active AND виделись за 7д (единая семантика с
+            -- history/offers/compare и _count_active_ads_normal). Без FILTER это был
+            -- COUNT всех ads с метриками за окно → расхождение между секциями дашборда.
+            COUNT(DISTINCT fa.id) FILTER (
+                WHERE fa.is_active AND fa.last_seen_at >= NOW() - INTERVAL '7 days'
+            ) AS active_ads_count
         FROM fb_campaigns fc
         JOIN fb_adsets fas ON fas.campaign_id = fc.id
         JOIN fb_ads fa     ON fa.adset_id = fas.id

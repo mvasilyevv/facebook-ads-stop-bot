@@ -21,7 +21,7 @@ from apps.api.routers.v1.schemas.ads_timeline import (
     TaskRow,
 )
 from apps.api.utils.partition import default_window
-from apps.api.utils.status_mapper import to_frontend_task_status
+from apps.api.utils.status_mapper import to_frontend_task_status_safe
 from core.models.catalog.fb_ad import FbAd
 from core.models.catalog.fb_adset import FbAdset
 from core.models.catalog.fb_campaign import FbCampaign
@@ -139,8 +139,7 @@ async def get_ad_timeline(
                 select(TaskQueue)
                 .where(
                     text(
-                        "(payload->>'fb_ad_id' = :fb_ad_id "
-                        "OR payload->>'target_id' = :fb_ad_id)"
+                        "(payload->>'fb_ad_id' = :fb_ad_id OR payload->>'target_id' = :fb_ad_id)"
                     ).bindparams(fb_ad_id=fb_ad_id)
                 )
                 .where(TaskQueue.created_at >= from_dt)
@@ -152,7 +151,8 @@ async def get_ad_timeline(
                 TaskRow(
                     id=r.id,
                     task_type=r.task_type,
-                    status=to_frontend_task_status(r.status),
+                    # L9: safe — нестандартный статус БД не роняет timeline 500.
+                    status=to_frontend_task_status_safe(r.status),
                     requested_by=r.requested_by,
                     created_at=r.created_at,
                     completed_at=r.completed_at,
