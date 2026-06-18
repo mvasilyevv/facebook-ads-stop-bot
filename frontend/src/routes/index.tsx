@@ -39,6 +39,7 @@ import { LiveTail } from "@/components/dashboard/LiveTail";
 import { TaskQueues } from "@/components/dashboard/TaskQueues";
 
 import { useDashboardBatch, useChartData } from "@/lib/api/dashboard";
+import { cumulativeSpendTotal } from "@/lib/utils/spendTotal";
 import { useDisableTasks, useEnableTasks } from "@/lib/api/ads";
 import {
   useObserverSettings,
@@ -115,10 +116,9 @@ function DashboardPage() {
     () => (chartQ.data ?? []).map((b) => Number(b.spend ?? 0)),
     [chartQ.data],
   );
-  const spendTotal = useMemo(
-    () => spendSeries.reduce((a, b) => a + b, 0),
-    [spendSeries],
-  );
+  // Корректный total спенда: складываем ДНЕВНЫЕ итоги (последний кумулятивный бакет
+  // суток), а не все бакеты подряд — иначе кумулятив задваивается (см. cumulativeSpendTotal).
+  const spendTotal = useMemo(() => cumulativeSpendTotal(chartQ.data ?? []), [chartQ.data]);
 
   // live-tail: реальные алерты.
   const events = useMemo<AlertEvent[]>(
