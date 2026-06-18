@@ -14,12 +14,13 @@ from core.creatives.registry import (
 from scripts.creative_report import _build_report, _norm
 
 
-# Реальный реестр (docs/creatives/*.yaml) грузится и проходит валидацию без ошибок
+# Реальный реестр (docs/creatives/*.yaml) грузится и СТРУКТУРНО валиден без ошибок.
+# Содержимое volatile — оператор обнуляет хуки/креативы при «чистом старте» (см.
+# комментарий в hooks.yaml), поэтому не привязываемся к конкретным hooks/креативам.
 def test_real_registry_loads_and_validates() -> None:
     reg = load_registry()
-    assert reg.hooks, "хуки должны загрузиться"
-    assert "KE" in reg.geos
-    assert reg.find_creative("KE_CR2_CR005") is not None
+    assert isinstance(reg.hooks, dict)
+    assert reg.geos, "хотя бы одно гео должно загрузиться"
     assert reg.validate() == []
 
 
@@ -129,7 +130,42 @@ def test_report_collapses_encoding_duplicates() -> None:
 
 # Петля: депозиты креатива раскидываются по всем его хукам
 def test_report_distributes_deposits_to_hooks() -> None:
-    reg = load_registry()
+    # Synthetic-реестр (НЕ volatile docs/creatives): креатив с двумя visual-хуками.
+    # Проверяем именно ЛОГИКУ распределения депозитов по хукам, без привязки к данным.
+    reg = Registry(
+        hooks={
+            "vis_mpesa_green_proof": Hook(
+                id="vis_mpesa_green_proof", level="visual", text="x", type="format", verdict="works"
+            ),
+            "vis_native_fb_post": Hook(
+                id="vis_native_fb_post", level="visual", text="y", type="format", verdict="works"
+            ),
+        },
+        geos={
+            "KE": Geo(
+                code="KE",
+                name="Kenya",
+                slots={
+                    "CR2": Slot(
+                        code="CR2",
+                        geo="KE",
+                        offer_code="KE_CR2",
+                        name="CR2",
+                        mechanic="crash",
+                        creatives=(
+                            Creative(
+                                code="KE_CR2_CR005",
+                                format="static",
+                                status="live",
+                                verdict="winner",
+                                visual_hooks=("vis_mpesa_green_proof", "vis_native_fb_post"),
+                            ),
+                        ),
+                    )
+                },
+            )
+        },
+    )
     deposits = [
         {
             "sub3": "KE_CR2_CR005",
@@ -139,7 +175,7 @@ def test_report_distributes_deposits_to_hooks() -> None:
         },
     ]
     report = _build_report(reg, deposits, 30)
-    # CR005 несёт vis_mpesa_green_proof → хук должен получить те же 5 депозитов
+    # CR005 несёт оба visual-хука → каждый должен получить те же 5 депозитов
     assert "vis_mpesa_green_proof" in report
     assert "vis_native_fb_post" in report
 

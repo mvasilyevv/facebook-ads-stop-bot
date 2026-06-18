@@ -25,7 +25,28 @@ from core.creatives.video_uniquifier import probe_video
 
 _HAS_FFMPEG = shutil.which("ffmpeg") is not None and shutil.which("ffprobe") is not None
 
-requires_ffmpeg = pytest.mark.skipif(not _HAS_FFMPEG, reason="ffmpeg/ffprobe не установлены")
+
+def _ffmpeg_has_drawtext() -> bool:
+    """ffmpeg собран с libfreetype (filter drawtext). Без него overlay-тесты невозможны —
+    на машинах с урезанной сборкой ffmpeg (нет drawtext) их надо пропускать, а не падать."""
+    if not _HAS_FFMPEG:
+        return False
+    try:
+        out = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-filters"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        return "drawtext" in out.stdout
+    except Exception:
+        return False
+
+
+requires_ffmpeg = pytest.mark.skipif(
+    not _ffmpeg_has_drawtext(),
+    reason="ffmpeg/ffprobe не установлены или ffmpeg без filter drawtext (нет libfreetype)",
+)
 
 
 def _make_clip(path: Path) -> None:
@@ -56,7 +77,19 @@ def _frame_md5(video: Path, second: float, tmp: Path) -> str:
     """md5 кадра на заданной секунде."""
     frame = tmp / f"f_{second}.png"
     subprocess.run(
-        ["ffmpeg", "-loglevel", "error", "-y", "-ss", str(second), "-i", str(video), "-frames:v", "1", str(frame)],
+        [
+            "ffmpeg",
+            "-loglevel",
+            "error",
+            "-y",
+            "-ss",
+            str(second),
+            "-i",
+            str(video),
+            "-frames:v",
+            "1",
+            str(frame),
+        ],
         check=True,
         capture_output=True,
     )
@@ -71,9 +104,7 @@ async def test_overlay_changes_frames_and_keeps_duration(tmp_path):
     _make_clip(src)
     out = tmp_path / "overlaid.mp4"
 
-    spec = OverlaySpec(
-        texts=[caption("GHS 10", fontsize=24), banner("20 FREE BETS", fontsize=18)]
-    )
+    spec = OverlaySpec(texts=[caption("GHS 10", fontsize=24), banner("20 FREE BETS", fontsize=18)])
     await overlay_video(src, out, spec)
 
     assert out.is_file()
