@@ -342,7 +342,8 @@ proto.fb_agent.scanner.v1.ListCampaignsRequest.toObject = function(includeInstan
   var f, obj = {
     sessionId: jspb.Message.getFieldWithDefault(msg, 1, ""),
     pageId: jspb.Message.getFieldWithDefault(msg, 2, ""),
-    ownerTag: jspb.Message.getFieldWithDefault(msg, 3, "")
+    ownerTag: jspb.Message.getFieldWithDefault(msg, 3, ""),
+    adAccountId: jspb.Message.getFieldWithDefault(msg, 4, "")
   };
 
   if (includeInstance) {
@@ -391,6 +392,10 @@ proto.fb_agent.scanner.v1.ListCampaignsRequest.deserializeBinaryFromReader = fun
       var value = /** @type {string} */ (reader.readString());
       msg.setOwnerTag(value);
       break;
+    case 4:
+      var value = /** @type {string} */ (reader.readString());
+      msg.setAdAccountId(value);
+      break;
     default:
       reader.skipField();
       break;
@@ -438,6 +443,13 @@ proto.fb_agent.scanner.v1.ListCampaignsRequest.serializeBinaryToWriter = functio
   if (f.length > 0) {
     writer.writeString(
       3,
+      f
+    );
+  }
+  f = message.getAdAccountId();
+  if (f.length > 0) {
+    writer.writeString(
+      4,
       f
     );
   }
@@ -513,6 +525,24 @@ proto.fb_agent.scanner.v1.ListCampaignsRequest.prototype.getOwnerTag = function(
  */
 proto.fb_agent.scanner.v1.ListCampaignsRequest.prototype.setOwnerTag = function(value) {
   return jspb.Message.setProto3StringField(this, 3, value);
+};
+
+
+/**
+ * optional string ad_account_id = 4;
+ * @return {string}
+ */
+proto.fb_agent.scanner.v1.ListCampaignsRequest.prototype.getAdAccountId = function() {
+  return /** @type {string} */ (jspb.Message.getFieldWithDefault(this, 4, ""));
+};
+
+
+/**
+ * @param {string} value
+ * @return {!proto.fb_agent.scanner.v1.ListCampaignsRequest} returns this
+ */
+proto.fb_agent.scanner.v1.ListCampaignsRequest.prototype.setAdAccountId = function(value) {
+  return jspb.Message.setProto3StringField(this, 4, value);
 };
 
 
@@ -882,7 +912,8 @@ proto.fb_agent.scanner.v1.RunScanCycleRequest.toObject = function(includeInstanc
     resetScrollFirst: jspb.Message.getBooleanFieldWithDefault(msg, 5, false),
     settleDelaySeconds: jspb.Message.getFloatingPointFieldWithDefault(msg, 6, 0.0),
     campaignIdsList: (f = jspb.Message.getRepeatedField(msg, 8)) == null ? undefined : f,
-    ownerTag: jspb.Message.getFieldWithDefault(msg, 9, "")
+    ownerTag: jspb.Message.getFieldWithDefault(msg, 9, ""),
+    adAccountId: jspb.Message.getFieldWithDefault(msg, 10, "")
   };
 
   if (includeInstance) {
@@ -950,6 +981,10 @@ proto.fb_agent.scanner.v1.RunScanCycleRequest.deserializeBinaryFromReader = func
     case 9:
       var value = /** @type {string} */ (reader.readString());
       msg.setOwnerTag(value);
+      break;
+    case 10:
+      var value = /** @type {string} */ (reader.readString());
+      msg.setAdAccountId(value);
       break;
     default:
       reader.skipField();
@@ -1033,6 +1068,13 @@ proto.fb_agent.scanner.v1.RunScanCycleRequest.serializeBinaryToWriter = function
   if (f.length > 0) {
     writer.writeString(
       9,
+      f
+    );
+  }
+  f = message.getAdAccountId();
+  if (f.length > 0) {
+    writer.writeString(
+      10,
       f
     );
   }
@@ -1217,6 +1259,24 @@ proto.fb_agent.scanner.v1.RunScanCycleRequest.prototype.getOwnerTag = function()
  */
 proto.fb_agent.scanner.v1.RunScanCycleRequest.prototype.setOwnerTag = function(value) {
   return jspb.Message.setProto3StringField(this, 9, value);
+};
+
+
+/**
+ * optional string ad_account_id = 10;
+ * @return {string}
+ */
+proto.fb_agent.scanner.v1.RunScanCycleRequest.prototype.getAdAccountId = function() {
+  return /** @type {string} */ (jspb.Message.getFieldWithDefault(this, 10, ""));
+};
+
+
+/**
+ * @param {string} value
+ * @return {!proto.fb_agent.scanner.v1.RunScanCycleRequest} returns this
+ */
+proto.fb_agent.scanner.v1.RunScanCycleRequest.prototype.setAdAccountId = function(value) {
+  return jspb.Message.setProto3StringField(this, 10, value);
 };
 
 

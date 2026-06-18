@@ -269,12 +269,18 @@ class BrowserAgentClient:
         logger.info("hard_reload: success за %d мс", resp.reload_ms)
         return True
 
-    async def list_campaigns(self, *, owner_tag: str = "") -> list[dict[str, str]]:
+    async def list_campaigns(
+        self, *, owner_tag: str = "", ad_account_id: str = ""
+    ) -> list[dict[str, str]]:
         """Live-список кампаний по owner_tag (через Graph campaigns edge, мимо allowlist).
 
         Возвращает [{"id": ..., "name": ...}, ...]. При ошибке — пустой список (не
         бросает). session_id не требуется: browser-agent сам берёт активную ads-сессию
         observer'а (getPreferredSession) с кешированным graph-токеном.
+
+        ad_account_id (L10, мульти-кабинет): числовой ID кабинета (без префикса act_) —
+        browser-agent откроет/найдёт вкладку именно этого кабинета. Пусто → старое
+        поведение (текущая primary-вкладка).
         """
         if not self._scanner_stub:
             logger.warning("list_campaigns: нет gRPC-канала browser-agent")
@@ -282,6 +288,7 @@ class BrowserAgentClient:
         req = scanner_pb2.ListCampaignsRequest(
             session_id=self._session_id or "",
             owner_tag=owner_tag or "",
+            ad_account_id=str(ad_account_id or "").replace("act_", "").strip(),
         )
         try:
             resp = await self._scanner_stub.ListCampaigns(

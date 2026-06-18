@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -187,7 +187,13 @@ async def list_observer_campaigns(engine: DepEngine) -> list[CampaignOption]:
 
 @router.post("/campaigns/refresh", response_model=list[CampaignOption])
 async def refresh_observer_campaigns(
-    engine: DepEngine, settings: DepSettings
+    engine: DepEngine,
+    settings: DepSettings,
+    ad_account_id: str | None = Query(
+        default=None,
+        description="L10: числовой ID кабинета — резолв из вкладки этого кабинета. "
+        "Пусто → текущая primary-вкладка (legacy).",
+    ),
 ) -> list[CampaignOption]:
     """Live-обновление списка кампаний через browser-agent (Graph API, МИМО allowlist).
 
@@ -195,6 +201,9 @@ async def refresh_observer_campaigns(
     поэтому их нельзя выбрать. Здесь резолвим ВСЕ кампании владельца по owner_tag живьём,
     апсертим в fb_campaigns (чтобы GET /campaigns их видел) и возвращаем обновлённый список.
     503 при недоступности browser-agent.
+
+    ad_account_id (мульти-кабинет): если задан — browser-agent откроет вкладку именно
+    этого кабинета (ensureAdsManagerPage({actId})); иначе резолв из текущей primary-вкладки.
     """
     import grpc
 
@@ -231,7 +240,9 @@ async def refresh_observer_campaigns(
         await client.start()
         # НЕ создаём новую сессию: browser-agent сам возьмёт активную ads-сессию observer'а
         # (getPreferredSession) с кешированным graph-токеном — иначе токен не извлекался.
-        campaigns = await client.list_campaigns(owner_tag=owner_tag or "")
+        campaigns = await client.list_campaigns(
+            owner_tag=owner_tag or "", ad_account_id=ad_account_id or ""
+        )
     except grpc.RpcError as exc:
         raise HTTPException(status_code=503, detail=f"browser-agent недоступен: {exc}") from exc
     except Exception as exc:

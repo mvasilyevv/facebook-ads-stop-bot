@@ -20,7 +20,7 @@ _sym_db = _symbol_database.Default()
 
 
 DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(
-    b'\n\x10v1/scanner.proto\x12\x13\x66\x62_agent.scanner.v1"_\n\x14ListCampaignsRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x14\n\x07page_id\x18\x02 \x01(\tH\x00\x88\x01\x01\x12\x11\n\towner_tag\x18\x03 \x01(\tB\n\n\x08_page_id"(\n\x0c\x43\x61mpaignInfo\x12\n\n\x02id\x18\x01 \x01(\t\x12\x0c\n\x04name\x18\x02 \x01(\t"M\n\x15ListCampaignsResponse\x12\x34\n\tcampaigns\x18\x01 \x03(\x0b\x32!.fb_agent.scanner.v1.CampaignInfo"\xe3\x01\n\x13RunScanCycleRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x14\n\x07page_id\x18\x02 \x01(\tH\x00\x88\x01\x01\x12\x19\n\x11max_scroll_passes\x18\x03 \x01(\x05\x12\x12\n\ndo_refresh\x18\x04 \x01(\x08\x12\x1a\n\x12reset_scroll_first\x18\x05 \x01(\x08\x12\x1c\n\x14settle_delay_seconds\x18\x06 \x01(\x01\x12\x14\n\x0c\x63\x61mpaign_ids\x18\x08 \x03(\t\x12\x11\n\towner_tag\x18\t \x01(\tB\n\n\x08_page_idJ\x04\x08\x07\x10\x08"\xcc\x01\n\x0eScanCycleEvent\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x35\n\x08progress\x18\x02 \x01(\x0b\x32!.fb_agent.scanner.v1.ScanProgressH\x00\x12\x35\n\x08\x63omplete\x18\x03 \x01(\x0b\x32!.fb_agent.scanner.v1.ScanCompleteH\x00\x12/\n\x05\x65rror\x18\x04 \x01(\x0b\x32\x1e.fb_agent.scanner.v1.ScanErrorH\x00\x42\x07\n\x05\x65vent"\xa9\x01\n\x0cScanProgress\x12\x13\n\x0bpass_number\x18\x01 \x01(\x05\x12\x13\n\x0brows_so_far\x18\x02 \x01(\x05\x12:\n\x0escroll_metrics\x18\x03 \x01(\x0b\x32".fb_agent.scanner.v1.ScrollMetrics\x12\x33\n\x08new_rows\x18\x04 \x03(\x0b\x32!.fb_agent.scanner.v1.ScannedAdRow"\xce\x02\n\x0cScanComplete\x12\x33\n\x08\x61ll_rows\x18\x01 \x03(\x0b\x32!.fb_agent.scanner.v1.ScannedAdRow\x12\x14\n\x0ctotal_passes\x18\x02 \x01(\x05\x12\x18\n\x10\x64uration_seconds\x18\x03 \x01(\x01\x12\x18\n\x10\x64ismissed_modals\x18\x04 \x03(\t\x12\x1f\n\x17unknown_modal_artifacts\x18\x05 \x03(\t\x12\x38\n\rphase_timings\x18\x06 \x01(\x0b\x32!.fb_agent.scanner.v1.PhaseTimings\x12\x17\n\x0fpartial_row_ids\x18\x07 \x03(\t\x12\x10\n\x08warnings\x18\x08 \x03(\t\x12\x14\n\x0c\x65mpty_reason\x18\t \x01(\t\x12#\n\x1brows_with_all_metrics_empty\x18\n \x01(\x05"o\n\x0cPhaseTimings\x12\x12\n\nrefresh_ms\x18\x01 \x01(\x05\x12\x14\n\x0c\x66irst_row_ms\x18\x02 \x01(\x05\x12\x11\n\tscroll_ms\x18\x03 \x01(\x05\x12\x10\n\x08parse_ms\x18\x04 \x01(\x05\x12\x10\n\x08total_ms\x18\x05 \x01(\x05"B\n\tScanError\x12\x0f\n\x07message\x18\x01 \x01(\t\x12\x13\n\x0brecoverable\x18\x02 \x01(\x08\x12\x0f\n\x07\x61ttempt\x18\x03 \x01(\x05"]\n\rScrollMetrics\x12\r\n\x05\x66ound\x18\x01 \x01(\x08\x12\x12\n\nscroll_top\x18\x02 \x01(\x01\x12\x16\n\x0emax_scroll_top\x18\x03 \x01(\x01\x12\x11\n\tat_bottom\x18\x04 \x01(\x08"\xaa\x04\n\x0cScannedAdRow\x12\x10\n\x08\x66\x62_ad_id\x18\x01 \x01(\t\x12\x15\n\rcampaign_name\x18\x02 \x01(\t\x12\x12\n\nadset_name\x18\x03 \x01(\t\x12\x0f\n\x07\x61\x64_name\x18\x04 \x01(\t\x12\x17\n\x0f\x64\x65livery_status\x18\x05 \x01(\t\x12\r\n\x05spend\x18\x06 \x01(\t\x12\x0e\n\x06\x62udget\x18\x07 \x01(\t\x12\r\n\x05reach\x18\x08 \x01(\x05\x12\x13\n\x0bimpressions\x18\t \x01(\x05\x12\x0e\n\x06\x63licks\x18\n \x01(\x05\x12\x0b\n\x03\x63pc\x18\x0b \x01(\t\x12\x0b\n\x03\x63tr\x18\x0c \x01(\t\x12\x17\n\x0foutbound_clicks\x18\r \x01(\x05\x12\x14\n\x0coutbound_ctr\x18\x0e \x01(\t\x12\x1a\n\x12landing_page_views\x18\x0f \x01(\x05\x12"\n\x1a\x63ost_per_landing_page_view\x18\x10 \x01(\t\x12\x17\n\x0f\x63ost_per_result\x18\x11 \x01(\t\x12\x0b\n\x03\x63pm\x18\x12 \x01(\t\x12\x11\n\tfrequency\x18\x13 \x01(\t\x12\r\n\x05leads\x18\x14 \x01(\x05\x12\x15\n\rcost_per_lead\x18\x15 \x01(\t\x12\x15\n\rregistrations\x18\x16 \x01(\x05\x12\x1d\n\x15\x63ost_per_registration\x18\x17 \x01(\t\x12\x10\n\x08\x64\x65posits\x18\x18 \x01(\x05\x12\x1b\n\x13resolved_offer_code\x18\x19 \x01(\t\x12\x13\n\x0b\x63\x61mpaign_id\x18\x1a \x01(\t"c\n\x15HardReloadPageRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x14\n\x07page_id\x18\x02 \x01(\tH\x00\x88\x01\x01\x12\x14\n\x0c\x62ypass_cache\x18\x03 \x01(\x08\x42\n\n\x08_page_id"S\n\x16HardReloadPageResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x15\n\rerror_message\x18\x02 \x01(\t\x12\x11\n\treload_ms\x18\x03 \x01(\x05\x32\xc4\x02\n\x0eScannerService\x12_\n\x0cRunScanCycle\x12(.fb_agent.scanner.v1.RunScanCycleRequest\x1a#.fb_agent.scanner.v1.ScanCycleEvent0\x01\x12i\n\x0eHardReloadPage\x12*.fb_agent.scanner.v1.HardReloadPageRequest\x1a+.fb_agent.scanner.v1.HardReloadPageResponse\x12\x66\n\rListCampaigns\x12).fb_agent.scanner.v1.ListCampaignsRequest\x1a*.fb_agent.scanner.v1.ListCampaignsResponseb\x06proto3'
+    b'\n\x10v1/scanner.proto\x12\x13\x66\x62_agent.scanner.v1"v\n\x14ListCampaignsRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x14\n\x07page_id\x18\x02 \x01(\tH\x00\x88\x01\x01\x12\x11\n\towner_tag\x18\x03 \x01(\t\x12\x15\n\rad_account_id\x18\x04 \x01(\tB\n\n\x08_page_id"(\n\x0c\x43\x61mpaignInfo\x12\n\n\x02id\x18\x01 \x01(\t\x12\x0c\n\x04name\x18\x02 \x01(\t"M\n\x15ListCampaignsResponse\x12\x34\n\tcampaigns\x18\x01 \x03(\x0b\x32!.fb_agent.scanner.v1.CampaignInfo"\xfa\x01\n\x13RunScanCycleRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x14\n\x07page_id\x18\x02 \x01(\tH\x00\x88\x01\x01\x12\x19\n\x11max_scroll_passes\x18\x03 \x01(\x05\x12\x12\n\ndo_refresh\x18\x04 \x01(\x08\x12\x1a\n\x12reset_scroll_first\x18\x05 \x01(\x08\x12\x1c\n\x14settle_delay_seconds\x18\x06 \x01(\x01\x12\x14\n\x0c\x63\x61mpaign_ids\x18\x08 \x03(\t\x12\x11\n\towner_tag\x18\t \x01(\t\x12\x15\n\rad_account_id\x18\n \x01(\tB\n\n\x08_page_idJ\x04\x08\x07\x10\x08"\xcc\x01\n\x0eScanCycleEvent\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x35\n\x08progress\x18\x02 \x01(\x0b\x32!.fb_agent.scanner.v1.ScanProgressH\x00\x12\x35\n\x08\x63omplete\x18\x03 \x01(\x0b\x32!.fb_agent.scanner.v1.ScanCompleteH\x00\x12/\n\x05\x65rror\x18\x04 \x01(\x0b\x32\x1e.fb_agent.scanner.v1.ScanErrorH\x00\x42\x07\n\x05\x65vent"\xa9\x01\n\x0cScanProgress\x12\x13\n\x0bpass_number\x18\x01 \x01(\x05\x12\x13\n\x0brows_so_far\x18\x02 \x01(\x05\x12:\n\x0escroll_metrics\x18\x03 \x01(\x0b\x32".fb_agent.scanner.v1.ScrollMetrics\x12\x33\n\x08new_rows\x18\x04 \x03(\x0b\x32!.fb_agent.scanner.v1.ScannedAdRow"\xce\x02\n\x0cScanComplete\x12\x33\n\x08\x61ll_rows\x18\x01 \x03(\x0b\x32!.fb_agent.scanner.v1.ScannedAdRow\x12\x14\n\x0ctotal_passes\x18\x02 \x01(\x05\x12\x18\n\x10\x64uration_seconds\x18\x03 \x01(\x01\x12\x18\n\x10\x64ismissed_modals\x18\x04 \x03(\t\x12\x1f\n\x17unknown_modal_artifacts\x18\x05 \x03(\t\x12\x38\n\rphase_timings\x18\x06 \x01(\x0b\x32!.fb_agent.scanner.v1.PhaseTimings\x12\x17\n\x0fpartial_row_ids\x18\x07 \x03(\t\x12\x10\n\x08warnings\x18\x08 \x03(\t\x12\x14\n\x0c\x65mpty_reason\x18\t \x01(\t\x12#\n\x1brows_with_all_metrics_empty\x18\n \x01(\x05"o\n\x0cPhaseTimings\x12\x12\n\nrefresh_ms\x18\x01 \x01(\x05\x12\x14\n\x0c\x66irst_row_ms\x18\x02 \x01(\x05\x12\x11\n\tscroll_ms\x18\x03 \x01(\x05\x12\x10\n\x08parse_ms\x18\x04 \x01(\x05\x12\x10\n\x08total_ms\x18\x05 \x01(\x05"B\n\tScanError\x12\x0f\n\x07message\x18\x01 \x01(\t\x12\x13\n\x0brecoverable\x18\x02 \x01(\x08\x12\x0f\n\x07\x61ttempt\x18\x03 \x01(\x05"]\n\rScrollMetrics\x12\r\n\x05\x66ound\x18\x01 \x01(\x08\x12\x12\n\nscroll_top\x18\x02 \x01(\x01\x12\x16\n\x0emax_scroll_top\x18\x03 \x01(\x01\x12\x11\n\tat_bottom\x18\x04 \x01(\x08"\xaa\x04\n\x0cScannedAdRow\x12\x10\n\x08\x66\x62_ad_id\x18\x01 \x01(\t\x12\x15\n\rcampaign_name\x18\x02 \x01(\t\x12\x12\n\nadset_name\x18\x03 \x01(\t\x12\x0f\n\x07\x61\x64_name\x18\x04 \x01(\t\x12\x17\n\x0f\x64\x65livery_status\x18\x05 \x01(\t\x12\r\n\x05spend\x18\x06 \x01(\t\x12\x0e\n\x06\x62udget\x18\x07 \x01(\t\x12\r\n\x05reach\x18\x08 \x01(\x05\x12\x13\n\x0bimpressions\x18\t \x01(\x05\x12\x0e\n\x06\x63licks\x18\n \x01(\x05\x12\x0b\n\x03\x63pc\x18\x0b \x01(\t\x12\x0b\n\x03\x63tr\x18\x0c \x01(\t\x12\x17\n\x0foutbound_clicks\x18\r \x01(\x05\x12\x14\n\x0coutbound_ctr\x18\x0e \x01(\t\x12\x1a\n\x12landing_page_views\x18\x0f \x01(\x05\x12"\n\x1a\x63ost_per_landing_page_view\x18\x10 \x01(\t\x12\x17\n\x0f\x63ost_per_result\x18\x11 \x01(\t\x12\x0b\n\x03\x63pm\x18\x12 \x01(\t\x12\x11\n\tfrequency\x18\x13 \x01(\t\x12\r\n\x05leads\x18\x14 \x01(\x05\x12\x15\n\rcost_per_lead\x18\x15 \x01(\t\x12\x15\n\rregistrations\x18\x16 \x01(\x05\x12\x1d\n\x15\x63ost_per_registration\x18\x17 \x01(\t\x12\x10\n\x08\x64\x65posits\x18\x18 \x01(\x05\x12\x1b\n\x13resolved_offer_code\x18\x19 \x01(\t\x12\x13\n\x0b\x63\x61mpaign_id\x18\x1a \x01(\t"c\n\x15HardReloadPageRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x14\n\x07page_id\x18\x02 \x01(\tH\x00\x88\x01\x01\x12\x14\n\x0c\x62ypass_cache\x18\x03 \x01(\x08\x42\n\n\x08_page_id"S\n\x16HardReloadPageResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x15\n\rerror_message\x18\x02 \x01(\t\x12\x11\n\treload_ms\x18\x03 \x01(\x05\x32\xc4\x02\n\x0eScannerService\x12_\n\x0cRunScanCycle\x12(.fb_agent.scanner.v1.RunScanCycleRequest\x1a#.fb_agent.scanner.v1.ScanCycleEvent0\x01\x12i\n\x0eHardReloadPage\x12*.fb_agent.scanner.v1.HardReloadPageRequest\x1a+.fb_agent.scanner.v1.HardReloadPageResponse\x12\x66\n\rListCampaigns\x12).fb_agent.scanner.v1.ListCampaignsRequest\x1a*.fb_agent.scanner.v1.ListCampaignsResponseb\x06proto3'
 )
 
 _globals = globals()
@@ -29,31 +29,31 @@ _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, "v1.scanner_pb2", _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
     DESCRIPTOR._loaded_options = None
     _globals["_LISTCAMPAIGNSREQUEST"]._serialized_start = 41
-    _globals["_LISTCAMPAIGNSREQUEST"]._serialized_end = 136
-    _globals["_CAMPAIGNINFO"]._serialized_start = 138
-    _globals["_CAMPAIGNINFO"]._serialized_end = 178
-    _globals["_LISTCAMPAIGNSRESPONSE"]._serialized_start = 180
-    _globals["_LISTCAMPAIGNSRESPONSE"]._serialized_end = 257
-    _globals["_RUNSCANCYCLEREQUEST"]._serialized_start = 260
-    _globals["_RUNSCANCYCLEREQUEST"]._serialized_end = 487
-    _globals["_SCANCYCLEEVENT"]._serialized_start = 490
-    _globals["_SCANCYCLEEVENT"]._serialized_end = 694
-    _globals["_SCANPROGRESS"]._serialized_start = 697
-    _globals["_SCANPROGRESS"]._serialized_end = 866
-    _globals["_SCANCOMPLETE"]._serialized_start = 869
-    _globals["_SCANCOMPLETE"]._serialized_end = 1203
-    _globals["_PHASETIMINGS"]._serialized_start = 1205
-    _globals["_PHASETIMINGS"]._serialized_end = 1316
-    _globals["_SCANERROR"]._serialized_start = 1318
-    _globals["_SCANERROR"]._serialized_end = 1384
-    _globals["_SCROLLMETRICS"]._serialized_start = 1386
-    _globals["_SCROLLMETRICS"]._serialized_end = 1479
-    _globals["_SCANNEDADROW"]._serialized_start = 1482
-    _globals["_SCANNEDADROW"]._serialized_end = 2036
-    _globals["_HARDRELOADPAGEREQUEST"]._serialized_start = 2038
-    _globals["_HARDRELOADPAGEREQUEST"]._serialized_end = 2137
-    _globals["_HARDRELOADPAGERESPONSE"]._serialized_start = 2139
-    _globals["_HARDRELOADPAGERESPONSE"]._serialized_end = 2222
-    _globals["_SCANNERSERVICE"]._serialized_start = 2225
-    _globals["_SCANNERSERVICE"]._serialized_end = 2549
+    _globals["_LISTCAMPAIGNSREQUEST"]._serialized_end = 159
+    _globals["_CAMPAIGNINFO"]._serialized_start = 161
+    _globals["_CAMPAIGNINFO"]._serialized_end = 201
+    _globals["_LISTCAMPAIGNSRESPONSE"]._serialized_start = 203
+    _globals["_LISTCAMPAIGNSRESPONSE"]._serialized_end = 280
+    _globals["_RUNSCANCYCLEREQUEST"]._serialized_start = 283
+    _globals["_RUNSCANCYCLEREQUEST"]._serialized_end = 533
+    _globals["_SCANCYCLEEVENT"]._serialized_start = 536
+    _globals["_SCANCYCLEEVENT"]._serialized_end = 740
+    _globals["_SCANPROGRESS"]._serialized_start = 743
+    _globals["_SCANPROGRESS"]._serialized_end = 912
+    _globals["_SCANCOMPLETE"]._serialized_start = 915
+    _globals["_SCANCOMPLETE"]._serialized_end = 1249
+    _globals["_PHASETIMINGS"]._serialized_start = 1251
+    _globals["_PHASETIMINGS"]._serialized_end = 1362
+    _globals["_SCANERROR"]._serialized_start = 1364
+    _globals["_SCANERROR"]._serialized_end = 1430
+    _globals["_SCROLLMETRICS"]._serialized_start = 1432
+    _globals["_SCROLLMETRICS"]._serialized_end = 1525
+    _globals["_SCANNEDADROW"]._serialized_start = 1528
+    _globals["_SCANNEDADROW"]._serialized_end = 2082
+    _globals["_HARDRELOADPAGEREQUEST"]._serialized_start = 2084
+    _globals["_HARDRELOADPAGEREQUEST"]._serialized_end = 2183
+    _globals["_HARDRELOADPAGERESPONSE"]._serialized_start = 2185
+    _globals["_HARDRELOADPAGERESPONSE"]._serialized_end = 2268
+    _globals["_SCANNERSERVICE"]._serialized_start = 2271
+    _globals["_SCANNERSERVICE"]._serialized_end = 2595
 # @@protoc_insertion_point(module_scope)

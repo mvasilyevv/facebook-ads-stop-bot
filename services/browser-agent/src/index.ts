@@ -406,14 +406,29 @@ async function hardReloadPageHandler(call: any, callback: any) {
 
 async function listCampaignsHandler(call: any, callback: any) {
   try {
+    const req = call.request;
     // Берём активную ads-сессию observer'а (с кешированным graph-токеном), а не создаём
     // новую — у свежей сессии нет истории запросов и токен не извлекался.
     const session = sessionManager.getPreferredSession();
-    const page = getPage(session);
+    // Мульти-кабинет (L10): числовой ID кабинета (пусто → legacy primary-вкладка).
+    const actId: string | undefined =
+      String(req.ad_account_id || '').replace(/^act_/, '').trim() || undefined;
+    // actId задан → резолвим/открываем вкладку именно этого кабинета (как runScanCycle),
+    // иначе остаёмся на текущей primary-вкладке (старое поведение).
+    let page;
+    if (actId) {
+      const fallbackUrl = reconstructAdsManagerUrl(session.id, actId);
+      page = await sessionManager.ensureAdsManagerPage(session, {
+        fallbackUrl: fallbackUrl ?? undefined,
+        actId,
+      });
+    } else {
+      page = getPage(session);
+    }
     // H-7 (BA-4): listOwnerCampaigns внутри может сделать reload (acquireGraphContext
     // cache-miss) — под тем же per-session локом, что и мутации/скан.
     const campaigns = await withPageLock(session.id, () =>
-      listOwnerCampaigns(page, call.request.owner_tag ?? '', session.id),
+      listOwnerCampaigns(page, req.owner_tag ?? '', session.id),
     );
     callback(null, { campaigns });
   } catch (err: any) {

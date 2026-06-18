@@ -28,6 +28,10 @@ message ListCampaignsRequest {
   optional string page_id = 2;
   // Фильтр по owner-тегу (campaignMatchesOwner). Пусто → все кампании кабинета.
   string owner_tag = 3;
+  // Мульти-кабинет (L10): числовой ID кабинета (без префикса act_), вкладку которого
+  // нужно открыть для резолва кампаний (ensureAdsManagerPage({actId})). Пусто → старое
+  // поведение (текущая primary-вкладка). Симметрично RunScanCycleRequest.ad_account_id.
+  string ad_account_id = 4;
 }
 
 message CampaignInfo {

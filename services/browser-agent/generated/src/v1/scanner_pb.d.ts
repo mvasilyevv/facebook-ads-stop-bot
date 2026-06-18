@@ -16,6 +16,8 @@ export class ListCampaignsRequest extends jspb.Message {
     setPageId(value: string): ListCampaignsRequest;
     getOwnerTag(): string;
     setOwnerTag(value: string): ListCampaignsRequest;
+    getAdAccountId(): string;
+    setAdAccountId(value: string): ListCampaignsRequest;
 
     serializeBinary(): Uint8Array;
     toObject(includeInstance?: boolean): ListCampaignsRequest.AsObject;
@@ -32,6 +34,7 @@ export namespace ListCampaignsRequest {
         sessionId: string,
         pageId?: string,
         ownerTag: string,
+        adAccountId: string,
     }
 }
 
@@ -102,6 +105,8 @@ export class RunScanCycleRequest extends jspb.Message {
     addCampaignIds(value: string, index?: number): string;
     getOwnerTag(): string;
     setOwnerTag(value: string): RunScanCycleRequest;
+    getAdAccountId(): string;
+    setAdAccountId(value: string): RunScanCycleRequest;
 
     serializeBinary(): Uint8Array;
     toObject(includeInstance?: boolean): RunScanCycleRequest.AsObject;
@@ -123,6 +128,7 @@ export namespace RunScanCycleRequest {
         settleDelaySeconds: number,
         campaignIdsList: Array<string>,
         ownerTag: string,
+        adAccountId: string,
     }
 }
 
