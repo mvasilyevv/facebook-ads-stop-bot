@@ -233,29 +233,41 @@ export function AdDrawer({ ad, onClose, isLoading = false, fbAdId }: AdDrawerPro
           </span>
         }
         footer={
-          <div className="flex w-full gap-3">
-            <Button
-              variant="secondary"
-              className="flex-1"
-              leftIcon={<Clock size={15} aria-hidden="true" />}
-              onClick={handleSnooze}
-              disabled={pending}
-              aria-label="Снуз на 1 час"
+          // Уже отключённое объявление (alert_state='disabled' после авто/ручного pause)
+          // не предлагаем отключать снова — показываем статус. Snooze тоже бессмыслен.
+          state === "disabled" ? (
+            <div
+              className="flex w-full items-center justify-center gap-2 py-1 text-[13px] text-bg-9"
+              role="status"
             >
-              Snooze 1ч
-            </Button>
-            <Button
-              variant="danger"
-              className="flex-1"
-              leftIcon={<Ban size={15} aria-hidden="true" />}
-              onClick={() => setConfirmOpen(true)}
-              disabled={pending}
-              loading={bulkDisable.isPending}
-              aria-label="Отключить объявление вручную"
-            >
-              Отключить
-            </Button>
-          </div>
+              <Ban size={14} aria-hidden="true" />
+              Объявление отключено
+            </div>
+          ) : (
+            <div className="flex w-full gap-3">
+              <Button
+                variant="secondary"
+                className="flex-1"
+                leftIcon={<Clock size={15} aria-hidden="true" />}
+                onClick={handleSnooze}
+                disabled={pending}
+                aria-label="Снуз на 1 час"
+              >
+                Snooze 1ч
+              </Button>
+              <Button
+                variant="danger"
+                className="flex-1"
+                leftIcon={<Ban size={15} aria-hidden="true" />}
+                onClick={() => setConfirmOpen(true)}
+                disabled={pending}
+                loading={bulkDisable.isPending}
+                aria-label="Отключить объявление вручную"
+              >
+                Отключить
+              </Button>
+            </div>
+          )
         }
       >
         <div className="flex flex-col gap-6">

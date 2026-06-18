@@ -168,6 +168,16 @@ describe("AdDrawer (deep-link /ads/$fbAdId)", () => {
     expect(screen.getByPlaceholderText("DISABLE")).toBeInTheDocument();
   });
 
+  // У уже отключённого (alert_state='disabled') нет кнопки «Отключить» — показываем статус.
+  it("для disabled не показывает кнопку Отключить, показывает статус", async () => {
+    mockAdsWith(makeSnapshot({ alert_state: "disabled" }));
+    await renderDrawer();
+    expect(
+      screen.queryByRole("button", { name: /Отключить объявление/i }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText(/Объявление отключено/i)).toBeInTheDocument();
+  });
+
   // Footer Snooze 1ч → useSnoozeAd(60).
   it("Snooze 1ч вызывает useSnoozeAd с minutes=60", async () => {
     const user = userEvent.setup();
