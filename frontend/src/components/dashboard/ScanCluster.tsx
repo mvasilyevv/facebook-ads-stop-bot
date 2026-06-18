@@ -12,6 +12,7 @@
  */
 
 import { RefreshCw, Play, Power } from "lucide-react";
+import { formatRelativeTime } from "@fb/shared";
 import { CountdownRing, PausedRing } from "@/components/data/CountdownRing";
 import { Button } from "@/components/ui/Button";
 import { useScanCountdown } from "@/lib/hooks/useScanCountdown";
@@ -55,7 +56,7 @@ export function ScanCluster({
   onEnable,
   onDisable,
 }: ScanClusterProps) {
-  const { scanning, age, next, interval, doScan } = useScanCountdown({
+  const { scanning, next, interval, doScan } = useScanCountdown({
     lastScanAt,
     nextScanAt,
     intervalSeconds,
@@ -79,7 +80,7 @@ export function ScanCluster({
             ПОСЛЕДНИЙ СКАН
           </div>
           <div className="whitespace-nowrap font-display text-[13px] tabular-nums text-bg-10">
-            {age}с назад <span className="text-bg-7">·</span>{" "}
+            {scanAgo(lastScanAt)} <span className="text-bg-7">·</span>{" "}
             <span className="text-warning">стоп</span>
           </div>
         </div>
@@ -114,7 +115,7 @@ export function ScanCluster({
           ПОСЛЕДНИЙ СКАН
         </div>
         <div className="whitespace-nowrap font-display text-[13px] tabular-nums text-bg-10">
-          {scanning ? formatScanningLabel(scanProgress) : `${age}с назад`}
+          {scanning ? formatScanningLabel(scanProgress) : scanAgo(lastScanAt)}
         </div>
       </div>
       {/* Мульти-кабинет: текущий кабинет цикла (только когда кабинетов > 1) */}
@@ -162,6 +163,17 @@ export function ScanCluster({
       </Button>
     </div>
   );
+}
+
+/**
+ * Возраст последнего скана крупными единицами (мин/ч/дн), не до секунды:
+ * «только что» / «39 мин назад» / «5 ч назад» / «3 дн назад». «—» если нет метки.
+ */
+function scanAgo(iso: string | null | undefined): string {
+  const rel = formatRelativeTime(iso); // "сейчас" | "5 мин" | "2 ч" | "3 дн" | "—"
+  if (rel === "—") return "—";
+  if (rel === "сейчас") return "только что";
+  return `${rel} назад`;
 }
 
 /** «сканирую…» или «кабинет 2/3» — когда в цикле несколько кабинетов. */
