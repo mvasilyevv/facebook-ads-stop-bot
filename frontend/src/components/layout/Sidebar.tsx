@@ -10,7 +10,6 @@
  *
  * Count-badges (реальные данные):
  *   - Объявления: ads_in_warning + ads_in_stop (активные инциденты, из stats).
- *   - Черновики: число pending-черновиков (useMetaDrafts).
  * 240px expanded / 64px collapsed (state в Zustand).
  */
 

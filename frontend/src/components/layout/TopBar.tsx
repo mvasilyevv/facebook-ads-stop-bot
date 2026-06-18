@@ -17,7 +17,7 @@ import { useCommandPalette } from "@/stores/commandPalette";
 const ROUTE_CRUMB: Record<string, string> = {
   "/": "Панель",
   "/ads": "Объявления",
-  "/drafts": "Черновики",
+  "/campaigns": "Кампании",
   "/offers": "Офферы",
   "/history": "История",
   "/settings": "Настройки",
