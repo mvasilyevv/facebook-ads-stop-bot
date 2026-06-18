@@ -89,19 +89,19 @@ export function Sidebar() {
       data-collapsed={collapsed || undefined}
       className={cn(
         "col-start-1 col-end-2 row-start-1 row-end-3",
-        "flex flex-col overflow-hidden border-r border-bg-5 bg-bg-0",
+        "flex flex-col overflow-hidden border-r border-[var(--hairline)] bg-bg-0",
       )}
     >
       {/* Brand-хедер (56px, совпадает с высотой TopBar) */}
       <div
         className={cn(
-          "flex h-14 shrink-0 items-center gap-2.5 border-b border-bg-5",
+          "flex h-14 shrink-0 items-center gap-2.5 border-b border-[var(--hairline)]",
           collapsed ? "justify-center px-0" : "px-5",
         )}
       >
         <div
           aria-hidden="true"
-          className="flex size-[26px] shrink-0 items-center justify-center bg-accent"
+          className="flex size-[26px] shrink-0 items-center justify-center rounded-[var(--radius-1)] bg-accent"
         >
           <span className="font-display text-[14px] font-bold text-bg-0">FB</span>
         </div>
@@ -125,7 +125,7 @@ export function Sidebar() {
                 {group.eyebrow}
               </div>
             ) : (
-              <div className="mx-4 mb-2 h-px bg-bg-5" aria-hidden="true" />
+              <div className="mx-4 mb-2 h-px bg-[var(--hairline)]" aria-hidden="true" />
             )}
             {group.items.map((item) => {
               const isActive =
@@ -142,7 +142,7 @@ export function Sidebar() {
                   title={collapsed ? item.label : undefined}
                   className={cn(
                     "relative flex h-9 w-full items-center gap-[11px] no-underline transition-colors",
-                    "text-[13px]",
+                    "rounded-[var(--radius-2)] text-[13px]",
                     collapsed ? "justify-center px-0" : "px-5",
                     isActive
                       ? "bg-bg-2 text-accent"
@@ -152,7 +152,7 @@ export function Sidebar() {
                   {isActive && (
                     <span
                       aria-hidden="true"
-                      className="absolute left-0 top-2 bottom-2 w-[3px] bg-accent"
+                      className="absolute left-0 top-2 bottom-2 w-[3px] rounded-full bg-accent"
                     />
                   )}
                   <item.icon size={18} strokeWidth={1.6} aria-hidden="true" />
@@ -177,7 +177,7 @@ export function Sidebar() {
       {/* Footer — только collapse-toggle */}
       <div
         className={cn(
-          "flex items-center border-t border-bg-5 py-3",
+          "flex items-center border-t border-[var(--hairline)] py-3",
           collapsed ? "justify-center px-0" : "justify-end px-4",
         )}
       >
@@ -185,7 +185,7 @@ export function Sidebar() {
           type="button"
           onClick={toggleSidebar}
           aria-label={collapsed ? "Развернуть меню" : "Свернуть меню"}
-          className="inline-flex size-7 items-center justify-center text-bg-9 transition-colors hover:bg-bg-2 hover:text-bg-11 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+          className="inline-flex size-7 items-center justify-center rounded-[var(--radius-2)] text-bg-9 transition-colors hover:bg-bg-2 hover:text-bg-11 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
         >
           <PanelLeft size={16} aria-hidden="true" />
         </button>

@@ -25,7 +25,10 @@ export function DensityToggle({ className }: { className?: string }) {
     <div
       role="radiogroup"
       aria-label="Плотность строк"
-      className={cn("inline-flex border border-bg-6", className)}
+      className={cn(
+        "inline-flex border border-[var(--hairline-strong)] rounded-[var(--radius-2)] overflow-hidden",
+        className,
+      )}
     >
       {OPTIONS.map((o) => {
         const on = density === o.value;

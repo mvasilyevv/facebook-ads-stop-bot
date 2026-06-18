@@ -156,11 +156,11 @@ export function CommandPalette() {
         <Dialog.Content
           onKeyDown={onKeyDown}
           aria-describedby={undefined}
-          className="fixed left-1/2 top-[14%] -translate-x-1/2 w-[560px] max-w-[92vw] bg-bg-1 border border-bg-6 z-[60] focus:outline-none"
+          className="fixed left-1/2 top-[14%] -translate-x-1/2 w-[560px] max-w-[92vw] overflow-hidden rounded-[var(--radius-3)] bg-bg-1 border border-[var(--hairline-strong)] z-[60] focus:outline-none"
         >
           <Dialog.Title className="sr-only">Командная палитра</Dialog.Title>
 
-          <div className="flex items-center gap-2.5 px-4 h-12 border-b border-bg-5">
+          <div className="flex items-center gap-2.5 px-4 h-12 border-b border-[var(--hairline)]">
             <Search size={16} className="text-bg-9 shrink-0" aria-hidden="true" />
             <input
               autoFocus
@@ -170,12 +170,12 @@ export function CommandPalette() {
               aria-label="Поиск"
               className="flex-1 bg-transparent outline-none text-bg-11 text-[14px] font-body placeholder:text-bg-8"
             />
-            <kbd className="font-display text-[10px] bg-bg-3 border border-bg-6 px-[5px] py-px text-bg-9">
+            <kbd className="font-display text-[10px] bg-bg-3 rounded-[var(--radius-1)] border border-[var(--hairline-strong)] px-[5px] py-px text-bg-9">
               ESC
             </kbd>
           </div>
 
-          <div className="max-h-[360px] overflow-y-auto py-2">
+          <div className="max-h-[360px] overflow-y-auto px-1.5 py-2">
             {items.length === 0 ? (
               <div className="px-4 py-10 text-center text-bg-9 text-[13px]">
                 {q ? "Ничего не найдено" : "Начните вводить запрос"}
@@ -198,6 +198,7 @@ export function CommandPalette() {
                         onClick={() => it.run()}
                         className={cn(
                           "w-full flex items-center gap-3 px-4 h-9 text-left text-[13.5px] transition-colors",
+                          "rounded-[var(--radius-2)]",
                           isActive ? "bg-bg-3 text-accent" : "text-bg-11 hover:bg-bg-2",
                         )}
                       >

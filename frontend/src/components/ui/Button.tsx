@@ -10,7 +10,7 @@ import { cn } from "@/lib/utils/cn";
 const buttonStyles = cva(
   [
     "inline-flex items-center justify-center gap-2",
-    "border font-medium font-body",
+    "border font-medium font-body rounded-[var(--radius-2)]",
     "transition-colors duration-[120ms]",
     "disabled:opacity-40 disabled:cursor-not-allowed",
     "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
@@ -22,7 +22,7 @@ const buttonStyles = cva(
         primary:
           "bg-accent border-accent text-bg-0 hover:bg-accent-muted hover:border-accent-muted",
         secondary:
-          "bg-bg-2 border-bg-6 text-bg-11 hover:bg-bg-3 hover:border-bg-7",
+          "bg-bg-2 border-[var(--hairline-strong)] text-bg-11 hover:bg-bg-3 hover:border-bg-7",
         danger:
           "bg-danger-bg border-[rgba(199,98,92,0.3)] text-danger hover:bg-[rgba(199,98,92,0.15)] hover:border-[rgba(199,98,92,0.5)]",
         ghost:

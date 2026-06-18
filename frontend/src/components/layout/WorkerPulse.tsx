@@ -68,7 +68,7 @@ export function WorkerPulse() {
       {open && total > 0 && (
         <div
           role="tooltip"
-          className="absolute right-0 top-[calc(100%+8px)] z-[80] w-[248px] border border-bg-6 bg-bg-3 p-3"
+          className="absolute right-0 top-[calc(100%+8px)] z-[80] w-[248px] rounded-[var(--radius-3)] border border-[var(--hairline-strong)] bg-bg-3 p-3"
         >
           <div className="mb-2 flex items-center justify-between">
             <span className="font-display text-[10px] font-semibold uppercase tracking-[0.12em] text-bg-9">
@@ -82,7 +82,7 @@ export function WorkerPulse() {
             {sorted.map((w) => (
               <div
                 key={w.name}
-                className="grid grid-cols-[auto_1fr_auto] items-center gap-2 border-t border-bg-5 py-1"
+                className="grid grid-cols-[auto_1fr_auto] items-center gap-2 border-t border-[var(--hairline)] py-1"
               >
                 <span
                   aria-hidden="true"

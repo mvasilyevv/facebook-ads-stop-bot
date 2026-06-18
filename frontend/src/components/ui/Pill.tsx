@@ -32,7 +32,7 @@ export function FilterPill({
         "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
         active
           ? "border-accent text-accent bg-accent-bg"
-          : "bg-bg-1 border-bg-6 text-bg-10 hover:border-bg-7 hover:text-bg-11",
+          : "bg-bg-1 border-[var(--hairline-strong)] text-bg-10 hover:border-bg-7 hover:text-bg-11",
         className,
       )}
       aria-pressed={active}
@@ -104,7 +104,7 @@ export function Pill({ children, leftIcon, className, ...rest }: PillProps) {
     <span
       className={cn(
         "inline-block",
-        "bg-bg-3 border border-bg-6",
+        "bg-bg-3 border border-[var(--hairline)] rounded-[var(--radius-1)]",
         "px-1.5 py-px",
         "font-display text-[10.5px] tracking-[0.04em] text-bg-10",
         className,

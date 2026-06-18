@@ -91,7 +91,7 @@ function DraftsPage() {
     return (
       <div className="space-y-6">
         <DraftsHeader count={null} />
-        <div className="flex gap-2 pb-5 border-b border-bg-5 mb-8">
+        <div className="flex gap-2 pb-5 border-b border-[var(--hairline)] mb-8">
           {["all", "pause_ad", "bulk_status_change"].map((k) => (
             <Skeleton key={k} height={28} width={80} />
           ))}

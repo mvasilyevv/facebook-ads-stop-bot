@@ -209,7 +209,7 @@ export function OfferFormModal({
           />
 
           {/* ── Money-настройки: CPA + чувствительность + live-разбивка ── */}
-          <div className="pt-2 border-t border-bg-5">
+          <div className="pt-2 border-t border-[var(--hairline)]">
             <div className="font-display text-[10px] tracking-[0.12em] uppercase text-bg-8 mb-3">
               СТОП-ПРАВИЛА
             </div>

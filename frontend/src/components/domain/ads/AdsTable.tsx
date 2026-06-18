@@ -98,14 +98,14 @@ export function AdsTable({
 
   return (
     <div
-      className="flex flex-col min-h-0 flex-1 border border-bg-6"
+      className="flex flex-col min-h-0 flex-1 border border-[var(--hairline)] rounded-[var(--radius-3)] overflow-hidden"
       role="table"
       aria-label="Объявления"
       aria-rowcount={rows.length}
     >
       {/* ── Header row ──────────────────────────────────────────────────── */}
       <div
-        className="grid items-center h-8 bg-bg-2 border-b border-bg-6 shrink-0"
+        className="grid items-center h-8 bg-bg-2 border-b border-[var(--hairline)] shrink-0"
         style={{ gridTemplateColumns: COLS }}
         role="row"
       >
@@ -118,7 +118,7 @@ export function AdsTable({
               aria-label="Выбрать все объявления"
               onClick={onSelectAll}
               className={cn(
-                "size-[15px] inline-flex items-center justify-center border cursor-pointer",
+                "size-[15px] inline-flex items-center justify-center border cursor-pointer rounded-[var(--radius-1)]",
                 rows.length > 0 && selected.size === rows.length
                   ? "border-accent bg-accent"
                   : "border-bg-7",
@@ -207,7 +207,7 @@ function AdRow({ ad, selected, cursor, top, height, onToggleSelect, onOpen }: Ad
       role="row"
       onClick={() => onOpen(ad)}
       className={cn(
-        "grid items-center cursor-pointer border-b border-bg-5",
+        "grid items-center cursor-pointer border-b border-[var(--hairline)]",
         "absolute left-0 right-0",
         selected ? "bg-accent-bg" : cursor ? "bg-bg-2" : "hover:bg-bg-1",
       )}
@@ -231,7 +231,7 @@ function AdRow({ ad, selected, cursor, top, height, onToggleSelect, onOpen }: Ad
           aria-checked={selected}
           aria-label={`Выбрать ${ad.ad_name}`}
           className={cn(
-            "size-[15px] inline-flex items-center justify-center border",
+            "size-[15px] inline-flex items-center justify-center border rounded-[var(--radius-1)]",
             selected ? "border-accent bg-accent" : "border-bg-7",
           )}
         >
@@ -270,7 +270,7 @@ function AdRow({ ad, selected, cursor, top, height, onToggleSelect, onOpen }: Ad
       {/* OFFER chip */}
       <span className="self-center">
         {ad.offer_code ? (
-          <span className="inline-block h-[18px] leading-[18px] px-1.5 bg-bg-3 border border-bg-6 text-bg-10 font-display text-[10px] tracking-[0.04em] uppercase">
+          <span className="inline-block h-[18px] leading-[18px] px-1.5 bg-bg-3 border border-[var(--hairline)] rounded-[var(--radius-1)] text-bg-10 font-display text-[10px] tracking-[0.04em] uppercase">
             {ad.offer_code}
           </span>
         ) : (
@@ -341,7 +341,7 @@ function GeoThumb({ geo, dimmed }: { geo: string; dimmed?: boolean }) {
     <div
       aria-hidden="true"
       className={cn(
-        "w-10 h-6 shrink-0 bg-bg-2 border border-bg-6 flex items-center justify-center overflow-hidden",
+        "w-10 h-6 shrink-0 bg-bg-2 border border-[var(--hairline)] rounded-[var(--radius-1)] flex items-center justify-center overflow-hidden",
         dimmed && "opacity-40",
       )}
     >

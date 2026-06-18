@@ -42,7 +42,7 @@ export function Drawer({
           style={{ width: `${width}px` }}
           className={cn(
             "fixed top-0 right-0 bottom-0 z-[51]",
-            "bg-bg-1 border-l border-bg-5",
+            "bg-bg-1 border-l border-[var(--hairline)] rounded-l-[var(--radius-3)] overflow-hidden",
             "flex flex-col",
             "focus:outline-none",
             // Slide-in анимация
@@ -61,7 +61,7 @@ export function Drawer({
           )}
 
           {/* Header */}
-          <div className="flex items-start justify-between border-b border-bg-5 px-8 py-6 gap-4 shrink-0">
+          <div className="flex items-start justify-between border-b border-[var(--hairline)] px-8 py-6 gap-4 shrink-0">
             <div className="flex-1 min-w-0">
               {eyebrow ? (
                 <div className="font-display text-[10px] tracking-[0.14em] uppercase text-bg-8 mb-2">
@@ -83,8 +83,8 @@ export function Drawer({
             <Dialog.Close
               aria-label="Закрыть"
               className={cn(
-                "size-8 shrink-0 inline-flex items-center justify-center",
-                "bg-transparent border border-bg-6 text-bg-10",
+                "size-8 shrink-0 inline-flex items-center justify-center rounded-[var(--radius-2)]",
+                "bg-transparent border border-[var(--hairline-strong)] text-bg-10",
                 "hover:bg-bg-2 transition-colors duration-[120ms]",
                 "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
               )}
@@ -100,7 +100,7 @@ export function Drawer({
 
           {/* Footer — если задан */}
           {footer ? (
-            <div className="shrink-0 border-t border-bg-5 px-8 py-4 bg-bg-1 flex items-center justify-between gap-3">
+            <div className="shrink-0 border-t border-[var(--hairline)] px-8 py-4 bg-bg-1 flex items-center justify-between gap-3">
               {footer}
             </div>
           ) : null}

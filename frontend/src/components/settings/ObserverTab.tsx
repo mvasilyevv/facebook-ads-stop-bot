@@ -53,7 +53,7 @@ function Field({ label, hint, children }: FieldProps) {
         gap: 16,
         alignItems: "center",
         padding: "12px 0",
-        borderBottom: "1px solid var(--bg-5)",
+        borderBottom: "1px solid var(--hairline)",
       }}
     >
       <div>
@@ -272,7 +272,7 @@ export const ObserverTab: FC = () => {
       <div>
         {/* Карточка: Статус */}
         <div
-          className="bg-bg-1 border border-bg-5"
+          className="bg-bg-1 border border-[var(--hairline)] rounded-[var(--radius-3)]"
           style={{ padding: "var(--s-5)", marginBottom: "var(--s-4)" }}
         >
           <div
@@ -356,7 +356,7 @@ export const ObserverTab: FC = () => {
 
         {/* Карточка: Действия */}
         <div
-          className="bg-bg-1 border border-bg-5"
+          className="bg-bg-1 border border-[var(--hairline)] rounded-[var(--radius-3)]"
           style={{ padding: "var(--s-5)" }}
         >
           <div
@@ -476,14 +476,14 @@ const CampaignAllowlist: FC = () => {
         <Skeleton className="h-24 w-full" />
       ) : !campaigns || campaigns.length === 0 ? (
         <div
-          className="text-[12px] border border-bg-5"
+          className="text-[12px] border border-[var(--hairline)] rounded-[var(--radius-2)]"
           style={{ color: "var(--bg-8)", padding: "var(--s-4)" }}
         >
           Кампаний нет. Нажми «Обновить список» — резолвим из кабинета по Owner Tag.
         </div>
       ) : (
         <div
-          className="border border-bg-5"
+          className="border border-[var(--hairline)] rounded-[var(--radius-2)] overflow-hidden"
           style={{ maxHeight: 260, overflowY: "auto" }}
         >
           {campaigns.map((c) => (
@@ -495,7 +495,7 @@ const CampaignAllowlist: FC = () => {
                 alignItems: "center",
                 gap: 10,
                 padding: "8px 12px",
-                borderBottom: "1px solid var(--bg-4)",
+                borderBottom: "1px solid var(--hairline)",
                 cursor: "pointer",
                 color: "var(--bg-10)",
               }}

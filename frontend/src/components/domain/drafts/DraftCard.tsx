@@ -127,14 +127,14 @@ export function DraftCard({
   return (
     <article
       className={cn(
-        "border bg-bg-1 relative transition-colors duration-[200ms]",
+        "border bg-bg-1 relative overflow-hidden rounded-[var(--radius-3)] transition-colors duration-[200ms]",
         // Состояния границы
         expired
-          ? "border-bg-5 opacity-60"
+          ? "border-[var(--hairline)] opacity-60"
           : expiring
             ? "border-[rgba(212,168,88,0.3)] hover:border-[rgba(212,168,88,0.5)]"
-            : "border-bg-5 hover:border-bg-6",
-        isBlocked && "border-bg-5",
+            : "border-[var(--hairline)] hover:border-[var(--hairline-strong)]",
+        isBlocked && "border-[var(--hairline)]",
       )}
       data-expiring={expiring}
       data-blocked={isBlocked}
@@ -157,7 +157,7 @@ export function DraftCard({
       )}
 
       {/* ── Header ── */}
-      <header className="flex items-start justify-between gap-4 px-6 pt-5 pb-4 border-b border-bg-3">
+      <header className="flex items-start justify-between gap-4 px-6 pt-5 pb-4 border-b border-[var(--hairline)]">
         <div className="flex-1 min-w-0">
           {/* Meta-line: badge + age + tool-name */}
           <div className="flex items-center gap-2.5 mb-2 font-display text-[10px] tracking-[0.14em] uppercase">
@@ -188,14 +188,14 @@ export function DraftCard({
         </div>
 
         {/* Task-id badge */}
-        <div className="shrink-0 font-display text-[10px] tracking-[0.04em] text-bg-8 bg-bg-2 border border-bg-5 px-2 py-1">
+        <div className="shrink-0 font-display text-[10px] tracking-[0.04em] text-bg-8 bg-bg-2 border border-[var(--hairline)] rounded-[var(--radius-1)] px-2 py-1">
           <span className="text-bg-7 mr-1">TASK</span>
           {shortTaskId(draft.id)}
         </div>
       </header>
 
       {/* ── Diff section ── */}
-      <div className="px-3 py-2 border-b border-bg-5">
+      <div className="px-3 py-2 border-b border-[var(--hairline)]">
         {usePreview && previewProps ? (
           <PreviewBlock {...previewProps} />
         ) : (
@@ -205,7 +205,7 @@ export function DraftCard({
 
       {/* ── AI rationale block ── */}
       {(reason || (batchCallCount != null && batchCallCount > 1)) && (
-        <div className="px-5 py-4 border-b border-bg-5">
+        <div className="px-5 py-4 border-b border-[var(--hairline)]">
           {reason && (
             <>
               <span
@@ -228,7 +228,7 @@ export function DraftCard({
           {batchCallCount != null && batchCallCount > 1 && (
             <div
               className={cn(
-                "bg-warning-bg border border-[rgba(212,168,88,0.3)]",
+                "bg-warning-bg border border-[rgba(212,168,88,0.3)] rounded-[var(--radius-2)]",
                 "px-[14px] py-3 flex items-start gap-2.5",
                 reason ? "mt-3" : "",
               )}
@@ -249,7 +249,7 @@ export function DraftCard({
       )}
 
       {/* ── Footer ── */}
-      <footer className="flex items-center justify-between gap-4 px-6 py-4 border-t border-bg-3 bg-bg-0">
+      <footer className="flex items-center justify-between gap-4 px-6 py-4 border-t border-[var(--hairline)] bg-bg-0">
         {/* Expiration counter */}
         <div
           className={cn(

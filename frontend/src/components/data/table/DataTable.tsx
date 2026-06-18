@@ -161,7 +161,7 @@ export function DataTable<T>({
       ref={containerRef}
       role="region"
       aria-label={label}
-      className="border border-bg-5 bg-bg-1 overflow-auto"
+      className="border border-[var(--hairline)] rounded-[var(--radius-3)] bg-bg-1 overflow-auto"
       style={virtualized ? { height: containerHeight } : undefined}
     >
       <table
@@ -171,7 +171,7 @@ export function DataTable<T>({
         {/* Sticky thead */}
         <thead className="sticky top-0 z-[2] bg-bg-1">
           {table.getHeaderGroups().map((hg) => (
-            <tr key={hg.id} className="border-b border-bg-5">
+            <tr key={hg.id} className="border-b border-[var(--hairline-strong)]">
               {hg.headers.map((header) => {
                 const meta = (header.column.columnDef.meta ?? {}) as ColumnMeta;
                 const canSort = header.column.getCanSort();
@@ -360,7 +360,7 @@ function SkeletonRow({
       {Array.from({ length: colCount }, (_, i) => (
         <td key={i} style={{ height: rowHeight }} className="px-3.5 align-middle">
           <div
-            className="h-3 bg-bg-3 animate-pulse rounded-[1px]"
+            className="h-3 bg-bg-3 animate-pulse rounded-[var(--radius-1)]"
             style={{ width: i === 0 ? 16 : i === 1 ? "75%" : "55%" }}
           />
         </td>

@@ -148,7 +148,7 @@ function RulesPreview({
 }) {
   if (!cpaValid) {
     return (
-      <div className="border border-bg-5 text-[12px] text-bg-9" style={{ padding: "var(--s-4)" }}>
+      <div className="border border-[var(--hairline)] rounded-[var(--radius-2)] text-[12px] text-bg-9" style={{ padding: "var(--s-4)" }}>
         Укажите CPA — покажу, при какой цене сработают стоп и warning по каждой метрике.
       </div>
     );
@@ -159,7 +159,7 @@ function RulesPreview({
   if (!data) return null;
 
   return (
-    <div className="border border-bg-5" style={{ padding: "var(--s-4)" }}>
+    <div className="border border-[var(--hairline)] rounded-[var(--radius-2)]" style={{ padding: "var(--s-4)" }}>
       <div className="font-display text-[10px] tracking-[0.12em] uppercase text-bg-8 mb-3">
         ПРИ КАКОЙ ЦЕНЕ СРАБОТАЕТ
       </div>
@@ -175,7 +175,7 @@ function RulesPreview({
         </thead>
         <tbody>
           {data.cost_rules.map((r) => (
-            <tr key={r.rule} className="border-t border-bg-4">
+            <tr key={r.rule} className="border-t border-[var(--hairline)]">
               <td className="py-1.5 text-bg-10">{r.label}</td>
               <td className="py-1.5 text-right font-display tabular-nums text-warning">
                 ${r.warning}
@@ -188,7 +188,7 @@ function RulesPreview({
 
       {/* Диапазоны расхода без/с депозитом */}
       {data.spend_ranges.length > 0 && (
-        <div className="mt-3 pt-3 border-t border-bg-4 flex flex-col gap-1.5">
+        <div className="mt-3 pt-3 border-t border-[var(--hairline)] flex flex-col gap-1.5">
           {data.spend_ranges.map((s) => (
             <div key={s.rule} className="flex items-center justify-between text-[12px]">
               <span className="text-bg-10">{s.label}</span>

@@ -101,7 +101,7 @@ export const TelegramTab: FC = () => {
 
         {/* Deep link */}
         {data?.auth_deep_link && (
-          <div className="mt-4 pt-4 border-t border-bg-4">
+          <div className="mt-4 pt-4 border-t border-[var(--hairline)]">
             <div className="text-[11px] text-bg-8 uppercase tracking-wider mb-2">
               Ссылка авторизации
             </div>

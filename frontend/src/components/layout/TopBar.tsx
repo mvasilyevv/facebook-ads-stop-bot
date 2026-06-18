@@ -37,7 +37,7 @@ export function TopBar() {
   const openPalette = useCommandPalette((s) => s.toggle);
 
   return (
-    <header className="col-start-2 col-end-3 row-start-1 row-end-2 z-[20] flex h-14 items-center justify-between border-b border-bg-5 bg-bg-0 px-8">
+    <header className="col-start-2 col-end-3 row-start-1 row-end-2 z-[20] flex h-14 items-center justify-between border-b border-[var(--hairline)] bg-bg-0 px-8">
       {/* Breadcrumb */}
       <nav
         aria-label="Текущий раздел"
@@ -56,13 +56,13 @@ export function TopBar() {
         <button
           type="button"
           onClick={openPalette}
-          className="flex items-center gap-2 border border-bg-6 bg-bg-2 px-3 py-1.5 font-body text-[13px] text-bg-9 transition-colors hover:border-bg-7 hover:text-bg-10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+          className="flex items-center gap-2 rounded-[var(--radius-2)] border border-[var(--hairline-strong)] bg-bg-2 px-3 py-1.5 font-body text-[13px] text-bg-9 transition-colors hover:border-bg-7 hover:text-bg-10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
           aria-label="Открыть поиск (⌘K)"
           title="Поиск объявлений, офферов, разделов (⌘K)"
         >
           <Search size={14} aria-hidden="true" />
           <span>Поиск</span>
-          <kbd className="ml-1.5 rounded-[2px] border border-bg-6 px-1 font-display text-[11px] text-bg-8">
+          <kbd className="ml-1.5 rounded-[var(--radius-1)] border border-[var(--hairline-strong)] px-1 font-display text-[11px] text-bg-8">
             ⌘K
           </kbd>
         </button>
@@ -70,13 +70,13 @@ export function TopBar() {
         {/* Worker health chip */}
         <WorkerPulse />
 
-        <div className="h-[22px] w-px bg-bg-5" aria-hidden="true" />
+        <div className="h-[22px] w-px bg-[var(--hairline)]" aria-hidden="true" />
 
         {/* Bell */}
         <button
           type="button"
           aria-label="Уведомления"
-          className="inline-flex size-8 items-center justify-center text-bg-10 transition-colors hover:bg-bg-2 hover:text-bg-11 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+          className="inline-flex size-8 items-center justify-center rounded-[var(--radius-2)] text-bg-10 transition-colors hover:bg-bg-2 hover:text-bg-11 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
         >
           <Bell size={17} aria-hidden="true" />
         </button>
@@ -84,7 +84,7 @@ export function TopBar() {
         {/* MV avatar */}
         <div
           aria-hidden="true"
-          className="flex size-[30px] items-center justify-center rounded-full border border-bg-6 bg-bg-2 font-display text-[12px] text-bg-11"
+          className="flex size-[30px] items-center justify-center rounded-full border border-[var(--hairline-strong)] bg-bg-2 font-display text-[12px] text-bg-11"
           title="Профиль"
         >
           MV

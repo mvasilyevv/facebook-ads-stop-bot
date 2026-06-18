@@ -128,7 +128,7 @@ export function FilterBar({
             placeholder="Поиск по названию / ad_id / offer"
             aria-label="Поиск объявлений"
             className={cn(
-              "w-full h-8 bg-bg-2 border border-bg-6 rounded-[var(--r-1)]",
+              "w-full h-8 bg-bg-2 border border-[var(--hairline)] rounded-[var(--radius-2)]",
               "text-bg-11 text-[13px] pl-8 pr-8",
               "placeholder:text-bg-9 outline-none",
               "focus-visible:border-bg-7",
@@ -156,7 +156,7 @@ export function FilterBar({
                   "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
                   on
                     ? "border-accent bg-accent-bg text-accent"
-                    : "border-bg-6 bg-transparent text-bg-10 hover:border-bg-7 hover:text-bg-11",
+                    : "border-[var(--hairline)] bg-transparent text-bg-10 hover:border-[var(--hairline-strong)] hover:text-bg-11",
                 )}
               >
                 <span
@@ -313,10 +313,10 @@ function CheckDropdown({
         aria-expanded={open}
         aria-label={ariaLabel}
         className={cn(
-          "inline-flex items-center gap-1.5 h-8 px-3",
-          "bg-bg-2 border border-bg-6 text-bg-10",
+          "inline-flex items-center gap-1.5 h-8 px-3 rounded-[var(--radius-2)]",
+          "bg-bg-2 border border-[var(--hairline)] text-bg-10",
           "font-display text-[12px] tracking-wide",
-          "hover:border-bg-7 hover:text-bg-11 transition-colors duration-[120ms]",
+          "hover:border-[var(--hairline-strong)] hover:text-bg-11 transition-colors duration-[120ms]",
           "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
           selected.size > 0 && "text-accent border-accent/40",
         )}
@@ -337,7 +337,7 @@ function CheckDropdown({
           aria-label={ariaLabel}
           className={cn(
             "absolute top-[calc(100%+6px)] left-0 z-30 min-w-[160px] max-h-[280px] overflow-y-auto",
-            "bg-bg-3 border border-bg-6 p-1.5 flex flex-col gap-0.5",
+            "bg-bg-3 border border-[var(--hairline)] rounded-[var(--radius-2)] p-1.5 flex flex-col gap-0.5",
           )}
         >
           {options.length === 0 ? (
@@ -353,7 +353,7 @@ function CheckDropdown({
                   aria-selected={on}
                   onClick={() => onToggle(o)}
                   className={cn(
-                    "flex items-center gap-2 px-2 py-1.5 text-left",
+                    "flex items-center gap-2 px-2 py-1.5 text-left rounded-[var(--radius-1)]",
                     "text-bg-11 text-[13px] transition-colors",
                     on ? "bg-bg-4" : "hover:bg-bg-4/60",
                   )}
@@ -361,7 +361,7 @@ function CheckDropdown({
                   <span
                     aria-hidden="true"
                     className={cn(
-                      "size-[14px] inline-flex items-center justify-center border",
+                      "size-[14px] inline-flex items-center justify-center border rounded-[var(--radius-1)]",
                       on ? "border-accent bg-accent" : "border-bg-7",
                     )}
                   >
@@ -391,7 +391,7 @@ function FilterChip({
     <span
       className={cn(
         "inline-flex items-center gap-1.5 h-[22px] pl-2.5 pr-1",
-        "bg-bg-2 border border-bg-6 text-bg-10",
+        "bg-bg-2 border border-[var(--hairline)] rounded-[var(--radius-1)] text-bg-10",
         "font-display text-[11px] tracking-[0.02em]",
       )}
     >

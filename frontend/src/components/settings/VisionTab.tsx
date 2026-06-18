@@ -111,7 +111,7 @@ export const VisionTab: FC = () => {
         </div>
 
         {/* Reconnect */}
-        <div className="mt-4 pt-4 border-t border-bg-4">
+        <div className="mt-4 pt-4 border-t border-[var(--hairline)]">
           <Button
             variant="secondary"
             onClick={() => void handleReconnect()}

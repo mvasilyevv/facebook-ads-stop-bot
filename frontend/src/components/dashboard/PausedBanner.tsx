@@ -19,7 +19,7 @@ export function PausedBanner({ since, onEnable }: PausedBannerProps) {
   return (
     <div
       role="alert"
-      className="flex items-center gap-3 border border-l-2 border-[color-mix(in_srgb,var(--warning)_34%,transparent)] border-l-warning bg-warning-bg px-4 py-3"
+      className="flex items-center gap-3 rounded-[var(--radius-3)] border border-l-2 border-[color-mix(in_srgb,var(--warning)_34%,transparent)] border-l-warning bg-warning-bg px-4 py-3"
     >
       <span className="flex shrink-0 text-warning" aria-hidden="true">
         <Pause size={18} strokeWidth={2} />
@@ -39,7 +39,7 @@ export function PausedBanner({ since, onEnable }: PausedBannerProps) {
         <button
           type="button"
           onClick={onEnable}
-          className="inline-flex shrink-0 items-center gap-2 bg-warning px-4 py-2 font-display text-[13px] font-semibold text-bg-0 transition-opacity hover:opacity-90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+          className="inline-flex shrink-0 items-center gap-2 rounded-[var(--radius-2)] bg-warning px-4 py-2 font-display text-[13px] font-semibold text-bg-0 transition-opacity hover:opacity-90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
         >
           <Play size={14} aria-hidden="true" />
           Включить

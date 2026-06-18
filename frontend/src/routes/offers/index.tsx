@@ -148,7 +148,7 @@ function OffersPage() {
           ))}
         </div>
         <button
-          className="font-display text-[12px] text-bg-10 flex items-center gap-1.5 px-3 py-1.5 border border-bg-5 hover:border-bg-6 transition-colors"
+          className="font-display text-[12px] text-bg-10 flex items-center gap-1.5 px-3 py-1.5 border border-[var(--hairline)] hover:border-[var(--hairline-strong)] rounded-[var(--radius-2)] transition-colors"
           type="button"
           aria-label="Сортировка"
         >

@@ -30,9 +30,9 @@ export function Tooltip({
             side={side}
             sideOffset={6}
             className={cn(
-              "z-[80] bg-bg-3 border border-bg-6 px-2.5 py-1.5",
+              "z-[80] bg-bg-3 border border-[var(--hairline)] px-2.5 py-1.5",
               "text-[12px] text-bg-11 font-body",
-              "rounded-[2px]",
+              "rounded-[var(--radius-2)]",
               "animate-in fade-in-0 zoom-in-95",
               "data-[side=bottom]:slide-in-from-top-1",
               "data-[side=top]:slide-in-from-bottom-1",

@@ -77,7 +77,7 @@ export function CustomTooltipContent({
 }: CustomTooltipContentProps) {
   if (!active || !payload?.length) return null;
   return (
-    <div className="bg-bg-3 border border-bg-6 px-3 py-2 text-[12px]">
+    <div className="bg-bg-3 border border-[var(--hairline)] rounded-[var(--radius-2)] px-3 py-2 text-[12px]">
       {label ? (
         <div className="font-display text-bg-9 mb-1 text-[10px] uppercase tracking-wider">
           {label}

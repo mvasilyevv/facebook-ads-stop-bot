@@ -58,7 +58,7 @@ const DOT_CLASSES: Record<TimelineItemType, string> = {
 function RulePill({ code }: { code: string }) {
   return (
     <span
-      className="inline-block bg-bg-3 border border-bg-6 px-1.5 py-0.5 mr-1 font-display text-[10.5px] tracking-[0.04em] text-bg-10"
+      className="inline-block bg-bg-2 border border-[var(--hairline)] rounded-[var(--radius-1)] px-1.5 py-0.5 mr-1 font-display text-[10.5px] tracking-[0.04em] text-bg-10"
       title={ruleCodeLabel(code, false)}
     >
       {ruleCodeLabel(code, true)}

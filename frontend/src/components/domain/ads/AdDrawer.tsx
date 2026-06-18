@@ -211,7 +211,7 @@ export function AdDrawer({ ad, onClose, isLoading = false, fbAdId }: AdDrawerPro
               {ALERT_STATE_LABELS[state] ?? state}
             </Badge>
             {ad.offer_code ? (
-              <span className="inline-block px-1.5 py-px bg-bg-3 border border-bg-6 text-bg-10 font-display text-[10px] tracking-[0.04em] uppercase">
+              <span className="inline-block px-1.5 py-px bg-bg-3 border border-[var(--hairline)] rounded-[var(--radius-1)] text-bg-10 font-display text-[10px] tracking-[0.04em] uppercase">
                 {ad.offer_code}
               </span>
             ) : null}
@@ -221,7 +221,7 @@ export function AdDrawer({ ad, onClose, isLoading = false, fbAdId }: AdDrawerPro
                 href={adsManagerAdUrl(ad) ?? undefined}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center gap-1 px-1.5 py-px bg-bg-2 border border-bg-6 text-bg-9 font-display text-[10px] tabular-nums tracking-[0.04em] hover:text-bg-11 hover:border-bg-7 transition-colors"
+                className="inline-flex items-center gap-1 px-1.5 py-px bg-bg-2 border border-[var(--hairline)] rounded-[var(--radius-1)] text-bg-9 font-display text-[10px] tabular-nums tracking-[0.04em] hover:text-bg-11 hover:border-[var(--hairline-strong)] transition-colors"
                 title="Открыть в Ads Manager"
                 aria-label={`Открыть в Ads Manager, кабинет ${adAccountId(ad)}`}
               >
@@ -274,7 +274,7 @@ export function AdDrawer({ ad, onClose, isLoading = false, fbAdId }: AdDrawerPro
           {/* Triggered-rule banner */}
           {rules.length > 0 && (
             <div
-              className="flex items-center gap-2 flex-wrap p-4 bg-danger-bg border border-[rgba(199,98,92,0.3)]"
+              className="flex items-center gap-2 flex-wrap p-4 bg-danger-bg border border-[rgba(199,98,92,0.3)] rounded-[var(--radius-2)]"
               style={{ borderLeft: "2px solid var(--danger)" }}
             >
               <span className="text-[12px] text-bg-10">сработали:</span>
@@ -286,7 +286,7 @@ export function AdDrawer({ ad, onClose, isLoading = false, fbAdId }: AdDrawerPro
           {(ad.campaign_name || ad.adset_name) && (
             <section>
               <Eyebrow className="mb-3">ИЕРАРХИЯ</Eyebrow>
-              <div className="border border-bg-5">
+              <div className="border border-[var(--hairline)] rounded-[var(--radius-2)] overflow-hidden">
                 <HierRow label="Кампания" value={ad.campaign_name} />
                 <HierRow label="Адсет" value={ad.adset_name} border />
               </div>
@@ -296,14 +296,14 @@ export function AdDrawer({ ad, onClose, isLoading = false, fbAdId }: AdDrawerPro
           {/* Метрики-снимок */}
           <section>
             <Eyebrow className="mb-3">МЕТРИКИ · СНИМОК</Eyebrow>
-            <div className="grid grid-cols-4 border border-bg-5">
+            <div className="grid grid-cols-4 border border-[var(--hairline)] rounded-[var(--radius-2)] overflow-hidden">
               {metricCells.map((c, i) => (
                 <div
                   key={c.k}
                   className={cn(
                     "px-3 py-2.5",
-                    i % 4 !== 3 && "border-r border-bg-5",
-                    i >= 4 && "border-t border-bg-5",
+                    i % 4 !== 3 && "border-r border-[var(--hairline)]",
+                    i >= 4 && "border-t border-[var(--hairline)]",
                     c.flag && "bg-danger-bg",
                   )}
                 >
@@ -331,7 +331,7 @@ export function AdDrawer({ ad, onClose, isLoading = false, fbAdId }: AdDrawerPro
           {/* CPL sparkline */}
           <section>
             <Eyebrow className="mb-3">CPL · 8 ТОЧЕК</Eyebrow>
-            <div className="bg-bg-1 border border-bg-5 p-4">
+            <div className="bg-bg-1 border border-[var(--hairline)] rounded-[var(--radius-2)] p-4">
               {timelineLoading ? (
                 <Skeleton height={70} className="w-full" />
               ) : cplSpark.length >= 2 ? (
@@ -401,7 +401,7 @@ function HierRow({
     <div
       className={cn(
         "flex items-center justify-between gap-3 px-3 py-2",
-        border && "border-t border-bg-5",
+        border && "border-t border-[var(--hairline)]",
       )}
     >
       <span className="font-display text-[10px] uppercase tracking-[0.1em] text-bg-9 shrink-0">
@@ -448,7 +448,7 @@ const KIND_DOT: Record<HistoryEntry["kind"], string> = {
 
 function HistoryRow({ entry }: { entry: HistoryEntry }) {
   return (
-    <div className="flex items-start gap-3 py-2.5 border-b border-bg-5 last:border-b-0">
+    <div className="flex items-start gap-3 py-2.5 border-b border-[var(--hairline)] last:border-b-0">
       <span
         aria-hidden="true"
         className="size-[7px] rounded-full mt-1.5 shrink-0"

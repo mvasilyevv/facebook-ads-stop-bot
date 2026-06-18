@@ -41,7 +41,7 @@ export function BulkActionBar({
     <div
       role="toolbar"
       aria-label={`Действия над ${count} выбранными объявлениями`}
-      className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[35] flex items-center gap-4 bg-bg-3 border border-bg-7 px-3.5 py-2.5"
+      className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[35] flex items-center gap-4 bg-bg-3 border border-[var(--hairline-strong)] rounded-[var(--radius-3)] px-4 py-2.5"
       style={{
         animation: "fbRise var(--dur-base) var(--ease-out)",
         boxShadow: "inset 0 1px 0 rgba(255,255,255,0.04)",
@@ -51,7 +51,7 @@ export function BulkActionBar({
         <b className="font-display tabular-nums">{count}</b> выбрано
       </span>
 
-      <span aria-hidden="true" className="w-px h-[22px] bg-bg-6" />
+      <span aria-hidden="true" className="w-px h-[22px] bg-[var(--hairline-strong)]" />
 
       {/* MONEY: Disable — открывает confirm-with-typing на странице */}
       <Button

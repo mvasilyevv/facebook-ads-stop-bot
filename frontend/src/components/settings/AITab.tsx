@@ -43,7 +43,7 @@ export const AITab: FC = () => {
             { label: "AI analyze rate-limit", value: "20 запросов / час (per IP)" },
             { label: "Кэш AI-ответов", value: "600 секунд (Redis)" },
           ].map(({ label, value }) => (
-            <div key={label} className="flex items-baseline justify-between gap-2 py-1.5 border-b border-bg-3 last:border-b-0">
+            <div key={label} className="flex items-baseline justify-between gap-2 py-1.5 border-b border-[var(--hairline)] last:border-b-0">
               <span className="font-display text-[11px] uppercase tracking-[0.08em] text-bg-8 shrink-0">
                 {label}
               </span>

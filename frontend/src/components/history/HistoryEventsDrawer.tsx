@@ -115,7 +115,7 @@ export const HistoryEventsDrawer: FC<HistoryEventsDrawerProps> = ({
             <div
               key={ev.id}
               role="listitem"
-              className="border border-bg-4 bg-bg-1 hover:bg-bg-2 transition-colors p-4"
+              className="border border-[var(--hairline)] rounded-[var(--radius-2)] bg-bg-1 hover:bg-bg-2 transition-colors p-4"
             >
               {/* Строка 1: время + бейдж стадии */}
               <div className="flex items-center justify-between gap-3 mb-2">
@@ -149,7 +149,7 @@ export const HistoryEventsDrawer: FC<HistoryEventsDrawerProps> = ({
                     <span
                       key={code}
                       title={ruleCodeLabel(code, false)}
-                      className="inline-block bg-bg-3 border border-bg-6 px-1.5 py-0.5 font-display text-[10.5px] tracking-[0.04em] text-bg-10"
+                      className="inline-block bg-bg-3 border border-[var(--hairline)] rounded-[var(--radius-1)] px-1.5 py-0.5 font-display text-[10.5px] tracking-[0.04em] text-bg-10"
                     >
                       {ruleCodeLabel(code, true)}
                     </span>

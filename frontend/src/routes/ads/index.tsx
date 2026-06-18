@@ -433,7 +433,7 @@ function AdsPage() {
       ) : isLoading ? (
         <TableSkeleton rowHeight={rowHeight} />
       ) : rows.length === 0 ? (
-        <div className="flex-1 border border-bg-6 flex items-center justify-center">
+        <div className="flex-1 border border-[var(--hairline)] rounded-[var(--radius-3)] flex items-center justify-center">
           <EmptyState title="Объявлений нет" description="Попробуйте сбросить фильтры." />
         </div>
       ) : (
@@ -534,13 +534,13 @@ function Legend({ k, label }: { k: string; label: string }) {
 
 function TableSkeleton({ rowHeight }: { rowHeight: number }) {
   return (
-    <div className="flex-1 border border-bg-6 min-h-0 overflow-hidden" aria-label="Загрузка">
-      <div className="h-8 bg-bg-2 border-b border-bg-6" />
+    <div className="flex-1 border border-[var(--hairline)] rounded-[var(--radius-3)] min-h-0 overflow-hidden" aria-label="Загрузка">
+      <div className="h-8 bg-bg-2 border-b border-[var(--hairline)]" />
       <div className="flex flex-col">
         {Array.from({ length: 14 }).map((_, i) => (
           <div
             key={i}
-            className="flex items-center gap-3 px-3 border-b border-bg-5"
+            className="flex items-center gap-3 px-3 border-b border-[var(--hairline)]"
             style={{ height: rowHeight }}
           >
             <Skeleton width={15} height={15} />

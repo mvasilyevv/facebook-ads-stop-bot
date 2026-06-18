@@ -118,7 +118,7 @@ export const HealthTab: FC = () => {
                 key={w.name}
                 role="listitem"
                 className={`flex items-center justify-between px-6 py-4 ${
-                  idx < workers.length - 1 ? "border-b border-bg-4" : ""
+                  idx < workers.length - 1 ? "border-b border-[var(--hairline)]" : ""
                 }`}
               >
                 {/* Имя воркера */}

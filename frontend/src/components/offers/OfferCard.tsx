@@ -62,7 +62,7 @@ function OfferAccounts({ offer }: { offer: Offer }) {
       {accounts.map((a) => (
         <span
           key={a}
-          className="inline-block px-1.5 py-px bg-bg-2 border border-bg-6 text-bg-9 font-display text-[10px] tabular-nums"
+          className="inline-block px-1.5 py-px bg-bg-2 border border-[var(--hairline)] rounded-[var(--radius-1)] text-bg-9 font-display text-[10px] tabular-nums"
           title={`Кабинет ${a}`}
         >
           {a.length > 8 ? `…${a.slice(-6)}` : a}
@@ -86,10 +86,10 @@ export function OfferCard({
   return (
     <article
       className={cn(
-        "border bg-bg-1 flex flex-col transition-colors duration-[200ms]",
+        "border rounded-[var(--radius-3)] overflow-hidden bg-bg-1 flex flex-col transition-colors duration-[200ms]",
         isActive
-          ? "border-bg-5 hover:border-bg-6"
-          : "border-bg-4 opacity-60 hover:opacity-80",
+          ? "border-[var(--hairline)] hover:border-[var(--hairline-strong)]"
+          : "border-[var(--hairline)] opacity-60 hover:opacity-80",
       )}
       data-offer-id={offer.id}
       data-active={isActive}
@@ -124,7 +124,7 @@ export function OfferCard({
       {/* ── Метрики: 4 строки key-value (Spend / Leads / CPL / Alerts) ── */}
       <div
         className="flex-1"
-        style={{ borderTop: "1px solid var(--bg-5)", padding: "var(--s-4) var(--s-5)", display: "flex", flexDirection: "column", gap: 10 }}
+        style={{ borderTop: "1px solid var(--hairline)", padding: "var(--s-4) var(--s-5)", display: "flex", flexDirection: "column", gap: 10 }}
       >
         {(
           [
@@ -154,7 +154,7 @@ export function OfferCard({
 
       {/* ── Footer actions: Правила + Изменить + Удалить ── */}
       <footer
-        style={{ borderTop: "1px solid var(--bg-5)", padding: "var(--s-3) var(--s-4)", display: "flex", gap: "var(--s-2)" }}
+        style={{ borderTop: "1px solid var(--hairline)", padding: "var(--s-3) var(--s-4)", display: "flex", gap: "var(--s-2)" }}
       >
         <Button
           variant="secondary"

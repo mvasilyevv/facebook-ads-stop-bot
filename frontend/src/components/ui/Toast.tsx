@@ -96,7 +96,7 @@ function ToastItemView({ item, onClose }: { item: ToastItem; onClose: () => void
       onOpenChange={(o) => !o && onClose()}
       role={item.variant === "error" ? "alert" : "status"}
       className={cn(
-        "bg-bg-2 border p-4 flex items-start gap-3",
+        "bg-bg-2 border rounded-[var(--radius-3)] p-4 flex items-start gap-3",
         "data-[state=open]:animate-in data-[state=open]:slide-in-from-right-4 data-[state=open]:fade-in-0",
         "data-[state=closed]:animate-out data-[state=closed]:slide-out-to-right-4 data-[state=closed]:fade-out-0",
         VARIANT_BORDER[item.variant],

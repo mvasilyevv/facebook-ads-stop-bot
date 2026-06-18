@@ -121,7 +121,7 @@ function EventRow({ item, onAlertClick }: EventRowProps) {
         alignItems: "center",
         height: 44,
         padding: "0 var(--s-5)",
-        borderBottom: "1px solid var(--bg-5)",
+        borderBottom: "1px solid var(--hairline)",
       }}
     >
       {/* Время */}
@@ -246,7 +246,7 @@ function GroupedTimeline({
   );
 
   return (
-    <div className="bg-bg-1 border border-bg-5">
+    <div className="bg-bg-1 border border-[var(--hairline)] rounded-[var(--radius-3)] overflow-hidden">
       {days.map((day) => {
         const dayItems = grouped.get(day) ?? [];
         return (
@@ -255,7 +255,7 @@ function GroupedTimeline({
             <div
               style={{
                 padding: "12px var(--s-5) 8px",
-                borderBottom: "1px solid var(--bg-5)",
+                borderBottom: "1px solid var(--hairline)",
               }}
             >
               <span

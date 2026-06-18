@@ -34,7 +34,7 @@ function TaskRowItem({ task }: { task: TaskQueueRow }) {
 
   return (
     <div
-      className="grid items-center gap-3 border-b border-bg-5 px-3 last:border-b-0"
+      className="grid items-center gap-3 border-b border-[var(--hairline)] px-3 last:border-b-0"
       style={{ gridTemplateColumns: "1fr auto auto", height: "var(--row-h)" }}
     >
       <div className="flex min-w-0 items-center gap-2">
@@ -76,7 +76,7 @@ interface QueueColProps {
 
 function QueueCol({ title, tasks, countColor, isLoading, isError, error, onRetry }: QueueColProps) {
   return (
-    <div className="border border-bg-5 bg-bg-1">
+    <div className="overflow-hidden rounded-[var(--radius-3)] border border-[var(--hairline)] bg-bg-1">
       <div className="flex items-baseline justify-between p-6 pb-3">
         <Eyebrow>{title}</Eyebrow>
         <span

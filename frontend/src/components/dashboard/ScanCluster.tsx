@@ -73,7 +73,7 @@ export function ScanCluster({
             СКАН ВЫКЛЮЧЕН
           </span>
         </div>
-        <div className="h-7 w-px bg-bg-5" aria-hidden="true" />
+        <div className="h-7 w-px bg-[var(--hairline-strong)]" aria-hidden="true" />
         <div className="leading-[1.3]">
           <div className="font-display text-[9px] font-semibold uppercase tracking-[0.12em] text-bg-9">
             ПОСЛЕДНИЙ СКАН
@@ -108,7 +108,7 @@ export function ScanCluster({
           {scanning ? "ИДЁТ СКАН" : "СЛЕД. СКАН"}
         </span>
       </div>
-      <div className="h-7 w-px bg-bg-5" aria-hidden="true" />
+      <div className="h-7 w-px bg-[var(--hairline-strong)]" aria-hidden="true" />
       <div className="leading-[1.3]">
         <div className="font-display text-[9px] font-semibold uppercase tracking-[0.12em] text-bg-9">
           ПОСЛЕДНИЙ СКАН

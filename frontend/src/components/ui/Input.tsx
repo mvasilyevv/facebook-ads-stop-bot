@@ -11,7 +11,7 @@ import { Kbd } from "./Kbd";
 
 const inputStyles = cva(
   [
-    "w-full bg-bg-2 border border-bg-6 text-bg-11",
+    "w-full bg-bg-2 border border-[var(--hairline-strong)] text-bg-11 rounded-[var(--radius-2)]",
     "placeholder:text-bg-9",
     "transition-colors duration-[120ms]",
     // focus-within outline ставится на обёртку; здесь убираем дефолтный outline

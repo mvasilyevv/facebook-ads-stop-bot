@@ -1,6 +1,6 @@
 /**
  * Modal — центрированный Radix Dialog.
- * backdrop-blur-sm overlay, sharp panel (border-bg-5), Esc закрывает.
+ * backdrop-blur-sm overlay, airy panel (hairline-граница + radius-3), Esc закрывает.
  * Sizes: sm 480px / md 640px / lg 800px.
  * focus-trap встроен в Radix Dialog.Content.
  */
@@ -45,7 +45,7 @@ export function Modal({
         <Dialog.Content
           className={cn(
             "fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-[60]",
-            "bg-bg-1 border border-bg-5",
+            "bg-bg-1 border border-[var(--hairline)] rounded-[var(--radius-3)]",
             "w-[calc(100vw-32px)] max-h-[calc(100vh-64px)] overflow-auto",
             "p-6",
             "focus:outline-none",
@@ -96,7 +96,7 @@ export function ModalFooter({
   className?: string;
 }) {
   return (
-    <div className={cn("flex justify-end gap-2 mt-6 pt-4 border-t border-bg-5", className)}>
+    <div className={cn("flex justify-end gap-2 mt-6 pt-4 border-t border-[var(--hairline)]", className)}>
       {children}
     </div>
   );

@@ -72,7 +72,7 @@ function AreaTooltip({ active, payload, label }: AreaTooltipProps) {
   const leads = payload.find((p) => p.dataKey === "leads");
 
   return (
-    <div className="bg-bg-3 border border-bg-6 px-3 py-2 text-[12px] min-w-[120px]">
+    <div className="bg-bg-3 border border-[var(--hairline)] rounded-[var(--radius-2)] px-3 py-2 text-[12px] min-w-[120px]">
       {label ? (
         <div className="font-display text-bg-9 mb-1.5 text-[10px] uppercase tracking-wider">
           {label}

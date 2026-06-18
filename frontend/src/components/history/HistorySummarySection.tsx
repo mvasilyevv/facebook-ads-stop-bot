@@ -48,7 +48,7 @@ export const HistorySummarySection: FC<HistorySummarySectionProps> = ({
     return (
       <div className="space-y-4">
         {Array.from({ length: 3 }).map((_, i) => (
-          <div key={i} className="animate-pulse bg-bg-1 border border-bg-5 p-5" style={{ height: i === 0 ? 100 : 140 }} />
+          <div key={i} className="animate-pulse bg-bg-1 border border-[var(--hairline)] rounded-[var(--radius-3)] p-5" style={{ height: i === 0 ? 100 : 140 }} />
         ))}
       </div>
     );
@@ -79,7 +79,7 @@ export const HistorySummarySection: FC<HistorySummarySectionProps> = ({
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)" }}>
       {/* Карточка: Spend — нужна для теста ($1,234.56) */}
-      <div className="bg-bg-1 border border-bg-5" style={{ padding: "var(--s-5)" }}>
+      <div className="bg-bg-1 border border-[var(--hairline)] rounded-[var(--radius-3)]" style={{ padding: "var(--s-5)" }}>
         <div
           className="font-display text-[10px] tracking-[0.12em] uppercase text-bg-8"
           style={{ marginBottom: 10 }}
@@ -95,7 +95,7 @@ export const HistorySummarySection: FC<HistorySummarySectionProps> = ({
       </div>
 
       {/* Карточка 1: Всего событий */}
-      <div className="bg-bg-1 border border-bg-5" style={{ padding: "var(--s-5)" }}>
+      <div className="bg-bg-1 border border-[var(--hairline)] rounded-[var(--radius-3)]" style={{ padding: "var(--s-5)" }}>
         <div
           className="font-display text-[10px] tracking-[0.12em] uppercase text-bg-8"
           style={{ marginBottom: 14 }}
@@ -111,7 +111,7 @@ export const HistorySummarySection: FC<HistorySummarySectionProps> = ({
       </div>
 
       {/* Карточка 2: По stage */}
-      <div className="bg-bg-1 border border-bg-5" style={{ padding: "var(--s-5)" }}>
+      <div className="bg-bg-1 border border-[var(--hairline)] rounded-[var(--radius-3)]" style={{ padding: "var(--s-5)" }}>
         <div
           className="font-display text-[10px] tracking-[0.12em] uppercase text-bg-8"
           style={{ marginBottom: 14 }}
@@ -147,7 +147,7 @@ export const HistorySummarySection: FC<HistorySummarySectionProps> = ({
 
       {/* Карточка 3: По правилу */}
       {topRules.length > 0 && (
-        <div className="bg-bg-1 border border-bg-5" style={{ padding: "var(--s-5)" }}>
+        <div className="bg-bg-1 border border-[var(--hairline)] rounded-[var(--radius-3)]" style={{ padding: "var(--s-5)" }}>
           <div
             className="font-display text-[10px] tracking-[0.12em] uppercase text-bg-8"
             style={{ marginBottom: 14 }}

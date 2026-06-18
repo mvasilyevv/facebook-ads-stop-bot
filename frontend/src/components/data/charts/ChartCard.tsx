@@ -38,7 +38,7 @@ export function RangeTabs({
     <div
       role="tablist"
       aria-label={ariaLabel}
-      className="flex border border-bg-5 bg-bg-2"
+      className="flex border border-[var(--hairline)] rounded-[var(--radius-2)] overflow-hidden bg-bg-2"
     >
       {items.map((item, idx) => (
         <button
@@ -51,7 +51,7 @@ export function RangeTabs({
             "px-2.5 py-1 font-display text-[11px] tracking-wider transition-colors",
             "focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-accent",
             // Разделитель между табами
-            idx < items.length - 1 ? "border-r border-bg-5" : "",
+            idx < items.length - 1 ? "border-r border-[var(--hairline)]" : "",
             item.value === value
               ? "bg-bg-4 text-accent"
               : "text-bg-9 hover:text-bg-11",
@@ -142,7 +142,7 @@ export function ChartCard({
 
       {/* Meta-footer: total / avg / peak / leads / cpl */}
       {hasFooter ? (
-        <div className="flex gap-6 pt-3 mt-3 border-t border-bg-5 font-display text-[11px] tracking-wider text-bg-10 flex-wrap">
+        <div className="flex gap-6 pt-3 mt-3 border-t border-[var(--hairline)] font-display text-[11px] tracking-wider text-bg-10 flex-wrap">
           {metaItems.map((item) => (
             <ChartMetaItem
               key={item.label}

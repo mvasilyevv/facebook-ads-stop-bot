@@ -55,8 +55,8 @@ export function TabsList({
       className={cn(
         "inline-flex items-center",
         variant === "underline"
-          ? "gap-1 border-b border-bg-6 w-full"
-          : "gap-1 bg-bg-2 border border-bg-5 p-1",
+          ? "gap-1 border-b border-[var(--hairline)] w-full"
+          : "gap-1 bg-bg-2 border border-[var(--hairline)] p-1 rounded-[var(--radius-2)]",
         className,
       )}
     >
@@ -76,7 +76,7 @@ export function TabsList({
                   "data-[state=active]:border-accent data-[state=active]:text-bg-11 data-[state=active]:font-semibold",
                 ]
               : [
-                  "h-7 px-3 text-[11.5px] uppercase tracking-wider",
+                  "h-7 px-3 text-[11.5px] uppercase tracking-wider rounded-[var(--radius-1)]",
                   "text-bg-9 hover:text-bg-11",
                   "data-[state=active]:bg-bg-4 data-[state=active]:text-accent",
                 ],
@@ -84,7 +84,7 @@ export function TabsList({
         >
           {it.label}
           {it.count != null ? (
-            <span className="text-[10px] font-display tabular-nums border border-bg-6 px-1 leading-tight">
+            <span className="text-[10px] font-display tabular-nums border border-[var(--hairline)] px-1 leading-tight rounded-[var(--radius-1)]">
               {it.count}
             </span>
           ) : null}

@@ -21,7 +21,7 @@ export function ReasonBlock({ text, source, className }: ReasonBlockProps) {
   return (
     <div
       className={cn(
-        "bg-bg-2 border-l-2 border-accent",
+        "bg-bg-2 border-l-2 border-accent rounded-r-[var(--radius-2)]",
         "px-4 py-[14px]",
         "text-[13px] text-bg-10 leading-[1.55]",
         className,

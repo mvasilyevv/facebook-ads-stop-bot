@@ -47,7 +47,7 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(function Select
           id={id}
           aria-invalid={!!errorMessage}
           className={cn(
-            "w-full appearance-none bg-bg-2 border border-bg-6 text-bg-11",
+            "w-full appearance-none bg-bg-2 border border-[var(--hairline-strong)] text-bg-11 rounded-[var(--radius-2)]",
             "font-display tracking-[0.02em]",
             "transition-colors duration-[120ms]",
             "focus:bg-bg-3 focus:border-accent focus:outline-none",

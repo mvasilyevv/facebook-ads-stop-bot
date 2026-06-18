@@ -46,7 +46,7 @@ export function PreviewBlock({ sections = [], bullets = [], className }: Preview
   return (
     <div
       className={cn(
-        "bg-bg-0 border border-bg-5",
+        "bg-bg-0 border border-[var(--hairline)] rounded-[var(--radius-2)]",
         "p-4 font-display text-[12px] text-bg-10 leading-[1.7]",
         className,
       )}

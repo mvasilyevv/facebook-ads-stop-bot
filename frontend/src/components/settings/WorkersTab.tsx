@@ -80,7 +80,7 @@ export const WorkersTab: FC = () => {
               key={w.name}
               role="listitem"
               className={`flex items-center justify-between px-6 py-3 ${
-                idx < workers.length - 1 ? "border-b border-bg-4" : ""
+                idx < workers.length - 1 ? "border-b border-[var(--hairline)]" : ""
               }`}
             >
               <div className="font-display text-[13px] text-bg-11">{w.name}</div>

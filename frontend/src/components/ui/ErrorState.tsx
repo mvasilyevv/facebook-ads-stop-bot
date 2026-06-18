@@ -34,7 +34,7 @@ export function ErrorState({
     <div
       role="alert"
       className={cn(
-        "border border-[rgba(199,98,92,0.3)] bg-danger-bg/60 p-6 flex items-start gap-4",
+        "border border-[rgba(199,98,92,0.3)] bg-danger-bg/60 rounded-[var(--radius-3)] p-6 flex items-start gap-4",
         className,
       )}
     >
