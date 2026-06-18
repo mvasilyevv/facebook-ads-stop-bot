@@ -84,8 +84,8 @@ function HealthPage() {
         {/* ── Загрузка ── */}
         {isLoading && (
           <>
-            <Skeleton className="h-20 w-full" />
-            <Skeleton className="h-48 w-full" />
+            <Skeleton className="h-20 w-full rounded-[var(--radius-3)]" />
+            <Skeleton className="h-48 w-full rounded-[var(--radius-3)]" />
           </>
         )}
 
@@ -114,8 +114,8 @@ function HealthPage() {
             {overall && (
               <section
                 className={cn(
-                  "border px-4 py-4 flex items-center justify-between gap-3",
-                  VERDICT_BG[overall] ?? "bg-bg-3 border-bg-5",
+                  "border px-4 py-4 flex items-center justify-between gap-3 rounded-[var(--radius-3)]",
+                  VERDICT_BG[overall] ?? "bg-bg-3 border-[var(--hairline)]",
                 )}
               >
                 <div className="flex items-center gap-3">
@@ -151,7 +151,7 @@ function HealthPage() {
             {/* Список воркеров */}
             <section>
               <Eyebrow className="mb-2.5 flex">ВОРКЕРЫ</Eyebrow>
-              <div className="border border-bg-5 bg-bg-1 px-4">
+              <div className="border border-[var(--hairline)] bg-bg-1 px-4 rounded-[var(--radius-3)] overflow-hidden">
                 {workers.length === 0 ? (
                   <EmptyState
                     title="Нет данных о воркерах"
@@ -167,7 +167,7 @@ function HealthPage() {
             {runtime && (
               <section>
                 <Eyebrow className="mb-2.5 flex">OBSERVER RUNTIME</Eyebrow>
-                <div className="border border-bg-5 bg-bg-1 px-4 py-3 flex items-center justify-between gap-3 min-h-[44px]">
+                <div className="border border-[var(--hairline)] bg-bg-1 px-4 py-3 flex items-center justify-between gap-3 min-h-[44px] rounded-[var(--radius-3)]">
                   <div>
                     <p className="font-display text-[12px] text-bg-9 uppercase tracking-[0.08em]">
                       Статус
@@ -190,7 +190,7 @@ function HealthPage() {
               type="button"
               onClick={handleRefetch}
               disabled={isLoading}
-              className="w-full min-h-[44px] border border-bg-6 text-bg-10 text-[13px] font-display hover:border-bg-7 hover:text-bg-11 active:opacity-70 disabled:opacity-40 transition-opacity"
+              className="w-full min-h-[44px] border border-[var(--hairline)] rounded-[var(--radius-2)] text-bg-10 text-[13px] font-display hover:border-[var(--hairline-strong)] hover:text-bg-11 active:opacity-70 disabled:opacity-40 transition-opacity"
             >
               Обновить статус
             </button>

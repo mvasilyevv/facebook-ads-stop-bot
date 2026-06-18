@@ -224,7 +224,7 @@ function OfferForm({ offer, onClose }: OfferFormProps) {
 
       {/* Активность (только при редактировании) */}
       {isEdit && (
-        <div className="border-t border-bg-5 pt-3">
+        <div className="border-t border-[var(--hairline)] pt-3">
           <Switch
             id={switchId}
             label="Активен"
@@ -333,10 +333,10 @@ function OfferCard({ offer, onClick }: OfferCardProps) {
       type="button"
       onClick={onClick}
       className={cn(
-        "w-full text-left border bg-bg-1 min-h-[44px]",
-        "flex items-center gap-3 px-4 py-3",
+        "w-full text-left border bg-bg-1 min-h-[44px] rounded-[var(--radius-2)]",
+        "flex items-center gap-3 px-4 py-3.5",
         "active:bg-bg-2 transition-colors duration-[var(--dur-base)]",
-        isActive ? "border-bg-5" : "border-bg-4 opacity-70",
+        isActive ? "border-[var(--hairline)]" : "border-[var(--hairline)] opacity-70",
       )}
       aria-label={`Оффер ${offer.code}`}
     >
@@ -564,11 +564,11 @@ function OffersPage() {
       ) : null}
 
       {/* Список */}
-      <div className="px-4 pt-3 flex flex-col gap-px">
+      <div className="px-4 pt-3 flex flex-col gap-2">
         {/* Загрузка */}
         {isLoading &&
           Array.from({ length: 4 }, (_, i) => (
-            <Skeleton key={i} className="h-[60px] w-full" />
+            <Skeleton key={i} className="h-[60px] w-full rounded-[var(--radius-2)]" />
           ))}
 
         {/* Ошибка */}

@@ -55,7 +55,7 @@ function FieldRow({ label, hint, children, noBorder = false }: FieldRowProps) {
     <div
       className={cn(
         "flex items-center justify-between gap-3 min-h-[44px] py-2.5",
-        !noBorder && "border-b border-bg-5",
+        !noBorder && "border-b border-[var(--hairline)]",
       )}
     >
       <div className="min-w-0">
@@ -81,7 +81,7 @@ function Section({ eyebrow, num, children }: SectionProps) {
       <Eyebrow num={num} className="mb-2.5 flex">
         {eyebrow}
       </Eyebrow>
-      <div className="border border-bg-5 bg-bg-1 px-4">{children}</div>
+      <div className="border border-[var(--hairline)] bg-bg-1 px-4 rounded-[var(--radius-3)]">{children}</div>
     </section>
   );
 }
@@ -103,7 +103,7 @@ function NavRow({ icon, label, onClick, noBorder = false }: NavRowProps) {
       className={cn(
         "w-full flex items-center gap-3 min-h-[44px] py-2.5 text-left",
         "active:bg-bg-2 transition-colors",
-        !noBorder && "border-b border-bg-5",
+        !noBorder && "border-b border-[var(--hairline)]",
       )}
     >
       <span className="text-bg-9 shrink-0">{icon}</span>
@@ -370,7 +370,7 @@ function SettingsPage() {
           <Eyebrow num="05" className="mb-2.5 flex">
             РАЗДЕЛЫ
           </Eyebrow>
-          <div className="border border-bg-5 bg-bg-1 px-4">
+          <div className="border border-[var(--hairline)] bg-bg-1 px-4 rounded-[var(--radius-3)]">
             <NavRow
               icon={<Heart size={16} strokeWidth={1.5} />}
               label="Здоровье воркеров"
@@ -402,7 +402,7 @@ function SettingsPage() {
           role="status"
           aria-live="polite"
           className={cn(
-            "fixed bottom-[80px] left-4 right-4 max-w-[440px] mx-auto z-50 px-4 py-3 text-[13px] border",
+            "fixed bottom-[80px] left-4 right-4 max-w-[440px] mx-auto z-50 px-4 py-3 text-[13px] border rounded-[var(--radius-2)]",
             toast.ok
               ? "bg-success-bg text-success border-success"
               : "bg-danger-bg text-danger border-danger",

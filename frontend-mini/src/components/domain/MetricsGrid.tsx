@@ -25,7 +25,9 @@ export function MetricsGrid({ cells, className }: MetricsGridProps) {
       style={{
         display: "grid",
         gridTemplateColumns: "1fr 1fr 1fr",
-        border: "1px solid var(--color-bg-5)",
+        border: "1px solid var(--hairline)",
+        borderRadius: "var(--radius-3)",
+        overflow: "hidden",
       }}
     >
       {cells.map((cell, i) => {
@@ -35,9 +37,9 @@ export function MetricsGrid({ cells, className }: MetricsGridProps) {
           <div
             key={i}
             style={{
-              padding: "10px 12px",
-              borderRight: col !== COLS - 1 ? "1px solid var(--color-bg-5)" : undefined,
-              borderTop: row > 0 ? "1px solid var(--color-bg-5)" : undefined,
+              padding: "12px 14px",
+              borderRight: col !== COLS - 1 ? "1px solid var(--hairline)" : undefined,
+              borderTop: row > 0 ? "1px solid var(--hairline)" : undefined,
               background: cell.flag ? "var(--color-danger-bg)" : "transparent",
             }}
           >

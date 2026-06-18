@@ -77,7 +77,7 @@ function PlanForm({ folder, onResult, onClose }: PlanFormProps) {
   return (
     <form onSubmit={(e) => void handleBuild(e)} className="flex flex-col gap-4 px-4 pb-6">
       {/* Выбранная папка */}
-      <div className="border border-bg-5 bg-bg-1 p-3">
+      <div className="border border-[var(--hairline)] bg-bg-1 p-3 rounded-[var(--radius-3)]">
         <Eyebrow>ПАПКА</Eyebrow>
         <p className="font-display text-[14px] text-bg-11 mt-1 truncate">{folder.name}</p>
         <p className="font-display tabular-nums text-[12px] text-bg-9 mt-0.5">
@@ -154,7 +154,7 @@ function PlanResult({ plan }: { plan: ScriptPlan }) {
           <div className="flex items-center gap-2 mb-2">
             <Eyebrow>{section.title.toUpperCase()}</Eyebrow>
           </div>
-          <div className="border border-bg-5 bg-bg-1 divide-y divide-bg-5">
+          <div className="border border-[var(--hairline)] bg-bg-1 divide-y divide-[var(--hairline)] rounded-[var(--radius-3)] overflow-hidden">
             {section.items.map((item) => (
               <div
                 key={item.label}
@@ -179,10 +179,10 @@ function PlanResult({ plan }: { plan: ScriptPlan }) {
                     aria-label={`Скопировать ${item.label}`}
                     onClick={() => void copyValue(item.value)}
                     className={cn(
-                      "shrink-0 inline-flex items-center justify-center w-8 h-8 mt-0.5 border",
+                      "shrink-0 inline-flex items-center justify-center w-8 h-8 mt-0.5 border rounded-[var(--radius-2)]",
                       copied === item.value
                         ? "border-success text-success bg-success-bg"
-                        : "border-bg-5 text-bg-9 active:bg-bg-2",
+                        : "border-[var(--hairline)] text-bg-9 active:bg-bg-2",
                     )}
                   >
                     <Copy size={14} strokeWidth={1.8} />
@@ -198,7 +198,7 @@ function PlanResult({ plan }: { plan: ScriptPlan }) {
       {plan.safety_notes.length > 0 && (
         <section>
           <Eyebrow className="mb-2">ВАЖНО</Eyebrow>
-          <div className="border border-warning bg-warning-bg p-3 flex flex-col gap-2">
+          <div className="border border-warning bg-warning-bg p-3 flex flex-col gap-2 rounded-[var(--radius-3)]">
             {plan.safety_notes.map((note, i) => (
               <div key={i} className="flex items-start gap-2">
                 <AlertTriangle
@@ -291,7 +291,7 @@ function ScriptsPage() {
 
         {/* Список папок */}
         {!isLoading && !isError && folderList.length > 0 && (
-          <div className="flex flex-col gap-0 border border-bg-5 divide-y divide-bg-5">
+          <div className="flex flex-col gap-0 border border-[var(--hairline)] divide-y divide-[var(--hairline)] rounded-[var(--radius-3)] overflow-hidden">
             {folderList.map((folder) => (
               <button
                 key={folder.path}

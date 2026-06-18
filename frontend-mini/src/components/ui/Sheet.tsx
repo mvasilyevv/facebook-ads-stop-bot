@@ -1,6 +1,6 @@
 /**
  * Sheet — bottom-sheet модалка на Radix Dialog.
- * Острые углы СВЕРХУ (radius 0), закруглений нет (дизайн-канон).
+ * Скруглённые верхние углы (radius-3), hairline-граница (airy-вид).
  * safe-area-inset-bottom применяется к контенту.
  * prefers-reduced-motion: анимация отключается.
  */
@@ -36,7 +36,8 @@ export function Sheet({ open, onClose, title, eyebrow, children, className }: Sh
           aria-describedby={undefined}
           className={cn(
             "fixed bottom-0 left-0 right-0 z-50",
-            "bg-[var(--color-bg-1)] border-t border-[var(--color-bg-5)]",
+            "bg-[var(--color-bg-1)] border-t border-[var(--hairline)]",
+            "rounded-t-[var(--radius-3)] overflow-hidden",
             "max-w-[480px] mx-auto",
             // анимация slide-up
             "data-[state=open]:animate-[slide-up_250ms_var(--ease-out)]",
@@ -54,7 +55,7 @@ export function Sheet({ open, onClose, title, eyebrow, children, className }: Sh
 
           {/* Заголовок */}
           {(eyebrow || title) && (
-            <div className="px-4 pb-4 border-b border-[var(--color-bg-5)]">
+            <div className="px-4 pb-4 border-b border-[var(--hairline)]">
               {eyebrow && (
                 <p className="text-[10px] uppercase tracking-[0.08em] text-[var(--color-bg-9)] font-mono mb-1">
                   {eyebrow}

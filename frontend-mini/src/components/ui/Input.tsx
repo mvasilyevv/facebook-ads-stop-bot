@@ -1,6 +1,6 @@
 /**
  * Input — поле ввода для мобильного UI-kit.
- * Тач-цель ≥ 44px (min-h-[44px]). Острые углы (radius 0).
+ * Тач-цель ≥ 44px (min-h-[44px]). Скругление radius-2, hairline-граница.
  * Поддерживает label, errorMessage, disabled.
  */
 import { useId, type InputHTMLAttributes } from "react";
@@ -28,8 +28,8 @@ export function Input({ label, errorMessage, id, className, ...rest }: InputProp
         id={inputId}
         {...rest}
         className={cn(
-          "min-h-[44px] px-3 w-full",
-          "bg-[var(--color-bg-2)] border border-[var(--color-bg-5)]",
+          "min-h-[44px] px-3 w-full rounded-[var(--radius-2)]",
+          "bg-[var(--color-bg-2)] border border-[var(--hairline)]",
           "text-[14px] text-[var(--color-bg-11)] font-body",
           "placeholder:text-[var(--color-bg-7)]",
           "focus:outline-none focus:border-[var(--color-accent)]",

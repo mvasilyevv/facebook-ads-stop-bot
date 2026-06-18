@@ -86,7 +86,7 @@ function PeriodPills({
   onChange: (d: number) => void;
 }) {
   return (
-    <div className="flex items-center gap-2 px-4 py-3 border-b border-bg-5">
+    <div className="flex items-center gap-2 px-4 py-3 border-b border-[var(--hairline)]">
       {PERIODS.map((p) => {
         const active = p.days === days;
         return (
@@ -98,10 +98,10 @@ function PeriodPills({
               onChange(p.days);
             }}
             className={cn(
-              "min-h-[36px] px-4 text-[12px] font-display font-semibold uppercase tracking-[0.08em] border transition-colors",
+              "min-h-[36px] px-4 text-[12px] font-display font-semibold uppercase tracking-[0.08em] border rounded-[var(--radius-2)] transition-colors",
               active
                 ? "bg-accent text-bg-0 border-accent"
-                : "bg-bg-1 text-bg-9 border-bg-5 hover:text-bg-11",
+                : "bg-bg-1 text-bg-9 border-[var(--hairline)] hover:text-bg-11",
             )}
           >
             {p.label}
@@ -134,7 +134,7 @@ function SummaryKpiGrid(props: SummaryKpiProps) {
   ];
 
   return (
-    <div className="grid grid-cols-2 gap-px bg-bg-5">
+    <div className="grid grid-cols-2 gap-px bg-[var(--hairline)] rounded-[var(--radius-3)] overflow-hidden">
       {items.map((item) => (
         <KpiPlate
           key={item.eyebrow}
@@ -152,7 +152,7 @@ function SummaryKpiGrid(props: SummaryKpiProps) {
 
 function CampaignRow({ c }: { c: HistoryCampaign }) {
   return (
-    <div className="flex items-start justify-between px-3.5 py-3 min-h-[44px] gap-2 border-b border-bg-5 last:border-0">
+    <div className="flex items-start justify-between px-3.5 py-3 min-h-[44px] gap-2 border-b border-[var(--hairline)] last:border-0">
       <div className="flex-1 min-w-0">
         <p className="font-display text-[13px] text-bg-11 truncate leading-snug">
           {c.campaign_name ?? c.campaign_id}
@@ -184,7 +184,7 @@ function CampaignRow({ c }: { c: HistoryCampaign }) {
 
 function OfferRow({ o }: { o: HistoryOffer }) {
   return (
-    <div className="flex items-start justify-between px-3.5 py-3 min-h-[44px] gap-2 border-b border-bg-5 last:border-0">
+    <div className="flex items-start justify-between px-3.5 py-3 min-h-[44px] gap-2 border-b border-[var(--hairline)] last:border-0">
       <div className="flex-1 min-w-0">
         <p className="font-display text-[13px] text-bg-11 tabular-nums leading-snug">{o.offer_code}</p>
         <p className="text-[11px] text-bg-9 mt-0.5 truncate">{o.offer_name}</p>
@@ -210,7 +210,7 @@ function OfferRow({ o }: { o: HistoryOffer }) {
 
 function RowSkeletons({ count = 3 }: { count?: number }) {
   return (
-    <div className="flex flex-col gap-px bg-bg-5">
+    <div className="flex flex-col gap-px bg-[var(--hairline)] rounded-[var(--radius-3)] overflow-hidden">
       {Array.from({ length: count }, (_, i) => (
         <div key={i} className="bg-bg-1 px-3.5 py-3 flex justify-between gap-2">
           <div className="flex-1 space-y-1.5">
@@ -248,7 +248,7 @@ function HistoryPage() {
         {/* ── KPI-сводка ── */}
         <Section num="01" title="ВСЕГО ЗА ПЕРИОД">
           {summary.isLoading ? (
-            <div className="grid grid-cols-2 gap-px bg-bg-5">
+            <div className="grid grid-cols-2 gap-px bg-[var(--hairline)] rounded-[var(--radius-3)] overflow-hidden">
               {Array.from({ length: 6 }, (_, i) => (
                 <div key={i} className="bg-bg-1 p-3 space-y-2">
                   <Skeleton className="h-3 w-14" />
@@ -279,7 +279,7 @@ function HistoryPage() {
         {/* ── ПО STAGE ── */}
         {s && (
           <Section num="02" title="ПО STAGE">
-            <div className="border border-bg-5 bg-bg-1 divide-y divide-bg-5">
+            <div className="border border-[var(--hairline)] bg-bg-1 rounded-[var(--radius-3)] overflow-hidden divide-y divide-[var(--hairline)]">
               <MetaRow
                 label="Warning-алертов"
                 value={s.alerts.warning_count}
@@ -300,7 +300,7 @@ function HistoryPage() {
         {/* ── ПО ПРАВИЛУ ── */}
         {s && s.alerts.by_rule.length > 0 && (
           <Section title="ПО ПРАВИЛУ">
-            <div className="border border-bg-5 bg-bg-1 divide-y divide-bg-5">
+            <div className="border border-[var(--hairline)] bg-bg-1 rounded-[var(--radius-3)] overflow-hidden divide-y divide-[var(--hairline)]">
               {s.alerts.by_rule.map((r) => (
                 <MetaRow
                   key={r.rule_code}
@@ -324,7 +324,7 @@ function HistoryPage() {
               description={`За ${days} дней данных нет`}
             />
           ) : (
-            <div className="border border-bg-5 bg-bg-1">
+            <div className="border border-[var(--hairline)] bg-bg-1 rounded-[var(--radius-3)] overflow-hidden">
               {(offersHistory.data ?? []).map((o) => (
                 <OfferRow key={o.offer_id} o={o} />
               ))}
@@ -344,7 +344,7 @@ function HistoryPage() {
               description={`За ${days} дней данных нет`}
             />
           ) : (
-            <div className="border border-bg-5 bg-bg-1">
+            <div className="border border-[var(--hairline)] bg-bg-1 rounded-[var(--radius-3)] overflow-hidden">
               {(campaignsHistory.data ?? []).map((c) => (
                 <CampaignRow key={c.campaign_id} c={c} />
               ))}

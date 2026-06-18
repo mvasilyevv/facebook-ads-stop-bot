@@ -62,7 +62,7 @@ export function TabBar() {
         "fixed bottom-0 left-0 right-0 z-30",
         "max-w-[480px] mx-auto",
         "bg-bg-1/95 backdrop-blur-md",
-        "border-t border-bg-6",
+        "border-t border-[var(--hairline-strong)]",
         "pb-[env(safe-area-inset-bottom)]",
       )}
     >

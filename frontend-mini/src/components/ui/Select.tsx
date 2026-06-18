@@ -1,6 +1,6 @@
 /**
  * Select — нативный select для мобильного UI-kit.
- * Тач-цель ≥ 44px. Острые углы. Соответствует дизайну Input.
+ * Тач-цель ≥ 44px. Скругление radius-2. Соответствует дизайну Input.
  */
 import { useId, type SelectHTMLAttributes } from "react";
 import { cn } from "@/lib/cn";
@@ -33,8 +33,8 @@ export function Select({ label, options, errorMessage, id, className, ...rest }:
         id={selectId}
         {...rest}
         className={cn(
-          "min-h-[44px] px-3 w-full appearance-none",
-          "bg-[var(--color-bg-2)] border border-[var(--color-bg-5)]",
+          "min-h-[44px] px-3 w-full appearance-none rounded-[var(--radius-2)]",
+          "bg-[var(--color-bg-2)] border border-[var(--hairline)]",
           "text-[14px] text-[var(--color-bg-11)] font-body",
           "focus:outline-none focus:border-[var(--color-accent)]",
           "disabled:opacity-40 disabled:cursor-not-allowed",

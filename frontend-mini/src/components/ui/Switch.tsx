@@ -41,7 +41,7 @@ export function Switch({ checked, onChange, label, disabled, id }: SwitchProps) 
         {/* Track */}
         <div
           className={cn(
-            "w-11 h-6 transition-colors duration-[var(--dur-base)]",
+            "w-11 h-6 rounded-full transition-colors duration-[var(--dur-base)]",
             checked
               ? "bg-[var(--color-accent)]"
               : "bg-[var(--color-bg-5)]",
@@ -50,7 +50,7 @@ export function Switch({ checked, onChange, label, disabled, id }: SwitchProps) 
         {/* Thumb */}
         <div
           className={cn(
-            "absolute top-1 left-1 w-4 h-4 bg-[#0a0a0b] transition-transform duration-[var(--dur-base)]",
+            "absolute top-1 left-1 w-4 h-4 rounded-full bg-[#0a0a0b] transition-transform duration-[var(--dur-base)]",
             checked && "translate-x-5",
           )}
         />

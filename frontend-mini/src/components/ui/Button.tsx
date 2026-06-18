@@ -13,7 +13,7 @@ const VARIANT_STYLES: Record<ButtonVariant, string> = {
   primary:
     "bg-[var(--color-accent)] text-[#0a0a0b] font-semibold hover:bg-[var(--color-accent-muted)] active:opacity-80",
   secondary:
-    "border border-[var(--color-bg-6)] text-[var(--color-bg-11)] hover:border-[var(--color-bg-7)] active:opacity-80",
+    "border border-[var(--hairline-strong)] text-[var(--color-bg-11)] hover:border-[var(--color-bg-7)] active:opacity-80",
   ghost:
     "text-[var(--color-bg-10)] hover:text-[var(--color-bg-11)] hover:bg-[var(--color-bg-3)] active:opacity-80",
   danger:
@@ -51,6 +51,7 @@ export function Button({
       className={cn(
         // базовые стили
         "inline-flex items-center justify-center gap-2",
+        "rounded-[var(--radius-2)]",
         "font-body transition-opacity",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]",
         // размер

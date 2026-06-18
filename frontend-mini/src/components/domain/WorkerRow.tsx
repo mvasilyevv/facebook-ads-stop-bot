@@ -42,7 +42,7 @@ export function WorkerRow({ worker }: WorkerRowProps) {
       : "нет данных";
 
   return (
-    <div className="flex items-center gap-3 px-0 py-2.5 min-h-[44px] border-b border-bg-5 last:border-0">
+    <div className="flex items-center gap-3 px-0 py-2.5 min-h-[44px] border-b border-[var(--hairline)] last:border-0">
       {/* Пульс-точка */}
       <PulseDot
         size={8}

@@ -32,7 +32,7 @@ function SkeletonBase({ className }: { className?: string }) {
       role="status"
       aria-label="Загрузка..."
       className={cn(
-        "bg-[var(--color-bg-3)] h-4",
+        "bg-[var(--color-bg-3)] h-4 rounded-[var(--radius-1)]",
         // shimmer
         "relative overflow-hidden",
         "before:absolute before:inset-0",
@@ -48,7 +48,7 @@ function SkeletonBase({ className }: { className?: string }) {
 /** Карточка-скелетон для списка объявлений. */
 export function AdCardSkeleton() {
   return (
-    <div className="bg-[var(--color-bg-1)] border border-[var(--color-bg-5)] p-4 space-y-3">
+    <div className="bg-[var(--color-bg-1)] border border-[var(--hairline)] rounded-[var(--radius-3)] p-4 space-y-3">
       <div className="flex justify-between items-start gap-2">
         <div className="flex-1 space-y-1">
           <Skeleton className="h-3 w-24" />

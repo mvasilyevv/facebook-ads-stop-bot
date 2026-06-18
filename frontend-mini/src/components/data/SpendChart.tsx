@@ -183,7 +183,7 @@ export function SpendChart({ data, height = 120, live = true, animate = true }: 
 
       {hover != null && (
         <div
-          className="pointer-events-none absolute top-0 border border-bg-6 bg-bg-3 px-2 py-1.5"
+          className="pointer-events-none absolute top-0 border border-[var(--hairline-strong)] bg-bg-3 px-2.5 py-1.5 rounded-[var(--radius-2)]"
           style={{ left: Math.min(Math.max(x(hover) - 50, 0), w - 100), minWidth: 92 }}
         >
           <div className="font-display text-[9px] font-semibold uppercase tracking-[0.12em] text-bg-9">

@@ -69,7 +69,7 @@ function AdRow({ ad, onClick }: AdRowProps) {
         haptic.selection();
         onClick();
       }}
-      className="w-full text-left bg-transparent border-none border-b border-bg-5 active:bg-bg-2"
+      className="w-full text-left bg-transparent border-none active:bg-bg-2"
       style={{
         display:             "grid",
         gridTemplateColumns: "40px 1fr auto auto",
@@ -80,7 +80,7 @@ function AdRow({ ad, onClick }: AdRowProps) {
         cursor:              "pointer",
         font:                "inherit",
         color:               "inherit",
-        borderBottom:        "1px solid var(--bg-5)",
+        borderBottom:        "1px solid var(--hairline)",
       }}
     >
       {/* Гео-плашка */}
@@ -89,7 +89,8 @@ function AdRow({ ad, onClick }: AdRowProps) {
           width:           40,
           height:          26,
           background:      "var(--bg-2)",
-          border:          "1px solid var(--bg-6)",
+          border:          "1px solid var(--hairline)",
+          borderRadius:    "var(--radius-1)",
           display:         "flex",
           alignItems:      "center",
           justifyContent:  "center",
@@ -174,7 +175,7 @@ function AdRowSkeleton() {
         alignItems:          "center",
         padding:             "10px 14px",
         minHeight:           44,
-        borderBottom:        "1px solid var(--bg-5)",
+        borderBottom:        "1px solid var(--hairline)",
       }}
     >
       <Skeleton className="h-[26px] w-[40px]" />
@@ -268,7 +269,7 @@ function AdsPage() {
       />
 
       {/* ── Поиск и фильтры (обычный блок под шапкой) ── */}
-      <div className="px-4 pt-3 pb-0 border-b border-bg-5">
+      <div className="px-4 pt-3 pb-0 border-b border-[var(--hairline)]">
         {/* Поле поиска */}
         <div style={{ position: "relative", marginBottom: 10 }}>
           <Search
@@ -290,7 +291,7 @@ function AdsPage() {
             aria-label="Поиск по объявлениям"
             className={cn(
               "w-full outline-none",
-              "bg-bg-2 border border-bg-6",
+              "bg-bg-2 border border-[var(--hairline-strong)] rounded-[var(--radius-2)]",
               "text-bg-11 placeholder:text-bg-8",
               "font-display text-[14px]",
             )}
@@ -327,7 +328,7 @@ function AdsPage() {
                   height:      30,
                   padding:     "0 12px",
                   borderRadius: "9999px",
-                  border:      `1px solid ${on ? "var(--accent)" : "var(--bg-6)"}`,
+                  border:      `1px solid ${on ? "var(--accent)" : "var(--hairline-strong)"}`,
                   background:  on ? "var(--accent-bg)" : "transparent",
                   color:       on ? "var(--accent)" : "var(--bg-10)",
                   font:        "inherit",

@@ -29,7 +29,7 @@ function PendingCount({ count }: { count: number }) {
   if (count === 0) return null;
   return (
     <span
-      className="inline-flex items-center justify-center font-display font-semibold text-[11px] tabular-nums bg-warning text-bg-0 min-w-[22px] h-[22px] px-1.5"
+      className="inline-flex items-center justify-center font-display font-semibold text-[11px] tabular-nums bg-warning text-bg-0 min-w-[22px] h-[22px] px-1.5 rounded-full"
       aria-label={`${count} ожидают`}
     >
       {count}

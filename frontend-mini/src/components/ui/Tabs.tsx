@@ -22,7 +22,7 @@ export function Tabs({ items, active, onChange, className }: TabsProps) {
     <div
       className={cn(
         "flex gap-0 overflow-x-auto scrollbar-none",
-        "border-b border-[var(--color-bg-5)]",
+        "border-b border-[var(--hairline)]",
         className,
       )}
     >

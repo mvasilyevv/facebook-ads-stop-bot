@@ -204,7 +204,7 @@ function AdDetailPage() {
     <div className="flex flex-col pb-8">
       {/* ── Шапка ─────────────────────────────────────────────────────────── */}
       <header
-        className="px-4 pt-4 pb-3 border-b border-bg-5"
+        className="px-4 pt-4 pb-3 border-b border-[var(--hairline)]"
         style={{ background: "var(--color-bg-0)" }}
       >
         {/* Eyebrow «ОБЪЯВЛЕНИЕ» + контекст кампании */}
@@ -236,7 +236,7 @@ function AdDetailPage() {
           )}
           {data.account_id && (
             <span
-              className="font-display tabular-nums text-bg-9 border border-bg-5 px-1.5"
+              className="font-display tabular-nums text-bg-9 border border-[var(--hairline)] rounded-[var(--radius-1)] px-1.5"
               style={{ fontSize: 10, lineHeight: "18px" }}
               title={`Кабинет ${data.account_id}`}
             >
@@ -269,6 +269,7 @@ function AdDetailPage() {
             style={{
               background: "var(--color-warning-bg)",
               borderLeft: "2px solid var(--color-warning)",
+              borderRadius: "var(--radius-1)",
             }}
           >
             <span
@@ -294,6 +295,7 @@ function AdDetailPage() {
               borderLeft: "2px solid var(--color-danger)",
               border: "1px solid color-mix(in srgb, var(--color-danger) 30%, transparent)",
               borderLeftWidth: 2,
+              borderRadius: "var(--radius-2)",
               padding: "10px 12px",
               display: "flex",
               gap: 6,
@@ -318,7 +320,10 @@ function AdDetailPage() {
         {recent_alerts.length > 0 && (
           <section>
             <Eyebrow className="mb-2.5">ИСТОРИЯ АЛЕРТОВ</Eyebrow>
-            <div className="border border-bg-5" style={{ background: "var(--color-bg-1)" }}>
+            <div
+              className="border border-[var(--hairline)] rounded-[var(--radius-3)] overflow-hidden"
+              style={{ background: "var(--color-bg-1)" }}
+            >
               <div className="px-3 py-0.5">
                 <AlertTimeline alerts={recent_alerts} />
               </div>

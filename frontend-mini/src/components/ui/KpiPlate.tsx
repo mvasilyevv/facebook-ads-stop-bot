@@ -39,7 +39,7 @@ export function KpiPlate({ eyebrow, label, value, variant = "default", className
   return (
     <div
       className={cn(
-        "bg-bg-1 border border-bg-5 p-3",
+        "bg-bg-1 border border-[var(--hairline)] rounded-[var(--radius-3)] p-3",
         "flex flex-col gap-1",
         className,
       )}

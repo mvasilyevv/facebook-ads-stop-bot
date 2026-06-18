@@ -22,7 +22,7 @@ export function MiniHeader({ eyebrowNum, eyebrow, title, right, className }: Min
   return (
     <header
       className={cn(
-        "px-4 pt-2 pb-3 border-b border-bg-5 bg-bg-0",
+        "px-4 pt-2 pb-3 border-b border-[var(--hairline)] bg-bg-0",
         className,
       )}
     >

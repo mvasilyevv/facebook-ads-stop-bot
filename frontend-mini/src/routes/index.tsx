@@ -141,7 +141,7 @@ function DashboardPage() {
   return (
     <div className="flex flex-col">
       {/* ── scan-header (sticky) ── */}
-      <header className="sticky top-0 z-10 px-4 pt-2 pb-3 border-b border-bg-5 bg-bg-0">
+      <header className="sticky top-0 z-10 px-4 pt-2 pb-3 border-b border-[var(--hairline)] bg-bg-0">
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
             <Eyebrow num="01">{`ОБЗОР · ${scanOn ? "LIVE" : "ПАУЗА"}`}</Eyebrow>
@@ -169,7 +169,7 @@ function DashboardPage() {
                   aria-label="Сканировать сейчас"
                   onClick={() => void handleScanNow()}
                   disabled={triggerScanMutation.isPending}
-                  className="inline-flex items-center justify-center bg-accent text-bg-0 w-11 h-11 disabled:opacity-60"
+                  className="inline-flex items-center justify-center bg-accent text-bg-0 w-11 h-11 rounded-[var(--radius-2)] disabled:opacity-60"
                 >
                   <RefreshCw
                     size={18}
@@ -186,7 +186,7 @@ function DashboardPage() {
                   aria-label="Возобновить Observer"
                   onClick={() => void handleResume()}
                   disabled={toggleScanMutation.isPending}
-                  className="inline-flex items-center justify-center bg-accent text-bg-0 w-11 h-11 disabled:opacity-60"
+                  className="inline-flex items-center justify-center bg-accent text-bg-0 w-11 h-11 rounded-[var(--radius-2)] disabled:opacity-60"
                 >
                   <Play size={18} strokeWidth={1.8} />
                 </button>
@@ -233,7 +233,7 @@ function DashboardPage() {
         </section>
 
         {/* ── spend chart ── */}
-        <section className="border border-bg-5 bg-bg-1 p-3.5">
+        <section className="border border-[var(--hairline)] rounded-[var(--radius-3)] bg-bg-1 p-4">
           <div className="flex items-baseline justify-between mb-2.5">
             <Eyebrow>SPEND × ЧАС · 24Ч</Eyebrow>
             <span className="font-display tabular-nums text-[15px] text-bg-11">
@@ -244,7 +244,10 @@ function DashboardPage() {
         </section>
 
         {/* ── KPI 2×2 ── */}
-        <section aria-label="Статистика" className="grid grid-cols-2 gap-px bg-bg-5">
+        <section
+          aria-label="Статистика"
+          className="grid grid-cols-2 gap-px bg-[var(--hairline)] rounded-[var(--radius-3)] overflow-hidden"
+        >
           {isLoading ? (
             [...Array(4)].map((_, i) => (
               <div key={i} className="bg-bg-1 p-3 space-y-2">
@@ -274,7 +277,7 @@ function DashboardPage() {
               {!scanOn ? "пауза" : live ? "live" : "тихо"}
             </span>
           </div>
-          <div className="border border-bg-5 bg-bg-1">
+          <div className="border border-[var(--hairline)] rounded-[var(--radius-3)] overflow-hidden bg-bg-1">
             {isLoading ? (
               <div className="p-4 space-y-3">
                 {[...Array(2)].map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}
@@ -282,7 +285,7 @@ function DashboardPage() {
             ) : incidents.length === 0 ? (
               <EmptyState title="Алертов за 24ч нет" description="Правила работают, трафик ровный" />
             ) : (
-              <div className="divide-y divide-bg-5">
+              <div className="divide-y divide-[var(--hairline)]">
                 {incidents.slice(0, 6).map((raw) => {
                   const inc = raw as Record<string, unknown>;
                   const fbAdId = String(inc["fb_ad_id"] ?? "");
@@ -327,8 +330,8 @@ function DashboardPage() {
               { title: "DISABLE QUEUE", rows: disableTasks, color: "var(--danger)" },
               { title: "ENABLE QUEUE", rows: enableTasks, color: "var(--success)" },
             ].map((q) => (
-              <div key={q.title} className="border border-bg-5 bg-bg-1">
-                <div className="flex items-center justify-between px-3.5 py-2.5 border-b border-bg-5">
+              <div key={q.title} className="border border-[var(--hairline)] rounded-[var(--radius-3)] overflow-hidden bg-bg-1">
+                <div className="flex items-center justify-between px-3.5 py-2.5 border-b border-[var(--hairline)]">
                   <Eyebrow>{q.title}</Eyebrow>
                   <span
                     className="font-display tabular-nums text-[13px]"
@@ -340,7 +343,7 @@ function DashboardPage() {
                 {q.rows.length === 0 ? (
                   <div className="px-4 py-3 text-[12px] text-bg-9">Очередь пуста</div>
                 ) : (
-                  <div className="divide-y divide-bg-5">
+                  <div className="divide-y divide-[var(--hairline)]">
                     {q.rows.slice(0, 5).map((raw, i) => {
                       const t = raw as Record<string, unknown>;
                       const status = normalizeTaskStatus(String(t["status"] ?? ""));
@@ -369,7 +372,7 @@ function DashboardPage() {
           role="status"
           aria-live="polite"
           className={cn(
-            "fixed bottom-[80px] left-4 right-4 max-w-[440px] mx-auto z-50 px-4 py-3 text-[13px] border",
+            "fixed bottom-[80px] left-4 right-4 max-w-[440px] mx-auto z-50 px-4 py-3 text-[13px] border rounded-[var(--radius-2)]",
             toast.ok
               ? "bg-success-bg text-success border-success"
               : "bg-danger-bg text-danger border-danger",

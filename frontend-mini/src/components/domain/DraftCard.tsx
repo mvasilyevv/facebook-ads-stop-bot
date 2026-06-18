@@ -82,12 +82,12 @@ export function DraftCard({ draft, currentState, onConfirm, onReject, busy = fal
   return (
     <article
       className={cn(
-        "border bg-bg-1 relative",
+        "border bg-bg-1 relative rounded-[var(--radius-3)] overflow-hidden",
         expired
-          ? "border-bg-5 opacity-60"
+          ? "border-[var(--hairline)] opacity-60"
           : expiring
             ? "border-[rgba(212,168,88,0.35)]"
-            : "border-bg-5",
+            : "border-[var(--hairline)]",
       )}
       data-testid="draft-card"
     >
@@ -100,7 +100,7 @@ export function DraftCard({ draft, currentState, onConfirm, onReject, busy = fal
             "absolute top-0 right-4",
             "bg-warning text-bg-0",
             "font-display font-semibold text-[9px] tracking-[0.14em] uppercase",
-            "px-2 py-[3px]",
+            "px-2 py-[3px] rounded-b-[var(--radius-1)]",
             "z-10",
           )}
         >
@@ -109,7 +109,7 @@ export function DraftCard({ draft, currentState, onConfirm, onReject, busy = fal
       )}
 
       {/* ── Header ── */}
-      <header className="px-4 pt-4 pb-3 border-b border-bg-5">
+      <header className="px-4 pt-4 pb-3 border-b border-[var(--hairline)]">
         {/* Meta-line: eyebrow + возраст */}
         <div className="flex items-center justify-between gap-2 mb-1.5">
           <Eyebrow>ЧЕРНОВИК</Eyebrow>
@@ -140,13 +140,13 @@ export function DraftCard({ draft, currentState, onConfirm, onReject, busy = fal
 
       {/* ── Diff-таблица ── */}
       {diffRows.length > 0 && (
-        <div className="border-b border-bg-5">
+        <div className="border-b border-[var(--hairline)]">
           {diffRows.map((row, i) => (
             <div
               key={i}
               className={cn(
                 "grid grid-cols-3 gap-2 px-4 py-2.5 text-[12px]",
-                i > 0 && "border-t border-bg-5",
+                i > 0 && "border-t border-[var(--hairline)]",
               )}
             >
               <span className="font-display text-bg-8 truncate">{row.field}</span>
@@ -173,7 +173,7 @@ export function DraftCard({ draft, currentState, onConfirm, onReject, busy = fal
 
       {/* ── Callout «Пакетная операция» ── */}
       {isBulk && batchCount != null && batchCount > 0 && (
-        <div className="border-b border-bg-5 px-4 py-3 flex items-start gap-2">
+        <div className="border-b border-[var(--hairline)] px-4 py-3 flex items-start gap-2">
           <AlertTriangle size={13} className="text-warning shrink-0 mt-[2px]" aria-hidden />
           <p className="font-display text-[11px] text-warning leading-[1.5]">
             Пакетная операция · {batchCount} graph-вызовов

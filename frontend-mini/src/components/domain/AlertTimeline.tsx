@@ -15,7 +15,7 @@ export function AlertTimeline({ alerts }: AlertTimelineProps) {
   if (alerts.length === 0) return null;
 
   return (
-    <div className="flex flex-col divide-y divide-bg-5">
+    <div className="flex flex-col divide-y divide-[var(--hairline)]">
       {alerts.slice(0, 10).map((al, i) => {
         const isStop = al.stage?.toLowerCase() === "stop";
         return (

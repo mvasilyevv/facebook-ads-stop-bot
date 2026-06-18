@@ -1,6 +1,6 @@
 /**
  * Card — блок-контейнер с опциональным eyebrow-заголовком.
- * Острые углы (radius 0), граница bg-5, фон bg-1.
+ * Airy-вид: hairline-граница, скругление radius-3, фон bg-1.
  */
 import type { HTMLAttributes, ReactNode } from "react";
 import { cn } from "@/lib/cn";
@@ -29,7 +29,7 @@ export function Card({
     <div
       {...rest}
       className={cn(
-        "bg-[var(--color-bg-1)] border border-[var(--color-bg-5)]",
+        "bg-[var(--color-bg-1)] border border-[var(--hairline)] rounded-[var(--radius-3)]",
         paddingClass,
         className,
       )}
