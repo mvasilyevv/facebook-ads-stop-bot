@@ -52,19 +52,22 @@ async def _read_observer_status(redis: Any) -> str:
 async def _query_ad_counts(engine: AsyncEngine) -> dict[str, int]:
     """Counts по объявлениям в ТЕКУЩЕМ скопе наблюдения + разбивка по alert_state.
 
-    «Под наблюдением» = is_active И виден в последнем завершённом скане (last_seen_at
+    «Под наблюдением» = is_active И виден в последнем УСПЕШНОМ скане (last_seen_at
     не старше его started_at). Так счётчик отражает реально сканируемые объявления
     (с учётом allowlist кампаний / owner-тега), а не весь накопленный каталог: при
     сужении скопа «замороженные» объявления старых сканов сразу выпадают, а не висят
-    в плашке сутками. CTE scope: граница — последний завершённый success/empty скан;
-    если сканов ещё не было — фолбэк на NOW()-24h (не ломаем пустую систему).
-    Один запрос — оптимально по числу round-trip'ов.
+    в плашке сутками. CTE scope: граница — последний завершённый **success**-скан
+    (который РЕАЛЬНО видел объявления). `empty`-сканы НЕ двигают границу: пустой скан —
+    это транзиентная слепота сканера (страница не догрузилась / am_tabular пусто), он
+    не обновляет last_seen, и если им двигать scope — ВСЕ объявления выпадают из окна и
+    дашборд схлопывается в 0 (мнимое «всё исчезло»). Фолбэк NOW()-24h если success-сканов
+    ещё не было. Один запрос — оптимально по числу round-trip'ов.
     """
     sql = """
         WITH scope AS (
             SELECT COALESCE(
                 (SELECT MAX(started_at) FROM scan_runs
-                   WHERE outcome IN ('success', 'empty') AND finished_at IS NOT NULL),
+                   WHERE outcome = 'success' AND finished_at IS NOT NULL),
                 NOW() - INTERVAL '24 hours'
             ) AS since
         )

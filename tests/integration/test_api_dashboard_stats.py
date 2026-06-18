@@ -158,6 +158,59 @@ async def test_stats_counts_ads_by_state(pg_engine, fake_redis_client, clean_sta
     )
 
 
+# Тест: пустой (empty) скан НЕ обнуляет «под контролем» — scope по последнему success.
+@pytest.mark.asyncio
+async def test_stats_empty_scan_does_not_collapse_scope(
+    pg_engine, fake_redis_client, clean_stats
+) -> None:
+    """Регресс: последний скан `empty` (транзиентная слепота) не должен схлопывать
+    дашборд в 0. scope.since считается по последнему SUCCESS-скану (реально видел
+    объявления), `empty` границу не двигает.
+
+    Раскладка времени: success-скан в T-120с (видел объявления, last_seen→T-90с),
+    затем empty-скан в T-30с (САМЫЙ свежий, ничего не увидел). Старая логика
+    (scope = success+empty) брала бы границу T-30с → last_seen T-90с < T-30с →
+    объявление выпадает → total_ads_monitored=0. Новая (success only) → граница
+    T-120с → объявление в окне → total_ads_monitored=1.
+    """
+    now = datetime.now(UTC)
+    async with pg_engine.begin() as conn:
+        ad_id = await _seed_ad(conn, "EMPTYSCOPE")  # normal (нет alert_state)
+        await conn.execute(
+            text("UPDATE fb_ads SET last_seen_at = :ls WHERE id = :i"),
+            {"ls": now - timedelta(seconds=90), "i": ad_id},
+        )
+        # success-скан РАНЬШЕ (реально видел объявления)
+        await conn.execute(
+            text(
+                "INSERT INTO scan_runs (scan_id, started_at, finished_at, outcome, duration_ms) "
+                "VALUES (:s, :st, :ft, 'success', 100)"
+            ),
+            {"s": 92001, "st": now - timedelta(seconds=120), "ft": now - timedelta(seconds=118)},
+        )
+        # empty-скан ПОЗЖЕ (самый свежий, ничего не увидел) — НЕ должен двигать scope
+        await conn.execute(
+            text(
+                "INSERT INTO scan_runs (scan_id, started_at, finished_at, outcome, duration_ms) "
+                "VALUES (:s, :st, :ft, 'empty', 100)"
+            ),
+            {"s": 92002, "st": now - timedelta(seconds=30), "ft": now - timedelta(seconds=28)},
+        )
+
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.get("/api/dashboard/stats")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    # Под старой логикой было бы 0 — объявление осталось под контролем.
+    assert data["total_ads_monitored"] == 1, (
+        f"Ожидалось 1 под контролем, получено {data['total_ads_monitored']} — "
+        "empty-скан схлопнул scope (баг)"
+    )
+    assert data["ads_in_normal"] == 1
+
+
 # Тест: last_scan_at корректно подхватывается из самого свежего scan_run.
 @pytest.mark.asyncio
 async def test_stats_last_scan_from_scan_runs(pg_engine, fake_redis_client, clean_stats) -> None:
