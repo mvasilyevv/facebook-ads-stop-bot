@@ -68,6 +68,14 @@ async def handle_dis_callback(
             idempotency_key=f"manual:pause_ad:{fb_ad_id}:{token or 'no-token'}",
             requested_by=requested_by,
         )
+        # L2: помечаем инцидент claimed (человек взял управление) — чтобы observer
+        # не плодил параллельную auto-pause задачу. Best-effort, не ломает ack.
+        try:
+            from core.observer.writers import mark_alert_state_claimed
+
+            await mark_alert_state_claimed(engine, fb_ad_id=fb_ad_id)
+        except Exception:
+            logger.warning("dis: не удалось пометить claimed для %s", fb_ad_id, exc_info=True)
         ack = "Задача на отключение принята" if task_id else "Уже в очереди"
     except Exception:
         logger.exception("create disable task failed")

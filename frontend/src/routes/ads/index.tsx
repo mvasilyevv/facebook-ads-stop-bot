@@ -122,7 +122,7 @@ function AdsPage() {
     filters.selectedStates.size > 0 ? [...filters.selectedStates].join(",") : undefined;
 
   const { data, isLoading, isError, error, refetch } = useAds({
-    alert_states: alertStatesParam,
+    alert_state: alertStatesParam, // M1: бэк-параметр называется alert_state (CSV)
     limit: FETCH_LIMIT,
     offset: 0,
   });

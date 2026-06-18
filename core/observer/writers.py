@@ -536,6 +536,41 @@ async def reset_alert_state_after_disable_succeeded(
         return bool(result.rowcount and result.rowcount > 0)
 
 
+async def mark_alert_state_claimed(
+    engine: AsyncEngine,
+    *,
+    fb_ad_id: str,
+) -> bool:
+    """Перевести ad_alert_state в 'claimed' после ручного dis (юзер взял управление).
+
+    L2: без этого observer при продолжающихся STOP-метриках плодит параллельную
+    auto-pause задачу (идемпотентную, но шумную в очереди/аудите). 'claimed'
+    помечает, что человек уже обработал инцидент.
+
+    Идемпотентно: UPDATE только из активных alert-состояний (warning_sent, stop_sent).
+    Из 'normal' НЕ переводим — иначе ад залип бы в claimed без инцидента, а
+    observer-reopen (reopen_reactivated_alert_state, H3) покрывает только 'disabled'
+    → ад стал бы money-blind. Из 'claimed'/'disabled' — no-op (уже обработан).
+
+    Returns: True если строку обновили, False если no-op (или ad не найден).
+    """
+    async with engine.begin() as conn:
+        result = await conn.execute(
+            text(
+                """
+                UPDATE ad_alert_state
+                SET alert_state = 'claimed',
+                    last_transition_at = NOW(),
+                    updated_at = NOW()
+                WHERE ad_id = (SELECT id FROM fb_ads WHERE fb_ad_id = :fbid)
+                  AND alert_state IN ('warning_sent', 'stop_sent')
+                """
+            ),
+            {"fbid": fb_ad_id},
+        )
+        return bool(result.rowcount and result.rowcount > 0)
+
+
 async def reset_alert_state_after_enable_succeeded(
     engine: AsyncEngine,
     *,

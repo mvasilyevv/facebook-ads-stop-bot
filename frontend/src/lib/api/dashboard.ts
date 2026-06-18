@@ -50,7 +50,8 @@ export function useDashboardStats() {
 // ─── Объявления ──────────────────────────────────────────────────────────────
 
 interface AdsParams {
-  alert_states?: string;
+  /** M1: имя совпадает с бэк-параметром /dashboard/ads (CSV alert_state'ов). */
+  alert_state?: string;
   limit?: number;
   offset?: number;
   include_inactive?: boolean;

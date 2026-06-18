@@ -17,6 +17,7 @@ import pytest_asyncio
 from sqlalchemy import text
 
 from core.observer.writers import (
+    mark_alert_state_claimed,
     reset_alert_state_after_disable_succeeded,
     reset_alert_state_after_enable_succeeded,
 )
@@ -236,4 +237,73 @@ async def test_enable_reset_idempotent_when_already_normal(pg_engine, ad_with_st
 @pytest.mark.asyncio
 async def test_enable_reset_unknown_fb_ad_id_is_noop(pg_engine) -> None:
     changed = await reset_alert_state_after_enable_succeeded(pg_engine, fb_ad_id="999999000000001")
+    assert changed is False
+
+
+# ====================== L2: mark_alert_state_claimed (ручной dis → claimed) ======================
+
+
+# Сценарий: stop_sent → claimed (юзер нажал dis на STOP-алерте, взял управление)
+@pytest.mark.asyncio
+async def test_claim_stop_sent_to_claimed(pg_engine, ad_with_state) -> None:
+    fb_ad_id = await ad_with_state("stop_sent")
+    before = await _read_state(pg_engine, fb_ad_id)
+
+    changed = await mark_alert_state_claimed(pg_engine, fb_ad_id=fb_ad_id)
+    assert changed is True
+
+    after = await _read_state(pg_engine, fb_ad_id)
+    assert after["alert_state"] == "claimed"
+    assert after["last_transition_at"] > before["last_transition_at"]
+
+
+# Сценарий: warning_sent → claimed (dis из WARNING-алерта)
+@pytest.mark.asyncio
+async def test_claim_warning_sent_to_claimed(pg_engine, ad_with_state) -> None:
+    fb_ad_id = await ad_with_state("warning_sent")
+    changed = await mark_alert_state_claimed(pg_engine, fb_ad_id=fb_ad_id)
+    assert changed is True
+    after = await _read_state(pg_engine, fb_ad_id)
+    assert after["alert_state"] == "claimed"
+
+
+# Сценарий КЛЮЧЕВОЙ (money-blind guard): normal НЕ переводим в claimed —
+# иначе ад залип бы в claimed без инцидента, а observer-reopen покрывает только disabled.
+@pytest.mark.asyncio
+async def test_claim_does_not_force_normal_into_claimed(pg_engine, ad_with_state) -> None:
+    fb_ad_id = await ad_with_state("normal")
+    changed = await mark_alert_state_claimed(pg_engine, fb_ad_id=fb_ad_id)
+    assert changed is False
+    after = await _read_state(pg_engine, fb_ad_id)
+    assert after["alert_state"] == "normal"
+
+
+# Сценарий: идемпотентность — повторный claim на уже claimed → no-op
+@pytest.mark.asyncio
+async def test_claim_idempotent_when_already_claimed(pg_engine, ad_with_state) -> None:
+    fb_ad_id = await ad_with_state("claimed")
+    before = await _read_state(pg_engine, fb_ad_id)
+
+    changed = await mark_alert_state_claimed(pg_engine, fb_ad_id=fb_ad_id)
+    assert changed is False
+
+    after = await _read_state(pg_engine, fb_ad_id)
+    assert after["alert_state"] == "claimed"
+    assert after["last_transition_at"] == before["last_transition_at"]
+
+
+# Сценарий: disabled НЕ откатываем в claimed (уже терминально обработан)
+@pytest.mark.asyncio
+async def test_claim_does_not_revert_disabled(pg_engine, ad_with_state) -> None:
+    fb_ad_id = await ad_with_state("disabled")
+    changed = await mark_alert_state_claimed(pg_engine, fb_ad_id=fb_ad_id)
+    assert changed is False
+    after = await _read_state(pg_engine, fb_ad_id)
+    assert after["alert_state"] == "disabled"
+
+
+# Сценарий: несуществующий fb_ad_id → no-op без исключений
+@pytest.mark.asyncio
+async def test_claim_unknown_fb_ad_id_is_noop(pg_engine) -> None:
+    changed = await mark_alert_state_claimed(pg_engine, fb_ad_id="999999000000002")
     assert changed is False

@@ -251,3 +251,65 @@ def test_ws_redis_unavailable_graceful_close(monkeypatch) -> None:
     # Сервер должен быть живым после неудачного WS.
     resp = client.get("/healthz")
     assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# M2: auth на WS (токен в query-param, проверка ДО accept)
+# ---------------------------------------------------------------------------
+
+
+# require_api_key=True + нет ключа в query → WS закрыт (1008) ДО accept,
+# real-time money-данные не утекают анонимному клиенту.
+def test_ws_rejected_without_api_key(monkeypatch) -> None:
+    monkeypatch.setenv("WS_HEARTBEAT_SECONDS", "60")
+    import importlib
+
+    import apps.api.routers.ws as ws_mod
+
+    importlib.reload(ws_mod)
+
+    from core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "require_api_key", True, raising=False)
+    monkeypatch.setattr(get_settings(), "api_key", "ws-secret", raising=False)
+
+    app, _fake_redis = _make_app()
+
+    import pytest
+    from fastapi.testclient import TestClient
+    from starlette.websockets import WebSocketDisconnect
+
+    client = TestClient(app, raise_server_exceptions=False)
+
+    # Закрытие до accept → клиент получает disconnect (а не сообщение).
+    with pytest.raises(WebSocketDisconnect):
+        with client.websocket_connect("/ws/dashboard") as ws:
+            ws.receive_json()
+
+
+# require_api_key=True + верный ключ в query → WS принят, событие доходит.
+def test_ws_accepted_with_valid_api_key(monkeypatch) -> None:
+    monkeypatch.setenv("WS_HEARTBEAT_SECONDS", "60")
+    import importlib
+
+    import apps.api.routers.ws as ws_mod
+
+    importlib.reload(ws_mod)
+
+    from core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "require_api_key", True, raising=False)
+    monkeypatch.setattr(get_settings(), "api_key", "ws-secret", raising=False)
+
+    app, fake_redis = _make_app()
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(app)
+
+    t = _publish_after(fake_redis, "fb_agent:scan:finished", {"scan_id": 7})
+    with client.websocket_connect("/ws/dashboard?api_key=ws-secret") as ws:
+        msg = ws.receive_json()
+        assert msg["type"] == "scan_finished"
+        assert msg["payload"]["scan_id"] == 7
+    t.join(timeout=2)
