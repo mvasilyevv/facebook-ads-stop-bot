@@ -16,6 +16,7 @@ import { useEffect, useState } from "react";
 import { Modal, ModalFooter } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
+import { TagListInput } from "@/components/ui/TagListInput";
 import { Switch } from "@/components/ui/Switch";
 import {
   OfferRulesFields,
@@ -29,32 +30,18 @@ import type { Offer } from "@fb/shared";
 export interface OfferFormValues {
   code: string;
   is_active: boolean;
+  /** FB Pixel ID оффера (событие оптимизации Purchase/FTD). Пусто — не задан. */
+  pixel_id: string;
   /** Мульти-кабинет: числовые ID кабинетов (без act_), минимум 1. */
   ad_account_ids: string[];
   /** Money-настройки: CPA + чувствительность стоп/warning. */
   rules: OfferRulesValues;
 }
 
-/** Разбор ввода кабинетов: запятые/пробелы/переносы, срез act_, дедуп. */
-function parseAccountIds(raw: string): { ids: string[]; invalid: string[] } {
-  const ids: string[] = [];
-  const invalid: string[] = [];
-  const seen = new Set<string>();
-  for (const part of raw.split(/[\s,;]+/)) {
-    const token = part.trim();
-    if (!token) continue;
-    const normalized = token.replace(/^act_/i, "");
-    if (!/^\d+$/.test(normalized)) {
-      invalid.push(token);
-      continue;
-    }
-    if (!seen.has(normalized)) {
-      seen.add(normalized);
-      ids.push(normalized);
-    }
-  }
-  return { ids, invalid };
-}
+// Кабинет: срез act_ и проверка на числовой ID — для TagListInput.
+const normalizeAccount = (token: string): string => token.replace(/^act_/i, "");
+const validateAccount = (token: string): string | null =>
+  /^\d+$/.test(token) ? null : "только числовой ID кабинета";
 
 interface OfferFormModalProps {
   open: boolean;
@@ -77,15 +64,20 @@ export function OfferFormModal({
   onSave,
 }: OfferFormModalProps) {
   const isEdit = !!offer;
-  // ad_account_ids появляется в generated-типах после pnpm gen:api — до этого читаем мягко.
-  const offerAccounts =
-    (offer as (Offer & { ad_account_ids?: string[] }) | null | undefined)?.ad_account_ids ?? [];
+  // ad_account_ids/pixel_id появляются в generated-типах после pnpm gen:api — читаем мягко.
+  const offerExt = offer as
+    | (Offer & { ad_account_ids?: string[]; pixel_id?: string | null })
+    | null
+    | undefined;
+  const offerAccounts = offerExt?.ad_account_ids ?? [];
 
   const [code, setCode] = useState("");
   const [isActive, setIsActive] = useState(true);
   const [rules, setRules] = useState<OfferRulesValues>(DEFAULT_OFFER_RULES_VALUES);
-  // Сырой ввод кабинетов (текст до парсинга) — парсим на submit.
-  const [accountsRaw, setAccountsRaw] = useState("");
+  // Кабинеты как список тэгов (без сырой строки) — добавление/удаление поэлементно.
+  const [accounts, setAccounts] = useState<string[]>([]);
+  // FB Pixel ID оффера.
+  const [pixelId, setPixelId] = useState("");
   const [codeError, setCodeError] = useState<string | undefined>();
   const [accountsError, setAccountsError] = useState<string | undefined>();
   const [busy, setBusy] = useState(false);
@@ -96,7 +88,8 @@ export function OfferFormModal({
       setCode(offer?.code ?? "");
       setIsActive(offer?.is_active ?? true);
       setRules({ ...DEFAULT_OFFER_RULES_VALUES, ...initialRules });
-      setAccountsRaw(offerAccounts.join(", "));
+      setAccounts(offerAccounts);
+      setPixelId(offerExt?.pixel_id ?? "");
       setCodeError(undefined);
       setAccountsError(undefined);
     }
@@ -125,13 +118,8 @@ export function OfferFormModal({
       }
     }
 
-    // Валидация кабинетов: минимум 1, только числовые ID (мульти-кабинет).
-    const { ids, invalid } = parseAccountIds(accountsRaw);
-    if (invalid.length > 0) {
-      setAccountsError(`Не похоже на ID кабинета: ${invalid.join(", ")}`);
-      return;
-    }
-    if (ids.length === 0) {
+    // Кабинеты валидируются поэлементно в TagListInput — здесь проверяем только «минимум 1».
+    if (accounts.length === 0) {
       setAccountsError("Укажи минимум один ID кабинета — без него оффер не сканируется");
       return;
     }
@@ -141,7 +129,8 @@ export function OfferFormModal({
       await onSave({
         code: code.trim().toUpperCase(),
         is_active: isActive,
-        ad_account_ids: ids,
+        pixel_id: pixelId.trim(),
+        ad_account_ids: accounts,
         rules,
       });
       handleClose(false);
@@ -192,20 +181,35 @@ export function OfferFormModal({
             </div>
           )}
 
-          {/* Кабинеты (мульти-кабинет): числовые ID через запятую/пробел, минимум 1 */}
-          <Input
+          {/* Кабинеты (мульти-кабинет): тэги — добавляешь по одному, минимум 1 */}
+          <TagListInput
             id="offer-accounts"
             label="Рекламные кабинеты"
-            placeholder="1234567890, 9876543210"
-            value={accountsRaw}
-            onChange={(e) => {
-              setAccountsRaw(e.target.value);
+            placeholder="1234567890 + Enter"
+            values={accounts}
+            onChange={(next) => {
+              setAccounts(next);
               if (accountsError) setAccountsError(undefined);
             }}
+            normalize={normalizeAccount}
+            validate={validateAccount}
             errorMessage={accountsError}
+            disabled={busy}
+            helpText="ID кабинетов, где крутится оффер (без act_). Enter/запятая — добавить, × — удалить. Сканируются только кабинеты, указанные хотя бы у одного активного оффера."
+          />
+
+          {/* FB Pixel ID — событие оптимизации при создании кампаний */}
+          <Input
+            id="offer-pixel"
+            label="FB Pixel ID"
+            placeholder="1234567890123456"
+            value={pixelId}
+            onChange={(e) => setPixelId(e.target.value)}
+            disabled={busy}
             autoComplete="off"
             spellCheck={false}
-            helpText="ID кабинетов, где крутится оффер (без act_). Сканируются только кабинеты, указанные хотя бы у одного активного оффера."
+            inputMode="numeric"
+            helpText="Пиксель оффера — событие оптимизации (Purchase/FTD) при создании кампаний. Необязательно."
           />
 
           {/* ── Money-настройки: CPA + чувствительность + live-разбивка ── */}

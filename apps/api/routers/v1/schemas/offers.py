@@ -52,6 +52,8 @@ class OfferOut(BaseModel):
     code: str
     name: str
     vertical: str | None = None
+    # FB Pixel ID оффера (для создания кампаний — событие оптимизации Purchase/FTD).
+    pixel_id: str | None = None
     # Поля отсутствующие в ORM — возвращаем null для стабильного shape фронта.
     country_code: None = None
     is_active: bool
@@ -70,6 +72,7 @@ class OfferOut(BaseModel):
             code=offer.code,  # type: ignore[attr-defined]
             name=offer.name,  # type: ignore[attr-defined]
             vertical=offer.vertical,  # type: ignore[attr-defined]
+            pixel_id=getattr(offer, "pixel_id", None),
             is_active=offer.is_active,  # type: ignore[attr-defined]
             ad_account_ids=list(getattr(offer, "ad_account_ids", None) or []),
             created_at=offer.created_at.isoformat() if offer.created_at else None,  # type: ignore[attr-defined]
@@ -85,6 +88,8 @@ class OfferCreateIn(BaseModel):
     # Принимаем опционально для обратной совместимости, но значение игнорируем.
     name: str | None = None
     vertical: str | None = Field(None, max_length=32)
+    # FB Pixel ID оффера (числовой; пусто — не задан).
+    pixel_id: str | None = Field(None, max_length=64)
     # Мульти-кабинет: кабинеты оффера, минимум 1 (без них оффер выпадает из скана).
     ad_account_ids: list[str] = Field(..., min_length=1)
     # country_code и notes принимаем но игнорируем (нет в ORM)
@@ -124,6 +129,8 @@ class OfferUpdateIn(BaseModel):
     # name не редактируется — всегда равно коду; поле принимается, но игнорируется.
     name: str | None = None
     vertical: str | None = Field(None, max_length=32)
+    # FB Pixel ID: None — не трогать; строка (в т.ч. пустая → null) — заменить.
+    pixel_id: str | None = Field(None, max_length=64)
     is_active: bool | None = None
     # Мульти-кабинет: None — не трогать; список — заменить (минимум 1 после нормализации).
     ad_account_ids: list[str] | None = None

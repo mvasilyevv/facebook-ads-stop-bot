@@ -48,6 +48,8 @@ interface OfferCreateIn {
   name: string;
   vertical?: string;
   is_active?: boolean;
+  /** FB Pixel ID оффера (числовой; null/пусто — не задан). */
+  pixel_id?: string | null;
   /** Мульти-кабинет: кабинеты оффера (числовые ID без act_), минимум 1. */
   ad_account_ids: string[];
 }

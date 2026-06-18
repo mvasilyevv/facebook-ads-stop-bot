@@ -10,7 +10,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { RefreshCw } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Card } from "@/components/ui/Card";
-import { Input } from "@/components/ui/Input";
+import { TagListInput } from "@/components/ui/TagListInput";
 import { Button } from "@/components/ui/Button";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { ErrorState } from "@/components/ui/ErrorState";
@@ -44,10 +44,19 @@ function CampaignsPage() {
 const OwnerTagCard: FC = () => {
   const { data, isLoading, error, refetch } = useObserverSettings();
   const updateMut = useUpdateObserverSettings();
-  const [tag, setTag] = useState("");
+  // Тэги как список (на бэке хранятся одной строкой через запятую).
+  const [tags, setTags] = useState<string[]>([]);
 
   useEffect(() => {
-    if (data) setTag(data.owner_campaign_tag ?? "");
+    if (data) {
+      const raw = data.owner_campaign_tag ?? "";
+      setTags(
+        raw
+          .split(",")
+          .map((t) => t.trim())
+          .filter(Boolean),
+      );
+    }
   }, [data]);
 
   if (isLoading) return <Skeleton className="h-32 w-full" />;
@@ -60,7 +69,7 @@ const OwnerTagCard: FC = () => {
         is_scanning_enabled: data?.is_scanning_enabled ?? false,
         auto_enable_recommendations: data?.auto_enable_recommendations ?? false,
         default_interval_seconds: data?.default_interval_seconds ?? 30,
-        owner_campaign_tag: tag || null,
+        owner_campaign_tag: tags.length ? tags.join(",") : null,
       });
       toast.success("Owner Tag сохранён");
     } catch (e) {
@@ -71,18 +80,17 @@ const OwnerTagCard: FC = () => {
   return (
     <Card eyebrow="OWNER CAMPAIGN TAG" padded>
       <div className="text-[12px] text-bg-9 mb-3">
-        Тег(и) в названии кампании, помечающие «мои» кампании в общем кабинете (несколько через
-        запятую). Пусто — сканируются все кампании.
+        Тег(и) в названии кампании, помечающие «мои» кампании в общем кабинете. Добавляй по одному
+        (Enter), × — удалить. Пусто — сканируются все кампании.
       </div>
-      <div className="flex items-center gap-3">
-        <Input
-          id="owner-tag"
-          aria-label="Owner Campaign Tag"
-          placeholder="MV,ABC"
-          value={tag}
-          onChange={(e) => setTag(e.target.value)}
-          className="flex-1"
-        />
+      <TagListInput
+        id="owner-tag"
+        aria-label="Owner Campaign Tag"
+        placeholder="MV + Enter"
+        values={tags}
+        onChange={setTags}
+      />
+      <div className="flex justify-end mt-3">
         <Button variant="primary" onClick={() => void handleSave()} loading={updateMut.isPending}>
           Сохранить
         </Button>

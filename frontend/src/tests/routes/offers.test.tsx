@@ -236,11 +236,14 @@ describe("OfferFormModal — создание", () => {
     await userEvent.clear(screen.getByLabelText(/код оффера/i));
     await userEvent.type(screen.getByLabelText(/код оффера/i), "gh_avi");
 
-    // Вводим кабинеты (мульти-кабинет: act_-префикс срезается, дубли схлопываются)
+    // Кабинеты тэгами: Enter добавляет; act_-префикс срезается, дубли схлопываются.
     await userEvent.type(
       screen.getByLabelText(/рекламные кабинеты/i),
-      "act_111, 222 111",
+      "act_111{Enter}222{Enter}111{Enter}",
     );
+
+    // Пиксель оффера
+    await userEvent.type(screen.getByLabelText(/fb pixel id/i), "9988776655");
 
     // Нажимаем создать
     await userEvent.click(screen.getByRole("button", { name: /создать оффер/i }));
@@ -249,6 +252,7 @@ describe("OfferFormModal — создание", () => {
       expect.objectContaining({
         code: "GH_AVI", // toUpperCase
         is_active: true,
+        pixel_id: "9988776655",
         ad_account_ids: ["111", "222"],
       }),
     );
@@ -303,11 +307,15 @@ describe("OfferFormModal — создание", () => {
     );
 
     await userEvent.type(screen.getByLabelText(/код оффера/i), "CR2");
-    await userEvent.type(screen.getByLabelText(/рекламные кабинеты/i), "abc123x");
-    await userEvent.click(screen.getByRole("button", { name: /создать оффер/i }));
+    // Нечисловой токен отклоняется прямо при добавлении (Enter) — chip не создаётся.
+    await userEvent.type(screen.getByLabelText(/рекламные кабинеты/i), "abc123x{Enter}");
 
+    expect(screen.getByText(/не подходит/i)).toBeInTheDocument();
+
+    // Сабмит без валидных кабинетов — отдельная ошибка «минимум один».
+    await userEvent.click(screen.getByRole("button", { name: /создать оффер/i }));
     expect(onSave).not.toHaveBeenCalled();
-    expect(screen.getByText(/не похоже на id кабинета/i)).toBeInTheDocument();
+    expect(screen.getByText(/минимум один id кабинета/i)).toBeInTheDocument();
   });
 
   // Money-настройки: CPA + дефолтные проценты чувствительности (80/80) уходят в onSave.
@@ -316,7 +324,7 @@ describe("OfferFormModal — создание", () => {
     render(<OfferFormModal open onOpenChange={() => {}} offer={null} onSave={onSave} />);
 
     await userEvent.type(screen.getByLabelText(/код оффера/i), "CR2");
-    await userEvent.type(screen.getByLabelText(/рекламные кабинеты/i), "111");
+    await userEvent.type(screen.getByLabelText(/рекламные кабинеты/i), "111{Enter}");
     await userEvent.type(screen.getByLabelText(/cpa ставка/i), "10");
     await userEvent.click(screen.getByRole("button", { name: /создать оффер/i }));
 

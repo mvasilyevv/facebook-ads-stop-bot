@@ -79,6 +79,7 @@ async def list_offers(
             code=row["code"],
             name=row["name"],
             vertical=row["vertical"],
+            pixel_id=row["pixel_id"],
             is_active=row["is_active"],
             ad_account_ids=list(row["ad_account_ids"] or []),
             created_at=row["created_at"].isoformat() if row["created_at"] else None,
@@ -244,6 +245,7 @@ async def create_offer(
                 code=body.code,
                 name=body.code,  # name = code: поле «Название» убрано из UI
                 vertical=body.vertical,
+                pixel_id=(body.pixel_id or None),
                 is_active=True,
                 # Мульти-кабинет: валидация (min 1, числовые ID) — в OfferCreateIn.
                 ad_account_ids=body.ad_account_ids,
@@ -253,6 +255,7 @@ async def create_offer(
                 Offer.__table__.c.code,
                 Offer.__table__.c.name,
                 Offer.__table__.c.vertical,
+                Offer.__table__.c.pixel_id,
                 Offer.__table__.c.is_active,
                 Offer.__table__.c.ad_account_ids,
                 Offer.__table__.c.created_at,
@@ -276,6 +279,7 @@ async def create_offer(
         code=row["code"],
         name=row["name"],
         vertical=row["vertical"],
+        pixel_id=row["pixel_id"],
         is_active=row["is_active"],
         ad_account_ids=list(row["ad_account_ids"] or []),
         created_at=row["created_at"].isoformat() if row["created_at"] else None,
@@ -301,6 +305,9 @@ async def update_offer(
     # name не обновляется — всегда равно коду (поле убрано из UI).
     if body.vertical is not None:
         updates["vertical"] = body.vertical
+    # pixel_id: None — не трогаем; строка (в т.ч. пустая → null) — заменяем.
+    if body.pixel_id is not None:
+        updates["pixel_id"] = body.pixel_id or None
     if body.is_active is not None:
         updates["is_active"] = body.is_active
     # Мульти-кабинет: None — не трогаем, список — замена (валидация в OfferUpdateIn).
@@ -327,6 +334,7 @@ async def update_offer(
                     Offer.__table__.c.code,
                     Offer.__table__.c.name,
                     Offer.__table__.c.vertical,
+                    Offer.__table__.c.pixel_id,
                     Offer.__table__.c.is_active,
                     Offer.__table__.c.ad_account_ids,
                     Offer.__table__.c.created_at,
@@ -343,6 +351,7 @@ async def update_offer(
         code=row["code"],
         name=row["name"],
         vertical=row["vertical"],
+        pixel_id=row["pixel_id"],
         is_active=row["is_active"],
         ad_account_ids=list(row["ad_account_ids"] or []),
         created_at=row["created_at"].isoformat() if row["created_at"] else None,

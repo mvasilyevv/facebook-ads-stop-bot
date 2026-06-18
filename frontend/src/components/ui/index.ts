@@ -18,6 +18,9 @@ export { Kbd } from "./Kbd";
 export { Input, SearchInput } from "./Input";
 export type { InputProps } from "./Input";
 
+export { TagListInput } from "./TagListInput";
+export type { TagListInputProps } from "./TagListInput";
+
 export { Select } from "./Select";
 export type { SelectOption } from "./Select";
 

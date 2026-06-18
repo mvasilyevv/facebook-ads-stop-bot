@@ -215,6 +215,7 @@ function OffersPage() {
             code: values.code,
             name: values.code, // бэк: name=code
             is_active: values.is_active,
+            pixel_id: values.pixel_id || null, // пусто → не задан
             ad_account_ids: values.ad_account_ids, // мульти-кабинет: min 1
           });
           await saveRules.mutateAsync({
@@ -292,6 +293,7 @@ function EditOfferModal({ offer, onClose }: { offer: Offer; onClose: () => void 
       onSave={async (values) => {
         await updateMutation.mutateAsync({
           is_active: values.is_active,
+          pixel_id: values.pixel_id, // строка (в т.ч. "") — форма источник истины
           ad_account_ids: values.ad_account_ids, // мульти-кабинет: замена списка
         });
         await saveRules.mutateAsync({

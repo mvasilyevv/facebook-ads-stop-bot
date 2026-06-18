@@ -39,6 +39,12 @@ class Offer(UUIDPrimaryKey, Timestamp, Base):
         String(32),
         nullable=True,
     )
+    # FB Pixel ID оффера (числовой ID пикселя). Используется при создании кампаний
+    # как событие оптимизации (Purchase/FTD). Nullable — задаётся в карточке оффера.
+    pixel_id: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+    )
     is_active: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,
