@@ -4,9 +4,9 @@
 [Model Context Protocol](https://modelcontextprotocol.io) и общаться с ботом
 голосом/текстом из десктоп-приложения Anthropic, минуя Telegram.
 
-Скоуп v1: **READ_ONLY tools**, **DRAFT_REQUIRED tools** (подтверждение в TG),
-**Resources** (snapshot БД и Redis). Транспорт — **stdio** (Claude Desktop сам
-запускает локальный процесс).
+Скоуп: **только READ_ONLY tools** + **Resources** (snapshot БД и Redis).
+Write-мутации (`request_*`, DRAFT_REQUIRED) отключены — подтверждение AI-черновиков
+убрано. Транспорт — **stdio** (Claude Desktop сам запускает локальный процесс).
 
 ---
 
@@ -14,7 +14,7 @@
 
 После настройки в Claude Desktop появится:
 
-- 15 **tools**:
+- **tools** (только read-only):
   - `get_active_offers`, `get_recent_alerts`, `get_worker_health`,
     `get_disable_tasks_status` — read-only из БД/Redis
   - `find_ads`, `get_insights`, `get_account_health`, `get_offer_performance`,
@@ -23,10 +23,9 @@
   - `get_tracker_stats` — read-only post-click статистика AdSet.pro (клики/
     регистрации/депозиты FTD/доход/ROI; разрез по event_type или ext_sub1..6).
     Независимо от Vision-сессии — работает, даже когда кабинет недоступен
-  - `request_budget_change`, `request_bulk_pause`, `request_clone_campaign`,
-    `request_create_campaign` — **DRAFT** мутации: tool создаёт запись в
-    `task_queue` со `status=draft`, исполнение требует подтверждения inline-
-    кнопкой в Telegram
+  - ~~`request_budget_change`, `request_bulk_pause`, `request_clone_campaign`,
+    `request_create_campaign`~~ — **write-мутации ОТКЛЮЧЕНЫ** в MCP: исключены
+    из `list_tools`, в `call_tool` отдают отказ (MCP read-only)
   - `analyze_creative`, `generate_ad_copy` — генерация контента через LLM
     (без mutations)
 - 4 **resources**:
@@ -35,8 +34,7 @@
   - `fb-stop-bot://workers-health` — heartbeat'ы воркеров из Redis
   - `fb-stop-bot://schema-overview` — Markdown-обзор всех tools
 
-Rate-limit: **30 запросов в час** на client_key `mcp:claude-desktop`
-(независимо от лимитов Telegram `/ask`).
+Rate-limit: **30 запросов в час** на client_key `mcp:claude-desktop`.
 
 ---
 
@@ -167,16 +165,11 @@ cd /Users/markvasilev/Desktop/FB_Agent
 
 > Отключи все объявления по офферу DRC_CR2.
 
-→ Claude вызовет `request_bulk_pause` → создастся DRAFT в `task_queue`,
-ответ:
-```
-DRAFT создан: task_id=42 (bulk_status_change pause, ... ).
-IDs: ... Подтверди в TG.
-```
-
-В Telegram у вас появится сообщение с inline-кнопками ✅ Подтвердить / ❌
-Отклонить (см. `core/telegram/handlers/ask.py`). После клика ✅ задача
-переходит в `pending` и `meta_api_worker` её исполняет.
+→ Write-мутации через MCP отключены — Claude пояснит, что инструмент недоступен
+(MCP read-only). Массовая пауза делается вручную в Telegram: `/pause DRC_CR2`
+(превью с кнопками ✅/❌ — см. `core/telegram/handlers/bulk.py` +
+`draft_confirm.py`). После клика ✅ задача переходит в `pending` и
+`meta_api_worker` её исполняет.
 
 ---
 
