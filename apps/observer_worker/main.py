@@ -287,6 +287,17 @@ async def heartbeat_loop(redis_client, stop: asyncio.Event) -> None:
 # ====================== One cycle ======================
 
 
+def _allowlist_blocks_scan(single_cabinet: bool, campaign_ids: list[str]) -> bool:
+    """Opt-in мониторинг: при ОДНОМ кабинете пустой allowlist = ничего не отслеживаем.
+
+    Money-критично: раньше пустой campaign_ids означал «сканировать все мои кампании»
+    (owner_tag-резолв в browser-agent). Теперь пусто = НИЧЕГО (скан не гоняем, авто-стоп
+    не работает). При мульти-кабе (>1 кабинета) allowlist неприменим (campaign.id не
+    уникальны меж кабинетами) → не блокируем, скоупинг через owner_tag.
+    """
+    return single_cabinet and not campaign_ids
+
+
 async def _run_account_scan(
     engine: AsyncEngine,
     *,
@@ -329,12 +340,20 @@ async def _run_account_scan(
     campaign_ids = list(config.get("campaign_ids") or []) if single_cabinet else []
 
     try:
-        scan_out = await gate.run_one_scan(
-            campaign_ids=campaign_ids,
-            owner_tag=config.get("owner_campaign_tag"),
-            auto_recover_page=auto_recover_page,
-            ad_account_id=ad_account_id,
-        )
+        # Opt-in мониторинг: при ОДНОМ кабинете пустой allowlist = НИЧЕГО не отслеживаем
+        # (раньше пусто = «все мои кампании»). Скан не гоняем — отдаём пустой результат,
+        # FSM не трогается, авто-стоп по этим объявлениям не работает (так и задумано).
+        if _allowlist_blocks_scan(single_cabinet, campaign_ids):
+            scan_out = ScanCycleOutput(
+                rows=[], empty_reason="ничего не отслеживается (allowlist пуст)"
+            )
+        else:
+            scan_out = await gate.run_one_scan(
+                campaign_ids=campaign_ids,
+                owner_tag=config.get("owner_campaign_tag"),
+                auto_recover_page=auto_recover_page,
+                ad_account_id=ad_account_id,
+            )
 
         if not scan_out.rows:
             outcome = "empty"

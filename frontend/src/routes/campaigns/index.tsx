@@ -37,17 +37,28 @@ function CampaignsPage() {
     <>
       <PageHeader eyebrowNum="01" eyebrow="OPERATE · СКОУП" title="Кампании" />
       <div className="space-y-6" style={{ maxWidth: 720 }}>
-        <OwnerTagCard />
+        <ScopeCard />
         <CabinetAutostartCard />
-        <CampaignAllowlist />
       </div>
     </>
   );
 }
 
+// ─── Скоуп наблюдения: Owner Tag + Отслеживаемые кампании в одном блоке ────────
+
+const ScopeCard: FC = () => {
+  return (
+    <Card padded>
+      <OwnerTagSection />
+      <div className="my-5 border-t border-[var(--hairline)]" />
+      <CampaignAllowlistSection />
+    </Card>
+  );
+};
+
 // ─── Owner Campaign Tag ───────────────────────────────────────────────────────
 
-const OwnerTagCard: FC = () => {
+const OwnerTagSection: FC = () => {
   const { data, isLoading, error, refetch } = useObserverSettings();
   const updateMut = useUpdateObserverSettings();
   // Тэги как список (на бэке хранятся одной строкой через запятую).
@@ -84,10 +95,13 @@ const OwnerTagCard: FC = () => {
   };
 
   return (
-    <Card eyebrow="OWNER CAMPAIGN TAG" padded>
+    <div>
+      <div className="font-display text-[10px] tracking-[0.12em] uppercase text-bg-8 mb-2">
+        OWNER CAMPAIGN TAG
+      </div>
       <div className="text-[12px] text-bg-9 mb-3">
         Тег(и) в названии кампании, помечающие «мои» кампании в общем кабинете. Добавляй по одному
-        (Enter), × — удалить. Пусто — сканируются все кампании.
+        (Enter), × — удалить. Пусто — список ниже не фильтруется по тегу.
       </div>
       <TagListInput
         id="owner-tag"
@@ -101,7 +115,7 @@ const OwnerTagCard: FC = () => {
           Сохранить
         </Button>
       </div>
-    </Card>
+    </div>
   );
 };
 
@@ -218,7 +232,7 @@ const CampaignName: FC<{ name: string }> = ({ name }) => {
   );
 };
 
-const CampaignAllowlist: FC = () => {
+const CampaignAllowlistSection: FC = () => {
   const { data: campaigns, isLoading } = useObserverCampaigns();
   const refreshMut = useRefreshObserverCampaigns();
   const saveMut = useSetCampaignAllowlist();
@@ -266,7 +280,7 @@ const CampaignAllowlist: FC = () => {
   const hasCampaigns = !!campaigns && campaigns.length > 0;
 
   return (
-    <Card padded>
+    <div>
       <div className="flex items-center justify-between mb-2">
         <div className="font-display text-[10px] tracking-[0.12em] uppercase text-bg-8">
           ОТСЛЕЖИВАЕМЫЕ КАМПАНИИ
@@ -282,8 +296,9 @@ const CampaignAllowlist: FC = () => {
         </Button>
       </div>
       <div className="text-[11px] text-bg-8 mb-3">
-        Пусто (ничего не выбрано) — сканируются все кампании по Owner Tag. Выбор сужает скан до
-        отмеченных. «Обновить список» тянет кампании из кабинета живьём через browser-agent.
+        Отмеченные кампании бот <b className="text-bg-10">отслеживает</b> (авто-стоп) и поднимает в
+        автостарте. Пусто (ничего не выбрано) — <b className="text-bg-10">ничего не отслеживается</b>{" "}
+        и не автостартится. «Обновить список» тянет кампании из кабинета через browser-agent.
       </div>
 
       {isLoading ? (
@@ -358,6 +373,6 @@ const CampaignAllowlist: FC = () => {
           Сохранить выбор ({selected.size})
         </Button>
       </div>
-    </Card>
+    </div>
   );
 };
