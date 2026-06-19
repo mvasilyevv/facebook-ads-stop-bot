@@ -7,6 +7,9 @@ import json
 from datetime import datetime, timedelta, timezone
 
 from apps.health_watchdog.main import (
+    DesyncedStopAd,
+    StuckPauseTask,
+    build_autostop_channel_alert,
     check_observer_runtime_freshness,
     parse_expected_workers,
     should_alert,
@@ -142,3 +145,83 @@ def test_should_alert_dedup_active() -> None:
 # heartbeat истёк + дедупа нет → алертим
 def test_should_alert_heartbeat_dead_and_no_dedup() -> None:
     assert should_alert(None, None) is True
+
+
+# ====================== канал авто-стопа: build_autostop_channel_alert ======================
+
+
+# Оба триггера пусты (канал жив) → алерта нет
+def test_autostop_alert_no_triggers_returns_none() -> None:
+    assert build_autostop_channel_alert([], []) is None
+
+
+# Только застрявшие задачи pause_ad → алерт с count, target_id, попытками и last_error
+def test_autostop_alert_stuck_tasks_only() -> None:
+    tasks = [
+        StuckPauseTask(
+            task_id=101,
+            target_id="23001",
+            attempt_count=16,
+            age_minutes=42,
+            last_error="Failed to fetch",
+        )
+    ]
+    text = build_autostop_channel_alert(tasks, [])
+    assert text is not None
+    # Money-критичный CRITICAL-маркер и контекст канала
+    assert "авто-стоп" in text.lower()
+    assert "23001" in text  # target_id (fb_ad_id) пострадавшего объявления
+    assert "16" in text  # число попыток
+    assert "42" in text  # возраст застревания в минутах
+    assert "Failed to fetch" in text  # диагностика (триггер 1 как обогащение)
+
+
+# Только рассинхрон (stop_sent при ACTIVE) → алерт со списком fb_ad_id
+def test_autostop_alert_desync_only() -> None:
+    desynced = [DesyncedStopAd(fb_ad_id="987654", age_minutes=30)]
+    text = build_autostop_channel_alert([], desynced)
+    assert text is not None
+    assert "987654" in text
+    assert "30" in text
+    # Рассинхрон-симптом: объявление в stop_sent, но крутится (ACTIVE)
+    assert "stop_sent" in text or "ACTIVE" in text
+
+
+# Оба триггера сразу → в тексте оба раздела
+def test_autostop_alert_both_triggers() -> None:
+    tasks = [
+        StuckPauseTask(task_id=1, target_id="111", attempt_count=5, age_minutes=20, last_error=None)
+    ]
+    desynced = [DesyncedStopAd(fb_ad_id="222", age_minutes=25)]
+    text = build_autostop_channel_alert(tasks, desynced)
+    assert text is not None
+    assert "111" in text
+    assert "222" in text
+
+
+# last_error=None не должен ронять рендер (например задача ещё ни разу не падала)
+def test_autostop_alert_stuck_task_without_error() -> None:
+    tasks = [
+        StuckPauseTask(task_id=1, target_id="111", attempt_count=0, age_minutes=20, last_error=None)
+    ]
+    text = build_autostop_channel_alert(tasks, [])
+    assert text is not None
+    assert "111" in text
+
+
+# Длинные списки усекаются (не раздуваем TG-сообщение), с пометкой «ещё N»
+def test_autostop_alert_truncates_long_lists() -> None:
+    tasks = [
+        StuckPauseTask(
+            task_id=i, target_id=f"ad{i}", attempt_count=3, age_minutes=20, last_error="x"
+        )
+        for i in range(25)
+    ]
+    text = build_autostop_channel_alert(tasks, [])
+    assert text is not None
+    # Общее число должно фигурировать целиком
+    assert "25" in text
+    # Но не все 25 строк перечислены поимённо — есть пометка про остаток
+    assert "ещё" in text.lower()
+    # Telegram-лимит сообщения 4096 — не превышаем
+    assert len(text) < 4096

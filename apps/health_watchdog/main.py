@@ -6,6 +6,9 @@
   отсутствие ключа (TTL истёк) → шлёт алерт в Telegram (с дедупом 1 ч/воркер).
 - читает JSON ``observer:runtime``; если ключа нет или ``updated_at`` старше
   OBSERVER_STALE_AFTER_SECONDS → отдельный алерт ``observer worker stale``.
+- (money-критично) проверяет канал авто-стопа: застрявшие задачи pause_ad/bot_auto_stop
+  и рассинхрон FSM=stop_sent ↔ delivery_status=ACTIVE → CRITICAL-алерт в ops-топик
+  (см. check_autostop_channel; нужен доступ к Postgres через engine).
 
 Сам watchdog пишет ``worker:heartbeat:health_watchdog`` TTL 60s.
 
@@ -20,9 +23,12 @@ import json
 import logging
 import os
 import signal
+from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime, timezone
 
 import redis.asyncio as redis_asyncio
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from core.db import WORKER_ENGINE_KWARGS
@@ -56,6 +62,21 @@ DEFAULT_EXPECTED_WORKERS = (
 
 OBSERVER_RUNTIME_KEY = "observer:runtime"
 ALERT_DEDUP_PREFIX = "health:alerted:"
+
+# ====================== канал авто-стопа (money-критичный мониторинг) ======================
+# Инцидент 2026-06-19: канал исполнения авто-стопа (Marketing API через Vision
+# page.evaluate(fetch)) лёг — fetch начал падать «Failed to fetch» (code=-2). Задачи
+# task_queue pause_ad/bot_auto_stop зависли в retrying (15-16 из 72 попыток), объявления
+# остались в FSM=stop_sent, но delivery_status=ACTIVE и продолжали тратить. Сигнала не было.
+# Watchdog независимым внешним наблюдателем ловит отказ канала по двум триггерам:
+#   (3) задачи pause_ad/bot_auto_stop незавершены дольше STUCK_MIN — прямой признак отказа;
+#   (2) рассинхрон stop_sent при delivery_status=ACTIVE дольше DESYNC_MIN — money-симптом.
+AUTOSTOP_STUCK_AFTER_MINUTES = int(os.environ.get("HEALTH_WATCHDOG_AUTOSTOP_STUCK_MIN", "15"))
+AUTOSTOP_DESYNC_AFTER_MINUTES = int(os.environ.get("HEALTH_WATCHDOG_AUTOSTOP_DESYNC_MIN", "15"))
+# Максимум объявлений в каждом списке алерта — остальное сворачивается в «… и ещё N»
+# (защита от раздувания TG-сообщения сверх лимита 4096 при массовом отказе).
+AUTOSTOP_ALERT_MAX_ITEMS = 10
+AUTOSTOP_DEDUP_KEY = f"{ALERT_DEDUP_PREFIX}autostop_channel"
 
 
 # ====================== pure helpers (тестируем напрямую) ======================
@@ -125,6 +146,71 @@ def check_observer_runtime_freshness(
 def should_alert(heartbeat_value: str | None, dedup_value: str | None) -> bool:
     """Алертим, когда heartbeat истёк И дедуп-ключа ещё нет."""
     return heartbeat_value is None and dedup_value is None
+
+
+@dataclass(frozen=True)
+class StuckPauseTask:
+    """Застрявшая задача авто-стопа (pause_ad от bot_auto_stop, не дошла до succeeded)."""
+
+    task_id: int
+    target_id: str  # fb_ad_id объявления, которое не удалось остановить
+    attempt_count: int
+    age_minutes: int  # сколько минут задача не завершается с момента создания
+    last_error: str | None  # последняя ошибка (часто «Failed to fetch» при отказе канала)
+
+
+@dataclass(frozen=True)
+class DesyncedStopAd:
+    """Рассинхрон: объявление в FSM=stop_sent, но delivery_status=ACTIVE (крутится/тратит)."""
+
+    fb_ad_id: str
+    age_minutes: int  # сколько минут держится рассинхрон (с момента перехода в stop_sent)
+
+
+def build_autostop_channel_alert(
+    stuck_tasks: Sequence[StuckPauseTask],
+    desynced_ads: Sequence[DesyncedStopAd],
+) -> str | None:
+    """Pure: текст CRITICAL-алерта по триггерам отказа канала авто-стопа.
+
+    Возвращает None, если оба триггера пусты (канал здоров). Иначе — единое
+    HTML-сообщение: раздел застрявших задач pause_ad и/или раздел рассинхрона
+    stop_sent↔ACTIVE. Длинные списки усекаются до AUTOSTOP_ALERT_MAX_ITEMS с
+    пометкой «… и ещё N» (TG-лимит 4096).
+    """
+    if not stuck_tasks and not desynced_ads:
+        return None
+
+    lines = [
+        "🆘 <b>КРИТИЧНО: канал авто-стопа</b>",
+        "Авто-стоп не доводит объявления до OFF — деньги тратятся.",
+    ]
+
+    if stuck_tasks:
+        lines.append("")
+        lines.append(f"⛔️ Застряли задачи pause_ad (bot_auto_stop): <b>{len(stuck_tasks)}</b>")
+        for task in stuck_tasks[:AUTOSTOP_ALERT_MAX_ITEMS]:
+            err = f", ошибка: {html.escape(task.last_error)}" if task.last_error else ""
+            lines.append(
+                f"   • <code>{html.escape(task.target_id)}</code> — "
+                f"{task.age_minutes} мин, попыток {task.attempt_count}{err}"
+            )
+        if len(stuck_tasks) > AUTOSTOP_ALERT_MAX_ITEMS:
+            lines.append(f"   … и ещё {len(stuck_tasks) - AUTOSTOP_ALERT_MAX_ITEMS}")
+
+    if desynced_ads:
+        lines.append("")
+        lines.append(
+            f"🔌 Рассинхрон (FSM=stop_sent, но delivery_status=ACTIVE): <b>{len(desynced_ads)}</b>"
+        )
+        for ad in desynced_ads[:AUTOSTOP_ALERT_MAX_ITEMS]:
+            lines.append(f"   • <code>{html.escape(ad.fb_ad_id)}</code> — {ad.age_minutes} мин")
+        if len(desynced_ads) > AUTOSTOP_ALERT_MAX_ITEMS:
+            lines.append(f"   … и ещё {len(desynced_ads) - AUTOSTOP_ALERT_MAX_ITEMS}")
+
+    lines.append("")
+    lines.append("Проверь Vision-сессию и meta_api_worker.")
+    return "\n".join(lines)
 
 
 # ====================== Telegram алерты ======================
@@ -270,6 +356,111 @@ async def check_observer_runtime(
     )
 
 
+_STUCK_PAUSE_TASKS_SQL = text(
+    """
+    SELECT id,
+           payload->>'target_id' AS target_id,
+           attempt_count,
+           last_error,
+           CAST(FLOOR(EXTRACT(EPOCH FROM (NOW() - created_at)) / 60) AS INTEGER) AS age_minutes
+    FROM task_queue
+    WHERE task_type = 'meta_api_mutation'
+      AND payload->>'mutation_kind' = 'pause_ad'
+      AND requested_by = 'bot_auto_stop'
+      AND status IN ('pending', 'retrying', 'running')
+      AND created_at < NOW() - make_interval(mins => :minutes)
+    ORDER BY created_at ASC
+    """
+)
+
+_DESYNCED_STOP_ADS_SQL = text(
+    """
+    SELECT fb_ads.fb_ad_id,
+           CAST(FLOOR(EXTRACT(EPOCH FROM (NOW() - s.last_transition_at)) / 60) AS INTEGER)
+               AS age_minutes
+    FROM fb_ads
+    JOIN ad_alert_state s ON s.ad_id = fb_ads.id
+    WHERE s.alert_state = 'stop_sent'
+      AND UPPER(fb_ads.delivery_status) = 'ACTIVE'
+      AND s.last_transition_at < NOW() - make_interval(mins => :minutes)
+    ORDER BY s.last_transition_at ASC
+    """
+)
+
+
+async def query_stuck_pause_tasks(engine: AsyncEngine, *, minutes: int) -> list[StuckPauseTask]:
+    """Задачи авто-стопа (pause_ad/bot_auto_stop), не завершённые дольше ``minutes`` минут.
+
+    Триггер 3: незавершённый статус (pending/retrying/running) + возраст created_at >
+    порога = прямой признак отказа канала исполнения (Vision fetch лёг, токен протух и т.п.).
+    """
+    async with engine.connect() as conn:
+        result = await conn.execute(_STUCK_PAUSE_TASKS_SQL, {"minutes": int(minutes)})
+        rows = result.all()
+    return [
+        StuckPauseTask(
+            task_id=int(r[0]),
+            target_id=str(r[1]),
+            attempt_count=int(r[2]),
+            last_error=r[3],
+            age_minutes=int(r[4]),
+        )
+        for r in rows
+    ]
+
+
+async def query_desynced_stop_ads(engine: AsyncEngine, *, minutes: int) -> list[DesyncedStopAd]:
+    """Объявления в FSM=stop_sent, но delivery_status=ACTIVE дольше ``minutes`` минут.
+
+    Триггер 2 (money-симптом): авто-стоп вынес решение (stop_sent), но не довёл объявление
+    до OFF — оно крутится и тратит. Ловит проблему по финальному симптому независимо от
+    причины. delivery_status сравнивается без учёта регистра; NULL (не сканировали) не
+    считается ACTIVE — не алертим вслепую.
+    """
+    async with engine.connect() as conn:
+        result = await conn.execute(_DESYNCED_STOP_ADS_SQL, {"minutes": int(minutes)})
+        rows = result.all()
+    return [DesyncedStopAd(fb_ad_id=str(r[0]), age_minutes=int(r[1])) for r in rows]
+
+
+async def check_autostop_channel(
+    engine: AsyncEngine,
+    redis_client: redis_asyncio.Redis,
+    *,
+    tg_client: TelegramBotClient | None,
+    chat_id: str | None,
+    thread_id: int | None,
+    stuck_after_minutes: int = AUTOSTOP_STUCK_AFTER_MINUTES,
+    desync_after_minutes: int = AUTOSTOP_DESYNC_AFTER_MINUTES,
+) -> bool:
+    """Проверяет здоровье канала авто-стопа. Возвращает True, если алерт был отправлен.
+
+    Money-критично: при отказе канала исполнения авто-стопа (инцидент 2026-06-19)
+    объявления остаются крутиться при FSM=stop_sent. Шлёт единый CRITICAL-алерт в
+    ops-топик с дедупом (раз в час, пока проблема жива).
+    """
+    try:
+        stuck = await query_stuck_pause_tasks(engine, minutes=stuck_after_minutes)
+        desynced = await query_desynced_stop_ads(engine, minutes=desync_after_minutes)
+    except Exception:  # noqa: BLE001
+        logger.exception("ошибка проверки канала авто-стопа")
+        return False
+
+    alert_text = build_autostop_channel_alert(stuck, desynced)
+    if alert_text is None:
+        return False
+
+    logger.error("канал авто-стопа деградировал: stuck=%d desync=%d", len(stuck), len(desynced))
+    return await _maybe_alert_with_dedup(
+        redis_client,
+        dedup_key=AUTOSTOP_DEDUP_KEY,
+        text=alert_text,
+        tg_client=tg_client,
+        chat_id=chat_id,
+        thread_id=thread_id,
+    )
+
+
 async def _publish_health_updated(
     redis_client: redis_asyncio.Redis,
     *,
@@ -314,8 +505,13 @@ async def run_one_check(
     tg_client: TelegramBotClient | None,
     chat_id: str | None,
     thread_id: int | None,
+    engine: AsyncEngine | None = None,
 ) -> None:
-    """Один прогон: heartbeat'ы + observer:runtime + publish health:updated."""
+    """Один прогон: heartbeat'ы + observer:runtime + канал авто-стопа + publish health:updated.
+
+    Проверка канала авто-стопа выполняется только при заданном ``engine`` (нужен доступ к
+    Postgres). Без него (например в unit-окружении) она пропускается.
+    """
     await check_worker_heartbeats(
         redis_client,
         expected_workers=expected_workers,
@@ -329,6 +525,14 @@ async def run_one_check(
         chat_id=chat_id,
         thread_id=thread_id,
     )
+    if engine is not None:
+        await check_autostop_channel(
+            engine,
+            redis_client,
+            tg_client=tg_client,
+            chat_id=chat_id,
+            thread_id=thread_id,
+        )
     # Публикуем сводку health в Redis-канал (best-effort)
     await _publish_health_updated(redis_client, expected_workers=expected_workers)
 
@@ -358,6 +562,7 @@ async def check_loop(
     chat_id: str | None,
     thread_id: int | None,
     stop: asyncio.Event,
+    engine: AsyncEngine | None = None,
 ) -> None:
     """Главный цикл проверок раз в CHECK_INTERVAL_SECONDS.
 
@@ -378,6 +583,7 @@ async def check_loop(
                 tg_client=tg_client,
                 chat_id=chat_id,
                 thread_id=thread_id,
+                engine=engine,
             )
         except Exception:  # noqa: BLE001
             logger.exception("ошибка в цикле проверок")
@@ -454,6 +660,7 @@ async def main_loop(database_url: str | None = None) -> None:
                 chat_id=chat_id,
                 thread_id=thread_id,
                 stop=stop,
+                engine=engine,
             ),
         )
     finally:
