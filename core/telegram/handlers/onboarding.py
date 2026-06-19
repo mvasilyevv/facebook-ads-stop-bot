@@ -73,7 +73,7 @@ async def handle_start(
             telegram_user_id=user_id,
             username=username,
             display_name=display_name,
-            role="recipient",
+            role=invite.get("role", "recipient"),
         )
         await send_text(
             client,

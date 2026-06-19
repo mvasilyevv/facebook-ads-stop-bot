@@ -258,7 +258,7 @@ async def find_active_invite(engine: AsyncEngine, code: str) -> dict | None:
             await conn.execute(
                 text(
                     """
-                    SELECT id, code, expires_at
+                    SELECT id, code, role, expires_at
                     FROM telegram_invites
                     WHERE code = :code
                       AND used_at IS NULL
@@ -272,7 +272,7 @@ async def find_active_invite(engine: AsyncEngine, code: str) -> dict | None:
         ).first()
     if not row:
         return None
-    return {"id": row[0], "code": row[1], "expires_at": row[2]}
+    return {"id": row[0], "code": row[1], "role": row[2], "expires_at": row[3]}
 
 
 async def consume_invite_and_create_recipient(

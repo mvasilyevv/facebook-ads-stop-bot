@@ -84,14 +84,15 @@ async def main(role: str, ttl_days: int) -> int:
                 text(
                     """
                     INSERT INTO telegram_invites
-                        (code, created_by, expires_at)
+                        (code, created_by, role, expires_at)
                     VALUES
-                        (:code, :by, :exp)
+                        (:code, :by, :role, :exp)
                     """
                 ),
                 {
                     "code": code,
                     "by": f"cli:role={role}",
+                    "role": role,
                     "exp": expires_at,
                 },
             )
