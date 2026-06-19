@@ -238,8 +238,10 @@ function AdRow({ ad, selected, cursor, top, height, onToggleSelect, onOpen }: Ad
         </span>
       </span>
 
-      {/* AD: thumb + (name + первый rule-pill) / родитель (кампания · адсет) */}
-      <div className="flex items-center gap-2 min-w-0 pl-1">
+      {/* AD: thumb + (name + первый rule-pill) / родитель (кампания · адсет).
+          overflow-hidden — клип по границе колонки: rule-pill и хвост адсета не
+          шринкуются и без клипа налезали на OFFER/CAB (баг наезда колонок). */}
+      <div className="flex items-center gap-2 min-w-0 pl-1 overflow-hidden">
         <CreativeThumb
           thumbUrl={(ad as AdSnapshot & { creative_thumb_url?: string | null }).creative_thumb_url ?? null}
           geo={geo}
