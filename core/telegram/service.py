@@ -25,11 +25,6 @@ class TelegramConfig:
 
     bot_token: str  # уже расшифрован
     chat_id: int | None
-    forum_warning_thread_id: int | None
-    forum_stop_thread_id: int | None
-    forum_enable_thread_id: int | None
-    forum_ops_thread_id: int | None
-    forum_digest_thread_id: int | None
     poller_offset: int
     poller_heartbeat_at: datetime | None
 
@@ -45,10 +40,7 @@ async def load_telegram_config(engine: AsyncEngine) -> TelegramConfig | None:
                 text(
                     """
                     SELECT bot_token_encrypted, chat_id,
-                           forum_warning_thread_id, forum_stop_thread_id,
-                           forum_enable_thread_id, forum_ops_thread_id,
-                           poller_offset, poller_heartbeat_at,
-                           forum_digest_thread_id
+                           poller_offset, poller_heartbeat_at
                     FROM telegram_config
                     WHERE singleton_key = 'default'
                     """
@@ -75,13 +67,8 @@ async def load_telegram_config(engine: AsyncEngine) -> TelegramConfig | None:
     return TelegramConfig(
         bot_token=token,
         chat_id=row[1],
-        forum_warning_thread_id=row[2],
-        forum_stop_thread_id=row[3],
-        forum_enable_thread_id=row[4],
-        forum_ops_thread_id=row[5],
-        poller_offset=int(row[6] or 0),
-        poller_heartbeat_at=row[7],
-        forum_digest_thread_id=row[8],
+        poller_offset=int(row[2] or 0),
+        poller_heartbeat_at=row[3],
     )
 
 

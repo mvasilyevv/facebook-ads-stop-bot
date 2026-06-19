@@ -34,7 +34,6 @@ from core.telegram.handlers.creator import (
 from core.telegram.handlers.draft_confirm import handle_draft_callback
 from core.telegram.handlers.onboarding import handle_help, handle_start
 from core.telegram.handlers.spy import handle_spy
-from core.telegram.handlers.topics import handle_setup_topics, handle_topics
 from core.telegram.service import find_recipient
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -66,9 +65,7 @@ _LEGACY_COMMANDS: frozenset[str] = frozenset(
 # dr_cancel НЕ здесь — отмена черновика безопасна (снимает pending-действие).
 _OWNER_ONLY_CALLBACKS: frozenset[str] = frozenset({"dis", "ereco", "plan", "dr_ok"})
 # Команды (autostart с аргументами проверяется отдельно — write-путь).
-_OWNER_ONLY_COMMANDS: frozenset[str] = frozenset(
-    {"pause", "resume", "record_plan", "stop_record", "setup_topics"}
-)
+_OWNER_ONLY_COMMANDS: frozenset[str] = frozenset({"pause", "resume", "record_plan", "stop_record"})
 
 
 def _is_private(chat_type: str | None) -> bool:
@@ -367,27 +364,6 @@ async def handle_update(
             engine=engine,
             client=client,
             chat_id=chat_id,
-            thread_id=thread_id,
-        )
-        return
-
-    if cmd == "setup_topics":
-        await handle_setup_topics(
-            engine=engine,
-            client=client,
-            chat_id=chat_id,
-            message_id=message_id,
-            thread_id=thread_id,
-            args_text=args_text,
-        )
-        return
-
-    if cmd == "topics":
-        await handle_topics(
-            engine=engine,
-            client=client,
-            chat_id=chat_id,
-            message_id=message_id,
             thread_id=thread_id,
         )
         return

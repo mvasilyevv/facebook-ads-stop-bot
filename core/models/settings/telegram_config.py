@@ -5,17 +5,18 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Integer, String, text
+from sqlalchemy import BigInteger, DateTime, String, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from core.models.base import Base, SingletonMixin, Timestamp, UUIDPrimaryKey
 
 
 class TelegramConfig(UUIDPrimaryKey, SingletonMixin, Timestamp, Base):
-    """Единственная строка с токеном бота и ID форум-тредов.
+    """Единственная строка с токеном бота.
 
     bot_token_encrypted — Fernet-шифрование через core.crypto.
     poller_heartbeat_at — обновляется telegram_poller каждые ~30s.
+    Колонки forum_*_thread_id живут в БД (удаляются в Волне 4), но убраны из ORM.
     """
 
     __tablename__ = "telegram_config"
@@ -26,26 +27,6 @@ class TelegramConfig(UUIDPrimaryKey, SingletonMixin, Timestamp, Base):
     )
     chat_id: Mapped[int | None] = mapped_column(
         BigInteger,
-        nullable=True,
-    )
-    forum_warning_thread_id: Mapped[int | None] = mapped_column(
-        Integer,
-        nullable=True,
-    )
-    forum_stop_thread_id: Mapped[int | None] = mapped_column(
-        Integer,
-        nullable=True,
-    )
-    forum_enable_thread_id: Mapped[int | None] = mapped_column(
-        Integer,
-        nullable=True,
-    )
-    forum_ops_thread_id: Mapped[int | None] = mapped_column(
-        Integer,
-        nullable=True,
-    )
-    forum_digest_thread_id: Mapped[int | None] = mapped_column(
-        Integer,
         nullable=True,
     )
     poller_offset: Mapped[int] = mapped_column(

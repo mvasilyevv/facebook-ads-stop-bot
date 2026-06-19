@@ -114,7 +114,7 @@ async def test_health_without_engine_calls_send_alert(monkeypatch) -> None:
     spy_notify.assert_not_awaited()
 
 
-# health: thread_id=None в _load_tg (forum_ops убран)
+# health: thread_id=None в _load_tg (форум-топики удалены в Волне 2)
 @pytest.mark.asyncio
 async def test_health_load_tg_no_thread_id() -> None:
     import apps.health_watchdog.main as hw
@@ -123,12 +123,11 @@ async def test_health_load_tg_no_thread_id() -> None:
     fake_cfg = SimpleNamespace(
         bot_token="tok",
         chat_id=123,
-        forum_ops_thread_id=42,
     )
     engine = MagicMock()
     with patch("apps.health_watchdog.main.load_telegram_config", AsyncMock(return_value=fake_cfg)):
         _, _, thread_id = await hw._load_tg(engine)
-    # thread_id должен быть None (убран forum-топик)
+    # thread_id должен быть None
     assert thread_id is None
 
 
@@ -286,10 +285,10 @@ async def test_enable_reco_send_alert_no_engine_uses_direct_send() -> None:
     tg_client.send_message.assert_awaited_once()
 
 
-# enable_reco: _default_tg_factory не передаёт thread_id (forum убран)
+# enable_reco: _default_tg_factory не передаёт thread_id (форум-топики удалены в Волне 2)
 @pytest.mark.asyncio
 async def test_enable_reco_default_tg_factory_no_thread() -> None:
-    fake_cfg = SimpleNamespace(bot_token="tok", forum_enable_thread_id=55, forum_ops_thread_id=77)
+    fake_cfg = SimpleNamespace(bot_token="tok", chat_id=99)
     engine = MagicMock()
     with patch(
         "apps.enable_recommendation_worker.main.load_telegram_config",
@@ -304,7 +303,7 @@ async def test_enable_reco_default_tg_factory_no_thread() -> None:
 # =================== digest ===================
 
 
-# digest: run_one_tick НЕ отправляет в forum_digest_thread (блок убран)
+# digest: run_one_tick НЕ отправляет в forum_digest_thread (форум-топики удалены в Волне 2)
 @pytest.mark.asyncio
 async def test_digest_no_forum_thread_send() -> None:
     from datetime import datetime, timezone
@@ -321,7 +320,6 @@ async def test_digest_no_forum_thread_send() -> None:
     fake_cfg = SimpleNamespace(
         bot_token="tok",
         chat_id=99,
-        forum_digest_thread_id=33,
     )
     tg_client = AsyncMock()
     tg_client.send_message = AsyncMock(return_value={"ok": True})

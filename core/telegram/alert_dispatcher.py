@@ -71,11 +71,9 @@ async def _send_alert_with_fallback(
     thread_id: int | None,
     event_id: Any,
 ) -> dict | None:
-    """Шлёт алерт в форум-топик thread_id; при проблеме с топиком — fallback в General.
+    """Шлёт алерт в чат (thread_id всегда None при DM-модели); fallback в General если топик недоступен.
 
-    Форум-топики убраны редизайном, но forum_*_thread_id остались в конфиге. Если топик
-    удалён/закрыт — НЕ теряем алерт (особенно warning — ранний сигнал), а пересылаем в
-    общий чат без thread_id. Возвращает ответ Telegram (dict) или None при неудаче.
+    Возвращает ответ Telegram (dict) или None при неудаче.
     """
     try:
         return await client.send_message(

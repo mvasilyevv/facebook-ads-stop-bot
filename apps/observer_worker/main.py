@@ -683,7 +683,6 @@ async def _maybe_alert_degraded(
         await tg_client.send_message(
             chat_id=str(cfg.chat_id),
             text=text_msg,
-            message_thread_id=getattr(cfg, "forum_ops_thread_id", None),
             parse_mode="HTML",
         )
         return True

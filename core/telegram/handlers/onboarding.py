@@ -136,10 +136,6 @@ async def handle_help(
             f"{fmt.code('/stop_record')} — остановить и сохранить.",
             f"{fmt.code('/plans')} — список с кнопкой «Запустить».",
             "",
-            fmt.b("🧩 Топики супергруппы"),
-            f"{fmt.code('/setup_topics')} — создать топики и развести сообщения.",
-            f"{fmt.code('/topics')} — текущая раскладка.",
-            "",
             f"{fmt.code('/help')} — эта справка.",
         ]
     )
