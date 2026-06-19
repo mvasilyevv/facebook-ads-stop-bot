@@ -115,6 +115,153 @@ async def _send_alert_with_fallback(
         return None
 
 
+async def _deliver_one_alert(
+    engine: AsyncEngine,
+    *,
+    client: TelegramBotClient,
+    redis_client: Any,
+    chat_id: int,
+    thread_id_by_stage: dict[str, int | None],
+    event_id: Any,
+    ad_id: Any,
+    stage: str,
+    matched_codes: list,
+    metrics_json: dict,
+    open_token: Any,
+    fb_ad_id: str,
+    ad_name: str,
+    adset_name: str,
+    campaign_name: str,
+    offer_code: str | None,
+    incident_key: str,
+    counters: dict[str, int],
+) -> None:
+    """Общий движок доставки одного алерта: pre-claim → send → update/rollback.
+
+    Используется и в dispatch_pending_alerts, и в sweep_orphan_alerts (DRY).
+    Мутирует counters: {'sent', 'skipped_duplicates', 'errors'}.
+    """
+    # Pre-claim: INSERT с sentinel message_id=0 ON CONFLICT DO NOTHING.
+    # Если RETURNING пустой — кто-то уже сделал claim → skip без send'а
+    # (защита от двойного TG-сообщения при параллельных dispatch'ах).
+    async with engine.begin() as conn:
+        claim_row = (
+            await conn.execute(
+                text(
+                    """
+                    INSERT INTO telegram_message_refs
+                        (chat_id, ad_id, incident_key, stream_kind,
+                         message_id, thread_id)
+                    VALUES
+                        (:cid, :aid, :ik, :sk, 0, :tid)
+                    ON CONFLICT (chat_id, ad_id, incident_key, stream_kind)
+                    DO NOTHING
+                    RETURNING id
+                    """
+                ),
+                {
+                    "cid": int(chat_id),
+                    "aid": ad_id,
+                    "ik": incident_key,
+                    "sk": stage,
+                    "tid": thread_id_by_stage.get(str(stage)),
+                },
+            )
+        ).first()
+
+    if claim_row is None:
+        counters["skipped_duplicates"] += 1
+        return
+
+    claim_id = claim_row[0]
+
+    # Рендер сообщения и клавиатуры
+    render_input = AlertRenderInput(
+        fb_ad_id=str(fb_ad_id),
+        ad_name=str(ad_name or ""),
+        campaign_name=str(campaign_name or ""),
+        adset_name=str(adset_name or ""),
+        offer_code=str(offer_code) if offer_code else None,
+        stage=str(stage),
+        matched_rule_codes=list(matched_codes or []),
+        metrics=dict(metrics_json or {}),
+        open_state_token=str(open_token) if open_token else None,
+    )
+    text_msg = render_alert_text(render_input)
+    keyboard = render_inline_keyboard(render_input)
+
+    # Send — с fallback в General при недоступном топике (не теряем алерт).
+    thread_id = thread_id_by_stage.get(str(stage))
+    sent = await _send_alert_with_fallback(
+        client,
+        chat_id=str(chat_id),
+        text_msg=text_msg,
+        keyboard=keyboard,
+        thread_id=thread_id,
+        event_id=event_id,
+    )
+    send_failed = sent is None
+    if send_failed:
+        counters["errors"] += 1
+
+    if send_failed:
+        # Освобождаем claim, чтобы ретрай (или другой воркер) мог переслать
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(
+                    text("DELETE FROM telegram_message_refs WHERE id = :i"),
+                    {"i": claim_id},
+                )
+        except Exception:
+            logger.exception("rollback telegram_message_refs claim failed")
+        return
+
+    message_id = int((sent or {}).get("message_id", 0))
+    if message_id <= 0:
+        # Telegram не вернул message_id — sentinel-row остаётся в БД для
+        # последующей дедупликации, но без реального message_id (== 0).
+        counters["sent"] += 1
+        # Publish best-effort даже без реального message_id — алерт был отправлен
+        await _publish_alert_created(
+            redis_client,
+            fb_ad_id=str(fb_ad_id),
+            stage=str(stage),
+            matched_rule_codes=list(matched_codes or []),
+            alert_event_id=event_id,
+        )
+        return
+
+    # UPDATE claim'а реальным message_id + sent_at
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    """
+                    UPDATE telegram_message_refs
+                    SET message_id = :mid,
+                        sent_at = NOW(),
+                        last_edited_at = NOW(),
+                        deleted_at = NULL
+                    WHERE id = :i
+                    """
+                ),
+                {"mid": message_id, "i": claim_id},
+            )
+    except Exception:
+        logger.exception("update telegram_message_refs message_id failed")
+
+    # Publish в Redis-канал после успешной отправки + обновления ref (best-effort)
+    await _publish_alert_created(
+        redis_client,
+        fb_ad_id=str(fb_ad_id),
+        stage=str(stage),
+        matched_rule_codes=list(matched_codes or []),
+        alert_event_id=event_id,
+    )
+
+    counters["sent"] += 1
+
+
 async def dispatch_pending_alerts(
     engine: AsyncEngine,
     *,
@@ -173,7 +320,7 @@ async def dispatch_pending_alerts(
             )
         ).all()
 
-    counters = {"sent": 0, "skipped_duplicates": 0, "errors": 0}
+    counters: dict[str, int] = {"sent": 0, "skipped_duplicates": 0, "errors": 0}
 
     for row in events:
         (
@@ -197,127 +344,145 @@ async def dispatch_pending_alerts(
         else:
             incident_key = str(open_token)
 
-        # Pre-claim: INSERT с sentinel message_id=0 ON CONFLICT DO NOTHING.
-        # Если RETURNING пустой — кто-то уже сделал claim → skip без send'а
-        # (защита от двойного TG-сообщения при параллельных dispatch'ах).
-        async with engine.begin() as conn:
-            claim_row = (
-                await conn.execute(
-                    text(
-                        """
-                        INSERT INTO telegram_message_refs
-                            (chat_id, ad_id, incident_key, stream_kind,
-                             message_id, thread_id)
-                        VALUES
-                            (:cid, :aid, :ik, :sk, 0, :tid)
-                        ON CONFLICT (chat_id, ad_id, incident_key, stream_kind)
-                        DO NOTHING
-                        RETURNING id
-                        """
-                    ),
-                    {
-                        "cid": int(chat_id),
-                        "aid": ad_id,
-                        "ik": incident_key,
-                        "sk": stage,
-                        "tid": thread_id_by_stage.get(str(stage)),
-                    },
-                )
-            ).first()
-
-        if claim_row is None:
-            counters["skipped_duplicates"] += 1
-            continue
-
-        claim_id = claim_row[0]
-
-        # Render
-        render_input = AlertRenderInput(
+        await _deliver_one_alert(
+            engine,
+            client=client,
+            redis_client=redis_client,
+            chat_id=int(chat_id),
+            thread_id_by_stage=thread_id_by_stage,
+            event_id=event_id,
+            ad_id=ad_id,
+            stage=str(stage),
+            matched_codes=list(matched_codes or []),
+            metrics_json=dict(metrics_json or {}),
+            open_token=open_token,
             fb_ad_id=str(fb_ad_id),
             ad_name=str(ad_name or ""),
-            campaign_name=str(campaign_name or ""),
             adset_name=str(adset_name or ""),
+            campaign_name=str(campaign_name or ""),
             offer_code=str(offer_code) if offer_code else None,
-            stage=str(stage),
-            matched_rule_codes=list(matched_codes or []),
-            metrics=dict(metrics_json or {}),
-            open_state_token=str(open_token) if open_token else None,
+            incident_key=incident_key,
+            counters=counters,
         )
-        text_msg = render_alert_text(render_input)
-        keyboard = render_inline_keyboard(render_input)
-
-        # Send — с fallback в General при недоступном топике (не теряем алерт).
-        thread_id = thread_id_by_stage.get(str(stage))
-        sent = await _send_alert_with_fallback(
-            client,
-            chat_id=str(chat_id),
-            text_msg=text_msg,
-            keyboard=keyboard,
-            thread_id=thread_id,
-            event_id=event_id,
-        )
-        send_failed = sent is None
-        if send_failed:
-            counters["errors"] += 1
-
-        if send_failed:
-            # Освобождаем claim, чтобы ретрай (или другой воркер) мог переслать
-            try:
-                async with engine.begin() as conn:
-                    await conn.execute(
-                        text("DELETE FROM telegram_message_refs WHERE id = :i"),
-                        {"i": claim_id},
-                    )
-            except Exception:
-                logger.exception("rollback telegram_message_refs claim failed")
-            continue
-
-        message_id = int((sent or {}).get("message_id", 0))
-        if message_id <= 0:
-            # Telegram не вернул message_id — sentinel-row остаётся в БД для
-            # последующей дедупликации, но без реального message_id (== 0).
-            counters["sent"] += 1
-            # Publish best-effort даже без реального message_id — алерт был отправлен
-            await _publish_alert_created(
-                redis_client,
-                fb_ad_id=str(fb_ad_id),
-                stage=str(stage),
-                matched_rule_codes=list(matched_codes or []),
-                alert_event_id=event_id,
-            )
-            continue
-
-        # UPDATE claim'а реальным message_id + sent_at
-        try:
-            async with engine.begin() as conn:
-                await conn.execute(
-                    text(
-                        """
-                        UPDATE telegram_message_refs
-                        SET message_id = :mid,
-                            sent_at = NOW(),
-                            last_edited_at = NOW(),
-                            deleted_at = NULL
-                        WHERE id = :i
-                        """
-                    ),
-                    {"mid": message_id, "i": claim_id},
-                )
-        except Exception:
-            logger.exception("update telegram_message_refs message_id failed")
-
-        # Publish в Redis-канал после успешной отправки + обновления ref (best-effort)
-        await _publish_alert_created(
-            redis_client,
-            fb_ad_id=str(fb_ad_id),
-            stage=str(stage),
-            matched_rule_codes=list(matched_codes or []),
-            alert_event_id=event_id,
-        )
-
-        counters["sent"] += 1
 
     return counters
 
 
-__all__ = ["dispatch_pending_alerts"]
+async def sweep_orphan_alerts(
+    engine: AsyncEngine,
+    *,
+    client: TelegramBotClient,
+    redis_client: Any = None,
+    hours: int = 24,
+) -> dict[str, int]:
+    """Retry-sweep: ресендит alert_events за последние `hours` часов без message_ref.
+
+    Осиротевший алерт = есть alert_event, но нет соответствующего telegram_message_refs.
+    Сопоставление: ad_id + incident_key=open_state_token::text + stream_kind=stage.
+
+    Вызывается в конце каждого scan-цикла — возвращает {'sent': N, 'skipped_duplicates': M,
+    'errors': K}. Алерты с NULL open_state_token пропускаются (нет incident_key).
+    """
+    config = await load_telegram_config(engine)
+    if config is None or config.chat_id is None:
+        logger.debug("sweep_orphan_alerts: нет chat_id — пропускаю")
+        return {"sent": 0, "skipped_duplicates": 0, "errors": 0, "skipped_no_chat": 1}
+
+    chat_id = config.chat_id
+    thread_id_by_stage: dict[str, int | None] = {
+        "warning": config.forum_warning_thread_id,
+        "stop": config.forum_stop_thread_id,
+    }
+
+    since_dt = datetime.now(timezone.utc) - timedelta(hours=hours)
+
+    # SELECT осиротевших: alert_events за окно hours, где НЕТ matching message_ref.
+    # NOT EXISTS сопоставляет по (ad_id, incident_key=open_state_token::text, stream_kind=stage).
+    # Фильтр created_at >= :since обеспечивает partition pruning в partitioned-таблице.
+    # NULL open_state_token исключаем — нет incident_key для дедупликации.
+    async with engine.connect() as conn:
+        orphans = (
+            await conn.execute(
+                text(
+                    """
+                    SELECT
+                        e.id, e.ad_id, e.stage, e.state,
+                        e.matched_rule_codes, e.metrics_json, e.open_state_token,
+                        a.fb_ad_id, a.ad_name,
+                        ads.adset_name,
+                        c.campaign_name,
+                        o.code AS offer_code
+                    FROM alert_events e
+                    JOIN fb_ads a ON a.id = e.ad_id
+                    JOIN fb_adsets ads ON ads.id = a.adset_id
+                    JOIN fb_campaigns c ON c.id = ads.campaign_id
+                    LEFT JOIN offers o ON o.id = c.offer_id
+                    WHERE e.created_at >= :since
+                      AND e.open_state_token IS NOT NULL
+                      AND NOT EXISTS (
+                          SELECT 1 FROM telegram_message_refs r
+                          WHERE r.ad_id = e.ad_id
+                            AND r.incident_key = e.open_state_token::text
+                            AND r.stream_kind = e.stage
+                      )
+                    ORDER BY e.created_at
+                    """
+                ),
+                {"since": since_dt},
+            )
+        ).all()
+
+    if not orphans:
+        return {"sent": 0, "skipped_duplicates": 0, "errors": 0}
+
+    logger.info("sweep_orphan_alerts: найдено %d осиротевших алертов за %dч", len(orphans), hours)
+
+    counters: dict[str, int] = {"sent": 0, "skipped_duplicates": 0, "errors": 0}
+
+    for row in orphans:
+        (
+            event_id,
+            ad_id,
+            stage,
+            _state,
+            matched_codes,
+            metrics_json,
+            open_token,
+            fb_ad_id,
+            ad_name,
+            adset_name,
+            campaign_name,
+            offer_code,
+        ) = row
+
+        # open_state_token IS NOT NULL гарантирован WHERE-фильтром выше
+        incident_key = str(open_token)
+
+        await _deliver_one_alert(
+            engine,
+            client=client,
+            redis_client=redis_client,
+            chat_id=int(chat_id),
+            thread_id_by_stage=thread_id_by_stage,
+            event_id=event_id,
+            ad_id=ad_id,
+            stage=str(stage),
+            matched_codes=list(matched_codes or []),
+            metrics_json=dict(metrics_json or {}),
+            open_token=open_token,
+            fb_ad_id=str(fb_ad_id),
+            ad_name=str(ad_name or ""),
+            adset_name=str(adset_name or ""),
+            campaign_name=str(campaign_name or ""),
+            offer_code=str(offer_code) if offer_code else None,
+            incident_key=incident_key,
+            counters=counters,
+        )
+
+    if counters["sent"]:
+        logger.info("sweep_orphan_alerts: отправлено %d алертов", counters["sent"])
+
+    return counters
+
+
+__all__ = ["dispatch_pending_alerts", "sweep_orphan_alerts"]

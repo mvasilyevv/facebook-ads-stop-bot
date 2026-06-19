@@ -421,11 +421,32 @@ async def _run_account_scan(
                 )
                 try:
                     dispatched = await dispatch_pending_alerts(
-                        engine, client=tg_client, scan_id=scan_id
+                        engine,
+                        client=tg_client,
+                        scan_id=scan_id,
+                        redis_client=redis_client,
                     )
                 except Exception:
                     logger.exception("alert dispatch failed — продолжаю")
                     dispatched = {"sent": 0, "errors": 1}
+
+            # Retry-sweep осиротевших алертов (TG-outage мог удалить pre-claim
+            # без отправки; FSM уже в stop_sent → emit_alert=False → без sweep навсегда потерян).
+            # Запускаем каждый цикл независимо от наличия новых алертов.
+            if tg_client is not None:
+                from core.telegram.alert_dispatcher import sweep_orphan_alerts
+
+                try:
+                    swept = await sweep_orphan_alerts(
+                        engine, client=tg_client, redis_client=redis_client
+                    )
+                    if swept.get("sent"):
+                        logger.info(
+                            "sweep_orphan_alerts: досланы %d осиротевших алертов",
+                            swept["sent"],
+                        )
+                except Exception:
+                    logger.exception("sweep_orphan_alerts failed — продолжаю")
     except Exception as exc:
         logger.exception("scan cycle crashed (кабинет=%s): %s", ad_account_id or "-", exc)
         outcome = "error"
