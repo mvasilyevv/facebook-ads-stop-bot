@@ -18,7 +18,6 @@ import type { AdSnapshot } from "@fb/shared";
 vi.mock("@/lib/api/ads", () => ({
   useAds: vi.fn(),
   useAdTimeline: vi.fn(() => ({ data: undefined, isLoading: false, isError: false })),
-  useSnoozeAd: vi.fn(() => ({ mutateAsync: vi.fn().mockResolvedValue({}), isPending: false })),
   useBulkDisable: vi.fn(() => ({ mutateAsync: vi.fn().mockResolvedValue({}), isPending: false })),
 }));
 

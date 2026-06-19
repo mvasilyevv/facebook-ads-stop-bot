@@ -50,16 +50,11 @@ vi.mock("@/lib/api/ads", () => ({
     mutateAsync: mockBulkDisable,
     isPending: false,
   })),
-  useBulkSnooze: vi.fn(() => ({
-    mutateAsync: vi.fn().mockResolvedValue({}),
-    isPending: false,
-  })),
   useDeleteAds: vi.fn(() => ({
     mutateAsync: vi.fn().mockResolvedValue({ deleted: [], count: 0 }),
     isPending: false,
   })),
   useAdTimeline: vi.fn(() => ({ data: null, isLoading: false, isError: false })),
-  useSnoozeAd: vi.fn(() => ({ mutateAsync: vi.fn(), isPending: false })),
   useDisableTasks: vi.fn(() => ({ data: [], isLoading: false, isError: false, refetch: vi.fn() })),
   useEnableTasks: vi.fn(() => ({ data: [], isLoading: false, isError: false, refetch: vi.fn() })),
 }));

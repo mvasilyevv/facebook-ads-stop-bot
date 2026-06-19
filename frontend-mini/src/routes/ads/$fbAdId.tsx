@@ -5,16 +5,14 @@
  * Канон: Eyebrow «ОБЪЯВЛЕНИЕ», имя mono text-bg-11, AlertStateBadge + Pill offer_code,
  * danger-callout с RulePills, MetricsGrid 3 колонки, AlertTimeline, кнопки 44px.
  *
- * API: useTmaAd(fbAdId) + useTmaDisable + useTmaSnooze + useTmaClaim.
+ * API: useTmaAd(fbAdId) + useTmaDisable + useTmaClaim.
  * BackButton — нативный TG (TelegramBackButton в __root по паттерну /ads/.+).
  * TabBar скрывается (TabBar.tsx HIDDEN_ON: /^\/ads\/.+$/).
  */
-import { useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import {
   useTmaAd,
   useTmaDisable,
-  useTmaSnooze,
   useTmaClaim,
 } from "@/lib/api";
 import {
@@ -42,19 +40,14 @@ export const Route = createFileRoute("/ads/$fbAdId")({
   component: AdDetailPage,
 });
 
-// Варианты снуза (минуты)
-const SNOOZE_OPTIONS = [30, 60, 120] as const;
-
 function AdDetailPage() {
   const { fbAdId } = Route.useParams();
-  const [snoozeOpen, setSnoozeOpen] = useState(false);
 
   const { data, isLoading, isError, error, refetch } = useTmaAd(fbAdId);
   const disable = useTmaDisable();
-  const snooze = useTmaSnooze();
   const claim = useTmaClaim();
 
-  const busy = disable.isPending || snooze.isPending || claim.isPending;
+  const busy = disable.isPending || claim.isPending;
 
   /** Отключить через API: confirm → мутация. */
   async function handleDisable() {
@@ -64,23 +57,6 @@ function AdDetailPage() {
     try {
       await disable.mutateAsync({ fbAdId });
       await tgAlert("Задача отключения поставлена");
-    } catch (e) {
-      await tgAlert((e as Error).message ?? "Ошибка");
-    }
-  }
-
-  /** Снуз на N минут. */
-  async function handleSnooze(minutes: number) {
-    haptic.selection();
-    setSnoozeOpen(false);
-    try {
-      const res = await snooze.mutateAsync({ fbAdId, minutes });
-      await tgAlert(
-        `Снуз до ${new Date(res.snoozed_until).toLocaleTimeString("ru-RU", {
-          hour: "2-digit",
-          minute: "2-digit",
-        })}`,
-      );
     } catch (e) {
       await tgAlert((e as Error).message ?? "Ошибка");
     }
@@ -151,7 +127,6 @@ function AdDetailPage() {
     adset_name,
     offer_code,
     state,
-    snooze_until,
     can_open_in_ads_manager,
     recent_alerts = [],
   } = data;
@@ -161,8 +136,6 @@ function AdDetailPage() {
 
   // Инцидент активен → показываем Claim
   const hasIncident = ["warning_sent", "stop_sent", "claimed"].includes(normalized);
-  // Снуз активен?
-  const snoozeActive = snooze_until != null && new Date(snooze_until).getTime() > Date.now();
 
   // Сработавшие правила: TmaRecentAlert не содержит rule_codes — callout не рендерится
   const alertRuleCodes: string[] = [];
@@ -262,28 +235,6 @@ function AdDetailPage() {
           </p>
         )}
 
-        {/* Снуз-баннер */}
-        {snoozeActive && snooze_until && (
-          <div
-            className="mt-2 px-3 py-2 flex items-center gap-2"
-            style={{
-              background: "var(--color-warning-bg)",
-              borderLeft: "2px solid var(--color-warning)",
-              borderRadius: "var(--radius-1)",
-            }}
-          >
-            <span
-              className="font-display text-warning"
-              style={{ fontSize: 12 }}
-            >
-              СНУЗ до{" "}
-              {new Date(snooze_until).toLocaleTimeString("ru-RU", {
-                hour: "2-digit",
-                minute: "2-digit",
-              })}
-            </span>
-          </div>
-        )}
       </header>
 
       <div className="flex flex-col gap-5 p-4">
@@ -335,83 +286,42 @@ function AdDetailPage() {
         <section className="flex flex-col gap-2.5">
           <Eyebrow className="mb-0.5">ДЕЙСТВИЯ</Eyebrow>
 
-          {/* Снуз: кнопка или inline-опции */}
-          {snoozeOpen ? (
-            <div className="flex flex-col gap-2">
-              <Eyebrow className="text-bg-9">ВЫБЕРИ ВРЕМЯ</Eyebrow>
-              {SNOOZE_OPTIONS.map((min) => (
-                <Button
-                  key={min}
-                  variant="secondary"
-                  size="md"
-                  fullWidth
-                  loading={snooze.isPending}
-                  disabled={busy}
-                  onClick={() => void handleSnooze(min)}
-                >
-                  {min} минут
-                </Button>
-              ))}
-              <Button
-                variant="ghost"
-                size="md"
-                fullWidth
-                disabled={busy}
-                onClick={() => { haptic.selection(); setSnoozeOpen(false); }}
-              >
-                Отмена
-              </Button>
-            </div>
-          ) : (
-            <>
-              <Button
-                variant="secondary"
-                size="md"
-                fullWidth
-                disabled={busy}
-                onClick={() => { haptic.selection(); setSnoozeOpen(true); }}
-              >
-                Снуз...
-              </Button>
+          {/* Claim — только при активном инциденте */}
+          {hasIncident && (
+            <Button
+              variant="secondary"
+              size="md"
+              fullWidth
+              loading={claim.isPending}
+              disabled={busy}
+              onClick={() => void handleClaim()}
+            >
+              Снять алерт
+            </Button>
+          )}
 
-              {/* Claim — только при активном инциденте */}
-              {hasIncident && (
-                <Button
-                  variant="secondary"
-                  size="md"
-                  fullWidth
-                  loading={claim.isPending}
-                  disabled={busy}
-                  onClick={() => void handleClaim()}
-                >
-                  Снять алерт
-                </Button>
-              )}
+          {/* Disable — опасное действие */}
+          <Button
+            variant="danger"
+            size="md"
+            fullWidth
+            loading={disable.isPending}
+            disabled={busy}
+            onClick={() => void handleDisable()}
+          >
+            Отключить объявление
+          </Button>
 
-              {/* Disable — опасное действие */}
-              <Button
-                variant="danger"
-                size="md"
-                fullWidth
-                loading={disable.isPending}
-                disabled={busy}
-                onClick={() => void handleDisable()}
-              >
-                Отключить объявление
-              </Button>
-
-              {/* Открыть в Ads Manager */}
-              {can_open_in_ads_manager && (
-                <Button
-                  variant="ghost"
-                  size="md"
-                  fullWidth
-                  onClick={handleOpenAdsManager}
-                >
-                  Открыть в Ads Manager ↗
-                </Button>
-              )}
-            </>
+          {/* Открыть в Ads Manager */}
+          {can_open_in_ads_manager && (
+            <Button
+              variant="ghost"
+              size="md"
+              fullWidth
+              onClick={handleOpenAdsManager}
+            >
+              Открыть в Ads Manager ↗
+            </Button>
           )}
         </section>
 

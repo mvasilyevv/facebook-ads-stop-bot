@@ -3,13 +3,13 @@
  *
  * Появляется по центру внизу при выборе ≥1 строки. Стиль: bg-3, 1px bg-7
  * border, анимация входа fbRise. Содержимое: «N выбрано» + Disable (danger,
- * money) + Snooze 1ч (прямая кнопка) + «Очистить выбор».
+ * money) + «Очистить выбор».
  *
  * Disable открывает confirm-with-typing на стороне страницы.
  * Presentational: все колбэки приходят снаружи.
  */
 
-import { Ban, Clock, CheckSquare, Trash2, X } from "lucide-react";
+import { Ban, CheckSquare, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 
 export interface BulkActionBarProps {
@@ -19,8 +19,6 @@ export interface BulkActionBarProps {
   isPending?: boolean;
 
   onDisable: () => void;
-  /** Snooze выбранных (минуты). */
-  onSnooze: (minutes: number) => void;
   /** Отметить «в работе» (claimed). */
   onMarkClaimed?: () => void;
   /** Hard-delete выбранных из каталога (необратимо). */
@@ -32,7 +30,6 @@ export function BulkActionBar({
   count,
   isPending = false,
   onDisable,
-  onSnooze,
   onMarkClaimed,
   onDelete,
   onClear,
@@ -63,18 +60,6 @@ export function BulkActionBar({
         aria-label={`Отключить ${count} объявлений`}
       >
         Отключить
-      </Button>
-
-      {/* Снуз 1 час — прямая кнопка */}
-      <Button
-        variant="secondary"
-        size="sm"
-        leftIcon={<Clock size={14} aria-hidden="true" />}
-        onClick={() => onSnooze(60)}
-        disabled={isPending}
-        aria-label="Снуз на 1 час"
-      >
-        Снуз 1ч
       </Button>
 
       {/* Отметить в работе (опционально) */}

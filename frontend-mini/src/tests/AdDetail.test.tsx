@@ -1,14 +1,13 @@
 /**
  * Тесты AdDetail под обновлённый канон.
  * Покрывает: рендер STOP_SENT, Eyebrow/бейдж/offer-pill, MetricsGrid,
- * AlertTimeline, кнопки действий (Disable confirm-flow, Snooze, Claim),
+ * AlertTimeline, кнопки действий (Disable confirm-flow, Claim),
  * кнопка Ads Manager, состояния loading/error.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useState } from "react";
 import { normalizeAlertState } from "@fb/shared";
 import { AlertStateBadge, Button, Pill } from "@/components/ui";
 import { Eyebrow } from "@/components/data";
@@ -66,7 +65,6 @@ interface MockAdData {
   adset_name: string | null;
   offer_code: string | null;
   state: string;
-  snooze_until: string | null;
   account_id: string | null;
   can_open_in_ads_manager: boolean;
   metrics: MockMetrics;
@@ -82,7 +80,6 @@ const STOP_AD: MockAdData = {
   adset_name: "CR2-adset-1",
   offer_code: "CR2",
   state: "STOP_SENT",
-  snooze_until: null,
   account_id: "act_123456",
   can_open_in_ads_manager: true,
   metrics: {
@@ -108,20 +105,9 @@ const NORMAL_AD: MockAdData = {
   recent_alerts: [],
 };
 
-const SNOOZED_AD: MockAdData = {
-  ...STOP_AD,
-  fb_ad_id: "ad_snooze_003",
-  state: "WARNING_SENT",
-  snooze_until: new Date(Date.now() + 30 * 60_000).toISOString(),
-};
-
 // ─── Моки API ────────────────────────────────────────────────────────────────
 
 const disableMutate = vi.fn().mockResolvedValue({ ok: true });
-const snoozeMutate = vi.fn().mockResolvedValue({
-  ok: true,
-  snoozed_until: new Date(Date.now() + 30 * 60_000).toISOString(),
-});
 const claimMutate = vi.fn().mockResolvedValue({ ok: true });
 
 let mockAdData: MockAdData | null = STOP_AD;
@@ -140,10 +126,6 @@ vi.mock("@/lib/api", () => ({
     mutateAsync: disableMutate,
     isPending: false,
   }),
-  useTmaSnooze: () => ({
-    mutateAsync: snoozeMutate,
-    isPending: false,
-  }),
   useTmaClaim: () => ({
     mutateAsync: claimMutate,
     isPending: false,
@@ -152,7 +134,7 @@ vi.mock("@/lib/api", () => ({
 
 // ─── Тестовый компонент ───────────────────────────────────────────────────────
 
-import { useTmaAd, useTmaDisable, useTmaSnooze, useTmaClaim } from "@/lib/api";
+import { useTmaAd, useTmaDisable, useTmaClaim } from "@/lib/api";
 import { tgConfirm, openLink } from "@/lib/tg";
 import type { TmaAdMetrics } from "@/lib/api";
 
@@ -161,12 +143,10 @@ interface TestAdDetailPageProps {
 }
 
 function TestAdDetailPage({ fbAdId = "ad_stop_001" }: TestAdDetailPageProps) {
-  const [snoozeOpen, setSnoozeOpen] = useState(false);
   const { data, isLoading, isError } = useTmaAd(fbAdId);
   const disable = useTmaDisable();
-  const snooze = useTmaSnooze();
   const claim = useTmaClaim();
-  const busy = disable.isPending || snooze.isPending || claim.isPending;
+  const busy = disable.isPending || claim.isPending;
 
   if (isLoading) return <div data-testid="loading">Загрузка...</div>;
   if (isError || !data) return <div data-testid="error">Ошибка</div>;
@@ -174,8 +154,6 @@ function TestAdDetailPage({ fbAdId = "ad_stop_001" }: TestAdDetailPageProps) {
   const ad = data as MockAdData;
   const normalized = normalizeAlertState(ad.state);
   const hasIncident = ["warning_sent", "stop_sent", "claimed"].includes(normalized);
-  const snoozeActive =
-    ad.snooze_until != null && new Date(ad.snooze_until).getTime() > Date.now();
 
   const metrics: TmaAdMetrics = (ad.metrics ?? {}) as TmaAdMetrics;
   const cplValue = metrics.cost_per_lead != null ? parseFloat(String(metrics.cost_per_lead)) : null;
@@ -211,10 +189,6 @@ function TestAdDetailPage({ fbAdId = "ad_stop_001" }: TestAdDetailPageProps) {
       {ad.offer_code && (
         <Pill variant="accent">{ad.offer_code}</Pill>
       )}
-      {/* Снуз-баннер */}
-      {snoozeActive && (
-        <div data-testid="snooze-banner">СНУЗ активен</div>
-      )}
       {/* Метрики */}
       <MetricsGrid cells={metricCells} />
       {/* Алерты */}
@@ -227,24 +201,6 @@ function TestAdDetailPage({ fbAdId = "ad_stop_001" }: TestAdDetailPageProps) {
         </div>
       )}
       {/* Кнопки */}
-      <Button
-        variant="secondary"
-        disabled={busy}
-        onClick={() => setSnoozeOpen(true)}
-        data-testid="btn-snooze-open"
-      >
-        Снуз...
-      </Button>
-      {snoozeOpen && (
-        <div data-testid="snooze-options">
-          <Button
-            onClick={() => void snooze.mutateAsync({ fbAdId, minutes: 30 })}
-            data-testid="btn-snooze-30"
-          >
-            30 минут
-          </Button>
-        </div>
-      )}
       {hasIncident && (
         <Button
           variant="secondary"
@@ -294,10 +250,6 @@ describe("AdDetail", () => {
     mockTgAlert.mockReset().mockResolvedValue(undefined);
     disableMutate.mockReset().mockResolvedValue({ ok: true });
     claimMutate.mockReset().mockResolvedValue({ ok: true });
-    snoozeMutate.mockReset().mockResolvedValue({
-      ok: true,
-      snoozed_until: new Date(Date.now() + 30 * 60_000).toISOString(),
-    });
   });
 
   // Базовый рендер: имя объявления видно
@@ -382,26 +334,6 @@ describe("AdDetail", () => {
     });
   });
 
-  // Кнопка Snooze открывает варианты
-  it("Снуз открывает опции выбора времени", async () => {
-    render(<Wrapper />);
-    const user = userEvent.setup();
-    await user.click(screen.getByTestId("btn-snooze-open"));
-    expect(screen.getByTestId("snooze-options")).toBeInTheDocument();
-    expect(screen.getByTestId("btn-snooze-30")).toBeInTheDocument();
-  });
-
-  // Кнопка 30 минут вызывает мутацию
-  it("Снуз 30 минут вызывает mutateAsync", async () => {
-    render(<Wrapper />);
-    const user = userEvent.setup();
-    await user.click(screen.getByTestId("btn-snooze-open"));
-    await user.click(screen.getByTestId("btn-snooze-30"));
-    await waitFor(() => {
-      expect(snoozeMutate).toHaveBeenCalledWith({ fbAdId: "ad_stop_001", minutes: 30 });
-    });
-  });
-
   // Кнопка Ads Manager видна при can_open_in_ads_manager=true
   it("кнопка Ads Manager видна при can_open_in_ads_manager=true", () => {
     render(<Wrapper />);
@@ -413,13 +345,6 @@ describe("AdDetail", () => {
     mockAdData = { ...STOP_AD, can_open_in_ads_manager: false };
     render(<Wrapper />);
     expect(screen.queryByTestId("btn-ads-manager")).not.toBeInTheDocument();
-  });
-
-  // Снуз-баннер виден при активном снузе
-  it("показывает снуз-баннер при активном снузе", () => {
-    mockAdData = SNOOZED_AD;
-    render(<Wrapper />);
-    expect(screen.getByTestId("snooze-banner")).toBeInTheDocument();
   });
 
   // Состояние загрузки

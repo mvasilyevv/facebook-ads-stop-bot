@@ -6,8 +6,6 @@
  *   GET  /api/ads/{fb_ad_id}/timeline               → AdTimeline
  *   POST /api/dashboard/disable-tasks               → TaskQueueRow
  *   POST /api/dashboard/disable-tasks/bulk          → BulkDisableResult
- *   POST /api/dashboard/ads/{fb_ad_id}/snooze       → SnoozeResult
- *   POST /api/dashboard/ads/bulk-snooze             → BulkSnoozeResult
  *   GET  /api/dashboard/disable-tasks               → TaskQueueRow[]
  *   GET  /api/dashboard/enable-tasks                → EnableTaskRow[]
  */
@@ -19,7 +17,6 @@ import type { components } from "@fb/shared/api/generated";
 
 type EnableTaskRow = components["schemas"]["EnableTaskRowOut"];
 type BulkDisableResult = components["schemas"]["BulkDisableResultOut"];
-type BulkSnoozeResult = components["schemas"]["BulkSnoozeResultOut"];
 
 // ─── Ads list (общий для Dashboard + AdsPage) ─────────────────────────────────
 
@@ -138,45 +135,3 @@ export function useDeleteAds() {
   });
 }
 
-// ─── Snooze одного объявления ─────────────────────────────────────────────────
-
-interface SnoozeIn {
-  minutes: number;
-}
-
-interface SnoozeResult {
-  ok: boolean;
-  fb_ad_id: string;
-  snoozed_until: string;
-}
-
-export function useSnoozeAd(fbAdId: string) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (body: SnoozeIn) =>
-      apiSend<SnoozeResult>("POST", `/dashboard/ads/${fbAdId}/snooze`, body),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["ads"] });
-      qc.invalidateQueries({ queryKey: ["dashboard"] });
-    },
-  });
-}
-
-// ─── Bulk snooze ──────────────────────────────────────────────────────────────
-
-interface BulkSnoozeIn {
-  fb_ad_ids: string[];
-  minutes: number;
-}
-
-export function useBulkSnooze() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (body: BulkSnoozeIn) =>
-      apiSend<BulkSnoozeResult>("POST", "/dashboard/ads/bulk-snooze", body),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["ads"] });
-      qc.invalidateQueries({ queryKey: ["dashboard"] });
-    },
-  });
-}

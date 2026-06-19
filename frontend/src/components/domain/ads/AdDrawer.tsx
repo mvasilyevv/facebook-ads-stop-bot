@@ -9,7 +9,7 @@
  *           flagged-ячейки danger.
  *   CPL sparkline (8 точек) — из timeline (CPL = spend/leads по точке).
  *   task-history секция (alerts + tasks DESC).
- *   footer: Snooze 1ч / Disable (MONEY: confirm-with-typing).
+ *   footer: Disable (MONEY: confirm-with-typing).
  *
  * Заголовок строится мгновенно из переданного AdSnapshot (строка таблицы),
  * детали (timeline) догружаются. Esc / scrim / крест закрывают (через Drawer).
@@ -19,7 +19,7 @@
  */
 
 import { useMemo, useState } from "react";
-import { Ban, Clock } from "lucide-react";
+import { Ban } from "lucide-react";
 
 import {
   ALERT_STATE_LABELS,
@@ -40,7 +40,7 @@ import { Eyebrow } from "@/components/data/Eyebrow";
 import { toast } from "@/components/ui/Toast";
 import { cn } from "@/lib/utils/cn";
 
-import { useAdTimeline, useSnoozeAd, useBulkDisable } from "@/lib/api/ads";
+import { useAdTimeline, useBulkDisable } from "@/lib/api/ads";
 import {
   adAccountId,
   readAdMetrics,
@@ -80,9 +80,8 @@ export function AdDrawer({ ad, onClose, isLoading = false, fbAdId }: AdDrawerPro
     include_tasks: true,
   });
 
-  const snooze = useSnoozeAd(resolvedId);
   const bulkDisable = useBulkDisable();
-  const pending = snooze.isPending || bulkDisable.isPending;
+  const pending = bulkDisable.isPending;
 
   // CPL sparkline (8 точек): CPL = spend/leads по точкам timeline.
   const cplSpark = useMemo<number[]>(() => {
@@ -120,18 +119,6 @@ export function AdDrawer({ ad, onClose, isLoading = false, fbAdId }: AdDrawerPro
     out.sort((x, y) => new Date(y.ts).getTime() - new Date(x.ts).getTime());
     return out;
   }, [timeline]);
-
-  async function handleSnooze() {
-    if (!resolvedId) return;
-    // L13: ждём результат — success только при фактическом успехе (был optimistic
-    // toast при fire-and-forget). Ошибку покажет глобальный MutationCache.onError.
-    try {
-      await snooze.mutateAsync({ minutes: 60 });
-      toast.success("Snooze на 1 час");
-    } catch {
-      /* глобальный onError покажет ошибку */
-    }
-  }
 
   // MONEY: disable одного — idempotency_token=randomUUID (отдельное поле).
   async function handleDisableConfirm() {
@@ -247,7 +234,7 @@ export function AdDrawer({ ad, onClose, isLoading = false, fbAdId }: AdDrawerPro
         }
         footer={
           // Уже отключённое объявление (alert_state='disabled' после авто/ручного pause)
-          // не предлагаем отключать снова — показываем статус. Snooze тоже бессмыслен.
+          // не предлагаем отключать снова — показываем статус.
           state === "disabled" ? (
             <div
               className="flex w-full items-center justify-center gap-2 py-1 text-[13px] text-bg-9"
@@ -258,16 +245,6 @@ export function AdDrawer({ ad, onClose, isLoading = false, fbAdId }: AdDrawerPro
             </div>
           ) : (
             <div className="flex w-full gap-3">
-              <Button
-                variant="secondary"
-                className="flex-1"
-                leftIcon={<Clock size={15} aria-hidden="true" />}
-                onClick={handleSnooze}
-                disabled={pending}
-                aria-label="Снуз на 1 час"
-              >
-                Snooze 1ч
-              </Button>
               <Button
                 variant="danger"
                 className="flex-1"

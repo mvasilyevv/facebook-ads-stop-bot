@@ -8,7 +8,6 @@
  *   - triggered-rule banner;
  *   - Esc / close → navigate назад к /ads;
  *   - footer Disable → ConfirmDialog (confirm-with-typing, placeholder DISABLE);
- *   - footer Snooze 1ч → useSnoozeAd(minutes=60);
  *   - skeleton при загрузке (ad=null).
  */
 
@@ -29,12 +28,9 @@ vi.mock("@tanstack/react-router", () => ({
   useParams: () => ({ fbAdId: FB_AD_ID }),
 }));
 
-const mockSnooze = vi.fn().mockResolvedValue({});
-
 vi.mock("@/lib/api/ads", () => ({
   useAds: vi.fn(),
   useAdTimeline: vi.fn(() => ({ data: undefined, isLoading: false, isError: false })),
-  useSnoozeAd: vi.fn(() => ({ mutateAsync: mockSnooze, isPending: false })),
   useBulkDisable: vi.fn(() => ({ mutateAsync: vi.fn().mockResolvedValue({}), isPending: false })),
 }));
 
@@ -188,12 +184,4 @@ describe("AdDrawer (deep-link /ads/$fbAdId)", () => {
     expect(screen.getByText(/Объявление отключено/i)).toBeInTheDocument();
   });
 
-  // Footer Snooze 1ч → useSnoozeAd(60).
-  it("Snooze 1ч вызывает useSnoozeAd с minutes=60", async () => {
-    const user = userEvent.setup();
-    await renderDrawer();
-
-    await user.click(screen.getByRole("button", { name: /Снуз на 1 час/i }));
-    expect(mockSnooze).toHaveBeenCalledWith({ minutes: 60 });
-  });
 });

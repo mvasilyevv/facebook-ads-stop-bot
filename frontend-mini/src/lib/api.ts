@@ -105,11 +105,6 @@ export interface TmaDisableResponse {
   detail: string;
 }
 
-export interface TmaSnoozeResponse {
-  ok: boolean;
-  snoozed_until: string;
-}
-
 export interface TmaClaimResponse {
   ok: boolean;
   alert_state: string;
@@ -219,21 +214,6 @@ export function useTmaDisable() {
     onSuccess: (_data, { fbAdId }) => {
       void qc.invalidateQueries({ queryKey: QK.tmaAd(fbAdId) });
       void qc.invalidateQueries({ queryKey: QK.dashboardBatch });
-    },
-  });
-}
-
-/** Снуз объявления на N минут. */
-export function useTmaSnooze() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({ fbAdId, minutes }: { fbAdId: string; minutes: number }) =>
-      fetchJson<TmaSnoozeResponse>(`/tma/ads/${encodeURIComponent(fbAdId)}/snooze`, {
-        method: "POST",
-        body: JSON.stringify({ minutes }),
-      }),
-    onSuccess: (_data, { fbAdId }) => {
-      void qc.invalidateQueries({ queryKey: QK.tmaAd(fbAdId) });
     },
   });
 }

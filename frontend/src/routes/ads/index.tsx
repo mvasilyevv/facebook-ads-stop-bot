@@ -39,7 +39,7 @@ import { AdsTable } from "@/components/domain/ads/AdsTable";
 import { BulkActionBar } from "@/components/domain/ads/BulkActionBar";
 import { AdDrawer } from "@/components/domain/ads/AdDrawer";
 
-import { useAds, useBulkDisable, useBulkSnooze, useDeleteAds } from "@/lib/api/ads";
+import { useAds, useBulkDisable, useDeleteAds } from "@/lib/api/ads";
 import { useDashboardStats } from "@/lib/api/dashboard";
 import { useRealtimeInvalidation } from "@/lib/websocket/useRealtimeInvalidation";
 import { useUiStore, DENSITY_ROW_HEIGHT } from "@/stores/ui";
@@ -212,7 +212,6 @@ function AdsPage() {
 
   // ── Мутации ──────────────────────────────────────────────────────────────
   const bulkDisable = useBulkDisable();
-  const bulkSnooze = useBulkSnooze();
   const deleteAds = useDeleteAds();
 
   // ── Колбэки фильтров ───────────────────────────────────────────────────────
@@ -310,28 +309,6 @@ function AdsPage() {
     const res = await deleteAds.mutateAsync(ids);
     clearSelection();
     toast.success(`Удалено ${res?.count ?? ids.length} объявлений из базы`);
-  }
-
-  // ── Snooze выбранных ────────────────────────────────────────────────────
-  async function handleBulkSnooze(minutes: number) {
-    const ids = [...selected];
-    if (ids.length === 0) return;
-    // L12/L13: ждём результат и показываем фактический (snoozed/failed), а не
-    // оптимистичный счёт. Раньше success показывался даже при провале, а partial-
-    // failure тихо проглатывался. Ошибку покажет глобальный MutationCache.onError.
-    try {
-      const res = await bulkSnooze.mutateAsync({ fb_ad_ids: ids, minutes });
-      clearSelection();
-      const failed = res?.failed?.length ?? 0;
-      const ok = res?.snoozed?.length ?? ids.length;
-      if (failed > 0) {
-        toast.warning(`Snooze: ${ok} ok, ${failed} не удалось`, "Часть объявлений не снузнулась");
-      } else {
-        toast.success(`Snooze ${ok} объявлений на ${minutes}м`);
-      }
-    } catch {
-      /* глобальный onError покажет ошибку */
-    }
   }
 
   // ── Keyboard nav ───────────────────────────────────────────────────────────
@@ -465,9 +442,8 @@ function AdsPage() {
       {selected.size > 0 && (
         <BulkActionBar
           count={selected.size}
-          isPending={bulkDisable.isPending || bulkSnooze.isPending || deleteAds.isPending}
+          isPending={bulkDisable.isPending || deleteAds.isPending}
           onDisable={() => setConfirmOpen(true)}
-          onSnooze={handleBulkSnooze}
           onDelete={() => setConfirmDeleteOpen(true)}
           onClear={clearSelection}
         />
