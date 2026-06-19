@@ -1260,8 +1260,8 @@ fi
 # 12. Caffeinate — запрет сна ноутбука
 # ==========================================
 if command -v caffeinate &>/dev/null; then
-    # -w $$ — caffeinate завершится автоматически при гибели скрипта
-    caffeinate -i -d -w $$ &
+    # -d дисплей, -i idle-sleep, -m disk-sleep, -s system-sleep на AC, -w $$ — завершение со скриптом
+    caffeinate -d -i -m -s -w $$ &
     CAFFEINATE_PID=$!
     append_pid "$CAFFEINATE_PID" "caffeinate"
     CAFFEINATE_ENABLED=1
@@ -1287,7 +1287,10 @@ echo -e "  ⏹  Остановка: ${YELLOW}./run.sh --down${NC}"
 echo -e "  📋 Просмотр:  ${YELLOW}./run.sh --logs${NC}"
 echo ""
 if [ "${CAFFEINATE_ENABLED:-0}" -eq 1 ]; then
-    echo -e "${YELLOW}☕ Сон ноутбука заблокирован (caffeinate)${NC}"
+    echo -e "${YELLOW}☕ Сон ноутбука заблокирован (caffeinate -d -i -m -s)${NC}"
+    echo -e "${YELLOW}⚠️  ВАЖНО: caffeinate НЕ держит сон при ЗАКРЫТОЙ КРЫШКЕ (clamshell) и ненадёжен на батарее.${NC}"
+    echo -e "${YELLOW}   Для 24/7: держите ноут на ЗАРЯДКЕ (AC) и НЕ закрывайте крышку —${NC}"
+    echo -e "${YELLOW}   иначе Vision-канал авто-стопа умрёт (инцидент 2026-06-19).${NC}"
 else
     echo -e "${YELLOW}⚠️  caffeinate недоступен — запрет сна не включён${NC}"
 fi
