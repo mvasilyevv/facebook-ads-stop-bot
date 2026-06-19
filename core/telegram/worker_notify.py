@@ -17,7 +17,11 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from core.telegram.client import TelegramBotClient
-from core.telegram.service import load_owner_recipients, load_telegram_config
+from core.telegram.service import (
+    load_active_recipients,
+    load_owner_recipients,
+    load_telegram_config,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -90,4 +94,60 @@ async def notify_owners(
         return delivered
     except Exception:
         logger.exception("worker_notify[%s]: неожиданная ошибка", category)
+        return False
+
+
+async def notify_recipients(
+    engine: AsyncEngine,
+    redis: Any,
+    *,
+    category: str,
+    text: str,
+    dedup_key: str | None = None,
+    dedup_ttl_seconds: int | None = None,
+) -> bool:
+    """Money/ops-нотификация ВСЕМ активным recipients в личку. Best-effort, dedup-after-send.
+
+    Returns: True если доставлено хотя бы одному recipient. Не бросает.
+    dedup_key ставится в Redis ТОЛЬКО после успешной доставки ≥1 получателю.
+    """
+    try:
+        if dedup_key and redis is not None:
+            try:
+                if await redis.get(dedup_key):
+                    return False
+            except Exception:
+                logger.exception(
+                    "notify_recipients[%s]: ошибка чтения dedup %s", category, dedup_key
+                )
+
+        cfg = await load_telegram_config(engine)
+        if cfg is None or not cfg.bot_token:
+            logger.warning("notify_recipients[%s]: нет bot_token", category)
+            return False
+
+        recipients = await load_active_recipients(engine)
+        if not recipients:
+            logger.warning("notify_recipients[%s]: нет активных recipients", category)
+            return False
+
+        client = _client_for_token(cfg.bot_token)
+        delivered = False
+        for r in recipients:
+            try:
+                await client.send_message(chat_id=str(r.chat_id), text=text, parse_mode="HTML")
+                delivered = True
+            except Exception:
+                logger.exception(
+                    "notify_recipients[%s]: не доставлено chat_id=%s", category, r.chat_id
+                )
+
+        if delivered and dedup_key and redis is not None and dedup_ttl_seconds:
+            try:
+                await redis.set(dedup_key, "1", nx=True, ex=dedup_ttl_seconds)
+            except Exception:
+                logger.exception("notify_recipients[%s]: ошибка SET dedup %s", category, dedup_key)
+        return delivered
+    except Exception:
+        logger.exception("notify_recipients[%s]: неожиданная ошибка", category)
         return False
