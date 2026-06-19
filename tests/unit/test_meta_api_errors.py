@@ -7,6 +7,7 @@ from core.meta_api.errors import (
     NotFoundError,
     PermanentError,
     RateLimitedError,
+    SessionUnavailableError,
     TemporaryError,
     TokenInvalidError,
     classify_graph_error,
@@ -64,6 +65,29 @@ def test_unknown_code_permanent() -> None:
 # Сеть/неизвестно (code=None) → TemporaryError (retry разумен).
 def test_no_code_temporary() -> None:
     exc = classify_graph_error(None, None, "Network blip")
+    assert isinstance(exc, TemporaryError)
+
+
+# REGRESSION (money): code -2 NetworkError «Failed to fetch» — транзиентный сетевой блип
+# Vision-fetch, ДОЛЖЕН быть Temporary (retry), а не Permanent. Иначе авто-стоп pause_ad
+# навсегда failed с 1-й попытки при любом блипе сети (кейс CR009 s2).
+def test_code_minus2_network_temporary() -> None:
+    exc = classify_graph_error(-2, None, "Failed to fetch")
+    assert isinstance(exc, TemporaryError)
+    assert not isinstance(exc, PermanentError)
+
+
+# code -3 page-evaluate — переходное состояние page/сессии → Temporary (SessionUnavailable).
+def test_code_minus3_page_evaluate_temporary() -> None:
+    exc = classify_graph_error(-3, None, "page.evaluate failed")
+    assert isinstance(exc, SessionUnavailableError)
+    assert isinstance(exc, TemporaryError)
+
+
+# code -1 TokenNotFound → SessionUnavailableError (Temporary) — токен ещё не в DOM.
+def test_code_minus1_token_not_found_temporary() -> None:
+    exc = classify_graph_error(-1, None, "EAA-токен не найден")
+    assert isinstance(exc, SessionUnavailableError)
     assert isinstance(exc, TemporaryError)
 
 

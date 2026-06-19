@@ -96,10 +96,15 @@ class SessionUnavailableError(TemporaryError):
 
 # Маппинг Graph code → класс исключения. Default — PermanentError.
 _CODE_MAP: dict[int, type[MetaApiError]] = {
-    # -1 = client.ts TokenNotFound: EAA-токен ещё не в DOM (свежеоткрытая вкладка кабинета).
-    # Это ВРЕМЕННО (вкладка прогреется) → Temporary/requeue, а не mark_failed (H4): иначе
-    # autostart bulk-activate и ручной pause в мульти-кабе фейлились перманентно с 1-й попытки.
+    # Отрицательные коды — ВНУТРЕННИЕ сигналы browser-agent (реальные Graph-коды
+    # положительные). Все транзиентные → Temporary/requeue, иначе авто-стоп бросается
+    # с 1-й попытки при любом блипе Vision-сессии (money-баг: pause_ad навсегда failed).
+    #   -1 TokenNotFound (EAA-токен ещё не в DOM свежей вкладки) — прогреется;
+    #   -2 NetworkError (Failed to fetch / Timeout fetch внутри page.evaluate) — сетевой блип;
+    #   -3 page-evaluate error — page/сессия в переходном состоянии.
     -1: SessionUnavailableError,
+    -2: TemporaryError,
+    -3: SessionUnavailableError,
     1: PermanentError,
     2: TemporaryError,
     4: RateLimitedError,
@@ -146,7 +151,10 @@ def classify_graph_error(
     elif code and code in _CODE_MAP:
         exc_cls = _CODE_MAP[code]
     else:
-        exc_cls = TemporaryError if not code else PermanentError
+        # code 0/None — могла быть сеть → Temporary. Отрицательные коды — внутренние
+        # сигналы browser-agent (Graph-коды положительные) → транзиентные, retry, а не
+        # permanent-fail (backstop для будущих негативных кодов помимо явных в _CODE_MAP).
+        exc_cls = TemporaryError if (not code or code < 0) else PermanentError
     return exc_cls(
         message or f"Graph API error code={code} subcode={subcode}",
         code=code,
