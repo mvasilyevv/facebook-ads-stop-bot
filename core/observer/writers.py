@@ -49,6 +49,13 @@ async def upsert_catalog_hierarchy(
     offer_id: uuid.UUID | None,
     delivery_status: str | None = None,
     ad_account_id: str | None = None,
+    creative_thumb_url: str | None = None,
+    creative_image_url: str | None = None,
+    adset_pixel_id: str | None = None,
+    adset_daily_budget: str | None = None,
+    adset_lifetime_budget: str | None = None,
+    adset_budget_remaining: str | None = None,
+    adset_learning_stage: str | None = None,
 ) -> uuid.UUID:
     """UPSERT offer → campaign → adset → ad, возвращает fb_ads.id (UUID).
 
@@ -61,12 +68,28 @@ async def upsert_catalog_hierarchy(
     ad_account_id — кабинет, из которого пришла строка скана (мульти-кабинет).
     None — не трогаем существующее значение (COALESCE), чтобы fallback-сканы
     без кабинета не затирали уже известную привязку.
+
+    creative_* / adset_* (Волна 1) — превью крео + метаданные адсета. Пустые
+    нормализуем в NULL и COALESCE'им: скан без значения не затирает уже известное
+    (URL крео обновляется только когда Graph его отдал).
     """
     # Пустой/пробельный статус → NULL: пишем только осмысленное значение.
     delivery_status = delivery_status.strip() if delivery_status else None
     delivery_status = delivery_status or None
     # Пустой кабинет → NULL (не затираем существующий COALESCE'ом ниже).
     ad_account_id = (ad_account_id or "").strip() or None
+
+    # Волна 1: пустые строки → NULL (COALESCE ниже не затирает известное значение).
+    def _nz(value: str | None) -> str | None:
+        return (value or "").strip() or None
+
+    creative_thumb_url = _nz(creative_thumb_url)
+    creative_image_url = _nz(creative_image_url)
+    adset_pixel_id = _nz(adset_pixel_id)
+    adset_daily_budget = _nz(adset_daily_budget)
+    adset_lifetime_budget = _nz(adset_lifetime_budget)
+    adset_budget_remaining = _nz(adset_budget_remaining)
+    adset_learning_stage = _nz(adset_learning_stage)
     now = datetime.now(timezone.utc)
 
     async with engine.begin() as conn:
@@ -169,17 +192,28 @@ async def upsert_catalog_hierarchy(
                 ).first()
         campaign_id = cmp_row[0]
 
-        # adset
+        # adset (+ Волна 1: pixel/budgets/learning — COALESCE не затирает известное NULL'ом)
         ads_row = (
             await conn.execute(
                 text(
                     """
                     INSERT INTO fb_adsets
-                        (campaign_id, fb_adset_id, adset_name, last_seen_at)
-                    VALUES (:cid, :fbas, :aname, :now)
+                        (campaign_id, fb_adset_id, adset_name, last_seen_at,
+                         pixel_id, daily_budget, lifetime_budget,
+                         budget_remaining, learning_stage)
+                    VALUES (:cid, :fbas, :aname, :now,
+                            :pixel, :dbud, :lbud, :brem, :lstage)
                     ON CONFLICT (campaign_id, adset_name) DO UPDATE
                     SET last_seen_at = :now,
                         fb_adset_id = COALESCE(EXCLUDED.fb_adset_id, fb_adsets.fb_adset_id),
+                        pixel_id = COALESCE(EXCLUDED.pixel_id, fb_adsets.pixel_id),
+                        daily_budget = COALESCE(EXCLUDED.daily_budget, fb_adsets.daily_budget),
+                        lifetime_budget =
+                            COALESCE(EXCLUDED.lifetime_budget, fb_adsets.lifetime_budget),
+                        budget_remaining =
+                            COALESCE(EXCLUDED.budget_remaining, fb_adsets.budget_remaining),
+                        learning_stage =
+                            COALESCE(EXCLUDED.learning_stage, fb_adsets.learning_stage),
                         is_active = TRUE
                     RETURNING id
                     """
@@ -189,23 +223,33 @@ async def upsert_catalog_hierarchy(
                     "fbas": fb_adset_id,
                     "aname": adset_name,
                     "now": now,
+                    "pixel": adset_pixel_id,
+                    "dbud": adset_daily_budget,
+                    "lbud": adset_lifetime_budget,
+                    "brem": adset_budget_remaining,
+                    "lstage": adset_learning_stage,
                 },
             )
         ).first()
         adset_id = ads_row[0]
 
-        # ad
+        # ad (+ Волна 1: превью крео — COALESCE не затирает известный URL пустым сканом)
         ad_row = (
             await conn.execute(
                 text(
                     """
                     INSERT INTO fb_ads
-                        (adset_id, fb_ad_id, ad_name, delivery_status, last_seen_at)
-                    VALUES (:adsid, :fbid, :aname, :dstatus, :now)
+                        (adset_id, fb_ad_id, ad_name, delivery_status, last_seen_at,
+                         creative_thumb_url, creative_image_url)
+                    VALUES (:adsid, :fbid, :aname, :dstatus, :now, :cthumb, :cimage)
                     ON CONFLICT (fb_ad_id) DO UPDATE
                     SET last_seen_at = :now,
                         ad_name = EXCLUDED.ad_name,
                         delivery_status = EXCLUDED.delivery_status,
+                        creative_thumb_url =
+                            COALESCE(EXCLUDED.creative_thumb_url, fb_ads.creative_thumb_url),
+                        creative_image_url =
+                            COALESCE(EXCLUDED.creative_image_url, fb_ads.creative_image_url),
                         is_active = TRUE
                     RETURNING id
                     """
@@ -216,6 +260,8 @@ async def upsert_catalog_hierarchy(
                     "aname": ad_name,
                     "dstatus": delivery_status,
                     "now": now,
+                    "cthumb": creative_thumb_url,
+                    "cimage": creative_image_url,
                 },
             )
         ).first()

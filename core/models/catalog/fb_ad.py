@@ -56,6 +56,17 @@ class FbAd(UUIDPrimaryKey, Timestamp, Base):
         String(64),
         nullable=True,
     )
+    # Волна 1: превью креатива из Graph (creative.thumbnail_url / image_url).
+    # Обновляется upsert'ом на каждом скане — URL Meta истекает (~30 дней).
+    # thumbnail — для таблицы (любой тип крео); image — крупно в карточке (только image-крео).
+    creative_thumb_url: Mapped[str | None] = mapped_column(
+        String(1024),
+        nullable=True,
+    )
+    creative_image_url: Mapped[str | None] = mapped_column(
+        String(1024),
+        nullable=True,
+    )
     # Текущий статус доставки (Active/Paused/In Review/Disapproved/...) — снимается
     # на каждом скане из DOM или маппинга Meta effective_status, обновляется upsert'ом.
     delivery_status: Mapped[str | None] = mapped_column(

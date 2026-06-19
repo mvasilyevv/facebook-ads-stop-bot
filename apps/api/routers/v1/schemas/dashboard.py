@@ -65,6 +65,16 @@ class AdSnapshotOut(BaseModel):
     delivery_status: str | None = None
     meta_ad_status: str | None = None
 
+    # Волна 1: превью креатива (ad-level) + метаданные адсета. NULL пока объект не
+    # сканировался после миграции 0022. Бюджеты — в minor units (как отдаёт Meta).
+    creative_thumb_url: str | None = None
+    creative_image_url: str | None = None
+    adset_pixel_id: str | None = None
+    adset_daily_budget: str | None = None
+    adset_lifetime_budget: str | None = None
+    adset_budget_remaining: str | None = None
+    learning_stage: str | None = None
+
     # Коды сработавших правил из последнего AlertEvent (по стадии: stop/warning).
     # Заполняются в core/dashboard/snapshot.py::_build_row_dict из LATERAL last_ev;
     # default [] — если для ad'а ещё нет AlertEvent.

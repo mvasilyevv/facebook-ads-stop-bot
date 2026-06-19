@@ -41,6 +41,14 @@ class _FakeRow:
     is_active: bool = True
     last_seen_at: datetime | None = None
     delivery_status: str | None = None
+    # Волна 1: превью крео + метаданные адсета
+    creative_thumb_url: str | None = None
+    creative_image_url: str | None = None
+    adset_pixel_id: str | None = None
+    adset_daily_budget: str | None = None
+    adset_lifetime_budget: str | None = None
+    adset_budget_remaining: str | None = None
+    learning_stage: str | None = None
     meta_ad_status: str | None = None
     m_cycle_ts: datetime | None = None
     m_spend: Decimal | None = None
@@ -96,6 +104,57 @@ def test_build_row_dict_delivery_status_passthrough() -> None:
     row = _FakeRow(delivery_status="Active")
     d = _build_row_dict(row)
     assert d["delivery_status"] == "Active"
+
+
+# Волна 1: превью крео + метаданные адсета пробрасываются из row в ответ.
+def test_build_row_dict_wave1_creative_meta_passthrough() -> None:
+    """creative_*/adset_*/learning_stage из row попадают в ответ как есть."""
+    row = _FakeRow(
+        creative_thumb_url="https://cdn/thumb.jpg",
+        creative_image_url="https://cdn/full.jpg",
+        adset_pixel_id="123456789",
+        adset_daily_budget="500",
+        adset_lifetime_budget="10000",
+        adset_budget_remaining="350",
+        learning_stage="LEARNING",
+    )
+    d = _build_row_dict(row)
+    assert d["creative_thumb_url"] == "https://cdn/thumb.jpg"
+    assert d["creative_image_url"] == "https://cdn/full.jpg"
+    assert d["adset_pixel_id"] == "123456789"
+    assert d["adset_daily_budget"] == "500"
+    assert d["adset_lifetime_budget"] == "10000"
+    assert d["adset_budget_remaining"] == "350"
+    assert d["learning_stage"] == "LEARNING"
+
+
+# Волна 1: при отсутствии данных (NULL из БД до скана) поля = None, не падает.
+def test_build_row_dict_wave1_fields_none_by_default() -> None:
+    """Без крео/метаданных (None из LEFT JOIN) — поля None, ответ собирается."""
+    row = _FakeRow()
+    d = _build_row_dict(row)
+    assert d["creative_thumb_url"] is None
+    assert d["adset_pixel_id"] is None
+    assert d["learning_stage"] is None
+
+
+# Волна 1: SELECT тянет новые колонки fb_ads/fb_adsets (оба билдера через _build_sql).
+def test_build_sql_selects_wave1_columns() -> None:
+    """SQL включает creative_* из fb_ads и pixel/budgets/learning из fb_adsets."""
+    sql, _ = _build_sql(
+        fb_ad_ids=None,
+        alert_states=None,
+        include_inactive=False,
+        incidents_only=False,
+        incident_stage=None,
+        limit=10,
+        offset=0,
+    )
+    assert "fb_ads.creative_thumb_url" in sql
+    assert "fb_ads.creative_image_url" in sql
+    assert "fb_adsets.pixel_id" in sql
+    assert "fb_adsets.daily_budget" in sql
+    assert "fb_adsets.learning_stage" in sql
 
 
 # Отсутствие ad_metrics за окно → metrics=None (LATERAL вернул NULL'ы).

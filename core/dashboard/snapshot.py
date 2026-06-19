@@ -159,6 +159,15 @@ def _build_row_dict(row: Any) -> dict[str, Any]:
         # Текущий статус доставки из каталога fb_ads (BL-12-mig). NULL если ad
         # ещё не сканировался после добавления колонки.
         "delivery_status": getattr(row, "delivery_status", None),
+        # Волна 1: превью крео (fb_ads) + метаданные адсета (fb_adsets). NULL пока
+        # ad/adset не сканировался после миграции 0022.
+        "creative_thumb_url": getattr(row, "creative_thumb_url", None),
+        "creative_image_url": getattr(row, "creative_image_url", None),
+        "adset_pixel_id": getattr(row, "adset_pixel_id", None),
+        "adset_daily_budget": getattr(row, "adset_daily_budget", None),
+        "adset_lifetime_budget": getattr(row, "adset_lifetime_budget", None),
+        "adset_budget_remaining": getattr(row, "adset_budget_remaining", None),
+        "learning_stage": getattr(row, "learning_stage", None),
         "meta_ad_status": row.meta_ad_status,
         # Коды сработавших правил из последнего AlertEvent.
         "stop_rule_codes": stop_rule_codes,
@@ -241,6 +250,13 @@ def _build_sql(
         fb_ads.is_active                   AS is_active,
         fb_ads.last_seen_at                AS last_seen_at,
         fb_ads.delivery_status             AS delivery_status,
+        fb_ads.creative_thumb_url          AS creative_thumb_url,
+        fb_ads.creative_image_url          AS creative_image_url,
+        fb_adsets.pixel_id                 AS adset_pixel_id,
+        fb_adsets.daily_budget             AS adset_daily_budget,
+        fb_adsets.lifetime_budget          AS adset_lifetime_budget,
+        fb_adsets.budget_remaining         AS adset_budget_remaining,
+        fb_adsets.learning_stage           AS learning_stage,
         mo.meta_ad_status                  AS meta_ad_status,
         -- LATERAL: последняя метрика за окно lookback_days
         latest_m.cycle_ts                  AS m_cycle_ts,
@@ -399,6 +415,13 @@ def _build_sql_cursor(
         fb_ads.is_active                   AS is_active,
         fb_ads.last_seen_at                AS last_seen_at,
         fb_ads.delivery_status             AS delivery_status,
+        fb_ads.creative_thumb_url          AS creative_thumb_url,
+        fb_ads.creative_image_url          AS creative_image_url,
+        fb_adsets.pixel_id                 AS adset_pixel_id,
+        fb_adsets.daily_budget             AS adset_daily_budget,
+        fb_adsets.lifetime_budget          AS adset_lifetime_budget,
+        fb_adsets.budget_remaining         AS adset_budget_remaining,
+        fb_adsets.learning_stage           AS learning_stage,
         mo.meta_ad_status                  AS meta_ad_status,
         latest_m.cycle_ts                  AS m_cycle_ts,
         latest_m.spend                     AS m_spend,

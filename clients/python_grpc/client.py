@@ -640,4 +640,13 @@ def _proto_to_row(proto) -> object:
         cost_per_registration=_dec(proto.cost_per_registration),
         deposits=proto.deposits,
         resolved_offer_code=proto.resolved_offer_code or None,
+        # Волна 1: превью крео + метаданные адсета. getattr-фолбэк "" — устойчивость
+        # к старому pb2 без новых полей (до пересборки browser-agent).
+        creative_thumb_url=getattr(proto, "creative_thumb_url", ""),
+        creative_image_url=getattr(proto, "creative_image_url", ""),
+        adset_pixel_id=getattr(proto, "adset_pixel_id", ""),
+        adset_daily_budget=getattr(proto, "adset_daily_budget", ""),
+        adset_lifetime_budget=getattr(proto, "adset_lifetime_budget", ""),
+        adset_budget_remaining=getattr(proto, "adset_budget_remaining", ""),
+        adset_learning_stage=getattr(proto, "adset_learning_stage", ""),
     )

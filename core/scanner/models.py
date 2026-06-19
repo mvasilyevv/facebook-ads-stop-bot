@@ -38,3 +38,12 @@ class ScannedAdRow:
     cost_per_registration: Decimal | None = None
     deposits: int = 0
     resolved_offer_code: str | None = None
+    # --- Волна 1: превью креатива (ad-level) + метаданные адсета (catalog-поля) ---
+    # Не участвуют в стоп-правилах/FSM — только каталог + витрина. Пустая строка = нет данных.
+    creative_thumb_url: str = ""  # превью крео (thumbnail_url), любой тип крео
+    creative_image_url: str = ""  # полноразмер (image_url), только image-крео; пусто для видео
+    adset_pixel_id: str = ""  # promoted_object.pixel_id адсета
+    adset_daily_budget: str = ""  # daily_budget адсета (minor units, как отдаёт Meta)
+    adset_lifetime_budget: str = ""  # lifetime_budget адсета
+    adset_budget_remaining: str = ""  # budget_remaining адсета
+    adset_learning_stage: str = ""  # learning_stage_info.status (LEARNING/LEARNING_LIMITED/"")

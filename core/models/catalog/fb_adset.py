@@ -51,6 +51,13 @@ class FbAdset(UUIDPrimaryKey, Timestamp, Base):
         String(255),
         nullable=False,
     )
+    # Волна 1: метаданные адсета из Graph (promoted_object / budgets / learning_stage).
+    # Обновляются upsert'ом на каждом скане. Бюджеты — в minor units (как отдаёт Meta).
+    pixel_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    daily_budget: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    lifetime_budget: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    budget_remaining: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    learning_stage: Mapped[str | None] = mapped_column(String(32), nullable=True)
     is_active: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,
