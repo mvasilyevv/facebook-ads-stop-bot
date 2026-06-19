@@ -10,7 +10,15 @@ from google.protobuf.internal import containers as _containers
 DESCRIPTOR: _descriptor.FileDescriptor
 
 class ExecuteGraphCallRequest(_message.Message):
-    __slots__ = ("session_id", "method", "endpoint", "query_params", "body_json", "timeout_ms")
+    __slots__ = (
+        "session_id",
+        "method",
+        "endpoint",
+        "query_params",
+        "body_json",
+        "timeout_ms",
+        "ad_account_id",
+    )
     class QueryParamsEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -25,12 +33,14 @@ class ExecuteGraphCallRequest(_message.Message):
     QUERY_PARAMS_FIELD_NUMBER: _ClassVar[int]
     BODY_JSON_FIELD_NUMBER: _ClassVar[int]
     TIMEOUT_MS_FIELD_NUMBER: _ClassVar[int]
+    AD_ACCOUNT_ID_FIELD_NUMBER: _ClassVar[int]
     session_id: str
     method: str
     endpoint: str
     query_params: _containers.ScalarMap[str, str]
     body_json: str
     timeout_ms: int
+    ad_account_id: str
     def __init__(
         self,
         session_id: _Optional[str] = ...,
@@ -39,6 +49,7 @@ class ExecuteGraphCallRequest(_message.Message):
         query_params: _Optional[_Mapping[str, str]] = ...,
         body_json: _Optional[str] = ...,
         timeout_ms: _Optional[int] = ...,
+        ad_account_id: _Optional[str] = ...,
     ) -> None: ...
 
 class ExecuteGraphCallResponse(_message.Message):
