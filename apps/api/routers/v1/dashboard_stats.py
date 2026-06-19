@@ -170,23 +170,56 @@ async def _query_task_counts(engine: AsyncEngine) -> dict[str, int]:
     }
 
 
-async def _build_stats(engine: AsyncEngine, redis: Any) -> DashboardStatsOut:
-    """Собирает все 4 группы счётчиков параллельно через asyncio.gather.
+async def _query_current_day_spend(engine: AsyncEngine, redis: Any) -> dict[str, Any]:
+    """Спенд текущих суток кабинета с нуля (Волна 2/E). Resilient: ошибка → None.
 
-    При ошибке в любом из подзапросов — пробрасываем дальше (fail-all для stats),
-    чтобы фронт чётко видел проблему в overview-карточках.
+    НЕ fail-all: TZ-кэш холодный / Redis недоступен не должны ронять счётчики-карточки.
+    Граница суток per-account из Redis-кэша (warmup в meta_api_worker); фолбэк — UTC.
     """
-    ad_counts, scan_counts, task_counts, observer_status = await asyncio.gather(
+    try:
+        from core.dashboard.cabinet_spend import current_day_spend
+        from core.meta_api.account_tz import (
+            DEFAULT_OFFSET_HOURS,
+            active_account_ids,
+            load_offset_map,
+        )
+
+        account_ids = await active_account_ids(engine)
+        tz_map = await load_offset_map(redis, account_ids) if account_ids else {}
+        # default_offset — оффсет доминирующего (первого известного) кабинета, иначе UTC.
+        default_offset = next(iter(tz_map.values()), DEFAULT_OFFSET_HOURS)
+        total = await current_day_spend(
+            engine,
+            tz_map=tz_map,
+            default_offset=default_offset,
+            now=datetime.now(UTC),
+        )
+        return {"current_day_spend": str(total)}
+    except Exception as exc:  # noqa: BLE001 — не критично для overview-карточек
+        logger.warning("current_day_spend не посчитан: %s", exc)
+        return {"current_day_spend": None}
+
+
+async def _build_stats(engine: AsyncEngine, redis: Any) -> DashboardStatsOut:
+    """Собирает все группы счётчиков параллельно через asyncio.gather.
+
+    Счётчики (ad/scan/task/observer) — fail-all (фронт видит проблему overview).
+    current_day_spend — resilient внутри (ошибка → None), money-поле не критично
+    для счётчиков, но и не должно их ронять.
+    """
+    ad_counts, scan_counts, task_counts, observer_status, spend = await asyncio.gather(
         _query_ad_counts(engine),
         _query_scan_counts(engine),
         _query_task_counts(engine),
         _read_observer_status(redis),
+        _query_current_day_spend(engine, redis),
     )
 
     return DashboardStatsOut(
         **ad_counts,
         **scan_counts,
         **task_counts,
+        **spend,
         observer_status=observer_status,
     )
 

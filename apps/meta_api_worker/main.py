@@ -486,6 +486,15 @@ async def task_loop(
             continue
 
         if claim.queue_empty or claim.task is None:
+            # Волна 2/E: на холостом ходу обновляем кэш TZ кабинетов (троттлинг 6ч внутри).
+            # Off auto-stop path — observer не трогаем. Best-effort, ошибки не ронят цикл.
+            if redis_client is not None:
+                try:
+                    from core.meta_api.account_tz import maybe_refresh_account_tz
+
+                    await maybe_refresh_account_tz(engine, redis_client, client)
+                except Exception:  # noqa: BLE001
+                    logger.debug("account_tz warmup пропущен", exc_info=True)
             try:
                 await asyncio.wait_for(stop.wait(), timeout=IDLE_SLEEP_SECONDS)
             except asyncio.TimeoutError:

@@ -11,12 +11,13 @@ Endpoints (с prefix /api от auto-discovery):
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import text
 
-from apps.api.deps import DepEngine
+from apps.api.deps import DepEngine, DepRedis
 from apps.api.routers.v1.schemas.dashboard_aggregates import (
     ChartBucketOut,
     SpendPointOut,
@@ -104,27 +105,62 @@ async def get_spend_history(
 # ─────────────────────── GET /dashboard/chart-data ───────────────────────────
 
 
+async def _dominant_cabinet_day_start(engine: Any, redis: Any) -> datetime:
+    """Начало текущих суток ДОМИНИРУЮЩЕГО кабинета (Волна 2/E) для floor'а графика.
+
+    Глобальный график — один; для мульти-кабинета берём оффсет первого известного
+    кабинета (для одно-кабинетного кейса — точно). Headline-число при этом считается
+    per-account точно (current_day_spend). Фолбэк — UTC-полночь.
+    """
+    from core.dashboard.cabinet_spend import cabinet_day_start_utc
+    from core.meta_api.account_tz import (
+        DEFAULT_OFFSET_HOURS,
+        active_account_ids,
+        load_offset_map,
+    )
+
+    account_ids = await active_account_ids(engine)
+    tz_map = await load_offset_map(redis, account_ids) if account_ids else {}
+    offset = next(iter(tz_map.values()), DEFAULT_OFFSET_HOURS)
+    return cabinet_day_start_utc(offset, datetime.now(UTC))
+
+
 @router.get("/dashboard/chart-data", response_model=list[ChartBucketOut])
 async def get_chart_data(
     engine: DepEngine,
+    redis: DepRedis,
     hours: int = Query(default=24, ge=1, le=720, description="Окно в часах, max=720 (30d)"),
     bucket: str = Query(default="hour", description="hour | day"),
+    cabinet_day: bool = Query(
+        default=False,
+        description="Окно с 00:00 текущих суток кабинета (TZ аккаунта) вместо скользящего hours",
+    ),
 ) -> list[dict[str, Any]]:
     """Бакетированный график для DashboardPage.
 
     Бакет = `date_trunc(bucket, cycle_ts)`. SUM по spend/impressions/clicks/leads/
     registrations/deposits + COUNT DISTINCT ad_id для active_ads.
 
-    Бакеты без метрик в окне не появляются (gap). Это согласовано с фронтом —
-    Recharts сам обработает разрывы.
+    cabinet_day=true (Волна 2/E): окно от начала текущих суток кабинета (TZ аккаунта),
+    чтобы график спенда начинался с нуля в полночь кабинета, а не от скользящего 24ч.
 
-    Partition pruning через WHERE cycle_ts >= NOW() - make_interval(hours).
+    Бакеты без метрик в окне не появляются (gap). Recharts сам обработает разрывы.
+    Partition pruning через WHERE cycle_ts >= floor (константа).
     """
     if bucket not in _VALID_BUCKETS:
         raise HTTPException(
             status_code=422,
             detail=f"bucket должен быть одним из: {sorted(_VALID_BUCKETS)}",
         )
+
+    # Пол окна: либо граница суток кабинета (cabinet_day), либо скользящее hours.
+    if cabinet_day:
+        since = await _dominant_cabinet_day_start(engine, redis)
+        window_floor = "m.cycle_ts >= :since"
+        params: dict[str, Any] = {"since": since}
+    else:
+        window_floor = "m.cycle_ts >= NOW() - make_interval(hours => :hours)"
+        params = {"hours": hours}
 
     # CRIT-1: ad_metrics — кумулятивные snapshot'ы. Наивный SUM(spend) сложил бы
     # все промежуточные снимки внутри бакета и завысил spend в десятки раз.
@@ -143,7 +179,7 @@ async def get_chart_data(
                 m.registrations,
                 m.deposits
             FROM ad_metrics m
-            WHERE m.cycle_ts >= NOW() - make_interval(hours => :hours)
+            WHERE {window_floor}
             ORDER BY date_trunc('{bucket}', m.cycle_ts), m.ad_id, m.cycle_ts DESC
         )
         SELECT
@@ -161,7 +197,7 @@ async def get_chart_data(
     """
 
     async with engine.connect() as conn:
-        rows = (await conn.execute(text(sql), {"hours": hours})).fetchall()
+        rows = (await conn.execute(text(sql), params)).fetchall()
 
     return [
         {

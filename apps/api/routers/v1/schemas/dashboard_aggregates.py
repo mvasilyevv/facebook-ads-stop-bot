@@ -29,6 +29,10 @@ class DashboardStatsOut(BaseModel):
     ads_in_claimed: int = 0
     ads_in_disabled: int = 0
     active_incidents: int = 0
+    # Волна 2/E: авторитетный спенд ТЕКУЩИХ суток кабинета с нуля (latest-per-ad с
+    # полом по границе суток per-account TZ). None если не посчитан/ошибка — фронт
+    # должен использовать это поле, а не сумму спенд-серии (та задваивает кумулятив).
+    current_day_spend: str | None = None
     last_scan_at: datetime | None = None
     last_scan_outcome: str | None = None
     scans_today: int = 0
