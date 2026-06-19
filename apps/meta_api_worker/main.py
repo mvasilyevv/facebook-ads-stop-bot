@@ -31,6 +31,7 @@ import json
 import logging
 import os
 import signal
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -39,6 +40,10 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from core.db import WORKER_ENGINE_KWARGS
 from core.meta_api.audit import AuditedMetaApiClient
+from core.meta_api.autostop_alert import (
+    maybe_alert_autostop_channel_down,
+    record_autostop_success,
+)
 from core.meta_api.client import MetaApiClient
 from core.meta_api.errors import (
     MutationValidationError,
@@ -66,6 +71,8 @@ from core.meta_api.schemas import IRREVERSIBLE_MUTATION_KINDS, MetaMutationPaylo
 from core.observer.queries import load_scanning_enabled
 from core.pubsub import CHANNEL_TASK_CHANGED
 from core.tasks.queue import Task
+from core.telegram.client import TelegramBotClient
+from core.telegram.service import load_telegram_config
 
 logger = logging.getLogger("meta_api_worker")
 
@@ -73,6 +80,28 @@ WORKER_NAME = "meta_api"
 HEARTBEAT_KEY = f"worker:heartbeat:{WORKER_NAME}"
 HEARTBEAT_TTL_SECONDS = 60
 IDLE_SLEEP_SECONDS = 5
+
+# requested_by авто-стопа (observer → pause_ad). Совпадает с writers._create_pause_mutation.
+_AUTO_STOP_REQUESTED_BY = "bot_auto_stop"
+
+# Конфиг CRITICAL-алерта «канал auto-stop мёртв» (см. core/meta_api/autostop_alert.py).
+# Money-сигнал: после N подряд сетевых фейлов pause_ad шлём ОДИН алерт «чини Vision»,
+# а не молча ретраим до 72 попыток (~6ч). Дефолты переопределяются из env.
+_ALERT_THRESHOLD = int(os.environ.get("AUTOSTOP_ALERT_THRESHOLD", "3"))
+_ALERT_WINDOW_SEC = int(os.environ.get("AUTOSTOP_ALERT_WINDOW_SEC", str(30 * 60)))
+_ALERT_DEDUP_SEC = int(os.environ.get("AUTOSTOP_ALERT_DEDUP_SEC", str(30 * 60)))
+
+
+@dataclass(frozen=True)
+class AutostopAlertContext:
+    """Параметры CRITICAL-алерта auto-stop, прокинутые из main_loop в process_one_task."""
+
+    tg_client: Any | None
+    chat_id: str | None
+    thread_id: int | None
+    threshold: int = _ALERT_THRESHOLD
+    window_seconds: int = _ALERT_WINDOW_SEC
+    dedup_ttl_seconds: int = _ALERT_DEDUP_SEC
 
 
 async def _publish_task_changed(
@@ -233,6 +262,7 @@ async def process_one_task(
     *,
     client: MetaApiClient | None = None,
     redis_client: redis_asyncio.Redis | None = None,
+    alert_ctx: AutostopAlertContext | None = None,
 ) -> None:
     """Полный жизненный цикл одной задачи.
 
@@ -368,6 +398,10 @@ async def process_one_task(
         # без этого FSM застревал в stop_sent при auto-stop через API. result прокидываем
         # для bulk (H2): метим FSM только по реально применённым id (modified_ids).
         await sync_fsm_after_mutation(engine, payload, result)
+        # Канал auto-stop жив (mutation дошла) → сброс счётчика подряд-фейлов и дедупа,
+        # чтобы следующий outage снова мог поднять CRITICAL (re-arm). Best-effort.
+        if redis_client is not None:
+            await record_autostop_success(redis_client)
         return
     except CreateCampaignPartialError as exc:
         # Batch API не атомарен: часть объектов уже создана в Meta.
@@ -413,6 +447,25 @@ async def process_one_task(
             logger.warning("meta_api: task id=%s → retrying (temporary): %s", task.id, exc)
         else:
             logger.error("meta_api: task id=%s → exhausted retries (temporary): %s", task.id, exc)
+        # Money-сигнал: auto-stop pause_ad не доходит до Meta из-за мёртвого Vision-канала
+        # (code=-2 Failed to fetch). После N подряд таких фейлов — ОДИН CRITICAL в TG
+        # «чини Vision», а не молчаливый ретрай до 72 попыток. Best-effort.
+        if (
+            redis_client is not None
+            and alert_ctx is not None
+            and getattr(task, "requested_by", "") == _AUTO_STOP_REQUESTED_BY
+        ):
+            await maybe_alert_autostop_channel_down(
+                redis_client,
+                exc=exc,
+                fb_ad_id=payload.target_id,
+                tg_client=alert_ctx.tg_client,
+                chat_id=alert_ctx.chat_id,
+                thread_id=alert_ctx.thread_id,
+                threshold=alert_ctx.threshold,
+                window_seconds=alert_ctx.window_seconds,
+                dedup_ttl_seconds=alert_ctx.dedup_ttl_seconds,
+            )
         return
     except ValueError as exc:
         # Необратимые kinds: ValueError мог прийти на постобработке УЖЕ успешного ответа
@@ -472,6 +525,7 @@ async def task_loop(
     *,
     client: MetaApiClient,
     redis_client: redis_asyncio.Redis | None = None,
+    alert_ctx: AutostopAlertContext | None = None,
 ) -> None:
     """Главный цикл claim → execute → mark."""
     while not stop.is_set():
@@ -501,10 +555,35 @@ async def task_loop(
                 pass
             continue
 
-        await process_one_task(engine, claim.task, client=client, redis_client=redis_client)
+        await process_one_task(
+            engine,
+            claim.task,
+            client=client,
+            redis_client=redis_client,
+            alert_ctx=alert_ctx,
+        )
 
 
 # ====================== entrypoint ======================
+
+
+async def _load_tg(
+    engine: AsyncEngine,
+) -> tuple[TelegramBotClient | None, str | None, int | None]:
+    """Читает telegram_config → (client, chat_id, ops_thread_id) для CRITICAL-алертов.
+
+    При отсутствии конфига → (None, None, None): алерты уйдут только в лог (детектор
+    всё равно работает, дедуп ставится). Маршрутизация — в ops-тред (forum_ops_thread_id).
+    """
+    try:
+        cfg = await load_telegram_config(engine)
+    except Exception:  # noqa: BLE001
+        logger.exception("meta_api_worker: не удалось загрузить telegram_config")
+        return None, None, None
+    if cfg is None or not cfg.bot_token or cfg.chat_id is None:
+        logger.warning("meta_api_worker: telegram_config не настроен — CRITICAL только в лог")
+        return None, None, None
+    return TelegramBotClient(cfg.bot_token), str(cfg.chat_id), cfg.forum_ops_thread_id
 
 
 async def main_loop(database_url: str | None = None) -> None:
@@ -517,6 +596,14 @@ async def main_loop(database_url: str | None = None) -> None:
     meta_client = _build_meta_client(engine)
     await meta_client.start()
 
+    # CRITICAL-алерт «канал auto-stop мёртв» (#2). TG-клиент опционален.
+    tg_client, tg_chat_id, tg_thread_id = await _load_tg(engine)
+    alert_ctx = AutostopAlertContext(
+        tg_client=tg_client,
+        chat_id=tg_chat_id,
+        thread_id=tg_thread_id,
+    )
+
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig_name in ("SIGTERM", "SIGINT"):
@@ -528,10 +615,21 @@ async def main_loop(database_url: str | None = None) -> None:
     logger.info("meta_api_worker запущен (MetaApiClient ready)")
     try:
         await asyncio.gather(
-            task_loop(engine, stop, client=meta_client, redis_client=redis_client),
+            task_loop(
+                engine,
+                stop,
+                client=meta_client,
+                redis_client=redis_client,
+                alert_ctx=alert_ctx,
+            ),
             heartbeat_loop(redis_client, stop),
         )
     finally:
+        if tg_client is not None:
+            try:
+                await tg_client.close()
+            except Exception:  # noqa: BLE001
+                logger.exception("meta_api_worker: ошибка закрытия TG-клиента")
         try:
             await meta_client.close()
         except Exception:  # noqa: BLE001
