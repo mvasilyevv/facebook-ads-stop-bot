@@ -26,7 +26,7 @@ from core.telegram.renderer import (
     render_alert_text,
     render_inline_keyboard,
 )
-from core.telegram.service import load_telegram_config
+from core.telegram.service import load_active_recipients, load_telegram_config
 
 logger = logging.getLogger(__name__)
 
@@ -274,17 +274,19 @@ async def dispatch_pending_alerts(
     Returns: {'sent': N, 'skipped_duplicates': M, 'errors': K}
     """
     config = await load_telegram_config(engine)
-    if config is None or config.chat_id is None:
-        logger.warning("Нет chat_id в telegram_config — пропускаю dispatch")
-        return {"sent": 0, "skipped_duplicates": 0, "errors": 0, "skipped_no_chat": 1}
+    if config is None or not config.bot_token:
+        logger.warning("Нет bot_token в telegram_config — пропускаю dispatch")
+        return {"sent": 0, "skipped_duplicates": 0, "errors": 0, "skipped_no_config": 1}
 
-    chat_id = config.chat_id
-    # Маршрутизация по топикам супергруппы — по стадии алерта (топики создаёт
-    # /setup_topics; пока thread_id NULL — уходит в General).
-    thread_id_by_stage = {
-        "warning": config.forum_warning_thread_id,
-        "stop": config.forum_stop_thread_id,
-    }
+    # Волна 2: рассылка всем активным recipients в личку (вместо одного config.chat_id).
+    # Дедуп per-chat гарантирован UNIQUE(chat_id, ad_id, incident_key, stream_kind).
+    recipients = await load_active_recipients(engine)
+    if not recipients:
+        logger.warning("dispatch: нет активных recipients — пропускаю")
+        return {"sent": 0, "skipped_duplicates": 0, "errors": 0, "skipped_no_recipients": 1}
+
+    # Топики форума не используются при DM-рассылке (всегда None → General).
+    thread_id_by_stage: dict[str, int | None] = {}
 
     # Partition pruning: ограничиваем диапазон created_at последним часом.
     # alert_events партиционирована по RANGE(created_at) — без фильтра по
@@ -344,26 +346,29 @@ async def dispatch_pending_alerts(
         else:
             incident_key = str(open_token)
 
-        await _deliver_one_alert(
-            engine,
-            client=client,
-            redis_client=redis_client,
-            chat_id=int(chat_id),
-            thread_id_by_stage=thread_id_by_stage,
-            event_id=event_id,
-            ad_id=ad_id,
-            stage=str(stage),
-            matched_codes=list(matched_codes or []),
-            metrics_json=dict(metrics_json or {}),
-            open_token=open_token,
-            fb_ad_id=str(fb_ad_id),
-            ad_name=str(ad_name or ""),
-            adset_name=str(adset_name or ""),
-            campaign_name=str(campaign_name or ""),
-            offer_code=str(offer_code) if offer_code else None,
-            incident_key=incident_key,
-            counters=counters,
-        )
+        # Рассылаем каждому активному recipient'у независимо.
+        # Per-chat дедуп через UNIQUE(chat_id, ad_id, incident_key, stream_kind).
+        for r in recipients:
+            await _deliver_one_alert(
+                engine,
+                client=client,
+                redis_client=redis_client,
+                chat_id=int(r.chat_id),
+                thread_id_by_stage=thread_id_by_stage,
+                event_id=event_id,
+                ad_id=ad_id,
+                stage=str(stage),
+                matched_codes=list(matched_codes or []),
+                metrics_json=dict(metrics_json or {}),
+                open_token=open_token,
+                fb_ad_id=str(fb_ad_id),
+                ad_name=str(ad_name or ""),
+                adset_name=str(adset_name or ""),
+                campaign_name=str(campaign_name or ""),
+                offer_code=str(offer_code) if offer_code else None,
+                incident_key=incident_key,
+                counters=counters,
+            )
 
     return counters
 
@@ -384,100 +389,115 @@ async def sweep_orphan_alerts(
     'errors': K}. Алерты с NULL open_state_token пропускаются (нет incident_key).
     """
     config = await load_telegram_config(engine)
-    if config is None or config.chat_id is None:
-        logger.debug("sweep_orphan_alerts: нет chat_id — пропускаю")
-        return {"sent": 0, "skipped_duplicates": 0, "errors": 0, "skipped_no_chat": 1}
+    if config is None or not config.bot_token:
+        logger.debug("sweep_orphan_alerts: нет bot_token — пропускаю")
+        return {"sent": 0, "skipped_duplicates": 0, "errors": 0, "skipped_no_config": 1}
 
-    chat_id = config.chat_id
-    thread_id_by_stage: dict[str, int | None] = {
-        "warning": config.forum_warning_thread_id,
-        "stop": config.forum_stop_thread_id,
-    }
+    # Волна 2: sweep по каждому recipient'у независимо.
+    # NOT EXISTS фильтруется per-chat через AND r.chat_id = :cid —
+    # иначе при 2+ recipients sweep решит «уже доставлено» при наличии
+    # ref хотя бы для одного и не отправит остальным.
+    recipients = await load_active_recipients(engine)
+    if not recipients:
+        logger.debug("sweep_orphan_alerts: нет активных recipients — пропускаю")
+        return {"sent": 0, "skipped_duplicates": 0, "errors": 0, "skipped_no_recipients": 1}
+
+    # Топики форума не используются при DM-рассылке.
+    thread_id_by_stage: dict[str, int | None] = {}
 
     since_dt = datetime.now(timezone.utc) - timedelta(hours=hours)
 
-    # SELECT осиротевших: alert_events за окно hours, где НЕТ matching message_ref.
-    # NOT EXISTS сопоставляет по (ad_id, incident_key=open_state_token::text, stream_kind=stage).
-    # Фильтр created_at >= :since обеспечивает partition pruning в partitioned-таблице.
-    # NULL open_state_token исключаем — нет incident_key для дедупликации.
-    async with engine.connect() as conn:
-        orphans = (
-            await conn.execute(
-                text(
-                    """
-                    SELECT
-                        e.id, e.ad_id, e.stage, e.state,
-                        e.matched_rule_codes, e.metrics_json, e.open_state_token,
-                        a.fb_ad_id, a.ad_name,
-                        ads.adset_name,
-                        c.campaign_name,
-                        o.code AS offer_code
-                    FROM alert_events e
-                    JOIN fb_ads a ON a.id = e.ad_id
-                    JOIN fb_adsets ads ON ads.id = a.adset_id
-                    JOIN fb_campaigns c ON c.id = ads.campaign_id
-                    LEFT JOIN offers o ON o.id = c.offer_id
-                    WHERE e.created_at >= :since
-                      AND e.open_state_token IS NOT NULL
-                      AND NOT EXISTS (
-                          SELECT 1 FROM telegram_message_refs r
-                          WHERE r.ad_id = e.ad_id
-                            AND r.incident_key = e.open_state_token::text
-                            AND r.stream_kind = e.stage
-                      )
-                    ORDER BY e.created_at
-                    """
-                ),
-                {"since": since_dt},
-            )
-        ).all()
-
-    if not orphans:
-        return {"sent": 0, "skipped_duplicates": 0, "errors": 0}
-
-    logger.info("sweep_orphan_alerts: найдено %d осиротевших алертов за %dч", len(orphans), hours)
-
     counters: dict[str, int] = {"sent": 0, "skipped_duplicates": 0, "errors": 0}
 
-    for row in orphans:
-        (
-            event_id,
-            ad_id,
-            stage,
-            _state,
-            matched_codes,
-            metrics_json,
-            open_token,
-            fb_ad_id,
-            ad_name,
-            adset_name,
-            campaign_name,
-            offer_code,
-        ) = row
+    for r in recipients:
+        # SELECT осиротевших для данного recipient'а: alert_events за окно hours,
+        # где НЕТ matching message_ref С ЭТИМ chat_id.
+        # AND r.chat_id = :cid — ключевое отличие от pre-волна-2 варианта:
+        # без него при наличии ref для другого recipient'а sweep пропускал доставку.
+        # Фильтр created_at >= :since обеспечивает partition pruning.
+        # NULL open_state_token исключаем — нет incident_key для дедупликации.
+        async with engine.connect() as conn:
+            orphans = (
+                await conn.execute(
+                    text(
+                        """
+                        SELECT
+                            e.id, e.ad_id, e.stage, e.state,
+                            e.matched_rule_codes, e.metrics_json, e.open_state_token,
+                            a.fb_ad_id, a.ad_name,
+                            ads.adset_name,
+                            c.campaign_name,
+                            o.code AS offer_code
+                        FROM alert_events e
+                        JOIN fb_ads a ON a.id = e.ad_id
+                        JOIN fb_adsets ads ON ads.id = a.adset_id
+                        JOIN fb_campaigns c ON c.id = ads.campaign_id
+                        LEFT JOIN offers o ON o.id = c.offer_id
+                        WHERE e.created_at >= :since
+                          AND e.open_state_token IS NOT NULL
+                          AND NOT EXISTS (
+                              SELECT 1 FROM telegram_message_refs r
+                              WHERE r.ad_id = e.ad_id
+                                AND r.incident_key = e.open_state_token::text
+                                AND r.stream_kind = e.stage
+                                AND r.chat_id = :cid
+                          )
+                        ORDER BY e.created_at
+                        """
+                    ),
+                    {"since": since_dt, "cid": int(r.chat_id)},
+                )
+            ).all()
 
-        # open_state_token IS NOT NULL гарантирован WHERE-фильтром выше
-        incident_key = str(open_token)
+        if not orphans:
+            continue
 
-        await _deliver_one_alert(
-            engine,
-            client=client,
-            redis_client=redis_client,
-            chat_id=int(chat_id),
-            thread_id_by_stage=thread_id_by_stage,
-            event_id=event_id,
-            ad_id=ad_id,
-            stage=str(stage),
-            matched_codes=list(matched_codes or []),
-            metrics_json=dict(metrics_json or {}),
-            open_token=open_token,
-            fb_ad_id=str(fb_ad_id),
-            ad_name=str(ad_name or ""),
-            adset_name=str(adset_name or ""),
-            campaign_name=str(campaign_name or ""),
-            offer_code=str(offer_code) if offer_code else None,
-            incident_key=incident_key,
-            counters=counters,
+        logger.info(
+            "sweep_orphan_alerts: recipient %d — найдено %d осиротевших за %dч",
+            r.chat_id,
+            len(orphans),
+            hours,
         )
+
+        for row in orphans:
+            (
+                event_id,
+                ad_id,
+                stage,
+                _state,
+                matched_codes,
+                metrics_json,
+                open_token,
+                fb_ad_id,
+                ad_name,
+                adset_name,
+                campaign_name,
+                offer_code,
+            ) = row
+
+            # open_state_token IS NOT NULL гарантирован WHERE-фильтром выше
+            incident_key = str(open_token)
+
+            await _deliver_one_alert(
+                engine,
+                client=client,
+                redis_client=redis_client,
+                chat_id=int(r.chat_id),
+                thread_id_by_stage=thread_id_by_stage,
+                event_id=event_id,
+                ad_id=ad_id,
+                stage=str(stage),
+                matched_codes=list(matched_codes or []),
+                metrics_json=dict(metrics_json or {}),
+                open_token=open_token,
+                fb_ad_id=str(fb_ad_id),
+                ad_name=str(ad_name or ""),
+                adset_name=str(adset_name or ""),
+                campaign_name=str(campaign_name or ""),
+                offer_code=str(offer_code) if offer_code else None,
+                incident_key=incident_key,
+                counters=counters,
+            )
 
     if counters["sent"]:
         logger.info("sweep_orphan_alerts: отправлено %d алертов", counters["sent"])

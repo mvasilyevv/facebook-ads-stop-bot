@@ -14,7 +14,11 @@ from core.telegram.alert_dispatcher import sweep_orphan_alerts
 
 
 async def _seed_tg_config(conn) -> None:
-    """Вставляет минимальный telegram_config с chat_id для тестов sweep."""
+    """Вставляет минимальный telegram_config + один recipient для тестов sweep.
+
+    Волна 2: sweep использует load_active_recipients, а не config.chat_id.
+    Вставляем одного recipient'а чтобы sweep рассылал ровно одно сообщение.
+    """
     from core.crypto import encrypt
 
     enc = encrypt("TEST_BOT_TOKEN_FAKE")
@@ -32,6 +36,16 @@ async def _seed_tg_config(conn) -> None:
         ),
         {"tok": enc},
     )
+    # Один recipient в личке (chat_id == telegram_user_id для упрощения)
+    await conn.execute(
+        text(
+            """
+            INSERT INTO telegram_recipients (id, chat_id, telegram_user_id, role)
+            VALUES (gen_random_uuid(), -1001234567890, -1001234567890, 'owner')
+            ON CONFLICT (chat_id, telegram_user_id) DO NOTHING
+            """
+        )
+    )
 
 
 @pytest_asyncio.fixture
@@ -42,6 +56,7 @@ async def _seed_orphan(pg_engine):
     async with pg_engine.begin() as conn:
         for t in (
             "telegram_message_refs",
+            "telegram_recipients",
             "alert_events",
             "fb_ads",
             "fb_adsets",
