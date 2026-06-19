@@ -233,6 +233,48 @@
         }
       }
     },
+    "/api/dashboard/ads/bulk-delete": {
+      "post": {
+        "tags": [
+          "ads-admin"
+        ],
+        "summary": "Bulk Delete Ads",
+        "description": "Hard-delete объявлений из fb_ads по списку fb_ad_id (каскад на уровне БД).\n\nВозвращает фактически удалённые fb_ad_id (которых не было — молча пропускаются).",
+        "operationId": "bulk_delete_ads_api_dashboard_ads_bulk_delete_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkDeleteAdsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkDeleteAdsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/ads/{fb_ad_id}/timeline": {
       "get": {
         "tags": [
@@ -1083,7 +1125,7 @@
           "dashboard"
         ],
         "summary": "Get Chart Data",
-        "description": "Бакетированный график для DashboardPage.\n\nБакет = `date_trunc(bucket, cycle_ts)`. SUM по spend/impressions/clicks/leads/\nregistrations/deposits + COUNT DISTINCT ad_id для active_ads.\n\nБакеты без метрик в окне не появляются (gap). Это согласовано с фронтом —\nRecharts сам обработает разрывы.\n\nPartition pruning через WHERE cycle_ts >= NOW() - make_interval(hours).",
+        "description": "Бакетированный график для DashboardPage.\n\nБакет = `date_trunc(bucket, cycle_ts)`. SUM по spend/impressions/clicks/leads/\nregistrations/deposits + COUNT DISTINCT ad_id для active_ads.\n\ncabinet_day=true (Волна 2/E): окно от начала текущих суток кабинета (TZ аккаунта),\nчтобы график спенда начинался с нуля в полночь кабинета, а не от скользящего 24ч.\n\nБакеты без метрик в окне не появляются (gap). Recharts сам обработает разрывы.\nPartition pruning через WHERE cycle_ts >= floor (константа).",
         "operationId": "get_chart_data_api_dashboard_chart_data_get",
         "parameters": [
           {
@@ -1111,6 +1153,18 @@
               "title": "Bucket"
             },
             "description": "hour | day"
+          },
+          {
+            "name": "cabinet_day",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Окно с 00:00 текущих суток кабинета (TZ аккаунта) вместо скользящего hours",
+              "default": false,
+              "title": "Cabinet Day"
+            },
+            "description": "Окно с 00:00 текущих суток кабинета (TZ аккаунта) вместо скользящего hours"
           }
         ],
         "responses": {
@@ -1385,170 +1439,6 @@
         "responses": {
           "204": {
             "description": "Successful Response"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/dashboard/draft-tasks": {
-      "get": {
-        "tags": [
-          "drafts"
-        ],
-        "summary": "List Draft Tasks",
-        "description": "Список DRAFT meta-mutation задач (status='draft', task_type='meta_api_mutation').",
-        "operationId": "list_draft_tasks_api_dashboard_draft_tasks_get",
-        "parameters": [
-          {
-            "name": "kind",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Фильтр по mutation_kind",
-              "title": "Kind"
-            },
-            "description": "Фильтр по mutation_kind"
-          },
-          {
-            "name": "limit",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "maximum": 200,
-              "minimum": 1,
-              "default": 50,
-              "title": "Limit"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/TmaDraftOut"
-                  },
-                  "title": "Response List Draft Tasks Api Dashboard Draft Tasks Get"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/dashboard/draft-tasks/{task_id}/confirm": {
-      "post": {
-        "tags": [
-          "drafts"
-        ],
-        "summary": "Confirm Draft Task",
-        "description": "DRAFT → PENDING.\n\nAdmin-зона подтверждает только безхозные черновики (created_by_chat_id IS NULL,\nсозданные через MCP/HTTP). Черновики от конкретного TG-пользователя — 409\n(их подтверждают в Telegram). Money-критично: ACL внутри approve_draft_task.",
-        "operationId": "confirm_draft_task_api_dashboard_draft_tasks__task_id__confirm_post",
-        "parameters": [
-          {
-            "name": "task_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "title": "Task Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TmaDraftActionResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/dashboard/draft-tasks/{task_id}/reject": {
-      "post": {
-        "tags": [
-          "drafts"
-        ],
-        "summary": "Reject Draft Task",
-        "description": "Отклонить (cancel) DRAFT-задачу.",
-        "operationId": "reject_draft_task_api_dashboard_draft_tasks__task_id__reject_post",
-        "parameters": [
-          {
-            "name": "task_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "title": "Task Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/TmaRejectRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TmaDraftActionResponse"
-                }
-              }
-            }
           },
           "422": {
             "description": "Validation Error",
@@ -3085,6 +2975,68 @@
         }
       }
     },
+    "/api/settings/cabinet-autostart": {
+      "get": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Get Cabinet Autostart",
+        "description": "Текущий конфиг автостарта (или дефолт, если ещё не задан).",
+        "operationId": "get_cabinet_autostart_api_settings_cabinet_autostart_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CabinetAutostartResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Put Cabinet Autostart",
+        "description": "Полная замена конфига автостарта. Применяется со следующей минуты воркера.",
+        "operationId": "put_cabinet_autostart_api_settings_cabinet_autostart_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CabinetAutostartPutRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CabinetAutostartResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/settings/observer": {
       "get": {
         "tags": [
@@ -3303,19 +3255,49 @@
           "settings"
         ],
         "summary": "Refresh Observer Campaigns",
-        "description": "Live-обновление списка кампаний через browser-agent (Graph API, МИМО allowlist).\n\nРешает «замкнутый круг»: обычный скан с allowlist не подхватывает новые кампании,\nпоэтому их нельзя выбрать. Здесь резолвим ВСЕ кампании владельца по owner_tag живьём,\nапсертим в fb_campaigns (чтобы GET /campaigns их видел) и возвращаем обновлённый список.\n503 при недоступности browser-agent.",
+        "description": "Live-обновление списка кампаний через browser-agent (Graph API, МИМО allowlist).\n\nРешает «замкнутый круг»: обычный скан с allowlist не подхватывает новые кампании,\nпоэтому их нельзя выбрать. Здесь резолвим ВСЕ кампании владельца по owner_tag живьём,\nапсертим в fb_campaigns (чтобы GET /campaigns их видел) и возвращаем обновлённый список.\n503 при недоступности browser-agent.\n\nad_account_id (мульти-кабинет): если задан — browser-agent откроет вкладку именно\nэтого кабинета (ensureAdsManagerPage({actId})); иначе резолв из текущей primary-вкладки.",
         "operationId": "refresh_observer_campaigns_api_settings_observer_campaigns_refresh_post",
+        "parameters": [
+          {
+            "name": "ad_account_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "L10: числовой ID кабинета — резолв из вкладки этого кабинета. Пусто → текущая primary-вкладка (legacy).",
+              "title": "Ad Account Id"
+            },
+            "description": "L10: числовой ID кабинета — резолв из вкладки этого кабинета. Пусто → текущая primary-вкладка (legacy)."
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
+                  "type": "array",
                   "items": {
                     "$ref": "#/components/schemas/CampaignOption"
                   },
-                  "type": "array",
                   "title": "Response Refresh Observer Campaigns Api Settings Observer Campaigns Refresh Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -3551,6 +3533,30 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/TelegramInviteResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/settings/telegram/setup-topics": {
+      "post": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Post Setup Topics",
+        "description": "Создаёт статические топики супергруппы и сохраняет их thread_id. Идемпотентно.\n\nТребует: бот — админ супергруппы с правом can_manage_topics, в группе включены\n«Темы». 400, если не настроен токен/chat_id. Возвращает отчёт по топикам.",
+        "operationId": "post_setup_topics_api_settings_telegram_setup_topics_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Post Setup Topics Api Settings Telegram Setup Topics Post"
                 }
               }
             }
@@ -3924,200 +3930,43 @@
         }
       }
     },
-    "/api/tma/draft-tasks": {
+    "/api/tma/cabinet-autostart": {
       "get": {
         "tags": [
           "tma"
         ],
-        "summary": "Tma List Draft Tasks",
-        "description": "Список DRAFT meta-mutation задач. status != DRAFT → пустой список.",
-        "operationId": "tma_list_draft_tasks_api_tma_draft_tasks_get",
-        "parameters": [
-          {
-            "name": "status",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "description": "Только DRAFT поддерживается",
-              "default": "DRAFT",
-              "title": "Status"
-            },
-            "description": "Только DRAFT поддерживается"
-          },
-          {
-            "name": "kind",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Фильтр по mutation_kind",
-              "title": "Kind"
-            },
-            "description": "Фильтр по mutation_kind"
-          },
-          {
-            "name": "limit",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "maximum": 200,
-              "minimum": 1,
-              "default": 50,
-              "title": "Limit"
-            }
-          }
-        ],
+        "summary": "Tma Get Cabinet Autostart",
+        "description": "Текущий конфиг автостарта кабинета (любой авторизованный recipient).",
+        "operationId": "tma_get_cabinet_autostart_api_tma_cabinet_autostart_get",
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/TmaDraftOut"
-                  },
-                  "title": "Response Tma List Draft Tasks Api Tma Draft Tasks Get"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/CabinetAutostartResponse"
                 }
               }
             }
           }
         }
-      }
-    },
-    "/api/tma/draft-tasks/{task_id}": {
-      "get": {
+      },
+      "put": {
         "tags": [
           "tma"
         ],
-        "summary": "Tma Get Draft Task",
-        "description": "Детали одной DRAFT-задачи. 404 — нет или уже не draft.\n\nВ отличие от list, здесь заполняется:\n- expires_at: дедлайн подтверждения (created_at + 24h).\n- current_state: текущее состояние объекта мутации (для показа diff было→станет).",
-        "operationId": "tma_get_draft_task_api_tma_draft_tasks__task_id__get",
-        "parameters": [
-          {
-            "name": "task_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "title": "Task Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TmaDraftOut"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/tma/draft-tasks/{task_id}/confirm": {
-      "post": {
-        "tags": [
-          "tma"
-        ],
-        "summary": "Tma Confirm Draft Task",
-        "description": "DRAFT → PENDING. ACL внутри approve_draft_task (owner-or-creator).\n\nowner → admin_override (подтверждает любой draft, проверка is_admin внутри).\nrecipient → только свой draft (created_by_chat_id == chat_id). Money-критично.",
-        "operationId": "tma_confirm_draft_task_api_tma_draft_tasks__task_id__confirm_post",
-        "parameters": [
-          {
-            "name": "task_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "title": "Task Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TmaDraftActionResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/tma/draft-tasks/{task_id}/reject": {
-      "post": {
-        "tags": [
-          "tma"
-        ],
-        "summary": "Tma Reject Draft Task",
-        "description": "Отклонить (cancel) DRAFT. ACL: owner или создатель черновика.\n\nrecipient может отклонить только свой draft (created_by_chat_id == chat_id);\nowner — любой. Симметрично confirm — чтобы recipient не отменял чужое.",
-        "operationId": "tma_reject_draft_task_api_tma_draft_tasks__task_id__reject_post",
-        "parameters": [
-          {
-            "name": "task_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "title": "Task Id"
-            }
-          }
-        ],
+        "summary": "Tma Put Cabinet Autostart",
+        "description": "Изменить конфиг автостарта. Money-критично → только role='owner'.",
+        "operationId": "tma_put_cabinet_autostart_api_tma_cabinet_autostart_put",
         "requestBody": {
-          "required": true,
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/TmaRejectRequest"
+                "$ref": "#/components/schemas/CabinetAutostartPutRequest"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "200": {
@@ -4125,7 +3974,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/TmaDraftActionResponse"
+                  "$ref": "#/components/schemas/CabinetAutostartResponse"
                 }
               }
             }
@@ -4420,6 +4269,17 @@
             ],
             "title": "Adset Name"
           },
+          "ad_account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ad Account Id"
+          },
           "offer_code": {
             "anyOf": [
               {
@@ -4527,6 +4387,83 @@
               }
             ],
             "title": "Meta Ad Status"
+          },
+          "creative_thumb_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Creative Thumb Url"
+          },
+          "creative_image_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Creative Image Url"
+          },
+          "adset_pixel_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Adset Pixel Id"
+          },
+          "adset_daily_budget": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Adset Daily Budget"
+          },
+          "adset_lifetime_budget": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Adset Lifetime Budget"
+          },
+          "adset_budget_remaining": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Adset Budget Remaining"
+          },
+          "learning_stage": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Learning Stage"
           },
           "stop_rule_codes": {
             "items": {
@@ -4747,6 +4684,17 @@
             ],
             "title": "Campaign Name"
           },
+          "ad_account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ad Account Id"
+          },
           "offer_code": {
             "anyOf": [
               {
@@ -4961,6 +4909,47 @@
         ],
         "title": "Body_creative_uniquify_api_tools_creative_uniquify_post"
       },
+      "BulkDeleteAdsRequest": {
+        "properties": {
+          "fb_ad_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 500,
+            "minItems": 1,
+            "title": "Fb Ad Ids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "fb_ad_ids"
+        ],
+        "title": "BulkDeleteAdsRequest",
+        "description": "Список fb_ad_id для удаления (1..500 за запрос)."
+      },
+      "BulkDeleteAdsResponse": {
+        "properties": {
+          "deleted": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Deleted"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "deleted",
+          "count"
+        ],
+        "title": "BulkDeleteAdsResponse",
+        "description": "Фактически удалённые fb_ad_id."
+      },
       "BulkDisableFailed": {
         "properties": {
           "fb_ad_id": {
@@ -5162,6 +5151,60 @@
         ],
         "title": "BulkSnoozeResultOut",
         "description": "Partial-failure ответ bulk-снуза. HTTP 200 даже при частичном успехе."
+      },
+      "CabinetAutostartPutRequest": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "hour_utc": {
+            "type": "integer",
+            "maximum": 23.0,
+            "minimum": 0.0,
+            "title": "Hour Utc",
+            "description": "Час запуска (UTC) 0..23"
+          },
+          "minute_utc": {
+            "type": "integer",
+            "maximum": 59.0,
+            "minimum": 0.0,
+            "title": "Minute Utc",
+            "description": "Минута запуска 0..59"
+          }
+        },
+        "type": "object",
+        "required": [
+          "enabled",
+          "hour_utc",
+          "minute_utc"
+        ],
+        "title": "CabinetAutostartPutRequest",
+        "description": "Тело PUT — расписание автостарта (вкл/выкл + время)."
+      },
+      "CabinetAutostartResponse": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "hour_utc": {
+            "type": "integer",
+            "title": "Hour Utc"
+          },
+          "minute_utc": {
+            "type": "integer",
+            "title": "Minute Utc"
+          }
+        },
+        "type": "object",
+        "required": [
+          "enabled",
+          "hour_utc",
+          "minute_utc"
+        ],
+        "title": "CabinetAutostartResponse",
+        "description": "Текущий конфиг автостарта (только расписание; кампании — в allowlist'е)."
       },
       "CampaignAdPlanOut": {
         "properties": {
@@ -5795,6 +5838,17 @@
             "title": "Active Incidents",
             "default": 0
           },
+          "current_day_spend": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Day Spend"
+          },
           "last_scan_at": {
             "anyOf": [
               {
@@ -6312,6 +6366,17 @@
           "campaign_name": {
             "type": "string",
             "title": "Campaign Name"
+          },
+          "ad_account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ad Account Id"
           },
           "offer_code": {
             "anyOf": [
@@ -6896,6 +6961,17 @@
             ],
             "title": "Adset Name"
           },
+          "ad_account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ad Account Id"
+          },
           "offer_code": {
             "anyOf": [
               {
@@ -7003,6 +7079,83 @@
               }
             ],
             "title": "Meta Ad Status"
+          },
+          "creative_thumb_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Creative Thumb Url"
+          },
+          "creative_image_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Creative Image Url"
+          },
+          "adset_pixel_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Adset Pixel Id"
+          },
+          "adset_daily_budget": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Adset Daily Budget"
+          },
+          "adset_lifetime_budget": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Adset Lifetime Budget"
+          },
+          "adset_budget_remaining": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Adset Budget Remaining"
+          },
+          "learning_stage": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Learning Stage"
           },
           "stop_rule_codes": {
             "items": {
@@ -7599,6 +7752,26 @@
             ],
             "title": "Vertical"
           },
+          "pixel_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pixel Id"
+          },
+          "ad_account_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Ad Account Ids"
+          },
           "country_code": {
             "anyOf": [
               {
@@ -7635,7 +7808,8 @@
         },
         "type": "object",
         "required": [
-          "code"
+          "code",
+          "ad_account_ids"
         ],
         "title": "OfferCreateIn",
         "description": "Тело POST /offers."
@@ -7739,6 +7913,17 @@
             ],
             "title": "Vertical"
           },
+          "pixel_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pixel Id"
+          },
           "country_code": {
             "type": "null",
             "title": "Country Code"
@@ -7746,6 +7931,13 @@
           "is_active": {
             "type": "boolean",
             "title": "Is Active"
+          },
+          "ad_account_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Ad Account Ids"
           },
           "created_at": {
             "anyOf": [
@@ -8062,6 +8254,18 @@
             ],
             "title": "Vertical"
           },
+          "pixel_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pixel Id"
+          },
           "is_active": {
             "anyOf": [
               {
@@ -8072,6 +8276,20 @@
               }
             ],
             "title": "Is Active"
+          },
+          "ad_account_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ad Account Ids"
           },
           "country_code": {
             "anyOf": [
@@ -8359,6 +8577,17 @@
               }
             ],
             "title": "Error Message"
+          },
+          "ad_account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ad Account Id"
           }
         },
         "type": "object",
@@ -9194,6 +9423,17 @@
               }
             ],
             "title": "Reason"
+          },
+          "token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token"
           }
         },
         "type": "object",
@@ -9234,110 +9474,6 @@
         ],
         "title": "TmaDisableResponse",
         "description": "Результат постановки задачи на отключение."
-      },
-      "TmaDraftActionResponse": {
-        "properties": {
-          "ok": {
-            "type": "boolean",
-            "title": "Ok"
-          },
-          "detail": {
-            "type": "string",
-            "title": "Detail"
-          }
-        },
-        "type": "object",
-        "required": [
-          "ok",
-          "detail"
-        ],
-        "title": "TmaDraftActionResponse",
-        "description": "Результат confirm/reject draft-задачи."
-      },
-      "TmaDraftOut": {
-        "properties": {
-          "id": {
-            "type": "integer",
-            "title": "Id"
-          },
-          "mutation_kind": {
-            "type": "string",
-            "title": "Mutation Kind"
-          },
-          "target_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Target Id"
-          },
-          "ad_account_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Ad Account Id"
-          },
-          "payload": {
-            "additionalProperties": true,
-            "type": "object",
-            "title": "Payload"
-          },
-          "requested_by": {
-            "type": "string",
-            "title": "Requested By"
-          },
-          "created_at": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Created At"
-          },
-          "expires_at": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Expires At"
-          },
-          "current_state": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Current State"
-          }
-        },
-        "type": "object",
-        "required": [
-          "id",
-          "mutation_kind",
-          "requested_by"
-        ],
-        "title": "TmaDraftOut",
-        "description": "Снимок DRAFT meta-mutation задачи для DraftsPage.\n\nexpires_at: время автоматической отмены (created_at + DRAFT_TTL_SECONDS).\ncurrent_state: текущее состояние объекта мутации (заполняется в detail-endpoint'е).\n    - pause_ad / activate_ad: {\"alert_state\": str, \"delivery_status\": str | None}\n    - set_adset_budget: {\"daily_budget_cents\": int | None, \"lifetime_budget_cents\": int | None}\n    - bulk_status_change: {\"by_state\": {\"<state>\": count}} — агрегат по N объектам\n    - Остальные mutation_kind → null (не поддерживаются / слишком дорого).\nВ list-endpoint'е current_state = None (дорого резолвить N строк)."
       },
       "TmaMeResponse": {
         "properties": {
@@ -9393,24 +9529,6 @@
         ],
         "title": "TmaRecentAlert",
         "description": "Одна запись истории алертов (alert_events) для AdDetailPage."
-      },
-      "TmaRejectRequest": {
-        "properties": {
-          "reason": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Reason"
-          }
-        },
-        "type": "object",
-        "title": "TmaRejectRequest",
-        "description": "Тело POST /tma/draft-tasks/{id}/reject."
       },
       "TmaSnoozeRequest": {
         "properties": {

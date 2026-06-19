@@ -33,14 +33,6 @@ export type TaskQueueRow = components["schemas"]["TaskQueueRowOut"];
 /** Enable-recommendation строка */
 export type EnableRecommendationRow = components["schemas"]["EnableRecommendationRowOut"];
 
-// ─── Черновики meta-mutations (TMA и Drafts page) ─────────────────────────
-
-/**
- * Снимок DRAFT meta-mutation задачи для DraftsPage / TMA.
- * Бэк отдаёт через GET /tma/draft-tasks и GET /api/drafts.
- */
-export type DraftOut = components["schemas"]["TmaDraftOut"];
-
 // ─── Офферы ──────────────────────────────────────────────────────────────────
 
 /** Оффер с правилами */

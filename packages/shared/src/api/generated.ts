@@ -136,6 +136,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/dashboard/ads/bulk-delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Bulk Delete Ads
+         * @description Hard-delete объявлений из fb_ads по списку fb_ad_id (каскад на уровне БД).
+         *
+         *     Возвращает фактически удалённые fb_ad_id (которых не было — молча пропускаются).
+         */
+        post: operations["bulk_delete_ads_api_dashboard_ads_bulk_delete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/ads/{fb_ad_id}/timeline": {
         parameters: {
             query?: never;
@@ -451,10 +473,11 @@ export interface paths {
          *     Бакет = `date_trunc(bucket, cycle_ts)`. SUM по spend/impressions/clicks/leads/
          *     registrations/deposits + COUNT DISTINCT ad_id для active_ads.
          *
-         *     Бакеты без метрик в окне не появляются (gap). Это согласовано с фронтом —
-         *     Recharts сам обработает разрывы.
+         *     cabinet_day=true (Волна 2/E): окно от начала текущих суток кабинета (TZ аккаунта),
+         *     чтобы график спенда начинался с нуля в полночь кабинета, а не от скользящего 24ч.
          *
-         *     Partition pruning через WHERE cycle_ts >= NOW() - make_interval(hours).
+         *     Бакеты без метрик в окне не появляются (gap). Recharts сам обработает разрывы.
+         *     Partition pruning через WHERE cycle_ts >= floor (константа).
          */
         get: operations["get_chart_data_api_dashboard_chart_data_get"];
         put?: never;
@@ -572,70 +595,6 @@ export interface paths {
          *     409 если задача уже в терминальном статусе (succeeded/cancelled).
          */
         delete: operations["cancel_disable_task_api_dashboard_disable_tasks__task_id__delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/dashboard/draft-tasks": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Draft Tasks
-         * @description Список DRAFT meta-mutation задач (status='draft', task_type='meta_api_mutation').
-         */
-        get: operations["list_draft_tasks_api_dashboard_draft_tasks_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/dashboard/draft-tasks/{task_id}/confirm": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Confirm Draft Task
-         * @description DRAFT → PENDING.
-         *
-         *     Admin-зона подтверждает только безхозные черновики (created_by_chat_id IS NULL,
-         *     созданные через MCP/HTTP). Черновики от конкретного TG-пользователя — 409
-         *     (их подтверждают в Telegram). Money-критично: ACL внутри approve_draft_task.
-         */
-        post: operations["confirm_draft_task_api_dashboard_draft_tasks__task_id__confirm_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/dashboard/draft-tasks/{task_id}/reject": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Reject Draft Task
-         * @description Отклонить (cancel) DRAFT-задачу.
-         */
-        post: operations["reject_draft_task_api_dashboard_draft_tasks__task_id__reject_post"];
-        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -1173,6 +1132,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/settings/cabinet-autostart": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Cabinet Autostart
+         * @description Текущий конфиг автостарта (или дефолт, если ещё не задан).
+         */
+        get: operations["get_cabinet_autostart_api_settings_cabinet_autostart_get"];
+        /**
+         * Put Cabinet Autostart
+         * @description Полная замена конфига автостарта. Применяется со следующей минуты воркера.
+         */
+        put: operations["put_cabinet_autostart_api_settings_cabinet_autostart_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/settings/observer": {
         parameters: {
             query?: never;
@@ -1290,6 +1273,9 @@ export interface paths {
          *     поэтому их нельзя выбрать. Здесь резолвим ВСЕ кампании владельца по owner_tag живьём,
          *     апсертим в fb_campaigns (чтобы GET /campaigns их видел) и возвращаем обновлённый список.
          *     503 при недоступности browser-agent.
+         *
+         *     ad_account_id (мульти-кабинет): если задан — browser-agent откроет вкладку именно
+         *     этого кабинета (ensureAdsManagerPage({actId})); иначе резолв из текущей primary-вкладки.
          */
         post: operations["refresh_observer_campaigns_api_settings_observer_campaigns_refresh_post"];
         delete?: never;
@@ -1454,6 +1440,29 @@ export interface paths {
          *     Возвращает { code, expires_at }.
          */
         post: operations["post_telegram_invite_api_settings_telegram_recipients_invite_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/settings/telegram/setup-topics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Setup Topics
+         * @description Создаёт статические топики супергруппы и сохраняет их thread_id. Идемпотентно.
+         *
+         *     Требует: бот — админ супергруппы с правом can_manage_topics, в группе включены
+         *     «Темы». 400, если не настроен токен/chat_id. Возвращает отчёт по топикам.
+         */
+        post: operations["post_setup_topics_api_settings_telegram_setup_topics_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1671,7 +1680,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/tma/draft-tasks": {
+    "/api/tma/cabinet-autostart": {
         parameters: {
             query?: never;
             header?: never;
@@ -1679,82 +1688,16 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Tma List Draft Tasks
-         * @description Список DRAFT meta-mutation задач. status != DRAFT → пустой список.
+         * Tma Get Cabinet Autostart
+         * @description Текущий конфиг автостарта кабинета (любой авторизованный recipient).
          */
-        get: operations["tma_list_draft_tasks_api_tma_draft_tasks_get"];
-        put?: never;
+        get: operations["tma_get_cabinet_autostart_api_tma_cabinet_autostart_get"];
+        /**
+         * Tma Put Cabinet Autostart
+         * @description Изменить конфиг автостарта. Money-критично → только role='owner'.
+         */
+        put: operations["tma_put_cabinet_autostart_api_tma_cabinet_autostart_put"];
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tma/draft-tasks/{task_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Tma Get Draft Task
-         * @description Детали одной DRAFT-задачи. 404 — нет или уже не draft.
-         *
-         *     В отличие от list, здесь заполняется:
-         *     - expires_at: дедлайн подтверждения (created_at + 24h).
-         *     - current_state: текущее состояние объекта мутации (для показа diff было→станет).
-         */
-        get: operations["tma_get_draft_task_api_tma_draft_tasks__task_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tma/draft-tasks/{task_id}/confirm": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Tma Confirm Draft Task
-         * @description DRAFT → PENDING. ACL внутри approve_draft_task (owner-or-creator).
-         *
-         *     owner → admin_override (подтверждает любой draft, проверка is_admin внутри).
-         *     recipient → только свой draft (created_by_chat_id == chat_id). Money-критично.
-         */
-        post: operations["tma_confirm_draft_task_api_tma_draft_tasks__task_id__confirm_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tma/draft-tasks/{task_id}/reject": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Tma Reject Draft Task
-         * @description Отклонить (cancel) DRAFT. ACL: owner или создатель черновика.
-         *
-         *     recipient может отклонить только свой draft (created_by_chat_id == chat_id);
-         *     owner — любой. Симметрично confirm — чтобы recipient не отменял чужое.
-         */
-        post: operations["tma_reject_draft_task_api_tma_draft_tasks__task_id__reject_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1923,6 +1866,8 @@ export interface components {
             campaign_name?: string | null;
             /** Adset Name */
             adset_name?: string | null;
+            /** Ad Account Id */
+            ad_account_id?: string | null;
             /** Offer Code */
             offer_code?: string | null;
             /** Offer Id */
@@ -1948,25 +1893,25 @@ export interface components {
             delivery_status?: string | null;
             /** Meta Ad Status */
             meta_ad_status?: string | null;
+            /** Creative Thumb Url */
+            creative_thumb_url?: string | null;
+            /** Creative Image Url */
+            creative_image_url?: string | null;
+            /** Adset Pixel Id */
+            adset_pixel_id?: string | null;
+            /** Adset Daily Budget */
+            adset_daily_budget?: string | null;
+            /** Adset Lifetime Budget */
+            adset_lifetime_budget?: string | null;
+            /** Adset Budget Remaining */
+            adset_budget_remaining?: string | null;
+            /** Learning Stage */
+            learning_stage?: string | null;
             /** Stop Rule Codes */
             stop_rule_codes?: string[];
             /** Warning Rule Codes */
             warning_rule_codes?: string[];
             metrics?: components["schemas"]["MetricsBlock"] | null;
-            /** Маленькое превью крео (thumb_url из Meta). Есть у любого крео: картинка/видео. */
-            creative_thumb_url?: string | null;
-            /** Полноразмерная картинка (только image-крео; для видео пусто — fallback на thumb). */
-            creative_image_url?: string | null;
-            /** ID пикселя адсета. */
-            adset_pixel_id?: string | null;
-            /** Дневной бюджет адсета (minor units, т.е. центы). Делить на 100 для отображения. */
-            adset_daily_budget?: string | null;
-            /** Lifetime-бюджет адсета (minor units). */
-            adset_lifetime_budget?: string | null;
-            /** Остаток бюджета адсета (minor units). */
-            adset_budget_remaining?: string | null;
-            /** Фаза обучения адсета: "" | "LEARNING" | "LEARNING_LIMITED". */
-            learning_stage?: string | null;
         };
         /**
          * AdTimelineResponse
@@ -2046,6 +1991,8 @@ export interface components {
             ad_name?: string | null;
             /** Campaign Name */
             campaign_name?: string | null;
+            /** Ad Account Id */
+            ad_account_id?: string | null;
             /** Offer Code */
             offer_code?: string | null;
             /** Stage */
@@ -2138,6 +2085,24 @@ export interface components {
             copies: number;
             /** Files */
             files: string[];
+        };
+        /**
+         * BulkDeleteAdsRequest
+         * @description Список fb_ad_id для удаления (1..500 за запрос).
+         */
+        BulkDeleteAdsRequest: {
+            /** Fb Ad Ids */
+            fb_ad_ids: string[];
+        };
+        /**
+         * BulkDeleteAdsResponse
+         * @description Фактически удалённые fb_ad_id.
+         */
+        BulkDeleteAdsResponse: {
+            /** Deleted */
+            deleted: string[];
+            /** Count */
+            count: number;
         };
         /**
          * BulkDisableFailed
@@ -2246,6 +2211,36 @@ export interface components {
             snoozed?: string[];
             /** Failed */
             failed?: components["schemas"]["BulkSnoozeFailed"][];
+        };
+        /**
+         * CabinetAutostartPutRequest
+         * @description Тело PUT — расписание автостарта (вкл/выкл + время).
+         */
+        CabinetAutostartPutRequest: {
+            /** Enabled */
+            enabled: boolean;
+            /**
+             * Hour Utc
+             * @description Час запуска (UTC) 0..23
+             */
+            hour_utc: number;
+            /**
+             * Minute Utc
+             * @description Минута запуска 0..59
+             */
+            minute_utc: number;
+        };
+        /**
+         * CabinetAutostartResponse
+         * @description Текущий конфиг автостарта (только расписание; кампании — в allowlist'е).
+         */
+        CabinetAutostartResponse: {
+            /** Enabled */
+            enabled: boolean;
+            /** Hour Utc */
+            hour_utc: number;
+            /** Minute Utc */
+            minute_utc: number;
         };
         /**
          * CampaignAdPlanOut
@@ -2575,7 +2570,7 @@ export interface components {
              * @default 0
              */
             active_incidents: number;
-            /** Current Day Spend — спенд текущих суток кабинета с нуля (Волна 2/E) */
+            /** Current Day Spend */
             current_day_spend?: string | null;
             /** Last Scan At */
             last_scan_at?: string | null;
@@ -2807,6 +2802,8 @@ export interface components {
             ad_name: string;
             /** Campaign Name */
             campaign_name: string;
+            /** Ad Account Id */
+            ad_account_id?: string | null;
             /** Offer Code */
             offer_code?: string | null;
             /** Is Active */
@@ -3024,6 +3021,8 @@ export interface components {
             campaign_name?: string | null;
             /** Adset Name */
             adset_name?: string | null;
+            /** Ad Account Id */
+            ad_account_id?: string | null;
             /** Offer Code */
             offer_code?: string | null;
             /** Offer Id */
@@ -3049,6 +3048,20 @@ export interface components {
             delivery_status?: string | null;
             /** Meta Ad Status */
             meta_ad_status?: string | null;
+            /** Creative Thumb Url */
+            creative_thumb_url?: string | null;
+            /** Creative Image Url */
+            creative_image_url?: string | null;
+            /** Adset Pixel Id */
+            adset_pixel_id?: string | null;
+            /** Adset Daily Budget */
+            adset_daily_budget?: string | null;
+            /** Adset Lifetime Budget */
+            adset_lifetime_budget?: string | null;
+            /** Adset Budget Remaining */
+            adset_budget_remaining?: string | null;
+            /** Learning Stage */
+            learning_stage?: string | null;
             /** Stop Rule Codes */
             stop_rule_codes?: string[];
             /** Warning Rule Codes */
@@ -3255,6 +3268,10 @@ export interface components {
             name?: string | null;
             /** Vertical */
             vertical?: string | null;
+            /** Pixel Id */
+            pixel_id?: string | null;
+            /** Ad Account Ids */
+            ad_account_ids: string[];
             /** Country Code */
             country_code?: string | null;
             /** Use Vision Creator */
@@ -3303,10 +3320,14 @@ export interface components {
             name: string;
             /** Vertical */
             vertical?: string | null;
+            /** Pixel Id */
+            pixel_id?: string | null;
             /** Country Code */
             country_code?: null;
             /** Is Active */
             is_active: boolean;
+            /** Ad Account Ids */
+            ad_account_ids?: string[];
             /** Created At */
             created_at?: string | null;
             /** Updated At */
@@ -3394,8 +3415,12 @@ export interface components {
             name?: string | null;
             /** Vertical */
             vertical?: string | null;
+            /** Pixel Id */
+            pixel_id?: string | null;
             /** Is Active */
             is_active?: boolean | null;
+            /** Ad Account Ids */
+            ad_account_ids?: string[] | null;
             /** Country Code */
             country_code?: string | null;
             /** Use Vision Creator */
@@ -3506,6 +3531,8 @@ export interface components {
             metrics_inserted?: number | null;
             /** Error Message */
             error_message?: string | null;
+            /** Ad Account Id */
+            ad_account_id?: string | null;
         };
         /**
          * ScanRunsResponse
@@ -3844,6 +3871,8 @@ export interface components {
         TmaDisableRequest: {
             /** Reason */
             reason?: string | null;
+            /** Token */
+            token?: string | null;
         };
         /**
          * TmaDisableResponse
@@ -3858,52 +3887,6 @@ export interface components {
             channel: string;
             /** Detail */
             detail: string;
-        };
-        /**
-         * TmaDraftActionResponse
-         * @description Результат confirm/reject draft-задачи.
-         */
-        TmaDraftActionResponse: {
-            /** Ok */
-            ok: boolean;
-            /** Detail */
-            detail: string;
-        };
-        /**
-         * TmaDraftOut
-         * @description Снимок DRAFT meta-mutation задачи для DraftsPage.
-         *
-         *     expires_at: время автоматической отмены (created_at + DRAFT_TTL_SECONDS).
-         *     current_state: текущее состояние объекта мутации (заполняется в detail-endpoint'е).
-         *         - pause_ad / activate_ad: {"alert_state": str, "delivery_status": str | None}
-         *         - set_adset_budget: {"daily_budget_cents": int | None, "lifetime_budget_cents": int | None}
-         *         - bulk_status_change: {"by_state": {"<state>": count}} — агрегат по N объектам
-         *         - Остальные mutation_kind → null (не поддерживаются / слишком дорого).
-         *     В list-endpoint'е current_state = None (дорого резолвить N строк).
-         */
-        TmaDraftOut: {
-            /** Id */
-            id: number;
-            /** Mutation Kind */
-            mutation_kind: string;
-            /** Target Id */
-            target_id?: string | null;
-            /** Ad Account Id */
-            ad_account_id?: string | null;
-            /** Payload */
-            payload?: {
-                [key: string]: unknown;
-            };
-            /** Requested By */
-            requested_by: string;
-            /** Created At */
-            created_at?: string | null;
-            /** Expires At */
-            expires_at?: string | null;
-            /** Current State */
-            current_state?: {
-                [key: string]: unknown;
-            } | null;
         };
         /**
          * TmaMeResponse
@@ -3926,14 +3909,6 @@ export interface components {
             created_at?: string | null;
             /** Reason Title */
             reason_title?: string | null;
-        };
-        /**
-         * TmaRejectRequest
-         * @description Тело POST /tma/draft-tasks/{id}/reject.
-         */
-        TmaRejectRequest: {
-            /** Reason */
-            reason?: string | null;
         };
         /**
          * TmaSnoozeRequest
@@ -4261,6 +4236,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BulkSnoozeResultOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    bulk_delete_ads_api_dashboard_ads_bulk_delete_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BulkDeleteAdsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkDeleteAdsResponse"];
                 };
             };
             /** @description Validation Error */
@@ -4674,6 +4682,8 @@ export interface operations {
                 hours?: number;
                 /** @description hour | day */
                 bucket?: string;
+                /** @description Окно с 00:00 текущих суток кабинета (TZ аккаунта) вместо скользящего hours */
+                cabinet_day?: boolean;
             };
             header?: never;
             path?: never;
@@ -4851,105 +4861,6 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_draft_tasks_api_dashboard_draft_tasks_get: {
-        parameters: {
-            query?: {
-                /** @description Фильтр по mutation_kind */
-                kind?: string | null;
-                limit?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TmaDraftOut"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    confirm_draft_task_api_dashboard_draft_tasks__task_id__confirm_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                task_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TmaDraftActionResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    reject_draft_task_api_dashboard_draft_tasks__task_id__reject_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                task_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TmaRejectRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TmaDraftActionResponse"];
-                };
             };
             /** @description Validation Error */
             422: {
@@ -5737,6 +5648,59 @@ export interface operations {
             };
         };
     };
+    get_cabinet_autostart_api_settings_cabinet_autostart_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CabinetAutostartResponse"];
+                };
+            };
+        };
+    };
+    put_cabinet_autostart_api_settings_cabinet_autostart_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CabinetAutostartPutRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CabinetAutostartResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_observer_settings_api_settings_observer_get: {
         parameters: {
             query?: never;
@@ -5911,7 +5875,10 @@ export interface operations {
     };
     refresh_observer_campaigns_api_settings_observer_campaigns_refresh_post: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description L10: числовой ID кабинета — резолв из вкладки этого кабинета. Пусто → текущая primary-вкладка (legacy). */
+                ad_account_id?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -5925,6 +5892,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CampaignOption"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -6122,6 +6098,28 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TelegramInviteResponse"];
+                };
+            };
+        };
+    };
+    post_setup_topics_api_settings_telegram_setup_topics_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
         };
@@ -6404,15 +6402,9 @@ export interface operations {
             };
         };
     };
-    tma_list_draft_tasks_api_tma_draft_tasks_get: {
+    tma_get_cabinet_autostart_api_tma_cabinet_autostart_get: {
         parameters: {
-            query?: {
-                /** @description Только DRAFT поддерживается */
-                status?: string;
-                /** @description Фильтр по mutation_kind */
-                kind?: string | null;
-                limit?: number;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -6425,94 +6417,21 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TmaDraftOut"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["CabinetAutostartResponse"];
                 };
             };
         };
     };
-    tma_get_draft_task_api_tma_draft_tasks__task_id__get: {
+    tma_put_cabinet_autostart_api_tma_cabinet_autostart_put: {
         parameters: {
             query?: never;
             header?: never;
-            path: {
-                task_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TmaDraftOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    tma_confirm_draft_task_api_tma_draft_tasks__task_id__confirm_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                task_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TmaDraftActionResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    tma_reject_draft_task_api_tma_draft_tasks__task_id__reject_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                task_id: number;
-            };
+            path?: never;
             cookie?: never;
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["TmaRejectRequest"];
+                "application/json": components["schemas"]["CabinetAutostartPutRequest"];
             };
         };
         responses: {
@@ -6522,7 +6441,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TmaDraftActionResponse"];
+                    "application/json": components["schemas"]["CabinetAutostartResponse"];
                 };
             };
             /** @description Validation Error */
