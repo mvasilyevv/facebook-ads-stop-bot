@@ -157,14 +157,29 @@ class TelegramBotClient:
         payload: dict,
         request_timeout: float | None = None,
     ) -> httpx.Response:
-        """HTTP POST с однократным retry при 429."""
+        """HTTP POST с однократным retry при 429 и backoff-ретраем при 502/503/504."""
+        url = f"{self._base}/{method}"
         try:
-            resp = await self._http.post(
-                f"{self._base}/{method}",
-                json=payload,
-                timeout=request_timeout,
-            )
+            resp = await self._http.post(url, json=payload, timeout=request_timeout)
             if resp.status_code != 429:
+                # Ретрай при транзиентных ошибках шлюза (2 попытки с нарастающей паузой)
+                if resp.status_code in (502, 503, 504):
+                    for delay in (2.0, 5.0):
+                        logger.warning(
+                            "Транзиентная ошибка Telegram API %s при вызове %s, повтор через %s с",
+                            resp.status_code,
+                            method,
+                            delay,
+                        )
+                        await asyncio.sleep(delay)
+                        try:
+                            resp = await self._http.post(url, json=payload, timeout=request_timeout)
+                        except httpx.HTTPError:
+                            raise RuntimeError(
+                                f"Не удалось выполнить запрос к Telegram API ({method})"
+                            ) from None
+                        if resp.status_code not in (502, 503, 504):
+                            break
                 return resp
         except httpx.HTTPError:
             raise RuntimeError(f"Не удалось выполнить запрос к Telegram API ({method})") from None
@@ -175,11 +190,7 @@ class TelegramBotClient:
         await asyncio.sleep(wait)
 
         try:
-            resp = await self._http.post(
-                f"{self._base}/{method}",
-                json=payload,
-                timeout=request_timeout,
-            )
+            resp = await self._http.post(url, json=payload, timeout=request_timeout)
         except httpx.HTTPError:
             raise RuntimeError(f"Не удалось выполнить запрос к Telegram API ({method})") from None
         return resp
