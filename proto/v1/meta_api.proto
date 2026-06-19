@@ -100,10 +100,19 @@ message GraphApiError {
 message CheckMetaApiHealthRequest {
   // ID активной browser-сессии. Если пустой — используется preferred session.
   string session_id = 1;
+
+  // Если true — выполнить РЕАЛЬНЫЙ лёгкий запрос к graph.facebook.com
+  // (GET /me?fields=id) тем же page.evaluate(fetch), что и auto-stop pause_ad.
+  // Token-only проверка (URL + EAA в DOM) может быть «healthy» при мёртвом сетевом
+  // канале (Failed to fetch). full_probe ловит это. Дороже — для watchdog/диагностики,
+  // не для частых проверок. По умолчанию false (дешёвый token-only режим).
+  bool full_probe = 2;
 }
 
 message CheckMetaApiHealthResponse {
   // True если Vision-сессия активна И на странице есть access_token.
+  // При full_probe дополнительно требует, чтобы реальный канал к Graph был жив
+  // (network доступен, токен не протух). Meta-side ошибки (rate-limit) канал живым не убирают.
   bool healthy = 1;
 
   // Текущий URL страницы (чтобы понять, на Ads Manager ли мы).
@@ -116,8 +125,24 @@ message CheckMetaApiHealthResponse {
   int32 token_length = 4;
 
   // Детали при unhealthy: "session_not_found", "page_closed", "wrong_url",
-  // "token_not_found", "browser_disconnected".
+  // "token_not_found", "browser_disconnected", "probe_network_down", "probe_token_invalid".
   string detail = 5;
+
+  // True если реальный сетевой probe был выполнен (full_probe=true и токен присутствовал).
+  bool probe_performed = 6;
+
+  // True если probe-запрос к Graph успешен (HTTP 200 без error-блока).
+  bool probe_ok = 7;
+
+  // HTTP-статус probe-ответа Meta (0 при сетевом отказе/таймауте).
+  int32 probe_status_code = 8;
+
+  // Длительность probe-запроса в миллисекундах.
+  int32 probe_duration_ms = 9;
+
+  // Детали probe: "ok", "probe_network_down", "probe_token_invalid",
+  // "meta_error:<code>" (Meta-side ошибка, но канал жив), "not_performed".
+  string probe_detail = 10;
 }
 
 // ======================== Media upload ========================

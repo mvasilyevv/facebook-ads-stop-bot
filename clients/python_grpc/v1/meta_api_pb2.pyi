@@ -92,23 +92,46 @@ class GraphApiError(_message.Message):
     ) -> None: ...
 
 class CheckMetaApiHealthRequest(_message.Message):
-    __slots__ = ("session_id",)
+    __slots__ = ("session_id", "full_probe")
     SESSION_ID_FIELD_NUMBER: _ClassVar[int]
+    FULL_PROBE_FIELD_NUMBER: _ClassVar[int]
     session_id: str
-    def __init__(self, session_id: _Optional[str] = ...) -> None: ...
+    full_probe: bool
+    def __init__(self, session_id: _Optional[str] = ..., full_probe: bool = ...) -> None: ...
 
 class CheckMetaApiHealthResponse(_message.Message):
-    __slots__ = ("healthy", "current_url", "token_present", "token_length", "detail")
+    __slots__ = (
+        "healthy",
+        "current_url",
+        "token_present",
+        "token_length",
+        "detail",
+        "probe_performed",
+        "probe_ok",
+        "probe_status_code",
+        "probe_duration_ms",
+        "probe_detail",
+    )
     HEALTHY_FIELD_NUMBER: _ClassVar[int]
     CURRENT_URL_FIELD_NUMBER: _ClassVar[int]
     TOKEN_PRESENT_FIELD_NUMBER: _ClassVar[int]
     TOKEN_LENGTH_FIELD_NUMBER: _ClassVar[int]
     DETAIL_FIELD_NUMBER: _ClassVar[int]
+    PROBE_PERFORMED_FIELD_NUMBER: _ClassVar[int]
+    PROBE_OK_FIELD_NUMBER: _ClassVar[int]
+    PROBE_STATUS_CODE_FIELD_NUMBER: _ClassVar[int]
+    PROBE_DURATION_MS_FIELD_NUMBER: _ClassVar[int]
+    PROBE_DETAIL_FIELD_NUMBER: _ClassVar[int]
     healthy: bool
     current_url: str
     token_present: bool
     token_length: int
     detail: str
+    probe_performed: bool
+    probe_ok: bool
+    probe_status_code: int
+    probe_duration_ms: int
+    probe_detail: str
     def __init__(
         self,
         healthy: bool = ...,
@@ -116,6 +139,11 @@ class CheckMetaApiHealthResponse(_message.Message):
         token_present: bool = ...,
         token_length: _Optional[int] = ...,
         detail: _Optional[str] = ...,
+        probe_performed: bool = ...,
+        probe_ok: bool = ...,
+        probe_status_code: _Optional[int] = ...,
+        probe_duration_ms: _Optional[int] = ...,
+        probe_detail: _Optional[str] = ...,
     ) -> None: ...
 
 class UploadImageRequest(_message.Message):

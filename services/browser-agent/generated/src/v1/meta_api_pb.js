@@ -256,7 +256,8 @@ proto.fb_agent.meta_api.v1.ExecuteGraphCallRequest.toObject = function(includeIn
     endpoint: jspb.Message.getFieldWithDefault(msg, 3, ""),
     queryParamsMap: (f = msg.getQueryParamsMap()) ? f.toObject(includeInstance, undefined) : [],
     bodyJson: jspb.Message.getFieldWithDefault(msg, 5, ""),
-    timeoutMs: jspb.Message.getFieldWithDefault(msg, 6, 0)
+    timeoutMs: jspb.Message.getFieldWithDefault(msg, 6, 0),
+    adAccountId: jspb.Message.getFieldWithDefault(msg, 7, "")
   };
 
   if (includeInstance) {
@@ -318,6 +319,10 @@ proto.fb_agent.meta_api.v1.ExecuteGraphCallRequest.deserializeBinaryFromReader =
     case 6:
       var value = /** @type {number} */ (reader.readInt32());
       msg.setTimeoutMs(value);
+      break;
+    case 7:
+      var value = /** @type {string} */ (reader.readString());
+      msg.setAdAccountId(value);
       break;
     default:
       reader.skipField();
@@ -384,6 +389,13 @@ proto.fb_agent.meta_api.v1.ExecuteGraphCallRequest.serializeBinaryToWriter = fun
   if (f != null) {
     writer.writeInt32(
       6,
+      f
+    );
+  }
+  f = message.getAdAccountId();
+  if (f.length > 0) {
+    writer.writeString(
+      7,
       f
     );
   }
@@ -517,6 +529,24 @@ proto.fb_agent.meta_api.v1.ExecuteGraphCallRequest.prototype.clearTimeoutMs = fu
  */
 proto.fb_agent.meta_api.v1.ExecuteGraphCallRequest.prototype.hasTimeoutMs = function() {
   return jspb.Message.getField(this, 6) != null;
+};
+
+
+/**
+ * optional string ad_account_id = 7;
+ * @return {string}
+ */
+proto.fb_agent.meta_api.v1.ExecuteGraphCallRequest.prototype.getAdAccountId = function() {
+  return /** @type {string} */ (jspb.Message.getFieldWithDefault(this, 7, ""));
+};
+
+
+/**
+ * @param {string} value
+ * @return {!proto.fb_agent.meta_api.v1.ExecuteGraphCallRequest} returns this
+ */
+proto.fb_agent.meta_api.v1.ExecuteGraphCallRequest.prototype.setAdAccountId = function(value) {
+  return jspb.Message.setProto3StringField(this, 7, value);
 };
 
 
@@ -1043,7 +1073,8 @@ proto.fb_agent.meta_api.v1.CheckMetaApiHealthRequest.prototype.toObject = functi
  */
 proto.fb_agent.meta_api.v1.CheckMetaApiHealthRequest.toObject = function(includeInstance, msg) {
   var f, obj = {
-    sessionId: jspb.Message.getFieldWithDefault(msg, 1, "")
+    sessionId: jspb.Message.getFieldWithDefault(msg, 1, ""),
+    fullProbe: jspb.Message.getBooleanFieldWithDefault(msg, 2, false)
   };
 
   if (includeInstance) {
@@ -1084,6 +1115,10 @@ proto.fb_agent.meta_api.v1.CheckMetaApiHealthRequest.deserializeBinaryFromReader
       var value = /** @type {string} */ (reader.readString());
       msg.setSessionId(value);
       break;
+    case 2:
+      var value = /** @type {boolean} */ (reader.readBool());
+      msg.setFullProbe(value);
+      break;
     default:
       reader.skipField();
       break;
@@ -1120,6 +1155,13 @@ proto.fb_agent.meta_api.v1.CheckMetaApiHealthRequest.serializeBinaryToWriter = f
       f
     );
   }
+  f = message.getFullProbe();
+  if (f) {
+    writer.writeBool(
+      2,
+      f
+    );
+  }
 };
 
 
@@ -1138,6 +1180,24 @@ proto.fb_agent.meta_api.v1.CheckMetaApiHealthRequest.prototype.getSessionId = fu
  */
 proto.fb_agent.meta_api.v1.CheckMetaApiHealthRequest.prototype.setSessionId = function(value) {
   return jspb.Message.setProto3StringField(this, 1, value);
+};
+
+
+/**
+ * optional bool full_probe = 2;
+ * @return {boolean}
+ */
+proto.fb_agent.meta_api.v1.CheckMetaApiHealthRequest.prototype.getFullProbe = function() {
+  return /** @type {boolean} */ (jspb.Message.getBooleanFieldWithDefault(this, 2, false));
+};
+
+
+/**
+ * @param {boolean} value
+ * @return {!proto.fb_agent.meta_api.v1.CheckMetaApiHealthRequest} returns this
+ */
+proto.fb_agent.meta_api.v1.CheckMetaApiHealthRequest.prototype.setFullProbe = function(value) {
+  return jspb.Message.setProto3BooleanField(this, 2, value);
 };
 
 
@@ -1177,7 +1237,12 @@ proto.fb_agent.meta_api.v1.CheckMetaApiHealthResponse.toObject = function(includ
     currentUrl: jspb.Message.getFieldWithDefault(msg, 2, ""),
     tokenPresent: jspb.Message.getBooleanFieldWithDefault(msg, 3, false),
     tokenLength: jspb.Message.getFieldWithDefault(msg, 4, 0),
-    detail: jspb.Message.getFieldWithDefault(msg, 5, "")
+    detail: jspb.Message.getFieldWithDefault(msg, 5, ""),
+    probePerformed: jspb.Message.getBooleanFieldWithDefault(msg, 6, false),
+    probeOk: jspb.Message.getBooleanFieldWithDefault(msg, 7, false),
+    probeStatusCode: jspb.Message.getFieldWithDefault(msg, 8, 0),
+    probeDurationMs: jspb.Message.getFieldWithDefault(msg, 9, 0),
+    probeDetail: jspb.Message.getFieldWithDefault(msg, 10, "")
   };
 
   if (includeInstance) {
@@ -1233,6 +1298,26 @@ proto.fb_agent.meta_api.v1.CheckMetaApiHealthResponse.deserializeBinaryFromReade
     case 5:
       var value = /** @type {string} */ (reader.readString());
       msg.setDetail(value);
+      break;
+    case 6:
+      var value = /** @type {boolean} */ (reader.readBool());
+      msg.setProbePerformed(value);
+      break;
+    case 7:
+      var value = /** @type {boolean} */ (reader.readBool());
+      msg.setProbeOk(value);
+      break;
+    case 8:
+      var value = /** @type {number} */ (reader.readInt32());
+      msg.setProbeStatusCode(value);
+      break;
+    case 9:
+      var value = /** @type {number} */ (reader.readInt32());
+      msg.setProbeDurationMs(value);
+      break;
+    case 10:
+      var value = /** @type {string} */ (reader.readString());
+      msg.setProbeDetail(value);
       break;
     default:
       reader.skipField();
@@ -1295,6 +1380,41 @@ proto.fb_agent.meta_api.v1.CheckMetaApiHealthResponse.serializeBinaryToWriter = 
   if (f.length > 0) {
     writer.writeString(
       5,
+      f
+    );
+  }
+  f = message.getProbePerformed();
+  if (f) {
+    writer.writeBool(
+      6,
+      f
+    );
+  }
+  f = message.getProbeOk();
+  if (f) {
+    writer.writeBool(
+      7,
+      f
+    );
+  }
+  f = message.getProbeStatusCode();
+  if (f !== 0) {
+    writer.writeInt32(
+      8,
+      f
+    );
+  }
+  f = message.getProbeDurationMs();
+  if (f !== 0) {
+    writer.writeInt32(
+      9,
+      f
+    );
+  }
+  f = message.getProbeDetail();
+  if (f.length > 0) {
+    writer.writeString(
+      10,
       f
     );
   }
@@ -1388,6 +1508,96 @@ proto.fb_agent.meta_api.v1.CheckMetaApiHealthResponse.prototype.getDetail = func
  */
 proto.fb_agent.meta_api.v1.CheckMetaApiHealthResponse.prototype.setDetail = function(value) {
   return jspb.Message.setProto3StringField(this, 5, value);
+};
+
+
+/**
+ * optional bool probe_performed = 6;
+ * @return {boolean}
+ */
+proto.fb_agent.meta_api.v1.CheckMetaApiHealthResponse.prototype.getProbePerformed = function() {
+  return /** @type {boolean} */ (jspb.Message.getBooleanFieldWithDefault(this, 6, false));
+};
+
+
+/**
+ * @param {boolean} value
+ * @return {!proto.fb_agent.meta_api.v1.CheckMetaApiHealthResponse} returns this
+ */
+proto.fb_agent.meta_api.v1.CheckMetaApiHealthResponse.prototype.setProbePerformed = function(value) {
+  return jspb.Message.setProto3BooleanField(this, 6, value);
+};
+
+
+/**
+ * optional bool probe_ok = 7;
+ * @return {boolean}
+ */
+proto.fb_agent.meta_api.v1.CheckMetaApiHealthResponse.prototype.getProbeOk = function() {
+  return /** @type {boolean} */ (jspb.Message.getBooleanFieldWithDefault(this, 7, false));
+};
+
+
+/**
+ * @param {boolean} value
+ * @return {!proto.fb_agent.meta_api.v1.CheckMetaApiHealthResponse} returns this
+ */
+proto.fb_agent.meta_api.v1.CheckMetaApiHealthResponse.prototype.setProbeOk = function(value) {
+  return jspb.Message.setProto3BooleanField(this, 7, value);
+};
+
+
+/**
+ * optional int32 probe_status_code = 8;
+ * @return {number}
+ */
+proto.fb_agent.meta_api.v1.CheckMetaApiHealthResponse.prototype.getProbeStatusCode = function() {
+  return /** @type {number} */ (jspb.Message.getFieldWithDefault(this, 8, 0));
+};
+
+
+/**
+ * @param {number} value
+ * @return {!proto.fb_agent.meta_api.v1.CheckMetaApiHealthResponse} returns this
+ */
+proto.fb_agent.meta_api.v1.CheckMetaApiHealthResponse.prototype.setProbeStatusCode = function(value) {
+  return jspb.Message.setProto3IntField(this, 8, value);
+};
+
+
+/**
+ * optional int32 probe_duration_ms = 9;
+ * @return {number}
+ */
+proto.fb_agent.meta_api.v1.CheckMetaApiHealthResponse.prototype.getProbeDurationMs = function() {
+  return /** @type {number} */ (jspb.Message.getFieldWithDefault(this, 9, 0));
+};
+
+
+/**
+ * @param {number} value
+ * @return {!proto.fb_agent.meta_api.v1.CheckMetaApiHealthResponse} returns this
+ */
+proto.fb_agent.meta_api.v1.CheckMetaApiHealthResponse.prototype.setProbeDurationMs = function(value) {
+  return jspb.Message.setProto3IntField(this, 9, value);
+};
+
+
+/**
+ * optional string probe_detail = 10;
+ * @return {string}
+ */
+proto.fb_agent.meta_api.v1.CheckMetaApiHealthResponse.prototype.getProbeDetail = function() {
+  return /** @type {string} */ (jspb.Message.getFieldWithDefault(this, 10, ""));
+};
+
+
+/**
+ * @param {string} value
+ * @return {!proto.fb_agent.meta_api.v1.CheckMetaApiHealthResponse} returns this
+ */
+proto.fb_agent.meta_api.v1.CheckMetaApiHealthResponse.prototype.setProbeDetail = function(value) {
+  return jspb.Message.setProto3StringField(this, 10, value);
 };
 
 

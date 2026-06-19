@@ -31,7 +31,10 @@ logger = logging.getLogger(__name__)
 # Дефолтный таймаут одного Graph-вызова. Browser-agent внутри ставит 30с,
 # Здесь даём небольшой запас (на gRPC прохождение).
 _DEFAULT_TIMEOUT_SECONDS = 35.0
+# Token-only health (без сетевого запроса) — быстрый.
 _HEALTH_CHECK_TIMEOUT_SECONDS = 10.0
+# full_probe делает реальный fetch (browser-agent внутри ставит 8с) — даём запас на gRPC.
+_HEALTH_PROBE_TIMEOUT_SECONDS = 15.0
 
 
 class MetaApiClient:
@@ -100,20 +103,32 @@ class MetaApiClient:
 
     # ====================== Health ======================
 
-    async def check_health(self) -> dict[str, Any]:
-        """CheckMetaApiHealth — лёгкий запрос для health_watchdog.
+    async def check_health(self, *, full_probe: bool = False) -> dict[str, Any]:
+        """CheckMetaApiHealth — статус канала Marketing API для health_watchdog.
 
-        Возвращает dict с ключами: healthy, current_url, token_present,
-        token_length, detail. Не бросает на unhealthy — это просто статус.
+        Token-only режим (full_probe=False, дефолт) — дёшево: только URL + наличие
+        EAA-токена в DOM, без сетевых запросов. Для частых проверок.
+
+        full_probe=True — browser-agent дополнительно делает РЕАЛЬНЫЙ GET /me?fields=id
+        тем же page.evaluate(fetch), что и auto-stop pause_ad. Ловит инцидент 2026-06-19:
+        token-only возвращал healthy=true при мёртвом сетевом канале (Failed to fetch).
+
+        Возвращает dict: healthy, current_url, token_present, token_length, detail +
+        probe_performed, probe_ok, probe_status_code, probe_duration_ms, probe_detail.
+        Не бросает на unhealthy — это просто статус.
         """
         if self._stub is None:
             raise RuntimeError("MetaApiClient не запущен: вызови await start()")
-        req = meta_api_pb2.CheckMetaApiHealthRequest(session_id=self.session_id)
+        req = meta_api_pb2.CheckMetaApiHealthRequest(
+            session_id=self.session_id,
+            full_probe=full_probe,
+        )
+        timeout = _HEALTH_PROBE_TIMEOUT_SECONDS if full_probe else _HEALTH_CHECK_TIMEOUT_SECONDS
         try:
             resp = await self._circuit_breaker.call(
                 self._stub.CheckMetaApiHealth,
                 req,
-                timeout=_HEALTH_CHECK_TIMEOUT_SECONDS,
+                timeout=timeout,
             )
         except CircuitOpenError as exc:
             return {
@@ -122,6 +137,11 @@ class MetaApiClient:
                 "token_present": False,
                 "token_length": 0,
                 "detail": f"circuit_open: {exc}",
+                "probe_performed": False,
+                "probe_ok": False,
+                "probe_status_code": 0,
+                "probe_duration_ms": 0,
+                "probe_detail": "not_performed",
             }
         return {
             "healthy": bool(resp.healthy),
@@ -129,6 +149,11 @@ class MetaApiClient:
             "token_present": bool(resp.token_present),
             "token_length": int(resp.token_length),
             "detail": str(resp.detail),
+            "probe_performed": bool(resp.probe_performed),
+            "probe_ok": bool(resp.probe_ok),
+            "probe_status_code": int(resp.probe_status_code),
+            "probe_duration_ms": int(resp.probe_duration_ms),
+            "probe_detail": str(resp.probe_detail),
         }
 
     # ====================== Core: ExecuteGraphCall ======================

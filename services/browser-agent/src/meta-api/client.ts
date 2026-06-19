@@ -40,7 +40,47 @@ export interface MetaApiHealthResult {
   tokenPresent: boolean;
   tokenLength: number;
   detail: string;
+  // Поля реального сетевого probe (full_probe). При token-only probePerformed=false.
+  probePerformed: boolean;
+  probeOk: boolean;
+  probeStatusCode: number;
+  probeDurationMs: number;
+  probeDetail: string;
 }
+
+export interface CheckHealthOptions {
+  // true → выполнить реальный GET /me к graph.facebook.com (дороже, для watchdog).
+  fullProbe?: boolean;
+  // TTL кеша probe-результата на эту страницу (мс). Защита от частых запросов к Meta.
+  cacheTtlMs?: number;
+}
+
+// Таймаут реального probe-fetch (короче дефолтного 30с — health должен быть быстрым).
+const PROBE_TIMEOUT_MS = 8_000;
+// Дефолтный TTL кеша probe: даже при частых вызовах Meta видит максимум 1 запрос / TTL.
+const DEFAULT_PROBE_CACHE_TTL_MS = 60_000;
+
+interface ProbeVerdict {
+  probePerformed: boolean;
+  probeOk: boolean;
+  probeStatusCode: number;
+  probeDurationMs: number;
+  probeDetail: string;
+  // true → канал реально мёртв для мутаций (network-down / протухший токен).
+  // Meta-side ошибки (rate-limit) сюда НЕ попадают — канал жив.
+  channelDown: boolean;
+}
+
+// Кеш probe-вердикта на страницу. WeakMap — запись уходит с GC страницы.
+const _probeCache = new WeakMap<Page, ProbeVerdict & { expiresAt: number }>();
+
+const _PROBE_NOT_PERFORMED = {
+  probePerformed: false,
+  probeOk: false,
+  probeStatusCode: 0,
+  probeDurationMs: 0,
+  probeDetail: 'not_performed',
+} as const;
 
 /**
  * Исполняет запрос к Marketing API изнутри активной Playwright-страницы.
@@ -182,10 +222,20 @@ export async function executeGraphCall(
 }
 
 /**
- * Health-check: жива ли страница Ads Manager и доступен ли токен.
- * Не делает реальных запросов к Meta — только проверяет состояние страницы.
+ * Health-check канала Marketing API.
+ *
+ * Token-only режим (по умолчанию) — дёшево: проверяет, что страница Ads Manager жива
+ * и EAA-токен есть в DOM. НЕ делает сетевых запросов.
+ *
+ * full_probe режим (opts.fullProbe) — выполняет РЕАЛЬНЫЙ лёгкий GET /me?fields=id тем же
+ * page.evaluate(fetch), что и auto-stop pause_ad. Ловит инцидент 2026-06-19: token-only
+ * возвращал healthy=true при мёртвом сетевом канале (Failed to fetch, code=-2). Результат
+ * probe кешируется на страницу (cacheTtlMs) — Meta не дёргается чаще, чем раз в TTL.
  */
-export async function checkMetaApiHealth(page: Page): Promise<MetaApiHealthResult> {
+export async function checkMetaApiHealth(
+  page: Page,
+  opts?: CheckHealthOptions,
+): Promise<MetaApiHealthResult> {
   try {
     if (page.isClosed()) {
       return {
@@ -194,6 +244,7 @@ export async function checkMetaApiHealth(page: Page): Promise<MetaApiHealthResul
         tokenPresent: false,
         tokenLength: 0,
         detail: 'page_closed',
+        ..._PROBE_NOT_PERFORMED,
       };
     }
 
@@ -210,6 +261,7 @@ export async function checkMetaApiHealth(page: Page): Promise<MetaApiHealthResul
         tokenPresent: false,
         tokenLength: 0,
         detail: 'wrong_url',
+        ..._PROBE_NOT_PERFORMED,
       };
     }
 
@@ -228,15 +280,45 @@ export async function checkMetaApiHealth(page: Page): Promise<MetaApiHealthResul
         tokenPresent: false,
         tokenLength: 0,
         detail: 'token_not_found',
+        ..._PROBE_NOT_PERFORMED,
       };
     }
 
+    // Token-only: токен есть, страница верная — для частых проверок этого достаточно.
+    if (!opts?.fullProbe) {
+      return {
+        healthy: true,
+        currentUrl,
+        tokenPresent: true,
+        tokenLength: tokenInfo.length,
+        detail: 'ok',
+        ..._PROBE_NOT_PERFORMED,
+      };
+    }
+
+    // Full probe: реальный сетевой запрос (с кешем на страницу).
+    const ttl = opts.cacheTtlMs ?? DEFAULT_PROBE_CACHE_TTL_MS;
+    const now = Date.now();
+    const cached = _probeCache.get(page);
+    let verdict: ProbeVerdict;
+    if (cached && cached.expiresAt > now) {
+      verdict = cached;
+    } else {
+      verdict = await runNetworkProbe(page);
+      _probeCache.set(page, { ...verdict, expiresAt: now + ttl });
+    }
+
     return {
-      healthy: true,
+      healthy: !verdict.channelDown,
       currentUrl,
       tokenPresent: true,
       tokenLength: tokenInfo.length,
-      detail: 'ok',
+      detail: verdict.channelDown ? verdict.probeDetail : 'ok',
+      probePerformed: verdict.probePerformed,
+      probeOk: verdict.probeOk,
+      probeStatusCode: verdict.probeStatusCode,
+      probeDurationMs: verdict.probeDurationMs,
+      probeDetail: verdict.probeDetail,
     };
   } catch (err: any) {
     return {
@@ -245,8 +327,55 @@ export async function checkMetaApiHealth(page: Page): Promise<MetaApiHealthResul
       tokenPresent: false,
       tokenLength: 0,
       detail: `error: ${String(err?.message ?? err)}`,
+      ..._PROBE_NOT_PERFORMED,
     };
   }
+}
+
+/**
+ * Реальный лёгкий probe канала: GET /me?fields=id через executeGraphCall.
+ * Классифицирует результат как «канал мёртв» (network/token) или «канал жив»
+ * (200 / Meta-side ошибка вроде rate-limit). Никогда не бросает.
+ */
+async function runNetworkProbe(page: Page): Promise<ProbeVerdict> {
+  const result = await executeGraphCall(page, {
+    method: 'GET',
+    endpoint: '/me',
+    queryParams: { fields: 'id' },
+    timeoutMs: PROBE_TIMEOUT_MS,
+  });
+
+  const base = {
+    probePerformed: true,
+    probeStatusCode: result.statusCode,
+    probeDurationMs: result.durationMs,
+  };
+
+  if (!result.error && result.statusCode === 200) {
+    return { ...base, probeOk: true, probeDetail: 'ok', channelDown: false };
+  }
+
+  if (result.error) {
+    const code = result.error.code;
+    // -1 token-not-found, -2 Failed to fetch, -3 page-evaluate — канал/сеть мертвы.
+    if (code === -1 || code === -2 || code === -3) {
+      return { ...base, probeOk: false, probeDetail: 'probe_network_down', channelDown: true };
+    }
+    // 190 OAuth — токен протух, мутации невозможны → канал мёртв для money-операций.
+    if (code === 190) {
+      return { ...base, probeOk: false, probeDetail: 'probe_token_invalid', channelDown: true };
+    }
+    // Прочие Meta-ошибки (rate-limit 17/4/32 и т.п.) — fetch ДОШЁЛ до Meta → канал жив.
+    return { ...base, probeOk: false, probeDetail: `meta_error:${code}`, channelDown: false };
+  }
+
+  // Не-200 без error-блока: Meta всё же ответила → канал жив, но probe не «ok».
+  return {
+    ...base,
+    probeOk: false,
+    probeDetail: `http_${result.statusCode}`,
+    channelDown: false,
+  };
 }
 
 /**

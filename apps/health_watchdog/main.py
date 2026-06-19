@@ -26,6 +26,7 @@ import signal
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timezone
+from typing import Any, Protocol
 
 import redis.asyncio as redis_asyncio
 from sqlalchemy import text
@@ -77,6 +78,25 @@ AUTOSTOP_DESYNC_AFTER_MINUTES = int(os.environ.get("HEALTH_WATCHDOG_AUTOSTOP_DES
 # (защита от раздувания TG-сообщения сверх лимита 4096 при массовом отказе).
 AUTOSTOP_ALERT_MAX_ITEMS = 10
 AUTOSTOP_DEDUP_KEY = f"{ALERT_DEDUP_PREFIX}autostop_channel"
+
+# ====================== сетевой probe канала Marketing API (money-критичный) ======================
+# Инцидент 2026-06-19: token-only health давал false-positive «healthy» при мёртвом
+# сетевом канале (Failed to fetch). Watchdog — единственный прободер: раз в
+# META_PROBE_INTERVAL_SECONDS делает реальный GET /me (full_probe) через browser-agent,
+# пишет результат в Redis meta_api:channel:health (его читает health_details), а при
+# отказе канала шлёт CRITICAL-алерт. Проактивно дополняет БД-детектор (check_autostop_channel).
+META_PROBE_INTERVAL_SECONDS = int(os.environ.get("HEALTH_WATCHDOG_META_PROBE_SEC", "300"))
+META_CHANNEL_HEALTH_KEY = "meta_api:channel:health"
+META_CHANNEL_DEDUP_KEY = f"{ALERT_DEDUP_PREFIX}meta_channel"
+# TTL ключа = 2× интервал: если сам прободер (watchdog) мёртв, ключ протухает и
+# health_details показывает UNKNOWN, а не залипший «healthy».
+META_CHANNEL_HEALTH_TTL_SECONDS = META_PROBE_INTERVAL_SECONDS * 2
+
+
+class _MetaProbeClient(Protocol):
+    """Минимальный контракт MetaApiClient для probe (для тестируемости)."""
+
+    async def check_health(self, *, full_probe: bool = ...) -> dict[str, Any]: ...
 
 
 # ====================== pure helpers (тестируем напрямую) ======================
@@ -211,6 +231,40 @@ def build_autostop_channel_alert(
     lines.append("")
     lines.append("Проверь Vision-сессию и meta_api_worker.")
     return "\n".join(lines)
+
+
+def classify_meta_probe(probe: dict[str, Any]) -> tuple[bool, str]:
+    """Классифицирует результат check_health(full_probe=True): жив ли канал.
+
+    Возвращает ``(is_down, reason)``. Канал мёртв (is_down=True), если probe вернул
+    ``healthy=False`` — это покрывает network-down (Failed to fetch), протухший токен (190),
+    недоступность browser-agent (circuit_open) и отсутствие токена. Meta-side ошибки
+    (rate-limit) оставляют ``healthy=True`` → канал жив (не считаем outage'ом, согласовано
+    с ``core.meta_api.autostop_alert.is_channel_down_error``).
+
+    reason — наиболее информативная причина: ``probe_detail`` при выполненном probe,
+    иначе ``detail`` (например circuit_open / token_not_found).
+    """
+    if bool(probe.get("healthy", False)):
+        return False, str(probe.get("probe_detail") or probe.get("detail") or "ok")
+
+    if probe.get("probe_performed"):
+        reason = probe.get("probe_detail") or probe.get("detail") or "down"
+    else:
+        reason = probe.get("detail") or "unreachable"
+    return True, str(reason)
+
+
+def build_meta_channel_alert(*, reason: str, detail: str) -> str:
+    """CRITICAL-текст: канал Marketing API (auto-stop) мёртв по проактивному probe."""
+    return (
+        "🛑 <b>CRITICAL: канал Marketing API мёртв (probe)</b>\n"
+        f"Реальный GET /me к graph.facebook.com не прошёл: <code>{html.escape(reason)}</code>\n"
+        f"Детали: <code>{html.escape(str(detail)[:200])}</code>\n\n"
+        "⚠️ Money: авто-стоп (pause_ad) не доходит до Meta — объявления могут тратить бюджет.\n"
+        "Почини Vision-канал (reconnect/restart browser_agent или Vision-профиль) "
+        "или выключи объявления вручную в Ads Manager."
+    )
 
 
 # ====================== Telegram алерты ======================
@@ -461,6 +515,79 @@ async def check_autostop_channel(
     )
 
 
+async def check_meta_api_channel(
+    meta_client: _MetaProbeClient,
+    redis_client: redis_asyncio.Redis,
+    *,
+    tg_client: TelegramBotClient | None,
+    chat_id: str | None,
+    thread_id: int | None,
+    now: datetime | None = None,
+) -> bool:
+    """Проактивный probe канала Marketing API. Возвращает True, если алерт отправлен.
+
+    Единственный прободер: делает реальный GET /me (full_probe) через browser-agent,
+    пишет снимок в Redis ``meta_api:channel:health`` (его читает health_details), при
+    отказе канала шлёт CRITICAL с дедупом, при восстановлении снимает дедуп (re-arm).
+    Best-effort: исключения check_health трактуются как «канал мёртв».
+    """
+    now = now or datetime.now(UTC)
+
+    try:
+        probe = await meta_client.check_health(full_probe=True)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("meta probe: check_health бросил исключение")
+        probe = {
+            "healthy": False,
+            "detail": f"probe_exception: {exc}",
+            "probe_performed": False,
+            "probe_ok": False,
+            "probe_status_code": 0,
+            "probe_duration_ms": 0,
+            "probe_detail": "probe_exception",
+        }
+
+    is_down, reason = classify_meta_probe(probe)
+
+    payload = {
+        "healthy": bool(probe.get("healthy", False)),
+        "probe_performed": bool(probe.get("probe_performed", False)),
+        "probe_ok": bool(probe.get("probe_ok", False)),
+        "probe_status_code": int(probe.get("probe_status_code", 0) or 0),
+        "probe_duration_ms": int(probe.get("probe_duration_ms", 0) or 0),
+        "detail": str(probe.get("detail", "")),
+        "probe_detail": str(probe.get("probe_detail", "")),
+        "reason": reason,
+        "checked_at": now.isoformat(),
+    }
+    try:
+        await redis_client.set(
+            META_CHANNEL_HEALTH_KEY,
+            json.dumps(payload, ensure_ascii=False),
+            ex=META_CHANNEL_HEALTH_TTL_SECONDS,
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("meta probe: не удалось записать %s", META_CHANNEL_HEALTH_KEY)
+
+    if not is_down:
+        # Канал жив → снимаем дедуп, чтобы будущий отказ снова дал алерт (re-arm).
+        try:
+            await redis_client.delete(META_CHANNEL_DEDUP_KEY)
+        except Exception:  # noqa: BLE001
+            logger.exception("meta probe: не удалось снять дедуп")
+        return False
+
+    logger.error("канал Marketing API мёртв (probe): %s", reason)
+    return await _maybe_alert_with_dedup(
+        redis_client,
+        dedup_key=META_CHANNEL_DEDUP_KEY,
+        text=build_meta_channel_alert(reason=reason, detail=str(probe.get("detail", ""))),
+        tg_client=tg_client,
+        chat_id=chat_id,
+        thread_id=thread_id,
+    )
+
+
 async def _publish_health_updated(
     redis_client: redis_asyncio.Redis,
     *,
@@ -593,6 +720,44 @@ async def check_loop(
             pass
 
 
+async def meta_probe_loop(
+    meta_client: _MetaProbeClient,
+    redis_client: redis_asyncio.Redis,
+    *,
+    tg_client: TelegramBotClient | None,
+    chat_id: str | None,
+    thread_id: int | None,
+    stop: asyncio.Event,
+    interval: int = META_PROBE_INTERVAL_SECONDS,
+) -> None:
+    """Цикл сетевого probe канала Marketing API раз в ``interval`` секунд.
+
+    Отдельная (более редкая) каденция от check_loop: реальный fetch к Meta не должен
+    выполняться слишком часто. Перед первой проверкой выжидает STARTUP_GRACE_SECONDS
+    (browser-agent/Vision стартуют дольше). Best-effort: ошибки не валят цикл.
+    """
+    try:
+        await asyncio.wait_for(stop.wait(), timeout=STARTUP_GRACE_SECONDS)
+    except asyncio.TimeoutError:
+        pass
+
+    while not stop.is_set():
+        try:
+            await check_meta_api_channel(
+                meta_client,
+                redis_client,
+                tg_client=tg_client,
+                chat_id=chat_id,
+                thread_id=thread_id,
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("ошибка в meta_probe_loop")
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=interval)
+        except asyncio.TimeoutError:
+            pass
+
+
 # ====================== entrypoint ======================
 
 
@@ -625,6 +790,8 @@ async def _load_tg(
 
 
 async def main_loop(database_url: str | None = None) -> None:
+    from core.meta_api.client import MetaApiClient
+
     db_url = database_url or _get_database_url()
     engine = create_async_engine(db_url, **WORKER_ENGINE_KWARGS)
     redis_client = redis_asyncio.from_url(_get_redis_url(), decode_responses=True)
@@ -636,6 +803,14 @@ async def main_loop(database_url: str | None = None) -> None:
         logger.warning("EXPECTED_WORKERS пуст — heartbeat-проверки не выполняются")
 
     tg_client, chat_id, thread_id = await _load_tg(engine)
+
+    # MetaApiClient для сетевого probe канала auto-stop (eager-init: gRPC-канал ленивый,
+    # старт не блокирует; недоступность browser-agent probe-цикл трактует как «канал мёртв»).
+    meta_client = MetaApiClient(
+        host=os.environ.get("BROWSER_AGENT_HOST", "localhost"),
+        port=int(os.environ.get("BROWSER_AGENT_GRPC_PORT", "50051")),
+    )
+    await meta_client.start()
 
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -662,8 +837,20 @@ async def main_loop(database_url: str | None = None) -> None:
                 stop=stop,
                 engine=engine,
             ),
+            meta_probe_loop(
+                meta_client,
+                redis_client,
+                tg_client=tg_client,
+                chat_id=chat_id,
+                thread_id=thread_id,
+                stop=stop,
+            ),
         )
     finally:
+        try:
+            await meta_client.close()
+        except Exception:  # noqa: BLE001
+            logger.exception("ошибка закрытия MetaApiClient")
         if tg_client is not None:
             try:
                 await tg_client.close()

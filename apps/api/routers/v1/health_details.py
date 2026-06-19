@@ -17,12 +17,20 @@ from typing import Any, Literal
 from fastapi import APIRouter
 
 from apps.api.deps import DepRedis
-from apps.api.routers.v1.schemas.health import HealthDetailsResponse, WorkerStatus
+from apps.api.routers.v1.schemas.health import (
+    HealthDetailsResponse,
+    MetaApiChannelStatus,
+    WorkerStatus,
+)
 from core.observer.runtime import read_observer_runtime
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["health"])
+
+# Redis-ключ probe канала Marketing API — пишет health_watchdog (см. контрактный тест
+# test_meta_channel_key_contract). Здесь только читаем (роутер не зависит от browser-agent).
+META_CHANNEL_HEALTH_KEY = "meta_api:channel:health"
 
 # Список воркеров по умолчанию (если EXPECTED_WORKERS не задан в env)
 # Имена ДОЛЖНЫ совпадать с ключами worker:heartbeat:<name>, которые пишут воркеры
@@ -58,12 +66,16 @@ def _get_expected_workers() -> list[str]:
 def _determine_overall(
     workers: list[WorkerStatus],
     expected: list[str],
+    meta_channel: MetaApiChannelStatus | None = None,
 ) -> Literal["HEALTHY", "DEGRADED", "CRITICAL"]:
-    """Определяет общий статус системы по статусам воркеров.
+    """Определяет общий статус системы по статусам воркеров и канала Marketing API.
 
     - observer OFFLINE → CRITICAL
-    - любой expected OFFLINE → DEGRADED
-    - все expected ONLINE → HEALTHY
+    - любой expected OFFLINE ИЛИ meta-канал DEGRADED (network-down/протух токен) → DEGRADED
+    - всё ONLINE → HEALTHY
+
+    meta-канал UNKNOWN (нет прободера / протух ключ) overall НЕ понижает — отсутствие
+    данных не равно отказу (money-сигнал даёт сам watchdog отдельным CRITICAL-алертом).
     """
     status_map = {w.name: w.status for w in workers}
 
@@ -74,7 +86,51 @@ def _determine_overall(
     if offline_count > 0:
         return "DEGRADED"
 
+    if meta_channel is not None and meta_channel.status == "DEGRADED":
+        return "DEGRADED"
+
     return "HEALTHY"
+
+
+async def _read_meta_api_channel(redis: DepRedis) -> MetaApiChannelStatus:
+    """Читает Redis meta_api:channel:health → статус канала Marketing API.
+
+    Ключ есть + healthy → ONLINE; есть + не healthy → DEGRADED; нет/битый → UNKNOWN.
+    Роутер только читает Redis (не зависит от browser-agent) — probe делает health_watchdog.
+    """
+    try:
+        raw = await redis.get(META_CHANNEL_HEALTH_KEY)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("не удалось прочитать %s: %s", META_CHANNEL_HEALTH_KEY, exc)
+        return MetaApiChannelStatus(status="UNKNOWN")
+
+    if not raw:
+        return MetaApiChannelStatus(status="UNKNOWN")
+
+    try:
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            return MetaApiChannelStatus(status="UNKNOWN")
+    except (json.JSONDecodeError, TypeError):
+        return MetaApiChannelStatus(status="UNKNOWN")
+
+    healthy = bool(data.get("healthy", False))
+    checked_at: datetime | None = None
+    checked_raw = data.get("checked_at")
+    if isinstance(checked_raw, str) and checked_raw:
+        try:
+            checked_at = datetime.fromisoformat(checked_raw)
+        except (ValueError, TypeError):
+            pass
+
+    return MetaApiChannelStatus(
+        status="ONLINE" if healthy else "DEGRADED",
+        healthy=healthy,
+        probe_ok=bool(data.get("probe_ok", False)),
+        detail=str(data.get("detail")) if data.get("detail") is not None else None,
+        reason=str(data.get("reason")) if data.get("reason") is not None else None,
+        checked_at=checked_at,
+    )
 
 
 @router.get("/health/details", response_model=HealthDetailsResponse)
@@ -168,10 +224,14 @@ async def get_health_details(redis: DepRedis) -> HealthDetailsResponse:
     _runtime = await read_observer_runtime(redis)
     observer_runtime: dict[str, Any] | None = _runtime["raw"] if _runtime["raw"] else None
 
-    overall = _determine_overall(workers, expected_workers)
+    # Статус сетевого канала Marketing API (probe пишет health_watchdog в Redis)
+    meta_api_channel = await _read_meta_api_channel(redis)
+
+    overall = _determine_overall(workers, expected_workers, meta_api_channel)
 
     return HealthDetailsResponse(
         workers=workers,
         observer_runtime=observer_runtime,
+        meta_api_channel=meta_api_channel,
         overall=overall,
     )

@@ -139,3 +139,91 @@ async def test_health_details_no_observer_runtime(fake_redis_client, monkeypatch
     assert resp.status_code == 200
     payload = resp.json()
     assert payload["observer_runtime"] is None
+
+
+# ====================== meta_api_channel (probe канала auto-stop) ======================
+
+_META_KEY = "meta_api:channel:health"
+
+
+# Ключ health probe = ONLINE и overall не понижается (канал жив)
+@pytest.mark.asyncio
+async def test_health_details_meta_channel_online(fake_redis_client, monkeypatch) -> None:
+    """meta_api:channel:health healthy → meta_api_channel.status=ONLINE, overall=HEALTHY."""
+    monkeypatch.setenv("EXPECTED_WORKERS", "observer")
+    await _set_heartbeat(fake_redis_client, "observer")
+    await fake_redis_client.set(
+        _META_KEY,
+        json.dumps(
+            {
+                "healthy": True,
+                "probe_ok": True,
+                "detail": "ok",
+                "reason": "ok",
+                "checked_at": datetime.now(UTC).isoformat(),
+            }
+        ),
+        ex=600,
+    )
+
+    app = _make_app(redis=fake_redis_client)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.get("/api/health/details")
+
+    payload = resp.json()
+    assert payload["meta_api_channel"]["status"] == "ONLINE"
+    assert payload["meta_api_channel"]["healthy"] is True
+    assert payload["overall"] == "HEALTHY"
+
+
+# Канал мёртв (probe down) → DEGRADED даже при всех воркерах ONLINE
+@pytest.mark.asyncio
+async def test_health_details_meta_channel_down_degrades(fake_redis_client, monkeypatch) -> None:
+    """meta-канал down → meta_api_channel.status=DEGRADED, overall=DEGRADED."""
+    monkeypatch.setenv("EXPECTED_WORKERS", "observer")
+    await _set_heartbeat(fake_redis_client, "observer")
+    await fake_redis_client.set(
+        _META_KEY,
+        json.dumps(
+            {
+                "healthy": False,
+                "probe_ok": False,
+                "detail": "probe_network_down",
+                "reason": "probe_network_down",
+                "checked_at": datetime.now(UTC).isoformat(),
+            }
+        ),
+        ex=600,
+    )
+
+    app = _make_app(redis=fake_redis_client)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.get("/api/health/details")
+
+    payload = resp.json()
+    assert payload["meta_api_channel"]["status"] == "DEGRADED"
+    assert payload["overall"] == "DEGRADED"
+
+
+# Нет ключа (прободер не писал/протух) → UNKNOWN, overall НЕ понижается
+@pytest.mark.asyncio
+async def test_health_details_meta_channel_unknown(fake_redis_client, monkeypatch) -> None:
+    """Нет meta-ключа → status=UNKNOWN, overall остаётся HEALTHY (нет прободера ≠ отказ)."""
+    monkeypatch.setenv("EXPECTED_WORKERS", "observer")
+    await _set_heartbeat(fake_redis_client, "observer")
+
+    app = _make_app(redis=fake_redis_client)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.get("/api/health/details")
+
+    payload = resp.json()
+    assert payload["meta_api_channel"]["status"] == "UNKNOWN"
+    assert payload["overall"] == "HEALTHY"
+
+
+# Контракт: ключ Redis в health_details совпадает с тем, что пишет health_watchdog
+def test_meta_channel_key_contract() -> None:
+    from apps.api.routers.v1.health_details import META_CHANNEL_HEALTH_KEY as reader_key
+    from apps.health_watchdog.main import META_CHANNEL_HEALTH_KEY as writer_key
+
+    assert reader_key == writer_key, "рассинхрон ключа meta-канала writer↔reader"

@@ -23,6 +23,8 @@ export class ExecuteGraphCallRequest extends jspb.Message {
     clearTimeoutMs(): void;
     getTimeoutMs(): number | undefined;
     setTimeoutMs(value: number): ExecuteGraphCallRequest;
+    getAdAccountId(): string;
+    setAdAccountId(value: string): ExecuteGraphCallRequest;
 
     serializeBinary(): Uint8Array;
     toObject(includeInstance?: boolean): ExecuteGraphCallRequest.AsObject;
@@ -43,6 +45,7 @@ export namespace ExecuteGraphCallRequest {
         queryParamsMap: Array<[string, string]>,
         bodyJson: string,
         timeoutMs?: number,
+        adAccountId: string,
     }
 }
 
@@ -113,6 +116,8 @@ export namespace GraphApiError {
 export class CheckMetaApiHealthRequest extends jspb.Message { 
     getSessionId(): string;
     setSessionId(value: string): CheckMetaApiHealthRequest;
+    getFullProbe(): boolean;
+    setFullProbe(value: boolean): CheckMetaApiHealthRequest;
 
     serializeBinary(): Uint8Array;
     toObject(includeInstance?: boolean): CheckMetaApiHealthRequest.AsObject;
@@ -127,6 +132,7 @@ export class CheckMetaApiHealthRequest extends jspb.Message {
 export namespace CheckMetaApiHealthRequest {
     export type AsObject = {
         sessionId: string,
+        fullProbe: boolean,
     }
 }
 
@@ -141,6 +147,16 @@ export class CheckMetaApiHealthResponse extends jspb.Message {
     setTokenLength(value: number): CheckMetaApiHealthResponse;
     getDetail(): string;
     setDetail(value: string): CheckMetaApiHealthResponse;
+    getProbePerformed(): boolean;
+    setProbePerformed(value: boolean): CheckMetaApiHealthResponse;
+    getProbeOk(): boolean;
+    setProbeOk(value: boolean): CheckMetaApiHealthResponse;
+    getProbeStatusCode(): number;
+    setProbeStatusCode(value: number): CheckMetaApiHealthResponse;
+    getProbeDurationMs(): number;
+    setProbeDurationMs(value: number): CheckMetaApiHealthResponse;
+    getProbeDetail(): string;
+    setProbeDetail(value: string): CheckMetaApiHealthResponse;
 
     serializeBinary(): Uint8Array;
     toObject(includeInstance?: boolean): CheckMetaApiHealthResponse.AsObject;
@@ -159,6 +175,11 @@ export namespace CheckMetaApiHealthResponse {
         tokenPresent: boolean,
         tokenLength: number,
         detail: string,
+        probePerformed: boolean,
+        probeOk: boolean,
+        probeStatusCode: number,
+        probeDurationMs: number,
+        probeDetail: string,
     }
 }
 

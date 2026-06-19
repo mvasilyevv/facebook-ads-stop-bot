@@ -98,8 +98,14 @@ export function createMetaApiServiceHandlers(sessionManager: SessionManager) {
       const req = call.request;
       const session = resolveSession(req.session_id);
       const page = getPage(session);
+      const fullProbe = Boolean(req.full_probe);
 
-      const result = await checkMetaApiHealth(page);
+      // full_probe делает реальный page.evaluate(fetch) — под per-session лок (как
+      // executeGraphCall), чтобы probe не пересекался со scan reload и не рвал in-flight
+      // fetch. Token-only режим — без лока (дешёвое чтение DOM).
+      const result = fullProbe
+        ? await withPageLock(session.id, () => checkMetaApiHealth(page, { fullProbe: true }))
+        : await checkMetaApiHealth(page);
 
       callback(null, {
         healthy: result.healthy,
@@ -107,6 +113,11 @@ export function createMetaApiServiceHandlers(sessionManager: SessionManager) {
         token_present: result.tokenPresent,
         token_length: result.tokenLength,
         detail: result.detail,
+        probe_performed: result.probePerformed,
+        probe_ok: result.probeOk,
+        probe_status_code: result.probeStatusCode,
+        probe_duration_ms: result.probeDurationMs,
+        probe_detail: result.probeDetail,
       });
     } catch (err: any) {
       // Если сессия не найдена — возвращаем healthy=false как штатный ответ
@@ -117,6 +128,11 @@ export function createMetaApiServiceHandlers(sessionManager: SessionManager) {
         token_present: false,
         token_length: 0,
         detail: `error: ${String(err?.message ?? err)}`,
+        probe_performed: false,
+        probe_ok: false,
+        probe_status_code: 0,
+        probe_duration_ms: 0,
+        probe_detail: 'not_performed',
       });
     }
   }

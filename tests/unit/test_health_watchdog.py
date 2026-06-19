@@ -10,7 +10,9 @@ from apps.health_watchdog.main import (
     DesyncedStopAd,
     StuckPauseTask,
     build_autostop_channel_alert,
+    build_meta_channel_alert,
     check_observer_runtime_freshness,
+    classify_meta_probe,
     parse_expected_workers,
     should_alert,
 )
@@ -65,6 +67,78 @@ def test_default_expected_workers_synced_with_health_details() -> None:
     assert details - watchdog == {"health_watchdog"}, (
         f"рассинхрон watchdog↔health_details: {details ^ watchdog}"
     )
+
+
+# ====================== classify_meta_probe (канал Marketing API) ======================
+
+
+# probe успешен (healthy=True, probe_ok) → канал жив (is_down=False)
+def test_classify_meta_probe_ok() -> None:
+    probe = {"healthy": True, "probe_performed": True, "probe_ok": True, "probe_detail": "ok"}
+    is_down, reason = classify_meta_probe(probe)
+    assert is_down is False
+    assert reason == "ok"
+
+
+# КЛЮЧЕВОЙ кейс: token present, но fetch падает (Failed to fetch) → канал мёртв
+def test_classify_meta_probe_network_down() -> None:
+    probe = {
+        "healthy": False,
+        "probe_performed": True,
+        "probe_ok": False,
+        "detail": "probe_network_down",
+        "probe_detail": "probe_network_down",
+    }
+    is_down, reason = classify_meta_probe(probe)
+    assert is_down is True
+    assert reason == "probe_network_down"
+
+
+# Протухший токен (190) → канал мёртв для мутаций
+def test_classify_meta_probe_token_invalid() -> None:
+    probe = {
+        "healthy": False,
+        "probe_performed": True,
+        "probe_ok": False,
+        "probe_detail": "probe_token_invalid",
+    }
+    is_down, reason = classify_meta_probe(probe)
+    assert is_down is True
+    assert reason == "probe_token_invalid"
+
+
+# Meta-side rate-limit: fetch дошёл до Meta → канал жив (не outage)
+def test_classify_meta_probe_rate_limit_alive() -> None:
+    probe = {
+        "healthy": True,
+        "probe_performed": True,
+        "probe_ok": False,
+        "probe_detail": "meta_error:17",
+    }
+    is_down, reason = classify_meta_probe(probe)
+    assert is_down is False
+
+
+# browser-agent недоступен (circuit_open, probe не выполнялся) → канал мёртв, причина из detail
+def test_classify_meta_probe_circuit_open() -> None:
+    probe = {
+        "healthy": False,
+        "probe_performed": False,
+        "detail": "circuit_open: browser-agent недоступен",
+        "probe_detail": "not_performed",
+    }
+    is_down, reason = classify_meta_probe(probe)
+    assert is_down is True
+    assert "circuit_open" in reason
+
+
+# build_meta_channel_alert: money-сигнал + причина + CRITICAL-маркер
+def test_build_meta_channel_alert_contains_money_signal() -> None:
+    text = build_meta_channel_alert(reason="probe_network_down", detail="Failed to fetch")
+    assert "probe_network_down" in text
+    assert "Failed to fetch" in text
+    # money-предупреждение и указание чинить канал
+    assert "auto-stop" in text.lower() or "авто-стоп" in text.lower()
 
 
 # Нет ключа observer:runtime → stale=True с reason="missing"
