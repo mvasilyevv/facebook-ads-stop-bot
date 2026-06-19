@@ -156,11 +156,10 @@ def _context_block(inp: AlertRenderInput) -> str:
 def render_inline_keyboard(inp: AlertRenderInput) -> dict | None:
     """Inline-клавиатура с кнопками действий.
 
-    Callback data format: `<action>:<fb_ad_id>:<token>` где action одно из:
+    Callback data format: `<action>:<fb_ad_id>:<token>` где action:
     - 'dis'   — отключить
-    - 'snz'   — snooze на 2 часа
 
-    Telegram limit на callback_data = 64 bytes. Используем сокращения (token[:8]).
+    Snooze убран (решение владельца). Telegram limit на callback_data = 64 bytes.
     """
     token_short = (inp.open_state_token or "")[:8]
     buttons: list[list[dict]] = []
@@ -171,10 +170,6 @@ def render_inline_keyboard(inp: AlertRenderInput) -> dict | None:
                 {
                     "text": "🛑 Отключить",
                     "callback_data": f"dis:{inp.fb_ad_id}:{token_short}",
-                },
-                {
-                    "text": "💤 Снуз 2ч",
-                    "callback_data": f"snz:{inp.fb_ad_id}:{token_short}",
                 },
             ]
         )

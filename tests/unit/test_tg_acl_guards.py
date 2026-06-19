@@ -93,15 +93,16 @@ async def test_plan_viewer_denied(monkeypatch) -> None:
     spy.assert_not_awaited()
 
 
-# snz: (snooze) от recipient → РАЗРЕШЕНО (не money)
+# snz: (snooze) УБРАН — больше не роутится ни в какой хендлер (no-op, не падает)
 @pytest.mark.asyncio
-async def test_snz_viewer_allowed(monkeypatch) -> None:
+async def test_snz_removed_no_op(monkeypatch) -> None:
     monkeypatch.setattr(router, "find_recipient", AsyncMock(return_value=_viewer()))
-    spy = AsyncMock()
-    monkeypatch.setattr(router, "handle_snz_callback", spy)
+    dis_spy = AsyncMock()
+    monkeypatch.setattr(router, "handle_dis_callback", dis_spy)
     client = AsyncMock()
+    # snz больше не обрабатывается: не бросает и не дёргает dis-хендлер
     await router._dispatch_callback_query(engine=object(), client=client, cq=_cq("snz:123"))
-    spy.assert_awaited_once()
+    dis_spy.assert_not_awaited()
 
 
 # dr_ok: подтверждение money-черновика (/pause) от владельца → хендлер вызывается (H-2)

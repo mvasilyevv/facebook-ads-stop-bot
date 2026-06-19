@@ -190,15 +190,15 @@ def test_render_adset_without_campaign() -> None:
     assert "адсет: EQ_KE broad" in text
 
 
-# keyboard для WARNING — две кнопки (Отключить + Снуз)
-def test_keyboard_has_disable_and_snooze_buttons() -> None:
+# keyboard для WARNING — только кнопка «Отключить» (snooze убран, решение владельца)
+def test_keyboard_has_only_disable_button() -> None:
     kb = render_inline_keyboard(_input(stage="warning"))
     assert kb is not None
     btns = kb["inline_keyboard"][0]
-    assert len(btns) == 2
+    assert len(btns) == 1
     actions = [b["callback_data"].split(":")[0] for b in btns]
     assert "dis" in actions
-    assert "snz" in actions
+    assert "snz" not in actions
 
 
 # callback_data строго <= 64 байт (Telegram limit)

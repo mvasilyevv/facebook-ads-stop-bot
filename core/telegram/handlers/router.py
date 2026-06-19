@@ -22,7 +22,6 @@ from core.telegram.handlers._send import send_text
 from core.telegram.handlers.alerts import (
     handle_dis_callback,
     handle_enable_reco_callback,
-    handle_snz_callback,
 )
 from core.telegram.handlers.autostart import handle_autostart
 from core.telegram.handlers.bulk import handle_bulk_toggle
@@ -165,14 +164,8 @@ async def _dispatch_callback_query(
         )
         return
 
-    if action == "snz":
-        await handle_snz_callback(
-            engine=engine,
-            client=client,
-            cq_id=cq_id,
-            fb_ad_id=fb_ad_id,
-        )
-        return
+    # action == "snz" (snooze) убран (решение владельца): старые snz-кнопки под уже
+    # отправленными алертами просто проигнорируются (no-op), не падают.
 
     if action == "ereco":
         await handle_enable_reco_callback(
