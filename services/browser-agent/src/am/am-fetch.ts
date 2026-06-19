@@ -199,6 +199,31 @@ async function fetchJson(page: Page, url: string): Promise<Record<string, unknow
   }, url)) as Record<string, unknown>;
 }
 
+const _sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+// Повтор при ТРАНЗИЕНТНОМ результате (generic, экспорт для unit-теста). delaysMs задаёт
+// число и паузы повторов: первый вызов всегда, далее до delaysMs.length повторов, пока
+// isTransient(result)=true. На success/нетранзиент — мгновенный возврат без ожидания.
+// Исчерпали попытки → возвращаем последний результат (caller разбирается, как и раньше).
+export async function retryTransient<T>(
+  fn: () => Promise<T>,
+  opts: { delaysMs: number[]; isTransient: (r: T) => boolean },
+): Promise<T> {
+  let result = await fn();
+  for (let attempt = 0; attempt < opts.delaysMs.length; attempt++) {
+    if (!opts.isTransient(result)) return result;
+    await _sleep(opts.delaysMs[attempt]);
+    result = await fn();
+  }
+  return result;
+}
+
+// am_tabular — money-путь (метрики для авто-стопа). Сетевой блип Vision-сессии (~0.6%
+// сканов, одиночный) даёт пустой скан → авто-стоп откладывается на следующий цикл (~95с).
+// 2 быстрых повтора при __amError убирают эту задержку прозрачно. НЕ ретраим Graph-error
+// в теле (токен 190) — это не блип (идёт прежним путём → authExpired → re-sniff).
+const AM_TABULAR_RETRY_DELAYS_MS = [300, 800];
+
 // am_tabular с курсорной пагинацией (limit 5000 → обычно одна итерация; цикл-бэкстоп 20).
 async function fetchAllAmTabular(
   page: Page,
@@ -209,7 +234,13 @@ async function fetchAllAmTabular(
   const rows: AmRow[] = [];
   let after: string | undefined;
   for (let i = 0; i < 20; i++) {
-    const body = await fetchJson(page, amTabularUrl(ctx, filtering, datePreset, after));
+    const body = await retryTransient(
+      () => fetchJson(page, amTabularUrl(ctx, filtering, datePreset, after)),
+      {
+        delaysMs: AM_TABULAR_RETRY_DELAYS_MS,
+        isTransient: (b) => Boolean((b as Record<string, unknown>)?.__amError),
+      },
+    );
     if (body?.__amError) {
       return { rows, error: `am_tabular: ${body.status ?? ''} ${body.body ?? body.message ?? ''}` };
     }
