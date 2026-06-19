@@ -21,6 +21,9 @@ from sqlalchemy import text
 from core.telegram.alert_dispatcher import dispatch_pending_alerts
 from core.telegram.client import TelegramBotClient
 
+# Волна 2: dispatch рассылает по telegram_recipients. Scoped chat_id для этого файла.
+_NO_DUP_RECIPIENT_CHAT_ID = 66554433
+
 
 @pytest_asyncio.fixture
 async def clean_dispatch_tables(pg_engine):
@@ -30,6 +33,7 @@ async def clean_dispatch_tables(pg_engine):
         async with pg_engine.begin() as conn:
             for t in (
                 "telegram_message_refs",
+                "telegram_recipients",
                 "alert_events",
                 "ad_alert_state",
                 "fb_ads",
@@ -90,6 +94,15 @@ async def alert_event_fixture(pg_engine, clean_dispatch_tables):
                 "tok": open_token,
                 "sid": scan_id,
             },
+        )
+        # Волна 2: рассылка по recipients; сеем одного для pre-claim race-теста.
+        await conn.execute(
+            text(
+                "INSERT INTO telegram_recipients "
+                "(id, chat_id, telegram_user_id, role) "
+                "VALUES (gen_random_uuid(), :c, :c, 'recipient')"
+            ),
+            {"c": _NO_DUP_RECIPIENT_CHAT_ID},
         )
 
     yield {"ad_id": ad_id, "scan_id": scan_id, "open_token": open_token}

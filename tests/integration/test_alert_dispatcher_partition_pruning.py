@@ -25,6 +25,9 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from core.telegram.alert_dispatcher import dispatch_pending_alerts
 from core.telegram.client import TelegramBotClient
 
+# chat_id тестового recipient'а для проверки dispatch (Волна 2: DM-модель)
+_PRUNING_RECIPIENT_CHAT_ID = 77665544
+
 
 @pytest_asyncio.fixture
 async def clean_pruning_tables(pg_engine: AsyncEngine):
@@ -34,6 +37,7 @@ async def clean_pruning_tables(pg_engine: AsyncEngine):
         async with pg_engine.begin() as conn:
             for t in (
                 "telegram_message_refs",
+                "telegram_recipients",
                 "alert_events",
                 "ad_alert_state",
                 "fb_ads",
@@ -184,14 +188,24 @@ async def test_dispatch_finds_recent_event_via_partition_filter(
                 INSERT INTO telegram_config
                     (singleton_key, bot_token_encrypted, chat_id,
                      forum_warning_thread_id, forum_stop_thread_id, poller_offset)
-                VALUES ('default', :tok, 123456789, NULL, NULL, 0)
+                VALUES ('default', :tok, NULL, NULL, NULL, 0)
                 ON CONFLICT (singleton_key) DO UPDATE
                 SET bot_token_encrypted = EXCLUDED.bot_token_encrypted,
-                    chat_id = EXCLUDED.chat_id,
+                    chat_id = NULL,
                     updated_at = NOW()
                 """
             ),
             {"tok": enc_token},
+        )
+        # Волна 2: dispatch рассылает по telegram_recipients, а не по config.chat_id.
+        # Сеем одного активного recipient'а — иначе dispatch вернёт skipped_no_recipients.
+        await conn.execute(
+            text(
+                "INSERT INTO telegram_recipients "
+                "(id, chat_id, telegram_user_id, role) "
+                "VALUES (gen_random_uuid(), :c, :c, 'recipient')"
+            ),
+            {"c": _PRUNING_RECIPIENT_CHAT_ID},
         )
 
     sent_count = 0
@@ -224,6 +238,10 @@ async def test_dispatch_finds_recent_event_via_partition_filter(
     assert result["errors"] == 0
     assert sent_count == 1
 
-    # Cleanup telegram_config
+    # Cleanup telegram_config + recipients (seeded в этом тесте)
     async with pg_engine.begin() as conn:
         await conn.execute(text("DELETE FROM telegram_config WHERE singleton_key = 'default'"))
+        await conn.execute(
+            text("DELETE FROM telegram_recipients WHERE chat_id = :c"),
+            {"c": _PRUNING_RECIPIENT_CHAT_ID},
+        )

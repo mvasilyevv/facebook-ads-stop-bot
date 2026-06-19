@@ -27,6 +27,9 @@ from core.scanner.models import ScannedAdRow
 from core.telegram.alert_dispatcher import dispatch_pending_alerts
 from core.telegram.client import TelegramBotClient
 
+# chat_id тестового recipient'а (личка, не супергруппа)
+_RECIPIENT_CHAT_ID = 98765432
+
 
 @pytest_asyncio.fixture
 async def clean_alert_e2e(pg_engine):
@@ -36,6 +39,7 @@ async def clean_alert_e2e(pg_engine):
         async with pg_engine.begin() as conn:
             for t in (
                 "telegram_message_refs",
+                "telegram_recipients",
                 "task_queue",
                 "alert_events",
                 "ad_metrics",
@@ -54,7 +58,21 @@ async def clean_alert_e2e(pg_engine):
 
 
 @pytest_asyncio.fixture
-async def offer_alert_e2e(pg_engine, clean_alert_e2e):
+async def seeded_recipient_e2e(pg_engine, clean_alert_e2e):
+    """Сеет одного активного recipient'а для DM-модели (Волна 2)."""
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO telegram_recipients "
+                "(id, chat_id, telegram_user_id, role) "
+                "VALUES (gen_random_uuid(), :c, :c, 'recipient')"
+            ),
+            {"c": _RECIPIENT_CHAT_ID},
+        )
+
+
+@pytest_asyncio.fixture
+async def offer_alert_e2e(pg_engine, clean_alert_e2e, seeded_recipient_e2e):
     """Оффер с CPA=10 для fast-stop."""
     offer_id = uuid.uuid4()
     code = f"ALR{uuid.uuid4().hex[:4].upper()}"
@@ -112,11 +130,12 @@ async def test_scan_emits_alert_dispatcher_delivers_once(
     assert counters["skipped_duplicates"] == 0
     assert counters["errors"] == 0
 
-    # Шаг 3: TG получил один payload с правильным thread_id (stop) и кнопками
+    # Шаг 3: TG получил один payload — в личку recipient'у (Волна 2: DM-модель)
     assert len(tg_respx.sent_messages) == 1
     sent = tg_respx.sent_messages[0]
-    assert sent["chat_id"] == "-1001234567890"
-    assert sent.get("message_thread_id") == 22  # forum_stop_thread_id из fixture
+    # Волна 2: рассылка в личку recipient'у, не в супергруппу; thread_id всегда None
+    assert int(sent["chat_id"]) == _RECIPIENT_CHAT_ID
+    assert sent.get("message_thread_id") is None
     assert "СТОП" in sent["text"]
     keyboard = sent["reply_markup"]["inline_keyboard"][0]
     assert any(b["callback_data"].startswith("dis:") for b in keyboard)

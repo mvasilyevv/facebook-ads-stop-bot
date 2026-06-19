@@ -21,12 +21,17 @@ from sqlalchemy import text
 from core.telegram.alert_dispatcher import dispatch_pending_alerts
 from core.telegram.client import TelegramBotClient
 
+# Волна 2: DM-модель — алерты уходят в личку recipient'а, а не в супергруппу.
+# chat_id одного тестового recipient'а (уникальный, не пересекается с другими тестами).
+_DISPATCHER_TEST_RECIPIENT_CHAT_ID = 55443322
+
 
 @pytest_asyncio.fixture
 async def offer_and_ad(pg_engine):
-    """Создаёт всю иерархию offer→campaign→adset→ad.
+    """Создаёт всю иерархию offer→campaign→adset→ad + одного активного recipient'а.
 
     telegram_config seed'ится отдельной fixture `seeded_telegram_config`.
+    Волна 2: dispatch рассылает по telegram_recipients, а не по config.chat_id.
     """
     offer_id = uuid.uuid4()
     campaign_id = uuid.uuid4()
@@ -56,6 +61,16 @@ async def offer_and_ad(pg_engine):
                 "n": f"AD_{suffix}",
             },
         )
+        # Сеем одного recipient'а (scoped chat_id, чтобы не конфликтовать с другими тестами)
+        await conn.execute(
+            text(
+                "INSERT INTO telegram_recipients "
+                "(id, chat_id, telegram_user_id, role) "
+                "VALUES (gen_random_uuid(), :c, :c, 'recipient') "
+                "ON CONFLICT (chat_id, telegram_user_id) DO NOTHING"
+            ),
+            {"c": _DISPATCHER_TEST_RECIPIENT_CHAT_ID},
+        )
 
     yield {
         "offer_id": offer_id,
@@ -70,6 +85,10 @@ async def offer_and_ad(pg_engine):
         await conn.execute(text("DELETE FROM telegram_message_refs WHERE ad_id = :i"), {"i": ad_id})
         await conn.execute(text("DELETE FROM alert_events WHERE ad_id = :i"), {"i": ad_id})
         await conn.execute(text("DELETE FROM offers WHERE id = :i"), {"i": offer_id})
+        await conn.execute(
+            text("DELETE FROM telegram_recipients WHERE chat_id = :c"),
+            {"c": _DISPATCHER_TEST_RECIPIENT_CHAT_ID},
+        )
 
 
 async def _insert_alert(
@@ -132,8 +151,9 @@ async def test_dispatch_warning_sends_one_message(
     assert len(tg_respx.sent_messages) == 1
 
     sent = tg_respx.sent_messages[0]
-    assert sent["chat_id"] == "-1001234567890"
-    assert sent.get("message_thread_id") == 11  # warning thread
+    # Волна 2: DM в личку recipient'у, не в супергруппу; thread_id всегда None
+    assert int(sent["chat_id"]) == _DISPATCHER_TEST_RECIPIENT_CHAT_ID
+    assert sent.get("message_thread_id") is None
     assert "ПРЕДУПРЕЖДЕНИЕ" in sent["text"]
     assert sent.get("parse_mode") == "HTML"
     # Кнопки
@@ -172,7 +192,8 @@ async def test_dispatch_stop_uses_stop_thread(
         await dispatch_pending_alerts(pg_engine, client=client, scan_id=200)
 
     sent = tg_respx.sent_messages[0]
-    assert sent.get("message_thread_id") == 22  # stop thread
+    # Волна 2: DM-модель — топики форума не используются, thread_id всегда None
+    assert sent.get("message_thread_id") is None
     assert "СТОП" in sent["text"]
 
 

@@ -38,11 +38,16 @@ async def fake_redis():
     await r.aclose()
 
 
+# Волна 2: dispatch по recipients, не по config.chat_id. Scoped chat_id для этого файла.
+_PUBSUB_RECIPIENT_CHAT_ID = 44332211
+
+
 @pytest_asyncio.fixture
 async def offer_and_ad_for_pubsub(pg_engine):
     """Создаёт иерархию offer→campaign→adset→ad для тестов dispatcher'а.
 
     Telegram config seed'ится отдельной фикстурой seeded_telegram_config из conftest.
+    Волна 2: также сеем одного telegram_recipient для DM-рассылки.
     """
     offer_id = uuid.uuid4()
     campaign_id = uuid.uuid4()
@@ -72,6 +77,16 @@ async def offer_and_ad_for_pubsub(pg_engine):
                 "n": f"AD_PUB_{suffix}",
             },
         )
+        # Волна 2: сеем одного recipient'а для DM-отправки
+        await conn.execute(
+            text(
+                "INSERT INTO telegram_recipients "
+                "(id, chat_id, telegram_user_id, role) "
+                "VALUES (gen_random_uuid(), :c, :c, 'recipient') "
+                "ON CONFLICT (chat_id, telegram_user_id) DO NOTHING"
+            ),
+            {"c": _PUBSUB_RECIPIENT_CHAT_ID},
+        )
 
     yield {
         "offer_id": offer_id,
@@ -86,6 +101,10 @@ async def offer_and_ad_for_pubsub(pg_engine):
         await conn.execute(text("DELETE FROM telegram_message_refs WHERE ad_id = :i"), {"i": ad_id})
         await conn.execute(text("DELETE FROM alert_events WHERE ad_id = :i"), {"i": ad_id})
         await conn.execute(text("DELETE FROM offers WHERE id = :i"), {"i": offer_id})
+        await conn.execute(
+            text("DELETE FROM telegram_recipients WHERE chat_id = :c"),
+            {"c": _PUBSUB_RECIPIENT_CHAT_ID},
+        )
 
 
 async def _insert_alert_pubsub(
