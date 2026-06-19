@@ -210,6 +210,27 @@ async def find_recipient_by_telegram_user_id(
     )
 
 
+async def load_owner_recipients(engine: AsyncEngine) -> list[Recipient]:
+    """Все активные owner-recipient'ы (role='owner', не revoked) — адресаты DM-нотификаций.
+
+    Возвращает список (может быть пустым). chat_id — private chat из /start.
+    """
+    async with engine.connect() as conn:
+        rows = (
+            await conn.execute(
+                text(
+                    """
+                    SELECT chat_id, telegram_user_id, username, role
+                    FROM telegram_recipients
+                    WHERE role = 'owner' AND revoked_at IS NULL
+                    ORDER BY chat_id
+                    """
+                )
+            )
+        ).all()
+    return [Recipient(chat_id=r[0], telegram_user_id=r[1], username=r[2], role=r[3]) for r in rows]
+
+
 async def find_active_invite(engine: AsyncEngine, code: str) -> dict | None:
     """Поиск активного (не использованного и не отозванного) invite-кода."""
     if not code:
@@ -308,6 +329,7 @@ __all__ = [
     "find_recipient",
     "find_recipient_by_telegram_user_id",
     "is_now_aware",
+    "load_owner_recipients",
     "load_poller_offset",
     "load_telegram_config",
     "save_poller_offset",
