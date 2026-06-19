@@ -12,6 +12,8 @@ import { cn } from "@/lib/utils/cn";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Card } from "@/components/ui/Card";
 import { TagListInput } from "@/components/ui/TagListInput";
+import { Input } from "@/components/ui/Input";
+import { Switch } from "@/components/ui/Switch";
 import { Button } from "@/components/ui/Button";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { ErrorState } from "@/components/ui/ErrorState";
@@ -22,6 +24,8 @@ import {
   useObserverCampaigns,
   useRefreshObserverCampaigns,
   useSetCampaignAllowlist,
+  useCabinetAutostart,
+  useUpdateCabinetAutostart,
 } from "@/lib/api/settings";
 
 export const Route = createFileRoute("/campaigns/")({
@@ -34,6 +38,7 @@ function CampaignsPage() {
       <PageHeader eyebrowNum="01" eyebrow="OPERATE · СКОУП" title="Кампании" />
       <div className="space-y-6" style={{ maxWidth: 720 }}>
         <OwnerTagCard />
+        <CabinetAutostartCard />
         <CampaignAllowlist />
       </div>
     </>
@@ -92,6 +97,98 @@ const OwnerTagCard: FC = () => {
         onChange={setTags}
       />
       <div className="flex justify-end mt-3">
+        <Button variant="primary" onClick={() => void handleSave()} loading={updateMut.isPending}>
+          Сохранить
+        </Button>
+      </div>
+    </Card>
+  );
+};
+
+// ─── Автостарт кабинета по расписанию ─────────────────────────────────────────
+
+const _DATE_RE = /^\d{1,2}\.\d{1,2}(\.\d{2,4})?$/;
+const pad2 = (n: number) => String(n).padStart(2, "0");
+
+const CabinetAutostartCard: FC = () => {
+  const { data, isLoading, error, refetch } = useCabinetAutostart();
+  const updateMut = useUpdateCabinetAutostart();
+  const [enabled, setEnabled] = useState(false);
+  const [time, setTime] = useState("06:00");
+  const [dates, setDates] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (data) {
+      setEnabled(data.enabled);
+      setTime(`${pad2(data.hour_utc)}:${pad2(data.minute_utc)}`);
+      setDates(data.dates ?? []);
+    }
+  }, [data]);
+
+  if (isLoading) return <Skeleton className="h-40 w-full" />;
+  if (error) return <ErrorState error={error} onRetry={() => void refetch()} />;
+
+  const handleSave = async () => {
+    const [hh, mm] = time.split(":");
+    const hour = Number(hh);
+    const minute = Number(mm);
+    if (
+      !Number.isInteger(hour) ||
+      hour < 0 ||
+      hour > 23 ||
+      !Number.isInteger(minute) ||
+      minute < 0 ||
+      minute > 59
+    ) {
+      toast.error("Время некорректно", "Формат ЧЧ:ММ (UTC)");
+      return;
+    }
+    try {
+      await updateMut.mutateAsync({ enabled, hour_utc: hour, minute_utc: minute, dates });
+      toast.success("Автостарт сохранён");
+    } catch (e) {
+      toast.error("Ошибка сохранения", e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  return (
+    <Card eyebrow="АВТОСТАРТ КАБИНЕТА" padded>
+      <div className="text-[12px] text-bg-9 mb-3">
+        В заданное время (UTC) бот включит объявления твоих кампаний, у которых в названии есть одна
+        из дат ниже, и запустит скан — без подтверждения. Пусто (нет дат) — ничего не включается.
+      </div>
+
+      <Switch
+        checked={enabled}
+        onChange={() => setEnabled((v) => !v)}
+        label="Включить автостарт"
+        visualLabel="Статус"
+      />
+
+      <div className="mt-4" style={{ maxWidth: 160 }}>
+        <Input
+          id="autostart-time"
+          type="time"
+          label="Время (UTC)"
+          value={time}
+          onChange={(e) => setTime(e.target.value)}
+        />
+      </div>
+
+      <div className="mt-3">
+        <TagListInput
+          id="autostart-dates"
+          label="Даты кампаний"
+          placeholder="22.05 + Enter"
+          values={dates}
+          onChange={setDates}
+          normalize={(t) => t.trim()}
+          validate={(t) => (_DATE_RE.test(t) ? null : "формат ДД.ММ (напр. 22.05)")}
+          helpText="Дата-метка из названия кампании (ДД.ММ). Включаются только кампании с этой датой."
+        />
+      </div>
+
+      <div className="flex justify-end mt-4">
         <Button variant="primary" onClick={() => void handleSave()} loading={updateMut.isPending}>
           Сохранить
         </Button>

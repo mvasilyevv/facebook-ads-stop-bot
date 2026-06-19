@@ -131,6 +131,7 @@ export const QK = {
   healthDetails: ["health", "details"] as const,
   historySummary: (days: number) => ["history", "summary", days] as const,
   observerSettings: ["settings", "observer"] as const,
+  cabinetAutostart: ["tma", "cabinet-autostart"] as const,
 } as const;
 
 // ─── Dashboard ────────────────────────────────────────────────────────────
@@ -290,6 +291,22 @@ export function useObserverSettings() {
   return useQuery({
     queryKey: QK.observerSettings,
     queryFn: () => fetchJson<ObserverConfig>("/settings/observer"),
+  });
+}
+
+/** Конфиг автостарта кабинета (owner-gated на запись через /tma/cabinet-autostart). */
+export interface CabinetAutostart {
+  enabled: boolean;
+  hour_utc: number;
+  minute_utc: number;
+  dates: string[];
+}
+
+export function useCabinetAutostart() {
+  return useQuery({
+    queryKey: QK.cabinetAutostart,
+    queryFn: () => fetchJson<CabinetAutostart>("/tma/cabinet-autostart"),
+    staleTime: 30_000,
   });
 }
 

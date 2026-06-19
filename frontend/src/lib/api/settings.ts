@@ -74,6 +74,37 @@ export function useUpdateObserverSettings() {
   });
 }
 
+// ─── Cabinet autostart (расписание авто-включения кабинета) ────────────────────
+
+/** Конфиг автостарта: в HH:MM UTC включаются объявления кампаний с нужной датой. */
+export interface CabinetAutostart {
+  enabled: boolean;
+  hour_utc: number;
+  minute_utc: number;
+  dates: string[];
+}
+
+export function useCabinetAutostart() {
+  return useQuery<CabinetAutostart>({
+    queryKey: ["settings", "cabinet-autostart"],
+    queryFn: ({ signal }) =>
+      apiGet<CabinetAutostart>("/settings/cabinet-autostart", undefined, signal),
+    staleTime: 30_000,
+  });
+}
+
+export function useUpdateCabinetAutostart() {
+  const qc = useQueryClient();
+  return useMutation({
+    meta: { suppressGlobalError: true },
+    mutationFn: (data: CabinetAutostart) =>
+      apiSend<CabinetAutostart>("PUT", "/settings/cabinet-autostart", data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["settings", "cabinet-autostart"] });
+    },
+  });
+}
+
 export function useScanNow() {
   const qc = useQueryClient();
   return useMutation({

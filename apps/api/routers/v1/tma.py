@@ -28,6 +28,10 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from apps.api.deps import DepEngine, DepSettings
+from apps.api.routers.v1.schemas.cabinet_autostart import (
+    CabinetAutostartPutRequest,
+    CabinetAutostartResponse,
+)
 from apps.api.routers.v1.schemas.tma import (
     TmaAdDetailResponse,
     TmaAdMetrics,
@@ -48,6 +52,7 @@ from core.config import Settings
 from core.dashboard.snapshot import build_ad_snapshot
 from core.meta_api.queue import create_mutation_task
 from core.meta_api.schemas import MetaMutationPayload
+from core.scheduler.cabinet_autostart import read_autostart_config, write_autostart_config
 from core.telegram.service import find_recipient_by_telegram_user_id, load_telegram_config
 
 logger = logging.getLogger(__name__)
@@ -470,3 +475,50 @@ async def tma_claim_ad(
         )
     logger.info("TMA claim: ad=%s by=tma:%s → claimed", fb_ad_id, principal.telegram_user_id)
     return TmaClaimResponse(ok=True, alert_state="claimed")
+
+
+# ===========================================================================
+# Автостарт кабинета по расписанию (read всем, write — owner-only)
+# ===========================================================================
+
+
+@router.get("/cabinet-autostart", response_model=CabinetAutostartResponse)
+async def tma_get_cabinet_autostart(
+    principal: DepTmaPrincipal,
+    engine: DepEngine,
+) -> CabinetAutostartResponse:
+    """Текущий конфиг автостарта кабинета (любой авторизованный recipient)."""
+    cfg = await read_autostart_config(engine)
+    return CabinetAutostartResponse.from_config(cfg)
+
+
+@router.put("/cabinet-autostart", response_model=CabinetAutostartResponse)
+async def tma_put_cabinet_autostart(
+    body: CabinetAutostartPutRequest,
+    principal: DepTmaPrincipal,
+    engine: DepEngine,
+) -> CabinetAutostartResponse:
+    """Изменить конфиг автостарта. Money-критично → только role='owner'."""
+    if not principal.is_owner:
+        raise HTTPException(
+            status_code=403, detail="Только владелец кабинета может менять автостарт"
+        )
+    await write_autostart_config(
+        engine,
+        {
+            "enabled": body.enabled,
+            "hour_utc": body.hour_utc,
+            "minute_utc": body.minute_utc,
+            "dates": body.dates,
+        },
+    )
+    logger.info(
+        "cabinet_autostart обновлён (tma:%s): enabled=%s %02d:%02d UTC, dates=%s",
+        principal.telegram_user_id,
+        body.enabled,
+        body.hour_utc,
+        body.minute_utc,
+        body.dates,
+    )
+    cfg = await read_autostart_config(engine)
+    return CabinetAutostartResponse.from_config(cfg)

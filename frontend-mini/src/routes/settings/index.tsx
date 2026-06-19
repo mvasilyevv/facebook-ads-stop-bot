@@ -11,6 +11,7 @@ import {
   useTriggerScan,
   useTelegramSettings,
   useVisionSettings,
+  useCabinetAutostart,
   fetchJson,
   QK,
 } from "@/lib/api";
@@ -345,6 +346,127 @@ function VisionSection() {
   );
 }
 
+// ─── Секция АВТОСТАРТ КАБИНЕТА ─────────────────────────────────────────────
+
+const _DATE_RE = /^\d{1,2}\.\d{1,2}(\.\d{2,4})?$/;
+const pad2 = (n: number) => String(n).padStart(2, "0");
+
+function CabinetAutostartSection({
+  showToast,
+}: {
+  showToast: (t: string, ok?: boolean) => void;
+}) {
+  const { data, isLoading, isError, refetch } = useCabinetAutostart();
+  const qc = useQueryClient();
+  const [enabled, setEnabled] = useState(false);
+  const [time, setTime] = useState("06:00");
+  const [datesRaw, setDatesRaw] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (data) {
+      setEnabled(data.enabled);
+      setTime(`${pad2(data.hour_utc)}:${pad2(data.minute_utc)}`);
+      setDatesRaw((data.dates ?? []).join(", "));
+    }
+  }, [data]);
+
+  if (isLoading) {
+    return (
+      <Section eyebrow="АВТОСТАРТ КАБИНЕТА" num="09">
+        <div className="py-2 space-y-3">
+          <Skeleton className="h-11 w-full" />
+          <Skeleton className="h-11 w-full" />
+        </div>
+      </Section>
+    );
+  }
+  if (isError || !data) {
+    return (
+      <Section eyebrow="АВТОСТАРТ КАБИНЕТА" num="09">
+        <ErrorState message="Не удалось загрузить" onRetry={() => void refetch()} />
+      </Section>
+    );
+  }
+
+  const handleSave = async () => {
+    const [hh, mm] = time.split(":");
+    const hour = Number(hh);
+    const minute = Number(mm);
+    if (
+      !Number.isInteger(hour) ||
+      hour < 0 ||
+      hour > 23 ||
+      !Number.isInteger(minute) ||
+      minute < 0 ||
+      minute > 59
+    ) {
+      showToast("Время: формат ЧЧ:ММ (UTC)", false);
+      return;
+    }
+    const dates: string[] = [];
+    for (const part of datesRaw.split(/[\s,;]+/)) {
+      const s = part.trim();
+      if (!s) continue;
+      if (!_DATE_RE.test(s)) {
+        showToast(`Дата «${s}» — формат ДД.ММ`, false);
+        return;
+      }
+      if (!dates.includes(s)) dates.push(s);
+    }
+    haptic.impact("light");
+    setSaving(true);
+    try {
+      await fetchJson("/tma/cabinet-autostart", {
+        method: "PUT",
+        body: JSON.stringify({ enabled, hour_utc: hour, minute_utc: minute, dates }),
+      });
+      void qc.invalidateQueries({ queryKey: QK.cabinetAutostart });
+      haptic.notify("success");
+      showToast("Автостарт сохранён");
+    } catch (e: unknown) {
+      haptic.notify("error");
+      showToast((e as Error).message ?? "Ошибка сохранения", false);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Section eyebrow="АВТОСТАРТ КАБИНЕТА" num="09">
+      <FieldRow label="Включить" hint="В заданное время (UTC) включит кампании с нужной датой">
+        <Switch checked={enabled} onChange={() => setEnabled((v) => !v)} />
+      </FieldRow>
+
+      <FieldRow label="Время (UTC)" hint="Час запуска расписания">
+        <Input
+          type="time"
+          aria-label="Время автостарта (UTC)"
+          value={time}
+          onChange={(e) => setTime(e.target.value)}
+          className="w-[110px] min-h-[36px] text-[13px]"
+        />
+      </FieldRow>
+
+      <FieldRow label="Даты кампаний" hint="ДД.ММ, несколько через запятую" noBorder>
+        <Input
+          aria-label="Даты кампаний"
+          placeholder="22.05, 25.05"
+          value={datesRaw}
+          onChange={(e) => setDatesRaw(e.target.value)}
+          className="w-[120px] min-h-[36px] text-[13px]"
+        />
+      </FieldRow>
+
+      <div className="py-3">
+        <Button variant="primary" fullWidth onClick={() => void handleSave()} loading={saving}>
+          Сохранить
+        </Button>
+      </div>
+    </Section>
+  );
+}
+
 // ─── SettingsPage ─────────────────────────────────────────────────────────
 
 function SettingsPage() {
@@ -394,6 +516,7 @@ function SettingsPage() {
         <ObserverSection showToast={showToast} />
         <TelegramSection />
         <VisionSection />
+        <CabinetAutostartSection showToast={showToast} />
       </div>
 
       {/* Toast */}
