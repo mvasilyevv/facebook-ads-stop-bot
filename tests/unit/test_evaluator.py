@@ -126,9 +126,8 @@ def test_guardrail_fires_even_with_few_impressions():
     assert "cpc_stop" in result.matched_rule_codes
 
 
-# Новый порог 3: уже при ~5-6 показах с расходом выше порога без клика guardrail стопает
-# (вменённый первый клик будет дороже стоп-порога) — кейс GH_CR_CR002.
-def test_guardrail_fires_just_above_min_impressions():
+# Guardrail стопает при умеренных показах (гейт убран — число показов не важно).
+def test_guardrail_fires_at_moderate_impressions():
     row = _make_row(spend=Decimal("0.12"), clicks=0, cpc=None)
 
     result = evaluate_stop_rules(row, _make_ctx(impressions=6))
@@ -137,8 +136,8 @@ def test_guardrail_fires_just_above_min_impressions():
     assert "cpc_stop" in result.matched_rule_codes
 
 
-# M1: при достаточных показах guardrail работает как прежде (sanity-минимум пройден).
-def test_guardrail_fires_above_min_impressions():
+# Guardrail стопает и при больших показах — поведение не зависит от числа показов.
+def test_guardrail_fires_at_high_impressions():
     row = _make_row(spend=Decimal("0.12"), clicks=0, cpc=None)
 
     result = evaluate_stop_rules(row, _make_ctx(impressions=500))
