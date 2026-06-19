@@ -103,3 +103,68 @@ async def test_autostop_actor_label(monkeypatch):
     )
     kw = spy.await_args.kwargs
     assert "Авто-стоп" in kw["text"]
+
+
+# ===== Тесты ветки exhausted ValueError / unknown Exception в process_one_task =====
+
+from types import SimpleNamespace  # noqa: E402
+
+
+def _task(attempt_count=10, max_attempts=10, **kwargs):
+    """Задача с исчерпанными ретраями (attempt_count == max_attempts)."""
+    base = dict(
+        id=99,
+        task_type="meta_api_mutation",
+        payload={"mutation_kind": "pause_ad", "target_id": "777"},
+        attempt_count=attempt_count,
+        max_attempts=max_attempts,
+        requested_by="bot_auto_stop",
+        next_retry_at=None,
+        last_error=None,
+    )
+    base.update(kwargs)
+    return SimpleNamespace(**base)
+
+
+def _mock_ownership(allowed=True):
+    return SimpleNamespace(allowed=allowed, not_found=False, reason="", foreign_ids=[])
+
+
+# pause_ad с ValueError (исчерпаны ретраи) → _alert_money_fail / notify_owners вызван
+@pytest.mark.asyncio
+async def test_pause_ad_value_error_exhausted_alerts(monkeypatch):
+    spy = AsyncMock(return_value=True)
+    monkeypatch.setattr(mw, "notify_owners", spy)
+    monkeypatch.setattr(mw, "load_owner_tag", AsyncMock(return_value=None))
+    monkeypatch.setattr(mw, "load_scanning_enabled", AsyncMock(return_value=True))
+    monkeypatch.setattr(mw, "check_mutation_ownership", AsyncMock(return_value=_mock_ownership()))
+    # Эмулируем ValueError из postprocess (не _IRREVERSIBLE_KINDS → requeue)
+    monkeypatch.setattr(mw, "execute_mutation", AsyncMock(side_effect=ValueError("bad parse")))
+    # Ретраи исчерпаны → requeue_task вернёт False (нет попыток)
+    monkeypatch.setattr(mw, "requeue_task", AsyncMock(return_value=False))
+
+    await mw.process_one_task(object(), _task(), client=AsyncMock(), redis_client=AsyncMock())
+
+    spy.assert_awaited_once()
+    kw = spy.await_args.kwargs
+    assert "777" in kw["text"]
+
+
+# pause_ad с произвольным Exception (unknown, исчерпаны ретраи) → _alert_money_fail / notify_owners вызван
+@pytest.mark.asyncio
+async def test_pause_ad_unknown_exception_exhausted_alerts(monkeypatch):
+    spy = AsyncMock(return_value=True)
+    monkeypatch.setattr(mw, "notify_owners", spy)
+    monkeypatch.setattr(mw, "load_owner_tag", AsyncMock(return_value=None))
+    monkeypatch.setattr(mw, "load_scanning_enabled", AsyncMock(return_value=True))
+    monkeypatch.setattr(mw, "check_mutation_ownership", AsyncMock(return_value=_mock_ownership()))
+    # Неклассифицированная ошибка → попадает в `except Exception`
+    monkeypatch.setattr(mw, "execute_mutation", AsyncMock(side_effect=RuntimeError("unexpected")))
+    # Ретраи исчерпаны → requeue_task вернёт False
+    monkeypatch.setattr(mw, "requeue_task", AsyncMock(return_value=False))
+
+    await mw.process_one_task(object(), _task(), client=AsyncMock(), redis_client=AsyncMock())
+
+    spy.assert_awaited_once()
+    kw = spy.await_args.kwargs
+    assert "777" in kw["text"]

@@ -566,6 +566,15 @@ async def process_one_task(
                 "meta_api: task id=%s → final fail (unexpected ValueError, retries exhausted)",
                 task.id,
             )
+            # Исчерпаны все попытки → финальный провал money-мутации (pause).
+            await _alert_money_fail(
+                engine,
+                redis_client,
+                payload=payload,
+                requested_by=getattr(task, "requested_by", ""),
+                error=f"exhausted retries (ValueError): {exc!r}",
+                kind_label=payload.mutation_kind,
+            )
         return
     except Exception as exc:  # noqa: BLE001 — защитная сетка на неклассифицированное
         # Необратимые kinds: неклассифицированная ошибка после возможного коммита → не ретраим.
@@ -577,6 +586,15 @@ async def process_one_task(
             logger.warning("meta_api: task id=%s → retrying (unknown): %s", task.id, exc)
         else:
             logger.error("meta_api: task id=%s → final fail (unknown): %s", task.id, exc)
+            # Исчерпаны все попытки → финальный провал money-мутации (pause).
+            await _alert_money_fail(
+                engine,
+                redis_client,
+                payload=payload,
+                requested_by=getattr(task, "requested_by", ""),
+                error=f"exhausted retries (unknown): {exc!r}",
+                kind_label=payload.mutation_kind,
+            )
 
 
 # ====================== sub-loops ======================
