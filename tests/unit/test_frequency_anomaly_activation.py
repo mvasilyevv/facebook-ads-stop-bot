@@ -144,26 +144,29 @@ def test_low_frequency_no_hit() -> None:
 # ====================== sanity-фильтры (защита от ложных стопов) ======================
 
 
-# Высокая частота, но reach < min_reach → НЕ стопаем (ненадёжная выборка на старте).
-def test_low_reach_suppresses_stop() -> None:
+# Решение байера: гейт min_reach УБРАН — высокая частота стопает даже при малом reach
+# (не ждём накопления охвата; от шумовых выбросов защищает только outlier_cap).
+def test_low_reach_still_stops() -> None:
     offer = _offer(frequency_threshold=Decimal("4.0"))
-    row = _row(frequency=Decimal("5.0"), impressions=2000, reach=50)  # reach < 100
+    row = _row(frequency=Decimal("5.0"), impressions=2000, reach=50)
     ctx = build_rule_context(
         offer, frequency_current=row.frequency, impressions=row.impressions, reach=row.reach
     )
     result = evaluate_stop_rules(row, ctx)
-    assert result.stage is None
+    assert result.stage == AlertStage.STOP
+    assert "frequency_anomaly" in result.matched_rule_codes
 
 
-# Высокая частота, но impressions < min_impressions → НЕ стопаем (мало данных).
-def test_low_impressions_suppresses_stop() -> None:
+# Решение байера: гейт min_impressions УБРАН — высокая частота стопает даже при малых показах.
+def test_low_impressions_still_stops() -> None:
     offer = _offer(frequency_threshold=Decimal("4.0"))
-    row = _row(frequency=Decimal("5.0"), impressions=300, reach=150)  # impr < 500
+    row = _row(frequency=Decimal("5.0"), impressions=300, reach=150)
     ctx = build_rule_context(
         offer, frequency_current=row.frequency, impressions=row.impressions, reach=row.reach
     )
     result = evaluate_stop_rules(row, ctx)
-    assert result.stage is None
+    assert result.stage == AlertStage.STOP
+    assert "frequency_anomaly" in result.matched_rule_codes
 
 
 # Частота выше outlier_cap (10) → выброс на старте (малый reach), НЕ стопаем.

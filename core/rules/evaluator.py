@@ -91,8 +91,6 @@ def _evaluate_click_stage(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | None
             title=rule_label("cpc_stop"),
             label="CPC",
             missing_event_label="кликов",
-            impressions=ctx.impressions,
-            min_impressions=ctx.guardrail_min_impressions,
         )
 
     return _pick_highest_priority_hit(
@@ -117,8 +115,6 @@ def _evaluate_click_stage(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | None
             title=rule_label("cpl_stop"),
             label="CPL",
             missing_event_label="лидов",
-            impressions=ctx.impressions,
-            min_impressions=ctx.guardrail_min_impressions,
         ),
     )
 
@@ -146,8 +142,6 @@ def _evaluate_lead_stage(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | None:
             title=rule_label("cpr_stop"),
             label="CPR",
             missing_event_label="регистраций",
-            impressions=ctx.impressions,
-            min_impressions=ctx.guardrail_min_impressions,
         ),
     )
 
@@ -223,17 +217,11 @@ def _evaluate_frequency_anomaly(ctx: RuleContext) -> RuleHit | None:
 
     current = ctx.frequency_current
 
-    # Sanity-check: FB на старте объявления может временно показывать frequency
-    # 50-100 из-за маленького reach (300 показов / 7 человек). Это не реальный
-    # burnout, а переходный шум. Пропускаем правило, если:
-    #   - frequency > cap (например 10) → выброс;
-    #   - impressions < min → недостаточно данных;
-    #   - reach < min → ненадёжная выборка.
+    # Потолок-выброс: FB на старте может временно показывать frequency 50-100 из-за
+    # крошечного reach (300 показов / 7 человек) — это переходный шум, не burnout.
+    # Отсекаем ТОЛЬКО абсурдные выбросы выше cap. Ожидания показов/охвата убраны
+    # (решение байера: стопать жёстко по порогу частоты, не ждать накопления данных).
     if current > ctx.frequency_outlier_cap:
-        return None
-    if ctx.impressions is not None and ctx.impressions < ctx.frequency_min_impressions:
-        return None
-    if ctx.reach is not None and ctx.reach < ctx.frequency_min_reach:
         return None
 
     prev = ctx.frequency_1h_ago
@@ -376,16 +364,11 @@ def _evaluate_guardrail_only(
     title: str,
     label: str,
     missing_event_label: str,
-    impressions: int | None = None,
-    min_impressions: int = 200,
 ) -> RuleHit | None:
+    # Жёсткий стоп без ожидания показов/охвата (решение байера): расход без
+    # события выше стоп-порога — money-сигнал, стопаем сразу, не ждём накопления
+    # показов. Мизерный спенд сам отсекается порогом spend>=stop_threshold.
     if not enabled:
-        return None
-
-    # Sanity-минимум показов: при <min объявление ещё не открутилось толком,
-    # вывод «расход без событий» статистически нерепрезентативен (см. правило
-    # cpc_stop с порогом 2% от CPA = $0.06: 1-2 показа уже превышают порог).
-    if impressions is not None and impressions < min_impressions:
         return None
 
     current_spend = _round_money(spend)

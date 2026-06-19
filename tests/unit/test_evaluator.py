@@ -115,17 +115,15 @@ def test_click_stage_guardrail_without_clicks_triggers_stop():
     assert result.matched_rule_codes == ["cpc_stop"]
 
 
-# M1: guardrail подавляется при impressions < sanity-минимума (отсекаем 1-2-показный выброс).
-# build_rule_context теперь заполняет ctx.impressions ВСЕГДА (а не только при frequency),
-# поэтому guardrail консистентно не стопает на 1-2 показах для любого оффера.
-# Порог снижен 10→3: 6 показов с расходом выше порога без клика уже money-сигнал.
-def test_guardrail_suppressed_below_min_impressions():
+# Решение байера: гейт-минимум показов УБРАН — стопаем жёстко по расходу даже на
+# 1-2 показах (расход без клика выше стоп-порога = money-сигнал, не ждём накопления).
+def test_guardrail_fires_even_with_few_impressions():
     row = _make_row(spend=Decimal("0.12"), clicks=0, cpc=None)
 
     result = evaluate_stop_rules(row, _make_ctx(impressions=2))
 
-    assert "cpc_stop" not in result.matched_rule_codes
-    assert "cpl_stop" not in result.matched_rule_codes
+    assert result.stage == AlertStage.STOP
+    assert "cpc_stop" in result.matched_rule_codes
 
 
 # Новый порог 3: уже при ~5-6 показах с расходом выше порога без клика guardrail стопает
