@@ -1,9 +1,12 @@
 # -*- coding: utf-8 -*-
 """Unit-тесты money-resilience авто-стопа: pause_ad создаётся с повышенным
-лимитом ретраев, чтобы пережить длинный сетевой outage graph.facebook.com.
+лимитом ретраев, чтобы пережить ~1 час сетевого outage graph.facebook.com.
 
 Дефолтных 5 попыток (~7.5 мин по backoff 30/60/120/240/300s-cap) мало — money-стоп
-умирал, а объявление продолжало крутить убыток. См. _AUTO_STOP_MAX_ATTEMPTS.
+умирал, а объявление продолжало крутить убыток. N=15 даёт ~62 мин (1 час):
+3 экспоненциальных интервала (60+120+240с) + 11×300с = 3720с.
+Почему не 6ч: health_watchdog probe детектирует мёртвый канал + шлёт CRITICAL в TG;
+длинный retry только маскировал корень. См. _AUTO_STOP_MAX_ATTEMPTS.
 """
 
 from __future__ import annotations
@@ -53,13 +56,19 @@ async def test_auto_stop_uses_bumped_max_attempts(monkeypatch) -> None:
     assert writers._AUTO_STOP_MAX_ATTEMPTS > 5
 
 
-# Покрытие по времени: при cap 300с константа даёт минимум ~3ч непрерывных ретраев
-# (4 ранних попытки 30+60+120+240=450с + (N-4)×300с). Защита от случайного занижения.
-def test_auto_stop_max_attempts_covers_long_outage() -> None:
+# Покрытие по времени ~1ч: 14 интервалов (60+120+240 + 11×300 = 3720с ≈ 62 мин).
+# Константа должна быть ровно 15 — владелец осознанно снизил с 72 (~6ч) до ~1ч:
+# health_watchdog probe детектирует мёртвый канал, длинный retry маскировал корень.
+def test_auto_stop_max_attempts_covers_one_hour() -> None:
     n = writers._AUTO_STOP_MAX_ATTEMPTS
-    early = 30 + 60 + 120 + 240  # backoff до выхода на cap
-    coverage_seconds = early + max(0, n - 4) * 300
-    assert coverage_seconds >= 3 * 3600  # не меньше 3 часов
+    assert n == 15, f"Ожидается 15 (~1ч), получено {n}; менять только осознанно"
+    # Суммарная задержка: _calc_next_retry(i+1) для i=0..n-2
+    # = min(30*2^1,300) + ... + min(30*2^(n-1),300)
+    total_wait = sum(min(30 * (2 ** (i + 1)), 300) for i in range(n - 1))
+    assert 3600 <= total_wait <= 4200, (
+        f"Суммарное окно ретраев {total_wait}с должно быть ~1ч (3600-4200с), "
+        f"не 6ч и не менее 60 мин"
+    )
 
 
 # Без стоп-решения (create_disable_task=False) задача не создаётся вовсе
