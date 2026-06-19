@@ -77,23 +77,26 @@ def _row(fb_ad_id: str, campaign: str, campaign_id: str, ad_name: str = "AD") ->
     )
 
 
-async def _set_owner_tag(pg_engine, tag: str | None) -> None:
-    """Кладёт owner_campaign_tag в observer_config + включает сканирование.
+async def _set_owner_tag(pg_engine, tag: str | None, campaign_ids: list[str] | None = None) -> None:
+    """Кладёт owner_campaign_tag + allowlist (campaign_ids) в observer_config + scanning ON.
 
-    is_scanning_enabled server_default=FALSE (scanning OFF by default), а autostart-тик
-    при выключенном сканировании сразу возвращает 'scanning_paused'. Явно включаем.
+    Allowlist — источник кампаний автостарта (объединён со «слежкой»).
+    is_scanning_enabled server_default=FALSE; autostart-тик при выключенном сканировании
+    сразу возвращает 'scanning_paused' — поэтому явно включаем.
     """
     async with pg_engine.begin() as conn:
         await conn.execute(
             text(
                 """
-                INSERT INTO observer_config (singleton_key, owner_campaign_tag, is_scanning_enabled)
-                VALUES ('default', :tag, TRUE)
+                INSERT INTO observer_config
+                    (singleton_key, owner_campaign_tag, is_scanning_enabled, campaign_ids)
+                VALUES ('default', :tag, TRUE, :ids)
                 ON CONFLICT (singleton_key)
-                DO UPDATE SET owner_campaign_tag = :tag, is_scanning_enabled = TRUE
+                DO UPDATE SET owner_campaign_tag = :tag, is_scanning_enabled = TRUE,
+                              campaign_ids = :ids
                 """
             ),
-            {"tag": tag},
+            {"tag": tag, "ids": campaign_ids or []},
         )
 
 
@@ -180,10 +183,10 @@ async def test_run_one_tick_starts_cabinet(
     mine = _row("111100", "MV | KE | CR2 | 22.05", campaign_id="C700")
     foreign = _row("222100", "MZ Artemteam CR2", campaign_id="C700")
     await process_scan_rows(pg_engine, rows=[mine, foreign], scan_id=1)
-    await _set_owner_tag(pg_engine, "MV")
+    await _set_owner_tag(pg_engine, "MV", campaign_ids=["C700"])
     await write_autostart_config(
         pg_engine,
-        {"enabled": True, "hour_utc": 6, "minute_utc": 0, "campaign_ids": ["C700"]},
+        {"enabled": True, "hour_utc": 6, "minute_utc": 0},
     )
 
     # Перехватываем publish, чтобы проверить scan-trigger.
@@ -237,10 +240,10 @@ async def test_run_one_tick_dedup_same_day(
 ) -> None:
     mine = _row("111200", "MV | KE | CR2 | 22.05", campaign_id="C800")
     await process_scan_rows(pg_engine, rows=[mine], scan_id=1)
-    await _set_owner_tag(pg_engine, "MV")
+    await _set_owner_tag(pg_engine, "MV", campaign_ids=["C800"])
     await write_autostart_config(
         pg_engine,
-        {"enabled": True, "hour_utc": 6, "minute_utc": 0, "campaign_ids": ["C800"]},
+        {"enabled": True, "hour_utc": 6, "minute_utc": 0},
     )
 
     now1 = datetime(2026, 5, 29, 6, 0, 0, tzinfo=timezone.utc)
@@ -267,7 +270,7 @@ async def test_run_one_tick_dedup_same_day(
 async def test_run_one_tick_disabled(pg_engine, fake_redis_client, clean_autostart_tables) -> None:
     await write_autostart_config(
         pg_engine,
-        {"enabled": False, "hour_utc": 6, "minute_utc": 0, "campaign_ids": ["C700"]},
+        {"enabled": False, "hour_utc": 6, "minute_utc": 0},
     )
     now = datetime(2026, 5, 29, 6, 0, 0, tzinfo=timezone.utc)
     summary = await run_one_tick(engine=pg_engine, redis_client=fake_redis_client, now=now)
@@ -282,7 +285,7 @@ async def test_run_one_tick_not_in_window(
 ) -> None:
     await write_autostart_config(
         pg_engine,
-        {"enabled": True, "hour_utc": 6, "minute_utc": 0, "campaign_ids": ["C700"]},
+        {"enabled": True, "hour_utc": 6, "minute_utc": 0},
     )
     now = datetime(2026, 5, 29, 5, 0, 0, tzinfo=timezone.utc)
     summary = await run_one_tick(engine=pg_engine, redis_client=fake_redis_client, now=now)
@@ -297,7 +300,7 @@ async def test_run_one_tick_no_campaigns(
 ) -> None:
     await write_autostart_config(
         pg_engine,
-        {"enabled": True, "hour_utc": 6, "minute_utc": 0, "campaign_ids": []},
+        {"enabled": True, "hour_utc": 6, "minute_utc": 0},
     )
     now = datetime(2026, 5, 29, 6, 0, 0, tzinfo=timezone.utc)
     summary = await run_one_tick(engine=pg_engine, redis_client=fake_redis_client, now=now)
@@ -312,10 +315,10 @@ async def test_run_one_tick_no_owner_ads(
 ) -> None:
     foreign = _row("222300", "MZ Artemteam CR2", campaign_id="C900")
     await process_scan_rows(pg_engine, rows=[foreign], scan_id=1)
-    await _set_owner_tag(pg_engine, "MV")
+    await _set_owner_tag(pg_engine, "MV", campaign_ids=["C900"])
     await write_autostart_config(
         pg_engine,
-        {"enabled": True, "hour_utc": 6, "minute_utc": 0, "campaign_ids": ["C900"]},
+        {"enabled": True, "hour_utc": 6, "minute_utc": 0},
     )
     now = datetime(2026, 5, 29, 6, 0, 0, tzinfo=timezone.utc)
     summary = await run_one_tick(engine=pg_engine, redis_client=fake_redis_client, now=now)

@@ -4,7 +4,7 @@
  */
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useState, useEffect } from "react";
-import { ChevronRight, Heart, FileCode, FileText, RefreshCw, Check } from "lucide-react";
+import { ChevronRight, Heart, FileCode, FileText, RefreshCw } from "lucide-react";
 import {
   useObserverSettings,
   useToggleScanning,
@@ -12,7 +12,6 @@ import {
   useTelegramSettings,
   useVisionSettings,
   useCabinetAutostart,
-  useObserverCampaigns,
   fetchJson,
   QK,
 } from "@/lib/api";
@@ -357,18 +356,15 @@ function CabinetAutostartSection({
   showToast: (t: string, ok?: boolean) => void;
 }) {
   const { data, isLoading, isError, refetch } = useCabinetAutostart();
-  const { data: campaigns, isLoading: campsLoading } = useObserverCampaigns();
   const qc = useQueryClient();
   const [enabled, setEnabled] = useState(false);
   const [time, setTime] = useState("06:00");
-  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (data) {
       setEnabled(data.enabled);
       setTime(`${pad2(data.hour_utc)}:${pad2(data.minute_utc)}`);
-      setSelected(new Set(data.campaign_ids ?? []));
     }
   }, [data]);
 
@@ -390,14 +386,6 @@ function CabinetAutostartSection({
     );
   }
 
-  const toggle = (id: string) =>
-    setSelected((s) => {
-      const n = new Set(s);
-      if (n.has(id)) n.delete(id);
-      else n.add(id);
-      return n;
-    });
-
   const handleSave = async () => {
     const [hh, mm] = time.split(":");
     const hour = Number(hh);
@@ -418,12 +406,7 @@ function CabinetAutostartSection({
     try {
       await fetchJson("/tma/cabinet-autostart", {
         method: "PUT",
-        body: JSON.stringify({
-          enabled,
-          hour_utc: hour,
-          minute_utc: minute,
-          campaign_ids: [...selected],
-        }),
+        body: JSON.stringify({ enabled, hour_utc: hour, minute_utc: minute }),
       });
       void qc.invalidateQueries({ queryKey: QK.cabinetAutostart });
       haptic.notify("success");
@@ -438,7 +421,7 @@ function CabinetAutostartSection({
 
   return (
     <Section eyebrow="АВТОСТАРТ КАБИНЕТА" num="09">
-      <FieldRow label="Включить" hint="В заданное время (UTC) включит отмеченные кампании">
+      <FieldRow label="Включить" hint="В заданное время (UTC) включит отслеживаемые кампании">
         <Switch checked={enabled} onChange={() => setEnabled((v) => !v)} />
       </FieldRow>
 
@@ -452,48 +435,9 @@ function CabinetAutostartSection({
         />
       </FieldRow>
 
-      <div className="pt-2">
-        <p className="text-[11px] text-bg-8 mb-2">Кампании ({selected.size})</p>
-        {campsLoading ? (
-          <Skeleton className="h-16 w-full" />
-        ) : !campaigns || campaigns.length === 0 ? (
-          <p className="text-[12px] text-bg-8 py-2">
-            Список кампаний пуст — обнови его на десктопе (Кампании → Обновить список).
-          </p>
-        ) : (
-          <div className="border border-[var(--hairline)] rounded-[var(--radius-2)] overflow-hidden max-h-[260px] overflow-y-auto">
-            {campaigns.map((c) => {
-              const isSel = selected.has(c.id);
-              return (
-                <button
-                  key={c.id}
-                  type="button"
-                  role="checkbox"
-                  aria-checked={isSel}
-                  aria-label={c.name || c.id}
-                  onClick={() => toggle(c.id)}
-                  className={cn(
-                    "w-full flex items-center gap-2.5 px-3 py-2.5 text-left text-[13px]",
-                    "border-b border-[var(--hairline)] last:border-b-0",
-                    isSel ? "bg-accent-bg text-bg-11" : "text-bg-10",
-                  )}
-                >
-                  <span
-                    aria-hidden
-                    className={cn(
-                      "inline-flex items-center justify-center shrink-0 size-4 rounded-[var(--radius-1)] border-[1.5px]",
-                      isSel ? "bg-accent border-accent text-bg-0" : "bg-bg-2 border-bg-7",
-                    )}
-                  >
-                    {isSel && <Check size={11} strokeWidth={3} />}
-                  </span>
-                  <span className="truncate">{c.name || c.id}</span>
-                </button>
-              );
-            })}
-          </div>
-        )}
-      </div>
+      <p className="text-[11px] text-bg-8 pt-1 pb-1">
+        Включаются кампании из «Отслеживаемые кампании» (настраиваются на десктопе).
+      </p>
 
       <div className="py-3">
         <Button variant="primary" fullWidth onClick={() => void handleSave()} loading={saving}>

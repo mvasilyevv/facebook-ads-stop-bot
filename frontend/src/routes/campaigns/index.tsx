@@ -112,29 +112,18 @@ const pad2 = (n: number) => String(n).padStart(2, "0");
 const CabinetAutostartCard: FC = () => {
   const { data, isLoading, error, refetch } = useCabinetAutostart();
   const updateMut = useUpdateCabinetAutostart();
-  const { data: campaigns, isLoading: campsLoading } = useObserverCampaigns();
   const [enabled, setEnabled] = useState(false);
   const [time, setTime] = useState("06:00");
-  const [selected, setSelected] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     if (data) {
       setEnabled(data.enabled);
       setTime(`${pad2(data.hour_utc)}:${pad2(data.minute_utc)}`);
-      setSelected(new Set(data.campaign_ids ?? []));
     }
   }, [data]);
 
-  if (isLoading) return <Skeleton className="h-40 w-full" />;
+  if (isLoading) return <Skeleton className="h-32 w-full" />;
   if (error) return <ErrorState error={error} onRetry={() => void refetch()} />;
-
-  const toggle = (id: string) =>
-    setSelected((s) => {
-      const n = new Set(s);
-      if (n.has(id)) n.delete(id);
-      else n.add(id);
-      return n;
-    });
 
   const handleSave = async () => {
     const [hh, mm] = time.split(":");
@@ -152,12 +141,7 @@ const CabinetAutostartCard: FC = () => {
       return;
     }
     try {
-      await updateMut.mutateAsync({
-        enabled,
-        hour_utc: hour,
-        minute_utc: minute,
-        campaign_ids: [...selected],
-      });
+      await updateMut.mutateAsync({ enabled, hour_utc: hour, minute_utc: minute });
       toast.success("Автостарт сохранён");
     } catch (e) {
       toast.error("Ошибка сохранения", e instanceof Error ? e.message : String(e));
@@ -167,8 +151,9 @@ const CabinetAutostartCard: FC = () => {
   return (
     <Card eyebrow="АВТОСТАРТ КАБИНЕТА" padded>
       <div className="text-[12px] text-bg-9 mb-3">
-        В заданное время (UTC) бот включит объявления отмеченных кампаний и запустит скан — без
-        подтверждения. Ничего не отмечено — ничего не включается.
+        В заданное время (UTC) бот включит объявления <b className="text-bg-11">отслеживаемых</b>{" "}
+        кампаний (список ниже) и запустит скан — без подтверждения. Пустой список отслеживаемых —
+        ничего не включается.
       </div>
 
       <Switch
@@ -178,61 +163,16 @@ const CabinetAutostartCard: FC = () => {
         visualLabel="Статус"
       />
 
-      <div className="mt-4" style={{ maxWidth: 160 }}>
-        <Input
-          id="autostart-time"
-          type="time"
-          label="Время (UTC)"
-          value={time}
-          onChange={(e) => setTime(e.target.value)}
-        />
-      </div>
-
-      <div className="mt-4">
-        <div className="font-display text-[10px] tracking-[0.12em] uppercase text-bg-8 mb-2">
-          КАМПАНИИ ({selected.size})
+      <div className="mt-4 flex items-end justify-between gap-3">
+        <div style={{ maxWidth: 160 }} className="flex-1">
+          <Input
+            id="autostart-time"
+            type="time"
+            label="Время (UTC)"
+            value={time}
+            onChange={(e) => setTime(e.target.value)}
+          />
         </div>
-        {campsLoading ? (
-          <Skeleton className="h-20 w-full" />
-        ) : !campaigns || campaigns.length === 0 ? (
-          <div
-            className="text-[12px] text-bg-8 border border-[var(--hairline)] rounded-[var(--radius-2)]"
-            style={{ padding: "var(--s-4)" }}
-          >
-            Кампаний нет. Обнови список в блоке «Отслеживаемые кампании» ниже — он тянет кампании из
-            кабинета.
-          </div>
-        ) : (
-          <div
-            className="border border-[var(--hairline)] rounded-[var(--radius-2)] overflow-hidden"
-            style={{ maxHeight: 320, overflowY: "auto" }}
-          >
-            {campaigns.map((c) => {
-              const isSel = selected.has(c.id);
-              return (
-                <button
-                  key={c.id}
-                  type="button"
-                  role="checkbox"
-                  aria-checked={isSel}
-                  aria-label={c.name || c.id}
-                  onClick={() => toggle(c.id)}
-                  className={cn(
-                    "w-full flex items-center gap-2.5 px-3 py-2.5 text-left text-[13px]",
-                    "border-b border-l-2 border-b-[var(--hairline)] last:border-b-0 cursor-pointer transition-colors",
-                    isSel ? "bg-accent-bg border-l-accent" : "border-l-transparent hover:bg-bg-2",
-                  )}
-                >
-                  <CheckBox state={isSel} />
-                  <CampaignName name={c.name || c.id} />
-                </button>
-              );
-            })}
-          </div>
-        )}
-      </div>
-
-      <div className="flex justify-end mt-4">
         <Button variant="primary" onClick={() => void handleSave()} loading={updateMut.isPending}>
           Сохранить
         </Button>

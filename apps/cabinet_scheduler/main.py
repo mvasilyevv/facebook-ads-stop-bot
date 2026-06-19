@@ -123,17 +123,22 @@ async def run_one_tick(
         return {"outcome": "already_done"}
 
     day = now.astimezone(timezone.utc).strftime("%Y-%m-%d")
-    campaign_ids = list(config.get("campaign_ids") or [])
-    if not campaign_ids:
-        # Кампаний не выбрано → нечего включать. Ставим маркер, чтобы не дёргать каждый тик окна.
-        await _set_autostart_done(redis_client, done_key)
-        logger.info(
-            "cabinet_autostart: фича включена, но список кампаний пуст — пропускаю день %s", day
-        )
-        return {"outcome": "no_campaigns", "day": day}
 
+    # Источник кампаний автостарта = allowlist отслеживаемых (observer_config.campaign_ids).
+    # Объединено: что отслеживаем, то и поднимаем по расписанию. Пустой allowlist →
+    # автостарт НИЧЕГО не включает (для observer пусто = «сканировать всё», но включить
+    # весь кабинет нельзя — money-дыра).
     observer_config = await load_observer_config(engine)
     owner_tag = (observer_config or {}).get("owner_campaign_tag")
+    campaign_ids = list((observer_config or {}).get("campaign_ids") or [])
+    if not campaign_ids:
+        await _set_autostart_done(redis_client, done_key)
+        logger.info(
+            "cabinet_autostart: фича включена, но отслеживаемых кампаний нет (allowlist пуст) — "
+            "пропускаю день %s",
+            day,
+        )
+        return {"outcome": "no_campaigns", "day": day}
 
     ad_ids, total = await resolve_owner_ad_ids_by_campaign_ids(
         engine, owner_tag=owner_tag, campaign_ids=campaign_ids

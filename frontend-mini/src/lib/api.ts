@@ -132,7 +132,6 @@ export const QK = {
   historySummary: (days: number) => ["history", "summary", days] as const,
   observerSettings: ["settings", "observer"] as const,
   cabinetAutostart: ["tma", "cabinet-autostart"] as const,
-  observerCampaigns: ["settings", "observer", "campaigns"] as const,
 } as const;
 
 // ─── Dashboard ────────────────────────────────────────────────────────────
@@ -300,29 +299,12 @@ export interface CabinetAutostart {
   enabled: boolean;
   hour_utc: number;
   minute_utc: number;
-  /** Meta-ID выбранных кампаний (галочками). */
-  campaign_ids: string[];
 }
 
 export function useCabinetAutostart() {
   return useQuery({
     queryKey: QK.cabinetAutostart,
     queryFn: () => fetchJson<CabinetAutostart>("/tma/cabinet-autostart"),
-    staleTime: 30_000,
-  });
-}
-
-/** Кампания из кабинета (для выбора в автостарте). selected — флаг observer-allowlist. */
-export interface ObserverCampaign {
-  id: string;
-  name: string;
-  selected: boolean;
-}
-
-export function useObserverCampaigns() {
-  return useQuery({
-    queryKey: QK.observerCampaigns,
-    queryFn: () => fetchJson<ObserverCampaign[]>("/settings/observer/campaigns"),
     staleTime: 30_000,
   });
 }

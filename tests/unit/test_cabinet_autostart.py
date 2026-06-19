@@ -77,30 +77,21 @@ def test_done_key_rejects_naive() -> None:
         autostart_done_key(datetime(2026, 5, 29, 6, 0, 0))
 
 
-# Пустой/None конфиг нормализуется в дефолты (фича выключена, кампаний нет)
+# Пустой/None конфиг нормализуется в дефолты (фича выключена)
 def test_normalize_empty_returns_defaults() -> None:
     cfg = _normalize_config(None)
     assert cfg["enabled"] is False
-    assert cfg["campaign_ids"] == []
     assert cfg["hour_utc"] == DEFAULT_CONFIG["hour_utc"]
     assert cfg["minute_utc"] == DEFAULT_CONFIG["minute_utc"]
 
 
-# Нормализация чистит пустые строки в campaign_ids и приводит типы
-def test_normalize_cleans_campaign_ids_and_types() -> None:
-    cfg = _normalize_config(
-        {"enabled": 1, "hour_utc": "7", "minute_utc": "15", "campaign_ids": ["123", " ", "456"]}
-    )
+# Нормализация приводит типы (enabled/час/минута); кампании в конфиге не хранятся
+def test_normalize_coerces_types() -> None:
+    cfg = _normalize_config({"enabled": 1, "hour_utc": "7", "minute_utc": "15"})
     assert cfg["enabled"] is True
     assert cfg["hour_utc"] == 7
     assert cfg["minute_utc"] == 15
-    assert cfg["campaign_ids"] == ["123", "456"]
-
-
-# Кривой тип campaign_ids (не список) → пустой список (защита от падения)
-def test_normalize_bad_campaign_ids_type() -> None:
-    cfg = _normalize_config({"enabled": True, "campaign_ids": "123"})
-    assert cfg["campaign_ids"] == []
+    assert "campaign_ids" not in cfg, "campaign_ids живёт в observer allowlist, не здесь"
 
 
 # ====================== N6: ошибка Redis GET не пропускает день молча ==========

@@ -6,10 +6,10 @@
 - /autostart on | off   — включить / выключить фичу.
 - /autostart HH:MM      — задать время (UTC).
 
-Выбор кампаний — галочками в UI (web/mini), не через TG.
+Кампании автостарта = ОТСЛЕЖИВАЕМЫЕ (observer allowlist), отдельно не выбираются.
 
 Money-критично: при включённом автостарте воркер cabinet_scheduler в заданное
-время сам включит объявления СВОИХ выбранных кампаний и запустит scan.
+время сам включит объявления отслеживаемых кампаний и запустит scan.
 Owner-scoping берётся из observer_config (тот же тег, что у /pause /resume).
 """
 
@@ -36,14 +36,11 @@ def _format_config(config: dict) -> str:
     state = "🟢 включён" if config.get("enabled") else "🔴 выключен"
     hour = int(config.get("hour_utc", 6))
     minute = int(config.get("minute_utc", 0))
-    count = len(config.get("campaign_ids") or [])
-    camps_str = f"{count} шт." if count else "— (не выбраны)"
     return (
         f"🗓 {fmt.b('Автостарт кабинета')}: {state}\n"
-        f"Время: {fmt.code(f'{hour:02d}:{minute:02d}')} UTC (ежедневно)\n"
-        f"Кампаний выбрано: {fmt.esc(camps_str)}\n\n"
-        "Что делает: в указанное время включает объявления выбранных кампаний и "
-        "запускает скан. Выбор кампаний — галочками в UI (web/mini)."
+        f"Время: {fmt.code(f'{hour:02d}:{minute:02d}')} UTC (ежедневно)\n\n"
+        "Что делает: в указанное время включает объявления ОТСЛЕЖИВАЕМЫХ кампаний "
+        "(список — «Отслеживаемые кампании» в UI) и запускает скан."
     )
 
 
@@ -56,7 +53,7 @@ _USAGE = "\n".join(
         f"{fmt.code('/autostart HH:MM')} — задать время (UTC).",
         "",
         f"Пример: {fmt.code('/autostart 06:00')} — ежедневно в 06:00 UTC.",
-        "Кампании выбираются галочками в UI (web/mini).",
+        "Кампании = отслеживаемые (см. «Отслеживаемые кампании» в UI).",
     ]
 )
 

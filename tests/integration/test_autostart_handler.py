@@ -82,8 +82,6 @@ async def test_autostart_set_time(pg_engine, clean_autostart_config) -> None:
     config = await read_autostart_config(pg_engine)
     assert config["hour_utc"] == 6
     assert config["minute_utc"] == 30
-    # Кампании через TG не задаются — список остаётся как был (пустой).
-    assert config["campaign_ids"] == []
 
 
 # /autostart off выключает, не теряя ранее заданное время

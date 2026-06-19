@@ -509,16 +509,14 @@ async def tma_put_cabinet_autostart(
             "enabled": body.enabled,
             "hour_utc": body.hour_utc,
             "minute_utc": body.minute_utc,
-            "campaign_ids": body.campaign_ids,
         },
     )
     logger.info(
-        "cabinet_autostart обновлён (tma:%s): enabled=%s %02d:%02d UTC, campaigns=%d",
+        "cabinet_autostart обновлён (tma:%s): enabled=%s %02d:%02d UTC",
         principal.telegram_user_id,
         body.enabled,
         body.hour_utc,
         body.minute_utc,
-        len(body.campaign_ids),
     )
     cfg = await read_autostart_config(engine)
     return CabinetAutostartResponse.from_config(cfg)
