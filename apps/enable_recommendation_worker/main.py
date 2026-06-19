@@ -41,6 +41,7 @@ from core.enable_reco.analyzer import (
     should_recommend,
 )
 from core.observer.queries import load_scanning_enabled
+from core.telegram.service import load_active_recipients, load_telegram_config
 
 logger = logging.getLogger(__name__)
 
@@ -269,18 +270,16 @@ async def send_alert(
     thread_id: int | None,
     candidate: CandidateRow,
     decision: RecommendationDecision,
+    engine: Any | None = None,
 ) -> bool:
-    """Шлёт TG-алерт с inline-кнопкой «Включить». Глушит ошибки TG (логируем).
+    """Шлёт TG-алерт с inline-кнопкой «Включить» всем активным recipients.
 
-    Возвращает True при успешной отправке, False при сбое или если TG не настроен.
+    Возвращает True при успешной доставке ≥1 получателю, False при сбое или отсутствии TG.
     mark_recommended должен вызываться ТОЛЬКО при True — иначе рекомендация теряется навсегда.
-    """
-    if tg_client is None or not chat_id:
-        logger.warning(
-            "TG не настроен — рекомендация для fb_ad_id=%s только в лог", candidate.fb_ad_id
-        )
-        return False
 
+    При engine — рассылает по всем активным recipients (без forum-топика). Иначе — старый
+    прямой send в один chat_id (обратная совместимость тестов волны 1).
+    """
     text_body, reply_markup = render_enable_reco_alert(
         EnableRecoRenderInput(
             fb_ad_id=candidate.fb_ad_id,
@@ -292,11 +291,53 @@ async def send_alert(
         )
     )
 
+    if engine is not None:
+        # Прод-путь: рассылаем всем активным recipients в личку (с кнопкой!)
+        if tg_client is None:
+            logger.warning(
+                "TG не настроен — рекомендация для fb_ad_id=%s только в лог", candidate.fb_ad_id
+            )
+            return False
+        try:
+            recipients = await load_active_recipients(engine)
+        except Exception:  # noqa: BLE001
+            logger.exception("send_alert: не удалось загрузить recipients")
+            return False
+        if not recipients:
+            logger.warning(
+                "send_alert: нет активных recipients — рекомендация для %s только в лог",
+                candidate.fb_ad_id,
+            )
+            return False
+        delivered = False
+        for r in recipients:
+            try:
+                await tg_client.send_message(
+                    chat_id=str(r.chat_id),
+                    text=text_body,
+                    reply_markup=reply_markup,
+                    parse_mode="HTML",
+                )
+                delivered = True
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    "send_alert: не доставлено chat_id=%s (fb_ad_id=%s)",
+                    r.chat_id,
+                    candidate.fb_ad_id,
+                )
+        return delivered
+
+    # Fallback: прямой send в один chat_id (обратная совместимость тестов волны 1)
+    if tg_client is None or not chat_id:
+        logger.warning(
+            "TG не настроен — рекомендация для fb_ad_id=%s только в лог", candidate.fb_ad_id
+        )
+        return False
+
     try:
         await tg_client.send_message(
             chat_id=chat_id,
             text=text_body,
-            message_thread_id=thread_id,
             reply_markup=reply_markup,
             parse_mode="HTML",
         )
@@ -406,6 +447,7 @@ async def run_once(
             thread_id=thread_id,
             candidate=cand,
             decision=decision,
+            engine=engine,
         )
         if not sent:
             counts["send_failed"] = counts.get("send_failed", 0) + 1
@@ -532,9 +574,12 @@ async def _default_redis_factory():
 
 
 async def _default_tg_factory(engine: AsyncEngine):
-    """Возвращает (client, chat_id, thread_id) либо (None, None, None)."""
+    """Возвращает (client, None, None).
+
+    thread_id убран: алерты идут через send_alert → load_active_recipients (DM каждому).
+    chat_id не используется в прод-пути (engine передаётся напрямую в run_once).
+    """
     from core.telegram.client import TelegramBotClient
-    from core.telegram.service import load_telegram_config
 
     try:
         cfg = await load_telegram_config(engine)
@@ -542,13 +587,13 @@ async def _default_tg_factory(engine: AsyncEngine):
         logger.exception("не удалось прочитать telegram_config")
         return None, None, None
 
-    if cfg is None or not cfg.bot_token or cfg.chat_id is None:
+    if cfg is None or not cfg.bot_token:
         logger.warning("telegram_config пуст — алерты только в лог")
         return None, None, None
 
     client = TelegramBotClient(cfg.bot_token)
-    thread_id = cfg.forum_enable_thread_id or cfg.forum_ops_thread_id
-    return client, str(cfg.chat_id), thread_id
+    # thread_id убран: рассылка через load_active_recipients в send_alert (нет forum-топика)
+    return client, None, None
 
 
 __all__ = [

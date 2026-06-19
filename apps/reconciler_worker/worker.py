@@ -87,22 +87,17 @@ def render_irreversible_alert(count: int) -> str:
 
 
 async def _maybe_alert_irreversible(engine: AsyncEngine, count: int) -> None:
-    """Best-effort TG-алерт о failed необратимых (в ops-топик). Не роняет reconcile."""
+    """Best-effort TG-алерт о failed необратимых — рассылка всем активным recipients."""
     if count <= 0:
         return
     try:
-        from core.telegram.client import TelegramBotClient
-        from core.telegram.service import load_telegram_config
+        from core.telegram.worker_notify import notify_recipients
 
-        cfg = await load_telegram_config(engine)
-        if cfg is None or not cfg.bot_token or cfg.chat_id is None:
-            return  # TG не настроен — failed-задачи всё равно видны в дашборде/логах
-        client = TelegramBotClient(cfg.bot_token)
-        await client.send_message(
-            chat_id=str(cfg.chat_id),
+        await notify_recipients(
+            engine,
+            None,  # redis не нужен: dedup_key не задан
+            category="reconciler_irreversible",
             text=render_irreversible_alert(count),
-            message_thread_id=cfg.forum_ops_thread_id,
-            parse_mode="HTML",
         )
     except Exception:  # noqa: BLE001
         logger.exception("reconciler: не удалось отправить алерт о необратимых мутациях")

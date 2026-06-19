@@ -36,6 +36,7 @@ from core.db import WORKER_ENGINE_KWARGS
 from core.pubsub import CHANNEL_HEALTH_UPDATED
 from core.telegram.client import TelegramAPIError, TelegramBotClient
 from core.telegram.service import load_telegram_config
+from core.telegram.worker_notify import notify_recipients
 
 logger = logging.getLogger("health_watchdog")
 
@@ -309,10 +310,12 @@ async def _maybe_alert_with_dedup(
     tg_client: TelegramBotClient | None,
     chat_id: str | None,
     thread_id: int | None,
+    engine: AsyncEngine | None = None,
 ) -> bool:
     """Сначала отправляет алерт, SET NX ставит ТОЛЬКО при успешной отправке.
 
-    Порядок: GET(dedup_key) → если стоит, пропускаем; иначе _send_alert →
+    Порядок: GET(dedup_key) → если стоит, пропускаем; иначе отправка всем recipients
+    (при engine) или _send_alert в один chat_id (без engine, совместимость с тестами) →
     SET NX EX только при sent=True. Это гарантирует, что при сбое TG ключ
     не блокирует повторную попытку на TTL (алерт не теряется).
     Возвращает True, если алерт был успешно отправлен и дедуп установлен.
@@ -324,7 +327,17 @@ async def _maybe_alert_with_dedup(
     except Exception:  # noqa: BLE001
         logger.exception("ошибка чтения дедуп-ключа %s", dedup_key)
 
-    sent = await _send_alert(tg_client, chat_id=chat_id, thread_id=thread_id, text=text)
+    if engine is not None:
+        # Прод-путь: рассылаем всем активным recipients (без forum-топика)
+        sent = await notify_recipients(
+            engine,
+            redis_client,
+            category=f"health_watchdog:{dedup_key}",
+            text=text,
+        )
+    else:
+        # Путь совместимости (тесты волны 1 мокают _send_alert напрямую)
+        sent = await _send_alert(tg_client, chat_id=chat_id, thread_id=thread_id, text=text)
     if not sent:
         return False
 
@@ -346,6 +359,7 @@ async def check_worker_heartbeats(
     tg_client: TelegramBotClient | None,
     chat_id: str | None,
     thread_id: int | None,
+    engine: AsyncEngine | None = None,
 ) -> int:
     """Для каждого ожидаемого воркера проверяет heartbeat. Возвращает число алертов."""
     alerted = 0
@@ -382,6 +396,7 @@ async def check_worker_heartbeats(
             tg_client=tg_client,
             chat_id=chat_id,
             thread_id=thread_id,
+            engine=engine,
         )
         if sent:
             alerted += 1
@@ -394,6 +409,7 @@ async def check_observer_runtime(
     tg_client: TelegramBotClient | None,
     chat_id: str | None,
     thread_id: int | None,
+    engine: AsyncEngine | None = None,
 ) -> bool:
     """Проверяет ``observer:runtime``. Возвращает True, если алерт был отправлен."""
     dedup_key = f"{ALERT_DEDUP_PREFIX}observer_runtime"
@@ -418,6 +434,7 @@ async def check_observer_runtime(
         tg_client=tg_client,
         chat_id=chat_id,
         thread_id=thread_id,
+        engine=engine,
     )
 
 
@@ -501,8 +518,8 @@ async def check_autostop_channel(
     """Проверяет здоровье канала авто-стопа. Возвращает True, если алерт был отправлен.
 
     Money-критично: при отказе канала исполнения авто-стопа (инцидент 2026-06-19)
-    объявления остаются крутиться при FSM=stop_sent. Шлёт единый CRITICAL-алерт в
-    ops-топик с дедупом (раз в час, пока проблема жива).
+    объявления остаются крутиться при FSM=stop_sent. Шлёт CRITICAL всем активным
+    recipients (без forum-топика) с дедупом (раз в час, пока проблема жива).
     """
     try:
         stuck = await query_stuck_pause_tasks(engine, minutes=stuck_after_minutes)
@@ -523,6 +540,7 @@ async def check_autostop_channel(
         tg_client=tg_client,
         chat_id=chat_id,
         thread_id=thread_id,
+        engine=engine,
     )
 
 
@@ -533,6 +551,7 @@ async def check_meta_api_channel(
     tg_client: TelegramBotClient | None,
     chat_id: str | None,
     thread_id: int | None,
+    engine: AsyncEngine | None = None,
     now: datetime | None = None,
 ) -> bool:
     """Проактивный probe канала Marketing API. Возвращает True, если алерт отправлен.
@@ -596,6 +615,7 @@ async def check_meta_api_channel(
         tg_client=tg_client,
         chat_id=chat_id,
         thread_id=thread_id,
+        engine=engine,
     )
 
 
@@ -656,12 +676,14 @@ async def run_one_check(
         tg_client=tg_client,
         chat_id=chat_id,
         thread_id=thread_id,
+        engine=engine,
     )
     await check_observer_runtime(
         redis_client,
         tg_client=tg_client,
         chat_id=chat_id,
         thread_id=thread_id,
+        engine=engine,
     )
     if engine is not None:
         await check_autostop_channel(
@@ -739,6 +761,7 @@ async def meta_probe_loop(
     chat_id: str | None,
     thread_id: int | None,
     stop: asyncio.Event,
+    engine: AsyncEngine | None = None,
     interval: int = META_PROBE_INTERVAL_SECONDS,
 ) -> None:
     """Цикл сетевого probe канала Marketing API раз в ``interval`` секунд.
@@ -760,6 +783,7 @@ async def meta_probe_loop(
                 tg_client=tg_client,
                 chat_id=chat_id,
                 thread_id=thread_id,
+                engine=engine,
             )
         except Exception:  # noqa: BLE001
             logger.exception("ошибка в meta_probe_loop")
@@ -785,19 +809,25 @@ def _get_redis_url() -> str:
 async def _load_tg(
     engine: AsyncEngine,
 ) -> tuple[TelegramBotClient | None, str | None, int | None]:
-    """Читает telegram_config и собирает (client, chat_id, thread_id) либо (None,None,None)."""
+    """Читает telegram_config и собирает (client, None, None).
+
+    thread_id больше не используется (рассылка всем recipients, не в форум-топик).
+    Клиент и chat_id возвращаются только для fallback-пути тестов (через _send_alert).
+    В прод-коде рассылка идёт через notify_recipients (engine передаётся в loops).
+    """
     try:
         cfg = await load_telegram_config(engine)
     except Exception:  # noqa: BLE001
         logger.exception("не удалось загрузить telegram_config")
         return None, None, None
 
-    if cfg is None or not cfg.bot_token or cfg.chat_id is None:
+    if cfg is None or not cfg.bot_token:
         logger.warning("telegram_config не настроен — алерты только в лог")
         return None, None, None
 
     client = TelegramBotClient(cfg.bot_token)
-    return client, str(cfg.chat_id), cfg.forum_ops_thread_id
+    # thread_id убран: алерты идут в личку всем recipients, не в forum-топик
+    return client, None, None
 
 
 async def main_loop(database_url: str | None = None) -> None:
@@ -855,6 +885,7 @@ async def main_loop(database_url: str | None = None) -> None:
                 chat_id=chat_id,
                 thread_id=thread_id,
                 stop=stop,
+                engine=engine,
             ),
         )
     finally:
