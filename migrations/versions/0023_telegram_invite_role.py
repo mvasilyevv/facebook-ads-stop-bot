@@ -12,7 +12,7 @@ depends_on = None
 def upgrade() -> None:
     op.add_column(
         "telegram_invites",
-        sa.Column("role", sa.String(16), nullable=False, server_default="recipient"),
+        sa.Column("role", sa.String(16), nullable=False, server_default=sa.text("'recipient'")),
     )
     # Backfill из метки created_by='cli:role=owner' (старые invite'ы до этой миграции)
     op.execute("UPDATE telegram_invites SET role='owner' WHERE created_by LIKE '%role=owner%'")
