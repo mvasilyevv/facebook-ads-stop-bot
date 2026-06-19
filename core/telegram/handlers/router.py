@@ -68,10 +68,6 @@ _OWNER_ONLY_CALLBACKS: frozenset[str] = frozenset({"dis", "ereco", "plan", "dr_o
 _OWNER_ONLY_COMMANDS: frozenset[str] = frozenset({"pause", "resume", "record_plan", "stop_record"})
 
 
-def _is_private(chat_type: str | None) -> bool:
-    return (chat_type or "") == "private"
-
-
 async def _dispatch_callback_query(
     *,
     engine: AsyncEngine,
@@ -244,7 +240,8 @@ async def handle_update(
 
     # Authorization check
     recipient = await find_recipient(engine, chat_id=chat_id, telegram_user_id=user_id)
-    if not recipient and _is_private(chat_type):
+    # Безусловный ACL-гейт: любой незарегистрированный — отказ, независимо от типа чата.
+    if not recipient:
         await send_text(
             client,
             chat_id=chat_id,

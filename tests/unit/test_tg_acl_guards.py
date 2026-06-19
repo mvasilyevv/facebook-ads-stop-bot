@@ -193,3 +193,72 @@ async def test_autostart_write_viewer_denied(monkeypatch) -> None:
 def test_recipient_is_owner_predicate() -> None:
     assert _owner().is_owner() is True
     assert _viewer().is_owner() is False
+
+
+# ====================== безусловный ACL-гейт (group-bypass fix) ======================
+
+
+def _group_update(text: str) -> dict:
+    """Вспомогательная: update от незарегистрированного пользователя в группе."""
+    return {
+        "message": {
+            "chat": {"id": 99, "type": "group"},
+            "message_id": 7,
+            "from": {"id": 42, "username": "stranger"},
+            "text": text,
+        }
+    }
+
+
+# Незарегистрированный в группе + /spy → отказ (прежде проходил мимо гейта)
+@pytest.mark.asyncio
+async def test_unregistered_group_spy_denied(monkeypatch) -> None:
+    """ACL-гейт срабатывает в групповом чате: recipient=None → отказ для /spy."""
+    monkeypatch.setattr(router, "find_recipient", AsyncMock(return_value=None))
+    spy = AsyncMock()
+    monkeypatch.setattr(router, "handle_spy", spy)
+    send = AsyncMock()
+    monkeypatch.setattr(router, "send_text", send)
+    await router.handle_update(
+        engine=object(), client=AsyncMock(), update=_group_update("/spy 1 DE")
+    )
+    spy.assert_not_awaited()
+    send.assert_awaited()
+
+
+# Незарегистрированный в личке + /spy → тоже отказ (существующий путь, регрессия)
+@pytest.mark.asyncio
+async def test_unregistered_private_spy_denied(monkeypatch) -> None:
+    """Регресс: незарегистрированный в личке не получает доступ к /spy."""
+    monkeypatch.setattr(router, "find_recipient", AsyncMock(return_value=None))
+    spy = AsyncMock()
+    monkeypatch.setattr(router, "handle_spy", spy)
+    send = AsyncMock()
+    monkeypatch.setattr(router, "send_text", send)
+    await router.handle_update(engine=object(), client=AsyncMock(), update=_cmd_update("/spy 1 DE"))
+    spy.assert_not_awaited()
+    send.assert_awaited()
+
+
+# /start от незарегистрированного → НЕ блокируется гейтом (путь регистрации)
+@pytest.mark.asyncio
+async def test_start_unregistered_passes_acl(monkeypatch) -> None:
+    """/start обрабатывается ДО ACL-гейта: незарегистрированный может начать онбординг."""
+    monkeypatch.setattr(router, "find_recipient", AsyncMock(return_value=None))
+    start_spy = AsyncMock()
+    monkeypatch.setattr(router, "handle_start", start_spy)
+    await router.handle_update(engine=object(), client=AsyncMock(), update=_cmd_update("/start"))
+    start_spy.assert_awaited_once()
+
+
+# /start с invite-кодом от незарегистрированного в группе → тоже проходит
+@pytest.mark.asyncio
+async def test_start_with_code_group_unregistered_passes(monkeypatch) -> None:
+    """/start <код> в групповом чате не блокируется гейтом."""
+    monkeypatch.setattr(router, "find_recipient", AsyncMock(return_value=None))
+    start_spy = AsyncMock()
+    monkeypatch.setattr(router, "handle_start", start_spy)
+    await router.handle_update(
+        engine=object(), client=AsyncMock(), update=_group_update("/start INVITECODE")
+    )
+    start_spy.assert_awaited_once()
