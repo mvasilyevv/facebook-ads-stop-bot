@@ -130,23 +130,6 @@ export function useRestartObserver() {
   });
 }
 
-/** Начать новый день кабинета (POST /observer/start-new-cabinet-day — архив вчера + форс-скан). */
-export function useStartNewCabinetDay() {
-  const qc = useQueryClient();
-  return useMutation({
-    // settings-вкладки показывают свою ошибку (try/catch+toast) → глушим глобальный onError.
-    meta: { suppressGlobalError: true },
-    mutationFn: () =>
-      apiSend<{ status: string; archived_date: string }>(
-        "POST",
-        "/observer/start-new-cabinet-day",
-      ),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["observer"] });
-    },
-  });
-}
-
 /** Переключение only is_scanning_enabled (PATCH /settings/observer/scanning). */
 export function useToggleScanning() {
   const qc = useQueryClient();

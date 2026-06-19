@@ -2,7 +2,7 @@
  * ObserverTab — настройки наблюдателя.
  *
  * Тоглы (сканирование / auto-enable reco) — авто-сейв через точечный PATCH.
- * Справа — карточка ДЕЙСТВИЯ (перезапуск observer, новый день кабинета).
+ * Справа — карточка ДЕЙСТВИЯ (перезапуск observer).
  *
  * Owner Campaign Tag и отслеживаемые кампании вынесены на страницу «Кампании»
  * (блок 01 OPERATE). Статус observer'а и список воркеров — в табе Health.
@@ -10,7 +10,7 @@
  */
 
 import { useState, useEffect, type FC } from "react";
-import { RefreshCw, Clock } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { Switch } from "@/components/ui/Switch";
 import { Button } from "@/components/ui/Button";
 import { Skeleton } from "@/components/ui/Skeleton";
@@ -22,7 +22,6 @@ import {
   useToggleScanning,
   useToggleAutoEnable,
   useRestartObserver,
-  useStartNewCabinetDay,
 } from "@/lib/api/settings";
 import type { ObserverConfig } from "@fb/shared";
 
@@ -65,7 +64,6 @@ export const ObserverTab: FC = () => {
   const toggleScanningMut = useToggleScanning();
   const toggleAutoEnableMut = useToggleAutoEnable();
   const restartMut = useRestartObserver();
-  const cabinetDayMut = useStartNewCabinetDay();
 
   const [form, setForm] = useState<Partial<ObserverConfig>>({});
 
@@ -117,15 +115,6 @@ export const ObserverTab: FC = () => {
       toast.success("Сигнал перезапуска observer отправлен");
     } catch (e) {
       toast.error("Ошибка перезапуска", e instanceof Error ? e.message : String(e));
-    }
-  };
-
-  const handleNewCabinetDay = async () => {
-    try {
-      const res = await cabinetDayMut.mutateAsync();
-      toast.success(`Новый день кабинета: архив за ${res.archived_date}`);
-    } catch (e) {
-      toast.error("Ошибка старта нового дня", e instanceof Error ? e.message : String(e));
     }
   };
 
@@ -186,15 +175,6 @@ export const ObserverTab: FC = () => {
               Перезапустить observer
             </Button>
 
-            <Button
-              variant="secondary"
-              leftIcon={<Clock size={14} />}
-              onClick={() => void handleNewCabinetDay()}
-              loading={cabinetDayMut.isPending}
-              style={{ justifyContent: "flex-start" }}
-            >
-              Начать новый день кабинета
-            </Button>
           </div>
         </div>
       </div>
