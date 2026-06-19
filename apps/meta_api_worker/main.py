@@ -73,6 +73,7 @@ from core.pubsub import CHANNEL_TASK_CHANGED
 from core.tasks.queue import Task
 from core.telegram.client import TelegramBotClient
 from core.telegram.service import load_telegram_config
+from core.telegram.worker_notify import notify_owners
 
 logger = logging.getLogger("meta_api_worker")
 
@@ -235,6 +236,9 @@ async def _fail_irreversible(
 # mutation_kind, которые ВЫКЛЮЧАЮТ открут (снижают трату) — разрешены даже на паузе.
 _DEACTIVATING_KINDS = frozenset({"pause_ad", "pause_campaign"})
 
+# Money-мутации остановки рекламы: при финальном провале владелец должен узнать.
+_PAUSE_KINDS = frozenset({"pause_ad", "bulk_status_change"})
+
 
 def _is_activating_mutation(payload: MetaMutationPayload) -> bool:
     """True если mutation ВКЛЮЧАЕТ/тратит (на паузе сканирования откладывается).
@@ -254,6 +258,39 @@ def _is_activating_mutation(payload: MetaMutationPayload) -> bool:
         # Выключающий bulk разрешён даже на паузе → не активирующий.
         return not is_deactivating_bulk(getattr(payload, "params", None) or {})
     return True
+
+
+async def _alert_money_fail(
+    engine,
+    redis_client,
+    *,
+    payload: MetaMutationPayload,
+    requested_by: str,
+    error: str,
+    kind_label: str,
+) -> None:
+    """Финальный провал money-мутации (пауза/bulk-стоп) → DM owner'ам. Best-effort.
+
+    Алертим только денежные действия: pause_ad/bulk_status_change (стоп рекламы).
+    Бюджет, кастомные аудитории, создание — не алертим здесь.
+    """
+    if payload.mutation_kind not in _PAUSE_KINDS:
+        return
+    actor = "Авто-стоп" if requested_by == _AUTO_STOP_REQUESTED_BY else "Пауза"
+    text = (
+        f"❌ <b>{actor} не сработал окончательно</b>\n"
+        f"fb_ad_id=<code>{payload.target_id}</code> ({kind_label})\n"
+        f"Ошибка: {error[:200]}\n"
+        f"Отключи объявление вручную."
+    )
+    await notify_owners(
+        engine,
+        redis_client,
+        category="money_fail",
+        text=text,
+        dedup_key=f"auto_stop_fail:{payload.target_id}",
+        dedup_ttl_seconds=3600,
+    )
 
 
 async def process_one_task(
@@ -425,6 +462,15 @@ async def process_one_task(
                 "— гонка с другим воркером",
                 task.id,
             )
+        # Partial fail create_campaign — не money-стоп, _PAUSE_KINDS проверит.
+        await _alert_money_fail(
+            engine,
+            redis_client,
+            payload=payload,
+            requested_by=getattr(task, "requested_by", ""),
+            error=str(exc),
+            kind_label=payload.mutation_kind,
+        )
         return
     except _PERMANENT_EXCEPTIONS as exc:
         applied = await mark_task_failed(engine, task_id=task.id, error=repr(exc))
@@ -436,6 +482,28 @@ async def process_one_task(
             )
         else:
             logger.warning("meta_api: task id=%s → permanent fail: %s", task.id, exc)
+        # Токен истёк — отдельный дедуплицированный алерт «нужен re-login Vision».
+        if isinstance(exc, TokenInvalidError):
+            await notify_owners(
+                engine,
+                redis_client,
+                category="token_invalid",
+                text=(
+                    "⚠️ <b>Marketing API: токен истёк</b>\n"
+                    "Зайди в Vision и обнови токен (re-login Facebook)."
+                ),
+                dedup_key="meta_token_invalid",
+                dedup_ttl_seconds=3600,
+            )
+        # Money-мутация (pause/bulk) финально провалилась — owner должен знать.
+        await _alert_money_fail(
+            engine,
+            redis_client,
+            payload=payload,
+            requested_by=getattr(task, "requested_by", ""),
+            error=repr(exc),
+            kind_label=payload.mutation_kind,
+        )
         return
     except _TEMPORARY_EXCEPTIONS as exc:
         # Необратимые kinds не ретраим: transient мог прилететь после коммита Meta → дубль.
@@ -447,6 +515,15 @@ async def process_one_task(
             logger.warning("meta_api: task id=%s → retrying (temporary): %s", task.id, exc)
         else:
             logger.error("meta_api: task id=%s → exhausted retries (temporary): %s", task.id, exc)
+            # Исчерпаны все попытки → финальный провал money-мутации (pause).
+            await _alert_money_fail(
+                engine,
+                redis_client,
+                payload=payload,
+                requested_by=getattr(task, "requested_by", ""),
+                error=f"exhausted retries: {exc!r}",
+                kind_label=payload.mutation_kind,
+            )
         # Money-сигнал: auto-stop pause_ad не доходит до Meta из-за мёртвого Vision-канала
         # (code=-2 Failed to fetch). После N подряд таких фейлов — ОДИН CRITICAL в TG
         # «чини Vision», а не молчаливый ретрай до 72 попыток. Best-effort.
