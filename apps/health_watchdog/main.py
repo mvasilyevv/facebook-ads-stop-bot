@@ -276,11 +276,15 @@ async def _send_alert(
     chat_id: str | None,
     thread_id: int | None,
     text: str,
-) -> None:
-    """Отправляет TG-алерт. Если клиента/чата нет — пишет только в лог."""
+) -> bool:
+    """Отправляет TG-алерт. Возвращает True при успешной отправке.
+
+    Если клиента/чата нет — пишет только в лог и возвращает False.
+    Исключения TG не роняют watchdog-цикл: логируются и возвращают False.
+    """
     logger.warning("ALERT: %s", text)
     if tg_client is None or not chat_id:
-        return
+        return False
     try:
         await tg_client.send_message(
             chat_id=chat_id,
@@ -288,10 +292,13 @@ async def _send_alert(
             message_thread_id=thread_id,
             parse_mode="HTML",
         )
+        return True
     except TelegramAPIError as exc:
         logger.error("не удалось отправить TG-алерт: %s", exc)
+        return False
     except Exception:  # noqa: BLE001
         logger.exception("неожиданная ошибка при отправке TG-алерта")
+        return False
 
 
 async def _maybe_alert_with_dedup(
@@ -303,25 +310,29 @@ async def _maybe_alert_with_dedup(
     chat_id: str | None,
     thread_id: int | None,
 ) -> bool:
-    """Атомарно ставит дедуп-ключ (NX+EX) и шлёт алерт, если ключа не было.
+    """Сначала отправляет алерт, SET NX ставит ТОЛЬКО при успешной отправке.
 
-    Возвращает True, если алерт был отправлен.
+    Порядок: GET(dedup_key) → если стоит, пропускаем; иначе _send_alert →
+    SET NX EX только при sent=True. Это гарантирует, что при сбое TG ключ
+    не блокирует повторную попытку на TTL (алерт не теряется).
+    Возвращает True, если алерт был успешно отправлен и дедуп установлен.
     """
+    # Дедуп-проверка: уже алертили в этом окне?
     try:
-        ok = await redis_client.set(
-            dedup_key,
-            "1",
-            ex=ALERT_DEDUP_TTL_SECONDS,
-            nx=True,
-        )
+        if await redis_client.get(dedup_key):
+            return False
+    except Exception:  # noqa: BLE001
+        logger.exception("ошибка чтения дедуп-ключа %s", dedup_key)
+
+    sent = await _send_alert(tg_client, chat_id=chat_id, thread_id=thread_id, text=text)
+    if not sent:
+        return False
+
+    # Ставим дедуп только после успешной доставки
+    try:
+        await redis_client.set(dedup_key, "1", ex=ALERT_DEDUP_TTL_SECONDS, nx=True)
     except Exception:  # noqa: BLE001
         logger.exception("ошибка SET дедуп-ключа %s", dedup_key)
-        return False
-
-    if not ok:
-        return False
-
-    await _send_alert(tg_client, chat_id=chat_id, thread_id=thread_id, text=text)
     return True
 
 
