@@ -269,13 +269,17 @@ async def send_alert(
     thread_id: int | None,
     candidate: CandidateRow,
     decision: RecommendationDecision,
-) -> None:
-    """Шлёт TG-алерт с inline-кнопкой «Включить». Глушит ошибки TG (логируем)."""
+) -> bool:
+    """Шлёт TG-алерт с inline-кнопкой «Включить». Глушит ошибки TG (логируем).
+
+    Возвращает True при успешной отправке, False при сбое или если TG не настроен.
+    mark_recommended должен вызываться ТОЛЬКО при True — иначе рекомендация теряется навсегда.
+    """
     if tg_client is None or not chat_id:
         logger.warning(
             "TG не настроен — рекомендация для fb_ad_id=%s только в лог", candidate.fb_ad_id
         )
-        return
+        return False
 
     text_body, reply_markup = render_enable_reco_alert(
         EnableRecoRenderInput(
@@ -296,8 +300,10 @@ async def send_alert(
             reply_markup=reply_markup,
             parse_mode="HTML",
         )
+        return True
     except Exception:  # noqa: BLE001
         logger.exception("send_message для fb_ad_id=%s упал", candidate.fb_ad_id)
+        return False
 
 
 # ====================== Один цикл ======================
@@ -389,20 +395,27 @@ async def run_once(
             counts["skipped_decision"] += 1
             continue
 
-        # Дедуп по Redis (NX) — защита от спама даже если БД-уникальность не сработала
-        if not await mark_recommended(redis_client, cand.ad_id):
-            counts["skipped_dedup"] += 1
-            continue
-
         counts["recommendations"] += 1
 
-        await send_alert(
+        # Сначала шлём алерт — mark_recommended только при успехе.
+        # Порядок критичен: если поставить дедуп до отправки, сбой TG потеряет
+        # рекомендацию навсегда (idempotency_key в БД + Redis NX уже стоят).
+        sent = await send_alert(
             tg_client,
             chat_id=chat_id or "",
             thread_id=thread_id,
             candidate=cand,
             decision=decision,
         )
+        if not sent:
+            counts["send_failed"] = counts.get("send_failed", 0) + 1
+            continue
+
+        # Дедуп по Redis (NX) — ставим только после успешной отправки
+        if not await mark_recommended(redis_client, cand.ad_id):
+            counts["skipped_dedup"] += 1
+            continue
+
         counts["alerts_sent"] += 1
 
     return counts
