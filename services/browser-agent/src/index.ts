@@ -377,6 +377,14 @@ function toProtoRow(row: any): any {
     cost_per_registration: row.cost_per_registration ?? '',
     deposits: row.deposits,
     resolved_offer_code: row.resolved_offer_code ?? '',
+    // Волна 1: превью крео + метаданные адсета (иначе теряются на TS→proto границе).
+    creative_thumb_url: row.creative_thumb_url ?? '',
+    creative_image_url: row.creative_image_url ?? '',
+    adset_pixel_id: row.adset_pixel_id ?? '',
+    adset_daily_budget: row.adset_daily_budget ?? '',
+    adset_lifetime_budget: row.adset_lifetime_budget ?? '',
+    adset_budget_remaining: row.adset_budget_remaining ?? '',
+    adset_learning_stage: row.adset_learning_stage ?? '',
   };
 }
 

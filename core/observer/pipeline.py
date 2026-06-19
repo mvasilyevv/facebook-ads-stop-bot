@@ -304,6 +304,13 @@ async def _process_one_row(
         offer_id=matched_offer.offer_id,
         delivery_status=row.delivery_status,
         ad_account_id=ad_account_id,
+        creative_thumb_url=row.creative_thumb_url,
+        creative_image_url=row.creative_image_url,
+        adset_pixel_id=row.adset_pixel_id,
+        adset_daily_budget=row.adset_daily_budget,
+        adset_lifetime_budget=row.adset_lifetime_budget,
+        adset_budget_remaining=row.adset_budget_remaining,
+        adset_learning_stage=row.adset_learning_stage,
     )
 
     # --- Метрики (партиционированная таблица) ---

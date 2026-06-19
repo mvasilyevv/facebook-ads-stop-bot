@@ -347,7 +347,9 @@ export async function runAmScanWithContext(
       'effective_status',
       'campaign_id',
       'adset_id',
-      'creative.thumbnail_width(160).thumbnail_height(120){id,thumbnail_url,image_url}',
+      // Канонная форма: модификатор thumbnail_width на edge creative невалиден
+      // (Graph молча опускал поле). Размер thumbnail_url — по умолчанию, для таблицы хватает.
+      'creative{id,thumbnail_url,image_url}',
     ],
     scopeFilter,
   );
@@ -363,6 +365,17 @@ export async function runAmScanWithContext(
   const campName = new Map(campRes.items.map((c) => [c.id, c.name ?? '']));
   // Полная карта адсетов с расширенными полями (пиксель/бюджеты/learning).
   const adsetMeta = new Map(adsetRes.items.map((a) => [a.id, a]));
+
+  // Волна 1 диагностика: сколько новых полей реально пришло из Graph (после parseLightList).
+  // Локализует разрыв: 0 здесь = Graph/парс, >0 здесь но NULL в БД = downstream (proto/writers).
+  const wv1Creative = adsRes.items.filter((a) => a.creativeThumbUrl).length;
+  const wv1Pixel = adsetRes.items.filter((a) => a.pixelId).length;
+  const wv1Budget = adsetRes.items.filter((a) => a.dailyBudget || a.lifetimeBudget).length;
+  const wv1Learning = adsetRes.items.filter((a) => a.learningStage).length;
+  console.log(
+    `[scan][am][wave1] creative=${wv1Creative}/${adsRes.items.length} ` +
+      `pixel=${wv1Pixel} budget=${wv1Budget} learning=${wv1Learning}/${adsetRes.items.length}`,
+  );
 
   let namesResolved = 0;
   let statusResolved = 0;
