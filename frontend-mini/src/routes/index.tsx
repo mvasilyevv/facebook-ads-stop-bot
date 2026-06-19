@@ -97,7 +97,8 @@ function DashboardPage() {
   const live = warning > 0 || stop > 0;
 
   const spendSeries = spend ?? [];
-  const spendSum = spendSeries.reduce((a, b) => a + b, 0);
+  // Авторитетный спенд текущих суток кабинета — из batch.stats (не суммируем бакеты)
+  const currentDaySpend = stats?.current_day_spend != null ? parseFloat(stats.current_day_spend) : null;
 
   const handleScanNow = async () => {
     haptic.impact("medium");
@@ -235,9 +236,9 @@ function DashboardPage() {
         {/* ── spend chart ── */}
         <section className="border border-[var(--hairline)] rounded-[var(--radius-3)] bg-bg-1 p-4">
           <div className="flex items-baseline justify-between mb-2.5">
-            <Eyebrow>SPEND × ЧАС · 24Ч</Eyebrow>
+            <Eyebrow>SPEND · СУТКИ КАБИНЕТА</Eyebrow>
             <span className="font-display tabular-nums text-[15px] text-bg-11">
-              {formatSpend(spendSum)}
+              {currentDaySpend != null ? formatSpend(currentDaySpend) : "—"}
             </span>
           </div>
           <SpendChart data={spendSeries} height={120} live={scanOn} animate />

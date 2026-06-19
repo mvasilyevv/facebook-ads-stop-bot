@@ -180,14 +180,14 @@ export interface ChartDataPoint {
 
 /**
  * Ряд spend по часам для SpendChart (number[]). Пустой ряд → график покажет
- * заглушку (без фейка). bucket=hour за последние `hours` часов.
+ * заглушку (без фейка). bucket=hour, cabinet_day=true — окно с 00:00 кабинета.
  */
 export function useSpendSeries(hours = 24) {
   return useQuery({
     queryKey: ["dashboard", "chart-data", hours] as const,
     queryFn: async () => {
       const data = await fetchJson<ChartDataPoint[] | { items: ChartDataPoint[] }>(
-        `/dashboard/chart-data?hours=${hours}&bucket=hour`,
+        `/dashboard/chart-data?hours=${hours}&bucket=hour&cabinet_day=true`,
       );
       const arr = Array.isArray(data) ? data : (data as { items: ChartDataPoint[] }).items ?? [];
       return arr.map((p) => Number(p.spend) || 0);

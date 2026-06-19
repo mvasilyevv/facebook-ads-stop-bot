@@ -2575,6 +2575,8 @@ export interface components {
              * @default 0
              */
             active_incidents: number;
+            /** Current Day Spend — спенд текущих суток кабинета с нуля (Волна 2/E) */
+            current_day_spend?: string | null;
             /** Last Scan At */
             last_scan_at?: string | null;
             /** Last Scan Outcome */

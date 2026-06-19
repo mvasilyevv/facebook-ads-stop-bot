@@ -80,6 +80,8 @@ export function useDashboardIncidents() {
 interface ChartParams {
   hours?: number;
   bucket?: "hour" | "day";
+  /** true — ось графика с 00:00 текущих суток кабинета (cabinet-day reset). */
+  cabinet_day?: boolean;
 }
 
 export function useChartData(params?: ChartParams) {

@@ -222,4 +222,71 @@ describe("DashboardPage", () => {
     expect(screen.getByRole("alert")).toBeInTheDocument();
     expect(screen.getByText(/Не удалось загрузить данные Dashboard/i)).toBeInTheDocument();
   });
+
+  // Headline-спенд берётся из stats.current_day_spend, а не суммируется из серии.
+  it("показывает current_day_spend из stats как headline-спенд", async () => {
+    vi.mocked(useDashboardBatch).mockReturnValue({
+      data: makeBatch({
+        stats: {
+          total_ads_monitored: 100,
+          ads_in_normal: 80,
+          ads_in_warning: 5,
+          ads_in_stop: 2,
+          ads_in_claimed: 1,
+          ads_in_disabled: 12,
+          active_incidents: 7,
+          last_scan_at: new Date().toISOString(),
+          last_scan_outcome: "ok",
+          scans_today: 42,
+          scans_today_with_errors: 0,
+          observer_status: "running",
+          pending_disable_tasks: 3,
+          pending_enable_tasks: 1,
+          failed_tasks_24h: 0,
+          current_day_spend: "123.45",
+        },
+      }),
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useDashboardBatch>);
+
+    await renderDashboard();
+    // formatSpend(123.45) → "$123.45"
+    expect(screen.getByText("$123.45")).toBeInTheDocument();
+  });
+
+  // Graceful при current_day_spend=null — показывает $0.00, не падает.
+  it("graceful при current_day_spend=null — рендерит $0.00", async () => {
+    vi.mocked(useDashboardBatch).mockReturnValue({
+      data: makeBatch({
+        stats: {
+          total_ads_monitored: 100,
+          ads_in_normal: 80,
+          ads_in_warning: 5,
+          ads_in_stop: 2,
+          ads_in_claimed: 1,
+          ads_in_disabled: 12,
+          active_incidents: 7,
+          last_scan_at: new Date().toISOString(),
+          last_scan_outcome: "ok",
+          scans_today: 42,
+          scans_today_with_errors: 0,
+          observer_status: "running",
+          pending_disable_tasks: 3,
+          pending_enable_tasks: 1,
+          failed_tasks_24h: 0,
+          current_day_spend: null,
+        },
+      }),
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useDashboardBatch>);
+
+    await renderDashboard();
+    expect(screen.getByText("$0.00")).toBeInTheDocument();
+  });
 });

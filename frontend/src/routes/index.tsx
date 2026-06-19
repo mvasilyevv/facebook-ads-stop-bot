@@ -39,7 +39,6 @@ import { LiveTail } from "@/components/dashboard/LiveTail";
 import { TaskQueues } from "@/components/dashboard/TaskQueues";
 
 import { useDashboardBatch, useChartData } from "@/lib/api/dashboard";
-import { cumulativeSpendTotal } from "@/lib/utils/spendTotal";
 import { useDisableTasks, useEnableTasks } from "@/lib/api/ads";
 import {
   useObserverSettings,
@@ -69,7 +68,8 @@ function DashboardPage() {
 
   // Главный агрегат + spend-ряд + очереди + observer-настройки.
   const { data: batch, isLoading, isError, error, refetch } = useDashboardBatch();
-  const chartQ = useChartData({ hours: 24, bucket: "hour" });
+  // cabinet_day=true — ось с 00:00 текущих суток кабинета (не скользящие 24ч).
+  const chartQ = useChartData({ bucket: "hour", cabinet_day: true });
   const disableTasksQ = useDisableTasks({ status: "PENDING,RUNNING,RETRYING", limit: 20 });
   const enableTasksQ = useEnableTasks({ status: "PENDING,RUNNING,RETRYING", limit: 20 });
   const observerQ = useObserverSettings();
@@ -121,9 +121,10 @@ function DashboardPage() {
     () => (chartQ.data ?? []).map((b) => Number(b.spend ?? 0)),
     [chartQ.data],
   );
-  // Корректный total спенда: складываем ДНЕВНЫЕ итоги (последний кумулятивный бакет
-  // суток), а не все бакеты подряд — иначе кумулятив задваивается (см. cumulativeSpendTotal).
-  const spendTotal = useMemo(() => cumulativeSpendTotal(chartQ.data ?? []), [chartQ.data]);
+  // Headline-спенд: авторитетный current_day_spend из stats (latest-per-ad с полом по
+  // полуночи кабинета). Не суммируем серию — кумулятивные снимки задвоят деньги.
+  // При null/undefined (бэк не вернул) — 0, graceful прочерк через formatSpend.
+  const spendTotal = parseFloat(stats?.current_day_spend ?? "0") || 0;
 
   // live-tail: реальные алерты.
   const events = useMemo<AlertEvent[]>(
@@ -209,7 +210,7 @@ function DashboardPage() {
           />
           <Card padded className="p-5">
             <div className="mb-3 flex items-baseline justify-between">
-              <Eyebrow>SPEND × ЧАС · 24Ч</Eyebrow>
+              <Eyebrow>SPEND × ЧАС · СУТКИ КАБИНЕТА</Eyebrow>
               <span className="font-display text-[18px] tabular-nums text-bg-11">
                 {formatSpend(spendTotal)}
               </span>
