@@ -57,6 +57,8 @@ class CycleResult:
     alerts_stop: int = 0
     disable_tasks_created: int = 0
     transitions: list[str] = field(default_factory=list)
+    # fb_ad_ids, для которых выполнен тихий sync инцидента → disabled (ад уже OFF в Meta)
+    synced_offline_disabled: list[str] = field(default_factory=list)
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     finished_at: datetime | None = None
 
@@ -357,6 +359,8 @@ async def _process_one_row(
                 current.alert_state,
                 row.fb_ad_id,
             )
+            # Собираем для нотификации owner'а (отправка в observer_worker — redis там есть).
+            result.synced_offline_disabled.append(row.fb_ad_id)
             # Инцидент закрыт; метрики OFF-ада заморожены — FSM/disable-task дальше не гоняем.
             return
     fsm_input = FsmInput(

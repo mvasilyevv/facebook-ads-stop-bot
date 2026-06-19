@@ -46,6 +46,7 @@ from core.observer.pipeline import CycleResult, process_scan_rows
 from core.observer.queries import load_observer_config, load_vision_auto_restart_flag
 from core.scanner.models import ScannedAdRow
 from core.telegram import format as fmt
+from core.telegram.worker_notify import notify_owners
 
 logger = logging.getLogger(__name__)
 
@@ -298,6 +299,24 @@ def _allowlist_blocks_scan(single_cabinet: bool, campaign_ids: list[str]) -> boo
     return single_cabinet and not campaign_ids
 
 
+async def _notify_synced_disabled(engine, redis_client, *, fb_ad_ids: list[str]) -> None:
+    """DM owner'у про тихий sync OFF→disabled (внешнее отключение ада). Best-effort."""
+    for fb_ad_id in fb_ad_ids:
+        text = (
+            f"ℹ️ <b>Объявление помечено disabled</b>\n"
+            f"fb_ad_id=<code>{fb_ad_id}</code> — в Meta уже OFF "
+            f"(внешнее отключение/наш pause не подтвердился)."
+        )
+        await notify_owners(
+            engine,
+            redis_client,
+            category="sync_disabled",
+            text=text,
+            dedup_key=f"sync_offline_disabled:{fb_ad_id}",
+            dedup_ttl_seconds=21600,
+        )
+
+
 async def _run_account_scan(
     engine: AsyncEngine,
     *,
@@ -374,6 +393,15 @@ async def _run_account_scan(
                 owner_tag=config.get("owner_campaign_tag"),
                 ad_account_id=ad_account_id,
             )
+
+            # Нотификация owner'а при тихом sync OFF→disabled
+            if cycle_result.synced_offline_disabled:
+                try:
+                    await _notify_synced_disabled(
+                        engine, redis_client, fb_ad_ids=cycle_result.synced_offline_disabled
+                    )
+                except Exception:
+                    logger.exception("sync_disabled notify failed — продолжаю")
 
             # Доставка алертов в TG — если был хоть один emit
             if (
