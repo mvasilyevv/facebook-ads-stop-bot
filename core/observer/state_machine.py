@@ -216,6 +216,25 @@ def should_reopen_disabled(current_state: AlertState, delivery_status: str | Non
     return (delivery_status or "").strip().upper() == "ACTIVE"
 
 
+def should_sync_disabled(current_state: AlertState, delivery_status: str | None) -> bool:
+    """True если ад завис в инциденте (warning_sent/stop_sent), а в Meta уже OFF → disabled.
+
+    Зеркало should_reopen_disabled. Терминальный `disabled` штатно ставит только
+    fsm_sync после УСПЕШНОЙ pause-мутации. Если наша pause упала (или ад выключили
+    вручную/выше по иерархии), FSM застревает в stop_sent, хотя ад фактически OFF —
+    рассинхрон (косметика, но вечный: метрик у OFF-ада нет → переходов нет). Обнаружив
+    OFF у инцидентного ада, observer сам приводит FSM к disabled.
+
+    Строго `OFF` (paused/archived/deleted — реально выключен). НЕ трогаем ACTIVE
+    (крутит — stop остаётся в силе, pause ретраится), модерацию (IN_REVIEW/
+    NOT_DELIVERING/PROCESSING — ад может сам вернуться в ACTIVE) и терминальные/normal.
+    Writer добавляет time-guard (cooldown), чтобы не опередить штатный fsm_sync.
+    """
+    if current_state not in ("warning_sent", "stop_sent"):
+        return False
+    return (delivery_status or "").strip().upper() == "OFF"
+
+
 def reset_after_disable_succeeded(current_state: AlertState) -> AlertState:
     """Вызывается из disable_worker'а после успешного клика.
 
@@ -241,4 +260,5 @@ __all__ = [
     "reset_after_disable_succeeded",
     "reset_after_enable_succeeded",
     "should_reopen_disabled",
+    "should_sync_disabled",
 ]

@@ -23,10 +23,16 @@ from core.observer.queries import (
     load_alert_state_by_fb_ad_id,
     match_offer_for_ad,
 )
-from core.observer.state_machine import FsmInput, decide, should_reopen_disabled
+from core.observer.state_machine import (
+    FsmInput,
+    decide,
+    should_reopen_disabled,
+    should_sync_disabled,
+)
 from core.observer.writers import (
     apply_fsm_transition,
     insert_metrics,
+    mark_disabled_when_offline,
     maybe_create_disable_task,
     reopen_reactivated_alert_state,
     upsert_catalog_hierarchy,
@@ -342,6 +348,17 @@ async def _process_one_row(
                 row.fb_ad_id,
             )
             current = None  # для FsmInput трактуем как normal — стартует свежий инцидент
+    elif current and should_sync_disabled(current.alert_state, row.delivery_status):
+        # Зеркало reopen: ад завис в инциденте, но в Meta уже OFF (наша pause упала или
+        # выключили вручную) → штатный fsm_sync не отработал. Приводим FSM к disabled.
+        if await mark_disabled_when_offline(engine, ad_id=ad_id):
+            logger.info(
+                "observer: sync %s→disabled (ад OFF, fsm_sync не отработал) fb_ad_id=%s",
+                current.alert_state,
+                row.fb_ad_id,
+            )
+            # Инцидент закрыт; метрики OFF-ада заморожены — FSM/disable-task дальше не гоняем.
+            return
     fsm_input = FsmInput(
         current_state=current.alert_state if current else "normal",
         current_stage=current.current_stage if current else None,

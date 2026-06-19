@@ -256,6 +256,72 @@ async def test_repeated_stop_does_not_duplicate_disable_task(pg_engine, offer_kr
         assert n_alerts == 1
 
 
+# Сценарий: ад завис в stop_sent, но в Meta уже OFF + инцидент старше cooldown →
+# observer сам синхронизирует FSM в disabled (зеркало reopen). Mirror случая CR008,
+# где наша pause-мутация упала, а ад фактически выключен.
+@pytest.mark.asyncio
+async def test_offline_ad_syncs_stop_sent_to_disabled(pg_engine, offer_kr2) -> None:
+    from core.observer.writers import mark_disabled_when_offline
+
+    # 1) цикл со STOP → ад в stop_sent
+    row = _make_row(spend=Decimal("25.0"), cpc=Decimal("0.10"))
+    await process_scan_rows(pg_engine, rows=[row], scan_id=1)
+
+    async with pg_engine.connect() as conn:
+        ad_id = (await conn.execute(text("SELECT id FROM fb_ads LIMIT 1"))).scalar()
+        st = (await conn.execute(text("SELECT alert_state FROM ad_alert_state LIMIT 1"))).scalar()
+    assert st == "stop_sent"
+
+    # 2) свежий stop_sent (инцидент моложе cooldown) → time-guard НЕ трогает
+    assert await mark_disabled_when_offline(pg_engine, ad_id=ad_id) is False
+    async with pg_engine.connect() as conn:
+        st = (await conn.execute(text("SELECT alert_state FROM ad_alert_state LIMIT 1"))).scalar()
+    assert st == "stop_sent"
+
+    # 3) состарим инцидент на 20 минут → теперь sync срабатывает
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "UPDATE ad_alert_state SET last_transition_at = NOW() - interval '20 min' "
+                "WHERE ad_id = :aid"
+            ),
+            {"aid": ad_id},
+        )
+    assert await mark_disabled_when_offline(pg_engine, ad_id=ad_id) is True
+    async with pg_engine.connect() as conn:
+        st = (await conn.execute(text("SELECT alert_state FROM ad_alert_state LIMIT 1"))).scalar()
+    assert st == "disabled"
+
+    # 4) идемпотентность: повторный вызов на disabled → no-op (False)
+    assert await mark_disabled_when_offline(pg_engine, ad_id=ad_id) is False
+
+
+# Сценарий: ад OFF старше cooldown проходит весь pipeline → синхронизируется в disabled,
+# новой disable-задачи НЕ создаётся (инцидент закрыт, не гоняем FSM по метрикам OFF-ада).
+@pytest.mark.asyncio
+async def test_pipeline_syncs_offline_incident_to_disabled(pg_engine, offer_kr2) -> None:
+    # 1) STOP → stop_sent + одна disable-задача
+    stop_row = _make_row(spend=Decimal("25.0"), cpc=Decimal("0.10"))
+    await process_scan_rows(pg_engine, rows=[stop_row], scan_id=1)
+
+    # состарим инцидент старше cooldown
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE ad_alert_state SET last_transition_at = NOW() - interval '20 min'")
+        )
+
+    # 2) тот же ад приходит OFF → pipeline синхронизирует в disabled
+    off_row = _make_row(spend=Decimal("25.0"), cpc=Decimal("0.10"))
+    object.__setattr__(off_row, "delivery_status", "OFF")
+    await process_scan_rows(pg_engine, rows=[off_row], scan_id=2)
+
+    async with pg_engine.connect() as conn:
+        st = (await conn.execute(text("SELECT alert_state FROM ad_alert_state LIMIT 1"))).scalar()
+        n_tasks = (await conn.execute(text("SELECT COUNT(*) FROM task_queue"))).scalar()
+    assert st == "disabled"
+    assert n_tasks == 1  # вторая (OFF) итерация не плодит новую disable-задачу
+
+
 # Сценарий: объявление без подходящего оффера → каталог пишется, но без правил
 @pytest.mark.asyncio
 async def test_ad_without_matching_offer(pg_engine, offer_kr2) -> None:

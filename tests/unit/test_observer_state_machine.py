@@ -13,6 +13,7 @@ from core.observer.state_machine import (
     reset_after_disable_succeeded,
     reset_after_enable_succeeded,
     should_reopen_disabled,
+    should_sync_disabled,
 )
 
 
@@ -178,3 +179,28 @@ def test_decide_is_pure_for_no_emit_cases() -> None:
 def test_should_reopen_disabled(state, delivery, expected):
     """reopen-кандидат только для disabled с ACTIVE delivery (любой регистр)."""
     assert should_reopen_disabled(state, delivery) is expected
+
+
+# should_sync_disabled — зеркало reopen: инцидентный ад фактически OFF → disabled.
+@pytest.mark.parametrize(
+    "state,delivery,expected",
+    [
+        ("stop_sent", "OFF", True),  # завис в стопе, а ад выключен
+        ("warning_sent", "OFF", True),  # и из warning тоже
+        ("stop_sent", "off", True),  # регистр не важен
+        ("stop_sent", " OFF ", True),  # с пробелами
+        ("stop_sent", "ACTIVE", False),  # крутит — НЕ трогаем (pause ретраится)
+        ("stop_sent", "IN_REVIEW", False),  # модерация — может вернуться в ACTIVE
+        ("stop_sent", "NOT_DELIVERING", False),  # disapproved/issues — не наш стоп
+        ("stop_sent", "PROCESSING", False),  # переходный
+        ("stop_sent", "UNKNOWN", False),
+        ("stop_sent", None, False),
+        ("stop_sent", "", False),
+        ("normal", "OFF", False),  # нет инцидента — выключенный ад без алерта
+        ("disabled", "OFF", False),  # уже терминал
+        ("claimed", "OFF", False),  # ручное ведение — не вмешиваемся
+    ],
+)
+def test_should_sync_disabled(state, delivery, expected):
+    """sync→disabled только для warning_sent/stop_sent с delivery=OFF (любой регистр)."""
+    assert should_sync_disabled(state, delivery) is expected

@@ -470,6 +470,41 @@ async def reopen_reactivated_alert_state(
         return (res.rowcount or 0) > 0
 
 
+async def mark_disabled_when_offline(
+    engine: AsyncEngine,
+    *,
+    ad_id: uuid.UUID,
+    cooldown_minutes: int = REACTIVATION_COOLDOWN_MINUTES,
+) -> bool:
+    """Sync warning_sent/stop_sent → disabled для ада, который в Meta уже OFF (зеркало reopen).
+
+    Терминальный `disabled` штатно ставит fsm_sync после УСПЕШНОЙ pause-мутации. Если
+    pause упала (или ад выключили вручную/выше), FSM застревает в инциденте, хотя ад
+    фактически OFF — рассинхрон навсегда (у OFF-ада нет метрик → нет переходов).
+
+    Time-guard (cooldown_minutes): трогаем только ады, зависшие в инциденте дольше
+    кулдауна — иначе опередили бы штатный fsm_sync на свежем stop_sent (наша pause
+    ещё в полёте/только сработала, лаг Meta effective_status). Идемпотентно:
+    rowcount=0 если ад не в warning_sent/stop_sent или инцидент свежий.
+    """
+    async with engine.begin() as conn:
+        res = await conn.execute(
+            text(
+                """
+                UPDATE ad_alert_state
+                SET alert_state = 'disabled',
+                    last_transition_at = NOW(),
+                    updated_at = NOW()
+                WHERE ad_id = :aid
+                  AND alert_state IN ('warning_sent', 'stop_sent')
+                  AND last_transition_at < NOW() - make_interval(mins => :cd)
+                """
+            ),
+            {"aid": ad_id, "cd": cooldown_minutes},
+        )
+        return (res.rowcount or 0) > 0
+
+
 def _warnings_from(transition: FsmTransition) -> tuple[str, ...]:
     return transition.alert_rule_codes if transition.alert_stage == "warning" else ()
 
