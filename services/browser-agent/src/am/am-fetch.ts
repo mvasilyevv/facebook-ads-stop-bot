@@ -168,6 +168,7 @@ function edgeUrl(
   fields: string[],
   filtering: Filter[],
   after?: string,
+  extraParams?: Record<string, string>,
 ): string {
   const qs = new URLSearchParams();
   qs.set('access_token', ctx.accessToken);
@@ -175,6 +176,9 @@ function edgeUrl(
   if (filtering.length) qs.set('filtering', JSON.stringify(filtering));
   qs.set('limit', String(AM_PAGE_LIMIT));
   if (after) qs.set('after', after);
+  // Top-level params (например thumbnail_width/height для крупного thumbnail_url —
+  // модификатор на edge creative невалиден, размер задаётся параметром запроса).
+  for (const [k, v] of Object.entries(extraParams ?? {})) qs.set(k, v);
   return `${origin}/${ctx.apiVersion}/${ctx.actId}/${edge}?${qs.toString()}`;
 }
 
@@ -233,11 +237,12 @@ async function fetchAllEdge(
   edge: string,
   fields: string[],
   filtering: Filter[],
+  extraParams?: Record<string, string>,
 ): Promise<{ items: LightMeta[]; error?: string }> {
   const out: LightMeta[] = [];
   let after: string | undefined;
   for (let i = 0; i < 20; i++) {
-    const body = await fetchJson(page, edgeUrl(ctx, origin, edge, fields, filtering, after));
+    const body = await fetchJson(page, edgeUrl(ctx, origin, edge, fields, filtering, after, extraParams));
     if (body?.__amError) {
       return { items: out, error: `${edge}: ${body.status ?? ''} ${body.body ?? body.message ?? ''}` };
     }
@@ -352,6 +357,9 @@ export async function runAmScanWithContext(
       'creative{id,thumbnail_url,image_url}',
     ],
     scopeFilter,
+    // thumbnail_url по умолчанию ~64px → блюр в крупной карточке. 400px — чёткое
+    // превью в drawer (для видео-крео, где image_url пуст). В таблице thumb мелкий.
+    { thumbnail_width: '400', thumbnail_height: '400' },
   );
   const adsetRes = await fetchAllEdge(
     page,
