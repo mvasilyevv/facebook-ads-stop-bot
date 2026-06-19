@@ -44,6 +44,7 @@ from core.scheduler.cabinet_autostart import (
     is_in_autostart_window,
     read_autostart_config,
 )
+from core.telegram.worker_notify import notify_owners
 
 logger = logging.getLogger("cabinet_scheduler")
 
@@ -172,6 +173,24 @@ async def run_one_tick(
             total,
             day,
         )
+
+        # Триггерим observer scan независимо от того, были ли ad_id — кабинет
+        # мог измениться, скан подтянет актуальное состояние.
+        await _trigger_observer_scan(redis_client)
+
+        # M8: маркер «выполнено» — только при started-пути (задача создана + скан).
+        # no_owner_ads не ставит маркер → следующий тик в окне повторит попытку
+        # (catch-up до конца суток). Двойного включения нет: idempotency_key задачи.
+        await _set_autostart_done(redis_client, done_key)
+
+        return {
+            "outcome": "started",
+            "day": day,
+            "task_id": task_id,
+            "ad_count": len(ad_ids),
+            "total": total,
+            "scan_triggered": True,
+        }
     else:
         logger.info(
             "cabinet_autostart: по кампаниям %s owner-объявлений не нашлось (owner_tag=%s), day=%s",
@@ -179,26 +198,10 @@ async def run_one_tick(
             owner_tag,
             day,
         )
-
-    # Триггерим observer scan независимо от того, были ли ad_id — кабинет
-    # мог измениться, скан подтянет актуальное состояние.
-    await _trigger_observer_scan(redis_client)
-
-    # M8: маркер «выполнено» — только теперь, когда задача создана и скан запущен.
-    # Транзиент выше → маркер не выставлен → следующий тик окна повторит.
-    await _set_autostart_done(redis_client, done_key)
-
-    if not ad_ids:
+        # Триггерим скан даже при no_owner_ads — кабинет мог измениться.
+        await _trigger_observer_scan(redis_client)
+        # done-маркер НЕ ставим: позволяем ретрай в окне (catch-up).
         return {"outcome": "no_owner_ads", "day": day, "total": total}
-
-    return {
-        "outcome": "started",
-        "day": day,
-        "task_id": task_id,
-        "ad_count": len(ad_ids),
-        "total": total,
-        "scan_triggered": True,
-    }
 
 
 async def _set_autostart_done(redis_client: redis_asyncio.Redis, done_key: str) -> None:
@@ -218,6 +221,33 @@ async def _trigger_observer_scan(redis_client: redis_asyncio.Redis) -> None:
         await redis_client.publish(_OBSERVER_TRIGGER_CHANNEL, payload)
     except Exception:
         logger.exception("cabinet_autostart: не смог опубликовать observer-trigger в Redis")
+
+
+async def _alert_autostart(engine: Any, redis_client: Any, summary: dict) -> None:
+    """Подтверждение/алерт автостарта кабинета. Best-effort, дедуп по дню."""
+    outcome = summary.get("outcome")
+    day = summary.get("day", "")
+    if outcome == "started":
+        text = (
+            f"🚀 <b>Автостарт кабинета {day}</b>\n"
+            f"Поставлено объявлений: {summary.get('ad_count')} "
+            f"(task_id={summary.get('task_id')})."
+        )
+    elif outcome == "no_owner_ads":
+        text = (
+            f"⚠️ <b>Автостарт {day}: owner-объявлений не найдено</b>\n"
+            f"Кабинет НЕ поднят. Проверь даты в названиях кампаний."
+        )
+    else:
+        return
+    await notify_owners(
+        engine,
+        redis_client,
+        category="autostart",
+        text=text,
+        dedup_key=f"autostart_alert:{day}:{outcome}",
+        dedup_ttl_seconds=93600,
+    )
 
 
 # ====================== loops ======================
@@ -251,6 +281,7 @@ async def tick_loop(
             outcome = summary.get("outcome")
             if outcome not in ("scanning_paused", "disabled", "not_in_window", "already_done"):
                 logger.info("cabinet_autostart tick: %s", summary)
+            await _alert_autostart(engine, redis_client, summary)
         except Exception:
             logger.exception("Ошибка в cabinet_autostart tick")
         try:
@@ -303,6 +334,7 @@ async def main_loop(database_url: str | None = None) -> None:
 __all__ = [
     "HEARTBEAT_KEY",
     "WORKER_NAME",
+    "_alert_autostart",
     "heartbeat_loop",
     "main_loop",
     "run_one_tick",
