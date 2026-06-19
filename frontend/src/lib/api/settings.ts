@@ -76,12 +76,13 @@ export function useUpdateObserverSettings() {
 
 // ─── Cabinet autostart (расписание авто-включения кабинета) ────────────────────
 
-/** Конфиг автостарта: в HH:MM UTC включаются объявления кампаний с нужной датой. */
+/** Конфиг автостарта: в HH:MM UTC включаются объявления выбранных кампаний. */
 export interface CabinetAutostart {
   enabled: boolean;
   hour_utc: number;
   minute_utc: number;
-  dates: string[];
+  /** Meta-ID выбранных кампаний (галочками). */
+  campaign_ids: string[];
 }
 
 export function useCabinetAutostart() {

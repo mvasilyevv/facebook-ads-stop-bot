@@ -67,9 +67,9 @@ async def test_autostart_on_enables(pg_engine, clean_autostart_config) -> None:
     assert config["enabled"] is True
 
 
-# /autostart HH:MM dates задаёт время (UTC) + список дат в БД
+# /autostart HH:MM задаёт время (UTC) в БД (кампании выбираются в UI, не через TG)
 @pytest.mark.asyncio
-async def test_autostart_set_time_and_dates(pg_engine, clean_autostart_config) -> None:
+async def test_autostart_set_time(pg_engine, clean_autostart_config) -> None:
     client = _FakeClient()
     await handle_autostart(
         engine=pg_engine,
@@ -77,26 +77,27 @@ async def test_autostart_set_time_and_dates(pg_engine, clean_autostart_config) -
         chat_id=555,
         message_id=1,
         thread_id=None,
-        args_text="06:30 22.05,25.05",
+        args_text="06:30",
     )
     config = await read_autostart_config(pg_engine)
     assert config["hour_utc"] == 6
     assert config["minute_utc"] == 30
-    assert config["dates"] == ["22.05", "25.05"]
+    # Кампании через TG не задаются — список остаётся как был (пустой).
+    assert config["campaign_ids"] == []
 
 
-# /autostart off выключает, не теряя ранее заданные время/даты
+# /autostart off выключает, не теряя ранее заданное время
 @pytest.mark.asyncio
-async def test_autostart_off_keeps_time_and_dates(pg_engine, clean_autostart_config) -> None:
+async def test_autostart_off_keeps_time(pg_engine, clean_autostart_config) -> None:
     client = _FakeClient()
-    # Сначала задаём время + даты + включаем.
+    # Сначала задаём время + включаем.
     await handle_autostart(
         engine=pg_engine,
         client=client,
         chat_id=555,
         message_id=1,
         thread_id=None,
-        args_text="07:00 22.05",
+        args_text="07:00",
     )
     await handle_autostart(
         engine=pg_engine,
@@ -117,8 +118,7 @@ async def test_autostart_off_keeps_time_and_dates(pg_engine, clean_autostart_con
     )
     config = await read_autostart_config(pg_engine)
     assert config["enabled"] is False
-    assert config["hour_utc"] == 7
-    assert config["dates"] == ["22.05"], "off не должен обнулять даты"
+    assert config["hour_utc"] == 7, "off не должен обнулять время"
 
 
 # Невалидный аргумент → подсказка по использованию (конфиг не меняется)

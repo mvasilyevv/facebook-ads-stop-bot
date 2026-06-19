@@ -2,15 +2,15 @@
 """Конфиг и pure-хелперы автостарта кабинета по расписанию.
 
 Автостарт — money-критичная фича: в заданное время (UTC, ежедневно) воркер
-автоматически включает (enable) объявления СВОИХ кампаний с нужной датой в
-названии и триггерит observer scan. Без подтверждения.
+автоматически включает (enable) объявления СВОИХ выбранных кампаний (галочками
+в UI) и триггерит observer scan. Без подтверждения.
 
 Хранение конфига — в ``system_config`` (key='cabinet_autostart', value JSONB):
     {
-        "enabled": bool,        # фича включена
-        "hour_utc": int,        # плановый час (UTC) 0..23
-        "minute_utc": int,      # плановая минута 0..59
-        "dates": ["22.05", ...] # список дат-меток кампаний (любая → подходит)
+        "enabled": bool,            # фича включена
+        "hour_utc": int,            # плановый час (UTC) 0..23
+        "minute_utc": int,          # плановая минута 0..59
+        "campaign_ids": ["123", ...] # Meta-ID выбранных кампаний (галочками в UI)
     }
 
 Pure-хелперы (без I/O):
@@ -38,7 +38,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "enabled": False,
     "hour_utc": 6,
     "minute_utc": 0,
-    "dates": [],
+    "campaign_ids": [],
 }
 
 # Redis-ключ дедупа: 26 часов с запасом перекрывают окно следующего дня.
@@ -78,14 +78,14 @@ def autostart_done_key(now: datetime) -> str:
 def _normalize_config(raw: dict[str, Any] | None) -> dict[str, Any]:
     """Приводит сырой JSONB к контракту с дефолтами (защита от кривых данных)."""
     raw = raw or {}
-    dates = raw.get("dates") or []
-    if not isinstance(dates, list):
-        dates = []
+    campaign_ids = raw.get("campaign_ids") or []
+    if not isinstance(campaign_ids, list):
+        campaign_ids = []
     return {
         "enabled": bool(raw.get("enabled", DEFAULT_CONFIG["enabled"])),
         "hour_utc": int(raw.get("hour_utc", DEFAULT_CONFIG["hour_utc"])),
         "minute_utc": int(raw.get("minute_utc", DEFAULT_CONFIG["minute_utc"])),
-        "dates": [str(d).strip() for d in dates if str(d).strip()],
+        "campaign_ids": [str(c).strip() for c in campaign_ids if str(c).strip()],
     }
 
 

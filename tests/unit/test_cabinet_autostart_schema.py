@@ -12,51 +12,45 @@ from apps.api.routers.v1.schemas.cabinet_autostart import (
 )
 
 
-# Валидный конфиг проходит, даты нормализуются (трим + дедуп с сохранением порядка)
-def test_put_valid_dates_dedup_and_trim() -> None:
+# Валидные campaign_ids проходят, нормализуются (трим + дедуп с сохранением порядка)
+def test_put_valid_campaign_ids_dedup_and_trim() -> None:
     req = CabinetAutostartPutRequest(
         enabled=True,
         hour_utc=6,
         minute_utc=30,
-        dates=[" 22.05 ", "25.05", "22.05"],
+        campaign_ids=[" 123456 ", "789", "123456"],
     )
-    assert req.dates == ["22.05", "25.05"]
+    assert req.campaign_ids == ["123456", "789"]
 
 
-# Формат с годом (ДД.ММ.ГГ) допускается
-def test_put_date_with_year_ok() -> None:
-    req = CabinetAutostartPutRequest(enabled=True, hour_utc=0, minute_utc=0, dates=["25.03.26"])
-    assert req.dates == ["25.03.26"]
-
-
-# Кривая дата (не ДД.ММ) → ValidationError (ловим опечатку до сохранения)
-def test_put_bad_date_rejected() -> None:
+# Нечисловой id (не Meta-ID) → ValidationError (ловим мусор до сохранения)
+def test_put_bad_campaign_id_rejected() -> None:
     with pytest.raises(ValidationError):
-        CabinetAutostartPutRequest(enabled=True, hour_utc=6, minute_utc=0, dates=["май"])
+        CabinetAutostartPutRequest(enabled=True, hour_utc=6, minute_utc=0, campaign_ids=["abc"])
 
 
 # Час вне 0..23 → ValidationError
 def test_put_hour_out_of_range() -> None:
     with pytest.raises(ValidationError):
-        CabinetAutostartPutRequest(enabled=True, hour_utc=24, minute_utc=0, dates=[])
+        CabinetAutostartPutRequest(enabled=True, hour_utc=24, minute_utc=0, campaign_ids=[])
 
 
 # Минута вне 0..59 → ValidationError
 def test_put_minute_out_of_range() -> None:
     with pytest.raises(ValidationError):
-        CabinetAutostartPutRequest(enabled=False, hour_utc=6, minute_utc=60, dates=[])
+        CabinetAutostartPutRequest(enabled=False, hour_utc=6, minute_utc=60, campaign_ids=[])
 
 
-# Пустой список дат допустим (фича может быть включена без дат — ничего не включит)
-def test_put_empty_dates_ok() -> None:
-    req = CabinetAutostartPutRequest(enabled=True, hour_utc=6, minute_utc=0, dates=[])
-    assert req.dates == []
+# Пустой список кампаний допустим (фича включена, но ничего не включит — безопасно)
+def test_put_empty_campaigns_ok() -> None:
+    req = CabinetAutostartPutRequest(enabled=True, hour_utc=6, minute_utc=0, campaign_ids=[])
+    assert req.campaign_ids == []
 
 
 # from_config берёт значения из dict, недостающие → дефолты
 def test_response_from_config_defaults() -> None:
-    resp = CabinetAutostartResponse.from_config({"enabled": True, "dates": ["22.05"]})
+    resp = CabinetAutostartResponse.from_config({"enabled": True, "campaign_ids": ["123"]})
     assert resp.enabled is True
     assert resp.hour_utc == 6  # дефолт
     assert resp.minute_utc == 0
-    assert resp.dates == ["22.05"]
+    assert resp.campaign_ids == ["123"]

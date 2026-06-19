@@ -34,7 +34,7 @@ import redis.asyncio as redis_asyncio
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from core.db import WORKER_ENGINE_KWARGS
-from core.meta_api.bulk import resolve_owner_ad_ids_by_dates
+from core.meta_api.bulk import resolve_owner_ad_ids_by_campaign_ids
 from core.meta_api.queue import create_mutation_task
 from core.meta_api.schemas import MetaMutationPayload
 from core.observer.queries import load_observer_config, load_scanning_enabled
@@ -73,7 +73,7 @@ async def run_one_tick(
     """Один проход автостарта. Возвращает summary dict с ключом 'outcome'.
 
     outcome ∈ {'scanning_paused', 'disabled', 'not_in_window', 'already_done',
-    'no_dates', 'no_owner_ads', 'started'}.
+    'no_campaigns', 'no_owner_ads', 'started'}.
 
     Шаги:
     0. Глобальный стоп: is_scanning_enabled=false → 'scanning_paused' (асимметричный
@@ -123,17 +123,21 @@ async def run_one_tick(
         return {"outcome": "already_done"}
 
     day = now.astimezone(timezone.utc).strftime("%Y-%m-%d")
-    dates = list(config.get("dates") or [])
-    if not dates:
-        # Дат нет → нечего включать. Ставим маркер, чтобы не дёргать каждый тик окна.
+    campaign_ids = list(config.get("campaign_ids") or [])
+    if not campaign_ids:
+        # Кампаний не выбрано → нечего включать. Ставим маркер, чтобы не дёргать каждый тик окна.
         await _set_autostart_done(redis_client, done_key)
-        logger.info("cabinet_autostart: фича включена, но список дат пуст — пропускаю день %s", day)
-        return {"outcome": "no_dates", "day": day}
+        logger.info(
+            "cabinet_autostart: фича включена, но список кампаний пуст — пропускаю день %s", day
+        )
+        return {"outcome": "no_campaigns", "day": day}
 
     observer_config = await load_observer_config(engine)
     owner_tag = (observer_config or {}).get("owner_campaign_tag")
 
-    ad_ids, total = await resolve_owner_ad_ids_by_dates(engine, owner_tag=owner_tag, dates=dates)
+    ad_ids, total = await resolve_owner_ad_ids_by_campaign_ids(
+        engine, owner_tag=owner_tag, campaign_ids=campaign_ids
+    )
 
     task_id: int | None = None
     if ad_ids:
@@ -143,7 +147,7 @@ async def run_one_tick(
             params={
                 "ad_ids": sorted(ad_ids),
                 "action": _AUTOSTART_ACTION,
-                "resolved_from_dates": dates,
+                "resolved_from_campaigns": campaign_ids,
             },
             ad_account_id=None,
         )
@@ -165,8 +169,8 @@ async def run_one_tick(
         )
     else:
         logger.info(
-            "cabinet_autostart: по датам %s owner-кампаний не нашлось (owner_tag=%s), day=%s",
-            dates,
+            "cabinet_autostart: по кампаниям %s owner-объявлений не нашлось (owner_tag=%s), day=%s",
+            campaign_ids,
             owner_tag,
             day,
         )

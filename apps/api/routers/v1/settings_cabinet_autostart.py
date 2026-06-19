@@ -46,15 +46,15 @@ async def put_cabinet_autostart(
             "enabled": body.enabled,
             "hour_utc": body.hour_utc,
             "minute_utc": body.minute_utc,
-            "dates": body.dates,
+            "campaign_ids": body.campaign_ids,
         },
     )
     logger.info(
-        "cabinet_autostart обновлён (web): enabled=%s %02d:%02d UTC, dates=%s",
+        "cabinet_autostart обновлён (web): enabled=%s %02d:%02d UTC, campaigns=%d",
         body.enabled,
         body.hour_utc,
         body.minute_utc,
-        body.dates,
+        len(body.campaign_ids),
     )
     cfg = await read_autostart_config(engine)
     return CabinetAutostartResponse.from_config(cfg)

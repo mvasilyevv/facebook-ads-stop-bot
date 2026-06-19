@@ -2,8 +2,9 @@
 """Интеграционные тесты автостарта кабинета по расписанию (money-критично).
 
 Главное — безопасность:
-- резолв по дате owner-scoped: своя кампания с датой включается, своя без даты — нет,
-  чужая (без owner-тега) с датой — НЕ включается, пустой список дат → пусто;
+- резолв по выбранным campaign_id owner-scoped: своя выбранная кампания включается,
+  своя НЕ выбранная — нет, чужая (без owner-тега) — НЕ включается даже если выбрана,
+  пустой список → пусто;
 - run_one_tick создаёт ОДНУ pending-задачу bulk_status_change activate и триггерит
   observer scan, повторный тик в тот же день дедуплицируется (already_done).
 """
@@ -19,7 +20,7 @@ import pytest_asyncio
 from sqlalchemy import text
 
 from apps.cabinet_scheduler.main import run_one_tick
-from core.meta_api.bulk import resolve_owner_ad_ids_by_dates
+from core.meta_api.bulk import resolve_owner_ad_ids_by_campaign_ids
 from core.observer.pipeline import process_scan_rows
 from core.scanner.models import ScannedAdRow
 from core.scheduler.cabinet_autostart import autostart_done_key, write_autostart_config
@@ -51,11 +52,12 @@ async def clean_autostart_tables(pg_engine):
     await _trunc()
 
 
-def _row(fb_ad_id: str, campaign: str, ad_name: str = "AD") -> ScannedAdRow:
-    """Минимальная строка скана (метрики не важны для резолва по дате)."""
+def _row(fb_ad_id: str, campaign: str, campaign_id: str, ad_name: str = "AD") -> ScannedAdRow:
+    """Минимальная строка скана; campaign_id → fb_campaigns.fb_campaign_id."""
     return ScannedAdRow(
         fb_ad_id=fb_ad_id,
         campaign_name=campaign,
+        campaign_id=campaign_id,
         adset_name="as",
         ad_name=ad_name,
         delivery_status="ACTIVE",
@@ -95,67 +97,73 @@ async def _set_owner_tag(pg_engine, tag: str | None) -> None:
         )
 
 
-# ====================== resolve_owner_ad_ids_by_dates ======================
+# ====================== resolve_owner_ad_ids_by_campaign_ids ======================
 
 
-# Своя кампания (тег MV) с датой 22.05 включается; своя без даты — нет
+# Своя выбранная кампания (тег MV) включается; своя НЕ выбранная — нет
 @pytest.mark.asyncio
-async def test_resolve_by_date_owner_with_date(pg_engine, clean_autostart_tables) -> None:
-    with_date = _row("111000", "MV | KE | CR2 | 22.05")
-    no_date = _row("111001", "MV | KE | CR2 | 18.04")
-    await process_scan_rows(pg_engine, rows=[with_date, no_date], scan_id=1)
+async def test_resolve_by_campaign_selected_only(pg_engine, clean_autostart_tables) -> None:
+    selected = _row("111000", "MV | KE | CR2 | 22.05", campaign_id="C100")
+    other = _row("111001", "MV | KE | CR2 | 18.04", campaign_id="C200")
+    await process_scan_rows(pg_engine, rows=[selected, other], scan_id=1)
 
-    ids, total = await resolve_owner_ad_ids_by_dates(pg_engine, owner_tag="MV", dates=["22.05"])
-    assert ids == ["111000"], "только кампания с датой 22.05"
+    ids, total = await resolve_owner_ad_ids_by_campaign_ids(
+        pg_engine, owner_tag="MV", campaign_ids=["C100"]
+    )
+    assert ids == ["111000"], "только выбранная кампания C100"
     assert total == 1
 
 
-# Чужая кампания (без owner-тега) с датой 22.05 НЕ включается
+# Чужая кампания (без owner-тега) НЕ включается, даже если её id выбран
 @pytest.mark.asyncio
-async def test_resolve_by_date_excludes_foreign(pg_engine, clean_autostart_tables) -> None:
-    mine = _row("111002", "MV | KE | CR2 | 22.05")
-    foreign = _row("222002", "22.05 MZ Artemteam CR2 CBO")
+async def test_resolve_by_campaign_excludes_foreign(pg_engine, clean_autostart_tables) -> None:
+    mine = _row("111002", "MV | KE | CR2 | 22.05", campaign_id="C300")
+    foreign = _row("222002", "MZ Artemteam CR2 CBO", campaign_id="C301")
     await process_scan_rows(pg_engine, rows=[mine, foreign], scan_id=1)
 
-    ids, total = await resolve_owner_ad_ids_by_dates(pg_engine, owner_tag="MV", dates=["22.05"])
-    assert ids == ["111002"], "чужая кампания с той же датой не должна попасть"
+    ids, total = await resolve_owner_ad_ids_by_campaign_ids(
+        pg_engine, owner_tag="MV", campaign_ids=["C300", "C301"]
+    )
+    assert ids == ["111002"], "чужая кампания не должна попасть даже при выборе"
     assert total == 1
 
 
-# Пустой список дат → пусто (НЕ включаем весь кабинет — безопасность)
+# Пустой список → пусто (НЕ включаем весь кабинет — безопасность)
 @pytest.mark.asyncio
-async def test_resolve_by_date_empty_dates(pg_engine, clean_autostart_tables) -> None:
-    mine = _row("111003", "MV | KE | CR2 | 22.05")
+async def test_resolve_by_campaign_empty(pg_engine, clean_autostart_tables) -> None:
+    mine = _row("111003", "MV | KE | CR2 | 22.05", campaign_id="C400")
     await process_scan_rows(pg_engine, rows=[mine], scan_id=1)
 
-    ids, total = await resolve_owner_ad_ids_by_dates(pg_engine, owner_tag="MV", dates=[])
+    ids, total = await resolve_owner_ad_ids_by_campaign_ids(
+        pg_engine, owner_tag="MV", campaign_ids=[]
+    )
     assert ids == []
     assert total == 0
 
 
-# Word-boundary: дата "22.05" не матчит "122.05" и "22.057"
+# Не выбранная кампания (id не в списке) → пусто
 @pytest.mark.asyncio
-async def test_resolve_by_date_word_boundary(pg_engine, clean_autostart_tables) -> None:
-    exact = _row("111004", "MV | CR2 | 22.05")
-    prefixed = _row("111005", "MV | CR2 | 122.05")
-    suffixed = _row("111006", "MV | CR2 | 22.057")
-    await process_scan_rows(pg_engine, rows=[exact, prefixed, suffixed], scan_id=1)
+async def test_resolve_by_campaign_not_selected(pg_engine, clean_autostart_tables) -> None:
+    mine = _row("111004", "MV | CR2 | 22.05", campaign_id="C500")
+    await process_scan_rows(pg_engine, rows=[mine], scan_id=1)
 
-    ids, total = await resolve_owner_ad_ids_by_dates(pg_engine, owner_tag="MV", dates=["22.05"])
-    assert ids == ["111004"], "только точное совпадение даты, без 122.05 / 22.057"
-    assert total == 1
+    ids, total = await resolve_owner_ad_ids_by_campaign_ids(
+        pg_engine, owner_tag="MV", campaign_ids=["C999"]
+    )
+    assert ids == []
+    assert total == 0
 
 
-# Несколько дат: кампания подходит если содержит ЛЮБУЮ из них
+# Несколько выбранных кампаний: попадают все их активные объявления
 @pytest.mark.asyncio
-async def test_resolve_by_date_multiple_dates(pg_engine, clean_autostart_tables) -> None:
-    d22 = _row("111007", "MV | CR2 | 22.05")
-    d25 = _row("111008", "MV | CR2 | 25.05")
-    other = _row("111009", "MV | CR2 | 30.05")
-    await process_scan_rows(pg_engine, rows=[d22, d25, other], scan_id=1)
+async def test_resolve_by_campaign_multiple(pg_engine, clean_autostart_tables) -> None:
+    a = _row("111007", "MV | CR2 | 22.05", campaign_id="C600")
+    b = _row("111008", "MV | CR2 | 25.05", campaign_id="C601")
+    c = _row("111009", "MV | CR2 | 30.05", campaign_id="C602")
+    await process_scan_rows(pg_engine, rows=[a, b, c], scan_id=1)
 
-    ids, total = await resolve_owner_ad_ids_by_dates(
-        pg_engine, owner_tag="MV", dates=["22.05", "25.05"]
+    ids, total = await resolve_owner_ad_ids_by_campaign_ids(
+        pg_engine, owner_tag="MV", campaign_ids=["C600", "C601"]
     )
     assert set(ids) == {"111007", "111008"}
     assert total == 2
@@ -164,18 +172,18 @@ async def test_resolve_by_date_multiple_dates(pg_engine, clean_autostart_tables)
 # ====================== run_one_tick ======================
 
 
-# В окне + enabled + owner-кампания с датой → pending bulk_status_change activate + scan trigger
+# В окне + enabled + своя выбранная кампания → pending bulk activate + scan trigger
 @pytest.mark.asyncio
 async def test_run_one_tick_starts_cabinet(
     pg_engine, fake_redis_client, clean_autostart_tables, monkeypatch
 ) -> None:
-    mine = _row("111100", "MV | KE | CR2 | 22.05")
-    foreign = _row("222100", "22.05 MZ Artemteam CR2")
+    mine = _row("111100", "MV | KE | CR2 | 22.05", campaign_id="C700")
+    foreign = _row("222100", "MZ Artemteam CR2", campaign_id="C700")
     await process_scan_rows(pg_engine, rows=[mine, foreign], scan_id=1)
     await _set_owner_tag(pg_engine, "MV")
     await write_autostart_config(
         pg_engine,
-        {"enabled": True, "hour_utc": 6, "minute_utc": 0, "dates": ["22.05"]},
+        {"enabled": True, "hour_utc": 6, "minute_utc": 0, "campaign_ids": ["C700"]},
     )
 
     # Перехватываем publish, чтобы проверить scan-trigger.
@@ -227,12 +235,12 @@ async def test_run_one_tick_starts_cabinet(
 async def test_run_one_tick_dedup_same_day(
     pg_engine, fake_redis_client, clean_autostart_tables
 ) -> None:
-    mine = _row("111200", "MV | KE | CR2 | 22.05")
+    mine = _row("111200", "MV | KE | CR2 | 22.05", campaign_id="C800")
     await process_scan_rows(pg_engine, rows=[mine], scan_id=1)
     await _set_owner_tag(pg_engine, "MV")
     await write_autostart_config(
         pg_engine,
-        {"enabled": True, "hour_utc": 6, "minute_utc": 0, "dates": ["22.05"]},
+        {"enabled": True, "hour_utc": 6, "minute_utc": 0, "campaign_ids": ["C800"]},
     )
 
     now1 = datetime(2026, 5, 29, 6, 0, 0, tzinfo=timezone.utc)
@@ -259,7 +267,7 @@ async def test_run_one_tick_dedup_same_day(
 async def test_run_one_tick_disabled(pg_engine, fake_redis_client, clean_autostart_tables) -> None:
     await write_autostart_config(
         pg_engine,
-        {"enabled": False, "hour_utc": 6, "minute_utc": 0, "dates": ["22.05"]},
+        {"enabled": False, "hour_utc": 6, "minute_utc": 0, "campaign_ids": ["C700"]},
     )
     now = datetime(2026, 5, 29, 6, 0, 0, tzinfo=timezone.utc)
     summary = await run_one_tick(engine=pg_engine, redis_client=fake_redis_client, now=now)
@@ -274,7 +282,7 @@ async def test_run_one_tick_not_in_window(
 ) -> None:
     await write_autostart_config(
         pg_engine,
-        {"enabled": True, "hour_utc": 6, "minute_utc": 0, "dates": ["22.05"]},
+        {"enabled": True, "hour_utc": 6, "minute_utc": 0, "campaign_ids": ["C700"]},
     )
     now = datetime(2026, 5, 29, 5, 0, 0, tzinfo=timezone.utc)
     summary = await run_one_tick(engine=pg_engine, redis_client=fake_redis_client, now=now)
@@ -282,17 +290,32 @@ async def test_run_one_tick_not_in_window(
     assert await fake_redis_client.get(autostart_done_key(now)) is None
 
 
-# Включено, в окне, но owner-кампаний с датой нет → no_owner_ads, но scan всё равно триггерим
+# Включено, в окне, но кампаний не выбрано → no_campaigns, ключ ставится (не дёргаем каждый тик)
+@pytest.mark.asyncio
+async def test_run_one_tick_no_campaigns(
+    pg_engine, fake_redis_client, clean_autostart_tables
+) -> None:
+    await write_autostart_config(
+        pg_engine,
+        {"enabled": True, "hour_utc": 6, "minute_utc": 0, "campaign_ids": []},
+    )
+    now = datetime(2026, 5, 29, 6, 0, 0, tzinfo=timezone.utc)
+    summary = await run_one_tick(engine=pg_engine, redis_client=fake_redis_client, now=now)
+    assert summary["outcome"] == "no_campaigns"
+    assert await fake_redis_client.get(autostart_done_key(now)) == "1"
+
+
+# Включено, в окне, но выбранная кампания чужая (нет owner-тега) → no_owner_ads, scan триггерим
 @pytest.mark.asyncio
 async def test_run_one_tick_no_owner_ads(
     pg_engine, fake_redis_client, clean_autostart_tables
 ) -> None:
-    foreign = _row("222300", "22.05 MZ Artemteam CR2")
+    foreign = _row("222300", "MZ Artemteam CR2", campaign_id="C900")
     await process_scan_rows(pg_engine, rows=[foreign], scan_id=1)
     await _set_owner_tag(pg_engine, "MV")
     await write_autostart_config(
         pg_engine,
-        {"enabled": True, "hour_utc": 6, "minute_utc": 0, "dates": ["22.05"]},
+        {"enabled": True, "hour_utc": 6, "minute_utc": 0, "campaign_ids": ["C900"]},
     )
     now = datetime(2026, 5, 29, 6, 0, 0, tzinfo=timezone.utc)
     summary = await run_one_tick(engine=pg_engine, redis_client=fake_redis_client, now=now)

@@ -2,12 +2,14 @@
 """TG-команда /autostart — управление автостартом кабинета по расписанию.
 
 Формы:
-- /autostart                       — показать текущий конфиг.
-- /autostart on | off              — включить / выключить фичу.
-- /autostart HH:MM 22.05,25.05     — задать время (UTC) + список дат кампаний.
+- /autostart            — показать текущий конфиг.
+- /autostart on | off   — включить / выключить фичу.
+- /autostart HH:MM      — задать время (UTC).
+
+Выбор кампаний — галочками в UI (web/mini), не через TG.
 
 Money-критично: при включённом автостарте воркер cabinet_scheduler в заданное
-время сам включит объявления СВОИХ кампаний с указанной датой и запустит scan.
+время сам включит объявления СВОИХ выбранных кампаний и запустит scan.
 Owner-scoping берётся из observer_config (тот же тег, что у /pause /resume).
 """
 
@@ -34,14 +36,14 @@ def _format_config(config: dict) -> str:
     state = "🟢 включён" if config.get("enabled") else "🔴 выключен"
     hour = int(config.get("hour_utc", 6))
     minute = int(config.get("minute_utc", 0))
-    dates = config.get("dates") or []
-    dates_str = ", ".join(dates) if dates else "— (не заданы)"
+    count = len(config.get("campaign_ids") or [])
+    camps_str = f"{count} шт." if count else "— (не выбраны)"
     return (
         f"🗓 {fmt.b('Автостарт кабинета')}: {state}\n"
         f"Время: {fmt.code(f'{hour:02d}:{minute:02d}')} UTC (ежедневно)\n"
-        f"Даты кампаний: {fmt.esc(dates_str)}\n\n"
-        "Что делает: в указанное время включает объявления твоих кампаний с "
-        "этими датами в названии и запускает скан."
+        f"Кампаний выбрано: {fmt.esc(camps_str)}\n\n"
+        "Что делает: в указанное время включает объявления выбранных кампаний и "
+        "запускает скан. Выбор кампаний — галочками в UI (web/mini)."
     )
 
 
@@ -51,17 +53,12 @@ _USAGE = "\n".join(
         f"{fmt.code('/autostart')} — показать настройки.",
         f"{fmt.code('/autostart on')} — включить.",
         f"{fmt.code('/autostart off')} — выключить.",
-        f"{fmt.code('/autostart HH:MM 22.05,25.05')} — время (UTC) + даты кампаний.",
+        f"{fmt.code('/autostart HH:MM')} — задать время (UTC).",
         "",
-        f"Пример: {fmt.code('/autostart 06:00 22.05')} — каждый день в 06:00 UTC "
-        "включать объявления кампаний с «22.05» в названии.",
+        f"Пример: {fmt.code('/autostart 06:00')} — ежедневно в 06:00 UTC.",
+        "Кампании выбираются галочками в UI (web/mini).",
     ]
 )
-
-
-def _parse_dates(raw: str) -> list[str]:
-    """Разбирает CSV дат: "22.05,25.05" → ["22.05", "25.05"]."""
-    return [d.strip() for d in raw.replace(";", ",").split(",") if d.strip()]
 
 
 async def handle_autostart(
@@ -105,23 +102,19 @@ async def handle_autostart(
         )
         return
 
-    # HH:MM [dates] — задать время + (опционально) даты.
+    # HH:MM — задать время (UTC). Кампании выбираются в UI.
     m = _TIME_RE.match(first)
     if m:
         hour = int(m.group(1))
         minute = int(m.group(2))
-        dates = _parse_dates(parts[1]) if len(parts) > 1 else []
-        # Если даты не переданы — сохраняем прежние (не обнуляем случайно).
         config = await read_autostart_config(engine)
         config["hour_utc"] = hour
         config["minute_utc"] = minute
-        if dates:
-            config["dates"] = dates
         await write_autostart_config(engine, config)
         await send_text(
             client,
             chat_id=chat_id,
-            text="✅ Время и даты обновлены.\n\n" + _format_config(config),
+            text="✅ Время обновлено.\n\n" + _format_config(config),
             reply_to_message_id=message_id,
             message_thread_id=thread_id,
         )

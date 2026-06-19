@@ -4,7 +4,7 @@
  */
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useState, useEffect } from "react";
-import { ChevronRight, Heart, FileCode, FileText, RefreshCw } from "lucide-react";
+import { ChevronRight, Heart, FileCode, FileText, RefreshCw, Check } from "lucide-react";
 import {
   useObserverSettings,
   useToggleScanning,
@@ -12,6 +12,7 @@ import {
   useTelegramSettings,
   useVisionSettings,
   useCabinetAutostart,
+  useObserverCampaigns,
   fetchJson,
   QK,
 } from "@/lib/api";
@@ -348,7 +349,6 @@ function VisionSection() {
 
 // ─── Секция АВТОСТАРТ КАБИНЕТА ─────────────────────────────────────────────
 
-const _DATE_RE = /^\d{1,2}\.\d{1,2}(\.\d{2,4})?$/;
 const pad2 = (n: number) => String(n).padStart(2, "0");
 
 function CabinetAutostartSection({
@@ -357,17 +357,18 @@ function CabinetAutostartSection({
   showToast: (t: string, ok?: boolean) => void;
 }) {
   const { data, isLoading, isError, refetch } = useCabinetAutostart();
+  const { data: campaigns, isLoading: campsLoading } = useObserverCampaigns();
   const qc = useQueryClient();
   const [enabled, setEnabled] = useState(false);
   const [time, setTime] = useState("06:00");
-  const [datesRaw, setDatesRaw] = useState("");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (data) {
       setEnabled(data.enabled);
       setTime(`${pad2(data.hour_utc)}:${pad2(data.minute_utc)}`);
-      setDatesRaw((data.dates ?? []).join(", "));
+      setSelected(new Set(data.campaign_ids ?? []));
     }
   }, [data]);
 
@@ -389,6 +390,14 @@ function CabinetAutostartSection({
     );
   }
 
+  const toggle = (id: string) =>
+    setSelected((s) => {
+      const n = new Set(s);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
+      return n;
+    });
+
   const handleSave = async () => {
     const [hh, mm] = time.split(":");
     const hour = Number(hh);
@@ -404,22 +413,17 @@ function CabinetAutostartSection({
       showToast("Время: формат ЧЧ:ММ (UTC)", false);
       return;
     }
-    const dates: string[] = [];
-    for (const part of datesRaw.split(/[\s,;]+/)) {
-      const s = part.trim();
-      if (!s) continue;
-      if (!_DATE_RE.test(s)) {
-        showToast(`Дата «${s}» — формат ДД.ММ`, false);
-        return;
-      }
-      if (!dates.includes(s)) dates.push(s);
-    }
     haptic.impact("light");
     setSaving(true);
     try {
       await fetchJson("/tma/cabinet-autostart", {
         method: "PUT",
-        body: JSON.stringify({ enabled, hour_utc: hour, minute_utc: minute, dates }),
+        body: JSON.stringify({
+          enabled,
+          hour_utc: hour,
+          minute_utc: minute,
+          campaign_ids: [...selected],
+        }),
       });
       void qc.invalidateQueries({ queryKey: QK.cabinetAutostart });
       haptic.notify("success");
@@ -434,11 +438,11 @@ function CabinetAutostartSection({
 
   return (
     <Section eyebrow="АВТОСТАРТ КАБИНЕТА" num="09">
-      <FieldRow label="Включить" hint="В заданное время (UTC) включит кампании с нужной датой">
+      <FieldRow label="Включить" hint="В заданное время (UTC) включит отмеченные кампании">
         <Switch checked={enabled} onChange={() => setEnabled((v) => !v)} />
       </FieldRow>
 
-      <FieldRow label="Время (UTC)" hint="Час запуска расписания">
+      <FieldRow label="Время (UTC)" hint="Час запуска расписания" noBorder>
         <Input
           type="time"
           aria-label="Время автостарта (UTC)"
@@ -448,15 +452,48 @@ function CabinetAutostartSection({
         />
       </FieldRow>
 
-      <FieldRow label="Даты кампаний" hint="ДД.ММ, несколько через запятую" noBorder>
-        <Input
-          aria-label="Даты кампаний"
-          placeholder="22.05, 25.05"
-          value={datesRaw}
-          onChange={(e) => setDatesRaw(e.target.value)}
-          className="w-[120px] min-h-[36px] text-[13px]"
-        />
-      </FieldRow>
+      <div className="pt-2">
+        <p className="text-[11px] text-bg-8 mb-2">Кампании ({selected.size})</p>
+        {campsLoading ? (
+          <Skeleton className="h-16 w-full" />
+        ) : !campaigns || campaigns.length === 0 ? (
+          <p className="text-[12px] text-bg-8 py-2">
+            Список кампаний пуст — обнови его на десктопе (Кампании → Обновить список).
+          </p>
+        ) : (
+          <div className="border border-[var(--hairline)] rounded-[var(--radius-2)] overflow-hidden max-h-[260px] overflow-y-auto">
+            {campaigns.map((c) => {
+              const isSel = selected.has(c.id);
+              return (
+                <button
+                  key={c.id}
+                  type="button"
+                  role="checkbox"
+                  aria-checked={isSel}
+                  aria-label={c.name || c.id}
+                  onClick={() => toggle(c.id)}
+                  className={cn(
+                    "w-full flex items-center gap-2.5 px-3 py-2.5 text-left text-[13px]",
+                    "border-b border-[var(--hairline)] last:border-b-0",
+                    isSel ? "bg-accent-bg text-bg-11" : "text-bg-10",
+                  )}
+                >
+                  <span
+                    aria-hidden
+                    className={cn(
+                      "inline-flex items-center justify-center shrink-0 size-4 rounded-[var(--radius-1)] border-[1.5px]",
+                      isSel ? "bg-accent border-accent text-bg-0" : "bg-bg-2 border-bg-7",
+                    )}
+                  >
+                    {isSel && <Check size={11} strokeWidth={3} />}
+                  </span>
+                  <span className="truncate">{c.name || c.id}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
 
       <div className="py-3">
         <Button variant="primary" fullWidth onClick={() => void handleSave()} loading={saving}>
