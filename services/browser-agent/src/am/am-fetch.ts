@@ -341,7 +341,14 @@ export async function runAmScanWithContext(
     ctx,
     GRAPH_REST_ORIGIN,
     'ads',
-    ['id', 'name', 'effective_status', 'campaign_id', 'adset_id'],
+    [
+      'id',
+      'name',
+      'effective_status',
+      'campaign_id',
+      'adset_id',
+      'creative.thumbnail_width(160).thumbnail_height(120){id,thumbnail_url,image_url}',
+    ],
     scopeFilter,
   );
   const adsetRes = await fetchAllEdge(
@@ -349,12 +356,13 @@ export async function runAmScanWithContext(
     ctx,
     GRAPH_REST_ORIGIN,
     'adsets',
-    ['id', 'name'],
+    ['id', 'name', 'promoted_object{pixel_id}', 'daily_budget', 'lifetime_budget', 'budget_remaining', 'learning_stage_info'],
     scopeFilter,
   );
 
   const campName = new Map(campRes.items.map((c) => [c.id, c.name ?? '']));
-  const adsetName = new Map(adsetRes.items.map((a) => [a.id, a.name ?? '']));
+  // Полная карта адсетов с расширенными полями (пиксель/бюджеты/learning).
+  const adsetMeta = new Map(adsetRes.items.map((a) => [a.id, a]));
 
   let namesResolved = 0;
   let statusResolved = 0;
@@ -362,12 +370,22 @@ export async function runAmScanWithContext(
   for (const ad of adsRes.items) {
     if (ad.name) namesResolved += 1;
     if (ad.effectiveStatus) statusResolved += 1;
+    const asMeta = ad.adsetId ? adsetMeta.get(ad.adsetId) : undefined;
     adMeta.set(ad.id, {
       adName: ad.name,
       effectiveStatus: ad.effectiveStatus,
       campaignId: ad.campaignId,
       campaignName: ad.campaignId ? campName.get(ad.campaignId) : undefined,
-      adsetName: ad.adsetId ? adsetName.get(ad.adsetId) : undefined,
+      adsetName: asMeta?.name,
+      // Поля из ad (крео, превью):
+      creativeThumbUrl: ad.creativeThumbUrl,
+      creativeImageUrl: ad.creativeImageUrl,
+      // Поля из адсета (пиксель/бюджеты/learning):
+      pixelId: asMeta?.pixelId,
+      dailyBudget: asMeta?.dailyBudget,
+      lifetimeBudget: asMeta?.lifetimeBudget,
+      budgetRemaining: asMeta?.budgetRemaining,
+      learningStage: asMeta?.learningStage,
     });
   }
 

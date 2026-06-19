@@ -3105,7 +3105,14 @@ proto.fb_agent.scanner.v1.ScannedAdRow.toObject = function(includeInstance, msg)
     costPerRegistration: jspb.Message.getFieldWithDefault(msg, 23, ""),
     deposits: jspb.Message.getFieldWithDefault(msg, 24, 0),
     resolvedOfferCode: jspb.Message.getFieldWithDefault(msg, 25, ""),
-    campaignId: jspb.Message.getFieldWithDefault(msg, 26, "")
+    campaignId: jspb.Message.getFieldWithDefault(msg, 26, ""),
+    creativeThumbUrl: jspb.Message.getFieldWithDefault(msg, 27, ""),
+    creativeImageUrl: jspb.Message.getFieldWithDefault(msg, 28, ""),
+    adsetPixelId: jspb.Message.getFieldWithDefault(msg, 29, ""),
+    adsetDailyBudget: jspb.Message.getFieldWithDefault(msg, 30, ""),
+    adsetLifetimeBudget: jspb.Message.getFieldWithDefault(msg, 31, ""),
+    adsetBudgetRemaining: jspb.Message.getFieldWithDefault(msg, 32, ""),
+    adsetLearningStage: jspb.Message.getFieldWithDefault(msg, 33, "")
   };
 
   if (includeInstance) {
@@ -3245,6 +3252,34 @@ proto.fb_agent.scanner.v1.ScannedAdRow.deserializeBinaryFromReader = function(ms
     case 26:
       var value = /** @type {string} */ (reader.readString());
       msg.setCampaignId(value);
+      break;
+    case 27:
+      var value = /** @type {string} */ (reader.readString());
+      msg.setCreativeThumbUrl(value);
+      break;
+    case 28:
+      var value = /** @type {string} */ (reader.readString());
+      msg.setCreativeImageUrl(value);
+      break;
+    case 29:
+      var value = /** @type {string} */ (reader.readString());
+      msg.setAdsetPixelId(value);
+      break;
+    case 30:
+      var value = /** @type {string} */ (reader.readString());
+      msg.setAdsetDailyBudget(value);
+      break;
+    case 31:
+      var value = /** @type {string} */ (reader.readString());
+      msg.setAdsetLifetimeBudget(value);
+      break;
+    case 32:
+      var value = /** @type {string} */ (reader.readString());
+      msg.setAdsetBudgetRemaining(value);
+      break;
+    case 33:
+      var value = /** @type {string} */ (reader.readString());
+      msg.setAdsetLearningStage(value);
       break;
     default:
       reader.skipField();
@@ -3454,6 +3489,55 @@ proto.fb_agent.scanner.v1.ScannedAdRow.serializeBinaryToWriter = function(messag
   if (f.length > 0) {
     writer.writeString(
       26,
+      f
+    );
+  }
+  f = message.getCreativeThumbUrl();
+  if (f.length > 0) {
+    writer.writeString(
+      27,
+      f
+    );
+  }
+  f = message.getCreativeImageUrl();
+  if (f.length > 0) {
+    writer.writeString(
+      28,
+      f
+    );
+  }
+  f = message.getAdsetPixelId();
+  if (f.length > 0) {
+    writer.writeString(
+      29,
+      f
+    );
+  }
+  f = message.getAdsetDailyBudget();
+  if (f.length > 0) {
+    writer.writeString(
+      30,
+      f
+    );
+  }
+  f = message.getAdsetLifetimeBudget();
+  if (f.length > 0) {
+    writer.writeString(
+      31,
+      f
+    );
+  }
+  f = message.getAdsetBudgetRemaining();
+  if (f.length > 0) {
+    writer.writeString(
+      32,
+      f
+    );
+  }
+  f = message.getAdsetLearningStage();
+  if (f.length > 0) {
+    writer.writeString(
+      33,
       f
     );
   }
@@ -3925,6 +4009,132 @@ proto.fb_agent.scanner.v1.ScannedAdRow.prototype.getCampaignId = function() {
  */
 proto.fb_agent.scanner.v1.ScannedAdRow.prototype.setCampaignId = function(value) {
   return jspb.Message.setProto3StringField(this, 26, value);
+};
+
+
+/**
+ * optional string creative_thumb_url = 27;
+ * @return {string}
+ */
+proto.fb_agent.scanner.v1.ScannedAdRow.prototype.getCreativeThumbUrl = function() {
+  return /** @type {string} */ (jspb.Message.getFieldWithDefault(this, 27, ""));
+};
+
+
+/**
+ * @param {string} value
+ * @return {!proto.fb_agent.scanner.v1.ScannedAdRow} returns this
+ */
+proto.fb_agent.scanner.v1.ScannedAdRow.prototype.setCreativeThumbUrl = function(value) {
+  return jspb.Message.setProto3StringField(this, 27, value);
+};
+
+
+/**
+ * optional string creative_image_url = 28;
+ * @return {string}
+ */
+proto.fb_agent.scanner.v1.ScannedAdRow.prototype.getCreativeImageUrl = function() {
+  return /** @type {string} */ (jspb.Message.getFieldWithDefault(this, 28, ""));
+};
+
+
+/**
+ * @param {string} value
+ * @return {!proto.fb_agent.scanner.v1.ScannedAdRow} returns this
+ */
+proto.fb_agent.scanner.v1.ScannedAdRow.prototype.setCreativeImageUrl = function(value) {
+  return jspb.Message.setProto3StringField(this, 28, value);
+};
+
+
+/**
+ * optional string adset_pixel_id = 29;
+ * @return {string}
+ */
+proto.fb_agent.scanner.v1.ScannedAdRow.prototype.getAdsetPixelId = function() {
+  return /** @type {string} */ (jspb.Message.getFieldWithDefault(this, 29, ""));
+};
+
+
+/**
+ * @param {string} value
+ * @return {!proto.fb_agent.scanner.v1.ScannedAdRow} returns this
+ */
+proto.fb_agent.scanner.v1.ScannedAdRow.prototype.setAdsetPixelId = function(value) {
+  return jspb.Message.setProto3StringField(this, 29, value);
+};
+
+
+/**
+ * optional string adset_daily_budget = 30;
+ * @return {string}
+ */
+proto.fb_agent.scanner.v1.ScannedAdRow.prototype.getAdsetDailyBudget = function() {
+  return /** @type {string} */ (jspb.Message.getFieldWithDefault(this, 30, ""));
+};
+
+
+/**
+ * @param {string} value
+ * @return {!proto.fb_agent.scanner.v1.ScannedAdRow} returns this
+ */
+proto.fb_agent.scanner.v1.ScannedAdRow.prototype.setAdsetDailyBudget = function(value) {
+  return jspb.Message.setProto3StringField(this, 30, value);
+};
+
+
+/**
+ * optional string adset_lifetime_budget = 31;
+ * @return {string}
+ */
+proto.fb_agent.scanner.v1.ScannedAdRow.prototype.getAdsetLifetimeBudget = function() {
+  return /** @type {string} */ (jspb.Message.getFieldWithDefault(this, 31, ""));
+};
+
+
+/**
+ * @param {string} value
+ * @return {!proto.fb_agent.scanner.v1.ScannedAdRow} returns this
+ */
+proto.fb_agent.scanner.v1.ScannedAdRow.prototype.setAdsetLifetimeBudget = function(value) {
+  return jspb.Message.setProto3StringField(this, 31, value);
+};
+
+
+/**
+ * optional string adset_budget_remaining = 32;
+ * @return {string}
+ */
+proto.fb_agent.scanner.v1.ScannedAdRow.prototype.getAdsetBudgetRemaining = function() {
+  return /** @type {string} */ (jspb.Message.getFieldWithDefault(this, 32, ""));
+};
+
+
+/**
+ * @param {string} value
+ * @return {!proto.fb_agent.scanner.v1.ScannedAdRow} returns this
+ */
+proto.fb_agent.scanner.v1.ScannedAdRow.prototype.setAdsetBudgetRemaining = function(value) {
+  return jspb.Message.setProto3StringField(this, 32, value);
+};
+
+
+/**
+ * optional string adset_learning_stage = 33;
+ * @return {string}
+ */
+proto.fb_agent.scanner.v1.ScannedAdRow.prototype.getAdsetLearningStage = function() {
+  return /** @type {string} */ (jspb.Message.getFieldWithDefault(this, 33, ""));
+};
+
+
+/**
+ * @param {string} value
+ * @return {!proto.fb_agent.scanner.v1.ScannedAdRow} returns this
+ */
+proto.fb_agent.scanner.v1.ScannedAdRow.prototype.setAdsetLearningStage = function(value) {
+  return jspb.Message.setProto3StringField(this, 33, value);
 };
 
 

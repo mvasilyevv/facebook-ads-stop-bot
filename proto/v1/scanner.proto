@@ -153,6 +153,13 @@ message ScannedAdRow {
   int32 deposits = 24;
   string resolved_offer_code = 25;
   string campaign_id = 26;
+  string creative_thumb_url = 27;       // превью крео (thumbnail_url; любой тип крео)
+  string creative_image_url = 28;       // полноразмер (image_url; только image-крео, пусто для видео)
+  string adset_pixel_id = 29;           // promoted_object.pixel_id адсета
+  string adset_daily_budget = 30;       // daily_budget адсета (minor units, как отдаёт Meta)
+  string adset_lifetime_budget = 31;    // lifetime_budget адсета
+  string adset_budget_remaining = 32;   // budget_remaining адсета
+  string adset_learning_stage = 33;     // learning_stage_info.status (LEARNING/LEARNING_LIMITED/"")
 }
 
 // --- HardReloadPage ---

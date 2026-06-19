@@ -249,6 +249,13 @@ class ScannedAdRow(_message.Message):
         "deposits",
         "resolved_offer_code",
         "campaign_id",
+        "creative_thumb_url",
+        "creative_image_url",
+        "adset_pixel_id",
+        "adset_daily_budget",
+        "adset_lifetime_budget",
+        "adset_budget_remaining",
+        "adset_learning_stage",
     )
     FB_AD_ID_FIELD_NUMBER: _ClassVar[int]
     CAMPAIGN_NAME_FIELD_NUMBER: _ClassVar[int]
@@ -276,6 +283,13 @@ class ScannedAdRow(_message.Message):
     DEPOSITS_FIELD_NUMBER: _ClassVar[int]
     RESOLVED_OFFER_CODE_FIELD_NUMBER: _ClassVar[int]
     CAMPAIGN_ID_FIELD_NUMBER: _ClassVar[int]
+    CREATIVE_THUMB_URL_FIELD_NUMBER: _ClassVar[int]
+    CREATIVE_IMAGE_URL_FIELD_NUMBER: _ClassVar[int]
+    ADSET_PIXEL_ID_FIELD_NUMBER: _ClassVar[int]
+    ADSET_DAILY_BUDGET_FIELD_NUMBER: _ClassVar[int]
+    ADSET_LIFETIME_BUDGET_FIELD_NUMBER: _ClassVar[int]
+    ADSET_BUDGET_REMAINING_FIELD_NUMBER: _ClassVar[int]
+    ADSET_LEARNING_STAGE_FIELD_NUMBER: _ClassVar[int]
     fb_ad_id: str
     campaign_name: str
     adset_name: str
@@ -302,6 +316,13 @@ class ScannedAdRow(_message.Message):
     deposits: int
     resolved_offer_code: str
     campaign_id: str
+    creative_thumb_url: str
+    creative_image_url: str
+    adset_pixel_id: str
+    adset_daily_budget: str
+    adset_lifetime_budget: str
+    adset_budget_remaining: str
+    adset_learning_stage: str
     def __init__(
         self,
         fb_ad_id: _Optional[str] = ...,
@@ -330,6 +351,13 @@ class ScannedAdRow(_message.Message):
         deposits: _Optional[int] = ...,
         resolved_offer_code: _Optional[str] = ...,
         campaign_id: _Optional[str] = ...,
+        creative_thumb_url: _Optional[str] = ...,
+        creative_image_url: _Optional[str] = ...,
+        adset_pixel_id: _Optional[str] = ...,
+        adset_daily_budget: _Optional[str] = ...,
+        adset_lifetime_budget: _Optional[str] = ...,
+        adset_budget_remaining: _Optional[str] = ...,
+        adset_learning_stage: _Optional[str] = ...,
     ) -> None: ...
 
 class HardReloadPageRequest(_message.Message):

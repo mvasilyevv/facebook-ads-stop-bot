@@ -292,6 +292,68 @@ test('parseLightList: id-only и расширенный', () => {
   assert.deepEqual(parseLightList({ data: 'x' }), []);
 });
 
+// parseLightList: новые поля крео/пиксель/budget_remaining/learning читаются у ад'ов и адсетов.
+test('parseLightList: creative thumbnail/image, promoted_object.pixel_id, budget_remaining, learning_stage_info', () => {
+  // Сценарий: ответ ads-edge с creative и адсетами с полным набором новых полей.
+  const adWithCreative = parseLightList({
+    data: [
+      {
+        id: 'AD1',
+        name: 'Ad One',
+        effective_status: 'ACTIVE',
+        creative: {
+          id: 'CR1',
+          thumbnail_url: 'https://cdn.fb.com/thumb_160x120.jpg',
+          image_url: 'https://cdn.fb.com/full.jpg',
+        },
+      },
+    ],
+  });
+  assert.equal(adWithCreative[0].creativeThumbUrl, 'https://cdn.fb.com/thumb_160x120.jpg');
+  assert.equal(adWithCreative[0].creativeImageUrl, 'https://cdn.fb.com/full.jpg');
+  assert.equal(adWithCreative[0].pixelId, undefined); // не задан на ad-edge
+
+  // Сценарий: видео-крео — image_url отсутствует (возвращается undefined).
+  const adVideoCreative = parseLightList({
+    data: [{ id: 'AD2', creative: { id: 'CR2', thumbnail_url: 'https://cdn.fb.com/video_thumb.jpg' } }],
+  });
+  assert.equal(adVideoCreative[0].creativeThumbUrl, 'https://cdn.fb.com/video_thumb.jpg');
+  assert.equal(adVideoCreative[0].creativeImageUrl, undefined);
+
+  // Сценарий: ответ adsets-edge с promoted_object.pixel_id, budget_remaining и learning_stage_info.
+  const adsetFull = parseLightList({
+    data: [
+      {
+        id: 'AS1',
+        name: 'Adset One',
+        daily_budget: '100000',
+        lifetime_budget: '0',
+        budget_remaining: '57300',
+        promoted_object: { pixel_id: '987654321' },
+        learning_stage_info: { status: 'LEARNING' },
+      },
+    ],
+  });
+  assert.equal(adsetFull[0].pixelId, '987654321');
+  assert.equal(adsetFull[0].budgetRemaining, '57300');
+  assert.equal(adsetFull[0].learningStage, 'LEARNING');
+  assert.equal(adsetFull[0].dailyBudget, '100000');
+  assert.equal(adsetFull[0].creativeThumbUrl, undefined); // нет у адсета
+
+  // Сценарий: learning_stage_info с LEARNING_LIMITED.
+  const adsetLimited = parseLightList({
+    data: [{ id: 'AS2', learning_stage_info: { status: 'LEARNING_LIMITED' } }],
+  });
+  assert.equal(adsetLimited[0].learningStage, 'LEARNING_LIMITED');
+
+  // Сценарий: поля отсутствуют — не паникуем, возвращаем undefined.
+  const adsetNoExtra = parseLightList({ data: [{ id: 'AS3', name: 'Plain' }] });
+  assert.equal(adsetNoExtra[0].pixelId, undefined);
+  assert.equal(adsetNoExtra[0].budgetRemaining, undefined);
+  assert.equal(adsetNoExtra[0].learningStage, undefined);
+  assert.equal(adsetNoExtra[0].creativeThumbUrl, undefined);
+});
+
 // lightNextCursor: курсор пагинации из paging.cursors.after.
 test('lightNextCursor: курсор after', () => {
   assert.equal(lightNextCursor({ paging: { cursors: { after: 'CUR123' } } }), 'CUR123');

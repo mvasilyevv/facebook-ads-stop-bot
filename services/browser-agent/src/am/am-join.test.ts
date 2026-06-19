@@ -153,6 +153,67 @@ describe('mapEffectiveStatus (H-8)', () => {
   });
 });
 
+describe('7 новых полей ScannedAdRow (крео + адсет)', () => {
+  it('все 7 полей заполняются из AmAdMeta', () => {
+    // Сценарий: все новые поля присутствуют — прокидываются в ScannedAdRow без изменений.
+    const row = buildScannedRow(
+      amRow({ adId: 'AD99' }),
+      {
+        adName: 'Test Ad',
+        creativeThumbUrl: 'https://cdn.fb.com/thumb.jpg',
+        creativeImageUrl: 'https://cdn.fb.com/full.jpg',
+        pixelId: '123456789',
+        dailyBudget: '200000',
+        lifetimeBudget: '0',
+        budgetRemaining: '150000',
+        learningStage: 'LEARNING',
+      },
+    );
+    assert.equal(row.creative_thumb_url, 'https://cdn.fb.com/thumb.jpg');
+    assert.equal(row.creative_image_url, 'https://cdn.fb.com/full.jpg');
+    assert.equal(row.adset_pixel_id, '123456789');
+    assert.equal(row.adset_daily_budget, '200000');
+    assert.equal(row.adset_lifetime_budget, '0');
+    assert.equal(row.adset_budget_remaining, '150000');
+    assert.equal(row.adset_learning_stage, 'LEARNING');
+  });
+
+  it('видео-крео: creative_image_url пустой (только thumbnail)', () => {
+    // Сценарий: video-крео не имеет image_url → поле должно быть пустой строкой.
+    const row = buildScannedRow(
+      amRow({ adId: 'AD_VIDEO' }),
+      { creativeThumbUrl: 'https://cdn.fb.com/video_thumb.jpg' },
+    );
+    assert.equal(row.creative_thumb_url, 'https://cdn.fb.com/video_thumb.jpg');
+    assert.equal(row.creative_image_url, ''); // image_url не задан → дефолт ''
+  });
+
+  it('все 7 полей = пустые строки при отсутствии meta', () => {
+    // Сценарий: meta пустой (archived объявление, нет данных адсета) — нет паники, все '' .
+    const row = buildScannedRow(amRow({ adId: 'AD_ARCHIVED' }), {});
+    assert.equal(row.creative_thumb_url, '');
+    assert.equal(row.creative_image_url, '');
+    assert.equal(row.adset_pixel_id, '');
+    assert.equal(row.adset_daily_budget, '');
+    assert.equal(row.adset_lifetime_budget, '');
+    assert.equal(row.adset_budget_remaining, '');
+    assert.equal(row.adset_learning_stage, '');
+  });
+
+  it('LEARNING_LIMITED прокидывается как есть', () => {
+    // Сценарий: адсет в стадии LEARNING_LIMITED — строка передаётся без изменений.
+    const row = buildScannedRow(amRow(), { learningStage: 'LEARNING_LIMITED' });
+    assert.equal(row.adset_learning_stage, 'LEARNING_LIMITED');
+  });
+
+  it('lifetime_budget адсета 0 → "0", не пустая строка', () => {
+    // Сценарий: lifetimeBudget="0" (явный ноль от Meta) должен сохраняться как "0", не дефолт ''.
+    const row = buildScannedRow(amRow(), { lifetimeBudget: '0', dailyBudget: '100000' });
+    assert.equal(row.adset_lifetime_budget, '0');
+    assert.equal(row.adset_daily_budget, '100000');
+  });
+});
+
 describe('buildScannedRows (H-8)', () => {
   it('итерирует merged-карту + резолвит meta по adId', () => {
     const merged = new Map<string, AmRow>([

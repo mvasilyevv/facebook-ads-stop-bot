@@ -29,7 +29,7 @@ function amMoney(v: string | null | undefined): string {
   return amNum(v) ?? '0';
 }
 
-// Метаданные объявления, собранные из light_* (имена/статус/бюджет).
+// Метаданные объявления, собранные из light_* (имена/статус/бюджет/крео/адсет).
 export interface AmAdMeta {
   adName?: string;
   adsetName?: string;
@@ -37,6 +37,13 @@ export interface AmAdMeta {
   campaignId?: string;
   effectiveStatus?: string;
   budget?: string;
+  creativeThumbUrl?: string;
+  creativeImageUrl?: string;
+  pixelId?: string;
+  dailyBudget?: string;
+  lifetimeBudget?: string;
+  budgetRemaining?: string;
+  learningStage?: string;
 }
 
 // effective_status (light_*) -> те же коды, что detectDeliveryStatus в DOM-пути.
@@ -118,6 +125,13 @@ export function buildScannedRow(am: AmRow, meta: AmAdMeta = {}): ScannedAdRow {
     // отдельный источник AdSet.pro (external_deposits в pipeline), здесь не трогаем.
     deposits: amInt(am.results),
     resolved_offer_code: null,
+    creative_thumb_url: meta.creativeThumbUrl ?? '',
+    creative_image_url: meta.creativeImageUrl ?? '',
+    adset_pixel_id: meta.pixelId ?? '',
+    adset_daily_budget: meta.dailyBudget ?? '',
+    adset_lifetime_budget: meta.lifetimeBudget ?? '',
+    adset_budget_remaining: meta.budgetRemaining ?? '',
+    adset_learning_stage: meta.learningStage ?? '',
   };
 }
 

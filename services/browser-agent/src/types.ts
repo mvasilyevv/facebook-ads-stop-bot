@@ -72,4 +72,11 @@ export interface ScannedAdRow {
   cost_per_registration: string | null;
   deposits: number;
   resolved_offer_code: string | null;
+  creative_thumb_url: string;
+  creative_image_url: string;
+  adset_pixel_id: string;
+  adset_daily_budget: string;
+  adset_lifetime_budget: string;
+  adset_budget_remaining: string;
+  adset_learning_stage: string;
 }

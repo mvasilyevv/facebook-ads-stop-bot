@@ -43,6 +43,11 @@ export interface LightMeta {
   adsetId?: string;
   dailyBudget?: string;
   lifetimeBudget?: string;
+  creativeThumbUrl?: string;
+  creativeImageUrl?: string;
+  pixelId?: string;
+  budgetRemaining?: string;
+  learningStage?: string;
 }
 
 const NULLISH = new Set(['na', 'null', '', '--', '-', '—']);
@@ -191,6 +196,11 @@ export function parseLightList(body: unknown): LightMeta[] {
     if (d.adset_id !== undefined) meta.adsetId = String(d.adset_id);
     if (d.daily_budget !== undefined) meta.dailyBudget = String(d.daily_budget);
     if (d.lifetime_budget !== undefined) meta.lifetimeBudget = String(d.lifetime_budget);
+    if (d.creative?.thumbnail_url !== undefined) meta.creativeThumbUrl = String(d.creative.thumbnail_url);
+    if (d.creative?.image_url !== undefined) meta.creativeImageUrl = String(d.creative.image_url);
+    if (d.promoted_object?.pixel_id !== undefined) meta.pixelId = String(d.promoted_object.pixel_id);
+    if (d.budget_remaining !== undefined) meta.budgetRemaining = String(d.budget_remaining);
+    if (d.learning_stage_info?.status !== undefined) meta.learningStage = String(d.learning_stage_info.status);
     out.push(meta);
   }
   return out;

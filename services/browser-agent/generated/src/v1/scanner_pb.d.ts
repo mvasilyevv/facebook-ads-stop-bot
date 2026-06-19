@@ -414,6 +414,20 @@ export class ScannedAdRow extends jspb.Message {
     setResolvedOfferCode(value: string): ScannedAdRow;
     getCampaignId(): string;
     setCampaignId(value: string): ScannedAdRow;
+    getCreativeThumbUrl(): string;
+    setCreativeThumbUrl(value: string): ScannedAdRow;
+    getCreativeImageUrl(): string;
+    setCreativeImageUrl(value: string): ScannedAdRow;
+    getAdsetPixelId(): string;
+    setAdsetPixelId(value: string): ScannedAdRow;
+    getAdsetDailyBudget(): string;
+    setAdsetDailyBudget(value: string): ScannedAdRow;
+    getAdsetLifetimeBudget(): string;
+    setAdsetLifetimeBudget(value: string): ScannedAdRow;
+    getAdsetBudgetRemaining(): string;
+    setAdsetBudgetRemaining(value: string): ScannedAdRow;
+    getAdsetLearningStage(): string;
+    setAdsetLearningStage(value: string): ScannedAdRow;
 
     serializeBinary(): Uint8Array;
     toObject(includeInstance?: boolean): ScannedAdRow.AsObject;
@@ -453,6 +467,13 @@ export namespace ScannedAdRow {
         deposits: number,
         resolvedOfferCode: string,
         campaignId: string,
+        creativeThumbUrl: string,
+        creativeImageUrl: string,
+        adsetPixelId: string,
+        adsetDailyBudget: string,
+        adsetLifetimeBudget: string,
+        adsetBudgetRemaining: string,
+        adsetLearningStage: string,
     }
 }
 
