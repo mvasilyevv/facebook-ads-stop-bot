@@ -99,3 +99,76 @@ async def test_load_offset_map_mixed() -> None:
 async def test_load_offset_corrupt_value() -> None:
     redis = _FakeRedis({"account_tz:x": "не-число"})
     assert await load_offset(redis, "x") == DEFAULT_OFFSET_HOURS
+
+
+# --- maybe_refresh_account_tz: throttle с успехо-зависимым интервалом (фикс ревью) ---
+
+
+class _FakeRedisRW:
+    """Фейк Redis с set(ex, nx) + get для проверки throttle-логики."""
+
+    def __init__(self) -> None:
+        self.store: dict = {}
+
+    async def set(self, key, value, *, ex=None, nx=False):
+        if nx and key in self.store:
+            return None
+        self.store[key] = (value, ex)
+        return True
+
+    async def get(self, key):
+        x = self.store.get(key)
+        return x[0] if x else None
+
+
+# Успешный refresh (>0) → throttle продлевается на полный интервал.
+@pytest.mark.asyncio
+async def test_maybe_refresh_success_extends(monkeypatch) -> None:
+    import core.meta_api.account_tz as m
+
+    async def fake_refresh(_e, _r, _c):
+        return 1
+
+    monkeypatch.setattr(m, "refresh_account_tz_cache", fake_refresh)
+    redis = _FakeRedisRW()
+    ok = await m.maybe_refresh_account_tz(
+        None, redis, None, min_interval_seconds=6000, retry_interval_seconds=60
+    )
+    assert ok is True
+    assert redis.store[m._REFRESH_THROTTLE_KEY][1] == 6000
+
+
+# Провал refresh (0 обновлено) → остаётся КОРОТКИЙ lock (повтор скоро, не виснет на 6ч).
+@pytest.mark.asyncio
+async def test_maybe_refresh_failure_keeps_short(monkeypatch) -> None:
+    import core.meta_api.account_tz as m
+
+    async def fake_refresh(_e, _r, _c):
+        return 0
+
+    monkeypatch.setattr(m, "refresh_account_tz_cache", fake_refresh)
+    redis = _FakeRedisRW()
+    ok = await m.maybe_refresh_account_tz(
+        None, redis, None, min_interval_seconds=6000, retry_interval_seconds=60
+    )
+    assert ok is False
+    assert redis.store[m._REFRESH_THROTTLE_KEY][1] == 60
+
+
+# Пока throttle-ключ жив — refresh не зовётся повторно.
+@pytest.mark.asyncio
+async def test_maybe_refresh_throttled(monkeypatch) -> None:
+    import core.meta_api.account_tz as m
+
+    calls = []
+
+    async def fake_refresh(_e, _r, _c):
+        calls.append(1)
+        return 1
+
+    monkeypatch.setattr(m, "refresh_account_tz_cache", fake_refresh)
+    redis = _FakeRedisRW()
+    await m.maybe_refresh_account_tz(None, redis, None)
+    second = await m.maybe_refresh_account_tz(None, redis, None)
+    assert second is False
+    assert len(calls) == 1

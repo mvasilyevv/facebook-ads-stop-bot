@@ -86,13 +86,18 @@ async def load_offset_map(
 
 
 async def active_account_ids(engine: AsyncEngine) -> list[str]:
-    """DISTINCT активные кабинеты из каталога кампаний."""
+    """DISTINCT активные кабинеты из каталога кампаний.
+
+    ORDER BY — детерминированный порядок: «первый» кабинет для chart-data
+    (_dominant_cabinet_day_start) должен быть стабилен между запросами.
+    """
     async with engine.connect() as conn:
         rows = (
             await conn.execute(
                 text(
                     "SELECT DISTINCT ad_account_id FROM fb_campaigns "
-                    "WHERE ad_account_id IS NOT NULL AND is_active = true"
+                    "WHERE ad_account_id IS NOT NULL AND is_active = true "
+                    "ORDER BY ad_account_id"
                 )
             )
         ).fetchall()
@@ -126,16 +131,31 @@ async def maybe_refresh_account_tz(
     client: Any,
     *,
     min_interval_seconds: int = 21600,
+    retry_interval_seconds: int = 300,
 ) -> bool:
-    """Троттлинг-обёртка: реально фетчит не чаще раза в min_interval_seconds (Redis SET NX).
+    """Троттлинг-обёртка с УСПЕХО-зависимым интервалом.
 
-    Возвращает True если в этот раз обновляли. Безопасно звать на каждой итерации воркера.
+    Берём короткий lock (retry_interval, SET NX — не дублируем fetch параллельными
+    воркерами). Если refresh реально обновил ≥1 кабинет — продлеваем throttle на полный
+    min_interval. Если refresh ничего не дал (gRPC/Vision недоступны на старте) — короткий
+    lock истечёт через retry_interval и попытка повторится. БЕЗ этого баг: длинный lock
+    ставился ДО refresh → при первом же сбое кэш зависал холодным на 6ч (дашборд на UTC).
+
+    Возвращает True если в этот раз успешно обновили хотя бы один кабинет.
     """
     try:
-        acquired = await redis.set(_REFRESH_THROTTLE_KEY, "1", ex=min_interval_seconds, nx=True)
+        acquired = await redis.set(_REFRESH_THROTTLE_KEY, "1", ex=retry_interval_seconds, nx=True)
     except Exception:  # noqa: BLE001 — Redis недоступен → пропускаем тихо
         return False
     if not acquired:
         return False
-    await refresh_account_tz_cache(engine, redis, client)
-    return True
+    updated = await refresh_account_tz_cache(engine, redis, client)
+    if updated > 0:
+        # Успех → не дёргаем Meta лишний раз, продлеваем throttle на полный интервал.
+        try:
+            await redis.set(_REFRESH_THROTTLE_KEY, "1", ex=min_interval_seconds)
+        except Exception:  # noqa: BLE001
+            pass
+        return True
+    # Ничего не обновили → оставляем короткий lock, повтор через retry_interval_seconds.
+    return False
