@@ -173,4 +173,30 @@ describe("AdsTable", () => {
     render(<AdsTable {...baseProps} rows={[ad]} />);
     expect(screen.queryByRole("link")).not.toBeInTheDocument();
   });
+
+  // Превью крео: если creative_thumb_url задан — рендерится img (data-testid=creative-thumb) с этим src.
+  it("рендерит img с creative_thumb_url при наличии", () => {
+    const thumbUrl = "https://example.com/thumb.jpg";
+    const ad = makeAd("1", { creative_thumb_url: thumbUrl } as Partial<AdSnapshot>);
+    render(<AdsTable {...baseProps} rows={[ad]} />);
+    // img имеет alt="" → role=presentation, ищем по data-testid.
+    const img = screen.getByTestId("creative-thumb");
+    expect(img).toBeInTheDocument();
+    expect(img).toHaveAttribute("src", thumbUrl);
+  });
+
+  // Превью крео: если creative_thumb_url не задан — рендерится geo-плейсхолдер (GeoThumb), img отсутствует.
+  it("рендерит geo-плейсхолдер (GeoThumb) когда creative_thumb_url равен null", () => {
+    const ad = makeAd("1", { creative_thumb_url: null } as Partial<AdSnapshot>);
+    render(<AdsTable {...baseProps} rows={[ad]} />);
+    // GeoThumb рендерит span с гео-меткой — img.creative-thumb отсутствует.
+    expect(screen.queryByTestId("creative-thumb")).not.toBeInTheDocument();
+  });
+
+  // Превью крео: если creative_thumb_url не задан вовсе — geo-плейсхолдер тоже.
+  it("рендерит geo-плейсхолдер когда creative_thumb_url отсутствует (undefined)", () => {
+    const ad = makeAd("1");
+    render(<AdsTable {...baseProps} rows={[ad]} />);
+    expect(screen.queryByTestId("creative-thumb")).not.toBeInTheDocument();
+  });
 });

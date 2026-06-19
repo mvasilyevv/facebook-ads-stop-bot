@@ -1953,6 +1953,20 @@ export interface components {
             /** Warning Rule Codes */
             warning_rule_codes?: string[];
             metrics?: components["schemas"]["MetricsBlock"] | null;
+            /** Маленькое превью крео (thumb_url из Meta). Есть у любого крео: картинка/видео. */
+            creative_thumb_url?: string | null;
+            /** Полноразмерная картинка (только image-крео; для видео пусто — fallback на thumb). */
+            creative_image_url?: string | null;
+            /** ID пикселя адсета. */
+            adset_pixel_id?: string | null;
+            /** Дневной бюджет адсета (minor units, т.е. центы). Делить на 100 для отображения. */
+            adset_daily_budget?: string | null;
+            /** Lifetime-бюджет адсета (minor units). */
+            adset_lifetime_budget?: string | null;
+            /** Остаток бюджета адсета (minor units). */
+            adset_budget_remaining?: string | null;
+            /** Фаза обучения адсета: "" | "LEARNING" | "LEARNING_LIMITED". */
+            learning_stage?: string | null;
         };
         /**
          * AdTimelineResponse

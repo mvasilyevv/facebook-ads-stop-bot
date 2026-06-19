@@ -16,7 +16,7 @@
  * ROAS/значения, которых нет в API → «—» (без фейка).
  */
 
-import { useRef, type RefObject } from "react";
+import { useRef, useState, type RefObject } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Check } from "lucide-react";
 
@@ -240,7 +240,11 @@ function AdRow({ ad, selected, cursor, top, height, onToggleSelect, onOpen }: Ad
 
       {/* AD: thumb + (name + первый rule-pill) / родитель (кампания · адсет) */}
       <div className="flex items-center gap-2 min-w-0 pl-1">
-        <GeoThumb geo={geo} dimmed={state === "disabled"} />
+        <CreativeThumb
+          thumbUrl={(ad as AdSnapshot & { creative_thumb_url?: string | null }).creative_thumb_url ?? null}
+          geo={geo}
+          dimmed={state === "disabled"}
+        />
         <div className="min-w-0 flex flex-col">
           <div className="flex items-center gap-2 min-w-0">
             <span
@@ -337,6 +341,47 @@ function GeoThumb({ geo, dimmed }: { geo: string; dimmed?: boolean }) {
       )}
     >
       <span className="font-display text-[8px] text-bg-8 tracking-[0.02em]">{geo}</span>
+    </div>
+  );
+}
+
+// ─── Превью крео (картинка или geo-fallback) ─────────────────────────────────
+
+/**
+ * Показывает превью крео из creative_thumb_url (40×24 px, object-cover).
+ * При отсутствии URL или ошибке загрузки — fallback на GeoThumb.
+ */
+function CreativeThumb({
+  thumbUrl,
+  geo,
+  dimmed,
+}: {
+  thumbUrl: string | null;
+  geo: string;
+  dimmed?: boolean;
+}) {
+  const [imgError, setImgError] = useState(false);
+
+  if (!thumbUrl || imgError) {
+    return <GeoThumb geo={geo} dimmed={dimmed} />;
+  }
+
+  return (
+    <div
+      aria-hidden="true"
+      className={cn(
+        "w-10 h-6 shrink-0 border border-[var(--hairline)] rounded-[var(--radius-1)] overflow-hidden",
+        dimmed && "opacity-40",
+      )}
+    >
+      <img
+        src={thumbUrl}
+        alt=""
+        loading="lazy"
+        data-testid="creative-thumb"
+        className="w-full h-full object-cover"
+        onError={() => setImgError(true)}
+      />
     </div>
   );
 }
