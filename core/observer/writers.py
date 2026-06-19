@@ -519,6 +519,15 @@ async def maybe_create_disable_task(
     )
 
 
+# Авто-стоп — money-критичный: при длинном outage graph.facebook.com (Vision-канал
+# периодически «Failed to fetch») дефолтных 5 попыток (~7.5 мин по backoff
+# 30/60/120/240/300s-cap) не хватает — money-стоп умирает, а объявление крутит
+# убыток. Поднимаем покрытие до ~6ч: 4 ранних попытки (450с) + 68×300с ≈ 20850с.
+# pause_ad идемпотентен и обратим — лишние ретраи безвредны; STOP-алерт с кнопкой
+# «Отключить» в TG остаётся ручным фолбэком, если API так и не поднимется.
+_AUTO_STOP_MAX_ATTEMPTS = 72
+
+
 async def _create_pause_mutation(
     engine: AsyncEngine,
     *,
@@ -531,6 +540,9 @@ async def _create_pause_mutation(
     target_id = fb_ad_id (числовой Graph ID). idempotency_key привязан к token
     инцидента. status='pending' (исполняется meta_api_worker'ом сразу, без
     draft-подтверждения — это автоматический стоп бота).
+
+    max_attempts повышен (_AUTO_STOP_MAX_ATTEMPTS) против дефолтных 5 — чтобы
+    money-стоп пережил длинный сетевой outage graph.facebook.com.
     """
     from core.meta_api.queue import create_mutation_task
     from core.meta_api.schemas import MetaMutationPayload
@@ -548,6 +560,7 @@ async def _create_pause_mutation(
         requested_by="bot_auto_stop",
         status="pending",
         idempotency_key=key,
+        max_attempts=_AUTO_STOP_MAX_ATTEMPTS,
     )
 
 

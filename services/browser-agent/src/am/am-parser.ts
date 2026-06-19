@@ -45,6 +45,7 @@ export interface LightMeta {
   lifetimeBudget?: string;
   creativeThumbUrl?: string;
   creativeImageUrl?: string;
+  videoId?: string; // для видео-крео — нода видео, откуда тянем полноразмерный постер
   pixelId?: string;
   budgetRemaining?: string;
   learningStage?: string;
@@ -197,7 +198,21 @@ export function parseLightList(body: unknown): LightMeta[] {
     if (d.daily_budget !== undefined) meta.dailyBudget = String(d.daily_budget);
     if (d.lifetime_budget !== undefined) meta.lifetimeBudget = String(d.lifetime_budget);
     if (d.creative?.thumbnail_url !== undefined) meta.creativeThumbUrl = String(d.creative.thumbnail_url);
-    if (d.creative?.image_url !== undefined) meta.creativeImageUrl = String(d.creative.image_url);
+    // image_url приоритетно; для видео-крео top-level image_url часто пуст →
+    // берём полноразмерный кадр из object_story_spec.video_data.image_url (постер видео).
+    const topImage = d.creative?.image_url;
+    const videoFrame = d.creative?.object_story_spec?.video_data?.image_url;
+    const image =
+      topImage !== undefined && topImage !== null && String(topImage) !== '' ? topImage : videoFrame;
+    if (image !== undefined && image !== null && String(image) !== '') {
+      meta.creativeImageUrl = String(image);
+    }
+    // video_id (top-level creative или внутри object_story_spec.video_data) — нужен,
+    // чтобы для видео-крео без image_url дотянуть полноразмерный кадр из video node.
+    const videoId = d.creative?.video_id ?? d.creative?.object_story_spec?.video_data?.video_id;
+    if (videoId !== undefined && videoId !== null && String(videoId) !== '') {
+      meta.videoId = String(videoId);
+    }
     if (d.promoted_object?.pixel_id !== undefined) meta.pixelId = String(d.promoted_object.pixel_id);
     if (d.budget_remaining !== undefined) meta.budgetRemaining = String(d.budget_remaining);
     if (d.learning_stage_info?.status !== undefined) meta.learningStage = String(d.learning_stage_info.status);

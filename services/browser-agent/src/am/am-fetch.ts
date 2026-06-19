@@ -255,6 +255,72 @@ async function fetchAllEdge(
   return { items: out };
 }
 
+// Лучший постер из video.thumbnails: предпочитаем is_preferred, иначе самый широкий кадр.
+// Чистая функция (экспорт для unit-теста) — вход = массив node.thumbnails.data.
+export function pickPreferredThumb(data: unknown): string | null {
+  if (!Array.isArray(data) || data.length === 0) return null;
+  const items = data as Array<Record<string, unknown>>;
+  const preferred = items.find((t) => t?.is_preferred && t?.uri);
+  if (preferred?.uri) return String(preferred.uri);
+  let best: Record<string, unknown> | null = null;
+  for (const t of items) {
+    if (!t?.uri) continue;
+    if (!best || Number(t.width ?? 0) > Number(best.width ?? 0)) best = t;
+  }
+  return best?.uri ? String(best.uri) : null;
+}
+
+// Полноразмерные постеры видео по video_id: batch GET /?ids=...&fields=thumbnails.
+// Best-effort: ошибки чанка проглатываем (оставляем thumbnail_url как было).
+async function fetchVideoPosters(
+  page: Page,
+  ctx: GraphContext,
+  videoIds: string[],
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const CHUNK = 50; // держим URL короче лимита
+  for (let i = 0; i < videoIds.length; i += CHUNK) {
+    const ids = videoIds.slice(i, i + CHUNK);
+    const qs = new URLSearchParams();
+    qs.set('access_token', ctx.accessToken);
+    qs.set('ids', ids.join(','));
+    qs.set('fields', 'thumbnails{uri,is_preferred,width,height}');
+    const url = `${GRAPH_REST_ORIGIN}/${ctx.apiVersion}/?${qs.toString()}`;
+    const body = await fetchJson(page, url);
+    if (body?.__amError || body?.error) continue; // best-effort: чанк пропускаем
+    for (const [vid, node] of Object.entries(body as Record<string, any>)) {
+      if (vid.startsWith('__')) continue; // служебные ключи (__fb_trace_id__ и т.п.)
+      const uri = pickPreferredThumb(node?.thumbnails?.data);
+      if (uri) out.set(vid, uri);
+    }
+  }
+  return out;
+}
+
+// Для видео-ад без image_url дотягиваем полноразмерный кадр из video node (in-place).
+// Возвращает число обогащённых ад'ов. Никогда не бросает — превью не money-критично.
+async function enrichVideoPosters(page: Page, ctx: GraphContext, items: LightMeta[]): Promise<number> {
+  const need = items.filter((a) => !a.creativeImageUrl && a.videoId);
+  if (!need.length) return 0;
+  const videoIds = [...new Set(need.map((a) => a.videoId as string))];
+  let posters: Map<string, string>;
+  try {
+    posters = await fetchVideoPosters(page, ctx, videoIds);
+  } catch (e) {
+    console.warn(`[am] video poster fetch упал (best-effort, оставляю thumbnail): ${String(e)}`);
+    return 0;
+  }
+  let n = 0;
+  for (const a of need) {
+    const uri = a.videoId ? posters.get(a.videoId) : undefined;
+    if (uri) {
+      a.creativeImageUrl = uri;
+      n += 1;
+    }
+  }
+  return n;
+}
+
 export interface AmScanResult {
   rows: ScannedAdRow[];
   diagnostics: {
@@ -353,8 +419,10 @@ export async function runAmScanWithContext(
       'campaign_id',
       'adset_id',
       // Канонная форма: модификатор thumbnail_width на edge creative невалиден
-      // (Graph молча опускал поле). Размер thumbnail_url — по умолчанию, для таблицы хватает.
-      'creative{id,thumbnail_url,image_url}',
+      // (Graph молча опускал поле). Размер thumbnail_url задаём top-level param ниже.
+      // object_story_spec.video_data.image_url — постер видео-крео, если был загружен
+      // (часто пуст: тогда полноразмерный кадр тянем из video node по video_id, ниже).
+      'creative{id,thumbnail_url,image_url,video_id,object_story_spec{video_data{image_url,video_id}}}',
     ],
     scopeFilter,
     // thumbnail_url по умолчанию ~64px → блюр в крупной карточке. 400px — чёткое
@@ -370,6 +438,11 @@ export async function runAmScanWithContext(
     scopeFilter,
   );
 
+  // Видео-ад без image_url: дотянуть полноразмерный постер из video node (best-effort,
+  // in-place правит adsRes.items[].creativeImageUrl). video_data.image_url у видео-крео
+  // обычно пуст — единственный полноразмерный кадр живёт в thumbnails видео-объекта.
+  const postersResolved = await enrichVideoPosters(page, ctx, adsRes.items);
+
   const campName = new Map(campRes.items.map((c) => [c.id, c.name ?? '']));
   // Полная карта адсетов с расширенными полями (пиксель/бюджеты/learning).
   const adsetMeta = new Map(adsetRes.items.map((a) => [a.id, a]));
@@ -377,11 +450,13 @@ export async function runAmScanWithContext(
   // Волна 1 диагностика: сколько новых полей реально пришло из Graph (после parseLightList).
   // Локализует разрыв: 0 здесь = Graph/парс, >0 здесь но NULL в БД = downstream (proto/writers).
   const wv1Creative = adsRes.items.filter((a) => a.creativeThumbUrl).length;
+  const wv1Image = adsRes.items.filter((a) => a.creativeImageUrl).length;
   const wv1Pixel = adsetRes.items.filter((a) => a.pixelId).length;
   const wv1Budget = adsetRes.items.filter((a) => a.dailyBudget || a.lifetimeBudget).length;
   const wv1Learning = adsetRes.items.filter((a) => a.learningStage).length;
   console.log(
     `[scan][am][wave1] creative=${wv1Creative}/${adsRes.items.length} ` +
+      `image=${wv1Image} (video_posters+${postersResolved}) ` +
       `pixel=${wv1Pixel} budget=${wv1Budget} learning=${wv1Learning}/${adsetRes.items.length}`,
   );
 

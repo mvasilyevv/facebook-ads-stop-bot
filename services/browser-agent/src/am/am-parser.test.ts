@@ -313,12 +313,56 @@ test('parseLightList: creative thumbnail/image, promoted_object.pixel_id, budget
   assert.equal(adWithCreative[0].creativeImageUrl, 'https://cdn.fb.com/full.jpg');
   assert.equal(adWithCreative[0].pixelId, undefined); // не задан на ad-edge
 
-  // Сценарий: видео-крео — image_url отсутствует (возвращается undefined).
+  // Сценарий: видео-крео без постера — image_url и object_story_spec отсутствуют → undefined.
   const adVideoCreative = parseLightList({
     data: [{ id: 'AD2', creative: { id: 'CR2', thumbnail_url: 'https://cdn.fb.com/video_thumb.jpg' } }],
   });
   assert.equal(adVideoCreative[0].creativeThumbUrl, 'https://cdn.fb.com/video_thumb.jpg');
   assert.equal(adVideoCreative[0].creativeImageUrl, undefined);
+
+  // Сценарий: видео-крео — top-level image_url пуст, полноразмерный кадр в
+  // object_story_spec.video_data.image_url → fallback на постер видео.
+  const adVideoPoster = parseLightList({
+    data: [
+      {
+        id: 'AD3',
+        creative: {
+          id: 'CR3',
+          image_url: '',
+          object_story_spec: { video_data: { image_url: 'https://cdn.fb.com/poster.jpg' } },
+        },
+      },
+    ],
+  });
+  assert.equal(adVideoPoster[0].creativeImageUrl, 'https://cdn.fb.com/poster.jpg');
+
+  // Сценарий: top-level image_url задан И есть постер видео → top-level в приоритете.
+  const adImagePriority = parseLightList({
+    data: [
+      {
+        id: 'AD4',
+        creative: {
+          id: 'CR4',
+          image_url: 'https://cdn.fb.com/top.jpg',
+          object_story_spec: { video_data: { image_url: 'https://cdn.fb.com/poster.jpg' } },
+        },
+      },
+    ],
+  });
+  assert.equal(adImagePriority[0].creativeImageUrl, 'https://cdn.fb.com/top.jpg');
+
+  // Сценарий: видео-крео без image_url — video_id (top-level и в object_story_spec)
+  // извлекается для последующего дотягивания постера из video node.
+  const adVideoId = parseLightList({
+    data: [{ id: 'AD5', creative: { id: 'CR5', thumbnail_url: 'https://cdn.fb.com/t.jpg', video_id: '777' } }],
+  });
+  assert.equal(adVideoId[0].videoId, '777');
+  assert.equal(adVideoId[0].creativeImageUrl, undefined);
+
+  const adVideoIdNested = parseLightList({
+    data: [{ id: 'AD6', creative: { id: 'CR6', object_story_spec: { video_data: { video_id: '888' } } } }],
+  });
+  assert.equal(adVideoIdNested[0].videoId, '888');
 
   // Сценарий: ответ adsets-edge с promoted_object.pixel_id, budget_remaining и learning_stage_info.
   const adsetFull = parseLightList({
