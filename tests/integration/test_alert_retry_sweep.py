@@ -26,9 +26,8 @@ async def _seed_tg_config(conn) -> None:
         text(
             """
             INSERT INTO telegram_config
-                (singleton_key, bot_token_encrypted, chat_id,
-                 forum_warning_thread_id, forum_stop_thread_id, poller_offset)
-            VALUES ('default', :tok, -1001234567890, NULL, NULL, 0)
+                (singleton_key, bot_token_encrypted, chat_id, poller_offset)
+            VALUES ('default', :tok, -1001234567890, 0)
             ON CONFLICT (singleton_key) DO UPDATE
             SET bot_token_encrypted = EXCLUDED.bot_token_encrypted,
                 chat_id = EXCLUDED.chat_id

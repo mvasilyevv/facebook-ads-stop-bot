@@ -155,9 +155,15 @@ async def test_enable_reco_send_alert_engine_sends_to_recipients() -> None:
     tg_client.send_message = AsyncMock(return_value={"ok": True})
 
     fake_recipient = SimpleNamespace(chat_id=111)
-    with patch(
-        "apps.enable_recommendation_worker.main.load_active_recipients",
-        AsyncMock(return_value=[fake_recipient]),
+    with (
+        patch(
+            "apps.enable_recommendation_worker.main.load_active_recipients",
+            AsyncMock(return_value=[fake_recipient]),
+        ),
+        patch(
+            "apps.enable_recommendation_worker.main.load_web_app_url",
+            AsyncMock(return_value=None),
+        ),
     ):
         result = await send_alert(
             tg_client,

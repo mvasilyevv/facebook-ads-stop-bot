@@ -180,10 +180,14 @@ async def test_resolve_by_campaign_multiple(pg_engine, clean_autostart_tables) -
 async def test_run_one_tick_starts_cabinet(
     pg_engine, fake_redis_client, clean_autostart_tables, monkeypatch
 ) -> None:
+    # Чужой ad — в СВОЕЙ кампании (C701): в Meta у кампании ровно одно имя, два ad'а
+    # одной кампании не могут иметь разные campaign_name (идентичность каталога —
+    # fb_campaign_id, миграция 0020). Обе кампании в allowlist → проверяем, что
+    # owner-scoping исключает чужую даже когда её id выбран.
     mine = _row("111100", "MV | KE | CR2 | 22.05", campaign_id="C700")
-    foreign = _row("222100", "MZ Artemteam CR2", campaign_id="C700")
+    foreign = _row("222100", "MZ Artemteam CR2", campaign_id="C701")
     await process_scan_rows(pg_engine, rows=[mine, foreign], scan_id=1)
-    await _set_owner_tag(pg_engine, "MV", campaign_ids=["C700"])
+    await _set_owner_tag(pg_engine, "MV", campaign_ids=["C700", "C701"])
     await write_autostart_config(
         pg_engine,
         {"enabled": True, "hour_utc": 6, "minute_utc": 0},

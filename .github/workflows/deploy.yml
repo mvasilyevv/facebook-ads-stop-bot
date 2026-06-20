@@ -116,8 +116,10 @@ jobs:
           REDIS_URL: redis://localhost:6379/0
           REDIS_HOST: localhost
           REDIS_PORT: 6379
-          # Тестовые заглушки — реальные ключи не нужны
-          ENCRYPTION_KEY: dGVzdGtleXRlc3RrZXl0ZXN0a2V5dGVzdGtleXQ=
+          # Тестовые заглушки — реальные ключи не нужны.
+          # ENCRYPTION_KEY обязан быть валидным Fernet (32 байта base64) — иначе
+          # тесты, реально шифрующие через Fernet (test_adsetpro_credentials), падают.
+          ENCRYPTION_KEY: UOGaDCkFFfSv7XMSdwQq_rqmossFFl8wSG7z69_5nO0=
           VISION_X_TOKEN: ci_test_token
           VISION_PROFILE_ID: ci_test_profile
           TELEGRAM_BOT_TOKEN: ci:test_token

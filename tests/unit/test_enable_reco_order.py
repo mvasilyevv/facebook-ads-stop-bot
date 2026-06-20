@@ -11,6 +11,17 @@ import pytest
 import apps.enable_recommendation_worker.main as er
 
 
+@pytest.fixture(autouse=True)
+def _mock_web_app_url():
+    """send_alert дёргает load_web_app_url(engine) для web_app deep-link кнопки.
+    В unit-тестах engine — MagicMock, реальный SQL не выполнить → мокаем (None)."""
+    with patch(
+        "apps.enable_recommendation_worker.main.load_web_app_url",
+        AsyncMock(return_value=None),
+    ):
+        yield
+
+
 def _fake_candidate() -> er.CandidateRow:
     """Минимальный CandidateRow для тестов send_alert."""
     return er.CandidateRow(

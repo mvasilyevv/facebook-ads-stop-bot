@@ -6,14 +6,12 @@
 
 from __future__ import annotations
 
-import os
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import create_async_engine
 
 from apps.cleanup_worker.worker import (
     cleanup_orphan_media_files,
@@ -22,49 +20,26 @@ from apps.cleanup_worker.worker import (
 )
 
 
-def _db_url() -> str | None:
-    """URL для тестов — приоритет TEST_DATABASE_URL, иначе обычный."""
-    url = os.environ.get("TEST_DATABASE_URL")
-    if url:
-        return url
-    # fallback на основную БД (риски при параллельных прогонах — минимизируется через unique idempotency_key)
-    try:
-        from core.config import get_settings
-
-        return get_settings().database_url
-    except Exception:
-        return None
-
-
 # Проверяет load_policy — должен прочитать system_config.retention_policy
 @pytest.mark.asyncio
-async def test_load_policy_from_db() -> None:
-    url = _db_url()
-    if not url:
-        pytest.skip("DB URL не доступен")
-    engine = create_async_engine(url)
-    try:
-        policy = await load_policy(engine)
-        assert isinstance(policy, dict)
-        assert "ad_metrics" in policy or "ad_library_scan" in policy
-    finally:
-        await engine.dispose()
+async def test_load_policy_from_db(pg_engine) -> None:
+    engine = pg_engine
+    policy = await load_policy(engine)
+    assert isinstance(policy, dict)
+    assert "ad_metrics" in policy or "ad_library_scan" in policy
 
 
 # Проверяет что delete_task_queue_completed удаляет только просроченные succeeded
 @pytest.mark.asyncio
-async def test_delete_task_queue_succeeded() -> None:
-    url = _db_url()
-    if not url:
-        pytest.skip("DB URL не доступен")
-    engine = create_async_engine(url)
+async def test_delete_task_queue_succeeded(pg_engine) -> None:
+    engine = pg_engine
+    old_key = f"test_cleanup_old_{uuid.uuid4().hex[:8]}"
+    fresh_key = f"test_cleanup_fresh_{uuid.uuid4().hex[:8]}"
     try:
         async with engine.begin() as conn:
             # Вставляем 2 fake task'а: один старый succeeded (40 дней назад), один свежий
             old_completed = datetime.now(timezone.utc) - timedelta(days=40)
             fresh_completed = datetime.now(timezone.utc) - timedelta(days=5)
-            old_key = f"test_cleanup_old_{uuid.uuid4().hex[:8]}"
-            fresh_key = f"test_cleanup_fresh_{uuid.uuid4().hex[:8]}"
 
             await conn.execute(
                 text(
@@ -98,15 +73,13 @@ async def test_delete_task_queue_succeeded() -> None:
                 )
             ).first()
             assert row is None, "old task должен быть удалён"
-
-        # Cleanup: удаляем fresh для чистоты
+    finally:
+        # Cleanup: удаляем оба ключа для чистоты (engine закроет pg_engine-фикстура)
         async with engine.begin() as conn:
             await conn.execute(
-                text("DELETE FROM task_queue WHERE idempotency_key = :k"),
-                {"k": fresh_key},
+                text("DELETE FROM task_queue WHERE idempotency_key IN (:k1, :k2)"),
+                {"k1": fresh_key, "k2": old_key},
             )
-    finally:
-        await engine.dispose()
 
 
 # Проверяет FS-cleanup: orphan файл удаляется, не-orphan остаётся

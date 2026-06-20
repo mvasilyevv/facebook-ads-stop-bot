@@ -186,9 +186,8 @@ async def test_dispatch_finds_recent_event_via_partition_filter(
             text(
                 """
                 INSERT INTO telegram_config
-                    (singleton_key, bot_token_encrypted, chat_id,
-                     forum_warning_thread_id, forum_stop_thread_id, poller_offset)
-                VALUES ('default', :tok, NULL, NULL, NULL, 0)
+                    (singleton_key, bot_token_encrypted, chat_id, poller_offset)
+                VALUES ('default', :tok, NULL, 0)
                 ON CONFLICT (singleton_key) DO UPDATE
                 SET bot_token_encrypted = EXCLUDED.bot_token_encrypted,
                     chat_id = NULL,

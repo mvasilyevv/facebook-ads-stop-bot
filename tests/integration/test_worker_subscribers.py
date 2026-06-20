@@ -328,17 +328,20 @@ async def test_observer_cabinet_day_triggers_immediate_rescan(pg_engine, monkeyp
     from apps.observer_worker.main import CHANNEL_CABINET_DAY, main_loop
 
     # Большой interval — естественный второй цикл за время теста не наступит.
+    # campaign_ids НЕ пуст: при ОДНОМ кабинете пустой allowlist = «ничего не отслеживаем»
+    # (opt-in мониторинг, money-критично, _allowlist_blocks_scan) → gate.run_one_scan не
+    # вызывается. Заполняем allowlist, чтобы скан реально пошёл и gate.calls рос.
     async with pg_engine.begin() as conn:
         await conn.execute(
             text(
                 """
                 INSERT INTO observer_config
                     (singleton_key, is_scanning_enabled, interval_seconds, jitter_seconds,
-                     owner_campaign_tag)
-                VALUES ('default', TRUE, 30, 0, 'MV')
+                     owner_campaign_tag, campaign_ids)
+                VALUES ('default', TRUE, 30, 0, 'MV', ARRAY['C_TEST_SUB'])
                 ON CONFLICT (singleton_key) DO UPDATE
                 SET is_scanning_enabled = TRUE, interval_seconds = 30, jitter_seconds = 0,
-                    owner_campaign_tag = 'MV'
+                    owner_campaign_tag = 'MV', campaign_ids = ARRAY['C_TEST_SUB']
                 """
             )
         )
@@ -407,7 +410,8 @@ async def test_observer_cabinet_day_triggers_immediate_rescan(pg_engine, monkeyp
             await conn.execute(
                 text(
                     "UPDATE observer_config SET interval_seconds = 90, jitter_seconds = 15, "
-                    "owner_campaign_tag = 'MV' WHERE singleton_key = 'default'"
+                    "owner_campaign_tag = 'MV', campaign_ids = '{}' "
+                    "WHERE singleton_key = 'default'"
                 )
             )
 

@@ -41,6 +41,13 @@ async def app_client(pg_engine, fake_redis):
     app.dependency_overrides[get_redis] = lambda: fake_redis
     app.state.redis = fake_redis
 
+    # Очистка ДО теста: на shared-БД соседние тесты/фикстуры могли оставить config
+    # (тогда no_config_returns_defaults видит чужой токен → is_authorized=True).
+    async with pg_engine.begin() as conn:
+        await conn.execute(text("DELETE FROM telegram_invites"))
+        await conn.execute(text("DELETE FROM telegram_recipients"))
+        await conn.execute(text("DELETE FROM telegram_config"))
+
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         yield client
 

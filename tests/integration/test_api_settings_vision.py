@@ -37,6 +37,11 @@ async def app_client(pg_engine, fake_redis):
     app.dependency_overrides[get_redis] = lambda: fake_redis
     app.state.redis = fake_redis
 
+    # Очистка ДО теста: соседние тесты на shared-БД оставляют vision_config с
+    # auto_restart=False → no_config_returns_defaults видит чужое значение вместо дефолта.
+    async with pg_engine.begin() as conn:
+        await conn.execute(text("DELETE FROM vision_config"))
+
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         yield client
 

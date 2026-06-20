@@ -20,8 +20,13 @@ from apps.api.routers.v1 import register_all
 
 
 # Структура URL-роутов app в виде set path-строк.
+# В FastAPI >=0.135 include_router больше не разворачивает под-роуты в плоский
+# app.routes — вместо этого появляется обёртка `_IncludedRouter` без атрибута .path,
+# а реальные пути живут во внутреннем (приватном) дереве. Поэтому набор итоговых
+# маршрутов берём из публичного контракта app.openapi()["paths"] — это стабильный
+# источник финальных путей с учётом всех префиксов.
 def _get_route_paths(app) -> set[str]:
-    return {r.path for r in app.routes}
+    return set(app.openapi().get("paths", {}).keys())
 
 
 # После create_app() приложение не падает и содержит /healthz и /readyz.
@@ -73,7 +78,7 @@ def test_register_all_picks_up_module_with_router_attribute(tmp_path, monkeypatc
     register_all(app)
 
     # Роутер зарегистрирован с префиксом /api.
-    paths = {r.path for r in app.routes}
+    paths = _get_route_paths(app)
     assert "/api/stub-route" in paths
 
     # Восстанавливаем iter_modules.
@@ -103,7 +108,7 @@ def test_register_all_skips_module_without_router(monkeypatch) -> None:
     register_all(app)
 
     # Никакой /api/... маршрут не добавлен.
-    paths = {r.path for r in app.routes}
+    paths = _get_route_paths(app)
     assert not any(p.startswith("/api") for p in paths)
 
     monkeypatch.setattr(pkgutil, "iter_modules", original_iter)

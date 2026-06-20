@@ -447,14 +447,11 @@ async def seeded_telegram_config(pg_engine):
             text(
                 """
                 INSERT INTO telegram_config
-                    (singleton_key, bot_token_encrypted, chat_id,
-                     forum_warning_thread_id, forum_stop_thread_id, poller_offset)
-                VALUES ('default', :tok, -1001234567890, 11, 22, 0)
+                    (singleton_key, bot_token_encrypted, chat_id, poller_offset)
+                VALUES ('default', :tok, -1001234567890, 0)
                 ON CONFLICT (singleton_key) DO UPDATE
                 SET bot_token_encrypted = EXCLUDED.bot_token_encrypted,
                     chat_id = EXCLUDED.chat_id,
-                    forum_warning_thread_id = EXCLUDED.forum_warning_thread_id,
-                    forum_stop_thread_id = EXCLUDED.forum_stop_thread_id,
                     updated_at = NOW()
                 """
             ),
@@ -462,8 +459,6 @@ async def seeded_telegram_config(pg_engine):
         )
     yield {
         "chat_id": -1001234567890,
-        "forum_warning_thread_id": 11,
-        "forum_stop_thread_id": 22,
     }
     async with pg_engine.begin() as conn:
         await conn.execute(text("DELETE FROM telegram_config WHERE singleton_key = 'default'"))

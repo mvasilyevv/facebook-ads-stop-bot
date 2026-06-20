@@ -118,18 +118,25 @@ async def offer_cr2(pg_engine, clean_obs_tables):
 
 @pytest_asyncio.fixture
 async def ensure_observer_config_enabled(pg_engine):
-    """Гарантирует что singleton observer_config есть и is_scanning_enabled=true."""
+    """Гарантирует что singleton observer_config есть и is_scanning_enabled=true.
+
+    Задаёт НЕпустой campaign_ids: при one-cabinet/legacy-скане пустой allowlist =
+    opt-in блокировка (`_allowlist_blocks_scan` → скан не гоняется, gate не вызывается).
+    Чтобы тесты реально доходили до gate.run_one_scan, нужен непустой allowlist.
+    """
     async with pg_engine.begin() as conn:
         # apply_schema создал строку с дефолтами; проверим что есть и принудительно включим
         await conn.execute(
             text(
                 """
-                INSERT INTO observer_config (singleton_key, is_scanning_enabled)
-                VALUES ('default', TRUE)
+                INSERT INTO observer_config
+                    (singleton_key, is_scanning_enabled, campaign_ids)
+                VALUES ('default', TRUE, ARRAY['1001'])
                 ON CONFLICT (singleton_key) DO UPDATE
                 SET is_scanning_enabled = TRUE,
                     interval_seconds = 1,
-                    jitter_seconds = 0
+                    jitter_seconds = 0,
+                    campaign_ids = ARRAY['1001']
                 """
             )
         )
@@ -138,7 +145,8 @@ async def ensure_observer_config_enabled(pg_engine):
     async with pg_engine.begin() as conn:
         await conn.execute(
             text(
-                "UPDATE observer_config SET interval_seconds = 90, jitter_seconds = 15 "
+                "UPDATE observer_config SET interval_seconds = 90, jitter_seconds = 15, "
+                "campaign_ids = ARRAY[]::text[] "
                 "WHERE singleton_key = 'default'"
             )
         )

@@ -8,28 +8,14 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import create_async_engine
 
 from apps.reconciler_worker.worker import cancel_old_drafts, reconcile_stuck_running
 
 
-def _db_url() -> str | None:
-    try:
-        from core.config import get_settings
-
-        return get_settings().database_url
-    except Exception:
-        return None
-
-
 # Проверка: зависшая 'running' с старым updated_at переводится в 'retrying'
 @pytest.mark.asyncio
-async def test_reconcile_stuck_running() -> None:
-    url = _db_url()
-    if not url:
-        pytest.skip("DB URL не доступен")
-
-    engine = create_async_engine(url)
+async def test_reconcile_stuck_running(pg_engine) -> None:
+    engine = pg_engine
     stuck_key = f"test_reconciler_stuck_{uuid.uuid4().hex[:8]}"
     try:
         # Вставляем running-задачу с очень старым updated_at (60 минут назад)
@@ -61,23 +47,18 @@ async def test_reconcile_stuck_running() -> None:
             assert status[0] == "retrying"
             assert status[1] == 1
     finally:
-        # Очистка
+        # Очистка (engine закроет pg_engine-фикстура)
         async with engine.begin() as conn:
             await conn.execute(
                 text("DELETE FROM task_queue WHERE idempotency_key = :k"),
                 {"k": stuck_key},
             )
-        await engine.dispose()
 
 
 # Проверка: старый draft (>24h) → cancelled
 @pytest.mark.asyncio
-async def test_cancel_old_drafts() -> None:
-    url = _db_url()
-    if not url:
-        pytest.skip("DB URL не доступен")
-
-    engine = create_async_engine(url)
+async def test_cancel_old_drafts(pg_engine) -> None:
+    engine = pg_engine
     old_draft_key = f"test_reconciler_draft_{uuid.uuid4().hex[:8]}"
     try:
         old_ts = datetime.now(timezone.utc) - timedelta(hours=30)
@@ -107,9 +88,9 @@ async def test_cancel_old_drafts() -> None:
             assert status is not None
             assert status[0] == "cancelled"
     finally:
+        # engine закроет pg_engine-фикстура
         async with engine.begin() as conn:
             await conn.execute(
                 text("DELETE FROM task_queue WHERE idempotency_key = :k"),
                 {"k": old_draft_key},
             )
-        await engine.dispose()
