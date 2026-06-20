@@ -143,14 +143,21 @@ services:
     restart: unless-stopped
     env_file: .env
     network_mode: host
+    # profile "agent": на боевом Linux-сервере browser-agent запускается НАТИВНО на
+    # хосте (co-located с Vision, CDP 127.0.0.1) — не в Docker. Поэтому исключён из
+    # дефолтного `docker compose up`. Поднять в Docker: `docker compose --profile agent up`.
+    profiles: ["agent"]
 
   # ====================== фронтенды ======================
+  # profile "web": фронтенды (веб-панель + Telegram Mini App). Не нужны для работы
+  # бота (управление через TG), поднимаются по запросу: `docker compose --profile web up`.
   frontend:
     build:
       context: .
       dockerfile: docker/Dockerfile.frontend
     image: fb-stop-bot/frontend:latest
     restart: unless-stopped
+    profiles: ["web"]
     ports:
       - "127.0.0.1:8080:80"
     depends_on:
@@ -162,6 +169,7 @@ services:
       dockerfile: docker/Dockerfile.mini-app
     image: fb-stop-bot/mini-app:latest
     restart: unless-stopped
+    profiles: ["web"]
     ports:
       - "127.0.0.1:8081:80"
     depends_on:

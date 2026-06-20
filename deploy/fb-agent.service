@@ -1,0 +1,32 @@
+# systemd-юнит автозапуска боевого стека FB Stop Bot на Linux-сервере.
+#
+# Назначение: при reboot сервера поднять стек ИМЕННО через `docker compose up`
+# (с enforced depends_on: postgres healthy → migrate completed → воркеры), а не
+# россыпью контейнеров от Docker-демона. migrate один раз накатывает миграции и
+# выходит; воркеры стартуют после него в правильном порядке.
+#
+# Установка на сервере:
+#   sudo cp deploy/fb-agent.service /etc/systemd/system/fb-agent.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now fb-agent.service
+#
+# Дефолтный `docker compose up` поднимает только core (api + 12 воркеров + postgres
+# + redis). Фронтенды — profile "web", browser-agent — profile "agent" (нативный на
+# хосте рядом с Vision, в Docker не поднимается).
+
+[Unit]
+Description=FB Stop Bot stack (docker compose)
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/fb_agent
+ExecStart=/usr/bin/docker compose up -d --remove-orphans
+ExecStop=/usr/bin/docker compose stop
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target

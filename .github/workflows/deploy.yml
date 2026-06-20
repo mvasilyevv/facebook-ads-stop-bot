@@ -16,6 +16,11 @@ env:
   REGISTRY: ghcr.io
   IMAGE_BASE: ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}
 
+# GITHUB_TOKEN: push образов в GHCR (build/build-base) + pull на деплое.
+permissions:
+  contents: read
+  packages: write
+
 # ─────────────────────────────────────────────
 # JOB 1: тесты (unit + integration)
 # ─────────────────────────────────────────────
@@ -291,41 +296,73 @@ jobs:
     runs-on: ubuntu-latest
     needs: build  # только после успешной сборки всех образов
     if: github.ref == 'refs/heads/main'
+    # GITHUB_TOKEN с правом read:packages — им логинимся в GHCR на сервере,
+    # без отдельного PAT (DEPLOY_GHCR_TOKEN больше не нужен).
+    permissions:
+      contents: read
+      packages: read
 
     steps:
       - name: SSH-деплой → ${{ secrets.DEPLOY_HOST }}
         uses: appleboy/ssh-action@v1
+        env:
+          # Прокидываем в SSH-сессию: встроенный токен ранна + параметры образов.
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+          IMAGE_BASE: ${{ env.IMAGE_BASE }}
+          GIT_SHA: ${{ github.sha }}
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           # Таймаут на всю операцию: pull тяжёлых образов может занять время
           command_timeout: 15m
+          # appleboy/ssh-action не пробрасывает env автоматически — перечисляем явно
+          envs: GHCR_TOKEN,GHCR_USER,IMAGE_BASE,GIT_SHA
           script: |
             set -euo pipefail
             cd ${{ secrets.DEPLOY_PROJECT_DIR }}
 
-            echo "=== [1/4] Авторизация в GHCR на сервере ==="
-            echo "${{ secrets.DEPLOY_GHCR_TOKEN }}" | \
-              docker login ghcr.io -u ${{ secrets.DEPLOY_GHCR_USER }} --password-stdin
+            echo "=== [0/5] Обновление кода на сервере (docker-compose, миграции, скрипты) ==="
+            # Образы несут код api/воркеров, но docker-compose.yml/entrypoint/скрипты
+            # читаются с диска сервера — синхронизируем их с main. .env в .gitignore не тронется.
+            git fetch --depth 1 origin main
+            git reset --hard origin/main
 
-            echo "=== [2/4] Pull свежих образов (тег: ${{ github.sha }}) ==="
-            # Обновляем тег latest на нужный SHA, чтобы compose pull взял правильный
-            IMAGE_BASE="${{ env.IMAGE_BASE }}"
-            SHA="${{ github.sha }}"
+            echo "=== [1/5] Авторизация в GHCR на сервере (GITHUB_TOKEN ранна) ==="
+            echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+
+            echo "=== [2/5] Pull свежих образов (тег: $GIT_SHA) ==="
+            # Обновляем тег latest на нужный SHA, чтобы compose взял правильный.
+            # browser-agent тянем для полноты, но в Docker он не поднимается
+            # (profile "agent" — на боевом сервере он нативный рядом с Vision).
             for svc in python-base api workers browser-agent frontend mini-app; do
-              docker pull "${IMAGE_BASE}-${svc}:${SHA}"
-              docker tag  "${IMAGE_BASE}-${svc}:${SHA}" "${IMAGE_BASE}-${svc}:latest"
+              docker pull "${IMAGE_BASE}-${svc}:${GIT_SHA}"
+              docker tag  "${IMAGE_BASE}-${svc}:${GIT_SHA}" "${IMAGE_BASE}-${svc}:latest"
             done
 
-            echo "=== [3/4] Миграции БД (alembic upgrade head) ==="
-            # --rm: контейнер удаляется после выполнения (one-shot)
+            echo "=== [3/5] Миграции БД (alembic upgrade head) ==="
             docker compose run --rm migrate
 
-            echo "=== [4/4] Перезапуск сервисов (без browser-agent если на хосте) ==="
-            # browser-agent в compose (network_mode: host) — up -d подхватит его.
-            # Если browser-agent вынесен на хост под systemd — раскомментируй:
-            #   sudo systemctl restart fb-browser-agent
+            echo "=== [4/5] Перезапуск core-стека (profiles web/agent исключены) ==="
             docker compose up -d --remove-orphans
 
-            echo "=== Деплой завершён: SHA ${{ github.sha }} ==="
+            echo "=== [5/5] Health-check (readyz + heartbeat) ==="
+            ok=0
+            for i in $(seq 1 18); do
+              if docker exec fb_agent-api-1 sh -c \
+                "curl -sf http://localhost:8100/readyz" 2>/dev/null | grep -q '"ready":true'; then
+                echo "readyz: ready"; ok=1; break
+              fi
+              echo "ждём readyz ($i/18)..."; sleep 5
+            done
+            if [ "$ok" -ne 1 ]; then
+              echo "ДЕПЛОЙ ПРОВАЛЕН: /readyz не стал ready за 90с"; exit 1
+            fi
+            HB=$(docker exec fb_agent-redis-1 redis-cli --no-raw keys 'worker:heartbeat:*' | grep -c heartbeat || true)
+            echo "heartbeat воркеров: $HB"
+            if [ "$HB" -lt 10 ]; then
+              echo "ДЕПЛОЙ ПРОВАЛЕН: воркеров с heartbeat $HB (<10)"; exit 1
+            fi
+
+            echo "=== Деплой здоров: SHA $GIT_SHA, heartbeat=$HB ==="
