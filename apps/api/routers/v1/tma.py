@@ -392,7 +392,7 @@ async def tma_snooze_ad(
     principal: DepTmaPrincipal,
     engine: DepEngine,
 ) -> TmaSnoozeResponse:
-    """Снуз: ad_alert_state.snoozed_until = now + minutes (как handle_snz_callback).
+    """Снуз: ad_alert_state.snoozed_until = now + minutes.
 
     404 — объявления нет. 409 — у ad нет строки состояния (нечего снузить).
     """

@@ -5,7 +5,7 @@ router — handle_update диспатчит обновления по домен
 - onboarding: /start, /help
 - spy: /spy (Ad Library pipeline)
 - bulk: /pause /resume + draft_confirm: dr_ok / dr_cancel
-- alerts: callbacks под алертами (dis / snz)
+- alerts: callbacks под алертами (dis / ereco)
 """
 
 from __future__ import annotations

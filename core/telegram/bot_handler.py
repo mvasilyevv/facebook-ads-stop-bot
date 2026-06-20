@@ -6,7 +6,7 @@
 - spy.py           — /spy
 - bulk.py          — /pause /resume
 - draft_confirm.py — dr_ok / dr_cancel callbacks
-- alerts.py        — dis / snz callbacks
+- alerts.py        — dis / ereco callbacks
 - router.py        — центральный диспетчер handle_update
 """
 

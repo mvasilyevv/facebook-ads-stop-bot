@@ -47,7 +47,7 @@ async def snooze_ad(
     """Снуз одного объявления: ad_alert_state.snoozed_until = now + minutes.
 
     404 — объявления нет в fb_ads. 409 — у ad нет строки состояния (нечего снузить).
-    Зеркало core.telegram.handlers.alerts.handle_snz_callback / tma_snooze_ad.
+    Зеркало tma_snooze_ad (apps/api/routers/v1/tma.py).
     """
     until = datetime.now(timezone.utc) + timedelta(minutes=body.minutes)
     async with engine.begin() as conn:

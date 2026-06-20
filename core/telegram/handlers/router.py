@@ -77,7 +77,7 @@ async def _dispatch_callback_query(
     """Обработка нажатия inline-кнопки (под алертами или draft-превью /pause).
 
     callback_data: '<action>:<arg1>[:<arg2>]'
-        action ∈ {'dis', 'snz', 'dr_ok', 'dr_cancel', 'plan'}.
+        action ∈ {'dis', 'ereco', 'dr_ok', 'dr_cancel', 'plan'}.
     """
     cq_id = str(cq.get("id", ""))
     data = str(cq.get("data") or "")
@@ -107,8 +107,8 @@ async def _dispatch_callback_query(
         return
 
     # Owner-ACL: money-кнопки (отключение/включение/запуск плана, подтверждение
-    # money-черновика dr_ok) доступны только role='owner'. snz (snooze) и dr_cancel
-    # (отмена черновика) — не money, доступны любому активному recipient.
+    # money-черновика dr_ok) доступны только role='owner'. dr_cancel
+    # (отмена черновика) — не money, доступна любому активному recipient.
     if action in _OWNER_ONLY_CALLBACKS and not recipient.is_owner():
         logger.warning(
             "ACL отказ (callback): action=%s chat_id=%s role=%s", action, chat_id, recipient.role
@@ -253,7 +253,7 @@ async def handle_update(
     # Owner-ACL: money-команды (трогают кабинет / боевой браузер) — только role='owner'.
     # autostart с аргументами = запись расписания (money); без аргументов = чтение (любому).
     needs_owner = cmd in _OWNER_ONLY_COMMANDS or (cmd == "autostart" and bool(args_text.strip()))
-    if needs_owner and not (recipient and recipient.is_owner()):
+    if needs_owner and not recipient.is_owner():
         logger.warning(
             "ACL отказ (команда): cmd=%s chat_id=%s role=%s",
             cmd,

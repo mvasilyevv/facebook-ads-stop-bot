@@ -1,16 +1,14 @@
 # -*- coding: utf-8 -*-
-"""Inline-кнопки под алертами: dis (disable) и snz (snooze).
+"""Inline-кнопки под алертами: dis (disable) и ereco (enable recommendation).
 
-callback_data: '<action>:<fb_ad_id>:<token>' (см. renderer.render_inline_keyboard).
-action ∈ {'dis', 'snz'}. Access control — recipient'ы только.
+callback_data: '<action>:<fb_ad_id>[:<token>]' (см. renderer.render_inline_keyboard).
+action ∈ {'dis', 'ereco'}. Access control — recipient'ы только.
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import text as sa_text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from core.telegram.client import TelegramBotClient
@@ -114,40 +112,7 @@ async def handle_enable_reco_callback(
         pass
 
 
-async def handle_snz_callback(
-    *,
-    engine: AsyncEngine,
-    client: TelegramBotClient,
-    cq_id: str,
-    fb_ad_id: str,
-) -> None:
-    """snz: ставит `ad_alert_state.snoozed_until` = now+2h."""
-    snooze_until = datetime.now(timezone.utc) + timedelta(hours=2)
-    try:
-        async with engine.begin() as conn:
-            await conn.execute(
-                sa_text(
-                    """
-                    UPDATE ad_alert_state s
-                    SET snoozed_until = :until, updated_at = NOW()
-                    FROM fb_ads a
-                    WHERE s.ad_id = a.id AND a.fb_ad_id = :fbid
-                    """
-                ),
-                {"until": snooze_until, "fbid": fb_ad_id},
-            )
-        ack = "Снуз на 2 часа"
-    except Exception:
-        logger.exception("snooze failed")
-        ack = "Ошибка"
-    try:
-        await client.answer_callback_query(cq_id, text=ack)
-    except Exception:
-        pass
-
-
 __all__ = [
     "handle_dis_callback",
     "handle_enable_reco_callback",
-    "handle_snz_callback",
 ]
