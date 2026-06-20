@@ -27,6 +27,7 @@ from core.telegram.renderer import (
     render_inline_keyboard,
 )
 from core.telegram.service import load_active_recipients, load_telegram_config
+from core.telegram.web_app_url import load_web_app_url, normalize_web_app_base
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +114,11 @@ async def _send_alert_with_fallback(
         return None
 
 
+async def _resolve_web_app_base(engine: AsyncEngine) -> str | None:
+    """web_app base для deep-link кнопок: system_config.web_app_url → нормализация."""
+    return normalize_web_app_base(await load_web_app_url(engine))
+
+
 async def _deliver_one_alert(
     engine: AsyncEngine,
     *,
@@ -133,6 +139,7 @@ async def _deliver_one_alert(
     offer_code: str | None,
     incident_key: str,
     counters: dict[str, int],
+    web_app_base: str | None = None,
 ) -> None:
     """Общий движок доставки одного алерта: pre-claim → send → update/rollback.
 
@@ -184,6 +191,7 @@ async def _deliver_one_alert(
         matched_rule_codes=list(matched_codes or []),
         metrics=dict(metrics_json or {}),
         open_state_token=str(open_token) if open_token else None,
+        web_app_base=web_app_base,
     )
     text_msg = render_alert_text(render_input)
     keyboard = render_inline_keyboard(render_input)
@@ -286,6 +294,9 @@ async def dispatch_pending_alerts(
     # Топики форума не используются при DM-рассылке (всегда None → General).
     thread_id_by_stage: dict[str, int | None] = {}
 
+    # Волна 3: web_app deep-link base — грузим один раз на батч (не per-alert).
+    web_app_base = await _resolve_web_app_base(engine)
+
     # Partition pruning: ограничиваем диапазон created_at последним часом.
     # alert_events партиционирована по RANGE(created_at) — без фильтра по
     # partition-ключу планировщик выполняет full-scan всех партиций (~365).
@@ -366,6 +377,7 @@ async def dispatch_pending_alerts(
                 offer_code=str(offer_code) if offer_code else None,
                 incident_key=incident_key,
                 counters=counters,
+                web_app_base=web_app_base,
             )
 
     return counters
@@ -402,6 +414,9 @@ async def sweep_orphan_alerts(
 
     # Топики форума не используются при DM-рассылке.
     thread_id_by_stage: dict[str, int | None] = {}
+
+    # Волна 3: web_app deep-link base — грузим один раз на батч (не per-alert).
+    web_app_base = await _resolve_web_app_base(engine)
 
     since_dt = datetime.now(timezone.utc) - timedelta(hours=hours)
 
@@ -495,6 +510,7 @@ async def sweep_orphan_alerts(
                 offer_code=str(offer_code) if offer_code else None,
                 incident_key=incident_key,
                 counters=counters,
+                web_app_base=web_app_base,
             )
 
     if counters["sent"]:
