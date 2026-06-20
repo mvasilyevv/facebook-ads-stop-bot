@@ -36,7 +36,10 @@ WORKDIR /app
 COPY --from=builder /app/.venv /app/.venv
 
 # Добавляем venv в PATH
+# PYTHONPATH=/app — чтобы скрипты из подпапок (scripts/apply_schema.py) видели
+# пакет core; иначе sys.path[0]=каталог скрипта, не корень → ModuleNotFoundError.
 ENV PATH="/app/.venv/bin:$PATH" \
+    PYTHONPATH=/app \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 

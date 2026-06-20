@@ -18,6 +18,14 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
+# URL берём из настроек приложения (core.config), а не из захардкоженного
+# alembic.ini — иначе в Docker/на сервере alembic идёт на localhost:5433 вместо
+# хоста из POSTGRES_HOST (env), хотя apply_schema (тоже core.config) идёт верно.
+# alembic.ini остаётся fallback'ом для офлайн-тулинга без окружения.
+from core.config import get_settings  # noqa: E402
+
+config.set_main_option("sqlalchemy.url", get_settings().database_url)
+
 target_metadata = Base.metadata
 
 

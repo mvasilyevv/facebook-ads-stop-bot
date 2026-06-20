@@ -59,8 +59,33 @@ case "${WORKER_TYPE}" in
     exec python run_creator_recorder.py
     ;;
   migrate)
-    # Применение Alembic-миграций до head (one-shot, depends_on у воркеров/api).
-    exec python -m alembic upgrade head
+    # One-shot bootstrap+миграции (depends_on у воркеров/api). На ПУСТОЙ БД
+    # базовые таблицы создаёт apply_schema (create_all), миграции — лишь
+    # инкрементальный DDL поверх. Чистый `alembic upgrade head` на пустой БД
+    # упал бы (грабля свежей БД) — зеркалим bootstrap-логику run.sh.
+    BOOTSTRAP_OUT="$(python scripts/apply_schema.py --init-if-empty 2>&1)" || {
+      printf '%s\n' "$BOOTSTRAP_OUT"
+      echo "ОШИБКА: apply_schema --init-if-empty не смог инициализировать схему"
+      exit 1
+    }
+    printf '%s\n' "$BOOTSTRAP_OUT"
+    BOOTSTRAP_RESULT="$(printf '%s\n' "$BOOTSTRAP_OUT" | sed -n 's/.*BOOTSTRAP_RESULT=\([a-z_]*\).*/\1/p' | tail -1)"
+    case "$BOOTSTRAP_RESULT" in
+      created|exists_no_alembic)
+        # Схема развёрнута create_all, но без alembic_version → stamp
+        # (upgrade здесь упал бы на ADD COLUMN уже существующих колонок).
+        echo "Помечаю миграции применёнными (alembic stamp head)..."
+        exec python -m alembic stamp head
+        ;;
+      exists_with_alembic)
+        # Штатный путь на развёрнутой БД: накатить недостающие миграции.
+        exec python -m alembic upgrade head
+        ;;
+      *)
+        echo "ОШИБКА: не удалось определить состояние схемы (BOOTSTRAP_RESULT='${BOOTSTRAP_RESULT}')"
+        exit 1
+        ;;
+    esac
     ;;
   *)
     echo "ОШИБКА: неизвестный WORKER_TYPE='${WORKER_TYPE}'"
