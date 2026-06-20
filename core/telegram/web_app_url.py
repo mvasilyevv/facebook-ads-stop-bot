@@ -62,4 +62,18 @@ async def save_web_app_url(engine: AsyncEngine, url: str | None) -> None:
         )
 
 
-__all__ = ["load_web_app_url", "save_web_app_url"]
+def normalize_web_app_base(raw: str | None) -> str | None:
+    """Нормализует web_app base для deep-link кнопок под алертами.
+
+    Возвращает https-base без хвостового слэша, либо None если raw пуст
+    или не https (Telegram inline web_app кнопки требуют https-URL).
+    """
+    if not raw:
+        return None
+    cleaned = raw.strip().rstrip("/")
+    if not cleaned.startswith("https://"):
+        return None
+    return cleaned
+
+
+__all__ = ["load_web_app_url", "save_web_app_url", "normalize_web_app_base"]
