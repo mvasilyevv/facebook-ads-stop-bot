@@ -214,13 +214,16 @@ async def test_digest_no_forum_thread_send() -> None:
     tg_client.send_message = AsyncMock(return_value={"ok": True})
     tg_client.close = AsyncMock()
 
-    fake_recipients = [(111, None)]
+    from core.telegram.service import Recipient as _Recipient
+
+    # Используем core-объект Recipient (консолидация Task 4 Волна 4)
+    fake_recipients = [_Recipient(chat_id=111, telegram_user_id=999, username=None, role="owner")]
     engine = MagicMock()
 
     with (
         patch("apps.digest_scheduler.main.load_telegram_config", AsyncMock(return_value=fake_cfg)),
         patch(
-            "apps.digest_scheduler.main._load_active_recipients",
+            "apps.digest_scheduler.main.load_active_recipients",
             AsyncMock(return_value=fake_recipients),
         ),
         patch("apps.digest_scheduler.main.build_digest", AsyncMock(return_value={})),

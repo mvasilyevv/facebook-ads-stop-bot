@@ -22,14 +22,13 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import redis.asyncio as redis_asyncio
-from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from core.db import WORKER_ENGINE_KWARGS
 from core.telegram.client import TelegramAPIError, TelegramBotClient
 from core.telegram.digest_builder import build_digest
 from core.telegram.digest_renderer import render_digest
-from core.telegram.service import load_telegram_config
+from core.telegram.service import Recipient, load_active_recipients, load_telegram_config
 
 logger = logging.getLogger("digest_scheduler")
 
@@ -95,51 +94,30 @@ def digest_sent_key(now: datetime) -> str:
 # ====================== I/O helpers ======================
 
 
-async def _load_active_recipients(engine: AsyncEngine) -> list[tuple[int, int | None]]:
-    """Возвращает [(chat_id, thread_id_or_None), ...] для активных recipient'ов.
-
-    thread_id здесь None — у TelegramRecipient нет per-user thread. Если в будущем
-    появится поле digest_subscribed/thread — добавим фильтр и колонку сюда.
-    """
-    async with engine.connect() as conn:
-        rows = (
-            await conn.execute(
-                text(
-                    """
-                    SELECT chat_id
-                    FROM telegram_recipients
-                    WHERE revoked_at IS NULL
-                    ORDER BY chat_id
-                    """
-                )
-            )
-        ).all()
-    return [(int(r[0]), None) for r in rows]
-
-
 async def _send_digest_to_recipients(
     *,
     tg_client: TelegramBotClient,
     text_html: str,
-    recipients: list[tuple[int, int | None]],
+    recipients: list[Recipient],
 ) -> tuple[int, int]:
     """Шлёт digest каждому recipient. Возвращает (sent_ok, sent_fail)."""
     ok = 0
     fail = 0
-    for chat_id, thread_id in recipients:
+    for r in recipients:
         try:
+            # Отправляем в личку (без thread_id — форум-топики убраны в волне 2)
             await tg_client.send_message(
-                chat_id=str(chat_id),
+                chat_id=str(r.chat_id),
                 text=text_html,
-                message_thread_id=thread_id,
+                message_thread_id=None,
                 parse_mode="HTML",
             )
             ok += 1
         except TelegramAPIError as exc:
-            logger.warning("Не смог отправить digest в chat_id=%s: %s", chat_id, exc)
+            logger.warning("Не смог отправить digest в chat_id=%s: %s", r.chat_id, exc)
             fail += 1
         except Exception:
-            logger.exception("Неожиданная ошибка отправки digest в chat_id=%s", chat_id)
+            logger.exception("Неожиданная ошибка отправки digest в chat_id=%s", r.chat_id)
             fail += 1
     return ok, fail
 
@@ -176,7 +154,7 @@ async def run_one_tick(
         logger.warning("telegram_config не настроен — digest не отправлен, флаг не ставим")
         return "no_tg_config"
 
-    recipients = await _load_active_recipients(engine)
+    recipients = await load_active_recipients(engine)
     if not recipients:
         logger.info("Нет активных получателей digest — флаг ставим, чтобы не долбить пустотой")
         try:
