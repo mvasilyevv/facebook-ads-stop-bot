@@ -47,6 +47,10 @@ dev = [
   "respx>=0.21.0,<1.0",
   "ruff>=0.11.0,<1.0.0",
   "hypothesis>=6.0,<7.0",
+  # core/campaign_creator/* импортит playwright.async_api top-level (~28 модулей);
+  # тесты (test_humanizer, test_campaign_name) их собирают → нужен для CI-сбора.
+  # В проде не нужен (creator не активен; воркеры используют patchright).
+  "playwright>=1.52.0,<2.0.0",
 ]
 
 [tool.setuptools.packages.find]
