@@ -206,18 +206,10 @@ jobs:
             dockerfile: docker/Dockerfile.workers
             image_suffix: workers
             is_python: true
-          - name: browser-agent
-            dockerfile: docker/Dockerfile.browser-agent
-            image_suffix: browser-agent
-            is_python: false
-          - name: frontend
-            dockerfile: docker/Dockerfile.frontend
-            image_suffix: frontend
-            is_python: false
-          - name: mini-app
-            dockerfile: docker/Dockerfile.mini-app
-            image_suffix: mini-app
-            is_python: false
+          # browser-agent (нативно на хосте рядом с Vision, profile "agent"), а также
+          # frontend/mini-app (опциональный profile "web") в Docker на боевом сервере
+          # НЕ поднимаются → из CI build matrix исключены, чтобы не блокировать автодеплой
+          # core-стека. Собираются отдельно при необходимости (см. docs/WINDOWS_DEPLOY/run).
 
     steps:
       - name: Checkout
@@ -338,7 +330,7 @@ jobs:
             # Обновляем тег latest на нужный SHA, чтобы compose взял правильный.
             # browser-agent тянем для полноты, но в Docker он не поднимается
             # (profile "agent" — на боевом сервере он нативный рядом с Vision).
-            for svc in python-base api workers browser-agent frontend mini-app; do
+            for svc in python-base api workers; do
               docker pull "${IMAGE_BASE}-${svc}:${GIT_SHA}"
               docker tag  "${IMAGE_BASE}-${svc}:${GIT_SHA}" "${IMAGE_BASE}-${svc}:latest"
             done
