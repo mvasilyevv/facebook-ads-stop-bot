@@ -5,8 +5,10 @@ FROM node:22-slim AS builder
 # VITE_API_BASE передаётся при сборке образа
 ARG VITE_API_BASE=/api
 
-# Установка pnpm через corepack (версия берётся из package.json → packageManager)
-RUN corepack enable && corepack prepare pnpm@latest --activate
+# Установка pnpm через corepack — pin на 11.6.0 (как в packageManager).
+# pnpm@latest (11.8) НЕ читает onlyBuiltDependencies из pnpm-workspace.yaml →
+# ERR_PNPM_IGNORED_BUILDS на esbuild валит сборку; 11.6.0 читает корректно.
+RUN corepack enable && corepack prepare pnpm@11.6.0 --activate
 
 WORKDIR /app
 
@@ -14,11 +16,16 @@ WORKDIR /app
 # Копируем только манифесты и lockfile монорепо, чтобы docker кэшировал
 # слой node_modules отдельно от исходников.
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
+# tsconfig.base.json — frontend-mini/tsconfig.json extends ../tsconfig.base.json
+# (target ES2022 + skipLibCheck). Без него tsc -b берёт дефолты → TS18028 на vitest .d.ts.
+COPY tsconfig.base.json ./
 COPY packages/shared/package.json ./packages/shared/package.json
 COPY frontend-mini/package.json ./frontend-mini/package.json
 
-# Устанавливаем зависимости всего workspace (нужен shared для резолва @fb/shared)
-RUN pnpm install --frozen-lockfile
+# Устанавливаем зависимости всего workspace (нужен shared для резолва @fb/shared).
+# dangerouslyAllowAllBuilds: pnpm в чистом Docker-store блокирует build-скрипты
+# (esbuild/@tailwindcss/oxide) даже при onlyBuiltDependencies → флаг разрешает их явно.
+RUN pnpm install --frozen-lockfile --config.dangerouslyAllowAllBuilds=true
 
 # --- Слой исходников ---
 COPY packages/shared/ ./packages/shared/
