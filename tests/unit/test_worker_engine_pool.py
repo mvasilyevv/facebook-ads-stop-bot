@@ -62,4 +62,6 @@ def test_worker_uses_pool_kwargs(rel: str) -> None:
     assert "create_async_engine(" in src
     for line in src.splitlines():
         if "create_async_engine(" in line and "WORKER_ENGINE_KWARGS" not in line:
-            raise AssertionError(f"{rel}: create_async_engine без WORKER_ENGINE_KWARGS: {line.strip()}")
+            raise AssertionError(
+                f"{rel}: create_async_engine без WORKER_ENGINE_KWARGS: {line.strip()}"
+            )

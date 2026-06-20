@@ -57,16 +57,14 @@ async def test_reconciler_alert_zero_skips() -> None:
 # =================== health_watchdog ===================
 
 
-# health: при наличии engine _maybe_alert_with_dedup зовёт notify_recipients (не _send_alert)
+# health: _maybe_alert_with_dedup зовёт notify_recipients и ставит дедуп при успехе
 @pytest.mark.asyncio
 async def test_health_with_engine_calls_notify_recipients(monkeypatch) -> None:
     import apps.health_watchdog.main as hw
 
     engine = MagicMock()
     spy_notify = AsyncMock(return_value=True)
-    spy_send = AsyncMock(return_value=True)
     monkeypatch.setattr(hw, "notify_recipients", spy_notify)
-    monkeypatch.setattr(hw, "_send_alert", spy_send)
 
     redis = AsyncMock()
     redis.get = AsyncMock(return_value=None)
@@ -76,65 +74,16 @@ async def test_health_with_engine_calls_notify_recipients(monkeypatch) -> None:
         redis,
         dedup_key="test:key",
         text="алерт",
-        tg_client=None,
-        chat_id=None,
-        thread_id=None,
         engine=engine,
     )
     assert ok is True
     spy_notify.assert_awaited_once()
-    spy_send.assert_not_awaited()  # forum-send не вызывается
-
-
-# health: без engine _maybe_alert_with_dedup зовёт _send_alert (старый путь, тесты волны 1)
-@pytest.mark.asyncio
-async def test_health_without_engine_calls_send_alert(monkeypatch) -> None:
-    import apps.health_watchdog.main as hw
-
-    spy_notify = AsyncMock(return_value=True)
-    spy_send = AsyncMock(return_value=True)
-    monkeypatch.setattr(hw, "notify_recipients", spy_notify)
-    monkeypatch.setattr(hw, "_send_alert", spy_send)
-
-    redis = AsyncMock()
-    redis.get = AsyncMock(return_value=None)
-    redis.set = AsyncMock(return_value=True)
-
-    ok = await hw._maybe_alert_with_dedup(
-        redis,
-        dedup_key="test:key",
-        text="алерт",
-        tg_client=object(),
-        chat_id="1",
-        thread_id=None,
-        engine=None,
-    )
-    assert ok is True
-    spy_send.assert_awaited_once()
-    spy_notify.assert_not_awaited()
-
-
-# health: thread_id=None в _load_tg (форум-топики удалены в Волне 2)
-@pytest.mark.asyncio
-async def test_health_load_tg_no_thread_id() -> None:
-    import apps.health_watchdog.main as hw
-    from core.telegram.service import load_telegram_config  # noqa: F401
-
-    fake_cfg = SimpleNamespace(
-        bot_token="tok",
-        chat_id=123,
-    )
-    engine = MagicMock()
-    with patch("apps.health_watchdog.main.load_telegram_config", AsyncMock(return_value=fake_cfg)):
-        _, _, thread_id = await hw._load_tg(engine)
-    # thread_id должен быть None
-    assert thread_id is None
 
 
 # =================== autostop_alert ===================
 
 
-# channel-down: при engine вызывает notify_recipients (lazy import из worker_notify), НЕ send с thread
+# channel-down: вызывает notify_recipients (lazy import из worker_notify), НЕ send напрямую
 @pytest.mark.asyncio
 async def test_autostop_alert_engine_path_uses_notify_recipients() -> None:
     import core.telegram.worker_notify as wnm
@@ -143,7 +92,6 @@ async def test_autostop_alert_engine_path_uses_notify_recipients() -> None:
 
     engine = MagicMock()
     redis = AsyncMock()
-    tg_client = AsyncMock()
 
     exc = TemporaryError("Failed to fetch", code=-2)
 
@@ -159,9 +107,6 @@ async def test_autostop_alert_engine_path_uses_notify_recipients() -> None:
                 redis,
                 exc=exc,
                 fb_ad_id="AD_123",
-                tg_client=tg_client,
-                chat_id="100",
-                thread_id=7,
                 engine=engine,
             )
     finally:
@@ -169,40 +114,6 @@ async def test_autostop_alert_engine_path_uses_notify_recipients() -> None:
 
     assert result is True
     spy_notify.assert_awaited_once()
-    # прямой send tg_client НЕ вызывался
-    tg_client.send_message.assert_not_awaited()
-
-
-# channel-down: без engine используется старый прямой send (обратная совместимость тестов)
-@pytest.mark.asyncio
-async def test_autostop_alert_no_engine_uses_tg_client() -> None:
-    from core.meta_api.autostop_alert import maybe_alert_autostop_channel_down
-    from core.meta_api.errors import TemporaryError
-
-    redis = AsyncMock()
-    tg_client = AsyncMock()
-
-    exc = TemporaryError("Failed to fetch", code=-2)
-
-    with patch(
-        "core.meta_api.autostop_alert.register_autostop_failure_and_should_alert",
-        AsyncMock(return_value=True),
-    ):
-        result = await maybe_alert_autostop_channel_down(
-            redis,
-            exc=exc,
-            fb_ad_id="AD_123",
-            tg_client=tg_client,
-            chat_id="100",
-            thread_id=7,
-            engine=None,
-        )
-
-    assert result is True
-    tg_client.send_message.assert_awaited_once()
-    kwargs = tg_client.send_message.await_args.kwargs
-    # thread_id не должен использоваться (пустой fallback оставляет его как есть для теста)
-    assert "message_thread_id" in kwargs
 
 
 # =================== enable_reco ===================
@@ -234,7 +145,7 @@ def _fake_decision():
     return RecommendationDecision(recommend=True, level="warning", skip_reason=None, snapshot={})
 
 
-# enable_reco: send_alert с engine рассылает по recipients, НЕ через forum-thread
+# enable_reco: send_alert рассылает по recipients, НЕ через forum-thread
 @pytest.mark.asyncio
 async def test_enable_reco_send_alert_engine_sends_to_recipients() -> None:
     from apps.enable_recommendation_worker.main import send_alert
@@ -250,8 +161,6 @@ async def test_enable_reco_send_alert_engine_sends_to_recipients() -> None:
     ):
         result = await send_alert(
             tg_client,
-            chat_id="",
-            thread_id=None,
             candidate=_fake_candidate(),
             decision=_fake_decision(),
             engine=engine,
@@ -263,26 +172,6 @@ async def test_enable_reco_send_alert_engine_sends_to_recipients() -> None:
     assert kwargs["chat_id"] == "111"
     # message_thread_id не передаётся
     assert "message_thread_id" not in kwargs
-
-
-# enable_reco: send_alert без engine — старый путь через chat_id (контракт тестов волны 1)
-@pytest.mark.asyncio
-async def test_enable_reco_send_alert_no_engine_uses_direct_send() -> None:
-    from apps.enable_recommendation_worker.main import send_alert
-
-    tg_client = AsyncMock()
-    tg_client.send_message = AsyncMock(return_value={"ok": True})
-
-    result = await send_alert(
-        tg_client,
-        chat_id="999",
-        thread_id=None,
-        candidate=_fake_candidate(),
-        decision=_fake_decision(),
-        engine=None,
-    )
-    assert result is True
-    tg_client.send_message.assert_awaited_once()
 
 
 # enable_reco: _default_tg_factory не передаёт thread_id (форум-топики удалены в Волне 2)

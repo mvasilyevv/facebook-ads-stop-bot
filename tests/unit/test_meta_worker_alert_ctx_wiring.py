@@ -19,7 +19,7 @@ import apps.meta_api_worker.main as meta
 @pytest.mark.asyncio
 async def test_task_loop_forwards_alert_ctx(monkeypatch) -> None:
     stop = asyncio.Event()
-    ctx = meta.AutostopAlertContext(tg_client=None, chat_id="100", thread_id=7)
+    ctx = meta.AutostopAlertContext(engine=object())
     task = SimpleNamespace(id=1, task_type="meta_api_mutation", requested_by="bot_auto_stop")
 
     monkeypatch.setattr(

@@ -46,9 +46,19 @@ def _fake_decision():
 async def test_send_alert_returns_bool():
     client = AsyncMock()
     client.send_message = AsyncMock(return_value={"ok": True})
-    res = await er.send_alert(
-        client, chat_id="1", thread_id=None, candidate=_fake_candidate(), decision=_fake_decision()
-    )
+    engine = MagicMock()
+    fake_r = MagicMock()
+    fake_r.chat_id = "1"
+    with patch(
+        "apps.enable_recommendation_worker.main.load_active_recipients",
+        AsyncMock(return_value=[fake_r]),
+    ):
+        res = await er.send_alert(
+            client,
+            candidate=_fake_candidate(),
+            decision=_fake_decision(),
+            engine=engine,
+        )
     assert res is True
 
 
@@ -57,27 +67,49 @@ async def test_send_alert_returns_bool():
 async def test_send_alert_failure_false():
     client = AsyncMock()
     client.send_message = AsyncMock(side_effect=RuntimeError("TG недоступен"))
-    res = await er.send_alert(
-        client, chat_id="1", thread_id=None, candidate=_fake_candidate(), decision=_fake_decision()
-    )
+    engine = MagicMock()
+    fake_r = MagicMock()
+    fake_r.chat_id = "1"
+    with patch(
+        "apps.enable_recommendation_worker.main.load_active_recipients",
+        AsyncMock(return_value=[fake_r]),
+    ):
+        res = await er.send_alert(
+            client,
+            candidate=_fake_candidate(),
+            decision=_fake_decision(),
+            engine=engine,
+        )
     assert res is False
 
 
-# send_alert при пустом chat_id → возвращает False (нет куда слать)
+# send_alert с пустым списком recipients → False
 @pytest.mark.asyncio
-async def test_send_alert_no_chat_id_false():
+async def test_send_alert_no_recipients_false():
     client = AsyncMock()
-    res = await er.send_alert(
-        client, chat_id="", thread_id=None, candidate=_fake_candidate(), decision=_fake_decision()
-    )
+    engine = MagicMock()
+    with patch(
+        "apps.enable_recommendation_worker.main.load_active_recipients",
+        AsyncMock(return_value=[]),
+    ):
+        res = await er.send_alert(
+            client,
+            candidate=_fake_candidate(),
+            decision=_fake_decision(),
+            engine=engine,
+        )
     assert res is False
 
 
 # send_alert при None client → возвращает False
 @pytest.mark.asyncio
 async def test_send_alert_none_client_false():
+    engine = MagicMock()
     res = await er.send_alert(
-        None, chat_id="1", thread_id=None, candidate=_fake_candidate(), decision=_fake_decision()
+        None,
+        candidate=_fake_candidate(),
+        decision=_fake_decision(),
+        engine=engine,
     )
     assert res is False
 
@@ -133,8 +165,6 @@ async def test_mark_recommended_not_called_on_send_failure():
             engine,
             redis_client=AsyncMock(),
             tg_client=AsyncMock(),
-            chat_id="999",
-            thread_id=None,
         )
 
     # send был вызван, mark — нет
@@ -196,8 +226,6 @@ async def test_mark_recommended_called_on_send_success():
             engine,
             redis_client=AsyncMock(),
             tg_client=AsyncMock(),
-            chat_id="999",
-            thread_id=None,
         )
 
     # оба вызваны

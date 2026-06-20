@@ -29,11 +29,9 @@ def _autostop_task(**over) -> SimpleNamespace:
     return SimpleNamespace(**base)
 
 
-def _alert_ctx(tg=None):
+def _alert_ctx(tg=None):  # noqa: ARG001 — tg больше не используется в AutostopAlertContext
     return meta.AutostopAlertContext(
-        tg_client=tg,
-        chat_id="100",
-        thread_id=7,
+        engine=object(),
         threshold=3,
         window_seconds=1800,
         dedup_ttl_seconds=1800,

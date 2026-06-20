@@ -270,9 +270,7 @@ async def test_enable_reco_paused_skips(monkeypatch) -> None:
     spy_fetch = AsyncMock()
     monkeypatch.setattr(ereco, "fetch_candidates", spy_fetch)
 
-    out = await ereco.run_once(
-        object(), redis_client=None, tg_client=None, chat_id=None, thread_id=None
-    )
+    out = await ereco.run_once(object(), redis_client=None, tg_client=None)
 
     assert out.get("skipped_paused") == 1
     assert out["candidates"] == 0

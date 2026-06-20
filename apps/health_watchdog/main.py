@@ -34,8 +34,6 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from core.db import WORKER_ENGINE_KWARGS
 from core.pubsub import CHANNEL_HEALTH_UPDATED
-from core.telegram.client import TelegramAPIError, TelegramBotClient
-from core.telegram.service import load_telegram_config
 from core.telegram.worker_notify import notify_recipients
 
 logger = logging.getLogger("health_watchdog")
@@ -271,53 +269,18 @@ def build_meta_channel_alert(*, reason: str, detail: str) -> str:
 # ====================== Telegram алерты ======================
 
 
-async def _send_alert(
-    tg_client: TelegramBotClient | None,
-    *,
-    chat_id: str | None,
-    thread_id: int | None,
-    text: str,
-) -> bool:
-    """Отправляет TG-алерт. Возвращает True при успешной отправке.
-
-    Если клиента/чата нет — пишет только в лог и возвращает False.
-    Исключения TG не роняют watchdog-цикл: логируются и возвращают False.
-    """
-    logger.warning("ALERT: %s", text)
-    if tg_client is None or not chat_id:
-        return False
-    try:
-        await tg_client.send_message(
-            chat_id=chat_id,
-            text=text,
-            message_thread_id=thread_id,
-            parse_mode="HTML",
-        )
-        return True
-    except TelegramAPIError as exc:
-        logger.error("не удалось отправить TG-алерт: %s", exc)
-        return False
-    except Exception:  # noqa: BLE001
-        logger.exception("неожиданная ошибка при отправке TG-алерта")
-        return False
-
-
 async def _maybe_alert_with_dedup(
     redis_client: redis_asyncio.Redis,
     *,
     dedup_key: str,
     text: str,
-    tg_client: TelegramBotClient | None,
-    chat_id: str | None,
-    thread_id: int | None,
-    engine: AsyncEngine | None = None,
+    engine: AsyncEngine,
 ) -> bool:
     """Сначала отправляет алерт, SET NX ставит ТОЛЬКО при успешной отправке.
 
     Порядок: GET(dedup_key) → если стоит, пропускаем; иначе отправка всем recipients
-    (при engine) или _send_alert в один chat_id (без engine, совместимость с тестами) →
-    SET NX EX только при sent=True. Это гарантирует, что при сбое TG ключ
-    не блокирует повторную попытку на TTL (алерт не теряется).
+    через notify_recipients → SET NX EX только при sent=True. Это гарантирует, что при
+    сбое TG ключ не блокирует повторную попытку на TTL (алерт не теряется).
     Возвращает True, если алерт был успешно отправлен и дедуп установлен.
     """
     # Дедуп-проверка: уже алертили в этом окне?
@@ -327,17 +290,13 @@ async def _maybe_alert_with_dedup(
     except Exception:  # noqa: BLE001
         logger.exception("ошибка чтения дедуп-ключа %s", dedup_key)
 
-    if engine is not None:
-        # Прод-путь: рассылаем всем активным recipients (без forum-топика)
-        sent = await notify_recipients(
-            engine,
-            redis_client,
-            category=f"health_watchdog:{dedup_key}",
-            text=text,
-        )
-    else:
-        # Путь совместимости (тесты волны 1 мокают _send_alert напрямую)
-        sent = await _send_alert(tg_client, chat_id=chat_id, thread_id=thread_id, text=text)
+    # Рассылаем всем активным recipients (без forum-топика)
+    sent = await notify_recipients(
+        engine,
+        redis_client,
+        category=f"health_watchdog:{dedup_key}",
+        text=text,
+    )
     if not sent:
         return False
 
@@ -356,10 +315,7 @@ async def check_worker_heartbeats(
     redis_client: redis_asyncio.Redis,
     *,
     expected_workers: list[str],
-    tg_client: TelegramBotClient | None,
-    chat_id: str | None,
-    thread_id: int | None,
-    engine: AsyncEngine | None = None,
+    engine: AsyncEngine,
 ) -> int:
     """Для каждого ожидаемого воркера проверяет heartbeat. Возвращает число алертов."""
     alerted = 0
@@ -393,9 +349,6 @@ async def check_worker_heartbeats(
             redis_client,
             dedup_key=dedup_key,
             text=text,
-            tg_client=tg_client,
-            chat_id=chat_id,
-            thread_id=thread_id,
             engine=engine,
         )
         if sent:
@@ -406,10 +359,7 @@ async def check_worker_heartbeats(
 async def check_observer_runtime(
     redis_client: redis_asyncio.Redis,
     *,
-    tg_client: TelegramBotClient | None,
-    chat_id: str | None,
-    thread_id: int | None,
-    engine: AsyncEngine | None = None,
+    engine: AsyncEngine,
 ) -> bool:
     """Проверяет ``observer:runtime``. Возвращает True, если алерт был отправлен."""
     dedup_key = f"{ALERT_DEDUP_PREFIX}observer_runtime"
@@ -431,9 +381,6 @@ async def check_observer_runtime(
         redis_client,
         dedup_key=dedup_key,
         text=text,
-        tg_client=tg_client,
-        chat_id=chat_id,
-        thread_id=thread_id,
         engine=engine,
     )
 
@@ -509,9 +456,6 @@ async def check_autostop_channel(
     engine: AsyncEngine,
     redis_client: redis_asyncio.Redis,
     *,
-    tg_client: TelegramBotClient | None,
-    chat_id: str | None,
-    thread_id: int | None,
     stuck_after_minutes: int = AUTOSTOP_STUCK_AFTER_MINUTES,
     desync_after_minutes: int = AUTOSTOP_DESYNC_AFTER_MINUTES,
 ) -> bool:
@@ -537,9 +481,6 @@ async def check_autostop_channel(
         redis_client,
         dedup_key=AUTOSTOP_DEDUP_KEY,
         text=alert_text,
-        tg_client=tg_client,
-        chat_id=chat_id,
-        thread_id=thread_id,
         engine=engine,
     )
 
@@ -548,10 +489,7 @@ async def check_meta_api_channel(
     meta_client: _MetaProbeClient,
     redis_client: redis_asyncio.Redis,
     *,
-    tg_client: TelegramBotClient | None,
-    chat_id: str | None,
-    thread_id: int | None,
-    engine: AsyncEngine | None = None,
+    engine: AsyncEngine,
     now: datetime | None = None,
 ) -> bool:
     """Проактивный probe канала Marketing API. Возвращает True, если алерт отправлен.
@@ -612,9 +550,6 @@ async def check_meta_api_channel(
         redis_client,
         dedup_key=META_CHANNEL_DEDUP_KEY,
         text=build_meta_channel_alert(reason=reason, detail=str(probe.get("detail", ""))),
-        tg_client=tg_client,
-        chat_id=chat_id,
-        thread_id=thread_id,
         engine=engine,
     )
 
@@ -660,39 +595,19 @@ async def run_one_check(
     redis_client: redis_asyncio.Redis,
     *,
     expected_workers: list[str],
-    tg_client: TelegramBotClient | None,
-    chat_id: str | None,
-    thread_id: int | None,
-    engine: AsyncEngine | None = None,
+    engine: AsyncEngine,
 ) -> None:
-    """Один прогон: heartbeat'ы + observer:runtime + канал авто-стопа + publish health:updated.
-
-    Проверка канала авто-стопа выполняется только при заданном ``engine`` (нужен доступ к
-    Postgres). Без него (например в unit-окружении) она пропускается.
-    """
+    """Один прогон: heartbeat'ы + observer:runtime + канал авто-стопа + publish health:updated."""
     await check_worker_heartbeats(
         redis_client,
         expected_workers=expected_workers,
-        tg_client=tg_client,
-        chat_id=chat_id,
-        thread_id=thread_id,
         engine=engine,
     )
     await check_observer_runtime(
         redis_client,
-        tg_client=tg_client,
-        chat_id=chat_id,
-        thread_id=thread_id,
         engine=engine,
     )
-    if engine is not None:
-        await check_autostop_channel(
-            engine,
-            redis_client,
-            tg_client=tg_client,
-            chat_id=chat_id,
-            thread_id=thread_id,
-        )
+    await check_autostop_channel(engine, redis_client)
     # Публикуем сводку health в Redis-канал (best-effort)
     await _publish_health_updated(redis_client, expected_workers=expected_workers)
 
@@ -718,11 +633,8 @@ async def check_loop(
     redis_client: redis_asyncio.Redis,
     *,
     expected_workers: list[str],
-    tg_client: TelegramBotClient | None,
-    chat_id: str | None,
-    thread_id: int | None,
     stop: asyncio.Event,
-    engine: AsyncEngine | None = None,
+    engine: AsyncEngine,
 ) -> None:
     """Главный цикл проверок раз в CHECK_INTERVAL_SECONDS.
 
@@ -740,9 +652,6 @@ async def check_loop(
             await run_one_check(
                 redis_client,
                 expected_workers=expected_workers,
-                tg_client=tg_client,
-                chat_id=chat_id,
-                thread_id=thread_id,
                 engine=engine,
             )
         except Exception:  # noqa: BLE001
@@ -757,11 +666,8 @@ async def meta_probe_loop(
     meta_client: _MetaProbeClient,
     redis_client: redis_asyncio.Redis,
     *,
-    tg_client: TelegramBotClient | None,
-    chat_id: str | None,
-    thread_id: int | None,
     stop: asyncio.Event,
-    engine: AsyncEngine | None = None,
+    engine: AsyncEngine,
     interval: int = META_PROBE_INTERVAL_SECONDS,
 ) -> None:
     """Цикл сетевого probe канала Marketing API раз в ``interval`` секунд.
@@ -780,9 +686,6 @@ async def meta_probe_loop(
             await check_meta_api_channel(
                 meta_client,
                 redis_client,
-                tg_client=tg_client,
-                chat_id=chat_id,
-                thread_id=thread_id,
                 engine=engine,
             )
         except Exception:  # noqa: BLE001
@@ -806,30 +709,6 @@ def _get_redis_url() -> str:
     return os.environ.get("REDIS_URL", "redis://localhost:6380/0")
 
 
-async def _load_tg(
-    engine: AsyncEngine,
-) -> tuple[TelegramBotClient | None, str | None, int | None]:
-    """Читает telegram_config и собирает (client, None, None).
-
-    thread_id больше не используется (рассылка всем recipients, не в форум-топик).
-    Клиент и chat_id возвращаются только для fallback-пути тестов (через _send_alert).
-    В прод-коде рассылка идёт через notify_recipients (engine передаётся в loops).
-    """
-    try:
-        cfg = await load_telegram_config(engine)
-    except Exception:  # noqa: BLE001
-        logger.exception("не удалось загрузить telegram_config")
-        return None, None, None
-
-    if cfg is None or not cfg.bot_token:
-        logger.warning("telegram_config не настроен — алерты только в лог")
-        return None, None, None
-
-    client = TelegramBotClient(cfg.bot_token)
-    # thread_id убран: алерты идут в личку всем recipients, не в forum-топик
-    return client, None, None
-
-
 async def main_loop(database_url: str | None = None) -> None:
     from core.meta_api.client import MetaApiClient
 
@@ -842,8 +721,6 @@ async def main_loop(database_url: str | None = None) -> None:
     )
     if not expected_workers:
         logger.warning("EXPECTED_WORKERS пуст — heartbeat-проверки не выполняются")
-
-    tg_client, chat_id, thread_id = await _load_tg(engine)
 
     # MetaApiClient для сетевого probe канала auto-stop (eager-init: gRPC-канал ленивый,
     # старт не блокирует; недоступность browser-agent probe-цикл трактует как «канал мёртв»).
@@ -872,18 +749,12 @@ async def main_loop(database_url: str | None = None) -> None:
             check_loop(
                 redis_client,
                 expected_workers=expected_workers,
-                tg_client=tg_client,
-                chat_id=chat_id,
-                thread_id=thread_id,
                 stop=stop,
                 engine=engine,
             ),
             meta_probe_loop(
                 meta_client,
                 redis_client,
-                tg_client=tg_client,
-                chat_id=chat_id,
-                thread_id=thread_id,
                 stop=stop,
                 engine=engine,
             ),
@@ -893,11 +764,6 @@ async def main_loop(database_url: str | None = None) -> None:
             await meta_client.close()
         except Exception:  # noqa: BLE001
             logger.exception("ошибка закрытия MetaApiClient")
-        if tg_client is not None:
-            try:
-                await tg_client.close()
-            except Exception:  # noqa: BLE001
-                logger.exception("ошибка закрытия TG-клиента")
         try:
             await redis_client.aclose()
         except Exception:  # noqa: BLE001

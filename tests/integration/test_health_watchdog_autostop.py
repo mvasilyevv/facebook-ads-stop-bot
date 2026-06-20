@@ -15,8 +15,8 @@ from __future__ import annotations
 
 import json
 import uuid
-from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import pytest_asyncio
@@ -35,26 +35,8 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-@dataclass
-class FakeTGClient:
-    """Минимальный стаб TelegramBotClient: фиксирует send_message вызовы."""
-
-    sent: list[dict] = field(default_factory=list)
-
-    async def send_message(
-        self,
-        *,
-        chat_id: str,
-        text: str,
-        message_thread_id: int | None = None,
-        reply_markup: dict | None = None,
-        parse_mode: str | None = "HTML",
-    ) -> dict:
-        self.sent.append({"chat_id": chat_id, "text": text, "thread_id": message_thread_id})
-        return {"message_id": len(self.sent)}
-
-    async def close(self) -> None:
-        pass
+def _make_engine_mock():
+    return MagicMock()
 
 
 @pytest_asyncio.fixture
@@ -328,7 +310,7 @@ async def test_desync_null_delivery_is_ignored(pg_engine, clean_autostop_tables)
 # ====================== Оркестрация check_autostop_channel ======================
 
 
-# Сценарий: отказ канала → ровно один CRITICAL-алерт в ops-топик, дедуп держит повтор
+# Сценарий: отказ канала → ровно один CRITICAL через notify_recipients, дедуп держит повтор
 @pytest.mark.asyncio
 async def test_check_autostop_channel_alerts_once(
     pg_engine, fake_redis_client, clean_autostop_tables
@@ -341,34 +323,31 @@ async def test_check_autostop_channel_alerts_once(
         delivery_status="ACTIVE",
         transition_age_minutes=40,
     )
-    tg = FakeTGClient()
+    notified: list[str] = []
 
-    first = await check_autostop_channel(
-        pg_engine,
-        fake_redis_client,
-        tg_client=tg,
-        chat_id="100",
-        thread_id=7,
-        stuck_after_minutes=15,
-        desync_after_minutes=15,
-    )
-    second = await check_autostop_channel(
-        pg_engine,
-        fake_redis_client,
-        tg_client=tg,
-        chat_id="100",
-        thread_id=7,
-        stuck_after_minutes=15,
-        desync_after_minutes=15,
-    )
+    async def fake_notify(engine, redis, *, category, text):
+        notified.append(text)
+        return True
+
+    with patch("apps.health_watchdog.main.notify_recipients", fake_notify):
+        first = await check_autostop_channel(
+            pg_engine,
+            fake_redis_client,
+            stuck_after_minutes=15,
+            desync_after_minutes=15,
+        )
+        second = await check_autostop_channel(
+            pg_engine,
+            fake_redis_client,
+            stuck_after_minutes=15,
+            desync_after_minutes=15,
+        )
 
     assert first is True
     assert second is False  # дедуп: повторно не шлём
-    assert len(tg.sent) == 1
-    msg = tg.sent[0]
-    assert "23010" in msg["text"]  # застрявшая задача
-    assert "55010" in msg["text"]  # рассинхрон
-    assert msg["thread_id"] == 7  # ops-топик
+    assert len(notified) == 1
+    assert "23010" in notified[0]  # застрявшая задача
+    assert "55010" in notified[0]  # рассинхрон
     assert await fake_redis_client.get(AUTOSTOP_DEDUP_KEY) == "1"
 
 
@@ -386,20 +365,17 @@ async def test_check_autostop_channel_healthy_no_alert(
         delivery_status="Paused",
         transition_age_minutes=40,
     )
-    tg = FakeTGClient()
 
-    sent = await check_autostop_channel(
-        pg_engine,
-        fake_redis_client,
-        tg_client=tg,
-        chat_id="100",
-        thread_id=7,
-        stuck_after_minutes=15,
-        desync_after_minutes=15,
-    )
+    with patch("apps.health_watchdog.main.notify_recipients", AsyncMock(return_value=True)) as spy:
+        sent = await check_autostop_channel(
+            pg_engine,
+            fake_redis_client,
+            stuck_after_minutes=15,
+            desync_after_minutes=15,
+        )
 
     assert sent is False
-    assert tg.sent == []
+    spy.assert_not_awaited()
     assert await fake_redis_client.get(AUTOSTOP_DEDUP_KEY) is None
 
 
@@ -414,44 +390,18 @@ async def test_run_one_check_includes_autostop(pg_engine, fake_redis_client, cle
         ex=60,
     )
     await _insert_pause_task(pg_engine, fb_ad_id="23099", status="retrying", age_minutes=40)
-    tg = FakeTGClient()
+    notified: list[str] = []
 
-    await run_one_check(
-        fake_redis_client,
-        expected_workers=["observer"],
-        tg_client=tg,
-        chat_id="100",
-        thread_id=7,
-        engine=pg_engine,
-    )
+    async def fake_notify(engine, redis, *, category, text):
+        notified.append(text)
+        return True
 
-    assert len(tg.sent) == 1
-    assert "23099" in tg.sent[0]["text"]
-    assert tg.sent[0]["thread_id"] == 7
+    with patch("apps.health_watchdog.main.notify_recipients", fake_notify):
+        await run_one_check(
+            fake_redis_client,
+            expected_workers=["observer"],
+            engine=pg_engine,
+        )
 
-
-# Сценарий: run_one_check без engine не падает и не трогает канал авто-стопа (обратная совместимость)
-@pytest.mark.asyncio
-async def test_run_one_check_without_engine_skips_autostop(
-    pg_engine, fake_redis_client, clean_autostop_tables
-):
-    await fake_redis_client.set("worker:heartbeat:observer", "alive", ex=60)
-    await fake_redis_client.set(
-        "observer:runtime",
-        json.dumps({"worker_status": "scanning", "updated_at": _utcnow().isoformat()}),
-        ex=60,
-    )
-    await _insert_pause_task(pg_engine, fb_ad_id="23098", status="retrying", age_minutes=40)
-    tg = FakeTGClient()
-
-    # engine не передан → autostop-проверка пропускается, исключений нет
-    await run_one_check(
-        fake_redis_client,
-        expected_workers=["observer"],
-        tg_client=tg,
-        chat_id="100",
-        thread_id=7,
-    )
-
-    assert tg.sent == []
-    assert await fake_redis_client.get(AUTOSTOP_DEDUP_KEY) is None
+    assert len(notified) == 1
+    assert "23099" in notified[0]

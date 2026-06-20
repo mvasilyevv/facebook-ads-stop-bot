@@ -10,7 +10,8 @@ check_meta_api_channel — единственный прободер: зовёт
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -19,27 +20,6 @@ from apps.health_watchdog.main import (
     META_CHANNEL_HEALTH_KEY,
     check_meta_api_channel,
 )
-
-
-@dataclass
-class FakeTGClient:
-    """Стаб TelegramBotClient: фиксирует send_message вызовы."""
-
-    sent: list[dict] = field(default_factory=list)
-
-    async def send_message(
-        self,
-        *,
-        chat_id: str,
-        text: str,
-        message_thread_id: int | None = None,
-        parse_mode: str | None = "HTML",
-    ) -> dict:
-        self.sent.append({"chat_id": chat_id, "text": text, "thread_id": message_thread_id})
-        return {"message_id": len(self.sent)}
-
-    async def close(self) -> None:
-        pass
 
 
 @dataclass
@@ -83,23 +63,23 @@ _DOWN_PROBE = {
 }
 
 
-# Канал мёртв (Failed to fetch): Redis-ключ healthy=False + ровно один CRITICAL-алерт
+def _make_engine():
+    return MagicMock()
+
+
+# Канал мёртв (Failed to fetch): Redis-ключ healthy=False + ровно один CRITICAL через notify_recipients
 @pytest.mark.asyncio
 async def test_probe_down_writes_redis_and_alerts(fake_redis_client) -> None:
     meta = FakeMetaClient([_DOWN_PROBE])
-    tg = FakeTGClient()
+    engine = _make_engine()
 
-    alerted = await check_meta_api_channel(
-        meta,
-        fake_redis_client,
-        tg_client=tg,
-        chat_id="100",
-        thread_id=7,
-    )
+    with patch("apps.health_watchdog.main.notify_recipients", AsyncMock(return_value=True)) as spy:
+        alerted = await check_meta_api_channel(meta, fake_redis_client, engine=engine)
 
     assert alerted is True
-    assert len(tg.sent) == 1
-    assert "probe_network_down" in tg.sent[0]["text"]
+    spy.assert_awaited_once()
+    kwargs = spy.await_args.kwargs
+    assert "probe_network_down" in kwargs["text"]
     raw = await fake_redis_client.get(META_CHANNEL_HEALTH_KEY)
     payload = json.loads(raw)
     assert payload["healthy"] is False
@@ -113,32 +93,28 @@ async def test_probe_down_writes_redis_and_alerts(fake_redis_client) -> None:
 @pytest.mark.asyncio
 async def test_probe_down_dedup_second_check_silent(fake_redis_client) -> None:
     meta = FakeMetaClient([_DOWN_PROBE, _DOWN_PROBE])
-    tg = FakeTGClient()
+    engine = _make_engine()
 
-    first = await check_meta_api_channel(
-        meta, fake_redis_client, tg_client=tg, chat_id="100", thread_id=None
-    )
-    second = await check_meta_api_channel(
-        meta, fake_redis_client, tg_client=tg, chat_id="100", thread_id=None
-    )
+    with patch("apps.health_watchdog.main.notify_recipients", AsyncMock(return_value=True)) as spy:
+        first = await check_meta_api_channel(meta, fake_redis_client, engine=engine)
+        second = await check_meta_api_channel(meta, fake_redis_client, engine=engine)
 
     assert first is True
     assert second is False
-    assert len(tg.sent) == 1
+    assert spy.await_count == 1
 
 
 # Канал жив: Redis-ключ healthy=True, без алерта
 @pytest.mark.asyncio
 async def test_probe_ok_writes_redis_no_alert(fake_redis_client) -> None:
     meta = FakeMetaClient([_OK_PROBE])
-    tg = FakeTGClient()
+    engine = _make_engine()
 
-    alerted = await check_meta_api_channel(
-        meta, fake_redis_client, tg_client=tg, chat_id="100", thread_id=None
-    )
+    with patch("apps.health_watchdog.main.notify_recipients", AsyncMock(return_value=True)) as spy:
+        alerted = await check_meta_api_channel(meta, fake_redis_client, engine=engine)
 
     assert alerted is False
-    assert tg.sent == []
+    spy.assert_not_awaited()
     payload = json.loads(await fake_redis_client.get(META_CHANNEL_HEALTH_KEY))
     assert payload["healthy"] is True
     assert payload["probe_ok"] is True
@@ -148,22 +124,18 @@ async def test_probe_ok_writes_redis_no_alert(fake_redis_client) -> None:
 @pytest.mark.asyncio
 async def test_probe_recovery_rearms_alert(fake_redis_client) -> None:
     meta = FakeMetaClient([_DOWN_PROBE, _OK_PROBE, _DOWN_PROBE])
-    tg = FakeTGClient()
+    engine = _make_engine()
+    spy = AsyncMock(return_value=True)
 
-    a1 = await check_meta_api_channel(
-        meta, fake_redis_client, tg_client=tg, chat_id="100", thread_id=None
-    )
-    a2 = await check_meta_api_channel(
-        meta, fake_redis_client, tg_client=tg, chat_id="100", thread_id=None
-    )
-    a3 = await check_meta_api_channel(
-        meta, fake_redis_client, tg_client=tg, chat_id="100", thread_id=None
-    )
+    with patch("apps.health_watchdog.main.notify_recipients", spy):
+        a1 = await check_meta_api_channel(meta, fake_redis_client, engine=engine)
+        a2 = await check_meta_api_channel(meta, fake_redis_client, engine=engine)
+        a3 = await check_meta_api_channel(meta, fake_redis_client, engine=engine)
 
     assert a1 is True  # первый отказ → алерт
     assert a2 is False  # восстановление → молчим, снимаем дедуп
     assert a3 is True  # снова отказ → новый алерт (re-arm сработал)
-    assert len(tg.sent) == 2
+    assert spy.await_count == 2
 
 
 # check_health бросил исключение → канал считается мёртвым (Redis down + alert)
@@ -173,11 +145,12 @@ async def test_probe_exception_treated_as_down(fake_redis_client) -> None:
         async def check_health(self, *, full_probe: bool = False) -> dict:
             raise RuntimeError("gRPC boom")
 
-    tg = FakeTGClient()
-    alerted = await check_meta_api_channel(
-        BoomClient(), fake_redis_client, tg_client=tg, chat_id="100", thread_id=None
-    )
+    engine = _make_engine()
+
+    with patch("apps.health_watchdog.main.notify_recipients", AsyncMock(return_value=True)) as spy:
+        alerted = await check_meta_api_channel(BoomClient(), fake_redis_client, engine=engine)
 
     assert alerted is True
+    spy.assert_awaited_once()
     payload = json.loads(await fake_redis_client.get(META_CHANNEL_HEALTH_KEY))
     assert payload["healthy"] is False

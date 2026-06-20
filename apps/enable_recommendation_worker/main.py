@@ -266,19 +266,14 @@ async def insert_recommendation(
 async def send_alert(
     tg_client,
     *,
-    chat_id: str,
-    thread_id: int | None,
     candidate: CandidateRow,
     decision: RecommendationDecision,
-    engine: Any | None = None,
+    engine: Any,
 ) -> bool:
     """Шлёт TG-алерт с inline-кнопкой «Включить» всем активным recipients.
 
     Возвращает True при успешной доставке ≥1 получателю, False при сбое или отсутствии TG.
     mark_recommended должен вызываться ТОЛЬКО при True — иначе рекомендация теряется навсегда.
-
-    При engine — рассылает по всем активным recipients (без forum-топика). Иначе — старый
-    прямой send в один chat_id (обратная совместимость тестов волны 1).
     """
     text_body, reply_markup = render_enable_reco_alert(
         EnableRecoRenderInput(
@@ -291,60 +286,39 @@ async def send_alert(
         )
     )
 
-    if engine is not None:
-        # Прод-путь: рассылаем всем активным recipients в личку (с кнопкой!)
-        if tg_client is None:
-            logger.warning(
-                "TG не настроен — рекомендация для fb_ad_id=%s только в лог", candidate.fb_ad_id
-            )
-            return False
-        try:
-            recipients = await load_active_recipients(engine)
-        except Exception:  # noqa: BLE001
-            logger.exception("send_alert: не удалось загрузить recipients")
-            return False
-        if not recipients:
-            logger.warning(
-                "send_alert: нет активных recipients — рекомендация для %s только в лог",
-                candidate.fb_ad_id,
-            )
-            return False
-        delivered = False
-        for r in recipients:
-            try:
-                await tg_client.send_message(
-                    chat_id=str(r.chat_id),
-                    text=text_body,
-                    reply_markup=reply_markup,
-                    parse_mode="HTML",
-                )
-                delivered = True
-            except Exception:  # noqa: BLE001
-                logger.exception(
-                    "send_alert: не доставлено chat_id=%s (fb_ad_id=%s)",
-                    r.chat_id,
-                    candidate.fb_ad_id,
-                )
-        return delivered
-
-    # Fallback: прямой send в один chat_id (обратная совместимость тестов волны 1)
-    if tg_client is None or not chat_id:
+    if tg_client is None:
         logger.warning(
             "TG не настроен — рекомендация для fb_ad_id=%s только в лог", candidate.fb_ad_id
         )
         return False
-
     try:
-        await tg_client.send_message(
-            chat_id=chat_id,
-            text=text_body,
-            reply_markup=reply_markup,
-            parse_mode="HTML",
-        )
-        return True
+        recipients = await load_active_recipients(engine)
     except Exception:  # noqa: BLE001
-        logger.exception("send_message для fb_ad_id=%s упал", candidate.fb_ad_id)
+        logger.exception("send_alert: не удалось загрузить recipients")
         return False
+    if not recipients:
+        logger.warning(
+            "send_alert: нет активных recipients — рекомендация для %s только в лог",
+            candidate.fb_ad_id,
+        )
+        return False
+    delivered = False
+    for r in recipients:
+        try:
+            await tg_client.send_message(
+                chat_id=str(r.chat_id),
+                text=text_body,
+                reply_markup=reply_markup,
+                parse_mode="HTML",
+            )
+            delivered = True
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "send_alert: не доставлено chat_id=%s (fb_ad_id=%s)",
+                r.chat_id,
+                candidate.fb_ad_id,
+            )
+    return delivered
 
 
 # ====================== Один цикл ======================
@@ -355,8 +329,6 @@ async def run_once(
     *,
     redis_client,
     tg_client,
-    chat_id: str | None,
-    thread_id: int | None,
     thresholds: AnalyzerThresholds | None = None,
     now: datetime | None = None,
 ) -> dict[str, int]:
@@ -443,8 +415,6 @@ async def run_once(
         # рекомендацию навсегда (idempotency_key в БД + Redis NX уже стоят).
         sent = await send_alert(
             tg_client,
-            chat_id=chat_id or "",
-            thread_id=thread_id,
             candidate=cand,
             decision=decision,
             engine=engine,
@@ -491,7 +461,7 @@ async def main_loop(
 
     engine = await engine_factory()
     redis_client = await redis_factory()
-    tg_client, chat_id, thread_id = await tg_factory(engine)
+    tg_client, _chat_id, _thread_id = await tg_factory(engine)
 
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -518,8 +488,6 @@ async def main_loop(
                     engine,
                     redis_client=redis_client,
                     tg_client=tg_client,
-                    chat_id=chat_id,
-                    thread_id=thread_id,
                 )
                 if any(v > 0 for v in summary.values()):
                     logger.info("enable_reco counts: %s", summary)

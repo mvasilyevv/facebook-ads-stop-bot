@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import html
 import logging
-from typing import Any, Protocol
+from typing import Any
 
 from core.meta_api.errors import RateLimitedError, SessionUnavailableError, TemporaryError
 
@@ -34,19 +34,6 @@ AUTOSTOP_ALERT_DEDUP_KEY = "autostop:alerted"
 DEFAULT_THRESHOLD = 3
 DEFAULT_WINDOW_SECONDS = 30 * 60
 DEFAULT_DEDUP_TTL_SECONDS = 30 * 60
-
-
-class _TGClient(Protocol):
-    """Оставлен для обратной совместимости — в прод-коде больше не используется напрямую."""
-
-    async def send_message(
-        self,
-        *,
-        chat_id: str,
-        text: str,
-        message_thread_id: int | None = ...,
-        parse_mode: str | None = ...,
-    ) -> Any: ...
 
 
 def is_channel_down_error(exc: BaseException) -> bool:
@@ -136,20 +123,16 @@ async def maybe_alert_autostop_channel_down(
     *,
     exc: BaseException,
     fb_ad_id: str,
-    tg_client: _TGClient | None,
-    chat_id: str | None,
-    thread_id: int | None,
+    engine: Any,
     threshold: int = DEFAULT_THRESHOLD,
     window_seconds: int = DEFAULT_WINDOW_SECONDS,
     dedup_ttl_seconds: int = DEFAULT_DEDUP_TTL_SECONDS,
-    engine: Any | None = None,
 ) -> bool:
     """Если ошибка = «канал мёртв» и серия достигла порога — шлёт ОДИН CRITICAL.
 
     Best-effort: ошибки TG/Redis не пробрасываются (не ломаем requeue auto-stop).
     Возвращает True, если решение «алертить» принято (даже если TG-клиента нет — лог).
-    При engine — рассылка всем активным recipients (без forum-топика); иначе старый
-    прямой send (обратная совместимость тестов и окружений без engine).
+    Рассылка всем активным recipients (без forum-топика) через notify_recipients.
     """
     if not is_channel_down_error(exc):
         return False
@@ -177,32 +160,16 @@ async def maybe_alert_autostop_channel_down(
     )
     logger.error("autostop_alert CRITICAL: %s (ad=%s)", str(exc), fb_ad_id)
 
-    if engine is not None:
-        # Прод-путь: рассылка всем recipients в личку (без forum-топика)
-        from core.telegram.worker_notify import notify_recipients
-
-        try:
-            await notify_recipients(
-                engine,
-                redis_client,
-                category="autostop_channel_down",
-                text=text,
-            )
-        except Exception:  # noqa: BLE001
-            logger.exception("autostop_alert: не удалось отправить CRITICAL всем recipients")
-        return True
-
-    # Fallback: прямой send в один chat_id (тесты / окружение без engine)
-    if tg_client is None or not chat_id:
-        return True
+    # Рассылка всем recipients в личку (без forum-топика)
+    from core.telegram.worker_notify import notify_recipients
 
     try:
-        await tg_client.send_message(
-            chat_id=chat_id,
+        await notify_recipients(
+            engine,
+            redis_client,
+            category="autostop_channel_down",
             text=text,
-            message_thread_id=thread_id,
-            parse_mode="HTML",
         )
     except Exception:  # noqa: BLE001
-        logger.exception("autostop_alert: не удалось отправить CRITICAL в TG")
+        logger.exception("autostop_alert: не удалось отправить CRITICAL всем recipients")
     return True

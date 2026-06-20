@@ -71,8 +71,6 @@ from core.meta_api.schemas import IRREVERSIBLE_MUTATION_KINDS, MetaMutationPaylo
 from core.observer.queries import load_scanning_enabled
 from core.pubsub import CHANNEL_TASK_CHANGED
 from core.tasks.queue import Task
-from core.telegram.client import TelegramBotClient
-from core.telegram.service import load_telegram_config
 from core.telegram.worker_notify import notify_owners
 
 logger = logging.getLogger("meta_api_worker")
@@ -98,17 +96,12 @@ class AutostopAlertContext:
     """Параметры CRITICAL-алерта auto-stop, прокинутые из main_loop в process_one_task.
 
     engine используется для рассылки через notify_recipients (всем активным recipients).
-    tg_client/chat_id/thread_id оставлены для обратной совместимости тестов (fallback-путь
-    в maybe_alert_autostop_channel_down при engine=None).
     """
 
-    tg_client: Any | None
-    chat_id: str | None
-    thread_id: int | None
+    engine: Any  # AsyncEngine для recipients-рассылки
     threshold: int = _ALERT_THRESHOLD
     window_seconds: int = _ALERT_WINDOW_SEC
     dedup_ttl_seconds: int = _ALERT_DEDUP_SEC
-    engine: Any | None = None  # AsyncEngine для recipients-рассылки
 
 
 async def _publish_task_changed(
@@ -542,13 +535,10 @@ async def process_one_task(
                 redis_client,
                 exc=exc,
                 fb_ad_id=payload.target_id,
-                tg_client=alert_ctx.tg_client,
-                chat_id=alert_ctx.chat_id,
-                thread_id=alert_ctx.thread_id,
+                engine=alert_ctx.engine,
                 threshold=alert_ctx.threshold,
                 window_seconds=alert_ctx.window_seconds,
                 dedup_ttl_seconds=alert_ctx.dedup_ttl_seconds,
-                engine=alert_ctx.engine,
             )
         return
     except ValueError as exc:
@@ -669,26 +659,6 @@ async def task_loop(
 # ====================== entrypoint ======================
 
 
-async def _load_tg(
-    engine: AsyncEngine,
-) -> tuple[TelegramBotClient | None, str | None, int | None]:
-    """Читает telegram_config → (client, None, None).
-
-    thread_id убран: алерты идут через notify_recipients всем активным recipients (DM).
-    Возвращает (client, None, None) для fallback-совместимости тестов.
-    """
-    try:
-        cfg = await load_telegram_config(engine)
-    except Exception:  # noqa: BLE001
-        logger.exception("meta_api_worker: не удалось загрузить telegram_config")
-        return None, None, None
-    if cfg is None or not cfg.bot_token:
-        logger.warning("meta_api_worker: telegram_config не настроен — CRITICAL только в лог")
-        return None, None, None
-    # thread_id убран: рассылка идёт в личку через notify_recipients (engine в AutostopAlertContext)
-    return TelegramBotClient(cfg.bot_token), None, None
-
-
 async def main_loop(database_url: str | None = None) -> None:
     db_url = database_url or _get_database_url()
     engine = create_async_engine(db_url, **WORKER_ENGINE_KWARGS)
@@ -700,13 +670,7 @@ async def main_loop(database_url: str | None = None) -> None:
     await meta_client.start()
 
     # CRITICAL-алерт «канал auto-stop мёртв» (#2). Рассылается всем recipients через engine.
-    tg_client, tg_chat_id, tg_thread_id = await _load_tg(engine)
-    alert_ctx = AutostopAlertContext(
-        tg_client=tg_client,
-        chat_id=tg_chat_id,
-        thread_id=tg_thread_id,
-        engine=engine,  # для рассылки через notify_recipients
-    )
+    alert_ctx = AutostopAlertContext(engine=engine)
 
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -729,11 +693,6 @@ async def main_loop(database_url: str | None = None) -> None:
             heartbeat_loop(redis_client, stop),
         )
     finally:
-        if tg_client is not None:
-            try:
-                await tg_client.close()
-            except Exception:  # noqa: BLE001
-                logger.exception("meta_api_worker: ошибка закрытия TG-клиента")
         try:
             await meta_client.close()
         except Exception:  # noqa: BLE001

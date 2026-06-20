@@ -29,7 +29,12 @@ def _utcnow() -> datetime:
 
 @pytest_asyncio.fixture
 async def clean_reco_tables(pg_engine):
-    """Чистит таблицы которые трогает worker."""
+    """Чистит таблицы которые трогает worker.
+
+    Создаёт тестового recipient chat_id=123456 чтобы send_alert → load_active_recipients
+    находил кого отправить (send_alert идёт по recipients, не по прямому chat_id).
+    """
+    _RECIPIENT_CHAT_ID = 123456
 
     async def _truncate():
         async with pg_engine.begin() as conn:
@@ -47,8 +52,21 @@ async def clean_reco_tables(pg_engine):
                 "offers",
             ):
                 await conn.execute(text(f"DELETE FROM {t}"))
+            await conn.execute(
+                text("DELETE FROM telegram_recipients WHERE chat_id = :c"),
+                {"c": _RECIPIENT_CHAT_ID},
+            )
 
     await _truncate()
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO telegram_recipients (chat_id, telegram_user_id, role) "
+                "VALUES (:c, 99001, 'owner') "
+                "ON CONFLICT (chat_id, telegram_user_id) DO NOTHING"
+            ),
+            {"c": _RECIPIENT_CHAT_ID},
+        )
     yield
     await _truncate()
 
@@ -142,8 +160,6 @@ async def test_creates_recommendation_for_recovered_ad(
         pg_engine,
         redis_client=fake_redis_client,
         tg_client=tg_client,
-        chat_id="123456",
-        thread_id=None,
     )
 
     assert counts["candidates"] == 1
@@ -208,8 +224,6 @@ async def test_dedups_within_window(pg_engine, stopped_ad, fake_redis_client, tg
         pg_engine,
         redis_client=fake_redis_client,
         tg_client=tg_client,
-        chat_id="555",
-        thread_id=None,
     )
     assert counts_1["recommendations"] == 1
     assert counts_1["alerts_sent"] == 1
@@ -218,8 +232,6 @@ async def test_dedups_within_window(pg_engine, stopped_ad, fake_redis_client, tg
         pg_engine,
         redis_client=fake_redis_client,
         tg_client=tg_client,
-        chat_id="555",
-        thread_id=None,
     )
     # Второй прогон — дедуп срабатывает: ни одной новой рекомендации, ни одного алёрта
     assert counts_2["recommendations"] == 0
@@ -256,8 +268,6 @@ async def test_skips_when_no_metrics_after_disable(
         pg_engine,
         redis_client=fake_redis_client,
         tg_client=tg_client,
-        chat_id="1",
-        thread_id=None,
     )
     assert counts["candidates"] == 1
     assert counts["recommendations"] == 0
@@ -283,8 +293,6 @@ async def test_skips_snoozed_ad(pg_engine, stopped_ad, fake_redis_client, tg_res
         pg_engine,
         redis_client=fake_redis_client,
         tg_client=tg_client,
-        chat_id="1",
-        thread_id=None,
     )
     assert counts["candidates"] == 1
     assert counts["skipped_decision"] == 1

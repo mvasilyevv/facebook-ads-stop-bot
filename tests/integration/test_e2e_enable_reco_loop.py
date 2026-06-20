@@ -36,9 +36,16 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+_E2E_RECIPIENT_CHAT_ID = 9000
+
+
 @pytest_asyncio.fixture
 async def clean_enable_reco_pipeline(pg_engine):
-    """Чистит все таблицы pipeline'а до/после теста."""
+    """Чистит все таблицы pipeline'а до/после теста.
+
+    Создаёт тестового recipient chat_id=9000 чтобы send_alert → load_active_recipients
+    находил кого отправить (send_alert рассылает по recipients, не берёт chat_id из параметра).
+    """
 
     async def _truncate():
         async with pg_engine.begin() as conn:
@@ -56,8 +63,21 @@ async def clean_enable_reco_pipeline(pg_engine):
                 "offers",
             ):
                 await conn.execute(text(f"DELETE FROM {t}"))
+            await conn.execute(
+                text("DELETE FROM telegram_recipients WHERE chat_id = :c"),
+                {"c": _E2E_RECIPIENT_CHAT_ID},
+            )
 
     await _truncate()
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO telegram_recipients (chat_id, telegram_user_id, role) "
+                "VALUES (:c, 99002, 'owner') "
+                "ON CONFLICT (chat_id, telegram_user_id) DO NOTHING"
+            ),
+            {"c": _E2E_RECIPIENT_CHAT_ID},
+        )
     yield
     await _truncate()
 
@@ -160,8 +180,6 @@ async def test_full_cycle_reco_to_enable_task(
         pg_engine,
         redis_client=fake_redis_client,
         tg_client=tg_client,
-        chat_id="9000",
-        thread_id=None,
     )
     assert counts["candidates"] == 1
     assert counts["recommendations"] == 1

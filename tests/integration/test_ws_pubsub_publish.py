@@ -17,6 +17,8 @@ import json
 import threading
 import time
 import uuid
+from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import patch as _patch
 
 import fakeredis.aioredis
 import httpx
@@ -429,13 +431,15 @@ async def test_health_watchdog_publishes_health_updated(fake_redis) -> None:
     await pubsub.subscribe("fb_agent:health:updated")
     await pubsub.get_message(ignore_subscribe_messages=True, timeout=0.1)
 
-    await run_one_check(
-        fake_redis,
-        expected_workers=expected_workers,
-        tg_client=None,
-        chat_id=None,
-        thread_id=None,
-    )
+    with _patch("apps.health_watchdog.main.notify_recipients", AsyncMock(return_value=False)):
+        with _patch(
+            "apps.health_watchdog.main.check_autostop_channel", AsyncMock(return_value=False)
+        ):
+            await run_one_check(
+                fake_redis,
+                expected_workers=expected_workers,
+                engine=MagicMock(),
+            )
 
     # Ожидаем сообщение
     received = None
@@ -473,13 +477,15 @@ async def test_health_watchdog_healthy_when_all_alive(fake_redis) -> None:
     await pubsub.subscribe("fb_agent:health:updated")
     await pubsub.get_message(ignore_subscribe_messages=True, timeout=0.1)
 
-    await run_one_check(
-        fake_redis,
-        expected_workers=expected_workers,
-        tg_client=None,
-        chat_id=None,
-        thread_id=None,
-    )
+    with _patch("apps.health_watchdog.main.notify_recipients", AsyncMock(return_value=False)):
+        with _patch(
+            "apps.health_watchdog.main.check_autostop_channel", AsyncMock(return_value=False)
+        ):
+            await run_one_check(
+                fake_redis,
+                expected_workers=expected_workers,
+                engine=MagicMock(),
+            )
 
     received = None
     for _ in range(20):

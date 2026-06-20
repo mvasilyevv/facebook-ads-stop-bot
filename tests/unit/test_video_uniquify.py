@@ -44,7 +44,16 @@ def _md5(path: Path) -> str:
 def _ffprobe_json(path: Path) -> dict:
     """Возвращает streams/format ролика."""
     out = subprocess.run(
-        ["ffprobe", "-v", "error", "-print_format", "json", "-show_streams", "-show_format", str(path)],
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-print_format",
+            "json",
+            "-show_streams",
+            "-show_format",
+            str(path),
+        ],
         check=True,
         capture_output=True,
     ).stdout

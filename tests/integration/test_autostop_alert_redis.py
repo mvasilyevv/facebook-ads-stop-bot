@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -19,25 +19,6 @@ from core.meta_api.autostop_alert import (
     register_autostop_failure_and_should_alert,
 )
 from core.meta_api.errors import RateLimitedError, TemporaryError
-
-
-@dataclass
-class FakeTGClient:
-    """Стаб TelegramBotClient: фиксирует send_message вызовы."""
-
-    sent: list[dict] = field(default_factory=list)
-
-    async def send_message(
-        self,
-        *,
-        chat_id: str,
-        text: str,
-        message_thread_id: int | None = None,
-        reply_markup: dict | None = None,
-        parse_mode: str | None = "HTML",
-    ) -> dict:
-        self.sent.append({"chat_id": chat_id, "text": text, "thread_id": message_thread_id})
-        return {"message_id": len(self.sent)}
 
 
 # Ниже порога — не алертим; на пороге — алертим один раз; дальше — дедуп молчит
@@ -71,69 +52,94 @@ async def test_success_resets_and_rearms(fake_redis_client) -> None:
     assert await register_autostop_failure_and_should_alert(fake_redis_client, **kw) is True
 
 
-# Оркестрация: channel-down на пороге → один CRITICAL в ops-тред с ad_id
+# Оркестрация: channel-down на пороге → один CRITICAL через notify_recipients
 @pytest.mark.asyncio
 async def test_orchestrator_alerts_on_channel_down(fake_redis_client) -> None:
-    tg = FakeTGClient()
+    import core.telegram.worker_notify as wnm
+
     exc = TemporaryError("Failed to fetch", code=-2)
+    engine = object()
+    spy_notify = AsyncMock(return_value=True)
     sent_any = False
-    for _ in range(3):
-        sent = await maybe_alert_autostop_channel_down(
-            fake_redis_client,
-            exc=exc,
-            fb_ad_id="120246662749510044",
-            tg_client=tg,
-            chat_id="100",
-            thread_id=7,
-            threshold=3,
-            window_seconds=1800,
-            dedup_ttl_seconds=1800,
-        )
-        sent_any = sent_any or sent
+    orig = wnm.notify_recipients
+    wnm.notify_recipients = spy_notify  # type: ignore[assignment]
+    try:
+        for _ in range(3):
+            sent = await maybe_alert_autostop_channel_down(
+                fake_redis_client,
+                exc=exc,
+                fb_ad_id="120246662749510044",
+                engine=engine,
+                threshold=3,
+                window_seconds=1800,
+                dedup_ttl_seconds=1800,
+            )
+            sent_any = sent_any or sent
+    finally:
+        wnm.notify_recipients = orig
+
     assert sent_any is True
-    assert len(tg.sent) == 1
-    assert tg.sent[0]["thread_id"] == 7
-    assert "120246662749510044" in tg.sent[0]["text"]
+    # notify_recipients вызван ровно один раз (дедуп работает)
+    spy_notify.assert_awaited_once()
+    kwargs = spy_notify.await_args.kwargs
+    assert "120246662749510044" in kwargs["text"]
 
 
 # Rate-limit (Meta-side, канал жив) НЕ инкрементит счётчик и НЕ алертит
 @pytest.mark.asyncio
 async def test_orchestrator_ignores_rate_limit(fake_redis_client) -> None:
-    tg = FakeTGClient()
+    import core.telegram.worker_notify as wnm
+
     exc = RateLimitedError("throttled", code=4)
-    for _ in range(10):
-        sent = await maybe_alert_autostop_channel_down(
-            fake_redis_client,
-            exc=exc,
-            fb_ad_id="120246662749510044",
-            tg_client=tg,
-            chat_id="100",
-            thread_id=7,
-            threshold=3,
-            window_seconds=1800,
-            dedup_ttl_seconds=1800,
-        )
-        assert sent is False
-    assert tg.sent == []
+    engine = object()
+    spy_notify = AsyncMock(return_value=True)
+    orig = wnm.notify_recipients
+    wnm.notify_recipients = spy_notify  # type: ignore[assignment]
+    try:
+        for _ in range(10):
+            sent = await maybe_alert_autostop_channel_down(
+                fake_redis_client,
+                exc=exc,
+                fb_ad_id="120246662749510044",
+                engine=engine,
+                threshold=3,
+                window_seconds=1800,
+                dedup_ttl_seconds=1800,
+            )
+            assert sent is False
+    finally:
+        wnm.notify_recipients = orig
+
+    spy_notify.assert_not_awaited()
     # счётчик не появился — rate-limit не считается «каналом мёртв»
     assert await fake_redis_client.get(AUTOSTOP_FAIL_COUNTER_KEY) is None
 
 
-# Нет TG-клиента → не падаем (алерт только в лог), решение всё равно True на пороге
+# notify_recipients вернул False (нет recipients/TG не настроен) → решение True, но re-arm не блокируется
 @pytest.mark.asyncio
-async def test_orchestrator_no_tg_client_does_not_crash(fake_redis_client) -> None:
+async def test_orchestrator_no_recipients_does_not_crash(fake_redis_client) -> None:
+    import core.telegram.worker_notify as wnm
+
     exc = TemporaryError("Failed to fetch", code=-2)
-    last = False
-    for _ in range(3):
-        last = await maybe_alert_autostop_channel_down(
-            fake_redis_client,
-            exc=exc,
-            fb_ad_id="120246662749510044",
-            tg_client=None,
-            chat_id=None,
-            thread_id=None,
-            threshold=3,
-            window_seconds=1800,
-            dedup_ttl_seconds=1800,
-        )
+    engine = object()
+    spy_notify = AsyncMock(return_value=False)
+    orig = wnm.notify_recipients
+    wnm.notify_recipients = spy_notify  # type: ignore[assignment]
+    try:
+        last = False
+        for _ in range(3):
+            last = await maybe_alert_autostop_channel_down(
+                fake_redis_client,
+                exc=exc,
+                fb_ad_id="120246662749510044",
+                engine=engine,
+                threshold=3,
+                window_seconds=1800,
+                dedup_ttl_seconds=1800,
+            )
+    finally:
+        wnm.notify_recipients = orig
+
+    # Функция вернула True на пороге (решение принято); notify_recipients вызван 1 раз
     assert last is True
+    spy_notify.assert_awaited_once()
