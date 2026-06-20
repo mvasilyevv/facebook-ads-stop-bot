@@ -217,3 +217,47 @@ def test_callback_data_encodes_fb_ad_id() -> None:
     )
     parts = dis_btn["callback_data"].split(":")
     assert parts[1] == "42424242"
+
+
+def _stop_input(**over):
+    """Базовый STOP-инпут для тестов клавиатуры (поля переопределяются через over)."""
+    base = dict(
+        fb_ad_id="900",
+        ad_name="Ad",
+        campaign_name="CR2|KE",
+        adset_name="EQ",
+        offer_code="KE",
+        stage="stop",
+        matched_rule_codes=[],
+        metrics={},
+        open_state_token="tok12345abc",
+    )
+    base.update(over)
+    return AlertRenderInput(**base)
+
+
+# web_app-кнопка присутствует первой строкой и ведёт на /ads/{fb_ad_id}
+def test_keyboard_has_web_app_button_when_base_set():
+    kb = render_inline_keyboard(_stop_input(web_app_base="https://h.ts.net/tma"))
+    rows = kb["inline_keyboard"]
+    assert rows[0][0]["text"] == "🔎 Открыть в Mini App"
+    assert rows[0][0]["web_app"]["url"] == "https://h.ts.net/tma/ads/900"
+    # «Отключить» — отдельной строкой ниже, callback не изменён
+    assert rows[1][0]["text"] == "🛑 Отключить"
+    assert rows[1][0]["callback_data"] == "dis:900:tok12345"
+
+
+# без base — web_app-кнопки нет, только «Отключить» (текущее поведение)
+def test_keyboard_no_web_app_button_when_base_none():
+    kb = render_inline_keyboard(_stop_input(web_app_base=None))
+    rows = kb["inline_keyboard"]
+    assert len(rows) == 1
+    assert rows[0][0]["text"] == "🛑 Отключить"
+
+
+# не-https base игнорируется (Telegram требует https) → web_app-кнопки нет
+def test_keyboard_no_web_app_button_when_base_not_https():
+    kb = render_inline_keyboard(_stop_input(web_app_base="http://h.ts.net/tma"))
+    rows = kb["inline_keyboard"]
+    assert len(rows) == 1
+    assert rows[0][0]["text"] == "🛑 Отключить"

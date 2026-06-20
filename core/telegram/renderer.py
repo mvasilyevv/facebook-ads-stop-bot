@@ -41,6 +41,7 @@ class AlertRenderInput:
     matched_rule_codes: list[str]
     metrics: dict[str, Any]
     open_state_token: str | None  # для callback кнопок
+    web_app_base: str | None = None  # https-base Mini App для deep-link кнопки
 
 
 # Заголовок по stage: эмодзи + слово.
@@ -156,6 +157,9 @@ def _context_block(inp: AlertRenderInput) -> str:
 def render_inline_keyboard(inp: AlertRenderInput) -> dict | None:
     """Inline-клавиатура с кнопками действий.
 
+    При заданном https web_app_base первой строкой добавляется web_app-кнопка
+    «Открыть в Mini App» (deep-link на /ads/{fb_ad_id}); ниже — callback 'dis'.
+
     Callback data format: `<action>:<fb_ad_id>:<token>` где action:
     - 'dis'   — отключить
 
@@ -165,6 +169,15 @@ def render_inline_keyboard(inp: AlertRenderInput) -> dict | None:
     buttons: list[list[dict]] = []
 
     if inp.stage in ("warning", "stop"):
+        if inp.web_app_base and inp.web_app_base.startswith("https://"):
+            buttons.append(
+                [
+                    {
+                        "text": "🔎 Открыть в Mini App",
+                        "web_app": {"url": f"{inp.web_app_base}/ads/{inp.fb_ad_id}"},
+                    },
+                ]
+            )
         buttons.append(
             [
                 {
