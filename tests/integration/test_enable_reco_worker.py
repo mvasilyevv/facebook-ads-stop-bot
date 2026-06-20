@@ -52,10 +52,11 @@ async def clean_reco_tables(pg_engine):
                 "offers",
             ):
                 await conn.execute(text(f"DELETE FROM {t}"))
-            await conn.execute(
-                text("DELETE FROM telegram_recipients WHERE chat_id = :c"),
-                {"c": _RECIPIENT_CHAT_ID},
-            )
+            # Тест ассертит ТОЧНЫЙ счётчик отправок (send_alert идёт по ВСЕМ
+            # активным recipients) → фикстура должна владеть таблицей целиком,
+            # иначе чужие recipients от других тестов (shared _test БД) ломают
+            # счётчик. Чистим всех, затем сеем своего единственного.
+            await conn.execute(text("DELETE FROM telegram_recipients"))
 
     await _truncate()
     async with pg_engine.begin() as conn:
