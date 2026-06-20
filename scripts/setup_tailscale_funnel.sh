@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 # Разовая настройка стабильного Tailscale Funnel для Telegram Mini App.
 #
-# Публикует локальный mini-app (vite, :5174) на ПОСТОЯННЫЙ публичный HTTPS-адрес
+# Публикует локальный mini-app (vite, :5175) на ПОСТОЯННЫЙ публичный HTTPS-адрес
 # https://<host>.<tailnet>.ts.net и регистрирует его в боте (web_app_url + авто
 # Menu Button). URL больше не меняется при перезапусках run.sh — BotFather Menu
 # Button настраивается ОДИН раз.
@@ -28,7 +28,7 @@ if [ -f .env ]; then
     . ./.env
     set +a
 fi
-MINI_PORT="${MINI_PORT:-5174}"
+MINI_PORT="${MINI_PORT:-5175}"
 API_PORT="${API_PORT:-8100}"
 
 echo -e "${BLUE}🔗 Настройка Tailscale Funnel для Mini App (порт ${MINI_PORT})${NC}"
