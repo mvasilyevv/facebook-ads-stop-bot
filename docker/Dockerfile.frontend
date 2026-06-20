@@ -1,16 +1,30 @@
-# Frontend React SPA: сборка и упаковка в nginx
-FROM node:20 AS builder
+# Frontend React SPA: сборка в pnpm workspace монорепо и упаковка в nginx
+FROM node:20-slim AS builder
 
 # VITE_API_BASE передаётся при сборке образа (например, https://api.fbbot.local)
 ARG VITE_API_BASE=/api
 
+# Установка pnpm через corepack (версия берётся из package.json → packageManager)
+RUN corepack enable && corepack prepare pnpm@latest --activate
+
 WORKDIR /app
 
-COPY frontend/package.json frontend/package-lock.json ./
-RUN npm ci
+# --- Слой кэша зависимостей ---
+# Копируем только манифесты и lockfile монорепо, чтобы docker кэшировал
+# слой node_modules отдельно от исходников.
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
+COPY packages/shared/package.json ./packages/shared/package.json
+COPY frontend/package.json ./frontend/package.json
 
-COPY frontend/ ./
-RUN VITE_API_BASE=${VITE_API_BASE} npm run build
+# Устанавливаем зависимости всего workspace (нужен shared для резолва @fb/shared)
+RUN pnpm install --frozen-lockfile
+
+# --- Слой исходников ---
+COPY packages/shared/ ./packages/shared/
+COPY frontend/ ./frontend/
+
+# Сборка только пакета fb-stop-bot-frontend (shared резолвится из workspace напрямую через src)
+RUN VITE_API_BASE=${VITE_API_BASE} pnpm --filter fb-stop-bot-frontend build
 
 # Финальный образ: nginx со статикой
 FROM nginx:alpine AS runtime
@@ -19,7 +33,7 @@ FROM nginx:alpine AS runtime
 COPY docker/nginx.conf /etc/nginx/conf.d/default.conf
 
 # Копируем собранную статику
-COPY --from=builder /app/dist /usr/share/nginx/html
+COPY --from=builder /app/frontend/dist /usr/share/nginx/html
 
 EXPOSE 80
 

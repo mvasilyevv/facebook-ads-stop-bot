@@ -1,19 +1,30 @@
-# Telegram Mini App: сборка и упаковка в nginx (base path /tma/)
-FROM node:20 AS builder
+# Telegram Mini App: сборка в pnpm workspace монорепо и упаковка в nginx (base path /tma/)
+FROM node:20-slim AS builder
 
 # VITE_API_BASE передаётся при сборке образа
 ARG VITE_API_BASE=/api
 
+# Установка pnpm через corepack (версия берётся из package.json → packageManager)
+RUN corepack enable && corepack prepare pnpm@latest --activate
+
 WORKDIR /app
 
-COPY frontend-mini/package.json frontend-mini/package-lock.json ./
-RUN npm ci
+# --- Слой кэша зависимостей ---
+# Копируем только манифесты и lockfile монорепо, чтобы docker кэшировал
+# слой node_modules отдельно от исходников.
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
+COPY packages/shared/package.json ./packages/shared/package.json
+COPY frontend-mini/package.json ./frontend-mini/package.json
 
-# Копируем mini-app и общие утилиты (используются через алиас @shared)
-COPY frontend-mini/ ./
-COPY frontend/src/shared ../frontend/src/shared
+# Устанавливаем зависимости всего workspace (нужен shared для резолва @fb/shared)
+RUN pnpm install --frozen-lockfile
 
-RUN VITE_API_BASE=${VITE_API_BASE} npm run build
+# --- Слой исходников ---
+COPY packages/shared/ ./packages/shared/
+COPY frontend-mini/ ./frontend-mini/
+
+# Сборка только пакета fb-agent-mini (shared резолвится из workspace напрямую через src)
+RUN VITE_API_BASE=${VITE_API_BASE} pnpm --filter fb-agent-mini build
 
 # Финальный образ: nginx со статикой
 FROM nginx:alpine AS runtime
@@ -22,7 +33,7 @@ FROM nginx:alpine AS runtime
 COPY docker/nginx-tma.conf /etc/nginx/conf.d/default.conf
 
 # Копируем собранную статику
-COPY --from=builder /app/dist /usr/share/nginx/html/tma
+COPY --from=builder /app/frontend-mini/dist /usr/share/nginx/html/tma
 
 EXPOSE 80
 

@@ -6,8 +6,10 @@ FROM fb-stop-bot/python-base:latest AS runtime
 COPY docker/worker-entrypoint.sh /usr/local/bin/worker-entrypoint.sh
 RUN chmod +x /usr/local/bin/worker-entrypoint.sh
 
-# WORKER_TYPE должен быть переопределён при запуске контейнера
-# Допустимые значения: observer, disable, enable, enable_recommendation, telegram_poller, health_watchdog
+# WORKER_TYPE должен быть переопределён при запуске контейнера (см. worker-entrypoint.sh).
+# Допустимые значения: observer, telegram_poller, cleanup, reconciler, meta_api,
+# health_watchdog, enable_recommendation, digest_scheduler, cabinet_scheduler,
+# tracker_aggregator, creator_worker, creator_recorder, migrate.
 ENV WORKER_TYPE=observer
 
 ENTRYPOINT ["/usr/local/bin/worker-entrypoint.sh"]

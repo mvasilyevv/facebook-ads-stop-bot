@@ -1,6 +1,58 @@
+# Полный стек FB Stop Bot для 24/7 Linux-хоста.
+#
+# Сетевая топология (Фаза 0 переезда):
+#   - Vision anti-detect браузер работает НА ХОСТЕ (под Xvfb), CDP слушает loopback.
+#   - Node.js browser-agent (gRPC :50051) тоже на хосте через network_mode: host,
+#     чтобы достучаться до Vision CDP по 127.0.0.1.
+#   - Postgres/Redis — в Docker, bind 127.0.0.1 (наружу не торчат).
+#   - Python-воркеры/API — в Docker, ходят до browser-agent на хосте через
+#     host.docker.internal (extra_hosts: host-gateway). Воркеры резолвят адрес
+#     browser-agent из env BROWSER_AGENT_HOST.
+#
+# ВНИМАНИЕ (money-критично, известное ограничение observer):
+#   apps/observer_worker/main.py::_default_gate_factory строит BrowserAgentConfig
+#   БЕЗ чтения BROWSER_AGENT_HOST/PORT — использует дефолт localhost:50051 из
+#   dataclass. Поэтому observer в контейнере на host.docker.internal НЕ попадёт на
+#   browser-agent (пойдёт на localhost внутри контейнера). До правки Python-фабрики
+#   observer запускайте через network_mode: host (см. закомментированный override
+#   в сервисе observer) ЛИБО оставьте observer на хосте под supervisord. meta_api/
+#   creator корректно читают BROWSER_AGENT_HOST и работают через host.docker.internal.
+
+# Общие настройки всех Python-воркеров (образ из Dockerfile.workers).
+x-worker-common: &worker-common
+  build:
+    context: .
+    dockerfile: docker/Dockerfile.workers
+  image: fb-stop-bot/workers:latest
+  restart: unless-stopped
+  env_file: .env
+  # Внутри docker-сети до БД/Redis ходим по service-имени, а не по host-портам .env.
+  # Эти значения переопределяют POSTGRES_HOST/REDIS_* из .env (которые указывают на
+  # host-проброс 127.0.0.1:5433 / :6380 для запуска вне Docker).
+  environment: &worker-env
+    POSTGRES_HOST: postgres
+    POSTGRES_PORT: "5432"
+    REDIS_URL: redis://redis:6379/0
+    REDIS_HOST: redis
+    REDIS_PORT: "6379"
+    BROWSER_AGENT_HOST: host.docker.internal
+    BROWSER_AGENT_GRPC_HOST: host.docker.internal
+    BROWSER_AGENT_GRPC_PORT: "50051"
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+    migrate:
+      condition: service_completed_successfully
+
 services:
+  # ====================== инфраструктура ======================
   postgres:
     image: postgres:16
+    restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-fb_stop_bot}
       POSTGRES_USER: ${POSTGRES_USER:-fb_stop_bot}
@@ -17,6 +69,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
     command: redis-server --appendonly yes
     ports:
       - "127.0.0.1:6380:6379"
@@ -27,6 +80,169 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+  # ====================== миграции (one-shot) ======================
+  # Применяет Alembic upgrade head до старта воркеров/API. Все они ждут
+  # service_completed_successfully этого сервиса.
+  migrate:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.workers
+    image: fb-stop-bot/workers:latest
+    env_file: .env
+    environment:
+      WORKER_TYPE: migrate
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: "no"
+
+  # ====================== API ======================
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    image: fb-stop-bot/api:latest
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      REDIS_URL: redis://redis:6379/0
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      BROWSER_AGENT_HOST: host.docker.internal
+      BROWSER_AGENT_GRPC_HOST: host.docker.internal
+      BROWSER_AGENT_GRPC_PORT: "50051"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "127.0.0.1:8100:8100"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  # ====================== browser-agent (на хосте) ======================
+  # network_mode: host — чтобы gRPC-сервер мог достучаться до Vision CDP на 127.0.0.1
+  # хоста. Слушает :50051 прямо на хост-интерфейсе; воркеры/api ходят сюда через
+  # host.docker.internal:50051.
+  browser-agent:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.browser-agent
+    image: fb-stop-bot/browser-agent:latest
+    restart: unless-stopped
+    env_file: .env
+    network_mode: host
+
+  # ====================== фронтенды ======================
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.frontend
+    image: fb-stop-bot/frontend:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:80"
+    depends_on:
+      - api
+
+  mini-app:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.mini-app
+    image: fb-stop-bot/mini-app:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8081:80"
+    depends_on:
+      - api
+
+  # ====================== 12 Python-воркеров ======================
+  observer:
+    <<: *worker-common
+    environment:
+      <<: *worker-env
+      WORKER_TYPE: observer
+    # Money-критично: до правки observer-gate-фабрики (не читает BROWSER_AGENT_HOST)
+    # раскомментируйте host-режим, иначе observer не достучится до browser-agent.
+    # При host-режиме уберите extra_hosts/ports конфликтов и используйте localhost:50051.
+    # network_mode: host
+
+  telegram_poller:
+    <<: *worker-common
+    environment:
+      <<: *worker-env
+      WORKER_TYPE: telegram_poller
+
+  cleanup:
+    <<: *worker-common
+    environment:
+      <<: *worker-env
+      WORKER_TYPE: cleanup
+
+  reconciler:
+    <<: *worker-common
+    environment:
+      <<: *worker-env
+      WORKER_TYPE: reconciler
+
+  meta_api:
+    <<: *worker-common
+    environment:
+      <<: *worker-env
+      WORKER_TYPE: meta_api
+
+  health_watchdog:
+    <<: *worker-common
+    environment:
+      <<: *worker-env
+      WORKER_TYPE: health_watchdog
+
+  enable_recommendation:
+    <<: *worker-common
+    environment:
+      <<: *worker-env
+      WORKER_TYPE: enable_recommendation
+
+  digest_scheduler:
+    <<: *worker-common
+    environment:
+      <<: *worker-env
+      WORKER_TYPE: digest_scheduler
+
+  cabinet_scheduler:
+    <<: *worker-common
+    environment:
+      <<: *worker-env
+      WORKER_TYPE: cabinet_scheduler
+
+  tracker_aggregator:
+    <<: *worker-common
+    environment:
+      <<: *worker-env
+      WORKER_TYPE: tracker_aggregator
+
+  creator_worker:
+    <<: *worker-common
+    environment:
+      <<: *worker-env
+      WORKER_TYPE: creator_worker
+
+  creator_recorder:
+    <<: *worker-common
+    environment:
+      <<: *worker-env
+      WORKER_TYPE: creator_recorder
 
 volumes:
   pgdata:
