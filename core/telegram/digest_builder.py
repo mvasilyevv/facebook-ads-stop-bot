@@ -168,12 +168,12 @@ async def _top_ads_and_total_spend(
     window_end: datetime,
     limit: int = 5,
 ) -> tuple[list[TopAdRow], Decimal]:
-    """Топ-N ad по последнему spend за окно + общий 24h spend.
+    """Топ-N ad по последнему spend за окно + общий spend за окно (per-ad-per-day).
 
     Логика:
-    - на ad_metrics берётся самая поздняя строка в окне (LATERAL/DISTINCT ON)
-      — это «снимок» по объявлению на конец окна;
-    - суммарный spend = SUM(этих последних snapshot'ов).
+    - топ-строки: latest-per-ad (DISTINCT ON ad_id) — для ранжирования по текущему spend;
+    - total: DISTINCT ON (ad_id, day) → SUM дневных итогов (cabinet-день может охватывать
+      несколько UTC-дней с cabinet-сбросом spend; наивный SUM снимков задваивает деньги).
 
     ⚠️ ad_metrics partitioned by cycle_ts — обязательно указываем границы окна,
     иначе сканируются все партиции.

@@ -179,19 +179,24 @@ async def test_build_digest_counts_disable_tasks(pg_engine, two_ads_world) -> No
 # Топ-строки — latest-per-ad (для ранжирования); total — sum дневных итогов.
 @pytest.mark.asyncio
 async def test_build_digest_top_ads_and_total_spend(pg_engine, two_ads_world) -> None:
-    now = _now()
+    # Фиксируем «сейчас» на 12:00 UTC — детерминизм 24/7, не зависит от wall-clock.
+    # Снапшоты ad_a разнесены по ГАРАНТИРОВАННО разным UTC-дням:
+    #   now - 14h = вчера 22:00 UTC (date_trunc('day') = вчера)
+    #   now - 1h  = сегодня 11:00 UTC (date_trunc('day') = сегодня)
+    # При любом wall-clock 14h назад от 12:00 UTC = вчера 22:00 → другой день.
+    now = _now().replace(hour=12, minute=0, second=0, microsecond=0)
     ad_a = two_ads_world["ad_a"]
     ad_b = two_ads_world["ad_b"]
 
     async with pg_engine.begin() as conn:
-        # ad_a: два снапшота в РАЗНЫХ UTC-днях (now - 10h и now - 1h при now ~07:xx → вчера и сегодня).
+        # ad_a: два снапшота в РАЗНЫХ UTC-днях (вчера=60, сегодня=100).
         # per-day CTE берёт latest per (ad, day): вчера=60, сегодня=100 → дневные итоги 60+100=160.
         # ad_b: один снапшот сегодня = 50 → дневной итог 50.
         # total = 160 + 50 = 210 (per-day, через cabinet-сброс).
         # out-of-window snapshot (now - 30h) не учитывается.
         for ad_id, ts, spend in (
-            (ad_a, now - timedelta(hours=10), Decimal("60.00")),
-            (ad_a, now - timedelta(hours=1), Decimal("100.00")),
+            (ad_a, now - timedelta(hours=14), Decimal("60.00")),  # вчера 22:00 UTC
+            (ad_a, now - timedelta(hours=1), Decimal("100.00")),  # сегодня 11:00 UTC
             (ad_b, now - timedelta(hours=2), Decimal("50.00")),
             # out-of-window snapshot — не учитывается
             (ad_a, now - timedelta(hours=30), Decimal("999.00")),
