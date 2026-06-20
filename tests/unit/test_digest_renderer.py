@@ -29,7 +29,7 @@ def _payload_empty() -> DigestPayload:
         disable_tasks_failed=0,
         active_offers_count=0,
         active_ads_count=0,
-        total_spend_24h_usd=Decimal("0"),
+        total_spend_window_usd=Decimal("0"),
     )
 
 
@@ -93,7 +93,7 @@ def test_render_full_day_top_ads_listed() -> None:
         disable_tasks_failed=1,
         active_offers_count=7,
         active_ads_count=42,
-        total_spend_24h_usd=Decimal("1234.50"),
+        total_spend_window_usd=Decimal("1234.50"),
     )
 
     text = render_digest(payload)
@@ -144,7 +144,7 @@ def test_render_truncates_long_ad_name() -> None:
         disable_tasks_failed=0,
         active_offers_count=1,
         active_ads_count=1,
-        total_spend_24h_usd=Decimal("10"),
+        total_spend_window_usd=Decimal("10"),
     )
     text = render_digest(payload)
     assert "AAAAA" in text
@@ -177,7 +177,7 @@ def test_render_no_offer_code() -> None:
         disable_tasks_failed=0,
         active_offers_count=0,
         active_ads_count=0,
-        total_spend_24h_usd=Decimal("5.00"),
+        total_spend_window_usd=Decimal("5.00"),
     )
     text = render_digest(payload)
     assert "bare ad" in text
@@ -208,7 +208,7 @@ def test_render_escapes_html_in_ad_name() -> None:
         disable_tasks_failed=0,
         active_offers_count=1,
         active_ads_count=1,
-        total_spend_24h_usd=Decimal("1"),
+        total_spend_window_usd=Decimal("1"),
     )
     text = render_digest(payload)
     assert "<script>" not in text
@@ -242,7 +242,7 @@ def test_render_zero_spend_top_ads_still_idle() -> None:
         disable_tasks_failed=0,
         active_offers_count=0,
         active_ads_count=60,
-        total_spend_24h_usd=Decimal("0"),
+        total_spend_window_usd=Decimal("0"),
     )
     text = render_digest(payload)
     assert "За окно не было активности" in text

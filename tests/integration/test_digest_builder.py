@@ -175,7 +175,8 @@ async def test_build_digest_counts_disable_tasks(pg_engine, two_ads_world) -> No
     assert payload.disable_tasks_failed == 1
 
 
-# Топ-5 по spend + total_spend_24h_usd считается из последнего snapshot ad_metrics
+# Топ-5 по spend + total_spend_window_usd считается per-ad-per-day (CRIT-1 fix).
+# Топ-строки — latest-per-ad (для ранжирования); total — sum дневных итогов.
 @pytest.mark.asyncio
 async def test_build_digest_top_ads_and_total_spend(pg_engine, two_ads_world) -> None:
     now = _now()
@@ -183,9 +184,11 @@ async def test_build_digest_top_ads_and_total_spend(pg_engine, two_ads_world) ->
     ad_b = two_ads_world["ad_b"]
 
     async with pg_engine.begin() as conn:
-        # ad_a: два снапшота, последний (по cycle_ts) = 100
-        # ad_b: один снапшот = 50
-        # суммарный spend = 100 + 50 = 150
+        # ad_a: два снапшота в РАЗНЫХ UTC-днях (now - 10h и now - 1h при now ~07:xx → вчера и сегодня).
+        # per-day CTE берёт latest per (ad, day): вчера=60, сегодня=100 → дневные итоги 60+100=160.
+        # ad_b: один снапшот сегодня = 50 → дневной итог 50.
+        # total = 160 + 50 = 210 (per-day, через cabinet-сброс).
+        # out-of-window snapshot (now - 30h) не учитывается.
         for ad_id, ts, spend in (
             (ad_a, now - timedelta(hours=10), Decimal("60.00")),
             (ad_a, now - timedelta(hours=1), Decimal("100.00")),
@@ -204,9 +207,10 @@ async def test_build_digest_top_ads_and_total_spend(pg_engine, two_ads_world) ->
             )
 
     payload = await build_digest(pg_engine, day_start_utc=now)
-    assert payload.total_spend_24h_usd == Decimal("150.00")
+    # total per-day: 60 (ad_a вчера) + 100 (ad_a сегодня) + 50 (ad_b сегодня) = 210
+    assert payload.total_spend_window_usd == Decimal("210.00")
     assert len(payload.top_ads_by_spend) == 2
-    # Сортировка по spend DESC: ad_a (100) первый, ad_b (50) второй
+    # Топ-строки: latest-per-ad — ad_a последний=100, ad_b=50
     assert payload.top_ads_by_spend[0].ad_id == ad_a
     assert payload.top_ads_by_spend[0].spend_usd == Decimal("100.00")
     assert payload.top_ads_by_spend[0].offer_code == "DIG_A"
@@ -263,7 +267,7 @@ async def test_build_digest_empty(pg_engine, clean_digest_tables) -> None:
     assert payload.disable_tasks_succeeded == 0
     assert payload.disable_tasks_failed == 0
     assert payload.top_ads_by_spend == []
-    assert payload.total_spend_24h_usd == Decimal("0")
+    assert payload.total_spend_window_usd == Decimal("0")
     assert payload.active_offers_count == 0
     assert payload.active_ads_count == 0
 
@@ -302,7 +306,7 @@ async def test_build_digest_top_excludes_zero_spend(pg_engine, two_ads_world) ->
     assert len(payload.top_ads_by_spend) == 1
     assert payload.top_ads_by_spend[0].ad_id == ad_a
     # total_spend — сумма ВСЕХ snapshot'ов (нули не влияют): 75 + 0 = 75.
-    assert payload.total_spend_24h_usd == Decimal("75.00")
+    assert payload.total_spend_window_usd == Decimal("75.00")
 
 
 # Регресс: все ad с нулевым spend → Топ-5 пуст (как пустой день), total=0.
@@ -327,4 +331,4 @@ async def test_build_digest_top_empty_when_all_zero_spend(pg_engine, two_ads_wor
 
     payload = await build_digest(pg_engine, day_start_utc=now)
     assert payload.top_ads_by_spend == []
-    assert payload.total_spend_24h_usd == Decimal("0")
+    assert payload.total_spend_window_usd == Decimal("0")

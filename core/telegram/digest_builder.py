@@ -20,6 +20,8 @@ from decimal import Decimal
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from core.dashboard.metric_aggregation import latest_per_ad_per_day_cte
+
 
 @dataclass(frozen=True)
 class TopAdRow:
@@ -49,7 +51,7 @@ class DigestPayload:
     disable_tasks_failed: int = 0
     active_offers_count: int = 0
     active_ads_count: int = 0
-    total_spend_24h_usd: Decimal = Decimal("0")
+    total_spend_window_usd: Decimal = Decimal("0")
 
 
 async def _count_alerts_by_stage(
@@ -213,23 +215,18 @@ async def _top_ads_and_total_spend(
             )
         ).all()
 
+        # CRIT-1: spend кумулятивен и сбрасывается в cabinet-полночь.
+        # Наивный DISTINCT ON (ad_id) берёт только последний snapshot → теряет день N-1.
+        # Правильно: per-day CTE суммирует дневные итоги через посуточные сбросы.
+        _total_cte = latest_per_ad_per_day_cte(
+            cte_alias="per_ad_day",
+            columns=("spend",),
+            from_param="start",
+            to_param="end",
+        )
         total_row = (
             await conn.execute(
-                text(
-                    """
-                    WITH last_metrics AS (
-                        SELECT DISTINCT ON (m.ad_id)
-                            m.ad_id,
-                            m.spend
-                        FROM ad_metrics m
-                        WHERE m.cycle_ts >= :start
-                          AND m.cycle_ts <  :end
-                        ORDER BY m.ad_id, m.cycle_ts DESC
-                    )
-                    SELECT COALESCE(SUM(spend), 0)
-                    FROM last_metrics
-                    """
-                ),
+                text(f"WITH {_total_cte} SELECT COALESCE(SUM(spend), 0) FROM per_ad_day"),
                 {"start": window_start, "end": window_end},
             )
         ).one()
@@ -296,7 +293,7 @@ async def build_digest(
         disable_tasks_failed=fail_cnt,
         active_offers_count=offers_cnt,
         active_ads_count=ads_cnt,
-        total_spend_24h_usd=total_spend,
+        total_spend_window_usd=total_spend,
     )
 
 

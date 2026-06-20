@@ -161,7 +161,7 @@ async def test_digest_aggregates_observer_pipeline_output(
     assert top1.offer_code == "DGST_S"
 
     # Total spend = сумма последних snapshot'ов = 25 + 2 = 27
-    assert digest.total_spend_24h_usd == Decimal("27")
+    assert digest.total_spend_window_usd == Decimal("27")
 
 
 # E2E: пустой период — никаких алертов/задач → нули по всем счётчикам
@@ -184,7 +184,7 @@ async def test_digest_empty_window_returns_zeros(
     assert digest.active_offers_count == 0
     assert digest.active_ads_count == 0
     assert digest.top_ads_by_spend == []
-    assert digest.total_spend_24h_usd == Decimal("0")
+    assert digest.total_spend_window_usd == Decimal("0")
 
 
 # E2E: окно «вчера» — данные из сегодня в него не попадают (partition pruning).

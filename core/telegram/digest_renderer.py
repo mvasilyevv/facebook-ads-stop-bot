@@ -67,7 +67,9 @@ def render_digest(payload: DigestPayload) -> str:
     # Активность считаем по алертам и реальному spend; непустой топ из нулей —
     # НЕ активность (урок бага дайджеста 06-02), иначе «тихий» блок прячется.
     has_activity = bool(
-        payload.alerts_warning_count or payload.alerts_stop_count or payload.total_spend_24h_usd > 0
+        payload.alerts_warning_count
+        or payload.alerts_stop_count
+        or payload.total_spend_window_usd > 0
     )
 
     # Сводки — по одной строке, метка жирным.
@@ -83,7 +85,7 @@ def render_digest(payload: DigestPayload) -> str:
     )
     lines.append(
         f"📈 {fmt.b('Итого')}   "
-        f"спенд {fmt.b(fmt.money(payload.total_spend_24h_usd))} · "
+        f"спенд {fmt.b(fmt.money(payload.total_spend_window_usd))} · "
         f"офферов {fmt.b(fmt.num(payload.active_offers_count))} · "
         f"ads {fmt.b(fmt.num(payload.active_ads_count))}"
     )
