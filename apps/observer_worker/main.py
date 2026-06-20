@@ -983,6 +983,11 @@ async def _default_gate_factory() -> ScannerGate:
     s = get_settings()
     client = BrowserAgentClient(
         BrowserAgentConfig(
+            # grpc_host/port из env — иначе в Docker observer пойдёт на localhost
+            # внутри контейнера и не достучится до browser-agent на хосте
+            # (host.docker.internal). Консистентно с meta_api/creator-воркерами.
+            grpc_host=os.environ.get("BROWSER_AGENT_HOST", "localhost"),
+            grpc_port=int(os.environ.get("BROWSER_AGENT_GRPC_PORT", "50051")),
             vision_x_token=s.vision_x_token,
             vision_api_url=s.vision_api_url,
             vision_profile_id=s.vision_profile_id,
