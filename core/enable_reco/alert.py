@@ -31,6 +31,7 @@ class EnableRecoRenderInput:
     adset_name: str
     offer_code: str | None
     decision: RecommendationDecision
+    web_app_base: str | None = None  # https-base Mini App для deep-link кнопки
 
 
 # Уровень рекомендации → (эмодзи, заголовок).
@@ -84,16 +85,25 @@ def render_enable_reco_alert(inp: EnableRecoRenderInput) -> tuple[str, dict | No
 
     text = "\n".join(lines)
 
-    reply_markup = {
-        "inline_keyboard": [
+    rows: list[list[dict]] = []
+    if inp.web_app_base and inp.web_app_base.startswith("https://"):
+        rows.append(
             [
                 {
-                    "text": "▶️ Включить",
-                    "callback_data": build_enable_reco_callback(inp.fb_ad_id),
+                    "text": "🔎 Открыть в Mini App",
+                    "web_app": {"url": f"{inp.web_app_base}/ads/{inp.fb_ad_id}"},
                 }
             ]
+        )
+    rows.append(
+        [
+            {
+                "text": "▶️ Включить",
+                "callback_data": build_enable_reco_callback(inp.fb_ad_id),
+            }
         ]
-    }
+    )
+    reply_markup = {"inline_keyboard": rows}
     return text, reply_markup
 
 

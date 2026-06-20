@@ -42,6 +42,7 @@ from core.enable_reco.analyzer import (
 )
 from core.observer.queries import load_scanning_enabled
 from core.telegram.service import load_active_recipients, load_telegram_config
+from core.telegram.web_app_url import load_web_app_url, normalize_web_app_base
 
 logger = logging.getLogger(__name__)
 
@@ -275,6 +276,7 @@ async def send_alert(
     Возвращает True при успешной доставке ≥1 получателю, False при сбое или отсутствии TG.
     mark_recommended должен вызываться ТОЛЬКО при True — иначе рекомендация теряется навсегда.
     """
+    web_app_base = normalize_web_app_base(await load_web_app_url(engine))
     text_body, reply_markup = render_enable_reco_alert(
         EnableRecoRenderInput(
             fb_ad_id=candidate.fb_ad_id,
@@ -283,6 +285,7 @@ async def send_alert(
             adset_name=candidate.adset_name,
             offer_code=candidate.offer_code,
             decision=decision,
+            web_app_base=web_app_base,
         )
     )
 
