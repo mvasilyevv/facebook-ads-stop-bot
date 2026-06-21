@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from dataclasses import dataclass
 
 from fastapi import APIRouter, HTTPException
@@ -237,6 +238,10 @@ async def _reconnect_browser(engine: AsyncEngine, settings: object) -> None:
             vision_x_token=x_token,
             vision_api_url=api_url,
             vision_profile_id=profile_id,
+            # grpc_host/port из env — иначе в Docker api пойдёт на localhost:50051
+            # (browser-agent на хосте). Зеркало фикса observer (main.py).
+            grpc_host=os.environ.get("BROWSER_AGENT_HOST", "localhost"),
+            grpc_port=int(os.environ.get("BROWSER_AGENT_GRPC_PORT", "50051")),
         )
     )
     try:
