@@ -1,0 +1,29 @@
+# Self-hosted RustDesk server (relay + ID/rendezvous) для приватного удалённого
+# доступа к рабочему столу сервера. Публичный relay RustDesk требует логин и не
+# для production — поэтому свой.
+#
+# Запуск:   cd /opt/rustdesk-server && docker compose up -d
+# Ключ:     после первого старта в ./data/id_ed25519.pub — его прописать в клиенты
+#           (Settings → Network → ID/Relay Server → Key).
+# Порты:    21115-21117/tcp + 21116/udp (открыть в ufw).
+# Клиент:   ID Server = <IP сервера>, Key = <id_ed25519.pub>; подключение по ID+паролю.
+#
+# hbbs -r <IP>:21117 — заставляет hbbs отдавать клиентам правильный адрес relay
+# (без этого peer мог сообщить 127.0.0.1, и внешний клиент не находил ретранслятор).
+
+services:
+  hbbs:
+    image: rustdesk/rustdesk-server:latest
+    command: hbbs -r 62.60.150.133:21117
+    network_mode: host
+    volumes:
+      - ./data:/root
+    restart: unless-stopped
+
+  hbbr:
+    image: rustdesk/rustdesk-server:latest
+    command: hbbr
+    network_mode: host
+    volumes:
+      - ./data:/root
+    restart: unless-stopped
