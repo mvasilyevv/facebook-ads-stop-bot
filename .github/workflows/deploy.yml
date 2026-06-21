@@ -330,16 +330,21 @@ jobs:
             # Обновляем тег latest на нужный SHA, чтобы compose взял правильный.
             # browser-agent тянем для полноты, но в Docker он не поднимается
             # (profile "agent" — на боевом сервере он нативный рядом с Vision).
+            # compose использует ЛОКАЛЬНЫЕ имена fb-stop-bot/<svc>:latest — тегаем
+            # ghcr-образ именно в них, иначе up берёт устаревший локальный образ
+            # и фиксы не доезжают (баг до 2026-06-21).
             for svc in python-base api workers; do
               docker pull "${IMAGE_BASE}-${svc}:${GIT_SHA}"
-              docker tag  "${IMAGE_BASE}-${svc}:${GIT_SHA}" "${IMAGE_BASE}-${svc}:latest"
+              docker tag  "${IMAGE_BASE}-${svc}:${GIT_SHA}" "fb-stop-bot/${svc}:latest"
             done
 
             echo "=== [3/5] Миграции БД (alembic upgrade head) ==="
             docker compose run --rm migrate
 
             echo "=== [4/5] Перезапуск core-стека (profiles web/agent исключены) ==="
-            docker compose up -d --remove-orphans
+            # --force-recreate: контейнеры держатся за image ID на момент создания;
+            # после retag latest нужно пересоздать, иначе возьмут старый образ.
+            docker compose up -d --remove-orphans --force-recreate
 
             echo "=== [5/5] Health-check (readyz + heartbeat) ==="
             ok=0
