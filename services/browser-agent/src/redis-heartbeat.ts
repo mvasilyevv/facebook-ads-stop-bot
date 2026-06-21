@@ -25,6 +25,7 @@ export interface RedisLike {
     expiryMode: 'EX',
     time: number,
   ): Promise<unknown>;
+  connect(): Promise<unknown>;
   quit(): Promise<unknown>;
 }
 
@@ -107,6 +108,16 @@ export async function startHeartbeat(
       // Ошибка Redis не должна ронять browser-agent — только лог.
       console.error('[heartbeat] Ошибка записи Redis heartbeat:', err);
     }
+  }
+
+  // lazyConnect: соединение поднимается явно. Дожидаемся готовности до первой
+  // записи, иначе она падает "Stream isn't writeable" (enableOfflineQueue=false)
+  // и засоряет логи ложной ошибкой при каждом старте. Сбой connect не критичен —
+  // таймер ниже будет переподключаться.
+  try {
+    await redis.connect();
+  } catch (err) {
+    console.error('[heartbeat] Первое подключение к Redis не удалось (повтор по таймеру):', err);
   }
 
   // Первая запись сразу при старте.
