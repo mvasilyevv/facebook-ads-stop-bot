@@ -47,10 +47,12 @@ systemctl enable --now xvfb.service vision-wm.service vision.service vision-auto
   отдаёт folder_id только для уже ЗАПУЩЕННОГО профиля (`GET /list`), поэтому он
   вынесен в `.env`. Узнать заново: запустить профиль (клик «Старт» в GUI или
   `xdotool` на :99), затем `curl -H "X-Token: $TOKEN" http://127.0.0.1:3030/list`.
-- **Посмотреть/управлять Vision через NoMachine:** Vision живёт на :99 (xfwm4 даёт
-  рамки окон). НЕ создавай в NoMachine новый desktop — он будет пустой. Подключайся
-  к существующему **дисплею :99** (в списке сессий NoMachine). Каждый «new desktop»
-  плодит пустой XFCE без приложения.
+- **Посмотреть/управлять Vision через NoMachine:** в `/usr/NX/etc/node.cfg` задано
+  `PhysicalDisplays :99` — NoMachine при подключении к «physical desktop» цепляется
+  к существующему :99 с Vision (xfwm4 даёт рамки окон), а НЕ создаёт пустой
+  виртуальный desktop. После правки node.cfg: `/usr/NX/bin/nxserver --restart`.
+  В клиенте подключайся к **physical desktop** (не «new virtual desktop»).
+  Xvfb :99 запущен без `-auth` (открытый локальный доступ) → cookie не нужен.
 - **Посмотреть headless-экран** (отладка, без NoMachine): на сервере `x11vnc -display
   :99 -localhost -rfbport 5900`, затем с ноута `ssh -L 5900:localhost:5900 root@<srv>`
   и VNC-клиент на `localhost:5900`.
