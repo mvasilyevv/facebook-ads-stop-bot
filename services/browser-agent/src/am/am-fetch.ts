@@ -21,6 +21,7 @@ import {
   AM_PAGE_LIMIT,
   type AmScanConfig,
 } from './am-config.js';
+import { adsManagerColumnsQs } from './am-columns-preset.js';
 import type { ScannedAdRow } from '../types.js';
 
 export interface GraphContext {
@@ -96,13 +97,22 @@ export function invalidateGraphContext(sessionId: string, actId?: string): void 
 // ещё не сниффился — тогда переоткрытие на этом уровне невозможно.
 export function reconstructAdsManagerUrl(sessionId: string, actId?: string): string | null {
   if (actId) {
-    return `https://adsmanager.facebook.com/adsmanager/manage/ads?act=${actId}`;
+    return cabinetCampaignsUrl(actId);
   }
   const ctx = _graphContextCache.get(graphContextKey(sessionId));
   if (!ctx) return null;
   const actNum = ctx.actId.replace(/^act_/, '');
   if (!actNum) return null;
-  return `https://adsmanager.facebook.com/adsmanager/manage/ads?act=${actNum}`;
+  return cabinetCampaignsUrl(actNum);
+}
+
+// URL вкладки кабинета: уровень кампаний + колонки пользователя (единый формат со
+// session-manager.adsManagerUrlForAct). Уровень вкладки на скан не влияет.
+function cabinetCampaignsUrl(actId: string): string {
+  return (
+    `https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=${actId}` +
+    `&${adsManagerColumnsQs()}`
+  );
 }
 
 // Вернуть GraphContext из кэша; при cache-miss/forceRefresh — сниффить (reload триггерит запрос,

@@ -313,6 +313,39 @@ class BrowserAgentClient:
             ),
         )
 
+    async def open_cabinet_tabs(self, ad_account_ids: list[str]) -> list[dict]:
+        """Открыть вкладки Ads Manager для кабинетов (фаза подготовки перед сканом).
+
+        Идемпотентно: уже открытую вкладку кабинета браузер-агент переиспользует.
+        Возвращает per-cabinet результаты: [{ad_account_id, opened, url, error}].
+        Ошибка одного кабинета не валит остальные (агрегируется в результат).
+        """
+        ids = [str(a) for a in ad_account_ids if str(a).strip()]
+        if not ids:
+            return []
+        # По ~20с на кабинет (page.goto), минимум 60с — открытие нескольких вкладок дольше
+        # обычного контрол-вызова.
+        timeout = max(60.0, 20.0 * len(ids))
+        resp = await self._call_with_session_recovery(
+            "открытия вкладок кабинетов",
+            lambda: self._browser_stub.OpenCabinetTabs(
+                browser_session_pb2.OpenCabinetTabsRequest(
+                    session_id=self._session_id or "",
+                    ad_account_ids=ids,
+                ),
+                timeout=timeout,
+            ),
+        )
+        return [
+            {
+                "ad_account_id": r.ad_account_id,
+                "opened": r.opened,
+                "url": r.url,
+                "error": r.error,
+            }
+            for r in resp.results
+        ]
+
     async def run_scan_cycle(
         self,
         max_scroll_passes: int = 50,

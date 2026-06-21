@@ -70,6 +70,28 @@ function deserialize_fb_agent_browser_session_v1_NavigateResponse(buffer_arg) {
   return v1_browser_session_pb.NavigateResponse.deserializeBinary(new Uint8Array(buffer_arg));
 }
 
+function serialize_fb_agent_browser_session_v1_OpenCabinetTabsRequest(arg) {
+  if (!(arg instanceof v1_browser_session_pb.OpenCabinetTabsRequest)) {
+    throw new Error('Expected argument of type fb_agent.browser_session.v1.OpenCabinetTabsRequest');
+  }
+  return Buffer.from(arg.serializeBinary());
+}
+
+function deserialize_fb_agent_browser_session_v1_OpenCabinetTabsRequest(buffer_arg) {
+  return v1_browser_session_pb.OpenCabinetTabsRequest.deserializeBinary(new Uint8Array(buffer_arg));
+}
+
+function serialize_fb_agent_browser_session_v1_OpenCabinetTabsResponse(arg) {
+  if (!(arg instanceof v1_browser_session_pb.OpenCabinetTabsResponse)) {
+    throw new Error('Expected argument of type fb_agent.browser_session.v1.OpenCabinetTabsResponse');
+  }
+  return Buffer.from(arg.serializeBinary());
+}
+
+function deserialize_fb_agent_browser_session_v1_OpenCabinetTabsResponse(buffer_arg) {
+  return v1_browser_session_pb.OpenCabinetTabsResponse.deserializeBinary(new Uint8Array(buffer_arg));
+}
+
 function serialize_fb_agent_browser_session_v1_ReconnectBrowserRequest(arg) {
   if (!(arg instanceof v1_browser_session_pb.ReconnectBrowserRequest)) {
     throw new Error('Expected argument of type fb_agent.browser_session.v1.ReconnectBrowserRequest');
@@ -221,6 +243,20 @@ navigate: {
     requestDeserialize: deserialize_fb_agent_browser_session_v1_NavigateRequest,
     responseSerialize: serialize_fb_agent_browser_session_v1_NavigateResponse,
     responseDeserialize: deserialize_fb_agent_browser_session_v1_NavigateResponse,
+  },
+  // Открыть вкладки Ads Manager для списка кабинетов (фаза "подготовка рабочего
+// места" перед сканом). Для каждого ad_account_id ищет/открывает вкладку кабинета
+// (manage/campaigns + колонки). Не сканирует. Идемпотентно: уже открытую переиспользует.
+openCabinetTabs: {
+    path: '/fb_agent.browser_session.v1.BrowserSessionService/OpenCabinetTabs',
+    requestStream: false,
+    responseStream: false,
+    requestType: v1_browser_session_pb.OpenCabinetTabsRequest,
+    responseType: v1_browser_session_pb.OpenCabinetTabsResponse,
+    requestSerialize: serialize_fb_agent_browser_session_v1_OpenCabinetTabsRequest,
+    requestDeserialize: deserialize_fb_agent_browser_session_v1_OpenCabinetTabsRequest,
+    responseSerialize: serialize_fb_agent_browser_session_v1_OpenCabinetTabsResponse,
+    responseDeserialize: deserialize_fb_agent_browser_session_v1_OpenCabinetTabsResponse,
   },
   // Стриминг статусов сессии (heartbeat, ошибки, смена страницы).
 streamSessionStatus: {

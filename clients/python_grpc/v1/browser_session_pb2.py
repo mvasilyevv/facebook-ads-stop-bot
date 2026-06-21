@@ -20,7 +20,7 @@ _sym_db = _symbol_database.Default()
 
 
 DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(
-    b'\n\x18v1/browser_session.proto\x12\x1b\x66\x62_agent.browser_session.v1"\xc5\x01\n\x13StartBrowserRequest\x12\x16\n\x0evision_x_token\x18\x01 \x01(\t\x12\x16\n\x0evision_api_url\x18\x02 \x01(\t\x12\x19\n\x11vision_profile_id\x18\x03 \x01(\t\x12\x1d\n\x10vision_folder_id\x18\x04 \x01(\tH\x00\x88\x01\x01\x12\x16\n\x0eviewport_width\x18\x05 \x01(\x05\x12\x17\n\x0fviewport_height\x18\x06 \x01(\x05\x42\x13\n\x11_vision_folder_id"\xb7\x01\n\x14StartBrowserResponse\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12;\n\x07profile\x18\x02 \x01(\x0b\x32*.fb_agent.browser_session.v1.VisionProfile\x12\x18\n\x10initial_page_url\x18\x03 \x01(\t\x12\x34\n\x05pages\x18\x04 \x03(\x0b\x32%.fb_agent.browser_session.v1.PageInfo"H\n\rVisionProfile\x12\x11\n\tfolder_id\x18\x01 \x01(\t\x12\x12\n\nprofile_id\x18\x02 \x01(\t\x12\x10\n\x08\x63\x64p_port\x18\x03 \x01(\x05"7\n\x08PageInfo\x12\x0f\n\x07page_id\x18\x01 \x01(\t\x12\x0b\n\x03url\x18\x02 \x01(\t\x12\r\n\x05title\x18\x03 \x01(\t".\n\x18\x44isconnectBrowserRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t"\x1b\n\x19\x44isconnectBrowserResponse"(\n\x12StopBrowserRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t"\x15\n\x13StopBrowserResponse"x\n\x17ReconnectBrowserRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x16\n\x0evision_x_token\x18\x02 \x01(\t\x12\x16\n\x0evision_api_url\x18\x03 \x01(\t\x12\x19\n\x11vision_profile_id\x18\x04 \x01(\t"+\n\x15GetSessionInfoRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t"\xa3\x01\n\x16GetSessionInfoResponse\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x11\n\tconnected\x18\x02 \x01(\x08\x12\x13\n\x0b\x63urrent_url\x18\x03 \x01(\t\x12\x34\n\x05pages\x18\x04 \x03(\x0b\x32%.fb_agent.browser_session.v1.PageInfo\x12\x17\n\x0f\x63onnected_since\x18\x05 \x01(\x03"h\n\x0fNavigateRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x14\n\x07page_id\x18\x02 \x01(\tH\x00\x88\x01\x01\x12\x0b\n\x03url\x18\x03 \x01(\t\x12\x12\n\nwait_until\x18\x04 \x01(\tB\n\n\x08_page_id"\x1f\n\x10NavigateResponse\x12\x0b\n\x03url\x18\x01 \x01(\t"0\n\x1aStreamSessionStatusRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t"p\n\x12SessionStatusEvent\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x0e\n\x06status\x18\x02 \x01(\t\x12\x0e\n\x06\x64\x65tail\x18\x03 \x01(\t\x12\x13\n\x0b\x63urrent_url\x18\x04 \x01(\t\x12\x11\n\ttimestamp\x18\x05 \x01(\x03\x32\xe8\x06\n\x15\x42rowserSessionService\x12s\n\x0cStartBrowser\x12\x30.fb_agent.browser_session.v1.StartBrowserRequest\x1a\x31.fb_agent.browser_session.v1.StartBrowserResponse\x12\x82\x01\n\x11\x44isconnectBrowser\x12\x35.fb_agent.browser_session.v1.DisconnectBrowserRequest\x1a\x36.fb_agent.browser_session.v1.DisconnectBrowserResponse\x12p\n\x0bStopBrowser\x12/.fb_agent.browser_session.v1.StopBrowserRequest\x1a\x30.fb_agent.browser_session.v1.StopBrowserResponse\x12{\n\x10ReconnectBrowser\x12\x34.fb_agent.browser_session.v1.ReconnectBrowserRequest\x1a\x31.fb_agent.browser_session.v1.StartBrowserResponse\x12y\n\x0eGetSessionInfo\x12\x32.fb_agent.browser_session.v1.GetSessionInfoRequest\x1a\x33.fb_agent.browser_session.v1.GetSessionInfoResponse\x12g\n\x08Navigate\x12,.fb_agent.browser_session.v1.NavigateRequest\x1a-.fb_agent.browser_session.v1.NavigateResponse\x12\x81\x01\n\x13StreamSessionStatus\x12\x37.fb_agent.browser_session.v1.StreamSessionStatusRequest\x1a/.fb_agent.browser_session.v1.SessionStatusEvent0\x01\x62\x06proto3'
+    b'\n\x18v1/browser_session.proto\x12\x1b\x66\x62_agent.browser_session.v1"D\n\x16OpenCabinetTabsRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x16\n\x0e\x61\x64_account_ids\x18\x02 \x03(\t"Y\n\x17OpenCabinetTabsResponse\x12>\n\x07results\x18\x01 \x03(\x0b\x32-.fb_agent.browser_session.v1.CabinetTabResult"U\n\x10\x43\x61\x62inetTabResult\x12\x15\n\rad_account_id\x18\x01 \x01(\t\x12\x0e\n\x06opened\x18\x02 \x01(\x08\x12\x0b\n\x03url\x18\x03 \x01(\t\x12\r\n\x05\x65rror\x18\x04 \x01(\t"\xc5\x01\n\x13StartBrowserRequest\x12\x16\n\x0evision_x_token\x18\x01 \x01(\t\x12\x16\n\x0evision_api_url\x18\x02 \x01(\t\x12\x19\n\x11vision_profile_id\x18\x03 \x01(\t\x12\x1d\n\x10vision_folder_id\x18\x04 \x01(\tH\x00\x88\x01\x01\x12\x16\n\x0eviewport_width\x18\x05 \x01(\x05\x12\x17\n\x0fviewport_height\x18\x06 \x01(\x05\x42\x13\n\x11_vision_folder_id"\xb7\x01\n\x14StartBrowserResponse\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12;\n\x07profile\x18\x02 \x01(\x0b\x32*.fb_agent.browser_session.v1.VisionProfile\x12\x18\n\x10initial_page_url\x18\x03 \x01(\t\x12\x34\n\x05pages\x18\x04 \x03(\x0b\x32%.fb_agent.browser_session.v1.PageInfo"H\n\rVisionProfile\x12\x11\n\tfolder_id\x18\x01 \x01(\t\x12\x12\n\nprofile_id\x18\x02 \x01(\t\x12\x10\n\x08\x63\x64p_port\x18\x03 \x01(\x05"7\n\x08PageInfo\x12\x0f\n\x07page_id\x18\x01 \x01(\t\x12\x0b\n\x03url\x18\x02 \x01(\t\x12\r\n\x05title\x18\x03 \x01(\t".\n\x18\x44isconnectBrowserRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t"\x1b\n\x19\x44isconnectBrowserResponse"(\n\x12StopBrowserRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t"\x15\n\x13StopBrowserResponse"x\n\x17ReconnectBrowserRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x16\n\x0evision_x_token\x18\x02 \x01(\t\x12\x16\n\x0evision_api_url\x18\x03 \x01(\t\x12\x19\n\x11vision_profile_id\x18\x04 \x01(\t"+\n\x15GetSessionInfoRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t"\xa3\x01\n\x16GetSessionInfoResponse\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x11\n\tconnected\x18\x02 \x01(\x08\x12\x13\n\x0b\x63urrent_url\x18\x03 \x01(\t\x12\x34\n\x05pages\x18\x04 \x03(\x0b\x32%.fb_agent.browser_session.v1.PageInfo\x12\x17\n\x0f\x63onnected_since\x18\x05 \x01(\x03"h\n\x0fNavigateRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x14\n\x07page_id\x18\x02 \x01(\tH\x00\x88\x01\x01\x12\x0b\n\x03url\x18\x03 \x01(\t\x12\x12\n\nwait_until\x18\x04 \x01(\tB\n\n\x08_page_id"\x1f\n\x10NavigateResponse\x12\x0b\n\x03url\x18\x01 \x01(\t"0\n\x1aStreamSessionStatusRequest\x12\x12\n\nsession_id\x18\x01 \x01(\t"p\n\x12SessionStatusEvent\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x0e\n\x06status\x18\x02 \x01(\t\x12\x0e\n\x06\x64\x65tail\x18\x03 \x01(\t\x12\x13\n\x0b\x63urrent_url\x18\x04 \x01(\t\x12\x11\n\ttimestamp\x18\x05 \x01(\x03\x32\xe6\x07\n\x15\x42rowserSessionService\x12s\n\x0cStartBrowser\x12\x30.fb_agent.browser_session.v1.StartBrowserRequest\x1a\x31.fb_agent.browser_session.v1.StartBrowserResponse\x12\x82\x01\n\x11\x44isconnectBrowser\x12\x35.fb_agent.browser_session.v1.DisconnectBrowserRequest\x1a\x36.fb_agent.browser_session.v1.DisconnectBrowserResponse\x12p\n\x0bStopBrowser\x12/.fb_agent.browser_session.v1.StopBrowserRequest\x1a\x30.fb_agent.browser_session.v1.StopBrowserResponse\x12{\n\x10ReconnectBrowser\x12\x34.fb_agent.browser_session.v1.ReconnectBrowserRequest\x1a\x31.fb_agent.browser_session.v1.StartBrowserResponse\x12y\n\x0eGetSessionInfo\x12\x32.fb_agent.browser_session.v1.GetSessionInfoRequest\x1a\x33.fb_agent.browser_session.v1.GetSessionInfoResponse\x12g\n\x08Navigate\x12,.fb_agent.browser_session.v1.NavigateRequest\x1a-.fb_agent.browser_session.v1.NavigateResponse\x12|\n\x0fOpenCabinetTabs\x12\x33.fb_agent.browser_session.v1.OpenCabinetTabsRequest\x1a\x34.fb_agent.browser_session.v1.OpenCabinetTabsResponse\x12\x81\x01\n\x13StreamSessionStatus\x12\x37.fb_agent.browser_session.v1.StreamSessionStatusRequest\x1a/.fb_agent.browser_session.v1.SessionStatusEvent0\x01\x62\x06proto3'
 )
 
 _globals = globals()
@@ -28,36 +28,42 @@ _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, "v1.browser_session_pb2", _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
     DESCRIPTOR._loaded_options = None
-    _globals["_STARTBROWSERREQUEST"]._serialized_start = 58
-    _globals["_STARTBROWSERREQUEST"]._serialized_end = 255
-    _globals["_STARTBROWSERRESPONSE"]._serialized_start = 258
-    _globals["_STARTBROWSERRESPONSE"]._serialized_end = 441
-    _globals["_VISIONPROFILE"]._serialized_start = 443
-    _globals["_VISIONPROFILE"]._serialized_end = 515
-    _globals["_PAGEINFO"]._serialized_start = 517
-    _globals["_PAGEINFO"]._serialized_end = 572
-    _globals["_DISCONNECTBROWSERREQUEST"]._serialized_start = 574
-    _globals["_DISCONNECTBROWSERREQUEST"]._serialized_end = 620
-    _globals["_DISCONNECTBROWSERRESPONSE"]._serialized_start = 622
-    _globals["_DISCONNECTBROWSERRESPONSE"]._serialized_end = 649
-    _globals["_STOPBROWSERREQUEST"]._serialized_start = 651
-    _globals["_STOPBROWSERREQUEST"]._serialized_end = 691
-    _globals["_STOPBROWSERRESPONSE"]._serialized_start = 693
-    _globals["_STOPBROWSERRESPONSE"]._serialized_end = 714
-    _globals["_RECONNECTBROWSERREQUEST"]._serialized_start = 716
-    _globals["_RECONNECTBROWSERREQUEST"]._serialized_end = 836
-    _globals["_GETSESSIONINFOREQUEST"]._serialized_start = 838
-    _globals["_GETSESSIONINFOREQUEST"]._serialized_end = 881
-    _globals["_GETSESSIONINFORESPONSE"]._serialized_start = 884
-    _globals["_GETSESSIONINFORESPONSE"]._serialized_end = 1047
-    _globals["_NAVIGATEREQUEST"]._serialized_start = 1049
-    _globals["_NAVIGATEREQUEST"]._serialized_end = 1153
-    _globals["_NAVIGATERESPONSE"]._serialized_start = 1155
-    _globals["_NAVIGATERESPONSE"]._serialized_end = 1186
-    _globals["_STREAMSESSIONSTATUSREQUEST"]._serialized_start = 1188
-    _globals["_STREAMSESSIONSTATUSREQUEST"]._serialized_end = 1236
-    _globals["_SESSIONSTATUSEVENT"]._serialized_start = 1238
-    _globals["_SESSIONSTATUSEVENT"]._serialized_end = 1350
-    _globals["_BROWSERSESSIONSERVICE"]._serialized_start = 1353
-    _globals["_BROWSERSESSIONSERVICE"]._serialized_end = 2225
+    _globals["_OPENCABINETTABSREQUEST"]._serialized_start = 57
+    _globals["_OPENCABINETTABSREQUEST"]._serialized_end = 125
+    _globals["_OPENCABINETTABSRESPONSE"]._serialized_start = 127
+    _globals["_OPENCABINETTABSRESPONSE"]._serialized_end = 216
+    _globals["_CABINETTABRESULT"]._serialized_start = 218
+    _globals["_CABINETTABRESULT"]._serialized_end = 303
+    _globals["_STARTBROWSERREQUEST"]._serialized_start = 306
+    _globals["_STARTBROWSERREQUEST"]._serialized_end = 503
+    _globals["_STARTBROWSERRESPONSE"]._serialized_start = 506
+    _globals["_STARTBROWSERRESPONSE"]._serialized_end = 689
+    _globals["_VISIONPROFILE"]._serialized_start = 691
+    _globals["_VISIONPROFILE"]._serialized_end = 763
+    _globals["_PAGEINFO"]._serialized_start = 765
+    _globals["_PAGEINFO"]._serialized_end = 820
+    _globals["_DISCONNECTBROWSERREQUEST"]._serialized_start = 822
+    _globals["_DISCONNECTBROWSERREQUEST"]._serialized_end = 868
+    _globals["_DISCONNECTBROWSERRESPONSE"]._serialized_start = 870
+    _globals["_DISCONNECTBROWSERRESPONSE"]._serialized_end = 897
+    _globals["_STOPBROWSERREQUEST"]._serialized_start = 899
+    _globals["_STOPBROWSERREQUEST"]._serialized_end = 939
+    _globals["_STOPBROWSERRESPONSE"]._serialized_start = 941
+    _globals["_STOPBROWSERRESPONSE"]._serialized_end = 962
+    _globals["_RECONNECTBROWSERREQUEST"]._serialized_start = 964
+    _globals["_RECONNECTBROWSERREQUEST"]._serialized_end = 1084
+    _globals["_GETSESSIONINFOREQUEST"]._serialized_start = 1086
+    _globals["_GETSESSIONINFOREQUEST"]._serialized_end = 1129
+    _globals["_GETSESSIONINFORESPONSE"]._serialized_start = 1132
+    _globals["_GETSESSIONINFORESPONSE"]._serialized_end = 1295
+    _globals["_NAVIGATEREQUEST"]._serialized_start = 1297
+    _globals["_NAVIGATEREQUEST"]._serialized_end = 1401
+    _globals["_NAVIGATERESPONSE"]._serialized_start = 1403
+    _globals["_NAVIGATERESPONSE"]._serialized_end = 1434
+    _globals["_STREAMSESSIONSTATUSREQUEST"]._serialized_start = 1436
+    _globals["_STREAMSESSIONSTATUSREQUEST"]._serialized_end = 1484
+    _globals["_SESSIONSTATUSEVENT"]._serialized_start = 1486
+    _globals["_SESSIONSTATUSEVENT"]._serialized_end = 1598
+    _globals["_BROWSERSESSIONSERVICE"]._serialized_start = 1601
+    _globals["_BROWSERSESSIONSERVICE"]._serialized_end = 2599
 # @@protoc_insertion_point(module_scope)

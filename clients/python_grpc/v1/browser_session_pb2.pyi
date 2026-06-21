@@ -10,6 +10,42 @@ from google.protobuf.internal import containers as _containers
 
 DESCRIPTOR: _descriptor.FileDescriptor
 
+class OpenCabinetTabsRequest(_message.Message):
+    __slots__ = ("session_id", "ad_account_ids")
+    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
+    AD_ACCOUNT_IDS_FIELD_NUMBER: _ClassVar[int]
+    session_id: str
+    ad_account_ids: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(
+        self, session_id: _Optional[str] = ..., ad_account_ids: _Optional[_Iterable[str]] = ...
+    ) -> None: ...
+
+class OpenCabinetTabsResponse(_message.Message):
+    __slots__ = ("results",)
+    RESULTS_FIELD_NUMBER: _ClassVar[int]
+    results: _containers.RepeatedCompositeFieldContainer[CabinetTabResult]
+    def __init__(
+        self, results: _Optional[_Iterable[_Union[CabinetTabResult, _Mapping]]] = ...
+    ) -> None: ...
+
+class CabinetTabResult(_message.Message):
+    __slots__ = ("ad_account_id", "opened", "url", "error")
+    AD_ACCOUNT_ID_FIELD_NUMBER: _ClassVar[int]
+    OPENED_FIELD_NUMBER: _ClassVar[int]
+    URL_FIELD_NUMBER: _ClassVar[int]
+    ERROR_FIELD_NUMBER: _ClassVar[int]
+    ad_account_id: str
+    opened: bool
+    url: str
+    error: str
+    def __init__(
+        self,
+        ad_account_id: _Optional[str] = ...,
+        opened: bool = ...,
+        url: _Optional[str] = ...,
+        error: _Optional[str] = ...,
+    ) -> None: ...
+
 class StartBrowserRequest(_message.Message):
     __slots__ = (
         "vision_x_token",

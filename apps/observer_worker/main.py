@@ -118,6 +118,15 @@ class ScannerGate(Protocol):
         """
         ...
 
+    async def open_cabinet_tabs(self, ad_account_ids: list[str]) -> list[dict]:
+        """Фаза подготовки: открыть вкладки Ads Manager для кабинетов перед сканом.
+
+        Идемпотентно (уже открытая вкладка переиспользуется). Возвращает per-cabinet
+        результаты [{ad_account_id, opened, url, error}]. Не бросает на ошибке одного
+        кабинета (агрегирует в результат).
+        """
+        ...
+
 
 # ====================== Scan_runs writers ======================
 
@@ -194,6 +203,7 @@ async def _publish_runtime_status(
     *,
     status: str,
     active_phase: str | None = None,
+    status_message: str | None = None,
     next_scan_at: datetime | None = None,
     last_successful_scan_at: datetime | None = None,
     current_account_id: str | None = None,
@@ -216,14 +226,15 @@ async def _publish_runtime_status(
     if redis_client is None:
         return
 
-    # Нормализованный статус для читателей (scanning/idle/dispatch → running)
-    _RUNNING_DETAIL = {"scanning", "idle", "dispatch"}
+    # Нормализованный статус для читателей (scanning/idle/dispatch/preparing → running)
+    _RUNNING_DETAIL = {"scanning", "idle", "dispatch", "preparing"}
     normalized_status = "running" if status in _RUNNING_DETAIL else status
 
     payload = {
         "worker_status": status,  # детальный (для отладки/granularity)
         "status": normalized_status,  # нормализованный (running|paused) для читателей
         "active_phase": active_phase,
+        "status_message": status_message,  # человекочитаемый текст фазы (UI/TG)
         "next_scan_at": next_scan_at.isoformat() if next_scan_at else None,
         "last_successful_scan_at": (
             last_successful_scan_at.isoformat() if last_successful_scan_at else None
@@ -525,6 +536,126 @@ def _aggregate_cycle_summary(per_account: list[dict]) -> dict:
     }
 
 
+# Module-level: набор кабинетов, для которого уже выполнена подготовка (вкладки открыты).
+# При смене набора (активирован новый оффер / поменялись ad_account_ids) — переподготовка.
+# None = подготовка ещё не выполнялась (первый цикл после старта процесса).
+_prepared_accounts: frozenset[str] | None = None
+
+
+def _reset_prepared_accounts() -> None:
+    """Сброс флага подготовки (для тестов / форс-переподготовки)."""
+    global _prepared_accounts
+    _prepared_accounts = None
+
+
+# TTL дедупа TG-уведомлений фазы подготовки (по набору кабинетов): при устойчивом
+# сбое Vision не спамить «Подготавливаю…» каждые ~90с — повтор не чаще этого окна.
+PREPARE_TG_DEDUP_TTL_SECONDS = 3600
+
+
+async def _notify_tg_simple(engine: AsyncEngine, tg_client, text: str) -> None:
+    """Best-effort простое TG-уведомление (без дедупа). Не бросает."""
+    if tg_client is None:
+        return
+    try:
+        from core.telegram.service import load_telegram_config
+
+        cfg = await load_telegram_config(engine)
+        if cfg is None or cfg.chat_id is None:
+            return
+        await tg_client.send_message(chat_id=str(cfg.chat_id), text=text, parse_mode="HTML")
+    except Exception:
+        logger.exception("observer: не удалось отправить TG-уведомление подготовки")
+
+
+async def _prepare_tg_allowed(redis_client, accounts: frozenset[str]) -> bool:
+    """Дедуп TG-уведомлений подготовки по набору кабинетов (Redis SET NX EX).
+
+    True → этот набор ещё не уведомляли в текущем окне (слать можно). False → уже слали
+    (молчим, чтобы не спамить при повторных попытках того же набора). Redis недоступен →
+    True (лучше уведомить, чем потерять).
+    """
+    if redis_client is None:
+        return True
+    import hashlib
+
+    digest = hashlib.sha1(":".join(sorted(accounts)).encode()).hexdigest()[:16]
+    key = f"observer:prepare:tg:{digest}"
+    try:
+        ok = await redis_client.set(key, "1", ex=PREPARE_TG_DEDUP_TTL_SECONDS, nx=True)
+        return bool(ok)
+    except Exception:
+        logger.exception("observer: ошибка дедупа TG-уведомления подготовки")
+        return True
+
+
+async def _prepare_workspace(
+    engine: AsyncEngine,
+    *,
+    gate: ScannerGate,
+    accounts: list[str],
+    redis_client=None,
+    tg_client=None,
+) -> None:
+    """Фаза «подготовка рабочего места»: открыть вкладки кабинетов активных офферов
+    перед сканом (manage/campaigns + колонки пользователя).
+
+    Выполняется при первом цикле после старта и при изменении набора кабинетов
+    (активирован новый оффер). Статус preparing → веб-панель + TG. Не блокирует скан:
+    при сбое open_cabinet_tabs скан сам переоткроет вкладки по ходу (ensureAdsManagerPage).
+    """
+    global _prepared_accounts
+    current = frozenset(accounts)
+    if current == _prepared_accounts:
+        return  # набор не менялся — вкладки уже открыты
+
+    n = len(accounts)
+    msg = f"Подготавливаю рабочее место: открываю кабинеты ({n})…"
+    logger.info("observer: %s [%s]", msg, ", ".join(accounts))
+    # Статус в runtime пишем всегда (дёшево, не спамит — это перезапись одного ключа).
+    await _publish_runtime_status(
+        redis_client,
+        status="preparing",
+        active_phase="preparing",
+        status_message=msg,
+        accounts_total=n,
+    )
+
+    # TG: дедуп по набору, чтобы при устойчивом сбое Vision не слать «Подготавливаю…»
+    # каждый цикл (~90с). Стартовое и сообщение о ПОЛНОМ провале — под дедупом; итог
+    # успеха шлём всегда (он происходит ровно один раз: дальше набор помечен prepared).
+    notify_allowed = await _prepare_tg_allowed(redis_client, current)
+    if notify_allowed:
+        await _notify_tg_simple(engine, tg_client, f"🛠 {msg}")
+
+    try:
+        results = await gate.open_cabinet_tabs(accounts)
+    except Exception:
+        logger.exception("observer: фаза подготовки — open_cabinet_tabs упал")
+        return  # не блокируем скан
+
+    opened = [r for r in results if r.get("opened")]
+    failed = [r for r in results if not r.get("opened")]
+    if failed:
+        logger.warning(
+            "observer: не открылись кабинеты: %s",
+            ", ".join(f"{r.get('ad_account_id')}({r.get('error', '')})" for r in failed),
+        )
+    logger.info("observer: подготовка завершена — открыто %d/%d кабинетов", len(opened), n)
+    done_msg = f"✅ Кабинеты открыты ({len(opened)}/{n}), начинаю сканирование."
+    if failed:
+        done_msg += " Не открылись: " + ", ".join(str(r.get("ad_account_id")) for r in failed) + "."
+
+    if opened:
+        # Успех (хотя бы частичный) — итог шлём ВСЕГДА (один раз: набор станет prepared).
+        await _notify_tg_simple(engine, tg_client, done_msg)
+        _prepared_accounts = current
+    elif notify_allowed:
+        # Полный провал — сообщаем только в окне дедупа (иначе на следующем цикле попробуем
+        # снова, но без TG-спама).
+        await _notify_tg_simple(engine, tg_client, done_msg)
+
+
 async def run_one_cycle(
     engine: AsyncEngine,
     *,
@@ -589,6 +720,16 @@ async def run_one_cycle(
             "скоупинг только через owner_tag",
             len(config.get("campaign_ids") or []),
         )
+
+    # Фаза «подготовка рабочего места»: открыть вкладки всех кабинетов (с колонками)
+    # перед сканом. Идемпотентно: только при первом цикле / смене набора кабинетов.
+    await _prepare_workspace(
+        engine,
+        gate=gate,
+        accounts=accounts,
+        redis_client=redis_client,
+        tg_client=tg_client,
+    )
 
     per_account: list[dict] = []
     for idx, account_id in enumerate(accounts):
@@ -1023,6 +1164,9 @@ async def _default_gate_factory() -> ScannerGate:
                 empty_reason=final_result.empty_reason,
                 warnings=list(final_result.warnings),
             )
+
+        async def open_cabinet_tabs(self, ad_account_ids: list[str]) -> list[dict]:
+            return await client.open_cabinet_tabs(ad_account_ids)
 
     return _BrowserAgentScannerGate()
 

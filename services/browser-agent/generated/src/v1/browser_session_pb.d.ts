@@ -6,6 +6,82 @@
 
 import * as jspb from "google-protobuf";
 
+export class OpenCabinetTabsRequest extends jspb.Message { 
+    getSessionId(): string;
+    setSessionId(value: string): OpenCabinetTabsRequest;
+    clearAdAccountIdsList(): void;
+    getAdAccountIdsList(): Array<string>;
+    setAdAccountIdsList(value: Array<string>): OpenCabinetTabsRequest;
+    addAdAccountIds(value: string, index?: number): string;
+
+    serializeBinary(): Uint8Array;
+    toObject(includeInstance?: boolean): OpenCabinetTabsRequest.AsObject;
+    static toObject(includeInstance: boolean, msg: OpenCabinetTabsRequest): OpenCabinetTabsRequest.AsObject;
+    static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
+    static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
+    static serializeBinaryToWriter(message: OpenCabinetTabsRequest, writer: jspb.BinaryWriter): void;
+    static deserializeBinary(bytes: Uint8Array): OpenCabinetTabsRequest;
+    static deserializeBinaryFromReader(message: OpenCabinetTabsRequest, reader: jspb.BinaryReader): OpenCabinetTabsRequest;
+}
+
+export namespace OpenCabinetTabsRequest {
+    export type AsObject = {
+        sessionId: string,
+        adAccountIdsList: Array<string>,
+    }
+}
+
+export class OpenCabinetTabsResponse extends jspb.Message { 
+    clearResultsList(): void;
+    getResultsList(): Array<CabinetTabResult>;
+    setResultsList(value: Array<CabinetTabResult>): OpenCabinetTabsResponse;
+    addResults(value?: CabinetTabResult, index?: number): CabinetTabResult;
+
+    serializeBinary(): Uint8Array;
+    toObject(includeInstance?: boolean): OpenCabinetTabsResponse.AsObject;
+    static toObject(includeInstance: boolean, msg: OpenCabinetTabsResponse): OpenCabinetTabsResponse.AsObject;
+    static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
+    static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
+    static serializeBinaryToWriter(message: OpenCabinetTabsResponse, writer: jspb.BinaryWriter): void;
+    static deserializeBinary(bytes: Uint8Array): OpenCabinetTabsResponse;
+    static deserializeBinaryFromReader(message: OpenCabinetTabsResponse, reader: jspb.BinaryReader): OpenCabinetTabsResponse;
+}
+
+export namespace OpenCabinetTabsResponse {
+    export type AsObject = {
+        resultsList: Array<CabinetTabResult.AsObject>,
+    }
+}
+
+export class CabinetTabResult extends jspb.Message { 
+    getAdAccountId(): string;
+    setAdAccountId(value: string): CabinetTabResult;
+    getOpened(): boolean;
+    setOpened(value: boolean): CabinetTabResult;
+    getUrl(): string;
+    setUrl(value: string): CabinetTabResult;
+    getError(): string;
+    setError(value: string): CabinetTabResult;
+
+    serializeBinary(): Uint8Array;
+    toObject(includeInstance?: boolean): CabinetTabResult.AsObject;
+    static toObject(includeInstance: boolean, msg: CabinetTabResult): CabinetTabResult.AsObject;
+    static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
+    static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
+    static serializeBinaryToWriter(message: CabinetTabResult, writer: jspb.BinaryWriter): void;
+    static deserializeBinary(bytes: Uint8Array): CabinetTabResult;
+    static deserializeBinaryFromReader(message: CabinetTabResult, reader: jspb.BinaryReader): CabinetTabResult;
+}
+
+export namespace CabinetTabResult {
+    export type AsObject = {
+        adAccountId: string,
+        opened: boolean,
+        url: string,
+        error: string,
+    }
+}
+
 export class StartBrowserRequest extends jspb.Message { 
     getVisionXToken(): string;
     setVisionXToken(value: string): StartBrowserRequest;

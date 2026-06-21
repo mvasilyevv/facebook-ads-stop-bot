@@ -5,6 +5,7 @@ import { VisionClient } from './vision-client.js';
 import { STEALTH_INIT_SCRIPT } from './stealth.js';
 import { generateHumanProfile } from './humanizer.js';
 import { injectCreator } from './creator-injector.js';
+import { adsManagerColumnsQs } from './am/am-columns-preset.js';
 import type { BrowserSession, HumanProfile } from './types.js';
 
 const EXISTING_PROFILE_PORT_GRACE_SECONDS = 8;
@@ -38,9 +39,15 @@ export function extractAdAccountId(url: string | null | undefined): string | nul
   return m ? m[1] : null;
 }
 
-/** URL Ads Manager для конкретного кабинета (мульти-кабинет, act без префикса act_). */
+/** URL Ads Manager для конкретного кабинета (мульти-кабинет, act без префикса act_).
+ * Уровень КАМПАНИЙ + набор колонок пользователя (am-columns-preset) — пользователь
+ * сразу видит нужные метрики; на скан (am_tabular level=ad через fetch) уровень
+ * вкладки не влияет. */
 export function adsManagerUrlForAct(actId: string): string {
-  return `https://adsmanager.facebook.com/adsmanager/manage/ads?act=${actId}`;
+  return (
+    `https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=${actId}` +
+    `&${adsManagerColumnsQs()}`
+  );
 }
 
 /** Найти среди ВСЕХ открытых вкладок живую вкладку Ads Manager нужного кабинета. */

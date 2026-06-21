@@ -663,11 +663,15 @@ test('ensureAdsManagerPage принимает вкладку того же ка�
 // ====================== Мульти-кабинет (MULTI_CABINET_PLAN.md M2) ======================
 
 // URL кабинета строится детерминированно из числового act.
-test('adsManagerUrlForAct строит URL кабинета', () => {
-  assert.equal(
-    adsManagerUrlForAct('123456'),
-    'https://adsmanager.facebook.com/adsmanager/manage/ads?act=123456',
+test('adsManagerUrlForAct строит URL кабинета на уровне кампаний с колонками', () => {
+  const url = adsManagerUrlForAct('123456');
+  // Уровень кампаний + нужный кабинет + набор колонок (пользовательский пресет).
+  assert.ok(
+    url.startsWith('https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=123456'),
+    `URL должен быть на уровне кампаний нужного кабинета, получено: ${url}`,
   );
+  assert.ok(url.includes('columns='), 'URL должен содержать набор колонок');
+  assert.ok(url.includes('column_preset='), 'URL должен содержать column_preset');
 });
 
 // Поиск вкладки нужного кабинета среди нескольких открытых (включая чужой act).

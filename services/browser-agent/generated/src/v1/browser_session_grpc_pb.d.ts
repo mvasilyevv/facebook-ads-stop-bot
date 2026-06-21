@@ -14,6 +14,7 @@ interface IBrowserSessionServiceService extends grpc.ServiceDefinition<grpc.Unty
     reconnectBrowser: IBrowserSessionServiceService_IReconnectBrowser;
     getSessionInfo: IBrowserSessionServiceService_IGetSessionInfo;
     navigate: IBrowserSessionServiceService_INavigate;
+    openCabinetTabs: IBrowserSessionServiceService_IOpenCabinetTabs;
     streamSessionStatus: IBrowserSessionServiceService_IStreamSessionStatus;
 }
 
@@ -71,6 +72,15 @@ interface IBrowserSessionServiceService_INavigate extends grpc.MethodDefinition<
     responseSerialize: grpc.serialize<v1_browser_session_pb.NavigateResponse>;
     responseDeserialize: grpc.deserialize<v1_browser_session_pb.NavigateResponse>;
 }
+interface IBrowserSessionServiceService_IOpenCabinetTabs extends grpc.MethodDefinition<v1_browser_session_pb.OpenCabinetTabsRequest, v1_browser_session_pb.OpenCabinetTabsResponse> {
+    path: "/fb_agent.browser_session.v1.BrowserSessionService/OpenCabinetTabs";
+    requestStream: false;
+    responseStream: false;
+    requestSerialize: grpc.serialize<v1_browser_session_pb.OpenCabinetTabsRequest>;
+    requestDeserialize: grpc.deserialize<v1_browser_session_pb.OpenCabinetTabsRequest>;
+    responseSerialize: grpc.serialize<v1_browser_session_pb.OpenCabinetTabsResponse>;
+    responseDeserialize: grpc.deserialize<v1_browser_session_pb.OpenCabinetTabsResponse>;
+}
 interface IBrowserSessionServiceService_IStreamSessionStatus extends grpc.MethodDefinition<v1_browser_session_pb.StreamSessionStatusRequest, v1_browser_session_pb.SessionStatusEvent> {
     path: "/fb_agent.browser_session.v1.BrowserSessionService/StreamSessionStatus";
     requestStream: false;
@@ -90,6 +100,7 @@ export interface IBrowserSessionServiceServer {
     reconnectBrowser: grpc.handleUnaryCall<v1_browser_session_pb.ReconnectBrowserRequest, v1_browser_session_pb.StartBrowserResponse>;
     getSessionInfo: grpc.handleUnaryCall<v1_browser_session_pb.GetSessionInfoRequest, v1_browser_session_pb.GetSessionInfoResponse>;
     navigate: grpc.handleUnaryCall<v1_browser_session_pb.NavigateRequest, v1_browser_session_pb.NavigateResponse>;
+    openCabinetTabs: grpc.handleUnaryCall<v1_browser_session_pb.OpenCabinetTabsRequest, v1_browser_session_pb.OpenCabinetTabsResponse>;
     streamSessionStatus: grpc.handleServerStreamingCall<v1_browser_session_pb.StreamSessionStatusRequest, v1_browser_session_pb.SessionStatusEvent>;
 }
 
@@ -112,6 +123,9 @@ export interface IBrowserSessionServiceClient {
     navigate(request: v1_browser_session_pb.NavigateRequest, callback: (error: grpc.ServiceError | null, response: v1_browser_session_pb.NavigateResponse) => void): grpc.ClientUnaryCall;
     navigate(request: v1_browser_session_pb.NavigateRequest, metadata: grpc.Metadata, callback: (error: grpc.ServiceError | null, response: v1_browser_session_pb.NavigateResponse) => void): grpc.ClientUnaryCall;
     navigate(request: v1_browser_session_pb.NavigateRequest, metadata: grpc.Metadata, options: Partial<grpc.CallOptions>, callback: (error: grpc.ServiceError | null, response: v1_browser_session_pb.NavigateResponse) => void): grpc.ClientUnaryCall;
+    openCabinetTabs(request: v1_browser_session_pb.OpenCabinetTabsRequest, callback: (error: grpc.ServiceError | null, response: v1_browser_session_pb.OpenCabinetTabsResponse) => void): grpc.ClientUnaryCall;
+    openCabinetTabs(request: v1_browser_session_pb.OpenCabinetTabsRequest, metadata: grpc.Metadata, callback: (error: grpc.ServiceError | null, response: v1_browser_session_pb.OpenCabinetTabsResponse) => void): grpc.ClientUnaryCall;
+    openCabinetTabs(request: v1_browser_session_pb.OpenCabinetTabsRequest, metadata: grpc.Metadata, options: Partial<grpc.CallOptions>, callback: (error: grpc.ServiceError | null, response: v1_browser_session_pb.OpenCabinetTabsResponse) => void): grpc.ClientUnaryCall;
     streamSessionStatus(request: v1_browser_session_pb.StreamSessionStatusRequest, options?: Partial<grpc.CallOptions>): grpc.ClientReadableStream<v1_browser_session_pb.SessionStatusEvent>;
     streamSessionStatus(request: v1_browser_session_pb.StreamSessionStatusRequest, metadata?: grpc.Metadata, options?: Partial<grpc.CallOptions>): grpc.ClientReadableStream<v1_browser_session_pb.SessionStatusEvent>;
 }
@@ -136,6 +150,9 @@ export class BrowserSessionServiceClient extends grpc.Client implements IBrowser
     public navigate(request: v1_browser_session_pb.NavigateRequest, callback: (error: grpc.ServiceError | null, response: v1_browser_session_pb.NavigateResponse) => void): grpc.ClientUnaryCall;
     public navigate(request: v1_browser_session_pb.NavigateRequest, metadata: grpc.Metadata, callback: (error: grpc.ServiceError | null, response: v1_browser_session_pb.NavigateResponse) => void): grpc.ClientUnaryCall;
     public navigate(request: v1_browser_session_pb.NavigateRequest, metadata: grpc.Metadata, options: Partial<grpc.CallOptions>, callback: (error: grpc.ServiceError | null, response: v1_browser_session_pb.NavigateResponse) => void): grpc.ClientUnaryCall;
+    public openCabinetTabs(request: v1_browser_session_pb.OpenCabinetTabsRequest, callback: (error: grpc.ServiceError | null, response: v1_browser_session_pb.OpenCabinetTabsResponse) => void): grpc.ClientUnaryCall;
+    public openCabinetTabs(request: v1_browser_session_pb.OpenCabinetTabsRequest, metadata: grpc.Metadata, callback: (error: grpc.ServiceError | null, response: v1_browser_session_pb.OpenCabinetTabsResponse) => void): grpc.ClientUnaryCall;
+    public openCabinetTabs(request: v1_browser_session_pb.OpenCabinetTabsRequest, metadata: grpc.Metadata, options: Partial<grpc.CallOptions>, callback: (error: grpc.ServiceError | null, response: v1_browser_session_pb.OpenCabinetTabsResponse) => void): grpc.ClientUnaryCall;
     public streamSessionStatus(request: v1_browser_session_pb.StreamSessionStatusRequest, options?: Partial<grpc.CallOptions>): grpc.ClientReadableStream<v1_browser_session_pb.SessionStatusEvent>;
     public streamSessionStatus(request: v1_browser_session_pb.StreamSessionStatusRequest, metadata?: grpc.Metadata, options?: Partial<grpc.CallOptions>): grpc.ClientReadableStream<v1_browser_session_pb.SessionStatusEvent>;
 }

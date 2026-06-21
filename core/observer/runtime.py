@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 OBSERVER_RUNTIME_KEY = "observer:runtime"
 
 # Значения worker_status, при которых воркер считается живым (status="running")
-_RUNNING_WORKER_STATUSES = {"scanning", "idle", "dispatch"}
+_RUNNING_WORKER_STATUSES = {"scanning", "idle", "dispatch", "preparing"}
 
 
 def _normalize_status(payload: dict[str, Any]) -> str:
@@ -81,6 +81,7 @@ async def read_observer_runtime(redis: Any) -> dict[str, Any]:
     _fallback: dict[str, Any] = {
         "status": "unknown",
         "active_phase": None,
+        "status_message": None,
         "next_scan_at": None,
         "last_successful_scan_at": None,
         "updated_at": None,
@@ -110,6 +111,7 @@ async def read_observer_runtime(redis: Any) -> dict[str, Any]:
     return {
         "status": _normalize_status(payload),
         "active_phase": payload.get("active_phase"),
+        "status_message": payload.get("status_message"),
         "next_scan_at": payload.get("next_scan_at"),
         "last_successful_scan_at": payload.get("last_successful_scan_at"),
         "updated_at": payload.get("updated_at"),

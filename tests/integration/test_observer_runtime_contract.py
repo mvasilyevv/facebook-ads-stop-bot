@@ -117,6 +117,24 @@ async def test_contract_paused_maps_to_paused(fake_redis_client) -> None:
     assert result["status"] == "paused", f"Ожидали 'paused', получили '{result['status']}'."
 
 
+# writer(preparing) → reader видит running + status_message пробрасывается (фаза подготовки)
+@pytest.mark.asyncio
+async def test_contract_preparing_maps_to_running_with_message(fake_redis_client) -> None:
+    """Фаза подготовки рабочего места: status='preparing' → running, текст в status_message."""
+    await _publish_runtime_status(
+        fake_redis_client,
+        status="preparing",
+        active_phase="preparing",
+        status_message="Подготавливаю рабочее место: открываю кабинеты (2)…",
+        accounts_total=2,
+    )
+    result = await read_observer_runtime(fake_redis_client)
+    assert result["status"] == "running", "preparing должен нормализоваться в running"
+    assert result["active_phase"] == "preparing"
+    assert "Подготавливаю" in result["status_message"]
+    assert result["raw"]["worker_status"] == "preparing"
+
+
 # writer сохраняет active_phase и last_successful_scan_at
 @pytest.mark.asyncio
 async def test_contract_extra_fields_preserved(fake_redis_client) -> None:

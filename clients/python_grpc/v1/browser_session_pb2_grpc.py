@@ -71,6 +71,12 @@ class BrowserSessionServiceStub(object):
             response_deserializer=v1_dot_browser__session__pb2.NavigateResponse.FromString,
             _registered_method=True,
         )
+        self.OpenCabinetTabs = channel.unary_unary(
+            "/fb_agent.browser_session.v1.BrowserSessionService/OpenCabinetTabs",
+            request_serializer=v1_dot_browser__session__pb2.OpenCabinetTabsRequest.SerializeToString,
+            response_deserializer=v1_dot_browser__session__pb2.OpenCabinetTabsResponse.FromString,
+            _registered_method=True,
+        )
         self.StreamSessionStatus = channel.unary_stream(
             "/fb_agent.browser_session.v1.BrowserSessionService/StreamSessionStatus",
             request_serializer=v1_dot_browser__session__pb2.StreamSessionStatusRequest.SerializeToString,
@@ -120,6 +126,15 @@ class BrowserSessionServiceServicer(object):
         context.set_details("Method not implemented!")
         raise NotImplementedError("Method not implemented!")
 
+    def OpenCabinetTabs(self, request, context):
+        """Открыть вкладки Ads Manager для списка кабинетов (фаза "подготовка рабочего
+        места" перед сканом). Для каждого ad_account_id ищет/открывает вкладку кабинета
+        (manage/campaigns + колонки). Не сканирует. Идемпотентно: уже открытую переиспользует.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details("Method not implemented!")
+        raise NotImplementedError("Method not implemented!")
+
     def StreamSessionStatus(self, request, context):
         """Стриминг статусов сессии (heartbeat, ошибки, смена страницы)."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
@@ -158,6 +173,11 @@ def add_BrowserSessionServiceServicer_to_server(servicer, server):
             servicer.Navigate,
             request_deserializer=v1_dot_browser__session__pb2.NavigateRequest.FromString,
             response_serializer=v1_dot_browser__session__pb2.NavigateResponse.SerializeToString,
+        ),
+        "OpenCabinetTabs": grpc.unary_unary_rpc_method_handler(
+            servicer.OpenCabinetTabs,
+            request_deserializer=v1_dot_browser__session__pb2.OpenCabinetTabsRequest.FromString,
+            response_serializer=v1_dot_browser__session__pb2.OpenCabinetTabsResponse.SerializeToString,
         ),
         "StreamSessionStatus": grpc.unary_stream_rpc_method_handler(
             servicer.StreamSessionStatus,
@@ -347,6 +367,36 @@ class BrowserSessionService(object):
             "/fb_agent.browser_session.v1.BrowserSessionService/Navigate",
             v1_dot_browser__session__pb2.NavigateRequest.SerializeToString,
             v1_dot_browser__session__pb2.NavigateResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True,
+        )
+
+    @staticmethod
+    def OpenCabinetTabs(
+        request,
+        target,
+        options=(),
+        channel_credentials=None,
+        call_credentials=None,
+        insecure=False,
+        compression=None,
+        wait_for_ready=None,
+        timeout=None,
+        metadata=None,
+    ):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            "/fb_agent.browser_session.v1.BrowserSessionService/OpenCabinetTabs",
+            v1_dot_browser__session__pb2.OpenCabinetTabsRequest.SerializeToString,
+            v1_dot_browser__session__pb2.OpenCabinetTabsResponse.FromString,
             options,
             channel_credentials,
             insecure,

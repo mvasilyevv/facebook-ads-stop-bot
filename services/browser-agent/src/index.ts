@@ -173,6 +173,34 @@ async function navigate(call: any, callback: any) {
   }
 }
 
+// Фаза "подготовка рабочего места": открыть вкладки кабинетов перед сканом.
+// Per-cabinet, идемпотентно (ensureAdsManagerPage переиспользует открытую вкладку).
+// Ошибка одного кабинета не валит остальные — собираем per-cabinet результаты.
+async function openCabinetTabs(call: any, callback: any) {
+  try {
+    const session = sessionManager.getSession(call.request.session_id);
+    const actIds: string[] = call.request.ad_account_ids || [];
+    const results = [];
+    for (const actId of actIds) {
+      try {
+        const page = await sessionManager.ensureAdsManagerPage(session, { actId });
+        results.push({ ad_account_id: actId, opened: true, url: page.url(), error: '' });
+      } catch (e: any) {
+        results.push({
+          ad_account_id: actId,
+          opened: false,
+          url: '',
+          error: e?.message || String(e),
+        });
+      }
+    }
+    callback(null, { results });
+  } catch (err: any) {
+    const code = grpcCodeForError(err);
+    callback({ code, message: err.message });
+  }
+}
+
 type SessionStatusLookup = (sessionId: string) => BrowserSession;
 
 export function writeSessionStatusEvent(call: any, sessionId: string, lookup: SessionStatusLookup): boolean {
@@ -470,6 +498,7 @@ function main() {
     reconnectBrowser,
     getSessionInfo,
     navigate,
+    openCabinetTabs,
     streamSessionStatus,
   });
 

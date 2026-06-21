@@ -22,8 +22,29 @@ service BrowserSessionService {
   // Перейти на URL.
   rpc Navigate(NavigateRequest) returns (NavigateResponse);
 
+  // Открыть вкладки Ads Manager для списка кабинетов (фаза "подготовка рабочего
+  // места" перед сканом). Для каждого ad_account_id ищет/открывает вкладку кабинета
+  // (manage/campaigns + колонки). Не сканирует. Идемпотентно: уже открытую переиспользует.
+  rpc OpenCabinetTabs(OpenCabinetTabsRequest) returns (OpenCabinetTabsResponse);
+
   // Стриминг статусов сессии (heartbeat, ошибки, смена страницы).
   rpc StreamSessionStatus(StreamSessionStatusRequest) returns (stream SessionStatusEvent);
+}
+
+message OpenCabinetTabsRequest {
+  string session_id = 1;
+  repeated string ad_account_ids = 2;  // числовые id без префикса act_
+}
+
+message OpenCabinetTabsResponse {
+  repeated CabinetTabResult results = 1;
+}
+
+message CabinetTabResult {
+  string ad_account_id = 1;
+  bool opened = 2;       // вкладка открыта/найдена
+  string url = 3;        // итоговый URL вкладки (если opened)
+  string error = 4;      // текст ошибки (если не opened)
 }
 
 message StartBrowserRequest {
