@@ -299,3 +299,85 @@ def test_autostop_alert_truncates_long_lists() -> None:
     assert "ещё" in text.lower()
     # Telegram-лимит сообщения 4096 — не превышаем
     assert len(text) < 4096
+
+
+# Сканирование выключено → канал авто-стопа НЕ проверяется и CRITICAL не шлётся
+# (browser-agent намеренно не держит сессию; «сессия не найдена» — ожидаемо, не отказ).
+async def test_check_meta_api_channel_skips_when_scanning_off(monkeypatch) -> None:
+    import apps.health_watchdog.main as hw
+    from core.observer import queries as obs_queries
+
+    async def _fake_config(engine):
+        return {"is_scanning_enabled": False}
+
+    monkeypatch.setattr(obs_queries, "load_observer_config", _fake_config)
+
+    probe_called = {"v": False}
+
+    class _Client:
+        async def check_health(self, *, full_probe: bool = False):
+            probe_called["v"] = True
+            return {"healthy": False}
+
+    class _Redis:
+        def __init__(self):
+            self.store: dict[str, str] = {}
+            self.deleted: list[str] = []
+
+        async def set(self, key, value, ex=None):
+            self.store[key] = value
+            return True
+
+        async def delete(self, key):
+            self.deleted.append(key)
+            return 1
+
+    redis = _Redis()
+    sent = await hw.check_meta_api_channel(
+        _Client(), redis, engine=None, now=datetime(2026, 1, 1, tzinfo=timezone.utc)
+    )
+    assert sent is False  # CRITICAL не отправлен
+    assert probe_called["v"] is False  # check_health даже не звался (сканирование off)
+    payload = json.loads(redis.store[hw.META_CHANNEL_HEALTH_KEY])
+    assert payload["probe_detail"] == "scanning_disabled"
+    assert hw.META_CHANNEL_DEDUP_KEY in redis.deleted  # дедуп снят (re-arm на будущее)
+
+
+# Сканирование ВКЛЮЧЕНО + канал реально мёртв → CRITICAL отправляется (регрессия фикса).
+async def test_check_meta_api_channel_alerts_when_scanning_on_and_down(monkeypatch) -> None:
+    import apps.health_watchdog.main as hw
+    from core.observer import queries as obs_queries
+
+    async def _fake_config(engine):
+        return {"is_scanning_enabled": True}
+
+    monkeypatch.setattr(obs_queries, "load_observer_config", _fake_config)
+
+    class _Client:
+        async def check_health(self, *, full_probe: bool = False):
+            return {"healthy": False, "detail": "network-down"}
+
+    class _Redis:
+        def __init__(self):
+            self.store: dict[str, str] = {}
+
+        async def set(self, key, value, ex=None, nx=False):
+            if nx and key in self.store:
+                return None
+            self.store[key] = value
+            return True
+
+        async def delete(self, key):
+            self.store.pop(key, None)
+            return 1
+
+    async def _fake_alert(redis_client, *, dedup_key, text, engine):
+        return True  # имитируем «алерт отправлен»
+
+    monkeypatch.setattr(hw, "_maybe_alert_with_dedup", _fake_alert)
+
+    redis = _Redis()
+    sent = await hw.check_meta_api_channel(
+        _Client(), redis, engine=None, now=datetime(2026, 1, 1, tzinfo=timezone.utc)
+    )
+    assert sent is True  # при включённом сканировании реальный отказ → CRITICAL

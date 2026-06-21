@@ -501,6 +501,42 @@ async def check_meta_api_channel(
     """
     now = now or datetime.now(UTC)
 
+    # Сканирование выключено (намеренно) → observer не держит постоянную browser-agent
+    # сессию, и «сессия не найдена» это НЕ отказ канала, а ожидаемое состояние. Не шлём
+    # ложный CRITICAL (money-спам). Логика совпадает с observer: config None / false → пауза.
+    try:
+        from core.observer.queries import load_observer_config
+
+        obs_config = await load_observer_config(engine)
+        scanning_on = bool(obs_config and obs_config.get("is_scanning_enabled"))
+    except Exception:  # noqa: BLE001
+        # Ошибка чтения конфига — ведём себя как раньше (проверяем канал, можем алертить).
+        scanning_on = True
+
+    if not scanning_on:
+        payload = {
+            "healthy": False,
+            "probe_performed": False,
+            "probe_ok": False,
+            "probe_status_code": 0,
+            "probe_duration_ms": 0,
+            "detail": "сканирование выключено — канал авто-стопа не проверяется",
+            "probe_detail": "scanning_disabled",
+            "reason": "сканирование выключено",
+            "checked_at": now.isoformat(),
+        }
+        try:
+            await redis_client.set(
+                META_CHANNEL_HEALTH_KEY,
+                json.dumps(payload, ensure_ascii=False),
+                ex=META_CHANNEL_HEALTH_TTL_SECONDS,
+            )
+            # Снимаем дедуп: при включении сканирования + реальном отказе снова дадим алерт.
+            await redis_client.delete(META_CHANNEL_DEDUP_KEY)
+        except Exception:  # noqa: BLE001
+            logger.exception("meta probe: запись статуса при выключенном сканировании")
+        return False
+
     try:
         probe = await meta_client.check_health(full_probe=True)
     except Exception as exc:  # noqa: BLE001
