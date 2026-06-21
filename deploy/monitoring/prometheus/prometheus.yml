@@ -1,0 +1,26 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # Сам Prometheus.
+  - job_name: prometheus
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Метрики хоста (CPU, RAM, диск, uptime, сеть, load).
+  - job_name: node
+    static_configs:
+      - targets: ['node-exporter:9100']
+
+  # Метрики по каждому docker-контейнеру (CPU/RAM/restarts).
+  - job_name: cadvisor
+    static_configs:
+      - targets: ['cadvisor:8080']
+
+  # Метрики приложения FB Agent (app_requests_total, app_request_duration_seconds).
+  # api резолвится через внешнюю сеть fb_agent_default.
+  - job_name: fb-api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['api:8100']

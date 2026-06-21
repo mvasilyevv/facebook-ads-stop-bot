@@ -101,3 +101,6 @@ data/_syntx_snap*.md
 
 # Билд-кэш TypeScript
 *.tsbuildinfo
+
+# Мониторинг: локальный пароль Grafana
+deploy/monitoring/.env.monitoring
