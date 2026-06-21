@@ -7,9 +7,10 @@
 ## Цепочка автозапуска
 
 ```
-ребут → xvfb.service (:99) → vision.service (Vision на :99, логин из keyring,
-        синк профилей) → vision-autostart.service (стартует боевой профиль через
-        Vision API /start) → fb-browser-agent.service (gRPC :50051, CDP)
+ребут → xvfb.service (:99) → vision-wm.service (xfwm4 — рамки окон) →
+        vision.service (Vision на :99, логин из keyring, синк профилей) →
+        vision-autostart.service (стартует боевой профиль через Vision API /start) →
+        fb-browser-agent.service (gRPC :50051, CDP)
 ```
 
 При включённом сканировании observer держит постоянную сессию; probe
@@ -25,11 +26,11 @@ apt-get install -y xvfb x11vnc dbus-x11 xdotool scrot
 cp deploy/vision-start-profile.sh /usr/local/bin/
 chmod +x /usr/local/bin/vision-start-profile.sh
 
-# 3. Юниты systemd
-cp deploy/xvfb.service deploy/vision.service deploy/vision-autostart.service \
-   /etc/systemd/system/
+# 3. Юниты systemd (vision-wm = оконный менеджер xfwm4 → рамки окон Vision)
+cp deploy/xvfb.service deploy/vision-wm.service deploy/vision.service \
+   deploy/vision-autostart.service /etc/systemd/system/
 systemctl daemon-reload
-systemctl enable --now xvfb.service vision.service vision-autostart.service
+systemctl enable --now xvfb.service vision-wm.service vision.service vision-autostart.service
 
 # 4. В /opt/fb_agent/.env должны быть заданы:
 #    VISION_X_TOKEN, VISION_API_URL, VISION_PROFILE_ID, VISION_FOLDER_ID
@@ -46,8 +47,12 @@ systemctl enable --now xvfb.service vision.service vision-autostart.service
   отдаёт folder_id только для уже ЗАПУЩЕННОГО профиля (`GET /list`), поэтому он
   вынесен в `.env`. Узнать заново: запустить профиль (клик «Старт» в GUI или
   `xdotool` на :99), затем `curl -H "X-Token: $TOKEN" http://127.0.0.1:3030/list`.
-- **Посмотреть headless-экран** (отладка): на сервере `x11vnc -display :99
-  -localhost -rfbport 5900`, затем с ноута `ssh -L 5900:localhost:5900 root@<srv>`
+- **Посмотреть/управлять Vision через NoMachine:** Vision живёт на :99 (xfwm4 даёт
+  рамки окон). НЕ создавай в NoMachine новый desktop — он будет пустой. Подключайся
+  к существующему **дисплею :99** (в списке сессий NoMachine). Каждый «new desktop»
+  плодит пустой XFCE без приложения.
+- **Посмотреть headless-экран** (отладка, без NoMachine): на сервере `x11vnc -display
+  :99 -localhost -rfbport 5900`, затем с ноута `ssh -L 5900:localhost:5900 root@<srv>`
   и VNC-клиент на `localhost:5900`.
 - **Снимок экрана** :99: `DISPLAY=:99 sudo -u mark HOME=/home/mark scrot -o /tmp/v.png`.
 
