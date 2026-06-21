@@ -72,12 +72,14 @@ jobs:
       # актуальные стабы. Зеркалим команду из run.sh строки 713-728.
       - name: Установка grpcio-tools для регенерации pb2
         run: |
-          # grpcio-tools берём ТОЙ ЖЕ версии, что залочен рантайм-grpcio в uv.lock.
-          # Иначе плавающий pip ставит более новый grpcio-tools, регенерённый pb2
-          # требует grpcio новее установленного в образе → краш всех воркеров.
+          # grpcio-tools И protobuf берём ТОЙ ЖЕ версии, что залочена в uv.lock для
+          # рантайма. Иначе плавающий pip ставит свежее → регенерённый pb2 требует
+          # grpcio/protobuf новее установленного в образе (uv sync --frozen) → краш
+          # всех gRPC-воркеров (grpc version guard / ValidateProtobufRuntimeVersion).
           GRPCIO_VER=$(python -c "import tomllib,pathlib; d=tomllib.loads(pathlib.Path('uv.lock').read_text()); print(next(p['version'] for p in d['package'] if p['name']=='grpcio'))")
-          echo "grpcio в uv.lock = ${GRPCIO_VER}; ставлю grpcio-tools==${GRPCIO_VER}"
-          pip install "grpcio-tools==${GRPCIO_VER}"
+          PROTOBUF_VER=$(python -c "import tomllib,pathlib; d=tomllib.loads(pathlib.Path('uv.lock').read_text()); print(next(p['version'] for p in d['package'] if p['name']=='protobuf'))")
+          echo "uv.lock: grpcio=${GRPCIO_VER} protobuf=${PROTOBUF_VER}; ставлю их же для регенерации pb2"
+          pip install "grpcio-tools==${GRPCIO_VER}" "protobuf==${PROTOBUF_VER}"
 
       - name: Регенерация gRPC Python-стабов из proto/v1/*.proto
         run: |
@@ -149,12 +151,14 @@ jobs:
       # pb2 регенерируем ДО сборки — committed-стабы дрейфуют от proto (грабля).
       - name: Установка grpcio-tools для регенерации pb2
         run: |
-          # grpcio-tools берём ТОЙ ЖЕ версии, что залочен рантайм-grpcio в uv.lock.
-          # Иначе плавающий pip ставит более новый grpcio-tools, регенерённый pb2
-          # требует grpcio новее установленного в образе → краш всех воркеров.
+          # grpcio-tools И protobuf берём ТОЙ ЖЕ версии, что залочена в uv.lock для
+          # рантайма. Иначе плавающий pip ставит свежее → регенерённый pb2 требует
+          # grpcio/protobuf новее установленного в образе (uv sync --frozen) → краш
+          # всех gRPC-воркеров (grpc version guard / ValidateProtobufRuntimeVersion).
           GRPCIO_VER=$(python -c "import tomllib,pathlib; d=tomllib.loads(pathlib.Path('uv.lock').read_text()); print(next(p['version'] for p in d['package'] if p['name']=='grpcio'))")
-          echo "grpcio в uv.lock = ${GRPCIO_VER}; ставлю grpcio-tools==${GRPCIO_VER}"
-          pip install "grpcio-tools==${GRPCIO_VER}"
+          PROTOBUF_VER=$(python -c "import tomllib,pathlib; d=tomllib.loads(pathlib.Path('uv.lock').read_text()); print(next(p['version'] for p in d['package'] if p['name']=='protobuf'))")
+          echo "uv.lock: grpcio=${GRPCIO_VER} protobuf=${PROTOBUF_VER}; ставлю их же для регенерации pb2"
+          pip install "grpcio-tools==${GRPCIO_VER}" "protobuf==${PROTOBUF_VER}"
 
       - name: Регенерация gRPC pb2-стабов
         run: |
@@ -231,12 +235,14 @@ jobs:
       - name: Установка grpcio-tools (только Python-образы)
         if: matrix.is_python
         run: |
-          # grpcio-tools берём ТОЙ ЖЕ версии, что залочен рантайм-grpcio в uv.lock.
-          # Иначе плавающий pip ставит более новый grpcio-tools, регенерённый pb2
-          # требует grpcio новее установленного в образе → краш всех воркеров.
+          # grpcio-tools И protobuf берём ТОЙ ЖЕ версии, что залочена в uv.lock для
+          # рантайма. Иначе плавающий pip ставит свежее → регенерённый pb2 требует
+          # grpcio/protobuf новее установленного в образе (uv sync --frozen) → краш
+          # всех gRPC-воркеров (grpc version guard / ValidateProtobufRuntimeVersion).
           GRPCIO_VER=$(python -c "import tomllib,pathlib; d=tomllib.loads(pathlib.Path('uv.lock').read_text()); print(next(p['version'] for p in d['package'] if p['name']=='grpcio'))")
-          echo "grpcio в uv.lock = ${GRPCIO_VER}; ставлю grpcio-tools==${GRPCIO_VER}"
-          pip install "grpcio-tools==${GRPCIO_VER}"
+          PROTOBUF_VER=$(python -c "import tomllib,pathlib; d=tomllib.loads(pathlib.Path('uv.lock').read_text()); print(next(p['version'] for p in d['package'] if p['name']=='protobuf'))")
+          echo "uv.lock: grpcio=${GRPCIO_VER} protobuf=${PROTOBUF_VER}; ставлю их же для регенерации pb2"
+          pip install "grpcio-tools==${GRPCIO_VER}" "protobuf==${PROTOBUF_VER}"
 
       - name: Регенерация gRPC pb2-стабов (только Python-образы)
         if: matrix.is_python
@@ -338,26 +344,48 @@ jobs:
             echo "=== [0/5] Обновление кода на сервере (docker-compose, миграции, скрипты) ==="
             # Образы несут код api/воркеров, но docker-compose.yml/entrypoint/скрипты
             # читаются с диска сервера — синхронизируем их с main. .env в .gitignore не тронется.
-            git fetch --depth 1 origin main
-            git reset --hard origin/main
+            # Лэндим РОВНО тот SHA, по которому собраны образы (не подвижный origin/main):
+            # при двух быстрых пушах подряд origin/main мог уйти вперёд → код-на-диске
+            # (миграции/compose/entrypoint) разойдётся с кодом внутри образов.
+            git fetch --depth 1 origin "${GIT_SHA}"
+            git reset --hard "${GIT_SHA}"
 
             echo "=== [1/5] Авторизация в GHCR на сервере (GITHUB_TOKEN ранна) ==="
             echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
 
-            echo "=== [2/5] Pull свежих образов (тег: $GIT_SHA) ==="
-            # Обновляем тег latest на нужный SHA, чтобы compose взял правильный.
-            # browser-agent тянем для полноты, но в Docker он не поднимается
-            # (profile "agent" — на боевом сервере он нативный рядом с Vision).
+            echo "=== [2/5] Pull свежих образов (тег: $GIT_SHA) + сохранение текущих для отката ==="
             # compose использует ЛОКАЛЬНЫЕ имена fb-stop-bot/<svc>:latest — тегаем
             # ghcr-образ именно в них, иначе up берёт устаревший локальный образ
             # и фиксы не доезжают (баг до 2026-06-21).
+            # ПЕРЕД перетегом сохраняем текущий рабочий latest под :rollback — чтобы
+            # при провале health-check вернуться на заведомо рабочие образы, а не
+            # оставить прод на битом билде (раньше отката не было: красный CI = тихо
+            # деградировавший прод, как в grpcio-инциденте 2026-06-21).
             for svc in python-base api workers; do
+              if docker image inspect "fb-stop-bot/${svc}:latest" >/dev/null 2>&1; then
+                docker tag "fb-stop-bot/${svc}:latest" "fb-stop-bot/${svc}:rollback"
+              fi
               docker pull "${IMAGE_BASE}-${svc}:${GIT_SHA}"
               docker tag  "${IMAGE_BASE}-${svc}:${GIT_SHA}" "fb-stop-bot/${svc}:latest"
             done
 
+            # Откат на предыдущие образы (только теги :rollback → :latest; схему БД НЕ
+            # трогаем — alembic-миграции аддитивны, старый код переживает новую схему).
+            # Best-effort, идемпотентно, вызывается один раз из провальной ветки.
+            rollback_stack() {
+              echo "!!! ОТКАТ: возвращаю :rollback → :latest и пересоздаю стек на предыдущих образах"
+              for svc in python-base api workers; do
+                if docker image inspect "fb-stop-bot/${svc}:rollback" >/dev/null 2>&1; then
+                  docker tag "fb-stop-bot/${svc}:rollback" "fb-stop-bot/${svc}:latest"
+                fi
+              done
+              docker compose up -d --remove-orphans --force-recreate || true
+            }
+
             echo "=== [3/5] Миграции БД (alembic upgrade head) ==="
-            docker compose run --rm migrate
+            if ! docker compose run --rm migrate; then
+              echo "ДЕПЛОЙ ПРОВАЛЕН: миграции упали"; rollback_stack; exit 1
+            fi
 
             echo "=== [4/5] Перезапуск core-стека (profiles web/agent исключены) ==="
             # --force-recreate: контейнеры держатся за image ID на момент создания;
@@ -374,12 +402,19 @@ jobs:
               echo "ждём readyz ($i/18)..."; sleep 5
             done
             if [ "$ok" -ne 1 ]; then
-              echo "ДЕПЛОЙ ПРОВАЛЕН: /readyz не стал ready за 90с"; exit 1
+              echo "ДЕПЛОЙ ПРОВАЛЕН: /readyz не стал ready за 90с"; rollback_stack; exit 1
             fi
-            HB=$(docker exec fb_agent-redis-1 redis-cli --no-raw keys 'worker:heartbeat:*' | grep -c heartbeat || true)
-            echo "heartbeat воркеров: $HB"
-            if [ "$HB" -lt 10 ]; then
-              echo "ДЕПЛОЙ ПРОВАЛЕН: воркеров с heartbeat $HB (<10)"; exit 1
+            # heartbeat-гейт с retry-петлёй: воркеры пишут первый heartbeat не мгновенно,
+            # одноразовая проверка давала ложный fail на холодном старте (ран 27905809942).
+            hb_ok=0; HB=0
+            for i in $(seq 1 12); do
+              HB=$(docker exec fb_agent-redis-1 redis-cli --scan --pattern 'worker:heartbeat:*' | grep -c . || true)
+              echo "heartbeat воркеров ($i/12): $HB"
+              if [ "$HB" -ge 10 ]; then hb_ok=1; break; fi
+              sleep 5
+            done
+            if [ "$hb_ok" -ne 1 ]; then
+              echo "ДЕПЛОЙ ПРОВАЛЕН: воркеров с heartbeat $HB (<10) за 60с"; rollback_stack; exit 1
             fi
 
             echo "=== Деплой здоров: SHA $GIT_SHA, heartbeat=$HB ==="
