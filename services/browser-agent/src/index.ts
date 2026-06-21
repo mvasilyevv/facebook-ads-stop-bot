@@ -18,6 +18,7 @@ import {
 } from './am/am-fetch.js';
 import { defaultAmConfig } from './am/am-config.js';
 import { withPageLock } from './page-lock.js';
+import { startHeartbeat } from './redis-heartbeat.js';
 
 const PORT = process.env.GRPC_PORT ? parseInt(process.env.GRPC_PORT, 10) : 50051;
 const sessionManager = new SessionManager();
@@ -501,16 +502,24 @@ function main() {
     checkAdLibraryHealth: adLibraryHandlers.checkAdLibraryHealth,
   });
 
-  server.bindAsync(`0.0.0.0:${PORT}`, grpc.ServerCredentials.createInsecure(), (error, port) => {
+  server.bindAsync(`0.0.0.0:${PORT}`, grpc.ServerCredentials.createInsecure(), async (error, port) => {
     if (error) {
       console.error(`Не удалось запустить gRPC-сервер: ${error.message}`);
       process.exit(1);
     }
     // Явно держим event loop живым: в detached-запуске gRPC server может не удержать процесс сам.
     const keepAliveTimer = setInterval(() => undefined, 60_000);
+
+    // Запускаем Redis heartbeat — пишет worker:heartbeat:browser-agent каждые 20с (TTL 60с).
+    // Читатель: apps/api/routers/v1/settings_vision.py::_read_runtime_from_redis
+    const stopHeartbeat = await startHeartbeat(sessionManager);
+
     const shutdown = () => {
       clearInterval(keepAliveTimer);
-      server.tryShutdown(() => process.exit(0));
+      // Graceful shutdown: останавливаем heartbeat и закрываем Redis-соединение.
+      stopHeartbeat().finally(() => {
+        server.tryShutdown(() => process.exit(0));
+      });
     };
     process.once('SIGINT', shutdown);
     process.once('SIGTERM', shutdown);
