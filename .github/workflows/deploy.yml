@@ -71,7 +71,13 @@ jobs:
       # Регенерируем ДО установки зависимостей, чтобы тесты всегда видели
       # актуальные стабы. Зеркалим команду из run.sh строки 713-728.
       - name: Установка grpcio-tools для регенерации pb2
-        run: pip install "grpcio-tools>=1.80.0,<2.0.0"
+        run: |
+          # grpcio-tools берём ТОЙ ЖЕ версии, что залочен рантайм-grpcio в uv.lock.
+          # Иначе плавающий pip ставит более новый grpcio-tools, регенерённый pb2
+          # требует grpcio новее установленного в образе → краш всех воркеров.
+          GRPCIO_VER=$(python -c "import tomllib,pathlib; d=tomllib.loads(pathlib.Path('uv.lock').read_text()); print(next(p['version'] for p in d['package'] if p['name']=='grpcio'))")
+          echo "grpcio в uv.lock = ${GRPCIO_VER}; ставлю grpcio-tools==${GRPCIO_VER}"
+          pip install "grpcio-tools==${GRPCIO_VER}"
 
       - name: Регенерация gRPC Python-стабов из proto/v1/*.proto
         run: |
@@ -142,7 +148,13 @@ jobs:
 
       # pb2 регенерируем ДО сборки — committed-стабы дрейфуют от proto (грабля).
       - name: Установка grpcio-tools для регенерации pb2
-        run: pip install "grpcio-tools>=1.80.0,<2.0.0"
+        run: |
+          # grpcio-tools берём ТОЙ ЖЕ версии, что залочен рантайм-grpcio в uv.lock.
+          # Иначе плавающий pip ставит более новый grpcio-tools, регенерённый pb2
+          # требует grpcio новее установленного в образе → краш всех воркеров.
+          GRPCIO_VER=$(python -c "import tomllib,pathlib; d=tomllib.loads(pathlib.Path('uv.lock').read_text()); print(next(p['version'] for p in d['package'] if p['name']=='grpcio'))")
+          echo "grpcio в uv.lock = ${GRPCIO_VER}; ставлю grpcio-tools==${GRPCIO_VER}"
+          pip install "grpcio-tools==${GRPCIO_VER}"
 
       - name: Регенерация gRPC pb2-стабов
         run: |
@@ -218,7 +230,13 @@ jobs:
       # pb2 нужен только Python-образам (api/workers наследуют python-base).
       - name: Установка grpcio-tools (только Python-образы)
         if: matrix.is_python
-        run: pip install "grpcio-tools>=1.80.0,<2.0.0"
+        run: |
+          # grpcio-tools берём ТОЙ ЖЕ версии, что залочен рантайм-grpcio в uv.lock.
+          # Иначе плавающий pip ставит более новый grpcio-tools, регенерённый pb2
+          # требует grpcio новее установленного в образе → краш всех воркеров.
+          GRPCIO_VER=$(python -c "import tomllib,pathlib; d=tomllib.loads(pathlib.Path('uv.lock').read_text()); print(next(p['version'] for p in d['package'] if p['name']=='grpcio'))")
+          echo "grpcio в uv.lock = ${GRPCIO_VER}; ставлю grpcio-tools==${GRPCIO_VER}"
+          pip install "grpcio-tools==${GRPCIO_VER}"
 
       - name: Регенерация gRPC pb2-стабов (только Python-образы)
         if: matrix.is_python
