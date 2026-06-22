@@ -180,6 +180,16 @@ async def update_preset(preset_id: str, body: PresetIn, engine: DepEngine) -> Pr
     params["pid"] = pid
 
     async with engine.begin() as conn:
+        # Существование проверяем ПЕРВЫМ: 404 на несуществующий id имеет приоритет над
+        # 409 по дублю имени (иначе PUT на чужой/несуществующий id с занятым именем врёт 409).
+        exists = (
+            await conn.execute(
+                text("SELECT 1 FROM campaign_preset WHERE id = :pid LIMIT 1"),
+                {"pid": pid},
+            )
+        ).first()
+        if exists is None:
+            raise HTTPException(status_code=404, detail=f"Пресет id={preset_id} не найден")
         dup = (
             await conn.execute(
                 text("SELECT 1 FROM campaign_preset WHERE name = :name AND id <> :pid LIMIT 1"),
