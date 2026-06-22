@@ -12,6 +12,8 @@ Endpoints под /api (благодаря auto-discovery с prefix="/api"):
 from __future__ import annotations
 
 import logging
+import os
+import re
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException, Query
@@ -37,6 +39,25 @@ router = APIRouter(prefix="/settings/observer", tags=["settings"])
 
 # Канал Redis для триггера scan-now.
 _SCAN_NOW_CHANNEL = "fb_agent:observer:trigger"
+
+# Дата в названии кампании (DD.MM или DD.MM.YY). У owner-кампаний она в КОНЦЕ имени
+# («MV | GH_CR | video | adset.pro | 18.06»), поэтому берём ПОСЛЕДНее совпадение.
+_NAME_DATE_RE = re.compile(r"(\d{1,2})\.(\d{1,2})(?:\.(\d{2,4}))?")
+
+
+def _campaign_sort_key(name: str) -> tuple[int, int, int, str]:
+    """Ключ сортировки кампаний по дате из названия (свежие выше при reverse=True).
+
+    Парсим последнюю дату DD.MM[.YY] в имени → (year, month, day, name). Без даты →
+    (0,0,0) — уезжает в конец. Имя хвостом для стабильного порядка при равной дате.
+    Сортировка по ИМЕНИ лексически не годится: дата в конце, префикс (GH_CR/GH) доминирует.
+    """
+    matches = _NAME_DATE_RE.findall(name or "")
+    if matches:
+        d, m, y = matches[-1]
+        year = (int(y) + 2000 if len(y) == 2 else int(y)) if y else 0
+        return (year, int(m), int(d), name or "")
+    return (0, 0, 0, name or "")
 
 
 async def _get_singleton(session: AsyncSession) -> ObserverConfig:
@@ -194,8 +215,8 @@ async def list_observer_campaigns(engine: DepEngine) -> list[CampaignOption]:
         if not campaign_matches_owner(campaign_name=name or "", ad_name="", owner_tag=owner_tag):
             continue
         out.append(CampaignOption(id=str(cid), name=name or "", selected=str(cid) in allowlist))
-    # Сортировка по имени убыванием: в названии кампании есть дата → свежие выше.
-    out.sort(key=lambda o: o.name, reverse=True)
+    # Сортировка по дате из названия — свежие кампании выше.
+    out.sort(key=lambda o: _campaign_sort_key(o.name), reverse=True)
     return out
 
 
@@ -260,14 +281,24 @@ async def refresh_observer_campaigns(
             vision_x_token=x_token,
             vision_api_url=settings.vision_api_url,
             vision_profile_id=profile_id,
+            # grpc_host/port из env — иначе из Docker api клиент идёт на localhost:50051,
+            # а browser-agent на хосте (host.docker.internal). Это и была причина «пусто»:
+            # refresh не достукивался до browser-agent. Зеркало settings_vision/observer.
+            grpc_host=os.environ.get("BROWSER_AGENT_HOST", "localhost"),
+            grpc_port=int(os.environ.get("BROWSER_AGENT_GRPC_PORT", "50051")),
         )
     )
     merged: dict[str, dict[str, str]] = {}
     try:
         await client.start()
-        # НЕ создаём новую сессию: browser-agent сам возьмёт активную ads-сессию observer'а
-        # (getPreferredSession) с кешированным graph-токеном. По каждому кабинету откроет его
-        # вкладку (ensureAdsManagerPage(actId)) и резолвит кампании по owner_tag.
+        # Гарантируем активную Vision-сессию: refresh самодостаточен и НЕ зависит от того,
+        # сканирует ли observer сейчас (иначе зацикленность: включение скана гейтится пустым
+        # allowlist'ом → observer не сканирует → нет сессии → refresh не видит кампании →
+        # нечем заполнить allowlist). StartBrowser идемпотентен: создаёт сессию или
+        # переиспользует уже поднятый профиль (CDP) — берёт session_id для list_campaigns.
+        await client.start_browser()
+        # По каждому кабинету list_campaigns откроет его вкладку (ensureAdsManagerPage(actId)),
+        # достанет graph-токен со страницы и резолвит кампании по owner_tag.
         for acc in targets:
             cs = await client.list_campaigns(owner_tag=owner_tag or "", ad_account_id=acc or "")
             for c in cs:
@@ -311,8 +342,8 @@ async def refresh_observer_campaigns(
         if not campaign_matches_owner(campaign_name=c["name"], ad_name="", owner_tag=owner_tag):
             continue
         result.append(CampaignOption(id=c["id"], name=c["name"], selected=c["id"] in allowlist))
-    # Сортировка по имени убыванием: в названии кампании есть дата → свежие выше.
-    result.sort(key=lambda o: o.name, reverse=True)
+    # Сортировка по дате из названия — свежие кампании выше.
+    result.sort(key=lambda o: _campaign_sort_key(o.name), reverse=True)
     return result
 
 
