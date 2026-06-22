@@ -170,8 +170,23 @@ def upgrade() -> None:
     op.create_index("ix_campaign_run_created_at", "campaign_run", ["created_at"])
     op.create_index("ix_campaign_run_preset", "campaign_run", ["preset_id"])
 
+    # Регистрируем task_type='campaign_create' в CHECK task_queue (воркер campaign_creator).
+    op.drop_constraint("ck_task_queue_task_type", "task_queue", type_="check")
+    op.create_check_constraint(
+        "ck_task_queue_task_type",
+        "task_queue",
+        "task_type IN ('disable', 'enable', 'plan_run', 'meta_api_mutation', "
+        "'ad_library_scan', 'campaign_create')",
+    )
+
 
 def downgrade() -> None:
+    op.drop_constraint("ck_task_queue_task_type", "task_queue", type_="check")
+    op.create_check_constraint(
+        "ck_task_queue_task_type",
+        "task_queue",
+        "task_type IN ('disable', 'enable', 'plan_run', 'meta_api_mutation', 'ad_library_scan')",
+    )
     op.drop_index("ix_campaign_run_preset", table_name="campaign_run")
     op.drop_index("ix_campaign_run_created_at", table_name="campaign_run")
     op.drop_index("ix_campaign_run_status", table_name="campaign_run")

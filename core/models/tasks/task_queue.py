@@ -26,7 +26,7 @@ from core.models.base import Base, BigIntPrimaryKey, Timestamp
 class TaskQueue(BigIntPrimaryKey, Timestamp, Base):
     """Единая очередь задач со всеми типами.
 
-    task_type ∈ {disable, enable, plan_run, meta_api_mutation, ad_library_scan}
+    task_type ∈ {disable, enable, plan_run, meta_api_mutation, ad_library_scan, campaign_create}
     status ∈ {draft, pending, running, succeeded, failed, retrying, cancelled}
 
     Retention:
@@ -54,7 +54,8 @@ class TaskQueue(BigIntPrimaryKey, Timestamp, Base):
     __table_args__ = (
         UniqueConstraint("idempotency_key", name="uq_task_queue_idempotency_key"),
         CheckConstraint(
-            "task_type IN ('disable', 'enable', 'plan_run', 'meta_api_mutation', 'ad_library_scan')",
+            "task_type IN ('disable', 'enable', 'plan_run', 'meta_api_mutation', "
+            "'ad_library_scan', 'campaign_create')",
             name="ck_task_queue_task_type",
         ),
         CheckConstraint(

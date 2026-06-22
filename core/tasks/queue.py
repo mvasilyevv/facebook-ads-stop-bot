@@ -22,7 +22,9 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 logger = logging.getLogger(__name__)
 
 # Допустимые значения task_type — должны совпадать с CHECK constraint в БД
-TASK_TYPES = frozenset({"disable", "enable", "plan_run", "meta_api_mutation", "ad_library_scan"})
+TASK_TYPES = frozenset(
+    {"disable", "enable", "plan_run", "meta_api_mutation", "ad_library_scan", "campaign_create"}
+)
 
 # Допустимые статусы — должны совпадать с CHECK constraint
 TASK_STATUSES = frozenset(

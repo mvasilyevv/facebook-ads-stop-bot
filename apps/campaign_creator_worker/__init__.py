@@ -1,0 +1,239 @@
+# -*- coding: utf-8 -*-
+"""campaign_creator_worker — исполнитель залива FB-кампаний (Подход A, Волна 2).
+
+Поллит task_queue (task_type='campaign_create'), по payload.run_id грузит CampaignRun,
+гоняет execute_campaign_spec (uniquify → upload → create) и пишет прогресс/статус/
+created_meta_ids обратно в campaign_run. Money-критичный путь: статусы объектов по
+launch_state (кампания PAUSED), idempotency_key против двойного залива, partial-create
+без retry (дубли недопустимы).
+
+Этот модуль — выделенные хелперы persistence/claim (чтобы main.py остался тонким):
+- claim_campaign_task: FOR UPDATE SKIP LOCKED по task_type='campaign_create' (отдельный
+  SQL, т.к. core.tasks.queue.claim_next_task валидирует task_type по своему реестру);
+- load_run / update_run_progress / finalize_run_* : чтение и запись campaign_run.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncEngine
+
+from core.campaign_builder.config import CampaignConfig
+from core.campaign_builder.uniquify import ConceptInput
+from core.tasks.queue import Task, TaskClaim, _row_to_task
+
+logger = logging.getLogger("campaign_creator_worker")
+
+TASK_TYPE = "campaign_create"
+
+
+# ====================== claim ======================
+
+# Зеркало core.tasks.queue._CLAIM_SQL, но без валидации task_type по реестру
+# (campaign_create в реестре core.tasks.queue.TASK_TYPES отсутствует — он принадлежит
+# этому воркеру). Тот же безопасный паттерн UPDATE ... WHERE id=(SELECT FOR UPDATE
+# SKIP LOCKED) для concurrent-воркеров.
+_CLAIM_CAMPAIGN_SQL = text(
+    """
+    UPDATE task_queue
+    SET status = 'running', updated_at = NOW()
+    WHERE id = (
+        SELECT id FROM task_queue
+        WHERE task_type = :tt
+          AND status IN ('pending', 'retrying')
+          AND (next_retry_at IS NULL OR next_retry_at <= NOW())
+        ORDER BY COALESCE(next_retry_at, created_at), id
+        FOR UPDATE SKIP LOCKED
+        LIMIT 1
+    )
+    RETURNING id, task_type, status, idempotency_key, payload,
+              attempt_count, max_attempts, requested_by, last_error,
+              next_retry_at, created_at
+    """
+)
+
+
+async def claim_campaign_task(engine: AsyncEngine) -> TaskClaim:
+    """Атомарный захват одной задачи task_type='campaign_create'."""
+    async with engine.begin() as conn:
+        row = (await conn.execute(_CLAIM_CAMPAIGN_SQL, {"tt": TASK_TYPE})).first()
+    if not row:
+        return TaskClaim(task=None, queue_empty=True)
+    return TaskClaim(task=_row_to_task(row), queue_empty=False)
+
+
+# ====================== campaign_run persistence ======================
+
+
+@dataclass
+class LoadedRun:
+    """Снимок campaign_run для воркера."""
+
+    id: str
+    config: dict[str, Any]
+    status: str
+
+
+async def load_run(engine: AsyncEngine, run_id: str) -> LoadedRun | None:
+    """Грузит campaign_run по id (config + текущий статус)."""
+    async with engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text("SELECT id, config, status FROM campaign_run WHERE id = :rid"),
+                {"rid": run_id},
+            )
+        ).first()
+    if not row:
+        return None
+    config = row[1]
+    if isinstance(config, str):
+        config = json.loads(config)
+    return LoadedRun(id=str(row[0]), config=config or {}, status=str(row[2]))
+
+
+def parse_run_config(config: dict[str, Any]) -> CampaignConfig:
+    """Десериализует снимок конфига run в CampaignConfig (валидация pydantic)."""
+    return CampaignConfig.model_validate(config)
+
+
+async def set_run_status(
+    engine: AsyncEngine,
+    run_id: str,
+    status: str,
+    *,
+    progress: dict[str, Any] | None = None,
+) -> None:
+    """Обновляет status (+ опц. progress) campaign_run. Идемпотентно по run_id."""
+    params: dict[str, Any] = {"rid": run_id, "st": status}
+    set_clause = "status = :st, updated_at = NOW()"
+    if progress is not None:
+        set_clause += ", progress = CAST(:pr AS JSONB)"
+        params["pr"] = json.dumps(progress)
+    async with engine.begin() as conn:
+        await conn.execute(text(f"UPDATE campaign_run SET {set_clause} WHERE id = :rid"), params)
+
+
+async def update_run_progress(engine: AsyncEngine, run_id: str, progress: dict[str, Any]) -> None:
+    """Пишет инкрементальный progress (jsonb) campaign_run."""
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "UPDATE campaign_run SET progress = CAST(:pr AS JSONB), updated_at = NOW() "
+                "WHERE id = :rid"
+            ),
+            {"rid": run_id, "pr": json.dumps(progress)},
+        )
+
+
+async def finalize_run_succeeded(
+    engine: AsyncEngine,
+    run_id: str,
+    *,
+    created_meta_ids: dict[str, Any],
+    progress: dict[str, Any],
+) -> None:
+    """Финал: status=succeeded + created_meta_ids + последний progress."""
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                """
+                UPDATE campaign_run
+                SET status = 'succeeded',
+                    created_meta_ids = CAST(:cmi AS JSONB),
+                    progress = CAST(:pr AS JSONB),
+                    error = NULL,
+                    updated_at = NOW()
+                WHERE id = :rid
+                """
+            ),
+            {
+                "rid": run_id,
+                "cmi": json.dumps(created_meta_ids),
+                "pr": json.dumps(progress),
+            },
+        )
+
+
+async def finalize_run_failed(
+    engine: AsyncEngine,
+    run_id: str,
+    *,
+    error: str,
+    created_meta_ids: dict[str, Any] | None = None,
+) -> None:
+    """Финал: status=failed + текст ошибки (+ опц. осиротевшие created_meta_ids).
+
+    created_meta_ids пишется при partial-create — для ручной чистки осиротевших
+    объектов через cleanup-эндпоинт.
+    """
+    params: dict[str, Any] = {"rid": run_id, "err": error[:8000]}
+    set_clause = "status = 'failed', error = :err, updated_at = NOW()"
+    if created_meta_ids is not None:
+        set_clause += ", created_meta_ids = CAST(:cmi AS JSONB)"
+        params["cmi"] = json.dumps(created_meta_ids)
+    async with engine.begin() as conn:
+        await conn.execute(text(f"UPDATE campaign_run SET {set_clause} WHERE id = :rid"), params)
+
+
+# ====================== resolve concepts ======================
+
+# Расширения, считаемые видео (остальное — фото).
+_VIDEO_EXTS = frozenset({".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv"})
+
+
+def resolve_concepts_from_config(cfg: CampaignConfig) -> dict[str, list[ConceptInput]]:
+    """Резолвит концепты на каждый блок кампании из файловой системы (media store).
+
+    Контракт хранения (по дизайну, раздел 1: upload → per-run media dir): концепты
+    блока лежат в `{creo_root}/{campaign.key}`, маска — glob первого adset'а блока.
+    Каждый файл = один концепт; сервис сам размножит его на N adset'ов (uniquify).
+    Видео грузим как path (ffmpeg по файлу), фото — как bytes (PIL in-memory).
+
+    Пустой блок → ValueError (нет концептов = невалидный залив, защита от пустой кампании).
+    """
+    creo_root = Path(os.path.expanduser(cfg.creo_root or ""))
+    out: dict[str, list[ConceptInput]] = {}
+    for block in cfg.campaigns:
+        block_dir = creo_root / block.key
+        glob_pat = block.adsets[0].glob if block.adsets else "*"
+        files = sorted(p for p in block_dir.glob(glob_pat) if p.is_file())
+        concepts: list[ConceptInput] = []
+        for index, path in enumerate(files):
+            is_video = path.suffix.lower() in _VIDEO_EXTS or block.kind == "video"
+            concepts.append(
+                ConceptInput(
+                    concept_id=f"{block.key}:{index}:{path.stem}",
+                    kind="video" if is_video else "image",
+                    content=None if is_video else path.read_bytes(),
+                    path=str(path),
+                    filename=path.name,
+                )
+            )
+        if not concepts:
+            raise ValueError(
+                f"кампания {block.key!r}: нет концептов в {block_dir} (маска {glob_pat!r})"
+            )
+        out[block.key] = concepts
+    return out
+
+
+__all__ = [
+    "TASK_TYPE",
+    "LoadedRun",
+    "Task",
+    "claim_campaign_task",
+    "resolve_concepts_from_config",
+    "finalize_run_failed",
+    "finalize_run_succeeded",
+    "load_run",
+    "parse_run_config",
+    "set_run_status",
+    "update_run_progress",
+]
