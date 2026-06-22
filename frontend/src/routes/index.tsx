@@ -47,7 +47,8 @@ import {
   useToggleScanning,
 } from "@/lib/api/settings";
 import { useRealtimeInvalidation } from "@/lib/websocket/useRealtimeInvalidation";
-import { apiSend } from "@/lib/api/client";
+import { apiSend, ApiError } from "@/lib/api/client";
+import { toast } from "@/components/ui/Toast";
 
 import type { AlertEvent, TaskQueueRow } from "@fb/shared";
 import { formatSpend } from "@fb/shared";
@@ -144,9 +145,20 @@ function DashboardPage() {
     });
   }
 
-  // включить observer (paused → on).
+  // включить observer (paused → on). Бэкенд может отказать (409), если мониторить нечего
+  // (пустой allowlist) — показываем причину тостом, тумблер остаётся off (читается из server-state).
   function handleEnable() {
-    toggleScanning.mutate(true);
+    toggleScanning.mutate(true, {
+      onError: (err) => {
+        const reason =
+          err instanceof ApiError && typeof err.detail === "string"
+            ? err.detail
+            : err instanceof Error
+              ? err.message
+              : "Не удалось включить скан";
+        toast.error("Скан не включён", reason);
+      },
+    });
   }
 
   // выключить observer (on → paused).

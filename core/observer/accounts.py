@@ -69,6 +69,23 @@ async def resolve_scan_account_ids(engine: AsyncEngine) -> list[str]:
     return sorted(acc for acc in normalized if acc)
 
 
+async def scan_nothing_monitored_reason(engine: AsyncEngine, campaign_ids: list[str]) -> str | None:
+    """Почему включённый скан фактически НИЧЕГО не отслеживает (или None если всё ок).
+
+    НЕ учитывает is_scanning_enabled — это решает caller:
+      - дашборд (scan_blocked_reason) зовёт только при включённом скане (баннер-подстраховка);
+      - гейт включения (PATCH /settings/observer/scanning) зовёт всегда — чтобы не дать
+        включить скан вхолостую (он бы крутился раз в интервал и ничего не отслеживал).
+    Та же логика, что в реальном цикле observer (allowlist_blocks_scan) — UI совпадает с поведением.
+    """
+    account_ids = await resolve_scan_account_ids(engine)
+    if not account_ids:
+        return "Нет активных офферов с кабинетами — сканировать нечего."
+    if allowlist_blocks_scan(len(account_ids) <= 1, list(campaign_ids or [])):
+        return "Список кампаний пуст — выберите кампании для мониторинга на странице «Кампании»."
+    return None
+
+
 async def load_ad_account_id_for_fb_ad(engine: AsyncEngine, fb_ad_id: str) -> str | None:
     """Кабинет объявления из каталога: fb_ads → fb_adsets → fb_campaigns.ad_account_id.
 

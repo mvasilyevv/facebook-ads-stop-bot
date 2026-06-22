@@ -209,27 +209,15 @@ async def _query_scan_block_reason(engine: AsyncEngine) -> dict[str, str | None]
     «observer выключен»).
     """
     try:
-        from core.observer.accounts import allowlist_blocks_scan, resolve_scan_account_ids
+        from core.observer.accounts import scan_nothing_monitored_reason
         from core.observer.queries import load_observer_config
 
         cfg = await load_observer_config(engine)
+        # Баннер показываем только при ВКЛЮЧЁННОМ скане (выключенный — отдельный баннер).
         if not cfg or not cfg.get("is_scanning_enabled"):
             return {"scan_blocked_reason": None}
-        account_ids = await resolve_scan_account_ids(engine)
-        if not account_ids:
-            return {
-                "scan_blocked_reason": ("Нет активных офферов с кабинетами — сканировать нечего.")
-            }
-        single_cabinet = len(account_ids) <= 1
-        campaign_ids = list(cfg.get("campaign_ids") or [])
-        if allowlist_blocks_scan(single_cabinet, campaign_ids):
-            return {
-                "scan_blocked_reason": (
-                    "Список кампаний пуст — ни одно объявление не отслеживается, "
-                    "авто-стоп не работает. Заполните список на странице «Кампании»."
-                )
-            }
-        return {"scan_blocked_reason": None}
+        reason = await scan_nothing_monitored_reason(engine, list(cfg.get("campaign_ids") or []))
+        return {"scan_blocked_reason": reason}
     except Exception as exc:  # noqa: BLE001 — advisory-поле, не критично для overview
         logger.warning("scan_blocked_reason не посчитан: %s", exc)
         return {"scan_blocked_reason": None}

@@ -109,9 +109,21 @@ async def patch_observer_scanning(
     body: ScanningToggleRequest,
     engine: DepEngine,
 ) -> ObserverSettingsResponse:
-    """Переключает только is_scanning_enabled, не трогая остальные поля."""
+    """Переключает только is_scanning_enabled, не трогая остальные поля.
+
+    Гейт включения: не даём включить скан, если мониторить нечего (пустой allowlist при
+    одном кабинете / нет активных офферов). Иначе скан крутился бы вхолостую раз в интервал,
+    ничего не отслеживая. Возвращаем 409 с понятной причиной — фронт показывает её на клике
+    «Включить», а заполнять кампании пользователь идёт на страницу «Кампании».
+    """
     async with AsyncSession(engine) as session:
         cfg = await _get_singleton(session)
+        if body.enabled:
+            from core.observer.accounts import scan_nothing_monitored_reason
+
+            reason = await scan_nothing_monitored_reason(engine, list(cfg.campaign_ids or []))
+            if reason:
+                raise HTTPException(status_code=409, detail=reason)
         cfg.is_scanning_enabled = body.enabled
         # Остальные поля не менялись — читаем из in-memory состояния до commit.
         result = _to_response(cfg)

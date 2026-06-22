@@ -138,6 +138,45 @@ async def test_patch_scanning_changes_only_scanning_flag(
     assert data_after["auto_enable_recommendations"] is False
 
 
+# Гейт включения: нельзя включить скан, когда мониторить нечего → 409 с причиной, флаг off.
+@pytest.mark.asyncio
+async def test_patch_scanning_enable_blocked_when_nothing_monitored(
+    pg_engine, fake_redis_client, clean_observer_config, monkeypatch
+):
+    import core.observer.accounts as acc
+
+    async def _fake_reason(_engine, _campaign_ids):
+        return "Список кампаний пуст — выберите кампании для мониторинга на странице «Кампании»."
+
+    monkeypatch.setattr(acc, "scan_nothing_monitored_reason", _fake_reason)
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.patch("/api/settings/observer/scanning", json={"enabled": True})
+        assert resp.status_code == 409
+        assert "кампани" in resp.json()["detail"].lower()
+        # Флаг НЕ включился — скан остался off.
+        get_after = await ac.get("/api/settings/observer")
+    assert get_after.json()["is_scanning_enabled"] is False
+
+
+# Гейт пропускает включение, когда есть что мониторить (причина None) → 200, флаг on.
+@pytest.mark.asyncio
+async def test_patch_scanning_enable_allowed_when_monitored(
+    pg_engine, fake_redis_client, clean_observer_config, monkeypatch
+):
+    import core.observer.accounts as acc
+
+    async def _fake_none(_engine, _campaign_ids):
+        return None
+
+    monkeypatch.setattr(acc, "scan_nothing_monitored_reason", _fake_none)
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.patch("/api/settings/observer/scanning", json={"enabled": True})
+        assert resp.status_code == 200
+        assert resp.json()["is_scanning_enabled"] is True
+
+
 # PATCH /auto-enable меняет колонку auto_enable_recommendations (проверка миграции 0003).
 @pytest.mark.asyncio
 async def test_patch_auto_enable_toggles_column(
