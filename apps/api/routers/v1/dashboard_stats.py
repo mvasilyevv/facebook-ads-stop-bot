@@ -73,12 +73,25 @@ async def _query_ad_counts(engine: AsyncEngine) -> dict[str, int]:
         )
         SELECT
             COUNT(*) AS total_active,
-            COUNT(*) FILTER (WHERE s.alert_state = 'normal' OR s.alert_state IS NULL)
-                AS in_normal,
+            -- «Норма» = нет инцидента И объявление реально крутится в FB (delivery ACTIVE
+            -- или неизвестен). Выключенные (delivery != ACTIVE) при alert_state=normal —
+            -- НЕ норма, они уходят в in_disabled (согласовано с UI displayAdState).
+            COUNT(*) FILTER (
+                WHERE (s.alert_state = 'normal' OR s.alert_state IS NULL)
+                AND (fb_ads.delivery_status IS NULL OR fb_ads.delivery_status = 'ACTIVE')
+            ) AS in_normal,
             COUNT(*) FILTER (WHERE s.alert_state = 'warning_sent') AS in_warning,
             COUNT(*) FILTER (WHERE s.alert_state = 'stop_sent') AS in_stop,
             COUNT(*) FILTER (WHERE s.alert_state = 'claimed') AS in_claimed,
-            COUNT(*) FILTER (WHERE s.alert_state = 'disabled') AS in_disabled,
+            -- Отключённые = бот-disabled ИЛИ нет инцидента, но объявление выключено в FB.
+            COUNT(*) FILTER (
+                WHERE s.alert_state = 'disabled'
+                OR (
+                    (s.alert_state = 'normal' OR s.alert_state IS NULL)
+                    AND fb_ads.delivery_status IS NOT NULL
+                    AND fb_ads.delivery_status <> 'ACTIVE'
+                )
+            ) AS in_disabled,
             COUNT(*) FILTER (
                 WHERE s.alert_state IN ('warning_sent', 'stop_sent')
                 AND (s.snoozed_until IS NULL OR s.snoozed_until < NOW())

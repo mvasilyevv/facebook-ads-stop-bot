@@ -56,8 +56,11 @@ async def clean_stats(pg_engine):
     await _wipe()
 
 
-async def _seed_ad(conn, suffix: str, alert_state: str | None = None):
-    """Создаёт offer→campaign→adset→ad. Возвращает ad_id."""
+async def _seed_ad(conn, suffix: str, alert_state: str | None = None, delivery_status=None):
+    """Создаёт offer→campaign→adset→ad. Возвращает ad_id.
+
+    delivery_status — статус доставки в FB (ACTIVE/OFF/…); None = NULL (как раньше).
+    """
     offer_id = uuid.uuid4()
     campaign_id = uuid.uuid4()
     adset_id = uuid.uuid4()
@@ -78,10 +81,16 @@ async def _seed_ad(conn, suffix: str, alert_state: str | None = None):
     )
     await conn.execute(
         text(
-            "INSERT INTO fb_ads (id, adset_id, fb_ad_id, ad_name, is_active) "
-            "VALUES (:i, :a, :f, :n, true)"
+            "INSERT INTO fb_ads (id, adset_id, fb_ad_id, ad_name, is_active, delivery_status) "
+            "VALUES (:i, :a, :f, :n, true, :ds)"
         ),
-        {"i": ad_id, "a": adset_id, "f": fb_ad_id, "n": f"STATS_AD_{suffix}"},
+        {
+            "i": ad_id,
+            "a": adset_id,
+            "f": fb_ad_id,
+            "n": f"STATS_AD_{suffix}",
+            "ds": delivery_status,
+        },
     )
     if alert_state:
         await conn.execute(
@@ -155,6 +164,30 @@ async def test_stats_counts_ads_by_state(pg_engine, fake_redis_client, clean_sta
     assert data["active_incidents"] == 3, (
         f"Ожидалось 3 active_incidents, получено {data['active_incidents']} — "
         "возможен double-count или snooze-фильтр сломан"
+    )
+
+
+# Тест: alert_state=normal, но delivery_status=OFF → панель считает «отключённым», не «нормой»
+# (согласовано с UI displayAdState). ACTIVE-normal остаётся нормой. Delta-подход — устойчив к
+# чужим строкам в общей БД.
+@pytest.mark.asyncio
+async def test_stats_off_delivery_counts_as_disabled(
+    pg_engine, fake_redis_client, clean_stats
+) -> None:
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        before = (await ac.get("/api/dashboard/stats")).json()
+        async with pg_engine.begin() as conn:
+            await _seed_ad(conn, "OFFNORM", alert_state=None, delivery_status="OFF")
+            await _seed_ad(conn, "ACTNORM", alert_state=None, delivery_status="ACTIVE")
+        after = (await ac.get("/api/dashboard/stats")).json()
+
+    # OFF при alert=normal → в disabled, ACTIVE → в normal. Проверяем дельту (а не абсолют).
+    assert after["ads_in_normal"] - before["ads_in_normal"] == 1, (
+        "ACTIVE-normal должно дать +1 норму"
+    )
+    assert after["ads_in_disabled"] - before["ads_in_disabled"] == 1, (
+        "OFF-объявление при alert=normal должно уйти в disabled, а не в норму"
     )
 
 

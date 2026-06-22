@@ -7,10 +7,13 @@
  * Возвращает тот же DashboardSocketState, что и useDashboardSocket (для индикатора связи).
  */
 
-import { useCallback } from "react";
+import { useCallback, useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
 import { useDashboardSocket, type DashboardSocketState } from "./useDashboardSocket";
+
+/** Период активного поллинга, когда WS недоступен (мс). */
+const POLLING_INVALIDATE_MS = 15_000;
 
 export function useRealtimeInvalidation(): DashboardSocketState {
   const qc = useQueryClient();
@@ -44,5 +47,22 @@ export function useRealtimeInvalidation(): DashboardSocketState {
     [qc],
   );
 
-  return useDashboardSocket({ onMessage });
+  const state = useDashboardSocket({ onMessage });
+
+  // Polling fallback: WS недоступен (status=polling, напр. basic-auth режет WS-рукопожатие) →
+  // активно инвалидируем ключевые запросы по таймеру. Без этого дашборд «замерзает» до ручного
+  // рефреша: WS — единственный источник live-инвалидации, а в polling-режиме WS-сообщений нет.
+  useEffect(() => {
+    if (!state.pollingFallback) return;
+    const id = window.setInterval(() => {
+      qc.invalidateQueries({ queryKey: ["dashboard"] });
+      qc.invalidateQueries({ queryKey: ["ads"] });
+      qc.invalidateQueries({ queryKey: ["observer"] });
+      qc.invalidateQueries({ queryKey: ["tasks"] });
+      qc.invalidateQueries({ queryKey: ["health"] });
+    }, POLLING_INVALIDATE_MS);
+    return () => window.clearInterval(id);
+  }, [state.pollingFallback, qc]);
+
+  return state;
 }
