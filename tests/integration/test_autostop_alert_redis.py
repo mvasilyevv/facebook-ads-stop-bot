@@ -14,11 +14,58 @@ import pytest
 from core.meta_api.autostop_alert import (
     AUTOSTOP_ALERT_DEDUP_KEY,
     AUTOSTOP_FAIL_COUNTER_KEY,
+    UNDELIVERED_ESCALATE_DEDUP_PREFIX,
+    escalate_undelivered_autostop_pauses,
     maybe_alert_autostop_channel_down,
     record_autostop_success,
     register_autostop_failure_and_should_alert,
 )
 from core.meta_api.errors import RateLimitedError, TemporaryError
+
+
+# ── Fake async engine: отдаёт заранее заданные строки на любой conn.execute().fetchall() ──
+class _FakeResult:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def fetchall(self):
+        return self._rows
+
+    def first(self):
+        return self._rows[0] if self._rows else None
+
+
+class _FakeConn:
+    def __init__(self, rows):
+        self._rows = rows
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def execute(self, *a, **k):
+        return _FakeResult(self._rows)
+
+
+class _FakeEngine:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def connect(self):
+        return _FakeConn(self._rows)
+
+
+class _Row:
+    """Минимальная строка стрянувшей задачи (доступ по атрибутам, как у asyncpg Row)."""
+
+    def __init__(self, fb_ad_id, created_at, last_error="Failed to fetch"):
+        self.id = 1
+        self.fb_ad_id = fb_ad_id
+        self.created_at = created_at
+        self.attempt_count = 5
+        self.last_error = last_error
 
 
 # Ниже порога — не алертим; на пороге — алертим один раз; дальше — дедуп молчит
@@ -143,3 +190,91 @@ async def test_orchestrator_no_recipients_does_not_crash(fake_redis_client) -> N
     # Функция вернула True на пороге (решение принято); notify_recipients вызван 1 раз
     assert last is True
     spy_notify.assert_awaited_once()
+
+
+# ─────────────── Per-ad эскалация недоставленной паузы ───────────────
+
+
+# Застрявшая pause_ad → один per-ad алерт + дедуп; повтор в окне — молчим
+@pytest.mark.asyncio
+async def test_escalate_undelivered_sends_once(fake_redis_client, monkeypatch) -> None:
+    from datetime import datetime, timedelta, timezone
+
+    import core.meta_api.autostop_alert as mod
+
+    created = datetime.now(timezone.utc) - timedelta(minutes=15)
+    engine = _FakeEngine([_Row("120246662749510044", created)])
+
+    # Не ходим в БД за ad_name/spend — отдаём фикс.
+    async def fake_fetch(_engine, _fid):
+        return ("GH_CR2_001", "55.00")
+
+    monkeypatch.setattr(mod, "_fetch_ad_name_and_spend", fake_fetch)
+    spy = AsyncMock(return_value=True)
+    monkeypatch.setattr("core.telegram.worker_notify.notify_owners", spy)
+
+    # 1-й прогон — алерт + per-ad дедуп (throttle off для детерминизма)
+    sent1 = await mod.escalate_undelivered_autostop_pauses(
+        engine,
+        fake_redis_client,
+        stuck_after_seconds=600,
+        dedup_ttl_seconds=3600,
+        throttle_seconds=0,
+    )
+    assert sent1 == 1
+    spy.assert_awaited_once()
+    dedup = await fake_redis_client.get(UNDELIVERED_ESCALATE_DEDUP_PREFIX + "120246662749510044")
+    assert dedup is not None
+
+    # 2-й прогон в окне дедупа — тишина (не задваиваем «выключи вручную»)
+    sent2 = await mod.escalate_undelivered_autostop_pauses(
+        engine,
+        fake_redis_client,
+        stuck_after_seconds=600,
+        dedup_ttl_seconds=3600,
+        throttle_seconds=0,
+    )
+    assert sent2 == 0
+    spy.assert_awaited_once()
+
+
+# Нет застрявших задач → ноль алертов
+@pytest.mark.asyncio
+async def test_escalate_undelivered_no_stuck(fake_redis_client, monkeypatch) -> None:
+    spy = AsyncMock(return_value=True)
+    monkeypatch.setattr("core.telegram.worker_notify.notify_owners", spy)
+    sent = await escalate_undelivered_autostop_pauses(
+        _FakeEngine([]), fake_redis_client, throttle_seconds=0
+    )
+    assert sent == 0
+    spy.assert_not_awaited()
+
+
+# Троттл: второй прогон подряд (лок держится) не сканирует и не шлёт
+@pytest.mark.asyncio
+async def test_escalate_undelivered_throttled(fake_redis_client, monkeypatch) -> None:
+    from datetime import datetime, timedelta, timezone
+
+    import core.meta_api.autostop_alert as mod
+
+    created = datetime.now(timezone.utc) - timedelta(minutes=15)
+    engine = _FakeEngine([_Row("999", created)])
+
+    async def fake_fetch(_engine, _fid):
+        return ("AD", "1.00")
+
+    monkeypatch.setattr(mod, "_fetch_ad_name_and_spend", fake_fetch)
+    spy = AsyncMock(return_value=True)
+    monkeypatch.setattr("core.telegram.worker_notify.notify_owners", spy)
+
+    sent1 = await mod.escalate_undelivered_autostop_pauses(
+        engine, fake_redis_client, stuck_after_seconds=600, throttle_seconds=60
+    )
+    assert sent1 == 1
+    # Лок ещё держится → второй прогон молчит (даже если бы дедуп ad сняли)
+    await fake_redis_client.delete(UNDELIVERED_ESCALATE_DEDUP_PREFIX + "999")
+    sent2 = await mod.escalate_undelivered_autostop_pauses(
+        engine, fake_redis_client, stuck_after_seconds=600, throttle_seconds=60
+    )
+    assert sent2 == 0
+    spy.assert_awaited_once()

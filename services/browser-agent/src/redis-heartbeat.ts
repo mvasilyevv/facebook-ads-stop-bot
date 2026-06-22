@@ -72,6 +72,8 @@ export function buildHeartbeatPayload(sessionManager: SessionManager): string {
   // Ищем активную сессию с живым CDP.
   let cdpReady = false;
   let cdpPort: number | null = null;
+  let netFailStreak = 0;
+  let healLevel = 0;
   let message = 'gRPC-сервер запущен';
 
   try {
@@ -79,6 +81,8 @@ export function buildHeartbeatPayload(sessionManager: SessionManager): string {
     const session = sessionManager.getPreferredSession();
     cdpReady = session.status === 'connected' && session.browser !== null;
     cdpPort = cdpReady ? (session.cdpPort ?? null) : null;
+    netFailStreak = session.netFailureStreak ?? 0;
+    healLevel = session.healLevel ?? 0;
     message = cdpReady
       ? `CDP подключён (порт ${cdpPort})`
       : 'Сессия найдена, но CDP не готов';
@@ -91,6 +95,10 @@ export function buildHeartbeatPayload(sessionManager: SessionManager): string {
     status: 'ONLINE',
     cdp_ready: cdpReady,
     cdp_port: cdpPort,
+    // Наблюдаемость авто-исцеления сети Vision (см. session-health.ts): серия сетевых сбоев
+    // fetch и текущий уровень эскалации лечения. Python-сторона может surface'ить при желании.
+    net_fail_streak: netFailStreak,
+    heal_level: healLevel,
     message,
     ts: Math.floor(Date.now() / 1000),
   };

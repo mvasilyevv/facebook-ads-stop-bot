@@ -6,10 +6,14 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 import grpc
 
 from core.meta_api.autostop_alert import (
+    _minutes_since,
     build_autostop_channel_down_alert,
+    build_undelivered_pause_alert,
     is_channel_down_error,
 )
 from core.meta_api.client import MetaApiClient
@@ -84,3 +88,39 @@ def test_alert_text_has_money_signal_and_context() -> None:
     low = text.lower()
     assert "авто-стоп" in low or "auto-stop" in low
     assert "vision" in low or "graph" in low
+
+
+# Per-ad алерт «выключи вручную» содержит имя объявления, id, спенд, минуты и «вручную»
+def test_undelivered_alert_has_ad_name_spend_and_manual_hint() -> None:
+    text = build_undelivered_pause_alert(
+        ad_name="GH_CR2_Aviator_001",
+        fb_ad_id="120246662749510044",
+        spend="123.45",
+        minutes_stuck=12,
+        last_error="Failed to fetch",
+    )
+    assert "GH_CR2_Aviator_001" in text
+    assert "120246662749510044" in text
+    assert "123.45" in text
+    assert "12" in text
+    assert "вручную" in text.lower()
+
+
+# Пустые имя/спенд не валят рендер (прочерк), id и минуты на месте
+def test_undelivered_alert_handles_missing_name_and_spend() -> None:
+    text = build_undelivered_pause_alert(
+        ad_name=None,
+        fb_ad_id="999",
+        spend=None,
+        minutes_stuck=20,
+        last_error=None,
+    )
+    assert "999" in text
+    assert "—" in text  # прочерк вместо имени/спенда
+
+
+# _minutes_since: целые минуты от tz-aware метки; None/битое → 0
+def test_minutes_since() -> None:
+    assert _minutes_since(None) == 0
+    past = datetime.now(timezone.utc) - timedelta(minutes=15, seconds=30)
+    assert _minutes_since(past) == 15  # дробь усекается вниз

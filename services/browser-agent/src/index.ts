@@ -18,6 +18,7 @@ import {
 } from './am/am-fetch.js';
 import { defaultAmConfig } from './am/am-config.js';
 import { withPageLock } from './page-lock.js';
+import { isNetworkFetchError, recordFetchOutcome, shouldHealNow } from './session-health.js';
 import { startHeartbeat } from './redis-heartbeat.js';
 
 const PORT = process.env.GRPC_PORT ? parseInt(process.env.GRPC_PORT, 10) : 50051;
@@ -372,6 +373,22 @@ async function runScanCycle(call: any) {
         },
       });
       endIfActive();
+
+      // Авто-исцеление сети Vision: сетевой сбой fetch (Failed to fetch) при живой странице/CDP
+      // не ловится обычной лесенкой (NOT_FOUND/«страница недоступна») — копим серию и эскалируем
+      // лечение (reload → reconnect → рестарт профиля). Graph-ошибка в теле (токен) сетью не
+      // считается (её лечит re-sniff). Делаем ПОСЛЕ отдачи результата — не блокируем ответ.
+      const netFail = isNetworkFetchError(d.amError) || isNetworkFetchError(d.nameError);
+      recordFetchOutcome(session, !netFail);
+      if (netFail && shouldHealNow(session, Date.now())) {
+        invalidateGraphContext(req.session_id, actId);
+        try {
+          const healed = await sessionManager.healSessionNetwork(req.session_id);
+          console.warn(`[scan][am] авто-исцеление: ${healed.action} (ok=${healed.ok})`);
+        } catch (e) {
+          console.error('[scan][am] авто-исцеление упало:', e);
+        }
+      }
   } catch (err: any) {
     if (cancelled) {
       endIfActive();

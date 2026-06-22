@@ -90,6 +90,12 @@ _ALERT_THRESHOLD = int(os.environ.get("AUTOSTOP_ALERT_THRESHOLD", "3"))
 _ALERT_WINDOW_SEC = int(os.environ.get("AUTOSTOP_ALERT_WINDOW_SEC", str(30 * 60)))
 _ALERT_DEDUP_SEC = int(os.environ.get("AUTOSTOP_ALERT_DEDUP_SEC", str(30 * 60)))
 
+# Per-ad эскалация недоставленной паузы (см. core/meta_api/autostop_alert.py): если конкретная
+# auto-stop pause_ad висит недоставленной дольше N секунд — точечный «выключи вручную» с именем
+# объявления и спендом. Дополняет channel-level CRITICAL. Дефолты переопределяются из env.
+_UNDELIVERED_AFTER_SEC = int(os.environ.get("AUTOSTOP_UNDELIVERED_AFTER_SEC", str(10 * 60)))
+_UNDELIVERED_DEDUP_SEC = int(os.environ.get("AUTOSTOP_UNDELIVERED_DEDUP_SEC", str(60 * 60)))
+
 
 @dataclass(frozen=True)
 class AutostopAlertContext:
@@ -641,6 +647,20 @@ async def task_loop(
                     await maybe_refresh_account_tz(engine, redis_client, client)
                 except Exception:  # noqa: BLE001
                     logger.debug("account_tz warmup пропущен", exc_info=True)
+                # Money: per-ad эскалация недоставленной паузы (канал Vision завис, авто-исцеление
+                # не помогло) — точечный «выключи вручную» с именем ad и спендом. Троттл внутри.
+                try:
+                    from core.meta_api.autostop_alert import escalate_undelivered_autostop_pauses
+
+                    await escalate_undelivered_autostop_pauses(
+                        engine,
+                        redis_client,
+                        requested_by=_AUTO_STOP_REQUESTED_BY,
+                        stuck_after_seconds=_UNDELIVERED_AFTER_SEC,
+                        dedup_ttl_seconds=_UNDELIVERED_DEDUP_SEC,
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.debug("undelivered-pause escalation пропущена", exc_info=True)
             try:
                 await asyncio.wait_for(stop.wait(), timeout=IDLE_SLEEP_SECONDS)
             except asyncio.TimeoutError:

@@ -22,6 +22,13 @@ export interface BrowserSession {
   /** Последний known-good URL вкладки Ads Manager кабинета — чтобы переоткрыть её,
    *  если вкладку закрыли (self-heal). Заполняется при успешном доступе к primary-странице. */
   lastAdsManagerUrl?: string | null;
+  /** Авто-исцеление сети: число подряд идущих сетевых сбоев fetch внутри Vision-страницы
+   *  (Failed to fetch / code -2). Сбрасывается на любом успешном fetch. См. session-health.ts. */
+  netFailureStreak?: number;
+  /** Текущий уровень эскалации лечения: 0 → reload, 1 → CDP-reconnect, 2+ → рестарт Vision-профиля. */
+  healLevel?: number;
+  /** Когда лечили в последний раз (cooldown между попытками авто-исцеления). */
+  lastHealAt?: Date | null;
 }
 
 export interface HumanProfile {

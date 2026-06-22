@@ -6,6 +6,7 @@ import { STEALTH_INIT_SCRIPT } from './stealth.js';
 import { generateHumanProfile } from './humanizer.js';
 import { injectCreator } from './creator-injector.js';
 import { adsManagerColumnsQs } from './am/am-columns-preset.js';
+import { withPageLock } from './page-lock.js';
 import type { BrowserSession, HumanProfile } from './types.js';
 
 const EXISTING_PROFILE_PORT_GRACE_SECONDS = 8;
@@ -368,6 +369,10 @@ export class SessionManager {
     visionXToken?: string;
     visionApiUrl?: string;
     visionProfileId?: string;
+    // Принудительный рестарт Vision-профиля даже при живом CDP-порте — для авто-исцеления
+    // «сеть страницы мертва» (порт на месте, но fetch не уходит): reconnect к тому же порту
+    // сеть не оживляет, помогает только перезапуск профиля. Обходит env-gate авто-restart.
+    forceProfileRestart?: boolean;
   }): Promise<BrowserSession> {
     const session = this.getSession(sessionId);
     // Старый CDP-клиент — отвяжем его ПОСЛЕ успешного нового подключения (H-6/BA-2),
@@ -386,15 +391,17 @@ export class SessionManager {
       ? session.visionFolderId
       : await visionClient.resolveFolderId(visionProfileId);
 
-    let resolvedPort = existingProfile?.port ?? null;
-    if (!resolvedPort && existingProfile) {
+    const forceRestart = options?.forceProfileRestart === true;
+    let resolvedPort = forceRestart ? null : (existingProfile?.port ?? null);
+    if (!resolvedPort && existingProfile && !forceRestart) {
       resolvedPort = await visionClient.waitUntilProfileHasPort(
         visionProfileId,
         EXISTING_PROFILE_PORT_GRACE_SECONDS,
       );
     }
 
-    if (!resolvedPort && existingProfile && isAutoRestartOnMissingCdpEnabled()) {
+    // forceRestart обходит env-gate (явное лечение, а не авто-restart на missing CDP).
+    if (!resolvedPort && existingProfile && (forceRestart || isAutoRestartOnMissingCdpEnabled())) {
       const recoveredProfile = await this.restartProfileForMissingCdp(
         visionClient,
         resolvedFolderId,
@@ -453,6 +460,46 @@ export class SessionManager {
     }
 
     return session;
+  }
+
+  // Авто-исцеление при «живая страница/CDP, но мёртвая сеть» (Failed to fetch / code -2).
+  // Эскалация по session.healLevel: 0 → reload страницы, 1 → CDP-reconnect, 2+ → рестарт
+  // Vision-профиля (реально оживляет сеть). Всё под per-session page-lock, чтобы лечение не
+  // пересекалось с in-flight scan/mutation. Детект/cooldown — в session-health.ts (вызывающий
+  // решает, звать ли healSessionNetwork). Никогда не бросает наружу — best-effort.
+  async healSessionNetwork(sessionId: string): Promise<{ action: string; ok: boolean }> {
+    const session = this.getSession(sessionId);
+    const level = session.healLevel ?? 0;
+    let ok = true;
+    const action = await withPageLock(sessionId, async (): Promise<string> => {
+      try {
+        if (level <= 0) {
+          const page = session.primaryPage;
+          const closed = typeof page?.isClosed === 'function' && page.isClosed();
+          if (page && !closed) {
+            await page.reload({ waitUntil: 'domcontentloaded', timeout: 60_000 });
+          }
+          return 'reload';
+        }
+        if (level === 1) {
+          await this.reconnectBrowser(sessionId);
+          return 'reconnect';
+        }
+        await this.reconnectBrowser(sessionId, { forceProfileRestart: true });
+        return 'restart_profile';
+      } catch (err) {
+        ok = false;
+        console.error(`[heal] session=${sessionId} уровень=${level} ошибка лечения:`, err);
+        return level <= 0 ? 'reload' : level === 1 ? 'reconnect' : 'restart_profile';
+      }
+    });
+    session.healLevel = level + 1;
+    session.lastHealAt = new Date();
+    session.netFailureStreak = 0;
+    console.warn(
+      `[heal] session=${sessionId} action=${action} ok=${ok} → следующий уровень=${session.healLevel}`,
+    );
+    return { action, ok };
   }
 
   getSession(sessionId: string): BrowserSession {

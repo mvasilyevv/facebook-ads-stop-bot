@@ -7,6 +7,7 @@ import type { BrowserSession } from '../types.js';
 import { executeGraphCall, checkMetaApiHealth, type GraphApiCallParams } from './client.js';
 import { uploadImage, VideoUploadSession } from './upload.js';
 import { withPageLock } from '../page-lock.js';
+import { recordFetchOutcome, shouldHealNow } from '../session-health.js';
 
 function grpcCodeForError(err: any): number {
   const message = String(err?.message || '').toLowerCase();
@@ -85,6 +86,20 @@ export function createMetaApiServiceHandlers(sessionManager: SessionManager) {
             }
           : undefined,
       });
+
+      // Авто-исцеление: сетевой сбой мутации (statusCode 0 / NetworkError code -2) при живой
+      // странице — копим серию и эскалируем лечение, чтобы money-канал авто-стопа сам оживал
+      // (а не требовал ручного рестарта). После callback — не задерживаем ответ воркеру.
+      const netFail = result.statusCode === 0;
+      recordFetchOutcome(session, !netFail);
+      if (netFail && shouldHealNow(session, Date.now())) {
+        try {
+          const healed = await sessionManager.healSessionNetwork(session.id);
+          console.warn(`[meta-api] авто-исцеление после мутации: ${healed.action} (ok=${healed.ok})`);
+        } catch (e) {
+          console.error('[meta-api] авто-исцеление после мутации упало:', e);
+        }
+      }
     } catch (err: any) {
       callback({
         code: grpcCodeForError(err),
