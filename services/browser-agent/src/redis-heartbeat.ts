@@ -27,6 +27,10 @@ export interface RedisLike {
   ): Promise<unknown>;
   connect(): Promise<unknown>;
   quit(): Promise<unknown>;
+  // status — текущее состояние соединения ioredis (ready|connecting|reconnecting|close|end|…).
+  // Пишем heartbeat только при 'ready', иначе команда падает "Stream isn't writeable".
+  readonly status: string;
+  on(event: string, listener: (...args: unknown[]) => void): unknown;
 }
 
 /** Фабрика Redis-клиента — ленивый импорт ioredis (чтобы не падать на старте если нет пакета). */
@@ -34,14 +38,33 @@ async function createRedisClient(url: string): Promise<RedisLike> {
   // ioredis добавлен в dependencies при установке задачи.
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const { default: Redis } = await import('ioredis');
-  return new Redis(url, {
-    // Не ломать browser-agent при падении Redis — тихая переподключение.
+  const client = new Redis(url, {
+    // enableOfflineQueue:false — команда на неготовом сокете падает сразу, но мы и
+    // не пишем, пока status !== 'ready' (см. writeHeartbeat), так что спама нет.
     enableOfflineQueue: false,
     lazyConnect: true,
-    maxRetriesPerRequest: 0,
-    // Логировать ошибки Redis в stderr, не выбрасывать.
-    enableReadyCheck: false,
-  }) as unknown as RedisLike;
+    maxRetriesPerRequest: 1,
+    enableReadyCheck: true,
+    // КЛЮЧЕВОЕ для живучести: явный retryStrategy = бесконечный реконнект с backoff.
+    // Без него ioredis после пересоздания контейнера redis (деплой/ребут/OOM) уходил
+    // в нерабочее состояние навсегда — heartbeat молчал часами (resilience-аудит rank 1).
+    retryStrategy: (times: number) => Math.min(times * 200, 5000),
+    reconnectOnError: () => true,
+  });
+  // Наблюдаемость без спама и без падения процесса: один лог на серию ошибок,
+  // отдельный лог при восстановлении соединения.
+  let errLogged = false;
+  client.on('error', (err: unknown) => {
+    if (!errLogged) {
+      console.error('[heartbeat] Redis error (повтор подавлён до reconnect):', err);
+      errLogged = true;
+    }
+  });
+  client.on('ready', () => {
+    console.error('[heartbeat] Redis подключён/восстановлен');
+    errLogged = false;
+  });
+  return client as unknown as RedisLike;
 }
 
 /** Возвращает payload heartbeat по текущему состоянию сессий. */
@@ -101,6 +124,10 @@ export async function startHeartbeat(
   /** Разовая запись в Redis. */
   async function writeHeartbeat(): Promise<void> {
     if (!redis) return;
+    // Пишем только при готовом соединении. При обрыве/реконнекте retryStrategy сам
+    // поднимет сокет, а следующая запись по таймеру пройдёт — без спама "Stream isn't
+    // writeable" и без вечно-мёртвого heartbeat после пересоздания redis (rank 1).
+    if (redis.status !== 'ready') return;
     try {
       const payload = buildHeartbeatPayload(sessionManager);
       await redis.set(HEARTBEAT_KEY, payload, 'EX', HEARTBEAT_TTL_SEC);

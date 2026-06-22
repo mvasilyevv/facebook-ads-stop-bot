@@ -344,6 +344,9 @@ jobs:
             echo "=== [0/5] Обновление кода на сервере (docker-compose, миграции, скрипты) ==="
             # Образы несут код api/воркеров, но docker-compose.yml/entrypoint/скрипты
             # читаются с диска сервера — синхронизируем их с main. .env в .gitignore не тронется.
+            # Текущий SHA ДО обновления — нужен, чтобы понять, менялся ли код browser-agent
+            # (он нативный на хосте вне Docker; пересобираем dist только при изменении — [6/6]).
+            PREV_SHA=$(git rev-parse HEAD 2>/dev/null || echo "")
             # Лэндим РОВНО тот SHA, по которому собраны образы (не подвижный origin/main):
             # при двух быстрых пушах подряд origin/main мог уйти вперёд → код-на-диске
             # (миграции/compose/entrypoint) разойдётся с кодом внутри образов.
@@ -415,6 +418,29 @@ jobs:
             done
             if [ "$hb_ok" -ne 1 ]; then
               echo "ДЕПЛОЙ ПРОВАЛЕН: воркеров с heartbeat $HB (<10) за 60с"; rollback_stack; exit 1
+            fi
+
+            echo "=== [6/6] browser-agent (host, вне Docker): пересборка dist + рестарт при изменении кода ==="
+            # browser-agent — нативный systemd-сервис на хосте, образы CI его не несут.
+            # Пересобираем dist и рестартим ТОЛЬКО если менялся его код — иначе зря рвём
+            # Vision-сессию на каждом деплое. При сомнении (нет PREV_SHA/ошибка diff) — пересобираем.
+            if [ -z "$PREV_SHA" ] || ! git diff --quiet "$PREV_SHA" "$GIT_SHA" -- services/browser-agent 2>/dev/null; then
+              echo "Код browser-agent изменился (или PREV_SHA неизвестен) — пересобираю dist"
+              if ( cd services/browser-agent && (npm ci || npm install) && npm run build ); then
+                systemctl restart fb-browser-agent
+                echo "browser-agent пересобран и перезапущен; жду свежий heartbeat"
+                for i in $(seq 1 6); do
+                  sleep 5
+                  if [ -n "$(docker exec fb_agent-redis-1 redis-cli --scan --pattern 'worker:heartbeat:browser-agent')" ]; then
+                    echo "browser-agent heartbeat жив"; break
+                  fi
+                  echo "ждём heartbeat browser-agent ($i/6)..."
+                done
+              else
+                echo "::warning::Сборка browser-agent упала — оставляю предыдущий dist, рестарт не делаю"
+              fi
+            else
+              echo "Код browser-agent не менялся — пропускаю пересборку (Vision-сессия не трогается)"
             fi
 
             echo "=== Деплой здоров: SHA $GIT_SHA, heartbeat=$HB ==="
