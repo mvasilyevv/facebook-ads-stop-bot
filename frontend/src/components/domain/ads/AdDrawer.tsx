@@ -234,9 +234,9 @@ export function AdDrawer({ ad, onClose, isLoading = false, fbAdId }: AdDrawerPro
           </span>
         }
         footer={
-          // Уже отключённое объявление (alert_state='disabled' после авто/ручного pause)
-          // не предлагаем отключать снова — показываем статус.
-          state === "disabled" ? (
+          // Объявление, показанное как «Выключено» (bot-disabled ИЛИ выключено в Ads Manager —
+          // см. displayAdState), не предлагаем отключать снова: бейдж и футер согласованы.
+          display.state === "disabled" ? (
             <div
               className="flex w-full items-center justify-center gap-2 py-1 text-[13px] text-bg-9"
               role="status"

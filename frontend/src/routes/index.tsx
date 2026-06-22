@@ -105,6 +105,11 @@ function DashboardPage() {
     const v = (observerStatusQ.data?.extra ?? {})["next_scan_at"];
     return typeof v === "string" ? v : null;
   }, [observerStatusQ.data]);
+  // Режим адаптивного скана (CRITICAL/ELEVATED/CALM/IDLE) из observer:runtime — для ScanModeBar.
+  const scanMode = useMemo<string | null>(() => {
+    const v = (observerStatusQ.data?.extra ?? {})["scan_mode"];
+    return typeof v === "string" ? v : null;
+  }, [observerStatusQ.data]);
 
   // Hero-число = ВСЕ объявления под контролем бота, включая отключённые (он их и
   // выключил — они под контролем, просто не крутятся). Берём total_ads_monitored
@@ -198,6 +203,7 @@ function DashboardPage() {
           scanOn={scanOn}
           lastScanAt={stats?.last_scan_at ?? null}
           nextScanAt={nextScanAt}
+          scanMode={scanMode}
           intervalSeconds={intervalSeconds}
           scanProgress={scanProgress}
           onScan={handleScanNow}
@@ -326,6 +332,7 @@ interface PageHeaderBlockProps {
   scanOn: boolean;
   lastScanAt: string | null;
   nextScanAt?: string | null;
+  scanMode?: string | null;
   intervalSeconds: number;
   scanProgress?: ScanProgress | null;
   onScan: () => void;
@@ -337,6 +344,7 @@ function PageHeaderBlock({
   scanOn,
   lastScanAt,
   nextScanAt,
+  scanMode,
   intervalSeconds,
   scanProgress,
   onScan,
@@ -358,6 +366,7 @@ function PageHeaderBlock({
         scanOn={scanOn}
         lastScanAt={lastScanAt}
         nextScanAt={nextScanAt}
+        scanMode={scanMode}
         intervalSeconds={intervalSeconds}
         scanProgress={scanProgress}
         onScan={onScan}

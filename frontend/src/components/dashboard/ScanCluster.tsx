@@ -2,19 +2,21 @@
  * ScanCluster — правый кластер page-header Dashboard (управление сканом).
  *
  * Канон design_handoff/web-dashboard.jsx (ScanHeaderControl):
- *   - Observer ON: countdown-линия (CountdownBar) + «СЛЕД. СКАН» + «ПОСЛЕДНИЙ СКАН Nс назад» +
- *     primary «Сканировать» (на время скана — спиннер + «Сканирую»).
- *   - Observer OFF (paused): dashed pause-ring + «СКАН ВЫКЛЮЧЕН» +
- *     primary «▶ Включить».
+ *   - Observer ON: индикатор РЕЖИМА (ScanModeBar — лёгкий градиент зелёный→красный, маркер
+ *     в позиции CRITICAL/ELEVATED/CALM/IDLE) + ОТДЕЛЬНЫЙ блок обратного отсчёта «СЛЕД. СКАН Nс»
+ *     + «ПОСЛЕДНИЙ СКАН Nс назад» + primary «Сканировать» (на время скана — спиннер + «Сканирую»).
+ *   - Observer OFF (paused): dashed pause-ring + «СКАН ВЫКЛЮЧЕН» + primary «▶ Включить».
  *
- * Данные: observer on/off + last_scan_at + интервал (через useScanCountdown).
- * onScan — реальный POST scan-now; onEnable — включение observer.
+ * Режим (scanMode) и обратный отсчёт — РАЗНЫЕ сущности: линия показывает нагрузку, число —
+ * сколько секунд до скана. Данные: observer on/off + last_scan_at + next_scan_at + scan_mode
+ * (через useScanCountdown + observer:runtime). onScan — реальный POST scan-now; onEnable — включение.
  */
 
+import { useRef } from "react";
 import { RefreshCw, Play, Power } from "lucide-react";
 import { formatRelativeTime } from "@fb/shared";
 import { PausedRing } from "@/components/data/CountdownRing";
-import { CountdownBar } from "@/components/data/CountdownBar";
+import { ScanModeBar } from "@/components/data/ScanModeBar";
 import { Button } from "@/components/ui/Button";
 import { useScanCountdown } from "@/lib/hooks/useScanCountdown";
 
@@ -35,6 +37,8 @@ interface ScanClusterProps {
   lastScanAt?: string | null;
   /** ISO следующего скана (observer:runtime.next_scan_at) — реальный адаптивный отсчёт. */
   nextScanAt?: string | null;
+  /** Режим адаптивного скана (observer:runtime.scan_mode): CRITICAL|ELEVATED|CALM|IDLE. */
+  scanMode?: string | null;
   /** Интервал авто-скана в секундах. */
   intervalSeconds?: number;
   /** Мульти-кабинет: прогресс цикла (показывается только при total > 1). */
@@ -51,6 +55,7 @@ export function ScanCluster({
   scanOn,
   lastScanAt,
   nextScanAt,
+  scanMode,
   intervalSeconds = 30,
   scanProgress,
   onScan,
@@ -64,6 +69,12 @@ export function ScanCluster({
     enabled: scanOn,
     onScan,
   });
+
+  // Sticky-режим: во время скана бэк временно не пишет scan_mode (известен только по итогу
+  // цикла) — держим последний известный, чтобы линия не моргала в «—».
+  const lastModeRef = useRef<string | null>(null);
+  if (scanMode) lastModeRef.current = scanMode;
+  const mode = scanMode ?? lastModeRef.current;
 
   // ── Paused: observer выключен ───────────────────────────────────────────────
   if (!scanOn) {
@@ -101,7 +112,27 @@ export function ScanCluster({
   // ── Active: observer работает ───────────────────────────────────────────────
   return (
     <div className="flex items-center gap-4">
-      <CountdownBar remaining={next} interval={interval} scanning={scanning} />
+      {/* Индикатор режима — лёгкий градиент + маркер (НЕ отсчёт). */}
+      <ScanModeBar mode={mode} />
+      <div className="h-7 w-px bg-[var(--hairline-strong)]" aria-hidden="true" />
+      {/* Обратный отсчёт — отдельная сущность: сколько секунд до следующего скана. */}
+      <div className="leading-[1.3]">
+        <div className="font-display text-[9px] font-semibold uppercase tracking-[0.12em] text-bg-9">
+          СЛЕД. СКАН
+        </div>
+        {scanning ? (
+          <div className="whitespace-nowrap font-display text-[13px] text-accent">сканирую…</div>
+        ) : (
+          <div className="whitespace-nowrap font-display tabular-nums">
+            <span className="text-[16px] text-bg-11" style={{ fontWeight: 300 }}>
+              {next}
+            </span>
+            <span className="text-[11px] text-bg-8" style={{ fontWeight: 300 }}>
+              /{interval}с
+            </span>
+          </div>
+        )}
+      </div>
       <div className="h-7 w-px bg-[var(--hairline-strong)]" aria-hidden="true" />
       <div className="leading-[1.3]">
         <div className="font-display text-[9px] font-semibold uppercase tracking-[0.12em] text-bg-9">

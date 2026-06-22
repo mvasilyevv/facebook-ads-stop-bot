@@ -213,6 +213,7 @@ async def _publish_runtime_status(
     current_account_id: str | None = None,
     accounts_done: int | None = None,
     accounts_total: int | None = None,
+    scan_mode: str | None = None,
 ) -> None:
     """SET observer:runtime → JSON с TTL RUNTIME_TTL_SECONDS. Frontend/health_watchdog читают ключ.
 
@@ -246,6 +247,8 @@ async def _publish_runtime_status(
         "current_account_id": current_account_id,
         "accounts_done": accounts_done,
         "accounts_total": accounts_total,
+        # Режим адаптивного скана текущего цикла (CRITICAL/ELEVATED/CALM/IDLE) — для UI-индикатора.
+        "scan_mode": scan_mode,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     try:
@@ -865,8 +868,15 @@ async def _sleep_with_runtime_refresh(
     seconds: float,
     status: str = "idle",
     next_scan_at: datetime | None = None,
+    scan_mode: str | None = None,
+    last_successful_scan_at: datetime | None = None,
 ) -> None:
     """Спит до ``seconds`` (прерываясь на любой из ``events``), освежая observer:runtime.
+
+    Сразу при входе публикует целевое состояние сна (next_scan_at + scan_mode), чтобы фронт
+    получил реальный адаптивный отсчёт и режим немедленно: на интервалах короче
+    RUNTIME_REFRESH_SECONDS публикации в цикле могло не быть вовсе (CALM 90с < 120с), и эти
+    поля не доезжали — UI сидел на mock-отсчёте «всегда база».
 
     Длинный sleep бьётся на чанки ≤ RUNTIME_REFRESH_SECONDS; после каждого чанка, если
     ни один event не выставлен и сон не закончился, переписываем observer:runtime со
@@ -876,6 +886,17 @@ async def _sleep_with_runtime_refresh(
     ``status`` сохраняет фактическое состояние между сканами ("paused" на паузе, иначе
     "idle"), чтобы освежение не затирало paused-статус ложным running.
     """
+
+    async def _refresh() -> None:
+        await _publish_runtime_status(
+            redis_client,
+            status=status,
+            next_scan_at=next_scan_at,
+            scan_mode=scan_mode,
+            last_successful_scan_at=last_successful_scan_at,
+        )
+
+    await _refresh()
     remaining = float(seconds)
     while remaining > 0:
         chunk = min(remaining, float(RUNTIME_REFRESH_SECONDS))
@@ -884,7 +905,7 @@ async def _sleep_with_runtime_refresh(
             return
         remaining -= chunk
         if remaining > 0:
-            await _publish_runtime_status(redis_client, status=status, next_scan_at=next_scan_at)
+            await _refresh()
 
 
 # ====================== Main loop ======================
@@ -1064,6 +1085,9 @@ async def main_loop(
             # На паузе сохраняем статус "paused" (не затираем ложным "idle").
             next_scan_at = datetime.now(timezone.utc) + timedelta(seconds=sleep_for)
             runtime_status = "paused" if summary.get("outcome") == "paused" else "idle"
+            # last_successful_scan_at пишем тем же контрактом, что и финальный publish цикла
+            # (now при success, иначе None) — чтобы освежение сна не затирало «последний скан».
+            last_ok_at = datetime.now(timezone.utc) if summary.get("outcome") == "success" else None
             await _sleep_with_runtime_refresh(
                 redis_client,
                 shutdown_event,
@@ -1071,6 +1095,8 @@ async def main_loop(
                 seconds=sleep_for,
                 status=runtime_status,
                 next_scan_at=next_scan_at,
+                scan_mode=scan_mode,
+                last_successful_scan_at=last_ok_at,
             )
 
             # Если trigger пришёл во время sleep — сбрасываем флаги, цикл идёт сразу.
