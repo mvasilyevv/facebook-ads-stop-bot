@@ -467,6 +467,7 @@ stop_all() {
     terminate_matching_processes "Health Watchdog" "run_health_watchdog.py"
     terminate_matching_processes "Creator Worker" "run_creator_worker.py"
     terminate_matching_processes "Creator Recorder" "run_creator_recorder.py"
+    terminate_matching_processes "Campaign Creator Worker" "run_campaign_creator_worker.py"
     terminate_matching_processes "Digest Scheduler" "run_digest_scheduler.py"
     terminate_matching_processes "Cabinet Scheduler" "run_cabinet_scheduler.py"
     terminate_matching_processes "Reconciler Worker" "run_reconciler_worker.py"
@@ -625,6 +626,7 @@ terminate_matching_processes_in_dir "Mini-app" "pnpm.*fb-agent-mini|node .*vite"
 terminate_matching_processes "Health Watchdog" "run_health_watchdog.py"
 terminate_matching_processes "Creator Worker" "run_creator_worker.py"
 terminate_matching_processes "Creator Recorder" "run_creator_recorder.py"
+terminate_matching_processes "Campaign Creator Worker" "run_campaign_creator_worker.py"
 terminate_matching_processes "Digest Scheduler" "run_digest_scheduler.py"
 terminate_matching_processes "Cabinet Scheduler" "run_cabinet_scheduler.py"
 terminate_matching_processes "Reconciler Worker" "run_reconciler_worker.py"
@@ -987,6 +989,10 @@ else
     echo -e "${BLUE}⏺  Запускаю Creator Recorder...${NC}"
     .venv/bin/python run_creator_recorder.py > "$LOG_DIR/creator_recorder.log" 2>&1 &
     append_pid "$!" "creator_recorder"
+
+    echo -e "${BLUE}🚀 Запускаю Campaign Creator Worker (залив кампаний)...${NC}"
+    .venv/bin/python run_campaign_creator_worker.py > "$LOG_DIR/campaign_creator_worker.log" 2>&1 &
+    append_pid "$!" "campaign_creator_worker"
 fi
 
 # ==========================================
