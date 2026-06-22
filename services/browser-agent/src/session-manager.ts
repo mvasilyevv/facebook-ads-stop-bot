@@ -93,6 +93,39 @@ export function findPreferredPrimaryPage(browser: Browser | null): Page | null {
   return fallbackPage;
 }
 
+/** Найти «нейтральную» вкладку для переиспользования под новый кабинет: исходную FB-вкладку
+ * (любой facebook.com, КРОМЕ вкладки конкретного кабинета ?act=) или пустую (about:blank).
+ * Кабинетные вкладки (?act=) и чужие сайты НЕ трогаем. Нужна, чтобы первый кабинет занял уже
+ * открытую вкладку, а не плодил новые: при 1 кабинете — 1 вкладка вместо «исходная + кабинет». */
+export function findReusableNonCabinetPage(browser: Browser | null): Page | null {
+  if (!browser) {
+    return null;
+  }
+  for (const context of browser.contexts()) {
+    for (const page of context.pages()) {
+      if (isPageClosed(page)) {
+        continue;
+      }
+      const url = page.url() || '';
+      // Вкладку конкретного кабинета не трогаем — она принадлежит другому кабинету.
+      if (extractAdAccountId(url)) {
+        continue;
+      }
+      if (url === '' || url === 'about:blank') {
+        return page;
+      }
+      try {
+        if (new URL(url).hostname.endsWith('facebook.com')) {
+          return page;
+        }
+      } catch {
+        // нераспознаваемый URL — не переиспользуем
+      }
+    }
+  }
+  return null;
+}
+
 /** Запоминает URL живой вкладки Ads Manager на сессии — чтобы переоткрыть её при self-heal. */
 export function rememberAdsManagerUrl(session: BrowserSession, page: Page | null | undefined): void {
   try {
@@ -438,6 +471,18 @@ export class SessionManager {
         throw new Error('Основная страница браузера недоступна');
       }
       const url = adsManagerUrlForAct(opts.actId);
+      // Переиспользуем уже открытую нейтральную вкладку (исходная FB / about:blank), чтобы не
+      // плодить вкладки: первый кабинет занимает её, остальные открываются новыми. Кабинетные
+      // вкладки (?act=) при этом не трогаем (findReusableNonCabinetPage их исключает) —
+      // защита от навигации чужого кабинета.
+      const reusable = findReusableNonCabinetPage(browserForAct);
+      if (reusable) {
+        console.warn(
+          `[session-manager] act=${opts.actId}: переиспользую вкладку ${reusable.url()} → ${url}`,
+        );
+        await reusable.goto(url, { waitUntil: 'domcontentloaded' });
+        return reusable;
+      }
       console.warn(`[session-manager] вкладка кабинета act=${opts.actId} не найдена — открываю ${url}`);
       const newPage = await ctxForAct.newPage();
       await newPage.goto(url, { waitUntil: 'domcontentloaded' });

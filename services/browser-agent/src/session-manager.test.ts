@@ -5,6 +5,7 @@ import {
   adsManagerUrlForAct,
   findAdsManagerPageByAct,
   findPreferredPrimaryPage,
+  findReusableNonCabinetPage,
   isAdsManagerUrl,
   rememberAdsManagerUrl,
   SessionManager,
@@ -700,4 +701,123 @@ test('findAdsManagerPageByAct: нет вкладки → null, закрытая 
 
   assert.equal(findAdsManagerPageByAct(browser as any, '333'), null);
   assert.equal(findAdsManagerPageByAct(null, '333'), null);
+});
+
+// findReusableNonCabinetPage: берёт исходную FB/пустую вкладку, пропускает кабинетные (?act=) и закрытые.
+test('findReusableNonCabinetPage: берёт FB/пустую, пропускает кабинетные и закрытые', () => {
+  const cab = {
+    isClosed: () => false,
+    url: () => 'https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=111',
+  };
+  const closedFb = { isClosed: () => true, url: () => 'https://www.facebook.com/' };
+  const fb = { isClosed: () => false, url: () => 'https://www.facebook.com/' };
+  assert.equal(
+    findReusableNonCabinetPage({ contexts: () => [{ pages: () => [cab, closedFb, fb] }] } as any),
+    fb,
+  );
+
+  const blank = { isClosed: () => false, url: () => 'about:blank' };
+  assert.equal(
+    findReusableNonCabinetPage({ contexts: () => [{ pages: () => [cab, blank] }] } as any),
+    blank,
+  );
+
+  // Только кабинетные вкладки → переиспользовать нечего.
+  assert.equal(
+    findReusableNonCabinetPage({ contexts: () => [{ pages: () => [cab] }] } as any),
+    null,
+  );
+  assert.equal(findReusableNonCabinetPage(null), null);
+});
+
+// ensureAdsManagerPage(actId): нет своей вкладки → переиспользует исходную FB-вкладку (navigate),
+// новую не плодит, чужой кабинет (?act=999) НЕ трогает.
+test('ensureAdsManagerPage (actId): переиспользует исходную FB-вкладку, чужой кабинет не трогает', async () => {
+  const manager = new SessionManager();
+  let fbGoto: string | null = null;
+  const fbPage = {
+    isClosed: () => false,
+    url: () => 'https://www.facebook.com/',
+    goto: async (u: string) => {
+      fbGoto = u;
+    },
+  };
+  let foreignGoto = 0;
+  const foreignCab = {
+    isClosed: () => false,
+    url: () => 'https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=999',
+    goto: async () => {
+      foreignGoto += 1;
+    },
+  };
+  let newPageCalls = 0;
+  const context = {
+    pages: () => [fbPage, foreignCab],
+    newPage: async () => {
+      newPageCalls += 1;
+      return { isClosed: () => false, url: () => '', goto: async () => {} };
+    },
+  };
+  const browser = { isConnected: () => true, contexts: () => [context] };
+  const session = makeSession({ browser, primaryPage: null });
+
+  const page = await manager.ensureAdsManagerPage(session as any, { actId: '111' });
+
+  assert.equal(page, fbPage as any); // переиспользовали исходную FB-вкладку
+  assert.ok(String(fbGoto).includes('act=111'), 'навигировали на нужный кабинет');
+  assert.equal(newPageCalls, 0); // новую вкладку не открывали
+  assert.equal(foreignGoto, 0); // чужой кабинет не трогали
+});
+
+// ensureAdsManagerPage(actId): нейтральной вкладки нет (только чужой кабинет) → открывает НОВУЮ.
+test('ensureAdsManagerPage (actId): нет нейтральной вкладки → открывает новую', async () => {
+  const manager = new SessionManager();
+  const foreignCab = {
+    isClosed: () => false,
+    url: () => 'https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=999',
+  };
+  let gotoUrl: string | null = null;
+  let newPageCalls = 0;
+  const newPage = {
+    isClosed: () => false,
+    url: () => '',
+    goto: async (u: string) => {
+      gotoUrl = u;
+    },
+  };
+  const context = {
+    pages: () => [foreignCab],
+    newPage: async () => {
+      newPageCalls += 1;
+      return newPage;
+    },
+  };
+  const browser = { isConnected: () => true, contexts: () => [context] };
+  const session = makeSession({ browser, primaryPage: null });
+
+  const page = await manager.ensureAdsManagerPage(session as any, { actId: '111' });
+
+  assert.equal(newPageCalls, 1);
+  assert.ok(String(gotoUrl).includes('act=111'));
+  assert.equal(page, newPage as any);
+});
+
+// ensureAdsManagerPage(actId): своя вкладка кабинета уже открыта → переиспользуется как есть (без navigate).
+test('ensureAdsManagerPage (actId): своя вкладка уже открыта → используется без navigate', async () => {
+  const manager = new SessionManager();
+  const ownCab = {
+    isClosed: () => false,
+    url: () => 'https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=111',
+  };
+  const context = {
+    pages: () => [ownCab],
+    newPage: async () => {
+      throw new Error('переоткрывать не нужно — вкладка кабинета уже есть');
+    },
+  };
+  const browser = { isConnected: () => true, contexts: () => [context] };
+  const session = makeSession({ browser, primaryPage: null });
+
+  const page = await manager.ensureAdsManagerPage(session as any, { actId: '111' });
+  assert.equal(page, ownCab as any);
 });
