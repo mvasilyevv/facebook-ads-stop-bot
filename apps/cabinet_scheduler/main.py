@@ -27,7 +27,7 @@ import json
 import logging
 import os
 import signal
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import redis.asyncio as redis_asyncio
@@ -60,6 +60,14 @@ _OBSERVER_TRIGGER_CHANNEL = "fb_agent:observer:trigger"
 
 # Действие mutation — включение (activate). Автостарт всегда включает.
 _AUTOSTART_ACTION = "activate"
+
+# Окно свежести объявления для автостарта (часы). fb_ads.is_active монотонно-истинный
+# (выставляется в TRUE и нигде не сбрасывается), поэтому сам по себе НЕ отличает живые
+# объявления от давно снятых. Автостарт поднимает только объявления, виденные сканом за
+# последние FRESHNESS_HOURS — иначе каждое утро bulk-активировались бы ВСЕ когда-либо
+# отсканированные ады (включая прошлые cabinet-дни) → нецелевой открут бюджета. 48ч
+# щедро покрывают вчерашний cabinet-день даже при разовом пропуске скана.
+AUTOSTART_FRESHNESS_HOURS = int(os.environ.get("CABINET_AUTOSTART_FRESHNESS_HOURS", "48"))
 
 
 # ====================== one tick ======================
@@ -141,8 +149,12 @@ async def run_one_tick(
         )
         return {"outcome": "no_campaigns", "day": day}
 
+    # Фильтр свежести: включаем только объявления, виденные последним сканом кабинета
+    # (last_seen_at >= now - FRESHNESS). Защита от реактивации давно снятых ads —
+    # is_active=TRUE монотонно-истинный и мёртвые объявления не отсекает.
+    since = now.astimezone(timezone.utc) - timedelta(hours=AUTOSTART_FRESHNESS_HOURS)
     ad_ids, total = await resolve_owner_ad_ids_by_campaign_ids(
-        engine, owner_tag=owner_tag, campaign_ids=campaign_ids
+        engine, owner_tag=owner_tag, campaign_ids=campaign_ids, since=since
     )
 
     task_id: int | None = None
