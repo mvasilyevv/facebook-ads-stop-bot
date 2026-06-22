@@ -443,4 +443,11 @@ jobs:
               echo "Код browser-agent не менялся — пропускаю пересборку (Vision-сессия не трогается)"
             fi
 
+            echo "=== Очистка старых образов/build-cache (тома и активные образы не трогаем) ==="
+            # until=168h хранит неделю — свежие :latest/:rollback/ghcr остаются, копятся
+            # только старые SHA-теги (54 шт до фикса) и build-cache. -af не трогает образы,
+            # используемые контейнерами; --filter until защищает недавний :rollback.
+            docker image prune -af --filter until=168h >/dev/null 2>&1 || true
+            docker builder prune -f --filter until=168h >/dev/null 2>&1 || true
+
             echo "=== Деплой здоров: SHA $GIT_SHA, heartbeat=$HB ==="

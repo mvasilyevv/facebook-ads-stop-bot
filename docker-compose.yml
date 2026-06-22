@@ -25,6 +25,11 @@ x-worker-common: &worker-common
     dockerfile: docker/Dockerfile.workers
   image: fb-stop-bot/workers:latest
   restart: unless-stopped
+  # Потолок памяти против утечки одного воркера (idle ~60MB, запас 6×).
+  mem_limit: 384m
+  # OOM-приоритет: не-money воркеры (cleanup/digest/creator/…) под нож раньше Vision/БД.
+  # observer/meta_api переопределяют на отрицательный (защищены ниже).
+  oom_score_adj: 200
   env_file: .env
   # Внутри docker-сети до БД/Redis ходим по service-имени, а не по host-портам .env.
   # Эти значения переопределяют POSTGRES_HOST/REDIS_* из .env (которые указывают на
@@ -53,6 +58,9 @@ services:
   postgres:
     image: postgres:16
     restart: unless-stopped
+    # БД — самый защищённый от OOM-killer (money-конфиг + история).
+    mem_limit: 1g
+    oom_score_adj: -700
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-fb_stop_bot}
       POSTGRES_USER: ${POSTGRES_USER:-fb_stop_bot}
@@ -70,6 +78,8 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    mem_limit: 256m
+    oom_score_adj: -500
     command: redis-server --appendonly yes
     ports:
       - "127.0.0.1:6380:6379"
@@ -109,6 +119,8 @@ services:
       dockerfile: docker/Dockerfile.api
     image: fb-stop-bot/api:latest
     restart: unless-stopped
+    mem_limit: 512m
+    oom_score_adj: -200
     env_file: .env
     environment:
       POSTGRES_HOST: postgres
@@ -178,6 +190,10 @@ services:
   # ====================== 12 Python-воркеров ======================
   observer:
     <<: *worker-common
+    # money-воркер: защищён от OOM-killer (override общего +200).
+    oom_score_adj: -400
+    # дать активному скан-циклу/мутации завершиться до SIGKILL при рестарте/деплое.
+    stop_grace_period: 60s
     environment:
       <<: *worker-env
       WORKER_TYPE: observer
@@ -206,6 +222,10 @@ services:
 
   meta_api:
     <<: *worker-common
+    # money-воркер (авто-стоп через Marketing API): защищён от OOM-killer.
+    oom_score_adj: -400
+    # дать активной Graph-мутации (pause_ad) завершиться до SIGKILL при деплое.
+    stop_grace_period: 60s
     environment:
       <<: *worker-env
       WORKER_TYPE: meta_api
