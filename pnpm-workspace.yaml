@@ -3,6 +3,9 @@ packages:
   - "frontend"
   - "frontend-mini"
 
+allowBuilds:
+  esbuild: true
+
 # pnpm 10+ читает onlyBuiltDependencies отсюда (раньше было в package.json "pnpm",
 # которое pnpm 11 игнорирует → причина purge-промпта и зависания run.sh).
 onlyBuiltDependencies:

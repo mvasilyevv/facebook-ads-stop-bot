@@ -22,6 +22,7 @@ import {
   Clock,
   Settings,
   PanelLeft,
+  Rocket,
   type LucideIcon,
 } from "lucide-react";
 import { useUiStore } from "@/stores/ui";
@@ -50,6 +51,7 @@ const NAV_GROUPS: NavGroup[] = [
       { to: "/", label: "Панель", icon: LayoutDashboard },
       { to: "/ads", label: "Объявления", icon: Layers, badgeKey: "ads" },
       { to: "/campaigns", label: "Кампании", icon: Radar },
+      { to: "/campaigns/create", label: "Создание", icon: Rocket },
     ],
   },
   {

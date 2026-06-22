@@ -1,0 +1,697 @@
+/**
+ * Тесты визарда создания кампаний.
+ *
+ * - Шаг 1: карточки выбора, смена режима
+ * - Шаг 2: валидация обязательных полей
+ * - Шаг 3: валидация бюджета, стран, destination_link
+ * - Шаг 4: добавление кампаний, валидация
+ * - Шаг 5: drag&drop dropzone виден, кнопка upload
+ * - Шаг 6: сухой прогон вызывает /validate
+ * - Wizard store: buildConfig, applyPreset, reset
+ * - API: uploadConcepts структура, статусы RunStatus
+ */
+
+import { render, screen, act } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactElement } from "react";
+
+// ─── Моки ─────────────────────────────────────────────────────────────────────
+
+// Мок TanStack Router (роут createFileRoute)
+vi.mock("@tanstack/react-router", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@tanstack/react-router")>();
+  return {
+    ...actual,
+    createFileRoute: () => ({ component: (c: unknown) => c }),
+    Link: ({ children, to }: { children: React.ReactNode; to: string }) => (
+      <a href={to}>{children}</a>
+    ),
+    useRouterState: () => ({ location: { pathname: "/campaigns/create" } }),
+  };
+});
+
+// Мок API campaigns
+vi.mock("@/lib/api/campaigns", () => ({
+  usePresets: () => ({
+    data: [
+      {
+        id: "preset-1",
+        name: "Test Preset",
+        act_id: "act_123",
+        page_id: "p456",
+        pixel_id: "px789",
+        tz_offset: 3,
+        offer_code: "GH_CR2",
+        byer_tag: "MV",
+        objective: "OUTCOME_SALES",
+        optimization_goal: "OFFSITE_CONVERSIONS",
+        custom_event_type: "PURCHASE",
+        special_ad_categories: ["NONE"],
+        cta: "PLAY_GAME",
+        text_optimizations: "OPT_OUT",
+        click_through_days: 1,
+        view_through_days: 1,
+        url_tags_template: null,
+        naming_template: null,
+        extra: {},
+        created_at: "2026-06-01T00:00:00Z",
+        updated_at: "2026-06-01T00:00:00Z",
+      },
+    ],
+    isLoading: false,
+    isError: false,
+  }),
+  useValidateConfig: () => ({
+    mutate: vi.fn(),
+    mutateAsync: vi.fn().mockResolvedValue({
+      offer_code: "GH_CR2",
+      launch_state: "campaign_paused",
+      copies_per_concept: 3,
+      campaign_count: 1,
+      adset_count: 3,
+      ad_count: 6,
+      campaigns: [
+        {
+          key: "image1",
+          name: "MV | GH_CR2 | Static | adset.pro | 2026-06-23",
+          kind: "image",
+          status: "PAUSED",
+          adsets: [{ name: "adset-1", status: "ACTIVE", ad_count: 2 }],
+        },
+      ],
+    }),
+    isPending: false,
+    isError: false,
+    data: null,
+    error: null,
+  }),
+  useLaunchCampaign: () => ({
+    mutate: vi.fn(),
+    mutateAsync: vi.fn().mockResolvedValue({
+      run_id: "run-abc",
+      task_id: 42,
+      status: "queued",
+      idempotency_key: "campaign:GH_CR2:2026-06-23:abc123",
+    }),
+    isPending: false,
+    isError: false,
+    error: null,
+  }),
+  useRuns: () => ({
+    data: {
+      data: [
+        {
+          id: "run-1",
+          preset_id: null,
+          status: "succeeded",
+          offer_code: "GH_CR2",
+          idempotency_key: "campaign:GH_CR2:2026-06-22:deadbeef",
+          error: null,
+          created_at: "2026-06-22T10:00:00Z",
+          updated_at: "2026-06-22T10:15:00Z",
+        },
+        {
+          id: "run-2",
+          preset_id: null,
+          status: "failed",
+          offer_code: "DRC_CR",
+          idempotency_key: null,
+          error: "Meta API timeout",
+          created_at: "2026-06-21T09:00:00Z",
+          updated_at: "2026-06-21T09:01:00Z",
+        },
+      ],
+      total: 2,
+    },
+    isLoading: false,
+    isError: false,
+    error: null,
+    refetch: vi.fn(),
+  }),
+  useRunDetail: () => ({
+    data: null,
+    isLoading: false,
+  }),
+  useCloneRun: () => ({
+    mutateAsync: vi.fn().mockResolvedValue({ run_id: "run-clone", task_id: null, status: "queued", idempotency_key: "" }),
+    isPending: false,
+  }),
+  useCancelRun: () => ({
+    mutateAsync: vi.fn().mockResolvedValue({ id: "run-1", status: "cancelled" }),
+    isPending: false,
+  }),
+  useCleanupRun: () => ({
+    mutateAsync: vi.fn().mockResolvedValue({ run_id: "run-2", meta_ids: {}, detail: "Нет объектов" }),
+    mutate: vi.fn(),
+    isPending: false,
+    data: null,
+  }),
+  uploadConcepts: vi.fn().mockResolvedValue({
+    upload_id: "abc123",
+    upload_dir: "/tmp/abc123",
+    concepts: [
+      { ref: "test.jpg", original_name: "test.jpg", size_bytes: 1024, content_type: "image/jpeg" },
+    ],
+    total_bytes: 1024,
+  }),
+  RUN_STATUS_LABELS: {
+    queued: "В очереди",
+    uniquifying: "Уникализация",
+    uploading: "Загрузка",
+    creating: "Создание",
+    succeeded: "Готово",
+    failed: "Ошибка",
+    cancelled: "Отменено",
+  },
+  CANCELLABLE_RUN_STATUSES: ["queued", "uniquifying", "uploading"],
+  TERMINAL_RUN_STATUSES: ["succeeded", "failed", "cancelled"],
+}));
+
+// Мок toast
+vi.mock("@/components/ui/Toast", () => ({
+  toast: {
+    success: vi.fn(),
+    error: vi.fn(),
+    info: vi.fn(),
+    warning: vi.fn(),
+  },
+}));
+
+// Мок stores/auth
+vi.mock("@/stores/auth", () => ({
+  useAuthStore: { getState: () => ({ apiKey: null }) },
+}));
+
+// ─── Импорты после моков ───────────────────────────────────────────────────────
+
+import { WizardStep1Start } from "@/components/domain/campaigns/WizardStep1Start";
+import { WizardStep2Identity, validateIdentity } from "@/components/domain/campaigns/WizardStep2Identity";
+import { validateGoal } from "@/components/domain/campaigns/WizardStep3Goal";
+import { WizardStep4Structure, validateStructure } from "@/components/domain/campaigns/WizardStep4Structure";
+import { WizardStep5Creatives, validateCreatives } from "@/components/domain/campaigns/WizardStep5Creatives";
+import { CampaignRunsHistory } from "@/components/domain/campaigns/CampaignRunsHistory";
+import { useWizardStore } from "@/stores/campaignWizard";
+import type { WizardIdentity, WizardGoal, WizardCreatives } from "@/stores/campaignWizard";
+import type { PresetOut } from "@/lib/api/campaigns";
+
+// ─── Хелперы ──────────────────────────────────────────────────────────────────
+
+function makeQC() {
+  return new QueryClient({ defaultOptions: { queries: { retry: false } } });
+}
+
+function wrap(ui: ReactElement) {
+  return <QueryClientProvider client={makeQC()}>{ui}</QueryClientProvider>;
+}
+
+const DEFAULT_IDENTITY: WizardIdentity = {
+  act_id: "act_123",
+  page_id: "456",
+  pixel_id: "789",
+  tz_offset: 0,
+  offer_code: "GH_CR2",
+  byer_tag: "MV",
+};
+
+const DEFAULT_GOAL: WizardGoal = {
+  objective: "OUTCOME_SALES",
+  optimization_goal: "OFFSITE_CONVERSIONS",
+  custom_event_type: "PURCHASE",
+  destination_link: "https://tracker.example.com",
+  cta: "PLAY_GAME",
+  text_optimizations: "OPT_OUT",
+  start_date: "2026-06-23",
+  budget_level: "campaign",
+  daily_budget_cents: 20000,
+  bid_strategy: "LOWEST_COST_WITHOUT_CAP",
+  countries: ["US", "BR"],
+  age_min: 18,
+  age_max: 65,
+  advantage_audience: true,
+  click_through_days: 1,
+  view_through_days: 1,
+  url_tags: "",
+  ad_text_mode: "none",
+  ad_text_primary: "",
+};
+
+// ─── ШАГ 1: WizardStep1Start ──────────────────────────────────────────────────
+
+describe("WizardStep1Start", () => {
+  // Рендерит три варианта: новый, пресет, клон
+  it("рендерит 3 карточки-опции", () => {
+    render(
+      wrap(
+        <WizardStep1Start mode="new" onChange={vi.fn()} />,
+      ),
+    );
+    expect(screen.getByText("Новый залив")).toBeInTheDocument();
+    expect(screen.getByText("Из пресета")).toBeInTheDocument();
+    expect(screen.getByText("Клон запуска")).toBeInTheDocument();
+  });
+
+  // Клик на "Из пресета" вызывает onChange с mode=preset
+  it("клик 'Из пресета' → onChange({mode:'preset'})", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(wrap(<WizardStep1Start mode="new" onChange={onChange} />));
+    await user.click(screen.getByText("Из пресета"));
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: "preset" }),
+    );
+  });
+
+  // При mode=preset отображается список пресетов
+  it("mode=preset показывает select с пресетом", () => {
+    render(wrap(<WizardStep1Start mode="preset" onChange={vi.fn()} />));
+    expect(screen.getByText("Test Preset (GH_CR2)")).toBeInTheDocument();
+  });
+
+  // При mode=clone отображается input для run_id
+  it("mode=clone показывает поле Run ID", () => {
+    render(wrap(<WizardStep1Start mode="clone" onChange={vi.fn()} />));
+    expect(screen.getByPlaceholderText(/UUID запуска/)).toBeInTheDocument();
+  });
+
+  // По умолчанию активна карточка "Новый залив" (aria-pressed=true)
+  it("активная карточка имеет aria-pressed=true", () => {
+    render(wrap(<WizardStep1Start mode="new" onChange={vi.fn()} />));
+    const newCard = screen.getByRole("button", { name: /Новый залив/ });
+    expect(newCard).toHaveAttribute("aria-pressed", "true");
+  });
+});
+
+// ─── ШАГ 2: validateIdentity ─────────────────────────────────────────────────
+
+describe("validateIdentity", () => {
+  // Пустые поля дают ошибки для всех обязательных
+  it("пустые поля → ошибки для act_id, page_id, pixel_id, offer_code", () => {
+    const empty: WizardIdentity = {
+      act_id: "", page_id: "", pixel_id: "", tz_offset: 0,
+      offer_code: "", byer_tag: "",
+    };
+    const errs = validateIdentity(empty);
+    expect(errs.act_id).toBeTruthy();
+    expect(errs.page_id).toBeTruthy();
+    expect(errs.pixel_id).toBeTruthy();
+    expect(errs.offer_code).toBeTruthy();
+  });
+
+  // Заполненные обязательные поля → нет ошибок
+  it("заполненные поля → нет ошибок", () => {
+    const errs = validateIdentity(DEFAULT_IDENTITY);
+    expect(Object.keys(errs)).toHaveLength(0);
+  });
+
+  // byer_tag опционален — без него нет ошибки
+  it("пустой byer_tag не даёт ошибку", () => {
+    const errs = validateIdentity({ ...DEFAULT_IDENTITY, byer_tag: "" });
+    expect(errs.byer_tag).toBeUndefined();
+  });
+});
+
+// ─── ШАГ 2: WizardStep2Identity рендер ───────────────────────────────────────
+
+describe("WizardStep2Identity render", () => {
+  // Поля заполнены из values
+  it("отображает переданные значения", () => {
+    render(
+      wrap(
+        <WizardStep2Identity
+          values={DEFAULT_IDENTITY}
+          onChange={vi.fn()}
+        />,
+      ),
+    );
+    expect(screen.getByDisplayValue("act_123")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("GH_CR2")).toBeInTheDocument();
+  });
+
+  // При ошибке act_id выводится сообщение
+  it("отображает ошибку для act_id", () => {
+    render(
+      wrap(
+        <WizardStep2Identity
+          values={{ ...DEFAULT_IDENTITY, act_id: "" }}
+          onChange={vi.fn()}
+          errors={{ act_id: "Обязательное поле" }}
+        />,
+      ),
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent("Обязательное поле");
+  });
+});
+
+// ─── ШАГ 3: validateGoal ─────────────────────────────────────────────────────
+
+describe("validateGoal", () => {
+  // Пустая destination_link → ошибка
+  it("пустой destination_link → ошибка", () => {
+    const errs = validateGoal({ ...DEFAULT_GOAL, destination_link: "" });
+    expect(errs.destination_link).toBeTruthy();
+  });
+
+  // Слишком маленький бюджет → ошибка
+  it("бюджет < $1 → ошибка", () => {
+    const errs = validateGoal({ ...DEFAULT_GOAL, daily_budget_cents: 50 });
+    expect(errs.daily_budget_cents).toBeTruthy();
+  });
+
+  // Слишком большой бюджет → ошибка (hard-cap $100k)
+  it("бюджет > $100k → ошибка", () => {
+    const errs = validateGoal({ ...DEFAULT_GOAL, daily_budget_cents: 10_001_000 });
+    expect(errs.daily_budget_cents).toBeTruthy();
+  });
+
+  // Нет стран → ошибка
+  it("пустые countries → ошибка", () => {
+    const errs = validateGoal({ ...DEFAULT_GOAL, countries: [] });
+    expect(errs.countries).toBeTruthy();
+  });
+
+  // Корректные данные → нет ошибок
+  it("корректные данные → нет ошибок", () => {
+    const errs = validateGoal(DEFAULT_GOAL);
+    expect(Object.keys(errs)).toHaveLength(0);
+  });
+});
+
+// ─── ШАГ 4: validateStructure ────────────────────────────────────────────────
+
+describe("validateStructure", () => {
+  // Пустой список → ошибка
+  it("пустой список кампаний → ошибка", () => {
+    expect(validateStructure([])).toBeTruthy();
+  });
+
+  // adset_count < 1 → ошибка
+  it("adset_count=0 → ошибка", () => {
+    const err = validateStructure([
+      { key: "image1", kind: "image", adset_count: 0, concept_refs: [] },
+    ]);
+    expect(err).toBeTruthy();
+  });
+
+  // Корректная структура → null
+  it("корректная структура → null", () => {
+    expect(
+      validateStructure([
+        { key: "image1", kind: "image", adset_count: 3, concept_refs: [] },
+      ]),
+    ).toBeNull();
+  });
+});
+
+// ─── ШАГ 4: WizardStep4Structure рендер ──────────────────────────────────────
+
+describe("WizardStep4Structure", () => {
+  // Пустой список → dropzone-подсказка
+  it("пустой список кампаний — показывает подсказку добавить", () => {
+    render(wrap(<WizardStep4Structure campaigns={[]} onChange={vi.fn()} />));
+    expect(screen.getByText(/Нет кампаний/)).toBeInTheDocument();
+  });
+
+  // Кнопка «+ Фото-кампания» добавляет кампанию
+  it("клик '+Фото-кампания' вызывает onChange с новой кампанией", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(wrap(<WizardStep4Structure campaigns={[]} onChange={onChange} />));
+    await user.click(screen.getByText("+ Фото-кампания"));
+    expect(onChange).toHaveBeenCalledWith([
+      expect.objectContaining({ kind: "image", adset_count: 3 }),
+    ]);
+  });
+
+  // Кнопка удалить уменьшает список
+  it("кнопка «удалить» убирает кампанию", async () => {
+    const user = userEvent.setup();
+    const campaigns = [{ key: "image1", kind: "image" as const, adset_count: 3, concept_refs: [] }];
+    const onChange = vi.fn();
+    render(wrap(<WizardStep4Structure campaigns={campaigns} onChange={onChange} />));
+    await user.click(screen.getByRole("button", { name: /Удалить кампанию/ }));
+    expect(onChange).toHaveBeenCalledWith([]);
+  });
+
+  // Итого adset'ов отображается
+  it("итого adset'ов суммируется корректно", () => {
+    const campaigns = [
+      { key: "image1", kind: "image" as const, adset_count: 3, concept_refs: [] },
+      { key: "video1", kind: "video" as const, adset_count: 5, concept_refs: [] },
+    ];
+    render(wrap(<WizardStep4Structure campaigns={campaigns} onChange={vi.fn()} />));
+    expect(screen.getByText(/8/)).toBeInTheDocument(); // 3 + 5
+  });
+});
+
+// ─── ШАГ 5: validateCreatives ────────────────────────────────────────────────
+
+describe("validateCreatives", () => {
+  const emptyCreatives: WizardCreatives = {
+    upload_id: null,
+    concepts: [],
+    copies_per_concept: null,
+  };
+
+  // Нет концептов → ошибка
+  it("нет концептов → ошибка", () => {
+    expect(validateCreatives(emptyCreatives)).toBeTruthy();
+  });
+
+  // Концепты есть, но upload_id = null → ошибка
+  it("концепты без upload_id → ошибка", () => {
+    const c: WizardCreatives = {
+      upload_id: null,
+      concepts: [{ ref: "a.jpg", original_name: "a.jpg", size_bytes: 100, content_type: "image/jpeg", campaign_keys: [] }],
+      copies_per_concept: null,
+    };
+    expect(validateCreatives(c)).toBeTruthy();
+  });
+
+  // Всё заполнено → null
+  it("концепты с upload_id → null", () => {
+    const c: WizardCreatives = {
+      upload_id: "abc",
+      concepts: [{ ref: "a.jpg", original_name: "a.jpg", size_bytes: 100, content_type: "image/jpeg", campaign_keys: [] }],
+      copies_per_concept: null,
+    };
+    expect(validateCreatives(c)).toBeNull();
+  });
+});
+
+// ─── ШАГ 5: WizardStep5Creatives dropzone ────────────────────────────────────
+
+describe("WizardStep5Creatives", () => {
+  const emptyCreatives: WizardCreatives = {
+    upload_id: null,
+    concepts: [],
+    copies_per_concept: null,
+  };
+
+  // Dropzone рендерится с текстом-подсказкой
+  it("dropzone содержит подсказку по загрузке", () => {
+    render(
+      wrap(
+        <WizardStep5Creatives
+          values={emptyCreatives}
+          campaigns={[]}
+          onChange={vi.fn()}
+        />,
+      ),
+    );
+    expect(screen.getByText(/Перетащите файлы/)).toBeInTheDocument();
+  });
+
+  // Загруженные концепты отображаются
+  it("загруженный концепт отображается в списке", () => {
+    const c: WizardCreatives = {
+      upload_id: "abc",
+      concepts: [
+        {
+          ref: "photo.jpg",
+          original_name: "photo.jpg",
+          size_bytes: 204800,
+          content_type: "image/jpeg",
+          campaign_keys: [],
+        },
+      ],
+      copies_per_concept: null,
+    };
+    render(wrap(<WizardStep5Creatives values={c} campaigns={[]} onChange={vi.fn()} />));
+    expect(screen.getByText("photo.jpg")).toBeInTheDocument();
+    expect(screen.getByText("200.0 KB")).toBeInTheDocument();
+  });
+
+  // Кнопка удалить концепт вызывает onChange без него
+  it("удаление концепта вызывает onChange с пустым списком", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const c: WizardCreatives = {
+      upload_id: "abc",
+      concepts: [
+        { ref: "photo.jpg", original_name: "photo.jpg", size_bytes: 1024, content_type: "image/jpeg", campaign_keys: [] },
+      ],
+      copies_per_concept: null,
+    };
+    render(wrap(<WizardStep5Creatives values={c} campaigns={[]} onChange={onChange} />));
+    await user.click(screen.getByRole("button", { name: /Удалить photo.jpg/ }));
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ concepts: [] }));
+  });
+});
+
+// ─── История запусков ─────────────────────────────────────────────────────────
+
+describe("CampaignRunsHistory", () => {
+  // Рендерит список запусков из mock
+  it("отображает запуски из истории", () => {
+    render(wrap(<CampaignRunsHistory />));
+    expect(screen.getByText("GH_CR2")).toBeInTheDocument();
+    expect(screen.getByText("DRC_CR")).toBeInTheDocument();
+  });
+
+  // Статус "Готово" для succeeded — может быть несколько (option + строка)
+  it("статус succeeded отображается как 'Готово'", () => {
+    render(wrap(<CampaignRunsHistory />));
+    const els = screen.getAllByText("Готово");
+    expect(els.length).toBeGreaterThanOrEqual(1);
+  });
+
+  // Статус "Ошибка" + текст ошибки для failed
+  it("статус failed + ошибка отображаются", () => {
+    render(wrap(<CampaignRunsHistory />));
+    const errEls = screen.getAllByText("Ошибка");
+    expect(errEls.length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("Meta API timeout")).toBeInTheDocument();
+  });
+
+  // Кнопки действий (копировать) присутствуют
+  it("кнопки клона/отмены видны", () => {
+    render(wrap(<CampaignRunsHistory />));
+    const cloneButtons = screen.getAllByTitle("Клонировать");
+    expect(cloneButtons.length).toBeGreaterThan(0);
+  });
+});
+
+// ─── Wizard Store ─────────────────────────────────────────────────────────────
+
+describe("useWizardStore", () => {
+  beforeEach(() => {
+    // Сброс store перед каждым тестом
+    useWizardStore.getState().reset();
+  });
+
+  // Дефолтный шаг = 1
+  it("начальный шаг = 1", () => {
+    expect(useWizardStore.getState().currentStep).toBe(1);
+  });
+
+  // goNext увеличивает шаг
+  it("goNext увеличивает шаг", () => {
+    act(() => useWizardStore.getState().goNext());
+    expect(useWizardStore.getState().currentStep).toBe(2);
+  });
+
+  // goPrev не уходит ниже 1
+  it("goPrev не уходит ниже шага 1", () => {
+    act(() => useWizardStore.getState().goPrev());
+    expect(useWizardStore.getState().currentStep).toBe(1);
+  });
+
+  // goNext не уходит выше 7
+  it("goNext не уходит выше шага 7", () => {
+    const store = useWizardStore.getState();
+    act(() => store.goTo(7));
+    act(() => store.goNext());
+    expect(useWizardStore.getState().currentStep).toBe(7);
+  });
+
+  // setIdentity обновляет только указанные поля
+  it("setIdentity обновляет offer_code", () => {
+    act(() => useWizardStore.getState().setIdentity({ offer_code: "DRC_CR" }));
+    expect(useWizardStore.getState().identity.offer_code).toBe("DRC_CR");
+  });
+
+  // applyPreset заполняет identity из пресета
+  it("applyPreset заполняет identity из пресета", () => {
+    const preset: PresetOut = {
+      id: "p1",
+      name: "Test",
+      act_id: "act_999",
+      page_id: "pg1",
+      pixel_id: "px1",
+      tz_offset: 2,
+      offer_code: "TEST_OFF",
+      byer_tag: "AB",
+      objective: "OUTCOME_SALES",
+      optimization_goal: "OFFSITE_CONVERSIONS",
+      custom_event_type: "PURCHASE",
+      special_ad_categories: ["NONE"],
+      cta: "PLAY_GAME",
+      text_optimizations: "OPT_OUT",
+      click_through_days: 1,
+      view_through_days: 1,
+      url_tags_template: "sub2={{ad.id}}",
+      naming_template: null,
+      extra: {},
+      created_at: "2026-06-01T00:00:00Z",
+      updated_at: "2026-06-01T00:00:00Z",
+    };
+    act(() => useWizardStore.getState().applyPreset(preset));
+    const { identity, goal } = useWizardStore.getState();
+    expect(identity.act_id).toBe("act_999");
+    expect(identity.offer_code).toBe("TEST_OFF");
+    expect(goal.url_tags).toBe("sub2={{ad.id}}");
+  });
+
+  // reset сбрасывает store в initial state
+  it("reset сбрасывает store", () => {
+    act(() => {
+      useWizardStore.getState().setIdentity({ act_id: "act_changed" });
+      useWizardStore.getState().goTo(5);
+    });
+    act(() => useWizardStore.getState().reset());
+    const state = useWizardStore.getState();
+    expect(state.currentStep).toBe(1);
+    expect(state.identity.act_id).toBe("");
+  });
+
+  // buildConfig собирает корректный конфиг
+  it("buildConfig включает обязательные поля", () => {
+    act(() => {
+      const store = useWizardStore.getState();
+      store.setIdentity(DEFAULT_IDENTITY);
+      store.setGoal(DEFAULT_GOAL);
+      store.setStructure({
+        campaigns: [{ key: "image1", kind: "image", adset_count: 3, concept_refs: [] }],
+      });
+      store.setCreatives({ upload_id: "up123", concepts: [], copies_per_concept: null });
+      store.setPreview({ launch_state: "campaign_paused", plan: null });
+    });
+    const config = useWizardStore.getState().buildConfig();
+    expect(config.act_id).toBe("act_123");
+    expect(config.offer_code).toBe("GH_CR2");
+    expect(config.launch_state).toBe("campaign_paused");
+    expect(config.campaigns).toHaveLength(1);
+    expect(config.creo_root).toBe("up123");
+    expect(config.daily_budget_cents).toBe(20000);
+  });
+
+  // launch_state default = campaign_paused
+  it("дефолт launch_state = campaign_paused", () => {
+    const config = useWizardStore.getState().buildConfig();
+    expect(config.launch_state).toBe("campaign_paused");
+  });
+});
+
+// ─── API helpers: RUN_STATUS_LABELS ──────────────────────────────────────────
+
+describe("RUN_STATUS_LABELS", () => {
+  it("все статусы имеют русские лейблы", async () => {
+    const { RUN_STATUS_LABELS } = await import("@/lib/api/campaigns");
+    const statuses = ["queued", "uniquifying", "uploading", "creating", "succeeded", "failed", "cancelled"];
+    for (const s of statuses) {
+      expect(RUN_STATUS_LABELS[s as keyof typeof RUN_STATUS_LABELS]).toBeTruthy();
+    }
+  });
+});

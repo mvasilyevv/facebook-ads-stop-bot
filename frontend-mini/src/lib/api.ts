@@ -565,3 +565,210 @@ export function useScriptPlan() {
       }),
   });
 }
+
+// ─── Campaign creation API ────────────────────────────────────────────────
+
+import type {
+  CampaignPreset,
+  PresetCreatePayload,
+  UploadConceptsResponse,
+  CampaignConfig,
+  ValidatePlanResponse,
+  LaunchPayload,
+  LaunchResponse,
+  CampaignRunSummary,
+  CampaignRunDetail,
+} from "./campaignTypes";
+import { TERMINAL_STATUSES } from "./campaignTypes";
+
+export type {
+  CampaignPreset,
+  PresetCreatePayload,
+  UploadConceptsResponse,
+  UploadedConcept,
+  CampaignConfig,
+  CampaignSpec,
+  ValidatePlanResponse,
+  CampaignPlan,
+  AdsetPlan,
+  LaunchPayload,
+  LaunchResponse,
+  CampaignRunSummary,
+  CampaignRunDetail,
+} from "./campaignTypes";
+export type { WizardStep, CampaignRunStatus } from "./campaignTypes";
+export { RUN_STATUS_LABEL, TERMINAL_STATUSES, WIZARD_STEPS, WIZARD_STEP_LABEL } from "./campaignTypes";
+
+export const QK_CAMPAIGN = {
+  presets: ["campaigns", "presets"] as const,
+  runs: ["campaigns", "runs"] as const,
+  run: (id: string) => ["campaigns", "run", id] as const,
+} as const;
+
+/** Список пресетов (GET /api/tools/campaigns/presets). */
+export function useCampaignPresets() {
+  return useQuery({
+    queryKey: QK_CAMPAIGN.presets,
+    queryFn: () => fetchJson<CampaignPreset[]>("/tools/campaigns/presets"),
+    staleTime: 30_000,
+  });
+}
+
+/** Создать пресет (POST /api/tools/campaigns/presets). */
+export function useCreatePreset() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: PresetCreatePayload) =>
+      fetchJson<CampaignPreset>("/tools/campaigns/presets", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: QK_CAMPAIGN.presets });
+    },
+  });
+}
+
+/** Обновить пресет (PUT /api/tools/campaigns/presets/{id}). */
+export function useUpdatePreset() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, payload }: { id: string; payload: Partial<PresetCreatePayload> }) =>
+      fetchJson<CampaignPreset>(`/tools/campaigns/presets/${encodeURIComponent(id)}`, {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: QK_CAMPAIGN.presets });
+    },
+  });
+}
+
+/** Удалить пресет (DELETE /api/tools/campaigns/presets/{id}). */
+export function useDeletePreset() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id }: { id: string }) =>
+      fetchJson(`/tools/campaigns/presets/${encodeURIComponent(id)}`, { method: "DELETE" }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: QK_CAMPAIGN.presets });
+    },
+  });
+}
+
+/**
+ * Загрузить концепты (POST /api/tools/campaigns/upload, multipart).
+ * Принимает FormData напрямую — fetchJson с кастомными заголовками.
+ */
+export function useUploadConcepts() {
+  return useMutation({
+    mutationFn: async (formData: FormData): Promise<UploadConceptsResponse> => {
+      const token = getStoredToken();
+      const headers: Record<string, string> = {};
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+      const resp = await fetch(`${API_BASE}/tools/campaigns/upload`, {
+        method: "POST",
+        headers,
+        body: formData,
+      });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({ detail: `Ошибка ${resp.status}` }));
+        throw new Error((err as { detail?: string }).detail ?? `Ошибка ${resp.status}`);
+      }
+      return resp.json() as Promise<UploadConceptsResponse>;
+    },
+  });
+}
+
+/** Dry-run валидация конфига (POST /api/tools/campaigns/validate). */
+export function useValidateCampaign() {
+  return useMutation({
+    mutationFn: (config: CampaignConfig) =>
+      fetchJson<ValidatePlanResponse>("/tools/campaigns/validate", {
+        method: "POST",
+        body: JSON.stringify({ config }),
+      }),
+  });
+}
+
+/** Запустить залив (POST /api/tools/campaigns/launch). */
+export function useLaunchCampaign() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: LaunchPayload) =>
+      fetchJson<LaunchResponse>("/tools/campaigns/launch", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: QK_CAMPAIGN.runs });
+    },
+  });
+}
+
+/** Список запусков (GET /api/tools/campaigns/runs). */
+export function useCampaignRuns() {
+  return useQuery({
+    queryKey: QK_CAMPAIGN.runs,
+    queryFn: () => fetchJson<CampaignRunSummary[]>("/tools/campaigns/runs"),
+    refetchInterval: 15_000,
+  });
+}
+
+/** Детали одного запуска (GET /api/tools/campaigns/runs/{id}). */
+export function useCampaignRun(id: string, enabled = true) {
+  return useQuery({
+    queryKey: QK_CAMPAIGN.run(id),
+    queryFn: () => fetchJson<CampaignRunDetail>(`/tools/campaigns/runs/${encodeURIComponent(id)}`),
+    enabled: enabled && !!id,
+    refetchInterval: (query) => {
+      // Продолжаем поллинг пока статус не финальный
+      const status = (query.state.data as CampaignRunDetail | undefined)?.status;
+      if (!status) return 3_000;
+      return TERMINAL_STATUSES.has(status as import("./campaignTypes").CampaignRunStatus) ? false : 3_000;
+    },
+  });
+}
+
+/** Отмена запуска (POST /api/tools/campaigns/runs/{id}/cancel). */
+export function useCancelRun() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id }: { id: string }) =>
+      fetchJson(`/tools/campaigns/runs/${encodeURIComponent(id)}/cancel`, { method: "POST" }),
+    onSuccess: (_data, { id }) => {
+      void qc.invalidateQueries({ queryKey: QK_CAMPAIGN.run(id) });
+      void qc.invalidateQueries({ queryKey: QK_CAMPAIGN.runs });
+    },
+  });
+}
+
+/** Клон запуска (POST /api/tools/campaigns/runs/{id}/clone). */
+export function useCloneRun() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id }: { id: string }) =>
+      fetchJson<CampaignRunDetail>(`/tools/campaigns/runs/${encodeURIComponent(id)}/clone`, {
+        method: "POST",
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: QK_CAMPAIGN.runs });
+    },
+  });
+}
+
+/** Cleanup (POST /api/tools/campaigns/runs/{id}/cleanup). */
+export function useCleanupRun() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id }: { id: string }) =>
+      fetchJson<{ run_id: string; meta_ids: Record<string, unknown>; detail: string }>(
+        `/tools/campaigns/runs/${encodeURIComponent(id)}/cleanup`,
+        { method: "POST" },
+      ),
+    onSuccess: (_data, { id }) => {
+      void qc.invalidateQueries({ queryKey: QK_CAMPAIGN.run(id) });
+      void qc.invalidateQueries({ queryKey: QK_CAMPAIGN.runs });
+    },
+  });
+}

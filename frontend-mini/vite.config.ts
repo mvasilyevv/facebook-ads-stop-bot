@@ -17,6 +17,8 @@ export default defineConfig({
       generatedRouteTree: "./src/routeTree.gen.ts",
       // Code-splitting только для прод-сборки (см. frontend/vite.config.ts).
       autoCodeSplitting: !process.env.VITEST,
+      // Компоненты шагов визарда и вспомогательные файлы — не роуты
+      routeFileIgnorePattern: "^(Step|RunsHistory)",
     }),
     react(),
     tailwindcss(),

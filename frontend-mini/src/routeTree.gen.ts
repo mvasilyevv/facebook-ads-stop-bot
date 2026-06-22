@@ -15,6 +15,7 @@ import { Route as ScriptsIndexRouteImport } from './routes/scripts/index'
 import { Route as OffersIndexRouteImport } from './routes/offers/index'
 import { Route as HistoryIndexRouteImport } from './routes/history/index'
 import { Route as HealthIndexRouteImport } from './routes/health/index'
+import { Route as CampaignsIndexRouteImport } from './routes/campaigns/index'
 import { Route as AdsIndexRouteImport } from './routes/ads/index'
 import { Route as AdsFbAdIdRouteImport } from './routes/ads/$fbAdId'
 
@@ -48,6 +49,11 @@ const HealthIndexRoute = HealthIndexRouteImport.update({
   path: '/health/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const CampaignsIndexRoute = CampaignsIndexRouteImport.update({
+  id: '/campaigns/',
+  path: '/campaigns/',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AdsIndexRoute = AdsIndexRouteImport.update({
   id: '/ads/',
   path: '/ads/',
@@ -63,6 +69,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/ads/$fbAdId': typeof AdsFbAdIdRoute
   '/ads/': typeof AdsIndexRoute
+  '/campaigns/': typeof CampaignsIndexRoute
   '/health/': typeof HealthIndexRoute
   '/history/': typeof HistoryIndexRoute
   '/offers/': typeof OffersIndexRoute
@@ -73,6 +80,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/ads/$fbAdId': typeof AdsFbAdIdRoute
   '/ads': typeof AdsIndexRoute
+  '/campaigns': typeof CampaignsIndexRoute
   '/health': typeof HealthIndexRoute
   '/history': typeof HistoryIndexRoute
   '/offers': typeof OffersIndexRoute
@@ -84,6 +92,7 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/ads/$fbAdId': typeof AdsFbAdIdRoute
   '/ads/': typeof AdsIndexRoute
+  '/campaigns/': typeof CampaignsIndexRoute
   '/health/': typeof HealthIndexRoute
   '/history/': typeof HistoryIndexRoute
   '/offers/': typeof OffersIndexRoute
@@ -96,6 +105,7 @@ export interface FileRouteTypes {
     | '/'
     | '/ads/$fbAdId'
     | '/ads/'
+    | '/campaigns/'
     | '/health/'
     | '/history/'
     | '/offers/'
@@ -106,6 +116,7 @@ export interface FileRouteTypes {
     | '/'
     | '/ads/$fbAdId'
     | '/ads'
+    | '/campaigns'
     | '/health'
     | '/history'
     | '/offers'
@@ -116,6 +127,7 @@ export interface FileRouteTypes {
     | '/'
     | '/ads/$fbAdId'
     | '/ads/'
+    | '/campaigns/'
     | '/health/'
     | '/history/'
     | '/offers/'
@@ -127,6 +139,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AdsFbAdIdRoute: typeof AdsFbAdIdRoute
   AdsIndexRoute: typeof AdsIndexRoute
+  CampaignsIndexRoute: typeof CampaignsIndexRoute
   HealthIndexRoute: typeof HealthIndexRoute
   HistoryIndexRoute: typeof HistoryIndexRoute
   OffersIndexRoute: typeof OffersIndexRoute
@@ -178,6 +191,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof HealthIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/campaigns/': {
+      id: '/campaigns/'
+      path: '/campaigns'
+      fullPath: '/campaigns/'
+      preLoaderRoute: typeof CampaignsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/ads/': {
       id: '/ads/'
       path: '/ads'
@@ -199,6 +219,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AdsFbAdIdRoute: AdsFbAdIdRoute,
   AdsIndexRoute: AdsIndexRoute,
+  CampaignsIndexRoute: CampaignsIndexRoute,
   HealthIndexRoute: HealthIndexRoute,
   HistoryIndexRoute: HistoryIndexRoute,
   OffersIndexRoute: OffersIndexRoute,
