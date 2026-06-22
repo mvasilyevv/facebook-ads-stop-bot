@@ -200,19 +200,54 @@ async def _query_current_day_spend(engine: AsyncEngine, redis: Any) -> dict[str,
         return {"current_day_spend": None}
 
 
+async def _query_scan_block_reason(engine: AsyncEngine) -> dict[str, str | None]:
+    """Почему включённый скан фактически ничего не отслеживает (None = всё ок).
+
+    Та же логика, что у observer (core.observer.accounts.allowlist_blocks_scan) — чтобы
+    UI-баннер совпадал с реальным поведением. Resilient: ошибка → None (не роняет stats).
+    Показываем причину ТОЛЬКО при включённом скане (выключенный покрыт отдельным баннером
+    «observer выключен»).
+    """
+    try:
+        from core.observer.accounts import allowlist_blocks_scan, resolve_scan_account_ids
+        from core.observer.queries import load_observer_config
+
+        cfg = await load_observer_config(engine)
+        if not cfg or not cfg.get("is_scanning_enabled"):
+            return {"scan_blocked_reason": None}
+        account_ids = await resolve_scan_account_ids(engine)
+        if not account_ids:
+            return {
+                "scan_blocked_reason": ("Нет активных офферов с кабинетами — сканировать нечего.")
+            }
+        single_cabinet = len(account_ids) <= 1
+        campaign_ids = list(cfg.get("campaign_ids") or [])
+        if allowlist_blocks_scan(single_cabinet, campaign_ids):
+            return {
+                "scan_blocked_reason": (
+                    "Список кампаний пуст — ни одно объявление не отслеживается, "
+                    "авто-стоп не работает. Заполните список на странице «Кампании»."
+                )
+            }
+        return {"scan_blocked_reason": None}
+    except Exception as exc:  # noqa: BLE001 — advisory-поле, не критично для overview
+        logger.warning("scan_blocked_reason не посчитан: %s", exc)
+        return {"scan_blocked_reason": None}
+
+
 async def _build_stats(engine: AsyncEngine, redis: Any) -> DashboardStatsOut:
     """Собирает все группы счётчиков параллельно через asyncio.gather.
 
     Счётчики (ad/scan/task/observer) — fail-all (фронт видит проблему overview).
-    current_day_spend — resilient внутри (ошибка → None), money-поле не критично
-    для счётчиков, но и не должно их ронять.
+    current_day_spend / scan_blocked_reason — resilient внутри (ошибка → None).
     """
-    ad_counts, scan_counts, task_counts, observer_status, spend = await asyncio.gather(
+    ad_counts, scan_counts, task_counts, observer_status, spend, block = await asyncio.gather(
         _query_ad_counts(engine),
         _query_scan_counts(engine),
         _query_task_counts(engine),
         _read_observer_status(redis),
         _query_current_day_spend(engine, redis),
+        _query_scan_block_reason(engine),
     )
 
     return DashboardStatsOut(
@@ -220,6 +255,7 @@ async def _build_stats(engine: AsyncEngine, redis: Any) -> DashboardStatsOut:
         **scan_counts,
         **task_counts,
         **spend,
+        **block,
         observer_status=observer_status,
     )
 

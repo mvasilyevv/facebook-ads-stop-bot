@@ -212,6 +212,7 @@ jobs:
     needs: build-base
 
     strategy:
+      fail-fast: false
       matrix:
         include:
           - name: api
@@ -222,10 +223,19 @@ jobs:
             dockerfile: docker/Dockerfile.workers
             image_suffix: workers
             is_python: true
-          # browser-agent (нативно на хосте рядом с Vision, profile "agent"), а также
-          # frontend/mini-app (опциональный profile "web") в Docker на боевом сервере
-          # НЕ поднимаются → из CI build matrix исключены, чтобы не блокировать автодеплой
-          # core-стека. Собираются отдельно при необходимости (см. docs/WINDOWS_DEPLOY/run).
+          # frontend/mini-app (profile "web") — статика nginx, теперь собираются в CI и
+          # деплоятся отдельным шагом [7/7] (после здорового ядра), чтобы правки UI ехали
+          # автоматически (раньше требовалась ручная пересборка на хосте).
+          - name: frontend
+            dockerfile: docker/Dockerfile.frontend
+            image_suffix: frontend
+            is_python: false
+          - name: mini-app
+            dockerfile: docker/Dockerfile.mini-app
+            image_suffix: mini-app
+            is_python: false
+          # browser-agent (нативно на хосте рядом с Vision, profile "agent") в Docker НЕ
+          # поднимается → собирается/деплоится на хосте шагом [6/6] (npm build + systemctl).
 
     steps:
       - name: Checkout
@@ -441,6 +451,26 @@ jobs:
               fi
             else
               echo "Код browser-agent не менялся — пропускаю пересборку (Vision-сессия не трогается)"
+            fi
+
+            echo "=== [7/7] Фронтенды (profile web): pull + пересоздание ==="
+            # frontend/mini-app — статика nginx, не входят в core-health-gate. Деплоим
+            # ПОСЛЕ здорового ядра; ошибка здесь НЕ валит деплой (веб некритичен, ядро ОК).
+            # web-new + api-old совместимы: новые поля схемы аддитивны (отсутствуют → UI
+            # graceful). Поэтому web вне rollback-критпути.
+            web_pulled=1
+            for svc in frontend mini-app; do
+              if docker pull "${IMAGE_BASE}-${svc}:${GIT_SHA}" 2>/dev/null; then
+                docker tag "${IMAGE_BASE}-${svc}:${GIT_SHA}" "fb-stop-bot/${svc}:latest"
+              else
+                echo "::warning::не удалось pull ${svc}:${GIT_SHA}"; web_pulled=0
+              fi
+            done
+            if [ "$web_pulled" -eq 1 ]; then
+              docker compose --profile web up -d --force-recreate frontend mini-app \
+                || echo "::warning::docker compose --profile web up не удался"
+            else
+              echo "::warning::пропускаю пересоздание web (образы не подтянулись)"
             fi
 
             echo "=== Очистка старых образов/build-cache (тома и активные образы не трогаем) ==="

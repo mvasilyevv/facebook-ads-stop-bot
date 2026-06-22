@@ -98,7 +98,7 @@ export interface paths {
          * @description Снуз одного объявления: ad_alert_state.snoozed_until = now + minutes.
          *
          *     404 — объявления нет в fb_ads. 409 — у ad нет строки состояния (нечего снузить).
-         *     Зеркало core.telegram.handlers.alerts.handle_snz_callback / tma_snooze_ad.
+         *     Зеркало tma_snooze_ad (apps/api/routers/v1/tma.py).
          */
         post: operations["snooze_ad_api_dashboard_ads__fb_ad_id__snooze_post"];
         delete?: never;
@@ -1446,29 +1446,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/settings/telegram/setup-topics": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Post Setup Topics
-         * @description Создаёт статические топики супергруппы и сохраняет их thread_id. Идемпотентно.
-         *
-         *     Требует: бот — админ супергруппы с правом can_manage_topics, в группе включены
-         *     «Темы». 400, если не настроен токен/chat_id. Возвращает отчёт по топикам.
-         */
-        post: operations["post_setup_topics_api_settings_telegram_setup_topics_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/settings/vision": {
         parameters: {
             query?: never;
@@ -1645,7 +1622,7 @@ export interface paths {
         put?: never;
         /**
          * Tma Snooze Ad
-         * @description Снуз: ad_alert_state.snoozed_until = now + minutes (как handle_snz_callback).
+         * @description Снуз: ad_alert_state.snoozed_until = now + minutes.
          *
          *     404 — объявления нет. 409 — у ad нет строки состояния (нечего снузить).
          */
@@ -2606,6 +2583,8 @@ export interface components {
              * @default 0
              */
             failed_tasks_24h: number;
+            /** Scan Blocked Reason */
+            scan_blocked_reason?: string | null;
         };
         /**
          * DisableTaskCreateIn
@@ -2783,6 +2762,8 @@ export interface components {
             observer_runtime?: {
                 [key: string]: unknown;
             } | null;
+            /** @description Статус сетевого канала Marketing API (probe из health_watchdog) */
+            meta_api_channel?: components["schemas"]["MetaApiChannelStatus"] | null;
             /**
              * Overall
              * @enum {string}
@@ -3076,6 +3057,31 @@ export interface components {
              * @default 0
              */
             transitions_count: number;
+        };
+        /**
+         * MetaApiChannelStatus
+         * @description Статус сетевого канала Marketing API (auto-stop) по проактивному probe.
+         *
+         *     Пишется health_watchdog в Redis meta_api:channel:health. ONLINE — реальный GET /me
+         *     прошёл; DEGRADED — канал мёртв (network-down / протух токен); UNKNOWN — прободер не
+         *     писал / ключ протух (нет данных, НЕ обязательно отказ).
+         */
+        MetaApiChannelStatus: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "ONLINE" | "DEGRADED" | "UNKNOWN";
+            /** Healthy */
+            healthy?: boolean | null;
+            /** Probe Ok */
+            probe_ok?: boolean | null;
+            /** Detail */
+            detail?: string | null;
+            /** Reason */
+            reason?: string | null;
+            /** Checked At */
+            checked_at?: string | null;
         };
         /**
          * MetricRow
@@ -6098,28 +6104,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TelegramInviteResponse"];
-                };
-            };
-        };
-    };
-    post_setup_topics_api_settings_telegram_setup_topics_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
                 };
             };
         };

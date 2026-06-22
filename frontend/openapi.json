@@ -144,7 +144,7 @@
           "dashboard"
         ],
         "summary": "Snooze Ad",
-        "description": "Снуз одного объявления: ad_alert_state.snoozed_until = now + minutes.\n\n404 — объявления нет в fb_ads. 409 — у ad нет строки состояния (нечего снузить).\nЗеркало core.telegram.handlers.alerts.handle_snz_callback / tma_snooze_ad.",
+        "description": "Снуз одного объявления: ad_alert_state.snoozed_until = now + minutes.\n\n404 — объявления нет в fb_ads. 409 — у ad нет строки состояния (нечего снузить).\nЗеркало tma_snooze_ad (apps/api/routers/v1/tma.py).",
         "operationId": "snooze_ad_api_dashboard_ads__fb_ad_id__snooze_post",
         "parameters": [
           {
@@ -3540,30 +3540,6 @@
         }
       }
     },
-    "/api/settings/telegram/setup-topics": {
-      "post": {
-        "tags": [
-          "settings"
-        ],
-        "summary": "Post Setup Topics",
-        "description": "Создаёт статические топики супергруппы и сохраняет их thread_id. Идемпотентно.\n\nТребует: бот — админ супергруппы с правом can_manage_topics, в группе включены\n«Темы». 400, если не настроен токен/chat_id. Возвращает отчёт по топикам.",
-        "operationId": "post_setup_topics_api_settings_telegram_setup_topics_post",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "type": "object",
-                  "title": "Response Post Setup Topics Api Settings Telegram Setup Topics Post"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/settings/vision": {
       "get": {
         "tags": [
@@ -3840,7 +3816,7 @@
           "tma"
         ],
         "summary": "Tma Snooze Ad",
-        "description": "Снуз: ad_alert_state.snoozed_until = now + minutes (как handle_snz_callback).\n\n404 — объявления нет. 409 — у ad нет строки состояния (нечего снузить).",
+        "description": "Снуз: ad_alert_state.snoozed_until = now + minutes.\n\n404 — объявления нет. 409 — у ad нет строки состояния (нечего снузить).",
         "operationId": "tma_snooze_ad_api_tma_ads__fb_ad_id__snooze_post",
         "parameters": [
           {
@@ -5901,6 +5877,17 @@
             "type": "integer",
             "title": "Failed Tasks 24H",
             "default": 0
+          },
+          "scan_blocked_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scan Blocked Reason"
           }
         },
         "type": "object",
@@ -6330,6 +6317,17 @@
             ],
             "title": "Observer Runtime",
             "description": "Содержимое Redis ключа observer:runtime"
+          },
+          "meta_api_channel": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MetaApiChannelStatus"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Статус сетевого канала Marketing API (probe из health_watchdog)"
           },
           "overall": {
             "type": "string",
@@ -7218,6 +7216,81 @@
         ],
         "title": "IncidentOut",
         "description": "AdSnapshotOut + incident-специфичные поля для /dashboard/incidents."
+      },
+      "MetaApiChannelStatus": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ONLINE",
+              "DEGRADED",
+              "UNKNOWN"
+            ],
+            "title": "Status"
+          },
+          "healthy": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Healthy"
+          },
+          "probe_ok": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Probe Ok"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "checked_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Checked At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "MetaApiChannelStatus",
+        "description": "Статус сетевого канала Marketing API (auto-stop) по проактивному probe.\n\nПишется health_watchdog в Redis meta_api:channel:health. ONLINE — реальный GET /me\nпрошёл; DEGRADED — канал мёртв (network-down / протух токен); UNKNOWN — прободер не\nписал / ключ протух (нет данных, НЕ обязательно отказ)."
       },
       "MetricRow": {
         "properties": {

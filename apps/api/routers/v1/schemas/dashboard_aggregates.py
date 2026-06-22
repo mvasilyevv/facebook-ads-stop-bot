@@ -41,6 +41,12 @@ class DashboardStatsOut(BaseModel):
     pending_disable_tasks: int = 0
     pending_enable_tasks: int = 0
     failed_tasks_24h: int = 0
+    # Причина, по которой включённый скан фактически НИЧЕГО не отслеживает (None = всё ок).
+    # Money-критично: при пустом allowlist кампаний (один кабинет) скан коротится — фронт
+    # показывает явный баннер «скан не работает», иначе это тихое состояние (heartbeats
+    # зелёные, observer running, но авто-стоп не работает). Совпадает с логикой observer
+    # (core.observer.accounts.allowlist_blocks_scan).
+    scan_blocked_reason: str | None = None
 
 
 class DashboardBatchOut(BaseModel):

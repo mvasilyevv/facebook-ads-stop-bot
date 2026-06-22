@@ -19,6 +19,21 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 _ACCOUNT_ID_RE = re.compile(r"^\d+$")
 
 
+def allowlist_blocks_scan(single_cabinet: bool, campaign_ids: list[str]) -> bool:
+    """Opt-in мониторинг: при ОДНОМ кабинете пустой allowlist = ничего не отслеживаем.
+
+    Money-критично: раньше пустой campaign_ids означал «сканировать все мои кампании»
+    (owner_tag-резолв в browser-agent). Теперь пусто = НИЧЕГО (скан не гоняем, авто-стоп
+    не работает). При мульти-кабе (>1 кабинета) allowlist неприменим (campaign.id не
+    уникальны меж кабинетами) → не блокируем, скоупинг через owner_tag.
+
+    Single source: используется и observer'ом (apps/observer_worker), и API-дашбордом
+    (apps/api/.../dashboard_stats) для вычисления `scan_blocked_reason` — чтобы UI-баннер
+    «скан не работает: список кампаний пуст» совпадал с реальным поведением observer.
+    """
+    return single_cabinet and not campaign_ids
+
+
 def normalize_account_id(raw: str | None) -> str | None:
     """Нормализует ID кабинета: трим, срез префикса act_, проверка «только цифры».
 

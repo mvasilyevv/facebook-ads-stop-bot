@@ -35,7 +35,11 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from apps.telegram_poller.main import _get_database_url
 from core.db import WORKER_ENGINE_KWARGS
-from core.observer.accounts import list_offers_without_accounts, resolve_scan_account_ids
+from core.observer.accounts import (
+    allowlist_blocks_scan,
+    list_offers_without_accounts,
+    resolve_scan_account_ids,
+)
 from core.observer.adaptive_interval import (
     JITTER_FRACTION,
     clamp_interval,
@@ -299,15 +303,9 @@ async def heartbeat_loop(redis_client, stop: asyncio.Event) -> None:
 # ====================== One cycle ======================
 
 
-def _allowlist_blocks_scan(single_cabinet: bool, campaign_ids: list[str]) -> bool:
-    """Opt-in мониторинг: при ОДНОМ кабинете пустой allowlist = ничего не отслеживаем.
-
-    Money-критично: раньше пустой campaign_ids означал «сканировать все мои кампании»
-    (owner_tag-резолв в browser-agent). Теперь пусто = НИЧЕГО (скан не гоняем, авто-стоп
-    не работает). При мульти-кабе (>1 кабинета) allowlist неприменим (campaign.id не
-    уникальны меж кабинетами) → не блокируем, скоупинг через owner_tag.
-    """
-    return single_cabinet and not campaign_ids
+# Перенесено в core.observer.accounts (single source — переиспользуется API-дашбордом
+# для scan_blocked_reason). Алиас сохраняет существующий импорт/тесты.
+_allowlist_blocks_scan = allowlist_blocks_scan
 
 
 async def _notify_synced_disabled(engine, redis_client, *, fb_ad_ids: list[str]) -> None:

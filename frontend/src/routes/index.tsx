@@ -30,6 +30,7 @@ import { Hero } from "@/components/dashboard/Hero";
 import { SpendChart } from "@/components/dashboard/SpendChart";
 import { ScanCluster, type ScanProgress } from "@/components/dashboard/ScanCluster";
 import { PausedBanner } from "@/components/dashboard/PausedBanner";
+import { ScanBlockedBanner } from "@/components/dashboard/ScanBlockedBanner";
 import {
   KPI_CELL_STATE,
   SparklineKpiRow,
@@ -196,6 +197,16 @@ function DashboardPage() {
         {!scanOn && (
           <div className="mb-6">
             <PausedBanner since={null} onEnable={handleEnable} />
+          </div>
+        )}
+
+        {/* ── scan-blocked banner (скан вкл, но allowlist пуст → ничего не мониторим) ── */}
+        {scanOn && stats?.scan_blocked_reason && (
+          <div className="mb-6">
+            <ScanBlockedBanner
+              reason={stats.scan_blocked_reason}
+              onNavigate={() => void router.navigate({ to: "/campaigns" })}
+            />
           </div>
         )}
 
