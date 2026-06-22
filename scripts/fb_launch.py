@@ -33,6 +33,27 @@ import yaml
 from pydantic import BaseModel, Field, model_validator
 
 from clients.python_grpc.v1 import meta_api_pb2, meta_api_pb2_grpc
+
+# Движок и схема конфига вынесены в core.campaign_builder — CLI их переиспользует
+# без форка логики (тела объектов, нейминг, валидация бюджета/таргета).
+from core.campaign_builder import (
+    Account,
+    AdsetConfig,
+    AdText,
+    Attribution,
+    Budget,
+    CampaignBlock,
+    CampaignConfig,
+    LaunchState,
+    Targeting,
+    ad_body,
+    adset_body,
+    campaign_body,
+    image_creative_body,
+    render_name,
+    url_tags_of,
+    video_creative_body,
+)
 from core.meta_api.client import MetaApiClient
 from core.meta_api.mutations._batch_helpers import (
     build_batch_payload,
@@ -44,75 +65,10 @@ from core.meta_api.upload import MediaUploader
 NAV_MARKERS = ("Execution context was destroyed", "navigation", "Target closed", "destroyed")
 
 
-# ====================== Схема конфига (pydantic) ======================
-
-
-class Account(BaseModel):
-    act_id: str  # без префикса act_ или с ним — нормализуем
-    page_id: str
-    pixel_id: str
-    tz_offset: str = "-07:00"  # TZ кабинета для start_time (America/Hermosillo = -07:00)
-
-    @property
-    def act(self) -> str:
-        return self.act_id if self.act_id.startswith("act_") else f"act_{self.act_id}"
-
-    @property
-    def act_num(self) -> str:
-        return self.act_id.removeprefix("act_")
-
-
-class Budget(BaseModel):
-    level: str = "campaign"  # campaign (CBO) | adset (ABO)
-    daily_cents: int = 300
-    bid_strategy: str = "LOWEST_COST_WITHOUT_CAP"
-    bid_amount_cents: int | None = None  # для COST_CAP / BID_CAP / TARGET_COST
-
-    @model_validator(mode="after")
-    def _check(self):
-        if self.level not in ("campaign", "adset"):
-            raise ValueError("budget.level: campaign | adset")
-        capped = self.bid_strategy in ("COST_CAP", "LOWEST_COST_WITH_BID_CAP", "TARGET_COST")
-        if capped and not self.bid_amount_cents:
-            raise ValueError(f"bid_strategy={self.bid_strategy} требует bid_amount_cents")
-        if self.daily_cents < 100:
-            raise ValueError("daily_cents < 100 ($1) — проверь бюджет")
-        return self
-
-
-class Targeting(BaseModel):
-    countries: list[str]
-    add_antarctica: bool = True  # SOP: AQ всегда
-    age_min: int = 18
-    age_max: int = 65
-    location_types: list[str] = Field(default_factory=lambda: ["home", "recent"])
-    advantage_audience: bool = True
-
-    def geo_countries(self) -> list[str]:
-        cs = list(self.countries)
-        if self.add_antarctica and "AQ" not in cs:
-            cs.append("AQ")
-        return cs
-
-
-class Attribution(BaseModel):
-    click_through_days: int = 1
-    view_through_days: int = 1
-
-    def spec(self) -> list[dict]:
-        out = []
-        if self.click_through_days:
-            out.append({"event_type": "CLICK_THROUGH", "window_days": self.click_through_days})
-        if self.view_through_days:
-            out.append({"event_type": "VIEW_THROUGH", "window_days": self.view_through_days})
-        return out
-
-
-class AdText(BaseModel):
-    mode: str = "none"  # none | full
-    message: str = ""
-    headline: str = ""
-    description: str = ""
+# ====================== CLI-only схема (YAML disk-flow) ======================
+# Account/Budget/Targeting/Attribution/AdText переиспользуются из campaign_builder.
+# Здесь только то, что специфично для YAML-залива с диска: коды креативов из имён
+# файлов (CodeResolver) и обёртка LaunchConfig, которая адаптируется к CampaignConfig.
 
 
 class CreativeCodes(BaseModel):
@@ -171,10 +127,42 @@ class LaunchConfig(BaseModel):
         return f"{d}.{m}"
 
     def render(self, template: str) -> str:
-        return (
-            template.replace("{byer}", self.byer_tag)
-            .replace("{offer}", self.offer_code)
-            .replace("{date}", self.date_label)
+        return render_name(
+            template, byer=self.byer_tag, offer=self.offer_code, date_label=self.date_label
+        )
+
+    def as_campaign_config(self) -> CampaignConfig:
+        """Адаптер YAML-конфига к CampaignConfig для общих body-builder'ов.
+
+        CLI всегда заливает PAUSED (байер сам unpause после ревью) — launch_state
+        фиксирован ALL_PAUSED. campaigns/copies для спеки не нужны (CLI ходит по
+        файлам с диска), но CampaignConfig требует непустой список — даём заглушку.
+        """
+        stub_block = CampaignBlock(
+            key="cli",
+            name="{byer} | {offer} | {date}",
+            kind="image",
+            adsets=[AdsetConfig(name="{byer} | {offer} | {date}", dir=".", glob="*")],
+        )
+        return CampaignConfig(
+            account=self.account,
+            offer_code=self.offer_code,
+            byer_tag=self.byer_tag,
+            objective=self.objective,
+            optimization_goal=self.optimization_goal,
+            custom_event_type=self.custom_event_type,
+            special_ad_categories=self.special_ad_categories,
+            destination_link=self.destination_link,
+            cta=self.cta,
+            text_optimizations=self.text_optimizations,
+            start_date=self.start_date,
+            creo_root=self.creo_root,
+            budget=self.budget,
+            targeting=self.targeting,
+            attribution=self.attribution,
+            ad_text=self.ad_text,
+            campaigns=[stub_block],
+            launch_state=LaunchState.ALL_PAUSED,
         )
 
 
@@ -310,136 +298,10 @@ async def wait_video_ready(stub, video_id: str, *, timeout_s: int = 240) -> str:
     return f"timeout(last={last})"
 
 
-# ====================== тела объектов ======================
-
-
-def campaign_body(cfg: LaunchConfig, name: str) -> dict:
-    body = {
-        "name": name,
-        "objective": cfg.objective,
-        "status": "PAUSED",
-        "special_ad_categories": cfg.special_ad_categories,
-    }
-    if cfg.budget.level == "campaign":  # CBO: бюджет+стратегия на кампании
-        body["daily_budget"] = cfg.budget.daily_cents
-        body["bid_strategy"] = cfg.budget.bid_strategy
-        if cfg.budget.bid_amount_cents:
-            body["bid_amount"] = cfg.budget.bid_amount_cents
-    return body
-
-
-def adset_body(cfg: LaunchConfig, name: str, campaign_id: str) -> dict:
-    body = {
-        "name": name,
-        "campaign_id": campaign_id,
-        "billing_event": "IMPRESSIONS",
-        "optimization_goal": cfg.optimization_goal,
-        "destination_type": "WEBSITE",
-        "promoted_object": {
-            "pixel_id": cfg.account.pixel_id,
-            "custom_event_type": cfg.custom_event_type,
-            "smart_pse_enabled": False,
-        },
-        "attribution_spec": cfg.attribution.spec(),
-        "targeting": {
-            "geo_locations": {
-                "countries": cfg.targeting.geo_countries(),
-                "location_types": cfg.targeting.location_types,
-            },
-            "age_min": cfg.targeting.age_min,
-            "age_max": cfg.targeting.age_max,
-            "targeting_automation": {
-                "advantage_audience": 1 if cfg.targeting.advantage_audience else 0
-            },
-        },
-        "start_time": cfg.start_time,
-        "status": "PAUSED",
-    }
-    if cfg.budget.level == "adset":  # ABO: бюджет+стратегия на адсете
-        body["daily_budget"] = cfg.budget.daily_cents
-        body["bid_strategy"] = cfg.budget.bid_strategy
-        if cfg.budget.bid_amount_cents:
-            body["bid_amount"] = cfg.budget.bid_amount_cents
-    return body
-
-
-def _link_data(cfg: LaunchConfig, media: dict) -> dict:
-    ld: dict = {
-        "link": cfg.destination_link,
-        "call_to_action": {"type": cfg.cta, "value": {"link": cfg.destination_link}},
-    }
-    ld.update(media)  # image_hash для картинок
-    if cfg.ad_text.mode == "full":
-        if cfg.ad_text.message:
-            ld["message"] = cfg.ad_text.message
-        if cfg.ad_text.headline:
-            ld["name"] = cfg.ad_text.headline
-        if cfg.ad_text.description:
-            ld["description"] = cfg.ad_text.description
-    return ld
-
-
-def image_creative_body(cfg: LaunchConfig, name: str, image_hash: str, url_tags: str) -> dict:
-    return {
-        "name": name,
-        "object_story_spec": {
-            "page_id": cfg.account.page_id,
-            "link_data": _link_data(cfg, {"image_hash": image_hash}),
-        },
-        "url_tags": url_tags,
-        "degrees_of_freedom_spec": {
-            "creative_features_spec": {
-                "text_optimizations": {"enroll_status": cfg.text_optimizations}
-            }
-        },
-    }
-
-
-def video_creative_body(
-    cfg: LaunchConfig, name: str, video_id: str, thumb_hash: str, url_tags: str
-) -> dict:
-    vd: dict = {
-        "video_id": video_id,
-        "image_hash": thumb_hash,
-        "call_to_action": {"type": cfg.cta, "value": {"link": cfg.destination_link}},
-    }
-    if cfg.ad_text.mode == "full":
-        if cfg.ad_text.message:
-            vd["message"] = cfg.ad_text.message
-        if cfg.ad_text.headline:
-            vd["title"] = cfg.ad_text.headline
-        if cfg.ad_text.description:
-            vd["link_description"] = cfg.ad_text.description
-    return {
-        "name": name,
-        "object_story_spec": {"page_id": cfg.account.page_id, "video_data": vd},
-        "url_tags": url_tags,
-        "degrees_of_freedom_spec": {
-            "creative_features_spec": {
-                "text_optimizations": {"enroll_status": cfg.text_optimizations}
-            }
-        },
-    }
-
-
-def ad_body(name: str, adset_id: str, creative_id: str) -> dict:
-    return {
-        "name": name,
-        "adset_id": adset_id,
-        "creative": {"creative_id": creative_id},
-        "status": "PAUSED",
-    }
-
-
-def url_tags_of(cfg: LaunchConfig, code: str) -> str:
-    return (
-        f"sub2={cfg.byer_tag}"
-        f"&sub3={code}"
-        f"&sub4={cfg.account.act_num}"
-        "&sub5={{campaign.name}}"
-        "&sub6={{adset.name}}"
-        "&sub7={{ad.name}}"
-    )
+# Тела объектов (campaign_body / adset_body / image_creative_body / video_creative_body /
+# ad_body / url_tags_of) импортируются из core.campaign_builder — без форка.
+# CLI заливает PAUSED, поэтому _CLI_STATUS зафиксирован.
+_CLI_STATUS = "PAUSED"
 
 
 # ====================== сборка одной кампании ======================
@@ -449,6 +311,7 @@ async def build_campaign(
     cfg: LaunchConfig, client, stub, camp: CampaignCfg, resolver: CodeResolver, go: bool
 ) -> dict:
     act = cfg.account.act
+    cc = cfg.as_campaign_config()  # адаптер для общих body-builder'ов campaign_builder
     creo_root = Path(os.path.expanduser(cfg.creo_root))  # noqa: ASYNC240
     thumbs = creo_root / ".thumbs"
     name = cfg.render(camp.name)
@@ -483,7 +346,7 @@ async def build_campaign(
                 make_batch_entry(
                     method="POST",
                     relative_url=f"{act}/campaigns",
-                    body_params=campaign_body(cfg, name),
+                    body_params=campaign_body(cc, name),
                 )
             ],
             "campaign",
@@ -501,7 +364,9 @@ async def build_campaign(
         make_batch_entry(
             method="POST",
             relative_url=f"{act}/adsets",
-            body_params=adset_body(cfg, cfg.render(a.name), cid),
+            # shared adset_body не несёт campaign_id (его подставляет исполнитель) —
+            # CLI создаёт кампанию первой и инжектит реальный cid.
+            body_params={**adset_body(cc, cfg.render(a.name), _CLI_STATUS), "campaign_id": cid},
         )
         for a in camp.adsets
     ]
@@ -554,7 +419,7 @@ async def build_campaign(
                     method="POST",
                     relative_url=f"{act}/adcreatives",
                     body_params=image_creative_body(
-                        cfg, f"{r['code']}", r["image_hash"], url_tags_of(cfg, r["code"])
+                        cc, f"{r['code']}", r["image_hash"], url_tags_of(cc, r["code"])
                     ),
                 )
                 for r in refs
@@ -565,11 +430,11 @@ async def build_campaign(
                     method="POST",
                     relative_url=f"{act}/adcreatives",
                     body_params=video_creative_body(
-                        cfg,
+                        cc,
                         f"{r['code']}",
                         r["video_id"],
                         r["thumb_hash"],
-                        url_tags_of(cfg, r["code"]),
+                        url_tags_of(cc, r["code"]),
                     ),
                 )
                 for r in refs
@@ -585,7 +450,7 @@ async def build_campaign(
             make_batch_entry(
                 method="POST",
                 relative_url=f"{act}/ads",
-                body_params=ad_body(refs[i]["code"], adset_id, creative_ids[i]),
+                body_params=ad_body(refs[i]["code"], adset_id, creative_ids[i], _CLI_STATUS),
             )
             for i in range(len(refs))
         ]
