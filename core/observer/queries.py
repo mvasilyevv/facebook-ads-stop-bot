@@ -302,6 +302,19 @@ def parse_owner_tags(raw: str | None) -> list[str]:
     return [t.strip() for t in raw.replace(";", ",").split(",") if t.strip()]
 
 
+def multi_cabinet_requires_owner_tag(account_count: int, owner_tag: str | None) -> bool:
+    """Money-гард: при мульти-кабе (>1 кабинета) без owner_tag скан небезопасен.
+
+    В мульти-кабинете глобальный allowlist campaign_ids игнорируется (campaign.id не
+    уникальны меж кабинетами) — скоупинг полностью полагается на owner_tag. Если тег
+    пуст/None, campaign_matches_owner → True для ВСЕХ кампаний, и в shared-кабинете бот
+    оценил бы стоп-правила и создал бы pause_ad по ЧУЖИМ объявлениям (необратимо, чужие
+    деньги). Зеркалит single-cab guard allowlist_blocks_scan: при пустом скоупе скан не
+    гоняем. True → скан этого набора кабинетов надо ПРОПУСТИТЬ ради безопасности.
+    """
+    return account_count > 1 and not parse_owner_tags(owner_tag)
+
+
 def campaign_matches_owner(
     *,
     campaign_name: str,
