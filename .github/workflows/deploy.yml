@@ -339,6 +339,9 @@ jobs:
           GHCR_USER: ${{ github.actor }}
           IMAGE_BASE: ${{ env.IMAGE_BASE }}
           GIT_SHA: ${{ github.sha }}
+          # Источник правды для секретов: base64 всего .env в GitHub Secret PROD_ENV_B64.
+          # Если секрет не задан — пусто, материализация выключена (используется .env на диске).
+          PROD_ENV_B64: ${{ secrets.PROD_ENV_B64 }}
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
@@ -346,7 +349,7 @@ jobs:
           # Таймаут на всю операцию: pull тяжёлых образов может занять время
           command_timeout: 15m
           # appleboy/ssh-action не пробрасывает env автоматически — перечисляем явно
-          envs: GHCR_TOKEN,GHCR_USER,IMAGE_BASE,GIT_SHA
+          envs: GHCR_TOKEN,GHCR_USER,IMAGE_BASE,GIT_SHA,PROD_ENV_B64
           script: |
             set -euo pipefail
             cd ${{ secrets.DEPLOY_PROJECT_DIR }}
@@ -362,6 +365,26 @@ jobs:
             # (миграции/compose/entrypoint) разойдётся с кодом внутри образов.
             git fetch --depth 1 origin "${GIT_SHA}"
             git reset --hard "${GIT_SHA}"
+
+            echo "=== [0.5/5] Материализация .env из GitHub Secrets (источник правды) ==="
+            # PROD_ENV_B64 = base64 всего .env в GitHub Secrets (single-line — без проблем
+            # с многострочностью в ssh-action). Fail-safe: пусто/битый секрет → оставляем
+            # рабочий .env на диске (прод не падает). Перед записью — бэкап предыдущего.
+            if [ -n "${PROD_ENV_B64:-}" ]; then
+              mkdir -p /var/backups/fb_agent
+              TMP_ENV=$(mktemp)
+              if printf '%s' "$PROD_ENV_B64" | base64 -d > "$TMP_ENV" 2>/dev/null \
+                 && grep -q '^ENCRYPTION_KEY=' "$TMP_ENV"; then
+                cp -a .env /var/backups/fb_agent/.env.prev 2>/dev/null || true
+                install -m 600 "$TMP_ENV" .env
+                echo ".env материализован из GitHub Secrets ($(wc -l < .env) строк)"
+              else
+                echo "::error::PROD_ENV_B64 битый или без ENCRYPTION_KEY — оставляю текущий .env"
+              fi
+              rm -f "$TMP_ENV"
+            else
+              echo "PROD_ENV_B64 не задан — материализация выключена, использую .env на диске"
+            fi
 
             echo "=== [1/5] Авторизация в GHCR на сервере (GITHUB_TOKEN ранна) ==="
             echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
