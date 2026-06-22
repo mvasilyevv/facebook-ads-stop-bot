@@ -261,8 +261,17 @@ const CampaignAllowlistSection: FC = () => {
 
   const handleRefresh = async () => {
     try {
-      await refreshMut.mutateAsync();
-      toast.success("Список кампаний обновлён");
+      const data = await refreshMut.mutateAsync();
+      // Честное сообщение: показываем число. 0 — не «успех», а подсказка почему пусто
+      // (нет кампаний с тегом в кабинете ИЛИ Vision-канал недоступен).
+      if (data.length === 0) {
+        toast.warning(
+          "Обновлено: 0 кампаний",
+          "В кабинетах офферов нет кампаний с этим Owner Tag, либо Vision-канал недоступен.",
+        );
+      } else {
+        toast.success(`Обновлено: ${data.length} кампаний`);
+      }
     } catch (e) {
       toast.error("Не удалось обновить список", e instanceof Error ? e.message : String(e));
     }

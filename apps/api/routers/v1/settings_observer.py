@@ -194,6 +194,8 @@ async def list_observer_campaigns(engine: DepEngine) -> list[CampaignOption]:
         if not campaign_matches_owner(campaign_name=name or "", ad_name="", owner_tag=owner_tag):
             continue
         out.append(CampaignOption(id=str(cid), name=name or "", selected=str(cid) in allowlist))
+    # Сортировка по имени убыванием: в названии кампании есть дата → свежие выше.
+    out.sort(key=lambda o: o.name, reverse=True)
     return out
 
 
@@ -210,12 +212,14 @@ async def refresh_observer_campaigns(
     """Live-обновление списка кампаний через browser-agent (Graph API, МИМО allowlist).
 
     Решает «замкнутый круг»: обычный скан с allowlist не подхватывает новые кампании,
-    поэтому их нельзя выбрать. Здесь резолвим ВСЕ кампании владельца по owner_tag живьём,
+    поэтому их нельзя выбрать. Здесь резолвим кампании владельца по owner_tag живьём,
     апсертим в fb_campaigns (чтобы GET /campaigns их видел) и возвращаем обновлённый список.
-    503 при недоступности browser-agent.
+    503 при недоступности browser-agent. Результат отсортирован по имени убыванием
+    (в названии есть дата → свежие выше).
 
-    ad_account_id (мульти-кабинет): если задан — browser-agent откроет вкладку именно
-    этого кабинета (ensureAdsManagerPage({actId})); иначе резолв из текущей primary-вкладки.
+    Кабинеты: если задан явный ad_account_id — только он; иначе ВСЕ кабинеты активных
+    офферов (offers.ad_account_ids, resolve_scan_account_ids) — обходим каждый и сливаем
+    кампании (dedup по fb_campaign_id). Нет активных офферов → legacy primary-вкладка.
     """
     import grpc
 
@@ -241,6 +245,16 @@ async def refresh_observer_campaigns(
             if vc.profile_id:
                 profile_id = vc.profile_id
 
+    # Кабинеты для обхода: явный ad_account_id (один) ИЛИ ВСЕ кабинеты активных офферов
+    # (resolve_scan_account_ids) — подтягиваем кампании из всех кабинетов, указанных в
+    # офферах. Нет активных офферов → legacy: текущая primary-вкладка ("").
+    from core.observer.accounts import resolve_scan_account_ids
+
+    if ad_account_id:
+        targets = [ad_account_id]
+    else:
+        targets = await resolve_scan_account_ids(engine) or [""]
+
     client = BrowserAgentClient(
         BrowserAgentConfig(
             vision_x_token=x_token,
@@ -248,13 +262,16 @@ async def refresh_observer_campaigns(
             vision_profile_id=profile_id,
         )
     )
+    merged: dict[str, dict[str, str]] = {}
     try:
         await client.start()
         # НЕ создаём новую сессию: browser-agent сам возьмёт активную ads-сессию observer'а
-        # (getPreferredSession) с кешированным graph-токеном — иначе токен не извлекался.
-        campaigns = await client.list_campaigns(
-            owner_tag=owner_tag or "", ad_account_id=ad_account_id or ""
-        )
+        # (getPreferredSession) с кешированным graph-токеном. По каждому кабинету откроет его
+        # вкладку (ensureAdsManagerPage(actId)) и резолвит кампании по owner_tag.
+        for acc in targets:
+            cs = await client.list_campaigns(owner_tag=owner_tag or "", ad_account_id=acc or "")
+            for c in cs:
+                merged[c["id"]] = c  # dedup по fb_campaign_id (между кабинетами не пересекаются)
     except grpc.RpcError as exc:
         raise HTTPException(status_code=503, detail=f"browser-agent недоступен: {exc}") from exc
     except Exception as exc:
@@ -264,6 +281,8 @@ async def refresh_observer_campaigns(
             await client.close()
         except Exception:  # noqa: BLE001
             pass
+
+    campaigns = list(merged.values())
 
     # Апсерт в каталог по fb_campaign_id (идентичность кампании, 0020/HIGH-3) —
     # чтобы GET /campaigns видел новые. У campaigns-edge ID есть всегда.
@@ -292,6 +311,8 @@ async def refresh_observer_campaigns(
         if not campaign_matches_owner(campaign_name=c["name"], ad_name="", owner_tag=owner_tag):
             continue
         result.append(CampaignOption(id=c["id"], name=c["name"], selected=c["id"] in allowlist))
+    # Сортировка по имени убыванием: в названии кампании есть дата → свежие выше.
+    result.sort(key=lambda o: o.name, reverse=True)
     return result
 
 
