@@ -3,7 +3,7 @@ import * as protoLoader from '@grpc/proto-loader';
 import * as path from 'path';
 import * as fs from 'fs';
 import type { ServiceDefinition } from '@grpc/grpc-js';
-import { SessionManager, findPreferredPrimaryPage } from './session-manager.js';
+import { SessionManager, closeForeignCabinetTabs, findPreferredPrimaryPage } from './session-manager.js';
 import { hardReloadPage } from './hard-reload.js';
 import type { BrowserSession } from './types.js';
 import { createCreatorServiceHandlers } from './creator-service.js';
@@ -192,6 +192,19 @@ async function openCabinetTabs(call: any, callback: any) {
           url: '',
           error: e?.message || String(e),
         });
+      }
+    }
+    // Гигиена вкладок: после открытия нужных кабинетов закрываем кабинетные вкладки вне
+    // набора офферов (напр. дефолтный кабинет профиля) — чтобы не копить лишние. Только при
+    // непустом наборе и best-effort (ошибка cleanup не валит результат открытия).
+    if (actIds.length > 0 && session.browser) {
+      try {
+        const closed = await closeForeignCabinetTabs(session.browser, actIds);
+        if (closed > 0) {
+          console.warn(`[openCabinetTabs] закрыто кабинетных вкладок вне офферов: ${closed}`);
+        }
+      } catch (e: any) {
+        console.warn(`[openCabinetTabs] cleanup вкладок не удался: ${e?.message || e}`);
       }
     }
     callback(null, { results });

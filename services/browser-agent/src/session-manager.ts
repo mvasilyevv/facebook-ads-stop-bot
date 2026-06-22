@@ -126,6 +126,53 @@ export function findReusableNonCabinetPage(browser: Browser | null): Page | null
   return null;
 }
 
+/** Закрывает кабинетные вкладки (?act=), которых НЕТ в наборе кабинетов офферов (keepActIds).
+ * Чтобы не копить лишние вкладки (напр. дефолтный кабинет профиля, не привязанный к офферу).
+ * Обычные/пустые вкладки и вкладки нужных кабинетов НЕ трогает. Страховка: не закрывает
+ * последнюю открытую вкладку (иначе браузер мог бы закрыться). Best-effort: ошибка close одной
+ * вкладки не валит остальные. Возвращает число закрытых. */
+export async function closeForeignCabinetTabs(
+  browser: Browser | null,
+  keepActIds: string[],
+): Promise<number> {
+  if (!browser) {
+    return 0;
+  }
+  const keep = new Set(keepActIds.map((a) => String(a)));
+  const openPages = (): Page[] => {
+    const pages: Page[] = [];
+    for (const context of browser.contexts()) {
+      for (const page of context.pages()) {
+        if (!isPageClosed(page)) {
+          pages.push(page);
+        }
+      }
+    }
+    return pages;
+  };
+  let closed = 0;
+  for (const page of openPages()) {
+    if (isPageClosed(page)) {
+      continue;
+    }
+    const act = extractAdAccountId(page.url());
+    if (!act || keep.has(act)) {
+      continue; // не кабинетная вкладка ИЛИ кабинет из офферов — оставляем
+    }
+    if (openPages().length <= 1) {
+      break; // не оставляем браузер без единой вкладки
+    }
+    try {
+      console.warn(`[session-manager] закрываю кабинетную вкладку вне офферов: act=${act}`);
+      await page.close();
+      closed += 1;
+    } catch {
+      // best-effort: не смогли закрыть — пропускаем
+    }
+  }
+  return closed;
+}
+
 /** Запоминает URL живой вкладки Ads Manager на сессии — чтобы переоткрыть её при self-heal. */
 export function rememberAdsManagerUrl(session: BrowserSession, page: Page | null | undefined): void {
   try {

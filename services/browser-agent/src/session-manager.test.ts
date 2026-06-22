@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
 import {
   adsManagerUrlForAct,
+  closeForeignCabinetTabs,
   findAdsManagerPageByAct,
   findPreferredPrimaryPage,
   findReusableNonCabinetPage,
@@ -820,4 +821,67 @@ test('ensureAdsManagerPage (actId): своя вкладка уже открыт�
 
   const page = await manager.ensureAdsManagerPage(session as any, { actId: '111' });
   assert.equal(page, ownCab as any);
+});
+
+// closeForeignCabinetTabs: закрывает кабинет вне набора офферов, нужные кабинеты и обычные
+// вкладки не трогает.
+test('closeForeignCabinetTabs: закрывает чужой кабинет, нужные и обычные не трогает', async () => {
+  let keepClosed = 0;
+  let foreignClosed = 0;
+  let fbClosed = 0;
+  const cabKeep = {
+    isClosed: () => false,
+    url: () => 'https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=111',
+    close: async () => {
+      keepClosed += 1;
+    },
+  };
+  const cabForeign = {
+    isClosed: () => false,
+    url: () => 'https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=999',
+    close: async () => {
+      foreignClosed += 1;
+    },
+  };
+  const fb = {
+    isClosed: () => false,
+    url: () => 'https://www.facebook.com/',
+    close: async () => {
+      fbClosed += 1;
+    },
+  };
+  const browser = { contexts: () => [{ pages: () => [cabKeep, cabForeign, fb] }] };
+
+  const closed = await closeForeignCabinetTabs(browser as any, ['111']);
+
+  assert.equal(closed, 1);
+  assert.equal(foreignClosed, 1); // кабинет вне офферов закрыт
+  assert.equal(keepClosed, 0); // кабинет из офферов не тронут
+  assert.equal(fbClosed, 0); // обычная вкладка не тронута
+});
+
+// closeForeignCabinetTabs: страховка — не закрывает последнюю оставшуюся вкладку.
+test('closeForeignCabinetTabs: не закрывает последнюю вкладку', async () => {
+  let closedCalls = 0;
+  const mk = (url: string) => {
+    const p: any = {
+      _closed: false,
+      isClosed: () => p._closed,
+      url: () => url,
+      close: async () => {
+        p._closed = true;
+        closedCalls += 1;
+      },
+    };
+    return p;
+  };
+  const f1 = mk('https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=901');
+  const f2 = mk('https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=902');
+  const browser = { contexts: () => [{ pages: () => [f1, f2] }] };
+
+  // keep пуст → обе вкладки «чужие», но вторую не закрываем (осталась бы 0 вкладок).
+  const closed = await closeForeignCabinetTabs(browser as any, []);
+
+  assert.equal(closed, 1);
+  assert.equal(closedCalls, 1);
 });
