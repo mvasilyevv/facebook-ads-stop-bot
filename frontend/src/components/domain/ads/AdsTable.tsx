@@ -21,9 +21,8 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { Check } from "lucide-react";
 
 import {
-  ALERT_STATE_LABELS,
   alertStateToBadgeVariant,
-  normalizeAlertState,
+  displayAdState,
 } from "@fb/shared";
 import type { AdSnapshot } from "@fb/shared";
 
@@ -196,7 +195,9 @@ interface AdRowProps {
 
 function AdRow({ ad, selected, cursor, top, height, onToggleSelect, onOpen }: AdRowProps) {
   const m = readAdMetrics(ad);
-  const state = normalizeAlertState(ad.alert_state);
+  // STATE учитывает И FSM, И доставку в FB: «норма» у выключенного объявления (delivery!=ACTIVE)
+  // показывается как «Выключено», а не ложная «Норма» (см. displayAdState).
+  const display = displayAdState(ad.alert_state, ad.delivery_status);
   const firstRule = (ad.stop_rule_codes?.[0] ?? ad.warning_rule_codes?.[0]) || null;
   const geo = deriveGeo(ad);
   const parent = parentTrail(ad);
@@ -245,7 +246,7 @@ function AdRow({ ad, selected, cursor, top, height, onToggleSelect, onOpen }: Ad
         <CreativeThumb
           thumbUrl={(ad as AdSnapshot & { creative_thumb_url?: string | null }).creative_thumb_url ?? null}
           geo={geo}
-          dimmed={state === "disabled"}
+          dimmed={display.state === "disabled"}
         />
         <div className="min-w-0 flex flex-col">
           <div className="flex items-center gap-2 min-w-0">
@@ -299,8 +300,8 @@ function AdRow({ ad, selected, cursor, top, height, onToggleSelect, onOpen }: Ad
 
       {/* STATE badge */}
       <span className="self-center pl-0.5">
-        <Badge variant={alertStateToBadgeVariant(state)} size="sm">
-          {ALERT_STATE_LABELS[state] ?? state}
+        <Badge variant={alertStateToBadgeVariant(display.state)} size="sm">
+          {display.label}
         </Badge>
       </span>
 

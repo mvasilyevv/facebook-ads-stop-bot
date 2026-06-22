@@ -22,9 +22,8 @@ import { useMemo, useState } from "react";
 import { Ban } from "lucide-react";
 
 import {
-  ALERT_STATE_LABELS,
   alertStateToBadgeVariant,
-  normalizeAlertState,
+  displayAdState,
   formatRelativeTime,
   type AdSnapshot,
 } from "@fb/shared";
@@ -164,7 +163,9 @@ export function AdDrawer({ ad, onClose, isLoading = false, fbAdId }: AdDrawerPro
   }
 
   // ── Полные данные ──────────────────────────────────────────────────────────
-  const state = normalizeAlertState(ad.alert_state);
+  // STATE учитывает И FSM, И доставку в FB (см. displayAdState): выключенное объявление
+  // с alert_state=normal показывается как «Выключено», а не ложная «Норма».
+  const display = displayAdState(ad.alert_state, ad.delivery_status);
   const geo = deriveGeo(ad);
   const m = readAdMetrics(ad);
   const rules = [...(ad.stop_rule_codes ?? []), ...(ad.warning_rule_codes ?? [])];
@@ -212,8 +213,8 @@ export function AdDrawer({ ad, onClose, isLoading = false, fbAdId }: AdDrawerPro
         title={<span className="truncate">{ad.ad_name}</span>}
         description={
           <span className="flex items-center gap-2 flex-wrap">
-            <Badge variant={alertStateToBadgeVariant(state)} size="sm">
-              {ALERT_STATE_LABELS[state] ?? state}
+            <Badge variant={alertStateToBadgeVariant(display.state)} size="sm">
+              {display.label}
             </Badge>
             {ad.offer_code ? (
               <span className="inline-block px-1.5 py-px bg-bg-3 border border-[var(--hairline)] rounded-[var(--radius-1)] text-bg-10 font-display text-[10px] tracking-[0.04em] uppercase">

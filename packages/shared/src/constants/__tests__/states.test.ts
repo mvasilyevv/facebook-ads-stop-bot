@@ -4,11 +4,41 @@ import {
   ALERT_STATE_LABELS,
   TASK_STATUSES,
   TASK_STATUS_LABELS,
+  displayAdState,
   normalizeAlertState,
   normalizeTaskStatus,
   type AlertState,
   type TaskStatus,
 } from "../states";
+
+describe("displayAdState (FSM + delivery_status)", () => {
+  // Норма + объявление НЕ крутится в FB (OFF) → «Выключено», а не ложная «Норма».
+  it("normal + delivery OFF → Выключено (state disabled)", () => {
+    expect(displayAdState("normal", "OFF")).toEqual({ label: "Выключено", state: "disabled" });
+  });
+  // Норма + объявление активно → обычная Норма.
+  it("normal + delivery ACTIVE → Норма", () => {
+    expect(displayAdState("normal", "ACTIVE")).toEqual({ label: "Норма", state: "normal" });
+  });
+  // delivery неизвестен (null) → не переопределяем, оставляем FSM-лейбл.
+  it("normal + delivery null → Норма (без переопределения)", () => {
+    expect(displayAdState("normal", null)).toEqual({ label: "Норма", state: "normal" });
+  });
+  // Инцидентное FSM-состояние — вердикт бота, не переопределяется доставкой.
+  it("stop_sent + delivery OFF → Стоп (FSM приоритетнее)", () => {
+    expect(displayAdState("stop_sent", "OFF")).toEqual({ label: "Стоп", state: "stop_sent" });
+  });
+  it("warning_sent + delivery ACTIVE → Предупреждение", () => {
+    expect(displayAdState("warning_sent", "ACTIVE")).toEqual({
+      label: "Предупреждение",
+      state: "warning_sent",
+    });
+  });
+  // PAUSED тоже считается «не крутится» при норме.
+  it("normal + delivery PAUSED → Выключено", () => {
+    expect(displayAdState("normal", "PAUSED")).toEqual({ label: "Выключено", state: "disabled" });
+  });
+});
 
 describe("normalizeAlertState", () => {
   // Канонические lowercase значения проходят без изменений

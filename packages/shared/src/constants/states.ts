@@ -63,6 +63,27 @@ export function alertStateCssVar(raw: string | null | undefined): string {
   return `var(${ALERT_STATE_FSM_VAR[normalizeAlertState(raw)]})`;
 }
 
+/**
+ * Итоговый статус объявления для UI: учитывает И FSM (alert_state), И доставку в FB
+ * (delivery_status из Ads Manager).
+ *
+ * Инцидентные FSM-состояния (warning_sent/stop_sent/claimed/disabled) — вердикт бота,
+ * показываем как есть. НО «normal» у объявления, которое НЕ крутится в FB (delivery_status
+ * != ACTIVE: OFF/PAUSED/…) — это ложная «Норма» (объявление выключено, монитор просто не бил
+ * тревогу). Показываем «Выключено» (цвет disabled), чтобы не путать с активной нормой.
+ * delivery_status неизвестен (null/пусто) → не переопределяем, оставляем FSM-лейбл.
+ */
+export function displayAdState(
+  alertStateRaw: string | null | undefined,
+  deliveryStatus: string | null | undefined,
+): { label: string; state: AlertState } {
+  const state = normalizeAlertState(alertStateRaw);
+  if (state === "normal" && deliveryStatus && deliveryStatus.toUpperCase() !== "ACTIVE") {
+    return { label: "Выключено", state: "disabled" };
+  }
+  return { label: ALERT_STATE_LABELS[state] ?? state, state };
+}
+
 // ─── Alert Stage ─────────────────────────────────────────────────────────────
 
 export const ALERT_STAGES = ["warning", "stop"] as const;
