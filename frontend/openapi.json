@@ -552,6 +552,536 @@
         }
       }
     },
+    "/api/tools/campaigns/presets": {
+      "get": {
+        "tags": [
+          "campaigns"
+        ],
+        "summary": "List Presets",
+        "description": "Список всех пресетов (новые сверху).",
+        "operationId": "list_presets_api_tools_campaigns_presets_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PresetOut"
+                  },
+                  "type": "array",
+                  "title": "Response List Presets Api Tools Campaigns Presets Get"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "campaigns"
+        ],
+        "summary": "Create Preset",
+        "description": "Создать пресет. 409 при дубле имени (UNIQUE name).",
+        "operationId": "create_preset_api_tools_campaigns_presets_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PresetIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PresetOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/tools/campaigns/presets/{preset_id}": {
+      "put": {
+        "tags": [
+          "campaigns"
+        ],
+        "summary": "Update Preset",
+        "description": "Полное обновление пресета. 404 если нет, 409 при дубле имени.",
+        "operationId": "update_preset_api_tools_campaigns_presets__preset_id__put",
+        "parameters": [
+          {
+            "name": "preset_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Preset Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PresetIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PresetOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "campaigns"
+        ],
+        "summary": "Delete Preset",
+        "description": "Удалить пресет. FK run→preset с ON DELETE SET NULL (история запусков цела).",
+        "operationId": "delete_preset_api_tools_campaigns_presets__preset_id__delete",
+        "parameters": [
+          {
+            "name": "preset_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Preset Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/tools/campaigns/upload": {
+      "post": {
+        "tags": [
+          "campaigns"
+        ],
+        "summary": "Upload Concepts",
+        "description": "Загрузка концептов креативов в per-run временную папку на сервере.\n\nВозвращает upload_id (входит в config.creo_root для воркера) + список refs\nс размерами для превью. Тяжёлая уникализация — в воркере, не здесь.",
+        "operationId": "upload_concepts_api_tools_campaigns_upload_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_concepts_api_tools_campaigns_upload_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadConceptsOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/tools/campaigns/validate": {
+      "post": {
+        "tags": [
+          "campaigns"
+        ],
+        "summary": "Validate Config",
+        "description": "Dry-run: собирает план (число объектов + нейминг) без создания в Meta.",
+        "operationId": "validate_config_api_tools_campaigns_validate_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ValidateIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidatePlanOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/tools/campaigns/launch": {
+      "post": {
+        "tags": [
+          "campaigns"
+        ],
+        "summary": "Launch Campaign",
+        "description": "Создать campaign_run(queued) + task_queue(campaign_create) в одной транзакции.\n\nMoney-safety: idempotency_key (по конфигу) общий для run и задачи. Повторный\nlaunch того же конфига → находим существующий run, ничего не дублируем (200-shape).\nВоркер по run_id грузит CampaignRun и исполняет залив.",
+        "operationId": "launch_campaign_api_tools_campaigns_launch_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LaunchIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LaunchOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/tools/campaigns/runs": {
+      "get": {
+        "tags": [
+          "campaigns"
+        ],
+        "summary": "List Runs",
+        "description": "Список запусков (новые сверху). offer_code извлекается из снимка config.",
+        "operationId": "list_runs_api_tools_campaigns_runs_get",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Фильтр по статусу run",
+              "title": "Status"
+            },
+            "description": "Фильтр по статусу run"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RunSummaryOut"
+                  },
+                  "title": "Response List Runs Api Tools Campaigns Runs Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/tools/campaigns/runs/{run_id}": {
+      "get": {
+        "tags": [
+          "campaigns"
+        ],
+        "summary": "Get Run",
+        "description": "Детали запуска: конфиг-снимок, прогресс, созданные Meta-ID, ошибка.",
+        "operationId": "get_run_api_tools_campaigns_runs__run_id__get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunDetailOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/tools/campaigns/runs/{run_id}/clone": {
+      "post": {
+        "tags": [
+          "campaigns"
+        ],
+        "summary": "Clone Run",
+        "description": "Клон запуска в новый черновик-run (status=queued БЕЗ задачи).\n\nКлон не заливает сразу: создаёт queued-run с новым idempotency_key\n(config + другой start_date/повторный залив должны иметь свой ключ).\nПользователь правит и жмёт launch отдельно. Здесь — только заготовка config.",
+        "operationId": "clone_run_api_tools_campaigns_runs__run_id__clone_post",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LaunchOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/tools/campaigns/runs/{run_id}/cancel": {
+      "post": {
+        "tags": [
+          "campaigns"
+        ],
+        "summary": "Cancel Run",
+        "description": "Отмена запуска в очереди (status=cancelled + отмена задачи).\n\nMoney-гард: отмена только ДО creating (необратимое создание Meta уже идёт).\n409 если run уже creating/succeeded/failed/cancelled.",
+        "operationId": "cancel_run_api_tools_campaigns_runs__run_id__cancel_post",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunSummaryOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/tools/campaigns/runs/{run_id}/cleanup": {
+      "post": {
+        "tags": [
+          "campaigns"
+        ],
+        "summary": "Cleanup Run",
+        "description": "Пометить созданные Meta-объекты на снос (partial-fail recovery).\n\nВозвращает created_meta_ids run для ручного/задачного сноса. Реальный снос —\nотдельной meta-мутацией (вне scope этого роутера). Money-safe: только читает\nсписок id, ничего сам в Meta не трогает.",
+        "operationId": "cleanup_run_api_tools_campaigns_runs__run_id__cleanup_post",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CleanupOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/dashboard/ads": {
       "get": {
         "tags": [
@@ -3105,7 +3635,7 @@
           "settings"
         ],
         "summary": "Patch Observer Scanning",
-        "description": "Переключает только is_scanning_enabled, не трогая остальные поля.",
+        "description": "Переключает только is_scanning_enabled, не трогая остальные поля.\n\nГейт включения: не даём включить скан, если мониторить нечего (пустой allowlist при\nодном кабинете / нет активных офферов). Иначе скан крутился бы вхолостую раз в интервал,\nничего не отслеживая. Возвращаем 409 с понятной причиной — фронт показывает её на клике\n«Включить», а заполнять кампании пользователь идёт на страницу «Кампании».",
         "operationId": "patch_observer_scanning_api_settings_observer_scanning_patch",
         "requestBody": {
           "content": {
@@ -3255,7 +3785,7 @@
           "settings"
         ],
         "summary": "Refresh Observer Campaigns",
-        "description": "Live-обновление списка кампаний через browser-agent (Graph API, МИМО allowlist).\n\nРешает «замкнутый круг»: обычный скан с allowlist не подхватывает новые кампании,\nпоэтому их нельзя выбрать. Здесь резолвим ВСЕ кампании владельца по owner_tag живьём,\nапсертим в fb_campaigns (чтобы GET /campaigns их видел) и возвращаем обновлённый список.\n503 при недоступности browser-agent.\n\nad_account_id (мульти-кабинет): если задан — browser-agent откроет вкладку именно\nэтого кабинета (ensureAdsManagerPage({actId})); иначе резолв из текущей primary-вкладки.",
+        "description": "Live-обновление списка кампаний через browser-agent (Graph API, МИМО allowlist).\n\nРешает «замкнутый круг»: обычный скан с allowlist не подхватывает новые кампании,\nпоэтому их нельзя выбрать. Здесь резолвим кампании владельца по owner_tag живьём,\nапсертим в fb_campaigns (чтобы GET /campaigns их видел) и возвращаем обновлённый список.\n503 при недоступности browser-agent. Результат отсортирован по имени убыванием\n(в названии есть дата → свежие выше).\n\nКабинеты: если задан явный ad_account_id — только он; иначе ВСЕ кабинеты активных\nофферов (offers.ad_account_ids, resolve_scan_account_ids) — обходим каждый и сливаем\nкампании (dedup по fb_campaign_id). Нет активных офферов → legacy primary-вкладка.",
         "operationId": "refresh_observer_campaigns_api_settings_observer_campaigns_refresh_post",
         "parameters": [
           {
@@ -4209,6 +4739,35 @@
         "title": "AIAnalyzeResponse",
         "description": "Ответ AI-анализа."
       },
+      "Account": {
+        "properties": {
+          "act_id": {
+            "type": "string",
+            "title": "Act Id"
+          },
+          "page_id": {
+            "type": "string",
+            "title": "Page Id"
+          },
+          "pixel_id": {
+            "type": "string",
+            "title": "Pixel Id"
+          },
+          "tz_offset": {
+            "type": "string",
+            "title": "Tz Offset",
+            "default": "-07:00"
+          }
+        },
+        "type": "object",
+        "required": [
+          "act_id",
+          "page_id",
+          "pixel_id"
+        ],
+        "title": "Account",
+        "description": "Идентичность кабинета (preset)."
+      },
       "AdSnapshotOut": {
         "properties": {
           "fb_ad_id": {
@@ -4476,6 +5035,33 @@
         "title": "AdSnapshotOut",
         "description": "Композитный snapshot одного ad'а для /dashboard/ads и /dashboard/incidents."
       },
+      "AdText": {
+        "properties": {
+          "mode": {
+            "type": "string",
+            "title": "Mode",
+            "default": "none"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message",
+            "default": ""
+          },
+          "headline": {
+            "type": "string",
+            "title": "Headline",
+            "default": ""
+          },
+          "description": {
+            "type": "string",
+            "title": "Description",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "title": "AdText",
+        "description": "Текст объявления (run). mode=none — объявления без текста."
+      },
       "AdTimelineResponse": {
         "properties": {
           "fb_ad_id": {
@@ -4569,6 +5155,54 @@
         ],
         "title": "AdTimelineResponse",
         "description": "Ответ GET /ads/{fb_ad_id}/timeline."
+      },
+      "AdsetConfig": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "dir": {
+            "type": "string",
+            "title": "Dir"
+          },
+          "glob": {
+            "type": "string",
+            "title": "Glob"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "dir",
+          "glob"
+        ],
+        "title": "AdsetConfig",
+        "description": "Один adset в структуре кампании."
+      },
+      "AdsetPlanOut": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "ad_count": {
+            "type": "integer",
+            "title": "Ad Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "status",
+          "ad_count"
+        ],
+        "title": "AdsetPlanOut",
+        "description": "Сводка по одному adset в плане."
       },
       "AdsetProPostbackBody": {
         "properties": {
@@ -4776,6 +5410,23 @@
         "title": "AlertRow",
         "description": "Одна строка alert_events (partitioned by created_at)."
       },
+      "Attribution": {
+        "properties": {
+          "click_through_days": {
+            "type": "integer",
+            "title": "Click Through Days",
+            "default": 1
+          },
+          "view_through_days": {
+            "type": "integer",
+            "title": "View Through Days",
+            "default": 1
+          }
+        },
+        "type": "object",
+        "title": "Attribution",
+        "description": "Окно атрибуции конверсий (preset)."
+      },
       "AutoEnableDisabledIn": {
         "properties": {
           "reason": {
@@ -4884,6 +5535,67 @@
           "files"
         ],
         "title": "Body_creative_uniquify_api_tools_creative_uniquify_post"
+      },
+      "Body_upload_concepts_api_tools_campaigns_upload_post": {
+        "properties": {
+          "files": {
+            "items": {
+              "type": "string",
+              "contentMediaType": "application/octet-stream"
+            },
+            "type": "array",
+            "title": "Files"
+          }
+        },
+        "type": "object",
+        "required": [
+          "files"
+        ],
+        "title": "Body_upload_concepts_api_tools_campaigns_upload_post"
+      },
+      "Budget": {
+        "properties": {
+          "level": {
+            "type": "string",
+            "title": "Level",
+            "default": "campaign"
+          },
+          "daily_cents": {
+            "type": "integer",
+            "title": "Daily Cents",
+            "default": 300
+          },
+          "lifetime_cents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lifetime Cents"
+          },
+          "bid_strategy": {
+            "type": "string",
+            "title": "Bid Strategy",
+            "default": "LOWEST_COST_WITHOUT_CAP"
+          },
+          "bid_amount_cents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bid Amount Cents"
+          }
+        },
+        "type": "object",
+        "title": "Budget",
+        "description": "Бюджет и стратегия ставок с hard-cap валидацией (money-safe)."
       },
       "BulkDeleteAdsRequest": {
         "properties": {
@@ -5263,6 +5975,155 @@
         "title": "CampaignAllowlistRequest",
         "description": "Тело PATCH /settings/observer/campaigns — allowlist кампаний для am-режима (#3)."
       },
+      "CampaignBlock": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "adsets": {
+            "items": {
+              "$ref": "#/components/schemas/AdsetConfig"
+            },
+            "type": "array",
+            "title": "Adsets"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "name",
+          "kind",
+          "adsets"
+        ],
+        "title": "CampaignBlock",
+        "description": "Одна кампания: тип медиа + список adset'ов."
+      },
+      "CampaignConfig": {
+        "properties": {
+          "account": {
+            "$ref": "#/components/schemas/Account"
+          },
+          "offer_code": {
+            "type": "string",
+            "title": "Offer Code"
+          },
+          "byer_tag": {
+            "type": "string",
+            "title": "Byer Tag",
+            "default": "MV"
+          },
+          "objective": {
+            "type": "string",
+            "title": "Objective",
+            "default": "OUTCOME_SALES"
+          },
+          "optimization_goal": {
+            "type": "string",
+            "title": "Optimization Goal",
+            "default": "OFFSITE_CONVERSIONS"
+          },
+          "custom_event_type": {
+            "type": "string",
+            "title": "Custom Event Type",
+            "default": "PURCHASE"
+          },
+          "special_ad_categories": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Special Ad Categories"
+          },
+          "destination_link": {
+            "type": "string",
+            "title": "Destination Link"
+          },
+          "cta": {
+            "type": "string",
+            "title": "Cta",
+            "default": "PLAY_GAME"
+          },
+          "text_optimizations": {
+            "type": "string",
+            "title": "Text Optimizations",
+            "default": "OPT_OUT"
+          },
+          "start_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start Date"
+          },
+          "creo_root": {
+            "type": "string",
+            "title": "Creo Root",
+            "default": ""
+          },
+          "budget": {
+            "$ref": "#/components/schemas/Budget"
+          },
+          "targeting": {
+            "$ref": "#/components/schemas/Targeting"
+          },
+          "attribution": {
+            "$ref": "#/components/schemas/Attribution"
+          },
+          "ad_text": {
+            "$ref": "#/components/schemas/AdText"
+          },
+          "campaigns": {
+            "items": {
+              "$ref": "#/components/schemas/CampaignBlock"
+            },
+            "type": "array",
+            "title": "Campaigns"
+          },
+          "copies_per_concept": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Copies Per Concept"
+          },
+          "creative_prefix": {
+            "type": "string",
+            "title": "Creative Prefix",
+            "default": ""
+          },
+          "launch_state": {
+            "$ref": "#/components/schemas/LaunchState",
+            "default": "campaign_paused"
+          }
+        },
+        "type": "object",
+        "required": [
+          "account",
+          "offer_code",
+          "destination_link",
+          "targeting",
+          "campaigns"
+        ],
+        "title": "CampaignConfig",
+        "description": "Полный конфиг создания кампании (preset + run в одной модели)."
+      },
       "CampaignFolderItem": {
         "properties": {
           "name": {
@@ -5421,6 +6282,43 @@
         ],
         "title": "CampaignOption",
         "description": "Кампания для выбора в allowlist сканирования (#3)."
+      },
+      "CampaignPlanOut": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "adsets": {
+            "items": {
+              "$ref": "#/components/schemas/AdsetPlanOut"
+            },
+            "type": "array",
+            "title": "Adsets"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "name",
+          "kind",
+          "status",
+          "adsets"
+        ],
+        "title": "CampaignPlanOut",
+        "description": "Сводка по одной кампании в плане."
       },
       "CampaignPlanRequest": {
         "properties": {
@@ -5656,6 +6554,31 @@
         ],
         "title": "ChartBucketOut",
         "description": "Один бакет /api/dashboard/chart-data (по часам или дням).\n\nactive_ads — COUNT DISTINCT ad_id в бакете."
+      },
+      "CleanupOut": {
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "title": "Run Id"
+          },
+          "meta_ids": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Meta Ids"
+          },
+          "detail": {
+            "type": "string",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "run_id",
+          "meta_ids",
+          "detail"
+        ],
+        "title": "CleanupOut",
+        "description": "Результат пометки run на снос Meta-объектов."
       },
       "CreativeUniquifyResponse": {
         "properties": {
@@ -7217,6 +8140,87 @@
         "title": "IncidentOut",
         "description": "AdSnapshotOut + incident-специфичные поля для /dashboard/incidents."
       },
+      "LaunchIn": {
+        "properties": {
+          "config": {
+            "$ref": "#/components/schemas/CampaignConfig"
+          },
+          "preset_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preset Id"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idempotency Key"
+          }
+        },
+        "type": "object",
+        "required": [
+          "config"
+        ],
+        "title": "LaunchIn",
+        "description": "Запрос запуска залива: конфиг + опц. ссылка на пресет/upload."
+      },
+      "LaunchOut": {
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "title": "Run Id"
+          },
+          "task_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "title": "Idempotency Key"
+          }
+        },
+        "type": "object",
+        "required": [
+          "run_id",
+          "task_id",
+          "status",
+          "idempotency_key"
+        ],
+        "title": "LaunchOut",
+        "description": "Ответ запуска: id созданного run + id задачи."
+      },
+      "LaunchState": {
+        "type": "string",
+        "enum": [
+          "campaign_paused",
+          "all_paused"
+        ],
+        "title": "LaunchState",
+        "description": "Money-инвариант запуска: что именно создаётся на паузе."
+      },
       "MetaApiChannelStatus": {
         "properties": {
           "status": {
@@ -8416,6 +9420,289 @@
         "title": "OpenFolderRequest",
         "description": "Запрос открытия папки результата."
       },
+      "PresetIn": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "act_id": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Act Id"
+          },
+          "page_id": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Page Id"
+          },
+          "pixel_id": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Pixel Id"
+          },
+          "tz_offset": {
+            "type": "integer",
+            "title": "Tz Offset",
+            "default": 0
+          },
+          "offer_code": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Offer Code"
+          },
+          "byer_tag": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Byer Tag"
+          },
+          "objective": {
+            "type": "string",
+            "title": "Objective",
+            "default": "OUTCOME_SALES"
+          },
+          "optimization_goal": {
+            "type": "string",
+            "title": "Optimization Goal",
+            "default": "OFFSITE_CONVERSIONS"
+          },
+          "custom_event_type": {
+            "type": "string",
+            "title": "Custom Event Type",
+            "default": "PURCHASE"
+          },
+          "special_ad_categories": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Special Ad Categories"
+          },
+          "cta": {
+            "type": "string",
+            "title": "Cta",
+            "default": "PLAY_GAME"
+          },
+          "text_optimizations": {
+            "type": "string",
+            "title": "Text Optimizations",
+            "default": "OPT_OUT"
+          },
+          "click_through_days": {
+            "type": "integer",
+            "title": "Click Through Days",
+            "default": 1
+          },
+          "view_through_days": {
+            "type": "integer",
+            "title": "View Through Days",
+            "default": 1
+          },
+          "url_tags_template": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 1024
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url Tags Template"
+          },
+          "naming_template": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 512
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Naming Template"
+          },
+          "extra": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Extra"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "act_id",
+          "page_id",
+          "pixel_id"
+        ],
+        "title": "PresetIn",
+        "description": "Тело создания/обновления пресета (стабильный конфиг залива)."
+      },
+      "PresetOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "act_id": {
+            "type": "string",
+            "title": "Act Id"
+          },
+          "page_id": {
+            "type": "string",
+            "title": "Page Id"
+          },
+          "pixel_id": {
+            "type": "string",
+            "title": "Pixel Id"
+          },
+          "tz_offset": {
+            "type": "integer",
+            "title": "Tz Offset"
+          },
+          "offer_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Offer Code"
+          },
+          "byer_tag": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Byer Tag"
+          },
+          "objective": {
+            "type": "string",
+            "title": "Objective"
+          },
+          "optimization_goal": {
+            "type": "string",
+            "title": "Optimization Goal"
+          },
+          "custom_event_type": {
+            "type": "string",
+            "title": "Custom Event Type"
+          },
+          "special_ad_categories": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Special Ad Categories"
+          },
+          "cta": {
+            "type": "string",
+            "title": "Cta"
+          },
+          "text_optimizations": {
+            "type": "string",
+            "title": "Text Optimizations"
+          },
+          "click_through_days": {
+            "type": "integer",
+            "title": "Click Through Days"
+          },
+          "view_through_days": {
+            "type": "integer",
+            "title": "View Through Days"
+          },
+          "url_tags_template": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url Tags Template"
+          },
+          "naming_template": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Naming Template"
+          },
+          "extra": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Extra"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "act_id",
+          "page_id",
+          "pixel_id",
+          "tz_offset",
+          "offer_code",
+          "byer_tag",
+          "objective",
+          "optimization_goal",
+          "custom_event_type",
+          "special_ad_categories",
+          "cta",
+          "text_optimizations",
+          "click_through_days",
+          "view_through_days",
+          "url_tags_template",
+          "naming_template",
+          "extra",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "PresetOut",
+        "description": "Пресет в ответе API."
+      },
       "RestartSignalResponse": {
         "properties": {
           "status": {
@@ -8543,6 +9830,166 @@
         ],
         "title": "RuleViolationOut",
         "description": "Топ правил по числу сработок (warning+stop) за окно ?days."
+      },
+      "RunDetailOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "preset_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preset Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "config": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Config"
+          },
+          "progress": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Progress"
+          },
+          "created_meta_ids": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Created Meta Ids"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idempotency Key"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "preset_id",
+          "status",
+          "config",
+          "progress",
+          "created_meta_ids",
+          "error",
+          "idempotency_key",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "RunDetailOut",
+        "description": "Детали запуска: конфиг-снимок + прогресс + Meta-ID + ошибка."
+      },
+      "RunSummaryOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "preset_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preset Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "offer_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Offer Code"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idempotency Key"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "preset_id",
+          "status",
+          "offer_code",
+          "idempotency_key",
+          "error",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "RunSummaryOut",
+        "description": "Краткая карточка запуска для списка."
       },
       "ScanNowResponse": {
         "properties": {
@@ -8896,6 +10343,50 @@
         ],
         "title": "StartCabinetDayResponse",
         "description": "Ответ на POST /observer/start-new-cabinet-day."
+      },
+      "Targeting": {
+        "properties": {
+          "countries": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Countries"
+          },
+          "add_antarctica": {
+            "type": "boolean",
+            "title": "Add Antarctica",
+            "default": true
+          },
+          "age_min": {
+            "type": "integer",
+            "title": "Age Min",
+            "default": 18
+          },
+          "age_max": {
+            "type": "integer",
+            "title": "Age Max",
+            "default": 65
+          },
+          "location_types": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Location Types"
+          },
+          "advantage_audience": {
+            "type": "boolean",
+            "title": "Advantage Audience",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "countries"
+        ],
+        "title": "Targeting",
+        "description": "Таргет с авто-добавлением Антарктиды (+AQ) по SOP."
       },
       "TaskQueueRowOut": {
         "properties": {
@@ -9717,6 +11208,133 @@
         ],
         "title": "TopCampaignOut",
         "description": "Строка топа кампаний по spend за окно ?days."
+      },
+      "UploadConceptsOut": {
+        "properties": {
+          "upload_id": {
+            "type": "string",
+            "title": "Upload Id"
+          },
+          "upload_dir": {
+            "type": "string",
+            "title": "Upload Dir"
+          },
+          "concepts": {
+            "items": {
+              "$ref": "#/components/schemas/UploadedConceptOut"
+            },
+            "type": "array",
+            "title": "Concepts"
+          },
+          "total_bytes": {
+            "type": "integer",
+            "title": "Total Bytes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "upload_id",
+          "upload_dir",
+          "concepts",
+          "total_bytes"
+        ],
+        "title": "UploadConceptsOut",
+        "description": "Ответ загрузки концептов: id временной папки + список файлов."
+      },
+      "UploadedConceptOut": {
+        "properties": {
+          "ref": {
+            "type": "string",
+            "title": "Ref"
+          },
+          "original_name": {
+            "type": "string",
+            "title": "Original Name"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "title": "Size Bytes"
+          },
+          "content_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Type"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ref",
+          "original_name",
+          "size_bytes"
+        ],
+        "title": "UploadedConceptOut",
+        "description": "Метаданные одного загруженного концепта (превью для UI)."
+      },
+      "ValidateIn": {
+        "properties": {
+          "config": {
+            "$ref": "#/components/schemas/CampaignConfig"
+          }
+        },
+        "type": "object",
+        "required": [
+          "config"
+        ],
+        "title": "ValidateIn",
+        "description": "Запрос dry-run валидации конфига."
+      },
+      "ValidatePlanOut": {
+        "properties": {
+          "offer_code": {
+            "type": "string",
+            "title": "Offer Code"
+          },
+          "launch_state": {
+            "type": "string",
+            "title": "Launch State"
+          },
+          "copies_per_concept": {
+            "type": "integer",
+            "title": "Copies Per Concept"
+          },
+          "campaign_count": {
+            "type": "integer",
+            "title": "Campaign Count"
+          },
+          "adset_count": {
+            "type": "integer",
+            "title": "Adset Count"
+          },
+          "ad_count": {
+            "type": "integer",
+            "title": "Ad Count"
+          },
+          "campaigns": {
+            "items": {
+              "$ref": "#/components/schemas/CampaignPlanOut"
+            },
+            "type": "array",
+            "title": "Campaigns"
+          }
+        },
+        "type": "object",
+        "required": [
+          "offer_code",
+          "launch_state",
+          "copies_per_concept",
+          "campaign_count",
+          "adset_count",
+          "ad_count",
+          "campaigns"
+        ],
+        "title": "ValidatePlanOut",
+        "description": "Результат validate: число объектов + нейминг без создания."
       },
       "ValidationError": {
         "properties": {

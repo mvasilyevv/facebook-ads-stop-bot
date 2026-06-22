@@ -257,6 +257,232 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/tools/campaigns/presets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Presets
+         * @description Список всех пресетов (новые сверху).
+         */
+        get: operations["list_presets_api_tools_campaigns_presets_get"];
+        put?: never;
+        /**
+         * Create Preset
+         * @description Создать пресет. 409 при дубле имени (UNIQUE name).
+         */
+        post: operations["create_preset_api_tools_campaigns_presets_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tools/campaigns/presets/{preset_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Update Preset
+         * @description Полное обновление пресета. 404 если нет, 409 при дубле имени.
+         */
+        put: operations["update_preset_api_tools_campaigns_presets__preset_id__put"];
+        post?: never;
+        /**
+         * Delete Preset
+         * @description Удалить пресет. FK run→preset с ON DELETE SET NULL (история запусков цела).
+         */
+        delete: operations["delete_preset_api_tools_campaigns_presets__preset_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tools/campaigns/upload": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Upload Concepts
+         * @description Загрузка концептов креативов в per-run временную папку на сервере.
+         *
+         *     Возвращает upload_id (входит в config.creo_root для воркера) + список refs
+         *     с размерами для превью. Тяжёлая уникализация — в воркере, не здесь.
+         */
+        post: operations["upload_concepts_api_tools_campaigns_upload_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tools/campaigns/validate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Validate Config
+         * @description Dry-run: собирает план (число объектов + нейминг) без создания в Meta.
+         */
+        post: operations["validate_config_api_tools_campaigns_validate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tools/campaigns/launch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Launch Campaign
+         * @description Создать campaign_run(queued) + task_queue(campaign_create) в одной транзакции.
+         *
+         *     Money-safety: idempotency_key (по конфигу) общий для run и задачи. Повторный
+         *     launch того же конфига → находим существующий run, ничего не дублируем (200-shape).
+         *     Воркер по run_id грузит CampaignRun и исполняет залив.
+         */
+        post: operations["launch_campaign_api_tools_campaigns_launch_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tools/campaigns/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Runs
+         * @description Список запусков (новые сверху). offer_code извлекается из снимка config.
+         */
+        get: operations["list_runs_api_tools_campaigns_runs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tools/campaigns/runs/{run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Run
+         * @description Детали запуска: конфиг-снимок, прогресс, созданные Meta-ID, ошибка.
+         */
+        get: operations["get_run_api_tools_campaigns_runs__run_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tools/campaigns/runs/{run_id}/clone": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Clone Run
+         * @description Клон запуска в новый черновик-run (status=queued БЕЗ задачи).
+         *
+         *     Клон не заливает сразу: создаёт queued-run с новым idempotency_key
+         *     (config + другой start_date/повторный залив должны иметь свой ключ).
+         *     Пользователь правит и жмёт launch отдельно. Здесь — только заготовка config.
+         */
+        post: operations["clone_run_api_tools_campaigns_runs__run_id__clone_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tools/campaigns/runs/{run_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cancel Run
+         * @description Отмена запуска в очереди (status=cancelled + отмена задачи).
+         *
+         *     Money-гард: отмена только ДО creating (необратимое создание Meta уже идёт).
+         *     409 если run уже creating/succeeded/failed/cancelled.
+         */
+        post: operations["cancel_run_api_tools_campaigns_runs__run_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tools/campaigns/runs/{run_id}/cleanup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cleanup Run
+         * @description Пометить созданные Meta-объекты на снос (partial-fail recovery).
+         *
+         *     Возвращает created_meta_ids run для ручного/задачного сноса. Реальный снос —
+         *     отдельной meta-мутацией (вне scope этого роутера). Money-safe: только читает
+         *     список id, ничего сам в Meta не трогает.
+         */
+        post: operations["cleanup_run_api_tools_campaigns_runs__run_id__cleanup_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/dashboard/ads": {
         parameters: {
             query?: never;
@@ -1201,6 +1427,11 @@ export interface paths {
         /**
          * Patch Observer Scanning
          * @description Переключает только is_scanning_enabled, не трогая остальные поля.
+         *
+         *     Гейт включения: не даём включить скан, если мониторить нечего (пустой allowlist при
+         *     одном кабинете / нет активных офферов). Иначе скан крутился бы вхолостую раз в интервал,
+         *     ничего не отслеживая. Возвращаем 409 с понятной причиной — фронт показывает её на клике
+         *     «Включить», а заполнять кампании пользователь идёт на страницу «Кампании».
          */
         patch: operations["patch_observer_scanning_api_settings_observer_scanning_patch"];
         trace?: never;
@@ -1270,12 +1501,14 @@ export interface paths {
          * @description Live-обновление списка кампаний через browser-agent (Graph API, МИМО allowlist).
          *
          *     Решает «замкнутый круг»: обычный скан с allowlist не подхватывает новые кампании,
-         *     поэтому их нельзя выбрать. Здесь резолвим ВСЕ кампании владельца по owner_tag живьём,
+         *     поэтому их нельзя выбрать. Здесь резолвим кампании владельца по owner_tag живьём,
          *     апсертим в fb_campaigns (чтобы GET /campaigns их видел) и возвращаем обновлённый список.
-         *     503 при недоступности browser-agent.
+         *     503 при недоступности browser-agent. Результат отсортирован по имени убыванием
+         *     (в названии есть дата → свежие выше).
          *
-         *     ad_account_id (мульти-кабинет): если задан — browser-agent откроет вкладку именно
-         *     этого кабинета (ensureAdsManagerPage({actId})); иначе резолв из текущей primary-вкладки.
+         *     Кабинеты: если задан явный ad_account_id — только он; иначе ВСЕ кабинеты активных
+         *     офферов (offers.ad_account_ids, resolve_scan_account_ids) — обходим каждый и сливаем
+         *     кампании (dedup по fb_campaign_id). Нет активных офферов → legacy primary-вкладка.
          */
         post: operations["refresh_observer_campaigns_api_settings_observer_campaigns_refresh_post"];
         delete?: never;
@@ -1829,6 +2062,23 @@ export interface components {
             model: string;
         };
         /**
+         * Account
+         * @description Идентичность кабинета (preset).
+         */
+        Account: {
+            /** Act Id */
+            act_id: string;
+            /** Page Id */
+            page_id: string;
+            /** Pixel Id */
+            pixel_id: string;
+            /**
+             * Tz Offset
+             * @default -07:00
+             */
+            tz_offset: string;
+        };
+        /**
          * AdSnapshotOut
          * @description Композитный snapshot одного ad'а для /dashboard/ads и /dashboard/incidents.
          */
@@ -1891,6 +2141,32 @@ export interface components {
             metrics?: components["schemas"]["MetricsBlock"] | null;
         };
         /**
+         * AdText
+         * @description Текст объявления (run). mode=none — объявления без текста.
+         */
+        AdText: {
+            /**
+             * Mode
+             * @default none
+             */
+            mode: string;
+            /**
+             * Message
+             * @default
+             */
+            message: string;
+            /**
+             * Headline
+             * @default
+             */
+            headline: string;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+        };
+        /**
          * AdTimelineResponse
          * @description Ответ GET /ads/{fb_ad_id}/timeline.
          */
@@ -1926,6 +2202,30 @@ export interface components {
             alerts: components["schemas"]["AlertRow"][];
             /** Tasks */
             tasks: components["schemas"]["TaskRow"][];
+        };
+        /**
+         * AdsetConfig
+         * @description Один adset в структуре кампании.
+         */
+        AdsetConfig: {
+            /** Name */
+            name: string;
+            /** Dir */
+            dir: string;
+            /** Glob */
+            glob: string;
+        };
+        /**
+         * AdsetPlanOut
+         * @description Сводка по одному adset в плане.
+         */
+        AdsetPlanOut: {
+            /** Name */
+            name: string;
+            /** Status */
+            status: string;
+            /** Ad Count */
+            ad_count: number;
         };
         /**
          * AdsetProPostbackBody
@@ -2011,6 +2311,22 @@ export interface components {
             created_at: string;
         };
         /**
+         * Attribution
+         * @description Окно атрибуции конверсий (preset).
+         */
+        Attribution: {
+            /**
+             * Click Through Days
+             * @default 1
+             */
+            click_through_days: number;
+            /**
+             * View Through Days
+             * @default 1
+             */
+            view_through_days: number;
+        };
+        /**
          * AutoEnableDisabledIn
          * @description Тело POST /dashboard/auto-enable-disabled/{fb_ad_id}.
          *
@@ -2062,6 +2378,36 @@ export interface components {
             copies: number;
             /** Files */
             files: string[];
+        };
+        /** Body_upload_concepts_api_tools_campaigns_upload_post */
+        Body_upload_concepts_api_tools_campaigns_upload_post: {
+            /** Files */
+            files: string[];
+        };
+        /**
+         * Budget
+         * @description Бюджет и стратегия ставок с hard-cap валидацией (money-safe).
+         */
+        Budget: {
+            /**
+             * Level
+             * @default campaign
+             */
+            level: string;
+            /**
+             * Daily Cents
+             * @default 300
+             */
+            daily_cents: number;
+            /** Lifetime Cents */
+            lifetime_cents?: number | null;
+            /**
+             * Bid Strategy
+             * @default LOWEST_COST_WITHOUT_CAP
+             */
+            bid_strategy: string;
+            /** Bid Amount Cents */
+            bid_amount_cents?: number | null;
         };
         /**
          * BulkDeleteAdsRequest
@@ -2261,6 +2607,85 @@ export interface components {
             campaign_ids?: string[];
         };
         /**
+         * CampaignBlock
+         * @description Одна кампания: тип медиа + список adset'ов.
+         */
+        CampaignBlock: {
+            /** Key */
+            key: string;
+            /** Name */
+            name: string;
+            /** Kind */
+            kind: string;
+            /** Adsets */
+            adsets: components["schemas"]["AdsetConfig"][];
+        };
+        /**
+         * CampaignConfig
+         * @description Полный конфиг создания кампании (preset + run в одной модели).
+         */
+        CampaignConfig: {
+            account: components["schemas"]["Account"];
+            /** Offer Code */
+            offer_code: string;
+            /**
+             * Byer Tag
+             * @default MV
+             */
+            byer_tag: string;
+            /**
+             * Objective
+             * @default OUTCOME_SALES
+             */
+            objective: string;
+            /**
+             * Optimization Goal
+             * @default OFFSITE_CONVERSIONS
+             */
+            optimization_goal: string;
+            /**
+             * Custom Event Type
+             * @default PURCHASE
+             */
+            custom_event_type: string;
+            /** Special Ad Categories */
+            special_ad_categories?: string[];
+            /** Destination Link */
+            destination_link: string;
+            /**
+             * Cta
+             * @default PLAY_GAME
+             */
+            cta: string;
+            /**
+             * Text Optimizations
+             * @default OPT_OUT
+             */
+            text_optimizations: string;
+            /** Start Date */
+            start_date?: string | null;
+            /**
+             * Creo Root
+             * @default
+             */
+            creo_root: string;
+            budget?: components["schemas"]["Budget"];
+            targeting: components["schemas"]["Targeting"];
+            attribution?: components["schemas"]["Attribution"];
+            ad_text?: components["schemas"]["AdText"];
+            /** Campaigns */
+            campaigns: components["schemas"]["CampaignBlock"][];
+            /** Copies Per Concept */
+            copies_per_concept?: number | null;
+            /**
+             * Creative Prefix
+             * @default
+             */
+            creative_prefix: string;
+            /** @default campaign_paused */
+            launch_state: components["schemas"]["LaunchState"];
+        };
+        /**
          * CampaignFolderItem
          * @description Краткое описание одной папки креативов для UI выбора.
          */
@@ -2340,6 +2765,22 @@ export interface components {
             name: string;
             /** Selected */
             selected: boolean;
+        };
+        /**
+         * CampaignPlanOut
+         * @description Сводка по одной кампании в плане.
+         */
+        CampaignPlanOut: {
+            /** Key */
+            key: string;
+            /** Name */
+            name: string;
+            /** Kind */
+            kind: string;
+            /** Status */
+            status: string;
+            /** Adsets */
+            adsets: components["schemas"]["AdsetPlanOut"][];
         };
         /**
          * CampaignPlanRequest
@@ -2439,6 +2880,20 @@ export interface components {
             deposits?: number | null;
             /** Active Ads */
             active_ads?: number | null;
+        };
+        /**
+         * CleanupOut
+         * @description Результат пометки run на снос Meta-объектов.
+         */
+        CleanupOut: {
+            /** Run Id */
+            run_id: string;
+            /** Meta Ids */
+            meta_ids: {
+                [key: string]: unknown;
+            };
+            /** Detail */
+            detail: string;
         };
         /**
          * CreativeUniquifyResponse
@@ -3059,6 +3514,37 @@ export interface components {
             transitions_count: number;
         };
         /**
+         * LaunchIn
+         * @description Запрос запуска залива: конфиг + опц. ссылка на пресет/upload.
+         */
+        LaunchIn: {
+            config: components["schemas"]["CampaignConfig"];
+            /** Preset Id */
+            preset_id?: string | null;
+            /** Idempotency Key */
+            idempotency_key?: string | null;
+        };
+        /**
+         * LaunchOut
+         * @description Ответ запуска: id созданного run + id задачи.
+         */
+        LaunchOut: {
+            /** Run Id */
+            run_id: string;
+            /** Task Id */
+            task_id: number | null;
+            /** Status */
+            status: string;
+            /** Idempotency Key */
+            idempotency_key: string;
+        };
+        /**
+         * LaunchState
+         * @description Money-инвариант запуска: что именно создаётся на паузе.
+         * @enum {string}
+         */
+        LaunchState: "campaign_paused" | "all_paused";
+        /**
          * MetaApiChannelStatus
          * @description Статус сетевого канала Marketing API (auto-stop) по проактивному probe.
          *
@@ -3443,6 +3929,124 @@ export interface components {
             path: string;
         };
         /**
+         * PresetIn
+         * @description Тело создания/обновления пресета (стабильный конфиг залива).
+         */
+        PresetIn: {
+            /** Name */
+            name: string;
+            /** Act Id */
+            act_id: string;
+            /** Page Id */
+            page_id: string;
+            /** Pixel Id */
+            pixel_id: string;
+            /**
+             * Tz Offset
+             * @default 0
+             */
+            tz_offset: number;
+            /** Offer Code */
+            offer_code?: string | null;
+            /** Byer Tag */
+            byer_tag?: string | null;
+            /**
+             * Objective
+             * @default OUTCOME_SALES
+             */
+            objective: string;
+            /**
+             * Optimization Goal
+             * @default OFFSITE_CONVERSIONS
+             */
+            optimization_goal: string;
+            /**
+             * Custom Event Type
+             * @default PURCHASE
+             */
+            custom_event_type: string;
+            /** Special Ad Categories */
+            special_ad_categories?: string[];
+            /**
+             * Cta
+             * @default PLAY_GAME
+             */
+            cta: string;
+            /**
+             * Text Optimizations
+             * @default OPT_OUT
+             */
+            text_optimizations: string;
+            /**
+             * Click Through Days
+             * @default 1
+             */
+            click_through_days: number;
+            /**
+             * View Through Days
+             * @default 1
+             */
+            view_through_days: number;
+            /** Url Tags Template */
+            url_tags_template?: string | null;
+            /** Naming Template */
+            naming_template?: string | null;
+            /** Extra */
+            extra?: {
+                [key: string]: unknown;
+            };
+        };
+        /**
+         * PresetOut
+         * @description Пресет в ответе API.
+         */
+        PresetOut: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Act Id */
+            act_id: string;
+            /** Page Id */
+            page_id: string;
+            /** Pixel Id */
+            pixel_id: string;
+            /** Tz Offset */
+            tz_offset: number;
+            /** Offer Code */
+            offer_code: string | null;
+            /** Byer Tag */
+            byer_tag: string | null;
+            /** Objective */
+            objective: string;
+            /** Optimization Goal */
+            optimization_goal: string;
+            /** Custom Event Type */
+            custom_event_type: string;
+            /** Special Ad Categories */
+            special_ad_categories: string[];
+            /** Cta */
+            cta: string;
+            /** Text Optimizations */
+            text_optimizations: string;
+            /** Click Through Days */
+            click_through_days: number;
+            /** View Through Days */
+            view_through_days: number;
+            /** Url Tags Template */
+            url_tags_template: string | null;
+            /** Naming Template */
+            naming_template: string | null;
+            /** Extra */
+            extra: {
+                [key: string]: unknown;
+            };
+            /** Created At */
+            created_at: string;
+            /** Updated At */
+            updated_at: string;
+        };
+        /**
          * RestartSignalResponse
          * @description Ответ на POST /observer/restart.
          */
@@ -3500,6 +4104,60 @@ export interface components {
             count: number;
             /** Ads Count */
             ads_count: number;
+        };
+        /**
+         * RunDetailOut
+         * @description Детали запуска: конфиг-снимок + прогресс + Meta-ID + ошибка.
+         */
+        RunDetailOut: {
+            /** Id */
+            id: string;
+            /** Preset Id */
+            preset_id: string | null;
+            /** Status */
+            status: string;
+            /** Config */
+            config: {
+                [key: string]: unknown;
+            };
+            /** Progress */
+            progress: {
+                [key: string]: unknown;
+            };
+            /** Created Meta Ids */
+            created_meta_ids: {
+                [key: string]: unknown;
+            };
+            /** Error */
+            error: string | null;
+            /** Idempotency Key */
+            idempotency_key: string | null;
+            /** Created At */
+            created_at: string;
+            /** Updated At */
+            updated_at: string;
+        };
+        /**
+         * RunSummaryOut
+         * @description Краткая карточка запуска для списка.
+         */
+        RunSummaryOut: {
+            /** Id */
+            id: string;
+            /** Preset Id */
+            preset_id: string | null;
+            /** Status */
+            status: string;
+            /** Offer Code */
+            offer_code: string | null;
+            /** Idempotency Key */
+            idempotency_key: string | null;
+            /** Error */
+            error: string | null;
+            /** Created At */
+            created_at: string;
+            /** Updated At */
+            updated_at: string;
         };
         /**
          * ScanNowResponse
@@ -3631,6 +4289,36 @@ export interface components {
             status: string;
             /** Archived Date */
             archived_date: string;
+        };
+        /**
+         * Targeting
+         * @description Таргет с авто-добавлением Антарктиды (+AQ) по SOP.
+         */
+        Targeting: {
+            /** Countries */
+            countries: string[];
+            /**
+             * Add Antarctica
+             * @default true
+             */
+            add_antarctica: boolean;
+            /**
+             * Age Min
+             * @default 18
+             */
+            age_min: number;
+            /**
+             * Age Max
+             * @default 65
+             */
+            age_max: number;
+            /** Location Types */
+            location_types?: string[];
+            /**
+             * Advantage Audience
+             * @default true
+             */
+            advantage_audience: boolean;
         };
         /**
          * TaskQueueRowOut
@@ -3961,6 +4649,61 @@ export interface components {
              * @default 0
              */
             active_ads_count: number;
+        };
+        /**
+         * UploadConceptsOut
+         * @description Ответ загрузки концептов: id временной папки + список файлов.
+         */
+        UploadConceptsOut: {
+            /** Upload Id */
+            upload_id: string;
+            /** Upload Dir */
+            upload_dir: string;
+            /** Concepts */
+            concepts: components["schemas"]["UploadedConceptOut"][];
+            /** Total Bytes */
+            total_bytes: number;
+        };
+        /**
+         * UploadedConceptOut
+         * @description Метаданные одного загруженного концепта (превью для UI).
+         */
+        UploadedConceptOut: {
+            /** Ref */
+            ref: string;
+            /** Original Name */
+            original_name: string;
+            /** Size Bytes */
+            size_bytes: number;
+            /** Content Type */
+            content_type?: string | null;
+        };
+        /**
+         * ValidateIn
+         * @description Запрос dry-run валидации конфига.
+         */
+        ValidateIn: {
+            config: components["schemas"]["CampaignConfig"];
+        };
+        /**
+         * ValidatePlanOut
+         * @description Результат validate: число объектов + нейминг без создания.
+         */
+        ValidatePlanOut: {
+            /** Offer Code */
+            offer_code: string;
+            /** Launch State */
+            launch_state: string;
+            /** Copies Per Concept */
+            copies_per_concept: number;
+            /** Campaign Count */
+            campaign_count: number;
+            /** Adset Count */
+            adset_count: number;
+            /** Ad Count */
+            ad_count: number;
+            /** Campaigns */
+            campaigns: components["schemas"]["CampaignPlanOut"][];
         };
         /** ValidationError */
         ValidationError: {
@@ -4435,6 +5178,380 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_presets_api_tools_campaigns_presets_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PresetOut"][];
+                };
+            };
+        };
+    };
+    create_preset_api_tools_campaigns_presets_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PresetIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PresetOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_preset_api_tools_campaigns_presets__preset_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                preset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PresetIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PresetOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_preset_api_tools_campaigns_presets__preset_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                preset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upload_concepts_api_tools_campaigns_upload_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_upload_concepts_api_tools_campaigns_upload_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UploadConceptsOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    validate_config_api_tools_campaigns_validate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ValidateIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidatePlanOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    launch_campaign_api_tools_campaigns_launch_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LaunchIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LaunchOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_runs_api_tools_campaigns_runs_get: {
+        parameters: {
+            query?: {
+                /** @description Фильтр по статусу run */
+                status?: string | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunSummaryOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_run_api_tools_campaigns_runs__run_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunDetailOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    clone_run_api_tools_campaigns_runs__run_id__clone_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LaunchOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_run_api_tools_campaigns_runs__run_id__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunSummaryOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cleanup_run_api_tools_campaigns_runs__run_id__cleanup_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CleanupOut"];
+                };
             };
             /** @description Validation Error */
             422: {

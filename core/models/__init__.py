@@ -26,6 +26,10 @@ from core.models.base import (
     Timestamp,
     UUIDPrimaryKey,
 )
+from core.models.campaigns import (
+    CampaignPreset,
+    CampaignRun,
+)
 from core.models.catalog import (
     FbAd,
     FbAdset,
@@ -76,6 +80,9 @@ __all__ = [
     "SingletonMixin",
     "Timestamp",
     "UUIDPrimaryKey",
+    # campaigns
+    "CampaignPreset",
+    "CampaignRun",
     # settings
     "AdsetProCredentials",
     "ObserverConfig",
