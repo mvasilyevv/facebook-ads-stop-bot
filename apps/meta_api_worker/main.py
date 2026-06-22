@@ -245,6 +245,54 @@ _DEACTIVATING_KINDS = frozenset({"pause_ad", "pause_campaign"})
 _PAUSE_KINDS = frozenset({"pause_ad", "bulk_status_change"})
 
 
+def is_mutation_success(result: Any) -> bool:
+    """True если результат mutation — логический успех (R3).
+
+    Batch-конверт Graph API даёт HTTP 200 без exception, но пер-саб ошибки лежат в теле.
+    Два handler'а возвращают «логический провал» без raise: bulk_status_change при полном
+    отказе Meta (success_result хардкодит success=True, но succeeded==0 & failed>0) и
+    duplicate_campaign при провале copy/rename (явный success=False). Без этой проверки
+    worker метил такие задачи succeeded → money-fail DM не уходил, бюджет тёк.
+
+    Контракт:
+    - не-dict / None → True (handler не вернул структуру — не наша забота, обычный успех);
+    - result['success'] is False → провал;
+    - bulk-форма (есть 'succeeded'/'failed'): succeeded==0 и failed>0 → провал (полный отказ);
+    - иначе → успех (в т.ч. partial bulk с succeeded>0 — он succeeded, но алертит отдельно).
+    """
+    if not isinstance(result, dict):
+        return True
+    if result.get("success") is False:
+        return False
+    succeeded = result.get("succeeded")
+    failed = result.get("failed")
+    if succeeded is not None and failed is not None:
+        try:
+            if int(succeeded) == 0 and int(failed) > 0:
+                return False
+        except (TypeError, ValueError):
+            return True
+    return True
+
+
+def is_partial_bulk_failure(result: Any) -> bool:
+    """True если bulk применился частично (succeeded>0, но failed>0).
+
+    Для partial mark_succeeded остаётся корректным (FSM-sync метит только modified_ids),
+    но владелец должен узнать о недовыключенных объявлениях через money-fail DM.
+    """
+    if not isinstance(result, dict):
+        return False
+    succeeded = result.get("succeeded")
+    failed = result.get("failed")
+    if succeeded is None or failed is None:
+        return False
+    try:
+        return int(succeeded) > 0 and int(failed) > 0
+    except (TypeError, ValueError):
+        return False
+
+
 def _is_activating_mutation(payload: MetaMutationPayload) -> bool:
     """True если mutation ВКЛЮЧАЕТ/тратит (на паузе сканирования откладывается).
 
@@ -417,6 +465,36 @@ async def process_one_task(
 
     try:
         result = await execute_mutation(payload, client=client)
+        # R3: handler мог вернуть «логический провал» БЕЗ exception (Batch HTTP 200,
+        # пер-саб ошибки в теле). bulk_status_change при полном отказе Meta хардкодит
+        # success=True с succeeded==0; duplicate_campaign отдаёт success=False. Без этой
+        # проверки задача метилась succeeded, money-fail DM не уходил, бюджет тёк.
+        if not is_mutation_success(result):
+            err = f"mutation_logical_fail: handler вернул провал без exception result={result!r}"
+            applied = await mark_task_failed(engine, task_id=task.id, error=err[:500])
+            if not applied:
+                logger.warning(
+                    "meta_api: task id=%s mark_failed (logical fail) не применился — гонка",
+                    task.id,
+                )
+            else:
+                logger.error(
+                    "meta_api: task id=%s kind=%s — логический провал mutation (без exception), "
+                    "mark_failed. ПРОВЕРЬ вручную! result=%r",
+                    task.id,
+                    payload.mutation_kind,
+                    result,
+                )
+            # Money-мутация (pause/bulk) провалилась — owner должен узнать (как в except).
+            await _alert_money_fail(
+                engine,
+                redis_client,
+                payload=payload,
+                requested_by=getattr(task, "requested_by", ""),
+                error=err,
+                kind_label=payload.mutation_kind,
+            )
+            return
         applied = await mark_task_succeeded(engine, task_id=task.id, result=result)
         if not applied:
             # Race: другой воркер уже закрыл задачу после reconciler-таймаута.
@@ -440,6 +518,29 @@ async def process_one_task(
         # без этого FSM застревал в stop_sent при auto-stop через API. result прокидываем
         # для bulk (H2): метим FSM только по реально применённым id (modified_ids).
         await sync_fsm_after_mutation(engine, payload, result)
+        # R3 partial: bulk применился частично (succeeded>0, failed>0). FSM-sync корректен
+        # (метит только modified_ids), задача succeeded, но часть объявлений НЕ выключилась —
+        # owner должен узнать через money-fail DM, иначе недовыключенные тратят бюджет.
+        if is_partial_bulk_failure(result):
+            logger.warning(
+                "meta_api: task id=%s kind=%s — bulk применился ЧАСТИЧНО "
+                "(succeeded=%s failed=%s), часть объявлений не выключена",
+                task.id,
+                payload.mutation_kind,
+                result.get("succeeded"),
+                result.get("failed"),
+            )
+            await _alert_money_fail(
+                engine,
+                redis_client,
+                payload=payload,
+                requested_by=getattr(task, "requested_by", ""),
+                error=(
+                    f"bulk частично провалился: succeeded={result.get('succeeded')} "
+                    f"failed={result.get('failed')} — проверь невыключенные вручную"
+                ),
+                kind_label=payload.mutation_kind,
+            )
         # Канал auto-stop жив (mutation дошла) → сброс счётчика подряд-фейлов и дедупа,
         # чтобы следующий outage снова мог поднять CRITICAL (re-arm). Best-effort.
         if redis_client is not None:
