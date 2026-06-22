@@ -2,7 +2,7 @@
  * ScanCluster — правый кластер page-header Dashboard (управление сканом).
  *
  * Канон design_handoff/web-dashboard.jsx (ScanHeaderControl):
- *   - Observer ON: countdown-ring + «СЛЕД. СКАН» + «ПОСЛЕДНИЙ СКАН Nс назад» +
+ *   - Observer ON: countdown-линия (CountdownBar) + «СЛЕД. СКАН» + «ПОСЛЕДНИЙ СКАН Nс назад» +
  *     primary «Сканировать» (на время скана — спиннер + «Сканирую»).
  *   - Observer OFF (paused): dashed pause-ring + «СКАН ВЫКЛЮЧЕН» +
  *     primary «▶ Включить».
@@ -13,7 +13,8 @@
 
 import { RefreshCw, Play, Power } from "lucide-react";
 import { formatRelativeTime } from "@fb/shared";
-import { CountdownRing, PausedRing } from "@/components/data/CountdownRing";
+import { PausedRing } from "@/components/data/CountdownRing";
+import { CountdownBar } from "@/components/data/CountdownBar";
 import { Button } from "@/components/ui/Button";
 import { useScanCountdown } from "@/lib/hooks/useScanCountdown";
 
@@ -100,15 +101,7 @@ export function ScanCluster({
   // ── Active: observer работает ───────────────────────────────────────────────
   return (
     <div className="flex items-center gap-4">
-      <div className="flex items-center gap-2.5">
-        <CountdownRing value={scanning ? interval : next} max={interval} active={scanning} />
-        <span
-          className="font-display text-[9px] font-semibold uppercase tracking-[0.12em]"
-          style={{ color: scanning ? "var(--accent)" : "var(--bg-9)" }}
-        >
-          {scanning ? "ИДЁТ СКАН" : "СЛЕД. СКАН"}
-        </span>
-      </div>
+      <CountdownBar remaining={next} interval={interval} scanning={scanning} />
       <div className="h-7 w-px bg-[var(--hairline-strong)]" aria-hidden="true" />
       <div className="leading-[1.3]">
         <div className="font-display text-[9px] font-semibold uppercase tracking-[0.12em] text-bg-9">
