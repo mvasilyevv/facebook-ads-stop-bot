@@ -74,13 +74,17 @@ class RecommendationDecision:
 _RECOMMENDABLE_STATES = frozenset({"stop_sent", "disabled"})
 
 
-def _aggregate_spend(metrics: list[MetricSnapshot]) -> Decimal:
-    """Суммарный spend по списку метрик."""
-    total = Decimal("0")
-    for m in metrics:
-        if m.spend is not None:
-            total += m.spend
-    return total
+def _latest_spend(metrics: list[MetricSnapshot]) -> Decimal:
+    """Spend из самого свежего снимка.
+
+    ad_metrics.spend — кумулятивный (нарастающий с начала cabinet-дня), поэтому
+    суммировать снимки нельзя (раздуло бы значение в N раз). Берём последний
+    снимок по cycle_ts; на паузе он держит финальное значение до сброса дня.
+    """
+    latest = _latest(metrics)
+    if latest is None or latest.spend is None:
+        return Decimal("0")
+    return latest.spend
 
 
 def _latest(metrics: list[MetricSnapshot]) -> MetricSnapshot | None:
@@ -134,15 +138,15 @@ def should_recommend(
     reasons: list[str] = []
     cpa = offer.cpa_threshold if offer else None
 
-    total_spend = _aggregate_spend(metrics)
+    total_spend = _latest_spend(metrics)
     latest = _latest(metrics)
 
-    # Правило 1: spend за окно < (порог * share)
+    # Правило 1: текущий (последний кумулятивный) spend < (порог * share)
     if cpa is not None and cpa > 0:
         spend_cap = cpa * thresholds.spend_window_share_of_cpa
         if total_spend <= spend_cap:
             reasons.append(
-                f"spend за окно {total_spend} ≤ {spend_cap} ({thresholds.spend_window_share_of_cpa} × CPA={cpa})"
+                f"spend {total_spend} ≤ {spend_cap} ({thresholds.spend_window_share_of_cpa} × CPA={cpa})"
             )
 
     # Правило 2: cost_per_lead вернулся в норму
