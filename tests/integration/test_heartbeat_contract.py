@@ -80,6 +80,10 @@ _EXPECTED_WORKERS = [
     "digest_scheduler",
     "creator",
     "creator_recorder",
+    # browser-agent — нативный host-сервис (мост к Vision), пишет heartbeat из TS
+    # (reconnect к Redis починен, rank 1). Python-writer'а нет → нет per-worker
+    # writes-теста, но имя каноническое и обязано мониториться watchdog'ом.
+    "browser-agent",
 ]
 
 

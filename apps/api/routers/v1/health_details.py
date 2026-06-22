@@ -49,6 +49,8 @@ _DEFAULT_EXPECTED_WORKERS: list[str] = [
     "creator",
     "creator_recorder",
     "cabinet_scheduler",
+    # browser-agent — нативный host-сервис (мост к Vision), пишет heartbeat (rank 1).
+    "browser-agent",
 ]
 
 

@@ -55,9 +55,13 @@ STARTUP_GRACE_SECONDS = int(os.environ.get("HEALTH_WATCHDOG_STARTUP_GRACE_SEC", 
 # (агрегатор депозитов) — их зависание (heartbeat-stall при живом процессе) не должно
 # пройти без TG-алерта (H4). enable_reco — реальное heartbeat-имя enable_recommendation_worker.
 # health_watchdog себя НЕ мониторит: если он сам мёртв — алертить некому.
+# browser-agent — нативный systemd-сервис на хосте (мост к Vision/каналу авто-стопа),
+# пишет worker:heartbeat:browser-agent (reconnect к Redis починен, resilience-аудит rank 1).
+# Самый хрупкий money-компонент — обязан мониториться.
 DEFAULT_EXPECTED_WORKERS = (
     "observer,telegram_poller,cleanup,reconciler,meta_api,tracker_aggregator,"
-    "enable_reco,cabinet_scheduler,digest_scheduler,creator,creator_recorder"
+    "enable_reco,cabinet_scheduler,digest_scheduler,creator,creator_recorder,"
+    "browser-agent"
 )
 
 OBSERVER_RUNTIME_KEY = "observer:runtime"

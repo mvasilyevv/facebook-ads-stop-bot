@@ -33,6 +33,8 @@ EXPECTED_WORKERS: tuple[str, ...] = (
     "digest_scheduler",
     "creator",
     "creator_recorder",
+    # browser-agent — нативный host-сервис (мост к Vision), пишет heartbeat (rank 1).
+    "browser-agent",
 )
 
 # Обратная совместимость для старых импортов.
