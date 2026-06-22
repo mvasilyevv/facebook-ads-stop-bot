@@ -13,7 +13,10 @@ class BulkDeleteAdsRequest(BaseModel):
 
 
 class BulkDeleteAdsResponse(BaseModel):
-    """Фактически удалённые fb_ad_id."""
+    """Фактически удалённые fb_ad_id + отменённые orphan-задачи task_queue."""
 
     deleted: list[str]
     count: int
+    # id отменённых (status='cancelled') active-задач outbox по удалённым ad_id —
+    # защита от orphan pause_ad/activate_ad в meta_api_worker.
+    cancelled_task_ids: list[int] = Field(default_factory=list)
