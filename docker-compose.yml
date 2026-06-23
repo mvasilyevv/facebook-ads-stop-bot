@@ -131,10 +131,16 @@ services:
       BROWSER_AGENT_HOST: host.docker.internal
       BROWSER_AGENT_GRPC_HOST: host.docker.internal
       BROWSER_AGENT_GRPC_PORT: "50051"
+      # Корень загрузки концептов кампаний. ОБЩИЙ named-volume с campaign_creator:
+      # api пишет файлы сюда (POST /tools/campaigns/upload), воркер читает их по тому же
+      # пути ({CAMPAIGN_UPLOAD_ROOT}/{upload_id}/{ref}) — иначе залив не найдёт концепты.
+      CAMPAIGN_UPLOAD_ROOT: /var/lib/fb_agent/campaign_uploads
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
       - "127.0.0.1:8100:8100"
+    volumes:
+      - campaign_uploads:/var/lib/fb_agent/campaign_uploads
     depends_on:
       postgres:
         condition: service_healthy
@@ -187,7 +193,7 @@ services:
     depends_on:
       - api
 
-  # ====================== 12 Python-воркеров ======================
+  # ====================== 13 Python-воркеров ======================
   observer:
     <<: *worker-common
     # money-воркер: защищён от OOM-killer (override общего +200).
@@ -272,6 +278,21 @@ services:
       <<: *worker-env
       WORKER_TYPE: creator_recorder
 
+  campaign_creator:
+    <<: *worker-common
+    # Залив FB-кампаний из UI (uniquify→upload→create через Marketing API). Создание
+    # объектов необратимо — даём активному заливу завершиться до SIGKILL при деплое.
+    stop_grace_period: 60s
+    environment:
+      <<: *worker-env
+      WORKER_TYPE: campaign_creator
+      # Тот же корень, что у api: воркер читает концепты, загруженные API, по этому пути.
+      CAMPAIGN_UPLOAD_ROOT: /var/lib/fb_agent/campaign_uploads
+    # Общий с api том концептов (api пишет upload, воркер читает на заливе).
+    volumes:
+      - campaign_uploads:/var/lib/fb_agent/campaign_uploads
+
 volumes:
   pgdata:
   redisdata:
+  campaign_uploads:

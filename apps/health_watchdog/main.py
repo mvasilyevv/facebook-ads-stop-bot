@@ -61,7 +61,7 @@ STARTUP_GRACE_SECONDS = int(os.environ.get("HEALTH_WATCHDOG_STARTUP_GRACE_SEC", 
 DEFAULT_EXPECTED_WORKERS = (
     "observer,telegram_poller,cleanup,reconciler,meta_api,tracker_aggregator,"
     "enable_reco,cabinet_scheduler,digest_scheduler,creator,creator_recorder,"
-    "browser-agent"
+    "campaign_creator,browser-agent"
 )
 
 OBSERVER_RUNTIME_KEY = "observer:runtime"

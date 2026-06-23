@@ -33,6 +33,9 @@ EXPECTED_WORKERS: tuple[str, ...] = (
     "digest_scheduler",
     "creator",
     "creator_recorder",
+    # campaign_creator — залив FB-кампаний из UI (always-on compose-сервис); его
+    # зависание оставляет launch'и в pending без исполнения → мониторим как creator.
+    "campaign_creator",
     # browser-agent — нативный host-сервис (мост к Vision), пишет heartbeat (rank 1).
     "browser-agent",
 )
