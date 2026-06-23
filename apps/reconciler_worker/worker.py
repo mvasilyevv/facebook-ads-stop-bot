@@ -24,6 +24,9 @@ from core.tasks.queue import (
     cancel_stale_drafts as _canonical_cancel_stale_drafts,
 )
 from core.tasks.queue import (
+    fail_stuck_campaign_create as _canonical_fail_stuck_campaign_create,
+)
+from core.tasks.queue import (
     fail_stuck_irreversible as _canonical_fail_stuck_irreversible,
 )
 from core.tasks.queue import (
@@ -47,6 +50,18 @@ async def fail_irreversible_stuck(engine: AsyncEngine) -> int:
         engine,
         mutation_kinds=IRREVERSIBLE_MUTATION_KINDS,
         stuck_after_seconds=stuck_after_seconds,
+    )
+
+
+async def fail_stuck_campaign_create(engine: AsyncEngine) -> int:
+    """Зависшие задачи campaign_create (необратимый залив) → failed (НЕ retry).
+
+    Money-safety: см. core.tasks.queue.fail_stuck_campaign_create. Вызывать ДО
+    reconcile_stuck_running. Returns: число помеченных failed.
+    """
+    stuck_after_seconds = _STUCK_TIMEOUT_MIN * 60
+    return await _canonical_fail_stuck_campaign_create(
+        engine, stuck_after_seconds=stuck_after_seconds
     )
 
 
@@ -86,6 +101,18 @@ def render_irreversible_alert(count: int) -> str:
     )
 
 
+def render_campaign_create_alert(count: int) -> str:
+    """HTML-текст алерта о зависших задачах создания кампаний (pure, для тестов)."""
+    return (
+        f"🛑 <b>Reconciler</b>\n"
+        f"Зависших заливов кампаний (campaign_create): <b>{count}</b> — "
+        f"помечены failed без retry.\n"
+        f"campaign_creator_worker мог упасть ПОСЛЕ начала залива в Meta — "
+        f"<b>проверь кабинет вручную</b> на дубли/осиротевшие кампании "
+        f"(см. campaign_run.created_meta_ids)."
+    )
+
+
 async def _maybe_alert_irreversible(engine: AsyncEngine, count: int) -> None:
     """Best-effort TG-алерт о failed необратимых — рассылка всем активным recipients."""
     if count <= 0:
@@ -103,17 +130,41 @@ async def _maybe_alert_irreversible(engine: AsyncEngine, count: int) -> None:
         logger.exception("reconciler: не удалось отправить алерт о необратимых мутациях")
 
 
+async def _maybe_alert_campaign_create(engine: AsyncEngine, count: int) -> None:
+    """Best-effort TG-алерт о failed зависших campaign_create — рассылка recipients."""
+    if count <= 0:
+        return
+    try:
+        from core.telegram.worker_notify import notify_recipients
+
+        await notify_recipients(
+            engine,
+            None,  # redis не нужен: dedup_key не задан
+            category="reconciler_campaign_create",
+            text=render_campaign_create_alert(count),
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("reconciler: не удалось отправить алерт о зависших campaign_create")
+
+
 async def run_once(engine: AsyncEngine) -> dict[str, int]:
     """Один прогон reconciler. Возвращает counters."""
     counts: dict[str, int] = {}
 
-    # ВАЖЕН ПОРЯДОК: сначала уводим необратимые стак-мутации в failed, потом requeue
-    # остального (reconcile их и так исключает — двойная защита от дубля кампании).
+    # ВАЖЕН ПОРЯДОК: сначала уводим необратимые стак-задачи (meta-мутации + заливы
+    # кампаний) в failed, потом requeue остального (reconcile их и так исключает —
+    # двойная защита от дубля кампании).
     try:
         counts["irreversible_failed"] = await fail_irreversible_stuck(engine)
     except Exception as exc:
         logger.exception("fail_irreversible_stuck failed: %s", exc)
         counts["irreversible_failed"] = -1
+
+    try:
+        counts["campaign_create_failed"] = await fail_stuck_campaign_create(engine)
+    except Exception as exc:
+        logger.exception("fail_stuck_campaign_create failed: %s", exc)
+        counts["campaign_create_failed"] = -1
 
     try:
         counts["stuck_to_retrying"] = await reconcile_stuck_running(engine)
@@ -129,6 +180,9 @@ async def run_once(engine: AsyncEngine) -> dict[str, int]:
 
     if counts.get("irreversible_failed", 0) > 0:
         await _maybe_alert_irreversible(engine, counts["irreversible_failed"])
+
+    if counts.get("campaign_create_failed", 0) > 0:
+        await _maybe_alert_campaign_create(engine, counts["campaign_create_failed"])
 
     if any(v > 0 for v in counts.values()):
         logger.info("reconciler counts: %s", counts)

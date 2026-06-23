@@ -361,6 +361,57 @@ async def fail_stuck_irreversible(
     return n
 
 
+# task_type, которые НЕЛЬЗЯ слепо ретраить при зависании в 'running' — необратимое
+# создание объектов в Meta (повтор = дубль кампании + двойной открут бюджета). Их
+# зависшие строки уводит в failed fail_stuck_campaign_create (НЕ retrying). Зеркалит
+# контракт IRREVERSIBLE_MUTATION_KINDS для meta_api_mutation, но на уровне task_type.
+IRREVERSIBLE_TASK_TYPES: frozenset[str] = frozenset({"campaign_create"})
+
+
+async def fail_stuck_campaign_create(
+    engine: AsyncEngine,
+    *,
+    stuck_after_seconds: int = 1800,
+) -> int:
+    """Зависшие в 'running' задачи task_type='campaign_create' → 'failed' (НЕ retry).
+
+    Money-safety, зеркало fail_stuck_irreversible для meta-мутаций, но на уровне
+    task_type. Крэш-путь: campaign_creator_worker начал создавать кампанию в Meta
+    (POST /campaigns/adsets/...) и умер (SIGKILL/OOM/деплой) ДО mark_succeeded → задача
+    застряла в 'running'. Слепой reconcile перевёл бы её в 'retrying' → повторный залив =
+    ДУБЛЬ кампании + двойной открут бюджета. Помечаем 'failed' с явным error — оператор
+    проверяет Meta вручную (осиротевшие объекты в campaign_run.created_meta_ids, если
+    воркер успел их записать; иначе — по кабинету).
+
+    Вызывать ПЕРЕД reconcile_stuck_running (тот безусловно исключает campaign_create —
+    двойная защита). Возвращает число помеченных failed (>0 → caller шлёт алерт).
+    """
+    stmt = text(
+        """
+        UPDATE task_queue
+        SET status = 'failed',
+            completed_at = NOW(),
+            last_error = COALESCE(last_error, '')
+                || ' [stuck campaign_create: воркер мог начать залив в Meta до краша '
+                || '— НЕ ретраим (риск дубля кампании), проверь Meta вручную]',
+            updated_at = NOW()
+        WHERE task_type = 'campaign_create'
+          AND status = 'running'
+          AND updated_at < NOW() - make_interval(secs => :sec)
+        """
+    )
+    async with engine.begin() as conn:
+        result = await conn.execute(stmt, {"sec": int(stuck_after_seconds)})
+        n = int(result.rowcount or 0)
+    if n:
+        logger.error(
+            "reconcile: %d зависших campaign_create → failed без retry "
+            "(возможен дубль/осиротевшая кампания в Meta — нужна ручная проверка)",
+            n,
+        )
+    return n
+
+
 async def reconcile_stuck_running(
     engine: AsyncEngine,
     *,
@@ -376,16 +427,22 @@ async def reconcile_stuck_running(
     (необратимые create_campaign/duplicate_campaign): они ИСКЛЮЧАЮТСЯ из requeue,
     т.к. их обрабатывает fail_stuck_irreversible (money-safety: retry = дубль).
 
+    Необратимые task_type целиком (IRREVERSIBLE_TASK_TYPES, напр. campaign_create)
+    ИСКЛЮЧАЮТСЯ ВСЕГДА, безусловно: их зависшие строки уводит в failed
+    fail_stuck_campaign_create. retry создания кампании = дубль + двойной открут.
+
     Используется reconciler_worker'ом. Возвращает число восстановленных строк.
     Не должно быть продублировано в reconciler_worker — иначе attempt_count
     бампается дважды и max_attempts исчерпывается за вдвое меньше попыток.
     """
     exclude = [k for k in (exclude_kinds or ()) if k]
-    params: dict[str, Any] = {"sec": int(stuck_after_seconds)}
-    guard = ""
+    irreversible_types = sorted(IRREVERSIBLE_TASK_TYPES)
+    params: dict[str, Any] = {"sec": int(stuck_after_seconds), "irrev_types": irreversible_types}
+    # Безусловный guard: необратимые task_type целиком вне requeue (money-safety).
+    guard = "\n  AND task_type NOT IN :irrev_types"
     if exclude:
         # Не ретраим необратимые meta-мутации (их уводит в failed fail_stuck_irreversible).
-        guard = (
+        guard += (
             "\n  AND NOT (task_type = 'meta_api_mutation' "
             "AND payload->>'mutation_kind' IN :exclude_kinds)"
         )
@@ -401,7 +458,7 @@ async def reconcile_stuck_running(
         WHERE status = 'running'
           AND updated_at < NOW() - make_interval(secs => :sec)"""
         + guard
-    )
+    ).bindparams(bindparam("irrev_types", expanding=True))
     if exclude:
         stmt = stmt.bindparams(bindparam("exclude_kinds", expanding=True))
     async with engine.begin() as conn:
