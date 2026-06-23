@@ -395,3 +395,70 @@ async def test_worker_skips_terminal_run(pg_engine, clean_campaigns):
             )
         ).scalar()
     assert task_status == "succeeded"
+
+
+# Cancel-гонка: run отменён до исполнения → воркер прерывается ДО создания объектов в Meta.
+# Money-safety: ни одного Graph-вызова (нет призрачной кампании). Задача → failed (терминально,
+# без re-claim). Покрывает terminal-guard (cancel до загрузки); узкое окно cancel-после-загрузки
+# закрывает атомарный set_run_status(expect='queued') — см. test_set_run_status_expect_guard.
+@pytest.mark.asyncio
+async def test_worker_aborts_when_run_cancelled_before_start(
+    pg_engine, clean_campaigns, _patch_concepts
+):
+    idem = f"idem-{uuid.uuid4().hex[:8]}"
+    run_id = await _seed_run(pg_engine, _run_config(), idem)
+    task_id = await _seed_task(pg_engine, run_id, idem)
+
+    claim = await claim_campaign_task(pg_engine)
+    assert claim.task is not None
+
+    # Конкурентный cancel выиграл гонку, пока run был queued.
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE campaign_run SET status = 'cancelled' WHERE id = :rid"), {"rid": run_id}
+        )
+
+    client = _FakeClient()
+    await process_one_task(pg_engine, claim.task, client=client, uploader=_FakeUploader())
+
+    async with pg_engine.connect() as conn:
+        run_status = (
+            await conn.execute(
+                text("SELECT status FROM campaign_run WHERE id = :rid"), {"rid": run_id}
+            )
+        ).scalar()
+        task_status = (
+            await conn.execute(
+                text("SELECT status FROM task_queue WHERE id = :tid"), {"tid": task_id}
+            )
+        ).scalar()
+
+    # Ни одного Graph-вызова (кампания НЕ создана) — призрака нет.
+    assert client.calls == []
+    # run остался cancelled (воркер не перевёл в uniquifying), задача терминальна (failed).
+    assert run_status == "cancelled"
+    assert task_status == "failed"
+
+
+# Атомарный guard set_run_status(expect=...): переход не проходит, если статус уже другой
+# (конкурентный cancel перевёл run в cancelled) → воркер прерывается без создания. Сердце
+# фикса cancel-гонки на узком окне cancel-после-загрузки-до-uniquifying.
+@pytest.mark.asyncio
+async def test_set_run_status_expect_guard(pg_engine, clean_campaigns):
+    from apps.campaign_creator_worker import set_run_status
+
+    idem = f"idem-{uuid.uuid4().hex[:8]}"
+    run_id = await _seed_run(pg_engine, _run_config(), idem)  # status=queued
+
+    # queued→uniquifying проходит (статус совпал с expect).
+    assert await set_run_status(pg_engine, run_id, "uniquifying", expect="queued") is True
+    # Повторный expect='queued' уже НЕ проходит (статус uniquifying) — возврат False.
+    assert await set_run_status(pg_engine, run_id, "creating", expect="queued") is False
+    async with pg_engine.connect() as conn:
+        st = (
+            await conn.execute(
+                text("SELECT status FROM campaign_run WHERE id = :r"), {"r": run_id}
+            )
+        ).scalar()
+    # Статус не изменён неудавшимся переходом.
+    assert st == "uniquifying"

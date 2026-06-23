@@ -184,7 +184,21 @@ async def _execute_run(
         await _safe_mark_failed(engine, task, f"invalid config: {exc!r}")
         return
 
-    await set_run_status(engine, run_id, "uniquifying", progress={"stage": "uniquifying"})
+    # Атомарный queued→uniquifying (cancel-гонка): если конкурентный cancel успел перевести
+    # run в cancelled, переход НЕ пройдёт (expect='queued') → прерываемся ДО любого создания
+    # объектов в Meta. Задачу терминируем как succeeded (обработана: run отменён, создавать нечего).
+    if not await set_run_status(
+        engine, run_id, "uniquifying", progress={"stage": "uniquifying"}, expect="queued"
+    ):
+        logger.info(
+            "campaign_create: task id=%s — run %s отменён до старта (cancel-гонка), пропуск без создания",
+            task.id,
+            run_id,
+        )
+        await _safe_mark_failed(
+            engine, task, "run отменён до старта (cancel-гонка) — пропуск без создания"
+        )
+        return
 
     async def on_progress(snapshot: dict[str, Any]) -> None:
         # Прогресс execute → status + progress run. Стадии execute (uploading/creating)

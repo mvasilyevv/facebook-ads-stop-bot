@@ -62,8 +62,11 @@ CAMPAIGN_TASK_TYPE = "campaign_create"
 _MAX_TOTAL_UPLOAD_BYTES = 500 * 1024 * 1024  # 500 МБ (видео тяжелее картинок)
 _MAX_UPLOAD_FILES = 50
 
-# Статусы run, в которых ещё можно отменить (до начала creating — необратимого создания Meta).
-_CANCELLABLE_RUN_STATUSES = ("queued", "uniquifying", "uploading")
+# Отмена разрешена ТОЛЬКО пока воркер не начал исполнение (queued). Как только воркер
+# атомарно перевёл queued→uniquifying, cancel получает 409. Иначе была cancel-гонка: cancel
+# при uniquifying/uploading ставил run=cancelled, но воркер (не перечитывая статус) всё равно
+# создавал PAUSED-кампанию вопреки 200 на cancel → призрак. Спенда не было (PAUSED), но намерение нарушалось.
+_CANCELLABLE_RUN_STATUSES = ("queued",)
 
 
 def _campaign_upload_root() -> Path:

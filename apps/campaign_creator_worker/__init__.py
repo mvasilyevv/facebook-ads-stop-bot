@@ -109,15 +109,30 @@ async def set_run_status(
     status: str,
     *,
     progress: dict[str, Any] | None = None,
-) -> None:
-    """Обновляет status (+ опц. progress) campaign_run. Идемпотентно по run_id."""
+    expect: str | None = None,
+) -> bool:
+    """Обновляет status (+ опц. progress) campaign_run. Идемпотентно по run_id.
+
+    expect — если задан, переход АТОМАРЕН: применяется только если текущий status == expect
+    (WHERE status = :expect). Возвращает True если строка обновлена; False если нет
+    (статус уже другой — напр. cancelled конкурентной отменой). Используется для перехода
+    queued→uniquifying: защита cancel-гонки (cancel успел → переход не пройдёт, воркер прервётся
+    ДО создания объектов в Meta). Без expect — безусловный UPDATE, возвращает True.
+    """
     params: dict[str, Any] = {"rid": run_id, "st": status}
     set_clause = "status = :st, updated_at = NOW()"
     if progress is not None:
         set_clause += ", progress = CAST(:pr AS JSONB)"
         params["pr"] = json.dumps(progress)
+    where = "id = :rid"
+    if expect is not None:
+        where += " AND status = :expect"
+        params["expect"] = expect
     async with engine.begin() as conn:
-        await conn.execute(text(f"UPDATE campaign_run SET {set_clause} WHERE id = :rid"), params)
+        result = await conn.execute(
+            text(f"UPDATE campaign_run SET {set_clause} WHERE {where}"), params
+        )
+        return (result.rowcount or 0) > 0
 
 
 async def update_run_progress(engine: AsyncEngine, run_id: str, progress: dict[str, Any]) -> None:
