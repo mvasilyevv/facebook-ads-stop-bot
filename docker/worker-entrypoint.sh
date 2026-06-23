@@ -3,7 +3,7 @@
 # Выбирает нужный воркер по переменной WORKER_TYPE и делает exec на run_<name>.py.
 #
 # Имена WORKER_TYPE согласованы с docker-compose.yml (services.<worker>.environment.WORKER_TYPE)
-# и с реальными точками входа run_*.py в корне репозитория. Полный набор — 12 воркеров.
+# и с реальными точками входа run_*.py в корне репозитория. Полный набор — 13 воркеров.
 # DOM-каналы disable/enable удалены (отключение/включение идёт через meta_api → Marketing API).
 
 set -e
@@ -58,6 +58,11 @@ case "${WORKER_TYPE}" in
     # Запись планов создания кампаний через CDP (pubsub record_start/record_stop).
     exec python run_creator_recorder.py
     ;;
+  campaign_creator)
+    # Исполняет campaign_create (залив FB-кампаний из UI: uniquify→upload→create
+    # через Marketing API). Money-критично: кампании PAUSED, partial-create без retry.
+    exec python run_campaign_creator_worker.py
+    ;;
   migrate)
     # One-shot bootstrap+миграции (depends_on у воркеров/api). На ПУСТОЙ БД
     # базовые таблицы создаёт apply_schema (create_all), миграции — лишь
@@ -92,7 +97,7 @@ case "${WORKER_TYPE}" in
     echo "Допустимые значения:"
     echo "  observer, telegram_poller, cleanup, reconciler, meta_api, health_watchdog,"
     echo "  enable_recommendation, digest_scheduler, cabinet_scheduler, tracker_aggregator,"
-    echo "  creator_worker, creator_recorder, migrate"
+    echo "  creator_worker, creator_recorder, campaign_creator, migrate"
     exit 1
     ;;
 esac

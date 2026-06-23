@@ -80,6 +80,8 @@ _EXPECTED_WORKERS = [
     "digest_scheduler",
     "creator",
     "creator_recorder",
+    # campaign_creator — залив FB-кампаний из UI (always-on compose-сервис).
+    "campaign_creator",
     # browser-agent — нативный host-сервис (мост к Vision), пишет heartbeat из TS
     # (reconnect к Redis починен, rank 1). Python-writer'а нет → нет per-worker
     # writes-теста, но имя каноническое и обязано мониториться watchdog'ом.
