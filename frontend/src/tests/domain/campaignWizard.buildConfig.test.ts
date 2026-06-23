@@ -60,8 +60,9 @@ describe("buildConfig — concept_refs из назначения", () => {
     useWizardStore.getState().reset();
   });
 
-  it("концепт с пустым campaign_keys → идёт во ВСЕ кампании", () => {
-    // Два концепта без назначения — должны попасть в обе кампании
+  it("концепт с пустым campaign_keys → идёт во все кампании СВОЕГО типа (kind-фильтр)", () => {
+    // Два концепта без назначения: видео-ref только в video-кампанию, фото — только в image.
+    // Иначе чужой тип уронил бы уникализатор уже после создания объектов в Meta (орфаны).
     const concepts: UploadedConcept[] = [
       { ref: "img1.jpg", original_name: "img1.jpg", size_bytes: 1024, content_type: "image/jpeg", campaign_keys: [] },
       { ref: "vid1.mp4", original_name: "vid1.mp4", size_bytes: 2048, content_type: "video/mp4", campaign_keys: [] },
@@ -74,10 +75,21 @@ describe("buildConfig — concept_refs из назначения", () => {
     const config = useWizardStore.getState().buildConfig();
 
     expect(config.campaigns).toHaveLength(2);
+    // image-кампания получает только фото, video-кампания — только видео.
     // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-    expect(config.campaigns[0]!.concept_refs).toEqual(["img1.jpg", "vid1.mp4"]);
+    expect(config.campaigns[0]!.concept_refs).toEqual(["img1.jpg"]);
     // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-    expect(config.campaigns[1]!.concept_refs).toEqual(["img1.jpg", "vid1.mp4"]);
+    expect(config.campaigns[1]!.concept_refs).toEqual(["vid1.mp4"]);
+  });
+
+  it("видео-концепт без назначения НЕ попадает в image-кампанию (kind-фильтр)", () => {
+    const concepts: UploadedConcept[] = [
+      { ref: "clip.mp4", original_name: "clip.mp4", size_bytes: 2048, content_type: "video/mp4", campaign_keys: [] },
+    ];
+    seedStore(concepts, [{ key: "static1", kind: "image" }]);
+    const config = useWizardStore.getState().buildConfig();
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+    expect(config.campaigns[0]!.concept_refs).toEqual([]);
   });
 
   it("концепт с campaign_keys=['static1'] → попадает только в static1, не в video1", () => {
@@ -114,10 +126,10 @@ describe("buildConfig — concept_refs из назначения", () => {
 
     const staticCamp = config.campaigns.find((c) => c.key === "static1");
     const videoCamp  = config.campaigns.find((c) => c.key === "video1");
-    // static1 получает оба: shared + only_static
+    // static1 (image) получает оба фото: shared + only_static
     expect(staticCamp?.concept_refs).toEqual(["shared.jpg", "only_static.jpg"]);
-    // video1 получает только shared
-    expect(videoCamp?.concept_refs).toEqual(["shared.jpg"]);
+    // video1 (video) — пусто: оба концепта фото, kind-фильтр их не пускает в видео-кампанию
+    expect(videoCamp?.concept_refs).toEqual([]);
   });
 
   it("нет концептов → concept_refs пустые массивы (не падает)", () => {

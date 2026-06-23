@@ -76,6 +76,13 @@ export const WizardStep6Preview: FC<WizardStep6PreviewProps> = ({
 
   const plan = preview.plan;
 
+  // Блоки без концептов: после kind-фильтра buildConfig видео-кампания без видео (или
+  // наоборот) получает пустой concept_refs. Launch такой блок отобьёт 422 — предупреждаем
+  // заранее, чтобы байер вернулся на шаг 5 и не упёрся в ошибку на запуске.
+  const emptyBlocks = config.campaigns
+    .filter((c) => (c.concept_refs ?? []).length === 0)
+    .map((c) => c.key);
+
   return (
     <div className="space-y-6">
       {/* Заголовок */}
@@ -90,6 +97,21 @@ export const WizardStep6Preview: FC<WizardStep6PreviewProps> = ({
           Без реального создания в Meta — только план нейминга и подсчёт объектов.
         </p>
       </div>
+
+      {/* Предупреждение о кампаниях без концептов */}
+      {emptyBlocks.length > 0 && (
+        <div
+          role="alert"
+          className="flex items-start gap-2 text-[12px] text-danger bg-danger/10 border border-danger/30 rounded-[var(--radius-2)] px-3 py-2.5"
+        >
+          <AlertCircle size={14} className="shrink-0 mt-0.5" />
+          <span>
+            Без концептов (нет файлов подходящего типа):{" "}
+            <span className="font-mono">{emptyBlocks.join(", ")}</span>. Вернись на шаг 5 —
+            запуск таких кампаний будет отклонён.
+          </span>
+        </div>
+      )}
 
       {/* Dry-run plan */}
       <div className="border border-[var(--hairline)] rounded-[var(--radius-3)] overflow-hidden">

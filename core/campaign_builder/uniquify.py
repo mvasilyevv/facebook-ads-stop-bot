@@ -92,17 +92,33 @@ def _resolve_copies(cfg: CampaignConfig, block: CampaignBlock) -> int:
     return len(block.adsets)
 
 
+def block_code_span(concept_count: int, copies: int) -> int:
+    """Сколько кодов CRxxx занимает один блок: K концептов × N adset = K×N ads.
+
+    ЕДИНЫЙ источник смещения сквозной нумерации между блоками. Превью
+    (build_campaign_spec) и исполнитель (execute_campaign_spec) обязаны накапливать
+    code_start через эту функцию одинаково — иначе коды разъедутся и нарушится
+    money-инвариант превью==залив. Не дублировать `concept_count * copies` инлайном.
+    """
+    return concept_count * copies
+
+
 def build_code_layout(
     offer_code: str,
     *,
     concept_count: int,
     copies: int,
     prefix: str = "",
+    start: int = 1,
 ) -> list[list[str]]:
     """Единый source-of-truth раскладки кодов креативов (превью == исполнитель).
 
     K концептов × copies копий (= число adset'ов): total ads = K×copies, сквозная
-    нумерация OFFER_CRxxx (CR001..CR{K*copies}), adset i = K кодов (по 1 на концепт).
+    нумерация OFFER_CRxxx (start..start+K*copies-1), adset i = K кодов (по 1 на концепт).
+
+    start — первый номер кода блока. При нескольких блоках в заливе исполнитель и
+    превью передают сюда накопленное смещение (sum block_code_span предыдущих блоков),
+    чтобы коды были глобально уникальны (sub3-атрибуция не коллизирует между кампаниями).
 
     Возвращает список по adset'ам: result[i] = коды ads adset'а i, где
     result[i][c] — код варианта i концепта c. Нумерация concept-major (концепт c,
@@ -115,7 +131,7 @@ def build_code_layout(
     if copies < 0:
         raise ValueError(f"copies не может быть отрицательным, получено {copies}")
     total = concept_count * copies
-    codes = creative_codes(offer_code, count=total, prefix=prefix)
+    codes = creative_codes(offer_code, count=total, prefix=prefix, start=start)
     # adset i = [код варианта i концепта 0, код варианта i концепта 1, ...].
     return [[codes[c * copies + i] for c in range(concept_count)] for i in range(copies)]
 
@@ -131,6 +147,7 @@ def build_uniquification_plan(
     concepts: list[ConceptInput],
     *,
     copies: int | None = None,
+    code_start: int = 1,
 ) -> UniquificationPlan:
     """Строит план распределения вариантов по adset'ам (чистая функция, без I/O).
 
@@ -142,6 +159,10 @@ def build_uniquification_plan(
     из cfg.copies_per_concept или числа adset'ов блока. Исполнитель передаёт сюда
     реальное число adset'ов spec'а, чтобы раскладка variant[i]→adset[i] совпала с
     числом созданных adset'ов (защита от рассинхрона при advanced copies_per_concept).
+
+    code_start — смещение сквозной нумерации (см. build_code_layout). При нескольких
+    блоках в заливе исполнитель передаёт накопленную сумму block_code_span предыдущих
+    блоков — коды глобально уникальны, sub3-атрибуция не коллизирует между кампаниями.
     """
     copies = copies if copies is not None else _resolve_copies(cfg, block)
     if copies < 1:
@@ -157,6 +178,7 @@ def build_uniquification_plan(
         concept_count=len(concepts),
         copies=copies,
         prefix=cfg.creative_prefix,
+        start=code_start,
     )
 
     variants_by_concept: dict[str, list[UniquifiedAd]] = {}

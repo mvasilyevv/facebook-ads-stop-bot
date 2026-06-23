@@ -26,6 +26,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import uuid
 from pathlib import Path
 
@@ -49,7 +50,7 @@ from apps.api.routers.v1.schemas.campaigns_create import (
     ValidatePlanOut,
 )
 from core.campaign_builder.builder import build_campaign_spec
-from core.campaign_builder.config import CampaignConfig
+from core.campaign_builder.config import CampaignConfig, ref_media_kind
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +62,41 @@ CAMPAIGN_TASK_TYPE = "campaign_create"
 # Лимиты загрузки концептов (зеркало tools.py creative-uniquify).
 _MAX_TOTAL_UPLOAD_BYTES = 500 * 1024 * 1024  # 500 МБ (видео тяжелее картинок)
 _MAX_UPLOAD_FILES = 50
+# Размер чанка стримового чтения: не держим весь файл в RAM до cap-check (OOM-защита).
+_UPLOAD_CHUNK_BYTES = 1 * 1024 * 1024  # 1 МБ
+
+
+def _sniff_media_kind(head: bytes) -> str | None:
+    """Тип медиа по magic-байтам начала файла: 'video' | 'image' | None (неизвестно).
+
+    Грубый сниффер для защиты от переименованного файла (напр. PNG с расширением .mp4):
+    такой концепт пройдёт kind-валидатор конфига (по расширению), но уронит уникализатор
+    (ffmpeg на картинке / PIL на видео) уже ПОСЛЕ создания объектов в Meta → орфаны.
+    Ловим несовпадение содержимого и расширения ДО любого POST. None — не распознали
+    (пропускаем, воркер разберётся; не блокируем легитимные форматы).
+    """
+    if len(head) < 12:
+        return None
+    # image
+    if head[:3] == b"\xff\xd8\xff":  # JPEG
+        return "image"
+    if head[:8] == b"\x89PNG\r\n\x1a\n":  # PNG
+        return "image"
+    if head[:6] in (b"GIF87a", b"GIF89a"):  # GIF
+        return "image"
+    if head[:2] == b"BM":  # BMP
+        return "image"
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":  # WEBP
+        return "image"
+    # video
+    if head[:4] == b"RIFF" and head[8:12] == b"AVI ":  # AVI
+        return "video"
+    if head[4:8] == b"ftyp":  # MP4/MOV/M4V (ISO-BMFF)
+        return "video"
+    if head[:4] == b"\x1a\x45\xdf\xa3":  # Matroska / WebM (EBML)
+        return "video"
+    return None
+
 
 # Отмена разрешена ТОЛЬКО пока воркер не начал исполнение (queued). Как только воркер
 # атомарно перевёл queued→uniquifying, cancel получает 409. Иначе была cancel-гонка: cancel
@@ -264,40 +300,84 @@ async def upload_concepts(files: list[UploadFile] = File(...)) -> UploadConcepts
     upload_dir = _campaign_upload_root() / upload_id
     upload_dir.mkdir(parents=True, exist_ok=True)
 
-    concepts: list[UploadedConceptOut] = []
-    total_bytes = 0
-    seen: set[str] = set()
-    for index, upload in enumerate(files):
-        content = await upload.read()
-        total_bytes += len(content)
-        if total_bytes > _MAX_TOTAL_UPLOAD_BYTES:
-            raise HTTPException(
-                status_code=413,
-                detail=f"Суммарный размер файлов превышает {_MAX_TOTAL_UPLOAD_BYTES // (1024 * 1024)} МБ",
-            )
-        fname = _safe_filename(upload.filename or "", index)
-        # Гарантируем уникальность имени внутри папки (коллизии после санитизации).
-        if fname in seen:
-            stem = Path(fname).stem
-            suffix = Path(fname).suffix
-            fname = f"{stem}_{index}{suffix}"
-        seen.add(fname)
-        (upload_dir / fname).write_bytes(content)
-        concepts.append(
-            UploadedConceptOut(
-                ref=fname,
-                original_name=upload.filename or fname,
-                size_bytes=len(content),
-                content_type=upload.content_type,
-            )
-        )
+    # Любая ошибка валидации/размера → сносим всю temp-папку (нет утечки частичных файлов).
+    try:
+        concepts = await _stream_uploads_to_dir(files, upload_dir)
+    except HTTPException:
+        shutil.rmtree(upload_dir, ignore_errors=True)
+        raise
 
+    total_bytes = sum(c.size_bytes for c in concepts)
     return UploadConceptsOut(
         upload_id=upload_id,
         upload_dir=str(upload_dir),
         concepts=concepts,
         total_bytes=total_bytes,
     )
+
+
+async def _stream_uploads_to_dir(
+    files: list[UploadFile], upload_dir: Path
+) -> list[UploadedConceptOut]:
+    """Стримит каждый файл по чанкам на диск с cap-check и magic-валидацией типа.
+
+    Money/OOM-инварианты:
+    - суммарный размер проверяется ПО ХОДУ чтения (не читаем весь файл в RAM до cap-check);
+    - первый чанк сниффится: расширение vs содержимое (переименованный файл → 422 ДО
+      создания объектов в Meta, иначе орфаны после падения уникализатора).
+    """
+    concepts: list[UploadedConceptOut] = []
+    total_bytes = 0
+    seen: set[str] = set()
+    for index, upload in enumerate(files):
+        fname = _safe_filename(upload.filename or "", index)
+        # Гарантируем уникальность имени внутри папки (коллизии после санитизации).
+        if fname in seen:
+            fname = f"{Path(fname).stem}_{index}{Path(fname).suffix}"
+        seen.add(fname)
+
+        dest = upload_dir / fname
+        file_bytes = 0
+        head_checked = False
+        with dest.open("wb") as fh:
+            while True:
+                chunk = await upload.read(_UPLOAD_CHUNK_BYTES)
+                if not chunk:
+                    break
+                if not head_checked:
+                    head_checked = True
+                    declared = ref_media_kind(fname)
+                    sniffed = _sniff_media_kind(chunk[:16])
+                    if declared is not None and sniffed is not None and declared != sniffed:
+                        raise HTTPException(
+                            status_code=422,
+                            detail=(
+                                f"Файл {upload.filename or fname!r}: расширение указывает тип "
+                                f"'{declared}', а содержимое — '{sniffed}' (переименованный файл "
+                                "уронит уникализатор уже после создания объектов в Meta)"
+                            ),
+                        )
+                file_bytes += len(chunk)
+                total_bytes += len(chunk)
+                if total_bytes > _MAX_TOTAL_UPLOAD_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=(
+                            f"Суммарный размер файлов превышает "
+                            f"{_MAX_TOTAL_UPLOAD_BYTES // (1024 * 1024)} МБ"
+                        ),
+                    )
+                fh.write(chunk)
+
+        concepts.append(
+            UploadedConceptOut(
+                ref=fname,
+                original_name=upload.filename or fname,
+                size_bytes=file_bytes,
+                content_type=upload.content_type,
+            )
+        )
+    return concepts
 
 
 # ─────────────────────────────── validate ────────────────────────────────
@@ -361,10 +441,22 @@ async def launch_campaign(body: LaunchIn, engine: DepEngine) -> LaunchOut:
     config = body.domain_config()
     # Валидируем структуру через builder (тот же путь и та же раскладка K, что validate):
     # concept_counts → превью, по которому байер апрувил, и залив сверяются на одной спеке.
+    counts = body.concept_counts_map()
     try:
-        build_campaign_spec(config, concept_counts=body.concept_counts_map())
+        build_campaign_spec(config, concept_counts=counts)
     except (ValueError, KeyError) as exc:
         raise HTTPException(status_code=422, detail=f"Невалидный конфиг: {exc}") from exc
+
+    # Fail-fast: блок без концептов создаст обречённый run (воркер упадёт на resolve_concepts).
+    # build_campaign_spec этого не ловит (0 концептов = 0 ads, не ошибка). Отбиваем ДО создания
+    # run/задачи — чтобы в истории не плодились заведомо-failed заливы (UX + чистота очереди).
+    if counts is not None:
+        empty = sorted(k for k, v in counts.items() if v < 1)
+        if empty:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Кампании без концептов: {', '.join(empty)} — назначь хотя бы один концепт",
+            )
 
     ikey = body.idempotency_key or _compute_idempotency_key(config)
     # В БД пишем КАНОНИЧЕСКИЙ доменный снимок (воркер ждёт вложенный CampaignConfig).

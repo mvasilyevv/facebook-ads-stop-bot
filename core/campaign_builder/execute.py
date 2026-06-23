@@ -35,6 +35,7 @@ from core.campaign_builder.config import CampaignBlock, CampaignConfig
 from core.campaign_builder.uniquify import (
     ConceptInput,
     UniquifiedAdset,
+    block_code_span,
     build_uniquification_plan,
     uniquify_concepts,
 )
@@ -231,11 +232,14 @@ async def _execute_block(
     created: dict[str, list[str]],
     state: _ProgressState,
     on_progress: ProgressCb | None,
+    code_start: int = 1,
 ) -> None:
     """Заливает одну кампанию: campaign → adsets → upload → creatives → ads.
 
     Мутирует created (накопитель id) — даже при исключении на середине вызывающий
     видит уже созданные объекты. Порядок шагов — из builder.plan_execution_steps.
+    code_start — смещение сквозной нумерации кодов (накоплено по предыдущим блокам),
+    чтобы коды совпали с превью и были глобально уникальны (sub3-атрибуция).
     """
     act = cfg.account.act
     cfg_block = _config_block_by_key(cfg, spec_block.key)
@@ -244,7 +248,9 @@ async def _execute_block(
     # если concepts пуст — осиротевших объектов не будет. copies жёстко = числу
     # adset'ов spec'а: variant[i]→adset[i] совпадает с числом реально создаваемых
     # adset'ов (нет рассинхрона при advanced copies_per_concept).
-    plan = build_uniquification_plan(cfg, cfg_block, concepts, copies=len(spec_block.adsets))
+    plan = build_uniquification_plan(
+        cfg, cfg_block, concepts, copies=len(spec_block.adsets), code_start=code_start
+    )
     state.total_ads += sum(len(a.ads) for a in plan.adsets)
 
     # 1) campaign (всегда PAUSED).
@@ -374,6 +380,10 @@ async def execute_campaign_spec(
     created = _empty_ids()
     state = _ProgressState(stage="creating")
 
+    # Сквозная нумерация кодов между блоками: блок B продолжает с номера, на котором
+    # кончился блок A. Накопление block_code_span ЗЕРКАЛИТ build_campaign_spec (превью):
+    # коды глобально уникальны и совпадают с превью (money-инвариант превью==залив).
+    code_start = 1
     for spec_block in spec.campaigns:
         concepts = concepts_by_campaign.get(spec_block.key, [])
         if not concepts:
@@ -397,6 +407,7 @@ async def execute_campaign_spec(
                 created=created,
                 state=state,
                 on_progress=on_progress,
+                code_start=code_start,
             )
         except PartialCreateError:
             raise
@@ -407,6 +418,8 @@ async def execute_campaign_spec(
                 failed_step=state.stage,
                 campaign_create_attempted=state.campaign_create_attempted,
             )
+        # Сдвигаем нумерацию на размер только что залитого блока (= len(concepts)×N adset).
+        code_start += block_code_span(len(concepts), len(spec_block.adsets))
 
     state.stage = "succeeded"
     await _emit(on_progress, state)

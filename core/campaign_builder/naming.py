@@ -30,13 +30,19 @@ def render_name(
     )
 
 
-def creative_codes(offer_code: str, *, count: int, prefix: str = "") -> list[str]:
-    """Генерирует список кодов креативов OFFER_CRxxx с нумерацией от 1.
+def creative_codes(offer_code: str, *, count: int, prefix: str = "", start: int = 1) -> list[str]:
+    """Генерирует список кодов креативов OFFER_CRxxx с нумерацией от `start`.
 
     По умолчанию префикс = `{offer_code}_CR` → `GH_CR_CR001`, `GH_CR_CR002`, …
     Код идёт в sub3 трекинга и в имя ad/creative.
+
+    start — первый номер (по умолчанию 1). Используется для сквозной нумерации между
+    блоками одного залива: блок B продолжает с того номера, на котором кончился блок A,
+    иначе sub3=CRxxx коллизирует между кампаниями (порча атрибуции трекера).
     """
     if count < 0:
         raise ValueError(f"count не может быть отрицательным, получено {count}")
+    if start < 1:
+        raise ValueError(f"start должен быть >= 1, получено {start}")
     used_prefix = prefix or f"{offer_code}_CR"
-    return [f"{used_prefix}{i:03d}" for i in range(1, count + 1)]
+    return [f"{used_prefix}{i:03d}" for i in range(start, start + count)]

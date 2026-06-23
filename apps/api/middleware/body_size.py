@@ -8,10 +8,12 @@
 постбэк трекера — это маленький JSON, на порядки меньше лимита. Остальные
 endpoints API тело не принимают, поэтому общий лимит на app-level безопасен.
 
-Исключение (H7b): /api/tools/* грузят multipart с изображениями (creative-uniquify,
-реальные файлы много больше 64 KB) — у них свой внутренний лимит в хендлере, и они
-dev-only (require_dev_tools). Для этих path 64KB-лимит не применяется, иначе multipart
-с картинками отбивался бы 413 до handler'а.
+Исключение (H7b): /api/tools/* грузят multipart с медиа (creative-uniquify и
+campaigns/upload — реальные файлы много больше 64 KB) — у них свой внутренний лимит
+в хендлере (_MAX_TOTAL_UPLOAD_BYTES, стримовое чтение по чанкам). Для этих path
+64KB-лимит не применяется, иначе multipart с картинками/видео отбивался бы 413 до
+handler'а. Гейт доступа разный: tools.py — dev-only (require_dev_tools), а
+campaigns/* — X-API-Key (ApiKeyAuthMiddleware); общий — собственный размерный лимит.
 """
 
 from __future__ import annotations
@@ -24,7 +26,8 @@ MAX_REQUEST_BODY_BYTES = 64 * 1024
 
 _BODYLESS_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
-# Path-префиксы, освобождённые от 64KB-лимита (large multipart, dev-only tools).
+# Path-префиксы, освобождённые от 64KB-лимита (large multipart: creative-uniquify,
+# campaigns/upload). У каждого свой внутренний размерный лимит в хендлере.
 _EXEMPT_PATH_PREFIXES = ("/api/tools/",)
 
 
