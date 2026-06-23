@@ -71,12 +71,23 @@ export const VisionTab: FC = () => {
     }
   };
 
-  const cdpStatus = data?.cdp_ready
-    ? "READY"
-    : data?.runtime_status ?? "OFFLINE";
+  // CDP-бейдж отражает РЕАЛЬНУЮ сессию (cdp_ready), а не статус процесса. Раньше при
+  // cdp_ready=false бейдж подменялся на runtime_status="ONLINE" (статус процесса
+  // browser-agent) → противоречие с «Активная CDP-сессия отсутствует». Теперь честно:
+  // READY (сессия есть) / НЕТ СЕССИИ (агент жив, но сессии нет) / OFFLINE (агент мёртв).
+  const agentAlive = Boolean(data?.runtime_status);
+  const cdpStatus = data?.cdp_ready ? "READY" : agentAlive ? "НЕТ СЕССИИ" : "OFFLINE";
   const cdpVariant = data?.cdp_ready
     ? ("success" as const)
-    : ("neutral" as const);
+    : agentAlive
+      ? ("warning" as const)
+      : ("stop" as const);
+  // Источник токена: показываем «(.env)», если токен взят из .env, а не сохранён в БД.
+  const tokenLabel = data?.has_token
+    ? data?.token_source === "env"
+      ? "Задан (.env)"
+      : "Задан"
+    : "Не задан";
 
   return (
     <div className="space-y-5 max-w-xl">
@@ -86,7 +97,13 @@ export const VisionTab: FC = () => {
           <div className="flex items-center justify-between">
             <span className="text-[13px] text-bg-10">Токен</span>
             <Badge variant={data?.has_token ? "success" : "neutral"} size="sm">
-              {data?.has_token ? "Задан" : "Не задан"}
+              {tokenLabel}
+            </Badge>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-[13px] text-bg-10">Агент</span>
+            <Badge variant={agentAlive ? "success" : "stop"} size="sm">
+              {data?.runtime_status ?? "OFFLINE"}
             </Badge>
           </div>
           <div className="flex items-center justify-between">

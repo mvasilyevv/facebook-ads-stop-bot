@@ -71,6 +71,23 @@ async def _load_config(session: AsyncSession) -> VisionConfig | None:
     return await session.scalar(select(VisionConfig).where(VisionConfig.singleton_key == "default"))
 
 
+def _resolve_token_source(
+    snap: _VisionSnapshot | None, settings: object
+) -> tuple[bool, str | None]:
+    """has_token + источник токена с учётом .env-fallback.
+
+    Vision подключается токеном из БД (vision_config), а при пустой БД — из .env
+    (VISION_X_TOKEN, см. _reconnect_browser). Поэтому «токен задан», если он есть хоть
+    где-то: db (приоритет) → env. Без env-fallback UI показывал «Не задан» при рабочем
+    .env-токене (типичная ситуация после деплоя, когда в БД токен ещё не сохраняли).
+    """
+    if snap and snap.x_token_encrypted:
+        return True, "db"
+    if getattr(settings, "vision_x_token", None):
+        return True, "env"
+    return False, None
+
+
 async def _read_runtime_from_redis(redis: object) -> dict[str, object]:
     """Считывает runtime-поля браузера из Redis heartbeat-ключа.
 
@@ -121,10 +138,11 @@ async def _read_runtime_from_redis(redis: object) -> dict[str, object]:
 async def get_vision_settings(
     engine: DepEngine,
     redis: DepRedis,
+    settings: DepSettings,
 ) -> VisionSettingsResponse:
     """Возвращает VisionConfig и runtime-поля из Redis.
 
-    has_token = x_token_encrypted не пустой.
+    has_token = токен есть в БД ИЛИ в .env (token_source говорит, где именно).
     Runtime-поля берутся из worker:heartbeat:browser-agent.
     """
     async with AsyncSession(engine) as session:
@@ -133,13 +151,14 @@ async def get_vision_settings(
 
     runtime = await _read_runtime_from_redis(redis)
 
-    has_token = bool(snap and snap.x_token_encrypted)
+    has_token, token_source = _resolve_token_source(snap, settings)
     profile_id: str | None = None
     if snap and snap.profile_id:
         profile_id = snap.profile_id
 
     return VisionSettingsResponse(
         has_token=has_token,
+        token_source=token_source,
         profile_id=profile_id,
         auto_restart_on_missing_cdp=snap.auto_restart_on_missing_cdp if snap else True,
         runtime_status=runtime["runtime_status"],  # type: ignore[arg-type]
@@ -154,6 +173,7 @@ async def put_vision_settings(
     body: VisionSettingsUpdateRequest,
     engine: DepEngine,
     redis: DepRedis,
+    settings: DepSettings,
 ) -> VisionSettingsResponse:
     """Обновляет x_token / profile_id / флаг self-heal в VisionConfig singleton.
 
@@ -187,13 +207,14 @@ async def put_vision_settings(
 
     runtime = await _read_runtime_from_redis(redis)
 
-    has_token = bool(snap and snap.x_token_encrypted)
+    has_token, token_source = _resolve_token_source(snap, settings)
     profile_id_val: str | None = None
     if snap and snap.profile_id:
         profile_id_val = snap.profile_id
 
     return VisionSettingsResponse(
         has_token=has_token,
+        token_source=token_source,
         profile_id=profile_id_val,
         auto_restart_on_missing_cdp=snap.auto_restart_on_missing_cdp if snap else True,
         runtime_status=runtime["runtime_status"],  # type: ignore[arg-type]

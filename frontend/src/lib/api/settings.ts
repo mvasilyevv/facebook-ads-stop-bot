@@ -21,6 +21,8 @@ import type { HealthDetails, ObserverConfig, ObserverStatus, TelegramSettings } 
 /** Ответ настроек Vision — не вынесен в @fb/shared, описываем здесь. */
 export interface VisionSettingsResponse {
   has_token: boolean;
+  /** Где взят токен: "db" | "env" | null (нет нигде). */
+  token_source?: string | null;
   profile_id?: string | null;
   auto_restart_on_missing_cdp: boolean;
   runtime_status?: string | null;
