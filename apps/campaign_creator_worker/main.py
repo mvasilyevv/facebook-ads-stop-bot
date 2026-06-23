@@ -222,7 +222,13 @@ async def _execute_run(
     except Exception as exc:  # noqa: BLE001 — единая маршрутизация по classify
         kind = classify_execution_error(exc)
         if kind == "transient":
-            # Сеть/rate-limit/Vision — задача в requeue с backoff, run остаётся «в работе».
+            # Money-safety: transient по classify_execution_error возможен ТОЛЬКО до
+            # инициации POST campaign (irreversible_attempted=False) — объект гарантированно
+            # не создан. Сбрасываем run обратно в 'queued' ПЕРЕД requeue: иначе он застрял
+            # в 'uniquifying' (set_run_status выше), и re-claim guard в process_one_task
+            # («run уже в работе» → failed) зарубил бы легитимный transient-retry.
+            await set_run_status(engine, run_id, "queued")
+            # Сеть/rate-limit/Vision — задача в requeue с backoff, run снова queued.
             retried = await requeue_for_retry(
                 engine,
                 task_id=task.id,

@@ -63,7 +63,6 @@ export interface WizardGoal {
   advantage_audience: boolean;
   click_through_days: number;
   view_through_days: number;
-  url_tags: string;
   ad_text_mode: "none" | "text";
   ad_text_primary: string;
 }
@@ -164,7 +163,6 @@ const DEFAULT_GOAL: WizardGoal = {
   advantage_audience: true,
   click_through_days: 1,
   view_through_days: 1,
-  url_tags: "",
   ad_text_mode: "none",
   ad_text_primary: "",
 };
@@ -232,7 +230,6 @@ export const useWizardStore = create<WizardState & WizardActions>((set, get) => 
         text_optimizations: preset.text_optimizations,
         click_through_days: preset.click_through_days,
         view_through_days: preset.view_through_days,
-        url_tags: preset.url_tags_template ?? "",
       },
     }),
 
@@ -240,6 +237,18 @@ export const useWizardStore = create<WizardState & WizardActions>((set, get) => 
 
   buildConfig: () => {
     const { identity, goal, structure, creatives, preview } = get();
+
+    // Для каждой кампании собираем concept_refs из загруженных концептов,
+    // привязанных к этой кампании по campaign_keys. Пустой campaign_keys = все.
+    const campaignsWithRefs: CampaignConfig["campaigns"] = structure.campaigns.map((block) => {
+      const refs = creatives.concepts
+        .filter(
+          (c) =>
+            c.campaign_keys.length === 0 || c.campaign_keys.includes(block.key),
+        )
+        .map((c) => c.ref);
+      return { ...block, concept_refs: refs };
+    });
 
     const config: CampaignConfig = {
       act_id: identity.act_id,
@@ -269,8 +278,8 @@ export const useWizardStore = create<WizardState & WizardActions>((set, get) => 
       advantage_audience: goal.advantage_audience,
       click_through_days: goal.click_through_days,
       view_through_days: goal.view_through_days,
-      url_tags: goal.url_tags || null,
-      campaigns: structure.campaigns,
+      // url_tags вычисляется бэком по SOP (builder.url_tags_of), кастомный ввод убран
+      campaigns: campaignsWithRefs,
       copies_per_concept: creatives.copies_per_concept ?? undefined,
       creo_root: creatives.upload_id,
       launch_state: preview.launch_state,

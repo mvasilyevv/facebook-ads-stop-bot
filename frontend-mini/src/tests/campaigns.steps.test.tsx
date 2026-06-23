@@ -172,6 +172,10 @@ describe("StepConfig — валидация", () => {
     fireEvent.change(screen.getByLabelText(/Ссылка назначения/i), {
       target: { value: "https://trk.example.com/click" },
     });
+    // Бюджет обязателен (минимум $1) — заполняем
+    fireEvent.change(screen.getByLabelText(/Дневной бюджет/i), {
+      target: { value: "50" },
+    });
     fireEvent.click(screen.getByRole("button", { name: /далее/i }));
     await waitFor(() => {
       expect(useWizardStore.getState().step).toBe("structure");
@@ -182,6 +186,10 @@ describe("StepConfig — валидация", () => {
     renderConfig();
     fireEvent.change(screen.getByLabelText(/Ссылка назначения/i), {
       target: { value: "https://trk.example.com" },
+    });
+    // Бюджет обязателен (минимум $1) — заполняем
+    fireEvent.change(screen.getByLabelText(/Дневной бюджет/i), {
+      target: { value: "50" },
     });
     fireEvent.click(screen.getByRole("button", { name: /далее/i }));
     await waitFor(() => {

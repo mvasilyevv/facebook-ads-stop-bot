@@ -169,6 +169,10 @@ class CampaignConfigIn(BaseModel):
                     name=f"{{byer}} | {{offer}} | {label} | adset.pro | {{date}}",
                     kind=camp.kind,
                     adsets=adsets,
+                    # ЕДИНЫЙ источник концептов: имена файлов из upload-ответа, назначенные
+                    # фронтом на эту кампанию. Воркер резолвит {creo_root}/{ref} по каждому —
+                    # без рассинхрона с validate (len concept_refs).
+                    concept_refs=list(camp.concept_refs),
                 )
             )
         return blocks

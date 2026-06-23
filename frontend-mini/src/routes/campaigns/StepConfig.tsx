@@ -54,12 +54,17 @@ export function StepConfig() {
       setError("Укажите ссылку назначения (трекинг-URL)");
       return;
     }
-    const dailyCentsNum = dailyCents.trim() ? Math.round(parseFloat(dailyCents) * 100) : null;
-    if (dailyCentsNum !== null && isNaN(dailyCentsNum)) {
-      setError("Некорректный бюджет");
+    const raw = dailyCents.trim();
+    if (!raw) {
+      setError("Укажите дневной бюджет (минимум $1)");
       return;
     }
-    if (dailyCentsNum !== null && dailyCentsNum > 10_000_000) {
+    const dailyCentsNum = Math.round(parseFloat(raw) * 100);
+    if (isNaN(dailyCentsNum) || dailyCentsNum < 100) {
+      setError("Минимальный бюджет — $1");
+      return;
+    }
+    if (dailyCentsNum > 10_000_000) {
       setError("Дневной бюджет превышает $100 000 — проверьте");
       return;
     }

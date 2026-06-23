@@ -105,6 +105,8 @@ export interface CampaignSpec {
   key: string;
   kind: "image" | "video";
   adset_count: number;
+  /** Ссылки на загруженные концепты (refs из /upload). Заполняется на шаге Креативы. */
+  concept_refs?: string[];
   adsets?: AdsetSpec[];
 }
 
@@ -138,7 +140,7 @@ export interface CampaignConfig {
   url_tags?: string | null;
   bid_strategy?: string | null;
   advantage_audience?: boolean;
-  ad_text?: { mode: "none" | "text"; texts?: string[] } | null;
+  ad_text?: { mode: "none" | "text"; primary?: string } | null;
 }
 
 // ─── Validate ─────────────────────────────────────────────────────────────

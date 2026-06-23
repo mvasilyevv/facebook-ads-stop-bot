@@ -185,6 +185,8 @@ def test_flat_config_to_domain_mapping() -> None:
     assert block.kind == "image"
     assert len(block.adsets) == 2
     assert "static" in block.name
+    # ЕДИНЫЙ источник концептов: concept_refs проброшен в доменный блок (не теряется).
+    assert block.concept_refs == ["a.jpg", "b.jpg"]
     # creo_root проброшен (upload_id).
     assert dom.creo_root == "abc123"
 

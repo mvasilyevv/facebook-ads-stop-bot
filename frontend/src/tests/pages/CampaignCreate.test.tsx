@@ -232,7 +232,6 @@ const DEFAULT_GOAL: WizardGoal = {
   advantage_audience: true,
   click_through_days: 1,
   view_through_days: 1,
-  url_tags: "",
   ad_text_mode: "none",
   ad_text_primary: "",
 };
@@ -638,10 +637,10 @@ describe("useWizardStore", () => {
       updated_at: "2026-06-01T00:00:00Z",
     };
     act(() => useWizardStore.getState().applyPreset(preset));
-    const { identity, goal } = useWizardStore.getState();
+    const { identity } = useWizardStore.getState();
     expect(identity.act_id).toBe("act_999");
     expect(identity.offer_code).toBe("TEST_OFF");
-    expect(goal.url_tags).toBe("sub2={{ad.id}}");
+    // url_tags убран из WizardGoal (вычисляется бэком по SOP, не редактируется пользователем)
   });
 
   // reset сбрасывает store в initial state

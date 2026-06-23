@@ -292,6 +292,84 @@ async def test_worker_pre_post_failure_no_meta_calls(pg_engine, clean_campaigns,
     assert status == "failed"
 
 
+# MID transient self-sabotage: transient-сбой ДО POST campaign → run сбрасывается обратно
+# в 'queued' (не застревает в uniquifying), задача в retrying. Следующий claim той же
+# задачи НЕ зарубается re-claim guard'ом ('run уже в работе') и переисполняет залив.
+@pytest.mark.asyncio
+async def test_worker_transient_pre_post_resets_run_to_queued(
+    pg_engine, clean_campaigns, monkeypatch
+):
+    idem = f"idem-{uuid.uuid4().hex[:8]}"
+    run_id = await _seed_run(pg_engine, _run_config(), idem)
+    task_id = await _seed_task(pg_engine, run_id, idem)
+
+    claim = await claim_campaign_task(pg_engine)
+    # Transient ДО инициации POST campaign: падаем в build_uniquification_plan (чистый шаг
+    # ПЕРЕД любым Meta-вызовом) с TemporaryError. irreversible_attempted=False (POST не
+    # инициирован, объект гарантированно не создан) → classify == transient → requeue.
+    from core.meta_api.errors import TemporaryError
+
+    call_state = {"failed": False}
+
+    def _flaky_plan(*args, **kwargs):
+        # Первый прогон падает (transient), повторный — реальная раскладка.
+        if not call_state["failed"]:
+            call_state["failed"] = True
+            raise TemporaryError("vision unavailable до POST")
+        from core.campaign_builder.uniquify import build_uniquification_plan as _real
+
+        return _real(*args, **kwargs)
+
+    monkeypatch.setattr("core.campaign_builder.execute.build_uniquification_plan", _flaky_plan)
+
+    client = _FakeClient()
+    await process_one_task(pg_engine, claim.task, client=client, uploader=_FakeUploader())
+    # Ни одного Meta-вызова: упали ДО POST campaign (объект не создан).
+    assert client.calls == []
+
+    async with pg_engine.connect() as conn:
+        run_status = (
+            await conn.execute(
+                text("SELECT status FROM campaign_run WHERE id = :rid"), {"rid": run_id}
+            )
+        ).scalar()
+        task = (
+            await conn.execute(
+                text("SELECT status, attempt_count FROM task_queue WHERE id = :tid"),
+                {"tid": task_id},
+            )
+        ).first()
+    # Run НЕ застрял в uniquifying — сброшен в queued (re-claim guard его не зарубит).
+    assert run_status == "queued"
+    assert task.status == "retrying"
+    assert task.attempt_count == 1
+
+    # Повторный claim той же задачи (после backoff) — переисполняем, теперь успешно.
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text("UPDATE task_queue SET next_retry_at = NOW() - INTERVAL '1 second' WHERE id=:tid"),
+            {"tid": task_id},
+        )
+    claim2 = await claim_campaign_task(pg_engine)
+    assert claim2.task is not None and claim2.task.id == task_id
+    await process_one_task(pg_engine, claim2.task, client=_FakeClient(), uploader=_FakeUploader())
+
+    async with pg_engine.connect() as conn:
+        run2 = (
+            await conn.execute(
+                text("SELECT status FROM campaign_run WHERE id = :rid"), {"rid": run_id}
+            )
+        ).scalar()
+        task2 = (
+            await conn.execute(
+                text("SELECT status FROM task_queue WHERE id = :tid"), {"tid": task_id}
+            )
+        ).scalar()
+    # Легитимный transient-retry прошёл: run залит, задача succeeded.
+    assert run2 == "succeeded"
+    assert task2 == "succeeded"
+
+
 # Дубль-задача на уже succeeded run (после reconciler-таймаута) — повторно не исполняется.
 @pytest.mark.asyncio
 async def test_worker_skips_terminal_run(pg_engine, clean_campaigns):

@@ -235,12 +235,13 @@ export const WizardStep3Goal: FC<WizardStep3GoalProps> = ({ values, onChange, er
           />
         </div>
         <div className="mt-4 grid grid-cols-2 gap-4">
-          <Input
-            label="URL Tags (sub2…sub7)"
-            placeholder="sub2={{ad.id}}&sub3={{campaign.id}}"
-            value={values.url_tags}
-            onChange={(e) => onChange({ url_tags: e.target.value })}
-          />
+          {/* url_tags вычисляется бэком по SOP (url_tags_of), редактирование убрано */}
+          <div className="flex flex-col gap-1">
+            <div className="text-[11px] font-display tracking-wider uppercase text-bg-9">
+              URL Tags
+            </div>
+            <div className="text-[12px] text-bg-7 italic">Трекинг по SOP — бэк вычисляет автоматически</div>
+          </div>
           <Select
             label="Text Optimizations"
             options={TEXT_OPT_OPTIONS}
@@ -287,6 +288,7 @@ function SectionLabel({ children }: { children: string }) {
 // ─── Валидация ────────────────────────────────────────────────────────────────
 
 export function validateGoal(values: WizardGoal): Partial<Record<keyof WizardGoal, string>> {
+  // url_tags убран из WizardGoal — бэк вычисляет по SOP
   const errors: Partial<Record<keyof WizardGoal, string>> = {};
 
   if (!values.destination_link.trim()) errors.destination_link = "Укажите трекинг-ссылку";
