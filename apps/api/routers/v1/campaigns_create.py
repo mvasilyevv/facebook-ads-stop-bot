@@ -302,9 +302,14 @@ async def upload_concepts(files: list[UploadFile] = File(...)) -> UploadConcepts
 
 @router.post("/tools/campaigns/validate", response_model=ValidatePlanOut)
 async def validate_config(body: ValidateIn) -> ValidatePlanOut:
-    """Dry-run: собирает план (число объектов + нейминг) без создания в Meta."""
+    """Dry-run: собирает план (число объектов + нейминг) без создания в Meta.
+
+    concept_counts (число концептов на блок) передаётся в build_campaign_spec —
+    раскладка K концептов × copies (сквозная нумерация ads), как у исполнителя.
+    """
     try:
-        spec = build_campaign_spec(body.config)
+        config = body.domain_config()
+        spec = build_campaign_spec(config, concept_counts=body.concept_counts_map())
     except (ValueError, KeyError) as exc:
         raise HTTPException(status_code=422, detail=f"Невалидный конфиг: {exc}") from exc
 
@@ -349,14 +354,18 @@ async def launch_campaign(body: LaunchIn, engine: DepEngine) -> LaunchOut:
     launch того же конфига → находим существующий run, ничего не дублируем (200-shape).
     Воркер по run_id грузит CampaignRun и исполняет залив.
     """
-    # Валидируем структуру через builder (тот же путь, что validate).
+    # Нормализуем плоский/вложенный вход в доменный CampaignConfig (единая точка).
+    config = body.domain_config()
+    # Валидируем структуру через builder (тот же путь и та же раскладка K, что validate):
+    # concept_counts → превью, по которому байер апрувил, и залив сверяются на одной спеке.
     try:
-        build_campaign_spec(body.config)
+        build_campaign_spec(config, concept_counts=body.concept_counts_map())
     except (ValueError, KeyError) as exc:
         raise HTTPException(status_code=422, detail=f"Невалидный конфиг: {exc}") from exc
 
-    ikey = body.idempotency_key or _compute_idempotency_key(body.config)
-    config_json = body.config.model_dump_json()
+    ikey = body.idempotency_key or _compute_idempotency_key(config)
+    # В БД пишем КАНОНИЧЕСКИЙ доменный снимок (воркер ждёт вложенный CampaignConfig).
+    config_json = config.model_dump_json()
 
     preset_uuid: uuid.UUID | None = None
     if body.preset_id:
@@ -366,23 +375,45 @@ async def launch_campaign(body: LaunchIn, engine: DepEngine) -> LaunchOut:
             raise HTTPException(status_code=422, detail="preset_id не UUID") from exc
 
     async with engine.begin() as conn:
-        # Идемпотентность: тот же ключ → возвращаем существующий run без дубля залива.
-        existing = (
+        # Идемпотентность money-safe (HIGH-4): INSERT ... ON CONFLICT DO NOTHING вместо
+        # read-then-insert. Два параллельных launch с одним ключом → один создаёт run,
+        # второй ловит конфликт (RETURNING пуст) и возвращает СУЩЕСТВУЮЩИЙ run — без
+        # 500 и без дубля залива (=без двойного открута бюджета).
+        run_row = (
             await conn.execute(
                 text(
-                    "SELECT id::text AS id, status FROM campaign_run "
-                    "WHERE idempotency_key = :ik LIMIT 1"
+                    """
+                    INSERT INTO campaign_run (preset_id, config, status, idempotency_key)
+                    VALUES (:preset_id, CAST(:config AS JSONB), 'queued', :ik)
+                    ON CONFLICT (idempotency_key) DO NOTHING
+                    RETURNING id::text AS id, status
+                    """
                 ),
-                {"ik": ikey},
+                {"preset_id": preset_uuid, "config": config_json, "ik": ikey},
             )
         ).first()
-        if existing is not None:
-            task_row = (
+
+        if run_row is None:
+            # Конфликт по idempotency_key — run уже создан (повтор/гонка). Возвращаем его.
+            existing = (
                 await conn.execute(
-                    text("SELECT id FROM task_queue WHERE idempotency_key = :ik LIMIT 1"),
+                    text(
+                        "SELECT id::text AS id, status FROM campaign_run "
+                        "WHERE idempotency_key = :ik LIMIT 1"
+                    ),
                     {"ik": ikey},
                 )
             ).first()
+            task_row = (
+                await conn.execute(
+                    text(
+                        "SELECT id FROM task_queue WHERE idempotency_key = :ik "
+                        "AND task_type = :tt LIMIT 1"
+                    ),
+                    {"ik": ikey, "tt": CAMPAIGN_TASK_TYPE},
+                )
+            ).first()
+            logger.info("campaign launch idempotent: run_id=%s ikey=%s", existing.id, ikey)
             return LaunchOut(
                 run_id=existing.id,
                 task_id=int(task_row.id) if task_row else None,
@@ -390,22 +421,11 @@ async def launch_campaign(body: LaunchIn, engine: DepEngine) -> LaunchOut:
                 idempotency_key=ikey,
             )
 
-        run_row = (
-            await conn.execute(
-                text(
-                    """
-                    INSERT INTO campaign_run (preset_id, config, status, idempotency_key)
-                    VALUES (:preset_id, CAST(:config AS JSONB), 'queued', :ik)
-                    RETURNING id::text AS id, status
-                    """
-                ),
-                {"preset_id": preset_uuid, "config": config_json, "ik": ikey},
-            )
-        ).first()
         run_id = run_row.id
 
         # Задача воркера: payload = {run_id}. task_type='campaign_create' (контракт).
-        # Тот же idempotency_key — двойная защита от дубля залива.
+        # Тот же idempotency_key — двойная защита от дубля залива. ON CONFLICT DO NOTHING:
+        # если задача уже есть (гонка/повтор) — берём существующую, не плодим дубль.
         task_row = (
             await conn.execute(
                 text(
@@ -415,6 +435,7 @@ async def launch_campaign(body: LaunchIn, engine: DepEngine) -> LaunchOut:
                          attempt_count, max_attempts, requested_by)
                     VALUES
                         (:tt, 'pending', :ik, CAST(:pl AS JSONB), 0, 5, :rb)
+                    ON CONFLICT (idempotency_key) DO NOTHING
                     RETURNING id
                     """
                 ),
@@ -426,11 +447,22 @@ async def launch_campaign(body: LaunchIn, engine: DepEngine) -> LaunchOut:
                 },
             )
         ).first()
+        if task_row is None:
+            task_row = (
+                await conn.execute(
+                    text(
+                        "SELECT id FROM task_queue WHERE idempotency_key = :ik "
+                        "AND task_type = :tt LIMIT 1"
+                    ),
+                    {"ik": ikey, "tt": CAMPAIGN_TASK_TYPE},
+                )
+            ).first()
 
-    logger.info("campaign launch: run_id=%s task_id=%s ikey=%s", run_id, task_row.id, ikey)
+    task_id = int(task_row.id) if task_row else None
+    logger.info("campaign launch: run_id=%s task_id=%s ikey=%s", run_id, task_id, ikey)
     return LaunchOut(
         run_id=run_id,
-        task_id=int(task_row.id),
+        task_id=task_id,
         status="queued",
         idempotency_key=ikey,
     )

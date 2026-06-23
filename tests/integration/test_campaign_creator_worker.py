@@ -232,9 +232,11 @@ async def test_worker_partial_fail(pg_engine, clean_campaigns):
     assert task_status == "failed"
 
 
-# Transient-сбой (Vision недоступен на первом шаге) → задача в retrying (не failed).
+# HIGH-2 money-safety: сбой НА POST campaign (Vision лёг при отправке → ответ мог
+# потеряться, кампания создаться) → задача в failed БЕЗ retry (повтор = дубль), даже
+# если причина transient. created пуст, но run уведён в failed (orphan на проверку).
 @pytest.mark.asyncio
-async def test_worker_transient_requeue(pg_engine, clean_campaigns):
+async def test_worker_fail_on_campaign_post_no_retry(pg_engine, clean_campaigns):
     idem = f"idem-{uuid.uuid4().hex[:8]}"
     run_id = await _seed_run(pg_engine, _run_config(), idem)
     task_id = await _seed_task(pg_engine, run_id, idem)
@@ -250,9 +252,44 @@ async def test_worker_transient_requeue(pg_engine, clean_campaigns):
                 {"tid": task_id},
             )
         ).first()
-    # Ничего не создано → transient → requeue, attempt инкрементнут.
-    assert task.status == "retrying"
-    assert task.attempt_count == 1
+        run_status = (
+            await conn.execute(
+                text("SELECT status FROM campaign_run WHERE id = :rid"), {"rid": run_id}
+            )
+        ).scalar()
+    # POST campaign инициирован → ack-lost → failed без retry (НЕ retrying).
+    assert task.status == "failed"
+    assert run_status == "failed"
+
+
+# Transient ДО инициации POST campaign (нет концептов на блок) НЕ должен задеть деньги:
+# падение происходит до любого Meta-вызова. Тут causa — ValueError (permanent), проверяем
+# лишь что повторного залива нет и задача терминальна (не зависает в running).
+@pytest.mark.asyncio
+async def test_worker_pre_post_failure_no_meta_calls(pg_engine, clean_campaigns, monkeypatch):
+    idem = f"idem-{uuid.uuid4().hex[:8]}"
+    run_id = await _seed_run(pg_engine, _run_config(), idem)
+    task_id = await _seed_task(pg_engine, run_id, idem)
+
+    # Резолвер концептов отдаёт пустой блок → падение на validate ДО POST campaign.
+    monkeypatch.setattr(
+        "apps.campaign_creator_worker.main.resolve_concepts_from_config", lambda cfg: {"static": []}
+    )
+
+    claim = await claim_campaign_task(pg_engine)
+    client = _FakeClient()
+    await process_one_task(pg_engine, claim.task, client=client, uploader=_FakeUploader())
+
+    # Ни одного Meta-вызова (упали до создания campaign).
+    assert client.calls == []
+    async with pg_engine.connect() as conn:
+        status = (
+            await conn.execute(
+                text("SELECT status FROM task_queue WHERE id = :tid"), {"tid": task_id}
+            )
+        ).scalar()
+    # Терминальна (не зависла в running). Пустые концепты = permanent (ValueError) → failed.
+    assert status == "failed"
 
 
 # Дубль-задача на уже succeeded run (после reconciler-таймаута) — повторно не исполняется.

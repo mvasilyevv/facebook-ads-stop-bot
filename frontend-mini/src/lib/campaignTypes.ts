@@ -118,7 +118,7 @@ export interface CampaignConfig {
   byer_tag?: string | null;
   start_date?: string | null; // YYYY-MM-DD, дефолт today+1
   destination_link: string;
-  daily_cents?: number | null;
+  daily_budget_cents?: number | null; // каноническое имя (выровнено с web)
   budget_level?: "campaign" | "adset";
   countries?: string[];
   age_min?: number;

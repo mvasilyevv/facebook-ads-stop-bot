@@ -30,6 +30,7 @@ import signal
 from typing import Any
 
 import redis.asyncio as redis_asyncio
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from apps.campaign_creator_worker import claim_campaign_task as _claim
@@ -118,6 +119,34 @@ async def process_one_task(
             await mark_succeeded(engine, task_id=task.id, result={"run_id": str(run_id)})
         else:
             await mark_failed(engine, task_id=task.id, error=f"run уже {run.status}")
+        return
+
+    # Money-safety (HIGH-2/HIGH-3): run уже В РАБОТЕ (uniquifying/uploading/creating)
+    # ИЛИ уже имеет созданные Meta-объекты. Это значит, что другой воркер (live-zombie:
+    # claim тем же task'ом без status-перехода) или прошлый запуск уже начал НЕОБРАТИМЫЙ
+    # залив. Повторное исполнение = дубль кампании + двойной открут бюджета. НЕ исполняем:
+    # уводим run+task в failed (осиротевшие объекты — на ручную проверку, retry запрещён).
+    if run.status in ("uniquifying", "uploading", "creating") or await _run_has_created_meta_ids(
+        engine, str(run_id)
+    ):
+        logger.error(
+            "campaign_create: task id=%s run %s уже в работе/с созданными объектами "
+            "(status=%s) — НЕ переисполняю (риск дубля кампании), помечаю failed",
+            task.id,
+            run_id,
+            run.status,
+        )
+        await finalize_run_failed(
+            engine,
+            str(run_id),
+            error=(
+                f"run уже в работе/с созданными объектами (status={run.status}) — "
+                "повторное исполнение запрещено (риск дубля кампании), проверь Meta вручную"
+            ),
+        )
+        await _safe_mark_failed(
+            engine, task, f"run уже в работе (status={run.status}) — re-execute запрещён"
+        )
         return
 
     if client is None or uploader is None:
@@ -246,6 +275,34 @@ async def _safe_mark_failed(engine: AsyncEngine, task: Task, error: str) -> None
         logger.warning(
             "campaign_create: task id=%s mark_failed не применился (гонка с воркером)", task.id
         )
+
+
+async def _run_has_created_meta_ids(engine: AsyncEngine, run_id: str) -> bool:
+    """True, если у campaign_run уже есть хоть один созданный Meta-объект.
+
+    created_meta_ids — JSONB вида {"campaigns": [...], "adsets": [...], ...}. Любой
+    непустой список означает, что необратимый залив уже начался → переисполнять нельзя.
+    Дешёвый guard поверх status-проверки (belt-and-suspenders против live-zombie/reclaim).
+    """
+    async with engine.connect() as conn:
+        row = (
+            await conn.execute(
+                text(
+                    """
+                    SELECT EXISTS (
+                        SELECT 1
+                        FROM campaign_run,
+                             jsonb_each(COALESCE(created_meta_ids, '{}'::jsonb)) AS kv
+                        WHERE id = :rid
+                          AND jsonb_typeof(kv.value) = 'array'
+                          AND jsonb_array_length(kv.value) > 0
+                    )
+                    """
+                ),
+                {"rid": run_id},
+            )
+        ).first()
+    return bool(row[0]) if row else False
 
 
 # ====================== sub-loops ======================

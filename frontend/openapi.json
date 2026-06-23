@@ -753,7 +753,7 @@
           "campaigns"
         ],
         "summary": "Validate Config",
-        "description": "Dry-run: собирает план (число объектов + нейминг) без создания в Meta.",
+        "description": "Dry-run: собирает план (число объектов + нейминг) без создания в Meta.\n\nconcept_counts (число концептов на блок) передаётся в build_campaign_spec —\nраскладка K концептов × copies (сквозная нумерация ads), как у исполнителя.",
         "operationId": "validate_config_api_tools_campaigns_validate_post",
         "requestBody": {
           "content": {
@@ -5062,6 +5062,23 @@
         "title": "AdText",
         "description": "Текст объявления (run). mode=none — объявления без текста."
       },
+      "AdTextIn": {
+        "properties": {
+          "mode": {
+            "type": "string",
+            "title": "Mode",
+            "default": "none"
+          },
+          "primary": {
+            "type": "string",
+            "title": "Primary",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "title": "AdTextIn",
+        "description": "Текст объявления в форме фронта (mode none|text, primary)."
+      },
       "AdTimelineResponse": {
         "properties": {
           "fb_ad_id": {
@@ -6124,6 +6141,223 @@
         "title": "CampaignConfig",
         "description": "Полный конфиг создания кампании (preset + run в одной модели)."
       },
+      "CampaignConfigIn": {
+        "properties": {
+          "act_id": {
+            "type": "string",
+            "title": "Act Id"
+          },
+          "page_id": {
+            "type": "string",
+            "title": "Page Id"
+          },
+          "pixel_id": {
+            "type": "string",
+            "title": "Pixel Id"
+          },
+          "tz_offset": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tz Offset",
+            "default": 0
+          },
+          "offer_code": {
+            "type": "string",
+            "title": "Offer Code"
+          },
+          "byer_tag": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Byer Tag"
+          },
+          "objective": {
+            "type": "string",
+            "title": "Objective",
+            "default": "OUTCOME_SALES"
+          },
+          "optimization_goal": {
+            "type": "string",
+            "title": "Optimization Goal",
+            "default": "OFFSITE_CONVERSIONS"
+          },
+          "custom_event_type": {
+            "type": "string",
+            "title": "Custom Event Type",
+            "default": "PURCHASE"
+          },
+          "special_ad_categories": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Special Ad Categories"
+          },
+          "destination_link": {
+            "type": "string",
+            "title": "Destination Link"
+          },
+          "cta": {
+            "type": "string",
+            "title": "Cta",
+            "default": "PLAY_GAME"
+          },
+          "text_optimizations": {
+            "type": "string",
+            "title": "Text Optimizations",
+            "default": "OPT_OUT"
+          },
+          "start_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start Date"
+          },
+          "ad_text": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AdTextIn"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "budget_level": {
+            "type": "string",
+            "title": "Budget Level",
+            "default": "campaign"
+          },
+          "daily_budget_cents": {
+            "type": "integer",
+            "title": "Daily Budget Cents"
+          },
+          "bid_strategy": {
+            "type": "string",
+            "title": "Bid Strategy",
+            "default": "LOWEST_COST_WITHOUT_CAP"
+          },
+          "countries": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Countries"
+          },
+          "age_min": {
+            "type": "integer",
+            "title": "Age Min",
+            "default": 18
+          },
+          "age_max": {
+            "type": "integer",
+            "title": "Age Max",
+            "default": 65
+          },
+          "advantage_audience": {
+            "type": "boolean",
+            "title": "Advantage Audience",
+            "default": true
+          },
+          "click_through_days": {
+            "type": "integer",
+            "title": "Click Through Days",
+            "default": 1
+          },
+          "view_through_days": {
+            "type": "integer",
+            "title": "View Through Days",
+            "default": 1
+          },
+          "campaigns": {
+            "items": {
+              "$ref": "#/components/schemas/CampaignStructureIn"
+            },
+            "type": "array",
+            "title": "Campaigns"
+          },
+          "copies_per_concept": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Copies Per Concept"
+          },
+          "creo_root": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Creo Root"
+          },
+          "launch_state": {
+            "type": "string",
+            "title": "Launch State",
+            "default": "campaign_paused"
+          },
+          "url_tags": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url Tags"
+          },
+          "naming_template": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Naming Template"
+          }
+        },
+        "type": "object",
+        "required": [
+          "act_id",
+          "page_id",
+          "pixel_id",
+          "offer_code",
+          "destination_link",
+          "daily_budget_cents",
+          "campaigns"
+        ],
+        "title": "CampaignConfigIn",
+        "description": "Плоский конфиг залива от фронта. `to_domain()` → доменный CampaignConfig.\n\nВсе money-инварианты (hard-cap бюджета, +AQ, дефолты) проверяет уже доменный\nCampaignConfig внутри `to_domain` — здесь сознательно НЕ дублируем валидацию,\nчтобы единый источник правды остался в core.campaign_builder.config."
+      },
       "CampaignFolderItem": {
         "properties": {
           "name": {
@@ -6462,6 +6696,38 @@
         ],
         "title": "CampaignScriptPlanOut",
         "description": "Полный план кампании для ручного создания."
+      },
+      "CampaignStructureIn": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "adset_count": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Adset Count"
+          },
+          "concept_refs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Concept Refs"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "kind",
+          "adset_count"
+        ],
+        "title": "CampaignStructureIn",
+        "description": "Одна кампания в плоской структуре фронта.\n\nНесёт только `key`/`kind`/`adset_count`/`concept_refs`. Доменные имена adset'ов\nи dir/glob генерируются детерминированно в `to_domain` (фронт их не знает)."
       },
       "ChartBucketOut": {
         "properties": {
@@ -8143,7 +8409,15 @@
       "LaunchIn": {
         "properties": {
           "config": {
-            "$ref": "#/components/schemas/CampaignConfig"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CampaignConfigIn"
+              },
+              {
+                "$ref": "#/components/schemas/CampaignConfig"
+              }
+            ],
+            "title": "Config"
           },
           "preset_id": {
             "anyOf": [
@@ -8174,7 +8448,7 @@
           "config"
         ],
         "title": "LaunchIn",
-        "description": "Запрос запуска залива: конфиг + опц. ссылка на пресет/upload."
+        "description": "Запрос запуска залива: конфиг + опц. ссылка на пресет/upload.\n\n`config` — каноническая ПЛОСКАЯ форма фронта (`CampaignConfigIn`) ИЛИ вложенный\n`CampaignConfig` (legacy). `domain_config()` нормализует в доменный CampaignConfig."
       },
       "LaunchOut": {
         "properties": {
@@ -11279,7 +11553,29 @@
       "ValidateIn": {
         "properties": {
           "config": {
-            "$ref": "#/components/schemas/CampaignConfig"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CampaignConfigIn"
+              },
+              {
+                "$ref": "#/components/schemas/CampaignConfig"
+              }
+            ],
+            "title": "Config"
+          },
+          "concept_counts": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Concept Counts"
           }
         },
         "type": "object",
@@ -11287,7 +11583,7 @@
           "config"
         ],
         "title": "ValidateIn",
-        "description": "Запрос dry-run валидации конфига."
+        "description": "Запрос dry-run валидации конфига.\n\n`config` — каноническая ПЛОСКАЯ форма фронта (`CampaignConfigIn`) ИЛИ вложенный\n`CampaignConfig` (legacy). OpenAPI документирует обе (anyOf), фронтовые типы\nгенерируются из плоской. `domain_config()`/`concept_counts_map()` нормализуют вход."
       },
       "ValidatePlanOut": {
         "properties": {

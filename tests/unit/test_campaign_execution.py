@@ -29,7 +29,6 @@ from core.campaign_builder import (
     build_campaign_spec,
 )
 from core.campaign_builder.execute import (
-    CampaignExecutionError,
     PartialCreateError,
     classify_execution_error,
     execute_campaign_spec,
@@ -399,8 +398,10 @@ def test_execute_partial_create_raises_with_created_ids(monkeypatch):
     assert ei.value.created_ids["campaigns"]  # кампания уже создана
 
 
-# Падение на самом первом шаге (кампания) → CampaignExecutionError без созданных объектов.
-def test_execute_fail_first_step_no_created(monkeypatch):
+# HIGH-2 money-safety: сбой НА POST campaign (ответ Meta потерян) → PartialCreateError
+# (ack-lost: кампания могла создаться), даже если created пуст и причина transient.
+# Повтор такого залива = дубль кампании, поэтому НЕ transient/requeue.
+def test_execute_fail_on_campaign_post_is_partial_not_transient(monkeypatch):
     _patch_uniquify(monkeypatch)
     block = _image_block(n_adsets=1)
     cfg = _config(block)
@@ -418,10 +419,13 @@ def test_execute_fail_first_step_no_created(monkeypatch):
             uploader=uploader,
         )
 
-    with pytest.raises(CampaignExecutionError) as ei:
+    with pytest.raises(PartialCreateError) as ei:
         asyncio.run(run())
-    # Ничего не создано → не partial.
-    assert not isinstance(ei.value, PartialCreateError)
+    # created пуст (id не вернулся), но POST инициирован → orphan на ручную проверку.
+    assert ei.value.created_ids["campaigns"] == []
+    assert ei.value.irreversible_attempted is True
+    # Классификация: НЕ transient (иначе requeue → дубль), а partial.
+    assert classify_execution_error(ei.value) == "partial"
 
 
 # =====================================================================

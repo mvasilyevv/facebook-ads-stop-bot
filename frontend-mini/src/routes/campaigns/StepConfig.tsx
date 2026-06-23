@@ -30,7 +30,7 @@ export function StepConfig() {
 
   const [destinationLink, setDestinationLink] = useState(config.destination_link ?? "");
   const [dailyCents, setDailyCents] = useState(
-    config.daily_cents ? String(config.daily_cents / 100) : "",
+    config.daily_budget_cents ? String(config.daily_budget_cents / 100) : "",
   );
   const [budgetLevel, setBudgetLevel] = useState<"campaign" | "adset">(
     config.budget_level ?? "campaign",
@@ -66,7 +66,7 @@ export function StepConfig() {
     haptic.impact("light");
     updateConfig({
       destination_link: destinationLink.trim(),
-      daily_cents: dailyCentsNum,
+      daily_budget_cents: dailyCentsNum,
       budget_level: budgetLevel,
       countries: parseCountries(countries),
       start_date: startDate || defaultStartDate(),

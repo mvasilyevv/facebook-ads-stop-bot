@@ -75,7 +75,15 @@ class _Uploader(Protocol):
 
 
 class CampaignExecutionError(RuntimeError):
-    """Залив провалился. Базовый класс."""
+    """Залив провалился. Базовый класс.
+
+    irreversible_attempted — money-флаг: POST создания campaign БЫЛ инициирован до
+    падения (ответ Meta мог потеряться при оборванной Vision-сессии/таймауте → объект
+    мог реально создаться). Тогда сбой НЕЛЬЗЯ классифицировать как transient/requeue —
+    повтор = дубль кампании. См. classify_execution_error.
+    """
+
+    irreversible_attempted: bool = False
 
 
 class PartialCreateError(CampaignExecutionError):
@@ -83,6 +91,12 @@ class PartialCreateError(CampaignExecutionError):
 
     created_ids — id уже созданных объектов (campaigns/adsets/creatives/ads).
     failed_step — на каком шаге упало. Воркер пишет это в run и НЕ ретраит (дубли).
+
+    Возникает в двух случаях:
+    - подтверждённый partial: хоть один объект вернул id (created непустой);
+    - ack-lost: POST создания campaign инициирован, но ответ потерян (created пуст,
+      но объект мог родиться в Meta). created_ids тогда содержит пустые списки —
+      сигнал «возможен осиротевший объект, проверь Meta вручную» (money-safety).
     """
 
     def __init__(
@@ -91,6 +105,8 @@ class PartialCreateError(CampaignExecutionError):
         super().__init__(message)
         self.created_ids = created_ids
         self.failed_step = failed_step
+        # PartialCreateError по определению означает «необратимый шаг достигнут».
+        self.irreversible_attempted = True
 
 
 # ====================== результат ======================
@@ -113,16 +129,23 @@ class ExecutionResult:
 def classify_execution_error(exc: BaseException) -> str:
     """Классифицирует ошибку залива для воркера: permanent | transient | partial.
 
-    - partial: PartialCreateError — часть объектов создана, retry = дубль → mark_failed.
-    - transient: TemporaryError и подтипы (RateLimited/SessionUnavailable/network) → requeue.
+    - partial: PartialCreateError — часть объектов создана (или ack-lost после POST
+      campaign), retry = дубль → mark_failed + осиротевшие id на ручную чистку.
+    - transient: TemporaryError на шаге ДО инициации создания campaign (сеть/Vision
+      легли до отправки POST — объект гарантированно не родился) → requeue.
     - permanent: PermanentError, ValueError (валидация конфига), всё прочее → mark_failed.
 
-    CampaignExecutionError (падение ДО создания объектов) оборачивает исходную причину
-    в __cause__ — классифицируем по ней, чтобы transient-сбой (сеть/Vision) на первом
-    шаге ушёл в requeue, а не в безвозвратный mark_failed.
+    Money-safety (HIGH-2, зеркало meta_api create/duplicate): если POST создания
+    campaign БЫЛ инициирован (irreversible_attempted=True), сбой НЕ может быть transient,
+    даже если причина — TemporaryError/SessionUnavailable: ответ Meta мог потеряться, а
+    кампания реально создаться. Любой такой сбой → не-retry (permanent/partial). Хрупкий
+    признак «есть ли created_ids» недостаточен — POST мог пройти без возврата id.
     """
     if isinstance(exc, PartialCreateError):
         return "partial"
+    # POST создания campaign инициирован → необратимо, retry запрещён (дубль).
+    if isinstance(exc, CampaignExecutionError) and getattr(exc, "irreversible_attempted", False):
+        return "permanent"
     if isinstance(exc, TemporaryError):
         return "transient"
     # Разворачиваем обёртку CampaignExecutionError → исходная причина.
@@ -147,6 +170,9 @@ class _ProgressState:
     creatives_done: int = 0
     ads_done: int = 0
     total_ads: int = 0
+    # Money-флаг: POST создания campaign инициирован (см. CampaignExecutionError).
+    # Выставляется ДО самого вызова execute_graph_call(/campaigns) — ответ мог потеряться.
+    campaign_create_attempted: bool = False
 
     def snapshot(self) -> dict[str, Any]:
         return {
@@ -222,7 +248,11 @@ async def _execute_block(
     state.total_ads += sum(len(a.ads) for a in plan.adsets)
 
     # 1) campaign (всегда PAUSED).
+    # Money-safety: помечаем «POST campaign инициирован» ДО самого вызова — если он
+    # упадёт (Vision лёг/таймаут), ответ Meta мог потеряться, а кампания создаться.
+    # С этого момента любой сбой = необратимый (см. classify_execution_error).
     state.stage = "creating"
+    state.campaign_create_attempted = True
     resp = await client.execute_graph_call(
         method="POST",
         endpoint=f"/{act}/campaigns",
@@ -348,9 +378,15 @@ async def execute_campaign_spec(
         concepts = concepts_by_campaign.get(spec_block.key, [])
         if not concepts:
             # Нет концептов на блок — конфиг невалиден. Если объекты уже созданы
-            # в прошлых блоках — это partial.
+            # в прошлых блоках — это partial. (campaign_create_attempted здесь False:
+            # проверка концептов идёт ДО любого POST текущего блока.)
             exc_msg = f"нет концептов для кампании {spec_block.key!r}"
-            _raise_for_failure(created, ValueError(exc_msg), failed_step="validate")
+            _raise_for_failure(
+                created,
+                ValueError(exc_msg),
+                failed_step="validate",
+                campaign_create_attempted=state.campaign_create_attempted,
+            )
         try:
             await _execute_block(
                 cfg,
@@ -365,7 +401,12 @@ async def execute_campaign_spec(
         except PartialCreateError:
             raise
         except Exception as exc:  # noqa: BLE001 — единая точка маршрутизации
-            _raise_for_failure(created, exc, failed_step=state.stage)
+            _raise_for_failure(
+                created,
+                exc,
+                failed_step=state.stage,
+                campaign_create_attempted=state.campaign_create_attempted,
+            )
 
     state.stage = "succeeded"
     await _emit(on_progress, state)
@@ -377,12 +418,21 @@ def _has_created(created: dict[str, list[str]]) -> bool:
 
 
 def _raise_for_failure(
-    created: dict[str, list[str]], cause: BaseException, *, failed_step: str
+    created: dict[str, list[str]],
+    cause: BaseException,
+    *,
+    failed_step: str,
+    campaign_create_attempted: bool = False,
 ) -> None:
     """Преобразует исключение залива в Partial/CampaignExecutionError (с цепочкой причин).
 
-    Если хоть что-то создано — PartialCreateError (нельзя ретраить: дубли). Иначе —
-    CampaignExecutionError, сохраняя оригинальную причину для classify (transient/permanent).
+    Money-safety (HIGH-2):
+    - есть подтверждённые created_ids → PartialCreateError (нельзя ретраить: дубли);
+    - POST создания campaign инициирован, но created пуст (ack-lost: ответ потерян,
+      объект мог родиться) → тоже PartialCreateError с пустыми списками — orphan на
+      ручную проверку, retry запрещён;
+    - иначе (падение ДО любого POST) → CampaignExecutionError, причина в __cause__ для
+      classify (transient → requeue безопасен: объект гарантированно не создан).
     """
     if _has_created(created):
         raise PartialCreateError(
@@ -390,7 +440,15 @@ def _raise_for_failure(
             created_ids=created,
             failed_step=failed_step,
         ) from cause
-    # Ничего не создано: пробрасываем тип причины через __cause__ для classify.
+    if campaign_create_attempted:
+        # ack-lost: POST campaign ушёл, ответа нет → возможен осиротевший объект.
+        raise PartialCreateError(
+            f"залив упал на шаге {failed_step!r} ПОСЛЕ инициации POST campaign "
+            f"(ответ Meta потерян — кампания могла создаться, проверь вручную): {cause!r}",
+            created_ids=created,
+            failed_step=failed_step,
+        ) from cause
+    # Ничего не создано и POST campaign не инициирован: causa через __cause__ для classify.
     err = CampaignExecutionError(f"залив упал на шаге {failed_step!r}: {cause!r}")
     err.__cause__ = cause
     raise err from cause

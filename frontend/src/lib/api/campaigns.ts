@@ -14,6 +14,7 @@
  */
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useAuthStore } from "@/stores/auth";
 import { apiGet, apiGetWithCount, apiSend } from "./client";
 
 // ─── Типы (сматчены с schemas/campaigns_create.py) ───────────────────────────
@@ -298,15 +299,10 @@ export async function uploadConcepts(files: File[]): Promise<UploadConceptsOut> 
   for (const f of files) {
     fd.append("files", f);
   }
-  // Через rawFetch из client.ts — нельзя напрямую, используем fetch c BASE=/api
-  const apiKey = (() => {
-    try {
-      const { useAuthStore } = require("@/stores/auth") as { useAuthStore: { getState: () => { apiKey: string | null } } };
-      return useAuthStore.getState().apiKey;
-    } catch {
-      return null;
-    }
-  })();
+  // multipart нельзя гнать через apiSend (он шлёт JSON) — fetch напрямую c BASE=/api.
+  // X-API-Key берём из Zustand-стора тем же ESM-путём, что и client.ts (HIGH-5:
+  // прежний CommonJS require в ESM падал ReferenceError → apiKey=null → 401).
+  const apiKey = useAuthStore.getState().apiKey;
 
   const headers: Record<string, string> = {};
   if (apiKey) headers["X-API-Key"] = apiKey;
