@@ -12,6 +12,10 @@ class VisionSettingsResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     has_token: bool = False
+    # Откуда взят токен: "db" (vision_config), "env" (.env VISION_X_TOKEN fallback) или
+    # None (нет нигде). Vision подключается токеном из БД, а при пустой БД — из .env;
+    # без этого поля UI пугал «Не задан» при рабочем .env-токене.
+    token_source: str | None = None
     profile_id: str | None = None
     auto_restart_on_missing_cdp: bool = True
     runtime_status: str | None = None

@@ -15,8 +15,20 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 
-from apps.api.deps import get_engine, get_redis
+from apps.api.deps import get_engine, get_redis, get_settings
 from apps.api.main import create_app
+from core.config import get_settings as _core_get_settings
+
+
+def _settings_with_token(vision_x_token: str):
+    """Копия боевых Settings с подменённым vision_x_token (детерминизм .env в тестах).
+
+    В CI/локали env VISION_X_TOKEN задан → has_token через .env-fallback стал бы True
+    недетерминированно. Подменяем только токен, остальные поля (profile_id/api_url) —
+    реальные, чтобы reconnect-тесты работали.
+    """
+    return _core_get_settings().model_copy(update={"vision_x_token": vision_x_token})
+
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -35,6 +47,9 @@ async def app_client(pg_engine, fake_redis):
     app = create_app()
     app.dependency_overrides[get_engine] = lambda: pg_engine
     app.dependency_overrides[get_redis] = lambda: fake_redis
+    # По умолчанию в тестах .env-токена нет → has_token отражает только БД (старая семантика
+    # тестов). Тест env-fallback переопределяет это явно.
+    app.dependency_overrides[get_settings] = lambda: _settings_with_token("")
     app.state.redis = fake_redis
 
     # Очистка ДО теста: соседние тесты на shared-БД оставляют vision_config с
@@ -62,11 +77,37 @@ async def test_get_vision_no_config_returns_defaults(app_client) -> None:
     assert resp.status_code == 200
     data = resp.json()
     assert data["has_token"] is False
+    assert data["token_source"] is None
     assert data["profile_id"] is None
     assert data["auto_restart_on_missing_cdp"] is True
     assert data["runtime_status"] is None
     assert data["cdp_ready"] is False
     assert data["cdp_port"] is None
+
+
+# Токена нет в БД, но есть в .env → has_token=True, token_source='env' (fix B:
+# панель не должна пугать «Не задан», когда Vision реально работает на .env-токене).
+@pytest.mark.asyncio
+async def test_get_vision_token_env_fallback(pg_engine, fake_redis) -> None:
+    async with pg_engine.begin() as conn:
+        await conn.execute(text("DELETE FROM vision_config"))
+
+    app = create_app()
+    app.dependency_overrides[get_engine] = lambda: pg_engine
+    app.dependency_overrides[get_redis] = lambda: fake_redis
+    app.dependency_overrides[get_settings] = lambda: _settings_with_token("env_tok_123")
+    app.state.redis = fake_redis
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        resp = await c.get("/api/settings/vision")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["has_token"] is True
+    assert data["token_source"] == "env"
+
+    async with pg_engine.begin() as conn:
+        await conn.execute(text("DELETE FROM vision_config"))
 
 
 # Без config, но с Redis heartbeat — runtime_status не null
@@ -127,6 +168,7 @@ async def test_put_vision_x_token_sets_has_token(app_client, pg_engine) -> None:
     assert resp.status_code == 200
     data = resp.json()
     assert data["has_token"] is True
+    assert data["token_source"] == "db"  # БД в приоритете над .env
     assert data["profile_id"] == "profile-abc"
 
     # Проверяем, что токен в БД зашифрован (не хранится в открытом виде)
