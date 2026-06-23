@@ -141,7 +141,8 @@ def test_preview_executor_parity_parametric(k_concepts: int, n_adsets: int):
 # ---------------------- multi-block concept_counts ----------------------
 
 
-# concept_counts задаёт K по каждому блоку отдельно; коды каждого блока сквозные внутри блока.
+# concept_counts задаёт K по каждому блоку; нумерация кодов СКВОЗНАЯ по всему заливу
+# (блок B продолжает с номера блока A) — sub3=CRxxx глобально уникален между кампаниями.
 def test_concept_counts_per_block():
     block_a = _image_block(n_adsets=2)
     block_b = CampaignBlock(
@@ -158,15 +159,44 @@ def test_concept_counts_per_block():
     spec = build_campaign_spec(cfg, concept_counts={"static": 2, "video": 1})
 
     static_spec, video_spec = spec.campaigns
-    # static: K=2 × N=2 = 4 ads.
+    # static: K=2 × N=2 = 4 ads → CR001..CR004.
     static_codes = [ad.code for adset in static_spec.adsets for ad in adset.ads]
     assert len(static_codes) == 4
     assert sorted(static_codes) == [f"GH_CR_CR{i:03d}" for i in range(1, 5)]
-    # video: K=1 × N=3 = 3 ads.
+    # video: K=1 × N=3 = 3 ads → ПРОДОЛЖАЕТ нумерацию CR005..CR007 (не повторяет CR001).
     video_codes = [ad.code for adset in video_spec.adsets for ad in adset.ads]
     assert len(video_codes) == 3
-    # Каждый блок имеет собственную сквозную нумерацию (начинается с CR001).
-    assert sorted(video_codes) == [f"GH_CR_CR{i:03d}" for i in range(1, 4)]
+    assert sorted(video_codes) == [f"GH_CR_CR{i:03d}" for i in range(5, 8)]
+    # Коды двух блоков глобально уникальны — нет коллизии sub3 между кампаниями.
+    assert len(set(static_codes + video_codes)) == 7
+
+
+# Кросс-блок parity: исполнитель (execute_campaign_spec накапливает code_start по
+# фактическим концептам) даёт ровно те коды по блокам, что превью build_campaign_spec.
+def test_cross_block_executor_parity():
+    block_a = _image_block(n_adsets=2)
+    block_b = CampaignBlock(
+        key="video",
+        name="{byer} | {offer} | video | adset.pro | {date}",
+        kind="video",
+        adsets=[
+            AdsetConfig(name="{byer} | {offer} | video | s1 | {date}", dir="v1", glob="*.mp4"),
+            AdsetConfig(name="{byer} | {offer} | video | s2 | {date}", dir="v2", glob="*.mp4"),
+            AdsetConfig(name="{byer} | {offer} | video | s3 | {date}", dir="v3", glob="*.mp4"),
+        ],
+    )
+    cfg = _config(block_a, campaigns=[block_a, block_b])
+    concepts_a = _concepts(2)  # 2 концепта на static
+    concepts_b = _concepts(1)  # 1 концепт на video
+
+    spec = build_campaign_spec(cfg, concept_counts={"static": 2, "video": 1})
+
+    # Исполнитель накапливает code_start: блок B стартует с block_code_span(2, 2)+1 = 5.
+    plan_a = build_uniquification_plan(cfg, block_a, concepts_a, copies=2, code_start=1)
+    plan_b = build_uniquification_plan(cfg, block_b, concepts_b, copies=3, code_start=5)
+
+    assert _spec_codes_by_adset(spec.campaigns[0]) == _plan_codes_by_adset(plan_a)
+    assert _spec_codes_by_adset(spec.campaigns[1]) == _plan_codes_by_adset(plan_b)
 
 
 # ---------------------- фолбэк concept_counts=None ----------------------

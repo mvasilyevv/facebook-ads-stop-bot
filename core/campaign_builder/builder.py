@@ -22,7 +22,7 @@ from core.campaign_builder.config import (
     LaunchState,
 )
 from core.campaign_builder.naming import render_name
-from core.campaign_builder.uniquify import build_code_layout
+from core.campaign_builder.uniquify import block_code_span, build_code_layout
 
 # ---------------------- спека (план объектов) ----------------------
 
@@ -218,7 +218,12 @@ def url_tags_of(cfg: CampaignConfig, code: str) -> str:
 
 
 def _build_block(
-    cfg: CampaignConfig, block: CampaignBlock, copies: int, concept_count: int
+    cfg: CampaignConfig,
+    block: CampaignBlock,
+    copies: int,
+    concept_count: int,
+    *,
+    code_start: int = 1,
 ) -> CampaignSpec_Block:
     """Разворачивает одну CampaignBlock в план с отрендеренными именами и телами.
 
@@ -226,6 +231,8 @@ def _build_block(
     concept_count — число концептов блока K. Коды креативов берутся из единого
     source-of-truth раскладки (build_code_layout): adset i = K ads (по 1 на концепт),
     сквозная нумерация OFFER_CRxxx без дублей между adset'ами.
+    code_start — смещение нумерации для этого блока (накопленное по предыдущим блокам),
+    чтобы коды были глобально уникальны в заливе (см. build_campaign_spec).
     """
     child_status = _child_status(cfg.launch_state)
     camp_name = render_name(
@@ -238,6 +245,7 @@ def _build_block(
         concept_count=concept_count,
         copies=copies,
         prefix=cfg.creative_prefix,
+        start=code_start,
     )
 
     adsets: list[AdsetSpec] = []
@@ -283,8 +291,13 @@ def build_campaign_spec(
     concept_counts — число концептов K по каждому блоку (ключ = block.key). Когда задан
     (validate/launch знают, сколько файлов загружено), превью показывает ИСТИННУЮ
     раскладку залива. Когда None — фолбэк: предполагается 1 концепт на блок (adset i = 1
-    ad, коды сквозные по блоку CR001..CR_N, БЕЗ дубля CR001 в разных adset). Фолбэк
-    занижает число ads, если концептов реально больше одного, но НЕ врёт кодами.
+    ad, коды сквозные CR001..CR_N, БЕЗ дубля CR001 в разных adset). Фолбэк занижает
+    число ads, если концептов реально больше одного, но НЕ врёт кодами.
+
+    Нумерация кодов СКВОЗНАЯ по всему заливу: блок B продолжает с номера, на котором
+    кончился блок A (накопление block_code_span). Иначе sub3=CRxxx коллизирует между
+    кампаниями одного залива (порча атрибуции трекера). Исполнитель (execute_campaign_spec)
+    накапливает code_start ровно так же — превью и залив дают идентичные коды.
 
     copies (число adset-слотов раскладки) всегда = len(block.adsets), как у исполнителя
     (он передаёт copies=len(spec.adsets)). cfg.copies_per_concept в раскладку spec'а не
@@ -292,12 +305,14 @@ def build_campaign_spec(
     """
     blocks: list[CampaignSpec_Block] = []
     reported_copies = 0  # репрезентативный скаляр для UI = число adset'ов первого блока
+    code_start = 1  # сквозная нумерация кодов между блоками (как у исполнителя)
     for index, block in enumerate(cfg.campaigns):
         copies = len(block.adsets)  # число adset-слотов = adset'ы блока (как исполнитель)
         concept_count = concept_counts.get(block.key, 1) if concept_counts is not None else 1
         if index == 0:
             reported_copies = copies
-        blocks.append(_build_block(cfg, block, copies, concept_count))
+        blocks.append(_build_block(cfg, block, copies, concept_count, code_start=code_start))
+        code_start += block_code_span(concept_count, copies)
 
     return CampaignSpec(
         offer_code=cfg.offer_code,

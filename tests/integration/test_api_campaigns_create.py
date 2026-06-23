@@ -256,6 +256,77 @@ async def test_launch_rejects_budget_over_cap(pg_engine, fake_redis_client, clea
     assert cnt == 0
 
 
+# Плоский конфиг с блоком без концептов → 422 ДО создания run (fail-fast против
+# обречённого залива: воркер всё равно упал бы на resolve_concepts, но без мусора в истории).
+@pytest.mark.asyncio
+async def test_launch_rejects_block_without_concepts(pg_engine, fake_redis_client, clean_campaigns):
+    flat = {
+        "act_id": "123",
+        "page_id": "100",
+        "pixel_id": "200",
+        "offer_code": "GH_CR",
+        "destination_link": "https://example.com",
+        "daily_budget_cents": 20000,
+        "countries": ["DE"],
+        "campaigns": [{"key": "video", "kind": "video", "adset_count": 2, "concept_refs": []}],
+    }
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.post("/api/tools/campaigns/launch", json={"config": flat})
+    assert resp.status_code == 422
+    assert "video" in resp.json()["detail"]
+    async with pg_engine.connect() as conn:
+        cnt = (await conn.execute(text("SELECT COUNT(*) FROM campaign_run"))).scalar()
+    assert cnt == 0
+
+
+# ─────────────────────────── upload ───────────────────────────
+
+# Magic-байты валидных файлов (head >= 12 для сниффера).
+_JPEG = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01" + b"\x00" * 64
+_MP4 = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom" + b"\x00" * 64
+_PNG = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR" + b"\x00" * 64
+
+
+# upload стримит файлы на диск и возвращает refs с размерами (суммарный total_bytes).
+@pytest.mark.asyncio
+async def test_upload_streams_and_returns_refs(pg_engine, fake_redis_client, tmp_path, monkeypatch):
+    monkeypatch.setenv("CAMPAIGN_UPLOAD_ROOT", str(tmp_path))
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+    files = [
+        ("files", ("a.jpg", _JPEG, "image/jpeg")),
+        ("files", ("b.mp4", _MP4, "video/mp4")),
+    ]
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.post("/api/tools/campaigns/upload", files=files)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["upload_id"]
+    refs = {c["ref"]: c for c in data["concepts"]}
+    assert set(refs) == {"a.jpg", "b.mp4"}
+    assert refs["a.jpg"]["size_bytes"] == len(_JPEG)
+    assert refs["b.mp4"]["size_bytes"] == len(_MP4)
+    assert data["total_bytes"] == len(_JPEG) + len(_MP4)
+    # Файлы реально на диске в папке upload_id.
+    assert (tmp_path / data["upload_id"] / "a.jpg").read_bytes() == _JPEG
+
+
+# Переименованный файл (PNG с расширением .mp4) → 422 по magic-сниффу, temp-папка снесена.
+@pytest.mark.asyncio
+async def test_upload_rejects_renamed_file_magic_mismatch(
+    pg_engine, fake_redis_client, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("CAMPAIGN_UPLOAD_ROOT", str(tmp_path))
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+    files = [("files", ("renamed.mp4", _PNG, "video/mp4"))]
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.post("/api/tools/campaigns/upload", files=files)
+    assert resp.status_code == 422
+    assert "содержимое" in resp.json()["detail"]
+    # Никаких осиротевших temp-папок после отказа (cleanup на ошибке).
+    assert list(tmp_path.iterdir()) == []
+
+
 # ─────────────────────────── runs / clone / cancel / cleanup ───────────────────────────
 
 
