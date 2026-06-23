@@ -92,6 +92,34 @@ def _resolve_copies(cfg: CampaignConfig, block: CampaignBlock) -> int:
     return len(block.adsets)
 
 
+def build_code_layout(
+    offer_code: str,
+    *,
+    concept_count: int,
+    copies: int,
+    prefix: str = "",
+) -> list[list[str]]:
+    """Единый source-of-truth раскладки кодов креативов (превью == исполнитель).
+
+    K концептов × copies копий (= число adset'ов): total ads = K×copies, сквозная
+    нумерация OFFER_CRxxx (CR001..CR{K*copies}), adset i = K кодов (по 1 на концепт).
+
+    Возвращает список по adset'ам: result[i] = коды ads adset'а i, где
+    result[i][c] — код варианта i концепта c. Нумерация concept-major (концепт c,
+    копия i → codes[c*copies + i]) — зеркалит build_uniquification_plan, который
+    раскладывает variant[i]→adset[i]. Любой потребитель (превью/исполнитель), желающий
+    показать ИСТИННУЮ раскладку залива, обязан брать коды отсюда.
+    """
+    if concept_count < 0:
+        raise ValueError(f"concept_count не может быть отрицательным, получено {concept_count}")
+    if copies < 0:
+        raise ValueError(f"copies не может быть отрицательным, получено {copies}")
+    total = concept_count * copies
+    codes = creative_codes(offer_code, count=total, prefix=prefix)
+    # adset i = [код варианта i концепта 0, код варианта i концепта 1, ...].
+    return [[codes[c * copies + i] for c in range(concept_count)] for i in range(copies)]
+
+
 def _seed_text(cfg: CampaignConfig, concept_id: str, copy_index: int) -> str:
     """Детерминированный seed по (offer, concept_id, copy_index) — идемпотентный retry."""
     return f"{cfg.offer_code}:{concept_id}:{copy_index}"
@@ -121,20 +149,25 @@ def build_uniquification_plan(
     if not concepts:
         raise ValueError("нужен хотя бы один концепт")
 
-    # Сквозная нумерация кодов: K концептов × copies копий.
-    total = len(concepts) * copies
-    codes = creative_codes(cfg.offer_code, count=total, prefix=cfg.creative_prefix)
+    # Сквозная нумерация кодов через единый source-of-truth раскладки
+    # (build_code_layout) — гарантирует побитовое совпадение с превью build_campaign_spec.
+    # layout[i][c] = код варианта i концепта c.
+    layout = build_code_layout(
+        cfg.offer_code,
+        concept_count=len(concepts),
+        copies=copies,
+        prefix=cfg.creative_prefix,
+    )
 
     variants_by_concept: dict[str, list[UniquifiedAd]] = {}
-    code_iter = iter(codes)
-    for concept in concepts:
+    for c_index, concept in enumerate(concepts):
         variants: list[UniquifiedAd] = []
         for i in range(copies):
             variants.append(
                 UniquifiedAd(
                     concept_id=concept.concept_id,
                     copy_index=i,
-                    code=next(code_iter),
+                    code=layout[i][c_index],
                     seed=_seed_text(cfg, concept.concept_id, i),
                     media_kind=block.kind,
                 )

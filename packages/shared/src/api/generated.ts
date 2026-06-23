@@ -340,6 +340,9 @@ export interface paths {
         /**
          * Validate Config
          * @description Dry-run: собирает план (число объектов + нейминг) без создания в Meta.
+         *
+         *     concept_counts (число концептов на блок) передаётся в build_campaign_spec —
+         *     раскладка K концептов × copies (сквозная нумерация ads), как у исполнителя.
          */
         post: operations["validate_config_api_tools_campaigns_validate_post"];
         delete?: never;
@@ -2167,6 +2170,22 @@ export interface components {
             description: string;
         };
         /**
+         * AdTextIn
+         * @description Текст объявления в форме фронта (mode none|text, primary).
+         */
+        AdTextIn: {
+            /**
+             * Mode
+             * @default none
+             */
+            mode: string;
+            /**
+             * Primary
+             * @default
+             */
+            primary: string;
+        };
+        /**
          * AdTimelineResponse
          * @description Ответ GET /ads/{fb_ad_id}/timeline.
          */
@@ -2686,6 +2705,117 @@ export interface components {
             launch_state: components["schemas"]["LaunchState"];
         };
         /**
+         * CampaignConfigIn
+         * @description Плоский конфиг залива от фронта. `to_domain()` → доменный CampaignConfig.
+         *
+         *     Все money-инварианты (hard-cap бюджета, +AQ, дефолты) проверяет уже доменный
+         *     CampaignConfig внутри `to_domain` — здесь сознательно НЕ дублируем валидацию,
+         *     чтобы единый источник правды остался в core.campaign_builder.config.
+         */
+        CampaignConfigIn: {
+            /** Act Id */
+            act_id: string;
+            /** Page Id */
+            page_id: string;
+            /** Pixel Id */
+            pixel_id: string;
+            /**
+             * Tz Offset
+             * @default 0
+             */
+            tz_offset: number | string | null;
+            /** Offer Code */
+            offer_code: string;
+            /** Byer Tag */
+            byer_tag?: string | null;
+            /**
+             * Objective
+             * @default OUTCOME_SALES
+             */
+            objective: string;
+            /**
+             * Optimization Goal
+             * @default OFFSITE_CONVERSIONS
+             */
+            optimization_goal: string;
+            /**
+             * Custom Event Type
+             * @default PURCHASE
+             */
+            custom_event_type: string;
+            /** Special Ad Categories */
+            special_ad_categories?: string[];
+            /** Destination Link */
+            destination_link: string;
+            /**
+             * Cta
+             * @default PLAY_GAME
+             */
+            cta: string;
+            /**
+             * Text Optimizations
+             * @default OPT_OUT
+             */
+            text_optimizations: string;
+            /** Start Date */
+            start_date?: string | null;
+            ad_text?: components["schemas"]["AdTextIn"] | null;
+            /**
+             * Budget Level
+             * @default campaign
+             */
+            budget_level: string;
+            /** Daily Budget Cents */
+            daily_budget_cents: number;
+            /**
+             * Bid Strategy
+             * @default LOWEST_COST_WITHOUT_CAP
+             */
+            bid_strategy: string;
+            /** Countries */
+            countries?: string[];
+            /**
+             * Age Min
+             * @default 18
+             */
+            age_min: number;
+            /**
+             * Age Max
+             * @default 65
+             */
+            age_max: number;
+            /**
+             * Advantage Audience
+             * @default true
+             */
+            advantage_audience: boolean;
+            /**
+             * Click Through Days
+             * @default 1
+             */
+            click_through_days: number;
+            /**
+             * View Through Days
+             * @default 1
+             */
+            view_through_days: number;
+            /** Campaigns */
+            campaigns: components["schemas"]["CampaignStructureIn"][];
+            /** Copies Per Concept */
+            copies_per_concept?: number | null;
+            /** Creo Root */
+            creo_root?: string | null;
+            /**
+             * Launch State
+             * @default campaign_paused
+             */
+            launch_state: string;
+            /** Url Tags */
+            url_tags?: string | null;
+            /** Naming Template */
+            naming_template?: string | null;
+        };
+        /**
          * CampaignFolderItem
          * @description Краткое описание одной папки креативов для UI выбора.
          */
@@ -2853,6 +2983,23 @@ export interface components {
             manual_guide: components["schemas"]["CampaignManualGuideSectionOut"][];
             /** Safety Notes */
             safety_notes: string[];
+        };
+        /**
+         * CampaignStructureIn
+         * @description Одна кампания в плоской структуре фронта.
+         *
+         *     Несёт только `key`/`kind`/`adset_count`/`concept_refs`. Доменные имена adset'ов
+         *     и dir/glob генерируются детерминированно в `to_domain` (фронт их не знает).
+         */
+        CampaignStructureIn: {
+            /** Key */
+            key: string;
+            /** Kind */
+            kind: string;
+            /** Adset Count */
+            adset_count: number;
+            /** Concept Refs */
+            concept_refs?: string[];
         };
         /**
          * ChartBucketOut
@@ -3516,9 +3663,13 @@ export interface components {
         /**
          * LaunchIn
          * @description Запрос запуска залива: конфиг + опц. ссылка на пресет/upload.
+         *
+         *     `config` — каноническая ПЛОСКАЯ форма фронта (`CampaignConfigIn`) ИЛИ вложенный
+         *     `CampaignConfig` (legacy). `domain_config()` нормализует в доменный CampaignConfig.
          */
         LaunchIn: {
-            config: components["schemas"]["CampaignConfig"];
+            /** Config */
+            config: components["schemas"]["CampaignConfigIn"] | components["schemas"]["CampaignConfig"];
             /** Preset Id */
             preset_id?: string | null;
             /** Idempotency Key */
@@ -4681,9 +4832,18 @@ export interface components {
         /**
          * ValidateIn
          * @description Запрос dry-run валидации конфига.
+         *
+         *     `config` — каноническая ПЛОСКАЯ форма фронта (`CampaignConfigIn`) ИЛИ вложенный
+         *     `CampaignConfig` (legacy). OpenAPI документирует обе (anyOf), фронтовые типы
+         *     генерируются из плоской. `domain_config()`/`concept_counts_map()` нормализуют вход.
          */
         ValidateIn: {
-            config: components["schemas"]["CampaignConfig"];
+            /** Config */
+            config: components["schemas"]["CampaignConfigIn"] | components["schemas"]["CampaignConfig"];
+            /** Concept Counts */
+            concept_counts?: {
+                [key: string]: number;
+            } | null;
         };
         /**
          * ValidatePlanOut

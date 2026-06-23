@@ -147,18 +147,53 @@ class AdsetConfig(BaseModel):
     glob: str  # маска файлов
 
 
+# Расширения медиа для проверки соответствия концепт↔kind кампании (единый источник:
+# воркер импортит отсюда). Несовпадение типа файла и block.kind → крах уникализатора
+# (PIL на mp4 / ffmpeg на jpg) ПОСЛЕ создания кампании+adset'ов в Meta = орфаны.
+# Ловим ДО любого POST, на уровне валидации конфига.
+VIDEO_EXTS = frozenset({".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv"})
+IMAGE_EXTS = frozenset({".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"})
+
+
+def ref_media_kind(ref: str) -> str | None:
+    """Тип медиа по расширению имени файла: 'video' | 'image' | None (неизвестно)."""
+    suffix = ("." + ref.rsplit(".", 1)[-1].lower()) if "." in ref else ""
+    if suffix in VIDEO_EXTS:
+        return "video"
+    if suffix in IMAGE_EXTS:
+        return "image"
+    return None
+
+
 class CampaignBlock(BaseModel):
-    """Одна кампания: тип медиа + список adset'ов."""
+    """Одна кампания: тип медиа + список adset'ов.
+
+    concept_refs — ЕДИНЫЙ источник концептов блока: имена файлов в media store
+    (`{creo_root}/{ref}`), назначенные фронтом на эту кампанию. Воркер материализует
+    ровно эти файлы (не glob по папке), validate считает их число (len) — превью и
+    залив сверяются на одном списке (money-safety: preview == залив).
+    """
 
     key: str
     name: str  # шаблон имени с плейсхолдерами
     kind: str  # image | video
     adsets: list[AdsetConfig]
+    concept_refs: list[str] = Field(default_factory=list)  # имена файлов концептов блока
 
     @model_validator(mode="after")
     def _check(self) -> CampaignBlock:
         if self.kind not in ("image", "video"):
             raise ValueError("campaign.kind: image | video")
+        # Money-safety: концепт с расширением чужого типа (видео в image-кампании или
+        # наоборот) уронит уникализатор уже ПОСЛЕ создания объектов в Meta → орфаны.
+        # Отклоняем ДО POST. Неизвестное расширение (None) пропускаем — воркер проверит файл.
+        for ref in self.concept_refs:
+            rk = ref_media_kind(ref)
+            if rk is not None and rk != self.kind:
+                raise ValueError(
+                    f"кампания {self.key!r} (kind={self.kind}): концепт {ref!r} имеет тип "
+                    f"{rk} — назначь его в {rk}-кампанию (несовпадение типа = орфаны в Meta)"
+                )
         return self
 
 

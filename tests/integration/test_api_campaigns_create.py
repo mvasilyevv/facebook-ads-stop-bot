@@ -154,8 +154,9 @@ async def test_validate_returns_plan(pg_engine, fake_redis_client, clean_campaig
     plan = resp.json()
     assert plan["campaign_count"] == 1
     assert plan["adset_count"] == 2
-    # copies = число adset (2) на каждый из 2 adset → 4 ads.
-    assert plan["ad_count"] == 4
+    # Без концептов в конфиге превью использует фолбэк (1 концепт/блок):
+    # adset i = 1 ad → 2 adset × 1 = 2 ads (parity с исполнителем, не баговые 4).
+    assert plan["ad_count"] == 2
     assert plan["launch_state"] == "campaign_paused"
     assert "GH_CR" in plan["campaigns"][0]["name"]
 

@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from core.campaign_builder.config import (
@@ -20,7 +21,8 @@ from core.campaign_builder.config import (
     CampaignConfig,
     LaunchState,
 )
-from core.campaign_builder.naming import creative_codes, render_name
+from core.campaign_builder.naming import render_name
+from core.campaign_builder.uniquify import build_code_layout
 
 # ---------------------- спека (план объектов) ----------------------
 
@@ -215,20 +217,35 @@ def url_tags_of(cfg: CampaignConfig, code: str) -> str:
 # ---------------------- сборка спеки ----------------------
 
 
-def _build_block(cfg: CampaignConfig, block: CampaignBlock, copies: int) -> CampaignSpec_Block:
-    """Разворачивает одну CampaignBlock в план с отрендеренными именами и телами."""
+def _build_block(
+    cfg: CampaignConfig, block: CampaignBlock, copies: int, concept_count: int
+) -> CampaignSpec_Block:
+    """Разворачивает одну CampaignBlock в план с отрендеренными именами и телами.
+
+    copies — число adset'ов раскладки (= len(block.adsets), как у исполнителя).
+    concept_count — число концептов блока K. Коды креативов берутся из единого
+    source-of-truth раскладки (build_code_layout): adset i = K ads (по 1 на концепт),
+    сквозная нумерация OFFER_CRxxx без дублей между adset'ами.
+    """
     child_status = _child_status(cfg.launch_state)
     camp_name = render_name(
         block.name, byer=cfg.byer_tag, offer=cfg.offer_code, date_label=cfg.date_label
     )
 
+    # Единый source-of-truth: layout[i] = коды ads adset'а i (K кодов, 1 на концепт).
+    layout = build_code_layout(
+        cfg.offer_code,
+        concept_count=concept_count,
+        copies=copies,
+        prefix=cfg.creative_prefix,
+    )
+
     adsets: list[AdsetSpec] = []
-    for adset_cfg in block.adsets:
+    for adset_index, adset_cfg in enumerate(block.adsets):
         adset_name = render_name(
             adset_cfg.name, byer=cfg.byer_tag, offer=cfg.offer_code, date_label=cfg.date_label
         )
-        # copies ad-слотов на adset; код креатива OFFER_CRxxx с глобальной нумерацией адсета.
-        codes = creative_codes(cfg.offer_code, count=copies, prefix=cfg.creative_prefix)
+        codes = layout[adset_index] if adset_index < len(layout) else []
         ads = [
             AdSpec(code=code, url_tags=url_tags_of(cfg, code), status=child_status)
             for code in codes
@@ -252,21 +269,35 @@ def _build_block(cfg: CampaignConfig, block: CampaignBlock, copies: int) -> Camp
     )
 
 
-def build_campaign_spec(cfg: CampaignConfig) -> CampaignSpec:
+def build_campaign_spec(
+    cfg: CampaignConfig,
+    concept_counts: Mapping[str, int] | None = None,
+) -> CampaignSpec:
     """Чистая функция: CampaignConfig → план объектов (для dry-run/validate/воркера).
 
-    copies_per_concept по умолчанию = числу adset'ов в кампании (раскладка K×N из дизайна).
-    Имена отрендерены, тела готовы к Graph API, статусы выставлены по launch_state.
+    Раскладка K концептов × N adset'ов (= число adset'ов блока): total ads = K×N,
+    adset i = K ads (по 1 на концепт), сквозная нумерация кодов OFFER_CRxxx. Эта же
+    раскладка применяется исполнителем (build_uniquification_plan через общий
+    build_code_layout) — превью побитово совпадает с заливом (money-инвариант HIGH-1).
+
+    concept_counts — число концептов K по каждому блоку (ключ = block.key). Когда задан
+    (validate/launch знают, сколько файлов загружено), превью показывает ИСТИННУЮ
+    раскладку залива. Когда None — фолбэк: предполагается 1 концепт на блок (adset i = 1
+    ad, коды сквозные по блоку CR001..CR_N, БЕЗ дубля CR001 в разных adset). Фолбэк
+    занижает число ads, если концептов реально больше одного, но НЕ врёт кодами.
+
+    copies (число adset-слотов раскладки) всегда = len(block.adsets), как у исполнителя
+    (он передаёт copies=len(spec.adsets)). cfg.copies_per_concept в раскладку spec'а не
+    вмешивается — adset'ы spec'а всегда соответствуют block.adsets 1:1.
     """
     blocks: list[CampaignSpec_Block] = []
-    reported_copies = 0  # репрезентативный скаляр для UI = значение первого блока
+    reported_copies = 0  # репрезентативный скаляр для UI = число adset'ов первого блока
     for index, block in enumerate(cfg.campaigns):
-        # Дефолт copies на блок = числу adset'ов ЭТОГО блока (раскладка K×N).
-        # Явный copies_per_concept переопределяет для всех блоков.
-        copies = cfg.copies_per_concept if cfg.copies_per_concept is not None else len(block.adsets)
+        copies = len(block.adsets)  # число adset-слотов = adset'ы блока (как исполнитель)
+        concept_count = concept_counts.get(block.key, 1) if concept_counts is not None else 1
         if index == 0:
             reported_copies = copies
-        blocks.append(_build_block(cfg, block, copies))
+        blocks.append(_build_block(cfg, block, copies, concept_count))
 
     return CampaignSpec(
         offer_code=cfg.offer_code,

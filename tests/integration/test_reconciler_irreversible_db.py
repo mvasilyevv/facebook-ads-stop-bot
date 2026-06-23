@@ -23,7 +23,11 @@ from sqlalchemy import text
 
 from core.meta_api.schemas import IRREVERSIBLE_MUTATION_KINDS
 from core.tasks import create_task
-from core.tasks.queue import fail_stuck_irreversible, reconcile_stuck_running
+from core.tasks.queue import (
+    fail_stuck_campaign_create,
+    fail_stuck_irreversible,
+    reconcile_stuck_running,
+)
 
 
 @pytest_asyncio.fixture
@@ -116,3 +120,73 @@ async def test_stuck_pause_ad_requeued_not_failed(pg_engine, clean_task_queue) -
     moved = await reconcile_stuck_running(pg_engine, exclude_kinds=IRREVERSIBLE_MUTATION_KINDS)
     assert moved == 1
     assert await _status(pg_engine, task_id) == "retrying"
+
+
+# ====================== campaign_create (CRIT-1 + HIGH-3) ======================
+
+
+async def _make_stuck_campaign_create(pg_engine) -> int:
+    """Создаёт campaign_create задачу и эмулирует зависание в 'running' 2 часа."""
+    task_id = await create_task(
+        pg_engine,
+        task_type="campaign_create",
+        idempotency_key=f"cc-{uuid.uuid4().hex[:10]}",
+        payload={"run_id": str(uuid.uuid4())},
+        requested_by="test",
+    )
+    assert task_id is not None
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text(
+                """
+                UPDATE task_queue
+                SET status = 'running', updated_at = NOW() - INTERVAL '2 hours'
+                WHERE id = :i
+                """
+            ),
+            {"i": task_id},
+        )
+    return task_id
+
+
+# Зависший campaign_create → fail_stuck_campaign_create помечает failed (НЕ retry)
+@pytest.mark.asyncio
+async def test_stuck_campaign_create_marked_failed(pg_engine, clean_task_queue) -> None:
+    task_id = await _make_stuck_campaign_create(pg_engine)
+
+    n = await fail_stuck_campaign_create(pg_engine)
+
+    assert n == 1
+    assert await _status(pg_engine, task_id) == "failed"
+
+
+# CRIT-1: reconcile_stuck_running НЕ уводит campaign_create в retrying (даже без exclude_kinds)
+@pytest.mark.asyncio
+async def test_reconcile_does_not_retry_campaign_create(pg_engine, clean_task_queue) -> None:
+    task_id = await _make_stuck_campaign_create(pg_engine)
+
+    # Без exclude_kinds (meta) — campaign_create исключён безусловным task_type guard'ом.
+    moved = await reconcile_stuck_running(pg_engine, exclude_kinds=None)
+
+    assert moved == 0
+    # campaign_create НЕ должна уйти в retrying — иначе риск дубля кампании
+    assert await _status(pg_engine, task_id) == "running"
+
+
+# Свежий fresh-run campaign_create (НЕ зависший) reconcile/fail не трогают
+@pytest.mark.asyncio
+async def test_fresh_campaign_create_untouched(pg_engine, clean_task_queue) -> None:
+    task_id = await create_task(
+        pg_engine,
+        task_type="campaign_create",
+        idempotency_key=f"cc-fresh-{uuid.uuid4().hex[:8]}",
+        payload={"run_id": str(uuid.uuid4())},
+        requested_by="test",
+    )
+    # status='pending', не running → ни одна из reconcile-функций не трогает.
+    failed = await fail_stuck_campaign_create(pg_engine)
+    moved = await reconcile_stuck_running(pg_engine, exclude_kinds=None)
+
+    assert failed == 0
+    assert moved == 0
+    assert await _status(pg_engine, task_id) == "pending"

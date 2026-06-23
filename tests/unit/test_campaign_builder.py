@@ -225,26 +225,37 @@ def test_spec_names_rendered():
     assert "{" not in camp.name
 
 
-# Каждый adset получает copies_per_concept ads-слотов (default = число adset'ов).
+# Фолбэк без concept_counts: предполагается 1 концепт/блок → adset i = 1 ad
+# (раскладка K×N с K=1). copies_per_concept в раскладку spec'а не вмешивается.
 def test_spec_copies_default_equals_adset_count():
     cfg = _config()
     spec = build_campaign_spec(cfg)
-    # 2 adset'а → default copies_per_concept=2 → у каждого adset 2 ad-слота
+    # 2 adset'а блока → reported copies = 2; фолбэк K=1 → по 1 ad на adset.
     assert spec.copies_per_concept == 2
     for adset in spec.campaigns[0].adsets:
-        assert len(adset.ads) == 2
+        assert len(adset.ads) == 1
 
 
-# Явный copies_per_concept переопределяет дефолт.
-def test_spec_copies_explicit():
-    cfg = _config(copies_per_concept=3)
-    spec = build_campaign_spec(cfg)
-    assert spec.copies_per_concept == 3
+# С concept_counts превью показывает истинную раскладку K×N: каждый adset = K ads.
+def test_spec_with_concept_counts_k_ads_per_adset():
+    cfg = _config()
+    spec = build_campaign_spec(cfg, concept_counts={"static": 3})
+    # 2 adset'а × 3 концепта → у каждого adset 3 ad-слота.
     for adset in spec.campaigns[0].adsets:
         assert len(adset.ads) == 3
 
 
-# Дефолт copies на блок: при разном числе adset'ов каждый блок получает своё число ads.
+# copies_per_concept в конфиге НЕ раздувает раскладку spec'а: adset'ы spec'а всегда
+# соответствуют block.adsets 1:1 (исполнитель берёт copies=len(spec.adsets)).
+def test_spec_copies_per_concept_does_not_inflate_layout():
+    cfg = _config(copies_per_concept=3)
+    spec = build_campaign_spec(cfg, concept_counts={"static": 1})
+    assert len(spec.campaigns[0].adsets) == 2  # = block.adsets, не copies_per_concept
+    for adset in spec.campaigns[0].adsets:
+        assert len(adset.ads) == 1  # K=1
+
+
+# Раскладка per-block: concept_counts задаёт K по каждому блоку отдельно.
 def test_spec_copies_default_per_block():
     one_adset = CampaignBlock(
         key="video",
@@ -255,19 +266,21 @@ def test_spec_copies_default_per_block():
         ],
     )
     cfg = _config(campaigns=[_image_block(), one_adset])  # 2 adset'а / 1 adset
-    spec = build_campaign_spec(cfg)
-    # image-блок: 2 adset'а → 2 ads на adset
+    spec = build_campaign_spec(cfg, concept_counts={"static": 2, "video": 1})
+    # image-блок: K=2 → 2 ads на adset
     assert all(len(a.ads) == 2 for a in spec.campaigns[0].adsets)
-    # video-блок: 1 adset → 1 ad на adset (дефолт = числу adset'ов своего блока)
+    # video-блок: K=1 → 1 ad на adset
     assert all(len(a.ads) == 1 for a in spec.campaigns[1].adsets)
 
 
-# Коды креативов в ad-слотах следуют схеме OFFER_CRxxx.
+# Коды креативов сквозные по блоку (CR001..CR_{K*N}), без дубля CR001 в разных adset.
 def test_spec_ad_codes_naming():
     cfg = _config()
-    spec = build_campaign_spec(cfg)
-    codes = [ad.code for ad in spec.campaigns[0].adsets[0].ads]
-    assert codes == ["GH_CR_CR001", "GH_CR_CR002"]
+    # K=2 концепта × 2 adset → CR001..CR004, adset0=[CR001,CR003], adset1=[CR002,CR004].
+    spec = build_campaign_spec(cfg, concept_counts={"static": 2})
+    all_codes = [ad.code for adset in spec.campaigns[0].adsets for ad in adset.ads]
+    assert sorted(all_codes) == ["GH_CR_CR001", "GH_CR_CR002", "GH_CR_CR003", "GH_CR_CR004"]
+    assert len(set(all_codes)) == 4  # без дублей между adset
 
 
 # ---------------------- launch_state → статусы объектов ----------------------
