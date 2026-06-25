@@ -14,6 +14,7 @@ export * from "./api/types";
 export * from "./constants/states";
 export * from "./constants/rules";
 export * from "./constants/mutations";
+export * from "./constants/campaignEnums";
 
 // ─── Форматтеры ──────────────────────────────────────────────────────────────
 export * from "./format/number";

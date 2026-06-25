@@ -10,6 +10,14 @@
  */
 
 import { type FC } from "react";
+import {
+  CALL_TO_ACTIONS,
+  CAMPAIGN_OBJECTIVES,
+  defaultOptimizationGoal,
+  OPTIMIZATION_GOAL_REQUIRES_EVENT,
+  OPTIMIZATION_GOALS_BY_OBJECTIVE,
+  PIXEL_EVENT_TYPES,
+} from "@fb/shared";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { Switch } from "@/components/ui/Switch";
@@ -31,14 +39,6 @@ const BID_STRATEGY_OPTIONS = [
   { value: "LOWEST_COST_WITHOUT_CAP", label: "Lowest cost (без кепа)" },
   { value: "LOWEST_COST_WITH_BID_CAP", label: "Bid cap" },
   { value: "COST_CAP", label: "Cost cap" },
-];
-
-const CTA_OPTIONS = [
-  { value: "PLAY_GAME", label: "PLAY_GAME" },
-  { value: "LEARN_MORE", label: "LEARN_MORE" },
-  { value: "SIGN_UP", label: "SIGN_UP" },
-  { value: "DOWNLOAD", label: "DOWNLOAD" },
-  { value: "GET_OFFER", label: "GET_OFFER" },
 ];
 
 const TEXT_OPT_OPTIONS = [
@@ -82,24 +82,42 @@ export const WizardStep3Goal: FC<WizardStep3GoalProps> = ({ values, onChange, er
       <section>
         <SectionLabel>ЦЕЛЬ ОПТИМИЗАЦИИ</SectionLabel>
         <div className="grid grid-cols-3 gap-4">
-          <Input
+          {/* objective → допустимые optimization_goal (при смене сбрасываем goal на дефолт цели) */}
+          <Select
             label="Objective"
+            options={CAMPAIGN_OBJECTIVES}
             value={values.objective}
-            onChange={(e) => onChange({ objective: e.target.value })}
-            helpText="Дефолт: OUTCOME_SALES"
+            onChange={(e) =>
+              onChange({
+                objective: e.target.value,
+                optimization_goal: defaultOptimizationGoal(e.target.value),
+              })
+            }
           />
-          <Input
+          <Select
             label="Optimization Goal"
+            options={OPTIMIZATION_GOALS_BY_OBJECTIVE[values.objective] ?? []}
             value={values.optimization_goal}
             onChange={(e) => onChange({ optimization_goal: e.target.value })}
-            helpText="Дефолт: OFFSITE_CONVERSIONS"
           />
-          <Input
-            label="Custom Event Type"
-            value={values.custom_event_type}
-            onChange={(e) => onChange({ custom_event_type: e.target.value })}
-            helpText="Дефолт: PURCHASE (FTD)"
-          />
+          {/* custom_event_type нужен только для OFFSITE_CONVERSIONS (promoted_object пикселя) */}
+          {values.optimization_goal === OPTIMIZATION_GOAL_REQUIRES_EVENT ? (
+            <Select
+              label="Событие пикселя"
+              options={PIXEL_EVENT_TYPES}
+              value={values.custom_event_type}
+              onChange={(e) => onChange({ custom_event_type: e.target.value })}
+            />
+          ) : (
+            <div className="flex flex-col gap-1.5">
+              <label className="text-[11px] font-display tracking-wider uppercase text-bg-9">
+                Событие пикселя
+              </label>
+              <div className="flex h-8 items-center rounded-[var(--radius-2)] border border-[var(--hairline)] bg-bg-2 px-3 text-[12px] text-bg-7">
+                не требуется для этой оптимизации
+              </div>
+            </div>
+          )}
         </div>
       </section>
 
@@ -219,7 +237,7 @@ export const WizardStep3Goal: FC<WizardStep3GoalProps> = ({ values, onChange, er
           />
           <Select
             label="CTA"
-            options={CTA_OPTIONS}
+            options={CALL_TO_ACTIONS}
             value={values.cta}
             onChange={(e) => onChange({ cta: e.target.value })}
           />
