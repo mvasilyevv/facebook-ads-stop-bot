@@ -30,7 +30,7 @@ function CampaignPlanCard({ plan }: { plan: CampaignPlan }) {
         <div className="flex-1 min-w-0 text-left">
           <p className="font-display text-[13px] text-bg-11 truncate leading-snug">{plan.name}</p>
           <p className="font-display tabular-nums text-[11px] text-bg-8 mt-0.5">
-            {plan.kind} · {plan.adsets.length} адс · {totalAds} ads · {plan.status}
+            {plan.adsets.length} адс · {totalAds} ads · {plan.status}
           </p>
         </div>
         {expanded ? (

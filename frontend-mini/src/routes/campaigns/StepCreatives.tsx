@@ -99,18 +99,10 @@ export function StepCreatives() {
       setError("Нет концептов для загрузки");
       return;
     }
-    // Заполняем concept_refs КАЖДОЙ кампании концептами СОВПАДАЮЩЕГО типа (kind):
-    // видео-ref → только в video-кампанию, фото → в image. Чужой тип уронит
-    // уникализатор уже ПОСЛЕ создания объектов в Meta (орфаны) — money-safety.
-    const VIDEO_EXTS = [".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv"];
-    const refKind = (ref: string): "video" | "image" =>
-      VIDEO_EXTS.some((e) => ref.toLowerCase().endsWith(e)) ? "video" : "image";
+    // Один adset держит и фото, и видео — каждая кампания получает все концепты.
     const allRefs = localConcepts.map((c) => c.ref);
     const campaigns = useWizardStore.getState().config.campaigns ?? [];
-    const campaignsWithRefs = campaigns.map((c) => ({
-      ...c,
-      concept_refs: allRefs.filter((ref) => refKind(ref) === c.kind),
-    }));
+    const campaignsWithRefs = campaigns.map((c) => ({ ...c, concept_refs: allRefs }));
     updateConfig({ creo_root: localUploadId, campaigns: campaignsWithRefs });
     nextStep();
   }

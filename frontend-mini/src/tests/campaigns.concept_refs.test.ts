@@ -15,10 +15,10 @@ import type { CampaignSpec } from "@/lib/campaignTypes";
 describe("mini — concept_refs заполняются из upload (CRIT)", () => {
   beforeEach(() => {
     useWizardStore.getState().reset();
-    // Добавляем две кампании в config
+    // Добавляем две кампании в config (смешанные медиа — без kind)
     const camps: CampaignSpec[] = [
-      { key: "camp_1", kind: "image", adset_count: 3 },
-      { key: "camp_2", kind: "video", adset_count: 2 },
+      { key: "camp_1", adset_count: 3 },
+      { key: "camp_2", adset_count: 2 },
     ];
     useWizardStore.getState().updateConfig({ campaigns: camps });
   });
@@ -44,9 +44,7 @@ describe("mini — concept_refs заполняются из upload (CRIT)", () =
 
     const result = useWizardStore.getState().config.campaigns ?? [];
     expect(result).toHaveLength(2);
-    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
     expect(result[0]!.concept_refs).toEqual(["img1.jpg", "vid1.mp4"]);
-    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
     expect(result[1]!.concept_refs).toEqual(["img1.jpg", "vid1.mp4"]);
   });
 

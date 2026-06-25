@@ -505,13 +505,38 @@ describe("StepStructure — управление кампаниями", () => {
     expect(screen.getByText(/Ключи не могут быть пустыми/i)).toBeTruthy();
   });
 
-  it("сохраняет campaigns в store", async () => {
+  it("сохраняет campaigns в store без поля kind", async () => {
     renderStructure();
     fireEvent.click(screen.getByRole("button", { name: /далее/i }));
     await waitFor(() => {
       const cfg = useWizardStore.getState().config;
       expect(cfg.campaigns).toHaveLength(1);
       expect(cfg.campaigns?.[0]?.key).toBe("camp_1");
+      // kind убран — смешанные медиа не требуют типа кампании
+      expect((cfg.campaigns?.[0] as unknown as Record<string, unknown>)?.["kind"]).toBeUndefined();
+    });
+  });
+
+  it("поле Метка записывается в spec.label", async () => {
+    renderStructure();
+    // Находим поле метки по плейсхолдеру
+    const labelInput = screen.getByPlaceholderText(/CR2 \/ тест-A/i);
+    fireEvent.change(labelInput, { target: { value: "тест-A" } });
+    fireEvent.click(screen.getByRole("button", { name: /далее/i }));
+    await waitFor(() => {
+      const cfg = useWizardStore.getState().config;
+      expect(cfg.campaigns?.[0]?.label).toBe("тест-A");
+    });
+  });
+
+  it("пустая метка сохраняется как null в spec.label", async () => {
+    renderStructure();
+    // Метку не заполняем → label должна быть undefined или null
+    fireEvent.click(screen.getByRole("button", { name: /далее/i }));
+    await waitFor(() => {
+      const cfg = useWizardStore.getState().config;
+      const label = cfg.campaigns?.[0]?.label;
+      expect(label == null).toBe(true);
     });
   });
 });
@@ -580,6 +605,50 @@ describe("StepCreatives — загрузка файлов", () => {
 
     await waitFor(() => {
       expect(useWizardStore.getState().uploadId).toBe("upload-xyz");
+    });
+  });
+
+  it("все концепты (фото и видео) попадают в каждую кампанию", async () => {
+    // Готовим store: две кампании и смешанные концепты
+    mockUseUploadConcepts.mockReturnValue({
+      mutateAsync: vi.fn().mockResolvedValue({
+        upload_id: "upload-mix",
+        upload_dir: "/tmp/upload-mix",
+        concepts: [
+          { ref: "photo.jpg", original_name: "photo.jpg", size_bytes: 1024, content_type: "image/jpeg" },
+          { ref: "clip.mp4", original_name: "clip.mp4", size_bytes: 2048, content_type: "video/mp4" },
+        ],
+        total_bytes: 3072,
+      }),
+      isPending: false,
+    });
+    useWizardStore.getState().updateConfig({
+      campaigns: [
+        { key: "camp_1", adset_count: 2 },
+        { key: "camp_2", adset_count: 2 },
+      ],
+    });
+
+    renderCreatives();
+
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const file = new File(["data"], "photo.jpg", { type: "image/jpeg" });
+    Object.defineProperty(fileInput, "files", { value: [file] });
+    fireEvent.change(fileInput);
+
+    await waitFor(() => {
+      expect(useWizardStore.getState().uploadId).toBe("upload-mix");
+    });
+
+    // Нажимаем «Далее» — concept_refs должны попасть во все кампании
+    const btn = screen.getByRole("button", { name: /далее/i });
+    fireEvent.click(btn);
+
+    await waitFor(() => {
+      const camps = useWizardStore.getState().config.campaigns ?? [];
+      // Обе кампании получили оба ref (смешанные медиа)
+      expect(camps[0]?.concept_refs).toEqual(["photo.jpg", "clip.mp4"]);
+      expect(camps[1]?.concept_refs).toEqual(["photo.jpg", "clip.mp4"]);
     });
   });
 });

@@ -1,20 +1,16 @@
 /**
- * StepStructure — шаг 4 визарда: структура (кампании image/video + число адсетов).
- * Динамический список кампаний — добавить/удалить/настроить каждую.
+ * StepStructure — шаг 4 визарда: структура (кампании + число адсетов).
+ * Смешанные медиа: тип кампании не выбирается — фото и видео в одном adset.
+ * Опциональная метка позволяет различать кампании в авто-нейминге.
  */
 import { useState } from "react";
 import { PlusCircle, Trash2 } from "lucide-react";
-import { Input, Button, Select, Badge } from "@/components/ui";
+import { Input, Button } from "@/components/ui";
 import { Eyebrow } from "@/components/data";
 import { haptic } from "@/lib/tg";
 import type { CampaignSpec } from "@/lib/campaignTypes";
 import { useWizardStore } from "./-wizardStore";
 import { cn } from "@/lib/cn";
-
-const KIND_OPTIONS = [
-  { value: "image", label: "Изображения" },
-  { value: "video", label: "Видео" },
-];
 
 interface CampaignRowProps {
   spec: CampaignSpec;
@@ -28,12 +24,7 @@ function CampaignRow({ spec, index, onUpdate, onRemove }: CampaignRowProps) {
     <div className="border border-[var(--hairline)] bg-bg-1 rounded-[var(--radius-3)] overflow-hidden">
       {/* Заголовок строки */}
       <div className="flex items-center justify-between px-3.5 py-2.5 bg-bg-2 border-b border-[var(--hairline)]">
-        <div className="flex items-center gap-2">
-          <span className="font-display tabular-nums text-[11px] text-bg-8">#{index + 1}</span>
-          <Badge variant={spec.kind === "video" ? "warning" : "done"}>
-            {spec.kind}
-          </Badge>
-        </div>
+        <span className="font-display tabular-nums text-[11px] text-bg-8">#{index + 1}</span>
         <button
           type="button"
           aria-label="Удалить кампанию"
@@ -48,11 +39,12 @@ function CampaignRow({ spec, index, onUpdate, onRemove }: CampaignRowProps) {
       <div className="flex flex-col gap-3 px-3.5 py-3">
         <div className="flex gap-3">
           <div className="flex-1">
-            <Select
-              label="Тип медиа"
-              value={spec.kind}
-              options={KIND_OPTIONS}
-              onChange={(e) => onUpdate({ ...spec, kind: e.target.value as "image" | "video" })}
+            <Input
+              label="Метка (необязательно)"
+              placeholder="CR2 / тест-A"
+              value={spec.label ?? ""}
+              onChange={(e) => onUpdate({ ...spec, label: e.target.value || null })}
+              autoCapitalize="none"
             />
           </div>
           <div className="w-[100px]">
@@ -92,7 +84,7 @@ export function StepStructure() {
   const [campaigns, setCampaigns] = useState<CampaignSpec[]>(
     config.campaigns && config.campaigns.length > 0
       ? config.campaigns
-      : [{ key: "camp_1", kind: "image", adset_count: 3 }],
+      : [{ key: "camp_1", adset_count: 3 }],
   );
   const [error, setError] = useState<string | null>(null);
 
@@ -100,7 +92,7 @@ export function StepStructure() {
     haptic.selection();
     setCampaigns((prev) => [
       ...prev,
-      { key: `camp_${prev.length + 1}`, kind: "image", adset_count: 3 },
+      { key: `camp_${prev.length + 1}`, adset_count: 3 },
     ]);
   }
 

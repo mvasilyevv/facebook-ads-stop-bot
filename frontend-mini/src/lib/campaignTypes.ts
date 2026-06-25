@@ -103,7 +103,8 @@ export interface AdsetSpec {
 /** Описание одной кампании в структуре. */
 export interface CampaignSpec {
   key: string;
-  kind: "image" | "video";
+  /** Необязательная метка для различения кампаний в имени (напр. «CR2 / тест-A»). */
+  label?: string | null;
   adset_count: number;
   /** Ссылки на загруженные концепты (refs из /upload). Заполняется на шаге Креативы. */
   concept_refs?: string[];
@@ -159,7 +160,6 @@ export interface AdsetPlan {
 export interface CampaignPlan {
   key: string;
   name: string;
-  kind: string;
   status: string;
   adsets: AdsetPlan[];
 }
