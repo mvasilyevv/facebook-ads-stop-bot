@@ -73,6 +73,12 @@ import { StepStart } from "@/routes/campaigns/StepStart";
 // Дефолтные ответы хуков TZ/офферов (idle — фетч ещё не запускался).
 const idleTz = { data: undefined, isError: false, isFetching: false } as const;
 const emptyOffers = { data: [], isLoading: false, isError: false } as const;
+// TZ успешно подтянута — гард шага пропускает дальше.
+const okTz = {
+  data: { tz_offset_hours: 3, tz_offset_str: "+03:00", timezone_name: "Europe/Moscow" },
+  isError: false,
+  isFetching: false,
+} as const;
 
 describe("StepIdentity — валидация", () => {
   beforeEach(() => {
@@ -98,6 +104,7 @@ describe("StepIdentity — валидация", () => {
   });
 
   it("переходит на следующий шаг после заполнения всех полей", async () => {
+    mockUseAdAccountTimezone.mockReturnValue(okTz); // TZ подтверждена → гард пропускает
     renderIdentity();
     fireEvent.change(screen.getByLabelText(/ID рекламного кабинета/i), {
       target: { value: "act_111" },
@@ -119,7 +126,20 @@ describe("StepIdentity — валидация", () => {
     });
   });
 
+  // Деньги: без подтверждённой TZ (idleTz) гард не пускает дальше.
+  it("не пускает дальше без подтверждённой таймзоны", () => {
+    renderIdentity(); // idleTz из beforeEach → TZ не подтянута
+    fireEvent.change(screen.getByLabelText(/ID рекламного кабинета/i), { target: { value: "act_1" } });
+    fireEvent.change(screen.getByLabelText(/ID страницы/i), { target: { value: "2" } });
+    fireEvent.change(screen.getByLabelText(/ID пикселя/i), { target: { value: "3" } });
+    fireEvent.change(screen.getByLabelText(/^Код оффера$/i), { target: { value: "GH_X" } });
+    fireEvent.click(screen.getByRole("button", { name: /далее/i }));
+    expect(screen.getByText(/Дождитесь подтягивания/i)).toBeTruthy();
+    expect(useWizardStore.getState().step).toBe("identity");
+  });
+
   it("сохраняет offer_code в uppercase в store", async () => {
+    mockUseAdAccountTimezone.mockReturnValue(okTz); // TZ подтверждена → гард пропускает
     renderIdentity();
     fireEvent.change(screen.getByLabelText(/ID рекламного кабинета/i), {
       target: { value: "act_111" },
@@ -206,6 +226,7 @@ describe("StepIdentity — валидация", () => {
 
   // Свободный ввод в комбобокс uppercase'ится
   it("свободный ввод в offer_code uppercase'ится", async () => {
+    mockUseAdAccountTimezone.mockReturnValue(okTz); // TZ подтверждена → гард пропускает
     renderIdentity();
     fireEvent.change(screen.getByLabelText(/ID рекламного кабинета/i), { target: { value: "act_1" } });
     fireEvent.change(screen.getByLabelText(/ID страницы/i), { target: { value: "2" } });

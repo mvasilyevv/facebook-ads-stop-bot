@@ -134,6 +134,9 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
                   </span>
                 )}
               </div>
+              {errors.tz_offset && (
+                <span className="text-[11px] text-danger font-display">{errors.tz_offset}</span>
+              )}
             </div>
           )}
         </div>
@@ -211,6 +214,10 @@ export function validateIdentity(
   if (!values.page_id.trim()) errors.page_id = "Обязательное поле";
   if (!values.pixel_id.trim()) errors.pixel_id = "Обязательное поле";
   if (!values.offer_code.trim()) errors.offer_code = "Обязательное поле";
+  // Деньги: TZ кабинета должна быть подтверждена (авто-подхват / ручной выбор /
+  // пресет) — иначе бэк тихо подставит дефолт и старт кампании уедет на часы.
+  if (!values.timezone_name.trim())
+    errors.tz_offset = "Подтвердите таймзону: введите Ad Account ID";
 
   return errors;
 }

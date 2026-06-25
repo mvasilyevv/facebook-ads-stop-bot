@@ -222,8 +222,9 @@ export const useWizardStore = create<WizardState & WizardActions>((set, get) => 
         page_id: preset.page_id,
         pixel_id: preset.pixel_id,
         tz_offset: preset.tz_offset,
-        // timezone_name в пресете не хранится — подтянется при blur по act_id.
-        timezone_name: "",
+        // Пресет хранит подтверждённый tz_offset — маркер, чтобы гард не блокировал;
+        // реальное имя TZ подтянется при blur по act_id.
+        timezone_name: "(из пресета)",
         offer_code: preset.offer_code ?? "",
         byer_tag: preset.byer_tag ?? "",
       },

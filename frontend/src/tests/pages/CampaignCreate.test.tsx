@@ -316,10 +316,16 @@ describe("validateIdentity", () => {
     expect(errs.offer_code).toBeTruthy();
   });
 
-  // Заполненные обязательные поля → нет ошибок
+  // Заполненные обязательные поля + подтверждённая TZ → нет ошибок
   it("заполненные поля → нет ошибок", () => {
-    const errs = validateIdentity(DEFAULT_IDENTITY);
+    const errs = validateIdentity({ ...DEFAULT_IDENTITY, timezone_name: "Europe/Moscow" });
     expect(Object.keys(errs)).toHaveLength(0);
+  });
+
+  // Деньги: без подтверждённой TZ (timezone_name пусто) — ошибка, дальше не пускаем.
+  it("без подтверждённой TZ → ошибка tz_offset", () => {
+    const errs = validateIdentity({ ...DEFAULT_IDENTITY, timezone_name: "" });
+    expect(errs.tz_offset).toBeTruthy();
   });
 
   // byer_tag опционален — без него нет ошибки

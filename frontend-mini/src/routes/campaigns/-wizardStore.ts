@@ -95,6 +95,8 @@ export const useWizardStore = create<WizardState>((set) => ({
             page_id: preset.page_id,
             pixel_id: preset.pixel_id,
             tz_offset: preset.tz_offset,
+            // Пресет хранит подтверждённый tz_offset — маркер, чтобы гард не блокировал.
+            timezone_name: "(из пресета)",
             offer_code: preset.offer_code ?? s.config.offer_code,
             byer_tag: preset.byer_tag ?? s.config.byer_tag,
             objective: preset.objective,

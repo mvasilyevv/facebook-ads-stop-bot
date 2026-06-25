@@ -89,6 +89,12 @@ export function StepIdentity() {
       setError("Укажите код оффера");
       return;
     }
+    // Деньги: не пускаем без подтверждённой TZ кабинета (авто/ручная/пресет),
+    // иначе бэк подставит дефолт → старт кампании уедет.
+    if (!config.timezone_name) {
+      setError("Дождитесь подтягивания таймзоны кабинета или укажите вручную");
+      return;
+    }
     haptic.impact("light");
     updateConfig({
       act_id: actId.trim(),
@@ -130,7 +136,7 @@ export function StepIdentity() {
             value={String(typeof tzOffset === "number" ? tzOffset : 0)}
             options={TZ_FALLBACK_OPTIONS}
             onChange={(e) =>
-              updateConfig({ tz_offset: Number(e.target.value), timezone_name: null })
+              updateConfig({ tz_offset: Number(e.target.value), timezone_name: "(вручную)" })
             }
           />
         ) : (
