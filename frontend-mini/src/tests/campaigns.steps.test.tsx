@@ -28,6 +28,8 @@ const mockUseUploadConcepts = vi.fn();
 const mockUseValidateCampaign = vi.fn();
 const mockUseLaunchCampaign = vi.fn();
 const mockUseCampaignRun = vi.fn();
+const mockUseAdAccountTimezone = vi.fn();
+const mockUseOffers = vi.fn();
 
 vi.mock("@/lib/api", () => ({
   useCampaignPresets: () => mockUseCampaignPresets(),
@@ -35,6 +37,8 @@ vi.mock("@/lib/api", () => ({
   useValidateCampaign: () => mockUseValidateCampaign(),
   useLaunchCampaign: () => mockUseLaunchCampaign(),
   useCampaignRun: () => mockUseCampaignRun(),
+  useAdAccountTimezone: () => mockUseAdAccountTimezone(),
+  useOffers: () => mockUseOffers(),
   useCloneRun: () => ({ mutate: vi.fn() }),
   useCancelRun: () => ({ mutate: vi.fn() }),
   useCleanupRun: () => ({ mutate: vi.fn() }),
@@ -66,10 +70,16 @@ import { StepStart } from "@/routes/campaigns/StepStart";
 
 // ─── StepIdentity ──────────────────────────────────────────────────────────
 
+// Дефолтные ответы хуков TZ/офферов (idle — фетч ещё не запускался).
+const idleTz = { data: undefined, isError: false, isFetching: false } as const;
+const emptyOffers = { data: [], isLoading: false, isError: false } as const;
+
 describe("StepIdentity — валидация", () => {
   beforeEach(() => {
     useWizardStore.getState().reset();
     useWizardStore.getState().setStep("identity");
+    mockUseAdAccountTimezone.mockReturnValue(idleTz);
+    mockUseOffers.mockReturnValue(emptyOffers);
   });
 
   function renderIdentity() {
@@ -128,6 +138,82 @@ describe("StepIdentity — валидация", () => {
 
     await waitFor(() => {
       expect(useWizardStore.getState().config.offer_code).toBe("GH_AVI");
+    });
+  });
+
+  // Успешный фетч TZ → tz_offset (число, м.б. отрицательное) и имя в store
+  it("успешный фетч TZ записывает отрицательный tz_offset и имя в store", async () => {
+    mockUseAdAccountTimezone.mockReturnValue({
+      data: { tz_offset_hours: -7, tz_offset_str: "-07:00", timezone_name: "America/Hermosillo" },
+      isError: false,
+      isFetching: false,
+    });
+    renderIdentity();
+    await waitFor(() => {
+      expect(useWizardStore.getState().config.tz_offset).toBe(-7);
+      expect(useWizardStore.getState().config.timezone_name).toBe("America/Hermosillo");
+    });
+  });
+
+  // Read-only показ таймзоны формата «UTC±HH:00 · name»
+  it("показывает таймзону в формате UTC-07:00 · name (read-only)", async () => {
+    mockUseAdAccountTimezone.mockReturnValue({
+      data: { tz_offset_hours: -7, tz_offset_str: "-07:00", timezone_name: "America/Hermosillo" },
+      isError: false,
+      isFetching: false,
+    });
+    renderIdentity();
+    await waitFor(() => {
+      expect(screen.getByText(/UTC-07:00 · America\/Hermosillo/)).toBeTruthy();
+    });
+  });
+
+  // Спиннер во время фетча
+  it("во время фетча TZ показывает спиннер", () => {
+    mockUseAdAccountTimezone.mockReturnValue({ data: undefined, isError: false, isFetching: true });
+    renderIdentity();
+    expect(screen.getByLabelText(/Загрузка таймзоны/i)).toBeTruthy();
+  });
+
+  // Ошибка фетча → ручной фолбэк с полным диапазоном UTC (−12..+14)
+  it("при ошибке фетча TZ показывает ручной Select с полным диапазоном UTC", async () => {
+    mockUseAdAccountTimezone.mockReturnValue({ data: undefined, isError: true, isFetching: false });
+    renderIdentity();
+    const select = (await screen.findByLabelText(/Таймзона кабинета \(ручной выбор\)/i)) as HTMLSelectElement;
+    // −12..+14 = 27 опций
+    expect(select.querySelectorAll("option").length).toBe(27);
+    fireEvent.change(select, { target: { value: "-7" } });
+    await waitFor(() => {
+      expect(useWizardStore.getState().config.tz_offset).toBe(-7);
+    });
+  });
+
+  // offer_code — комбобокс с подсказками из активных офферов (datalist)
+  it("offer_code комбобокс предлагает коды активных офферов", () => {
+    mockUseOffers.mockReturnValue({
+      data: [
+        { id: "1", code: "GH_AVI", name: "Aviator", is_active: true },
+        { id: "2", code: "GH_CR2", name: "Crash", is_active: true },
+      ],
+      isLoading: false,
+      isError: false,
+    });
+    renderIdentity();
+    const datalist = document.getElementById("offer-code-list") as HTMLDataListElement;
+    const values = Array.from(datalist.querySelectorAll("option")).map((o) => o.value);
+    expect(values).toEqual(["GH_AVI", "GH_CR2"]);
+  });
+
+  // Свободный ввод в комбобокс uppercase'ится
+  it("свободный ввод в offer_code uppercase'ится", async () => {
+    renderIdentity();
+    fireEvent.change(screen.getByLabelText(/ID рекламного кабинета/i), { target: { value: "act_1" } });
+    fireEvent.change(screen.getByLabelText(/ID страницы/i), { target: { value: "2" } });
+    fireEvent.change(screen.getByLabelText(/ID пикселя/i), { target: { value: "3" } });
+    fireEvent.change(screen.getByLabelText(/^Код оффера$/i), { target: { value: "custom_x" } });
+    fireEvent.click(screen.getByRole("button", { name: /далее/i }));
+    await waitFor(() => {
+      expect(useWizardStore.getState().config.offer_code).toBe("CUSTOM_X");
     });
   });
 });

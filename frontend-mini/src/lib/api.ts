@@ -243,6 +243,38 @@ export function useOffers() {
   });
 }
 
+// ─── Таймзона рекламного кабинета ──────────────────────────────────────────
+
+/**
+ * Ответ GET /campaigns/ad-account-timezone. Тип локальный (не из @fb/shared/api
+ * generated — gen:api требует живого бэка). `tz_offset_hours` может быть < 0
+ * (напр. -7 для America/Hermosillo). Деньги: это часы для start_time кабинета.
+ */
+export interface AdAccountTimezoneResponse {
+  tz_offset_hours: number;
+  tz_offset_str: string;
+  timezone_name: string;
+}
+
+/**
+ * Фетчит TZ кабинета (зафиксирована при создании, неизменна) по act_id.
+ * `enabled` гейтит запрос (вызываем только после blur с непустым act_id).
+ * 503 — browser-agent/Vision недоступны, 422 — Meta-ошибка/кабинет не найден.
+ */
+export function useAdAccountTimezone(actId: string, enabled: boolean) {
+  const trimmed = actId.trim();
+  return useQuery({
+    queryKey: ["campaigns", "ad-account-timezone", trimmed] as const,
+    queryFn: () =>
+      fetchJson<AdAccountTimezoneResponse>(
+        `/campaigns/ad-account-timezone?act_id=${encodeURIComponent(trimmed)}`,
+      ),
+    enabled: enabled && trimmed.length > 0,
+    retry: false,
+    staleTime: 60 * 60 * 1000, // TZ статична — кэшируем час
+  });
+}
+
 // ─── Health ───────────────────────────────────────────────────────────────
 
 export function useHealthDetails() {

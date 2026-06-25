@@ -156,6 +156,17 @@ vi.mock("@/lib/api/campaigns", () => ({
     ],
     total_bytes: 1024,
   }),
+  useAdAccountTimezone: () => ({
+    mutate: vi.fn(),
+    mutateAsync: vi.fn().mockResolvedValue({
+      tz_offset_hours: 0,
+      tz_offset_str: "+00:00",
+      timezone_name: "Etc/UTC",
+    }),
+    isPending: false,
+    isError: false,
+    error: null,
+  }),
   RUN_STATUS_LABELS: {
     queued: "В очереди",
     uniquifying: "Уникализация",
@@ -167,6 +178,12 @@ vi.mock("@/lib/api/campaigns", () => ({
   },
   CANCELLABLE_RUN_STATUSES: ["queued", "uniquifying", "uploading"],
   TERMINAL_RUN_STATUSES: ["succeeded", "failed", "cancelled"],
+}));
+
+// Мок офферов (комбобокс кода оффера в шаге 2) — иначе useOffers дёрнет реальный
+// apiGet и промис повиснет/реджектнется в jsdom (флейки).
+vi.mock("@/lib/api/offers", () => ({
+  useOffers: () => ({ data: [], isLoading: false, isError: false }),
 }));
 
 // Мок toast
@@ -211,6 +228,7 @@ const DEFAULT_IDENTITY: WizardIdentity = {
   page_id: "456",
   pixel_id: "789",
   tz_offset: 0,
+  timezone_name: "",
   offer_code: "GH_CR2",
   byer_tag: "MV",
 };
@@ -288,7 +306,7 @@ describe("validateIdentity", () => {
   // Пустые поля дают ошибки для всех обязательных
   it("пустые поля → ошибки для act_id, page_id, pixel_id, offer_code", () => {
     const empty: WizardIdentity = {
-      act_id: "", page_id: "", pixel_id: "", tz_offset: 0,
+      act_id: "", page_id: "", pixel_id: "", tz_offset: 0, timezone_name: "",
       offer_code: "", byer_tag: "",
     };
     const errs = validateIdentity(empty);

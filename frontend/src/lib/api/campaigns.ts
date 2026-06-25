@@ -252,6 +252,33 @@ export const RUN_STATUS_LABELS: Record<RunStatus, string> = {
   cancelled: "Отменено",
 };
 
+// ─── Ad Account Timezone (авто-подхват) ──────────────────────────────────────
+
+/**
+ * Ответ GET /campaigns/ad-account-timezone. Определяем тип ЛОКАЛЬНО (не из generated):
+ * эндпоинт читается без живого бэка при gen:api.
+ */
+export interface AdAccountTimezoneOut {
+  /** Смещение в часах от UTC; МОЖЕТ быть отрицательным (напр. -7 для America/Hermosillo). */
+  tz_offset_hours: number;
+  /** Готовая строка вида "±HH:00" для start_time (напр. "-07:00", "+03:00"). */
+  tz_offset_str: string;
+  /** Имя таймзоны кабинета (напр. "America/New_York"). */
+  timezone_name: string;
+}
+
+/**
+ * Подтягивает таймзону рекламного кабинета по act_id.
+ * TZ кабинета зафиксирована при создании и неизменна — тянем её из Graph через бэк.
+ * act_id принимается с префиксом act_ или без (бэк нормализует).
+ */
+export function useAdAccountTimezone() {
+  return useMutation<AdAccountTimezoneOut, Error, string>({
+    mutationFn: (actId: string) =>
+      apiGet<AdAccountTimezoneOut>("/campaigns/ad-account-timezone", { act_id: actId }),
+  });
+}
+
 // ─── Presets ──────────────────────────────────────────────────────────────────
 
 export function usePresets() {

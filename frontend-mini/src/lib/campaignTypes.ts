@@ -115,7 +115,10 @@ export interface CampaignConfig {
   act_id: string;
   page_id: string;
   pixel_id: string;
+  /** Часовой сдвиг кабинета (часы, м.б. отрицательным). Бэк сам int→`±HH:00`. */
   tz_offset?: number;
+  /** IANA-имя TZ кабинета (для показа в UI; в start_time не идёт). */
+  timezone_name?: string | null;
   offer_code: string;
   byer_tag?: string | null;
   start_date?: string | null; // YYYY-MM-DD, дефолт today+1

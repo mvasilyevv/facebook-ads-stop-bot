@@ -40,7 +40,10 @@ export interface WizardIdentity {
   act_id: string;
   page_id: string;
   pixel_id: string;
+  /** Смещение TZ кабинета в часах (может быть отрицательным). Авто-подхват по act_id. */
   tz_offset: number;
+  /** Имя TZ кабинета для отображения (напр. "America/New_York"). "" — ещё не подтянуто. */
+  timezone_name: string;
   offer_code: string;
   byer_tag: string;
 }
@@ -142,6 +145,7 @@ const DEFAULT_IDENTITY: WizardIdentity = {
   page_id: "",
   pixel_id: "",
   tz_offset: 0,
+  timezone_name: "",
   offer_code: "",
   byer_tag: "",
 };
@@ -218,6 +222,8 @@ export const useWizardStore = create<WizardState & WizardActions>((set, get) => 
         page_id: preset.page_id,
         pixel_id: preset.pixel_id,
         tz_offset: preset.tz_offset,
+        // timezone_name в пресете не хранится — подтянется при blur по act_id.
+        timezone_name: "",
         offer_code: preset.offer_code ?? "",
         byer_tag: preset.byer_tag ?? "",
       },
