@@ -34,6 +34,25 @@ function isVideo(ct: string | null): boolean {
   return !!ct?.startsWith("video/");
 }
 
+/** Считает кол-во фото/видео-концептов, привязанных к кампании с ключом `key`. */
+function countMediaForCampaign(
+  concepts: UploadedConcept[],
+  key: string,
+): { img: number; vid: number } {
+  let img = 0;
+  let vid = 0;
+  for (const c of concepts) {
+    const attached = c.campaign_keys.length === 0 || c.campaign_keys.includes(key);
+    if (!attached) continue;
+    if (isVideo(c.content_type)) {
+      vid++;
+    } else {
+      img++;
+    }
+  }
+  return { img, vid };
+}
+
 // ─── Компонент ────────────────────────────────────────────────────────────────
 
 export const WizardStep5Creatives: FC<WizardStep5CreativesProps> = ({
@@ -49,6 +68,12 @@ export const WizardStep5Creatives: FC<WizardStep5CreativesProps> = ({
 
   // Число adset'ов всего (дефолт copies_per_concept)
   const totalAdsets = campaigns.reduce((s, c) => s + c.adset_count, 0);
+
+  // Медиа-состав по кампаниям (для tooltip'а на чипе)
+  const campaignMediaCounts: Record<string, { img: number; vid: number }> = {};
+  for (const campaign of campaigns) {
+    campaignMediaCounts[campaign.key] = countMediaForCampaign(values.concepts, campaign.key);
+  }
 
   const handleFiles = useCallback(
     async (files: FileList | File[]) => {
@@ -123,8 +148,10 @@ export const WizardStep5Creatives: FC<WizardStep5CreativesProps> = ({
           Загрузка креативов
         </h2>
         <p className="text-[13px] text-bg-9 mt-1">
-          Перетащите или выберите концепты (фото/видео). Бот автоматически создаст{" "}
-          <b className="text-bg-11">{totalAdsets || "N"}</b> уникализаций каждого.
+          Перетащите или выберите концепты — фото и видео можно загружать вместе. Один adset
+          держит и фото-, и видео-объявления; привязка концепта к кампании типонезависима. Бот
+          автоматически создаст{" "}
+          <b className="text-bg-11">{totalAdsets || "N"}</b> уникализаций каждого концепта.
         </p>
       </div>
 
@@ -200,6 +227,7 @@ export const WizardStep5Creatives: FC<WizardStep5CreativesProps> = ({
               key={concept.ref}
               concept={concept}
               campaigns={campaigns}
+              campaignMediaCounts={campaignMediaCounts}
               onRemove={() => removeConcept(concept.ref)}
               onToggleCampaign={(key) => toggleCampaignKey(concept.ref, key)}
             />
@@ -252,11 +280,19 @@ export const WizardStep5Creatives: FC<WizardStep5CreativesProps> = ({
 interface ConceptRowProps {
   concept: UploadedConcept;
   campaigns: CampaignStructure[];
+  /** Медиа-состав по ключу кампании: сколько фото/видео привязано к каждой кампании. */
+  campaignMediaCounts: Record<string, { img: number; vid: number }>;
   onRemove: () => void;
   onToggleCampaign: (key: string) => void;
 }
 
-const ConceptRow: FC<ConceptRowProps> = ({ concept, campaigns, onRemove, onToggleCampaign }) => {
+const ConceptRow: FC<ConceptRowProps> = ({
+  concept,
+  campaigns,
+  campaignMediaCounts,
+  onRemove,
+  onToggleCampaign,
+}) => {
   const video = isVideo(concept.content_type);
 
   return (
@@ -301,7 +337,11 @@ const ConceptRow: FC<ConceptRowProps> = ({ concept, campaigns, onRemove, onToggl
                     : "bg-bg-2 border-[var(--hairline)] text-bg-7 hover:border-[var(--hairline-strong)]",
                 )}
                 aria-pressed={isActive}
-                title={`${c.key} / ${c.adset_count} adsets`}
+                title={(() => {
+                  const counts = campaignMediaCounts[c.key];
+                  if (!counts) return `${c.key} · ${c.adset_count} adsets`;
+                  return `${c.key} · ${counts.img} фото + ${counts.vid} видео · ${c.adset_count} adsets`;
+                })()}
               >
                 {c.key}
               </button>
