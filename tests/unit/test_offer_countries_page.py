@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
-"""Unit: offer-поля countries + default_page_id (схемы, нормализация, роутер).
+"""Unit: offer-поле countries (схемы, нормализация, роутер).
 
 Без живой БД: схемы тестируются напрямую, роутер — с фейковым async-engine,
 который перехватывает values insert/update и отдаёт каноническую строку.
 Покрываем: ISO-2 upper нормализацию, пустой countries → [], дефолты,
-OfferOut со всеми 4 полями (pixel_id/ad_account_ids/countries/default_page_id),
-персист в POST/PUT и возврат в GET.
+OfferOut с pixel_id/ad_account_ids/countries (БЕЗ default_page_id —
+страница задаётся per-campaign, откатано), персист в POST/PUT и возврат в GET.
 """
 
 from __future__ import annotations
@@ -44,12 +44,6 @@ def test_create_invalid_country_rejected() -> None:
         OfferCreateIn(code="GH_CR2", ad_account_ids=["123"], countries=["DEU"])
 
 
-# default_page_id опционален и по умолчанию None.
-def test_create_default_page_id_optional() -> None:
-    body = OfferCreateIn(code="GH_CR2", ad_account_ids=["123"])
-    assert body.default_page_id is None
-
-
 # В update countries=None — поле не трогаем (sentinel «не менять»).
 def test_update_countries_none_means_untouched() -> None:
     body = OfferUpdateIn(countries=None)
@@ -68,11 +62,11 @@ def test_update_countries_normalized() -> None:
     assert body.countries == ["BR", "US"]
 
 
-# ─────────────────────── OfferOut: все 4 поля ───────────────────────
+# ─────────────────────── OfferOut: pixel_id + ad_account_ids + countries ───────────────────────
 
 
-# OfferOut.from_orm_offer отдаёт pixel_id + ad_account_ids + countries + default_page_id.
-def test_offer_out_contains_all_four_fields() -> None:
+# OfferOut.from_orm_offer отдаёт pixel_id + ad_account_ids + countries (без страницы).
+def test_offer_out_contains_offer_fields() -> None:
     now = datetime.now(UTC)
     fake = SimpleNamespace(
         id=uuid.uuid4(),
@@ -83,7 +77,6 @@ def test_offer_out_contains_all_four_fields() -> None:
         is_active=True,
         ad_account_ids=["123", "456"],
         countries=["DE", "KE"],
-        default_page_id="777111",
         created_at=now,
         updated_at=now,
     )
@@ -91,7 +84,7 @@ def test_offer_out_contains_all_four_fields() -> None:
     assert out.pixel_id == "999000"
     assert out.ad_account_ids == ["123", "456"]
     assert out.countries == ["DE", "KE"]
-    assert out.default_page_id == "777111"
+    assert not hasattr(out, "default_page_id")
 
 
 # OfferOut с пустым/отсутствующим countries даёт [] (стабильный shape).
@@ -106,13 +99,11 @@ def test_offer_out_missing_countries_defaults_empty() -> None:
         is_active=True,
         ad_account_ids=None,
         countries=None,
-        default_page_id=None,
         created_at=now,
         updated_at=now,
     )
     out = OfferOut.from_orm_offer(fake)
     assert out.countries == []
-    assert out.default_page_id is None
 
 
 # ─────────────────────── роутер: фейковый async-engine ───────────────────────
@@ -193,7 +184,6 @@ def _canonical_row(**overrides: Any) -> dict[str, Any]:
         "is_active": True,
         "ad_account_ids": ["123"],
         "countries": ["DE", "KE"],
-        "default_page_id": "777111",
         "created_at": now,
         "updated_at": now,
     }
@@ -208,8 +198,8 @@ def _client(captured: dict[str, Any], row: dict[str, Any]) -> TestClient:
     return TestClient(app, raise_server_exceptions=True)
 
 
-# POST /offers персистит countries (upper) + default_page_id и отдаёт их в ответе.
-def test_post_persists_and_returns_new_fields() -> None:
+# POST /offers персистит countries (upper) и отдаёт их в ответе.
+def test_post_persists_and_returns_countries() -> None:
     captured: dict[str, Any] = {}
     client = _client(captured, _canonical_row())
     resp = client.post(
@@ -218,41 +208,40 @@ def test_post_persists_and_returns_new_fields() -> None:
             "code": "GH_CR2",
             "ad_account_ids": ["123"],
             "countries": ["de", "ke"],
-            "default_page_id": "777111",
         },
     )
     assert resp.status_code == 201, resp.text
     body = resp.json()
     assert body["countries"] == ["DE", "KE"]
-    assert body["default_page_id"] == "777111"
-    # В values insert попали нормализованные countries и страница.
+    assert "default_page_id" not in body
+    # В values insert попали нормализованные countries.
     assert captured.get("countries") == ["DE", "KE"]
-    assert captured.get("default_page_id") == "777111"
+    assert "default_page_id" not in captured
 
 
-# PUT /offers/{id} заменяет countries (включая пустой) и default_page_id.
-def test_put_updates_new_fields() -> None:
+# PUT /offers/{id} заменяет countries (включая пустой).
+def test_put_updates_countries() -> None:
     captured: dict[str, Any] = {}
     oid = uuid.uuid4()
-    client = _client(captured, _canonical_row(id=oid, countries=[], default_page_id=None))
+    client = _client(captured, _canonical_row(id=oid, countries=[]))
     resp = client.put(
         f"/api/offers/{oid}",
-        json={"countries": [], "default_page_id": ""},
+        json={"countries": []},
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["countries"] == []
-    assert body["default_page_id"] is None
-    # Пустой default_page_id → null в values update.
-    assert captured.get("default_page_id") is None
+    assert "default_page_id" not in body
+    # countries=[] долетает в values update.
+    assert captured.get("countries") == []
 
 
-# GET /offers отдаёт countries + default_page_id для каждого оффера.
-def test_get_list_returns_new_fields() -> None:
+# GET /offers отдаёт countries для каждого оффера (без default_page_id).
+def test_get_list_returns_countries() -> None:
     captured: dict[str, Any] = {}
     client = _client(captured, _canonical_row())
     resp = client.get("/api/offers")
     assert resp.status_code == 200, resp.text
     rows = resp.json()
     assert rows and rows[0]["countries"] == ["DE", "KE"]
-    assert rows[0]["default_page_id"] == "777111"
+    assert "default_page_id" not in rows[0]

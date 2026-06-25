@@ -83,7 +83,6 @@ async def list_offers(
             is_active=row["is_active"],
             ad_account_ids=list(row["ad_account_ids"] or []),
             countries=list(row["countries"] or []),
-            default_page_id=row["default_page_id"],
             created_at=row["created_at"].isoformat() if row["created_at"] else None,
             updated_at=row["updated_at"].isoformat() if row["updated_at"] else None,
         )
@@ -251,9 +250,8 @@ async def create_offer(
                 is_active=True,
                 # Мульти-кабинет: валидация (min 1, числовые ID) — в OfferCreateIn.
                 ad_account_ids=body.ad_account_ids,
-                # Гео (ISO-2 upper) и страница оффера — для дерайва визарда.
+                # Гео оффера (ISO-2 upper) — для дерайва визарда.
                 countries=body.countries,
-                default_page_id=(body.default_page_id or None),
             )
             .returning(
                 Offer.__table__.c.id,
@@ -264,7 +262,6 @@ async def create_offer(
                 Offer.__table__.c.is_active,
                 Offer.__table__.c.ad_account_ids,
                 Offer.__table__.c.countries,
-                Offer.__table__.c.default_page_id,
                 Offer.__table__.c.created_at,
                 Offer.__table__.c.updated_at,
             )
@@ -290,7 +287,6 @@ async def create_offer(
         is_active=row["is_active"],
         ad_account_ids=list(row["ad_account_ids"] or []),
         countries=list(row["countries"] or []),
-        default_page_id=row["default_page_id"],
         created_at=row["created_at"].isoformat() if row["created_at"] else None,
         updated_at=row["updated_at"].isoformat() if row["updated_at"] else None,
     )
@@ -325,9 +321,6 @@ async def update_offer(
     # Гео: None — не трогаем; список (в т.ч. пустой) — замена (нормализация в OfferUpdateIn).
     if body.countries is not None:
         updates["countries"] = body.countries
-    # default_page_id: None — не трогаем; строка (в т.ч. пустая → null) — замена.
-    if body.default_page_id is not None:
-        updates["default_page_id"] = body.default_page_id or None
     # body.code намеренно не добавляем в updates
 
     async with engine.begin() as conn:
@@ -353,7 +346,6 @@ async def update_offer(
                     Offer.__table__.c.is_active,
                     Offer.__table__.c.ad_account_ids,
                     Offer.__table__.c.countries,
-                    Offer.__table__.c.default_page_id,
                     Offer.__table__.c.created_at,
                     Offer.__table__.c.updated_at,
                 )
@@ -372,7 +364,6 @@ async def update_offer(
         is_active=row["is_active"],
         ad_account_ids=list(row["ad_account_ids"] or []),
         countries=list(row["countries"] or []),
-        default_page_id=row["default_page_id"],
         created_at=row["created_at"].isoformat() if row["created_at"] else None,
         updated_at=row["updated_at"].isoformat() if row["updated_at"] else None,
     )

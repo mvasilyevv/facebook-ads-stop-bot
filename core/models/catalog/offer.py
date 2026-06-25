@@ -65,12 +65,6 @@ class Offer(UUIDPrimaryKey, Timestamp, Base):
         nullable=False,
         server_default=text("'{}'"),
     )
-    # FB Page ID обычной страницы оффера. Преселект в дропдауне страниц кабинета при
-    # создании кампании, если страница есть среди подтянутых. Опционально.
-    default_page_id: Mapped[str | None] = mapped_column(
-        String(64),
-        nullable=True,
-    )
 
     rules: Mapped[list["OfferRule"]] = relationship(  # noqa: F821
         "OfferRule",

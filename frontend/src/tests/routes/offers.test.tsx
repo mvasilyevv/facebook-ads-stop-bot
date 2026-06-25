@@ -248,9 +248,6 @@ describe("OfferFormModal — создание", () => {
     // Гео (страны): нижний регистр аплоадится в upper, дубли схлопываются.
     await userEvent.type(screen.getByLabelText(/страны/i), "de{Enter}br{Enter}de{Enter}");
 
-    // Страница по умолчанию
-    await userEvent.type(screen.getByLabelText(/страница по умолчанию/i), "1112223334");
-
     // Нажимаем создать
     await userEvent.click(screen.getByRole("button", { name: /создать оффер/i }));
 
@@ -261,7 +258,6 @@ describe("OfferFormModal — создание", () => {
         pixel_id: "9988776655",
         ad_account_ids: ["111", "222"],
         countries: ["DE", "BR"], // ISO-2 upper, дедуп
-        default_page_id: "1112223334",
       }),
     );
   });

@@ -24,14 +24,12 @@ type RulePreviewOut = components["schemas"]["RulePreviewOut"];
  * пока нет в generated-типах (gen:api НЕ запускаем). Бэк OfferOut уже отдаёт их.
  *   - ad_account_ids / pixel_id — уже в generated, дублируем для строгости.
  *   - countries (ISO-2 upper, дефолт []) — НОВОЕ.
- *   - default_page_id (str|null) — НОВОЕ, опц.
  * Реэкспортим как Offer — потребители (форма, визард) читают единый тип.
  */
 export type Offer = OfferBase & {
   ad_account_ids?: string[];
   pixel_id?: string | null;
   countries?: string[];
-  default_page_id?: string | null;
 };
 
 // ─── Список офферов ───────────────────────────────────────────────────────────
@@ -45,7 +43,7 @@ export function useOffers(includeInactive?: boolean) {
   });
 }
 
-// Реэкспорт расширенного типа уже сделан выше — Offer включает countries/default_page_id.
+// Реэкспорт расширенного типа уже сделан выше — Offer включает countries.
 
 // ─── Сравнение офферов ────────────────────────────────────────────────────────
 
@@ -71,8 +69,6 @@ export interface OfferCreateIn {
   ad_account_ids: string[];
   /** Гео оффера (ISO-2 upper). Дефолт [] — не задано. */
   countries?: string[];
-  /** Страница FB по умолчанию (числовой page_id). null/пусто — не задана. */
-  default_page_id?: string | null;
 }
 
 export function useCreateOffer() {

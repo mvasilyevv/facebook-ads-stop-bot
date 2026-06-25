@@ -6,7 +6,8 @@
  *
  * Дерайв из оффера: при выборе offer_code, совпавшего с оффером из useOffers,
  * подставляем act_id (1 кабинет → авто, >1 → Select выбора, 0 → ручной ввод),
- * pixel_id, goal.countries и преселект default_page_id. Все поля редактируемы.
+ * pixel_id и goal.countries. Все поля редактируемы. Страница НЕ свойство оффера —
+ * выбирается из дропдауна страниц кабинета.
  *
  * Таймзона кабинета подтягивается автоматически по act_id (blur): TZ зафиксирована
  * при создании кабинета, её нельзя выбрать руками без ошибки. На ошибке авто-подхвата —
@@ -26,13 +27,12 @@ import type { Offer } from "@fb/shared";
 import type { WizardGoal, WizardIdentity } from "@/stores/campaignWizard";
 
 /**
- * Оффер с новыми полями дерайва. countries/default_page_id ещё нет в generated.ts
- * (gen:api не гоняем) — объявляем локально и читаем из useOffers().data через
- * безопасный каст (бэк OfferOut уже отдаёт эти поля).
+ * Оффер с новым полем дерайва. countries ещё нет в generated.ts (gen:api не гоняем) —
+ * объявляем локально и читаем из useOffers().data через безопасный каст
+ * (бэк OfferOut уже отдаёт это поле).
  */
 type WizardOffer = Offer & {
   countries?: string[] | null;
-  default_page_id?: string | null;
 };
 
 interface WizardStep2IdentityProps {
@@ -72,9 +72,6 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
   const [pages, setPages] = useState<{ id: string; name: string }[]>([]);
   // Кабинеты выбранного оффера при дерайве (>1 → Select выбора кабинета).
   const [offerAccounts, setOfferAccounts] = useState<string[]>([]);
-  // Желаемый page_id после фетча страниц (преселект default_page_id оффера),
-  // применяется только если он есть среди подтянутых.
-  const desiredPageId = useRef<string | null>(null);
   // Дедуп: не фетчить повторно тот же act_id на каждом blur (бьёт по живой
   // Vision-сессии + строка в meta_api_audit_log на каждый клик).
   const lastFetchedAct = useRef<string | null>(null);
@@ -103,17 +100,10 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
       onSuccess: (data) => {
         // Непустой массив → дропдаун; пустой → остаётся ручной ввод page_id.
         setPages(data.pages);
-        // Преселект default_page_id оффера, только если он есть среди подтянутых.
-        const want = desiredPageId.current;
-        if (want && data.pages.some((p) => p.id === want)) {
-          onChange({ page_id: want });
-        }
-        desiredPageId.current = null;
       },
       onError: () => {
         // Не удалось подтянуть страницы — фолбэк на ручной ввод page_id.
         setPages([]);
-        desiredPageId.current = null;
       },
     });
   };
@@ -122,7 +112,7 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
   const fetchAccountMeta = () => fetchAccountMetaFor(values.act_id);
 
   // Дерайв из выбранного оффера: act_id (1 авто / >1 Select / 0 ручной),
-  // pixel_id, goal.countries, преселект default_page_id. Все поля редактируемы.
+  // pixel_id, goal.countries. Все поля редактируемы. Страница — не свойство оффера.
   const deriveFromOffer = (code: string) => {
     const offer = offers.find((o) => o.code === code);
     if (!offer) {
@@ -145,9 +135,6 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
     if (onGoalChange && offer.countries && offer.countries.length > 0) {
       onGoalChange({ countries: offer.countries.map((c) => c.toUpperCase()) });
     }
-
-    // Преселект страницы оффера среди подтянутых страниц кабинета.
-    desiredPageId.current = offer.default_page_id ?? null;
 
     // Авто-кабинет → сразу тянем его TZ и страницы (как при blur).
     if (soleAccount) fetchAccountMetaFor(soleAccount);
@@ -313,7 +300,7 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
         </datalist>
         <div className="grid grid-cols-2 gap-4">
           {/* Свободный ввод разрешён, .toUpperCase() сохраняется. Совпадение
-              с оффером каталога → дерайв act_id/pixel/countries/page. */}
+              с оффером каталога → дерайв act_id/pixel/countries. */}
           <Input
             label="Код оффера"
             placeholder="GH_CR2"

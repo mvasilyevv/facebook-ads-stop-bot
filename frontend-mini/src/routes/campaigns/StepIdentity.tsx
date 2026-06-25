@@ -18,15 +18,14 @@ import type { Offer } from "@fb/shared";
 import { useWizardStore } from "./-wizardStore";
 
 /**
- * Оффер с money-полями дерайва. countries/default_page_id/ad_account_ids/pixel_id
- * ещё нет в generated.ts (gen:api не гоняем) — объявляем локально и читаем из
+ * Оффер с money-полями дерайва. countries/ad_account_ids/pixel_id ещё нет в
+ * generated.ts (gen:api не гоняем) — объявляем локально и читаем из
  * useOffers().data через безопасный каст (бэк OfferOut уже отдаёт эти поля).
  */
 type WizardOffer = Offer & {
   ad_account_ids?: string[];
   pixel_id?: string | null;
   countries?: string[];
-  default_page_id?: string | null;
 };
 
 /** Число часов сдвига → строка вида «±HH:00» (зеркало _tz_offset_to_str бэка). */
@@ -78,8 +77,8 @@ export function StepIdentity() {
   const lastDerivedCode = useRef<string | null>(null);
 
   // Дерайв из выбранного оффера: act_id (1 → авто, >1 → Select, 0 → ручной),
-  // pixel_id префилл, countries в стор (шаг «Параметры»), default_page_id —
-  // преселект ниже, когда подтянутся страницы кабинета. Все поля редактируемы.
+  // pixel_id префилл, countries в стор (шаг «Параметры»). Все поля редактируемы.
+  // Страница FB — не свойство оффера: выбирается из дропдауна кабинета (ниже).
   useEffect(() => {
     const code = offerCode.trim().toUpperCase();
     if (!code || code === lastDerivedCode.current) return;
@@ -107,12 +106,6 @@ export function StepIdentity() {
     }
   }, [offerCode, offers, updateConfig]);
 
-  // default_page_id оффера для преселекта в дропдауне страниц (ниже).
-  const derivedOffer = offers.find(
-    (o) => o.code.toUpperCase() === offerCode.trim().toUpperCase(),
-  );
-  const defaultPageId = derivedOffer?.default_page_id ?? null;
-
   // Успешный фетч → записать число часов + имя TZ в стор (деньги: число).
   useEffect(() => {
     if (tzQuery.data) {
@@ -128,16 +121,6 @@ export function StepIdentity() {
   useEffect(() => {
     if (tzQuery.isError) setTzManual(true);
   }, [tzQuery.isError]);
-
-  // Преселект default_page_id оффера: когда страницы подтянулись и поле page_id
-  // ещё пустое, а дефолтная страница оффера среди них — выбираем её. Если её нет
-  // в списке — не блок (пользователь выберет вручную). Поле остаётся редактируемым.
-  useEffect(() => {
-    if (!defaultPageId || pageId) return;
-    if (pages.some((p) => p.id === defaultPageId)) {
-      setPageId(defaultPageId);
-    }
-  }, [defaultPageId, pageId, pages]);
 
   function handleActBlur() {
     const trimmed = actId.trim();

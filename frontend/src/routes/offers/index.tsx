@@ -218,7 +218,6 @@ function OffersPage() {
             pixel_id: values.pixel_id || null, // пусто → не задан
             ad_account_ids: values.ad_account_ids, // мульти-кабинет: min 1
             countries: values.countries, // гео оффера (ISO-2 upper)
-            default_page_id: values.default_page_id || null, // пусто → не задана
           });
           await saveRules.mutateAsync({
             offerId: created.id,
@@ -298,7 +297,6 @@ function EditOfferModal({ offer, onClose }: { offer: Offer; onClose: () => void 
           pixel_id: values.pixel_id, // строка (в т.ч. "") — форма источник истины
           ad_account_ids: values.ad_account_ids, // мульти-кабинет: замена списка
           countries: values.countries, // гео оффера (ISO-2 upper) — замена списка
-          default_page_id: values.default_page_id || null, // пусто → не задана
         });
         await saveRules.mutateAsync({
           offerId: offer.id,

@@ -136,7 +136,7 @@ function parseCountries(raw: string): string[] | null {
 
 function OfferForm({ offer, onClose }: OfferFormProps) {
   const isEdit = !!offer;
-  // countries/default_page_id появляются в generated-типах после pnpm gen:api —
+  // countries появляются в generated-типах после pnpm gen:api —
   // до этого читаем мягко через OfferExt (бэк OfferOut уже отдаёт их).
   const offerExt = offer as OfferExt | null;
   const offerAccounts = offerExt?.ad_account_ids ?? [];
@@ -148,7 +148,6 @@ function OfferForm({ offer, onClose }: OfferFormProps) {
   const [accountsError, setAccountsError] = useState<string | null>(null);
   const [countriesRaw, setCountriesRaw] = useState(offerCountries.join(", "));
   const [countriesError, setCountriesError] = useState<string | null>(null);
-  const [defaultPageId, setDefaultPageId] = useState(offerExt?.default_page_id ?? "");
   const [isActive, setIsActive] = useState(offer?.is_active ?? true);
   const [error, setError] = useState<string | null>(null);
   const switchId = useId();
@@ -187,10 +186,6 @@ function OfferForm({ offer, onClose }: OfferFormProps) {
       return;
     }
 
-    // default_page_id — опц., числовой; пусто → null (страница не задана).
-    const pageIdTrimmed = defaultPageId.trim();
-    const defaultPage = pageIdTrimmed === "" ? null : pageIdTrimmed;
-
     try {
       if (isEdit && offer) {
         const payload: OfferUpdatePayload = {
@@ -199,7 +194,6 @@ function OfferForm({ offer, onClose }: OfferFormProps) {
           is_active: isActive,
           ad_account_ids: accountIds,
           countries,
-          default_page_id: defaultPage,
         };
         await update.mutateAsync({ id: offer.id, payload });
       } else {
@@ -210,7 +204,6 @@ function OfferForm({ offer, onClose }: OfferFormProps) {
           vertical: vertical || null,
           ad_account_ids: accountIds,
           countries,
-          default_page_id: defaultPage,
         };
         await create.mutateAsync(payload);
       }
@@ -267,15 +260,6 @@ function OfferForm({ offer, onClose }: OfferFormProps) {
         errorMessage={countriesError ?? undefined}
         autoCapitalize="characters"
         autoCorrect="off"
-      />
-
-      {/* Страница FB по умолчанию (опц.) — визард преселектит её в дропдауне */}
-      <Input
-        label="Страница FB по умолчанию"
-        placeholder="123456789"
-        value={defaultPageId}
-        onChange={(e) => setDefaultPageId(e.target.value)}
-        inputMode="numeric"
       />
 
       {/* Вертикаль */}

@@ -242,7 +242,6 @@ describe("StepIdentity — валидация", () => {
           ad_account_ids: ["111222333"],
           pixel_id: "999888777",
           countries: ["GH", "NG"],
-          default_page_id: null,
         },
       ],
       isLoading: false,
@@ -276,7 +275,6 @@ describe("StepIdentity — валидация", () => {
           ad_account_ids: ["111", "222"],
           pixel_id: "999",
           countries: [],
-          default_page_id: null,
         },
       ],
       isLoading: false,
@@ -296,40 +294,6 @@ describe("StepIdentity — валидация", () => {
     // Выбор кабинета пишет act_id
     fireEvent.change(cabSelect, { target: { value: "222" } });
     expect(cabSelect.value).toBe("222");
-  });
-
-  // Дерайв: default_page_id оффера преселектится в дропдауне страниц, если есть среди них
-  it("default_page_id оффера преселектится в дропдауне страниц", async () => {
-    mockUseAdAccountTimezone.mockReturnValue(okTz);
-    mockUseAdAccountPages.mockReturnValue({
-      data: { pages: [{ id: "555", name: "Aviator Page" }, { id: "777", name: "Other Page" }] },
-      isError: false,
-      isFetching: false,
-    });
-    mockUseOffers.mockReturnValue({
-      data: [
-        {
-          id: "1",
-          code: "GH_AVI",
-          name: "Aviator",
-          is_active: true,
-          ad_account_ids: ["111"],
-          pixel_id: "999",
-          countries: [],
-          default_page_id: "777",
-        },
-      ],
-      isLoading: false,
-      isError: false,
-    });
-    renderIdentity();
-    fireEvent.change(screen.getByLabelText(/^Код оффера$/i), { target: { value: "GH_AVI" } });
-    await waitFor(() => {
-      // Дропдаун страниц преселектил дефолтную страницу оффера
-      expect((screen.getByLabelText(/ID страницы Facebook/i) as HTMLSelectElement).value).toBe(
-        "777",
-      );
-    });
   });
 
   // Свободный ввод в комбобокс uppercase'ится

@@ -198,7 +198,7 @@ vi.mock("@/lib/api/campaigns", () => ({
 
 // Мок офферов (комбобокс кода оффера в шаге 2) — иначе useOffers дёрнет реальный
 // apiGet и промис повиснет/реджектнется в jsdom (флейки). Один оффер с новыми
-// полями (ad_account_ids/pixel_id/countries/default_page_id) для теста дерайва.
+// полями (ad_account_ids/pixel_id/countries) для теста дерайва.
 vi.mock("@/lib/api/offers", () => ({
   useOffers: () => ({
     data: [
@@ -211,7 +211,6 @@ vi.mock("@/lib/api/offers", () => ({
         pixel_id: "px555",
         ad_account_ids: ["111222"],
         countries: ["br", "de"],
-        default_page_id: "111",
       },
     ],
     isLoading: false,

@@ -84,8 +84,6 @@ class OfferOut(BaseModel):
     ad_account_ids: list[str] = Field(default_factory=list)
     # Гео оффера (ISO-2 upper, мультигео). Визард префиллит goal.countries.
     countries: list[str] = Field(default_factory=list)
-    # FB Page ID обычной страницы оффера (преселект в дропдауне страниц кабинета). Опц.
-    default_page_id: str | None = None
     created_at: str | None = None  # ISO-строка из ORM datetime
     updated_at: str | None = None
     use_vision_creator: None = None
@@ -103,7 +101,6 @@ class OfferOut(BaseModel):
             is_active=offer.is_active,  # type: ignore[attr-defined]
             ad_account_ids=list(getattr(offer, "ad_account_ids", None) or []),
             countries=list(getattr(offer, "countries", None) or []),
-            default_page_id=getattr(offer, "default_page_id", None),
             created_at=offer.created_at.isoformat() if offer.created_at else None,  # type: ignore[attr-defined]
             updated_at=offer.updated_at.isoformat() if offer.updated_at else None,  # type: ignore[attr-defined]
         )
@@ -123,8 +120,6 @@ class OfferCreateIn(BaseModel):
     ad_account_ids: list[str] = Field(..., min_length=1)
     # Гео оффера (ISO-2 upper), дефолт пусто. Визард префиллит гео из этого списка.
     countries: list[str] = Field(default_factory=list)
-    # FB Page ID обычной страницы оффера. Опционально.
-    default_page_id: str | None = Field(None, max_length=64)
     # country_code и notes принимаем но игнорируем (нет в ORM)
     country_code: str | None = None
     use_vision_creator: bool | None = None
@@ -175,8 +170,6 @@ class OfferUpdateIn(BaseModel):
     ad_account_ids: list[str] | None = None
     # Гео: None — не трогать; список (в т.ч. пустой) — заменить (ISO-2 upper, дедуп).
     countries: list[str] | None = None
-    # default_page_id: None — не трогать; строка (в т.ч. пустая → null) — заменить.
-    default_page_id: str | None = Field(None, max_length=64)
     country_code: str | None = None
     use_vision_creator: bool | None = None
     notes: str | None = None

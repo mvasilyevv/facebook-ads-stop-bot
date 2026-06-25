@@ -391,13 +391,11 @@ import type {
  * отдаёт их — читаем из useOffers().data через этот тип:
  *   - ad_account_ids / pixel_id — уже в generated, дублируем для строгости.
  *   - countries (ISO-2 upper, дефолт []) — НОВОЕ.
- *   - default_page_id (str|null) — НОВОЕ, опц.
  */
 export type OfferExt = Offer & {
   ad_account_ids?: string[];
   pixel_id?: string | null;
   countries?: string[];
-  default_page_id?: string | null;
 };
 
 /** Тип для создания оффера — минимальный набор полей. */
@@ -409,8 +407,6 @@ export interface OfferCreatePayload {
   ad_account_ids: string[];
   /** Гео оффера (ISO-2 upper). Дефолт [] — не задано. */
   countries?: string[];
-  /** Страница FB по умолчанию (числовой page_id). null/пусто — не задана. */
-  default_page_id?: string | null;
 }
 
 /** Тип для обновления оффера. */
@@ -422,8 +418,6 @@ export interface OfferUpdatePayload {
   ad_account_ids?: string[];
   /** Гео оффера (ISO-2 upper): undefined — не трогать, список — заменить. */
   countries?: string[];
-  /** Страница FB по умолчанию: undefined — не трогать, null/строка — заменить. */
-  default_page_id?: string | null;
 }
 
 export const QK_EXT = {
