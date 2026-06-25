@@ -1,13 +1,12 @@
 /**
  * Шаг 4 — Структура кампаний.
  *
- * Список кампаний: каждая имеет key, kind (image/video), adset_count.
+ * Список кампаний: каждая имеет key, label (необязательно), adset_count.
  * Добавить/удалить кампанию. Итого: сколько adset'ов всего.
  */
 
 import { type FC } from "react";
-import { Trash2, Image, Video } from "lucide-react";
-import { cn } from "@/lib/utils/cn";
+import { Trash2, Plus, Layers } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import type { CampaignStructure } from "@/lib/api/campaigns";
@@ -19,9 +18,8 @@ interface WizardStep4StructureProps {
 }
 
 /** Генерирует уникальный key для новой кампании. */
-function genKey(campaigns: CampaignStructure[], prefix: string): string {
-  const existing = campaigns.filter((c) => c.key.startsWith(prefix)).length;
-  return `${prefix}${existing + 1}`;
+function genKey(campaigns: CampaignStructure[]): string {
+  return `camp${campaigns.length + 1}`;
 }
 
 export const WizardStep4Structure: FC<WizardStep4StructureProps> = ({
@@ -31,8 +29,8 @@ export const WizardStep4Structure: FC<WizardStep4StructureProps> = ({
 }) => {
   const totalAdsets = campaigns.reduce((sum, c) => sum + c.adset_count, 0);
 
-  const addCampaign = (prefix: "image" | "video") => {
-    const key = genKey(campaigns, prefix);
+  const addCampaign = () => {
+    const key = genKey(campaigns);
     onChange([...campaigns, { key, adset_count: 3, concept_refs: [] }]);
   };
 
@@ -55,8 +53,9 @@ export const WizardStep4Structure: FC<WizardStep4StructureProps> = ({
           Кампании и adset'ы
         </h2>
         <p className="text-[13px] text-bg-9 mt-1">
-          Добавьте кампании — static (фото) и/или video. Укажите число adset'ов N в каждой.
-          Бот создаст K×N ads (K концептов × N уникализаций).
+          Добавьте кампании и число adset'ов N. Концепты (фото и видео) привяжете на след. шаге —
+          один adset может держать и фото-, и видео-объявления. Метка позволяет различать кампании
+          в имени.
         </p>
       </div>
 
@@ -64,24 +63,14 @@ export const WizardStep4Structure: FC<WizardStep4StructureProps> = ({
       {campaigns.length === 0 ? (
         <div className="border border-dashed border-[var(--hairline-strong)] rounded-[var(--radius-3)] p-8 text-center">
           <div className="text-bg-8 text-[13px] mb-3">Нет кампаний — добавьте хотя бы одну</div>
-          <div className="flex items-center justify-center gap-2">
-            <Button
-              variant="secondary"
-              size="sm"
-              leftIcon={<Image size={13} />}
-              onClick={() => addCampaign("image")}
-            >
-              + Фото-кампания
-            </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              leftIcon={<Video size={13} />}
-              onClick={() => addCampaign("video")}
-            >
-              + Видео-кампания
-            </Button>
-          </div>
+          <Button
+            variant="secondary"
+            size="sm"
+            leftIcon={<Plus size={13} />}
+            onClick={addCampaign}
+          >
+            + Кампания
+          </Button>
         </div>
       ) : (
         <div className="space-y-3">
@@ -100,18 +89,10 @@ export const WizardStep4Structure: FC<WizardStep4StructureProps> = ({
             <Button
               variant="secondary"
               size="sm"
-              leftIcon={<Image size={13} />}
-              onClick={() => addCampaign("image")}
+              leftIcon={<Plus size={13} />}
+              onClick={addCampaign}
             >
-              + Фото
-            </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              leftIcon={<Video size={13} />}
-              onClick={() => addCampaign("video")}
-            >
-              + Видео
+              + Кампания
             </Button>
           </div>
         </div>
@@ -147,45 +128,39 @@ interface CampaignRowProps {
 }
 
 const CampaignRow: FC<CampaignRowProps> = ({ campaign, index, onUpdate, onRemove }) => {
-  // Определяем тип кампании по ключу (исторически: image-prefix = фото, video = видео).
-  // kind убран из CampaignStructure — теперь кампания может быть смешанной.
-  const isVideo = campaign.key.toLowerCase().startsWith("video");
-
   return (
-    <div className="border border-[var(--hairline)] rounded-[var(--radius-3)] p-4 bg-bg-1 flex items-center gap-4">
-      {/* Иконка типа */}
-      <div
-        className={cn(
-          "size-9 rounded-[var(--radius-2)] flex items-center justify-center shrink-0",
-          isVideo ? "bg-purple-500/10 text-purple-400" : "bg-blue-500/10 text-blue-400",
-        )}
-      >
-        {isVideo ? <Video size={16} /> : <Image size={16} />}
+    <div className="border border-[var(--hairline)] rounded-[var(--radius-3)] p-4 bg-bg-1 flex items-start gap-4">
+      {/* Нейтральная иконка */}
+      <div className="size-9 rounded-[var(--radius-2)] flex items-center justify-center shrink-0 bg-bg-3 text-bg-8 mt-1">
+        <Layers size={16} />
       </div>
 
-      {/* Тип и key */}
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 mb-1">
-          <span
-            className={cn(
-              "font-display text-[10px] tracking-[0.12em] uppercase px-1.5 py-0.5 rounded",
-              isVideo ? "bg-purple-500/10 text-purple-400" : "bg-blue-500/10 text-blue-400",
-            )}
-          >
-            {isVideo ? "VIDEO" : "STATIC"}
-          </span>
+      {/* Индекс + key */}
+      <div className="flex-1 min-w-0 space-y-3">
+        <div>
           <span className="font-display text-[11px] text-bg-8">#{index + 1}</span>
+          <div
+            className="font-display text-[12px] text-bg-9 truncate"
+            title={`key: ${campaign.key}`}
+          >
+            key: <span className="text-bg-11">{campaign.key}</span>
+          </div>
         </div>
-        <div
-          className="font-display text-[12px] text-bg-9 truncate"
-          title={`key: ${campaign.key}`}
-        >
-          key: <span className="text-bg-11">{campaign.key}</span>
-        </div>
+
+        {/* Поле метки */}
+        <Input
+          label="Метка (необязательно)"
+          type="text"
+          value={campaign.label ?? ""}
+          placeholder="напр. CR2 / тест-A"
+          onChange={(e) => {
+            onUpdate({ label: e.target.value });
+          }}
+        />
       </div>
 
       {/* N adset'ов */}
-      <div className="w-36 shrink-0">
+      <div className="w-36 shrink-0 mt-1">
         <Input
           label="Число adset'ов N"
           type="number"
@@ -206,7 +181,7 @@ const CampaignRow: FC<CampaignRowProps> = ({ campaign, index, onUpdate, onRemove
         type="button"
         aria-label="Удалить кампанию"
         onClick={onRemove}
-        className="shrink-0 size-8 flex items-center justify-center rounded-[var(--radius-2)] text-bg-7 hover:text-danger hover:bg-danger/10 transition-colors"
+        className="shrink-0 size-8 flex items-center justify-center rounded-[var(--radius-2)] text-bg-7 hover:text-danger hover:bg-danger/10 transition-colors mt-1"
       >
         <Trash2 size={14} />
       </button>

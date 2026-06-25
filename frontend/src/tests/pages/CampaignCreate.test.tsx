@@ -528,12 +528,12 @@ describe("WizardStep4Structure", () => {
     expect(screen.getByText(/Нет кампаний/)).toBeInTheDocument();
   });
 
-  // Кнопка «+ Фото-кампания» добавляет кампанию
-  it("клик '+Фото-кампания' вызывает onChange с новой кампанией", async () => {
+  // Кнопка «+ Кампания» добавляет кампанию
+  it("клик '+ Кампания' вызывает onChange с новой кампанией", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
     render(wrap(<WizardStep4Structure campaigns={[]} onChange={onChange} />));
-    await user.click(screen.getByText("+ Фото-кампания"));
+    await user.click(screen.getByText("+ Кампания"));
     expect(onChange).toHaveBeenCalledWith([
       expect.objectContaining({ adset_count: 3 }),
     ]);
