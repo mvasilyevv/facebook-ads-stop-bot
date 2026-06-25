@@ -167,6 +167,22 @@ vi.mock("@/lib/api/campaigns", () => ({
     isError: false,
     error: null,
   }),
+  useAdAccountPages: () => ({
+    // mutate сразу зовёт onSuccess с непустым списком — имитируем удачный фетч
+    // страниц, чтобы тест мог проверить рендер дропдаупа после blur.
+    mutate: vi.fn(
+      (
+        _actId: string,
+        opts?: { onSuccess?: (d: { pages: { id: string; name: string }[] }) => void },
+      ) => {
+        opts?.onSuccess?.({ pages: [{ id: "111", name: "Acme Page" }] });
+      },
+    ),
+    mutateAsync: vi.fn().mockResolvedValue({ pages: [{ id: "111", name: "Acme Page" }] }),
+    isPending: false,
+    isError: false,
+    error: null,
+  }),
   RUN_STATUS_LABELS: {
     queued: "В очереди",
     uniquifying: "Уникализация",
@@ -364,6 +380,22 @@ describe("WizardStep2Identity render", () => {
       ),
     );
     expect(screen.getByRole("alert")).toHaveTextContent("Обязательное поле");
+  });
+
+  // После blur по Ad Account ID страницы подтянулись → page_id рендерится дропдаупом
+  // с опцией "{name} — {id}" (а не свободным Input).
+  it("страницы подтянулись → рендерится Select с опцией страницы", async () => {
+    const user = userEvent.setup();
+    render(
+      wrap(
+        <WizardStep2Identity values={DEFAULT_IDENTITY} onChange={vi.fn()} />,
+      ),
+    );
+    // blur по Ad Account ID запускает фетч страниц (мок зовёт onSuccess синхронно).
+    const actInput = screen.getByDisplayValue("act_123");
+    await user.click(actInput);
+    await user.tab();
+    expect(screen.getByRole("option", { name: "Acme Page — 111" })).toBeInTheDocument();
   });
 });
 

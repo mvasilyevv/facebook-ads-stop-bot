@@ -7,13 +7,16 @@
  * Таймзона кабинета подтягивается автоматически по act_id (blur): TZ зафиксирована
  * при создании кабинета, её нельзя выбрать руками без ошибки. На ошибке авто-подхвата —
  * фолбэк на ручной ввод с ПОЛНЫМ диапазоном UTC (−12..+14, включая отрицательные).
+ *
+ * Тем же blur'ом (общий дедуп) тянем список FB-страниц кабинета: если подтянулись —
+ * page_id выбирается дропдауном, иначе остаётся ручной ввод ID.
  */
 
 import { useRef, useState, type FC } from "react";
 import { Loader2 } from "lucide-react";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
-import { useAdAccountTimezone } from "@/lib/api/campaigns";
+import { useAdAccountPages, useAdAccountTimezone } from "@/lib/api/campaigns";
 import { useOffers } from "@/lib/api/offers";
 import type { WizardIdentity } from "@/stores/campaignWizard";
 
@@ -43,15 +46,19 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
   errors = {},
 }) => {
   const tzMutation = useAdAccountTimezone();
+  const pagesMutation = useAdAccountPages();
   const offersQuery = useOffers();
   // Авто-подхват TZ упал → показываем ручной фолбэк-контрол.
   const [tzFallback, setTzFallback] = useState(false);
+  // Подтянутые страницы кабинета → дропдаун выбора page_id. Пусто/ошибка → ручной ввод.
+  const [pages, setPages] = useState<{ id: string; name: string }[]>([]);
   // Дедуп: не фетчить повторно тот же act_id на каждом blur (бьёт по живой
   // Vision-сессии + строка в meta_api_audit_log на каждый клик).
   const lastFetchedAct = useRef<string | null>(null);
 
-  // Подтягиваем TZ кабинета по act_id при потере фокуса (если поле непустое).
-  const fetchTimezone = () => {
+  // Подтягиваем TZ кабинета И список страниц по act_id при потере фокуса
+  // (если поле непустое). Один blur → один фетч на act_id (общий дедуп).
+  const fetchAccountMeta = () => {
     const actId = values.act_id.trim();
     if (!actId || actId === lastFetchedAct.current) return;
     lastFetchedAct.current = actId;
@@ -65,6 +72,16 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
         // повторить фетч тем же act_id (сбрасываем дедуп).
         lastFetchedAct.current = null;
         setTzFallback(true);
+      },
+    });
+    pagesMutation.mutate(actId, {
+      onSuccess: (data) => {
+        // Непустой массив → дропдаун; пустой → остаётся ручной ввод page_id.
+        setPages(data.pages);
+      },
+      onError: () => {
+        // Не удалось подтянуть страницы — фолбэк на ручной ввод page_id.
+        setPages([]);
       },
     });
   };
@@ -95,7 +112,7 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
             placeholder="act_123456789"
             value={values.act_id}
             onChange={(e) => onChange({ act_id: e.target.value })}
-            onBlur={fetchTimezone}
+            onBlur={fetchAccountMeta}
             errorMessage={errors.act_id}
             helpText="Числовой ID с префиксом act_ или без"
           />
@@ -148,13 +165,41 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
           СТРАНИЦА И ПИКСЕЛЬ
         </div>
         <div className="grid grid-cols-2 gap-4">
-          <Input
-            label="Facebook Page ID"
-            placeholder="123456789"
-            value={values.page_id}
-            onChange={(e) => onChange({ page_id: e.target.value })}
-            errorMessage={errors.page_id}
-          />
+          {pagesMutation.isPending ? (
+            // Спиннер во время фетча страниц — финальный контрол ещё неизвестен.
+            <div className="flex flex-col gap-1.5">
+              <label className="text-[11px] font-display tracking-wider uppercase text-bg-9">
+                Facebook Page ID
+              </label>
+              <div className="flex h-8 items-center gap-2 rounded-[var(--radius-2)] border border-[var(--hairline-strong)] bg-bg-2 px-3 text-[13.5px] text-bg-9">
+                <Loader2 aria-hidden="true" size={14} className="animate-spin text-bg-9" />
+                <span>Подтягиваю страницы кабинета…</span>
+              </div>
+              {errors.page_id && (
+                <span className="text-[11px] text-danger font-display">{errors.page_id}</span>
+              )}
+            </div>
+          ) : pages.length > 0 ? (
+            // Страницы подтянулись — выбор из дропдауна, value=id.
+            <Select
+              label="Facebook Page"
+              placeholder="Выберите страницу"
+              options={pages.map((p) => ({ value: p.id, label: `${p.name} — ${p.id}` }))}
+              value={values.page_id}
+              onChange={(e) => onChange({ page_id: e.target.value })}
+              errorMessage={errors.page_id}
+            />
+          ) : (
+            // Фетч упал / страниц нет — ручной ввод ID с подсказкой.
+            <Input
+              label="Facebook Page ID"
+              placeholder="123456789"
+              value={values.page_id}
+              onChange={(e) => onChange({ page_id: e.target.value })}
+              errorMessage={errors.page_id}
+              helpText="Не удалось подтянуть — введите ID вручную"
+            />
+          )}
           <Input
             label="FB Pixel ID"
             placeholder="123456789"

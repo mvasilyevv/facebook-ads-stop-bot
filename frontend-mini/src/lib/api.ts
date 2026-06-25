@@ -275,6 +275,38 @@ export function useAdAccountTimezone(actId: string, enabled: boolean) {
   });
 }
 
+// ─── Страницы рекламного кабинета (для выбора page_id) ─────────────────────
+
+/**
+ * Ответ GET /campaigns/ad-account-pages. Тип локальный (не из @fb/shared/api
+ * generated — gen:api требует живого бэка). `pages` может быть пустым массивом
+ * (нет привязанных страниц или нет прав) — тогда фронт оставляет ручной ввод.
+ */
+export interface AdAccountPagesResponse {
+  pages: { id: string; name: string }[];
+}
+
+/**
+ * Фетчит страницы (promote_pages) кабинета по act_id для дропдауна page_id.
+ * `enabled` гейтит запрос (вызываем только после blur с непустым act_id) — тот же
+ * триггер, что у useAdAccountTimezone. 503 — browser-agent/Vision недоступны,
+ * 422 — Meta-ошибка/кабинет не найден. При ошибке/пустом массиве фронт даёт
+ * ручной ввод page_id.
+ */
+export function useAdAccountPages(actId: string, enabled: boolean) {
+  const trimmed = actId.trim();
+  return useQuery({
+    queryKey: ["campaigns", "ad-account-pages", trimmed] as const,
+    queryFn: () =>
+      fetchJson<AdAccountPagesResponse>(
+        `/campaigns/ad-account-pages?act_id=${encodeURIComponent(trimmed)}`,
+      ),
+    enabled: enabled && trimmed.length > 0,
+    retry: false,
+    staleTime: 60 * 60 * 1000, // список страниц меняется редко — кэшируем час
+  });
+}
+
 // ─── Health ───────────────────────────────────────────────────────────────
 
 export function useHealthDetails() {

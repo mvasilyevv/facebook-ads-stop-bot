@@ -279,6 +279,29 @@ export function useAdAccountTimezone() {
   });
 }
 
+// ─── Ad Account Pages (дропдаун страниц) ─────────────────────────────────────
+
+/**
+ * Ответ GET /campaigns/ad-account-pages. Тип определяем ЛОКАЛЬНО (не из generated):
+ * эндпоинт читается без живого бэка при gen:api. Массив может быть пустым.
+ */
+export interface AdAccountPagesOut {
+  pages: { id: string; name: string }[];
+}
+
+/**
+ * Подтягивает список FB-страниц (promote_pages), привязанных к кабинету, по act_id.
+ * Нужен для дропдауна выбора page_id в визарде — байер выбирает страницу из списка,
+ * а не вводит ID руками. На ошибке/пустом массиве фронт откатывается на ручной ввод.
+ * act_id принимается с префиксом act_ или без (бэк нормализует).
+ */
+export function useAdAccountPages() {
+  return useMutation<AdAccountPagesOut, Error, string>({
+    mutationFn: (actId: string) =>
+      apiGet<AdAccountPagesOut>("/campaigns/ad-account-pages", { act_id: actId }),
+  });
+}
+
 // ─── Presets ──────────────────────────────────────────────────────────────────
 
 export function usePresets() {

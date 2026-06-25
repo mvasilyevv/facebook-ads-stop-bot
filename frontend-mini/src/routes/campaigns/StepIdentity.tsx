@@ -13,7 +13,7 @@ import { useEffect, useState } from "react";
 import { Input, Button, Select } from "@/components/ui";
 import { Eyebrow } from "@/components/data";
 import { haptic } from "@/lib/tg";
-import { useAdAccountTimezone, useOffers } from "@/lib/api";
+import { useAdAccountPages, useAdAccountTimezone, useOffers } from "@/lib/api";
 import { useWizardStore } from "./-wizardStore";
 
 /** Число часов сдвига → строка вида «±HH:00» (зеркало _tz_offset_to_str бэка). */
@@ -39,10 +39,16 @@ export function StepIdentity() {
   const [byerTag, setByerTag] = useState(config.byer_tag ?? "");
   const [error, setError] = useState<string | null>(null);
 
-  // Таймзона: фетч на blur. fetchAct непустой → запрос включён.
+  // Таймзона + страницы: фетч на blur. fetchAct непустой → оба запроса включены
+  // (общий триггер, ДЕДУП через одинаковый fetchAct в ключе запроса).
   const [fetchAct, setFetchAct] = useState("");
   const [tzManual, setTzManual] = useState(false);
   const tzQuery = useAdAccountTimezone(fetchAct, fetchAct.length > 0);
+  const pagesQuery = useAdAccountPages(fetchAct, fetchAct.length > 0);
+
+  // Страницы подтянулись непустым массивом → дропдаун; иначе/ошибка → ручной ввод.
+  const pages = pagesQuery.data?.pages ?? [];
+  const hasPages = pages.length > 0;
 
   // Источник офферов для комбобокса (свободный ввод + подсказки).
   const offersQuery = useOffers();
@@ -171,13 +177,52 @@ export function StepIdentity() {
           </div>
         )}
 
-        <Input
-          label="ID страницы Facebook"
-          placeholder="123456789"
-          value={pageId}
-          onChange={(e) => setPageId(e.target.value)}
-          inputMode="numeric"
-        />
+        {/* ID страницы: если страницы подтянулись — дропдаун; иначе ручной ввод */}
+        {pagesQuery.isFetching ? (
+          <div className="flex flex-col gap-1">
+            <label
+              className="text-[11px] uppercase tracking-[0.07em] text-[var(--color-bg-9)] font-mono"
+            >
+              ID страницы Facebook
+            </label>
+            <div
+              className="min-h-[44px] px-3 flex items-center gap-2 rounded-[var(--radius-2)] bg-[var(--color-bg-1)] border border-[var(--hairline)] text-[14px] text-[var(--color-bg-11)]"
+              aria-label="ID страницы Facebook"
+            >
+              <span
+                className="inline-block h-3.5 w-3.5 rounded-full border-2 border-[var(--color-bg-7)] border-t-transparent animate-spin"
+                role="status"
+                aria-label="Загрузка страниц"
+              />
+              <span className="text-bg-8">Подтягиваем страницы…</span>
+            </div>
+          </div>
+        ) : hasPages ? (
+          <Select
+            label="ID страницы Facebook"
+            value={pageId}
+            options={[
+              { value: "", label: "Выберите страницу" },
+              ...pages.map((p) => ({ value: p.id, label: `${p.name} — ${p.id}` })),
+            ]}
+            onChange={(e) => setPageId(e.target.value)}
+          />
+        ) : (
+          <div className="flex flex-col gap-1">
+            <Input
+              label="ID страницы Facebook"
+              placeholder="123456789"
+              value={pageId}
+              onChange={(e) => setPageId(e.target.value)}
+              inputMode="numeric"
+            />
+            {pagesQuery.isError && (
+              <p className="text-[11px] text-bg-7">
+                Не удалось подтянуть страницы — введите ID вручную.
+              </p>
+            )}
+          </div>
+        )}
         <Input
           label="ID пикселя"
           placeholder="987654321"

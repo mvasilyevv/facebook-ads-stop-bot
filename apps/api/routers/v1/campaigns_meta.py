@@ -3,15 +3,19 @@
 
 Endpoints под /api (auto-discovery, prefix="/api"):
 - GET /campaigns/ad-account-timezone?act_id={id} — автоподхват таймзоны кабинета.
+- GET /campaigns/ad-account-pages?act_id={id} — список FB-страниц (promote_pages) кабинета.
 
-Зачем: у рекламного кабинета TZ фиксируется при создании и неизменна. Визард ставит
-campaign start_time = "{date}T00:00:00{tz_offset_str}" → старт кампании в полночь по
+Зачем (timezone): у рекламного кабинета TZ фиксируется при создании и неизменна. Визард
+ставит campaign start_time = "{date}T00:00:00{tz_offset_str}" → старт кампании в полночь по
 времени кабинета. Чтобы байер не вводил оффсет руками (деньги: ошибка сдвинет старт),
 тянем `timezone_offset_hours_utc` из Graph и отдаём готовое число + строку для start_time.
 
+Зачем (pages): шаг «Идентичность» визарда требует page_id. Тянем доступные кабинету
+страницы (`/act_{id}/promote_pages`) → байер выбирает из дропдауна вместо ручного ввода ID.
+
 Канал: read-only `MetaApiClient.execute_graph_call` через активную Vision-сессию (как
 account_tz warmup в meta_api_worker). НЕ открываем новый браузер, НЕ дёргаем живую сессию
-сверх одного GET /act_{id}.
+сверх одного GET.
 """
 
 from __future__ import annotations
@@ -54,6 +58,19 @@ class AdAccountTimezoneResponse(BaseModel):
     tz_offset_hours: int
     tz_offset_str: str  # ISO ±HH:00 — идёт в start_time = "{date}T00:00:00{tz_offset_str}"
     timezone_name: str
+
+
+class AdAccountPage(BaseModel):
+    """FB-страница, доступная кабинету для промо (id + человекочитаемое имя)."""
+
+    id: str
+    name: str
+
+
+class AdAccountPagesResponse(BaseModel):
+    """Список страниц кабинета для дропдауна page_id в шаге «Идентичность»."""
+
+    pages: list[AdAccountPage]
 
 
 def _normalize_act_id(act_id: str | None) -> str:
@@ -110,6 +127,36 @@ async def fetch_account_timezone(
         tz_offset_str=_tz_offset_to_str(offset_hours),
         timezone_name=str(resp.get("timezone_name") or ""),
     )
+
+
+async def fetch_account_pages(
+    client: MetaApiClient,
+    numeric_act_id: str,
+) -> AdAccountPagesResponse:
+    """GET /act_{id}/promote_pages?fields=id,name → список страниц кабинета.
+
+    Доменные/транспортные ошибки пробрасываются — роутер маршрутизирует их на HTTP-коды.
+    Пагинацию НЕ доходим (limit=100 достаточно для UI-дропдауна). Элементы без id
+    пропускаем; name пустой/None → "". id/name приводим к строке.
+    """
+    # ВАЖНО (money): НЕ передаём ad_account_id — иначе browser-agent ушёл бы в
+    # ensureAdsManagerPage и НАВИГИРОВАЛ живую вкладку кабинета (риск порвать in-flight
+    # скан авто-стопа). Read-only GET из primary facebook.com-вкладки.
+    resp = await client.execute_graph_call(
+        method="GET",
+        endpoint=f"/act_{numeric_act_id}/promote_pages",
+        query_params={"fields": "id,name", "limit": "100"},
+    )
+    data = resp.get("data") or []
+    pages: list[AdAccountPage] = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        raw_id = item.get("id")
+        if raw_id is None or str(raw_id) == "":
+            continue
+        pages.append(AdAccountPage(id=str(raw_id), name=str(item.get("name") or "")))
+    return AdAccountPagesResponse(pages=pages)
 
 
 def _build_meta_client(engine: Any) -> AuditedMetaApiClient:
@@ -174,6 +221,60 @@ async def get_ad_account_timezone(
         # Прочие доменные ошибки Meta (включая RateLimited/Temporary) — кабинет
         # читается одним дешёвым GET, не ретраим; отдаём 422 как «не удалось получить».
         logger.info("ad-account-timezone: ошибка Meta act_%s: %s", numeric, exc)
+        raise HTTPException(status_code=422, detail=f"Meta вернула ошибку: {exc}") from exc
+    finally:
+        try:
+            await client.close()
+        except Exception:  # noqa: BLE001 — закрытие канала best-effort
+            pass
+
+
+@router.get("/ad-account-pages", response_model=AdAccountPagesResponse)
+async def get_ad_account_pages(
+    engine: DepEngine,
+    act_id: str = Query(
+        ...,
+        description="ID рекламного кабинета (с префиксом act_ или без — нормализуется).",
+    ),
+) -> AdAccountPagesResponse:
+    """Список FB-страниц кабинета (promote_pages) для дропдауна page_id.
+
+    400 — act_id пустой; 503 — browser-agent / Vision недоступны; 422 — Meta вернула
+    ошибку или кабинет не найден. read-only: один GET /act_{id}/promote_pages через
+    Vision-сессию, без открытия браузера. Массив может быть пустым (нет страниц).
+    """
+    numeric = _normalize_act_id(act_id)
+    if not numeric:
+        raise HTTPException(status_code=400, detail="act_id пустой")
+
+    client = _build_meta_client(engine)
+    try:
+        await client.start()
+        return await fetch_account_pages(client, numeric)
+    except (SessionUnavailableError, CircuitOpenError) as exc:
+        # Vision-сессия не готова / circuit OPEN — канал временно недоступен.
+        logger.warning("ad-account-pages: канал недоступен act_%s: %s", numeric, exc)
+        raise HTTPException(status_code=503, detail="browser-agent / Vision недоступны") from exc
+    except grpc.RpcError as exc:
+        logger.warning("ad-account-pages: gRPC ошибка act_%s: %s", numeric, exc)
+        raise HTTPException(status_code=503, detail="browser-agent недоступен") from exc
+    except RateLimitedError as exc:
+        # Meta-side rate-limit (подкласс TemporaryError) — для одного дешёвого GET
+        # ретрай не помогает; ловим РАНЬШЕ TemporaryError, отдаём 422.
+        logger.info("ad-account-pages: rate-limit Meta act_%s: %s", numeric, exc)
+        raise HTTPException(status_code=422, detail=f"Meta вернула ошибку: {exc}") from exc
+    except TemporaryError as exc:
+        # Транзиентный сбой канала Vision (browser-agent code -2 "Failed to fetch") —
+        # канал недоступен, не «кабинет битый». Честный 503.
+        logger.warning("ad-account-pages: канал Vision недоступен act_%s: %s", numeric, exc)
+        raise HTTPException(status_code=503, detail="browser-agent / Vision недоступны") from exc
+    except (NotFoundError, MetaPermissionError, PermanentError) as exc:
+        # Доменная ошибка Meta: кабинет не найден / нет прав / постоянный отказ.
+        logger.info("ad-account-pages: Meta отвергла act_%s: %s", numeric, exc)
+        raise HTTPException(status_code=422, detail=f"Meta вернула ошибку: {exc}") from exc
+    except MetaApiError as exc:
+        # Прочие доменные ошибки Meta — отдаём 422 как «не удалось получить».
+        logger.info("ad-account-pages: ошибка Meta act_%s: %s", numeric, exc)
         raise HTTPException(status_code=422, detail=f"Meta вернула ошибку: {exc}") from exc
     finally:
         try:

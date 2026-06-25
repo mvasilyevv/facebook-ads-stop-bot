@@ -29,6 +29,7 @@ const mockUseValidateCampaign = vi.fn();
 const mockUseLaunchCampaign = vi.fn();
 const mockUseCampaignRun = vi.fn();
 const mockUseAdAccountTimezone = vi.fn();
+const mockUseAdAccountPages = vi.fn();
 const mockUseOffers = vi.fn();
 
 vi.mock("@/lib/api", () => ({
@@ -38,6 +39,7 @@ vi.mock("@/lib/api", () => ({
   useLaunchCampaign: () => mockUseLaunchCampaign(),
   useCampaignRun: () => mockUseCampaignRun(),
   useAdAccountTimezone: () => mockUseAdAccountTimezone(),
+  useAdAccountPages: () => mockUseAdAccountPages(),
   useOffers: () => mockUseOffers(),
   useCloneRun: () => ({ mutate: vi.fn() }),
   useCancelRun: () => ({ mutate: vi.fn() }),
@@ -70,8 +72,10 @@ import { StepStart } from "@/routes/campaigns/StepStart";
 
 // ─── StepIdentity ──────────────────────────────────────────────────────────
 
-// Дефолтные ответы хуков TZ/офферов (idle — фетч ещё не запускался).
+// Дефолтные ответы хуков TZ/страниц/офферов (idle — фетч ещё не запускался).
 const idleTz = { data: undefined, isError: false, isFetching: false } as const;
+// По умолчанию страницы не подтянуты → page_id вводится вручную (ручной Input).
+const emptyPages = { data: { pages: [] }, isError: false, isFetching: false } as const;
 const emptyOffers = { data: [], isLoading: false, isError: false } as const;
 // TZ успешно подтянута — гард шага пропускает дальше.
 const okTz = {
@@ -85,6 +89,7 @@ describe("StepIdentity — валидация", () => {
     useWizardStore.getState().reset();
     useWizardStore.getState().setStep("identity");
     mockUseAdAccountTimezone.mockReturnValue(idleTz);
+    mockUseAdAccountPages.mockReturnValue(emptyPages);
     mockUseOffers.mockReturnValue(emptyOffers);
   });
 
@@ -236,6 +241,38 @@ describe("StepIdentity — валидация", () => {
     await waitFor(() => {
       expect(useWizardStore.getState().config.offer_code).toBe("CUSTOM_X");
     });
+  });
+
+  // Страницы подтянулись → page_id выбирается дропдауном (label '{name} — {id}')
+  it("страницы подтянулись → дропдаун с опцией, выбор пишет page_id", async () => {
+    mockUseAdAccountTimezone.mockReturnValue(okTz);
+    mockUseAdAccountPages.mockReturnValue({
+      data: { pages: [{ id: "111", name: "Aviator Page" }, { id: "222", name: "Crash Page" }] },
+      isError: false,
+      isFetching: false,
+    });
+    renderIdentity();
+    const pageSelect = screen.getByLabelText(/ID страницы Facebook/i) as HTMLSelectElement;
+    // Опция-плейсхолдер + 2 страницы
+    const labels = Array.from(pageSelect.querySelectorAll("option")).map((o) => o.textContent);
+    expect(labels).toContain("Aviator Page — 111");
+    expect(labels).toContain("Crash Page — 222");
+    fireEvent.change(pageSelect, { target: { value: "222" } });
+    // Заполняем остальное и проходим дальше — page_id из дропдауна попадает в store
+    fireEvent.change(screen.getByLabelText(/ID рекламного кабинета/i), { target: { value: "act_1" } });
+    fireEvent.change(screen.getByLabelText(/ID пикселя/i), { target: { value: "3" } });
+    fireEvent.change(screen.getByLabelText(/^Код оффера$/i), { target: { value: "GH_X" } });
+    fireEvent.click(screen.getByRole("button", { name: /далее/i }));
+    await waitFor(() => {
+      expect(useWizardStore.getState().config.page_id).toBe("222");
+    });
+  });
+
+  // Спиннер при загрузке страниц
+  it("во время фетча страниц показывает спиннер", () => {
+    mockUseAdAccountPages.mockReturnValue({ data: undefined, isError: false, isFetching: true });
+    renderIdentity();
+    expect(screen.getByLabelText(/Загрузка страниц/i)).toBeTruthy();
   });
 });
 
