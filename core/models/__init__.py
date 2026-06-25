@@ -27,8 +27,10 @@ from core.models.base import (
     UUIDPrimaryKey,
 )
 from core.models.campaigns import (
+    CampaignCreative,
     CampaignPreset,
     CampaignRun,
+    OfferCreativeSeq,
 )
 from core.models.catalog import (
     FbAd,
@@ -81,8 +83,10 @@ __all__ = [
     "Timestamp",
     "UUIDPrimaryKey",
     # campaigns
+    "CampaignCreative",
     "CampaignPreset",
     "CampaignRun",
+    "OfferCreativeSeq",
     # settings
     "AdsetProCredentials",
     "ObserverConfig",
