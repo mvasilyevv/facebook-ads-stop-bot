@@ -49,8 +49,9 @@ from apps.api.routers.v1.schemas.campaigns_create import (
     ValidateIn,
     ValidatePlanOut,
 )
-from core.campaign_builder.builder import build_campaign_spec
+from core.campaign_builder.builder import build_campaign_spec, total_code_span
 from core.campaign_builder.config import CampaignConfig, ref_media_kind
+from core.campaign_builder.creative_ledger import allocate_code_span, peek_next_seq
 
 logger = logging.getLogger(__name__)
 
@@ -384,7 +385,7 @@ async def _stream_uploads_to_dir(
 
 
 @router.post("/tools/campaigns/validate", response_model=ValidatePlanOut)
-async def validate_config(body: ValidateIn) -> ValidatePlanOut:
+async def validate_config(body: ValidateIn, engine: DepEngine) -> ValidatePlanOut:
     """Dry-run: собирает план (число объектов + нейминг) без создания в Meta.
 
     concept_counts (число концептов на блок) передаётся в build_campaign_spec —
@@ -392,6 +393,10 @@ async def validate_config(body: ValidateIn) -> ValidatePlanOut:
     """
     try:
         config = body.domain_config()
+        # Превью показывает реалистичные коды: продолжаем нумерацию оффера.
+        # peek_next_seq — read-only, счётчик не двигает.
+        async with engine.connect() as conn:
+            config.code_start = await peek_next_seq(conn, config.offer_code) + 1
         spec = build_campaign_spec(config, concept_counts=body.concept_counts_map())
     except (ValueError, KeyError) as exc:
         raise HTTPException(status_code=422, detail=f"Невалидный конфиг: {exc}") from exc
@@ -516,6 +521,19 @@ async def launch_campaign(body: LaunchIn, engine: DepEngine) -> LaunchOut:
             )
 
         run_id = run_row.id
+
+        # Per-offer нумерация: резервируем диапазон кодов ТОЛЬКО для реально нового
+        # run'а (на конфликт-ветке аллокации нет → без gap'ов на повторах). code_start
+        # фиксируется в config → воркер и retry берут одни и те же коды (preview==launch).
+        span = total_code_span(config)
+        base = await allocate_code_span(conn, config.offer_code, span)
+        await conn.execute(
+            text(
+                "UPDATE campaign_run SET config = jsonb_set(config, '{code_start}', "
+                "to_jsonb(:base)) WHERE id = CAST(:rid AS UUID)"
+            ),
+            {"base": base, "rid": run_id},
+        )
 
         # Задача воркера: payload = {run_id}. task_type='campaign_create' (контракт).
         # Тот же idempotency_key — двойная защита от дубля залива. ON CONFLICT DO NOTHING:

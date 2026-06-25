@@ -444,6 +444,60 @@ async def test_cancel_run_creating_conflict(pg_engine, fake_redis_client, clean_
     assert resp.status_code == 409
 
 
+# Два launch одного оффера с разными датами → code_start второго продолжает первый (нет коллизии CRxxx).
+@pytest.mark.asyncio
+async def test_launch_allocates_continuing_code_start(
+    pg_engine, fake_redis_client, clean_campaigns
+):
+    app = _make_app(engine=pg_engine, redis=fake_redis_client)
+
+    # Конфиг с concept_refs чтобы span > 0 (иначе block_code_span = 0×copies = 0).
+    def _cfg_with_refs(start_date: str) -> dict:
+        cfg = _valid_config()
+        cfg["start_date"] = start_date
+        cfg["campaigns"][0]["concept_refs"] = ["a.jpg", "b.jpg"]
+        return cfg
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        r1 = await ac.post(
+            "/api/tools/campaigns/launch", json={"config": _cfg_with_refs("2099-01-01")}
+        )
+        r2 = await ac.post(
+            "/api/tools/campaigns/launch", json={"config": _cfg_with_refs("2099-01-02")}
+        )
+
+    assert r1.status_code == 201
+    assert r2.status_code == 201
+    run_id1 = r1.json()["run_id"]
+    run_id2 = r2.json()["run_id"]
+    assert run_id1 != run_id2  # разные конфиги → разные run'ы
+
+    # Читаем code_start обоих run'ов из campaign_run.config.
+    async with pg_engine.connect() as conn:
+        row1 = (
+            await conn.execute(
+                text(
+                    "SELECT (config->>'code_start')::int AS code_start FROM campaign_run WHERE id = :rid"
+                ),
+                {"rid": uuid.UUID(run_id1)},
+            )
+        ).first()
+        row2 = (
+            await conn.execute(
+                text(
+                    "SELECT (config->>'code_start')::int AS code_start FROM campaign_run WHERE id = :rid"
+                ),
+                {"rid": uuid.UUID(run_id2)},
+            )
+        ).first()
+
+    base1 = row1.code_start
+    base2 = row2.code_start
+    # span = 2 концепта × 2 adset = 4 кода на запуск.
+    span1 = 2 * 2
+    assert base2 == base1 + span1
+
+
 # cleanup возвращает созданные Meta-ID для сноса (или сообщение, что их нет).
 @pytest.mark.asyncio
 async def test_cleanup_run(pg_engine, fake_redis_client, clean_campaigns):
