@@ -82,11 +82,14 @@ async def fetch_account_timezone(
     их на HTTP-коды. timezone_offset_hours_utc — целое, МОЖЕТ быть отрицательным
     (напр. -7 для America/Hermosillo).
     """
+    # ВАЖНО (money): НЕ передаём ad_account_id — иначе browser-agent ушёл бы в
+    # ensureAdsManagerPage и НАВИГИРОВАЛ живую вкладку кабинета (риск порвать
+    # in-flight скан авто-стопа). Read-only GET /act_{id} отрабатывает из primary
+    # facebook.com-вкладки (юзер залогинен и имеет доступ к своим кабинетам).
     resp = await client.execute_graph_call(
         method="GET",
         endpoint=f"/act_{numeric_act_id}",
         query_params={"fields": "timezone_name,timezone_offset_hours_utc"},
-        ad_account_id=numeric_act_id,
     )
     raw_offset = resp.get("timezone_offset_hours_utc")
     if raw_offset is None:
