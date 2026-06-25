@@ -47,9 +47,7 @@ def _flat_config_dict() -> dict:
         "click_through_days": 1,
         "view_through_days": 1,
         "ad_text": {"mode": "text", "primary": "играй"},
-        "campaigns": [
-            {"key": "static", "kind": "image", "adset_count": 2, "concept_refs": ["a.jpg", "b.jpg"]}
-        ],
+        "campaigns": [{"key": "static", "adset_count": 2, "concept_refs": ["a.jpg", "b.jpg"]}],
         "copies_per_concept": None,
         "creo_root": "abc123",
         "launch_state": "campaign_paused",
@@ -180,13 +178,13 @@ def test_flat_config_to_domain_mapping() -> None:
     # ad_text: фронтовый mode 'text' → доменный 'full', primary → message.
     assert dom.ad_text.mode == "full"
     assert dom.ad_text.message == "играй"
-    # campaigns: adset_count=2 → 2 доменных adset'а, kind image → label static.
+    # campaigns: adset_count=2 → 2 доменных adset'а, тип медиа не в имени.
     assert len(dom.campaigns) == 1
     block = dom.campaigns[0]
     assert block.key == "static"
-    assert block.kind == "image"
     assert len(block.adsets) == 2
-    assert "static" in block.name
+    assert "adset.pro" in block.name
+    assert "static" not in block.name and "video" not in block.name
     # ЕДИНЫЙ источник концептов: concept_refs проброшен в доменный блок (не теряется).
     assert block.concept_refs == ["a.jpg", "b.jpg"]
     # creo_root проброшен (upload_id).
@@ -237,15 +235,6 @@ def test_flat_config_budget_hard_cap_rejected() -> None:
     cfg = _flat_config_dict()
     cfg["daily_budget_cents"] = 100_000_00 + 1
     body = LaunchIn(config=cfg)
-    with pytest.raises(ValueError):
-        body.domain_config()
-
-
-# Плоский конфиг с недопустимым kind → ValueError при конвертации (домен досверяет).
-def test_flat_config_bad_kind_rejected() -> None:
-    cfg = _flat_config_dict()
-    cfg["campaigns"][0]["kind"] = "carousel"
-    body = ValidateIn(config=cfg)
     with pytest.raises(ValueError):
         body.domain_config()
 
@@ -302,3 +291,21 @@ def test_nested_config_still_accepted() -> None:
     # У вложенной формы concept_counts недоступен из тела → None (фолбэк раскладки).
     assert ValidateIn(config=nested).concept_counts_map() is None
     assert LaunchIn(config=nested).concept_counts_map() is None
+
+
+# Метка кампании добавляется в конец имени кампании и каждого adset'а.
+def test_flat_config_label_appended() -> None:
+    cfg = _flat_config_dict()
+    cfg["campaigns"][0]["label"] = "TEST-A"
+    dom = CampaignConfigIn.model_validate(cfg).to_domain()
+    block = dom.campaigns[0]
+    assert block.name.endswith("| TEST-A")
+    assert all(a.name.endswith("| TEST-A") for a in block.adsets)
+
+
+# Без метки — имя без сегмента типа и без хвоста.
+def test_flat_config_no_label_no_type_segment() -> None:
+    dom = CampaignConfigIn.model_validate(_flat_config_dict()).to_domain()
+    block = dom.campaigns[0]
+    assert "adset.pro" in block.name
+    assert "static" not in block.name and "video" not in block.name

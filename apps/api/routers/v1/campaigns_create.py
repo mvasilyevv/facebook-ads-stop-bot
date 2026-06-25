@@ -409,7 +409,6 @@ async def validate_config(body: ValidateIn) -> ValidatePlanOut:
             CampaignPlanOut(
                 key=block.key,
                 name=block.name,
-                kind=block.kind,
                 status=block.status,
                 adsets=adsets,
             )

@@ -32,11 +32,6 @@ from core.campaign_builder.config import (
 # ────────────────────────────── flat config (контракт фронта) ──────────────────────────────
 
 
-def _kind_label(kind: str) -> str:
-    """Лейбл типа медиа для нейминга (image→static, video→video)."""
-    return "static" if kind == "image" else "video"
-
-
 def _tz_offset_to_str(tz_offset: int | str | None) -> str:
     """Часовой сдвиг кабинета int (часы) → ISO `±HH:00` для start_time.
 
@@ -54,12 +49,14 @@ def _tz_offset_to_str(tz_offset: int | str | None) -> str:
 class CampaignStructureIn(BaseModel):
     """Одна кампания в плоской структуре фронта.
 
-    Несёт только `key`/`kind`/`adset_count`/`concept_refs`. Доменные имена adset'ов
+    Несёт `key`/`label`/`adset_count`/`concept_refs`. Доменные имена adset'ов
     и dir/glob генерируются детерминированно в `to_domain` (фронт их не знает).
+    `label` — произвольная метка кампании; если задана, добавляется в конец имени
+    кампании и каждого adset'а. Пустая/None — ничего не добавляется.
     """
 
     key: str
-    kind: str  # image | video
+    label: str | None = None  # произвольная метка кампании (в конец имени)
     adset_count: int = Field(ge=1)
     concept_refs: list[str] = Field(default_factory=list)
 
@@ -151,16 +148,18 @@ class CampaignConfigIn(BaseModel):
         """Разворачивает плоские кампании в доменные CampaignBlock с adset'ами.
 
         Имена кампаний/adset'ов — детерминированные шаблоны SOP
-        (`{byer} | {offer} | <type> | adset.pro | {date}`). dir/glob для adset'а
-        в build_campaign_spec не используются (только имена/счётчик) — ставим
-        стабильные плейсхолдеры из key концепта.
+        (`{byer} | {offer} | adset.pro | {date}`). Если задана `label` кампании —
+        добавляется в конец имени кампании и каждого adset'а (`| label`).
+        dir/glob для adset'а в build_campaign_spec не используются (только имена/счётчик) —
+        ставим стабильные плейсхолдеры из key концепта.
         """
         blocks: list[CampaignBlock] = []
         for camp in self.campaigns:
-            label = _kind_label(camp.kind)
+            user_label = (camp.label or "").strip()
+            suffix = f" | {user_label}" if user_label else ""
             adsets = [
                 AdsetConfig(
-                    name=f"{{byer}} | {{offer}} | {label} | s{i} | {{date}}",
+                    name=f"{{byer}} | {{offer}} | s{i} | {{date}}{suffix}",
                     dir=f"{camp.key}/a{i}",
                     glob="*",
                 )
@@ -169,8 +168,7 @@ class CampaignConfigIn(BaseModel):
             blocks.append(
                 CampaignBlock(
                     key=camp.key,
-                    name=f"{{byer}} | {{offer}} | {label} | adset.pro | {{date}}",
-                    kind=camp.kind,
+                    name=f"{{byer}} | {{offer}} | adset.pro | {{date}}{suffix}",
                     adsets=adsets,
                     # ЕДИНЫЙ источник концептов: имена файлов из upload-ответа, назначенные
                     # фронтом на эту кампанию. Воркер резолвит {creo_root}/{ref} по каждому —
@@ -371,7 +369,6 @@ class CampaignPlanOut(BaseModel):
 
     key: str
     name: str
-    kind: str
     status: str
     adsets: list[AdsetPlanOut]
 
