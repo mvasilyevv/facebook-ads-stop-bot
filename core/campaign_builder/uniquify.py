@@ -191,7 +191,7 @@ def build_uniquification_plan(
                     copy_index=i,
                     code=layout[i][c_index],
                     seed=_seed_text(cfg, concept.concept_id, i),
-                    media_kind=block.kind,
+                    media_kind=concept.kind,
                 )
             )
         variants_by_concept[concept.concept_id] = variants
@@ -261,7 +261,7 @@ async def uniquify_concepts(
     for adset in plan.adsets:
         for ad in adset.ads:
             concept = by_id[ad.concept_id]
-            if block.kind == "video":
+            if concept.kind == "video":
                 ad.media_bytes = await _uniquify_one_video(concept, ad)
                 ad.media_kind = "video"
             else:
