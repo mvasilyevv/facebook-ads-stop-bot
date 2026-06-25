@@ -301,7 +301,7 @@ const ConceptRow: FC<ConceptRowProps> = ({ concept, campaigns, onRemove, onToggl
                     : "bg-bg-2 border-[var(--hairline)] text-bg-7 hover:border-[var(--hairline-strong)]",
                 )}
                 aria-pressed={isActive}
-                title={`${c.kind} / ${c.adset_count} adsets`}
+                title={`${c.key} / ${c.adset_count} adsets`}
               >
                 {c.key}
               </button>

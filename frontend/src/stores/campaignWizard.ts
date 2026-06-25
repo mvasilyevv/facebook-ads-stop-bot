@@ -251,22 +251,12 @@ export const useWizardStore = create<WizardState & WizardActions>((set, get) => 
   buildConfig: () => {
     const { identity, goal, structure, creatives, preview } = get();
 
-    // Тип медиа по расширению — зеркало backend VIDEO_EXTS (core/campaign_builder/config.py).
-    // Видео-концепт в image-кампанию (или наоборот) уронит уникализатор уже ПОСЛЕ создания
-    // объектов в Meta → орфаны. Фильтруем по kind ДО отправки (как mini StepCreatives).
-    const VIDEO_EXTS = [".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv"];
-    const refKind = (ref: string): "video" | "image" =>
-      VIDEO_EXTS.some((e) => ref.toLowerCase().endsWith(e)) ? "video" : "image";
-
     // Для каждой кампании собираем concept_refs из загруженных концептов, привязанных к
-    // этой кампании по campaign_keys (пустой campaign_keys = все) И совпадающих по типу.
+    // этой кампании по campaign_keys (пустой campaign_keys = все кампании).
+    // Фильтр по типу медиа убран — кампания принимает смешанные фото/видео концепты.
     const campaignsWithRefs: CampaignConfig["campaigns"] = structure.campaigns.map((block) => {
       const refs = creatives.concepts
-        .filter(
-          (c) =>
-            (c.campaign_keys.length === 0 || c.campaign_keys.includes(block.key)) &&
-            refKind(c.ref) === block.kind,
-        )
+        .filter((c) => c.campaign_keys.length === 0 || c.campaign_keys.includes(block.key))
         .map((c) => c.ref);
       return { ...block, concept_refs: refs };
     });

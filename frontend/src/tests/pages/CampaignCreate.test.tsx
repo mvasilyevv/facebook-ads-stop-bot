@@ -76,7 +76,6 @@ vi.mock("@/lib/api/campaigns", () => ({
         {
           key: "image1",
           name: "MV | GH_CR2 | Static | adset.pro | 2026-06-23",
-          kind: "image",
           status: "PAUSED",
           adsets: [{ name: "adset-1", status: "ACTIVE", ad_count: 2 }],
         },
@@ -505,7 +504,7 @@ describe("validateStructure", () => {
   // adset_count < 1 → ошибка
   it("adset_count=0 → ошибка", () => {
     const err = validateStructure([
-      { key: "image1", kind: "image", adset_count: 0, concept_refs: [] },
+      { key: "image1", adset_count: 0, concept_refs: [] },
     ]);
     expect(err).toBeTruthy();
   });
@@ -514,7 +513,7 @@ describe("validateStructure", () => {
   it("корректная структура → null", () => {
     expect(
       validateStructure([
-        { key: "image1", kind: "image", adset_count: 3, concept_refs: [] },
+        { key: "image1", adset_count: 3, concept_refs: [] },
       ]),
     ).toBeNull();
   });
@@ -536,14 +535,14 @@ describe("WizardStep4Structure", () => {
     render(wrap(<WizardStep4Structure campaigns={[]} onChange={onChange} />));
     await user.click(screen.getByText("+ Фото-кампания"));
     expect(onChange).toHaveBeenCalledWith([
-      expect.objectContaining({ kind: "image", adset_count: 3 }),
+      expect.objectContaining({ adset_count: 3 }),
     ]);
   });
 
   // Кнопка удалить уменьшает список
   it("кнопка «удалить» убирает кампанию", async () => {
     const user = userEvent.setup();
-    const campaigns = [{ key: "image1", kind: "image" as const, adset_count: 3, concept_refs: [] }];
+    const campaigns = [{ key: "image1", adset_count: 3, concept_refs: [] }];
     const onChange = vi.fn();
     render(wrap(<WizardStep4Structure campaigns={campaigns} onChange={onChange} />));
     await user.click(screen.getByRole("button", { name: /Удалить кампанию/ }));
@@ -553,8 +552,8 @@ describe("WizardStep4Structure", () => {
   // Итого adset'ов отображается
   it("итого adset'ов суммируется корректно", () => {
     const campaigns = [
-      { key: "image1", kind: "image" as const, adset_count: 3, concept_refs: [] },
-      { key: "video1", kind: "video" as const, adset_count: 5, concept_refs: [] },
+      { key: "image1", adset_count: 3, concept_refs: [] },
+      { key: "video1", adset_count: 5, concept_refs: [] },
     ];
     render(wrap(<WizardStep4Structure campaigns={campaigns} onChange={vi.fn()} />));
     expect(screen.getByText(/8/)).toBeInTheDocument(); // 3 + 5
@@ -779,7 +778,7 @@ describe("useWizardStore", () => {
       store.setIdentity(DEFAULT_IDENTITY);
       store.setGoal(DEFAULT_GOAL);
       store.setStructure({
-        campaigns: [{ key: "image1", kind: "image", adset_count: 3, concept_refs: [] }],
+        campaigns: [{ key: "image1", adset_count: 3, concept_refs: [] }],
       });
       store.setCreatives({ upload_id: "up123", concepts: [], copies_per_concept: null });
       store.setPreview({ launch_state: "campaign_paused", plan: null });

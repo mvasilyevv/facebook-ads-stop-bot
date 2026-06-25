@@ -19,9 +19,9 @@ interface WizardStep4StructureProps {
 }
 
 /** Генерирует уникальный key для новой кампании. */
-function genKey(campaigns: CampaignStructure[], kind: "image" | "video"): string {
-  const existing = campaigns.filter((c) => c.kind === kind).length;
-  return `${kind}${existing + 1}`;
+function genKey(campaigns: CampaignStructure[], prefix: string): string {
+  const existing = campaigns.filter((c) => c.key.startsWith(prefix)).length;
+  return `${prefix}${existing + 1}`;
 }
 
 export const WizardStep4Structure: FC<WizardStep4StructureProps> = ({
@@ -31,9 +31,9 @@ export const WizardStep4Structure: FC<WizardStep4StructureProps> = ({
 }) => {
   const totalAdsets = campaigns.reduce((sum, c) => sum + c.adset_count, 0);
 
-  const addCampaign = (kind: "image" | "video") => {
-    const key = genKey(campaigns, kind);
-    onChange([...campaigns, { key, kind, adset_count: 3, concept_refs: [] }]);
+  const addCampaign = (prefix: "image" | "video") => {
+    const key = genKey(campaigns, prefix);
+    onChange([...campaigns, { key, adset_count: 3, concept_refs: [] }]);
   };
 
   const removeCampaign = (idx: number) => {
@@ -147,7 +147,9 @@ interface CampaignRowProps {
 }
 
 const CampaignRow: FC<CampaignRowProps> = ({ campaign, index, onUpdate, onRemove }) => {
-  const isVideo = campaign.kind === "video";
+  // Определяем тип кампании по ключу (исторически: image-prefix = фото, video = видео).
+  // kind убран из CampaignStructure — теперь кампания может быть смешанной.
+  const isVideo = campaign.key.toLowerCase().startsWith("video");
 
   return (
     <div className="border border-[var(--hairline)] rounded-[var(--radius-3)] p-4 bg-bg-1 flex items-center gap-4">

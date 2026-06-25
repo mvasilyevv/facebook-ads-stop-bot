@@ -80,14 +80,14 @@ export interface UploadConceptsOut {
 
 // CampaignConfig — полный конфиг залива (контракт с бэком CampaignConfig pydantic)
 export interface CampaignStructure {
-  /** Ключ кампании (уникальный в рамках конфига, напр. "static1" или "video1") */
+  /** Ключ кампании (уникальный в рамках конфига, напр. "camp1") */
   key: string;
-  /** Тип медиа (image / video) */
-  kind: "image" | "video";
   /** Число adset'ов в этой кампании */
   adset_count: number;
-  /** Привязанные ref концептов (из upload_id) */
+  /** Привязанные ref концептов (из upload_id) — смешанные фото/видео */
   concept_refs: string[];
+  /** Произвольная метка кампании (добавляется в конец имени при нейминге) */
+  label?: string | null;
 }
 
 export interface AdTextConfig {
@@ -169,7 +169,7 @@ export interface AdsetPlanOut {
 export interface CampaignPlanOut {
   key: string;
   name: string;
-  kind: string;
+  // kind убран — спека больше не типизирует кампанию (медиа per-concept)
   status: string;
   adsets: AdsetPlanOut[];
 }

@@ -76,9 +76,8 @@ export const WizardStep6Preview: FC<WizardStep6PreviewProps> = ({
 
   const plan = preview.plan;
 
-  // Блоки без концептов: после kind-фильтра buildConfig видео-кампания без видео (или
-  // наоборот) получает пустой concept_refs. Launch такой блок отобьёт 422 — предупреждаем
-  // заранее, чтобы байер вернулся на шаг 5 и не упёрся в ошибку на запуске.
+  // Блоки без концептов: если кампания не получила ни одного концепта,
+  // launch отобьёт 422 — предупреждаем заранее, чтобы байер вернулся на шаг 5.
   const emptyBlocks = config.campaigns
     .filter((c) => (c.concept_refs ?? []).length === 0)
     .map((c) => c.key);
@@ -272,7 +271,7 @@ function CampaignPlanRow({ campaign }: { campaign: CampaignPlanOut }) {
           {campaign.name}
         </span>
         <span className="text-[10px] text-bg-7 font-display uppercase tracking-wider shrink-0">
-          {campaign.kind} · {campaign.adsets.length} adset
+          {campaign.adsets.length} adset
           {campaign.adsets.length !== 1 ? "s" : ""}
         </span>
       </button>

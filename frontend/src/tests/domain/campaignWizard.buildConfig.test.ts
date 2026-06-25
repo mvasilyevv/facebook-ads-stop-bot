@@ -6,6 +6,7 @@
  *   - url_tags не попадает в конфиг (HIGH mislabel-fix)
  *   - пустой campaign_keys = концепт идёт во все кампании
  *   - концепт с campaign_keys только в конкретной кампании
+ *   - смешанные медиа (фото+видео) без kind-фильтра
  */
 import { describe, it, expect, beforeEach } from "vitest";
 import { useWizardStore } from "@/stores/campaignWizard";
@@ -18,7 +19,7 @@ const TOMORROW = (() => {
 })();
 
 /** Заполняет минимальный валидный стор для buildConfig. */
-function seedStore(concepts: UploadedConcept[], campaigns: { key: string; kind: "image" | "video" }[]) {
+function seedStore(concepts: UploadedConcept[], campaigns: { key: string }[]) {
   const store = useWizardStore.getState();
   store.setIdentity({
     act_id: "act_123",
@@ -61,82 +62,87 @@ describe("buildConfig — concept_refs из назначения", () => {
     useWizardStore.getState().reset();
   });
 
-  it("концепт с пустым campaign_keys → идёт во все кампании СВОЕГО типа (kind-фильтр)", () => {
-    // Два концепта без назначения: видео-ref только в video-кампанию, фото — только в image.
-    // Иначе чужой тип уронил бы уникализатор уже после создания объектов в Meta (орфаны).
+  it("кампания получает смешанные концепты (фото+видео) без kind-фильтра", () => {
+    // Кампания получает и фото, и видео — kind-фильтр убран, медиа смешанные.
+    const concepts: UploadedConcept[] = [
+      { ref: "img.jpg", original_name: "img.jpg", size_bytes: 1, content_type: "image/jpeg", campaign_keys: ["c1"] },
+      { ref: "clip.mp4", original_name: "clip.mp4", size_bytes: 1, content_type: "video/mp4", campaign_keys: ["c1"] },
+    ];
+    seedStore(concepts, [{ key: "c1" }]);
+    const config = useWizardStore.getState().buildConfig();
+    expect(config.campaigns[0]!.concept_refs).toEqual(["img.jpg", "clip.mp4"]);
+  });
+
+  it("концепт с пустым campaign_keys → идёт во все кампании", () => {
+    // Без назначения концепт идёт в обе кампании (и фото, и видео — без фильтра по типу).
     const concepts: UploadedConcept[] = [
       { ref: "img1.jpg", original_name: "img1.jpg", size_bytes: 1024, content_type: "image/jpeg", campaign_keys: [] },
       { ref: "vid1.mp4", original_name: "vid1.mp4", size_bytes: 2048, content_type: "video/mp4", campaign_keys: [] },
     ];
     seedStore(concepts, [
-      { key: "static1", kind: "image" },
-      { key: "video1", kind: "video" },
+      { key: "camp1" },
+      { key: "camp2" },
     ]);
 
     const config = useWizardStore.getState().buildConfig();
 
     expect(config.campaigns).toHaveLength(2);
-    // image-кампания получает только фото, video-кампания — только видео.
-    expect(config.campaigns[0]!.concept_refs).toEqual(["img1.jpg"]);
-    expect(config.campaigns[1]!.concept_refs).toEqual(["vid1.mp4"]);
+    // Оба концепта (фото + видео) попадают в обе кампании — kind-фильтра нет.
+    expect(config.campaigns[0]!.concept_refs).toEqual(["img1.jpg", "vid1.mp4"]);
+    expect(config.campaigns[1]!.concept_refs).toEqual(["img1.jpg", "vid1.mp4"]);
   });
 
-  it("видео-концепт без назначения НЕ попадает в image-кампанию (kind-фильтр)", () => {
+  it("концепт с campaign_keys=['camp1'] → попадает только в camp1, не в camp2", () => {
+    // Привязка по ключу работает независимо от типа медиа.
     const concepts: UploadedConcept[] = [
-      { ref: "clip.mp4", original_name: "clip.mp4", size_bytes: 2048, content_type: "video/mp4", campaign_keys: [] },
-    ];
-    seedStore(concepts, [{ key: "static1", kind: "image" }]);
-    const config = useWizardStore.getState().buildConfig();
-    expect(config.campaigns[0]!.concept_refs).toEqual([]);
-  });
-
-  it("концепт с campaign_keys=['static1'] → попадает только в static1, не в video1", () => {
-    const concepts: UploadedConcept[] = [
-      { ref: "img1.jpg", original_name: "img1.jpg", size_bytes: 1024, content_type: "image/jpeg", campaign_keys: ["static1"] },
-      { ref: "vid1.mp4", original_name: "vid1.mp4", size_bytes: 2048, content_type: "video/mp4", campaign_keys: ["video1"] },
+      { ref: "img1.jpg", original_name: "img1.jpg", size_bytes: 1024, content_type: "image/jpeg", campaign_keys: ["camp1"] },
+      { ref: "vid1.mp4", original_name: "vid1.mp4", size_bytes: 2048, content_type: "video/mp4", campaign_keys: ["camp2"] },
     ];
     seedStore(concepts, [
-      { key: "static1", kind: "image" },
-      { key: "video1", kind: "video" },
+      { key: "camp1" },
+      { key: "camp2" },
     ]);
 
     const config = useWizardStore.getState().buildConfig();
 
-    const staticCamp = config.campaigns.find((c) => c.key === "static1");
-    const videoCamp  = config.campaigns.find((c) => c.key === "video1");
-    expect(staticCamp?.concept_refs).toEqual(["img1.jpg"]);
-    expect(videoCamp?.concept_refs).toEqual(["vid1.mp4"]);
+    const c1 = config.campaigns.find((c) => c.key === "camp1");
+    const c2 = config.campaigns.find((c) => c.key === "camp2");
+    expect(c1?.concept_refs).toEqual(["img1.jpg"]);
+    expect(c2?.concept_refs).toEqual(["vid1.mp4"]);
   });
 
   it("смесь: концепт без назначения + концепт с назначением", () => {
+    // shared (без назначения) идёт в обе кампании; only_c1 — только в camp1.
     const concepts: UploadedConcept[] = [
       // без назначения — идёт везде
       { ref: "shared.jpg", original_name: "shared.jpg", size_bytes: 512, content_type: "image/jpeg", campaign_keys: [] },
-      // только для static1
-      { ref: "only_static.jpg", original_name: "only_static.jpg", size_bytes: 512, content_type: "image/jpeg", campaign_keys: ["static1"] },
+      // только для camp1
+      { ref: "only_c1.mp4", original_name: "only_c1.mp4", size_bytes: 512, content_type: "video/mp4", campaign_keys: ["camp1"] },
     ];
     seedStore(concepts, [
-      { key: "static1", kind: "image" },
-      { key: "video1", kind: "video" },
+      { key: "camp1" },
+      { key: "camp2" },
     ]);
 
     const config = useWizardStore.getState().buildConfig();
 
-    const staticCamp = config.campaigns.find((c) => c.key === "static1");
-    const videoCamp  = config.campaigns.find((c) => c.key === "video1");
-    // static1 (image) получает оба фото: shared + only_static
-    expect(staticCamp?.concept_refs).toEqual(["shared.jpg", "only_static.jpg"]);
-    // video1 (video) — пусто: оба концепта фото, kind-фильтр их не пускает в видео-кампанию
-    expect(videoCamp?.concept_refs).toEqual([]);
+    const c1 = config.campaigns.find((c) => c.key === "camp1");
+    const c2 = config.campaigns.find((c) => c.key === "camp2");
+    // camp1 получает оба: shared (без назначения) + only_c1 (привязан к camp1)
+    expect(c1?.concept_refs).toEqual(["shared.jpg", "only_c1.mp4"]);
+    // camp2 получает только shared (без назначения); only_c1 не привязан к camp2
+    expect(c2?.concept_refs).toEqual(["shared.jpg"]);
   });
 
   it("нет концептов → concept_refs пустые массивы (не падает)", () => {
-    seedStore([], [{ key: "static1", kind: "image" }]);
+    // Пустой upload не должен крашить buildConfig.
+    seedStore([], [{ key: "camp1" }]);
     const config = useWizardStore.getState().buildConfig();
     expect(config.campaigns[0]!.concept_refs).toEqual([]);
   });
 
   it("нет кампаний → campaigns пустой массив", () => {
+    // Корнер-кейс: структура без кампаний.
     seedStore([], []);
     const config = useWizardStore.getState().buildConfig();
     expect(config.campaigns).toEqual([]);
@@ -149,7 +155,8 @@ describe("buildConfig — url_tags отсутствует в конфиге", ()
   });
 
   it("buildConfig не включает поле url_tags (вычисляется бэком по SOP)", () => {
-    seedStore([], [{ key: "static1", kind: "image" }]);
+    // url_tags не должен редактироваться пользователем — бэк генерирует его сам.
+    seedStore([], [{ key: "camp1" }]);
     const config = useWizardStore.getState().buildConfig();
     // url_tags должен быть undefined или отсутствовать (не редактируется пользователем)
     expect((config as unknown as Record<string, unknown>)["url_tags"]).toBeUndefined();
@@ -162,14 +169,16 @@ describe("buildConfig — ad_text контракт {mode, primary}", () => {
   });
 
   it("mode=none → {mode: 'none'}", () => {
-    seedStore([], [{ key: "s1", kind: "image" }]);
+    // По умолчанию текст объявления отключён.
+    seedStore([], [{ key: "s1" }]);
     // goal.ad_text_mode = "none" по умолчанию
     const config = useWizardStore.getState().buildConfig();
     expect(config.ad_text).toEqual({ mode: "none" });
   });
 
   it("mode=text + primary → {mode: 'text', primary: '...'}", () => {
-    seedStore([], [{ key: "s1", kind: "image" }]);
+    // При включённом тексте primary обязателен.
+    seedStore([], [{ key: "s1" }]);
     useWizardStore.getState().setGoal({ ad_text_mode: "text", ad_text_primary: "Привет мир" });
     const config = useWizardStore.getState().buildConfig();
     expect(config.ad_text).toEqual({ mode: "text", primary: "Привет мир" });
