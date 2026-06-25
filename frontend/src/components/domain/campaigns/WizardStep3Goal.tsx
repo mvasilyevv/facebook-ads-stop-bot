@@ -2,22 +2,16 @@
  * Шаг 3 — Цель / Бюджет / Таргет / Атрибуция / Назначение.
  *
  * Секции:
- *   - Цель оптимизации (objective / optimization_goal / custom_event_type)
- *   - Бюджет (budget_level CBO/ABO, daily_budget_cents, bid_strategy)
+ *   - Цель оптимизации — read-only «Зашито по SOP» (objective/optimization_goal/
+ *     custom_event_type/bid_strategy/billing/text_optimizations не редактируются)
+ *   - Бюджет (budget_level CBO/ABO, daily_budget_cents, bid_amount_cents=целевой CPA)
  *   - Таргет (countries+AQ, age_min/max, advantage_audience)
  *   - Атрибуция (click_through_days, view_through_days)
- *   - Назначение (destination_link, cta, start_date, url_tags)
+ *   - Назначение (destination_link, cta, start_date)
  */
 
 import { type FC } from "react";
-import {
-  CALL_TO_ACTIONS,
-  CAMPAIGN_OBJECTIVES,
-  defaultOptimizationGoal,
-  OPTIMIZATION_GOAL_REQUIRES_EVENT,
-  OPTIMIZATION_GOALS_BY_OBJECTIVE,
-  PIXEL_EVENT_TYPES,
-} from "@fb/shared";
+import { CALL_TO_ACTIONS } from "@fb/shared";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { Switch } from "@/components/ui/Switch";
@@ -35,15 +29,14 @@ const BUDGET_LEVEL_OPTIONS = [
   { value: "adset", label: "ABO — бюджет на adset'ах" },
 ];
 
-const BID_STRATEGY_OPTIONS = [
-  { value: "LOWEST_COST_WITHOUT_CAP", label: "Lowest cost (без кепа)" },
-  { value: "LOWEST_COST_WITH_BID_CAP", label: "Bid cap" },
-  { value: "COST_CAP", label: "Cost cap" },
-];
-
-const TEXT_OPT_OPTIONS = [
-  { value: "OPT_OUT", label: "OPT_OUT (выключено)" },
-  { value: "OPT_IN", label: "OPT_IN (включено)" },
+// Инварианты, зашитые по SOP — показываем read-only, без выбора в UI.
+const SOP_LOCKED = [
+  "Sales",
+  "OFFSITE_CONVERSIONS",
+  "Purchase",
+  "Cost cap",
+  "IMPRESSIONS",
+  "OPT_OUT",
 ];
 
 const ATTRIBUTION_DAYS_OPTIONS = [
@@ -53,13 +46,21 @@ const ATTRIBUTION_DAYS_OPTIONS = [
 ];
 
 export const WizardStep3Goal: FC<WizardStep3GoalProps> = ({ values, onChange, errors = {} }) => {
-  // Бюджет: показываем в долларах (cents/100), сохраняем в центах
+  // Бюджет и целевой CPA: показываем в долларах (cents/100), сохраняем в центах
   const budgetDollars = values.daily_budget_cents / 100;
+  const cpaDollars = values.bid_amount_cents / 100;
 
   const handleBudgetChange = (v: string) => {
     const parsed = parseFloat(v);
     if (!isNaN(parsed) && parsed >= 0) {
       onChange({ daily_budget_cents: Math.round(parsed * 100) });
+    }
+  };
+
+  const handleCpaChange = (v: string) => {
+    const parsed = parseFloat(v);
+    if (!isNaN(parsed) && parsed >= 0) {
+      onChange({ bid_amount_cents: Math.round(parsed * 100) });
     }
   };
 
@@ -78,47 +79,22 @@ export const WizardStep3Goal: FC<WizardStep3GoalProps> = ({ values, onChange, er
         </p>
       </div>
 
-      {/* Цель */}
+      {/* Цель оптимизации — зашита по SOP, read-only (без выбора) */}
       <section>
-        <SectionLabel>ЦЕЛЬ ОПТИМИЗАЦИИ</SectionLabel>
-        <div className="grid grid-cols-3 gap-4">
-          {/* objective → допустимые optimization_goal (при смене сбрасываем goal на дефолт цели) */}
-          <Select
-            label="Objective"
-            options={CAMPAIGN_OBJECTIVES}
-            value={values.objective}
-            onChange={(e) =>
-              onChange({
-                objective: e.target.value,
-                optimization_goal: defaultOptimizationGoal(e.target.value),
-              })
-            }
-          />
-          <Select
-            label="Optimization Goal"
-            options={OPTIMIZATION_GOALS_BY_OBJECTIVE[values.objective] ?? []}
-            value={values.optimization_goal}
-            onChange={(e) => onChange({ optimization_goal: e.target.value })}
-          />
-          {/* custom_event_type нужен только для OFFSITE_CONVERSIONS (promoted_object пикселя) */}
-          {values.optimization_goal === OPTIMIZATION_GOAL_REQUIRES_EVENT ? (
-            <Select
-              label="Событие пикселя"
-              options={PIXEL_EVENT_TYPES}
-              value={values.custom_event_type}
-              onChange={(e) => onChange({ custom_event_type: e.target.value })}
-            />
-          ) : (
-            <div className="flex flex-col gap-1.5">
-              <label className="text-[11px] font-display tracking-wider uppercase text-bg-9">
-                Событие пикселя
-              </label>
-              <div className="flex h-8 items-center rounded-[var(--radius-2)] border border-[var(--hairline)] bg-bg-2 px-3 text-[12px] text-bg-7">
-                не требуется для этой оптимизации
-              </div>
-            </div>
-          )}
+        <SectionLabel>ЦЕЛЬ ОПТИМИЗАЦИИ · ЗАШИТО ПО SOP</SectionLabel>
+        <div className="flex flex-wrap gap-2">
+          {SOP_LOCKED.map((item) => (
+            <span
+              key={item}
+              className="inline-flex h-7 items-center rounded-[var(--radius-2)] border border-[var(--hairline)] bg-bg-2 px-3 font-display text-[12px] text-bg-9"
+            >
+              {item}
+            </span>
+          ))}
         </div>
+        <p className="mt-2 text-[11px] text-bg-7">
+          Эти параметры одинаковы для всех кампаний кабинета и не редактируются.
+        </p>
       </section>
 
       {/* Бюджет */}
@@ -138,17 +114,22 @@ export const WizardStep3Goal: FC<WizardStep3GoalProps> = ({ values, onChange, er
             type="number"
             min={1}
             max={100000}
-            step={1}
+            step={0.01}
             value={String(budgetDollars)}
             onChange={(e) => handleBudgetChange(e.target.value)}
             errorMessage={errors.daily_budget_cents}
             helpText="Hard cap: $100 000 / день"
           />
-          <Select
-            label="Bid Strategy"
-            options={BID_STRATEGY_OPTIONS}
-            value={values.bid_strategy}
-            onChange={(e) => onChange({ bid_strategy: e.target.value })}
+          {/* Целевой CPA = bid_amount для COST_CAP (обязателен) */}
+          <Input
+            label="Целевой CPA, $"
+            type="number"
+            min={0}
+            step={0.01}
+            value={String(cpaDollars)}
+            onChange={(e) => handleCpaChange(e.target.value)}
+            errorMessage={errors.bid_amount_cents}
+            helpText="Cost cap — цена за результат"
           />
         </div>
       </section>
@@ -252,20 +233,14 @@ export const WizardStep3Goal: FC<WizardStep3GoalProps> = ({ values, onChange, er
             helpText="Трекинг-ссылка из AdSet.pro"
           />
         </div>
-        <div className="mt-4 grid grid-cols-2 gap-4">
-          {/* url_tags вычисляется бэком по SOP (url_tags_of), редактирование убрано */}
+        <div className="mt-4">
+          {/* url_tags и text_optimizations (OPT_OUT) вычисляются/зашиты бэком по SOP — редактирование убрано */}
           <div className="flex flex-col gap-1">
             <div className="text-[11px] font-display tracking-wider uppercase text-bg-9">
               URL Tags
             </div>
             <div className="text-[12px] text-bg-7 italic">Трекинг по SOP — бэк вычисляет автоматически</div>
           </div>
-          <Select
-            label="Text Optimizations"
-            options={TEXT_OPT_OPTIONS}
-            value={values.text_optimizations}
-            onChange={(e) => onChange({ text_optimizations: e.target.value })}
-          />
         </div>
         {/* Ad text */}
         <div className="mt-4">
@@ -312,6 +287,8 @@ export function validateGoal(values: WizardGoal): Partial<Record<keyof WizardGoa
   if (!values.destination_link.trim()) errors.destination_link = "Укажите трекинг-ссылку";
   if (values.daily_budget_cents < 100) errors.daily_budget_cents = "Минимум $1";
   if (values.daily_budget_cents > 10_000_000) errors.daily_budget_cents = "Максимум $100 000/день";
+  // Целевой CPA обязателен — COST_CAP без bid_amount бэк отклонит (money-инвариант)
+  if (values.bid_amount_cents <= 0) errors.bid_amount_cents = "Укажите целевой CPA";
   if (values.countries.length === 0) errors.countries = "Укажите хотя бы одну страну";
   if (!values.start_date) errors.start_date = "Укажите дату старта";
 

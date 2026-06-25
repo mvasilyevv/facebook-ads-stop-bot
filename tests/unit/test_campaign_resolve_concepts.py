@@ -18,6 +18,7 @@ from apps.campaign_creator_worker import resolve_concepts_from_config
 from core.campaign_builder.config import (
     Account,
     AdsetConfig,
+    Budget,
     CampaignBlock,
     CampaignConfig,
     Targeting,
@@ -45,6 +46,8 @@ def _config(creo_root: str, blocks: list[CampaignBlock]) -> CampaignConfig:
         destination_link="https://example.shop/x",
         start_date="2026-06-18",
         creo_root=creo_root,
+        # Дефолт COST_CAP требует bid_amount_cents — ставим явный таргет CPA.
+        budget=Budget(daily_cents=300, bid_amount_cents=500),
         targeting=Targeting(countries=["GH"]),
         campaigns=blocks,
     )
@@ -177,6 +180,7 @@ def test_validate_ad_count_matches_resolver(tmp_path, monkeypatch):
         "offer_code": "GH_CR",
         "destination_link": "https://example.com",
         "daily_budget_cents": 20000,
+        "bid_amount_cents": 500,  # дефолт COST_CAP требует таргет CPA
         "countries": ["DE"],
         "creo_root": "up1",
         "campaigns": [

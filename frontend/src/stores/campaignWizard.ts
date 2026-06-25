@@ -50,6 +50,8 @@ export interface WizardIdentity {
 
 /** Данные шага 3 — цель / бюджет / таргет / атрибуция / назначение. */
 export interface WizardGoal {
+  // objective / optimization_goal / custom_event_type / bid_strategy / text_optimizations
+  // зашиты по SOP и не редактируются из UI — остаются в сторе для отправки на бэк.
   objective: string;
   optimization_goal: string;
   custom_event_type: string;
@@ -59,6 +61,8 @@ export interface WizardGoal {
   start_date: string;
   budget_level: "campaign" | "adset";
   daily_budget_cents: number;
+  /** Целевой CPA в центах (bid_amount для COST_CAP). $ × 100. */
+  bid_amount_cents: number;
   bid_strategy: string;
   countries: string[];
   age_min: number;
@@ -151,18 +155,20 @@ const DEFAULT_IDENTITY: WizardIdentity = {
 };
 
 const DEFAULT_GOAL: WizardGoal = {
+  // Инварианты по SOP — зашиты, в UI не выбираются (read-only блок «Зашито по SOP»).
   objective: "OUTCOME_SALES",
   optimization_goal: "OFFSITE_CONVERSIONS",
   custom_event_type: "PURCHASE",
+  bid_strategy: "COST_CAP",
+  text_optimizations: "OPT_OUT",
   destination_link: "",
   cta: "PLAY_GAME",
-  text_optimizations: "OPT_OUT",
   start_date: tomorrow(),
   budget_level: "campaign",
   daily_budget_cents: 2000_00, // $200 как дефолт
-  bid_strategy: "LOWEST_COST_WITHOUT_CAP",
+  bid_amount_cents: 0, // целевой CPA — обязателен (валидация >0)
   countries: [],
-  age_min: 18,
+  age_min: 21,
   age_max: 65,
   advantage_audience: true,
   click_through_days: 1,
@@ -286,6 +292,7 @@ export const useWizardStore = create<WizardState & WizardActions>((set, get) => 
           : { mode: "none" },
       budget_level: goal.budget_level,
       daily_budget_cents: goal.daily_budget_cents,
+      bid_amount_cents: goal.bid_amount_cents,
       bid_strategy: goal.bid_strategy,
       countries: goal.countries,
       age_min: goal.age_min,

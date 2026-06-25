@@ -63,6 +63,8 @@ def _valid_config_dict() -> dict:
         "account": {"act_id": "123", "page_id": "100", "pixel_id": "200"},
         "offer_code": "GH_CR",
         "destination_link": "https://example.com",
+        # Дефолт COST_CAP требует bid_amount_cents — задаём явный таргет CPA.
+        "budget": {"daily_cents": 300, "bid_amount_cents": 500},
         "targeting": {"countries": ["DE"]},
         "campaigns": [
             {
@@ -246,6 +248,50 @@ def test_flat_config_bad_kind_rejected() -> None:
     body = ValidateIn(config=cfg)
     with pytest.raises(ValueError):
         body.domain_config()
+
+
+# ────────────── bid_amount_cents (Целевой CPA) + SOP-дефолты ──────────────
+
+
+# bid_amount_cents из плоского конфига доходит до доменного Budget.
+def test_flat_config_bid_amount_reaches_budget() -> None:
+    cfg = _flat_config_dict()
+    cfg["bid_strategy"] = "COST_CAP"
+    cfg["bid_amount_cents"] = 750  # $7.50 целевой CPA
+    dom = CampaignConfigIn.model_validate(cfg).to_domain()
+    assert dom.budget.bid_strategy == "COST_CAP"
+    assert dom.budget.bid_amount_cents == 750
+
+
+# COST_CAP без bid_amount_cents отклоняется при конвертации (домен досверяет → 422).
+def test_flat_config_cost_cap_without_bid_rejected() -> None:
+    cfg = _flat_config_dict()
+    cfg["bid_strategy"] = "COST_CAP"
+    cfg["bid_amount_cents"] = None
+    with pytest.raises(ValueError):
+        CampaignConfigIn.model_validate(cfg).to_domain()
+
+
+# SOP-дефолты плоской схемы: bid_strategy COST_CAP, age_min 21, bid_amount_cents отсутствует.
+def test_flat_config_sop_defaults() -> None:
+    cfg = _flat_config_dict()
+    del cfg["bid_strategy"]  # дефолт схемы
+    del cfg["age_min"]  # дефолт схемы
+    cfg_in = CampaignConfigIn.model_validate(cfg)
+    assert cfg_in.bid_strategy == "COST_CAP"
+    assert cfg_in.age_min == 21
+    assert cfg_in.bid_amount_cents is None
+
+
+# Доменные SOP-дефолты Budget/Targeting: COST_CAP и age_min 21.
+def test_domain_sop_defaults() -> None:
+    from core.campaign_builder.config import Budget, Targeting
+
+    assert Budget(daily_cents=300, bid_amount_cents=500).bid_strategy == "COST_CAP"
+    assert Targeting(countries=["DE"]).age_min == 21
+    # Дефолтный COST_CAP без ставки → ValueError (money-инвариант).
+    with pytest.raises(ValueError):
+        Budget(daily_cents=300)
 
 
 # Вложенная (legacy) форма по-прежнему принимается обоими телами (обратная совместимость).

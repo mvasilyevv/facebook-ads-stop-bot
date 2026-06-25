@@ -32,6 +32,10 @@ export function StepConfig() {
   const [dailyCents, setDailyCents] = useState(
     config.daily_budget_cents ? String(config.daily_budget_cents / 100) : "",
   );
+  // Целевой CPA (bid_amount). В UI доллары, в стор/бэк центы — обязателен для COST_CAP.
+  const [bidAmount, setBidAmount] = useState(
+    config.bid_amount_cents ? String(config.bid_amount_cents / 100) : "",
+  );
   const [budgetLevel, setBudgetLevel] = useState<"campaign" | "adset">(
     config.budget_level ?? "campaign",
   );
@@ -68,10 +72,22 @@ export function StepConfig() {
       setError("Дневной бюджет превышает $100 000 — проверьте");
       return;
     }
+    // Целевой CPA обязателен — bid_strategy=COST_CAP без bid_amount_cents падает на бэке.
+    const rawBid = bidAmount.trim();
+    if (!rawBid) {
+      setError("Укажите целевой CPA ($) — обязателен для COST_CAP");
+      return;
+    }
+    const bidCentsNum = Math.round(parseFloat(rawBid) * 100);
+    if (isNaN(bidCentsNum) || bidCentsNum < 1) {
+      setError("Целевой CPA должен быть больше $0");
+      return;
+    }
     haptic.impact("light");
     updateConfig({
       destination_link: destinationLink.trim(),
       daily_budget_cents: dailyCentsNum,
+      bid_amount_cents: bidCentsNum,
       budget_level: budgetLevel,
       countries: parseCountries(countries),
       start_date: startDate || defaultStartDate(),
@@ -116,6 +132,17 @@ export function StepConfig() {
           value={dailyCents}
           onChange={(e) => setDailyCents(e.target.value)}
           inputMode="decimal"
+          step="0.01"
+          type="text"
+        />
+
+        <Input
+          label="Целевой CPA ($)"
+          placeholder="3.50"
+          value={bidAmount}
+          onChange={(e) => setBidAmount(e.target.value)}
+          inputMode="decimal"
+          step="0.01"
           type="text"
         />
 

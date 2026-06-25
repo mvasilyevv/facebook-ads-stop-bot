@@ -5,8 +5,8 @@
 логики: CLI импортирует эти модели. Дефолты — по SOP/памяти проекта
 (`docs/playbooks/campaign-launch.md`):
 - objective OUTCOME_SALES / optimization OFFSITE_CONVERSIONS / event PURCHASE;
-- бюджет CBO, LOWEST_COST_WITHOUT_CAP, hard-cap валидация;
-- таргет 18–65, advantage_audience, авто +AQ (Антарктида);
+- бюджет CBO, COST_CAP (требует bid_amount_cents), hard-cap валидация;
+- таргет 21–65, advantage_audience, авто +AQ (Антарктида);
 - атрибуция 1d click / 1d view;
 - start_date = следующий день (today+1), дата в имени кампании = тот же день.
 
@@ -63,8 +63,8 @@ class Budget(BaseModel):
     level: str = "campaign"  # campaign (CBO) | adset (ABO)
     daily_cents: int = 300
     lifetime_cents: int | None = None
-    bid_strategy: str = "LOWEST_COST_WITHOUT_CAP"
-    bid_amount_cents: int | None = None  # для COST_CAP / BID_CAP / TARGET_COST
+    bid_strategy: str = "COST_CAP"  # SOP: реальные кампании кабинета всегда COST_CAP
+    bid_amount_cents: int | None = None  # для COST_CAP / BID_CAP / TARGET_COST (обязателен)
 
     @model_validator(mode="after")
     def _check(self) -> Budget:
@@ -95,7 +95,7 @@ class Targeting(BaseModel):
 
     countries: list[str]
     add_antarctica: bool = True  # SOP: AQ всегда
-    age_min: int = 18
+    age_min: int = 21  # SOP: дефолт 21 (реальные кампании кабинета)
     age_max: int = 65
     location_types: list[str] = Field(default_factory=lambda: ["home", "recent"])
     advantage_audience: bool = True
@@ -217,7 +217,9 @@ class CampaignConfig(BaseModel):
     text_optimizations: str = "OPT_OUT"
     start_date: str | None = Field(default_factory=_default_start_date)  # YYYY-MM-DD = today+1
     creo_root: str = ""
-    budget: Budget = Field(default_factory=Budget)
+    # budget обязателен: дефолт-стратегия COST_CAP требует bid_amount_cents, поэтому
+    # «пустого» дефолтного бюджета у money-конфига быть не может — задаётся явно.
+    budget: Budget
     targeting: Targeting
     attribution: Attribution = Field(default_factory=Attribution)
     ad_text: AdText = Field(default_factory=AdText)

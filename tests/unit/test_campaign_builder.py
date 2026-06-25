@@ -60,6 +60,8 @@ def _config(**overrides) -> CampaignConfig:
         destination_link="https://example.shop/x",
         start_date="2026-06-18",
         creo_root="~/Documents/FB_Agent_Creo/CR_GH",
+        # Дефолт COST_CAP требует bid_amount_cents — ставим явный таргет CPA.
+        budget=Budget(daily_cents=300, bid_amount_cents=500),
         targeting=Targeting(countries=["GH"]),
         campaigns=[_image_block()],
     )
@@ -71,27 +73,28 @@ def _config(**overrides) -> CampaignConfig:
 
 
 # Бюджет ниже минимума ($1) отклоняется как опечатка.
+# bid_amount_cents задан, чтобы дефолтный COST_CAP не упал раньше на отсутствии ставки.
 def test_budget_below_min_rejected():
     with pytest.raises(ValueError):
-        Budget(daily_cents=50)
+        Budget(daily_cents=50, bid_amount_cents=500)
 
 
 # Дневной бюджет выше hard-cap отклоняется (защита от лишнего нуля).
 def test_budget_daily_hard_cap():
     with pytest.raises(ValueError):
-        Budget(daily_cents=MAX_DAILY_BUDGET_CENTS + 1)
+        Budget(daily_cents=MAX_DAILY_BUDGET_CENTS + 1, bid_amount_cents=500)
 
 
 # Дневной бюджет ровно на границе hard-cap проходит.
 def test_budget_daily_at_cap_ok():
-    b = Budget(daily_cents=MAX_DAILY_BUDGET_CENTS)
+    b = Budget(daily_cents=MAX_DAILY_BUDGET_CENTS, bid_amount_cents=500)
     assert b.daily_cents == MAX_DAILY_BUDGET_CENTS
 
 
 # Lifetime-бюджет выше hard-cap отклоняется.
 def test_budget_lifetime_hard_cap():
     with pytest.raises(ValueError):
-        Budget(daily_cents=300, lifetime_cents=MAX_LIFETIME_BUDGET_CENTS + 1)
+        Budget(daily_cents=300, lifetime_cents=MAX_LIFETIME_BUDGET_CENTS + 1, bid_amount_cents=500)
 
 
 # Capped-стратегия без bid_amount_cents отклоняется.
@@ -100,10 +103,17 @@ def test_budget_capped_strategy_requires_bid():
         Budget(daily_cents=300, bid_strategy="COST_CAP")
 
 
+# Дефолтная стратегия — COST_CAP (SOP) и без bid_amount_cents она же отклоняется.
+def test_budget_default_strategy_is_cost_cap():
+    assert Budget(daily_cents=300, bid_amount_cents=500).bid_strategy == "COST_CAP"
+    with pytest.raises(ValueError):
+        Budget(daily_cents=300)  # дефолт COST_CAP без ставки → ValueError
+
+
 # Неизвестный уровень бюджета отклоняется.
 def test_budget_level_invalid():
     with pytest.raises(ValueError):
-        Budget(daily_cents=300, level="weird")
+        Budget(daily_cents=300, level="weird", bid_amount_cents=500)
 
 
 # ---------------------- валидация таргета (+AQ) ----------------------
@@ -311,7 +321,7 @@ def test_spec_status_all_paused():
 
 # CBO: бюджет и стратегия живут на кампании, не на adset.
 def test_spec_cbo_budget_on_campaign():
-    cfg = _config(budget=Budget(level="campaign", daily_cents=300))
+    cfg = _config(budget=Budget(level="campaign", daily_cents=300, bid_amount_cents=500))
     spec = build_campaign_spec(cfg)
     camp = spec.campaigns[0]
     assert camp.body["daily_budget"] == 300
@@ -320,7 +330,7 @@ def test_spec_cbo_budget_on_campaign():
 
 # ABO: бюджет и стратегия на adset, не на кампании.
 def test_spec_abo_budget_on_adset():
-    cfg = _config(budget=Budget(level="adset", daily_cents=300))
+    cfg = _config(budget=Budget(level="adset", daily_cents=300, bid_amount_cents=500))
     spec = build_campaign_spec(cfg)
     camp = spec.campaigns[0]
     assert "daily_budget" not in camp.body

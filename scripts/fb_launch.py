@@ -109,7 +109,9 @@ class LaunchConfig(BaseModel):
     text_optimizations: str = "OPT_OUT"
     start_date: str  # YYYY-MM-DD (= следующий день по SOP)
     creo_root: str
-    budget: Budget = Field(default_factory=Budget)
+    # budget обязателен: дефолт-стратегия COST_CAP требует bid_amount_cents (как в
+    # core.campaign_builder.CampaignConfig) — пустого дефолта у money-конфига нет.
+    budget: Budget
     targeting: Targeting
     attribution: Attribution = Field(default_factory=Attribution)
     ad_text: AdText = Field(default_factory=AdText)

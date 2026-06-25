@@ -107,11 +107,14 @@ class CampaignConfigIn(BaseModel):
     # бюджет
     budget_level: str = "campaign"
     daily_budget_cents: int
-    bid_strategy: str = "LOWEST_COST_WITHOUT_CAP"
+    bid_strategy: str = "COST_CAP"  # SOP: реальные кампании кабинета всегда COST_CAP
+    # Целевой CPA в центах (в UI доллары → центы, как daily_budget_cents). COST_CAP
+    # требует его — доменный Budget досверяет (ValueError → 422 при отсутствии).
+    bid_amount_cents: int | None = None
 
     # таргет
     countries: list[str] = Field(default_factory=list)
-    age_min: int = 18
+    age_min: int = 21
     age_max: int = 65
     advantage_audience: bool = True
 
@@ -202,6 +205,7 @@ class CampaignConfigIn(BaseModel):
                 level=self.budget_level,
                 daily_cents=self.daily_budget_cents,
                 bid_strategy=self.bid_strategy,
+                bid_amount_cents=self.bid_amount_cents,
             ),
             "targeting": Targeting(
                 countries=self.countries,

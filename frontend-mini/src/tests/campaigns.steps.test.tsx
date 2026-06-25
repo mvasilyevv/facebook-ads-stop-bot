@@ -387,6 +387,10 @@ describe("StepConfig — валидация", () => {
     fireEvent.change(screen.getByLabelText(/Дневной бюджет/i), {
       target: { value: "50" },
     });
+    // Целевой CPA обязателен (COST_CAP) — заполняем
+    fireEvent.change(screen.getByLabelText(/Целевой CPA/i), {
+      target: { value: "3.50" },
+    });
     fireEvent.click(screen.getByRole("button", { name: /далее/i }));
     await waitFor(() => {
       expect(useWizardStore.getState().step).toBe("structure");
@@ -402,10 +406,60 @@ describe("StepConfig — валидация", () => {
     fireEvent.change(screen.getByLabelText(/Дневной бюджет/i), {
       target: { value: "50" },
     });
+    // Целевой CPA обязателен (COST_CAP) — заполняем
+    fireEvent.change(screen.getByLabelText(/Целевой CPA/i), {
+      target: { value: "3.50" },
+    });
     fireEvent.click(screen.getByRole("button", { name: /далее/i }));
     await waitFor(() => {
       expect(useWizardStore.getState().config.destination_link).toBe("https://trk.example.com");
     });
+  });
+
+  // Деньги: целевой CPA обязателен — без него COST_CAP падает на бэке.
+  it("показывает ошибку при пустом целевом CPA", () => {
+    renderConfig();
+    fireEvent.change(screen.getByLabelText(/Ссылка назначения/i), {
+      target: { value: "https://trk.example.com" },
+    });
+    fireEvent.change(screen.getByLabelText(/Дневной бюджет/i), {
+      target: { value: "50" },
+    });
+    // CPA не заполнен → блокировка перехода
+    fireEvent.click(screen.getByRole("button", { name: /далее/i }));
+    expect(screen.getByText(/обязателен для COST_CAP/i)).toBeTruthy();
+    expect(useWizardStore.getState().step).toBe("config");
+  });
+
+  // Деньги: дробные доллары конвертятся в центы (бюджет и CPA) корректно.
+  it("дробный бюджет и CPA сохраняются как центы в store", async () => {
+    renderConfig();
+    fireEvent.change(screen.getByLabelText(/Ссылка назначения/i), {
+      target: { value: "https://trk.example.com" },
+    });
+    fireEvent.change(screen.getByLabelText(/Дневной бюджет/i), {
+      target: { value: "49.99" },
+    });
+    fireEvent.change(screen.getByLabelText(/Целевой CPA/i), {
+      target: { value: "3.50" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /далее/i }));
+    await waitFor(() => {
+      const cfg = useWizardStore.getState().config;
+      expect(cfg.daily_budget_cents).toBe(4999);
+      expect(cfg.bid_amount_cents).toBe(350);
+    });
+  });
+
+  // Инварианты кабинета зашиты в дефолтах конфига — без UI-выбора.
+  it("дефолты конфига содержат зашитые инварианты (COST_CAP, age_min 21)", () => {
+    const cfg = useWizardStore.getState().config;
+    expect(cfg.bid_strategy).toBe("COST_CAP");
+    expect(cfg.age_min).toBe(21);
+    expect(cfg.objective).toBe("OUTCOME_SALES");
+    expect(cfg.optimization_goal).toBe("OFFSITE_CONVERSIONS");
+    expect(cfg.custom_event_type).toBe("PURCHASE");
+    expect(cfg.text_optimizations).toBe("OPT_OUT");
   });
 });
 

@@ -21,6 +21,9 @@ def _cfg(block_kind: str, refs: list[str]) -> dict:
         "offer_code": "X",
         "destination_link": "https://e.com",
         "start_date": "2026-07-01",
+        # Дефолт COST_CAP требует bid_amount_cents — задаём, чтобы валидация
+        # упиралась именно в проверку типа концепта, а не в бюджет.
+        "budget": {"daily_cents": 300, "bid_amount_cents": 500},
         "targeting": {"countries": ["DE"]},
         "campaigns": [
             {

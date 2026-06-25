@@ -98,10 +98,15 @@ describe("wizardStore конфиг", () => {
     expect(cfg.budget_level).toBe("campaign");
   });
 
-  it("дефолтный age_min = 18, age_max = 65", () => {
+  it("дефолтный age_min = 21, age_max = 65 (зашитый инвариант по SOP)", () => {
     const cfg = useWizardStore.getState().config;
-    expect(cfg.age_min).toBe(18);
+    expect(cfg.age_min).toBe(21);
     expect(cfg.age_max).toBe(65);
+  });
+
+  it("дефолтный bid_strategy = COST_CAP (зашитый инвариант)", () => {
+    const cfg = useWizardStore.getState().config;
+    expect(cfg.bid_strategy).toBe("COST_CAP");
   });
 
   it("campaigns по умолчанию пустые", () => {

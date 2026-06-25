@@ -275,9 +275,10 @@ const DEFAULT_GOAL: WizardGoal = {
   start_date: "2026-06-23",
   budget_level: "campaign",
   daily_budget_cents: 20000,
-  bid_strategy: "LOWEST_COST_WITHOUT_CAP",
+  bid_amount_cents: 500, // $5 целевой CPA (обязателен)
+  bid_strategy: "COST_CAP",
   countries: ["US", "BR"],
-  age_min: 18,
+  age_min: 21,
   age_max: 65,
   advantage_audience: true,
   click_through_days: 1,
@@ -478,6 +479,12 @@ describe("validateGoal", () => {
   it("пустые countries → ошибка", () => {
     const errs = validateGoal({ ...DEFAULT_GOAL, countries: [] });
     expect(errs.countries).toBeTruthy();
+  });
+
+  // Целевой CPA не задан (0) → ошибка (COST_CAP требует bid_amount)
+  it("bid_amount_cents = 0 → ошибка целевого CPA", () => {
+    const errs = validateGoal({ ...DEFAULT_GOAL, bid_amount_cents: 0 });
+    expect(errs.bid_amount_cents).toBeTruthy();
   });
 
   // Корректные данные → нет ошибок
@@ -784,6 +791,9 @@ describe("useWizardStore", () => {
     expect(config.campaigns).toHaveLength(1);
     expect(config.creo_root).toBe("up123");
     expect(config.daily_budget_cents).toBe(20000);
+    // Целевой CPA (bid_amount) доходит до config для builder (COST_CAP)
+    expect(config.bid_amount_cents).toBe(500);
+    expect(config.bid_strategy).toBe("COST_CAP");
   });
 
   // launch_state default = campaign_paused

@@ -47,17 +47,21 @@ const STEPS: WizardStep[] = [
 ];
 
 const DEFAULT_CONFIG: Partial<CampaignConfig> = {
+  // Инварианты кабинета (одинаковы у всех реальных кампаний) — зашиты, без UI-выбора.
   objective: "OUTCOME_SALES",
   optimization_goal: "OFFSITE_CONVERSIONS",
   custom_event_type: "PURCHASE",
   cta: "PLAY_GAME",
   text_optimizations: "OPT_OUT",
+  // COST_CAP требует bid_amount_cents («Целевой CPA») — собирается на шаге «Параметры».
+  bid_strategy: "COST_CAP",
   click_through_days: 1,
   view_through_days: 1,
+  // budget_level — осознанный выбор по SOP (CBO/ABO), дефолт CBO, не лочим.
   budget_level: "campaign",
   launch_state: "campaign_paused",
   countries: [],
-  age_min: 18,
+  age_min: 21,
   age_max: 65,
   advantage_audience: true,
   campaigns: [],

@@ -130,6 +130,8 @@ export interface CampaignConfig {
   budget_level?: "campaign" | "adset";
   /** Бюджет в центах */
   daily_budget_cents: number;
+  /** Целевой CPA в центах (bid_amount для COST_CAP) */
+  bid_amount_cents?: number;
   /** Стратегия ставки */
   bid_strategy?: string;
   /** Страны (+ AQ авто) */

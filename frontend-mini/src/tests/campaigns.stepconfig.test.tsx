@@ -89,6 +89,10 @@ describe("StepConfig — валидация бюджета", () => {
     fireEvent.change(screen.getByLabelText(/Дневной бюджет/i), {
       target: { value: "50" },
     });
+    // Целевой CPA обязателен (COST_CAP)
+    fireEvent.change(screen.getByLabelText(/Целевой CPA/i), {
+      target: { value: "3.50" },
+    });
     fireEvent.click(screen.getByRole("button", { name: /далее/i }));
 
     await waitFor(() => {
@@ -103,6 +107,10 @@ describe("StepConfig — валидация бюджета", () => {
     });
     fireEvent.change(screen.getByLabelText(/Дневной бюджет/i), {
       target: { value: "75.50" },
+    });
+    // Целевой CPA обязателен (COST_CAP)
+    fireEvent.change(screen.getByLabelText(/Целевой CPA/i), {
+      target: { value: "3.50" },
     });
     fireEvent.click(screen.getByRole("button", { name: /далее/i }));
 

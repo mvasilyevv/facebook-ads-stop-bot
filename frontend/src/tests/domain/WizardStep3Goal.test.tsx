@@ -21,9 +21,10 @@ const BASE_VALUES: WizardGoal = {
   start_date: "2026-06-24",
   budget_level: "campaign",
   daily_budget_cents: 20000,
-  bid_strategy: "LOWEST_COST_WITHOUT_CAP",
+  bid_amount_cents: 500, // $5 целевой CPA (обязателен для COST_CAP)
+  bid_strategy: "COST_CAP",
   countries: ["GH"],
-  age_min: 18,
+  age_min: 21,
   age_max: 65,
   advantage_audience: true,
   click_through_days: 1,
@@ -55,6 +56,32 @@ describe("WizardStep3Goal — url_tags инпут убран", () => {
     // Проверяем что есть текст про SOP или автоматический трекинг
     const sopText = screen.getByText(/трекинг по SOP|вычисляет автоматически/i);
     expect(sopText).toBeTruthy();
+  });
+});
+
+describe("WizardStep3Goal — инварианты зашиты, CPA вводится", () => {
+  // Дропдаунов Objective/Optimization Goal больше нет — инварианты read-only
+  it("не содержит редактируемого дропдауна Objective", () => {
+    render(<WizardStep3Goal values={BASE_VALUES} onChange={() => {}} />);
+    expect(screen.queryByLabelText(/^Objective$/i)).toBeNull();
+    expect(screen.queryByLabelText(/Optimization Goal/i)).toBeNull();
+    expect(screen.queryByLabelText(/Bid Strategy/i)).toBeNull();
+  });
+
+  // Read-only блок «Зашито по SOP» показывает инварианты как текст
+  it("показывает read-only инварианты SOP (Cost cap, IMPRESSIONS)", () => {
+    render(<WizardStep3Goal values={BASE_VALUES} onChange={() => {}} />);
+    expect(screen.getByText("Cost cap")).toBeInTheDocument();
+    expect(screen.getByText("IMPRESSIONS")).toBeInTheDocument();
+    expect(screen.getByText("OFFSITE_CONVERSIONS")).toBeInTheDocument();
+  });
+
+  // Поле «Целевой CPA, $» присутствует и отражает значение из стора (центы → $)
+  it("содержит поле «Целевой CPA, $» со значением из bid_amount_cents", () => {
+    render(<WizardStep3Goal values={BASE_VALUES} onChange={() => {}} />);
+    const cpa = screen.getByLabelText(/Целевой CPA/i) as HTMLInputElement;
+    expect(cpa).toBeInTheDocument();
+    expect(cpa.value).toBe("5"); // 500 центов = $5
   });
 });
 

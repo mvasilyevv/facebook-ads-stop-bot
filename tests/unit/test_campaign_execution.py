@@ -22,6 +22,7 @@ import pytest
 from core.campaign_builder import (
     Account,
     AdsetConfig,
+    Budget,
     CampaignBlock,
     CampaignConfig,
     LaunchState,
@@ -73,6 +74,8 @@ def _config(block: CampaignBlock | None = None, **overrides) -> CampaignConfig:
         offer_code="GH_CR",
         destination_link="https://example.shop/x",
         start_date="2026-06-18",
+        # Дефолт COST_CAP требует bid_amount_cents — ставим явный таргет CPA.
+        budget=Budget(daily_cents=300, bid_amount_cents=500),
         targeting=Targeting(countries=["GH"]),
         campaigns=[block or _image_block()],
     )

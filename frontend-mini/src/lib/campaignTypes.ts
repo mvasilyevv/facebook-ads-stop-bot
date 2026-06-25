@@ -142,6 +142,8 @@ export interface CampaignConfig {
   view_through_days?: number;
   url_tags?: string | null;
   bid_strategy?: string | null;
+  /** Целевой CPA (bid_amount) в центах — обязателен для COST_CAP. */
+  bid_amount_cents?: number | null;
   advantage_audience?: boolean;
   ad_text?: { mode: "none" | "text"; primary?: string } | null;
 }
