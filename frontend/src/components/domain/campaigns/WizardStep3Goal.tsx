@@ -10,7 +10,7 @@
  *   - Назначение (destination_link, cta, start_date)
  */
 
-import { type FC } from "react";
+import { type FC, useEffect, useState } from "react";
 import { CALL_TO_ACTIONS } from "@fb/shared";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
@@ -46,24 +46,6 @@ const ATTRIBUTION_DAYS_OPTIONS = [
 ];
 
 export const WizardStep3Goal: FC<WizardStep3GoalProps> = ({ values, onChange, errors = {} }) => {
-  // Бюджет и целевой CPA: показываем в долларах (cents/100), сохраняем в центах
-  const budgetDollars = values.daily_budget_cents / 100;
-  const cpaDollars = values.bid_amount_cents / 100;
-
-  const handleBudgetChange = (v: string) => {
-    const parsed = parseFloat(v);
-    if (!isNaN(parsed) && parsed >= 0) {
-      onChange({ daily_budget_cents: Math.round(parsed * 100) });
-    }
-  };
-
-  const handleCpaChange = (v: string) => {
-    const parsed = parseFloat(v);
-    if (!isNaN(parsed) && parsed >= 0) {
-      onChange({ bid_amount_cents: Math.round(parsed * 100) });
-    }
-  };
-
   return (
     <div className="space-y-7">
       {/* Заголовок */}
@@ -109,25 +91,18 @@ export const WizardStep3Goal: FC<WizardStep3GoalProps> = ({ values, onChange, er
               onChange({ budget_level: e.target.value as WizardGoal["budget_level"] })
             }
           />
-          <Input
+          <DollarInput
             label="Дневной бюджет ($)"
-            type="number"
-            min={1}
-            max={100000}
-            step={0.01}
-            value={String(budgetDollars)}
-            onChange={(e) => handleBudgetChange(e.target.value)}
+            cents={values.daily_budget_cents}
+            onCents={(cents) => onChange({ daily_budget_cents: cents })}
             errorMessage={errors.daily_budget_cents}
             helpText="Hard cap: $100 000 / день"
           />
           {/* Целевой CPA = bid_amount для COST_CAP (обязателен) */}
-          <Input
+          <DollarInput
             label="Целевой CPA, $"
-            type="number"
-            min={0}
-            step={0.01}
-            value={String(cpaDollars)}
-            onChange={(e) => handleCpaChange(e.target.value)}
+            cents={values.bid_amount_cents}
+            onCents={(cents) => onChange({ bid_amount_cents: cents })}
             errorMessage={errors.bid_amount_cents}
             helpText="Cost cap — цена за результат"
           />
@@ -269,6 +244,59 @@ export const WizardStep3Goal: FC<WizardStep3GoalProps> = ({ values, onChange, er
 };
 
 // ─── Вспомогательные компоненты ───────────────────────────────────────────────
+
+/**
+ * Денежное поле в долларах с хранением в центах.
+ *
+ * Локальное строковое состояние позволяет полностью стереть значение и набрать
+ * новое (промежуточные "", "12." не коммитятся в стор — нет snap-back к старому
+ * числу). type="text" + inputMode="decimal" убирает нативные стрелки-степперы.
+ * При внешнем изменении центов (reset/preset) текст ре-синхронизируется.
+ */
+function DollarInput({
+  label,
+  cents,
+  onCents,
+  errorMessage,
+  helpText,
+}: {
+  label: string;
+  cents: number;
+  onCents: (cents: number) => void;
+  errorMessage?: string;
+  helpText?: string;
+}) {
+  const centsToStr = (c: number) => String(c / 100);
+  const [text, setText] = useState(() => centsToStr(cents));
+
+  // Ре-синхронизация только при реальном внешнем изменении центов.
+  // Если локально пусто/промежуточно — не трогаем (parse != cents → resync лишь
+  // когда стор сменился извне, а не из-за нашего же ввода).
+  useEffect(() => {
+    const parsed = parseFloat(text);
+    const localCents = isNaN(parsed) ? NaN : Math.round(parsed * 100);
+    if (localCents !== cents) setText(centsToStr(cents));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cents]);
+
+  const handle = (v: string) => {
+    setText(v);
+    const parsed = parseFloat(v);
+    if (!isNaN(parsed) && parsed >= 0) onCents(Math.round(parsed * 100));
+  };
+
+  return (
+    <Input
+      label={label}
+      type="text"
+      inputMode="decimal"
+      value={text}
+      onChange={(e) => handle(e.target.value)}
+      errorMessage={errorMessage}
+      helpText={helpText}
+    />
+  );
+}
 
 function SectionLabel({ children }: { children: string }) {
   return (
