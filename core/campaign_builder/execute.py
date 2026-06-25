@@ -46,6 +46,10 @@ logger = logging.getLogger(__name__)
 # Прогресс-колбэк: получает плоский снимок состояния (stage + счётчики).
 ProgressCb = Callable[[dict[str, Any]], Awaitable[None]]
 
+# Колбэк создания креатива: вызывается после каждого успешно созданного creative.
+# Аргументы: (code, kind, meta_creative_id). Best-effort — сбой не должен ронять залив.
+CreativeCb = Callable[[str, str, str], Awaitable[None]]  # (code, kind, meta_creative_id)
+
 
 class _GraphClient(Protocol):
     """Минимальный контракт клиента Graph API (для типизации + моков)."""
@@ -233,6 +237,7 @@ async def _execute_block(
     state: _ProgressState,
     on_progress: ProgressCb | None,
     code_start: int = 1,
+    on_creative_created: CreativeCb | None = None,
 ) -> None:
     """Заливает одну кампанию: campaign → adsets → upload → creatives → ads.
 
@@ -333,6 +338,8 @@ async def _execute_block(
             created["creatives"].append(creative_id)
             state.creatives_done += 1
             await _emit(on_progress, state)
+            if on_creative_created is not None:
+                await on_creative_created(ad.code, ad.media_kind, creative_id)
 
             # ad: статус по launch_state (берём из spec-adset, он уже посчитан).
             ad_status = spec_block.adsets[adset_index].status
@@ -365,6 +372,7 @@ async def execute_campaign_spec(
     client: _GraphClient,
     uploader: _Uploader,
     on_progress: ProgressCb | None = None,
+    on_creative_created: CreativeCb | None = None,
 ) -> ExecutionResult:
     """Заливает все кампании спеки последовательно. Money-критичный путь.
 
@@ -408,6 +416,7 @@ async def execute_campaign_spec(
                 state=state,
                 on_progress=on_progress,
                 code_start=code_start,
+                on_creative_created=on_creative_created,
             )
         except PartialCreateError:
             raise

@@ -464,3 +464,48 @@ def test_uniquified_ad_dataclass_fields():
     )
     assert ad.concept_id == "c0"
     assert ad.copy_index == 0
+
+
+# =====================================================================
+#  on_creative_created callback
+# =====================================================================
+
+
+# Callback on_creative_created вызывается ровно по разу на каждый созданный creative
+# с правильными аргументами (code, kind, meta_creative_id). Залив проходит успешно.
+def test_on_creative_created_called(monkeypatch):
+    _patch_uniquify(monkeypatch)
+    block = _image_block(n_adsets=2)
+    cfg = _config(block)
+    spec = build_campaign_spec(cfg)
+    concepts = _concepts("image", count=2)
+    client = _FakeClient()
+    uploader = _FakeUploader()
+
+    seen: list[tuple[str, str, str]] = []
+
+    async def cb(code: str, kind: str, cid: str) -> None:
+        seen.append((code, kind, cid))
+
+    async def run():
+        return await execute_campaign_spec(
+            cfg,
+            spec,
+            concepts_by_campaign={block.key: concepts},
+            client=client,
+            uploader=uploader,
+            on_creative_created=cb,
+        )
+
+    result = asyncio.run(run())
+    # 2 adset'а × 2 концепта = 4 креатива
+    n_creatives = len(result.created_meta_ids["creatives"])
+    assert len(seen) == n_creatives
+    # Все kind == "image" (image-блок)
+    assert all(kind == "image" for _, kind, _ in seen)
+    # Все creative_id непустые
+    assert all(cid for _, _, cid in seen)
+    # Коды совпадают с тем, что реально создано
+    assert {code for code, _, _ in seen} == set(
+        c["body"]["name"] for c in client.calls if "adcreatives" in c["endpoint"]
+    )

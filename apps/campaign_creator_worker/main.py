@@ -43,6 +43,7 @@ from apps.campaign_creator_worker import (
     set_run_status,
 )
 from core.campaign_builder.builder import build_campaign_spec
+from core.campaign_builder.creative_ledger import record_creative
 from core.campaign_builder.execute import (
     PartialCreateError,
     classify_execution_error,
@@ -207,6 +208,23 @@ async def _execute_run(
         run_status = stage if stage in ("uploading", "creating") else "creating"
         await set_run_status(engine, run_id, run_status, progress=snapshot)
 
+    async def _record(code: str, kind: str, creative_id: str) -> None:
+        # Реестр — best-effort аудит: его сбой не должен ронять успешный залив.
+        try:
+            async with engine.begin() as conn:
+                await record_creative(
+                    conn,
+                    offer_code=cfg.offer_code,
+                    code=code,
+                    kind=kind,
+                    meta_creative_id=creative_id,
+                    run_id=run_id,
+                )
+        except Exception:  # noqa: BLE001 — best-effort аудит
+            logger.warning(
+                "реестр креатива не записан: code=%s run=%s", code, run_id, exc_info=True
+            )
+
     try:
         result = await execute_campaign_spec(
             cfg,
@@ -215,6 +233,7 @@ async def _execute_run(
             client=client,
             uploader=uploader,
             on_progress=on_progress,
+            on_creative_created=_record,
         )
     except PartialCreateError as exc:
         # Часть объектов уже в Meta — НЕ ретраим (дубли). run=failed + осиротевшие id.
