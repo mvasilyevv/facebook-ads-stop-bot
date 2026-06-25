@@ -303,7 +303,7 @@ def build_campaign_spec(
     """
     blocks: list[CampaignSpec_Block] = []
     reported_copies = 0  # репрезентативный скаляр для UI = число adset'ов первого блока
-    code_start = 1  # сквозная нумерация кодов между блоками (как у исполнителя)
+    code_start = cfg.code_start  # база сквозной нумерации (per-offer на launch)
     for index, block in enumerate(cfg.campaigns):
         copies = len(block.adsets)  # число adset-слотов = adset'ы блока (как исполнитель)
         concept_count = concept_counts.get(block.key, 1) if concept_counts is not None else 1
@@ -318,6 +318,14 @@ def build_campaign_spec(
         copies_per_concept=reported_copies,
         campaigns=blocks,
     )
+
+
+def total_code_span(cfg: CampaignConfig) -> int:
+    """Сколько кодов CRxxx займёт весь залив: Σ (len(concept_refs) × len(adsets)) по блокам.
+
+    Используется аллокатором per-offer (campaigns_create.launch) для резерва диапазона.
+    """
+    return sum(block_code_span(len(b.concept_refs), len(b.adsets)) for b in cfg.campaigns)
 
 
 # ---------------------- execute-скелет (порядок шагов) ----------------------

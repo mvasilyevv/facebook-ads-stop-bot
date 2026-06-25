@@ -220,6 +220,9 @@ class CampaignConfig(BaseModel):
     campaigns: list[CampaignBlock]
     copies_per_concept: int | None = None  # default = число adset'ов кампании
     creative_prefix: str = ""  # префикс кодов креативов (default = {offer}_CR)
+    # База сквозной нумерации кодов креативов. =1 по умолчанию; на launch
+    # аллокатор per-offer проставляет реальное смещение (см. campaigns_create.launch).
+    code_start: int = 1
     launch_state: LaunchState = LaunchState.CAMPAIGN_PAUSED
 
     @model_validator(mode="after")

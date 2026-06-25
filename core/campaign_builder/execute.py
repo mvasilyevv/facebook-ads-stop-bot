@@ -383,7 +383,7 @@ async def execute_campaign_spec(
     # Сквозная нумерация кодов между блоками: блок B продолжает с номера, на котором
     # кончился блок A. Накопление block_code_span ЗЕРКАЛИТ build_campaign_spec (превью):
     # коды глобально уникальны и совпадают с превью (money-инвариант превью==залив).
-    code_start = 1
+    code_start = cfg.code_start
     for spec_block in spec.campaigns:
         concepts = concepts_by_campaign.get(spec_block.key, [])
         if not concepts:
