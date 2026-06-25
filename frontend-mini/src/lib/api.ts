@@ -385,6 +385,21 @@ import type {
   TelegramSettings,
 } from "@fb/shared";
 
+/**
+ * OfferExt — локальное расширение @fb/shared Offer (OfferOut) money-полями,
+ * которых пока нет в generated-типах (gen:api НЕ запускаем). Бэк OfferOut уже
+ * отдаёт их — читаем из useOffers().data через этот тип:
+ *   - ad_account_ids / pixel_id — уже в generated, дублируем для строгости.
+ *   - countries (ISO-2 upper, дефолт []) — НОВОЕ.
+ *   - default_page_id (str|null) — НОВОЕ, опц.
+ */
+export type OfferExt = Offer & {
+  ad_account_ids?: string[];
+  pixel_id?: string | null;
+  countries?: string[];
+  default_page_id?: string | null;
+};
+
 /** Тип для создания оффера — минимальный набор полей. */
 export interface OfferCreatePayload {
   code: string;
@@ -392,6 +407,10 @@ export interface OfferCreatePayload {
   vertical?: string | null;
   /** Мульти-кабинет: кабинеты оффера (числовые ID без act_), минимум 1 — бэк отдаёт 422 без них. */
   ad_account_ids: string[];
+  /** Гео оффера (ISO-2 upper). Дефолт [] — не задано. */
+  countries?: string[];
+  /** Страница FB по умолчанию (числовой page_id). null/пусто — не задана. */
+  default_page_id?: string | null;
 }
 
 /** Тип для обновления оффера. */
@@ -401,6 +420,10 @@ export interface OfferUpdatePayload {
   is_active?: boolean | null;
   /** Мульти-кабинет: undefined — не трогать, список — заменить (минимум 1). */
   ad_account_ids?: string[];
+  /** Гео оффера (ISO-2 upper): undefined — не трогать, список — заменить. */
+  countries?: string[];
+  /** Страница FB по умолчанию: undefined — не трогать, null/строка — заменить. */
+  default_page_id?: string | null;
 }
 
 export const QK_EXT = {

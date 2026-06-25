@@ -22,6 +22,7 @@ import {
   useDeleteOffer,
   useOfferRules,
   useSaveOfferRules,
+  type Offer,
 } from "@/lib/api/offers";
 import { OfferCard } from "@/components/offers/OfferCard";
 import { OfferFormModal } from "@/components/offers/OfferFormModal";
@@ -35,7 +36,6 @@ import { ErrorState } from "@/components/ui/ErrorState";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { toast } from "@/components/ui/Toast";
-import type { Offer } from "@fb/shared";
 
 export const Route = createFileRoute("/offers/")({
   component: OffersPage,
@@ -217,6 +217,8 @@ function OffersPage() {
             is_active: values.is_active,
             pixel_id: values.pixel_id || null, // пусто → не задан
             ad_account_ids: values.ad_account_ids, // мульти-кабинет: min 1
+            countries: values.countries, // гео оффера (ISO-2 upper)
+            default_page_id: values.default_page_id || null, // пусто → не задана
           });
           await saveRules.mutateAsync({
             offerId: created.id,
@@ -295,6 +297,8 @@ function EditOfferModal({ offer, onClose }: { offer: Offer; onClose: () => void 
           is_active: values.is_active,
           pixel_id: values.pixel_id, // строка (в т.ч. "") — форма источник истины
           ad_account_ids: values.ad_account_ids, // мульти-кабинет: замена списка
+          countries: values.countries, // гео оффера (ISO-2 upper) — замена списка
+          default_page_id: values.default_page_id || null, // пусто → не задана
         });
         await saveRules.mutateAsync({
           offerId: offer.id,

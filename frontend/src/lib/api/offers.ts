@@ -13,11 +13,26 @@
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiGet, apiSend } from "./client";
-import type { Offer, OfferRules } from "@fb/shared";
+import type { Offer as OfferBase, OfferRules } from "@fb/shared";
 import type { components } from "@fb/shared/api/generated";
 
 type OfferCompareRow = components["schemas"]["OfferCompareRow"];
 type RulePreviewOut = components["schemas"]["RulePreviewOut"];
+
+/**
+ * Offer — локальное расширение @fb/shared Offer (OfferOut) money-полями, которых
+ * пока нет в generated-типах (gen:api НЕ запускаем). Бэк OfferOut уже отдаёт их.
+ *   - ad_account_ids / pixel_id — уже в generated, дублируем для строгости.
+ *   - countries (ISO-2 upper, дефолт []) — НОВОЕ.
+ *   - default_page_id (str|null) — НОВОЕ, опц.
+ * Реэкспортим как Offer — потребители (форма, визард) читают единый тип.
+ */
+export type Offer = OfferBase & {
+  ad_account_ids?: string[];
+  pixel_id?: string | null;
+  countries?: string[];
+  default_page_id?: string | null;
+};
 
 // ─── Список офферов ───────────────────────────────────────────────────────────
 
@@ -29,6 +44,8 @@ export function useOffers(includeInactive?: boolean) {
     staleTime: 30_000,
   });
 }
+
+// Реэкспорт расширенного типа уже сделан выше — Offer включает countries/default_page_id.
 
 // ─── Сравнение офферов ────────────────────────────────────────────────────────
 
@@ -43,7 +60,7 @@ export function useOffersCompare(days?: number) {
 
 // ─── Создание оффера ──────────────────────────────────────────────────────────
 
-interface OfferCreateIn {
+export interface OfferCreateIn {
   code: string;
   name: string;
   vertical?: string;
@@ -52,6 +69,10 @@ interface OfferCreateIn {
   pixel_id?: string | null;
   /** Мульти-кабинет: кабинеты оффера (числовые ID без act_), минимум 1. */
   ad_account_ids: string[];
+  /** Гео оффера (ISO-2 upper). Дефолт [] — не задано. */
+  countries?: string[];
+  /** Страница FB по умолчанию (числовой page_id). null/пусто — не задана. */
+  default_page_id?: string | null;
 }
 
 export function useCreateOffer() {

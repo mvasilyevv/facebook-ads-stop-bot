@@ -247,6 +247,7 @@ function WizardLayout() {
             <WizardStep2Identity
               values={store.identity}
               onChange={store.setIdentity}
+              onGoalChange={store.setGoal}
               errors={errors as Record<string, string>}
             />
           )}

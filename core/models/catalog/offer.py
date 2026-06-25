@@ -58,6 +58,19 @@ class Offer(UUIDPrimaryKey, Timestamp, Base):
         nullable=False,
         server_default=text("'{}'"),
     )
+    # Гео оффера (ISO-2 upper, мультигео). Визард префиллит goal.countries из этого
+    # списка. Пустой — гео не задано (вводится вручную в шаге «Параметры»).
+    countries: Mapped[list[str]] = mapped_column(
+        ARRAY(String),
+        nullable=False,
+        server_default=text("'{}'"),
+    )
+    # FB Page ID обычной страницы оффера. Преселект в дропдауне страниц кабинета при
+    # создании кампании, если страница есть среди подтянутых. Опционально.
+    default_page_id: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+    )
 
     rules: Mapped[list["OfferRule"]] = relationship(  # noqa: F821
         "OfferRule",

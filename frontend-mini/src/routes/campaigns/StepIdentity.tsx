@@ -9,12 +9,25 @@
  *
  * Данные могут быть предзаполнены из пресета — редактируемы.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Input, Button, Select } from "@/components/ui";
 import { Eyebrow } from "@/components/data";
 import { haptic } from "@/lib/tg";
 import { useAdAccountPages, useAdAccountTimezone, useOffers } from "@/lib/api";
+import type { Offer } from "@fb/shared";
 import { useWizardStore } from "./-wizardStore";
+
+/**
+ * Оффер с money-полями дерайва. countries/default_page_id/ad_account_ids/pixel_id
+ * ещё нет в generated.ts (gen:api не гоняем) — объявляем локально и читаем из
+ * useOffers().data через безопасный каст (бэк OfferOut уже отдаёт эти поля).
+ */
+type WizardOffer = Offer & {
+  ad_account_ids?: string[];
+  pixel_id?: string | null;
+  countries?: string[];
+  default_page_id?: string | null;
+};
 
 /** Число часов сдвига → строка вида «±HH:00» (зеркало _tz_offset_to_str бэка). */
 function tzOffsetToStr(hours: number): string {
@@ -47,14 +60,58 @@ export function StepIdentity() {
   const pagesQuery = useAdAccountPages(fetchAct, fetchAct.length > 0);
 
   // Страницы подтянулись непустым массивом → дропдаун; иначе/ошибка → ручной ввод.
-  const pages = pagesQuery.data?.pages ?? [];
+  // useMemo стабилизирует ref массива (иначе effect'ы ниже бьются каждый рендер).
+  const pages = useMemo(() => pagesQuery.data?.pages ?? [], [pagesQuery.data]);
   const hasPages = pages.length > 0;
 
-  // Источник офферов для комбобокса (свободный ввод + подсказки).
+  // Источник офферов для комбобокса (свободный ввод + подсказки) + дерайва.
   const offersQuery = useOffers();
-  const offerCodes = (offersQuery.data ?? [])
-    .map((o) => o.code)
-    .filter(Boolean);
+  const offers = useMemo(
+    () => (offersQuery.data ?? []) as WizardOffer[],
+    [offersQuery.data],
+  );
+  const offerCodes = offers.map((o) => o.code).filter(Boolean);
+
+  // Кабинеты дерайвнутого оффера: >1 → показываем Select выбора кабинета.
+  const [offerAccounts, setOfferAccounts] = useState<string[]>([]);
+  // Защита от повторного дерайва на каждый рендер: помним последний применённый код.
+  const lastDerivedCode = useRef<string | null>(null);
+
+  // Дерайв из выбранного оффера: act_id (1 → авто, >1 → Select, 0 → ручной),
+  // pixel_id префилл, countries в стор (шаг «Параметры»), default_page_id —
+  // преселект ниже, когда подтянутся страницы кабинета. Все поля редактируемы.
+  useEffect(() => {
+    const code = offerCode.trim().toUpperCase();
+    if (!code || code === lastDerivedCode.current) return;
+    const matched = offers.find((o) => o.code.toUpperCase() === code);
+    if (!matched) return;
+
+    lastDerivedCode.current = code;
+    const accounts = matched.ad_account_ids ?? [];
+    setOfferAccounts(accounts);
+
+    // act_id: ровно 1 кабинет → подставляем и триггерим TZ/страницы; >1/0 — не
+    // навязываем (Select выбора / ручной ввод остаются за пользователем).
+    if (accounts.length === 1) {
+      const only = accounts[0] as string;
+      setActId(only);
+      setFetchAct(only);
+    }
+
+    // pixel_id префилл (поле редактируемо).
+    if (matched.pixel_id) setPixelId(matched.pixel_id);
+
+    // countries → стор: подтянет шаг «Параметры» при монтировании.
+    if (matched.countries && matched.countries.length > 0) {
+      updateConfig({ countries: matched.countries });
+    }
+  }, [offerCode, offers, updateConfig]);
+
+  // default_page_id оффера для преселекта в дропдауне страниц (ниже).
+  const derivedOffer = offers.find(
+    (o) => o.code.toUpperCase() === offerCode.trim().toUpperCase(),
+  );
+  const defaultPageId = derivedOffer?.default_page_id ?? null;
 
   // Успешный фетч → записать число часов + имя TZ в стор (деньги: число).
   useEffect(() => {
@@ -71,6 +128,16 @@ export function StepIdentity() {
   useEffect(() => {
     if (tzQuery.isError) setTzManual(true);
   }, [tzQuery.isError]);
+
+  // Преселект default_page_id оффера: когда страницы подтянулись и поле page_id
+  // ещё пустое, а дефолтная страница оффера среди них — выбираем её. Если её нет
+  // в списке — не блок (пользователь выберет вручную). Поле остаётся редактируемым.
+  useEffect(() => {
+    if (!defaultPageId || pageId) return;
+    if (pages.some((p) => p.id === defaultPageId)) {
+      setPageId(defaultPageId);
+    }
+  }, [defaultPageId, pageId, pages]);
 
   function handleActBlur() {
     const trimmed = actId.trim();
@@ -125,15 +192,33 @@ export function StepIdentity() {
       <Eyebrow num="02">ИДЕНТИЧНОСТЬ + ОФФЕР</Eyebrow>
 
       <div className="flex flex-col gap-4">
-        <Input
-          label="ID рекламного кабинета"
-          placeholder="act_1234567890"
-          value={actId}
-          onChange={(e) => setActId(e.target.value)}
-          onBlur={handleActBlur}
-          autoCapitalize="none"
-          autoCorrect="off"
-        />
+        {/* Кабинет оффера: >1 → Select выбора (опции = кабинеты оффера); выбор
+            пишет act_id и триггерит TZ/страницы. 1/0 — обычный ручной Input. */}
+        {offerAccounts.length > 1 ? (
+          <Select
+            label="Рекламный кабинет оффера"
+            value={actId}
+            options={[
+              { value: "", label: "Выберите кабинет" },
+              ...offerAccounts.map((a) => ({ value: a, label: `act_${a}` })),
+            ]}
+            onChange={(e) => {
+              const next = e.target.value;
+              setActId(next);
+              if (next) setFetchAct(next);
+            }}
+          />
+        ) : (
+          <Input
+            label="ID рекламного кабинета"
+            placeholder="act_1234567890"
+            value={actId}
+            onChange={(e) => setActId(e.target.value)}
+            onBlur={handleActBlur}
+            autoCapitalize="none"
+            autoCorrect="off"
+          />
+        )}
 
         {/* Timezone: read-only показ + спиннер; на ошибке — ручной Select */}
         {tzManual ? (

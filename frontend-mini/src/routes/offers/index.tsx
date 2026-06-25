@@ -28,6 +28,7 @@ import {
   useUpdateOfferRules,
   type OfferCreatePayload,
   type OfferUpdatePayload,
+  type OfferExt,
 } from "@/lib/api";
 import { haptic, tgConfirm } from "@/lib/tg";
 import { cn } from "@/lib/cn";
@@ -114,16 +115,40 @@ function parseAccountIds(raw: string): string[] | null {
   return ids;
 }
 
+/**
+ * Разбор гео-ввода: запятые/пробелы, ISO-2 upper, дедуп. null — есть невалидный
+ * токен (не 2 буквы). Пустой ввод → [] (валидно, гео не задано).
+ */
+function parseCountries(raw: string): string[] | null {
+  const codes: string[] = [];
+  const seen = new Set<string>();
+  for (const part of raw.split(/[\s,;]+/)) {
+    const token = part.trim().toUpperCase();
+    if (!token) continue;
+    if (!/^[A-Z]{2}$/.test(token)) return null;
+    if (!seen.has(token)) {
+      seen.add(token);
+      codes.push(token);
+    }
+  }
+  return codes;
+}
+
 function OfferForm({ offer, onClose }: OfferFormProps) {
   const isEdit = !!offer;
-  // ad_account_ids появляется в generated-типах после pnpm gen:api — до этого читаем мягко.
-  const offerAccounts =
-    (offer as (Offer & { ad_account_ids?: string[] }) | null)?.ad_account_ids ?? [];
+  // countries/default_page_id появляются в generated-типах после pnpm gen:api —
+  // до этого читаем мягко через OfferExt (бэк OfferOut уже отдаёт их).
+  const offerExt = offer as OfferExt | null;
+  const offerAccounts = offerExt?.ad_account_ids ?? [];
+  const offerCountries = offerExt?.countries ?? [];
   const [code, setCode] = useState(offer?.code ?? "");
   const [name, setName] = useState(offer?.name ?? "");
   const [vertical, setVertical] = useState(offer?.vertical ?? "");
   const [accountsRaw, setAccountsRaw] = useState(offerAccounts.join(", "));
   const [accountsError, setAccountsError] = useState<string | null>(null);
+  const [countriesRaw, setCountriesRaw] = useState(offerCountries.join(", "));
+  const [countriesError, setCountriesError] = useState<string | null>(null);
+  const [defaultPageId, setDefaultPageId] = useState(offerExt?.default_page_id ?? "");
   const [isActive, setIsActive] = useState(offer?.is_active ?? true);
   const [error, setError] = useState<string | null>(null);
   const switchId = useId();
@@ -136,6 +161,7 @@ function OfferForm({ offer, onClose }: OfferFormProps) {
     e.preventDefault();
     setError(null);
     setAccountsError(null);
+    setCountriesError(null);
     haptic.impact("medium");
 
     if (!code.trim()) {
@@ -154,6 +180,17 @@ function OfferForm({ offer, onClose }: OfferFormProps) {
       return;
     }
 
+    // Гео — опц.: пусто → [] (валидно). Невалидный токен (не ISO-2) → ошибка.
+    const countries = parseCountries(countriesRaw);
+    if (countries === null) {
+      setCountriesError("Только ISO-2 коды стран (US, GB, DE…)");
+      return;
+    }
+
+    // default_page_id — опц., числовой; пусто → null (страница не задана).
+    const pageIdTrimmed = defaultPageId.trim();
+    const defaultPage = pageIdTrimmed === "" ? null : pageIdTrimmed;
+
     try {
       if (isEdit && offer) {
         const payload: OfferUpdatePayload = {
@@ -161,6 +198,8 @@ function OfferForm({ offer, onClose }: OfferFormProps) {
           vertical: vertical || null,
           is_active: isActive,
           ad_account_ids: accountIds,
+          countries,
+          default_page_id: defaultPage,
         };
         await update.mutateAsync({ id: offer.id, payload });
       } else {
@@ -170,6 +209,8 @@ function OfferForm({ offer, onClose }: OfferFormProps) {
           name: name.trim() || trimmedCode,
           vertical: vertical || null,
           ad_account_ids: accountIds,
+          countries,
+          default_page_id: defaultPage,
         };
         await create.mutateAsync(payload);
       }
@@ -211,6 +252,29 @@ function OfferForm({ offer, onClose }: OfferFormProps) {
           if (accountsError) setAccountsError(null);
         }}
         errorMessage={accountsError ?? undefined}
+        inputMode="numeric"
+      />
+
+      {/* Гео оффера (ISO-2 upper, опц.) — визард префиллит ими countries */}
+      <Input
+        label="Гео (страны, ISO-2)"
+        placeholder="US, GB, DE"
+        value={countriesRaw}
+        onChange={(e) => {
+          setCountriesRaw(e.target.value.toUpperCase());
+          if (countriesError) setCountriesError(null);
+        }}
+        errorMessage={countriesError ?? undefined}
+        autoCapitalize="characters"
+        autoCorrect="off"
+      />
+
+      {/* Страница FB по умолчанию (опц.) — визард преселектит её в дропдауне */}
+      <Input
+        label="Страница FB по умолчанию"
+        placeholder="123456789"
+        value={defaultPageId}
+        onChange={(e) => setDefaultPageId(e.target.value)}
         inputMode="numeric"
       />
 

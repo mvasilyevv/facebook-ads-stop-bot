@@ -4,6 +4,10 @@
  * Поля: act_id, page_id, pixel_id, tz_offset, offer_code, byer_tag.
  * Если шаг 1 был "preset" — поля предзаполнены из пресета.
  *
+ * Дерайв из оффера: при выборе offer_code, совпавшего с оффером из useOffers,
+ * подставляем act_id (1 кабинет → авто, >1 → Select выбора, 0 → ручной ввод),
+ * pixel_id, goal.countries и преселект default_page_id. Все поля редактируемы.
+ *
  * Таймзона кабинета подтягивается автоматически по act_id (blur): TZ зафиксирована
  * при создании кабинета, её нельзя выбрать руками без ошибки. На ошибке авто-подхвата —
  * фолбэк на ручной ввод с ПОЛНЫМ диапазоном UTC (−12..+14, включая отрицательные).
@@ -18,11 +22,24 @@ import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { useAdAccountPages, useAdAccountTimezone } from "@/lib/api/campaigns";
 import { useOffers } from "@/lib/api/offers";
-import type { WizardIdentity } from "@/stores/campaignWizard";
+import type { Offer } from "@fb/shared";
+import type { WizardGoal, WizardIdentity } from "@/stores/campaignWizard";
+
+/**
+ * Оффер с новыми полями дерайва. countries/default_page_id ещё нет в generated.ts
+ * (gen:api не гоняем) — объявляем локально и читаем из useOffers().data через
+ * безопасный каст (бэк OfferOut уже отдаёт эти поля).
+ */
+type WizardOffer = Offer & {
+  countries?: string[] | null;
+  default_page_id?: string | null;
+};
 
 interface WizardStep2IdentityProps {
   values: WizardIdentity;
   onChange: (v: Partial<WizardIdentity>) => void;
+  /** Префилл полей шага «Параметры» (goal.countries) при дерайве из оффера. */
+  onGoalChange?: (v: Partial<WizardGoal>) => void;
   /** Ошибки валидации по именам полей. */
   errors?: Partial<Record<keyof WizardIdentity, string>>;
 }
@@ -43,6 +60,7 @@ function formatTzOffset(hours: number): string {
 export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
   values,
   onChange,
+  onGoalChange,
   errors = {},
 }) => {
   const tzMutation = useAdAccountTimezone();
@@ -52,14 +70,21 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
   const [tzFallback, setTzFallback] = useState(false);
   // Подтянутые страницы кабинета → дропдаун выбора page_id. Пусто/ошибка → ручной ввод.
   const [pages, setPages] = useState<{ id: string; name: string }[]>([]);
+  // Кабинеты выбранного оффера при дерайве (>1 → Select выбора кабинета).
+  const [offerAccounts, setOfferAccounts] = useState<string[]>([]);
+  // Желаемый page_id после фетча страниц (преселект default_page_id оффера),
+  // применяется только если он есть среди подтянутых.
+  const desiredPageId = useRef<string | null>(null);
   // Дедуп: не фетчить повторно тот же act_id на каждом blur (бьёт по живой
   // Vision-сессии + строка в meta_api_audit_log на каждый клик).
   const lastFetchedAct = useRef<string | null>(null);
 
-  // Подтягиваем TZ кабинета И список страниц по act_id при потере фокуса
-  // (если поле непустое). Один blur → один фетч на act_id (общий дедуп).
-  const fetchAccountMeta = () => {
-    const actId = values.act_id.trim();
+  const offers = (offersQuery.data ?? []) as WizardOffer[];
+
+  // Подтягиваем TZ кабинета И список страниц по конкретному act_id.
+  // Один фетч на act_id (общий дедуп) — защита от лишних обращений к Vision.
+  const fetchAccountMetaFor = (rawActId: string) => {
+    const actId = rawActId.trim();
     if (!actId || actId === lastFetchedAct.current) return;
     lastFetchedAct.current = actId;
     tzMutation.mutate(actId, {
@@ -78,12 +103,60 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
       onSuccess: (data) => {
         // Непустой массив → дропдаун; пустой → остаётся ручной ввод page_id.
         setPages(data.pages);
+        // Преселект default_page_id оффера, только если он есть среди подтянутых.
+        const want = desiredPageId.current;
+        if (want && data.pages.some((p) => p.id === want)) {
+          onChange({ page_id: want });
+        }
+        desiredPageId.current = null;
       },
       onError: () => {
         // Не удалось подтянуть страницы — фолбэк на ручной ввод page_id.
         setPages([]);
+        desiredPageId.current = null;
       },
     });
+  };
+
+  // blur по Ad Account ID — фетч TZ+страниц по текущему значению act_id.
+  const fetchAccountMeta = () => fetchAccountMetaFor(values.act_id);
+
+  // Дерайв из выбранного оффера: act_id (1 авто / >1 Select / 0 ручной),
+  // pixel_id, goal.countries, преселект default_page_id. Все поля редактируемы.
+  const deriveFromOffer = (code: string) => {
+    const offer = offers.find((o) => o.code === code);
+    if (!offer) {
+      // Свободный ввод кода без совпадения — оффер-дерайв не применяем,
+      // ручной выбор кабинета убираем.
+      setOfferAccounts([]);
+      return;
+    }
+    const accounts = (offer.ad_account_ids ?? []).filter((a) => a.trim().length > 0);
+    setOfferAccounts(accounts);
+    // 1 кабинет → подставляем сразу; >1 → ждём выбор в Select; 0 → ручной ввод.
+    const soleAccount = accounts.length === 1 ? accounts[0] : null;
+
+    const patch: Partial<WizardIdentity> = {};
+    if (offer.pixel_id) patch.pixel_id = offer.pixel_id;
+    if (soleAccount) patch.act_id = soleAccount;
+    if (Object.keys(patch).length > 0) onChange(patch);
+
+    // Гео оффера → префилл countries в шаге «Параметры» (редактируемо).
+    if (onGoalChange && offer.countries && offer.countries.length > 0) {
+      onGoalChange({ countries: offer.countries.map((c) => c.toUpperCase()) });
+    }
+
+    // Преселект страницы оффера среди подтянутых страниц кабинета.
+    desiredPageId.current = offer.default_page_id ?? null;
+
+    // Авто-кабинет → сразу тянем его TZ и страницы (как при blur).
+    if (soleAccount) fetchAccountMetaFor(soleAccount);
+  };
+
+  // Выбор кабинета из Select (оффер с >1 кабинетом). act_id меняется → TZ перефетчится.
+  const handleAccountSelect = (actId: string) => {
+    onChange({ act_id: actId });
+    fetchAccountMetaFor(actId);
   };
 
   return (
@@ -106,6 +179,21 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
         <div className="font-display text-[10px] tracking-[0.14em] uppercase text-bg-7 mb-3">
           РЕКЛАМНЫЙ КАБИНЕТ
         </div>
+        {/* Оффер с несколькими кабинетами — выбор кабинета залива (без фан-аута). */}
+        {offerAccounts.length > 1 && (
+          <div className="mb-4">
+            <Select
+              label="Кабинет оффера"
+              placeholder="Выберите кабинет"
+              options={offerAccounts.map((a) => ({ value: a, label: a }))}
+              value={offerAccounts.includes(values.act_id) ? values.act_id : ""}
+              onChange={(e) => handleAccountSelect(e.target.value)}
+            />
+            <p className="text-[11px] text-bg-8 mt-1.5">
+              У оффера несколько кабинетов — выберите, на какой заливать.
+            </p>
+          </div>
+        )}
         <div className="grid grid-cols-2 gap-4">
           <Input
             label="Ad Account ID"
@@ -224,12 +312,17 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
           ))}
         </datalist>
         <div className="grid grid-cols-2 gap-4">
-          {/* Свободный ввод разрешён, .toUpperCase() сохраняется. */}
+          {/* Свободный ввод разрешён, .toUpperCase() сохраняется. Совпадение
+              с оффером каталога → дерайв act_id/pixel/countries/page. */}
           <Input
             label="Код оффера"
             placeholder="GH_CR2"
             value={values.offer_code}
-            onChange={(e) => onChange({ offer_code: e.target.value.toUpperCase() })}
+            onChange={(e) => {
+              const code = e.target.value.toUpperCase();
+              onChange({ offer_code: code });
+              deriveFromOffer(code);
+            }}
             errorMessage={errors.offer_code}
             helpText="Войдёт в название кампании"
             list="offers-dl"

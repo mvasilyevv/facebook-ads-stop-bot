@@ -34,6 +34,10 @@ export interface OfferFormValues {
   pixel_id: string;
   /** Мульти-кабинет: числовые ID кабинетов (без act_), минимум 1. */
   ad_account_ids: string[];
+  /** Гео оффера (ISO-2 upper). Дефолт [] — не задано. */
+  countries: string[];
+  /** Страница FB по умолчанию (числовой page_id). Пусто — не задана. */
+  default_page_id: string;
   /** Money-настройки: CPA + чувствительность стоп/warning. */
   rules: OfferRulesValues;
 }
@@ -42,6 +46,11 @@ export interface OfferFormValues {
 const normalizeAccount = (token: string): string => token.replace(/^act_/i, "");
 const validateAccount = (token: string): string | null =>
   /^\d+$/.test(token) ? null : "только числовой ID кабинета";
+
+// Гео: upper-case ISO-2; проверка на ровно две латинские буквы.
+const normalizeCountry = (token: string): string => token.trim().toUpperCase();
+const validateCountry = (token: string): string | null =>
+  /^[A-Z]{2}$/.test(token) ? null : "только ISO-2 код (напр. DE, BR)";
 
 interface OfferFormModalProps {
   open: boolean;
@@ -64,12 +73,19 @@ export function OfferFormModal({
   onSave,
 }: OfferFormModalProps) {
   const isEdit = !!offer;
-  // ad_account_ids/pixel_id появляются в generated-типах после pnpm gen:api — читаем мягко.
+  // Offer из @fb/shared не содержит countries/default_page_id (gen:api не запускаем) —
+  // читаем мягко через расширение. ad_account_ids/pixel_id уже есть в generated.
   const offerExt = offer as
-    | (Offer & { ad_account_ids?: string[]; pixel_id?: string | null })
+    | (Offer & {
+        ad_account_ids?: string[];
+        pixel_id?: string | null;
+        countries?: string[];
+        default_page_id?: string | null;
+      })
     | null
     | undefined;
   const offerAccounts = offerExt?.ad_account_ids ?? [];
+  const offerCountries = offerExt?.countries ?? [];
 
   const [code, setCode] = useState("");
   const [isActive, setIsActive] = useState(true);
@@ -78,6 +94,10 @@ export function OfferFormModal({
   const [accounts, setAccounts] = useState<string[]>([]);
   // FB Pixel ID оффера.
   const [pixelId, setPixelId] = useState("");
+  // Гео оффера (ISO-2 upper) тэгами.
+  const [countries, setCountries] = useState<string[]>([]);
+  // Страница FB по умолчанию (page_id).
+  const [defaultPageId, setDefaultPageId] = useState("");
   const [codeError, setCodeError] = useState<string | undefined>();
   const [accountsError, setAccountsError] = useState<string | undefined>();
   const [busy, setBusy] = useState(false);
@@ -90,10 +110,12 @@ export function OfferFormModal({
       setRules({ ...DEFAULT_OFFER_RULES_VALUES, ...initialRules });
       setAccounts(offerAccounts);
       setPixelId(offerExt?.pixel_id ?? "");
+      setCountries(offerCountries);
+      setDefaultPageId(offerExt?.default_page_id ?? "");
       setCodeError(undefined);
       setAccountsError(undefined);
     }
-    // offerAccounts/initialRules — производные от offer; отдельные зависимости не нужны.
+    // offerAccounts/offerCountries/initialRules — производные от offer; отдельные зависимости не нужны.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, offer, initialRules]);
 
@@ -131,6 +153,8 @@ export function OfferFormModal({
         is_active: isActive,
         pixel_id: pixelId.trim(),
         ad_account_ids: accounts,
+        countries,
+        default_page_id: defaultPageId.trim(),
         rules,
       });
       handleClose(false);
@@ -210,6 +234,33 @@ export function OfferFormModal({
             spellCheck={false}
             inputMode="numeric"
             helpText="Пиксель оффера — событие оптимизации (Purchase/FTD) при создании кампаний. Необязательно."
+          />
+
+          {/* Гео (страны) — тэги ISO-2; префилл geo визарда при создании кампаний */}
+          <TagListInput
+            id="offer-countries"
+            label="Страны (гео)"
+            placeholder="DE + Enter"
+            values={countries}
+            onChange={setCountries}
+            normalize={normalizeCountry}
+            validate={validateCountry}
+            disabled={busy}
+            helpText="ISO-2 коды (DE, BR, IN). Enter/запятая — добавить, × — удалить. Подставляются в гео при создании кампаний. Необязательно."
+          />
+
+          {/* Страница FB по умолчанию — преселект в дропдауне страниц кабинета */}
+          <Input
+            id="offer-default-page"
+            label="Страница по умолчанию"
+            placeholder="1234567890123456"
+            value={defaultPageId}
+            onChange={(e) => setDefaultPageId(e.target.value)}
+            disabled={busy}
+            autoComplete="off"
+            spellCheck={false}
+            inputMode="numeric"
+            helpText="FB page_id — преселект страницы при создании кампаний. Необязательно."
           />
 
           {/* ── Money-настройки: CPA + чувствительность + live-разбивка ── */}

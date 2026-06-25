@@ -229,6 +229,109 @@ describe("StepIdentity — валидация", () => {
     expect(values).toEqual(["GH_AVI", "GH_CR2"]);
   });
 
+  // Дерайв из оффера: 1 кабинет → act_id авто, pixel_id префилл, countries в store
+  it("выбор оффера с одним кабинетом деривит act_id/pixel_id/countries", async () => {
+    mockUseAdAccountTimezone.mockReturnValue(okTz);
+    mockUseOffers.mockReturnValue({
+      data: [
+        {
+          id: "1",
+          code: "GH_AVI",
+          name: "Aviator",
+          is_active: true,
+          ad_account_ids: ["111222333"],
+          pixel_id: "999888777",
+          countries: ["GH", "NG"],
+          default_page_id: null,
+        },
+      ],
+      isLoading: false,
+      isError: false,
+    });
+    renderIdentity();
+    // Вводим код оффера → срабатывает дерайв
+    fireEvent.change(screen.getByLabelText(/^Код оффера$/i), { target: { value: "GH_AVI" } });
+    await waitFor(() => {
+      // act_id подставлен (1 кабинет → авто)
+      expect((screen.getByLabelText(/ID рекламного кабинета/i) as HTMLInputElement).value).toBe(
+        "111222333",
+      );
+      // pixel_id префилл
+      expect((screen.getByLabelText(/ID пикселя/i) as HTMLInputElement).value).toBe("999888777");
+      // countries записаны в store (подтянет шаг «Параметры»)
+      expect(useWizardStore.getState().config.countries).toEqual(["GH", "NG"]);
+    });
+  });
+
+  // Дерайв из оффера: >1 кабинет → показывается Select выбора кабинета
+  it("выбор оффера с несколькими кабинетами показывает Select кабинета", async () => {
+    mockUseAdAccountTimezone.mockReturnValue(idleTz);
+    mockUseOffers.mockReturnValue({
+      data: [
+        {
+          id: "1",
+          code: "GH_AVI",
+          name: "Aviator",
+          is_active: true,
+          ad_account_ids: ["111", "222"],
+          pixel_id: "999",
+          countries: [],
+          default_page_id: null,
+        },
+      ],
+      isLoading: false,
+      isError: false,
+    });
+    renderIdentity();
+    fireEvent.change(screen.getByLabelText(/^Код оффера$/i), { target: { value: "GH_AVI" } });
+    // Появился Select выбора кабинета (label по новому контролу)
+    const cabSelect = (await screen.findByLabelText(
+      /Рекламный кабинет оффера/i,
+    )) as HTMLSelectElement;
+    const optVals = Array.from(cabSelect.querySelectorAll("option")).map((o) => o.value);
+    expect(optVals).toContain("111");
+    expect(optVals).toContain("222");
+    // act_id всё ещё не подставлен (выбор за пользователем)
+    expect((cabSelect).value).toBe("");
+    // Выбор кабинета пишет act_id
+    fireEvent.change(cabSelect, { target: { value: "222" } });
+    expect(cabSelect.value).toBe("222");
+  });
+
+  // Дерайв: default_page_id оффера преселектится в дропдауне страниц, если есть среди них
+  it("default_page_id оффера преселектится в дропдауне страниц", async () => {
+    mockUseAdAccountTimezone.mockReturnValue(okTz);
+    mockUseAdAccountPages.mockReturnValue({
+      data: { pages: [{ id: "555", name: "Aviator Page" }, { id: "777", name: "Other Page" }] },
+      isError: false,
+      isFetching: false,
+    });
+    mockUseOffers.mockReturnValue({
+      data: [
+        {
+          id: "1",
+          code: "GH_AVI",
+          name: "Aviator",
+          is_active: true,
+          ad_account_ids: ["111"],
+          pixel_id: "999",
+          countries: [],
+          default_page_id: "777",
+        },
+      ],
+      isLoading: false,
+      isError: false,
+    });
+    renderIdentity();
+    fireEvent.change(screen.getByLabelText(/^Код оффера$/i), { target: { value: "GH_AVI" } });
+    await waitFor(() => {
+      // Дропдаун страниц преселектил дефолтную страницу оффера
+      expect((screen.getByLabelText(/ID страницы Facebook/i) as HTMLSelectElement).value).toBe(
+        "777",
+      );
+    });
+  });
+
   // Свободный ввод в комбобокс uppercase'ится
   it("свободный ввод в offer_code uppercase'ится", async () => {
     mockUseAdAccountTimezone.mockReturnValue(okTz); // TZ подтверждена → гард пропускает

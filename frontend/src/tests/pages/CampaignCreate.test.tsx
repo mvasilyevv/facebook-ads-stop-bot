@@ -15,7 +15,7 @@ import { render, screen, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { ReactElement } from "react";
+import { useState, type ReactElement } from "react";
 
 // ─── Моки ─────────────────────────────────────────────────────────────────────
 
@@ -197,9 +197,26 @@ vi.mock("@/lib/api/campaigns", () => ({
 }));
 
 // Мок офферов (комбобокс кода оффера в шаге 2) — иначе useOffers дёрнет реальный
-// apiGet и промис повиснет/реджектнется в jsdom (флейки).
+// apiGet и промис повиснет/реджектнется в jsdom (флейки). Один оффер с новыми
+// полями (ad_account_ids/pixel_id/countries/default_page_id) для теста дерайва.
 vi.mock("@/lib/api/offers", () => ({
-  useOffers: () => ({ data: [], isLoading: false, isError: false }),
+  useOffers: () => ({
+    data: [
+      {
+        id: "offer-1",
+        code: "GH_AVI",
+        name: "Aviator GH",
+        vertical: "gambling",
+        is_active: true,
+        pixel_id: "px555",
+        ad_account_ids: ["111222"],
+        countries: ["br", "de"],
+        default_page_id: "111",
+      },
+    ],
+    isLoading: false,
+    isError: false,
+  }),
 }));
 
 // Мок toast
@@ -396,6 +413,44 @@ describe("WizardStep2Identity render", () => {
     await user.click(actInput);
     await user.tab();
     expect(screen.getByRole("option", { name: "Acme Page — 111" })).toBeInTheDocument();
+  });
+
+  // Дерайв: выбор кода оффера, совпавшего с каталогом, подставляет act_id (1 кабинет),
+  // pixel_id из оффера (identity) и countries (goal). Stateful-обёртка, чтобы
+  // контролируемый Input реально набирал полный код, иначе onChange-spy не держит value.
+  it("выбор оффера подставляет act_id/pixel/countries", async () => {
+    const user = userEvent.setup();
+    const onGoalChange = vi.fn();
+    let lastIdentity: Partial<WizardIdentity> = {};
+
+    function Harness() {
+      const [identity, setIdentity] = useState<WizardIdentity>({
+        ...DEFAULT_IDENTITY,
+        act_id: "",
+        pixel_id: "",
+        offer_code: "",
+      });
+      lastIdentity = identity;
+      return (
+        <WizardStep2Identity
+          values={identity}
+          onChange={(v) => setIdentity((prev) => ({ ...prev, ...v }))}
+          onGoalChange={onGoalChange}
+        />
+      );
+    }
+
+    render(wrap(<Harness />));
+    const offerInput = screen.getByPlaceholderText("GH_CR2");
+    await user.type(offerInput, "GH_AVI");
+
+    // act_id (1 кабинет → авто) + pixel_id из оффера осели в identity.
+    expect(lastIdentity.act_id).toBe("111222");
+    expect(lastIdentity.pixel_id).toBe("px555");
+    // countries (ISO-2 upper) ушли в goal.
+    expect(onGoalChange).toHaveBeenCalledWith(
+      expect.objectContaining({ countries: ["BR", "DE"] }),
+    );
   });
 });
 
