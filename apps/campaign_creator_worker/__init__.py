@@ -257,7 +257,7 @@ def resolve_concepts_from_config(cfg: CampaignConfig) -> dict[str, list[ConceptI
             path = creo_dir / safe_ref
             if not path.is_file():
                 raise ValueError(f"кампания {block.key!r}: концепт {ref!r} не найден в {creo_dir}")
-            is_video = path.suffix.lower() in _VIDEO_EXTS or block.kind == "video"
+            is_video = path.suffix.lower() in _VIDEO_EXTS
             concepts.append(
                 ConceptInput(
                     concept_id=f"{block.key}:{index}:{path.stem}",

@@ -15,8 +15,10 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from core.campaign_builder.config import (
+    VIDEO_EXTS,
     CampaignBlock,
     CampaignConfig,
     LaunchState,
@@ -217,6 +219,23 @@ def url_tags_of(cfg: CampaignConfig, code: str) -> str:
 # ---------------------- сборка спеки ----------------------
 
 
+def _resolve_block_kind(block: CampaignBlock) -> str:
+    """Резолвит тип блока (video|image) из расширений концептов.
+
+    Если хотя бы один концепт — видео, весь блок считается video.
+    Иначе — image.
+    """
+    if not block.concept_refs:
+        return "image"
+
+    for ref in block.concept_refs:
+        suffix = Path(ref).suffix.lower()
+        if suffix in VIDEO_EXTS:
+            return "video"
+
+    return "image"
+
+
 def _build_block(
     cfg: CampaignConfig,
     block: CampaignBlock,
@@ -270,7 +289,7 @@ def _build_block(
     return CampaignSpec_Block(
         key=block.key,
         name=camp_name,
-        kind=block.kind,
+        kind=_resolve_block_kind(block),
         body=campaign_body(cfg, camp_name),
         status="PAUSED",
         adsets=adsets,
