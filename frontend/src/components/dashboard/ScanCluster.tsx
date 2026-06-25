@@ -12,7 +12,7 @@
  * (через useScanCountdown + observer:runtime). onScan — реальный POST scan-now; onEnable — включение.
  */
 
-import { useRef } from "react";
+import { useEffect, useState } from "react";
 import { RefreshCw, Play, Power } from "lucide-react";
 import { formatRelativeTime } from "@fb/shared";
 import { PausedRing } from "@/components/data/CountdownRing";
@@ -72,9 +72,11 @@ export function ScanCluster({
 
   // Sticky-режим: во время скана бэк временно не пишет scan_mode (известен только по итогу
   // цикла) — держим последний известный, чтобы линия не моргала в «—».
-  const lastModeRef = useRef<string | null>(null);
-  if (scanMode) lastModeRef.current = scanMode;
-  const mode = scanMode ?? lastModeRef.current;
+  const [stickyMode, setStickyMode] = useState<string | null>(scanMode ?? null);
+  useEffect(() => {
+    if (scanMode) setStickyMode(scanMode);
+  }, [scanMode]);
+  const mode = scanMode ?? stickyMode;
 
   // ── Paused: observer выключен ───────────────────────────────────────────────
   if (!scanOn) {

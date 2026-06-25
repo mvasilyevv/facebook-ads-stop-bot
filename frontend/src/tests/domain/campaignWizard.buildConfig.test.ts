@@ -77,9 +77,7 @@ describe("buildConfig — concept_refs из назначения", () => {
 
     expect(config.campaigns).toHaveLength(2);
     // image-кампания получает только фото, video-кампания — только видео.
-    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
     expect(config.campaigns[0]!.concept_refs).toEqual(["img1.jpg"]);
-    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
     expect(config.campaigns[1]!.concept_refs).toEqual(["vid1.mp4"]);
   });
 
@@ -89,7 +87,6 @@ describe("buildConfig — concept_refs из назначения", () => {
     ];
     seedStore(concepts, [{ key: "static1", kind: "image" }]);
     const config = useWizardStore.getState().buildConfig();
-    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
     expect(config.campaigns[0]!.concept_refs).toEqual([]);
   });
 
@@ -136,7 +133,6 @@ describe("buildConfig — concept_refs из назначения", () => {
   it("нет концептов → concept_refs пустые массивы (не падает)", () => {
     seedStore([], [{ key: "static1", kind: "image" }]);
     const config = useWizardStore.getState().buildConfig();
-    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
     expect(config.campaigns[0]!.concept_refs).toEqual([]);
   });
 
