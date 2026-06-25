@@ -166,33 +166,27 @@ def ref_media_kind(ref: str) -> str | None:
 
 
 class CampaignBlock(BaseModel):
-    """Одна кампания: тип медиа + список adset'ов.
+    """Одна кампания: список adset'ов + смешанный набор концептов (фото/видео).
 
-    concept_refs — ЕДИНЫЙ источник концептов блока: имена файлов в media store
-    (`{creo_root}/{ref}`), назначенные фронтом на эту кампанию. Воркер материализует
-    ровно эти файлы (не glob по папке), validate считает их число (len) — превью и
-    залив сверяются на одном списке (money-safety: preview == залив).
+    Тип каждого ad определяется по расширению файла концепта (ref_media_kind),
+    не по кампании. concept_refs — единый источник концептов блока.
     """
 
     key: str
     name: str  # шаблон имени с плейсхолдерами
-    kind: str  # image | video
     adsets: list[AdsetConfig]
-    concept_refs: list[str] = Field(default_factory=list)  # имена файлов концептов блока
+    concept_refs: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _check(self) -> CampaignBlock:
-        if self.kind not in ("image", "video"):
-            raise ValueError("campaign.kind: image | video")
-        # Money-safety: концепт с расширением чужого типа (видео в image-кампании или
-        # наоборот) уронит уникализатор уже ПОСЛЕ создания объектов в Meta → орфаны.
-        # Отклоняем ДО POST. Неизвестное расширение (None) пропускаем — воркер проверит файл.
+        # Money-safety: уникализатор умеет только image (PIL) и video (ffmpeg).
+        # Файл с неизвестным расширением уронил бы материализацию уже ПОСЛЕ
+        # создания объектов в Meta → орфаны. Отклоняем ДО любого POST.
         for ref in self.concept_refs:
-            rk = ref_media_kind(ref)
-            if rk is not None and rk != self.kind:
+            if ref_media_kind(ref) is None:
                 raise ValueError(
-                    f"кампания {self.key!r} (kind={self.kind}): концепт {ref!r} имеет тип "
-                    f"{rk} — назначь его в {rk}-кампанию (несовпадение типа = орфаны в Meta)"
+                    f"кампания {self.key!r}: концепт {ref!r} имеет неизвестное "
+                    f"расширение — поддерживаются только фото и видео"
                 )
         return self
 
