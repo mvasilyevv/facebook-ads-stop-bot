@@ -58,6 +58,12 @@ def _valid_config() -> dict:
         "destination_link": "https://example.com",
         "start_date": "2026-07-01",
         "targeting": {"countries": ["DE"]},
+        "budget": {
+            "level": "campaign",
+            "daily_cents": 5000,
+            "bid_strategy": "COST_CAP",
+            "bid_amount_cents": 150,
+        },
         "campaigns": [
             {
                 "key": "static",
@@ -247,7 +253,11 @@ async def test_launch_idempotent(pg_engine, fake_redis_client, clean_campaigns):
 async def test_launch_rejects_budget_over_cap(pg_engine, fake_redis_client, clean_campaigns):
     app = _make_app(engine=pg_engine, redis=fake_redis_client)
     cfg = _valid_config()
-    cfg["budget"] = {"daily_cents": 100_000_00 + 1}
+    cfg["budget"] = {
+        "daily_cents": 100_000_00 + 1,
+        "bid_strategy": "COST_CAP",
+        "bid_amount_cents": 150,
+    }
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         resp = await ac.post("/api/tools/campaigns/launch", json={"config": cfg})
     assert resp.status_code == 422
@@ -267,6 +277,7 @@ async def test_launch_rejects_block_without_concepts(pg_engine, fake_redis_clien
         "offer_code": "GH_CR",
         "destination_link": "https://example.com",
         "daily_budget_cents": 20000,
+        "bid_amount_cents": 150,
         "countries": ["DE"],
         "campaigns": [{"key": "video", "kind": "video", "adset_count": 2, "concept_refs": []}],
     }

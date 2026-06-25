@@ -44,6 +44,12 @@ def _run_config() -> dict:
         "start_date": "2026-06-18",
         "creo_root": "/nonexistent-creo-root",
         "targeting": {"countries": ["GH"]},
+        "budget": {
+            "level": "campaign",
+            "daily_cents": 5000,
+            "bid_strategy": "COST_CAP",
+            "bid_amount_cents": 150,
+        },
         "campaigns": [
             {
                 "key": "static",
@@ -456,9 +462,7 @@ async def test_set_run_status_expect_guard(pg_engine, clean_campaigns):
     assert await set_run_status(pg_engine, run_id, "creating", expect="queued") is False
     async with pg_engine.connect() as conn:
         st = (
-            await conn.execute(
-                text("SELECT status FROM campaign_run WHERE id = :r"), {"r": run_id}
-            )
+            await conn.execute(text("SELECT status FROM campaign_run WHERE id = :r"), {"r": run_id})
         ).scalar()
     # Статус не изменён неудавшимся переходом.
     assert st == "uniquifying"
