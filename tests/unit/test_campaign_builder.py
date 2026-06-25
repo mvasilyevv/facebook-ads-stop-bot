@@ -44,7 +44,6 @@ def _image_block() -> CampaignBlock:
     return CampaignBlock(
         key="static",
         name="{byer} | {offer} | static | adset.pro | {date}",
-        kind="image",
         adsets=[
             AdsetConfig(name="{byer} | {offer} | static | s1 | {date}", dir="c1/a1", glob="*.jpg"),
             AdsetConfig(name="{byer} | {offer} | static | s2 | {date}", dir="c1/a2", glob="*.jpg"),
@@ -270,10 +269,10 @@ def test_spec_copies_default_per_block():
     one_adset = CampaignBlock(
         key="video",
         name="{byer} | {offer} | video | adset.pro | {date}",
-        kind="video",
         adsets=[
             AdsetConfig(name="{byer} | {offer} | video | s1 | {date}", dir="c2/a1", glob="*.mp4")
         ],
+        concept_refs=["v.mp4"],
     )
     cfg = _config(campaigns=[_image_block(), one_adset])  # 2 adset'а / 1 adset
     spec = build_campaign_spec(cfg, concept_counts={"static": 2, "video": 1})
@@ -369,25 +368,23 @@ def test_spec_url_tags():
     assert "sub5={{campaign.name}}" in ad.url_tags
 
 
-# kind=video помечает кампанию как видео (для ветки upload видео в воркере).
-def test_spec_video_kind_preserved():
-    video_block = CampaignBlock(
-        key="video",
-        name="{byer} | {offer} | video | adset.pro | {date}",
-        kind="video",
+# Смешанный блок (2 концепта разного типа × 2 adset) строится без поля kind.
+# Каждый adset получает 2 ad-слота, у CampaignSpec_Block атрибута kind нет.
+def test_spec_mixed_block():
+    block = CampaignBlock(
+        key="c1",
+        name="{byer} | {offer} | mixed | {date}",
         adsets=[
-            AdsetConfig(name="{byer} | {offer} | video | s1 | {date}", dir="c2/a1", glob="*.mp4")
+            AdsetConfig(name="{byer} | {offer} | as1 | {date}", dir=".", glob="*"),
+            AdsetConfig(name="{byer} | {offer} | as2 | {date}", dir=".", glob="*"),
         ],
+        concept_refs=["a.jpg", "b.mp4"],
     )
-    cfg = _config(campaigns=[video_block])
-    spec = build_campaign_spec(cfg)
-    assert spec.campaigns[0].kind == "video"
-
-
-# Неверный kind кампании отклоняется на уровне конфига.
-def test_campaign_block_kind_invalid():
-    with pytest.raises(ValueError):
-        CampaignBlock(key="x", name="n", kind="audio", adsets=[])
+    cfg = _config(campaigns=[block])
+    spec = build_campaign_spec(cfg, concept_counts={"c1": 2})
+    assert len(spec.campaigns[0].adsets) == 2
+    assert all(len(a.ads) == 2 for a in spec.campaigns[0].adsets)
+    assert not hasattr(spec.campaigns[0], "kind")
 
 
 # ---------------------- execute-скелет (порядок шагов) ----------------------
@@ -436,10 +433,10 @@ def test_execution_steps_per_campaign():
     second = CampaignBlock(
         key="video",
         name="{byer} | {offer} | video | adset.pro | {date}",
-        kind="video",
         adsets=[
             AdsetConfig(name="{byer} | {offer} | video | s1 | {date}", dir="c2/a1", glob="*.mp4")
         ],
+        concept_refs=["v.mp4"],
     )
     cfg = _config(campaigns=[_image_block(), second])
     spec = build_campaign_spec(cfg)
