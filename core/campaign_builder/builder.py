@@ -113,7 +113,10 @@ def adset_body(cfg: CampaignConfig, name: str, status: str) -> dict:
                 "location_types": cfg.targeting.location_types,
             },
             "age_min": cfg.targeting.age_min,
-            "age_max": cfg.targeting.age_max,
+            # Advantage+ Audience требует верхнюю границу 65: age_max<65 при advantage_audience
+            # → Invalid parameter (subcode 1870189). Advantage+ возраст расширяет сам, кап не
+            # честный — поэтому при включённом Advantage+ форсим 65 (как рабочие adsets кабинета).
+            "age_max": 65 if cfg.targeting.advantage_audience else cfg.targeting.age_max,
             "targeting_automation": {
                 "advantage_audience": 1 if cfg.targeting.advantage_audience else 0
             },

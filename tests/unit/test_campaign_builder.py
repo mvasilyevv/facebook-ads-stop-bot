@@ -367,6 +367,26 @@ def test_spec_adset_body_targeting():
     assert body["start_time"] == "2026-06-18T00:00:00-07:00"
 
 
+# Advantage+ Audience форсит age_max=65 (age_max<65 + advantage → Invalid parameter 1870189).
+def test_spec_adset_age_max_forced_65_under_advantage():
+    cfg = _config(
+        targeting=Targeting(countries=["GH"], age_min=21, age_max=55, advantage_audience=True)
+    )
+    body = build_campaign_spec(cfg).campaigns[0].adsets[0].body
+    assert body["targeting"]["age_max"] == 65
+    assert body["targeting"]["targeting_automation"]["advantage_audience"] == 1
+
+
+# Без Advantage+ кастомный age_max сохраняется.
+def test_spec_adset_age_max_preserved_without_advantage():
+    cfg = _config(
+        targeting=Targeting(countries=["GH"], age_min=21, age_max=55, advantage_audience=False)
+    )
+    body = build_campaign_spec(cfg).campaigns[0].adsets[0].body
+    assert body["targeting"]["age_max"] == 55
+    assert body["targeting"]["targeting_automation"]["advantage_audience"] == 0
+
+
 # url_tags ad-слота несёт sub2..sub7 по SOP.
 def test_spec_url_tags():
     cfg = _config()
