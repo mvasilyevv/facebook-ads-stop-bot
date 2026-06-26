@@ -24,6 +24,61 @@ async def peek_next_seq(conn: AsyncConnection, offer_code: str) -> int:
     return int(row.next_seq) if row else 0
 
 
+async def reconcile_offer_seq(
+    conn: AsyncConnection,
+    offer_code: str,
+    *,
+    exclude_run_id: str | uuid.UUID | None = None,
+) -> int | None:
+    """Приводит next_seq оффера к РЕАЛЬНОМУ максимуму выданных кодов из ledger.
+
+    Чинит инфляцию счётчика от прошлых НЕУДАЧНЫХ заливов: span резервируется на старте
+    (`allocate_code_span`), но при падении залива не возвращается — поэтому next_seq
+    уходит далеко вперёд числа реально созданных креативов (коды прыгают на CR059 при
+    паре реальных). Здесь опускаем next_seq к `MAX(номер кода)` из `campaign_creative`.
+
+    Безопасно ТОЛЬКО когда по офферу нет ДРУГИХ незавершённых run'ов
+    (queued/uniquifying/uploading/creating) — иначе затёрли бы их зарезервированный
+    диапазон и получили коллизию кодов. `exclude_run_id` — текущий запускаемый run (он
+    уже 'queued', но не конкурент сам себе). Счётчик только ОПУСКАЕТСЯ (вверх его двигает
+    `allocate_code_span`). Возвращает новое next_seq, либо None если пропущено
+    (есть конкурентный in-flight run).
+    """
+    inflight = (
+        await conn.execute(
+            text(
+                """
+                SELECT count(*) FROM campaign_run
+                WHERE config->>'offer_code' = :c
+                  AND status IN ('queued', 'uniquifying', 'uploading', 'creating')
+                  AND (:exclude IS NULL OR id <> CAST(:exclude AS UUID))
+                """
+            ),
+            {"c": offer_code, "exclude": str(exclude_run_id) if exclude_run_id else None},
+        )
+    ).scalar_one()
+    if inflight:
+        return None
+    # Номер креатива — хвост 'CR<NNN>' (offer-код тоже может содержать CR/цифры,
+    # поэтому якорим на конец строки): GH_CR2_CR053 → 53.
+    real_max = (
+        await conn.execute(
+            text(
+                """
+                SELECT COALESCE(MAX(substring(code from 'CR([0-9]+)$')::int), 0)
+                FROM campaign_creative WHERE offer_code = :c
+                """
+            ),
+            {"c": offer_code},
+        )
+    ).scalar_one()
+    await conn.execute(
+        text("UPDATE offer_creative_seq SET next_seq = :n WHERE offer_code = :c AND next_seq > :n"),
+        {"n": int(real_max), "c": offer_code},
+    )
+    return int(real_max)
+
+
 async def allocate_code_span(conn: AsyncConnection, offer_code: str, span: int) -> int:
     """Атомарно резервирует диапазон из span кодов, возвращает base (первый номер).
 

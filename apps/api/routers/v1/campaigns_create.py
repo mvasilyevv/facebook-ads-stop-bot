@@ -51,7 +51,11 @@ from apps.api.routers.v1.schemas.campaigns_create import (
 )
 from core.campaign_builder.builder import build_campaign_spec, total_code_span
 from core.campaign_builder.config import CampaignConfig, ref_media_kind
-from core.campaign_builder.creative_ledger import allocate_code_span, peek_next_seq
+from core.campaign_builder.creative_ledger import (
+    allocate_code_span,
+    peek_next_seq,
+    reconcile_offer_seq,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -526,6 +530,12 @@ async def launch_campaign(body: LaunchIn, engine: DepEngine) -> LaunchOut:
         # run'а (на конфликт-ветке аллокации нет → без gap'ов на повторах). code_start
         # фиксируется в config → воркер и retry берут одни и те же коды (preview==launch).
         span = total_code_span(config)
+        # Перед резервом приводим счётчик к реальности: прошлые НЕУДАЧНЫЕ заливы жгли span
+        # (allocate) без отката → next_seq инфлировал выше числа реально созданных
+        # креативов (коды прыгали на CR059). reconcile опускает его к max из ledger
+        # (безопасно — текущий run исключён, других in-flight по офферу нет). Самолечение
+        # на следующем же заливе, без ручного вмешательства.
+        await reconcile_offer_seq(conn, config.offer_code, exclude_run_id=run_id)
         base = await allocate_code_span(conn, config.offer_code, span)
         # Переписываем весь config через CAST(:cfg AS JSONB) (тот же паттерн, что INSERT
         # выше) — избегаем полиморфной to_jsonb($1), которую asyncpg не типизирует
