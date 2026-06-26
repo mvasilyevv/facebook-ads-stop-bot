@@ -89,8 +89,8 @@ def campaign_body(cfg: CampaignConfig, name: str) -> dict:
     if cfg.budget.level == "campaign":  # CBO: бюджет+стратегия на кампании
         body["daily_budget"] = cfg.budget.daily_cents
         body["bid_strategy"] = cfg.budget.bid_strategy
-        if cfg.budget.bid_amount_cents:
-            body["bid_amount"] = cfg.budget.bid_amount_cents
+        # bid_amount (cost/bid cap) — поле adset'а, НЕ кампании: Meta его на кампании
+        # игнорирует, и adset под COST_CAP-кампанией без bid_amount падает «Invalid parameter».
     return body
 
 
@@ -121,11 +121,15 @@ def adset_body(cfg: CampaignConfig, name: str, status: str) -> dict:
         "start_time": cfg.start_time,
         "status": status,
     }
-    if cfg.budget.level == "adset":  # ABO: бюджет+стратегия на адсете
+    if cfg.budget.level == "adset":  # ABO: бюджет+стратегия+cap на адсете
         body["daily_budget"] = cfg.budget.daily_cents
         body["bid_strategy"] = cfg.budget.bid_strategy
         if cfg.budget.bid_amount_cents:
             body["bid_amount"] = cfg.budget.bid_amount_cents
+    elif cfg.budget.bid_amount_cents:
+        # CBO: бюджет+стратегия на кампании, но cap (bid_amount) — поле adset'а.
+        # Без него COST_CAP/BID_CAP adset падает «Invalid parameter» (subcode 1815857).
+        body["bid_amount"] = cfg.budget.bid_amount_cents
     return body
 
 

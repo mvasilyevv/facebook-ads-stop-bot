@@ -318,22 +318,32 @@ def test_spec_status_all_paused():
 # ---------------------- маппинг тел объектов ----------------------
 
 
-# CBO: бюджет и стратегия живут на кампании, не на adset.
+# CBO: бюджет/стратегия — на кампании; cap (bid_amount) — на adset (поле adset'а в Meta).
 def test_spec_cbo_budget_on_campaign():
     cfg = _config(budget=Budget(level="campaign", daily_cents=300, bid_amount_cents=500))
     spec = build_campaign_spec(cfg)
     camp = spec.campaigns[0]
     assert camp.body["daily_budget"] == 300
-    assert "daily_budget" not in camp.adsets[0].body
+    assert camp.body["bid_strategy"] == "COST_CAP"
+    # bid_amount НЕ на кампании: Meta его там игнорит → adset без cap падает Invalid parameter.
+    assert "bid_amount" not in camp.body
+    adset = camp.adsets[0].body
+    assert "daily_budget" not in adset
+    # cap едет на adset (без него COST_CAP adset = Invalid parameter, subcode 1815857).
+    assert adset["bid_amount"] == 500
 
 
-# ABO: бюджет и стратегия на adset, не на кампании.
+# ABO: бюджет/стратегия/cap — всё на adset, не на кампании.
 def test_spec_abo_budget_on_adset():
     cfg = _config(budget=Budget(level="adset", daily_cents=300, bid_amount_cents=500))
     spec = build_campaign_spec(cfg)
     camp = spec.campaigns[0]
     assert "daily_budget" not in camp.body
-    assert camp.adsets[0].body["daily_budget"] == 300
+    assert "bid_amount" not in camp.body
+    adset = camp.adsets[0].body
+    assert adset["daily_budget"] == 300
+    assert adset["bid_strategy"] == "COST_CAP"
+    assert adset["bid_amount"] == 500
 
 
 # Тело кампании несёт objective и special_ad_categories.
