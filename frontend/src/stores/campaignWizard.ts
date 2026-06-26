@@ -251,12 +251,13 @@ export const useWizardStore = create<WizardState & WizardActions>((set, get) => 
   buildConfig: () => {
     const { identity, goal, structure, creatives, preview } = get();
 
-    // Для каждой кампании собираем concept_refs из загруженных концептов, привязанных к
-    // этой кампании по campaign_keys (пустой campaign_keys = все кампании).
+    // Для каждой кампании собираем concept_refs из концептов, ЯВНО привязанных к ней
+    // (campaign_keys содержит ключ кампании). Пустой campaign_keys = концепт не
+    // распределён (в пуле) — он не попадает ни в одну кампанию.
     // Фильтр по типу медиа убран — кампания принимает смешанные фото/видео концепты.
     const campaignsWithRefs: CampaignConfig["campaigns"] = structure.campaigns.map((block) => {
       const refs = creatives.concepts
-        .filter((c) => c.campaign_keys.length === 0 || c.campaign_keys.includes(block.key))
+        .filter((c) => c.campaign_keys.includes(block.key))
         .map((c) => c.ref);
       return { ...block, concept_refs: refs };
     });
