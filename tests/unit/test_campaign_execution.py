@@ -229,6 +229,9 @@ class _FakeUploader:
         self.images.append(video_bytes)
         return f"vid-{len(self.images)}"
 
+    async def wait_video_ready(self, video_id, **kw):
+        return True
+
 
 def _patch_uniquify(monkeypatch):
     """Заглушка image-уникализатора — не трогаем PIL."""

@@ -15,7 +15,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from pathlib import Path
 from typing import AsyncIterator
 
@@ -41,6 +43,10 @@ DEFAULT_VIDEO_CHUNK_SIZE = 3 * 1024 * 1024
 
 # Таймаут одного gRPC вызова на upload. 2 минуты — Meta может медленно обрабатывать.
 _UPLOAD_TIMEOUT_SECONDS = 180.0
+
+# Ожидание готовности видео (status=ready) перед созданием AdCreative.
+VIDEO_READY_TIMEOUT_SECONDS = 120.0
+VIDEO_READY_POLL_INTERVAL_SECONDS = 4.0
 
 # Лимит размера картинки для single-shot upload. Meta документирует 8MB, но
 # с учётом base64-кодирования и proto overhead закладываем запас.
@@ -332,6 +338,61 @@ class MediaUploader:
             )
 
         return response.video_id
+
+    async def wait_video_ready(
+        self,
+        video_id: str,
+        *,
+        timeout: float = VIDEO_READY_TIMEOUT_SECONDS,  # noqa: ASYNC109 — deadline-поллинг с graceful False, не cancel
+        interval: float = VIDEO_READY_POLL_INTERVAL_SECONDS,
+    ) -> bool:
+        """Дожидается status=ready видео ПЕРЕД созданием AdCreative.
+
+        Meta выдаёт video_id на фазе finish загрузки, но транскодинг идёт асинхронно.
+        Создание adcreative со свежим video_id, пока видео в processing, Meta часто
+        отклоняет (1487056/1487202 'video is still being processed') и авто-thumbnail
+        ещё недоступен → creative падает → PartialCreateError → orphan-залив на ручную
+        чистку. Поллит GET /{video_id}?fields=status.
+
+        Возвращает True если дождались ready; False если истёк timeout (best-effort —
+        НЕ валим залив, даём Meta шанс принять creative). Ошибки чтения статуса
+        проглатываются и поллинг продолжается (статус-GET не должен ронять залив).
+        Бросает PermanentError только при явном status=error (видео не обработалось).
+        """
+        deadline = time.monotonic() + timeout
+        last_status = ""
+        while True:
+            video_status = ""
+            try:
+                resp = await self._client.execute_graph_call(
+                    method="GET",
+                    endpoint=f"/{video_id}",
+                    query_params={"fields": "status"},
+                )
+                status_obj = (resp or {}).get("status") or {}
+                video_status = str(status_obj.get("video_status", "")).lower()
+                last_status = video_status or last_status
+            except Exception as exc:  # noqa: BLE001 — статус-GET best-effort, не валит залив
+                logger.warning(
+                    "video %s: ошибка чтения статуса (продолжаю поллинг): %r", video_id, exc
+                )
+
+            if video_status == "ready":
+                return True
+            if video_status == "error":
+                raise PermanentError(
+                    f"видео {video_id} не обработалось Meta (status=error)",
+                    endpoint=f"/{video_id}",
+                )
+            if time.monotonic() >= deadline:
+                logger.warning(
+                    "video %s не дошло до ready за %.0fs (последний статус=%s) — продолжаю залив",
+                    video_id,
+                    timeout,
+                    last_status or "unknown",
+                )
+                return False
+            await asyncio.sleep(interval)
 
     # ====================== внутреннее ======================
 

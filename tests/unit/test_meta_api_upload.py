@@ -352,3 +352,51 @@ def test_media_uploader_default_chunk_size() -> None:
     assert uploader._chunk_size == DEFAULT_VIDEO_CHUNK_SIZE == 3 * 1024 * 1024
     # Чанк + метаданные первого сообщения должны умещаться в дефолтный gRPC-лимит 4MB.
     assert DEFAULT_VIDEO_CHUNK_SIZE < 4 * 1024 * 1024
+
+
+# wait_video_ready: поллит GET /{video_id}?fields=status до status=ready.
+@pytest.mark.asyncio
+async def test_wait_video_ready_polls_until_ready() -> None:
+    client = MagicMock()
+    client.execute_graph_call = AsyncMock(
+        side_effect=[
+            {"status": {"video_status": "processing"}},
+            {"status": {"video_status": "ready"}},
+        ]
+    )
+    uploader = MediaUploader(client)
+    ok = await uploader.wait_video_ready("vid1", timeout=5, interval=0.001)
+    assert ok is True
+    assert client.execute_graph_call.await_count == 2
+
+
+# wait_video_ready: status=error → PermanentError (видео не обработалось).
+@pytest.mark.asyncio
+async def test_wait_video_ready_raises_on_error() -> None:
+    client = MagicMock()
+    client.execute_graph_call = AsyncMock(return_value={"status": {"video_status": "error"}})
+    uploader = MediaUploader(client)
+    with pytest.raises(PermanentError):
+        await uploader.wait_video_ready("vid1", timeout=5, interval=0.001)
+
+
+# wait_video_ready: таймаут (всё ещё processing) → False, залив НЕ роняется.
+@pytest.mark.asyncio
+async def test_wait_video_ready_timeout_returns_false() -> None:
+    client = MagicMock()
+    client.execute_graph_call = AsyncMock(return_value={"status": {"video_status": "processing"}})
+    uploader = MediaUploader(client)
+    ok = await uploader.wait_video_ready("vid1", timeout=0.01, interval=0.005)
+    assert ok is False
+
+
+# wait_video_ready: ошибка чтения статуса проглатывается, поллинг продолжается до ready.
+@pytest.mark.asyncio
+async def test_wait_video_ready_swallows_read_errors() -> None:
+    client = MagicMock()
+    client.execute_graph_call = AsyncMock(
+        side_effect=[RuntimeError("network blip"), {"status": {"video_status": "ready"}}]
+    )
+    uploader = MediaUploader(client)
+    ok = await uploader.wait_video_ready("vid1", timeout=5, interval=0.001)
+    assert ok is True

@@ -75,6 +75,8 @@ class _Uploader(Protocol):
         self, ad_account_id: str, video_bytes: bytes, *, filename: str = "upload.mp4"
     ) -> str: ...
 
+    async def wait_video_ready(self, video_id: str) -> bool: ...
+
 
 # ====================== ошибки ======================
 
@@ -314,6 +316,11 @@ async def _execute_block(
                 video_id = await uploader.upload_video_from_bytes(
                     act, ad.media_bytes or b"", filename=f"{ad.code}.mp4"
                 )
+                # Ждём транскодинг (status=ready) ДО создания creative: иначе Meta
+                # отклонит adcreative по «video is still being processed» и авто-кадр
+                # ещё недоступен → PartialCreateError → orphan-залив. Best-effort: по
+                # таймауту не валим залив, даём Meta шанс.
+                await uploader.wait_video_ready(video_id)
                 state.uploads_done += 1
                 await _emit(on_progress, state)
                 creative_body = video_creative_body(

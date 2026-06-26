@@ -95,6 +95,9 @@ class _FakeUploader:
     async def upload_video_from_bytes(self, ad_account_id, video_bytes, *, filename="upload.mp4"):
         return "vid-id"
 
+    async def wait_video_ready(self, video_id, **kw):
+        return True
+
 
 @pytest.fixture(autouse=True)
 def _patch_concepts(monkeypatch):
