@@ -506,7 +506,14 @@ async function listCampaignsHandler(call: any, callback: any) {
 // --- Запуск сервера ---
 
 function main() {
-  const server = new grpc.Server();
+  // Лимит сообщения 50 МБ (как у Python-клиента в core/meta_api/client.py): дефолт
+  // grpc-js — 4 МБ, из-за чего видео-чанк ровно 4 МБ + накладные protobuf
+  // (4194354 > 4194304) и картинки до 8 МБ (unary UploadImage) отвергались как
+  // RESOURCE_EXHAUSTED на шаге creating/uploading залива.
+  const server = new grpc.Server({
+    'grpc.max_receive_message_length': 50 * 1024 * 1024,
+    'grpc.max_send_message_length': 50 * 1024 * 1024,
+  });
 
   // Загружаем proto-описания сервисов.
   const browserSessionProto = loadProto('browser_session.proto') as any;

@@ -32,10 +32,12 @@ from core.meta_api.errors import (
 
 logger = logging.getLogger(__name__)
 
-# Дефолтный размер чанка для видео-upload. 4MB — компромисс между:
-# - меньше = больше round-trip'ов к Meta, выше latency
-# - больше = риск превысить max gRPC message (50MB) с учётом proto overhead
-DEFAULT_VIDEO_CHUNK_SIZE = 4 * 1024 * 1024
+# Дефолтный размер чанка для видео-upload. 3MB (не 4MB): первый чанк несёт ещё и
+# метаданные (session_id/filename/file_size), и ровно 4MB chunk_bytes + proto overhead
+# давали 4194354 > дефолтного gRPC-лимита 4194304 (RESOURCE_EXHAUSTED на /advideos).
+# 3MB оставляет запас под метаданные даже на сервере с дефолтным 4MB-лимитом (сервер
+# browser-agent поднят до 50MB, но чанк держим с запасом — defense-in-depth).
+DEFAULT_VIDEO_CHUNK_SIZE = 3 * 1024 * 1024
 
 # Таймаут одного gRPC вызова на upload. 2 минуты — Meta может медленно обрабатывать.
 _UPLOAD_TIMEOUT_SECONDS = 180.0

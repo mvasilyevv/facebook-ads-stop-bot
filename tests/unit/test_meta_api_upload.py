@@ -345,8 +345,10 @@ def test_media_uploader_rejects_invalid_chunk_size() -> None:
         MediaUploader(client, chunk_size=-1)
 
 
-# Дефолтный chunk_size = 4MB.
+# Дефолтный chunk_size = 3MB (запас под proto-метаданные под gRPC-лимит).
 def test_media_uploader_default_chunk_size() -> None:
     client = MagicMock()
     uploader = MediaUploader(client)
-    assert uploader._chunk_size == DEFAULT_VIDEO_CHUNK_SIZE == 4 * 1024 * 1024
+    assert uploader._chunk_size == DEFAULT_VIDEO_CHUNK_SIZE == 3 * 1024 * 1024
+    # Чанк + метаданные первого сообщения должны умещаться в дефолтный gRPC-лимит 4MB.
+    assert DEFAULT_VIDEO_CHUNK_SIZE < 4 * 1024 * 1024
