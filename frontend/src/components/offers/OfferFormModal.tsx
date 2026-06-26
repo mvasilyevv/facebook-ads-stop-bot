@@ -36,6 +36,8 @@ export interface OfferFormValues {
   ad_account_ids: string[];
   /** Гео оффера (ISO-2 upper). Дефолт [] — не задано. */
   countries: string[];
+  /** Дефолтный целевой CPA оффера (центы; null — не задан). Префилл визарда. */
+  default_cpa_cents: number | null;
   /** Money-настройки: CPA + чувствительность стоп/warning. */
   rules: OfferRulesValues;
 }
@@ -78,6 +80,7 @@ export function OfferFormModal({
         ad_account_ids?: string[];
         pixel_id?: string | null;
         countries?: string[];
+        default_cpa_cents?: number | null;
       })
     | null
     | undefined;
@@ -93,6 +96,8 @@ export function OfferFormModal({
   const [pixelId, setPixelId] = useState("");
   // Гео оффера (ISO-2 upper) тэгами.
   const [countries, setCountries] = useState<string[]>([]);
+  // Дефолтный целевой CPA в долларах (строка — свободный ввод, в центы при сабмите).
+  const [cpaDollars, setCpaDollars] = useState("");
   const [codeError, setCodeError] = useState<string | undefined>();
   const [accountsError, setAccountsError] = useState<string | undefined>();
   const [busy, setBusy] = useState(false);
@@ -106,6 +111,9 @@ export function OfferFormModal({
       setAccounts(offerAccounts);
       setPixelId(offerExt?.pixel_id ?? "");
       setCountries(offerCountries);
+      setCpaDollars(
+        offerExt?.default_cpa_cents != null ? String(offerExt.default_cpa_cents / 100) : "",
+      );
       setCodeError(undefined);
       setAccountsError(undefined);
     }
@@ -140,6 +148,14 @@ export function OfferFormModal({
       return;
     }
 
+    // CPA: пусто → null (не задан); число → центы; мусор → null.
+    const cpaTrim = cpaDollars.trim();
+    const cpaParsed = cpaTrim === "" ? NaN : parseFloat(cpaTrim);
+    const defaultCpaCents =
+      cpaTrim !== "" && Number.isFinite(cpaParsed) && cpaParsed >= 0
+        ? Math.round(cpaParsed * 100)
+        : null;
+
     setBusy(true);
     try {
       await onSave({
@@ -148,6 +164,7 @@ export function OfferFormModal({
         pixel_id: pixelId.trim(),
         ad_account_ids: accounts,
         countries,
+        default_cpa_cents: defaultCpaCents,
         rules,
       });
       handleClose(false);
@@ -240,6 +257,21 @@ export function OfferFormModal({
             validate={validateCountry}
             disabled={busy}
             helpText="ISO-2 коды (DE, BR, IN). Enter/запятая — добавить, × — удалить. Подставляются в гео при создании кампаний. Необязательно."
+          />
+
+          {/* Дефолтный целевой CPA — префилл «Целевой CPA, $» при создании кампаний */}
+          <Input
+            id="offer-default-cpa"
+            label="Целевой CPA по умолчанию, $"
+            placeholder="3.50"
+            value={cpaDollars}
+            onChange={(e) => setCpaDollars(e.target.value)}
+            disabled={busy}
+            type="text"
+            inputMode="decimal"
+            autoComplete="off"
+            spellCheck={false}
+            helpText="Подставляется в «Целевой CPA» на шаге «Параметры» при создании кампаний. Необязательно."
           />
 
           {/* ── Money-настройки: CPA + чувствительность + live-разбивка ── */}

@@ -30,6 +30,8 @@ export type Offer = OfferBase & {
   ad_account_ids?: string[];
   pixel_id?: string | null;
   countries?: string[];
+  /** Дефолтный целевой CPA оффера (центы). Визард префиллит «Целевой CPA, $». */
+  default_cpa_cents?: number | null;
 };
 
 // ─── Список офферов ───────────────────────────────────────────────────────────
@@ -69,6 +71,8 @@ export interface OfferCreateIn {
   ad_account_ids: string[];
   /** Гео оффера (ISO-2 upper). Дефолт [] — не задано. */
   countries?: string[];
+  /** Дефолтный целевой CPA оффера (центы; null/пусто — не задан). */
+  default_cpa_cents?: number | null;
 }
 
 export function useCreateOffer() {

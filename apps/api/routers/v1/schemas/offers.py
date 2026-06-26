@@ -84,6 +84,8 @@ class OfferOut(BaseModel):
     ad_account_ids: list[str] = Field(default_factory=list)
     # Гео оффера (ISO-2 upper, мультигео). Визард префиллит goal.countries.
     countries: list[str] = Field(default_factory=list)
+    # Дефолтный целевой CPA оффера (центы). Визард префиллит поле «Целевой CPA, $».
+    default_cpa_cents: int | None = None
     created_at: str | None = None  # ISO-строка из ORM datetime
     updated_at: str | None = None
     use_vision_creator: None = None
@@ -101,6 +103,7 @@ class OfferOut(BaseModel):
             is_active=offer.is_active,  # type: ignore[attr-defined]
             ad_account_ids=list(getattr(offer, "ad_account_ids", None) or []),
             countries=list(getattr(offer, "countries", None) or []),
+            default_cpa_cents=getattr(offer, "default_cpa_cents", None),
             created_at=offer.created_at.isoformat() if offer.created_at else None,  # type: ignore[attr-defined]
             updated_at=offer.updated_at.isoformat() if offer.updated_at else None,  # type: ignore[attr-defined]
         )
@@ -120,6 +123,8 @@ class OfferCreateIn(BaseModel):
     ad_account_ids: list[str] = Field(..., min_length=1)
     # Гео оффера (ISO-2 upper), дефолт пусто. Визард префиллит гео из этого списка.
     countries: list[str] = Field(default_factory=list)
+    # Дефолтный целевой CPA оффера (центы, >=0). Пусто — не задан.
+    default_cpa_cents: int | None = Field(None, ge=0)
     # country_code и notes принимаем но игнорируем (нет в ORM)
     country_code: str | None = None
     use_vision_creator: bool | None = None
@@ -170,6 +175,9 @@ class OfferUpdateIn(BaseModel):
     ad_account_ids: list[str] | None = None
     # Гео: None — не трогать; список (в т.ч. пустой) — заменить (ISO-2 upper, дедуп).
     countries: list[str] | None = None
+    # Целевой CPA (центы, >=0). Обновляется, если поле ПЕРЕДАНО (model_fields_set),
+    # в т.ч. null = очистить; отсутствует — не трогать.
+    default_cpa_cents: int | None = Field(None, ge=0)
     country_code: str | None = None
     use_vision_creator: bool | None = None
     notes: str | None = None

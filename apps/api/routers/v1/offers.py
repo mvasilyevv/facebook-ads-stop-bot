@@ -83,6 +83,7 @@ async def list_offers(
             is_active=row["is_active"],
             ad_account_ids=list(row["ad_account_ids"] or []),
             countries=list(row["countries"] or []),
+            default_cpa_cents=row["default_cpa_cents"],
             created_at=row["created_at"].isoformat() if row["created_at"] else None,
             updated_at=row["updated_at"].isoformat() if row["updated_at"] else None,
         )
@@ -252,6 +253,8 @@ async def create_offer(
                 ad_account_ids=body.ad_account_ids,
                 # Гео оффера (ISO-2 upper) — для дерайва визарда.
                 countries=body.countries,
+                # Дефолтный целевой CPA (центы) — для дерайва визарда.
+                default_cpa_cents=body.default_cpa_cents,
             )
             .returning(
                 Offer.__table__.c.id,
@@ -262,6 +265,7 @@ async def create_offer(
                 Offer.__table__.c.is_active,
                 Offer.__table__.c.ad_account_ids,
                 Offer.__table__.c.countries,
+                Offer.__table__.c.default_cpa_cents,
                 Offer.__table__.c.created_at,
                 Offer.__table__.c.updated_at,
             )
@@ -287,6 +291,7 @@ async def create_offer(
         is_active=row["is_active"],
         ad_account_ids=list(row["ad_account_ids"] or []),
         countries=list(row["countries"] or []),
+        default_cpa_cents=row["default_cpa_cents"],
         created_at=row["created_at"].isoformat() if row["created_at"] else None,
         updated_at=row["updated_at"].isoformat() if row["updated_at"] else None,
     )
@@ -321,6 +326,9 @@ async def update_offer(
     # Гео: None — не трогаем; список (в т.ч. пустой) — замена (нормализация в OfferUpdateIn).
     if body.countries is not None:
         updates["countries"] = body.countries
+    # CPA: обновляем, если поле ПЕРЕДАНО (в т.ч. null = очистить); отсутствует — не трогаем.
+    if "default_cpa_cents" in body.model_fields_set:
+        updates["default_cpa_cents"] = body.default_cpa_cents
     # body.code намеренно не добавляем в updates
 
     async with engine.begin() as conn:
@@ -346,6 +354,7 @@ async def update_offer(
                     Offer.__table__.c.is_active,
                     Offer.__table__.c.ad_account_ids,
                     Offer.__table__.c.countries,
+                    Offer.__table__.c.default_cpa_cents,
                     Offer.__table__.c.created_at,
                     Offer.__table__.c.updated_at,
                 )
@@ -364,6 +373,7 @@ async def update_offer(
         is_active=row["is_active"],
         ad_account_ids=list(row["ad_account_ids"] or []),
         countries=list(row["countries"] or []),
+        default_cpa_cents=row["default_cpa_cents"],
         created_at=row["created_at"].isoformat() if row["created_at"] else None,
         updated_at=row["updated_at"].isoformat() if row["updated_at"] else None,
     )
