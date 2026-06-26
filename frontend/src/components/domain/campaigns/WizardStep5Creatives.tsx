@@ -2,13 +2,17 @@
  * Шаг 5 — Концепты креативов.
  *
  * Drag&drop загрузка файлов → POST /tools/campaigns/upload → upload_id.
- * Список загруженных концептов с привязкой к кампаниям (типонезависимой).
- * Сводка по кампаниям: adset'ы × привязанные концепты = объявления (копий на концепт
- * НЕ задаётся вручную — бэк делает по числу adset'ов КАЖДОЙ кампании).
+ * Привязка концептов к кампаниям — формат «колонки-кампании»: каждая кампания это
+ * колонка со своим набором концептов. Концепт добавляешь в колонку из пула («+ добавить»),
+ * убираешь крестиком (если кампания была последней — концепт удаляется из загрузки).
+ * Один концепт может быть в нескольких кампаниях одновременно.
+ *
+ * Модель: concept.campaign_keys — пустой массив = «во всех кампаниях», иначе явный
+ * список ключей. Контракт buildConfig (пустой = все) сохранён.
  */
 
 import { type FC, useRef, useState, useCallback } from "react";
-import { Upload, X, Film, Image, AlertCircle } from "lucide-react";
+import { Upload, X, Film, Image, AlertCircle, Plus } from "lucide-react";
 import { cn } from "@/lib/utils/cn";
 import { Spinner } from "@/components/ui/Spinner";
 import { uploadConcepts } from "@/lib/api/campaigns";
@@ -43,36 +47,17 @@ function adWord(n: number): string {
   return "объявлений";
 }
 
-/** Считает кол-во фото/видео-концептов, привязанных к кампании с ключом `key`. */
-function countMediaForCampaign(
-  concepts: UploadedConcept[],
-  key: string,
-): { img: number; vid: number } {
-  let img = 0;
-  let vid = 0;
-  for (const c of concepts) {
-    const attached = c.campaign_keys.length === 0 || c.campaign_keys.includes(key);
-    if (!attached) continue;
-    if (isVideo(c.content_type)) {
-      vid++;
-    } else {
-      img++;
-    }
-  }
-  return { img, vid };
-}
-
-// Палитра цветов кампаний (циклическая) — единый цвет кампании в сводке и на чипах.
+// Палитра цветов кампаний (циклическая) — единый цвет кампании в колонке и хедере.
 const CAMPAIGN_CHIP_COLORS = [
-  { dot: "bg-blue-400", chip: "bg-blue-500/15 border-blue-500/40 text-blue-300" },
-  { dot: "bg-purple-400", chip: "bg-purple-500/15 border-purple-500/40 text-purple-300" },
-  { dot: "bg-emerald-400", chip: "bg-emerald-500/15 border-emerald-500/40 text-emerald-300" },
-  { dot: "bg-amber-400", chip: "bg-amber-500/15 border-amber-500/40 text-amber-300" },
-  { dot: "bg-pink-400", chip: "bg-pink-500/15 border-pink-500/40 text-pink-300" },
-  { dot: "bg-cyan-400", chip: "bg-cyan-500/15 border-cyan-500/40 text-cyan-300" },
+  { dot: "bg-blue-400", ring: "border-blue-500/40", soft: "bg-blue-500/5" },
+  { dot: "bg-purple-400", ring: "border-purple-500/40", soft: "bg-purple-500/5" },
+  { dot: "bg-emerald-400", ring: "border-emerald-500/40", soft: "bg-emerald-500/5" },
+  { dot: "bg-amber-400", ring: "border-amber-500/40", soft: "bg-amber-500/5" },
+  { dot: "bg-pink-400", ring: "border-pink-500/40", soft: "bg-pink-500/5" },
+  { dot: "bg-cyan-400", ring: "border-cyan-500/40", soft: "bg-cyan-500/5" },
 ];
 
-function campaignChipColor(index: number): { dot: string; chip: string } {
+function campaignChipColor(index: number): { dot: string; ring: string; soft: string } {
   return CAMPAIGN_CHIP_COLORS[index % CAMPAIGN_CHIP_COLORS.length]!;
 }
 
@@ -89,13 +74,24 @@ export const WizardStep5Creatives: FC<WizardStep5CreativesProps> = ({
   const [isDragOver, setIsDragOver] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Медиа-состав по кампаниям + цвет/индекс кампании (для сводки и чипов).
-  const campaignMediaCounts: Record<string, { img: number; vid: number }> = {};
-  const campaignIndexByKey: Record<string, number> = {};
-  campaigns.forEach((campaign, i) => {
-    campaignMediaCounts[campaign.key] = countMediaForCampaign(values.concepts, campaign.key);
-    campaignIndexByKey[campaign.key] = i;
-  });
+  const allKeys = campaigns.map((c) => c.key);
+
+  // Резолв «во всех» → конкретные ключи (только существующие кампании).
+  const attachedKeys = useCallback(
+    (c: UploadedConcept): string[] =>
+      c.campaign_keys.length === 0 ? allKeys : c.campaign_keys.filter((k) => allKeys.includes(k)),
+    [allKeys],
+  );
+
+  const isAttached = (c: UploadedConcept, key: string): boolean =>
+    c.campaign_keys.length === 0 || c.campaign_keys.includes(key);
+
+  // Нормализация: набор == все кампании → пустой массив (семантика «во всех»).
+  const normalizeKeys = useCallback(
+    (keys: string[]): string[] =>
+      keys.length === allKeys.length && allKeys.every((k) => keys.includes(k)) ? [] : keys,
+    [allKeys],
+  );
 
   const handleFiles = useCallback(
     async (files: FileList | File[]) => {
@@ -106,7 +102,7 @@ export const WizardStep5Creatives: FC<WizardStep5CreativesProps> = ({
       setUploadError(null);
       try {
         const result = await uploadConcepts(arr);
-        // Новые концепты — привязаны ко всем кампаниям по умолчанию
+        // Новые концепты по умолчанию привязаны ко всем кампаниям (campaign_keys=[]).
         const newConcepts: UploadedConcept[] = result.concepts.map((c) => ({
           ...c,
           campaign_keys: [],
@@ -143,21 +139,42 @@ export const WizardStep5Creatives: FC<WizardStep5CreativesProps> = ({
     [handleFiles],
   );
 
+  // Удалить концепт из загрузки целиком.
   const removeConcept = (ref: string) => {
     onChange({ concepts: values.concepts.filter((c) => c.ref !== ref) });
   };
 
-  const toggleCampaignKey = (conceptRef: string, key: string) => {
+  // Убрать концепт из конкретной кампании. Если кампания была последней — удаляем файл.
+  const detachFromCampaign = (ref: string, key: string) => {
+    const concept = values.concepts.find((c) => c.ref === ref);
+    if (!concept) return;
+    const next = attachedKeys(concept).filter((k) => k !== key);
+    if (next.length === 0) {
+      removeConcept(ref);
+      return;
+    }
     onChange({
-      concepts: values.concepts.map((c) => {
-        if (c.ref !== conceptRef) return c;
-        const keys = c.campaign_keys.includes(key)
-          ? c.campaign_keys.filter((k) => k !== key)
-          : [...c.campaign_keys, key];
-        return { ...c, campaign_keys: keys };
-      }),
+      concepts: values.concepts.map((c) =>
+        c.ref === ref ? { ...c, campaign_keys: normalizeKeys(next) } : c,
+      ),
     });
   };
+
+  // Добавить концепт в кампанию (из пула не-привязанных).
+  const attachToCampaign = (ref: string, key: string) => {
+    const concept = values.concepts.find((c) => c.ref === ref);
+    if (!concept) return;
+    const next = Array.from(new Set([...attachedKeys(concept), key]));
+    onChange({
+      concepts: values.concepts.map((c) =>
+        c.ref === ref ? { ...c, campaign_keys: normalizeKeys(next) } : c,
+      ),
+    });
+  };
+
+  // Сводка пула (всего загружено).
+  const poolImg = values.concepts.filter((c) => !isVideo(c.content_type)).length;
+  const poolVid = values.concepts.filter((c) => isVideo(c.content_type)).length;
 
   return (
     <div className="space-y-6">
@@ -170,9 +187,8 @@ export const WizardStep5Creatives: FC<WizardStep5CreativesProps> = ({
           Загрузка креативов
         </h2>
         <p className="text-[13px] text-bg-9 mt-1">
-          Перетащите или выберите концепты — фото и видео можно загружать вместе, привязка к
-          кампании типонезависима. Каждый adset кампании получит уникализированную копию каждого
-          привязанного концепта — итог по кампаниям ниже.
+          Загрузите концепты (фото и видео можно вместе), затем распределите их по кампаниям ниже.
+          Каждый adset кампании получит уникализированную копию каждого её концепта.
         </p>
       </div>
 
@@ -237,57 +253,48 @@ export const WizardStep5Creatives: FC<WizardStep5CreativesProps> = ({
         </div>
       )}
 
-      {/* Сводка по кампаниям: adset'ы × привязанные концепты = объявления */}
-      {values.concepts.length > 0 && campaigns.length > 0 && (
-        <div>
-          <div className="font-display text-[10px] tracking-[0.14em] uppercase text-bg-7 mb-2">
-            ПО КАМПАНИЯМ
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {campaigns.map((c, i) => {
-              const counts = campaignMediaCounts[c.key] ?? { img: 0, vid: 0 };
-              const k = counts.img + counts.vid;
-              const ads = c.adset_count * k;
-              const color = campaignChipColor(i);
-              return (
-                <div
-                  key={c.key}
-                  className="flex-1 min-w-[200px] border border-[var(--hairline)] rounded-[var(--radius-2)] bg-bg-1 px-3 py-2.5"
-                >
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className={cn("size-2 rounded-full shrink-0", color.dot)} aria-hidden="true" />
-                    <span className="font-display text-[12px] text-bg-11">{c.key}</span>
-                    <span className="text-[11px] text-bg-7">· {c.adset_count} adset</span>
-                  </div>
-                  <div className="text-[11px] text-bg-9">
-                    {counts.img} фото + {counts.vid} видео →{" "}
-                    <b className="text-bg-11">
-                      {ads} {adWord(ads)}
-                    </b>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+      {/* Пул загруженного (сводка) */}
+      {values.concepts.length > 0 && (
+        <div className="flex items-center gap-2 text-[12px] text-bg-9">
+          <span className="font-display text-[10px] tracking-[0.14em] uppercase text-bg-7">
+            Загружено
+          </span>
+          <span className="text-bg-11 font-medium">{values.concepts.length}</span>
+          <span className="text-bg-7">·</span>
+          <span>{poolImg} фото</span>
+          <span className="text-bg-7">·</span>
+          <span>{poolVid} видео</span>
         </div>
       )}
 
-      {/* Список загруженных концептов */}
-      {values.concepts.length > 0 && (
-        <div className="space-y-2">
-          <div className="font-display text-[10px] tracking-[0.14em] uppercase text-bg-7">
-            КОНЦЕПТЫ ({values.concepts.length})
-          </div>
-          {values.concepts.map((concept) => (
-            <ConceptRow
-              key={concept.ref}
-              concept={concept}
-              campaigns={campaigns}
-              campaignMediaCounts={campaignMediaCounts}
-              campaignIndexByKey={campaignIndexByKey}
-              onRemove={() => removeConcept(concept.ref)}
-              onToggleCampaign={(key) => toggleCampaignKey(concept.ref, key)}
+      {/* Привязка по кампаниям — колонки */}
+      {values.concepts.length > 0 && campaigns.length > 0 && (
+        <div
+          className="grid gap-3 items-start"
+          style={{ gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 280px), 1fr))" }}
+        >
+          {campaigns.map((campaign, i) => (
+            <CampaignColumn
+              key={campaign.key}
+              campaign={campaign}
+              color={campaignChipColor(i)}
+              attached={values.concepts.filter((c) => isAttached(c, campaign.key))}
+              pool={values.concepts.filter((c) => !isAttached(c, campaign.key))}
+              onDetach={(ref) => detachFromCampaign(ref, campaign.key)}
+              onAttach={(ref) => attachToCampaign(ref, campaign.key)}
             />
+          ))}
+        </div>
+      )}
+
+      {/* Нет кампаний — простой пул (распределить можно после шага 4) */}
+      {values.concepts.length > 0 && campaigns.length === 0 && (
+        <div className="space-y-2">
+          <div className="text-[12px] text-bg-8">
+            Добавьте кампании на шаге 4, чтобы распределить концепты.
+          </div>
+          {values.concepts.map((c) => (
+            <PoolRow key={c.ref} concept={c} onRemove={() => removeConcept(c.ref)} />
           ))}
         </div>
       )}
@@ -308,32 +315,180 @@ export const WizardStep5Creatives: FC<WizardStep5CreativesProps> = ({
   );
 };
 
-// ─── ConceptRow ───────────────────────────────────────────────────────────────
+// ─── CampaignColumn — колонка одной кампании ──────────────────────────────────
 
-interface ConceptRowProps {
-  concept: UploadedConcept;
-  campaigns: CampaignStructure[];
-  /** Медиа-состав по ключу кампании: сколько фото/видео привязано к каждой кампании. */
-  campaignMediaCounts: Record<string, { img: number; vid: number }>;
-  /** Индекс кампании по ключу — для согласованного цвета чипа со сводкой. */
-  campaignIndexByKey: Record<string, number>;
-  onRemove: () => void;
-  onToggleCampaign: (key: string) => void;
+interface CampaignColumnProps {
+  campaign: CampaignStructure;
+  color: { dot: string; ring: string; soft: string };
+  /** Концепты, привязанные к этой кампании. */
+  attached: UploadedConcept[];
+  /** Концепты из пула, ещё НЕ привязанные к этой кампании. */
+  pool: UploadedConcept[];
+  onDetach: (ref: string) => void;
+  onAttach: (ref: string) => void;
 }
 
-const ConceptRow: FC<ConceptRowProps> = ({
-  concept,
-  campaigns,
-  campaignMediaCounts,
-  campaignIndexByKey,
-  onRemove,
-  onToggleCampaign,
+const CampaignColumn: FC<CampaignColumnProps> = ({
+  campaign,
+  color,
+  attached,
+  pool,
+  onDetach,
+  onAttach,
 }) => {
-  const video = isVideo(concept.content_type);
+  const [picking, setPicking] = useState(false);
+
+  const img = attached.filter((c) => !isVideo(c.content_type)).length;
+  const vid = attached.filter((c) => isVideo(c.content_type)).length;
+  const ads = campaign.adset_count * attached.length;
 
   return (
+    <div className={cn("rounded-[var(--radius-3)] border bg-bg-1 flex flex-col", color.ring)}>
+      {/* Хедер */}
+      <div className={cn("px-3 py-2.5 border-b border-[var(--hairline)] rounded-t-[var(--radius-3)]", color.soft)}>
+        <div className="flex items-center gap-2">
+          <span className={cn("size-2.5 rounded-full shrink-0", color.dot)} aria-hidden="true" />
+          <span className="font-display text-[13px] text-bg-11 truncate">{campaign.key}</span>
+          <span className="text-[11px] text-bg-7 shrink-0">· {campaign.adset_count} adset</span>
+        </div>
+      </div>
+
+      {/* Карточки концептов */}
+      <div className="p-2 space-y-1.5">
+        {attached.length === 0 ? (
+          <div className="flex items-center gap-2 text-[11px] text-amber-400/90 px-1 py-2">
+            <AlertCircle size={12} className="shrink-0" />
+            Нет концептов — кампания не зальётся
+          </div>
+        ) : (
+          attached.map((c) => (
+            <ConceptCard
+              key={c.ref}
+              concept={c}
+              onRemove={() => onDetach(c.ref)}
+              removeLabel={`Убрать ${c.original_name} из ${campaign.key}`}
+            />
+          ))
+        )}
+
+        {/* + добавить из пула */}
+        {pool.length > 0 && (
+          <div>
+            <button
+              type="button"
+              onClick={() => setPicking((v) => !v)}
+              aria-expanded={picking}
+              className={cn(
+                "w-full flex items-center justify-center gap-1.5 rounded-[var(--radius-2)] border border-dashed py-1.5 text-[12px] transition-colors",
+                picking
+                  ? "border-accent text-accent bg-accent-bg/40"
+                  : "border-[var(--hairline-strong)] text-bg-8 hover:text-bg-11 hover:border-accent",
+              )}
+            >
+              <Plus size={13} />
+              добавить
+            </button>
+
+            {picking && (
+              <div className="mt-1.5 space-y-1 rounded-[var(--radius-2)] border border-[var(--hairline)] bg-bg-2 p-1.5">
+                <div className="text-[10px] uppercase tracking-wider text-bg-7 px-1 pb-0.5">
+                  Из пула ({pool.length})
+                </div>
+                {pool.map((c) => {
+                  const video = isVideo(c.content_type);
+                  return (
+                    <button
+                      key={c.ref}
+                      type="button"
+                      onClick={() => onAttach(c.ref)}
+                      className="w-full flex items-center gap-2 rounded-[var(--radius-1)] px-1.5 py-1 text-left hover:bg-bg-3 transition-colors"
+                      title={`Добавить ${c.original_name}`}
+                    >
+                      <span
+                        className={cn(
+                          "size-5 shrink-0 rounded-[var(--radius-1)] flex items-center justify-center",
+                          video ? "bg-purple-500/10 text-purple-400" : "bg-blue-500/10 text-blue-400",
+                        )}
+                        aria-hidden="true"
+                      >
+                        {video ? <Film size={11} /> : <Image size={11} />}
+                      </span>
+                      <span className="text-[11px] text-bg-10 truncate flex-1">
+                        {c.original_name}
+                      </span>
+                      <Plus size={12} className="text-bg-7 shrink-0" />
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Футер — итог по кампании */}
+      <div className="px-3 py-2 border-t border-[var(--hairline)] mt-auto">
+        {attached.length > 0 ? (
+          <div className="text-[11px] text-bg-9">
+            {img} фото + {vid} видео →{" "}
+            <b className="text-bg-11">
+              {ads} {adWord(ads)}
+            </b>
+          </div>
+        ) : (
+          <div className="text-[11px] text-bg-7">0 объявлений</div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// ─── ConceptCard — карточка концепта внутри колонки ───────────────────────────
+
+interface ConceptCardProps {
+  concept: UploadedConcept;
+  onRemove: () => void;
+  removeLabel: string;
+}
+
+const ConceptCard: FC<ConceptCardProps> = ({ concept, onRemove, removeLabel }) => {
+  const video = isVideo(concept.content_type);
+  return (
+    <div className="group flex items-center gap-2 rounded-[var(--radius-2)] border border-[var(--hairline)] bg-bg-2 px-2 py-1.5">
+      <span
+        className={cn(
+          "size-6 shrink-0 rounded-[var(--radius-1)] flex items-center justify-center",
+          video ? "bg-purple-500/10 text-purple-400" : "bg-blue-500/10 text-blue-400",
+        )}
+        aria-hidden="true"
+      >
+        {video ? <Film size={12} /> : <Image size={12} />}
+      </span>
+      <div className="flex-1 min-w-0">
+        <div className="text-[12px] text-bg-11 truncate" title={concept.original_name}>
+          {concept.original_name}
+        </div>
+        <div className="text-[10px] text-bg-7">{formatBytes(concept.size_bytes)}</div>
+      </div>
+      <button
+        type="button"
+        aria-label={removeLabel}
+        title={removeLabel}
+        onClick={onRemove}
+        className="shrink-0 size-5 flex items-center justify-center text-bg-7 hover:text-danger transition-colors"
+      >
+        <X size={12} />
+      </button>
+    </div>
+  );
+};
+
+// ─── PoolRow — строка концепта без кампаний (нет шага 4) ───────────────────────
+
+const PoolRow: FC<{ concept: UploadedConcept; onRemove: () => void }> = ({ concept, onRemove }) => {
+  const video = isVideo(concept.content_type);
+  return (
     <div className="border border-[var(--hairline)] rounded-[var(--radius-2)] px-3 py-2.5 bg-bg-1 flex items-center gap-3">
-      {/* Иконка */}
       <div
         className={cn(
           "size-7 shrink-0 rounded-[var(--radius-1)] flex items-center justify-center",
@@ -343,51 +498,12 @@ const ConceptRow: FC<ConceptRowProps> = ({
       >
         {video ? <Film size={13} /> : <Image size={13} />}
       </div>
-
-      {/* Имя и размер */}
       <div className="flex-1 min-w-0">
         <div className="text-[12px] text-bg-11 truncate" title={concept.original_name}>
           {concept.original_name}
         </div>
         <div className="text-[11px] text-bg-7">{formatBytes(concept.size_bytes)}</div>
       </div>
-
-      {/* Привязка к кампаниям (если их > 1) — цвет чипа = цвет кампании в сводке */}
-      {campaigns.length > 1 && (
-        <div className="flex items-center gap-1.5 shrink-0">
-          <span className="text-[10px] text-bg-7 font-display uppercase tracking-wider">
-            кампании:
-          </span>
-          {campaigns.map((c) => {
-            const isActive =
-              concept.campaign_keys.length === 0 || concept.campaign_keys.includes(c.key);
-            const color = campaignChipColor(campaignIndexByKey[c.key] ?? 0);
-            return (
-              <button
-                key={c.key}
-                type="button"
-                onClick={() => onToggleCampaign(c.key)}
-                className={cn(
-                  "font-display text-[10px] px-1.5 py-0.5 rounded border transition-colors",
-                  isActive
-                    ? color.chip
-                    : "bg-bg-2 border-[var(--hairline)] text-bg-7 hover:border-[var(--hairline-strong)]",
-                )}
-                aria-pressed={isActive}
-                title={(() => {
-                  const counts = campaignMediaCounts[c.key];
-                  if (!counts) return `${c.key} · ${c.adset_count} adsets`;
-                  return `${c.key} · ${counts.img} фото + ${counts.vid} видео · ${c.adset_count} adsets`;
-                })()}
-              >
-                {c.key}
-              </button>
-            );
-          })}
-        </div>
-      )}
-
-      {/* Удалить */}
       <button
         type="button"
         aria-label={`Удалить ${concept.original_name}`}

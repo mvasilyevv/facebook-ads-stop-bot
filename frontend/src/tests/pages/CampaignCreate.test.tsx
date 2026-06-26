@@ -653,6 +653,69 @@ describe("WizardStep5Creatives", () => {
     await user.click(screen.getByRole("button", { name: /Удалить photo.jpg/ }));
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ concepts: [] }));
   });
+
+  // ── Колонки-кампании (новый формат привязки) ──
+  const twoCampaigns = [
+    { key: "c1", adset_count: 2, concept_refs: [] },
+    { key: "c2", adset_count: 2, concept_refs: [] },
+  ];
+  function withConcept(keys: string[]): WizardCreatives {
+    return {
+      upload_id: "abc",
+      concepts: [
+        {
+          ref: "a.jpg",
+          original_name: "a.jpg",
+          size_bytes: 100,
+          content_type: "image/jpeg",
+          campaign_keys: keys,
+        },
+      ],
+      copies_per_concept: null,
+    };
+  }
+
+  // Концепт «во всех» (campaign_keys=[]) виден в КАЖДОЙ колонке кампании
+  it("концепт во всех кампаниях виден в обеих колонках", () => {
+    render(wrap(<WizardStep5Creatives values={withConcept([])} campaigns={twoCampaigns} onChange={vi.fn()} />));
+    expect(screen.getAllByText("a.jpg")).toHaveLength(2);
+  });
+
+  // Убрать концепт из одной кампании — остаётся в другой (явный ключ)
+  it("убрать из одной кампании оставляет концепт в другой", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(wrap(<WizardStep5Creatives values={withConcept([])} campaigns={twoCampaigns} onChange={onChange} />));
+    await user.click(screen.getByRole("button", { name: "Убрать a.jpg из c1" }));
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        concepts: [expect.objectContaining({ ref: "a.jpg", campaign_keys: ["c2"] })],
+      }),
+    );
+  });
+
+  // Убрать концепт из ПОСЛЕДНЕЙ кампании — удаляет файл из загрузки
+  it("убрать из последней кампании удаляет концепт", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(wrap(<WizardStep5Creatives values={withConcept(["c1"])} campaigns={twoCampaigns} onChange={onChange} />));
+    await user.click(screen.getByRole("button", { name: "Убрать a.jpg из c1" }));
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ concepts: [] }));
+  });
+
+  // «+ добавить» во вторую кампанию: c1+c2 = все → нормализуется в [] (во всех)
+  it("добавить концепт во вторую кампанию через пул", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(wrap(<WizardStep5Creatives values={withConcept(["c1"])} campaigns={twoCampaigns} onChange={onChange} />));
+    await user.click(screen.getByRole("button", { name: "добавить" }));
+    await user.click(screen.getByTitle("Добавить a.jpg"));
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        concepts: [expect.objectContaining({ ref: "a.jpg", campaign_keys: [] })],
+      }),
+    );
+  });
 });
 
 // ─── История запусков ─────────────────────────────────────────────────────────
