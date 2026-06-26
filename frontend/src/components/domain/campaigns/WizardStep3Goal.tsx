@@ -97,6 +97,7 @@ export const WizardStep3Goal: FC<WizardStep3GoalProps> = ({ values, onChange, er
             onCents={(cents) => onChange({ daily_budget_cents: cents })}
             errorMessage={errors.daily_budget_cents}
             helpText="Hard cap: $100 000 / день"
+            placeholder="Введите сумму"
           />
           {/* Целевой CPA = bid_amount для COST_CAP (обязателен) */}
           <DollarInput
@@ -105,6 +106,7 @@ export const WizardStep3Goal: FC<WizardStep3GoalProps> = ({ values, onChange, er
             onCents={(cents) => onChange({ bid_amount_cents: cents })}
             errorMessage={errors.bid_amount_cents}
             helpText="Cost cap — цена за результат"
+            placeholder="Из оффера или вручную"
           />
         </div>
       </section>
@@ -259,14 +261,17 @@ function DollarInput({
   onCents,
   errorMessage,
   helpText,
+  placeholder,
 }: {
   label: string;
   cents: number;
   onCents: (cents: number) => void;
   errorMessage?: string;
   helpText?: string;
+  placeholder?: string;
 }) {
-  const centsToStr = (c: number) => String(c / 100);
+  // 0/отрицательные центы → пустая строка (поле показывает placeholder, не «0»).
+  const centsToStr = (c: number) => (c > 0 ? String(c / 100) : "");
   const [text, setText] = useState(() => centsToStr(cents));
 
   // Ре-синхронизация только при реальном внешнем изменении центов.
@@ -291,6 +296,7 @@ function DollarInput({
       type="text"
       inputMode="decimal"
       value={text}
+      placeholder={placeholder}
       onChange={(e) => handle(e.target.value)}
       errorMessage={errorMessage}
       helpText={helpText}

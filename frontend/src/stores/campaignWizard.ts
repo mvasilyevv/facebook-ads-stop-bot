@@ -165,7 +165,7 @@ const DEFAULT_GOAL: WizardGoal = {
   cta: "PLAY_GAME",
   start_date: tomorrow(),
   budget_level: "campaign",
-  daily_budget_cents: 2000_00, // $200 как дефолт
+  daily_budget_cents: 0, // без дефолта — пользователь вводит сумму (валидация >=$1)
   bid_amount_cents: 0, // целевой CPA — обязателен (валидация >0)
   countries: [],
   age_min: 21,

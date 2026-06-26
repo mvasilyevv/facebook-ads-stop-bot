@@ -33,6 +33,21 @@ const BASE_VALUES: WizardGoal = {
   ad_text_primary: "",
 };
 
+describe("WizardStep3Goal — дневной бюджет без дефолта", () => {
+  // Бюджет=0 → поле пустое с placeholder «Введите сумму», а не «0».
+  it("пустой бюджет (0) показывает placeholder, не «0»", () => {
+    render(<WizardStep3Goal values={{ ...BASE_VALUES, daily_budget_cents: 0 }} onChange={() => {}} />);
+    const input = screen.getByPlaceholderText("Введите сумму");
+    expect(input).toHaveValue("");
+  });
+
+  // Заданный бюджет отображается в долларах.
+  it("ненулевой бюджет показывает значение в долларах", () => {
+    render(<WizardStep3Goal values={{ ...BASE_VALUES, daily_budget_cents: 20000 }} onChange={() => {}} />);
+    expect(screen.getByPlaceholderText("Введите сумму")).toHaveValue("200");
+  });
+});
+
 describe("WizardStep3Goal — url_tags инпут убран", () => {
   it("не содержит редактируемого поля 'URL Tags (sub2…sub7)'", () => {
     render(<WizardStep3Goal values={BASE_VALUES} onChange={() => {}} />);
