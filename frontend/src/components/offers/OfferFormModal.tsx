@@ -1,15 +1,15 @@
 /**
- * OfferFormModal — модал создания/редактирования оффера + money-настроек.
+ * OfferFormModal — модал создания/редактирования оффера (только identity).
  *
  * Поля:
  *   - code (string, только при создании; name=code на бэке)
  *   - ad_account_ids (мульти-кабинет, минимум 1)
+ *   - pixel_id, countries (гео) — для дерайва визарда
  *   - is_active (boolean)
- *   - rules: CPA + ползунки stop%/warning% + live-разбивка (OfferRulesFields)
  *
- * vertical убран из UI (на матчинг/правила не влияет; колонка в БД остаётся nullable).
- * Сохранение правил — отдельным PUT /offers/{id}/rules, проводку делает родитель
- * (routes/offers): create → id → rules, либо update → rules.
+ * Стоп-правила (CPA + чувствительность) — НЕ здесь: они в отдельной кнопке «Правила»
+ * (RulesDrawer). Целевой CPA един и живёт в правилах (offer_rules.cpa_threshold) —
+ * из него и пороги, и префилл бида визарда. vertical убран из UI (колонка nullable).
  */
 
 import { useEffect, useState } from "react";
@@ -18,11 +18,6 @@ import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { TagListInput } from "@/components/ui/TagListInput";
 import { Switch } from "@/components/ui/Switch";
-import {
-  OfferRulesFields,
-  DEFAULT_OFFER_RULES_VALUES,
-  type OfferRulesValues,
-} from "./OfferRulesFields";
 import type { Offer } from "@fb/shared";
 
 // ─── Типы ────────────────────────────────────────────────────────────────────
@@ -36,10 +31,6 @@ export interface OfferFormValues {
   ad_account_ids: string[];
   /** Гео оффера (ISO-2 upper). Дефолт [] — не задано. */
   countries: string[];
-  /** Дефолтный целевой CPA оффера (центы; null — не задан). Префилл визарда. */
-  default_cpa_cents: number | null;
-  /** Money-настройки: CPA + чувствительность стоп/warning. */
-  rules: OfferRulesValues;
 }
 
 // Кабинет: срез act_ и проверка на числовой ID — для TagListInput.
@@ -57,21 +48,13 @@ interface OfferFormModalProps {
   onOpenChange: (open: boolean) => void;
   /** Если задан — режим редактирования. Иначе — создание. */
   offer?: Offer | null;
-  /** Текущие правила оффера (для режима редактирования). */
-  initialRules?: Partial<OfferRulesValues>;
-  /** Обработчик сохранения. Получает поля формы + правила. */
+  /** Обработчик сохранения. Получает identity-поля оффера. */
   onSave: (values: OfferFormValues) => Promise<void>;
 }
 
 // ─── Компонент ────────────────────────────────────────────────────────────────
 
-export function OfferFormModal({
-  open,
-  onOpenChange,
-  offer,
-  initialRules,
-  onSave,
-}: OfferFormModalProps) {
+export function OfferFormModal({ open, onOpenChange, offer, onSave }: OfferFormModalProps) {
   const isEdit = !!offer;
   // Offer из @fb/shared не содержит countries (gen:api не запускаем) — читаем мягко
   // через расширение. ad_account_ids/pixel_id уже есть в generated.
@@ -80,7 +63,6 @@ export function OfferFormModal({
         ad_account_ids?: string[];
         pixel_id?: string | null;
         countries?: string[];
-        default_cpa_cents?: number | null;
       })
     | null
     | undefined;
@@ -89,37 +71,30 @@ export function OfferFormModal({
 
   const [code, setCode] = useState("");
   const [isActive, setIsActive] = useState(true);
-  const [rules, setRules] = useState<OfferRulesValues>(DEFAULT_OFFER_RULES_VALUES);
   // Кабинеты как список тэгов (без сырой строки) — добавление/удаление поэлементно.
   const [accounts, setAccounts] = useState<string[]>([]);
   // FB Pixel ID оффера.
   const [pixelId, setPixelId] = useState("");
   // Гео оффера (ISO-2 upper) тэгами.
   const [countries, setCountries] = useState<string[]>([]);
-  // Дефолтный целевой CPA в долларах (строка — свободный ввод, в центы при сабмите).
-  const [cpaDollars, setCpaDollars] = useState("");
   const [codeError, setCodeError] = useState<string | undefined>();
   const [accountsError, setAccountsError] = useState<string | undefined>();
   const [busy, setBusy] = useState(false);
 
-  // Синхронизируем состояние при открытии/смене оффера/правил.
+  // Синхронизируем состояние при открытии/смене оффера.
   useEffect(() => {
     if (open) {
       setCode(offer?.code ?? "");
       setIsActive(offer?.is_active ?? true);
-      setRules({ ...DEFAULT_OFFER_RULES_VALUES, ...initialRules });
       setAccounts(offerAccounts);
       setPixelId(offerExt?.pixel_id ?? "");
       setCountries(offerCountries);
-      setCpaDollars(
-        offerExt?.default_cpa_cents != null ? String(offerExt.default_cpa_cents / 100) : "",
-      );
       setCodeError(undefined);
       setAccountsError(undefined);
     }
-    // offerAccounts/offerCountries/initialRules — производные от offer; отдельные зависимости не нужны.
+    // offerAccounts/offerCountries — производные от offer; отдельные зависимости не нужны.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, offer, initialRules]);
+  }, [open, offer]);
 
   function handleClose(next: boolean) {
     if (busy) return;
@@ -148,14 +123,6 @@ export function OfferFormModal({
       return;
     }
 
-    // CPA: пусто → null (не задан); число → центы; мусор → null.
-    const cpaTrim = cpaDollars.trim();
-    const cpaParsed = cpaTrim === "" ? NaN : parseFloat(cpaTrim);
-    const defaultCpaCents =
-      cpaTrim !== "" && Number.isFinite(cpaParsed) && cpaParsed >= 0
-        ? Math.round(cpaParsed * 100)
-        : null;
-
     setBusy(true);
     try {
       await onSave({
@@ -164,8 +131,6 @@ export function OfferFormModal({
         pixel_id: pixelId.trim(),
         ad_account_ids: accounts,
         countries,
-        default_cpa_cents: defaultCpaCents,
-        rules,
       });
       handleClose(false);
     } finally {
@@ -179,7 +144,9 @@ export function OfferFormModal({
       onOpenChange={handleClose}
       title={isEdit ? `Оффер ${offer!.code}` : "Новый оффер"}
       description={
-        isEdit ? "Кабинеты, статус и стоп-правила." : "Добавить оффер для матчинга кампаний."
+        isEdit
+          ? "Кабинеты, пиксель, гео, статус. Стоп-правила — в кнопке «Правила»."
+          : "Добавить оффер для матчинга кампаний. Стоп-правила — потом в «Правилах»."
       }
       size="md"
     >
@@ -258,33 +225,6 @@ export function OfferFormModal({
             disabled={busy}
             helpText="ISO-2 коды (DE, BR, IN). Enter/запятая — добавить, × — удалить. Подставляются в гео при создании кампаний. Необязательно."
           />
-
-          {/* Дефолтный целевой CPA — префилл «Целевой CPA, $» при создании кампаний */}
-          <Input
-            id="offer-default-cpa"
-            label="Целевой CPA по умолчанию, $"
-            placeholder="3.50"
-            value={cpaDollars}
-            onChange={(e) => setCpaDollars(e.target.value)}
-            disabled={busy}
-            type="text"
-            inputMode="decimal"
-            autoComplete="off"
-            spellCheck={false}
-            helpText="Подставляется в «Целевой CPA» на шаге «Параметры» при создании кампаний. Необязательно."
-          />
-
-          {/* ── Money-настройки: CPA + чувствительность + live-разбивка ── */}
-          <div className="pt-2 border-t border-[var(--hairline)]">
-            <div className="font-display text-[10px] tracking-[0.12em] uppercase text-bg-8 mb-3">
-              СТОП-ПРАВИЛА
-            </div>
-            <OfferRulesFields
-              values={rules}
-              onChange={(patch) => setRules((r) => ({ ...r, ...patch }))}
-              disabled={busy}
-            />
-          </div>
 
           {/* Статус */}
           <Switch

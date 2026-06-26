@@ -67,9 +67,16 @@ async def list_offers(
     При include_inactive=true — все, включая soft-deleted.
     """
     async with engine.connect() as conn:
-        stmt = select(Offer).order_by(Offer.created_at.desc())
+        # LEFT JOIN offer_rules → cpa_threshold (единый целевой CPA оффера; визард тянет бид).
+        o = Offer.__table__
+        r = OfferRule.__table__
+        stmt = (
+            select(o, r.c.cpa_threshold)
+            .select_from(o.outerjoin(r, r.c.offer_id == o.c.id))
+            .order_by(o.c.created_at.desc())
+        )
         if not include_inactive:
-            stmt = stmt.where(Offer.is_active.is_(True))
+            stmt = stmt.where(o.c.is_active.is_(True))
         result = await conn.execute(stmt)
         rows = result.mappings().all()
 
@@ -83,7 +90,7 @@ async def list_offers(
             is_active=row["is_active"],
             ad_account_ids=list(row["ad_account_ids"] or []),
             countries=list(row["countries"] or []),
-            default_cpa_cents=row["default_cpa_cents"],
+            cpa_threshold=row["cpa_threshold"],
             created_at=row["created_at"].isoformat() if row["created_at"] else None,
             updated_at=row["updated_at"].isoformat() if row["updated_at"] else None,
         )
@@ -253,8 +260,6 @@ async def create_offer(
                 ad_account_ids=body.ad_account_ids,
                 # Гео оффера (ISO-2 upper) — для дерайва визарда.
                 countries=body.countries,
-                # Дефолтный целевой CPA (центы) — для дерайва визарда.
-                default_cpa_cents=body.default_cpa_cents,
             )
             .returning(
                 Offer.__table__.c.id,
@@ -265,7 +270,6 @@ async def create_offer(
                 Offer.__table__.c.is_active,
                 Offer.__table__.c.ad_account_ids,
                 Offer.__table__.c.countries,
-                Offer.__table__.c.default_cpa_cents,
                 Offer.__table__.c.created_at,
                 Offer.__table__.c.updated_at,
             )
@@ -291,7 +295,6 @@ async def create_offer(
         is_active=row["is_active"],
         ad_account_ids=list(row["ad_account_ids"] or []),
         countries=list(row["countries"] or []),
-        default_cpa_cents=row["default_cpa_cents"],
         created_at=row["created_at"].isoformat() if row["created_at"] else None,
         updated_at=row["updated_at"].isoformat() if row["updated_at"] else None,
     )
@@ -326,9 +329,6 @@ async def update_offer(
     # Гео: None — не трогаем; список (в т.ч. пустой) — замена (нормализация в OfferUpdateIn).
     if body.countries is not None:
         updates["countries"] = body.countries
-    # CPA: обновляем, если поле ПЕРЕДАНО (в т.ч. null = очистить); отсутствует — не трогаем.
-    if "default_cpa_cents" in body.model_fields_set:
-        updates["default_cpa_cents"] = body.default_cpa_cents
     # body.code намеренно не добавляем в updates
 
     async with engine.begin() as conn:
@@ -354,7 +354,6 @@ async def update_offer(
                     Offer.__table__.c.is_active,
                     Offer.__table__.c.ad_account_ids,
                     Offer.__table__.c.countries,
-                    Offer.__table__.c.default_cpa_cents,
                     Offer.__table__.c.created_at,
                     Offer.__table__.c.updated_at,
                 )
@@ -373,7 +372,6 @@ async def update_offer(
         is_active=row["is_active"],
         ad_account_ids=list(row["ad_account_ids"] or []),
         countries=list(row["countries"] or []),
-        default_cpa_cents=row["default_cpa_cents"],
         created_at=row["created_at"].isoformat() if row["created_at"] else None,
         updated_at=row["updated_at"].isoformat() if row["updated_at"] else None,
     )

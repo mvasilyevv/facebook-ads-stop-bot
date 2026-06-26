@@ -184,7 +184,7 @@ def _canonical_row(**overrides: Any) -> dict[str, Any]:
         "is_active": True,
         "ad_account_ids": ["123"],
         "countries": ["DE", "KE"],
-        "default_cpa_cents": None,
+        "cpa_threshold": None,
         "created_at": now,
         "updated_at": now,
     }

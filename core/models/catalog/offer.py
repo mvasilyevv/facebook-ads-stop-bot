@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import Boolean, Index, Integer, String, text
+from sqlalchemy import Boolean, Index, String, text
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -64,13 +64,6 @@ class Offer(UUIDPrimaryKey, Timestamp, Base):
         ARRAY(String),
         nullable=False,
         server_default=text("'{}'"),
-    )
-    # Целевой CPA оффера по умолчанию (в центах, как bid_amount_cents визарда). Визард
-    # префиллит поле «Целевой CPA, $» на шаге «Параметры» из этого значения (редактируемо).
-    # NULL — дефолт не задан (вводится вручную при заливе).
-    default_cpa_cents: Mapped[int | None] = mapped_column(
-        Integer,
-        nullable=True,
     )
 
     rules: Mapped[list["OfferRule"]] = relationship(  # noqa: F821

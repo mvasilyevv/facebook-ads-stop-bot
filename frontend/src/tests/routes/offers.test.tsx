@@ -340,28 +340,8 @@ describe("OfferFormModal — создание", () => {
     expect(screen.getByText(/минимум один id кабинета/i)).toBeInTheDocument();
   });
 
-  // Money-настройки: CPA + дефолтные проценты чувствительности (80/80) уходят в onSave.
-  it("передаёт CPA + дефолтные проценты чувствительности в onSave", async () => {
-    const onSave = vi.fn().mockResolvedValue(undefined);
-    render(<OfferFormModal open onOpenChange={() => {}} offer={null} onSave={onSave} />);
-
-    await userEvent.type(screen.getByLabelText(/код оффера/i), "CR2");
-    await userEvent.type(screen.getByLabelText(/рекламные кабинеты/i), "111{Enter}");
-    await userEvent.type(screen.getByLabelText(/cpa ставка/i), "10");
-    await userEvent.click(screen.getByRole("button", { name: /создать оффер/i }));
-
-    expect(onSave).toHaveBeenCalledWith(
-      expect.objectContaining({
-        code: "CR2",
-        ad_account_ids: ["111"],
-        rules: expect.objectContaining({
-          cpa: "10",
-          stop_percent_of_rule: 80,
-          warning_percent_of_stop: 80,
-        }),
-      }),
-    );
-  });
+  // Стоп-правила (CPA + чувствительность) больше НЕ в форме оффера — они в «Правилах»
+  // (RulesDrawer). Форма передаёт только identity (покрыто тестами выше).
 });
 
 // ─── OfferDeleteManager тест ──────────────────────────────────────────────────

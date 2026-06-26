@@ -33,7 +33,7 @@ import type { WizardGoal, WizardIdentity } from "@/stores/campaignWizard";
  */
 type WizardOffer = Offer & {
   countries?: string[] | null;
-  default_cpa_cents?: number | null;
+  cpa_threshold?: number | string | null;
 };
 
 interface WizardStep2IdentityProps {
@@ -137,9 +137,10 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
       onGoalChange({ countries: offer.countries.map((c) => c.toUpperCase()) });
     }
 
-    // Дефолтный CPA оффера → префилл «Целевой CPA, $» (редактируемо).
-    if (onGoalChange && offer.default_cpa_cents != null && offer.default_cpa_cents > 0) {
-      onGoalChange({ bid_amount_cents: offer.default_cpa_cents });
+    // Целевой CPA оффера (из правил, доллары) → префилл бида «Целевой CPA, $» (центы, редактируемо).
+    const cpa = Number(offer.cpa_threshold);
+    if (onGoalChange && Number.isFinite(cpa) && cpa > 0) {
+      onGoalChange({ bid_amount_cents: Math.round(cpa * 100) });
     }
 
     // Авто-кабинет → сразу тянем его TZ и страницы (как при blur).
