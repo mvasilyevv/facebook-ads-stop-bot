@@ -527,12 +527,15 @@ async def launch_campaign(body: LaunchIn, engine: DepEngine) -> LaunchOut:
         # фиксируется в config → воркер и retry берут одни и те же коды (preview==launch).
         span = total_code_span(config)
         base = await allocate_code_span(conn, config.offer_code, span)
+        # Переписываем весь config через CAST(:cfg AS JSONB) (тот же паттерн, что INSERT
+        # выше) — избегаем полиморфной to_jsonb($1), которую asyncpg не типизирует
+        # (DatatypeMismatchError: input has type unknown).
+        config.code_start = base
         await conn.execute(
             text(
-                "UPDATE campaign_run SET config = jsonb_set(config, '{code_start}', "
-                "to_jsonb(:base)) WHERE id = CAST(:rid AS UUID)"
+                "UPDATE campaign_run SET config = CAST(:cfg AS JSONB) WHERE id = CAST(:rid AS UUID)"
             ),
-            {"base": base, "rid": run_id},
+            {"cfg": config.model_dump_json(), "rid": run_id},
         )
 
         # Задача воркера: payload = {run_id}. task_type='campaign_create' (контракт).
