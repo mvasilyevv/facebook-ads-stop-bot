@@ -177,12 +177,13 @@ async def test_validate_returns_plan(pg_engine, fake_redis_client, clean_campaig
     assert cnt == 0
 
 
-# Невалидный конфиг (adset_count < 1) → 422 ещё на pydantic.
+# Невалидный конфиг (концепт с неизвестным расширением) → 422 (валидатор CampaignBlock,
+# orphan-защита: уникализатор знает только image/video).
 @pytest.mark.asyncio
 async def test_validate_invalid_config_422(pg_engine, fake_redis_client, clean_campaigns):
     app = _make_app(engine=pg_engine, redis=fake_redis_client)
     cfg = _valid_config()
-    cfg["campaigns"][0]["adset_count"] = 0  # нарушает Field(ge=1)
+    cfg["campaigns"][0]["concept_refs"] = ["broken.txt"]  # неизвестное расширение → reject
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         resp = await ac.post("/api/tools/campaigns/validate", json={"config": cfg})
     assert resp.status_code == 422
