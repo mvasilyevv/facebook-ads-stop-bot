@@ -163,8 +163,49 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
           Кабинет и оффер
         </h2>
         <p className="text-[13px] text-bg-9 mt-1">
-          Укажите ID рекламного кабинета, страницы, пикселя и код оффера.
+          Сначала выберите оффер — кабинет, пиксель, гео и целевой CPA подтянутся
+          автоматически. Страницу укажете ниже.
         </p>
+      </div>
+
+      {/* Оффер — первым: выбор оффера дерайвит кабинет/пиксель/гео/CPA */}
+      <div>
+        <div className="font-display text-[10px] tracking-[0.14em] uppercase text-bg-7 mb-3">
+          ОФФЕР И БАЙЕР
+        </div>
+        {/* Комбобокс-подсказки из активных офферов (вне grid — datalist не занимает место). */}
+        <datalist id="offers-dl">
+          {(offersQuery.data ?? []).map((o) => (
+            <option key={o.id} value={o.code}>
+              {o.name}
+            </option>
+          ))}
+        </datalist>
+        <div className="grid grid-cols-2 gap-4">
+          {/* Свободный ввод разрешён, .toUpperCase() сохраняется. Совпадение
+              с оффером каталога → дерайв act_id/pixel/countries/CPA. */}
+          <Input
+            label="Код оффера"
+            placeholder="GH_CR2"
+            value={values.offer_code}
+            onChange={(e) => {
+              const code = e.target.value.toUpperCase();
+              onChange({ offer_code: code });
+              deriveFromOffer(code);
+            }}
+            errorMessage={errors.offer_code}
+            helpText="Войдёт в название кампании"
+            list="offers-dl"
+          />
+          <Input
+            label="Тег байера"
+            placeholder="MV"
+            value={values.byer_tag}
+            onChange={(e) => onChange({ byer_tag: e.target.value.toUpperCase() })}
+            errorMessage={errors.byer_tag}
+            helpText="Опционально — для фильтра owner_campaign_tag"
+          />
+        </div>
       </div>
 
       {/* Кабинет */}
@@ -291,45 +332,6 @@ export const WizardStep2Identity: FC<WizardStep2IdentityProps> = ({
         </div>
       </div>
 
-      {/* Оффер */}
-      <div>
-        <div className="font-display text-[10px] tracking-[0.14em] uppercase text-bg-7 mb-3">
-          ОФФЕР И БАЙЕР
-        </div>
-        {/* Комбобокс-подсказки из активных офферов (вне grid — datalist не занимает место). */}
-        <datalist id="offers-dl">
-          {(offersQuery.data ?? []).map((o) => (
-            <option key={o.id} value={o.code}>
-              {o.name}
-            </option>
-          ))}
-        </datalist>
-        <div className="grid grid-cols-2 gap-4">
-          {/* Свободный ввод разрешён, .toUpperCase() сохраняется. Совпадение
-              с оффером каталога → дерайв act_id/pixel/countries. */}
-          <Input
-            label="Код оффера"
-            placeholder="GH_CR2"
-            value={values.offer_code}
-            onChange={(e) => {
-              const code = e.target.value.toUpperCase();
-              onChange({ offer_code: code });
-              deriveFromOffer(code);
-            }}
-            errorMessage={errors.offer_code}
-            helpText="Войдёт в название кампании"
-            list="offers-dl"
-          />
-          <Input
-            label="Тег байера"
-            placeholder="MV"
-            value={values.byer_tag}
-            onChange={(e) => onChange({ byer_tag: e.target.value.toUpperCase() })}
-            errorMessage={errors.byer_tag}
-            helpText="Опционально — для фильтра owner_campaign_tag"
-          />
-        </div>
-      </div>
     </div>
   );
 };
