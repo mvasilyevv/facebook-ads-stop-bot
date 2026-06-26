@@ -115,4 +115,29 @@ describe("Sidebar — smoke-рендер с роутером", () => {
       expect(activeLinks[0]).toHaveAttribute("href", "/");
     });
   });
+
+  // Тест: на /campaigns/create горит только подпункт «Создание», не «Кампании».
+  it("на /campaigns/create активен только «Создание»", async () => {
+    const rootRoute = createRootRoute({ component: () => <Sidebar /> });
+    const routes = ["/", "/campaigns", "/campaigns/create"].map((path) =>
+      createRoute({ getParentRoute: () => rootRoute, path, component: () => null }),
+    );
+    const router = createRouter({
+      routeTree: rootRoute.addChildren(routes),
+      history: createMemoryHistory({ initialEntries: ["/campaigns/create"] }),
+    });
+    render(
+      <QueryClientProvider client={makeQueryClient()}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await waitFor(() => {
+      const activeLinks = screen.getAllByRole("link", { current: "page" });
+      expect(activeLinks.length).toBe(1);
+      expect(activeLinks[0]).toHaveAttribute("href", "/campaigns/create");
+    });
+    // «Кампании» виден, но не aria-current (приглушённый родитель).
+    const campaigns = screen.getByRole("link", { name: "Кампании" });
+    expect(campaigns).not.toHaveAttribute("aria-current");
+  });
 });

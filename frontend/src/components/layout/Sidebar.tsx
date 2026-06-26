@@ -35,6 +35,8 @@ interface NavItem {
   icon: LucideIcon;
   /** Ключ для подстановки count-badge. */
   badgeKey?: "ads";
+  /** Вложенные пункты (отрисовываются с отступом под родителем). */
+  children?: NavItem[];
 }
 
 interface NavGroup {
@@ -50,8 +52,12 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: "/", label: "Панель", icon: LayoutDashboard },
       { to: "/ads", label: "Объявления", icon: Layers, badgeKey: "ads" },
-      { to: "/campaigns", label: "Кампании", icon: Radar },
-      { to: "/campaigns/create", label: "Создание", icon: Rocket },
+      {
+        to: "/campaigns",
+        label: "Кампании",
+        icon: Radar,
+        children: [{ to: "/campaigns/create", label: "Создание", icon: Rocket }],
+      },
     ],
   },
   {
@@ -80,6 +86,66 @@ export function Sidebar() {
   const { data: stats } = useDashboardStats();
   const adsBadge = stats ? (stats.ads_in_warning ?? 0) + (stats.ads_in_stop ?? 0) : 0;
   const badgeFor = (key?: "ads"): number => (key === "ads" ? adsBadge : 0);
+
+  // Активность по самому длинному совпавшему пути: на /campaigns/create
+  // горит только «Создание», а «Кампании» — приглушённо как родитель.
+  const pathActive = (to: string): boolean =>
+    to === "/"
+      ? location.pathname === "/"
+      : location.pathname === to || location.pathname.startsWith(`${to}/`);
+
+  // Единый рендер пункта (родитель или подпункт).
+  //   active — полная подсветка (bg + accent + левый бар),
+  //   muted  — приглушённый родитель (активен дочерний маршрут),
+  //   child  — отступ и уменьшенная иконка для вложенного пункта.
+  const renderLink = (
+    item: NavItem,
+    opts: { active: boolean; muted?: boolean; child?: boolean },
+  ) => {
+    const badge = badgeFor(item.badgeKey);
+    return (
+      <Link
+        key={item.to}
+        to={item.to}
+        // exact: иначе TanStack помечает родителя активным на дочернем маршруте
+        // (на /campaigns/create горели бы и «Кампании», и «Создание»).
+        activeOptions={{ exact: true }}
+        aria-label={item.label}
+        aria-current={opts.active ? "page" : undefined}
+        title={collapsed ? item.label : undefined}
+        className={cn(
+          "relative flex w-full items-center gap-[11px] no-underline transition-colors",
+          "rounded-[var(--radius-2)] text-[13px]",
+          opts.child ? "h-8" : "h-9",
+          collapsed ? "justify-center px-0" : opts.child ? "pl-[42px] pr-5" : "px-5",
+          opts.active
+            ? "bg-bg-2 text-accent"
+            : opts.muted
+              ? "text-accent-muted hover:bg-bg-1"
+              : "text-bg-10 hover:bg-bg-1 hover:text-bg-11",
+        )}
+      >
+        {opts.active && (
+          <span
+            aria-hidden="true"
+            className="absolute left-0 top-2 bottom-2 w-[3px] rounded-full bg-accent"
+          />
+        )}
+        <item.icon size={opts.child ? 15 : 18} strokeWidth={1.6} aria-hidden="true" />
+        {!collapsed && <span className="flex-1 text-left">{item.label}</span>}
+        {!collapsed && item.badgeKey && badge > 0 && (
+          <span
+            className={cn(
+              "font-display text-[11px] tabular-nums",
+              opts.active ? "text-accent" : "text-bg-9",
+            )}
+          >
+            {badge}
+          </span>
+        )}
+      </Link>
+    );
+  };
 
   return (
     <aside
@@ -125,46 +191,31 @@ export function Sidebar() {
               <div className="mx-4 mb-2 h-px bg-[var(--hairline)]" aria-hidden="true" />
             )}
             {group.items.map((item) => {
-              const isActive =
-                location.pathname === item.to ||
-                (item.to !== "/" && location.pathname.startsWith(item.to));
-              const badge = badgeFor(item.badgeKey);
+              const childActive = item.children?.some((c) => pathActive(c.to)) ?? false;
+              const selfActive = pathActive(item.to) && !childActive;
+
+              if (!item.children) {
+                return renderLink(item, { active: selfActive });
+              }
 
               return (
-                <Link
-                  key={item.to}
-                  to={item.to}
-                  aria-label={item.label}
-                  aria-current={isActive ? "page" : undefined}
-                  title={collapsed ? item.label : undefined}
-                  className={cn(
-                    "relative flex h-9 w-full items-center gap-[11px] no-underline transition-colors",
-                    "rounded-[var(--radius-2)] text-[13px]",
-                    collapsed ? "justify-center px-0" : "px-5",
-                    isActive
-                      ? "bg-bg-2 text-accent"
-                      : "text-bg-10 hover:bg-bg-1 hover:text-bg-11",
-                  )}
-                >
-                  {isActive && (
-                    <span
-                      aria-hidden="true"
-                      className="absolute left-0 top-2 bottom-2 w-[3px] rounded-full bg-accent"
-                    />
-                  )}
-                  <item.icon size={18} strokeWidth={1.6} aria-hidden="true" />
-                  {!collapsed && <span className="flex-1 text-left">{item.label}</span>}
-                  {!collapsed && item.badgeKey && badge > 0 && (
-                    <span
-                      className={cn(
-                        "font-display text-[11px] tabular-nums",
-                        isActive ? "text-accent" : "text-bg-9",
+                <div key={item.to}>
+                  {renderLink(item, { active: selfActive, muted: childActive })}
+                  {collapsed ? (
+                    item.children.map((c) => renderLink(c, { active: pathActive(c.to) }))
+                  ) : (
+                    <div className="relative mt-0.5">
+                      {/* Направляющая линия вложенности */}
+                      <span
+                        aria-hidden="true"
+                        className="absolute left-[27px] top-0 bottom-1.5 w-px bg-[var(--hairline)]"
+                      />
+                      {item.children.map((c) =>
+                        renderLink(c, { active: pathActive(c.to), child: true }),
                       )}
-                    >
-                      {badge}
-                    </span>
+                    </div>
                   )}
-                </Link>
+                </div>
               );
             })}
           </div>
