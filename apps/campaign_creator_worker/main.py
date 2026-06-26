@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import shutil
 import signal
 from typing import Any
 
@@ -33,8 +34,9 @@ import redis.asyncio as redis_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
-from apps.campaign_creator_worker import claim_campaign_task as _claim
 from apps.campaign_creator_worker import (
+    _campaign_upload_root,
+    _resolve_creo_dir,
     finalize_run_failed,
     finalize_run_succeeded,
     load_run,
@@ -42,6 +44,7 @@ from apps.campaign_creator_worker import (
     resolve_concepts_from_config,
     set_run_status,
 )
+from apps.campaign_creator_worker import claim_campaign_task as _claim
 from core.campaign_builder.builder import build_campaign_spec
 from core.campaign_builder.creative_ledger import record_creative
 from core.campaign_builder.execute import (
@@ -199,13 +202,15 @@ async def _execute_run(
         await _safe_mark_failed(
             engine, task, "run отменён до старта (cancel-гонка) — пропуск без создания"
         )
+        _cleanup_upload_dir(cfg.creo_root)
         return
 
     async def on_progress(snapshot: dict[str, Any]) -> None:
-        # Прогресс execute → status + progress run. Стадии execute (uploading/creating)
-        # маппятся 1:1 в статус run. Best-effort, не роняет залив (execute ловит).
+        # Прогресс execute → status + progress run. Стадии execute
+        # (uniquifying/uploading/creating) маппятся 1:1 в статус run. Best-effort,
+        # не роняет залив (execute ловит).
         stage = snapshot.get("stage", "creating")
-        run_status = stage if stage in ("uploading", "creating") else "creating"
+        run_status = stage if stage in ("uniquifying", "uploading", "creating") else "creating"
         await set_run_status(engine, run_id, run_status, progress=snapshot)
 
     async def _record(code: str, kind: str, creative_id: str) -> None:
@@ -251,6 +256,7 @@ async def _execute_run(
             created_meta_ids=exc.created_ids,
         )
         await _safe_mark_failed(engine, task, f"partial_fail: {exc!r}")
+        _cleanup_upload_dir(cfg.creo_root)
         return
     except Exception as exc:  # noqa: BLE001 — единая маршрутизация по classify
         kind = classify_execution_error(exc)
@@ -280,11 +286,13 @@ async def _execute_run(
                     exc,
                 )
                 await finalize_run_failed(engine, run_id, error=f"transient exhausted: {exc!r}")
+                _cleanup_upload_dir(cfg.creo_root)  # попытки исчерпаны → терминал
             return
         # permanent: валидация/Meta permission/policy → run=failed, без retry.
         logger.error("campaign_create: task id=%s → permanent fail: %r", task.id, exc)
         await finalize_run_failed(engine, run_id, error=f"permanent: {exc!r}")
         await _safe_mark_failed(engine, task, f"permanent: {exc!r}")
+        _cleanup_upload_dir(cfg.creo_root)
         return
 
     # Успех: created_meta_ids в run + task succeeded.
@@ -305,6 +313,7 @@ async def _execute_run(
         )
     else:
         logger.info("campaign_create: task id=%s succeeded (run %s)", task.id, run_id)
+    _cleanup_upload_dir(cfg.creo_root)
 
 
 async def _safe_mark_failed(engine: AsyncEngine, task: Task, error: str) -> None:
@@ -313,6 +322,29 @@ async def _safe_mark_failed(engine: AsyncEngine, task: Task, error: str) -> None
     if not applied:
         logger.warning(
             "campaign_create: task id=%s mark_failed не применился (гонка с воркером)", task.id
+        )
+
+
+def _cleanup_upload_dir(creo_root: str | None) -> None:
+    """Best-effort удаление папки загруженных концептов на ТЕРМИНАЛЬНОМ исходе прогона.
+
+    Оригиналы фото/видео нужны только до залива (уникализированные байты уже ушли в
+    Meta). Не зовётся при transient-requeue — там воркер материализует файлы на retry.
+    Защита: удаляем только подпапку внутри корня загрузок (не произвольный путь);
+    абсолютные creo_root (legacy/тесты) вне корня — пропускаем. Сбой не роняет задачу.
+    """
+    if not creo_root:
+        return
+    try:
+        target = _resolve_creo_dir(creo_root).resolve()
+        root = _campaign_upload_root().resolve()
+        if root not in target.parents:
+            return  # путь вне корня загрузок — не наш, не трогаем
+        shutil.rmtree(target, ignore_errors=True)
+        logger.info("campaign_create: upload-папка прогона очищена: %s", target)
+    except Exception:  # noqa: BLE001 — best-effort, не роняет обработку задачи
+        logger.warning(
+            "campaign_create: не удалось очистить upload-папку %r", creo_root, exc_info=True
         )
 
 

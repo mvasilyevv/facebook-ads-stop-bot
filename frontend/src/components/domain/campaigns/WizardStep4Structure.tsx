@@ -69,7 +69,7 @@ export const WizardStep4Structure: FC<WizardStep4StructureProps> = ({
             leftIcon={<Plus size={13} />}
             onClick={addCampaign}
           >
-            + Кампания
+            Кампания
           </Button>
         </div>
       ) : (
@@ -92,7 +92,7 @@ export const WizardStep4Structure: FC<WizardStep4StructureProps> = ({
               leftIcon={<Plus size={13} />}
               onClick={addCampaign}
             >
-              + Кампания
+              Кампания
             </Button>
           </div>
         </div>

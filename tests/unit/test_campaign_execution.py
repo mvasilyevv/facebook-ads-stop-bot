@@ -30,6 +30,7 @@ from core.campaign_builder import (
     build_campaign_spec,
 )
 from core.campaign_builder.execute import (
+    CampaignExecutionError,
     PartialCreateError,
     classify_execution_error,
     execute_campaign_spec,
@@ -40,6 +41,7 @@ from core.campaign_builder.uniquify import (
     build_uniquification_plan,
     uniquify_concepts,
 )
+from core.creatives.video_uniquifier import VideoUniquifyError
 from core.meta_api.errors import (
     PermanentError,
     RateLimitedError,
@@ -428,6 +430,43 @@ def test_execute_fail_on_campaign_post_is_partial_not_transient(monkeypatch):
     assert ei.value.irreversible_attempted is True
     # Классификация: НЕ transient (иначе requeue → дубль), а partial.
     assert classify_execution_error(ei.value) == "partial"
+
+
+# Money-safety: падение уникализации (нет ffmpeg/битый файл) идёт ДО любого POST →
+# CampaignExecutionError (НЕ PartialCreateError): ни одного объекта в Meta, orphan'ов нет.
+# Регресс на инцидент «partial_fail step=uploading: ffprobe не найден» (создались
+# campaign+adset до уникализации).
+def test_execute_uniquify_failure_before_any_post_is_clean_fail(monkeypatch):
+    block = _image_block(n_adsets=2)
+    cfg = _config(block)
+    spec = build_campaign_spec(cfg)
+    concepts = _concepts("image", count=2)
+    client = _FakeClient()
+    uploader = _FakeUploader()
+
+    async def boom(*_a, **_k):
+        raise VideoUniquifyError("Не найден ffprobe — установите ffmpeg (brew install ffmpeg)")
+
+    # Уникализация (материализация байтов) теперь шаг 0 — патчим её в execute.
+    monkeypatch.setattr("core.campaign_builder.execute.uniquify_concepts", boom)
+
+    async def run():
+        return await execute_campaign_spec(
+            cfg,
+            spec,
+            concepts_by_campaign={block.key: concepts},
+            client=client,
+            uploader=uploader,
+        )
+
+    with pytest.raises(CampaignExecutionError) as ei:
+        asyncio.run(run())
+    # НЕ partial: осиротевших объектов нет.
+    assert not isinstance(ei.value, PartialCreateError)
+    # Ни одного вызова в Meta — POST campaign даже не инициирован.
+    assert client.calls == []
+    # VideoUniquifyError(ValueError) → permanent: mark_failed без retry.
+    assert classify_execution_error(ei.value) == "permanent"
 
 
 # =====================================================================

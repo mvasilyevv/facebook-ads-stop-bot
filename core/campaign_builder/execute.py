@@ -258,6 +258,14 @@ async def _execute_block(
     )
     state.total_ads += sum(len(a.ads) for a in plan.adsets)
 
+    # 0) uniquify (тяжёлое: ffmpeg/PIL) — материализуем байты вариантов ДО любого POST
+    # в Meta. Падение уникализатора (битый файл / нет ffmpeg) тогда не оставит
+    # осиротевших campaign/adset: created пуст + campaign_create_attempted=False →
+    # CampaignExecutionError (чистый fail), а не PartialCreateError (orphan).
+    state.stage = "uniquifying"
+    await _emit(on_progress, state)
+    materialized: list[UniquifiedAdset] = await uniquify_concepts(cfg, cfg_block, concepts, plan)
+
     # 1) campaign (всегда PAUSED).
     # Money-safety: помечаем «POST campaign инициирован» ДО самого вызова — если он
     # упадёт (Vision лёг/таймаут), ответ Meta мог потеряться, а кампания создаться.
@@ -292,12 +300,10 @@ async def _execute_block(
         state.adsets_done += 1
         await _emit(on_progress, state)
 
-    # 3) uniquify (тяжёлое: ffmpeg/PIL) — материализуем байты вариантов.
+    # 3) upload media + 5) creatives + 6) ads, adset за adset'ом.
+    # Байты уже материализованы (шаг 0) — здесь только сетевые вызовы в Meta.
     state.stage = "uploading"
     await _emit(on_progress, state)
-    materialized: list[UniquifiedAdset] = await uniquify_concepts(cfg, cfg_block, concepts, plan)
-
-    # 4) upload media + 5) creatives + 6) ads, adset за adset'ом.
     # adset i = K ads (по 1 на концепт), вариант с copy_index == i.
     for adset_index, mat_adset in enumerate(materialized):
         adset_id = adset_ids[adset_index]

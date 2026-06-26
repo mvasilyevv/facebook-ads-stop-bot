@@ -24,10 +24,12 @@ RUN uv sync --frozen --no-dev --no-install-project \
 # Финальный образ: только runtime
 FROM python:3.12-slim AS runtime
 
-# Только runtime-зависимости libpq
+# Runtime-зависимости: libpq + ffmpeg/ffprobe (уникализация видео-креативов в
+# campaign_creator — core/creatives/video_uniquifier требует ffprobe в PATH).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
     curl \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
