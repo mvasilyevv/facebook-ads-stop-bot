@@ -37,11 +37,17 @@ def _make_app(*, engine=None, redis=None):
 
 @pytest_asyncio.fixture
 async def clean_campaigns(pg_engine):
-    """Чистит campaign_run/campaign_preset/task_queue до и после теста."""
+    """Чистит campaign_run/campaign_preset/task_queue до и после теста.
+
+    Также сбрасывает реестр креативов (campaign_creative) и счётчики
+    нумерации (offer_creative_seq) для полной изоляции тестов.
+    """
 
     async def _truncate():
         async with pg_engine.begin() as conn:
             await conn.execute(text("DELETE FROM task_queue WHERE task_type = 'campaign_create'"))
+            await conn.execute(text("DELETE FROM campaign_creative"))
+            await conn.execute(text("DELETE FROM offer_creative_seq"))
             await conn.execute(text("DELETE FROM campaign_run"))
             await conn.execute(text("DELETE FROM campaign_preset"))
 
@@ -68,7 +74,6 @@ def _valid_config() -> dict:
             {
                 "key": "static",
                 "name": "{byer} | {offer} | static | adset.pro | {date}",
-                "kind": "image",
                 "adsets": [
                     {"name": "as1", "dir": "as1", "glob": "*.jpg"},
                     {"name": "as2", "dir": "as2", "glob": "*.jpg"},
@@ -172,12 +177,12 @@ async def test_validate_returns_plan(pg_engine, fake_redis_client, clean_campaig
     assert cnt == 0
 
 
-# Невалидный конфиг (плохой kind) → 422 ещё на pydantic.
+# Невалидный конфиг (adset_count < 1) → 422 ещё на pydantic.
 @pytest.mark.asyncio
 async def test_validate_invalid_config_422(pg_engine, fake_redis_client, clean_campaigns):
     app = _make_app(engine=pg_engine, redis=fake_redis_client)
     cfg = _valid_config()
-    cfg["campaigns"][0]["kind"] = "carousel"  # недопустимо
+    cfg["campaigns"][0]["adset_count"] = 0  # нарушает Field(ge=1)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         resp = await ac.post("/api/tools/campaigns/validate", json={"config": cfg})
     assert resp.status_code == 422
@@ -279,7 +284,7 @@ async def test_launch_rejects_block_without_concepts(pg_engine, fake_redis_clien
         "daily_budget_cents": 20000,
         "bid_amount_cents": 150,
         "countries": ["DE"],
-        "campaigns": [{"key": "video", "kind": "video", "adset_count": 2, "concept_refs": []}],
+        "campaigns": [{"key": "video", "adset_count": 2, "concept_refs": []}],
     }
     app = _make_app(engine=pg_engine, redis=fake_redis_client)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:

@@ -63,7 +63,6 @@ def _image_block(n_adsets: int = 3) -> CampaignBlock:
     return CampaignBlock(
         key="static",
         name="{byer} | {offer} | static | adset.pro | {date}",
-        kind="image",
         adsets=adsets,
     )
 
