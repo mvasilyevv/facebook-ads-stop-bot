@@ -51,7 +51,9 @@ async def reconcile_offer_seq(
                 SELECT count(*) FROM campaign_run
                 WHERE config->>'offer_code' = :c
                   AND status IN ('queued', 'uniquifying', 'uploading', 'creating')
-                  AND (:exclude IS NULL OR id <> CAST(:exclude AS UUID))
+                  -- CAST обязателен: голый ":exclude IS NULL" даёт asyncpg
+                  -- нетипизированный параметр (could not determine data type of $2).
+                  AND (CAST(:exclude AS UUID) IS NULL OR id <> CAST(:exclude AS UUID))
                 """
             ),
             {"c": offer_code, "exclude": str(exclude_run_id) if exclude_run_id else None},
