@@ -6,7 +6,7 @@
  */
 
 import { type FC } from "react";
-import { Trash2, Plus, Layers } from "lucide-react";
+import { Trash2, Plus, Minus, Layers } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import type { CampaignStructure } from "@/lib/api/campaigns";
@@ -159,21 +159,42 @@ const CampaignRow: FC<CampaignRowProps> = ({ campaign, index, onUpdate, onRemove
         />
       </div>
 
-      {/* N adset'ов */}
+      {/* N adset'ов — степпер −/+ (по нативным стрелкам тяжело попасть) */}
       <div className="w-36 shrink-0 mt-1">
-        <Input
-          label="Число adset'ов N"
-          type="number"
-          min={1}
-          max={50}
-          value={String(campaign.adset_count)}
-          onChange={(e) => {
-            const v = parseInt(e.target.value, 10);
-            if (!isNaN(v) && v >= 1 && v <= 50) {
-              onUpdate({ adset_count: v });
-            }
-          }}
-        />
+        <div className="font-display text-[11px] tracking-wider uppercase text-bg-9 mb-1.5">
+          Число adset'ов N
+        </div>
+        <div className="flex items-center rounded-[var(--radius-2)] border border-[var(--hairline-strong)] bg-bg-2 overflow-hidden">
+          <button
+            type="button"
+            aria-label="Уменьшить число adset'ов"
+            disabled={campaign.adset_count <= 1}
+            onClick={() => onUpdate({ adset_count: Math.max(1, campaign.adset_count - 1) })}
+            className="size-9 shrink-0 flex items-center justify-center text-bg-9 hover:bg-bg-3 hover:text-bg-11 disabled:opacity-30 disabled:hover:bg-transparent transition-colors"
+          >
+            <Minus size={15} />
+          </button>
+          <input
+            type="text"
+            inputMode="numeric"
+            aria-label="Число adset'ов N"
+            value={String(campaign.adset_count)}
+            onChange={(e) => {
+              const v = parseInt(e.target.value, 10);
+              if (!isNaN(v) && v >= 1 && v <= 50) onUpdate({ adset_count: v });
+            }}
+            className="flex-1 min-w-0 h-9 bg-transparent text-center text-[14px] text-bg-11 tabular-nums outline-none border-x border-[var(--hairline)]"
+          />
+          <button
+            type="button"
+            aria-label="Увеличить число adset'ов"
+            disabled={campaign.adset_count >= 50}
+            onClick={() => onUpdate({ adset_count: Math.min(50, campaign.adset_count + 1) })}
+            className="size-9 shrink-0 flex items-center justify-center text-bg-9 hover:bg-bg-3 hover:text-bg-11 disabled:opacity-30 disabled:hover:bg-transparent transition-colors"
+          >
+            <Plus size={15} />
+          </button>
+        </div>
       </div>
 
       {/* Удалить */}

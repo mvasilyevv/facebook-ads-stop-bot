@@ -28,6 +28,7 @@ import logging
 import os
 import shutil
 import signal
+import time
 from typing import Any
 
 import redis.asyncio as redis_asyncio
@@ -256,7 +257,8 @@ async def _execute_run(
             created_meta_ids=exc.created_ids,
         )
         await _safe_mark_failed(engine, task, f"partial_fail: {exc!r}")
-        _cleanup_upload_dir(cfg.creo_root)
+        # Концепты НЕ чистим при ошибке — нужны для ретрая (повтор залива тем же config).
+        # Старые upload-папки подметает retention в cleanup_worker.
         return
     except Exception as exc:  # noqa: BLE001 — единая маршрутизация по classify
         kind = classify_execution_error(exc)
@@ -286,13 +288,13 @@ async def _execute_run(
                     exc,
                 )
                 await finalize_run_failed(engine, run_id, error=f"transient exhausted: {exc!r}")
-                _cleanup_upload_dir(cfg.creo_root)  # попытки исчерпаны → терминал
+                # Концепты НЕ чистим — оставляем для ретрая (retention подметёт старое).
             return
         # permanent: валидация/Meta permission/policy → run=failed, без retry.
         logger.error("campaign_create: task id=%s → permanent fail: %r", task.id, exc)
         await finalize_run_failed(engine, run_id, error=f"permanent: {exc!r}")
         await _safe_mark_failed(engine, task, f"permanent: {exc!r}")
-        _cleanup_upload_dir(cfg.creo_root)
+        # Концепты НЕ чистим — оставляем для ретрая (retention подметёт старое).
         return
 
     # Успех: created_meta_ids в run + task succeeded.
@@ -326,10 +328,12 @@ async def _safe_mark_failed(engine: AsyncEngine, task: Task, error: str) -> None
 
 
 def _cleanup_upload_dir(creo_root: str | None) -> None:
-    """Best-effort удаление папки загруженных концептов на ТЕРМИНАЛЬНОМ исходе прогона.
+    """Best-effort удаление папки загруженных концептов на УСПЕХЕ/ОТМЕНЕ прогона.
 
-    Оригиналы фото/видео нужны только до залива (уникализированные байты уже ушли в
-    Meta). Не зовётся при transient-requeue — там воркер материализует файлы на retry.
+    Оригиналы фото/видео нужны до успешного залива (уникализированные байты уже ушли в
+    Meta) ИЛИ для ретрая после ошибки. Поэтому при ошибке (partial/permanent/exhausted)
+    папку НЕ чистим — пользователь может «Повторить залив» тем же config; старые папки
+    подметает retention в cleanup_worker. Зовётся только при success и cancel-гонке.
     Защита: удаляем только подпапку внутри корня загрузок (не произвольный путь);
     абсолютные creo_root (legacy/тесты) вне корня — пропускаем. Сбой не роняет задачу.
     """
@@ -345,6 +349,38 @@ def _cleanup_upload_dir(creo_root: str | None) -> None:
     except Exception:  # noqa: BLE001 — best-effort, не роняет обработку задачи
         logger.warning(
             "campaign_create: не удалось очистить upload-папку %r", creo_root, exc_info=True
+        )
+
+
+def _sweep_stale_upload_dirs(max_age_days: float = 7.0) -> None:
+    """Retention: подметает upload-папки старше max_age_days.
+
+    При ошибке залива папку концептов оставляем для «Повторить залив», поэтому без
+    подметания неуспешные/заброшенные папки копились бы. Зовётся при старте воркера
+    (он рестартится на деплоях — достаточно часто). Best-effort, не роняет старт.
+    """
+    root = _campaign_upload_root()
+    if not root.exists():
+        return
+    cutoff = time.time() - max_age_days * 86400.0
+    removed = 0
+    try:
+        for child in root.iterdir():
+            if not child.is_dir():
+                continue
+            try:
+                if child.stat().st_mtime < cutoff:
+                    shutil.rmtree(child, ignore_errors=True)
+                    removed += 1
+            except OSError:
+                continue
+    except OSError:
+        return
+    if removed:
+        logger.info(
+            "campaign_create: retention — удалено %d upload-папок старше %.0fд",
+            removed,
+            max_age_days,
         )
 
 
@@ -444,6 +480,7 @@ async def main_loop(database_url: str | None = None) -> None:
             pass
 
     logger.info("campaign_creator_worker запущен (MetaApiClient ready)")
+    _sweep_stale_upload_dirs()  # retention старых upload-папок (концепты неуспешных заливов)
     try:
         await asyncio.gather(
             task_loop(engine, stop, client=meta_client, uploader=uploader),

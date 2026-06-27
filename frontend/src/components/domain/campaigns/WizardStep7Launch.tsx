@@ -16,6 +16,7 @@ import {
   Loader2,
   ExternalLink,
   Trash2,
+  RefreshCw,
 } from "lucide-react";
 import { cn } from "@/lib/utils/cn";
 import { Button } from "@/components/ui/Button";
@@ -71,6 +72,18 @@ export const WizardStep7Launch: FC<WizardStep7LaunchProps> = ({
   const handleLaunch = () => {
     launchMut.mutate(
       { config, preset_id: presetId ?? null },
+      {
+        onSuccess: (out) => onRunId(out.run_id),
+      },
+    );
+  };
+
+  // Повтор после ошибки: тот же config, но СВЕЖИЙ idempotency_key (иначе launch вернёт
+  // тот же упавший run по ON CONFLICT). Концепты переиспользуются — воркер не чистит
+  // upload-папку при ошибке (только при успехе), так что заново загружать не нужно.
+  const handleRetry = () => {
+    launchMut.mutate(
+      { config, preset_id: presetId ?? null, idempotency_key: crypto.randomUUID() },
       {
         onSuccess: (out) => onRunId(out.run_id),
       },
@@ -136,6 +149,8 @@ export const WizardStep7Launch: FC<WizardStep7LaunchProps> = ({
           onCleanup={() => cleanupMut.mutate(runId)}
           cleaningUp={cleanupMut.isPending}
           cleanupResult={cleanupMut.data}
+          onRetry={handleRetry}
+          retrying={launchMut.isPending}
         />
       )}
     </div>
@@ -149,9 +164,18 @@ interface RunProgressProps {
   onCleanup: () => void;
   cleaningUp: boolean;
   cleanupResult?: { meta_ids: Record<string, unknown>; detail: string };
+  onRetry: () => void;
+  retrying: boolean;
 }
 
-function RunProgress({ runId, onCleanup, cleaningUp, cleanupResult }: RunProgressProps) {
+function RunProgress({
+  runId,
+  onCleanup,
+  cleaningUp,
+  cleanupResult,
+  onRetry,
+  retrying,
+}: RunProgressProps) {
   // Поллинг каждые 3 сек пока статус не терминальный
   const [interval, setInterval_] = useState<number | false>(3000);
 
@@ -220,6 +244,19 @@ function RunProgress({ runId, onCleanup, cleaningUp, cleanupResult }: RunProgres
         {RUN_STATUS_LABELS[status]}
         {run.error && <span className="ml-2 text-[12px] font-normal opacity-80">— {run.error}</span>}
       </div>
+
+      {/* Повтор после ошибки — тот же конфиг, без пересоздания (концепты переиспользуются) */}
+      {failed && (
+        <Button
+          variant="primary"
+          size="md"
+          leftIcon={<RefreshCw size={14} />}
+          onClick={onRetry}
+          loading={retrying}
+        >
+          Повторить залив
+        </Button>
+      )}
 
       {/* Прогресс-детали (jsonb) */}
       {run.progress && Object.keys(run.progress).length > 0 && (
