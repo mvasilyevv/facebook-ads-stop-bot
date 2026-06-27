@@ -457,7 +457,7 @@ async def test_launch_allocates_continuing_code_start(
 ):
     app = _make_app(engine=pg_engine, redis=fake_redis_client)
 
-    # Конфиг с concept_refs чтобы span > 0 (иначе block_code_span = 0×copies = 0).
+    # Конфиг с concept_refs чтобы span > 0 (без концептов block_code_span = 0).
     def _cfg_with_refs(start_date: str) -> dict:
         cfg = _valid_config()
         cfg["start_date"] = start_date
@@ -499,8 +499,8 @@ async def test_launch_allocates_continuing_code_start(
 
     base1 = row1.code_start
     base2 = row2.code_start
-    # span = 2 концепта × 2 adset = 4 кода на запуск.
-    span1 = 2 * 2
+    # span = число КОНЦЕПТОВ (код общий по adset'ам): 2 концепта → 2 кода на запуск.
+    span1 = 2
     assert base2 == base1 + span1
 
 
