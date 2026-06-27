@@ -38,6 +38,8 @@ interface WizardStep7LaunchProps {
   presetId?: string | null;
   runId: string | null;
   onRunId: (id: string) => void;
+  /** Завершить визард (сброс к шагу 1). Кнопка «Готово» на успешном заливе. */
+  onFinish: () => void;
 }
 
 // ─── Шаги прогресса ──────────────────────────────────────────────────────────
@@ -65,6 +67,7 @@ export const WizardStep7Launch: FC<WizardStep7LaunchProps> = ({
   presetId,
   runId,
   onRunId,
+  onFinish,
 }) => {
   const launchMut = useLaunchCampaign();
   const cleanupMut = useCleanupRun();
@@ -151,6 +154,7 @@ export const WizardStep7Launch: FC<WizardStep7LaunchProps> = ({
           cleanupResult={cleanupMut.data}
           onRetry={handleRetry}
           retrying={launchMut.isPending}
+          onFinish={onFinish}
         />
       )}
     </div>
@@ -166,6 +170,7 @@ interface RunProgressProps {
   cleanupResult?: { meta_ids: Record<string, unknown>; detail: string };
   onRetry: () => void;
   retrying: boolean;
+  onFinish: () => void;
 }
 
 function RunProgress({
@@ -175,6 +180,7 @@ function RunProgress({
   cleanupResult,
   onRetry,
   retrying,
+  onFinish,
 }: RunProgressProps) {
   // Поллинг каждые 3 сек пока статус не терминальный
   const [interval, setInterval_] = useState<number | false>(3000);
@@ -255,6 +261,18 @@ function RunProgress({
           loading={retrying}
         >
           Повторить залив
+        </Button>
+      )}
+
+      {/* Готово — завершить визард после успеха (сброс к шагу 1, можно начать новый залив) */}
+      {succeeded && (
+        <Button
+          variant="primary"
+          size="md"
+          leftIcon={<CheckCircle size={14} />}
+          onClick={onFinish}
+        >
+          Готово — начать новый залив
         </Button>
       )}
 

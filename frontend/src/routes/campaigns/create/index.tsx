@@ -291,6 +291,7 @@ function WizardLayout() {
               presetId={store.start.preset_id}
               runId={store.runId}
               onRunId={(id) => store.setRunId(id)}
+              onFinish={() => store.reset()}
             />
           )}
 
