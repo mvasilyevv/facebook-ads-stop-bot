@@ -2,12 +2,12 @@
 """Unit-тесты parity превью (build_campaign_spec) и исполнителя (build_uniquification_plan).
 
 HIGH-1 (money): превью, по которому байер апрувит залив, должно показывать ТУ ЖЕ
-раскладку, что реально создаст исполнитель. Баг: build_campaign_spec считал коды
-креативов per-adset (каждый adset перезапускал нумерацию с CR001) и трактовал copies
-как число ads на adset — расхождение с исполнителем, где раскладка K концептов × N
-adset'ов: total ads = K×N, сквозная нумерация OFFER_CRxxx, adset i = K ads (1 на концепт).
+раскладку, что реально создаст исполнитель.
 
-Эти тесты фиксируют единый source-of-truth раскладки и сводят обе стороны к нему.
+Модель кодов: ОДИН код на концепт, ОБЩИЙ для всех его вариантов (adset'ов). Концепт c
+получает code[c] в КАЖДОМ adset'е → одинаковые креативы в разных adset'ах носят один
+код/имя (трекер агрегирует статистику по sub3). Уникализация (разные пиксели/md5) идёт
+отдельно по seed(copy_index) и на код НЕ влияет. span блока = число концептов K.
 """
 
 from __future__ import annotations
@@ -78,12 +78,12 @@ def _plan_codes_by_adset(plan) -> list[list[str]]:
     return [[ad.code for ad in adset.ads] for adset in plan.adsets]
 
 
-# ---------------------- основной кейс HIGH-1: 3 концепта × 2 adset ----------------------
+# ---------------------- основной кейс: 3 концепта × 2 adset ----------------------
 
 
-# 3 концепта × 2 adset: превью показывает ровно 6 ads с уникальными сквозными кодами
-# CR001..CR006 (а не CR001..CR00x повторно в каждом adset).
-def test_preview_3concepts_2adsets_ad_count_and_unique_codes():
+# 3 концепта × 2 adset: 6 ads, но кодов 3 (по концепту), и КАЖДЫЙ adset несёт один и тот
+# же набор CR001..CR003 — одинаковый креатив в разных adset'ах = один код/имя.
+def test_preview_3concepts_2adsets_ad_count_and_shared_codes():
     block = _image_block(n_adsets=2)
     cfg = _config(block)
     spec = build_campaign_spec(cfg, concept_counts={"static": 3})
@@ -92,12 +92,12 @@ def test_preview_3concepts_2adsets_ad_count_and_unique_codes():
     all_codes = [ad.code for adset in block_spec.adsets for ad in adset.ads]
     # K×N = 3×2 = 6 ads всего.
     assert len(all_codes) == 6
-    # Все коды уникальны (нет повторного CR001 в разных adset).
-    assert len(set(all_codes)) == 6
-    # Сквозная нумерация CR001..CR006.
-    assert sorted(all_codes) == [f"GH_CR_CR{i:03d}" for i in range(1, 7)]
-    # adset i = K ads (по 1 на концепт).
-    assert all(len(adset.ads) == 3 for adset in block_spec.adsets)
+    # Но РАЗЛИЧНЫХ кодов = K = 3 (код общий между adset'ами для одного концепта).
+    assert len(set(all_codes)) == 3
+    assert sorted(set(all_codes)) == [f"GH_CR_CR{i:03d}" for i in range(1, 4)]
+    # adset i = K ads (по 1 на концепт), и оба adset'а несут ОДИН набор кодов.
+    codes_by_adset = _spec_codes_by_adset(block_spec)
+    assert all(row == ["GH_CR_CR001", "GH_CR_CR002", "GH_CR_CR003"] for row in codes_by_adset)
 
 
 # Превью и исполнитель дают ПОБИТОВО ту же раскладку кодов по adset'ам (parity).
@@ -112,10 +112,11 @@ def test_preview_matches_executor_layout_3x2():
     assert _spec_codes_by_adset(spec.campaigns[0]) == _plan_codes_by_adset(plan)
 
 
-# ---------------------- параметрический parity K×N ----------------------
+# ---------------------- параметрический parity ----------------------
 
 
-# При любом K концептов × N adset'ов превью совпадает с исполнителем побитово.
+# При любом K концептов × N adset'ов превью совпадает с исполнителем побитово; кодов = K,
+# каждый adset несёт один и тот же набор CR001..CR_K.
 @pytest.mark.parametrize(
     ("k_concepts", "n_adsets"),
     [(1, 1), (1, 3), (2, 2), (3, 2), (2, 4), (4, 1), (3, 3)],
@@ -133,19 +134,20 @@ def test_preview_executor_parity_parametric(k_concepts: int, n_adsets: int):
 
     # Совпадение раскладки кодов по adset'ам.
     assert spec_layout == plan_layout
-    # Всего K×N ads, коды уникальны и сквозные.
+    # Всего K×N ads, но РАЗЛИЧНЫХ кодов = K (код общий по adset'ам для одного концепта).
     flat = [c for row in spec_layout for c in row]
     assert len(flat) == k_concepts * n_adsets
-    assert sorted(flat) == [f"GH_CR_CR{i:03d}" for i in range(1, k_concepts * n_adsets + 1)]
-    # Каждый adset несёт ровно K ads.
-    assert all(len(row) == k_concepts for row in spec_layout)
+    expected_codes = [f"GH_CR_CR{i:03d}" for i in range(1, k_concepts + 1)]
+    assert sorted(set(flat)) == expected_codes
+    # Каждый adset несёт ровно K ads и ОДИН и тот же набор кодов концептов.
+    assert all(row == expected_codes for row in spec_layout)
 
 
 # ---------------------- multi-block concept_counts ----------------------
 
 
-# concept_counts задаёт K по каждому блоку; нумерация кодов СКВОЗНАЯ по всему заливу
-# (блок B продолжает с номера блока A) — sub3=CRxxx глобально уникален между кампаниями.
+# concept_counts задаёт K по каждому блоку; нумерация СКВОЗНАЯ по концептам всего залива
+# (блок B продолжает с номера после концептов блока A) — sub3=CRxxx глобально уникален.
 def test_concept_counts_per_block():
     block_a = _image_block(n_adsets=2)
     block_b = CampaignBlock(
@@ -162,20 +164,20 @@ def test_concept_counts_per_block():
     spec = build_campaign_spec(cfg, concept_counts={"static": 2, "video": 1})
 
     static_spec, video_spec = spec.campaigns
-    # static: K=2 × N=2 = 4 ads → CR001..CR004.
+    # static: K=2 концепта × N=2 adset = 4 ads, но 2 кода CR001..CR002 (общие по adset).
     static_codes = [ad.code for adset in static_spec.adsets for ad in adset.ads]
     assert len(static_codes) == 4
-    assert sorted(static_codes) == [f"GH_CR_CR{i:03d}" for i in range(1, 5)]
-    # video: K=1 × N=3 = 3 ads → ПРОДОЛЖАЕТ нумерацию CR005..CR007 (не повторяет CR001).
+    assert sorted(set(static_codes)) == [f"GH_CR_CR{i:03d}" for i in range(1, 3)]
+    # video: K=1 концепт → ПРОДОЛЖАЕТ нумерацию с CR003 (span static = 2 концепта).
     video_codes = [ad.code for adset in video_spec.adsets for ad in adset.ads]
-    assert len(video_codes) == 3
-    assert sorted(video_codes) == [f"GH_CR_CR{i:03d}" for i in range(5, 8)]
-    # Коды двух блоков глобально уникальны — нет коллизии sub3 между кампаниями.
-    assert len(set(static_codes + video_codes)) == 7
+    assert len(video_codes) == 3  # 1 концепт × 3 adset
+    assert set(video_codes) == {"GH_CR_CR003"}
+    # Коды концептов двух блоков глобально различны: {CR001, CR002, CR003}.
+    assert set(static_codes + video_codes) == {"GH_CR_CR001", "GH_CR_CR002", "GH_CR_CR003"}
 
 
-# Кросс-блок parity: исполнитель (execute_campaign_spec накапливает code_start по
-# фактическим концептам) даёт ровно те коды по блокам, что превью build_campaign_spec.
+# Кросс-блок parity: исполнитель (накапливает code_start по числу КОНЦЕПТОВ блока)
+# даёт ровно те коды по блокам, что превью build_campaign_spec.
 def test_cross_block_executor_parity():
     block_a = _image_block(n_adsets=2)
     block_b = CampaignBlock(
@@ -194,9 +196,9 @@ def test_cross_block_executor_parity():
 
     spec = build_campaign_spec(cfg, concept_counts={"static": 2, "video": 1})
 
-    # Исполнитель накапливает code_start: блок B стартует с block_code_span(2, 2)+1 = 5.
+    # Исполнитель накапливает code_start: блок B стартует с block_code_span(2 концепта)+1 = 3.
     plan_a = build_uniquification_plan(cfg, block_a, concepts_a, copies=2, code_start=1)
-    plan_b = build_uniquification_plan(cfg, block_b, concepts_b, copies=3, code_start=5)
+    plan_b = build_uniquification_plan(cfg, block_b, concepts_b, copies=3, code_start=3)
 
     assert _spec_codes_by_adset(spec.campaigns[0]) == _plan_codes_by_adset(plan_a)
     assert _spec_codes_by_adset(spec.campaigns[1]) == _plan_codes_by_adset(plan_b)
@@ -205,8 +207,8 @@ def test_cross_block_executor_parity():
 # ---------------------- фолбэк concept_counts=None ----------------------
 
 
-# Без concept_counts превью предполагает 1 концепт/блок: adset i = 1 ad, коды сквозные
-# по блоку (CR001..CR_N), БЕЗ дубля CR001 в разных adset.
+# Без concept_counts превью предполагает 1 концепт/блок: adset i = 1 ad с кодом CR001 в
+# КАЖДОМ adset'е (один концепт → один код, общий по adset'ам).
 def test_fallback_no_concept_counts_assumes_one_concept_per_block():
     block = _image_block(n_adsets=3)
     cfg = _config(block)
@@ -214,12 +216,11 @@ def test_fallback_no_concept_counts_assumes_one_concept_per_block():
 
     block_spec = spec.campaigns[0]
     codes_by_adset = _spec_codes_by_adset(block_spec)
-    # 1 концепт × 3 adset = 3 ads, по 1 на adset.
+    # 1 концепт × 3 adset = 3 ads, по 1 на adset, код CR001 во всех.
     assert all(len(row) == 1 for row in codes_by_adset)
     flat = [c for row in codes_by_adset for c in row]
-    assert flat == ["GH_CR_CR001", "GH_CR_CR002", "GH_CR_CR003"]
-    # Никаких дублей кодов между adset'ами.
-    assert len(set(flat)) == len(flat)
+    assert flat == ["GH_CR_CR001", "GH_CR_CR001", "GH_CR_CR001"]
+    assert set(flat) == {"GH_CR_CR001"}
 
 
 # Фолбэк совпадает с исполнителем при 1 концепте на блок.
@@ -250,5 +251,6 @@ def test_layout_copies_equals_block_adset_count():
     plan_layout = _plan_codes_by_adset(plan)
     assert spec_layout == plan_layout
     flat = [c for row in spec_layout for c in row]
-    assert len(flat) == 2 * 2  # K концептов × N adset'ов
-    assert sorted(flat) == [f"GH_CR_CR{i:03d}" for i in range(1, 5)]
+    assert len(flat) == 2 * 2  # K концептов × N adset'ов = 4 ads
+    assert sorted(set(flat)) == [f"GH_CR_CR{i:03d}" for i in range(1, 3)]  # 2 кода
+    assert all(row == ["GH_CR_CR001", "GH_CR_CR002"] for row in spec_layout)

@@ -131,14 +131,22 @@ def test_distribution_variant_i_to_adset_i():
 
 
 # Каждый ad ссылается на свой концепт и уникальный код креатива OFFER_CRxxx.
-def test_ad_codes_unique_and_offer_prefixed():
+def test_ad_codes_shared_across_adsets_and_offer_prefixed():
+    # Код = код КОНЦЕПТА, общий по adset'ам: 2 концепта × 2 adset = 4 ad, но 2 кода.
+    # Внутри adset'а коды уникальны (по концепту), между adset'ами концепт c носит один код.
     block = _image_block(n_adsets=2)
     cfg = _config(block)
     concepts = _concepts("image", count=2)
     plan = build_uniquification_plan(cfg, block, concepts)
-    codes = [ad.code for adset in plan.adsets for ad in adset.ads]
-    assert len(codes) == len(set(codes))  # все коды уникальны
-    assert all(c.startswith("GH_CR_CR") for c in codes)
+    codes_by_adset = [[ad.code for ad in adset.ads] for adset in plan.adsets]
+    assert all(c.startswith("GH_CR_CR") for row in codes_by_adset for c in row)
+    # Внутри каждого adset'а коды различны (по 1 на концепт).
+    assert all(len(row) == len(set(row)) for row in codes_by_adset)
+    # Между adset'ами раскладка кодов ОДИНАКОВА (один концепт → один код).
+    assert all(row == codes_by_adset[0] for row in codes_by_adset)
+    # Всего различных кодов = число концептов.
+    flat = {c for row in codes_by_adset for c in row}
+    assert len(flat) == 2
 
 
 # Детерминированный seed: один и тот же (concept_id, i) даёт один seed → идемпотентный retry.

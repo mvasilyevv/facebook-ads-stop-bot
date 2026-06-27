@@ -92,15 +92,18 @@ def _resolve_copies(cfg: CampaignConfig, block: CampaignBlock) -> int:
     return len(block.adsets)
 
 
-def block_code_span(concept_count: int, copies: int) -> int:
-    """Сколько кодов CRxxx занимает один блок: K концептов × N adset = K×N ads.
+def block_code_span(concept_count: int, copies: int) -> int:  # noqa: ARG001 — copies для сигнатуры
+    """Сколько кодов CRxxx занимает один блок: K концептов (ОДИН код на концепт).
+
+    Код креатива = код КОНЦЕПТА, общий для всех его вариантов (adset'ов): одинаковые
+    креативы в разных adset'ах носят один код/имя → трекер агрегирует статистику по
+    sub3=CRxxx как один креатив. Поэтому span блока = число концептов, а НЕ K×N adset.
 
     ЕДИНЫЙ источник смещения сквозной нумерации между блоками. Превью
     (build_campaign_spec) и исполнитель (execute_campaign_spec) обязаны накапливать
-    code_start через эту функцию одинаково — иначе коды разъедутся и нарушится
-    money-инвариант превью==залив. Не дублировать `concept_count * copies` инлайном.
+    code_start через эту функцию одинаково — иначе коды разъедутся (превью==залив).
     """
-    return concept_count * copies
+    return concept_count
 
 
 def build_code_layout(
@@ -113,27 +116,25 @@ def build_code_layout(
 ) -> list[list[str]]:
     """Единый source-of-truth раскладки кодов креативов (превью == исполнитель).
 
-    K концептов × copies копий (= число adset'ов): total ads = K×copies, сквозная
-    нумерация OFFER_CRxxx (start..start+K*copies-1), adset i = K кодов (по 1 на концепт).
+    ОДИН код на концепт, ОБЩИЙ для всех его вариантов (adset'ов): концепт c → code[c]
+    в КАЖДОМ adset'е. Одинаковые креативы в разных adset'ах носят один код/имя →
+    трекер агрегирует статистику по sub3. Уникализация (разные пиксели/md5) — отдельно,
+    через seed по copy_index; имя/код от неё НЕ зависит. total кодов = K концептов.
 
-    start — первый номер кода блока. При нескольких блоках в заливе исполнитель и
-    превью передают сюда накопленное смещение (sum block_code_span предыдущих блоков),
-    чтобы коды были глобально уникальны (sub3-атрибуция не коллизирует между кампаниями).
+    start — первый номер кода блока. При нескольких блоках исполнитель и превью
+    передают накопленное смещение (sum block_code_span предыдущих блоков), чтобы коды
+    концептов не коллизировали между кампаниями (sub3-атрибуция).
 
-    Возвращает список по adset'ам: result[i] = коды ads adset'а i, где
-    result[i][c] — код варианта i концепта c. Нумерация concept-major (концепт c,
-    копия i → codes[c*copies + i]) — зеркалит build_uniquification_plan, который
-    раскладывает variant[i]→adset[i]. Любой потребитель (превью/исполнитель), желающий
-    показать ИСТИННУЮ раскладку залива, обязан брать коды отсюда.
+    Возвращает список по adset'ам: result[i][c] — код концепта c в adset'е i. Для всех
+    adset'ов i код концепта c одинаков (result[i][c] == result[j][c] == codes[c]).
     """
     if concept_count < 0:
         raise ValueError(f"concept_count не может быть отрицательным, получено {concept_count}")
     if copies < 0:
         raise ValueError(f"copies не может быть отрицательным, получено {copies}")
-    total = concept_count * copies
-    codes = creative_codes(offer_code, count=total, prefix=prefix, start=start)
-    # adset i = [код варианта i концепта 0, код варианта i концепта 1, ...].
-    return [[codes[c * copies + i] for c in range(concept_count)] for i in range(copies)]
+    codes = creative_codes(offer_code, count=concept_count, prefix=prefix, start=start)
+    # adset i = [код концепта 0, концепта 1, ...] — ОДИН код на концепт, общий по adset'ам.
+    return [[codes[c] for c in range(concept_count)] for _i in range(copies)]
 
 
 def _seed_text(cfg: CampaignConfig, concept_id: str, copy_index: int) -> str:

@@ -59,7 +59,7 @@ def test_code_start_offsets_codes():
     assert spec.campaigns[0].adsets[0].ads[0].code == "GH_CR010"
 
 
-# total_code_span суммирует K×N по блокам: c1 2×2=4, c2 1×3=3 → 7.
+# total_code_span суммирует число КОНЦЕПТОВ по блокам (код общий по adset'ам): c1=2, c2=1 → 3.
 def test_total_code_span():
     cfg = _config(
         campaigns=[
@@ -68,5 +68,5 @@ def test_total_code_span():
         ],
         offer_code="GH",
     )
-    # c1: 2 концепта × 2 adset = 4; c2: 1 концепт × 3 adset = 3 → итого 7
-    assert total_code_span(cfg) == 7
+    # span = число концептов на блок: c1=2 концепта, c2=1 концепт → итого 3.
+    assert total_code_span(cfg) == 3

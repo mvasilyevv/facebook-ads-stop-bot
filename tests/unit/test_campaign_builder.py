@@ -282,14 +282,15 @@ def test_spec_copies_default_per_block():
     assert all(len(a.ads) == 1 for a in spec.campaigns[1].adsets)
 
 
-# Коды креативов сквозные по блоку (CR001..CR_{K*N}), без дубля CR001 в разных adset.
+# Код креатива = код КОНЦЕПТА, общий по adset'ам: K=2 концепта → CR001..CR002, и
+# КАЖДЫЙ adset несёт один набор [CR001, CR002] (одинаковый креатив = один код/имя).
 def test_spec_ad_codes_naming():
     cfg = _config()
-    # K=2 концепта × 2 adset → CR001..CR004, adset0=[CR001,CR003], adset1=[CR002,CR004].
     spec = build_campaign_spec(cfg, concept_counts={"static": 2})
-    all_codes = [ad.code for adset in spec.campaigns[0].adsets for ad in adset.ads]
-    assert sorted(all_codes) == ["GH_CR_CR001", "GH_CR_CR002", "GH_CR_CR003", "GH_CR_CR004"]
-    assert len(set(all_codes)) == 4  # без дублей между adset
+    codes_by_adset = [[ad.code for ad in adset.ads] for adset in spec.campaigns[0].adsets]
+    assert all(row == ["GH_CR_CR001", "GH_CR_CR002"] for row in codes_by_adset)
+    flat = {c for row in codes_by_adset for c in row}
+    assert flat == {"GH_CR_CR001", "GH_CR_CR002"}  # 2 различных кода по концептам
 
 
 # ---------------------- launch_state → статусы объектов ----------------------
