@@ -209,18 +209,20 @@ export function createMetaApiServiceHandlers(sessionManager: SessionManager) {
   function uploadVideoHandler(call: any, callback: any): void {
     const t0 = Date.now();
     let videoSession: VideoUploadSession | null = null;
-    let chunkIndex = 0;
     let chunksProcessed = 0;
-    let resolvedSession: BrowserSession | null = null;
-    let resolvedPage: Page | null = null;
     let isFinishing = false;
     let respondedOnce = false;
 
-    // Все на await-приёме данных: каждый chunk обрабатывается последовательно через очередь.
-    const pendingQueue: Buffer[] = [];
+    // Сырые chunks в порядке прихода. 'data'-обработчик ТОЛЬКО синхронно кладёт в
+    // очередь, а единственный воркер processChunks разбирает их строго последовательно
+    // — гарантирует start() ДО первого transfer() и правильный порядок байтов.
+    // Раньше async 'data'-обработчики наезжали: на видео >1 чанка второй chunk звал
+    // transfer() пока start() ещё await'ился → 'VideoUploadSession не запущен' + риск
+    // перемешать байты. (Всплыло после уменьшения gRPC-чанка 4→3 МБ: видео стало 2 чанка.)
+    const pendingChunks: any[] = [];
     let processing = false;
     let endReceived = false;
-    let isLastChunkPending = false;
+    let isLastChunkSeen = false;
 
     function respondError(msg: string): void {
       if (respondedOnce) return;
@@ -246,25 +248,61 @@ export function createMetaApiServiceHandlers(sessionManager: SessionManager) {
       });
     }
 
-    async function drainQueue(): Promise<void> {
-      if (processing) return;
+    function bytesOf(chunk: any): Buffer {
+      return Buffer.isBuffer(chunk.chunk_bytes)
+        ? chunk.chunk_bytes
+        : Buffer.from(chunk.chunk_bytes || []);
+    }
+
+    async function processChunks(): Promise<void> {
+      if (processing || respondedOnce) return;
       processing = true;
       try {
-        while (pendingQueue.length > 0) {
-          const chunk = pendingQueue.shift()!;
-          if (!videoSession) {
-            respondError('Внутренняя ошибка: videoSession не инициализирован к началу transfer');
-            return;
+        while (pendingChunks.length > 0) {
+          const chunk = pendingChunks.shift();
+          if (videoSession === null) {
+            // Первый chunk: метаданные → создать сессию и СТАРТОВАТЬ (await до transfer).
+            const sessionId = String(chunk.session_id || '');
+            const adAccountId = String(chunk.ad_account_id || '');
+            const filename = String(chunk.filename || 'upload.mp4');
+            const fileSize = Number(chunk.file_size || 0);
+            if (!adAccountId) {
+              respondError('Первый chunk должен содержать ad_account_id');
+              return;
+            }
+            if (fileSize <= 0) {
+              respondError('Первый chunk должен содержать file_size > 0');
+              return;
+            }
+            const resolvedSession = sessionId
+              ? sessionManager.getSession(sessionId)
+              : sessionManager.getPreferredSession();
+            const resolvedPage = getPage(resolvedSession);
+            videoSession = new VideoUploadSession(resolvedPage, {
+              adAccountId,
+              filename,
+              fileSize,
+            });
+            await videoSession.start();
+            if (!chunk.is_init) {
+              const bytes = bytesOf(chunk);
+              if (bytes.length > 0) {
+                await videoSession.transfer(bytes);
+              }
+            }
+          } else {
+            const bytes = bytesOf(chunk);
+            if (bytes.length > 0) {
+              await videoSession.transfer(bytes);
+            }
           }
-          await videoSession.transfer(chunk);
           chunksProcessed += 1;
+          if (chunk.is_last_chunk) {
+            isLastChunkSeen = true;
+          }
         }
-        if (isLastChunkPending && videoSession && !isFinishing) {
-          isFinishing = true;
-          const videoId = await videoSession.finish();
-          respondSuccess(videoId);
-        } else if (endReceived && !respondedOnce && videoSession && !isFinishing) {
-          // Клиент закрыл стрим без is_last_chunk — корректно делаем finish.
+        // Очередь пуста: финишим, если пришёл последний chunk ИЛИ стрим закрыт.
+        if (videoSession && !isFinishing && (isLastChunkSeen || endReceived)) {
           isFinishing = true;
           const videoId = await videoSession.finish();
           respondSuccess(videoId);
@@ -274,80 +312,24 @@ export function createMetaApiServiceHandlers(sessionManager: SessionManager) {
       } finally {
         processing = false;
       }
+      // Догоняем chunks, приехавшие пока обрабатывали/финишили.
+      if (!respondedOnce && pendingChunks.length > 0) {
+        void processChunks();
+      }
     }
 
-    call.on('data', async (chunk: any) => {
-      try {
-        chunkIndex += 1;
-        // Первый chunk должен принести метаданные (init).
-        if (videoSession === null) {
-          const sessionId = String(chunk.session_id || '');
-          const adAccountId = String(chunk.ad_account_id || '');
-          const filename = String(chunk.filename || 'upload.mp4');
-          const fileSize = Number(chunk.file_size || 0);
-
-          if (!adAccountId) {
-            respondError('Первый chunk должен содержать ad_account_id');
-            return;
-          }
-          if (fileSize <= 0) {
-            respondError('Первый chunk должен содержать file_size > 0');
-            return;
-          }
-
-          resolvedSession = sessionId
-            ? sessionManager.getSession(sessionId)
-            : sessionManager.getPreferredSession();
-          resolvedPage = getPage(resolvedSession);
-
-          videoSession = new VideoUploadSession(resolvedPage, {
-            adAccountId,
-            filename,
-            fileSize,
-          });
-          await videoSession.start();
-
-          // Если в первом chunk есть и bytes (не init-only) — обрабатываем как transfer.
-          const initOnly = Boolean(chunk.is_init);
-          const bytes: Buffer = Buffer.isBuffer(chunk.chunk_bytes)
-            ? chunk.chunk_bytes
-            : Buffer.from(chunk.chunk_bytes || []);
-          if (!initOnly && bytes.length > 0) {
-            pendingQueue.push(bytes);
-          }
-          if (chunk.is_last_chunk) {
-            isLastChunkPending = true;
-          }
-          await drainQueue();
-          return;
-        }
-
-        // Последующие chunks — это transfer.
-        const bytes: Buffer = Buffer.isBuffer(chunk.chunk_bytes)
-          ? chunk.chunk_bytes
-          : Buffer.from(chunk.chunk_bytes || []);
-        if (bytes.length > 0) {
-          pendingQueue.push(bytes);
-        }
-        if (chunk.is_last_chunk) {
-          isLastChunkPending = true;
-        }
-        await drainQueue();
-      } catch (err: any) {
-        respondError(`UploadVideo: ${String(err?.message ?? err)}`);
-      }
+    call.on('data', (chunk: any) => {
+      pendingChunks.push(chunk);
+      void processChunks();
     });
 
-    call.on('end', async () => {
+    call.on('end', () => {
       endReceived = true;
-      await drainQueue();
-      if (!respondedOnce) {
-        // Стрим закрыт, но finish не запущен — это значит что-то не так
-        // (например, ни одного chunk не пришло). Сигналим клиенту.
-        if (videoSession === null) {
-          respondError('UploadVideo: стрим закрыт без единого chunk');
-        }
+      if (videoSession === null && pendingChunks.length === 0) {
+        respondError('UploadVideo: стрим закрыт без единого chunk');
+        return;
       }
+      void processChunks();
     });
 
     call.on('error', (err: any) => {
