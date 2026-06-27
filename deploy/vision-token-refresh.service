@@ -1,0 +1,11 @@
+[Unit]
+Description=Авто-рефреш Vision X-Token (логин в облако v1.empr.cloud до истечения)
+After=network-online.target docker.service vision.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Рефреш только если до истечения токена меньше 5 дней (иначе no-op).
+ExecStart=/usr/bin/python3 /usr/local/bin/vision-refresh-token.py --if-expiring 5
+# Логи best-effort, не валим систему при сбое сети/облака.
+TimeoutStartSec=240

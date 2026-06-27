@@ -1,0 +1,12 @@
+[Unit]
+Description=Ежедневная проверка/рефреш Vision X-Token (за ~5 дней до истечения)
+
+[Timer]
+# Раз в сутки 05:30 UTC + джиттер, чтобы не совпасть с cleanup/digest.
+OnCalendar=*-*-* 05:30:00 UTC
+RandomizedDelaySec=300
+# Догнать пропущенный запуск (хост был выключен в момент таймера).
+Persistent=true
+
+[Install]
+WantedBy=timers.target
