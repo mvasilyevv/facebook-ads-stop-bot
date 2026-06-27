@@ -5,7 +5,7 @@ import type { Page } from 'playwright';
 import { SessionManager, findPreferredPrimaryPage } from '../session-manager.js';
 import type { BrowserSession } from '../types.js';
 import { executeGraphCall, checkMetaApiHealth, type GraphApiCallParams } from './client.js';
-import { uploadImage, VideoUploadSession } from './upload.js';
+import { uploadImage, uploadVideoSingle } from './upload.js';
 import { withPageLock } from '../page-lock.js';
 import { recordFetchOutcome, shouldHealNow } from '../session-health.js';
 
@@ -203,22 +203,27 @@ export function createMetaApiServiceHandlers(sessionManager: SessionManager) {
     }
   }
 
-  // Client streaming: клиент шлёт несколько UploadVideoChunk, сервер отвечает одним UploadVideoResponse.
-  // Поток: первый chunk с метаданными (filename + file_size + ad_account_id) → start;
-  // далее transfer для каждого chunk с bytes; последний chunk с is_last_chunk=true → finish.
+  // Client streaming: клиент шлёт несколько UploadVideoChunk, сервер отвечает одним
+  // UploadVideoResponse. Чанки нужны только для обхода gRPC-лимита сообщения — видео
+  // собирается целиком и грузится ОДНИМ multipart-POST (source=File), как картинки.
+  // Meta v22 отвергает chunked resumable (upload_phase=start/transfer/finish) как
+  // 'Invalid parameter', а single-POST принимает (проверено живьём: 200 + video_id).
   function uploadVideoHandler(call: any, callback: any): void {
     const t0 = Date.now();
-    let videoSession: VideoUploadSession | null = null;
     let chunksProcessed = 0;
     let isFinishing = false;
     let respondedOnce = false;
+    let videoId = '';
 
-    // Сырые chunks в порядке прихода. 'data'-обработчик ТОЛЬКО синхронно кладёт в
-    // очередь, а единственный воркер processChunks разбирает их строго последовательно
-    // — гарантирует start() ДО первого transfer() и правильный порядок байтов.
-    // Раньше async 'data'-обработчики наезжали: на видео >1 чанка второй chunk звал
-    // transfer() пока start() ещё await'ился → 'VideoUploadSession не запущен' + риск
-    // перемешать байты. (Всплыло после уменьшения gRPC-чанка 4→3 МБ: видео стало 2 чанка.)
+    // 'data'-обработчик ТОЛЬКО синхронно кладёт chunk в очередь, единственный воркер
+    // processChunks разбирает строго последовательно (без гонок async-обработчиков) и
+    // накапливает байты по порядку. Раньше async 'data' наезжали → перемешивание/гонка.
+    let metadataSeen = false;
+    let adAccountId = '';
+    let filename = 'upload.mp4';
+    let resolvedPage: Page | null = null;
+    const videoBuffers: Buffer[] = [];
+
     const pendingChunks: any[] = [];
     let processing = false;
     let endReceived = false;
@@ -228,7 +233,7 @@ export function createMetaApiServiceHandlers(sessionManager: SessionManager) {
       if (respondedOnce) return;
       respondedOnce = true;
       callback(null, {
-        video_id: videoSession?.id || '',
+        video_id: videoId,
         ok: false,
         error: msg,
         duration_ms: Date.now() - t0,
@@ -236,11 +241,12 @@ export function createMetaApiServiceHandlers(sessionManager: SessionManager) {
       });
     }
 
-    function respondSuccess(videoId: string): void {
+    function respondSuccess(vid: string): void {
       if (respondedOnce) return;
       respondedOnce = true;
+      videoId = vid;
       callback(null, {
-        video_id: videoId,
+        video_id: vid,
         ok: true,
         error: '',
         duration_ms: Date.now() - t0,
@@ -260,52 +266,43 @@ export function createMetaApiServiceHandlers(sessionManager: SessionManager) {
       try {
         while (pendingChunks.length > 0) {
           const chunk = pendingChunks.shift();
-          if (videoSession === null) {
-            // Первый chunk: метаданные → создать сессию и СТАРТОВАТЬ (await до transfer).
+          if (!metadataSeen) {
             const sessionId = String(chunk.session_id || '');
-            const adAccountId = String(chunk.ad_account_id || '');
-            const filename = String(chunk.filename || 'upload.mp4');
-            const fileSize = Number(chunk.file_size || 0);
+            adAccountId = String(chunk.ad_account_id || '');
+            filename = String(chunk.filename || 'upload.mp4');
             if (!adAccountId) {
               respondError('Первый chunk должен содержать ad_account_id');
-              return;
-            }
-            if (fileSize <= 0) {
-              respondError('Первый chunk должен содержать file_size > 0');
               return;
             }
             const resolvedSession = sessionId
               ? sessionManager.getSession(sessionId)
               : sessionManager.getPreferredSession();
-            const resolvedPage = getPage(resolvedSession);
-            videoSession = new VideoUploadSession(resolvedPage, {
-              adAccountId,
-              filename,
-              fileSize,
-            });
-            await videoSession.start();
-            if (!chunk.is_init) {
-              const bytes = bytesOf(chunk);
-              if (bytes.length > 0) {
-                await videoSession.transfer(bytes);
-              }
-            }
-          } else {
-            const bytes = bytesOf(chunk);
-            if (bytes.length > 0) {
-              await videoSession.transfer(bytes);
-            }
+            resolvedPage = getPage(resolvedSession);
+            metadataSeen = true;
+          }
+          const bytes = bytesOf(chunk);
+          if (bytes.length > 0) {
+            videoBuffers.push(bytes);
           }
           chunksProcessed += 1;
           if (chunk.is_last_chunk) {
             isLastChunkSeen = true;
           }
         }
-        // Очередь пуста: финишим, если пришёл последний chunk ИЛИ стрим закрыт.
-        if (videoSession && !isFinishing && (isLastChunkSeen || endReceived)) {
+        // Очередь пуста: всё видео собрано → грузим ОДНИМ POST.
+        if (metadataSeen && resolvedPage && !isFinishing && (isLastChunkSeen || endReceived)) {
           isFinishing = true;
-          const videoId = await videoSession.finish();
-          respondSuccess(videoId);
+          const full = Buffer.concat(videoBuffers);
+          if (full.length === 0) {
+            respondError('UploadVideo: пустое видео (0 байт)');
+            return;
+          }
+          const res = await uploadVideoSingle(resolvedPage, { adAccountId, filename, fileBytes: full });
+          if (res.ok && res.videoId) {
+            respondSuccess(res.videoId);
+          } else {
+            respondError(`UploadVideo: ${res.error || 'no video_id'}`);
+          }
         }
       } catch (err: any) {
         respondError(`UploadVideo: ${String(err?.message ?? err)}`);
@@ -325,7 +322,7 @@ export function createMetaApiServiceHandlers(sessionManager: SessionManager) {
 
     call.on('end', () => {
       endReceived = true;
-      if (videoSession === null && pendingChunks.length === 0) {
+      if (!metadataSeen && pendingChunks.length === 0) {
         respondError('UploadVideo: стрим закрыт без единого chunk');
         return;
       }

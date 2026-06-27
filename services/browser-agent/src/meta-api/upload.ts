@@ -334,6 +334,100 @@ async function uploadImageFromUrl(
  *
  * Все вызовы — через page.evaluate(fetch FormData), внутри одного browser-context.
  */
+/**
+ * Загружает видео в /act_X/advideos ОДНИМ multipart-POST (source=File) — как картинки.
+ * Возвращает video_id (поле `id` в ответе Meta).
+ *
+ * Почему single-POST, а не chunked resumable (upload_phase=start/transfer/finish):
+ * Meta v22 отвергает upload_phase=start как 'Invalid parameter' (GRAPH_ERROR_100).
+ * Single-POST `source` поддерживается для видео до ~1GB и проверен живьём (200 + id).
+ */
+export async function uploadVideoSingle(
+  page: Page,
+  params: {
+    adAccountId: string;
+    filename: string;
+    fileBytes: Uint8Array | Buffer;
+    timeoutMs?: number;
+  },
+): Promise<{ ok: boolean; videoId: string; error: string; durationMs: number }> {
+  const timeoutMs = params.timeoutMs ?? DEFAULT_UPLOAD_TIMEOUT_MS;
+  const t0 = Date.now();
+
+  if (!params.adAccountId.startsWith('act_')) {
+    return {
+      ok: false,
+      videoId: '',
+      error: `ad_account_id должен начинаться с act_, получено ${params.adAccountId}`,
+      durationMs: 0,
+    };
+  }
+  if (!params.fileBytes || params.fileBytes.length === 0) {
+    return { ok: false, videoId: '', error: 'INVALID_ARGUMENT: file_bytes пусты', durationMs: 0 };
+  }
+
+  const base64 = Buffer.from(params.fileBytes).toString('base64');
+
+  try {
+    const result: { ok: boolean; videoId: string; error: string } = await page.evaluate(
+      async (args) => {
+        const match = document.documentElement.innerHTML.match(/EAA[A-Za-z0-9_-]{100,}/);
+        if (!match) return { ok: false, videoId: '', error: 'TOKEN_NOT_FOUND_IN_PAGE' };
+        const token = match[0];
+
+        const bytes = Uint8Array.from(atob(args.base64Data), (c) => c.charCodeAt(0));
+        const form = new FormData();
+        form.append('source', new File([bytes], args.filename, { type: 'video/mp4' }));
+        form.append('access_token', token);
+
+        const url = `https://graph.facebook.com/${args.apiVersion}/${args.adAccountId}/advideos`;
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), args.timeoutMs);
+        try {
+          const response = await fetch(url, {
+            method: 'POST',
+            credentials: 'include',
+            body: form,
+            signal: controller.signal,
+          });
+          clearTimeout(timeoutId);
+          const text = await response.text();
+          let parsed: any;
+          try {
+            parsed = JSON.parse(text);
+          } catch {
+            return { ok: false, videoId: '', error: `Невалидный JSON: ${text.slice(0, 300)}` };
+          }
+          if (parsed?.error) {
+            return {
+              ok: false,
+              videoId: '',
+              error: `GRAPH_ERROR_${parsed.error.code}: ${parsed.error.message}`,
+            };
+          }
+          const vid = String(parsed.id ?? parsed.video_id ?? '');
+          if (!vid) return { ok: false, videoId: '', error: `Ответ без id: ${text.slice(0, 200)}` };
+          return { ok: true, videoId: vid, error: '' };
+        } catch (err: any) {
+          clearTimeout(timeoutId);
+          const msg = err?.name === 'AbortError' ? 'Timeout' : String(err?.message ?? err);
+          return { ok: false, videoId: '', error: msg };
+        }
+      },
+      {
+        adAccountId: params.adAccountId,
+        filename: params.filename || 'upload.mp4',
+        base64Data: base64,
+        timeoutMs,
+        apiVersion: META_API_VERSION,
+      },
+    );
+    return { ok: result.ok, videoId: result.videoId, error: result.error, durationMs: Date.now() - t0 };
+  } catch (err: any) {
+    return { ok: false, videoId: '', error: String(err?.message ?? err), durationMs: Date.now() - t0 };
+  }
+}
+
 export class VideoUploadSession {
   private page: Page;
   private adAccountId: string;
