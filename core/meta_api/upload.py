@@ -394,6 +394,42 @@ class MediaUploader:
                 return False
             await asyncio.sleep(interval)
 
+    async def get_video_thumbnail_url(
+        self,
+        video_id: str,
+        *,
+        retries: int = 6,
+        interval: float = 3.0,
+    ) -> str:
+        """uri авто-сгенерённой Meta миниатюры видео (для video_data.image_url).
+
+        Meta ТРЕБУЕТ image_hash ИЛИ image_url в video_data, иначе adcreatives падает
+        subcode 1443226 «Для вашего объявления нужна миниатюра видео». Берём
+        preferred-миниатюру из GET /{video_id}/thumbnails. Поллит — миниатюры
+        появляются после обработки видео. Best-effort: пустая строка если не получили
+        (creative тогда упадёт явно с понятной ошибкой).
+        """
+        last = ""
+        for _ in range(retries):
+            try:
+                resp = await self._client.execute_graph_call(
+                    method="GET",
+                    endpoint=f"/{video_id}/thumbnails",
+                    query_params={"fields": "uri,is_preferred"},
+                )
+                data = (resp or {}).get("data") or []
+                if data:
+                    preferred = next((t for t in data if t.get("is_preferred")), None)
+                    uri = str((preferred or data[0]).get("uri", ""))
+                    if uri:
+                        return uri
+            except Exception as exc:  # noqa: BLE001 — best-effort, поллим дальше
+                last = repr(exc)
+                logger.warning("get_video_thumbnail_url %s: %r", video_id, exc)
+            await asyncio.sleep(interval)
+        logger.warning("видео %s: миниатюра не получена (%s)", video_id, last or "пусто")
+        return ""
+
     # ====================== внутреннее ======================
 
     async def _video_chunks(

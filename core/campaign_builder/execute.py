@@ -77,6 +77,8 @@ class _Uploader(Protocol):
 
     async def wait_video_ready(self, video_id: str) -> bool: ...
 
+    async def get_video_thumbnail_url(self, video_id: str) -> str: ...
+
 
 # ====================== ошибки ======================
 
@@ -321,15 +323,14 @@ async def _execute_block(
                 # ещё недоступен → PartialCreateError → orphan-залив. Best-effort: по
                 # таймауту не валим залив, даём Meta шанс.
                 await uploader.wait_video_ready(video_id)
+                # Meta ТРЕБУЕТ миниатюру в video_data (subcode 1443226). Берём авто-кадр
+                # Meta (GET /{video_id}/thumbnails) → image_url. Появляется после ready.
+                thumb_url = await uploader.get_video_thumbnail_url(video_id)
                 state.uploads_done += 1
                 await _emit(on_progress, state)
                 creative_body = video_creative_body(
-                    cfg, name=ad.code, video_id=video_id, thumb_hash="", url_tags=url_tags
+                    cfg, name=ad.code, video_id=video_id, thumb_url=thumb_url, url_tags=url_tags
                 )
-                # Без явного thumbnail убираем пустой image_hash → Meta берёт авто-кадр.
-                vd = creative_body["object_story_spec"]["video_data"]
-                if not vd.get("image_hash"):
-                    vd.pop("image_hash", None)
             else:
                 image_hash = await uploader.upload_image(
                     act, ad.media_bytes or b"", filename=f"{ad.code}.jpeg"

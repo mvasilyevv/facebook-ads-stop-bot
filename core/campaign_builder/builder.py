@@ -171,14 +171,20 @@ def image_creative_body(cfg: CampaignConfig, name: str, image_hash: str, url_tag
 
 
 def video_creative_body(
-    cfg: CampaignConfig, name: str, video_id: str, thumb_hash: str, url_tags: str
+    cfg: CampaignConfig, name: str, video_id: str, thumb_url: str, url_tags: str
 ) -> dict:
-    """Тело video-креатива."""
+    """Тело video-креатива.
+
+    Meta ТРЕБУЕТ миниатюру в video_data (image_hash ИЛИ image_url), иначе adcreatives
+    падает subcode 1443226 «Для вашего объявления нужна миниатюра видео». Кладём
+    image_url = авто-сгенерённая Meta миниатюра (GET /{video_id}/thumbnails).
+    """
     vd: dict = {
         "video_id": video_id,
-        "image_hash": thumb_hash,
         "call_to_action": {"type": cfg.cta, "value": {"link": cfg.destination_link}},
     }
+    if thumb_url:
+        vd["image_url"] = thumb_url
     if cfg.ad_text.mode == "full":
         if cfg.ad_text.message:
             vd["message"] = cfg.ad_text.message

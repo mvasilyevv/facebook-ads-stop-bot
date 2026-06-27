@@ -232,6 +232,9 @@ class _FakeUploader:
     async def wait_video_ready(self, video_id, **kw):
         return True
 
+    async def get_video_thumbnail_url(self, video_id, **kw):
+        return f"https://thumb.example/{video_id}.jpg"
+
 
 def _patch_uniquify(monkeypatch):
     """Заглушка image-уникализатора — не трогаем PIL."""

@@ -400,3 +400,30 @@ async def test_wait_video_ready_swallows_read_errors() -> None:
     uploader = MediaUploader(client)
     ok = await uploader.wait_video_ready("vid1", timeout=5, interval=0.001)
     assert ok is True
+
+
+# get_video_thumbnail_url: берёт preferred-миниатюру (Meta требует её в video_data).
+@pytest.mark.asyncio
+async def test_get_video_thumbnail_url_returns_preferred() -> None:
+    client = MagicMock()
+    client.execute_graph_call = AsyncMock(
+        return_value={
+            "data": [
+                {"uri": "https://a/1.jpg", "is_preferred": False},
+                {"uri": "https://a/2.jpg", "is_preferred": True},
+            ]
+        }
+    )
+    uploader = MediaUploader(client)
+    url = await uploader.get_video_thumbnail_url("vid1", retries=1, interval=0.001)
+    assert url == "https://a/2.jpg"
+
+
+# get_video_thumbnail_url: миниатюр нет → пустая строка (creative упадёт явно, не тихо).
+@pytest.mark.asyncio
+async def test_get_video_thumbnail_url_empty_returns_blank() -> None:
+    client = MagicMock()
+    client.execute_graph_call = AsyncMock(return_value={"data": []})
+    uploader = MediaUploader(client)
+    url = await uploader.get_video_thumbnail_url("vid1", retries=2, interval=0.001)
+    assert url == ""
