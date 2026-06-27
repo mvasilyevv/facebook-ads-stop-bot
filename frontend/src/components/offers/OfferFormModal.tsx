@@ -17,6 +17,7 @@ import { Modal, ModalFooter } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { TagListInput } from "@/components/ui/TagListInput";
+import { CountryMultiSelect } from "@/components/ui/CountryMultiSelect";
 import { Switch } from "@/components/ui/Switch";
 import type { Offer } from "@fb/shared";
 
@@ -37,11 +38,6 @@ export interface OfferFormValues {
 const normalizeAccount = (token: string): string => token.replace(/^act_/i, "");
 const validateAccount = (token: string): string | null =>
   /^\d+$/.test(token) ? null : "только числовой ID кабинета";
-
-// Гео: upper-case ISO-2; проверка на ровно две латинские буквы.
-const normalizeCountry = (token: string): string => token.trim().toUpperCase();
-const validateCountry = (token: string): string | null =>
-  /^[A-Z]{2}$/.test(token) ? null : "только ISO-2 код (напр. DE, BR)";
 
 interface OfferFormModalProps {
   open: boolean;
@@ -213,17 +209,15 @@ export function OfferFormModal({ open, onOpenChange, offer, onSave }: OfferFormM
             helpText="Пиксель оффера — событие оптимизации (Purchase/FTD) при создании кампаний. Необязательно."
           />
 
-          {/* Гео (страны) — тэги ISO-2; префилл geo визарда при создании кампаний */}
-          <TagListInput
+          {/* Гео (страны) — выбор по названию, хранится ISO-2; префилл geo визарда */}
+          <CountryMultiSelect
             id="offer-countries"
             label="Страны (гео)"
-            placeholder="DE + Enter"
+            placeholder="Начните вводить — напр. Гана"
             values={countries}
             onChange={setCountries}
-            normalize={normalizeCountry}
-            validate={validateCountry}
             disabled={busy}
-            helpText="ISO-2 коды (DE, BR, IN). Enter/запятая — добавить, × — удалить. Подставляются в гео при создании кампаний. Необязательно."
+            helpText="Выберите страну по названию (хранится код ISO-2). Подставляется в гео при создании кампаний. Необязательно."
           />
 
           {/* Статус */}

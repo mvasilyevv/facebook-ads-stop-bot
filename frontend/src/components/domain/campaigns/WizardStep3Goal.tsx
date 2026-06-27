@@ -15,7 +15,7 @@ import { CALL_TO_ACTIONS } from "@fb/shared";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { Switch } from "@/components/ui/Switch";
-import { TagListInput } from "@/components/ui/TagListInput";
+import { CountryMultiSelect } from "@/components/ui/CountryMultiSelect";
 import type { WizardGoal } from "@/stores/campaignWizard";
 
 interface WizardStep3GoalProps {
@@ -119,18 +119,14 @@ export const WizardStep3Goal: FC<WizardStep3GoalProps> = ({ values, onChange, er
             <div className="text-[11px] font-display tracking-wider uppercase text-bg-9 mb-1.5">
               Страны <span className="text-bg-7">(AQ добавляется автоматически)</span>
             </div>
-            <TagListInput
+            <CountryMultiSelect
               id="countries"
               aria-label="Страны"
-              placeholder="US, BR, DE + Enter"
+              placeholder="Начните вводить — напр. Гана"
               values={values.countries}
-              onChange={(v) => onChange({ countries: v.map((s) => s.toUpperCase()) })}
+              onChange={(v) => onChange({ countries: v })}
+              errorMessage={errors.countries}
             />
-            {errors.countries && (
-              <span role="alert" className="text-[11px] text-danger font-display">
-                {errors.countries}
-              </span>
-            )}
           </div>
 
           <div className="grid grid-cols-3 gap-4 items-end">

@@ -245,7 +245,7 @@ describe("OfferFormModal — создание", () => {
     // Пиксель оффера
     await userEvent.type(screen.getByLabelText(/fb pixel id/i), "9988776655");
 
-    // Гео (страны): нижний регистр аплоадится в upper, дубли схлопываются.
+    // Гео (страны): ввод кода/имени → Enter выбирает совпавшую опцию, хранится ISO-2.
     await userEvent.type(screen.getByLabelText(/страны/i), "de{Enter}br{Enter}de{Enter}");
 
     // Нажимаем создать
@@ -262,18 +262,34 @@ describe("OfferFormModal — создание", () => {
     );
   });
 
-  // Гео: нечисловой/невалидный ISO-2 токен отклоняется при добавлении (chip не создаётся).
-  it("отклоняет невалидный ISO-2 код страны", async () => {
+  // Гео: выбор по русскому названию → хранится ISO-2 («Гана» → GH).
+  it("выбирает страну по русскому названию (хранится ISO-2)", async () => {
     const onSave = vi.fn().mockResolvedValue(undefined);
     render(<OfferFormModal open onOpenChange={() => {}} offer={null} onSave={onSave} />);
 
     await userEvent.type(screen.getByLabelText(/код оффера/i), "CR2");
     await userEvent.type(screen.getByLabelText(/рекламные кабинеты/i), "111{Enter}");
-    // Трёхбуквенный код — не ISO-2 → отклонён.
-    await userEvent.type(screen.getByLabelText(/страны/i), "deu{Enter}");
-    expect(screen.getByText(/не подходит/i)).toBeInTheDocument();
+    // Печатаем «гана» → в выпадашке появляется «Гана» → Enter выбирает.
+    await userEvent.type(screen.getByLabelText(/страны/i), "гана");
+    expect(await screen.findByText("Гана")).toBeInTheDocument();
+    await userEvent.keyboard("{Enter}");
 
-    // Сабмит проходит (countries опц.) — countries пустой.
+    await userEvent.click(screen.getByRole("button", { name: /создать оффер/i }));
+    expect(onSave).toHaveBeenCalledWith(
+      expect.objectContaining({ code: "CR2", countries: ["GH"] }),
+    );
+  });
+
+  // Гео: мусорный ввод не даёт опций — ничего не добавляется (countries пустой).
+  it("игнорирует ввод без совпадений по странам", async () => {
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    render(<OfferFormModal open onOpenChange={() => {}} offer={null} onSave={onSave} />);
+
+    await userEvent.type(screen.getByLabelText(/код оффера/i), "CR2");
+    await userEvent.type(screen.getByLabelText(/рекламные кабинеты/i), "111{Enter}");
+    // Несуществующая страна — нет опций → Enter ничего не добавляет.
+    await userEvent.type(screen.getByLabelText(/страны/i), "zzzzz{Enter}");
+
     await userEvent.click(screen.getByRole("button", { name: /создать оффер/i }));
     expect(onSave).toHaveBeenCalledWith(
       expect.objectContaining({ code: "CR2", countries: [] }),

@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { deriveGeoFromNames } from "../geo";
+import {
+  deriveGeoFromNames,
+  countryNameRu,
+  countryFlagEmoji,
+  isValidCountryCode,
+  searchCountries,
+} from "../geo";
 import { alertStateCssVar } from "../../constants/states";
 
 describe("deriveGeoFromNames — единый гео-парсер web/mini", () => {
@@ -26,6 +32,53 @@ describe("deriveGeoFromNames — единый гео-парсер web/mini", () 
   // Ничего не нашли → фолбэк по первым буквам, совсем пусто → «—».
   it("пустой вход → «—»", () => {
     expect(deriveGeoFromNames(null, undefined)).toBe("—");
+  });
+});
+
+describe("countryNameRu / countryFlagEmoji — русские имена стран", () => {
+  // Корень бага: GH (Гана) путали с GE (Грузия) в криптичном коде. Фиксируем имена.
+  it("GH → Гана, GE → Грузия (НЕ путаются)", () => {
+    expect(countryNameRu("GH")).toBe("Гана");
+    expect(countryNameRu("GE")).toBe("Грузия");
+    expect(countryNameRu("GH")).not.toBe(countryNameRu("GE"));
+  });
+
+  // Регистронезависимость + фолбэк на сам код для мусора.
+  it("нормализует регистр, мусор → сам код", () => {
+    expect(countryNameRu("gh")).toBe("Гана");
+    expect(countryNameRu("ZZ")).toBe("ZZ");
+  });
+
+  // Флаг-emoji из кода.
+  it("флаг страны из ISO-2", () => {
+    expect(countryFlagEmoji("GH")).toBe("🇬🇭");
+    expect(countryFlagEmoji("xx-bad")).toBe("🏳️");
+  });
+
+  it("валидация ISO-2 кода", () => {
+    expect(isValidCountryCode("GH")).toBe(true);
+    expect(isValidCountryCode("gh")).toBe(true);
+    expect(isValidCountryCode("ZZ")).toBe(false);
+  });
+});
+
+describe("searchCountries — поиск по имени/коду, хранит код", () => {
+  // По русскому имени.
+  it("находит «Гана» по подстроке имени, отдаёт код GH", () => {
+    const res = searchCountries("ган");
+    expect(res.some((c) => c.code === "GH" && c.name === "Гана")).toBe(true);
+  });
+
+  // По ISO-2 коду.
+  it("находит по коду", () => {
+    const res = searchCountries("gh");
+    expect(res[0]?.code).toBe("GH");
+  });
+
+  // exclude убирает уже выбранные.
+  it("исключает выбранные коды", () => {
+    const res = searchCountries("", { exclude: ["GH"], limit: 300 });
+    expect(res.some((c) => c.code === "GH")).toBe(false);
   });
 });
 
