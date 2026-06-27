@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodic Vision channel self-heal check (раз в 60с)
+
+[Timer]
+OnBootSec=120
+OnUnitInactiveSec=60
+AccuracySec=10s
+Persistent=false
+
+[Install]
+WantedBy=timers.target
