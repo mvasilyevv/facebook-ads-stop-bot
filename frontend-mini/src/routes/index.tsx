@@ -5,7 +5,7 @@
  */
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
-import { RefreshCw, Play } from "lucide-react";
+import { RefreshCw, Play, Power } from "lucide-react";
 import {
   formatSpend,
   formatRelativeTime,
@@ -125,6 +125,18 @@ function DashboardPage() {
     }
   };
 
+  const handlePause = async () => {
+    haptic.impact("heavy");
+    try {
+      await toggleScanMutation.mutateAsync({ enabled: false });
+      haptic.notify("success");
+      showToast("Observer остановлен");
+    } catch (e: unknown) {
+      haptic.notify("error");
+      showToast((e as Error).message ?? "Ошибка", false);
+    }
+  };
+
   const incidents = batch?.recent_incidents ?? [];
   const disableTasks = (batch?.recent_disable_tasks ?? []).filter((raw) => {
     const t = raw as Record<string, unknown>;
@@ -165,6 +177,15 @@ function DashboardPage() {
                     <div className="font-display tabular-nums text-[11px] text-bg-10">{next}с</div>
                   </div>
                 </div>
+                <button
+                  type="button"
+                  aria-label="Остановить сканирование"
+                  onClick={() => void handlePause()}
+                  disabled={toggleScanMutation.isPending}
+                  className="inline-flex items-center justify-center bg-bg-1 text-bg-10 border border-[var(--hairline)] w-11 h-11 rounded-[var(--radius-2)] disabled:opacity-60 active:bg-bg-2"
+                >
+                  <Power size={18} strokeWidth={1.8} />
+                </button>
                 <button
                   type="button"
                   aria-label="Сканировать сейчас"

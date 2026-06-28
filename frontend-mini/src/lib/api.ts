@@ -94,6 +94,8 @@ export interface TmaAdDetail {
   snooze_until: string | null;
   account_id: string | null;
   can_open_in_ads_manager: boolean;
+  creative_thumb_url: string | null;
+  creative_image_url: string | null;
   metrics: TmaAdMetrics;
   recent_alerts: TmaRecentAlert[];
 }

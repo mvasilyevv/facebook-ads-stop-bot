@@ -43,6 +43,9 @@ class TmaAdDetailResponse(BaseModel):
     snooze_until: str | None = None
     account_id: str | None = None
     can_open_in_ads_manager: bool = False
+    # Превью креатива (из fb_ads): image_url приоритетнее thumb (крупнее).
+    creative_thumb_url: str | None = None
+    creative_image_url: str | None = None
     metrics: TmaAdMetrics
     recent_alerts: list[TmaRecentAlert] = Field(default_factory=list)
 

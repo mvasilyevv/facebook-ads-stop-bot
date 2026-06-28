@@ -268,6 +268,8 @@ async def tma_ad_detail(
         snooze_until=snap.get("snoozed_until"),
         account_id=account_id,
         can_open_in_ads_manager=bool(account_id),
+        creative_thumb_url=snap.get("creative_thumb_url"),
+        creative_image_url=snap.get("creative_image_url"),
         metrics=metrics,
         recent_alerts=recent,
     )

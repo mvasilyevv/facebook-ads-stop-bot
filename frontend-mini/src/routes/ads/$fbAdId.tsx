@@ -134,6 +134,9 @@ function AdDetailPage() {
   const metrics: TmaAdMetrics = (data.metrics ?? {}) as TmaAdMetrics;
   const normalized = normalizeAlertState(state);
 
+  // Превью креатива: image приоритетнее thumb (крупнее). Нет ни того, ни другого → секции нет.
+  const creativeSrc = data.creative_image_url || data.creative_thumb_url || null;
+
   // Инцидент активен → показываем Claim
   const hasIncident = ["warning_sent", "stop_sent", "claimed"].includes(normalized);
 
@@ -255,6 +258,29 @@ function AdDetailPage() {
           >
             <RulePills codes={alertRuleCodes} />
           </div>
+        )}
+
+        {/* ── Креатив (превью, если бэк отдал URL) ───────────────────────── */}
+        {creativeSrc && (
+          <section>
+            <Eyebrow className="mb-2.5">КРЕАТИВ</Eyebrow>
+            <a
+              href={creativeSrc}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={() => haptic.selection()}
+              className="block rounded-[var(--radius-3)] overflow-hidden border border-[var(--hairline)]"
+              style={{ background: "var(--color-bg-1)" }}
+              aria-label="Открыть креатив в полном размере"
+            >
+              <img
+                src={creativeSrc}
+                alt="Превью креатива"
+                loading="lazy"
+                className="w-full max-h-[320px] object-contain"
+              />
+            </a>
+          </section>
         )}
 
         {/* ── Метрики ────────────────────────────────────────────────────── */}
