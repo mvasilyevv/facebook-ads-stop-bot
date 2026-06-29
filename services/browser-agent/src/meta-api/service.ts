@@ -29,7 +29,20 @@ function getPage(session: BrowserSession): Page {
   return page;
 }
 
-export function createMetaApiServiceHandlers(sessionManager: SessionManager) {
+// Инъекция зависимостей — только для тестов сборки чанков uploadVideo (без реального
+// аплоада/браузера). В проде используются дефолты (модульные импорты) — поведение неизменно.
+export interface MetaApiServiceDeps {
+  uploadVideoSingle?: typeof uploadVideoSingle;
+  getPage?: (session: BrowserSession) => Page;
+}
+
+export function createMetaApiServiceHandlers(
+  sessionManager: SessionManager,
+  deps: MetaApiServiceDeps = {},
+) {
+  const _uploadVideoSingle = deps.uploadVideoSingle ?? uploadVideoSingle;
+  const _getPage = deps.getPage ?? getPage;
+
   function resolveSession(sessionId: string): BrowserSession {
     const normalizedSessionId = String(sessionId || '').trim();
     return normalizedSessionId
@@ -277,7 +290,7 @@ export function createMetaApiServiceHandlers(sessionManager: SessionManager) {
             const resolvedSession = sessionId
               ? sessionManager.getSession(sessionId)
               : sessionManager.getPreferredSession();
-            resolvedPage = getPage(resolvedSession);
+            resolvedPage = _getPage(resolvedSession);
             metadataSeen = true;
           }
           const bytes = bytesOf(chunk);
@@ -297,7 +310,7 @@ export function createMetaApiServiceHandlers(sessionManager: SessionManager) {
             respondError('UploadVideo: пустое видео (0 байт)');
             return;
           }
-          const res = await uploadVideoSingle(resolvedPage, { adAccountId, filename, fileBytes: full });
+          const res = await _uploadVideoSingle(resolvedPage, { adAccountId, filename, fileBytes: full });
           if (res.ok && res.videoId) {
             respondSuccess(res.videoId);
           } else {

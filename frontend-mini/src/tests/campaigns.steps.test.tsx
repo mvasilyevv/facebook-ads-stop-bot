@@ -69,6 +69,8 @@ import { StepConfig } from "@/routes/campaigns/StepConfig";
 import { StepStructure } from "@/routes/campaigns/StepStructure";
 import { StepCreatives } from "@/routes/campaigns/StepCreatives";
 import { StepStart } from "@/routes/campaigns/StepStart";
+import { StepPreview } from "@/routes/campaigns/StepPreview";
+import { StepLaunch } from "@/routes/campaigns/StepLaunch";
 
 // ─── StepIdentity ──────────────────────────────────────────────────────────
 
@@ -725,5 +727,109 @@ describe("StepStart — выбор режима", () => {
     render(<TestProviders><StepStart onCloneRun={onCloneRun} /></TestProviders>);
     fireEvent.click(screen.getByText(/Клон из истории/i));
     expect(onCloneRun).toHaveBeenCalled();
+  });
+});
+
+// ─── StepPreview (M13) ───────────────────────────────────────────────────────
+
+describe("StepPreview — dry-run валидация", () => {
+  const validateMutate = vi.fn();
+
+  beforeEach(() => {
+    useWizardStore.getState().reset();
+    useWizardStore.getState().setStep("preview");
+    validateMutate.mockReset().mockResolvedValue({});
+    mockUseValidateCampaign.mockReturnValue({
+      mutateAsync: validateMutate,
+      data: undefined,
+      isPending: false,
+      error: null,
+    });
+  });
+
+  // Шаг сам запускает dry-run при первом рендере (валидация до создания кампании).
+  it("автозапускает dry-run validate при первом рендере", async () => {
+    render(<TestProviders><StepPreview /></TestProviders>);
+    await waitFor(() => expect(validateMutate).toHaveBeenCalledTimes(1));
+  });
+
+  // Guard: без готового плана кнопка «Запустить залив» заблокирована (нельзя идти дальше).
+  it("кнопка 'Запустить залив' заблокирована пока нет плана", () => {
+    render(<TestProviders><StepPreview /></TestProviders>);
+    expect(screen.getByRole("button", { name: /Запустить залив/i })).toBeDisabled();
+  });
+
+  // При готовом плане — «Конфиг валидный» + сводка, кнопка разблокирована.
+  it("при готовом плане показывает сводку и разблокирует кнопку", () => {
+    mockUseValidateCampaign.mockReturnValue({
+      mutateAsync: validateMutate,
+      data: {
+        campaign_count: 2,
+        adset_count: 4,
+        ad_count: 8,
+        offer_code: "GH_CR",
+        launch_state: "campaign_paused",
+        copies_per_concept: 2,
+        campaigns: [],
+      },
+      isPending: false,
+      error: null,
+    });
+    render(<TestProviders><StepPreview /></TestProviders>);
+    expect(screen.getByText(/Конфиг валидный/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Запустить залив/i })).not.toBeDisabled();
+  });
+});
+
+// ─── StepLaunch (M13) — anti-double-fire ─────────────────────────────────────
+
+describe("StepLaunch — запуск без двойного fire", () => {
+  const launchMutate = vi.fn();
+
+  beforeEach(() => {
+    useWizardStore.getState().reset();
+    useWizardStore.getState().setStep("launch");
+    launchMutate.mockReset().mockResolvedValue({ run_id: "run_1" });
+    mockUseLaunchCampaign.mockReturnValue({ mutateAsync: launchMutate, isPending: false });
+    mockUseCampaignRun.mockReturnValue({ data: undefined, isLoading: false });
+  });
+
+  // Залив стартует РОВНО один раз и run_id сохраняется в store (money: дубль POST = дубль кампании).
+  it("запускает залив ровно один раз и сохраняет run_id", async () => {
+    render(<TestProviders><StepLaunch /></TestProviders>);
+    await waitFor(() => expect(launchMutate).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(useWizardStore.getState().runId).toBe("run_1"));
+  });
+
+  // launched-guard: если run_id уже есть (повторный вход на шаг) — повторного залива НЕТ.
+  it("НЕ перезапускает залив если run_id уже есть (launched guard)", async () => {
+    useWizardStore.getState().setRunId("existing_run");
+    render(<TestProviders><StepLaunch /></TestProviders>);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(launchMutate).not.toHaveBeenCalled();
+  });
+
+  // Ошибка запуска (до получения run_id) показывается пользователю.
+  it("ошибка запуска показывается", async () => {
+    launchMutate.mockReset().mockRejectedValue(new Error("Meta отклонила залив"));
+    render(<TestProviders><StepLaunch /></TestProviders>);
+    await waitFor(() => expect(screen.getByText(/Meta отклонила залив/i)).toBeInTheDocument());
+  });
+
+  // Успех: показываются созданные Meta-ID (и повторный залив не запускается — runId уже есть).
+  it("успех показывает созданные Meta-ID", () => {
+    useWizardStore.getState().setRunId("run_1");
+    mockUseCampaignRun.mockReturnValue({
+      data: {
+        status: "succeeded",
+        progress: {},
+        created_meta_ids: { campaigns: ["123456"] },
+        error: null,
+      },
+      isLoading: false,
+    });
+    render(<TestProviders><StepLaunch /></TestProviders>);
+    expect(screen.getByText(/СОЗДАННЫЕ META-ID/i)).toBeInTheDocument();
+    expect(launchMutate).not.toHaveBeenCalled();
   });
 });
