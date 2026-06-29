@@ -145,18 +145,20 @@ describe("OffersPage", () => {
     expect(screen.getByText("Удалить")).toBeInTheDocument();
   });
 
-  // Кнопка "Пороги" показывает 6 полей порогов
-  it("клик по 'Пороги' показывает редактор 6 порогов", () => {
+  // Кнопка "Пороги" показывает только рабочие пороги (CPA + Frequency);
+  // неактивные (spend-без-события/CPM/CTR/funnel-ratio) убраны из формы.
+  it("клик по 'Пороги' показывает только рабочие пороги (CPA, Frequency)", () => {
     render(<OffersTestWrapper />);
     const card = screen.getByRole("button", { name: /Оффер GH_AVI/i });
     fireEvent.click(card);
     fireEvent.click(screen.getByText("Пороги"));
-    expect(screen.getByLabelText(/Spend без события/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/CPA порог/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/CPM порог/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/CTR порог/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Frequency порог/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/Funnel ratio/i)).toBeInTheDocument();
+    // Неактивные пороги в форме отсутствовать (не вводить в заблуждение).
+    expect(screen.queryByLabelText(/Spend без события/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/CPM порог/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/CTR порог/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Funnel ratio/i)).not.toBeInTheDocument();
   });
 
   // Кнопка "+ Новый" открывает форму создания

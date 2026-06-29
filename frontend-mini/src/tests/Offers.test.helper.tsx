@@ -50,13 +50,11 @@ interface ThresholdField {
   hint: string;
 }
 
+// Зеркало THRESHOLD_FIELDS из routes/offers/index.tsx — только рабочие пороги
+// (spend_no_event/cpm/ctr/funnel_ratio убраны: evaluator их не читает).
 const THRESHOLD_FIELDS: ThresholdField[] = [
-  { key: "spend_no_event_threshold", label: "Spend без события ($)", hint: "" },
   { key: "cpa_threshold", label: "CPA порог ($)", hint: "" },
-  { key: "cpm_threshold", label: "CPM порог ($)", hint: "" },
-  { key: "ctr_threshold", label: "CTR порог (%)", hint: "" },
   { key: "frequency_threshold", label: "Frequency порог", hint: "" },
-  { key: "funnel_ratio_threshold", label: "Funnel ratio (%)", hint: "" },
 ];
 
 // ─── Форма создания/редактирования ───────────────────────────────────────────

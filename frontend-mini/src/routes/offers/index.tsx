@@ -58,36 +58,19 @@ interface ThresholdField {
   hint: string;
 }
 
+// Только пороги, которые реально читает evaluator. spend_no_event/cpm/ctr/funnel_ratio
+// убраны: движок их не использует (CPM/CTR — диагностика по решению байера, spend-без-
+// события дублирует guardrail'ы CPC/CPL), а в форме создавали ложное чувство настройки стопа.
 const THRESHOLD_FIELDS: ThresholdField[] = [
-  {
-    key: "spend_no_event_threshold",
-    label: "Spend без события ($)",
-    hint: "При каком спенде без события — стоп",
-  },
   {
     key: "cpa_threshold",
     label: "CPA порог ($)",
     hint: "Максимально допустимый CPA",
   },
   {
-    key: "cpm_threshold",
-    label: "CPM порог ($)",
-    hint: "Максимально допустимый CPM",
-  },
-  {
-    key: "ctr_threshold",
-    label: "CTR порог (%)",
-    hint: "Минимально допустимый CTR",
-  },
-  {
     key: "frequency_threshold",
     label: "Frequency порог",
     hint: "Максимальная частота показа",
-  },
-  {
-    key: "funnel_ratio_threshold",
-    label: "Funnel ratio (%)",
-    hint: "Минимальный reg/lead ratio",
   },
 ];
 
