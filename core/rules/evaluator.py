@@ -162,7 +162,7 @@ def _evaluate_registration_stage(row: ScannedAdRow, ctx: RuleContext) -> RuleHit
     regs_without_dep_hit = _evaluate_regs_without_deposits(row, ctx)
 
     spend_without_dep_hit = None
-    if _is_registration_normal(row, ctx):
+    if _should_apply_registration_spend_guardrail(row, ctx):
         spend_without_dep_hit = _evaluate_spend_range(
             enabled=ctx.spend_no_dep_enabled,
             current_value=_ratio_percent(row.spend, ctx.cpa_amount),
@@ -503,18 +503,26 @@ def _evaluate_spend_range(
     return None
 
 
-def _is_registration_normal(row: ScannedAdRow, ctx: RuleContext) -> bool:
-    """True если цена регистрации не выходит за стоп-порог CPR.
+def _should_apply_registration_spend_guardrail(row: ScannedAdRow, ctx: RuleContext) -> bool:
+    """Запускать ли spend-guardrail (расход без депа) на registration-ступени.
 
-    КОНТРАКТ: ``ctx.cpr_stop_threshold`` — это ИТОГОВОЕ свёрнутое значение
-    (cpa_amount × cpr_percent_stop% × cpr_stop_percent_of_base%), уже учтены
-    все модификаторы из RuleContext.__post_init__. Здесь сравниваем напрямую,
-    без повторного умножения на проценты — иначе получится double-fold
-    (порог уехал бы в 0.8 от настоящего и нормальные регистрации
-    ложно «выходили» бы из normal-зоны).
+    Запускаем когда:
+    - цена регистрации в норме (CPR ≤ стоп) — классический случай; ИЛИ
+    - цена регистрации ещё НЕ известна (CPR=None — attribution-лаг Meta: count
+      регистраций есть в actions, но cost_per_action_type ещё не посчитан).
+      Без этого backstop'а убыточный ад с регистрациями, без депозитов и с
+      временно-NULL CPR крутит бюджет без авто-стопа, пока CPR не появится или
+      регистрации не дорастут до regs_no_dep stop-порога (money-leak H1). Если
+      CPR известна и ВЫШЕ стопа — cpr_hit застопит раньше и жёстче, так что
+      запуск spend-guardrail тут не ослабляет защиту.
+
+    NB: сам spend_no_dep_range стопает только при расходе ≥ 50% CPA, поэтому
+    мизерный спенд при CPR=None ложных стопов не даёт.
     """
-    if row.registrations <= 0 or row.cost_per_registration is None:
+    if row.registrations <= 0:
         return False
+    if row.cost_per_registration is None:
+        return True
     return _round_money(row.cost_per_registration) <= ctx.cpr_stop_threshold
 
 

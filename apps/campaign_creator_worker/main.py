@@ -449,7 +449,20 @@ async def task_loop(
             await _sleep_or_stop(stop)
             continue
 
-        await process_one_task(engine, claim.task, client=client, uploader=uploader)
+        try:
+            await process_one_task(engine, claim.task, client=client, uploader=uploader)
+        except Exception:  # noqa: BLE001 — неожиданная ошибка (напр. БД в фазе pre-execute гардов)
+            # process_one_task сам маршрутизирует ошибки execute (requeue/mark_failed/
+            # finalize), но pre-execute гарды (load_run / _run_has_created_meta_ids /
+            # set_run_status) делают DB-I/O ВНЕ внутреннего try. Транзиентная ошибка БД
+            # там не должна ронять воркер (иначе asyncio.gather падает, heartbeat встаёт,
+            # подтверждённый залив теряется). Задача остаётся 'running' → reconciler через
+            # 30 мин уведёт её в retrying. Логируем и продолжаем цикл.
+            logger.exception(
+                "campaign_create: непредвиденная ошибка обработки task id=%s — воркер продолжает",
+                claim.task.id,
+            )
+            await _sleep_or_stop(stop)
 
 
 async def _sleep_or_stop(stop: asyncio.Event) -> None:

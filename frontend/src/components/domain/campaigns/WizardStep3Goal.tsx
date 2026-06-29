@@ -320,7 +320,12 @@ export function validateGoal(values: WizardGoal): Partial<Record<keyof WizardGoa
   // Целевой CPA обязателен — COST_CAP без bid_amount бэк отклонит (money-инвариант)
   if (values.bid_amount_cents <= 0) errors.bid_amount_cents = "Укажите целевой CPA";
   if (values.countries.length === 0) errors.countries = "Укажите хотя бы одну страну";
-  if (!values.start_date) errors.start_date = "Укажите дату старта";
+  if (!values.start_date) {
+    errors.start_date = "Укажите дату старта";
+  } else if (values.start_date < new Date().toISOString().slice(0, 10)) {
+    // Дата в прошлом → Meta отклонит залив на шаге 7 невнятной ошибкой. Ловим раньше.
+    errors.start_date = "Дата старта не может быть в прошлом";
+  }
 
   return errors;
 }

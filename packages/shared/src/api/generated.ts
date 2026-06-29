@@ -4654,6 +4654,10 @@ export interface components {
              * @default false
              */
             can_open_in_ads_manager: boolean;
+            /** Creative Thumb Url */
+            creative_thumb_url?: string | null;
+            /** Creative Image Url */
+            creative_image_url?: string | null;
             metrics: components["schemas"]["TmaAdMetrics"];
             /** Recent Alerts */
             recent_alerts?: components["schemas"]["TmaRecentAlert"][];

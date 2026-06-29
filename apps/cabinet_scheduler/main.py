@@ -34,7 +34,7 @@ import redis.asyncio as redis_asyncio
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from core.db import WORKER_ENGINE_KWARGS
-from core.meta_api.bulk import resolve_owner_ad_ids_by_campaign_ids
+from core.meta_api.bulk import MAX_BULK, resolve_owner_ad_ids_by_campaign_ids
 from core.meta_api.queue import create_mutation_task
 from core.meta_api.schemas import MetaMutationPayload
 from core.observer.queries import load_observer_config, load_scanning_enabled
@@ -60,6 +60,12 @@ _OBSERVER_TRIGGER_CHANNEL = "fb_agent:observer:trigger"
 
 # Действие mutation — включение (activate). Автостарт всегда включает.
 _AUTOSTART_ACTION = "activate"
+
+# Потолок резолва объявлений автостарта (защита от резолва всего кабинета). Один
+# bulk_status_change ограничен MAX_BULK (лимит Meta Batch API), поэтому всё, что
+# выше, режем на чанки по MAX_BULK и создаём отдельную задачу на каждый чанк
+# (M3: раньше включались только первые 50, остальные молча отбрасывались).
+_AUTOSTART_MAX_ADS = MAX_BULK * 40
 
 
 # ====================== one tick ======================
@@ -142,53 +148,76 @@ async def run_one_tick(
         return {"outcome": "no_campaigns", "day": day}
 
     ad_ids, total = await resolve_owner_ad_ids_by_campaign_ids(
-        engine, owner_tag=owner_tag, campaign_ids=campaign_ids
+        engine, owner_tag=owner_tag, campaign_ids=campaign_ids, limit=_AUTOSTART_MAX_ADS
     )
 
-    task_id: int | None = None
     if ad_ids:
-        payload = MetaMutationPayload(
-            mutation_kind="bulk_status_change",
-            target_id=f"autostart:{len(ad_ids)}",
-            params={
-                "ad_ids": sorted(ad_ids),
-                "action": _AUTOSTART_ACTION,
-                "resolved_from_campaigns": campaign_ids,
-            },
-            ad_account_id=None,
-        )
-        # idempotency_key с датой запуска: повторный тик в тот же день не задвоит.
-        idem_key = f"autostart:{day}:{_AUTOSTART_ACTION}"
-        task_id = await create_mutation_task(
-            engine,
-            payload=payload,
-            requested_by="cabinet_autostart",
-            status="pending",
-            idempotency_key=idem_key,
-        )
+        # M3: режем на чанки по MAX_BULK (лимит Meta Batch API) — одна bulk-задача на
+        # чанк с УНИКАЛЬНЫМ idempotency_key (...:{idx}), иначе при >50 объявлениях
+        # включались бы только первые 50, а остальные молча оставались на паузе.
+        sorted_ids = sorted(ad_ids)
+        chunks = [sorted_ids[i : i + MAX_BULK] for i in range(0, len(sorted_ids), MAX_BULK)]
+        truncated = total > len(ad_ids)
+        task_ids: list[int] = []
+        for idx, chunk in enumerate(chunks):
+            payload = MetaMutationPayload(
+                mutation_kind="bulk_status_change",
+                target_id=f"autostart:{len(chunk)}:{idx}",
+                params={
+                    "ad_ids": chunk,
+                    "action": _AUTOSTART_ACTION,
+                    "resolved_from_campaigns": campaign_ids,
+                },
+                ad_account_id=None,
+            )
+            # idempotency_key с датой запуска И индексом чанка: повторный тик в тот же
+            # день не задвоит ни один чанк.
+            idem_key = f"autostart:{day}:{_AUTOSTART_ACTION}:{idx}"
+            tid = await create_mutation_task(
+                engine,
+                payload=payload,
+                requested_by="cabinet_autostart",
+                status="pending",
+                idempotency_key=idem_key,
+            )
+            if tid is not None:
+                task_ids.append(tid)
         logger.info(
-            "cabinet_autostart: создана enable-задача task_id=%s, ad_ids=%d (total=%d), day=%s",
-            task_id,
+            "cabinet_autostart: создано enable-задач=%d (chunks), ad_ids=%d (total=%d, "
+            "truncated=%s), day=%s",
+            len(task_ids),
             len(ad_ids),
             total,
+            truncated,
             day,
         )
+        if truncated:
+            logger.warning(
+                "cabinet_autostart: total=%d превысил потолок %d — включены не все "
+                "объявления, остаток требует ручной проверки (day=%s)",
+                total,
+                _AUTOSTART_MAX_ADS,
+                day,
+            )
 
         # Триггерим observer scan независимо от того, были ли ad_id — кабинет
         # мог измениться, скан подтянет актуальное состояние.
         await _trigger_observer_scan(redis_client)
 
-        # M8: маркер «выполнено» — только при started-пути (задача создана + скан).
+        # M8: маркер «выполнено» — только при started-пути (задачи созданы + скан).
         # no_owner_ads не ставит маркер → следующий тик в окне повторит попытку
-        # (catch-up до конца суток). Двойного включения нет: idempotency_key задачи.
+        # (catch-up до конца суток). Двойного включения нет: idempotency_key задач.
         await _set_autostart_done(redis_client, done_key)
 
         return {
             "outcome": "started",
             "day": day,
-            "task_id": task_id,
+            "task_id": task_ids[0] if task_ids else None,  # backward-compat (первая задача)
+            "task_ids": task_ids,
             "ad_count": len(ad_ids),
             "total": total,
+            "chunks": len(chunks),
+            "truncated": truncated,
             "scan_triggered": True,
         }
     else:
@@ -198,10 +227,17 @@ async def run_one_tick(
             owner_tag,
             day,
         )
-        # Триггерим скан даже при no_owner_ads — кабинет мог измениться.
-        await _trigger_observer_scan(redis_client)
-        # done-маркер НЕ ставим: позволяем ретрай в окне (catch-up).
-        return {"outcome": "no_owner_ads", "day": day, "total": total}
+        # M5: скан при no_owner_ads — НЕ чаще раза в сутки (SET NX), иначе каждый тик
+        # (60с) до конца суток форсил бы observer-scan (~960/день) и обнулял адаптивный
+        # интервал (anti-detect риск). done-маркер НЕ ставим — резолв всё равно
+        # ретраится в окне (catch-up enable, если объявления появятся позже).
+        scan_triggered = await _trigger_scan_once_per_day(redis_client, now)
+        return {
+            "outcome": "no_owner_ads",
+            "day": day,
+            "total": total,
+            "scan_triggered": scan_triggered,
+        }
 
 
 async def _set_autostart_done(redis_client: redis_asyncio.Redis, done_key: str) -> None:
@@ -210,6 +246,25 @@ async def _set_autostart_done(redis_client: redis_asyncio.Redis, done_key: str) 
         await redis_client.set(done_key, "1", ex=AUTOSTART_DONE_TTL_SECONDS)
     except Exception:
         logger.exception("cabinet_autostart: не удалось выставить маркер %s", done_key)
+
+
+async def _trigger_scan_once_per_day(redis_client: redis_asyncio.Redis, now: datetime) -> bool:
+    """Триггернуть observer-scan не чаще раза в сутки (SET NX дневной ключ).
+
+    Возвращает True, если скан триггернут сейчас, False — если уже был сегодня или
+    Redis недоступен. Защита от спама форс-сканов в ветке no_owner_ads (M5).
+    """
+    day = now.astimezone(timezone.utc).strftime("%Y-%m-%d")
+    key = f"cabinet:autostart:scan:{day}"
+    try:
+        was_set = await redis_client.set(key, "1", ex=AUTOSTART_DONE_TTL_SECONDS, nx=True)
+    except Exception:
+        logger.exception("cabinet_autostart: ошибка SET NX scan-маркера %s", key)
+        return False
+    if not was_set:
+        return False
+    await _trigger_observer_scan(redis_client)
+    return True
 
 
 async def _trigger_observer_scan(redis_client: redis_asyncio.Redis) -> None:
@@ -228,11 +283,20 @@ async def _alert_autostart(engine: Any, redis_client: Any, summary: dict) -> Non
     outcome = summary.get("outcome")
     day = summary.get("day", "")
     if outcome == "started":
-        text = (
-            f"🚀 <b>Автостарт кабинета {day}</b>\n"
-            f"Поставлено объявлений: {summary.get('ad_count')} "
-            f"(task_id={summary.get('task_id')})."
-        )
+        task_ids = summary.get("task_ids")
+        if not task_ids and summary.get("task_id") is not None:
+            task_ids = [summary["task_id"]]
+        task_ids = task_ids or []
+        lines = [
+            f"🚀 <b>Автостарт кабинета {day}</b>",
+            f"Поставлено объявлений: {summary.get('ad_count')} (задач: {len(task_ids)}).",
+        ]
+        if summary.get("truncated"):
+            lines.append(
+                f"⚠️ Найдено {summary.get('total')} — превышен потолок автостарта, "
+                f"включены не все. Проверь остаток вручную."
+            )
+        text = "\n".join(lines)
     elif outcome == "no_owner_ads":
         text = (
             f"⚠️ <b>Автостарт {day}: owner-объявлений не найдено</b>\n"

@@ -124,3 +124,101 @@ async def test_redis_get_error_is_retryable_not_already_done(monkeypatch) -> Non
 
     # КЛЮЧЕВОЕ: НЕ 'already_done' (день не помечается выполненным) → след. тик повторит.
     assert summary["outcome"] == "redis_error"
+
+
+# ====================== M3/M5: чанки >50 + скан раз в сутки ====================
+
+
+class _FakeRedis:
+    """fake Redis с поддержкой get/set(nx)/publish — для проверки логики тика."""
+
+    def __init__(self) -> None:
+        self.store: dict = {}
+        self.published: list = []
+
+    async def get(self, key):
+        return self.store.get(key)
+
+    async def set(self, key, value, ex=None, nx=False):
+        if nx and key in self.store:
+            return None
+        self.store[key] = value
+        return True
+
+    async def publish(self, channel, payload):
+        self.published.append((channel, payload))
+
+
+def _patch_window_open(monkeypatch, m, *, campaign_ids, owner_tag="MV"):
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr(m, "load_scanning_enabled", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        m,
+        "read_autostart_config",
+        AsyncMock(return_value={"enabled": True, "hour_utc": 6, "minute_utc": 0}),
+    )
+    monkeypatch.setattr(
+        m,
+        "load_observer_config",
+        AsyncMock(return_value={"owner_campaign_tag": owner_tag, "campaign_ids": campaign_ids}),
+    )
+
+
+# M3: >MAX_BULK объявлений → несколько bulk-задач (чанки ≤50) с уникальными idem-ключами,
+# объединение чанков = все объявления (раньше включались только первые 50, остаток терялся).
+@pytest.mark.asyncio
+async def test_started_chunks_over_max_bulk(monkeypatch) -> None:
+    from unittest.mock import AsyncMock
+
+    import apps.cabinet_scheduler.main as m
+
+    _patch_window_open(monkeypatch, m, campaign_ids=["c1"])
+    ad_ids = [f"ad{i:03d}" for i in range(120)]  # 120 → чанки 50/50/20
+    monkeypatch.setattr(
+        m, "resolve_owner_ad_ids_by_campaign_ids", AsyncMock(return_value=(ad_ids, 120))
+    )
+    created: list = []
+
+    async def _fake_create(engine, *, payload, requested_by, status, idempotency_key):
+        created.append((payload, idempotency_key))
+        return len(created)
+
+    monkeypatch.setattr(m, "create_mutation_task", _fake_create)
+    now = datetime(2026, 5, 29, 9, 0, 0, tzinfo=timezone.utc)
+
+    summary = await m.run_one_tick(engine=object(), redis_client=_FakeRedis(), now=now)
+
+    assert summary["outcome"] == "started"
+    assert summary["ad_count"] == 120
+    assert summary["chunks"] == 3
+    assert len(summary["task_ids"]) == 3
+    assert summary["truncated"] is False
+    all_ids: list = []
+    keys = set()
+    for payload, key in created:
+        assert len(payload.params["ad_ids"]) <= m.MAX_BULK
+        all_ids.extend(payload.params["ad_ids"])
+        keys.add(key)
+    assert sorted(all_ids) == sorted(ad_ids), "все объявления должны попасть в задачи"
+    assert len(keys) == 3, "idempotency_key каждого чанка уникален"
+
+
+# M5: при no_owner_ads observer-scan триггерится не чаще раза в сутки (а не каждый тик).
+@pytest.mark.asyncio
+async def test_no_owner_ads_scan_triggers_once_per_day(monkeypatch) -> None:
+    from unittest.mock import AsyncMock
+
+    import apps.cabinet_scheduler.main as m
+
+    _patch_window_open(monkeypatch, m, campaign_ids=["c1"])
+    monkeypatch.setattr(m, "resolve_owner_ad_ids_by_campaign_ids", AsyncMock(return_value=([], 0)))
+    redis = _FakeRedis()
+    now = datetime(2026, 5, 29, 9, 0, 0, tzinfo=timezone.utc)
+
+    first = await m.run_one_tick(engine=object(), redis_client=redis, now=now)
+    second = await m.run_one_tick(engine=object(), redis_client=redis, now=now)
+
+    assert first["outcome"] == "no_owner_ads" and first["scan_triggered"] is True
+    assert second["outcome"] == "no_owner_ads" and second["scan_triggered"] is False
+    assert len(redis.published) == 1, "форс-скан публикуется ровно один раз за сутки"

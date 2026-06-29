@@ -271,7 +271,8 @@ const DEFAULT_GOAL: WizardGoal = {
   destination_link: "https://tracker.example.com",
   cta: "PLAY_GAME",
   text_optimizations: "OPT_OUT",
-  start_date: "2026-06-23",
+  // Дата старта — всегда в будущем (валидация отклоняет прошлое), вычисляем динамически.
+  start_date: new Date(Date.now() + 7 * 86_400_000).toISOString().slice(0, 10),
   budget_level: "campaign",
   daily_budget_cents: 20000,
   bid_amount_cents: 500, // $5 целевой CPA (обязателен)

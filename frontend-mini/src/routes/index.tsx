@@ -20,7 +20,7 @@ import {
   useTriggerScan,
   useSpendSeries,
 } from "@/lib/api";
-import { haptic } from "@/lib/tg";
+import { haptic, tgConfirm } from "@/lib/tg";
 import {
   Eyebrow,
   PulseDot,
@@ -127,6 +127,9 @@ function DashboardPage() {
 
   const handlePause = async () => {
     haptic.impact("heavy");
+    // Подтверждение: остановка observer = выключение авто-стопа всех объявлений (money).
+    const ok = await tgConfirm("Остановить сканирование и авто-стоп?");
+    if (!ok) return;
     try {
       await toggleScanMutation.mutateAsync({ enabled: false });
       haptic.notify("success");

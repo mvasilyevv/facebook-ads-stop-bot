@@ -18,7 +18,8 @@ const BASE_VALUES: WizardGoal = {
   destination_link: "https://trk.example.com",
   cta: "PLAY_GAME",
   text_optimizations: "OPT_OUT",
-  start_date: "2026-06-24",
+  // Дата старта — всегда в будущем (валидация отклоняет прошлое), вычисляем динамически.
+  start_date: new Date(Date.now() + 7 * 86_400_000).toISOString().slice(0, 10),
   budget_level: "campaign",
   daily_budget_cents: 20000,
   bid_amount_cents: 500, // $5 целевой CPA (обязателен для COST_CAP)
@@ -119,5 +120,19 @@ describe("validateGoal — не требует url_tags", () => {
   it("пустые страны → ошибка", () => {
     const errors = validateGoal({ ...BASE_VALUES, countries: [] });
     expect(errors.countries).toBeTruthy();
+  });
+
+  // M6: дата старта в прошлом → ошибка (Meta отклонила бы залив невнятно на шаге 7).
+  it("дата старта в прошлом → ошибка", () => {
+    const past = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+    const errors = validateGoal({ ...BASE_VALUES, start_date: past });
+    expect(errors.start_date).toBeTruthy();
+  });
+
+  // Сегодняшняя дата — валидна (граница не должна отсекать «сегодня»).
+  it("дата старта сегодня → без ошибки", () => {
+    const today = new Date().toISOString().slice(0, 10);
+    const errors = validateGoal({ ...BASE_VALUES, start_date: today });
+    expect(errors.start_date).toBeUndefined();
   });
 });

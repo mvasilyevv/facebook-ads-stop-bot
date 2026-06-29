@@ -554,3 +554,61 @@ def test_cpm_and_frequency_are_diagnostics_only():
 
     assert result.stage is None
     assert result.matched_rule_codes == []
+
+
+# H1 (money-leak): при регистрациях без депозитов и НЕИЗВЕСТНОЙ цене реги
+# (cost_per_registration=None — attribution-лаг Meta) spend-guardrail обязан
+# работать. Спенд 60% CPA, 3 реги, 0 депов, CPR=None → STOP spend_no_dep_range.
+def test_registration_stage_spend_guardrail_fires_when_cpr_unknown():
+    row = _make_row(
+        spend=Decimal("3.00"),  # 60% от CPA=5 → в стоп-диапазоне 50-70%
+        clicks=20,
+        cpc=Decimal("0.15"),
+        leads=5,
+        cost_per_lead=Decimal("0.60"),
+        registrations=3,  # меньше regs_no_dep stop(5)/warn(4)
+        cost_per_registration=None,  # цена реги ещё не посчитана Meta
+    )
+
+    result = evaluate_stop_rules(row, _make_ctx())
+
+    assert result.stage is AlertStage.STOP
+    assert "spend_no_dep_range" in result.stop_rule_codes
+
+
+# Парность: тот же ад с ИЗВЕСТНОЙ нормальной ценой реги стопается так же —
+# поведение при CPR=None не должно отличаться от CPR в норме.
+def test_registration_stage_spend_guardrail_parity_known_vs_unknown_cpr():
+    base = dict(
+        spend=Decimal("3.00"),
+        clicks=20,
+        cpc=Decimal("0.15"),
+        leads=5,
+        cost_per_lead=Decimal("0.60"),
+        registrations=3,
+    )
+    known = evaluate_stop_rules(
+        _make_row(**base, cost_per_registration=Decimal("0.50")), _make_ctx()
+    )
+    unknown = evaluate_stop_rules(_make_row(**base, cost_per_registration=None), _make_ctx())
+
+    assert known.stage is AlertStage.STOP
+    assert unknown.stage == known.stage
+    assert unknown.stop_rule_codes == known.stop_rule_codes
+
+
+# Без ложных срабатываний: CPR=None + малый спенд (20% CPA) + мало рег → НЕ стоп.
+def test_registration_stage_no_stop_on_low_spend_when_cpr_unknown():
+    row = _make_row(
+        spend=Decimal("1.00"),  # 20% от CPA=5 → ниже стоп-диапазона 50%
+        clicks=10,
+        cpc=Decimal("0.10"),
+        leads=2,
+        cost_per_lead=Decimal("0.50"),
+        registrations=2,
+        cost_per_registration=None,
+    )
+
+    result = evaluate_stop_rules(row, _make_ctx())
+
+    assert result.stage is None
