@@ -64,7 +64,14 @@ async function rawFetch(path: string, options: RequestOptions = {}): Promise<Res
   return resp;
 }
 
-/** Парсит тело ответа: 204 → null, json → объект, иначе текст. */
+/**
+ * Парсит тело успешного (resp.ok) ответа: 204 → null, json → объект.
+ *
+ * Не-JSON тело успешного ответа (мисконфиг endpoint'а, edge-кейс прокси) раньше
+ * молча кастовался в T — каллер получал строку вместо ожидаемого объекта и падал
+ * на .property с undefined (M9-аудит). Бросаем явную ApiError вместо тихой подмены
+ * типа: ни один каллер apiGet/apiSend в проекте не ожидает text/blob-ответ.
+ */
 async function parseBody<T>(resp: Response): Promise<T> {
   if (resp.status === 204) {
     return null as T;
@@ -73,7 +80,12 @@ async function parseBody<T>(resp: Response): Promise<T> {
   if (ct.includes("application/json")) {
     return (await resp.json()) as T;
   }
-  return (await resp.text()) as unknown as T;
+  const text = await resp.text();
+  throw new ApiError(
+    `Ожидался JSON-ответ, получен content-type=${ct || "(пусто)"}`,
+    resp.status,
+    text,
+  );
 }
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {

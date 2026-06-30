@@ -50,7 +50,7 @@ import { useRealtimeInvalidation } from "@/lib/websocket/useRealtimeInvalidation
 import { apiSend, ApiError } from "@/lib/api/client";
 import { toast } from "@/components/ui/Toast";
 
-import type { AlertEvent, TaskQueueRow } from "@fb/shared";
+import type { AlertEvent } from "@fb/shared";
 import { formatSpend } from "@fb/shared";
 
 // ─── Route ────────────────────────────────────────────────────────────────────
@@ -133,15 +133,13 @@ function DashboardPage() {
   // При null/undefined (бэк не вернул) — 0, graceful прочерк через formatSpend.
   const spendTotal = parseFloat(stats?.current_day_spend ?? "0") || 0;
 
-  // live-tail: реальные алерты.
-  const events = useMemo<AlertEvent[]>(
-    () => (batch?.recent_alerts as AlertEvent[] | undefined) ?? [],
-    [batch],
-  );
+  // live-tail: реальные алерты. recent_alerts типизирован AlertEventOut на бэке
+  // (M9-аудит) — каст больше не нужен.
+  const events = useMemo<AlertEvent[]>(() => batch?.recent_alerts ?? [], [batch]);
 
-  // Очереди задач.
-  const disableTasks = (disableTasksQ.data as TaskQueueRow[] | undefined) ?? [];
-  const enableTasks = (enableTasksQ.data as TaskQueueRow[] | undefined) ?? [];
+  // Очереди задач. useDisableTasks/useEnableTasks уже типизированы TaskQueueRow[].
+  const disableTasks = disableTasksQ.data ?? [];
+  const enableTasks = enableTasksQ.data ?? [];
 
   // scan-now → redis-триггер.
   function handleScanNow() {

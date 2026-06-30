@@ -29,8 +29,7 @@ export const Route = createFileRoute("/offers/$id")({
 });
 
 function OfferRulesPage() {
-  const params = Route.useParams() as unknown as { id: string };
-  const id = params.id;
+  const { id } = Route.useParams();
   const navigate = useNavigate();
 
   const { data: offers } = useOffers();

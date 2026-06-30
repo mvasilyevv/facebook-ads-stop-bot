@@ -12,6 +12,9 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from apps.api.routers.v1.schemas.dashboard import AlertEventOut
+from apps.api.routers.v1.schemas.tasks import TaskQueueRowOut
+
 
 class DashboardStatsOut(BaseModel):
     """Сводные счётчики для overview-карточек DashboardPage.
@@ -58,15 +61,21 @@ class DashboardBatchOut(BaseModel):
     Секции:
     - recent_disable_tasks: задачи отключения (meta_api_mutation pause_ad / legacy disable)
     - recent_enable_tasks: задачи включения (meta_api_mutation activate_ad / legacy enable)
+
+    recent_alerts/recent_disable_tasks/recent_enable_tasks типизированы точными моделями
+    (AlertEventOut/TaskQueueRowOut) — серилизаторы (alert_event_row_to_out/task_row_to_out)
+    уже строят dict ровно под их форму, раньше тип был размыт до dict[str, Any], из-за чего
+    фронт был вынужден небезопасно кастовать поля (M9-аудит). recent_incidents/
+    enable_recommendations_pending оставлены dict — отдельных моделей под их форму нет.
     """
 
     model_config = ConfigDict(from_attributes=False)
 
     stats: DashboardStatsOut
     recent_incidents: list[dict[str, Any]] = Field(default_factory=list)
-    recent_alerts: list[dict[str, Any]] = Field(default_factory=list)
-    recent_disable_tasks: list[dict[str, Any]] = Field(default_factory=list)
-    recent_enable_tasks: list[dict[str, Any]] = Field(default_factory=list)
+    recent_alerts: list[AlertEventOut] = Field(default_factory=list)
+    recent_disable_tasks: list[TaskQueueRowOut] = Field(default_factory=list)
+    recent_enable_tasks: list[TaskQueueRowOut] = Field(default_factory=list)
     enable_recommendations_pending: list[dict[str, Any]] = Field(default_factory=list)
 
 

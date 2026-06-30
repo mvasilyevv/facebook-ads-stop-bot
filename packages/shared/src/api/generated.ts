@@ -3078,17 +3078,11 @@ export interface components {
                 [key: string]: unknown;
             }[];
             /** Recent Alerts */
-            recent_alerts?: {
-                [key: string]: unknown;
-            }[];
+            recent_alerts?: components["schemas"]["AlertEventOut"][];
             /** Recent Disable Tasks */
-            recent_disable_tasks?: {
-                [key: string]: unknown;
-            }[];
+            recent_disable_tasks?: components["schemas"]["TaskQueueRowOut"][];
             /** Recent Enable Tasks */
-            recent_enable_tasks?: {
-                [key: string]: unknown;
-            }[];
+            recent_enable_tasks?: components["schemas"]["TaskQueueRowOut"][];
             /** Enable Recommendations Pending */
             enable_recommendations_pending?: {
                 [key: string]: unknown;

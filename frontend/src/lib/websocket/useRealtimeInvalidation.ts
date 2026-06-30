@@ -36,6 +36,9 @@ export function useRealtimeInvalidation(): DashboardSocketState {
         case "task_changed":
           qc.invalidateQueries({ queryKey: ["dashboard"] });
           qc.invalidateQueries({ queryKey: ["tasks"] });
+          // campaign_create — тоже task_queue-задача (M10): без этого история
+          // заливов (CampaignRunsHistory) не обновлялась live при смене статуса.
+          qc.invalidateQueries({ queryKey: ["campaigns", "runs"] });
           break;
         case "health_updated":
           qc.invalidateQueries({ queryKey: ["health"] });
@@ -60,6 +63,7 @@ export function useRealtimeInvalidation(): DashboardSocketState {
       qc.invalidateQueries({ queryKey: ["observer"] });
       qc.invalidateQueries({ queryKey: ["tasks"] });
       qc.invalidateQueries({ queryKey: ["health"] });
+      qc.invalidateQueries({ queryKey: ["campaigns", "runs"] });
     }, POLLING_INVALIDATE_MS);
     return () => window.clearInterval(id);
   }, [state.pollingFallback, qc]);

@@ -99,6 +99,41 @@ describe("buildQuery — сборка query-string", () => {
   });
 });
 
+// ─── parseBody — не-JSON успешный ответ (M9) ──────────────────────────────────
+
+describe("parseBody — не-JSON успешный ответ бросает ApiError", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  // Раньше text-тело 200-ответа молча кастовалось в T (каллер получал строку
+  // вместо объекта). Теперь — явная ApiError, а не тихая подмена типа.
+  it("200 OK с text/plain телом → ApiError, а не тихий каст", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response("not json", {
+          status: 200,
+          headers: { "Content-Type": "text/plain" },
+        }),
+      ),
+    );
+
+    const { apiGet } = await import("@/lib/api/client");
+    await expect(apiGet("/test")).rejects.toBeInstanceOf(ApiError);
+  });
+
+  // 204 No Content — особый случай, должен оставаться null (не задет фиксом).
+  it("204 No Content → null, не ApiError", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 204 })));
+
+    const { apiGet } = await import("@/lib/api/client");
+    const result = await apiGet("/test");
+    expect(result).toBeNull();
+  });
+});
+
 // ─── apiGetWithCount — X-Total-Count парсинг ──────────────────────────────────
 
 describe("apiGetWithCount — парсинг X-Total-Count", () => {
