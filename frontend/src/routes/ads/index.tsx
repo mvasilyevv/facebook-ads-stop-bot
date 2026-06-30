@@ -19,10 +19,13 @@
  *
  * Keyboard: «/» фокус поиска · J/K|↑/↓ курсор · X выбор курсора · Enter drawer ·
  *           D disable выбранных · Esc закрыть/сбросить/blur.
+ *
+ * Фильтры/выбор/keyboard-nav вынесены в хуки (lib/hooks/useAds*) — этот файл
+ * держит data-fetching, money-mutations (disable/delete) и композицию JSX.
  */
 
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Eyebrow } from "@/components/data/Eyebrow";
 import { Badge } from "@/components/ui/Badge";
@@ -34,7 +37,7 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { toast } from "@/components/ui/Toast";
 
-import { FilterBar, type AdsFilterState } from "@/components/domain/ads/FilterBar";
+import { FilterBar } from "@/components/domain/ads/FilterBar";
 import { AdsTable } from "@/components/domain/ads/AdsTable";
 import { BulkActionBar } from "@/components/domain/ads/BulkActionBar";
 import { AdDrawer } from "@/components/domain/ads/AdDrawer";
@@ -43,9 +46,12 @@ import { useAds, useBulkDisable, useDeleteAds } from "@/lib/api/ads";
 import { useDashboardStats } from "@/lib/api/dashboard";
 import { useRealtimeInvalidation } from "@/lib/websocket/useRealtimeInvalidation";
 import { useUiStore, DENSITY_ROW_HEIGHT } from "@/stores/ui";
+import { useAdsFilterState } from "@/lib/hooks/useAdsFilterState";
+import { useFilteredAdsRows } from "@/lib/hooks/useFilteredAdsRows";
+import { useAdsSelection } from "@/lib/hooks/useAdsSelection";
+import { useAdsKeyboardNav } from "@/lib/hooks/useAdsKeyboardNav";
 
 import { ALERT_STATE_LABELS, type AdSnapshot, type AlertState } from "@fb/shared";
-import { adAccountId } from "@/components/domain/ads/adHelpers";
 
 // ─── Route ────────────────────────────────────────────────────────────────────
 
@@ -82,30 +88,6 @@ function AdsPage() {
   const navigate = useNavigate({ from: "/ads/" });
   const { state: stateParam } = Route.useSearch();
 
-  // ── Фильтры (state-фильтр инициализируется из ?state= — deep-link с Dashboard) ──
-  const [filters, setFilters] = useState<AdsFilterState>(() => ({
-    search: "",
-    selectedStates: parseStateParam(stateParam),
-    selectedOffers: new Set<string>(),
-    selectedAccounts: new Set<string>(),
-    selectedCampaigns: new Set<string>(),
-    selectedAdsets: new Set<string>(),
-  }));
-
-  // URL ↔ state-фильтр: тоггл пиллов обновляет ?state= (replace, без истории) —
-  // текущий вид всегда можно шарить ссылкой.
-  useEffect(() => {
-    const next = [...filters.selectedStates].sort().join(",") || undefined;
-    if (next !== (stateParam || undefined)) {
-      void navigate({ search: { state: next }, replace: true });
-    }
-    // navigate стабилен; stateParam в deps вызвал бы цикл при внешней навигации.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filters.selectedStates]);
-
-  // ── Выбор / курсор / drawer ──────────────────────────────────────────────
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [cursor, setCursor] = useState(-1);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   // Drawer — локальный стейт (scrim показывает таблицу под собой, как в эталоне).
@@ -120,7 +102,21 @@ function AdsPage() {
   const density = useUiStore((s) => s.density);
   const rowHeight = DENSITY_ROW_HEIGHT[density] + 14;
 
-  // ── Данные ──────────────────────────────────────────────────────────────────
+  // ── Фильтры (state-фильтр инициализируется из ?state= — deep-link с Dashboard) ──
+  // selectedStates нужен ДО fetch'а (server-side query-параметр), поэтому состояние
+  // фильтров и производные данные (rows/options из загруженных строк) — два хука.
+  const [initialStates] = useState(() => parseStateParam(stateParam));
+  const {
+    filters,
+    setSearch,
+    toggleState,
+    toggleOffer,
+    toggleAccount,
+    toggleCampaign,
+    toggleAdset,
+    clearAll,
+  } = useAdsFilterState(initialStates);
+
   // state-фильтр уходит на сервер; search/offer — клиентские (как в эталоне).
   const alertStatesParam =
     filters.selectedStates.size > 0 ? [...filters.selectedStates].join(",") : undefined;
@@ -133,160 +129,32 @@ function AdsPage() {
 
   const statsQ = useDashboardStats();
 
-  const allRows = useMemo<AdSnapshot[]>(() => data?.data ?? [], [data]);
+  const allRows = data?.data ?? [];
+  const { rows, offerOptions, accountOptions, campaignOptions, adsetOptions } =
+    useFilteredAdsRows(allRows, filters);
 
-  // Offer-опции из загруженных данных.
-  const offerOptions = useMemo(() => {
-    const set = new Set<string>();
-    allRows.forEach((r) => r.offer_code && set.add(r.offer_code));
-    return [...set].sort();
-  }, [allRows]);
-
-  // Кабинеты из загруженных данных (мульти-кабинет; ≤1 — dropdown скрыт в FilterBar).
-  const accountOptions = useMemo(() => {
-    const set = new Set<string>();
-    allRows.forEach((r) => {
-      const acc = adAccountId(r);
-      if (acc) set.add(acc);
-    });
-    return [...set].sort();
-  }, [allRows]);
-
-  // Кампании и адсеты («отец») из загруженных строк — для dropdown-фильтров.
-  const campaignOptions = useMemo(() => {
-    const set = new Set<string>();
-    allRows.forEach((r) => r.campaign_name && set.add(r.campaign_name));
-    return [...set].sort();
-  }, [allRows]);
-
-  const adsetOptions = useMemo(() => {
-    const set = new Set<string>();
-    allRows.forEach((r) => r.adset_name && set.add(r.adset_name));
-    return [...set].sort();
-  }, [allRows]);
-
-  // ── Клиентская фильтрация + сортировка по spend desc ────────────────────
-  const rows = useMemo<AdSnapshot[]>(() => {
-    const q = filters.search.trim().toLowerCase();
-    const offers = filters.selectedOffers;
-    const accounts = filters.selectedAccounts;
-    const campaigns = filters.selectedCampaigns;
-    const adsets = filters.selectedAdsets;
-    const out = allRows.filter((r) => {
-      if (q) {
-        const hit =
-          r.ad_name.toLowerCase().includes(q) ||
-          r.fb_ad_id.includes(q) ||
-          (r.offer_code?.toLowerCase().includes(q) ?? false);
-        if (!hit) return false;
-      }
-      if (offers.size > 0 && !(r.offer_code && offers.has(r.offer_code))) return false;
-      if (accounts.size > 0) {
-        const acc = adAccountId(r);
-        if (!(acc && accounts.has(acc))) return false;
-      }
-      if (campaigns.size > 0 && !(r.campaign_name && campaigns.has(r.campaign_name))) return false;
-      if (adsets.size > 0 && !(r.adset_name && adsets.has(r.adset_name))) return false;
-      return true;
-    });
-    // Сортировка по spend desc (как в эталоне).
-    out.sort((a, b) => {
-      const sa = Number.parseFloat(a.metrics?.spend ?? "0") || 0;
-      const sb = Number.parseFloat(b.metrics?.spend ?? "0") || 0;
-      return sb - sa;
-    });
-    return out;
-  }, [
-    allRows,
-    filters.search,
-    filters.selectedOffers,
-    filters.selectedAccounts,
-    filters.selectedCampaigns,
-    filters.selectedAdsets,
-  ]);
-
-  // Курсор не должен выходить за пределы после фильтрации.
+  // URL ↔ state-фильтр: тоггл пиллов обновляет ?state= (replace, без истории) —
+  // текущий вид всегда можно шарить ссылкой.
   useEffect(() => {
-    setCursor((c) => (c >= rows.length ? rows.length - 1 : c));
-  }, [rows.length]);
+    const next = [...filters.selectedStates].sort().join(",") || undefined;
+    if (next !== (stateParam || undefined)) {
+      void navigate({ search: { state: next }, replace: true });
+    }
+    // navigate стабилен; stateParam в deps вызвал бы цикл при внешней навигации.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filters.selectedStates]);
+
+  // ── Выбор / курсор ───────────────────────────────────────────────────────
+  const { selected, cursor, setCursor, toggleSelect, clearSelection, selectAll } =
+    useAdsSelection(rows);
 
   // ── Мутации ──────────────────────────────────────────────────────────────
   const bulkDisable = useBulkDisable();
   const deleteAds = useDeleteAds();
 
-  // ── Колбэки фильтров ───────────────────────────────────────────────────────
-  const toggleState = useCallback((s: AlertState) => {
-    setFilters((p) => {
-      const next = new Set(p.selectedStates);
-      if (next.has(s)) { next.delete(s); } else { next.add(s); }
-      return { ...p, selectedStates: next };
-    });
-  }, []);
-
-  const toggleOffer = useCallback((o: string) => {
-    setFilters((p) => {
-      const next = new Set(p.selectedOffers);
-      if (next.has(o)) { next.delete(o); } else { next.add(o); }
-      return { ...p, selectedOffers: next };
-    });
-  }, []);
-
-  const toggleAccount = useCallback((a: string) => {
-    setFilters((p) => {
-      const next = new Set(p.selectedAccounts);
-      if (next.has(a)) { next.delete(a); } else { next.add(a); }
-      return { ...p, selectedAccounts: next };
-    });
-  }, []);
-
-  const toggleCampaign = useCallback((c: string) => {
-    setFilters((p) => {
-      const next = new Set(p.selectedCampaigns);
-      if (next.has(c)) { next.delete(c); } else { next.add(c); }
-      return { ...p, selectedCampaigns: next };
-    });
-  }, []);
-
-  const toggleAdset = useCallback((a: string) => {
-    setFilters((p) => {
-      const next = new Set(p.selectedAdsets);
-      if (next.has(a)) { next.delete(a); } else { next.add(a); }
-      return { ...p, selectedAdsets: next };
-    });
-  }, []);
-
-  const clearAll = useCallback(() => {
-    setFilters({
-      search: "",
-      selectedStates: new Set(),
-      selectedOffers: new Set(),
-      selectedAccounts: new Set(),
-      selectedCampaigns: new Set(),
-      selectedAdsets: new Set(),
-    });
-  }, []);
-
-  // ── Выбор ──────────────────────────────────────────────────────────────────
-  const toggleSelect = useCallback((id: string) => {
-    setSelected((p) => {
-      const n = new Set(p);
-      if (n.has(id)) { n.delete(id); } else { n.add(id); }
-      return n;
-    });
-  }, []);
-
-  const clearSelection = useCallback(() => setSelected(new Set()), []);
-
-  const selectAll = useCallback(() => {
-    setSelected((prev) => {
-      // Если уже все выбраны — снимаем; иначе выбираем все.
-      if (prev.size === rows.length && rows.length > 0) return new Set();
-      return new Set(rows.map((r) => r.fb_ad_id));
-    });
-  }, [rows]);
-
   // ── Открыть drawer ───────────────────────────────────────────────────────
   const openDrawer = useCallback((ad: AdSnapshot) => setDrawerAd(ad), []);
+  const requestDisableConfirm = useCallback(() => setConfirmOpen(true), []);
 
   // ── MONEY: bulk disable ────────────────────────────────────────────────────
   async function handleDisableConfirm() {
@@ -312,50 +180,20 @@ function AdsPage() {
   }
 
   // ── Keyboard nav ───────────────────────────────────────────────────────────
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      const target = e.target as HTMLElement;
-      // В инпуте — только Esc (blur), остальное не перехватываем.
-      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") {
-        if (e.key === "Escape") (target as HTMLInputElement).blur();
-        return;
-      }
-      if (e.key === "/") {
-        e.preventDefault();
-        searchRef.current?.focus();
-      } else if (e.key === "j" || e.key === "ArrowDown") {
-        e.preventDefault();
-        setCursor((c) => Math.min(rows.length - 1, c + 1));
-      } else if (e.key === "k" || e.key === "ArrowUp") {
-        e.preventDefault();
-        setCursor((c) => Math.max(0, c - 1));
-      } else if (e.key === "x" && cursor >= 0 && rows[cursor]) {
-        e.preventDefault();
-        toggleSelect(rows[cursor]!.fb_ad_id);
-      } else if (e.key === "Enter" && cursor >= 0 && rows[cursor]) {
-        e.preventDefault();
-        openDrawer(rows[cursor]!);
-      } else if (e.key === "d" && selected.size > 0) {
-        e.preventDefault();
-        setConfirmOpen(true);
-      } else if (e.key === "Escape") {
-        // Приоритет: drawer (закроется сам через Radix) → иначе сброс выбора.
-        if (!drawerAd && selected.size > 0) clearSelection();
-      }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [rows, cursor, selected.size, drawerAd, toggleSelect, openDrawer, clearSelection]);
-
-  // Скроллим курсор во вью при навигации J/K.
-  useEffect(() => {
-    if (cursor < 0 || !scrollRef.current) return;
-    const el = scrollRef.current;
-    const top = cursor * rowHeight;
-    const bottom = top + rowHeight;
-    if (top < el.scrollTop) el.scrollTop = top;
-    else if (bottom > el.scrollTop + el.clientHeight) el.scrollTop = bottom - el.clientHeight;
-  }, [cursor, rowHeight]);
+  useAdsKeyboardNav({
+    rows,
+    cursor,
+    setCursor,
+    selectedSize: selected.size,
+    drawerOpen: drawerAd !== null,
+    searchRef,
+    scrollRef,
+    rowHeight,
+    toggleSelect,
+    openDrawer,
+    clearSelection,
+    requestDisableConfirm,
+  });
 
   // ── Totals для count-badge (по всему кабинету, из stats) ────────────────
   const stats = statsQ.data;
@@ -390,7 +228,7 @@ function AdsPage() {
           adsetOptions={adsetOptions}
           count={rows.length}
           searchRef={searchRef}
-          onSearchChange={(v) => setFilters((p) => ({ ...p, search: v }))}
+          onSearchChange={setSearch}
           onStateToggle={toggleState}
           onOfferToggle={toggleOffer}
           onAccountToggle={toggleAccount}
@@ -443,7 +281,7 @@ function AdsPage() {
         <BulkActionBar
           count={selected.size}
           isPending={bulkDisable.isPending || deleteAds.isPending}
-          onDisable={() => setConfirmOpen(true)}
+          onDisable={requestDisableConfirm}
           onDelete={() => setConfirmDeleteOpen(true)}
           onClear={clearSelection}
         />
