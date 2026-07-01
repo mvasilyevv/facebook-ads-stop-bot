@@ -185,6 +185,17 @@ def main() -> int:
     log(f"текущий токен: {dl:.1f}д до exp; логинюсь за свежим")
     new = login(user, pw)
     log(f"свежий токен получен, до exp {days_left(new):.1f}д")
+    team_id = env.get("VISION_TEAM_ID", "")
+    if team_id:
+        # Профили живут в командной папке: личный токен меняем на team-token
+        # (GET /teams/{id}/auth), иначе /start отдаёт Payment required (инцидент 01.07).
+        req = urllib.request.Request(
+            f"https://v1.empr.cloud/api/v1/teams/{team_id}/auth",
+            headers={"X-Token": new},
+        )
+        with urllib.request.urlopen(req, timeout=30) as r:
+            new = json.loads(r.read())["data"]["token"]
+        log(f"team-token получен (team {team_id[:8]}…), до exp {days_left(new):.1f}д")
     update_env_token(ENV_PATH, new)
     log("VISION_X_TOKEN обновлён в .env (бэкап создан)")
 
