@@ -90,6 +90,16 @@ DEGRADED_ALERT_THRESHOLD = int(os.environ.get("OBSERVER_DEGRADED_ALERT_THRESHOLD
 DEGRADED_ALERT_TTL_SECONDS = int(os.environ.get("OBSERVER_DEGRADED_ALERT_TTL_SEC", "1800"))
 DEGRADED_ALERT_DEDUP_KEY = "observer:degraded:alerted"
 
+# MID X-16 (аудит 02.07): разлогин/чекпоинт Vision-профиля. browser-agent детектит
+# redirect на login.php/checkpoint, HTML вместо JSON или Graph 190 с login-subcode и
+# отдаёт empty_reason='login_required'. Money-критично: скан слеп, авто-стоп не работает —
+# owner должен получить ЯВНЫЙ алерт «нужен ре-логин», а не тихий пустой скан. Дедуп с
+# re-arm при недоставке (как degraded), TTL ~30 мин, чтобы не спамить каждый цикл.
+LOGIN_REQUIRED_ALERT_TTL_SECONDS = int(
+    os.environ.get("OBSERVER_LOGIN_REQUIRED_ALERT_TTL_SEC", "1800")
+)
+LOGIN_REQUIRED_ALERT_DEDUP_KEY = "observer:login_required:alerted"
+
 # Money-гард R4: мульти-каб (>1 кабинета) без owner_tag → скан остановлен ради безопасности
 # (иначе авто-стоп чужой рекламы в shared-кабинете). Дедуп ops-алерта, чтобы не спамить
 # каждый цикл, пока конфиг не исправят.
@@ -399,8 +409,18 @@ async def _run_account_scan(
             )
 
         if not scan_out.rows:
-            outcome = "empty"
-            error_msg = scan_out.empty_reason or "no rows"
+            # Разлогин/чекпоинт Vision-профиля (money-критично): browser-agent отдал
+            # empty_reason='login_required'. Это НЕ «пустой кабинет» (нет активной рекламы) —
+            # это слепота канала: скан ничего не видит, авто-стоп не работает. Классифицируем
+            # как error (→ resolve_scan_mode=CALM, degraded-счётчик, а не тихий IDLE) и шлём
+            # deduped алерт «нужен ре-логин». Проверяем ДО обычной empty-ветки.
+            if (scan_out.empty_reason or "") == "login_required":
+                outcome = "error"
+                error_msg = "login_required"
+                await _maybe_alert_login_required(engine, redis_client, ad_account_id=ad_account_id)
+            else:
+                outcome = "empty"
+                error_msg = scan_out.empty_reason or "no rows"
         else:
             await _publish_runtime_status(
                 redis_client,
@@ -845,6 +865,66 @@ class _ObserverState:
     force_scan_pending: bool = False  # выставляется триггером fb_agent:observer:trigger
     should_stop: bool = False  # выставляется сигналом restart
     consecutive_scan_failures: int = 0  # подряд error-циклов (Layer 3 degraded-алерт)
+
+
+async def _maybe_alert_login_required(
+    engine: AsyncEngine,
+    redis_client,
+    *,
+    ad_account_id: str | None = None,
+) -> bool:
+    """Deduped алерт «Vision-профиль разлогинен» (MID X-16). Возвращает True, если отправлен.
+
+    Доставка через notify_recipients (тот же путь, что degraded/health_watchdog). Дедуп
+    через Redis SET NX EX; при недоставке дедуп снимается — следующий разлогин-цикл
+    попробует доставить снова (алерт не теряется на TTL). Redis недоступен → всё равно
+    шлём (money-критичный сигнал важнее анти-спама).
+    """
+    allowed = True
+    if redis_client is not None:
+        try:
+            ok = await redis_client.set(
+                LOGIN_REQUIRED_ALERT_DEDUP_KEY,
+                "1",
+                ex=LOGIN_REQUIRED_ALERT_TTL_SECONDS,
+                nx=True,
+            )
+            allowed = bool(ok)
+        except Exception:
+            logger.exception("observer login_required-alert: ошибка SET дедуп-ключа")
+            allowed = True
+    if not allowed:
+        return False
+
+    cabinet_line = f"Кабинет: {fmt.code(str(ad_account_id))}\n" if ad_account_id else ""
+    text_msg = (
+        f"🔒 {fmt.b('Vision-профиль разлогинен')}\n"
+        f"Скан вернулся на страницу входа/чекпоинт Facebook — сессия протухла.\n"
+        f"{cabinet_line}"
+        "Скан слеп, авто-стоп не работает. Зайди в Vision-профиль и залогинься "
+        "заново (re-login Facebook), затем проверь вкладку Ads Manager на :3030."
+    )
+    logger.error("ALERT (observer login_required): кабинет=%s", ad_account_id or "-")
+
+    sent = await notify_recipients(
+        engine,
+        redis_client,
+        category="observer:login_required",
+        text=text_msg,
+    )
+    if not sent:
+        logger.warning(
+            "observer login_required-алерт НЕ доставлен (нет получателей/токена или сбой TG) — "
+            "дедуп снят, ретрай на следующем цикле"
+        )
+        if redis_client is not None:
+            try:
+                await redis_client.delete(LOGIN_REQUIRED_ALERT_DEDUP_KEY)
+            except Exception:
+                logger.exception(
+                    "observer login_required-alert: ошибка DEL дедуп-ключа после недоставки"
+                )
+    return bool(sent)
 
 
 async def _maybe_alert_degraded(

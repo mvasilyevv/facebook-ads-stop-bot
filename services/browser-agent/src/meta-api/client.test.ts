@@ -5,7 +5,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { executeGraphCall, checkMetaApiHealth } from './client.js';
+import { executeGraphCall, checkMetaApiHealth, isLoginRequiredError } from './client.js';
 
 // Мок Playwright Page: page.evaluate(fn, args) → вызываем evalImpl(args) (fn игнорируем).
 function mockPage(evalImpl: (args: any) => any): any {
@@ -174,6 +174,26 @@ describe('checkMetaApiHealth full_probe (incident 2026-06-19)', () => {
     assert.equal(r.probeDetail, 'probe_token_invalid');
   });
 
+  // MID X-16: 190 с login-subcode 463 (session expired) = РАЗЛОГИН профиля, не просто
+  // протухший токен. Отдельный маркер login_required → health_watchdog шлёт «нужен ре-логин».
+  it('full_probe разлогин (190 + subcode 463) → healthy=false, login_required', async () => {
+    const body = JSON.stringify({
+      error: {
+        code: 190,
+        error_subcode: 463,
+        type: 'OAuthException',
+        message: 'Session has expired',
+      },
+    });
+    const { page } = mockHealthPage({
+      graph: () => ({ status_code: 400, response_json: body }),
+    });
+    const r = await checkMetaApiHealth(page, { fullProbe: true });
+    assert.equal(r.healthy, false);
+    assert.equal(r.probeDetail, 'login_required');
+    assert.equal(r.detail, 'login_required');
+  });
+
   // Meta-side rate-limit (code 17): fetch ДОШЁЛ до Meta → канал жив (healthy=true),
   // но probe_ok=false. Согласовано с autostop_alert.is_channel_down_error.
   it('full_probe rate-limit (17) → healthy=true, probe_ok=false', async () => {
@@ -209,5 +229,40 @@ describe('checkMetaApiHealth full_probe (incident 2026-06-19)', () => {
     assert.equal(r.detail, 'token_not_found');
     assert.equal(r.probePerformed, false);
     assert.equal(graphEvalCount(), 0);
+  });
+});
+
+// isLoginRequiredError: чистый классификатор разлогина/чекпоинта (MID X-16).
+describe('isLoginRequiredError', () => {
+  // login-subcode 459 (checkpoint) → разлогин.
+  it('190 + subcode 459 (checkpoint) → true', () => {
+    assert.equal(isLoginRequiredError({ code: 190, subcode: 459, type: 'OAuthException' }), true);
+  });
+
+  // По тексту про re-login без subcode → true.
+  it('190 с текстом про log in → true', () => {
+    assert.equal(
+      isLoginRequiredError({ code: 190, message: 'The session has been invalidated, please log in' }),
+      true,
+    );
+  });
+
+  // 190 без login-признаков (обычное протухание токена) → false (это не разлогин).
+  it('190 без login-subcode/текста → false', () => {
+    assert.equal(
+      isLoginRequiredError({ code: 190, subcode: 0, message: 'Error validating access token' }),
+      false,
+    );
+  });
+
+  // Не-OAuth ошибка (rate-limit) → false.
+  it('code 17 (rate-limit) → false', () => {
+    assert.equal(isLoginRequiredError({ code: 17, message: 'limit reached' }), false);
+  });
+
+  // Пустой/undefined вход → false.
+  it('undefined/пустой вход → false', () => {
+    assert.equal(isLoginRequiredError(undefined), false);
+    assert.equal(isLoginRequiredError(null), false);
   });
 });

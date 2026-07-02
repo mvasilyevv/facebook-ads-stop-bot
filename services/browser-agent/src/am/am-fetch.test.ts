@@ -1,7 +1,8 @@
-// Тесты чистой логики am-fetch: выбор постера видео + retry-on-transient метрик.
+// Тесты чистой логики am-fetch: выбор постера видео + retry-on-transient метрик +
+// детект разлогина/чекпоинта (MID X-16: слепой канал = слитый бюджет).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { pickPreferredThumb, retryTransient } from './am-fetch.js';
+import { pickPreferredThumb, retryTransient, isLoginRequiredResponse } from './am-fetch.js';
 
 // Предпочитаем кадр с is_preferred=true (Meta помечает «главный» кадр видео).
 test('pickPreferredThumb: берёт is_preferred', () => {
@@ -71,4 +72,100 @@ test('retryTransient: исчерпание → последний transient-ре
   );
   assert.equal(calls, 3); // initial + 2 retries (delaysMs.length=2)
   assert.equal(r.__amError, true);
+});
+
+// --- isLoginRequiredResponse: детект разлогина/чекпоинта ---
+
+// fetch увёл на login.php (redirected=true) — сессия протухла, нужен ре-логин.
+test('isLoginRequiredResponse: redirect на login.php → true', () => {
+  assert.equal(
+    isLoginRequiredResponse({
+      __amError: true,
+      status: 200,
+      redirected: true,
+      finalUrl: 'https://www.facebook.com/login.php?next=...',
+      contentType: 'text/html',
+      body: '<!doctype html><html>...',
+    }),
+    true,
+  );
+});
+
+// Редирект на checkpoint (verify identity) — тоже разлогин-класс.
+test('isLoginRequiredResponse: redirect на checkpoint → true', () => {
+  assert.equal(
+    isLoginRequiredResponse({
+      __amError: true,
+      redirected: true,
+      finalUrl: 'https://www.facebook.com/checkpoint/?next',
+    }),
+    true,
+  );
+});
+
+// HTML вместо JSON (Meta отдала login-страницу) без явного redirect-флага.
+test('isLoginRequiredResponse: HTML-тело вместо JSON → true', () => {
+  assert.equal(
+    isLoginRequiredResponse({
+      __amError: true,
+      status: 200,
+      redirected: false,
+      contentType: 'text/html; charset=utf-8',
+      body: '<!DOCTYPE html><html><head><title>Log in to Facebook</title>',
+    }),
+    true,
+  );
+});
+
+// Graph error 190 с login-subcode 463 (session expired) → true.
+test('isLoginRequiredResponse: 190 + subcode 463 → true', () => {
+  assert.equal(
+    isLoginRequiredResponse({
+      error: { code: 190, error_subcode: 463, type: 'OAuthException', message: 'Session expired' },
+    }),
+    true,
+  );
+});
+
+// Graph error 190 с login-текстом, но без subcode → true (эвристика по message).
+test('isLoginRequiredResponse: 190 с текстом про re-login → true', () => {
+  assert.equal(
+    isLoginRequiredResponse({
+      error: { code: 190, type: 'OAuthException', message: 'The user must log in again.' },
+    }),
+    true,
+  );
+});
+
+// Обычный сетевой блип (__amError без redirect/HTML) — НЕ разлогин (это транзиент).
+test('isLoginRequiredResponse: сетевой блип → false', () => {
+  assert.equal(
+    isLoginRequiredResponse({ __amError: true, message: 'Failed to fetch' }),
+    false,
+  );
+});
+
+// 190 без login-признаков (короткоживущий токен протух) — НЕ login_required (re-sniff чинит).
+test('isLoginRequiredResponse: 190 без login-subcode/текста → false', () => {
+  assert.equal(
+    isLoginRequiredResponse({
+      error: { code: 190, type: 'OAuthException', message: 'Error validating access token' },
+    }),
+    false,
+  );
+});
+
+// Rate-limit (code 17) — канал жив, не разлогин.
+test('isLoginRequiredResponse: rate-limit code 17 → false', () => {
+  assert.equal(
+    isLoginRequiredResponse({ error: { code: 17, message: 'User request limit reached' } }),
+    false,
+  );
+});
+
+// Нормальный JSON-ответ без ошибок и пустой вход → false.
+test('isLoginRequiredResponse: чистый ответ / пустой вход → false', () => {
+  assert.equal(isLoginRequiredResponse({ data: [] }), false);
+  assert.equal(isLoginRequiredResponse(null), false);
+  assert.equal(isLoginRequiredResponse(undefined), false);
 });

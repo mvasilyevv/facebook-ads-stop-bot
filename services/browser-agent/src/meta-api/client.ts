@@ -361,9 +361,12 @@ async function runNetworkProbe(page: Page): Promise<ProbeVerdict> {
     if (code === -1 || code === -2 || code === -3) {
       return { ...base, probeOk: false, probeDetail: 'probe_network_down', channelDown: true };
     }
-    // 190 OAuth — токен протух, мутации невозможны → канал мёртв для money-операций.
+    // 190 OAuth — токен протух ИЛИ профиль разлогинен. Разлогин/чекпоинт (нужен ре-логин
+    // Vision-профиля) отличаем от обычного протухания токена по subcode/тексту — health_watchdog
+    // шлёт разный алерт (login_required = «зайди в Vision и залогинься», а не «обнови токен»).
     if (code === 190) {
-      return { ...base, probeOk: false, probeDetail: 'probe_token_invalid', channelDown: true };
+      const detail = isLoginRequiredError(result.error) ? 'login_required' : 'probe_token_invalid';
+      return { ...base, probeOk: false, probeDetail: detail, channelDown: true };
     }
     // Прочие Meta-ошибки (rate-limit 17/4/32 и т.п.) — fetch ДОШЁЛ до Meta → канал жив.
     return { ...base, probeOk: false, probeDetail: `meta_error:${code}`, channelDown: false };
@@ -376,6 +379,28 @@ async function runNetworkProbe(page: Page): Promise<ProbeVerdict> {
     probeDetail: `http_${result.statusCode}`,
     channelDown: false,
   };
+}
+
+// OAuth-subcodes, означающие РАЗЛОГИН/чекпоинт (нужен ре-логин профиля), а не просто
+// протухший короткоживущий токен: 458/459 checkpoint, 460 password changed, 463 session
+// expired, 464 unconfirmed, 467 invalid/logged-out. Зеркалит am-fetch._LOGIN_REQUIRED_SUBCODES.
+const _LOGIN_REQUIRED_SUBCODES: ReadonlySet<number> = new Set([458, 459, 460, 463, 464, 467]);
+
+/**
+ * True, если Graph error (code 190 / OAuthException) — это именно разлогин/чекпоинт
+ * профиля (нужен ре-логин Vision), а не рядовое протухание access_token. Экспорт для
+ * unit-теста. Признаки: login-subcode ИЛИ явное упоминание re-login/checkpoint в тексте.
+ */
+export function isLoginRequiredError(
+  err: { code?: number; subcode?: number; type?: string; message?: string } | undefined | null,
+): boolean {
+  if (!err) return false;
+  const code = Number(err.code ?? 0);
+  if (code !== 190 && err.type !== 'OAuthException') return false;
+  const subcode = Number(err.subcode ?? 0);
+  if (_LOGIN_REQUIRED_SUBCODES.has(subcode)) return true;
+  const msg = String(err.message ?? '').toLowerCase();
+  return /session.*expired|log ?in|checkpoint|re-?authenticate|not logged in|logged out/.test(msg);
 }
 
 /**

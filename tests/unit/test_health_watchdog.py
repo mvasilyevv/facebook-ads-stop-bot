@@ -13,6 +13,7 @@ from apps.health_watchdog.main import (
     build_meta_channel_alert,
     check_observer_runtime_freshness,
     classify_meta_probe,
+    is_login_required_reason,
     parse_expected_workers,
     should_alert,
 )
@@ -139,6 +140,42 @@ def test_build_meta_channel_alert_contains_money_signal() -> None:
     assert "Failed to fetch" in text
     # money-предупреждение и указание чинить канал
     assert "auto-stop" in text.lower() or "авто-стоп" in text.lower()
+
+
+# MID X-16: probe вернул маркер login_required → канал мёртв, reason=login_required.
+def test_classify_meta_probe_login_required() -> None:
+    probe = {
+        "healthy": False,
+        "probe_performed": True,
+        "probe_ok": False,
+        "detail": "login_required",
+        "probe_detail": "login_required",
+    }
+    is_down, reason = classify_meta_probe(probe)
+    assert is_down is True
+    assert reason == "login_required"
+
+
+# MID X-16: is_login_required_reason различает разлогин от network-down/token-invalid.
+def test_is_login_required_reason() -> None:
+    assert is_login_required_reason("login_required") is True
+    assert is_login_required_reason("LOGIN_REQUIRED") is True
+    assert is_login_required_reason("probe_network_down") is False
+    assert is_login_required_reason("probe_token_invalid") is False
+    assert is_login_required_reason("meta_error:17") is False
+
+
+# MID X-16: login_required → ОТДЕЛЬНЫЙ текст «нужен ре-логин Vision-профиля»,
+# отличный от generic network-down (действие оператора — залогиниться, не рестарт канала).
+def test_build_meta_channel_alert_login_required_distinct_text() -> None:
+    text = build_meta_channel_alert(reason="login_required", detail="Session expired")
+    low = text.lower()
+    assert "ре-логин" in low or "re-login" in low
+    assert "разлогин" in low or "залогин" in low
+    # money-предупреждение сохраняется
+    assert "авто-стоп" in low or "auto-stop" in low
+    # generic-текст «канал Marketing API мёртв» НЕ используется для login_required
+    assert "канал marketing api мёртв" not in low
 
 
 # Нет ключа observer:runtime → stale=True с reason="missing"

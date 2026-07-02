@@ -65,6 +65,19 @@ class TokenInvalidError(PermanentError):
     """
 
 
+class LoginRequiredError(TokenInvalidError):
+    """Профиль Vision РАЗЛОГИНЕН / чекпоинт — нужен ре-логин, не просто обновление токена.
+
+    Отличается от рядового TokenInvalidError тем, что сессия целиком протухла (redirect
+    на login.php/checkpoint, HTML вместо JSON, 190 с login-subcode 458/459/460/463/464/467).
+    Re-sniff токена НЕ помогает — оператор должен зайти в Vision и залогиниться заново.
+
+    Наследник TokenInvalidError → для meta_api_worker это Permanent-класс (mark_failed,
+    без бесконечного retry) И триггерит существующий «нужен re-login Vision» алерт.
+    Money-критично: слепой канал = слитый бюджет (инцидент 01.07 — канал умер молча).
+    """
+
+
 class RateLimitedError(TemporaryError):
     """Meta rate-limit или throttling.
 
@@ -126,8 +139,17 @@ _CODE_MAP: dict[int, type[MetaApiError]] = {
 }
 
 # Subcode override применяется ПЕРЕД code lookup.
+# Login-subcodes 458/459/460/463/464/467 — именно разлогин/чекпоинт (сессия протухла,
+# нужен ре-логин профиля), а не рядовое протухание короткоживущего токена → LoginRequiredError.
+# Зеркалит browser-agent _LOGIN_REQUIRED_SUBCODES (am-fetch.ts / meta-api/client.ts).
 _SUBCODE_OVERRIDES: dict[int, type[MetaApiError]] = {
     33: NotFoundError,  # 100/33 = object doesn't exist
+    458: LoginRequiredError,
+    459: LoginRequiredError,  # checkpoint (user must log in)
+    460: LoginRequiredError,  # password changed → session invalidated
+    463: LoginRequiredError,  # session expired
+    464: LoginRequiredError,  # unconfirmed user
+    467: LoginRequiredError,  # invalid access token (logged out)
     1357045: TokenInvalidError,  # session re-auth required
 }
 

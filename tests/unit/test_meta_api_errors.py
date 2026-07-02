@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from core.meta_api.errors import (
+    LoginRequiredError,
     NotFoundError,
     PermanentError,
     RateLimitedError,
@@ -41,6 +42,29 @@ def test_subcode_33_overrides_code_100() -> None:
 def test_subcode_1357045_reauth() -> None:
     exc = classify_graph_error(190, 1357045, "Login required")
     assert isinstance(exc, TokenInvalidError)
+
+
+# MID X-16: login-subcode 463 (session expired) = разлогин → LoginRequiredError.
+# Наследник TokenInvalidError (Permanent-класс + триггер re-login алерта в meta_api_worker).
+def test_subcode_463_login_required() -> None:
+    exc = classify_graph_error(190, 463, "Session has expired")
+    assert isinstance(exc, LoginRequiredError)
+    assert isinstance(exc, TokenInvalidError)  # наследование → тот же re-login алерт
+    assert isinstance(exc, PermanentError)  # не ретраится бесконечно
+
+
+# MID X-16: checkpoint-subcode 459 → LoginRequiredError (нужен ре-логин профиля).
+def test_subcode_459_checkpoint_login_required() -> None:
+    exc = classify_graph_error(190, 459, "Checkpoint required")
+    assert isinstance(exc, LoginRequiredError)
+
+
+# MID X-16: 190 БЕЗ login-subcode = рядовое протухание токена → TokenInvalidError,
+# но НЕ LoginRequiredError (re-sniff чинит, ре-логин профиля не нужен).
+def test_190_without_login_subcode_is_not_login_required() -> None:
+    exc = classify_graph_error(190, None, "Error validating access token")
+    assert isinstance(exc, TokenInvalidError)
+    assert not isinstance(exc, LoginRequiredError)
 
 
 # Code 200 — нет прав на действие → PermissionError (постоянная).

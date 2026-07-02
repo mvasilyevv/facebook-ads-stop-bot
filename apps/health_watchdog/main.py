@@ -239,17 +239,29 @@ def build_autostop_channel_alert(
     return "\n".join(lines)
 
 
+# MID X-16: маркер разлогина/чекпоинта из probe-ответа browser-agent (probe_detail/detail).
+# browser-agent отдаёт 'login_required' при 190 с login-subcode/redirect на login.php.
+# Отличаем от рядового network-down/token-invalid → отдельный текст «нужен ре-логин».
+LOGIN_REQUIRED_MARKER = "login_required"
+
+
+def is_login_required_reason(reason: str) -> bool:
+    """True, если reason из probe — маркер разлогина/чекпоинта (нужен ре-логин профиля)."""
+    return LOGIN_REQUIRED_MARKER in str(reason).lower()
+
+
 def classify_meta_probe(probe: dict[str, Any]) -> tuple[bool, str]:
     """Классифицирует результат check_health(full_probe=True): жив ли канал.
 
     Возвращает ``(is_down, reason)``. Канал мёртв (is_down=True), если probe вернул
     ``healthy=False`` — это покрывает network-down (Failed to fetch), протухший токен (190),
-    недоступность browser-agent (circuit_open) и отсутствие токена. Meta-side ошибки
-    (rate-limit) оставляют ``healthy=True`` → канал жив (не считаем outage'ом, согласовано
-    с ``core.meta_api.autostop_alert.is_channel_down_error``).
+    разлогин/чекпоинт (login_required), недоступность browser-agent (circuit_open) и
+    отсутствие токена. Meta-side ошибки (rate-limit) оставляют ``healthy=True`` → канал
+    жив (не считаем outage'ом, согласовано с ``autostop_alert.is_channel_down_error``).
 
     reason — наиболее информативная причина: ``probe_detail`` при выполненном probe,
-    иначе ``detail`` (например circuit_open / token_not_found).
+    иначе ``detail`` (например circuit_open / token_not_found / login_required).
+    Вызывающий смотрит ``is_login_required_reason(reason)``, чтобы выбрать текст алерта.
     """
     if bool(probe.get("healthy", False)):
         return False, str(probe.get("probe_detail") or probe.get("detail") or "ok")
@@ -262,7 +274,20 @@ def classify_meta_probe(probe: dict[str, Any]) -> tuple[bool, str]:
 
 
 def build_meta_channel_alert(*, reason: str, detail: str) -> str:
-    """CRITICAL-текст: канал Marketing API (auto-stop) мёртв по проактивному probe."""
+    """CRITICAL-текст: канал Marketing API (auto-stop) мёртв по проактивному probe.
+
+    Разлогин/чекпоинт (login_required) даёт ОТДЕЛЬНЫЙ текст «нужен ре-логин Vision-профиля»
+    (действие оператора — зайти и залогиниться), отличный от generic network-down.
+    """
+    if is_login_required_reason(reason):
+        return (
+            "🔒 <b>CRITICAL: Vision-профиль разлогинен (probe)</b>\n"
+            f"Реальный GET /me к graph.facebook.com отвергнут: <code>{html.escape(reason)}</code>\n"
+            f"Детали: <code>{html.escape(str(detail)[:200])}</code>\n\n"
+            "⚠️ Money: авто-стоп (pause_ad) не доходит до Meta — объявления тратят бюджет.\n"
+            "Нужен ре-логин Vision-профиля: зайди в Vision и залогинься заново "
+            "(re-login Facebook), затем проверь вкладку Ads Manager."
+        )
     return (
         "🛑 <b>CRITICAL: канал Marketing API мёртв (probe)</b>\n"
         f"Реальный GET /me к graph.facebook.com не прошёл: <code>{html.escape(reason)}</code>\n"

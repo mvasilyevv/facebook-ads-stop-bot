@@ -319,7 +319,9 @@ async function runScanCycle(call: any) {
       const scan = await withPageLock(req.session_id, async () => {
         let acquired = await acquireGraphContext(page, req.session_id, { expectedActId: actId });
         let result = await runAmScanWithContext(page, acquired.ctx, amConfig);
-        if (result.diagnostics.authExpired) {
+        // Разлогин/чекпоинт: re-sniff токена бессмыслен (сессия протухла) — не тратим
+        // reload, отдаём результат с loginRequired наверх (observer поднимет алерт).
+        if (result.diagnostics.authExpired && !result.diagnostics.loginRequired) {
           console.warn('[scan][am] access_token протух (190) → re-sniff + retry');
           invalidateGraphContext(req.session_id, actId);
           acquired = await acquireGraphContext(page, req.session_id, {
@@ -346,6 +348,7 @@ async function runScanCycle(call: any) {
       }
       console.log(`[scan][am] campaigns=${d.campaigns.length}`);
       const amWarnings: string[] = [];
+      if (d.loginRequired) amWarnings.push('am_login_required');
       if (d.amError) amWarnings.push('am_tabular_error');
       if (d.nameError || d.namesResolved === 0) amWarnings.push('am_names_missing');
       if (d.adsEdgeOnly > 0) amWarnings.push(`am_edge_only:${d.adsEdgeOnly}`);
@@ -368,7 +371,15 @@ async function runScanCycle(call: any) {
           },
           partial_row_ids: [],
           warnings: amWarnings,
-          empty_reason: amProtoRows.length === 0 ? 'no_active_ads' : '',
+          // Разлогин/чекпоинт (money-критично) имеет приоритет над «нет активных ад'ов»:
+          // пустой скан из-за протухшей сессии Vision — это НЕ «нет рекламы», а слепота
+          // канала. Гоним отдельный маркер, чтобы observer поднял алерт «нужен ре-логин»,
+          // а не тихо ушёл в IDLE как при обычном пустом кабинете.
+          empty_reason: d.loginRequired
+            ? 'login_required'
+            : amProtoRows.length === 0
+              ? 'no_active_ads'
+              : '',
           rows_with_all_metrics_empty: result.rows.filter((r: any) => !r.impressions && !Number(r.spend || 0) && !r.cpm && !r.cpc && !r.ctr).length,
         },
       });

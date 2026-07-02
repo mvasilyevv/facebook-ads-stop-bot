@@ -193,6 +193,9 @@ function edgeUrl(
 }
 
 // GET изнутри страницы (origin facebook → куки сессии + наш access_token). Без httpx.
+// Отдаём __amError с диагностикой redirect/HTML, чтобы отличить разлогин от сетевого блипа:
+//   redirected/finalUrl — fetch увёл на login.php/checkpoint (сессия протухла);
+//   contentType/body — HTML вместо JSON тоже признак login-редиректа/заглушки.
 async function fetchJson(page: Page, url: string): Promise<Record<string, unknown>> {
   return (await page.evaluate(async (u: string) => {
     try {
@@ -201,12 +204,66 @@ async function fetchJson(page: Page, url: string): Promise<Record<string, unknow
       try {
         return JSON.parse(text);
       } catch {
-        return { __amError: true, status: r.status, body: text.slice(0, 300) };
+        return {
+          __amError: true,
+          status: r.status,
+          body: text.slice(0, 300),
+          redirected: r.redirected,
+          finalUrl: r.url,
+          contentType: r.headers.get('content-type') || '',
+        };
       }
     } catch (e) {
       return { __amError: true, message: String(e) };
     }
   }, url)) as Record<string, unknown>;
+}
+
+// Facebook OAuth-subcodes, которые означают именно РАЗЛОГИН / чекпоинт (нужен ре-логин
+// профиля), а не просто протухший короткоживущий токен. 458 App-not-installed,
+// 459 checkpoint (user must log in), 460 password changed (сессия инвалидирована),
+// 463 session expired, 464 unconfirmed user, 467 invalid access token (logged out).
+const _LOGIN_REQUIRED_SUBCODES: ReadonlySet<number> = new Set([458, 459, 460, 463, 464, 467]);
+
+// Чистый детектор разлогина/чекпоинта по результату fetchJson (экспорт для unit-теста).
+// Возвращает true, если ответ Meta — признак протухшей сессии (нужен ре-логин Vision),
+// а НЕ транзиентный сетевой блип и не обычная Graph-ошибка. Триггеры:
+//   (а) fetch увёл на login.php|checkpoint (redirected/finalUrl);
+//   (б) вместо JSON пришёл HTML (content-type text/html или тело похоже на HTML) —
+//       Meta так отдаёт login-страницу;
+//   (в) Graph error code 190 (OAuthException) с login/checkpoint-subcode ИЛИ явным
+//       упоминанием re-login в тексте (session expired / log in / checkpoint).
+export function isLoginRequiredResponse(body: Record<string, unknown> | null | undefined): boolean {
+  if (!body || typeof body !== 'object') return false;
+
+  // (а)/(б): __amError с redirect/HTML.
+  if (body.__amError) {
+    const finalUrl = String(body.finalUrl ?? '').toLowerCase();
+    if (body.redirected === true || /login\.php|checkpoint|\/login\//.test(finalUrl)) {
+      return true;
+    }
+    const contentType = String(body.contentType ?? '').toLowerCase();
+    const rawBody = String(body.body ?? '');
+    const looksHtml =
+      contentType.includes('text/html') ||
+      /^\s*<(?:!doctype|html)\b/i.test(rawBody) ||
+      /login\.php|checkpoint|<title>[^<]*log ?in/i.test(rawBody);
+    if (looksHtml) return true;
+    return false;
+  }
+
+  // (в): Graph error 190 в теле JSON.
+  const gErr = body.error as
+    | { code?: number; type?: string; error_subcode?: number; message?: string }
+    | undefined;
+  if (!gErr) return false;
+  const code = Number(gErr.code ?? 0);
+  const isOAuth = code === 190 || gErr.type === 'OAuthException';
+  if (!isOAuth) return false;
+  const subcode = Number(gErr.error_subcode ?? 0);
+  if (_LOGIN_REQUIRED_SUBCODES.has(subcode)) return true;
+  const msg = String(gErr.message ?? '').toLowerCase();
+  return /session.*expired|log ?in|checkpoint|re-?authenticate|not logged in|logged out/.test(msg);
 }
 
 const _sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -240,7 +297,7 @@ async function fetchAllAmTabular(
   ctx: GraphContext,
   filtering: Filter[],
   datePreset: string,
-): Promise<{ rows: AmRow[]; error?: string; authExpired?: boolean }> {
+): Promise<{ rows: AmRow[]; error?: string; authExpired?: boolean; loginRequired?: boolean }> {
   const rows: AmRow[] = [];
   let after: string | undefined;
   for (let i = 0; i < 20; i++) {
@@ -251,6 +308,17 @@ async function fetchAllAmTabular(
         isTransient: (b) => Boolean((b as Record<string, unknown>)?.__amError),
       },
     );
+    // Разлогин/чекпоинт (money-критично): fetch увёл на login.php/checkpoint, пришёл HTML
+    // вместо JSON, или Graph 190 с login-subcode. Это НЕ транзиент — re-sniff токена не
+    // поможет (сессия протухла), нужен ре-логин Vision-профиля. Отдаём отдельным флагом,
+    // чтобы observer поднял явный алерт вместо тихого «пустого скана».
+    if (isLoginRequiredResponse(body)) {
+      return {
+        rows,
+        error: `am_tabular: login_required (${body.status ?? body.error ?? ''})`,
+        loginRequired: true,
+      };
+    }
     if (body?.__amError) {
       return { rows, error: `am_tabular: ${body.status ?? ''} ${body.body ?? body.message ?? ''}` };
     }
@@ -279,11 +347,19 @@ async function fetchAllEdge(
   fields: string[],
   filtering: Filter[],
   extraParams?: Record<string, string>,
-): Promise<{ items: LightMeta[]; error?: string }> {
+): Promise<{ items: LightMeta[]; error?: string; loginRequired?: boolean }> {
   const out: LightMeta[] = [];
   let after: string | undefined;
   for (let i = 0; i < 20; i++) {
     const body = await fetchJson(page, edgeUrl(ctx, origin, edge, fields, filtering, after, extraParams));
+    // Разлогин/чекпоинт на edge-запросе (имена/иерархия) — тот же money-критичный сигнал.
+    if (isLoginRequiredResponse(body)) {
+      return {
+        items: out,
+        error: `${edge}: login_required (${body.status ?? body.error ?? ''})`,
+        loginRequired: true,
+      };
+    }
     if (body?.__amError) {
       return { items: out, error: `${edge}: ${body.status ?? ''} ${body.body ?? body.message ?? ''}` };
     }
@@ -372,6 +448,10 @@ export interface AmScanResult {
     amError?: string;
     nameError?: string;
     authExpired?: boolean; // токен протух (code 190) → caller делает re-sniff + retry
+    // Разлогин/чекпоинт Facebook: сессия протухла (login.php/checkpoint/HTML/190-login).
+    // Money-критично: re-sniff НЕ помогает — нужен ре-логин Vision-профиля. Caller
+    // (index.ts) отдаёт это в scan-ответе как empty_reason='login_required'.
+    loginRequired?: boolean;
     // Сверка полноты: ад'ы из Graph ads-edge (сущности), которых НЕТ в am_tabular (метриках).
     adsEdgeOnly: number;
     adsEdgeOnlySample: string[];
@@ -439,12 +519,12 @@ export async function runAmScanWithContext(
     : [];
 
   // 1) Метрики per-ad (am_tabular) — уже в скоупе.
-  const { rows: amRows, error: amError, authExpired } = await fetchAllAmTabular(
-    page,
-    ctx,
-    buildFiltering({ campaignIds }),
-    config.datePreset,
-  );
+  const {
+    rows: amRows,
+    error: amError,
+    authExpired,
+    loginRequired: amLoginRequired,
+  } = await fetchAllAmTabular(page, ctx, buildFiltering({ campaignIds }), config.datePreset);
   const merged = mergeAmRows(amRows);
 
   // 2) Имена/статус ад'ов + adsets — тоже в скоупе (тянем только своё, не весь кабинет).
@@ -543,6 +623,11 @@ export async function runAmScanWithContext(
     .map((c) => ({ id: c.id, name: c.name ?? '', adCount: adsPerCampaign.get(c.id) ?? 0 }))
     .sort((a, b) => b.adCount - a.adCount);
 
+  // Разлогин на любом из запросов цикла (метрики или edge имён/иерархии) → единый флаг.
+  const loginRequired = Boolean(
+    amLoginRequired || campRes.loginRequired || adsRes.loginRequired || adsetRes.loginRequired,
+  );
+
   return {
     rows,
     diagnostics: {
@@ -553,6 +638,7 @@ export async function runAmScanWithContext(
       amError,
       nameError: adsRes.error ?? campRes.error ?? adsetRes.error,
       authExpired,
+      loginRequired,
       adsEdgeOnly: adsEdgeOnly.length,
       adsEdgeOnlySample: adsEdgeOnly.slice(0, 12),
       metricsOnly: metricsOnly.length,
