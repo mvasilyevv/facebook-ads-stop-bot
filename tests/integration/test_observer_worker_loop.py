@@ -352,43 +352,37 @@ async def test_auto_recover_flag_false_from_vision_config(
         await conn.execute(text("DELETE FROM vision_config"))
 
 
-# Layer 3: _maybe_alert_degraded шлёт TG-алерт один раз, затем дедуп, после сброса — снова
+# Layer 3: _maybe_alert_degraded шлёт через notify_recipients один раз, затем дедуп,
+# после сброса — снова (инцидент 01.07: легаси telegram_config.chat_id удалён)
 @pytest.mark.asyncio
-async def test_degraded_alert_dedup_and_clear(
-    pg_engine, fake_redis_client, seeded_telegram_config
-) -> None:
-    sent: list[dict] = []
+async def test_degraded_alert_dedup_and_clear(pg_engine, fake_redis_client) -> None:
+    from unittest.mock import AsyncMock, patch
 
-    class _StubTg:
-        async def send_message(self, **kwargs):
-            sent.append(kwargs)
-
-    tg = _StubTg()
     await fake_redis_client.delete("observer:degraded:alerted")
 
-    # Первый вызов — отправка
-    ok1 = await _maybe_alert_degraded(
-        pg_engine, fake_redis_client, tg, consecutive_failures=3, last_error="page gone"
-    )
-    assert ok1 is True
-    assert len(sent) == 1
-    assert "Observer" in sent[0]["text"]
-    assert sent[0]["chat_id"] == str(seeded_telegram_config["chat_id"])
+    with patch("apps.observer_worker.main.notify_recipients", AsyncMock(return_value=True)) as spy:
+        # Первый вызов — отправка
+        ok1 = await _maybe_alert_degraded(
+            pg_engine, fake_redis_client, consecutive_failures=3, last_error="page gone"
+        )
+        assert ok1 is True
+        assert spy.await_count == 1
+        assert "Observer" in spy.await_args.kwargs["text"]
 
-    # Второй вызов — дедуп, без отправки
-    ok2 = await _maybe_alert_degraded(
-        pg_engine, fake_redis_client, tg, consecutive_failures=4, last_error="page gone"
-    )
-    assert ok2 is False
-    assert len(sent) == 1
+        # Второй вызов — дедуп, без отправки
+        ok2 = await _maybe_alert_degraded(
+            pg_engine, fake_redis_client, consecutive_failures=4, last_error="page gone"
+        )
+        assert ok2 is False
+        assert spy.await_count == 1
 
-    # После сброса дедупа — снова отправка
-    await _clear_degraded_dedup(fake_redis_client)
-    ok3 = await _maybe_alert_degraded(
-        pg_engine, fake_redis_client, tg, consecutive_failures=5, last_error="page gone"
-    )
-    assert ok3 is True
-    assert len(sent) == 2
+        # После сброса дедупа — снова отправка
+        await _clear_degraded_dedup(fake_redis_client)
+        ok3 = await _maybe_alert_degraded(
+            pg_engine, fake_redis_client, consecutive_failures=5, last_error="page gone"
+        )
+        assert ok3 is True
+        assert spy.await_count == 2
 
     await fake_redis_client.delete("observer:degraded:alerted")
 
@@ -418,11 +412,10 @@ async def test_main_loop_degraded_alert_after_threshold(
 
     # gate всегда падает → outcome=error каждый цикл, self-heal не помогает
     gate = _FakeGate(RuntimeError("Основная страница браузера недоступна"))
-    sent: list[dict] = []
 
     class _StubTg:
         async def send_message(self, **kwargs):
-            sent.append(kwargs)
+            return None
 
     iters = {"n": 0}
 
@@ -439,16 +432,22 @@ async def test_main_loop_degraded_alert_after_threshold(
     async def _tg_factory():
         return _StubTg()
 
-    await main_loop(
-        gate_factory=_gate_factory,
-        redis_factory=_redis_factory,
-        tg_client_factory=_tg_factory,
-        should_continue=_should_continue,
-    )
+    from unittest.mock import AsyncMock, patch
 
-    # threshold=3 → ровно 1 алерт (дальше дедуп держит)
-    assert len(sent) == 1
-    assert "Observer" in sent[0]["text"]
+    with patch("apps.observer_worker.main.notify_recipients", AsyncMock(return_value=True)) as spy:
+        await main_loop(
+            gate_factory=_gate_factory,
+            redis_factory=_redis_factory,
+            tg_client_factory=_tg_factory,
+            should_continue=_should_continue,
+        )
+
+    # threshold=3 → ровно 1 алерт через notify_recipients (дальше дедуп держит)
+    degraded_calls = [
+        c for c in spy.await_args_list if c.kwargs.get("category") == "observer:degraded"
+    ]
+    assert len(degraded_calls) == 1
+    assert "Observer" in degraded_calls[0].kwargs["text"]
 
     await fake_redis_client.delete("observer:degraded:alerted")
 

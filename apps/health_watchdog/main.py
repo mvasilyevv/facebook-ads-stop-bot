@@ -43,6 +43,9 @@ HEARTBEAT_KEY = f"worker:heartbeat:{WORKER_NAME}"
 HEARTBEAT_TTL_SECONDS = 60
 
 CHECK_INTERVAL_SECONDS = int(os.environ.get("HEALTH_WATCHDOG_INTERVAL_SEC", "60"))
+# Пауза перед перезапуском упавшего цикла (_supervised, инцидент 01.07:
+# gather без защиты — одно исключение молча гасило весь воркер-сторож).
+LOOP_RESTART_DELAY_SECONDS = float(os.environ.get("HEALTH_WATCHDOG_LOOP_RESTART_SEC", "5"))
 ALERT_DEDUP_TTL_SECONDS = int(os.environ.get("HEALTH_WATCHDOG_ALERT_TTL_SEC", "3600"))
 OBSERVER_STALE_AFTER_SECONDS = int(os.environ.get("HEALTH_WATCHDOG_OBSERVER_STALE_SEC", "300"))
 # Grace-период перед ПЕРВОЙ проверкой: при совместном старте (supervisord/run.sh)
@@ -290,6 +293,9 @@ async def _maybe_alert_with_dedup(
     # Дедуп-проверка: уже алертили в этом окне?
     try:
         if await redis_client.get(dedup_key):
+            # Явный след: без него успешная отправка и подавление неотличимы от
+            # зависания (расследование 01.07 приняло тихий дедуп/успех за провал).
+            logger.info("алерт %s подавлен дедупом (уже отправлен в этом окне)", dedup_key)
             return False
     except Exception:  # noqa: BLE001
         logger.exception("ошибка чтения дедуп-ключа %s", dedup_key)
@@ -304,6 +310,7 @@ async def _maybe_alert_with_dedup(
     if not sent:
         return False
 
+    logger.info("алерт %s отправлен активным recipients", dedup_key)
     # Ставим дедуп только после успешной доставки
     try:
         await redis_client.set(dedup_key, "1", ex=ALERT_DEDUP_TTL_SECONDS, nx=True)
@@ -518,6 +525,9 @@ async def check_meta_api_channel(
         scanning_on = True
 
     if not scanning_on:
+        # След намеренного пропуска: после 11:24 01.07 probe молчал «по дизайну»,
+        # и тишина в логах выглядела как зависание воркера.
+        logger.info("meta probe: сканирование выключено — канал авто-стопа не проверяется")
         payload = {
             "healthy": False,
             "probe_performed": False,
@@ -578,6 +588,8 @@ async def check_meta_api_channel(
         logger.exception("meta probe: не удалось записать %s", META_CHANNEL_HEALTH_KEY)
 
     if not is_down:
+        # INFO-след каждого healthy-прохода: тишина в логах ≠ живой probe (урок 01.07).
+        logger.info("meta probe: канал жив (%s)", reason)
         # Канал жив → снимаем дедуп, чтобы будущий отказ снова дал алерт (re-arm).
         try:
             await redis_client.delete(META_CHANNEL_DEDUP_KEY)
@@ -736,6 +748,33 @@ async def meta_probe_loop(
             pass
 
 
+async def _supervised(
+    name: str,
+    factory: Any,
+    stop: asyncio.Event,
+) -> None:
+    """Перезапускает упавший цикл вместо тихой смерти (инцидент 01.07).
+
+    main_loop раньше собирал циклы голым asyncio.gather: одно исключение гасило
+    весь воркер-сторож, а «сторожа за сторожем» нет — молчание длилось часами.
+    factory — zero-arg callable, возвращающий корутину цикла; цикл сам крутится
+    до stop. Исключение → лог + пауза LOOP_RESTART_DELAY_SECONDS + новый запуск.
+    """
+    while not stop.is_set():
+        try:
+            await factory()
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "цикл %s упал — перезапуск через %sс", name, LOOP_RESTART_DELAY_SECONDS
+            )
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=LOOP_RESTART_DELAY_SECONDS)
+            except asyncio.TimeoutError:
+                pass
+
+
 # ====================== entrypoint ======================
 
 
@@ -784,20 +823,31 @@ async def main_loop(database_url: str | None = None) -> None:
         CHECK_INTERVAL_SECONDS,
     )
     try:
+        # Каждый цикл под _supervised + return_exceptions: упавший цикл
+        # перезапускается, а не гасит воркер молча (инцидент 01.07).
         await asyncio.gather(
-            heartbeat_loop(redis_client, stop),
-            check_loop(
-                redis_client,
-                expected_workers=expected_workers,
-                stop=stop,
-                engine=engine,
+            _supervised("heartbeat_loop", lambda: heartbeat_loop(redis_client, stop), stop),
+            _supervised(
+                "check_loop",
+                lambda: check_loop(
+                    redis_client,
+                    expected_workers=expected_workers,
+                    stop=stop,
+                    engine=engine,
+                ),
+                stop,
             ),
-            meta_probe_loop(
-                meta_client,
-                redis_client,
-                stop=stop,
-                engine=engine,
+            _supervised(
+                "meta_probe_loop",
+                lambda: meta_probe_loop(
+                    meta_client,
+                    redis_client,
+                    stop=stop,
+                    engine=engine,
+                ),
+                stop,
             ),
+            return_exceptions=True,
         )
     finally:
         try:

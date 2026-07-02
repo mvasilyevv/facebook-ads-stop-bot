@@ -50,7 +50,7 @@ from core.observer.pipeline import CycleResult, process_scan_rows
 from core.observer.queries import load_observer_config, load_vision_auto_restart_flag
 from core.scanner.models import ScannedAdRow
 from core.telegram import format as fmt
-from core.telegram.worker_notify import notify_owners
+from core.telegram.worker_notify import notify_owners, notify_recipients
 
 logger = logging.getLogger(__name__)
 
@@ -776,7 +776,6 @@ class _ObserverState:
 async def _maybe_alert_degraded(
     engine: AsyncEngine,
     redis_client,
-    tg_client,
     *,
     consecutive_failures: int,
     last_error: str | None,
@@ -784,12 +783,16 @@ async def _maybe_alert_degraded(
     """Layer 3: deduped TG-алерт о «тихой» деградации observer'а.
 
     Срабатывает, когда сканы стабильно падают и self-heal (Layer 1/2) не восстановил
-    primary-вкладку. Дедуп через Redis SET NX EX — повтор не чаще DEGRADED_ALERT_TTL.
+    primary-вкладку. Доставка через notify_recipients (telegram_recipients) — тот же
+    путь, что у health_watchdog. Легаси telegram_config.chat_id убран (инцидент 01.07:
+    chat_id NULL в проде → алерт молча терялся при сработавшем детекте).
+    Дедуп через Redis SET NX EX; при недоставке дедуп снимается — следующий
+    падающий цикл попробует доставить снова (алерт не теряется на TTL).
     Возвращает True, если алерт реально отправлен в TG.
     """
     if redis_client is None:
         return False
-    # Дедуп ставим ПЕРВЫМ — чтобы не дёргать БД/TG на каждом падающем цикле.
+    # Дедуп ставим ПЕРВЫМ — чтобы не дёргать БД/TG на каждом падающем цикле (~90с).
     try:
         ok = await redis_client.set(
             DEGRADED_ALERT_DEDUP_KEY, "1", ex=DEGRADED_ALERT_TTL_SECONDS, nx=True
@@ -808,29 +811,23 @@ async def _maybe_alert_degraded(
         f"Последняя ошибка: {fmt.code(str(last_error or 'н/д'))}"
     )
     logger.error("ALERT (observer degraded): %s", text_msg)
-    if tg_client is None:
-        # TG не настроен — алерт только в лог; дедуп уже стоит (как в health_watchdog).
-        return False
 
-    try:
-        from core.telegram.service import load_telegram_config
-
-        cfg = await load_telegram_config(engine)
-    except Exception:
-        logger.exception("observer degraded-alert: не удалось загрузить telegram_config")
-        return False
-    if cfg is None or cfg.chat_id is None:
-        return False
-    try:
-        await tg_client.send_message(
-            chat_id=str(cfg.chat_id),
-            text=text_msg,
-            parse_mode="HTML",
+    sent = await notify_recipients(
+        engine,
+        redis_client,
+        category="observer:degraded",
+        text=text_msg,
+    )
+    if not sent:
+        logger.warning(
+            "observer degraded-алерт НЕ доставлен (нет получателей/токена или сбой TG) — "
+            "проверь telegram_recipients; дедуп снят, ретрай на следующем цикле"
         )
-        return True
-    except Exception:
-        logger.exception("observer degraded-alert: не удалось отправить TG")
-        return False
+        try:
+            await redis_client.delete(DEGRADED_ALERT_DEDUP_KEY)
+        except Exception:
+            logger.exception("observer degraded-alert: ошибка DEL дедуп-ключа после недоставки")
+    return bool(sent)
 
 
 async def _clear_degraded_dedup(redis_client) -> None:
@@ -1047,7 +1044,6 @@ async def main_loop(
                     await _maybe_alert_degraded(
                         engine,
                         redis_client,
-                        tg_client,
                         consecutive_failures=state.consecutive_scan_failures,
                         last_error=summary.get("error"),
                     )
