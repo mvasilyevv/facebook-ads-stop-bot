@@ -38,6 +38,13 @@ function AdDetailRoute() {
     include_tasks: false,
   });
 
+  // Холодный deep-link: snapshot нет в кэше useAds, есть только timeline
+  // (без alert_state — AdTimelineResponse его не отдаёт). Раньше сюда
+  // подставлялся alert_state: "normal", что рисовало ложную «Норму» для
+  // объявления, которое на самом деле могло быть в STOP/WARNING/DISABLED.
+  // Синтетический snapshot — только для полей, реально известных из timeline;
+  // alert_state оставляем placeholder-значением и явно помечаем stateUnknown,
+  // чтобы AdDrawer НЕ доверял ему и показал нейтральный статус.
   const ad: AdSnapshot | null = useMemo(() => {
     if (fromList) return fromList;
     if (!timeline) return null;
@@ -49,7 +56,7 @@ function AdDetailRoute() {
       adset_name: timeline.adset_name ?? null,
       offer_code: timeline.offer_code ?? null,
       offer_id: null,
-      alert_state: "normal",
+      alert_state: "normal", // placeholder — реальный статус неизвестен, см. stateUnknown ниже
       is_active: true,
       last_seen_at: null,
       stop_rule_codes: [],
@@ -58,7 +65,18 @@ function AdDetailRoute() {
     } satisfies AdSnapshot;
   }, [fromList, timeline]);
 
+  // true только для синтетического ad из timeline-фолбэка (fromList отсутствует).
+  const stateUnknown = !fromList && ad !== null;
+
   const isLoading = adsLoading || (timelineLoading && !fromList);
 
-  return <AdDrawer ad={ad} onClose={close} isLoading={isLoading} fbAdId={fbAdId} />;
+  return (
+    <AdDrawer
+      ad={ad}
+      onClose={close}
+      isLoading={isLoading}
+      fbAdId={fbAdId}
+      stateUnknown={stateUnknown}
+    />
+  );
 }

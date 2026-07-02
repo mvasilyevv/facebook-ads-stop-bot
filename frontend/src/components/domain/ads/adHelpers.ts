@@ -8,7 +8,7 @@
  *   ROAS в схеме НЕТ → всегда null (рендерим «—», не фейк).
  */
 
-import { deriveGeoFromNames, type AdSnapshot } from "@fb/shared";
+import { deriveGeoFromNames, formatSpend1, type AdSnapshot } from "@fb/shared";
 
 // ─── Числовой парс ────────────────────────────────────────────────────────────
 
@@ -128,16 +128,12 @@ export const isRoasBad = (v: number | null): boolean => v != null && v < 1;
 
 // ─── Money-форматтер «1 знак» (как в прототипе) ────────────────────────────
 
-const MONEY1 = new Intl.NumberFormat("en-US", {
-  minimumFractionDigits: 1,
-  maximumFractionDigits: 1,
-});
-
-/** $1,234.5 — формат денег с одним знаком (эталонный money() из ads-web.jsx). */
-export function money1(v: number | null | undefined): string {
-  if (v == null) return "—";
-  return "$" + MONEY1.format(v);
-}
+/**
+ * $1,234.5 — формат денег с одним знаком (эталонный money() из ads-web.jsx).
+ * Реэкспорт: реализация сведена в @fb/shared (formatSpend1) — единый источник
+ * с mini, локальная копия убрана (аудит 02.07, LOW F1 «дубль money1()»).
+ */
+export const money1 = formatSpend1;
 
 // ─── Гео из имени объявления ───────────────────────────────────────────────
 

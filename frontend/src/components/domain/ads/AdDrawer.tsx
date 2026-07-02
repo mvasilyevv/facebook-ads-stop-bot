@@ -48,9 +48,21 @@ interface AdDrawerProps {
   isLoading?: boolean;
   /** fb_ad_id, известный до прихода snapshot (для header/timeline при ad=null). */
   fbAdId?: string;
+  /**
+   * true — переданный `ad` собран синтетически (холодный deep-link без snapshot
+   * в кэше, только timeline), реального alert_state с бэка нет. НЕ подставляем
+   * ложную «Норму» — показываем нейтральный статус «Статус неизвестен».
+   */
+  stateUnknown?: boolean;
 }
 
-export function AdDrawer({ ad, onClose, isLoading = false, fbAdId }: AdDrawerProps) {
+export function AdDrawer({
+  ad,
+  onClose,
+  isLoading = false,
+  fbAdId,
+  stateUnknown = false,
+}: AdDrawerProps) {
   // id резолвится из snapshot или из явного пропа (для холодного deep-link).
   const resolvedId = ad?.fb_ad_id ?? fbAdId ?? "";
 
@@ -95,7 +107,12 @@ export function AdDrawer({ ad, onClose, isLoading = false, fbAdId }: AdDrawerPro
   // ── Полные данные ──────────────────────────────────────────────────────────
   // STATE учитывает И FSM, И доставку в FB (см. displayAdState): выключенное объявление
   // с alert_state=normal показывается как «Выключено», а не ложная «Норма».
-  const display = displayAdState(ad.alert_state, ad.delivery_status);
+  // stateUnknown (холодный deep-link без snapshot) — реальный FSM неизвестен,
+  // displayAdState() не вызываем вообще (иначе синтетический "normal" покажет
+  // ложную «Норму» вместо честного «нет данных»).
+  const display = stateUnknown
+    ? { label: "Статус неизвестен", state: "normal" as const }
+    : displayAdState(ad.alert_state, ad.delivery_status);
   const geo = deriveGeo(ad);
   const m = readAdMetrics(ad);
   const rules = [...(ad.stop_rule_codes ?? []), ...(ad.warning_rule_codes ?? [])];
@@ -112,7 +129,7 @@ export function AdDrawer({ ad, onClose, isLoading = false, fbAdId }: AdDrawerPro
       title={<span className="truncate">{ad.ad_name}</span>}
       description={
         <span className="flex items-center gap-2 flex-wrap">
-          <Badge variant={alertStateToBadgeVariant(display.state)} size="sm">
+          <Badge variant={stateUnknown ? "neutral" : alertStateToBadgeVariant(display.state)} size="sm">
             {display.label}
           </Badge>
           {ad.offer_code ? (
@@ -135,7 +152,9 @@ export function AdDrawer({ ad, onClose, isLoading = false, fbAdId }: AdDrawerPro
       footer={
         <AdDisableButton
           fbAdId={resolvedId}
-          alreadyDisabled={display.state === "disabled"}
+          // При неизвестном статусе не утверждаем «уже отключено» — кнопка
+          // Disable остаётся доступной (сама по себе безопасна: создаёт задачу).
+          alreadyDisabled={!stateUnknown && display.state === "disabled"}
           onDisabled={onClose}
         />
       }

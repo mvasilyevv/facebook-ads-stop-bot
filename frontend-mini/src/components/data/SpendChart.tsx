@@ -2,14 +2,18 @@
  * SpendChart — мягкий area-график «spend × час» для hero-строки.
  * Чистый SVG: пунктирные направляющие + база, draw-on линия, пульс на «now»,
  * hover-тултип. Пустой ряд → заглушка (без фейка). Порт из web (единый канон).
+ *
+ * null-точки (аудит 02.07, LOW F2): "нет данных за бакет" (null) визуально
+ * отличается от "потрачено 0" — рисуем разрыв линии/области вместо просадки
+ * в ноль, чтобы не искажать тренд. null исключён из hover/пика/последней точки.
  */
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { formatSpend } from "@fb/shared";
 import { PulseDot } from "@/components/data/PulseDot";
 
 interface SpendChartProps {
-  /** Ряд значений spend по часам. */
-  data: number[];
+  /** Ряд значений spend по часам. null — нет данных за бакет (разрыв). */
+  data: (number | null)[];
   /** Высота области графика в px. */
   height?: number;
   /** Показывать пульс на последней точке. */
@@ -66,7 +70,25 @@ export function SpendChart({ data, height = 120, live = true, animate = true }: 
   const innerH = H - padB - padT;
   const n = data.length;
 
-  if (n < 2) {
+  // Непрерывные участки без null — на них рисуем линию/область, между ними разрыв.
+  const segments = useMemo(() => {
+    const out: number[][] = [];
+    let cur: number[] = [];
+    data.forEach((v, i) => {
+      if (v == null) {
+        if (cur.length) out.push(cur);
+        cur = [];
+      } else {
+        cur.push(i);
+      }
+    });
+    if (cur.length) out.push(cur);
+    return out;
+  }, [data]);
+
+  const validValues = data.filter((v): v is number => v != null);
+
+  if (n < 2 || validValues.length === 0) {
     return (
       <div ref={wrapRef} className="relative w-full" style={{ height: H }}>
         <div className="flex h-full items-center justify-center text-[12px] text-bg-8">
@@ -76,20 +98,40 @@ export function SpendChart({ data, height = 120, live = true, animate = true }: 
     );
   }
 
-  const max = Math.max(...data) * 1.1 || 1;
+  const max = Math.max(...validValues) * 1.1 || 1;
   const x = (i: number) => (i / (n - 1)) * w;
   const y = (v: number) => padT + innerH - (v / max) * innerH;
-  const linePts = data.map((v, i) => `${x(i)},${y(v)}`).join(" ");
-  const areaPath =
-    `M${x(0)},${y(data[0]!)} ` +
-    data.map((v, i) => `L${x(i)},${y(v)}`).join(" ") +
-    ` L${x(n - 1)},${H - padB} L${x(0)},${H - padB} Z`;
+
+  // Индекс последней НЕ-null точки — на неё ставим pulse/last-value, а не
+  // на последний элемент массива (может быть null-разрывом на самом краю).
+  const lastValidIdx = (() => {
+    for (let i = data.length - 1; i >= 0; i--) {
+      if (data[i] != null) return i;
+    }
+    return null;
+  })();
+
+  const linePts = segments.map((seg) => seg.map((i) => `${x(i)},${y(data[i]!)}`).join(" "));
+  const areaPaths = segments.map((seg) => {
+    const first = seg[0]!;
+    const last = seg[seg.length - 1]!;
+    return (
+      `M${x(first)},${y(data[first]!)} ` +
+      seg.map((i) => `L${x(i)},${y(data[i]!)}`).join(" ") +
+      ` L${x(last)},${H - padB} L${x(first)},${H - padB} Z`
+    );
+  });
 
   const onMove = (e: React.MouseEvent<HTMLDivElement>) => {
     const rect = wrapRef.current?.getBoundingClientRect();
     if (!rect) return;
     const px = e.clientX - rect.left;
     const i = Math.max(0, Math.min(n - 1, Math.round((px / rect.width) * (n - 1))));
+    // Наведение на разрыв (null-точку) — тултип не показываем, курсор снят.
+    if (data[i] == null) {
+      setHover(null);
+      return;
+    }
     setHover(i);
   };
 
@@ -122,15 +164,21 @@ export function SpendChart({ data, height = 120, live = true, animate = true }: 
           />
         ))}
 
-        <path d={areaPath} fill={`url(#fill${gid})`} />
-        <polyline
-          ref={lineRef}
-          points={linePts}
-          fill="none"
-          stroke="var(--accent)"
-          strokeWidth={1.5}
-          strokeLinejoin="round"
-        />
+        {areaPaths.map((d, i) => (
+          <path key={`area-${i}`} d={d} fill={`url(#fill${gid})`} />
+        ))}
+        {linePts.map((pts, i) => (
+          <polyline
+            key={`line-${i}`}
+            // draw-on анимация цепляется за первый сегмент (обычный случай — без разрывов).
+            ref={i === 0 ? lineRef : undefined}
+            points={pts}
+            fill="none"
+            stroke="var(--accent)"
+            strokeWidth={1.5}
+            strokeLinejoin="round"
+          />
+        ))}
 
         {[0, 6, 12, 18, n - 1].map((i) => (
           <text
@@ -146,7 +194,7 @@ export function SpendChart({ data, height = 120, live = true, animate = true }: 
           </text>
         ))}
 
-        {hover != null && (
+        {hover != null && data[hover] != null && (
           <g>
             <line
               x1={x(hover)}
@@ -168,7 +216,7 @@ export function SpendChart({ data, height = 120, live = true, animate = true }: 
         )}
       </svg>
 
-      {live && (
+      {live && lastValidIdx != null && (
         <PulseDot
           size={8}
           color="var(--accent)"
@@ -176,12 +224,12 @@ export function SpendChart({ data, height = 120, live = true, animate = true }: 
             position: "absolute",
             pointerEvents: "none",
             right: -1,
-            top: y(data[n - 1]!) - 4,
+            top: y(data[lastValidIdx]!) - 4,
           }}
         />
       )}
 
-      {hover != null && (
+      {hover != null && data[hover] != null && (
         <div
           className="pointer-events-none absolute top-0 border border-[var(--hairline-strong)] bg-bg-3 px-2.5 py-1.5 rounded-[var(--radius-2)]"
           style={{ left: Math.min(Math.max(x(hover) - 50, 0), w - 100), minWidth: 92 }}

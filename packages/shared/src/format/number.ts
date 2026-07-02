@@ -12,6 +12,12 @@ const SPEND_FORMATTER = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 2,
 });
 
+/** Один знак после запятой — компактный money-формат для плотных таблиц/панелей. */
+const SPEND1_FORMATTER = new Intl.NumberFormat("en-US", {
+  minimumFractionDigits: 1,
+  maximumFractionDigits: 1,
+});
+
 const COMPACT_FORMATTER = new Intl.NumberFormat("en-US", {
   notation: "compact",
   maximumFractionDigits: 1,
@@ -34,6 +40,20 @@ export function formatSpend(value: number | string | null | undefined): string {
   const n = typeof value === "string" ? Number.parseFloat(value) : value;
   if (Number.isNaN(n)) return "—";
   return SPEND_FORMATTER.format(n);
+}
+
+/**
+ * Денежная сумма с ОДНИМ знаком: $1,234.5 — компактный вариант formatSpend()
+ * для плотных таблиц/панелей (Ads-таблица, метрики-панель объявления).
+ * Единый источник — раньше был локально продублирован в web (money1 в
+ * adHelpers.ts), сведено сюда во избежание рассинхрона форматов между
+ * web и mini (аудит 02.07, LOW F1).
+ */
+export function formatSpend1(value: number | string | null | undefined): string {
+  if (value == null || value === "") return "—";
+  const n = typeof value === "string" ? Number.parseFloat(value) : value;
+  if (Number.isNaN(n)) return "—";
+  return "$" + SPEND1_FORMATTER.format(n);
 }
 
 /** Компактное число: 12.4K, 1.2M. */

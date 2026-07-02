@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   formatSpend,
+  formatSpend1,
   formatCompact,
   formatInt,
   formatPercent,
@@ -46,6 +47,40 @@ describe("formatSpend", () => {
   // Отрицательное (бывает при корректировках)
   it("форматирует отрицательное число", () => {
     expect(formatSpend(-50)).toBe("-$50.00");
+  });
+});
+
+// Единый источник для web money1() (аудит 02.07, LOW F1 «дубль money1()») —
+// сведено в @fb/shared, тесты дублируют прежний контракт web-версии.
+describe("formatSpend1", () => {
+  // Один знак после запятой (не два, как formatSpend)
+  it("форматирует с одним знаком", () => {
+    expect(formatSpend1(1234.56)).toBe("$1,234.6");
+  });
+
+  // Ноль — валидный кейс
+  it("ноль → $0.0", () => {
+    expect(formatSpend1(0)).toBe("$0.0");
+  });
+
+  // null → "—"
+  it("null → —", () => {
+    expect(formatSpend1(null)).toBe("—");
+  });
+
+  // undefined → "—"
+  it("undefined → —", () => {
+    expect(formatSpend1(undefined)).toBe("—");
+  });
+
+  // Строковый вход (бэк отдаёт Decimal как строку)
+  it("принимает строку", () => {
+    expect(formatSpend1("99.55")).toBe("$99.6");
+  });
+
+  // Не-число строка → "—"
+  it("невалидная строка → —", () => {
+    expect(formatSpend1("abc")).toBe("—");
   });
 });
 

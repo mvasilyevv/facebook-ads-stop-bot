@@ -182,8 +182,24 @@ export interface ChartDataPoint {
 }
 
 /**
- * Ряд spend по часам для SpendChart (number[]). Пустой ряд → график покажет
+ * Парсит spend точки в number|null. Вынесено из useSpendSeries для юнит-тестов
+ * (аудит 02.07, LOW F2): "нет данных за бакет" (null/undefined/""/NaN) явно
+ * отличается от "потрачено ровно 0" — раньше `Number(p.spend) || 0` схлопывал
+ * оба случая в 0, график рисовал плоскую линию вместо честного разрыва.
+ *
+ * ВАЖНО: Number(null) === 0 — null/undefined/"" проверяются ДО Number(),
+ * иначе "нет данных" снова тихо становится "потрачено 0".
+ */
+export function parseSpendPoint(spend: ChartDataPoint["spend"]): number | null {
+  if (spend == null || spend === "") return null;
+  const n = Number(spend);
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * Ряд spend по часам для SpendChart (number|null)[]. Пустой ряд → график покажет
  * заглушку (без фейка). bucket=hour, cabinet_day=true — окно с 00:00 кабинета.
+ * null-точки — разрыв графика вместо просадки в ноль (см. parseSpendPoint).
  */
 export function useSpendSeries(hours = 24) {
   return useQuery({
@@ -193,7 +209,7 @@ export function useSpendSeries(hours = 24) {
         `/dashboard/chart-data?hours=${hours}&bucket=hour&cabinet_day=true`,
       );
       const arr = Array.isArray(data) ? data : (data as { items: ChartDataPoint[] }).items ?? [];
-      return arr.map((p) => Number(p.spend) || 0);
+      return arr.map((p) => parseSpendPoint(p.spend));
     },
     refetchInterval: 60_000,
   });

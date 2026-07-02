@@ -2,7 +2,7 @@
  * Тесты fetchJson: Bearer header, 401-retry, ошибки.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { fetchJson } from "@/lib/api";
+import { fetchJson, parseSpendPoint } from "@/lib/api";
 
 // Мокаем auth-модуль
 vi.mock("@/lib/auth", () => ({
@@ -79,5 +79,37 @@ describe("fetchJson", () => {
     await fetchJson("/no-auth");
     const [, opts] = mockFetch.mock.calls[0] as [string, RequestInit];
     expect((opts.headers as Record<string, string>)["Authorization"]).toBeUndefined();
+  });
+});
+
+// Аудит 02.07, LOW F2: раньше `Number(p.spend) || 0` схлопывал "нет данных" и
+// "потрачено 0" в одно значение — parseSpendPoint явно различает null и 0.
+describe("parseSpendPoint", () => {
+  // Настоящий 0 (объявление крутилось, но не потратило) — валидное число, не разрыв.
+  it("честный 0 остаётся числом 0, не null", () => {
+    expect(parseSpendPoint(0)).toBe(0);
+    expect(parseSpendPoint("0")).toBe(0);
+  });
+
+  // Обычное положительное число/строка
+  it("парсит положительное число и строку", () => {
+    expect(parseSpendPoint(12.5)).toBe(12.5);
+    expect(parseSpendPoint("12.5")).toBe(12.5);
+  });
+
+  // null/undefined — "нет данных за бакет" → null (разрыв графика)
+  it("null/undefined → null (не 0)", () => {
+    expect(parseSpendPoint(null)).toBeNull();
+    expect(parseSpendPoint(undefined as unknown as null)).toBeNull();
+  });
+
+  // Пустая строка — тоже "нет данных"
+  it("пустая строка → null", () => {
+    expect(parseSpendPoint("")).toBeNull();
+  });
+
+  // Невалидная строка (NaN после Number()) → null, не 0
+  it("невалидная строка → null (не 0)", () => {
+    expect(parseSpendPoint("abc")).toBeNull();
   });
 });
