@@ -141,7 +141,7 @@ async def test_chart_bucket_hour(pg_engine, fake_redis_client, clean_chart) -> N
     buckets = resp.json()
     assert len(buckets) >= 1
 
-    # Scoped-SQL: latest-per-(hour×ad) для нашего ad_id = 50.00 (не naive SUM 90)
+    # Scoped-SQL: latest-per-(hour×ad) для нашего ad_id = 50.00 (не naive SUM 90) — эталон
     async with pg_engine.connect() as conn:
         scoped = (
             await conn.execute(
@@ -164,8 +164,22 @@ async def test_chart_bucket_hour(pg_engine, fake_redis_client, clean_chart) -> N
     assert Decimal(str(scoped)) == Decimal("50.00"), (
         f"latest-per-hour spend={scoped}, ожидалось 50.00 (не naive SUM 90)"
     )
-    # Endpoint должен вернуть бакет, в котором spend >= 50 (наш вклад)
-    assert any(Decimal(str(b["spend"])) >= Decimal("50.00") for b in buckets)
+
+    # Главная проверка (MID-20): находим ТОЧНЫЙ бакет по ts (прошлый час) в ФАКТИЧЕСКОМ
+    # ответе endpoint'а — не просто "любой бакет с spend>=50", а конкретно наш час.
+    # bucket.spend — SUM по ВСЕМ ad'ам в этом часе (shared БД), поэтому >= наш latest,
+    # но обязан включать ровно 50.00 нашего ad'а, а не naive-SUM 90 при регрессии CRIT-1.
+    async with pg_engine.connect() as conn:
+        expected_ts = (
+            await conn.execute(text("SELECT date_trunc('hour', NOW() - INTERVAL '1 hour')"))
+        ).scalar_one()
+    matching = [b for b in buckets if b["ts"].startswith(expected_ts.isoformat()[:13])]
+    assert matching, f"Бакет с ts={expected_ts} не найден в ответе chart-data"
+    bucket_spend = Decimal(str(matching[0]["spend"]))
+    assert bucket_spend >= Decimal("50.00"), (
+        f"bucket[ts={expected_ts}].spend={bucket_spend}, ожидалось >= 50.00 (наш latest-вклад)"
+    )
+    assert matching[0]["active_ads"] >= 1
 
 
 # Тест: bucket=day — 3 кумулятивных цикла в одном дне → spend = latest, не SUM.
@@ -212,8 +226,18 @@ async def test_chart_bucket_day(pg_engine, fake_redis_client, clean_chart) -> No
     assert Decimal(str(scoped)) == Decimal("50.00"), (
         f"latest-per-day spend={scoped}, ожидалось 50.00 (не naive SUM 90)"
     )
-    # Endpoint должен вернуть бакет с нашим вкладом >= 50
-    assert any(Decimal(str(b["spend"])) >= Decimal("50.00") for b in buckets)
+
+    # Главная проверка (MID-20): точный бакет по ts (сегодняшний UTC-день) в
+    # ФАКТИЧЕСКОМ ответе endpoint'а, не просто "любой бакет с spend>=50".
+    async with pg_engine.connect() as conn:
+        expected_ts = (await conn.execute(text("SELECT date_trunc('day', NOW())"))).scalar_one()
+    matching = [b for b in buckets if b["ts"].startswith(expected_ts.isoformat()[:10])]
+    assert matching, f"Бакет с ts={expected_ts} не найден в ответе chart-data"
+    bucket_spend = Decimal(str(matching[0]["spend"]))
+    assert bucket_spend >= Decimal("50.00"), (
+        f"bucket[ts={expected_ts}].spend={bucket_spend}, ожидалось >= 50.00 (наш latest-вклад)"
+    )
+    assert matching[0]["active_ads"] >= 1
 
 
 # Тест: hours=24&bucket=hour → не больше 24 точек.

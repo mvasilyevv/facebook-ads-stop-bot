@@ -42,7 +42,10 @@ class TrackerAggregate(UUIDPrimaryKey, Timestamp, Base):
     installs: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     registrations: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     deposits: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
-    revenue: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, server_default="0")
+    # Numeric(12,4) — согласовано с точностью источника (adsetpro_postback_events
+    # revenue приходит с 4 знаками после запятой); было (12,2) и округляло агрегат
+    # до копеек, теряя 2 младших разряда постбэка (MID-15, migration 0032).
+    revenue: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False, server_default="0")
     roi_percent: Mapped[Decimal | None] = mapped_column(Numeric(7, 2), nullable=True)
     last_postback_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 

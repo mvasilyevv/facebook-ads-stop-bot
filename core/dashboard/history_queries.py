@@ -14,6 +14,15 @@ CRIT-1: ad_metrics хранит КУМУЛЯТИВНЫЕ snapshot'ы (spend ра
 latest_per_ad_per_day_cte (DISTINCT ON (ad_id, day) → SUM дневных итогов), а не
 наивный SUM по всем cycle-строкам. См. core/dashboard/metric_aggregation.py.
 
+MID-14 (аудит 02.07): `latest_per_ad_per_day_cte` группирует дни по
+`date_trunc('day', cycle_ts)` — это UTC-сутки, а фактический посуточный сброс
+spend в кабинете происходит по TZ кабинета. Для не-UTC кабинетов это даёт
+систематический сдвиг границы дня в многодневных отчётах этого модуля
+(fetch_summary_metrics/fetch_campaigns/fetch_offers/fetch_ads) — несколько часов
+на стыке суток могут посчитаться не в тот календарный день. Стоп-решения FSM/
+evaluator это НЕ затрагивает (работают на latest-snapshot, не на этой posуточной
+агрегации). Подробности и обоснование — в core/dashboard/metric_aggregation.py.
+
 matched_rule_codes — JSONB! Unnest через jsonb_array_elements_text().
 """
 

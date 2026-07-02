@@ -170,14 +170,18 @@ async def test_performance_default_7d(pg_engine, fake_redis_client, clean_perf) 
 
 
 # Тест: top_campaigns spend = latest-per-ad (не naive SUM трёх циклов).
-# Проверяем через scoped-SQL по нашему campaign_id — endpoint имеет LIMIT 10
-# и в shared-БД может быть больше кампаний. scoped-SQL даёт точный результат.
+# Проверяем ФАКТИЧЕСКОЕ значение из JSON-ответа endpoint'а (не только scoped-SQL —
+# MID-20: раньше тест ассертил scoped-SQL и лишь проверял "форму" resp.json(),
+# оставляя возможный баг маппинга SQL→Pydantic-схема незамеченным). Гоняем с большим
+# limit_campaigns, чтобы наша кампания гарантированно попала в выдачу endpoint'а,
+# несмотря на дефолтный LIMIT 10 в shared-БД с параллельными тестами.
 @pytest.mark.asyncio
 async def test_performance_top_campaigns_exact_spend(pg_engine, fake_redis_client) -> None:
-    """top_campaigns.spend == latest snapshot, а не naive SUM кумулятивных циклов.
+    """top_campaigns.spend == latest snapshot из ОТВЕТА endpoint'а, не naive SUM.
 
-    Endpoint имеет LIMIT 10 → в shared-БД наша кампания может не попасть в топ.
-    Используем scoped-SQL по нашему campaign_id для точной проверки агрегации.
+    scoped-SQL остаётся как независимая эталонная проверка агрегации, но главный
+    assert — на resp.json()["top_campaigns"] — ловит и SQL-регрессию, и баг
+    сериализации/маппинга в TopCampaignOut.
     """
     sfx = uuid.uuid4().hex[:6]
     # multicycle=True: 3 snapshot'а с latest=300.00. Naive SUM = 100+200+300 = 600.
@@ -187,7 +191,7 @@ async def test_performance_top_campaigns_exact_spend(pg_engine, fake_redis_clien
         )
 
     try:
-        # Scoped-SQL: latest-per-(day×ad) за 7 дней для нашего campaign_id
+        # Scoped-SQL: latest-per-(day×ad) за 7 дней для нашего campaign_id (эталон)
         async with pg_engine.connect() as conn:
             scoped_spend = (
                 await conn.execute(
@@ -214,12 +218,28 @@ async def test_performance_top_campaigns_exact_spend(pg_engine, fake_redis_clien
             f"scoped spend={scoped_spend}, ожидалось 300.00 (latest), не naive SUM 3 циклов (600)"
         )
 
-        # Также проверим что endpoint отрабатывает (форма)
+        # Главная проверка: ФАКТИЧЕСКИЙ ответ endpoint'а содержит ровно то же значение.
+        # limit_campaigns=100 гарантирует попадание нашей кампании в выдачу.
         app = _make_app(engine=pg_engine, redis=fake_redis_client)
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-            resp = await ac.get("/api/dashboard/performance", params={"days": 7})
+            resp = await ac.get(
+                "/api/dashboard/performance",
+                params={"days": 7, "limit_campaigns": 100},
+            )
         assert resp.status_code == 200
-        assert "top_campaigns" in resp.json()
+        camps = resp.json()["top_campaigns"]
+        our_camp = next((c for c in camps if c["campaign_name"] == f"PRF_CMP_{sfx}"), None)
+        assert our_camp is not None, (
+            f"Кампания PRF_CMP_{sfx} не найдена в top_campaigns ответа endpoint'а"
+        )
+        assert Decimal(our_camp["spend"]) == Decimal("300.00"), (
+            f"endpoint spend={our_camp['spend']}, ожидалось 300.00 (latest), "
+            "не naive SUM 3 циклов (600) — регрессия CRIT-1 в сериализации ответа"
+        )
+        assert our_camp["leads"] == 20
+        assert Decimal(our_camp["cost_per_lead"]) == Decimal("15.00"), (
+            f"endpoint cost_per_lead={our_camp['cost_per_lead']}, ожидалось 15.00 (300/20)"
+        )
     finally:
         async with pg_engine.begin() as conn:
             await conn.execute(
@@ -237,11 +257,15 @@ async def test_performance_top_campaigns_exact_spend(pg_engine, fake_redis_clien
 
 
 # Тест: cost_per_lead = spend/leads на latest-значениях (не naive SUM).
-# scoped-SQL проверяет что latest spend=300/leads=20 → cpl=15.00.
+# scoped-SQL — эталон; главный assert — на resp.json() endpoint'а (MID-20).
 @pytest.mark.asyncio
 async def test_performance_cost_per_lead_exact(pg_engine, fake_redis_client) -> None:
-    """cost_per_lead = spend/leads (latest-значения). Без мультицикла выглядит верным,
-    с мультициклом: если spend взялся как SUM, cost_per_lead завышен в 3×."""
+    """cost_per_lead = spend/leads (latest-значения) — из ФАКТИЧЕСКОГО ответа endpoint'а.
+
+    Без мультицикла выглядит верным, с мультициклом: если spend взялся как SUM,
+    cost_per_lead завышен в 3×. Раньше тест проверял только scoped-SQL и не трогал
+    resp.json() вовсе — баг сериализации TopCampaignOut.cost_per_lead прошёл бы незамеченным.
+    """
     sfx = uuid.uuid4().hex[:6]
     # spend=300, leads=20, multicycle=True → latest spend=300, leads=20, cpl=15.00.
     async with pg_engine.begin() as conn:
@@ -250,7 +274,7 @@ async def test_performance_cost_per_lead_exact(pg_engine, fake_redis_client) -> 
         )
 
     try:
-        # Scoped: latest spend и leads для нашего campaign
+        # Scoped: latest spend и leads для нашего campaign (эталон)
         async with pg_engine.connect() as conn:
             row = (
                 await conn.execute(
@@ -280,6 +304,24 @@ async def test_performance_cost_per_lead_exact(pg_engine, fake_redis_client) -> 
         assert expected_cpl == Decimal("15.00"), (
             f"cost_per_lead={expected_cpl}, ожидалось 15.00 (300/20)"
         )
+
+        # Главная проверка: ФАКТИЧЕСКИЙ ответ endpoint'а содержит те же 15.00.
+        app = _make_app(engine=pg_engine, redis=fake_redis_client)
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            resp = await ac.get(
+                "/api/dashboard/performance",
+                params={"days": 7, "limit_campaigns": 100},
+            )
+        assert resp.status_code == 200
+        camps = resp.json()["top_campaigns"]
+        our_camp = next((c for c in camps if c["campaign_name"] == f"PRF_CMP_{sfx}"), None)
+        assert our_camp is not None, (
+            f"Кампания PRF_CMP_{sfx} не найдена в top_campaigns ответа endpoint'а"
+        )
+        assert Decimal(our_camp["cost_per_lead"]) == Decimal("15.00"), (
+            f"endpoint cost_per_lead={our_camp['cost_per_lead']}, ожидалось 15.00 (300/20) — "
+            "не 3-кратно завышенное значение при naive SUM спенда"
+        )
     finally:
         async with pg_engine.begin() as conn:
             await conn.execute(
@@ -296,10 +338,11 @@ async def test_performance_cost_per_lead_exact(pg_engine, fake_redis_client) -> 
             await conn.execute(text(f"DELETE FROM offers WHERE code = 'PRF_{sfx}'"))
 
 
-# Тест: offer_leaderboard spend = latest-per-ad (не naive SUM). Scoped по offer_id.
+# Тест: offer_leaderboard spend = latest-per-ad (не naive SUM). Scoped по offer_id
+# + прямая проверка resp.json() (MID-20).
 @pytest.mark.asyncio
 async def test_performance_offer_leaderboard_exact_spend(pg_engine, fake_redis_client) -> None:
-    """offer_leaderboard.spend == latest snapshot, а не naive SUM трёх циклов."""
+    """offer_leaderboard.spend == latest snapshot из ОТВЕТА endpoint'а, не naive SUM."""
     sfx = uuid.uuid4().hex[:6]
     # latest=240.00, naive SUM 3 циклов был бы 80+160+240=480
     async with pg_engine.begin() as conn:
@@ -308,7 +351,7 @@ async def test_performance_offer_leaderboard_exact_spend(pg_engine, fake_redis_c
         )
 
     try:
-        # Scoped: latest spend для нашего offer_id
+        # Scoped: latest spend для нашего offer_id (эталон)
         async with pg_engine.connect() as conn:
             scoped_spend = (
                 await conn.execute(
@@ -334,6 +377,25 @@ async def test_performance_offer_leaderboard_exact_spend(pg_engine, fake_redis_c
         assert Decimal(str(scoped_spend)) == Decimal("240.00"), (
             f"offer scoped spend={scoped_spend}, ожидалось 240.00 (latest), не naive SUM (480)"
         )
+
+        # Главная проверка: ФАКТИЧЕСКИЙ ответ endpoint'а содержит то же 240.00.
+        app = _make_app(engine=pg_engine, redis=fake_redis_client)
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            resp = await ac.get(
+                "/api/dashboard/performance",
+                params={"days": 7, "limit_offers": 100},
+            )
+        assert resp.status_code == 200
+        leaderboard = resp.json()["offer_leaderboard"]
+        our_offer = next((o for o in leaderboard if o["offer_code"] == f"PRF_{sfx}"), None)
+        assert our_offer is not None, (
+            f"Оффер PRF_{sfx} не найден в offer_leaderboard ответа endpoint'а"
+        )
+        assert Decimal(our_offer["spend"]) == Decimal("240.00"), (
+            f"endpoint offer spend={our_offer['spend']}, ожидалось 240.00 (latest), "
+            "не naive SUM 3 циклов (480)"
+        )
+        assert our_offer["leads"] == 12
     finally:
         async with pg_engine.begin() as conn:
             await conn.execute(

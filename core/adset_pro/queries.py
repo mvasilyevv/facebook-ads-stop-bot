@@ -22,6 +22,15 @@ DEPOSIT_EVENT_TYPES: tuple[str, ...] = ("ftd", "redep", "baddep")
 
 # Окно для подсчёта внешних депозитов — должно быть достаточно для closure attribution
 # (FB атрибутирует кликами 24h по умолчанию, депозиты тоже обычно в этом окне).
+#
+# MID-3 (аудит 02.07): окно 24ч широковато для no-dep guardrail'ов в evaluator'е —
+# ОДИН депозит, попавший в это окно, "защищает" объявление от всех no-dep стоп-правил
+# на ВСЕ оставшиеся часы окна, даже если объявление после этого депозита реально льёт
+# в минус весь остаток суток. Это осознанный трейд-офф в пользу меньшего false-positive
+# (не остановить объявление, которое на самом деле конвертит с лагом), а не баг — но при
+# желании ужесточить guardrail'ы окно можно сузить параметром `window=` у
+# load_external_deposits/load_external_deposits_batch (например, до 2-6ч) без изменения
+# сигнатуры или контракта функций.
 DEFAULT_EXTERNAL_DEPOSITS_WINDOW = timedelta(hours=24)
 
 
@@ -36,6 +45,10 @@ async def load_external_deposits(
     """Сколько депозитных событий прислал AdSet.pro для одного fb_ad_id за window.
 
     Дубликаты (is_duplicate=TRUE) не учитываем — они уже есть в основной записи.
+
+    MID-3: window по умолчанию — 24ч (см. DEFAULT_EXTERNAL_DEPOSITS_WINDOW) — один
+    депозит внутри окна глушит no-dep guardrail'ы evaluator'а на всё окно; сузить
+    можно передав явный `window=`.
     """
     cutoff = (now or datetime.now(timezone.utc)) - window
     async with engine.connect() as conn:
@@ -70,6 +83,10 @@ async def load_external_deposits_batch(
 
     Если для какого-то fb_ad_id нет постбэков — в результате этого ключа не будет
     (потребитель должен использовать .get(fb_ad_id, 0)).
+
+    MID-3: window по умолчанию — 24ч (см. DEFAULT_EXTERNAL_DEPOSITS_WINDOW) — один
+    депозит внутри окна глушит no-dep guardrail'ы evaluator'а на всё окно; сузить
+    можно передав явный `window=`.
     """
     if not fb_ad_ids:
         return {}

@@ -182,6 +182,53 @@ class ChatSession:
             if not response.has_tool_uses:
                 return ChatResponse(answer=response.text or "(пустой ответ)", tool_calls=traces)
 
+            # MID-19 hard-guard: allow_tools=False запрещает исполнение ЛЮБОГО tool_use,
+            # даже если модель его всё-таки вернула (например, провайдер проигнорировал
+            # пустой tools=None, или баг в промпте/API). Раньше отсутствие tools в запросе
+            # было единственной защитой — не hard-guard в самом цикле. Здесь — явный отказ:
+            # ни один tool не исполняется, ERROR в лог, модели во всех tool_result уходит
+            # отказ, чтобы она сформулировала обычный текстовый ответ на следующем шаге.
+            if not self._allow_tools:
+                logger.error(
+                    "ChatSession(allow_tools=False): модель вернула %d tool_use — "
+                    "исполнение заблокировано hard-guard'ом (client_key=%s, tools=%s)",
+                    len(response.tool_uses),
+                    client_key,
+                    [tu.name for tu in response.tool_uses],
+                )
+                assistant_blocks = []
+                if response.text:
+                    assistant_blocks.append({"type": "text", "text": response.text})
+                for tu in response.tool_uses:
+                    assistant_blocks.append(
+                        {"type": "tool_use", "id": tu.id, "name": tu.name, "input": tu.input}
+                    )
+                messages.append({"role": "assistant", "content": assistant_blocks})
+
+                refusal = (
+                    "Инструменты отключены в этом режиме — вызов недоступен. "
+                    "Ответь текстом без использования tool-use."
+                )
+                tool_results = [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": tu.id,
+                        "content": [{"type": "text", "text": refusal}],
+                        "is_error": True,
+                    }
+                    for tu in response.tool_uses
+                ]
+                traces.append(
+                    ToolCallTrace(
+                        name=",".join(tu.name for tu in response.tool_uses),
+                        args={},
+                        result="",
+                        error="allow_tools=False: вызов инструментов заблокирован",
+                    )
+                )
+                messages.append({"role": "user", "content": tool_results})
+                continue
+
             assistant_blocks: list[dict[str, Any]] = []
             if response.text:
                 assistant_blocks.append({"type": "text", "text": response.text})

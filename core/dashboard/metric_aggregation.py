@@ -29,6 +29,21 @@ pruning по `ad_metrics` (партиционирована по cycle_ts) и н
 
 Decimal: spend/cpc/cost_per_lead — NUMERIC, не трогаем тип в SQL, на Python
 стороне оборачиваем в Decimal (как в digest_builder).
+
+MID-14 (аудит 02.07): `latest_per_ad_per_day_cte` группирует по
+`date_trunc('day', m.cycle_ts)` — это UTC-сутки (Postgres `date_trunc` без явной
+timezone работает в TZ сессии/сервера, здесь эффективно UTC). Реальный сброс
+spend кабинета (`cabinet day reset`) происходит по TZ рекламного кабинета, а не
+по UTC-полночи. Для кабинетов не в UTC это даёт систематический сдвиг границы
+дня в многодневной аналитике: часть вечерних (по UTC) метрик одних кабинетных
+суток может попасть в "следующий" UTC-день CTE и наоборот — сумма за конкретный
+календарный день кабинета может недосчитать/пересчитать несколько часов на
+границе. Money/стоп-решения НЕ задеты — FSM и evaluator работают на
+latest-cycle snapshot, а не на этой posuточной агрегации. Затронуты только
+многодневные ANALYTICS-отчёты (history/performance/chart-data). Точный фикс —
+`date_trunc('day', m.cycle_ts AT TIME ZONE <cabinet_tz>)` per-account, не
+сделан: требует протаскивания TZ кабинета через все CTE-вызовы; фиксируется
+здесь как известная погрешность до отдельного решения.
 """
 
 from __future__ import annotations

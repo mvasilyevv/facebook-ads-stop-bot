@@ -255,6 +255,25 @@ def verify_encryption_key(key: str, verify_token: str) -> None:
     logger.debug("ENCRYPTION_KEY прошёл верификацию успешно")
 
 
+class EncryptionKeyRotationError(RuntimeError):
+    """Ротация ключа прервана: старым ключом не расшифровалось хотя бы одно поле.
+
+    Бросается ДО каких-либо UPDATE — БД остаётся полностью в старом ключе
+    (MID-18: раньше InvalidToken на отдельном поле просто пропускался, часть
+    записей перешифровывалась, часть — нет, а .env уже мог быть переключён на
+    новый ключ → частично перешифрованное состояние без способа его различить).
+    """
+
+    def __init__(self, problems: list[str]) -> None:
+        self.problems = problems
+        message = (
+            "Ротация ENCRYPTION_KEY прервана: старым ключом не расшифровались поля: "
+            + "; ".join(problems)
+            + ". БД не изменена (ни одной записи не перешифровано), .env менять нельзя."
+        )
+        super().__init__(message)
+
+
 async def rotate_encryption_key(old_key: str, new_key: str) -> int:
     """Перешифровывает все зашифрованные поля в БД при смене ключа.
 
@@ -263,6 +282,16 @@ async def rotate_encryption_key(old_key: str, new_key: str) -> int:
     adsetpro_credentials.api_key_encrypted/postback_secret_encrypted (BYTEA — N4).
     Использует raw SQL через AsyncEngine — без ORM-моделей, чтобы не зависеть от
     конкретной версии схемы.
+
+    Атомарность (MID-18): двухфазный процесс в ОДНОЙ транзакции.
+    1) Читаем ВСЕ строки, расшифровываем ВСЕ значения старым ключом. Если хотя бы
+       одно значение не расшифровывается (InvalidToken) — собираем полный список
+       проблемных полей и бросаем EncryptionKeyRotationError ДО единого UPDATE.
+       Ни одна запись не меняется — БД остаётся согласованно на старом ключе.
+    2) Только если фаза 1 полностью успешна — перешифровываем все значения новым
+       ключом и пишем их в рамках одной транзакции (`engine.begin()`, COMMIT в конце
+       блока или ROLLBACK при исключении). Частично перешифрованного состояния
+       не может возникнуть: либо все UPDATE закоммитятся, либо ни один.
 
     Args:
         old_key: текущий Fernet-ключ (base64).
@@ -273,6 +302,9 @@ async def rotate_encryption_key(old_key: str, new_key: str) -> int:
 
     Raises:
         RuntimeError: если библиотека cryptography не установлена.
+        EncryptionKeyRotationError: если старым ключом не расшифровалось хотя бы
+            одно поле — БД не изменена, вызывающий код НЕ должен переключать
+            ENCRYPTION_KEY в .env на new_key.
     """
     if Fernet is None:
         raise RuntimeError("Библиотека cryptography не установлена")
@@ -298,65 +330,42 @@ async def rotate_encryption_key(old_key: str, new_key: str) -> int:
 
     fernet_old = Fernet(old_key.encode() if isinstance(old_key, str) else old_key)
     fernet_new = Fernet(new_key.encode() if isinstance(new_key, str) else new_key)
-    rotated = 0
 
     try:
         async with engine.begin() as conn:
-            # telegram_config.bot_token_encrypted
-            rows = (
+            # ── Фаза 1: собрать ВСЕ строки и расшифровать ВСЕ значения старым ключом.
+            # Ничего не пишем — только читаем и валидируем. Копим проблемы, не
+            # прерываемся на первой же ошибке, чтобы вернуть полный список сразу.
+            problems: list[str] = []
+
+            tg_rows = (
                 await conn.execute(text("SELECT id, bot_token_encrypted FROM telegram_config"))
             ).all()
-            for row_id, encrypted in rows:
+            tg_plain: dict[object, str] = {}
+            for row_id, encrypted in tg_rows:
                 if not encrypted:
                     continue
                 try:
-                    plaintext = fernet_old.decrypt(encrypted.encode()).decode()
-                    new_blob = fernet_new.encrypt(plaintext.encode()).decode()
-                    await conn.execute(
-                        text(
-                            "UPDATE telegram_config SET bot_token_encrypted = :b, "
-                            "updated_at = NOW() WHERE id = :i"
-                        ),
-                        {"b": new_blob, "i": row_id},
-                    )
-                    rotated += 1
-                    logger.info("telegram_config[%s]: bot_token_encrypted перешифрован", row_id)
+                    tg_plain[row_id] = fernet_old.decrypt(encrypted.encode()).decode()
                 except InvalidToken:
-                    logger.error(
-                        "telegram_config[%s]: не расшифровать старым ключом — пропуск",
-                        row_id,
-                    )
+                    problems.append(f"telegram_config[{row_id}].bot_token_encrypted")
 
-            # vision_config.x_token_encrypted
-            rows = (
+            vis_rows = (
                 await conn.execute(text("SELECT id, x_token_encrypted FROM vision_config"))
             ).all()
-            for row_id, encrypted in rows:
+            vis_plain: dict[object, str] = {}
+            for row_id, encrypted in vis_rows:
                 if not encrypted:
                     continue
                 try:
-                    plaintext = fernet_old.decrypt(encrypted.encode()).decode()
-                    new_blob = fernet_new.encrypt(plaintext.encode()).decode()
-                    await conn.execute(
-                        text(
-                            "UPDATE vision_config SET x_token_encrypted = :b, "
-                            "updated_at = NOW() WHERE id = :i"
-                        ),
-                        {"b": new_blob, "i": row_id},
-                    )
-                    rotated += 1
-                    logger.info("vision_config[%s]: x_token_encrypted перешифрован", row_id)
+                    vis_plain[row_id] = fernet_old.decrypt(encrypted.encode()).decode()
                 except InvalidToken:
-                    logger.error(
-                        "vision_config[%s]: не расшифровать старым ключом — пропуск",
-                        row_id,
-                    )
+                    problems.append(f"vision_config[{row_id}].x_token_encrypted")
 
             # adsetpro_credentials.api_key_encrypted/postback_secret_encrypted (N4).
             # BYTEA (не TEXT): хранит Fernet-токен как utf-8 байты (core/adset_pro/
-            # credentials.py). Без этого блока после ротации ключа AdSet.pro-credentials
-            # не расшифровывались бы → депозиты не доезжают → лишние авто-стопы.
-            rows = (
+            # credentials.py).
+            asp_rows = (
                 await conn.execute(
                     text(
                         "SELECT id, api_key_encrypted, postback_secret_encrypted "
@@ -364,8 +373,9 @@ async def rotate_encryption_key(old_key: str, new_key: str) -> int:
                     )
                 )
             ).all()
-            for row_id, api_enc, secret_enc in rows:
-                updates: dict[str, bytes] = {}
+            asp_plain: dict[object, dict[str, bytes]] = {}
+            for row_id, api_enc, secret_enc in asp_rows:
+                decoded: dict[str, bytes] = {}
                 for col, enc in (
                     ("api_key_encrypted", api_enc),
                     ("postback_secret_encrypted", secret_enc),
@@ -373,31 +383,70 @@ async def rotate_encryption_key(old_key: str, new_key: str) -> int:
                     if not enc:
                         continue
                     try:
-                        # BYTEA → utf-8 строка Fernet-токена → decrypt старым → encrypt новым.
                         token = bytes(enc).decode("utf-8")
-                        plaintext = fernet_old.decrypt(token.encode())
-                        updates[col] = fernet_new.encrypt(plaintext)
+                        decoded[col] = fernet_old.decrypt(token.encode())
                     except InvalidToken:
-                        logger.error(
-                            "adsetpro_credentials[%s].%s: не расшифровать старым ключом — пропуск",
-                            row_id,
-                            col,
-                        )
-                if updates:
-                    set_sql = ", ".join(f"{c} = :{c}" for c in updates)
-                    await conn.execute(
-                        text(
-                            f"UPDATE adsetpro_credentials SET {set_sql}, updated_at = NOW() "
-                            "WHERE id = :i"
-                        ),
-                        {**updates, "i": row_id},
-                    )
-                    rotated += len(updates)
-                    logger.info(
-                        "adsetpro_credentials[%s]: перешифровано %d поле(й)",
-                        row_id,
-                        len(updates),
-                    )
+                        problems.append(f"adsetpro_credentials[{row_id}].{col}")
+                if decoded:
+                    asp_plain[row_id] = decoded
+
+            if problems:
+                # Явная ошибка со списком проблемных полей, БЕЗ единой записи в БД.
+                logger.critical(
+                    "Ротация ENCRYPTION_KEY прервана на фазе расшифровки: %d проблемных "
+                    "полей, БД не изменена: %s",
+                    len(problems),
+                    "; ".join(problems),
+                )
+                raise EncryptionKeyRotationError(problems)
+
+            # ── Фаза 2: только если ВСЁ расшифровалось — перешифровываем новым ключом
+            # и пишем в рамках той же транзакции. COMMIT — один раз, при выходе из
+            # `async with engine.begin()`; при любом исключении — ROLLBACK целиком.
+            rotated = 0
+
+            for row_id, plaintext in tg_plain.items():
+                new_blob = fernet_new.encrypt(plaintext.encode()).decode()
+                await conn.execute(
+                    text(
+                        "UPDATE telegram_config SET bot_token_encrypted = :b, "
+                        "updated_at = NOW() WHERE id = :i"
+                    ),
+                    {"b": new_blob, "i": row_id},
+                )
+                rotated += 1
+                logger.info("telegram_config[%s]: bot_token_encrypted перешифрован", row_id)
+
+            for row_id, plaintext in vis_plain.items():
+                new_blob = fernet_new.encrypt(plaintext.encode()).decode()
+                await conn.execute(
+                    text(
+                        "UPDATE vision_config SET x_token_encrypted = :b, "
+                        "updated_at = NOW() WHERE id = :i"
+                    ),
+                    {"b": new_blob, "i": row_id},
+                )
+                rotated += 1
+                logger.info("vision_config[%s]: x_token_encrypted перешифрован", row_id)
+
+            for row_id, decoded in asp_plain.items():
+                updates: dict[str, bytes] = {
+                    col: fernet_new.encrypt(plaintext) for col, plaintext in decoded.items()
+                }
+                set_sql = ", ".join(f"{c} = :{c}" for c in updates)
+                await conn.execute(
+                    text(
+                        f"UPDATE adsetpro_credentials SET {set_sql}, updated_at = NOW() "
+                        "WHERE id = :i"
+                    ),
+                    {**updates, "i": row_id},
+                )
+                rotated += len(updates)
+                logger.info(
+                    "adsetpro_credentials[%s]: перешифровано %d поле(й)",
+                    row_id,
+                    len(updates),
+                )
     finally:
         await engine.dispose()
 

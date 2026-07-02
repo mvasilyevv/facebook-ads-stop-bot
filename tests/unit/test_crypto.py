@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import multiprocessing
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from cryptography.fernet import Fernet
@@ -218,3 +219,142 @@ def test_ensure_encryption_key_double_check_skips_generation(monkeypatch, tmp_pa
     # Ключ не перегенерирован — осталась одна исходная строка.
     assert env.read_text(encoding="utf-8").count("ENCRYPTION_KEY=") == 1
     assert calls["n"] >= 2  # был и быстрый путь, и double-check под lock
+
+
+# --- MID-18: rotate_encryption_key — атомарность (collect-all-then-write) ---
+
+
+class _FakeConn:
+    """Мок AsyncConnection: execute диспетчерится по подстроке SQL из заранее
+    заданной карты `responses`, UPDATE'ы просто фиксируются в `updates`."""
+
+    def __init__(self, responses: dict[str, list[tuple]]) -> None:
+        self._responses = responses
+        self.updates: list[str] = []
+
+    async def execute(self, stmt, params=None):  # noqa: ANN001 - тестовый мок
+        sql = str(stmt)
+        result = MagicMock()
+        if sql.strip().upper().startswith("SELECT"):
+            for key, rows in self._responses.items():
+                if key in sql:
+                    result.all = MagicMock(return_value=rows)
+                    return result
+            result.all = MagicMock(return_value=[])
+            return result
+        # UPDATE — просто запоминаем, какую таблицу тронули.
+        self.updates.append(sql)
+        return result
+
+
+class _FakeEngineCtx:
+    """Async context manager, который `engine.begin()` обязан вернуть."""
+
+    def __init__(self, conn: _FakeConn) -> None:
+        self._conn = conn
+
+    async def __aenter__(self):
+        return self._conn
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False  # исключение не глушим — как реальный AsyncEngine begin()
+
+
+def _patch_fake_engine(monkeypatch, conn: _FakeConn) -> None:
+    """Подменяет create_async_engine + get_settings().database_url на фейковые."""
+    fake_engine = MagicMock()
+    fake_engine.begin = MagicMock(return_value=_FakeEngineCtx(conn))
+    fake_engine.dispose = AsyncMock()
+
+    monkeypatch.setattr("sqlalchemy.ext.asyncio.create_async_engine", lambda *a, **kw: fake_engine)
+    monkeypatch.setattr(
+        "core.config.get_settings",
+        lambda: SimpleNamespace(database_url="postgresql+asyncpg://fake/fake"),
+    )
+
+
+# Все поля расшифровываются старым ключом → перешифровка проходит одной транзакцией,
+# UPDATE выполняется для каждой затронутой таблицы (без частично перешифрованного состояния).
+@pytest.mark.asyncio
+async def test_rotate_encryption_key_success_writes_all(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(crypto, "_project_root", lambda: str(tmp_path))
+
+    old_key = Fernet.generate_key().decode()
+    new_key = Fernet.generate_key().decode()
+    fernet_old = Fernet(old_key.encode())
+
+    tg_token = fernet_old.encrypt(b"tg-bot-token").decode()
+    vis_token = fernet_old.encrypt(b"vision-x-token").decode()
+
+    conn = _FakeConn(
+        {
+            "telegram_config": [(1, tg_token)],
+            "vision_config": [(1, vis_token)],
+            "adsetpro_credentials": [],
+        }
+    )
+    _patch_fake_engine(monkeypatch, conn)
+
+    rotated = await crypto.rotate_encryption_key(old_key, new_key)
+
+    assert rotated == 2
+    # UPDATE выполнился по обеим таблицам с расшифровываемыми полями.
+    assert any("telegram_config" in u for u in conn.updates)
+    assert any("vision_config" in u for u in conn.updates)
+
+
+# Одно поле не расшифровывается старым ключом → EncryptionKeyRotationError ДО записи,
+# ни один UPDATE не должен был уйти (частично перешифрованного состояния не возникает).
+@pytest.mark.asyncio
+async def test_rotate_encryption_key_partial_failure_writes_nothing(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(crypto, "_project_root", lambda: str(tmp_path))
+
+    old_key = Fernet.generate_key().decode()
+    new_key = Fernet.generate_key().decode()
+    fernet_old = Fernet(old_key.encode())
+    fernet_wrong = Fernet(Fernet.generate_key())  # чужой ключ — испортит одно поле
+
+    tg_token_ok = fernet_old.encrypt(b"tg-bot-token").decode()
+    vis_token_broken = fernet_wrong.encrypt(b"vision-x-token").decode()  # не расшифруется
+
+    conn = _FakeConn(
+        {
+            "telegram_config": [(1, tg_token_ok)],
+            "vision_config": [(2, vis_token_broken)],
+            "adsetpro_credentials": [],
+        }
+    )
+    _patch_fake_engine(monkeypatch, conn)
+
+    with pytest.raises(crypto.EncryptionKeyRotationError) as exc_info:
+        await crypto.rotate_encryption_key(old_key, new_key)
+
+    # Список проблемных полей указывает ровно на сломанную запись.
+    assert any("vision_config[2]" in p for p in exc_info.value.problems)
+    # Ни один UPDATE не должен был уйти — даже валидное telegram_config-поле.
+    assert conn.updates == []
+
+
+# Список проблемных полей попадает в текст исключения (для алерта/лога вызывающей стороны).
+@pytest.mark.asyncio
+async def test_rotate_encryption_key_error_message_lists_problem_fields(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setattr(crypto, "_project_root", lambda: str(tmp_path))
+
+    old_key = Fernet.generate_key().decode()
+    new_key = Fernet.generate_key().decode()
+    fernet_wrong = Fernet(Fernet.generate_key())
+
+    broken_token = fernet_wrong.encrypt(b"secret").decode()
+    conn = _FakeConn(
+        {
+            "telegram_config": [(7, broken_token)],
+            "vision_config": [],
+            "adsetpro_credentials": [],
+        }
+    )
+    _patch_fake_engine(monkeypatch, conn)
+
+    with pytest.raises(crypto.EncryptionKeyRotationError, match=r"telegram_config\[7\]"):
+        await crypto.rotate_encryption_key(old_key, new_key)
