@@ -295,9 +295,12 @@ async def post_vision_reconnect(
             detail=f"gRPC browser-agent недоступен: {exc}",
         ) from exc
     except Exception as exc:
+        # LOW (аудит 02.07): голый Exception может нести внутренние детали (пути,
+        # креды в traceback) — клиенту генерик-текст, диагностика в лог.
+        logger.exception("Ошибка переподключения к browser-agent")
         raise HTTPException(
             status_code=503,
-            detail=f"Ошибка переподключения к browser-agent: {exc}",
+            detail="Ошибка переподключения к browser-agent — подробности в логе сервера",
         ) from exc
 
     return VisionReconnectResponse(status="reconnected")

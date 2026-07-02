@@ -20,7 +20,13 @@ class AIAnalyzeRequest(BaseModel):
     """Тело запроса AI-анализа."""
 
     block_type: AnalysisBlockType
-    scope_key: str = Field(default="global", description="'global' или конкретный ID")
+    # LOW (аудит 02.07): без max_length scope_key участвует и в Redis cache-ключе
+    # (ai:cache:analyze:{block_type}:{scope_key}), и в промпте — неограниченная длина
+    # даёт раздутые Redis-ключи/промпт-инъекцию объёмом. 128 с запасом покрывает
+    # 'global' и любой реальный UUID/fb_ad_id/campaign_id.
+    scope_key: str = Field(
+        default="global", max_length=128, description="'global' или конкретный ID"
+    )
     force_refresh: bool = Field(default=False, description="Игнорировать Redis-кэш")
     client_data: dict[str, Any] | None = Field(
         default=None,

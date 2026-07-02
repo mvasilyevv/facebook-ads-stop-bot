@@ -102,10 +102,14 @@ async def list_enable_tasks(
         SELECT COUNT(*) FROM task_queue tq
         WHERE {where_clause}
     """
+    # LOW (аудит 02.07): count_sql не использует limit/offset — не передаём их лишними
+    # bind-параметрами (SQLAlchemy их проглатывает молча, но это вводит в заблуждение
+    # при чтении/отладке SQL).
+    count_params = {k: v for k, v in params.items() if k not in ("limit", "offset")}
 
     async with engine.connect() as conn:
         rows = (await conn.execute(text(query_sql), params)).fetchall()
-        total = (await conn.execute(text(count_sql), params)).scalar() or 0
+        total = (await conn.execute(text(count_sql), count_params)).scalar() or 0
 
     response.headers["X-Total-Count"] = str(total)
     return [task_row_to_out(r) for r in rows]

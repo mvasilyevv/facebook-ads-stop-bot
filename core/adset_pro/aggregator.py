@@ -68,6 +68,10 @@ class AggregationResult:
     rows_updated: int
     deposits_total: int
     revenue_total: Decimal
+    # LOW (аудит 02.07): постбэки с невалидным/отсутствующим country в этом окне —
+    # молча дропались раньше, теперь видны в логе прогона и в аудит-снимке
+    # system_config.tracker_aggregator_runs (apps/tracker_aggregator_worker/worker.py).
+    rows_dropped_invalid_country: int = 0
 
 
 def _utc_day_bounds(window_start: datetime, window_end: datetime) -> tuple[datetime, datetime]:
@@ -139,6 +143,33 @@ _AGGREGATE_SQL = text(
     """
 )
 
+# LOW (аудит 02.07): счётчик строк, отброшенных ИМЕННО из-за невалидного country (не
+# NULL fb_ad_fk и не is_duplicate — те исключения задокументированы и намеренны).
+# Раньше дроп был молчаливым — без счётчика невозможно было отличить "нет постбэков"
+# от "постбэки есть, но country не парсится" (например AdSet.pro сменил формат raw_json).
+_INVALID_COUNTRY_COUNT_SQL = text(
+    """
+    SELECT COUNT(*)
+    FROM adsetpro_postback_events
+    WHERE received_at >= :day_floor
+      AND received_at < :day_ceil
+      AND fb_ad_fk IS NOT NULL
+      AND is_duplicate = FALSE
+      AND (
+          UPPER(COALESCE(
+              raw_json->>'country',
+              raw_json->>'country_code',
+              raw_json->>'geo'
+          )) IS NULL
+          OR char_length(UPPER(COALESCE(
+              raw_json->>'country',
+              raw_json->>'country_code',
+              raw_json->>'geo'
+          ))) <> 2
+      )
+    """
+)
+
 
 async def aggregate_postback_events(
     engine: AsyncEngine,
@@ -156,18 +187,25 @@ async def aggregate_postback_events(
     """
     day_floor, day_ceil = _utc_day_bounds(window_start, window_end)
 
+    day_bounds_params = {"day_floor": day_floor, "day_ceil": day_ceil}
+
     async with engine.begin() as conn:
         result = await conn.execute(
             _AGGREGATE_SQL,
             {
-                "day_floor": day_floor,
-                "day_ceil": day_ceil,
+                **day_bounds_params,
                 "deposit_types": list(deposit_event_types),
                 "reg_types": list(registration_event_types),
                 "install_types": list(install_event_types),
             },
         )
         rows = result.all()
+
+        # LOW (аудит 02.07): отдельный лёгкий COUNT в той же транзакции — та же
+        # видимость данных, что и основной upsert (consistent read).
+        dropped_invalid_country = int(
+            (await conn.execute(_INVALID_COUNTRY_COUNT_SQL, day_bounds_params)).scalar() or 0
+        )
 
     inserted = sum(1 for r in rows if r[0])
     deposits_total = sum(int(r[1] or 0) for r in rows)
@@ -183,9 +221,11 @@ async def aggregate_postback_events(
         rows_updated=len(rows) - inserted,
         deposits_total=deposits_total,
         revenue_total=revenue_total,
+        rows_dropped_invalid_country=dropped_invalid_country,
     )
     logger.info(
-        "tracker_aggregate: дни [%s..%s) → upsert=%d (new=%d upd=%d) deposits=%d revenue=%s",
+        "tracker_aggregate: дни [%s..%s) → upsert=%d (new=%d upd=%d) deposits=%d revenue=%s "
+        "dropped_invalid_country=%d",
         day_floor.date(),
         day_ceil.date(),
         agg.rows_upserted,
@@ -193,5 +233,14 @@ async def aggregate_postback_events(
         agg.rows_updated,
         agg.deposits_total,
         agg.revenue_total,
+        agg.rows_dropped_invalid_country,
     )
+    if agg.rows_dropped_invalid_country > 0:
+        logger.warning(
+            "tracker_aggregate: %d постбэков дня [%s..%s) отброшено из-за невалидного/"
+            "отсутствующего country в raw_json — проверь формат постбэков AdSet.pro",
+            agg.rows_dropped_invalid_country,
+            day_floor.date(),
+            day_ceil.date(),
+        )
     return agg

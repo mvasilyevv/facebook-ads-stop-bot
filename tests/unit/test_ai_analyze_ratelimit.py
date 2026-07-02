@@ -10,7 +10,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -76,6 +76,35 @@ def test_extract_client_key_no_client() -> None:
 # ─── Redis sliding-window ──────────────────────────────────────────────────────
 
 
+class _FakePipeline:
+    """Минимальная эмуляция redis.asyncio Pipeline для MULTI/EXEC (LOW, аудит 02.07).
+
+    check_and_increment шлёт INCR+EXPIRE одной атомарной транзакцией — закрывает окно
+    гонки "краш между раздельными INCR и EXPIRE оставляет ключ без TTL навсегда".
+    """
+
+    def __init__(self, incr_fn):
+        self._incr_fn = incr_fn
+        self._incr_result: int | None = None
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc_info):
+        return False
+
+    def incr(self, key: str):
+        self._pending_key = key
+        return self
+
+    def expire(self, key: str, ttl: int, nx: bool = False):
+        return self
+
+    async def execute(self):
+        self._incr_result = await self._incr_fn(self._pending_key)
+        return [self._incr_result, True]
+
+
 # 20 запросов — проходят, 21-й — RateLimitExceeded
 @pytest.mark.asyncio
 async def test_redis_ratelimit_21st_request_raises() -> None:
@@ -87,12 +116,8 @@ async def test_redis_ratelimit_21st_request_raises() -> None:
         counter["value"] += 1
         return counter["value"]
 
-    async def fake_expire(key: str, ttl: int) -> None:
-        pass
-
-    redis = AsyncMock()
-    redis.incr = fake_incr
-    redis.expire = fake_expire
+    redis = MagicMock()
+    redis.pipeline = MagicMock(side_effect=lambda transaction=True: _FakePipeline(fake_incr))
 
     # 20 запросов должны проходить
     for i in range(20):
@@ -115,8 +140,8 @@ async def test_redis_ratelimit_fallback_on_redis_error() -> None:
     """Сбой Redis → in-memory fallback cap активируется, не fail-open."""
     _reset_memory_fallback_for_tests()
 
-    redis = AsyncMock()
-    redis.incr = AsyncMock(side_effect=ConnectionError("Redis недоступен"))
+    redis = MagicMock()
+    redis.pipeline = MagicMock(side_effect=ConnectionError("Redis недоступен"))
 
     # Проходим secondary cap (5 запросов / 60с)
     for _ in range(5):

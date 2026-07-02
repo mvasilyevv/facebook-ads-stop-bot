@@ -61,6 +61,9 @@ async def _write_audit(engine: AsyncEngine, result: AggregationResult) -> None:
         "rows_updated": result.rows_updated,
         "deposits_total": result.deposits_total,
         "revenue_total": str(result.revenue_total),
+        # LOW (аудит 02.07): видимость молчаливого дропа невалидного country прямо в
+        # аудит-снимке — раньше отследить можно было только по логам.
+        "rows_dropped_invalid_country": result.rows_dropped_invalid_country,
     }
     async with engine.begin() as conn:
         await conn.execute(

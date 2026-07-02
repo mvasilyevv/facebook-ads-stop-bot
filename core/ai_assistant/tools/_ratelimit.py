@@ -89,11 +89,15 @@ async def check_and_increment(
 
     key = f"ai:ratelimit:{namespace}:{client_key}"
     try:
-        # INCR атомарно создаёт ключ если нет, возвращает новое значение.
-        current = await redis_client.incr(key)
-        if current == 1:
-            # Только что создали ключ — ставим TTL.
-            await redis_client.expire(key, _DEFAULT_TTL_SECONDS)
+        # LOW (аудит 02.07): INCR и EXPIRE двумя раздельными вызовами имели окно гонки —
+        # краш/дисконнект между ними оставлял ключ БЕЗ TTL навсегда (утечка + перманентный
+        # rate-limit для client_key). MULTI/EXEC через pipeline(transaction=True) шлёт обе
+        # команды одной атомарной транзакцией — либо обе применились, либо ни одна.
+        async with redis_client.pipeline(transaction=True) as pipe:
+            pipe.incr(key)
+            pipe.expire(key, _DEFAULT_TTL_SECONDS, nx=True)
+            incr_result, _expire_result = await pipe.execute()
+        current = incr_result
     except Exception as exc:
         logger.warning(
             "rate-limit redis недоступен (%s), переключаюсь на in-memory cap для %s",

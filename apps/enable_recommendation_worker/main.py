@@ -261,6 +261,29 @@ async def insert_recommendation(
     return row[0] if row else None
 
 
+async def delete_unpromoted_recommendation(engine: AsyncEngine, *, rec_id: uuid.UUID) -> None:
+    """Откатывает INSERT из insert_recommendation при недоставленном алерте (re-arm).
+
+    LOW (аудит 02.07): idempotency_key = f(ad_id, last_transition_at) не меняется, пока
+    ад остаётся в том же инциденте — без отката запись в БД навсегда блокирует повтор
+    (ON CONFLICT DO NOTHING на следующих циклах), и рекомендация молча теряется при
+    любом сбое TG. Паттерн — как re-arm дедупа в observer._maybe_alert_degraded (246000c7):
+    неудачная попытка не должна оставлять постоянный след, мешающий ретраю.
+    Удаляем только НЕ подтверждённую (promoted_to_task_id IS NULL) запись — если между
+    insert и этим вызовом её кто-то успел confirm'ить (гонка с UI), запись не трогаем.
+    """
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                """
+                DELETE FROM enable_recommendations
+                WHERE id = :rid AND promoted_to_task_id IS NULL
+                """
+            ),
+            {"rid": rec_id},
+        )
+
+
 # ====================== TG отправка ======================
 
 
@@ -424,6 +447,12 @@ async def run_once(
         )
         if not sent:
             counts["send_failed"] = counts.get("send_failed", 0) + 1
+            # Re-arm (LOW, аудит 02.07): откатываем INSERT, иначе idempotency_key
+            # блокирует повтор навсегда — следующий цикл, пока ад в том же инциденте,
+            # снова получит new_id=None и рекомендация теряется молча. Redis-дедуп уже
+            # не ставится при недоставке (см. комментарий выше) — здесь закрываем
+            # аналогичную дыру на стороне БД.
+            await delete_unpromoted_recommendation(engine, rec_id=new_id)
             continue
 
         # Дедуп по Redis (NX) — ставим только после успешной отправки
@@ -569,6 +598,7 @@ async def _default_tg_factory(engine: AsyncEngine):
 
 __all__ = [
     "CandidateRow",
+    "delete_unpromoted_recommendation",
     "fetch_candidates",
     "fetch_metrics_since",
     "insert_recommendation",

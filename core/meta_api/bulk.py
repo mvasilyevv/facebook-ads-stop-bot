@@ -18,6 +18,15 @@ from core.observer.queries import campaign_matches_owner
 
 MAX_BULK = 50
 
+# LOW (аудит 02.07): SQL-запросы ниже читали ВСЕ совпавшие строки без LIMIT (Python-срез
+# owned[:limit] применялся уже ПОСЛЕ полной выборки в память) — на большом каталоге это
+# unbounded read по offer-код/campaign_ids паттерну. SQL LIMIT ставим с большим запасом
+# над реальными limit'ами вызовов (MAX_BULK=50, _AUTOSTART_MAX_ADS=2000), чтобы:
+# (1) ограничить pathological сканы, (2) НЕ исказить total (второй элемент кортежа —
+# используется вызывающими для честного "усечено до N" сообщения/лога) для любых
+# реалистичных объёмов каталога.
+_SQL_ROW_CAP = 20000
+
 
 async def resolve_owner_ad_ids(
     engine: AsyncEngine,
@@ -49,9 +58,10 @@ async def resolve_owner_ad_ids(
                     WHERE (c.campaign_name ~* :pattern OR a.ad_name ~* :pattern)
                       AND a.fb_ad_id IS NOT NULL
                       AND a.is_active = TRUE
+                    LIMIT :sql_cap
                     """
                 ),
-                {"pattern": pattern},
+                {"pattern": pattern, "sql_cap": _SQL_ROW_CAP},
             )
         ).all()
 
@@ -103,7 +113,7 @@ async def resolve_owner_ad_ids_by_campaign_ids(
     if not clean_ids:
         return [], 0
 
-    params: dict[str, object] = {"ids": clean_ids}
+    params: dict[str, object] = {"ids": clean_ids, "sql_cap": _SQL_ROW_CAP}
     freshness_clause = ""
     if since is not None:
         freshness_clause = "AND a.last_seen_at >= :since"
@@ -122,6 +132,7 @@ async def resolve_owner_ad_ids_by_campaign_ids(
                       AND a.fb_ad_id IS NOT NULL
                       AND a.is_active = TRUE
                       {freshness_clause}
+                    LIMIT :sql_cap
                     """
                 ),
                 params,

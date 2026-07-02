@@ -203,12 +203,18 @@ def _evaluate_deposit_stage(row: ScannedAdRow, ctx: RuleContext) -> RuleHit | No
 
 
 def _evaluate_frequency_anomaly(ctx: RuleContext) -> RuleHit | None:
-    """Правило 7: выгорание аудитории по резкому росту frequency.
+    """Правило 7: выгорание аудитории по абсолютному порогу frequency.
 
     STOP: frequency > stop_threshold (например 3.5) — тяжёлый burnout.
-    WARNING: frequency > warning_threshold (2.5) И
-             (нет истории ИЛИ рост за час >= growth_warning_pct%).
+    WARNING: frequency > warning_threshold (2.5).
     Без текущей frequency — правило не срабатывает.
+
+    LOW (аудит 02.07): историческая ветка "рост за час" (frequency_1h_ago) удалена как
+    мёртвый код — build_rule_context (единственный производитель RuleContext) никогда
+    не заполняет frequency_1h_ago, значение всегда None (см. докстринг build_rule_context,
+    core/observer/pipeline.py: "Фаза 1: только абсолютный порог, без истории"). Ветки с
+    prev были недостижимы в проде; фактическое поведение (WARNING по абсолютному порогу
+    без учёта роста) не меняется этим упрощением.
     """
     if not ctx.frequency_anomaly_enabled:
         return None
@@ -224,25 +230,11 @@ def _evaluate_frequency_anomaly(ctx: RuleContext) -> RuleHit | None:
     if current > ctx.frequency_outlier_cap:
         return None
 
-    prev = ctx.frequency_1h_ago
     stop_thr = ctx.frequency_stop_threshold
     warn_thr = ctx.frequency_warning_threshold
-    growth_pct = ctx.frequency_growth_warning_pct
 
-    # STOP: абсолютный порог (без условия на рост)
+    # STOP: абсолютный порог
     if current > stop_thr:
-        if prev is not None and prev > 0:
-            growth = ((current - prev) / prev * _HUNDRED).quantize(
-                _PERCENT_STEP, rounding=ROUND_HALF_UP
-            )
-            reason = (
-                f"Частота {current:.2f} (час назад {prev:.2f}, рост {growth:.0f}%) — "
-                f"выгорание аудитории. Стоп-порог {stop_thr:.2f}."
-            )
-        else:
-            reason = (
-                f"Частота {current:.2f} превысила стоп-порог {stop_thr:.2f} — выгорание аудитории."
-            )
         return RuleHit(
             code="frequency_anomaly",
             title=rule_label("frequency_anomaly"),
@@ -250,42 +242,24 @@ def _evaluate_frequency_anomaly(ctx: RuleContext) -> RuleHit | None:
             value=current,
             threshold=stop_thr,
             summary=f"Frequency {current:.2f} превысила стоп {stop_thr:.2f}",
-            reason_text=reason,
+            reason_text=(
+                f"Частота {current:.2f} превысила стоп-порог {stop_thr:.2f} — выгорание аудитории."
+            ),
         )
 
-    # WARNING: абсолютный порог + условие на рост (или нет истории — WARNING по абсолюту)
+    # WARNING: абсолютный порог
     if current > warn_thr:
-        if prev is None or prev <= 0:
-            # Нет истории — WARNING только по абсолютному порогу
-            return RuleHit(
-                code="frequency_anomaly",
-                title=rule_label("frequency_anomaly"),
-                stage=AlertStage.WARNING,
-                value=current,
-                threshold=warn_thr,
-                summary=f"Frequency {current:.2f} превысила порог {warn_thr:.2f}",
-                reason_text=(
-                    f"Частота {current:.2f} выше порога {warn_thr:.2f} — "
-                    f"возможное выгорание аудитории (история не доступна)."
-                ),
-            )
-        # Есть история — проверяем рост
-        growth = ((current - prev) / prev * _HUNDRED).quantize(
-            _PERCENT_STEP, rounding=ROUND_HALF_UP
+        return RuleHit(
+            code="frequency_anomaly",
+            title=rule_label("frequency_anomaly"),
+            stage=AlertStage.WARNING,
+            value=current,
+            threshold=warn_thr,
+            summary=f"Frequency {current:.2f} превысила порог {warn_thr:.2f}",
+            reason_text=(
+                f"Частота {current:.2f} выше порога {warn_thr:.2f} — возможное выгорание аудитории."
+            ),
         )
-        if growth >= growth_pct:
-            return RuleHit(
-                code="frequency_anomaly",
-                title=rule_label("frequency_anomaly"),
-                stage=AlertStage.WARNING,
-                value=current,
-                threshold=warn_thr,
-                summary=f"Frequency {current:.2f} (рост {growth:.0f}% за час) — выгорание",
-                reason_text=(
-                    f"Частота {current:.2f} (час назад {prev:.2f}, рост {growth:.0f}%) — "
-                    f"выгорание аудитории. Порог роста {growth_pct:.0f}%."
-                ),
-            )
 
     return None
 

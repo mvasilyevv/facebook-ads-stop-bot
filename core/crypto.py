@@ -234,7 +234,12 @@ def verify_encryption_key(key: str, verify_token: str) -> None:
     try:
         f = Fernet(key.encode() if isinstance(key, str) else key)
         decrypted = f.decrypt(verify_token.encode()).decode()
-    except (InvalidToken, Exception) as exc:  # noqa: BLE001
+    # LOW (аудит 02.07): (InvalidToken, Exception) было бессмысленной комбинацией —
+    # InvalidToken это подкласс Exception, так что except перехватывал ровно то же
+    # множество, что и голый except Exception, только выглядел как два разных случая.
+    # Exception здесь осознан (не только InvalidToken): Fernet(...) на кривом base64-ключе
+    # бросает ValueError/binascii.Error — тоже "ключ не прошёл верификацию".
+    except Exception as exc:  # noqa: BLE001
         logger.critical(
             "КРИТИЧЕСКАЯ ОШИБКА: ENCRYPTION_KEY не совпадает с ENCRYPTION_KEY_VERIFY. "
             "Все зашифрованные токены в БД недоступны. Проверьте .encryption_key.backup. "

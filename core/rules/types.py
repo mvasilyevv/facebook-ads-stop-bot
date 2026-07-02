@@ -116,12 +116,13 @@ class RuleContext:
     spend_with_dep_from_percent: Decimal = field(init=False, default=SPEND_WITH_DEP_FROM_PERCENT)
     spend_with_dep_to_percent: Decimal = field(init=False, default=SPEND_WITH_DEP_TO_PERCENT)
 
-    # Правило 7: frequency-anomaly (выгорание аудитории)
+    # Правило 7: frequency-anomaly (выгорание аудитории). Абсолютные пороги, без истории
+    # роста за час — LOW (аудит 02.07): frequency_1h_ago/frequency_growth_warning_pct
+    # удалены как мёртвые поля (build_rule_context никогда их не заполнял, ветка в
+    # evaluator._evaluate_frequency_anomaly была недостижима).
     frequency_anomaly_enabled: bool = True
     frequency_current: Decimal | None = None
-    frequency_1h_ago: Decimal | None = None
     frequency_warning_threshold: Decimal = Decimal("2.5")
-    frequency_growth_warning_pct: Decimal = Decimal("30.0")
     frequency_stop_threshold: Decimal = Decimal("3.5")
     # impressions/reach — данные строки (диагностика/будущие правила). Гейты-минимумы
     # по показам и охвату УБРАНЫ (решение байера: стопать жёстко по порогу, не ждать

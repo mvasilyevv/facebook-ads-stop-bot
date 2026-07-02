@@ -31,6 +31,12 @@ router = APIRouter(tags=["dashboard"])
 # Защита от перегруза JSON-ответа /spend-history без фильтра.
 _SPEND_HISTORY_GLOBAL_LIMIT = 10000
 
+# LOW (аудит 02.07): при fb_ad_id раньше не было cap вовсе ("нас интересует история
+# одного ad'а") — но partitioned ad_metrics хранит снимок на КАЖДЫЙ scan-цикл, и без
+# верхнего окна долгоживущий ad с частым сканом может вернуть мегабайтный ответ.
+# 50000 точек — с большим запасом (adaptive-скан раз в секунды, 168h*3600/интервал).
+_SPEND_HISTORY_PER_AD_LIMIT = 50000
+
 # Допустимые значения бакета для chart-data.
 _VALID_BUCKETS = {"hour", "day"}
 
@@ -48,7 +54,8 @@ async def get_spend_history(
 
     Партиционный фильтр по cycle_ts применяется в WHERE (partition pruning).
     Если fb_ad_id не передан — limit 10000 (защита от мегабайтных ответов).
-    Если fb_ad_id передан — без limit (нас интересует история одного ad'а).
+    Если fb_ad_id передан — cap 50000 (история одного ad'а может быть длинной,
+    но не безграничной — LOW аудита 02.07).
     ORDER BY cycle_ts ASC.
     """
     params: dict[str, Any] = {"hours": hours}
@@ -61,11 +68,10 @@ async def get_spend_history(
 
     where_sql = " AND ".join(where_clauses)
 
-    # Без фильтра — отрезаем 10k точек: без этого full scan может затянуть API.
-    limit_clause = ""
-    if not fb_ad_id:
-        params["lim"] = _SPEND_HISTORY_GLOBAL_LIMIT
-        limit_clause = "LIMIT :lim"
+    # Без фильтра — отрезаем 10k точек; с фильтром по одному ad — 50k (запас, но не
+    # безграничность). Без этого full scan может затянуть API.
+    params["lim"] = _SPEND_HISTORY_GLOBAL_LIMIT if not fb_ad_id else _SPEND_HISTORY_PER_AD_LIMIT
+    limit_clause = "LIMIT :lim"
 
     sql = f"""
         SELECT

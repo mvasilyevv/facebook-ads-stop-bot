@@ -39,12 +39,14 @@ class _EchoTool:
 
 
 class _BrokenRedis:
-    """Redis, который рейзит на любом вызове (сбой канала)."""
+    """Redis, который рейзит на любом вызове (сбой канала).
 
-    async def incr(self, key: str) -> int:
-        raise RuntimeError("redis down")
+    pipeline (не incr/expire раздельно) — check_and_increment теперь шлёт INCR+EXPIRE
+    одной атомарной транзакцией (LOW, аудит 02.07: закрывает окно гонки "краш между
+    INCR и EXPIRE оставляет ключ без TTL навсегда").
+    """
 
-    async def expire(self, key: str, ttl: int) -> None:
+    def pipeline(self, transaction: bool = True):
         raise RuntimeError("redis down")
 
 
@@ -115,15 +117,43 @@ async def test_call_tool_broken_redis_uses_memory_cap_not_failopen() -> None:
     assert _is_rate_limited(responses[5])
 
 
+class _FakePipeline:
+    """Минимальная эмуляция redis.asyncio Pipeline для MULTI/EXEC (LOW, аудит 02.07).
+
+    check_and_increment теперь шлёт INCR+EXPIRE одной атомарной транзакцией через
+    `async with redis.pipeline(transaction=True) as pipe: ...; await pipe.execute()`.
+    """
+
+    def __init__(self, incr_return: int = 1):
+        self._incr_return = incr_return
+        self.commands: list[str] = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc_info):
+        return False
+
+    def incr(self, key: str):
+        self.commands.append("incr")
+        return self
+
+    def expire(self, key: str, ttl: int, nx: bool = False):
+        self.commands.append("expire")
+        return self
+
+    async def execute(self):
+        return [self._incr_return, True]
+
+
 # Здоровый Redis, лимит НЕ исчерпан — check_and_increment вызывается штатно,
 # инструмент отрабатывает без rate-limit отказа.
 @pytest.mark.asyncio
 async def test_call_tool_healthy_redis_not_rate_limited() -> None:
     fake_redis = AsyncMock()
-    fake_redis.incr = AsyncMock(return_value=1)
-    fake_redis.expire = AsyncMock(return_value=True)
+    fake_redis.pipeline = MagicMock(return_value=_FakePipeline(incr_return=1))
     mgr = _ctx_manager(redis_client=fake_redis)
 
     responses = await _call(mgr, times=1)
     assert not _is_rate_limited(responses[0])
-    fake_redis.incr.assert_awaited()
+    fake_redis.pipeline.assert_called()

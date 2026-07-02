@@ -623,10 +623,14 @@ async def list_runs(
         LIMIT :limit OFFSET :offset
     """
     count_sql = f"SELECT COUNT(*) FROM campaign_run {where}"
+    # LOW (аудит 02.07): count_sql не использует limit/offset — не передаём их лишними
+    # bind-параметрами (SQLAlchemy их проглатывает молча, но это вводит в заблуждение
+    # при чтении/отладке SQL).
+    count_params = {k: v for k, v in params.items() if k not in ("limit", "offset")}
 
     async with engine.connect() as conn:
         rows = (await conn.execute(text(query), params)).fetchall()
-        total = (await conn.execute(text(count_sql), params)).scalar() or 0
+        total = (await conn.execute(text(count_sql), count_params)).scalar() or 0
 
     response.headers["X-Total-Count"] = str(total)
     return [RunSummaryOut(**dict(r._mapping)) for r in rows]

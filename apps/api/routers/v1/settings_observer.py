@@ -306,7 +306,12 @@ async def refresh_observer_campaigns(
     except grpc.RpcError as exc:
         raise HTTPException(status_code=503, detail=f"browser-agent недоступен: {exc}") from exc
     except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"Ошибка резолва кампаний: {exc}") from exc
+        # LOW (аудит 02.07): голый Exception — не показываем str(exc) клиенту (может
+        # нести внутренние детали), полная ошибка уходит в лог.
+        logger.exception("Ошибка резолва кампаний через browser-agent")
+        raise HTTPException(
+            status_code=503, detail="Ошибка резолва кампаний — подробности в логе сервера"
+        ) from exc
     finally:
         try:
             await client.close()

@@ -252,7 +252,10 @@ class OfferRuleUpsertIn(BaseModel):
     Все поля nullable. Отрицательные пороги запрещены (ge=0).
     """
 
-    cpa_threshold: Decimal | None = Field(None, ge=0)
+    # LOW (аудит 02.07): cpa_threshold=0 раньше молча превращался в дефолт 100 в
+    # build_rule_context (`offer.cpa_threshold or Decimal("100")` трактует 0 как falsy).
+    # gt=0 запрещает 0 на входе явно, не полагаясь на скрытый фолбэк ниже по пайплайну.
+    cpa_threshold: Decimal | None = Field(None, gt=0)
     frequency_threshold: Decimal | None = Field(None, ge=0)
     # Чувствительность 1–100% (всегда задано, дефолт 80). НЕ nullable — колонки NOT NULL.
     stop_percent_of_rule: Decimal = Field(Decimal("80"), ge=1, le=100)

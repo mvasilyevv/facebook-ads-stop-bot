@@ -87,8 +87,8 @@ def build_rule_context(
 
     frequency-anomaly (правило 7, #37) — opt-in per-offer через offer.frequency_threshold:
     NULL/0 → правило выключено для этого оффера; задан → stop-порог = frequency_threshold,
-    warning — свёртка 80% (как у CPC/CPL/CPR). Фаза 1: только абсолютный порог, без
-    истории frequency_1h_ago (рост за час не считаем).
+    warning — свёртка 80% (как у CPC/CPL/CPR). Только абсолютный порог, без истории роста
+    за час (поле frequency_1h_ago удалено из RuleContext как мёртвое — см. core/rules/types.py).
 
     impressions/reach: кладём в RuleContext ВСЕГДА — для диагностики и будущих правил.
     Гейты-минимумы по показам/охвату УБРАНЫ (решение байера): guardrail (cpc/cpl/cpr при
@@ -96,6 +96,12 @@ def build_rule_context(
     (перекрут вреднее статистической нерепрезентативности). От шумового выброса частоты на
     старте (freq 50-100 при крошечном reach) защищает только frequency_outlier_cap.
     """
+    # LOW (аудит 02.07): `or` (не `if is None`) осознан — трактует и None, И 0 как
+    # "порог не задан" → нейтральный default. Это НЕ money-баг: cpa_amount=0 в правилах
+    # означает мгновенный STOP всего (любой расход/CPC/CPL превышает 0% от базы) —
+    # опаснее дефолта 100. Вход теперь заперт на уровне API (OfferRuleUpsertIn.cpa_threshold
+    # gt=0, apps/api/routers/v1/schemas/offers.py) — 0 просто не долетает сюда с формы.
+    # Этот фолбэк остаётся как последний рубеж (прямые записи в БД в обход API).
     cpa = offer.cpa_threshold or Decimal("100")
     # Чувствительность per-offer: при каком % правила срабатывает стоп/ворнинг.
     # Дефолт 80/80 (как было захардкожено) при отсутствии offer_rules-строки.

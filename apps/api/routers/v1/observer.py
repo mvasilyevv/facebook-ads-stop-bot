@@ -279,8 +279,12 @@ async def _publish_restart_signal(redis: Redis, channel: str) -> RestartSignalRe
     try:
         await redis.publish(channel, payload)
     except Exception as exc:
-        logger.error("Redis недоступен при отправке restart-сигнала (%s): %s", channel, exc)
-        raise HTTPException(status_code=503, detail=f"Redis недоступен: {exc}") from exc
+        # LOW (аудит 02.07): str(exc) в detail может раскрыть внутренние детали
+        # подключения к Redis — клиенту генерик-текст, полная ошибка в лог.
+        logger.exception("Redis недоступен при отправке restart-сигнала (%s)", channel)
+        raise HTTPException(
+            status_code=503, detail="Redis недоступен — подробности в логе сервера"
+        ) from exc
 
     logger.info("Restart-сигнал отправлен в канал: %s", channel)
     return RestartSignalResponse(status="signal_sent", channel=channel)

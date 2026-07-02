@@ -19,12 +19,9 @@ from core.ai_assistant.tools._ratelimit import (
 
 
 class _BrokenRedis:
-    """Имитация сбоя Redis — incr/expire рейзят."""
+    """Имитация сбоя Redis — pipeline (incr/expire атомарно, LOW аудита 02.07) рейзит."""
 
-    async def incr(self, key: str) -> int:
-        raise RuntimeError("redis down")
-
-    async def expire(self, key: str, ttl: int) -> None:
+    def pipeline(self, transaction: bool = True):
         raise RuntimeError("redis down")
 
 
