@@ -7,14 +7,14 @@ Numeric(12,2) — при агрегации (см. core/adset_pro/aggregator.py)
 безопасное (Postgres расширяет NUMERIC(p,s) без переписи таблицы, ALTER TYPE
 той же базовой категории), данных не теряет, увеличивает точность.
 
-Revision ID: 0032_tracker_aggregate_revenue_precision
+Revision ID: 0032_tracker_revenue_scale
 Revises: 0031_default_partitions
 """
 
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0032_tracker_aggregate_revenue_precision"
+revision = "0032_tracker_revenue_scale"
 down_revision = "0031_default_partitions"
 branch_labels = None
 depends_on = None
