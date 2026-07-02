@@ -1,9 +1,14 @@
 # -*- coding: utf-8 -*-
-"""Unit-тесты core.meta_api.queue — pure-функция default_idempotency_key."""
+"""Unit-тесты core.meta_api.queue — pure-функция default_idempotency_key + salt-uuid."""
 
 from __future__ import annotations
 
-from core.meta_api.queue import default_idempotency_key
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from core.meta_api.queue import create_draft_task, default_idempotency_key
 from core.meta_api.schemas import MetaMutationPayload
 
 
@@ -69,3 +74,60 @@ def test_idempotency_key_params_matter() -> None:
     key_a = default_idempotency_key(a, requested_by="ai")
     key_b = default_idempotency_key(b, requested_by="ai")
     assert key_a != key_b
+
+
+# ====================== MID-5: draft salt = timestamp + uuid4 (без коллизий) ======================
+
+
+# MID-5: два create_draft_task в одну и ту же секунду (замороженное время) → РАЗНЫЕ
+# idempotency_key. Раньше salt=isoformat → одинаковый ISO при двойном клике →
+# одинаковый ключ → ON CONFLICT DO NOTHING глотал второй draft. uuid4 разводит ключи.
+@pytest.mark.asyncio
+async def test_draft_salt_unique_on_same_second_double_click() -> None:
+    payload = MetaMutationPayload(mutation_kind="pause_ad", target_id="ad_777")
+
+    captured_keys: list[str] = []
+
+    async def fake_create_task(engine, **kwargs):
+        captured_keys.append(kwargs["idempotency_key"])
+        return len(captured_keys)  # уникальный id, не None
+
+    # Замораживаем время на одну и ту же секунду для обоих вызовов — эмулируем
+    # двойной клик в пределах одной секунды (worst case для salt=isoformat).
+    frozen = datetime(2026, 7, 2, 12, 0, 0, tzinfo=timezone.utc)
+    frozen_dt = MagicMock()
+    frozen_dt.now = MagicMock(return_value=frozen)
+
+    with (
+        patch("core.meta_api.queue.create_task", fake_create_task),
+        patch("core.meta_api.queue.datetime", frozen_dt),
+    ):
+        engine = AsyncMock()
+        await create_draft_task(engine, payload=payload, requested_by="ai")
+        await create_draft_task(engine, payload=payload, requested_by="ai")
+
+    assert len(captured_keys) == 2
+    # Ключевой инвариант MID-5: даже при идентичном timestamp ключи РАЗНЫЕ (uuid4-компонент).
+    assert captured_keys[0] != captured_keys[1], (
+        "два draft в одну секунду дали одинаковый idempotency_key — коллизия MID-5 не устранена"
+    )
+
+
+# MID-5: salt всё ещё содержит timestamp (для читаемости/дебага), но детерминизм
+# сломан uuid4 — тот же payload+requested_by даёт разные ключи на каждом вызове.
+@pytest.mark.asyncio
+async def test_draft_salt_nondeterministic_across_calls() -> None:
+    payload = MetaMutationPayload(mutation_kind="activate_ad", target_id="ad_1")
+    captured_keys: list[str] = []
+
+    async def fake_create_task(engine, **kwargs):
+        captured_keys.append(kwargs["idempotency_key"])
+        return len(captured_keys)
+
+    with patch("core.meta_api.queue.create_task", fake_create_task):
+        engine = AsyncMock()
+        for _ in range(5):
+            await create_draft_task(engine, payload=payload, requested_by="ai")
+
+    # Все 5 ключей уникальны — draft'ы не глотаются дедупом.
+    assert len(set(captured_keys)) == 5

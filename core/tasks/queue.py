@@ -247,6 +247,36 @@ async def mark_failed(
     return (result.rowcount or 0) > 0
 
 
+async def touch_task_running(engine: AsyncEngine, *, task_id: int) -> bool:
+    """Освежить updated_at у задачи в статусе 'running' — heartbeat-touch (MID-10).
+
+    Долгий исполнитель (например, upload видео >30 мин через meta_api_worker) без
+    периодического touch будет украден reconciler'ом: reconcile_stuck_running метит
+    'running' старше 30 мин (по updated_at!) в 'retrying' → повторное исполнение той
+    же mutation = дубль/двойной открут. Долгий воркер обязан периодически (каждые
+    ~5 мин, < 30-мин stuck-таймаута) звать эту функцию, пока mutation исполняется.
+
+    ⚠️ writer↔reader контракт: reconcile_stuck_running читает ИМЕННО updated_at
+    (WHERE updated_at < NOW() - interval), поэтому touch обновляет updated_at, а не
+    started_at/claimed_at. При смене поля-детектора в reconciler — синхронно менять здесь.
+
+    Returns: True если строка ещё 'running' и updated_at обновлён. False — задача уже
+    не 'running' (закрыта/украдена/reconciled): caller может прекратить touch-цикл.
+    """
+    async with engine.begin() as conn:
+        result = await conn.execute(
+            text(
+                """
+                UPDATE task_queue
+                SET updated_at = NOW()
+                WHERE id = :id AND status = 'running'
+                """
+            ),
+            {"id": int(task_id)},
+        )
+    return (result.rowcount or 0) > 0
+
+
 async def requeue_for_retry(
     engine: AsyncEngine,
     *,

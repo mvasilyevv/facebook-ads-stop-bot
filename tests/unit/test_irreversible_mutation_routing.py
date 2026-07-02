@@ -16,6 +16,7 @@ import pytest
 
 import apps.meta_api_worker.main as meta
 from core.meta_api.errors import TemporaryError
+from core.meta_api.mutations.duplicate_campaign import DuplicateCampaignPartialError
 
 
 def _task(kind: str, tid: int = 1) -> SimpleNamespace:
@@ -78,3 +79,31 @@ async def test_pause_ad_temporary_requeues(monkeypatch, _patched) -> None:
     await meta.process_one_task(object(), _task("pause_ad"), client=AsyncMock())
     spy_requeue.assert_awaited_once()
     spy_fail.assert_not_awaited()
+
+
+# MID-4: duplicate_campaign copy ok + rename fail → DuplicateCampaignPartialError →
+# mark_failed БЕЗ retry (retry создал бы вторую копию), осиротевший id в error mark_failed.
+@pytest.mark.asyncio
+async def test_duplicate_campaign_partial_error_marks_failed_with_orphan_id(
+    monkeypatch, _patched
+) -> None:
+    spy_fail, spy_requeue = _patched
+    monkeypatch.setattr(
+        meta,
+        "execute_mutation",
+        AsyncMock(
+            side_effect=DuplicateCampaignPartialError(
+                "копия создана (id=888), но переименование не удалось: http 400",
+                created_ids={"campaign": "888"},
+                failed_steps=[{"step": "rename", "error": "http 400"}],
+            )
+        ),
+    )
+    await meta.process_one_task(object(), _task("duplicate_campaign"), client=AsyncMock())
+    # Помечена failed без retry — контракт как у CreateCampaignPartialError.
+    spy_fail.assert_awaited_once()
+    spy_requeue.assert_not_awaited()
+    # Осиротевший id доехал в error mark_failed (для ручной чистки).
+    err = spy_fail.await_args.kwargs["error"]
+    assert "888" in err
+    assert "duplicate_partial_fail" in err

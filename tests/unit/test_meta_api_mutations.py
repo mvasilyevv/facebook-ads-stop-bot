@@ -20,7 +20,10 @@ from core.meta_api.mutations.activate_ad import ActivateAdHandler
 from core.meta_api.mutations.activate_campaign import ActivateCampaignHandler
 from core.meta_api.mutations.bulk_status_change import BulkStatusChangeHandler
 from core.meta_api.mutations.create_campaign import CreateCampaignHandler
-from core.meta_api.mutations.duplicate_campaign import DuplicateCampaignHandler
+from core.meta_api.mutations.duplicate_campaign import (
+    DuplicateCampaignHandler,
+    DuplicateCampaignPartialError,
+)
 from core.meta_api.mutations.pause_ad import PauseAdHandler
 from core.meta_api.mutations.pause_campaign import PauseCampaignHandler
 from core.meta_api.mutations.set_adset_budget import SetAdsetBudgetHandler
@@ -274,9 +277,9 @@ async def test_duplicate_campaign_with_new_name_does_rename() -> None:
     assert copied_id in result["modified_ids"]
 
 
-# Если rename упал — копия создана, success=False, last_error содержит «копия создана».
+# MID-4: rename упал — копия осиротела → DuplicateCampaignPartialError с id в created_ids.
 @pytest.mark.asyncio
-async def test_duplicate_campaign_rename_failure_returns_warning() -> None:
+async def test_duplicate_campaign_rename_failure_raises_partial_error() -> None:
     import json as _json
 
     copied_id = "23843999"
@@ -292,11 +295,12 @@ async def test_duplicate_campaign_rename_failure_returns_warning() -> None:
         params={"deep_copy": True, "new_name": "Cloned"},
     )
 
-    result = await DuplicateCampaignHandler().execute(client, payload)
+    with pytest.raises(DuplicateCampaignPartialError) as exc_info:
+        await DuplicateCampaignHandler().execute(client, payload)
 
-    assert result["success"] is False
-    assert "копия создана" in result["last_error"]
-    assert copied_id in result["modified_ids"]
+    exc = exc_info.value
+    assert exc.created_ids == {"campaign": copied_id}
+    assert "копия создана" in str(exc)
 
 
 # Невалидный status_after_clone — ValueError.

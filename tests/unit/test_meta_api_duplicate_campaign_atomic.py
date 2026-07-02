@@ -5,8 +5,8 @@
 - без new_name → простой /copies, один вызов
 - с new_name → один POST / с batch=[copy, rename]
 - batch оба успешны → success=True, modified_ids с copied_campaign_id
-- batch copy ok + rename failed → success=False, last_error со «копия создана», id в modified_ids
-- batch copy failed → success=False, modified_ids пуст
+- batch copy ok + rename failed → DuplicateCampaignPartialError (MID-4: копия осиротела)
+- batch copy failed → success=False, modified_ids пуст (ничего не создано)
 - new_name только из пробелов → trim → ветка без batch (как None)
 """
 
@@ -18,7 +18,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from core.meta_api.mutations.duplicate_campaign import DuplicateCampaignHandler
+from core.meta_api.mutations.duplicate_campaign import (
+    DuplicateCampaignHandler,
+    DuplicateCampaignPartialError,
+)
 from core.meta_api.schemas import MetaMutationPayload
 
 
@@ -120,10 +123,10 @@ async def test_duplicate_batch_both_success_returns_success() -> None:
     assert result.get("new_name") == "Copy Q4"
 
 
-# Batch copy ok + rename failed → success=False, last_error содержит «копия создана» и id,
-# но copied_campaign_id всё равно в modified_ids.
+# MID-4: copy ok + rename failed → бросаем DuplicateCampaignPartialError с осиротевшим
+# copied_id в created_ids (контракт как у create_campaign — retry создал бы вторую копию).
 @pytest.mark.asyncio
-async def test_duplicate_batch_rename_fail_returns_failure_with_copy_id() -> None:
+async def test_duplicate_batch_rename_fail_raises_partial_error() -> None:
     copied_id = "55667788"
     client = _make_client(_batch_response(200, 400, copied_id))
     payload = MetaMutationPayload(
@@ -132,12 +135,15 @@ async def test_duplicate_batch_rename_fail_returns_failure_with_copy_id() -> Non
         params={"deep_copy": True, "new_name": "Fail Rename"},
     )
 
-    result = await DuplicateCampaignHandler().execute(client, payload)
+    with pytest.raises(DuplicateCampaignPartialError) as exc_info:
+        await DuplicateCampaignHandler().execute(client, payload)
 
-    assert result["success"] is False
-    assert copied_id in result["modified_ids"]
-    assert "копия создана" in result["last_error"]
-    assert copied_id in result["last_error"]
+    exc = exc_info.value
+    # Осиротевшая копия — в created_ids для ручной чистки (как CreateCampaignPartialError).
+    assert exc.created_ids == {"campaign": copied_id}
+    assert exc.failed_steps and exc.failed_steps[0]["step"] == "rename"
+    assert "копия создана" in str(exc)
+    assert copied_id in str(exc)
 
 
 # Batch copy failed → success=False, modified_ids пуст.

@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -110,11 +111,18 @@ async def create_draft_task(
 ) -> int | None:
     """Создать DRAFT-задачу (для AI tools).
 
-    Каждый draft уникален: idempotency_key содержит timestamp salt.
+    Каждый draft уникален: idempotency_key содержит timestamp + uuid4 salt.
     created_by_chat_id — TG chat_id инициатора (для owner ACL). Если AI работает
     через MCP — оставляем None, тогда approve через TG будет требовать админ-роль.
+
+    MID-5 (аудит 02.07): salt = только isoformat-timestamp давал коллизию при двойном
+    клике в одну секунду (два вызова в пределах одной секунды → одинаковый ISO без
+    микросекунд у некоторых источников времени, а одинаковый salt → одинаковый
+    idempotency_key → ON CONFLICT DO NOTHING глотал второй draft). Добавляем uuid4 —
+    гарантированно уникальный компонент, столкновение невозможно даже при мгновенных
+    повторных вызовах.
     """
-    salt = datetime.now(timezone.utc).isoformat()
+    salt = f"{datetime.now(timezone.utc).isoformat()}:{uuid.uuid4()}"
     key = default_idempotency_key(payload, requested_by=requested_by, salt=salt)
     return await create_mutation_task(
         engine,

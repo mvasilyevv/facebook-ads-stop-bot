@@ -49,6 +49,110 @@ _IDLE_RELOAD_INTERVAL_SECONDS = 10
 # за offset. Держим отдельный (более долгий) backoff специально для этого случая.
 _CONFLICT_RETRY_DELAY_SECONDS = 30
 
+# MID-8 (аудит 02.07): offset подтверждался ДАЖЕ для упавшего handle_update → money-кнопка
+# (dis:/ereco:) под алертом терялась навсегда (at-most-once). Фикс: при падении обработчика
+# НЕ двигаем offset за этот update — Telegram переотдаст его на следующем poll (at-least-once).
+# Защита от «ядовитого» update (падает вечно → поллер застрял на нём, всё встало): считаем
+# попытки per-update. После _MAX_UPDATE_ATTEMPTS — скип с ERROR-логом (offset двигаем дальше),
+# чтобы один битый update не заморозил очередь. Счётчик в Redis (переживает рестарт поллера,
+# иначе два процесса/деплой сбрасывали бы его → вечный ретрай); при недоступности Redis —
+# in-memory fallback (secondary cap), чтобы всё равно не залипнуть навсегда.
+_MAX_UPDATE_ATTEMPTS = 3
+_UPDATE_FAIL_KEY_PREFIX = "tg:upd:fail:"
+_UPDATE_FAIL_TTL_SECONDS = 3600
+# In-memory fallback-счётчик попыток per update_id (если Redis недоступен).
+_inmem_update_fail_counts: dict[int, int] = {}
+
+
+async def _bump_update_failure(redis_client, update_id: int) -> int:
+    """Инкремент счётчика неудачных попыток обработки update. Возвращает новое значение.
+
+    Redis-first (переживает рестарт поллера); in-memory fallback при сбое/отсутствии Redis.
+    """
+    if redis_client is not None:
+        try:
+            key = f"{_UPDATE_FAIL_KEY_PREFIX}{update_id}"
+            count = int(await redis_client.incr(key))
+            if count == 1:
+                await redis_client.expire(key, _UPDATE_FAIL_TTL_SECONDS)
+            return count
+        except Exception:  # noqa: BLE001 — Redis лёг → in-memory fallback
+            logger.warning("telegram_poller: Redis-счётчик попыток недоступен, in-memory fallback")
+    _inmem_update_fail_counts[update_id] = _inmem_update_fail_counts.get(update_id, 0) + 1
+    return _inmem_update_fail_counts[update_id]
+
+
+async def _clear_update_failure(redis_client, update_id: int) -> None:
+    """Сбросить счётчик попыток (update обработан или ядовитый — скипнут). Best-effort."""
+    _inmem_update_fail_counts.pop(update_id, None)
+    if redis_client is not None:
+        try:
+            await redis_client.delete(f"{_UPDATE_FAIL_KEY_PREFIX}{update_id}")
+        except Exception:  # noqa: BLE001
+            pass
+
+
+async def _process_updates_batch(
+    updates: list,
+    *,
+    engine,
+    client,
+    redis_pubsub,
+    fail_redis,
+    offset: int,
+) -> int:
+    """Обработать батч updates. Возвращает новый offset (ack Telegram'у).
+
+    MID-8 контракт:
+    - update обработан успешно → сдвигаем offset за него (ack, больше не переотдаётся);
+    - update упал, попыток < лимита → offset НЕ двигаем за него И прерываем батч
+      (у следующих update_id выше — ack их сдвинул бы offset за упавший, потеряв его).
+      Telegram переотдаст упавший + хвост на следующем poll;
+    - update упал, попытки исчерпаны (ядовитый) → ERROR-лог, сдвигаем offset за него
+      (скип навсегда), чтобы один битый update не заморозил всю очередь.
+
+    updates от Telegram отсортированы по update_id по возрастанию — порядок гарантирован.
+    """
+    for update in updates:
+        upd_id = int(update.get("update_id", 0))
+        try:
+            await handle_update(
+                engine=engine,
+                client=client,
+                update=update,
+                redis=redis_pubsub,
+            )
+        except Exception:
+            attempts = await _bump_update_failure(fail_redis, upd_id)
+            if attempts >= _MAX_UPDATE_ATTEMPTS:
+                # Ядовитый update: падает стабильно. Скипаем, чтобы не залипнуть навсегда.
+                logger.error(
+                    "handle_update crashed %d раз (update_id=%d) — ЯДОВИТЫЙ, скипаю "
+                    "(offset двигаю дальше). Money-кнопка под ним, если была, потеряна.",
+                    attempts,
+                    upd_id,
+                    exc_info=True,
+                )
+                await _clear_update_failure(fail_redis, upd_id)
+                if upd_id > offset:
+                    offset = upd_id
+                continue
+            # Ретраибельный сбой: offset НЕ двигаем за упавший update — Telegram
+            # переотдаст его (и хвост батча) на следующем poll. Прерываем батч.
+            logger.warning(
+                "handle_update crashed (update_id=%d, попытка %d/%d) — offset НЕ подтверждаю, "
+                "update будет переобработан на следующем poll",
+                upd_id,
+                attempts,
+                _MAX_UPDATE_ATTEMPTS,
+            )
+            break
+        # Успех: ack этого update (сдвигаем offset) + чистим счётчик попыток.
+        if upd_id > offset:
+            offset = upd_id
+        await _clear_update_failure(fail_redis, upd_id)
+    return offset
+
 
 async def heartbeat_loop(redis_client, stop: asyncio.Event) -> None:
     """Периодически пишет worker:heartbeat:telegram_poller с TTL 60s.
@@ -249,19 +353,18 @@ async def main_loop(db_url: str) -> None:
             if not updates:
                 continue
 
-            for update in updates:
-                upd_id = int(update.get("update_id", 0))
-                if upd_id > offset:
-                    offset = upd_id
-                try:
-                    await handle_update(
-                        engine=engine,
-                        client=client,
-                        update=update,
-                        redis=redis_pubsub,
-                    )
-                except Exception:
-                    logger.exception("handle_update crashed (update_id=%d)", upd_id)
+            # MID-8: offset двигаем ТОЛЬКО за успешно обработанные updates. Упавший
+            # (не-ядовитый) update оставляет offset позади себя → Telegram переотдаст его
+            # на следующем poll (at-least-once для money-кнопок). fail_redis == hb_redis —
+            # тот же клиент, что и heartbeat (INCR/EXPIRE); None → in-memory fallback.
+            offset = await _process_updates_batch(
+                updates,
+                engine=engine,
+                client=client,
+                redis_pubsub=redis_pubsub,
+                fail_redis=hb_redis,
+                offset=offset,
+            )
 
             # Сохраняем offset чтобы при рестарте не обрабатывать заново
             try:

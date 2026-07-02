@@ -60,6 +60,7 @@ from core.meta_api.errors import (
 from core.meta_api.fsm_sync import is_deactivating_bulk, sync_fsm_after_mutation
 from core.meta_api.mutations import dispatch_mutation
 from core.meta_api.mutations.create_campaign import CreateCampaignPartialError
+from core.meta_api.mutations.duplicate_campaign import DuplicateCampaignPartialError
 from core.meta_api.ownership import check_mutation_ownership, load_owner_tag
 from core.meta_api.queue import (
     claim_pending_task,
@@ -70,7 +71,7 @@ from core.meta_api.queue import (
 from core.meta_api.schemas import IRREVERSIBLE_MUTATION_KINDS, MetaMutationPayload
 from core.observer.queries import load_scanning_enabled
 from core.pubsub import CHANNEL_TASK_CHANGED
-from core.tasks.queue import Task
+from core.tasks.queue import Task, touch_task_running
 from core.telegram.worker_notify import notify_owners
 
 logger = logging.getLogger("meta_api_worker")
@@ -79,6 +80,13 @@ WORKER_NAME = "meta_api"
 HEARTBEAT_KEY = f"worker:heartbeat:{WORKER_NAME}"
 HEARTBEAT_TTL_SECONDS = 60
 IDLE_SLEEP_SECONDS = 5
+
+# MID-10 (аудит 02.07): интервал touch-heartbeat'а долгих mutation. Reconciler метит
+# 'running' старше 30 мин (RECONCILER_STUCK_TIMEOUT_MIN) в 'retrying' по updated_at.
+# Долгий исполнитель (upload видео, медленный Meta) без освежения updated_at был бы
+# украден → дубль/двойной открут. Освежаем каждые 5 мин (<< 30-мин таймаут) через
+# core.tasks.queue.touch_task_running. Env-override для тестов/тюнинга.
+_TASK_TOUCH_INTERVAL_SECONDS = int(os.environ.get("META_API_TASK_TOUCH_INTERVAL_SEC", str(5 * 60)))
 
 # requested_by авто-стопа (observer → pause_ad). Совпадает с writers._create_pause_mutation.
 _AUTO_STOP_REQUESTED_BY = "bot_auto_stop"
@@ -168,6 +176,60 @@ async def execute_mutation(
     Доменные ошибки Meta пробрасываются как есть — process_one_task маршрутизирует.
     """
     return await dispatch_mutation(client, payload)
+
+
+async def _touch_loop(engine: AsyncEngine, task_id: int, interval_seconds: float) -> None:
+    """Фоновый touch-таск: пока mutation исполняется, каждые interval_seconds освежает
+    updated_at задачи (MID-10) — защита от кражи reconciler'ом долгой mutation.
+
+    Останавливается через cancel() из _execute_with_touch по завершении mutation.
+    Если touch вернул False (задача уже не 'running' — украдена/закрыта) — цикл выходит,
+    незачем биться о закрытую строку. Ошибки БД проглатываются (touch best-effort, он
+    не должен ронять исполнение mutation).
+    """
+    while True:
+        try:
+            await asyncio.sleep(interval_seconds)
+        except asyncio.CancelledError:
+            raise
+        try:
+            still_running = await touch_task_running(engine, task_id=task_id)
+        except Exception:  # noqa: BLE001 — touch best-effort, не роняем mutation
+            logger.debug("meta_api: touch task id=%s упал (продолжаю)", task_id, exc_info=True)
+            continue
+        if not still_running:
+            logger.debug(
+                "meta_api: touch task id=%s — строка уже не 'running', останавливаю touch-цикл",
+                task_id,
+            )
+            return
+
+
+async def _execute_with_touch(
+    engine: AsyncEngine,
+    task_id: int,
+    payload: MetaMutationPayload,
+    *,
+    client: MetaApiClient,
+    touch_interval_seconds: float = _TASK_TOUCH_INTERVAL_SECONDS,
+) -> dict[str, Any]:
+    """execute_mutation с фоновым heartbeat-touch updated_at (MID-10).
+
+    Долгие mutation (upload видео, медленная обработка Meta) могут исполняться дольше
+    30-мин reconciler-таймаута. Без освежения updated_at reconcile_stuck_running увёл бы
+    задачу в 'retrying' → повторное исполнение = дубль/двойной открут. Пока идёт
+    execute_mutation, фоновый _touch_loop держит updated_at свежим. По завершении
+    (успех/исключение) touch-таск отменяется. Исключения mutation пробрасываются как есть.
+    """
+    touch_task = asyncio.create_task(_touch_loop(engine, task_id, touch_interval_seconds))
+    try:
+        return await execute_mutation(payload, client=client)
+    finally:
+        touch_task.cancel()
+        try:
+            await touch_task
+        except asyncio.CancelledError:
+            pass
 
 
 # ====================== классификация ошибок ======================
@@ -464,7 +526,9 @@ async def process_one_task(
     )
 
     try:
-        result = await execute_mutation(payload, client=client)
+        # MID-10: heartbeat-touch долгой mutation. Пока идёт исполнение, фоновый таск
+        # освежает updated_at задачи — иначе reconciler украл бы running >30 мин → дубль.
+        result = await _execute_with_touch(engine, task.id, payload, client=client)
         # R3: handler мог вернуть «логический провал» БЕЗ exception (Batch HTTP 200,
         # пер-саб ошибки в теле). bulk_status_change при полном отказе Meta хардкодит
         # success=True с succeeded==0; duplicate_campaign отдаёт success=False. Без этой
@@ -569,6 +633,41 @@ async def process_one_task(
                 task.id,
             )
         # Partial fail create_campaign — не money-стоп, _PAUSE_KINDS проверит.
+        await _alert_money_fail(
+            engine,
+            redis_client,
+            payload=payload,
+            requested_by=getattr(task, "requested_by", ""),
+            error=str(exc),
+            kind_label=payload.mutation_kind,
+        )
+        return
+    except DuplicateCampaignPartialError as exc:
+        # MID-4: copy прошёл, rename упал → копия осиротела в Meta. Метим failed БЕЗ
+        # retry (retry создал бы вторую копию — двойной открут). Логируем осиротевший
+        # id для ручной проверки/переименования. Контракт как у CreateCampaignPartialError.
+        logger.error(
+            "meta_api: task id=%s duplicate_campaign partial fail — "
+            "копия создана и осиротела в Meta, нужна ручная проверка! "
+            "created_ids=%s failed_steps=%s",
+            task.id,
+            exc.created_ids,
+            exc.failed_steps,
+        )
+        applied = await mark_task_failed(
+            engine,
+            task_id=task.id,
+            error=f"duplicate_partial_fail: created_ids={exc.created_ids!r} "
+            f"failed={exc.failed_steps!r}",
+        )
+        if not applied:
+            logger.warning(
+                "meta_api: task id=%s mark_failed (duplicate partial) не применился "
+                "— гонка с другим воркером",
+                task.id,
+            )
+        # duplicate_campaign не в _PAUSE_KINDS — _alert_money_fail сам отфильтрует (no-op),
+        # но зовём единообразно с create_campaign веткой на случай расширения _PAUSE_KINDS.
         await _alert_money_fail(
             engine,
             redis_client,
